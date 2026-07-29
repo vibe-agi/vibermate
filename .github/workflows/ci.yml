@@ -1,0 +1,98 @@
+# Deterministic CI runs module and generation drift, structural checks, unit
+# tests, race tests, contract tests, vet, and govulncheck. It does not run real
+# Agent/provider traffic, platform Root or proxy changes, signing, installers,
+# long-duration soak, or external-version drift. Those gates require later
+# production and release runners.
+name: validation
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+
+permissions:
+  contents: read
+
+jobs:
+  generated-structural:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+          check-latest: false
+          cache: true
+      - name: Verify generated files
+        run: |
+          go generate ./...
+          git diff --exit-code
+      - name: Verify module files
+        run: go mod tidy -diff
+      - name: Verify formatting
+        run: |
+          unformatted="$(gofmt -l .)"
+          if [ -n "$unformatted" ]; then
+            echo "$unformatted"
+            exit 1
+          fi
+      - name: Run structural checks and scanner self-tests
+        run: |
+          go run ./cmd/repositorycheck
+          go test ./internal/repositorycheck
+
+  unit:
+    needs: generated-structural
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+          check-latest: false
+          cache: true
+      - run: go test ./...
+      - run: go vet ./...
+
+  race:
+    needs: generated-structural
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+          check-latest: false
+          cache: true
+      - run: go test -race ./...
+
+  contracts:
+    needs: generated-structural
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+          check-latest: false
+          cache: true
+      - name: Run Access, runtime, host, and persistence contracts
+        run: |
+          go test -count=1 ./internal/access
+          go test -count=1 ./internal/productruntime
+          go test -count=1 ./internal/hostcontract
+          go test -count=1 ./internal/runtimepersistence
+
+  vulnerability:
+    needs: generated-structural
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+          check-latest: false
+          cache: true
+      - name: Scan reachable Go vulnerabilities
+        run: go run golang.org/x/vuln/cmd/govulncheck@v1.6.0 ./...

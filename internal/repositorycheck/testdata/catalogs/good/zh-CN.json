@@ -1,0 +1,3 @@
+{
+  "operation.progress": "已处理 {{current}}，共 {{total}}"
+}

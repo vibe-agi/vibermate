@@ -1,0 +1,3 @@
+{
+  "operation.progress": "Processed {{current}} of {{total}}"
+}
