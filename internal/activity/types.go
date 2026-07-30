@@ -29,12 +29,13 @@ var (
 type Kind string
 
 const (
-	KindAccessApplied      Kind = "access.applied"
-	KindOfflineHoldEntered Kind = "offline_hold.entered"
-	KindOfflineHoldResumed Kind = "offline_hold.resumed"
-	KindApprovalPending    Kind = "approval.pending"
-	KindApprovalResolved   Kind = "approval.resolved"
-	KindExchangeCompleted  Kind = "exchange.completed"
+	KindAccessApplied            Kind = "access.applied"
+	KindCredentialSecretReplaced Kind = "credential.secret_replaced"
+	KindOfflineHoldEntered       Kind = "offline_hold.entered"
+	KindOfflineHoldResumed       Kind = "offline_hold.resumed"
+	KindApprovalPending          Kind = "approval.pending"
+	KindApprovalResolved         Kind = "approval.resolved"
+	KindExchangeCompleted        Kind = "exchange.completed"
 )
 
 type Status string
@@ -58,6 +59,7 @@ type Event struct {
 func (event Event) Validate() error {
 	switch event.Kind {
 	case KindAccessApplied,
+		KindCredentialSecretReplaced,
 		KindOfflineHoldEntered,
 		KindOfflineHoldResumed,
 		KindApprovalPending,

@@ -1,0 +1,11 @@
+{
+  "identifier": "main-window",
+  "description": "Capabilities for the trusted VibeMate main Webview",
+  "webviews": [
+    "main"
+  ],
+  "permissions": [
+    "core:default",
+    "allow-take-control-session"
+  ]
+}

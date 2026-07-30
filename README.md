@@ -2,14 +2,14 @@
 
 This repository contains the production implementation of VibeMate.
 
-The current code is an M0 runtime, executable Access-plan, protocol, controlled
-egress, Exchange-pipeline, and loopback-ingress foundation. It provides a typed
-`ProductRuntime` lifecycle, an explicit host contract, a mandatory
-offline-egress coordination boundary, a real versioned SQLite store with
-operation admission and bounded drain, and a complete Access aggregate with
-transactional compare-and-swap writes. A pure compiler validates ownership,
-references, and declared capabilities before producing the sole process-local
-immutable `AccessPlanSnapshot` and deterministic `PlanHash`.
+The current code is an M0.7 runtime, executable Access-plan, protocol,
+controlled-egress, Exchange, loopback-ingress, and Desktop-host foundation. It
+provides a typed `ProductRuntime` lifecycle, a Host-owned readiness commit
+point, a mandatory offline-egress coordination boundary, a real versioned
+SQLite store with operation admission and bounded drain, and a complete Access
+aggregate with transactional compare-and-swap writes. A pure compiler validates
+ownership, references, and declared capabilities before producing the sole
+process-local immutable `AccessPlanSnapshot` and deterministic `PlanHash`.
 
 The current M0 plan contains one enabled Agent endpoint, one owned OpenAI Chat
 profile and provider target, one account binding that stores only `SecretRef`
@@ -42,10 +42,10 @@ enforces strict certificate verification and redirect rejection, and applies
 the frozen transport-fingerprint plan with explicit fallback evidence. It
 retrieves a `SecretRef` only after egress admission, applies the typed static
 bearer AuthDriver, and destroys the process-memory value. The host-neutral
-SecretStore exposes no listing or plaintext control API. Ordinary development
-builds have a private file-backed driver selected by build tag; its contents
-are plaintext-equivalent at rest and are not release secret protection.
-Native Keychain selection remains deferred to the Desktop/release stage.
+SecretStore exposes no listing or plaintext read control API. The current
+development sidecar uses one private file-backed driver; its contents are
+plaintext-equivalent at rest and are not release secret protection. There is no
+release SecretStore driver or release packaging profile in this stage.
 
 ProductRuntime now owns an internal Exchange executor. Each admitted Exchange
 begins a planned-offline action before resolving configuration, resolves the
@@ -69,35 +69,53 @@ Body-free ConnectionEvents persist connection phase evidence. The local Root
 is installation-persistent and exported as public evidence, but this code does
 not install it into an operating-system trust store.
 
-The `vibermate run -- <command>` launcher contract is implemented and tested
-against a fixture control server. It consumes only short-lived, private,
-generation-scoped loopback discovery; creates one CaptureRun; supervises one
-child; injects authenticated proxy variables; removes protected Agent
-authorities from inherited `NO_PROXY`; and heartbeats and finishes the run.
-The narrow CaptureRun control handler, launcher discovery publisher, generation
-lock, and fixed-client verifier are implemented as typed components. They are
-not yet assembled into a Desktop Host, so the production CLI cannot currently
-discover a running VibeMate instance.
+DesktopHost now owns the literal proxy and control listeners, complete routes,
+generation lock, capability separation, launcher discovery, and the only
+product readiness publication. It publishes discovery only after
+ProductRuntime, both listeners, and every route are ready. The packaged
+`vibermated` sidecar writes a one-shot bootstrap descriptor to the native shell;
+the Tauri shell exchanges that nonce outside the Webview and transfers one
+read/write control session to the main Webview. Development and packaged
+Webview origins are selected explicitly and never accepted together.
+
+The authenticated control slice exposes status, active-plan metadata and apply,
+write-only credential replacement, Activity, ConnectionEvent, approval, and
+offline-hold actions. Credential metadata inspection never reads secret bytes,
+and responses never contain a secret value or `SecretRef`. The React UI uses
+the synchronized `en-US` and `zh-CN` catalogs, can load the active Access
+revision before editing, and does not place capabilities or secrets in Web
+Storage.
+
+The `vibermate run -- <command>` launcher consumes only short-lived, private,
+generation-scoped discovery; creates one CaptureRun; supervises one child;
+injects authenticated proxy variables; removes protected Agent authorities
+from inherited `NO_PROXY`; and heartbeats and finishes the run. Host integration
+tests exercise this path over real loopback listeners with a local child
+process. They do not send provider traffic.
 
 SQLite is the only durable Access authority; active-plan publication occurs
 after commit. An indeterminate commit or post-commit publication failure marks
 only the affected Access projection unavailable, so new reads and writes fail
 closed instead of serving an unmarked stale plan. A normal close/reopen recovery
-recompiles the same revision and hash from SQLite. Forced process termination,
-operating-system failure, and power-loss recovery are not yet proven. Startup
-reports only `initialized`; it does not publish product readiness or discovery.
-There is no Host-owned proxy/control listener or discovery publication, so this
-stage still exposes no client-connectable product route. No Desktop shell,
-Server host, assembled control server, or product UI exists yet. Unmatched
-AgentEndpoint blind tunneling, system/application proxy installation, physical
-network loss, sleep, and credentialed provider behavior are not proven.
+recompiles the same revision and hash from SQLite. ProductRuntime reports only
+`initialized`; DesktopHost derives product readiness and withdraws discovery
+before shutdown. Forced process termination, operating-system failure, and
+power-loss recovery are not yet proven by the M0.7 suite.
+
+This stage still does not prove credentialed Claude behavior, real provider
+streaming, real tool approval, physical network loss/sleep, planned
+disconnect/resume with a live Agent, `SIGINT` or force-kill recovery in the
+packaged application, Root installation, signing, notarization, or a release
+SecretStore. It does not implement Server, Windows/Linux, unmatched-endpoint
+blind tunneling, system proxy installation, multi-profile routing, or a full
+control API.
 
 The implementation is not Preview-ready or Release-ready.
 
 ## Development
 
-The required toolchain is Go 1.25.12. Run the deterministic repository checks
-and test layers with:
+The pinned toolchains are Go 1.25.12, Node 22.23.1 with pnpm 10.33.2, and Rust
+1.88. Run the deterministic repository checks and test layers with:
 
 ```text
 make check
@@ -106,6 +124,16 @@ make test-race
 make vet
 make vuln
 ```
+
+`make check` generates development-only Desktop icons and sidecars in ignored
+build directories before running the UI and native-shell tests. The generated
+sidecar uses the plaintext-equivalent development SecretStore; it must not be
+distributed as a release build.
+
+`cargo audit` currently exits successfully with 17 allowed transitive warnings,
+including `RUSTSEC-2024-0429` in `glib`. That dependency is absent from the
+current `aarch64-apple-darwin` tree, but the lockfile warning is not described as
+a warning-free audit and still requires release-time disposition.
 
 The runtime and package ownership map is in
 [`docs/module-map.md`](docs/module-map.md).

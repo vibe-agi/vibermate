@@ -9,6 +9,7 @@ import (
 	"sync"
 
 	"github.com/vibe-agi/vibermate/internal/access"
+	"github.com/vibe-agi/vibermate/internal/accesscredential"
 	"github.com/vibe-agi/vibermate/internal/activity"
 	"github.com/vibe-agi/vibermate/internal/capturerun"
 	"github.com/vibe-agi/vibermate/internal/connectionevent"
@@ -29,6 +30,7 @@ type Runtime struct {
 	schemaReader runtimepersistence.SchemaStateReader
 	accesses     accessRuntime
 	probeCatalog access.ProviderProbeCatalog
+	credentials  credentialRuntime
 	activities   activityRuntime
 	connections  connectionEventRuntime
 	approvals    approvalRuntime
@@ -71,6 +73,7 @@ func startWithBuilders(
 	}
 	if builders.storage == nil ||
 		builders.access == nil ||
+		builders.credential == nil ||
 		builders.activity == nil ||
 		builders.connection == nil ||
 		builders.approval == nil ||
@@ -151,6 +154,21 @@ func startWithBuilders(
 		)
 	}
 	cleanups.register("Access runtime", accesses.Shutdown)
+
+	credentials, err := builders.credential.Build(credentialBuildRequest{
+		resolver: accesses,
+		secrets:  options.Secrets,
+	})
+	if err != nil || credentials == nil {
+		buildErr := err
+		if buildErr == nil {
+			buildErr = fmt.Errorf(
+				"%w: credential component is nil",
+				ErrInvalidBuildResult,
+			)
+		}
+		return fail("credential control", buildErr)
+	}
 
 	securityRandom := newSynchronizedReader(options.SecurityRandom)
 	activities, err := builders.activity.Build(activityBuildRequest{
@@ -398,6 +416,7 @@ func startWithBuilders(
 		schemaReader: storageResult.store.SchemaStateReader(),
 		accesses:     accesses,
 		probeCatalog: accesses,
+		credentials:  credentials,
 		activities:   activities,
 		connections:  connections,
 		approvals:    approvals,
@@ -480,6 +499,12 @@ func (r *Runtime) SchemaStateReader() runtimepersistence.SchemaStateReader {
 // AccessWriter returns the serialized Access aggregate mutation boundary.
 func (r *Runtime) AccessWriter() access.Writer {
 	return r.accesses
+}
+
+// Credentials returns the write-only credential control boundary bound to the
+// active Access plan and host SecretStore.
+func (r *Runtime) Credentials() accesscredential.Controller {
+	return r.credentials
 }
 
 // SnapshotResolver returns the current process-local Access projection.

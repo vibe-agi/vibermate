@@ -1,0 +1,43 @@
+{
+  "name": "@vibermate/desktop",
+  "private": true,
+  "version": "0.0.0",
+  "license": "Apache-2.0",
+  "type": "module",
+  "packageManager": "pnpm@10.33.2",
+  "engines": {
+    "node": "22.23.1"
+  },
+  "scripts": {
+    "build": "pnpm run check:generated && tsc --noEmit && vite build",
+    "bundle:development": "pnpm run prepare:desktop && pnpm exec tauri build",
+    "check": "pnpm run check:generated && tsc --noEmit && vitest run && vite build",
+    "check:generated": "node scripts/sync-locales.mjs --check",
+    "dev": "vite",
+    "generate": "node scripts/sync-locales.mjs",
+    "generate:icons": "pnpm exec tauri icon src-tauri/icon.svg --output src-tauri/icons",
+    "prepare:desktop": "pnpm run generate:icons && pnpm run prepare:sidecars",
+    "prepare:sidecars": "node scripts/build-sidecars.mjs --profile=development",
+    "tauri": "pnpm run prepare:desktop && pnpm exec tauri"
+  },
+  "dependencies": {
+    "@tauri-apps/api": "2.11.1",
+    "i18next": "26.3.6",
+    "react": "19.2.8",
+    "react-dom": "19.2.8",
+    "react-i18next": "17.0.11"
+  },
+  "devDependencies": {
+    "@tauri-apps/cli": "2.11.4",
+    "@testing-library/dom": "10.4.1",
+    "@testing-library/react": "16.3.2",
+    "@types/node": "26.1.2",
+    "@types/react": "19.2.14",
+    "@types/react-dom": "19.2.3",
+    "@vitejs/plugin-react": "6.0.4",
+    "jsdom": "30.0.0",
+    "typescript": "7.0.2",
+    "vite": "8.1.5",
+    "vitest": "4.1.10"
+  }
+}

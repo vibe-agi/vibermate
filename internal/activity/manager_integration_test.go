@@ -60,9 +60,9 @@ func TestActivityTimelinePersistsRedactedEventsAndPaginates(t *testing.T) {
 		t.Fatal(err)
 	}
 	third, err := manager.Record(context.Background(), activity.Event{
-		Kind:      activity.KindOfflineHoldResumed,
+		Kind:      activity.KindCredentialSecretReplaced,
 		AccessID:  accessID,
-		SubjectID: "offline-hold-1",
+		SubjectID: "credential-1",
 		Status:    activity.StatusSucceeded,
 	})
 	if err != nil {

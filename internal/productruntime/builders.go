@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/vibe-agi/vibermate/internal/access"
+	"github.com/vibe-agi/vibermate/internal/accesscredential"
 	"github.com/vibe-agi/vibermate/internal/activity"
 	"github.com/vibe-agi/vibermate/internal/anthropicchat"
 	"github.com/vibe-agi/vibermate/internal/capturerun"
@@ -95,6 +96,27 @@ func (productionAccessBuilder) Build(
 	}
 	projection := access.NewSnapshotProjection()
 	return access.NewManager(ctx, request.repository, compiler, projection)
+}
+
+type credentialBuildRequest struct {
+	resolver access.SnapshotResolver
+	secrets  secretstore.Store
+}
+
+type credentialRuntime interface {
+	accesscredential.Controller
+}
+
+type credentialBuilder interface {
+	Build(credentialBuildRequest) (credentialRuntime, error)
+}
+
+type productionCredentialBuilder struct{}
+
+func (productionCredentialBuilder) Build(
+	request credentialBuildRequest,
+) (credentialRuntime, error) {
+	return accesscredential.New(request.resolver, request.secrets)
 }
 
 func productionAccessPlanCompiler() (*access.Compiler, error) {
@@ -546,6 +568,7 @@ func (productionProxyBuilder) Build(
 type runtimeBuilders struct {
 	storage    storageBuilder
 	access     accessBuilder
+	credential credentialBuilder
 	activity   activityBuilder
 	connection connectionEventBuilder
 	approval   approvalBuilder
@@ -562,6 +585,7 @@ func productionBuilders() runtimeBuilders {
 	return runtimeBuilders{
 		storage:    productionStorageBuilder{},
 		access:     productionAccessBuilder{},
+		credential: productionCredentialBuilder{},
 		activity:   productionActivityBuilder{},
 		connection: productionConnectionEventBuilder{},
 		approval:   productionApprovalBuilder{},

@@ -180,3 +180,29 @@ func TestDataPlaneAccessBoundaryUsesPublicCheckWithGoodAndBadFixtures(
 		t.Fatalf("public Check did not report data-plane-access-boundary: %v", err)
 	}
 }
+
+func TestDesktopFrontendBoundaryUsesPublicCheckWithGoodAndBadFixtures(
+	t *testing.T,
+) {
+	t.Parallel()
+
+	goodRoot := filepath.Join("testdata", "repository-frontend-good")
+	if err := Check(goodRoot); err != nil {
+		t.Fatalf("known-good repository fixture failed: %v", err)
+	}
+
+	badRoot := filepath.Join("testdata", "repository-frontend-bad")
+	err := Check(badRoot)
+	if !errors.Is(err, ErrCheckFailed) {
+		t.Fatalf("expected ErrCheckFailed, got %v", err)
+	}
+	for _, rule := range []string{
+		"desktop-host-boundary",
+		"desktop-capability-storage",
+		"frontend-i18n",
+	} {
+		if !strings.Contains(err.Error(), rule) {
+			t.Fatalf("public Check did not report %s: %v", rule, err)
+		}
+	}
+}

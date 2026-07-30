@@ -19,8 +19,13 @@ import (
 )
 
 var (
-	ErrCheckFailed = errors.New("repository check failed")
-	placeholderRE  = regexp.MustCompile(`\{\{\s*([A-Za-z_][A-Za-z0-9_]*)\s*\}\}`)
+	ErrCheckFailed           = errors.New("repository check failed")
+	placeholderRE            = regexp.MustCompile(`\{\{\s*([A-Za-z_][A-Za-z0-9_]*)\s*\}\}`)
+	jsxTextRE                = regexp.MustCompile(`>\s*([\pL][^<>{}]*)\s*</`)
+	jsxExpressionLiteralRE   = regexp.MustCompile(">\\s*\\{\\s*[\"'`]([^\"'`]+)[\"'`]\\s*\\}\\s*</")
+	jsxStaticUserAttributeRE = regexp.MustCompile(
+		`\b(?:alt|aria-label|placeholder|title)\s*=\s*["']([^"']+)["']`,
+	)
 )
 
 // Violation is one deterministic repository policy failure.
@@ -45,6 +50,7 @@ func Check(repositoryRoot string) error {
 	violations = append(violations, CheckProtocolSDKIsolation(repositoryRoot)...)
 	violations = append(violations, CheckExternalEgressGate(repositoryRoot)...)
 	violations = append(violations, CheckDataPlaneAccessBoundary(repositoryRoot)...)
+	violations = append(violations, CheckDesktopFrontendBoundary(repositoryRoot)...)
 	violations = append(
 		violations,
 		CheckCatalogPair(
@@ -70,6 +76,113 @@ func Check(repositoryRoot string) error {
 		joined = append(joined, errors.New(violation.String()))
 	}
 	return errors.Join(joined...)
+}
+
+// CheckDesktopFrontendBoundary protects the production Desktop UI shape that
+// now exists: only the native Host adapter may import Tauri, Web Storage cannot
+// hold capabilities, and visible TSX copy must come from the locale catalogs.
+func CheckDesktopFrontendBoundary(repositoryRoot string) []Violation {
+	sourceRoot := filepath.Join(repositoryRoot, "ui", "desktop", "src")
+	if _, err := os.Stat(sourceRoot); errors.Is(err, os.ErrNotExist) {
+		return nil
+	}
+	allowedTauriImport := filepath.Join(
+		"ui",
+		"desktop",
+		"src",
+		"desktop-host.ts",
+	)
+	var violations []Violation
+	walkErr := filepath.WalkDir(sourceRoot, func(
+		path string,
+		entry fs.DirEntry,
+		err error,
+	) error {
+		if err != nil {
+			return err
+		}
+		if entry.IsDir() {
+			if entry.Name() == "generated" {
+				return filepath.SkipDir
+			}
+			return nil
+		}
+		extension := filepath.Ext(path)
+		if extension != ".ts" && extension != ".tsx" {
+			return nil
+		}
+		relative := relativeDisplayPath(repositoryRoot, path)
+		file, openErr := os.Open(path)
+		if openErr != nil {
+			return openErr
+		}
+		defer file.Close()
+		scanner := bufio.NewScanner(file)
+		lineNumber := 0
+		for scanner.Scan() {
+			lineNumber++
+			line := scanner.Text()
+			if strings.Contains(line, "@tauri-apps/") &&
+				filepath.Clean(relative) != allowedTauriImport {
+				violations = append(violations, Violation{
+					Rule:    "desktop-host-boundary",
+					Path:    relative,
+					Line:    lineNumber,
+					Message: "only the Desktop Host adapter may import Tauri",
+				})
+			}
+			if strings.Contains(line, "localStorage") ||
+				strings.Contains(line, "sessionStorage") {
+				violations = append(violations, Violation{
+					Rule:    "desktop-capability-storage",
+					Path:    relative,
+					Line:    lineNumber,
+					Message: "Desktop capabilities cannot use Web Storage",
+				})
+			}
+			if extension == ".tsx" && hasJSXUserCopy(line) {
+				violations = append(violations, Violation{
+					Rule:    "frontend-i18n",
+					Path:    relative,
+					Line:    lineNumber,
+					Message: "visible TSX copy must use a stable locale key",
+				})
+			}
+		}
+		return scanner.Err()
+	})
+	if walkErr != nil {
+		violations = append(violations, Violation{
+			Rule:    "desktop-host-boundary",
+			Path:    filepath.Join("ui", "desktop", "src"),
+			Message: walkErr.Error(),
+		})
+	}
+	return violations
+}
+
+func hasJSXUserCopy(line string) bool {
+	for _, expression := range []*regexp.Regexp{
+		jsxTextRE,
+		jsxExpressionLiteralRE,
+		jsxStaticUserAttributeRE,
+	} {
+		for _, match := range expression.FindAllStringSubmatch(line, -1) {
+			if len(match) > 1 && containsLetter(match[1]) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func containsLetter(value string) bool {
+	for _, character := range value {
+		if unicode.IsLetter(character) {
+			return true
+		}
+	}
+	return false
 }
 
 // CheckDataPlaneAccessBoundary keeps the Exchange hot path on the immutable
