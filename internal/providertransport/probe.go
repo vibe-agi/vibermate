@@ -6,70 +6,74 @@ import (
 	"crypto/x509"
 	"errors"
 	"net"
-	"net/url"
 	"time"
 
+	"github.com/vibe-agi/vibermate/internal/access"
 	"github.com/vibe-agi/vibermate/internal/offlinehold"
 )
 
-type TLSProber struct {
+// ProviderProber probes a frozen provider target without sending HTTP headers,
+// credentials, or a request body. Remote targets complete strict TLS; the
+// explicit loopback-cleartext exception completes an exact TCP peer check.
+type ProviderProber struct {
 	dialer  contextDialer
 	roots   *x509.CertPool
 	timeout time.Duration
 }
 
-var _ offlinehold.Prober = (*TLSProber)(nil)
+var _ offlinehold.Prober = (*ProviderProber)(nil)
 
-const DefaultTLSProbeTargetTimeout = 10 * time.Second
+const DefaultProviderProbeTargetTimeout = 10 * time.Second
 
-func NewTLSProber() (*TLSProber, error) {
-	return newTLSProber(
+func NewProviderProber() (*ProviderProber, error) {
+	return newProviderProber(
 		&net.Dialer{},
 		nil,
 	)
 }
 
-func newTLSProber(
+func newProviderProber(
 	dialer contextDialer,
 	roots *x509.CertPool,
-) (*TLSProber, error) {
-	return newTLSProberWithTimeout(
+) (*ProviderProber, error) {
+	return newProviderProberWithTimeout(
 		dialer,
 		roots,
-		DefaultTLSProbeTargetTimeout,
+		DefaultProviderProbeTargetTimeout,
 	)
 }
 
-func newTLSProberWithTimeout(
+func newProviderProberWithTimeout(
 	dialer contextDialer,
 	roots *x509.CertPool,
 	timeout time.Duration,
-) (*TLSProber, error) {
+) (*ProviderProber, error) {
 	if dialer == nil || timeout <= 0 {
-		return nil, errors.New("TLS probe dependencies are incomplete")
+		return nil, errors.New("provider probe dependencies are incomplete")
 	}
-	return &TLSProber{
+	return &ProviderProber{
 		dialer:  dialer,
 		roots:   roots,
 		timeout: timeout,
 	}, nil
 }
 
-func (prober *TLSProber) Probe(
+func (prober *ProviderProber) Probe(
 	ctx context.Context,
 	request offlinehold.ProbeRequest,
 ) error {
-	if ctx == nil || len(request.Targets) == 0 {
+	if prober == nil || prober.dialer == nil ||
+		ctx == nil || len(request.Targets) == 0 {
 		return offlinehold.NewProbeFailure(
 			offlinehold.ProbeReasonFailed,
-			errors.New("TLS probe request is invalid"),
+			errors.New("provider probe request is invalid"),
 		)
 	}
 	for _, reference := range request.Targets {
 		if reference.Kind != offlinehold.EgressProvider {
 			return offlinehold.NewProbeFailure(
 				offlinehold.ProbeReasonFailed,
-				errors.New("TLS prober received a non-provider target"),
+				errors.New("provider prober received a non-provider target"),
 			)
 		}
 		target, err := targetFromProbe(reference)
@@ -104,6 +108,32 @@ func (prober *TLSProber) Probe(
 				classifyProbeTransportFailure(err),
 				err,
 			)
+		}
+		if target.transportKind ==
+			access.ProviderTransportLoopbackCleartext {
+			peerErr := validateLoopbackPeer(raw.RemoteAddr(), target)
+			closeErr := raw.Close()
+			contextErr := targetContext.Err()
+			cancel()
+			if contextErr != nil {
+				return offlinehold.NewProbeFailure(
+					classifyProbeContextFailure(ctx, contextErr),
+					contextErr,
+				)
+			}
+			if peerErr != nil {
+				return offlinehold.NewProbeFailure(
+					offlinehold.ProbeReasonTransportUnavailable,
+					peerErr,
+				)
+			}
+			if closeErr != nil {
+				return offlinehold.NewProbeFailure(
+					classifyProbeTransportFailure(closeErr),
+					closeErr,
+				)
+			}
+			continue
 		}
 		deadline, available := targetContext.Deadline()
 		if !available {
@@ -157,24 +187,36 @@ func targetFromProbe(reference offlinehold.ProbeTarget) (Target, error) {
 	if reference.Kind != offlinehold.EgressProvider ||
 		reference.AccessRevision == 0 ||
 		reference.PlanHash == "" {
-		return Target{}, errors.New("provider TLS probe target identity is incomplete")
+		return Target{}, errors.New("provider probe target identity is incomplete")
 	}
 	if err := reference.Validate(); err != nil {
 		return Target{}, err
 	}
-	parsed, err := url.Parse(reference.NetworkOrigin)
+	origin, err := access.NewProviderOrigin(reference.NetworkOrigin)
 	if err != nil {
 		return Target{}, err
 	}
 	target := Target{
-		origin:        reference.NetworkOrigin,
-		scheme:        parsed.Scheme,
+		origin:        origin.String(),
+		scheme:        origin.Scheme(),
 		httpAuthority: reference.HTTPAuthority,
+		networkHost:   origin.NetworkHost(),
 		tlsServerName: reference.TLSServerName,
-		basePath:      parsed.EscapedPath(),
+		basePath:      origin.BasePath(),
+		port:          origin.Port(),
+		transportKind: origin.TransportKind(),
 	}
 	if err := target.validate(); err != nil {
 		return Target{}, err
+	}
+	probeTransport, err := target.probeTransportKind()
+	if err != nil {
+		return Target{}, err
+	}
+	if probeTransport != reference.Transport {
+		return Target{}, errors.New(
+			"provider probe transport identity changed",
+		)
 	}
 	return target, nil
 }

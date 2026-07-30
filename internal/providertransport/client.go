@@ -100,7 +100,7 @@ func NewProductionClient(
 	authenticator Authenticator,
 	timeouts TransportTimeouts,
 ) (*Client, error) {
-	transport, err := newProductionStrictTransport(timeouts)
+	transport, err := newProductionTransport(timeouts)
 	if err != nil {
 		return nil, err
 	}
@@ -173,6 +173,7 @@ func (client *Client) Do(
 		operationContext,
 		request,
 		frozen.secretReference,
+		frozen.target,
 	)
 	if err != nil {
 		return nil, Evidence{}, fmt.Errorf("finalize provider authentication: %w", err)

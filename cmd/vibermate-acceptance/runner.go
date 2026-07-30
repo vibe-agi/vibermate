@@ -1166,7 +1166,7 @@ func providerConnectionAuditReady(
 			record.RouteHost == clientOrigin.TLSServerName() {
 			clientConnected = true
 		}
-		if record.RouteHost == providerOrigin.TLSServerName() {
+		if record.RouteHost == providerOrigin.NetworkHost() {
 			if record.CredentialBindingID != expectedCredential {
 				return false, fmt.Errorf(
 					"provider ConnectionEvent credential binding=%q",

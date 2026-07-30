@@ -218,6 +218,124 @@ func TestClientStrictTLSUsesFrozenSNIAndAuthority(t *testing.T) {
 	}
 }
 
+func TestClientUsesExplicitLoopbackCleartextTransport(t *testing.T) {
+	t.Parallel()
+
+	observed := make(chan struct {
+		host          string
+		authorization string
+		path          string
+	}, 1)
+	server := httptest.NewServer(http.HandlerFunc(func(
+		writer http.ResponseWriter,
+		request *http.Request,
+	) {
+		observed <- struct {
+			host          string
+			authorization string
+			path          string
+		}{
+			host:          request.Host,
+			authorization: request.Header.Get("Authorization"),
+			path:          request.URL.Path,
+		}
+		writer.Header().Set("Content-Type", "application/json")
+		_, _ = io.WriteString(writer, `{"ok":true}`)
+	}))
+	defer server.Close()
+
+	origin, err := access.NewProviderOrigin(server.URL + "/v1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	target := targetFromProviderOrigin(origin)
+	gate := newStartedGate(t)
+	secrets := &secretReaderStub{value: []byte("loopback-token")}
+	authenticator, err := NewStaticBearerAuthenticator(secrets)
+	if err != nil {
+		t.Fatal(err)
+	}
+	client, err := NewProductionClient(
+		gate,
+		authenticator,
+		DefaultTransportTimeouts(),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer shutdownClient(t, client)
+
+	request := newTestRequest(
+		t,
+		gate,
+		"loopback-cleartext-request",
+		target,
+		nil,
+	)
+	if request.ProbeTarget().Transport !=
+		offlinehold.ProbeTransportLoopbackCleartext ||
+		request.ProbeTarget().TLSServerName != "" {
+		t.Fatalf("loopback probe target = %+v", request.ProbeTarget())
+	}
+	response, evidence, err := client.Do(context.Background(), request)
+	if err != nil {
+		t.Fatalf("Do() error = %v", err)
+	}
+	body, err := io.ReadAll(response.Body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := response.Body.Close(); err != nil {
+		t.Fatal(err)
+	}
+	request.action.Release()
+	if string(body) != `{"ok":true}` {
+		t.Fatalf("response body = %q", body)
+	}
+	if evidence.Transport.Requested().Ref != "" ||
+		evidence.Transport.Effective().Ref != "" {
+		t.Fatalf(
+			"cleartext request claimed TLS fingerprint evidence: %+v",
+			evidence.Transport,
+		)
+	}
+	select {
+	case capture := <-observed:
+		if capture.host != origin.HTTPAuthority() ||
+			capture.authorization != "Bearer loopback-token" ||
+			capture.path != "/v1/chat/completions" {
+			t.Fatalf("loopback request = %+v", capture)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("loopback provider did not receive the request")
+	}
+}
+
+func TestNewTargetPreservesCompiledLoopbackIdentity(t *testing.T) {
+	t.Parallel()
+
+	plan := testRequestAccessPlanWithOrigin(
+		t,
+		"http://127.0.0.1:23333/v1",
+	)
+	targets := plan.ProviderTargets()
+	if len(targets) != 1 {
+		t.Fatalf("compiled targets = %d", len(targets))
+	}
+	target, err := NewTarget(targets[0])
+	if err != nil {
+		t.Fatalf("NewTarget() error = %v", err)
+	}
+	if target.Origin() != "http://127.0.0.1:23333/v1" ||
+		target.TransportKind() !=
+			access.ProviderTransportLoopbackCleartext ||
+		target.NetworkHost() != "127.0.0.1" ||
+		target.HTTPAuthority() != "127.0.0.1:23333" ||
+		target.TLSServerName() != "" {
+		t.Fatalf("loopback target = %+v", target)
+	}
+}
+
 func TestTLSHostnameFailureSendsNoHTTPAuthorization(t *testing.T) {
 	t.Parallel()
 
@@ -603,6 +721,17 @@ func testRequestAccessPlan(
 	t *testing.T,
 ) access.AccessPlanSnapshot {
 	t.Helper()
+	return testRequestAccessPlanWithOrigin(
+		t,
+		"https://provider.example:443/v1",
+	)
+}
+
+func testRequestAccessPlanWithOrigin(
+	t *testing.T,
+	rawProviderOrigin string,
+) access.AccessPlanSnapshot {
+	t.Helper()
 	accessID, err := access.NewAccessID("provider-transport-test")
 	if err != nil {
 		t.Fatal(err)
@@ -635,7 +764,7 @@ func testRequestAccessPlan(
 	if err != nil {
 		t.Fatal(err)
 	}
-	providerOrigin, err := access.NewProviderOrigin("https://provider.example:443/v1")
+	providerOrigin, err := access.NewProviderOrigin(rawProviderOrigin)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -788,8 +917,24 @@ func testTarget(host string, port int) Target {
 		origin:        "https://" + authority + "/v1",
 		scheme:        "https",
 		httpAuthority: authority,
+		networkHost:   host,
 		tlsServerName: host,
 		basePath:      "/v1",
+		port:          uint16(port),
+		transportKind: access.ProviderTransportStrictTLS,
+	}
+}
+
+func targetFromProviderOrigin(origin access.ProviderOrigin) Target {
+	return Target{
+		origin:        origin.String(),
+		scheme:        origin.Scheme(),
+		httpAuthority: origin.HTTPAuthority(),
+		networkHost:   origin.NetworkHost(),
+		tlsServerName: origin.TLSServerName(),
+		basePath:      origin.BasePath(),
+		port:          origin.Port(),
+		transportKind: origin.TransportKind(),
 	}
 }
 

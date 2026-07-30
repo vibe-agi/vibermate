@@ -75,6 +75,51 @@ type profileTransport struct {
 	timeouts  TransportTimeouts
 }
 
+type productionTransport struct {
+	strictTLS Transport
+	loopback  Transport
+}
+
+func newProductionTransport(
+	timeouts TransportTimeouts,
+) (*productionTransport, error) {
+	strictTLS, err := newProductionStrictTransport(timeouts)
+	if err != nil {
+		return nil, err
+	}
+	loopback, err := newProductionLoopbackTransport(timeouts)
+	if err != nil {
+		return nil, err
+	}
+	return &productionTransport{
+		strictTLS: strictTLS,
+		loopback:  loopback,
+	}, nil
+}
+
+func (transport *productionTransport) RoundTrip(
+	request *http.Request,
+	dispatch TransportDispatch,
+) (*http.Response, transportprofile.Evidence, error) {
+	if transport == nil ||
+		transport.strictTLS == nil ||
+		transport.loopback == nil {
+		return nil, transportprofile.Evidence{}, errors.New(
+			"production provider transport is not initialized",
+		)
+	}
+	switch dispatch.target.transportKind {
+	case access.ProviderTransportStrictTLS:
+		return transport.strictTLS.RoundTrip(request, dispatch)
+	case access.ProviderTransportLoopbackCleartext:
+		return transport.loopback.RoundTrip(request, dispatch)
+	default:
+		return nil, transportprofile.Evidence{}, errors.New(
+			"provider transport kind is unsupported",
+		)
+	}
+}
+
 func newProductionStrictTransport(
 	timeouts TransportTimeouts,
 ) (*profileTransport, error) {
@@ -127,6 +172,11 @@ func (transport *profileTransport) RoundTrip(
 	}
 	if err := dispatch.target.validate(); err != nil {
 		return nil, transportprofile.Evidence{}, err
+	}
+	if dispatch.target.transportKind != access.ProviderTransportStrictTLS {
+		return nil, transportprofile.Evidence{}, errors.New(
+			"strict TLS provider transport received a non-TLS target",
+		)
 	}
 	if request.URL.Scheme != "https" ||
 		request.URL.Host != dispatch.target.httpAuthority ||

@@ -114,7 +114,10 @@ type CompiledProviderTarget struct {
 	target        ProviderTarget
 	basePath      string
 	httpAuthority string
+	networkHost   string
 	tlsServerName string
+	port          uint16
+	transportKind ProviderTransportKind
 }
 
 func (target CompiledProviderTarget) Target() ProviderTarget {
@@ -124,7 +127,12 @@ func (target CompiledProviderTarget) Target() ProviderTarget {
 }
 func (target CompiledProviderTarget) BasePath() string      { return target.basePath }
 func (target CompiledProviderTarget) HTTPAuthority() string { return target.httpAuthority }
+func (target CompiledProviderTarget) NetworkHost() string   { return target.networkHost }
 func (target CompiledProviderTarget) TLSServerName() string { return target.tlsServerName }
+func (target CompiledProviderTarget) Port() uint16          { return target.port }
+func (target CompiledProviderTarget) TransportKind() ProviderTransportKind {
+	return target.transportKind
+}
 
 type CompiledPluginPlan struct {
 	revision   Revision

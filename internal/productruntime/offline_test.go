@@ -43,6 +43,7 @@ func TestRuntimeResumeProberDispatchesOnlyTypedSupportedTargets(t *testing.T) {
 		context.Background(),
 		offlinehold.ProbeRequest{Targets: []offlinehold.ProbeTarget{{
 			Kind:          offlinehold.EgressUpdate,
+			Transport:     offlinehold.ProbeTransportStrictTLS,
 			TargetRef:     "update-target",
 			NetworkOrigin: "https://update.example",
 			HTTPAuthority: "update.example",
@@ -377,6 +378,7 @@ func testRuntimeProbeTarget(
 ) offlinehold.ProbeTarget {
 	target := offlinehold.ProbeTarget{
 		Kind:          kind,
+		Transport:     offlinehold.ProbeTransportStrictTLS,
 		TargetRef:     string(kind) + "/" + host,
 		NetworkOrigin: "https://" + host,
 		HTTPAuthority: host,

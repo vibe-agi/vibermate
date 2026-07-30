@@ -20,6 +20,7 @@ var (
 	ErrUnknownPluginPlanMode    = errors.New("plugin plan mode is not in the catalog")
 	ErrUnknownModelPolicyMode   = errors.New("model policy mode is not in the catalog")
 	ErrUnknownTransportProfile  = errors.New("transport fingerprint profile is not in the catalog")
+	ErrInvalidProviderTransport = errors.New("ProviderTarget transport is invalid")
 	ErrAccessNotEnabled         = errors.New("Access is not enabled")
 	ErrDuplicateResource        = errors.New("Access resource ID is duplicated")
 	ErrUnsupportedPluginBinding = errors.New("plugin bindings are not enabled")
@@ -314,6 +315,15 @@ func (compiler *Compiler) Compile(aggregate Aggregate) (AccessPlanSnapshot, erro
 			fmt.Errorf("%w: %q", ErrUnknownEgressMode, candidate.EgressPolicy.Mode),
 		)
 	}
+	if target.Origin.TransportKind() ==
+		ProviderTransportLoopbackCleartext &&
+		candidate.EgressPolicy.Mode != EgressModeDirect {
+		return AccessPlanSnapshot{}, errors.Join(
+			ErrInvalidAccessPlan,
+			ErrInvalidProviderTransport,
+			errors.New("loopback cleartext ProviderTarget requires direct egress"),
+		)
+	}
 	pluginDefinition, exists := compiler.catalog.pluginPlanModes[candidate.PluginPlan.Mode]
 	if !exists {
 		return AccessPlanSnapshot{}, errors.Join(
@@ -346,7 +356,10 @@ func (compiler *Compiler) Compile(aggregate Aggregate) (AccessPlanSnapshot, erro
 		target:        target,
 		basePath:      target.Origin.BasePath(),
 		httpAuthority: target.Origin.HTTPAuthority(),
+		networkHost:   target.Origin.NetworkHost(),
 		tlsServerName: target.Origin.TLSServerName(),
+		port:          target.Origin.Port(),
+		transportKind: target.Origin.TransportKind(),
 	}}
 	codecPlan := CodecPlan{
 		id:                   codecDefinition.ID,

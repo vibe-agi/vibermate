@@ -621,6 +621,7 @@ func providerTarget(target string) ProbeTarget {
 	host := target + ".example"
 	return ProbeTarget{
 		Kind:           EgressProvider,
+		Transport:      ProbeTransportStrictTLS,
 		TargetRef:      target,
 		NetworkOrigin:  "https://" + host + "/v1",
 		HTTPAuthority:  host,
@@ -634,6 +635,7 @@ func opaqueTarget(target string) ProbeTarget {
 	host := target + ".example"
 	return ProbeTarget{
 		Kind:          EgressOpaque,
+		Transport:     ProbeTransportStrictTLS,
 		TargetRef:     target,
 		NetworkOrigin: "https://" + host,
 		HTTPAuthority: host,

@@ -37,9 +37,12 @@ actions and active egress have drained. Provider and original-origin clients
 cannot emit an external byte without a lease and have bounded cancellation,
 response-body ownership, and shutdown.
 
-The provider client separates origin, HTTP authority, and TLS server name,
-enforces strict certificate verification and redirect rejection, and applies
-the frozen transport-fingerprint plan with explicit fallback evidence. It
+The provider client separates origin, HTTP authority, network host, and TLS
+server name. Remote targets enforce strict certificate verification, redirect
+rejection, and the frozen transport-fingerprint plan with explicit fallback
+evidence. The only cleartext exception is an explicitly configured literal
+loopback IP: it is Direct-only, bypasses ambient proxies, and verifies the
+connected TCP peer before any authenticated HTTP byte is written. It
 retrieves a `SecretRef` only after egress admission, applies the typed static
 bearer AuthDriver, and destroys the process-memory value. The host-neutral
 SecretStore exposes no listing or plaintext read control API. The current
@@ -100,8 +103,8 @@ artifact digests and Go build metadata. The manifest binds the App build to one
 clean Git revision, pinned toolchains, explicit Desktop/development-sidecar
 profiles, configuration digests, and both packaged sidecars. The deterministic
 sequence uses a unique missing SecretRef; the credentialed continuation uses
-the development file SecretStore and defaults to
-`https://model8.run/v1` with model `gpt-5.6-sol`. No acceptance mode takes
+the development file SecretStore and defaults to a local Cherry Studio API at
+`http://127.0.0.1:23333/v1` with model `glm-5`. No acceptance mode takes
 a secret value on its command line.
 
 SQLite is the only durable Access authority; active-plan publication occurs

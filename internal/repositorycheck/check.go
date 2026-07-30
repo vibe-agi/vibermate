@@ -303,6 +303,7 @@ func CheckDataPlaneAccessBoundary(repositoryRoot string) []Violation {
 func CheckExternalEgressGate(repositoryRoot string) []Violation {
 	allowedFiles := map[string]struct{}{
 		"internal/providertransport/transport.go": {},
+		"internal/providertransport/loopback.go":  {},
 		"internal/providertransport/probe.go":     {},
 		"internal/originaltransport/transport.go": {},
 		"internal/originaltransport/probe.go":     {},

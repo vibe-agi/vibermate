@@ -242,6 +242,13 @@ type EgressMode string
 
 const EgressModeDirect EgressMode = "direct"
 
+type ProviderTransportKind string
+
+const (
+	ProviderTransportStrictTLS         ProviderTransportKind = "strict_tls"
+	ProviderTransportLoopbackCleartext ProviderTransportKind = "loopback_cleartext"
+)
+
 type PluginPlanMode string
 
 const PluginPlanModePassThrough PluginPlanMode = "pass_through"
@@ -312,7 +319,7 @@ type ClientOrigin struct {
 }
 
 func NewClientOrigin(value string) (ClientOrigin, error) {
-	origin, err := parseOrigin(value, false)
+	origin, err := parseOrigin(value, false, false)
 	if err != nil {
 		return ClientOrigin{}, fmt.Errorf("%w: ClientOrigin: %w", ErrInvalidAccess, err)
 	}
@@ -345,28 +352,45 @@ func (origin ClientOrigin) validate() error {
 
 type ProviderOrigin struct {
 	value         string
+	scheme        string
 	basePath      string
 	httpAuthority string
+	networkHost   string
 	tlsServerName string
+	port          uint16
+	transportKind ProviderTransportKind
 }
 
 func NewProviderOrigin(value string) (ProviderOrigin, error) {
-	origin, err := parseOrigin(value, true)
+	origin, err := parseOrigin(value, true, true)
 	if err != nil {
 		return ProviderOrigin{}, fmt.Errorf("%w: ProviderTarget origin: %w", ErrInvalidAccess, err)
 	}
 	return ProviderOrigin{
 		value:         origin.value,
+		scheme:        origin.scheme,
 		basePath:      origin.basePath,
 		httpAuthority: origin.httpAuthority,
+		networkHost:   origin.networkHost,
 		tlsServerName: origin.tlsServerName,
+		port:          origin.port,
+		transportKind: origin.transportKind,
 	}, nil
 }
 
 func (origin ProviderOrigin) String() string        { return origin.value }
+func (origin ProviderOrigin) Scheme() string        { return origin.scheme }
 func (origin ProviderOrigin) BasePath() string      { return origin.basePath }
 func (origin ProviderOrigin) HTTPAuthority() string { return origin.httpAuthority }
+func (origin ProviderOrigin) NetworkHost() string   { return origin.networkHost }
 func (origin ProviderOrigin) TLSServerName() string { return origin.tlsServerName }
+func (origin ProviderOrigin) Port() uint16          { return origin.port }
+func (origin ProviderOrigin) TransportKind() ProviderTransportKind {
+	return origin.transportKind
+}
+func (origin ProviderOrigin) EndpointAuthority() string {
+	return net.JoinHostPort(origin.networkHost, strconv.Itoa(int(origin.port)))
+}
 
 func (origin ProviderOrigin) validate() error {
 	parsed, err := NewProviderOrigin(origin.value)
@@ -381,22 +405,26 @@ func (origin ProviderOrigin) validate() error {
 
 type parsedOrigin struct {
 	value         string
+	scheme        string
 	basePath      string
 	httpAuthority string
+	networkHost   string
 	tlsServerName string
 	port          uint16
+	transportKind ProviderTransportKind
 }
 
-func parseOrigin(value string, allowBasePath bool) (parsedOrigin, error) {
+func parseOrigin(
+	value string,
+	allowBasePath bool,
+	allowLoopbackHTTP bool,
+) (parsedOrigin, error) {
 	if value == "" || len(value) > MaxOriginBytes || !utf8.ValidString(value) {
 		return parsedOrigin{}, errorsForOrigin("origin is empty or exceeds the byte limit")
 	}
 	parsed, err := url.Parse(value)
 	if err != nil || !parsed.IsAbs() || parsed.Opaque != "" {
 		return parsedOrigin{}, errorsForOrigin("origin is not an absolute URL")
-	}
-	if parsed.Scheme != "https" {
-		return parsedOrigin{}, errorsForOrigin("origin scheme must be https")
 	}
 	if parsed.User != nil || parsed.RawQuery != "" || parsed.Fragment != "" {
 		return parsedOrigin{}, errorsForOrigin("origin cannot contain user info, query, or fragment")
@@ -405,7 +433,33 @@ func parseOrigin(value string, allowBasePath bool) (parsedOrigin, error) {
 		return parsedOrigin{}, errorsForOrigin("origin path cannot use alternate escaping")
 	}
 
-	authority, serverName, port, err := canonicalAuthority(parsed)
+	var (
+		defaultPort   uint16
+		transportKind ProviderTransportKind
+	)
+	switch parsed.Scheme {
+	case "https":
+		defaultPort = 443
+		transportKind = ProviderTransportStrictTLS
+	case "http":
+		if !allowLoopbackHTTP {
+			return parsedOrigin{}, errorsForOrigin("origin scheme must be https")
+		}
+		address, addressErr := netip.ParseAddr(parsed.Hostname())
+		if addressErr != nil ||
+			!address.IsLoopback() ||
+			address.Is4In6() {
+			return parsedOrigin{}, errorsForOrigin(
+				"cleartext provider origin must use a literal loopback IP",
+			)
+		}
+		defaultPort = 80
+		transportKind = ProviderTransportLoopbackCleartext
+	default:
+		return parsedOrigin{}, errorsForOrigin("origin scheme is unsupported")
+	}
+
+	authority, networkHost, port, err := canonicalAuthority(parsed, defaultPort)
 	if err != nil {
 		return parsedOrigin{}, err
 	}
@@ -423,16 +477,26 @@ func parseOrigin(value string, allowBasePath bool) (parsedOrigin, error) {
 			return parsedOrigin{}, errorsForOrigin("provider base path is not canonical")
 		}
 	}
+	tlsServerName := networkHost
+	if transportKind == ProviderTransportLoopbackCleartext {
+		tlsServerName = ""
+	}
 	return parsedOrigin{
-		value:         "https://" + authority + basePath,
+		value:         parsed.Scheme + "://" + authority + basePath,
+		scheme:        parsed.Scheme,
 		basePath:      basePath,
 		httpAuthority: authority,
-		tlsServerName: serverName,
+		networkHost:   networkHost,
+		tlsServerName: tlsServerName,
 		port:          port,
+		transportKind: transportKind,
 	}, nil
 }
 
-func canonicalAuthority(parsed *url.URL) (string, string, uint16, error) {
+func canonicalAuthority(
+	parsed *url.URL,
+	defaultPort uint16,
+) (string, string, uint16, error) {
 	host := strings.ToLower(parsed.Hostname())
 	if host == "" || strings.Contains(host, "%") {
 		return "", "", 0, errorsForOrigin("origin host is invalid")
@@ -451,9 +515,9 @@ func canonicalAuthority(parsed *url.URL) (string, string, uint16, error) {
 		return net.JoinHostPort(host, port), host, uint16(number), nil
 	}
 	if strings.Contains(host, ":") {
-		return "[" + host + "]", host, 443, nil
+		return "[" + host + "]", host, defaultPort, nil
 	}
-	return host, host, 443, nil
+	return host, host, defaultPort, nil
 }
 
 func validateDNSName(host string) error {

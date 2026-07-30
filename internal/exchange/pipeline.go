@@ -195,7 +195,7 @@ func (pipeline *Pipeline) Execute(
 			err,
 		)
 	}
-	result.RouteHost = selection.target.TLSServerName()
+	result.RouteHost = selection.target.NetworkHost()
 	result.CredentialBindingID = selection.accountID.String()
 	if err := pipeline.protocolPath.ValidatePlan(selection.codecPlan); err != nil {
 		return result, newFailure(

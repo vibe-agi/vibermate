@@ -21,8 +21,8 @@ export const initialAccessForm: AccessFormValues = {
   description: "",
   expectedRevision: "0",
   clientOrigin: "https://api.anthropic.com",
-  providerOrigin: "https://model8.run/v1",
-  fixedModel: "gpt-4.1-mini",
+  providerOrigin: "http://127.0.0.1:23333/v1",
+  fixedModel: "glm-5",
 };
 
 export function validAccessForm(values: AccessFormValues): boolean {

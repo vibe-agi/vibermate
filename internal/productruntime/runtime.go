@@ -249,7 +249,7 @@ func startWithBuilders(
 	}
 	cleanups.register("storage health monitor", monitor.Shutdown)
 
-	providerResumeProber, err := providertransport.NewTLSProber()
+	providerResumeProber, err := providertransport.NewProviderProber()
 	if err != nil {
 		return fail("offline-hold provider probe", err)
 	}

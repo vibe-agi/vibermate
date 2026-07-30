@@ -14,13 +14,20 @@ The runner requires:
   same App bundle;
 - an absolute Claude Code 2.1.220 executable whose invocation label and
   SHA-256 match the fixed Darwin arm64 release;
-- one provider HTTPS origin, fixed model, Access ID, and logical `SecretRef`;
+- one provider origin, fixed model, Access ID, and logical `SecretRef`;
 - a private path for the JSON evidence report.
 
 The fixed Claude executable SHA-256 is
 `8addc857f3fe64d5a0368af9ee50321b50afb4a6918ba3ef018ab84f5dbbe081`.
 The default provider route for this acceptance slice is
-`https://model8.run/v1` with model `gpt-5.6-sol`.
+`http://127.0.0.1:23333/v1` with model `glm-5`.
+
+Remote provider origins remain HTTPS-only with strict system-root validation.
+The default exercises the design's narrower development exception: cleartext
+is accepted only for a literal loopback IP, is forced through Direct egress,
+does not use ambient proxies, and verifies the connected TCP peer before any
+authenticated HTTP byte is written. `localhost`, LAN, private-CIDR, and public
+HTTP origins are rejected.
 
 The runner never accepts a secret value. It removes ambient Anthropic,
 alternate-provider, Claude credential, and OpenAI credential variables from
@@ -105,8 +112,10 @@ The deterministic sequence verifies:
 5. one executable Access commits as revision 1;
 6. fixed Claude reaches the proxy while egress is held and queues approved
    original-origin control traffic with zero active egress;
-7. Resume performs TLS-only, no-credential probes for the exact queued
-   original origin and frozen provider target before release;
+7. Resume performs no-credential probes for the exact queued original origin
+   and frozen provider target before release; strict HTTPS targets complete TLS,
+   while the literal-loopback cleartext exception completes an exact TCP peer
+   check;
 8. the semantic request reaches the intentionally missing development
    credential boundary, records `provider_credential_unavailable`, and does not
    send provider HTTP traffic;
@@ -141,8 +150,8 @@ Before the credentialed run, use the same development-profile App to apply the
 acceptance Access and save its provider key:
 
 1. set Access ID to `assembly-001`;
-2. set the provider origin to `https://model8.run/v1`;
-3. set the fixed model to `gpt-5.6-sol`;
+2. set the provider origin to `http://127.0.0.1:23333/v1`;
+3. set the fixed model to `glm-5`;
 4. apply the Access at the currently loaded revision;
 5. save the provider credential once and confirm a nonzero secret revision.
 
@@ -189,7 +198,7 @@ Other nonzero statuses are failures.
 ## Evidence boundary
 
 A successful M0 report proves only this fixed macOS arm64 Desktop slice, fixed
-Claude release, configured relay/model, and captured run. It does not prove
+Claude release, configured provider target/model, and captured run. It does not prove
 physical sleep or network removal, power-loss durability, arbitrary Agent or
 provider compatibility, reverse protocol translation, exact JA3/JA4 or HTTP/2
 fingerprint parity, Root installation, signed/notarized distribution, Server,

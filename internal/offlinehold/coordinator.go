@@ -385,6 +385,7 @@ func (gate *Gate) PendingProbeTargets() []ProbeTarget {
 		seen[key] = struct{}{}
 		targets = append(targets, ProbeTarget{
 			Kind:           key.target.Kind,
+			Transport:      key.target.Transport,
 			TargetRef:      key.target.TargetRef,
 			NetworkOrigin:  key.target.NetworkOrigin,
 			HTTPAuthority:  key.target.HTTPAuthority,
@@ -741,6 +742,21 @@ func validateProbeTarget(target ProbeTarget) error {
 	if !validEgressKind(target.Kind) {
 		return ErrInvalidRequest
 	}
+	switch target.Transport {
+	case ProbeTransportStrictTLS:
+		if err := validateOpaqueIdentity(
+			"probe TLS server name",
+			target.TLSServerName,
+		); err != nil {
+			return err
+		}
+	case ProbeTransportLoopbackCleartext:
+		if target.Kind != EgressProvider || target.TLSServerName != "" {
+			return ErrInvalidRequest
+		}
+	default:
+		return ErrInvalidRequest
+	}
 	for _, field := range []struct {
 		label string
 		value string
@@ -748,7 +764,6 @@ func validateProbeTarget(target ProbeTarget) error {
 		{label: "probe target reference", value: target.TargetRef},
 		{label: "probe network origin", value: target.NetworkOrigin},
 		{label: "probe HTTP authority", value: target.HTTPAuthority},
-		{label: "probe TLS server name", value: target.TLSServerName},
 	} {
 		if err := validateOpaqueIdentity(field.label, field.value); err != nil {
 			return err
@@ -768,6 +783,7 @@ func validateProbeTarget(target ProbeTarget) error {
 func probeTargetSortKey(target ProbeTarget) string {
 	return strings.Join([]string{
 		string(target.Kind),
+		string(target.Transport),
 		target.TargetRef,
 		target.NetworkOrigin,
 		target.HTTPAuthority,

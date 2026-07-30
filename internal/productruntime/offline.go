@@ -153,6 +153,7 @@ func (r *Runtime) resumeProbeTargets() ([]offlinehold.ProbeTarget, error) {
 func probeTargetIdentityKey(target offlinehold.ProbeTarget) string {
 	return strings.Join([]string{
 		string(target.Kind),
+		string(target.Transport),
 		target.TargetRef,
 		target.NetworkOrigin,
 		target.HTTPAuthority,

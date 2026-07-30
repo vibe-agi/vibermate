@@ -46,6 +46,49 @@ func TestCompilerProducesDeterministicExecutablePlan(t *testing.T) {
 	assertGetterIsolation(t, first)
 }
 
+func TestCompilerMarksLiteralLoopbackCleartextTarget(t *testing.T) {
+	t.Parallel()
+
+	compiler := testCompiler(t)
+	aggregate := testAggregate(
+		t,
+		newAccessID(t, "access-loopback-cleartext"),
+		1,
+		"Loopback",
+	)
+	origin, err := access.NewProviderOrigin(
+		"http://127.0.0.1:23333/v1",
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	aggregate.ProviderTargets[0].Origin = origin
+	plan, err := compiler.Compile(aggregate)
+	if err != nil {
+		t.Fatalf("Compile() error = %v", err)
+	}
+	targets := plan.ProviderTargets()
+	if len(targets) != 1 {
+		t.Fatalf("compiled targets = %d", len(targets))
+	}
+	target := targets[0]
+	if target.TransportKind() !=
+		access.ProviderTransportLoopbackCleartext ||
+		target.NetworkHost() != "127.0.0.1" ||
+		target.HTTPAuthority() != "127.0.0.1:23333" ||
+		target.TLSServerName() != "" ||
+		target.Port() != 23333 {
+		t.Fatalf(
+			"compiled loopback target = kind=%q host=%q authority=%q SNI=%q port=%d",
+			target.TransportKind(),
+			target.NetworkHost(),
+			target.HTTPAuthority(),
+			target.TLSServerName(),
+			target.Port(),
+		)
+	}
+}
+
 func TestCompilerCatalogDoesNotRetainInputAliases(t *testing.T) {
 	t.Parallel()
 
@@ -326,6 +369,10 @@ func TestOriginsRejectAmbiguousNetworkIdentity(t *testing.T) {
 
 	for _, value := range []string{
 		"http://api.openai.com/v1",
+		"http://localhost:23333/v1",
+		"http://192.168.1.10:23333/v1",
+		"http://10.0.0.8:23333/v1",
+		"http://[::ffff:127.0.0.1]:23333/v1",
 		"https://user@api.openai.com/v1",
 		"https://*.openai.com/v1",
 		"https://api.openai.com/v1/",
@@ -337,6 +384,56 @@ func TestOriginsRejectAmbiguousNetworkIdentity(t *testing.T) {
 	}
 	if _, err := access.NewClientOrigin("https://api.anthropic.com/v1"); err == nil {
 		t.Fatal("ClientOrigin accepted a provider path")
+	}
+	if _, err := access.NewClientOrigin("http://127.0.0.1:23333"); err == nil {
+		t.Fatal("ClientOrigin accepted cleartext HTTP")
+	}
+}
+
+func TestProviderOriginAcceptsOnlyLiteralLoopbackCleartext(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		value     string
+		canonical string
+		host      string
+		authority string
+		port      uint16
+	}{
+		{
+			value:     "http://127.0.0.1:23333/v1",
+			canonical: "http://127.0.0.1:23333/v1",
+			host:      "127.0.0.1",
+			authority: "127.0.0.1:23333",
+			port:      23333,
+		},
+		{
+			value:     "http://[::1]:23333/v1",
+			canonical: "http://[::1]:23333/v1",
+			host:      "::1",
+			authority: "[::1]:23333",
+			port:      23333,
+		},
+	}
+	for _, test := range tests {
+		test := test
+		t.Run(test.value, func(t *testing.T) {
+			origin, err := access.NewProviderOrigin(test.value)
+			if err != nil {
+				t.Fatalf("NewProviderOrigin() error = %v", err)
+			}
+			if origin.String() != test.canonical ||
+				origin.Scheme() != "http" ||
+				origin.NetworkHost() != test.host ||
+				origin.HTTPAuthority() != test.authority ||
+				origin.EndpointAuthority() != test.authority ||
+				origin.TLSServerName() != "" ||
+				origin.Port() != test.port ||
+				origin.TransportKind() !=
+					access.ProviderTransportLoopbackCleartext {
+				t.Fatalf("ProviderOrigin = %#v", origin)
+			}
+		})
 	}
 }
 

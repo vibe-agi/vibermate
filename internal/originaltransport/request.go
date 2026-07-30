@@ -109,6 +109,7 @@ func (request Request) Body() []byte {
 func (request Request) probeTarget() offlinehold.ProbeTarget {
 	return offlinehold.ProbeTarget{
 		Kind:          request.kind,
+		Transport:     offlinehold.ProbeTransportStrictTLS,
 		TargetRef:     request.origin.String(),
 		NetworkOrigin: request.origin.String(),
 		HTTPAuthority: request.origin.HTTPAuthority(),

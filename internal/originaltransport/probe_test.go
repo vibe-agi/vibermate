@@ -228,6 +228,7 @@ func frozenOriginalProbeTarget(
 	}
 	return offlinehold.ProbeTarget{
 		Kind:          kind,
+		Transport:     offlinehold.ProbeTransportStrictTLS,
 		TargetRef:     origin.String(),
 		NetworkOrigin: origin.String(),
 		HTTPAuthority: origin.HTTPAuthority(),

@@ -21,6 +21,7 @@ type Authenticator interface {
 		context.Context,
 		*http.Request,
 		secretstore.Reference,
+		Target,
 	) (CredentialEvidence, error)
 }
 
@@ -47,14 +48,13 @@ func (authenticator *StaticBearerAuthenticator) Apply(
 	ctx context.Context,
 	request *http.Request,
 	reference secretstore.Reference,
+	target Target,
 ) (CredentialEvidence, error) {
 	if ctx == nil || request == nil || request.URL == nil {
 		return CredentialEvidence{}, errors.New("final provider request is missing")
 	}
-	if request.URL.Scheme != "https" ||
-		request.URL.Host == "" ||
-		request.Host != request.URL.Host {
-		return CredentialEvidence{}, errors.New("provider request identity is not frozen")
+	if err := target.validateRequestIdentity(request); err != nil {
+		return CredentialEvidence{}, err
 	}
 	value, err := authenticator.secrets.Read(ctx, reference)
 	value, err = secretstore.ValidateReaderResult(value, err)

@@ -51,7 +51,7 @@ func TestTLSProbeUsesFrozenTargetWithoutHTTPOrCredential(t *testing.T) {
 	dialer := &recordingMappingDialer{
 		address: server.Listener.Addr().String(),
 	}
-	prober, err := newTLSProber(
+	prober, err := newProviderProber(
 		dialer,
 		roots,
 	)
@@ -89,7 +89,7 @@ func TestTLSProbeClassifiesHostnameRejection(t *testing.T) {
 	roots.AddCert(server.Certificate())
 	port := listenerPort(t, server.Listener.Addr())
 	target := testTarget("untrusted.invalid", port)
-	prober, err := newTLSProber(
+	prober, err := newProviderProber(
 		&mappingDialer{address: server.Listener.Addr().String()},
 		roots,
 	)
@@ -114,7 +114,7 @@ func TestTLSProbeOwnsTargetDeadline(t *testing.T) {
 	dialer := &silentProbeDialer{}
 	defer dialer.Close()
 	target := testTarget("example.com", 443)
-	prober, err := newTLSProberWithTimeout(
+	prober, err := newProviderProberWithTimeout(
 		dialer,
 		nil,
 		20*time.Millisecond,
@@ -135,6 +135,67 @@ func TestTLSProbeOwnsTargetDeadline(t *testing.T) {
 	if !errors.As(err, &failure) ||
 		failure.Reason != offlinehold.ProbeReasonTransportUnavailable {
 		t.Fatalf("bounded probe error = %v", err)
+	}
+}
+
+func TestLoopbackProbeUsesExactFrozenPeerWithoutHTTP(t *testing.T) {
+	t.Parallel()
+
+	listener := newLoopbackProbeListener(t)
+	origin, err := access.NewProviderOrigin(
+		"http://" + listener.Addr().String() + "/v1",
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	target := targetFromProviderOrigin(origin)
+	prober, err := newProviderProber(&net.Dialer{}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := prober.Probe(
+		context.Background(),
+		offlinehold.ProbeRequest{
+			Targets: []offlinehold.ProbeTarget{
+				frozenProviderProbeTarget(t, "loopback-target", target),
+			},
+		},
+	); err != nil {
+		t.Fatalf("Probe() error = %v", err)
+	}
+}
+
+func TestLoopbackProbeRejectsChangedPeer(t *testing.T) {
+	t.Parallel()
+
+	expected := newLoopbackProbeListener(t)
+	actual := newLoopbackProbeListener(t)
+	origin, err := access.NewProviderOrigin(
+		"http://" + expected.Addr().String() + "/v1",
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	target := targetFromProviderOrigin(origin)
+	prober, err := newProviderProber(
+		&mappingDialer{address: actual.Addr().String()},
+		nil,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	err = prober.Probe(
+		context.Background(),
+		offlinehold.ProbeRequest{
+			Targets: []offlinehold.ProbeTarget{
+				frozenProviderProbeTarget(t, "loopback-target", target),
+			},
+		},
+	)
+	var failure *offlinehold.ProbeFailure
+	if !errors.As(err, &failure) ||
+		failure.Reason != offlinehold.ProbeReasonTransportUnavailable {
+		t.Fatalf("Probe() error = %v", err)
 	}
 }
 
@@ -199,4 +260,25 @@ func frozenProviderProbeTarget(
 
 func targetAuthority(host string, port int) string {
 	return host + ":" + strconv.Itoa(port)
+}
+
+func newLoopbackProbeListener(t *testing.T) net.Listener {
+	t.Helper()
+	listener, err := net.Listen("tcp4", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		_ = listener.Close()
+	})
+	go func() {
+		for {
+			connection, acceptErr := listener.Accept()
+			if acceptErr != nil {
+				return
+			}
+			_ = connection.Close()
+		}
+	}()
+	return listener
 }

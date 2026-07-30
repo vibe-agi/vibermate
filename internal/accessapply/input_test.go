@@ -57,6 +57,27 @@ func TestBuildCommandRejectsPathMismatchAndDanglingOwnership(t *testing.T) {
 	}
 }
 
+func TestBuildCommandCompilesLiteralLoopbackProviderOrigin(t *testing.T) {
+	t.Parallel()
+
+	input := validInput()
+	input.ProviderTargets[0].Origin = "http://127.0.0.1:23333/v1"
+	command, err := accessapply.BuildCommand("access-control", input)
+	if err != nil {
+		t.Fatalf("BuildCommand() error = %v", err)
+	}
+	plan, err := testCompiler(t).Compile(command.Aggregate)
+	if err != nil {
+		t.Fatalf("Compile() error = %v", err)
+	}
+	targets := plan.ProviderTargets()
+	if len(targets) != 1 ||
+		targets[0].TransportKind() !=
+			access.ProviderTransportLoopbackCleartext {
+		t.Fatalf("compiled provider targets = %+v", targets)
+	}
+}
+
 func validInput() accessapply.Input {
 	return accessapply.Input{
 		ExpectedRevision: 0,

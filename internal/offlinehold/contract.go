@@ -106,8 +106,16 @@ const (
 	ProbeReasonFailed               ProbeReason = "probe_failed"
 )
 
+type ProbeTransportKind string
+
+const (
+	ProbeTransportStrictTLS         ProbeTransportKind = "strict_tls"
+	ProbeTransportLoopbackCleartext ProbeTransportKind = "loopback_cleartext"
+)
+
 type ProbeTarget struct {
 	Kind           EgressKind
+	Transport      ProbeTransportKind
 	TargetRef      string
 	NetworkOrigin  string
 	HTTPAuthority  string

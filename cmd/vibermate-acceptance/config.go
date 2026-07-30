@@ -14,8 +14,8 @@ import (
 )
 
 const (
-	defaultProviderOrigin = "https://model8.run/v1"
-	defaultProviderModel  = "gpt-5.6-sol"
+	defaultProviderOrigin = "http://127.0.0.1:23333/v1"
+	defaultProviderModel  = "glm-5"
 )
 
 type config struct {

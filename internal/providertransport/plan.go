@@ -27,8 +27,11 @@ type Target struct {
 	origin        string
 	scheme        string
 	httpAuthority string
+	networkHost   string
 	tlsServerName string
 	basePath      string
+	port          uint16
+	transportKind access.ProviderTransportKind
 }
 
 func NewTarget(compiled access.CompiledProviderTarget) (Target, error) {
@@ -38,20 +41,26 @@ func NewTarget(compiled access.CompiledProviderTarget) (Target, error) {
 	if err != nil {
 		return Target{}, fmt.Errorf("parse compiled provider target: %w", err)
 	}
-	if parsed.Scheme != "https" ||
+	if parsed.Scheme != origin.Scheme() ||
 		parsed.Host == "" ||
-		parsed.Hostname() != origin.TLSServerName() ||
+		parsed.Hostname() != origin.NetworkHost() ||
 		origin.HTTPAuthority() != compiled.HTTPAuthority() ||
+		origin.NetworkHost() != compiled.NetworkHost() ||
 		origin.TLSServerName() != compiled.TLSServerName() ||
-		origin.BasePath() != compiled.BasePath() {
+		origin.BasePath() != compiled.BasePath() ||
+		origin.Port() != compiled.Port() ||
+		origin.TransportKind() != compiled.TransportKind() {
 		return Target{}, errors.New("compiled provider target network identities disagree")
 	}
 	return Target{
 		origin:        origin.String(),
 		scheme:        parsed.Scheme,
 		httpAuthority: compiled.HTTPAuthority(),
+		networkHost:   compiled.NetworkHost(),
 		tlsServerName: compiled.TLSServerName(),
 		basePath:      compiled.BasePath(),
+		port:          compiled.Port(),
+		transportKind: compiled.TransportKind(),
 	}, nil
 }
 
@@ -63,8 +72,16 @@ func (target Target) HTTPAuthority() string {
 	return target.httpAuthority
 }
 
+func (target Target) NetworkHost() string {
+	return target.networkHost
+}
+
 func (target Target) TLSServerName() string {
 	return target.tlsServerName
+}
+
+func (target Target) TransportKind() access.ProviderTransportKind {
+	return target.transportKind
 }
 
 func (target Target) BasePath() string {
@@ -72,28 +89,44 @@ func (target Target) BasePath() string {
 }
 
 func (target Target) endpointAuthority() (string, error) {
-	parsed, err := url.Parse(target.origin)
-	if err != nil || parsed.Hostname() == "" {
+	if err := target.validate(); err != nil {
 		return "", errors.New("provider target endpoint authority is invalid")
 	}
-	port := parsed.Port()
-	if port == "" {
-		port = "443"
-	}
-	return net.JoinHostPort(parsed.Hostname(), port), nil
+	return net.JoinHostPort(
+		target.networkHost,
+		fmt.Sprintf("%d", target.port),
+	), nil
 }
 
 func (target Target) validate() error {
 	if target.origin == "" {
 		return errors.New("provider target is empty")
 	}
-	parsed, err := url.Parse(target.origin)
+	origin, err := access.NewProviderOrigin(target.origin)
 	if err != nil ||
-		parsed.Scheme != "https" ||
-		parsed.Host != target.httpAuthority ||
-		parsed.Hostname() != target.tlsServerName ||
-		parsed.EscapedPath() != target.basePath {
+		origin.Scheme() != target.scheme ||
+		origin.HTTPAuthority() != target.httpAuthority ||
+		origin.NetworkHost() != target.networkHost ||
+		origin.TLSServerName() != target.tlsServerName ||
+		origin.BasePath() != target.basePath ||
+		origin.Port() != target.port ||
+		origin.TransportKind() != target.transportKind {
 		return errors.New("provider target is not canonical")
+	}
+	return nil
+}
+
+func (target Target) validateRequestIdentity(request *http.Request) error {
+	if request == nil || request.URL == nil {
+		return errors.New("provider request identity is incomplete")
+	}
+	if err := target.validate(); err != nil {
+		return err
+	}
+	if request.URL.Scheme != target.scheme ||
+		request.URL.Host != target.httpAuthority ||
+		request.Host != target.httpAuthority {
+		return errors.New("provider request identity is not frozen")
 	}
 	return nil
 }
@@ -117,8 +150,13 @@ func NewProbeTarget(
 	if err := target.validate(); err != nil {
 		return offlinehold.ProbeTarget{}, err
 	}
+	probeTransport, err := target.probeTransportKind()
+	if err != nil {
+		return offlinehold.ProbeTarget{}, err
+	}
 	frozen := offlinehold.ProbeTarget{
 		Kind:           offlinehold.EgressProvider,
+		Transport:      probeTransport,
 		TargetRef:      targetRef,
 		NetworkOrigin:  target.origin,
 		HTTPAuthority:  target.httpAuthority,
@@ -130,6 +168,20 @@ func NewProbeTarget(
 		return offlinehold.ProbeTarget{}, err
 	}
 	return frozen, nil
+}
+
+func (target Target) probeTransportKind() (
+	offlinehold.ProbeTransportKind,
+	error,
+) {
+	switch target.transportKind {
+	case access.ProviderTransportStrictTLS:
+		return offlinehold.ProbeTransportStrictTLS, nil
+	case access.ProviderTransportLoopbackCleartext:
+		return offlinehold.ProbeTransportLoopbackCleartext, nil
+	default:
+		return "", errors.New("provider target transport kind is unsupported")
+	}
 }
 
 type RequestOptions struct {
