@@ -549,11 +549,11 @@ func (pipeline *Pipeline) executeComplete(
 		)
 	}
 	if !contentTypeMatches(response.Header.Get("Content-Type"), "application/json") {
-		return newFailure(
-			ReasonProviderResponseInvalid,
+		return newProviderContentTypeFailure(
 			request.exchangeID,
 			response.StatusCode,
-			errors.New("provider response Content-Type is not application/json"),
+			response.Body,
+			"application/json",
 		)
 	}
 	body, err := readBounded(response.Body, maxCompleteResponseBytes)
@@ -827,18 +827,19 @@ func (pipeline *Pipeline) executeStream(
 			response.Header.Get("Content-Type"),
 			"text/event-stream",
 		) {
+			failure := newProviderContentTypeFailure(
+				request.exchangeID,
+				statusCode,
+				response.Body,
+				"text/event-stream",
+			)
 			_ = response.Body.Close()
 			return pipeline.abortStream(
 				ctx,
 				request.exchangeID,
 				downstream,
 				ledger,
-				newFailure(
-					ReasonProviderResponseInvalid,
-					request.exchangeID,
-					statusCode,
-					errors.New("provider response Content-Type is not text/event-stream"),
-				),
+				failure,
 			)
 		}
 
@@ -1231,6 +1232,7 @@ func (pipeline *Pipeline) abortStream(
 		ProviderStatus: typed.ProviderStatus,
 		ProviderField:  typed.ProviderField,
 		ProtocolReason: typed.ProtocolReason,
+		ResponseIssue:  typed.ResponseIssue,
 	})
 	if abortErr != nil {
 		return errors.Join(
@@ -1291,6 +1293,27 @@ func classifyProviderRejection(reader io.Reader) ProviderField {
 		}
 	}
 	return ProviderFieldUnknown
+}
+
+func newProviderContentTypeFailure(
+	exchangeID string,
+	providerStatus int,
+	body io.Reader,
+	expected string,
+) *Failure {
+	failure := newFailure(
+		ReasonProviderResponseInvalid,
+		exchangeID,
+		providerStatus,
+		protocolcore.NewFailure(
+			protocolcore.ReasonInvalidProviderResponse,
+			"$.http.content_type",
+			fmt.Errorf("provider response Content-Type is not %s", expected),
+		),
+	)
+	failure.ProviderField = classifyProviderRejection(body)
+	failure.ResponseIssue = ProviderResponseIssueContentType
+	return failure
 }
 
 func (pipeline *Pipeline) classifyProviderError(

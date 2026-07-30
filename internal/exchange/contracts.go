@@ -96,6 +96,15 @@ func knownProviderField(value string) ProviderField {
 	}
 }
 
+// ProviderResponseIssue identifies a closed response-envelope failure class.
+// It never carries provider-supplied text or response content.
+type ProviderResponseIssue string
+
+const (
+	ProviderResponseIssueUnknown     ProviderResponseIssue = ""
+	ProviderResponseIssueContentType ProviderResponseIssue = "content_type"
+)
+
 type ClientField string
 
 const (
@@ -150,6 +159,7 @@ type Failure struct {
 	ProviderField  ProviderField
 	ClientField    ClientField
 	ProtocolReason protocolcore.Reason
+	ResponseIssue  ProviderResponseIssue
 	cause          error
 }
 
@@ -173,6 +183,9 @@ func (failure *Failure) Error() string {
 	}
 	if failure.ProtocolReason != "" {
 		message += fmt.Sprintf(" protocolReason=%s", failure.ProtocolReason)
+	}
+	if failure.ResponseIssue != "" {
+		message += fmt.Sprintf(" providerResponseIssue=%s", failure.ResponseIssue)
 	}
 	if failure.cause != nil {
 		message += ": " + failure.cause.Error()
@@ -399,6 +412,7 @@ type FailureNotice struct {
 	ProviderStatus int
 	ProviderField  ProviderField
 	ProtocolReason protocolcore.Reason
+	ResponseIssue  ProviderResponseIssue
 }
 
 // Downstream is implemented by a future ingress adapter. Begin commits the

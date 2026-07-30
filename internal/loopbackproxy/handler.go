@@ -1080,17 +1080,19 @@ func (downstream *httpDownstream) Abort(
 		return errors.New("only a begun event stream can abort in band")
 	}
 	data, err := json.Marshal(struct {
-		Type           string                 `json:"type"`
-		ReasonCode     exchange.ReasonCode    `json:"reasonCode"`
-		ProviderStatus int                    `json:"providerStatus,omitempty"`
-		ProviderField  exchange.ProviderField `json:"providerField,omitempty"`
-		ProtocolReason protocolcore.Reason    `json:"protocolReason,omitempty"`
+		Type           string                         `json:"type"`
+		ReasonCode     exchange.ReasonCode            `json:"reasonCode"`
+		ProviderStatus int                            `json:"providerStatus,omitempty"`
+		ProviderField  exchange.ProviderField         `json:"providerField,omitempty"`
+		ProtocolReason protocolcore.Reason            `json:"protocolReason,omitempty"`
+		ResponseIssue  exchange.ProviderResponseIssue `json:"providerResponseIssue,omitempty"`
 	}{
 		Type:           "error",
 		ReasonCode:     notice.ReasonCode,
 		ProviderStatus: notice.ProviderStatus,
 		ProviderField:  notice.ProviderField,
 		ProtocolReason: notice.ProtocolReason,
+		ResponseIssue:  notice.ResponseIssue,
 	})
 	if err != nil {
 		return err

@@ -257,7 +257,8 @@ func TestAgentExitedBeforeApprovalReturnsBoundedFailureEvidence(t *testing.T) {
 		"subtype": "error_during_execution",
 		"result": `{"reasonCode":"provider_response_invalid",` +
 			`"providerStatus":200,` +
-			`"protocolReason":"malformed_event_stream"} secret-value`,
+			`"protocolReason":"invalid_provider_response",` +
+			`"providerResponseIssue":"content_type"} secret-value`,
 	}))
 	err := agentExitedBeforeApproval(context.Background(), run)
 	for _, required := range []string{
@@ -265,7 +266,8 @@ func TestAgentExitedBeforeApprovalReturnsBoundedFailureEvidence(t *testing.T) {
 		"tool pre-approval Claude exit=0",
 		"reasonCode=provider_response_invalid",
 		"providerStatus=200",
-		"protocolReason=malformed_event_stream",
+		"protocolReason=invalid_provider_response",
+		"providerResponseIssue=content_type",
 		"resultSubtype=error_during_execution",
 	} {
 		if !strings.Contains(err.Error(), required) {

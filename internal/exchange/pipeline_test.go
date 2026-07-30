@@ -451,6 +451,65 @@ func TestPipelinePublishesStableProtocolReasonForMalformedStream(t *testing.T) {
 	}
 }
 
+func TestPipelineClassifiesUnexpectedStreamContentTypeWithoutBodyText(
+	t *testing.T,
+) {
+	t.Parallel()
+
+	accessID := mustAccessID(t, "access-stream-content-type")
+	snapshot := compileTestSnapshot(t, accessID, 1, "gpt-content-type")
+	provider := &providerDouble{results: []providerResult{{
+		response: &http.Response{
+			StatusCode: http.StatusOK,
+			Header: http.Header{
+				"Content-Type": []string{"application/json"},
+			},
+			Body: io.NopCloser(strings.NewReader(
+				`{"error":{"param":"tools","message":"private provider text"}}`,
+			)),
+		},
+	}}}
+	pipeline := newTestPipeline(
+		t,
+		&resolverDouble{snapshots: []access.AccessPlanSnapshot{snapshot}},
+		provider,
+		&decisionDouble{decision: ToolDecision{
+			Outcome: ToolDecisionApproved,
+		}},
+	)
+	t.Cleanup(func() { shutdownPipeline(t, pipeline) })
+	downstream := &downstreamRecorder{}
+	result, err := pipeline.Execute(
+		context.Background(),
+		mustClientRequest(
+			t,
+			"exchange-stream-content-type",
+			accessID,
+			streamingClientRequest(),
+			ReplayNonReplayable,
+		),
+		downstream,
+	)
+	var failure *Failure
+	if !errors.As(err, &failure) ||
+		failure.Code != ReasonProviderResponseInvalid ||
+		failure.ProviderField != ProviderFieldTools ||
+		failure.ProtocolReason != protocolcore.ReasonInvalidProviderResponse ||
+		failure.ResponseIssue != ProviderResponseIssueContentType ||
+		strings.Contains(failure.Error(), "private provider text") ||
+		result.Outcome != AttemptFailed {
+		t.Fatalf("Execute() result=%+v error=%v", result, err)
+	}
+	if len(downstream.aborts) != 1 ||
+		downstream.aborts[0].ProviderField != ProviderFieldTools ||
+		downstream.aborts[0].ProtocolReason !=
+			protocolcore.ReasonInvalidProviderResponse ||
+		downstream.aborts[0].ResponseIssue !=
+			ProviderResponseIssueContentType {
+		t.Fatalf("downstream aborts = %+v", downstream.aborts)
+	}
+}
+
 func TestPipelineProviderCommentsDoNotResetSemanticProgressTimeout(t *testing.T) {
 	t.Parallel()
 
