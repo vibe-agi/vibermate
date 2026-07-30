@@ -13,7 +13,7 @@ import (
 	"github.com/vibe-agi/vibermate/internal/runtimepersistence"
 )
 
-func TestAccessCASPublishesImmutableMonotonicSnapshotsAndRestores(t *testing.T) {
+func TestAccessPlanCASPublishesImmutablePlanAndRestores(t *testing.T) {
 	t.Parallel()
 
 	databasePath := filepath.Join(t.TempDir(), "data", "runtime.db")
@@ -31,177 +31,175 @@ func TestAccessCASPublishesImmutableMonotonicSnapshotsAndRestores(t *testing.T) 
 		assertFailureCode(t, err, access.ReasonAccessNotConfigured)
 	}
 
-	missingUpdate, missingUpdateErr := manager.WriteAccess(
-		context.Background(),
-		access.WriteCommand{
-			AccessID:         accessID,
-			ExpectedRevision: 1,
-			Binding:          access.Binding{Name: "Missing"},
-		},
-	)
-	if missingUpdate.Outcome != access.WriteOutcomeNotCommitted ||
-		!errors.Is(missingUpdateErr, access.ErrAccessNotConfigured) {
-		t.Fatalf("missing update result=%+v err=%v", missingUpdate, missingUpdateErr)
-	}
-	assertFailureCode(t, missingUpdateErr, access.ReasonAccessNotConfigured)
-
 	cancelledContext, cancelWrite := context.WithCancel(context.Background())
 	cancelWrite()
 	cancelled, cancelledErr := manager.WriteAccess(
 		cancelledContext,
 		access.WriteCommand{
-			AccessID:         accessID,
 			ExpectedRevision: 0,
-			Binding:          access.Binding{Name: "Cancelled"},
+			Aggregate:        testAggregate(t, accessID, 1, "Cancelled"),
 		},
 	)
 	if cancelled.Outcome != access.WriteOutcomeNotCommitted ||
 		!errors.Is(cancelledErr, context.Canceled) {
 		t.Fatalf("pre-commit cancellation result=%+v err=%v", cancelled, cancelledErr)
 	}
-	assertFailureCode(t, cancelledErr, access.ReasonWriteNotCommitted)
 	if _, err := manager.ResolveAccess(accessID); !errors.Is(
 		err,
 		access.ErrAccessNotConfigured,
 	) {
-		t.Fatalf("pre-commit cancellation published a snapshot: %v", err)
+		t.Fatalf("pre-commit cancellation published a plan: %v", err)
 	}
 
 	create := access.WriteCommand{
-		AccessID:         accessID,
 		ExpectedRevision: 0,
-		Binding: access.Binding{
-			Name:        "Primary",
-			Description: "Initial description",
-		},
+		Aggregate:        testAggregate(t, accessID, 1, "Primary"),
 	}
 	created, err := manager.WriteAccess(context.Background(), create)
 	if err != nil {
 		t.Fatalf("create Access: %v", err)
 	}
-	if created.Outcome != access.WriteOutcomeCommitted || created.Snapshot.Revision() != 1 {
+	if created.Outcome != access.WriteOutcomeCommitted || created.Revision != 1 {
 		t.Fatalf("create result = %+v", created)
 	}
-
-	create.Binding.Name = "Mutated input"
-	create.Binding.Description = "Mutated input description"
-	if got := created.Snapshot.Binding().Name; got != "Primary" {
-		t.Fatalf("input alias changed published snapshot: %q", got)
-	}
-	output := created.Snapshot.Binding()
-	output.Name = "Mutated output"
-	output.Description = "Mutated output description"
-	if got := created.Snapshot.Binding().Name; got != "Primary" {
-		t.Fatalf("output alias changed published snapshot: %q", got)
-	}
-
-	oldHandle, err := manager.ResolveAccess(accessID)
+	first, err := manager.ResolveAccess(accessID)
 	if err != nil {
-		t.Fatalf("resolve first snapshot: %v", err)
+		t.Fatalf("resolve revision one: %v", err)
 	}
-	updated, err := manager.WriteAccess(context.Background(), access.WriteCommand{
-		AccessID:         accessID,
+	assertCompletePlan(t, first, 1, "Primary")
+
+	// Mutating every mutable input collection after the write cannot alter the
+	// compiled active plan.
+	create.Aggregate.Binding.ProfileIDs[0] = mustEndpointProfileID(t, "mutated-profile")
+	create.Aggregate.Profiles[0].AccountBindingIDs = nil
+	create.Aggregate.ProviderTargets[0].Capabilities = nil
+	create.Aggregate.RouteSets[0].CandidateProfileIDs = nil
+	firstAfterInputMutation, err := manager.ResolveAccess(accessID)
+	if err != nil {
+		t.Fatalf("resolve after input mutation: %v", err)
+	}
+	assertCompletePlan(t, firstAfterInputMutation, 1, "Primary")
+	assertGetterIsolation(t, firstAfterInputMutation)
+
+	oldHandle := firstAfterInputMutation
+	update := access.WriteCommand{
 		ExpectedRevision: 1,
-		Binding: access.Binding{
-			Name:        "Primary updated",
-			Description: "Second revision",
-		},
-	})
+		Aggregate:        testAggregate(t, accessID, 2, "Primary updated"),
+	}
+	updated, err := manager.WriteAccess(context.Background(), update)
 	if err != nil {
 		t.Fatalf("update Access: %v", err)
 	}
-	if updated.Snapshot.Revision() != 2 {
-		t.Fatalf("updated revision = %d, want 2", updated.Snapshot.Revision())
+	if updated.Outcome != access.WriteOutcomeCommitted || updated.Revision != 2 {
+		t.Fatalf("update result = %+v", updated)
 	}
 	if oldHandle.Revision() != 1 || oldHandle.Binding().Name != "Primary" {
-		t.Fatalf("old snapshot handle changed: revision=%d binding=%+v",
-			oldHandle.Revision(), oldHandle.Binding())
+		t.Fatalf(
+			"old plan handle changed: revision=%d name=%q",
+			oldHandle.Revision(),
+			oldHandle.Binding().Name,
+		)
 	}
-	newHandle, err := manager.ResolveAccess(accessID)
+	current, err := manager.ResolveAccess(accessID)
 	if err != nil {
-		t.Fatalf("resolve second snapshot: %v", err)
+		t.Fatalf("resolve revision two: %v", err)
 	}
-	if newHandle.Revision() != 2 || newHandle.Binding().Name != "Primary updated" {
-		t.Fatalf("new snapshot = revision:%d binding:%+v",
-			newHandle.Revision(), newHandle.Binding())
+	assertCompletePlan(t, current, 2, "Primary updated")
+	if current.PlanHash() == oldHandle.PlanHash() {
+		t.Fatal("different aggregate revisions produced the same plan hash")
 	}
+
 	if err := projection.Publish(oldHandle); !errors.Is(
 		err,
 		access.ErrPublishedRevisionRegression,
 	) {
 		t.Fatalf("projection accepted a regressing revision: %v", err)
 	}
-	afterRegressionAttempt, err := manager.ResolveAccess(accessID)
+	afterRegression, err := manager.ResolveAccess(accessID)
 	if err != nil {
 		t.Fatalf("resolve after regression attempt: %v", err)
 	}
-	if afterRegressionAttempt != newHandle {
-		t.Fatalf("regression attempt changed snapshot: before=%+v after=%+v",
-			newHandle, afterRegressionAttempt)
+	if afterRegression.PlanHash() != current.PlanHash() {
+		t.Fatal("regression attempt changed the active plan")
 	}
 
 	stale, staleErr := manager.WriteAccess(context.Background(), access.WriteCommand{
-		AccessID:         accessID,
 		ExpectedRevision: 1,
-		Binding:          access.Binding{Name: "Stale"},
+		Aggregate:        testAggregate(t, accessID, 2, "Stale candidate"),
 	})
 	if stale.Outcome != access.WriteOutcomeNotCommitted ||
+		stale.Revision != 2 ||
 		!errors.Is(staleErr, access.ErrRevisionConflict) {
 		t.Fatalf("stale CAS result=%+v err=%v", stale, staleErr)
-	}
-	var failure *access.Failure
-	if !errors.As(staleErr, &failure) || failure.ActualRevision != 2 {
-		t.Fatalf("stale CAS actual revision: %v", staleErr)
 	}
 	afterStale, err := manager.ResolveAccess(accessID)
 	if err != nil {
 		t.Fatalf("resolve after stale CAS: %v", err)
 	}
-	if afterStale != newHandle {
-		t.Fatalf("stale CAS changed snapshot: before=%+v after=%+v", newHandle, afterStale)
+	if afterStale.PlanHash() != current.PlanHash() {
+		t.Fatal("stale CAS changed the active plan")
 	}
 
 	shutdownManager(t, manager)
 	shutdownStore(t, store)
 
+	// This is a normal close/reopen recovery proof, not a process-crash or
+	// power-loss durability proof.
 	reopened := openStore(t, databasePath)
 	defer shutdownStore(t, reopened)
-	recovered := newManager(t, reopened, access.NewSnapshotProjection())
-	defer shutdownManager(t, recovered)
-	recoveredSnapshot, err := recovered.ResolveAccess(accessID)
+	recoveredManager := newManager(t, reopened, access.NewSnapshotProjection())
+	defer shutdownManager(t, recoveredManager)
+	recovered, err := recoveredManager.ResolveAccess(accessID)
 	if err != nil {
 		t.Fatalf("resolve recovered Access: %v", err)
 	}
-	if recoveredSnapshot != newHandle {
-		t.Fatalf("recovered snapshot=%+v, want %+v", recoveredSnapshot, newHandle)
+	assertCompletePlan(t, recovered, 2, "Primary updated")
+	if recovered.PlanHash() != current.PlanHash() {
+		t.Fatalf(
+			"recovered plan hash = %s, want %s",
+			recovered.PlanHash(),
+			current.PlanHash(),
+		)
 	}
 }
 
-func TestAccessConcurrentCreateCASAllowsOneWriter(t *testing.T) {
+func TestConcurrentCASPublishesExactlyOneNewPlan(t *testing.T) {
 	t.Parallel()
 
-	store := openStore(t, filepath.Join(t.TempDir(), "data", "runtime.db"))
+	store := newTemporaryStore(t)
 	defer shutdownStore(t, store)
 	manager := newManager(t, store, access.NewSnapshotProjection())
 	defer shutdownManager(t, manager)
 	accessID := newAccessID(t, "access-concurrent")
+	if _, err := manager.WriteAccess(context.Background(), access.WriteCommand{
+		ExpectedRevision: 0,
+		Aggregate:        testAggregate(t, accessID, 1, "Revision one"),
+	}); err != nil {
+		t.Fatalf("create initial Access: %v", err)
+	}
 
-	type writeResponse struct {
+	type response struct {
 		result access.WriteResult
 		err    error
 	}
-	responses := make(chan writeResponse, 2)
+	responses := make(chan response, 2)
 	start := make(chan struct{})
-	for _, name := range []string{"Writer A", "Writer B"} {
-		name := name
+	commands := []access.WriteCommand{
+		{
+			ExpectedRevision: 1,
+			Aggregate:        testAggregate(t, accessID, 2, "Writer A"),
+		},
+		{
+			ExpectedRevision: 1,
+			Aggregate:        testAggregate(t, accessID, 2, "Writer B"),
+		},
+	}
+	for _, command := range commands {
+		command := command
 		go func() {
 			<-start
-			result, err := manager.WriteAccess(context.Background(), access.WriteCommand{
-				AccessID:         accessID,
-				ExpectedRevision: 0,
-				Binding:          access.Binding{Name: name},
-			})
-			responses <- writeResponse{result: result, err: err}
+			result, err := manager.WriteAccess(context.Background(), command)
+			responses <- response{result: result, err: err}
 		}()
 	}
 	close(start)
@@ -217,410 +215,351 @@ func TestAccessConcurrentCreateCASAllowsOneWriter(t *testing.T) {
 			response.result.Outcome == access.WriteOutcomeNotCommitted:
 			conflicts++
 		default:
-			t.Fatalf("unexpected concurrent CAS result=%+v err=%v",
-				response.result, response.err)
+			t.Fatalf(
+				"unexpected concurrent CAS result=%+v err=%v",
+				response.result,
+				response.err,
+			)
 		}
 	}
 	if committed != 1 || conflicts != 1 {
-		t.Fatalf("concurrent results: committed=%d conflicts=%d", committed, conflicts)
+		t.Fatalf("committed=%d conflicts=%d, want 1 and 1", committed, conflicts)
 	}
-	snapshot, err := manager.ResolveAccess(accessID)
+	plan, err := manager.ResolveAccess(accessID)
 	if err != nil {
-		t.Fatalf("resolve concurrent result: %v", err)
+		t.Fatalf("resolve concurrent winner: %v", err)
 	}
-	if snapshot.Revision() != 1 {
-		t.Fatalf("concurrent revision = %d, want 1", snapshot.Revision())
+	if plan.Revision() != 2 ||
+		(plan.Binding().Name != "Writer A" && plan.Binding().Name != "Writer B") {
+		t.Fatalf("active winner revision=%d name=%q", plan.Revision(), plan.Binding().Name)
 	}
 }
 
-func TestAccessIDsAndRevisionsAreAggregateLocal(t *testing.T) {
+func TestCompileFailureLeavesDurableAndActivePlanUnchanged(t *testing.T) {
 	t.Parallel()
 
-	store := openStore(t, filepath.Join(t.TempDir(), "data", "runtime.db"))
+	store := newTemporaryStore(t)
 	defer shutdownStore(t, store)
 	manager := newManager(t, store, access.NewSnapshotProjection())
 	defer shutdownManager(t, manager)
-	firstID := newAccessID(t, "access-one")
-	secondID := newAccessID(t, "access-two")
+	accessID := newAccessID(t, "access-compile-failure")
+	if _, err := manager.WriteAccess(context.Background(), access.WriteCommand{
+		ExpectedRevision: 0,
+		Aggregate:        testAggregate(t, accessID, 1, "Revision one"),
+	}); err != nil {
+		t.Fatalf("create initial plan: %v", err)
+	}
+	before, err := manager.ResolveAccess(accessID)
+	if err != nil {
+		t.Fatalf("resolve initial plan: %v", err)
+	}
 
-	for _, command := range []access.WriteCommand{
-		{
-			AccessID:         firstID,
+	invalid := testAggregate(t, accessID, 2, "Invalid revision two")
+	invalid.EgressPolicy.Mode = "unknown-egress"
+	result, err := manager.WriteAccess(context.Background(), access.WriteCommand{
+		ExpectedRevision: 1,
+		Aggregate:        invalid,
+	})
+	if result.Outcome != access.WriteOutcomeNotCommitted ||
+		!errors.Is(err, access.ErrInvalidAccessPlan) ||
+		!errors.Is(err, access.ErrUnknownEgressMode) {
+		t.Fatalf("invalid plan result=%+v err=%v", result, err)
+	}
+	after, err := manager.ResolveAccess(accessID)
+	if err != nil {
+		t.Fatalf("resolve after compile failure: %v", err)
+	}
+	if after.Revision() != 1 || after.PlanHash() != before.PlanHash() {
+		t.Fatal("compile failure changed the active plan")
+	}
+	aggregates, err := store.AccessRepository().LoadAll(context.Background())
+	if err != nil {
+		t.Fatalf("load after compile failure: %v", err)
+	}
+	if len(aggregates) != 1 ||
+		aggregates[0].Binding.Revision != 1 ||
+		aggregates[0].Binding.Name != "Revision one" {
+		t.Fatalf("compile failure changed durable state: %+v", aggregates)
+	}
+}
+
+func TestWriterOwnershipSpansCommitThroughPlanPublication(t *testing.T) {
+	t.Parallel()
+
+	store := newTemporaryStore(t)
+	defer shutdownStore(t, store)
+	projection := newBlockingProjection(1)
+	manager := newManager(t, store, projection)
+	defer shutdownManager(t, manager)
+	accessID := newAccessID(t, "access-serialized-publication")
+	firstCommand := access.WriteCommand{
+		ExpectedRevision: 0,
+		Aggregate:        testAggregate(t, accessID, 1, "Revision one"),
+	}
+	secondCommand := access.WriteCommand{
+		ExpectedRevision: 1,
+		Aggregate:        testAggregate(t, accessID, 2, "Revision two"),
+	}
+	type response struct {
+		result access.WriteResult
+		err    error
+	}
+	firstContext, cancelFirst := context.WithCancel(context.Background())
+	defer cancelFirst()
+	firstDone := make(chan response, 1)
+	go func() {
+		result, err := manager.WriteAccess(firstContext, firstCommand)
+		firstDone <- response{result: result, err: err}
+	}()
+	select {
+	case <-projection.entered:
+	case <-time.After(time.Second):
+		t.Fatal("first writer did not reach publication")
+	}
+	assertDurableRevision(t, store, 1)
+	cancelFirst()
+
+	secondDone := make(chan response, 1)
+	go func() {
+		result, err := manager.WriteAccess(context.Background(), secondCommand)
+		secondDone <- response{result: result, err: err}
+	}()
+	select {
+	case second := <-secondDone:
+		t.Fatalf("second writer escaped commit-to-publish ownership: %+v", second)
+	case <-time.After(40 * time.Millisecond):
+	}
+	assertDurableRevision(t, store, 1)
+
+	close(projection.release)
+	first := <-firstDone
+	second := <-secondDone
+	if first.err != nil ||
+		first.result.Outcome != access.WriteOutcomeCommitted ||
+		first.result.Revision != 1 {
+		t.Fatalf("first write result=%+v err=%v", first.result, first.err)
+	}
+	if second.err != nil ||
+		second.result.Outcome != access.WriteOutcomeCommitted ||
+		second.result.Revision != 2 {
+		t.Fatalf("second write result=%+v err=%v", second.result, second.err)
+	}
+	active, err := manager.ResolveAccess(accessID)
+	if err != nil ||
+		active.Revision() != 2 ||
+		active.Binding().Name != "Revision two" {
+		t.Fatalf(
+			"active plan revision=%d name=%q err=%v",
+			active.Revision(),
+			active.Binding().Name,
+			err,
+		)
+	}
+}
+
+func TestPublicationFailurePoisonsOnlyAffectedAccess(t *testing.T) {
+	t.Parallel()
+
+	databasePath := filepath.Join(t.TempDir(), "data", "runtime.db")
+	store := openStore(t, databasePath)
+	defer shutdownStore(t, store)
+	firstID := newAccessID(t, "access-poisoned")
+	secondID := newAccessID(t, "access-independent")
+	projection := newFailingProjection(firstID, 2)
+	manager := newManager(t, store, projection)
+	defer shutdownManager(t, manager)
+
+	for _, accessID := range []access.AccessID{firstID, secondID} {
+		result, err := manager.WriteAccess(context.Background(), access.WriteCommand{
 			ExpectedRevision: 0,
-			Binding:          access.Binding{Name: "First"},
-		},
-		{
-			AccessID:         secondID,
-			ExpectedRevision: 0,
-			Binding:          access.Binding{Name: "Second"},
-		},
-	} {
-		result, err := manager.WriteAccess(context.Background(), command)
-		if err != nil || result.Snapshot.Revision() != 1 {
-			t.Fatalf("create aggregate-local Access result=%+v err=%v", result, err)
+			Aggregate:        testAggregate(t, accessID, 1, "Revision one"),
+		})
+		if err != nil || result.Revision != 1 {
+			t.Fatalf("create accessId=%q result=%+v err=%v", accessID, result, err)
 		}
 	}
-	if _, err := manager.WriteAccess(context.Background(), access.WriteCommand{
-		AccessID:         firstID,
-		ExpectedRevision: 1,
-		Binding:          access.Binding{Name: "First revision two"},
-	}); err != nil {
-		t.Fatalf("update first Access: %v", err)
+	oldHandle, err := manager.ResolveAccess(firstID)
+	if err != nil {
+		t.Fatalf("resolve old handle: %v", err)
 	}
 
-	first, err := manager.ResolveAccess(firstID)
-	if err != nil {
-		t.Fatalf("resolve first Access: %v", err)
+	result, err := manager.WriteAccess(context.Background(), access.WriteCommand{
+		ExpectedRevision: 1,
+		Aggregate:        testAggregate(t, firstID, 2, "Durable revision two"),
+	})
+	if result.Outcome != access.WriteOutcomeCommitted ||
+		result.Revision != 2 ||
+		!errors.Is(err, access.ErrProjectionUnavailable) {
+		t.Fatalf("publication failure result=%+v err=%v", result, err)
 	}
-	second, err := manager.ResolveAccess(secondID)
-	if err != nil {
-		t.Fatalf("resolve second Access: %v", err)
+	if _, err := manager.ResolveAccess(firstID); !errors.Is(
+		err,
+		access.ErrProjectionUnavailable,
+	) {
+		t.Fatalf("poisoned Access remained resolvable: %v", err)
 	}
-	if first.Revision() != 2 || second.Revision() != 1 {
-		t.Fatalf("aggregate revisions: first=%d second=%d",
-			first.Revision(), second.Revision())
+	if oldHandle.Revision() != 1 || oldHandle.Binding().Name != "Revision one" {
+		t.Fatal("previously acquired handle changed after publication failure")
 	}
-	records, err := store.AccessRepository().LoadAll(context.Background())
-	if err != nil {
-		t.Fatalf("load aggregate-local records: %v", err)
+	if _, err := manager.WriteAccess(context.Background(), access.WriteCommand{
+		ExpectedRevision: 2,
+		Aggregate:        testAggregate(t, firstID, 3, "Rejected revision three"),
+	}); !errors.Is(err, access.ErrProjectionUnavailable) {
+		t.Fatalf("poisoned Access accepted a new write: %v", err)
 	}
-	if len(records) != 2 {
-		t.Fatalf("durable Access count = %d, want 2", len(records))
+
+	secondResult, err := manager.WriteAccess(context.Background(), access.WriteCommand{
+		ExpectedRevision: 1,
+		Aggregate:        testAggregate(t, secondID, 2, "Independent revision two"),
+	})
+	if err != nil || secondResult.Revision != 2 {
+		t.Fatalf("independent update result=%+v err=%v", secondResult, err)
+	}
+	secondPlan, err := manager.ResolveAccess(secondID)
+	if err != nil || secondPlan.Revision() != 2 {
+		t.Fatalf("resolve independent plan revision=%d err=%v", secondPlan.Revision(), err)
+	}
+
+	health := manager.ProjectionHealth()
+	if health.State != access.ProjectionStateUnavailable ||
+		health.UnavailableAccessCount != 1 {
+		t.Fatalf("projection health = %+v", health)
+	}
+
+	shutdownManager(t, manager)
+	shutdownStore(t, store)
+	reopened := openStore(t, databasePath)
+	defer shutdownStore(t, reopened)
+	recoveredManager := newManager(t, reopened, access.NewSnapshotProjection())
+	defer shutdownManager(t, recoveredManager)
+	firstRecovered, err := recoveredManager.ResolveAccess(firstID)
+	if err != nil ||
+		firstRecovered.Revision() != 2 ||
+		firstRecovered.Binding().Name != "Durable revision two" {
+		t.Fatalf(
+			"recovered poisoned Access revision=%d name=%q err=%v",
+			firstRecovered.Revision(),
+			firstRecovered.Binding().Name,
+			err,
+		)
+	}
+	secondRecovered, err := recoveredManager.ResolveAccess(secondID)
+	if err != nil ||
+		secondRecovered.Revision() != 2 ||
+		secondRecovered.Binding().Name != "Independent revision two" {
+		t.Fatalf(
+			"recovered independent Access revision=%d name=%q err=%v",
+			secondRecovered.Revision(),
+			secondRecovered.Binding().Name,
+			err,
+		)
+	}
+	if health := recoveredManager.ProjectionHealth(); health.State != access.ProjectionStateHealthy {
+		t.Fatalf("recovered projection health = %+v", health)
 	}
 }
 
-func TestAccessConcurrentResolversObserveCompleteSnapshots(t *testing.T) {
-	t.Parallel()
-
-	store := openStore(t, filepath.Join(t.TempDir(), "data", "runtime.db"))
+func TestConcurrentResolversObserveCompletePlansAcrossAccesses(t *testing.T) {
+	store := newTemporaryStore(t)
 	defer shutdownStore(t, store)
 	manager := newManager(t, store, access.NewSnapshotProjection())
 	defer shutdownManager(t, manager)
-	accessID := newAccessID(t, "access-reader-race")
-
-	if _, err := manager.WriteAccess(context.Background(), access.WriteCommand{
-		AccessID:         accessID,
-		ExpectedRevision: 0,
-		Binding:          access.Binding{Name: "Revision 1"},
-	}); err != nil {
-		t.Fatalf("create Access: %v", err)
+	accessIDs := []access.AccessID{
+		newAccessID(t, "access-race-a"),
+		newAccessID(t, "access-race-b"),
+	}
+	for _, accessID := range accessIDs {
+		if _, err := manager.WriteAccess(context.Background(), access.WriteCommand{
+			ExpectedRevision: 0,
+			Aggregate:        testAggregate(t, accessID, 1, "Revision 1"),
+		}); err != nil {
+			t.Fatalf("create accessId=%q: %v", accessID, err)
+		}
 	}
 
-	const readers = 8
 	done := make(chan struct{})
-	readerErrors := make(chan error, readers)
-	var waitGroup sync.WaitGroup
-	for range readers {
-		waitGroup.Add(1)
+	errs := make(chan error, 16)
+	var readers sync.WaitGroup
+	for range 16 {
+		readers.Add(1)
 		go func() {
-			defer waitGroup.Done()
+			defer readers.Done()
 			for {
 				select {
 				case <-done:
 					return
 				default:
 				}
-				snapshot, err := manager.ResolveAccess(accessID)
-				if err != nil {
-					readerErrors <- err
-					return
-				}
-				wantName := fmt.Sprintf("Revision %d", snapshot.Revision())
-				if snapshot.Binding().Name != wantName {
-					readerErrors <- fmt.Errorf(
-						"incomplete snapshot: revision=%d name=%q",
-						snapshot.Revision(),
-						snapshot.Binding().Name,
-					)
-					return
+				for _, accessID := range accessIDs {
+					plan, err := manager.ResolveAccess(accessID)
+					if err != nil {
+						errs <- err
+						return
+					}
+					if err := validateObservedPlan(plan); err != nil {
+						errs <- err
+						return
+					}
 				}
 			}
 		}()
 	}
 
-	for revision := access.Revision(2); revision <= 50; revision++ {
-		if _, err := manager.WriteAccess(context.Background(), access.WriteCommand{
-			AccessID:         accessID,
-			ExpectedRevision: revision - 1,
-			Binding: access.Binding{
-				Name: fmt.Sprintf("Revision %d", revision),
-			},
-		}); err != nil {
-			close(done)
-			waitGroup.Wait()
-			t.Fatalf("write revision %d: %v", revision, err)
+	for revision := access.Revision(2); revision <= 30; revision++ {
+		for _, accessID := range accessIDs {
+			if _, err := manager.WriteAccess(context.Background(), access.WriteCommand{
+				ExpectedRevision: revision - 1,
+				Aggregate: testAggregate(
+					t,
+					accessID,
+					revision,
+					fmt.Sprintf("Revision %d", revision),
+				),
+			}); err != nil {
+				close(done)
+				readers.Wait()
+				t.Fatalf("write accessId=%q revision=%d: %v", accessID, revision, err)
+			}
 		}
 	}
 	close(done)
-	waitGroup.Wait()
-	close(readerErrors)
-	for err := range readerErrors {
-		t.Errorf("concurrent resolver: %v", err)
+	readers.Wait()
+	close(errs)
+	for err := range errs {
+		t.Fatalf("concurrent resolver observed invalid plan: %v", err)
 	}
-	final, err := manager.ResolveAccess(accessID)
-	if err != nil {
-		t.Fatalf("resolve final snapshot: %v", err)
-	}
-	if final.Revision() != 50 || final.Binding().Name != "Revision 50" {
-		t.Fatalf("final snapshot: revision=%d binding=%+v",
-			final.Revision(), final.Binding())
+	for _, accessID := range accessIDs {
+		plan, err := manager.ResolveAccess(accessID)
+		if err != nil {
+			t.Fatalf("resolve final accessId=%q: %v", accessID, err)
+		}
+		if plan.Revision() != 30 || plan.Binding().Name != "Revision 30" {
+			t.Fatalf(
+				"final accessId=%q revision=%d name=%q",
+				accessID,
+				plan.Revision(),
+				plan.Binding().Name,
+			)
+		}
 	}
 }
 
-func TestAccessWriterSerializesCommitThroughPublication(t *testing.T) {
+func TestShutdownDeadlineDrainsCommitToPublicationBoundary(t *testing.T) {
 	t.Parallel()
 
-	store := openStore(t, filepath.Join(t.TempDir(), "data", "runtime.db"))
+	store := newTemporaryStore(t)
 	defer shutdownStore(t, store)
 	projection := newBlockingProjection(1)
 	manager := newManager(t, store, projection)
-	defer shutdownManager(t, manager)
-	accessID := newAccessID(t, "access-linearized")
-
-	firstContext, cancelFirst := context.WithCancel(context.Background())
-	defer cancelFirst()
-	type writeResponse struct {
-		result access.WriteResult
-		err    error
-	}
-	firstDone := make(chan writeResponse, 1)
-	go func() {
-		result, err := manager.WriteAccess(firstContext, access.WriteCommand{
-			AccessID:         accessID,
-			ExpectedRevision: 0,
-			Binding:          access.Binding{Name: "Revision one"},
-		})
-		firstDone <- writeResponse{result: result, err: err}
-	}()
-
-	select {
-	case <-projection.entered:
-	case <-time.After(time.Second):
-		t.Fatal("first writer did not reach post-commit publication")
-	}
-	records, err := store.AccessRepository().LoadAll(context.Background())
-	if err != nil {
-		t.Fatalf("read durable state in commit-to-publish window: %v", err)
-	}
-	if len(records) != 1 || records[0].Revision != 1 {
-		t.Fatalf("durable state before publication: %+v", records)
-	}
-
-	cancelFirst()
-	secondDone := make(chan writeResponse, 1)
-	secondStarted := make(chan struct{})
-	go func() {
-		close(secondStarted)
-		result, err := manager.WriteAccess(context.Background(), access.WriteCommand{
-			AccessID:         accessID,
-			ExpectedRevision: 1,
-			Binding:          access.Binding{Name: "Revision two"},
-		})
-		secondDone <- writeResponse{result: result, err: err}
-	}()
-	<-secondStarted
-	select {
-	case response := <-secondDone:
-		t.Fatalf("second writer crossed unpublished first commit: %+v %v",
-			response.result, response.err)
-	case <-time.After(40 * time.Millisecond):
-	}
-
-	close(projection.release)
-	first := <-firstDone
-	if first.err != nil || first.result.Outcome != access.WriteOutcomeCommitted {
-		t.Fatalf("post-commit cancellation result=%+v err=%v", first.result, first.err)
-	}
-	second := <-secondDone
-	if second.err != nil || second.result.Snapshot.Revision() != 2 {
-		t.Fatalf("second write result=%+v err=%v", second.result, second.err)
-	}
-
-	if revisions := projection.publishedRevisions(); !equalRevisions(
-		revisions,
-		[]access.Revision{1, 2},
-	) {
-		t.Fatalf("published revisions = %v, want [1 2]", revisions)
-	}
-	snapshot, err := manager.ResolveAccess(accessID)
-	if err != nil {
-		t.Fatalf("resolve serialized result: %v", err)
-	}
-	if snapshot.Revision() != 2 {
-		t.Fatalf("published revision regressed to %d", snapshot.Revision())
-	}
-}
-
-func TestAccessCloseAndReopenRecoversCommitWithoutProcessPublication(t *testing.T) {
-	t.Parallel()
-
-	databasePath := filepath.Join(t.TempDir(), "data", "runtime.db")
-	store := openStore(t, databasePath)
-	accessID := newAccessID(t, "access-unpublished-reopen")
-	candidate := access.Record{
-		AccessID: accessID,
-		Revision: 1,
-		Binding:  access.Binding{Name: "Durable before publication"},
-	}
-	result, err := store.AccessRepository().CompareAndSwap(
-		context.Background(),
-		access.Mutation{ExpectedRevision: 0, Candidate: candidate},
-	)
-	if err != nil || result.Outcome != access.CommitOutcomeCommitted {
-		t.Fatalf("commit without projection result=%+v err=%v", result, err)
-	}
-	shutdownStore(t, store)
-
-	reopened := openStore(t, databasePath)
-	defer shutdownStore(t, reopened)
-	manager := newManager(t, reopened, access.NewSnapshotProjection())
-	defer shutdownManager(t, manager)
-	snapshot, err := manager.ResolveAccess(accessID)
-	if err != nil {
-		t.Fatalf("recover committed Access: %v", err)
-	}
-	if snapshot.Revision() != 1 ||
-		snapshot.Binding().Name != "Durable before publication" {
-		t.Fatalf("recovered snapshot: revision=%d binding=%+v",
-			snapshot.Revision(), snapshot.Binding())
-	}
-}
-
-func TestAccessPublishFailurePoisonsOnlyAffectedProjectionUntilRestart(
-	t *testing.T,
-) {
-	t.Parallel()
-
-	databasePath := filepath.Join(t.TempDir(), "data", "runtime.db")
-	store := openStore(t, databasePath)
-	projection := newFailingProjection(2)
-	manager := newManager(t, store, projection)
-	accessID := newAccessID(t, "access-publication-failure")
-
-	created, err := manager.WriteAccess(context.Background(), access.WriteCommand{
-		AccessID:         accessID,
+	accessID := newAccessID(t, "access-blocked-publication")
+	command := access.WriteCommand{
 		ExpectedRevision: 0,
-		Binding:          access.Binding{Name: "Revision one"},
-	})
-	if err != nil || created.Outcome != access.WriteOutcomeCommitted {
-		t.Fatalf("create Access result=%+v err=%v", created, err)
+		Aggregate:        testAggregate(t, accessID, 1, "Committed"),
 	}
-	oldHandle, err := manager.ResolveAccess(accessID)
-	if err != nil {
-		t.Fatalf("resolve first revision: %v", err)
-	}
-
-	updated, updateErr := manager.WriteAccess(
-		context.Background(),
-		access.WriteCommand{
-			AccessID:         accessID,
-			ExpectedRevision: 1,
-			Binding:          access.Binding{Name: "Revision two"},
-		},
-	)
-	if updated.Outcome != access.WriteOutcomeCommitted ||
-		updated.Snapshot.Revision() != 2 ||
-		!errors.Is(updateErr, access.ErrProjectionUnavailable) ||
-		!errors.Is(updateErr, errInjectedPublication) {
-		t.Fatalf("publication failure result=%+v err=%v", updated, updateErr)
-	}
-	assertFailureCode(t, updateErr, access.ReasonProjectionUnavailable)
-	if oldHandle.Revision() != 1 ||
-		oldHandle.Binding().Name != "Revision one" {
-		t.Fatalf("publication failure changed old handle: revision=%d binding=%+v",
-			oldHandle.Revision(), oldHandle.Binding())
-	}
-	if _, err := manager.ResolveAccess(accessID); !errors.Is(
-		err,
-		access.ErrProjectionUnavailable,
-	) {
-		t.Fatalf("poisoned projection served a stale snapshot: %v", err)
-	} else {
-		assertFailureCode(t, err, access.ReasonProjectionUnavailable)
-	}
-	health := manager.ProjectionHealth()
-	if health.State != access.ProjectionStateUnavailable ||
-		health.UnavailableAccessCount != 1 {
-		t.Fatalf("poisoned projection health = %+v", health)
-	}
-
-	retry, retryErr := manager.WriteAccess(
-		context.Background(),
-		access.WriteCommand{
-			AccessID:         accessID,
-			ExpectedRevision: 2,
-			Binding:          access.Binding{Name: "Ambiguous retry"},
-		},
-	)
-	if retry.Outcome != access.WriteOutcomeNotCommitted ||
-		!errors.Is(retryErr, access.ErrProjectionUnavailable) {
-		t.Fatalf("poisoned projection accepted a write result=%+v err=%v",
-			retry, retryErr)
-	}
-	assertFailureCode(t, retryErr, access.ReasonProjectionUnavailable)
-
-	otherID := newAccessID(t, "access-still-available")
-	other, otherErr := manager.WriteAccess(
-		context.Background(),
-		access.WriteCommand{
-			AccessID:         otherID,
-			ExpectedRevision: 0,
-			Binding:          access.Binding{Name: "Independent Access"},
-		},
-	)
-	if otherErr != nil || other.Outcome != access.WriteOutcomeCommitted {
-		t.Fatalf("unaffected Access write result=%+v err=%v", other, otherErr)
-	}
-
-	records, err := store.AccessRepository().LoadAll(context.Background())
-	if err != nil {
-		t.Fatalf("load durable state after publication failure: %v", err)
-	}
-	if len(records) != 2 ||
-		records[0].AccessID != accessID ||
-		records[0].Revision != 2 ||
-		records[0].Binding.Name != "Revision two" {
-		t.Fatalf("durable state after publication failure = %+v", records)
-	}
-
-	shutdownManager(t, manager)
-	shutdownStore(t, store)
-
-	reopened := openStore(t, databasePath)
-	defer shutdownStore(t, reopened)
-	recovered := newManager(t, reopened, access.NewSnapshotProjection())
-	defer shutdownManager(t, recovered)
-	recoveredSnapshot, err := recovered.ResolveAccess(accessID)
-	if err != nil {
-		t.Fatalf("resolve recovered publication failure: %v", err)
-	}
-	if recoveredSnapshot.Revision() != 2 ||
-		recoveredSnapshot.Binding().Name != "Revision two" {
-		t.Fatalf("recovered publication failure snapshot: revision=%d binding=%+v",
-			recoveredSnapshot.Revision(), recoveredSnapshot.Binding())
-	}
-	if health := recovered.ProjectionHealth(); health.State != access.ProjectionStateHealthy ||
-		health.UnavailableAccessCount != 0 {
-		t.Fatalf("recovered projection health = %+v", health)
-	}
-}
-
-func TestAccessShutdownBoundsBlockedPostCommitPublicationAndRejectsWrites(t *testing.T) {
-	t.Parallel()
-
-	store := openStore(t, filepath.Join(t.TempDir(), "data", "runtime.db"))
-	defer shutdownStore(t, store)
-	projection := newBlockingProjection(1)
-	manager := newManager(t, store, projection)
-	accessID := newAccessID(t, "access-shutdown")
 
 	writeDone := make(chan error, 1)
 	go func() {
-		_, err := manager.WriteAccess(context.Background(), access.WriteCommand{
-			AccessID:         accessID,
-			ExpectedRevision: 0,
-			Binding:          access.Binding{Name: "Committed"},
-		})
+		_, err := manager.WriteAccess(context.Background(), command)
 		writeDone <- err
 	}()
 	select {
@@ -639,9 +578,13 @@ func TestAccessShutdownBoundsBlockedPostCommitPublicationAndRejectsWrites(t *tes
 		t.Fatalf("blocked Access shutdown error = %v", shutdownErr)
 	}
 	if _, err := manager.WriteAccess(context.Background(), access.WriteCommand{
-		AccessID:         newAccessID(t, "access-rejected"),
 		ExpectedRevision: 0,
-		Binding:          access.Binding{Name: "Rejected"},
+		Aggregate: testAggregate(
+			t,
+			newAccessID(t, "access-rejected"),
+			1,
+			"Rejected",
+		),
 	}); !errors.Is(err, access.ErrAccessRuntimeStopping) {
 		t.Fatalf("Access shutdown accepted a new write: %v", err)
 	}
@@ -657,15 +600,239 @@ func TestAccessShutdownBoundsBlockedPostCommitPublicationAndRejectsWrites(t *tes
 	}
 }
 
+func assertCompletePlan(
+	t *testing.T,
+	plan access.AccessPlanSnapshot,
+	revision access.Revision,
+	name string,
+) {
+	t.Helper()
+	if plan.Revision() != revision || plan.Binding().Name != name {
+		t.Fatalf(
+			"plan revision=%d name=%q, want revision=%d name=%q",
+			plan.Revision(),
+			plan.Binding().Name,
+			revision,
+			name,
+		)
+	}
+	if plan.PlanHash().IsZero() || len(plan.PlanHash().String()) != 64 {
+		t.Fatalf("plan hash is invalid: %q", plan.PlanHash())
+	}
+	endpoint := plan.AgentEndpoint()
+	if endpoint.ClientOrigin.String() !=
+		"https://"+plan.AccessID().String()+".example.test:443" ||
+		endpoint.ClientDialect != access.DialectAnthropicMessages {
+		t.Fatalf("AgentEndpoint = %+v", endpoint)
+	}
+	profiles := plan.EndpointProfiles()
+	if len(profiles) != 1 ||
+		profiles[0].BackendDialect != access.DialectOpenAIChat ||
+		profiles[0].DefaultModelPolicy.Mode != access.ModelPolicyModeFixed ||
+		profiles[0].DefaultModelPolicy.FixedModel.String() != "gpt-4.1-mini" {
+		t.Fatalf("profiles = %+v", profiles)
+	}
+	targets := plan.ProviderTargets()
+	if len(targets) != 1 ||
+		targets[0].Target().Origin.String() != "https://api.openai.com:443/v1" ||
+		targets[0].BasePath() != "/v1" ||
+		targets[0].HTTPAuthority() != "api.openai.com:443" ||
+		targets[0].TLSServerName() != "api.openai.com" {
+		t.Fatalf("compiled targets = %+v", targets)
+	}
+	accounts := plan.AccountBindings()
+	if len(accounts) != 1 ||
+		accounts[0].SecretRef.String() != "secret://provider/"+plan.AccessID().String() ||
+		accounts[0].AuthDriverRef != access.StaticHeaderAuthDriverRef() {
+		t.Fatalf("account bindings = %+v", accounts)
+	}
+	codec := plan.CodecPlan()
+	if codec.ClientDialect() != access.DialectAnthropicMessages ||
+		codec.ProviderDialect() != access.DialectOpenAIChat ||
+		codec.ID().String() != "anthropic-messages-to-openai-chat" {
+		t.Fatalf("codec plan = %+v", codec)
+	}
+	if plan.EgressPolicy().Mode != access.EgressModeDirect {
+		t.Fatalf("egress policy = %+v", plan.EgressPolicy())
+	}
+	if plugin := plan.PluginPlan(); plugin.Mode() != access.PluginPlanModePassThrough ||
+		len(plugin.BindingIDs()) != 0 {
+		t.Fatalf("plugin plan mode=%q bindings=%v", plugin.Mode(), plugin.BindingIDs())
+	}
+	transport := plan.TransportFingerprintPlan()
+	requestedTransport := transport.Requested()
+	transportFallbacks := transport.Fallbacks()
+	if requestedTransport.Ref() != access.ObservedClientH1TransportProfileRef() ||
+		requestedTransport.Source() != access.TransportFingerprintObservedClient ||
+		requestedTransport.HTTPTransport() != access.HTTPTransportHTTP1 ||
+		len(requestedTransport.ALPN()) != 1 ||
+		requestedTransport.ALPN()[0] != access.ApplicationProtocolHTTP1 ||
+		len(transportFallbacks) != 1 ||
+		transportFallbacks[0].Ref() != access.StandardH1TransportProfileRef() ||
+		transportFallbacks[0].Source() != access.TransportFingerprintStandard {
+		t.Fatalf(
+			"transport fingerprint requested=%+v fallbacks=%+v",
+			requestedTransport,
+			transportFallbacks,
+		)
+	}
+	routeSets := plan.RouteSets()
+	if len(routeSets) != 1 ||
+		routeSets[0].ID != plan.Binding().DefaultRouteSetID ||
+		len(routeSets[0].CandidateProfileIDs) != 1 ||
+		routeSets[0].CandidateProfileIDs[0] != profiles[0].ID {
+		t.Fatalf("route sets = %+v", routeSets)
+	}
+	dependencies := plan.DependencyRevisions()
+	if len(dependencies) != 16 {
+		t.Fatalf(
+			"routeSets=%d dependencyRevisions=%d",
+			len(routeSets),
+			len(dependencies),
+		)
+	}
+	aggregateKinds := map[access.DependencyKind]bool{
+		access.DependencyAccessBinding:      true,
+		access.DependencyAgentEndpoint:      true,
+		access.DependencyEndpointProfile:    true,
+		access.DependencyProviderTarget:     true,
+		access.DependencyAccountBinding:     true,
+		access.DependencyModelPolicy:        true,
+		access.DependencyRouteSet:           true,
+		access.DependencyAccessEgressPolicy: true,
+		access.DependencyPluginPlan:         true,
+	}
+	seenKinds := make(map[access.DependencyKind]int, len(dependencies))
+	for _, dependency := range dependencies {
+		seenKinds[dependency.Kind]++
+		if aggregateKinds[dependency.Kind] && dependency.Revision != revision {
+			t.Fatalf("aggregate dependency = %+v, want revision %d", dependency, revision)
+		}
+		if !aggregateKinds[dependency.Kind] && dependency.Revision != 1 {
+			t.Fatalf("catalog dependency = %+v, want revision 1", dependency)
+		}
+	}
+	for _, kind := range []access.DependencyKind{
+		access.DependencyAccessBinding,
+		access.DependencyAgentEndpoint,
+		access.DependencyEndpointProfile,
+		access.DependencyProviderTarget,
+		access.DependencyAccountBinding,
+		access.DependencyModelPolicy,
+		access.DependencyRouteSet,
+		access.DependencyAccessEgressPolicy,
+		access.DependencyPluginPlan,
+		access.DependencyCodecPair,
+		access.DependencyAuthDriver,
+		access.DependencyEgressCapability,
+		access.DependencyPluginPlanCapability,
+		access.DependencyModelPolicyCapability,
+	} {
+		if seenKinds[kind] != 1 {
+			t.Fatalf("dependency kind %q count=%d, want 1", kind, seenKinds[kind])
+		}
+	}
+	if seenKinds[access.DependencyTransportFingerprint] != 2 {
+		t.Fatalf(
+			"transport fingerprint dependency count=%d, want 2",
+			seenKinds[access.DependencyTransportFingerprint],
+		)
+	}
+}
+
+func assertGetterIsolation(t *testing.T, plan access.AccessPlanSnapshot) {
+	t.Helper()
+	binding := plan.Binding()
+	binding.ProfileIDs = nil
+	profiles := plan.EndpointProfiles()
+	profiles[0].AccountBindingIDs = nil
+	targets := plan.ProviderTargets()
+	target := targets[0].Target()
+	target.Capabilities = nil
+	routes := plan.RouteSets()
+	routes[0].CandidateProfileIDs = nil
+	codec := plan.CodecPlan()
+	required := codec.RequiredCapabilities()
+	required[0] = "mutated"
+	transport := plan.TransportFingerprintPlan()
+	requestedALPN := transport.Requested().ALPN()
+	requestedALPN[0] = access.ApplicationProtocolHTTP2
+	fallbacks := transport.Fallbacks()
+	fallbackALPN := fallbacks[0].ALPN()
+	fallbackALPN[0] = access.ApplicationProtocolHTTP2
+	dependencies := plan.DependencyRevisions()
+	dependencies[0].ID = "mutated"
+
+	if len(plan.Binding().ProfileIDs) != 1 ||
+		len(plan.EndpointProfiles()[0].AccountBindingIDs) != 1 ||
+		len(plan.ProviderTargets()[0].Target().Capabilities) != 3 ||
+		len(plan.RouteSets()[0].CandidateProfileIDs) != 1 ||
+		plan.CodecPlan().RequiredCapabilities()[0] == "mutated" ||
+		plan.TransportFingerprintPlan().Requested().ALPN()[0] !=
+			access.ApplicationProtocolHTTP1 ||
+		plan.TransportFingerprintPlan().Fallbacks()[0].ALPN()[0] !=
+			access.ApplicationProtocolHTTP1 ||
+		plan.DependencyRevisions()[0].ID == "mutated" {
+		t.Fatal("a getter exposed mutable active-plan state")
+	}
+}
+
+func validateObservedPlan(plan access.AccessPlanSnapshot) error {
+	if plan.PlanHash().IsZero() {
+		return errors.New("zero PlanHash")
+	}
+	if plan.Binding().Revision != plan.Revision() {
+		return errors.New("binding and plan revisions differ")
+	}
+	if plan.Binding().Name != fmt.Sprintf("Revision %d", plan.Revision()) {
+		return fmt.Errorf(
+			"name=%q revision=%d",
+			plan.Binding().Name,
+			plan.Revision(),
+		)
+	}
+	targets := plan.ProviderTargets()
+	if len(targets) != 1 ||
+		targets[0].BasePath() != "/v1" ||
+		targets[0].Target().Revision != plan.Revision() {
+		return errors.New("target is not from the same complete aggregate revision")
+	}
+	foundRoot := false
+	for _, dependency := range plan.DependencyRevisions() {
+		if dependency.Kind == access.DependencyAccessBinding {
+			foundRoot = true
+			if dependency.Revision != plan.Revision() {
+				return errors.New("root dependency revision differs")
+			}
+		}
+	}
+	if !foundRoot {
+		return errors.New("root dependency is missing")
+	}
+	return nil
+}
+
+func assertDurableRevision(
+	t *testing.T,
+	store *runtimepersistence.Store,
+	revision access.Revision,
+) {
+	t.Helper()
+	aggregates, err := store.AccessRepository().LoadAll(context.Background())
+	if err != nil {
+		t.Fatalf("load durable Access: %v", err)
+	}
+	if len(aggregates) != 1 || aggregates[0].Binding.Revision != revision {
+		t.Fatalf("durable aggregates=%+v, want revision=%d", aggregates, revision)
+	}
+}
+
 type blockingProjection struct {
 	delegate      access.SnapshotProjection
 	blockRevision access.Revision
 	entered       chan struct{}
 	release       chan struct{}
 	enterOnce     sync.Once
-
-	mu        sync.Mutex
-	published []access.Revision
 }
 
 func newBlockingProjection(blockRevision access.Revision) *blockingProjection {
@@ -677,30 +844,41 @@ func newBlockingProjection(blockRevision access.Revision) *blockingProjection {
 	}
 }
 
-func (p *blockingProjection) Restore(snapshots []access.Snapshot) error {
-	return p.delegate.Restore(snapshots)
+func (p *blockingProjection) Restore(plans []access.AccessPlanSnapshot) error {
+	return p.delegate.Restore(plans)
 }
 
-func (p *blockingProjection) Publish(snapshot access.Snapshot) error {
-	if snapshot.Revision() == p.blockRevision {
+func (p *blockingProjection) Publish(plan access.AccessPlanSnapshot) error {
+	if plan.Revision() == p.blockRevision {
 		p.enterOnce.Do(func() {
 			close(p.entered)
 		})
 		<-p.release
 	}
-	if err := p.delegate.Publish(snapshot); err != nil {
-		return err
-	}
-	p.mu.Lock()
-	p.published = append(p.published, snapshot.Revision())
-	p.mu.Unlock()
-	return nil
+	return p.delegate.Publish(plan)
 }
 
 func (p *blockingProjection) ResolveAccess(
 	accessID access.AccessID,
-) (access.Snapshot, error) {
+) (access.AccessPlanSnapshot, error) {
 	return p.delegate.ResolveAccess(accessID)
+}
+
+func (p *blockingProjection) ResolveClientOrigin(
+	origin access.ClientOrigin,
+) (access.IngressBinding, error) {
+	return p.delegate.ResolveClientOrigin(origin)
+}
+
+func (p *blockingProjection) ActiveClientAuthorities() ([]string, error) {
+	return p.delegate.ActiveClientAuthorities()
+}
+
+func (p *blockingProjection) ActiveProviderProbeTargets() (
+	[]access.ProviderProbeTarget,
+	error,
+) {
+	return p.delegate.ActiveProviderProbeTargets()
 }
 
 func (p *blockingProjection) MarkUnavailable(accessID access.AccessID) {
@@ -711,41 +889,57 @@ func (p *blockingProjection) ProjectionHealth() access.ProjectionHealth {
 	return p.delegate.ProjectionHealth()
 }
 
-func (p *blockingProjection) publishedRevisions() []access.Revision {
-	p.mu.Lock()
-	defer p.mu.Unlock()
-	return append([]access.Revision(nil), p.published...)
-}
-
-var errInjectedPublication = errors.New("injected snapshot publication error")
+var errInjectedPublication = errors.New("injected plan publication error")
 
 type failingProjection struct {
 	delegate     access.SnapshotProjection
+	failAccessID access.AccessID
 	failRevision access.Revision
 }
 
-func newFailingProjection(failRevision access.Revision) *failingProjection {
+func newFailingProjection(
+	accessID access.AccessID,
+	revision access.Revision,
+) *failingProjection {
 	return &failingProjection{
 		delegate:     access.NewSnapshotProjection(),
-		failRevision: failRevision,
+		failAccessID: accessID,
+		failRevision: revision,
 	}
 }
 
-func (p *failingProjection) Restore(snapshots []access.Snapshot) error {
-	return p.delegate.Restore(snapshots)
+func (p *failingProjection) Restore(plans []access.AccessPlanSnapshot) error {
+	return p.delegate.Restore(plans)
 }
 
-func (p *failingProjection) Publish(snapshot access.Snapshot) error {
-	if snapshot.Revision() == p.failRevision {
+func (p *failingProjection) Publish(plan access.AccessPlanSnapshot) error {
+	if plan.AccessID() == p.failAccessID && plan.Revision() == p.failRevision {
 		return errInjectedPublication
 	}
-	return p.delegate.Publish(snapshot)
+	return p.delegate.Publish(plan)
 }
 
 func (p *failingProjection) ResolveAccess(
 	accessID access.AccessID,
-) (access.Snapshot, error) {
+) (access.AccessPlanSnapshot, error) {
 	return p.delegate.ResolveAccess(accessID)
+}
+
+func (p *failingProjection) ResolveClientOrigin(
+	origin access.ClientOrigin,
+) (access.IngressBinding, error) {
+	return p.delegate.ResolveClientOrigin(origin)
+}
+
+func (p *failingProjection) ActiveClientAuthorities() ([]string, error) {
+	return p.delegate.ActiveClientAuthorities()
+}
+
+func (p *failingProjection) ActiveProviderProbeTargets() (
+	[]access.ProviderProbeTarget,
+	error,
+) {
+	return p.delegate.ActiveProviderProbeTargets()
 }
 
 func (p *failingProjection) MarkUnavailable(accessID access.AccessID) {
@@ -754,75 +948,6 @@ func (p *failingProjection) MarkUnavailable(accessID access.AccessID) {
 
 func (p *failingProjection) ProjectionHealth() access.ProjectionHealth {
 	return p.delegate.ProjectionHealth()
-}
-
-func equalRevisions(left, right []access.Revision) bool {
-	if len(left) != len(right) {
-		return false
-	}
-	for index := range left {
-		if left[index] != right[index] {
-			return false
-		}
-	}
-	return true
-}
-
-func newAccessID(t *testing.T, value string) access.AccessID {
-	t.Helper()
-	accessID, err := access.NewAccessID(value)
-	if err != nil {
-		t.Fatalf("construct Access ID: %v", err)
-	}
-	return accessID
-}
-
-func openStore(t *testing.T, databasePath string) *runtimepersistence.Store {
-	t.Helper()
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
-	store, err := runtimepersistence.Open(ctx, runtimepersistence.Options{
-		DatabasePath:           databasePath,
-		BusyTimeout:            runtimepersistence.DefaultBusyTimeout,
-		CommitReconcileTimeout: runtimepersistence.DefaultCommitReconcileTimeout,
-	})
-	if err != nil {
-		t.Fatalf("open runtime store: %v", err)
-	}
-	return store
-}
-
-func shutdownStore(t *testing.T, store *runtimepersistence.Store) {
-	t.Helper()
-	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
-	defer cancel()
-	if err := store.Shutdown(ctx); err != nil {
-		t.Fatalf("shutdown runtime store: %v", err)
-	}
-}
-
-func newManager(
-	t *testing.T,
-	store *runtimepersistence.Store,
-	projection access.SnapshotProjection,
-) *access.Manager {
-	t.Helper()
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
-	manager, err := access.NewManager(ctx, store.AccessRepository(), projection)
-	if err != nil {
-		t.Fatalf("construct Access manager: %v", err)
-	}
-	return manager
-}
-
-func shutdownManager(t *testing.T, manager *access.Manager) {
-	t.Helper()
-	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
-	defer cancel()
-	if err := manager.Shutdown(ctx); err != nil {
-		t.Fatalf("shutdown Access manager: %v", err)
-	}
 }
 
 func assertFailureCode(t *testing.T, err error, expected access.ReasonCode) {

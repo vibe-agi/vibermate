@@ -2,46 +2,25 @@ package access
 
 import "context"
 
-// Record is the typed persistence boundary between Access and SQLite.
-type Record struct {
-	AccessID AccessID
-	Revision Revision
-	Binding  Binding
+// PlanCompiler is the pure compilation boundary consumed by Manager.
+type PlanCompiler interface {
+	Compile(Aggregate) (AccessPlanSnapshot, error)
 }
 
-func (r Record) Validate() error {
-	return Snapshot{
-		accessID: r.AccessID,
-		revision: r.Revision,
-		binding:  r.Binding,
-	}.validate()
-}
-
-func (r Record) snapshot() (Snapshot, error) {
-	if err := r.Validate(); err != nil {
-		return Snapshot{}, err
-	}
-	return Snapshot{
-		accessID: r.AccessID,
-		revision: r.Revision,
-		binding:  r.Binding,
-	}, nil
-}
-
-// Mutation contains a prevalidated candidate and its compare-and-swap base.
+// Mutation contains a precompiled candidate and its compare-and-swap base.
 type Mutation struct {
 	ExpectedRevision Revision
-	Candidate        Record
+	Candidate        Aggregate
 }
 
-func (m Mutation) Validate() error {
-	if err := m.Candidate.Validate(); err != nil {
+func (mutation Mutation) Validate() error {
+	if err := mutation.Candidate.Validate(); err != nil {
 		return err
 	}
-	if m.ExpectedRevision >= MaxRevision {
+	if mutation.ExpectedRevision >= MaxRevision {
 		return ErrInvalidAccess
 	}
-	if m.Candidate.Revision != m.ExpectedRevision+1 {
+	if mutation.Candidate.Binding.Revision != mutation.ExpectedRevision+1 {
 		return ErrInvalidAccess
 	}
 	return nil
@@ -61,12 +40,12 @@ const (
 // CommitResult contains authoritative state when the outcome makes it known.
 type CommitResult struct {
 	Outcome        CommitOutcome
-	Record         Record
+	Aggregate      Aggregate
 	ActualRevision Revision
 }
 
 // Repository is the SQLite persistence port consumed by Manager.
 type Repository interface {
-	LoadAll(context.Context) ([]Record, error)
+	LoadAll(context.Context) ([]Aggregate, error)
 	CompareAndSwap(context.Context, Mutation) (CommitResult, error)
 }

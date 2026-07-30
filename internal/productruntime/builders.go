@@ -69,8 +69,63 @@ func (productionAccessBuilder) Build(
 	ctx context.Context,
 	request accessBuildRequest,
 ) (accessRuntime, error) {
+	compiler, err := productionAccessPlanCompiler()
+	if err != nil {
+		return nil, fmt.Errorf("build Access plan compiler: %w", err)
+	}
 	projection := access.NewSnapshotProjection()
-	return access.NewManager(ctx, request.repository, projection)
+	return access.NewManager(ctx, request.repository, compiler, projection)
+}
+
+func productionAccessPlanCompiler() (*access.Compiler, error) {
+	codecPairID, err := access.NewCodecPairID(
+		"anthropic-messages-to-openai-chat",
+	)
+	if err != nil {
+		return nil, err
+	}
+	catalog, err := access.NewCatalog(access.CatalogOptions{
+		Capabilities: access.PlanCapabilities{
+			MaxEndpointProfiles: 1,
+			MaxAccountBindings:  1,
+			MaxRouteSets:        1,
+		},
+		CodecPairs: []access.CodecPairDefinition{{
+			ID:              codecPairID,
+			Revision:        4,
+			ClientDialect:   access.DialectAnthropicMessages,
+			ProviderDialect: access.DialectOpenAIChat,
+			RequiredCapabilities: []access.ProviderCapability{
+				access.ProviderCapabilityMessages,
+				access.ProviderCapabilityStreaming,
+				access.ProviderCapabilityToolCalls,
+			},
+		}},
+		AuthDrivers: []access.AuthDriverDefinition{{
+			Ref:      access.StaticHeaderAuthDriverRef(),
+			Revision: 1,
+		}},
+		EgressModes: []access.EgressModeDefinition{{
+			Mode:     access.EgressModeDirect,
+			Revision: 1,
+		}},
+		PluginPlanModes: []access.PluginPlanModeDefinition{{
+			Mode:     access.PluginPlanModePassThrough,
+			Revision: 1,
+		}},
+		ModelPolicyModes: []access.ModelPolicyModeDefinition{{
+			Mode:     access.ModelPolicyModeFixed,
+			Revision: 1,
+		}},
+		TransportProfiles: []access.TransportFingerprintDefinition{
+			access.ObservedClientH1TransportFingerprintDefinition(),
+			access.StandardH1TransportFingerprintDefinition(),
+		},
+	})
+	if err != nil {
+		return nil, err
+	}
+	return access.NewCompiler(catalog)
 }
 
 type monitorBuildRequest struct {

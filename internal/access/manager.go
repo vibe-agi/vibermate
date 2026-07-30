@@ -14,6 +14,7 @@ type Writer interface {
 // Manager owns Access recovery, write serialization, and snapshot publication.
 type Manager struct {
 	repository Repository
+	compiler   PlanCompiler
 	projection SnapshotProjection
 	writer     chan struct{}
 	lifecycle  *lifecycleGate
@@ -22,12 +23,16 @@ type Manager struct {
 var (
 	_ Writer                 = (*Manager)(nil)
 	_ SnapshotResolver       = (*Manager)(nil)
+	_ IngressResolver        = (*Manager)(nil)
+	_ IngressCatalogReader   = (*Manager)(nil)
+	_ ProviderProbeCatalog   = (*Manager)(nil)
 	_ ProjectionHealthReader = (*Manager)(nil)
 )
 
 func NewManager(
 	ctx context.Context,
 	repository Repository,
+	compiler PlanCompiler,
 	projection SnapshotProjection,
 ) (*Manager, error) {
 	if ctx == nil {
@@ -36,46 +41,62 @@ func NewManager(
 	if repository == nil {
 		return nil, errors.New("Access repository is nil")
 	}
+	if compiler == nil {
+		return nil, errors.New("Access plan compiler is nil")
+	}
 	if projection == nil {
-		return nil, errors.New("Access snapshot projection is nil")
+		return nil, errors.New("Access plan projection is nil")
 	}
 
-	records, err := repository.LoadAll(ctx)
+	aggregates, err := repository.LoadAll(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("recover Access aggregates: %w", err)
 	}
 	if err := ctx.Err(); err != nil {
 		return nil, fmt.Errorf("recover Access aggregates: %w", err)
 	}
-	snapshots := make([]Snapshot, 0, len(records))
-	for _, record := range records {
-		snapshot, snapshotErr := record.snapshot()
-		if snapshotErr != nil {
+	snapshots := make([]AccessPlanSnapshot, 0, len(aggregates))
+	for _, aggregate := range aggregates {
+		snapshot, compileErr := compiler.Compile(aggregate)
+		if compileErr != nil {
 			return nil, fmt.Errorf(
 				"%w: recover accessId=%q: %w",
 				ErrInvalidRepositoryState,
-				record.AccessID.String(),
-				snapshotErr,
+				aggregate.Binding.ID.String(),
+				compileErr,
 			)
 		}
 		snapshots = append(snapshots, snapshot)
 	}
 	if err := projection.Restore(snapshots); err != nil {
-		return nil, fmt.Errorf("restore Access snapshot projection: %w", err)
+		return nil, fmt.Errorf("restore Access plan projection: %w", err)
 	}
 
 	writer := make(chan struct{}, 1)
 	writer <- struct{}{}
 	return &Manager{
 		repository: repository,
+		compiler:   compiler,
 		projection: projection,
 		writer:     writer,
 		lifecycle:  newLifecycleGate(),
 	}, nil
 }
 
-func (m *Manager) ResolveAccess(accessID AccessID) (Snapshot, error) {
+func (m *Manager) ResolveAccess(accessID AccessID) (AccessPlanSnapshot, error) {
 	return m.projection.ResolveAccess(accessID)
+}
+
+func (m *Manager) ResolveClientOrigin(origin ClientOrigin) (IngressBinding, error) {
+	return m.projection.ResolveClientOrigin(origin)
+}
+
+func (m *Manager) ActiveClientAuthorities() ([]string, error) {
+	return m.projection.ActiveClientAuthorities()
+}
+
+func (m *Manager) ActiveProviderProbeTargets() ([]ProviderProbeTarget, error) {
+	return m.projection.ActiveProviderProbeTargets()
 }
 
 func (m *Manager) ProjectionHealth() ProjectionHealth {
@@ -88,11 +109,12 @@ func (m *Manager) WriteAccess(
 	ctx context.Context,
 	command WriteCommand,
 ) (WriteResult, error) {
+	accessID := command.accessID()
 	if ctx == nil {
 		return WriteResult{Outcome: WriteOutcomeNotCommitted}, newFailure(
 			ReasonInvalidAccess,
 			ErrInvalidAccess,
-			command.AccessID,
+			accessID,
 			command.ExpectedRevision,
 			0,
 			errors.New("Access write context is nil"),
@@ -102,12 +124,34 @@ func (m *Manager) WriteAccess(
 		return WriteResult{Outcome: WriteOutcomeNotCommitted}, newFailure(
 			ReasonInvalidAccess,
 			ErrInvalidAccess,
-			command.AccessID,
+			accessID,
 			command.ExpectedRevision,
 			0,
 			err,
 		)
 	}
+	if err := ctx.Err(); err != nil {
+		return WriteResult{Outcome: WriteOutcomeNotCommitted}, newFailure(
+			ReasonWriteNotCommitted,
+			ErrWriteNotCommitted,
+			accessID,
+			command.ExpectedRevision,
+			0,
+			err,
+		)
+	}
+	candidatePlan, err := m.compiler.Compile(command.Aggregate)
+	if err != nil {
+		return WriteResult{Outcome: WriteOutcomeNotCommitted}, newFailure(
+			ReasonInvalidAccessPlan,
+			ErrInvalidAccessPlan,
+			accessID,
+			command.ExpectedRevision,
+			0,
+			err,
+		)
+	}
+	candidate := candidatePlan.aggregate.Clone()
 
 	operationContext, finish, err := m.lifecycle.begin(ctx)
 	if err != nil {
@@ -115,7 +159,7 @@ func (m *Manager) WriteAccess(
 			return WriteResult{Outcome: WriteOutcomeNotCommitted}, newFailure(
 				ReasonWriteNotCommitted,
 				ErrWriteNotCommitted,
-				command.AccessID,
+				accessID,
 				command.ExpectedRevision,
 				0,
 				err,
@@ -124,7 +168,7 @@ func (m *Manager) WriteAccess(
 		return WriteResult{Outcome: WriteOutcomeNotCommitted}, newFailure(
 			ReasonAccessRuntimeStopping,
 			ErrAccessRuntimeStopping,
-			command.AccessID,
+			accessID,
 			command.ExpectedRevision,
 			0,
 			err,
@@ -143,7 +187,7 @@ func (m *Manager) WriteAccess(
 			return WriteResult{Outcome: WriteOutcomeNotCommitted}, newFailure(
 				ReasonAccessRuntimeStopping,
 				ErrAccessRuntimeStopping,
-				command.AccessID,
+				accessID,
 				command.ExpectedRevision,
 				0,
 				cause,
@@ -152,37 +196,21 @@ func (m *Manager) WriteAccess(
 		return WriteResult{Outcome: WriteOutcomeNotCommitted}, newFailure(
 			ReasonWriteNotCommitted,
 			ErrWriteNotCommitted,
-			command.AccessID,
+			accessID,
 			command.ExpectedRevision,
 			0,
 			cause,
 		)
 	}
 
-	candidate := Record{
-		AccessID: command.AccessID,
-		Revision: command.ExpectedRevision + 1,
-		Binding:  command.Binding,
-	}
-	snapshot, snapshotErr := candidate.snapshot()
-	if snapshotErr != nil {
-		return WriteResult{Outcome: WriteOutcomeNotCommitted}, newFailure(
-			ReasonInvalidAccess,
-			ErrInvalidAccess,
-			command.AccessID,
-			command.ExpectedRevision,
-			0,
-			snapshotErr,
-		)
-	}
-	if _, resolveErr := m.projection.ResolveAccess(command.AccessID); errors.Is(
+	if _, resolveErr := m.projection.ResolveAccess(accessID); errors.Is(
 		resolveErr,
 		ErrProjectionUnavailable,
 	) {
 		return WriteResult{Outcome: WriteOutcomeNotCommitted}, newFailure(
 			ReasonProjectionUnavailable,
 			ErrProjectionUnavailable,
-			command.AccessID,
+			accessID,
 			command.ExpectedRevision,
 			0,
 			resolveErr,
@@ -199,89 +227,104 @@ func (m *Manager) WriteAccess(
 	switch commitResult.Outcome {
 	case CommitOutcomeCommitted:
 		if commitErr != nil ||
-			commitResult.Record != candidate ||
-			commitResult.ActualRevision != candidate.Revision {
-			m.projection.MarkUnavailable(command.AccessID)
-			return WriteResult{Outcome: WriteOutcomeIndeterminate}, newFailure(
-				ReasonCommitOutcomeUnknown,
-				ErrCommitOutcomeUnknown,
-				command.AccessID,
-				command.ExpectedRevision,
-				commitResult.ActualRevision,
-				errors.Join(commitErr, ErrInvalidRepositoryState),
-			)
+			!commitResult.Aggregate.Equal(candidate) ||
+			commitResult.ActualRevision != candidate.Binding.Revision {
+			m.projection.MarkUnavailable(accessID)
+			return WriteResult{
+					Outcome:  WriteOutcomeIndeterminate,
+					Revision: commitResult.ActualRevision,
+				}, newFailure(
+					ReasonCommitOutcomeUnknown,
+					ErrCommitOutcomeUnknown,
+					accessID,
+					command.ExpectedRevision,
+					commitResult.ActualRevision,
+					errors.Join(commitErr, ErrInvalidRepositoryState),
+				)
 		}
 		// Caller cancellation after a known commit is deliberately not checked.
-		if publishErr := m.projection.Publish(snapshot); publishErr != nil {
-			m.projection.MarkUnavailable(command.AccessID)
+		if publishErr := m.projection.Publish(candidatePlan); publishErr != nil {
+			m.projection.MarkUnavailable(accessID)
 			return WriteResult{
 					Outcome:  WriteOutcomeCommitted,
-					Snapshot: snapshot,
+					Revision: candidate.Binding.Revision,
 				}, newFailure(
 					ReasonProjectionUnavailable,
 					ErrProjectionUnavailable,
-					command.AccessID,
+					accessID,
 					command.ExpectedRevision,
-					candidate.Revision,
+					candidate.Binding.Revision,
 					publishErr,
 				)
 		}
 		return WriteResult{
 			Outcome:  WriteOutcomeCommitted,
-			Snapshot: snapshot,
+			Revision: candidate.Binding.Revision,
 		}, nil
 
 	case CommitOutcomeConflict:
-		return WriteResult{Outcome: WriteOutcomeNotCommitted}, newFailure(
-			ReasonRevisionConflict,
-			ErrRevisionConflict,
-			command.AccessID,
-			command.ExpectedRevision,
-			commitResult.ActualRevision,
-			commitErr,
-		)
+		return WriteResult{
+				Outcome:  WriteOutcomeNotCommitted,
+				Revision: commitResult.ActualRevision,
+			}, newFailure(
+				ReasonRevisionConflict,
+				ErrRevisionConflict,
+				accessID,
+				command.ExpectedRevision,
+				commitResult.ActualRevision,
+				commitErr,
+			)
 
 	case CommitOutcomeNotConfigured:
 		return WriteResult{Outcome: WriteOutcomeNotCommitted}, newFailure(
 			ReasonAccessNotConfigured,
 			ErrAccessNotConfigured,
-			command.AccessID,
+			accessID,
 			command.ExpectedRevision,
 			0,
 			commitErr,
 		)
 
 	case CommitOutcomeNotCommitted:
-		return WriteResult{Outcome: WriteOutcomeNotCommitted}, newFailure(
-			ReasonWriteNotCommitted,
-			ErrWriteNotCommitted,
-			command.AccessID,
-			command.ExpectedRevision,
-			commitResult.ActualRevision,
-			commitErr,
-		)
+		return WriteResult{
+				Outcome:  WriteOutcomeNotCommitted,
+				Revision: commitResult.ActualRevision,
+			}, newFailure(
+				ReasonWriteNotCommitted,
+				ErrWriteNotCommitted,
+				accessID,
+				command.ExpectedRevision,
+				commitResult.ActualRevision,
+				commitErr,
+			)
 
 	case CommitOutcomeIndeterminate:
-		m.projection.MarkUnavailable(command.AccessID)
-		return WriteResult{Outcome: WriteOutcomeIndeterminate}, newFailure(
-			ReasonCommitOutcomeUnknown,
-			ErrCommitOutcomeUnknown,
-			command.AccessID,
-			command.ExpectedRevision,
-			commitResult.ActualRevision,
-			commitErr,
-		)
+		m.projection.MarkUnavailable(accessID)
+		return WriteResult{
+				Outcome:  WriteOutcomeIndeterminate,
+				Revision: commitResult.ActualRevision,
+			}, newFailure(
+				ReasonCommitOutcomeUnknown,
+				ErrCommitOutcomeUnknown,
+				accessID,
+				command.ExpectedRevision,
+				commitResult.ActualRevision,
+				commitErr,
+			)
 
 	default:
-		m.projection.MarkUnavailable(command.AccessID)
-		return WriteResult{Outcome: WriteOutcomeIndeterminate}, newFailure(
-			ReasonCommitOutcomeUnknown,
-			ErrCommitOutcomeUnknown,
-			command.AccessID,
-			command.ExpectedRevision,
-			commitResult.ActualRevision,
-			fmt.Errorf("%w: outcome=%q", ErrInvalidRepositoryState, commitResult.Outcome),
-		)
+		m.projection.MarkUnavailable(accessID)
+		return WriteResult{
+				Outcome:  WriteOutcomeIndeterminate,
+				Revision: commitResult.ActualRevision,
+			}, newFailure(
+				ReasonCommitOutcomeUnknown,
+				ErrCommitOutcomeUnknown,
+				accessID,
+				command.ExpectedRevision,
+				commitResult.ActualRevision,
+				fmt.Errorf("%w: outcome=%q", ErrInvalidRepositoryState, commitResult.Outcome),
+			)
 	}
 }
 

@@ -43,7 +43,7 @@ func newAccessRepository(
 	}
 }
 
-func (r *accessRepository) LoadAll(ctx context.Context) ([]access.Record, error) {
+func (r *accessRepository) LoadAll(ctx context.Context) ([]access.Aggregate, error) {
 	permit, err := r.operations.admit(ctx)
 	if err != nil {
 		return nil, err
@@ -52,9 +52,22 @@ func (r *accessRepository) LoadAll(ctx context.Context) ([]access.Record, error)
 
 	rows, err := r.database.QueryContext(
 		permit.context,
-		`SELECT access_id, revision, name, description
-		 FROM access_bindings
-		 ORDER BY access_id`,
+		`SELECT
+		     binding.access_id,
+		     binding.revision,
+		     binding.name,
+		     binding.description,
+		     plan.format_version,
+		     plan.payload_json,
+		     origin.client_origin,
+		     origin.endpoint_authority,
+		     origin.agent_endpoint_id
+		 FROM access_bindings AS binding
+		 LEFT JOIN access_plan_aggregates AS plan
+		   ON plan.access_id = binding.access_id
+		 LEFT JOIN access_client_origins AS origin
+		   ON origin.access_id = binding.access_id
+		 ORDER BY binding.access_id`,
 	)
 	if err != nil {
 		return nil, fmt.Errorf("load Access aggregates: %w", err)
@@ -63,18 +76,18 @@ func (r *accessRepository) LoadAll(ctx context.Context) ([]access.Record, error)
 		_ = rows.Close()
 	}()
 
-	var records []access.Record
+	var aggregates []access.Aggregate
 	for rows.Next() {
-		record, scanErr := scanAccessRecord(rows)
+		aggregate, scanErr := scanAccessAggregate(rows)
 		if scanErr != nil {
 			return nil, scanErr
 		}
-		records = append(records, record)
+		aggregates = append(aggregates, aggregate)
 	}
 	if err := rows.Err(); err != nil {
 		return nil, fmt.Errorf("iterate Access aggregates: %w", err)
 	}
-	return records, nil
+	return aggregates, nil
 }
 
 func (r *accessRepository) CompareAndSwap(
@@ -82,6 +95,10 @@ func (r *accessRepository) CompareAndSwap(
 	mutation access.Mutation,
 ) (access.CommitResult, error) {
 	if err := mutation.Validate(); err != nil {
+		return access.CommitResult{Outcome: access.CommitOutcomeNotCommitted}, err
+	}
+	encoded, err := encodeAccessAggregatePayload(mutation.Candidate)
+	if err != nil {
 		return access.CommitResult{Outcome: access.CommitOutcomeNotCommitted}, err
 	}
 
@@ -100,6 +117,7 @@ func (r *accessRepository) CompareAndSwap(
 		_ = transaction.Rollback()
 	}()
 
+	candidate := mutation.Candidate
 	var result sql.Result
 	if mutation.ExpectedRevision == 0 {
 		result, err = transaction.ExecContext(
@@ -109,10 +127,10 @@ func (r *accessRepository) CompareAndSwap(
 			 )
 			 VALUES (?, ?, ?, ?)
 			 ON CONFLICT(access_id) DO NOTHING`,
-			mutation.Candidate.AccessID.String(),
-			int64(mutation.Candidate.Revision),
-			mutation.Candidate.Binding.Name,
-			mutation.Candidate.Binding.Description,
+			candidate.Binding.ID.String(),
+			int64(candidate.Binding.Revision),
+			candidate.Binding.Name,
+			candidate.Binding.Description,
 		)
 	} else {
 		result, err = transaction.ExecContext(
@@ -120,16 +138,16 @@ func (r *accessRepository) CompareAndSwap(
 			`UPDATE access_bindings
 			 SET revision = ?, name = ?, description = ?
 			 WHERE access_id = ? AND revision = ?`,
-			int64(mutation.Candidate.Revision),
-			mutation.Candidate.Binding.Name,
-			mutation.Candidate.Binding.Description,
-			mutation.Candidate.AccessID.String(),
+			int64(candidate.Binding.Revision),
+			candidate.Binding.Name,
+			candidate.Binding.Description,
+			candidate.Binding.ID.String(),
 			int64(mutation.ExpectedRevision),
 		)
 	}
 	if err != nil {
 		return access.CommitResult{Outcome: access.CommitOutcomeNotCommitted},
-			fmt.Errorf("write Access aggregate: %w", err)
+			fmt.Errorf("write Access aggregate root: %w", err)
 	}
 
 	affected, err := result.RowsAffected()
@@ -138,10 +156,10 @@ func (r *accessRepository) CompareAndSwap(
 			fmt.Errorf("read Access write result: %w", err)
 	}
 	if affected != 1 {
-		current, exists, readErr := loadAccessRecord(
+		current, exists, readErr := loadAccessAggregate(
 			permit.context,
 			transaction,
-			mutation.Candidate.AccessID,
+			candidate.Binding.ID,
 		)
 		if readErr != nil {
 			return access.CommitResult{Outcome: access.CommitOutcomeNotCommitted},
@@ -154,17 +172,52 @@ func (r *accessRepository) CompareAndSwap(
 		}
 		return access.CommitResult{
 			Outcome:        access.CommitOutcomeConflict,
-			Record:         current,
-			ActualRevision: current.Revision,
+			Aggregate:      current,
+			ActualRevision: current.Binding.Revision,
 		}, nil
+	}
+
+	if _, err := transaction.ExecContext(
+		permit.context,
+		`INSERT INTO access_plan_aggregates (
+		     access_id, format_version, payload_json
+		 )
+		 VALUES (?, ?, ?)
+		 ON CONFLICT(access_id) DO UPDATE SET
+		   format_version = excluded.format_version,
+		   payload_json = excluded.payload_json`,
+		candidate.Binding.ID.String(),
+		accessAggregateFormatVersion,
+		encoded,
+	); err != nil {
+		return access.CommitResult{Outcome: access.CommitOutcomeNotCommitted},
+			fmt.Errorf("write Access aggregate payload: %w", err)
+	}
+	if _, err := transaction.ExecContext(
+		permit.context,
+		`INSERT INTO access_client_origins (
+		     access_id, client_origin, endpoint_authority, agent_endpoint_id
+		 )
+		 VALUES (?, ?, ?, ?)
+		 ON CONFLICT(access_id) DO UPDATE SET
+		   client_origin = excluded.client_origin,
+		   endpoint_authority = excluded.endpoint_authority,
+		   agent_endpoint_id = excluded.agent_endpoint_id`,
+		candidate.Binding.ID.String(),
+		candidate.AgentEndpoint.ClientOrigin.String(),
+		candidate.AgentEndpoint.ClientOrigin.EndpointAuthority(),
+		candidate.AgentEndpoint.ID.String(),
+	); err != nil {
+		return access.CommitResult{Outcome: access.CommitOutcomeNotCommitted},
+			fmt.Errorf("write Access ClientOrigin identity: %w", err)
 	}
 
 	commitErr := r.committer.Commit(transaction)
 	if commitErr == nil {
 		return access.CommitResult{
 			Outcome:        access.CommitOutcomeCommitted,
-			Record:         mutation.Candidate,
-			ActualRevision: mutation.Candidate.Revision,
+			Aggregate:      candidate.Clone(),
+			ActualRevision: candidate.Binding.Revision,
 		}, nil
 	}
 
@@ -176,10 +229,10 @@ func (r *accessRepository) CompareAndSwap(
 		r.reconcileTimeout,
 	)
 	defer cancelReconcile()
-	current, exists, reconcileErr := loadAccessRecord(
+	current, exists, reconcileErr := loadAccessAggregate(
 		reconcileContext,
 		r.database,
-		mutation.Candidate.AccessID,
+		candidate.Binding.ID,
 	)
 	if reconcileErr != nil {
 		return access.CommitResult{
@@ -189,35 +242,31 @@ func (r *accessRepository) CompareAndSwap(
 				fmt.Errorf("reconcile Access commit: %w", reconcileErr),
 			)
 	}
-	if exists && current == mutation.Candidate {
+	if exists && current.Equal(candidate) {
 		return access.CommitResult{
 			Outcome:        access.CommitOutcomeCommitted,
-			Record:         current,
-			ActualRevision: current.Revision,
+			Aggregate:      current,
+			ActualRevision: current.Binding.Revision,
 		}, nil
 	}
-	if !exists || current.Revision == mutation.ExpectedRevision {
-		return access.CommitResult{
-			Outcome:        access.CommitOutcomeNotCommitted,
-			Record:         current,
-			ActualRevision: current.Revision,
-		}, fmt.Errorf("commit Access transaction: %w", commitErr)
-	}
-	if current.Revision != mutation.Candidate.Revision {
-		return access.CommitResult{
-				Outcome:        access.CommitOutcomeIndeterminate,
-				Record:         current,
-				ActualRevision: current.Revision,
-			}, fmt.Errorf(
-				"commit Access transaction has divergent durable revision: %w",
-				commitErr,
-			)
+	if !exists || current.Binding.Revision == mutation.ExpectedRevision {
+		result := access.CommitResult{
+			Outcome: access.CommitOutcomeNotCommitted,
+		}
+		if exists {
+			result.Aggregate = current
+			result.ActualRevision = current.Binding.Revision
+		}
+		return result, fmt.Errorf("commit Access transaction: %w", commitErr)
 	}
 	return access.CommitResult{
-		Outcome:        access.CommitOutcomeConflict,
-		Record:         current,
-		ActualRevision: current.Revision,
-	}, fmt.Errorf("commit Access transaction: %w", commitErr)
+			Outcome:        access.CommitOutcomeIndeterminate,
+			Aggregate:      current,
+			ActualRevision: current.Binding.Revision,
+		}, fmt.Errorf(
+			"commit Access transaction has divergent durable state: %w",
+			commitErr,
+		)
 }
 
 type accessRow interface {
@@ -228,68 +277,93 @@ type accessRowQuerier interface {
 	QueryRowContext(context.Context, string, ...any) *sql.Row
 }
 
-func loadAccessRecord(
+func loadAccessAggregate(
 	ctx context.Context,
 	querier accessRowQuerier,
 	accessID access.AccessID,
-) (access.Record, bool, error) {
-	record, err := scanAccessRecord(querier.QueryRowContext(
+) (access.Aggregate, bool, error) {
+	aggregate, err := scanAccessAggregate(querier.QueryRowContext(
 		ctx,
-		`SELECT access_id, revision, name, description
-		 FROM access_bindings
-		 WHERE access_id = ?`,
+		`SELECT
+		     binding.access_id,
+		     binding.revision,
+		     binding.name,
+		     binding.description,
+		     plan.format_version,
+		     plan.payload_json,
+		     origin.client_origin,
+		     origin.endpoint_authority,
+		     origin.agent_endpoint_id
+		 FROM access_bindings AS binding
+		 LEFT JOIN access_plan_aggregates AS plan
+		   ON plan.access_id = binding.access_id
+		 LEFT JOIN access_client_origins AS origin
+		   ON origin.access_id = binding.access_id
+		 WHERE binding.access_id = ?`,
 		accessID.String(),
 	))
 	if errors.Is(err, sql.ErrNoRows) {
-		return access.Record{}, false, nil
+		return access.Aggregate{}, false, nil
 	}
 	if err != nil {
-		return access.Record{}, false, err
+		return access.Aggregate{}, false, err
 	}
-	return record, true, nil
+	return aggregate, true, nil
 }
 
-func scanAccessRecord(row accessRow) (access.Record, error) {
+func scanAccessAggregate(row accessRow) (access.Aggregate, error) {
 	var (
 		accessIDText string
 		revision     int64
 		name         string
 		description  string
+		format       sql.NullInt64
+		encoded      []byte
+		clientOrigin sql.NullString
+		authority    sql.NullString
+		endpointID   sql.NullString
 	)
-	if err := row.Scan(&accessIDText, &revision, &name, &description); err != nil {
-		return access.Record{}, err
+	if err := row.Scan(
+		&accessIDText,
+		&revision,
+		&name,
+		&description,
+		&format,
+		&encoded,
+		&clientOrigin,
+		&authority,
+		&endpointID,
+	); err != nil {
+		return access.Aggregate{}, err
 	}
-	accessID, err := access.NewAccessID(accessIDText)
+	if !format.Valid || len(encoded) == 0 {
+		return access.Aggregate{}, fmt.Errorf(
+			"%w: accessId=%q has no executable plan payload",
+			access.ErrInvalidRepositoryState,
+			accessIDText,
+		)
+	}
+	aggregate, err := decodeAccessAggregate(
+		accessIDText,
+		revision,
+		name,
+		description,
+		format.Int64,
+		encoded,
+	)
 	if err != nil {
-		return access.Record{}, fmt.Errorf(
-			"%w: decode Access ID: %w",
-			access.ErrInvalidRepositoryState,
-			err,
-		)
+		return access.Aggregate{}, err
 	}
-	if revision <= 0 {
-		return access.Record{}, fmt.Errorf(
-			"%w: accessId=%q revision=%d",
-			access.ErrInvalidRepositoryState,
-			accessIDText,
-			revision,
-		)
-	}
-	record := access.Record{
-		AccessID: accessID,
-		Revision: access.Revision(revision),
-		Binding: access.Binding{
-			Name:        name,
-			Description: description,
-		},
-	}
-	if err := record.Validate(); err != nil {
-		return access.Record{}, fmt.Errorf(
-			"%w: accessId=%q: %w",
+	if !clientOrigin.Valid ||
+		!endpointID.Valid ||
+		clientOrigin.String != aggregate.AgentEndpoint.ClientOrigin.String() ||
+		authority.String != aggregate.AgentEndpoint.ClientOrigin.EndpointAuthority() ||
+		endpointID.String != aggregate.AgentEndpoint.ID.String() {
+		return access.Aggregate{}, fmt.Errorf(
+			"%w: accessId=%q ClientOrigin identity does not match aggregate payload",
 			access.ErrInvalidRepositoryState,
 			accessIDText,
-			err,
 		)
 	}
-	return record, nil
+	return aggregate, nil
 }

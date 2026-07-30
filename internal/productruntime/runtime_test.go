@@ -37,8 +37,8 @@ func TestProductRuntimeStartsAndShutsDownNormally(t *testing.T) {
 	if status.Host != hostcontract.KindDesktop {
 		t.Fatalf("runtime host = %q, want desktop", status.Host)
 	}
-	if status.SchemaRevision != 2 {
-		t.Fatalf("schema revision = %d, want 2", status.SchemaRevision)
+	if status.SchemaRevision != 5 {
+		t.Fatalf("schema revision = %d, want 5", status.SchemaRevision)
 	}
 	if status.AccessProjection.State != access.ProjectionStateHealthy ||
 		status.AccessProjection.UnavailableAccessCount != 0 {
@@ -142,12 +142,13 @@ func TestProductRuntimeWiresAccessCASAndRestoresItAcrossRestart(t *testing.T) {
 	write, err := first.AccessWriter().WriteAccess(
 		context.Background(),
 		access.WriteCommand{
-			AccessID:         accessID,
 			ExpectedRevision: 0,
-			Binding: access.Binding{
-				Name:        "Runtime Access",
-				Description: "Committed through ProductRuntime",
-			},
+			Aggregate: runtimeAccessAggregate(
+				t,
+				accessID,
+				1,
+				"Runtime Access",
+			),
 		},
 	)
 	if err != nil || write.Outcome != access.WriteOutcomeCommitted {
@@ -157,9 +158,13 @@ func TestProductRuntimeWiresAccessCASAndRestoresItAcrossRestart(t *testing.T) {
 	if _, err := first.AccessWriter().WriteAccess(
 		context.Background(),
 		access.WriteCommand{
-			AccessID:         accessID,
 			ExpectedRevision: 1,
-			Binding:          access.Binding{Name: "Rejected after shutdown"},
+			Aggregate: runtimeAccessAggregate(
+				t,
+				accessID,
+				2,
+				"Rejected after shutdown",
+			),
 		},
 	); !errors.Is(err, access.ErrAccessRuntimeStopping) {
 		t.Fatalf("stopped runtime accepted an Access write: %v", err)
@@ -212,9 +217,13 @@ func TestProductRuntimeStatusDegradesWhenAccessProjectionIsUnavailable(t *testin
 	if _, err := runtime.AccessWriter().WriteAccess(
 		context.Background(),
 		access.WriteCommand{
-			AccessID:         accessID,
 			ExpectedRevision: 0,
-			Binding:          access.Binding{Name: "Revision one"},
+			Aggregate: runtimeAccessAggregate(
+				t,
+				accessID,
+				1,
+				"Revision one",
+			),
 		},
 	); err != nil {
 		t.Fatalf("create Access before publication failure: %v", err)
@@ -222,9 +231,13 @@ func TestProductRuntimeStatusDegradesWhenAccessProjectionIsUnavailable(t *testin
 	result, err := runtime.AccessWriter().WriteAccess(
 		context.Background(),
 		access.WriteCommand{
-			AccessID:         accessID,
 			ExpectedRevision: 1,
-			Binding:          access.Binding{Name: "Revision two"},
+			Aggregate: runtimeAccessAggregate(
+				t,
+				accessID,
+				2,
+				"Revision two",
+			),
 		},
 	)
 	if result.Outcome != access.WriteOutcomeCommitted ||
@@ -853,11 +866,15 @@ func (b failingPublicationAccessBuilder) Build(
 	ctx context.Context,
 	request accessBuildRequest,
 ) (accessRuntime, error) {
+	compiler, err := productionAccessPlanCompiler()
+	if err != nil {
+		return nil, err
+	}
 	projection := &failingPublicationProjection{
 		SnapshotProjection: access.NewSnapshotProjection(),
 		failRevision:       b.failRevision,
 	}
-	return access.NewManager(ctx, request.repository, projection)
+	return access.NewManager(ctx, request.repository, compiler, projection)
 }
 
 type failingPublicationProjection struct {
@@ -865,11 +882,141 @@ type failingPublicationProjection struct {
 	failRevision access.Revision
 }
 
-func (p *failingPublicationProjection) Publish(snapshot access.Snapshot) error {
+func (p *failingPublicationProjection) Publish(
+	snapshot access.AccessPlanSnapshot,
+) error {
 	if snapshot.Revision() == p.failRevision {
 		return errors.New("injected ProductRuntime Access publication failure")
 	}
 	return p.SnapshotProjection.Publish(snapshot)
+}
+
+func runtimeAccessAggregate(
+	t *testing.T,
+	accessID access.AccessID,
+	revision access.Revision,
+	name string,
+) access.Aggregate {
+	t.Helper()
+	endpointID, err := access.NewAgentEndpointID(accessID.String() + "-endpoint")
+	if err != nil {
+		t.Fatalf("construct AgentEndpoint ID: %v", err)
+	}
+	profileID, err := access.NewEndpointProfileID(accessID.String() + "-profile")
+	if err != nil {
+		t.Fatalf("construct EndpointProfile ID: %v", err)
+	}
+	targetID, err := access.NewProviderTargetID(accessID.String() + "-target")
+	if err != nil {
+		t.Fatalf("construct ProviderTarget ID: %v", err)
+	}
+	accountID, err := access.NewAccountBindingID(accessID.String() + "-account")
+	if err != nil {
+		t.Fatalf("construct account binding ID: %v", err)
+	}
+	routeSetID, err := access.NewRouteSetID(accessID.String() + "-routes")
+	if err != nil {
+		t.Fatalf("construct RouteSet ID: %v", err)
+	}
+	egressID, err := access.NewEgressPolicyID(accessID.String() + "-egress")
+	if err != nil {
+		t.Fatalf("construct egress policy ID: %v", err)
+	}
+	clientOrigin, err := access.NewClientOrigin("https://api.anthropic.com:443")
+	if err != nil {
+		t.Fatalf("construct ClientOrigin: %v", err)
+	}
+	providerOrigin, err := access.NewProviderOrigin("https://api.openai.com:443/v1")
+	if err != nil {
+		t.Fatalf("construct ProviderOrigin: %v", err)
+	}
+	model, err := access.NewModelName("gpt-4.1-mini")
+	if err != nil {
+		t.Fatalf("construct model: %v", err)
+	}
+	secretRef, err := access.NewSecretRef("secret://provider/" + accessID.String())
+	if err != nil {
+		t.Fatalf("construct SecretRef: %v", err)
+	}
+	return access.Aggregate{
+		Binding: access.AccessBinding{
+			ID:                accessID,
+			Revision:          revision,
+			Name:              name,
+			Description:       "ProductRuntime executable Access",
+			Status:            access.AccessStatusEnabled,
+			AgentEndpointID:   endpointID,
+			DefaultRouteSetID: routeSetID,
+			ProfileIDs:        []access.EndpointProfileID{profileID},
+			EgressPolicyID:    egressID,
+		},
+		AgentEndpoint: access.AgentEndpoint{
+			ID:            endpointID,
+			Revision:      revision,
+			AccessID:      accessID,
+			ClientOrigin:  clientOrigin,
+			ClientDialect: access.DialectAnthropicMessages,
+		},
+		Profiles: []access.EndpointProfile{{
+			ID:                  profileID,
+			Revision:            revision,
+			AccessID:            accessID,
+			Name:                "OpenAI Chat",
+			Description:         "Fixed M0 profile",
+			BackendDialect:      access.DialectOpenAIChat,
+			TargetID:            targetID,
+			TransportProfileRef: access.ObservedClientH1TransportProfileRef(),
+			AccountBindingIDs: []access.AccountBindingID{
+				accountID,
+			},
+			DefaultAccountBindingID: accountID,
+			DefaultModelPolicy: access.ModelPolicy{
+				Revision:   revision,
+				Mode:       access.ModelPolicyModeFixed,
+				FixedModel: model,
+			},
+		}},
+		ProviderTargets: []access.ProviderTarget{{
+			ID:        targetID,
+			Revision:  revision,
+			AccessID:  accessID,
+			ProfileID: profileID,
+			Origin:    providerOrigin,
+			Protocol:  access.DialectOpenAIChat,
+			Capabilities: []access.ProviderCapability{
+				access.ProviderCapabilityMessages,
+				access.ProviderCapabilityStreaming,
+				access.ProviderCapabilityToolCalls,
+			},
+		}},
+		AccountBindings: []access.ProviderAccountBinding{{
+			ID:            accountID,
+			Revision:      revision,
+			AccessID:      accessID,
+			ProfileID:     profileID,
+			Label:         "Primary",
+			SecretRef:     secretRef,
+			AuthDriverRef: access.StaticHeaderAuthDriverRef(),
+			Enabled:       true,
+		}},
+		RouteSets: []access.RouteSet{{
+			ID:                  routeSetID,
+			Revision:            revision,
+			AccessID:            accessID,
+			CandidateProfileIDs: []access.EndpointProfileID{profileID},
+		}},
+		EgressPolicy: access.AccessEgressPolicy{
+			ID:       egressID,
+			Revision: revision,
+			AccessID: accessID,
+			Mode:     access.EgressModeDirect,
+		},
+		PluginPlan: access.PluginPlan{
+			Revision: revision,
+			AccessID: accessID,
+			Mode:     access.PluginPlanModePassThrough,
+		},
+	}
 }
 
 type ownedComponentDouble struct {

@@ -10,7 +10,6 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
-	"time"
 
 	"github.com/pressly/goose/v3"
 	"github.com/vibe-agi/vibermate/internal/access"
@@ -18,7 +17,7 @@ import (
 
 var errInjectedCommitResult = errors.New("injected commit result error")
 
-func TestAccessMigrationUpgradesFoundationSchema(t *testing.T) {
+func TestExecutablePlanMigrationUpgradesFoundationSchema(t *testing.T) {
 	t.Parallel()
 
 	databasePath := filepath.Join(t.TempDir(), "data", "runtime.db")
@@ -41,25 +40,21 @@ func TestAccessMigrationUpgradesFoundationSchema(t *testing.T) {
 	if err != nil {
 		t.Fatalf("construct foundation migration provider: %v", err)
 	}
-	if _, err := provider.UpTo(context.Background(), 1); err != nil {
-		t.Fatalf("create schema revision 1 fixture: %v", err)
+	if _, err := provider.UpTo(context.Background(), 2); err != nil {
+		t.Fatalf("create schema revision 2 fixture: %v", err)
 	}
 	if err := database.Close(); err != nil {
-		t.Fatalf("close schema revision 1 fixture: %v", err)
+		t.Fatalf("close schema revision 2 fixture: %v", err)
 	}
 
 	store := openTestStore(t, databasePath)
-	defer func() {
-		if err := store.Shutdown(context.Background()); err != nil {
-			t.Errorf("shutdown upgraded store: %v", err)
-		}
-	}()
+	defer shutdownTestStore(t, store)
 	state, err := store.SchemaStateReader().ReadSchemaState(context.Background())
 	if err != nil {
 		t.Fatalf("read upgraded schema state: %v", err)
 	}
-	if state.Revision != 2 {
-		t.Fatalf("upgraded schema revision = %d, want 2", state.Revision)
+	if state.Revision != 5 {
+		t.Fatalf("upgraded schema revision = %d, want 5", state.Revision)
 	}
 	mutation := accessMutation(t, "access-upgraded", 0, "Upgraded")
 	result, err := store.AccessRepository().CompareAndSwap(
@@ -71,355 +66,362 @@ func TestAccessMigrationUpgradesFoundationSchema(t *testing.T) {
 	}
 }
 
-func TestAccessRepositoryReconcilesCommitThatReturnedAnError(t *testing.T) {
+func TestAccessRepositoryPersistsWholeAggregateWithCAS(t *testing.T) {
 	t.Parallel()
 
 	store := openTestStore(t, filepath.Join(t.TempDir(), "data", "runtime.db"))
-	defer func() {
-		if err := store.Shutdown(context.Background()); err != nil {
-			t.Errorf("shutdown store: %v", err)
-		}
-	}()
-	store.accessRepo.committer = commitThenError{}
+	defer shutdownTestStore(t, store)
 
-	mutation := accessMutation(t, "access-committed", 0, "Committed")
-	result, err := store.AccessRepository().CompareAndSwap(
+	create := accessMutation(t, "access-cas", 0, "Revision one")
+	created, err := store.AccessRepository().CompareAndSwap(context.Background(), create)
+	if err != nil ||
+		created.Outcome != access.CommitOutcomeCommitted ||
+		!created.Aggregate.Equal(create.Candidate) {
+		t.Fatalf("create result=%+v err=%v", created, err)
+	}
+	update := accessMutation(t, "access-cas", 1, "Revision two")
+	updated, err := store.AccessRepository().CompareAndSwap(context.Background(), update)
+	if err != nil ||
+		updated.Outcome != access.CommitOutcomeCommitted ||
+		!updated.Aggregate.Equal(update.Candidate) {
+		t.Fatalf("update result=%+v err=%v", updated, err)
+	}
+
+	stale := accessMutation(t, "access-cas", 1, "Stale")
+	staleResult, err := store.AccessRepository().CompareAndSwap(
 		context.Background(),
-		mutation,
+		stale,
 	)
+	if err != nil ||
+		staleResult.Outcome != access.CommitOutcomeConflict ||
+		staleResult.ActualRevision != 2 {
+		t.Fatalf("stale result=%+v err=%v", staleResult, err)
+	}
+	aggregates, err := store.AccessRepository().LoadAll(context.Background())
 	if err != nil {
-		t.Fatalf("reconciled commit returned an error: %v", err)
+		t.Fatalf("load aggregate: %v", err)
 	}
-	if result.Outcome != access.CommitOutcomeCommitted ||
-		result.Record != mutation.Candidate {
-		t.Fatalf("reconciled commit result = %+v", result)
-	}
-	records, err := store.AccessRepository().LoadAll(context.Background())
-	if err != nil {
-		t.Fatalf("load reconciled commit: %v", err)
-	}
-	if len(records) != 1 || records[0] != mutation.Candidate {
-		t.Fatalf("durable reconciled records = %+v", records)
+	if len(aggregates) != 1 || !aggregates[0].Equal(update.Candidate) {
+		t.Fatalf("durable aggregates = %+v", aggregates)
 	}
 }
 
-func TestAccessManagerPublishesReconciledCommittedOutcome(t *testing.T) {
+func TestAccessRepositoryRejectsDuplicateClientOriginAtomically(t *testing.T) {
 	t.Parallel()
 
 	store := openTestStore(t, filepath.Join(t.TempDir(), "data", "runtime.db"))
-	defer func() {
-		if err := store.Shutdown(context.Background()); err != nil {
-			t.Errorf("shutdown store: %v", err)
-		}
-	}()
-	projection := access.NewSnapshotProjection()
-	manager, err := access.NewManager(
-		context.Background(),
-		store.AccessRepository(),
-		projection,
-	)
-	if err != nil {
-		t.Fatalf("construct Access manager: %v", err)
-	}
-	defer func() {
-		if err := manager.Shutdown(context.Background()); err != nil {
-			t.Errorf("shutdown Access manager: %v", err)
-		}
-	}()
-	store.accessRepo.committer = commitThenError{}
+	defer shutdownTestStore(t, store)
 
-	mutation := accessMutation(t, "access-manager-committed", 0, "Committed")
-	result, err := manager.WriteAccess(context.Background(), access.WriteCommand{
-		AccessID:         mutation.Candidate.AccessID,
-		ExpectedRevision: mutation.ExpectedRevision,
-		Binding:          mutation.Candidate.Binding,
-	})
-	if err != nil || result.Outcome != access.WriteOutcomeCommitted {
-		t.Fatalf("reconciled manager write result=%+v err=%v", result, err)
-	}
-	snapshot, err := manager.ResolveAccess(mutation.Candidate.AccessID)
-	if err != nil {
-		t.Fatalf("resolve reconciled manager write: %v", err)
-	}
-	if snapshot.Revision() != 1 || snapshot.Binding().Name != "Committed" {
-		t.Fatalf("reconciled manager snapshot: revision=%d binding=%+v",
-			snapshot.Revision(), snapshot.Binding())
-	}
-}
-
-func TestAccessRepositoryReconcilesDefinitelyUncommittedError(t *testing.T) {
-	t.Parallel()
-
-	store := openTestStore(t, filepath.Join(t.TempDir(), "data", "runtime.db"))
-	defer func() {
-		if err := store.Shutdown(context.Background()); err != nil {
-			t.Errorf("shutdown store: %v", err)
-		}
-	}()
-	initial := accessMutation(t, "access-not-committed", 0, "Revision one")
+	first := accessMutation(t, "access-origin-one", 0, "First")
 	if result, err := store.AccessRepository().CompareAndSwap(
 		context.Background(),
-		initial,
+		first,
 	); err != nil || result.Outcome != access.CommitOutcomeCommitted {
-		t.Fatalf("create initial Access result=%+v err=%v", result, err)
+		t.Fatalf("create first Access result=%+v err=%v", result, err)
 	}
-
-	store.accessRepo.committer = rollbackThenError{}
-	update := accessMutation(t, "access-not-committed", 1, "Revision two")
+	second := accessMutation(t, "access-origin-two", 0, "Second")
 	result, err := store.AccessRepository().CompareAndSwap(
 		context.Background(),
-		update,
+		second,
 	)
-	if !errors.Is(err, errInjectedCommitResult) {
-		t.Fatalf("uncommitted result error = %v", err)
+	if err == nil || result.Outcome != access.CommitOutcomeNotCommitted {
+		t.Fatalf("duplicate origin result=%+v err=%v", result, err)
 	}
-	if result.Outcome != access.CommitOutcomeNotCommitted {
-		t.Fatalf("uncommitted result = %+v", result)
-	}
-	records, loadErr := store.AccessRepository().LoadAll(context.Background())
+	aggregates, loadErr := store.AccessRepository().LoadAll(context.Background())
 	if loadErr != nil {
-		t.Fatalf("load after uncommitted result: %v", loadErr)
+		t.Fatalf("load after duplicate origin: %v", loadErr)
 	}
-	if len(records) != 1 || records[0] != initial.Candidate {
-		t.Fatalf("uncommitted write changed durable state: %+v", records)
+	if len(aggregates) != 1 ||
+		aggregates[0].Binding.ID != first.Candidate.Binding.ID {
+		t.Fatalf("duplicate origin changed durable state: %+v", aggregates)
 	}
 }
 
-func TestAccessManagerDoesNotPublishReconciledUncommittedOutcome(t *testing.T) {
+func TestAggregatePayloadFailureRollsBackRootAndDoesNotPublish(t *testing.T) {
 	t.Parallel()
 
 	store := openTestStore(t, filepath.Join(t.TempDir(), "data", "runtime.db"))
-	defer func() {
-		if err := store.Shutdown(context.Background()); err != nil {
-			t.Errorf("shutdown store: %v", err)
-		}
-	}()
-	manager, err := access.NewManager(
-		context.Background(),
-		store.AccessRepository(),
-		access.NewSnapshotProjection(),
-	)
-	if err != nil {
-		t.Fatalf("construct Access manager: %v", err)
-	}
-	defer func() {
-		if err := manager.Shutdown(context.Background()); err != nil {
-			t.Errorf("shutdown Access manager: %v", err)
-		}
-	}()
-	accessID, err := access.NewAccessID("access-manager-not-committed")
-	if err != nil {
-		t.Fatalf("construct Access ID: %v", err)
-	}
-	store.accessRepo.committer = rollbackThenError{}
-	result, err := manager.WriteAccess(context.Background(), access.WriteCommand{
-		AccessID:         accessID,
+	defer shutdownTestStore(t, store)
+	manager := newTestAccessManager(t, store)
+	defer shutdownTestAccessManager(t, manager)
+	accessID := mustAccessID(t, "access-transaction-failure")
+
+	if _, err := manager.WriteAccess(context.Background(), access.WriteCommand{
 		ExpectedRevision: 0,
-		Binding:          access.Binding{Name: "Not committed"},
+		Aggregate:        executableAggregate(t, accessID, 1, "Revision one"),
+	}); err != nil {
+		t.Fatalf("create initial plan: %v", err)
+	}
+	before, err := manager.ResolveAccess(accessID)
+	if err != nil {
+		t.Fatalf("resolve initial plan: %v", err)
+	}
+	if _, err := store.database.ExecContext(
+		context.Background(),
+		`CREATE TRIGGER reject_access_plan_payload
+		 BEFORE UPDATE ON access_plan_aggregates
+		 BEGIN
+		   SELECT RAISE(ABORT, 'injected payload write failure');
+		 END`,
+	); err != nil {
+		t.Fatalf("create payload failure trigger: %v", err)
+	}
+
+	result, err := manager.WriteAccess(context.Background(), access.WriteCommand{
+		ExpectedRevision: 1,
+		Aggregate:        executableAggregate(t, accessID, 2, "Revision two"),
 	})
 	if result.Outcome != access.WriteOutcomeNotCommitted ||
 		!errors.Is(err, access.ErrWriteNotCommitted) {
-		t.Fatalf("uncommitted manager result=%+v err=%v", result, err)
+		t.Fatalf("failed transaction result=%+v err=%v", result, err)
+	}
+	after, err := manager.ResolveAccess(accessID)
+	if err != nil {
+		t.Fatalf("resolve after transaction failure: %v", err)
+	}
+	if after.Revision() != 1 || after.PlanHash() != before.PlanHash() {
+		t.Fatal("transaction failure changed the active plan")
+	}
+	aggregates, err := store.AccessRepository().LoadAll(context.Background())
+	if err != nil {
+		t.Fatalf("load after transaction failure: %v", err)
+	}
+	if len(aggregates) != 1 ||
+		aggregates[0].Binding.Revision != 1 ||
+		aggregates[0].Binding.Name != "Revision one" {
+		t.Fatalf("transaction failure changed durable state: %+v", aggregates)
+	}
+}
+
+func TestManagerPublishesCommitReconciledAfterDriverError(t *testing.T) {
+	t.Parallel()
+
+	store := openTestStore(t, filepath.Join(t.TempDir(), "data", "runtime.db"))
+	defer shutdownTestStore(t, store)
+	manager := newTestAccessManager(t, store)
+	defer shutdownTestAccessManager(t, manager)
+	store.accessRepo.committer = commitThenError{}
+	accessID := mustAccessID(t, "access-reconciled-commit")
+
+	result, err := manager.WriteAccess(context.Background(), access.WriteCommand{
+		ExpectedRevision: 0,
+		Aggregate:        executableAggregate(t, accessID, 1, "Committed"),
+	})
+	if err != nil ||
+		result.Outcome != access.WriteOutcomeCommitted ||
+		result.Revision != 1 {
+		t.Fatalf("reconciled write result=%+v err=%v", result, err)
+	}
+	plan, err := manager.ResolveAccess(accessID)
+	if err != nil || plan.Revision() != 1 || plan.Binding().Name != "Committed" {
+		t.Fatalf(
+			"reconciled active plan revision=%d name=%q err=%v",
+			plan.Revision(),
+			plan.Binding().Name,
+			err,
+		)
+	}
+}
+
+func TestManagerDoesNotPublishDefinitelyUncommittedTransaction(t *testing.T) {
+	t.Parallel()
+
+	store := openTestStore(t, filepath.Join(t.TempDir(), "data", "runtime.db"))
+	defer shutdownTestStore(t, store)
+	manager := newTestAccessManager(t, store)
+	defer shutdownTestAccessManager(t, manager)
+	store.accessRepo.committer = rollbackThenError{}
+	accessID := mustAccessID(t, "access-not-committed")
+
+	result, err := manager.WriteAccess(context.Background(), access.WriteCommand{
+		ExpectedRevision: 0,
+		Aggregate:        executableAggregate(t, accessID, 1, "Not committed"),
+	})
+	if result.Outcome != access.WriteOutcomeNotCommitted ||
+		!errors.Is(err, access.ErrWriteNotCommitted) {
+		t.Fatalf("uncommitted result=%+v err=%v", result, err)
 	}
 	if _, err := manager.ResolveAccess(accessID); !errors.Is(
 		err,
 		access.ErrAccessNotConfigured,
 	) {
-		t.Fatalf("uncommitted manager write published a snapshot: %v", err)
+		t.Fatalf("uncommitted transaction published a plan: %v", err)
+	}
+	aggregates, err := store.AccessRepository().LoadAll(context.Background())
+	if err != nil || len(aggregates) != 0 {
+		t.Fatalf("uncommitted transaction persisted=%+v err=%v", aggregates, err)
 	}
 }
 
-func TestAccessRepositoryReturnsIndeterminateWhenReconciliationIsUnavailable(
-	t *testing.T,
-) {
+func TestIndeterminateRevisionPoisonsUntilRestartRecovery(t *testing.T) {
 	t.Parallel()
 
 	databasePath := filepath.Join(t.TempDir(), "data", "runtime.db")
 	store := openTestStore(t, databasePath)
-	store.accessRepo.committer = commitThenCloseAdmission{
-		operations: store.operations,
-	}
-	mutation := accessMutation(t, "access-indeterminate", 0, "Committed")
-	result, err := store.AccessRepository().CompareAndSwap(
-		context.Background(),
-		mutation,
-	)
-	if err == nil || result.Outcome != access.CommitOutcomeIndeterminate {
-		t.Fatalf("indeterminate commit result=%+v err=%v", result, err)
-	}
-	if loadResult, loadErr := store.AccessRepository().LoadAll(
-		context.Background(),
-	); !errors.Is(loadErr, ErrStoreClosing) || loadResult != nil {
-		t.Fatalf("closed operation gate load=%+v err=%v", loadResult, loadErr)
-	}
-	if err := store.Shutdown(context.Background()); err != nil {
-		t.Fatalf("shutdown indeterminate store: %v", err)
-	}
+	manager := newTestAccessManager(t, store)
+	accessID := mustAccessID(t, "access-indeterminate")
+	revisionOne := executableAggregate(t, accessID, 1, "Revision one")
+	revisionTwo := executableAggregate(t, accessID, 2, "Revision two")
 
-	reopened := openTestStore(t, databasePath)
-	defer func() {
-		if err := reopened.Shutdown(context.Background()); err != nil {
-			t.Errorf("shutdown reopened store: %v", err)
-		}
-	}()
-	records, err := reopened.AccessRepository().LoadAll(context.Background())
-	if err != nil {
-		t.Fatalf("load durable indeterminate commit after restart: %v", err)
-	}
-	if len(records) != 1 || records[0] != mutation.Candidate {
-		t.Fatalf("recovered indeterminate commit = %+v", records)
-	}
-}
-
-func TestAccessManagerReturnsTypedIndeterminateOutcomeAndRestartRecovers(
-	t *testing.T,
-) {
-	t.Parallel()
-
-	databasePath := filepath.Join(t.TempDir(), "data", "runtime.db")
-	store := openTestStore(t, databasePath)
-	manager, err := access.NewManager(
-		context.Background(),
-		store.AccessRepository(),
-		access.NewSnapshotProjection(),
-	)
-	if err != nil {
-		t.Fatalf("construct Access manager: %v", err)
-	}
-	accessID, err := access.NewAccessID("access-manager-indeterminate")
-	if err != nil {
-		t.Fatalf("construct Access ID: %v", err)
-	}
-	created, err := manager.WriteAccess(context.Background(), access.WriteCommand{
-		AccessID:         accessID,
+	if _, err := manager.WriteAccess(context.Background(), access.WriteCommand{
 		ExpectedRevision: 0,
-		Binding:          access.Binding{Name: "Revision one"},
-	})
-	if err != nil || created.Outcome != access.WriteOutcomeCommitted {
-		t.Fatalf("create initial Access result=%+v err=%v", created, err)
+		Aggregate:        revisionOne,
+	}); err != nil {
+		t.Fatalf("create revision one: %v", err)
 	}
 	oldHandle, err := manager.ResolveAccess(accessID)
 	if err != nil {
-		t.Fatalf("resolve initial Access: %v", err)
+		t.Fatalf("resolve revision one: %v", err)
+	}
+	expectedRevisionTwo, err := testAccessCompiler(t).Compile(revisionTwo)
+	if err != nil {
+		t.Fatalf("compile expected revision two: %v", err)
 	}
 
 	store.accessRepo.committer = commitThenCloseAdmission{
 		operations: store.operations,
 	}
 	result, err := manager.WriteAccess(context.Background(), access.WriteCommand{
-		AccessID:         accessID,
 		ExpectedRevision: 1,
-		Binding:          access.Binding{Name: "Durably ambiguous revision two"},
+		Aggregate:        revisionTwo,
 	})
 	if result.Outcome != access.WriteOutcomeIndeterminate ||
 		!errors.Is(err, access.ErrCommitOutcomeUnknown) {
-		t.Fatalf("indeterminate manager result=%+v err=%v", result, err)
-	}
-	var failure *access.Failure
-	if !errors.As(err, &failure) ||
-		failure.Code != access.ReasonCommitOutcomeUnknown {
-		t.Fatalf("indeterminate manager failure = %v", err)
+		t.Fatalf("indeterminate result=%+v err=%v", result, err)
 	}
 	if _, err := manager.ResolveAccess(accessID); !errors.Is(
 		err,
 		access.ErrProjectionUnavailable,
 	) {
-		t.Fatalf("indeterminate manager served a stale snapshot: %v", err)
-	} else {
-		var projectionFailure *access.Failure
-		if !errors.As(err, &projectionFailure) ||
-			projectionFailure.Code != access.ReasonProjectionUnavailable {
-			t.Fatalf("poisoned resolver failure = %v", err)
-		}
+		t.Fatalf("indeterminate Access served a stale plan: %v", err)
 	}
 	if oldHandle.Revision() != 1 ||
 		oldHandle.Binding().Name != "Revision one" {
-		t.Fatalf("indeterminate write changed old handle: revision=%d binding=%+v",
-			oldHandle.Revision(), oldHandle.Binding())
+		t.Fatal("indeterminate write changed a previously acquired handle")
 	}
-	health := manager.ProjectionHealth()
-	if health.State != access.ProjectionStateUnavailable ||
+	if health := manager.ProjectionHealth(); health.State != access.ProjectionStateUnavailable ||
 		health.UnavailableAccessCount != 1 {
 		t.Fatalf("indeterminate projection health = %+v", health)
 	}
-	retry, retryErr := manager.WriteAccess(context.Background(), access.WriteCommand{
-		AccessID:         accessID,
+	if _, err := manager.WriteAccess(context.Background(), access.WriteCommand{
 		ExpectedRevision: 2,
-		Binding:          access.Binding{Name: "Rejected while unavailable"},
-	})
-	if retry.Outcome != access.WriteOutcomeNotCommitted ||
-		!errors.Is(retryErr, access.ErrProjectionUnavailable) {
-		t.Fatalf("unavailable projection write result=%+v err=%v", retry, retryErr)
-	}
-	if err := manager.Shutdown(context.Background()); err != nil {
-		t.Fatalf("shutdown Access manager: %v", err)
-	}
-	if err := store.Shutdown(context.Background()); err != nil {
-		t.Fatalf("shutdown indeterminate store: %v", err)
+		Aggregate:        executableAggregate(t, accessID, 3, "Rejected"),
+	}); !errors.Is(err, access.ErrProjectionUnavailable) {
+		t.Fatalf("poisoned Access accepted a write: %v", err)
 	}
 
+	shutdownTestAccessManager(t, manager)
+	shutdownTestStore(t, store)
 	reopened := openTestStore(t, databasePath)
-	defer func() {
-		if err := reopened.Shutdown(context.Background()); err != nil {
-			t.Errorf("shutdown reopened store: %v", err)
-		}
-	}()
-	recovered, err := access.NewManager(
-		context.Background(),
-		reopened.AccessRepository(),
-		access.NewSnapshotProjection(),
-	)
-	if err != nil {
-		t.Fatalf("recover Access manager: %v", err)
-	}
-	defer func() {
-		if err := recovered.Shutdown(context.Background()); err != nil {
-			t.Errorf("shutdown recovered Access manager: %v", err)
-		}
-	}()
-	snapshot, err := recovered.ResolveAccess(accessID)
+	defer shutdownTestStore(t, reopened)
+	recovered := newTestAccessManager(t, reopened)
+	defer shutdownTestAccessManager(t, recovered)
+	plan, err := recovered.ResolveAccess(accessID)
 	if err != nil {
 		t.Fatalf("resolve recovered indeterminate commit: %v", err)
 	}
-	if snapshot.Revision() != 2 ||
-		snapshot.Binding().Name != "Durably ambiguous revision two" {
-		t.Fatalf("recovered indeterminate snapshot: revision=%d binding=%+v",
-			snapshot.Revision(), snapshot.Binding())
+	if plan.Revision() != 2 ||
+		plan.Binding().Name != "Revision two" ||
+		plan.PlanHash() != expectedRevisionTwo.PlanHash() {
+		t.Fatalf(
+			"recovered plan revision=%d name=%q hash=%s, want hash=%s",
+			plan.Revision(),
+			plan.Binding().Name,
+			plan.PlanHash(),
+			expectedRevisionTwo.PlanHash(),
+		)
 	}
-	if health := recovered.ProjectionHealth(); health.State != access.ProjectionStateHealthy ||
-		health.UnavailableAccessCount != 0 {
-		t.Fatalf("recovered indeterminate projection health = %+v", health)
+	if health := recovered.ProjectionHealth(); health.State != access.ProjectionStateHealthy {
+		t.Fatalf("recovered projection health = %+v", health)
 	}
 }
 
-func TestAccessRecoveryRejectsInvalidDurableContent(t *testing.T) {
+func TestAccessRecoveryRejectsMissingOrInvalidPlanPayload(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name    string
+		corrupt func(*testing.T, *Store, access.AccessID)
+	}{
+		{
+			name: "missing payload",
+			corrupt: func(t *testing.T, store *Store, accessID access.AccessID) {
+				if _, err := store.database.ExecContext(
+					context.Background(),
+					`DELETE FROM access_plan_aggregates WHERE access_id = ?`,
+					accessID.String(),
+				); err != nil {
+					t.Fatalf("delete payload: %v", err)
+				}
+			},
+		},
+		{
+			name: "invalid payload",
+			corrupt: func(t *testing.T, store *Store, accessID access.AccessID) {
+				if _, err := store.database.ExecContext(
+					context.Background(),
+					`UPDATE access_plan_aggregates
+					 SET payload_json = ?
+					 WHERE access_id = ?`,
+					[]byte(`{"unknown":true}`),
+					accessID.String(),
+				); err != nil {
+					t.Fatalf("corrupt payload: %v", err)
+				}
+			},
+		},
+	}
+	for _, test := range tests {
+		test := test
+		t.Run(test.name, func(t *testing.T) {
+			store := openTestStore(
+				t,
+				filepath.Join(t.TempDir(), "data", "runtime.db"),
+			)
+			defer shutdownTestStore(t, store)
+			mutation := accessMutation(t, "access-corrupt", 0, "Valid")
+			if _, err := store.AccessRepository().CompareAndSwap(
+				context.Background(),
+				mutation,
+			); err != nil {
+				t.Fatalf("create valid aggregate: %v", err)
+			}
+			test.corrupt(t, store, mutation.Candidate.Binding.ID)
+			if _, err := store.AccessRepository().LoadAll(
+				context.Background(),
+			); !errors.Is(err, access.ErrInvalidRepositoryState) {
+				t.Fatalf("invalid durable aggregate was accepted: %v", err)
+			}
+			if _, err := access.NewManager(
+				context.Background(),
+				store.AccessRepository(),
+				testAccessCompiler(t),
+				access.NewSnapshotProjection(),
+			); !errors.Is(err, access.ErrInvalidRepositoryState) {
+				t.Fatalf("manager recovered invalid durable aggregate: %v", err)
+			}
+		})
+	}
+}
+
+func TestAccessRepositoryCancellationBeforeCommitLeavesNoState(t *testing.T) {
 	t.Parallel()
 
 	store := openTestStore(t, filepath.Join(t.TempDir(), "data", "runtime.db"))
-	defer func() {
-		if err := store.Shutdown(context.Background()); err != nil {
-			t.Errorf("shutdown store: %v", err)
-		}
-	}()
-	if _, err := store.database.ExecContext(
-		context.Background(),
-		`PRAGMA ignore_check_constraints = ON`,
-	); err != nil {
-		t.Fatalf("enable corruption fixture: %v", err)
+	defer shutdownTestStore(t, store)
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	result, err := store.AccessRepository().CompareAndSwap(
+		ctx,
+		accessMutation(t, "access-cancelled", 0, "Cancelled"),
+	)
+	if !errors.Is(err, context.Canceled) ||
+		result.Outcome != access.CommitOutcomeNotCommitted {
+		t.Fatalf("cancelled write result=%+v err=%v", result, err)
 	}
-	if _, err := store.database.ExecContext(
-		context.Background(),
-		`INSERT INTO access_bindings (access_id, revision, name, description)
-		 VALUES ('access-corrupt', 1, '', '')`,
-	); err != nil {
-		t.Fatalf("insert corruption fixture: %v", err)
-	}
-
-	if _, err := store.AccessRepository().LoadAll(context.Background()); !errors.Is(
-		err,
-		access.ErrInvalidRepositoryState,
-	) {
-		t.Fatalf("invalid durable Access was accepted: %v", err)
+	aggregates, loadErr := store.AccessRepository().LoadAll(context.Background())
+	if loadErr != nil || len(aggregates) != 0 {
+		t.Fatalf("cancelled write persisted=%+v err=%v", aggregates, loadErr)
 	}
 }
 
@@ -460,48 +462,267 @@ func accessMutation(
 	name string,
 ) access.Mutation {
 	t.Helper()
-	accessID, err := access.NewAccessID(accessIDText)
-	if err != nil {
-		t.Fatalf("construct Access ID: %v", err)
-	}
+	accessID := mustAccessID(t, accessIDText)
 	return access.Mutation{
 		ExpectedRevision: expected,
-		Candidate: access.Record{
+		Candidate: executableAggregate(
+			t,
+			accessID,
+			expected+1,
+			name,
+		),
+	}
+}
+
+func executableAggregate(
+	t *testing.T,
+	accessID access.AccessID,
+	revision access.Revision,
+	name string,
+) access.Aggregate {
+	t.Helper()
+	endpointID := mustAgentEndpointID(t, accessID.String()+"-endpoint")
+	profileID := mustEndpointProfileID(t, accessID.String()+"-profile")
+	targetID := mustProviderTargetID(t, accessID.String()+"-target")
+	accountID := mustAccountBindingID(t, accessID.String()+"-account")
+	routeSetID := mustRouteSetID(t, accessID.String()+"-routes")
+	egressID := mustEgressPolicyID(t, accessID.String()+"-egress")
+	clientOrigin, err := access.NewClientOrigin("https://api.anthropic.com:443")
+	if err != nil {
+		t.Fatalf("construct ClientOrigin: %v", err)
+	}
+	providerOrigin, err := access.NewProviderOrigin("https://api.openai.com:443/v1")
+	if err != nil {
+		t.Fatalf("construct ProviderOrigin: %v", err)
+	}
+	model, err := access.NewModelName("gpt-4.1-mini")
+	if err != nil {
+		t.Fatalf("construct model: %v", err)
+	}
+	secretRef, err := access.NewSecretRef("secret://provider/" + accessID.String())
+	if err != nil {
+		t.Fatalf("construct SecretRef: %v", err)
+	}
+	return access.Aggregate{
+		Binding: access.AccessBinding{
+			ID:                accessID,
+			Revision:          revision,
+			Name:              name,
+			Description:       "Executable test Access",
+			Status:            access.AccessStatusEnabled,
+			AgentEndpointID:   endpointID,
+			DefaultRouteSetID: routeSetID,
+			ProfileIDs:        []access.EndpointProfileID{profileID},
+			EgressPolicyID:    egressID,
+		},
+		AgentEndpoint: access.AgentEndpoint{
+			ID:            endpointID,
+			Revision:      revision,
+			AccessID:      accessID,
+			ClientOrigin:  clientOrigin,
+			ClientDialect: access.DialectAnthropicMessages,
+		},
+		Profiles: []access.EndpointProfile{{
+			ID:                  profileID,
+			Revision:            revision,
+			AccessID:            accessID,
+			Name:                "OpenAI Chat",
+			Description:         "Fixed M0 profile",
+			BackendDialect:      access.DialectOpenAIChat,
+			TargetID:            targetID,
+			TransportProfileRef: access.ObservedClientH1TransportProfileRef(),
+			DefaultModelPolicy: access.ModelPolicy{
+				Revision:   revision,
+				Mode:       access.ModelPolicyModeFixed,
+				FixedModel: model,
+			},
+			AccountBindingIDs:       []access.AccountBindingID{accountID},
+			DefaultAccountBindingID: accountID,
+		}},
+		ProviderTargets: []access.ProviderTarget{{
+			ID:        targetID,
+			Revision:  revision,
+			AccessID:  accessID,
+			ProfileID: profileID,
+			Origin:    providerOrigin,
+			Protocol:  access.DialectOpenAIChat,
+			Capabilities: []access.ProviderCapability{
+				access.ProviderCapabilityMessages,
+				access.ProviderCapabilityStreaming,
+				access.ProviderCapabilityToolCalls,
+			},
+		}},
+		AccountBindings: []access.ProviderAccountBinding{{
+			ID:            accountID,
+			Revision:      revision,
+			AccessID:      accessID,
+			ProfileID:     profileID,
+			Label:         "Primary",
+			SecretRef:     secretRef,
+			AuthDriverRef: access.StaticHeaderAuthDriverRef(),
+			Enabled:       true,
+		}},
+		RouteSets: []access.RouteSet{{
+			ID:                  routeSetID,
+			Revision:            revision,
+			AccessID:            accessID,
+			CandidateProfileIDs: []access.EndpointProfileID{profileID},
+		}},
+		EgressPolicy: access.AccessEgressPolicy{
+			ID:       egressID,
+			Revision: revision,
 			AccessID: accessID,
-			Revision: expected + 1,
-			Binding:  access.Binding{Name: name},
+			Mode:     access.EgressModeDirect,
+		},
+		PluginPlan: access.PluginPlan{
+			Revision: revision,
+			AccessID: accessID,
+			Mode:     access.PluginPlanModePassThrough,
 		},
 	}
 }
 
-func TestAccessRepositoryCancellationBeforeCommitDoesNotPublishDurableState(
-	t *testing.T,
-) {
-	t.Parallel()
+func testAccessCompiler(t *testing.T) *access.Compiler {
+	t.Helper()
+	codecID, err := access.NewCodecPairID("anthropic-messages-to-openai-chat")
+	if err != nil {
+		t.Fatalf("construct codec ID: %v", err)
+	}
+	catalog, err := access.NewCatalog(access.CatalogOptions{
+		Capabilities: access.PlanCapabilities{
+			MaxEndpointProfiles: 1,
+			MaxAccountBindings:  1,
+			MaxRouteSets:        1,
+		},
+		CodecPairs: []access.CodecPairDefinition{{
+			ID:              codecID,
+			Revision:        1,
+			ClientDialect:   access.DialectAnthropicMessages,
+			ProviderDialect: access.DialectOpenAIChat,
+			RequiredCapabilities: []access.ProviderCapability{
+				access.ProviderCapabilityMessages,
+				access.ProviderCapabilityStreaming,
+				access.ProviderCapabilityToolCalls,
+			},
+		}},
+		AuthDrivers: []access.AuthDriverDefinition{{
+			Ref:      access.StaticHeaderAuthDriverRef(),
+			Revision: 1,
+		}},
+		EgressModes: []access.EgressModeDefinition{{
+			Mode:     access.EgressModeDirect,
+			Revision: 1,
+		}},
+		PluginPlanModes: []access.PluginPlanModeDefinition{{
+			Mode:     access.PluginPlanModePassThrough,
+			Revision: 1,
+		}},
+		ModelPolicyModes: []access.ModelPolicyModeDefinition{{
+			Mode:     access.ModelPolicyModeFixed,
+			Revision: 1,
+		}},
+		TransportProfiles: []access.TransportFingerprintDefinition{
+			access.ObservedClientH1TransportFingerprintDefinition(),
+			access.StandardH1TransportFingerprintDefinition(),
+		},
+	})
+	if err != nil {
+		t.Fatalf("construct catalog: %v", err)
+	}
+	compiler, err := access.NewCompiler(catalog)
+	if err != nil {
+		t.Fatalf("construct compiler: %v", err)
+	}
+	return compiler
+}
 
-	store := openTestStore(t, filepath.Join(t.TempDir(), "data", "runtime.db"))
-	defer func() {
-		if err := store.Shutdown(context.Background()); err != nil {
-			t.Errorf("shutdown store: %v", err)
-		}
-	}()
-	ctx, cancel := context.WithCancel(context.Background())
-	cancel()
-	result, err := store.AccessRepository().CompareAndSwap(
-		ctx,
-		accessMutation(t, "access-cancelled", 0, "Cancelled"),
+func newTestAccessManager(t *testing.T, store *Store) *access.Manager {
+	t.Helper()
+	manager, err := access.NewManager(
+		context.Background(),
+		store.AccessRepository(),
+		testAccessCompiler(t),
+		access.NewSnapshotProjection(),
 	)
-	if !errors.Is(err, context.Canceled) ||
-		result.Outcome != access.CommitOutcomeNotCommitted {
-		t.Fatalf("cancelled write result=%+v err=%v", result, err)
+	if err != nil {
+		t.Fatalf("construct Access manager: %v", err)
 	}
-	verifyContext, cancelVerify := context.WithTimeout(context.Background(), time.Second)
-	defer cancelVerify()
-	records, loadErr := store.AccessRepository().LoadAll(verifyContext)
-	if loadErr != nil {
-		t.Fatalf("load after cancelled write: %v", loadErr)
+	return manager
+}
+
+func shutdownTestAccessManager(t *testing.T, manager *access.Manager) {
+	t.Helper()
+	if err := manager.Shutdown(context.Background()); err != nil {
+		t.Fatalf("shutdown Access manager: %v", err)
 	}
-	if len(records) != 0 {
-		t.Fatalf("cancelled write persisted records: %+v", records)
+}
+
+func shutdownTestStore(t *testing.T, store *Store) {
+	t.Helper()
+	if err := store.Shutdown(context.Background()); err != nil {
+		t.Fatalf("shutdown store: %v", err)
 	}
+}
+
+func mustAccessID(t *testing.T, value string) access.AccessID {
+	t.Helper()
+	id, err := access.NewAccessID(value)
+	if err != nil {
+		t.Fatalf("construct Access ID: %v", err)
+	}
+	return id
+}
+
+func mustAgentEndpointID(t *testing.T, value string) access.AgentEndpointID {
+	t.Helper()
+	id, err := access.NewAgentEndpointID(value)
+	if err != nil {
+		t.Fatalf("construct AgentEndpoint ID: %v", err)
+	}
+	return id
+}
+
+func mustEndpointProfileID(t *testing.T, value string) access.EndpointProfileID {
+	t.Helper()
+	id, err := access.NewEndpointProfileID(value)
+	if err != nil {
+		t.Fatalf("construct EndpointProfile ID: %v", err)
+	}
+	return id
+}
+
+func mustProviderTargetID(t *testing.T, value string) access.ProviderTargetID {
+	t.Helper()
+	id, err := access.NewProviderTargetID(value)
+	if err != nil {
+		t.Fatalf("construct ProviderTarget ID: %v", err)
+	}
+	return id
+}
+
+func mustAccountBindingID(t *testing.T, value string) access.AccountBindingID {
+	t.Helper()
+	id, err := access.NewAccountBindingID(value)
+	if err != nil {
+		t.Fatalf("construct account binding ID: %v", err)
+	}
+	return id
+}
+
+func mustRouteSetID(t *testing.T, value string) access.RouteSetID {
+	t.Helper()
+	id, err := access.NewRouteSetID(value)
+	if err != nil {
+		t.Fatalf("construct RouteSet ID: %v", err)
+	}
+	return id
+}
+
+func mustEgressPolicyID(t *testing.T, value string) access.EgressPolicyID {
+	t.Helper()
+	id, err := access.NewEgressPolicyID(value)
+	if err != nil {
+		t.Fatalf("construct egress policy ID: %v", err)
+	}
+	return id
 }
