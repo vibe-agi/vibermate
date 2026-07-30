@@ -273,6 +273,7 @@ function AccessPanel({
     };
 
   const setAccessID = (event: ChangeEvent<HTMLInputElement>) => {
+    setSecret("");
     setLoadedCredential(undefined);
     setForm((current) => ({
       ...current,
@@ -319,20 +320,21 @@ function AccessPanel({
 
   const submitCredential = async (event: FormEvent) => {
     event.preventDefault();
-    if (form.accessId.length === 0 || secret.length === 0) {
+    if (loadedCredential === undefined || secret.length === 0) {
       return;
     }
-    const coordinates = loadedCredential ?? credentialCoordinates(form);
     const result = await model.replaceCredentialSecret(
       form.accessId,
-      coordinates.profileId,
-      coordinates.credentialId,
+      loadedCredential.profileId,
+      loadedCredential.credentialId,
       secret,
     );
     if (result !== undefined) {
       setSecret("");
     }
   };
+  const activeCredential =
+    loadedCredential === undefined ? undefined : credential;
 
   return (
     <section className="panel access-panel">
@@ -413,12 +415,20 @@ function AccessPanel({
         <div className="credential-copy">
           <h3>{t("credential.title")}</h3>
           <p>{t("credential.description")}</p>
-          <span className={`credential-state ${credential?.secretState ?? "missing"}`}>
-            {t(`credential.state.${credential?.secretState ?? "missing"}`)}
-            {credential !== undefined && (
+          <span
+            className={`credential-state ${
+              activeCredential?.secretState ?? "missing"
+            }`}
+          >
+            {t(
+              `credential.state.${
+                activeCredential?.secretState ?? "missing"
+              }`,
+            )}
+            {activeCredential !== undefined && (
               <span className="credential-revision">
                 {t("credential.revision", {
-                  revision: credential.secretRevision,
+                  revision: activeCredential.secretRevision,
                 })}
               </span>
             )}
@@ -426,7 +436,7 @@ function AccessPanel({
         </div>
         <LabeledInput
           autoComplete="off"
-          disabled={form.accessId.length === 0}
+          disabled={loadedCredential === undefined}
           label={t("credential.secret.label")}
           onChange={(event) => setSecret(event.target.value)}
           required
@@ -436,7 +446,11 @@ function AccessPanel({
         />
         <div className="form-action">
           <button
-            disabled={busy || form.accessId.length === 0 || secret.length === 0}
+            disabled={
+              busy ||
+              loadedCredential === undefined ||
+              secret.length === 0
+            }
             type="submit"
           >
             {t("credential.replace.action")}

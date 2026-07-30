@@ -45,6 +45,7 @@ const (
 	ReasonApprovalNotFound       ReasonCode = "approval_not_found"
 	ReasonProbeFailed            ReasonCode = "offline_probe_failed"
 	ReasonCredentialNotFound     ReasonCode = "credential_not_found"
+	ReasonCredentialValueInvalid ReasonCode = "credential_value_invalid"
 	ReasonConnectionNotFound     ReasonCode = "connection_not_found"
 	ReasonSecretStoreUnavailable ReasonCode = "secret_store_unavailable"
 	ReasonSecretStoreReadOnly    ReasonCode = "secret_store_read_only"
@@ -548,7 +549,7 @@ func (handler *Handler) replaceCredentialSecret(
 			if valueErr != nil {
 				return problemResponse(problemSpec{
 					status: http.StatusUnprocessableEntity,
-					reason: ReasonInvalidRequest,
+					reason: ReasonCredentialValueInvalid,
 				})
 			}
 			defer value.Destroy()
@@ -855,6 +856,11 @@ func classifyCredentialError(err error) problemSpec {
 		return problemSpec{
 			status: http.StatusNotFound,
 			reason: ReasonCredentialNotFound,
+		}
+	case errors.Is(err, accesscredential.ErrInvalidCredential):
+		return problemSpec{
+			status: http.StatusUnprocessableEntity,
+			reason: ReasonCredentialValueInvalid,
 		}
 	case errors.Is(err, secretstore.ErrRevisionConflict),
 		errors.Is(err, secretstore.ErrRevisionExhausted):

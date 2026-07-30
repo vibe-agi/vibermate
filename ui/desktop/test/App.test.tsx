@@ -304,6 +304,18 @@ describe("Desktop dashboard", () => {
     fireEvent.change(screen.getByLabelText("Access ID"), {
       target: { value: "work" },
     });
+    expect(
+      (screen.getByLabelText("Provider API key") as HTMLInputElement).disabled,
+    ).toBe(true);
+    fireEvent.click(
+      screen.getByRole("button", { name: "Load active Access" }),
+    );
+    await waitFor(() =>
+      expect(client.accessPlan).toHaveBeenCalledWith(
+        "work",
+        expect.any(AbortSignal),
+      ),
+    );
     fireEvent.change(screen.getByLabelText("Provider API key"), {
       target: { value: "replacement-provider-secret" },
     });

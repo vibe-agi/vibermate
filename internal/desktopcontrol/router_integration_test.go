@@ -428,6 +428,31 @@ func TestDesktopControlAppliesAccessAndControlsOfflineHoldWithScopedAuth(
 		missingCredentialView.SecretRevision != 0 {
 		t.Fatalf("missing credential = %+v", missingCredentialView)
 	}
+	invalidCredential := doMutation(
+		t,
+		router,
+		authority,
+		credentialPath+"/actions/replace-secret",
+		writeToken,
+		0,
+		"credential-replace-invalid-0001",
+		[]byte(`{"secret":"provider-secret\nvalue"}`),
+	)
+	if invalidCredential.Code != http.StatusUnprocessableEntity ||
+		!bytes.Contains(
+			invalidCredential.Body.Bytes(),
+			[]byte(`"reasonCode":"credential_value_invalid"`),
+		) ||
+		!bytes.Contains(
+			invalidCredential.Body.Bytes(),
+			[]byte(`"messageKey":"error.credential_value_invalid"`),
+		) {
+		t.Fatalf(
+			"invalid credential code=%d body=%s",
+			invalidCredential.Code,
+			invalidCredential.Body.Bytes(),
+		)
+	}
 	secretBody := []byte(`{"secret":"provider-secret-value"}`)
 	replacedCredential := doMutation(
 		t,
