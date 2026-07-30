@@ -511,6 +511,10 @@ mod tests {
                 .expect("parse Tauri configuration");
         assert!(configuration["app"]["security"]["csp"].is_null());
         assert_eq!(configuration["build"]["devUrl"], WEBVIEW_ORIGIN);
+        assert_eq!(
+            configuration["bundle"]["resources"]["binaries/vibermate-build-manifest.json"],
+            "vibermate-build-manifest.json"
+        );
         let document = include_str!("../../index.html");
         assert!(document.contains("http://127.0.0.1:*"));
         assert!(!document.contains("connect-src 'self' http://localhost"));

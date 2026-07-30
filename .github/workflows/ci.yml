@@ -1,8 +1,9 @@
 # Deterministic CI runs module and generation drift, structural checks, unit
 # tests, race tests, contract tests, vet, and govulncheck. It does not run real
-# Agent/provider traffic, platform Root or proxy changes, signing, installers,
-# long-duration soak, or external-version drift. Those gates require later
-# production and release runners.
+# Agent/provider traffic, the opt-in packaged M0 acceptance sequence, platform
+# Root or proxy changes, signing, installers, long-duration soak, or
+# external-version drift. Those gates require a frozen macOS arm64 artifact and
+# a separately authorized acceptance runner.
 name: validation
 
 on:
@@ -116,6 +117,7 @@ jobs:
           go test -count=1 ./internal/runlauncher
           go test -count=1 ./internal/runtimepath
           go test -count=1 ./internal/toolapproval
+          go test -count=1 ./cmd/vibermate-acceptance
 
   desktop:
     needs: generated-structural

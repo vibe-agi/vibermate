@@ -33,6 +33,9 @@
     "externalBin": [
       "binaries/vibermated",
       "binaries/vibermate"
-    ]
+    ],
+    "resources": {
+      "binaries/vibermate-build-manifest.json": "vibermate-build-manifest.json"
+    }
   }
 }

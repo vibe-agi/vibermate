@@ -1,0 +1,946 @@
+package main
+
+import (
+	"bufio"
+	"bytes"
+	"context"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"io"
+	"os"
+	"os/exec"
+	"slices"
+	"strings"
+	"sync"
+	"syscall"
+	"time"
+
+	"github.com/vibe-agi/vibermate/internal/exchange"
+)
+
+const (
+	maxAgentLineBytes = 8 << 20
+	maxAgentLines     = 8192
+)
+
+type agentRun struct {
+	command    *exec.Cmd
+	done       chan struct{}
+	outputDone chan struct{}
+	stderr     *boundedBuffer
+	marker     string
+
+	mu         sync.Mutex
+	waitErr    error
+	lines      int
+	deltas     int
+	toolUses   int
+	markerSeen bool
+	markerTail string
+	lastType   string
+	failure    agentFailureEvidence
+	readErr    error
+	changed    chan struct{}
+}
+
+type agentFailureEvidence struct {
+	reasonCode     exchange.ReasonCode
+	providerStatus int
+	providerField  exchange.ProviderField
+	agentStatus    int
+	category       string
+	resultSubtype  string
+}
+
+func startAgent(
+	config config,
+	workingDirectory string,
+	prompt string,
+	tools string,
+	marker string,
+) (*agentRun, error) {
+	command := newAgentCommand(config, workingDirectory, prompt, tools)
+	stdout, err := command.StdoutPipe()
+	if err != nil {
+		return nil, err
+	}
+	stderr := newBoundedBuffer(256 << 10)
+	command.Stderr = stderr
+	run := &agentRun{
+		command:    command,
+		done:       make(chan struct{}),
+		outputDone: make(chan struct{}),
+		stderr:     stderr,
+		changed:    make(chan struct{}),
+		marker:     marker,
+	}
+	if err := command.Start(); err != nil {
+		return nil, fmt.Errorf("start captured Claude: %w", err)
+	}
+	go run.consume(stdout)
+	go func() {
+		waitErr := command.Wait()
+		run.mu.Lock()
+		run.waitErr = waitErr
+		run.signalLocked()
+		run.mu.Unlock()
+		close(run.done)
+	}()
+	return run, nil
+}
+
+func newAgentCommand(
+	config config,
+	workingDirectory string,
+	prompt string,
+	tools string,
+) *exec.Cmd {
+	arguments := fixedClaudeArguments(config.claudePath, tools)
+	command := exec.Command(config.launcherPath, arguments...)
+	command.Dir = workingDirectory
+	command.Env = acceptanceEnvironment(os.Environ())
+	command.Stdin = strings.NewReader(prompt)
+	return command
+}
+
+func fixedClaudeArguments(
+	claudePath string,
+	tools string,
+) []string {
+	arguments := []string{
+		"run",
+		"--",
+		claudePath,
+		"--print",
+		"--output-format",
+		"stream-json",
+		"--include-partial-messages",
+		"--verbose",
+		"--debug",
+		"api",
+		"--safe-mode",
+		"--no-session-persistence",
+		"--model",
+		"sonnet",
+		"--tools=" + tools,
+	}
+	if tools != "" {
+		arguments = append(
+			arguments,
+			"--permission-mode",
+			"bypassPermissions",
+		)
+	}
+	return arguments
+}
+
+func acceptanceEnvironment(base []string) []string {
+	managed := map[string]struct{}{
+		"ANTHROPIC_API_KEY":          {},
+		"ANTHROPIC_AUTH_TOKEN":       {},
+		"ANTHROPIC_BASE_URL":         {},
+		"ANTHROPIC_BEDROCK_BASE_URL": {},
+		"ANTHROPIC_CUSTOM_HEADERS":   {},
+		"ANTHROPIC_FOUNDRY_BASE_URL": {},
+		"ANTHROPIC_VERTEX_BASE_URL":  {},
+		"CLAUDE_CODE_OAUTH_TOKEN":    {},
+		"CLAUDE_CODE_USE_BEDROCK":    {},
+		"CLAUDE_CODE_USE_FOUNDRY":    {},
+		"CLAUDE_CODE_USE_VERTEX":     {},
+		"OPENAI_ACCESS_TOKEN":        {},
+		"OPENAI_API_KEY":             {},
+	}
+	result := make([]string, 0, len(base)+1)
+	for _, entry := range base {
+		name, _, found := strings.Cut(entry, "=")
+		if !found {
+			continue
+		}
+		if _, replace := managed[name]; replace {
+			continue
+		}
+		result = append(result, entry)
+	}
+	result = append(
+		result,
+		"ANTHROPIC_API_KEY=vibermate-assembly-placeholder",
+	)
+	slices.Sort(result)
+	return result
+}
+
+func (run *agentRun) consume(reader io.Reader) {
+	defer close(run.outputDone)
+	scanner := bufio.NewScanner(reader)
+	scanner.Buffer(make([]byte, 64<<10), maxAgentLineBytes)
+	for scanner.Scan() {
+		line := append([]byte(nil), scanner.Bytes()...)
+		run.mu.Lock()
+		run.lines++
+		if run.lines > maxAgentLines {
+			run.readErr = errors.New("Claude output exceeded the line bound")
+			run.signalLocked()
+			run.mu.Unlock()
+			_ = run.command.Process.Signal(syscall.SIGINT)
+			return
+		}
+		run.observeLine(line)
+		run.signalLocked()
+		run.mu.Unlock()
+	}
+	run.mu.Lock()
+	if err := scanner.Err(); err != nil && run.readErr == nil {
+		run.readErr = err
+	}
+	run.signalLocked()
+	run.mu.Unlock()
+}
+
+func (run *agentRun) observeLine(line []byte) {
+	var envelope any
+	if json.Unmarshal(line, &envelope) != nil {
+		run.failure.merge(extractAgentFailureEvidence(line))
+		return
+	}
+	run.deltas += countType(envelope, "content_block_delta")
+	run.toolUses += trustedToolUseCount(envelope)
+	run.failure.merge(failureEvidenceFromEnvelope(envelope))
+	if typed, ok := envelope.(map[string]any); ok {
+		kind, _ := typed["type"].(string)
+		if validEnvelopeType(kind) {
+			run.lastType = kind
+		}
+	}
+	text := trustedAssistantText(envelope)
+	candidate := run.markerTail + text
+	if run.marker != "" && strings.Contains(candidate, run.marker) {
+		run.markerSeen = true
+	}
+	const tailLimit = 64
+	if len(candidate) > tailLimit {
+		candidate = candidate[len(candidate)-tailLimit:]
+	}
+	run.markerTail = candidate
+}
+
+func failureEvidenceFromEnvelope(value any) agentFailureEvidence {
+	evidence := agentFailureEvidence{}
+	envelope, ok := value.(map[string]any)
+	if ok {
+		if kind, _ := envelope["type"].(string); kind == "result" {
+			subtype, _ := envelope["subtype"].(string)
+			if validResultSubtype(subtype) {
+				evidence.resultSubtype = subtype
+			}
+		}
+	}
+	collectFailureEvidence(value, &evidence)
+	return evidence
+}
+
+func collectFailureEvidence(value any, evidence *agentFailureEvidence) {
+	switch typed := value.(type) {
+	case map[string]any:
+		if rawReason, ok := typed["reasonCode"].(string); ok {
+			if reason := knownExchangeReason(rawReason); reason != "" {
+				evidence.reasonCode = reason
+				if rawStatus, exists := typed["providerStatus"]; exists {
+					evidence.providerStatus = boundedJSONStatus(rawStatus)
+				}
+				if rawField, exists := typed["providerField"].(string); exists {
+					evidence.providerField = knownProviderField(rawField)
+				}
+			}
+		}
+		for _, nested := range typed {
+			collectFailureEvidence(nested, evidence)
+		}
+	case []any:
+		for _, nested := range typed {
+			collectFailureEvidence(nested, evidence)
+		}
+	case string:
+		evidence.merge(extractAgentFailureEvidence([]byte(typed)))
+	}
+}
+
+func extractAgentFailureEvidence(payload []byte) agentFailureEvidence {
+	evidence := agentFailureEvidence{}
+	for _, reason := range knownExchangeReasons() {
+		if bytes.Contains(payload, []byte(reason)) {
+			evidence.reasonCode = reason
+			break
+		}
+	}
+	if evidence.reasonCode != "" {
+		evidence.providerStatus = extractProviderStatus(payload)
+		evidence.providerField = extractProviderField(payload)
+	}
+	lower := bytes.ToLower(payload)
+	evidence.agentStatus = extractAgentStatus(lower)
+	evidence.category = classifyAgentFailure(lower)
+	var decoded any
+	if json.Unmarshal(payload, &decoded) == nil {
+		switch decoded.(type) {
+		case map[string]any, []any:
+			evidence.merge(failureEvidenceFromEnvelope(decoded))
+		}
+	}
+	return evidence
+}
+
+func extractProviderField(payload []byte) exchange.ProviderField {
+	for _, field := range []exchange.ProviderField{
+		exchange.ProviderFieldModel,
+		exchange.ProviderFieldMessages,
+		exchange.ProviderFieldTools,
+		exchange.ProviderFieldToolChoice,
+		exchange.ProviderFieldParallelToolCalls,
+		exchange.ProviderFieldMaxCompletionTokens,
+		exchange.ProviderFieldMaxTokens,
+		exchange.ProviderFieldReasoningEffort,
+		exchange.ProviderFieldTemperature,
+		exchange.ProviderFieldTopP,
+		exchange.ProviderFieldStop,
+		exchange.ProviderFieldStream,
+		exchange.ProviderFieldStreamOptions,
+		exchange.ProviderFieldN,
+	} {
+		for _, prefix := range [][]byte{
+			[]byte(`"providerField":"`),
+			[]byte("providerField="),
+		} {
+			marker := append(append([]byte(nil), prefix...), []byte(field)...)
+			if bytes.Contains(payload, marker) {
+				return field
+			}
+		}
+	}
+	return ""
+}
+
+func extractAgentStatus(payload []byte) int {
+	for _, marker := range [][]byte{
+		[]byte("api error"),
+		[]byte("http error"),
+		[]byte("status code"),
+		[]byte("error:"),
+	} {
+		index := bytes.Index(payload, marker)
+		if index < 0 {
+			continue
+		}
+		if status := firstHTTPStatus(
+			payload[index+len(marker):],
+			48,
+		); status != 0 {
+			return status
+		}
+	}
+	return 0
+}
+
+func firstHTTPStatus(payload []byte, limit int) int {
+	if len(payload) > limit {
+		payload = payload[:limit]
+	}
+	for index := 0; index+3 <= len(payload); index++ {
+		if payload[index] < '1' || payload[index] > '5' ||
+			payload[index+1] < '0' || payload[index+1] > '9' ||
+			payload[index+2] < '0' || payload[index+2] > '9' {
+			continue
+		}
+		if index > 0 &&
+			payload[index-1] >= '0' &&
+			payload[index-1] <= '9' {
+			continue
+		}
+		if index+3 < len(payload) &&
+			payload[index+3] >= '0' &&
+			payload[index+3] <= '9' {
+			continue
+		}
+		status := int(payload[index]-'0')*100 +
+			int(payload[index+1]-'0')*10 +
+			int(payload[index+2]-'0')
+		return status
+	}
+	return 0
+}
+
+func classifyAgentFailure(payload []byte) string {
+	switch {
+	case containsAny(payload, "invalid api key", "unauthorized", "authentication"):
+		return "authentication"
+	case bytes.Contains(payload, []byte("model")) &&
+		containsAny(payload, "not found", "does not exist", "unsupported"):
+		return "model_unavailable"
+	case containsAny(payload, "rate limit", "too many requests"):
+		return "rate_limited"
+	case containsAny(payload, "insufficient quota", "credit balance", "billing"):
+		return "quota"
+	case containsAny(payload, "certificate", "tls handshake"):
+		return "tls"
+	case containsAny(payload, "connection refused", "connection reset", "econn"):
+		return "connection"
+	case containsAny(payload, "unexpected eof", "stream closed", "socket closed"):
+		return "stream"
+	case bytes.Contains(payload, []byte("not found")):
+		return "not_found"
+	default:
+		return ""
+	}
+}
+
+func containsAny(payload []byte, values ...string) bool {
+	for _, value := range values {
+		if bytes.Contains(payload, []byte(value)) {
+			return true
+		}
+	}
+	return false
+}
+
+func extractProviderStatus(payload []byte) int {
+	for _, field := range [][]byte{
+		[]byte(`"providerStatus"`),
+		[]byte(`providerStatus`),
+	} {
+		index := bytes.Index(payload, field)
+		if index < 0 {
+			continue
+		}
+		remainder := payload[index+len(field):]
+		for len(remainder) > 0 &&
+			(remainder[0] == ':' ||
+				remainder[0] == '=' ||
+				remainder[0] == ' ' ||
+				remainder[0] == '\t') {
+			remainder = remainder[1:]
+		}
+		status := 0
+		digits := 0
+		for len(remainder) > 0 &&
+			remainder[0] >= '0' &&
+			remainder[0] <= '9' &&
+			digits < 3 {
+			status = status*10 + int(remainder[0]-'0')
+			remainder = remainder[1:]
+			digits++
+		}
+		if digits == 3 && status >= 100 && status <= 599 {
+			return status
+		}
+	}
+	return 0
+}
+
+func boundedJSONStatus(value any) int {
+	number, ok := value.(float64)
+	if !ok || number < 100 || number > 599 || number != float64(int(number)) {
+		return 0
+	}
+	return int(number)
+}
+
+func knownExchangeReason(value string) exchange.ReasonCode {
+	for _, reason := range knownExchangeReasons() {
+		if string(reason) == value {
+			return reason
+		}
+	}
+	return ""
+}
+
+func knownProviderField(value string) exchange.ProviderField {
+	switch exchange.ProviderField(value) {
+	case exchange.ProviderFieldModel,
+		exchange.ProviderFieldMessages,
+		exchange.ProviderFieldTools,
+		exchange.ProviderFieldToolChoice,
+		exchange.ProviderFieldParallelToolCalls,
+		exchange.ProviderFieldMaxCompletionTokens,
+		exchange.ProviderFieldMaxTokens,
+		exchange.ProviderFieldReasoningEffort,
+		exchange.ProviderFieldTemperature,
+		exchange.ProviderFieldTopP,
+		exchange.ProviderFieldStop,
+		exchange.ProviderFieldStream,
+		exchange.ProviderFieldStreamOptions,
+		exchange.ProviderFieldN:
+		return exchange.ProviderField(value)
+	default:
+		return ""
+	}
+}
+
+func knownExchangeReasons() []exchange.ReasonCode {
+	return []exchange.ReasonCode{
+		exchange.ReasonInvalidExchangeRequest,
+		exchange.ReasonUnsupportedClientInput,
+		exchange.ReasonAccessPlanUnavailable,
+		exchange.ReasonUnsupportedAccessPlan,
+		exchange.ReasonProviderRequestInvalid,
+		exchange.ReasonProviderCredentialUnavailable,
+		exchange.ReasonProviderTransportFailed,
+		exchange.ReasonProviderResponseIdle,
+		exchange.ReasonProviderStatusRejected,
+		exchange.ReasonProviderResponseInvalid,
+		exchange.ReasonTransportRetryExhausted,
+		exchange.ReasonToolDecisionRejected,
+		exchange.ReasonToolDecisionUnavailable,
+		exchange.ReasonDownstreamCommitFailed,
+		exchange.ReasonDownstreamDisconnected,
+		exchange.ReasonExchangeCanceled,
+		exchange.ReasonExchangeRuntimeStopping,
+		exchange.ReasonDownstreamFailureAborted,
+	}
+}
+
+func validResultSubtype(value string) bool {
+	switch value {
+	case "success",
+		"error_during_execution",
+		"error_max_turns",
+		"error_max_budget_usd",
+		"error_max_structured_output_retries":
+		return true
+	default:
+		return false
+	}
+}
+
+func validEnvelopeType(value string) bool {
+	switch value {
+	case "system", "assistant", "user", "stream_event", "result":
+		return true
+	default:
+		return false
+	}
+}
+
+func (evidence *agentFailureEvidence) merge(candidate agentFailureEvidence) {
+	if candidate.reasonCode != "" {
+		evidence.reasonCode = candidate.reasonCode
+	}
+	if candidate.providerStatus != 0 {
+		evidence.providerStatus = candidate.providerStatus
+	}
+	if candidate.providerField != "" {
+		evidence.providerField = candidate.providerField
+	}
+	if candidate.agentStatus != 0 {
+		evidence.agentStatus = candidate.agentStatus
+	}
+	if candidate.category != "" {
+		evidence.category = candidate.category
+	}
+	if candidate.resultSubtype != "" {
+		evidence.resultSubtype = candidate.resultSubtype
+	}
+}
+
+func trustedToolUseCount(value any) int {
+	envelope, ok := value.(map[string]any)
+	if !ok {
+		return 0
+	}
+	kind, _ := envelope["type"].(string)
+	if kind != "assistant" && kind != "stream_event" {
+		return 0
+	}
+	return countType(envelope, "tool_use")
+}
+
+func trustedAssistantText(value any) string {
+	envelope, ok := value.(map[string]any)
+	if !ok {
+		return ""
+	}
+	kind, _ := envelope["type"].(string)
+	switch kind {
+	case "assistant":
+		return collectText(envelope["message"])
+	case "stream_event":
+		return collectText(envelope["event"])
+	case "result":
+		result, _ := envelope["result"].(string)
+		return result
+	default:
+		return ""
+	}
+}
+
+func collectText(value any) string {
+	switch typed := value.(type) {
+	case map[string]any:
+		var result strings.Builder
+		for key, nested := range typed {
+			if key == "text" {
+				text, _ := nested.(string)
+				result.WriteString(text)
+				continue
+			}
+			result.WriteString(collectText(nested))
+		}
+		return result.String()
+	case []any:
+		var result strings.Builder
+		for _, nested := range typed {
+			result.WriteString(collectText(nested))
+		}
+		return result.String()
+	default:
+		return ""
+	}
+}
+
+func countType(value any, expected string) int {
+	switch typed := value.(type) {
+	case map[string]any:
+		count := 0
+		if kind, _ := typed["type"].(string); kind == expected {
+			count++
+		}
+		for _, nested := range typed {
+			count += countType(nested, expected)
+		}
+		return count
+	case []any:
+		count := 0
+		for _, nested := range typed {
+			count += countType(nested, expected)
+		}
+		return count
+	default:
+		return 0
+	}
+}
+
+func (run *agentRun) wait(
+	ctx context.Context,
+) (int, error) {
+	if run == nil {
+		return -1, errors.New("Claude run is nil")
+	}
+	select {
+	case <-run.done:
+		select {
+		case <-run.outputDone:
+		case <-ctx.Done():
+			return -1, ctx.Err()
+		}
+		run.mu.Lock()
+		readErr := run.readErr
+		waitErr := run.waitErr
+		run.mu.Unlock()
+		if readErr != nil {
+			return -1, readErr
+		}
+		if waitErr == nil {
+			return 0, nil
+		}
+		var exitError *exec.ExitError
+		if errors.As(waitErr, &exitError) {
+			return exitError.ExitCode(), nil
+		}
+		return -1, waitErr
+	case <-ctx.Done():
+		_ = run.command.Process.Signal(syscall.SIGINT)
+		select {
+		case <-run.done:
+		case <-time.After(5 * time.Second):
+			_ = run.command.Process.Kill()
+			<-run.done
+		}
+		select {
+		case <-run.outputDone:
+		case <-time.After(5 * time.Second):
+		}
+		return -1, ctx.Err()
+	}
+}
+
+func (run *agentRun) signalInterrupt() error {
+	if run == nil || run.command == nil || run.command.Process == nil {
+		return errors.New("Claude run process is unavailable")
+	}
+	return run.command.Process.Signal(os.Interrupt)
+}
+
+func (run *agentRun) waitForDelta(ctx context.Context) error {
+	for {
+		run.mu.Lock()
+		if run.deltas > 0 {
+			run.mu.Unlock()
+			return nil
+		}
+		if run.readErr != nil {
+			err := run.readErr
+			run.mu.Unlock()
+			return err
+		}
+		changed := run.changed
+		run.mu.Unlock()
+		select {
+		case <-changed:
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-run.done:
+			select {
+			case <-run.outputDone:
+			case <-ctx.Done():
+				return ctx.Err()
+			}
+			run.mu.Lock()
+			if run.deltas > 0 {
+				run.mu.Unlock()
+				return nil
+			}
+			waitErr := run.waitErr
+			run.mu.Unlock()
+			if waitErr == nil {
+				return errors.New(
+					"Claude exited before its first streamed delta",
+				)
+			}
+			return fmt.Errorf(
+				"Claude exited before its first streamed delta: %w",
+				normalizeWaitError(waitErr),
+			)
+		}
+	}
+}
+
+func (run *agentRun) evidence() (
+	lines int,
+	deltas int,
+	toolUses int,
+	marker bool,
+) {
+	run.mu.Lock()
+	defer run.mu.Unlock()
+	return run.lines, run.deltas, run.toolUses, run.markerSeen
+}
+
+func (run *agentRun) safeFailureEvidence() string {
+	if run == nil {
+		return ""
+	}
+	var stderr []byte
+	var truncated bool
+	if run.stderr != nil {
+		stderr, truncated = run.stderr.snapshot()
+	}
+	stderrEvidence := extractAgentFailureEvidence(stderr)
+	run.mu.Lock()
+	evidence := run.failure
+	lines := run.lines
+	deltas := run.deltas
+	lastType := run.lastType
+	run.mu.Unlock()
+	evidence.merge(stderrEvidence)
+
+	fields := []string{
+		fmt.Sprintf("stdoutLines=%d", lines),
+		fmt.Sprintf("deltas=%d", deltas),
+		fmt.Sprintf("stderrBytes=%d", len(stderr)),
+	}
+	if lastType != "" {
+		fields = append(fields, "lastEnvelope="+lastType)
+	}
+	if evidence.reasonCode != "" {
+		fields = append(fields, "reasonCode="+string(evidence.reasonCode))
+	}
+	if evidence.providerStatus != 0 {
+		fields = append(
+			fields,
+			fmt.Sprintf("providerStatus=%d", evidence.providerStatus),
+		)
+	}
+	if evidence.providerField != "" {
+		fields = append(
+			fields,
+			"providerField="+string(evidence.providerField),
+		)
+	}
+	if evidence.agentStatus != 0 {
+		fields = append(
+			fields,
+			fmt.Sprintf("agentStatus=%d", evidence.agentStatus),
+		)
+	}
+	if evidence.category != "" {
+		fields = append(fields, "category="+evidence.category)
+	}
+	if keywords := safeFailureKeywords(stderr); len(keywords) != 0 {
+		fields = append(fields, "keywords="+strings.Join(keywords, ","))
+	}
+	if shape := safeFailureShape(stderr); shape != "" {
+		fields = append(fields, "shape="+shape)
+	}
+	if evidence.resultSubtype != "" {
+		fields = append(fields, "resultSubtype="+evidence.resultSubtype)
+	}
+	if truncated {
+		fields = append(fields, "stderrTruncated=true")
+	}
+	return strings.Join(fields, " ")
+}
+
+func safeFailureShape(payload []byte) string {
+	const maximumTokens = 24
+	tokens := make([]string, 0, maximumTokens)
+	for start := 0; start < len(payload) && len(tokens) < maximumTokens; {
+		for start < len(payload) && !isDiagnosticToken(payload[start]) {
+			start++
+		}
+		end := start
+		numeric := true
+		for end < len(payload) && isDiagnosticToken(payload[end]) {
+			if payload[end] < '0' || payload[end] > '9' {
+				numeric = false
+			}
+			end++
+		}
+		if end == start {
+			break
+		}
+		length := end - start
+		if numeric && length == 3 &&
+			payload[start] >= '1' && payload[start] <= '5' {
+			tokens = append(tokens, "s"+string(payload[start:end]))
+		} else if numeric {
+			tokens = append(tokens, fmt.Sprintf("n%d", length))
+		} else {
+			tokens = append(tokens, fmt.Sprintf("a%d", length))
+		}
+		start = end
+	}
+	return strings.Join(tokens, ".")
+}
+
+func isDiagnosticToken(value byte) bool {
+	return value >= 'a' && value <= 'z' ||
+		value >= 'A' && value <= 'Z' ||
+		value >= '0' && value <= '9' ||
+		value == '_' ||
+		value == '-'
+}
+
+func safeFailureKeywords(payload []byte) []string {
+	lower := bytes.ToLower(payload)
+	dictionary := []string{
+		"access",
+		"account",
+		"api",
+		"authentication",
+		"authorization",
+		"available",
+		"balance",
+		"billing",
+		"body",
+		"captured",
+		"certificate",
+		"claude",
+		"closed",
+		"code",
+		"command",
+		"connect",
+		"connection",
+		"content",
+		"credit",
+		"denied",
+		"does",
+		"endpoint",
+		"eof",
+		"error",
+		"failed",
+		"fetch",
+		"forbidden",
+		"format",
+		"found",
+		"internal",
+		"invalid",
+		"json",
+		"key",
+		"limit",
+		"maximum",
+		"message",
+		"missing",
+		"model",
+		"network",
+		"not",
+		"offline",
+		"organization",
+		"overloaded",
+		"parse",
+		"path",
+		"permission",
+		"proxy",
+		"quota",
+		"rate",
+		"region",
+		"request",
+		"required",
+		"response",
+		"retry",
+		"route",
+		"schema",
+		"server",
+		"service",
+		"socket",
+		"started",
+		"status",
+		"stream",
+		"streaming",
+		"timeout",
+		"tls",
+		"tool",
+		"type",
+		"unauthorized",
+		"unknown",
+		"unavailable",
+		"unexpected",
+		"unsupported",
+	}
+	result := make([]string, 0, len(dictionary))
+	for _, word := range dictionary {
+		if containsWord(lower, word) {
+			result = append(result, word)
+		}
+	}
+	return result
+}
+
+func containsWord(payload []byte, word string) bool {
+	needle := []byte(word)
+	for start := 0; start < len(payload); {
+		index := bytes.Index(payload[start:], needle)
+		if index < 0 {
+			return false
+		}
+		index += start
+		beforeOK := index == 0 || !isASCIIWord(payload[index-1])
+		afterIndex := index + len(needle)
+		afterOK := afterIndex == len(payload) ||
+			!isASCIIWord(payload[afterIndex])
+		if beforeOK && afterOK {
+			return true
+		}
+		start = index + 1
+	}
+	return false
+}
+
+func isASCIIWord(value byte) bool {
+	return value >= 'a' && value <= 'z' ||
+		value >= '0' && value <= '9' ||
+		value == '_'
+}
+
+func (run *agentRun) signalLocked() {
+	close(run.changed)
+	run.changed = make(chan struct{})
+}

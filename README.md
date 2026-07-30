@@ -2,7 +2,7 @@
 
 This repository contains the production implementation of VibeMate.
 
-The current code is an M0.7 runtime, executable Access-plan, protocol,
+The current code is a narrow M0 runtime, executable Access-plan, protocol,
 controlled-egress, Exchange, loopback-ingress, and Desktop-host foundation. It
 provides a typed `ProductRuntime` lifecycle, a Host-owned readiness commit
 point, a mandatory offline-egress coordination boundary, a real versioned
@@ -93,22 +93,32 @@ from inherited `NO_PROXY`; and heartbeats and finishes the run. Host integration
 tests exercise this path over real loopback listeners with a local child
 process. They do not send provider traffic.
 
+The opt-in `vibermate-acceptance` command exercises the packaged macOS arm64
+assembly with fixed Claude Code 2.1.220. It derives the daemon and launcher from
+one App bundle and cross-checks an embedded build manifest against actual
+artifact digests and Go build metadata. The manifest binds the App build to one
+clean Git revision, pinned toolchains, explicit Desktop/development-sidecar
+profiles, configuration digests, and both packaged sidecars. The deterministic
+sequence uses a unique missing SecretRef; the credentialed continuation uses
+the development file SecretStore and defaults to
+`https://api.example.com/v1` with model `gpt-5.6-sol`. No acceptance mode takes
+a secret value on its command line.
+
 SQLite is the only durable Access authority; active-plan publication occurs
 after commit. An indeterminate commit or post-commit publication failure marks
 only the affected Access projection unavailable, so new reads and writes fail
 closed instead of serving an unmarked stale plan. A normal close/reopen recovery
 recompiles the same revision and hash from SQLite. ProductRuntime reports only
 `initialized`; DesktopHost derives product readiness and withdraws discovery
-before shutdown. Forced process termination, operating-system failure, and
-power-loss recovery are not yet proven by the M0.7 suite.
+before shutdown. Unit and component tests do not by themselves prove packaged
+Claude, provider, `SIGINT`, or force-kill behavior; those claims require a
+passing private v3 report from the clean frozen artifact.
 
-This stage still does not prove credentialed Claude behavior, real provider
-streaming, real tool approval, physical network loss/sleep, planned
-disconnect/resume with a live Agent, `SIGINT` or force-kill recovery in the
-packaged application, Root installation, signing, notarization, or a release
-SecretStore. It does not implement Server, Windows/Linux, unmatched-endpoint
-blind tunneling, system proxy installation, multi-profile routing, or a full
-control API.
+Even a passing M0 assembly report does not prove physical network loss/sleep,
+power-loss durability, arbitrary client/provider compatibility, Root
+installation, signing, notarization, or release secret protection. The code
+does not implement Server, Windows/Linux, unmatched-endpoint blind tunneling,
+system proxy installation, multi-profile routing, or a full control API.
 
 The implementation is not Preview-ready or Release-ready.
 
@@ -126,8 +136,9 @@ make vuln
 ```
 
 `make check` generates development-only Desktop icons and sidecars in ignored
-build directories before running the UI and native-shell tests. The generated
-sidecar uses the plaintext-equivalent development SecretStore; it must not be
+build directories before running the UI and native-shell tests. It also
+generates the build manifest later embedded by Tauri. The generated sidecar
+uses the plaintext-equivalent development SecretStore; it must not be
 distributed as a release build.
 
 `cargo audit` currently exits successfully with 17 allowed transitive warnings,
@@ -137,6 +148,8 @@ a warning-free audit and still requires release-time disposition.
 
 The runtime and package ownership map is in
 [`docs/module-map.md`](docs/module-map.md).
+The opt-in packaged acceptance contract is in
+[`docs/m0-acceptance.md`](docs/m0-acceptance.md).
 
 ## License
 
