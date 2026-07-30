@@ -29,6 +29,7 @@ import (
 	"github.com/vibe-agi/vibermate/internal/offlinehold"
 	"github.com/vibe-agi/vibermate/internal/originaltransport"
 	"github.com/vibe-agi/vibermate/internal/pathcapability"
+	"github.com/vibe-agi/vibermate/internal/protocolcore"
 	"github.com/vibe-agi/vibermate/internal/ssewire"
 	"github.com/vibe-agi/vibermate/internal/transportprofile"
 )
@@ -1083,11 +1084,13 @@ func (downstream *httpDownstream) Abort(
 		ReasonCode     exchange.ReasonCode    `json:"reasonCode"`
 		ProviderStatus int                    `json:"providerStatus,omitempty"`
 		ProviderField  exchange.ProviderField `json:"providerField,omitempty"`
+		ProtocolReason protocolcore.Reason    `json:"protocolReason,omitempty"`
 	}{
 		Type:           "error",
 		ReasonCode:     notice.ReasonCode,
 		ProviderStatus: notice.ProviderStatus,
 		ProviderField:  notice.ProviderField,
+		ProtocolReason: notice.ProtocolReason,
 	})
 	if err != nil {
 		return err

@@ -149,6 +149,7 @@ type Failure struct {
 	ProviderStatus int
 	ProviderField  ProviderField
 	ClientField    ClientField
+	ProtocolReason protocolcore.Reason
 	cause          error
 }
 
@@ -169,6 +170,9 @@ func (failure *Failure) Error() string {
 	}
 	if failure.ClientField != ClientFieldUnknown {
 		message += fmt.Sprintf(" clientField=%s", failure.ClientField)
+	}
+	if failure.ProtocolReason != "" {
+		message += fmt.Sprintf(" protocolReason=%s", failure.ProtocolReason)
 	}
 	if failure.cause != nil {
 		message += ": " + failure.cause.Error()
@@ -210,6 +214,7 @@ func newFailure(
 		Code:           code,
 		ExchangeID:     exchangeID,
 		ProviderStatus: providerStatus,
+		ProtocolReason: protocolcore.ReasonOf(cause),
 		cause:          cause,
 	}
 }
@@ -393,6 +398,7 @@ type FailureNotice struct {
 	ReasonCode     ReasonCode
 	ProviderStatus int
 	ProviderField  ProviderField
+	ProtocolReason protocolcore.Reason
 }
 
 // Downstream is implemented by a future ingress adapter. Begin commits the

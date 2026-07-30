@@ -399,6 +399,58 @@ func TestPipelineClassifiesProviderBodyIdleAfterResponseHeaders(t *testing.T) {
 	}
 }
 
+func TestPipelinePublishesStableProtocolReasonForMalformedStream(t *testing.T) {
+	t.Parallel()
+
+	accessID := mustAccessID(t, "access-malformed-stream")
+	snapshot := compileTestSnapshot(t, accessID, 1, "gpt-malformed")
+	provider := &providerDouble{results: []providerResult{{
+		response: &http.Response{
+			StatusCode: http.StatusOK,
+			Header: http.Header{
+				"Content-Type": []string{"text/event-stream"},
+			},
+			Body: io.NopCloser(strings.NewReader(
+				"data: {invalid-json}\n\ndata: [DONE]\n\n",
+			)),
+		},
+	}}}
+	pipeline := newTestPipeline(
+		t,
+		&resolverDouble{snapshots: []access.AccessPlanSnapshot{snapshot}},
+		provider,
+		&decisionDouble{decision: ToolDecision{
+			Outcome: ToolDecisionApproved,
+		}},
+	)
+	t.Cleanup(func() { shutdownPipeline(t, pipeline) })
+	downstream := &downstreamRecorder{}
+	result, err := pipeline.Execute(
+		context.Background(),
+		mustClientRequest(
+			t,
+			"exchange-malformed-stream",
+			accessID,
+			streamingClientRequest(),
+			ReplayNonReplayable,
+		),
+		downstream,
+	)
+	var failure *Failure
+	if !errors.As(err, &failure) ||
+		failure.Code != ReasonProviderResponseInvalid ||
+		failure.ProtocolReason != protocolcore.ReasonMalformedEventStream ||
+		result.Outcome != AttemptFailed {
+		t.Fatalf("Execute() result=%+v error=%v", result, err)
+	}
+	if len(downstream.aborts) != 1 ||
+		downstream.aborts[0].ReasonCode != ReasonProviderResponseInvalid ||
+		downstream.aborts[0].ProtocolReason !=
+			protocolcore.ReasonMalformedEventStream {
+		t.Fatalf("downstream aborts = %+v", downstream.aborts)
+	}
+}
+
 func TestPipelineProviderCommentsDoNotResetSemanticProgressTimeout(t *testing.T) {
 	t.Parallel()
 

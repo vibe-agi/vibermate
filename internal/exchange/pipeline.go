@@ -1230,6 +1230,7 @@ func (pipeline *Pipeline) abortStream(
 		ReasonCode:     typed.Code,
 		ProviderStatus: typed.ProviderStatus,
 		ProviderField:  typed.ProviderField,
+		ProtocolReason: typed.ProtocolReason,
 	})
 	if abortErr != nil {
 		return errors.Join(

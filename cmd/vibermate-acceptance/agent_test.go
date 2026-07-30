@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"io"
 	"slices"
@@ -236,6 +237,43 @@ func TestAgentProcessFailureDoesNotWrapNil(t *testing.T) {
 		err.Error() != "normal Claude exit=1 stdoutLines=0 deltas=0 stderrBytes=0" ||
 		strings.Contains(err.Error(), "%!") {
 		t.Fatalf("process failure = %v", err)
+	}
+}
+
+func TestAgentExitedBeforeApprovalReturnsBoundedFailureEvidence(t *testing.T) {
+	t.Parallel()
+
+	done := make(chan struct{})
+	close(done)
+	outputDone := make(chan struct{})
+	close(outputDone)
+	run := &agentRun{
+		done:       done,
+		outputDone: outputDone,
+		stderr:     newBoundedBuffer(256),
+	}
+	run.observeLine(mustJSON(t, map[string]any{
+		"type":    "result",
+		"subtype": "error_during_execution",
+		"result": `{"reasonCode":"provider_response_invalid",` +
+			`"providerStatus":200,` +
+			`"protocolReason":"malformed_event_stream"} secret-value`,
+	}))
+	err := agentExitedBeforeApproval(context.Background(), run)
+	for _, required := range []string{
+		"Claude exited before a tool approval became pending",
+		"tool pre-approval Claude exit=0",
+		"reasonCode=provider_response_invalid",
+		"providerStatus=200",
+		"protocolReason=malformed_event_stream",
+		"resultSubtype=error_during_execution",
+	} {
+		if !strings.Contains(err.Error(), required) {
+			t.Fatalf("agentExitedBeforeApproval() error = %v", err)
+		}
+	}
+	if strings.Contains(err.Error(), "secret-value") {
+		t.Fatalf("agentExitedBeforeApproval() leaked result: %v", err)
 	}
 }
 

@@ -1647,11 +1647,20 @@ func waitForApproval(
 		case <-ctx.Done():
 			return toolapproval.View{}, ctx.Err()
 		case <-run.done:
-			return toolapproval.View{}, errors.New(
-				"Claude exited before a tool approval became pending",
-			)
+			return toolapproval.View{}, agentExitedBeforeApproval(ctx, run)
 		}
 	}
+}
+
+func agentExitedBeforeApproval(
+	ctx context.Context,
+	run *agentRun,
+) error {
+	exitCode, waitErr := run.wait(ctx)
+	return fmt.Errorf(
+		"Claude exited before a tool approval became pending: %w",
+		agentProcessFailure("tool pre-approval", exitCode, waitErr, run),
+	)
 }
 
 func runAgentInterrupt(

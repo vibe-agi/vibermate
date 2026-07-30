@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"github.com/vibe-agi/vibermate/internal/exchange"
+	"github.com/vibe-agi/vibermate/internal/protocolcore"
 )
 
 const (
@@ -48,6 +49,7 @@ type agentFailureEvidence struct {
 	reasonCode     exchange.ReasonCode
 	providerStatus int
 	providerField  exchange.ProviderField
+	protocolReason protocolcore.Reason
 	agentStatus    int
 	category       string
 	resultSubtype  string
@@ -253,6 +255,9 @@ func collectFailureEvidence(value any, evidence *agentFailureEvidence) {
 				}
 			}
 		}
+		if rawReason, ok := typed["protocolReason"].(string); ok {
+			evidence.protocolReason = knownProtocolReason(rawReason)
+		}
 		for _, nested := range typed {
 			collectFailureEvidence(nested, evidence)
 		}
@@ -270,6 +275,21 @@ func extractAgentFailureEvidence(payload []byte) agentFailureEvidence {
 	for _, reason := range knownExchangeReasons() {
 		if bytes.Contains(payload, []byte(reason)) {
 			evidence.reasonCode = reason
+			break
+		}
+	}
+	for _, reason := range knownProtocolReasons() {
+		for _, prefix := range [][]byte{
+			[]byte(`"protocolReason":"`),
+			[]byte("protocolReason="),
+		} {
+			marker := append(append([]byte(nil), prefix...), []byte(reason)...)
+			if bytes.Contains(payload, marker) {
+				evidence.protocolReason = reason
+				break
+			}
+		}
+		if evidence.protocolReason != "" {
 			break
 		}
 	}
@@ -498,6 +518,30 @@ func knownExchangeReasons() []exchange.ReasonCode {
 	}
 }
 
+func knownProtocolReasons() []protocolcore.Reason {
+	return []protocolcore.Reason{
+		protocolcore.ReasonInvalidClientRequest,
+		protocolcore.ReasonUnsupportedClientInput,
+		protocolcore.ReasonInvalidProviderResponse,
+		protocolcore.ReasonUnsupportedProviderData,
+		protocolcore.ReasonMalformedEventStream,
+		protocolcore.ReasonTruncatedEventStream,
+		protocolcore.ReasonStreamStateViolation,
+		protocolcore.ReasonStreamLimitExceeded,
+		protocolcore.ReasonToolCallIncomplete,
+		protocolcore.ReasonOperationCanceled,
+	}
+}
+
+func knownProtocolReason(value string) protocolcore.Reason {
+	for _, reason := range knownProtocolReasons() {
+		if string(reason) == value {
+			return reason
+		}
+	}
+	return ""
+}
+
 func validResultSubtype(value string) bool {
 	switch value {
 	case "success",
@@ -529,6 +573,9 @@ func (evidence *agentFailureEvidence) merge(candidate agentFailureEvidence) {
 	}
 	if candidate.providerField != "" {
 		evidence.providerField = candidate.providerField
+	}
+	if candidate.protocolReason != "" {
+		evidence.protocolReason = candidate.protocolReason
 	}
 	if candidate.agentStatus != 0 {
 		evidence.agentStatus = candidate.agentStatus
@@ -763,6 +810,12 @@ func (run *agentRun) safeFailureEvidence() string {
 		fields = append(
 			fields,
 			"providerField="+string(evidence.providerField),
+		)
+	}
+	if evidence.protocolReason != "" {
+		fields = append(
+			fields,
+			"protocolReason="+string(evidence.protocolReason),
 		)
 	}
 	if evidence.agentStatus != 0 {
