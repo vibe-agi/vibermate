@@ -50,13 +50,11 @@ func runAcceptance(
 		checkPassed,
 		"App bundle and acceptance artifacts share one clean Git source identity",
 	)
-	if config.deterministicOnly {
-		isolated, isolateErr := isolateDeterministicSecret(config)
-		if isolateErr != nil {
-			return fail("deterministic-secret-reference", isolateErr)
-		}
-		config = isolated
+	phases, isolateErr := splitAcceptancePhases(config)
+	if isolateErr != nil {
+		return fail("deterministic-secret-reference", isolateErr)
 	}
+	config = phases.deterministic
 
 	if err := verifyFixedClaude(ctx, config); err != nil {
 		return fail("fixed-claude-identity", err)
@@ -180,6 +178,7 @@ func runAcceptance(
 			),
 		)
 	}
+	deterministicPlanHash := applied.PlanHash
 	report.add(
 		"access-apply",
 		checkPassed,
@@ -389,6 +388,32 @@ func runAcceptance(
 		)
 		return report, nil
 	}
+	credentialedApplied, credentialedStatus, credentialedProblem, credentialedErr :=
+		third.control.applyAccess(ctx, phases.credentialed, 1)
+	if credentialedErr != nil ||
+		credentialedStatus != http.StatusOK ||
+		credentialedProblem.ReasonCode != "" ||
+		credentialedApplied.Outcome != access.WriteOutcomeCommitted ||
+		credentialedApplied.Revision != 2 ||
+		len(credentialedApplied.PlanHash) != 64 ||
+		credentialedApplied.PlanHash == deterministicPlanHash {
+		return fail(
+			"credentialed-access-apply",
+			fmt.Errorf(
+				"status=%d reason=%s result=%+v err=%w",
+				credentialedStatus,
+				credentialedProblem.ReasonCode,
+				credentialedApplied,
+				credentialedErr,
+			),
+		)
+	}
+	config = phases.credentialed
+	report.add(
+		"credentialed-access-apply",
+		checkPassed,
+		"configured SecretRef rebound the Access as revision 2 without exposing its value",
+	)
 	credential, err := third.control.credential(ctx, config)
 	if err != nil ||
 		credential.SecretState != secretstore.StateConfigured ||
@@ -453,6 +478,22 @@ func runAcceptance(
 		"credentialed assembly generation drained cleanly",
 	)
 	return report, nil
+}
+
+type acceptancePhases struct {
+	deterministic config
+	credentialed  config
+}
+
+func splitAcceptancePhases(input config) (acceptancePhases, error) {
+	deterministic, err := isolateDeterministicSecret(input)
+	if err != nil {
+		return acceptancePhases{}, err
+	}
+	return acceptancePhases{
+		deterministic: deterministic,
+		credentialed:  input,
+	}, nil
 }
 
 func isolateDeterministicSecret(input config) (config, error) {

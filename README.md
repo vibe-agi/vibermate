@@ -101,7 +101,7 @@ clean Git revision, pinned toolchains, explicit Desktop/development-sidecar
 profiles, configuration digests, and both packaged sidecars. The deterministic
 sequence uses a unique missing SecretRef; the credentialed continuation uses
 the development file SecretStore and defaults to
-`https://api.example.com/v1` with model `gpt-5.6-sol`. No acceptance mode takes
+`https://model8.run` with model `gpt-5.6-sol`. No acceptance mode takes
 a secret value on its command line.
 
 SQLite is the only durable Access authority; active-plan publication occurs

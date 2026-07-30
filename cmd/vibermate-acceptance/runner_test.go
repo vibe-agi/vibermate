@@ -10,31 +10,33 @@ import (
 	"github.com/vibe-agi/vibermate/internal/offlinehold"
 )
 
-func TestDeterministicAcceptanceIsolatesConfiguredSecretReference(t *testing.T) {
+func TestAcceptancePhasesAlwaysIsolateConfiguredSecretReference(t *testing.T) {
 	t.Parallel()
 
 	input := config{
-		deterministicOnly: true,
+		deterministicOnly: false,
 		secretRef:         "secret://provider/configured-development-key",
 	}
-	first, err := isolateDeterministicSecret(input)
+	first, err := splitAcceptancePhases(input)
 	if err != nil {
 		t.Fatal(err)
 	}
-	second, err := isolateDeterministicSecret(input)
+	second, err := splitAcceptancePhases(input)
 	if err != nil {
 		t.Fatal(err)
 	}
 	const prefix = "secret://provider/m0-assembly-"
-	if !strings.HasPrefix(first.secretRef, prefix) ||
-		!strings.HasPrefix(second.secretRef, prefix) ||
-		first.secretRef == input.secretRef ||
-		second.secretRef == input.secretRef ||
-		first.secretRef == second.secretRef {
+	if !strings.HasPrefix(first.deterministic.secretRef, prefix) ||
+		!strings.HasPrefix(second.deterministic.secretRef, prefix) ||
+		first.deterministic.secretRef == input.secretRef ||
+		second.deterministic.secretRef == input.secretRef ||
+		first.deterministic.secretRef == second.deterministic.secretRef ||
+		first.credentialed != input ||
+		second.credentialed != input {
 		t.Fatalf(
 			"isolated references first=%q second=%q configured=%q",
-			first.secretRef,
-			second.secretRef,
+			first.deterministic.secretRef,
+			second.deterministic.secretRef,
 			input.secretRef,
 		)
 	}

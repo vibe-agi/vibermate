@@ -20,7 +20,7 @@ The runner requires:
 The fixed Claude executable SHA-256 is
 `8addc857f3fe64d5a0368af9ee50321b50afb4a6918ba3ef018ab84f5dbbe081`.
 The default provider route for this acceptance slice is
-`https://api.example.com/v1` with model `gpt-5.6-sol`.
+`https://model8.run` with model `gpt-5.6-sol`.
 
 The runner never accepts a secret value. It removes ambient Anthropic,
 alternate-provider, Claude credential, and OpenAI credential variables from
@@ -141,7 +141,7 @@ Before the credentialed run, use the same development-profile App to apply the
 acceptance Access and save its provider key:
 
 1. set Access ID to `assembly-001`;
-2. set the provider origin to `https://api.example.com/v1`;
+2. set the provider origin to `https://model8.run`;
 3. set the fixed model to `gpt-5.6-sol`;
 4. apply the Access at the currently loaded revision;
 5. save the provider credential once and confirm a nonzero secret revision.
@@ -151,19 +151,27 @@ The default logical reference is
 reference may be supplied explicitly, but no secret value may be passed on the
 command line.
 
+Full mode first runs the complete deterministic sequence with a fresh,
+run-local missing `SecretRef`. After revision 1 recovery succeeds, it applies
+revision 2 with the configured `SecretRef` before inspecting credential
+metadata or permitting provider HTTP. This keeps every deterministic no-send
+claim independent of credentials already present on the host.
+
 The credentialed continuation additionally verifies:
 
-1. fixed Claude completes an unheld provider reply with a trusted assistant
+1. revision 2 atomically replaces the run-local missing `SecretRef` with the
+   configured logical reference without exposing its value;
+2. fixed Claude completes an unheld provider reply with a trusted assistant
    marker and at least one incremental content delta;
-2. a new request queues while Hold is active, sends nothing before Resume, and
+3. a new request queues while Hold is active, sends nothing before Resume, and
    returns a trusted marker with at least two deltas after the exact route probe;
-3. a real `TodoWrite` intent becomes durable pending approval without raw
+4. a real `TodoWrite` intent becomes durable pending approval without raw
    arguments, and neither the tool block nor completion marker reaches Claude
    before `allow-once`;
-4. signaling captured Claude after its first streamed delta terminates the
+5. signaling captured Claude after its first streamed delta terminates the
    child within the bound while the shared runtime remains ready and all hold
    ownership converges;
-5. the final packaged daemon drains cleanly.
+6. the final packaged daemon drains cleanly.
 
 Example:
 

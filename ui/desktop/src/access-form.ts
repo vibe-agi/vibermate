@@ -21,7 +21,7 @@ export const initialAccessForm: AccessFormValues = {
   description: "",
   expectedRevision: "0",
   clientOrigin: "https://api.anthropic.com",
-  providerOrigin: "https://api.openai.com/v1",
+  providerOrigin: "https://model8.run",
   fixedModel: "gpt-4.1-mini",
 };
 

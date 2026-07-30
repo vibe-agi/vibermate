@@ -14,7 +14,7 @@ import (
 )
 
 const (
-	defaultProviderOrigin = "https://api.example.com/v1"
+	defaultProviderOrigin = "https://model8.run"
 	defaultProviderModel  = "gpt-5.6-sol"
 )
 
