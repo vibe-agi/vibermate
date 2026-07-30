@@ -16,6 +16,7 @@ import (
 	"github.com/vibe-agi/vibermate/internal/hostcontract"
 	"github.com/vibe-agi/vibermate/internal/offlinehold"
 	"github.com/vibe-agi/vibermate/internal/runtimepersistence"
+	"github.com/vibe-agi/vibermate/internal/secretstore"
 )
 
 var errAcquireNotExpected = errors.New("egress acquisition is not expected in M0 tests")
@@ -74,6 +75,12 @@ func TestProductRuntimeStartsAndShutsDownNormally(t *testing.T) {
 	}
 	if _, exists := wireStatus["accessProjection"]; !exists {
 		t.Fatalf("runtime status omits Access projection health: %s", wire)
+	}
+	if _, exists := wireStatus["offlineHold"]; !exists {
+		t.Fatalf("runtime status omits offline-hold state: %s", wire)
+	}
+	if status.OfflineHold.State != offlinehold.StateOnline {
+		t.Fatalf("runtime offline-hold state = %+v", status.OfflineHold)
 	}
 
 	schemaState, err := runtime.SchemaStateReader().ReadSchemaState(context.Background())
@@ -531,6 +538,45 @@ func TestProductRuntimeRollbackErrorDoesNotOverrideStartupCause(t *testing.T) {
 	}
 }
 
+func TestProductRuntimeShutsDownControlledEgressInDependencyOrder(t *testing.T) {
+	t.Parallel()
+
+	var events eventLog
+	coordinator := &coordinatorDouble{events: &events}
+	builders := productionBuilders()
+	builders.provider = fixedProviderBuilder{
+		component: &egressRuntimeDouble{
+			events: &events,
+			event:  "provider.shutdown",
+		},
+	}
+	builders.original = fixedOriginalBuilder{
+		component: &egressRuntimeDouble{
+			events: &events,
+			event:  "original.shutdown",
+		},
+	}
+	runtime, err := startWithBuilders(
+		context.Background(),
+		testOptions(t, hostcontract.Desktop(), coordinator),
+		builders,
+	)
+	if err != nil {
+		t.Fatalf("start ProductRuntime: %v", err)
+	}
+	shutdownRuntime(t, runtime)
+
+	want := []string{
+		"offline.begin-shutdown",
+		"original.shutdown",
+		"provider.shutdown",
+		"offline.drain",
+	}
+	if got := events.snapshot(); !reflect.DeepEqual(got, want) {
+		t.Fatalf("controlled egress shutdown order = %v, want %v", got, want)
+	}
+}
+
 func TestProductRuntimeRejectsCorruptSQLiteOnRestart(t *testing.T) {
 	t.Parallel()
 
@@ -671,7 +717,7 @@ func TestProductRuntimeAppliesInternalShutdownDeadline(t *testing.T) {
 func testOptions(
 	t *testing.T,
 	host hostcontract.Contract,
-	coordinator offlinehold.Coordinator,
+	coordinator offlinehold.RuntimeCoordinator,
 ) Options {
 	t.Helper()
 	paths, err := NewRuntimePaths(filepath.Join(t.TempDir(), "runtime-data"))
@@ -685,13 +731,14 @@ func testOptionsWithPaths(
 	t *testing.T,
 	paths RuntimePaths,
 	host hostcontract.Contract,
-	coordinator offlinehold.Coordinator,
+	coordinator offlinehold.RuntimeCoordinator,
 ) Options {
 	t.Helper()
 	return Options{
 		Paths:       paths,
 		Host:        host,
 		OfflineHold: coordinator,
+		Secrets:     unavailableSecretStore{},
 		Clock:       SystemClock{},
 		InstanceIDs: NewCryptographicInstanceIDSource(),
 		Lifecycle: LifecycleOptions{
@@ -731,12 +778,16 @@ type coordinatorDouble struct {
 	drains                      int
 	events                      *eventLog
 	blockDrainUntilCancellation bool
+	state                       offlinehold.State
+	revision                    uint64
 }
 
 func (c *coordinatorDouble) Start(_ context.Context, binding offlinehold.RuntimeBinding) error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	c.instanceID = binding.InstanceID
+	c.state = offlinehold.StateOnline
+	c.revision++
 	return c.startErr
 }
 
@@ -747,13 +798,53 @@ func (c *coordinatorDouble) Acquire(
 	return nil, errAcquireNotExpected
 }
 
+func (c *coordinatorDouble) BeginAction(
+	context.Context,
+	offlinehold.ActionRequest,
+) (*offlinehold.ActionLease, error) {
+	return &offlinehold.ActionLease{}, nil
+}
+
 func (c *coordinatorDouble) BeginShutdown() {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	c.beginCount++
+	c.state = offlinehold.StateStopping
+	c.revision++
 	if c.events != nil {
 		c.events.add("offline.begin-shutdown")
 	}
+}
+
+func (c *coordinatorDouble) Snapshot() offlinehold.Snapshot {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return offlinehold.Snapshot{
+		State:        c.state,
+		Revision:     c.revision,
+		ActiveByKind: map[offlinehold.EgressKind]int{},
+		QueuedByKind: map[offlinehold.EgressKind]int{},
+	}
+}
+
+func (c *coordinatorDouble) PendingProbeTargets() []offlinehold.ProbeTarget {
+	return nil
+}
+
+func (c *coordinatorDouble) Enter(
+	context.Context,
+	uint64,
+) (offlinehold.Snapshot, error) {
+	return c.Snapshot(), errors.New("offline control is not expected in this test")
+}
+
+func (c *coordinatorDouble) Resume(
+	context.Context,
+	uint64,
+	offlinehold.ResumeRequest,
+	offlinehold.Prober,
+) (offlinehold.Snapshot, error) {
+	return c.Snapshot(), errors.New("offline control is not expected in this test")
 }
 
 func (c *coordinatorDouble) Drain(ctx context.Context) error {
@@ -790,6 +881,29 @@ func (c *coordinatorDouble) drainCount() int {
 	return c.drains
 }
 
+type unavailableSecretStore struct{}
+
+func (unavailableSecretStore) Read(
+	context.Context,
+	secretstore.Reference,
+) (*secretstore.Value, error) {
+	return nil, secretstore.ErrNotFound
+}
+
+func (unavailableSecretStore) Inspect(
+	context.Context,
+	secretstore.Reference,
+) (secretstore.Metadata, error) {
+	return secretstore.Metadata{State: secretstore.StateMissing}, nil
+}
+
+func (unavailableSecretStore) Replace(
+	context.Context,
+	secretstore.ReplaceCommand,
+) (secretstore.Metadata, error) {
+	return secretstore.Metadata{}, secretstore.ErrReadOnly
+}
+
 type eventLog struct {
 	mu     sync.Mutex
 	events []string
@@ -814,6 +928,38 @@ type fixedMonitorBuilder struct {
 
 func (b fixedMonitorBuilder) Build(monitorBuildRequest) (ownedComponent, error) {
 	return b.component, b.err
+}
+
+type egressRuntimeDouble struct {
+	events *eventLog
+	event  string
+}
+
+func (runtime *egressRuntimeDouble) Shutdown(context.Context) error {
+	runtime.events.add(runtime.event)
+	return nil
+}
+
+type fixedProviderBuilder struct {
+	component providerRuntime
+	err       error
+}
+
+func (builder fixedProviderBuilder) Build(
+	providerBuildRequest,
+) (providerRuntime, error) {
+	return builder.component, builder.err
+}
+
+type fixedOriginalBuilder struct {
+	component originalRuntime
+	err       error
+}
+
+func (builder fixedOriginalBuilder) Build(
+	originalBuildRequest,
+) (originalRuntime, error) {
+	return builder.component, builder.err
 }
 
 type failingAccessBuilder struct {

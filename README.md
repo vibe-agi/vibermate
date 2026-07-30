@@ -27,6 +27,25 @@ barrier. Official Anthropic and OpenAI Go SDKs are pinned test-only wire
 oracles and are structurally forbidden from the production codec hot path.
 Unsupported or ambiguous protocol shapes fail closed.
 
+Controlled egress is now a mandatory runtime-owned boundary. The planned
+offline coordinator serializes logical action admission with Enter Hold,
+allows actions admitted before that cut to finish, queues later egress with a
+complete frozen non-secret target identity, and probes those exact identities
+before bounded FIFO release. `SafeToDisconnect` is true only after pre-Enter
+actions and active egress have drained. Provider and original-origin clients
+cannot emit an external byte without a lease and have bounded cancellation,
+response-body ownership, and shutdown.
+
+The provider client separates origin, HTTP authority, and TLS server name,
+enforces strict certificate verification and redirect rejection, and applies
+the frozen transport-fingerprint plan with explicit fallback evidence. It
+retrieves a `SecretRef` only after egress admission, applies the typed static
+bearer AuthDriver, and destroys the process-memory value. The host-neutral
+SecretStore exposes no listing or plaintext control API. Ordinary development
+builds have a private file-backed driver selected by build tag; its contents
+are plaintext-equivalent at rest and are not release secret protection.
+Native Keychain selection remains deferred to the Desktop/release stage.
+
 SQLite is the only durable Access authority; active-plan publication occurs
 after commit. An indeterminate commit or post-commit publication failure marks
 only the affected Access projection unavailable, so new reads and writes fail
@@ -34,9 +53,10 @@ closed instead of serving an unmarked stale plan. A normal close/reopen recovery
 recompiles the same revision and hash from SQLite. Forced process termination,
 operating-system failure, and power-loss recovery are not yet proven. Startup
 reports only `initialized`; it does not publish product readiness or discovery.
-No provider transport, external network request, Exchange pipeline, proxy data
-plane, control server, Desktop shell, Server host, CLI, or product UI exists
-yet.
+No Exchange pipeline or listener currently invokes these transports, so this
+stage sends no product network traffic. No proxy data plane, control server,
+Desktop shell, Server host, CLI, or product UI exists yet. Physical network
+loss, sleep, and credentialed provider behavior are not proven.
 
 The implementation is not Preview-ready or Release-ready.
 

@@ -8,6 +8,7 @@ import (
 
 	"github.com/vibe-agi/vibermate/internal/hostcontract"
 	"github.com/vibe-agi/vibermate/internal/offlinehold"
+	"github.com/vibe-agi/vibermate/internal/secretstore"
 )
 
 const runtimeDatabaseName = "runtime.db"
@@ -67,7 +68,8 @@ func DefaultLifecycleOptions() LifecycleOptions {
 type Options struct {
 	Paths       RuntimePaths
 	Host        hostcontract.Contract
-	OfflineHold offlinehold.Coordinator
+	OfflineHold offlinehold.RuntimeCoordinator
+	Secrets     secretstore.Store
 	Clock       Clock
 	InstanceIDs InstanceIDSource
 	Lifecycle   LifecycleOptions
@@ -82,6 +84,9 @@ func (o Options) validate() error {
 	}
 	if o.OfflineHold == nil {
 		return fmt.Errorf("%w: offline-hold coordinator is missing", ErrInvalidOptions)
+	}
+	if o.Secrets == nil {
+		return fmt.Errorf("%w: secret store is missing", ErrInvalidOptions)
 	}
 	if o.Clock == nil {
 		return fmt.Errorf("%w: clock is missing", ErrInvalidOptions)

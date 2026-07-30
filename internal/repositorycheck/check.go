@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"go/ast"
 	"go/parser"
 	"go/token"
 	"io/fs"
@@ -42,6 +43,7 @@ func Check(repositoryRoot string) error {
 	var violations []Violation
 	violations = append(violations, CheckProductionEnglish(repositoryRoot)...)
 	violations = append(violations, CheckProtocolSDKIsolation(repositoryRoot)...)
+	violations = append(violations, CheckExternalEgressGate(repositoryRoot)...)
 	violations = append(
 		violations,
 		CheckCatalogPair(
@@ -67,6 +69,135 @@ func Check(repositoryRoot string) error {
 		joined = append(joined, errors.New(violation.String()))
 	}
 	return errors.Join(joined...)
+}
+
+// CheckExternalEgressGate rejects new raw outbound-client construction outside
+// the gated provider and original-origin transports and their typed probes.
+func CheckExternalEgressGate(repositoryRoot string) []Violation {
+	allowedFiles := map[string]struct{}{
+		"internal/providertransport/transport.go": {},
+		"internal/providertransport/probe.go":     {},
+		"internal/originaltransport/transport.go": {},
+		"internal/originaltransport/probe.go":     {},
+	}
+	protectedSymbols := map[string]map[string]struct{}{
+		"net": {
+			"Dial":        {},
+			"DialTimeout": {},
+			"Dialer":      {},
+			"Resolver":    {},
+		},
+		"net/http": {
+			"Client":           {},
+			"Transport":        {},
+			"DefaultClient":    {},
+			"DefaultTransport": {},
+			"Get":              {},
+			"Post":             {},
+			"PostForm":         {},
+			"Head":             {},
+		},
+		"crypto/tls": {
+			"Dial":           {},
+			"DialWithDialer": {},
+			"Dialer":         {},
+		},
+	}
+	var violations []Violation
+	for _, relativeRoot := range []string{"cmd", "internal"} {
+		sourceRoot := filepath.Join(repositoryRoot, relativeRoot)
+		if _, err := os.Stat(sourceRoot); errors.Is(err, os.ErrNotExist) {
+			continue
+		}
+		walkErr := filepath.WalkDir(
+			sourceRoot,
+			func(path string, entry fs.DirEntry, err error) error {
+				if err != nil {
+					return err
+				}
+				if entry.IsDir() {
+					if entry.Name() == "testdata" || entry.Name() == "vendor" {
+						return filepath.SkipDir
+					}
+					return nil
+				}
+				if filepath.Ext(path) != ".go" ||
+					strings.HasSuffix(path, "_test.go") {
+					return nil
+				}
+				relative := relativeDisplayPath(repositoryRoot, path)
+				if _, allowed := allowedFiles[relative]; allowed {
+					return nil
+				}
+				fileSet := token.NewFileSet()
+				parsed, parseErr := parser.ParseFile(fileSet, path, nil, 0)
+				if parseErr != nil {
+					return parseErr
+				}
+				imports := make(map[string]string)
+				for _, imported := range parsed.Imports {
+					importPath := strings.Trim(imported.Path.Value, `"`)
+					if _, protected := protectedSymbols[importPath]; !protected {
+						continue
+					}
+					name := filepath.Base(importPath)
+					if imported.Name != nil {
+						if imported.Name.Name == "." ||
+							imported.Name.Name == "_" {
+							position := fileSet.Position(imported.Pos())
+							violations = append(violations, Violation{
+								Rule:    "external-egress-gate",
+								Path:    relative,
+								Line:    position.Line,
+								Message: "protected network packages must use a named import",
+							})
+							continue
+						}
+						name = imported.Name.Name
+					}
+					imports[name] = importPath
+				}
+				ast.Inspect(parsed, func(node ast.Node) bool {
+					selector, ok := node.(*ast.SelectorExpr)
+					if !ok {
+						return true
+					}
+					identifier, ok := selector.X.(*ast.Ident)
+					if !ok {
+						return true
+					}
+					importPath, protectedImport := imports[identifier.Name]
+					if !protectedImport {
+						return true
+					}
+					if _, protected := protectedSymbols[importPath][selector.Sel.Name]; !protected {
+						return true
+					}
+					position := fileSet.Position(selector.Pos())
+					violations = append(violations, Violation{
+						Rule: "external-egress-gate",
+						Path: relative,
+						Line: position.Line,
+						Message: fmt.Sprintf(
+							"raw outbound symbol %s.%s is outside the gated transport",
+							identifier.Name,
+							selector.Sel.Name,
+						),
+					})
+					return true
+				})
+				return nil
+			},
+		)
+		if walkErr != nil {
+			violations = append(violations, Violation{
+				Rule:    "external-egress-gate",
+				Path:    relativeRoot,
+				Message: walkErr.Error(),
+			})
+		}
+	}
+	return violations
 }
 
 // CheckProtocolSDKIsolation keeps official SDKs in oracle tests rather than

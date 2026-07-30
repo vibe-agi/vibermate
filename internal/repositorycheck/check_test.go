@@ -136,3 +136,27 @@ func TestProtocolSDKHotPathRuleUsesPublicCheckWithGoodAndBadFixtures(t *testing.
 		t.Fatalf("public Check did not report protocol-sdk-hotpath: %v", err)
 	}
 }
+
+func TestExternalEgressGateRuleUsesPublicCheckWithGoodAndBadFixtures(t *testing.T) {
+	t.Parallel()
+
+	goodRoot := filepath.Join("testdata", "repository-egress-good")
+	if err := Check(goodRoot); err != nil {
+		t.Fatalf("known-good repository fixture failed: %v", err)
+	}
+
+	badRoot := filepath.Join("testdata", "repository-egress-bad")
+	err := Check(badRoot)
+	if !errors.Is(err, ErrCheckFailed) {
+		t.Fatalf("expected ErrCheckFailed, got %v", err)
+	}
+	if !strings.Contains(err.Error(), "external-egress-gate") {
+		t.Fatalf("public Check did not report external-egress-gate: %v", err)
+	}
+	if !strings.Contains(
+		err.Error(),
+		filepath.Join("internal", "originaltransport", "client.go"),
+	) {
+		t.Fatalf("public Check did not reject raw dial outside the probe: %v", err)
+	}
+}

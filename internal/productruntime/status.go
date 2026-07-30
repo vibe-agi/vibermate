@@ -6,6 +6,7 @@ import (
 
 	"github.com/vibe-agi/vibermate/internal/access"
 	"github.com/vibe-agi/vibermate/internal/hostcontract"
+	"github.com/vibe-agi/vibermate/internal/offlinehold"
 )
 
 // RuntimeState is a language-independent lifecycle state.
@@ -41,6 +42,7 @@ type RuntimeStatus struct {
 	SchemaRevision   int64                   `json:"schemaRevision"`
 	Storage          StorageState            `json:"storage"`
 	AccessProjection access.ProjectionHealth `json:"accessProjection"`
+	OfflineHold      offlinehold.Snapshot    `json:"offlineHold"`
 	StartedAt        time.Time               `json:"startedAt"`
 	StoppedAt        *time.Time              `json:"stoppedAt,omitempty"`
 	StopReasonCode   string                  `json:"stopReasonCode,omitempty"`

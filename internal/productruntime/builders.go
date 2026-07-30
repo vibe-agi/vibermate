@@ -8,7 +8,11 @@ import (
 
 	"github.com/vibe-agi/vibermate/internal/access"
 	"github.com/vibe-agi/vibermate/internal/anthropicchat"
+	"github.com/vibe-agi/vibermate/internal/offlinehold"
+	"github.com/vibe-agi/vibermate/internal/originaltransport"
+	"github.com/vibe-agi/vibermate/internal/providertransport"
 	"github.com/vibe-agi/vibermate/internal/runtimepersistence"
+	"github.com/vibe-agi/vibermate/internal/secretstore"
 )
 
 type storageBuildRequest struct {
@@ -56,6 +60,7 @@ type accessBuildRequest struct {
 type accessRuntime interface {
 	access.Writer
 	access.SnapshotResolver
+	access.ProviderProbeCatalog
 	access.ProjectionHealthReader
 	Shutdown(context.Context) error
 }
@@ -150,17 +155,72 @@ func (productionMonitorBuilder) Build(request monitorBuildRequest) (ownedCompone
 	return newStorageHealthMonitor(request)
 }
 
+type providerBuildRequest struct {
+	coordinator offlinehold.Coordinator
+	secrets     secretstore.Reader
+}
+
+type providerRuntime interface {
+	Shutdown(context.Context) error
+}
+
+type providerBuilder interface {
+	Build(providerBuildRequest) (providerRuntime, error)
+}
+
+type productionProviderBuilder struct{}
+
+func (productionProviderBuilder) Build(
+	request providerBuildRequest,
+) (providerRuntime, error) {
+	authenticator, err := providertransport.NewStaticBearerAuthenticator(
+		request.secrets,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("build static bearer AuthDriver: %w", err)
+	}
+	return providertransport.NewProductionClient(
+		request.coordinator,
+		authenticator,
+		providertransport.DefaultTransportTimeouts(),
+	)
+}
+
+type originalBuildRequest struct {
+	coordinator offlinehold.Coordinator
+}
+
+type originalRuntime interface {
+	Shutdown(context.Context) error
+}
+
+type originalBuilder interface {
+	Build(originalBuildRequest) (originalRuntime, error)
+}
+
+type productionOriginalBuilder struct{}
+
+func (productionOriginalBuilder) Build(
+	request originalBuildRequest,
+) (originalRuntime, error) {
+	return originaltransport.NewProduction(request.coordinator)
+}
+
 type runtimeBuilders struct {
-	storage storageBuilder
-	access  accessBuilder
-	monitor monitorBuilder
+	storage  storageBuilder
+	access   accessBuilder
+	monitor  monitorBuilder
+	provider providerBuilder
+	original originalBuilder
 }
 
 func productionBuilders() runtimeBuilders {
 	return runtimeBuilders{
-		storage: productionStorageBuilder{},
-		access:  productionAccessBuilder{},
-		monitor: productionMonitorBuilder{},
+		storage:  productionStorageBuilder{},
+		access:   productionAccessBuilder{},
+		monitor:  productionMonitorBuilder{},
+		provider: productionProviderBuilder{},
+		original: productionOriginalBuilder{},
 	}
 }
 

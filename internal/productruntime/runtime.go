@@ -9,6 +9,8 @@ import (
 
 	"github.com/vibe-agi/vibermate/internal/access"
 	"github.com/vibe-agi/vibermate/internal/offlinehold"
+	"github.com/vibe-agi/vibermate/internal/originaltransport"
+	"github.com/vibe-agi/vibermate/internal/providertransport"
 	"github.com/vibe-agi/vibermate/internal/runtimepersistence"
 )
 
@@ -19,7 +21,12 @@ type Runtime struct {
 	status       *statusTracker
 	schemaReader runtimepersistence.SchemaStateReader
 	accesses     accessRuntime
+	probeCatalog access.ProviderProbeCatalog
 	monitor      ownedComponent
+	provider     providerRuntime
+	original     originalRuntime
+	offlineHold  offlinehold.RuntimeCoordinator
+	resumeProber offlinehold.Prober
 	cleanups     cleanupStack
 	clock        Clock
 	timeout      LifecycleOptions
@@ -48,7 +55,11 @@ func startWithBuilders(
 	if err := ctx.Err(); err != nil {
 		return nil, fmt.Errorf("start ProductRuntime: %w", err)
 	}
-	if builders.storage == nil || builders.access == nil || builders.monitor == nil {
+	if builders.storage == nil ||
+		builders.access == nil ||
+		builders.monitor == nil ||
+		builders.provider == nil ||
+		builders.original == nil {
 		return nil, fmt.Errorf("%w: component builder is missing", ErrInvalidBuildResult)
 	}
 
@@ -62,6 +73,7 @@ func startWithBuilders(
 
 	tracker := newStatusTracker(instanceID, options.Host.Kind(), options.Clock.Now())
 	var cleanups cleanupStack
+	var pending cleanupStack
 	fail := func(stage string, root error) (*Runtime, error) {
 		startupErr := fmt.Errorf("start ProductRuntime stage %q: %w", stage, root)
 		rollbackContext, cancel := context.WithTimeout(
@@ -69,11 +81,13 @@ func startWithBuilders(
 			options.Lifecycle.RollbackTimeout,
 		)
 		defer cancel()
+		pendingErr := pending.shutdown(rollbackContext)
 		rollbackErr := cleanups.shutdown(rollbackContext)
-		if rollbackErr != nil {
+		if pendingErr != nil || rollbackErr != nil {
 			return nil, errors.Join(
 				startupErr,
-				fmt.Errorf("startup rollback: %w", rollbackErr),
+				wrapOptionalError("pending startup rollback", pendingErr),
+				wrapOptionalError("startup rollback", rollbackErr),
 			)
 		}
 		return nil, startupErr
@@ -142,15 +156,72 @@ func startWithBuilders(
 	}
 	cleanups.register("storage health monitor", monitor.Shutdown)
 
+	providerResumeProber, err := providertransport.NewTLSProber()
+	if err != nil {
+		return fail("offline-hold provider probe", err)
+	}
+	originalResumeProber, err := originaltransport.NewTLSProber()
+	if err != nil {
+		return fail("offline-hold original-origin probe", err)
+	}
+	resumeProber, err := newRuntimeResumeProber(
+		providerResumeProber,
+		originalResumeProber,
+	)
+	if err != nil {
+		return fail("offline-hold resume probe", err)
+	}
+
+	provider, err := builders.provider.Build(providerBuildRequest{
+		coordinator: options.OfflineHold,
+		secrets:     options.Secrets,
+	})
+	if err != nil {
+		return fail("provider transport", err)
+	}
+	if provider == nil {
+		return fail(
+			"provider transport",
+			fmt.Errorf("%w: provider transport is nil", ErrInvalidBuildResult),
+		)
+	}
+	pending.register("provider transport", provider.Shutdown)
+
+	original, err := builders.original.Build(originalBuildRequest{
+		coordinator: options.OfflineHold,
+	})
+	if err != nil {
+		return fail("original-origin transport", err)
+	}
+	if original == nil {
+		return fail(
+			"original-origin transport",
+			fmt.Errorf(
+				"%w: original-origin transport is nil",
+				ErrInvalidBuildResult,
+			),
+		)
+	}
+	pending.register("original-origin transport", original.Shutdown)
+
 	if err := options.OfflineHold.Start(ctx, offlinehold.RuntimeBinding{
 		InstanceID: instanceID,
 	}); err != nil {
 		return fail("offline-hold binding", err)
 	}
-	cleanups.register("offline-hold coordinator", func(ctx context.Context) error {
+	pending.register("offline-hold binding", func(ctx context.Context) error {
 		options.OfflineHold.BeginShutdown()
 		return options.OfflineHold.Drain(ctx)
 	})
+
+	cleanups.register("offline-hold drain", options.OfflineHold.Drain)
+	cleanups.register("provider transport", provider.Shutdown)
+	cleanups.register("original-origin transport", original.Shutdown)
+	cleanups.register("offline-hold admission", func(context.Context) error {
+		options.OfflineHold.BeginShutdown()
+		return nil
+	})
+	pending = cleanupStack{}
 
 	finalState, err := storageResult.store.SchemaStateReader().ReadSchemaState(ctx)
 	if err != nil {
@@ -161,7 +232,12 @@ func startWithBuilders(
 		status:       tracker,
 		schemaReader: storageResult.store.SchemaStateReader(),
 		accesses:     accesses,
+		probeCatalog: accesses,
 		monitor:      monitor,
+		provider:     provider,
+		original:     original,
+		offlineHold:  options.OfflineHold,
+		resumeProber: resumeProber,
 		cleanups:     cleanups,
 		clock:        options.Clock,
 		timeout:      options.Lifecycle,
@@ -173,6 +249,7 @@ func startWithBuilders(
 func (r *Runtime) Status() RuntimeStatus {
 	status := r.status.snapshot()
 	status.AccessProjection = r.accesses.ProjectionHealth()
+	status.OfflineHold = r.offlineHold.Snapshot()
 	if status.AccessProjection.State == access.ProjectionStateUnavailable &&
 		status.State == RuntimeStateInitialized {
 		status.State = RuntimeStateDegraded
