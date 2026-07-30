@@ -44,6 +44,7 @@ func Check(repositoryRoot string) error {
 	violations = append(violations, CheckProductionEnglish(repositoryRoot)...)
 	violations = append(violations, CheckProtocolSDKIsolation(repositoryRoot)...)
 	violations = append(violations, CheckExternalEgressGate(repositoryRoot)...)
+	violations = append(violations, CheckDataPlaneAccessBoundary(repositoryRoot)...)
 	violations = append(
 		violations,
 		CheckCatalogPair(
@@ -69,6 +70,119 @@ func Check(repositoryRoot string) error {
 		joined = append(joined, errors.New(violation.String()))
 	}
 	return errors.Join(joined...)
+}
+
+// CheckDataPlaneAccessBoundary keeps the Exchange hot path on the immutable
+// SnapshotResolver boundary. It rejects persistence access and Access mutation
+// contracts from the production package that now executes provider requests.
+func CheckDataPlaneAccessBoundary(repositoryRoot string) []Violation {
+	sourceRoot := filepath.Join(repositoryRoot, "internal", "exchange")
+	if _, err := os.Stat(sourceRoot); errors.Is(err, os.ErrNotExist) {
+		return nil
+	}
+	const accessImport = "github.com/vibe-agi/vibermate/internal/access"
+	const persistenceImport = "github.com/vibe-agi/vibermate/internal/runtimepersistence"
+	blockedAccessSymbols := map[string]struct{}{
+		"Manager":            {},
+		"Repository":         {},
+		"SnapshotProjection": {},
+		"WriteCommand":       {},
+		"WriteResult":        {},
+		"Writer":             {},
+	}
+	var violations []Violation
+	walkErr := filepath.WalkDir(sourceRoot, func(
+		path string,
+		entry fs.DirEntry,
+		err error,
+	) error {
+		if err != nil {
+			return err
+		}
+		if entry.IsDir() {
+			if entry.Name() == "testdata" || entry.Name() == "vendor" {
+				return filepath.SkipDir
+			}
+			return nil
+		}
+		if filepath.Ext(path) != ".go" || strings.HasSuffix(path, "_test.go") {
+			return nil
+		}
+		fileSet := token.NewFileSet()
+		parsed, parseErr := parser.ParseFile(fileSet, path, nil, 0)
+		if parseErr != nil {
+			return parseErr
+		}
+		relative := relativeDisplayPath(repositoryRoot, path)
+		accessNames := make(map[string]struct{})
+		for _, imported := range parsed.Imports {
+			importPath := strings.Trim(imported.Path.Value, `"`)
+			if importPath == persistenceImport {
+				position := fileSet.Position(imported.Pos())
+				violations = append(violations, Violation{
+					Rule:    "data-plane-access-boundary",
+					Path:    relative,
+					Line:    position.Line,
+					Message: "Exchange hot path cannot import runtime persistence",
+				})
+			}
+			if importPath != accessImport {
+				continue
+			}
+			name := "access"
+			if imported.Name != nil {
+				if imported.Name.Name == "." || imported.Name.Name == "_" {
+					position := fileSet.Position(imported.Pos())
+					violations = append(violations, Violation{
+						Rule:    "data-plane-access-boundary",
+						Path:    relative,
+						Line:    position.Line,
+						Message: "Access contracts must use a named import",
+					})
+					continue
+				}
+				name = imported.Name.Name
+			}
+			accessNames[name] = struct{}{}
+		}
+		ast.Inspect(parsed, func(node ast.Node) bool {
+			selector, ok := node.(*ast.SelectorExpr)
+			if !ok {
+				return true
+			}
+			identifier, ok := selector.X.(*ast.Ident)
+			if !ok {
+				return true
+			}
+			if _, imported := accessNames[identifier.Name]; !imported {
+				return true
+			}
+			if _, blocked := blockedAccessSymbols[selector.Sel.Name]; !blocked {
+				return true
+			}
+			position := fileSet.Position(selector.Pos())
+			violations = append(violations, Violation{
+				Rule: "data-plane-access-boundary",
+				Path: relative,
+				Line: position.Line,
+				Message: fmt.Sprintf(
+					"Exchange hot path cannot use Access mutation symbol %s.%s",
+					identifier.Name,
+					selector.Sel.Name,
+				),
+			})
+			return true
+		})
+		return nil
+	})
+	if walkErr != nil {
+		violations = append(violations, Violation{
+			Rule:    "data-plane-access-boundary",
+			Path:    filepath.Join("internal", "exchange"),
+			Message: walkErr.Error(),
+		})
+	}
+	return violations
 }
 
 // CheckExternalEgressGate rejects new raw outbound-client construction outside

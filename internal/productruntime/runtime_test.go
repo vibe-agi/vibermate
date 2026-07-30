@@ -3,8 +3,11 @@ package productruntime
 import (
 	"bytes"
 	"context"
+	"crypto/rand"
 	"encoding/json"
 	"errors"
+	"io"
+	"net/http"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -13,10 +16,14 @@ import (
 	"time"
 
 	"github.com/vibe-agi/vibermate/internal/access"
+	"github.com/vibe-agi/vibermate/internal/activity"
+	"github.com/vibe-agi/vibermate/internal/exchange"
 	"github.com/vibe-agi/vibermate/internal/hostcontract"
 	"github.com/vibe-agi/vibermate/internal/offlinehold"
+	"github.com/vibe-agi/vibermate/internal/providertransport"
 	"github.com/vibe-agi/vibermate/internal/runtimepersistence"
 	"github.com/vibe-agi/vibermate/internal/secretstore"
+	"github.com/vibe-agi/vibermate/internal/toolapproval"
 )
 
 var errAcquireNotExpected = errors.New("egress acquisition is not expected in M0 tests")
@@ -38,8 +45,8 @@ func TestProductRuntimeStartsAndShutsDownNormally(t *testing.T) {
 	if status.Host != hostcontract.KindDesktop {
 		t.Fatalf("runtime host = %q, want desktop", status.Host)
 	}
-	if status.SchemaRevision != 5 {
-		t.Fatalf("schema revision = %d, want 5", status.SchemaRevision)
+	if status.SchemaRevision != 8 {
+		t.Fatalf("schema revision = %d, want 8", status.SchemaRevision)
 	}
 	if status.AccessProjection.State != access.ProjectionStateHealthy ||
 		status.AccessProjection.UnavailableAccessCount != 0 {
@@ -195,6 +202,125 @@ func TestProductRuntimeWiresAccessCASAndRestoresItAcrossRestart(t *testing.T) {
 	}
 	if second.Status().State != RuntimeStateInitialized {
 		t.Fatalf("runtime with recovered Access is not initialized: %+v", second.Status())
+	}
+}
+
+func TestProductRuntimeWiresExchangePipelineToActiveAccessPlan(t *testing.T) {
+	t.Parallel()
+
+	accessID, err := access.NewAccessID("access-exchange-runtime")
+	if err != nil {
+		t.Fatal(err)
+	}
+	provider := &pipelineProviderRuntime{
+		responseBody: []byte(`{
+			"id":"chatcmpl-runtime",
+			"object":"chat.completion",
+			"created":1,
+			"model":"gpt-4.1-mini",
+			"choices":[{
+				"index":0,
+				"message":{"role":"assistant","content":"Runtime path.","refusal":null},
+				"finish_reason":"stop",
+				"logprobs":null
+			}],
+			"usage":{"prompt_tokens":4,"completion_tokens":2,"total_tokens":6}
+		}`),
+	}
+	options := testOptions(
+		t,
+		hostcontract.Desktop(),
+		&coordinatorDouble{},
+	)
+	builders := productionBuilders()
+	builders.provider = fixedProviderBuilder{component: provider}
+	runtime, err := startWithBuilders(context.Background(), options, builders)
+	if err != nil {
+		t.Fatalf("start ProductRuntime with provider fixture: %v", err)
+	}
+	defer shutdownRuntime(t, runtime)
+
+	write, err := runtime.AccessWriter().WriteAccess(
+		context.Background(),
+		access.WriteCommand{
+			ExpectedRevision: 0,
+			Aggregate: runtimeAccessAggregate(
+				t,
+				accessID,
+				1,
+				"Exchange Runtime Access",
+			),
+		},
+	)
+	if err != nil || write.Outcome != access.WriteOutcomeCommitted {
+		t.Fatalf("write Access result=%+v err=%v", write, err)
+	}
+	activePlan, err := runtime.SnapshotResolver().ResolveAccess(accessID)
+	if err != nil {
+		t.Fatalf("resolve active Access plan: %v", err)
+	}
+	request, err := exchange.NewClientRequest(
+		"exchange-runtime-wiring",
+		activePlan.IngressBinding(),
+		[]byte(`{
+			"model":"claude-client-alias",
+			"max_tokens":32,
+			"messages":[{"role":"user","content":"hello"}]
+		}`),
+		exchange.ReplayGenerationCostOnly,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	downstream := &runtimeDownstream{}
+	result, err := runtime.ExchangeExecutor().Execute(
+		context.Background(),
+		request,
+		downstream,
+	)
+	if err != nil {
+		t.Fatalf("execute ProductRuntime Exchange: %v", err)
+	}
+	if result.AccessRevision != 1 ||
+		result.Outcome != exchange.AttemptSucceeded ||
+		!result.Ledger.DownstreamTerminal {
+		t.Fatalf("Exchange result = %+v", result)
+	}
+	providerRequest := provider.requestSnapshot()
+	var providerWire struct {
+		Model string `json:"model"`
+	}
+	if err := json.Unmarshal(providerRequest.Body(), &providerWire); err != nil {
+		t.Fatal(err)
+	}
+	if providerWire.Model != "gpt-4.1-mini" ||
+		providerRequest.RelativePath() != "chat/completions" {
+		t.Fatalf(
+			"provider request model=%q path=%q",
+			providerWire.Model,
+			providerRequest.RelativePath(),
+		)
+	}
+	if downstream.mode != exchange.ResponseModeJSON ||
+		!bytes.Contains(downstream.body.Bytes(), []byte("Runtime path.")) {
+		t.Fatalf(
+			"downstream mode=%q body=%s",
+			downstream.mode,
+			downstream.body.Bytes(),
+		)
+	}
+	records, err := runtime.Activities().List(
+		context.Background(),
+		activity.PageRequest{Limit: 10},
+	)
+	if err != nil {
+		t.Fatalf("list runtime Activity: %v", err)
+	}
+	if len(records.Items) != 1 ||
+		records.Items[0].Kind != activity.KindExchangeCompleted ||
+		records.Items[0].SubjectID != "exchange-runtime-wiring" ||
+		records.Items[0].Status != activity.StatusSucceeded {
+		t.Fatalf("runtime Activity = %+v", records.Items)
 	}
 }
 
@@ -462,6 +588,16 @@ func TestProductRuntimeMiddleStageFailureRollsBackInReverseOrder(t *testing.T) {
 			event:  "monitor.shutdown",
 		},
 	}
+	builders.provider = fixedProviderBuilder{
+		component: &egressRuntimeDouble{
+			events: &events,
+			event:  "provider.shutdown",
+		},
+	}
+	builders.exchange = tracingExchangeBuilder{
+		delegate: builders.exchange,
+		events:   &events,
+	}
 
 	runtime, err := startWithBuilders(context.Background(), options, builders)
 	if runtime != nil {
@@ -471,6 +607,9 @@ func TestProductRuntimeMiddleStageFailureRollsBackInReverseOrder(t *testing.T) {
 		t.Fatalf("startup cause was not preserved: %v", err)
 	}
 	if got, want := events.snapshot(), []string{
+		"exchange.begin-shutdown",
+		"exchange.drain",
+		"provider.shutdown",
 		"monitor.shutdown",
 		"access.shutdown",
 		"sqlite.shutdown",
@@ -538,7 +677,9 @@ func TestProductRuntimeRollbackErrorDoesNotOverrideStartupCause(t *testing.T) {
 	}
 }
 
-func TestProductRuntimeShutsDownControlledEgressInDependencyOrder(t *testing.T) {
+func TestProductRuntimeShutdownClosesExchangeAdmissionBeforeTransportDrain(
+	t *testing.T,
+) {
 	t.Parallel()
 
 	var events eventLog
@@ -556,6 +697,10 @@ func TestProductRuntimeShutsDownControlledEgressInDependencyOrder(t *testing.T) 
 			event:  "original.shutdown",
 		},
 	}
+	builders.exchange = tracingExchangeBuilder{
+		delegate: builders.exchange,
+		events:   &events,
+	}
 	runtime, err := startWithBuilders(
 		context.Background(),
 		testOptions(t, hostcontract.Desktop(), coordinator),
@@ -568,12 +713,113 @@ func TestProductRuntimeShutsDownControlledEgressInDependencyOrder(t *testing.T) 
 
 	want := []string{
 		"offline.begin-shutdown",
+		"exchange.begin-shutdown",
 		"original.shutdown",
 		"provider.shutdown",
+		"exchange.drain",
 		"offline.drain",
 	}
 	if got := events.snapshot(); !reflect.DeepEqual(got, want) {
-		t.Fatalf("controlled egress shutdown order = %v, want %v", got, want)
+		t.Fatalf("Exchange shutdown order = %v, want %v", got, want)
+	}
+}
+
+func TestProductRuntimeProviderClosureUnblocksExchangeDrain(t *testing.T) {
+	t.Parallel()
+
+	accessID, err := access.NewAccessID("access-blocked-provider-body")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var events eventLog
+	body := newBlockingResponseBody()
+	provider := &blockingBodyProviderRuntime{
+		body:   body,
+		events: &events,
+	}
+	coordinator := &coordinatorDouble{events: &events}
+	options := testOptions(t, hostcontract.Desktop(), coordinator)
+	builders := productionBuilders()
+	builders.provider = fixedProviderBuilder{component: provider}
+	builders.exchange = tracingExchangeBuilder{
+		delegate: builders.exchange,
+		events:   &events,
+	}
+	runtime, err := startWithBuilders(context.Background(), options, builders)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := runtime.AccessWriter().WriteAccess(
+		context.Background(),
+		access.WriteCommand{
+			ExpectedRevision: 0,
+			Aggregate: runtimeAccessAggregate(
+				t,
+				accessID,
+				1,
+				"Blocked Provider Body",
+			),
+		},
+	); err != nil {
+		t.Fatal(err)
+	}
+	activePlan, err := runtime.SnapshotResolver().ResolveAccess(accessID)
+	if err != nil {
+		t.Fatalf("resolve active Access plan: %v", err)
+	}
+	request, err := exchange.NewClientRequest(
+		"exchange-blocked-provider-body",
+		activePlan.IngressBinding(),
+		[]byte(`{
+			"model":"claude-client-alias",
+			"max_tokens":32,
+			"stream":true,
+			"messages":[{"role":"user","content":"hello"}]
+		}`),
+		exchange.ReplayGenerationCostOnly,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	executeResult := make(chan error, 1)
+	go func() {
+		_, executeErr := runtime.ExchangeExecutor().Execute(
+			context.Background(),
+			request,
+			&runtimeDownstream{},
+		)
+		executeResult <- executeErr
+	}()
+	select {
+	case <-body.readStarted:
+	case <-time.After(time.Second):
+		t.Fatal("provider response body read did not start")
+	}
+
+	shutdownContext, cancel := context.WithTimeout(
+		context.Background(),
+		time.Second,
+	)
+	defer cancel()
+	if err := runtime.Shutdown(shutdownContext); err != nil {
+		t.Fatalf("shutdown ProductRuntime: %v", err)
+	}
+	select {
+	case executeErr := <-executeResult:
+		if exchange.ReasonOf(executeErr) != exchange.ReasonExchangeCanceled {
+			t.Fatalf("Exchange error = %v", executeErr)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("Exchange did not drain after provider body closure")
+	}
+	if got, want := events.snapshot(), []string{
+		"offline.begin-shutdown",
+		"exchange.begin-shutdown",
+		"provider.shutdown",
+		"exchange.drain",
+		"offline.drain",
+	}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("Exchange shutdown events = %v, want %v", got, want)
 	}
 }
 
@@ -628,13 +874,20 @@ func TestProductRuntimeStartupRollbackUsesInternalDeadline(t *testing.T) {
 	coordinator := &coordinatorDouble{blockDrainUntilCancellation: true}
 	options := testOptions(t, hostcontract.Desktop(), coordinator)
 	options.Lifecycle.RollbackTimeout = 40 * time.Millisecond
+	options.Lifecycle.HealthPollInterval = time.Hour
+	failureObserved := make(chan time.Time, 1)
 	builders := productionBuilders()
 	builders.storage = tracingStorageBuilder{
 		delegate: builders.storage,
 		readErr:  startupCause,
+		readObserved: func() {
+			select {
+			case failureObserved <- time.Now():
+			default:
+			}
+		},
 	}
 
-	started := time.Now()
 	runtime, err := startWithBuilders(context.Background(), options, builders)
 	if runtime != nil {
 		t.Fatal("failed start returned a runtime")
@@ -645,8 +898,13 @@ func TestProductRuntimeStartupRollbackUsesInternalDeadline(t *testing.T) {
 	if !errors.Is(err, context.DeadlineExceeded) {
 		t.Fatalf("rollback deadline was not reported: %v", err)
 	}
-	if elapsed := time.Since(started); elapsed >= 500*time.Millisecond {
-		t.Fatalf("bounded startup rollback took too long: %v", elapsed)
+	select {
+	case started := <-failureObserved:
+		if elapsed := time.Since(started); elapsed >= 500*time.Millisecond {
+			t.Fatalf("bounded startup rollback took too long: %v", elapsed)
+		}
+	default:
+		t.Fatal("startup failure observation is missing")
 	}
 }
 
@@ -735,12 +993,15 @@ func testOptionsWithPaths(
 ) Options {
 	t.Helper()
 	return Options{
-		Paths:       paths,
-		Host:        host,
-		OfflineHold: coordinator,
-		Secrets:     unavailableSecretStore{},
-		Clock:       SystemClock{},
-		InstanceIDs: NewCryptographicInstanceIDSource(),
+		Paths:          paths,
+		Host:           host,
+		OfflineHold:    coordinator,
+		Secrets:        unavailableSecretStore{},
+		Approvals:      toolapproval.DefaultConfig(),
+		ExchangeHold:   exchange.DefaultHoldPolicy(),
+		Clock:          SystemClock{},
+		InstanceIDs:    NewCryptographicInstanceIDSource(),
+		SecurityRandom: rand.Reader,
 		Lifecycle: LifecycleOptions{
 			RollbackTimeout:    time.Second,
 			ShutdownTimeout:    time.Second,
@@ -935,9 +1196,144 @@ type egressRuntimeDouble struct {
 	event  string
 }
 
+func (*egressRuntimeDouble) Do(
+	context.Context,
+	providertransport.Request,
+) (*http.Response, providertransport.Evidence, error) {
+	return nil, providertransport.Evidence{},
+		errors.New("provider request is not expected in this test")
+}
+
 func (runtime *egressRuntimeDouble) Shutdown(context.Context) error {
 	runtime.events.add(runtime.event)
 	return nil
+}
+
+type pipelineProviderRuntime struct {
+	mu           sync.Mutex
+	request      providertransport.Request
+	responseBody []byte
+	closed       bool
+}
+
+type blockingBodyProviderRuntime struct {
+	body   *blockingResponseBody
+	events *eventLog
+}
+
+func (runtime *blockingBodyProviderRuntime) Do(
+	context.Context,
+	providertransport.Request,
+) (*http.Response, providertransport.Evidence, error) {
+	return &http.Response{
+		StatusCode: http.StatusOK,
+		Header: http.Header{
+			"Content-Type": []string{"text/event-stream"},
+		},
+		Body: runtime.body,
+	}, providertransport.Evidence{}, nil
+}
+
+func (runtime *blockingBodyProviderRuntime) Shutdown(context.Context) error {
+	if runtime.events != nil {
+		runtime.events.add("provider.shutdown")
+	}
+	return runtime.body.Close()
+}
+
+type blockingResponseBody struct {
+	readStarted chan struct{}
+	closed      chan struct{}
+	startOnce   sync.Once
+	closeOnce   sync.Once
+}
+
+func newBlockingResponseBody() *blockingResponseBody {
+	return &blockingResponseBody{
+		readStarted: make(chan struct{}),
+		closed:      make(chan struct{}),
+	}
+}
+
+func (body *blockingResponseBody) Read([]byte) (int, error) {
+	body.startOnce.Do(func() { close(body.readStarted) })
+	<-body.closed
+	return 0, errors.New("provider response body was closed")
+}
+
+func (body *blockingResponseBody) Close() error {
+	body.closeOnce.Do(func() { close(body.closed) })
+	return nil
+}
+
+func (runtime *pipelineProviderRuntime) Do(
+	_ context.Context,
+	request providertransport.Request,
+) (*http.Response, providertransport.Evidence, error) {
+	runtime.mu.Lock()
+	defer runtime.mu.Unlock()
+	if runtime.closed {
+		return nil, providertransport.Evidence{},
+			errors.New("pipeline provider is closed")
+	}
+	runtime.request = request
+	return &http.Response{
+			StatusCode: http.StatusOK,
+			Header: http.Header{
+				"Content-Type": []string{"application/json"},
+			},
+			Body: io.NopCloser(bytes.NewReader(runtime.responseBody)),
+		}, providertransport.Evidence{
+			Credential: providertransport.CredentialEvidence{
+				DriverRef:  access.AuthDriverStaticHeaderValue,
+				HeaderName: "authorization",
+				SecretRead: true,
+			},
+		}, nil
+}
+
+func (runtime *pipelineProviderRuntime) Shutdown(context.Context) error {
+	runtime.mu.Lock()
+	defer runtime.mu.Unlock()
+	runtime.closed = true
+	return nil
+}
+
+func (runtime *pipelineProviderRuntime) requestSnapshot() providertransport.Request {
+	runtime.mu.Lock()
+	defer runtime.mu.Unlock()
+	return runtime.request
+}
+
+type runtimeDownstream struct {
+	mode exchange.ResponseMode
+	body bytes.Buffer
+}
+
+func (downstream *runtimeDownstream) Begin(
+	_ context.Context,
+	mode exchange.ResponseMode,
+) error {
+	downstream.mode = mode
+	return nil
+}
+
+func (downstream *runtimeDownstream) Write(
+	_ context.Context,
+	body []byte,
+) (int, error) {
+	return downstream.body.Write(body)
+}
+
+func (*runtimeDownstream) Keepalive(context.Context) error {
+	return nil
+}
+
+func (*runtimeDownstream) Abort(
+	context.Context,
+	exchange.FailureNotice,
+) error {
+	return errors.New("stream abort is not expected")
 }
 
 type fixedProviderBuilder struct {
@@ -960,6 +1356,48 @@ func (builder fixedOriginalBuilder) Build(
 	originalBuildRequest,
 ) (originalRuntime, error) {
 	return builder.component, builder.err
+}
+
+type tracingExchangeBuilder struct {
+	delegate exchangeBuilder
+	events   *eventLog
+}
+
+func (builder tracingExchangeBuilder) Build(
+	request exchangeBuildRequest,
+) (exchangeRuntime, error) {
+	runtime, err := builder.delegate.Build(request)
+	if err != nil {
+		return nil, err
+	}
+	return &tracingExchangeRuntime{
+		exchangeRuntime: runtime,
+		events:          builder.events,
+	}, nil
+}
+
+type tracingExchangeRuntime struct {
+	exchangeRuntime
+	events *eventLog
+}
+
+func (runtime *tracingExchangeRuntime) BeginShutdown() {
+	if runtime.events != nil {
+		runtime.events.add("exchange.begin-shutdown")
+	}
+	runtime.exchangeRuntime.BeginShutdown()
+}
+
+func (runtime *tracingExchangeRuntime) Drain(ctx context.Context) error {
+	if runtime.events != nil {
+		runtime.events.add("exchange.drain")
+	}
+	return runtime.exchangeRuntime.Drain(ctx)
+}
+
+func (runtime *tracingExchangeRuntime) Shutdown(ctx context.Context) error {
+	runtime.BeginShutdown()
+	return runtime.Drain(ctx)
 }
 
 type failingAccessBuilder struct {
@@ -1179,9 +1617,10 @@ func (c *ownedComponentDouble) Shutdown(context.Context) error {
 }
 
 type tracingStorageBuilder struct {
-	delegate storageBuilder
-	events   *eventLog
-	readErr  error
+	delegate     storageBuilder
+	events       *eventLog
+	readErr      error
+	readObserved func()
 }
 
 func (b tracingStorageBuilder) Build(
@@ -1196,21 +1635,26 @@ func (b tracingStorageBuilder) Build(
 		RuntimeStore: result.store,
 		events:       b.events,
 		readErr:      b.readErr,
+		readObserved: b.readObserved,
 	}
 	return result, nil
 }
 
 type tracingStore struct {
 	runtimepersistence.RuntimeStore
-	events  *eventLog
-	readErr error
+	events       *eventLog
+	readErr      error
+	readObserved func()
 }
 
 func (s *tracingStore) SchemaStateReader() runtimepersistence.SchemaStateReader {
 	if s.readErr == nil {
 		return s.RuntimeStore.SchemaStateReader()
 	}
-	return failingSchemaStateReader{err: s.readErr}
+	return failingSchemaStateReader{
+		err:      s.readErr,
+		observed: s.readObserved,
+	}
 }
 
 func (s *tracingStore) Shutdown(ctx context.Context) error {
@@ -1221,11 +1665,15 @@ func (s *tracingStore) Shutdown(ctx context.Context) error {
 }
 
 type failingSchemaStateReader struct {
-	err error
+	err      error
+	observed func()
 }
 
 func (r failingSchemaStateReader) ReadSchemaState(
 	context.Context,
 ) (runtimepersistence.SchemaState, error) {
+	if r.observed != nil {
+		r.observed()
+	}
 	return runtimepersistence.SchemaState{}, r.err
 }

@@ -17,6 +17,8 @@ import (
 
 	"github.com/pressly/goose/v3"
 	"github.com/vibe-agi/vibermate/internal/access"
+	"github.com/vibe-agi/vibermate/internal/activity"
+	"github.com/vibe-agi/vibermate/internal/toolapproval"
 )
 
 const (
@@ -42,15 +44,19 @@ type Options struct {
 type RuntimeStore interface {
 	SchemaStateReader() SchemaStateReader
 	AccessRepository() access.Repository
+	ActivityRepository() activity.Repository
+	ToolApprovalRepository() toolapproval.Repository
 	Shutdown(context.Context) error
 }
 
 // Store owns a SQLite connection pool and its repositories.
 type Store struct {
-	database   *sql.DB
-	repo       *Repository
-	accessRepo *accessRepository
-	operations *operationGate
+	database     *sql.DB
+	repo         *Repository
+	accessRepo   *accessRepository
+	activityRepo *activityRepository
+	approvalRepo *toolApprovalRepository
+	operations   *operationGate
 
 	closeMu   sync.Mutex
 	closing   bool
@@ -110,17 +116,21 @@ func Open(ctx context.Context, options Options) (*Store, error) {
 		options.CommitReconcileTimeout,
 		sqlTransactionCommitter{},
 	)
+	activityRepo := newActivityRepository(database, operations)
+	approvalRepo := newToolApprovalRepository(database, operations)
 	if _, err := repository.ReadSchemaState(ctx); err != nil {
 		operations.closeAdmission()
 		return fail(fmt.Errorf("read initial schema state: %w", err))
 	}
 
 	return &Store{
-		database:   database,
-		repo:       repository,
-		accessRepo: accessRepo,
-		operations: operations,
-		closeDone:  make(chan struct{}),
+		database:     database,
+		repo:         repository,
+		accessRepo:   accessRepo,
+		activityRepo: activityRepo,
+		approvalRepo: approvalRepo,
+		operations:   operations,
+		closeDone:    make(chan struct{}),
 	}, nil
 }
 
@@ -130,6 +140,14 @@ func (s *Store) SchemaStateReader() SchemaStateReader {
 
 func (s *Store) AccessRepository() access.Repository {
 	return s.accessRepo
+}
+
+func (s *Store) ActivityRepository() activity.Repository {
+	return s.activityRepo
+}
+
+func (s *Store) ToolApprovalRepository() toolapproval.Repository {
+	return s.approvalRepo
 }
 
 // Settings reads the active SQLite connection policy through the same

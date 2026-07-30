@@ -8,10 +8,13 @@ import (
 	"sync"
 
 	"github.com/vibe-agi/vibermate/internal/access"
+	"github.com/vibe-agi/vibermate/internal/activity"
+	"github.com/vibe-agi/vibermate/internal/exchange"
 	"github.com/vibe-agi/vibermate/internal/offlinehold"
 	"github.com/vibe-agi/vibermate/internal/originaltransport"
 	"github.com/vibe-agi/vibermate/internal/providertransport"
 	"github.com/vibe-agi/vibermate/internal/runtimepersistence"
+	"github.com/vibe-agi/vibermate/internal/toolapproval"
 )
 
 var ErrInvalidBuildResult = errors.New("invalid runtime build result")
@@ -22,9 +25,12 @@ type Runtime struct {
 	schemaReader runtimepersistence.SchemaStateReader
 	accesses     accessRuntime
 	probeCatalog access.ProviderProbeCatalog
+	activities   activityRuntime
+	approvals    approvalRuntime
 	monitor      ownedComponent
 	provider     providerRuntime
 	original     originalRuntime
+	exchanges    exchangeRuntime
 	offlineHold  offlinehold.RuntimeCoordinator
 	resumeProber offlinehold.Prober
 	cleanups     cleanupStack
@@ -57,9 +63,12 @@ func startWithBuilders(
 	}
 	if builders.storage == nil ||
 		builders.access == nil ||
+		builders.activity == nil ||
+		builders.approval == nil ||
 		builders.monitor == nil ||
 		builders.provider == nil ||
-		builders.original == nil {
+		builders.original == nil ||
+		builders.exchange == nil {
 		return nil, fmt.Errorf("%w: component builder is missing", ErrInvalidBuildResult)
 	}
 
@@ -130,6 +139,43 @@ func startWithBuilders(
 		)
 	}
 	cleanups.register("Access runtime", accesses.Shutdown)
+
+	securityRandom := newSynchronizedReader(options.SecurityRandom)
+	activities, err := builders.activity.Build(activityBuildRequest{
+		repository: storageResult.store.ActivityRepository(),
+		clock:      options.Clock,
+		random:     securityRandom,
+	})
+	if err != nil || activities == nil {
+		buildErr := err
+		if buildErr == nil {
+			buildErr = fmt.Errorf(
+				"%w: Activity component is nil",
+				ErrInvalidBuildResult,
+			)
+		}
+		return fail("Activity recovery", buildErr)
+	}
+	cleanups.register("Activity component", activities.Shutdown)
+
+	approvals, err := builders.approval.Build(approvalBuildRequest{
+		ctx:        ctx,
+		repository: storageResult.store.ToolApprovalRepository(),
+		clock:      options.Clock,
+		random:     securityRandom,
+		config:     options.Approvals,
+	})
+	if err != nil || approvals == nil {
+		buildErr := err
+		if buildErr == nil {
+			buildErr = fmt.Errorf(
+				"%w: tool approval component is nil",
+				ErrInvalidBuildResult,
+			)
+		}
+		return fail("tool approval recovery", buildErr)
+	}
+	cleanups.register("tool approval component", approvals.Shutdown)
 
 	ownerContext, cancelOwner := context.WithCancelCause(context.WithoutCancel(ctx))
 	cleanups.register("runtime owner context", func(context.Context) error {
@@ -204,6 +250,27 @@ func startWithBuilders(
 	}
 	pending.register("original-origin transport", original.Shutdown)
 
+	exchanges, err := builders.exchange.Build(exchangeBuildRequest{
+		ownerContext:  ownerContext,
+		actions:       options.OfflineHold,
+		resolver:      accesses,
+		provider:      provider,
+		toolDecisions: approvals,
+		activities:    activities,
+		hold:          options.ExchangeHold,
+	})
+	if err != nil || exchanges == nil {
+		buildErr := err
+		if buildErr == nil {
+			buildErr = fmt.Errorf(
+				"%w: Exchange pipeline is nil",
+				ErrInvalidBuildResult,
+			)
+		}
+		return fail("Exchange pipeline", buildErr)
+	}
+	pending.register("Exchange pipeline", exchanges.Shutdown)
+
 	if err := options.OfflineHold.Start(ctx, offlinehold.RuntimeBinding{
 		InstanceID: instanceID,
 	}); err != nil {
@@ -215,8 +282,13 @@ func startWithBuilders(
 	})
 
 	cleanups.register("offline-hold drain", options.OfflineHold.Drain)
+	cleanups.register("Exchange drain", exchanges.Drain)
 	cleanups.register("provider transport", provider.Shutdown)
 	cleanups.register("original-origin transport", original.Shutdown)
+	cleanups.register("Exchange admission", func(context.Context) error {
+		exchanges.BeginShutdown()
+		return nil
+	})
 	cleanups.register("offline-hold admission", func(context.Context) error {
 		options.OfflineHold.BeginShutdown()
 		return nil
@@ -233,9 +305,12 @@ func startWithBuilders(
 		schemaReader: storageResult.store.SchemaStateReader(),
 		accesses:     accesses,
 		probeCatalog: accesses,
+		activities:   activities,
+		approvals:    approvals,
 		monitor:      monitor,
 		provider:     provider,
 		original:     original,
+		exchanges:    exchanges,
 		offlineHold:  options.OfflineHold,
 		resumeProber: resumeProber,
 		cleanups:     cleanups,
@@ -255,6 +330,23 @@ func (r *Runtime) Status() RuntimeStatus {
 		status.State = RuntimeStateDegraded
 	}
 	return status
+}
+
+// ExchangeExecutor returns the runtime-owned data-plane core. It has no
+// listener and resolves one Access plan for each submitted Exchange.
+func (r *Runtime) ExchangeExecutor() exchange.Executor {
+	return r.exchanges
+}
+
+// Activities returns the runtime-owned durable redacted timeline.
+func (r *Runtime) Activities() activity.Runtime {
+	return r.activities
+}
+
+// ToolApprovals returns the durable interactive tool decision authority used
+// by the Exchange pipeline.
+func (r *Runtime) ToolApprovals() toolapproval.Controller {
+	return r.approvals
 }
 
 // SchemaStateReader returns the SQLite-backed initialization-state reader.

@@ -4,15 +4,21 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
+	"strconv"
 	"time"
 
 	"github.com/vibe-agi/vibermate/internal/access"
+	"github.com/vibe-agi/vibermate/internal/activity"
 	"github.com/vibe-agi/vibermate/internal/anthropicchat"
+	"github.com/vibe-agi/vibermate/internal/exchange"
 	"github.com/vibe-agi/vibermate/internal/offlinehold"
 	"github.com/vibe-agi/vibermate/internal/originaltransport"
 	"github.com/vibe-agi/vibermate/internal/providertransport"
 	"github.com/vibe-agi/vibermate/internal/runtimepersistence"
 	"github.com/vibe-agi/vibermate/internal/secretstore"
+	"github.com/vibe-agi/vibermate/internal/toolapproval"
+	"github.com/vibe-agi/vibermate/internal/transportprofile"
 )
 
 type storageBuildRequest struct {
@@ -141,6 +147,63 @@ type monitorBuildRequest struct {
 	observe      func(runtimepersistence.SchemaState, error)
 }
 
+type activityBuildRequest struct {
+	repository activity.Repository
+	clock      activity.Clock
+	random     io.Reader
+}
+
+type activityRuntime interface {
+	activity.Runtime
+}
+
+type activityBuilder interface {
+	Build(activityBuildRequest) (activityRuntime, error)
+}
+
+type productionActivityBuilder struct{}
+
+func (productionActivityBuilder) Build(
+	request activityBuildRequest,
+) (activityRuntime, error) {
+	return activity.New(activity.Options{
+		Repository: request.repository,
+		Clock:      request.clock,
+		Random:     request.random,
+	})
+}
+
+type approvalBuildRequest struct {
+	ctx        context.Context
+	repository toolapproval.Repository
+	clock      toolapproval.Clock
+	random     io.Reader
+	config     toolapproval.Config
+}
+
+type approvalRuntime interface {
+	exchange.ToolDecisionGate
+	toolapproval.Controller
+	Shutdown(context.Context) error
+}
+
+type approvalBuilder interface {
+	Build(approvalBuildRequest) (approvalRuntime, error)
+}
+
+type productionApprovalBuilder struct{}
+
+func (productionApprovalBuilder) Build(
+	request approvalBuildRequest,
+) (approvalRuntime, error) {
+	return toolapproval.New(request.ctx, toolapproval.Options{
+		Repository: request.repository,
+		Clock:      request.clock,
+		Random:     request.random,
+		Config:     request.config,
+	})
+}
+
 type ownedComponent interface {
 	Shutdown(context.Context) error
 }
@@ -161,6 +224,7 @@ type providerBuildRequest struct {
 }
 
 type providerRuntime interface {
+	exchange.Provider
 	Shutdown(context.Context) error
 }
 
@@ -186,6 +250,139 @@ func (productionProviderBuilder) Build(
 	)
 }
 
+type exchangeBuildRequest struct {
+	ownerContext  context.Context
+	actions       offlinehold.ActionAdmission
+	resolver      access.SnapshotResolver
+	provider      exchange.Provider
+	toolDecisions exchange.ToolDecisionGate
+	activities    activity.Recorder
+	hold          exchange.HoldPolicy
+}
+
+type exchangeRuntime interface {
+	exchange.Executor
+	BeginShutdown()
+	Drain(context.Context) error
+	Shutdown(context.Context) error
+}
+
+type exchangeBuilder interface {
+	Build(exchangeBuildRequest) (exchangeRuntime, error)
+}
+
+type productionExchangeBuilder struct{}
+
+type activityAttemptObserver struct {
+	recorder activity.Recorder
+}
+
+func (observer activityAttemptObserver) Observe(
+	ctx context.Context,
+	observation exchange.AttemptObservation,
+) error {
+	if observer.recorder == nil {
+		return errors.New("Exchange Activity recorder is nil")
+	}
+	status := activity.StatusFailed
+	switch observation.Outcome {
+	case exchange.AttemptSucceeded:
+		status = activity.StatusSucceeded
+	case exchange.AttemptCanceled:
+		status = activity.StatusCanceled
+	case exchange.AttemptFailed, exchange.AttemptAborted:
+	default:
+		return errors.New("Exchange observation outcome is invalid")
+	}
+	reasonCode := string(observation.ReasonCode)
+	if observation.ProviderStatus != 0 {
+		reasonCode += "_http_" + strconv.Itoa(observation.ProviderStatus)
+	}
+	if observation.ProviderField != exchange.ProviderFieldUnknown {
+		reasonCode += "_field_" + string(observation.ProviderField)
+	}
+	if observation.ClientField != exchange.ClientFieldUnknown {
+		reasonCode += "_client_field_" + string(observation.ClientField)
+	}
+	_, err := observer.recorder.Record(ctx, activity.Event{
+		Kind:       activity.KindExchangeCompleted,
+		AccessID:   observation.AccessID,
+		SubjectID:  observation.ExchangeID,
+		Status:     status,
+		ReasonCode: reasonCode,
+		Transport:  activityTransportEvidence(observation.Transport),
+	})
+	return err
+}
+
+func activityTransportEvidence(
+	evidence transportprofile.Evidence,
+) *activity.TransportEvidence {
+	requested := evidence.Requested()
+	if requested.Ref == "" || requested.Revision == 0 {
+		return nil
+	}
+	profile := func(
+		value transportprofile.ProfileEvidence,
+	) activity.TransportProfileEvidence {
+		return activity.TransportProfileEvidence{
+			Ref:      value.Ref,
+			Revision: uint64(value.Revision),
+			Source:   string(value.Source),
+		}
+	}
+	converted := &activity.TransportEvidence{
+		Requested:                profile(requested),
+		FallbackReason:           string(evidence.FallbackReason()),
+		ClientOfferedALPN:        evidence.ClientOfferedALPN(),
+		DownstreamNegotiatedALPN: evidence.DownstreamNegotiatedALPN(),
+		UpstreamOfferedALPN:      evidence.UpstreamOfferedALPN(),
+		UpstreamNegotiatedALPN:   evidence.UpstreamNegotiatedALPN(),
+		HTTPTransport:            string(evidence.HTTPTransport()),
+	}
+	for _, attempted := range evidence.FallbackChain() {
+		converted.FallbackChain = append(
+			converted.FallbackChain,
+			profile(attempted),
+		)
+	}
+	effective := evidence.Effective()
+	if effective.Ref != "" && effective.Revision != 0 {
+		value := profile(effective)
+		converted.Effective = &value
+	}
+	return converted
+}
+
+func (productionExchangeBuilder) Build(
+	request exchangeBuildRequest,
+) (exchangeRuntime, error) {
+	if request.activities == nil {
+		return nil, errors.New("Exchange Activity recorder is nil")
+	}
+	protocolPath, err := anthropicchat.NewProtocolPath(
+		anthropicchat.DefaultOptions(),
+	)
+	if err != nil {
+		return nil, fmt.Errorf("build Anthropic Chat protocol path: %w", err)
+	}
+	return exchange.New(exchange.Options{
+		OwnerContext:  request.ownerContext,
+		Actions:       request.actions,
+		Resolver:      request.resolver,
+		ProtocolPath:  protocolPath,
+		Provider:      request.provider,
+		ToolDecisions: request.toolDecisions,
+		RetryWaiter:   exchange.TimerRetryWaiter{},
+		Observer: activityAttemptObserver{
+			recorder: request.activities,
+		},
+		ObservationTimeout: 2 * time.Second,
+		Hold:               request.hold,
+		Stream:             exchange.DefaultStreamBudgets(),
+	})
+}
+
 type originalBuildRequest struct {
 	coordinator offlinehold.Coordinator
 }
@@ -209,18 +406,24 @@ func (productionOriginalBuilder) Build(
 type runtimeBuilders struct {
 	storage  storageBuilder
 	access   accessBuilder
+	activity activityBuilder
+	approval approvalBuilder
 	monitor  monitorBuilder
 	provider providerBuilder
 	original originalBuilder
+	exchange exchangeBuilder
 }
 
 func productionBuilders() runtimeBuilders {
 	return runtimeBuilders{
 		storage:  productionStorageBuilder{},
 		access:   productionAccessBuilder{},
+		activity: productionActivityBuilder{},
+		approval: productionApprovalBuilder{},
 		monitor:  productionMonitorBuilder{},
 		provider: productionProviderBuilder{},
 		original: productionOriginalBuilder{},
+		exchange: productionExchangeBuilder{},
 	}
 }
 

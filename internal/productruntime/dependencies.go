@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"sync"
 	"time"
 )
 
@@ -25,6 +26,21 @@ type SystemClock struct{}
 
 func (SystemClock) Now() time.Time {
 	return time.Now().UTC()
+}
+
+type synchronizedReader struct {
+	mu     sync.Mutex
+	reader io.Reader
+}
+
+func newSynchronizedReader(reader io.Reader) *synchronizedReader {
+	return &synchronizedReader{reader: reader}
+}
+
+func (reader *synchronizedReader) Read(destination []byte) (int, error) {
+	reader.mu.Lock()
+	defer reader.mu.Unlock()
+	return reader.reader.Read(destination)
 }
 
 // InstanceIDSource creates opaque process-lifetime incarnation identifiers.

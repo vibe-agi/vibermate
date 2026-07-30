@@ -3,12 +3,15 @@ package productruntime
 import (
 	"errors"
 	"fmt"
+	"io"
 	"path/filepath"
 	"time"
 
+	"github.com/vibe-agi/vibermate/internal/exchange"
 	"github.com/vibe-agi/vibermate/internal/hostcontract"
 	"github.com/vibe-agi/vibermate/internal/offlinehold"
 	"github.com/vibe-agi/vibermate/internal/secretstore"
+	"github.com/vibe-agi/vibermate/internal/toolapproval"
 )
 
 const runtimeDatabaseName = "runtime.db"
@@ -66,13 +69,16 @@ func DefaultLifecycleOptions() LifecycleOptions {
 
 // Options is the complete typed ProductRuntime construction input.
 type Options struct {
-	Paths       RuntimePaths
-	Host        hostcontract.Contract
-	OfflineHold offlinehold.RuntimeCoordinator
-	Secrets     secretstore.Store
-	Clock       Clock
-	InstanceIDs InstanceIDSource
-	Lifecycle   LifecycleOptions
+	Paths          RuntimePaths
+	Host           hostcontract.Contract
+	OfflineHold    offlinehold.RuntimeCoordinator
+	Secrets        secretstore.Store
+	Approvals      toolapproval.Config
+	ExchangeHold   exchange.HoldPolicy
+	Clock          Clock
+	InstanceIDs    InstanceIDSource
+	SecurityRandom io.Reader
+	Lifecycle      LifecycleOptions
 }
 
 func (o Options) validate() error {
@@ -88,11 +94,20 @@ func (o Options) validate() error {
 	if o.Secrets == nil {
 		return fmt.Errorf("%w: secret store is missing", ErrInvalidOptions)
 	}
+	if err := o.Approvals.Validate(); err != nil {
+		return fmt.Errorf("%w: approval policy: %w", ErrInvalidOptions, err)
+	}
+	if err := o.ExchangeHold.Validate(); err != nil {
+		return fmt.Errorf("%w: Exchange Hold policy: %w", ErrInvalidOptions, err)
+	}
 	if o.Clock == nil {
 		return fmt.Errorf("%w: clock is missing", ErrInvalidOptions)
 	}
 	if o.InstanceIDs == nil {
 		return fmt.Errorf("%w: instance ID source is missing", ErrInvalidOptions)
+	}
+	if o.SecurityRandom == nil {
+		return fmt.Errorf("%w: security random source is missing", ErrInvalidOptions)
 	}
 	if o.Lifecycle.RollbackTimeout <= 0 {
 		return fmt.Errorf("%w: rollback timeout must be positive", ErrInvalidOptions)

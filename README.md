@@ -2,13 +2,14 @@
 
 This repository contains the production implementation of VibeMate.
 
-The current code is an M0 runtime and executable Access-plan foundation. It
-provides a typed `ProductRuntime` lifecycle, an explicit host contract, a
-mandatory offline-egress coordination boundary, a real versioned SQLite store
-with operation admission and bounded drain, and a complete Access aggregate
-with transactional compare-and-swap writes. A pure compiler validates
-ownership, references, and declared capabilities before producing the sole
-process-local immutable `AccessPlanSnapshot` and deterministic `PlanHash`.
+The current code is an M0 runtime, executable Access-plan, protocol, controlled
+egress, and Exchange-pipeline foundation. It provides a typed `ProductRuntime`
+lifecycle, an explicit host contract, a mandatory offline-egress coordination
+boundary, a real versioned SQLite store with operation admission and bounded
+drain, and a complete Access aggregate with transactional compare-and-swap
+writes. A pure compiler validates ownership, references, and declared
+capabilities before producing the sole process-local immutable
+`AccessPlanSnapshot` and deterministic `PlanHash`.
 
 The current M0 plan contains one enabled Agent endpoint, one owned OpenAI Chat
 profile and provider target, one account binding that stores only `SecretRef`
@@ -46,6 +47,17 @@ builds have a private file-backed driver selected by build tag; its contents
 are plaintext-equivalent at rest and are not release secret protection.
 Native Keychain selection remains deferred to the Desktop/release stage.
 
+ProductRuntime now owns an internal Exchange executor. Each admitted Exchange
+begins a planned-offline action before resolving configuration, resolves the
+active plan exactly once, revalidates the frozen ingress identity, translates
+the request, invokes only the gated provider transport, and publishes either a
+complete response or incremental SSE output. A commit ledger prevents unsafe
+transport replay after client-visible semantics, and complete tool groups wait
+behind a durable fail-closed approval authority before any tool block or
+terminal event is released. Attempts append a redacted durable Activity record
+with stable reason codes and transport-selection evidence, never prompt,
+credential, header, or raw tool-argument values.
+
 SQLite is the only durable Access authority; active-plan publication occurs
 after commit. An indeterminate commit or post-commit publication failure marks
 only the affected Access projection unavailable, so new reads and writes fail
@@ -53,10 +65,11 @@ closed instead of serving an unmarked stale plan. A normal close/reopen recovery
 recompiles the same revision and hash from SQLite. Forced process termination,
 operating-system failure, and power-loss recovery are not yet proven. Startup
 reports only `initialized`; it does not publish product readiness or discovery.
-No Exchange pipeline or listener currently invokes these transports, so this
-stage sends no product network traffic. No proxy data plane, control server,
-Desktop shell, Server host, CLI, or product UI exists yet. Physical network
-loss, sleep, and credentialed provider behavior are not proven.
+There is no listener or client-connectable route to the internal Exchange
+executor, so this stage does not expose product network traffic. No loopback
+proxy, control server, Desktop shell, Server host, CLI, or product UI exists
+yet. Physical network loss, sleep, and credentialed provider behavior are not
+proven.
 
 The implementation is not Preview-ready or Release-ready.
 

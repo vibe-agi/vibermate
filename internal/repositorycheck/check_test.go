@@ -160,3 +160,23 @@ func TestExternalEgressGateRuleUsesPublicCheckWithGoodAndBadFixtures(t *testing.
 		t.Fatalf("public Check did not reject raw dial outside the probe: %v", err)
 	}
 }
+
+func TestDataPlaneAccessBoundaryUsesPublicCheckWithGoodAndBadFixtures(
+	t *testing.T,
+) {
+	t.Parallel()
+
+	goodRoot := filepath.Join("testdata", "repository-data-plane-good")
+	if err := Check(goodRoot); err != nil {
+		t.Fatalf("known-good repository fixture failed: %v", err)
+	}
+
+	badRoot := filepath.Join("testdata", "repository-data-plane-bad")
+	err := Check(badRoot)
+	if !errors.Is(err, ErrCheckFailed) {
+		t.Fatalf("expected ErrCheckFailed, got %v", err)
+	}
+	if !strings.Contains(err.Error(), "data-plane-access-boundary") {
+		t.Fatalf("public Check did not report data-plane-access-boundary: %v", err)
+	}
+}
