@@ -18,6 +18,15 @@ empty pass-through plugin plan, and dependency revisions. `ClientOrigin` and
 the actual provider target are separate network identities, and no secret value
 can enter the aggregate or snapshot.
 
+The protocol layer now implements the corresponding network-free bilateral
+path. Constructor-validated immutable IR separates Anthropic Messages client
+semantics from OpenAI Chat provider semantics; the typed codec composition
+handles bounded request/response translation, incremental SSE framing, token
+deltas, usage and stop reasons, complete tool blocks, and the tool-intent commit
+barrier. Official Anthropic and OpenAI Go SDKs are pinned test-only wire
+oracles and are structurally forbidden from the production codec hot path.
+Unsupported or ambiguous protocol shapes fail closed.
+
 SQLite is the only durable Access authority; active-plan publication occurs
 after commit. An indeterminate commit or post-commit publication failure marks
 only the affected Access projection unavailable, so new reads and writes fail
@@ -25,8 +34,9 @@ closed instead of serving an unmarked stale plan. A normal close/reopen recovery
 recompiles the same revision and hash from SQLite. Forced process termination,
 operating-system failure, and power-loss recovery are not yet proven. Startup
 reports only `initialized`; it does not publish product readiness or discovery.
-No protocol wire codec, provider transport, proxy data plane, control server,
-Desktop shell, Server host, CLI, or product UI exists yet.
+No provider transport, external network request, Exchange pipeline, proxy data
+plane, control server, Desktop shell, Server host, CLI, or product UI exists
+yet.
 
 The implementation is not Preview-ready or Release-ready.
 

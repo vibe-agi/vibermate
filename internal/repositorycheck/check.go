@@ -6,6 +6,8 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"go/parser"
+	"go/token"
 	"io/fs"
 	"os"
 	"path/filepath"
@@ -39,6 +41,7 @@ func (v Violation) String() string {
 func Check(repositoryRoot string) error {
 	var violations []Violation
 	violations = append(violations, CheckProductionEnglish(repositoryRoot)...)
+	violations = append(violations, CheckProtocolSDKIsolation(repositoryRoot)...)
 	violations = append(
 		violations,
 		CheckCatalogPair(
@@ -64,6 +67,80 @@ func Check(repositoryRoot string) error {
 		joined = append(joined, errors.New(violation.String()))
 	}
 	return errors.Join(joined...)
+}
+
+// CheckProtocolSDKIsolation keeps official SDKs in oracle tests rather than
+// allowing them to become the production protocol hot path.
+func CheckProtocolSDKIsolation(repositoryRoot string) []Violation {
+	protectedRoots := []string{
+		filepath.Join("internal", "anthropicchat"),
+		filepath.Join("internal", "protocolcore"),
+		filepath.Join("internal", "ssewire"),
+	}
+	blockedImports := map[string]struct{}{
+		"github.com/anthropics/anthropic-sdk-go": {},
+		"github.com/openai/openai-go/v3":         {},
+	}
+	var violations []Violation
+	for _, relativeRoot := range protectedRoots {
+		sourceRoot := filepath.Join(repositoryRoot, relativeRoot)
+		if _, err := os.Stat(sourceRoot); errors.Is(err, os.ErrNotExist) {
+			continue
+		}
+		walkErr := filepath.WalkDir(
+			sourceRoot,
+			func(path string, entry fs.DirEntry, err error) error {
+				if err != nil {
+					return err
+				}
+				if entry.IsDir() {
+					if entry.Name() == "testdata" || entry.Name() == "vendor" {
+						return filepath.SkipDir
+					}
+					return nil
+				}
+				if filepath.Ext(path) != ".go" ||
+					strings.HasSuffix(path, "_test.go") {
+					return nil
+				}
+				fileSet := token.NewFileSet()
+				parsed, parseErr := parser.ParseFile(
+					fileSet,
+					path,
+					nil,
+					parser.ImportsOnly,
+				)
+				if parseErr != nil {
+					return parseErr
+				}
+				for _, imported := range parsed.Imports {
+					importPath := strings.Trim(imported.Path.Value, `"`)
+					if _, blocked := blockedImports[importPath]; !blocked {
+						continue
+					}
+					position := fileSet.Position(imported.Pos())
+					violations = append(violations, Violation{
+						Rule: "protocol-sdk-hotpath",
+						Path: relativeDisplayPath(repositoryRoot, path),
+						Line: position.Line,
+						Message: fmt.Sprintf(
+							"official SDK import %q is allowed only in oracle tests",
+							importPath,
+						),
+					})
+				}
+				return nil
+			},
+		)
+		if walkErr != nil {
+			violations = append(violations, Violation{
+				Rule:    "protocol-sdk-hotpath",
+				Path:    relativeRoot,
+				Message: walkErr.Error(),
+			})
+		}
+	}
+	return violations
 }
 
 // CheckProductionEnglish rejects non-ASCII letters in implementation source,

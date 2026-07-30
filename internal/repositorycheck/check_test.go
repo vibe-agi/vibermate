@@ -118,3 +118,21 @@ func TestEnglishSourceRuleIsWiredThroughRepositoryCheck(t *testing.T) {
 		t.Fatalf("public Check did not report english-source: %v", err)
 	}
 }
+
+func TestProtocolSDKHotPathRuleUsesPublicCheckWithGoodAndBadFixtures(t *testing.T) {
+	t.Parallel()
+
+	goodRoot := filepath.Join("testdata", "repository-sdk-good")
+	if err := Check(goodRoot); err != nil {
+		t.Fatalf("known-good repository fixture failed: %v", err)
+	}
+
+	badRoot := filepath.Join("testdata", "repository-sdk-bad")
+	err := Check(badRoot)
+	if !errors.Is(err, ErrCheckFailed) {
+		t.Fatalf("expected ErrCheckFailed, got %v", err)
+	}
+	if !strings.Contains(err.Error(), "protocol-sdk-hotpath") {
+		t.Fatalf("public Check did not report protocol-sdk-hotpath: %v", err)
+	}
+}

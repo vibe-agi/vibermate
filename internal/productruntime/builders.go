@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/vibe-agi/vibermate/internal/access"
+	"github.com/vibe-agi/vibermate/internal/anthropicchat"
 	"github.com/vibe-agi/vibermate/internal/runtimepersistence"
 )
 
@@ -79,7 +80,7 @@ func (productionAccessBuilder) Build(
 
 func productionAccessPlanCompiler() (*access.Compiler, error) {
 	codecPairID, err := access.NewCodecPairID(
-		"anthropic-messages-to-openai-chat",
+		anthropicchat.CodecPairID,
 	)
 	if err != nil {
 		return nil, err
@@ -92,7 +93,7 @@ func productionAccessPlanCompiler() (*access.Compiler, error) {
 		},
 		CodecPairs: []access.CodecPairDefinition{{
 			ID:              codecPairID,
-			Revision:        4,
+			Revision:        anthropicchat.CodecRevision,
 			ClientDialect:   access.DialectAnthropicMessages,
 			ProviderDialect: access.DialectOpenAIChat,
 			RequiredCapabilities: []access.ProviderCapability{
