@@ -441,14 +441,6 @@ func runAcceptance(
 		checkPassed,
 		"fixed Claude completed an unheld streamed provider reply",
 	)
-	if err := runHeldStreaming(ctx, config, third); err != nil {
-		return fail("planned-hold-streaming", err)
-	}
-	report.add(
-		"planned-hold-streaming",
-		checkPassed,
-		"held request resumed and returned multiple streamed deltas",
-	)
 	if err := runToolApproval(ctx, config, third); err != nil {
 		return fail("tool-approval", err)
 	}
@@ -456,6 +448,14 @@ func runAcceptance(
 		"tool-approval",
 		checkPassed,
 		"TodoWrite remained behind the durable allow-once barrier",
+	)
+	if err := runHeldStreaming(ctx, config, third); err != nil {
+		return fail("planned-hold-streaming", err)
+	}
+	report.add(
+		"planned-hold-streaming",
+		checkPassed,
+		"held request resumed and returned multiple streamed deltas",
 	)
 	if err := runAgentInterrupt(ctx, config, third); err != nil {
 		return fail("agent-sigint", err)

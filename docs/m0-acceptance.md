@@ -163,11 +163,11 @@ The credentialed continuation additionally verifies:
    configured logical reference without exposing its value;
 2. fixed Claude completes an unheld provider reply with a trusted assistant
    marker and at least one incremental content delta;
-3. a new request queues while Hold is active, sends nothing before Resume, and
-   returns a trusted marker with at least two deltas after the exact route probe;
-4. a real `TodoWrite` intent becomes durable pending approval without raw
+3. a real `TodoWrite` intent becomes durable pending approval without raw
    arguments, and neither the tool block nor completion marker reaches Claude
    before `allow-once`;
+4. a new request queues while Hold is active, sends nothing before Resume, and
+   returns a trusted marker with at least two deltas after the exact route probe;
 5. signaling captured Claude after its first streamed delta terminates the
    child within the bound while the shared runtime remains ready and all hold
    ownership converges;
