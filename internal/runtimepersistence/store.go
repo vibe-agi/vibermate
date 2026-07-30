@@ -18,6 +18,8 @@ import (
 	"github.com/pressly/goose/v3"
 	"github.com/vibe-agi/vibermate/internal/access"
 	"github.com/vibe-agi/vibermate/internal/activity"
+	"github.com/vibe-agi/vibermate/internal/capturerun"
+	"github.com/vibe-agi/vibermate/internal/connectionevent"
 	"github.com/vibe-agi/vibermate/internal/toolapproval"
 )
 
@@ -45,18 +47,22 @@ type RuntimeStore interface {
 	SchemaStateReader() SchemaStateReader
 	AccessRepository() access.Repository
 	ActivityRepository() activity.Repository
+	CaptureRunRepository() capturerun.Repository
+	ConnectionEventRepository() connectionevent.Repository
 	ToolApprovalRepository() toolapproval.Repository
 	Shutdown(context.Context) error
 }
 
 // Store owns a SQLite connection pool and its repositories.
 type Store struct {
-	database     *sql.DB
-	repo         *Repository
-	accessRepo   *accessRepository
-	activityRepo *activityRepository
-	approvalRepo *toolApprovalRepository
-	operations   *operationGate
+	database       *sql.DB
+	repo           *Repository
+	accessRepo     *accessRepository
+	activityRepo   *activityRepository
+	captureRepo    *captureRunRepository
+	connectionRepo *connectionEventRepository
+	approvalRepo   *toolApprovalRepository
+	operations     *operationGate
 
 	closeMu   sync.Mutex
 	closing   bool
@@ -116,7 +122,9 @@ func Open(ctx context.Context, options Options) (*Store, error) {
 		options.CommitReconcileTimeout,
 		sqlTransactionCommitter{},
 	)
+	captureRepo := newCaptureRunRepository(database, operations)
 	activityRepo := newActivityRepository(database, operations)
+	connectionRepo := newConnectionEventRepository(database, operations)
 	approvalRepo := newToolApprovalRepository(database, operations)
 	if _, err := repository.ReadSchemaState(ctx); err != nil {
 		operations.closeAdmission()
@@ -124,13 +132,15 @@ func Open(ctx context.Context, options Options) (*Store, error) {
 	}
 
 	return &Store{
-		database:     database,
-		repo:         repository,
-		accessRepo:   accessRepo,
-		activityRepo: activityRepo,
-		approvalRepo: approvalRepo,
-		operations:   operations,
-		closeDone:    make(chan struct{}),
+		database:       database,
+		repo:           repository,
+		accessRepo:     accessRepo,
+		activityRepo:   activityRepo,
+		captureRepo:    captureRepo,
+		connectionRepo: connectionRepo,
+		approvalRepo:   approvalRepo,
+		operations:     operations,
+		closeDone:      make(chan struct{}),
 	}, nil
 }
 
@@ -144,6 +154,14 @@ func (s *Store) AccessRepository() access.Repository {
 
 func (s *Store) ActivityRepository() activity.Repository {
 	return s.activityRepo
+}
+
+func (s *Store) CaptureRunRepository() capturerun.Repository {
+	return s.captureRepo
+}
+
+func (s *Store) ConnectionEventRepository() connectionevent.Repository {
+	return s.connectionRepo
 }
 
 func (s *Store) ToolApprovalRepository() toolapproval.Repository {

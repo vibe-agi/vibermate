@@ -1,0 +1,318 @@
+package capturecontrol_test
+
+import (
+	"bytes"
+	"context"
+	"crypto/sha256"
+	"encoding/base64"
+	"encoding/hex"
+	"encoding/json"
+	"net/http"
+	"net/http/httptest"
+	"os"
+	"path/filepath"
+	"testing"
+	"time"
+
+	"github.com/vibe-agi/vibermate/internal/capturecontrol"
+	"github.com/vibe-agi/vibermate/internal/capturerun"
+	"github.com/vibe-agi/vibermate/internal/clientadapter"
+	"github.com/vibe-agi/vibermate/internal/localca"
+	"github.com/vibe-agi/vibermate/internal/runtimepersistence"
+)
+
+func TestCaptureControlSeparatesLauncherAndPerRunCapabilities(t *testing.T) {
+	t.Parallel()
+
+	fixture := newFixture(t)
+	defer fixture.Close(t)
+	create := capturecontrol.CreateRequest{
+		CWD:            fixture.workspace,
+		Command:        []string{"claude", "--print", "private prompt"},
+		ExecutablePath: fixture.executable,
+	}
+	response := fixture.DoJSON(
+		t,
+		http.MethodPost,
+		"/api/v1/capture-runs",
+		fixture.launcherToken,
+		"",
+		create,
+	)
+	if response.Code != http.StatusCreated {
+		t.Fatalf("create status=%d body=%s", response.Code, response.Body.Bytes())
+	}
+	if bytes.Contains(response.Body.Bytes(), []byte("private prompt")) {
+		t.Fatal("launch grant echoed child argv")
+	}
+	var grant capturecontrol.LaunchGrant
+	decodeRecorder(t, response, &grant)
+	if grant.Run.ID == "" ||
+		grant.Run.CWD != fixture.workspace ||
+		grant.LaunchRecipe != clientadapter.LaunchNodeEnvProxy ||
+		grant.Adapter == nil ||
+		grant.Adapter.Version != "2.1.220" ||
+		grant.ExecutablePath == "" ||
+		grant.ProxyOrigin != "http://127.0.0.1:32123" ||
+		grant.ProxyCapability == "" ||
+		grant.RunCapability == "" ||
+		grant.ProxyCapability == grant.RunCapability ||
+		grant.RootPEMPath != fixture.authority.Root().Path() ||
+		len(grant.ProtectedAuthorities) != 1 ||
+		grant.ProtectedAuthorities[0] != "api.anthropic.com:443" {
+		t.Fatalf("launch grant = %+v", grant)
+	}
+
+	unauthorized := fixture.DoJSON(
+		t,
+		http.MethodPost,
+		"/api/v1/capture-runs",
+		"",
+		"",
+		create,
+	)
+	if unauthorized.Code != http.StatusUnauthorized {
+		t.Fatalf("unauthorized create status=%d", unauthorized.Code)
+	}
+
+	attach := fixture.DoJSON(
+		t,
+		http.MethodPost,
+		"/api/v1/capture-runs/"+grant.Run.ID+"/actions/attach-process",
+		"",
+		grant.RunCapability,
+		capturecontrol.AttachRequest{ProcessID: 444},
+	)
+	if attach.Code != http.StatusOK {
+		t.Fatalf("attach status=%d body=%s", attach.Code, attach.Body.Bytes())
+	}
+	var attached capturerun.View
+	decodeRecorder(t, attach, &attached)
+	if attached.ProcessID != 444 || attached.State != capturerun.StateAttached {
+		t.Fatalf("attached view = %+v", attached)
+	}
+	heartbeat := fixture.DoJSON(
+		t,
+		http.MethodPost,
+		"/api/v1/capture-runs/"+grant.Run.ID+"/actions/heartbeat",
+		"",
+		grant.RunCapability,
+		nil,
+	)
+	if heartbeat.Code != http.StatusOK {
+		t.Fatalf("heartbeat status=%d body=%s", heartbeat.Code, heartbeat.Body.Bytes())
+	}
+	finish := fixture.DoJSON(
+		t,
+		http.MethodPost,
+		"/api/v1/capture-runs/"+grant.Run.ID+"/actions/finish",
+		"",
+		grant.RunCapability,
+		nil,
+	)
+	if finish.Code != http.StatusNoContent {
+		t.Fatalf("finish status=%d body=%s", finish.Code, finish.Body.Bytes())
+	}
+	rejected := fixture.DoJSON(
+		t,
+		http.MethodPost,
+		"/api/v1/capture-runs/"+grant.Run.ID+"/actions/heartbeat",
+		"",
+		fixture.launcherToken,
+		nil,
+	)
+	if rejected.Code != http.StatusForbidden {
+		t.Fatalf("wrong per-run capability status=%d", rejected.Code)
+	}
+}
+
+func TestCaptureControlExpiresLauncherCapability(t *testing.T) {
+	t.Parallel()
+
+	fixture := newFixture(t)
+	defer fixture.Close(t)
+	fixture.clock.now = fixture.clock.now.Add(2 * time.Minute)
+	response := fixture.DoJSON(
+		t,
+		http.MethodPost,
+		"/api/v1/capture-runs",
+		fixture.launcherToken,
+		"",
+		capturecontrol.CreateRequest{
+			CWD:            fixture.workspace,
+			Command:        []string{"claude"},
+			ExecutablePath: fixture.executable,
+		},
+	)
+	if response.Code != http.StatusUnauthorized {
+		t.Fatalf("expired launcher status=%d body=%s", response.Code, response.Body.Bytes())
+	}
+}
+
+type fixture struct {
+	handler       *capturecontrol.Handler
+	store         *runtimepersistence.Store
+	runs          *capturerun.Manager
+	authority     *localca.Authority
+	clock         *fakeClock
+	launcherToken string
+	workspace     string
+	executable    string
+}
+
+func newFixture(t *testing.T) *fixture {
+	t.Helper()
+	directory := t.TempDir()
+	store, err := runtimepersistence.Open(
+		context.Background(),
+		runtimepersistence.Options{
+			DatabasePath:           filepath.Join(directory, "data", "runtime.db"),
+			BusyTimeout:            runtimepersistence.DefaultBusyTimeout,
+			CommitReconcileTimeout: runtimepersistence.DefaultCommitReconcileTimeout,
+		},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	clock := &fakeClock{now: time.Date(2026, 7, 29, 8, 0, 0, 0, time.UTC)}
+	runOptions := capturerun.DefaultOptions(store.CaptureRunRepository())
+	runOptions.Clock = clock
+	runs, err := capturerun.NewManager(context.Background(), runOptions)
+	if err != nil {
+		t.Fatal(err)
+	}
+	authority, err := localca.Open(
+		context.Background(),
+		localca.DefaultOptions(filepath.Join(directory, "ca")),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	workspace := filepath.Join(directory, "workspace")
+	if err := os.MkdirAll(workspace, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	executable := filepath.Join(directory, "claude")
+	executableContent := []byte("#!/bin/sh\nexit 0\n")
+	if err := os.WriteFile(
+		executable,
+		executableContent,
+		0o700,
+	); err != nil {
+		t.Fatal(err)
+	}
+	executableDigest := sha256.Sum256(executableContent)
+	verifier, err := clientadapter.NewM0Verifier([]clientadapter.Release{{
+		ID:               "claude-code",
+		Version:          "2.1.220",
+		InvocationLabel:  "claude",
+		ExecutableSHA256: hex.EncodeToString(executableDigest[:]),
+		LaunchRecipe:     clientadapter.LaunchNodeEnvProxy,
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	token := base64.RawURLEncoding.EncodeToString(bytes.Repeat([]byte{0x42}, 32))
+	launcher, err := capturecontrol.NewLauncherAuthority(
+		capturecontrol.LauncherGrant{
+			Token:     token,
+			ExpiresAt: clock.Now().Add(time.Minute),
+		},
+		clock,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	handler, err := capturecontrol.New(capturecontrol.Options{
+		Runs:        runs,
+		Verifier:    verifier,
+		Authorities: fixedAuthorities{"api.anthropic.com:443"},
+		ProxyOrigin: "http://127.0.0.1:32123",
+		Root:        authority.Root(),
+		Launcher:    launcher,
+		RunLifetime: 2 * time.Minute,
+		Clock:       clock,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return &fixture{
+		handler:       handler,
+		store:         store,
+		runs:          runs,
+		authority:     authority,
+		clock:         clock,
+		launcherToken: token,
+		workspace:     workspace,
+		executable:    executable,
+	}
+}
+
+func (fixture *fixture) DoJSON(
+	t *testing.T,
+	method, path, bearer, runCapability string,
+	body any,
+) *httptest.ResponseRecorder {
+	t.Helper()
+	var encoded []byte
+	if body != nil {
+		var err error
+		encoded, err = json.Marshal(body)
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	request := httptest.NewRequest(method, "http://127.0.0.1"+path, bytes.NewReader(encoded))
+	if body != nil {
+		request.Header.Set("Content-Type", "application/json")
+	}
+	if bearer != "" {
+		request.Header.Set("Authorization", "Bearer "+bearer)
+	}
+	if runCapability != "" {
+		request.Header.Set(capturecontrol.RunCapabilityHeader, runCapability)
+	}
+	recorder := httptest.NewRecorder()
+	fixture.handler.ServeHTTP(recorder, request)
+	return recorder
+}
+
+func (fixture *fixture) Close(t *testing.T) {
+	t.Helper()
+	if err := fixture.runs.Shutdown(context.Background()); err != nil {
+		t.Errorf("shutdown runs: %v", err)
+	}
+	if err := fixture.authority.Shutdown(context.Background()); err != nil {
+		t.Errorf("shutdown authority: %v", err)
+	}
+	if err := fixture.store.Shutdown(context.Background()); err != nil {
+		t.Errorf("shutdown store: %v", err)
+	}
+}
+
+type fakeClock struct {
+	now time.Time
+}
+
+func (clock *fakeClock) Now() time.Time {
+	return clock.now
+}
+
+type fixedAuthorities []string
+
+func (authorities fixedAuthorities) ActiveClientAuthorities() ([]string, error) {
+	return append([]string(nil), authorities...), nil
+}
+
+func decodeRecorder(
+	t *testing.T,
+	recorder *httptest.ResponseRecorder,
+	output any,
+) {
+	t.Helper()
+	decoder := json.NewDecoder(recorder.Body)
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(output); err != nil {
+		t.Fatal(err)
+	}
+}

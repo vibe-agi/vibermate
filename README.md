@@ -3,13 +3,13 @@
 This repository contains the production implementation of VibeMate.
 
 The current code is an M0 runtime, executable Access-plan, protocol, controlled
-egress, and Exchange-pipeline foundation. It provides a typed `ProductRuntime`
-lifecycle, an explicit host contract, a mandatory offline-egress coordination
-boundary, a real versioned SQLite store with operation admission and bounded
-drain, and a complete Access aggregate with transactional compare-and-swap
-writes. A pure compiler validates ownership, references, and declared
-capabilities before producing the sole process-local immutable
-`AccessPlanSnapshot` and deterministic `PlanHash`.
+egress, Exchange-pipeline, and loopback-ingress foundation. It provides a typed
+`ProductRuntime` lifecycle, an explicit host contract, a mandatory
+offline-egress coordination boundary, a real versioned SQLite store with
+operation admission and bounded drain, and a complete Access aggregate with
+transactional compare-and-swap writes. A pure compiler validates ownership,
+references, and declared capabilities before producing the sole process-local
+immutable `AccessPlanSnapshot` and deterministic `PlanHash`.
 
 The current M0 plan contains one enabled Agent endpoint, one owned OpenAI Chat
 profile and provider target, one account binding that stores only `SecretRef`
@@ -58,6 +58,27 @@ terminal event is released. Attempts append a redacted durable Activity record
 with stable reason codes and transport-selection evidence, never prompt,
 credential, header, or raw tool-argument values.
 
+ProductRuntime also composes a handler-only loopback proxy boundary. An
+authenticated, persisted CaptureRun capability must be accepted before exact
+`ClientOrigin` lookup, local leaf issuance, CONNECT MITM, path classification,
+or data-plane dispatch. Every request on an existing CONNECT connection
+revalidates its frozen AgentEndpoint evidence against the current active plan.
+Semantic Anthropic Messages operations enter the Exchange executor;
+auxiliary/opaque operations use the separately gated original-origin transport.
+Body-free ConnectionEvents persist connection phase evidence. The local Root
+is installation-persistent and exported as public evidence, but this code does
+not install it into an operating-system trust store.
+
+The `vibermate run -- <command>` launcher contract is implemented and tested
+against a fixture control server. It consumes only short-lived, private,
+generation-scoped loopback discovery; creates one CaptureRun; supervises one
+child; injects authenticated proxy variables; removes protected Agent
+authorities from inherited `NO_PROXY`; and heartbeats and finishes the run.
+The narrow CaptureRun control handler, launcher discovery publisher, generation
+lock, and fixed-client verifier are implemented as typed components. They are
+not yet assembled into a Desktop Host, so the production CLI cannot currently
+discover a running VibeMate instance.
+
 SQLite is the only durable Access authority; active-plan publication occurs
 after commit. An indeterminate commit or post-commit publication failure marks
 only the affected Access projection unavailable, so new reads and writes fail
@@ -65,11 +86,11 @@ closed instead of serving an unmarked stale plan. A normal close/reopen recovery
 recompiles the same revision and hash from SQLite. Forced process termination,
 operating-system failure, and power-loss recovery are not yet proven. Startup
 reports only `initialized`; it does not publish product readiness or discovery.
-There is no listener or client-connectable route to the internal Exchange
-executor, so this stage does not expose product network traffic. No loopback
-proxy, control server, Desktop shell, Server host, CLI, or product UI exists
-yet. Physical network loss, sleep, and credentialed provider behavior are not
-proven.
+There is no Host-owned proxy/control listener or discovery publication, so this
+stage still exposes no client-connectable product route. No Desktop shell,
+Server host, assembled control server, or product UI exists yet. Unmatched
+AgentEndpoint blind tunneling, system/application proxy installation, physical
+network loss, sleep, and credentialed provider behavior are not proven.
 
 The implementation is not Preview-ready or Release-ready.
 

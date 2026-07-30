@@ -193,6 +193,7 @@ func CheckExternalEgressGate(repositoryRoot string) []Violation {
 		"internal/providertransport/probe.go":     {},
 		"internal/originaltransport/transport.go": {},
 		"internal/originaltransport/probe.go":     {},
+		"internal/loopbackclient/client.go":       {},
 	}
 	protectedSymbols := map[string]map[string]struct{}{
 		"net": {

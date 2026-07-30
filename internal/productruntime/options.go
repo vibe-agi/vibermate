@@ -51,6 +51,10 @@ func (p RuntimePaths) DatabasePath() string {
 	return p.databasePath
 }
 
+func (p RuntimePaths) LocalCADirectory() string {
+	return filepath.Join(p.dataDirectory, "local-ca")
+}
+
 // LifecycleOptions bounds startup rollback, shutdown, and health observation.
 type LifecycleOptions struct {
 	RollbackTimeout    time.Duration

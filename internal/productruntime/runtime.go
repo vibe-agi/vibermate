@@ -5,11 +5,15 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net/http"
 	"sync"
 
 	"github.com/vibe-agi/vibermate/internal/access"
 	"github.com/vibe-agi/vibermate/internal/activity"
+	"github.com/vibe-agi/vibermate/internal/capturerun"
+	"github.com/vibe-agi/vibermate/internal/connectionevent"
 	"github.com/vibe-agi/vibermate/internal/exchange"
+	"github.com/vibe-agi/vibermate/internal/localca"
 	"github.com/vibe-agi/vibermate/internal/offlinehold"
 	"github.com/vibe-agi/vibermate/internal/originaltransport"
 	"github.com/vibe-agi/vibermate/internal/providertransport"
@@ -26,11 +30,15 @@ type Runtime struct {
 	accesses     accessRuntime
 	probeCatalog access.ProviderProbeCatalog
 	activities   activityRuntime
+	connections  connectionEventRuntime
 	approvals    approvalRuntime
 	monitor      ownedComponent
 	provider     providerRuntime
 	original     originalRuntime
 	exchanges    exchangeRuntime
+	captureRuns  captureRuntime
+	localCA      localCARuntime
+	proxy        proxyRuntime
 	offlineHold  offlinehold.RuntimeCoordinator
 	resumeProber offlinehold.Prober
 	cleanups     cleanupStack
@@ -64,11 +72,15 @@ func startWithBuilders(
 	if builders.storage == nil ||
 		builders.access == nil ||
 		builders.activity == nil ||
+		builders.connection == nil ||
 		builders.approval == nil ||
 		builders.monitor == nil ||
 		builders.provider == nil ||
 		builders.original == nil ||
-		builders.exchange == nil {
+		builders.exchange == nil ||
+		builders.capture == nil ||
+		builders.localCA == nil ||
+		builders.proxy == nil {
 		return nil, fmt.Errorf("%w: component builder is missing", ErrInvalidBuildResult)
 	}
 
@@ -157,6 +169,23 @@ func startWithBuilders(
 		return fail("Activity recovery", buildErr)
 	}
 	cleanups.register("Activity component", activities.Shutdown)
+
+	connections, err := builders.connection.Build(ctx, connectionEventBuildRequest{
+		repository: storageResult.store.ConnectionEventRepository(),
+		clock:      options.Clock,
+		random:     securityRandom,
+	})
+	if err != nil || connections == nil {
+		buildErr := err
+		if buildErr == nil {
+			buildErr = fmt.Errorf(
+				"%w: ConnectionEvent component is nil",
+				ErrInvalidBuildResult,
+			)
+		}
+		return fail("ConnectionEvent recovery", buildErr)
+	}
+	cleanups.register("ConnectionEvent component", connections.Shutdown)
 
 	approvals, err := builders.approval.Build(approvalBuildRequest{
 		ctx:        ctx,
@@ -271,26 +300,90 @@ func startWithBuilders(
 	}
 	pending.register("Exchange pipeline", exchanges.Shutdown)
 
+	captureRuns, err := builders.capture.Build(ctx, captureBuildRequest{
+		repository: storageResult.store.CaptureRunRepository(),
+		clock:      options.Clock,
+		random:     securityRandom,
+	})
+	if err != nil {
+		return fail("CaptureRun recovery", err)
+	}
+	if captureRuns == nil {
+		return fail(
+			"CaptureRun recovery",
+			fmt.Errorf("%w: CaptureRun component is nil", ErrInvalidBuildResult),
+		)
+	}
+	pending.register("CaptureRun component", captureRuns.Shutdown)
+
+	certificateAuthority, err := builders.localCA.Build(ctx, localCABuildRequest{
+		directory: options.Paths.LocalCADirectory(),
+		clock:     options.Clock,
+		random:    securityRandom,
+	})
+	if err != nil {
+		return fail("local Root CA", err)
+	}
+	if certificateAuthority == nil {
+		return fail(
+			"local Root CA",
+			fmt.Errorf("%w: local CA component is nil", ErrInvalidBuildResult),
+		)
+	}
+	pending.register("local Root CA", certificateAuthority.Shutdown)
+
+	proxy, err := builders.proxy.Build(proxyBuildRequest{
+		ownerContext: ownerContext,
+		runs:         captureRuns,
+		ingress:      accesses,
+		exchanges:    exchanges,
+		original:     original,
+		certificates: certificateAuthority,
+		connections:  connections,
+		random:       securityRandom,
+	})
+	if err != nil {
+		return fail("loopback proxy handler", err)
+	}
+	if proxy == nil {
+		return fail(
+			"loopback proxy handler",
+			fmt.Errorf("%w: loopback proxy handler is nil", ErrInvalidBuildResult),
+		)
+	}
+	pending.register("loopback proxy handler", proxy.Shutdown)
+
 	if err := options.OfflineHold.Start(ctx, offlinehold.RuntimeBinding{
 		InstanceID: instanceID,
 	}); err != nil {
 		return fail("offline-hold binding", err)
 	}
-	pending.register("offline-hold binding", func(ctx context.Context) error {
+	pending.register("offline-hold binding", func(shutdownContext context.Context) error {
 		options.OfflineHold.BeginShutdown()
-		return options.OfflineHold.Drain(ctx)
+		return options.OfflineHold.Drain(shutdownContext)
 	})
 
+	cleanups.register("local Root CA", certificateAuthority.Shutdown)
 	cleanups.register("offline-hold drain", options.OfflineHold.Drain)
 	cleanups.register("Exchange drain", exchanges.Drain)
+	cleanups.register("loopback proxy drain", proxy.Drain)
 	cleanups.register("provider transport", provider.Shutdown)
 	cleanups.register("original-origin transport", original.Shutdown)
+	cleanups.register("CaptureRun component", captureRuns.Shutdown)
 	cleanups.register("Exchange admission", func(context.Context) error {
 		exchanges.BeginShutdown()
 		return nil
 	})
 	cleanups.register("offline-hold admission", func(context.Context) error {
 		options.OfflineHold.BeginShutdown()
+		return nil
+	})
+	cleanups.register("CaptureRun admission", func(context.Context) error {
+		captureRuns.BeginShutdown()
+		return nil
+	})
+	cleanups.register("loopback proxy admission", func(context.Context) error {
+		proxy.BeginShutdown()
 		return nil
 	})
 	pending = cleanupStack{}
@@ -306,11 +399,15 @@ func startWithBuilders(
 		accesses:     accesses,
 		probeCatalog: accesses,
 		activities:   activities,
+		connections:  connections,
 		approvals:    approvals,
 		monitor:      monitor,
 		provider:     provider,
 		original:     original,
 		exchanges:    exchanges,
+		captureRuns:  captureRuns,
+		localCA:      certificateAuthority,
+		proxy:        proxy,
 		offlineHold:  options.OfflineHold,
 		resumeProber: resumeProber,
 		cleanups:     cleanups,
@@ -338,15 +435,40 @@ func (r *Runtime) ExchangeExecutor() exchange.Executor {
 	return r.exchanges
 }
 
+// CaptureRuns returns the runtime-owned short-lived child attribution
+// controller. It has no HTTP exposure until a Host composes authenticated
+// control routes.
+func (r *Runtime) CaptureRuns() capturerun.Controller {
+	return r.captureRuns
+}
+
 // Activities returns the runtime-owned durable redacted timeline.
 func (r *Runtime) Activities() activity.Runtime {
 	return r.activities
+}
+
+// ConnectionEvents returns the durable body-free connection audit boundary.
+func (r *Runtime) ConnectionEvents() connectionevent.Runtime {
+	return r.connections
 }
 
 // ToolApprovals returns the durable interactive tool decision authority used
 // by the Exchange pipeline.
 func (r *Runtime) ToolApprovals() toolapproval.Controller {
 	return r.approvals
+}
+
+// LocalRoot returns public Root CA installation evidence. ProductRuntime does
+// not install it into an operating-system trust store.
+func (r *Runtime) LocalRoot() localca.Root {
+	return r.localCA.Root()
+}
+
+// ProxyHandler returns the fully composed CONNECT/MITM handler. A Host must
+// bind a literal loopback listener and is solely responsible for publishing
+// that address after every route is ready.
+func (r *Runtime) ProxyHandler() http.Handler {
+	return r.proxy
 }
 
 // SchemaStateReader returns the SQLite-backed initialization-state reader.
@@ -363,6 +485,12 @@ func (r *Runtime) AccessWriter() access.Writer {
 // SnapshotResolver returns the current process-local Access projection.
 func (r *Runtime) SnapshotResolver() access.SnapshotResolver {
 	return r.accesses
+}
+
+// ActiveClientAuthorities returns the enabled exact AgentEndpoint authorities
+// used to remove dangerous NO_PROXY bypasses from captured child environments.
+func (r *Runtime) ActiveClientAuthorities() ([]string, error) {
+	return r.accesses.ActiveClientAuthorities()
 }
 
 // AccessProjectionHealth reports whether process-local Access snapshots can be

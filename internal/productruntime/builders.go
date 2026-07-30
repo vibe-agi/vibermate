@@ -5,15 +5,21 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net/http"
 	"strconv"
 	"time"
 
 	"github.com/vibe-agi/vibermate/internal/access"
 	"github.com/vibe-agi/vibermate/internal/activity"
 	"github.com/vibe-agi/vibermate/internal/anthropicchat"
+	"github.com/vibe-agi/vibermate/internal/capturerun"
+	"github.com/vibe-agi/vibermate/internal/connectionevent"
 	"github.com/vibe-agi/vibermate/internal/exchange"
+	"github.com/vibe-agi/vibermate/internal/localca"
+	"github.com/vibe-agi/vibermate/internal/loopbackproxy"
 	"github.com/vibe-agi/vibermate/internal/offlinehold"
 	"github.com/vibe-agi/vibermate/internal/originaltransport"
+	"github.com/vibe-agi/vibermate/internal/pathcapability"
 	"github.com/vibe-agi/vibermate/internal/providertransport"
 	"github.com/vibe-agi/vibermate/internal/runtimepersistence"
 	"github.com/vibe-agi/vibermate/internal/secretstore"
@@ -66,6 +72,8 @@ type accessBuildRequest struct {
 type accessRuntime interface {
 	access.Writer
 	access.SnapshotResolver
+	access.IngressResolver
+	access.IngressCatalogReader
 	access.ProviderProbeCatalog
 	access.ProjectionHealthReader
 	Shutdown(context.Context) error
@@ -167,6 +175,33 @@ func (productionActivityBuilder) Build(
 	request activityBuildRequest,
 ) (activityRuntime, error) {
 	return activity.New(activity.Options{
+		Repository: request.repository,
+		Clock:      request.clock,
+		Random:     request.random,
+	})
+}
+
+type connectionEventBuildRequest struct {
+	repository connectionevent.Repository
+	clock      connectionevent.Clock
+	random     io.Reader
+}
+
+type connectionEventRuntime interface {
+	connectionevent.Runtime
+}
+
+type connectionEventBuilder interface {
+	Build(context.Context, connectionEventBuildRequest) (connectionEventRuntime, error)
+}
+
+type productionConnectionEventBuilder struct{}
+
+func (productionConnectionEventBuilder) Build(
+	ctx context.Context,
+	request connectionEventBuildRequest,
+) (connectionEventRuntime, error) {
+	return connectionevent.New(ctx, connectionevent.Options{
 		Repository: request.repository,
 		Clock:      request.clock,
 		Random:     request.random,
@@ -388,6 +423,7 @@ type originalBuildRequest struct {
 }
 
 type originalRuntime interface {
+	loopbackproxy.OriginalClient
 	Shutdown(context.Context) error
 }
 
@@ -403,27 +439,139 @@ func (productionOriginalBuilder) Build(
 	return originaltransport.NewProduction(request.coordinator)
 }
 
+type captureBuildRequest struct {
+	repository capturerun.Repository
+	clock      capturerun.Clock
+	random     io.Reader
+}
+
+type captureRuntime interface {
+	capturerun.Controller
+	capturerun.ProxyAuthorizer
+	BeginShutdown()
+	Drain(context.Context) error
+	Shutdown(context.Context) error
+}
+
+type captureBuilder interface {
+	Build(context.Context, captureBuildRequest) (captureRuntime, error)
+}
+
+type productionCaptureBuilder struct{}
+
+func (productionCaptureBuilder) Build(
+	ctx context.Context,
+	request captureBuildRequest,
+) (captureRuntime, error) {
+	options := capturerun.DefaultOptions(request.repository)
+	options.Clock = request.clock
+	options.Random = request.random
+	return capturerun.NewManager(ctx, options)
+}
+
+type localCABuildRequest struct {
+	directory string
+	clock     localca.Clock
+	random    io.Reader
+}
+
+type localCARuntime interface {
+	loopbackproxy.CertificateAuthority
+	Root() localca.Root
+	Shutdown(context.Context) error
+}
+
+type localCABuilder interface {
+	Build(context.Context, localCABuildRequest) (localCARuntime, error)
+}
+
+type productionLocalCABuilder struct{}
+
+func (productionLocalCABuilder) Build(
+	ctx context.Context,
+	request localCABuildRequest,
+) (localCARuntime, error) {
+	options := localca.DefaultOptions(request.directory)
+	options.Clock = request.clock
+	options.Random = request.random
+	return localca.Open(ctx, options)
+}
+
+type proxyBuildRequest struct {
+	ownerContext context.Context
+	runs         loopbackproxy.RunAuthorizer
+	ingress      access.IngressResolver
+	exchanges    exchange.Executor
+	original     loopbackproxy.OriginalClient
+	certificates loopbackproxy.CertificateAuthority
+	connections  connectionevent.Runtime
+	random       io.Reader
+}
+
+type proxyRuntime interface {
+	http.Handler
+	BeginShutdown()
+	Drain(context.Context) error
+	Shutdown(context.Context) error
+}
+
+type proxyBuilder interface {
+	Build(proxyBuildRequest) (proxyRuntime, error)
+}
+
+type productionProxyBuilder struct{}
+
+func (productionProxyBuilder) Build(
+	request proxyBuildRequest,
+) (proxyRuntime, error) {
+	paths, err := pathcapability.NewM0Catalog()
+	if err != nil {
+		return nil, fmt.Errorf("build M0 PathCapability catalog: %w", err)
+	}
+	return loopbackproxy.New(loopbackproxy.Options{
+		OwnerContext: request.ownerContext,
+		Runs:         request.runs,
+		Ingress:      request.ingress,
+		Paths:        paths,
+		Exchanges:    request.exchanges,
+		Original:     request.original,
+		Certificates: request.certificates,
+		Connections:  request.connections,
+		ExchangeIDs: loopbackproxy.NewRandomExchangeIDSource(
+			request.random,
+		),
+	})
+}
+
 type runtimeBuilders struct {
-	storage  storageBuilder
-	access   accessBuilder
-	activity activityBuilder
-	approval approvalBuilder
-	monitor  monitorBuilder
-	provider providerBuilder
-	original originalBuilder
-	exchange exchangeBuilder
+	storage    storageBuilder
+	access     accessBuilder
+	activity   activityBuilder
+	connection connectionEventBuilder
+	approval   approvalBuilder
+	monitor    monitorBuilder
+	provider   providerBuilder
+	original   originalBuilder
+	exchange   exchangeBuilder
+	capture    captureBuilder
+	localCA    localCABuilder
+	proxy      proxyBuilder
 }
 
 func productionBuilders() runtimeBuilders {
 	return runtimeBuilders{
-		storage:  productionStorageBuilder{},
-		access:   productionAccessBuilder{},
-		activity: productionActivityBuilder{},
-		approval: productionApprovalBuilder{},
-		monitor:  productionMonitorBuilder{},
-		provider: productionProviderBuilder{},
-		original: productionOriginalBuilder{},
-		exchange: productionExchangeBuilder{},
+		storage:    productionStorageBuilder{},
+		access:     productionAccessBuilder{},
+		activity:   productionActivityBuilder{},
+		connection: productionConnectionEventBuilder{},
+		approval:   productionApprovalBuilder{},
+		monitor:    productionMonitorBuilder{},
+		provider:   productionProviderBuilder{},
+		original:   productionOriginalBuilder{},
+		exchange:   productionExchangeBuilder{},
+		capture:    productionCaptureBuilder{},
+		localCA:    productionLocalCABuilder{},
+		proxy:      productionProxyBuilder{},
 	}
 }
 

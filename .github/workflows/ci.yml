@@ -77,12 +77,17 @@ jobs:
           go-version-file: go.mod
           check-latest: false
           cache: true
-      - name: Run Access, runtime, host, and persistence contracts
+      - name: Run runtime, persistence, ingress, and launcher contracts
         run: |
           go test -count=1 ./internal/access
           go test -count=1 ./internal/productruntime
           go test -count=1 ./internal/hostcontract
           go test -count=1 ./internal/runtimepersistence
+          go test -count=1 ./internal/capturerun
+          go test -count=1 ./internal/connectionevent
+          go test -count=1 ./internal/loopbackproxy
+          go test -count=1 ./internal/runlauncher
+          go test -count=1 ./internal/launcherdiscovery
 
   vulnerability:
     needs: generated-structural

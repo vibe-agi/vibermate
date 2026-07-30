@@ -4,10 +4,12 @@ import (
 	"bytes"
 	"context"
 	"crypto/rand"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"io"
 	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -17,9 +19,12 @@ import (
 
 	"github.com/vibe-agi/vibermate/internal/access"
 	"github.com/vibe-agi/vibermate/internal/activity"
+	"github.com/vibe-agi/vibermate/internal/capturerun"
+	"github.com/vibe-agi/vibermate/internal/connectionevent"
 	"github.com/vibe-agi/vibermate/internal/exchange"
 	"github.com/vibe-agi/vibermate/internal/hostcontract"
 	"github.com/vibe-agi/vibermate/internal/offlinehold"
+	"github.com/vibe-agi/vibermate/internal/originaltransport"
 	"github.com/vibe-agi/vibermate/internal/providertransport"
 	"github.com/vibe-agi/vibermate/internal/runtimepersistence"
 	"github.com/vibe-agi/vibermate/internal/secretstore"
@@ -45,8 +50,8 @@ func TestProductRuntimeStartsAndShutsDownNormally(t *testing.T) {
 	if status.Host != hostcontract.KindDesktop {
 		t.Fatalf("runtime host = %q, want desktop", status.Host)
 	}
-	if status.SchemaRevision != 8 {
-		t.Fatalf("schema revision = %d, want 8", status.SchemaRevision)
+	if status.SchemaRevision != 10 {
+		t.Fatalf("schema revision = %d, want 10", status.SchemaRevision)
 	}
 	if status.AccessProjection.State != access.ProjectionStateHealthy ||
 		status.AccessProjection.UnavailableAccessCount != 0 {
@@ -321,6 +326,95 @@ func TestProductRuntimeWiresExchangePipelineToActiveAccessPlan(t *testing.T) {
 		records.Items[0].SubjectID != "exchange-runtime-wiring" ||
 		records.Items[0].Status != activity.StatusSucceeded {
 		t.Fatalf("runtime Activity = %+v", records.Items)
+	}
+}
+
+func TestProductRuntimeComposesCaptureIngressAndConnectionAudit(t *testing.T) {
+	t.Parallel()
+
+	runtime := startTestRuntime(
+		t,
+		testOptions(t, hostcontract.Desktop(), &coordinatorDouble{}),
+	)
+	defer shutdownRuntime(t, runtime)
+
+	accessID, err := access.NewAccessID("access-proxy-runtime")
+	if err != nil {
+		t.Fatal(err)
+	}
+	result, err := runtime.AccessWriter().WriteAccess(
+		context.Background(),
+		access.WriteCommand{
+			ExpectedRevision: 0,
+			Aggregate: runtimeAccessAggregate(
+				t,
+				accessID,
+				1,
+				"Proxy Runtime Access",
+			),
+		},
+	)
+	if err != nil || result.Outcome != access.WriteOutcomeCommitted {
+		t.Fatalf("write Access result=%+v error=%v", result, err)
+	}
+	authorities, err := runtime.ActiveClientAuthorities()
+	if err != nil ||
+		!reflect.DeepEqual(authorities, []string{"api.anthropic.com:443"}) {
+		t.Fatalf("active client authorities=%v error=%v", authorities, err)
+	}
+
+	grant, err := runtime.CaptureRuns().Create(
+		context.Background(),
+		capturerun.CreateCommand{
+			CWD:            t.TempDir(),
+			ExecutablePath: "/usr/bin/true",
+			Lifetime:       time.Minute,
+		},
+	)
+	if err != nil {
+		t.Fatalf("create CaptureRun: %v", err)
+	}
+	request := httptest.NewRequest(http.MethodConnect, "http://127.0.0.1", nil)
+	request.Host = "unregistered.example.test:443"
+	request.Header.Set(
+		"Proxy-Authorization",
+		"Basic "+base64.StdEncoding.EncodeToString(
+			[]byte("capture:"+grant.ProxyCapability.Value()),
+		),
+	)
+	recorder := httptest.NewRecorder()
+	runtime.ProxyHandler().ServeHTTP(recorder, request)
+	if recorder.Code != http.StatusForbidden ||
+		!bytes.Contains(
+			recorder.Body.Bytes(),
+			[]byte(`"reasonCode":"agent_endpoint_not_configured"`),
+		) {
+		t.Fatalf(
+			"proxy rejection status=%d body=%s",
+			recorder.Code,
+			recorder.Body.Bytes(),
+		)
+	}
+	page, err := runtime.ConnectionEvents().List(
+		context.Background(),
+		connectionevent.PageRequest{Limit: 10},
+	)
+	if err != nil {
+		t.Fatalf("list ConnectionEvents: %v", err)
+	}
+	if len(page.Items) != 2 ||
+		page.Items[0].Phase != connectionevent.PhaseDecided ||
+		page.Items[0].Decision != connectionevent.DecisionDeny ||
+		page.Items[0].Outcome != connectionevent.OutcomeDenied ||
+		page.Items[1].Phase != connectionevent.PhaseAttempted {
+		t.Fatalf("runtime proxy ConnectionEvents = %+v", page.Items)
+	}
+	root := runtime.LocalRoot()
+	if len(root.CertificatePEM()) == 0 ||
+		root.Path() == "" ||
+		root.Fingerprint() == "" ||
+		root.NotAfter().IsZero() {
+		t.Fatalf("runtime local Root evidence is incomplete: %+v", root)
 	}
 }
 
@@ -677,7 +771,7 @@ func TestProductRuntimeRollbackErrorDoesNotOverrideStartupCause(t *testing.T) {
 	}
 }
 
-func TestProductRuntimeShutdownClosesExchangeAdmissionBeforeTransportDrain(
+func TestProductRuntimeShutdownClosesIngressAndExchangeBeforeTransportDrain(
 	t *testing.T,
 ) {
 	t.Parallel()
@@ -692,13 +786,21 @@ func TestProductRuntimeShutdownClosesExchangeAdmissionBeforeTransportDrain(
 		},
 	}
 	builders.original = fixedOriginalBuilder{
-		component: &egressRuntimeDouble{
+		component: &originalRuntimeDouble{
 			events: &events,
 			event:  "original.shutdown",
 		},
 	}
 	builders.exchange = tracingExchangeBuilder{
 		delegate: builders.exchange,
+		events:   &events,
+	}
+	builders.capture = tracingCaptureBuilder{
+		delegate: builders.capture,
+		events:   &events,
+	}
+	builders.proxy = tracingProxyBuilder{
+		delegate: builders.proxy,
 		events:   &events,
 	}
 	runtime, err := startWithBuilders(
@@ -712,10 +814,14 @@ func TestProductRuntimeShutdownClosesExchangeAdmissionBeforeTransportDrain(
 	shutdownRuntime(t, runtime)
 
 	want := []string{
+		"proxy.begin-shutdown",
+		"capture.begin-shutdown",
 		"offline.begin-shutdown",
 		"exchange.begin-shutdown",
+		"capture.shutdown",
 		"original.shutdown",
 		"provider.shutdown",
+		"proxy.drain",
 		"exchange.drain",
 		"offline.drain",
 	}
@@ -1209,6 +1315,23 @@ func (runtime *egressRuntimeDouble) Shutdown(context.Context) error {
 	return nil
 }
 
+type originalRuntimeDouble struct {
+	events *eventLog
+	event  string
+}
+
+func (*originalRuntimeDouble) Do(
+	context.Context,
+	originaltransport.Request,
+) (*http.Response, error) {
+	return nil, errors.New("original-origin request is not expected in this test")
+}
+
+func (runtime *originalRuntimeDouble) Shutdown(context.Context) error {
+	runtime.events.add(runtime.event)
+	return nil
+}
+
 type pipelineProviderRuntime struct {
 	mu           sync.Mutex
 	request      providertransport.Request
@@ -1379,6 +1502,73 @@ func (builder tracingExchangeBuilder) Build(
 type tracingExchangeRuntime struct {
 	exchangeRuntime
 	events *eventLog
+}
+
+type tracingCaptureBuilder struct {
+	delegate captureBuilder
+	events   *eventLog
+}
+
+func (builder tracingCaptureBuilder) Build(
+	ctx context.Context,
+	request captureBuildRequest,
+) (captureRuntime, error) {
+	runtime, err := builder.delegate.Build(ctx, request)
+	if err != nil {
+		return nil, err
+	}
+	return &tracingCaptureRuntime{
+		captureRuntime: runtime,
+		events:         builder.events,
+	}, nil
+}
+
+type tracingCaptureRuntime struct {
+	captureRuntime
+	events *eventLog
+}
+
+func (runtime *tracingCaptureRuntime) BeginShutdown() {
+	runtime.events.add("capture.begin-shutdown")
+	runtime.captureRuntime.BeginShutdown()
+}
+
+func (runtime *tracingCaptureRuntime) Shutdown(ctx context.Context) error {
+	runtime.events.add("capture.shutdown")
+	return runtime.captureRuntime.Shutdown(ctx)
+}
+
+type tracingProxyBuilder struct {
+	delegate proxyBuilder
+	events   *eventLog
+}
+
+func (builder tracingProxyBuilder) Build(
+	request proxyBuildRequest,
+) (proxyRuntime, error) {
+	runtime, err := builder.delegate.Build(request)
+	if err != nil {
+		return nil, err
+	}
+	return &tracingProxyRuntime{
+		proxyRuntime: runtime,
+		events:       builder.events,
+	}, nil
+}
+
+type tracingProxyRuntime struct {
+	proxyRuntime
+	events *eventLog
+}
+
+func (runtime *tracingProxyRuntime) BeginShutdown() {
+	runtime.events.add("proxy.begin-shutdown")
+	runtime.proxyRuntime.BeginShutdown()
+}
+
+func (runtime *tracingProxyRuntime) Drain(ctx context.Context) error {
+	runtime.events.add("proxy.drain")
+	return runtime.proxyRuntime.Drain(ctx)
 }
 
 func (runtime *tracingExchangeRuntime) BeginShutdown() {

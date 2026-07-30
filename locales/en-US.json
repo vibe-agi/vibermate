@@ -1,1 +1,6 @@
-{}
+{
+  "cli.error.launchFailed": "The captured command could not be started.",
+  "cli.error.runtimePathUnavailable": "The local VibeMate runtime path is unavailable.",
+  "cli.error.runtimeUnavailable": "VibeMate is not running. Open the desktop app first.",
+  "cli.usage.run": "Usage: vibermate run -- <command> [args...]"
+}

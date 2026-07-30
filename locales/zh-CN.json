@@ -1,1 +1,6 @@
-{}
+{
+  "cli.error.launchFailed": "无法启动临时捕获命令。",
+  "cli.error.runtimePathUnavailable": "无法访问本机 VibeMate 运行路径。",
+  "cli.error.runtimeUnavailable": "VibeMate 尚未运行，请先打开桌面应用。",
+  "cli.usage.run": "用法：vibermate run -- <命令> [参数...]"
+}
