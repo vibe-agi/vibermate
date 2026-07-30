@@ -20,7 +20,7 @@ The runner requires:
 The fixed Claude executable SHA-256 is
 `8addc857f3fe64d5a0368af9ee50321b50afb4a6918ba3ef018ab84f5dbbe081`.
 The default provider route for this acceptance slice is
-`https://model8.run` with model `gpt-5.6-sol`.
+`https://model8.run/v1` with model `gpt-5.6-sol`.
 
 The runner never accepts a secret value. It removes ambient Anthropic,
 alternate-provider, Claude credential, and OpenAI credential variables from
@@ -141,7 +141,7 @@ Before the credentialed run, use the same development-profile App to apply the
 acceptance Access and save its provider key:
 
 1. set Access ID to `assembly-001`;
-2. set the provider origin to `https://model8.run`;
+2. set the provider origin to `https://model8.run/v1`;
 3. set the fixed model to `gpt-5.6-sol`;
 4. apply the Access at the currently loaded revision;
 5. save the provider credential once and confirm a nonzero secret revision.
