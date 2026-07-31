@@ -8,8 +8,28 @@ import (
 	"time"
 
 	"github.com/vibe-agi/vibermate/internal/access"
+	"github.com/vibe-agi/vibermate/internal/certidentity"
 	"github.com/vibe-agi/vibermate/internal/runtimepersistence"
 )
+
+type discardLeafCacheInvalidator struct{}
+
+func (discardLeafCacheInvalidator) InvalidateLeafCache(
+	access.LeafCacheInvalidation,
+) {
+}
+
+func newProjection(t *testing.T) *access.AtomicSnapshotProjection {
+	t.Helper()
+	projection, err := access.NewSnapshotProjection(
+		certidentity.InitialRootRevision,
+		discardLeafCacheInvalidator{},
+	)
+	if err != nil {
+		t.Fatalf("construct Access projection: %v", err)
+	}
+	return projection
+}
 
 func testCompiler(t *testing.T) *access.Compiler {
 	t.Helper()

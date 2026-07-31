@@ -1,4 +1,4 @@
-package localca_test
+package localca
 
 import (
 	"context"
@@ -10,27 +10,28 @@ import (
 	"net"
 	"os"
 	"path/filepath"
-	"sync"
 	"testing"
 	"time"
 
-	"github.com/vibe-agi/vibermate/internal/localca"
+	"github.com/vibe-agi/vibermate/internal/access"
+	"github.com/vibe-agi/vibermate/internal/certidentity"
 )
 
-func TestLocalCAReopensOneRootAndIssuesExactHostLeaves(t *testing.T) {
+func TestLocalCAReopensOneRootAndIssuesRevisionAuthorizedLeaf(t *testing.T) {
 	t.Parallel()
 
 	directory := filepath.Join(t.TempDir(), "ca")
-	authority := openAuthority(t, directory)
-	root := authority.Root()
-	if root.Fingerprint() == "" || root.Path() == "" ||
-		len(root.CertificatePEM()) == 0 {
-		t.Fatalf("incomplete Root view: %+v", root)
+	authority := openAuthority(t, directory, nil)
+	identity := authority.Identity()
+	delivery := authority.Certificate()
+	if !identity.Valid() || !delivery.Valid() ||
+		identity.Revision() != certidentity.InitialRootRevision {
+		t.Fatalf("incomplete Root identity or delivery: %+v %+v", identity, delivery)
 	}
 	assertPermissions(t, directory, 0o700)
-	assertPermissions(t, root.Path(), 0o600)
+	assertPermissions(t, delivery.Path(), 0o600)
 
-	block, rest := pem.Decode(root.CertificatePEM())
+	block, rest := pem.Decode(delivery.CertificatePEM())
 	if block == nil || len(rest) != 0 {
 		t.Fatal("Root PEM is invalid")
 	}
@@ -40,131 +41,183 @@ func TestLocalCAReopensOneRootAndIssuesExactHostLeaves(t *testing.T) {
 	}
 	if !rootCertificate.IsCA ||
 		rootCertificate.CheckSignatureFrom(rootCertificate) != nil ||
-		len(rootCertificate.DNSNames) != 0 {
-		t.Fatalf("invalid Root certificate: %+v", rootCertificate)
+		len(rootCertificate.DNSNames) != 0 ||
+		identity.Digest().String() == "" ||
+		identity.Fingerprint() != identity.Digest().String() {
+		t.Fatalf("invalid Root certificate identity: %+v", rootCertificate)
 	}
 
-	leaf, err := authority.Issue("api.anthropic.com")
+	fixture := newAccessFixture(t, "api", 1)
+	projection := newAccessProjection(t, authority, fixture)
+	leaf, err := authority.Issue(
+		context.Background(),
+		leafAdmission(t, projection, authority, fixture),
+	)
 	if err != nil {
 		t.Fatalf("issue leaf: %v", err)
 	}
 	if leaf.Leaf == nil ||
 		len(leaf.Leaf.DNSNames) != 1 ||
-		leaf.Leaf.DNSNames[0] != "api.anthropic.com" ||
+		leaf.Leaf.DNSNames[0] != fixture.origin.TLSServerName() ||
 		len(leaf.Leaf.IPAddresses) != 0 {
 		t.Fatalf("leaf SANs = dns:%v ip:%v", leaf.Leaf.DNSNames, leaf.Leaf.IPAddresses)
 	}
-	if err := verifyHandshake(leaf, root.CertificatePEM(), "api.anthropic.com"); err != nil {
+	if err := verifyHandshake(
+		leaf,
+		delivery.CertificatePEM(),
+		fixture.origin.TLSServerName(),
+	); err != nil {
 		t.Fatalf("verify issued leaf: %v", err)
 	}
-	if err := verifyHandshake(leaf, root.CertificatePEM(), "other.example.test"); err == nil {
+	if err := verifyHandshake(
+		leaf,
+		delivery.CertificatePEM(),
+		"other.example.test",
+	); err == nil {
 		t.Fatal("exact-host leaf verified for another name")
 	}
 
-	// Returned values are independent from the cache and public Root view.
-	rootBytes := root.CertificatePEM()
+	// Returned public material and derived leaf values do not alias authority
+	// state or the bounded cache.
+	rootBytes := delivery.CertificatePEM()
 	rootBytes[0] ^= 0xff
 	leaf.Certificate[0][0] ^= 0xff
 	leaf.PrivateKey.(*ecdsa.PrivateKey).D.SetInt64(1)
-	fresh, err := authority.Issue("api.anthropic.com")
+	fresh, err := authority.Issue(
+		context.Background(),
+		leafAdmission(t, projection, authority, fixture),
+	)
 	if err != nil {
 		t.Fatalf("issue cached leaf after caller mutation: %v", err)
 	}
 	if err := verifyHandshake(
 		fresh,
-		authority.Root().CertificatePEM(),
-		"api.anthropic.com",
+		authority.Certificate().CertificatePEM(),
+		fixture.origin.TLSServerName(),
 	); err != nil {
 		t.Fatalf("caller mutation changed cached leaf: %v", err)
 	}
 
-	if err := authority.Shutdown(context.Background()); err != nil {
-		t.Fatalf("shutdown authority: %v", err)
-	}
-	if _, err := authority.Issue("api.anthropic.com"); !errors.Is(
-		err,
-		localca.ErrAuthorityClosed,
-	) {
+	closedAdmission := leafAdmission(t, projection, authority, fixture)
+	shutdownAuthority(t, authority)
+	if _, err := authority.Issue(
+		context.Background(),
+		closedAdmission,
+	); !errors.Is(err, ErrAuthorityClosed) {
 		t.Fatalf("closed authority issue error = %v", err)
 	}
 
-	reopened := openAuthority(t, directory)
+	reopened := openAuthority(t, directory, nil)
 	defer shutdownAuthority(t, reopened)
-	if reopened.Root().Fingerprint() != root.Fingerprint() ||
-		string(reopened.Root().CertificatePEM()) != string(root.CertificatePEM()) {
-		t.Fatal("reopen changed installation Root")
+	if reopened.Identity() != identity ||
+		string(reopened.Certificate().CertificatePEM()) !=
+			string(delivery.CertificatePEM()) {
+		t.Fatal("reopen changed installation Root identity or certificate")
 	}
 }
 
-func TestLocalCARejectsWildcardPortAndIncompletePersistentState(t *testing.T) {
+func TestLocalCARejectsForgedAdmissionAndIncompletePersistentState(t *testing.T) {
 	t.Parallel()
 
 	directory := filepath.Join(t.TempDir(), "ca")
-	authority := openAuthority(t, directory)
-	for _, host := range []string{
-		"*.example.test",
-		"api.example.test:443",
-		"API.example.test",
-		"api.example.test.",
-	} {
-		if _, err := authority.Issue(host); !errors.Is(err, localca.ErrInvalidLeafHost) {
-			t.Fatalf("Issue(%q) error = %v", host, err)
-		}
+	authority := openAuthority(t, directory, nil)
+	if _, err := authority.Issue(
+		context.Background(),
+		access.LeafIssuanceAdmission{},
+	); !errors.Is(err, ErrLeafRequestInvalid) {
+		t.Fatalf("forged admission error = %v", err)
 	}
-	rootPath := authority.Root().Path()
+	certificatePath := authority.Certificate().Path()
 	shutdownAuthority(t, authority)
-	if err := os.Remove(rootPath); err != nil {
+	if err := os.Remove(certificatePath); err != nil {
 		t.Fatalf("remove Root certificate fixture: %v", err)
 	}
-	if _, err := localca.Open(
+	if _, err := Open(
 		context.Background(),
-		localca.DefaultOptions(directory),
-	); !errors.Is(err, localca.ErrRootStateInvalid) {
+		DefaultOptions(directory, context.Background()),
+	); !errors.Is(err, ErrRootStateInvalid) {
 		t.Fatalf("incomplete Root state error = %v", err)
 	}
 }
 
-func TestLocalCALeafIssuanceIsRaceSafe(t *testing.T) {
+func TestRootIdentityDoesNotIncludeCertificateDeliveryPath(t *testing.T) {
 	t.Parallel()
 
-	authority := openAuthority(t, filepath.Join(t.TempDir(), "ca"))
-	defer shutdownAuthority(t, authority)
-	const callers = 32
-	var wait sync.WaitGroup
-	failures := make(chan error, callers)
-	for range callers {
-		wait.Add(1)
-		go func() {
-			defer wait.Done()
-			certificate, err := authority.Issue("api.anthropic.com")
-			if err == nil {
-				err = certificate.Leaf.VerifyHostname("api.anthropic.com")
-			}
-			failures <- err
-		}()
+	base := t.TempDir()
+	firstDirectory := filepath.Join(base, "first", "ca")
+	first := openAuthority(t, firstDirectory, nil)
+	identity := first.Identity()
+	firstPath := first.Certificate().Path()
+	shutdownAuthority(t, first)
+
+	secondDirectory := filepath.Join(base, "second", "ca")
+	if err := os.MkdirAll(secondDirectory, 0o700); err != nil {
+		t.Fatal(err)
 	}
-	wait.Wait()
-	close(failures)
-	for err := range failures {
+	for _, name := range []string{rootKeyFile, rootCertFile, rootManifestFile} {
+		data, err := os.ReadFile(filepath.Join(firstDirectory, name))
 		if err != nil {
-			t.Fatalf("concurrent issuance: %v", err)
+			t.Fatal(err)
 		}
+		if err := os.WriteFile(filepath.Join(secondDirectory, name), data, 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	second := openAuthority(t, secondDirectory, nil)
+	defer shutdownAuthority(t, second)
+	if second.Identity() != identity ||
+		second.Certificate().Path() == firstPath {
+		t.Fatalf(
+			"relocated Root identity/path = %+v %q",
+			second.Identity(),
+			second.Certificate().Path(),
+		)
 	}
 }
 
-func openAuthority(t *testing.T, directory string) *localca.Authority {
+func TestLocalCAOptionsRequireExplicitOwnerAndBoundedPolicy(t *testing.T) {
+	t.Parallel()
+
+	directory := filepath.Join(t.TempDir(), "ca")
+	for name, mutate := range map[string]func(*Options){
+		"owner":      func(options *Options) { options.OwnerContext = nil },
+		"capacity":   func(options *Options) { options.LeafCacheCapacity = 0 },
+		"timeout":    func(options *Options) { options.GenerationTimeout = 0 },
+		"relative":   func(options *Options) { options.Directory = "relative" },
+		"clock":      func(options *Options) { options.Clock = nil },
+		"randomness": func(options *Options) { options.Random = nil },
+	} {
+		t.Run(name, func(t *testing.T) {
+			options := DefaultOptions(directory, context.Background())
+			mutate(&options)
+			if _, err := Open(context.Background(), options); !errors.Is(
+				err,
+				ErrInvalidOptions,
+			) {
+				t.Fatalf("Open() error = %v", err)
+			}
+		})
+	}
+}
+
+func openAuthority(
+	t *testing.T,
+	directory string,
+	mutate func(*Options),
+) *Authority {
 	t.Helper()
-	authority, err := localca.Open(
-		context.Background(),
-		localca.DefaultOptions(directory),
-	)
+	options := DefaultOptions(directory, context.Background())
+	if mutate != nil {
+		mutate(&options)
+	}
+	authority, err := Open(context.Background(), options)
 	if err != nil {
 		t.Fatalf("open local CA: %v", err)
 	}
 	return authority
 }
 
-func shutdownAuthority(t *testing.T, authority *localca.Authority) {
+func shutdownAuthority(t *testing.T, authority *Authority) {
 	t.Helper()
 	if err := authority.Shutdown(context.Background()); err != nil {
 		t.Fatalf("shutdown local CA: %v", err)

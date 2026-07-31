@@ -24,9 +24,11 @@ import (
 
 	"github.com/vibe-agi/vibermate/internal/access"
 	"github.com/vibe-agi/vibermate/internal/capturerun"
+	"github.com/vibe-agi/vibermate/internal/certidentity"
 	"github.com/vibe-agi/vibermate/internal/clientadapter"
 	"github.com/vibe-agi/vibermate/internal/connectionevent"
 	"github.com/vibe-agi/vibermate/internal/exchange"
+	"github.com/vibe-agi/vibermate/internal/localca"
 	"github.com/vibe-agi/vibermate/internal/offlinehold"
 	"github.com/vibe-agi/vibermate/internal/originaltransport"
 	"github.com/vibe-agi/vibermate/internal/pathcapability"
@@ -73,7 +75,13 @@ type RunAuthorizer interface {
 }
 
 type CertificateAuthority interface {
-	Issue(string) (tls.Certificate, error)
+	Identity() localca.RootIdentity
+	Issue(context.Context, access.LeafIssuanceAdmission) (tls.Certificate, error)
+}
+
+type IngressAuthority interface {
+	access.IngressResolver
+	access.LeafIssuanceAdmitter
 }
 
 type OriginalClient interface {
@@ -119,7 +127,7 @@ func (source RandomExchangeIDSource) NewExchangeID(
 type Options struct {
 	OwnerContext     context.Context
 	Runs             RunAuthorizer
-	Ingress          access.IngressResolver
+	Ingress          IngressAuthority
 	Paths            *pathcapability.Catalog
 	Exchanges        exchange.Executor
 	Original         OriginalClient
@@ -135,7 +143,7 @@ type operation struct {
 
 type Handler struct {
 	runs         RunAuthorizer
-	ingress      access.IngressResolver
+	ingress      IngressAuthority
 	paths        *pathcapability.Catalog
 	exchanges    exchange.Executor
 	original     OriginalClient
@@ -376,11 +384,6 @@ func (handler *Handler) ServeHTTP(
 		)
 		return
 	}
-	certificate, err := handler.certificates.Issue(host)
-	if err != nil {
-		writeReason(writer, http.StatusServiceUnavailable, ReasonMITMUnavailable, "")
-		return
-	}
 	hijacker, ok := writer.(http.Hijacker)
 	if !ok {
 		writeReason(writer, http.StatusInternalServerError, ReasonMITMUnavailable, "")
@@ -405,7 +408,6 @@ func (handler *Handler) ServeHTTP(
 		request.Context(),
 		counted,
 		host,
-		certificate,
 		evidence,
 		binding,
 		audit,
@@ -422,7 +424,6 @@ func (handler *Handler) serveTLS(
 	parent context.Context,
 	connection net.Conn,
 	expectedHost string,
-	certificate tls.Certificate,
 	run capturerun.Evidence,
 	binding access.IngressBinding,
 	audit *connectionevent.Connection,
@@ -442,9 +443,48 @@ func (handler *Handler) serveTLS(
 		MinVersion: tls.VersionTLS12,
 		NextProtos: []string{string(access.ApplicationProtocolHTTP1)},
 		GetCertificate: func(hello *tls.ClientHelloInfo) (*tls.Certificate, error) {
+			if hello == nil {
+				return nil, errors.New(string(ReasonMITMUnavailable))
+			}
 			observedSNI = hello.ServerName
 			if !sniMatches(expectedHost, hello.ServerName) {
 				return nil, errors.New(string(ReasonConnectSNIMismatch))
+			}
+			san, err := certidentity.NewDNSName(hello.ServerName)
+			if err != nil {
+				return nil, errors.Join(
+					errors.New(string(ReasonMITMUnavailable)),
+					err,
+				)
+			}
+			intent, err := access.NewLeafIssuanceIntent(
+				handler.certificates.Identity().Revision(),
+				binding,
+				san,
+				certidentity.LeafKeyAlgorithmECDSAP256,
+			)
+			if err != nil {
+				return nil, errors.Join(
+					errors.New(string(ReasonMITMUnavailable)),
+					err,
+				)
+			}
+			admission, err := handler.ingress.AdmitLeaf(intent)
+			if err != nil {
+				return nil, errors.Join(
+					errors.New(string(ReasonMITMUnavailable)),
+					err,
+				)
+			}
+			certificate, err := handler.certificates.Issue(
+				hello.Context(),
+				admission,
+			)
+			if err != nil {
+				return nil, errors.Join(
+					errors.New(string(ReasonMITMUnavailable)),
+					err,
+				)
 			}
 			return &certificate, nil
 		},

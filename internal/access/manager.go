@@ -24,6 +24,7 @@ var (
 	_ Writer                 = (*Manager)(nil)
 	_ SnapshotResolver       = (*Manager)(nil)
 	_ IngressResolver        = (*Manager)(nil)
+	_ LeafIssuanceAdmitter   = (*Manager)(nil)
 	_ IngressCatalogReader   = (*Manager)(nil)
 	_ ProviderProbeCatalog   = (*Manager)(nil)
 	_ ProjectionHealthReader = (*Manager)(nil)
@@ -56,8 +57,16 @@ func NewManager(
 		return nil, fmt.Errorf("recover Access aggregates: %w", err)
 	}
 	snapshots := make([]AccessPlanSnapshot, 0, len(aggregates))
+	type withdrawal struct {
+		accessID AccessID
+		revision Revision
+	}
+	withdrawals := make([]withdrawal, 0)
 	for _, aggregate := range aggregates {
-		snapshot, compileErr := compiler.Compile(aggregate)
+		snapshot, candidate, active, compileErr := compileCandidate(
+			compiler,
+			aggregate,
+		)
 		if compileErr != nil {
 			return nil, fmt.Errorf(
 				"%w: recover accessId=%q: %w",
@@ -66,10 +75,30 @@ func NewManager(
 				compileErr,
 			)
 		}
-		snapshots = append(snapshots, snapshot)
+		if active {
+			snapshots = append(snapshots, snapshot)
+		} else {
+			withdrawals = append(withdrawals, withdrawal{
+				accessID: candidate.Binding.ID,
+				revision: candidate.Binding.Revision,
+			})
+		}
 	}
 	if err := projection.Restore(snapshots); err != nil {
 		return nil, fmt.Errorf("restore Access plan projection: %w", err)
+	}
+	for _, withdrawn := range withdrawals {
+		if err := projection.Withdraw(
+			withdrawn.accessID,
+			withdrawn.revision,
+		); err != nil {
+			return nil, fmt.Errorf(
+				"%w: restore disabled accessId=%q: %w",
+				ErrInvalidRepositoryState,
+				withdrawn.accessID.String(),
+				err,
+			)
+		}
 	}
 
 	writer := make(chan struct{}, 1)
@@ -89,6 +118,12 @@ func (m *Manager) ResolveAccess(accessID AccessID) (AccessPlanSnapshot, error) {
 
 func (m *Manager) ResolveClientOrigin(origin ClientOrigin) (IngressBinding, error) {
 	return m.projection.ResolveClientOrigin(origin)
+}
+
+func (m *Manager) AdmitLeaf(
+	intent LeafIssuanceIntent,
+) (LeafIssuanceAdmission, error) {
+	return m.projection.AdmitLeaf(intent)
 }
 
 func (m *Manager) ActiveClientAuthorities() ([]string, error) {
@@ -140,7 +175,10 @@ func (m *Manager) WriteAccess(
 			err,
 		)
 	}
-	candidatePlan, err := m.compiler.Compile(command.Aggregate)
+	candidatePlan, candidate, active, err := compileCandidate(
+		m.compiler,
+		command.Aggregate,
+	)
 	if err != nil {
 		return WriteResult{Outcome: WriteOutcomeNotCommitted}, newFailure(
 			ReasonInvalidAccessPlan,
@@ -151,8 +189,6 @@ func (m *Manager) WriteAccess(
 			err,
 		)
 	}
-	candidate := candidatePlan.aggregate.Clone()
-
 	operationContext, finish, err := m.lifecycle.begin(ctx)
 	if err != nil {
 		if !errors.Is(err, ErrAccessRuntimeStopping) {
@@ -243,7 +279,16 @@ func (m *Manager) WriteAccess(
 				)
 		}
 		// Caller cancellation after a known commit is deliberately not checked.
-		if publishErr := m.projection.Publish(candidatePlan); publishErr != nil {
+		var publishErr error
+		if active {
+			publishErr = m.projection.Publish(candidatePlan)
+		} else {
+			publishErr = m.projection.Withdraw(
+				accessID,
+				candidate.Binding.Revision,
+			)
+		}
+		if publishErr != nil {
 			m.projection.MarkUnavailable(accessID)
 			return WriteResult{
 					Outcome:  WriteOutcomeCommitted,
@@ -326,6 +371,28 @@ func (m *Manager) WriteAccess(
 				fmt.Errorf("%w: outcome=%q", ErrInvalidRepositoryState, commitResult.Outcome),
 			)
 	}
+}
+
+func compileCandidate(
+	compiler PlanCompiler,
+	aggregate Aggregate,
+) (AccessPlanSnapshot, Aggregate, bool, error) {
+	if aggregate.Binding.Status == AccessStatusDisabled {
+		compilable := aggregate.Clone()
+		compilable.Binding.Status = AccessStatusEnabled
+		plan, err := compiler.Compile(compilable)
+		if err != nil {
+			return AccessPlanSnapshot{}, Aggregate{}, false, err
+		}
+		candidate := plan.aggregate.Clone()
+		candidate.Binding.Status = AccessStatusDisabled
+		return AccessPlanSnapshot{}, candidate, false, nil
+	}
+	plan, err := compiler.Compile(aggregate)
+	if err != nil {
+		return AccessPlanSnapshot{}, Aggregate{}, false, err
+	}
+	return plan, plan.aggregate.Clone(), true, nil
 }
 
 // Shutdown rejects new writes, cancels pre-commit work, and drains operations

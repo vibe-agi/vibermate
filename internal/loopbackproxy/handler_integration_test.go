@@ -399,6 +399,7 @@ func TestLoopbackProxyKeepsFrozenResponsesEndpointAcrossProviderPlanAdvance(
 
 	advancedProjection, _ := testProjectionForDialectRevision(
 		t,
+		fixture.authority,
 		access.DialectOpenAIResponses,
 		2,
 		"gpt-provider-revision-two",
@@ -467,7 +468,7 @@ func TestLoopbackProxyRejectsSNIMismatchAndDrainsHijackedConnections(
 	}
 	_ = response.Body.Close()
 	pool := x509.NewCertPool()
-	pool.AppendCertsFromPEM(fixture.authority.Root().CertificatePEM())
+	pool.AppendCertsFromPEM(fixture.authority.Certificate().CertificatePEM())
 	wrongSNI := tls.Client(connection, &tls.Config{
 		RootCAs:    pool,
 		ServerName: "other.example.test",
@@ -498,6 +499,43 @@ func TestLoopbackProxyRejectsSNIMismatchAndDrainsHijackedConnections(
 		}
 	}
 	_ = open.Close()
+}
+
+func TestLoopbackProxyFailsClosedWhenEndpointIsRevokedBeforeClientHello(
+	t *testing.T,
+) {
+	t.Parallel()
+
+	fixture := newProxyFixture(t)
+	defer fixture.Close(t)
+	connection, response := fixture.Connect(
+		t,
+		fixture.grant.ProxyCapability.Value(),
+		"api.anthropic.com:443",
+	)
+	if response.StatusCode != http.StatusOK {
+		t.Fatalf("CONNECT status = %d", response.StatusCode)
+	}
+	_ = response.Body.Close()
+	fixture.ingress.Revoke()
+	pool := x509.NewCertPool()
+	if !pool.AppendCertsFromPEM(
+		fixture.authority.Certificate().CertificatePEM(),
+	) {
+		t.Fatal("append local Root")
+	}
+	secured := tls.Client(connection, &tls.Config{
+		RootCAs:    pool,
+		ServerName: "api.anthropic.com",
+		MinVersion: tls.VersionTLS12,
+	})
+	if err := secured.Handshake(); err == nil {
+		t.Fatal("revoked endpoint completed a new TLS handshake")
+	}
+	_ = secured.Close()
+	if len(fixture.exchanges.Requests()) != 0 || fixture.original.Count() != 0 {
+		t.Fatal("revoked pre-ClientHello connection reached a data plane")
+	}
 }
 
 func TestLoopbackProxyRevalidatesEndpointOnEveryPersistentConnectionRequest(
@@ -653,12 +691,19 @@ func newProxyFixtureForDialect(
 	}
 	authority, err := localca.Open(
 		context.Background(),
-		localca.DefaultOptions(filepath.Join(directory, "ca")),
+		localca.DefaultOptions(
+			filepath.Join(directory, "ca"),
+			context.Background(),
+		),
 	)
 	if err != nil {
 		t.Fatal(err)
 	}
-	projection, accessID := testProjectionForDialect(t, clientDialect)
+	projection, accessID := testProjectionForDialect(
+		t,
+		authority,
+		clientDialect,
+	)
 	ingress := &revocableIngress{delegate: projection}
 	operations, err := operationcatalog.BuiltIn()
 	if err != nil {
@@ -730,10 +775,20 @@ func fixedCodexAdapterEvidence() clientadapter.Evidence {
 }
 
 type revocableIngress struct {
-	delegate access.IngressResolver
+	delegate loopbackproxy.IngressAuthority
 	revoked  atomic.Bool
 	mu       sync.RWMutex
 	current  *access.IngressBinding
+}
+
+func (ingress *revocableIngress) AdmitLeaf(
+	intent access.LeafIssuanceIntent,
+) (access.LeafIssuanceAdmission, error) {
+	if ingress.revoked.Load() {
+		return access.LeafIssuanceAdmission{},
+			access.ErrLeafIssuanceUnauthorized
+	}
+	return ingress.delegate.AdmitLeaf(intent)
 }
 
 func (ingress *revocableIngress) ResolveClientOrigin(
@@ -818,7 +873,9 @@ func (fixture *proxyFixture) ConnectTLS(
 	}
 	_ = response.Body.Close()
 	pool := x509.NewCertPool()
-	if !pool.AppendCertsFromPEM(fixture.authority.Root().CertificatePEM()) {
+	if !pool.AppendCertsFromPEM(
+		fixture.authority.Certificate().CertificatePEM(),
+	) {
 		t.Fatal("append local Root")
 	}
 	secured := tls.Client(connection, &tls.Config{
@@ -956,18 +1013,25 @@ func (recorder *originalRecorder) Count() int {
 
 func testProjection(
 	t *testing.T,
+	authority *localca.Authority,
 ) (*access.AtomicSnapshotProjection, access.AccessID) {
 	t.Helper()
-	return testProjectionForDialect(t, access.DialectAnthropicMessages)
+	return testProjectionForDialect(
+		t,
+		authority,
+		access.DialectAnthropicMessages,
+	)
 }
 
 func testProjectionForDialect(
 	t *testing.T,
+	authority *localca.Authority,
 	clientDialect access.Dialect,
 ) (*access.AtomicSnapshotProjection, access.AccessID) {
 	t.Helper()
 	return testProjectionForDialectRevision(
 		t,
+		authority,
 		clientDialect,
 		1,
 		"gpt-4.1-mini",
@@ -976,6 +1040,7 @@ func testProjectionForDialect(
 
 func testProjectionForDialectRevision(
 	t *testing.T,
+	authority *localca.Authority,
 	clientDialect access.Dialect,
 	revision access.Revision,
 	modelValue string,
@@ -1067,7 +1132,7 @@ func testProjectionForDialectRevision(
 		},
 		AgentEndpoint: access.AgentEndpoint{
 			ID:            endpointID,
-			Revision:      revision,
+			Revision:      1,
 			AccessID:      accessID,
 			ClientOrigin:  clientOrigin,
 			ClientDialect: clientDialect,
@@ -1124,7 +1189,13 @@ func testProjectionForDialectRevision(
 	if err != nil {
 		t.Fatal(err)
 	}
-	projection := access.NewSnapshotProjection()
+	projection, err := access.NewSnapshotProjection(
+		authority.Identity().Revision(),
+		authority,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
 	if err := projection.Restore([]access.AccessPlanSnapshot{plan}); err != nil {
 		t.Fatal(err)
 	}

@@ -13,12 +13,13 @@ var (
 // IngressBinding is the immutable identity evidence frozen by an ingress
 // connection before it issues a certificate or admits an Exchange.
 type IngressBinding struct {
-	accessID     AccessID
-	endpointID   AgentEndpointID
-	clientOrigin ClientOrigin
-	dialect      Dialect
-	revision     Revision
-	planHash     PlanHash
+	accessID         AccessID
+	endpointID       AgentEndpointID
+	endpointRevision Revision
+	clientOrigin     ClientOrigin
+	dialect          Dialect
+	revision         Revision
+	planHash         PlanHash
 }
 
 func (binding IngressBinding) AccessID() AccessID {
@@ -27,6 +28,10 @@ func (binding IngressBinding) AccessID() AccessID {
 
 func (binding IngressBinding) AgentEndpointID() AgentEndpointID {
 	return binding.endpointID
+}
+
+func (binding IngressBinding) AgentEndpointRevision() Revision {
+	return binding.endpointRevision
 }
 
 func (binding IngressBinding) ClientOrigin() ClientOrigin {
@@ -55,7 +60,8 @@ func (binding IngressBinding) validate() error {
 	if err := binding.clientOrigin.validate(); err != nil {
 		return err
 	}
-	if binding.dialect == "" || binding.revision == 0 || binding.planHash.IsZero() {
+	if binding.dialect == "" || binding.endpointRevision == 0 ||
+		binding.revision == 0 || binding.planHash.IsZero() {
 		return fmt.Errorf("%w: ingress binding is incomplete", ErrInvalidAccessPlan)
 	}
 	return nil
@@ -81,6 +87,7 @@ func (binding IngressBinding) ValidateSnapshot(
 	if binding.accessID != snapshot.AccessID() ||
 		snapshot.Binding().Status != AccessStatusEnabled ||
 		binding.endpointID != endpoint.ID ||
+		binding.endpointRevision != endpoint.Revision ||
 		binding.clientOrigin != endpoint.ClientOrigin ||
 		binding.dialect != endpoint.ClientDialect {
 		return fmt.Errorf(
@@ -105,6 +112,7 @@ func (binding IngressBinding) ValidateCurrent(
 	}
 	if binding.accessID != current.accessID ||
 		binding.endpointID != current.endpointID ||
+		binding.endpointRevision != current.endpointRevision ||
 		binding.clientOrigin != current.clientOrigin ||
 		binding.dialect != current.dialect {
 		return fmt.Errorf(
@@ -137,11 +145,12 @@ type IngressCatalogReader interface {
 func ingressBindingFromSnapshot(snapshot AccessPlanSnapshot) IngressBinding {
 	endpoint := snapshot.AgentEndpoint()
 	return IngressBinding{
-		accessID:     snapshot.AccessID(),
-		endpointID:   endpoint.ID,
-		clientOrigin: endpoint.ClientOrigin,
-		dialect:      endpoint.ClientDialect,
-		revision:     snapshot.Revision(),
-		planHash:     snapshot.PlanHash(),
+		accessID:         snapshot.AccessID(),
+		endpointID:       endpoint.ID,
+		endpointRevision: endpoint.Revision,
+		clientOrigin:     endpoint.ClientOrigin,
+		dialect:          endpoint.ClientDialect,
+		revision:         snapshot.Revision(),
+		planHash:         snapshot.PlanHash(),
 	}
 }

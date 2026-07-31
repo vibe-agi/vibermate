@@ -14,6 +14,7 @@ import (
 	"github.com/vibe-agi/vibermate/internal/activity"
 	"github.com/vibe-agi/vibermate/internal/anthropicchat"
 	"github.com/vibe-agi/vibermate/internal/capturerun"
+	"github.com/vibe-agi/vibermate/internal/certidentity"
 	"github.com/vibe-agi/vibermate/internal/connectionevent"
 	"github.com/vibe-agi/vibermate/internal/exchange"
 	"github.com/vibe-agi/vibermate/internal/localca"
@@ -70,13 +71,16 @@ func (productionStorageBuilder) Build(
 }
 
 type accessBuildRequest struct {
-	repository access.Repository
+	repository   access.Repository
+	rootRevision certidentity.RootRevision
+	leafCache    access.LeafCacheInvalidator
 }
 
 type accessRuntime interface {
 	access.Writer
 	access.SnapshotResolver
 	access.IngressResolver
+	access.LeafIssuanceAdmitter
 	access.IngressCatalogReader
 	access.ProviderProbeCatalog
 	access.ProjectionHealthReader
@@ -97,7 +101,13 @@ func (productionAccessBuilder) Build(
 	if err != nil {
 		return nil, fmt.Errorf("build Access plan compiler: %w", err)
 	}
-	projection := access.NewSnapshotProjection()
+	projection, err := access.NewSnapshotProjection(
+		request.rootRevision,
+		request.leafCache,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("build Access projection: %w", err)
+	}
 	return access.NewManager(ctx, request.repository, compiler, projection)
 }
 
@@ -538,14 +548,16 @@ func (productionCaptureBuilder) Build(
 }
 
 type localCABuildRequest struct {
-	directory string
-	clock     localca.Clock
-	random    io.Reader
+	ownerContext context.Context
+	directory    string
+	clock        localca.Clock
+	random       io.Reader
 }
 
 type localCARuntime interface {
 	loopbackproxy.CertificateAuthority
-	Root() localca.Root
+	access.LeafCacheInvalidator
+	Certificate() localca.RootCertificate
 	Shutdown(context.Context) error
 }
 
@@ -559,7 +571,7 @@ func (productionLocalCABuilder) Build(
 	ctx context.Context,
 	request localCABuildRequest,
 ) (localCARuntime, error) {
-	options := localca.DefaultOptions(request.directory)
+	options := localca.DefaultOptions(request.directory, request.ownerContext)
 	options.Clock = request.clock
 	options.Random = request.random
 	return localca.Open(ctx, options)
@@ -568,7 +580,7 @@ func (productionLocalCABuilder) Build(
 type proxyBuildRequest struct {
 	ownerContext context.Context
 	runs         loopbackproxy.RunAuthorizer
-	ingress      access.IngressResolver
+	ingress      loopbackproxy.IngressAuthority
 	exchanges    exchange.Executor
 	original     loopbackproxy.OriginalClient
 	certificates loopbackproxy.CertificateAuthority

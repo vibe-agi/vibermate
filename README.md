@@ -2,14 +2,15 @@
 
 This repository contains the production implementation of VibeMate.
 
-The current code is a narrow M0 runtime, executable Access-plan, protocol,
-controlled-egress, Exchange, loopback-ingress, and Desktop-host foundation. It
-provides a typed `ProductRuntime` lifecycle, a Host-owned readiness commit
-point, a mandatory offline-egress coordination boundary, a real versioned
-SQLite store with operation admission and bounded drain, and a complete Access
-aggregate with transactional compare-and-swap writes. A pure compiler validates
-ownership, references, and declared capabilities before producing the sole
-process-local immutable `AccessPlanSnapshot` and deterministic `PlanHash`.
+The current code is a narrow runtime, executable Access-plan, protocol,
+controlled-egress, Exchange, loopback-ingress, Desktop-host, and local
+certificate-authority foundation. It provides a typed `ProductRuntime`
+lifecycle, a Host-owned readiness commit point, a mandatory offline-egress
+coordination boundary, a real versioned SQLite store with operation admission
+and bounded drain, and a complete Access aggregate with transactional
+compare-and-swap writes. A pure compiler validates ownership, references, and
+declared capabilities before producing the sole process-local immutable
+`AccessPlanSnapshot` and deterministic `PlanHash`.
 
 The current M0 plan contains one enabled Agent endpoint, one owned OpenAI Chat
 profile and provider target, one account binding that stores only `SecretRef`
@@ -84,13 +85,38 @@ feature; generic Codex versions receive the ordinary unsupported-path result.
 Both decisions happen before body read or data-plane dispatch. Responses management,
 upload, batch, media, Realtime, and foreign semantic operations cannot enter
 model translation. Body-free ConnectionEvents persist connection phase
-evidence. The local Root is installation-persistent and exported as public
-evidence, but this code does not install it into an operating-system trust
-store. Repository tests prove the version-gated response. A clean private v5
-packaged report additionally binds a Codex-surfaced HTTP 426, the proxy's
-bounded 426-to-HTTP connection audit, and the subsequent HTTP Exchange reason
-from Runtime Activity. That evidence does not prove successful Responses
-WebSocket semantics or client-visible per-token TUI behavior.
+evidence.
+
+The local certificate authority owns one installation-persistent ECDSA P-256
+Root. Certificate DER SHA-256 is its only machine identity; the display
+fingerprint is derived, the public delivery path is not identity, and the
+persistent Root revision starts at 1. Existing manifest state is migrated
+without replacing the key or certificate through a same-directory synced
+temporary file and atomic rename. The Root private key remains structurally
+inside `internal/localca`.
+
+Leaf signing is no longer authorized by a host string. The active Access
+projection validates the current Root revision and exact Access,
+AgentEndpoint revision, `ClientOrigin`, canonical DNS SAN, and leaf algorithm,
+then grants a one-use admission to the local authority. Projection publication
+is the revocation cut: an admission obtained before the cut may complete for
+its current TLS handshake, while later admission fails and invalidated work
+cannot repopulate the bounded LRU cache. Same-key cold issuance is coalesced;
+different keys may generate concurrently; cancellation, failure, panic, and
+shutdown do not cache a result or strand waiters. The production proxy performs
+this admission against the real ClientHello after exact CONNECT/SNI validation.
+IP-literal leaf admission is intentionally unsupported.
+
+This code exports only immutable Root identity and defensive-copy public
+certificate delivery material. It does not install, remove, replace, or rotate
+an operating-system Root, and it has no trust Control API or trust UI.
+Repository tests prove the version-gated Responses behavior. A clean private
+v5 packaged report at the preceding frozen implementation additionally binds a
+Codex-surfaced HTTP 426, the proxy's bounded 426-to-HTTP connection audit, and
+the subsequent HTTP Exchange reason from Runtime Activity. Because the
+certificate path has since changed, packaged acceptance must be regenerated on
+the clean candidate before this slice freezes. Neither report proves successful
+Responses WebSocket semantics or client-visible per-token TUI behavior.
 
 DesktopHost now owns the literal proxy and control listeners, complete routes,
 generation lock, capability separation, launcher discovery, and the only

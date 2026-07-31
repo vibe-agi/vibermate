@@ -157,7 +157,7 @@ func TestRuntimeResumeUsesFrozenQueueAndActiveRouteSetTargets(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	projection := access.NewSnapshotProjection()
+	projection := newTestSnapshotProjection(t)
 	if err := projection.Restore([]access.AccessPlanSnapshot{plan}); err != nil {
 		t.Fatal(err)
 	}
@@ -244,7 +244,7 @@ func TestRuntimeResumeKeepsQueuedProviderTargetFrozenAcrossPlanChange(
 		2,
 		"https://new-provider.example:443/v1",
 	)
-	projection := access.NewSnapshotProjection()
+	projection := newTestSnapshotProjection(t)
 	if err := projection.Restore([]access.AccessPlanSnapshot{revisionOne}); err != nil {
 		t.Fatal(err)
 	}

@@ -252,7 +252,7 @@ func Start(ctx context.Context, options Options) (*Host, error) {
 		Verifier:    verifier,
 		Authorities: runtime,
 		ProxyOrigin: proxyOrigin,
-		Root:        runtime.LocalRoot(),
+		Root:        runtime.LocalRootCertificate(),
 		Launcher:    launcherAuthority,
 		RunLifetime: options.CaptureRunLifetime,
 		Clock:       options.Runtime.Clock,

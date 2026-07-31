@@ -141,8 +141,55 @@ func startWithBuilders(
 	}
 	cleanups.register("sqlite", storageResult.store.Shutdown)
 
+	securityRandom := newSynchronizedReader(options.SecurityRandom)
+	ownerContext, cancelOwner := context.WithCancelCause(context.WithoutCancel(ctx))
+	cleanups.register("runtime owner context", func(context.Context) error {
+		cancelOwner(errors.New("runtime owner context stopped"))
+		return nil
+	})
+
+	certificateAuthority, err := builders.localCA.Build(ctx, localCABuildRequest{
+		ownerContext: ownerContext,
+		directory:    options.Paths.LocalCADirectory(),
+		clock:        options.Clock,
+		random:       securityRandom,
+	})
+	if err != nil {
+		return fail("local Root CA", err)
+	}
+	if certificateAuthority == nil ||
+		!certificateAuthority.Identity().Valid() ||
+		!certificateAuthority.Certificate().Valid() {
+		incompleteErr := fmt.Errorf(
+			"%w: local CA component is incomplete",
+			ErrInvalidBuildResult,
+		)
+		if certificateAuthority != nil {
+			closeContext, cancel := context.WithTimeout(
+				context.WithoutCancel(ctx),
+				options.Lifecycle.RollbackTimeout,
+			)
+			closeErr := certificateAuthority.Shutdown(closeContext)
+			cancel()
+			incompleteErr = errors.Join(
+				incompleteErr,
+				wrapOptionalError(
+					"close incomplete local CA component",
+					closeErr,
+				),
+			)
+		}
+		return fail(
+			"local Root CA",
+			incompleteErr,
+		)
+	}
+	cleanups.register("local Root CA", certificateAuthority.Shutdown)
+
 	accesses, err := builders.access.Build(ctx, accessBuildRequest{
-		repository: storageResult.store.AccessRepository(),
+		repository:   storageResult.store.AccessRepository(),
+		rootRevision: certificateAuthority.Identity().Revision(),
+		leafCache:    certificateAuthority,
 	})
 	if err != nil {
 		return fail("Access recovery", err)
@@ -170,7 +217,6 @@ func startWithBuilders(
 		return fail("credential control", buildErr)
 	}
 
-	securityRandom := newSynchronizedReader(options.SecurityRandom)
 	activities, err := builders.activity.Build(activityBuildRequest{
 		repository: storageResult.store.ActivityRepository(),
 		clock:      options.Clock,
@@ -223,12 +269,6 @@ func startWithBuilders(
 		return fail("tool approval recovery", buildErr)
 	}
 	cleanups.register("tool approval component", approvals.Shutdown)
-
-	ownerContext, cancelOwner := context.WithCancelCause(context.WithoutCancel(ctx))
-	cleanups.register("runtime owner context", func(context.Context) error {
-		cancelOwner(errors.New("runtime owner context stopped"))
-		return nil
-	})
 
 	monitor, err := builders.monitor.Build(monitorBuildRequest{
 		ownerContext: ownerContext,
@@ -334,22 +374,6 @@ func startWithBuilders(
 	}
 	pending.register("CaptureRun component", captureRuns.Shutdown)
 
-	certificateAuthority, err := builders.localCA.Build(ctx, localCABuildRequest{
-		directory: options.Paths.LocalCADirectory(),
-		clock:     options.Clock,
-		random:    securityRandom,
-	})
-	if err != nil {
-		return fail("local Root CA", err)
-	}
-	if certificateAuthority == nil {
-		return fail(
-			"local Root CA",
-			fmt.Errorf("%w: local CA component is nil", ErrInvalidBuildResult),
-		)
-	}
-	pending.register("local Root CA", certificateAuthority.Shutdown)
-
 	proxy, err := builders.proxy.Build(proxyBuildRequest{
 		ownerContext: ownerContext,
 		runs:         captureRuns,
@@ -381,7 +405,6 @@ func startWithBuilders(
 		return options.OfflineHold.Drain(shutdownContext)
 	})
 
-	cleanups.register("local Root CA", certificateAuthority.Shutdown)
 	cleanups.register("offline-hold drain", options.OfflineHold.Drain)
 	cleanups.register("Exchange drain", exchanges.Drain)
 	cleanups.register("loopback proxy drain", proxy.Drain)
@@ -477,10 +500,16 @@ func (r *Runtime) ToolApprovals() toolapproval.Controller {
 	return r.approvals
 }
 
-// LocalRoot returns public Root CA installation evidence. ProductRuntime does
-// not install it into an operating-system trust store.
-func (r *Runtime) LocalRoot() localca.Root {
-	return r.localCA.Root()
+// LocalRootIdentity returns immutable public signing-authority identity.
+// ProductRuntime does not install it into an operating-system trust store.
+func (r *Runtime) LocalRootIdentity() localca.RootIdentity {
+	return r.localCA.Identity()
+}
+
+// LocalRootCertificate returns defensive-copy public delivery material. Its
+// path is not part of Root identity or signing authorization.
+func (r *Runtime) LocalRootCertificate() localca.RootCertificate {
+	return r.localCA.Certificate()
 }
 
 // ProxyHandler returns the fully composed CONNECT/MITM handler. A Host must

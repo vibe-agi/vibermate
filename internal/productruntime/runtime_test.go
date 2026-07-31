@@ -208,6 +208,8 @@ func TestProductRuntimeWiresAccessCASAndRestoresItAcrossRestart(t *testing.T) {
 	if err != nil || write.Outcome != access.WriteOutcomeCommitted {
 		t.Fatalf("write runtime Access result=%+v err=%v", write, err)
 	}
+	firstRootIdentity := first.LocalRootIdentity()
+	firstRootCertificate := first.LocalRootCertificate().CertificatePEM()
 	shutdownRuntime(t, first)
 	if _, err := first.AccessWriter().WriteAccess(
 		context.Background(),
@@ -231,6 +233,13 @@ func TestProductRuntimeWiresAccessCASAndRestoresItAcrossRestart(t *testing.T) {
 		&coordinatorDouble{},
 	))
 	defer shutdownRuntime(t, second)
+	if second.LocalRootIdentity() != firstRootIdentity ||
+		!bytes.Equal(
+			second.LocalRootCertificate().CertificatePEM(),
+			firstRootCertificate,
+		) {
+		t.Fatal("ProductRuntime reopen changed local Root identity or certificate")
+	}
 	recovered, err := second.SnapshotResolver().ResolveAccess(accessID)
 	if err != nil {
 		t.Fatalf("resolve recovered runtime Access: %v", err)
@@ -575,12 +584,15 @@ func TestProductRuntimeComposesCaptureIngressAndConnectionAudit(t *testing.T) {
 		page.Items[1].Phase != connectionevent.PhaseAttempted {
 		t.Fatalf("runtime proxy ConnectionEvents = %+v", page.Items)
 	}
-	root := runtime.LocalRoot()
-	if len(root.CertificatePEM()) == 0 ||
-		root.Path() == "" ||
-		root.Fingerprint() == "" ||
-		root.NotAfter().IsZero() {
-		t.Fatalf("runtime local Root evidence is incomplete: %+v", root)
+	identity := runtime.LocalRootIdentity()
+	certificate := runtime.LocalRootCertificate()
+	if !identity.Valid() || !certificate.Valid() ||
+		len(certificate.CertificatePEM()) == 0 {
+		t.Fatalf(
+			"runtime local Root evidence is incomplete: identity=%+v certificate=%+v",
+			identity,
+			certificate,
+		)
 	}
 }
 
@@ -1857,8 +1869,15 @@ func (b failingPublicationAccessBuilder) Build(
 	if err != nil {
 		return nil, err
 	}
+	baseProjection, err := access.NewSnapshotProjection(
+		request.rootRevision,
+		request.leafCache,
+	)
+	if err != nil {
+		return nil, err
+	}
 	projection := &failingPublicationProjection{
-		SnapshotProjection: access.NewSnapshotProjection(),
+		SnapshotProjection: baseProjection,
 		failRevision:       b.failRevision,
 	}
 	return access.NewManager(ctx, request.repository, compiler, projection)

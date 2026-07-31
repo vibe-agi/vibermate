@@ -2631,12 +2631,15 @@ func compileTestSnapshot(
 	modelValue string,
 ) access.AccessPlanSnapshot {
 	t.Helper()
-	return compileTestSnapshotWithEndpoint(
+	return compileTestSnapshotWithDialect(
 		t,
 		accessID,
 		revision,
 		modelValue,
 		accessID.String()+"-endpoint",
+		1,
+		access.DialectAnthropicMessages,
+		"https://api.anthropic.com:443",
 	)
 }
 
@@ -2654,6 +2657,7 @@ func compileTestSnapshotWithEndpoint(
 		revision,
 		modelValue,
 		endpointValue,
+		revision,
 		access.DialectAnthropicMessages,
 		"https://api.anthropic.com:443",
 	)
@@ -2672,6 +2676,7 @@ func compileResponsesTestSnapshot(
 		revision,
 		modelValue,
 		accessID.String()+"-endpoint",
+		1,
 		access.DialectOpenAIResponses,
 		"https://api.openai.com:443",
 	)
@@ -2683,6 +2688,7 @@ func compileTestSnapshotWithDialect(
 	revision access.Revision,
 	modelValue string,
 	endpointValue string,
+	endpointRevision access.Revision,
 	clientDialect access.Dialect,
 	clientOriginValue string,
 ) access.AccessPlanSnapshot {
@@ -2804,7 +2810,7 @@ func compileTestSnapshotWithDialect(
 		},
 		AgentEndpoint: access.AgentEndpoint{
 			ID:            endpointID,
-			Revision:      revision,
+			Revision:      endpointRevision,
 			AccessID:      accessID,
 			ClientOrigin:  clientOrigin,
 			ClientDialect: clientDialect,

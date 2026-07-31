@@ -60,7 +60,7 @@ func TestCaptureControlSeparatesLauncherAndPerRunCapabilities(t *testing.T) {
 		grant.ProxyCapability == "" ||
 		grant.RunCapability == "" ||
 		grant.ProxyCapability == grant.RunCapability ||
-		grant.RootPEMPath != fixture.authority.Root().Path() ||
+		grant.RootPEMPath != fixture.authority.Certificate().Path() ||
 		len(grant.ProtectedAuthorities) != 1 ||
 		grant.ProtectedAuthorities[0] != "api.anthropic.com:443" {
 		t.Fatalf("launch grant = %+v", grant)
@@ -265,7 +265,10 @@ func newFixture(t *testing.T) *fixture {
 	}
 	authority, err := localca.Open(
 		context.Background(),
-		localca.DefaultOptions(filepath.Join(directory, "ca")),
+		localca.DefaultOptions(
+			filepath.Join(directory, "ca"),
+			context.Background(),
+		),
 	)
 	if err != nil {
 		t.Fatal(err)
@@ -325,7 +328,7 @@ func newFixture(t *testing.T) *fixture {
 		Verifier:    verifier,
 		Authorities: fixedAuthorities{"api.anthropic.com:443"},
 		ProxyOrigin: "http://127.0.0.1:32123",
-		Root:        authority.Root(),
+		Root:        authority.Certificate(),
 		Launcher:    launcher,
 		RunLifetime: 2 * time.Minute,
 		Clock:       clock,

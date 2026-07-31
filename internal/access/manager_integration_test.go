@@ -18,7 +18,7 @@ func TestAccessPlanCASPublishesImmutablePlanAndRestores(t *testing.T) {
 
 	databasePath := filepath.Join(t.TempDir(), "data", "runtime.db")
 	store := openStore(t, databasePath)
-	projection := access.NewSnapshotProjection()
+	projection := newProjection(t)
 	manager := newManager(t, store, projection)
 	accessID := newAccessID(t, "access-primary")
 
@@ -147,7 +147,7 @@ func TestAccessPlanCASPublishesImmutablePlanAndRestores(t *testing.T) {
 	// power-loss durability proof.
 	reopened := openStore(t, databasePath)
 	defer shutdownStore(t, reopened)
-	recoveredManager := newManager(t, reopened, access.NewSnapshotProjection())
+	recoveredManager := newManager(t, reopened, newProjection(t))
 	defer shutdownManager(t, recoveredManager)
 	recovered, err := recoveredManager.ResolveAccess(accessID)
 	if err != nil {
@@ -168,7 +168,7 @@ func TestResponsesAccessPlanRestoresIdenticalOperationAndHash(t *testing.T) {
 
 	databasePath := filepath.Join(t.TempDir(), "data", "runtime.db")
 	store := openStore(t, databasePath)
-	manager := newManager(t, store, access.NewSnapshotProjection())
+	manager := newManager(t, store, newProjection(t))
 	accessID := newAccessID(t, "access-responses-reopen")
 	aggregate := testAggregate(t, accessID, 1, "Responses")
 	aggregate.AgentEndpoint.ClientDialect = access.DialectOpenAIResponses
@@ -200,7 +200,7 @@ func TestResponsesAccessPlanRestoresIdenticalOperationAndHash(t *testing.T) {
 	recoveredManager := newManager(
 		t,
 		reopened,
-		access.NewSnapshotProjection(),
+		newProjection(t),
 	)
 	defer shutdownManager(t, recoveredManager)
 	recovered, err := recoveredManager.ResolveAccess(accessID)
@@ -253,7 +253,7 @@ func TestConcurrentCASPublishesExactlyOneNewPlan(t *testing.T) {
 
 	store := newTemporaryStore(t)
 	defer shutdownStore(t, store)
-	manager := newManager(t, store, access.NewSnapshotProjection())
+	manager := newManager(t, store, newProjection(t))
 	defer shutdownManager(t, manager)
 	accessID := newAccessID(t, "access-concurrent")
 	if _, err := manager.WriteAccess(context.Background(), access.WriteCommand{
@@ -325,7 +325,7 @@ func TestCompileFailureLeavesDurableAndActivePlanUnchanged(t *testing.T) {
 
 	store := newTemporaryStore(t)
 	defer shutdownStore(t, store)
-	manager := newManager(t, store, access.NewSnapshotProjection())
+	manager := newManager(t, store, newProjection(t))
 	defer shutdownManager(t, manager)
 	accessID := newAccessID(t, "access-compile-failure")
 	if _, err := manager.WriteAccess(context.Background(), access.WriteCommand{
@@ -373,7 +373,7 @@ func TestWriterOwnershipSpansCommitThroughPlanPublication(t *testing.T) {
 
 	store := newTemporaryStore(t)
 	defer shutdownStore(t, store)
-	projection := newBlockingProjection(1)
+	projection := newBlockingProjection(t, 1)
 	manager := newManager(t, store, projection)
 	defer shutdownManager(t, manager)
 	accessID := newAccessID(t, "access-serialized-publication")
@@ -450,7 +450,7 @@ func TestPublicationFailurePoisonsOnlyAffectedAccess(t *testing.T) {
 	defer shutdownStore(t, store)
 	firstID := newAccessID(t, "access-poisoned")
 	secondID := newAccessID(t, "access-independent")
-	projection := newFailingProjection(firstID, 2)
+	projection := newFailingProjection(t, firstID, 2)
 	manager := newManager(t, store, projection)
 	defer shutdownManager(t, manager)
 
@@ -515,7 +515,7 @@ func TestPublicationFailurePoisonsOnlyAffectedAccess(t *testing.T) {
 	shutdownStore(t, store)
 	reopened := openStore(t, databasePath)
 	defer shutdownStore(t, reopened)
-	recoveredManager := newManager(t, reopened, access.NewSnapshotProjection())
+	recoveredManager := newManager(t, reopened, newProjection(t))
 	defer shutdownManager(t, recoveredManager)
 	firstRecovered, err := recoveredManager.ResolveAccess(firstID)
 	if err != nil ||
@@ -544,10 +544,69 @@ func TestPublicationFailurePoisonsOnlyAffectedAccess(t *testing.T) {
 	}
 }
 
+func TestDisabledWithdrawalPublicationFailurePoisonsUntilRecovery(
+	t *testing.T,
+) {
+	t.Parallel()
+
+	databasePath := filepath.Join(t.TempDir(), "data", "runtime.db")
+	store := openStore(t, databasePath)
+	defer shutdownStore(t, store)
+	accessID := newAccessID(t, "access-disabled-publication-failure")
+	projection := newFailingProjection(t, accessID, 2)
+	manager := newManager(t, store, projection)
+	if _, err := manager.WriteAccess(
+		context.Background(),
+		access.WriteCommand{
+			ExpectedRevision: 0,
+			Aggregate: testAggregate(
+				t,
+				accessID,
+				1,
+				"Enabled before withdrawal failure",
+			),
+		},
+	); err != nil {
+		t.Fatal(err)
+	}
+	disabled := testAggregate(t, accessID, 2, "Durably disabled")
+	disabled.Binding.Status = access.AccessStatusDisabled
+	result, err := manager.WriteAccess(
+		context.Background(),
+		access.WriteCommand{
+			ExpectedRevision: 1,
+			Aggregate:        disabled,
+		},
+	)
+	if result.Outcome != access.WriteOutcomeCommitted ||
+		result.Revision != 2 ||
+		!errors.Is(err, access.ErrProjectionUnavailable) {
+		t.Fatalf("withdrawal failure result=%+v error=%v", result, err)
+	}
+	if _, err := manager.ResolveAccess(accessID); !errors.Is(
+		err,
+		access.ErrProjectionUnavailable,
+	) {
+		t.Fatalf("failed withdrawal did not poison old plan: %v", err)
+	}
+	if err := manager.Shutdown(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+
+	recovered := newManager(t, store, newProjection(t))
+	defer shutdownManager(t, recovered)
+	if _, err := recovered.ResolveAccess(accessID); !errors.Is(
+		err,
+		access.ErrAccessNotConfigured,
+	) {
+		t.Fatalf("recovered disabled Access error = %v", err)
+	}
+}
+
 func TestConcurrentResolversObserveCompletePlansAcrossAccesses(t *testing.T) {
 	store := newTemporaryStore(t)
 	defer shutdownStore(t, store)
-	manager := newManager(t, store, access.NewSnapshotProjection())
+	manager := newManager(t, store, newProjection(t))
 	defer shutdownManager(t, manager)
 	accessIDs := []access.AccessID{
 		newAccessID(t, "access-race-a"),
@@ -634,7 +693,7 @@ func TestShutdownDeadlineDrainsCommitToPublicationBoundary(t *testing.T) {
 
 	store := newTemporaryStore(t)
 	defer shutdownStore(t, store)
-	projection := newBlockingProjection(1)
+	projection := newBlockingProjection(t, 1)
 	manager := newManager(t, store, projection)
 	accessID := newAccessID(t, "access-blocked-publication")
 	command := access.WriteCommand{
@@ -924,6 +983,83 @@ func assertDurableRevision(
 	}
 }
 
+func TestDisabledAccessCommitsWithdrawalAndRestoresAsInactive(t *testing.T) {
+	t.Parallel()
+
+	store := openStore(t, filepath.Join(t.TempDir(), "data", "runtime.db"))
+	defer shutdownStore(t, store)
+	accessID := newAccessID(t, "access-disabled-recovery")
+	manager := newManager(t, store, newProjection(t))
+	if _, err := manager.WriteAccess(
+		context.Background(),
+		access.WriteCommand{
+			ExpectedRevision: 0,
+			Aggregate: testAggregate(
+				t,
+				accessID,
+				1,
+				"Enabled Access",
+			),
+		},
+	); err != nil {
+		t.Fatalf("create enabled Access: %v", err)
+	}
+	disabled := testAggregate(t, accessID, 2, "Disabled Access")
+	disabled.Binding.Status = access.AccessStatusDisabled
+	disabled.AgentEndpoint.Revision = 1
+	result, err := manager.WriteAccess(
+		context.Background(),
+		access.WriteCommand{
+			ExpectedRevision: 1,
+			Aggregate:        disabled,
+		},
+	)
+	if err != nil || result.Outcome != access.WriteOutcomeCommitted ||
+		result.Revision != 2 {
+		t.Fatalf("disable result=%+v error=%v", result, err)
+	}
+	if _, err := manager.ResolveAccess(accessID); !errors.Is(
+		err,
+		access.ErrAccessNotConfigured,
+	) {
+		t.Fatalf("disabled active projection error = %v", err)
+	}
+	aggregates, err := store.AccessRepository().LoadAll(context.Background())
+	if err != nil || len(aggregates) != 1 ||
+		aggregates[0].Binding.Revision != 2 ||
+		aggregates[0].Binding.Status != access.AccessStatusDisabled {
+		t.Fatalf("durable disabled aggregate=%+v error=%v", aggregates, err)
+	}
+	if err := manager.Shutdown(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+
+	recovered := newManager(t, store, newProjection(t))
+	defer shutdownManager(t, recovered)
+	if _, err := recovered.ResolveAccess(accessID); !errors.Is(
+		err,
+		access.ErrAccessNotConfigured,
+	) {
+		t.Fatalf("recovered disabled Access error = %v", err)
+	}
+	reenabled := testAggregate(t, accessID, 3, "Re-enabled Access")
+	reenabled.AgentEndpoint.Revision = 2
+	result, err = recovered.WriteAccess(
+		context.Background(),
+		access.WriteCommand{
+			ExpectedRevision: 2,
+			Aggregate:        reenabled,
+		},
+	)
+	if err != nil || result.Outcome != access.WriteOutcomeCommitted {
+		t.Fatalf("re-enable result=%+v error=%v", result, err)
+	}
+	active, err := recovered.ResolveAccess(accessID)
+	if err != nil || active.Revision() != 3 {
+		t.Fatalf("re-enabled active plan revision=%d error=%v", active.Revision(), err)
+	}
+}
+
 type blockingProjection struct {
 	delegate      access.SnapshotProjection
 	blockRevision access.Revision
@@ -932,9 +1068,12 @@ type blockingProjection struct {
 	enterOnce     sync.Once
 }
 
-func newBlockingProjection(blockRevision access.Revision) *blockingProjection {
+func newBlockingProjection(
+	t *testing.T,
+	blockRevision access.Revision,
+) *blockingProjection {
 	return &blockingProjection{
-		delegate:      access.NewSnapshotProjection(),
+		delegate:      newProjection(t),
 		blockRevision: blockRevision,
 		entered:       make(chan struct{}),
 		release:       make(chan struct{}),
@@ -955,6 +1094,13 @@ func (p *blockingProjection) Publish(plan access.AccessPlanSnapshot) error {
 	return p.delegate.Publish(plan)
 }
 
+func (p *blockingProjection) Withdraw(
+	accessID access.AccessID,
+	revision access.Revision,
+) error {
+	return p.delegate.Withdraw(accessID, revision)
+}
+
 func (p *blockingProjection) ResolveAccess(
 	accessID access.AccessID,
 ) (access.AccessPlanSnapshot, error) {
@@ -965,6 +1111,12 @@ func (p *blockingProjection) ResolveClientOrigin(
 	origin access.ClientOrigin,
 ) (access.IngressBinding, error) {
 	return p.delegate.ResolveClientOrigin(origin)
+}
+
+func (p *blockingProjection) AdmitLeaf(
+	intent access.LeafIssuanceIntent,
+) (access.LeafIssuanceAdmission, error) {
+	return p.delegate.AdmitLeaf(intent)
 }
 
 func (p *blockingProjection) ActiveClientAuthorities() ([]string, error) {
@@ -995,11 +1147,12 @@ type failingProjection struct {
 }
 
 func newFailingProjection(
+	t *testing.T,
 	accessID access.AccessID,
 	revision access.Revision,
 ) *failingProjection {
 	return &failingProjection{
-		delegate:     access.NewSnapshotProjection(),
+		delegate:     newProjection(t),
 		failAccessID: accessID,
 		failRevision: revision,
 	}
@@ -1016,6 +1169,16 @@ func (p *failingProjection) Publish(plan access.AccessPlanSnapshot) error {
 	return p.delegate.Publish(plan)
 }
 
+func (p *failingProjection) Withdraw(
+	accessID access.AccessID,
+	revision access.Revision,
+) error {
+	if accessID == p.failAccessID && revision == p.failRevision {
+		return errInjectedPublication
+	}
+	return p.delegate.Withdraw(accessID, revision)
+}
+
 func (p *failingProjection) ResolveAccess(
 	accessID access.AccessID,
 ) (access.AccessPlanSnapshot, error) {
@@ -1026,6 +1189,12 @@ func (p *failingProjection) ResolveClientOrigin(
 	origin access.ClientOrigin,
 ) (access.IngressBinding, error) {
 	return p.delegate.ResolveClientOrigin(origin)
+}
+
+func (p *failingProjection) AdmitLeaf(
+	intent access.LeafIssuanceIntent,
+) (access.LeafIssuanceAdmission, error) {
+	return p.delegate.AdmitLeaf(intent)
 }
 
 func (p *failingProjection) ActiveClientAuthorities() ([]string, error) {

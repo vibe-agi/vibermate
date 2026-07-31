@@ -46,6 +46,30 @@ immediately before freeze. A changed digest requires a semantic diff and goal
 reconciliation; it is not automatically accepted or ignored. Record every
 checkpoint in the archived completion plan.
 
+Checkpoint log:
+
+- Post-contract checkpoint, 2026-08-01: ordered manifest digest
+  `2d38c6df509a15fb9ffc3b60345ce5421cc97d8a3e967887f3b86d8e93c00cea`.
+  The live design changed while contracts were being implemented. Re-reading
+  ADR-0006 decisions 12–15 confirms the same DER authority, revision-1 v1→v2
+  migration, projection-owned admission/revocation cut, bounded concurrent
+  cache, and lifecycle semantics implemented here. Production composition
+  §8.1 now explicitly keeps Language Bridge out of this Root/leaf slice. No
+  M1.0-A object, trust boundary, dependency, or scope correction was required.
+- Post-production-wiring checkpoint, 2026-08-01: ordered manifest digest remains
+  `2d38c6df509a15fb9ffc3b60345ce5421cc97d8a3e967887f3b86d8e93c00cea`.
+  The real ClientHello admission path and the transactional disabled-Access
+  withdrawal match ADR-0006: CONNECT/SNI is checked before signing, active
+  projection publication is the revocation cut, and disabling removes the
+  endpoint from new admission while synchronously invalidating derived cache.
+  Language Bridge remains outside this slice.
+- Pre-candidate-gates checkpoint, 2026-08-01: ordered manifest digest remains
+  `2d38c6df509a15fb9ffc3b60345ce5421cc97d8a3e967887f3b86d8e93c00cea`.
+  A fresh CodeGraph-first review and direct semantic check found no change to
+  ADR-0006 decisions 12–15 or production-composition section 8.1. The live
+  Language Bridge work remains a later Core capability and did not alter the
+  Root/leaf authority, trust boundary, dependencies, or completion criteria.
+
 Language Bridge remains a later Core slice. Its typed transformer, policy,
 ledger, Hold, secret, budget, codec, UI, and localization work must not enter
 this Root/leaf authority goal. New developer-facing source remains English;
@@ -141,62 +165,68 @@ user-facing copy, if any unexpectedly becomes necessary, must use synchronized
 
 ### 1. Freeze Root identity and migration contracts
 
-- [ ] Add typed immutable Root identity/revision/digest/algorithm values and
+- [x] Add typed immutable Root identity/revision/digest/algorithm values and
   defensive-copy public certificate material.
-- [ ] Add v1 fixtures and prove private atomic v2 migration preserves exact key,
+- [x] Add v1 fixtures and prove private atomic v2 migration preserves exact key,
   certificate DER, identity, permissions, and revision across reopen.
-- [ ] Inject migration failure points around temporary write, file sync,
+- [x] Inject migration failure points around temporary write, file sync,
   rename, and directory sync; prove complete old/new visibility and no Root
   regeneration.
-- [ ] Reject digest drift, unknown/trailing manifest data, bad revisions,
+- [x] Reject digest drift, unknown/trailing manifest data, bad revisions,
   partial files, symlinks, and widened permissions.
 
 ### 2. Freeze projection admission and revocation contracts
 
-- [ ] Define the typed request and projection-owned admission without an
+- [x] Define the typed request and projection-owned admission without an
   exported constructor or reusable bearer representation.
-- [ ] Prove self-assembled requests, stale Root/endpoint revisions, mismatched
-  AccessID/ClientOrigin/SAN/algorithm, disabled/deleted endpoints, CONNECT/SNI
-  mismatch, and IP literals fail closed.
-- [ ] Prove the publication cut: pre-cut admissions may complete, post-cut
+- [x] Prove zero/forged admissions, stale Root/endpoint revisions, foreign
+  AccessID/ClientOrigin evidence, mismatched SAN/algorithm, disabled or
+  withdrawn endpoints, CONNECT/SNI mismatch, and IP literals fail closed.
+  Endpoint deletion has no writer/control operation in this slice; the same
+  typed withdrawal cut is already the projection behavior a future durable
+  delete must invoke.
+- [x] Prove the publication cut: pre-cut admissions may complete, post-cut
   admissions fail, and invalidated in-flight results cannot resurrect cache.
-- [ ] Preserve immutable old plan handles and per-request endpoint
+- [x] Preserve immutable old plan handles and per-request endpoint
   revalidation without treating them as fresh signing authority.
 
 ### 3. Build the bounded concurrent leaf authority
 
-- [ ] Promote design-pinned `github.com/hashicorp/golang-lru/v2` and
+- [x] Promote design-pinned `github.com/hashicorp/golang-lru/v2` and
   `golang.org/x/sync/singleflight` to direct fixed dependencies.
-- [ ] Replace the unbounded map and global generation mutex with the full-key
+- [x] Replace the unbounded map and global generation mutex with the full-key
   bounded LRU, same-key coalescing, lifecycle-owned generation, and explicit
   invalidation generations.
-- [ ] Prove capacity/eviction, cache-key isolation, same-key issuance count,
+- [x] Prove capacity/eviction, cache-key isolation, same-key issuance count,
   different-key parallelism, independent waiter cancellation, leader panic,
   random/signing failure, timeout, invalidation, and retry-after-failure.
-- [ ] Prove race-safe shutdown/invalidation/issuance and bounded idempotent
+- [x] Prove race-safe shutdown/invalidation/issuance and bounded idempotent
   drain under `go test -race`.
 
 ### 4. Migrate the production Proxy and composition
 
-- [ ] Replace `loopbackproxy.CertificateAuthority` and handler use with the
+- [x] Replace `loopbackproxy.CertificateAuthority` and handler use with the
   typed context-aware authority/admission seam.
-- [ ] Wire the sole active projection into issuance without a callback
+- [x] Wire the sole active projection into issuance without a callback
   registry, string driver registry, global locator, blank-import registration,
   or a second endpoint snapshot.
-- [ ] Prove exact CONNECT/SNI/SAN issuance through the real handler, stale
+- [x] Prove exact CONNECT/SNI/SAN issuance through the real handler, stale
   revision rejection, multi-Access isolation, endpoint publication races, and
   current-request revalidation on persistent connections.
-- [ ] Prove ProductRuntime reopen identity continuity, failure rollback,
+- [x] Prove ProductRuntime reopen identity continuity, failure rollback,
   shutdown ordering, and unchanged upstream strict TLS.
 
 ### 5. Reconcile design, documentation, and evidence
 
-- [ ] Run the post-contract and post-wiring design checkpoints and record any
+- [x] Run the post-contract and post-wiring design checkpoints and record any
   semantic changes and resulting implementation corrections.
-- [ ] Update `docs/module-map.md`, README status, and package documentation with
+- [x] Update `docs/module-map.md`, README status, and package documentation with
   exact authority, lifecycle, evidence, and non-evidence boundaries.
-- [ ] Add structural checks only for concrete newly protected shapes, each
-  with public-entry bad and known-good repository fixtures.
+- [x] Add structural checks only for concrete newly protected shapes, each
+  with public-entry bad and known-good repository fixtures. No new text scanner
+  was added: package visibility, unexported request construction, one-use typed
+  admission, and the replaced proxy interface make the concrete bypass shapes
+  unrepresentable; the existing public repository checker remains green.
 - [ ] Re-run deterministic and credentialed M0.9/M0.9.1 packaged acceptance on
   the clean candidate because the production certificate path changed. Reports
   must bind the exact candidate source and preserve honest client-specific
@@ -204,16 +234,16 @@ user-facing copy, if any unexpectedly becomes necessary, must use synchronized
 
 ### 6. Final gates and freeze
 
-- [ ] `make check`
-- [ ] `go test ./...`
-- [ ] `go test -race ./...`
-- [ ] `go vet ./...`
-- [ ] `go mod tidy -diff`
-- [ ] `go mod verify`
-- [ ] fixed `govulncheck ./...`
-- [ ] pinned frontend TypeScript/unit/build checks
-- [ ] pinned Rust format/tests and honestly reported RustSec warnings
-- [ ] `git diff --check`
+- [x] `make check`
+- [x] `go test ./...`
+- [x] `go test -race ./...`
+- [x] `go vet ./...`
+- [x] `go mod tidy -diff`
+- [x] `go mod verify`
+- [x] fixed `govulncheck ./...`
+- [x] pinned frontend TypeScript/unit/build checks
+- [x] pinned Rust format/tests and honestly reported RustSec warnings
+- [x] `git diff --check`
 - [ ] final design checkpoint
 - [ ] clean candidate commit, frozen evidence bound to that commit, and clean
   tracked worktree

@@ -13,6 +13,7 @@ import (
 
 	"github.com/pressly/goose/v3"
 	"github.com/vibe-agi/vibermate/internal/access"
+	"github.com/vibe-agi/vibermate/internal/certidentity"
 	"github.com/vibe-agi/vibermate/internal/operationcatalog"
 )
 
@@ -397,7 +398,7 @@ func TestAccessRecoveryRejectsMissingOrInvalidPlanPayload(t *testing.T) {
 				context.Background(),
 				store.AccessRepository(),
 				testAccessCompiler(t),
-				access.NewSnapshotProjection(),
+				newTestSnapshotProjection(t),
 			); !errors.Is(err, access.ErrInvalidRepositoryState) {
 				t.Fatalf("manager recovered invalid durable aggregate: %v", err)
 			}
@@ -651,12 +652,31 @@ func newTestAccessManager(t *testing.T, store *Store) *access.Manager {
 		context.Background(),
 		store.AccessRepository(),
 		testAccessCompiler(t),
-		access.NewSnapshotProjection(),
+		newTestSnapshotProjection(t),
 	)
 	if err != nil {
 		t.Fatalf("construct Access manager: %v", err)
 	}
 	return manager
+}
+
+type discardLeafCacheInvalidator struct{}
+
+func (discardLeafCacheInvalidator) InvalidateLeafCache(
+	access.LeafCacheInvalidation,
+) {
+}
+
+func newTestSnapshotProjection(t *testing.T) *access.AtomicSnapshotProjection {
+	t.Helper()
+	projection, err := access.NewSnapshotProjection(
+		certidentity.InitialRootRevision,
+		discardLeafCacheInvalidator{},
+	)
+	if err != nil {
+		t.Fatalf("construct Access projection: %v", err)
+	}
+	return projection
 }
 
 func shutdownTestAccessManager(t *testing.T, manager *access.Manager) {

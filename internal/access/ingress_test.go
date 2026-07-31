@@ -17,7 +17,7 @@ func TestIngressResolverUsesTheSameAtomicPlanProjection(t *testing.T) {
 	if err != nil {
 		t.Fatalf("compile plan: %v", err)
 	}
-	projection := access.NewSnapshotProjection()
+	projection := newProjection(t)
 	if err := projection.Restore([]access.AccessPlanSnapshot{plan}); err != nil {
 		t.Fatalf("restore projection: %v", err)
 	}
@@ -81,7 +81,7 @@ func TestProjectionRejectsDuplicateClientOriginsAcrossAccesses(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	projection := access.NewSnapshotProjection()
+	projection := newProjection(t)
 	if err := projection.Restore([]access.AccessPlanSnapshot{
 		first,
 		second,
@@ -103,9 +103,14 @@ func TestIngressBindingAllowsProviderPlanAdvanceButRejectsEndpointChange(
 	if err != nil {
 		t.Fatal(err)
 	}
-	providerOnlyRevision, err := compiler.Compile(
-		testAggregate(t, accessID, 2, "Provider-only revision"),
+	providerOnlyAggregate := testAggregate(
+		t,
+		accessID,
+		2,
+		"Provider-only revision",
 	)
+	providerOnlyAggregate.AgentEndpoint.Revision = 1
+	providerOnlyRevision, err := compiler.Compile(providerOnlyAggregate)
 	if err != nil {
 		t.Fatal(err)
 	}

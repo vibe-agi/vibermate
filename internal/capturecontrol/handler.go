@@ -55,7 +55,7 @@ type Options struct {
 	Verifier    clientadapter.Verifier
 	Authorities access.IngressCatalogReader
 	ProxyOrigin string
-	Root        localca.Root
+	Root        localca.RootCertificate
 	Launcher    *LauncherAuthority
 	RunLifetime time.Duration
 	Clock       Clock
@@ -66,7 +66,7 @@ type Handler struct {
 	verifier    clientadapter.Verifier
 	authorities access.IngressCatalogReader
 	proxyOrigin string
-	root        localca.Root
+	root        localca.RootCertificate
 	launcher    *LauncherAuthority
 	runLifetime time.Duration
 	clock       Clock
