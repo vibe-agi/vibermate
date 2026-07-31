@@ -495,6 +495,34 @@ func TestCodexHTTPFallbackMessageRequiresBoundedTransportDetail(t *testing.T) {
 	}
 }
 
+func TestCodexJSONLFallbackAcceptsOnlyTypedErrorEnvelopes(t *testing.T) {
+	t.Parallel()
+
+	run := &agentRun{clientID: acceptanceClientCodexCLI}
+	run.observeLine(mustJSON(t, map[string]any{
+		"type": "assistant_message",
+		"text": codexHTTPFallbackPrefix + "synthetic transport failure",
+	}))
+	if run.httpFallbackSeen {
+		t.Fatal("untrusted envelope forged HTTP fallback evidence")
+	}
+	run.observeLine(mustJSON(t, map[string]any{
+		"type":    "error",
+		"message": "unrelated client error",
+	}))
+	if run.httpFallbackSeen {
+		t.Fatal("unrelated typed error forged HTTP fallback evidence")
+	}
+	run.observeLine(mustJSON(t, map[string]any{
+		"type": "error",
+		"message": codexHTTPFallbackPrefix +
+			"synthetic transport failure",
+	}))
+	if !run.httpFallbackSeen {
+		t.Fatal("typed fallback error was not observed")
+	}
+}
+
 func TestCodexJSONLRejectsConflictingThreadIdentity(t *testing.T) {
 	t.Parallel()
 

@@ -652,6 +652,14 @@ func (run *agentRun) observeCodexLine(line []byte) {
 	case "turn.failed":
 		run.failure.merge(extractAgentFailureEvidence(line))
 		run.lastType = kind
+	case "error":
+		var message string
+		if json.Unmarshal(envelope["message"], &message) == nil &&
+			isCodexHTTPFallbackMessage(message) {
+			run.httpFallbackSeen = true
+		}
+		run.failure.merge(extractAgentFailureEvidence(line))
+		run.lastType = kind
 	case "item.started", "item.updated":
 		if run.turnStarted && !run.turnCompleted {
 			run.lastType = kind
