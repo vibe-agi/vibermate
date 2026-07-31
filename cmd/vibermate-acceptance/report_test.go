@@ -12,6 +12,9 @@ import (
 
 func TestWriteReportPublishesPrivateRedactedEvidence(t *testing.T) {
 	t.Parallel()
+	if reportSchema != "vibermate.m0-assembly-acceptance/v5" {
+		t.Fatalf("report schema = %q", reportSchema)
+	}
 
 	client := acceptanceClient{
 		ID:      acceptanceClientCodexCLI,

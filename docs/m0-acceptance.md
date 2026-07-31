@@ -91,7 +91,7 @@ The acceptance runner rejects:
 - an unpinned build or acceptance-host toolchain;
 - a missing, malformed, oversized, or unknown-field manifest.
 
-The v4 report records the selected client identity and typed compound adapter
+The v5 report records the selected client identity and typed compound adapter
 evidence, deterministic App-bundle manifest digest, individual artifact
 digests, build and host toolchains, build profiles, configuration digests, and
 redacted run configuration. It is atomically replaced with mode `0600`. It
@@ -135,8 +135,9 @@ The deterministic sequence verifies:
 5. one executable Access commits as revision 1;
 6. the fixed client reaches the exact configured ingress while egress is held;
    Claude queues approved original-origin control traffic, while fixed Codex
-   receives a bounded local 426 and its HTTP fallback queues the frozen provider
-   target, both with zero active egress;
+   emits its trusted HTTP-fallback event and independently produces the bounded
+   local 426-to-HTTP proxy audit before queuing the frozen provider target, both
+   with zero active egress;
 7. Resume performs no-credential probes for every queued frozen target before
    release; strict HTTPS targets complete TLS, while the literal-loopback
    cleartext exception completes an exact TCP peer check;

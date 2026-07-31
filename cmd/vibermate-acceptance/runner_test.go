@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -195,6 +196,93 @@ func TestToolApprovalSpecUsesTheSelectedClientToolAndBoundedProof(
 				t.Fatal("unexpected proof content passed verification")
 			}
 		})
+	}
+}
+
+func TestAcceptanceReportDetailsMatchTheObservedClientEvidence(t *testing.T) {
+	t.Parallel()
+
+	for _, test := range []struct {
+		name       string
+		evidence   toolApprovalEvidence
+		wantDetail string
+	}{
+		{
+			name: "Claude Write",
+			evidence: toolApprovalEvidence{
+				ClientID: acceptanceClientClaudeCode,
+				ToolName: "Write",
+				Approved: true,
+			},
+			wantDetail: "Write remained behind the durable allow-once barrier and produced the bounded proof file",
+		},
+		{
+			name: "Codex exec",
+			evidence: toolApprovalEvidence{
+				ClientID: acceptanceClientCodexCLI,
+				ToolName: "exec",
+				Approved: true,
+			},
+			wantDetail: "exec remained behind the durable allow-once barrier and produced the bounded proof file",
+		},
+	} {
+		test := test
+		t.Run(test.name, func(t *testing.T) {
+			detail, err := test.evidence.reportDetail()
+			if err != nil {
+				t.Fatal(err)
+			}
+			if detail != test.wantDetail {
+				t.Fatalf("report detail = %q", detail)
+			}
+		})
+	}
+
+	if _, err := (toolApprovalEvidence{
+		ClientID: acceptanceClientCodexCLI,
+		ToolName: "Write",
+		Approved: true,
+	}).reportDetail(); err == nil {
+		t.Fatal("mismatched Codex tool produced report evidence")
+	}
+
+	claudeDetail, err := (heldStreamingEvidence{
+		ClientID:     acceptanceClientClaudeCode,
+		ClientDeltas: 2,
+		Completed:    true,
+	}).reportDetail()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if claudeDetail !=
+		"held request resumed and returned multiple streamed client deltas" {
+		t.Fatalf("Claude streaming detail = %q", claudeDetail)
+	}
+
+	codexDetail, err := (heldStreamingEvidence{
+		ClientID:     acceptanceClientCodexCLI,
+		ClientDeltas: 0,
+		Completed:    true,
+	}).reportDetail()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if codexDetail !=
+		"held request resumed and completed through the Responses streaming path" {
+		t.Fatalf("Codex streaming detail = %q", codexDetail)
+	}
+	for _, forbidden := range []string{"multiple", "delta", "TUI", "token"} {
+		if strings.Contains(codexDetail, forbidden) {
+			t.Fatalf("Codex detail overclaimed %q: %q", forbidden, codexDetail)
+		}
+	}
+
+	if _, err := (heldStreamingEvidence{
+		ClientID:     acceptanceClientClaudeCode,
+		ClientDeltas: 1,
+		Completed:    true,
+	}).reportDetail(); err == nil {
+		t.Fatal("insufficient Claude deltas produced report evidence")
 	}
 }
 
@@ -484,6 +572,76 @@ func TestResponsesHTTPFallbackAuditRequiresBoundedNegotiationAndActiveHTTP(
 		t.Fatalf(
 			"credentialed negotiation ready=%t error=%v",
 			ready,
+			err,
+		)
+	}
+}
+
+func TestCodexHTTPFallbackEvidenceRequiresClientEventAndConnectionAudit(
+	t *testing.T,
+) {
+	t.Parallel()
+
+	clientEvent := &agentRun{
+		clientID:         acceptanceClientCodexCLI,
+		httpFallbackSeen: true,
+		changed:          make(chan struct{}),
+	}
+	auditCalls := 0
+	evidence, err := waitForCodexHTTPFallbackEvidence(
+		context.Background(),
+		clientEvent,
+		func(context.Context) error {
+			auditCalls++
+			return nil
+		},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !evidence.ClientEvent || !evidence.ConnectionAudit || auditCalls != 1 {
+		t.Fatalf(
+			"fallback evidence = %+v auditCalls=%d",
+			evidence,
+			auditCalls,
+		)
+	}
+
+	auditFailure := errors.New("audit unavailable")
+	evidence, err = waitForCodexHTTPFallbackEvidence(
+		context.Background(),
+		clientEvent,
+		func(context.Context) error {
+			return auditFailure
+		},
+	)
+	if !errors.Is(err, auditFailure) ||
+		!evidence.ClientEvent ||
+		evidence.ConnectionAudit {
+		t.Fatalf("partial fallback evidence = %+v error=%v", evidence, err)
+	}
+
+	missingEvent := &agentRun{
+		clientID: acceptanceClientCodexCLI,
+		changed:  make(chan struct{}),
+	}
+	cancelled, cancel := context.WithCancel(context.Background())
+	cancel()
+	auditCalls = 0
+	evidence, err = waitForCodexHTTPFallbackEvidence(
+		cancelled,
+		missingEvent,
+		func(context.Context) error {
+			auditCalls++
+			return nil
+		},
+	)
+	if err == nil || evidence.ClientEvent || evidence.ConnectionAudit ||
+		auditCalls != 0 {
+		t.Fatalf(
+			"missing client event evidence = %+v auditCalls=%d error=%v",
+			evidence,
+			auditCalls,
 			err,
 		)
 	}

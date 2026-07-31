@@ -11,7 +11,7 @@ import (
 	"github.com/vibe-agi/vibermate/internal/clientadapter"
 )
 
-const reportSchema = "vibermate.m0-assembly-acceptance/v4"
+const reportSchema = "vibermate.m0-assembly-acceptance/v5"
 
 type checkStatus string
 

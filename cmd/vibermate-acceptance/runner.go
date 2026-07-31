@@ -203,16 +203,16 @@ func runAcceptance(
 		"fixed client crossed its exact ingress and controlled-egress boundary; queuedKinds="+preflight.queuedKinds,
 	)
 	if client.ID == acceptanceClientCodexCLI {
-		if !preflight.httpFallbackSeen {
+		if err := preflight.codexHTTPFallback.validate(); err != nil {
 			return fail(
 				"fixed-codex-http-fallback",
-				errors.New("fixed Codex did not expose HTTP fallback evidence"),
+				err,
 			)
 		}
 		report.add(
 			"fixed-codex-http-fallback",
 			checkPassed,
-			"the bounded local 426 caused fixed Codex to select Responses HTTP",
+			"fixed Codex reported its HTTP fallback and the proxy audit proved the bounded 426-to-HTTP transition",
 		)
 	}
 	report.add(
@@ -474,21 +474,31 @@ func runAcceptance(
 			"two successful Exchanges retained one private Codex thread identity across exec resume",
 		)
 	}
-	if err := runToolApproval(ctx, config, third); err != nil {
+	toolEvidence, err := runToolApproval(ctx, config, third)
+	if err != nil {
+		return fail("tool-approval", err)
+	}
+	toolDetail, err := toolEvidence.reportDetail()
+	if err != nil {
 		return fail("tool-approval", err)
 	}
 	report.add(
 		"tool-approval",
 		checkPassed,
-		"Write remained behind the durable allow-once barrier and produced the bounded proof file",
+		toolDetail,
 	)
-	if err := runHeldStreaming(ctx, config, third); err != nil {
+	streamingEvidence, err := runHeldStreaming(ctx, config, third)
+	if err != nil {
+		return fail("planned-hold-streaming", err)
+	}
+	streamingDetail, err := streamingEvidence.reportDetail()
+	if err != nil {
 		return fail("planned-hold-streaming", err)
 	}
 	report.add(
 		"planned-hold-streaming",
 		checkPassed,
-		"held request resumed and returned multiple streamed deltas",
+		streamingDetail,
 	)
 	if err := runAgentInterrupt(ctx, config, third); err != nil {
 		return fail("agent-sigint", err)
@@ -620,7 +630,49 @@ type ingressPreflightEvidence struct {
 	queuedKinds        string
 	providerReason     string
 	connectionBaseline int64
-	httpFallbackSeen   bool
+	codexHTTPFallback  codexHTTPFallbackEvidence
+}
+
+type codexHTTPFallbackEvidence struct {
+	ClientEvent     bool
+	ConnectionAudit bool
+}
+
+func (evidence codexHTTPFallbackEvidence) validate() error {
+	if !evidence.ClientEvent || !evidence.ConnectionAudit {
+		return errors.New(
+			"Codex HTTP fallback requires both the typed client event and proxy connection audit",
+		)
+	}
+	return nil
+}
+
+func waitForCodexHTTPFallbackEvidence(
+	ctx context.Context,
+	run *agentRun,
+	audit func(context.Context) error,
+) (codexHTTPFallbackEvidence, error) {
+	if ctx == nil || run == nil || audit == nil {
+		return codexHTTPFallbackEvidence{}, errors.New(
+			"complete Codex HTTP fallback evidence dependencies are required",
+		)
+	}
+	evidence := codexHTTPFallbackEvidence{}
+	if err := run.waitForHTTPFallback(ctx); err != nil {
+		return evidence, fmt.Errorf(
+			"observe typed Codex HTTP fallback event: %w",
+			err,
+		)
+	}
+	evidence.ClientEvent = true
+	if err := audit(ctx); err != nil {
+		return evidence, fmt.Errorf(
+			"validate Codex HTTP fallback connection audit: %w",
+			err,
+		)
+	}
+	evidence.ConnectionAudit = true
+	return evidence, nil
 }
 
 func runHeldIngressPreflight(
@@ -713,23 +765,28 @@ func runHeldIngressPreflight(
 	if err != nil {
 		return ingressPreflightEvidence{}, err
 	}
-	httpFallbackSeen := false
+	fallbackEvidence := codexHTTPFallbackEvidence{}
 	if config.clientID == acceptanceClientCodexCLI {
 		fallbackContext, cancelFallback := context.WithTimeout(
 			ctx,
 			10*time.Second,
 		)
-		err = waitForResponsesHTTPFallbackAudit(
+		fallbackEvidence, err = waitForCodexHTTPFallbackEvidence(
 			fallbackContext,
-			generation.control,
-			config,
-			connectionBaseline,
+			run,
+			func(auditContext context.Context) error {
+				return waitForResponsesHTTPFallbackAudit(
+					auditContext,
+					generation.control,
+					config,
+					connectionBaseline,
+				)
+			},
 		)
 		cancelFallback()
 		if err != nil {
 			return ingressPreflightEvidence{}, err
 		}
-		httpFallbackSeen = true
 	}
 	queuedKinds, err := queuedKindSummary(queued)
 	if err != nil {
@@ -785,7 +842,7 @@ func runHeldIngressPreflight(
 		queuedKinds:        queuedKinds,
 		providerReason:     reasonCode,
 		connectionBaseline: connectionBaseline,
-		httpFallbackSeen:   httpFallbackSeen,
+		codexHTTPFallback:  fallbackEvidence,
 	}, nil
 }
 
@@ -1938,25 +1995,53 @@ func waitForExchangeFailureAfter(
 	}
 }
 
+type heldStreamingEvidence struct {
+	ClientID     acceptanceClientID
+	ClientDeltas int
+	Completed    bool
+}
+
+func (evidence heldStreamingEvidence) reportDetail() (string, error) {
+	if !evidence.Completed || evidence.ClientDeltas < 0 {
+		return "", errors.New("held streaming evidence is incomplete")
+	}
+	switch evidence.ClientID {
+	case acceptanceClientClaudeCode:
+		if evidence.ClientDeltas < 2 {
+			return "", errors.New(
+				"Claude held streaming evidence requires multiple client deltas",
+			)
+		}
+		return "held request resumed and returned multiple streamed client deltas", nil
+	case acceptanceClientCodexCLI:
+		return "held request resumed and completed through the Responses streaming path", nil
+	default:
+		return "", errors.New("held streaming report client is unsupported")
+	}
+}
+
 func runHeldStreaming(
 	ctx context.Context,
 	config config,
 	generation *daemonGeneration,
-) error {
+) (heldStreamingEvidence, error) {
 	hold, err := generation.control.offline(ctx)
 	if err != nil {
-		return err
+		return heldStreamingEvidence{}, err
 	}
 	hold, err = generation.control.offlineAction(ctx, "enter", hold.Revision)
 	if err != nil {
-		return err
+		return heldStreamingEvidence{}, err
 	}
 	if hold.State != offlinehold.StateHeld || !hold.SafeToDisconnect {
-		return fmt.Errorf("offline hold did not settle: %+v", hold)
+		return heldStreamingEvidence{}, fmt.Errorf(
+			"offline hold did not settle: %+v",
+			hold,
+		)
 	}
 	workingDirectory, err := os.MkdirTemp("", "vibermate-agent-stream-*")
 	if err != nil {
-		return err
+		return heldStreamingEvidence{}, err
 	}
 	defer os.RemoveAll(workingDirectory)
 	run, err := startAgent(
@@ -1967,14 +2052,14 @@ func runHeldStreaming(
 		"VIBEMATE_STREAM_OK",
 	)
 	if err != nil {
-		return err
+		return heldStreamingEvidence{}, err
 	}
 	if err := waitForQueuedEgress(ctx, generation.control, run); err != nil {
-		return err
+		return heldStreamingEvidence{}, err
 	}
 	current, err := generation.control.offline(ctx)
 	if err != nil {
-		return err
+		return heldStreamingEvidence{}, err
 	}
 	resumed, err := generation.control.offlineAction(
 		ctx,
@@ -1982,35 +2067,45 @@ func runHeldStreaming(
 		current.Revision,
 	)
 	if err != nil {
-		return err
+		return heldStreamingEvidence{}, err
 	}
 	if err := requireReleasedOfflineRequest(resumed); err != nil {
-		return err
+		return heldStreamingEvidence{}, err
 	}
 	waitContext, cancel := context.WithTimeout(ctx, 3*time.Minute)
 	defer cancel()
 	exitCode, err := run.wait(waitContext)
 	if err != nil || exitCode != 0 {
-		return agentProcessFailure("streaming", exitCode, err, run)
-	}
-	_, deltas, _, marker := run.evidence()
-	if config.clientID == acceptanceClientClaudeCode &&
-		(deltas < 2 || !marker) {
-		return fmt.Errorf(
-			"streaming evidence deltas=%d marker=%t",
-			deltas,
-			marker,
+		return heldStreamingEvidence{}, agentProcessFailure(
+			"streaming",
+			exitCode,
+			err,
+			run,
 		)
 	}
-	if config.clientID != acceptanceClientClaudeCode {
-		if err := requireSuccessfulAgentEvidence(
-			config.clientID,
-			run,
-		); err != nil {
-			return fmt.Errorf("held streaming evidence: %w", err)
-		}
+	if err := requireSuccessfulAgentEvidence(config.clientID, run); err != nil {
+		return heldStreamingEvidence{}, fmt.Errorf(
+			"held streaming evidence: %w",
+			err,
+		)
 	}
-	return waitForOfflineSettlement(ctx, generation.control, 10*time.Second)
+	_, deltas, _, _ := run.evidence()
+	evidence := heldStreamingEvidence{
+		ClientID:     config.clientID,
+		ClientDeltas: deltas,
+		Completed:    true,
+	}
+	if _, err := evidence.reportDetail(); err != nil {
+		return heldStreamingEvidence{}, err
+	}
+	if err := waitForOfflineSettlement(
+		ctx,
+		generation.control,
+		10*time.Second,
+	); err != nil {
+		return heldStreamingEvidence{}, err
+	}
+	return evidence, nil
 }
 
 func requireReleasedOfflineRequest(snapshot offlinehold.Snapshot) error {
@@ -2143,14 +2238,42 @@ func agentExitedBeforeHeldEgress(
 	)
 }
 
+type toolApprovalEvidence struct {
+	ClientID acceptanceClientID
+	ToolName string
+	Approved bool
+}
+
+func (evidence toolApprovalEvidence) reportDetail() (string, error) {
+	if !evidence.Approved {
+		return "", errors.New("tool approval evidence is incomplete")
+	}
+	expected := ""
+	switch evidence.ClientID {
+	case acceptanceClientClaudeCode:
+		expected = "Write"
+	case acceptanceClientCodexCLI:
+		expected = "exec"
+	default:
+		return "", errors.New("tool approval report client is unsupported")
+	}
+	if evidence.ToolName != expected {
+		return "", errors.New(
+			"tool approval evidence does not match the selected client",
+		)
+	}
+	return evidence.ToolName +
+		" remained behind the durable allow-once barrier and produced the bounded proof file", nil
+}
+
 func runToolApproval(
 	ctx context.Context,
 	config config,
 	generation *daemonGeneration,
-) error {
+) (toolApprovalEvidence, error) {
 	workingDirectory, err := os.MkdirTemp("", "vibermate-agent-tool-*")
 	if err != nil {
-		return err
+		return toolApprovalEvidence{}, err
 	}
 	defer os.RemoveAll(workingDirectory)
 	spec, err := newToolApprovalSpec(
@@ -2158,7 +2281,7 @@ func runToolApproval(
 		workingDirectory,
 	)
 	if err != nil {
-		return err
+		return toolApprovalEvidence{}, err
 	}
 	run, err := startAgent(
 		config,
@@ -2168,11 +2291,11 @@ func runToolApproval(
 		spec.marker,
 	)
 	if err != nil {
-		return err
+		return toolApprovalEvidence{}, err
 	}
 	if config.clientID == acceptanceClientClaudeCode {
 		if err := run.waitForConfiguredTool(ctx, spec.toolName); err != nil {
-			return err
+			return toolApprovalEvidence{}, err
 		}
 	}
 	if _, statErr := os.Stat(spec.proofPath); !errors.Is(
@@ -2180,21 +2303,29 @@ func runToolApproval(
 		os.ErrNotExist,
 	) {
 		if statErr == nil {
-			return errors.New("tool side effect occurred before approval")
+			return toolApprovalEvidence{}, errors.New(
+				"tool side effect occurred before approval",
+			)
 		}
-		return fmt.Errorf("inspect pre-approval tool proof: %w", statErr)
+		return toolApprovalEvidence{}, fmt.Errorf(
+			"inspect pre-approval tool proof: %w",
+			statErr,
+		)
 	}
 	approval, err := waitForApproval(ctx, generation.control, run)
 	if err != nil {
-		return err
+		return toolApprovalEvidence{}, err
 	}
 	if len(approval.ToolNames) != 1 ||
 		approval.ToolNames[0] != spec.toolName {
-		return fmt.Errorf("unexpected approval tools: %v", approval.ToolNames)
+		return toolApprovalEvidence{}, fmt.Errorf(
+			"unexpected approval tools: %v",
+			approval.ToolNames,
+		)
 	}
 	_, _, toolUsesBeforeDecision, markerBeforeDecision := run.evidence()
 	if toolUsesBeforeDecision != 0 || markerBeforeDecision {
-		return fmt.Errorf(
+		return toolApprovalEvidence{}, fmt.Errorf(
 			"tool stream leaked before approval: toolUses=%d marker=%t",
 			toolUsesBeforeDecision,
 			markerBeforeDecision,
@@ -2202,29 +2333,45 @@ func runToolApproval(
 	}
 	resolved, err := generation.control.allowOnce(ctx, approval)
 	if err != nil {
-		return err
+		return toolApprovalEvidence{}, err
 	}
 	if resolved.State != toolapproval.StateAllowed {
-		return fmt.Errorf("approval did not resolve allowed: %+v", resolved)
+		return toolApprovalEvidence{}, fmt.Errorf(
+			"approval did not resolve allowed: %+v",
+			resolved,
+		)
 	}
 	waitContext, cancel := context.WithTimeout(ctx, 3*time.Minute)
 	defer cancel()
 	exitCode, err := run.wait(waitContext)
 	if err != nil || exitCode != 0 {
-		return agentProcessFailure("tool", exitCode, err, run)
+		return toolApprovalEvidence{}, agentProcessFailure(
+			"tool",
+			exitCode,
+			err,
+			run,
+		)
 	}
 	_, _, toolUses, marker := run.evidence()
 	if toolUses == 0 || !marker {
-		return fmt.Errorf(
+		return toolApprovalEvidence{}, fmt.Errorf(
 			"tool approval evidence toolUses=%d marker=%t",
 			toolUses,
 			marker,
 		)
 	}
 	if err := verifyToolApprovalProof(spec); err != nil {
-		return err
+		return toolApprovalEvidence{}, err
 	}
-	return nil
+	evidence := toolApprovalEvidence{
+		ClientID: config.clientID,
+		ToolName: spec.toolName,
+		Approved: true,
+	}
+	if _, err := evidence.reportDetail(); err != nil {
+		return toolApprovalEvidence{}, err
+	}
+	return evidence, nil
 }
 
 type toolApprovalSpec struct {

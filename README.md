@@ -142,7 +142,7 @@ recompiles the same revision and hash from SQLite. ProductRuntime reports only
 `initialized`; DesktopHost derives product readiness and withdraws discovery
 before shutdown. Unit and component tests do not by themselves prove packaged
 Claude, provider, `SIGINT`, or force-kill behavior; those claims require a
-passing private v4 report from the clean frozen artifact.
+passing private v5 report from the clean frozen artifact.
 
 Even a passing M0 assembly report does not prove physical network loss/sleep,
 power-loss durability, arbitrary client/provider compatibility, Root
