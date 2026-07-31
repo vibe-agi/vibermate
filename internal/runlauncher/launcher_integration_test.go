@@ -180,6 +180,55 @@ func TestLauncherRejectsControlRedirectWithoutStartingChild(t *testing.T) {
 	}
 }
 
+func TestLauncherBoundsCaptureRunCreation(t *testing.T) {
+	t.Parallel()
+
+	releaseRequest := make(chan struct{})
+	server := httptest.NewServer(http.HandlerFunc(func(
+		_ http.ResponseWriter,
+		_ *http.Request,
+	) {
+		<-releaseRequest
+	}))
+	defer func() {
+		close(releaseRequest)
+		server.Close()
+	}()
+	launcher, err := runlauncher.New(runlauncher.Config{
+		Discovery: fixedDiscovery{session: launcherdiscovery.Session{
+			BaseURL:       server.URL,
+			LauncherToken: capability(0x52),
+		}},
+		BaseEnvironment: []string{"PATH=/usr/bin:/bin"},
+		ControlTimeout:  50 * time.Millisecond,
+		Getwd: func() (string, error) {
+			return t.TempDir(), nil
+		},
+		LookPath: func(string) (string, error) {
+			return "/bin/echo", nil
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	finished := make(chan error, 1)
+	go func() {
+		_, runErr := launcher.Run(
+			context.Background(),
+			[]string{"echo"},
+		)
+		finished <- runErr
+	}()
+	select {
+	case runErr := <-finished:
+		if runErr == nil {
+			t.Fatal("unresponsive CaptureRun creation succeeded")
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("CaptureRun creation ignored the configured control timeout")
+	}
+}
+
 type fixedDiscovery struct {
 	session launcherdiscovery.Session
 	err     error

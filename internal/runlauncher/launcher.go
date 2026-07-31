@@ -112,11 +112,22 @@ func (launcher *Launcher) Run(
 		return 1, fmt.Errorf("construct launcher control client: %w", err)
 	}
 	defer control.close()
-	grant, err := control.create(ctx, capturecontrol.CreateRequest{
-		CWD:            cwd,
-		Command:        append([]string(nil), command...),
-		ExecutablePath: executable,
-	})
+	var grant capturecontrol.LaunchGrant
+	err = launcher.callWithTimeout(
+		ctx,
+		func(call context.Context) error {
+			var createErr error
+			grant, createErr = control.create(
+				call,
+				capturecontrol.CreateRequest{
+					CWD:            cwd,
+					Command:        append([]string(nil), command...),
+					ExecutablePath: executable,
+				},
+			)
+			return createErr
+		},
+	)
 	if err != nil {
 		return 1, err
 	}
