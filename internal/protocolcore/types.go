@@ -1270,6 +1270,7 @@ const (
 	NoticeReasoningExecutionNotForwarded      NoticeCode = "reasoning_execution_not_forwarded"
 	NoticeToolItemIdentityNotForwarded        NoticeCode = "tool_item_identity_not_forwarded"
 	NoticeCustomToolKindEncoded               NoticeCode = "custom_tool_kind_encoded"
+	NoticeDeveloperRoleNormalized             NoticeCode = "developer_role_normalized"
 )
 
 type TranslationNotice struct {

@@ -62,7 +62,7 @@ func TestPathComposesFixedResponsesRequestWithExistingChatBackend(
 	}
 	if wire.Model != "provider-model" ||
 		len(wire.Messages) != 2 ||
-		wire.Messages[0].Role != "developer" ||
+		wire.Messages[0].Role != "system" ||
 		wire.Messages[1].Role != "user" ||
 		len(wire.Tools) != 3 ||
 		wire.MaxTokens != nil ||
@@ -88,6 +88,7 @@ func TestPathComposesFixedResponsesRequestWithExistingChatBackend(
 		protocolcore.NoticeCustomToolGrammarNotForwarded,
 		protocolcore.NoticeToolNamespaceEncoded,
 		protocolcore.NoticeReasoningEffortDowngraded,
+		protocolcore.NoticeDeveloperRoleNormalized,
 	} {
 		if !reportsHaveNotice(clientReport, backendReport, code) {
 			t.Fatalf(

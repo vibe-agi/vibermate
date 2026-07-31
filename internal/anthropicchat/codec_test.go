@@ -169,6 +169,7 @@ func TestProviderRequestProfileSelectsOneTokenFieldAndToolReasoningMode(
 		completionTokenField: CompletionTokenFieldMaxCompletionTokens,
 		toolReasoningMode:    ToolReasoningModeNone,
 		disabledReasoning:    DisabledReasoningModeNone,
+		instructionRoleMode:  InstructionRolePreserveDeveloper,
 	}
 	codec, err := New(options)
 	if err != nil {

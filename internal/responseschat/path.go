@@ -17,7 +17,7 @@ import (
 
 const (
 	CodecPairID   = "openai-responses-to-openai-chat"
-	CodecRevision = 1
+	CodecRevision = 2
 )
 
 type Options struct {
@@ -26,9 +26,12 @@ type Options struct {
 }
 
 func DefaultOptions() Options {
+	chat := anthropicchat.DefaultOptions()
+	chat.ProviderRequest =
+		anthropicchat.SystemInstructionCompatibilityProfile()
 	return Options{
 		Responses: openairesponses.DefaultOptions(),
-		Chat:      anthropicchat.DefaultOptions(),
+		Chat:      chat,
 	}
 }
 

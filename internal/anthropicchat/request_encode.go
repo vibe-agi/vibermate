@@ -104,7 +104,11 @@ func (codec *Codec) EncodeProviderRequest(
 	}
 	report := protocolcore.TranslationReport{}
 	for messageIndex, message := range request.Messages {
-		encoded, normalized, err := encodeMessage(message, toolCatalog)
+		encoded, normalized, err := encodeMessage(
+			message,
+			toolCatalog,
+			codec.providerRequest.instructionRoleMode,
+		)
 		if err != nil {
 			return nil, report, protocolcore.NewFailure(
 				protocolcore.ReasonUnsupportedClientInput,
@@ -122,6 +126,16 @@ func (codec *Codec) EncodeProviderRequest(
 				Code: protocolcore.NoticeContentOrderNormalized,
 				Path: "$.messages[" + integerString(messageIndex) + "].content",
 			}))
+		}
+		if message.Role == protocolcore.RoleDeveloper &&
+			codec.providerRequest.instructionRoleMode ==
+				InstructionRoleNormalizeDeveloperToSystem {
+			report = report.Merge(protocolcore.NewTranslationReport(
+				protocolcore.TranslationNotice{
+					Code: protocolcore.NoticeDeveloperRoleNormalized,
+					Path: "$.messages[" + integerString(messageIndex) + "].role",
+				},
+			))
 		}
 	}
 
@@ -455,6 +469,7 @@ func openAINamedToolChoice(name string) openAINamedToolChoiceWire {
 func encodeMessage(
 	message protocolcore.Message,
 	toolCatalog providerToolCatalog,
+	instructionRoleMode InstructionRoleMode,
 ) ([]openAIRequestMessageWire, bool, error) {
 	switch message.Role {
 	case protocolcore.RoleSystem, protocolcore.RoleDeveloper:
@@ -467,8 +482,14 @@ func encodeMessage(
 			}
 			text += block.Text
 		}
+		role := string(message.Role)
+		if message.Role == protocolcore.RoleDeveloper &&
+			instructionRoleMode ==
+				InstructionRoleNormalizeDeveloperToSystem {
+			role = string(protocolcore.RoleSystem)
+		}
 		return []openAIRequestMessageWire{{
-			Role:    string(message.Role),
+			Role:    role,
 			Content: stringPointer(text),
 		}}, false, nil
 

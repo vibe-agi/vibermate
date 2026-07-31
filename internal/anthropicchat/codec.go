@@ -39,12 +39,21 @@ const (
 	DisabledReasoningModeNone
 )
 
+type InstructionRoleMode uint8
+
+const (
+	instructionRoleModeUnknown InstructionRoleMode = iota
+	InstructionRolePreserveDeveloper
+	InstructionRoleNormalizeDeveloperToSystem
+)
+
 // ProviderRequestProfile freezes the provider-side Chat request shape for one
 // codec revision. It contains no target host or model-specific dispatch.
 type ProviderRequestProfile struct {
 	completionTokenField CompletionTokenField
 	toolReasoningMode    ToolReasoningMode
 	disabledReasoning    DisabledReasoningMode
+	instructionRoleMode  InstructionRoleMode
 }
 
 func OpenAIChatCompatibilityProfile() ProviderRequestProfile {
@@ -52,6 +61,19 @@ func OpenAIChatCompatibilityProfile() ProviderRequestProfile {
 		completionTokenField: CompletionTokenFieldMaxTokens,
 		toolReasoningMode:    ToolReasoningModeOmit,
 		disabledReasoning:    DisabledReasoningModeOmit,
+		instructionRoleMode:  InstructionRolePreserveDeveloper,
+	}
+}
+
+// SystemInstructionCompatibilityProfile targets Chat implementations whose
+// message-role capability predates the developer role. The semantic downgrade
+// is explicit in TranslationReport rather than selected by provider identity.
+func SystemInstructionCompatibilityProfile() ProviderRequestProfile {
+	return ProviderRequestProfile{
+		completionTokenField: CompletionTokenFieldMaxTokens,
+		toolReasoningMode:    ToolReasoningModeOmit,
+		disabledReasoning:    DisabledReasoningModeOmit,
+		instructionRoleMode:  InstructionRoleNormalizeDeveloperToSystem,
 	}
 }
 
@@ -71,6 +93,12 @@ func (profile ProviderRequestProfile) validate() error {
 	case DisabledReasoningModeOmit, DisabledReasoningModeNone:
 	default:
 		return errors.New("Chat disabled reasoning mode is invalid")
+	}
+	switch profile.instructionRoleMode {
+	case InstructionRolePreserveDeveloper,
+		InstructionRoleNormalizeDeveloperToSystem:
+	default:
+		return errors.New("Chat instruction role mode is invalid")
 	}
 	return nil
 }
