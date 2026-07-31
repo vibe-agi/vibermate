@@ -77,6 +77,7 @@ type Capability struct {
 	operationID    access.ClientOperationID
 	revision       access.Revision
 	kind           Kind
+	transport      access.ClientOperationTransport
 	method         string
 	path           string
 	bodyKind       BodyKind
@@ -97,6 +98,10 @@ func (capability Capability) Revision() access.Revision {
 
 func (capability Capability) Kind() Kind {
 	return capability.kind
+}
+
+func (capability Capability) Transport() access.ClientOperationTransport {
+	return capability.transport
 }
 
 func (capability Capability) Method() string {
@@ -178,6 +183,7 @@ func NewCatalog(
 				operationID:    definition.ID(),
 				revision:       definition.Revision(),
 				kind:           kind,
+				transport:      definition.Transport(),
 				method:         method,
 				path:           definition.PathPattern(),
 				bodyKind:       bodyKind,
@@ -194,12 +200,19 @@ func NewCatalog(
 				dialect: definition.ClientDialect(),
 				path:    definition.PathPattern(),
 			}
-			if _, duplicate := catalog.byPath[key]; duplicate {
-				return nil, errors.New(
-					"PathCapability exact definition is duplicated",
-				)
+			existing, found := catalog.byPath[key]
+			if !found {
+				existing = make(map[string]Capability)
+				catalog.byPath[key] = existing
 			}
-			catalog.byPath[key] = methods
+			for method, capability := range methods {
+				if _, duplicate := existing[method]; duplicate {
+					return nil, errors.New(
+						"PathCapability exact method is duplicated",
+					)
+				}
+				existing[method] = capability
+			}
 		case access.ClientOperationPathPrefix:
 			for _, existing := range catalog.prefixes[definition.ClientDialect()] {
 				if existing.path == definition.PathPattern() {
@@ -281,6 +294,7 @@ func (catalog *Catalog) Classify(
 	if !known {
 		return Capability{
 			kind:          KindOpaque,
+			transport:     access.ClientOperationTransportHTTP,
 			method:        method,
 			path:          requestPath,
 			bodyKind:      BodyOpaque,

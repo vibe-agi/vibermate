@@ -137,6 +137,7 @@ func mustClientOperationDefinition(
 			PathPattern:    path,
 			PathMatch:      access.ClientOperationPathExact,
 			Kind:           access.ClientOperationSemantic,
+			Transport:      access.ClientOperationTransportHTTP,
 			BodyKind:       access.ClientOperationBodyJSON,
 			ReplayClass:    access.ClientReplayGenerationCostOnly,
 			CodecFeature:   feature,

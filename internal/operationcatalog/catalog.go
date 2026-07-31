@@ -12,20 +12,21 @@ import (
 )
 
 const (
-	AnthropicMessagesCreateID      = "anthropic-messages-create"
-	AnthropicMessagesCountTokensID = "anthropic-messages-count-tokens"
-	OpenAIResponsesCreateID        = "openai-responses-create"
-	OpenAIResponsesManagementID    = "openai-responses-management"
-	OpenAIFilesUnsupportedID       = "openai-files-unsupported"
-	OpenAIUploadsUnsupportedID     = "openai-uploads-unsupported"
-	OpenAIBatchesUnsupportedID     = "openai-batches-unsupported"
-	OpenAIAudioUnsupportedID       = "openai-audio-unsupported"
-	OpenAIImagesUnsupportedID      = "openai-images-unsupported"
-	OpenAIVideosUnsupportedID      = "openai-videos-unsupported"
-	OpenAIRealtimeUnsupportedID    = "openai-realtime-unsupported"
-	OpenAIChatUnsupportedID        = "openai-chat-unsupported"
-	OpenAICompletionsUnsupportedID = "openai-completions-unsupported"
-	OpenAIEmbeddingsUnsupportedID  = "openai-embeddings-unsupported"
+	AnthropicMessagesCreateID             = "anthropic-messages-create"
+	AnthropicMessagesCountTokensID        = "anthropic-messages-count-tokens"
+	OpenAIResponsesCreateID               = "openai-responses-create"
+	OpenAIResponsesWebSocketUnsupportedID = "openai-responses-websocket-unsupported"
+	OpenAIResponsesManagementID           = "openai-responses-management"
+	OpenAIFilesUnsupportedID              = "openai-files-unsupported"
+	OpenAIUploadsUnsupportedID            = "openai-uploads-unsupported"
+	OpenAIBatchesUnsupportedID            = "openai-batches-unsupported"
+	OpenAIAudioUnsupportedID              = "openai-audio-unsupported"
+	OpenAIImagesUnsupportedID             = "openai-images-unsupported"
+	OpenAIVideosUnsupportedID             = "openai-videos-unsupported"
+	OpenAIRealtimeUnsupportedID           = "openai-realtime-unsupported"
+	OpenAIChatUnsupportedID               = "openai-chat-unsupported"
+	OpenAICompletionsUnsupportedID        = "openai-completions-unsupported"
+	OpenAIEmbeddingsUnsupportedID         = "openai-embeddings-unsupported"
 
 	MaxJSONBodyBytes   = 16 << 20
 	MaxOpaqueBodyBytes = 16 << 20
@@ -64,6 +65,7 @@ func M0() (Catalog, error) {
 			PathPattern:    path,
 			PathMatch:      access.ClientOperationPathExact,
 			Kind:           access.ClientOperationSemantic,
+			Transport:      access.ClientOperationTransportHTTP,
 			BodyKind:       access.ClientOperationBodyJSON,
 			ReplayClass:    access.ClientReplayGenerationCostOnly,
 			CodecFeature:   feature,
@@ -105,6 +107,26 @@ func M0() (Catalog, error) {
 		"responses",
 		nil,
 	); err != nil {
+		return Catalog{}, err
+	}
+	webSocketID, err := access.NewClientOperationID(
+		OpenAIResponsesWebSocketUnsupportedID,
+	)
+	if err != nil {
+		return Catalog{}, err
+	}
+	if err := add(access.ClientOperationOptions{
+		ID:            webSocketID,
+		Revision:      1,
+		ClientDialect: access.DialectOpenAIResponses,
+		Methods:       []string{http.MethodGet},
+		PathPattern:   "/v1/responses",
+		PathMatch:     access.ClientOperationPathExact,
+		Kind:          access.ClientOperationUnsupported,
+		Transport:     access.ClientOperationTransportWebSocket,
+		BodyKind:      access.ClientOperationBodyNone,
+		ReplayClass:   access.ClientReplayNonReplayable,
+	}); err != nil {
 		return Catalog{}, err
 	}
 
@@ -183,6 +205,7 @@ func addOperation(
 		PathPattern:    path,
 		PathMatch:      match,
 		Kind:           kind,
+		Transport:      access.ClientOperationTransportHTTP,
 		BodyKind:       bodyKind,
 		ReplayClass:    replay,
 		CodecFeature:   feature,

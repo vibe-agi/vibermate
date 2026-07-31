@@ -24,6 +24,7 @@ import (
 	"github.com/vibe-agi/vibermate/internal/exchange"
 	"github.com/vibe-agi/vibermate/internal/hostcontract"
 	"github.com/vibe-agi/vibermate/internal/offlinehold"
+	"github.com/vibe-agi/vibermate/internal/operationcatalog"
 	"github.com/vibe-agi/vibermate/internal/originaltransport"
 	"github.com/vibe-agi/vibermate/internal/providertransport"
 	"github.com/vibe-agi/vibermate/internal/runtimepersistence"
@@ -301,6 +302,7 @@ func TestProductRuntimeWiresExchangePipelineToActiveAccessPlan(t *testing.T) {
 	request, err := exchange.NewClientRequest(
 		"exchange-runtime-wiring",
 		activePlan.IngressBinding(),
+		runtimeAnthropicOperationEvidence(t),
 		[]byte(`{
 			"model":"claude-client-alias",
 			"max_tokens":32,
@@ -360,6 +362,135 @@ func TestProductRuntimeWiresExchangePipelineToActiveAccessPlan(t *testing.T) {
 		records.Items[0].SubjectID != "exchange-runtime-wiring" ||
 		records.Items[0].Status != activity.StatusSucceeded {
 		t.Fatalf("runtime Activity = %+v", records.Items)
+	}
+}
+
+func TestProductRuntimeWiresResponsesThroughTheSameExchangeAndProvider(
+	t *testing.T,
+) {
+	t.Parallel()
+
+	accessID, err := access.NewAccessID("access-responses-runtime")
+	if err != nil {
+		t.Fatal(err)
+	}
+	provider := &pipelineProviderRuntime{
+		responseBody: []byte(`{
+			"id":"chatcmpl-responses-runtime",
+			"object":"chat.completion",
+			"created":1,
+			"model":"gpt-4.1-mini",
+			"choices":[{
+				"index":0,
+				"message":{"role":"assistant","content":"Responses runtime path.","refusal":null},
+				"finish_reason":"stop",
+				"logprobs":null
+			}],
+			"usage":{"prompt_tokens":4,"completion_tokens":3,"total_tokens":7}
+		}`),
+	}
+	options := testOptions(t, hostcontract.Desktop(), &coordinatorDouble{})
+	builders := productionBuilders()
+	builders.provider = fixedProviderBuilder{component: provider}
+	runtime, err := startWithBuilders(context.Background(), options, builders)
+	if err != nil {
+		t.Fatalf("start ProductRuntime with provider fixture: %v", err)
+	}
+	defer shutdownRuntime(t, runtime)
+
+	aggregate := runtimeAccessAggregate(
+		t,
+		accessID,
+		1,
+		"Responses Runtime Access",
+	)
+	clientOrigin, err := access.NewClientOrigin("https://api.openai.com:443")
+	if err != nil {
+		t.Fatal(err)
+	}
+	aggregate.AgentEndpoint.ClientOrigin = clientOrigin
+	aggregate.AgentEndpoint.ClientDialect = access.DialectOpenAIResponses
+	write, err := runtime.AccessWriter().WriteAccess(
+		context.Background(),
+		access.WriteCommand{
+			ExpectedRevision: 0,
+			Aggregate:        aggregate,
+		},
+	)
+	if err != nil || write.Outcome != access.WriteOutcomeCommitted {
+		t.Fatalf("write Responses Access result=%+v err=%v", write, err)
+	}
+	activePlan, err := runtime.SnapshotResolver().ResolveAccess(accessID)
+	if err != nil {
+		t.Fatalf("resolve Responses Access: %v", err)
+	}
+	request, err := exchange.NewClientRequest(
+		"exchange-responses-runtime-wiring",
+		activePlan.IngressBinding(),
+		runtimeResponsesOperationEvidence(t),
+		[]byte(`{
+			"model":"codex-client-alias",
+			"input":[{
+				"type":"message",
+				"role":"user",
+				"content":[{"type":"input_text","text":"hello"}]
+			}],
+			"store":false,
+			"stream":false
+		}`),
+		exchange.ReplayGenerationCostOnly,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	downstream := &runtimeDownstream{}
+	result, err := runtime.ExchangeExecutor().Execute(
+		context.Background(),
+		request,
+		downstream,
+	)
+	if err != nil {
+		t.Fatalf("execute Responses Exchange: %v", err)
+	}
+	if result.AccessRevision != 1 ||
+		result.PlanHash != activePlan.PlanHash().String() ||
+		result.Outcome != exchange.AttemptSucceeded ||
+		!result.Ledger.DownstreamTerminal {
+		t.Fatalf("Responses Exchange result = %+v", result)
+	}
+	var providerWire struct {
+		Model string `json:"model"`
+	}
+	providerRequest := provider.requestSnapshot()
+	if err := json.Unmarshal(providerRequest.Body(), &providerWire); err != nil {
+		t.Fatal(err)
+	}
+	var clientWire struct {
+		Object string `json:"object"`
+		Status string `json:"status"`
+		Output []struct {
+			Content []struct {
+				Text string `json:"text"`
+			} `json:"content"`
+		} `json:"output"`
+	}
+	if err := json.Unmarshal(downstream.body.Bytes(), &clientWire); err != nil {
+		t.Fatal(err)
+	}
+	if providerWire.Model != "gpt-4.1-mini" ||
+		providerRequest.RelativePath() != "chat/completions" ||
+		downstream.mode != exchange.ResponseModeJSON ||
+		clientWire.Object != "response" ||
+		clientWire.Status != "completed" ||
+		len(clientWire.Output) != 1 ||
+		len(clientWire.Output[0].Content) != 1 ||
+		clientWire.Output[0].Content[0].Text != "Responses runtime path." {
+		t.Fatalf(
+			"provider model=%q path=%q downstream=%s",
+			providerWire.Model,
+			providerRequest.RelativePath(),
+			downstream.body.Bytes(),
+		)
 	}
 }
 
@@ -910,6 +1041,7 @@ func TestProductRuntimeProviderClosureUnblocksExchangeDrain(t *testing.T) {
 	request, err := exchange.NewClientRequest(
 		"exchange-blocked-provider-body",
 		activePlan.IngressBinding(),
+		runtimeAnthropicOperationEvidence(t),
 		[]byte(`{
 			"model":"claude-client-alias",
 			"max_tokens":32,
@@ -961,6 +1093,52 @@ func TestProductRuntimeProviderClosureUnblocksExchangeDrain(t *testing.T) {
 	}; !reflect.DeepEqual(got, want) {
 		t.Fatalf("Exchange shutdown events = %v, want %v", got, want)
 	}
+}
+
+func runtimeAnthropicOperationEvidence(
+	t *testing.T,
+) exchange.ClientOperationEvidence {
+	t.Helper()
+	operationID, err := access.NewClientOperationID(
+		operationcatalog.AnthropicMessagesCreateID,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	evidence, err := exchange.NewClientOperationEvidence(
+		operationID,
+		1,
+		http.MethodPost,
+		"/v1/messages",
+		"",
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return evidence
+}
+
+func runtimeResponsesOperationEvidence(
+	t *testing.T,
+) exchange.ClientOperationEvidence {
+	t.Helper()
+	operationID, err := access.NewClientOperationID(
+		operationcatalog.OpenAIResponsesCreateID,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	evidence, err := exchange.NewClientOperationEvidence(
+		operationID,
+		1,
+		http.MethodPost,
+		"/v1/responses",
+		"",
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return evidence
 }
 
 func TestProductRuntimeRejectsCorruptSQLiteOnRestart(t *testing.T) {

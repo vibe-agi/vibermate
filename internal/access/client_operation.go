@@ -43,6 +43,13 @@ const (
 	ClientOperationBodyStream    ClientOperationBodyKind = "stream"
 )
 
+type ClientOperationTransport string
+
+const (
+	ClientOperationTransportHTTP      ClientOperationTransport = "http"
+	ClientOperationTransportWebSocket ClientOperationTransport = "websocket"
+)
+
 type ClientReplayClass string
 
 const (
@@ -64,6 +71,7 @@ type ClientOperationOptions struct {
 	PathPattern    string
 	PathMatch      ClientOperationPathMatch
 	Kind           ClientOperationKind
+	Transport      ClientOperationTransport
 	BodyKind       ClientOperationBodyKind
 	ReplayClass    ClientReplayClass
 	CodecFeature   CodecFeature
@@ -83,6 +91,7 @@ type ClientOperationDefinition struct {
 	pathPattern    string
 	pathMatch      ClientOperationPathMatch
 	kind           ClientOperationKind
+	transport      ClientOperationTransport
 	bodyKind       ClientOperationBodyKind
 	replayClass    ClientReplayClass
 	codecFeature   CodecFeature
@@ -102,6 +111,7 @@ func NewClientOperationDefinition(
 		pathPattern:    options.PathPattern,
 		pathMatch:      options.PathMatch,
 		kind:           options.Kind,
+		transport:      options.Transport,
 		bodyKind:       options.BodyKind,
 		replayClass:    options.ReplayClass,
 		codecFeature:   options.CodecFeature,
@@ -143,6 +153,10 @@ func (definition ClientOperationDefinition) PathMatch() ClientOperationPathMatch
 
 func (definition ClientOperationDefinition) Kind() ClientOperationKind {
 	return definition.kind
+}
+
+func (definition ClientOperationDefinition) Transport() ClientOperationTransport {
+	return definition.transport
 }
 
 func (definition ClientOperationDefinition) BodyKind() ClientOperationBodyKind {
@@ -216,6 +230,22 @@ func (definition ClientOperationDefinition) Validate() error {
 		ClientOperationUnsupported:
 	default:
 		return errors.New("client operation kind is invalid")
+	}
+	switch definition.transport {
+	case ClientOperationTransportHTTP:
+	case ClientOperationTransportWebSocket:
+		if definition.kind != ClientOperationUnsupported ||
+			definition.pathMatch != ClientOperationPathExact ||
+			len(definition.methods) != 1 ||
+			definition.methods[0] != "GET" ||
+			definition.bodyKind != ClientOperationBodyNone ||
+			definition.egressBearing {
+			return errors.New(
+				"WebSocket client operation must be an exact bodyless unsupported GET",
+			)
+		}
+	default:
+		return errors.New("client operation transport is invalid")
 	}
 	switch definition.bodyKind {
 	case ClientOperationBodyNone:

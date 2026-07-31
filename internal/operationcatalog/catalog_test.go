@@ -30,6 +30,7 @@ func TestM0CatalogHasOneExactResponsesCreateOperation(t *testing.T) {
 	if matched.PathPattern() != "/v1/responses" ||
 		matched.PathMatch() != access.ClientOperationPathExact ||
 		matched.Kind() != access.ClientOperationSemantic ||
+		matched.Transport() != access.ClientOperationTransportHTTP ||
 		matched.CodecFeature() != "responses" ||
 		matched.ReplayClass() != access.ClientReplayGenerationCostOnly ||
 		!matched.EgressBearing() {
@@ -38,6 +39,34 @@ func TestM0CatalogHasOneExactResponsesCreateOperation(t *testing.T) {
 	if methods := matched.Methods(); len(methods) != 1 ||
 		methods[0] != "POST" {
 		t.Fatalf("Responses operation methods = %v", methods)
+	}
+}
+
+func TestM0CatalogDeclaresResponsesWebSocketAsUnsupported(t *testing.T) {
+	t.Parallel()
+
+	catalog, err := operationcatalog.M0()
+	if err != nil {
+		t.Fatal(err)
+	}
+	var matched access.ClientOperationDefinition
+	for _, definition := range catalog.Definitions() {
+		if definition.ID().String() ==
+			operationcatalog.OpenAIResponsesWebSocketUnsupportedID {
+			matched = definition
+			break
+		}
+	}
+	methods := matched.Methods()
+	if matched.PathPattern() != "/v1/responses" ||
+		matched.PathMatch() != access.ClientOperationPathExact ||
+		matched.Kind() != access.ClientOperationUnsupported ||
+		matched.Transport() != access.ClientOperationTransportWebSocket ||
+		matched.BodyKind() != access.ClientOperationBodyNone ||
+		matched.EgressBearing() ||
+		len(methods) != 1 ||
+		methods[0] != "GET" {
+		t.Fatalf("Responses WebSocket operation = %+v", matched)
 	}
 }
 

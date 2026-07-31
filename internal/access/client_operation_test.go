@@ -27,6 +27,7 @@ func TestClientOperationConstructorOwnsAndCanonicalizesCollections(
 			PathPattern:    "/v1/responses",
 			PathMatch:      access.ClientOperationPathExact,
 			Kind:           access.ClientOperationSemantic,
+			Transport:      access.ClientOperationTransportHTTP,
 			BodyKind:       access.ClientOperationBodyJSON,
 			ReplayClass:    access.ClientReplayGenerationCostOnly,
 			CodecFeature:   "responses",
@@ -46,6 +47,9 @@ func TestClientOperationConstructorOwnsAndCanonicalizesCollections(
 	returnedQueries[0] = "mutated=again"
 	if definition.Methods()[0] != http.MethodPost {
 		t.Fatal("client operation retained a method alias")
+	}
+	if definition.Transport() != access.ClientOperationTransportHTTP {
+		t.Fatalf("client operation transport = %q", definition.Transport())
 	}
 	if got := definition.AllowedQueries(); len(got) != 2 ||
 		got[0] != "include=usage" ||
@@ -69,6 +73,7 @@ func TestClientOperationConstructorRejectsUnsafeCapabilities(t *testing.T) {
 		PathPattern:   "/v1/responses",
 		PathMatch:     access.ClientOperationPathExact,
 		Kind:          access.ClientOperationSemantic,
+		Transport:     access.ClientOperationTransportHTTP,
 		BodyKind:      access.ClientOperationBodyJSON,
 		ReplayClass:   access.ClientReplayGenerationCostOnly,
 		CodecFeature:  "responses",
@@ -79,6 +84,12 @@ func TestClientOperationConstructorRejectsUnsafeCapabilities(t *testing.T) {
 		name   string
 		mutate func(*access.ClientOperationOptions)
 	}{
+		{
+			name: "unknown transport",
+			mutate: func(options *access.ClientOperationOptions) {
+				options.Transport = "unknown"
+			},
+		},
 		{
 			name: "lowercase method",
 			mutate: func(options *access.ClientOperationOptions) {

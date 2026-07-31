@@ -180,8 +180,24 @@ func TestM0PathCapabilityIsolatesResponsesFromOtherOpenAIOperations(
 			operationcatalog.OpenAIResponsesCreateID ||
 		responses.Revision() != 1 ||
 		responses.BodyKind() != pathcapability.BodyJSON ||
+		responses.Transport() != access.ClientOperationTransportHTTP ||
 		responses.ReplayClass() != exchange.ReplayGenerationCostOnly {
 		t.Fatalf("Responses capability=%+v err=%v", responses, err)
+	}
+	websocket, err := catalog.Classify(
+		access.DialectOpenAIResponses,
+		http.MethodGet,
+		"/v1/responses",
+		"",
+		"",
+	)
+	if err != nil ||
+		websocket.Kind() != pathcapability.KindUnsupported ||
+		websocket.OperationID().String() !=
+			operationcatalog.OpenAIResponsesWebSocketUnsupportedID ||
+		websocket.Transport() != access.ClientOperationTransportWebSocket ||
+		websocket.EgressBearing() {
+		t.Fatalf("Responses WebSocket capability=%+v err=%v", websocket, err)
 	}
 
 	models, err := catalog.Classify(
@@ -255,7 +271,7 @@ func TestM0PathCapabilityRejectsWrongResponsesMethodAndQuery(
 	}{
 		{
 			name:   "wrong method",
-			method: http.MethodGet,
+			method: http.MethodPatch,
 			reason: pathcapability.ReasonUnsupportedMethod,
 		},
 		{

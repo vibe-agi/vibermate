@@ -59,27 +59,33 @@ release SecretStore driver or release packaging profile in this stage.
 ProductRuntime now owns an internal Exchange executor. Each admitted Exchange
 begins a planned-offline action before resolving configuration, resolves the
 active plan exactly once, revalidates the frozen ingress identity, translates
-the request, invokes only the gated provider transport, and publishes either a
-complete response or incremental SSE output. A commit ledger prevents unsafe
-transport replay after client-visible semantics, and complete tool groups wait
-behind a durable fail-closed approval authority before any tool block or
-terminal event is released. Attempts append a redacted durable Activity record
-with stable reason codes and transport-selection evidence, never prompt,
-credential, header, or raw tool-argument values.
+the request through an explicitly assembled typed protocol-path selector,
+invokes only the gated provider transport, and publishes either a complete
+response or incremental SSE output. Frozen client-operation evidence is
+revalidated against that one plan before decoding. A commit ledger prevents
+unsafe transport replay after client-visible Anthropic or Responses semantics,
+and complete tool groups wait behind a durable fail-closed approval authority
+before any tool block or terminal event is released. Attempts append a redacted
+durable Activity record with stable reason codes and transport-selection
+evidence, never prompt, credential, header, or raw tool-argument values.
 
 ProductRuntime also composes a handler-only loopback proxy boundary. An
 authenticated, persisted CaptureRun capability must be accepted before exact
 `ClientOrigin` lookup, local leaf issuance, CONNECT MITM, path classification,
 or data-plane dispatch. Every request on an existing CONNECT connection
 revalidates its frozen AgentEndpoint evidence against the current active plan.
-Semantic Anthropic Messages operations enter the current Exchange executor;
-auxiliary/opaque operations use the separately gated original-origin transport.
-The exact Responses operation is compiled and classified but is not yet
-selected by production Exchange. Responses management, upload, batch, media,
-Realtime, and foreign semantic operations cannot enter model translation.
-Body-free ConnectionEvents persist connection phase evidence. The local Root
-is installation-persistent and exported as public evidence, but this code does
-not install it into an operating-system trust store.
+Exact semantic Anthropic Messages and OpenAI Responses HTTP operations enter
+the same Exchange executor; semantic ingress carries no client authentication
+or hop-by-hop headers into IR or provider construction. Auxiliary/opaque
+operations use the separately gated original-origin transport. Responses
+WebSocket upgrade is an explicit unsupported typed operation and receives a
+bounded 426 before body read or data-plane dispatch. Responses management,
+upload, batch, media, Realtime, and foreign semantic operations cannot enter
+model translation. Body-free ConnectionEvents persist connection phase
+evidence. The local Root is installation-persistent and exported as public
+evidence, but this code does not install it into an operating-system trust
+store. Repository tests do not yet prove that fixed Codex falls back from the
+426 to HTTP.
 
 DesktopHost now owns the literal proxy and control listeners, complete routes,
 generation lock, capability separation, launcher discovery, and the only
@@ -105,16 +111,17 @@ from inherited `NO_PROXY`; and heartbeats and finishes the run. Host integration
 tests exercise this path over real loopback listeners with a local child
 process. They do not send provider traffic.
 
-The opt-in `vibermate-acceptance` command exercises the packaged macOS arm64
-assembly with fixed Claude Code 2.1.220. It derives the daemon and launcher from
-one App bundle and cross-checks an embedded build manifest against actual
-artifact digests and Go build metadata. The manifest binds the App build to one
-clean Git revision, pinned toolchains, explicit Desktop/development-sidecar
-profiles, configuration digests, and both packaged sidecars. The deterministic
-sequence uses a unique missing SecretRef; the credentialed continuation uses
-the development file SecretStore and defaults to a local Cherry Studio API at
-`http://127.0.0.1:23333/v1` with model `dashscope:glm-5`. No acceptance mode takes
-a secret value on its command line.
+The existing opt-in `vibermate-acceptance` command exercises the packaged macOS
+arm64 assembly with fixed Claude Code 2.1.220. It derives the daemon and
+launcher from one App bundle and cross-checks an embedded build manifest
+against actual artifact digests and Go build metadata. The manifest binds the
+App build to one clean Git revision, pinned toolchains, explicit
+Desktop/development-sidecar profiles, configuration digests, and both packaged
+sidecars. The deterministic sequence uses a unique missing SecretRef; the
+credentialed continuation uses the development file SecretStore and defaults
+to a local Cherry Studio API at `http://127.0.0.1:23333/v1` with model
+`dashscope:glm-5`. No acceptance mode takes a secret value on its command line.
+Fixed Codex 0.145.0 launch and packaged HTTP-fallback evidence remain pending.
 
 SQLite is the only durable Access authority; active-plan publication occurs
 after commit. An indeterminate commit or post-commit publication failure marks

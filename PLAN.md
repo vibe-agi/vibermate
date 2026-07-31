@@ -127,7 +127,7 @@ payloads or credentials.
   controls.
 - [x] Prove ordinary text remains incremental while the first unresolved tool
   fragment fences the required suffix until durable approval.
-- [ ] Prove retry/commit-ledger semantics remain unchanged after any
+- [x] Prove retry/commit-ledger semantics remain unchanged after any
   client-visible Responses event.
 
 ### 4. Compile the Codex operation into the sole Access plan
@@ -151,18 +151,24 @@ Responses operation, revision, content, and `PlanHash`.
 
 ### 5. Extend Exchange and loopback ingress
 
-- [ ] Dispatch the exact Responses operation through the same one-resolve
+- [x] Dispatch the exact Responses operation through the same one-resolve
   Exchange and revalidate frozen Codex AgentEndpoint evidence on every request.
-- [ ] Strip client auth and hop-by-hop headers before IR/provider boundaries;
+- [x] Strip client auth and hop-by-hop headers before IR/provider boundaries;
   retain only redacted connection and translation evidence.
-- [ ] Route every provider attempt and resume probe through the existing
+- [x] Route every provider attempt and resume probe through the existing
   controlled-egress tree.
 - [ ] Return an explicit bounded 426 for unsupported Responses WebSocket
   upgrades and prove the fixed client falls back to HTTP without bypassing
   CaptureRun, endpoint authorization, or Exchange.
-- [ ] Cover persistent CONNECT plan changes, hold-entry races, cancellation,
+- [x] Cover persistent CONNECT plan changes, hold-entry races, cancellation,
   shutdown, malformed SSE, tool approval, and multi-Access isolation under
   `-race`.
+
+The shared operation catalog now distinguishes exact Responses POST/HTTP from
+unsupported GET/WebSocket on the same path. Loopback tests prove a bounded 426
+before body read, Exchange, or original egress. The remaining unchecked item
+requires fixed Codex evidence that this response actually selects its HTTP
+fallback; repository fixtures alone cannot establish client behavior.
 
 ### 6. Add the fixed Codex launcher contract
 

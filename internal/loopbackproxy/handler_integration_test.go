@@ -29,6 +29,7 @@ import (
 	"github.com/vibe-agi/vibermate/internal/operationcatalog"
 	"github.com/vibe-agi/vibermate/internal/originaltransport"
 	"github.com/vibe-agi/vibermate/internal/pathcapability"
+	"github.com/vibe-agi/vibermate/internal/responseschat"
 	"github.com/vibe-agi/vibermate/internal/runtimepersistence"
 )
 
@@ -229,6 +230,178 @@ func TestLoopbackProxyFailsClosedBeforeCertificateOrDataPlane(t *testing.T) {
 	}
 }
 
+func TestLoopbackProxyReturnsBounded426ForResponsesWebSocketUpgrade(
+	t *testing.T,
+) {
+	t.Parallel()
+
+	fixture := newResponsesProxyFixture(t)
+	defer fixture.Close(t)
+	secured := fixture.ConnectTLS(
+		t,
+		fixture.grant.ProxyCapability.Value(),
+		"api.openai.com:443",
+		"api.openai.com",
+	)
+	defer secured.Close()
+	response := writeInnerRequest(t, secured, &http.Request{
+		Method: http.MethodGet,
+		URL:    mustURL(t, "/v1/responses"),
+		Host:   "api.openai.com:443",
+		Header: http.Header{
+			"Connection":            []string{"keep-alive, Upgrade"},
+			"Upgrade":               []string{"websocket"},
+			"Sec-Websocket-Version": []string{"13"},
+		},
+	})
+	body, err := io.ReadAll(io.LimitReader(response.Body, 1025))
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = response.Body.Close()
+	if response.StatusCode != http.StatusUpgradeRequired ||
+		len(body) == 0 ||
+		len(body) > 1024 ||
+		!bytes.Contains(
+			body,
+			[]byte(`"reasonCode":"responses_websocket_unsupported"`),
+		) ||
+		len(fixture.exchanges.Requests()) != 0 ||
+		fixture.original.Count() != 0 {
+		t.Fatalf(
+			"WebSocket response status=%d body=%s Exchanges=%d original=%d",
+			response.StatusCode,
+			body,
+			len(fixture.exchanges.Requests()),
+			fixture.original.Count(),
+		)
+	}
+}
+
+func TestLoopbackProxyDispatchesExactResponsesHTTPWithTypedEvidence(
+	t *testing.T,
+) {
+	t.Parallel()
+
+	fixture := newResponsesProxyFixture(t)
+	defer fixture.Close(t)
+	secured := fixture.ConnectTLS(
+		t,
+		fixture.grant.ProxyCapability.Value(),
+		"api.openai.com:443",
+		"api.openai.com",
+	)
+	defer secured.Close()
+	const requestBody = `{"model":"client","input":"hello","stream":true}`
+	response := writeInnerRequest(t, secured, &http.Request{
+		Method:        http.MethodPost,
+		URL:           mustURL(t, "/v1/responses"),
+		Host:          "api.openai.com:443",
+		ContentLength: int64(len(requestBody)),
+		Body:          io.NopCloser(strings.NewReader(requestBody)),
+		Header: http.Header{
+			"Authorization": []string{"Bearer client-owned"},
+			"Connection":    []string{"keep-alive, X-Client-Hop"},
+			"X-Client-Hop":  []string{"must-not-cross"},
+			"Content-Type":  []string{"application/json"},
+		},
+	})
+	body, err := io.ReadAll(response.Body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = response.Body.Close()
+	requests := fixture.exchanges.Requests()
+	if response.StatusCode != http.StatusOK ||
+		string(body) != `{"result":"proxied"}` ||
+		len(requests) != 1 ||
+		requests[0].AccessID() != fixture.accessID ||
+		requests[0].ReplayClass() != exchange.ReplayGenerationCostOnly ||
+		string(requests[0].Body()) != requestBody {
+		t.Fatalf(
+			"Responses status=%d body=%s requests=%+v",
+			response.StatusCode,
+			body,
+			requests,
+		)
+	}
+	operation := requests[0].ClientOperation()
+	if operation.ID().String() != operationcatalog.OpenAIResponsesCreateID ||
+		operation.Revision() != 1 ||
+		operation.Method() != http.MethodPost ||
+		operation.Path() != "/v1/responses" ||
+		operation.RawQuery() != "" {
+		t.Fatalf("Responses operation evidence = %+v", operation)
+	}
+}
+
+func TestLoopbackProxyKeepsFrozenResponsesEndpointAcrossProviderPlanAdvance(
+	t *testing.T,
+) {
+	t.Parallel()
+
+	fixture := newResponsesProxyFixture(t)
+	defer fixture.Close(t)
+	secured := fixture.ConnectTLS(
+		t,
+		fixture.grant.ProxyCapability.Value(),
+		"api.openai.com:443",
+		"api.openai.com",
+	)
+	defer secured.Close()
+
+	advancedProjection, _ := testProjectionForDialectRevision(
+		t,
+		access.DialectOpenAIResponses,
+		2,
+		"gpt-provider-revision-two",
+	)
+	origin, err := access.NewClientOrigin("https://api.openai.com:443")
+	if err != nil {
+		t.Fatal(err)
+	}
+	advanced, err := advancedProjection.ResolveClientOrigin(origin)
+	if err != nil {
+		t.Fatal(err)
+	}
+	fixture.ingress.Advance(advanced)
+
+	const requestBody = `{"model":"client","input":"hello","stream":false}`
+	response := writeInnerRequest(t, secured, &http.Request{
+		Method:        http.MethodPost,
+		URL:           mustURL(t, "/v1/responses"),
+		Host:          "api.openai.com:443",
+		ContentLength: int64(len(requestBody)),
+		Body:          io.NopCloser(strings.NewReader(requestBody)),
+		Header:        http.Header{"Content-Type": []string{"application/json"}},
+	})
+	body, err := io.ReadAll(response.Body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = response.Body.Close()
+	requests := fixture.exchanges.Requests()
+	if response.StatusCode != http.StatusOK ||
+		string(body) != `{"result":"proxied"}` ||
+		len(requests) != 1 ||
+		requests[0].IngressBinding().AccessRevision() != 1 ||
+		advanced.AccessRevision() != 2 ||
+		requests[0].IngressBinding().AgentEndpointID() !=
+			advanced.AgentEndpointID() ||
+		requests[0].IngressBinding().ClientOrigin() !=
+			advanced.ClientOrigin() ||
+		requests[0].IngressBinding().ClientDialect() !=
+			advanced.ClientDialect() {
+		t.Fatalf(
+			"provider-plan advance status=%d body=%s request=%+v current=%+v",
+			response.StatusCode,
+			body,
+			requests,
+			advanced,
+		)
+	}
+}
+
 func TestLoopbackProxyRejectsSNIMismatchAndDrainsHijackedConnections(
 	t *testing.T,
 ) {
@@ -285,42 +458,73 @@ func TestLoopbackProxyRevalidatesEndpointOnEveryPersistentConnectionRequest(
 ) {
 	t.Parallel()
 
-	fixture := newProxyFixture(t)
-	defer fixture.Close(t)
-	secured := fixture.ConnectTLS(
-		t,
-		fixture.grant.ProxyCapability.Value(),
-		"api.anthropic.com:443",
-		"api.anthropic.com",
-	)
-	defer secured.Close()
+	for _, test := range []struct {
+		name      string
+		fixture   func(*testing.T) *proxyFixture
+		authority string
+		path      string
+	}{
+		{
+			name:      "Anthropic Messages",
+			fixture:   newProxyFixture,
+			authority: "api.anthropic.com:443",
+			path:      "/v1/messages",
+		},
+		{
+			name:      "OpenAI Responses",
+			fixture:   newResponsesProxyFixture,
+			authority: "api.openai.com:443",
+			path:      "/v1/responses",
+		},
+	} {
+		test := test
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+			fixture := test.fixture(t)
+			defer fixture.Close(t)
+			host := strings.TrimSuffix(test.authority, ":443")
+			secured := fixture.ConnectTLS(
+				t,
+				fixture.grant.ProxyCapability.Value(),
+				test.authority,
+				host,
+			)
+			defer secured.Close()
 
-	fixture.ingress.Revoke()
-	response := writeInnerRequest(t, secured, &http.Request{
-		Method:        http.MethodPost,
-		URL:           mustURL(t, "/v1/messages"),
-		Host:          "api.anthropic.com:443",
-		Header:        http.Header{"Content-Type": []string{"application/json"}},
-		Body:          io.NopCloser(strings.NewReader(`{"model":"client"}`)),
-		ContentLength: int64(len(`{"model":"client"}`)),
-	})
-	body, err := io.ReadAll(response.Body)
-	if err != nil {
-		t.Fatal(err)
-	}
-	_ = response.Body.Close()
-	if response.StatusCode != http.StatusMisdirectedRequest ||
-		!bytes.Contains(body, []byte(`"reasonCode":"agent_endpoint_changed"`)) ||
-		!response.Close {
-		t.Fatalf(
-			"revoked endpoint response status=%d close=%v body=%s",
-			response.StatusCode,
-			response.Close,
-			body,
-		)
-	}
-	if len(fixture.exchanges.Requests()) != 0 || fixture.original.Count() != 0 {
-		t.Fatal("revoked persistent connection reached a data plane")
+			fixture.ingress.Revoke()
+			response := writeInnerRequest(t, secured, &http.Request{
+				Method: http.MethodPost,
+				URL:    mustURL(t, test.path),
+				Host:   test.authority,
+				Header: http.Header{
+					"Content-Type": []string{"application/json"},
+				},
+				Body:          io.NopCloser(strings.NewReader(`{"model":"client"}`)),
+				ContentLength: int64(len(`{"model":"client"}`)),
+			})
+			body, err := io.ReadAll(response.Body)
+			if err != nil {
+				t.Fatal(err)
+			}
+			_ = response.Body.Close()
+			if response.StatusCode != http.StatusMisdirectedRequest ||
+				!bytes.Contains(
+					body,
+					[]byte(`"reasonCode":"agent_endpoint_changed"`),
+				) ||
+				!response.Close {
+				t.Fatalf(
+					"revoked endpoint response status=%d close=%v body=%s",
+					response.StatusCode,
+					response.Close,
+					body,
+				)
+			}
+			if len(fixture.exchanges.Requests()) != 0 ||
+				fixture.original.Count() != 0 {
+				t.Fatal("revoked persistent connection reached a data plane")
+			}
+		})
 	}
 }
 
@@ -340,6 +544,19 @@ type proxyFixture struct {
 }
 
 func newProxyFixture(t *testing.T) *proxyFixture {
+	t.Helper()
+	return newProxyFixtureForDialect(t, access.DialectAnthropicMessages)
+}
+
+func newResponsesProxyFixture(t *testing.T) *proxyFixture {
+	t.Helper()
+	return newProxyFixtureForDialect(t, access.DialectOpenAIResponses)
+}
+
+func newProxyFixtureForDialect(
+	t *testing.T,
+	clientDialect access.Dialect,
+) *proxyFixture {
 	t.Helper()
 	directory := t.TempDir()
 	store, err := runtimepersistence.Open(
@@ -373,7 +590,7 @@ func newProxyFixture(t *testing.T) *proxyFixture {
 	if err != nil {
 		t.Fatal(err)
 	}
-	projection, accessID := testProjection(t)
+	projection, accessID := testProjectionForDialect(t, clientDialect)
 	ingress := &revocableIngress{delegate: projection}
 	operations, err := operationcatalog.M0()
 	if err != nil {
@@ -434,6 +651,8 @@ func newProxyFixture(t *testing.T) *proxyFixture {
 type revocableIngress struct {
 	delegate access.IngressResolver
 	revoked  atomic.Bool
+	mu       sync.RWMutex
+	current  *access.IngressBinding
 }
 
 func (ingress *revocableIngress) ResolveClientOrigin(
@@ -442,11 +661,29 @@ func (ingress *revocableIngress) ResolveClientOrigin(
 	if ingress.revoked.Load() {
 		return access.IngressBinding{}, access.ErrAgentEndpointNotConfigured
 	}
+	ingress.mu.RLock()
+	current := ingress.current
+	if current != nil {
+		binding := *current
+		ingress.mu.RUnlock()
+		if binding.ClientOrigin() == origin {
+			return binding, nil
+		}
+		return access.IngressBinding{}, access.ErrAgentEndpointNotConfigured
+	}
+	ingress.mu.RUnlock()
 	return ingress.delegate.ResolveClientOrigin(origin)
 }
 
 func (ingress *revocableIngress) Revoke() {
 	ingress.revoked.Store(true)
+}
+
+func (ingress *revocableIngress) Advance(binding access.IngressBinding) {
+	ingress.mu.Lock()
+	defer ingress.mu.Unlock()
+	copy := binding
+	ingress.current = &copy
 }
 
 func (fixture *proxyFixture) Connect(
@@ -640,6 +877,29 @@ func testProjection(
 	t *testing.T,
 ) (*access.AtomicSnapshotProjection, access.AccessID) {
 	t.Helper()
+	return testProjectionForDialect(t, access.DialectAnthropicMessages)
+}
+
+func testProjectionForDialect(
+	t *testing.T,
+	clientDialect access.Dialect,
+) (*access.AtomicSnapshotProjection, access.AccessID) {
+	t.Helper()
+	return testProjectionForDialectRevision(
+		t,
+		clientDialect,
+		1,
+		"gpt-4.1-mini",
+	)
+}
+
+func testProjectionForDialectRevision(
+	t *testing.T,
+	clientDialect access.Dialect,
+	revision access.Revision,
+	modelValue string,
+) (*access.AtomicSnapshotProjection, access.AccessID) {
+	t.Helper()
 	accessID, _ := access.NewAccessID("access-proxy")
 	endpointID, _ := access.NewAgentEndpointID("endpoint-proxy")
 	profileID, _ := access.NewEndpointProfileID("profile-proxy")
@@ -647,11 +907,19 @@ func testProjection(
 	accountID, _ := access.NewAccountBindingID("account-proxy")
 	routeID, _ := access.NewRouteSetID("route-proxy")
 	egressID, _ := access.NewEgressPolicyID("egress-proxy")
-	clientOrigin, _ := access.NewClientOrigin("https://api.anthropic.com:443")
+	clientOriginValue := "https://api.anthropic.com:443"
+	codecPairID := anthropicchat.CodecPairID
+	codecRevision := access.Revision(anthropicchat.CodecRevision)
+	if clientDialect == access.DialectOpenAIResponses {
+		clientOriginValue = "https://api.openai.com:443"
+		codecPairID = responseschat.CodecPairID
+		codecRevision = access.Revision(responseschat.CodecRevision)
+	}
+	clientOrigin, _ := access.NewClientOrigin(clientOriginValue)
 	providerOrigin, _ := access.NewProviderOrigin("https://api.openai.com:443/v1")
-	model, _ := access.NewModelName("gpt-4.1-mini")
+	model, _ := access.NewModelName(modelValue)
 	secret, _ := access.NewSecretRef("secret://provider/proxy")
-	codecID, _ := access.NewCodecPairID(anthropicchat.CodecPairID)
+	codecID, _ := access.NewCodecPairID(codecPairID)
 	operations, err := operationcatalog.M0()
 	if err != nil {
 		t.Fatal(err)
@@ -665,11 +933,11 @@ func testProjection(
 		ClientOperations: operations.Definitions(),
 		CodecPairs: []access.CodecPairDefinition{{
 			ID:              codecID,
-			Revision:        anthropicchat.CodecRevision,
-			ClientDialect:   access.DialectAnthropicMessages,
+			Revision:        codecRevision,
+			ClientDialect:   clientDialect,
 			ProviderDialect: access.DialectOpenAIChat,
 			ClientOperationIDs: operations.SemanticOperationIDs(
-				access.DialectAnthropicMessages,
+				clientDialect,
 			),
 			RequiredCapabilities: []access.ProviderCapability{
 				access.ProviderCapabilityMessages,
@@ -708,7 +976,7 @@ func testProjection(
 	plan, err := compiler.Compile(access.Aggregate{
 		Binding: access.AccessBinding{
 			ID:                accessID,
-			Revision:          1,
+			Revision:          revision,
 			Name:              "Proxy Access",
 			Status:            access.AccessStatusEnabled,
 			AgentEndpointID:   endpointID,
@@ -718,26 +986,26 @@ func testProjection(
 		},
 		AgentEndpoint: access.AgentEndpoint{
 			ID:            endpointID,
-			Revision:      1,
+			Revision:      revision,
 			AccessID:      accessID,
 			ClientOrigin:  clientOrigin,
-			ClientDialect: access.DialectAnthropicMessages,
+			ClientDialect: clientDialect,
 		},
 		Profiles: []access.EndpointProfile{{
 			ID:                      profileID,
-			Revision:                1,
+			Revision:                revision,
 			AccessID:                accessID,
 			Name:                    "OpenAI",
 			BackendDialect:          access.DialectOpenAIChat,
 			TargetID:                targetID,
 			TransportProfileRef:     access.ObservedClientH1TransportProfileRef(),
-			DefaultModelPolicy:      access.ModelPolicy{Revision: 1, Mode: access.ModelPolicyModeFixed, FixedModel: model},
+			DefaultModelPolicy:      access.ModelPolicy{Revision: revision, Mode: access.ModelPolicyModeFixed, FixedModel: model},
 			AccountBindingIDs:       []access.AccountBindingID{accountID},
 			DefaultAccountBindingID: accountID,
 		}},
 		ProviderTargets: []access.ProviderTarget{{
 			ID:           targetID,
-			Revision:     1,
+			Revision:     revision,
 			AccessID:     accessID,
 			ProfileID:    profileID,
 			Origin:       providerOrigin,
@@ -746,7 +1014,7 @@ func testProjection(
 		}},
 		AccountBindings: []access.ProviderAccountBinding{{
 			ID:            accountID,
-			Revision:      1,
+			Revision:      revision,
 			AccessID:      accessID,
 			ProfileID:     profileID,
 			Label:         "Primary",
@@ -756,18 +1024,18 @@ func testProjection(
 		}},
 		RouteSets: []access.RouteSet{{
 			ID:                  routeID,
-			Revision:            1,
+			Revision:            revision,
 			AccessID:            accessID,
 			CandidateProfileIDs: []access.EndpointProfileID{profileID},
 		}},
 		EgressPolicy: access.AccessEgressPolicy{
 			ID:       egressID,
-			Revision: 1,
+			Revision: revision,
 			AccessID: accessID,
 			Mode:     access.EgressModeDirect,
 		},
 		PluginPlan: access.PluginPlan{
-			Revision: 1,
+			Revision: revision,
 			AccessID: accessID,
 			Mode:     access.PluginPlanModePassThrough,
 		},

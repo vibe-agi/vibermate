@@ -7,6 +7,8 @@ import (
 	"context"
 	"errors"
 	"net/http"
+	"slices"
+	"sort"
 	"strings"
 
 	"github.com/vibe-agi/vibermate/internal/access"
@@ -104,26 +106,29 @@ type StreamingBridge interface {
 }
 
 type Options struct {
-	ID        access.CodecPairID
-	Revision  access.Revision
-	Client    ClientCodec
-	Backend   BackendCodec
-	Streaming StreamingBridge
+	ID                 access.CodecPairID
+	Revision           access.Revision
+	ClientOperationIDs []access.ClientOperationID
+	Client             ClientCodec
+	Backend            BackendCodec
+	Streaming          StreamingBridge
 }
 
 // Path is one immutable, explicitly assembled codec capability. It contains
 // two independent wire edges joined by protocolcore IR and no string registry.
 type Path struct {
-	id        access.CodecPairID
-	revision  access.Revision
-	client    ClientCodec
-	backend   BackendCodec
-	streaming StreamingBridge
+	id         access.CodecPairID
+	revision   access.Revision
+	operations []access.ClientOperationID
+	client     ClientCodec
+	backend    BackendCodec
+	streaming  StreamingBridge
 }
 
 func New(options Options) (*Path, error) {
 	if options.ID.String() == "" ||
 		options.Revision == 0 ||
+		len(options.ClientOperationIDs) == 0 ||
 		options.Client == nil ||
 		options.Backend == nil ||
 		options.Streaming == nil ||
@@ -131,12 +136,25 @@ func New(options Options) (*Path, error) {
 		options.Backend.Dialect() == "" {
 		return nil, errors.New("protocol path dependencies are incomplete")
 	}
+	operations := slices.Clone(options.ClientOperationIDs)
+	sort.Slice(operations, func(left, right int) bool {
+		return operations[left].String() < operations[right].String()
+	})
+	for index, operationID := range operations {
+		if operationID.String() == "" ||
+			(index > 0 && operationID == operations[index-1]) {
+			return nil, errors.New(
+				"protocol path client operations are invalid",
+			)
+		}
+	}
 	return &Path{
-		id:        options.ID,
-		revision:  options.Revision,
-		client:    options.Client,
-		backend:   options.Backend,
-		streaming: options.Streaming,
+		id:         options.ID,
+		revision:   options.Revision,
+		operations: operations,
+		client:     options.Client,
+		backend:    options.Backend,
+		streaming:  options.Streaming,
 	}, nil
 }
 
@@ -161,6 +179,22 @@ func (path *Path) Streaming() StreamingBridge {
 	return path.streaming
 }
 
+func (path *Path) ClientOperationIDs() []access.ClientOperationID {
+	if path == nil {
+		return nil
+	}
+	return slices.Clone(path.operations)
+}
+
+func (path *Path) SupportsClientOperation(
+	operationID access.ClientOperationID,
+) bool {
+	if path == nil || operationID.String() == "" {
+		return false
+	}
+	return slices.Contains(path.operations, operationID)
+}
+
 func (path *Path) ValidatePlan(plan access.CodecPlan) error {
 	if path == nil ||
 		plan.ID() != path.id ||
@@ -169,5 +203,67 @@ func (path *Path) ValidatePlan(plan access.CodecPlan) error {
 		plan.ProviderDialect() != path.backend.Dialect() {
 		return errors.New("active Access codec plan is unsupported")
 	}
+	planOperations := plan.ClientOperations()
+	if len(planOperations) != len(path.operations) {
+		return errors.New("active Access client operations are unsupported")
+	}
+	operationIDs := make([]access.ClientOperationID, len(planOperations))
+	for index, operation := range planOperations {
+		operationIDs[index] = operation.ID()
+	}
+	sort.Slice(operationIDs, func(left, right int) bool {
+		return operationIDs[left].String() < operationIDs[right].String()
+	})
+	if !slices.Equal(operationIDs, path.operations) {
+		return errors.New("active Access client operations are unsupported")
+	}
 	return nil
+}
+
+// Selector is an immutable, explicitly assembled set of typed protocol paths.
+// It performs no registration and owns no global state.
+type Selector struct {
+	paths []*Path
+}
+
+func NewSelector(paths ...*Path) (*Selector, error) {
+	if len(paths) == 0 {
+		return nil, errors.New("protocol path selector is empty")
+	}
+	owned := slices.Clone(paths)
+	for index, path := range owned {
+		if path == nil {
+			return nil, errors.New("protocol path selector contains a nil path")
+		}
+		for previous := 0; previous < index; previous++ {
+			if owned[previous].id == path.id &&
+				owned[previous].revision == path.revision {
+				return nil, errors.New(
+					"protocol path selector contains a duplicate path",
+				)
+			}
+		}
+	}
+	return &Selector{paths: owned}, nil
+}
+
+func (selector *Selector) Select(
+	plan access.CodecPlan,
+	operationID access.ClientOperationID,
+) (*Path, error) {
+	if selector == nil || operationID.String() == "" {
+		return nil, errors.New("protocol path selection input is invalid")
+	}
+	for _, path := range selector.paths {
+		if path.ValidatePlan(plan) != nil {
+			continue
+		}
+		if !path.SupportsClientOperation(operationID) {
+			return nil, errors.New(
+				"active Access client operation is unsupported",
+			)
+		}
+		return path, nil
+	}
+	return nil, errors.New("active Access codec plan is unsupported")
 }

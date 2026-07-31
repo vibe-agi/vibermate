@@ -44,21 +44,22 @@ const (
 type ReasonCode string
 
 const (
-	ReasonProxyAuthenticationRequired ReasonCode = "proxy_authentication_required"
-	ReasonCaptureRunRejected          ReasonCode = "capture_run_rejected"
-	ReasonAgentEndpointNotConfigured  ReasonCode = "agent_endpoint_not_configured"
-	ReasonConnectAuthorityInvalid     ReasonCode = "connect_authority_invalid"
-	ReasonConnectSNIMismatch          ReasonCode = "connect_sni_mismatch"
-	ReasonMITMUnavailable             ReasonCode = "mitm_unavailable"
-	ReasonRequestAuthorityMismatch    ReasonCode = "request_authority_mismatch"
-	ReasonAgentEndpointChanged        ReasonCode = "agent_endpoint_changed"
-	ReasonPathUnsupported             ReasonCode = "path_unsupported"
-	ReasonRequestBodyInvalid          ReasonCode = "request_body_invalid"
-	ReasonExchangeFailed              ReasonCode = "exchange_failed"
-	ReasonOriginalEgressFailed        ReasonCode = "original_egress_failed"
-	ReasonProxyStopping               ReasonCode = "proxy_stopping"
-	ReasonConnectOnly                 ReasonCode = "connect_only"
-	ReasonConnectionAuditUnavailable  ReasonCode = "connection_audit_unavailable"
+	ReasonProxyAuthenticationRequired   ReasonCode = "proxy_authentication_required"
+	ReasonCaptureRunRejected            ReasonCode = "capture_run_rejected"
+	ReasonAgentEndpointNotConfigured    ReasonCode = "agent_endpoint_not_configured"
+	ReasonConnectAuthorityInvalid       ReasonCode = "connect_authority_invalid"
+	ReasonConnectSNIMismatch            ReasonCode = "connect_sni_mismatch"
+	ReasonMITMUnavailable               ReasonCode = "mitm_unavailable"
+	ReasonRequestAuthorityMismatch      ReasonCode = "request_authority_mismatch"
+	ReasonAgentEndpointChanged          ReasonCode = "agent_endpoint_changed"
+	ReasonPathUnsupported               ReasonCode = "path_unsupported"
+	ReasonResponsesWebSocketUnsupported ReasonCode = "responses_websocket_unsupported"
+	ReasonRequestBodyInvalid            ReasonCode = "request_body_invalid"
+	ReasonExchangeFailed                ReasonCode = "exchange_failed"
+	ReasonOriginalEgressFailed          ReasonCode = "original_egress_failed"
+	ReasonProxyStopping                 ReasonCode = "proxy_stopping"
+	ReasonConnectOnly                   ReasonCode = "connect_only"
+	ReasonConnectionAuditUnavailable    ReasonCode = "connection_audit_unavailable"
 )
 
 var ErrProxyStopping = errors.New("loopback proxy is stopping")
@@ -549,6 +550,17 @@ func (handler *Handler) serveInner(
 		return
 	}
 	if capability.Kind() == pathcapability.KindUnsupported {
+		if capability.Transport() ==
+			access.ClientOperationTransportWebSocket &&
+			isWebSocketUpgrade(request) {
+			writeReason(
+				writer,
+				http.StatusUpgradeRequired,
+				ReasonResponsesWebSocketUnsupported,
+				"",
+			)
+			return
+		}
 		writeReason(
 			writer,
 			http.StatusUnprocessableEntity,
@@ -594,6 +606,24 @@ func (handler *Handler) serveInner(
 	}
 }
 
+func isWebSocketUpgrade(request *http.Request) bool {
+	if request == nil ||
+		!strings.EqualFold(
+			strings.TrimSpace(request.Header.Get("Upgrade")),
+			"websocket",
+		) {
+		return false
+	}
+	for _, value := range request.Header.Values("Connection") {
+		for _, token := range strings.Split(value, ",") {
+			if strings.EqualFold(strings.TrimSpace(token), "upgrade") {
+				return true
+			}
+		}
+	}
+	return false
+}
+
 func (handler *Handler) serveSemantic(
 	writer http.ResponseWriter,
 	request *http.Request,
@@ -604,9 +634,21 @@ func (handler *Handler) serveSemantic(
 	observation transportprofile.Observation,
 	audit *connectionevent.Connection,
 ) {
+	operation, err := exchange.NewClientOperationEvidence(
+		capability.OperationID(),
+		capability.Revision(),
+		request.Method,
+		request.URL.Path,
+		request.URL.RawQuery,
+	)
+	if err != nil {
+		writeReason(writer, http.StatusBadRequest, ReasonRequestBodyInvalid, "")
+		return
+	}
 	clientRequest, err := exchange.NewClientRequest(
 		exchangeID,
 		binding,
+		operation,
 		body,
 		capability.ReplayClass(),
 		exchange.WithClientHelloObservation(observation),

@@ -38,6 +38,7 @@ type ClientOperationPlan struct {
 	pathPattern    string
 	pathMatch      ClientOperationPathMatch
 	kind           ClientOperationKind
+	transport      ClientOperationTransport
 	bodyKind       ClientOperationBodyKind
 	replayClass    ClientReplayClass
 	codecFeature   CodecFeature
@@ -62,6 +63,9 @@ func (plan ClientOperationPlan) PathMatch() ClientOperationPathMatch {
 }
 func (plan ClientOperationPlan) Kind() ClientOperationKind {
 	return plan.kind
+}
+func (plan ClientOperationPlan) Transport() ClientOperationTransport {
+	return plan.transport
 }
 func (plan ClientOperationPlan) BodyKind() ClientOperationBodyKind {
 	return plan.bodyKind

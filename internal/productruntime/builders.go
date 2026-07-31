@@ -22,6 +22,7 @@ import (
 	"github.com/vibe-agi/vibermate/internal/operationcatalog"
 	"github.com/vibe-agi/vibermate/internal/originaltransport"
 	"github.com/vibe-agi/vibermate/internal/pathcapability"
+	"github.com/vibe-agi/vibermate/internal/protocolpath"
 	"github.com/vibe-agi/vibermate/internal/providertransport"
 	"github.com/vibe-agi/vibermate/internal/responseschat"
 	"github.com/vibe-agi/vibermate/internal/runtimepersistence"
@@ -449,17 +450,30 @@ func (productionExchangeBuilder) Build(
 	if request.activities == nil {
 		return nil, errors.New("Exchange Activity recorder is nil")
 	}
-	protocolPath, err := anthropicchat.NewProtocolPath(
+	anthropicPath, err := anthropicchat.NewProtocolPath(
 		anthropicchat.DefaultOptions(),
 	)
 	if err != nil {
 		return nil, fmt.Errorf("build Anthropic Chat protocol path: %w", err)
 	}
+	responsesPath, err := responseschat.NewProtocolPath(
+		responseschat.DefaultOptions(),
+	)
+	if err != nil {
+		return nil, fmt.Errorf("build Responses Chat protocol path: %w", err)
+	}
+	protocolPaths, err := protocolpath.NewSelector(
+		anthropicPath,
+		responsesPath,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("build protocol path selector: %w", err)
+	}
 	return exchange.New(exchange.Options{
 		OwnerContext:  request.ownerContext,
 		Actions:       request.actions,
 		Resolver:      request.resolver,
-		ProtocolPath:  protocolPath,
+		ProtocolPaths: protocolPaths,
 		Provider:      request.provider,
 		ToolDecisions: request.toolDecisions,
 		RetryWaiter:   exchange.TimerRetryWaiter{},

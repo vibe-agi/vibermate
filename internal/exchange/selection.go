@@ -3,10 +3,76 @@ package exchange
 import (
 	"errors"
 	"fmt"
+	"slices"
 
 	"github.com/vibe-agi/vibermate/internal/access"
 	"github.com/vibe-agi/vibermate/internal/providertransport"
 )
+
+func validateClientOperation(
+	codecPlan access.CodecPlan,
+	evidence ClientOperationEvidence,
+	replayClass ReplayClass,
+) error {
+	var selected access.ClientOperationPlan
+	found := false
+	for _, operation := range codecPlan.ClientOperations() {
+		if operation.ID() != evidence.ID() {
+			continue
+		}
+		if found {
+			return errors.New("client operation is duplicated in the Access plan")
+		}
+		selected = operation
+		found = true
+	}
+	if !found ||
+		selected.Revision() != evidence.Revision() ||
+		selected.ClientDialect() != codecPlan.ClientDialect() ||
+		selected.PathMatch() != access.ClientOperationPathExact ||
+		selected.Kind() != access.ClientOperationSemantic ||
+		selected.Transport() != access.ClientOperationTransportHTTP ||
+		!selected.EgressBearing() ||
+		selected.PathPattern() != evidence.Path() ||
+		!slices.Contains(selected.Methods(), evidence.Method()) ||
+		(evidence.RawQuery() != "" &&
+			!slices.Contains(
+				selected.AllowedQueries(),
+				evidence.RawQuery(),
+			)) {
+		return errors.New(
+			"client operation evidence does not match the Access plan",
+		)
+	}
+	expectedReplay, err := exchangeReplayClass(selected.ReplayClass())
+	if err != nil || replayClass != expectedReplay {
+		return errors.New(
+			"client operation replay class does not match the Access plan",
+		)
+	}
+	return nil
+}
+
+func exchangeReplayClass(
+	class access.ClientReplayClass,
+) (ReplayClass, error) {
+	switch class {
+	case access.ClientReplaySafe:
+		return ReplaySafe, nil
+	case access.ClientReplayIdempotencyKeyed:
+		return ReplayIdempotencyKeyed, nil
+	case access.ClientReplayGenerationCostOnly:
+		return ReplayGenerationCostOnly, nil
+	case access.ClientReplaySideEffectPossible:
+		return ReplaySideEffectPossible, nil
+	case access.ClientReplayNonReplayable:
+		return ReplayNonReplayable, nil
+	case access.ClientReplayUnknown:
+		return ReplayUnknown, nil
+	default:
+		return "", errors.New("client operation replay class is invalid")
+	}
+}
 
 type frozenSelection struct {
 	accessID       access.AccessID

@@ -42,7 +42,7 @@ var errOfflineHoldAdmission = errors.New(
 type Pipeline struct {
 	resolver      access.SnapshotResolver
 	actions       offlinehold.ActionAdmission
-	protocolPath  *protocolpath.Path
+	protocolPaths *protocolpath.Selector
 	provider      Provider
 	toolDecisions ToolDecisionGate
 	retryWaiter   RetryWaiter
@@ -70,7 +70,7 @@ func New(options Options) (*Pipeline, error) {
 	if options.OwnerContext == nil ||
 		options.Actions == nil ||
 		options.Resolver == nil ||
-		options.ProtocolPath == nil ||
+		options.ProtocolPaths == nil ||
 		options.Provider == nil ||
 		options.ToolDecisions == nil ||
 		options.RetryWaiter == nil ||
@@ -88,7 +88,7 @@ func New(options Options) (*Pipeline, error) {
 	return &Pipeline{
 		resolver:      options.Resolver,
 		actions:       options.Actions,
-		protocolPath:  options.ProtocolPath,
+		protocolPaths: options.ProtocolPaths,
 		provider:      options.Provider,
 		toolDecisions: options.ToolDecisions,
 		retryWaiter:   options.RetryWaiter,
@@ -197,7 +197,23 @@ func (pipeline *Pipeline) Execute(
 	}
 	result.RouteHost = selection.target.NetworkHost()
 	result.CredentialBindingID = selection.accountID.String()
-	if err := pipeline.protocolPath.ValidatePlan(selection.codecPlan); err != nil {
+	if err := validateClientOperation(
+		selection.codecPlan,
+		request.operation,
+		request.replayClass,
+	); err != nil {
+		return result, newFailure(
+			ReasonUnsupportedAccessPlan,
+			request.exchangeID,
+			0,
+			err,
+		)
+	}
+	protocolPath, err := pipeline.protocolPaths.Select(
+		selection.codecPlan,
+		request.operation.id,
+	)
+	if err != nil {
 		return result, newFailure(
 			ReasonUnsupportedAccessPlan,
 			request.exchangeID,
@@ -206,7 +222,7 @@ func (pipeline *Pipeline) Execute(
 		)
 	}
 	decoded, clientRequestReport, err :=
-		pipeline.protocolPath.Client().DecodeRequest(request.body)
+		protocolPath.Client().DecodeRequest(request.body)
 	result.Translation = result.Translation.Merge(clientRequestReport)
 	if err != nil {
 		reason := ReasonInvalidExchangeRequest
@@ -233,7 +249,7 @@ func (pipeline *Pipeline) Execute(
 		)
 	}
 	encodedProvider, backendRequestReport, err :=
-		pipeline.protocolPath.Backend().EncodeRequest(decoded)
+		protocolPath.Backend().EncodeRequest(decoded)
 	result.Translation = result.Translation.Merge(backendRequestReport)
 	if err != nil {
 		return result, newFailure(
@@ -277,6 +293,7 @@ func (pipeline *Pipeline) Execute(
 			operationContext,
 			request,
 			selection,
+			protocolPath,
 			decoded,
 			frozenRequest,
 			downstream,
@@ -288,6 +305,7 @@ func (pipeline *Pipeline) Execute(
 			operationContext,
 			request,
 			selection,
+			protocolPath,
 			decoded,
 			frozenRequest,
 			downstream,
@@ -515,6 +533,7 @@ func (pipeline *Pipeline) executeComplete(
 	ctx context.Context,
 	request ClientRequest,
 	selection frozenSelection,
+	protocolPath *protocolpath.Path,
 	decoded protocolcore.Request,
 	frozenRequest providertransport.Request,
 	downstream Downstream,
@@ -570,7 +589,7 @@ func (pipeline *Pipeline) executeComplete(
 		)
 	}
 	providerResponse, backendResponseReport, err :=
-		pipeline.protocolPath.Backend().DecodeResponse(
+		protocolPath.Backend().DecodeResponse(
 			decoded,
 			body,
 		)
@@ -589,7 +608,7 @@ func (pipeline *Pipeline) executeComplete(
 		return err
 	}
 	clientBody, clientResponseReport, err :=
-		pipeline.protocolPath.Client().EncodeResponse(
+		protocolPath.Client().EncodeResponse(
 			decoded,
 			providerResponse,
 		)
@@ -662,6 +681,7 @@ func (pipeline *Pipeline) executeStream(
 	ctx context.Context,
 	request ClientRequest,
 	selection frozenSelection,
+	protocolPath *protocolpath.Path,
 	decoded protocolcore.Request,
 	frozenRequest providertransport.Request,
 	downstream Downstream,
@@ -852,7 +872,7 @@ func (pipeline *Pipeline) executeStream(
 			)
 		}
 
-		stream, err := pipeline.protocolPath.Streaming().NewStream(decoded)
+		stream, err := protocolPath.Streaming().NewStream(decoded)
 		if err != nil {
 			_ = response.Body.Close()
 			return pipeline.abortStream(

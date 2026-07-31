@@ -480,6 +480,7 @@ func compileClientOperation(
 		pathPattern:    definition.pathPattern,
 		pathMatch:      definition.pathMatch,
 		kind:           definition.kind,
+		transport:      definition.transport,
 		bodyKind:       definition.bodyKind,
 		replayClass:    definition.replayClass,
 		codecFeature:   definition.codecFeature,
@@ -1092,6 +1093,7 @@ type canonicalClientOperation struct {
 	PathPattern    string   `json:"pathPattern"`
 	PathMatch      string   `json:"pathMatch"`
 	Kind           string   `json:"kind"`
+	Transport      string   `json:"transport"`
 	BodyKind       string   `json:"bodyKind"`
 	ReplayClass    string   `json:"replayClass"`
 	CodecFeature   string   `json:"codecFeature"`
@@ -1109,7 +1111,7 @@ type canonicalDependency struct {
 func canonicalPlanBytes(snapshot AccessPlanSnapshot) ([]byte, error) {
 	binding := snapshot.aggregate.Binding
 	canonical := canonicalPlan{
-		SchemaVersion: 3,
+		SchemaVersion: 4,
 		Binding: canonicalBinding{
 			ID:                binding.ID.String(),
 			Revision:          binding.Revision,
@@ -1179,6 +1181,7 @@ func canonicalPlanBytes(snapshot AccessPlanSnapshot) ([]byte, error) {
 				PathPattern:    operation.pathPattern,
 				PathMatch:      string(operation.pathMatch),
 				Kind:           string(operation.kind),
+				Transport:      string(operation.transport),
 				BodyKind:       string(operation.bodyKind),
 				ReplayClass:    string(operation.replayClass),
 				CodecFeature:   string(operation.codecFeature),

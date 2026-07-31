@@ -45,12 +45,17 @@ func TestPathRequiresTwoTypedEdgesAndRejectsAnUnmatchedPlan(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	operationID, err := access.NewClientOperationID("client-create")
+	if err != nil {
+		t.Fatal(err)
+	}
 	path, err := New(Options{
-		ID:        identifier,
-		Revision:  1,
-		Client:    clientCodecFixture{},
-		Backend:   backendCodecFixture{},
-		Streaming: streamingFixture{},
+		ID:                 identifier,
+		Revision:           1,
+		ClientOperationIDs: []access.ClientOperationID{operationID},
+		Client:             clientCodecFixture{},
+		Backend:            backendCodecFixture{},
+		Streaming:          streamingFixture{},
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -61,6 +66,23 @@ func TestPathRequiresTwoTypedEdgesAndRejectsAnUnmatchedPlan(t *testing.T) {
 	}
 	if err := path.ValidatePlan(access.CodecPlan{}); err == nil {
 		t.Fatal("path accepted an unmatched Access codec plan")
+	}
+	operations := path.ClientOperationIDs()
+	operations[0] = access.ClientOperationID{}
+	if !path.SupportsClientOperation(operationID) ||
+		path.SupportsClientOperation(access.ClientOperationID{}) ||
+		path.ClientOperationIDs()[0] != operationID {
+		t.Fatal("path did not own its typed client operation identities")
+	}
+	selector, err := NewSelector(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := selector.Select(access.CodecPlan{}, operationID); err == nil {
+		t.Fatal("selector accepted an unmatched Access codec plan")
+	}
+	if _, err := NewSelector(path, path); err == nil {
+		t.Fatal("selector accepted a duplicate typed protocol path")
 	}
 	if _, err := New(Options{ID: identifier, Revision: 1}); err == nil {
 		t.Fatal("path accepted missing codec edges")

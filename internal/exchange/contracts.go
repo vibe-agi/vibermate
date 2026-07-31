@@ -9,6 +9,8 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"net/url"
+	pathpkg "path"
 	"slices"
 	"strings"
 	"time"
@@ -274,11 +276,73 @@ func (class ReplayClass) allowsTransportResend() bool {
 	}
 }
 
-// ClientRequest is an owned immutable ingress representation. A future ingress
-// adapter constructs it once after selecting the Access identity.
+// ClientOperationEvidence freezes the operation-catalog match made before
+// semantic decoding. Exchange revalidates it against the one resolved plan.
+type ClientOperationEvidence struct {
+	id       access.ClientOperationID
+	revision access.Revision
+	method   string
+	path     string
+	rawQuery string
+}
+
+func NewClientOperationEvidence(
+	id access.ClientOperationID,
+	revision access.Revision,
+	method string,
+	path string,
+	rawQuery string,
+) (ClientOperationEvidence, error) {
+	evidence := ClientOperationEvidence{
+		id:       id,
+		revision: revision,
+		method:   method,
+		path:     path,
+		rawQuery: rawQuery,
+	}
+	if err := evidence.validate(); err != nil {
+		return ClientOperationEvidence{}, err
+	}
+	return evidence, nil
+}
+
+func (evidence ClientOperationEvidence) ID() access.ClientOperationID {
+	return evidence.id
+}
+
+func (evidence ClientOperationEvidence) Revision() access.Revision {
+	return evidence.revision
+}
+
+func (evidence ClientOperationEvidence) Method() string {
+	return evidence.method
+}
+
+func (evidence ClientOperationEvidence) Path() string {
+	return evidence.path
+}
+
+func (evidence ClientOperationEvidence) RawQuery() string {
+	return evidence.rawQuery
+}
+
+func (evidence ClientOperationEvidence) validate() error {
+	if evidence.id.String() == "" ||
+		evidence.revision == 0 ||
+		!validOperationMethod(evidence.method) ||
+		!canonicalOperationPath(evidence.path) ||
+		(evidence.rawQuery != "" &&
+			!canonicalOperationQuery(evidence.rawQuery)) {
+		return errors.New("client operation evidence is invalid")
+	}
+	return nil
+}
+
+// ClientRequest is an owned immutable ingress representation.
 type ClientRequest struct {
 	exchangeID     string
 	ingress        access.IngressBinding
+	operation      ClientOperationEvidence
 	body           []byte
 	replayClass    ReplayClass
 	clientHello    transportprofile.Observation
@@ -308,6 +372,7 @@ func WithClientHelloObservation(
 func NewClientRequest(
 	exchangeID string,
 	ingress access.IngressBinding,
+	operation ClientOperationEvidence,
 	body []byte,
 	replayClass ReplayClass,
 	options ...ClientRequestOption,
@@ -316,6 +381,9 @@ func NewClientRequest(
 		return ClientRequest{}, err
 	}
 	if err := ingress.Validate(); err != nil {
+		return ClientRequest{}, err
+	}
+	if err := operation.validate(); err != nil {
 		return ClientRequest{}, err
 	}
 	if len(body) == 0 || len(body) > providertransport.MaxProviderRequestBytes {
@@ -327,6 +395,7 @@ func NewClientRequest(
 	request := ClientRequest{
 		exchangeID:  exchangeID,
 		ingress:     ingress,
+		operation:   operation,
 		body:        bytes.Clone(body),
 		replayClass: replayClass,
 	}
@@ -366,6 +435,10 @@ func (request ClientRequest) IngressBinding() access.IngressBinding {
 	return request.ingress
 }
 
+func (request ClientRequest) ClientOperation() ClientOperationEvidence {
+	return request.operation
+}
+
 func (request ClientRequest) Body() []byte {
 	return bytes.Clone(request.body)
 }
@@ -388,6 +461,9 @@ func (request ClientRequest) validate() error {
 	if err := request.ingress.Validate(); err != nil {
 		return err
 	}
+	if err := request.operation.validate(); err != nil {
+		return err
+	}
 	if len(request.body) == 0 ||
 		len(request.body) > providertransport.MaxProviderRequestBytes {
 		return errors.New("client request body has an invalid size")
@@ -396,6 +472,45 @@ func (request ClientRequest) validate() error {
 		return errors.New("client TLS ClientHello observation is unavailable")
 	}
 	return request.replayClass.validate()
+}
+
+func validOperationMethod(value string) bool {
+	if value == "" || strings.ToUpper(value) != value {
+		return false
+	}
+	for _, character := range value {
+		if (character < 'A' || character > 'Z') &&
+			character != '-' {
+			return false
+		}
+	}
+	return true
+}
+
+func canonicalOperationPath(value string) bool {
+	if value == "" ||
+		len(value) > access.MaxClientOperationPath ||
+		!utf8.ValidString(value) ||
+		value[0] != '/' ||
+		strings.ContainsAny(value, "\\%\x00\r\n\t") ||
+		pathpkg.Clean(value) != value ||
+		(value != "/" && strings.HasSuffix(value, "/")) {
+		return false
+	}
+	for _, character := range value {
+		if character < 0x20 || character > 0x7e {
+			return false
+		}
+	}
+	return true
+}
+
+func canonicalOperationQuery(value string) bool {
+	if value == "" || len(value) > 2048 || !utf8.ValidString(value) {
+		return false
+	}
+	parsed, err := url.ParseQuery(value)
+	return err == nil && parsed.Encode() == value
 }
 
 type ResponseMode string
@@ -659,7 +774,7 @@ type Options struct {
 	OwnerContext       context.Context
 	Actions            offlinehold.ActionAdmission
 	Resolver           access.SnapshotResolver
-	ProtocolPath       *protocolpath.Path
+	ProtocolPaths      *protocolpath.Selector
 	Provider           Provider
 	ToolDecisions      ToolDecisionGate
 	RetryWaiter        RetryWaiter

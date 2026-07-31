@@ -5,6 +5,7 @@ import (
 	"net/http"
 
 	"github.com/vibe-agi/vibermate/internal/access"
+	"github.com/vibe-agi/vibermate/internal/operationcatalog"
 	"github.com/vibe-agi/vibermate/internal/protocolcore"
 	"github.com/vibe-agi/vibermate/internal/protocolpath"
 )
@@ -116,11 +117,18 @@ func NewProtocolPath(options Options) (*protocolpath.Path, error) {
 	if err != nil {
 		return nil, err
 	}
+	operationID, err := access.NewClientOperationID(
+		operationcatalog.AnthropicMessagesCreateID,
+	)
+	if err != nil {
+		return nil, err
+	}
 	return protocolpath.New(protocolpath.Options{
-		ID:        identifier,
-		Revision:  access.Revision(CodecRevision),
-		Client:    clientCodec{codec: codec},
-		Backend:   backendCodec{codec: codec},
-		Streaming: streamingBridge{codec: codec},
+		ID:                 identifier,
+		Revision:           access.Revision(CodecRevision),
+		ClientOperationIDs: []access.ClientOperationID{operationID},
+		Client:             clientCodec{codec: codec},
+		Backend:            backendCodec{codec: codec},
+		Streaming:          streamingBridge{codec: codec},
 	})
 }

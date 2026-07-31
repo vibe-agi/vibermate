@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"slices"
@@ -18,7 +19,9 @@ import (
 	"github.com/vibe-agi/vibermate/internal/offlinehold"
 	"github.com/vibe-agi/vibermate/internal/operationcatalog"
 	"github.com/vibe-agi/vibermate/internal/protocolcore"
+	"github.com/vibe-agi/vibermate/internal/protocolpath"
 	"github.com/vibe-agi/vibermate/internal/providertransport"
+	"github.com/vibe-agi/vibermate/internal/responseschat"
 	"github.com/vibe-agi/vibermate/internal/secretstore"
 	"github.com/vibe-agi/vibermate/internal/ssewire"
 	"github.com/vibe-agi/vibermate/internal/transportprofile"
@@ -53,6 +56,7 @@ func TestPipelineExecutesCompleteResponseFromOneFrozenPlan(t *testing.T) {
 	request, err := NewClientRequest(
 		"exchange-complete",
 		snapshot.IngressBinding(),
+		mustAnthropicOperationEvidence(t),
 		inputBody,
 		ReplayGenerationCostOnly,
 	)
@@ -104,6 +108,361 @@ func TestPipelineExecutesCompleteResponseFromOneFrozenPlan(t *testing.T) {
 			protocolcore.NoticeMetadataNotForwarded,
 		) {
 		t.Fatalf("result = %+v", result)
+	}
+}
+
+func TestPipelineExecutesCompleteResponsesOperationFromOneFrozenPlan(
+	t *testing.T,
+) {
+	t.Parallel()
+
+	accessID := mustAccessID(t, "access-responses-complete")
+	snapshot := compileResponsesTestSnapshot(t, accessID, 1, "gpt-plan-responses")
+	resolver := &resolverDouble{snapshots: []access.AccessPlanSnapshot{snapshot}}
+	provider := &providerDouble{results: []providerResult{{
+		response: jsonResponse(
+			http.StatusOK,
+			completeProviderResponse("gpt-plan-responses"),
+		),
+	}}}
+	pipeline := newTestPipeline(
+		t,
+		resolver,
+		provider,
+		&decisionDouble{decision: ToolDecision{Outcome: ToolDecisionApproved}},
+	)
+	t.Cleanup(func() { shutdownPipeline(t, pipeline) })
+
+	request, err := NewClientRequest(
+		"exchange-responses-complete",
+		snapshot.IngressBinding(),
+		mustResponsesOperationEvidence(t),
+		completeResponsesClientRequest(),
+		ReplayGenerationCostOnly,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	downstream := &downstreamRecorder{}
+	result, err := pipeline.Execute(context.Background(), request, downstream)
+	if err != nil {
+		t.Fatalf("Execute() error = %v", err)
+	}
+	if resolver.callCount() != 1 {
+		t.Fatalf("resolver calls = %d, want 1", resolver.callCount())
+	}
+	requests := provider.requestsSnapshot()
+	if len(requests) != 1 ||
+		requests[0].RelativePath() != anthropicchat.ProviderRelativePath {
+		t.Fatalf("provider requests = %#v", requests)
+	}
+	providerHeaders := requests[0].Headers()
+	if providerHeaders.Get("Accept") != "application/json" ||
+		providerHeaders.Get("Authorization") != "" ||
+		providerHeaders.Get("Proxy-Authorization") != "" ||
+		providerHeaders.Get("Connection") != "" ||
+		providerHeaders.Get("X-Client-Hop") != "" {
+		t.Fatalf("provider headers = %v", providerHeaders)
+	}
+	var providerWire struct {
+		Model  string `json:"model"`
+		Stream bool   `json:"stream"`
+	}
+	if err := json.Unmarshal(requests[0].Body(), &providerWire); err != nil {
+		t.Fatal(err)
+	}
+	if providerWire.Model != "gpt-plan-responses" || providerWire.Stream {
+		t.Fatalf("provider request = %+v", providerWire)
+	}
+	var clientWire struct {
+		Object string `json:"object"`
+		Status string `json:"status"`
+		Model  string `json:"model"`
+		Output []struct {
+			Type    string `json:"type"`
+			Content []struct {
+				Type string `json:"type"`
+				Text string `json:"text"`
+			} `json:"content"`
+		} `json:"output"`
+	}
+	if err := json.Unmarshal(downstream.bytesSnapshot(), &clientWire); err != nil {
+		t.Fatalf("decode Responses body: %v", err)
+	}
+	if clientWire.Object != "response" ||
+		clientWire.Status != "completed" ||
+		clientWire.Model != "codex-client-alias" ||
+		len(clientWire.Output) != 1 ||
+		clientWire.Output[0].Type != "message" ||
+		len(clientWire.Output[0].Content) != 1 ||
+		clientWire.Output[0].Content[0].Type != "output_text" ||
+		clientWire.Output[0].Content[0].Text != "Done." {
+		t.Fatalf("Responses body = %#v", clientWire)
+	}
+	if result.Outcome != AttemptSucceeded ||
+		result.AccessRevision != snapshot.Revision() ||
+		result.PlanHash != snapshot.PlanHash().String() ||
+		result.Ledger.DownstreamSemanticBytes == 0 ||
+		!result.Ledger.DownstreamTerminal {
+		t.Fatalf("result = %+v", result)
+	}
+}
+
+func TestPipelineRejectsResponsesOperationEvidenceMismatchBeforeProvider(
+	t *testing.T,
+) {
+	t.Parallel()
+
+	responsesID, err := access.NewClientOperationID(
+		operationcatalog.OpenAIResponsesCreateID,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	anthropicID, err := access.NewClientOperationID(
+		operationcatalog.AnthropicMessagesCreateID,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	tests := []struct {
+		name     string
+		id       access.ClientOperationID
+		revision access.Revision
+		method   string
+		path     string
+		query    string
+	}{
+		{
+			name:     "operation ID",
+			id:       anthropicID,
+			revision: 1,
+			method:   http.MethodPost,
+			path:     "/v1/responses",
+		},
+		{
+			name:     "operation revision",
+			id:       responsesID,
+			revision: 2,
+			method:   http.MethodPost,
+			path:     "/v1/responses",
+		},
+		{
+			name:     "method",
+			id:       responsesID,
+			revision: 1,
+			method:   http.MethodGet,
+			path:     "/v1/responses",
+		},
+		{
+			name:     "path",
+			id:       responsesID,
+			revision: 1,
+			method:   http.MethodPost,
+			path:     "/v1/other",
+		},
+		{
+			name:     "query",
+			id:       responsesID,
+			revision: 1,
+			method:   http.MethodPost,
+			path:     "/v1/responses",
+			query:    "mode=test",
+		},
+	}
+	for _, test := range tests {
+		test := test
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+			accessID := mustAccessID(
+				t,
+				"access-responses-mismatch-"+strings.ReplaceAll(test.name, " ", "-"),
+			)
+			snapshot := compileResponsesTestSnapshot(
+				t,
+				accessID,
+				1,
+				"gpt-plan-responses",
+			)
+			resolver := &resolverDouble{
+				snapshots: []access.AccessPlanSnapshot{snapshot},
+			}
+			provider := &providerDouble{}
+			pipeline := newTestPipeline(
+				t,
+				resolver,
+				provider,
+				&decisionDouble{},
+			)
+			t.Cleanup(func() { shutdownPipeline(t, pipeline) })
+			evidence, err := NewClientOperationEvidence(
+				test.id,
+				test.revision,
+				test.method,
+				test.path,
+				test.query,
+			)
+			if err != nil {
+				t.Fatal(err)
+			}
+			request, err := NewClientRequest(
+				"exchange-responses-mismatch",
+				snapshot.IngressBinding(),
+				evidence,
+				completeResponsesClientRequest(),
+				ReplayGenerationCostOnly,
+			)
+			if err != nil {
+				t.Fatal(err)
+			}
+			_, executeErr := pipeline.Execute(
+				context.Background(),
+				request,
+				&downstreamRecorder{},
+			)
+			if ReasonOf(executeErr) != ReasonUnsupportedAccessPlan {
+				t.Fatalf("Execute() error = %v", executeErr)
+			}
+			if resolver.callCount() != 1 || provider.callCount() != 0 {
+				t.Fatalf(
+					"resolver calls=%d provider calls=%d",
+					resolver.callCount(),
+					provider.callCount(),
+				)
+			}
+		})
+	}
+}
+
+func TestPipelineIsolatesConcurrentAnthropicAndResponsesAccesses(
+	t *testing.T,
+) {
+	t.Parallel()
+
+	anthropicID := mustAccessID(t, "access-concurrent-anthropic")
+	responsesID := mustAccessID(t, "access-concurrent-responses")
+	anthropicSnapshot := compileTestSnapshot(
+		t,
+		anthropicID,
+		1,
+		"gpt-concurrent-anthropic",
+	)
+	responsesSnapshot := compileResponsesTestSnapshot(
+		t,
+		responsesID,
+		1,
+		"gpt-concurrent-responses",
+	)
+	resolver := &keyedResolverDouble{
+		snapshots: map[access.AccessID]access.AccessPlanSnapshot{
+			anthropicID: anthropicSnapshot,
+			responsesID: responsesSnapshot,
+		},
+	}
+	const exchanges = 40
+	results := make([]providerResult, exchanges)
+	for index := range results {
+		results[index] = providerResult{
+			response: jsonResponse(
+				http.StatusOK,
+				completeProviderResponse("gpt-concurrent-provider"),
+			),
+		}
+	}
+	provider := &providerDouble{results: results}
+	pipeline := newTestPipeline(
+		t,
+		resolver,
+		provider,
+		&decisionDouble{decision: ToolDecision{Outcome: ToolDecisionApproved}},
+	)
+	t.Cleanup(func() { shutdownPipeline(t, pipeline) })
+	type execution struct {
+		request   ClientRequest
+		accessID  access.AccessID
+		planHash  string
+		responses bool
+	}
+	executions := make([]execution, 0, exchanges)
+	for index := 0; index < exchanges; index++ {
+		snapshot := anthropicSnapshot
+		evidence := mustAnthropicOperationEvidence(t)
+		body := completeClientRequest()
+		responses := false
+		if index%2 == 1 {
+			snapshot = responsesSnapshot
+			evidence = mustResponsesOperationEvidence(t)
+			body = completeResponsesClientRequest()
+			responses = true
+		}
+		request, err := NewClientRequest(
+			fmt.Sprintf("exchange-concurrent-%d", index),
+			snapshot.IngressBinding(),
+			evidence,
+			body,
+			ReplayGenerationCostOnly,
+		)
+		if err != nil {
+			t.Fatal(err)
+		}
+		executions = append(executions, execution{
+			request:   request,
+			accessID:  snapshot.AccessID(),
+			planHash:  snapshot.PlanHash().String(),
+			responses: responses,
+		})
+	}
+
+	errs := make(chan error, exchanges)
+	var group sync.WaitGroup
+	for _, item := range executions {
+		item := item
+		group.Add(1)
+		go func() {
+			defer group.Done()
+			downstream := &downstreamRecorder{}
+			result, err := pipeline.Execute(
+				context.Background(),
+				item.request,
+				downstream,
+			)
+			if err != nil {
+				errs <- err
+				return
+			}
+			if result.AccessID != item.accessID.String() ||
+				result.PlanHash != item.planHash ||
+				result.Outcome != AttemptSucceeded {
+				errs <- fmt.Errorf(
+					"isolated result mismatch: %+v",
+					result,
+				)
+				return
+			}
+			wire := downstream.bytesSnapshot()
+			if item.responses != bytes.Contains(wire, []byte(`"object":"response"`)) {
+				errs <- fmt.Errorf(
+					"client dialect response mismatch: responses=%t body=%s",
+					item.responses,
+					wire,
+				)
+			}
+		}()
+	}
+	group.Wait()
+	close(errs)
+	for err := range errs {
+		t.Error(err)
+	}
+	if resolver.callCount(anthropicID) != exchanges/2 ||
+		resolver.callCount(responsesID) != exchanges/2 ||
+		provider.callCount() != exchanges {
+		t.Fatalf(
+			"calls: anthropic=%d responses=%d provider=%d",
+			resolver.callCount(anthropicID),
+			resolver.callCount(responsesID),
+			provider.callCount(),
+		)
 	}
 }
 
@@ -287,6 +646,7 @@ func TestPipelineRejectsConnectionBindingAfterAgentEndpointChange(
 	request, err := NewClientRequest(
 		"exchange-stale-ingress",
 		connectionPlan.IngressBinding(),
+		mustAnthropicOperationEvidence(t),
 		completeClientRequest(),
 		ReplayGenerationCostOnly,
 	)
@@ -317,19 +677,13 @@ func TestPipelineObservesSanitizedProviderRejection(t *testing.T) {
 	accessID := mustAccessID(t, "access-provider-rejection")
 	snapshot := compileTestSnapshot(t, accessID, 1, "gpt-rejection")
 	observer := &attemptObserverDouble{}
-	protocolPath, err := anthropicchat.NewProtocolPath(
-		anthropicchat.DefaultOptions(),
-	)
-	if err != nil {
-		t.Fatal(err)
-	}
 	pipeline, err := New(Options{
 		OwnerContext: context.Background(),
 		Actions:      newTestActionGate(t),
 		Resolver: &resolverDouble{
 			snapshots: []access.AccessPlanSnapshot{snapshot},
 		},
-		ProtocolPath: protocolPath,
+		ProtocolPaths: mustProtocolPathSelector(t),
 		Provider: &providerDouble{results: []providerResult{{
 			response: streamResponse(
 				http.StatusUnprocessableEntity,
@@ -404,7 +758,7 @@ func TestPipelineClassifiesProviderBodyIdleAfterResponseHeaders(t *testing.T) {
 			"exchange-provider-idle",
 			accessID,
 			streamingClientRequest(),
-			ReplayNonReplayable,
+			ReplayGenerationCostOnly,
 		),
 		downstream,
 	)
@@ -454,7 +808,7 @@ func TestPipelinePublishesStableProtocolReasonForMalformedStream(t *testing.T) {
 			"exchange-malformed-stream",
 			accessID,
 			streamingClientRequest(),
-			ReplayNonReplayable,
+			ReplayGenerationCostOnly,
 		),
 		downstream,
 	)
@@ -470,6 +824,65 @@ func TestPipelinePublishesStableProtocolReasonForMalformedStream(t *testing.T) {
 		downstream.aborts[0].ProtocolReason !=
 			protocolcore.ReasonMalformedEventStream {
 		t.Fatalf("downstream aborts = %+v", downstream.aborts)
+	}
+}
+
+func TestPipelineResponsesRejectsMalformedProviderStreamWithoutTerminal(
+	t *testing.T,
+) {
+	t.Parallel()
+
+	accessID := mustAccessID(t, "access-responses-malformed-stream")
+	snapshot := compileResponsesTestSnapshot(
+		t,
+		accessID,
+		1,
+		"gpt-responses-malformed",
+	)
+	provider := &providerDouble{results: []providerResult{{
+		response: &http.Response{
+			StatusCode: http.StatusOK,
+			Header: http.Header{
+				"Content-Type": []string{"text/event-stream"},
+			},
+			Body: io.NopCloser(strings.NewReader(
+				"data: {invalid-json}\n\ndata: [DONE]\n\n",
+			)),
+		},
+	}}}
+	pipeline := newTestPipeline(
+		t,
+		&resolverDouble{snapshots: []access.AccessPlanSnapshot{snapshot}},
+		provider,
+		&decisionDouble{decision: ToolDecision{Outcome: ToolDecisionApproved}},
+	)
+	t.Cleanup(func() { shutdownPipeline(t, pipeline) })
+	request, err := NewClientRequest(
+		"exchange-responses-malformed-stream",
+		snapshot.IngressBinding(),
+		mustResponsesOperationEvidence(t),
+		streamingResponsesClientRequest(),
+		ReplayGenerationCostOnly,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	downstream := &downstreamRecorder{}
+	result, err := pipeline.Execute(context.Background(), request, downstream)
+	var failure *Failure
+	if !errors.As(err, &failure) ||
+		failure.Code != ReasonProviderResponseInvalid ||
+		failure.ProtocolReason != protocolcore.ReasonMalformedEventStream ||
+		result.Outcome != AttemptFailed ||
+		result.Ledger.DownstreamTerminal ||
+		!result.Ledger.DownstreamFailure {
+		t.Fatalf("Execute() result=%+v error=%v", result, err)
+	}
+	if bytes.Contains(
+		downstream.bytesSnapshot(),
+		[]byte(`"type":"response.completed"`),
+	) {
+		t.Fatalf("malformed stream emitted a terminal: %s", downstream.bytesSnapshot())
 	}
 }
 
@@ -508,7 +921,7 @@ func TestPipelineClassifiesUnexpectedStreamContentTypeWithoutBodyText(
 			"exchange-stream-content-type",
 			accessID,
 			streamingClientRequest(),
-			ReplayNonReplayable,
+			ReplayGenerationCostOnly,
 		),
 		downstream,
 	)
@@ -570,14 +983,14 @@ func TestPipelineProviderCommentsDoNotResetSemanticProgressTimeout(t *testing.T)
 			"exchange-semantic-idle",
 			accessID,
 			streamingClientRequest(),
-			ReplayNonReplayable,
+			ReplayGenerationCostOnly,
 		),
 		downstream,
 	)
 	var failure *Failure
 	if !errors.As(err, &failure) ||
-		failure.Code != ReasonProviderResponseIdle ||
-		failure.ProviderStatus != http.StatusOK {
+		failure.Code != ReasonTransportRetryExhausted ||
+		!errors.Is(err, ErrProviderSemanticIdle) {
 		t.Fatalf("Execute() result=%+v error=%v", result, err)
 	}
 	if elapsed := time.Since(started); elapsed > time.Second {
@@ -632,7 +1045,7 @@ func TestPipelineKeepaliveFailureCancelsProviderRead(t *testing.T) {
 			"exchange-downstream-disconnect",
 			accessID,
 			streamingClientRequest(),
-			ReplayNonReplayable,
+			ReplayGenerationCostOnly,
 		),
 		downstream,
 	)
@@ -807,19 +1220,13 @@ func TestPipelineObservesUnsupportedClientCapability(t *testing.T) {
 	snapshot := compileTestSnapshot(t, accessID, 1, "gpt-client-capability")
 	observer := &attemptObserverDouble{}
 	provider := &providerDouble{}
-	protocolPath, err := anthropicchat.NewProtocolPath(
-		anthropicchat.DefaultOptions(),
-	)
-	if err != nil {
-		t.Fatal(err)
-	}
 	pipeline, err := New(Options{
 		OwnerContext: context.Background(),
 		Actions:      newTestActionGate(t),
 		Resolver: &resolverDouble{
 			snapshots: []access.AccessPlanSnapshot{snapshot},
 		},
-		ProtocolPath:       protocolPath,
+		ProtocolPaths:      mustProtocolPathSelector(t),
 		Provider:           provider,
 		ToolDecisions:      &decisionDouble{},
 		RetryWaiter:        &retryWaiterDouble{},
@@ -943,6 +1350,69 @@ func TestPipelineDoesNotRetryAfterClientVisibleSemantics(t *testing.T) {
 	}
 }
 
+func TestPipelineResponsesDoesNotRetryAfterClientVisibleSemantics(
+	t *testing.T,
+) {
+	t.Parallel()
+
+	accessID := mustAccessID(t, "access-responses-commit-barrier")
+	snapshot := compileResponsesTestSnapshot(
+		t,
+		accessID,
+		1,
+		"gpt-responses-commit-barrier",
+	)
+	body := &scriptedReader{
+		first: firstTextProviderEvent(t, "gpt-responses-commit-barrier"),
+		err:   temporaryNetworkError{},
+	}
+	provider := &providerDouble{results: []providerResult{{
+		response: streamResponse(http.StatusOK, body),
+	}}}
+	pipeline := newTestPipeline(
+		t,
+		&resolverDouble{snapshots: []access.AccessPlanSnapshot{snapshot}},
+		provider,
+		&decisionDouble{decision: ToolDecision{Outcome: ToolDecisionApproved}},
+	)
+	t.Cleanup(func() { shutdownPipeline(t, pipeline) })
+	request, err := NewClientRequest(
+		"exchange-responses-commit-barrier",
+		snapshot.IngressBinding(),
+		mustResponsesOperationEvidence(t),
+		streamingResponsesClientRequest(),
+		ReplayGenerationCostOnly,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	downstream := &downstreamRecorder{}
+	result, err := pipeline.Execute(
+		context.Background(),
+		request,
+		downstream,
+	)
+	if ReasonOf(err) != ReasonProviderTransportFailed {
+		t.Fatalf("Execute() error = %v", err)
+	}
+	if provider.callCount() != 1 ||
+		result.TransportResends != 0 ||
+		result.Ledger.DownstreamSemanticBytes == 0 ||
+		!result.Ledger.DownstreamFailure ||
+		result.Ledger.DownstreamTerminal ||
+		!bytes.Contains(
+			downstream.bytesSnapshot(),
+			[]byte(`"type":"response.output_text.delta"`),
+		) {
+		t.Fatalf(
+			"result = %+v; provider calls=%d downstream=%s",
+			result,
+			provider.callCount(),
+			downstream.bytesSnapshot(),
+		)
+	}
+}
+
 func TestPipelineToolDecisionBarrierRejectsWithoutToolOrTerminalLeak(t *testing.T) {
 	t.Parallel()
 
@@ -1003,6 +1473,72 @@ func TestPipelineToolDecisionBarrierRejectsWithoutToolOrTerminalLeak(t *testing.
 		!result.Ledger.DownstreamFailure ||
 		result.Outcome != AttemptAborted {
 		t.Fatalf("result = %+v", result)
+	}
+}
+
+func TestPipelineResponsesToolDecisionBarrierRejectsWithoutToolOrTerminalLeak(
+	t *testing.T,
+) {
+	t.Parallel()
+
+	accessID := mustAccessID(t, "access-responses-tool-reject")
+	snapshot := compileResponsesTestSnapshot(t, accessID, 1, "gpt-responses-tool")
+	decisions := &decisionDouble{decision: ToolDecision{
+		Outcome:    ToolDecisionRejected,
+		ReasonCode: "approval_required",
+	}}
+	provider := &providerDouble{results: []providerResult{{
+		response: streamResponse(
+			http.StatusOK,
+			toolProviderStream(t, "gpt-responses-tool"),
+		),
+	}}}
+	pipeline := newTestPipeline(
+		t,
+		&resolverDouble{snapshots: []access.AccessPlanSnapshot{snapshot}},
+		provider,
+		decisions,
+	)
+	t.Cleanup(func() { shutdownPipeline(t, pipeline) })
+	request, err := NewClientRequest(
+		"exchange-responses-tool-reject",
+		snapshot.IngressBinding(),
+		mustResponsesOperationEvidence(t),
+		streamingResponsesToolClientRequest(),
+		ReplayGenerationCostOnly,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	downstream := &downstreamRecorder{}
+	result, err := pipeline.Execute(
+		context.Background(),
+		request,
+		downstream,
+	)
+	if ReasonOf(err) != ReasonToolDecisionRejected ||
+		decisions.callCount() != 1 ||
+		result.Outcome != AttemptAborted ||
+		result.Ledger.DownstreamTerminal ||
+		!result.Ledger.DownstreamFailure ||
+		len(result.Ledger.DownstreamToolKeys()) != 0 {
+		t.Fatalf(
+			"Execute() result=%+v error=%v decisions=%d",
+			result,
+			err,
+			decisions.callCount(),
+		)
+	}
+	wire := downstream.bytesSnapshot()
+	for _, forbidden := range [][]byte{
+		[]byte("call-hidden"),
+		[]byte(`"type":"response.function_call_arguments.delta"`),
+		[]byte(`"type":"response.output_item.done"`),
+		[]byte(`"type":"response.completed"`),
+	} {
+		if bytes.Contains(wire, forbidden) {
+			t.Fatalf("rejected Responses stream leaked %q: %s", forbidden, wire)
+		}
 	}
 }
 
@@ -1111,6 +1647,75 @@ func TestPipelineShutdownCancelsAndDrainsActiveExchange(t *testing.T) {
 	)
 	if ReasonOf(err) != ReasonExchangeRuntimeStopping {
 		t.Fatalf("new Execute() after shutdown = %v", err)
+	}
+}
+
+func TestPipelineResponsesShutdownCancelsAndDrainsActiveExchange(
+	t *testing.T,
+) {
+	t.Parallel()
+
+	accessID := mustAccessID(t, "access-responses-shutdown")
+	snapshot := compileResponsesTestSnapshot(
+		t,
+		accessID,
+		1,
+		"gpt-responses-shutdown",
+	)
+	provider := &blockingProvider{started: make(chan struct{})}
+	pipeline := newTestPipeline(
+		t,
+		&resolverDouble{snapshots: []access.AccessPlanSnapshot{snapshot}},
+		provider,
+		&decisionDouble{decision: ToolDecision{Outcome: ToolDecisionApproved}},
+	)
+	request, err := NewClientRequest(
+		"exchange-responses-shutdown",
+		snapshot.IngressBinding(),
+		mustResponsesOperationEvidence(t),
+		streamingResponsesClientRequest(),
+		ReplayGenerationCostOnly,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resultChannel := make(chan error, 1)
+	go func() {
+		_, executeErr := pipeline.Execute(
+			context.Background(),
+			request,
+			&downstreamRecorder{},
+		)
+		resultChannel <- executeErr
+	}()
+	select {
+	case <-provider.started:
+	case <-time.After(time.Second):
+		t.Fatal("Responses provider did not start")
+	}
+	shutdownContext, cancel := context.WithTimeout(
+		context.Background(),
+		time.Second,
+	)
+	defer cancel()
+	if err := pipeline.Shutdown(shutdownContext); err != nil {
+		t.Fatalf("Shutdown() error = %v", err)
+	}
+	select {
+	case executeErr := <-resultChannel:
+		if ReasonOf(executeErr) != ReasonExchangeCanceled {
+			t.Fatalf("Execute() after shutdown = %v", executeErr)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("active Responses Exchange did not drain")
+	}
+	_, err = pipeline.Execute(
+		context.Background(),
+		request,
+		&downstreamRecorder{},
+	)
+	if ReasonOf(err) != ReasonExchangeRuntimeStopping {
+		t.Fatalf("new Responses Execute() after shutdown = %v", err)
 	}
 }
 
@@ -1282,17 +1887,11 @@ func newTestPipelineWithActions(
 	actions offlinehold.ActionAdmission,
 ) *Pipeline {
 	t.Helper()
-	protocolPath, err := anthropicchat.NewProtocolPath(
-		anthropicchat.DefaultOptions(),
-	)
-	if err != nil {
-		t.Fatal(err)
-	}
 	pipeline, err := New(Options{
 		OwnerContext:       context.Background(),
 		Actions:            actions,
 		Resolver:           resolver,
-		ProtocolPath:       protocolPath,
+		ProtocolPaths:      mustProtocolPathSelector(t),
 		Provider:           provider,
 		ToolDecisions:      decisions,
 		RetryWaiter:        waiter,
@@ -1393,6 +1992,34 @@ func (resolver *resolverDouble) callCount() int {
 	resolver.mu.Lock()
 	defer resolver.mu.Unlock()
 	return resolver.calls
+}
+
+type keyedResolverDouble struct {
+	mu        sync.Mutex
+	snapshots map[access.AccessID]access.AccessPlanSnapshot
+	calls     map[access.AccessID]int
+}
+
+func (resolver *keyedResolverDouble) ResolveAccess(
+	accessID access.AccessID,
+) (access.AccessPlanSnapshot, error) {
+	resolver.mu.Lock()
+	defer resolver.mu.Unlock()
+	if resolver.calls == nil {
+		resolver.calls = make(map[access.AccessID]int)
+	}
+	resolver.calls[accessID]++
+	snapshot, exists := resolver.snapshots[accessID]
+	if !exists {
+		return access.AccessPlanSnapshot{}, access.ErrAccessNotConfigured
+	}
+	return snapshot, nil
+}
+
+func (resolver *keyedResolverDouble) callCount(accessID access.AccessID) int {
+	resolver.mu.Lock()
+	defer resolver.mu.Unlock()
+	return resolver.calls[accessID]
 }
 
 type providerResult struct {
@@ -1834,6 +2461,58 @@ func streamingClientRequest() []byte {
 	}`)
 }
 
+func completeResponsesClientRequest() []byte {
+	return []byte(`{
+		"model":"codex-client-alias",
+		"input":[{
+			"type":"message",
+			"role":"user",
+			"content":[{"type":"input_text","text":"hello"}]
+		}],
+		"store":false,
+		"stream":false
+	}`)
+}
+
+func streamingResponsesClientRequest() []byte {
+	return []byte(`{
+		"model":"codex-client-alias",
+		"input":[{
+			"type":"message",
+			"role":"user",
+			"content":[{"type":"input_text","text":"hello"}]
+		}],
+		"store":false,
+		"stream":true
+	}`)
+}
+
+func streamingResponsesToolClientRequest() []byte {
+	return []byte(`{
+		"model":"codex-client-alias",
+		"input":[{
+			"type":"message",
+			"role":"user",
+			"content":[{"type":"input_text","text":"hello"}]
+		}],
+		"tools":[{
+			"type":"function",
+			"name":"shell",
+			"description":"Run a command.",
+			"parameters":{
+				"type":"object",
+				"properties":{"cmd":{"type":"string"}},
+				"required":["cmd"],
+				"additionalProperties":false
+			},
+			"strict":false
+		}],
+		"tool_choice":"auto",
+		"store":false,
+		"stream":true
+	}`)
+}
+
 func streamingToolClientRequest() []byte {
 	return []byte(`{
 		"model":"claude-client-alias",
@@ -1859,6 +2538,7 @@ func mustClientRequest(
 	request, err := NewClientRequest(
 		exchangeID,
 		testIngressBinding(t, accessID),
+		mustAnthropicOperationEvidence(t),
 		body,
 		replayClass,
 	)
@@ -1866,6 +2546,69 @@ func mustClientRequest(
 		t.Fatal(err)
 	}
 	return request
+}
+
+func mustAnthropicOperationEvidence(t *testing.T) ClientOperationEvidence {
+	t.Helper()
+	operationID, err := access.NewClientOperationID(
+		operationcatalog.AnthropicMessagesCreateID,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	evidence, err := NewClientOperationEvidence(
+		operationID,
+		1,
+		http.MethodPost,
+		"/v1/messages",
+		"",
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return evidence
+}
+
+func mustResponsesOperationEvidence(t *testing.T) ClientOperationEvidence {
+	t.Helper()
+	operationID, err := access.NewClientOperationID(
+		operationcatalog.OpenAIResponsesCreateID,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	evidence, err := NewClientOperationEvidence(
+		operationID,
+		1,
+		http.MethodPost,
+		"/v1/responses",
+		"",
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return evidence
+}
+
+func mustProtocolPathSelector(t *testing.T) *protocolpath.Selector {
+	t.Helper()
+	anthropicPath, err := anthropicchat.NewProtocolPath(
+		anthropicchat.DefaultOptions(),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	responsesPath, err := responseschat.NewProtocolPath(
+		responseschat.DefaultOptions(),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	selector, err := protocolpath.NewSelector(anthropicPath, responsesPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return selector
 }
 
 func testIngressBinding(
@@ -1905,7 +2648,50 @@ func compileTestSnapshotWithEndpoint(
 	endpointValue string,
 ) access.AccessPlanSnapshot {
 	t.Helper()
-	codecID, err := access.NewCodecPairID(anthropicchat.CodecPairID)
+	return compileTestSnapshotWithDialect(
+		t,
+		accessID,
+		revision,
+		modelValue,
+		endpointValue,
+		access.DialectAnthropicMessages,
+		"https://api.anthropic.com:443",
+	)
+}
+
+func compileResponsesTestSnapshot(
+	t *testing.T,
+	accessID access.AccessID,
+	revision access.Revision,
+	modelValue string,
+) access.AccessPlanSnapshot {
+	t.Helper()
+	return compileTestSnapshotWithDialect(
+		t,
+		accessID,
+		revision,
+		modelValue,
+		accessID.String()+"-endpoint",
+		access.DialectOpenAIResponses,
+		"https://api.openai.com:443",
+	)
+}
+
+func compileTestSnapshotWithDialect(
+	t *testing.T,
+	accessID access.AccessID,
+	revision access.Revision,
+	modelValue string,
+	endpointValue string,
+	clientDialect access.Dialect,
+	clientOriginValue string,
+) access.AccessPlanSnapshot {
+	t.Helper()
+	anthropicCodecID, err := access.NewCodecPairID(anthropicchat.CodecPairID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	responsesCodecID, err := access.NewCodecPairID(responseschat.CodecPairID)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1920,20 +2706,36 @@ func compileTestSnapshotWithEndpoint(
 			MaxRouteSets:        1,
 		},
 		ClientOperations: operations.Definitions(),
-		CodecPairs: []access.CodecPairDefinition{{
-			ID:              codecID,
-			Revision:        anthropicchat.CodecRevision,
-			ClientDialect:   access.DialectAnthropicMessages,
-			ProviderDialect: access.DialectOpenAIChat,
-			ClientOperationIDs: operations.SemanticOperationIDs(
-				access.DialectAnthropicMessages,
-			),
-			RequiredCapabilities: []access.ProviderCapability{
-				access.ProviderCapabilityMessages,
-				access.ProviderCapabilityStreaming,
-				access.ProviderCapabilityToolCalls,
+		CodecPairs: []access.CodecPairDefinition{
+			{
+				ID:              anthropicCodecID,
+				Revision:        anthropicchat.CodecRevision,
+				ClientDialect:   access.DialectAnthropicMessages,
+				ProviderDialect: access.DialectOpenAIChat,
+				ClientOperationIDs: operations.SemanticOperationIDs(
+					access.DialectAnthropicMessages,
+				),
+				RequiredCapabilities: []access.ProviderCapability{
+					access.ProviderCapabilityMessages,
+					access.ProviderCapabilityStreaming,
+					access.ProviderCapabilityToolCalls,
+				},
 			},
-		}},
+			{
+				ID:              responsesCodecID,
+				Revision:        responseschat.CodecRevision,
+				ClientDialect:   access.DialectOpenAIResponses,
+				ProviderDialect: access.DialectOpenAIChat,
+				ClientOperationIDs: operations.SemanticOperationIDs(
+					access.DialectOpenAIResponses,
+				),
+				RequiredCapabilities: []access.ProviderCapability{
+					access.ProviderCapabilityMessages,
+					access.ProviderCapabilityStreaming,
+					access.ProviderCapabilityToolCalls,
+				},
+			},
+		},
 		AuthDrivers: []access.AuthDriverDefinition{{
 			Ref:      access.StaticHeaderAuthDriverRef(),
 			Revision: 1,
@@ -1970,7 +2772,7 @@ func compileTestSnapshotWithEndpoint(
 	accountID := mustAccountBindingID(t, suffix+"-account")
 	routeID := mustRouteSetID(t, suffix+"-routes")
 	egressID := mustEgressPolicyID(t, suffix+"-egress")
-	clientOrigin, err := access.NewClientOrigin("https://api.anthropic.com:443")
+	clientOrigin, err := access.NewClientOrigin(clientOriginValue)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -2005,7 +2807,7 @@ func compileTestSnapshotWithEndpoint(
 			Revision:      revision,
 			AccessID:      accessID,
 			ClientOrigin:  clientOrigin,
-			ClientDialect: access.DialectAnthropicMessages,
+			ClientDialect: clientDialect,
 		},
 		Profiles: []access.EndpointProfile{{
 			ID:                      profileID,
