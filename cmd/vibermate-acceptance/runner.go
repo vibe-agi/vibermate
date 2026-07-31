@@ -641,7 +641,7 @@ type codexHTTPFallbackEvidence struct {
 }
 
 func (evidence codexHTTPFallbackEvidence) validate() error {
-	if evidence.ClientHTTPStatus != http.StatusBadGateway ||
+	if evidence.ClientHTTPStatus != http.StatusUpgradeRequired ||
 		evidence.RuntimeReason !=
 			exchange.ReasonProviderCredentialUnavailable ||
 		!evidence.ConnectionAudit {
@@ -656,7 +656,7 @@ func (evidence codexHTTPFallbackEvidence) reportDetail() (string, error) {
 	if err := evidence.validate(); err != nil {
 		return "", err
 	}
-	return "fixed Codex reported HTTP 502 for the fallback request, runtime Activity bound it to provider_credential_unavailable, and the proxy audit proved the bounded 426-to-HTTP transition", nil
+	return "fixed Codex reported typed HTTP 426, the proxy audit proved the bounded transition to HTTP, and Runtime Activity bound that request to provider_credential_unavailable", nil
 }
 
 func completeCodexHTTPFallbackEvidence(
@@ -676,7 +676,7 @@ func completeCodexHTTPFallbackEvidence(
 	}
 	if err := run.waitForAgentStatus(
 		ctx,
-		http.StatusBadGateway,
+		http.StatusUpgradeRequired,
 	); err != nil {
 		return evidence, fmt.Errorf(
 			"observe typed Codex fallback HTTP status: %w (%s)",
@@ -684,7 +684,7 @@ func completeCodexHTTPFallbackEvidence(
 			run.safeFailureEvidence(),
 		)
 	}
-	evidence.ClientHTTPStatus = http.StatusBadGateway
+	evidence.ClientHTTPStatus = http.StatusUpgradeRequired
 	return evidence, evidence.validate()
 }
 

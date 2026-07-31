@@ -586,7 +586,7 @@ func TestCodexHTTPFallbackEvidenceRequiresClientOutcomeAndConnectionAudit(
 	clientEvent := &agentRun{
 		clientID: acceptanceClientCodexCLI,
 		failure: agentFailureEvidence{
-			agentStatus: http.StatusBadGateway,
+			agentStatus: http.StatusUpgradeRequired,
 		},
 		changed: make(chan struct{}),
 	}
@@ -601,7 +601,7 @@ func TestCodexHTTPFallbackEvidenceRequiresClientOutcomeAndConnectionAudit(
 	if err != nil {
 		t.Fatal(err)
 	}
-	if evidence.ClientHTTPStatus != http.StatusBadGateway ||
+	if evidence.ClientHTTPStatus != http.StatusUpgradeRequired ||
 		evidence.RuntimeReason !=
 			exchange.ReasonProviderCredentialUnavailable ||
 		!evidence.ConnectionAudit {
@@ -611,7 +611,7 @@ func TestCodexHTTPFallbackEvidenceRequiresClientOutcomeAndConnectionAudit(
 	if err != nil {
 		t.Fatal(err)
 	}
-	if detail != "fixed Codex reported HTTP 502 for the fallback request, runtime Activity bound it to provider_credential_unavailable, and the proxy audit proved the bounded 426-to-HTTP transition" {
+	if detail != "fixed Codex reported typed HTTP 426, the proxy audit proved the bounded transition to HTTP, and Runtime Activity bound that request to provider_credential_unavailable" {
 		t.Fatalf("fallback detail = %q", detail)
 	}
 

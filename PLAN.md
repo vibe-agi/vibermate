@@ -25,7 +25,7 @@ checks but are superseded for these three evidence claims.
    documentation.
 2. Fixed Codex fallback passes only after the existing body-free proxy audit
    proves the bounded 426-to-HTTP transition, that same client invocation
-   reports typed HTTP 502, and Runtime Activity binds the Exchange to
+   reports typed HTTP 426, and Runtime Activity binds the subsequent Exchange to
    `provider_credential_unavailable`.
 3. Report details derive from typed evidence returned by the exercised path;
    they are not unconditional client-neutral prose.
@@ -52,7 +52,7 @@ checks but are superseded for these three evidence claims.
   prefix plus nonempty bounded transport detail from typed error envelopes;
   do not treat that separate warning as 426 evidence.
 - [x] Capture the proxy connection audit while the fallback HTTP request is
-  still held, then require typed HTTP 502 from the same invocation and the
+  still held, then require typed HTTP 426 from the same invocation and the
   exact Runtime Activity reason before reporting success.
 - [x] Return typed evidence with separate client-event and connection-audit
   fields, and reject either field missing.
@@ -120,7 +120,7 @@ checks but are superseded for these three evidence claims.
 This plan is complete only when evidence supports:
 
 > One clean packaged fixed-Codex build independently produced the bounded proxy
-> 426-to-HTTP audit, reported typed HTTP 502 for the resulting fallback request,
+> 426-to-HTTP audit, reported typed HTTP 426 for the rejected WebSocket request,
 > and recorded `provider_credential_unavailable` in Runtime Activity; its actual
 > `exec` tool remained behind durable allow-once approval; and its held request
 > completed through the Responses streaming path without claiming unobserved
