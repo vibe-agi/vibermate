@@ -172,15 +172,24 @@ fallback; repository fixtures alone cannot establish client behavior.
 
 ### 6. Add the fixed Codex launcher contract
 
-- [ ] Pin Codex CLI 0.145.0 macOS arm64 compound release evidence and typed
+- [x] Pin Codex CLI 0.145.0 macOS arm64 compound release evidence and typed
   launch recipe in the immutable client catalog.
-- [ ] Verify canonical wrapper/native-child paths and digests before issuing a
+- [x] Verify canonical wrapper/native-child paths and digests before issuing a
   CaptureRun grant; freeze the catalog revision in that grant.
-- [ ] Inject only the owned proxy/Root/fallback inputs and a non-secret client
+- [x] Inject only the owned proxy/Root/fallback inputs and a non-secret client
   placeholder; remove conflicting ambient proxy, CA, base-URL, and credential
   variables.
-- [ ] Prove child supervision, heartbeat, exit status, SIGINT, and cleanup
+- [x] Prove child supervision, heartbeat, exit status, SIGINT, and cleanup
   without introducing a Codex-specific daemon or control API.
+
+The built-in catalog binds the global npm wrapper, main package metadata,
+platform package metadata, and native child to one catalog and adapter
+revision. Component tests verify the exact external 0.145.0 installation,
+catalog alias isolation, every-artifact mismatch, path escape and ambiguity
+failure, CaptureRun persistence, environment isolation, and bounded
+supervision/SIGINT convergence. A same-name unrecognized build remains a
+generic client from control grant through proxy authorization; it is not
+rejected and does not inherit the Root or WebSocket fallback feature.
 
 ### 7. Run one packaged Codex HTTP vertical
 

@@ -1,12 +1,13 @@
 // Package clientadapter verifies narrowly scoped launch adaptations. Generic
-// proxy variables need no client identity; adapter-specific trust variables
-// require a verified executable and supported version.
+// proxy variables need no client identity; adapter-specific trust and
+// compatibility behavior require a complete, fixed release match.
 package clientadapter
 
 import (
 	"bufio"
 	"context"
 	"crypto/sha256"
+	"encoding/binary"
 	"encoding/hex"
 	"errors"
 	"fmt"
@@ -15,11 +16,16 @@ import (
 	"path/filepath"
 	"runtime"
 	"slices"
+	"strconv"
 	"strings"
 )
 
 const (
-	maxExecutableBytes = 1 << 30
+	defaultMaxArtifactBytes = int64(512 << 20)
+	maxCatalogEntries       = 256
+	maxReleaseArtifacts     = 16
+	maxArtifactPathBytes    = 4096
+	releaseDigestDomain     = "vibermate:client-release:v1"
 )
 
 type Status string
@@ -27,35 +33,208 @@ type Status string
 const (
 	StatusGeneric  Status = "generic"
 	StatusVerified Status = "verified"
+	StatusFailed   Status = "failed"
 )
+
+type CatalogRevision uint64
+
+func (revision CatalogRevision) Valid() bool {
+	return revision > 0 && uint64(revision) <= uint64(^uint64(0)>>1)
+}
+
+type AdapterRevision uint64
+
+func (revision AdapterRevision) Valid() bool {
+	return revision > 0 && uint64(revision) <= uint64(^uint64(0)>>1)
+}
 
 type LaunchRecipe string
 
 const (
 	LaunchGeneric      LaunchRecipe = "generic_proxy"
 	LaunchNodeEnvProxy LaunchRecipe = "node_env_proxy"
+	LaunchSSLCertFile  LaunchRecipe = "ssl_cert_file"
 )
 
 func (recipe LaunchRecipe) Valid() bool {
-	return recipe == LaunchGeneric || recipe == LaunchNodeEnvProxy
+	switch recipe {
+	case LaunchGeneric, LaunchNodeEnvProxy, LaunchSSLCertFile:
+		return true
+	default:
+		return false
+	}
 }
 
 func (recipe LaunchRecipe) RequiresRoot() bool {
-	return recipe == LaunchNodeEnvProxy
+	return recipe == LaunchNodeEnvProxy || recipe == LaunchSSLCertFile
+}
+
+type InstallShape string
+
+const (
+	InstallNativeSingleBinary    InstallShape = "native_single_binary"
+	InstallNPMWrapperNativeChild InstallShape = "npm_wrapper_native_child"
+)
+
+func (shape InstallShape) Valid() bool {
+	return shape == InstallNativeSingleBinary ||
+		shape == InstallNPMWrapperNativeChild
+}
+
+type ArtifactRole string
+
+const (
+	ArtifactEntrypoint              ArtifactRole = "entrypoint"
+	ArtifactMainPackageMetadata     ArtifactRole = "main_package_metadata"
+	ArtifactPlatformPackageMetadata ArtifactRole = "platform_package_metadata"
+	ArtifactNativeChild             ArtifactRole = "native_child"
+)
+
+func (role ArtifactRole) Valid() bool {
+	switch role {
+	case ArtifactEntrypoint,
+		ArtifactMainPackageMetadata,
+		ArtifactPlatformPackageMetadata,
+		ArtifactNativeChild:
+		return true
+	default:
+		return false
+	}
+}
+
+// Feature is a closed bit set of compatibility behavior proven for an exact
+// release. Generic clients never receive these features.
+type Feature uint64
+
+const (
+	FeatureResponsesWebSocketHTTPFallback Feature = 1 << iota
+)
+
+const knownFeatures = FeatureResponsesWebSocketHTTPFallback
+
+func (features Feature) valid() bool {
+	return features&^knownFeatures == 0
+}
+
+type Artifact struct {
+	Role         ArtifactRole
+	RelativePath string
+	SHA256       string
+	MaxBytes     int64
+}
+
+// Release is one immutable catalog input. Artifact paths are relative to the
+// canonical entrypoint directory; ArtifactRoot bounds every resolved path.
+type Release struct {
+	ID                      string
+	Revision                AdapterRevision
+	Version                 string
+	OperatingSystem         string
+	Architecture            string
+	InstallShape            InstallShape
+	InvocationLabel         string
+	CanonicalEntrypointName string
+	ArtifactRoot            string
+	Artifacts               []Artifact
+	LaunchRecipe            LaunchRecipe
+	Features                Feature
+}
+
+// Catalog is an immutable, explicitly constructed release set. Its revision
+// identifies the exact evidence set consulted for verified and generic
+// detections.
+type Catalog struct {
+	revision CatalogRevision
+	releases []Release
+}
+
+func NewCatalog(
+	revision CatalogRevision,
+	releases []Release,
+) (Catalog, error) {
+	if !revision.Valid() ||
+		len(releases) == 0 ||
+		len(releases) > maxCatalogEntries {
+		return Catalog{}, errors.New("client release catalog is invalid")
+	}
+	cloned := make([]Release, len(releases))
+	for index, release := range releases {
+		cloned[index] = cloneRelease(release)
+		slices.SortFunc(
+			cloned[index].Artifacts,
+			func(left, right Artifact) int {
+				leftKey := string(left.Role) + "\x00" + left.RelativePath
+				rightKey := string(right.Role) + "\x00" + right.RelativePath
+				return strings.Compare(leftKey, rightKey)
+			},
+		)
+		if err := validateRelease(cloned[index]); err != nil {
+			return Catalog{}, err
+		}
+	}
+	slices.SortFunc(cloned, func(left, right Release) int {
+		return strings.Compare(releaseSortKey(left), releaseSortKey(right))
+	})
+	for index := 1; index < len(cloned); index++ {
+		if releaseSortKey(cloned[index-1]) == releaseSortKey(cloned[index]) {
+			return Catalog{}, errors.New(
+				"client release catalog contains a duplicate identity",
+			)
+		}
+	}
+	return Catalog{revision: revision, releases: cloned}, nil
+}
+
+func (catalog Catalog) Revision() CatalogRevision {
+	return catalog.revision
+}
+
+func (catalog Catalog) Valid() bool {
+	return catalog.revision.Valid() &&
+		len(catalog.releases) > 0 &&
+		len(catalog.releases) <= maxCatalogEntries
 }
 
 type Evidence struct {
-	ID               string       `json:"id"`
-	Version          string       `json:"version"`
-	ExecutableSHA256 string       `json:"executableSha256"`
-	LaunchRecipe     LaunchRecipe `json:"launchRecipe"`
+	ID              string          `json:"id"`
+	Revision        AdapterRevision `json:"revision"`
+	Version         string          `json:"version"`
+	CatalogRevision CatalogRevision `json:"catalogRevision"`
+	InstallShape    InstallShape    `json:"installShape"`
+	ReleaseSHA256   string          `json:"releaseSha256"`
+	LaunchRecipe    LaunchRecipe    `json:"launchRecipe"`
+	Features        Feature         `json:"features"`
+}
+
+func (evidence Evidence) Validate() error {
+	if strings.TrimSpace(evidence.ID) != evidence.ID ||
+		evidence.ID == "" ||
+		!evidence.Revision.Valid() ||
+		strings.TrimSpace(evidence.Version) != evidence.Version ||
+		evidence.Version == "" ||
+		!evidence.CatalogRevision.Valid() ||
+		!evidence.InstallShape.Valid() ||
+		!evidence.LaunchRecipe.Valid() ||
+		evidence.LaunchRecipe == LaunchGeneric ||
+		!evidence.Features.valid() ||
+		!validDigest(evidence.ReleaseSHA256) {
+		return errors.New("client adapter evidence is invalid")
+	}
+	return nil
+}
+
+func (evidence Evidence) Supports(feature Feature) bool {
+	return feature != 0 &&
+		feature&^knownFeatures == 0 &&
+		evidence.Features&feature == feature
 }
 
 type Detection struct {
-	Status          Status    `json:"status"`
-	CanonicalPath   string    `json:"canonicalPath"`
-	ExecutableLabel string    `json:"executableLabel"`
-	Evidence        *Evidence `json:"evidence,omitempty"`
+	Status          Status          `json:"status"`
+	CatalogRevision CatalogRevision `json:"catalogRevision"`
+	CanonicalPath   string          `json:"canonicalPath"`
+	ExecutableLabel string          `json:"executableLabel"`
+	Evidence        *Evidence       `json:"evidence,omitempty"`
 }
 
 func (detection Detection) clone() Detection {
@@ -77,49 +256,39 @@ type Verifier interface {
 	Verify(context.Context, Request) (Detection, error)
 }
 
-// Release is one read-only adapter identity. A Host selects an explicit
-// catalog; package loading never registers releases globally.
-type Release struct {
-	ID               string
-	Version          string
-	InvocationLabel  string
-	ExecutableSHA256 string
-	LaunchRecipe     LaunchRecipe
-}
-
-type M0Verifier struct {
+type ReleaseVerifier struct {
+	revision CatalogRevision
 	releases []Release
 }
 
-func NewM0Verifier(releases []Release) (*M0Verifier, error) {
-	if len(releases) == 0 {
-		return nil, errors.New("at least one fixed client release is required")
+func NewReleaseVerifier(
+	catalog Catalog,
+) (*ReleaseVerifier, error) {
+	if !catalog.Valid() {
+		return nil, errors.New("complete client release catalog is required")
 	}
-	catalog := slices.Clone(releases)
-	slices.SortFunc(catalog, func(left, right Release) int {
-		leftKey := left.InvocationLabel + "\x00" + left.ExecutableSHA256
-		rightKey := right.InvocationLabel + "\x00" + right.ExecutableSHA256
-		return strings.Compare(leftKey, rightKey)
-	})
-	for index, release := range catalog {
-		if err := validateRelease(release); err != nil {
-			return nil, err
-		}
-		if index > 0 &&
-			catalog[index-1].InvocationLabel == release.InvocationLabel &&
-			catalog[index-1].ExecutableSHA256 == release.ExecutableSHA256 {
-			return nil, errors.New("fixed client release catalog contains a duplicate identity")
-		}
+	normalized, err := NewCatalog(catalog.revision, catalog.releases)
+	if err != nil {
+		return nil, err
 	}
-	return &M0Verifier{releases: catalog}, nil
+	releases := make([]Release, len(normalized.releases))
+	for index, release := range normalized.releases {
+		releases[index] = cloneRelease(release)
+	}
+	return &ReleaseVerifier{
+		revision: normalized.revision,
+		releases: releases,
+	}, nil
 }
 
-func (verifier *M0Verifier) Verify(
+func (verifier *ReleaseVerifier) Verify(
 	ctx context.Context,
 	request Request,
 ) (Detection, error) {
-	if verifier == nil || ctx == nil {
-		return Detection{}, errors.New("ClientAdapter verifier and context are required")
+	if verifier == nil || ctx == nil || !verifier.revision.Valid() {
+		return Detection{}, errors.New(
+			"ClientAdapter verifier and context are required",
+		)
 	}
 	canonical, label, err := canonicalExecutable(request)
 	if err != nil {
@@ -127,41 +296,58 @@ func (verifier *M0Verifier) Verify(
 	}
 	detection := Detection{
 		Status:          StatusGeneric,
+		CatalogRevision: verifier.revision,
 		CanonicalPath:   canonical,
 		ExecutableLabel: label,
 	}
 	candidates := verifier.releasesForLabel(label)
-	if len(candidates) == 0 {
-		return detection, nil
-	}
-	digest, err := executableDigest(ctx, canonical)
-	if err != nil {
-		return Detection{}, err
-	}
-	var matched *Release
-	for index := range candidates {
-		if candidates[index].ExecutableSHA256 == digest {
-			release := candidates[index]
-			matched = &release
-			break
+	var matched []Release
+	for _, candidate := range candidates {
+		ok, matchErr := verifyRelease(ctx, canonical, candidate)
+		if matchErr != nil {
+			detection.Status = StatusFailed
+			return detection, matchErr
+		}
+		if ok {
+			matched = append(matched, candidate)
 		}
 	}
-	if matched == nil {
+	if len(matched) == 0 {
 		return detection, nil
 	}
-	detection.Status = StatusVerified
-	detection.Evidence = &Evidence{
-		ID:               matched.ID,
-		Version:          matched.Version,
-		ExecutableSHA256: digest,
-		LaunchRecipe:     matched.LaunchRecipe,
+	if len(matched) != 1 {
+		detection.Status = StatusFailed
+		return detection, errors.New(
+			"client executable matches multiple catalog releases",
+		)
 	}
+	release := matched[0]
+	evidence := Evidence{
+		ID:              release.ID,
+		Revision:        release.Revision,
+		Version:         release.Version,
+		CatalogRevision: verifier.revision,
+		InstallShape:    release.InstallShape,
+		ReleaseSHA256:   releaseEvidenceDigest(release),
+		LaunchRecipe:    release.LaunchRecipe,
+		Features:        release.Features,
+	}
+	if err := evidence.Validate(); err != nil {
+		detection.Status = StatusFailed
+		return detection, err
+	}
+	detection.Status = StatusVerified
+	detection.Evidence = &evidence
 	return detection.clone(), nil
 }
 
-func (verifier *M0Verifier) releasesForLabel(label string) []Release {
+func (verifier *ReleaseVerifier) releasesForLabel(label string) []Release {
 	var matches []Release
 	for _, release := range verifier.releases {
+		if release.OperatingSystem != runtime.GOOS ||
+			release.Architecture != runtime.GOARCH {
+			continue
+		}
 		matched := release.InvocationLabel == label
 		if runtime.GOOS == "windows" {
 			matched = strings.EqualFold(release.InvocationLabel, label)
@@ -173,6 +359,115 @@ func (verifier *M0Verifier) releasesForLabel(label string) []Release {
 	return matches
 }
 
+func verifyRelease(
+	ctx context.Context,
+	canonicalEntrypoint string,
+	release Release,
+) (bool, error) {
+	if release.CanonicalEntrypointName != "" &&
+		filepath.Base(canonicalEntrypoint) !=
+			release.CanonicalEntrypointName {
+		return false, nil
+	}
+	entrypointDirectory := filepath.Dir(canonicalEntrypoint)
+	lexicalRoot := filepath.Clean(filepath.Join(
+		entrypointDirectory,
+		release.ArtifactRoot,
+	))
+	resolvedRoot, err := filepath.EvalSymlinks(lexicalRoot)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return false, nil
+		}
+		return false, fmt.Errorf("resolve client release root: %w", err)
+	}
+	resolvedRoot, err = filepath.Abs(resolvedRoot)
+	if err != nil {
+		return false, fmt.Errorf("make client release root absolute: %w", err)
+	}
+	resolvedRoot = filepath.Clean(resolvedRoot)
+	rootInfo, err := os.Stat(resolvedRoot)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return false, nil
+		}
+		return false, fmt.Errorf("inspect client release root: %w", err)
+	}
+	if !rootInfo.IsDir() {
+		return false, nil
+	}
+	if !pathWithin(resolvedRoot, canonicalEntrypoint) {
+		return false, errors.New(
+			"canonical client entrypoint escapes its release root",
+		)
+	}
+	seen := make(map[string]struct{}, len(release.Artifacts))
+	for _, artifact := range release.Artifacts {
+		lexicalPath := canonicalEntrypoint
+		if artifact.RelativePath != "" {
+			lexicalPath = filepath.Clean(filepath.Join(
+				entrypointDirectory,
+				artifact.RelativePath,
+			))
+		}
+		if !pathWithin(lexicalRoot, lexicalPath) {
+			return false, errors.New(
+				"client release artifact escapes its lexical root",
+			)
+		}
+		resolvedPath, err := filepath.EvalSymlinks(lexicalPath)
+		if err != nil {
+			if errors.Is(err, os.ErrNotExist) {
+				return false, nil
+			}
+			return false, fmt.Errorf(
+				"resolve client release artifact: %w",
+				err,
+			)
+		}
+		resolvedPath, err = filepath.Abs(resolvedPath)
+		if err != nil {
+			return false, fmt.Errorf(
+				"make client release artifact absolute: %w",
+				err,
+			)
+		}
+		resolvedPath = filepath.Clean(resolvedPath)
+		if !pathWithin(resolvedRoot, resolvedPath) {
+			return false, errors.New(
+				"client release artifact resolves outside its release root",
+			)
+		}
+		if _, duplicate := seen[resolvedPath]; duplicate {
+			return false, errors.New(
+				"client release artifacts resolve to the same file",
+			)
+		}
+		seen[resolvedPath] = struct{}{}
+		maxBytes := artifact.MaxBytes
+		if maxBytes == 0 {
+			maxBytes = defaultMaxArtifactBytes
+		}
+		actual, eligible, err := regularFileDigest(
+			ctx,
+			resolvedPath,
+			maxBytes,
+			artifact.Role == ArtifactEntrypoint ||
+				artifact.Role == ArtifactNativeChild,
+		)
+		if err != nil {
+			return false, fmt.Errorf(
+				"hash client release artifact: %w",
+				err,
+			)
+		}
+		if !eligible || actual != artifact.SHA256 {
+			return false, nil
+		}
+	}
+	return true, nil
+}
+
 func canonicalExecutable(request Request) (string, string, error) {
 	if len(request.Command) == 0 ||
 		request.Command[0] == "" ||
@@ -181,7 +476,9 @@ func canonicalExecutable(request Request) (string, string, error) {
 		filepath.Clean(request.CWD) != request.CWD ||
 		request.ExecutablePath == "" ||
 		!filepath.IsAbs(request.ExecutablePath) {
-		return "", "", errors.New("complete canonical launch request is required")
+		return "", "", errors.New(
+			"complete canonical launch request is required",
+		)
 	}
 	invocationLabel := filepath.Base(request.ExecutablePath)
 	commandLabel := filepath.Base(request.Command[0])
@@ -203,7 +500,9 @@ func canonicalExecutable(request Request) (string, string, error) {
 	canonical = filepath.Clean(canonical)
 	info, err := os.Stat(canonical)
 	if err != nil || !info.Mode().IsRegular() {
-		return "", "", errors.New("executable path must resolve to a regular file")
+		return "", "", errors.New(
+			"executable path must resolve to a regular file",
+		)
 	}
 	if runtime.GOOS != "windows" && info.Mode().Perm()&0o111 == 0 {
 		return "", "", errors.New("executable path is not executable")
@@ -216,31 +515,51 @@ func canonicalExecutable(request Request) (string, string, error) {
 		}
 		commandPath, err = filepath.EvalSymlinks(commandPath)
 		if err != nil {
-			return "", "", fmt.Errorf("resolve explicit command path: %w", err)
+			return "", "", fmt.Errorf(
+				"resolve explicit command path: %w",
+				err,
+			)
 		}
 		commandPath, err = filepath.Abs(commandPath)
 		if err != nil {
 			return "", "", err
 		}
 		if filepath.Clean(commandPath) != canonical {
-			return "", "", errors.New("explicit command path differs from executable path")
+			return "", "", errors.New(
+				"explicit command path differs from executable path",
+			)
 		}
 	}
 	return canonical, invocationLabel, nil
 }
 
-func executableDigest(ctx context.Context, path string) (string, error) {
+func regularFileDigest(
+	ctx context.Context,
+	path string,
+	maxBytes int64,
+	requireExecutable bool,
+) (string, bool, error) {
 	file, err := os.Open(path)
 	if err != nil {
-		return "", err
+		if errors.Is(err, os.ErrNotExist) {
+			return "", false, nil
+		}
+		return "", false, err
 	}
 	defer file.Close()
 	info, err := file.Stat()
 	if err != nil {
-		return "", err
+		return "", false, err
 	}
-	if info.Size() <= 0 || info.Size() > maxExecutableBytes {
-		return "", errors.New("executable size is outside the verification limit")
+	if !info.Mode().IsRegular() ||
+		info.Size() <= 0 ||
+		info.Size() > maxBytes {
+		return "", false, nil
+	}
+	if requireExecutable &&
+		runtime.GOOS != "windows" &&
+		info.Mode().Perm()&0o111 == 0 {
+		return "", false, nil
 	}
 	hash := sha256.New()
 	reader := bufio.NewReaderSize(file, 64<<10)
@@ -248,57 +567,288 @@ func executableDigest(ctx context.Context, path string) (string, error) {
 	var total int64
 	for {
 		if err := ctx.Err(); err != nil {
-			return "", err
+			return "", false, err
 		}
 		count, readErr := reader.Read(buffer)
 		if count > 0 {
 			total += int64(count)
-			if total > maxExecutableBytes {
-				return "", errors.New("executable exceeds the verification limit")
+			if total > maxBytes {
+				return "", false, nil
 			}
 			if _, err := hash.Write(buffer[:count]); err != nil {
-				return "", err
+				return "", false, err
 			}
 		}
 		if errors.Is(readErr, io.EOF) {
 			break
 		}
 		if readErr != nil {
-			return "", readErr
+			return "", false, readErr
 		}
 	}
-	return hex.EncodeToString(hash.Sum(nil)), nil
+	return hex.EncodeToString(hash.Sum(nil)), true, nil
+}
+
+func pathWithin(root string, candidate string) bool {
+	relative, err := filepath.Rel(root, candidate)
+	if err != nil || filepath.IsAbs(relative) {
+		return false
+	}
+	return relative == "." ||
+		(relative != ".." &&
+			!strings.HasPrefix(relative, ".."+string(filepath.Separator)))
 }
 
 func validateRelease(release Release) error {
 	if strings.TrimSpace(release.ID) != release.ID ||
 		release.ID == "" ||
+		!release.Revision.Valid() ||
 		strings.TrimSpace(release.Version) != release.Version ||
 		release.Version == "" ||
-		strings.TrimSpace(release.InvocationLabel) != release.InvocationLabel ||
+		release.OperatingSystem == "" ||
+		release.Architecture == "" ||
+		!release.InstallShape.Valid() ||
+		strings.TrimSpace(release.InvocationLabel) !=
+			release.InvocationLabel ||
 		release.InvocationLabel == "" ||
 		filepath.Base(release.InvocationLabel) != release.InvocationLabel ||
-		!release.LaunchRecipe.Valid() {
+		(release.CanonicalEntrypointName != "" &&
+			filepath.Base(release.CanonicalEntrypointName) !=
+				release.CanonicalEntrypointName) ||
+		!validArtifactRoot(release.ArtifactRoot) ||
+		!release.LaunchRecipe.Valid() ||
+		release.LaunchRecipe == LaunchGeneric ||
+		!release.Features.valid() ||
+		len(release.Artifacts) == 0 ||
+		len(release.Artifacts) > maxReleaseArtifacts {
 		return errors.New("fixed client release metadata is invalid")
 	}
-	decoded, err := hex.DecodeString(release.ExecutableSHA256)
-	if err != nil ||
-		len(decoded) != sha256.Size ||
-		strings.ToLower(release.ExecutableSHA256) != release.ExecutableSHA256 {
-		return errors.New("fixed client release digest is invalid")
+	entrypoints := 0
+	roles := make(map[ArtifactRole]int)
+	paths := make(map[string]struct{})
+	for _, artifact := range release.Artifacts {
+		if !artifact.Role.Valid() ||
+			len(artifact.RelativePath) > maxArtifactPathBytes ||
+			(artifact.RelativePath != "" &&
+				(filepath.IsAbs(artifact.RelativePath) ||
+					filepath.Clean(artifact.RelativePath) !=
+						artifact.RelativePath)) ||
+			artifact.MaxBytes < 0 ||
+			artifact.MaxBytes > defaultMaxArtifactBytes ||
+			!validDigest(artifact.SHA256) {
+			return errors.New("fixed client release artifact is invalid")
+		}
+		if _, duplicate := paths[artifact.RelativePath]; duplicate {
+			return errors.New(
+				"fixed client release artifact path is duplicated",
+			)
+		}
+		paths[artifact.RelativePath] = struct{}{}
+		roles[artifact.Role]++
+		if artifact.Role == ArtifactEntrypoint {
+			entrypoints++
+			if artifact.RelativePath != "" {
+				return errors.New(
+					"fixed client entrypoint artifact path is invalid",
+				)
+			}
+		} else if artifact.RelativePath == "" {
+			return errors.New(
+				"fixed client companion artifact path is empty",
+			)
+		}
+	}
+	if entrypoints != 1 {
+		return errors.New(
+			"fixed client release needs one entrypoint artifact",
+		)
+	}
+	switch release.InstallShape {
+	case InstallNativeSingleBinary:
+		if len(release.Artifacts) != 1 {
+			return errors.New(
+				"native client release must contain one artifact",
+			)
+		}
+	case InstallNPMWrapperNativeChild:
+		if roles[ArtifactMainPackageMetadata] != 1 ||
+			roles[ArtifactPlatformPackageMetadata] != 1 ||
+			roles[ArtifactNativeChild] != 1 {
+			return errors.New(
+				"npm client release companion artifacts are incomplete",
+			)
+		}
 	}
 	return nil
 }
 
-// ClaudeCode221220DarwinARM64 returns the fixed release identity used by the
-// M0 acceptance matrix. The digest identifies the canonical executable bytes;
-// version output is never executed as part of verification.
+func validArtifactRoot(root string) bool {
+	if root == "" ||
+		len(root) > maxArtifactPathBytes ||
+		filepath.IsAbs(root) ||
+		filepath.Clean(root) != root {
+		return false
+	}
+	parts := strings.Split(filepath.ToSlash(root), "/")
+	parents := 0
+	for _, part := range parts {
+		if part == ".." {
+			parents++
+		}
+	}
+	return parents <= 2
+}
+
+func validDigest(value string) bool {
+	decoded, err := hex.DecodeString(value)
+	return err == nil &&
+		len(decoded) == sha256.Size &&
+		strings.ToLower(value) == value
+}
+
+func cloneRelease(release Release) Release {
+	cloned := release
+	cloned.Artifacts = slices.Clone(release.Artifacts)
+	return cloned
+}
+
+func releaseSortKey(release Release) string {
+	var builder strings.Builder
+	builder.WriteString(release.InvocationLabel)
+	builder.WriteByte(0)
+	builder.WriteString(release.OperatingSystem)
+	builder.WriteByte(0)
+	builder.WriteString(release.Architecture)
+	builder.WriteByte(0)
+	builder.WriteString(release.CanonicalEntrypointName)
+	builder.WriteByte(0)
+	builder.WriteString(release.ID)
+	builder.WriteByte(0)
+	builder.WriteString(strconv.FormatUint(uint64(release.Revision), 10))
+	builder.WriteByte(0)
+	builder.WriteString(release.Version)
+	builder.WriteByte(0)
+	builder.WriteString(string(release.InstallShape))
+	builder.WriteByte(0)
+	builder.WriteString(release.ArtifactRoot)
+	for _, artifact := range release.Artifacts {
+		builder.WriteByte(0)
+		builder.WriteString(string(artifact.Role))
+		builder.WriteByte(0)
+		builder.WriteString(artifact.RelativePath)
+		builder.WriteByte(0)
+		builder.WriteString(artifact.SHA256)
+	}
+	return builder.String()
+}
+
+func releaseEvidenceDigest(release Release) string {
+	hash := sha256.New()
+	writeDigestField(hash, releaseDigestDomain)
+	writeDigestField(hash, release.ID)
+	writeDigestUint(hash, uint64(release.Revision))
+	writeDigestField(hash, release.Version)
+	writeDigestField(hash, release.OperatingSystem)
+	writeDigestField(hash, release.Architecture)
+	writeDigestField(hash, string(release.InstallShape))
+	writeDigestField(hash, release.InvocationLabel)
+	writeDigestField(hash, release.CanonicalEntrypointName)
+	writeDigestField(hash, release.ArtifactRoot)
+	writeDigestField(hash, string(release.LaunchRecipe))
+	writeDigestUint(hash, uint64(release.Features))
+	for _, artifact := range release.Artifacts {
+		writeDigestField(hash, string(artifact.Role))
+		writeDigestField(hash, artifact.RelativePath)
+		writeDigestField(hash, artifact.SHA256)
+		writeDigestUint(hash, uint64(artifact.MaxBytes))
+	}
+	return hex.EncodeToString(hash.Sum(nil))
+}
+
+func writeDigestField(writer io.Writer, value string) {
+	writeDigestUint(writer, uint64(len(value)))
+	_, _ = io.WriteString(writer, value)
+}
+
+func writeDigestUint(writer io.Writer, value uint64) {
+	var encoded [8]byte
+	binary.BigEndian.PutUint64(encoded[:], value)
+	_, _ = writer.Write(encoded[:])
+}
+
+// ClaudeCode221220DarwinARM64 returns one fixed compatibility release. Version
+// output is never executed as part of verification.
 func ClaudeCode221220DarwinARM64() Release {
 	return Release{
-		ID:               "claude-code",
-		Version:          "2.1.220",
-		InvocationLabel:  "claude",
-		ExecutableSHA256: "8addc857f3fe64d5a0368af9ee50321b50afb4a6918ba3ef018ab84f5dbbe081",
-		LaunchRecipe:     LaunchNodeEnvProxy,
+		ID:              "claude-code",
+		Revision:        1,
+		Version:         "2.1.220",
+		OperatingSystem: "darwin",
+		Architecture:    "arm64",
+		InstallShape:    InstallNativeSingleBinary,
+		InvocationLabel: "claude",
+		ArtifactRoot:    ".",
+		Artifacts: []Artifact{{
+			Role:   ArtifactEntrypoint,
+			SHA256: "8addc857f3fe64d5a0368af9ee50321b50afb4a6918ba3ef018ab84f5dbbe081",
+		}},
+		LaunchRecipe: LaunchNodeEnvProxy,
+	}
+}
+
+// CodexCLI01450DarwinARM64 returns the compound release whose HTTP fallback,
+// Root input, and wire behavior were verified by the fixed client matrix.
+func CodexCLI01450DarwinARM64() Release {
+	return Release{
+		ID:                      "codex-cli",
+		Revision:                1,
+		Version:                 "0.145.0",
+		OperatingSystem:         "darwin",
+		Architecture:            "arm64",
+		InstallShape:            InstallNPMWrapperNativeChild,
+		InvocationLabel:         "codex",
+		CanonicalEntrypointName: "codex.js",
+		ArtifactRoot:            "..",
+		Artifacts: []Artifact{
+			{
+				Role:   ArtifactEntrypoint,
+				SHA256: "134063e133f0b4244fa3b251acf973d4fe4b4aeeacbdc135211bf480f59f1477",
+			},
+			{
+				Role:         ArtifactMainPackageMetadata,
+				RelativePath: "../package.json",
+				SHA256:       "ff896fd5e5444cfc645890b21273ad1c6b3e26e4e4ab0934de597a0f8db5aafb",
+				MaxBytes:     1 << 20,
+			},
+			{
+				Role:         ArtifactPlatformPackageMetadata,
+				RelativePath: "../node_modules/@openai/codex-darwin-arm64/package.json",
+				SHA256:       "da204207716d61f06a70d96dd66e9b6c0728a3bdf8f696f31026549d47667a98",
+				MaxBytes:     1 << 20,
+			},
+			{
+				Role:         ArtifactNativeChild,
+				RelativePath: "../node_modules/@openai/codex-darwin-arm64/vendor/aarch64-apple-darwin/bin/codex",
+				SHA256:       "1da3f4e0e96028b8a771814293c3033dafd1971f943f6c7e79b0897fe705f590",
+			},
+		},
+		LaunchRecipe: LaunchSSLCertFile,
+		Features:     FeatureResponsesWebSocketHTTPFallback,
+	}
+}
+
+// BuiltInCatalog returns the explicit release evidence set. Other executable
+// versions remain valid generic clients rather than inheriting these recipes.
+//
+// NewReleaseVerifier performs the full validation at Host construction, so a
+// programming error in these constants is reported instead of becoming an
+// empty or partially active catalog.
+func BuiltInCatalog() Catalog {
+	return Catalog{
+		revision: 1,
+		releases: []Release{
+			ClaudeCode221220DarwinARM64(),
+			CodexCLI01450DarwinARM64(),
+		},
 	}
 }

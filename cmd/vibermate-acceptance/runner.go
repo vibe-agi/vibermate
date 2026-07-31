@@ -513,11 +513,16 @@ func isolateDeterministicSecret(input config) (config, error) {
 }
 
 func verifyFixedClaude(ctx context.Context, config config) error {
-	verifier, err := clientadapter.NewM0Verifier(
+	catalog, err := clientadapter.NewCatalog(
+		1,
 		[]clientadapter.Release{
 			clientadapter.ClaudeCode221220DarwinARM64(),
 		},
 	)
+	if err != nil {
+		return err
+	}
+	verifier, err := clientadapter.NewReleaseVerifier(catalog)
 	if err != nil {
 		return err
 	}

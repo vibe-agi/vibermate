@@ -26,7 +26,7 @@ type Options struct {
 	ProxyListenAddress   string
 	ControlListenAddress string
 	AllowedOrigins       []string
-	ClientReleases       []clientadapter.Release
+	ClientCatalog        clientadapter.Catalog
 	LauncherTTL          time.Duration
 	BootstrapTTL         time.Duration
 	AppSessionTTL        time.Duration
@@ -34,7 +34,7 @@ type Options struct {
 	ShutdownTimeout      time.Duration
 }
 
-// DefaultOptions creates the fixed macOS arm64 M0 Host policy. Callers still
+// DefaultOptions creates the current macOS arm64 Host policy. Callers still
 // supply all ProductRuntime dependencies explicitly.
 func DefaultOptions(
 	paths Paths,
@@ -46,14 +46,12 @@ func DefaultOptions(
 		ProxyListenAddress:   "127.0.0.1:0",
 		ControlListenAddress: "127.0.0.1:0",
 		AllowedOrigins:       []string{"tauri://localhost"},
-		ClientReleases: []clientadapter.Release{
-			clientadapter.ClaudeCode221220DarwinARM64(),
-		},
-		LauncherTTL:        defaultLauncherTTL,
-		BootstrapTTL:       defaultBootstrapTTL,
-		AppSessionTTL:      defaultAppSessionTTL,
-		CaptureRunLifetime: defaultCaptureRunLifetime,
-		ShutdownTimeout:    defaultShutdownTimeout,
+		ClientCatalog:        clientadapter.BuiltInCatalog(),
+		LauncherTTL:          defaultLauncherTTL,
+		BootstrapTTL:         defaultBootstrapTTL,
+		AppSessionTTL:        defaultAppSessionTTL,
+		CaptureRunLifetime:   defaultCaptureRunLifetime,
+		ShutdownTimeout:      defaultShutdownTimeout,
 	}
 }
 
@@ -74,7 +72,7 @@ func (options Options) validate() error {
 		return err
 	}
 	if len(options.AllowedOrigins) == 0 ||
-		len(options.ClientReleases) == 0 ||
+		!options.ClientCatalog.Valid() ||
 		options.Runtime.SecurityRandom == nil ||
 		options.LauncherTTL <= 0 ||
 		options.BootstrapTTL <= 0 ||
@@ -84,10 +82,10 @@ func (options Options) validate() error {
 		return errors.New("Desktop Host policy is incomplete")
 	}
 	if options.LauncherTTL > time.Hour {
-		return errors.New("launcher capability lifetime exceeds the M0 bound")
+		return errors.New("launcher capability lifetime exceeds the supported bound")
 	}
 	if options.BootstrapTTL > 5*time.Minute {
-		return errors.New("Desktop bootstrap lifetime exceeds the M0 bound")
+		return errors.New("Desktop bootstrap lifetime exceeds the supported bound")
 	}
 	return nil
 }

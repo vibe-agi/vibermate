@@ -24,7 +24,7 @@ import (
 
 var ErrInvalidBuildResult = errors.New("invalid runtime build result")
 
-// Runtime owns every successfully constructed M0 component.
+// Runtime owns every successfully constructed production component.
 type Runtime struct {
 	status       *statusTracker
 	schemaReader runtimepersistence.SchemaStateReader

@@ -11,10 +11,10 @@ import (
 	"github.com/vibe-agi/vibermate/internal/pathcapability"
 )
 
-func TestM0PathCapabilityClassifiesSemanticAuxiliaryAndOpaque(t *testing.T) {
+func TestBuiltInPathCapabilityClassifiesSemanticAuxiliaryAndOpaque(t *testing.T) {
 	t.Parallel()
 
-	catalog := m0Catalog(t)
+	catalog := builtInCatalog(t)
 	semantic, err := catalog.Classify(
 		access.DialectAnthropicMessages,
 		http.MethodPost,
@@ -81,12 +81,12 @@ func TestM0PathCapabilityClassifiesSemanticAuxiliaryAndOpaque(t *testing.T) {
 	}
 }
 
-func TestM0PathCapabilityFailsClosedForKnownOrNonCanonicalTargets(
+func TestBuiltInPathCapabilityFailsClosedForKnownOrNonCanonicalTargets(
 	t *testing.T,
 ) {
 	t.Parallel()
 
-	catalog := m0Catalog(t)
+	catalog := builtInCatalog(t)
 	tests := []struct {
 		name     string
 		method   string
@@ -161,12 +161,12 @@ func TestM0PathCapabilityFailsClosedForKnownOrNonCanonicalTargets(
 	}
 }
 
-func TestM0PathCapabilityIsolatesResponsesFromOtherOpenAIOperations(
+func TestBuiltInPathCapabilityIsolatesResponsesFromOtherOpenAIOperations(
 	t *testing.T,
 ) {
 	t.Parallel()
 
-	catalog := m0Catalog(t)
+	catalog := builtInCatalog(t)
 	responses, err := catalog.Classify(
 		access.DialectOpenAIResponses,
 		http.MethodPost,
@@ -257,12 +257,12 @@ func TestM0PathCapabilityIsolatesResponsesFromOtherOpenAIOperations(
 	}
 }
 
-func TestM0PathCapabilityRejectsWrongResponsesMethodAndQuery(
+func TestBuiltInPathCapabilityRejectsWrongResponsesMethodAndQuery(
 	t *testing.T,
 ) {
 	t.Parallel()
 
-	catalog := m0Catalog(t)
+	catalog := builtInCatalog(t)
 	for _, test := range []struct {
 		name     string
 		method   string
@@ -303,9 +303,9 @@ func TestM0PathCapabilityRejectsWrongResponsesMethodAndQuery(
 	}
 }
 
-func m0Catalog(t *testing.T) *pathcapability.Catalog {
+func builtInCatalog(t *testing.T) *pathcapability.Catalog {
 	t.Helper()
-	operations, err := operationcatalog.M0()
+	operations, err := operationcatalog.BuiltIn()
 	if err != nil {
 		t.Fatalf("construct operation catalog: %v", err)
 	}

@@ -1,4 +1,4 @@
-// Package desktopcontrol exposes the bounded Desktop M0 control slice. It
+// Package desktopcontrol exposes the bounded Desktop control slice. It
 // returns stable reason and i18n keys; localized user copy remains in catalogs.
 package desktopcontrol
 

@@ -54,8 +54,8 @@ func TestExecutablePlanMigrationUpgradesFoundationSchema(t *testing.T) {
 	if err != nil {
 		t.Fatalf("read upgraded schema state: %v", err)
 	}
-	if state.Revision != 11 {
-		t.Fatalf("upgraded schema revision = %d, want 11", state.Revision)
+	if state.Revision != 12 {
+		t.Fatalf("upgraded schema revision = %d, want 12", state.Revision)
 	}
 	mutation := accessMutation(t, "access-upgraded", 0, "Upgraded")
 	result, err := store.AccessRepository().CompareAndSwap(
@@ -589,7 +589,7 @@ func testAccessCompiler(t *testing.T) *access.Compiler {
 	if err != nil {
 		t.Fatalf("construct codec ID: %v", err)
 	}
-	operations, err := operationcatalog.M0()
+	operations, err := operationcatalog.BuiltIn()
 	if err != nil {
 		t.Fatalf("construct operation catalog: %v", err)
 	}

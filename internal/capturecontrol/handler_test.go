@@ -11,6 +11,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"runtime"
 	"testing"
 	"time"
 
@@ -49,8 +50,10 @@ func TestCaptureControlSeparatesLauncherAndPerRunCapabilities(t *testing.T) {
 	decodeRecorder(t, response, &grant)
 	if grant.Run.ID == "" ||
 		grant.Run.CWD != fixture.workspace ||
+		grant.CatalogRevision != 4 ||
 		grant.LaunchRecipe != clientadapter.LaunchNodeEnvProxy ||
 		grant.Adapter == nil ||
+		grant.Adapter.CatalogRevision != grant.CatalogRevision ||
 		grant.Adapter.Version != "2.1.220" ||
 		grant.ExecutablePath == "" ||
 		grant.ProxyOrigin != "http://127.0.0.1:32123" ||
@@ -61,6 +64,28 @@ func TestCaptureControlSeparatesLauncherAndPerRunCapabilities(t *testing.T) {
 		len(grant.ProtectedAuthorities) != 1 ||
 		grant.ProtectedAuthorities[0] != "api.anthropic.com:443" {
 		t.Fatalf("launch grant = %+v", grant)
+	}
+	proxyCapability, err := capturerun.NewProxyCapability(
+		grant.ProxyCapability,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	proxyEvidence, err := fixture.runs.AuthorizeProxy(
+		context.Background(),
+		proxyCapability,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if proxyEvidence.CatalogRevision != grant.CatalogRevision ||
+		proxyEvidence.Adapter == nil ||
+		*proxyEvidence.Adapter != *grant.Adapter {
+		t.Fatalf(
+			"proxy evidence=%+v grant adapter=%+v",
+			proxyEvidence,
+			grant.Adapter,
+		)
 	}
 
 	unauthorized := fixture.DoJSON(
@@ -149,6 +174,63 @@ func TestCaptureControlExpiresLauncherCapability(t *testing.T) {
 	}
 }
 
+func TestCaptureControlKeepsUnknownClientBuildGeneric(t *testing.T) {
+	t.Parallel()
+
+	fixture := newFixture(t)
+	defer fixture.Close(t)
+	if err := os.WriteFile(
+		fixture.executable,
+		[]byte("#!/bin/sh\nexit 9\n"),
+		0o700,
+	); err != nil {
+		t.Fatal(err)
+	}
+	response := fixture.DoJSON(
+		t,
+		http.MethodPost,
+		"/api/v1/capture-runs",
+		fixture.launcherToken,
+		"",
+		capturecontrol.CreateRequest{
+			CWD:            fixture.workspace,
+			Command:        []string{"claude"},
+			ExecutablePath: fixture.executable,
+		},
+	)
+	if response.Code != http.StatusCreated {
+		t.Fatalf(
+			"unknown build create status=%d body=%s",
+			response.Code,
+			response.Body.Bytes(),
+		)
+	}
+	var grant capturecontrol.LaunchGrant
+	decodeRecorder(t, response, &grant)
+	if grant.CatalogRevision != 4 ||
+		grant.LaunchRecipe != clientadapter.LaunchGeneric ||
+		grant.Adapter != nil ||
+		grant.RootPEMPath != "" {
+		t.Fatalf("unknown build launch grant = %+v", grant)
+	}
+	proxyCapability, err := capturerun.NewProxyCapability(
+		grant.ProxyCapability,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	evidence, err := fixture.runs.AuthorizeProxy(
+		context.Background(),
+		proxyCapability,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if evidence.CatalogRevision != 4 || evidence.Adapter != nil {
+		t.Fatalf("unknown build proxy evidence = %+v", evidence)
+	}
+}
+
 type fixture struct {
 	handler       *capturecontrol.Handler
 	store         *runtimepersistence.Store
@@ -202,13 +284,28 @@ func newFixture(t *testing.T) *fixture {
 		t.Fatal(err)
 	}
 	executableDigest := sha256.Sum256(executableContent)
-	verifier, err := clientadapter.NewM0Verifier([]clientadapter.Release{{
-		ID:               "claude-code",
-		Version:          "2.1.220",
-		InvocationLabel:  "claude",
-		ExecutableSHA256: hex.EncodeToString(executableDigest[:]),
-		LaunchRecipe:     clientadapter.LaunchNodeEnvProxy,
-	}})
+	catalog, err := clientadapter.NewCatalog(
+		4,
+		[]clientadapter.Release{{
+			ID:              "claude-code",
+			Revision:        1,
+			Version:         "2.1.220",
+			OperatingSystem: runtime.GOOS,
+			Architecture:    runtime.GOARCH,
+			InstallShape:    clientadapter.InstallNativeSingleBinary,
+			InvocationLabel: "claude",
+			ArtifactRoot:    ".",
+			Artifacts: []clientadapter.Artifact{{
+				Role:   clientadapter.ArtifactEntrypoint,
+				SHA256: hex.EncodeToString(executableDigest[:]),
+			}},
+			LaunchRecipe: clientadapter.LaunchNodeEnvProxy,
+		}},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	verifier, err := clientadapter.NewReleaseVerifier(catalog)
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -78,14 +78,16 @@ Exact semantic Anthropic Messages and OpenAI Responses HTTP operations enter
 the same Exchange executor; semantic ingress carries no client authentication
 or hop-by-hop headers into IR or provider construction. Auxiliary/opaque
 operations use the separately gated original-origin transport. Responses
-WebSocket upgrade is an explicit unsupported typed operation and receives a
-bounded 426 before body read or data-plane dispatch. Responses management,
+WebSocket upgrade is an explicit unsupported typed operation. A bounded 426 is
+available only when the CaptureRun carries the exact verified fixed-client
+feature; generic Codex versions receive the ordinary unsupported-path result.
+Both decisions happen before body read or data-plane dispatch. Responses management,
 upload, batch, media, Realtime, and foreign semantic operations cannot enter
 model translation. Body-free ConnectionEvents persist connection phase
 evidence. The local Root is installation-persistent and exported as public
 evidence, but this code does not install it into an operating-system trust
-store. Repository tests do not yet prove that fixed Codex falls back from the
-426 to HTTP.
+store. Repository tests prove the version-gated response but do not yet prove
+that real fixed Codex falls back from the 426 to HTTP.
 
 DesktopHost now owns the literal proxy and control listeners, complete routes,
 generation lock, capability separation, launcher discovery, and the only
@@ -107,9 +109,15 @@ Storage.
 The `vibermate run -- <command>` launcher consumes only short-lived, private,
 generation-scoped discovery; creates one CaptureRun; supervises one child;
 injects authenticated proxy variables; removes protected Agent authorities
-from inherited `NO_PROXY`; and heartbeats and finishes the run. Host integration
-tests exercise this path over real loopback listeners with a local child
-process. They do not send provider traffic.
+from inherited `NO_PROXY`; and heartbeats and finishes the run. The daemon
+verifies every artifact in a revisioned compound client release before granting
+version-specific behavior. Fixed Codex receives the same local Root through
+`SSL_CERT_FILE` plus a non-secret client placeholder after conflicting ambient
+proxy, CA, base-URL, and credential variables are removed. Unknown Codex
+versions remain generic clients instead of being rejected or mislabeled. Host
+integration tests exercise this path over real loopback listeners with a local
+child process, including bounded SIGINT convergence. They do not send provider
+traffic.
 
 The existing opt-in `vibermate-acceptance` command exercises the packaged macOS
 arm64 assembly with fixed Claude Code 2.1.220. It derives the daemon and
@@ -121,7 +129,9 @@ sidecars. The deterministic sequence uses a unique missing SecretRef; the
 credentialed continuation uses the development file SecretStore and defaults
 to a local Cherry Studio API at `http://127.0.0.1:23333/v1` with model
 `dashscope:glm-5`. No acceptance mode takes a secret value on its command line.
-Fixed Codex 0.145.0 launch and packaged HTTP-fallback evidence remain pending.
+The fixed Codex 0.145.0 compound-release and launcher contracts are
+component-verified. Packaged real-client HTTP-fallback evidence remains
+pending.
 
 SQLite is the only durable Access authority; active-plan publication occurs
 after commit. An indeterminate commit or post-commit publication failure marks

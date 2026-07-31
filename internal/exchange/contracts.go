@@ -793,7 +793,7 @@ const (
 	AttemptAborted   AttemptOutcome = "aborted"
 )
 
-// Result is evidence for one logical Exchange and its one M0 Attempt. It does
+// Result is evidence for one logical Exchange and its one provider Attempt. It does
 // not expose the Access plan handle or provider response body.
 type Result struct {
 	ExchangeID          string

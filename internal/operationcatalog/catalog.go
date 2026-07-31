@@ -36,7 +36,7 @@ type Catalog struct {
 	definitions []access.ClientOperationDefinition
 }
 
-func M0() (Catalog, error) {
+func BuiltIn() (Catalog, error) {
 	var definitions []access.ClientOperationDefinition
 	add := func(options access.ClientOperationOptions) error {
 		definition, err := access.NewClientOperationDefinition(options)

@@ -3,11 +3,13 @@ package runtimepersistence
 import (
 	"context"
 	"database/sql"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"time"
 
 	"github.com/vibe-agi/vibermate/internal/capturerun"
+	"github.com/vibe-agi/vibermate/internal/clientadapter"
 )
 
 const captureRunColumns = `
@@ -16,6 +18,14 @@ const captureRunColumns = `
 	control_capability_hash,
 	cwd,
 	executable_label,
+	client_catalog_revision,
+	adapter_id,
+	adapter_revision,
+	adapter_version,
+	adapter_install_shape,
+	adapter_release_sha256,
+	adapter_launch_recipe,
+	adapter_features,
 	process_id,
 	state,
 	created_at_unix_ms,
@@ -48,6 +58,10 @@ func (repository *captureRunRepository) Create(
 		return err
 	}
 	defer finish()
+	adapterID, adapterRevision, adapterVersion, installShape,
+		releaseDigest, launchRecipe, features := captureRunAdapterColumns(
+		record.Adapter,
+	)
 	_, err = repository.database.ExecContext(
 		operation,
 		`INSERT INTO capture_runs (
@@ -56,18 +70,34 @@ func (repository *captureRunRepository) Create(
 		     control_capability_hash,
 		     cwd,
 		     executable_label,
+		     client_catalog_revision,
+		     adapter_id,
+		     adapter_revision,
+		     adapter_version,
+		     adapter_install_shape,
+		     adapter_release_sha256,
+		     adapter_launch_recipe,
+		     adapter_features,
 		     process_id,
 		     state,
 		     created_at_unix_ms,
 		     expires_at_unix_ms,
 		     updated_at_unix_ms
 		 )
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		record.ID,
 		record.ProxyCapabilityHash[:],
 		record.ControlCapabilityHash[:],
 		record.CWD,
 		record.ExecutableLabel,
+		int64(record.CatalogRevision),
+		adapterID,
+		adapterRevision,
+		adapterVersion,
+		installShape,
+		releaseDigest,
+		launchRecipe,
+		features,
 		record.ProcessID,
 		string(record.State),
 		toUnixMillis(record.CreatedAt),
@@ -328,10 +358,15 @@ type captureRunScanner interface {
 
 func scanCaptureRun(scanner captureRunScanner) (capturerun.DurableRecord, error) {
 	var (
-		record                            capturerun.DurableRecord
-		proxyHash, controlHash            []byte
-		state                             string
-		createdAt, expiresAt, updatedAtMS int64
+		record                             capturerun.DurableRecord
+		proxyHash, controlHash             []byte
+		releaseHash                        []byte
+		catalogRevision, adapterRevision   int64
+		adapterFeatures                    int64
+		adapterID, adapterVersion          string
+		adapterInstallShape, adapterRecipe string
+		state                              string
+		createdAt, expiresAt, updatedAtMS  int64
 	)
 	if err := scanner.Scan(
 		&record.ID,
@@ -339,6 +374,14 @@ func scanCaptureRun(scanner captureRunScanner) (capturerun.DurableRecord, error)
 		&controlHash,
 		&record.CWD,
 		&record.ExecutableLabel,
+		&catalogRevision,
+		&adapterID,
+		&adapterRevision,
+		&adapterVersion,
+		&adapterInstallShape,
+		&releaseHash,
+		&adapterRecipe,
+		&adapterFeatures,
 		&record.ProcessID,
 		&state,
 		&createdAt,
@@ -353,6 +396,41 @@ func scanCaptureRun(scanner captureRunScanner) (capturerun.DurableRecord, error)
 	}
 	copy(record.ProxyCapabilityHash[:], proxyHash)
 	copy(record.ControlCapabilityHash[:], controlHash)
+	if catalogRevision <= 0 ||
+		adapterRevision < 0 ||
+		adapterFeatures < 0 {
+		return capturerun.DurableRecord{}, errors.New(
+			"CaptureRun client evidence number is invalid",
+		)
+	}
+	record.CatalogRevision = clientadapter.CatalogRevision(catalogRevision)
+	if adapterID != "" {
+		if len(releaseHash) != 32 ||
+			adapterRevision == 0 {
+			return capturerun.DurableRecord{}, errors.New(
+				"CaptureRun adapter evidence is incomplete",
+			)
+		}
+		record.Adapter = &clientadapter.Evidence{
+			ID:              adapterID,
+			Revision:        clientadapter.AdapterRevision(adapterRevision),
+			Version:         adapterVersion,
+			CatalogRevision: record.CatalogRevision,
+			InstallShape:    clientadapter.InstallShape(adapterInstallShape),
+			ReleaseSHA256:   hex.EncodeToString(releaseHash),
+			LaunchRecipe:    clientadapter.LaunchRecipe(adapterRecipe),
+			Features:        clientadapter.Feature(adapterFeatures),
+		}
+	} else if adapterRevision != 0 ||
+		adapterVersion != "" ||
+		adapterInstallShape != "" ||
+		len(releaseHash) != 0 ||
+		adapterRecipe != "" ||
+		adapterFeatures != 0 {
+		return capturerun.DurableRecord{}, errors.New(
+			"CaptureRun generic client evidence is inconsistent",
+		)
+	}
 	record.State = capturerun.State(state)
 	record.CreatedAt = fromUnixMillis(createdAt)
 	record.ExpiresAt = fromUnixMillis(expiresAt)
@@ -361,4 +439,28 @@ func scanCaptureRun(scanner captureRunScanner) (capturerun.DurableRecord, error)
 		return capturerun.DurableRecord{}, err
 	}
 	return record, nil
+}
+
+func captureRunAdapterColumns(
+	evidence *clientadapter.Evidence,
+) (
+	string,
+	int64,
+	string,
+	string,
+	[]byte,
+	string,
+	int64,
+) {
+	if evidence == nil {
+		return "", 0, "", "", []byte{}, "", 0
+	}
+	releaseDigest, _ := hex.DecodeString(evidence.ReleaseSHA256)
+	return evidence.ID,
+		int64(evidence.Revision),
+		evidence.Version,
+		string(evidence.InstallShape),
+		releaseDigest,
+		string(evidence.LaunchRecipe),
+		int64(evidence.Features)
 }

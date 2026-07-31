@@ -24,6 +24,7 @@ import (
 
 	"github.com/vibe-agi/vibermate/internal/access"
 	"github.com/vibe-agi/vibermate/internal/capturerun"
+	"github.com/vibe-agi/vibermate/internal/clientadapter"
 	"github.com/vibe-agi/vibermate/internal/connectionevent"
 	"github.com/vibe-agi/vibermate/internal/exchange"
 	"github.com/vibe-agi/vibermate/internal/offlinehold"
@@ -552,7 +553,11 @@ func (handler *Handler) serveInner(
 	if capability.Kind() == pathcapability.KindUnsupported {
 		if capability.Transport() ==
 			access.ClientOperationTransportWebSocket &&
-			isWebSocketUpgrade(request) {
+			isWebSocketUpgrade(request) &&
+			run.Adapter != nil &&
+			run.Adapter.Supports(
+				clientadapter.FeatureResponsesWebSocketHTTPFallback,
+			) {
 			writeReason(
 				writer,
 				http.StatusUpgradeRequired,

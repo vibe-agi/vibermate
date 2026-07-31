@@ -14,6 +14,8 @@ import (
 	"time"
 	"unicode"
 	"unicode/utf8"
+
+	"github.com/vibe-agi/vibermate/internal/clientadapter"
 )
 
 const (
@@ -57,6 +59,8 @@ type DurableRecord struct {
 	ControlCapabilityHash CapabilityDigest
 	CWD                   string
 	ExecutableLabel       string
+	CatalogRevision       clientadapter.CatalogRevision
+	Adapter               *clientadapter.Evidence
 	ProcessID             int
 	State                 State
 	CreatedAt             time.Time
@@ -81,6 +85,21 @@ func (record DurableRecord) Validate() error {
 		MaxExecutableLabelByte,
 	); err != nil {
 		return err
+	}
+	if !record.CatalogRevision.Valid() {
+		return fmt.Errorf(
+			"%w: client catalog revision is invalid",
+			ErrInvalidRequest,
+		)
+	}
+	if record.Adapter != nil {
+		if err := record.Adapter.Validate(); err != nil ||
+			record.Adapter.CatalogRevision != record.CatalogRevision {
+			return fmt.Errorf(
+				"%w: client adapter evidence is invalid",
+				ErrInvalidRequest,
+			)
+		}
 	}
 	if record.ProcessID < 0 {
 		return fmt.Errorf("%w: process ID is negative", ErrInvalidRequest)
@@ -172,9 +191,11 @@ type LaunchGrant struct {
 }
 
 type CreateCommand struct {
-	CWD            string
-	ExecutablePath string
-	Lifetime       time.Duration
+	CWD             string
+	ExecutablePath  string
+	Lifetime        time.Duration
+	CatalogRevision clientadapter.CatalogRevision
+	Adapter         *clientadapter.Evidence
 }
 
 func (command CreateCommand) validate(maxLifetime time.Duration) error {
@@ -187,6 +208,21 @@ func (command CreateCommand) validate(maxLifetime time.Duration) error {
 	if command.Lifetime <= 0 || command.Lifetime > maxLifetime {
 		return fmt.Errorf("%w: CaptureRun lifetime is invalid", ErrInvalidRequest)
 	}
+	if !command.CatalogRevision.Valid() {
+		return fmt.Errorf(
+			"%w: client catalog revision is invalid",
+			ErrInvalidRequest,
+		)
+	}
+	if command.Adapter != nil {
+		if err := command.Adapter.Validate(); err != nil ||
+			command.Adapter.CatalogRevision != command.CatalogRevision {
+			return fmt.Errorf(
+				"%w: client adapter evidence is invalid",
+				ErrInvalidRequest,
+			)
+		}
+	}
 	label := filepath.Base(command.ExecutablePath)
 	return validateText("executable label", label, MaxExecutableLabelByte)
 }
@@ -197,6 +233,8 @@ type Evidence struct {
 	RunID           string
 	CWD             string
 	ExecutableLabel string
+	CatalogRevision clientadapter.CatalogRevision
+	Adapter         *clientadapter.Evidence
 	ProcessID       int
 	ExpiresAt       time.Time
 }
@@ -206,9 +244,21 @@ func evidenceOf(record DurableRecord) Evidence {
 		RunID:           record.ID,
 		CWD:             record.CWD,
 		ExecutableLabel: record.ExecutableLabel,
+		CatalogRevision: record.CatalogRevision,
+		Adapter:         cloneAdapter(record.Adapter),
 		ProcessID:       record.ProcessID,
 		ExpiresAt:       record.ExpiresAt,
 	}
+}
+
+func cloneAdapter(
+	evidence *clientadapter.Evidence,
+) *clientadapter.Evidence {
+	if evidence == nil {
+		return nil
+	}
+	cloned := *evidence
+	return &cloned
 }
 
 type Recovery struct {

@@ -13,8 +13,65 @@ import (
 	"time"
 
 	"github.com/vibe-agi/vibermate/internal/capturerun"
+	"github.com/vibe-agi/vibermate/internal/clientadapter"
 	"github.com/vibe-agi/vibermate/internal/runtimepersistence"
 )
+
+func TestCaptureRunPersistsVerifiedAdapterEvidenceWithProxyCapability(
+	t *testing.T,
+) {
+	t.Parallel()
+
+	databasePath := filepath.Join(t.TempDir(), "data", "runtime.db")
+	clock := newClock(time.Date(2026, 7, 29, 0, 30, 0, 0, time.UTC))
+	firstStore := openStore(t, databasePath)
+	first := newManager(t, firstStore, clock)
+	adapter := clientadapter.Evidence{
+		ID:              "codex-cli",
+		Revision:        3,
+		Version:         "0.145.0",
+		CatalogRevision: 7,
+		InstallShape:    clientadapter.InstallNPMWrapperNativeChild,
+		ReleaseSHA256:   "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+		LaunchRecipe:    clientadapter.LaunchSSLCertFile,
+		Features:        clientadapter.FeatureResponsesWebSocketHTTPFallback,
+	}
+	grant, err := first.Create(
+		context.Background(),
+		capturerun.CreateCommand{
+			CWD:             filepath.Join(t.TempDir(), "workspace"),
+			ExecutablePath:  "/usr/local/bin/codex",
+			Lifetime:        2 * time.Minute,
+			CatalogRevision: 7,
+			Adapter:         &adapter,
+		},
+	)
+	if err != nil {
+		t.Fatalf("create verified CaptureRun: %v", err)
+	}
+	adapter.Version = "caller-mutated"
+	evidence, err := first.AuthorizeProxy(
+		context.Background(),
+		grant.ProxyCapability,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	assertCodexEvidence(t, evidence)
+
+	shutdownStore(t, firstStore)
+	secondStore := openStore(t, databasePath)
+	defer shutdownStore(t, secondStore)
+	second := newManager(t, secondStore, clock)
+	recovered, err := second.AuthorizeProxy(
+		context.Background(),
+		grant.ProxyCapability,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	assertCodexEvidence(t, recovered)
+}
 
 func TestCaptureRunCapabilitiesArePersistedAsHashesAndDriveLifecycle(
 	t *testing.T,
@@ -27,9 +84,10 @@ func TestCaptureRunCapabilitiesArePersistedAsHashesAndDriveLifecycle(
 	manager := newManager(t, store, clock)
 
 	grant, err := manager.Create(context.Background(), capturerun.CreateCommand{
-		CWD:            filepath.Join(t.TempDir(), "workspace"),
-		ExecutablePath: "/usr/local/bin/claude",
-		Lifetime:       2 * time.Minute,
+		CWD:             filepath.Join(t.TempDir(), "workspace"),
+		ExecutablePath:  "/usr/local/bin/claude",
+		Lifetime:        2 * time.Minute,
+		CatalogRevision: 1,
 	})
 	if err != nil {
 		t.Fatalf("create CaptureRun: %v", err)
@@ -146,9 +204,10 @@ func TestCaptureRunRestartRecoveryRetainsOnlyFreshCapabilityHashes(
 	firstStore := openStore(t, databasePath)
 	first := newManager(t, firstStore, clock)
 	grant, err := first.Create(context.Background(), capturerun.CreateCommand{
-		CWD:            filepath.Join(t.TempDir(), "workspace"),
-		ExecutablePath: "/opt/vibermate/claude",
-		Lifetime:       90 * time.Second,
+		CWD:             filepath.Join(t.TempDir(), "workspace"),
+		ExecutablePath:  "/opt/vibermate/claude",
+		Lifetime:        90 * time.Second,
+		CatalogRevision: 1,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -196,9 +255,10 @@ func TestCaptureRunShutdownRevokesBeforeSQLiteClose(t *testing.T) {
 	store := openStore(t, databasePath)
 	manager := newManager(t, store, clock)
 	grant, err := manager.Create(context.Background(), capturerun.CreateCommand{
-		CWD:            filepath.Join(t.TempDir(), "workspace"),
-		ExecutablePath: "/usr/bin/true",
-		Lifetime:       time.Minute,
+		CWD:             filepath.Join(t.TempDir(), "workspace"),
+		ExecutablePath:  "/usr/bin/true",
+		Lifetime:        time.Minute,
+		CatalogRevision: 1,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -225,6 +285,24 @@ func TestCaptureRunShutdownRevokesBeforeSQLiteClose(t *testing.T) {
 		grant.ProxyCapability,
 	); !errors.Is(err, capturerun.ErrCapabilityRejected) {
 		t.Fatalf("revoked capability after reopen error = %v", err)
+	}
+}
+
+func assertCodexEvidence(
+	t *testing.T,
+	evidence capturerun.Evidence,
+) {
+	t.Helper()
+
+	if evidence.CatalogRevision != 7 ||
+		evidence.Adapter == nil ||
+		evidence.Adapter.ID != "codex-cli" ||
+		evidence.Adapter.Version != "0.145.0" ||
+		evidence.Adapter.CatalogRevision != evidence.CatalogRevision ||
+		!evidence.Adapter.Supports(
+			clientadapter.FeatureResponsesWebSocketHTTPFallback,
+		) {
+		t.Fatalf("CaptureRun adapter evidence = %+v", evidence)
 	}
 }
 

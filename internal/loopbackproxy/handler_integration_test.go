@@ -21,6 +21,7 @@ import (
 	"github.com/vibe-agi/vibermate/internal/access"
 	"github.com/vibe-agi/vibermate/internal/anthropicchat"
 	"github.com/vibe-agi/vibermate/internal/capturerun"
+	"github.com/vibe-agi/vibermate/internal/clientadapter"
 	"github.com/vibe-agi/vibermate/internal/connectionevent"
 	"github.com/vibe-agi/vibermate/internal/exchange"
 	"github.com/vibe-agi/vibermate/internal/localca"
@@ -270,6 +271,52 @@ func TestLoopbackProxyReturnsBounded426ForResponsesWebSocketUpgrade(
 		fixture.original.Count() != 0 {
 		t.Fatalf(
 			"WebSocket response status=%d body=%s Exchanges=%d original=%d",
+			response.StatusCode,
+			body,
+			len(fixture.exchanges.Requests()),
+			fixture.original.Count(),
+		)
+	}
+}
+
+func TestLoopbackProxyDoesNotApplyFixedFallbackToGenericClient(
+	t *testing.T,
+) {
+	t.Parallel()
+
+	fixture := newGenericResponsesProxyFixture(t)
+	defer fixture.Close(t)
+	secured := fixture.ConnectTLS(
+		t,
+		fixture.grant.ProxyCapability.Value(),
+		"api.openai.com:443",
+		"api.openai.com",
+	)
+	defer secured.Close()
+	response := writeInnerRequest(t, secured, &http.Request{
+		Method: http.MethodGet,
+		URL:    mustURL(t, "/v1/responses"),
+		Host:   "api.openai.com:443",
+		Header: http.Header{
+			"Connection": []string{"Upgrade"},
+			"Upgrade":    []string{"websocket"},
+		},
+	})
+	body, err := io.ReadAll(io.LimitReader(response.Body, 1025))
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = response.Body.Close()
+	if response.StatusCode != http.StatusUnprocessableEntity ||
+		!bytes.Contains(body, []byte(`"reasonCode":"path_unsupported"`)) ||
+		bytes.Contains(
+			body,
+			[]byte(`"reasonCode":"responses_websocket_unsupported"`),
+		) ||
+		len(fixture.exchanges.Requests()) != 0 ||
+		fixture.original.Count() != 0 {
+		t.Fatalf(
+			"generic WebSocket status=%d body=%s Exchanges=%d original=%d",
 			response.StatusCode,
 			body,
 			len(fixture.exchanges.Requests()),
@@ -545,17 +592,36 @@ type proxyFixture struct {
 
 func newProxyFixture(t *testing.T) *proxyFixture {
 	t.Helper()
-	return newProxyFixtureForDialect(t, access.DialectAnthropicMessages)
+	return newProxyFixtureForDialect(
+		t,
+		access.DialectAnthropicMessages,
+		nil,
+	)
 }
 
 func newResponsesProxyFixture(t *testing.T) *proxyFixture {
 	t.Helper()
-	return newProxyFixtureForDialect(t, access.DialectOpenAIResponses)
+	adapter := fixedCodexAdapterEvidence()
+	return newProxyFixtureForDialect(
+		t,
+		access.DialectOpenAIResponses,
+		&adapter,
+	)
+}
+
+func newGenericResponsesProxyFixture(t *testing.T) *proxyFixture {
+	t.Helper()
+	return newProxyFixtureForDialect(
+		t,
+		access.DialectOpenAIResponses,
+		nil,
+	)
 }
 
 func newProxyFixtureForDialect(
 	t *testing.T,
 	clientDialect access.Dialect,
+	adapter *clientadapter.Evidence,
 ) *proxyFixture {
 	t.Helper()
 	directory := t.TempDir()
@@ -576,9 +642,11 @@ func newProxyFixtureForDialect(
 		t.Fatal(err)
 	}
 	grant, err := runs.Create(context.Background(), capturerun.CreateCommand{
-		CWD:            filepath.Join(directory, "workspace"),
-		ExecutablePath: "/usr/local/bin/claude",
-		Lifetime:       5 * time.Minute,
+		CWD:             filepath.Join(directory, "workspace"),
+		ExecutablePath:  "/usr/local/bin/claude",
+		Lifetime:        5 * time.Minute,
+		CatalogRevision: 1,
+		Adapter:         adapter,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -592,7 +660,7 @@ func newProxyFixtureForDialect(
 	}
 	projection, accessID := testProjectionForDialect(t, clientDialect)
 	ingress := &revocableIngress{delegate: projection}
-	operations, err := operationcatalog.M0()
+	operations, err := operationcatalog.BuiltIn()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -645,6 +713,19 @@ func newProxyFixtureForDialect(
 		ingress:     ingress,
 		accessID:    accessID,
 		connections: connections,
+	}
+}
+
+func fixedCodexAdapterEvidence() clientadapter.Evidence {
+	return clientadapter.Evidence{
+		ID:              "codex-cli",
+		Revision:        1,
+		Version:         "0.145.0",
+		CatalogRevision: 1,
+		InstallShape:    clientadapter.InstallNPMWrapperNativeChild,
+		ReleaseSHA256:   "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+		LaunchRecipe:    clientadapter.LaunchSSLCertFile,
+		Features:        clientadapter.FeatureResponsesWebSocketHTTPFallback,
 	}
 }
 
@@ -920,7 +1001,7 @@ func testProjectionForDialectRevision(
 	model, _ := access.NewModelName(modelValue)
 	secret, _ := access.NewSecretRef("secret://provider/proxy")
 	codecID, _ := access.NewCodecPairID(codecPairID)
-	operations, err := operationcatalog.M0()
+	operations, err := operationcatalog.BuiltIn()
 	if err != nil {
 		t.Fatal(err)
 	}

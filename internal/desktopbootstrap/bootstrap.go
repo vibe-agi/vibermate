@@ -52,7 +52,7 @@ func cloneStrings(values []string) []string {
 	return cloned
 }
 
-// Session is the bounded M0 App control session. Event and report-host
+// Session is the bounded App control session. Event and report-host
 // capabilities are not issued until their corresponding routes exist.
 type Session struct {
 	Schema     string    `json:"schema"`

@@ -106,6 +106,7 @@ func (manager *Manager) Create(
 	if command.Lifetime == 0 {
 		command.Lifetime = manager.defaultLifetime
 	}
+	command.Adapter = cloneAdapter(command.Adapter)
 	if err := command.validate(manager.maxLifetime); err != nil {
 		return LaunchGrant{}, err
 	}
@@ -134,6 +135,8 @@ func (manager *Manager) Create(
 		ControlCapabilityHash: capabilityDigest(controlDigestDomain, controlValue),
 		CWD:                   command.CWD,
 		ExecutableLabel:       filepath.Base(command.ExecutablePath),
+		CatalogRevision:       command.CatalogRevision,
+		Adapter:               cloneAdapter(command.Adapter),
 		State:                 StateCreated,
 		CreatedAt:             now,
 		ExpiresAt:             now.Add(command.Lifetime),

@@ -12,16 +12,34 @@ import (
 	"github.com/vibe-agi/vibermate/internal/clientadapter"
 )
 
+const codexClientPlaceholder = "vibermate-local-proxy"
+
 var managedEnvironment = map[string]struct{}{
 	"HTTP_PROXY":               {},
 	"HTTPS_PROXY":              {},
 	"http_proxy":               {},
 	"https_proxy":              {},
+	"ALL_PROXY":                {},
+	"all_proxy":                {},
 	"NO_PROXY":                 {},
 	"no_proxy":                 {},
 	"VIBERMATE_CAPTURE_RUN_ID": {},
 	"NODE_EXTRA_CA_CERTS":      {},
 	"NODE_USE_ENV_PROXY":       {},
+}
+
+var codexManagedEnvironment = map[string]struct{}{
+	"SSL_CERT_FILE":       {},
+	"REQUESTS_CA_BUNDLE":  {},
+	"CURL_CA_BUNDLE":      {},
+	"OPENAI_BASE_URL":     {},
+	"CODEX_BASE_URL":      {},
+	"OPENAI_API_KEY":      {},
+	"CODEX_API_KEY":       {},
+	"OPENAI_ORGANIZATION": {},
+	"OPENAI_PROJECT":      {},
+	"OPENAI_ORG_ID":       {},
+	"OPENAI_PROJECT_ID":   {},
 }
 
 func buildEnvironment(
@@ -49,7 +67,7 @@ func buildEnvironment(
 			noProxyValues = append(noProxyValues, value)
 			continue
 		}
-		if _, managed := managedEnvironment[key]; managed {
+		if environmentManaged(key, grant.LaunchRecipe) {
 			continue
 		}
 		preserved[key] = value
@@ -67,6 +85,9 @@ func buildEnvironment(
 	case clientadapter.LaunchNodeEnvProxy:
 		preserved["NODE_EXTRA_CA_CERTS"] = grant.RootPEMPath
 		preserved["NODE_USE_ENV_PROXY"] = "1"
+	case clientadapter.LaunchSSLCertFile:
+		preserved["SSL_CERT_FILE"] = grant.RootPEMPath
+		preserved["CODEX_API_KEY"] = codexClientPlaceholder
 	default:
 		return nil, errors.New("CaptureRun launch recipe is unsupported")
 	}
@@ -80,6 +101,20 @@ func buildEnvironment(
 		result = append(result, key+"="+preserved[key])
 	}
 	return result, nil
+}
+
+func environmentManaged(
+	key string,
+	recipe clientadapter.LaunchRecipe,
+) bool {
+	if _, managed := managedEnvironment[key]; managed {
+		return true
+	}
+	if recipe == clientadapter.LaunchSSLCertFile {
+		_, managed := codexManagedEnvironment[key]
+		return managed
+	}
+	return false
 }
 
 func authenticatedProxyURL(origin string, capability string) (string, error) {

@@ -328,7 +328,7 @@ func compiledSnapshot(t *testing.T) access.AccessPlanSnapshot {
 	model, _ := access.NewModelName("gpt-4.1-mini")
 	secretRef, _ := access.NewSecretRef("secret://provider/work-account")
 	codecID, _ := access.NewCodecPairID("anthropic-messages-to-openai-chat")
-	operations, err := operationcatalog.M0()
+	operations, err := operationcatalog.BuiltIn()
 	if err != nil {
 		t.Fatal(err)
 	}

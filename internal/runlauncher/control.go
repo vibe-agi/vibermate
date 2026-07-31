@@ -15,6 +15,7 @@ import (
 
 	"github.com/vibe-agi/vibermate/internal/capturecontrol"
 	"github.com/vibe-agi/vibermate/internal/capturerun"
+	"github.com/vibe-agi/vibermate/internal/clientadapter"
 	"github.com/vibe-agi/vibermate/internal/launcherdiscovery"
 	"github.com/vibe-agi/vibermate/internal/loopbackclient"
 )
@@ -245,8 +246,23 @@ func validateGrant(grant capturecontrol.LaunchGrant) error {
 		grant.ProxyCapability == grant.RunCapability ||
 		grant.ExecutablePath == "" ||
 		grant.ProxyOrigin == "" ||
+		!grant.CatalogRevision.Valid() ||
 		!grant.LaunchRecipe.Valid() {
 		return errors.New("CaptureRun launch grant is incomplete")
+	}
+	if grant.Adapter == nil {
+		if grant.LaunchRecipe != clientadapter.LaunchGeneric {
+			return errors.New(
+				"CaptureRun launch grant omitted verified adapter evidence",
+			)
+		}
+	} else if err := grant.Adapter.Validate(); err != nil ||
+		grant.Adapter.CatalogRevision != grant.CatalogRevision ||
+		grant.Adapter.LaunchRecipe != grant.LaunchRecipe ||
+		grant.LaunchRecipe == clientadapter.LaunchGeneric {
+		return errors.New(
+			"CaptureRun launch grant adapter evidence is inconsistent",
+		)
 	}
 	if grant.LaunchRecipe.RequiresRoot() && grant.RootPEMPath == "" {
 		return errors.New("CaptureRun launch grant is missing the local Root")

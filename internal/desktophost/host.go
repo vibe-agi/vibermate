@@ -131,7 +131,7 @@ func Start(ctx context.Context, options Options) (*Host, error) {
 	}
 	random := &lockedReader{source: options.Runtime.SecurityRandom}
 	options.Runtime.SecurityRandom = random
-	verifier, err := clientadapter.NewM0Verifier(options.ClientReleases)
+	verifier, err := clientadapter.NewReleaseVerifier(options.ClientCatalog)
 	if err != nil {
 		return nil, fmt.Errorf("build fixed ClientAdapter catalog: %w", err)
 	}

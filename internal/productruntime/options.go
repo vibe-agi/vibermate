@@ -62,7 +62,7 @@ type LifecycleOptions struct {
 	HealthPollInterval time.Duration
 }
 
-// DefaultLifecycleOptions returns the M0 process lifecycle policy.
+// DefaultLifecycleOptions returns the process lifecycle policy.
 func DefaultLifecycleOptions() LifecycleOptions {
 	return LifecycleOptions{
 		RollbackTimeout:    5 * time.Second,

@@ -10,6 +10,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -57,6 +58,22 @@ exit 7
 		launcher:   capability(0x11),
 		proxy:      capability(0x22),
 		run:        capability(0x33),
+		expectedCommand: []string{
+			"agent",
+			"first",
+			"two words",
+		},
+		recipe: clientadapter.LaunchNodeEnvProxy,
+		adapter: &clientadapter.Evidence{
+			ID:              "claude-code",
+			Revision:        1,
+			Version:         "test",
+			CatalogRevision: 7,
+			InstallShape:    clientadapter.InstallNativeSingleBinary,
+			ReleaseSHA256:   strings.Repeat("d", 64),
+			LaunchRecipe:    clientadapter.LaunchNodeEnvProxy,
+		},
+		authorities: []string{"api.anthropic.com:443"},
 	}
 	server := httptest.NewServer(control)
 	defer server.Close()
@@ -173,13 +190,17 @@ func (discovery fixedDiscovery) Load() (launcherdiscovery.Session, error) {
 }
 
 type controlFixture struct {
-	t          *testing.T
-	executable string
-	workspace  string
-	rootPath   string
-	launcher   string
-	proxy      string
-	run        string
+	t               *testing.T
+	executable      string
+	workspace       string
+	rootPath        string
+	launcher        string
+	proxy           string
+	run             string
+	expectedCommand []string
+	recipe          clientadapter.LaunchRecipe
+	adapter         *clientadapter.Evidence
+	authorities     []string
 
 	mu             sync.Mutex
 	createCalls    int
@@ -207,9 +228,7 @@ func (fixture *controlFixture) ServeHTTP(
 		decodeRequest(fixture.t, request, &input)
 		if input.CWD != fixture.workspace ||
 			input.ExecutablePath != fixture.executable ||
-			len(input.Command) != 3 ||
-			input.Command[0] != "agent" ||
-			input.Command[2] != "two words" {
+			!slices.Equal(input.Command, fixture.expectedCommand) {
 			fixture.t.Errorf("create request = %+v", input)
 		}
 		fixture.createCalls++
@@ -220,13 +239,18 @@ func (fixture *controlFixture) ServeHTTP(
 				CWD:             fixture.workspace,
 				State:           capturerun.StateCreated,
 			},
-			LaunchRecipe:         clientadapter.LaunchNodeEnvProxy,
-			ExecutablePath:       fixture.executable,
-			ProxyOrigin:          "http://" + request.Host,
-			ProxyCapability:      fixture.proxy,
-			RunCapability:        fixture.run,
-			RootPEMPath:          fixture.rootPath,
-			ProtectedAuthorities: []string{"api.anthropic.com:443"},
+			CatalogRevision: 7,
+			LaunchRecipe:    fixture.recipe,
+			Adapter:         fixture.adapter,
+			ExecutablePath:  fixture.executable,
+			ProxyOrigin:     "http://" + request.Host,
+			ProxyCapability: fixture.proxy,
+			RunCapability:   fixture.run,
+			RootPEMPath:     fixture.rootPath,
+			ProtectedAuthorities: append(
+				[]string(nil),
+				fixture.authorities...,
+			),
 		})
 	case "/api/v1/capture-runs/capture-run-1/actions/attach-process":
 		if !fixture.authorizeRun(request) {

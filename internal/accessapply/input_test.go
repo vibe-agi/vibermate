@@ -155,7 +155,7 @@ func testCompiler(t *testing.T) *access.Compiler {
 	if err != nil {
 		t.Fatal(err)
 	}
-	operations, err := operationcatalog.M0()
+	operations, err := operationcatalog.BuiltIn()
 	if err != nil {
 		t.Fatal(err)
 	}

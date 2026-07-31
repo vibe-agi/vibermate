@@ -520,7 +520,7 @@ func validateTransportFingerprintDefinition(
 		case ApplicationProtocolHTTP1:
 		case ApplicationProtocolHTTP2:
 			return errors.New(
-				"HTTP/2 fingerprint transport is not implemented in the M0 runtime",
+				"HTTP/2 fingerprint transport is not implemented by the current runtime",
 			)
 		default:
 			return errors.New("transport fingerprint ALPN value is invalid")

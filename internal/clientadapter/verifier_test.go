@@ -6,12 +6,13 @@ import (
 	"encoding/hex"
 	"os"
 	"path/filepath"
+	"runtime"
 	"testing"
 
 	"github.com/vibe-agi/vibermate/internal/clientadapter"
 )
 
-func TestM0VerifierMatchesFixedDigestWithoutExecutingCandidate(t *testing.T) {
+func TestReleaseVerifierMatchesFixedDigestWithoutExecutingCandidate(t *testing.T) {
 	t.Parallel()
 
 	directory := t.TempDir()
@@ -28,13 +29,17 @@ func TestM0VerifierMatchesFixedDigestWithoutExecutingCandidate(t *testing.T) {
 	if err := os.Symlink(versioned, claude); err != nil {
 		t.Fatal(err)
 	}
-	verifier, err := clientadapter.NewM0Verifier([]clientadapter.Release{{
-		ID:               "claude-code",
-		Version:          "2.1.220",
-		InvocationLabel:  "claude",
-		ExecutableSHA256: digest(content),
-		LaunchRecipe:     clientadapter.LaunchNodeEnvProxy,
-	}})
+	catalog, err := clientadapter.NewCatalog(
+		4,
+		[]clientadapter.Release{fixedTestRelease(
+			"claude",
+			digest(content),
+		)},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	verifier, err := clientadapter.NewReleaseVerifier(catalog)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -53,10 +58,11 @@ func TestM0VerifierMatchesFixedDigestWithoutExecutingCandidate(t *testing.T) {
 	if detection.Status != clientadapter.StatusVerified ||
 		detection.CanonicalPath != canonicalClaude ||
 		detection.ExecutableLabel != "claude" ||
+		detection.CatalogRevision != 4 ||
 		detection.Evidence == nil ||
 		detection.Evidence.Version != "2.1.220" ||
 		detection.Evidence.LaunchRecipe != clientadapter.LaunchNodeEnvProxy ||
-		detection.Evidence.ExecutableSHA256 != digest(content) {
+		detection.Evidence.ReleaseSHA256 == "" {
 		t.Fatalf("verified detection = %+v", detection)
 	}
 	if _, err := os.Stat(marker); !os.IsNotExist(err) {
@@ -84,7 +90,7 @@ func TestM0VerifierMatchesFixedDigestWithoutExecutingCandidate(t *testing.T) {
 	}
 }
 
-func TestM0VerifierLeavesUnknownExecutableOnGenericProxyRecipe(t *testing.T) {
+func TestReleaseVerifierLeavesUnknownExecutableOnGenericProxyRecipe(t *testing.T) {
 	t.Parallel()
 
 	directory := t.TempDir()
@@ -93,13 +99,17 @@ func TestM0VerifierLeavesUnknownExecutableOnGenericProxyRecipe(t *testing.T) {
 	if err := os.WriteFile(executable, content, 0o700); err != nil {
 		t.Fatal(err)
 	}
-	verifier, err := clientadapter.NewM0Verifier([]clientadapter.Release{{
-		ID:               "claude-code",
-		Version:          "2.1.220",
-		InvocationLabel:  "claude",
-		ExecutableSHA256: digest(content),
-		LaunchRecipe:     clientadapter.LaunchNodeEnvProxy,
-	}})
+	catalog, err := clientadapter.NewCatalog(
+		4,
+		[]clientadapter.Release{fixedTestRelease(
+			"claude",
+			digest(content),
+		)},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	verifier, err := clientadapter.NewReleaseVerifier(catalog)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -120,4 +130,25 @@ func TestM0VerifierLeavesUnknownExecutableOnGenericProxyRecipe(t *testing.T) {
 func digest(content []byte) string {
 	value := sha256.Sum256(content)
 	return hex.EncodeToString(value[:])
+}
+
+func fixedTestRelease(
+	invocationLabel string,
+	executableDigest string,
+) clientadapter.Release {
+	return clientadapter.Release{
+		ID:              "claude-code",
+		Revision:        1,
+		Version:         "2.1.220",
+		OperatingSystem: runtime.GOOS,
+		Architecture:    runtime.GOARCH,
+		InstallShape:    clientadapter.InstallNativeSingleBinary,
+		InvocationLabel: invocationLabel,
+		ArtifactRoot:    ".",
+		Artifacts: []clientadapter.Artifact{{
+			Role:   clientadapter.ArtifactEntrypoint,
+			SHA256: executableDigest,
+		}},
+		LaunchRecipe: clientadapter.LaunchNodeEnvProxy,
+	}
 }

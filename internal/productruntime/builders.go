@@ -123,7 +123,7 @@ func (productionCredentialBuilder) Build(
 }
 
 func productionAccessPlanCompiler() (*access.Compiler, error) {
-	operations, err := operationcatalog.M0()
+	operations, err := operationcatalog.BuiltIn()
 	if err != nil {
 		return nil, fmt.Errorf("build client operation catalog: %w", err)
 	}
@@ -592,13 +592,13 @@ type productionProxyBuilder struct{}
 func (productionProxyBuilder) Build(
 	request proxyBuildRequest,
 ) (proxyRuntime, error) {
-	operations, err := operationcatalog.M0()
+	operations, err := operationcatalog.BuiltIn()
 	if err != nil {
 		return nil, fmt.Errorf("build client operation catalog: %w", err)
 	}
 	paths, err := pathcapability.NewCatalog(operations.Definitions())
 	if err != nil {
-		return nil, fmt.Errorf("build M0 PathCapability catalog: %w", err)
+		return nil, fmt.Errorf("build PathCapability catalog: %w", err)
 	}
 	return loopbackproxy.New(loopbackproxy.Options{
 		OwnerContext: request.ownerContext,

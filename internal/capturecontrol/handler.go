@@ -80,15 +80,16 @@ type CreateRequest struct {
 }
 
 type LaunchGrant struct {
-	Run                  capturerun.View            `json:"run"`
-	LaunchRecipe         clientadapter.LaunchRecipe `json:"launchRecipe"`
-	Adapter              *clientadapter.Evidence    `json:"adapter,omitempty"`
-	ExecutablePath       string                     `json:"executablePath"`
-	ProxyOrigin          string                     `json:"proxyOrigin"`
-	ProxyCapability      string                     `json:"proxyCapability"`
-	RunCapability        string                     `json:"runCapability"`
-	RootPEMPath          string                     `json:"rootPemPath,omitempty"`
-	ProtectedAuthorities []string                   `json:"protectedAuthorities"`
+	Run                  capturerun.View               `json:"run"`
+	CatalogRevision      clientadapter.CatalogRevision `json:"catalogRevision"`
+	LaunchRecipe         clientadapter.LaunchRecipe    `json:"launchRecipe"`
+	Adapter              *clientadapter.Evidence       `json:"adapter,omitempty"`
+	ExecutablePath       string                        `json:"executablePath"`
+	ProxyOrigin          string                        `json:"proxyOrigin"`
+	ProxyCapability      string                        `json:"proxyCapability"`
+	RunCapability        string                        `json:"runCapability"`
+	RootPEMPath          string                        `json:"rootPemPath,omitempty"`
+	ProtectedAuthorities []string                      `json:"protectedAuthorities"`
 }
 
 type AttachRequest struct {
@@ -183,6 +184,20 @@ func (handler *Handler) create(
 		writeProblem(writer, http.StatusUnprocessableEntity, ReasonAdapterVerification)
 		return
 	}
+	if !detection.CatalogRevision.Valid() ||
+		detection.CanonicalPath == "" ||
+		(detection.Status != clientadapter.StatusGeneric &&
+			detection.Status != clientadapter.StatusVerified) ||
+		(detection.Status == clientadapter.StatusGeneric &&
+			detection.Evidence != nil) ||
+		(detection.Status == clientadapter.StatusVerified &&
+			(detection.Evidence == nil ||
+				detection.Evidence.Validate() != nil ||
+				detection.Evidence.CatalogRevision !=
+					detection.CatalogRevision)) {
+		writeProblem(writer, http.StatusUnprocessableEntity, ReasonAdapterVerification)
+		return
+	}
 	authorities, err := handler.authorities.ActiveClientAuthorities()
 	if err != nil {
 		writeProblem(writer, http.StatusServiceUnavailable, ReasonProjectionUnavailable)
@@ -203,9 +218,11 @@ func (handler *Handler) create(
 	grant, err := handler.runs.Create(
 		request.Context(),
 		capturerun.CreateCommand{
-			CWD:            input.CWD,
-			ExecutablePath: detection.CanonicalPath,
-			Lifetime:       handler.runLifetime,
+			CWD:             input.CWD,
+			ExecutablePath:  detection.CanonicalPath,
+			Lifetime:        handler.runLifetime,
+			CatalogRevision: detection.CatalogRevision,
+			Adapter:         adapter,
 		},
 	)
 	if err != nil {
@@ -214,6 +231,7 @@ func (handler *Handler) create(
 	}
 	writeJSON(writer, http.StatusCreated, LaunchGrant{
 		Run:                  grant.Run,
+		CatalogRevision:      detection.CatalogRevision,
 		LaunchRecipe:         recipe,
 		Adapter:              adapter,
 		ExecutablePath:       detection.CanonicalPath,

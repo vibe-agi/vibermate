@@ -26,7 +26,7 @@ type Options struct {
 	ShutdownTimeout time.Duration
 }
 
-// ProductionOptions constructs the fixed macOS arm64 M0 dependency graph from
+// ProductionOptions constructs the current macOS arm64 dependency graph from
 // native-shell-resolved absolute paths.
 func ProductionOptions(
 	ctx context.Context,

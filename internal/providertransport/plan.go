@@ -239,7 +239,7 @@ func NewRequest(options RequestOptions) (Request, error) {
 		return Request{}, errors.New("provider request has no data-plane Action lease")
 	}
 	if options.Method != http.MethodPost {
-		return Request{}, errors.New("M0 provider request method must be POST")
+		return Request{}, errors.New("provider request method must be POST")
 	}
 	relativePath, err := canonicalRelativePath(options.RelativePath)
 	if err != nil {

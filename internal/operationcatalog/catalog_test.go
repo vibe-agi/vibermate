@@ -7,10 +7,10 @@ import (
 	"github.com/vibe-agi/vibermate/internal/operationcatalog"
 )
 
-func TestM0CatalogHasOneExactResponsesCreateOperation(t *testing.T) {
+func TestBuiltInCatalogHasOneExactResponsesCreateOperation(t *testing.T) {
 	t.Parallel()
 
-	catalog, err := operationcatalog.M0()
+	catalog, err := operationcatalog.BuiltIn()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -42,10 +42,10 @@ func TestM0CatalogHasOneExactResponsesCreateOperation(t *testing.T) {
 	}
 }
 
-func TestM0CatalogDeclaresResponsesWebSocketAsUnsupported(t *testing.T) {
+func TestBuiltInCatalogDeclaresResponsesWebSocketAsUnsupported(t *testing.T) {
 	t.Parallel()
 
-	catalog, err := operationcatalog.M0()
+	catalog, err := operationcatalog.BuiltIn()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -70,10 +70,10 @@ func TestM0CatalogDeclaresResponsesWebSocketAsUnsupported(t *testing.T) {
 	}
 }
 
-func TestM0CatalogDefinitionsAreImmutableValues(t *testing.T) {
+func TestBuiltInCatalogDefinitionsAreImmutableValues(t *testing.T) {
 	t.Parallel()
 
-	catalog, err := operationcatalog.M0()
+	catalog, err := operationcatalog.BuiltIn()
 	if err != nil {
 		t.Fatal(err)
 	}
