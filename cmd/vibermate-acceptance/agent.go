@@ -1432,25 +1432,25 @@ func (run *agentRun) waitForHTTPFallback(ctx context.Context) error {
 	}
 }
 
-func (run *agentRun) waitForFailureReason(
+func (run *agentRun) waitForAgentStatus(
 	ctx context.Context,
-	expected exchange.ReasonCode,
+	expected int,
 ) error {
-	if run == nil || expected == "" {
-		return errors.New("Agent failure reason expectation is incomplete")
+	if run == nil || expected < 100 || expected > 599 {
+		return errors.New("Agent HTTP status expectation is invalid")
 	}
 	for {
 		run.mu.Lock()
-		observed := run.failure.reasonCode
+		observed := run.failure.agentStatus
 		readErr := run.readErr
 		changed := run.changed
 		run.mu.Unlock()
 		if observed == expected {
 			return nil
 		}
-		if observed != "" {
+		if observed != 0 {
 			return fmt.Errorf(
-				"Agent failure reason=%q, want %q",
+				"Agent HTTP status=%d, want %d",
 				observed,
 				expected,
 			)
@@ -1469,7 +1469,7 @@ func (run *agentRun) waitForFailureReason(
 				return ctx.Err()
 			}
 			run.mu.Lock()
-			observed = run.failure.reasonCode
+			observed = run.failure.agentStatus
 			readErr = run.readErr
 			run.mu.Unlock()
 			if readErr != nil {
@@ -1478,15 +1478,15 @@ func (run *agentRun) waitForFailureReason(
 			if observed == expected {
 				return nil
 			}
-			if observed != "" {
+			if observed != 0 {
 				return fmt.Errorf(
-					"Agent failure reason=%q, want %q",
+					"Agent HTTP status=%d, want %d",
 					observed,
 					expected,
 				)
 			}
 			return errors.New(
-				"Agent exited without the expected typed failure reason",
+				"Agent exited without the expected typed HTTP status",
 			)
 		}
 	}

@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"net/http"
 	"os"
 	"path/filepath"
 	"strings"
@@ -585,26 +586,32 @@ func TestCodexHTTPFallbackEvidenceRequiresClientOutcomeAndConnectionAudit(
 	clientEvent := &agentRun{
 		clientID: acceptanceClientCodexCLI,
 		failure: agentFailureEvidence{
-			reasonCode: exchange.ReasonProviderCredentialUnavailable,
+			agentStatus: http.StatusBadGateway,
 		},
 		changed: make(chan struct{}),
 	}
 	evidence, err := completeCodexHTTPFallbackEvidence(
 		context.Background(),
 		clientEvent,
-		codexHTTPFallbackEvidence{ConnectionAudit: true},
+		codexHTTPFallbackEvidence{
+			RuntimeReason:   exchange.ReasonProviderCredentialUnavailable,
+			ConnectionAudit: true,
+		},
 	)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !evidence.ClientHTTPOutcome || !evidence.ConnectionAudit {
+	if evidence.ClientHTTPStatus != http.StatusBadGateway ||
+		evidence.RuntimeReason !=
+			exchange.ReasonProviderCredentialUnavailable ||
+		!evidence.ConnectionAudit {
 		t.Fatalf("fallback evidence = %+v", evidence)
 	}
 	detail, err := evidence.reportDetail()
 	if err != nil {
 		t.Fatal(err)
 	}
-	if detail != "fixed Codex reported the typed missing-credential outcome from its fallback HTTP request and the proxy audit proved the bounded 426-to-HTTP transition" {
+	if detail != "fixed Codex reported HTTP 502 for the fallback request, runtime Activity bound it to provider_credential_unavailable, and the proxy audit proved the bounded 426-to-HTTP transition" {
 		t.Fatalf("fallback detail = %q", detail)
 	}
 
@@ -613,7 +620,8 @@ func TestCodexHTTPFallbackEvidenceRequiresClientOutcomeAndConnectionAudit(
 		clientEvent,
 		codexHTTPFallbackEvidence{},
 	)
-	if err == nil || evidence.ClientHTTPOutcome || evidence.ConnectionAudit {
+	if err == nil || evidence.ClientHTTPStatus != 0 ||
+		evidence.RuntimeReason != "" || evidence.ConnectionAudit {
 		t.Fatalf("partial fallback evidence = %+v error=%v", evidence, err)
 	}
 
@@ -626,9 +634,15 @@ func TestCodexHTTPFallbackEvidenceRequiresClientOutcomeAndConnectionAudit(
 	evidence, err = completeCodexHTTPFallbackEvidence(
 		cancelled,
 		missingEvent,
-		codexHTTPFallbackEvidence{ConnectionAudit: true},
+		codexHTTPFallbackEvidence{
+			RuntimeReason:   exchange.ReasonProviderCredentialUnavailable,
+			ConnectionAudit: true,
+		},
 	)
-	if err == nil || evidence.ClientHTTPOutcome || !evidence.ConnectionAudit {
+	if err == nil || evidence.ClientHTTPStatus != 0 ||
+		evidence.RuntimeReason !=
+			exchange.ReasonProviderCredentialUnavailable ||
+		!evidence.ConnectionAudit {
 		t.Fatalf(
 			"missing client event evidence = %+v error=%v",
 			evidence,

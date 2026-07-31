@@ -635,14 +635,18 @@ type ingressPreflightEvidence struct {
 }
 
 type codexHTTPFallbackEvidence struct {
-	ClientHTTPOutcome bool
-	ConnectionAudit   bool
+	ClientHTTPStatus int
+	RuntimeReason    exchange.ReasonCode
+	ConnectionAudit  bool
 }
 
 func (evidence codexHTTPFallbackEvidence) validate() error {
-	if !evidence.ClientHTTPOutcome || !evidence.ConnectionAudit {
+	if evidence.ClientHTTPStatus != http.StatusBadGateway ||
+		evidence.RuntimeReason !=
+			exchange.ReasonProviderCredentialUnavailable ||
+		!evidence.ConnectionAudit {
 		return errors.New(
-			"Codex HTTP fallback requires both the typed HTTP outcome and proxy connection audit",
+			"Codex HTTP fallback requires the typed HTTP status, runtime reason, and proxy connection audit",
 		)
 	}
 	return nil
@@ -652,7 +656,7 @@ func (evidence codexHTTPFallbackEvidence) reportDetail() (string, error) {
 	if err := evidence.validate(); err != nil {
 		return "", err
 	}
-	return "fixed Codex reported the typed missing-credential outcome from its fallback HTTP request and the proxy audit proved the bounded 426-to-HTTP transition", nil
+	return "fixed Codex reported HTTP 502 for the fallback request, runtime Activity bound it to provider_credential_unavailable, and the proxy audit proved the bounded 426-to-HTTP transition", nil
 }
 
 func completeCodexHTTPFallbackEvidence(
@@ -670,16 +674,17 @@ func completeCodexHTTPFallbackEvidence(
 			"Codex HTTP fallback connection audit is required before completion",
 		)
 	}
-	if err := run.waitForFailureReason(
+	if err := run.waitForAgentStatus(
 		ctx,
-		exchange.ReasonProviderCredentialUnavailable,
+		http.StatusBadGateway,
 	); err != nil {
 		return evidence, fmt.Errorf(
-			"observe typed Codex fallback HTTP outcome: %w",
+			"observe typed Codex fallback HTTP status: %w (%s)",
 			err,
+			run.safeFailureEvidence(),
 		)
 	}
-	evidence.ClientHTTPOutcome = true
+	evidence.ClientHTTPStatus = http.StatusBadGateway
 	return evidence, evidence.validate()
 }
 
@@ -818,6 +823,7 @@ func runHeldIngressPreflight(
 		return ingressPreflightEvidence{}, err
 	}
 	if config.clientID == acceptanceClientCodexCLI {
+		fallbackEvidence.RuntimeReason = exchange.ReasonCode(reasonCode)
 		fallbackContext, cancelFallback := context.WithTimeout(
 			ctx,
 			10*time.Second,
