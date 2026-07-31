@@ -1,9 +1,11 @@
 package main
 
 import (
+	"context"
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -12,6 +14,105 @@ import (
 	"github.com/vibe-agi/vibermate/internal/connectionevent"
 	"github.com/vibe-agi/vibermate/internal/offlinehold"
 )
+
+func TestWaitForActiveProviderEgressRequiresAnAdmittedProviderExchange(
+	t *testing.T,
+) {
+	t.Parallel()
+
+	reader := &scriptedOfflineReader{snapshots: []offlinehold.Snapshot{
+		{
+			State:         offlinehold.StateOnline,
+			ActiveActions: 1,
+			ActiveEgress:  1,
+			ActiveByKind: map[offlinehold.EgressKind]int{
+				offlinehold.EgressAuxiliary: 1,
+			},
+		},
+		{
+			State:         offlinehold.StateOnline,
+			ActiveActions: 1,
+			ActiveEgress:  1,
+			ActiveByKind: map[offlinehold.EgressKind]int{
+				offlinehold.EgressProvider: 1,
+			},
+		},
+	}}
+	run := &agentRun{
+		done:       make(chan struct{}),
+		outputDone: make(chan struct{}),
+		clientID:   acceptanceClientCodexCLI,
+	}
+	if err := waitForActiveProviderEgress(
+		context.Background(),
+		reader,
+		run,
+		time.Second,
+	); err != nil {
+		t.Fatal(err)
+	}
+	if calls := reader.callCount(); calls != 2 {
+		t.Fatalf("offline snapshot calls = %d, want 2", calls)
+	}
+}
+
+func TestWaitForActiveProviderEgressStopsWhenTheAgentExits(t *testing.T) {
+	t.Parallel()
+
+	done := make(chan struct{})
+	close(done)
+	outputDone := make(chan struct{})
+	close(outputDone)
+	run := &agentRun{
+		done:       done,
+		outputDone: outputDone,
+		clientID:   acceptanceClientCodexCLI,
+	}
+	reader := &scriptedOfflineReader{snapshots: []offlinehold.Snapshot{{
+		State: offlinehold.StateOnline,
+	}}}
+	started := time.Now()
+	err := waitForActiveProviderEgress(
+		context.Background(),
+		reader,
+		run,
+		time.Second,
+	)
+	if err == nil || !strings.Contains(
+		err.Error(),
+		"exited before provider egress became active",
+	) {
+		t.Fatalf("early Agent exit error = %v", err)
+	}
+	if elapsed := time.Since(started); elapsed >= 500*time.Millisecond {
+		t.Fatalf("early Agent exit observed after %s", elapsed)
+	}
+}
+
+type scriptedOfflineReader struct {
+	mu        sync.Mutex
+	snapshots []offlinehold.Snapshot
+	calls     int
+}
+
+func (reader *scriptedOfflineReader) offline(
+	context.Context,
+) (offlinehold.Snapshot, error) {
+	reader.mu.Lock()
+	defer reader.mu.Unlock()
+	index := reader.calls
+	reader.calls++
+	if index >= len(reader.snapshots) {
+		index = len(reader.snapshots) - 1
+	}
+	return reader.snapshots[index], nil
+}
+
+func (reader *scriptedOfflineReader) callCount() int {
+	reader.mu.Lock()
+	defer reader.mu.Unlock()
+	return reader.calls
+}
 
 func TestToolApprovalSpecUsesTheSelectedClientToolAndBoundedProof(
 	t *testing.T,

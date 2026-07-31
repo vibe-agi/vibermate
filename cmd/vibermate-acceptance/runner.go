@@ -1768,6 +1768,57 @@ func waitForActiveConnectionAudit(
 	}
 }
 
+type offlineSnapshotReader interface {
+	offline(context.Context) (offlinehold.Snapshot, error)
+}
+
+func waitForActiveProviderEgress(
+	ctx context.Context,
+	reader offlineSnapshotReader,
+	run *agentRun,
+	limit time.Duration,
+) error {
+	if ctx == nil || reader == nil || run == nil || limit <= 0 {
+		return errors.New("active provider egress observation is incomplete")
+	}
+	waitContext, cancel := context.WithTimeout(ctx, limit)
+	defer cancel()
+	ticker := time.NewTicker(50 * time.Millisecond)
+	defer ticker.Stop()
+	for {
+		snapshot, err := reader.offline(waitContext)
+		if err != nil {
+			return err
+		}
+		if snapshot.State == offlinehold.StateOnline &&
+			snapshot.ActiveActions > 0 &&
+			snapshot.ActiveEgress > 0 &&
+			snapshot.ActiveByKind[offlinehold.EgressProvider] > 0 {
+			return nil
+		}
+		select {
+		case <-ticker.C:
+		case <-waitContext.Done():
+			return fmt.Errorf(
+				"active provider egress was not observed: %w",
+				waitContext.Err(),
+			)
+		case <-run.done:
+			exitCode, waitErr := run.wait(waitContext)
+			return fmt.Errorf(
+				"%s exited before provider egress became active: %w",
+				run.clientLabel(),
+				agentProcessFailure(
+					"interrupt precondition",
+					exitCode,
+					waitErr,
+					run,
+				),
+			)
+		}
+	}
+}
+
 func requireRecoveredConnectionAudit(
 	ctx context.Context,
 	control *controlClient,
@@ -2316,13 +2367,6 @@ func runAgentInterrupt(
 	config config,
 	generation *daemonGeneration,
 ) error {
-	connectionBaseline, err := latestConnectionSequence(
-		ctx,
-		generation.control,
-	)
-	if err != nil {
-		return err
-	}
 	workingDirectory, err := os.MkdirTemp("", "vibermate-agent-sigint-*")
 	if err != nil {
 		return err
@@ -2349,11 +2393,10 @@ func runAgentInterrupt(
 			return err
 		}
 	} else {
-		if _, err := waitForActiveConnectionAudit(
+		if err := waitForActiveProviderEgress(
 			ctx,
 			generation.control,
-			config,
-			connectionBaseline,
+			run,
 			2*time.Minute,
 		); err != nil {
 			return err
