@@ -105,6 +105,193 @@ func TestUnknownUsageIsDistinctFromKnownZero(t *testing.T) {
 	}
 }
 
+func TestResponsesSemanticValuesRemainTypedAndImmutable(t *testing.T) {
+	t.Parallel()
+
+	schema, err := NewJSONObject(
+		[]byte(`{"type":"object","properties":{"path":{"type":"string"}}}`),
+		1024,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	developer, err := NewTextBlock("Use the available tools.")
+	if err != nil {
+		t.Fatal(err)
+	}
+	user, err := NewTextBlock("Inspect one file.")
+	if err != nil {
+		t.Fatal(err)
+	}
+	request := Request{
+		RequestedModel: "client-model",
+		EffectiveModel: "provider-model",
+		Stream:         true,
+		Messages: []Message{
+			{Role: RoleDeveloper, Blocks: []ContentBlock{developer}},
+			{Role: RoleUser, Blocks: []ContentBlock{user}},
+		},
+		Tools: []ToolDefinition{{
+			Kind:        ToolKindCustom,
+			Name:        "exec",
+			Description: "Execute one command.",
+			CustomFormat: CustomToolFormat{
+				Kind:       CustomToolFormatGrammar,
+				Syntax:     "lark",
+				Definition: "start: /.+/",
+			},
+		}},
+		ToolNamespaces: []ToolNamespace{{
+			Name:        "workspace",
+			Description: "Workspace operations.",
+			Tools: []ToolDefinition{{
+				Kind:        ToolKindFunction,
+				Name:        "read_file",
+				Description: "Read one file.",
+				InputSchema: schema,
+			}},
+		}},
+		ToolChoice:      ToolChoice{Mode: ToolChoiceAuto, DisableParallel: true},
+		OutputVerbosity: TextVerbosityLow,
+		Reasoning: ReasoningIntent{
+			Context: ReasoningContextAllTurns,
+			Effort:  ReasoningEffortLow,
+		},
+	}
+	if err := request.Validate(); err != nil {
+		t.Fatalf("Request.Validate() error = %v", err)
+	}
+	cloned := request.Clone()
+	request.Tools[0].Name = "mutated"
+	request.ToolNamespaces[0].Name = "mutated"
+	request.ToolNamespaces[0].Tools[0].Name = "mutated"
+	exposed := request.ToolNamespaces[0].Tools[0].InputSchema.Bytes()
+	exposed[0] = '['
+	if cloned.Tools[0].Name != "exec" ||
+		cloned.ToolNamespaces[0].Name != "workspace" ||
+		cloned.ToolNamespaces[0].Tools[0].Name != "read_file" ||
+		!bytes.Equal(
+			cloned.ToolNamespaces[0].Tools[0].InputSchema.Bytes(),
+			[]byte(`{"type":"object","properties":{"path":{"type":"string"}}}`),
+		) {
+		t.Fatalf("Request.Clone() retained a Responses alias: %#v", cloned)
+	}
+
+	callID, err := NewCallKey("openai-responses-call", "call-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	itemID, err := NewCallKey("openai-responses-item", "item-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	callBlock, err := NewToolCallBlock(ToolCall{
+		Kind:      ToolKindCustom,
+		Key:       callID,
+		ItemKey:   itemID,
+		Namespace: "workspace",
+		Name:      "exec",
+		Input:     "pwd",
+	})
+	if err != nil {
+		t.Fatalf("NewToolCallBlock() error = %v", err)
+	}
+	if callBlock.ToolCall.Key == callBlock.ToolCall.ItemKey {
+		t.Fatal("Responses call and item identities collapsed")
+	}
+	refusal, err := NewRefusalBlock("Request refused.")
+	if err != nil {
+		t.Fatal(err)
+	}
+	response := Response{
+		ID:             "response-1",
+		RequestedModel: "client-model",
+		EffectiveModel: "provider-model",
+		ReportedModel:  "reported-model",
+		Blocks:         []ContentBlock{callBlock, refusal},
+		StopReason:     StopReasonToolUse,
+	}
+	if err := response.Validate(); err != nil {
+		t.Fatalf("Response.Validate() error = %v", err)
+	}
+}
+
+func TestToolKindsRejectAmbiguousPayloads(t *testing.T) {
+	t.Parallel()
+
+	schema, err := NewJSONObject([]byte(`{"type":"object"}`), 1024)
+	if err != nil {
+		t.Fatal(err)
+	}
+	callID, err := NewCallKey("source", "call-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	tests := []struct {
+		name       string
+		definition ToolDefinition
+		call       ToolCall
+	}{
+		{
+			name: "function definition with custom format",
+			definition: ToolDefinition{
+				Kind:        ToolKindFunction,
+				Name:        "sample",
+				InputSchema: schema,
+				CustomFormat: CustomToolFormat{
+					Kind: CustomToolFormatText,
+				},
+			},
+		},
+		{
+			name: "custom definition with JSON schema",
+			definition: ToolDefinition{
+				Kind:        ToolKindCustom,
+				Name:        "sample",
+				InputSchema: schema,
+				CustomFormat: CustomToolFormat{
+					Kind: CustomToolFormatText,
+				},
+			},
+		},
+		{
+			name: "function call with custom input",
+			call: ToolCall{
+				Kind:      ToolKindFunction,
+				Key:       callID,
+				Name:      "sample",
+				Arguments: schema,
+				Input:     "ambiguous",
+			},
+		},
+		{
+			name: "custom call with JSON arguments",
+			call: ToolCall{
+				Kind:      ToolKindCustom,
+				Key:       callID,
+				Name:      "sample",
+				Arguments: schema,
+				Input:     "value",
+			},
+		},
+	}
+	for _, test := range tests {
+		test := test
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+			var validateErr error
+			if test.definition.Name != "" {
+				validateErr = test.definition.Validate()
+			} else {
+				validateErr = test.call.Validate()
+			}
+			if validateErr == nil {
+				t.Fatal("Validate() succeeded, want ambiguous-payload failure")
+			}
+		})
+	}
+}
+
 func TestProviderExtensionOwnsOpaqueFragments(t *testing.T) {
 	t.Parallel()
 

@@ -86,6 +86,12 @@ payloads or credentials.
 
 ### 1. Freeze the Responses semantic contract
 
+- [x] Capture the fixed client's initial HTTP request shape without semantic
+  payloads or credential values. The pinned client sends stateless streaming
+  input items, developer-scoped `additional_tools`, function/custom/namespace
+  definitions, custom Lark grammar, optional output-token limits, reasoning
+  context, encrypted-reasoning inclusion, text verbosity, prompt-cache identity,
+  and bounded client metadata.
 - [ ] Add official-SDK-oracle fixtures for fixed Codex request, complete
   response, SSE text, function call, function output, usage, failure,
   cancellation, malformed ordering, and unknown extensions.

@@ -22,7 +22,9 @@ const (
 	MaxProviderExtensionBytes     = 16 << 20
 	MaxToolCount                  = 256
 	MaxToolNameBytes              = 256
+	MaxToolNamespaceBytes         = 256
 	MaxToolJSONBytes              = 4 << 20
+	MaxCustomToolFormatBytes      = 1 << 20
 	MaxOutputSchemaBytes          = 4 << 20
 	MaxStopSequenceCount          = 32
 	MaxStopSequenceBytes          = 1024
@@ -32,6 +34,7 @@ type Role string
 
 const (
 	RoleSystem    Role = "system"
+	RoleDeveloper Role = "developer"
 	RoleUser      Role = "user"
 	RoleAssistant Role = "assistant"
 	RoleTool      Role = "tool"
@@ -41,6 +44,7 @@ type BlockKind string
 
 const (
 	BlockText       BlockKind = "text"
+	BlockRefusal    BlockKind = "refusal"
 	BlockToolCall   BlockKind = "tool_call"
 	BlockToolResult BlockKind = "tool_result"
 )
@@ -121,27 +125,78 @@ func (key CallKey) IsZero() bool {
 }
 
 type ToolCall struct {
+	Kind      ToolKind
 	Key       CallKey
+	ItemKey   CallKey
+	Namespace string
 	Name      string
 	Arguments JSONDocument
+	Input     string
 }
 
 func (call ToolCall) Validate() error {
 	if call.Key.IsZero() {
 		return errors.New("tool call key is empty")
 	}
+	if !call.ItemKey.IsZero() {
+		if err := validateIdentifier(
+			"tool call item source",
+			call.ItemKey.Source(),
+			64,
+		); err != nil {
+			return err
+		}
+	}
+	if call.Namespace != "" {
+		if err := validateIdentifier(
+			"tool namespace",
+			call.Namespace,
+			MaxToolNamespaceBytes,
+		); err != nil {
+			return err
+		}
+	}
 	if err := validateIdentifier("tool name", call.Name, MaxToolNameBytes); err != nil {
 		return err
 	}
-	if call.Arguments.IsZero() {
-		return errors.New("tool call arguments are empty")
+	switch call.EffectiveKind() {
+	case ToolKindFunction:
+		if call.Arguments.IsZero() {
+			return errors.New("function tool call arguments are empty")
+		}
+		if call.Input != "" {
+			return errors.New("function tool call contains custom input")
+		}
+	case ToolKindCustom:
+		if !call.Arguments.IsZero() {
+			return errors.New("custom tool call contains JSON arguments")
+		}
+		if err := validateText(
+			"custom tool call input",
+			call.Input,
+			MaxToolJSONBytes,
+			true,
+		); err != nil {
+			return err
+		}
+	default:
+		return errors.New("tool call kind is unsupported")
 	}
 	return nil
 }
 
+func (call ToolCall) EffectiveKind() ToolKind {
+	if call.Kind == "" {
+		return ToolKindFunction
+	}
+	return call.Kind
+}
+
 func (call ToolCall) Clone() ToolCall {
 	cloned := call
-	cloned.Arguments = JSONDocument{value: call.Arguments.Bytes()}
+	if !call.Arguments.IsZero() {
+		cloned.Arguments = JSONDocument{value: call.Arguments.Bytes()}
+	}
 	return cloned
 }
 
@@ -185,6 +240,7 @@ func (result ToolResult) Validate() error {
 type ContentBlock struct {
 	Kind       BlockKind
 	Text       string
+	Refusal    string
 	ToolCall   ToolCall
 	ToolResult ToolResult
 }
@@ -194,6 +250,13 @@ func NewTextBlock(text string) (ContentBlock, error) {
 		return ContentBlock{}, err
 	}
 	return ContentBlock{Kind: BlockText, Text: text}, nil
+}
+
+func NewRefusalBlock(refusal string) (ContentBlock, error) {
+	if err := validateText("refusal block", refusal, MaxTextBytes, false); err != nil {
+		return ContentBlock{}, err
+	}
+	return ContentBlock{Kind: BlockRefusal, Refusal: refusal}, nil
 }
 
 func NewToolCallBlock(call ToolCall) (ContentBlock, error) {
@@ -214,6 +277,8 @@ func (block ContentBlock) Validate() error {
 	switch block.Kind {
 	case BlockText:
 		return validateText("text block", block.Text, MaxTextBytes, true)
+	case BlockRefusal:
+		return validateText("refusal block", block.Refusal, MaxTextBytes, false)
 	case BlockToolCall:
 		return block.ToolCall.Validate()
 	case BlockToolResult:
@@ -236,7 +301,7 @@ type Message struct {
 
 func (message Message) Validate() error {
 	switch message.Role {
-	case RoleSystem, RoleUser, RoleAssistant, RoleTool:
+	case RoleSystem, RoleDeveloper, RoleUser, RoleAssistant, RoleTool:
 	default:
 		return errors.New("message role is unsupported")
 	}
@@ -248,16 +313,18 @@ func (message Message) Validate() error {
 			return fmt.Errorf("content block %d: %w", index, err)
 		}
 		switch message.Role {
-		case RoleSystem:
+		case RoleSystem, RoleDeveloper:
 			if block.Kind != BlockText {
-				return errors.New("system message contains a non-text block")
+				return errors.New("instruction message contains a non-text block")
 			}
 		case RoleUser:
 			if block.Kind != BlockText && block.Kind != BlockToolResult {
 				return errors.New("user message contains an unsupported block")
 			}
 		case RoleAssistant:
-			if block.Kind != BlockText && block.Kind != BlockToolCall {
+			if block.Kind != BlockText &&
+				block.Kind != BlockRefusal &&
+				block.Kind != BlockToolCall {
 				return errors.New("assistant message contains an unsupported block")
 			}
 		case RoleTool:
@@ -278,10 +345,64 @@ func (message Message) Clone() Message {
 	return cloned
 }
 
+type ToolKind string
+
+const (
+	ToolKindFunction ToolKind = "function"
+	ToolKindCustom   ToolKind = "custom"
+)
+
+type CustomToolFormatKind string
+
+const (
+	CustomToolFormatText    CustomToolFormatKind = "text"
+	CustomToolFormatGrammar CustomToolFormatKind = "grammar"
+)
+
+type CustomToolFormat struct {
+	Kind       CustomToolFormatKind
+	Syntax     string
+	Definition string
+}
+
+func (format CustomToolFormat) Validate() error {
+	switch format.Kind {
+	case CustomToolFormatText:
+		if format.Syntax != "" || format.Definition != "" {
+			return errors.New("text custom-tool format contains a grammar")
+		}
+	case CustomToolFormatGrammar:
+		if format.Syntax != "lark" && format.Syntax != "regex" {
+			return errors.New("custom-tool grammar syntax is unsupported")
+		}
+		if err := validateText(
+			"custom-tool grammar",
+			format.Definition,
+			MaxCustomToolFormatBytes,
+			false,
+		); err != nil {
+			return err
+		}
+	default:
+		return errors.New("custom-tool format kind is unsupported")
+	}
+	return nil
+}
+
+func (format CustomToolFormat) IsZero() bool {
+	return format.Kind == "" &&
+		format.Syntax == "" &&
+		format.Definition == ""
+}
+
 type ToolDefinition struct {
+	Kind                ToolKind
 	Name                string
 	Description         string
 	InputSchema         JSONDocument
+	CustomFormat        CustomToolFormat
+	StrictKnown         bool
+	Strict              bool
 	EagerInputStreaming bool
 }
 
@@ -292,15 +413,92 @@ func (definition ToolDefinition) Validate() error {
 	if err := validateText("tool description", definition.Description, MaxTextBytes, true); err != nil {
 		return err
 	}
-	if definition.InputSchema.IsZero() {
-		return errors.New("tool input schema is empty")
+	switch definition.EffectiveKind() {
+	case ToolKindFunction:
+		if definition.InputSchema.IsZero() {
+			return errors.New("function tool input schema is empty")
+		}
+		if !definition.CustomFormat.IsZero() {
+			return errors.New("function tool contains a custom format")
+		}
+		if !definition.StrictKnown && definition.Strict {
+			return errors.New("unknown function strictness is true")
+		}
+	case ToolKindCustom:
+		if !definition.InputSchema.IsZero() {
+			return errors.New("custom tool contains an input schema")
+		}
+		if definition.StrictKnown || definition.Strict {
+			return errors.New("custom tool contains function strictness")
+		}
+		if err := definition.CustomFormat.Validate(); err != nil {
+			return err
+		}
+	default:
+		return errors.New("tool definition kind is unsupported")
 	}
 	return nil
 }
 
+func (definition ToolDefinition) EffectiveKind() ToolKind {
+	if definition.Kind == "" {
+		return ToolKindFunction
+	}
+	return definition.Kind
+}
+
 func (definition ToolDefinition) Clone() ToolDefinition {
 	cloned := definition
-	cloned.InputSchema = JSONDocument{value: definition.InputSchema.Bytes()}
+	if !definition.InputSchema.IsZero() {
+		cloned.InputSchema = JSONDocument{value: definition.InputSchema.Bytes()}
+	}
+	return cloned
+}
+
+type ToolNamespace struct {
+	Name        string
+	Description string
+	Tools       []ToolDefinition
+}
+
+func (namespace ToolNamespace) Validate() error {
+	if err := validateIdentifier(
+		"tool namespace",
+		namespace.Name,
+		MaxToolNamespaceBytes,
+	); err != nil {
+		return err
+	}
+	if err := validateText(
+		"tool namespace description",
+		namespace.Description,
+		MaxTextBytes,
+		false,
+	); err != nil {
+		return err
+	}
+	if len(namespace.Tools) == 0 || len(namespace.Tools) > MaxToolCount {
+		return errors.New("tool namespace member count is invalid")
+	}
+	names := make(map[string]struct{}, len(namespace.Tools))
+	for index, tool := range namespace.Tools {
+		if err := tool.Validate(); err != nil {
+			return fmt.Errorf("tool namespace member %d: %w", index, err)
+		}
+		if _, duplicate := names[tool.Name]; duplicate {
+			return errors.New("tool namespace member name is duplicated")
+		}
+		names[tool.Name] = struct{}{}
+	}
+	return nil
+}
+
+func (namespace ToolNamespace) Clone() ToolNamespace {
+	cloned := namespace
+	cloned.Tools = make([]ToolDefinition, len(namespace.Tools))
+	for index, tool := range namespace.Tools {
+		cloned.Tools[index] = tool.Clone()
+	}
 	return cloned
 }
 
@@ -362,11 +560,36 @@ const (
 type ReasoningEffort string
 
 const (
-	ReasoningEffortLow    ReasoningEffort = "low"
-	ReasoningEffortMedium ReasoningEffort = "medium"
-	ReasoningEffortHigh   ReasoningEffort = "high"
-	ReasoningEffortXHigh  ReasoningEffort = "xhigh"
-	ReasoningEffortMax    ReasoningEffort = "max"
+	ReasoningEffortNone    ReasoningEffort = "none"
+	ReasoningEffortMinimal ReasoningEffort = "minimal"
+	ReasoningEffortLow     ReasoningEffort = "low"
+	ReasoningEffortMedium  ReasoningEffort = "medium"
+	ReasoningEffortHigh    ReasoningEffort = "high"
+	ReasoningEffortXHigh   ReasoningEffort = "xhigh"
+	ReasoningEffortMax     ReasoningEffort = "max"
+)
+
+type ReasoningContext string
+
+const (
+	ReasoningContextAuto        ReasoningContext = "auto"
+	ReasoningContextCurrentTurn ReasoningContext = "current_turn"
+	ReasoningContextAllTurns    ReasoningContext = "all_turns"
+)
+
+type ReasoningSummary string
+
+const (
+	ReasoningSummaryAuto     ReasoningSummary = "auto"
+	ReasoningSummaryConcise  ReasoningSummary = "concise"
+	ReasoningSummaryDetailed ReasoningSummary = "detailed"
+)
+
+type ReasoningExecutionMode string
+
+const (
+	ReasoningExecutionStandard ReasoningExecutionMode = "standard"
+	ReasoningExecutionPro      ReasoningExecutionMode = "pro"
 )
 
 // ReasoningIntent is the provider-neutral request intent. Thinking controls
@@ -376,7 +599,10 @@ type ReasoningIntent struct {
 	Thinking     ThinkingMode
 	BudgetTokens int
 	Display      ThinkingDisplay
+	Context      ReasoningContext
 	Effort       ReasoningEffort
+	Summary      ReasoningSummary
+	Execution    ReasoningExecutionMode
 	TaskBudget   TaskBudget
 }
 
@@ -413,6 +639,8 @@ func (budget TaskBudget) Validate() error {
 func (intent ReasoningIntent) Validate(maxOutputTokens int) error {
 	switch intent.Effort {
 	case "",
+		ReasoningEffortNone,
+		ReasoningEffortMinimal,
 		ReasoningEffortLow,
 		ReasoningEffortMedium,
 		ReasoningEffortHigh,
@@ -420,6 +648,29 @@ func (intent ReasoningIntent) Validate(maxOutputTokens int) error {
 		ReasoningEffortMax:
 	default:
 		return errors.New("reasoning effort is unsupported")
+	}
+	switch intent.Context {
+	case "",
+		ReasoningContextAuto,
+		ReasoningContextCurrentTurn,
+		ReasoningContextAllTurns:
+	default:
+		return errors.New("reasoning context is unsupported")
+	}
+	switch intent.Summary {
+	case "",
+		ReasoningSummaryAuto,
+		ReasoningSummaryConcise,
+		ReasoningSummaryDetailed:
+	default:
+		return errors.New("reasoning summary is unsupported")
+	}
+	switch intent.Execution {
+	case "",
+		ReasoningExecutionStandard,
+		ReasoningExecutionPro:
+	default:
+		return errors.New("reasoning execution mode is unsupported")
 	}
 	switch intent.Display {
 	case "", ThinkingDisplaySummarized, ThinkingDisplayOmitted:
@@ -440,7 +691,8 @@ func (intent ReasoningIntent) Validate(maxOutputTokens int) error {
 			return errors.New("adaptive thinking contains a token budget")
 		}
 	case ThinkingModeEnabled:
-		if intent.BudgetTokens < 1024 ||
+		if maxOutputTokens <= 0 ||
+			intent.BudgetTokens < 1024 ||
 			intent.BudgetTokens >= maxOutputTokens {
 			return errors.New("enabled thinking token budget is invalid")
 		}
@@ -449,6 +701,14 @@ func (intent ReasoningIntent) Validate(maxOutputTokens int) error {
 	}
 	return intent.TaskBudget.Validate()
 }
+
+type TextVerbosity string
+
+const (
+	TextVerbosityLow    TextVerbosity = "low"
+	TextVerbosityMedium TextVerbosity = "medium"
+	TextVerbosityHigh   TextVerbosity = "high"
+)
 
 type ContextEditKind string
 
@@ -573,18 +833,21 @@ func (intent StructuredOutputIntent) Clone() StructuredOutputIntent {
 }
 
 type Request struct {
-	RequestedModel  string
-	EffectiveModel  string
+	RequestedModel string
+	EffectiveModel string
+	// MaxOutputTokens is zero only when the source dialect omitted a limit.
 	MaxOutputTokens int
 	Stream          bool
 	System          []ContentBlock
 	Messages        []Message
 	Tools           []ToolDefinition
+	ToolNamespaces  []ToolNamespace
 	ToolChoice      ToolChoice
 	Reasoning       ReasoningIntent
 	Context         ContextManagementIntent
 	Diagnostics     DiagnosticsIntent
 	Output          StructuredOutputIntent
+	OutputVerbosity TextVerbosity
 	Temperature     *float64
 	TopP            *float64
 	StopSequences   []string
@@ -597,8 +860,8 @@ func (request Request) Validate() error {
 	if err := validateIdentifier("effective model", request.EffectiveModel, MaxModelBytes); err != nil {
 		return err
 	}
-	if request.MaxOutputTokens <= 0 {
-		return errors.New("maximum output tokens must be positive")
+	if request.MaxOutputTokens < 0 {
+		return errors.New("maximum output tokens cannot be negative")
 	}
 	if len(request.System) > MaxContentBlocks {
 		return errors.New("system content block count is invalid")
@@ -619,10 +882,12 @@ func (request Request) Validate() error {
 			return fmt.Errorf("message %d: %w", index, err)
 		}
 	}
-	if len(request.Tools) > MaxToolCount {
+	if len(request.Tools) > MaxToolCount ||
+		len(request.ToolNamespaces) > MaxToolCount {
 		return errors.New("tool definition count is invalid")
 	}
 	toolNames := make(map[string]struct{}, len(request.Tools))
+	totalTools := len(request.Tools)
 	for index, tool := range request.Tools {
 		if err := tool.Validate(); err != nil {
 			return fmt.Errorf("tool definition %d: %w", index, err)
@@ -632,7 +897,21 @@ func (request Request) Validate() error {
 		}
 		toolNames[tool.Name] = struct{}{}
 	}
-	if err := request.ToolChoice.Validate(len(request.Tools)); err != nil {
+	namespaceNames := make(map[string]struct{}, len(request.ToolNamespaces))
+	for index, namespace := range request.ToolNamespaces {
+		if err := namespace.Validate(); err != nil {
+			return fmt.Errorf("tool namespace %d: %w", index, err)
+		}
+		if _, duplicate := namespaceNames[namespace.Name]; duplicate {
+			return errors.New("tool namespace name is duplicated")
+		}
+		namespaceNames[namespace.Name] = struct{}{}
+		totalTools += len(namespace.Tools)
+		if totalTools > MaxToolCount {
+			return errors.New("total tool definition count is invalid")
+		}
+	}
+	if err := request.ToolChoice.Validate(totalTools); err != nil {
 		return err
 	}
 	if err := request.Reasoning.Validate(request.MaxOutputTokens); err != nil {
@@ -646,6 +925,11 @@ func (request Request) Validate() error {
 	}
 	if err := request.Output.Validate(); err != nil {
 		return err
+	}
+	switch request.OutputVerbosity {
+	case "", TextVerbosityLow, TextVerbosityMedium, TextVerbosityHigh:
+	default:
+		return errors.New("text verbosity is unsupported")
 	}
 	if request.ToolChoice.Mode == ToolChoiceNamed {
 		if _, exists := toolNames[request.ToolChoice.Name]; !exists {
@@ -679,6 +963,10 @@ func (request Request) Clone() Request {
 	cloned.Tools = make([]ToolDefinition, len(request.Tools))
 	for index, tool := range request.Tools {
 		cloned.Tools[index] = tool.Clone()
+	}
+	cloned.ToolNamespaces = make([]ToolNamespace, len(request.ToolNamespaces))
+	for index, namespace := range request.ToolNamespaces {
+		cloned.ToolNamespaces[index] = namespace.Clone()
 	}
 	cloned.StopSequences = slices.Clone(request.StopSequences)
 	cloned.Context = request.Context.Clone()
@@ -879,7 +1167,9 @@ func (response Response) Validate() error {
 		return errors.New("response content block count is invalid")
 	}
 	for index, block := range response.Blocks {
-		if block.Kind != BlockText && block.Kind != BlockToolCall {
+		if block.Kind != BlockText &&
+			block.Kind != BlockRefusal &&
+			block.Kind != BlockToolCall {
 			return fmt.Errorf("response content block %d has an unsupported kind", index)
 		}
 		if err := block.Validate(); err != nil {
@@ -944,6 +1234,12 @@ const (
 	NoticeReasoningContentNotForwarded        NoticeCode = "reasoning_content_not_forwarded"
 	NoticeReasoningUsageNotForwarded          NoticeCode = "reasoning_usage_not_forwarded"
 	NoticeEagerToolInputStreamingNotForwarded NoticeCode = "eager_tool_input_streaming_not_forwarded"
+	NoticeToolPlacementNormalized             NoticeCode = "tool_placement_normalized"
+	NoticePromptCacheKeyNotForwarded          NoticeCode = "prompt_cache_key_not_forwarded"
+	NoticeClientMetadataNotForwarded          NoticeCode = "client_metadata_not_forwarded"
+	NoticeReasoningContextNotForwarded        NoticeCode = "reasoning_context_not_forwarded"
+	NoticeReasoningIncludeNotForwarded        NoticeCode = "reasoning_include_not_forwarded"
+	NoticeTextVerbosityNotForwarded           NoticeCode = "text_verbosity_not_forwarded"
 )
 
 type TranslationNotice struct {
