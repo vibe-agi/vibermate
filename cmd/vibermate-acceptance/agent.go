@@ -891,6 +891,7 @@ func extractAgentStatus(payload []byte) int {
 	for _, marker := range [][]byte{
 		[]byte("api error"),
 		[]byte("http error"),
+		[]byte("unexpected status"),
 		[]byte("status code"),
 		[]byte("error:"),
 	} {

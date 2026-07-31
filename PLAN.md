@@ -51,6 +51,8 @@ checks but are superseded for these three evidence claims.
 - [x] Correct the retry-exhaustion warning parser to accept only the fixed
   prefix plus nonempty bounded transport detail from typed error envelopes;
   do not treat that separate warning as 426 evidence.
+- [x] Parse the fixed client's bounded `unexpected status 426` failed-turn
+  envelope as typed client status without retaining its error detail.
 - [x] Capture the proxy connection audit while the fallback HTTP request is
   still held, then require typed HTTP 426 from the same invocation and the
   exact Runtime Activity reason before reporting success.

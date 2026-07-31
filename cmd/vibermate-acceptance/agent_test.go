@@ -523,6 +523,25 @@ func TestCodexJSONLFallbackAcceptsOnlyTypedErrorEnvelopes(t *testing.T) {
 	}
 }
 
+func TestCodexJSONLExtractsUnexpectedHTTPStatusFromFailedTurn(t *testing.T) {
+	t.Parallel()
+
+	run := &agentRun{clientID: acceptanceClientCodexCLI}
+	run.observeLine(mustJSON(t, map[string]any{
+		"type": "turn.failed",
+		"error": map[string]any{
+			"message": "unexpected status 426 Upgrade Required: bounded failure",
+		},
+	}))
+	if run.failure.agentStatus != 426 || run.lastType != "turn.failed" {
+		t.Fatalf(
+			"Codex failed-turn evidence status=%d lastType=%q",
+			run.failure.agentStatus,
+			run.lastType,
+		)
+	}
+}
+
 func TestCodexJSONLRejectsConflictingThreadIdentity(t *testing.T) {
 	t.Parallel()
 
