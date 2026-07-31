@@ -25,6 +25,8 @@ checks but are superseded for these three evidence claims.
    documentation.
 2. Fixed Codex fallback passes only after a trusted typed client event and the
    existing body-free proxy audit independently agree on the same behavior.
+   The audit is captured while the HTTP request remains held; the client event
+   may settle after Resume but must come from that same invocation.
 3. Report details derive from typed evidence returned by the exercised path;
    they are not unconditional client-neutral prose.
 4. Codex evidence may claim completion through the Responses streaming path,
@@ -47,7 +49,9 @@ checks but are superseded for these three evidence claims.
 
 - [x] Add a failing test that rejects connection-audit-only evidence.
 - [x] Call the existing trusted Codex `waitForHTTPFallback` boundary.
-- [x] Run the proxy connection audit only after the typed client event.
+- [x] Capture the proxy connection audit while the fallback HTTP request is
+  still held, then require the typed client event from the same invocation
+  before reporting success.
 - [x] Return typed evidence with separate client-event and connection-audit
   fields, and reject either field missing.
 - [x] Keep the dedicated fallback invocation WebSocket-capable; do not force

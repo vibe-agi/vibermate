@@ -647,17 +647,21 @@ func (evidence codexHTTPFallbackEvidence) validate() error {
 	return nil
 }
 
-func waitForCodexHTTPFallbackEvidence(
+func completeCodexHTTPFallbackEvidence(
 	ctx context.Context,
 	run *agentRun,
-	audit func(context.Context) error,
+	evidence codexHTTPFallbackEvidence,
 ) (codexHTTPFallbackEvidence, error) {
-	if ctx == nil || run == nil || audit == nil {
+	if ctx == nil || run == nil {
 		return codexHTTPFallbackEvidence{}, errors.New(
 			"complete Codex HTTP fallback evidence dependencies are required",
 		)
 	}
-	evidence := codexHTTPFallbackEvidence{}
+	if !evidence.ConnectionAudit {
+		return evidence, errors.New(
+			"Codex HTTP fallback connection audit is required before completion",
+		)
+	}
 	if err := run.waitForHTTPFallback(ctx); err != nil {
 		return evidence, fmt.Errorf(
 			"observe typed Codex HTTP fallback event: %w",
@@ -665,14 +669,7 @@ func waitForCodexHTTPFallbackEvidence(
 		)
 	}
 	evidence.ClientEvent = true
-	if err := audit(ctx); err != nil {
-		return evidence, fmt.Errorf(
-			"validate Codex HTTP fallback connection audit: %w",
-			err,
-		)
-	}
-	evidence.ConnectionAudit = true
-	return evidence, nil
+	return evidence, evidence.validate()
 }
 
 func runHeldIngressPreflight(
@@ -771,22 +768,17 @@ func runHeldIngressPreflight(
 			ctx,
 			10*time.Second,
 		)
-		fallbackEvidence, err = waitForCodexHTTPFallbackEvidence(
+		err = waitForResponsesHTTPFallbackAudit(
 			fallbackContext,
-			run,
-			func(auditContext context.Context) error {
-				return waitForResponsesHTTPFallbackAudit(
-					auditContext,
-					generation.control,
-					config,
-					connectionBaseline,
-				)
-			},
+			generation.control,
+			config,
+			connectionBaseline,
 		)
 		cancelFallback()
 		if err != nil {
 			return ingressPreflightEvidence{}, err
 		}
+		fallbackEvidence.ConnectionAudit = true
 	}
 	queuedKinds, err := queuedKindSummary(queued)
 	if err != nil {
@@ -813,6 +805,21 @@ func runHeldIngressPreflight(
 	)
 	if err != nil {
 		return ingressPreflightEvidence{}, err
+	}
+	if config.clientID == acceptanceClientCodexCLI {
+		fallbackContext, cancelFallback := context.WithTimeout(
+			ctx,
+			10*time.Second,
+		)
+		fallbackEvidence, err = completeCodexHTTPFallbackEvidence(
+			fallbackContext,
+			run,
+			fallbackEvidence,
+		)
+		cancelFallback()
+		if err != nil {
+			return ingressPreflightEvidence{}, err
+		}
 	}
 	signalErr := run.signalInterrupt()
 	if signalErr != nil && !errors.Is(signalErr, os.ErrProcessDone) {

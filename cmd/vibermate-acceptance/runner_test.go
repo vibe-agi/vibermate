@@ -2,7 +2,6 @@ package main
 
 import (
 	"context"
-	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -587,37 +586,24 @@ func TestCodexHTTPFallbackEvidenceRequiresClientEventAndConnectionAudit(
 		httpFallbackSeen: true,
 		changed:          make(chan struct{}),
 	}
-	auditCalls := 0
-	evidence, err := waitForCodexHTTPFallbackEvidence(
+	evidence, err := completeCodexHTTPFallbackEvidence(
 		context.Background(),
 		clientEvent,
-		func(context.Context) error {
-			auditCalls++
-			return nil
-		},
+		codexHTTPFallbackEvidence{ConnectionAudit: true},
 	)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !evidence.ClientEvent || !evidence.ConnectionAudit || auditCalls != 1 {
-		t.Fatalf(
-			"fallback evidence = %+v auditCalls=%d",
-			evidence,
-			auditCalls,
-		)
+	if !evidence.ClientEvent || !evidence.ConnectionAudit {
+		t.Fatalf("fallback evidence = %+v", evidence)
 	}
 
-	auditFailure := errors.New("audit unavailable")
-	evidence, err = waitForCodexHTTPFallbackEvidence(
+	evidence, err = completeCodexHTTPFallbackEvidence(
 		context.Background(),
 		clientEvent,
-		func(context.Context) error {
-			return auditFailure
-		},
+		codexHTTPFallbackEvidence{},
 	)
-	if !errors.Is(err, auditFailure) ||
-		!evidence.ClientEvent ||
-		evidence.ConnectionAudit {
+	if err == nil || evidence.ClientEvent || evidence.ConnectionAudit {
 		t.Fatalf("partial fallback evidence = %+v error=%v", evidence, err)
 	}
 
@@ -627,21 +613,15 @@ func TestCodexHTTPFallbackEvidenceRequiresClientEventAndConnectionAudit(
 	}
 	cancelled, cancel := context.WithCancel(context.Background())
 	cancel()
-	auditCalls = 0
-	evidence, err = waitForCodexHTTPFallbackEvidence(
+	evidence, err = completeCodexHTTPFallbackEvidence(
 		cancelled,
 		missingEvent,
-		func(context.Context) error {
-			auditCalls++
-			return nil
-		},
+		codexHTTPFallbackEvidence{ConnectionAudit: true},
 	)
-	if err == nil || evidence.ClientEvent || evidence.ConnectionAudit ||
-		auditCalls != 0 {
+	if err == nil || evidence.ClientEvent || !evidence.ConnectionAudit {
 		t.Fatalf(
-			"missing client event evidence = %+v auditCalls=%d error=%v",
+			"missing client event evidence = %+v error=%v",
 			evidence,
-			auditCalls,
 			err,
 		)
 	}
