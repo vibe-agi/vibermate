@@ -104,7 +104,7 @@ clean Git revision, pinned toolchains, explicit Desktop/development-sidecar
 profiles, configuration digests, and both packaged sidecars. The deterministic
 sequence uses a unique missing SecretRef; the credentialed continuation uses
 the development file SecretStore and defaults to a local Cherry Studio API at
-`http://127.0.0.1:23333/v1` with model `glm-5`. No acceptance mode takes
+`http://127.0.0.1:23333/v1` with model `dashscope:glm-5`. No acceptance mode takes
 a secret value on its command line.
 
 SQLite is the only durable Access authority; active-plan publication occurs

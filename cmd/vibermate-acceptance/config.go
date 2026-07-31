@@ -15,7 +15,7 @@ import (
 
 const (
 	defaultProviderOrigin = "http://127.0.0.1:23333/v1"
-	defaultProviderModel  = "glm-5"
+	defaultProviderModel  = "dashscope:glm-5"
 )
 
 type config struct {

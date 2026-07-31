@@ -20,7 +20,7 @@ The runner requires:
 The fixed Claude executable SHA-256 is
 `8addc857f3fe64d5a0368af9ee50321b50afb4a6918ba3ef018ab84f5dbbe081`.
 The default provider route for this acceptance slice is
-`http://127.0.0.1:23333/v1` with model `glm-5`.
+`http://127.0.0.1:23333/v1` with model `dashscope:glm-5`.
 
 Remote provider origins remain HTTPS-only with strict system-root validation.
 The default exercises the design's narrower development exception: cleartext
@@ -151,7 +151,7 @@ acceptance Access and save its provider key:
 
 1. set Access ID to `assembly-001`;
 2. set the provider origin to `http://127.0.0.1:23333/v1`;
-3. set the fixed model to `glm-5`;
+3. set the fixed model to `dashscope:glm-5`;
 4. apply the Access at the currently loaded revision;
 5. save the provider credential once and confirm a nonzero secret revision.
 

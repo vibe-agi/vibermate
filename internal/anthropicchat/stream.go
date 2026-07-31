@@ -41,11 +41,12 @@ type openAIStreamChoiceWire struct {
 }
 
 type openAIStreamDeltaWire struct {
-	Role         string                     `json:"role,omitempty"`
-	Content      *string                    `json:"content,omitempty"`
-	Refusal      *string                    `json:"refusal,omitempty"`
-	ToolCalls    []openAIStreamToolCallWire `json:"tool_calls,omitempty"`
-	FunctionCall json.RawMessage            `json:"function_call,omitempty"`
+	Role             string                     `json:"role,omitempty"`
+	Content          *string                    `json:"content,omitempty"`
+	ReasoningContent json.RawMessage            `json:"reasoning_content,omitempty"`
+	Refusal          *string                    `json:"refusal,omitempty"`
+	ToolCalls        []openAIStreamToolCallWire `json:"tool_calls,omitempty"`
+	FunctionCall     json.RawMessage            `json:"function_call,omitempty"`
 }
 
 type openAIStreamToolCallWire struct {
@@ -87,6 +88,8 @@ type ProviderStream struct {
 	heldBytes        int
 	semanticProgress uint64
 	tools            map[int]*streamToolAccumulator
+	reasoning        [][]byte
+	reasoningUsage   *protocolcore.ProviderExtension
 	finishReason     protocolcore.StopReason
 	usage            protocolcore.Usage
 	usageSeen        bool
@@ -455,14 +458,39 @@ func (stream *ProviderStream) FinishDecoded(
 		stream.failed = true
 		return nil, err
 	}
+	providerExtensions := make([]protocolcore.ProviderExtension, 0, 2)
+	if len(stream.reasoning) > 0 {
+		extension, err := protocolcore.NewProviderExtension(
+			SourceOpenAIChat,
+			protocolcore.ProviderExtensionReasoningContent,
+			"$.choices[0].delta.reasoning_content",
+			stream.reasoning,
+		)
+		if err != nil {
+			stream.failed = true
+			return nil, protocolcore.NewFailure(
+				protocolcore.ReasonInvalidProviderResponse,
+				"$.choices[0].delta.reasoning_content",
+				err,
+			)
+		}
+		providerExtensions = append(providerExtensions, extension)
+	}
+	if stream.reasoningUsage != nil {
+		providerExtensions = append(
+			providerExtensions,
+			stream.reasoningUsage.Clone(),
+		)
+	}
 	response := protocolcore.Response{
-		ID:             stream.responseID,
-		RequestedModel: stream.request.RequestedModel,
-		EffectiveModel: stream.request.EffectiveModel,
-		ReportedModel:  stream.reportedModel,
-		Blocks:         responseBlocks,
-		StopReason:     stream.finishReason,
-		Usage:          stream.usage,
+		ID:                 stream.responseID,
+		RequestedModel:     stream.request.RequestedModel,
+		EffectiveModel:     stream.request.EffectiveModel,
+		ReportedModel:      stream.reportedModel,
+		Blocks:             responseBlocks,
+		ProviderExtensions: providerExtensions,
+		StopReason:         stream.finishReason,
+		Usage:              stream.usage,
 	}
 	if err := response.Validate(); err != nil {
 		stream.failed = true
@@ -530,6 +558,28 @@ func (stream *ProviderStream) consumeChunk(
 		}
 		stream.usage = usage
 		stream.usageSeen = true
+		if extension, present, extensionErr := reasoningUsageExtension(chunk.Usage); extensionErr != nil {
+			return extensionErr
+		} else if present {
+			if stream.reasoningUsage != nil &&
+				!reflect.DeepEqual(
+					stream.reasoningUsage.Fragments(),
+					extension.Fragments(),
+				) {
+				return protocolcore.NewFailure(
+					protocolcore.ReasonStreamStateViolation,
+					"$.usage.completion_tokens_details",
+					errors.New("provider reasoning usage changed after publication"),
+				)
+			}
+			if stream.reasoningUsage == nil {
+				cloned := extension.Clone()
+				stream.reasoningUsage = &cloned
+				stream.report = stream.report.Merge(reasoningUsageNotice(
+					"$.usage.completion_tokens_details",
+				))
+			}
+		}
 	}
 	if len(chunk.Choices) == 0 {
 		if chunk.Usage == nil {
@@ -571,6 +621,13 @@ func (stream *ProviderStream) consumeChunk(
 		)
 	}
 
+	if rawPresent(choice.Delta.ReasoningContent) {
+		if err := stream.consumeReasoning(
+			choice.Delta.ReasoningContent,
+		); err != nil {
+			return err
+		}
+	}
 	if choice.Delta.Content != nil {
 		if err := stream.consumeText(safe, *choice.Delta.Content); err != nil {
 			return err
@@ -594,6 +651,31 @@ func (stream *ProviderStream) consumeChunk(
 			return err
 		}
 		stream.finishReason = reason
+		stream.semanticProgress++
+	}
+	return nil
+}
+
+func (stream *ProviderStream) consumeReasoning(raw json.RawMessage) error {
+	const path = "$.choices[0].delta.reasoning_content"
+	if err := validateReasoningContent(raw, path); err != nil {
+		return err
+	}
+	stream.decodedBytes += len(raw)
+	if stream.decodedBytes > stream.codec.options.MaxResponseBytes {
+		return protocolcore.NewFailure(
+			protocolcore.ReasonStreamLimitExceeded,
+			path,
+			errors.New("provider stream exceeds the configured byte limit"),
+		)
+	}
+	if len(stream.reasoning) == 0 {
+		stream.report = stream.report.Merge(reasoningContentNotice(path))
+	}
+	stream.reasoning = append(stream.reasoning, bytes.Clone(raw))
+	var content string
+	_ = json.Unmarshal(raw, &content)
+	if content != "" {
 		stream.semanticProgress++
 	}
 	return nil

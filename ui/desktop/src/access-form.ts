@@ -22,7 +22,7 @@ export const initialAccessForm: AccessFormValues = {
   expectedRevision: "0",
   clientOrigin: "https://api.anthropic.com",
   providerOrigin: "http://127.0.0.1:23333/v1",
-  fixedModel: "glm-5",
+  fixedModel: "dashscope:glm-5",
 };
 
 export function validAccessForm(values: AccessFormValues): boolean {

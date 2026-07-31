@@ -102,3 +102,58 @@ func TestUnknownUsageIsDistinctFromKnownZero(t *testing.T) {
 		t.Fatal("unknown usage equals known zero")
 	}
 }
+
+func TestProviderExtensionOwnsOpaqueFragments(t *testing.T) {
+	t.Parallel()
+
+	input := [][]byte{
+		[]byte(`"opaque-one"`),
+		[]byte(`{"reasoning_tokens":2}`),
+	}
+	extension, err := NewProviderExtension(
+		"openai-chat",
+		ProviderExtensionReasoningContent,
+		"$.choices[0].delta.reasoning_content",
+		input,
+	)
+	if err != nil {
+		t.Fatalf("NewProviderExtension() error = %v", err)
+	}
+	input[0][1] = 'X'
+	fragments := extension.Fragments()
+	if !bytes.Equal(fragments[0], []byte(`"opaque-one"`)) {
+		t.Fatalf("constructor retained input alias: %q", fragments)
+	}
+	fragments[0][1] = 'Y'
+	if fresh := extension.Fragments(); !bytes.Equal(
+		fresh[0],
+		[]byte(`"opaque-one"`),
+	) {
+		t.Fatalf("getter exposed mutable storage: %q", fresh)
+	}
+
+	text, err := NewTextBlock("visible")
+	if err != nil {
+		t.Fatal(err)
+	}
+	response := Response{
+		ID:                 "response-1",
+		RequestedModel:     "client-model",
+		EffectiveModel:     "provider-model",
+		ReportedModel:      "reported-model",
+		Blocks:             []ContentBlock{text},
+		ProviderExtensions: []ProviderExtension{extension},
+		StopReason:         StopReasonEndTurn,
+	}
+	if err := response.Validate(); err != nil {
+		t.Fatalf("Response.Validate() error = %v", err)
+	}
+	cloned := response.Clone()
+	response.ProviderExtensions[0] = ProviderExtension{}
+	if fresh := cloned.ProviderExtensions[0].Fragments(); !bytes.Equal(
+		fresh[0],
+		[]byte(`"opaque-one"`),
+	) {
+		t.Fatalf("Response.Clone() retained extension alias: %q", fresh)
+	}
+}

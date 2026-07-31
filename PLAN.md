@@ -92,23 +92,24 @@ capture provider text, prompts, tool arguments, headers, or credentials.
 
 ### 2. Establish one frozen packaged artifact
 
-- [ ] Build the App bundle from a standalone clean checkout at the final
+- [x] Build the App bundle from a standalone clean checkout at the final
   plan-bearing commit.
-- [ ] Derive packaged `vibermate`, packaged `vibermated`, and the acceptance
+- [x] Derive packaged `vibermate`, packaged `vibermated`, and the acceptance
   runner from that same revision.
-- [ ] Verify the embedded manifest, sidecar digests, clean Git identity, pinned
+- [x] Verify the embedded manifest, sidecar digests, clean Git identity, pinned
   Go/Node/Rust toolchains, and development build profile through the runner.
-- [ ] Run deterministic acceptance and retain a mode-`0600` report.
+- [x] Run deterministic acceptance and retain a mode-`0600` report.
 
 ### 3. Bind the development credential without weakening secret boundaries
 
-- [ ] Store the Cherry Studio development key through the write-only App
+- [x] Store the Cherry Studio development key through the write-only App
   control path under an existing logical `SecretRef`.
-- [ ] Verify only configured state and a nonzero secret revision; do not read
+- [x] Verify only configured state and a nonzero secret revision; do not read
   or print the value.
-- [ ] Query the local authenticated model catalog through a bounded,
-  redaction-safe path and confirm the exact `glm-5` and `kimi-k3` identifiers.
-- [ ] Keep native Keychain work outside this M0 development profile.
+- [x] Confirm the selected `dashscope:glm-5` identifier through the normal
+  frozen-plan production request. Do not add a raw model-catalog or provider
+  bypass solely for acceptance.
+- [x] Keep native Keychain work outside this M0 development profile.
 
 ### 4. Run the credentialed vertical chain
 
@@ -127,7 +128,7 @@ capture provider text, prompts, tool arguments, headers, or credentials.
 
 ### 5. Correct failures only at their owning layer
 
-- [ ] Protocol failures receive protocol fixtures and codec tests.
+- [x] Protocol failures receive protocol fixtures and codec tests.
 - [ ] Provider-envelope failures receive sanitized wire-shape tests.
 - [ ] Hold ordering failures receive deterministic admission/probe tests.
 - [ ] Proxy or ingress failures receive CONNECT/MITM and endpoint-revalidation
@@ -168,6 +169,36 @@ Even then, VibeMate is not Preview-ready or Release-ready. Physical
 sleep/network removal, native secret protection, signing/notarization,
 installer lifecycle, Server, Windows/Linux, additional clients/codecs,
 multi-profile routing, and full product UI remain outside this plan.
+
+## Current evidence
+
+- Frozen source revision:
+  `3d77ce8c87cf984ec90b8fa45ba168a01980237a`.
+- Standalone build checkout:
+  `/Users/null/Code/github/vibe-agi/vibermate-m0-acceptance-3d77ce8`.
+- Deterministic report:
+  `/private/tmp/vibermate-m0-deterministic-3d77ce8.json`.
+- Deterministic result: 16 of 16 checks passed; report mode is `0600`;
+  source provenance is clean and matches the frozen revision.
+- First credentialed attempt:
+  `/private/tmp/vibermate-m0-credentialed-3d77ce8.json`.
+- Credentialed result: existing development secret revision 1 reached the
+  local provider but was rejected with HTTP 403. VibeMate returned the closed
+  reason `provider_status_rejected`; no provider body or secret entered the
+  report.
+- The credential was replaced through the App and only metadata was observed:
+  the existing SecretRef advanced to revision 2.
+- A production-path request using the bare `glm-5` model reached Cherry Studio
+  and was rejected with `invalid_model_format`; Cherry requires the namespaced
+  `dashscope:glm-5` identifier while the upstream may report `glm-5`.
+- The namespaced model reached the provider and received HTTP 200. The frozen
+  `3d77ce8` codec then failed closed on the provider extension
+  `reasoning_content`.
+- The current candidate adds deterministic complete-response and SSE fixtures:
+  provider reasoning remains immutable opaque evidence, never enters Anthropic
+  text, and produces explicit reasoning-content and reasoning-usage
+  TranslationReport notices. A new clean artifact and vertical rerun remain
+  required.
 
 ## Archive and successor protocol
 

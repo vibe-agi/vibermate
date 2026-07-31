@@ -13,16 +13,19 @@ import (
 )
 
 const (
-	MaxModelBytes        = 512
-	MaxMessageCount      = 4096
-	MaxContentBlocks     = 4096
-	MaxTextBytes         = 8 << 20
-	MaxToolCount         = 256
-	MaxToolNameBytes     = 256
-	MaxToolJSONBytes     = 4 << 20
-	MaxOutputSchemaBytes = 4 << 20
-	MaxStopSequenceCount = 32
-	MaxStopSequenceBytes = 1024
+	MaxModelBytes                 = 512
+	MaxMessageCount               = 4096
+	MaxContentBlocks              = 4096
+	MaxTextBytes                  = 8 << 20
+	MaxProviderExtensions         = 256
+	MaxProviderExtensionFragments = 1 << 20
+	MaxProviderExtensionBytes     = 16 << 20
+	MaxToolCount                  = 256
+	MaxToolNameBytes              = 256
+	MaxToolJSONBytes              = 4 << 20
+	MaxOutputSchemaBytes          = 4 << 20
+	MaxStopSequenceCount          = 32
+	MaxStopSequenceBytes          = 1024
 )
 
 type Role string
@@ -740,15 +743,122 @@ func (usage Usage) Validate() error {
 	return nil
 }
 
+type ProviderExtensionSource string
+type ProviderExtensionKind string
+
+const (
+	ProviderExtensionSourceOpenAIChat ProviderExtensionSource = "openai-chat"
+
+	ProviderExtensionReasoningContent ProviderExtensionKind = "reasoning_content"
+	ProviderExtensionReasoningUsage   ProviderExtensionKind = "reasoning_usage"
+)
+
+// ProviderExtension preserves provider-specific JSON values without
+// reserializing them. Fragments are immutable snapshots of the original wire
+// values and are not a promise that another dialect can represent them.
+type ProviderExtension struct {
+	source    ProviderExtensionSource
+	kind      ProviderExtensionKind
+	path      string
+	fragments [][]byte
+}
+
+func NewProviderExtension(
+	source ProviderExtensionSource,
+	kind ProviderExtensionKind,
+	path string,
+	fragments [][]byte,
+) (ProviderExtension, error) {
+	extension := ProviderExtension{
+		source: source,
+		kind:   kind,
+		path:   path,
+	}
+	extension.fragments = cloneByteSlices(fragments)
+	if err := extension.Validate(); err != nil {
+		return ProviderExtension{}, err
+	}
+	return extension, nil
+}
+
+func (extension ProviderExtension) Source() ProviderExtensionSource {
+	return extension.source
+}
+
+func (extension ProviderExtension) Kind() ProviderExtensionKind {
+	return extension.kind
+}
+
+func (extension ProviderExtension) Path() string {
+	return extension.path
+}
+
+func (extension ProviderExtension) Fragments() [][]byte {
+	return cloneByteSlices(extension.fragments)
+}
+
+func (extension ProviderExtension) Validate() error {
+	if err := validateIdentifier(
+		"provider extension source",
+		string(extension.source),
+		128,
+	); err != nil {
+		return err
+	}
+	switch extension.source {
+	case ProviderExtensionSourceOpenAIChat:
+	default:
+		return errors.New("provider extension source is unsupported")
+	}
+	switch extension.kind {
+	case ProviderExtensionReasoningContent, ProviderExtensionReasoningUsage:
+	default:
+		return errors.New("provider extension kind is unsupported")
+	}
+	if err := validateText("provider extension path", extension.path, 1024, false); err != nil {
+		return err
+	}
+	if len(extension.fragments) == 0 ||
+		len(extension.fragments) > MaxProviderExtensionFragments {
+		return errors.New("provider extension fragment count is invalid")
+	}
+	totalBytes := 0
+	for index, fragment := range extension.fragments {
+		if len(fragment) == 0 || !json.Valid(fragment) {
+			return fmt.Errorf("provider extension fragment %d is not valid JSON", index)
+		}
+		totalBytes += len(fragment)
+		if totalBytes > MaxProviderExtensionBytes {
+			return errors.New("provider extension exceeds the byte limit")
+		}
+	}
+	return nil
+}
+
+func (extension ProviderExtension) Clone() ProviderExtension {
+	cloned := extension
+	cloned.fragments = cloneByteSlices(extension.fragments)
+	return cloned
+}
+
+func (extension ProviderExtension) byteSize() int {
+	total := 0
+	for _, fragment := range extension.fragments {
+		total += len(fragment)
+	}
+	return total
+}
+
 type Response struct {
-	ID             string
-	RequestedModel string
-	EffectiveModel string
-	ReportedModel  string
-	Blocks         []ContentBlock
-	StopReason     StopReason
-	StopSequence   string
-	Usage          Usage
+	ID                 string
+	RequestedModel     string
+	EffectiveModel     string
+	ReportedModel      string
+	Blocks             []ContentBlock
+	ProviderExtensions []ProviderExtension
+	StopReason         StopReason
+	StopSequence       string
+	Usage              Usage
 }
 
 func (response Response) Validate() error {
@@ -775,6 +885,27 @@ func (response Response) Validate() error {
 			return fmt.Errorf("response content block %d: %w", index, err)
 		}
 	}
+	if len(response.ProviderExtensions) > MaxProviderExtensions {
+		return errors.New("provider extension count is invalid")
+	}
+	extensionKeys := make(map[string]struct{}, len(response.ProviderExtensions))
+	extensionBytes := 0
+	for index, extension := range response.ProviderExtensions {
+		if err := extension.Validate(); err != nil {
+			return fmt.Errorf("provider extension %d: %w", index, err)
+		}
+		extensionBytes += extension.byteSize()
+		if extensionBytes > MaxProviderExtensionBytes {
+			return errors.New("provider extensions exceed the response byte limit")
+		}
+		key := string(extension.Source()) + "\x00" +
+			string(extension.Kind()) + "\x00" +
+			extension.Path()
+		if _, duplicate := extensionKeys[key]; duplicate {
+			return errors.New("provider extension identity is duplicated")
+		}
+		extensionKeys[key] = struct{}{}
+	}
 	switch response.StopReason {
 	case StopReasonEndTurn, StopReasonMaxTokens, StopReasonToolUse, StopReasonStopSequence:
 	default:
@@ -789,6 +920,7 @@ func (response Response) Validate() error {
 func (response Response) Clone() Response {
 	cloned := response
 	cloned.Blocks = cloneBlocks(response.Blocks)
+	cloned.ProviderExtensions = cloneProviderExtensions(response.ProviderExtensions)
 	return cloned
 }
 
@@ -808,6 +940,8 @@ const (
 	NoticeDiagnosticsNotForwarded       NoticeCode = "diagnostics_not_forwarded"
 	NoticeContentOrderNormalized        NoticeCode = "content_order_normalized"
 	NoticeLateUsageAccounting           NoticeCode = "late_usage_accounting"
+	NoticeReasoningContentNotForwarded  NoticeCode = "reasoning_content_not_forwarded"
+	NoticeReasoningUsageNotForwarded    NoticeCode = "reasoning_usage_not_forwarded"
 )
 
 type TranslationNotice struct {
@@ -842,6 +976,22 @@ func cloneBlocks(blocks []ContentBlock) []ContentBlock {
 	cloned := make([]ContentBlock, len(blocks))
 	for index, block := range blocks {
 		cloned[index] = block.Clone()
+	}
+	return cloned
+}
+
+func cloneProviderExtensions(extensions []ProviderExtension) []ProviderExtension {
+	cloned := make([]ProviderExtension, len(extensions))
+	for index, extension := range extensions {
+		cloned[index] = extension.Clone()
+	}
+	return cloned
+}
+
+func cloneByteSlices(values [][]byte) [][]byte {
+	cloned := make([][]byte, len(values))
+	for index, value := range values {
+		cloned[index] = bytes.Clone(value)
 	}
 	return cloned
 }

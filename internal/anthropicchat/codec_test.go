@@ -687,6 +687,67 @@ func TestNonStreamingResponseRoundTripsThroughOfficialAnthropicOracle(t *testing
 	}
 }
 
+func TestNonStreamingReasoningContentRemainsOpaqueAndIsNotForwarded(t *testing.T) {
+	t.Parallel()
+
+	codec := newTestCodec(t)
+	request := newStreamingRequest(t, codec)
+	request.Stream = false
+	body := []byte(`{
+		"id":"chatcmpl-reasoning",
+		"object":"chat.completion",
+		"created":1,
+		"model":"glm-5",
+		"choices":[{
+			"index":0,
+			"message":{
+				"role":"assistant",
+				"content":"Visible",
+				"reasoning_content":"opaque-reasoning"
+			},
+			"finish_reason":"stop"
+		}],
+		"usage":{
+			"prompt_tokens":5,
+			"completion_tokens":4,
+			"total_tokens":9,
+			"completion_tokens_details":{"reasoning_tokens":2}
+		}
+	}`)
+
+	response, report, err := codec.DecodeProviderResponse(request, body)
+	if err != nil {
+		t.Fatalf("DecodeProviderResponse() error = %v", err)
+	}
+	for _, notice := range []protocolcore.NoticeCode{
+		protocolcore.NoticeReasoningContentNotForwarded,
+		protocolcore.NoticeReasoningUsageNotForwarded,
+	} {
+		if !reportHasNotice(report, notice) {
+			t.Fatalf("translation report = %#v, want %q", report.Notices(), notice)
+		}
+	}
+	if len(response.ProviderExtensions) != 2 ||
+		!bytes.Equal(
+			response.ProviderExtensions[0].Fragments()[0],
+			[]byte(`"opaque-reasoning"`),
+		) ||
+		!bytes.Equal(
+			response.ProviderExtensions[1].Fragments()[0],
+			[]byte(`{"reasoning_tokens":2}`),
+		) {
+		t.Fatalf("provider extensions = %#v", response.ProviderExtensions)
+	}
+	encoded, err := codec.EncodeClientResponse(response)
+	if err != nil {
+		t.Fatalf("EncodeClientResponse() error = %v", err)
+	}
+	if bytes.Contains(encoded, []byte("opaque-reasoning")) ||
+		!bytes.Contains(encoded, []byte(`"text":"Visible"`)) {
+		t.Fatalf("client response = %s", encoded)
+	}
+}
+
 func TestNonStreamingToolResponseRequiresCompleteJSONObject(t *testing.T) {
 	t.Parallel()
 
@@ -780,6 +841,72 @@ func TestStreamingTextIsIncrementalAndTerminalWaitsForApproval(t *testing.T) {
 		if err := json.Unmarshal(event.Data, &oracle); err != nil {
 			t.Fatalf("official Anthropic SDK rejected event %d: %v\n%s", index, err, event.Data)
 		}
+	}
+}
+
+func TestStreamingReasoningContentIsExplicitlyReportedAcrossDialects(t *testing.T) {
+	t.Parallel()
+
+	codec := newTestCodec(t)
+	stream, err := codec.NewProviderStream(newStreamingRequest(t, codec))
+	if err != nil {
+		t.Fatalf("NewProviderStream() error = %v", err)
+	}
+	wire := joinProviderEvents(t,
+		`{"id":"chatcmpl-reasoning","object":"chat.completion.chunk","created":1,"model":"glm-5","choices":[{"index":0,"delta":{"role":"assistant","content":"","reasoning_content":"opaque-one"},"finish_reason":null}]}`,
+		`{"id":"chatcmpl-reasoning","object":"chat.completion.chunk","created":1,"model":"glm-5","choices":[{"index":0,"delta":{"content":"Visible","reasoning_content":"opaque-two"},"finish_reason":null}]}`,
+		`{"id":"chatcmpl-reasoning","object":"chat.completion.chunk","created":1,"model":"glm-5","choices":[{"index":0,"delta":{},"finish_reason":"stop"}]}`,
+		`{"id":"chatcmpl-reasoning","object":"chat.completion.chunk","created":1,"model":"glm-5","choices":[],"usage":{"prompt_tokens":5,"completion_tokens":4,"total_tokens":9,"completion_tokens_details":{"reasoning_tokens":2}}}`,
+		`[DONE]`,
+	)
+
+	immediate, err := feedFragments(stream, wire, 11)
+	if err != nil {
+		t.Fatalf("Feed() error = %v", err)
+	}
+	if bytes.Contains(immediate, []byte("opaque-one")) ||
+		bytes.Contains(immediate, []byte("opaque-two")) {
+		t.Fatalf("provider reasoning leaked into Anthropic wire: %s", immediate)
+	}
+	if !bytes.Contains(immediate, []byte(`"text":"Visible"`)) {
+		t.Fatalf("visible provider content was not streamed: %s", immediate)
+	}
+	pending, err := stream.FinishDecoded(context.Background())
+	if err != nil {
+		t.Fatalf("FinishDecoded() error = %v", err)
+	}
+	report := pending.TranslationReport()
+	for _, notice := range []protocolcore.NoticeCode{
+		protocolcore.NoticeReasoningContentNotForwarded,
+		protocolcore.NoticeReasoningUsageNotForwarded,
+	} {
+		if !reportHasNotice(report, notice) {
+			t.Fatalf("translation report = %#v, want %q", report.Notices(), notice)
+		}
+	}
+	response := pending.DecodedResponse()
+	if len(response.ProviderExtensions) != 2 {
+		t.Fatalf(
+			"provider extension count = %d, want 2",
+			len(response.ProviderExtensions),
+		)
+	}
+	reasoning := response.ProviderExtensions[0]
+	if reasoning.Source() != SourceOpenAIChat ||
+		reasoning.Kind() != protocolcore.ProviderExtensionReasoningContent ||
+		reasoning.Path() != "$.choices[0].delta.reasoning_content" {
+		t.Fatalf("reasoning extension = %#v", reasoning)
+	}
+	fragments := reasoning.Fragments()
+	if len(fragments) != 2 ||
+		!bytes.Equal(fragments[0], []byte(`"opaque-one"`)) ||
+		!bytes.Equal(fragments[1], []byte(`"opaque-two"`)) {
+		t.Fatalf("reasoning fragments = %q", fragments)
+	}
+	fragments[0][1] = 'X'
+	fresh := pending.DecodedResponse().ProviderExtensions[0].Fragments()
+	if !bytes.Equal(fresh[0], []byte(`"opaque-one"`)) {
+		t.Fatalf("reasoning getter exposed mutable storage: %q", fresh)
 	}
 }
 

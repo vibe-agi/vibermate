@@ -1,6 +1,7 @@
 package anthropicchat
 
 import (
+	"bytes"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -27,13 +28,14 @@ type openAIChoiceWire struct {
 }
 
 type openAIResponseMessageWire struct {
-	Role         string               `json:"role"`
-	Content      *string              `json:"content"`
-	Refusal      *string              `json:"refusal,omitempty"`
-	ToolCalls    []openAIToolCallWire `json:"tool_calls,omitempty"`
-	Annotations  json.RawMessage      `json:"annotations,omitempty"`
-	Audio        json.RawMessage      `json:"audio,omitempty"`
-	FunctionCall json.RawMessage      `json:"function_call,omitempty"`
+	Role             string               `json:"role"`
+	Content          *string              `json:"content"`
+	ReasoningContent json.RawMessage      `json:"reasoning_content,omitempty"`
+	Refusal          *string              `json:"refusal,omitempty"`
+	ToolCalls        []openAIToolCallWire `json:"tool_calls,omitempty"`
+	Annotations      json.RawMessage      `json:"annotations,omitempty"`
+	Audio            json.RawMessage      `json:"audio,omitempty"`
+	FunctionCall     json.RawMessage      `json:"function_call,omitempty"`
 }
 
 type openAIUsageWire struct {
@@ -54,6 +56,34 @@ type openAICompletionUsageWire struct {
 	AudioTokens              int64 `json:"audio_tokens,omitempty"`
 	AcceptedPredictionTokens int64 `json:"accepted_prediction_tokens,omitempty"`
 	RejectedPredictionTokens int64 `json:"rejected_prediction_tokens,omitempty"`
+	reasoningTokensPresent   bool
+	raw                      json.RawMessage
+}
+
+func (wire *openAICompletionUsageWire) UnmarshalJSON(value []byte) error {
+	var decoded struct {
+		ReasoningTokens          int64 `json:"reasoning_tokens,omitempty"`
+		AudioTokens              int64 `json:"audio_tokens,omitempty"`
+		AcceptedPredictionTokens int64 `json:"accepted_prediction_tokens,omitempty"`
+		RejectedPredictionTokens int64 `json:"rejected_prediction_tokens,omitempty"`
+	}
+	if err := decodeStrict(value, &decoded); err != nil {
+		return err
+	}
+	var fields map[string]json.RawMessage
+	if err := json.Unmarshal(value, &fields); err != nil {
+		return err
+	}
+	_, reasoningTokensPresent := fields["reasoning_tokens"]
+	*wire = openAICompletionUsageWire{
+		ReasoningTokens:          decoded.ReasoningTokens,
+		AudioTokens:              decoded.AudioTokens,
+		AcceptedPredictionTokens: decoded.AcceptedPredictionTokens,
+		RejectedPredictionTokens: decoded.RejectedPredictionTokens,
+		reasoningTokensPresent:   reasoningTokensPresent,
+		raw:                      bytes.Clone(value),
+	}
+	return nil
 }
 
 func (codec *Codec) DecodeProviderResponse(
@@ -121,6 +151,22 @@ func (codec *Codec) DecodeProviderResponse(
 				"$.choices[0].message",
 				errors.New("provider response contains an unsupported content type"),
 			)
+	}
+
+	report := protocolcore.TranslationReport{}
+	providerExtensions := make([]protocolcore.ProviderExtension, 0, 2)
+	if rawPresent(choice.Message.ReasoningContent) {
+		extension, err := reasoningContentExtension(
+			choice.Message.ReasoningContent,
+			"$.choices[0].message.reasoning_content",
+		)
+		if err != nil {
+			return protocolcore.Response{}, protocolcore.TranslationReport{}, err
+		}
+		providerExtensions = append(providerExtensions, extension)
+		report = report.Merge(reasoningContentNotice(
+			"$.choices[0].message.reasoning_content",
+		))
 	}
 
 	blocks := make([]protocolcore.ContentBlock, 0, 1+len(choice.Message.ToolCalls))
@@ -197,25 +243,35 @@ func (codec *Codec) DecodeProviderResponse(
 	if err != nil {
 		return protocolcore.Response{}, protocolcore.TranslationReport{}, err
 	}
+	if extension, present, extensionErr := reasoningUsageExtension(wire.Usage); extensionErr != nil {
+		return protocolcore.Response{}, protocolcore.TranslationReport{}, extensionErr
+	} else if present {
+		providerExtensions = append(providerExtensions, extension)
+		report = report.Merge(reasoningUsageNotice(
+			"$.usage.completion_tokens_details",
+		))
+	}
 	response := protocolcore.Response{
-		ID:             wire.ID,
-		RequestedModel: request.RequestedModel,
-		EffectiveModel: request.EffectiveModel,
-		ReportedModel:  wire.Model,
-		Blocks:         blocks,
-		StopReason:     stopReason,
-		Usage:          usage,
+		ID:                 wire.ID,
+		RequestedModel:     request.RequestedModel,
+		EffectiveModel:     request.EffectiveModel,
+		ReportedModel:      wire.Model,
+		Blocks:             blocks,
+		ProviderExtensions: providerExtensions,
+		StopReason:         stopReason,
+		Usage:              usage,
 	}
 	if err := response.Validate(); err != nil {
 		return protocolcore.Response{}, protocolcore.TranslationReport{},
 			protocolcore.NewFailure(protocolcore.ReasonInvalidProviderResponse, "$", err)
 	}
-	report := protocolcore.TranslationReport{}
 	if wire.ServiceTier != nil {
-		report = protocolcore.NewTranslationReport(protocolcore.TranslationNotice{
-			Code: protocolcore.NoticeServiceTierNotForwarded,
-			Path: "$.service_tier",
-		})
+		report = report.Merge(protocolcore.NewTranslationReport(
+			protocolcore.TranslationNotice{
+				Code: protocolcore.NoticeServiceTierNotForwarded,
+				Path: "$.service_tier",
+			},
+		))
 	}
 	return response.Clone(), report, nil
 }
@@ -319,16 +375,23 @@ func decodeUsage(wire *openAIUsageWire) (protocolcore.Usage, error) {
 			errors.New("cached tokens exceed prompt tokens"),
 		)
 	}
-	if wire.CompletionTokensDetails != nil &&
-		(wire.CompletionTokensDetails.ReasoningTokens != 0 ||
-			wire.CompletionTokensDetails.AudioTokens != 0 ||
+	if wire.CompletionTokensDetails != nil {
+		if wire.CompletionTokensDetails.ReasoningTokens < 0 {
+			return protocolcore.Usage{}, protocolcore.NewFailure(
+				protocolcore.ReasonInvalidProviderResponse,
+				"$.usage.completion_tokens_details.reasoning_tokens",
+				errors.New("reasoning token count is negative"),
+			)
+		}
+		if wire.CompletionTokensDetails.AudioTokens != 0 ||
 			wire.CompletionTokensDetails.AcceptedPredictionTokens != 0 ||
-			wire.CompletionTokensDetails.RejectedPredictionTokens != 0) {
-		return protocolcore.Usage{}, protocolcore.NewFailure(
-			protocolcore.ReasonUnsupportedProviderData,
-			"$.usage.completion_tokens_details",
-			errors.New("completion usage details are unsupported"),
-		)
+			wire.CompletionTokensDetails.RejectedPredictionTokens != 0 {
+			return protocolcore.Usage{}, protocolcore.NewFailure(
+				protocolcore.ReasonUnsupportedProviderData,
+				"$.usage.completion_tokens_details",
+				errors.New("completion usage details are unsupported"),
+			)
+		}
 	}
 	source := SourceOpenAIChat
 	usage := protocolcore.Usage{
@@ -361,6 +424,80 @@ func decodeUsage(wire *openAIUsageWire) (protocolcore.Usage, error) {
 		)
 	}
 	return usage, nil
+}
+
+func reasoningContentExtension(
+	raw json.RawMessage,
+	path string,
+) (protocolcore.ProviderExtension, error) {
+	if err := validateReasoningContent(raw, path); err != nil {
+		return protocolcore.ProviderExtension{}, err
+	}
+	extension, err := protocolcore.NewProviderExtension(
+		SourceOpenAIChat,
+		protocolcore.ProviderExtensionReasoningContent,
+		path,
+		[][]byte{raw},
+	)
+	if err != nil {
+		return protocolcore.ProviderExtension{}, protocolcore.NewFailure(
+			protocolcore.ReasonInvalidProviderResponse,
+			path,
+			err,
+		)
+	}
+	return extension, nil
+}
+
+func validateReasoningContent(raw json.RawMessage, path string) error {
+	var value string
+	if err := json.Unmarshal(raw, &value); err != nil {
+		return protocolcore.NewFailure(
+			protocolcore.ReasonInvalidProviderResponse,
+			path,
+			errors.New("provider reasoning content is not a string"),
+		)
+	}
+	return nil
+}
+
+func reasoningUsageExtension(
+	wire *openAIUsageWire,
+) (protocolcore.ProviderExtension, bool, error) {
+	if wire == nil ||
+		wire.CompletionTokensDetails == nil ||
+		!wire.CompletionTokensDetails.reasoningTokensPresent {
+		return protocolcore.ProviderExtension{}, false, nil
+	}
+	const path = "$.usage.completion_tokens_details"
+	extension, err := protocolcore.NewProviderExtension(
+		SourceOpenAIChat,
+		protocolcore.ProviderExtensionReasoningUsage,
+		path,
+		[][]byte{wire.CompletionTokensDetails.raw},
+	)
+	if err != nil {
+		return protocolcore.ProviderExtension{}, false, protocolcore.NewFailure(
+			protocolcore.ReasonInvalidProviderResponse,
+			path,
+			err,
+		)
+	}
+	return extension, true, nil
+}
+
+func reasoningContentNotice(path string) protocolcore.TranslationReport {
+	return protocolcore.NewTranslationReport(protocolcore.TranslationNotice{
+		Code: protocolcore.NoticeReasoningContentNotForwarded,
+		Path: path,
+	})
+}
+
+func reasoningUsageNotice(path string) protocolcore.TranslationReport {
+	return protocolcore.NewTranslationReport(protocolcore.TranslationNotice{
+		Code: protocolcore.NoticeReasoningUsageNotForwarded,
+		Path: path,
+	})
 }
 
 type anthropicResponseWire struct {
