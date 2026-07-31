@@ -1015,6 +1015,7 @@ type Usage struct {
 	CacheWrite    UsageValue
 	CacheRead     UsageValue
 	Output        UsageValue
+	Reasoning     UsageValue
 }
 
 func (usage Usage) Validate() error {
@@ -1023,11 +1024,17 @@ func (usage Usage) Validate() error {
 		usage.CacheWrite,
 		usage.CacheRead,
 		usage.Output,
+		usage.Reasoning,
 	}
 	for _, value := range values {
 		if err := value.Validate(); err != nil {
 			return err
 		}
+	}
+	if usage.Reasoning.Known &&
+		usage.Output.Known &&
+		usage.Reasoning.Tokens > usage.Output.Tokens {
+		return errors.New("reasoning usage exceeds output usage")
 	}
 	return nil
 }
@@ -1140,6 +1147,7 @@ func (extension ProviderExtension) byteSize() int {
 
 type Response struct {
 	ID                 string
+	CreatedAtUnix      int64
 	RequestedModel     string
 	EffectiveModel     string
 	ReportedModel      string
@@ -1154,6 +1162,9 @@ func (response Response) Validate() error {
 	if err := validateIdentifier("response ID", response.ID, 512); err != nil {
 		return err
 	}
+	if response.CreatedAtUnix < 0 {
+		return errors.New("response creation time is negative")
+	}
 	if err := validateIdentifier("requested model", response.RequestedModel, MaxModelBytes); err != nil {
 		return err
 	}
@@ -1166,6 +1177,8 @@ func (response Response) Validate() error {
 	if len(response.Blocks) == 0 || len(response.Blocks) > MaxContentBlocks {
 		return errors.New("response content block count is invalid")
 	}
+	toolKeys := make(map[CallKey]struct{})
+	hasToolCall := false
 	for index, block := range response.Blocks {
 		if block.Kind != BlockText &&
 			block.Kind != BlockRefusal &&
@@ -1174,6 +1187,13 @@ func (response Response) Validate() error {
 		}
 		if err := block.Validate(); err != nil {
 			return fmt.Errorf("response content block %d: %w", index, err)
+		}
+		if block.Kind == BlockToolCall {
+			hasToolCall = true
+			if _, duplicate := toolKeys[block.ToolCall.Key]; duplicate {
+				return errors.New("response tool call identity is duplicated")
+			}
+			toolKeys[block.ToolCall.Key] = struct{}{}
 		}
 	}
 	if len(response.ProviderExtensions) > MaxProviderExtensions {
@@ -1201,6 +1221,9 @@ func (response Response) Validate() error {
 	case StopReasonEndTurn, StopReasonMaxTokens, StopReasonToolUse, StopReasonStopSequence:
 	default:
 		return errors.New("response stop reason is unsupported")
+	}
+	if (response.StopReason == StopReasonToolUse) != hasToolCall {
+		return errors.New("response stop reason and tool calls are inconsistent")
 	}
 	if response.StopReason != StopReasonStopSequence && response.StopSequence != "" {
 		return errors.New("response has an unexpected stop sequence")
@@ -1240,6 +1263,12 @@ const (
 	NoticeReasoningContextNotForwarded        NoticeCode = "reasoning_context_not_forwarded"
 	NoticeReasoningIncludeNotForwarded        NoticeCode = "reasoning_include_not_forwarded"
 	NoticeTextVerbosityNotForwarded           NoticeCode = "text_verbosity_not_forwarded"
+	NoticeCustomToolGrammarNotForwarded       NoticeCode = "custom_tool_grammar_not_forwarded"
+	NoticeToolNamespaceEncoded                NoticeCode = "tool_namespace_encoded"
+	NoticeReasoningSummaryNotForwarded        NoticeCode = "reasoning_summary_not_forwarded"
+	NoticeReasoningExecutionNotForwarded      NoticeCode = "reasoning_execution_not_forwarded"
+	NoticeToolItemIdentityNotForwarded        NoticeCode = "tool_item_identity_not_forwarded"
+	NoticeCustomToolKindEncoded               NoticeCode = "custom_tool_kind_encoded"
 )
 
 type TranslationNotice struct {

@@ -103,6 +103,44 @@ func TestUnknownUsageIsDistinctFromKnownZero(t *testing.T) {
 	if unknown == knownZero {
 		t.Fatal("unknown usage equals known zero")
 	}
+	usage := Usage{
+		Output: UsageValue{
+			Tokens: 2,
+			Known:  true,
+			Source: "oracle",
+		},
+		Reasoning: UsageValue{
+			Tokens: 3,
+			Known:  true,
+			Source: "oracle",
+		},
+	}
+	if err := usage.Validate(); err == nil {
+		t.Fatal("reasoning usage greater than output usage was accepted")
+	}
+}
+
+func TestFailedAndCanceledAreNotSuccessfulResponseStopReasons(t *testing.T) {
+	t.Parallel()
+
+	text, err := NewTextBlock("partial")
+	if err != nil {
+		t.Fatal(err)
+	}
+	base := Response{
+		ID:             "response-1",
+		RequestedModel: "client-model",
+		EffectiveModel: "provider-model",
+		ReportedModel:  "provider-model-revision",
+		Blocks:         []ContentBlock{text},
+	}
+	for _, reason := range []StopReason{"failed", "cancelled"} {
+		response := base.Clone()
+		response.StopReason = reason
+		if err := response.Validate(); err == nil {
+			t.Fatalf("Response.Validate() accepted %q", reason)
+		}
+	}
 }
 
 func TestResponsesSemanticValuesRemainTypedAndImmutable(t *testing.T) {

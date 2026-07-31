@@ -92,40 +92,40 @@ payloads or credentials.
   definitions, custom Lark grammar, optional output-token limits, reasoning
   context, encrypted-reasoning inclusion, text verbosity, prompt-cache identity,
   and bounded client metadata.
-- [ ] Add official-SDK-oracle fixtures for fixed Codex request, complete
+- [x] Add official-SDK-oracle fixtures for fixed Codex request, complete
   response, SSE text, function call, function output, usage, failure,
   cancellation, malformed ordering, and unknown extensions.
-- [ ] Extend immutable protocol-core values only for concepts actually required
+- [x] Extend immutable protocol-core values only for concepts actually required
   by those fixtures: Responses item/call identity, refusal/error/abort, tool
   correlation, and known/unknown usage details.
-- [ ] Keep observation-only provider extensions typed and immutable; define
+- [x] Keep observation-only provider extensions typed and immutable; define
   explicit translation notices or rejection for every non-forwarded concept.
-- [ ] Prove deep input/output alias isolation, deterministic cloning, strict
+- [x] Prove deep input/output alias isolation, deterministic cloning, strict
   bounds, fuzz convergence, and race safety.
 
 ### 2. Implement the pure OpenAI Responses client edge
 
-- [ ] Add a typed Responses client codec for bounded HTTP request decoding,
+- [x] Add a typed Responses client codec for bounded HTTP request decoding,
   complete-response encoding, and incremental SSE encoding.
-- [ ] Preserve source ordering and independently track response, output item,
+- [x] Preserve source ordering and independently track response, output item,
   content part, function call, and argument-fragment state.
-- [ ] Require a valid terminal event; reject unknown-item deltas, duplicate
+- [x] Require a valid terminal event; reject unknown-item deltas, duplicate
   terminal events, incomplete calls, invalid JSON arguments, and trailing
   semantic events.
-- [ ] Map generic function calls/results through stable IR identities without
+- [x] Map generic function calls/results through stable IR identities without
   treating item ID and call ID as interchangeable.
-- [ ] Keep OpenAI SDK imports restricted to tests.
+- [x] Keep OpenAI SDK imports restricted to tests.
 
 ### 3. Compose Responses to the existing Chat backend
 
-- [ ] Generalize the typed protocol path so Responses client edge and OpenAI
+- [x] Generalize the typed protocol path so Responses client edge and OpenAI
   Chat backend edge compose explicitly without a global registry.
-- [ ] Reuse the existing Chat request encoder and response/SSE decoder; do not
+- [x] Reuse the existing Chat request encoder and response/SSE decoder; do not
   create a second provider client or transport.
-- [ ] Make TranslationReport loss policy explicit for developer messages,
+- [x] Make TranslationReport loss policy explicit for developer messages,
   refusal, reasoning, usage details, tool choice, and unsupported Responses
   controls.
-- [ ] Prove ordinary text remains incremental while the first unresolved tool
+- [x] Prove ordinary text remains incremental while the first unresolved tool
   fragment fences the required suffix until durable approval.
 - [ ] Prove retry/commit-ledger semantics remain unchanged after any
   client-visible Responses event.

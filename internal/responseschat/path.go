@@ -1,20 +1,42 @@
-package anthropicchat
+// Package responseschat explicitly composes the OpenAI Responses client edge
+// with the existing OpenAI Chat backend edge. It owns no transport, Access
+// selection, credentials, or global codec registry.
+package responseschat
 
 import (
 	"context"
 	"net/http"
 
 	"github.com/vibe-agi/vibermate/internal/access"
+	"github.com/vibe-agi/vibermate/internal/anthropicchat"
+	"github.com/vibe-agi/vibermate/internal/openairesponses"
 	"github.com/vibe-agi/vibermate/internal/protocolcore"
 	"github.com/vibe-agi/vibermate/internal/protocolpath"
 )
 
+const (
+	CodecPairID   = "openai-responses-to-openai-chat"
+	CodecRevision = 1
+)
+
+type Options struct {
+	Responses openairesponses.Options
+	Chat      anthropicchat.Options
+}
+
+func DefaultOptions() Options {
+	return Options{
+		Responses: openairesponses.DefaultOptions(),
+		Chat:      anthropicchat.DefaultOptions(),
+	}
+}
+
 type clientCodec struct {
-	codec *Codec
+	codec *openairesponses.Codec
 }
 
 func (clientCodec) Dialect() access.Dialect {
-	return access.DialectAnthropicMessages
+	return access.DialectOpenAIResponses
 }
 
 func (codec clientCodec) DecodeRequest(
@@ -24,15 +46,14 @@ func (codec clientCodec) DecodeRequest(
 }
 
 func (codec clientCodec) EncodeResponse(
-	_ protocolcore.Request,
+	request protocolcore.Request,
 	response protocolcore.Response,
 ) ([]byte, protocolcore.TranslationReport, error) {
-	encoded, err := codec.codec.EncodeClientResponse(response)
-	return encoded, protocolcore.TranslationReport{}, err
+	return codec.codec.EncodeClientResponse(request, response)
 }
 
 type backendCodec struct {
-	codec *Codec
+	codec *anthropicchat.Codec
 }
 
 func (backendCodec) Dialect() access.Dialect {
@@ -54,7 +75,7 @@ func (codec backendCodec) EncodeRequest(
 	}
 	encoded, err := protocolpath.NewProviderRequest(
 		http.MethodPost,
-		ProviderRelativePath,
+		anthropicchat.ProviderRelativePath,
 		headers,
 		body,
 	)
@@ -69,13 +90,18 @@ func (codec backendCodec) DecodeResponse(
 }
 
 type streamingBridge struct {
-	codec *Codec
+	client *openairesponses.Codec
+	chat   *anthropicchat.Codec
 }
 
 func (bridge streamingBridge) NewStream(
 	request protocolcore.Request,
 ) (protocolpath.Stream, error) {
-	stream, err := bridge.codec.NewProviderStream(request)
+	encoder, err := bridge.client.NewStreamEncoder(request)
+	if err != nil {
+		return nil, err
+	}
+	stream, err := bridge.chat.NewProviderStreamWithEncoder(request, encoder)
 	if err != nil {
 		return nil, err
 	}
@@ -83,7 +109,7 @@ func (bridge streamingBridge) NewStream(
 }
 
 type streamAdapter struct {
-	stream *ProviderStream
+	stream *anthropicchat.ProviderStream
 }
 
 func (adapter streamAdapter) Feed(
@@ -108,7 +134,11 @@ func (adapter streamAdapter) FinishDecoded(
 }
 
 func NewProtocolPath(options Options) (*protocolpath.Path, error) {
-	codec, err := New(options)
+	client, err := openairesponses.New(options.Responses)
+	if err != nil {
+		return nil, err
+	}
+	chat, err := anthropicchat.New(options.Chat)
 	if err != nil {
 		return nil, err
 	}
@@ -119,8 +149,8 @@ func NewProtocolPath(options Options) (*protocolpath.Path, error) {
 	return protocolpath.New(protocolpath.Options{
 		ID:        identifier,
 		Revision:  access.Revision(CodecRevision),
-		Client:    clientCodec{codec: codec},
-		Backend:   backendCodec{codec: codec},
-		Streaming: streamingBridge{codec: codec},
+		Client:    clientCodec{codec: client},
+		Backend:   backendCodec{codec: chat},
+		Streaming: streamingBridge{client: client, chat: chat},
 	})
 }

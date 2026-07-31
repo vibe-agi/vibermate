@@ -15,11 +15,15 @@ const (
 )
 
 type Options struct {
-	MaxRequestBytes int
+	MaxRequestBytes  int
+	MaxResponseBytes int
 }
 
 func DefaultOptions() Options {
-	return Options{MaxRequestBytes: 16 << 20}
+	return Options{
+		MaxRequestBytes:  16 << 20,
+		MaxResponseBytes: 16 << 20,
+	}
 }
 
 type Codec struct {
@@ -27,7 +31,7 @@ type Codec struct {
 }
 
 func New(options Options) (*Codec, error) {
-	if options.MaxRequestBytes <= 0 {
+	if options.MaxRequestBytes <= 0 || options.MaxResponseBytes <= 0 {
 		return nil, errors.New("Responses codec limits must be positive")
 	}
 	return &Codec{options: options}, nil

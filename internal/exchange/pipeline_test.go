@@ -46,6 +46,7 @@ func TestPipelineExecutesCompleteResponseFromOneFrozenPlan(t *testing.T) {
 	inputBody := []byte(`{
 		"model":"claude-client-alias",
 		"max_tokens":32,
+		"metadata":{"user_id":"test-only"},
 		"messages":[{"role":"user","content":"hello"}]
 	}`)
 	request, err := NewClientRequest(
@@ -96,7 +97,11 @@ func TestPipelineExecutesCompleteResponseFromOneFrozenPlan(t *testing.T) {
 		!result.Ledger.DownstreamOrdinaryHeaders ||
 		!result.Ledger.DownstreamTerminal ||
 		result.Ledger.UpstreamSends != 1 ||
-		result.Ledger.UpstreamResponses != 1 {
+		result.Ledger.UpstreamResponses != 1 ||
+		!translationHasNotice(
+			result.Translation,
+			protocolcore.NoticeMetadataNotForwarded,
+		) {
 		t.Fatalf("result = %+v", result)
 	}
 }
@@ -153,9 +158,25 @@ func TestPipelineResendsSameFrozenRepresentationBeforeSemanticCommit(t *testing.
 		result.Ledger.UpstreamSends != 2 ||
 		result.Ledger.UpstreamResponses != 2 ||
 		!result.Ledger.DownstreamHoldEnvelope ||
-		!result.Ledger.DownstreamTerminal {
+		!result.Ledger.DownstreamTerminal ||
+		!translationHasNotice(
+			result.Translation,
+			protocolcore.NoticeLateUsageAccounting,
+		) {
 		t.Fatalf("resend result = %+v; waiter calls=%d", result, waiter.callCount())
 	}
+}
+
+func translationHasNotice(
+	report protocolcore.TranslationReport,
+	code protocolcore.NoticeCode,
+) bool {
+	return slices.ContainsFunc(
+		report.Notices(),
+		func(notice protocolcore.TranslationNotice) bool {
+			return notice.Code == code
+		},
+	)
 }
 
 func TestPipelineNeverResolvesAgainDuringAnActiveExchange(t *testing.T) {

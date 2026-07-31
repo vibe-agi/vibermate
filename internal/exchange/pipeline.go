@@ -205,7 +205,9 @@ func (pipeline *Pipeline) Execute(
 			err,
 		)
 	}
-	decoded, _, err := pipeline.protocolPath.Client().DecodeRequest(request.body)
+	decoded, clientRequestReport, err :=
+		pipeline.protocolPath.Client().DecodeRequest(request.body)
+	result.Translation = result.Translation.Merge(clientRequestReport)
 	if err != nil {
 		reason := ReasonInvalidExchangeRequest
 		if protocolcore.ReasonOf(err) ==
@@ -230,7 +232,9 @@ func (pipeline *Pipeline) Execute(
 			err,
 		)
 	}
-	encodedProvider, _, err := pipeline.protocolPath.Backend().EncodeRequest(decoded)
+	encodedProvider, backendRequestReport, err :=
+		pipeline.protocolPath.Backend().EncodeRequest(decoded)
+	result.Translation = result.Translation.Merge(backendRequestReport)
 	if err != nil {
 		return result, newFailure(
 			ReasonProviderRequestInvalid,
@@ -565,10 +569,12 @@ func (pipeline *Pipeline) executeComplete(
 			err,
 		)
 	}
-	providerResponse, _, err := pipeline.protocolPath.Backend().DecodeResponse(
-		decoded,
-		body,
-	)
+	providerResponse, backendResponseReport, err :=
+		pipeline.protocolPath.Backend().DecodeResponse(
+			decoded,
+			body,
+		)
+	result.Translation = result.Translation.Merge(backendResponseReport)
 	if err != nil {
 		return newFailure(
 			ReasonProviderResponseInvalid,
@@ -582,9 +588,12 @@ func (pipeline *Pipeline) executeComplete(
 		result.Outcome = AttemptAborted
 		return err
 	}
-	clientBody, err := pipeline.protocolPath.Client().EncodeResponse(
-		providerResponse,
-	)
+	clientBody, clientResponseReport, err :=
+		pipeline.protocolPath.Client().EncodeResponse(
+			decoded,
+			providerResponse,
+		)
+	result.Translation = result.Translation.Merge(clientResponseReport)
 	if err != nil {
 		return newFailure(
 			ReasonProviderResponseInvalid,
@@ -867,6 +876,7 @@ func (pipeline *Pipeline) executeStream(
 			response.Body,
 			downstream,
 			ledger,
+			result,
 		)
 		if streamErr == nil {
 			return nil
@@ -936,6 +946,7 @@ func (pipeline *Pipeline) consumeProviderStream(
 	body io.ReadCloser,
 	downstream Downstream,
 	ledger *CommitLedger,
+	result *Result,
 ) error {
 	readContext, cancelRead := context.WithCancelCause(ctx)
 	readResults := make(chan providerReadResult)
@@ -1026,6 +1037,9 @@ func (pipeline *Pipeline) consumeProviderStream(
 	if err != nil {
 		return err
 	}
+	result.Translation = result.Translation.Merge(
+		terminal.TranslationReport(),
+	)
 	intents := terminal.ToolIntents()
 	if err := pipeline.decideTools(ctx, request, selection, intents); err != nil {
 		_ = terminal.Reject()

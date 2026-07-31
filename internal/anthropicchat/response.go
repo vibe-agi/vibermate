@@ -102,6 +102,15 @@ func (codec *Codec) DecodeProviderResponse(
 				errors.New("response body has an invalid size"),
 			)
 	}
+	toolCatalog, err := buildProviderToolCatalog(request)
+	if err != nil {
+		return protocolcore.Response{}, protocolcore.TranslationReport{},
+			protocolcore.NewFailure(
+				protocolcore.ReasonInvalidClientRequest,
+				"$.tools",
+				err,
+			)
+	}
 
 	var wire openAIResponseWire
 	if err := decodeStrict(body, &wire); err != nil {
@@ -202,6 +211,7 @@ func (codec *Codec) DecodeProviderResponse(
 		}
 		toolCallIDs[toolCall.ID] = struct{}{}
 		block, err := codec.decodeCompleteToolCall(
+			toolCatalog,
 			toolCall,
 			fmt.Sprintf("$.choices[0].message.tool_calls[%d]", index),
 		)
@@ -253,6 +263,7 @@ func (codec *Codec) DecodeProviderResponse(
 	}
 	response := protocolcore.Response{
 		ID:                 wire.ID,
+		CreatedAtUnix:      wire.Created,
 		RequestedModel:     request.RequestedModel,
 		EffectiveModel:     request.EffectiveModel,
 		ReportedModel:      wire.Model,
@@ -277,6 +288,7 @@ func (codec *Codec) DecodeProviderResponse(
 }
 
 func (codec *Codec) decodeCompleteToolCall(
+	toolCatalog providerToolCatalog,
 	wire openAIToolCallWire,
 	path string,
 ) (protocolcore.ContentBlock, error) {
@@ -295,7 +307,16 @@ func (codec *Codec) decodeCompleteToolCall(
 			err,
 		)
 	}
-	arguments, err := protocolcore.NewJSONObject(
+	entry, err := toolCatalog.clientEntryForProvider(wire.Function.Name)
+	if err != nil {
+		return protocolcore.ContentBlock{}, protocolcore.NewFailure(
+			protocolcore.ReasonUnsupportedProviderData,
+			path+".function.name",
+			err,
+		)
+	}
+	call, err := entry.clientCall(
+		key,
 		[]byte(wire.Function.Arguments),
 		codec.options.MaxToolArgumentBytes,
 	)
@@ -306,11 +327,7 @@ func (codec *Codec) decodeCompleteToolCall(
 			err,
 		)
 	}
-	block, err := protocolcore.NewToolCallBlock(protocolcore.ToolCall{
-		Key:       key,
-		Name:      wire.Function.Name,
-		Arguments: arguments,
-	})
+	block, err := protocolcore.NewToolCallBlock(call)
 	if err != nil {
 		return protocolcore.ContentBlock{}, protocolcore.NewFailure(
 			protocolcore.ReasonInvalidProviderResponse,
@@ -415,6 +432,14 @@ func decodeUsage(wire *openAIUsageWire) (protocolcore.Usage, error) {
 			Known:  true,
 			Source: source,
 		},
+	}
+	if wire.CompletionTokensDetails != nil &&
+		wire.CompletionTokensDetails.reasoningTokensPresent {
+		usage.Reasoning = protocolcore.UsageValue{
+			Tokens: wire.CompletionTokensDetails.ReasoningTokens,
+			Known:  true,
+			Source: source,
+		}
 	}
 	if err := usage.Validate(); err != nil {
 		return protocolcore.Usage{}, protocolcore.NewFailure(

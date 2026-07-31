@@ -79,8 +79,11 @@ func (clientCodecFixture) DecodeRequest(
 	return protocolcore.Request{}, protocolcore.TranslationReport{}, nil
 }
 
-func (clientCodecFixture) EncodeResponse(protocolcore.Response) ([]byte, error) {
-	return nil, nil
+func (clientCodecFixture) EncodeResponse(
+	protocolcore.Request,
+	protocolcore.Response,
+) ([]byte, protocolcore.TranslationReport, error) {
+	return nil, protocolcore.TranslationReport{}, nil
 }
 
 type backendCodecFixture struct{}

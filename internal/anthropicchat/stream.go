@@ -13,6 +13,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/vibe-agi/vibermate/internal/protocolcore"
+	"github.com/vibe-agi/vibermate/internal/protocolpath"
 	"github.com/vibe-agi/vibermate/internal/ssewire"
 )
 
@@ -71,11 +72,14 @@ type streamToolAccumulator struct {
 type ProviderStream struct {
 	mu sync.Mutex
 
-	codec   *Codec
-	request protocolcore.Request
-	decoder *ssewire.Decoder
+	codec       *Codec
+	request     protocolcore.Request
+	decoder     *ssewire.Decoder
+	encoder     protocolpath.ClientStreamEncoder
+	toolCatalog providerToolCatalog
 
 	responseID       string
+	createdAtUnix    int64
 	reportedModel    string
 	messageStarted   bool
 	textOpen         bool
@@ -102,6 +106,16 @@ type ProviderStream struct {
 func (codec *Codec) NewProviderStream(
 	request protocolcore.Request,
 ) (*ProviderStream, error) {
+	return codec.NewProviderStreamWithEncoder(
+		request,
+		newAnthropicStreamEncoder(request),
+	)
+}
+
+func (codec *Codec) NewProviderStreamWithEncoder(
+	request protocolcore.Request,
+	encoder protocolpath.ClientStreamEncoder,
+) (*ProviderStream, error) {
 	if err := request.Validate(); err != nil {
 		return nil, protocolcore.NewFailure(
 			protocolcore.ReasonInvalidClientRequest,
@@ -116,15 +130,28 @@ func (codec *Codec) NewProviderStream(
 			errors.New("request is not configured for streaming"),
 		)
 	}
+	if encoder == nil {
+		return nil, errors.New("client stream encoder is required")
+	}
+	toolCatalog, err := buildProviderToolCatalog(request)
+	if err != nil {
+		return nil, protocolcore.NewFailure(
+			protocolcore.ReasonInvalidClientRequest,
+			"$.tools",
+			err,
+		)
+	}
 	decoder, err := ssewire.NewDecoder(codec.options.SSE)
 	if err != nil {
 		return nil, err
 	}
 	return &ProviderStream{
-		codec:   codec,
-		request: request.Clone(),
-		decoder: decoder,
-		tools:   make(map[int]*streamToolAccumulator),
+		codec:       codec,
+		request:     request.Clone(),
+		decoder:     decoder,
+		encoder:     encoder,
+		toolCatalog: toolCatalog,
+		tools:       make(map[int]*streamToolAccumulator),
 	}, nil
 }
 
@@ -279,13 +306,12 @@ func (stream *ProviderStream) FinishDecoded(
 		responseBlocks = append(responseBlocks, block)
 	}
 	if stream.textOpen {
-		if err := appendEvent(&release, "content_block_stop", struct {
-			Type  string `json:"type"`
-			Index int    `json:"index"`
-		}{Type: "content_block_stop", Index: stream.textIndex}); err != nil {
+		encoded, err := stream.encoder.StopText(stream.textIndex)
+		if err != nil {
 			stream.failed = true
 			return nil, err
 		}
+		release.Write(encoded)
 	}
 
 	intents := make([]protocolcore.ToolIntent, 0, len(toolIndexes))
@@ -310,7 +336,22 @@ func (stream *ProviderStream) FinishDecoded(
 				err,
 			)
 		}
-		arguments, err := protocolcore.NewJSONObject(
+		entry, err := stream.toolCatalog.clientEntryForProvider(
+			accumulator.name,
+		)
+		if err != nil {
+			stream.failed = true
+			return nil, protocolcore.NewFailure(
+				protocolcore.ReasonToolCallIncomplete,
+				fmt.Sprintf(
+					"$.choices[0].delta.tool_calls[%d].function.name",
+					index,
+				),
+				err,
+			)
+		}
+		call, err := entry.clientCall(
+			key,
 			accumulator.arguments,
 			stream.codec.options.MaxToolArgumentBytes,
 		)
@@ -318,20 +359,10 @@ func (stream *ProviderStream) FinishDecoded(
 			stream.failed = true
 			return nil, protocolcore.NewFailure(
 				protocolcore.ReasonToolCallIncomplete,
-				fmt.Sprintf("$.choices[0].delta.tool_calls[%d].function.arguments", index),
-				err,
-			)
-		}
-		call := protocolcore.ToolCall{
-			Key:       key,
-			Name:      accumulator.name,
-			Arguments: arguments,
-		}
-		if err := call.Validate(); err != nil {
-			stream.failed = true
-			return nil, protocolcore.NewFailure(
-				protocolcore.ReasonToolCallIncomplete,
-				fmt.Sprintf("$.choices[0].delta.tool_calls[%d]", index),
+				fmt.Sprintf(
+					"$.choices[0].delta.tool_calls[%d].function.arguments",
+					index,
+				),
 				err,
 			)
 		}
@@ -348,61 +379,12 @@ func (stream *ProviderStream) FinishDecoded(
 		})
 		blockIndex := stream.nextBlockIndex
 		stream.nextBlockIndex++
-		if err := appendEvent(&release, "content_block_start", struct {
-			Type         string `json:"type"`
-			Index        int    `json:"index"`
-			ContentBlock struct {
-				Type  string          `json:"type"`
-				ID    string          `json:"id"`
-				Name  string          `json:"name"`
-				Input json.RawMessage `json:"input"`
-			} `json:"content_block"`
-		}{
-			Type:  "content_block_start",
-			Index: blockIndex,
-			ContentBlock: struct {
-				Type  string          `json:"type"`
-				ID    string          `json:"id"`
-				Name  string          `json:"name"`
-				Input json.RawMessage `json:"input"`
-			}{
-				Type:  "tool_use",
-				ID:    call.Key.WireID(),
-				Name:  call.Name,
-				Input: json.RawMessage("{}"),
-			},
-		}); err != nil {
+		encoded, err := stream.encoder.ToolCall(blockIndex, call)
+		if err != nil {
 			stream.failed = true
 			return nil, err
 		}
-		if err := appendEvent(&release, "content_block_delta", struct {
-			Type  string `json:"type"`
-			Index int    `json:"index"`
-			Delta struct {
-				Type        string `json:"type"`
-				PartialJSON string `json:"partial_json"`
-			} `json:"delta"`
-		}{
-			Type:  "content_block_delta",
-			Index: blockIndex,
-			Delta: struct {
-				Type        string `json:"type"`
-				PartialJSON string `json:"partial_json"`
-			}{
-				Type:        "input_json_delta",
-				PartialJSON: string(call.Arguments.Bytes()),
-			},
-		}); err != nil {
-			stream.failed = true
-			return nil, err
-		}
-		if err := appendEvent(&release, "content_block_stop", struct {
-			Type  string `json:"type"`
-			Index int    `json:"index"`
-		}{Type: "content_block_stop", Index: blockIndex}); err != nil {
-			stream.failed = true
-			return nil, err
-		}
+		release.Write(encoded)
 	}
 
 	if !stream.usageSeen {
@@ -424,7 +406,11 @@ func (stream *ProviderStream) FinishDecoded(
 		responseBlocks = append(responseBlocks, block)
 		blockIndex := stream.nextBlockIndex
 		stream.nextBlockIndex++
-		if err := appendTextBlock(&release, blockIndex, held); err != nil {
+		if err := stream.appendEncodedTextBlock(
+			&release,
+			blockIndex,
+			held,
+		); err != nil {
 			stream.failed = true
 			return nil, err
 		}
@@ -444,6 +430,16 @@ func (stream *ProviderStream) FinishDecoded(
 			return nil, err
 		}
 		responseBlocks = append(responseBlocks, block)
+		blockIndex := stream.nextBlockIndex
+		stream.nextBlockIndex++
+		if err := stream.appendEncodedTextBlock(
+			&release,
+			blockIndex,
+			"",
+		); err != nil {
+			stream.failed = true
+			return nil, err
+		}
 	}
 
 	if stream.usageSeen && stream.usage.InputUncached.Known {
@@ -453,10 +449,6 @@ func (stream *ProviderStream) FinishDecoded(
 				Path: "$.usage",
 			},
 		))
-	}
-	if err := appendTerminalEvents(&release, stream.finishReason, stream.usage); err != nil {
-		stream.failed = true
-		return nil, err
 	}
 	providerExtensions := make([]protocolcore.ProviderExtension, 0, 2)
 	if len(stream.reasoning) > 0 {
@@ -484,6 +476,7 @@ func (stream *ProviderStream) FinishDecoded(
 	}
 	response := protocolcore.Response{
 		ID:                 stream.responseID,
+		CreatedAtUnix:      stream.createdAtUnix,
 		RequestedModel:     stream.request.RequestedModel,
 		EffectiveModel:     stream.request.EffectiveModel,
 		ReportedModel:      stream.reportedModel,
@@ -500,8 +493,42 @@ func (stream *ProviderStream) FinishDecoded(
 			err,
 		)
 	}
+	terminalBytes, err := stream.encoder.Terminal(response)
+	if err != nil {
+		stream.failed = true
+		return nil, err
+	}
+	release.Write(terminalBytes)
+	stream.report = stream.report.Merge(
+		stream.encoder.TranslationReport(),
+	)
 	stream.finished = true
 	return newPendingTerminal(release.Bytes(), response, intents, stream.report), nil
+}
+
+func (stream *ProviderStream) appendEncodedTextBlock(
+	destination *bytes.Buffer,
+	index int,
+	text string,
+) error {
+	start, err := stream.encoder.StartText(index)
+	if err != nil {
+		return err
+	}
+	destination.Write(start)
+	if text != "" {
+		delta, err := stream.encoder.AppendText(index, text)
+		if err != nil {
+			return err
+		}
+		destination.Write(delta)
+	}
+	stop, err := stream.encoder.StopText(index)
+	if err != nil {
+		return err
+	}
+	destination.Write(stop)
+	return nil
 }
 
 func (stream *ProviderStream) checkMutable(ctx context.Context) error {
@@ -533,7 +560,12 @@ func (stream *ProviderStream) consumeChunk(
 			errors.New("provider stream object is invalid"),
 		)
 	}
-	if err := stream.ensureMessageStarted(safe, chunk.ID, chunk.Model); err != nil {
+	if err := stream.ensureMessageStarted(
+		safe,
+		chunk.ID,
+		chunk.Created,
+		chunk.Model,
+	); err != nil {
 		return err
 	}
 	if chunk.ServiceTier != nil {
@@ -684,6 +716,7 @@ func (stream *ProviderStream) consumeReasoning(raw json.RawMessage) error {
 func (stream *ProviderStream) ensureMessageStarted(
 	safe *bytes.Buffer,
 	responseID string,
+	createdAtUnix int64,
 	reportedModel string,
 ) error {
 	if responseID == "" || len(responseID) > 512 || !utf8.ValidString(responseID) {
@@ -702,8 +735,17 @@ func (stream *ProviderStream) ensureMessageStarted(
 			errors.New("provider reported model is invalid"),
 		)
 	}
+	if createdAtUnix < 0 {
+		return protocolcore.NewFailure(
+			protocolcore.ReasonInvalidProviderResponse,
+			"$.created",
+			errors.New("provider response creation time is negative"),
+		)
+	}
 	if stream.messageStarted {
-		if responseID != stream.responseID || reportedModel != stream.reportedModel {
+		if responseID != stream.responseID ||
+			createdAtUnix != stream.createdAtUnix ||
+			reportedModel != stream.reportedModel {
 			return protocolcore.NewFailure(
 				protocolcore.ReasonStreamStateViolation,
 				"$",
@@ -713,50 +755,20 @@ func (stream *ProviderStream) ensureMessageStarted(
 		return nil
 	}
 	stream.responseID = responseID
+	stream.createdAtUnix = createdAtUnix
 	stream.reportedModel = reportedModel
 	stream.messageStarted = true
 	stream.semanticProgress++
-	return appendEvent(safe, "message_start", struct {
-		Type    string `json:"type"`
-		Message struct {
-			ID           string             `json:"id"`
-			Type         string             `json:"type"`
-			Role         string             `json:"role"`
-			Model        string             `json:"model"`
-			Content      []any              `json:"content"`
-			StopReason   *string            `json:"stop_reason"`
-			StopSequence *string            `json:"stop_sequence"`
-			Usage        anthropicUsageWire `json:"usage"`
-			Container    any                `json:"container"`
-			StopDetails  any                `json:"stop_details"`
-		} `json:"message"`
-	}{
-		Type: "message_start",
-		Message: struct {
-			ID           string             `json:"id"`
-			Type         string             `json:"type"`
-			Role         string             `json:"role"`
-			Model        string             `json:"model"`
-			Content      []any              `json:"content"`
-			StopReason   *string            `json:"stop_reason"`
-			StopSequence *string            `json:"stop_sequence"`
-			Usage        anthropicUsageWire `json:"usage"`
-			Container    any                `json:"container"`
-			StopDetails  any                `json:"stop_details"`
-		}{
-			ID:      responseID,
-			Type:    "message",
-			Role:    "assistant",
-			Model:   stream.request.RequestedModel,
-			Content: []any{},
-			Usage: anthropicUsageWire{
-				CacheCreationInputTokens: int64Pointer(0),
-				CacheReadInputTokens:     int64Pointer(0),
-			},
-			Container:   nil,
-			StopDetails: nil,
-		},
+	encoded, err := stream.encoder.Start(protocolpath.StreamStart{
+		ResponseID:    responseID,
+		CreatedAtUnix: createdAtUnix,
+		ReportedModel: reportedModel,
 	})
+	if err != nil {
+		return err
+	}
+	safe.Write(encoded)
+	return nil
 }
 
 func (stream *ProviderStream) consumeText(safe *bytes.Buffer, text string) error {
@@ -796,39 +808,18 @@ func (stream *ProviderStream) consumeText(safe *bytes.Buffer, text string) error
 		stream.textIndex = stream.nextBlockIndex
 		stream.nextBlockIndex++
 		stream.textOpen = true
-		if err := appendEvent(safe, "content_block_start", struct {
-			Type         string `json:"type"`
-			Index        int    `json:"index"`
-			ContentBlock struct {
-				Type string `json:"type"`
-				Text string `json:"text"`
-			} `json:"content_block"`
-		}{
-			Type:  "content_block_start",
-			Index: stream.textIndex,
-			ContentBlock: struct {
-				Type string `json:"type"`
-				Text string `json:"text"`
-			}{Type: "text", Text: ""},
-		}); err != nil {
+		encoded, err := stream.encoder.StartText(stream.textIndex)
+		if err != nil {
 			return err
 		}
+		safe.Write(encoded)
 	}
-	return appendEvent(safe, "content_block_delta", struct {
-		Type  string `json:"type"`
-		Index int    `json:"index"`
-		Delta struct {
-			Type string `json:"type"`
-			Text string `json:"text"`
-		} `json:"delta"`
-	}{
-		Type:  "content_block_delta",
-		Index: stream.textIndex,
-		Delta: struct {
-			Type string `json:"type"`
-			Text string `json:"text"`
-		}{Type: "text_delta", Text: text},
-	})
+	encoded, err := stream.encoder.AppendText(stream.textIndex, text)
+	if err != nil {
+		return err
+	}
+	safe.Write(encoded)
+	return nil
 }
 
 func (stream *ProviderStream) consumeToolFragments(
@@ -837,12 +828,11 @@ func (stream *ProviderStream) consumeToolFragments(
 ) error {
 	if !stream.barrier {
 		if stream.textOpen {
-			if err := appendEvent(safe, "content_block_stop", struct {
-				Type  string `json:"type"`
-				Index int    `json:"index"`
-			}{Type: "content_block_stop", Index: stream.textIndex}); err != nil {
+			encoded, err := stream.encoder.StopText(stream.textIndex)
+			if err != nil {
 				return err
 			}
+			safe.Write(encoded)
 			stream.textOpen = false
 		}
 		stream.barrier = true

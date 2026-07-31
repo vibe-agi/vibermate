@@ -436,11 +436,12 @@ func CheckProtocolSDKIsolation(repositoryRoot string) []Violation {
 		filepath.Join("internal", "anthropicchat"),
 		filepath.Join("internal", "openairesponses"),
 		filepath.Join("internal", "protocolcore"),
+		filepath.Join("internal", "responseschat"),
 		filepath.Join("internal", "ssewire"),
 	}
-	blockedImports := map[string]struct{}{
-		"github.com/anthropics/anthropic-sdk-go": {},
-		"github.com/openai/openai-go/v3":         {},
+	blockedImportRoots := []string{
+		"github.com/anthropics/anthropic-sdk-go",
+		"github.com/openai/openai-go/v3",
 	}
 	var violations []Violation
 	for _, relativeRoot := range protectedRoots {
@@ -476,7 +477,7 @@ func CheckProtocolSDKIsolation(repositoryRoot string) []Violation {
 				}
 				for _, imported := range parsed.Imports {
 					importPath := strings.Trim(imported.Path.Value, `"`)
-					if _, blocked := blockedImports[importPath]; !blocked {
+					if !hasImportRoot(importPath, blockedImportRoots) {
 						continue
 					}
 					position := fileSet.Position(imported.Pos())
@@ -502,6 +503,16 @@ func CheckProtocolSDKIsolation(repositoryRoot string) []Violation {
 		}
 	}
 	return violations
+}
+
+func hasImportRoot(importPath string, roots []string) bool {
+	for _, root := range roots {
+		if importPath == root ||
+			strings.HasPrefix(importPath, root+"/") {
+			return true
+		}
+	}
+	return false
 }
 
 // CheckProductionEnglish rejects non-ASCII letters in implementation source,

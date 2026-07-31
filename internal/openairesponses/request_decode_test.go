@@ -234,13 +234,18 @@ func TestDecodeResponsesToolHistoryKeepsItemAndCallIdentitiesSeparate(t *testing
 func TestDecodeResponsesUnknownFieldFailsClosed(t *testing.T) {
 	t.Parallel()
 
-	_, _, err := newTestCodec(t).DecodeClientRequest([]byte(`{
+	body := []byte(`{
 		"model":"gpt-5.6-sol",
 		"input":[{"type":"message","role":"user","content":"hello"}],
 		"store":false,
 		"stream":true,
 		"private_extension":true
-	}`))
+	}`)
+	var oracle responses.ResponseNewParams
+	if err := json.Unmarshal(body, &oracle); err != nil {
+		t.Fatalf("official OpenAI SDK rejected extension fixture: %v", err)
+	}
+	_, _, err := newTestCodec(t).DecodeClientRequest(body)
 	if protocolcore.ReasonOf(err) != protocolcore.ReasonInvalidClientRequest {
 		t.Fatalf("DecodeClientRequest() error = %v", err)
 	}

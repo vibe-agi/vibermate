@@ -57,6 +57,7 @@ type openAIFunctionDefinition struct {
 	Name        string          `json:"name"`
 	Description string          `json:"description,omitempty"`
 	Parameters  json.RawMessage `json:"parameters"`
+	Strict      *bool           `json:"strict,omitempty"`
 }
 
 type openAIToolCallWire struct {
@@ -80,6 +81,15 @@ func (codec *Codec) EncodeProviderRequest(
 			err,
 		)
 	}
+	toolCatalog, err := buildProviderToolCatalog(request)
+	if err != nil {
+		return nil, protocolcore.TranslationReport{},
+			protocolcore.NewFailure(
+				protocolcore.ReasonUnsupportedClientInput,
+				"$.tools",
+				err,
+			)
+	}
 
 	messages := make([]openAIRequestMessageWire, 0, len(request.Messages)+len(request.System))
 	if len(request.System) > 0 {
@@ -94,7 +104,7 @@ func (codec *Codec) EncodeProviderRequest(
 	}
 	report := protocolcore.TranslationReport{}
 	for messageIndex, message := range request.Messages {
-		encoded, normalized, err := encodeMessage(message)
+		encoded, normalized, err := encodeMessage(message, toolCatalog)
 		if err != nil {
 			return nil, report, protocolcore.NewFailure(
 				protocolcore.ReasonUnsupportedClientInput,
@@ -103,6 +113,10 @@ func (codec *Codec) EncodeProviderRequest(
 			)
 		}
 		messages = append(messages, encoded...)
+		report = report.Merge(messageEncodingReport(
+			messageIndex,
+			message,
+		))
 		if normalized {
 			report = report.Merge(protocolcore.NewTranslationReport(protocolcore.TranslationNotice{
 				Code: protocolcore.NoticeContentOrderNormalized,
@@ -111,22 +125,50 @@ func (codec *Codec) EncodeProviderRequest(
 		}
 	}
 
-	tools := make([]openAIToolDefinitionWire, len(request.Tools))
-	for index, tool := range request.Tools {
+	tools := make([]openAIToolDefinitionWire, len(toolCatalog.entries))
+	for index, entry := range toolCatalog.entries {
+		tool := entry.definition
+		parameters := tool.InputSchema.Bytes()
+		if tool.EffectiveKind() == protocolcore.ToolKindCustom {
+			parameters = []byte(customToolInputSchema)
+		}
+		var strict *bool
+		if tool.StrictKnown {
+			value := tool.Strict
+			strict = &value
+		}
 		tools[index] = openAIToolDefinitionWire{
 			Type: "function",
 			Function: openAIFunctionDefinition{
-				Name:        tool.Name,
+				Name:        entry.providerName,
 				Description: tool.Description,
-				Parameters:  tool.InputSchema.Bytes(),
+				Parameters:  parameters,
+				Strict:      strict,
 			},
+		}
+		if entry.identity.namespace != "" {
+			report = report.Merge(protocolcore.NewTranslationReport(
+				protocolcore.TranslationNotice{
+					Code: protocolcore.NoticeToolNamespaceEncoded,
+					Path: entry.path,
+				},
+			))
+		}
+		if tool.EffectiveKind() == protocolcore.ToolKindCustom &&
+			tool.CustomFormat.Kind ==
+				protocolcore.CustomToolFormatGrammar {
+			report = report.Merge(protocolcore.NewTranslationReport(
+				protocolcore.TranslationNotice{
+					Code: protocolcore.NoticeCustomToolGrammarNotForwarded,
+					Path: entry.path + ".format",
+				},
+			))
 		}
 		if tool.EagerInputStreaming {
 			report = report.Merge(protocolcore.NewTranslationReport(
 				protocolcore.TranslationNotice{
 					Code: protocolcore.NoticeEagerToolInputStreamingNotForwarded,
-					Path: "$.tools[" + integerString(index) +
-						"].eager_input_streaming",
+					Path: entry.path + ".eager_input_streaming",
 				},
 			))
 		}
@@ -141,7 +183,15 @@ func (codec *Codec) EncodeProviderRequest(
 	case protocolcore.ToolChoiceRequired:
 		toolChoice = "required"
 	case protocolcore.ToolChoiceNamed:
-		toolChoice = openAINamedToolChoice(request.ToolChoice.Name)
+		entry, err := toolCatalog.namedEntry(request.ToolChoice.Name)
+		if err != nil {
+			return nil, report, protocolcore.NewFailure(
+				protocolcore.ReasonUnsupportedClientInput,
+				"$.tool_choice",
+				err,
+			)
+		}
+		toolChoice = openAINamedToolChoice(entry.providerName)
 	case protocolcore.ToolChoiceNone:
 		toolChoice = "none"
 	default:
@@ -186,6 +236,14 @@ func (codec *Codec) EncodeProviderRequest(
 			},
 		))
 	}
+	if request.OutputVerbosity != "" {
+		report = report.Merge(protocolcore.NewTranslationReport(
+			protocolcore.TranslationNotice{
+				Code: protocolcore.NoticeTextVerbosityNotForwarded,
+				Path: "$.text.verbosity",
+			},
+		))
+	}
 	switch request.Output.Kind {
 	case "":
 	case protocolcore.StructuredOutputJSONSchema:
@@ -204,19 +262,21 @@ func (codec *Codec) EncodeProviderRequest(
 			errors.New("structured output kind is unavailable"),
 		)
 	}
-	switch codec.providerRequest.completionTokenField {
-	case CompletionTokenFieldMaxTokens:
-		wire.MaxTokens = integerPointer(request.MaxOutputTokens)
-	case CompletionTokenFieldMaxCompletionTokens:
-		wire.MaxCompletionTokens = integerPointer(request.MaxOutputTokens)
-	default:
-		return nil, report, protocolcore.NewFailure(
-			protocolcore.ReasonUnsupportedClientInput,
-			"$.max_tokens",
-			errors.New("provider completion token field is unavailable"),
-		)
+	if request.MaxOutputTokens > 0 {
+		switch codec.providerRequest.completionTokenField {
+		case CompletionTokenFieldMaxTokens:
+			wire.MaxTokens = integerPointer(request.MaxOutputTokens)
+		case CompletionTokenFieldMaxCompletionTokens:
+			wire.MaxCompletionTokens = integerPointer(request.MaxOutputTokens)
+		default:
+			return nil, report, protocolcore.NewFailure(
+				protocolcore.ReasonUnsupportedClientInput,
+				"$.max_tokens",
+				errors.New("provider completion token field is unavailable"),
+			)
+		}
 	}
-	if len(request.Tools) > 0 {
+	if len(toolCatalog.entries) > 0 {
 		switch codec.providerRequest.toolReasoningMode {
 		case ToolReasoningModeOmit:
 			if wire.ReasoningEffort != "" {
@@ -249,6 +309,41 @@ func (codec *Codec) EncodeProviderRequest(
 		)
 	}
 	return encoded, report, nil
+}
+
+func messageEncodingReport(
+	messageIndex int,
+	message protocolcore.Message,
+) protocolcore.TranslationReport {
+	report := protocolcore.TranslationReport{}
+	for blockIndex, block := range message.Blocks {
+		if block.Kind != protocolcore.BlockToolCall {
+			continue
+		}
+		path := fmt.Sprintf(
+			"$.messages[%d].blocks[%d]",
+			messageIndex,
+			blockIndex,
+		)
+		if !block.ToolCall.ItemKey.IsZero() {
+			report = report.Merge(protocolcore.NewTranslationReport(
+				protocolcore.TranslationNotice{
+					Code: protocolcore.NoticeToolItemIdentityNotForwarded,
+					Path: path + ".item_id",
+				},
+			))
+		}
+		if block.ToolCall.EffectiveKind() ==
+			protocolcore.ToolKindCustom {
+			report = report.Merge(protocolcore.NewTranslationReport(
+				protocolcore.TranslationNotice{
+					Code: protocolcore.NoticeCustomToolKindEncoded,
+					Path: path + ".kind",
+				},
+			))
+		}
+	}
+	return report
 }
 
 func structuredOutputName(schema protocolcore.JSONDocument) string {
@@ -290,6 +385,30 @@ func (codec *Codec) encodeProviderReasoning(
 			protocolcore.TranslationNotice{
 				Code: protocolcore.NoticeTaskBudgetNotForwarded,
 				Path: "$.output_config.task_budget",
+			},
+		))
+	}
+	if intent.Context != "" {
+		report = report.Merge(protocolcore.NewTranslationReport(
+			protocolcore.TranslationNotice{
+				Code: protocolcore.NoticeReasoningContextNotForwarded,
+				Path: "$.reasoning.context",
+			},
+		))
+	}
+	if intent.Summary != "" {
+		report = report.Merge(protocolcore.NewTranslationReport(
+			protocolcore.TranslationNotice{
+				Code: protocolcore.NoticeReasoningSummaryNotForwarded,
+				Path: "$.reasoning.summary",
+			},
+		))
+	}
+	if intent.Execution != "" {
+		report = report.Merge(protocolcore.NewTranslationReport(
+			protocolcore.TranslationNotice{
+				Code: protocolcore.NoticeReasoningExecutionNotForwarded,
+				Path: "$.reasoning.mode",
 			},
 		))
 	}
@@ -335,8 +454,24 @@ func openAINamedToolChoice(name string) openAINamedToolChoiceWire {
 
 func encodeMessage(
 	message protocolcore.Message,
+	toolCatalog providerToolCatalog,
 ) ([]openAIRequestMessageWire, bool, error) {
 	switch message.Role {
+	case protocolcore.RoleSystem, protocolcore.RoleDeveloper:
+		var text string
+		for _, block := range message.Blocks {
+			if block.Kind != protocolcore.BlockText {
+				return nil, false, errors.New(
+					"instruction message contains an unsupported block",
+				)
+			}
+			text += block.Text
+		}
+		return []openAIRequestMessageWire{{
+			Role:    string(message.Role),
+			Content: stringPointer(text),
+		}}, false, nil
+
 	case protocolcore.RoleUser:
 		var encoded []openAIRequestMessageWire
 		var text string
@@ -393,12 +528,20 @@ func encodeMessage(
 					mixed = true
 				}
 				seenTool = true
+				entry, err := toolCatalog.providerEntryForCall(block.ToolCall)
+				if err != nil {
+					return nil, false, err
+				}
+				arguments, err := entry.providerArguments(block.ToolCall)
+				if err != nil {
+					return nil, false, err
+				}
 				toolCalls = append(toolCalls, openAIToolCallWire{
 					ID:   block.ToolCall.Key.WireID(),
 					Type: "function",
 					Function: openAIFunctionWire{
-						Name:      block.ToolCall.Name,
-						Arguments: string(block.ToolCall.Arguments.Bytes()),
+						Name:      entry.providerName,
+						Arguments: string(arguments),
 					},
 				})
 			default:
@@ -414,6 +557,23 @@ func encodeMessage(
 			Content:   content,
 			ToolCalls: toolCalls,
 		}}, mixed, nil
+
+	case protocolcore.RoleTool:
+		encoded := make([]openAIRequestMessageWire, len(message.Blocks))
+		for index, block := range message.Blocks {
+			if block.Kind != protocolcore.BlockToolResult {
+				return nil, false, errors.New(
+					"tool message contains an unsupported block",
+				)
+			}
+			content := block.ToolResult.Content
+			encoded[index] = openAIRequestMessageWire{
+				Role:       "tool",
+				Content:    &content,
+				ToolCallID: block.ToolResult.Key.WireID(),
+			}
+		}
+		return encoded, len(encoded) > 1, nil
 
 	default:
 		return nil, false, errors.New("message role cannot be encoded for Chat")

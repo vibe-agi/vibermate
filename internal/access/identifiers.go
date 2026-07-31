@@ -211,6 +211,7 @@ type Dialect string
 
 const (
 	DialectAnthropicMessages Dialect = "anthropic-messages"
+	DialectOpenAIResponses   Dialect = "openai-responses"
 	DialectOpenAIChat        Dialect = "openai-chat"
 )
 

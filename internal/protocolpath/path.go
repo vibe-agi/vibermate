@@ -18,7 +18,10 @@ type ClientCodec interface {
 	DecodeRequest(
 		[]byte,
 	) (protocolcore.Request, protocolcore.TranslationReport, error)
-	EncodeResponse(protocolcore.Response) ([]byte, error)
+	EncodeResponse(
+		protocolcore.Request,
+		protocolcore.Response,
+	) ([]byte, protocolcore.TranslationReport, error)
 }
 
 type BackendCodec interface {

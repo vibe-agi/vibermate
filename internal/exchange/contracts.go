@@ -690,6 +690,7 @@ type Result struct {
 	Outcome             AttemptOutcome
 	TransportResends    uint32
 	Ledger              LedgerSnapshot
+	Translation         protocolcore.TranslationReport
 	Credential          providertransport.CredentialEvidence
 	Transport           transportprofile.Evidence
 }
