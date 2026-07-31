@@ -2237,6 +2237,7 @@ func newToolApprovalSpec(
 	const (
 		marker       = "VIBEMATE_TOOL_DONE"
 		proofContent = "VIBEMATE_TOOL_APPROVAL_PROOF"
+		toolOutput   = "VIBEMATE_TOOL_EXEC_OK"
 	)
 	toolName := ""
 	proofPath := filepath.Join(
@@ -2260,12 +2261,14 @@ func newToolApprovalSpec(
 		prompt = fmt.Sprintf(
 			"In working directory %q, the expected proof file is %q. "+
 				"Use the %s tool exactly once with exactly this input: "+
-				"`printf %%s %s > approval-proof.txt`. "+
-				"Do not use any other tool. After it succeeds, reply exactly %s.",
+				"`printf %%s %s > approval-proof.txt && printf %%s %s`. "+
+				"Treat that output as success and do not call any tool again. "+
+				"After it succeeds, reply exactly %s.",
 			filepath.Clean(workingDirectory),
 			proofPath,
 			toolName,
 			proofContent,
+			toolOutput,
 			marker,
 		)
 	default:
