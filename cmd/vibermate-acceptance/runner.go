@@ -1558,22 +1558,38 @@ func runToolApproval(
 		return err
 	}
 	defer os.RemoveAll(workingDirectory)
+	spec, err := newToolApprovalSpec(workingDirectory)
+	if err != nil {
+		return err
+	}
 	run, err := startAgent(
 		config,
 		workingDirectory,
-		"Use TodoWrite exactly once to record one completed item, then reply VIBEMATE_TOOL_DONE.",
-		"TodoWrite",
-		"VIBEMATE_TOOL_DONE",
+		spec.prompt,
+		spec.toolName,
+		spec.marker,
 	)
 	if err != nil {
 		return err
+	}
+	if err := run.waitForConfiguredTool(ctx, spec.toolName); err != nil {
+		return err
+	}
+	if _, statErr := os.Stat(spec.proofPath); !errors.Is(
+		statErr,
+		os.ErrNotExist,
+	) {
+		if statErr == nil {
+			return errors.New("tool side effect occurred before approval")
+		}
+		return fmt.Errorf("inspect pre-approval tool proof: %w", statErr)
 	}
 	approval, err := waitForApproval(ctx, generation.control, run)
 	if err != nil {
 		return err
 	}
 	if len(approval.ToolNames) != 1 ||
-		approval.ToolNames[0] != "TodoWrite" {
+		approval.ToolNames[0] != spec.toolName {
 		return fmt.Errorf("unexpected approval tools: %v", approval.ToolNames)
 	}
 	_, _, toolUsesBeforeDecision, markerBeforeDecision := run.evidence()
@@ -1604,6 +1620,67 @@ func runToolApproval(
 			toolUses,
 			marker,
 		)
+	}
+	if err := verifyToolApprovalProof(spec); err != nil {
+		return err
+	}
+	return nil
+}
+
+type toolApprovalSpec struct {
+	prompt       string
+	toolName     string
+	marker       string
+	proofPath    string
+	proofContent string
+}
+
+func newToolApprovalSpec(workingDirectory string) (toolApprovalSpec, error) {
+	if !filepath.IsAbs(workingDirectory) {
+		return toolApprovalSpec{}, errors.New(
+			"tool approval working directory is not absolute",
+		)
+	}
+	const (
+		toolName     = "Write"
+		marker       = "VIBEMATE_TOOL_DONE"
+		proofContent = "VIBEMATE_TOOL_APPROVAL_PROOF"
+	)
+	proofPath := filepath.Join(
+		filepath.Clean(workingDirectory),
+		"approval-proof.txt",
+	)
+	return toolApprovalSpec{
+		prompt: fmt.Sprintf(
+			"Use the %s tool exactly once to create %q with exactly this content: %q. "+
+				"Do not use any other tool. After the tool succeeds, reply exactly %s.",
+			toolName,
+			proofPath,
+			proofContent,
+			marker,
+		),
+		toolName:     toolName,
+		marker:       marker,
+		proofPath:    proofPath,
+		proofContent: proofContent,
+	}, nil
+}
+
+func verifyToolApprovalProof(spec toolApprovalSpec) error {
+	info, err := os.Stat(spec.proofPath)
+	if err != nil {
+		return fmt.Errorf("inspect tool approval proof: %w", err)
+	}
+	if !info.Mode().IsRegular() ||
+		info.Size() != int64(len(spec.proofContent)) {
+		return errors.New("tool approval proof has an invalid shape")
+	}
+	content, err := os.ReadFile(spec.proofPath)
+	if err != nil {
+		return fmt.Errorf("read tool approval proof: %w", err)
+	}
+	if string(content) != spec.proofContent {
+		return errors.New("tool approval proof content did not match")
 	}
 	return nil
 }

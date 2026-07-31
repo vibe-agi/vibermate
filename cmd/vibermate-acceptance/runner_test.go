@@ -1,6 +1,8 @@
 package main
 
 import (
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -9,6 +11,58 @@ import (
 	"github.com/vibe-agi/vibermate/internal/connectionevent"
 	"github.com/vibe-agi/vibermate/internal/offlinehold"
 )
+
+func TestToolApprovalSpecUsesAvailableWriteToolAndBoundedProof(t *testing.T) {
+	t.Parallel()
+
+	workingDirectory := t.TempDir()
+	spec, err := newToolApprovalSpec(workingDirectory)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if spec.toolName != "Write" {
+		t.Fatalf("tool name = %q, want Write", spec.toolName)
+	}
+	if filepath.Dir(spec.proofPath) != workingDirectory {
+		t.Fatalf("proof path = %q", spec.proofPath)
+	}
+	if spec.proofContent == "" ||
+		!strings.Contains(spec.prompt, spec.proofPath) ||
+		!strings.Contains(spec.prompt, spec.proofContent) {
+		t.Fatalf("invalid proof specification: %+v", spec)
+	}
+	if err := verifyToolApprovalProof(spec); err == nil {
+		t.Fatal("missing proof passed verification")
+	}
+	if err := os.WriteFile(
+		spec.proofPath,
+		[]byte(spec.proofContent),
+		0o600,
+	); err != nil {
+		t.Fatal(err)
+	}
+	if err := verifyToolApprovalProof(spec); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(
+		spec.proofPath,
+		[]byte(spec.proofContent+"unexpected"),
+		0o600,
+	); err != nil {
+		t.Fatal(err)
+	}
+	if err := verifyToolApprovalProof(spec); err == nil {
+		t.Fatal("unexpected proof content passed verification")
+	}
+}
+
+func TestToolApprovalSpecRejectsRelativeWorkingDirectory(t *testing.T) {
+	t.Parallel()
+
+	if _, err := newToolApprovalSpec("relative"); err == nil {
+		t.Fatal("relative working directory was accepted")
+	}
+}
 
 func TestAcceptancePhasesAlwaysIsolateConfiguredSecretReference(t *testing.T) {
 	t.Parallel()

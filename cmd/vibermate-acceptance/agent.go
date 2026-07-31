@@ -43,6 +43,9 @@ type agentRun struct {
 	failure    agentFailureEvidence
 	readErr    error
 	changed    chan struct{}
+
+	configurationSeen bool
+	configuredTools   []string
 }
 
 type agentFailureEvidence struct {
@@ -209,6 +212,10 @@ func (run *agentRun) observeLine(line []byte) {
 	run.deltas += countType(envelope, "content_block_delta")
 	run.toolUses += trustedToolUseCount(envelope)
 	run.failure.merge(failureEvidenceFromEnvelope(envelope))
+	if tools, initialized := trustedConfiguredTools(envelope); initialized {
+		run.configurationSeen = true
+		run.configuredTools = tools
+	}
 	if typed, ok := envelope.(map[string]any); ok {
 		kind, _ := typed["type"].(string)
 		if validEnvelopeType(kind) {
@@ -225,6 +232,32 @@ func (run *agentRun) observeLine(line []byte) {
 		candidate = candidate[len(candidate)-tailLimit:]
 	}
 	run.markerTail = candidate
+}
+
+func trustedConfiguredTools(value any) ([]string, bool) {
+	envelope, ok := value.(map[string]any)
+	if !ok {
+		return nil, false
+	}
+	kind, _ := envelope["type"].(string)
+	subtype, _ := envelope["subtype"].(string)
+	if kind != "system" || subtype != "init" {
+		return nil, false
+	}
+	rawTools, ok := envelope["tools"].([]any)
+	if !ok || len(rawTools) > 128 {
+		return nil, true
+	}
+	tools := make([]string, 0, len(rawTools))
+	for _, rawTool := range rawTools {
+		tool, valid := rawTool.(string)
+		if !valid || tool == "" || len(tool) > 128 {
+			return nil, true
+		}
+		tools = append(tools, tool)
+	}
+	slices.Sort(tools)
+	return slices.Compact(tools), true
 }
 
 func failureEvidenceFromEnvelope(value any) agentFailureEvidence {
@@ -792,6 +825,66 @@ func (run *agentRun) waitForDelta(ctx context.Context) error {
 			return fmt.Errorf(
 				"Claude exited before its first streamed delta: %w",
 				normalizeWaitError(waitErr),
+			)
+		}
+	}
+}
+
+func (run *agentRun) waitForConfiguredTool(
+	ctx context.Context,
+	expected string,
+) error {
+	if run == nil {
+		return errors.New("Claude run is nil")
+	}
+	if expected == "" {
+		return errors.New("expected Claude tool is empty")
+	}
+	for {
+		run.mu.Lock()
+		if run.configurationSeen {
+			tools := append([]string(nil), run.configuredTools...)
+			run.mu.Unlock()
+			if slices.Contains(tools, expected) {
+				return nil
+			}
+			return fmt.Errorf(
+				"Claude init did not expose required tool %q; available tools: %s",
+				expected,
+				strings.Join(tools, ","),
+			)
+		}
+		if run.readErr != nil {
+			err := run.readErr
+			run.mu.Unlock()
+			return err
+		}
+		changed := run.changed
+		run.mu.Unlock()
+		select {
+		case <-changed:
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-run.done:
+			select {
+			case <-run.outputDone:
+			case <-ctx.Done():
+				return ctx.Err()
+			}
+			run.mu.Lock()
+			seen := run.configurationSeen
+			tools := append([]string(nil), run.configuredTools...)
+			readErr := run.readErr
+			run.mu.Unlock()
+			if readErr != nil {
+				return readErr
+			}
+			if seen && slices.Contains(tools, expected) {
+				return nil
+			}
+			return fmt.Errorf(
+				"Claude exited before exposing required tool %q",
+				expected,
 			)
 		}
 	}

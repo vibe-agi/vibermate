@@ -73,6 +73,58 @@ func TestAgentEvidenceTrustsOnlyAssistantOutput(t *testing.T) {
 	}
 }
 
+func TestConfiguredToolsTrustOnlyClaudeSystemInit(t *testing.T) {
+	t.Parallel()
+
+	tools, initialized := trustedConfiguredTools(map[string]any{
+		"type":    "assistant",
+		"subtype": "init",
+		"tools":   []any{"Write"},
+	})
+	if initialized || len(tools) != 0 {
+		t.Fatalf("assistant envelope tools = %v initialized=%t", tools, initialized)
+	}
+
+	tools, initialized = trustedConfiguredTools(map[string]any{
+		"type":    "system",
+		"subtype": "init",
+		"tools":   []any{"Write", "Write", "Read"},
+	})
+	if !initialized || !slices.Equal(tools, []string{"Read", "Write"}) {
+		t.Fatalf("system init tools = %v initialized=%t", tools, initialized)
+	}
+
+	tools, initialized = trustedConfiguredTools(map[string]any{
+		"type":    "system",
+		"subtype": "init",
+		"tools":   []any{"Write", 7},
+	})
+	if !initialized || len(tools) != 0 {
+		t.Fatalf("malformed init tools = %v initialized=%t", tools, initialized)
+	}
+}
+
+func TestWaitForConfiguredToolRequiresExactInitTool(t *testing.T) {
+	t.Parallel()
+
+	run := &agentRun{
+		configurationSeen: true,
+		configuredTools:   []string{"Read", "Write"},
+	}
+	if err := run.waitForConfiguredTool(
+		context.Background(),
+		"Write",
+	); err != nil {
+		t.Fatal(err)
+	}
+	if err := run.waitForConfiguredTool(
+		context.Background(),
+		"WriteFile",
+	); err == nil {
+		t.Fatal("unconfigured tool was accepted")
+	}
+}
+
 func TestAcceptanceEnvironmentReplacesAmbientProviderCredentials(t *testing.T) {
 	t.Parallel()
 
