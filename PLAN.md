@@ -48,6 +48,9 @@ checks but are superseded for these three evidence claims.
 ### 1. Bind fallback to two independent evidence sources
 
 - [x] Add a failing test that rejects connection-audit-only evidence.
+- [x] Match the fixed client's real typed warning shape: the exact fallback
+  prefix plus nonempty bounded transport detail; reject assistant text,
+  unrelated warnings, missing detail, and oversized detail.
 - [x] Call the existing trusted Codex `waitForHTTPFallback` boundary.
 - [x] Capture the proxy connection audit while the fallback HTTP request is
   still held, then require the typed client event from the same invocation

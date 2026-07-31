@@ -396,7 +396,8 @@ func TestCodexJSONLEvidenceTrustsOnlyTypedClientEvents(t *testing.T) {
 	}
 	run.observeLine(mustJSON(t, map[string]any{
 		"type": "user_message",
-		"text": "VIBEMATE_CODEX_OK " + codexHTTPFallbackMessage,
+		"text": "VIBEMATE_CODEX_OK " + codexHTTPFallbackPrefix +
+			"synthetic transport failure",
 	}))
 	if run.httpFallbackSeen {
 		t.Fatal("Assistant text forged HTTP fallback evidence")
@@ -413,7 +414,7 @@ func TestCodexJSONLEvidenceTrustsOnlyTypedClientEvents(t *testing.T) {
 		"type": "item.completed",
 		"item": map[string]any{
 			"type": "agent_message",
-			"text": codexHTTPFallbackMessage,
+			"text": codexHTTPFallbackPrefix + "synthetic transport failure",
 		},
 	}))
 	if run.httpFallbackSeen {
@@ -423,7 +424,7 @@ func TestCodexJSONLEvidenceTrustsOnlyTypedClientEvents(t *testing.T) {
 		"type": "item.completed",
 		"item": map[string]any{
 			"type":    "error",
-			"message": codexHTTPFallbackMessage,
+			"message": codexHTTPFallbackPrefix + "synthetic transport failure",
 		},
 	}))
 	run.observeLine(mustJSON(t, map[string]any{
@@ -454,6 +455,43 @@ func TestCodexJSONLEvidenceTrustsOnlyTypedClientEvents(t *testing.T) {
 		run.toolUses != 1 ||
 		!run.markerSeen {
 		t.Fatalf("Codex evidence = %+v", run)
+	}
+}
+
+func TestCodexHTTPFallbackMessageRequiresBoundedTransportDetail(t *testing.T) {
+	t.Parallel()
+
+	for _, test := range []struct {
+		name    string
+		message string
+		want    bool
+	}{
+		{
+			name:    "typed fallback",
+			message: codexHTTPFallbackPrefix + "unexpected HTTP status: 426",
+			want:    true,
+		},
+		{
+			name:    "missing detail",
+			message: strings.TrimSpace(codexHTTPFallbackPrefix),
+		},
+		{
+			name:    "different warning",
+			message: "Reconnecting... 1/5",
+		},
+		{
+			name: "oversized detail",
+			message: codexHTTPFallbackPrefix +
+				strings.Repeat("x", (4<<10)+1),
+		},
+	} {
+		test := test
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+			if got := isCodexHTTPFallbackMessage(test.message); got != test.want {
+				t.Fatalf("fallback message match = %t, want %t", got, test.want)
+			}
+		})
 	}
 }
 

@@ -26,7 +26,7 @@ const (
 	maxAgentLines            = 8192
 	codexStateDirectoryName  = ".vibermate-codex"
 	fixedCodexRequestedModel = "gpt-5.6-sol"
-	codexHTTPFallbackMessage = "Falling back from WebSockets to HTTPS transport."
+	codexHTTPFallbackPrefix  = "Falling back from WebSockets to HTTPS transport. "
 	codexHTTPProviderSelect  = `model_provider="vibermate-http"`
 	codexHTTPProviderDefine  = `model_providers.vibermate-http={name="VibeMate Responses HTTP",base_url="https://api.openai.com/v1",env_key="CODEX_API_KEY",wire_api="responses",requires_openai_auth=false,supports_websockets=false}`
 )
@@ -676,7 +676,7 @@ func (run *agentRun) observeCodexCompletedItem(raw json.RawMessage) {
 		run.agentMessages++
 		run.observeTrustedText(item.Text)
 	case "error":
-		if strings.TrimSpace(item.Message) == codexHTTPFallbackMessage {
+		if isCodexHTTPFallbackMessage(item.Message) {
 			run.httpFallbackSeen = true
 		}
 		run.failure.merge(extractAgentFailureEvidence(raw))
@@ -687,6 +687,20 @@ func (run *agentRun) observeCodexCompletedItem(raw json.RawMessage) {
 		"web_search":
 		run.toolUses++
 	}
+}
+
+func isCodexHTTPFallbackMessage(message string) bool {
+	const maxFallbackMessageBytes = 4 << 10
+	trimmed := strings.TrimSpace(message)
+	if len(trimmed) > maxFallbackMessageBytes ||
+		!strings.HasPrefix(trimmed, codexHTTPFallbackPrefix) {
+		return false
+	}
+	detail := strings.TrimSpace(strings.TrimPrefix(
+		trimmed,
+		codexHTTPFallbackPrefix,
+	))
+	return detail != ""
 }
 
 func (run *agentRun) setReadError(err error) {
