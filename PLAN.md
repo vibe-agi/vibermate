@@ -4,7 +4,7 @@ Status: complete
 Created: 2026-08-01
 Completed: 2026-08-01
 Implementation baseline: `cf3f599e11ee13f82fef0e8a6b8c09e38878b124`
-Frozen implementation candidate: `2d525d662fa6df2ec0c6a7d32ee2c92b3ff013be`
+Frozen implementation candidate: `6d3b0ec7196f0d8e8fc71afc6c894e180cbe8ca6`
 
 ## Objective
 
@@ -260,30 +260,30 @@ user-facing copy, if any unexpectedly becomes necessary, must use synchronized
 ## Frozen candidate and evidence
 
 - Implementation source: clean commit
-  `2d525d662fa6df2ec0c6a7d32ee2c92b3ff013be`.
+  `6d3b0ec7196f0d8e8fc71afc6c894e180cbe8ca6`.
 - Standalone clean checkout:
   `/private/tmp/vibermate-m10a.AtPYtn/source`.
 - Packaged development-profile App:
   `/private/tmp/vibermate-m10a.AtPYtn/source/ui/desktop/src-tauri/target/release/bundle/macos/VibeMate.app`.
 - App-bundle digest recorded by the acceptance provenance:
-  `79594a8e80abf495553dc5abc61d762e52dee1ab0772fbd0431b9fae7035f2b8`.
+  `a9fe7cbeca33b108a5f282e12919e60b7bdfe9ed6ceb37cd21d6e446798da6dd`.
 - Packaged daemon digest:
-  `d5b3d3f39e9ef9213d0905ee86545ea25f665b9e7f3264392b4e4b0ea0a530de`.
+  `fc3eb1cf614c688a26c268d1b4dd4559ab28892dd04494612a383e59b847094d`.
 - Packaged launcher digest:
-  `fd041874c0c1898995cb7c15e65c6c260cd2d142083831d969f811f6e10568ab`.
+  `d9b4ac4379a78d255c581e60b2049c71f022c60604184307f4c83982396c30e9`.
 - Embedded build-manifest digest:
-  `253c9d3a9bead6a33c786efe05aab543ad501a7871abb7a8dc9f5ff38cbcf021`.
+  `a8fa023b57e027b72d9b55a569f55f6d541ff22ed7951e28e155c4f11f3856ed`.
 - Acceptance-runner digest:
-  `c923e35c210f0db86166d6fc1ab5bbe70e1bfa657d26b26b659443017a0cc6d7`.
+  `9af2c9e1717591875597d28f8af215b86a3fc17ae77f3b96a5038937e1dd991e`.
 - Deterministic report:
-  `/private/tmp/vibermate-m10a.AtPYtn/deterministic-report-2d525d6.json`,
+  `/private/tmp/vibermate-m10a.AtPYtn/deterministic-report-6d3b0ec.json`,
   SHA-256
-  `b161bfed5930e1818a335cd7d7653d11c300236c9eb9a536c00a2702bfcfda34`,
+  `d710d0d6628e8b4a0cbad9ba03059dff9565d5afc7426be9338bf27969968e74`,
   mode `0600`, 17 of 17 checks passed.
 - Credentialed report:
-  `/private/tmp/vibermate-m10a.AtPYtn/credentialed-report-2d525d6.json`,
+  `/private/tmp/vibermate-m10a.AtPYtn/credentialed-report-6d3b0ec.json`,
   SHA-256
-  `630dcc8bb9498c625409732a1a611b434c169f7cda3f375850c2cc9e798a95b7`,
+  `849e54866024cd70548be6d9282c637a8d74debbb2974f6f1e6ece0df3c125d4`,
   mode `0600`, 25 of 25 checks passed using fixed Codex CLI 0.145.0,
   the existing development SecretRef, literal-loopback Cherry Studio, and
   `dashscope:glm-5`. No secret value appeared on the command line or in either
@@ -294,6 +294,15 @@ user-facing copy, if any unexpectedly becomes necessary, must use synchronized
   traffic. The credentialed report also exercises Responses streaming,
   `exec resume`, the Codex `exec` approval barrier, Hold/Resume, signal
   cancellation, and bounded drain.
+- A fresh all-package run after the first evidence draft exposed a
+  timing-dependent test assumption: the timeout-retry test asked real ECDSA
+  generation to finish inside the same intentionally tiny deadline used to
+  force its first timeout. Commit `6d3b0ec7196f0d8e8fc71afc6c894e180cbe8ca6`
+  changed only that test to retry through a pre-generated valid leaf, preserving
+  the production deadline and failure semantics. The focused test then passed
+  50 ordinary and 20 race repetitions, followed by full ordinary and race
+  suites. The earlier `2d525d6` reports are superseded by the selected reports
+  above, which were rebuilt from `6d3b0ec`.
 - Two discarded preflight invocations correctly stopped before Runtime or
   client execution: one rejected ambient Node 25.8.1, and one rejected a
   canonical `codex.js` path that omitted the frozen `codex` invocation label.

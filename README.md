@@ -112,7 +112,7 @@ certificate delivery material. It does not install, remove, replace, or rotate
 an operating-system Root, and it has no trust Control API or trust UI.
 Repository tests prove the version-gated Responses behavior. A clean private
 v5 deterministic report and credentialed report bound to implementation commit
-`2d525d662fa6df2ec0c6a7d32ee2c92b3ff013be` exercise the revised production
+`6d3b0ec7196f0d8e8fc71afc6c894e180cbe8ca6` exercise the revised production
 certificate path. They additionally bind a Codex-surfaced HTTP 426, the proxy's
 bounded 426-to-HTTP connection audit, and the subsequent HTTP Exchange reason
 from Runtime Activity. Neither report proves successful Responses WebSocket
@@ -162,7 +162,7 @@ takes a secret value on its command line. The Codex runner isolates
 `CODEX_HOME`, reads prompts from standard input, trusts only bounded typed
 JSONL plus bounded client-status evidence, and exercises `exec resume`. One
 clean packaged v5 deterministic report and one credentialed report bound to
-implementation commit `2d525d662fa6df2ec0c6a7d32ee2c92b3ff013be`
+implementation commit `6d3b0ec7196f0d8e8fc71afc6c894e180cbe8ca6`
 pass 17 of 17 and 25 of 25 checks respectively. The tool proof names Codex
 `exec`, and the Hold proof claims completion through the Responses streaming
 path without claiming TUI delta rendering.
