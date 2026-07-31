@@ -66,7 +66,10 @@ func TestDecodeFixedCodexRequestProducesTypedIRAndExplicitNotices(t *testing.T) 
 			{
 				"type":"message",
 				"role":"developer",
-				"content":[{"type":"input_text","text":"Be exact."}]
+				"content":[{"type":"input_text","text":"Be exact."}],
+				"internal_chat_message_metadata_passthrough":{
+					"turn_id":"019fa87c-10ea-7d91-951b-8c425d40bcd5"
+				}
 			},
 			{
 				"type":"message",
@@ -139,6 +142,7 @@ func TestDecodeFixedCodexRequestProducesTypedIRAndExplicitNotices(t *testing.T) 
 		protocolcore.NoticeToolPlacementNormalized,
 		protocolcore.NoticePromptCacheKeyNotForwarded,
 		protocolcore.NoticeClientMetadataNotForwarded,
+		protocolcore.NoticeInternalMessageMetadataNotForwarded,
 		protocolcore.NoticeReasoningContextNotForwarded,
 		protocolcore.NoticeReasoningIncludeNotForwarded,
 		protocolcore.NoticeTextVerbosityNotForwarded,
@@ -400,6 +404,30 @@ func TestDecodeResponsesAssistantRefusalUsesItsTypedField(t *testing.T) {
 	if block.Kind != protocolcore.BlockRefusal ||
 		block.Refusal != "Request refused." {
 		t.Fatalf("decoded refusal = %#v", block)
+	}
+}
+
+func TestDecodeResponsesMessageMetadataRejectsInvalidShape(t *testing.T) {
+	t.Parallel()
+
+	for _, metadata := range []string{
+		`"not-an-object"`,
+		`{"turn_id":""}`,
+		`{"turn_id":"turn-1","unknown":true}`,
+	} {
+		_, _, err := newTestCodec(t).DecodeClientRequest([]byte(`{
+			"model":"gpt-5.6-sol",
+			"input":[{
+				"type":"message",
+				"role":"user",
+				"content":"hello",
+				"internal_chat_message_metadata_passthrough":` + metadata + `
+			}]
+		}`))
+		if protocolcore.ReasonOf(err) !=
+			protocolcore.ReasonInvalidClientRequest {
+			t.Fatalf("metadata %s error = %v", metadata, err)
+		}
 	}
 }
 

@@ -40,10 +40,15 @@ type additionalToolsWire struct {
 }
 
 type inputMessageWire struct {
-	Type    string          `json:"type"`
-	Role    string          `json:"role"`
-	Content json.RawMessage `json:"content"`
-	Phase   string          `json:"phase,omitempty"`
+	Type             string          `json:"type"`
+	Role             string          `json:"role"`
+	Content          json.RawMessage `json:"content"`
+	Phase            string          `json:"phase,omitempty"`
+	InternalMetadata json.RawMessage `json:"internal_chat_message_metadata_passthrough,omitempty"`
+}
+
+type internalMessageMetadataWire struct {
+	TurnID string `json:"turn_id"`
 }
 
 type inputContentWire struct {
@@ -294,8 +299,8 @@ func (codec *Codec) decodeInputItem(
 	}
 	switch kind {
 	case "message":
-		message, err := decodeInputMessage(raw, path)
-		return singleton(message), nil, nil, protocolcore.TranslationReport{}, err
+		message, report, err := decodeInputMessage(raw, path)
+		return singleton(message), nil, nil, report, err
 	case "function_call":
 		message, err := decodeFunctionCall(raw, path)
 		return singleton(message), nil, nil, protocolcore.TranslationReport{}, err
@@ -351,10 +356,15 @@ func (codec *Codec) decodeInputItem(
 func decodeInputMessage(
 	raw json.RawMessage,
 	path string,
-) (protocolcore.Message, error) {
+) (
+	protocolcore.Message,
+	protocolcore.TranslationReport,
+	error,
+) {
 	var wire inputMessageWire
 	if err := decodeStrict(raw, &wire); err != nil {
-		return protocolcore.Message{}, invalidClient(path, err)
+		return protocolcore.Message{}, protocolcore.TranslationReport{},
+			invalidClient(path, err)
 	}
 	var role protocolcore.Role
 	switch wire.Role {
@@ -367,26 +377,60 @@ func decodeInputMessage(
 	case "assistant":
 		role = protocolcore.RoleAssistant
 	default:
-		return protocolcore.Message{}, invalidClient(
-			path+".role",
-			errors.New("Responses message role is unsupported"),
-		)
+		return protocolcore.Message{}, protocolcore.TranslationReport{},
+			invalidClient(
+				path+".role",
+				errors.New("Responses message role is unsupported"),
+			)
 	}
 	if wire.Phase != "" {
-		return protocolcore.Message{}, invalidClient(
-			path+".phase",
-			errors.New("Responses assistant phase is unsupported"),
-		)
+		return protocolcore.Message{}, protocolcore.TranslationReport{},
+			invalidClient(
+				path+".phase",
+				errors.New("Responses assistant phase is unsupported"),
+			)
+	}
+	metadataReport, err := decodeInternalMessageMetadata(
+		wire.InternalMetadata,
+		path+".internal_chat_message_metadata_passthrough",
+	)
+	if err != nil {
+		return protocolcore.Message{}, protocolcore.TranslationReport{}, err
 	}
 	blocks, err := decodeMessageContent(wire.Content, role, path+".content")
 	if err != nil {
-		return protocolcore.Message{}, err
+		return protocolcore.Message{}, protocolcore.TranslationReport{}, err
 	}
 	message := protocolcore.Message{Role: role, Blocks: blocks}
 	if err := message.Validate(); err != nil {
-		return protocolcore.Message{}, invalidClient(path, err)
+		return protocolcore.Message{}, protocolcore.TranslationReport{},
+			invalidClient(path, err)
 	}
-	return message, nil
+	return message, metadataReport, nil
+}
+
+func decodeInternalMessageMetadata(
+	raw json.RawMessage,
+	path string,
+) (protocolcore.TranslationReport, error) {
+	if !rawPresent(raw) {
+		return protocolcore.TranslationReport{}, nil
+	}
+	if _, err := protocolcore.NewJSONObject(raw, MaxMetadataBytes); err != nil {
+		return protocolcore.TranslationReport{}, invalidClient(path, err)
+	}
+	var wire internalMessageMetadataWire
+	if err := decodeStrict(raw, &wire); err != nil {
+		return protocolcore.TranslationReport{}, invalidClient(path, err)
+	}
+	if err := validateBoundedString(wire.TurnID, 512, false); err != nil {
+		return protocolcore.TranslationReport{},
+			invalidClient(path+".turn_id", err)
+	}
+	return notice(
+		protocolcore.NoticeInternalMessageMetadataNotForwarded,
+		path,
+	), nil
 }
 
 func decodeMessageContent(

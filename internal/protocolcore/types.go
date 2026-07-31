@@ -1260,6 +1260,7 @@ const (
 	NoticeToolPlacementNormalized             NoticeCode = "tool_placement_normalized"
 	NoticePromptCacheKeyNotForwarded          NoticeCode = "prompt_cache_key_not_forwarded"
 	NoticeClientMetadataNotForwarded          NoticeCode = "client_metadata_not_forwarded"
+	NoticeInternalMessageMetadataNotForwarded NoticeCode = "internal_message_metadata_not_forwarded"
 	NoticeReasoningContextNotForwarded        NoticeCode = "reasoning_context_not_forwarded"
 	NoticeReasoningIncludeNotForwarded        NoticeCode = "reasoning_include_not_forwarded"
 	NoticeTextVerbosityNotForwarded           NoticeCode = "text_verbosity_not_forwarded"
