@@ -324,6 +324,123 @@ func TestProviderConnectionAuditRequiresCompleteImmutableTimeline(
 	}
 }
 
+func TestResponsesHTTPFallbackAuditRequiresBoundedNegotiationAndActiveHTTP(
+	t *testing.T,
+) {
+	t.Parallel()
+
+	clientOrigin, err := access.NewClientOrigin("https://api.openai.com")
+	if err != nil {
+		t.Fatal(err)
+	}
+	records := responsesHTTPFallbackAuditRecords(t)
+	ready, err := responsesHTTPFallbackAuditReady(records, clientOrigin)
+	if err != nil || !ready {
+		t.Fatalf("complete fallback ready=%t error=%v", ready, err)
+	}
+
+	onlyNegotiation := append(
+		[]connectionevent.Record(nil),
+		records[:4]...,
+	)
+	ready, err = responsesHTTPFallbackAuditReady(
+		onlyNegotiation,
+		clientOrigin,
+	)
+	if err != nil || ready {
+		t.Fatalf("negotiation-only ready=%t error=%v", ready, err)
+	}
+
+	wrongRun := append([]connectionevent.Record(nil), records...)
+	wrongRun[6].IngressID = "run-other"
+	if ready, err = responsesHTTPFallbackAuditReady(
+		wrongRun,
+		clientOrigin,
+	); err == nil || ready {
+		t.Fatalf("cross-run fallback ready=%t error=%v", ready, err)
+	}
+
+	credentialedNegotiation := append(
+		[]connectionevent.Record(nil),
+		records...,
+	)
+	credentialedNegotiation[3].CredentialBindingID = "provider-account"
+	if ready, err = responsesHTTPFallbackAuditReady(
+		credentialedNegotiation,
+		clientOrigin,
+	); err == nil || ready {
+		t.Fatalf(
+			"credentialed negotiation ready=%t error=%v",
+			ready,
+			err,
+		)
+	}
+}
+
+func responsesHTTPFallbackAuditRecords(
+	t *testing.T,
+) []connectionevent.Record {
+	t.Helper()
+	started := time.Date(2026, 7, 31, 1, 2, 3, 0, time.UTC)
+	connection := func(
+		identifier string,
+		offset time.Duration,
+		terminal bool,
+	) []connectionevent.Event {
+		attempt := connectionevent.Event{
+			ConnectionID:     identifier,
+			SourceConfidence: connectionevent.SourceConfidenceUnknown,
+			RequestedHost:    "api.openai.com:443",
+			Port:             443,
+			Decryption:       connectionevent.DecryptionNone,
+			Phase:            connectionevent.PhaseAttempted,
+			StartedAt:        started.Add(offset),
+		}
+		decided := attempt
+		decided.IngressID = "run-001"
+		decided.SourceLabel = "codex.js"
+		decided.SourceConfidence = connectionevent.SourceConfidenceConfigured
+		decided.RouteHost = "api.openai.com"
+		decided.Decision = connectionevent.DecisionAllow
+		decided.RuleID = "agent_endpoint_exact"
+		decided.EgressScope = connectionevent.EgressScopeAccess
+		decided.EgressSource = connectionevent.EgressSourceAccessDefault
+		decided.EgressPolicyRevision = 1
+		decided.Decryption = connectionevent.DecryptionMITM
+		decided.Phase = connectionevent.PhaseDecided
+		connected := decided
+		connected.ObservedSNI = "api.openai.com"
+		connected.Phase = connectionevent.PhaseConnected
+		events := []connectionevent.Event{attempt, decided, connected}
+		if terminal {
+			closed := connected
+			closed.BytesUp = 2048
+			closed.BytesDown = 2048
+			closed.Phase = connectionevent.PhaseClosed
+			closed.Outcome = connectionevent.OutcomeCompleted
+			closed.EndedAt = started.Add(offset + time.Second)
+			events = append(events, closed)
+		}
+		return events
+	}
+	events := append(
+		connection("connection-negotiation", 0, true),
+		connection("connection-http", 2*time.Second, false)...,
+	)
+	records := make([]connectionevent.Record, len(events))
+	for index, event := range events {
+		record := connectionevent.Record{
+			Sequence: int64(index + 1),
+			Event:    event,
+		}
+		if err := record.Validate(); err != nil {
+			t.Fatalf("fixture event %d: %v", index, err)
+		}
+		records[index] = record
+	}
+	return records
+}
+
 func providerAuditTimeline(t *testing.T) connectionevent.Timeline {
 	t.Helper()
 	started := time.Date(2026, 7, 30, 1, 2, 3, 0, time.UTC)

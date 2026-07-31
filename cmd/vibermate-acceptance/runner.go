@@ -703,16 +703,23 @@ func runHeldIngressPreflight(
 	if err != nil {
 		return ingressPreflightEvidence{}, err
 	}
+	httpFallbackSeen := false
 	if config.clientID == acceptanceClientCodexCLI {
 		fallbackContext, cancelFallback := context.WithTimeout(
 			ctx,
 			10*time.Second,
 		)
-		err = run.waitForHTTPFallback(fallbackContext)
+		err = waitForResponsesHTTPFallbackAudit(
+			fallbackContext,
+			generation.control,
+			config,
+			connectionBaseline,
+		)
 		cancelFallback()
 		if err != nil {
 			return ingressPreflightEvidence{}, err
 		}
+		httpFallbackSeen = true
 	}
 	queuedKinds, err := queuedKindSummary(queued)
 	if err != nil {
@@ -768,8 +775,7 @@ func runHeldIngressPreflight(
 		queuedKinds:        queuedKinds,
 		providerReason:     reasonCode,
 		connectionBaseline: connectionBaseline,
-		httpFallbackSeen: run.protocolEvidence().
-			HTTPFallbackSeen,
+		httpFallbackSeen:   httpFallbackSeen,
 	}, nil
 }
 
@@ -1324,6 +1330,207 @@ func connectionRecordsAfter(
 		cursor = page.NextCursor
 	}
 	return nil, errors.New("ConnectionEvent evidence exceeded its page bound")
+}
+
+const maxResponsesFallbackConnectionBytes = 64 << 10
+
+func waitForResponsesHTTPFallbackAudit(
+	ctx context.Context,
+	control *controlClient,
+	config config,
+	after int64,
+) error {
+	client, err := selectedAcceptanceClient(config)
+	if err != nil {
+		return err
+	}
+	if client.ID != acceptanceClientCodexCLI {
+		return errors.New("Responses HTTP fallback requires fixed Codex")
+	}
+	clientOrigin, err := access.NewClientOrigin(client.ClientOrigin)
+	if err != nil {
+		return err
+	}
+	ticker := time.NewTicker(50 * time.Millisecond)
+	defer ticker.Stop()
+	for {
+		records, err := connectionRecordsAfter(ctx, control, after)
+		if err != nil {
+			return err
+		}
+		ready, err := responsesHTTPFallbackAuditReady(
+			records,
+			clientOrigin,
+		)
+		if err != nil {
+			return err
+		}
+		if ready {
+			return nil
+		}
+		select {
+		case <-ticker.C:
+		case <-ctx.Done():
+			return ctx.Err()
+		}
+	}
+}
+
+func responsesHTTPFallbackAuditReady(
+	records []connectionevent.Record,
+	clientOrigin access.ClientOrigin,
+) (bool, error) {
+	authority := clientOrigin.EndpointAuthority()
+	host := clientOrigin.TLSServerName()
+	if authority == "" || host == "" {
+		return false, errors.New("fallback client origin is invalid")
+	}
+	timelines := make(map[string][]connectionevent.Record)
+	for _, record := range records {
+		if record.RequestedHost != authority {
+			continue
+		}
+		if err := record.Validate(); err != nil {
+			return false, fmt.Errorf(
+				"validate fallback ConnectionEvent: %w",
+				err,
+			)
+		}
+		timelines[record.ConnectionID] = append(
+			timelines[record.ConnectionID],
+			record,
+		)
+	}
+	if len(timelines) < 2 {
+		return false, nil
+	}
+	if len(timelines) > 2 {
+		return false, errors.New(
+			"fixed Codex fallback opened unexpected client connections",
+		)
+	}
+
+	var negotiation *connectionevent.Record
+	var activeHTTP *connectionevent.Record
+	for _, timeline := range timelines {
+		slices.SortFunc(
+			timeline,
+			func(left, right connectionevent.Record) int {
+				switch {
+				case left.Sequence < right.Sequence:
+					return -1
+				case left.Sequence > right.Sequence:
+					return 1
+				default:
+					return 0
+				}
+			},
+		)
+		latest := timeline[len(timeline)-1]
+		switch latest.Phase {
+		case connectionevent.PhaseAttempted,
+			connectionevent.PhaseDecided:
+			return false, nil
+		case connectionevent.PhaseConnected:
+			if !connectionPhaseSequence(
+				timeline,
+				[]connectionevent.Phase{
+					connectionevent.PhaseAttempted,
+					connectionevent.PhaseDecided,
+					connectionevent.PhaseConnected,
+				},
+			) {
+				return false, errors.New(
+					"fallback HTTP connection timeline is invalid",
+				)
+			}
+			candidate := latest
+			activeHTTP = &candidate
+		case connectionevent.PhaseClosed:
+			if !connectionPhaseSequence(
+				timeline,
+				[]connectionevent.Phase{
+					connectionevent.PhaseAttempted,
+					connectionevent.PhaseDecided,
+					connectionevent.PhaseConnected,
+					connectionevent.PhaseClosed,
+				},
+			) {
+				return false, errors.New(
+					"fallback negotiation timeline is invalid",
+				)
+			}
+			candidate := latest
+			negotiation = &candidate
+		default:
+			return false, errors.New(
+				"fixed Codex fallback connection terminated unexpectedly",
+			)
+		}
+	}
+	if negotiation == nil || activeHTTP == nil {
+		return false, nil
+	}
+	for label, record := range map[string]*connectionevent.Record{
+		"negotiation": negotiation,
+		"HTTP":        activeHTTP,
+	} {
+		if record.IngressID == "" ||
+			record.SourceLabel == "" ||
+			record.SourceConfidence !=
+				connectionevent.SourceConfidenceConfigured ||
+			record.Decision != connectionevent.DecisionAllow ||
+			record.Decryption != connectionevent.DecryptionMITM ||
+			record.ObservedSNI != host ||
+			record.RouteHost != host ||
+			record.CredentialBindingID != "" {
+			return false, fmt.Errorf(
+				"fallback %s connection evidence is invalid",
+				label,
+			)
+		}
+	}
+	if negotiation.IngressID != activeHTTP.IngressID ||
+		negotiation.SourceLabel != activeHTTP.SourceLabel ||
+		negotiation.Sequence >= activeHTTP.Sequence {
+		return false, errors.New(
+			"fallback connections do not share one CaptureRun",
+		)
+	}
+	if negotiation.Outcome != connectionevent.OutcomeCompleted ||
+		negotiation.ErrorClass != "" ||
+		negotiation.BytesUp == 0 ||
+		negotiation.BytesDown == 0 ||
+		negotiation.BytesUp > maxResponsesFallbackConnectionBytes ||
+		negotiation.BytesDown > maxResponsesFallbackConnectionBytes {
+		return false, errors.New(
+			"fallback negotiation was not bounded and completed",
+		)
+	}
+	if activeHTTP.Outcome != "" ||
+		activeHTTP.ErrorClass != "" ||
+		activeHTTP.BytesUp != 0 ||
+		activeHTTP.BytesDown != 0 {
+		return false, errors.New(
+			"fallback HTTP Exchange connection is not active",
+		)
+	}
+	return true, nil
+}
+
+func connectionPhaseSequence(
+	records []connectionevent.Record,
+	expected []connectionevent.Phase,
+) bool {
+	if len(records) != len(expected) {
+		return false
+	}
+	for index, phase := range expected {
+		if records[index].Phase != phase {
+			return false
+		}
+	}
+	return true
 }
 
 func waitForProviderConnectionAudit(
