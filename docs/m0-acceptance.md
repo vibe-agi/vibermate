@@ -45,6 +45,18 @@ and rules, and receives prompts only over standard input. The active provider
 value is resolved by the runtime's selected SecretStore only after the
 offline-egress lease is granted.
 
+The fixed Codex acceptance uses two deliberately separate invocation
+profiles. One dedicated fallback process leaves the client's supported
+WebSocket negotiation enabled and proves the local bounded 426 selects an HTTP
+connection inside the same CaptureRun. Each independent semantic process uses
+the client's supported explicit Responses HTTP provider configuration, with
+WebSocket disabled, so session-local negotiation cannot race the actual
+semantic assertion. Both profiles still traverse the authenticated launcher,
+proxy, exact operation catalog, one Access snapshot, Exchange, and controlled
+egress. This is an acceptance invocation choice, not a production client
+branch, Access setting, provider bypass, or claim of successful WebSocket
+semantics.
+
 The ordinary M0 build intentionally uses the development file SecretStore:
 
 ```text
