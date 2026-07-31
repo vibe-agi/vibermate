@@ -1432,6 +1432,66 @@ func (run *agentRun) waitForHTTPFallback(ctx context.Context) error {
 	}
 }
 
+func (run *agentRun) waitForFailureReason(
+	ctx context.Context,
+	expected exchange.ReasonCode,
+) error {
+	if run == nil || expected == "" {
+		return errors.New("Agent failure reason expectation is incomplete")
+	}
+	for {
+		run.mu.Lock()
+		observed := run.failure.reasonCode
+		readErr := run.readErr
+		changed := run.changed
+		run.mu.Unlock()
+		if observed == expected {
+			return nil
+		}
+		if observed != "" {
+			return fmt.Errorf(
+				"Agent failure reason=%q, want %q",
+				observed,
+				expected,
+			)
+		}
+		if readErr != nil {
+			return readErr
+		}
+		select {
+		case <-changed:
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-run.done:
+			select {
+			case <-run.outputDone:
+			case <-ctx.Done():
+				return ctx.Err()
+			}
+			run.mu.Lock()
+			observed = run.failure.reasonCode
+			readErr = run.readErr
+			run.mu.Unlock()
+			if readErr != nil {
+				return readErr
+			}
+			if observed == expected {
+				return nil
+			}
+			if observed != "" {
+				return fmt.Errorf(
+					"Agent failure reason=%q, want %q",
+					observed,
+					expected,
+				)
+			}
+			return errors.New(
+				"Agent exited without the expected typed failure reason",
+			)
+		}
+	}
+}
+
 func (run *agentRun) clientLabel() string {
 	if run == nil {
 		return "Agent"

@@ -135,9 +135,9 @@ The deterministic sequence verifies:
 5. one executable Access commits as revision 1;
 6. the fixed client reaches the exact configured ingress while egress is held;
    Claude queues approved original-origin control traffic, while fixed Codex
-   emits its trusted HTTP-fallback event and independently produces the bounded
-   local 426-to-HTTP proxy audit before queuing the frozen provider target, both
-   with zero active egress;
+   independently produces the bounded local 426-to-HTTP proxy audit before
+   queuing the frozen provider target with zero active egress, then reports the
+   typed missing-credential outcome returned through that HTTP path;
 7. Resume performs no-credential probes for every queued frozen target before
    release; strict HTTPS targets complete TLS, while the literal-loopback
    cleartext exception completes an exact TCP peer check;

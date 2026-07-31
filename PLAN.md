@@ -9,8 +9,8 @@ Implementation baseline: `ede07ab1fd9663d0307e0eb57b0ed901a6c30b79`
 Correct three fixed-Codex acceptance-evidence defects without changing the
 runtime, protocol, Access, Exchange, Hold, proxy, or provider object model:
 
-1. require both the typed Codex HTTP-fallback event and the proxy's bounded
-   426-to-HTTP connection audit;
+1. require both the typed Codex outcome from the fallback HTTP request and the
+   proxy's bounded 426-to-HTTP connection audit;
 2. stop describing Codex completion as multiple client-visible stream deltas;
 3. report the actual approved Codex tool (`exec`) instead of Claude's `Write`.
 
@@ -23,10 +23,10 @@ checks but are superseded for these three evidence claims.
 1. Production data-plane behavior remains unchanged. This plan may strengthen
    only the opt-in acceptance runner, its tests, evidence schema, and evidence
    documentation.
-2. Fixed Codex fallback passes only after a trusted typed client event and the
-   existing body-free proxy audit independently agree on the same behavior.
-   The audit is captured while the HTTP request remains held; the client event
-   may settle after Resume but must come from that same invocation.
+2. Fixed Codex fallback passes only after the existing body-free proxy audit
+   proves the bounded 426-to-HTTP transition and that same client invocation
+   reports the typed `provider_credential_unavailable` outcome returned by the
+   resulting HTTP request.
 3. Report details derive from typed evidence returned by the exercised path;
    they are not unconditional client-neutral prose.
 4. Codex evidence may claim completion through the Responses streaming path,
@@ -48,15 +48,12 @@ checks but are superseded for these three evidence claims.
 ### 1. Bind fallback to two independent evidence sources
 
 - [x] Add a failing test that rejects connection-audit-only evidence.
-- [x] Match the fixed client's real typed warning shape: the exact fallback
-  prefix plus nonempty bounded transport detail; reject assistant text,
-  unrelated warnings, missing detail, and oversized detail.
-- [x] Accept that bounded warning only from the client's typed error item or
-  top-level error envelopes.
-- [x] Call the existing trusted Codex `waitForHTTPFallback` boundary.
+- [x] Correct the retry-exhaustion warning parser to accept only the fixed
+  prefix plus nonempty bounded transport detail from typed error envelopes;
+  do not treat that separate warning as 426 evidence.
 - [x] Capture the proxy connection audit while the fallback HTTP request is
-  still held, then require the typed client event from the same invocation
-  before reporting success.
+  still held, then require the typed missing-credential HTTP outcome from the
+  same invocation before reporting success.
 - [x] Return typed evidence with separate client-event and connection-audit
   fields, and reject either field missing.
 - [x] Keep the dedicated fallback invocation WebSocket-capable; do not force
@@ -122,8 +119,9 @@ checks but are superseded for these three evidence claims.
 
 This plan is complete only when evidence supports:
 
-> One clean packaged fixed-Codex build emitted its trusted HTTP-fallback event
-> and independently produced the bounded proxy 426-to-HTTP audit; its actual
+> One clean packaged fixed-Codex build independently produced the bounded proxy
+> 426-to-HTTP audit and reported the typed missing-credential outcome from the
+> resulting fallback HTTP request; its actual
 > `exec` tool remained behind durable allow-once approval; and its held request
 > completed through the Responses streaming path without claiming unobserved
 > CLI/TUI delta behavior. Both private v5 reports bind the same clean source and

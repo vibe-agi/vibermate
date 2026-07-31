@@ -203,7 +203,8 @@ func runAcceptance(
 		"fixed client crossed its exact ingress and controlled-egress boundary; queuedKinds="+preflight.queuedKinds,
 	)
 	if client.ID == acceptanceClientCodexCLI {
-		if err := preflight.codexHTTPFallback.validate(); err != nil {
+		fallbackDetail, err := preflight.codexHTTPFallback.reportDetail()
+		if err != nil {
 			return fail(
 				"fixed-codex-http-fallback",
 				err,
@@ -212,7 +213,7 @@ func runAcceptance(
 		report.add(
 			"fixed-codex-http-fallback",
 			checkPassed,
-			"fixed Codex reported its HTTP fallback and the proxy audit proved the bounded 426-to-HTTP transition",
+			fallbackDetail,
 		)
 	}
 	report.add(
@@ -634,17 +635,24 @@ type ingressPreflightEvidence struct {
 }
 
 type codexHTTPFallbackEvidence struct {
-	ClientEvent     bool
-	ConnectionAudit bool
+	ClientHTTPOutcome bool
+	ConnectionAudit   bool
 }
 
 func (evidence codexHTTPFallbackEvidence) validate() error {
-	if !evidence.ClientEvent || !evidence.ConnectionAudit {
+	if !evidence.ClientHTTPOutcome || !evidence.ConnectionAudit {
 		return errors.New(
-			"Codex HTTP fallback requires both the typed client event and proxy connection audit",
+			"Codex HTTP fallback requires both the typed HTTP outcome and proxy connection audit",
 		)
 	}
 	return nil
+}
+
+func (evidence codexHTTPFallbackEvidence) reportDetail() (string, error) {
+	if err := evidence.validate(); err != nil {
+		return "", err
+	}
+	return "fixed Codex reported the typed missing-credential outcome from its fallback HTTP request and the proxy audit proved the bounded 426-to-HTTP transition", nil
 }
 
 func completeCodexHTTPFallbackEvidence(
@@ -662,13 +670,16 @@ func completeCodexHTTPFallbackEvidence(
 			"Codex HTTP fallback connection audit is required before completion",
 		)
 	}
-	if err := run.waitForHTTPFallback(ctx); err != nil {
+	if err := run.waitForFailureReason(
+		ctx,
+		exchange.ReasonProviderCredentialUnavailable,
+	); err != nil {
 		return evidence, fmt.Errorf(
-			"observe typed Codex HTTP fallback event: %w",
+			"observe typed Codex fallback HTTP outcome: %w",
 			err,
 		)
 	}
-	evidence.ClientEvent = true
+	evidence.ClientHTTPOutcome = true
 	return evidence, evidence.validate()
 }
 

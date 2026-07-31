@@ -12,6 +12,7 @@ import (
 	"github.com/vibe-agi/vibermate/internal/access"
 	"github.com/vibe-agi/vibermate/internal/activity"
 	"github.com/vibe-agi/vibermate/internal/connectionevent"
+	"github.com/vibe-agi/vibermate/internal/exchange"
 	"github.com/vibe-agi/vibermate/internal/offlinehold"
 )
 
@@ -576,15 +577,17 @@ func TestResponsesHTTPFallbackAuditRequiresBoundedNegotiationAndActiveHTTP(
 	}
 }
 
-func TestCodexHTTPFallbackEvidenceRequiresClientEventAndConnectionAudit(
+func TestCodexHTTPFallbackEvidenceRequiresClientOutcomeAndConnectionAudit(
 	t *testing.T,
 ) {
 	t.Parallel()
 
 	clientEvent := &agentRun{
-		clientID:         acceptanceClientCodexCLI,
-		httpFallbackSeen: true,
-		changed:          make(chan struct{}),
+		clientID: acceptanceClientCodexCLI,
+		failure: agentFailureEvidence{
+			reasonCode: exchange.ReasonProviderCredentialUnavailable,
+		},
+		changed: make(chan struct{}),
 	}
 	evidence, err := completeCodexHTTPFallbackEvidence(
 		context.Background(),
@@ -594,8 +597,15 @@ func TestCodexHTTPFallbackEvidenceRequiresClientEventAndConnectionAudit(
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !evidence.ClientEvent || !evidence.ConnectionAudit {
+	if !evidence.ClientHTTPOutcome || !evidence.ConnectionAudit {
 		t.Fatalf("fallback evidence = %+v", evidence)
+	}
+	detail, err := evidence.reportDetail()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if detail != "fixed Codex reported the typed missing-credential outcome from its fallback HTTP request and the proxy audit proved the bounded 426-to-HTTP transition" {
+		t.Fatalf("fallback detail = %q", detail)
 	}
 
 	evidence, err = completeCodexHTTPFallbackEvidence(
@@ -603,7 +613,7 @@ func TestCodexHTTPFallbackEvidenceRequiresClientEventAndConnectionAudit(
 		clientEvent,
 		codexHTTPFallbackEvidence{},
 	)
-	if err == nil || evidence.ClientEvent || evidence.ConnectionAudit {
+	if err == nil || evidence.ClientHTTPOutcome || evidence.ConnectionAudit {
 		t.Fatalf("partial fallback evidence = %+v error=%v", evidence, err)
 	}
 
@@ -618,7 +628,7 @@ func TestCodexHTTPFallbackEvidenceRequiresClientEventAndConnectionAudit(
 		missingEvent,
 		codexHTTPFallbackEvidence{ConnectionAudit: true},
 	)
-	if err == nil || evidence.ClientEvent || !evidence.ConnectionAudit {
+	if err == nil || evidence.ClientHTTPOutcome || !evidence.ConnectionAudit {
 		t.Fatalf(
 			"missing client event evidence = %+v error=%v",
 			evidence,
