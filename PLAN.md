@@ -1,143 +1,196 @@
-# M0.8 Assembly Acceptance Convergence Plan
+# M0.9 Codex Responses HTTP Expansion Plan
 
 Status: active
-Created: 2026-07-30
-Implementation baseline: `8fb4401a16bb1866d0f2c1cbafcf82ec75827515`
+Created: 2026-07-31
+Implementation baseline: `7560937a358f23d1924a7dffa1978537171efb12`
 
 ## Objective
 
-Close the first production-assembly evidence loop for the macOS arm64 M0
-slice. A single clean App bundle must carry the launcher and daemon built from
-the same Git revision, start the sole `ProductRuntime`, run fixed Claude Code
-2.1.220 through the authenticated loopback proxy, and produce a private,
-auditable v3 acceptance report.
+Add one fixed Codex CLI 0.145.0 macOS arm64 input to the existing packaged
+Desktop assembly without creating another runtime, configuration authority, or
+provider path. The first slice is OpenAI Responses over HTTP/SSE at the Agent
+edge, translated through the immutable protocol IR to the existing OpenAI Chat
+provider edge and controlled by the same Access snapshot, Exchange, approval,
+Offline Hold, CaptureRun, and shutdown tree.
 
-This is an implementation and evidence plan, not a Preview or Release plan.
+This plan extends the supported client/protocol matrix. It is not a Preview,
+Release, installer, Server, or multi-platform plan.
 
 ## Design authority
 
 The read-only design repository remains authoritative:
 
 - `docs/design/18-production-composition.md` sections 7 and 8;
-- `docs/design/17-validation-roadmap.md` sections 2, 5, and 6;
-- `docs/design/02-architecture.md` Access and Exchange ownership;
-- `docs/design/10-client-compatibility.md` sections 5 and 6;
+- `docs/design/17-validation-roadmap.md` sections 4, 5.2, and 6;
+- `docs/design/07-protocol-translation.md` sections 2 through 6;
+- `docs/design/10-client-compatibility.md` sections 2 through 6;
+- `docs/design/14-technology-stack.md` sections 4 and 5;
 - `docs/design/20-transparent-hold-and-resume.md`;
 - `docs/adr/0006-agent-endpoint-mitm-allowlist.md`;
 - `docs/adr/0012-planned-offline-core-egress-gate.md`.
 
-The design repository is never modified by this plan.
+The design repository must not be modified or copied into this implementation
+repository.
 
 ## Required invariants
 
-1. `productruntime.Start` remains the only business composition root.
-2. SQLite is the only durable Access authority. Data-plane code obtains one
-   immutable active plan through `SnapshotResolver` and never uses a writer,
-   repository, or `WriteResult` snapshot.
-3. Every external egress requires the runtime-owned Offline Hold action and
-   egress leases. Enter Hold and Exchange admission share the established
-   atomic cut.
-4. A held provider target remains bound to Access revision, `PlanHash`, origin,
-   authority, transport kind, and SNI when applicable.
-5. Remote provider targets remain strict HTTPS with system roots and the
-   frozen transport-fingerprint plan.
-6. Cleartext provider traffic is accepted only for an explicitly configured
-   literal loopback IP, Direct egress, no ambient proxy, and exact post-dial
-   TCP peer verification before authenticated HTTP bytes are written.
-7. Secret values enter only the explicit development `SecretStore`. They never
-   enter SQLite, Access plans, command lines, reports, logs, or source files.
-8. Each real Exchange resolves exactly one active plan and revalidates the
-   frozen AgentEndpoint evidence.
-9. Tool output and terminal stream events remain behind the durable approval
-   barrier.
-10. Product readiness is Host-owned and published only after the runtime,
-    listeners, routes, and discovery record are complete.
-11. Shutdown and failure evidence must remain honest. A failed drain is not
-    reported as stopped, and a component test is not described as packaged
-    assembly evidence.
+1. `productruntime.Start` remains the sole business composition root, and the
+   Desktop Host remains the sole Desktop readiness publisher.
+2. SQLite remains the only durable Access authority. Every Codex Exchange
+   resolves exactly one immutable `AccessPlanSnapshot` through the existing
+   `SnapshotResolver`.
+3. OpenAI Responses is a new typed client codec and operation capability, not a
+   raw JSON passthrough, SDK hot-path dependency, string registry, or second
+   static configuration model.
+4. Client wire identity, IR call identity, provider wire identity, Responses
+   item ID, and function call ID stay in distinct typed namespaces. Unknown or
+   colliding correlations fail closed.
+5. The existing OpenAI Chat backend codec and controlled provider transport are
+   reused. No client credential, header, or original target may leak to the
+   provider request.
+6. Every external byte remains behind the runtime-owned Offline Hold action and
+   egress leases. Held work retains the exact frozen plan/target identity.
+7. Tool arguments remain bounded and incomplete tool calls remain invisible.
+   Complete tool intent, output, and terminal events stay behind the durable
+   approval barrier.
+8. Responses `failed`, `cancelled`, malformed terminal sequences, and truncated
+   streams are errors/aborts, never successful stop reasons.
+9. Same-dialect and cross-dialect translation both emit an explicit
+   `TranslationReport`; unknown does not become zero and loss is never silent.
+10. Fixed-client support is bound to canonical executable and compound release
+    evidence plus a typed launch recipe. Name, `--version`, User-Agent, or an
+    npm wrapper alone is insufficient.
+11. WebSocket upgrade behavior is explicit and fail closed. This slice may
+    prove the fixed Codex HTTP fallback from a bounded 426 response, but it may
+    not claim Responses WebSocket semantic conversion or successful WS support.
+12. Secret values never enter Access, SQLite, reports, command lines, logs, or
+    protocol IR. The development file SecretStore remains development-only.
 
 ## Development method
 
-All behavior changes follow a test-driven loop:
+Every production change follows a TDD loop:
 
-1. add or tighten a deterministic failing unit, contract, integration, or
-   acceptance assertion;
-2. implement the smallest production-path change that satisfies the design
-   invariant;
-3. run the focused test and race test;
-4. run repository structural checks;
-5. rerun the affected vertical scenario;
-6. commit only a coherent reviewed slice.
+1. introduce a deterministic failing fixture at the owning boundary;
+2. implement the smallest typed production behavior;
+3. run focused unit and race tests;
+4. run structural and generated checks;
+5. run the affected integration contract;
+6. freeze one coherent commit before moving upward.
 
-No acceptance assertion may be weakened to accommodate a provider, Agent, or
-timing failure. Safe diagnostic additions use closed reason enums and never
-capture provider text, prompts, tool arguments, headers, or credentials.
+No real-client acceptance assertion may be weakened to accommodate Codex,
+provider, or timing behavior. Safe diagnostics contain only typed reason codes,
+event kinds, counts, hashes, and provenance; they never capture semantic
+payloads or credentials.
 
 ## Bottom-up execution order
 
-### 1. Freeze the local provider transport boundary
+### 1. Freeze the Responses semantic contract
 
-- [x] Add typed strict-TLS versus literal-loopback-cleartext target identity.
-- [x] Reject remote HTTP, `localhost`, LAN, private-CIDR, and mapped-address
-  cleartext origins.
-- [x] Keep remote uTLS/fingerprint behavior unchanged.
-- [x] Add a separate no-proxy loopback transport with exact peer verification
-  before HTTP write.
-- [x] Extend Offline Hold probe identity and transport-appropriate,
-  no-credential probing.
-- [x] Cover valid loopback, invalid origins, changed peers, zero-write failure,
-  compiler, control input, client, probe, structural-good, unit, and race
-  paths.
-- [x] Freeze the change as commit `8fb4401`.
+- [ ] Add official-SDK-oracle fixtures for fixed Codex request, complete
+  response, SSE text, function call, function output, usage, failure,
+  cancellation, malformed ordering, and unknown extensions.
+- [ ] Extend immutable protocol-core values only for concepts actually required
+  by those fixtures: Responses item/call identity, refusal/error/abort, tool
+  correlation, and known/unknown usage details.
+- [ ] Keep observation-only provider extensions typed and immutable; define
+  explicit translation notices or rejection for every non-forwarded concept.
+- [ ] Prove deep input/output alias isolation, deterministic cloning, strict
+  bounds, fuzz convergence, and race safety.
 
-### 2. Establish one frozen packaged artifact
+### 2. Implement the pure OpenAI Responses client edge
 
-- [x] Build the App bundle from a standalone clean checkout at the final
-  plan-bearing commit.
-- [x] Derive packaged `vibermate`, packaged `vibermated`, and the acceptance
-  runner from that same revision.
-- [x] Verify the embedded manifest, sidecar digests, clean Git identity, pinned
-  Go/Node/Rust toolchains, and development build profile through the runner.
-- [x] Run deterministic acceptance and retain a mode-`0600` report.
+- [ ] Add a typed Responses client codec for bounded HTTP request decoding,
+  complete-response encoding, and incremental SSE encoding.
+- [ ] Preserve source ordering and independently track response, output item,
+  content part, function call, and argument-fragment state.
+- [ ] Require a valid terminal event; reject unknown-item deltas, duplicate
+  terminal events, incomplete calls, invalid JSON arguments, and trailing
+  semantic events.
+- [ ] Map generic function calls/results through stable IR identities without
+  treating item ID and call ID as interchangeable.
+- [ ] Keep OpenAI SDK imports restricted to tests.
 
-### 3. Bind the development credential without weakening secret boundaries
+### 3. Compose Responses to the existing Chat backend
 
-- [x] Store the Cherry Studio development key through the write-only App
-  control path under an existing logical `SecretRef`.
-- [x] Verify only configured state and a nonzero secret revision; do not read
-  or print the value.
-- [x] Confirm the selected `dashscope:glm-5` identifier through the normal
-  frozen-plan production request. Do not add a raw model-catalog or provider
-  bypass solely for acceptance.
-- [x] Keep native Keychain work outside this M0 development profile.
+- [ ] Generalize the typed protocol path so Responses client edge and OpenAI
+  Chat backend edge compose explicitly without a global registry.
+- [ ] Reuse the existing Chat request encoder and response/SSE decoder; do not
+  create a second provider client or transport.
+- [ ] Make TranslationReport loss policy explicit for developer messages,
+  refusal, reasoning, usage details, tool choice, and unsupported Responses
+  controls.
+- [ ] Prove ordinary text remains incremental while the first unresolved tool
+  fragment fences the required suffix until durable approval.
+- [ ] Prove retry/commit-ledger semantics remain unchanged after any
+  client-visible Responses event.
 
-### 4. Run the credentialed vertical chain
+### 4. Compile the Codex operation into the sole Access plan
 
-- [x] Apply the complete Access route to
-  `http://127.0.0.1:23333/v1` using a confirmed fixed model.
-- [x] Prove a normal response with a trusted marker and incremental deltas.
-- [ ] Prove a real tool intent becomes durable pending approval, remains
-  hidden before `allow-once`, and completes only after approval.
-- [ ] Prove a request admitted after Enter Hold sends zero provider bytes
-  before Resume, probes the exact frozen loopback peer, and resumes streaming.
-- [ ] Prove Agent `SIGINT` after the first delta converges without taking down
-  the shared runtime.
-- [ ] Prove daemon `SIGKILL` releases generation ownership and that the next
-  generation recovers the committed Access revision from SQLite.
-- [ ] Retain one mode-`0600` credentialed v3 report from the frozen artifact.
+- [ ] Add the typed codec identity, revision, client dialect, and exact
+  Responses operation capability to the explicit compiler catalogs.
+- [ ] Support the exact fixed-client `/v1/responses` HTTP operation; classify
+  management, upload, background, Realtime, and unknown semantic paths without
+  routing them into model translation.
+- [ ] Keep `ClientOrigin` separate from `ProviderTarget`; preserve Access
+  revision, `PlanHash`, endpoint, transport, authority, and model mapping.
+- [ ] Apply any schema change as one versioned SQLite migration and recover the
+  identical plan/hash on reopen.
+- [ ] Prove invalid capabilities, stale CAS, failed transaction/publication,
+  projection poison isolation, and old-handle immutability.
 
-### 5. Correct failures only at their owning layer
+### 5. Extend Exchange and loopback ingress
 
-- [x] Protocol failures receive protocol fixtures and codec tests.
-- [x] Provider-envelope failures receive sanitized wire-shape tests.
-- [ ] Hold ordering failures receive deterministic admission/probe tests.
-- [ ] Proxy or ingress failures receive CONNECT/MITM and endpoint-revalidation
-  tests.
-- [ ] Host or recovery failures receive packaged lifecycle/provenance tests.
-- [ ] Provider-specific instability is recorded as external evidence and does
-  not weaken core contracts.
+- [ ] Dispatch the exact Responses operation through the same one-resolve
+  Exchange and revalidate frozen Codex AgentEndpoint evidence on every request.
+- [ ] Strip client auth and hop-by-hop headers before IR/provider boundaries;
+  retain only redacted connection and translation evidence.
+- [ ] Route every provider attempt and resume probe through the existing
+  controlled-egress tree.
+- [ ] Return an explicit bounded 426 for unsupported Responses WebSocket
+  upgrades and prove the fixed client falls back to HTTP without bypassing
+  CaptureRun, endpoint authorization, or Exchange.
+- [ ] Cover persistent CONNECT plan changes, hold-entry races, cancellation,
+  shutdown, malformed SSE, tool approval, and multi-Access isolation under
+  `-race`.
 
-### 6. Final gates and evidence audit
+### 6. Add the fixed Codex launcher contract
+
+- [ ] Pin Codex CLI 0.145.0 macOS arm64 compound release evidence and typed
+  launch recipe in the immutable client catalog.
+- [ ] Verify canonical wrapper/native-child paths and digests before issuing a
+  CaptureRun grant; freeze the catalog revision in that grant.
+- [ ] Inject only the owned proxy/Root/fallback inputs and a non-secret client
+  placeholder; remove conflicting ambient proxy, CA, base-URL, and credential
+  variables.
+- [ ] Prove child supervision, heartbeat, exit status, SIGINT, and cleanup
+  without introducing a Codex-specific daemon or control API.
+
+### 7. Run one packaged Codex HTTP vertical
+
+- [ ] Build App, daemon, launcher, and acceptance runner from one standalone
+  clean revision with pinned toolchains and matching digests.
+- [ ] Run fixed Codex `exec` through CaptureRun, CONNECT/MITM, exact Responses
+  dispatch, one Access snapshot, Chat provider translation, controlled egress,
+  and incremental Responses SSE.
+- [ ] Prove normal text, function call/output approval, planned Hold/Resume,
+  SIGINT, `exec resume`, daemon termination, and SQLite reopen at the supported
+  HTTP boundary.
+- [ ] Retain private mode-`0600` deterministic and credentialed reports with
+  source/artifact/toolchain provenance and no semantic payload or secret.
+- [ ] State explicitly that HTTP fallback evidence does not prove successful
+  Responses WebSocket semantics or TUI interaction.
+
+### 8. UI only after runtime evidence
+
+- [ ] Reuse existing authenticated control routes wherever possible.
+- [ ] If a new user-visible capability/state is unavoidable, add its stable
+  language-independent code and synchronized `en-US`/`zh-CN` keys only after
+  storage, compiler, protocol, Exchange, ingress, launcher, and acceptance
+  contracts pass.
+- [ ] Do not add client-specific configuration shortcuts, secret display, raw
+  wire diagnostics, or a second Access editor.
+
+### 9. Final gates
 
 - [ ] `make check`
 - [ ] `go test ./...`
@@ -149,75 +202,32 @@ capture provider text, prompts, tool arguments, headers, or credentials.
 - [ ] pinned frontend TypeScript/unit/build checks
 - [ ] pinned Rust format/tests and an honestly reported RustSec warning set
 - [ ] `git diff --check`
-- [ ] clean worktree after the final commit
-- [ ] report provenance matches the final clean commit and exact App bundle
+- [ ] clean source and matching packaged-report provenance
 
 ## Completion statement
 
-This plan is complete only when current evidence supports the following
-statement:
+This plan is complete only when evidence supports:
 
-> One fixed Claude Code 2.1.220 build can traverse the clean packaged macOS
-> arm64 VibeMate M0 assembly through the sole ProductRuntime and a complete
-> immutable Access plan, use controlled provider egress, stream a normal
-> response, cross the durable tool-approval barrier, enter and resume planned
-> hold, converge on SIGINT, and recover committed SQLite state after daemon
-> termination. The evidence is bound to one clean build and contains no secret
-> or semantic payload.
+> One fixed Codex CLI 0.145.0 macOS arm64 build can enter the same packaged
+> VibeMate ProductRuntime through the authenticated Desktop launcher and exact
+> AgentEndpoint, translate bounded OpenAI Responses HTTP/SSE semantics through
+> immutable IR to the existing OpenAI Chat provider path, cross the durable
+> tool-approval and Offline Hold boundaries, converge on cancellation, and
+> recover committed SQLite state. The evidence is bound to one clean build and
+> contains no secret or semantic payload.
 
-Even then, VibeMate is not Preview-ready or Release-ready. Physical
-sleep/network removal, native secret protection, signing/notarization,
-installer lifecycle, Server, Windows/Linux, additional clients/codecs,
-multi-profile routing, and full product UI remain outside this plan.
+Even then, VibeMate is not Preview-ready or Release-ready. Successful Responses
+WebSocket semantic conversion, TUI interaction, ChatGPT-login control traffic,
+additional Codex versions, Server, Windows/Linux, native secret protection,
+physical sleep/network removal, signing/notarization, installers, and full
+product UI remain outside this plan.
 
-## Current evidence
-
-- Frozen source revision:
-  `7b3c3adeed9bddff3865d567cb40a31ccb191fb7`.
-- Standalone build checkout:
-  `/Users/null/Code/github/vibe-agi/vibermate-m0-acceptance-7b3c3ad`.
-- Deterministic report:
-  `/private/tmp/vibermate-m0-deterministic-7b3c3ad.json`.
-- Deterministic result: 16 of 16 checks passed; report mode is `0600`;
-  source provenance is clean and matches the frozen revision.
-- Current credentialed attempt:
-  `/private/tmp/vibermate-m0-credentialed-7b3c3ad.json`.
-- Credentialed result: Access revision 2 and secret metadata were applied, and
-  the normal reply completed with incremental deltas. The tool scenario then
-  failed closed on a request-shape mismatch before its approval became
-  pending.
-- The credential was replaced through the App and only metadata was observed:
-  the existing SecretRef advanced to revision 2.
-- A production-path request using the bare `glm-5` model reached Cherry Studio
-  and was rejected with `invalid_model_format`; Cherry requires the namespaced
-  `dashscope:glm-5` identifier while the upstream may report `glm-5`.
-- The namespaced model reached the provider and received HTTP 200. The frozen
-  `3d77ce8` codec then failed closed on the provider extension
-  `reasoning_content`.
-- Commit `23d24ac` added deterministic complete-response and SSE fixtures:
-  provider reasoning remains immutable opaque evidence, never enters Anthropic
-  text, and produces explicit reasoning-content and reasoning-usage
-  TranslationReport notices.
-- Commit `7b3c3ad` changed the acceptance proof to the fixed CLI's real `Write`
-  tool and now verifies both the durable barrier and a bounded file side
-  effect. The default-base request then failed closed on the newly observed
-  Anthropic field `eager_input_streaming`.
-- The current candidate models that field in the immutable protocol IR,
-  retains strict rejection for all other unknown tool fields, increments the
-  codec revision, and emits an explicit notice because OpenAI Chat has no
-  equivalent request flag. A new clean artifact and vertical rerun remain
-  required.
-
-## Archive and successor protocol
+## Archive protocol
 
 After every checkbox and the completion statement are proven:
 
-1. move this file without rewriting its history to
-   `docs/plans/archive/2026-07-30-m0.8-assembly-acceptance.md`;
-2. add final report paths, hashes, and the completing Git revision to the
-   archived copy;
-3. create a new root `PLAN.md` from the then-current implementation and
-   read-only design;
-4. make the successor plan bottom-up and TDD-driven, with UI work after its
-   storage, contracts, runtime, and data-plane dependencies;
-5. create the corresponding Codex Goal only after the successor plan exists.
+1. move this file to a date-named path under `docs/plans/archive/`;
+2. record frozen source, artifact, report paths and hashes;
+3. create the next root plan from the then-current implementation and read-only
+   design;
+4. keep the successor bottom-up, TDD-driven, and UI-last.
