@@ -111,12 +111,12 @@ This code exports only immutable Root identity and defensive-copy public
 certificate delivery material. It does not install, remove, replace, or rotate
 an operating-system Root, and it has no trust Control API or trust UI.
 Repository tests prove the version-gated Responses behavior. A clean private
-v5 packaged report at the preceding frozen implementation additionally binds a
-Codex-surfaced HTTP 426, the proxy's bounded 426-to-HTTP connection audit, and
-the subsequent HTTP Exchange reason from Runtime Activity. Because the
-certificate path has since changed, packaged acceptance must be regenerated on
-the clean candidate before this slice freezes. Neither report proves successful
-Responses WebSocket semantics or client-visible per-token TUI behavior.
+v5 deterministic report and credentialed report bound to implementation commit
+`2d525d662fa6df2ec0c6a7d32ee2c92b3ff013be` exercise the revised production
+certificate path. They additionally bind a Codex-surfaced HTTP 426, the proxy's
+bounded 426-to-HTTP connection audit, and the subsequent HTTP Exchange reason
+from Runtime Activity. Neither report proves successful Responses WebSocket
+semantics or client-visible per-token TUI behavior.
 
 DesktopHost now owns the literal proxy and control listeners, complete routes,
 generation lock, capability separation, launcher discovery, and the only
@@ -161,10 +161,11 @@ development file SecretStore and defaults to a local Cherry Studio API at
 takes a secret value on its command line. The Codex runner isolates
 `CODEX_HOME`, reads prompts from standard input, trusts only bounded typed
 JSONL plus bounded client-status evidence, and exercises `exec resume`. One
-clean packaged v5 deterministic report passes 17 of 17 checks and one
-credentialed report passes 25 of 25 checks. The tool proof names Codex `exec`,
-and the Hold proof claims completion through the Responses streaming path
-without claiming TUI delta rendering.
+clean packaged v5 deterministic report and one credentialed report bound to
+implementation commit `2d525d662fa6df2ec0c6a7d32ee2c92b3ff013be`
+pass 17 of 17 and 25 of 25 checks respectively. The tool proof names Codex
+`exec`, and the Hold proof claims completion through the Responses streaming
+path without claiming TUI delta rendering.
 
 SQLite is the only durable Access authority; active-plan publication occurs
 after commit. An indeterminate commit or post-commit publication failure marks

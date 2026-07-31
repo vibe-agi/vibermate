@@ -1,8 +1,10 @@
 # M1.0-A Revision-Authorized Root and Leaf Authority
 
-Status: active
+Status: complete
 Created: 2026-08-01
+Completed: 2026-08-01
 Implementation baseline: `cf3f599e11ee13f82fef0e8a6b8c09e38878b124`
+Frozen implementation candidate: `2d525d662fa6df2ec0c6a7d32ee2c92b3ff013be`
 
 ## Objective
 
@@ -69,6 +71,13 @@ Checkpoint log:
   ADR-0006 decisions 12–15 or production-composition section 8.1. The live
   Language Bridge work remains a later Core capability and did not alter the
   Root/leaf authority, trust boundary, dependencies, or completion criteria.
+- Final pre-freeze checkpoint, 2026-08-01: ordered manifest digest remains
+  `2d38c6df509a15fb9ffc3b60345ce5421cc97d8a3e967887f3b86d8e93c00cea`.
+  CodeGraph was consulted first, followed by a direct reread of ADR-0006
+  decisions 12–15, production-composition section 8.1, and ADR-0013's scope
+  exchange. The frozen implementation still matches the live DER identity,
+  revision, admission cut, cache, and lifecycle requirements. Language Bridge
+  remains explicitly excluded, so no final goal correction was required.
 
 Language Bridge remains a later Core slice. Its typed transformer, policy,
 ledger, Hold, secret, budget, codec, UI, and localization work must not enter
@@ -227,7 +236,7 @@ user-facing copy, if any unexpectedly becomes necessary, must use synchronized
   was added: package visibility, unexported request construction, one-use typed
   admission, and the replaced proxy interface make the concrete bypass shapes
   unrepresentable; the existing public repository checker remains green.
-- [ ] Re-run deterministic and credentialed M0.9/M0.9.1 packaged acceptance on
+- [x] Re-run deterministic and credentialed M0.9/M0.9.1 packaged acceptance on
   the clean candidate because the production certificate path changed. Reports
   must bind the exact candidate source and preserve honest client-specific
   wording and private permissions.
@@ -244,9 +253,65 @@ user-facing copy, if any unexpectedly becomes necessary, must use synchronized
 - [x] pinned frontend TypeScript/unit/build checks
 - [x] pinned Rust format/tests and honestly reported RustSec warnings
 - [x] `git diff --check`
-- [ ] final design checkpoint
-- [ ] clean candidate commit, frozen evidence bound to that commit, and clean
+- [x] final design checkpoint
+- [x] clean candidate commit, frozen evidence bound to that commit, and clean
   tracked worktree
+
+## Frozen candidate and evidence
+
+- Implementation source: clean commit
+  `2d525d662fa6df2ec0c6a7d32ee2c92b3ff013be`.
+- Standalone clean checkout:
+  `/private/tmp/vibermate-m10a.AtPYtn/source`.
+- Packaged development-profile App:
+  `/private/tmp/vibermate-m10a.AtPYtn/source/ui/desktop/src-tauri/target/release/bundle/macos/VibeMate.app`.
+- App-bundle digest recorded by the acceptance provenance:
+  `79594a8e80abf495553dc5abc61d762e52dee1ab0772fbd0431b9fae7035f2b8`.
+- Packaged daemon digest:
+  `d5b3d3f39e9ef9213d0905ee86545ea25f665b9e7f3264392b4e4b0ea0a530de`.
+- Packaged launcher digest:
+  `fd041874c0c1898995cb7c15e65c6c260cd2d142083831d969f811f6e10568ab`.
+- Embedded build-manifest digest:
+  `253c9d3a9bead6a33c786efe05aab543ad501a7871abb7a8dc9f5ff38cbcf021`.
+- Acceptance-runner digest:
+  `c923e35c210f0db86166d6fc1ab5bbe70e1bfa657d26b26b659443017a0cc6d7`.
+- Deterministic report:
+  `/private/tmp/vibermate-m10a.AtPYtn/deterministic-report-2d525d6.json`,
+  SHA-256
+  `b161bfed5930e1818a335cd7d7653d11c300236c9eb9a536c00a2702bfcfda34`,
+  mode `0600`, 17 of 17 checks passed.
+- Credentialed report:
+  `/private/tmp/vibermate-m10a.AtPYtn/credentialed-report-2d525d6.json`,
+  SHA-256
+  `630dcc8bb9498c625409732a1a611b434c169f7cda3f375850c2cc9e798a95b7`,
+  mode `0600`, 25 of 25 checks passed using fixed Codex CLI 0.145.0,
+  the existing development SecretRef, literal-loopback Cherry Studio, and
+  `dashscope:glm-5`. No secret value appeared on the command line or in either
+  report; a post-run sensitive-field/token scan was empty.
+- Both reports bind the same clean source and App members, Go 1.25.12,
+  Node 22.23.1, pnpm 10.33.2, and Rust/Cargo 1.88.0. The deterministic report
+  exercises the revised authorized ClientHello/leaf path without provider
+  traffic. The credentialed report also exercises Responses streaming,
+  `exec resume`, the Codex `exec` approval barrier, Hold/Resume, signal
+  cancellation, and bounded drain.
+- Two discarded preflight invocations correctly stopped before Runtime or
+  client execution: one rejected ambient Node 25.8.1, and one rejected a
+  canonical `codex.js` path that omitted the frozen `codex` invocation label.
+  The selected reports use the pinned toolchains and the actual compound
+  installation entrypoint.
+- Post-commit `make check`, `go test ./...`, and `go test -race ./...` passed
+  from the tracked candidate. Vet, tidy drift, module verification, generated
+  and structural checks, pinned frontend/Rust checks, and diff checks passed.
+  Fixed `govulncheck` found zero reachable vulnerabilities. `cargo audit`
+  exited successfully with the existing 17 allowed warnings: 16 unmaintained
+  advisories and `RUSTSEC-2024-0429` for `glib`; this is not described as a
+  warning-free audit.
+
+This evidence proves only the fixed macOS arm64 development-profile vertical
+and normal/injected lifecycle boundaries described above. It does not prove
+physical power loss, system Root installation, arbitrary clients, successful
+Responses WebSocket, TUI delta rendering, release SecretStore protection,
+signing/notarization, Preview readiness, or Release readiness.
 
 ## Explicitly excluded
 
