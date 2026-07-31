@@ -58,37 +58,41 @@ type inputContentWire struct {
 }
 
 type functionCallWire struct {
-	Type      string `json:"type"`
-	ID        string `json:"id"`
-	CallID    string `json:"call_id"`
-	Name      string `json:"name"`
-	Namespace string `json:"namespace,omitempty"`
-	Arguments string `json:"arguments"`
-	Status    string `json:"status,omitempty"`
+	Type             string          `json:"type"`
+	ID               string          `json:"id"`
+	CallID           string          `json:"call_id"`
+	Name             string          `json:"name"`
+	Namespace        string          `json:"namespace,omitempty"`
+	Arguments        string          `json:"arguments"`
+	Status           string          `json:"status,omitempty"`
+	InternalMetadata json.RawMessage `json:"internal_chat_message_metadata_passthrough,omitempty"`
 }
 
 type functionCallOutputWire struct {
-	Type   string          `json:"type"`
-	ID     string          `json:"id,omitempty"`
-	CallID string          `json:"call_id"`
-	Output json.RawMessage `json:"output"`
-	Status string          `json:"status,omitempty"`
+	Type             string          `json:"type"`
+	ID               string          `json:"id,omitempty"`
+	CallID           string          `json:"call_id"`
+	Output           json.RawMessage `json:"output"`
+	Status           string          `json:"status,omitempty"`
+	InternalMetadata json.RawMessage `json:"internal_chat_message_metadata_passthrough,omitempty"`
 }
 
 type customToolCallWire struct {
-	Type      string `json:"type"`
-	ID        string `json:"id"`
-	CallID    string `json:"call_id"`
-	Name      string `json:"name"`
-	Namespace string `json:"namespace,omitempty"`
-	Input     string `json:"input"`
+	Type             string          `json:"type"`
+	ID               string          `json:"id"`
+	CallID           string          `json:"call_id"`
+	Name             string          `json:"name"`
+	Namespace        string          `json:"namespace,omitempty"`
+	Input            string          `json:"input"`
+	InternalMetadata json.RawMessage `json:"internal_chat_message_metadata_passthrough,omitempty"`
 }
 
 type customToolCallOutputWire struct {
-	Type   string          `json:"type"`
-	ID     string          `json:"id,omitempty"`
-	CallID string          `json:"call_id"`
-	Output json.RawMessage `json:"output"`
+	Type             string          `json:"type"`
+	ID               string          `json:"id,omitempty"`
+	CallID           string          `json:"call_id"`
+	Output           json.RawMessage `json:"output"`
+	InternalMetadata json.RawMessage `json:"internal_chat_message_metadata_passthrough,omitempty"`
 }
 
 type toolTypeWire struct {
@@ -302,17 +306,17 @@ func (codec *Codec) decodeInputItem(
 		message, report, err := decodeInputMessage(raw, path)
 		return singleton(message), nil, nil, report, err
 	case "function_call":
-		message, err := decodeFunctionCall(raw, path)
-		return singleton(message), nil, nil, protocolcore.TranslationReport{}, err
+		message, report, err := decodeFunctionCall(raw, path)
+		return singleton(message), nil, nil, report, err
 	case "function_call_output":
-		message, err := decodeFunctionCallOutput(raw, path)
-		return singleton(message), nil, nil, protocolcore.TranslationReport{}, err
+		message, report, err := decodeFunctionCallOutput(raw, path)
+		return singleton(message), nil, nil, report, err
 	case "custom_tool_call":
-		message, err := decodeCustomToolCall(raw, path)
-		return singleton(message), nil, nil, protocolcore.TranslationReport{}, err
+		message, report, err := decodeCustomToolCall(raw, path)
+		return singleton(message), nil, nil, report, err
 	case "custom_tool_call_output":
-		message, err := decodeCustomToolCallOutput(raw, path)
-		return singleton(message), nil, nil, protocolcore.TranslationReport{}, err
+		message, report, err := decodeCustomToolCallOutput(raw, path)
+		return singleton(message), nil, nil, report, err
 	case "additional_tools":
 		var wire additionalToolsWire
 		if err := decodeStrict(raw, &wire); err != nil {
@@ -507,23 +511,37 @@ func decodeMessageContent(
 func decodeFunctionCall(
 	raw json.RawMessage,
 	path string,
-) (protocolcore.Message, error) {
+) (
+	protocolcore.Message,
+	protocolcore.TranslationReport,
+	error,
+) {
 	var wire functionCallWire
 	if err := decodeStrict(raw, &wire); err != nil {
-		return protocolcore.Message{}, invalidClient(path, err)
+		return protocolcore.Message{}, protocolcore.TranslationReport{},
+			invalidClient(path, err)
+	}
+	metadataReport, err := decodeInternalMessageMetadata(
+		wire.InternalMetadata,
+		path+".internal_chat_message_metadata_passthrough",
+	)
+	if err != nil {
+		return protocolcore.Message{}, protocolcore.TranslationReport{}, err
 	}
 	if wire.Status != "" && wire.Status != "completed" {
-		return protocolcore.Message{}, invalidClient(
-			path+".status",
-			errors.New("function call is not complete"),
-		)
+		return protocolcore.Message{}, protocolcore.TranslationReport{},
+			invalidClient(
+				path+".status",
+				errors.New("function call is not complete"),
+			)
 	}
 	arguments, err := protocolcore.NewJSONObject(
 		[]byte(wire.Arguments),
 		protocolcore.MaxToolJSONBytes,
 	)
 	if err != nil {
-		return protocolcore.Message{}, invalidClient(path+".arguments", err)
+		return protocolcore.Message{}, protocolcore.TranslationReport{},
+			invalidClient(path+".arguments", err)
 	}
 	call, err := newToolCall(
 		protocolcore.ToolKindFunction,
@@ -535,25 +553,39 @@ func decodeFunctionCall(
 		"",
 	)
 	if err != nil {
-		return protocolcore.Message{}, invalidClient(path, err)
+		return protocolcore.Message{}, protocolcore.TranslationReport{},
+			invalidClient(path, err)
 	}
 	block, err := protocolcore.NewToolCallBlock(call)
 	if err != nil {
-		return protocolcore.Message{}, invalidClient(path, err)
+		return protocolcore.Message{}, protocolcore.TranslationReport{},
+			invalidClient(path, err)
 	}
 	return protocolcore.Message{
 		Role:   protocolcore.RoleAssistant,
 		Blocks: []protocolcore.ContentBlock{block},
-	}, nil
+	}, metadataReport, nil
 }
 
 func decodeCustomToolCall(
 	raw json.RawMessage,
 	path string,
-) (protocolcore.Message, error) {
+) (
+	protocolcore.Message,
+	protocolcore.TranslationReport,
+	error,
+) {
 	var wire customToolCallWire
 	if err := decodeStrict(raw, &wire); err != nil {
-		return protocolcore.Message{}, invalidClient(path, err)
+		return protocolcore.Message{}, protocolcore.TranslationReport{},
+			invalidClient(path, err)
+	}
+	metadataReport, err := decodeInternalMessageMetadata(
+		wire.InternalMetadata,
+		path+".internal_chat_message_metadata_passthrough",
+	)
+	if err != nil {
+		return protocolcore.Message{}, protocolcore.TranslationReport{}, err
 	}
 	call, err := newToolCall(
 		protocolcore.ToolKindCustom,
@@ -565,44 +597,73 @@ func decodeCustomToolCall(
 		wire.Input,
 	)
 	if err != nil {
-		return protocolcore.Message{}, invalidClient(path, err)
+		return protocolcore.Message{}, protocolcore.TranslationReport{},
+			invalidClient(path, err)
 	}
 	block, err := protocolcore.NewToolCallBlock(call)
 	if err != nil {
-		return protocolcore.Message{}, invalidClient(path, err)
+		return protocolcore.Message{}, protocolcore.TranslationReport{},
+			invalidClient(path, err)
 	}
 	return protocolcore.Message{
 		Role:   protocolcore.RoleAssistant,
 		Blocks: []protocolcore.ContentBlock{block},
-	}, nil
+	}, metadataReport, nil
 }
 
 func decodeFunctionCallOutput(
 	raw json.RawMessage,
 	path string,
-) (protocolcore.Message, error) {
+) (
+	protocolcore.Message,
+	protocolcore.TranslationReport,
+	error,
+) {
 	var wire functionCallOutputWire
 	if err := decodeStrict(raw, &wire); err != nil {
-		return protocolcore.Message{}, invalidClient(path, err)
+		return protocolcore.Message{}, protocolcore.TranslationReport{},
+			invalidClient(path, err)
+	}
+	metadataReport, err := decodeInternalMessageMetadata(
+		wire.InternalMetadata,
+		path+".internal_chat_message_metadata_passthrough",
+	)
+	if err != nil {
+		return protocolcore.Message{}, protocolcore.TranslationReport{}, err
 	}
 	if wire.Status != "" && wire.Status != "completed" {
-		return protocolcore.Message{}, invalidClient(
-			path+".status",
-			errors.New("function call output is not complete"),
-		)
+		return protocolcore.Message{}, protocolcore.TranslationReport{},
+			invalidClient(
+				path+".status",
+				errors.New("function call output is not complete"),
+			)
 	}
-	return decodeToolOutput(wire.CallID, wire.Output, path)
+	message, err := decodeToolOutput(wire.CallID, wire.Output, path)
+	return message, metadataReport, err
 }
 
 func decodeCustomToolCallOutput(
 	raw json.RawMessage,
 	path string,
-) (protocolcore.Message, error) {
+) (
+	protocolcore.Message,
+	protocolcore.TranslationReport,
+	error,
+) {
 	var wire customToolCallOutputWire
 	if err := decodeStrict(raw, &wire); err != nil {
-		return protocolcore.Message{}, invalidClient(path, err)
+		return protocolcore.Message{}, protocolcore.TranslationReport{},
+			invalidClient(path, err)
 	}
-	return decodeToolOutput(wire.CallID, wire.Output, path)
+	metadataReport, err := decodeInternalMessageMetadata(
+		wire.InternalMetadata,
+		path+".internal_chat_message_metadata_passthrough",
+	)
+	if err != nil {
+		return protocolcore.Message{}, protocolcore.TranslationReport{}, err
+	}
+	message, err := decodeToolOutput(wire.CallID, wire.Output, path)
+	return message, metadataReport, err
 }
 
 func decodeToolOutput(

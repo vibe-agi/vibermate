@@ -431,6 +431,68 @@ func TestDecodeResponsesMessageMetadataRejectsInvalidShape(t *testing.T) {
 	}
 }
 
+func TestDecodeResponsesToolHistoryAcceptsBoundedItemMetadataWithoutRetainingIt(
+	t *testing.T,
+) {
+	t.Parallel()
+
+	request, report, err := newTestCodec(t).DecodeClientRequest([]byte(`{
+		"model":"gpt-5.6-sol",
+		"input":[
+			{
+				"type":"function_call",
+				"id":"item-function-1",
+				"call_id":"call-function-1",
+				"name":"read_file",
+				"arguments":"{\"path\":\"README.md\"}",
+				"internal_chat_message_metadata_passthrough":{"turn_id":"turn-1"}
+			},
+			{
+				"type":"function_call_output",
+				"call_id":"call-function-1",
+				"output":"ok",
+				"internal_chat_message_metadata_passthrough":{"turn_id":"turn-1"}
+			},
+			{
+				"type":"custom_tool_call",
+				"id":"item-custom-1",
+				"call_id":"call-custom-1",
+				"name":"exec",
+				"input":"pwd",
+				"internal_chat_message_metadata_passthrough":{"turn_id":"turn-1"}
+			},
+			{
+				"type":"custom_tool_call_output",
+				"call_id":"call-custom-1",
+				"output":"/tmp",
+				"internal_chat_message_metadata_passthrough":{"turn_id":"turn-1"}
+			}
+		],
+		"store":false,
+		"stream":true
+	}`))
+	if err != nil {
+		t.Fatalf("DecodeClientRequest() error = %v", err)
+	}
+	if len(request.Messages) != 4 {
+		t.Fatalf("message count = %d, want 4", len(request.Messages))
+	}
+	var metadataNotices int
+	for _, notice := range report.Notices() {
+		if notice.Code ==
+			protocolcore.NoticeInternalMessageMetadataNotForwarded {
+			metadataNotices++
+		}
+	}
+	if metadataNotices != 4 {
+		t.Fatalf(
+			"metadata notice count = %d, want 4; report=%#v",
+			metadataNotices,
+			report.Notices(),
+		)
+	}
+}
+
 func newTestCodec(t *testing.T) *Codec {
 	t.Helper()
 	codec, err := New(DefaultOptions())
