@@ -667,13 +667,23 @@ func runHeldIngressPreflight(
 		return ingressPreflightEvidence{}, err
 	}
 	defer os.RemoveAll(workingDirectory)
-	run, err := startAgent(
-		config,
-		workingDirectory,
-		"Reply exactly VIBEMATE_PREFLIGHT and nothing else.",
-		"",
-		"",
-	)
+	var run *agentRun
+	if config.clientID == acceptanceClientCodexCLI {
+		run, err = startFallbackAgent(
+			config,
+			workingDirectory,
+			"Reply exactly VIBEMATE_PREFLIGHT and nothing else.",
+			"",
+		)
+	} else {
+		run, err = startAgent(
+			config,
+			workingDirectory,
+			"Reply exactly VIBEMATE_PREFLIGHT and nothing else.",
+			"",
+			"",
+		)
+	}
 	if err != nil {
 		return ingressPreflightEvidence{}, err
 	}

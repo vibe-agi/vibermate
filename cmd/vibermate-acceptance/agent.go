@@ -27,6 +27,15 @@ const (
 	codexStateDirectoryName  = ".vibermate-codex"
 	fixedCodexRequestedModel = "gpt-5.6-sol"
 	codexHTTPFallbackMessage = "Falling back from WebSockets to HTTPS transport."
+	codexHTTPProviderSelect  = `model_provider="vibermate-http"`
+	codexHTTPProviderDefine  = `model_providers.vibermate-http={name="VibeMate Responses HTTP",base_url="https://api.openai.com/v1",env_key="CODEX_API_KEY",wire_api="responses",requires_openai_auth=false,supports_websockets=false}`
+)
+
+type codexResponsesTransport uint8
+
+const (
+	codexResponsesHTTPOnly codexResponsesTransport = iota + 1
+	codexResponsesFallbackEvidence
 )
 
 type agentRun struct {
@@ -133,6 +142,35 @@ func startAgent(
 	return startAgentProcess(command, client, marker)
 }
 
+func startFallbackAgent(
+	config config,
+	workingDirectory string,
+	prompt string,
+	marker string,
+) (*agentRun, error) {
+	client, err := selectedAcceptanceClient(config)
+	if err != nil {
+		return nil, err
+	}
+	if client.ID != acceptanceClientCodexCLI {
+		return nil, errors.New("HTTP fallback evidence requires fixed Codex")
+	}
+	if err := privateDirectory(
+		filepath.Join(workingDirectory, codexStateDirectoryName),
+	); err != nil {
+		return nil, fmt.Errorf("prepare Codex state: %w", err)
+	}
+	command, err := newFallbackAgentCommand(
+		config,
+		workingDirectory,
+		prompt,
+	)
+	if err != nil {
+		return nil, err
+	}
+	return startAgentProcess(command, client, marker)
+}
+
 func startResumeAgent(
 	config config,
 	workingDirectory string,
@@ -212,6 +250,36 @@ func newAgentCommand(
 	prompt string,
 	tools string,
 ) (*exec.Cmd, error) {
+	return newAgentCommandWithCodexTransport(
+		config,
+		workingDirectory,
+		prompt,
+		tools,
+		codexResponsesHTTPOnly,
+	)
+}
+
+func newFallbackAgentCommand(
+	config config,
+	workingDirectory string,
+	prompt string,
+) (*exec.Cmd, error) {
+	return newAgentCommandWithCodexTransport(
+		config,
+		workingDirectory,
+		prompt,
+		"",
+		codexResponsesFallbackEvidence,
+	)
+}
+
+func newAgentCommandWithCodexTransport(
+	config config,
+	workingDirectory string,
+	prompt string,
+	tools string,
+	transport codexResponsesTransport,
+) (*exec.Cmd, error) {
 	client, err := selectedAcceptanceClient(config)
 	if err != nil {
 		return nil, err
@@ -220,9 +288,20 @@ func newAgentCommand(
 	stateDirectory := ""
 	switch client.ID {
 	case acceptanceClientClaudeCode:
+		if transport != codexResponsesHTTPOnly {
+			return nil, errors.New(
+				"HTTP fallback evidence is unsupported for Claude",
+			)
+		}
 		arguments = fixedClaudeArguments(client.ExecutablePath, tools)
 	case acceptanceClientCodexCLI:
-		arguments = fixedCodexArguments(client.ExecutablePath)
+		arguments, err = fixedCodexArguments(
+			client.ExecutablePath,
+			transport,
+		)
+		if err != nil {
+			return nil, err
+		}
 		stateDirectory = filepath.Join(
 			workingDirectory,
 			codexStateDirectoryName,
@@ -275,11 +354,30 @@ func fixedClaudeArguments(
 	return arguments
 }
 
-func fixedCodexArguments(codexPath string) []string {
-	return []string{
+func fixedCodexArguments(
+	codexPath string,
+	transport codexResponsesTransport,
+) ([]string, error) {
+	arguments := []string{
 		"run",
 		"--",
 		codexPath,
+	}
+	switch transport {
+	case codexResponsesHTTPOnly:
+		arguments = append(
+			arguments,
+			"-c",
+			codexHTTPProviderSelect,
+			"-c",
+			codexHTTPProviderDefine,
+		)
+	case codexResponsesFallbackEvidence:
+	default:
+		return nil, errors.New("Codex Responses transport is unsupported")
+	}
+	arguments = append(
+		arguments,
 		"-a",
 		"never",
 		"-s",
@@ -294,7 +392,8 @@ func fixedCodexArguments(codexPath string) []string {
 		"--model",
 		fixedCodexRequestedModel,
 		"-",
-	}
+	)
+	return arguments, nil
 }
 
 func newResumeAgentCommand(
@@ -326,6 +425,10 @@ func newResumeAgentCommand(
 		"run",
 		"--",
 		client.ExecutablePath,
+		"-c",
+		codexHTTPProviderSelect,
+		"-c",
+		codexHTTPProviderDefine,
 		"-a",
 		"never",
 		"-s",

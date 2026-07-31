@@ -261,6 +261,10 @@ func TestFixedCodexInvocationUsesIsolatedStateAndStandardInput(
 		"run",
 		"--",
 		"/absolute/codex",
+		"-c",
+		`model_provider="vibermate-http"`,
+		"-c",
+		`model_providers.vibermate-http={name="VibeMate Responses HTTP",base_url="https://api.openai.com/v1",env_key="CODEX_API_KEY",wire_api="responses",requires_openai_auth=false,supports_websockets=false}`,
 		"-a",
 		"never",
 		"-s",
@@ -295,6 +299,35 @@ func TestFixedCodexInvocationUsesIsolatedStateAndStandardInput(
 	}
 }
 
+func TestFixedCodexFallbackInvocationLeavesWebSocketCapabilityEnabled(
+	t *testing.T,
+) {
+	t.Parallel()
+
+	command, err := newFallbackAgentCommand(
+		config{
+			clientID:     acceptanceClientCodexCLI,
+			launcherPath: "/absolute/launcher",
+			codexPath:    "/absolute/codex",
+		},
+		"/trusted/workspace",
+		"fallback-through-stdin",
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, argument := range command.Args {
+		if strings.Contains(argument, "supports_websockets") ||
+			strings.Contains(argument, "vibermate-http") {
+			t.Fatalf("fallback invocation forced HTTP: %q", command.Args)
+		}
+	}
+	if !slices.Contains(command.Args, "exec") ||
+		!slices.Contains(command.Args, "--ignore-user-config") {
+		t.Fatalf("fallback invocation = %q", command.Args)
+	}
+}
+
 func TestFixedCodexResumeUsesExactTrustedThreadIdentity(t *testing.T) {
 	t.Parallel()
 
@@ -322,6 +355,10 @@ func TestFixedCodexResumeUsesExactTrustedThreadIdentity(t *testing.T) {
 		"run",
 		"--",
 		"/absolute/codex",
+		"-c",
+		`model_provider="vibermate-http"`,
+		"-c",
+		`model_providers.vibermate-http={name="VibeMate Responses HTTP",base_url="https://api.openai.com/v1",env_key="CODEX_API_KEY",wire_api="responses",requires_openai_auth=false,supports_websockets=false}`,
 		"-a",
 		"never",
 		"-s",
