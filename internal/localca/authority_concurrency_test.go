@@ -238,12 +238,21 @@ func TestLeafGenerationTimeoutIsTypedAndRetryable(t *testing.T) {
 	t.Parallel()
 
 	authority := openAuthority(t, filepath.Join(t.TempDir(), "ca"), func(options *Options) {
-		options.GenerationTimeout = 20 * time.Millisecond
+		options.GenerationTimeout = 250 * time.Millisecond
 	})
 	defer shutdownAuthority(t, authority)
 	fixture := newAccessFixture(t, "timeout", 1)
 	projection := newAccessProjection(t, authority, fixture)
-	controlled := newControlledGenerator(authority.generator)
+	seedAdmission := leafAdmission(t, projection, authority, fixture)
+	seedRequest, err := seedAdmission.ClaimForIssuance()
+	if err != nil {
+		t.Fatalf("claim seed leaf request: %v", err)
+	}
+	seed, err := authority.generator.Generate(context.Background(), seedRequest)
+	if err != nil {
+		t.Fatalf("generate seed leaf: %v", err)
+	}
+	controlled := newControlledGenerator(staticLeafGenerator{certificate: seed})
 	controlled.setBarrier(make(chan struct{}), false)
 	authority.generator = controlled
 	if _, err := authority.Issue(
@@ -263,6 +272,20 @@ func TestLeafGenerationTimeoutIsTypedAndRetryable(t *testing.T) {
 	); err != nil {
 		t.Fatalf("issuance retry after timeout: %v", err)
 	}
+}
+
+type staticLeafGenerator struct {
+	certificate tlsCertificate
+}
+
+func (generator staticLeafGenerator) Generate(
+	ctx context.Context,
+	_ access.LeafIssuanceRequest,
+) (tlsCertificate, error) {
+	if err := ctx.Err(); err != nil {
+		return tlsCertificate{}, context.Cause(ctx)
+	}
+	return generator.certificate, nil
 }
 
 func TestLeafRandomFailureIsNotCachedAndCanRetry(t *testing.T) {
