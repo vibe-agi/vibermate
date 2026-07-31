@@ -1,100 +1,175 @@
-# M0.9.1 Acceptance Evidence Correction Plan
+# M1.0 Proxy/Trust Foundation Plan
 
 Status: active
 Created: 2026-07-31
-Implementation baseline: `ede07ab1fd9663d0307e0eb57b0ed901a6c30b79`
+Implementation baseline: `750e8aa55522d52bfe432084b4e97e9246eea8db`
 
 ## Objective
 
-Correct three fixed-Codex acceptance-evidence defects without changing the
-runtime, protocol, Access, Exchange, Hold, proxy, or provider object model:
+Close the first installable trust boundary without widening the Agent protocol
+matrix. A macOS arm64 Desktop user must be able to inspect, explicitly install,
+verify, and explicitly remove the one existing installation Root through a
+Host-owned platform adapter. Exact AgentEndpoint leaf issuance must become
+bounded, revision-aware, invalidatable, and safe under concurrent cold starts.
 
-1. require both the typed Codex outcome from the fallback HTTP request and the
-   proxy's bounded 426-to-HTTP connection audit;
-2. stop describing Codex completion as multiple client-visible stream deltas;
-3. report the actual approved Codex tool (`exec`) instead of Claude's `Write`.
+This slice keeps the current one-listener, exact CONNECT/SNI, H1 semantic path
+working. It does not add another Root, a client-private trust store, a secret
+backend, an OpenAI Chat Agent edge, or automatic system changes.
 
-Freeze a new clean packaged build and private v5 deterministic/credentialed
-reports. The previous v4 reports remain valid for their underlying runtime
-checks but are superseded for these three evidence claims.
+## Read-only design authority
+
+- `docs/design/00-overview.md` M1 proxy foundation boundary;
+- `docs/design/02-architecture.md` sections 5.3, 9, and 14;
+- `docs/design/06-security.md` sections 9.5 and 10;
+- `docs/design/10-client-compatibility.md` sections 1 through 3 and 8;
+- `docs/design/11-delivery-and-operations.md` section 2;
+- `docs/design/14-technology-stack.md` section 4;
+- `docs/design/15-local-control-api.md` platform Root routes;
+- `docs/design/18-production-composition.md` sections 7 and 8;
+- `docs/design/19-hosts-and-deployment.md` Desktop Host boundary;
+- `docs/adr/0006-agent-endpoint-mitm-allowlist.md`;
+- `docs/adr/0007-client-and-upstream-authority-separation.md`;
+- `docs/adr/0011-shared-runtime-and-host-shells.md`.
+
+The design repository remains read-only. External proxy implementations may
+inform wire fixtures, cache failure tests, and performance questions only. No
+external code, package layout, names, registries, patched dependency, or
+documentation enters this repository.
+
+## Current implementation gap audit
+
+| Boundary | Already implemented and proved | Missing before the product can claim it |
+|---|---|---|
+| Root identity | One persistent ECDSA P-256 Root, private files, reopen continuity, exact-host leaves | OS trust inspection/install/remove, explicit Root revision, replacement lifecycle |
+| Leaf issuance | Canonical DNS/IP validation, exact SAN, race-safe mutex cache | Bounded LRU, same-key cold-start coalescing, panic/cancel waiter release, endpoint/root revision cache identity, invalidation |
+| Downstream proxy | One authenticated loopback CONNECT listener, exact AgentEndpoint lookup, SNI equality, per-request endpoint revalidation | General connection policy, unmatched-endpoint blind tunnel, system/application proxy ownership |
+| HTTP transport | H1 MITM, SSE, cancellation, bounds, strict upstream TLS | H1 wire shadow, H2 ingress/upstream, compression matrix, blind WebSocket forwarding |
+| Fingerprint | Captured ClientHello, uTLS observed/standard H1 profiles, requested/effective fallback evidence | H1 wire-shape evidence, H2 capability matrix and wire fixtures, pool isolation |
+| Desktop delivery | Packaged ad-hoc App and Host-owned readiness | Root authorization UX, signed helper decision, system proxy restore, signing/notarization/installer |
+
+Only the first two rows and the explicit Desktop Root action are in M1.0.
+Connection policy, blind tunneling, system proxy ownership, H2, and release
+packaging remain separately reviewable successors.
 
 ## Required invariants
 
-1. Production data-plane behavior remains unchanged. This plan may strengthen
-   only the opt-in acceptance runner, its tests, evidence schema, and evidence
-   documentation.
-2. Fixed Codex fallback passes only after the existing body-free proxy audit
-   proves the bounded 426-to-HTTP transition, that same client invocation
-   reports typed HTTP 426, and Runtime Activity binds the subsequent Exchange to
-   `provider_credential_unavailable`.
-3. Report details derive from typed evidence returned by the exercised path;
-   they are not unconditional client-neutral prose.
-4. Codex evidence may claim completion through the Responses streaming path,
-   but not multiple CLI/TUI deltas, per-token display, or successful WebSocket
-   semantics.
-5. Claude may retain the multiple-delta claim only while `deltas >= 2` remains
-   an enforced assertion.
-6. Tool evidence names the exact approved tool and remains bound to the durable
-   allow-once decision and bounded post-approval proof file.
-7. The report schema changes so machines cannot confuse pre-correction and
-   post-correction evidence.
-8. Reports remain mode `0600` and contain no prompt, response, thread ID, tool
-   arguments, headers, credential value, or semantic payload.
-9. No concrete model/provider observation creates a production branch.
-10. The deferred OpenAI Chat Agent edge is not implemented in this plan.
+1. Each installation has exactly one Root. No per-Access, per-Profile,
+   temporary, remote, or client-private Root mode is introduced.
+2. Root private-key bytes remain inside `internal/localca` and never cross a
+   control, UI, report, log, helper argument, or platform-adapter boundary.
+3. A `TrustStoreChangePlan` is derived from the current immutable public Root
+   identity. The UI cannot supply an arbitrary certificate path, fingerprint,
+   trust store, or removal target.
+4. Trust mutation occurs only after an authenticated explicit user action. App
+   startup, daemon restart, tests, status polling, and Access apply never prompt
+   for OS authorization.
+5. `applied` is reported only after a fresh platform inspection observes the
+   expected trust state. Cancellation, timeout, insufficient privilege,
+   unknown observation, and manual fallback remain non-success outcomes.
+6. The Desktop Host owns the platform adapter. `ProductRuntime` owns the Root
+   and public Root projection but does not invoke an OS command or select a
+   platform driver.
+7. Platform selection uses typed construction and ordinary platform-specific
+   compilation. There is no string driver registry, blank-import registration,
+   global service locator, or `func(any)` injection.
+8. Leaf issuance accepts a typed request containing the exact active
+   AgentEndpoint identity/revision, Root revision, canonical host/SAN, and
+   algorithm. A host string alone is no longer sufficient authority.
+9. Cache identity includes every value that changes the leaf result. The cache
+   is bounded and failures are not cached. Same-key concurrent misses perform
+   one generation; panic, cancellation, and errors release every waiter.
+10. Endpoint disable/delete or revision replacement prevents any later issue
+    from reusing the old authorization and removes obsolete entries from the
+    bounded cache. Existing established connections retain their already
+    completed TLS state and are still revalidated per HTTP request.
+11. The existing strict upstream system-root TLS path is unchanged. The local
+    Root is never added to provider trust and no skip-verification option is
+    introduced.
+12. All new user-facing text uses synchronized nonempty `en-US` and `zh-CN`
+    catalogs; API status/reason codes remain language-independent.
 
-## TDD execution
+## Bottom-up TDD execution
 
-### 1. Bind fallback to two independent evidence sources
+### 1. Freeze public Root and trust-operation contracts
 
-- [x] Add a failing test that rejects connection-audit-only evidence.
-- [x] Correct the retry-exhaustion warning parser to accept only the fixed
-  prefix plus nonempty bounded transport detail from typed error envelopes;
-  do not treat that separate warning as 426 evidence.
-- [x] Parse the fixed client's bounded `unexpected status 426` failed-turn
-  envelope as typed client status without retaining its error detail.
-- [x] Capture the proxy connection audit while the fallback HTTP request is
-  still held, then require typed HTTP 426 from the same invocation and the
-  exact Runtime Activity reason before reporting success.
-- [x] Return typed evidence with separate client-event and connection-audit
-  fields, and reject either field missing.
-- [x] Keep the dedicated fallback invocation WebSocket-capable; do not force
-  HTTP in order to make the assertion pass.
+- [ ] Add immutable `RootIdentity`, `RootRevision`, `TrustStoreChangePlan`,
+  `TrustStoreChangeResult`, `TrustObservation`, and closed status/reason enums.
+- [ ] Bind every plan to one exact current fingerprint, certificate digest,
+  expected system store, operation, and authorization/manual-fallback policy.
+- [ ] Reject unknown fields, arbitrary paths, stale Root revisions, replayed
+  plans, and install/remove outcome contradictions.
+- [ ] Keep certificate PEM available only through the existing public Root
+  boundary and keep the private key structurally unreachable.
 
-### 2. Make report detail match exercised evidence
+### 2. Harden the local leaf authority
 
-- [x] Add a failing table test for Claude `Write` versus Codex `exec`.
-- [x] Return the proven tool name from the approval exercise and generate the
-  report detail from that typed result.
-- [x] Add a failing test that forbids multiple-delta/token/TUI wording for
-  Codex.
-- [x] Preserve Claude's multiple-client-delta wording only behind its existing
-  `deltas >= 2` assertion.
-- [x] Describe Codex Hold completion only as traversing the Responses streaming
-  path.
+- [ ] Promote the design-pinned LRU and singleflight dependencies to direct,
+  fixed module requirements when production use begins.
+- [ ] Replace the unbounded host map with a bounded typed cache keyed by Root
+  revision, AgentEndpoint ID/revision, exact SAN identity, and algorithm.
+- [ ] Coalesce concurrent cold issuance and prove leader panic, cancellation,
+  random failure, and signing failure wake all waiters without caching failure.
+- [ ] Add explicit endpoint invalidation/reconciliation after active-plan
+  publication without making the CA a second Access authority.
+- [ ] Preserve close/reopen Root identity, exact SAN, private permissions,
+  independent returned certificates, and bounded shutdown.
 
-### 3. Version and test the evidence contract
+### 3. Implement the macOS Host trust adapter
 
-- [x] Add a failing report test for schema v5.
-- [x] Bump the private acceptance report schema from v4 to v5.
-- [x] Pass focused unit and race tests for the acceptance package.
-- [x] Update acceptance documentation, module evidence, and the superseded v4
-  archive boundary.
+- [ ] Build a typed Darwin adapter around fixed platform operations with
+  explicit argv, bounded output, cancellation, deadlines, and no shell command
+  construction.
+- [ ] Inspect the system trust store by exact certificate fingerprint and
+  distinguish trusted, not trusted, unknown, and duplicate/conflicting state.
+- [ ] Execute install/remove only from a validated current plan, then always
+  re-inspect before returning a result.
+- [ ] Map user cancellation, timeout, permission denial, unavailable automatic
+  removal, and manual Keychain Access recovery to stable outcomes.
+- [ ] If a signed helper or native authorization API is required for a real
+  applied result, freeze that Host dependency choice before adding it; do not
+  smuggle reusable administrator authority into the daemon.
+- [ ] Prove the adapter cannot install or remove an arbitrary certificate and
+  cannot expose the Root private key.
 
-### 4. Freeze corrected packaged evidence
+### 4. Compose authenticated Desktop control
 
-- [ ] Commit the narrow implementation and evidence-contract change.
-- [ ] Build App, daemon, launcher, and acceptance runner from one standalone
-  clean source revision with pinned toolchains.
-- [ ] Run deterministic acceptance and retain one private mode-`0600` v5
-  report.
-- [ ] Run credentialed acceptance and retain one private mode-`0600` v5 report.
-- [ ] Verify both reports bind the clean source and exact artifact digests.
-- [ ] Verify the fallback detail states both evidence sources, tool detail says
-  `exec`, and Codex Hold detail contains no multiple-delta/token/TUI claim.
-- [ ] Run a literal safe scan over both reports and retained logs.
+- [ ] Add only the contracted Root status/install/remove routes needed by this
+  slice, with existing read/write capabilities, exact Origin/Host/Fetch
+  Metadata checks, strict bodies, idempotency, and bounded operations.
+- [ ] Keep the adapter outside `productruntime.Start`; DesktopHost receives it
+  as an explicit typed dependency and merges its observed state into the Host
+  projection.
+- [ ] Ensure failed or canceled trust operations do not affect runtime
+  initialization, proxy readiness, Access projection health, or the existing
+  `vibermate run` same-Root export path.
+- [ ] Make shutdown cancel and drain active inspections/mutations without
+  reporting a false completed state.
 
-### 5. Final gates
+### 5. Add UI only after Host contracts pass
+
+- [ ] Show current Root fingerprint, expiry, private-file health, observed
+  trust state, and one explicit install/remove action.
+- [ ] Explain the system authorization and exact cleanup consequence before
+  mutation; do not ask for or retain an administrator password in VibeMate.
+- [ ] Render cancellation, manual steps, residual trust, and retry from stable
+  i18n keys; never infer success from a closed dialog.
+- [ ] Keep trust actions separate from provider credential storage and Access
+  apply.
+
+### 6. Prove the real macOS boundary
+
+- [ ] Add deterministic executor fixtures for applied, canceled, timed out,
+  permission denied, needs-manual, malformed output, and residual-trust cases.
+- [ ] Add an opt-in macOS system-trust acceptance that installs only the
+  disposable current test Root after explicit user authorization, verifies a
+  real TLS client handshake, removes that exact Root, and verifies it is no
+  longer trusted.
+- [ ] Resolve targets read-only before every destructive trust action and
+  retain only fingerprint/status/timing evidence.
+- [ ] Keep ordinary CI and packaged M0 acceptance free of authorization
+  prompts.
+
+### 7. Final gates
 
 - [ ] `make check`
 - [ ] `go test ./...`
@@ -103,41 +178,43 @@ checks but are superseded for these three evidence claims.
 - [ ] `go mod tidy -diff`
 - [ ] `go mod verify`
 - [ ] fixed `govulncheck ./...`
-- [ ] pinned frontend and Rust checks
-- [ ] honestly report the unchanged RustSec warning set
+- [ ] pinned frontend TypeScript/unit/build checks
+- [ ] pinned Rust format/tests and an honestly reported RustSec warning set
 - [ ] `git diff --check`
-- [ ] clean tracked source and matching v5 provenance
+- [ ] clean tracked source and opt-in evidence bound to its exact revision
 
-### 6. Restore product-first execution order
+## Explicitly deferred
 
-- [x] Move the OpenAI Chat Agent edge plan to `docs/plans/deferred/` without
-  claiming it is obsolete.
-- [ ] Audit the current implementation against the M1 delivery boundary in the
-  read-only design.
-- [ ] After this plan closes, create a narrow Proxy/Trust Foundation successor
-  before any additional protocol-width expansion.
+- Root replacement/old-new migration windows and uninstall orchestration;
+- system or per-application proxy enable/compare-and-restore;
+- connection `allow/deny/ask`, unmatched-endpoint blind tunneling, and L4
+  firewall persistence;
+- H1 wire-shadow replay, HTTP/2, compression expansion, and blind WebSocket;
+- upstream HTTP/SOCKS proxy profiles and transport pooling;
+- additional Agent protocols, providers, models, or fixed executable releases;
+- native release SecretStore, signing, notarization, installers, Server, and
+  Windows/Linux.
 
 ## Completion statement
 
 This plan is complete only when evidence supports:
 
-> One clean packaged fixed-Codex build independently produced the bounded proxy
-> 426-to-HTTP audit, reported typed HTTP 426 for the rejected WebSocket request,
-> and recorded `provider_credential_unavailable` in Runtime Activity; its actual
-> `exec` tool remained behind durable allow-once approval; and its held request
-> completed through the Responses streaming path without claiming unobserved
-> CLI/TUI delta behavior. Both private v5 reports bind the same clean source and
-> contain no secret or semantic payload.
+> The macOS Desktop Host can derive an exact change plan for the installation's
+> single persistent Root, perform an explicitly authorized install or removal,
+> re-inspect the system trust store before reporting the result, and serve only
+> bounded revision-authorized AgentEndpoint leaves from a concurrent-safe
+> cache. No startup path prompts, no private key crosses the Host boundary, and
+> strict provider TLS remains independent.
 
-The underlying M0.9 runtime implementation remains frozen. This correction
-does not make VibeMate Preview-ready or Release-ready.
+Even then, VibeMate is not Preview-ready or Release-ready. It will still lack
+system-proxy ownership, unmatched-endpoint blind tunneling, H2, full M1
+fingerprint/wire evidence, signed/notarized delivery, release secret protection,
+and the multi-platform acceptance matrix.
 
-## Archive protocol
+## Successor order
 
-After every checkbox and the completion statement are proven:
-
-1. move this plan under `docs/plans/archive/`;
-2. record the frozen source, artifact, report paths, hashes, and warning set;
-3. replace the root plan with the Proxy/Trust Foundation gap-closure plan;
-4. keep protocol-width expansion deferred until that product boundary is
-   reviewed.
+1. M1.1 Connection Policy, blind tunnel, and system/application proxy recovery.
+2. M1.2 H1 wire preservation, compression, and blind WebSocket transport.
+3. M1.3 H2 semantic transport, stream isolation, and capability evidence.
+4. Re-audit packaging/signing and the remaining M1 acceptance boundary before
+   resuming deferred protocol-width work.

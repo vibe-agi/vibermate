@@ -136,8 +136,8 @@ The deterministic sequence verifies:
 6. the fixed client reaches the exact configured ingress while egress is held;
    Claude queues approved original-origin control traffic, while fixed Codex
    independently produces the bounded local 426-to-HTTP proxy audit before
-   queuing the frozen provider target with zero active egress, reports typed
-   HTTP 426 for the rejected WebSocket request, and records
+   queuing the frozen provider target with zero active egress, surfaces HTTP
+   426 for the rejected WebSocket request, and records
    `provider_credential_unavailable` for that Exchange;
 7. Resume performs no-credential probes for every queued frozen target before
    release; strict HTTPS targets complete TLS, while the literal-loopback

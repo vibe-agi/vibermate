@@ -86,8 +86,11 @@ upload, batch, media, Realtime, and foreign semantic operations cannot enter
 model translation. Body-free ConnectionEvents persist connection phase
 evidence. The local Root is installation-persistent and exported as public
 evidence, but this code does not install it into an operating-system trust
-store. Repository tests prove the version-gated response but do not yet prove
-that real fixed Codex falls back from the 426 to HTTP.
+store. Repository tests prove the version-gated response. A clean private v5
+packaged report additionally binds a Codex-surfaced HTTP 426, the proxy's
+bounded 426-to-HTTP connection audit, and the subsequent HTTP Exchange reason
+from Runtime Activity. That evidence does not prove successful Responses
+WebSocket semantics or client-visible per-token TUI behavior.
 
 DesktopHost now owns the literal proxy and control listeners, complete routes,
 generation lock, capability separation, launcher discovery, and the only
@@ -131,8 +134,11 @@ development file SecretStore and defaults to a local Cherry Studio API at
 `http://127.0.0.1:23333/v1` with model `dashscope:glm-5`. No acceptance mode
 takes a secret value on its command line. The Codex runner isolates
 `CODEX_HOME`, reads prompts from standard input, trusts only bounded typed
-JSONL evidence, and can exercise `exec resume`; a clean packaged credentialed
-report is still required before those runtime claims are complete.
+JSONL plus bounded client-status evidence, and exercises `exec resume`. One
+clean packaged v5 deterministic report passes 17 of 17 checks and one
+credentialed report passes 25 of 25 checks. The tool proof names Codex `exec`,
+and the Hold proof claims completion through the Responses streaming path
+without claiming TUI delta rendering.
 
 SQLite is the only durable Access authority; active-plan publication occurs
 after commit. An indeterminate commit or post-commit publication failure marks
