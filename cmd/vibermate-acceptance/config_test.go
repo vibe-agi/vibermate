@@ -99,6 +99,44 @@ func TestPackagedExecutableInputCannotSelectAnotherBinary(t *testing.T) {
 	}
 }
 
+func TestClientInvocationPathPreservesVerifiedWrapperLabel(t *testing.T) {
+	t.Parallel()
+
+	directory := t.TempDir()
+	native := filepath.Join(directory, "lib", "codex.js")
+	if err := os.MkdirAll(filepath.Dir(native), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(native, []byte("fixed-wrapper"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	invocation := filepath.Join(directory, "bin", "codex")
+	if err := os.MkdirAll(filepath.Dir(invocation), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(native, invocation); err != nil {
+		t.Fatal(err)
+	}
+	selected, err := clientInvocationPath(invocation)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if selected != invocation || filepath.Base(selected) != "codex" {
+		t.Fatalf("client invocation path = %q", selected)
+	}
+	canonical, err := executablePath(selected)
+	if err != nil {
+		t.Fatal(err)
+	}
+	canonicalNative, err := filepath.EvalSymlinks(native)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if canonical != canonicalNative {
+		t.Fatalf("canonical client target = %q", canonical)
+	}
+}
+
 func TestDefaultAcceptanceRouteUsesApprovedRelay(t *testing.T) {
 	t.Parallel()
 

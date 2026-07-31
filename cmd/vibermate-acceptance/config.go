@@ -179,7 +179,7 @@ func parseConfig(arguments []string) (config, error) {
 	if err != nil {
 		return config{}, err
 	}
-	canonicalClient, err := executablePath(client.ExecutablePath)
+	clientInvocation, err := clientInvocationPath(client.ExecutablePath)
 	if err != nil {
 		return config{}, fmt.Errorf(
 			"%s executable: %w",
@@ -189,9 +189,9 @@ func parseConfig(arguments []string) (config, error) {
 	}
 	switch parsed.clientID {
 	case acceptanceClientClaudeCode:
-		parsed.claudePath = canonicalClient
+		parsed.claudePath = clientInvocation
 	case acceptanceClientCodexCLI:
-		parsed.codexPath = canonicalClient
+		parsed.codexPath = clientInvocation
 	}
 	if parsed.accessID == "" ||
 		strings.TrimSpace(parsed.accessID) != parsed.accessID ||
@@ -331,4 +331,11 @@ func executablePath(path string) (string, error) {
 		return "", errors.New("path must resolve to an executable regular file")
 	}
 	return canonical, nil
+}
+
+func clientInvocationPath(path string) (string, error) {
+	if _, err := executablePath(path); err != nil {
+		return "", err
+	}
+	return path, nil
 }
