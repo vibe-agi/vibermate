@@ -5,20 +5,65 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/vibe-agi/vibermate/internal/access"
 	"github.com/vibe-agi/vibermate/internal/accessapply"
 )
 
 func TestAssemblyAccessKeepsClientAndProviderIdentitySeparate(t *testing.T) {
 	t.Parallel()
 
+	for _, test := range []struct {
+		name    string
+		client  acceptanceClientID
+		origin  string
+		dialect access.Dialect
+	}{
+		{
+			name:    "Claude",
+			client:  acceptanceClientClaudeCode,
+			origin:  "https://api.anthropic.com",
+			dialect: access.DialectAnthropicMessages,
+		},
+		{
+			name:    "Codex",
+			client:  acceptanceClientCodexCLI,
+			origin:  "https://api.openai.com",
+			dialect: access.DialectOpenAIResponses,
+		},
+	} {
+		test := test
+		t.Run(test.name, func(t *testing.T) {
+			assertAssemblyAccessClientEdge(
+				t,
+				test.client,
+				test.origin,
+				test.dialect,
+			)
+		})
+	}
+}
+
+func assertAssemblyAccessClientEdge(
+	t *testing.T,
+	client acceptanceClientID,
+	clientOrigin string,
+	clientDialect access.Dialect,
+) {
+	t.Helper()
+
 	config := config{
+		clientID:       client,
 		accessID:       "Acc-001",
 		providerOrigin: "https://api.openai.com/v1",
 		providerModel:  "fixed-provider-model",
 		secretRef:      "secret://provider/acceptance",
 	}
-	input := assemblyAccess(config, 0)
-	if input.AgentEndpoint.ClientOrigin != "https://api.anthropic.com" {
+	input, err := assemblyAccess(config, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if input.AgentEndpoint.ClientOrigin != clientOrigin ||
+		input.AgentEndpoint.ClientDialect != string(clientDialect) {
 		t.Fatalf("client origin = %q", input.AgentEndpoint.ClientOrigin)
 	}
 	if len(input.ProviderTargets) != 1 ||

@@ -7,9 +7,11 @@ import (
 	"os"
 	"path/filepath"
 	"time"
+
+	"github.com/vibe-agi/vibermate/internal/clientadapter"
 )
 
-const reportSchema = "vibermate.m0-assembly-acceptance/v3"
+const reportSchema = "vibermate.m0-assembly-acceptance/v4"
 
 type checkStatus string
 
@@ -25,28 +27,57 @@ type acceptanceCheck struct {
 	Detail string      `json:"detail"`
 }
 
-type acceptanceReport struct {
-	Schema        string                `json:"schema"`
-	StartedAt     time.Time             `json:"startedAt"`
-	FinishedAt    time.Time             `json:"finishedAt"`
-	Platform      string                `json:"platform"`
-	Architecture  string                `json:"architecture"`
-	ClaudeVersion string                `json:"claudeVersion"`
-	Provenance    *acceptanceProvenance `json:"provenance,omitempty"`
-	Status        checkStatus           `json:"status"`
-	Checks        []acceptanceCheck     `json:"checks"`
+type acceptanceClientReport struct {
+	ID      string                  `json:"id"`
+	Version string                  `json:"version"`
+	Adapter *clientadapter.Evidence `json:"adapter,omitempty"`
 }
 
-func newReport(now time.Time) acceptanceReport {
+type acceptanceReport struct {
+	Schema       string                 `json:"schema"`
+	StartedAt    time.Time              `json:"startedAt"`
+	FinishedAt   time.Time              `json:"finishedAt"`
+	Platform     string                 `json:"platform"`
+	Architecture string                 `json:"architecture"`
+	Client       acceptanceClientReport `json:"client"`
+	Provenance   *acceptanceProvenance  `json:"provenance,omitempty"`
+	Status       checkStatus            `json:"status"`
+	Checks       []acceptanceCheck      `json:"checks"`
+}
+
+func newReport(now time.Time, client acceptanceClient) acceptanceReport {
 	return acceptanceReport{
-		Schema:        reportSchema,
-		StartedAt:     now.UTC(),
-		Platform:      "darwin",
-		Architecture:  "arm64",
-		ClaudeVersion: "2.1.220",
-		Status:        checkPassed,
-		Checks:        []acceptanceCheck{},
+		Schema:       reportSchema,
+		StartedAt:    now.UTC(),
+		Platform:     "darwin",
+		Architecture: "arm64",
+		Client: acceptanceClientReport{
+			ID:      string(client.ID),
+			Version: client.Version,
+		},
+		Status: checkPassed,
+		Checks: []acceptanceCheck{},
 	}
+}
+
+func (report *acceptanceReport) bindClientEvidence(
+	evidence clientadapter.Evidence,
+) error {
+	if report == nil {
+		return errors.New("acceptance report is nil")
+	}
+	if err := evidence.Validate(); err != nil {
+		return err
+	}
+	if report.Client.ID != evidence.ID ||
+		report.Client.Version != evidence.Version {
+		return errors.New(
+			"client adapter evidence does not match the acceptance client",
+		)
+	}
+	cloned := evidence
+	report.Client.Adapter = &cloned
+	return nil
 }
 
 func (report *acceptanceReport) add(

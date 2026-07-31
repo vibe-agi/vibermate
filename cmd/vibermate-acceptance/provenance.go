@@ -91,6 +91,8 @@ type buildProvenance struct {
 
 type acceptanceConfiguration struct {
 	DeterministicOnly bool   `json:"deterministicOnly"`
+	ClientID          string `json:"clientId"`
+	ClientVersion     string `json:"clientVersion"`
 	AccessID          string `json:"accessId"`
 	ProviderOrigin    string `json:"providerOrigin"`
 	ProviderModel     string `json:"providerModel"`
@@ -119,18 +121,16 @@ func collectAcceptanceProvenance(
 	ctx context.Context,
 	config config,
 ) (acceptanceProvenance, error) {
+	client, err := selectedAcceptanceClient(config)
+	if err != nil {
+		return acceptanceProvenance{}, err
+	}
 	provenance := acceptanceProvenance{
 		Build: buildProvenance{
 			GoBuildVersions: make(map[string]string),
 			GoBuildTags:     make(map[string]string),
 		},
-		Configuration: acceptanceConfiguration{
-			DeterministicOnly: config.deterministicOnly,
-			AccessID:          config.accessID,
-			ProviderOrigin:    config.providerOrigin,
-			ProviderModel:     config.providerModel,
-			Timeout:           config.timeout.String(),
-		},
+		Configuration: newAcceptanceConfiguration(config, client),
 	}
 	if ctx == nil {
 		return provenance, errors.New("provenance context is nil")
@@ -150,7 +150,7 @@ func collectAcceptanceProvenance(
 	if err != nil {
 		return provenance, err
 	}
-	claudePath, err := executablePath(config.claudePath)
+	clientPath, err := executablePath(client.ExecutablePath)
 	if err != nil {
 		return provenance, err
 	}
@@ -179,7 +179,7 @@ func collectAcceptanceProvenance(
 		{role: "daemon", path: config.daemonPath},
 		{role: "launcher", path: config.launcherPath},
 		{role: "acceptance", path: acceptancePath},
-		{role: "claude", path: claudePath},
+		{role: "client-entrypoint", path: clientPath},
 		{role: "desktop-build-manifest", path: manifestPath},
 	} {
 		evidence, digestErr := digestArtifact(artifact.role, artifact.path)
@@ -245,6 +245,21 @@ func collectAcceptanceProvenance(
 	}
 	provenance.Toolchains = toolchains
 	return provenance, nil
+}
+
+func newAcceptanceConfiguration(
+	config config,
+	client acceptanceClient,
+) acceptanceConfiguration {
+	return acceptanceConfiguration{
+		DeterministicOnly: config.deterministicOnly,
+		ClientID:          string(client.ID),
+		ClientVersion:     client.Version,
+		AccessID:          config.accessID,
+		ProviderOrigin:    config.providerOrigin,
+		ProviderModel:     config.providerModel,
+		Timeout:           config.timeout.String(),
+	}
 }
 
 func readDesktopBuildManifest(path string) (desktopBuildManifest, error) {

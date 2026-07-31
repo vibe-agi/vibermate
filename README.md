@@ -119,19 +119,20 @@ integration tests exercise this path over real loopback listeners with a local
 child process, including bounded SIGINT convergence. They do not send provider
 traffic.
 
-The existing opt-in `vibermate-acceptance` command exercises the packaged macOS
-arm64 assembly with fixed Claude Code 2.1.220. It derives the daemon and
-launcher from one App bundle and cross-checks an embedded build manifest
-against actual artifact digests and Go build metadata. The manifest binds the
-App build to one clean Git revision, pinned toolchains, explicit
-Desktop/development-sidecar profiles, configuration digests, and both packaged
-sidecars. The deterministic sequence uses a unique missing SecretRef; the
-credentialed continuation uses the development file SecretStore and defaults
-to a local Cherry Studio API at `http://127.0.0.1:23333/v1` with model
-`dashscope:glm-5`. No acceptance mode takes a secret value on its command line.
-The fixed Codex 0.145.0 compound-release and launcher contracts are
-component-verified. Packaged real-client HTTP-fallback evidence remains
-pending.
+The opt-in `vibermate-acceptance` command exercises the packaged macOS arm64
+assembly with exactly one selected fixed client: Claude Code 2.1.220 or Codex
+CLI 0.145.0. It derives the daemon and launcher from one App bundle and
+cross-checks an embedded build manifest against actual artifact digests and Go
+build metadata. The manifest binds the App build to one clean Git revision,
+pinned toolchains, explicit Desktop/development-sidecar profiles,
+configuration digests, and both packaged sidecars. The deterministic sequence
+uses a unique missing SecretRef; the credentialed continuation uses the
+development file SecretStore and defaults to a local Cherry Studio API at
+`http://127.0.0.1:23333/v1` with model `dashscope:glm-5`. No acceptance mode
+takes a secret value on its command line. The Codex runner isolates
+`CODEX_HOME`, reads prompts from standard input, trusts only bounded typed
+JSONL evidence, and can exercise `exec resume`; a clean packaged credentialed
+report is still required before those runtime claims are complete.
 
 SQLite is the only durable Access authority; active-plan publication occurs
 after commit. An indeterminate commit or post-commit publication failure marks
@@ -141,7 +142,7 @@ recompiles the same revision and hash from SQLite. ProductRuntime reports only
 `initialized`; DesktopHost derives product readiness and withdraws discovery
 before shutdown. Unit and component tests do not by themselves prove packaged
 Claude, provider, `SIGINT`, or force-kill behavior; those claims require a
-passing private v3 report from the clean frozen artifact.
+passing private v4 report from the clean frozen artifact.
 
 Even a passing M0 assembly report does not prove physical network loss/sleep,
 power-loss durability, arbitrary client/provider compatibility, Root

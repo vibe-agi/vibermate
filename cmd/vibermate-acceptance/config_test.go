@@ -4,6 +4,8 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+
+	"github.com/vibe-agi/vibermate/internal/access"
 )
 
 func TestAppBundlePathRequiresPackagedMembers(t *testing.T) {
@@ -109,12 +111,85 @@ func TestDefaultAcceptanceRouteUsesApprovedRelay(t *testing.T) {
 			defaults.providerModel,
 		)
 	}
-	aggregate := assemblyAccess(defaults, 0)
+	aggregate, err := assemblyAccess(defaults, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
 	if len(aggregate.ProviderTargets) != 1 ||
 		aggregate.ProviderTargets[0].Origin != defaultProviderOrigin ||
 		len(aggregate.Profiles) != 1 ||
 		aggregate.Profiles[0].DefaultModelPolicy.FixedModel !=
 			defaultProviderModel {
 		t.Fatalf("default executable route = %+v", aggregate)
+	}
+}
+
+func TestAcceptanceClientSelectionKeepsUnknownUserVersionsOutOfFixedEvidence(
+	t *testing.T,
+) {
+	t.Parallel()
+
+	for _, test := range []struct {
+		name        string
+		config      config
+		id          acceptanceClientID
+		version     string
+		origin      string
+		dialect     access.Dialect
+		executable  string
+		adapterID   string
+		reportLabel string
+	}{
+		{
+			name: "Claude",
+			config: config{
+				clientID:   acceptanceClientClaudeCode,
+				claudePath: "/fixed/claude",
+			},
+			id:          acceptanceClientClaudeCode,
+			version:     "2.1.220",
+			origin:      "https://api.anthropic.com",
+			dialect:     access.DialectAnthropicMessages,
+			executable:  "/fixed/claude",
+			adapterID:   "claude-code",
+			reportLabel: "Claude Code",
+		},
+		{
+			name: "Codex",
+			config: config{
+				clientID:  acceptanceClientCodexCLI,
+				codexPath: "/fixed/codex",
+			},
+			id:          acceptanceClientCodexCLI,
+			version:     "0.145.0",
+			origin:      "https://api.openai.com",
+			dialect:     access.DialectOpenAIResponses,
+			executable:  "/fixed/codex",
+			adapterID:   "codex-cli",
+			reportLabel: "Codex CLI",
+		},
+	} {
+		test := test
+		t.Run(test.name, func(t *testing.T) {
+			client, err := selectedAcceptanceClient(test.config)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if client.ID != test.id ||
+				client.Version != test.version ||
+				client.ClientOrigin != test.origin ||
+				client.ClientDialect != test.dialect ||
+				client.ExecutablePath != test.executable ||
+				client.Release.ID != test.adapterID ||
+				client.ReportLabel != test.reportLabel {
+				t.Fatalf("selected client = %+v", client)
+			}
+		})
+	}
+
+	if _, err := selectedAcceptanceClient(config{
+		clientID: acceptanceClientID("codex-latest"),
+	}); err == nil {
+		t.Fatal("unversioned acceptance client identity was accepted")
 	}
 }

@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"io"
+	"path/filepath"
 	"slices"
 	"strings"
 	"testing"
@@ -125,10 +126,10 @@ func TestWaitForConfiguredToolRequiresExactInitTool(t *testing.T) {
 	}
 }
 
-func TestAcceptanceEnvironmentReplacesAmbientProviderCredentials(t *testing.T) {
+func TestAcceptanceEnvironmentIsolatesEachFixedClient(t *testing.T) {
 	t.Parallel()
 
-	environment := acceptanceEnvironment([]string{
+	base := []string{
 		"PATH=/usr/bin",
 		"ANTHROPIC_API_KEY=ambient",
 		"ANTHROPIC_AUTH_TOKEN=ambient",
@@ -137,18 +138,57 @@ func TestAcceptanceEnvironmentReplacesAmbientProviderCredentials(t *testing.T) {
 		"CLAUDE_CODE_OAUTH_TOKEN=ambient",
 		"OPENAI_ACCESS_TOKEN=ambient",
 		"OPENAI_API_KEY=ambient",
-	})
-	expected := []string{
-		"ANTHROPIC_API_KEY=vibermate-assembly-placeholder",
-		"PATH=/usr/bin",
+		"OPENAI_BASE_URL=https://ambient.invalid/v1",
+		"CODEX_API_KEY=ambient",
+		"CODEX_BASE_URL=https://ambient.invalid/v1",
+		"CODEX_HOME=/ambient/codex",
+		"SSL_CERT_FILE=/ambient/root.pem",
 	}
-	if len(environment) != len(expected) {
-		t.Fatalf("environment = %v", environment)
+	for _, test := range []struct {
+		name     string
+		client   acceptanceClientID
+		stateDir string
+		expected []string
+	}{
+		{
+			name:   "Claude",
+			client: acceptanceClientClaudeCode,
+			expected: []string{
+				"ANTHROPIC_API_KEY=vibermate-assembly-placeholder",
+				"PATH=/usr/bin",
+			},
+		},
+		{
+			name:     "Codex",
+			client:   acceptanceClientCodexCLI,
+			stateDir: "/private/codex-home",
+			expected: []string{
+				"CODEX_HOME=/private/codex-home",
+				"PATH=/usr/bin",
+			},
+		},
+	} {
+		test := test
+		t.Run(test.name, func(t *testing.T) {
+			environment, err := clientAcceptanceEnvironment(
+				test.client,
+				base,
+				test.stateDir,
+			)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !slices.Equal(environment, test.expected) {
+				t.Fatalf("environment = %v", environment)
+			}
+		})
 	}
-	for index := range expected {
-		if environment[index] != expected[index] {
-			t.Fatalf("environment = %v", environment)
-		}
+	if _, err := clientAcceptanceEnvironment(
+		acceptanceClientID("unknown"),
+		base,
+		"",
+	); err == nil {
+		t.Fatal("unknown client environment was accepted")
 	}
 }
 
@@ -177,10 +217,14 @@ func TestAgentPromptUsesStandardInputInsteadOfProcessArguments(t *testing.T) {
 	t.Parallel()
 
 	const prompt = "prompt-that-must-not-enter-argv"
-	command := newAgentCommand(config{
+	command, err := newAgentCommand(config{
+		clientID:     acceptanceClientClaudeCode,
 		launcherPath: "/absolute/launcher",
 		claudePath:   "/absolute/claude",
 	}, "/trusted/workspace", prompt, "")
+	if err != nil {
+		t.Fatal(err)
+	}
 	if slices.Contains(command.Args, prompt) {
 		t.Fatalf("Claude arguments exposed the prompt: %q", command.Args)
 	}
@@ -194,6 +238,202 @@ func TestAgentPromptUsesStandardInputInsteadOfProcessArguments(t *testing.T) {
 	}
 	if command.Dir != "/trusted/workspace" {
 		t.Fatalf("Claude working directory = %q", command.Dir)
+	}
+}
+
+func TestFixedCodexInvocationUsesIsolatedStateAndStandardInput(
+	t *testing.T,
+) {
+	t.Parallel()
+
+	const prompt = "codex-prompt-that-must-not-enter-argv"
+	workingDirectory := "/trusted/workspace"
+	command, err := newAgentCommand(config{
+		clientID:     acceptanceClientCodexCLI,
+		launcherPath: "/absolute/launcher",
+		codexPath:    "/absolute/codex",
+	}, workingDirectory, prompt, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	expected := []string{
+		"/absolute/launcher",
+		"run",
+		"--",
+		"/absolute/codex",
+		"-a",
+		"never",
+		"-s",
+		"workspace-write",
+		"exec",
+		"--json",
+		"--skip-git-repo-check",
+		"--ignore-user-config",
+		"--ignore-rules",
+		"--color",
+		"never",
+		"--model",
+		"gpt-5.6-sol",
+		"-",
+	}
+	if !slices.Equal(command.Args, expected) {
+		t.Fatalf("Codex arguments = %q", command.Args)
+	}
+	if slices.Contains(command.Args, prompt) {
+		t.Fatalf("Codex arguments exposed the prompt: %q", command.Args)
+	}
+	payload, err := io.ReadAll(command.Stdin)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(payload) != prompt {
+		t.Fatalf("Codex stdin = %q", payload)
+	}
+	expectedHome := filepath.Join(workingDirectory, codexStateDirectoryName)
+	if !slices.Contains(command.Env, "CODEX_HOME="+expectedHome) {
+		t.Fatalf("Codex environment = %v", command.Env)
+	}
+}
+
+func TestFixedCodexResumeUsesExactTrustedThreadIdentity(t *testing.T) {
+	t.Parallel()
+
+	threadID, err := parseAgentThreadID(
+		"019c12b2-94d7-7d40-b3e8-ea4f1733dcba",
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	command, err := newResumeAgentCommand(
+		config{
+			clientID:     acceptanceClientCodexCLI,
+			launcherPath: "/absolute/launcher",
+			codexPath:    "/absolute/codex",
+		},
+		"/trusted/workspace",
+		"continue-through-stdin",
+		threadID,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	expected := []string{
+		"/absolute/launcher",
+		"run",
+		"--",
+		"/absolute/codex",
+		"-a",
+		"never",
+		"-s",
+		"workspace-write",
+		"exec",
+		"resume",
+		"--json",
+		"--skip-git-repo-check",
+		"--ignore-user-config",
+		"--ignore-rules",
+		"--model",
+		"gpt-5.6-sol",
+		threadID.String(),
+		"-",
+	}
+	if !slices.Equal(command.Args, expected) {
+		t.Fatalf("Codex resume arguments = %q", command.Args)
+	}
+	if _, err := newResumeAgentCommand(
+		config{clientID: acceptanceClientClaudeCode},
+		"/trusted/workspace",
+		"prompt",
+		threadID,
+	); err == nil {
+		t.Fatal("Claude was accepted by the Codex resume contract")
+	}
+}
+
+func TestCodexJSONLEvidenceTrustsOnlyTypedClientEvents(t *testing.T) {
+	t.Parallel()
+
+	run := &agentRun{
+		clientID: acceptanceClientCodexCLI,
+		marker:   "VIBEMATE_CODEX_OK",
+	}
+	run.observeLine(mustJSON(t, map[string]any{
+		"type": "user_message",
+		"text": "VIBEMATE_CODEX_OK " + codexHTTPFallbackMessage,
+	}))
+	if run.httpFallbackSeen {
+		t.Fatal("Assistant text forged HTTP fallback evidence")
+	}
+
+	run.observeLine(mustJSON(t, map[string]any{
+		"type":      "thread.started",
+		"thread_id": "019c12b2-94d7-7d40-b3e8-ea4f1733dcba",
+	}))
+	run.observeLine(mustJSON(t, map[string]any{
+		"type": "turn.started",
+	}))
+	run.observeLine(mustJSON(t, map[string]any{
+		"type": "item.completed",
+		"item": map[string]any{
+			"type": "agent_message",
+			"text": codexHTTPFallbackMessage,
+		},
+	}))
+	if run.httpFallbackSeen {
+		t.Fatal("Assistant text forged HTTP fallback evidence")
+	}
+	run.observeLine(mustJSON(t, map[string]any{
+		"type": "item.completed",
+		"item": map[string]any{
+			"type":    "error",
+			"message": codexHTTPFallbackMessage,
+		},
+	}))
+	run.observeLine(mustJSON(t, map[string]any{
+		"type": "item.completed",
+		"item": map[string]any{
+			"type": "agent_message",
+			"text": "VIBEMATE_CODEX_OK",
+		},
+	}))
+	run.observeLine(mustJSON(t, map[string]any{
+		"type": "item.completed",
+		"item": map[string]any{
+			"type": "command_execution",
+		},
+	}))
+	run.observeLine(mustJSON(t, map[string]any{
+		"type": "turn.completed",
+	}))
+
+	if run.readErr != nil {
+		t.Fatal(run.readErr)
+	}
+	if run.threadID.String() !=
+		"019c12b2-94d7-7d40-b3e8-ea4f1733dcba" ||
+		!run.httpFallbackSeen ||
+		!run.turnCompleted ||
+		run.agentMessages != 2 ||
+		run.toolUses != 1 ||
+		!run.markerSeen {
+		t.Fatalf("Codex evidence = %+v", run)
+	}
+}
+
+func TestCodexJSONLRejectsConflictingThreadIdentity(t *testing.T) {
+	t.Parallel()
+
+	run := &agentRun{clientID: acceptanceClientCodexCLI}
+	run.observeLine(mustJSON(t, map[string]any{
+		"type":      "thread.started",
+		"thread_id": "019c12b2-94d7-7d40-b3e8-ea4f1733dcba",
+	}))
+	run.observeLine(mustJSON(t, map[string]any{
+		"type":      "thread.started",
+		"thread_id": "019c12b2-94d7-7d40-b3e8-ea4f1733dcbb",
+	}))
+	if run.readErr == nil {
+		t.Fatal("Conflicting Codex thread identity was accepted")
 	}
 }
 
@@ -283,7 +523,10 @@ func TestAgentFailureEvidenceClassifiesClientSummaryWithoutReturningIt(
 func TestAgentProcessFailureDoesNotWrapNil(t *testing.T) {
 	t.Parallel()
 
-	run := &agentRun{stderr: newBoundedBuffer(1)}
+	run := &agentRun{
+		stderr:   newBoundedBuffer(1),
+		clientID: acceptanceClientClaudeCode,
+	}
 	err := agentProcessFailure("normal", 1, nil, run)
 	if err == nil ||
 		err.Error() != "normal Claude exit=1 stdoutLines=0 deltas=0 stderrBytes=0" ||
@@ -303,6 +546,7 @@ func TestAgentExitedBeforeApprovalReturnsBoundedFailureEvidence(t *testing.T) {
 		done:       done,
 		outputDone: outputDone,
 		stderr:     newBoundedBuffer(256),
+		clientID:   acceptanceClientClaudeCode,
 	}
 	run.observeLine(mustJSON(t, map[string]any{
 		"type":    "result",

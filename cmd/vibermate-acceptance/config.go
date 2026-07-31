@@ -22,7 +22,9 @@ type config struct {
 	desktopAppPath    string
 	daemonPath        string
 	launcherPath      string
+	clientID          acceptanceClientID
 	claudePath        string
+	codexPath         string
 	accessID          string
 	providerOrigin    string
 	providerModel     string
@@ -57,6 +59,7 @@ func parseConfig(arguments []string) (config, error) {
 		"optional packaged vibermate path; must be the selected App member",
 	)
 	flags.StringVar(&parsed.claudePath, "claude", "", "absolute Claude Code 2.1.220 path")
+	flags.StringVar(&parsed.codexPath, "codex", "", "absolute Codex CLI 0.145.0 path")
 	flags.StringVar(
 		&parsed.accessID,
 		"access-id",
@@ -97,7 +100,7 @@ func parseConfig(arguments []string) (config, error) {
 		&parsed.deterministicOnly,
 		"deterministic-only",
 		false,
-		"skip credentialed Claude traffic",
+		"skip credentialed fixed-client traffic",
 	)
 	flags.BoolVar(
 		&parsed.keepData,
@@ -162,8 +165,33 @@ func parseConfig(arguments []string) (config, error) {
 	}
 	parsed.daemonPath = packagedDaemon
 	parsed.launcherPath = packagedLauncher
-	if _, err := executablePath(parsed.claudePath); err != nil {
-		return config{}, fmt.Errorf("claude executable: %w", err)
+	if (parsed.claudePath == "") == (parsed.codexPath == "") {
+		return config{}, errors.New(
+			"exactly one fixed Claude or Codex executable is required",
+		)
+	}
+	if parsed.codexPath != "" {
+		parsed.clientID = acceptanceClientCodexCLI
+	} else {
+		parsed.clientID = acceptanceClientClaudeCode
+	}
+	client, err := selectedAcceptanceClient(parsed)
+	if err != nil {
+		return config{}, err
+	}
+	canonicalClient, err := executablePath(client.ExecutablePath)
+	if err != nil {
+		return config{}, fmt.Errorf(
+			"%s executable: %w",
+			client.ReportLabel,
+			err,
+		)
+	}
+	switch parsed.clientID {
+	case acceptanceClientClaudeCode:
+		parsed.claudePath = canonicalClient
+	case acceptanceClientCodexCLI:
+		parsed.codexPath = canonicalClient
 	}
 	if parsed.accessID == "" ||
 		strings.TrimSpace(parsed.accessID) != parsed.accessID ||
@@ -180,9 +208,13 @@ func parseConfig(arguments []string) (config, error) {
 	if strings.TrimSpace(parsed.secretRef) != parsed.secretRef {
 		return config{}, errors.New("provider SecretRef is invalid")
 	}
+	assembly, err := assemblyAccess(parsed, 0)
+	if err != nil {
+		return config{}, fmt.Errorf("acceptance client: %w", err)
+	}
 	if _, err := accessapply.BuildCommand(
 		parsed.accessID,
-		assemblyAccess(parsed, 0),
+		assembly,
 	); err != nil {
 		return config{}, fmt.Errorf("acceptance Access: %w", err)
 	}
@@ -202,6 +234,7 @@ func parseConfig(arguments []string) (config, error) {
 
 func defaultConfig() config {
 	return config{
+		clientID:       acceptanceClientClaudeCode,
 		accessID:       "assembly-001",
 		providerOrigin: defaultProviderOrigin,
 		providerModel:  defaultProviderModel,

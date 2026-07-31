@@ -27,10 +27,14 @@ func runAcceptance(
 	parent context.Context,
 	config config,
 ) (report acceptanceReport, resultErr error) {
-	report = newReport(time.Now())
+	client, clientErr := selectedAcceptanceClient(config)
+	report = newReport(time.Now(), client)
 	defer func() {
 		report.FinishedAt = time.Now().UTC()
 	}()
+	if clientErr != nil {
+		return report, clientErr
+	}
 	ctx, cancel := context.WithTimeout(parent, config.timeout)
 	defer cancel()
 	fail := func(id string, err error) (acceptanceReport, error) {
@@ -56,13 +60,18 @@ func runAcceptance(
 	}
 	config = phases.deterministic
 
-	if err := verifyFixedClaude(ctx, config); err != nil {
-		return fail("fixed-claude-identity", err)
+	adapterEvidence, err := verifyFixedClient(ctx, config)
+	if err != nil {
+		return fail("fixed-client-identity", err)
+	}
+	if err := report.bindClientEvidence(adapterEvidence); err != nil {
+		return fail("fixed-client-identity", err)
 	}
 	report.add(
-		"fixed-claude-identity",
+		"fixed-client-identity",
 		checkPassed,
-		"Claude Code 2.1.220 executable digest matched",
+		client.ReportLabel+" "+client.Version+
+			" compound release evidence matched",
 	)
 	layout, err := runtimepath.Default()
 	if err != nil {
@@ -186,15 +195,28 @@ func runAcceptance(
 	)
 	preflight, err := runHeldIngressPreflight(ctx, config, first)
 	if err != nil {
-		return fail("fixed-claude-opaque-control", err)
+		return fail("fixed-client-ingress-preflight", err)
 	}
 	report.add(
-		"fixed-claude-opaque-control",
+		"fixed-client-ingress-preflight",
 		checkPassed,
-		"fixed Claude resumed original-origin control traffic after an exact TLS probe; queuedKinds="+preflight.opaqueKinds,
+		"fixed client crossed its exact ingress and controlled-egress boundary; queuedKinds="+preflight.queuedKinds,
 	)
+	if client.ID == acceptanceClientCodexCLI {
+		if !preflight.httpFallbackSeen {
+			return fail(
+				"fixed-codex-http-fallback",
+				errors.New("fixed Codex did not expose HTTP fallback evidence"),
+			)
+		}
+		report.add(
+			"fixed-codex-http-fallback",
+			checkPassed,
+			"the bounded local 426 caused fixed Codex to select Responses HTTP",
+		)
+	}
 	report.add(
-		"fixed-claude-provider-fail-closed",
+		"fixed-client-provider-fail-closed",
 		checkPassed,
 		"the subsequent provider request failed before transport at the missing development credential boundary; reason="+preflight.providerReason,
 	)
@@ -206,10 +228,10 @@ func runAcceptance(
 		15*time.Second,
 	)
 	if err != nil {
-		return fail("fixed-claude-connection-audit", err)
+		return fail("fixed-client-connection-audit", err)
 	}
 	report.add(
-		"fixed-claude-connection-audit",
+		"fixed-client-connection-audit",
 		checkPassed,
 		"durable MITM ConnectionEvent correlated the configured Agent ingress with the selected provider route; connectionId="+connectionID,
 	)
@@ -316,7 +338,7 @@ func runAcceptance(
 	report.add(
 		"daemon-sigkill-active-request",
 		checkPassed,
-		"SIGKILL terminated a held fixed-Claude request without an upstream send or completion marker; queuedKinds="+heldAgent.queuedKinds,
+		"SIGKILL terminated a held fixed-client request without an upstream send or completion marker; queuedKinds="+heldAgent.queuedKinds,
 	)
 
 	third, err := startDaemon(
@@ -439,8 +461,19 @@ func runAcceptance(
 	report.add(
 		"normal-streaming-reply",
 		checkPassed,
-		"fixed Claude completed an unheld streamed provider reply",
+		"fixed "+client.ReportLabel+
+			" completed an unheld streamed provider reply",
 	)
+	if client.ID == acceptanceClientCodexCLI {
+		if err := runCodexResume(ctx, config, third); err != nil {
+			return fail("fixed-codex-exec-resume", err)
+		}
+		report.add(
+			"fixed-codex-exec-resume",
+			checkPassed,
+			"two successful Exchanges retained one private Codex thread identity across exec resume",
+		)
+	}
 	if err := runToolApproval(ctx, config, third); err != nil {
 		return fail("tool-approval", err)
 	}
@@ -463,8 +496,16 @@ func runAcceptance(
 	report.add(
 		"agent-sigint",
 		checkPassed,
-		"captured Claude SIGINT canceled an active streamed Exchange",
+		"captured "+client.ReportLabel+
+			" SIGINT canceled an active streamed Exchange",
 	)
+	if client.ID == acceptanceClientCodexCLI {
+		report.add(
+			"fixed-codex-http-scope",
+			checkPassed,
+			"evidence covers bounded WebSocket rejection and Responses HTTP fallback; it does not prove successful Responses WebSocket semantics or TUI interaction",
+		)
+	}
 	stopContext, stopCancel = context.WithTimeout(ctx, 30*time.Second)
 	err = third.stopGracefully(stopContext)
 	stopCancel()
@@ -512,39 +553,47 @@ func isolateDeterministicSecret(input config) (config, error) {
 	return input, nil
 }
 
-func verifyFixedClaude(ctx context.Context, config config) error {
-	catalog, err := clientadapter.NewCatalog(
-		1,
-		[]clientadapter.Release{
-			clientadapter.ClaudeCode221220DarwinARM64(),
-		},
+func verifyFixedClient(
+	ctx context.Context,
+	config config,
+) (clientadapter.Evidence, error) {
+	client, err := selectedAcceptanceClient(config)
+	if err != nil {
+		return clientadapter.Evidence{}, err
+	}
+	verifier, err := clientadapter.NewReleaseVerifier(
+		clientadapter.BuiltInCatalog(),
 	)
 	if err != nil {
-		return err
-	}
-	verifier, err := clientadapter.NewReleaseVerifier(catalog)
-	if err != nil {
-		return err
+		return clientadapter.Evidence{}, err
 	}
 	workingDirectory, err := os.Getwd()
 	if err != nil {
-		return err
+		return clientadapter.Evidence{}, err
 	}
 	detection, err := verifier.Verify(ctx, clientadapter.Request{
-		Command:        []string{config.claudePath, "--version"},
+		Command:        []string{client.ExecutablePath},
 		CWD:            workingDirectory,
-		ExecutablePath: config.claudePath,
+		ExecutablePath: client.ExecutablePath,
 	})
 	if err != nil {
-		return err
+		return clientadapter.Evidence{}, err
 	}
 	if detection.Status != clientadapter.StatusVerified ||
 		detection.Evidence == nil ||
-		detection.Evidence.ID != "claude-code" ||
-		detection.Evidence.Version != "2.1.220" {
-		return errors.New("Claude executable did not match the fixed release")
+		detection.Evidence.ID != client.Release.ID ||
+		detection.Evidence.Revision != client.Release.Revision ||
+		detection.Evidence.Version != client.Release.Version ||
+		detection.Evidence.LaunchRecipe != client.Release.LaunchRecipe ||
+		detection.Evidence.Features != client.Release.Features {
+		return clientadapter.Evidence{}, errors.New(
+			"client executable did not match the selected fixed release",
+		)
 	}
-	return nil
+	if err := detection.Evidence.Validate(); err != nil {
+		return clientadapter.Evidence{}, err
+	}
+	return *detection.Evidence, nil
 }
 
 func requireRecoveredAccess(
@@ -568,9 +617,10 @@ func requireRecoveredAccess(
 }
 
 type ingressPreflightEvidence struct {
-	opaqueKinds        string
+	queuedKinds        string
 	providerReason     string
 	connectionBaseline int64
+	httpFallbackSeen   bool
 }
 
 func runHeldIngressPreflight(
@@ -640,23 +690,38 @@ func runHeldIngressPreflight(
 		_, _ = run.wait(waitContext)
 		cancelWait()
 	}()
-	opaqueQueued, err := waitForHeldQueuedEgressKind(
+	egressKind, err := heldPreflightEgressKind(config.clientID)
+	if err != nil {
+		return ingressPreflightEvidence{}, err
+	}
+	queued, err := waitForHeldQueuedEgressKind(
 		ctx,
 		generation.control,
 		run,
-		offlinehold.EgressOpaque,
+		egressKind,
 	)
 	if err != nil {
 		return ingressPreflightEvidence{}, err
 	}
-	opaqueKinds, err := queuedKindSummary(opaqueQueued)
+	if config.clientID == acceptanceClientCodexCLI {
+		fallbackContext, cancelFallback := context.WithTimeout(
+			ctx,
+			10*time.Second,
+		)
+		err = run.waitForHTTPFallback(fallbackContext)
+		cancelFallback()
+		if err != nil {
+			return ingressPreflightEvidence{}, err
+		}
+	}
+	queuedKinds, err := queuedKindSummary(queued)
 	if err != nil {
 		return ingressPreflightEvidence{}, err
 	}
 	releasing, err := generation.control.offlineAction(
 		ctx,
 		"resume",
-		opaqueQueued.Revision,
+		queued.Revision,
 	)
 	if err != nil {
 		return ingressPreflightEvidence{}, err
@@ -700,10 +765,27 @@ func runHeldIngressPreflight(
 		return ingressPreflightEvidence{}, err
 	}
 	return ingressPreflightEvidence{
-		opaqueKinds:        opaqueKinds,
+		queuedKinds:        queuedKinds,
 		providerReason:     reasonCode,
 		connectionBaseline: connectionBaseline,
+		httpFallbackSeen: run.protocolEvidence().
+			HTTPFallbackSeen,
 	}, nil
+}
+
+func heldPreflightEgressKind(
+	clientID acceptanceClientID,
+) (offlinehold.EgressKind, error) {
+	switch clientID {
+	case acceptanceClientClaudeCode:
+		return offlinehold.EgressOpaque, nil
+	case acceptanceClientCodexCLI:
+		return offlinehold.EgressProvider, nil
+	default:
+		return "", errors.New(
+			"fixed client preflight egress boundary is unsupported",
+		)
+	}
 }
 
 type heldAgentRun struct {
@@ -803,6 +885,7 @@ func queueHeldIngressForDaemonKill(
 	connectionID, err := waitForActiveConnectionAudit(
 		ctx,
 		generation.control,
+		config,
 		connectionBaseline,
 		10*time.Second,
 	)
@@ -936,15 +1019,42 @@ func runNormalReply(
 		}
 		return processFailure
 	}
-	_, deltas, _, marker := run.evidence()
-	if deltas == 0 || !marker {
-		return fmt.Errorf(
-			"normal reply evidence deltas=%d marker=%t",
-			deltas,
-			marker,
-		)
+	if err := requireSuccessfulAgentEvidence(config.clientID, run); err != nil {
+		return fmt.Errorf("normal reply evidence: %w", err)
 	}
 	return waitForOfflineSettlement(ctx, generation.control, 10*time.Second)
+}
+
+func requireSuccessfulAgentEvidence(
+	clientID acceptanceClientID,
+	run *agentRun,
+) error {
+	_, deltas, _, marker := run.evidence()
+	if !marker {
+		return errors.New("assistant completion marker was not observed")
+	}
+	switch clientID {
+	case acceptanceClientClaudeCode:
+		if deltas == 0 {
+			return errors.New("Claude emitted no streamed content delta")
+		}
+	case acceptanceClientCodexCLI:
+		evidence := run.protocolEvidence()
+		if evidence.ThreadID.String() == "" ||
+			evidence.AgentMessages == 0 ||
+			!evidence.TurnStarted ||
+			!evidence.TurnCompleted {
+			return fmt.Errorf(
+				"Codex JSONL completion is incomplete: messages=%d started=%t completed=%t",
+				evidence.AgentMessages,
+				evidence.TurnStarted,
+				evidence.TurnCompleted,
+			)
+		}
+	default:
+		return errors.New("fixed client completion evidence is unsupported")
+	}
+	return nil
 }
 
 func latestExchangeFailure(
@@ -981,6 +1091,182 @@ func latestActivitySequence(
 		}
 	}
 	return latest, nil
+}
+
+func successfulExchangeSubjectsAfter(
+	records []activity.Record,
+	accessID string,
+	after int64,
+) []string {
+	matches := make([]activity.Record, 0, len(records))
+	for _, record := range records {
+		if record.Sequence <= after ||
+			record.Kind != activity.KindExchangeCompleted ||
+			record.AccessID != accessID ||
+			record.Status != activity.StatusSucceeded ||
+			record.SubjectID == "" {
+			continue
+		}
+		matches = append(matches, record)
+	}
+	slices.SortFunc(matches, func(left, right activity.Record) int {
+		switch {
+		case left.Sequence < right.Sequence:
+			return -1
+		case left.Sequence > right.Sequence:
+			return 1
+		default:
+			return strings.Compare(left.SubjectID, right.SubjectID)
+		}
+	})
+	seen := make(map[string]struct{}, len(matches))
+	subjects := make([]string, 0, len(matches))
+	for _, record := range matches {
+		if _, duplicate := seen[record.SubjectID]; duplicate {
+			continue
+		}
+		seen[record.SubjectID] = struct{}{}
+		subjects = append(subjects, record.SubjectID)
+	}
+	return subjects
+}
+
+func waitForSuccessfulExchangesAfter(
+	ctx context.Context,
+	control *controlClient,
+	accessID string,
+	after int64,
+	expected int,
+	limit time.Duration,
+) error {
+	if after < 0 || expected <= 0 {
+		return errors.New("successful Exchange evidence request is invalid")
+	}
+	waitContext, cancel := context.WithTimeout(ctx, limit)
+	defer cancel()
+	ticker := time.NewTicker(50 * time.Millisecond)
+	defer ticker.Stop()
+	observed := 0
+	for {
+		page, err := control.activities(waitContext)
+		if err != nil {
+			return err
+		}
+		observed = len(successfulExchangeSubjectsAfter(
+			page.Items,
+			accessID,
+			after,
+		))
+		if observed >= expected {
+			return nil
+		}
+		select {
+		case <-ticker.C:
+		case <-waitContext.Done():
+			return fmt.Errorf(
+				"successful Exchange evidence count=%d want=%d: %w",
+				observed,
+				expected,
+				waitContext.Err(),
+			)
+		}
+	}
+}
+
+func runCodexResume(
+	ctx context.Context,
+	config config,
+	generation *daemonGeneration,
+) error {
+	if config.clientID != acceptanceClientCodexCLI {
+		return errors.New("Codex resume requires the fixed Codex client")
+	}
+	activityBaseline, err := latestActivitySequence(
+		ctx,
+		generation.control,
+	)
+	if err != nil {
+		return err
+	}
+	workingDirectory, err := os.MkdirTemp(
+		"",
+		"vibermate-codex-resume-*",
+	)
+	if err != nil {
+		return err
+	}
+	defer os.RemoveAll(workingDirectory)
+
+	first, err := startAgent(
+		config,
+		workingDirectory,
+		"Reply exactly VIBEMATE_RESUME_FIRST and nothing else.",
+		"",
+		"VIBEMATE_RESUME_FIRST",
+	)
+	if err != nil {
+		return err
+	}
+	firstContext, cancelFirst := context.WithTimeout(ctx, 3*time.Minute)
+	firstExit, firstErr := first.wait(firstContext)
+	cancelFirst()
+	if firstErr != nil || firstExit != 0 {
+		return agentProcessFailure(
+			"resume initial turn",
+			firstExit,
+			firstErr,
+			first,
+		)
+	}
+	if err := requireSuccessfulAgentEvidence(
+		config.clientID,
+		first,
+	); err != nil {
+		return err
+	}
+	threadID := first.protocolEvidence().ThreadID
+	if threadID.String() == "" {
+		return errors.New("Codex initial turn omitted its thread identity")
+	}
+
+	resumed, err := startResumeAgent(
+		config,
+		workingDirectory,
+		"Reply exactly VIBEMATE_RESUME_SECOND and nothing else.",
+		threadID,
+		"VIBEMATE_RESUME_SECOND",
+	)
+	if err != nil {
+		return err
+	}
+	resumeContext, cancelResume := context.WithTimeout(ctx, 3*time.Minute)
+	resumeExit, resumeErr := resumed.wait(resumeContext)
+	cancelResume()
+	if resumeErr != nil || resumeExit != 0 {
+		return agentProcessFailure(
+			"resumed turn",
+			resumeExit,
+			resumeErr,
+			resumed,
+		)
+	}
+	if err := requireSuccessfulAgentEvidence(
+		config.clientID,
+		resumed,
+	); err != nil {
+		return err
+	}
+	if resumed.protocolEvidence().ThreadID != threadID {
+		return errors.New("Codex exec resume changed thread identity")
+	}
+	return waitForSuccessfulExchangesAfter(
+		ctx,
+		generation.control,
+		config.accessID,
+		activityBaseline,
+		2,
+		15*time.Second,
+	)
 }
 
 func latestConnectionSequence(
@@ -1051,7 +1337,11 @@ func waitForProviderConnectionAudit(
 	if err != nil {
 		return "", err
 	}
-	clientOrigin, err := access.NewClientOrigin("https://api.anthropic.com")
+	client, err := selectedAcceptanceClient(config)
+	if err != nil {
+		return "", err
+	}
+	clientOrigin, err := access.NewClientOrigin(client.ClientOrigin)
 	if err != nil {
 		return "", err
 	}
@@ -1206,10 +1496,15 @@ func providerConnectionAuditReady(
 func waitForActiveConnectionAudit(
 	ctx context.Context,
 	control *controlClient,
+	config config,
 	after int64,
 	limit time.Duration,
 ) (string, error) {
-	clientOrigin, err := access.NewClientOrigin("https://api.anthropic.com")
+	client, err := selectedAcceptanceClient(config)
+	if err != nil {
+		return "", err
+	}
+	clientOrigin, err := access.NewClientOrigin(client.ClientOrigin)
 	if err != nil {
 		return "", err
 	}
@@ -1431,12 +1726,21 @@ func runHeldStreaming(
 		return agentProcessFailure("streaming", exitCode, err, run)
 	}
 	_, deltas, _, marker := run.evidence()
-	if deltas < 2 || !marker {
+	if config.clientID == acceptanceClientClaudeCode &&
+		(deltas < 2 || !marker) {
 		return fmt.Errorf(
 			"streaming evidence deltas=%d marker=%t",
 			deltas,
 			marker,
 		)
+	}
+	if config.clientID != acceptanceClientClaudeCode {
+		if err := requireSuccessfulAgentEvidence(
+			config.clientID,
+			run,
+		); err != nil {
+			return fmt.Errorf("held streaming evidence: %w", err)
+		}
 	}
 	return waitForOfflineSettlement(ctx, generation.control, 10*time.Second)
 }
@@ -1516,7 +1820,10 @@ func waitForQueuedEgress(
 		case <-ctx.Done():
 			return ctx.Err()
 		case <-run.done:
-			return errors.New("Claude exited before egress queued in offline hold")
+			return fmt.Errorf(
+				"%s exited before egress queued in offline hold",
+				run.clientLabel(),
+			)
 		}
 	}
 }
@@ -1546,7 +1853,8 @@ func waitForHeldQueuedEgressKind(
 			return offlinehold.Snapshot{}, ctx.Err()
 		case <-run.done:
 			return offlinehold.Snapshot{}, fmt.Errorf(
-				"Claude exited before %s egress queued in offline hold",
+				"%s exited before %s egress queued in offline hold",
+				run.clientLabel(),
 				kind,
 			)
 		}
@@ -1563,7 +1871,10 @@ func runToolApproval(
 		return err
 	}
 	defer os.RemoveAll(workingDirectory)
-	spec, err := newToolApprovalSpec(workingDirectory)
+	spec, err := newToolApprovalSpec(
+		config.clientID,
+		workingDirectory,
+	)
 	if err != nil {
 		return err
 	}
@@ -1577,8 +1888,10 @@ func runToolApproval(
 	if err != nil {
 		return err
 	}
-	if err := run.waitForConfiguredTool(ctx, spec.toolName); err != nil {
-		return err
+	if config.clientID == acceptanceClientClaudeCode {
+		if err := run.waitForConfiguredTool(ctx, spec.toolName); err != nil {
+			return err
+		}
 	}
 	if _, statErr := os.Stat(spec.proofPath); !errors.Is(
 		statErr,
@@ -1640,30 +1953,56 @@ type toolApprovalSpec struct {
 	proofContent string
 }
 
-func newToolApprovalSpec(workingDirectory string) (toolApprovalSpec, error) {
+func newToolApprovalSpec(
+	clientID acceptanceClientID,
+	workingDirectory string,
+) (toolApprovalSpec, error) {
 	if !filepath.IsAbs(workingDirectory) {
 		return toolApprovalSpec{}, errors.New(
 			"tool approval working directory is not absolute",
 		)
 	}
 	const (
-		toolName     = "Write"
 		marker       = "VIBEMATE_TOOL_DONE"
 		proofContent = "VIBEMATE_TOOL_APPROVAL_PROOF"
 	)
+	toolName := ""
 	proofPath := filepath.Join(
 		filepath.Clean(workingDirectory),
 		"approval-proof.txt",
 	)
-	return toolApprovalSpec{
-		prompt: fmt.Sprintf(
+	var prompt string
+	switch clientID {
+	case acceptanceClientClaudeCode:
+		toolName = "Write"
+		prompt = fmt.Sprintf(
 			"Use the %s tool exactly once to create %q with exactly this content: %q. "+
 				"Do not use any other tool. After the tool succeeds, reply exactly %s.",
 			toolName,
 			proofPath,
 			proofContent,
 			marker,
-		),
+		)
+	case acceptanceClientCodexCLI:
+		toolName = "exec"
+		prompt = fmt.Sprintf(
+			"In working directory %q, the expected proof file is %q. "+
+				"Use the %s tool exactly once with exactly this input: "+
+				"`printf %%s %s > approval-proof.txt`. "+
+				"Do not use any other tool. After it succeeds, reply exactly %s.",
+			filepath.Clean(workingDirectory),
+			proofPath,
+			toolName,
+			proofContent,
+			marker,
+		)
+	default:
+		return toolApprovalSpec{}, errors.New(
+			"tool approval client is unsupported",
+		)
+	}
+	return toolApprovalSpec{
+		prompt:       prompt,
 		toolName:     toolName,
 		marker:       marker,
 		proofPath:    proofPath,
@@ -1696,7 +2035,12 @@ func agentProcessFailure(
 	waitErr error,
 	run *agentRun,
 ) error {
-	message := fmt.Sprintf("%s Claude exit=%d", label, exitCode)
+	message := fmt.Sprintf(
+		"%s %s exit=%d",
+		label,
+		run.clientLabel(),
+		exitCode,
+	)
 	if evidence := run.safeFailureEvidence(); evidence != "" {
 		message += " " + evidence
 	}
@@ -1740,7 +2084,8 @@ func agentExitedBeforeApproval(
 ) error {
 	exitCode, waitErr := run.wait(ctx)
 	return fmt.Errorf(
-		"Claude exited before a tool approval became pending: %w",
+		"%s exited before a tool approval became pending: %w",
+		run.clientLabel(),
 		agentProcessFailure("tool pre-approval", exitCode, waitErr, run),
 	)
 }
@@ -1750,6 +2095,13 @@ func runAgentInterrupt(
 	config config,
 	generation *daemonGeneration,
 ) error {
+	connectionBaseline, err := latestConnectionSequence(
+		ctx,
+		generation.control,
+	)
+	if err != nil {
+		return err
+	}
 	workingDirectory, err := os.MkdirTemp("", "vibermate-agent-sigint-*")
 	if err != nil {
 		return err
@@ -1765,11 +2117,26 @@ func runAgentInterrupt(
 	if err != nil {
 		return err
 	}
-	deltaContext, cancelDelta := context.WithTimeout(ctx, 2*time.Minute)
-	err = run.waitForDelta(deltaContext)
-	cancelDelta()
-	if err != nil {
-		return err
+	if config.clientID == acceptanceClientClaudeCode {
+		deltaContext, cancelDelta := context.WithTimeout(
+			ctx,
+			2*time.Minute,
+		)
+		err = run.waitForDelta(deltaContext)
+		cancelDelta()
+		if err != nil {
+			return err
+		}
+	} else {
+		if _, err := waitForActiveConnectionAudit(
+			ctx,
+			generation.control,
+			config,
+			connectionBaseline,
+			2*time.Minute,
+		); err != nil {
+			return err
+		}
 	}
 	if err := run.signalInterrupt(); err != nil {
 		return err

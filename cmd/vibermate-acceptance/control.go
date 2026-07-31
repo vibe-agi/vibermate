@@ -188,7 +188,10 @@ func (client *controlClient) applyAccess(
 	config config,
 	expected uint64,
 ) (desktopcontrol.AccessApplyResponse, int, controlProblem, error) {
-	input := assemblyAccess(config, expected)
+	input, err := assemblyAccess(config, expected)
+	if err != nil {
+		return desktopcontrol.AccessApplyResponse{}, 0, controlProblem{}, err
+	}
 	var result desktopcontrol.AccessApplyResponse
 	status, problem, err := client.request(
 		ctx,
@@ -432,14 +435,21 @@ func idempotencyKey() (string, error) {
 	return base64.RawURLEncoding.EncodeToString(value), nil
 }
 
-func assemblyAccess(config config, expected uint64) accessapply.Input {
+func assemblyAccess(
+	config config,
+	expected uint64,
+) (accessapply.Input, error) {
 	identifiers := assemblyIdentifiers(config.accessID)
+	client, err := selectedAcceptanceClient(config)
+	if err != nil {
+		return accessapply.Input{}, err
+	}
 	return accessapply.Input{
 		ExpectedRevision: expected,
 		Access: accessapply.AccessInput{
 			ID:                identifiers.access,
-			Name:              "M0 Assembly Access",
-			Description:       "Fixed Claude Code assembly acceptance",
+			Name:              "Assembly Access",
+			Description:       "Fixed client assembly acceptance",
 			Status:            string(access.AccessStatusEnabled),
 			AgentEndpointID:   identifiers.endpoint,
 			DefaultRouteSetID: identifiers.routeSet,
@@ -448,13 +458,13 @@ func assemblyAccess(config config, expected uint64) accessapply.Input {
 		},
 		AgentEndpoint: accessapply.AgentEndpointInput{
 			ID:            identifiers.endpoint,
-			ClientOrigin:  "https://api.anthropic.com",
-			ClientDialect: string(access.DialectAnthropicMessages),
+			ClientOrigin:  client.ClientOrigin,
+			ClientDialect: string(client.ClientDialect),
 		},
 		Profiles: []accessapply.ProfileInput{{
 			ID:                  identifiers.profile,
-			Name:                "M0 Assembly Profile",
-			Description:         "Fixed Anthropic to OpenAI Chat path",
+			Name:                "Assembly Profile",
+			Description:         "Fixed client to OpenAI Chat path",
 			BackendDialect:      string(access.DialectOpenAIChat),
 			TargetID:            identifiers.target,
 			TransportProfileRef: access.TransportProfileObservedClientH1Value,
@@ -479,7 +489,7 @@ func assemblyAccess(config config, expected uint64) accessapply.Input {
 		AccountBindings: []accessapply.AccountBindingInput{{
 			ID:            identifiers.account,
 			ProfileID:     identifiers.profile,
-			Label:         "M0 Assembly Account",
+			Label:         "Assembly Account",
 			SecretRef:     config.secretRef,
 			AuthDriverRef: access.AuthDriverStaticHeaderValue,
 			Enabled:       true,
@@ -496,7 +506,7 @@ func assemblyAccess(config config, expected uint64) accessapply.Input {
 			Mode:       string(access.PluginPlanModePassThrough),
 			BindingIDs: []string{},
 		},
-	}
+	}, nil
 }
 
 type assemblyIDs struct {

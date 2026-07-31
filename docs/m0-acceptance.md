@@ -12,13 +12,20 @@ The runner requires:
 - one packaged `VibeMate.app`;
 - the `vibermated` and `vibermate` executables that are direct members of that
   same App bundle;
-- an absolute Claude Code 2.1.220 executable whose invocation label and
-  SHA-256 match the fixed Darwin arm64 release;
+- exactly one absolute fixed-client executable:
+  - Claude Code 2.1.220 with its fixed Darwin arm64 native-binary digest; or
+  - Codex CLI 0.145.0 with its fixed npm wrapper, package metadata, platform
+    package metadata, and Darwin arm64 native-child digests;
 - one provider origin, fixed model, Access ID, and logical `SecretRef`;
 - a private path for the JSON evidence report.
 
-The fixed Claude executable SHA-256 is
+The fixed Claude entrypoint SHA-256 is
 `8addc857f3fe64d5a0368af9ee50321b50afb4a6918ba3ef018ab84f5dbbe081`.
+The Codex identity is compound evidence rather than a version string or one
+wrapper hash. The built-in client catalog is the authority for every required
+artifact digest and the fixed `ssl_cert_file` launch recipe. Other executable
+versions remain valid generic proxy clients, but they cannot be used to
+produce this fixed-client acceptance evidence.
 The default provider route for this acceptance slice is
 `http://127.0.0.1:23333/v1` with model `dashscope:glm-5`.
 
@@ -30,10 +37,13 @@ authenticated HTTP byte is written. `localhost`, LAN, private-CIDR, and public
 HTTP origins are rejected.
 
 The runner never accepts a secret value. It removes ambient Anthropic,
-alternate-provider, Claude credential, and OpenAI credential variables from
-the captured child environment. A non-secret placeholder forces the Agent to
-enter the VibeMate proxy. The active provider value is resolved by the
-runtime's selected SecretStore only after the offline-egress lease is granted.
+alternate-provider, Claude, Codex, and OpenAI credential/base-URL variables,
+plus conflicting CA inputs, from the captured child environment. A non-secret
+client placeholder forces the selected Agent to enter the VibeMate proxy. A
+Codex run also receives a private run-owned `CODEX_HOME`, ignores user config
+and rules, and receives prompts only over standard input. The active provider
+value is resolved by the runtime's selected SecretStore only after the
+offline-egress lease is granted.
 
 The ordinary M0 build intentionally uses the development file SecretStore:
 
@@ -69,10 +79,11 @@ The acceptance runner rejects:
 - an unpinned build or acceptance-host toolchain;
 - a missing, malformed, oversized, or unknown-field manifest.
 
-The v3 report records the deterministic App-bundle manifest digest, individual
-artifact digests, build and host toolchains, build profiles, configuration
-digests, and redacted run configuration. It is atomically replaced with mode
-`0600`. It contains no prompt, response body, header, tool arguments, or secret
+The v4 report records the selected client identity and typed compound adapter
+evidence, deterministic App-bundle manifest digest, individual artifact
+digests, build and host toolchains, build profiles, configuration digests, and
+redacted run configuration. It is atomically replaced with mode `0600`. It
+contains no prompt, response body, header, tool arguments, thread ID, or secret
 value.
 
 Build from a clean frozen commit with the pinned toolchains:
@@ -102,7 +113,7 @@ traffic.
 
 The deterministic sequence verifies:
 
-1. the fixed Claude executable identity;
+1. the selected fixed-client compound executable identity;
 2. exclusive Desktop generation ownership;
 3. the packaged App starts with an isolated temporary user directory,
    exchanges the native-shell bootstrap, publishes readiness, and gracefully
@@ -110,12 +121,13 @@ The deterministic sequence verifies:
 4. the packaged daemon starts from an inherited bootstrap descriptor with
    complete proxy and control routes;
 5. one executable Access commits as revision 1;
-6. fixed Claude reaches the proxy while egress is held and queues approved
-   original-origin control traffic with zero active egress;
-7. Resume performs no-credential probes for the exact queued original origin
-   and frozen provider target before release; strict HTTPS targets complete TLS,
-   while the literal-loopback cleartext exception completes an exact TCP peer
-   check;
+6. the fixed client reaches the exact configured ingress while egress is held;
+   Claude queues approved original-origin control traffic, while fixed Codex
+   receives a bounded local 426 and its HTTP fallback queues the frozen provider
+   target, both with zero active egress;
+7. Resume performs no-credential probes for every queued frozen target before
+   release; strict HTTPS targets complete TLS, while the literal-loopback
+   cleartext exception completes an exact TCP peer check;
 8. the semantic request reaches the intentionally missing development
    credential boundary, records `provider_credential_unavailable`, and does not
    send provider HTTP traffic;
@@ -125,7 +137,7 @@ The deterministic sequence verifies:
 10. daemon `SIGINT` drains the Host and removes owned discovery;
 11. a new incarnation reopens SQLite and rejects `expectedRevision=0`, proving
     revision 1 recovery;
-12. another fixed-Claude request remains queued behind Hold when the daemon is
+12. another fixed-client request remains queued behind Hold when the daemon is
     killed;
 13. daemon `SIGKILL` terminates that request without a completion marker,
     releases kernel generation ownership, and leaves no resurrected in-memory
@@ -143,6 +155,9 @@ Example:
   --deterministic-only \
   --report=/absolute/private/path/m0-deterministic.json
 ```
+
+Use `--codex=/absolute/path/to/the/fixed/codex` instead of `--claude` to
+select the fixed Codex vertical. Supplying both or neither is rejected.
 
 ## Credentialed continuation
 
@@ -170,24 +185,29 @@ The credentialed continuation additionally verifies:
 
 1. revision 2 atomically replaces the run-local missing `SecretRef` with the
    configured logical reference without exposing its value;
-2. fixed Claude completes an unheld provider reply with a trusted assistant
-   marker and at least one incremental content delta;
-3. a real `Write` intent becomes durable pending approval without raw
+2. the fixed client completes an unheld provider reply with a trusted assistant
+   marker; Claude exposes at least one incremental content delta, while Codex
+   exposes a complete typed JSONL turn bound to a trusted thread identity;
+3. fixed Codex additionally completes two distinct successful Exchanges while
+   preserving that private thread identity across `exec resume`;
+4. a real client tool intent (`Write` for Claude or `exec` for Codex) becomes
+   durable pending approval without raw
    arguments; neither the tool block, completion marker, nor bounded proof file
    exists before `allow-once`, and the exact proof file exists afterward;
-4. a new request queues while Hold is active, sends nothing before Resume, and
-   returns a trusted marker with at least two deltas after the exact route probe;
-5. signaling captured Claude after its first streamed delta terminates the
-   child within the bound while the shared runtime remains ready and all hold
-   ownership converges;
-6. the final packaged daemon drains cleanly.
+5. a new request queues while Hold is active, sends nothing before Resume, and
+   returns a trusted marker after the exact route probe; Claude also exposes at
+   least two content deltas;
+6. signaling the captured client during an active streamed Exchange terminates
+   the child within the bound while the shared runtime remains ready and all
+   hold ownership converges;
+7. the final packaged daemon drains cleanly.
 
 Example:
 
 ```text
 /private/tmp/vibermate-acceptance \
   --desktop-app=/absolute/path/to/VibeMate.app \
-  --claude=/Users/null/.local/bin/claude \
+  --codex=/absolute/path/to/the/fixed/codex \
   --report=/absolute/private/path/m0-credentialed.json
 ```
 
@@ -197,9 +217,12 @@ Other nonzero statuses are failures.
 
 ## Evidence boundary
 
-A successful M0 report proves only this fixed macOS arm64 Desktop slice, fixed
-Claude release, configured provider target/model, and captured run. It does not prove
-physical sleep or network removal, power-loss durability, arbitrary Agent or
-provider compatibility, reverse protocol translation, exact JA3/JA4 or HTTP/2
-fingerprint parity, Root installation, signed/notarized distribution, Server,
-Windows/Linux, or Preview/Release readiness.
+A successful report proves only this fixed macOS arm64 Desktop slice, the
+selected fixed client release, configured provider target/model, and captured
+run. Fixed Codex evidence covers bounded WebSocket rejection and Responses HTTP
+fallback; it does not prove successful Responses WebSocket semantics or TUI
+interaction. The report also does not prove physical sleep or network removal,
+power-loss durability, arbitrary Agent or provider compatibility, reverse
+protocol translation, exact JA3/JA4 or HTTP/2 fingerprint parity, Root
+installation, signed/notarized distribution, Server, Windows/Linux, or
+Preview/Release readiness.

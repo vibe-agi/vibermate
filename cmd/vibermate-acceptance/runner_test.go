@@ -8,59 +8,186 @@ import (
 	"time"
 
 	"github.com/vibe-agi/vibermate/internal/access"
+	"github.com/vibe-agi/vibermate/internal/activity"
 	"github.com/vibe-agi/vibermate/internal/connectionevent"
 	"github.com/vibe-agi/vibermate/internal/offlinehold"
 )
 
-func TestToolApprovalSpecUsesAvailableWriteToolAndBoundedProof(t *testing.T) {
+func TestToolApprovalSpecUsesTheSelectedClientToolAndBoundedProof(
+	t *testing.T,
+) {
 	t.Parallel()
 
-	workingDirectory := t.TempDir()
-	spec, err := newToolApprovalSpec(workingDirectory)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if spec.toolName != "Write" {
-		t.Fatalf("tool name = %q, want Write", spec.toolName)
-	}
-	if filepath.Dir(spec.proofPath) != workingDirectory {
-		t.Fatalf("proof path = %q", spec.proofPath)
-	}
-	if spec.proofContent == "" ||
-		!strings.Contains(spec.prompt, spec.proofPath) ||
-		!strings.Contains(spec.prompt, spec.proofContent) {
-		t.Fatalf("invalid proof specification: %+v", spec)
-	}
-	if err := verifyToolApprovalProof(spec); err == nil {
-		t.Fatal("missing proof passed verification")
-	}
-	if err := os.WriteFile(
-		spec.proofPath,
-		[]byte(spec.proofContent),
-		0o600,
-	); err != nil {
-		t.Fatal(err)
-	}
-	if err := verifyToolApprovalProof(spec); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(
-		spec.proofPath,
-		[]byte(spec.proofContent+"unexpected"),
-		0o600,
-	); err != nil {
-		t.Fatal(err)
-	}
-	if err := verifyToolApprovalProof(spec); err == nil {
-		t.Fatal("unexpected proof content passed verification")
+	for _, test := range []struct {
+		name     string
+		clientID acceptanceClientID
+		toolName string
+	}{
+		{
+			name:     "Claude",
+			clientID: acceptanceClientClaudeCode,
+			toolName: "Write",
+		},
+		{
+			name:     "Codex",
+			clientID: acceptanceClientCodexCLI,
+			toolName: "exec",
+		},
+	} {
+		test := test
+		t.Run(test.name, func(t *testing.T) {
+			workingDirectory := t.TempDir()
+			spec, err := newToolApprovalSpec(
+				test.clientID,
+				workingDirectory,
+			)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if spec.toolName != test.toolName {
+				t.Fatalf(
+					"tool name = %q, want %q",
+					spec.toolName,
+					test.toolName,
+				)
+			}
+			if filepath.Dir(spec.proofPath) != workingDirectory {
+				t.Fatalf("proof path = %q", spec.proofPath)
+			}
+			if spec.proofContent == "" ||
+				!strings.Contains(spec.prompt, spec.proofPath) ||
+				!strings.Contains(spec.prompt, spec.proofContent) {
+				t.Fatalf("invalid proof specification: %+v", spec)
+			}
+			if err := verifyToolApprovalProof(spec); err == nil {
+				t.Fatal("missing proof passed verification")
+			}
+			if err := os.WriteFile(
+				spec.proofPath,
+				[]byte(spec.proofContent),
+				0o600,
+			); err != nil {
+				t.Fatal(err)
+			}
+			if err := verifyToolApprovalProof(spec); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(
+				spec.proofPath,
+				[]byte(spec.proofContent+"unexpected"),
+				0o600,
+			); err != nil {
+				t.Fatal(err)
+			}
+			if err := verifyToolApprovalProof(spec); err == nil {
+				t.Fatal("unexpected proof content passed verification")
+			}
+		})
 	}
 }
 
 func TestToolApprovalSpecRejectsRelativeWorkingDirectory(t *testing.T) {
 	t.Parallel()
 
-	if _, err := newToolApprovalSpec("relative"); err == nil {
+	if _, err := newToolApprovalSpec(
+		acceptanceClientClaudeCode,
+		"relative",
+	); err == nil {
 		t.Fatal("relative working directory was accepted")
+	}
+}
+
+func TestHeldPreflightUsesTheClientSpecificEgressBoundary(t *testing.T) {
+	t.Parallel()
+
+	for _, test := range []struct {
+		client acceptanceClientID
+		kind   offlinehold.EgressKind
+	}{
+		{
+			client: acceptanceClientClaudeCode,
+			kind:   offlinehold.EgressOpaque,
+		},
+		{
+			client: acceptanceClientCodexCLI,
+			kind:   offlinehold.EgressProvider,
+		},
+	} {
+		if kind, err := heldPreflightEgressKind(test.client); err != nil ||
+			kind != test.kind {
+			t.Fatalf(
+				"client %q kind=%q error=%v",
+				test.client,
+				kind,
+				err,
+			)
+		}
+	}
+	if _, err := heldPreflightEgressKind(
+		acceptanceClientID("unknown"),
+	); err == nil {
+		t.Fatal("unknown client preflight boundary was accepted")
+	}
+}
+
+func TestSuccessfulExchangeEvidenceCountsDistinctPostBaselineSubjects(
+	t *testing.T,
+) {
+	t.Parallel()
+
+	records := []activity.Record{
+		{
+			Sequence:  9,
+			Kind:      activity.KindExchangeCompleted,
+			AccessID:  "Acc-001",
+			SubjectID: "exchange-before",
+			Status:    activity.StatusSucceeded,
+		},
+		{
+			Sequence:  10,
+			Kind:      activity.KindExchangeCompleted,
+			AccessID:  "Acc-001",
+			SubjectID: "exchange-first",
+			Status:    activity.StatusSucceeded,
+		},
+		{
+			Sequence:  11,
+			Kind:      activity.KindExchangeCompleted,
+			AccessID:  "Acc-001",
+			SubjectID: "exchange-first",
+			Status:    activity.StatusSucceeded,
+		},
+		{
+			Sequence:  12,
+			Kind:      activity.KindExchangeCompleted,
+			AccessID:  "Acc-002",
+			SubjectID: "exchange-other",
+			Status:    activity.StatusSucceeded,
+		},
+		{
+			Sequence:  13,
+			Kind:      activity.KindExchangeCompleted,
+			AccessID:  "Acc-001",
+			SubjectID: "exchange-failed",
+			Status:    activity.StatusFailed,
+		},
+		{
+			Sequence:  14,
+			Kind:      activity.KindExchangeCompleted,
+			AccessID:  "Acc-001",
+			SubjectID: "exchange-second",
+			Status:    activity.StatusSucceeded,
+		},
+	}
+	subjects := successfulExchangeSubjectsAfter(
+		records,
+		"Acc-001",
+		9,
+	)
+	if len(subjects) != 2 ||
+		subjects[0] != "exchange-first" ||
+		subjects[1] != "exchange-second" {
+		t.Fatalf("successful Exchange subjects = %v", subjects)
 	}
 }
 

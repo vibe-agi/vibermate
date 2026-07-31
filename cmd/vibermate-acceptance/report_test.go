@@ -6,12 +6,31 @@ import (
 	"path/filepath"
 	"testing"
 	"time"
+
+	"github.com/vibe-agi/vibermate/internal/clientadapter"
 )
 
 func TestWriteReportPublishesPrivateRedactedEvidence(t *testing.T) {
 	t.Parallel()
 
-	report := newReport(time.Unix(10, 0))
+	client := acceptanceClient{
+		ID:      acceptanceClientCodexCLI,
+		Version: "0.145.0",
+	}
+	report := newReport(time.Unix(10, 0), client)
+	if err := report.bindClientEvidence(clientadapter.Evidence{
+		ID:              "codex-cli",
+		Revision:        1,
+		Version:         "0.145.0",
+		CatalogRevision: 1,
+		InstallShape:    clientadapter.InstallNPMWrapperNativeChild,
+		ReleaseSHA256:   "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+		LaunchRecipe:    clientadapter.LaunchSSLCertFile,
+		Features: clientadapter.
+			FeatureResponsesWebSocketHTTPFallback,
+	}); err != nil {
+		t.Fatal(err)
+	}
 	report.Provenance = &acceptanceProvenance{
 		Source: sourceProvenance{
 			VCS:      "git",
@@ -41,6 +60,11 @@ func TestWriteReportPublishesPrivateRedactedEvidence(t *testing.T) {
 	}
 	if decoded.Schema != reportSchema ||
 		decoded.Status != checkPassed ||
+		decoded.Client.ID != string(acceptanceClientCodexCLI) ||
+		decoded.Client.Version != "0.145.0" ||
+		decoded.Client.Adapter == nil ||
+		decoded.Client.Adapter.ReleaseSHA256 !=
+			"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa" ||
 		decoded.Provenance == nil ||
 		decoded.Provenance.Source.Revision !=
 			"0123456789012345678901234567890123456789" ||

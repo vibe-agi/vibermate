@@ -10,6 +10,7 @@ import (
 	"io"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"slices"
 	"strings"
 	"sync"
@@ -21,8 +22,11 @@ import (
 )
 
 const (
-	maxAgentLineBytes = 8 << 20
-	maxAgentLines     = 8192
+	maxAgentLineBytes        = 8 << 20
+	maxAgentLines            = 8192
+	codexStateDirectoryName  = ".vibermate-codex"
+	fixedCodexRequestedModel = "gpt-5.6-sol"
+	codexHTTPFallbackMessage = "Falling back from WebSockets to HTTPS transport."
 )
 
 type agentRun struct {
@@ -31,6 +35,7 @@ type agentRun struct {
 	outputDone chan struct{}
 	stderr     *boundedBuffer
 	marker     string
+	clientID   acceptanceClientID
 
 	mu         sync.Mutex
 	waitErr    error
@@ -46,6 +51,45 @@ type agentRun struct {
 
 	configurationSeen bool
 	configuredTools   []string
+
+	threadID         agentThreadID
+	agentMessages    int
+	httpFallbackSeen bool
+	turnStarted      bool
+	turnCompleted    bool
+}
+
+type agentThreadID struct {
+	value string
+}
+
+func parseAgentThreadID(value string) (agentThreadID, error) {
+	if len(value) != 36 {
+		return agentThreadID{}, errors.New("agent thread identity is invalid")
+	}
+	for index := range value {
+		character := value[index]
+		if index == 8 || index == 13 || index == 18 || index == 23 {
+			if character != '-' {
+				return agentThreadID{}, errors.New(
+					"agent thread identity is invalid",
+				)
+			}
+			continue
+		}
+		if (character < '0' || character > '9') &&
+			(character < 'a' || character > 'f') &&
+			(character < 'A' || character > 'F') {
+			return agentThreadID{}, errors.New(
+				"agent thread identity is invalid",
+			)
+		}
+	}
+	return agentThreadID{value: strings.ToLower(value)}, nil
+}
+
+func (identity agentThreadID) String() string {
+	return identity.value
 }
 
 type agentFailureEvidence struct {
@@ -66,7 +110,68 @@ func startAgent(
 	tools string,
 	marker string,
 ) (*agentRun, error) {
-	command := newAgentCommand(config, workingDirectory, prompt, tools)
+	client, err := selectedAcceptanceClient(config)
+	if err != nil {
+		return nil, err
+	}
+	if client.ID == acceptanceClientCodexCLI {
+		if err := privateDirectory(
+			filepath.Join(workingDirectory, codexStateDirectoryName),
+		); err != nil {
+			return nil, fmt.Errorf("prepare Codex state: %w", err)
+		}
+	}
+	command, err := newAgentCommand(
+		config,
+		workingDirectory,
+		prompt,
+		tools,
+	)
+	if err != nil {
+		return nil, err
+	}
+	return startAgentProcess(command, client, marker)
+}
+
+func startResumeAgent(
+	config config,
+	workingDirectory string,
+	prompt string,
+	threadID agentThreadID,
+	marker string,
+) (*agentRun, error) {
+	client, err := selectedAcceptanceClient(config)
+	if err != nil {
+		return nil, err
+	}
+	if client.ID != acceptanceClientCodexCLI {
+		return nil, errors.New("resume requires the fixed Codex client")
+	}
+	if err := privateDirectory(
+		filepath.Join(workingDirectory, codexStateDirectoryName),
+	); err != nil {
+		return nil, fmt.Errorf("prepare Codex state: %w", err)
+	}
+	command, err := newResumeAgentCommand(
+		config,
+		workingDirectory,
+		prompt,
+		threadID,
+	)
+	if err != nil {
+		return nil, err
+	}
+	return startAgentProcess(command, client, marker)
+}
+
+func startAgentProcess(
+	command *exec.Cmd,
+	client acceptanceClient,
+	marker string,
+) (*agentRun, error) {
+	if command == nil {
+		return nil, errors.New("captured client command is nil")
+	}
 	stdout, err := command.StdoutPipe()
 	if err != nil {
 		return nil, err
@@ -80,9 +185,14 @@ func startAgent(
 		stderr:     stderr,
 		changed:    make(chan struct{}),
 		marker:     marker,
+		clientID:   client.ID,
 	}
 	if err := command.Start(); err != nil {
-		return nil, fmt.Errorf("start captured Claude: %w", err)
+		return nil, fmt.Errorf(
+			"start captured %s: %w",
+			client.ReportLabel,
+			err,
+		)
 	}
 	go run.consume(stdout)
 	go func() {
@@ -101,13 +211,37 @@ func newAgentCommand(
 	workingDirectory string,
 	prompt string,
 	tools string,
-) *exec.Cmd {
-	arguments := fixedClaudeArguments(config.claudePath, tools)
+) (*exec.Cmd, error) {
+	client, err := selectedAcceptanceClient(config)
+	if err != nil {
+		return nil, err
+	}
+	var arguments []string
+	stateDirectory := ""
+	switch client.ID {
+	case acceptanceClientClaudeCode:
+		arguments = fixedClaudeArguments(client.ExecutablePath, tools)
+	case acceptanceClientCodexCLI:
+		arguments = fixedCodexArguments(client.ExecutablePath)
+		stateDirectory = filepath.Join(
+			workingDirectory,
+			codexStateDirectoryName,
+		)
+	default:
+		return nil, errors.New("acceptance client invocation is unsupported")
+	}
 	command := exec.Command(config.launcherPath, arguments...)
 	command.Dir = workingDirectory
-	command.Env = acceptanceEnvironment(os.Environ())
+	command.Env, err = clientAcceptanceEnvironment(
+		client.ID,
+		os.Environ(),
+		stateDirectory,
+	)
+	if err != nil {
+		return nil, err
+	}
 	command.Stdin = strings.NewReader(prompt)
-	return command
+	return command, nil
 }
 
 func fixedClaudeArguments(
@@ -141,6 +275,112 @@ func fixedClaudeArguments(
 	return arguments
 }
 
+func fixedCodexArguments(codexPath string) []string {
+	return []string{
+		"run",
+		"--",
+		codexPath,
+		"-a",
+		"never",
+		"-s",
+		"workspace-write",
+		"exec",
+		"--json",
+		"--skip-git-repo-check",
+		"--ignore-user-config",
+		"--ignore-rules",
+		"--color",
+		"never",
+		"--model",
+		fixedCodexRequestedModel,
+		"-",
+	}
+}
+
+func newResumeAgentCommand(
+	config config,
+	workingDirectory string,
+	prompt string,
+	threadID agentThreadID,
+) (*exec.Cmd, error) {
+	client, err := selectedAcceptanceClient(config)
+	if err != nil {
+		return nil, err
+	}
+	if client.ID != acceptanceClientCodexCLI || threadID.String() == "" {
+		return nil, errors.New("Codex resume invocation is invalid")
+	}
+	stateDirectory := filepath.Join(
+		workingDirectory,
+		codexStateDirectoryName,
+	)
+	environment, err := clientAcceptanceEnvironment(
+		client.ID,
+		os.Environ(),
+		stateDirectory,
+	)
+	if err != nil {
+		return nil, err
+	}
+	arguments := []string{
+		"run",
+		"--",
+		client.ExecutablePath,
+		"-a",
+		"never",
+		"-s",
+		"workspace-write",
+		"exec",
+		"resume",
+		"--json",
+		"--skip-git-repo-check",
+		"--ignore-user-config",
+		"--ignore-rules",
+		"--model",
+		fixedCodexRequestedModel,
+		threadID.String(),
+		"-",
+	}
+	command := exec.Command(config.launcherPath, arguments...)
+	command.Dir = workingDirectory
+	command.Env = environment
+	command.Stdin = strings.NewReader(prompt)
+	return command, nil
+}
+
+func clientAcceptanceEnvironment(
+	clientID acceptanceClientID,
+	base []string,
+	stateDirectory string,
+) ([]string, error) {
+	result := acceptanceEnvironment(base)
+	switch clientID {
+	case acceptanceClientClaudeCode:
+		if stateDirectory != "" {
+			return nil, errors.New(
+				"Claude acceptance state directory is unexpected",
+			)
+		}
+		result = append(
+			result,
+			"ANTHROPIC_API_KEY=vibermate-assembly-placeholder",
+		)
+	case acceptanceClientCodexCLI:
+		if stateDirectory == "" ||
+			!filepath.IsAbs(stateDirectory) ||
+			filepath.Clean(stateDirectory) != stateDirectory {
+			return nil, errors.New(
+				"Codex acceptance state directory is invalid",
+			)
+		}
+		result = append(result, "CODEX_HOME="+stateDirectory)
+	default:
+		return nil, errors.New("acceptance client environment is unsupported")
+	}
+	slices.Sort(result)
+	return result, nil
+}
+
 func acceptanceEnvironment(base []string) []string {
 	managed := map[string]struct{}{
 		"ANTHROPIC_API_KEY":          {},
@@ -154,10 +394,23 @@ func acceptanceEnvironment(base []string) []string {
 		"CLAUDE_CODE_USE_BEDROCK":    {},
 		"CLAUDE_CODE_USE_FOUNDRY":    {},
 		"CLAUDE_CODE_USE_VERTEX":     {},
+		"CODEX_API_KEY":              {},
+		"CODEX_BASE_URL":             {},
+		"CODEX_HOME":                 {},
+		"CURL_CA_BUNDLE":             {},
+		"NODE_EXTRA_CA_CERTS":        {},
+		"NODE_USE_ENV_PROXY":         {},
 		"OPENAI_ACCESS_TOKEN":        {},
 		"OPENAI_API_KEY":             {},
+		"OPENAI_BASE_URL":            {},
+		"OPENAI_ORGANIZATION":        {},
+		"OPENAI_ORG_ID":              {},
+		"OPENAI_PROJECT":             {},
+		"OPENAI_PROJECT_ID":          {},
+		"REQUESTS_CA_BUNDLE":         {},
+		"SSL_CERT_FILE":              {},
 	}
-	result := make([]string, 0, len(base)+1)
+	result := make([]string, 0, len(base))
 	for _, entry := range base {
 		name, _, found := strings.Cut(entry, "=")
 		if !found {
@@ -168,10 +421,6 @@ func acceptanceEnvironment(base []string) []string {
 		}
 		result = append(result, entry)
 	}
-	result = append(
-		result,
-		"ANTHROPIC_API_KEY=vibermate-assembly-placeholder",
-	)
 	slices.Sort(result)
 	return result
 }
@@ -185,7 +434,10 @@ func (run *agentRun) consume(reader io.Reader) {
 		run.mu.Lock()
 		run.lines++
 		if run.lines > maxAgentLines {
-			run.readErr = errors.New("Claude output exceeded the line bound")
+			run.readErr = fmt.Errorf(
+				"%s output exceeded the line bound",
+				run.clientLabel(),
+			)
 			run.signalLocked()
 			run.mu.Unlock()
 			_ = run.command.Process.Signal(syscall.SIGINT)
@@ -204,6 +456,14 @@ func (run *agentRun) consume(reader io.Reader) {
 }
 
 func (run *agentRun) observeLine(line []byte) {
+	if run.clientID == acceptanceClientCodexCLI {
+		run.observeCodexLine(line)
+		return
+	}
+	run.observeClaudeLine(line)
+}
+
+func (run *agentRun) observeClaudeLine(line []byte) {
 	var envelope any
 	if json.Unmarshal(line, &envelope) != nil {
 		run.failure.merge(extractAgentFailureEvidence(line))
@@ -223,6 +483,116 @@ func (run *agentRun) observeLine(line []byte) {
 		}
 	}
 	text := trustedAssistantText(envelope)
+	run.observeTrustedText(text)
+}
+
+func (run *agentRun) observeCodexLine(line []byte) {
+	var envelope map[string]json.RawMessage
+	if json.Unmarshal(line, &envelope) != nil {
+		run.failure.merge(extractAgentFailureEvidence(line))
+		return
+	}
+	var kind string
+	if json.Unmarshal(envelope["type"], &kind) != nil {
+		return
+	}
+	switch kind {
+	case "thread.started":
+		var rawThreadID string
+		if json.Unmarshal(envelope["thread_id"], &rawThreadID) != nil {
+			run.setReadError(errors.New(
+				"Codex thread event omitted its identity",
+			))
+			return
+		}
+		threadID, err := parseAgentThreadID(rawThreadID)
+		if err != nil {
+			run.setReadError(err)
+			return
+		}
+		if run.threadID.String() != "" && run.threadID != threadID {
+			run.setReadError(errors.New(
+				"Codex thread identity changed within one invocation",
+			))
+			return
+		}
+		run.threadID = threadID
+		run.lastType = kind
+	case "turn.started":
+		if run.threadID.String() == "" || run.turnStarted ||
+			run.turnCompleted {
+			run.setReadError(errors.New(
+				"Codex turn start sequence is invalid",
+			))
+			return
+		}
+		run.turnStarted = true
+		run.lastType = kind
+	case "item.completed":
+		if !run.turnStarted || run.turnCompleted {
+			run.setReadError(errors.New(
+				"Codex completed item sequence is invalid",
+			))
+			return
+		}
+		run.observeCodexCompletedItem(envelope["item"])
+		run.lastType = kind
+	case "turn.completed":
+		if !run.turnStarted || run.turnCompleted {
+			run.setReadError(errors.New(
+				"Codex turn completion sequence is invalid",
+			))
+			return
+		}
+		run.turnCompleted = true
+		run.lastType = kind
+	case "turn.failed":
+		run.failure.merge(extractAgentFailureEvidence(line))
+		run.lastType = kind
+	case "item.started", "item.updated":
+		if run.turnStarted && !run.turnCompleted {
+			run.lastType = kind
+		}
+	default:
+		run.failure.merge(extractAgentFailureEvidence(line))
+	}
+}
+
+func (run *agentRun) observeCodexCompletedItem(raw json.RawMessage) {
+	var item struct {
+		Type    string `json:"type"`
+		Text    string `json:"text"`
+		Message string `json:"message"`
+	}
+	if json.Unmarshal(raw, &item) != nil {
+		run.setReadError(errors.New("Codex completed item is invalid"))
+		return
+	}
+	switch item.Type {
+	case "agent_message":
+		run.agentMessages++
+		run.observeTrustedText(item.Text)
+	case "error":
+		if strings.TrimSpace(item.Message) == codexHTTPFallbackMessage {
+			run.httpFallbackSeen = true
+		}
+		run.failure.merge(extractAgentFailureEvidence(raw))
+	case "command_execution",
+		"file_change",
+		"mcp_tool_call",
+		"collaboration_tool_call",
+		"web_search":
+		run.toolUses++
+	}
+}
+
+func (run *agentRun) setReadError(err error) {
+	if run.readErr == nil {
+		run.readErr = err
+	}
+}
+
+func (run *agentRun) observeTrustedText(text string) {
 	candidate := run.markerTail + text
 	if run.marker != "" && strings.Contains(candidate, run.marker) {
 		run.markerSeen = true
@@ -739,7 +1109,7 @@ func (run *agentRun) wait(
 	ctx context.Context,
 ) (int, error) {
 	if run == nil {
-		return -1, errors.New("Claude run is nil")
+		return -1, errors.New("client run is nil")
 	}
 	select {
 	case <-run.done:
@@ -781,12 +1151,15 @@ func (run *agentRun) wait(
 
 func (run *agentRun) signalInterrupt() error {
 	if run == nil || run.command == nil || run.command.Process == nil {
-		return errors.New("Claude run process is unavailable")
+		return errors.New("client run process is unavailable")
 	}
 	return run.command.Process.Signal(os.Interrupt)
 }
 
 func (run *agentRun) waitForDelta(ctx context.Context) error {
+	if run == nil || run.clientID != acceptanceClientClaudeCode {
+		return errors.New("Claude stream run is unavailable")
+	}
 	for {
 		run.mu.Lock()
 		if run.deltas > 0 {
@@ -835,7 +1208,7 @@ func (run *agentRun) waitForConfiguredTool(
 	expected string,
 ) error {
 	if run == nil {
-		return errors.New("Claude run is nil")
+		return errors.New("client run is nil")
 	}
 	if expected == "" {
 		return errors.New("expected Claude tool is empty")
@@ -890,6 +1263,64 @@ func (run *agentRun) waitForConfiguredTool(
 	}
 }
 
+func (run *agentRun) waitForHTTPFallback(ctx context.Context) error {
+	if run == nil || run.clientID != acceptanceClientCodexCLI {
+		return errors.New("Codex fallback run is unavailable")
+	}
+	for {
+		run.mu.Lock()
+		if run.httpFallbackSeen {
+			run.mu.Unlock()
+			return nil
+		}
+		if run.readErr != nil {
+			err := run.readErr
+			run.mu.Unlock()
+			return err
+		}
+		changed := run.changed
+		run.mu.Unlock()
+		select {
+		case <-changed:
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-run.done:
+			select {
+			case <-run.outputDone:
+			case <-ctx.Done():
+				return ctx.Err()
+			}
+			run.mu.Lock()
+			seen := run.httpFallbackSeen
+			readErr := run.readErr
+			run.mu.Unlock()
+			if readErr != nil {
+				return readErr
+			}
+			if seen {
+				return nil
+			}
+			return errors.New(
+				"Codex exited without HTTP fallback evidence",
+			)
+		}
+	}
+}
+
+func (run *agentRun) clientLabel() string {
+	if run == nil {
+		return "Agent"
+	}
+	switch run.clientID {
+	case acceptanceClientClaudeCode:
+		return "Claude"
+	case acceptanceClientCodexCLI:
+		return "Codex"
+	default:
+		return "Agent"
+	}
+}
+
 func (run *agentRun) evidence() (
 	lines int,
 	deltas int,
@@ -899,6 +1330,29 @@ func (run *agentRun) evidence() (
 	run.mu.Lock()
 	defer run.mu.Unlock()
 	return run.lines, run.deltas, run.toolUses, run.markerSeen
+}
+
+type agentProtocolEvidence struct {
+	ThreadID         agentThreadID
+	AgentMessages    int
+	HTTPFallbackSeen bool
+	TurnStarted      bool
+	TurnCompleted    bool
+}
+
+func (run *agentRun) protocolEvidence() agentProtocolEvidence {
+	if run == nil {
+		return agentProtocolEvidence{}
+	}
+	run.mu.Lock()
+	defer run.mu.Unlock()
+	return agentProtocolEvidence{
+		ThreadID:         run.threadID,
+		AgentMessages:    run.agentMessages,
+		HTTPFallbackSeen: run.httpFallbackSeen,
+		TurnStarted:      run.turnStarted,
+		TurnCompleted:    run.turnCompleted,
+	}
 }
 
 func (run *agentRun) safeFailureEvidence() string {
