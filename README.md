@@ -14,9 +14,12 @@ process-local immutable `AccessPlanSnapshot` and deterministic `PlanHash`.
 The current M0 plan contains one enabled Agent endpoint, one owned OpenAI Chat
 profile and provider target, one account binding that stores only `SecretRef`
 and `AuthDriverRef`, one default route set, Direct egress, a fixed model
-mapping, the Anthropic Messages to OpenAI Chat codec identity, an explicit
-empty pass-through plugin plan, and dependency revisions. `ClientOrigin` and
-the actual provider target are separate network identities, and no secret value
+mapping, an explicit empty pass-through plugin plan, and dependency revisions.
+The sole immutable plan can now compile either the Anthropic Messages or exact
+OpenAI Responses `POST /v1/responses` client operation against the existing
+OpenAI Chat backend. A shared typed operation catalog is the only path truth
+used by Access compilation and ingress classification. `ClientOrigin` and the
+actual provider target are separate network identities, and no secret value
 can enter the aggregate or snapshot.
 
 The protocol layer now implements the corresponding network-free bilateral
@@ -69,8 +72,11 @@ authenticated, persisted CaptureRun capability must be accepted before exact
 `ClientOrigin` lookup, local leaf issuance, CONNECT MITM, path classification,
 or data-plane dispatch. Every request on an existing CONNECT connection
 revalidates its frozen AgentEndpoint evidence against the current active plan.
-Semantic Anthropic Messages operations enter the Exchange executor;
+Semantic Anthropic Messages operations enter the current Exchange executor;
 auxiliary/opaque operations use the separately gated original-origin transport.
+The exact Responses operation is compiled and classified but is not yet
+selected by production Exchange. Responses management, upload, batch, media,
+Realtime, and foreign semantic operations cannot enter model translation.
 Body-free ConnectionEvents persist connection phase evidence. The local Root
 is installation-persistent and exported as public evidence, but this code does
 not install it into an operating-system trust store.

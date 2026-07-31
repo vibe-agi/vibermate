@@ -18,6 +18,7 @@ import (
 
 	"github.com/vibe-agi/vibermate/internal/access"
 	"github.com/vibe-agi/vibermate/internal/offlinehold"
+	"github.com/vibe-agi/vibermate/internal/operationcatalog"
 	"github.com/vibe-agi/vibermate/internal/secretstore"
 	"github.com/vibe-agi/vibermate/internal/transportprofile"
 )
@@ -782,17 +783,25 @@ func testRequestAccessPlanWithOrigin(
 	if err != nil {
 		t.Fatal(err)
 	}
+	operations, err := operationcatalog.M0()
+	if err != nil {
+		t.Fatal(err)
+	}
 	catalog, err := access.NewCatalog(access.CatalogOptions{
 		Capabilities: access.PlanCapabilities{
 			MaxEndpointProfiles: 1,
 			MaxAccountBindings:  1,
 			MaxRouteSets:        1,
 		},
+		ClientOperations: operations.Definitions(),
 		CodecPairs: []access.CodecPairDefinition{{
 			ID:              codecID,
 			Revision:        1,
 			ClientDialect:   access.DialectAnthropicMessages,
 			ProviderDialect: access.DialectOpenAIChat,
+			ClientOperationIDs: operations.SemanticOperationIDs(
+				access.DialectAnthropicMessages,
+			),
 			RequiredCapabilities: []access.ProviderCapability{
 				access.ProviderCapabilityMessages,
 				access.ProviderCapabilityStreaming,

@@ -39,6 +39,7 @@ type CodecPairDefinition struct {
 	Revision             Revision
 	ClientDialect        Dialect
 	ProviderDialect      Dialect
+	ClientOperationIDs   []ClientOperationID
 	RequiredCapabilities []ProviderCapability
 }
 
@@ -96,6 +97,7 @@ func StandardH1TransportFingerprintDefinition() TransportFingerprintDefinition {
 
 type CatalogOptions struct {
 	Capabilities      PlanCapabilities
+	ClientOperations  []ClientOperationDefinition
 	CodecPairs        []CodecPairDefinition
 	AuthDrivers       []AuthDriverDefinition
 	EgressModes       []EgressModeDefinition
@@ -113,6 +115,7 @@ type codecPairKey struct {
 type Catalog struct {
 	initialized       bool
 	capabilities      PlanCapabilities
+	clientOperations  map[ClientOperationID]ClientOperationDefinition
 	codecPairs        map[codecPairKey]CodecPairDefinition
 	knownDialects     map[Dialect]struct{}
 	authDrivers       map[AuthDriverRef]AuthDriverDefinition
@@ -129,8 +132,12 @@ func NewCatalog(options CatalogOptions) (Catalog, error) {
 		return Catalog{}, errors.New("Access plan catalog limits must be positive")
 	}
 	catalog := Catalog{
-		initialized:      true,
-		capabilities:     options.Capabilities,
+		initialized:  true,
+		capabilities: options.Capabilities,
+		clientOperations: make(
+			map[ClientOperationID]ClientOperationDefinition,
+			len(options.ClientOperations),
+		),
 		codecPairs:       make(map[codecPairKey]CodecPairDefinition, len(options.CodecPairs)),
 		knownDialects:    make(map[Dialect]struct{}),
 		authDrivers:      make(map[AuthDriverRef]AuthDriverDefinition, len(options.AuthDrivers)),
@@ -142,6 +149,19 @@ func NewCatalog(options CatalogOptions) (Catalog, error) {
 			len(options.TransportProfiles),
 		),
 	}
+	for _, definition := range options.ClientOperations {
+		if err := definition.Validate(); err != nil {
+			return Catalog{}, err
+		}
+		if _, duplicate := catalog.clientOperations[definition.ID()]; duplicate {
+			return Catalog{}, errors.New(
+				"client operation definition is duplicated",
+			)
+		}
+		cloned := cloneClientOperationDefinition(definition)
+		catalog.clientOperations[cloned.ID()] = cloned
+		catalog.knownDialects[cloned.ClientDialect()] = struct{}{}
+	}
 	for _, definition := range options.CodecPairs {
 		if err := definition.ID.validate(); err != nil {
 			return Catalog{}, err
@@ -151,6 +171,7 @@ func NewCatalog(options CatalogOptions) (Catalog, error) {
 		}
 		if definition.ClientDialect == "" ||
 			definition.ProviderDialect == "" ||
+			len(definition.ClientOperationIDs) == 0 ||
 			len(definition.RequiredCapabilities) == 0 {
 			return Catalog{}, errors.New("codec pair definition is incomplete")
 		}
@@ -160,6 +181,41 @@ func NewCatalog(options CatalogOptions) (Catalog, error) {
 		}
 		if _, duplicate := catalog.codecPairs[key]; duplicate {
 			return Catalog{}, errors.New("codec pair definition is duplicated")
+		}
+		definition.ClientOperationIDs = slices.Clone(
+			definition.ClientOperationIDs,
+		)
+		sort.Slice(
+			definition.ClientOperationIDs,
+			func(left, right int) bool {
+				return definition.ClientOperationIDs[left].String() <
+					definition.ClientOperationIDs[right].String()
+			},
+		)
+		for index, operationID := range definition.ClientOperationIDs {
+			operation, exists := catalog.clientOperations[operationID]
+			if !exists {
+				return Catalog{}, fmt.Errorf(
+					"codec pair client operation is unresolved: %q",
+					operationID.String(),
+				)
+			}
+			if operation.ClientDialect() != definition.ClientDialect {
+				return Catalog{}, errors.New(
+					"codec pair client operation dialect does not match",
+				)
+			}
+			if operation.Kind() != ClientOperationSemantic {
+				return Catalog{}, errors.New(
+					"codec pair client operation is not semantic",
+				)
+			}
+			if index > 0 &&
+				operationID == definition.ClientOperationIDs[index-1] {
+				return Catalog{}, errors.New(
+					"codec pair client operation is duplicated",
+				)
+			}
 		}
 		definition.RequiredCapabilities = slices.Clone(definition.RequiredCapabilities)
 		sortCapabilities(definition.RequiredCapabilities)
@@ -234,7 +290,8 @@ func NewCatalog(options CatalogOptions) (Catalog, error) {
 	if err := validateTransportFallbacks(catalog.transportProfiles); err != nil {
 		return Catalog{}, err
 	}
-	if len(catalog.codecPairs) == 0 ||
+	if len(catalog.clientOperations) == 0 ||
+		len(catalog.codecPairs) == 0 ||
 		len(catalog.authDrivers) == 0 ||
 		len(catalog.egressModes) == 0 ||
 		len(catalog.pluginPlanModes) == 0 ||
@@ -361,11 +418,24 @@ func (compiler *Compiler) Compile(aggregate Aggregate) (AccessPlanSnapshot, erro
 		port:          target.Origin.Port(),
 		transportKind: target.Origin.TransportKind(),
 	}}
+	clientOperations := make(
+		[]ClientOperationPlan,
+		0,
+		len(codecDefinition.ClientOperationIDs),
+	)
+	for _, operationID := range codecDefinition.ClientOperationIDs {
+		definition := compiler.catalog.clientOperations[operationID]
+		clientOperations = append(
+			clientOperations,
+			compileClientOperation(definition),
+		)
+	}
 	codecPlan := CodecPlan{
 		id:                   codecDefinition.ID,
 		revision:             codecDefinition.Revision,
 		clientDialect:        codecDefinition.ClientDialect,
 		providerDialect:      codecDefinition.ProviderDialect,
+		clientOperations:     clientOperations,
 		requiredCapabilities: slices.Clone(codecDefinition.RequiredCapabilities),
 	}
 	pluginPlan := CompiledPluginPlan{
@@ -376,6 +446,7 @@ func (compiler *Compiler) Compile(aggregate Aggregate) (AccessPlanSnapshot, erro
 	dependencies := buildDependencyRevisions(
 		candidate,
 		codecDefinition,
+		clientOperations,
 		authDefinitions,
 		egressDefinition,
 		pluginDefinition,
@@ -396,6 +467,26 @@ func (compiler *Compiler) Compile(aggregate Aggregate) (AccessPlanSnapshot, erro
 	}
 	snapshot.planHash = newPlanHash(canonical)
 	return snapshot, nil
+}
+
+func compileClientOperation(
+	definition ClientOperationDefinition,
+) ClientOperationPlan {
+	return ClientOperationPlan{
+		id:             definition.id,
+		revision:       definition.revision,
+		clientDialect:  definition.clientDialect,
+		methods:        slices.Clone(definition.methods),
+		pathPattern:    definition.pathPattern,
+		pathMatch:      definition.pathMatch,
+		kind:           definition.kind,
+		bodyKind:       definition.bodyKind,
+		replayClass:    definition.replayClass,
+		codecFeature:   definition.codecFeature,
+		maxBodyBytes:   definition.maxBodyBytes,
+		allowedQueries: slices.Clone(definition.allowedQueries),
+		egressBearing:  definition.egressBearing,
+	}
 }
 
 func validateTransportFingerprintDefinition(
@@ -782,6 +873,7 @@ func hasDuplicateCapabilities(capabilities []ProviderCapability) bool {
 func buildDependencyRevisions(
 	aggregate Aggregate,
 	codec CodecPairDefinition,
+	clientOperations []ClientOperationPlan,
 	authDrivers []AuthDriverDefinition,
 	egress EgressModeDefinition,
 	plugin PluginPlanModeDefinition,
@@ -797,6 +889,13 @@ func buildDependencyRevisions(
 		{Kind: DependencyEgressCapability, ID: string(egress.Mode), Revision: egress.Revision},
 		{Kind: DependencyPluginPlanCapability, ID: string(plugin.Mode), Revision: plugin.Revision},
 		{Kind: DependencyModelPolicyCapability, ID: string(model.Mode), Revision: model.Revision},
+	}
+	for _, operation := range clientOperations {
+		dependencies = append(dependencies, DependencyRevision{
+			Kind:     DependencyClientOperation,
+			ID:       operation.id.String(),
+			Revision: operation.revision,
+		})
 	}
 	for _, template := range append(
 		[]TransportFingerprintTemplate{transport.requested},
@@ -977,11 +1076,28 @@ type canonicalPlugin struct {
 }
 
 type canonicalCodec struct {
-	ID                   string               `json:"id"`
-	Revision             Revision             `json:"revision"`
-	ClientDialect        string               `json:"clientDialect"`
-	ProviderDialect      string               `json:"providerDialect"`
-	RequiredCapabilities []ProviderCapability `json:"requiredCapabilities"`
+	ID                   string                     `json:"id"`
+	Revision             Revision                   `json:"revision"`
+	ClientDialect        string                     `json:"clientDialect"`
+	ProviderDialect      string                     `json:"providerDialect"`
+	ClientOperations     []canonicalClientOperation `json:"clientOperations"`
+	RequiredCapabilities []ProviderCapability       `json:"requiredCapabilities"`
+}
+
+type canonicalClientOperation struct {
+	ID             string   `json:"id"`
+	Revision       Revision `json:"revision"`
+	ClientDialect  string   `json:"clientDialect"`
+	Methods        []string `json:"methods"`
+	PathPattern    string   `json:"pathPattern"`
+	PathMatch      string   `json:"pathMatch"`
+	Kind           string   `json:"kind"`
+	BodyKind       string   `json:"bodyKind"`
+	ReplayClass    string   `json:"replayClass"`
+	CodecFeature   string   `json:"codecFeature"`
+	MaxBodyBytes   int64    `json:"maxBodyBytes"`
+	AllowedQueries []string `json:"allowedQueries"`
+	EgressBearing  bool     `json:"egressBearing"`
 }
 
 type canonicalDependency struct {
@@ -993,7 +1109,7 @@ type canonicalDependency struct {
 func canonicalPlanBytes(snapshot AccessPlanSnapshot) ([]byte, error) {
 	binding := snapshot.aggregate.Binding
 	canonical := canonicalPlan{
-		SchemaVersion: 2,
+		SchemaVersion: 3,
 		Binding: canonicalBinding{
 			ID:                binding.ID.String(),
 			Revision:          binding.Revision,
@@ -1030,10 +1146,15 @@ func canonicalPlanBytes(snapshot AccessPlanSnapshot) ([]byte, error) {
 			BindingIDs: pluginBindingIDStrings(snapshot.pluginPlan.bindingIDs),
 		},
 		Codec: canonicalCodec{
-			ID:                   snapshot.codecPlan.id.String(),
-			Revision:             snapshot.codecPlan.revision,
-			ClientDialect:        string(snapshot.codecPlan.clientDialect),
-			ProviderDialect:      string(snapshot.codecPlan.providerDialect),
+			ID:              snapshot.codecPlan.id.String(),
+			Revision:        snapshot.codecPlan.revision,
+			ClientDialect:   string(snapshot.codecPlan.clientDialect),
+			ProviderDialect: string(snapshot.codecPlan.providerDialect),
+			ClientOperations: make(
+				[]canonicalClientOperation,
+				0,
+				len(snapshot.codecPlan.clientOperations),
+			),
 			RequiredCapabilities: slices.Clone(snapshot.codecPlan.requiredCapabilities),
 		},
 		Transport: canonicalTransportPlan{
@@ -1046,6 +1167,26 @@ func canonicalPlanBytes(snapshot AccessPlanSnapshot) ([]byte, error) {
 				len(snapshot.transportPlan.fallbacks),
 			),
 		},
+	}
+	for _, operation := range snapshot.codecPlan.clientOperations {
+		canonical.Codec.ClientOperations = append(
+			canonical.Codec.ClientOperations,
+			canonicalClientOperation{
+				ID:             operation.id.String(),
+				Revision:       operation.revision,
+				ClientDialect:  string(operation.clientDialect),
+				Methods:        slices.Clone(operation.methods),
+				PathPattern:    operation.pathPattern,
+				PathMatch:      string(operation.pathMatch),
+				Kind:           string(operation.kind),
+				BodyKind:       string(operation.bodyKind),
+				ReplayClass:    string(operation.replayClass),
+				CodecFeature:   string(operation.codecFeature),
+				MaxBodyBytes:   operation.maxBodyBytes,
+				AllowedQueries: slices.Clone(operation.allowedQueries),
+				EgressBearing:  operation.egressBearing,
+			},
+		)
 	}
 	for _, fallback := range snapshot.transportPlan.fallbacks {
 		canonical.Transport.Fallbacks = append(

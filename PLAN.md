@@ -132,17 +132,22 @@ payloads or credentials.
 
 ### 4. Compile the Codex operation into the sole Access plan
 
-- [ ] Add the typed codec identity, revision, client dialect, and exact
+- [x] Add the typed codec identity, revision, client dialect, and exact
   Responses operation capability to the explicit compiler catalogs.
-- [ ] Support the exact fixed-client `/v1/responses` HTTP operation; classify
+- [x] Support the exact fixed-client `/v1/responses` HTTP operation; classify
   management, upload, background, Realtime, and unknown semantic paths without
   routing them into model translation.
-- [ ] Keep `ClientOrigin` separate from `ProviderTarget`; preserve Access
+- [x] Keep `ClientOrigin` separate from `ProviderTarget`; preserve Access
   revision, `PlanHash`, endpoint, transport, authority, and model mapping.
-- [ ] Apply any schema change as one versioned SQLite migration and recover the
+- [x] Apply any schema change as one versioned SQLite migration and recover the
   identical plan/hash on reopen.
-- [ ] Prove invalid capabilities, stale CAS, failed transaction/publication,
+- [x] Prove invalid capabilities, stale CAS, failed transaction/publication,
   projection poison isolation, and old-handle immutability.
+
+No SQLite schema change was required: operation definitions are immutable
+compiler dependencies rather than a second persisted configuration model.
+Normal close/reopen recompiles the same committed aggregate into the same
+Responses operation, revision, content, and `PlanHash`.
 
 ### 5. Extend Exchange and loopback ingress
 

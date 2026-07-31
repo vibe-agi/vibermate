@@ -267,6 +267,14 @@ func TestDecodeResponsesRejectsAmbiguousOrUnsupportedControls(t *testing.T) {
 			}`,
 		},
 		{
+			name: "background execution",
+			body: `{
+				"model":"gpt-5.6-sol",
+				"input":[{"type":"message","role":"user","content":"hello"}],
+				"background":true
+			}`,
+		},
+		{
 			name: "explicit zero output limit",
 			body: `{
 				"model":"gpt-5.6-sol",

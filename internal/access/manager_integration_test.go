@@ -163,6 +163,91 @@ func TestAccessPlanCASPublishesImmutablePlanAndRestores(t *testing.T) {
 	}
 }
 
+func TestResponsesAccessPlanRestoresIdenticalOperationAndHash(t *testing.T) {
+	t.Parallel()
+
+	databasePath := filepath.Join(t.TempDir(), "data", "runtime.db")
+	store := openStore(t, databasePath)
+	manager := newManager(t, store, access.NewSnapshotProjection())
+	accessID := newAccessID(t, "access-responses-reopen")
+	aggregate := testAggregate(t, accessID, 1, "Responses")
+	aggregate.AgentEndpoint.ClientDialect = access.DialectOpenAIResponses
+	result, err := manager.WriteAccess(
+		context.Background(),
+		access.WriteCommand{
+			ExpectedRevision: 0,
+			Aggregate:        aggregate,
+		},
+	)
+	if err != nil ||
+		result.Outcome != access.WriteOutcomeCommitted ||
+		result.Revision != 1 {
+		t.Fatalf("write Responses Access result=%+v err=%v", result, err)
+	}
+	active, err := manager.ResolveAccess(accessID)
+	if err != nil {
+		t.Fatalf("resolve Responses Access: %v", err)
+	}
+	assertResponsesOperation(t, active)
+
+	shutdownManager(t, manager)
+	shutdownStore(t, store)
+
+	// This proves deterministic recovery after a normal close/reopen. It does
+	// not claim process-crash or power-loss durability.
+	reopened := openStore(t, databasePath)
+	defer shutdownStore(t, reopened)
+	recoveredManager := newManager(
+		t,
+		reopened,
+		access.NewSnapshotProjection(),
+	)
+	defer shutdownManager(t, recoveredManager)
+	recovered, err := recoveredManager.ResolveAccess(accessID)
+	if err != nil {
+		t.Fatalf("resolve recovered Responses Access: %v", err)
+	}
+	assertResponsesOperation(t, recovered)
+	if recovered.Revision() != active.Revision() ||
+		recovered.PlanHash() != active.PlanHash() ||
+		recovered.Binding().Name != active.Binding().Name ||
+		recovered.AgentEndpoint().ClientOrigin !=
+			active.AgentEndpoint().ClientOrigin ||
+		recovered.EndpointProfiles()[0].DefaultModelPolicy.FixedModel !=
+			active.EndpointProfiles()[0].DefaultModelPolicy.FixedModel ||
+		recovered.ProviderTargets()[0].Target().Origin !=
+			active.ProviderTargets()[0].Target().Origin {
+		t.Fatalf(
+			"recovered Responses plan differs: active=%s recovered=%s",
+			active.PlanHash(),
+			recovered.PlanHash(),
+		)
+	}
+}
+
+func assertResponsesOperation(
+	t *testing.T,
+	plan access.AccessPlanSnapshot,
+) {
+	t.Helper()
+	codec := plan.CodecPlan()
+	operations := codec.ClientOperations()
+	if codec.ID().String() != "openai-responses-to-openai-chat" ||
+		codec.ClientDialect() != access.DialectOpenAIResponses ||
+		codec.ProviderDialect() != access.DialectOpenAIChat ||
+		len(operations) != 1 ||
+		operations[0].ID().String() != "openai-responses-create" ||
+		operations[0].PathPattern() != "/v1/responses" ||
+		operations[0].PathMatch() != access.ClientOperationPathExact ||
+		operations[0].Kind() != access.ClientOperationSemantic {
+		t.Fatalf("Responses codec plan = %+v", codec)
+	}
+	methods := operations[0].Methods()
+	if len(methods) != 1 || methods[0] != "POST" {
+		t.Fatalf("Responses operation methods = %v", methods)
+	}
+}
+
 func TestConcurrentCASPublishesExactlyOneNewPlan(t *testing.T) {
 	t.Parallel()
 
@@ -652,6 +737,14 @@ func assertCompletePlan(
 		codec.ID().String() != "anthropic-messages-to-openai-chat" {
 		t.Fatalf("codec plan = %+v", codec)
 	}
+	operations := codec.ClientOperations()
+	if len(operations) != 1 ||
+		operations[0].ID().String() != "anthropic-messages-create" ||
+		operations[0].PathPattern() != "/v1/messages" ||
+		operations[0].PathMatch() != access.ClientOperationPathExact ||
+		operations[0].CodecFeature() != "messages" {
+		t.Fatalf("client operations = %+v", operations)
+	}
 	if plan.EgressPolicy().Mode != access.EgressModeDirect {
 		t.Fatalf("egress policy = %+v", plan.EgressPolicy())
 	}
@@ -684,7 +777,7 @@ func assertCompletePlan(
 		t.Fatalf("route sets = %+v", routeSets)
 	}
 	dependencies := plan.DependencyRevisions()
-	if len(dependencies) != 16 {
+	if len(dependencies) != 17 {
 		t.Fatalf(
 			"routeSets=%d dependencyRevisions=%d",
 			len(routeSets),
@@ -723,6 +816,7 @@ func assertCompletePlan(
 		access.DependencyAccessEgressPolicy,
 		access.DependencyPluginPlan,
 		access.DependencyCodecPair,
+		access.DependencyClientOperation,
 		access.DependencyAuthDriver,
 		access.DependencyEgressCapability,
 		access.DependencyPluginPlanCapability,
@@ -754,6 +848,8 @@ func assertGetterIsolation(t *testing.T, plan access.AccessPlanSnapshot) {
 	codec := plan.CodecPlan()
 	required := codec.RequiredCapabilities()
 	required[0] = "mutated"
+	operationMethods := codec.ClientOperations()[0].Methods()
+	operationMethods[0] = "DELETE"
 	transport := plan.TransportFingerprintPlan()
 	requestedALPN := transport.Requested().ALPN()
 	requestedALPN[0] = access.ApplicationProtocolHTTP2
@@ -768,6 +864,7 @@ func assertGetterIsolation(t *testing.T, plan access.AccessPlanSnapshot) {
 		len(plan.ProviderTargets()[0].Target().Capabilities) != 3 ||
 		len(plan.RouteSets()[0].CandidateProfileIDs) != 1 ||
 		plan.CodecPlan().RequiredCapabilities()[0] == "mutated" ||
+		plan.CodecPlan().ClientOperations()[0].Methods()[0] != "POST" ||
 		plan.TransportFingerprintPlan().Requested().ALPN()[0] !=
 			access.ApplicationProtocolHTTP1 ||
 		plan.TransportFingerprintPlan().Fallbacks()[0].ALPN()[0] !=

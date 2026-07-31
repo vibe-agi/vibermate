@@ -7,16 +7,14 @@ import (
 
 	"github.com/vibe-agi/vibermate/internal/access"
 	"github.com/vibe-agi/vibermate/internal/exchange"
+	"github.com/vibe-agi/vibermate/internal/operationcatalog"
 	"github.com/vibe-agi/vibermate/internal/pathcapability"
 )
 
 func TestM0PathCapabilityClassifiesSemanticAuxiliaryAndOpaque(t *testing.T) {
 	t.Parallel()
 
-	catalog, err := pathcapability.NewM0Catalog()
-	if err != nil {
-		t.Fatal(err)
-	}
+	catalog := m0Catalog(t)
 	semantic, err := catalog.Classify(
 		access.DialectAnthropicMessages,
 		http.MethodPost,
@@ -88,10 +86,7 @@ func TestM0PathCapabilityFailsClosedForKnownOrNonCanonicalTargets(
 ) {
 	t.Parallel()
 
-	catalog, err := pathcapability.NewM0Catalog()
-	if err != nil {
-		t.Fatal(err)
-	}
+	catalog := m0Catalog(t)
 	tests := []struct {
 		name     string
 		method   string
@@ -164,4 +159,143 @@ func TestM0PathCapabilityFailsClosedForKnownOrNonCanonicalTargets(
 			}
 		})
 	}
+}
+
+func TestM0PathCapabilityIsolatesResponsesFromOtherOpenAIOperations(
+	t *testing.T,
+) {
+	t.Parallel()
+
+	catalog := m0Catalog(t)
+	responses, err := catalog.Classify(
+		access.DialectOpenAIResponses,
+		http.MethodPost,
+		"/v1/responses",
+		"",
+		"",
+	)
+	if err != nil ||
+		responses.Kind() != pathcapability.KindSemantic ||
+		responses.OperationID().String() !=
+			operationcatalog.OpenAIResponsesCreateID ||
+		responses.Revision() != 1 ||
+		responses.BodyKind() != pathcapability.BodyJSON ||
+		responses.ReplayClass() != exchange.ReplayGenerationCostOnly {
+		t.Fatalf("Responses capability=%+v err=%v", responses, err)
+	}
+
+	models, err := catalog.Classify(
+		access.DialectOpenAIResponses,
+		http.MethodGet,
+		"/v1/models",
+		"",
+		"client=codex",
+	)
+	if err != nil || models.Kind() != pathcapability.KindOpaque {
+		t.Fatalf("models capability=%+v err=%v", models, err)
+	}
+
+	for _, path := range []string{
+		"/v1/responses/response-1",
+		"/v1/responses/response-1/input_items",
+		"/v1/uploads",
+		"/v1/uploads/upload-1/parts",
+		"/v1/files",
+		"/v1/batches",
+		"/v1/audio/transcriptions",
+		"/v1/images/generations",
+		"/v1/videos",
+		"/v1/realtime",
+		"/v1/realtime/calls",
+		"/v1/chat/completions",
+		"/v1/completions",
+		"/v1/embeddings",
+	} {
+		capability, classifyErr := catalog.Classify(
+			access.DialectOpenAIResponses,
+			http.MethodPost,
+			path,
+			"",
+			"",
+		)
+		if classifyErr != nil ||
+			capability.Kind() != pathcapability.KindUnsupported {
+			t.Fatalf(
+				"path %q capability=%+v err=%v",
+				path,
+				capability,
+				classifyErr,
+			)
+		}
+	}
+
+	unknown, err := catalog.Classify(
+		access.DialectOpenAIResponses,
+		http.MethodGet,
+		"/codex/client/settings",
+		"",
+		"",
+	)
+	if err != nil || unknown.Kind() != pathcapability.KindOpaque {
+		t.Fatalf("unknown control capability=%+v err=%v", unknown, err)
+	}
+}
+
+func TestM0PathCapabilityRejectsWrongResponsesMethodAndQuery(
+	t *testing.T,
+) {
+	t.Parallel()
+
+	catalog := m0Catalog(t)
+	for _, test := range []struct {
+		name     string
+		method   string
+		rawQuery string
+		reason   pathcapability.ReasonCode
+	}{
+		{
+			name:   "wrong method",
+			method: http.MethodGet,
+			reason: pathcapability.ReasonUnsupportedMethod,
+		},
+		{
+			name:     "query",
+			method:   http.MethodPost,
+			rawQuery: "background=true",
+			reason:   pathcapability.ReasonUnsupportedQuery,
+		},
+	} {
+		test := test
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+			_, err := catalog.Classify(
+				access.DialectOpenAIResponses,
+				test.method,
+				"/v1/responses",
+				"",
+				test.rawQuery,
+			)
+			if !errors.Is(err, pathcapability.ErrUnsupported) ||
+				pathcapability.ReasonOf(err) != test.reason {
+				t.Fatalf(
+					"Classify() error=%v reason=%q",
+					err,
+					pathcapability.ReasonOf(err),
+				)
+			}
+		})
+	}
+}
+
+func m0Catalog(t *testing.T) *pathcapability.Catalog {
+	t.Helper()
+	operations, err := operationcatalog.M0()
+	if err != nil {
+		t.Fatalf("construct operation catalog: %v", err)
+	}
+	catalog, err := pathcapability.NewCatalog(operations.Definitions())
+	if err != nil {
+		t.Fatalf("construct PathCapability catalog: %v", err)
+	}
+	return catalog
 }

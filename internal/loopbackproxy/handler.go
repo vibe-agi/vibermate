@@ -548,6 +548,15 @@ func (handler *Handler) serveInner(
 		)
 		return
 	}
+	if capability.Kind() == pathcapability.KindUnsupported {
+		writeReason(
+			writer,
+			http.StatusUnprocessableEntity,
+			ReasonPathUnsupported,
+			"",
+		)
+		return
+	}
 	body, err := readBounded(request.Body, capability.MaxBodyBytes())
 	if err != nil {
 		writeReason(writer, http.StatusRequestEntityTooLarge, ReasonRequestBodyInvalid, "")

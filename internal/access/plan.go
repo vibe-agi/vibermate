@@ -28,11 +28,73 @@ func (hash PlanHash) IsZero() bool {
 	return hash == PlanHash{}
 }
 
+// ClientOperationPlan is one immutable, compiled client-wire operation. It is
+// part of the active Access plan and cannot select a provider target by itself.
+type ClientOperationPlan struct {
+	id             ClientOperationID
+	revision       Revision
+	clientDialect  Dialect
+	methods        []string
+	pathPattern    string
+	pathMatch      ClientOperationPathMatch
+	kind           ClientOperationKind
+	bodyKind       ClientOperationBodyKind
+	replayClass    ClientReplayClass
+	codecFeature   CodecFeature
+	maxBodyBytes   int64
+	allowedQueries []string
+	egressBearing  bool
+}
+
+func (plan ClientOperationPlan) ID() ClientOperationID { return plan.id }
+func (plan ClientOperationPlan) Revision() Revision    { return plan.revision }
+func (plan ClientOperationPlan) ClientDialect() Dialect {
+	return plan.clientDialect
+}
+func (plan ClientOperationPlan) Methods() []string {
+	return slices.Clone(plan.methods)
+}
+func (plan ClientOperationPlan) PathPattern() string {
+	return plan.pathPattern
+}
+func (plan ClientOperationPlan) PathMatch() ClientOperationPathMatch {
+	return plan.pathMatch
+}
+func (plan ClientOperationPlan) Kind() ClientOperationKind {
+	return plan.kind
+}
+func (plan ClientOperationPlan) BodyKind() ClientOperationBodyKind {
+	return plan.bodyKind
+}
+func (plan ClientOperationPlan) ReplayClass() ClientReplayClass {
+	return plan.replayClass
+}
+func (plan ClientOperationPlan) CodecFeature() CodecFeature {
+	return plan.codecFeature
+}
+func (plan ClientOperationPlan) MaxBodyBytes() int64 {
+	return plan.maxBodyBytes
+}
+func (plan ClientOperationPlan) AllowedQueries() []string {
+	return slices.Clone(plan.allowedQueries)
+}
+func (plan ClientOperationPlan) EgressBearing() bool {
+	return plan.egressBearing
+}
+
+func cloneClientOperationPlan(plan ClientOperationPlan) ClientOperationPlan {
+	cloned := plan
+	cloned.methods = slices.Clone(plan.methods)
+	cloned.allowedQueries = slices.Clone(plan.allowedQueries)
+	return cloned
+}
+
 type CodecPlan struct {
 	id                   CodecPairID
 	revision             Revision
 	clientDialect        Dialect
 	providerDialect      Dialect
+	clientOperations     []ClientOperationPlan
 	requiredCapabilities []ProviderCapability
 }
 
@@ -106,6 +168,13 @@ func (plan CodecPlan) ID() CodecPairID          { return plan.id }
 func (plan CodecPlan) Revision() Revision       { return plan.revision }
 func (plan CodecPlan) ClientDialect() Dialect   { return plan.clientDialect }
 func (plan CodecPlan) ProviderDialect() Dialect { return plan.providerDialect }
+func (plan CodecPlan) ClientOperations() []ClientOperationPlan {
+	operations := make([]ClientOperationPlan, len(plan.clientOperations))
+	for index, operation := range plan.clientOperations {
+		operations[index] = cloneClientOperationPlan(operation)
+	}
+	return operations
+}
 func (plan CodecPlan) RequiredCapabilities() []ProviderCapability {
 	return slices.Clone(plan.requiredCapabilities)
 }
@@ -164,6 +233,7 @@ const (
 	DependencyPluginPlanCapability  DependencyKind = "plugin_plan_capability"
 	DependencyModelPolicyCapability DependencyKind = "model_policy_capability"
 	DependencyTransportFingerprint  DependencyKind = "transport_fingerprint"
+	DependencyClientOperation       DependencyKind = "client_operation"
 )
 
 type DependencyRevision struct {
@@ -243,6 +313,7 @@ func (snapshot AccessPlanSnapshot) EgressPolicy() AccessEgressPolicy {
 
 func (snapshot AccessPlanSnapshot) CodecPlan() CodecPlan {
 	plan := snapshot.codecPlan
+	plan.clientOperations = snapshot.codecPlan.ClientOperations()
 	plan.requiredCapabilities = slices.Clone(plan.requiredCapabilities)
 	return plan
 }
@@ -273,6 +344,12 @@ func (snapshot AccessPlanSnapshot) validate() error {
 	}
 	if len(snapshot.compiledTargets) == 0 || len(snapshot.dependencies) == 0 {
 		return fmt.Errorf("%w: compiled plan is incomplete", ErrInvalidAccessPlan)
+	}
+	if len(snapshot.codecPlan.clientOperations) == 0 {
+		return fmt.Errorf(
+			"%w: client operation plan is empty",
+			ErrInvalidAccessPlan,
+		)
 	}
 	if snapshot.transportPlan.requested.ref.String() == "" ||
 		len(snapshot.transportPlan.requested.alpn) == 0 {

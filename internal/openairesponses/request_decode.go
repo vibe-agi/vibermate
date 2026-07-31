@@ -18,6 +18,7 @@ type requestWire struct {
 	ToolChoice        json.RawMessage   `json:"tool_choice,omitempty"`
 	ParallelToolCalls *bool             `json:"parallel_tool_calls,omitempty"`
 	Reasoning         json.RawMessage   `json:"reasoning,omitempty"`
+	Background        *bool             `json:"background,omitempty"`
 	Store             *bool             `json:"store,omitempty"`
 	Stream            bool              `json:"stream,omitempty"`
 	Include           []string          `json:"include,omitempty"`
@@ -155,6 +156,13 @@ func (codec *Codec) DecodeClientRequest(
 			invalidClient(
 				"$.store",
 				errors.New("stored Responses state is unsupported"),
+			)
+	}
+	if wire.Background != nil && *wire.Background {
+		return protocolcore.Request{}, protocolcore.TranslationReport{},
+			invalidClient(
+				"$.background",
+				errors.New("background Responses execution is unsupported"),
 			)
 	}
 	maxOutputTokens := 0

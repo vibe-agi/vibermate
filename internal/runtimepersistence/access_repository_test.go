@@ -13,6 +13,7 @@ import (
 
 	"github.com/pressly/goose/v3"
 	"github.com/vibe-agi/vibermate/internal/access"
+	"github.com/vibe-agi/vibermate/internal/operationcatalog"
 )
 
 var errInjectedCommitResult = errors.New("injected commit result error")
@@ -588,17 +589,25 @@ func testAccessCompiler(t *testing.T) *access.Compiler {
 	if err != nil {
 		t.Fatalf("construct codec ID: %v", err)
 	}
+	operations, err := operationcatalog.M0()
+	if err != nil {
+		t.Fatalf("construct operation catalog: %v", err)
+	}
 	catalog, err := access.NewCatalog(access.CatalogOptions{
 		Capabilities: access.PlanCapabilities{
 			MaxEndpointProfiles: 1,
 			MaxAccountBindings:  1,
 			MaxRouteSets:        1,
 		},
+		ClientOperations: operations.Definitions(),
 		CodecPairs: []access.CodecPairDefinition{{
 			ID:              codecID,
 			Revision:        1,
 			ClientDialect:   access.DialectAnthropicMessages,
 			ProviderDialect: access.DialectOpenAIChat,
+			ClientOperationIDs: operations.SemanticOperationIDs(
+				access.DialectAnthropicMessages,
+			),
 			RequiredCapabilities: []access.ProviderCapability{
 				access.ProviderCapabilityMessages,
 				access.ProviderCapabilityStreaming,

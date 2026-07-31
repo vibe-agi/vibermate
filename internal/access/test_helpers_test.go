@@ -2,6 +2,7 @@ package access_test
 
 import (
 	"context"
+	"net/http"
 	"path/filepath"
 	"testing"
 	"time"
@@ -29,23 +30,68 @@ func testCatalogOptions(t *testing.T) access.CatalogOptions {
 	if err != nil {
 		t.Fatalf("construct codec pair ID: %v", err)
 	}
+	operation := mustClientOperationDefinition(
+		t,
+		"anthropic-messages-create",
+		access.DialectAnthropicMessages,
+		http.MethodPost,
+		"/v1/messages",
+		"messages",
+	)
+	responsesCodecID, err := access.NewCodecPairID(
+		"openai-responses-to-openai-chat",
+	)
+	if err != nil {
+		t.Fatalf("construct Responses codec pair ID: %v", err)
+	}
+	responsesOperation := mustClientOperationDefinition(
+		t,
+		"openai-responses-create",
+		access.DialectOpenAIResponses,
+		http.MethodPost,
+		"/v1/responses",
+		"responses",
+	)
 	return access.CatalogOptions{
 		Capabilities: access.PlanCapabilities{
 			MaxEndpointProfiles: 1,
 			MaxAccountBindings:  1,
 			MaxRouteSets:        1,
 		},
-		CodecPairs: []access.CodecPairDefinition{{
-			ID:              codecID,
-			Revision:        1,
-			ClientDialect:   access.DialectAnthropicMessages,
-			ProviderDialect: access.DialectOpenAIChat,
-			RequiredCapabilities: []access.ProviderCapability{
-				access.ProviderCapabilityMessages,
-				access.ProviderCapabilityStreaming,
-				access.ProviderCapabilityToolCalls,
+		ClientOperations: []access.ClientOperationDefinition{
+			operation,
+			responsesOperation,
+		},
+		CodecPairs: []access.CodecPairDefinition{
+			{
+				ID:              codecID,
+				Revision:        1,
+				ClientDialect:   access.DialectAnthropicMessages,
+				ProviderDialect: access.DialectOpenAIChat,
+				ClientOperationIDs: []access.ClientOperationID{
+					operation.ID(),
+				},
+				RequiredCapabilities: []access.ProviderCapability{
+					access.ProviderCapabilityMessages,
+					access.ProviderCapabilityStreaming,
+					access.ProviderCapabilityToolCalls,
+				},
 			},
-		}},
+			{
+				ID:              responsesCodecID,
+				Revision:        1,
+				ClientDialect:   access.DialectOpenAIResponses,
+				ProviderDialect: access.DialectOpenAIChat,
+				ClientOperationIDs: []access.ClientOperationID{
+					responsesOperation.ID(),
+				},
+				RequiredCapabilities: []access.ProviderCapability{
+					access.ProviderCapabilityMessages,
+					access.ProviderCapabilityStreaming,
+					access.ProviderCapabilityToolCalls,
+				},
+			},
+		},
 		AuthDrivers: []access.AuthDriverDefinition{{
 			Ref:      access.StaticHeaderAuthDriverRef(),
 			Revision: 1,
@@ -67,6 +113,42 @@ func testCatalogOptions(t *testing.T) access.CatalogOptions {
 			access.StandardH1TransportFingerprintDefinition(),
 		},
 	}
+}
+
+func mustClientOperationDefinition(
+	t *testing.T,
+	id string,
+	dialect access.Dialect,
+	method string,
+	path string,
+	feature access.CodecFeature,
+) access.ClientOperationDefinition {
+	t.Helper()
+	identifier, err := access.NewClientOperationID(id)
+	if err != nil {
+		t.Fatalf("construct client operation ID: %v", err)
+	}
+	definition, err := access.NewClientOperationDefinition(
+		access.ClientOperationOptions{
+			ID:             identifier,
+			Revision:       1,
+			ClientDialect:  dialect,
+			Methods:        []string{method},
+			PathPattern:    path,
+			PathMatch:      access.ClientOperationPathExact,
+			Kind:           access.ClientOperationSemantic,
+			BodyKind:       access.ClientOperationBodyJSON,
+			ReplayClass:    access.ClientReplayGenerationCostOnly,
+			CodecFeature:   feature,
+			MaxBodyBytes:   16 << 20,
+			EgressBearing:  true,
+			AllowedQueries: nil,
+		},
+	)
+	if err != nil {
+		t.Fatalf("construct client operation definition: %v", err)
+	}
+	return definition
 }
 
 func testAggregate(

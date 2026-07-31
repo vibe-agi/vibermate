@@ -5,10 +5,9 @@ package pathcapability
 import (
 	"errors"
 	"fmt"
-	"net/http"
-	"net/url"
 	pathpkg "path"
 	"slices"
+	"sort"
 	"strings"
 	"unicode/utf8"
 
@@ -75,6 +74,8 @@ const (
 )
 
 type Capability struct {
+	operationID    access.ClientOperationID
+	revision       access.Revision
 	kind           Kind
 	method         string
 	path           string
@@ -84,6 +85,14 @@ type Capability struct {
 	featureFlags   []string
 	allowedQueries []string
 	egressBearing  bool
+}
+
+func (capability Capability) OperationID() access.ClientOperationID {
+	return capability.operationID
+}
+
+func (capability Capability) Revision() access.Revision {
+	return capability.revision
 }
 
 func (capability Capability) Kind() Kind {
@@ -118,116 +127,110 @@ func (capability Capability) EgressBearing() bool {
 	return capability.egressBearing
 }
 
-type Definition struct {
-	Dialect        access.Dialect
-	Method         string
-	Path           string
-	Kind           Kind
-	BodyKind       BodyKind
-	MaxBodyBytes   int64
-	ReplayClass    exchange.ReplayClass
-	FeatureFlags   []string
-	AllowedQueries []string
-	EgressBearing  bool
-}
-
 type routeKey struct {
 	dialect access.Dialect
 	path    string
 }
 
-type Catalog struct {
-	byPath map[routeKey]map[string]Capability
+type prefixRoute struct {
+	path    string
+	methods map[string]Capability
 }
 
-func NewCatalog(definitions []Definition) (*Catalog, error) {
+type Catalog struct {
+	byPath   map[routeKey]map[string]Capability
+	prefixes map[access.Dialect][]prefixRoute
+}
+
+func NewCatalog(
+	definitions []access.ClientOperationDefinition,
+) (*Catalog, error) {
 	if len(definitions) == 0 {
 		return nil, errors.New("PathCapability definitions are empty")
 	}
 	catalog := &Catalog{
-		byPath: make(map[routeKey]map[string]Capability),
+		byPath:   make(map[routeKey]map[string]Capability),
+		prefixes: make(map[access.Dialect][]prefixRoute),
 	}
 	for _, definition := range definitions {
-		if definition.Dialect == "" ||
-			!validMethod(definition.Method) ||
-			!canonicalPath(definition.Path) ||
-			definition.Kind == KindOpaque ||
-			definition.Kind == KindUnsupported ||
-			definition.MaxBodyBytes <= 0 ||
-			definition.MaxBodyBytes > providertransport.MaxProviderRequestBytes {
-			return nil, errors.New("PathCapability definition is invalid")
+		if err := definition.Validate(); err != nil {
+			return nil, fmt.Errorf("PathCapability definition is invalid: %w", err)
 		}
-		allowedQueries := slices.Clone(definition.AllowedQueries)
-		slices.Sort(allowedQueries)
-		for index, query := range allowedQueries {
-			if !canonicalRawQuery(query) ||
-				(index > 0 && query == allowedQueries[index-1]) {
-				return nil, errors.New(
-					"PathCapability allowed query is invalid",
-				)
+		kind, err := pathKind(definition.Kind())
+		if err != nil {
+			return nil, err
+		}
+		bodyKind, err := pathBodyKind(definition.BodyKind())
+		if err != nil {
+			return nil, err
+		}
+		replayClass, err := pathReplayClass(definition.ReplayClass())
+		if err != nil {
+			return nil, err
+		}
+		var featureFlags []string
+		if definition.CodecFeature() != "" {
+			featureFlags = []string{string(definition.CodecFeature())}
+		}
+		methods := make(map[string]Capability, len(definition.Methods()))
+		for _, method := range definition.Methods() {
+			methods[method] = Capability{
+				operationID:    definition.ID(),
+				revision:       definition.Revision(),
+				kind:           kind,
+				method:         method,
+				path:           definition.PathPattern(),
+				bodyKind:       bodyKind,
+				maxBodyBytes:   definition.MaxBodyBytes(),
+				replayClass:    replayClass,
+				featureFlags:   slices.Clone(featureFlags),
+				allowedQueries: definition.AllowedQueries(),
+				egressBearing:  definition.EgressBearing(),
 			}
 		}
-		switch definition.Kind {
-		case KindSemantic, KindAuxiliary:
-		default:
-			return nil, errors.New("PathCapability definition kind is invalid")
-		}
-		switch definition.BodyKind {
-		case BodyJSON, BodyOpaque:
-		default:
-			return nil, errors.New("PathCapability body kind is invalid")
-		}
-		key := routeKey{dialect: definition.Dialect, path: definition.Path}
-		methods := catalog.byPath[key]
-		if methods == nil {
-			methods = make(map[string]Capability)
+		switch definition.PathMatch() {
+		case access.ClientOperationPathExact:
+			key := routeKey{
+				dialect: definition.ClientDialect(),
+				path:    definition.PathPattern(),
+			}
+			if _, duplicate := catalog.byPath[key]; duplicate {
+				return nil, errors.New(
+					"PathCapability exact definition is duplicated",
+				)
+			}
 			catalog.byPath[key] = methods
-		}
-		if _, duplicate := methods[definition.Method]; duplicate {
-			return nil, errors.New("PathCapability definition is duplicated")
-		}
-		methods[definition.Method] = Capability{
-			kind:           definition.Kind,
-			method:         definition.Method,
-			path:           definition.Path,
-			bodyKind:       definition.BodyKind,
-			maxBodyBytes:   definition.MaxBodyBytes,
-			replayClass:    definition.ReplayClass,
-			featureFlags:   slices.Clone(definition.FeatureFlags),
-			allowedQueries: allowedQueries,
-			egressBearing:  definition.EgressBearing,
+		case access.ClientOperationPathPrefix:
+			for _, existing := range catalog.prefixes[definition.ClientDialect()] {
+				if existing.path == definition.PathPattern() {
+					return nil, errors.New(
+						"PathCapability prefix definition is duplicated",
+					)
+				}
+			}
+			catalog.prefixes[definition.ClientDialect()] = append(
+				catalog.prefixes[definition.ClientDialect()],
+				prefixRoute{
+					path:    definition.PathPattern(),
+					methods: methods,
+				},
+			)
+		default:
+			return nil, errors.New(
+				"PathCapability path match is unsupported",
+			)
 		}
 	}
+	for dialect := range catalog.prefixes {
+		sort.Slice(
+			catalog.prefixes[dialect],
+			func(left, right int) bool {
+				return len(catalog.prefixes[dialect][left].path) >
+					len(catalog.prefixes[dialect][right].path)
+			},
+		)
+	}
 	return catalog, nil
-}
-
-func NewM0Catalog() (*Catalog, error) {
-	return NewCatalog([]Definition{
-		{
-			Dialect:        access.DialectAnthropicMessages,
-			Method:         http.MethodPost,
-			Path:           "/v1/messages",
-			Kind:           KindSemantic,
-			BodyKind:       BodyJSON,
-			MaxBodyBytes:   providertransport.MaxProviderRequestBytes,
-			ReplayClass:    exchange.ReplayGenerationCostOnly,
-			FeatureFlags:   []string{"messages", "streaming", "tool_calls"},
-			AllowedQueries: []string{"beta=true"},
-			EgressBearing:  true,
-		},
-		{
-			Dialect:        access.DialectAnthropicMessages,
-			Method:         http.MethodPost,
-			Path:           "/v1/messages/count_tokens",
-			Kind:           KindAuxiliary,
-			BodyKind:       BodyJSON,
-			MaxBodyBytes:   providertransport.MaxProviderRequestBytes,
-			ReplayClass:    exchange.ReplaySafe,
-			FeatureFlags:   []string{"token_count"},
-			AllowedQueries: []string{"beta=true"},
-			EgressBearing:  true,
-		},
-	})
 }
 
 // Classify rejects alternate escaping and non-canonical paths before looking
@@ -266,6 +269,16 @@ func (catalog *Catalog) Classify(
 		path:    requestPath,
 	}]
 	if !known {
+		for _, prefix := range catalog.prefixes[dialect] {
+			if requestPath == prefix.path ||
+				strings.HasPrefix(requestPath, prefix.path+"/") {
+				methods = prefix.methods
+				known = true
+				break
+			}
+		}
+	}
+	if !known {
 		return Capability{
 			kind:          KindOpaque,
 			method:        method,
@@ -292,12 +305,56 @@ func (catalog *Catalog) Classify(
 	return capability, nil
 }
 
-func canonicalRawQuery(value string) bool {
-	if value == "" || len(value) > 2048 || !utf8.ValidString(value) {
-		return false
+func pathKind(kind access.ClientOperationKind) (Kind, error) {
+	switch kind {
+	case access.ClientOperationSemantic:
+		return KindSemantic, nil
+	case access.ClientOperationAuxiliary:
+		return KindAuxiliary, nil
+	case access.ClientOperationOpaque:
+		return KindOpaque, nil
+	case access.ClientOperationUnsupported:
+		return KindUnsupported, nil
+	default:
+		return "", errors.New("PathCapability operation kind is invalid")
 	}
-	parsed, err := url.ParseQuery(value)
-	return err == nil && parsed.Encode() == value
+}
+
+func pathBodyKind(
+	kind access.ClientOperationBodyKind,
+) (BodyKind, error) {
+	switch kind {
+	case access.ClientOperationBodyJSON:
+		return BodyJSON, nil
+	case access.ClientOperationBodyNone,
+		access.ClientOperationBodyMultipart,
+		access.ClientOperationBodyBytes,
+		access.ClientOperationBodyStream:
+		return BodyOpaque, nil
+	default:
+		return "", errors.New("PathCapability body kind is invalid")
+	}
+}
+
+func pathReplayClass(
+	class access.ClientReplayClass,
+) (exchange.ReplayClass, error) {
+	switch class {
+	case access.ClientReplaySafe:
+		return exchange.ReplaySafe, nil
+	case access.ClientReplayIdempotencyKeyed:
+		return exchange.ReplayIdempotencyKeyed, nil
+	case access.ClientReplayGenerationCostOnly:
+		return exchange.ReplayGenerationCostOnly, nil
+	case access.ClientReplaySideEffectPossible:
+		return exchange.ReplaySideEffectPossible, nil
+	case access.ClientReplayNonReplayable:
+		return exchange.ReplayNonReplayable, nil
+	case access.ClientReplayUnknown:
+		return exchange.ReplayUnknown, nil
+	default:
+		return "", errors.New("PathCapability replay class is invalid")
+	}
 }
 
 func canonicalPath(value string) bool {

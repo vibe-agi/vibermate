@@ -38,6 +38,7 @@ type PluginBindingID struct{ value string }
 type ModelMappingRef struct{ value string }
 type AuthDriverRef struct{ value string }
 type CodecPairID struct{ value string }
+type ClientOperationID struct{ value string }
 type TransportProfileRef struct{ value string }
 
 func NewAccessID(value string) (AccessID, error) {
@@ -117,6 +118,17 @@ func NewCodecPairID(value string) (CodecPairID, error) {
 	return CodecPairID{value: value}, nil
 }
 
+func NewClientOperationID(value string) (ClientOperationID, error) {
+	if err := validateIdentifier(
+		"client operation ID",
+		value,
+		MaxResourceIDBytes,
+	); err != nil {
+		return ClientOperationID{}, err
+	}
+	return ClientOperationID{value: value}, nil
+}
+
 func NewTransportProfileRef(value string) (TransportProfileRef, error) {
 	if err := validateIdentifier(
 		"transport fingerprint profile reference",
@@ -139,6 +151,7 @@ func (id PluginBindingID) String() string   { return id.value }
 func (ref ModelMappingRef) String() string  { return ref.value }
 func (ref AuthDriverRef) String() string    { return ref.value }
 func (id CodecPairID) String() string       { return id.value }
+func (id ClientOperationID) String() string { return id.value }
 func (ref TransportProfileRef) String() string {
 	return ref.value
 }
@@ -175,6 +188,9 @@ func (ref AuthDriverRef) validate() error {
 }
 func (id CodecPairID) validate() error {
 	return validateIdentifier("codec pair ID", id.value, MaxResourceIDBytes)
+}
+func (id ClientOperationID) validate() error {
+	return validateIdentifier("client operation ID", id.value, MaxResourceIDBytes)
 }
 func (ref TransportProfileRef) validate() error {
 	return validateIdentifier(

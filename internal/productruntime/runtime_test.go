@@ -33,6 +33,40 @@ import (
 
 var errAcquireNotExpected = errors.New("egress acquisition is not expected in M0 tests")
 
+func TestProductionAccessCompilerFreezesExactResponsesOperation(t *testing.T) {
+	t.Parallel()
+
+	compiler, err := productionAccessPlanCompiler()
+	if err != nil {
+		t.Fatal(err)
+	}
+	accessID, err := access.NewAccessID("access-runtime-responses")
+	if err != nil {
+		t.Fatal(err)
+	}
+	aggregate := runtimeAccessAggregate(t, accessID, 1, "Responses")
+	clientOrigin, err := access.NewClientOrigin("https://api.openai.com:443")
+	if err != nil {
+		t.Fatal(err)
+	}
+	aggregate.AgentEndpoint.ClientOrigin = clientOrigin
+	aggregate.AgentEndpoint.ClientDialect = access.DialectOpenAIResponses
+	plan, err := compiler.Compile(aggregate)
+	if err != nil {
+		t.Fatalf("compile Responses Access: %v", err)
+	}
+	codec := plan.CodecPlan()
+	operations := codec.ClientOperations()
+	if codec.ID().String() != "openai-responses-to-openai-chat" ||
+		codec.ClientDialect() != access.DialectOpenAIResponses ||
+		codec.ProviderDialect() != access.DialectOpenAIChat ||
+		len(operations) != 1 ||
+		operations[0].ID().String() != "openai-responses-create" ||
+		operations[0].PathPattern() != "/v1/responses" {
+		t.Fatalf("production Responses codec plan = %+v", codec)
+	}
+}
+
 func TestProductRuntimeStartsAndShutsDownNormally(t *testing.T) {
 	t.Parallel()
 

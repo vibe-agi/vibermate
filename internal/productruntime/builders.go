@@ -19,9 +19,11 @@ import (
 	"github.com/vibe-agi/vibermate/internal/localca"
 	"github.com/vibe-agi/vibermate/internal/loopbackproxy"
 	"github.com/vibe-agi/vibermate/internal/offlinehold"
+	"github.com/vibe-agi/vibermate/internal/operationcatalog"
 	"github.com/vibe-agi/vibermate/internal/originaltransport"
 	"github.com/vibe-agi/vibermate/internal/pathcapability"
 	"github.com/vibe-agi/vibermate/internal/providertransport"
+	"github.com/vibe-agi/vibermate/internal/responseschat"
 	"github.com/vibe-agi/vibermate/internal/runtimepersistence"
 	"github.com/vibe-agi/vibermate/internal/secretstore"
 	"github.com/vibe-agi/vibermate/internal/toolapproval"
@@ -120,8 +122,18 @@ func (productionCredentialBuilder) Build(
 }
 
 func productionAccessPlanCompiler() (*access.Compiler, error) {
-	codecPairID, err := access.NewCodecPairID(
+	operations, err := operationcatalog.M0()
+	if err != nil {
+		return nil, fmt.Errorf("build client operation catalog: %w", err)
+	}
+	anthropicCodecPairID, err := access.NewCodecPairID(
 		anthropicchat.CodecPairID,
+	)
+	if err != nil {
+		return nil, err
+	}
+	responsesCodecPairID, err := access.NewCodecPairID(
+		responseschat.CodecPairID,
 	)
 	if err != nil {
 		return nil, err
@@ -132,17 +144,37 @@ func productionAccessPlanCompiler() (*access.Compiler, error) {
 			MaxAccountBindings:  1,
 			MaxRouteSets:        1,
 		},
-		CodecPairs: []access.CodecPairDefinition{{
-			ID:              codecPairID,
-			Revision:        anthropicchat.CodecRevision,
-			ClientDialect:   access.DialectAnthropicMessages,
-			ProviderDialect: access.DialectOpenAIChat,
-			RequiredCapabilities: []access.ProviderCapability{
-				access.ProviderCapabilityMessages,
-				access.ProviderCapabilityStreaming,
-				access.ProviderCapabilityToolCalls,
+		ClientOperations: operations.Definitions(),
+		CodecPairs: []access.CodecPairDefinition{
+			{
+				ID:              anthropicCodecPairID,
+				Revision:        anthropicchat.CodecRevision,
+				ClientDialect:   access.DialectAnthropicMessages,
+				ProviderDialect: access.DialectOpenAIChat,
+				ClientOperationIDs: operations.SemanticOperationIDs(
+					access.DialectAnthropicMessages,
+				),
+				RequiredCapabilities: []access.ProviderCapability{
+					access.ProviderCapabilityMessages,
+					access.ProviderCapabilityStreaming,
+					access.ProviderCapabilityToolCalls,
+				},
 			},
-		}},
+			{
+				ID:              responsesCodecPairID,
+				Revision:        responseschat.CodecRevision,
+				ClientDialect:   access.DialectOpenAIResponses,
+				ProviderDialect: access.DialectOpenAIChat,
+				ClientOperationIDs: operations.SemanticOperationIDs(
+					access.DialectOpenAIResponses,
+				),
+				RequiredCapabilities: []access.ProviderCapability{
+					access.ProviderCapabilityMessages,
+					access.ProviderCapabilityStreaming,
+					access.ProviderCapabilityToolCalls,
+				},
+			},
+		},
 		AuthDrivers: []access.AuthDriverDefinition{{
 			Ref:      access.StaticHeaderAuthDriverRef(),
 			Revision: 1,
@@ -546,7 +578,11 @@ type productionProxyBuilder struct{}
 func (productionProxyBuilder) Build(
 	request proxyBuildRequest,
 ) (proxyRuntime, error) {
-	paths, err := pathcapability.NewM0Catalog()
+	operations, err := operationcatalog.M0()
+	if err != nil {
+		return nil, fmt.Errorf("build client operation catalog: %w", err)
+	}
+	paths, err := pathcapability.NewCatalog(operations.Definitions())
 	if err != nil {
 		return nil, fmt.Errorf("build M0 PathCapability catalog: %w", err)
 	}

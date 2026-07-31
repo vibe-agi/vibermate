@@ -46,6 +46,148 @@ func TestCompilerProducesDeterministicExecutablePlan(t *testing.T) {
 	assertGetterIsolation(t, first)
 }
 
+func TestCompilerFreezesExactResponsesOperationInPlanHash(t *testing.T) {
+	t.Parallel()
+
+	options := testCatalogOptions(t)
+	responsesCodecID, err := access.NewCodecPairID(
+		"openai-responses-to-openai-chat",
+	)
+	if err != nil {
+		t.Fatalf("construct Responses codec ID: %v", err)
+	}
+	responsesOperation := options.ClientOperations[1]
+	catalog, err := access.NewCatalog(options)
+	if err != nil {
+		t.Fatalf("construct compiler catalog: %v", err)
+	}
+	compiler, err := access.NewCompiler(catalog)
+	if err != nil {
+		t.Fatalf("construct compiler: %v", err)
+	}
+
+	anthropicAggregate := testAggregate(
+		t,
+		newAccessID(t, "access-operation-anthropic"),
+		1,
+		"Anthropic",
+	)
+	anthropicPlan, err := compiler.Compile(anthropicAggregate)
+	if err != nil {
+		t.Fatalf("compile Anthropic plan: %v", err)
+	}
+	responsesAggregate := testAggregate(
+		t,
+		newAccessID(t, "access-operation-responses"),
+		1,
+		"Responses",
+	)
+	responsesAggregate.AgentEndpoint.ClientDialect =
+		access.DialectOpenAIResponses
+	responsesPlan, err := compiler.Compile(responsesAggregate)
+	if err != nil {
+		t.Fatalf("compile Responses plan: %v", err)
+	}
+
+	codec := responsesPlan.CodecPlan()
+	operations := codec.ClientOperations()
+	if codec.ID() != responsesCodecID ||
+		codec.Revision() != 1 ||
+		codec.ClientDialect() != access.DialectOpenAIResponses ||
+		len(operations) != 1 ||
+		operations[0].ID() != responsesOperation.ID() ||
+		operations[0].Revision() != 1 ||
+		operations[0].PathMatch() != access.ClientOperationPathExact ||
+		operations[0].PathPattern() != "/v1/responses" ||
+		operations[0].Kind() != access.ClientOperationSemantic ||
+		operations[0].CodecFeature() != "responses" {
+		t.Fatalf("compiled Responses codec operation = %+v", codec)
+	}
+	if methods := operations[0].Methods(); len(methods) != 1 ||
+		methods[0] != "POST" {
+		t.Fatalf("compiled Responses methods = %v", methods)
+	}
+	if responsesPlan.PlanHash() == anthropicPlan.PlanHash() {
+		t.Fatal("different client operations produced the same PlanHash")
+	}
+	foundOperationDependency := false
+	for _, dependency := range responsesPlan.DependencyRevisions() {
+		if dependency.Kind == access.DependencyClientOperation {
+			foundOperationDependency = true
+			if dependency.ID != responsesOperation.ID().String() ||
+				dependency.Revision != responsesOperation.Revision() {
+				t.Fatalf("client operation dependency = %+v", dependency)
+			}
+		}
+	}
+	if !foundOperationDependency {
+		t.Fatal("client operation dependency is missing")
+	}
+
+	methods := operations[0].Methods()
+	methods[0] = "DELETE"
+	if responsesPlan.CodecPlan().ClientOperations()[0].Methods()[0] != "POST" {
+		t.Fatal("client operation getter aliases the active plan")
+	}
+}
+
+func TestCatalogRejectsMissingOrMismatchedCodecOperations(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name   string
+		mutate func(*testing.T, *access.CatalogOptions)
+	}{
+		{
+			name: "missing operation",
+			mutate: func(t *testing.T, options *access.CatalogOptions) {
+				missing, err := access.NewClientOperationID("missing-operation")
+				if err != nil {
+					t.Fatal(err)
+				}
+				options.CodecPairs[0].ClientOperationIDs =
+					[]access.ClientOperationID{missing}
+			},
+		},
+		{
+			name: "mismatched dialect",
+			mutate: func(t *testing.T, options *access.CatalogOptions) {
+				options.ClientOperations[0] = mustClientOperationDefinition(
+					t,
+					"responses-operation",
+					access.DialectOpenAIResponses,
+					"POST",
+					"/v1/responses",
+					"responses",
+				)
+				options.CodecPairs[0].ClientOperationIDs =
+					[]access.ClientOperationID{
+						options.ClientOperations[0].ID(),
+					}
+			},
+		},
+		{
+			name: "duplicate operation reference",
+			mutate: func(_ *testing.T, options *access.CatalogOptions) {
+				operationID := options.ClientOperations[0].ID()
+				options.CodecPairs[0].ClientOperationIDs =
+					[]access.ClientOperationID{operationID, operationID}
+			},
+		},
+	}
+	for _, test := range tests {
+		test := test
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+			options := testCatalogOptions(t)
+			test.mutate(t, &options)
+			if _, err := access.NewCatalog(options); err == nil {
+				t.Fatal("invalid client operation catalog was accepted")
+			}
+		})
+	}
+}
+
 func TestCompilerMarksLiteralLoopbackCleartextTarget(t *testing.T) {
 	t.Parallel()
 
@@ -101,17 +243,29 @@ func TestCompilerCatalogDoesNotRetainInputAliases(t *testing.T) {
 		access.ProviderCapabilityStreaming,
 		access.ProviderCapabilityToolCalls,
 	}
+	operation := mustClientOperationDefinition(
+		t,
+		"anthropic-messages-create",
+		access.DialectAnthropicMessages,
+		"POST",
+		"/v1/messages",
+		"messages",
+	)
 	options := access.CatalogOptions{
 		Capabilities: access.PlanCapabilities{
 			MaxEndpointProfiles: 1,
 			MaxAccountBindings:  1,
 			MaxRouteSets:        1,
 		},
+		ClientOperations: []access.ClientOperationDefinition{operation},
 		CodecPairs: []access.CodecPairDefinition{{
-			ID:                   codecID,
-			Revision:             1,
-			ClientDialect:        access.DialectAnthropicMessages,
-			ProviderDialect:      access.DialectOpenAIChat,
+			ID:              codecID,
+			Revision:        1,
+			ClientDialect:   access.DialectAnthropicMessages,
+			ProviderDialect: access.DialectOpenAIChat,
+			ClientOperationIDs: []access.ClientOperationID{
+				operation.ID(),
+			},
 			RequiredCapabilities: required,
 		}},
 		AuthDrivers: []access.AuthDriverDefinition{{
@@ -141,6 +295,8 @@ func TestCompilerCatalogDoesNotRetainInputAliases(t *testing.T) {
 	}
 	required[0] = "mutated"
 	options.CodecPairs[0].RequiredCapabilities = nil
+	options.CodecPairs[0].ClientOperationIDs = nil
+	options.ClientOperations = nil
 	options.TransportProfiles[0].ALPN[0] = access.ApplicationProtocolHTTP2
 	options.TransportProfiles[0].FallbackRefs = nil
 	compiler, err := access.NewCompiler(catalog)
@@ -158,6 +314,10 @@ func TestCompilerCatalogDoesNotRetainInputAliases(t *testing.T) {
 			"required capabilities = %v",
 			plan.CodecPlan().RequiredCapabilities(),
 		)
+	}
+	if operations := plan.CodecPlan().ClientOperations(); len(operations) != 1 ||
+		operations[0].PathPattern() != "/v1/messages" {
+		t.Fatalf("client operation catalog retained input aliases: %+v", operations)
 	}
 	transport := plan.TransportFingerprintPlan()
 	if transport.Requested().ALPN()[0] != access.ApplicationProtocolHTTP1 ||

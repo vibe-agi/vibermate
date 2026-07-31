@@ -26,6 +26,7 @@ import (
 	"github.com/vibe-agi/vibermate/internal/localca"
 	"github.com/vibe-agi/vibermate/internal/loopbackproxy"
 	"github.com/vibe-agi/vibermate/internal/offlinehold"
+	"github.com/vibe-agi/vibermate/internal/operationcatalog"
 	"github.com/vibe-agi/vibermate/internal/originaltransport"
 	"github.com/vibe-agi/vibermate/internal/pathcapability"
 	"github.com/vibe-agi/vibermate/internal/runtimepersistence"
@@ -374,7 +375,11 @@ func newProxyFixture(t *testing.T) *proxyFixture {
 	}
 	projection, accessID := testProjection(t)
 	ingress := &revocableIngress{delegate: projection}
-	paths, err := pathcapability.NewM0Catalog()
+	operations, err := operationcatalog.M0()
+	if err != nil {
+		t.Fatal(err)
+	}
+	paths, err := pathcapability.NewCatalog(operations.Definitions())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -647,17 +652,25 @@ func testProjection(
 	model, _ := access.NewModelName("gpt-4.1-mini")
 	secret, _ := access.NewSecretRef("secret://provider/proxy")
 	codecID, _ := access.NewCodecPairID(anthropicchat.CodecPairID)
+	operations, err := operationcatalog.M0()
+	if err != nil {
+		t.Fatal(err)
+	}
 	catalog, err := access.NewCatalog(access.CatalogOptions{
 		Capabilities: access.PlanCapabilities{
 			MaxEndpointProfiles: 1,
 			MaxAccountBindings:  1,
 			MaxRouteSets:        1,
 		},
+		ClientOperations: operations.Definitions(),
 		CodecPairs: []access.CodecPairDefinition{{
 			ID:              codecID,
 			Revision:        anthropicchat.CodecRevision,
 			ClientDialect:   access.DialectAnthropicMessages,
 			ProviderDialect: access.DialectOpenAIChat,
+			ClientOperationIDs: operations.SemanticOperationIDs(
+				access.DialectAnthropicMessages,
+			),
 			RequiredCapabilities: []access.ProviderCapability{
 				access.ProviderCapabilityMessages,
 				access.ProviderCapabilityStreaming,

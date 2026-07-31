@@ -5,6 +5,7 @@ import (
 
 	"github.com/vibe-agi/vibermate/internal/access"
 	"github.com/vibe-agi/vibermate/internal/accessapply"
+	"github.com/vibe-agi/vibermate/internal/operationcatalog"
 )
 
 func TestBuildCommandCreatesOneCompleteTypedAggregateWithoutSecretValue(t *testing.T) {
@@ -154,17 +155,25 @@ func testCompiler(t *testing.T) *access.Compiler {
 	if err != nil {
 		t.Fatal(err)
 	}
+	operations, err := operationcatalog.M0()
+	if err != nil {
+		t.Fatal(err)
+	}
 	catalog, err := access.NewCatalog(access.CatalogOptions{
 		Capabilities: access.PlanCapabilities{
 			MaxEndpointProfiles: 1,
 			MaxAccountBindings:  1,
 			MaxRouteSets:        1,
 		},
+		ClientOperations: operations.Definitions(),
 		CodecPairs: []access.CodecPairDefinition{{
 			ID:              codecID,
 			Revision:        1,
 			ClientDialect:   access.DialectAnthropicMessages,
 			ProviderDialect: access.DialectOpenAIChat,
+			ClientOperationIDs: operations.SemanticOperationIDs(
+				access.DialectAnthropicMessages,
+			),
 			RequiredCapabilities: []access.ProviderCapability{
 				access.ProviderCapabilityMessages,
 				access.ProviderCapabilityStreaming,
