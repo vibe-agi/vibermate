@@ -279,9 +279,10 @@ func (message Message) Clone() Message {
 }
 
 type ToolDefinition struct {
-	Name        string
-	Description string
-	InputSchema JSONDocument
+	Name                string
+	Description         string
+	InputSchema         JSONDocument
+	EagerInputStreaming bool
 }
 
 func (definition ToolDefinition) Validate() error {
@@ -927,21 +928,22 @@ func (response Response) Clone() Response {
 type NoticeCode string
 
 const (
-	NoticeCacheControlNotForwarded      NoticeCode = "cache_control_not_forwarded"
-	NoticeMetadataNotForwarded          NoticeCode = "metadata_not_forwarded"
-	NoticeTopKNotForwarded              NoticeCode = "top_k_not_forwarded"
-	NoticeServiceTierNotForwarded       NoticeCode = "service_tier_not_forwarded"
-	NoticeThinkingModeNotForwarded      NoticeCode = "thinking_mode_not_forwarded"
-	NoticeThinkingBudgetNotForwarded    NoticeCode = "thinking_budget_not_forwarded"
-	NoticeThinkingDisplayNotForwarded   NoticeCode = "thinking_display_not_forwarded"
-	NoticeReasoningEffortDowngraded     NoticeCode = "reasoning_effort_downgraded"
-	NoticeTaskBudgetNotForwarded        NoticeCode = "task_budget_not_forwarded"
-	NoticeContextManagementNotForwarded NoticeCode = "context_management_not_forwarded"
-	NoticeDiagnosticsNotForwarded       NoticeCode = "diagnostics_not_forwarded"
-	NoticeContentOrderNormalized        NoticeCode = "content_order_normalized"
-	NoticeLateUsageAccounting           NoticeCode = "late_usage_accounting"
-	NoticeReasoningContentNotForwarded  NoticeCode = "reasoning_content_not_forwarded"
-	NoticeReasoningUsageNotForwarded    NoticeCode = "reasoning_usage_not_forwarded"
+	NoticeCacheControlNotForwarded            NoticeCode = "cache_control_not_forwarded"
+	NoticeMetadataNotForwarded                NoticeCode = "metadata_not_forwarded"
+	NoticeTopKNotForwarded                    NoticeCode = "top_k_not_forwarded"
+	NoticeServiceTierNotForwarded             NoticeCode = "service_tier_not_forwarded"
+	NoticeThinkingModeNotForwarded            NoticeCode = "thinking_mode_not_forwarded"
+	NoticeThinkingBudgetNotForwarded          NoticeCode = "thinking_budget_not_forwarded"
+	NoticeThinkingDisplayNotForwarded         NoticeCode = "thinking_display_not_forwarded"
+	NoticeReasoningEffortDowngraded           NoticeCode = "reasoning_effort_downgraded"
+	NoticeTaskBudgetNotForwarded              NoticeCode = "task_budget_not_forwarded"
+	NoticeContextManagementNotForwarded       NoticeCode = "context_management_not_forwarded"
+	NoticeDiagnosticsNotForwarded             NoticeCode = "diagnostics_not_forwarded"
+	NoticeContentOrderNormalized              NoticeCode = "content_order_normalized"
+	NoticeLateUsageAccounting                 NoticeCode = "late_usage_accounting"
+	NoticeReasoningContentNotForwarded        NoticeCode = "reasoning_content_not_forwarded"
+	NoticeReasoningUsageNotForwarded          NoticeCode = "reasoning_usage_not_forwarded"
+	NoticeEagerToolInputStreamingNotForwarded NoticeCode = "eager_tool_input_streaming_not_forwarded"
 )
 
 type TranslationNotice struct {

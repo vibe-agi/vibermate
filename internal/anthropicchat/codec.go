@@ -11,7 +11,7 @@ const (
 	SourceOpenAIChat        = "openai-chat"
 	CallNamespace           = "anthropic-messages-openai-chat"
 	CodecPairID             = "anthropic-messages-to-openai-chat"
-	CodecRevision           = 4
+	CodecRevision           = 5
 	ProviderRelativePath    = "chat/completions"
 )
 

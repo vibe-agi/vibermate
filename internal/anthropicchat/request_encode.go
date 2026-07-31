@@ -121,6 +121,15 @@ func (codec *Codec) EncodeProviderRequest(
 				Parameters:  tool.InputSchema.Bytes(),
 			},
 		}
+		if tool.EagerInputStreaming {
+			report = report.Merge(protocolcore.NewTranslationReport(
+				protocolcore.TranslationNotice{
+					Code: protocolcore.NoticeEagerToolInputStreamingNotForwarded,
+					Path: "$.tools[" + integerString(index) +
+						"].eager_input_streaming",
+				},
+			))
+		}
 	}
 
 	var toolChoice any

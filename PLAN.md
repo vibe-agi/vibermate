@@ -113,9 +113,9 @@ capture provider text, prompts, tool arguments, headers, or credentials.
 
 ### 4. Run the credentialed vertical chain
 
-- [ ] Apply the complete Access route to
+- [x] Apply the complete Access route to
   `http://127.0.0.1:23333/v1` using a confirmed fixed model.
-- [ ] Prove a normal response with a trusted marker and incremental deltas.
+- [x] Prove a normal response with a trusted marker and incremental deltas.
 - [ ] Prove a real tool intent becomes durable pending approval, remains
   hidden before `allow-once`, and completes only after approval.
 - [ ] Prove a request admitted after Enter Hold sends zero provider bytes
@@ -129,7 +129,7 @@ capture provider text, prompts, tool arguments, headers, or credentials.
 ### 5. Correct failures only at their owning layer
 
 - [x] Protocol failures receive protocol fixtures and codec tests.
-- [ ] Provider-envelope failures receive sanitized wire-shape tests.
+- [x] Provider-envelope failures receive sanitized wire-shape tests.
 - [ ] Hold ordering failures receive deterministic admission/probe tests.
 - [ ] Proxy or ingress failures receive CONNECT/MITM and endpoint-revalidation
   tests.
@@ -173,19 +173,19 @@ multi-profile routing, and full product UI remain outside this plan.
 ## Current evidence
 
 - Frozen source revision:
-  `3d77ce8c87cf984ec90b8fa45ba168a01980237a`.
+  `7b3c3adeed9bddff3865d567cb40a31ccb191fb7`.
 - Standalone build checkout:
-  `/Users/null/Code/github/vibe-agi/vibermate-m0-acceptance-3d77ce8`.
+  `/Users/null/Code/github/vibe-agi/vibermate-m0-acceptance-7b3c3ad`.
 - Deterministic report:
-  `/private/tmp/vibermate-m0-deterministic-3d77ce8.json`.
+  `/private/tmp/vibermate-m0-deterministic-7b3c3ad.json`.
 - Deterministic result: 16 of 16 checks passed; report mode is `0600`;
   source provenance is clean and matches the frozen revision.
-- First credentialed attempt:
-  `/private/tmp/vibermate-m0-credentialed-3d77ce8.json`.
-- Credentialed result: existing development secret revision 1 reached the
-  local provider but was rejected with HTTP 403. VibeMate returned the closed
-  reason `provider_status_rejected`; no provider body or secret entered the
-  report.
+- Current credentialed attempt:
+  `/private/tmp/vibermate-m0-credentialed-7b3c3ad.json`.
+- Credentialed result: Access revision 2 and secret metadata were applied, and
+  the normal reply completed with incremental deltas. The tool scenario then
+  failed closed on a request-shape mismatch before its approval became
+  pending.
 - The credential was replaced through the App and only metadata was observed:
   the existing SecretRef advanced to revision 2.
 - A production-path request using the bare `glm-5` model reached Cherry Studio
@@ -194,10 +194,18 @@ multi-profile routing, and full product UI remain outside this plan.
 - The namespaced model reached the provider and received HTTP 200. The frozen
   `3d77ce8` codec then failed closed on the provider extension
   `reasoning_content`.
-- The current candidate adds deterministic complete-response and SSE fixtures:
+- Commit `23d24ac` added deterministic complete-response and SSE fixtures:
   provider reasoning remains immutable opaque evidence, never enters Anthropic
   text, and produces explicit reasoning-content and reasoning-usage
-  TranslationReport notices. A new clean artifact and vertical rerun remain
+  TranslationReport notices.
+- Commit `7b3c3ad` changed the acceptance proof to the fixed CLI's real `Write`
+  tool and now verifies both the durable barrier and a bounded file side
+  effect. The default-base request then failed closed on the newly observed
+  Anthropic field `eager_input_streaming`.
+- The current candidate models that field in the immutable protocol IR,
+  retains strict rejection for all other unknown tool fields, increments the
+  codec revision, and emits an explicit notice because OpenAI Chat has no
+  equivalent request flag. A new clean artifact and vertical rerun remain
   required.
 
 ## Archive and successor protocol

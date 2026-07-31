@@ -167,8 +167,8 @@ func TestFixedClaudeInvocationEnablesBoundedAPIDiagnostics(t *testing.T) {
 		!slices.Contains(arguments, "--tools=") {
 		t.Fatalf("Claude arguments contain an unsafe empty argv: %q", arguments)
 	}
-	withTool := fixedClaudeArguments("/absolute/claude", "TodoWrite")
-	if !slices.Contains(withTool, "--tools=TodoWrite") {
+	withTool := fixedClaudeArguments("/absolute/claude", "Write")
+	if !slices.Contains(withTool, "--tools=Write") {
 		t.Fatalf("Claude tool arguments = %q", withTool)
 	}
 }

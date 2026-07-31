@@ -53,8 +53,9 @@ func TestRequestCloneDoesNotAliasCollectionsOrJSON(t *testing.T) {
 			Blocks: []ContentBlock{text},
 		}},
 		Tools: []ToolDefinition{{
-			Name:        "sample",
-			InputSchema: schema,
+			Name:                "sample",
+			InputSchema:         schema,
+			EagerInputStreaming: true,
 		}},
 		Context: ContextManagementIntent{
 			Edits: []ContextEdit{{
@@ -80,6 +81,7 @@ func TestRequestCloneDoesNotAliasCollectionsOrJSON(t *testing.T) {
 	request.StopSequences[0] = "changed"
 	if cloned.Messages[0].Blocks[0].Text != "hello" ||
 		cloned.Tools[0].Name != "sample" ||
+		!cloned.Tools[0].EagerInputStreaming ||
 		!cloned.Context.Edits[0].KeepAll ||
 		!bytes.Equal(cloned.Output.Schema.Bytes(), []byte(`{"type":"object"}`)) ||
 		cloned.StopSequences[0] != "stop" {

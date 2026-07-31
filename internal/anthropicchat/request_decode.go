@@ -57,11 +57,12 @@ type anthropicToolResultBlockWire struct {
 }
 
 type anthropicToolDefinitionWire struct {
-	Name         string          `json:"name"`
-	Description  string          `json:"description,omitempty"`
-	InputSchema  json.RawMessage `json:"input_schema"`
-	CacheControl json.RawMessage `json:"cache_control,omitempty"`
-	Type         string          `json:"type,omitempty"`
+	Name                string          `json:"name"`
+	Description         string          `json:"description,omitempty"`
+	InputSchema         json.RawMessage `json:"input_schema"`
+	CacheControl        json.RawMessage `json:"cache_control,omitempty"`
+	Type                string          `json:"type,omitempty"`
+	EagerInputStreaming *bool           `json:"eager_input_streaming,omitempty"`
 }
 
 type anthropicToolChoiceWire struct {
@@ -773,9 +774,10 @@ func (codec *Codec) decodeToolDefinition(
 			protocolcore.NewFailure(protocolcore.ReasonInvalidClientRequest, path+".input_schema", err)
 	}
 	tool := protocolcore.ToolDefinition{
-		Name:        wire.Name,
-		Description: wire.Description,
-		InputSchema: schema,
+		Name:                wire.Name,
+		Description:         wire.Description,
+		InputSchema:         schema,
+		EagerInputStreaming: wire.EagerInputStreaming != nil && *wire.EagerInputStreaming,
 	}
 	if err := tool.Validate(); err != nil {
 		return protocolcore.ToolDefinition{}, protocolcore.TranslationReport{},

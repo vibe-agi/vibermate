@@ -447,7 +447,7 @@ func runAcceptance(
 	report.add(
 		"tool-approval",
 		checkPassed,
-		"TodoWrite remained behind the durable allow-once barrier",
+		"Write remained behind the durable allow-once barrier and produced the bounded proof file",
 	)
 	if err := runHeldStreaming(ctx, config, third); err != nil {
 		return fail("planned-hold-streaming", err)

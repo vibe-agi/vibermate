@@ -26,6 +26,9 @@ handles bounded request/response translation, incremental SSE framing, token
 deltas, usage and stop reasons, complete tool blocks, and the tool-intent commit
 barrier. Official Anthropic and OpenAI Go SDKs are pinned test-only wire
 oracles and are structurally forbidden from the production codec hot path.
+Anthropic `eager_input_streaming` is a typed tool intent; because OpenAI Chat
+has no equivalent request flag, the codec emits an explicit translation notice
+while retaining incremental tool-argument handling and the commit barrier.
 Unsupported or ambiguous protocol shapes fail closed.
 
 Controlled egress is now a mandatory runtime-owned boundary. The planned

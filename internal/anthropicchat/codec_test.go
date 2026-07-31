@@ -39,7 +39,8 @@ func TestRequestTranslationProducesChatWireAndExplicitLossReport(t *testing.T) {
 			"name":"shell",
 			"description":"Run a command.",
 			"input_schema":{"type":"object","properties":{"cmd":{"type":"string"}}},
-			"cache_control":{"type":"ephemeral"}
+			"cache_control":{"type":"ephemeral"},
+			"eager_input_streaming":true
 		}],
 		"tool_choice":{"type":"tool","name":"shell","disable_parallel_tool_use":true},
 		"thinking":{"type":"adaptive","display":"omitted"},
@@ -69,7 +70,9 @@ func TestRequestTranslationProducesChatWireAndExplicitLossReport(t *testing.T) {
 		request.Context.Edits[0].Kind != protocolcore.ContextEditClearThinking ||
 		!request.Context.Edits[0].KeepAll ||
 		!request.Diagnostics.Requested ||
-		request.Diagnostics.HasPrevious {
+		request.Diagnostics.HasPrevious ||
+		len(request.Tools) != 1 ||
+		!request.Tools[0].EagerInputStreaming {
 		t.Fatalf("decoded request = %#v", request)
 	}
 	if len(parseReport.Notices()) != 4 {
@@ -95,6 +98,7 @@ func TestRequestTranslationProducesChatWireAndExplicitLossReport(t *testing.T) {
 		protocolcore.NoticeTaskBudgetNotForwarded,
 		protocolcore.NoticeContextManagementNotForwarded,
 		protocolcore.NoticeDiagnosticsNotForwarded,
+		protocolcore.NoticeEagerToolInputStreamingNotForwarded,
 	} {
 		if !reportHasNotice(encodeReport, code) {
 			t.Fatalf("encode report = %#v, want notice %q", encodeReport.Notices(), code)
@@ -129,6 +133,29 @@ func TestRequestTranslationProducesChatWireAndExplicitLossReport(t *testing.T) {
 	}
 	if !bytes.Contains(encoded, []byte(`"tool_call_id":"call-previous"`)) {
 		t.Fatalf("provider request did not preserve tool call ID: %s", encoded)
+	}
+	if bytes.Contains(encoded, []byte(`"eager_input_streaming"`)) {
+		t.Fatalf("provider request leaked a source-dialect field: %s", encoded)
+	}
+}
+
+func TestToolDefinitionUnknownFieldStillFailsClosed(t *testing.T) {
+	t.Parallel()
+
+	codec := newTestCodec(t)
+	_, _, err := codec.DecodeClientRequest([]byte(`{
+		"model":"claude-client-alias",
+		"max_tokens":64,
+		"stream":true,
+		"messages":[{"role":"user","content":"hello"}],
+		"tools":[{
+			"name":"sample",
+			"input_schema":{"type":"object"},
+			"private_extension":true
+		}]
+	}`))
+	if protocolcore.ReasonOf(err) != protocolcore.ReasonInvalidClientRequest {
+		t.Fatalf("DecodeClientRequest() error = %v", err)
 	}
 }
 
