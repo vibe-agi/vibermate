@@ -1441,11 +1441,7 @@ func (run *agentRun) waitForAgentStatus(
 		return errors.New("Agent HTTP status expectation is invalid")
 	}
 	for {
-		run.mu.Lock()
-		observed := run.failure.agentStatus
-		readErr := run.readErr
-		changed := run.changed
-		run.mu.Unlock()
+		observed, readErr, changed := run.agentStatusEvidence()
 		if observed == expected {
 			return nil
 		}
@@ -1469,10 +1465,7 @@ func (run *agentRun) waitForAgentStatus(
 			case <-ctx.Done():
 				return ctx.Err()
 			}
-			run.mu.Lock()
-			observed = run.failure.agentStatus
-			readErr = run.readErr
-			run.mu.Unlock()
+			observed, readErr, _ = run.agentStatusEvidence()
 			if readErr != nil {
 				return readErr
 			}
@@ -1487,10 +1480,28 @@ func (run *agentRun) waitForAgentStatus(
 				)
 			}
 			return errors.New(
-				"Agent exited without the expected typed HTTP status",
+				"Agent exited without the expected HTTP status evidence",
 			)
 		}
 	}
+}
+
+func (run *agentRun) agentStatusEvidence() (
+	status int,
+	readErr error,
+	changed <-chan struct{},
+) {
+	var stderr []byte
+	if run.stderr != nil {
+		stderr, _ = run.stderr.snapshot()
+	}
+	run.mu.Lock()
+	evidence := run.failure
+	readErr = run.readErr
+	changed = run.changed
+	run.mu.Unlock()
+	evidence.merge(extractAgentFailureEvidence(stderr))
+	return evidence.agentStatus, readErr, changed
 }
 
 func (run *agentRun) clientLabel() string {

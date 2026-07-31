@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"io"
+	"net/http"
 	"path/filepath"
 	"slices"
 	"strings"
@@ -539,6 +540,30 @@ func TestCodexJSONLExtractsUnexpectedHTTPStatusFromFailedTurn(t *testing.T) {
 			run.failure.agentStatus,
 			run.lastType,
 		)
+	}
+}
+
+func TestAgentStatusEvidenceIncludesBoundedStderrAfterProcessExit(t *testing.T) {
+	t.Parallel()
+
+	done := make(chan struct{})
+	outputDone := make(chan struct{})
+	close(done)
+	close(outputDone)
+	run := &agentRun{
+		done:       done,
+		outputDone: outputDone,
+		stderr:     newBoundedBuffer(256),
+		changed:    make(chan struct{}),
+	}
+	_, _ = run.stderr.Write([]byte(
+		"unexpected status 426 Upgrade Required: bounded failure",
+	))
+	if err := run.waitForAgentStatus(
+		context.Background(),
+		http.StatusUpgradeRequired,
+	); err != nil {
+		t.Fatal(err)
 	}
 }
 

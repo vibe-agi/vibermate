@@ -656,7 +656,7 @@ func (evidence codexHTTPFallbackEvidence) reportDetail() (string, error) {
 	if err := evidence.validate(); err != nil {
 		return "", err
 	}
-	return "fixed Codex reported typed HTTP 426, the proxy audit proved the bounded transition to HTTP, and Runtime Activity bound that request to provider_credential_unavailable", nil
+	return "fixed Codex surfaced HTTP 426, the proxy audit proved the bounded transition to HTTP, and Runtime Activity bound that request to provider_credential_unavailable", nil
 }
 
 func completeCodexHTTPFallbackEvidence(
@@ -679,7 +679,7 @@ func completeCodexHTTPFallbackEvidence(
 		http.StatusUpgradeRequired,
 	); err != nil {
 		return evidence, fmt.Errorf(
-			"observe typed Codex fallback HTTP status: %w (%s)",
+			"observe Codex fallback HTTP status: %w (%s)",
 			err,
 			run.safeFailureEvidence(),
 		)

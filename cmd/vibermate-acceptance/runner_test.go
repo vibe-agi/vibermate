@@ -611,7 +611,7 @@ func TestCodexHTTPFallbackEvidenceRequiresClientOutcomeAndConnectionAudit(
 	if err != nil {
 		t.Fatal(err)
 	}
-	if detail != "fixed Codex reported typed HTTP 426, the proxy audit proved the bounded transition to HTTP, and Runtime Activity bound that request to provider_credential_unavailable" {
+	if detail != "fixed Codex surfaced HTTP 426, the proxy audit proved the bounded transition to HTTP, and Runtime Activity bound that request to provider_credential_unavailable" {
 		t.Fatalf("fallback detail = %q", detail)
 	}
 
