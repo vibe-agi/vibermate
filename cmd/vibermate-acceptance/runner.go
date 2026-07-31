@@ -1852,13 +1852,27 @@ func waitForHeldQueuedEgressKind(
 		case <-ctx.Done():
 			return offlinehold.Snapshot{}, ctx.Err()
 		case <-run.done:
-			return offlinehold.Snapshot{}, fmt.Errorf(
-				"%s exited before %s egress queued in offline hold",
-				run.clientLabel(),
+			return offlinehold.Snapshot{}, agentExitedBeforeHeldEgress(
+				ctx,
+				run,
 				kind,
 			)
 		}
 	}
+}
+
+func agentExitedBeforeHeldEgress(
+	ctx context.Context,
+	run *agentRun,
+	kind offlinehold.EgressKind,
+) error {
+	exitCode, waitErr := run.wait(ctx)
+	return fmt.Errorf(
+		"%s exited before %s egress queued in offline hold: %w",
+		run.clientLabel(),
+		kind,
+		agentProcessFailure("held-ingress", exitCode, waitErr, run),
+	)
 }
 
 func runToolApproval(

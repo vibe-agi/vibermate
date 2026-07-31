@@ -575,6 +575,41 @@ func TestAgentExitedBeforeApprovalReturnsBoundedFailureEvidence(t *testing.T) {
 	}
 }
 
+func TestAgentExitedBeforeHeldEgressReturnsBoundedFailureEvidence(t *testing.T) {
+	t.Parallel()
+
+	done := make(chan struct{})
+	close(done)
+	outputDone := make(chan struct{})
+	close(outputDone)
+	run := &agentRun{
+		done:       done,
+		outputDone: outputDone,
+		stderr:     newBoundedBuffer(256),
+		clientID:   acceptanceClientCodexCLI,
+	}
+	_, _ = run.stderr.Write([]byte(
+		"request configuration is invalid; private-detail",
+	))
+	err := agentExitedBeforeHeldEgress(
+		context.Background(),
+		run,
+		offlinehold.EgressProvider,
+	)
+	for _, required := range []string{
+		"Codex exited before provider egress queued in offline hold",
+		"held-ingress Codex exit=0",
+		"keywords=invalid,request",
+	} {
+		if !strings.Contains(err.Error(), required) {
+			t.Fatalf("agentExitedBeforeHeldEgress() error = %v", err)
+		}
+	}
+	if strings.Contains(err.Error(), "private-detail") {
+		t.Fatalf("agentExitedBeforeHeldEgress() leaked stderr: %v", err)
+	}
+}
+
 func TestOfflineAcceptanceRequiresReleaseThenOnlineSettlement(t *testing.T) {
 	t.Parallel()
 
