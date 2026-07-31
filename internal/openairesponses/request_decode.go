@@ -95,6 +95,11 @@ type customToolCallOutputWire struct {
 	InternalMetadata json.RawMessage `json:"internal_chat_message_metadata_passthrough,omitempty"`
 }
 
+type toolOutputContentWire struct {
+	Type string `json:"type"`
+	Text string `json:"text"`
+}
+
 type toolTypeWire struct {
 	Type string `json:"type"`
 }
@@ -638,8 +643,12 @@ func decodeFunctionCallOutput(
 				errors.New("function call output is not complete"),
 			)
 	}
-	message, err := decodeToolOutput(wire.CallID, wire.Output, path)
-	return message, metadataReport, err
+	message, outputReport, err := decodeToolOutput(
+		wire.CallID,
+		wire.Output,
+		path,
+	)
+	return message, metadataReport.Merge(outputReport), err
 }
 
 func decodeCustomToolCallOutput(
@@ -662,37 +671,92 @@ func decodeCustomToolCallOutput(
 	if err != nil {
 		return protocolcore.Message{}, protocolcore.TranslationReport{}, err
 	}
-	message, err := decodeToolOutput(wire.CallID, wire.Output, path)
-	return message, metadataReport, err
+	message, outputReport, err := decodeToolOutput(
+		wire.CallID,
+		wire.Output,
+		path,
+	)
+	return message, metadataReport.Merge(outputReport), err
 }
 
 func decodeToolOutput(
 	callID string,
 	raw json.RawMessage,
 	path string,
-) (protocolcore.Message, error) {
-	var output string
-	if err := json.Unmarshal(raw, &output); err != nil {
-		return protocolcore.Message{}, invalidClient(
-			path+".output",
-			errors.New("tool output content arrays are unsupported"),
-		)
+) (
+	protocolcore.Message,
+	protocolcore.TranslationReport,
+	error,
+) {
+	output, report, err := decodeToolOutputText(raw, path+".output")
+	if err != nil {
+		return protocolcore.Message{}, protocolcore.TranslationReport{}, err
 	}
 	key, err := protocolcore.NewCallKey("openai-responses-call", callID)
 	if err != nil {
-		return protocolcore.Message{}, invalidClient(path+".call_id", err)
+		return protocolcore.Message{}, protocolcore.TranslationReport{},
+			invalidClient(path+".call_id", err)
 	}
 	block, err := protocolcore.NewToolResultBlock(protocolcore.ToolResult{
 		Key:     key,
 		Content: output,
 	})
 	if err != nil {
-		return protocolcore.Message{}, invalidClient(path, err)
+		return protocolcore.Message{}, protocolcore.TranslationReport{},
+			invalidClient(path, err)
 	}
 	return protocolcore.Message{
 		Role:   protocolcore.RoleTool,
 		Blocks: []protocolcore.ContentBlock{block},
-	}, nil
+	}, report, nil
+}
+
+func decodeToolOutputText(
+	raw json.RawMessage,
+	path string,
+) (string, protocolcore.TranslationReport, error) {
+	var output string
+	if json.Unmarshal(raw, &output) == nil {
+		return output, protocolcore.TranslationReport{}, nil
+	}
+	var rawItems []json.RawMessage
+	if err := json.Unmarshal(raw, &rawItems); err != nil ||
+		len(rawItems) == 0 {
+		return "", protocolcore.TranslationReport{}, invalidClient(
+			path,
+			errors.New(
+				"tool output must be text or a nonempty content array",
+			),
+		)
+	}
+	var normalized strings.Builder
+	for index, rawItem := range rawItems {
+		var item toolOutputContentWire
+		if err := decodeStrict(rawItem, &item); err != nil {
+			return "", protocolcore.TranslationReport{},
+				invalidClient(
+					fmt.Sprintf("%s[%d]", path, index),
+					err,
+				)
+		}
+		if item.Type != "input_text" {
+			return "", protocolcore.TranslationReport{},
+				invalidClient(
+					fmt.Sprintf("%s[%d].type", path, index),
+					errors.New(
+						"tool output content type is unsupported",
+					),
+				)
+		}
+		if index > 0 {
+			normalized.WriteByte('\n')
+		}
+		normalized.WriteString(item.Text)
+	}
+	return normalized.String(), notice(
+		protocolcore.NoticeToolOutputContentNormalized,
+		path,
+	), nil
 }
 
 func newToolCall(
@@ -708,9 +772,15 @@ func newToolCall(
 	if err != nil {
 		return protocolcore.ToolCall{}, err
 	}
-	itemKey, err := protocolcore.NewCallKey("openai-responses-item", itemID)
-	if err != nil {
-		return protocolcore.ToolCall{}, err
+	var itemKey protocolcore.CallKey
+	if itemID != "" {
+		itemKey, err = protocolcore.NewCallKey(
+			"openai-responses-item",
+			itemID,
+		)
+		if err != nil {
+			return protocolcore.ToolCall{}, err
+		}
 	}
 	call := protocolcore.ToolCall{
 		Kind:      kind,

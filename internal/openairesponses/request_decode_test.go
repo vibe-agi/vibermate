@@ -357,7 +357,7 @@ func TestDecodeResponsesRejectsAmbiguousOrUnsupportedControls(t *testing.T) {
 			}`,
 		},
 		{
-			name: "content-array tool output",
+			name: "unsupported tool output content kind",
 			body: `{
 				"model":"gpt-5.6-sol",
 				"input":[
@@ -365,7 +365,10 @@ func TestDecodeResponsesRejectsAmbiguousOrUnsupportedControls(t *testing.T) {
 					{
 						"type":"function_call_output",
 						"call_id":"call-1",
-						"output":[{"type":"input_text","text":"value"}]
+						"output":[{
+							"type":"input_image",
+							"image_url":"data:image/png;base64,AA=="
+						}]
 					}
 				]
 			}`,
@@ -455,7 +458,6 @@ func TestDecodeResponsesToolHistoryAcceptsBoundedItemMetadataWithoutRetainingIt(
 			},
 			{
 				"type":"custom_tool_call",
-				"id":"item-custom-1",
 				"call_id":"call-custom-1",
 				"name":"exec",
 				"input":"pwd",
@@ -464,7 +466,10 @@ func TestDecodeResponsesToolHistoryAcceptsBoundedItemMetadataWithoutRetainingIt(
 			{
 				"type":"custom_tool_call_output",
 				"call_id":"call-custom-1",
-				"output":"/tmp",
+				"output":[
+					{"type":"input_text","text":"/tmp"},
+					{"type":"input_text","text":"complete"}
+				],
 				"internal_chat_message_metadata_passthrough":{"turn_id":"turn-1"}
 			}
 		],
@@ -477,17 +482,42 @@ func TestDecodeResponsesToolHistoryAcceptsBoundedItemMetadataWithoutRetainingIt(
 	if len(request.Messages) != 4 {
 		t.Fatalf("message count = %d, want 4", len(request.Messages))
 	}
+	if !request.Messages[2].Blocks[0].ToolCall.ItemKey.IsZero() {
+		t.Fatalf(
+			"absent custom item ID became %#v",
+			request.Messages[2].Blocks[0].ToolCall.ItemKey,
+		)
+	}
+	if request.Messages[3].Blocks[0].ToolResult.Content !=
+		"/tmp\ncomplete" {
+		t.Fatalf(
+			"normalized tool output = %q",
+			request.Messages[3].Blocks[0].ToolResult.Content,
+		)
+	}
 	var metadataNotices int
+	var outputNotices int
 	for _, notice := range report.Notices() {
 		if notice.Code ==
 			protocolcore.NoticeInternalMessageMetadataNotForwarded {
 			metadataNotices++
+		}
+		if notice.Code ==
+			protocolcore.NoticeToolOutputContentNormalized {
+			outputNotices++
 		}
 	}
 	if metadataNotices != 4 {
 		t.Fatalf(
 			"metadata notice count = %d, want 4; report=%#v",
 			metadataNotices,
+			report.Notices(),
+		)
+	}
+	if outputNotices != 1 {
+		t.Fatalf(
+			"tool output notice count = %d, want 1; report=%#v",
+			outputNotices,
 			report.Notices(),
 		)
 	}

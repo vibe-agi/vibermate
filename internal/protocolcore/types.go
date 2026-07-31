@@ -1271,6 +1271,7 @@ const (
 	NoticeToolItemIdentityNotForwarded        NoticeCode = "tool_item_identity_not_forwarded"
 	NoticeCustomToolKindEncoded               NoticeCode = "custom_tool_kind_encoded"
 	NoticeDeveloperRoleNormalized             NoticeCode = "developer_role_normalized"
+	NoticeToolOutputContentNormalized         NoticeCode = "tool_output_content_normalized"
 )
 
 type TranslationNotice struct {
