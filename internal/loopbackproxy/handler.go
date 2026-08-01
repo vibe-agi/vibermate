@@ -754,11 +754,20 @@ func (handler *Handler) serveSemantic(
 	}
 }
 
+// connectionSource grades ingress attribution from the evidence the CaptureRun
+// actually carries. A digest-verified compound release is the strongest
+// evidence a pure proxy can obtain, so it reports `verified`; a run without one
+// reports `configured`. Neither is a claim of operating-system process
+// identity, which the proxy cannot establish.
 func connectionSource(run capturerun.Evidence) connectionevent.Source {
+	confidence := connectionevent.SourceConfidenceConfigured
+	if run.Adapter != nil {
+		confidence = connectionevent.SourceConfidenceVerified
+	}
 	return connectionevent.Source{
 		IngressID:  run.RunID,
 		Label:      run.ExecutableLabel,
-		Confidence: connectionevent.SourceConfidenceConfigured,
+		Confidence: confidence,
 	}
 }
 
