@@ -1,6 +1,6 @@
-.PHONY: check check-format check-generated check-dependencies check-structural check-desktop check-desktop-ui check-desktop-rust test test-race vet vuln vuln-go vuln-rust
+.PHONY: check check-format check-generated check-dependencies check-structural check-release-build check-desktop check-desktop-ui check-desktop-rust test test-race vet vuln vuln-go vuln-rust
 
-check: check-format check-generated check-dependencies check-structural check-desktop
+check: check-format check-generated check-dependencies check-structural check-release-build check-desktop
 
 check-format:
 	@unformatted="$$(gofmt -l .)"; \
@@ -20,6 +20,13 @@ check-dependencies:
 check-structural:
 	go run ./cmd/repositorycheck
 	go test ./internal/repositorycheck
+
+# The release backend is selected by a build tag, so nothing in an ordinary
+# build or test run compiles it. It went missing entirely once; this is what
+# would have caught that.
+check-release-build:
+	go build -tags vibermate_native_secrets ./...
+	go vet -tags vibermate_native_secrets ./...
 
 check-desktop: check-desktop-ui check-desktop-rust
 

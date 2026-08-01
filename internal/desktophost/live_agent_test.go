@@ -1,3 +1,8 @@
+//go:build !vibermate_native_secrets
+
+// These runs put a provider credential into a Store, so they use the
+// development file backend and are built only when it is the selected one. A
+// live run must not file a test secret in somebody's keychain.
 package desktophost_test
 
 import (

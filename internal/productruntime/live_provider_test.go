@@ -1,3 +1,8 @@
+//go:build !vibermate_native_secrets
+
+// These runs put a provider credential into a Store, so they use the
+// development file backend and are built only when it is the selected one. A
+// live run must not file a test secret in somebody's keychain.
 package productruntime
 
 import (
@@ -785,4 +790,148 @@ func TestALiveStreamThatEndsEarlyKeepsTheLedgerAxesApart(t *testing.T) {
 	if !found {
 		t.Fatal("no provider attempt was recorded")
 	}
+}
+
+// The other client dialect, against a real model. Codex speaks OpenAI
+// Responses; this is the translation the Anthropic runs never touch, and the
+// only main translation path with no live evidence behind it.
+//
+// It goes through the Exchange rather than the proxy because the Codex binary
+// on this machine is a release the catalog has no evidence for. The
+// translation is what is under test here, not the launch.
+func TestALiveProviderAnswersAResponsesClient(t *testing.T) {
+	provider := liveProviderFromEnvironment(t)
+
+	accessID, err := access.NewAccessID("access-live-responses")
+	if err != nil {
+		t.Fatal(err)
+	}
+	gate, err := offlinehold.New(offlinehold.DefaultConfig())
+	if err != nil {
+		t.Fatal(err)
+	}
+	options := testOptions(t, hostcontract.Desktop(), gate)
+	factory, err := hostsecret.NewDevelopmentFileFactory(
+		filepath.Join(t.TempDir(), "secrets", "store.json"),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	secrets, err := factory.Open(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	options.Secrets = secrets
+	runtime, err := Start(context.Background(), options)
+	if err != nil {
+		t.Fatalf("start ProductRuntime: %v", err)
+	}
+	defer shutdownRuntime(t, runtime)
+
+	aggregate := liveAccessAggregate(t, accessID, provider)
+	clientOrigin, err := access.NewClientOrigin("https://api.openai.com:443")
+	if err != nil {
+		t.Fatal(err)
+	}
+	aggregate.AgentEndpoint.ClientOrigin = clientOrigin
+	aggregate.AgentEndpoint.ClientDialect = access.DialectOpenAIResponses
+	if write, err := runtime.AccessWriter().WriteAccess(
+		context.Background(),
+		access.WriteCommand{ExpectedRevision: 0, Aggregate: aggregate},
+	); err != nil || write.Outcome != access.WriteOutcomeCommitted {
+		t.Fatalf("write Access result=%+v err=%v", write, err)
+	}
+	value, err := secretstore.NewValue([]byte(provider.key))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := runtime.Credentials().ReplaceSecret(
+		context.Background(),
+		accesscredential.ReplaceCommand{
+			AccessID:         accessID,
+			ProfileID:        aggregate.Profiles[0].ID,
+			CredentialID:     aggregate.AccountBindings[0].ID,
+			ExpectedRevision: 0,
+			Value:            value,
+		},
+	); err != nil {
+		t.Fatalf("store the provider credential: %v", err)
+	}
+	activePlan, err := runtime.SnapshotResolver().ResolveAccess(accessID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	request, err := exchange.NewClientRequest(
+		"exchange-live-responses",
+		activePlan.IngressBinding(),
+		runtimeResponsesOperationEvidence(t),
+		[]byte(`{
+			"model":"codex-client-alias",
+			"input":[{
+				"type":"message",
+				"role":"user",
+				"content":[{"type":"input_text","text":"Reply with the single word: ready"}]
+			}],
+			"store":false,
+			"stream":false
+		}`),
+		exchange.ReplayGenerationCostOnly,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
+	defer cancel()
+	downstream := &runtimeDownstream{}
+	result, err := runtime.ExchangeExecutor().Execute(ctx, request, downstream)
+	if err != nil {
+		t.Fatalf("execute a live Responses Exchange: %v", err)
+	}
+	if result.Outcome != exchange.AttemptSucceeded ||
+		!result.Ledger.DownstreamTerminal {
+		t.Fatalf("live Responses result = %+v", result)
+	}
+
+	// The client asked in Responses, so the answer comes back as a Responses
+	// object with output items, not as a chat completion relabelled.
+	var answer struct {
+		Object string `json:"object"`
+		Status string `json:"status"`
+		Output []struct {
+			Type    string `json:"type"`
+			Role    string `json:"role"`
+			Content []struct {
+				Type string `json:"type"`
+				Text string `json:"text"`
+			} `json:"content"`
+		} `json:"output"`
+		Usage struct {
+			InputTokens  int `json:"input_tokens"`
+			OutputTokens int `json:"output_tokens"`
+		} `json:"usage"`
+	}
+	if err := json.Unmarshal(downstream.body.Bytes(), &answer); err != nil {
+		t.Fatalf("decode the answer: %v body=%s", err, downstream.body.Bytes())
+	}
+	if answer.Object != "response" || answer.Status != "completed" {
+		t.Fatalf("answer shape = %+v body=%s", answer, downstream.body.Bytes())
+	}
+	text := ""
+	for _, item := range answer.Output {
+		if item.Type != "message" || item.Role != "assistant" {
+			continue
+		}
+		for _, block := range item.Content {
+			if block.Type == "output_text" {
+				text += block.Text
+			}
+		}
+	}
+	if strings.TrimSpace(text) == "" {
+		t.Fatalf("the model said nothing: %s", downstream.body.Bytes())
+	}
+	if answer.Usage.InputTokens == 0 || answer.Usage.OutputTokens == 0 {
+		t.Fatalf("usage was not carried back: %+v", answer.Usage)
+	}
+	t.Logf("live Responses answer: %q", strings.TrimSpace(text))
 }
