@@ -72,14 +72,19 @@ which `ADR-0015` §10 forbids outright.
 
 ## Bottom-up implementation
 
-### 1. Independent typed identity
+### 1. Independent typed identity — complete at `cb1a7f3`
 
-- [ ] Give `exchange.ClientRequest` typed `CaptureRunRef` and `ConnectionRef`
+- [x] Give `exchange.ClientRequest` typed `CaptureRunRef` and `ConnectionRef`
   correlation instead of a concatenated Exchange ID.
-- [ ] Generate the Exchange ID independently in the proxy and pass the run and
+- [x] Generate the Exchange ID independently in the proxy and pass the run and
   connection as references.
-- [ ] Prove no production identity contains another identity as a substring.
-- [ ] Add a structural rule rejecting delimiter-joined identity construction.
+- [x] Generate the upstream attempt identity independently instead of
+  `exchangeID + "/attempt-1"`.
+- [x] Stop reconstructing offline-hold action membership from an identity
+  prefix; the typed `ActionLease` was always the authority.
+- [x] Add a structural rule rejecting both delimiter-joined identity
+  construction and delimiter-joined identity matching, scoped so documented
+  formats such as `secret://namespace/id` stay legal.
 
 ### 2. Narrow ConnectionEvent
 
