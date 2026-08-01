@@ -113,12 +113,17 @@ no-body GETs, so the fixed Claude Code control plane is unaffected.
 
 ### 6. Fixed-client evidence
 
-- [ ] Run bounded fixed Claude Code 2.1.220 fixture; record `passed`,
-  `blocked`, or `not_observed` without presetting the result.
-- [ ] If the fixed client terminates on the rejection, keep the fail-closed
-  fix, mark the capability `blocked`, and open M1.0-C0a' for the local
-  tokenizer strategy (`07` §6.3 option 1), which needs no egress and no
-  handoff. Restoring the original-origin bypass is not an option.
+- [x] Ran a bounded fixed Claude Code 2.1.220 probe. Result recorded in
+  `docs/evidence/2026-08-02-m1.0-c0a-fixed-client-probe.md`: `not_observed`
+  dynamically across two non-interactive scenarios, and statically the client
+  catches every `countTokens` failure and returns `null`. The capability is
+  therefore not `blocked`, and the local-tokenizer contingency is not required
+  to restore availability.
+- [ ] Re-establish through packaged acceptance before any Preview claim; the
+  interactive TUI and explicit compaction paths remain unexercised.
+
+Status: implementation and deterministic gates complete at `98b693a`. Packaged
+acceptance is outstanding.
 
 ## Gates
 
