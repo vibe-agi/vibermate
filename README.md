@@ -105,14 +105,16 @@ cannot repopulate the bounded LRU cache. Same-key cold issuance is coalesced;
 different keys may generate concurrently; cancellation, failure, panic, and
 shutdown do not cache a result or strand waiters. The production proxy performs
 this admission against the real ClientHello after exact CONNECT/SNI validation.
-IP-literal leaf admission is intentionally unsupported.
+IP-literal leaf admission is intentionally unsupported. The canonical DNS
+constructor also rejects any value parsed as an IP address, so callers cannot
+reclassify a bare IPv4 or IPv6 literal as a DNS SAN.
 
 This code exports only immutable Root identity and defensive-copy public
 certificate delivery material. It does not install, remove, replace, or rotate
 an operating-system Root, and it has no trust Control API or trust UI.
 Repository tests prove the version-gated Responses behavior. A clean private
 v5 deterministic report and credentialed report bound to implementation commit
-`6d3b0ec7196f0d8e8fc71afc6c894e180cbe8ca6` exercise the revised production
+`c19cca4eb2842aa00d8e8fc17160b342a111f0b6` exercise the revised production
 certificate path. They additionally bind a Codex-surfaced HTTP 426, the proxy's
 bounded 426-to-HTTP connection audit, and the subsequent HTTP Exchange reason
 from Runtime Activity. Neither report proves successful Responses WebSocket
@@ -162,7 +164,7 @@ takes a secret value on its command line. The Codex runner isolates
 `CODEX_HOME`, reads prompts from standard input, trusts only bounded typed
 JSONL plus bounded client-status evidence, and exercises `exec resume`. One
 clean packaged v5 deterministic report and one credentialed report bound to
-implementation commit `6d3b0ec7196f0d8e8fc71afc6c894e180cbe8ca6`
+implementation commit `c19cca4eb2842aa00d8e8fc17160b342a111f0b6`
 pass 17 of 17 and 25 of 25 checks respectively. The tool proof names Codex
 `exec`, and the Hold proof claims completion through the Responses streaming
 path without claiming TUI delta rendering.

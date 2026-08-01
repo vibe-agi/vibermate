@@ -1,10 +1,11 @@
 # M1.0-A Revision-Authorized Root and Leaf Authority
 
-Status: complete
+Status: complete, including the narrow DNS/IP classification correction
 Created: 2026-08-01
 Completed: 2026-08-01
 Implementation baseline: `cf3f599e11ee13f82fef0e8a6b8c09e38878b124`
-Frozen implementation candidate: `6d3b0ec7196f0d8e8fc71afc6c894e180cbe8ca6`
+Frozen implementation candidate: `c19cca4eb2842aa00d8e8fc17160b342a111f0b6`
+Superseded implementation candidate: `6d3b0ec7196f0d8e8fc71afc6c894e180cbe8ca6`
 
 ## Objective
 
@@ -78,6 +79,20 @@ Checkpoint log:
   exchange. The frozen implementation still matches the live DER identity,
   revision, admission cut, cache, and lifecycle requirements. Language Bridge
   remains explicitly excluded, so no final goal correction was required.
+- DNS/IP correction checkpoint, 2026-08-01: ordered manifest digest remains
+  `2d38c6df509a15fb9ffc3b60345ce5421cc97d8a3e967887f3b86d8e93c00cea`.
+  A CodeGraph-first review followed by direct ADR-0006 and production-
+  composition checks confirmed that the correction closes an implementation
+  gap in the existing DNS-only production admission contract. It does not add
+  IP issuance, change the trust boundary, or pull Language Bridge into this
+  slice.
+- Final correction pre-freeze checkpoint, 2026-08-01: after the clean packaged
+  runs and non-cached full ordinary/race suites, the ordered manifest digest
+  remains
+  `2d38c6df509a15fb9ffc3b60345ce5421cc97d8a3e967887f3b86d8e93c00cea`.
+  A final CodeGraph-first lookup and direct reread confirmed ADR-0006 still
+  requires DNS-only production admission and section 8.1 still defers Language
+  Bridge. No goal correction was required.
 
 Language Bridge remains a later Core slice. Its typed transformer, policy,
 ledger, Hold, secret, budget, codec, UI, and localization work must not enter
@@ -118,8 +133,10 @@ user-facing copy, if any unexpectedly becomes necessary, must use synchronized
    ID/revision, complete ClientOrigin, canonical SAN identity, and typed leaf
    key algorithm.
 8. The request type can represent DNS and IP SAN identity, but this production
-   slice authorizes canonical DNS only. IP-literal admission remains
-   `unsupported` until a separate accepted design decision permits it.
+   slice authorizes canonical DNS only. `NewDNSName` and the shared validity
+   predicate reject every value accepted by `netip.ParseAddr`, so an IP literal
+   cannot be relabeled as DNS. IP-literal admission remains `unsupported` until
+   a separate accepted design decision permits it.
 9. A structurally valid request is not proof of authorization. Only the sole
    active Access projection can grant an unforgeable, revision-scoped issuance
    admission after exact ClientOrigin and CONNECT/SNI validation. Callers
@@ -191,6 +208,8 @@ user-facing copy, if any unexpectedly becomes necessary, must use synchronized
 - [x] Prove zero/forged admissions, stale Root/endpoint revisions, foreign
   AccessID/ClientOrigin evidence, mismatched SAN/algorithm, disabled or
   withdrawn endpoints, CONNECT/SNI mismatch, and IP literals fail closed.
+  Bare IPv4 and IPv6 values are covered both at the certificate-identity
+  constructor and through an IP `ClientOrigin` projection admission.
   Endpoint deletion has no writer/control operation in this slice; the same
   typed withdrawal cut is already the projection behavior a future durable
   delete must invoke.
@@ -260,30 +279,30 @@ user-facing copy, if any unexpectedly becomes necessary, must use synchronized
 ## Frozen candidate and evidence
 
 - Implementation source: clean commit
-  `6d3b0ec7196f0d8e8fc71afc6c894e180cbe8ca6`.
+  `c19cca4eb2842aa00d8e8fc17160b342a111f0b6`.
 - Standalone clean checkout:
   `/private/tmp/vibermate-m10a.AtPYtn/source`.
 - Packaged development-profile App:
   `/private/tmp/vibermate-m10a.AtPYtn/source/ui/desktop/src-tauri/target/release/bundle/macos/VibeMate.app`.
 - App-bundle digest recorded by the acceptance provenance:
-  `a9fe7cbeca33b108a5f282e12919e60b7bdfe9ed6ceb37cd21d6e446798da6dd`.
+  `820dd17cd112f76554921d4e7d3c65a0a9fd5191328c1f50ba9950dbca61e349`.
 - Packaged daemon digest:
-  `fc3eb1cf614c688a26c268d1b4dd4559ab28892dd04494612a383e59b847094d`.
+  `441eef35dca15946c2e42a057824aa5d3402c69753e28eb5de62eb4e1682a59f`.
 - Packaged launcher digest:
-  `d9b4ac4379a78d255c581e60b2049c71f022c60604184307f4c83982396c30e9`.
+  `063b01d8fb89de6067723b80b3bac05a82784951658a19974c48bd3143860042`.
 - Embedded build-manifest digest:
-  `a8fa023b57e027b72d9b55a569f55f6d541ff22ed7951e28e155c4f11f3856ed`.
+  `efc212717c32923e2e4454809763091aeb463eb7d15163164a3ccf4f5e557905`.
 - Acceptance-runner digest:
-  `9af2c9e1717591875597d28f8af215b86a3fc17ae77f3b96a5038937e1dd991e`.
+  `3c2988f861a68704cc41b8b7528ffeb589ae93404f02d53b55bdafc6de60511c`.
 - Deterministic report:
-  `/private/tmp/vibermate-m10a.AtPYtn/deterministic-report-6d3b0ec.json`,
+  `/private/tmp/vibermate-m10a.AtPYtn/deterministic-report-c19cca4.json`,
   SHA-256
-  `d710d0d6628e8b4a0cbad9ba03059dff9565d5afc7426be9338bf27969968e74`,
+  `e709f28e8b43b895462f6035e97911bd80751525da1e60fd03716e0cfc24f1c2`,
   mode `0600`, 17 of 17 checks passed.
 - Credentialed report:
-  `/private/tmp/vibermate-m10a.AtPYtn/credentialed-report-6d3b0ec.json`,
+  `/private/tmp/vibermate-m10a.AtPYtn/credentialed-report-c19cca4-retry.json`,
   SHA-256
-  `849e54866024cd70548be6d9282c637a8d74debbb2974f6f1e6ece0df3c125d4`,
+  `bb2123d96e117c1aac600777805354545ade785540c7ecc5d73563ba04c51a78`,
   mode `0600`, 25 of 25 checks passed using fixed Codex CLI 0.145.0,
   the existing development SecretRef, literal-loopback Cherry Studio, and
   `dashscope:glm-5`. No secret value appeared on the command line or in either
@@ -294,15 +313,26 @@ user-facing copy, if any unexpectedly becomes necessary, must use synchronized
   traffic. The credentialed report also exercises Responses streaming,
   `exec resume`, the Codex `exec` approval barrier, Hold/Resume, signal
   cancellation, and bounded drain.
-- A fresh all-package run after the first evidence draft exposed a
+- A fresh all-package run after the first M1.0-A evidence draft exposed a
   timing-dependent test assumption: the timeout-retry test asked real ECDSA
   generation to finish inside the same intentionally tiny deadline used to
   force its first timeout. Commit `6d3b0ec7196f0d8e8fc71afc6c894e180cbe8ca6`
   changed only that test to retry through a pre-generated valid leaf, preserving
-  the production deadline and failure semantics. The focused test then passed
-  50 ordinary and 20 race repetitions, followed by full ordinary and race
-  suites. The earlier `2d525d6` reports are superseded by the selected reports
-  above, which were rebuilt from `6d3b0ec`.
+  the production deadline and failure semantics. Candidate `c19cca4` descends
+  from that correction and adds only the DNS/IP typed-boundary fix and its
+  regression tests. The focused certificate-identity and Access packages then
+  passed 50 ordinary and 20 race repetitions, followed by full ordinary and
+  race suites. All reports from earlier candidates are superseded by the
+  selected reports above, which were rebuilt from `c19cca4`.
+- One discarded credentialed invocation from the same candidate and artifact
+  set passed normal streaming and `exec resume`, then timed out waiting three
+  minutes for the Codex tool turn to finish after approval. Its private failed
+  report is
+  `/private/tmp/vibermate-m10a.AtPYtn/credentialed-report-c19cca4.json`,
+  SHA-256
+  `2b51a3d9a54573b13e6d9cf992ee40769ae3a81e1e76c75571ff99e7f3745ba9`.
+  It is not selected evidence. A bounded retry using the exact same frozen
+  source and artifact digests passed all 25 checks and is the selected report.
 - Two discarded preflight invocations correctly stopped before Runtime or
   client execution: one rejected ambient Node 25.8.1, and one rejected a
   canonical `codex.js` path that omitted the frozen `codex` invocation label.
