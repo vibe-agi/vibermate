@@ -1,468 +1,265 @@
-# M1.0-B Desktop Trust Operation Foundation
+# M1.0-C macOS Trust Observation and Read-Only UX
 
-Status: complete
+Status: planned; implementation not started
 Created: 2026-08-01
-Completed: 2026-08-01
-Implementation baseline: `f8534654cbbd3b9eec839de3d23a888111f22617`
-Prior implementation candidate: `c19cca4eb2842aa00d8e8fc17160b342a111f0b6`
-Frozen implementation candidate: `35e8a575142420f4b4c95e07a6312b3bc3a82f73`
+Implementation baseline: `329490b859089e6c0321b60c84268c74504e7d7d`
 
 ## Objective
 
-Define the long-lived typed contract for observing the current public Root,
-derive immutable exact-identity install and remove plans, and deterministically
-validate fixture-backed macOS trust-operation orchestration through injected
-executors.
+On supported macOS builds, observe the operating-system state of VibeMate's
+current public Root through bounded read-only platform commands, normalize that
+evidence into the existing typed `systemtrust.Observation`, expose the result
+through the authenticated Desktop read capability, and render a bilingual
+read-only Root status in the Desktop UI.
 
-No production executor is wired. No production path observes or modifies an
-operating-system trust store. This slice does not add ProductRuntime,
-DesktopHost, Control API, Tauri, UI, system authorization, Root rotation, proxy,
-provider, protocol, Offline Hold, Language Bridge, or plugin behavior.
+This slice must not install, trust, untrust, replace, or delete a certificate.
+It must not request OS authorization or add a mutation endpoint. It adds no
+provider, protocol, proxy, plugin, Language Bridge, SecretStore, or Server Host
+capability.
 
-The only completion claim for this slice is:
+The only completion claim is:
 
-> VibeMate defines an exact typed contract for observing its current public
-> Root, derives immutable install/remove plans, and deterministically validates
-> fixture-backed macOS trust-operation orchestration through injected
-> executors. No production executor is wired, and no production path observes
-> or modifies the operating-system trust store.
+> On a supported macOS build, VibeMate can perform a bounded read-only
+> observation of its current public Root, distinguish exact certificate
+> presence from the admin-domain Server-TLS trust decision, and expose that
+> typed evidence through an authenticated read-only Desktop API and bilingual
+> UI. No production path can modify the operating-system trust store.
 
-This slice does not prove live macOS inspection, successful authorization,
-verified trust-store mutation, supported-client trust, Preview readiness, or
-Release readiness.
+This is not evidence that authorization, installation, removal, or supported
+client TLS trust works. It remains neither Preview-ready nor Release-ready.
 
-## Read-only design authority and checkpoints
+## Read-only design authority
 
 The authoritative design repository is
 `/Users/null/Code/github/vibe-agi/vibermate-design`. Its current disk contents,
-including uncommitted work, are read-only implementation authority. CodeGraph
-is consulted before direct text search whenever its `.codegraph/` index exists.
+including user-owned uncommitted changes, are read-only implementation
+authority. Use CodeGraph first while its `.codegraph/` directory exists, then
+re-read the relevant source sections. Reconcile the goal after contracts,
+after Host/API composition, and immediately before freeze.
 
-The relevant baseline is:
+Relevant sources:
 
 - `CONTRIBUTING.md`;
 - `docs/design/00-overview.md`;
 - `docs/design/02-architecture.md`;
+- `docs/design/03-ui.md`;
+- `docs/design/04-ux.md`;
 - `docs/design/06-security.md`;
 - `docs/design/10-client-compatibility.md`;
 - `docs/design/11-delivery-and-operations.md`;
 - `docs/design/14-technology-stack.md`;
+- `docs/design/15-local-control-api.md`;
+- `docs/design/16-verifiable-interaction-contract.md`;
 - `docs/design/18-production-composition.md`;
 - `docs/design/19-hosts-and-deployment.md`;
-- `docs/adr/0006-agent-endpoint-mitm-allowlist.md`;
-- `docs/adr/0007-client-and-upstream-authority-separation.md`;
-- `docs/adr/0011-shared-runtime-and-host-shells.md`;
-- `docs/adr/0013-core-language-bridge-and-typed-transformer-adapters.md`.
+- ADR-0006, ADR-0007, and ADR-0011.
 
-The initial ordered SHA-256 manifest digest for those files is
-`2d38c6df509a15fb9ffc3b60345ce5421cc97d8a3e967887f3b86d8e93c00cea`.
-Re-read and re-hash them after contracts, after orchestration, and immediately
-before freeze. A changed digest requires a semantic diff and goal
-reconciliation.
+The initial ordered manifest digest for those files is
+`5db80800925f4992a3a10d5d77eea01bcad69c0dab9236b98ae62237e88b9469`.
+A changed digest requires a semantic diff; it is not automatically accepted or
+ignored.
 
-Initial checkpoint, 2026-08-01:
+Current design reconciliation:
 
-- The design still requires one current Root, explicit per-operation OS
-  authorization, post-command trust reinspection, manual recovery when exact
-  removal is unavailable, and no permanent administrative grant.
-- macOS writable trust settings are the admin domain. The immutable Apple
-  system trust-settings domain is not the target.
-- The certificate object target is the fixed
-  `/Library/Keychains/System.keychain`.
-- DER SHA-256 remains the only Root machine identity. Subject, serial,
-  certificate path, command output, and formatted fingerprint are not
-  authority.
-- Language Bridge remains outside this platform-trust slice.
+- `/api/v1/platform/root-ca` is the final Host projection route. Do not create
+  a temporary trust-status endpoint.
+- Exact certificate presence and the target trust decision remain independent
+  evidence. Neither command exit zero nor object presence proves trust.
+- Desktop owns local operating-system observation. ProductRuntime remains the
+  shared business composition and must not receive a macOS process adapter.
+- The UI uses synchronized locale keys and Host capabilities; it never infers
+  success from hidden buttons, platform names, or partial evidence.
+- Language Bridge and localization infrastructure work do not enter this
+  platform-observation slice beyond consuming the established locale catalogs.
 
-Post-contract and orchestration checkpoint, 2026-08-01:
+## Checkpoint 1: freeze the current-Root handoff
 
-- A fresh CodeGraph-first review followed by the ordered manifest hash found
-  the same digest,
-  `2d38c6df509a15fb9ffc3b60345ce5421cc97d8a3e967887f3b86d8e93c00cea`.
-- The current design still separates exact certificate presence from the
-  admin-domain trust decision, requires post-command reconciliation, and uses
-  the four stable result statuses `applied`, `user_cancelled`, `needs_manual`,
-  and `failed`.
-- The design repository's ongoing Language Bridge and localization work does
-  not change this slice's Root authority, platform boundary, dependencies, or
-  no-UI scope. No goal correction was required.
+Desktop observation must always target the one current Root owned by the
+existing `localca.Authority`.
 
-Final pre-freeze checkpoint, 2026-08-01:
+Before implementing the process adapter, freeze a typed public-Root handoff
+that preserves all of these constraints:
 
-- CodeGraph was consulted again before the final ordered manifest hash. The
-  digest remains
-  `2d38c6df509a15fb9ffc3b60345ce5421cc97d8a3e967887f3b86d8e93c00cea`.
-- A final semantic check found no change to exact DER authority, explicit
-  authorization, mandatory post-command observation, manual recovery, result
-  statuses, Host composition order, or the Language Bridge exclusion. The
-  candidate required no design correction.
+- one consistent identity-plus-certificate snapshot;
+- DER SHA-256 remains the only machine identity;
+- `CurrentPublicRootSource` remains sealed against caller-asserted Roots;
+- `*localca.Authority`, private-key material, certificate paths, and signing
+  capability never cross into Desktop Host or Control API;
+- ProductRuntime may expose a narrow public-Root capability, but it must not
+  import or own the macOS executor, observation lifecycle, or UI projection;
+- do not stitch together separate identity and certificate reads if a future
+  Root replacement could make them inconsistent;
+- tests may use explicit package-local fakes without adding a production fake
+  or a second Root authority.
 
-## Authority and package boundary
+If production wiring would require weakening the sealed source, exposing the
+Authority, or creating a second Root model, stop for object-model review.
 
-1. The existing `localca.Authority` remains the sole Root authority. This
-   slice may consume only an immutable current-public-Root snapshot containing
-   its `RootIdentity` and defensive-copy certificate DER.
-2. A sealed, read-only `CurrentPublicRootSource` is the only source accepted
-   by planning and execution. Callers submit only a typed operation; they
-   cannot submit an identity, digest, certificate, path, or command.
-3. A test fake may implement the sealed source inside the trust package. No
-   fake, no-op, memory driver, global locator, string registry, blank-import
-   registration, or production alternate Root source is provided.
-4. The trust package does not read or receive a Root private key. It does not
-   persist Root state or create a second Root authority.
-5. This slice does not wire the source or coordinator into ProductRuntime.
-   Future production composition may connect only the existing local
-   authority. Future Root rotation must share the same mutation admission
-   authority; repeated reads alone do not close a rotation race.
+## Checkpoint 2: read-only macOS observation
 
-## Typed observation
+Add one typed, macOS-specific read-only process boundary. Platform selection is
+explicit through typed construction and, where needed, build constraints. Do
+not use a string driver registry, global locator, blank-import registration, or
+runtime platform guessing.
 
-Observation has two independent axes:
+Introduce a read-only `Observer` boundary that consumes the sealed current-Root
+source and returns the existing `Observation`. Its process interface and command
+spec type can represent inspection only. The production read-only executor must
+not satisfy the M1.0-B mutation executor interface, accept a `ChangePlan`, or be
+callable through `Coordinator.Execute`; this restriction must be enforced by
+the type system rather than a runtime string check.
 
-```text
-ExactPresence: present | absent | unknown
-TrustDecision: trusted | untrusted | unknown
-```
+The only allowed executable is `/usr/bin/security`. The only allowed command
+families in this slice are:
 
-Valid interpretations are:
-
-- `present + trusted`: the exact DER exists and has the target trust decision;
-- `present + untrusted`: the exact certificate object remains without the
-  target trust decision;
-- `absent + untrusted`: the exact object does not exist and is not trusted;
-- either axis `unknown`: the entire observation is unusable for mutation and
-  fails closed.
-
-`absent + trusted` is contradictory and rejected. Presence never proves
-trust. Untrusted never proves absence.
-
-Every observation binds:
-
-- current `RootRevision`;
-- exact certificate DER SHA-256 `RootDigest`;
-- `TrustSettingsDomainAdmin`;
-- `CertificateKeychainSystem`;
-- `TrustUsageServerTLS`;
-- the two observation axes;
-- a typed evidence revision identifying the bounded macOS fixture grammar.
-
-Existence, trust, and command success are never conflated. Unrecognized,
-ambiguous, oversized, or failed evidence yields `unknown`.
-
-## Immutable change plan
-
-A plan is a short-lived immutable value, not a persisted Root state or bearer
-authorization. It privately owns defensive copies of:
-
-- operation: `install` or `remove`;
-- current `RootRevision`;
-- current DER SHA-256 `RootDigest`;
-- public certificate DER;
-- fixed typed target scope;
-- desired observation;
-- complete observation precondition;
-- ordered typed steps;
-- whether a mutation requires OS authorization;
-- typed manual fallback.
-
-Public accessors return immutable values or copies. Plan equality, stale checks,
-and execution never use a certificate path, subject, serial number, display
-fingerprint, local directory, command output, or caller-supplied string.
-
-The long-lived steps are:
-
-- `ensure_exact_certificate_and_admin_trust`;
-- `remove_exact_admin_trust_settings`;
-- `delete_exact_certificate`;
-- `inspect_exact_root`.
-
-The truth table is:
-
-| Operation | Precondition | Plan |
-|---|---|---|
-| install | present + trusted | already satisfied; no mutation |
-| install | absent + untrusted | ensure exact certificate/admin trust, inspect |
-| install | present + untrusted | restore exact admin trust, inspect |
-| remove | present + trusted | remove exact admin trust, inspect, delete exact certificate, inspect |
-| remove | present + untrusted | delete exact certificate, inspect |
-| remove | absent + untrusted | already satisfied; no mutation |
-| either | unknown or contradictory | fail closed; no mutation |
-
-Install completes only at `present + trusted` for the exact current digest.
-Remove completes only at `absent + untrusted`. If a future feature merely
-revokes trust while retaining the certificate, it must use a distinct
-`revoke_trust` operation.
-
-## macOS bounded adapter
-
-The typed target is exactly:
-
-- `TrustSettingsDomainAdmin`;
-- `CertificateKeychainSystem`;
-- fixed certificate keychain
+- exact certificate enumeration through `find-certificate` against the fixed
   `/Library/Keychains/System.keychain`;
-- `TrustUsageServerTLS`.
+- admin trust-settings observation through `dump-trust-settings -d`.
 
-Core values never contain CLI flags. The macOS fixture adapter may map
-`TrustUsageServerTLS` to the bounded `security -p ssl` shape, but that
-mapping is not verified production behavior.
+The executor must:
 
-The adapter creates opaque fixed executable-plus-argv command specifications.
-It never invokes a shell, accepts an executable/path/keychain from a caller,
-uses `sudo`, stores reusable authorization, or emits arbitrary command text.
-The only executable is `/usr/bin/security`.
+- invoke no shell, `sudo`, helper, AppleScript, or authorization API;
+- accept no executable, command, keychain, path, digest, or environment value
+  from an HTTP/UI caller;
+- use fixed argv and a frozen minimal environment suitable for deterministic
+  parsing;
+- bound stdout and stderr without silently truncating successful evidence;
+- enforce a hard deadline, cancel the process, call `Wait`, and drain all owned
+  goroutines and pipes;
+- classify cancellation, timeout, non-zero exit, output overflow, unsupported
+  grammar, and ambiguous evidence with stable language-independent reasons;
+- keep raw stdout/stderr, certificate paths, unrelated certificate material,
+  subjects, serials, and local machine details out of logs, results, reports,
+  and API values.
 
-The current bounded command shapes are limited to:
+No production or test source may invoke `add-trusted-cert`,
+`remove-trusted-cert`, `delete-certificate`, or any other mutation command.
 
-- `find-certificate`;
-- `dump-trust-settings -d`;
-- `add-trusted-cert`;
-- `remove-trusted-cert -d`;
-- `delete-certificate -Z <DER SHA-256>`;
+## Checkpoint 3: normalize real evidence
 
-The local help text proves only that these command shapes exist. It does not
-prove authorization behavior, output stability, mutation success, or final
-trust state.
+Replace the synthetic trust-decision input at the production boundary with a
+versioned parser for the exact supported `security` output shapes. Deterministic
+fixtures remain parser evidence; they are not a second runtime backend.
 
-Presence parsing computes DER SHA-256 from bounded PEM output and ignores
-subject/common-name/displayed-hash identity. Trust parsing is strict,
-versioned, fixture-backed, and fail-closed. Raw stdout/stderr never leaves the
-adapter or appears in results, logs, reports, or audit values. The executor
-contract must report capture overflow as an error or indeterminate outcome; it
-may not silently truncate evidence and report success.
+Normalization rules:
 
-If a future real executor needs a certificate file, only the adapter may
-materialize verified current DER in a private operation-owned directory with
-minimal permissions and bounded cleanup. The fixture adapter exercises that
-public-certificate materialization and cleanup around the injected executor;
-this slice provides no `os/exec` runner and never invokes `security`.
+- presence is computed only by parsing certificate DER and comparing its
+  SHA-256 with the current `RootDigest`;
+- same-subject, same-name, same-serial, or display-fingerprint certificates
+  with different DER are foreign;
+- trust is evaluated only for the exact Root in the admin trust-settings domain
+  and `TrustUsageServerTLS`;
+- unrelated policies, certificates, domains, and usages do not promote trust;
+- missing exact trust evidence yields `untrusted` only when the captured grammar
+  is complete enough to prove absence; incomplete evidence yields `unknown`;
+- duplicate, contradictory, localized/unrecognized, oversized, malformed, or
+  version-drifted evidence yields `unknown`;
+- `absent + trusted` remains contradictory and fails closed;
+- read the current public Root again after observation and discard the result
+  if revision or digest changed.
 
-## Coordinator semantics
+Raw current-machine output must not be committed. Sanitized fixtures preserve
+only grammar necessary for parsing and replace unrelated identities. A
+read-only current-machine check proves only the state actually observed; if the
+current Root is absent/untrusted, trusted behavior remains fixture-backed until
+the separately authorized mutation acceptance stage.
 
-Mutation orchestration uses fail-fast admission:
+## Checkpoint 4: Desktop Host, Control API, and UI
 
-- admission ownership is the in-process linearization point;
-- at most one trust mutation orchestration is active;
-- concurrent attempts return stable reason `operation_in_progress`;
-- there is no FIFO, fairness, queued cancellation, or background operation
-  queue;
-- ownership remains held through final reconciliation.
+Desktop Host owns the observation executor and its shutdown. It supplies a
+read-only provider to Desktop control after ProductRuntime has produced the
+sealed current-public-Root capability. Observation failure is represented in
+the Root projection; it must not create false ProductRuntime readiness or make
+the data plane depend on the trust store.
 
-Execution order is:
+Expose `GET /api/v1/platform/root-ca` through the existing authenticated Desktop
+read capability:
 
-```text
-take fail-fast ownership
-→ read current public Root
-→ compare plan revision and digest
-→ inspect current OS evidence
-→ verify the complete plan precondition
-→ re-read current public Root
-→ compare revision and digest again
-→ execute one typed step
-→ inspect through a coordinator-owned reconciliation context
-→ continue only if the typed intermediate state permits the next step
-→ perform final inspection
-→ release ownership
-```
+- Desktop-only route and route-allowlist evidence;
+- `Cache-Control: no-store`;
+- no request body, caller-selected Root, path, command, or target scope;
+- Root revision, DER-derived fingerprint, algorithm, validity, exact presence,
+  trust decision, typed evidence revision, observation time, and stable reason;
+- no certificate bytes, private-key state/material, local path, argv, raw
+  command output, or mutation/change-plan value in this slice;
+- no install, replace, remove, refresh-with-write-authority, or generic command
+  endpoint.
 
-The plan is never authority by itself. A stale Root revision, stale digest,
-changed observation, changed target, malformed certificate, or changed
-evidence revision fails before mutation.
+The Desktop UI adds a read-only Root CA status surface. It may refresh the GET
+operation, but it does not poll without a bound and offers no mutation button.
+All visible text and status labels use synchronized `en-US` and `zh-CN` keys.
+API enums/reasons remain language-neutral. The UI separately displays:
 
-Each mutation step is followed by inspection. Typed success plus the required
-intermediate state permits the next destructive step. Error, cancellation,
-timeout, permission denial, panic, or indeterminate outcome stops later
-destructive steps and triggers bounded reconciliation.
+- current Root public identity and validity;
+- exact certificate presence;
+- admin-domain Server-TLS trust decision;
+- unknown/unavailable evidence and a non-success guidance state.
 
-The coordinator serializes only its own in-process operations. External
-trust-store changes are not cross-process atomic with the plan. Mandatory
-preinspection and postinspection detect and reconcile them without claiming an
-OS-wide lock.
+The UI must not translate `present` into trusted, `untrusted` into removed, or
+`unknown` into a successful/failed mutation. Mutation and manual-recovery copy
+belong to the later authorized stage.
 
-## Result, cancellation, and shutdown
+## Required tests
 
-Results contain only typed operation, status, reason, completion, plan-bound
-Root identity, and defensive-copy observation. They never contain certificate
-material, paths, argv, private data, raw stdout/stderr, or user-facing text.
+At minimum prove:
 
-- Already-satisfied preinspection returns `status=applied`,
-  `completed=true`, reason `already_satisfied`, and runs no mutation.
-- Only typed executor success followed by the required postinspection returns
-  `status=applied`, `completed=true`.
-- Platform-reported cancellation returns `status=user_cancelled`; permission
-  denial returns `status=needs_manual`; caller cancellation, timeout, failure,
-  or indeterminate outcome returns `status=failed`. Every such outcome keeps
-  `completed=false`, even when reconciliation observes the desired state. The
-  real observed state is still returned. A later operation may complete
-  idempotently from its new precondition.
-- Failed or unavailable reconciliation returns `unknown`; it never infers the
-  operating-system final state.
+1. fixed executable, keychain, domain, usage, argv, and environment;
+2. the production executor cannot accept a mutation spec, and no shell, helper,
+   authorization, or mutation command is reachable;
+3. bounded output, timeout, cancellation, kill/wait, pipe drain, and shutdown;
+4. exact DER presence with foreign same-subject certificates;
+5. exact admin Server-TLS trusted, untrusted, absent, and unknown fixtures;
+6. malformed, duplicate, contradictory, oversized, incomplete, localized, and
+   unknown-version evidence fails closed;
+7. Root revision/digest change during observation discards the result;
+8. input/output alias isolation and absence of raw evidence in errors/results;
+9. concurrent reads are bounded and do not leak processes or goroutines;
+10. Desktop Host owns composition and shutdown; ProductRuntime owns no OS
+    process adapter;
+11. the GET route requires read authority, is Desktop-only/no-store, rejects
+    other methods, and exposes no mutation route;
+12. the UI renders every typed state from locale keys and has no install/remove
+    action;
+13. `en-US` and `zh-CN` catalogs have identical non-empty key/parameter sets;
+14. structural good/bad fixtures protect the exact read-only allowlist and
+    continue rejecting concrete mutation executors and command tokens;
+15. a current-machine read-only acceptance records tool/OS versions, exact
+    candidate, observed state, and proves that no mutation command ran;
+16. existing M0.9 through M1.0-B ordinary/race and packaged Host behavior do
+    not regress.
 
-Before mutation, caller cancellation prevents execution. Once mutation starts,
-the executor is asked to stop, but caller cancellation cannot cancel final
-state reconciliation. Reconciliation uses a coordinator-owned independent hard
-deadline.
-
-Shutdown is bounded and idempotent:
-
-```text
-close admission
-→ cancel active command
-→ perform bounded reconciliation
-→ drain
-```
-
-Shutdown rejects new planning/execution admission. A deadline cannot be
-reported as a completed stop while owned work remains. This slice proves
-bounded behavior only for executors that obey the executor contract. A future
-real process runner needs separate kill, wait, and drain evidence.
-
-## Stable language-independent reasons
-
-The closed reason set includes:
-
-- `applied`;
-- `already_satisfied`;
-- `operation_in_progress`;
-- `plan_stale`;
-- `observation_unknown`;
-- `caller_cancelled`;
-- `user_cancelled`;
-- `permission_denied`;
-- `command_timeout`;
-- `command_failed`;
-- `command_indeterminate`;
-- `postcondition_mismatch`;
-- `shutting_down`;
-- `reconciliation_unknown`.
-
-These are developer/API reason values, not user-facing copy. This slice adds no
-UI text or locale keys.
-
-## Failure conditions
-
-The operation fails closed without mutation when:
-
-- current public Root cannot be read or validated;
-- certificate DER does not match the current Root digest;
-- plan Root revision or digest is stale;
-- observation is unknown, contradictory, oversized, ambiguous, or changed;
-- target scope, usage, evidence revision, or ordered steps are invalid;
-- command specification cannot be derived exclusively from typed current Root
-  material and fixed platform constants;
-- admission is closed or another mutation owns it.
-
-After mutation starts, every terminal path attempts bounded reinspection.
-Later destructive steps never run after a non-successful earlier mutation.
-
-## Test matrix
-
-Contract and orchestration tests must cover:
-
-1. absent/untrusted to install plan;
-2. present/trusted install idempotency without mutation;
-3. present/untrusted install recovery plan;
-4. present/trusted remove plan;
-5. present/untrusted remove deletes the exact object;
-6. absent/untrusted remove idempotency without mutation;
-7. contradictory and unknown observation rejection;
-8. same-subject foreign DER is neither matched nor deleted;
-9. stale Root revision;
-10. stale Root digest;
-11. changed observation precondition;
-12. fixed executable/argv with no shell;
-13. caller input cannot inject executable, argv, certificate path, or keychain;
-14. bounded fixture grammar and unknown output/version/oversized evidence;
-15. user cancellation;
-16. permission denial;
-17. command timeout;
-18. caller and owner cancellation before mutation, plus caller cancellation
-    after mutation admission;
-19. success followed by postcondition mismatch;
-20. failure/indeterminate result followed by mandatory reconciliation;
-21. per-step inspection and stopping later destructive steps;
-22. retry and repeated execution idempotency;
-23. deterministic fail-fast concurrent mutation;
-24. shutdown rejects new admission and drains within deadline;
-25. retryable idempotent shutdown;
-26. input, output, DER, argv, steps, and observation alias isolation;
-27. result/log/fixture redaction;
-28. ProductRuntime, DesktopHost, Desktop control, OpenAPI, Tauri, and UI have
-    no trust-mutation composition;
-29. no production `os/exec` runner or concrete command executor;
-30. the tests never change the current machine trust store.
-
-Concurrency tests use barriers/channels, never timing sleeps as ordering
-evidence. Critical adapter and coordinator tests run repeatedly under ordinary
-and race modes.
-
-## Structural boundaries
-
-Structural checks are added only for concrete shapes introduced here, with
-public `Check` entry good and injected-bad fixtures:
-
-- no import of the trust-operation package by ProductRuntime, DesktopHost, or
-  Desktop control;
-- no production `os/exec` runner in the trust-operation package;
-- no concrete `CommandExecutor` implementation in non-test source;
-- fixed dangerous command strings only in the macOS planning adapter;
-- no exact system-trust namespace or dangerous mutation command in OpenAPI,
-  Tauri/Rust, or Desktop UI production surfaces.
-
-Checks must not scan generic words such as `trust`, `Root`, or `security`.
+Concurrency tests use barriers/channels rather than sleeps. Platform parser
+fixtures are versioned and state exactly what they prove. Current-machine
+evidence is private, bounded, and contains no unrelated trust-store output.
 
 ## Explicit non-goals
 
-- Live trust-store observation;
-- real Root installation, trust removal, certificate deletion, or OS
-  authorization;
-- Root rotation;
-- helper processes, `sudo`, persistent authorization, or a real
-  `os/exec` runner;
-- ProductRuntime, DesktopHost, Control API, Tauri, UI, or i18n wiring;
-- Server Host trust installation;
-- Windows or Linux adapters;
-- system proxy changes;
-- ClientAdapter expansion;
-- provider, protocol, Offline Hold, Language Bridge, or plugin work;
-- TLA+ changes.
+- install, remove, replace, rotate, revoke, or delete Root state;
+- OS authorization, privileged helper, `sudo`, Keychain Access automation, or
+  reusable administrator authority;
+- mutation Control API/Tauri commands/UI/actions/manual-recovery workflow;
+- live client TLS acceptance based on the observed Root;
+- Windows, Linux, Server Host, system proxy, H2, WebSocket, protocol, provider,
+  plugin, Language Bridge, or SecretStore expansion;
+- ProductRuntime readiness depending on OS trust;
+- design-repository or TLA+ changes.
 
-An implementation conflict with current CA rotation or trust design stops this
-goal for review; it is not resolved by editing the design repository.
+## Validation and freeze
 
-## Frozen candidate and evidence
+Before freeze, run the complete repository gates: formatting, generated and
+structural checks, full ordinary/race tests, vet, dependency drift/verification,
+fixed Go vulnerability scan, Desktop TypeScript/tests/build, Rust formatting
+and tests, focused repeated observation/Host/control/UI tests, and
+`git diff --check`.
 
-- Implementation source: clean commit
-  `35e8a575142420f4b4c95e07a6312b3bc3a82f73`.
-- Design manifest digest:
-  `2d38c6df509a15fb9ffc3b60345ce5421cc97d8a3e967887f3b86d8e93c00cea`.
-- Toolchains: Go 1.25.12 darwin/arm64, Node 22.23.1, pnpm 10.33.2,
-  rustc/cargo 1.88.0.
-- `gofmt -l .` returned no files.
-- `make check` passed generated drift, dependency drift, repository structural
-  checks, Desktop TypeScript/tests/build, Rust formatting, and Rust tests.
-- `go test -count=1 ./...`, `go test -race -count=1 ./...`, and
-  `go vet ./...` passed.
-- `go mod tidy -diff` was empty and `go mod verify` reported all modules
-  verified.
-- `govulncheck@v1.6.0 ./...` reported no called vulnerabilities. It also
-  reported one vulnerability in a required module that this code does not
-  call.
-- `internal/systemtrust` and `internal/repositorycheck` passed 50 ordinary and
-  50 race repetitions after the final candidate changes.
-- `git diff --check` and the staged/generated drift checks passed.
-- `cargo audit` exited successfully with the existing 17 allowed dependency
-  warnings, including `RUSTSEC-2024-0429` for `glib`. This slice changes no
-  Rust dependency and does not describe the audit as warning-free.
-- Independent read-only review found no remaining blocker after the owner and
-  caller cancellation cuts, four-state results, per-surface structural
-  fixtures, and bounded-output evidence wording were corrected.
+Because this slice intentionally changes Desktop Host composition and packaged
+UI, produce a clean frozen candidate and a new deterministic packaged Host
+report. Reassess credentialed Agent/provider acceptance from the actual diff:
+rerun it only if proxy, Exchange, runtime assembly, client launch, or packaged
+data-plane behavior changes. Do not reuse an old artifact digest as new
+evidence.
 
-Credentialed Agent/provider acceptance was intentionally not rerun: the frozen
-candidate does not change ProductRuntime, packaged runtime composition, or
-artifact behavior. Existing reports remain evidence for earlier slices only;
-they are not M1.0-B evidence.
-
-No live `security` process ran, no production executor was added, and neither
-the macOS system trust store nor the design repository was modified. M1.0-B
-remains neither Preview-ready nor Release-ready.
+Freeze implementation and evidence as separate commits and leave the worktree
+clean. The evidence must state the actual live observation encountered and the
+fixture-only branches separately. It must explicitly confirm that the system
+trust store was not modified and that the result is not Preview/Release ready.
