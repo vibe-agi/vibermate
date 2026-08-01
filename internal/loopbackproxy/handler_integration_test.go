@@ -134,13 +134,10 @@ func TestLoopbackProxyAuthenticatesMITMAndDispatchesByPathCapability(
 	if err != nil {
 		t.Fatal(err)
 	}
-	foundProviderRoute := false
+	// The connection record answers who connected where from here. The
+	// per-request provider destination and credential decision belong to the
+	// EgressAttempt, so they never appear here.
 	for _, record := range page.Items {
-		if record.Phase == connectionevent.PhaseConnected &&
-			record.RouteHost == "api.example.com" &&
-			record.CredentialBindingID == "account-proxy" {
-			foundProviderRoute = true
-		}
 		expectedConfidence := connectionevent.SourceConfidenceConfigured
 		if record.Phase == connectionevent.PhaseAttempted {
 			expectedConfidence = connectionevent.SourceConfidenceUnknown
@@ -149,9 +146,13 @@ func TestLoopbackProxyAuthenticatesMITMAndDispatchesByPathCapability(
 			record.SourceConfidence != expectedConfidence {
 			t.Fatalf("connection record = %+v", record)
 		}
-	}
-	if !foundProviderRoute {
-		t.Fatalf("ConnectionEvent page has no provider route: %+v", page)
+		if record.CredentialBindingID != "" {
+			t.Fatalf("connection record carries a credential decision: %+v", record)
+		}
+		if record.RouteHost != "" &&
+			record.RouteHost != "api.anthropic.com" {
+			t.Fatalf("connection record carries a provider route: %+v", record)
+		}
 	}
 }
 

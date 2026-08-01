@@ -758,20 +758,15 @@ func (handler *Handler) serveSemantic(
 		return
 	}
 	downstream := newHTTPDownstream(writer)
-	result, err := handler.exchanges.Execute(
+	_, err = handler.exchanges.Execute(
 		request.Context(),
 		clientRequest,
 		downstream,
 	)
-	if result.RouteHost != "" {
-		_ = audit.Connected(
-			request.Context(),
-			connectionevent.ConnectedEvidence{
-				RouteHost:           result.RouteHost,
-				CredentialBindingID: result.CredentialBindingID,
-			},
-		)
-	}
+	// The per-request destination and credential decision belong to the
+	// EgressAttempt the provider transport records. Writing them back onto the
+	// connection would leave only the last request's answer on a persistent
+	// connection carrying several.
 	if err != nil && !downstream.Begun() {
 		writeReason(
 			writer,
