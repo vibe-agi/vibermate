@@ -1,78 +1,64 @@
-# M1.0-C0g Generic ApprovalCenter
+# M1.0-C0f Ingress Identity and Observation
 
 Status: active
 Created: 2026-08-02
-Implementation baseline: `12d40c6`
+Implementation baseline: `9afec27`
 Branch: `m1/root-leaf-foundation`
-Predecessor: `docs/plans/archive/2026-08-02-m1.0-c0e-ingress-surface.md`
+Predecessor: `docs/plans/archive/2026-08-02-m1.0-c0g-generic-approvals.md`
 Defers: `docs/plans/deferred/2026-08-01-m1.0-c-macos-trust-observation.md`
 
 ## Objective
 
-The design has one ApprovalCenter serving network `ask`, tool intent, plugin
-permission, authorized outbound, and high-risk configuration, with identical
-pending items merged into one entry rather than one prompt per event. The
-durable record today is tool intent and nothing else: the kind, risk, copy
-keys, and choices are all constants, the subject fields are tool call IDs and
-tool names, and an Access plan binding is mandatory.
+Two ingress facts are currently asserted rather than observed.
 
-That last constraint is the blocking one. A network `ask` is decided before
-any Access is resolved, so it cannot supply a plan binding at all. Connection
-policy cannot be built on this record, and adding a second approval kind would
-mean forking it.
+A CaptureRun reports the same state whether traffic arrived through it or not.
+Design 02 is explicit that a run created but never used is
+`waiting_for_traffic`, not captured: a program that ignores proxy variables,
+clears its environment, dials a socket directly, or uses QUIC produces exactly
+this shape, and telling the user it was captured is the difference between a
+working setup and a silent one.
+
+Separately, the connection record uses the CaptureRun identity as its ingress
+identity. They are different objects: a CaptureRun is one short-lived source,
+while an IngressProfile is the stable thing connection rules, network egress
+rules, and per-ingress statistics are scoped by. Substituting one for the other
+leaves a connection with no ingress identity at all once an ingress is not a
+CaptureRun.
 
 ## Read-only design authority
 
-- `docs/design/04-ux.md` §4.1 and §4.6;
-- `docs/design/06-security.md` §4.1;
-- `docs/design/03-ui.md` §3.2.
+- `docs/design/02-architecture.md` §4.2 and the IngressProfile terminology;
+- `docs/design/06-security.md` §4.1 and §4.3;
+- `docs/adr/0003-capture-run-and-agent-session.md`.
 
 ## Required invariants
 
-1. A record declares its `Kind`. Risk, copy keys, and available choices are
-   derived from the kind rather than assumed.
-2. Identical pending items merge on a stable `AggregateKey`, and the record
-   counts how many requests and how many waiters that entry represents. A
-   burst of the same question is one entry, not one prompt per event.
-3. The Access plan binding is optional, because a decision taken before Access
-   resolution has none. When present it is still frozen and still checked, so
-   a stale plan cannot resolve a pending item.
-4. A subject is carried as redacted identifiers and safe display labels only.
-   No record holds a path, header, body, argument value, or credential.
-5. Fail-closed behaviour is unchanged: expiry, cancellation, shutdown, and a
-   full queue all deny, and a decision remains compare-and-swap and
-   idempotency-keyed.
-6. The existing tool-intent behaviour is preserved exactly, including its
-   blocking barrier and its stable i18n keys.
+1. A CaptureRun distinguishes created, observed, and finished. Observation is
+   recorded from real authenticated proxy traffic, never inferred from the
+   fact that a child was launched.
+2. A run that never carried traffic is reported honestly. The product does not
+   claim capture it did not observe.
+3. Observation is monotonic and idempotent: the first authenticated connection
+   marks it, later ones do not rewrite it, and a finished run does not become
+   observed afterwards.
+4. Nothing here infers attribution from a fingerprint, user agent, loopback
+   source port, or connection reuse. Those signals are shared between
+   processes and are not identity.
 
 ## Non-goals
 
-- connection policy itself, which consumes this;
-- remembered rules beyond recording the chosen scope;
-- plugin permissions and authorized outbound, which have no runtime yet;
-- UI beyond what the control contract needs.
+- IngressProfile as a control-plane object with its own routes and UI, which
+  belongs with connection policy that consumes it;
+- system and application proxy pointing;
+- session resolution.
 
 ## Bottom-up implementation
 
-- [x] Generalize the durable record: kind, aggregate key, subject refs and
-      labels, request and waiter counts, optional plan binding.
-- [x] Derive risk, copy keys, and choices from the kind.
-- [x] Migrate the schema and preserve existing rows as tool intent, each with
-      its own identity as its aggregate key so nothing merges retroactively.
-- [x] Merge identical pending questions onto one entry at runtime: one
-      decision releases every waiter, a cancelled waiter does not answer the
-      others, and the entry is freed only when its last waiter leaves.
-- [x] Prove counting, optional binding, and unchanged fail-closed behaviour.
-
-## A harness bound, not a product contract
-
-The runtime test harness allowed five seconds to start, which the whole suite
-under race instrumentation began to exceed once a fourteenth migration existed.
-Migrations run in well under a second in isolation; the pure-Go SQLite driver
-with the suite running in parallel makes that time a function of machine
-contention. The bound was raised rather than the migration trimmed, because the
-product has no five-second startup contract and trimming would have hidden
-nothing real.
+- [ ] Add a typed observation state to the CaptureRun record and persist it.
+- [ ] Mark it from the first authenticated proxy connection only.
+- [ ] Prove monotonicity, idempotence, and that a finished run cannot become
+      observed.
+- [ ] Prove a launched-but-unused run reports honestly.
 
 ## Gates
 
@@ -82,9 +68,8 @@ nothing real.
 
 ## Completion statement
 
-> One durable approval record serves more than one kind, merges identical
-> pending items with counts, and does not require an Access plan binding for a
-> decision taken before Access resolution.
+> A CaptureRun reports whether traffic was actually observed through it, marked
+> only from real authenticated proxy traffic and never inferred.
 
-It does not implement connection policy, remembered rules, or plugin
-permissions.
+It does not implement IngressProfile as a control-plane object, proxy
+pointing, or session resolution.
