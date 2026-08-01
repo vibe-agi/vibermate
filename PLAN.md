@@ -46,10 +46,25 @@ with an audit record. Two shapes still fall outside that:
 
 ## Bottom-up implementation
 
-- [ ] Classify a cleartext forward-proxy request and give it a typed decision.
-- [ ] Forward or refuse it through the gated egress boundary with both records.
-- [ ] Refuse an unsupported upgrade explicitly instead of degrading it.
-- [ ] Prove no body, credential, or model pipeline is reachable from either.
+- [x] Classify a cleartext forward-proxy request and give it a typed decision.
+- [x] Forward it through the gated egress boundary with both records; an
+      origin-form request and an unauthenticated forward are still refused,
+      and both leave an audit record.
+- [x] Refuse an unsupported upgrade explicitly instead of degrading it.
+- [x] Prove no body, credential, or model pipeline is reachable from either.
+- [x] Prove a real captured child process reaches a non-model host through the
+      real launcher and the real proxy over real sockets.
+
+## A test that proved nothing
+
+The captured-child test first fetched a loopback origin with an ordinary
+`http.Get`. It passed, and it proved nothing: Go unconditionally skips a proxy
+for a loopback target, so the child had connected directly with the proxy
+uninvolved. The test now asserts the proxy recorded the outbound, and the child
+builds its transport from the exported variables explicitly. What it proves is
+what belongs to vibermate: the launcher exported a usable proxy address and
+credential, and the proxy forwarded a request to a host that is not a model
+API. Go's own automatic proxy selection is not under test.
 
 ## Gates
 
