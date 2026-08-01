@@ -154,9 +154,46 @@ func decodeTolerant(
 		return protocolcore.TranslationReport{}, err
 	}
 	if err := decodeStrict(filtered, destination); err != nil {
-		return protocolcore.TranslationReport{}, err
+		return protocolcore.TranslationReport{}, failingField(
+			known,
+			destination,
+			path,
+			err,
+		)
 	}
 	return protocolcore.NewTranslationReport(notices...), nil
+}
+
+// failingField names which modelled field a strict decode refused.
+//
+// Reporting the whole object says "somewhere in the request", which is what a
+// person is already looking at. Narrowing it costs one decode per field and
+// only happens on the failure path, and it turns "my client cannot connect"
+// into a field somebody can look up.
+func failingField(
+	known map[string]json.RawMessage,
+	destination any,
+	path string,
+	cause error,
+) error {
+	names := make([]string, 0, len(known))
+	for name := range known {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	for _, name := range names {
+		probe := reflect.New(reflect.Indirect(reflect.ValueOf(destination)).Type())
+		single, err := json.Marshal(map[string]json.RawMessage{
+			name: known[name],
+		})
+		if err != nil {
+			continue
+		}
+		if decodeStrict(single, probe.Interface()) != nil {
+			return fmt.Errorf("%s: %w", path+"."+name, cause)
+		}
+	}
+	return cause
 }
 
 // modelledFieldNames is the set of wire names the destination declares.

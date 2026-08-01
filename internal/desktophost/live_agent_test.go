@@ -164,7 +164,7 @@ func TestARealAgentClientReachesAModelThroughVibermate(t *testing.T) {
 		)
 		if listErr == nil {
 			for _, record := range records.Items {
-				t.Logf("activity: %+v", record)
+				t.Logf("activity: %+v diagnosis: %+v", record, record.Diagnosis)
 			}
 		}
 		t.Fatalf(
@@ -421,7 +421,7 @@ func TestARealResponsesClientReachesAModelThroughVibermate(t *testing.T) {
 		)
 		if listErr == nil {
 			for _, record := range records.Items {
-				t.Logf("activity: %+v", record)
+				t.Logf("activity: %+v diagnosis: %+v", record, record.Diagnosis)
 			}
 		}
 		t.Fatalf(

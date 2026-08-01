@@ -1,6 +1,7 @@
 package anthropicchat_test
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/vibe-agi/vibermate/internal/anthropicchat"
@@ -87,5 +88,33 @@ func TestADuplicateFieldIsStillRefused(t *testing.T) {
 	}`)
 	if _, _, err := codec.DecodeClientRequest(body); err == nil {
 		t.Fatal("a duplicate field was accepted")
+	}
+}
+
+// A refusal inside a modelled field names that field. "Somewhere in the
+// request" is what the person is already looking at.
+func TestARefusalInsideAFieldNamesTheField(t *testing.T) {
+	t.Parallel()
+
+	codec, err := anthropicchat.New(anthropicchat.DefaultOptions())
+	if err != nil {
+		t.Fatal(err)
+	}
+	// A content block type this dialect cannot express is a refusal, not a
+	// declared loss: the block is what the message says.
+	body := []byte(`{
+		"model":"claude-3-5-sonnet",
+		"max_tokens":64,
+		"messages":[{
+			"role":"user",
+			"content":[{"type":"text","text":"hello","unknown_option":true}]
+		}]
+	}`)
+	_, _, err = codec.DecodeClientRequest(body)
+	if err == nil {
+		t.Fatal("an unknown field inside a content block was accepted")
+	}
+	if !strings.Contains(err.Error(), "$.messages") {
+		t.Fatalf("the refusal does not name the field: %v", err)
 	}
 }

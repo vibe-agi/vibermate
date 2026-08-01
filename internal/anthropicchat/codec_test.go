@@ -139,11 +139,16 @@ func TestRequestTranslationProducesChatWireAndExplicitLossReport(t *testing.T) {
 	}
 }
 
-func TestToolDefinitionUnknownFieldStillFailsClosed(t *testing.T) {
+// A tool definition carries options this dialect does not model, and a real
+// client sends them: refusing the request over one made Claude Code unusable.
+// Design 07 §2.3 keeps the unknown field visible rather than letting a typed
+// unmarshal erase it, and §3.2 permits the loss because it is declared. The
+// field is named at its own position, not at the request root.
+func TestToolDefinitionUnknownFieldIsDeclaredAtItsPosition(t *testing.T) {
 	t.Parallel()
 
 	codec := newTestCodec(t)
-	_, _, err := codec.DecodeClientRequest([]byte(`{
+	_, report, err := codec.DecodeClientRequest([]byte(`{
 		"model":"claude-client-alias",
 		"max_tokens":64,
 		"stream":true,
@@ -154,8 +159,18 @@ func TestToolDefinitionUnknownFieldStillFailsClosed(t *testing.T) {
 			"private_extension":true
 		}]
 	}`))
-	if protocolcore.ReasonOf(err) != protocolcore.ReasonInvalidClientRequest {
+	if err != nil {
 		t.Fatalf("DecodeClientRequest() error = %v", err)
+	}
+	found := false
+	for _, notice := range report.Notices() {
+		if notice.Code == protocolcore.NoticeUnknownRequestFieldNotForwarded &&
+			notice.Path == "$.tools[0].private_extension" {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("the dropped tool option was not declared: %+v", report.Notices())
 	}
 }
 

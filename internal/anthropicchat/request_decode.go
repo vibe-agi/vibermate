@@ -10,23 +10,23 @@ import (
 )
 
 type anthropicRequestWire struct {
-	Model         string                        `json:"model"`
-	MaxTokens     int                           `json:"max_tokens"`
-	Messages      []anthropicMessageWire        `json:"messages"`
-	System        json.RawMessage               `json:"system,omitempty"`
-	Metadata      json.RawMessage               `json:"metadata,omitempty"`
-	StopSequences []string                      `json:"stop_sequences,omitempty"`
-	Stream        bool                          `json:"stream,omitempty"`
-	Temperature   *float64                      `json:"temperature,omitempty"`
-	TopP          *float64                      `json:"top_p,omitempty"`
-	TopK          *int                          `json:"top_k,omitempty"`
-	Tools         []anthropicToolDefinitionWire `json:"tools,omitempty"`
-	ToolChoice    *anthropicToolChoiceWire      `json:"tool_choice,omitempty"`
-	Thinking      json.RawMessage               `json:"thinking,omitempty"`
-	OutputConfig  json.RawMessage               `json:"output_config,omitempty"`
-	Context       json.RawMessage               `json:"context_management,omitempty"`
-	Diagnostics   json.RawMessage               `json:"diagnostics,omitempty"`
-	ServiceTier   string                        `json:"service_tier,omitempty"`
+	Model         string                   `json:"model"`
+	MaxTokens     int                      `json:"max_tokens"`
+	Messages      []anthropicMessageWire   `json:"messages"`
+	System        json.RawMessage          `json:"system,omitempty"`
+	Metadata      json.RawMessage          `json:"metadata,omitempty"`
+	StopSequences []string                 `json:"stop_sequences,omitempty"`
+	Stream        bool                     `json:"stream,omitempty"`
+	Temperature   *float64                 `json:"temperature,omitempty"`
+	TopP          *float64                 `json:"top_p,omitempty"`
+	TopK          *int                     `json:"top_k,omitempty"`
+	Tools         []json.RawMessage        `json:"tools,omitempty"`
+	ToolChoice    *anthropicToolChoiceWire `json:"tool_choice,omitempty"`
+	Thinking      json.RawMessage          `json:"thinking,omitempty"`
+	OutputConfig  json.RawMessage          `json:"output_config,omitempty"`
+	Context       json.RawMessage          `json:"context_management,omitempty"`
+	Diagnostics   json.RawMessage          `json:"diagnostics,omitempty"`
+	ServiceTier   string                   `json:"service_tier,omitempty"`
 }
 
 type anthropicMessageWire struct {
@@ -149,7 +149,23 @@ func (codec *Codec) DecodeClientRequest(
 	}
 
 	tools := make([]protocolcore.ToolDefinition, len(wire.Tools))
-	for index, tool := range wire.Tools {
+	for index, rawTool := range wire.Tools {
+		// A tool definition carries options this dialect does not model —
+		// Claude Code's `defer_loading` among them — and refusing the request
+		// over one made the client unusable. Design 07 §2.3 keeps the unknown
+		// field visible instead of letting a typed unmarshal erase it, and
+		// §3.2 permits the loss because it is declared.
+		var tool anthropicToolDefinitionWire
+		toolPath := fmt.Sprintf("$.tools[%d]", index)
+		unknownTool, unknownErr := decodeTolerant(rawTool, &tool, toolPath)
+		if unknownErr != nil {
+			return protocolcore.Request{}, report, protocolcore.NewFailure(
+				protocolcore.ReasonInvalidClientRequest,
+				toolPath,
+				unknownErr,
+			)
+		}
+		report = report.Merge(unknownTool)
 		decoded, toolReport, decodeErr := codec.decodeToolDefinition(index, tool)
 		if decodeErr != nil {
 			return protocolcore.Request{}, report, decodeErr
