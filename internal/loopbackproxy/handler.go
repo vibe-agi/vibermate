@@ -281,7 +281,10 @@ func (handler *Handler) ServeHTTP(
 		handler.finishConnectionAudit(audit, terminalEvidence)
 	}()
 
-	if request.Method != http.MethodConnect {
+	cleartextForward := request.Method != http.MethodConnect &&
+		request.URL != nil &&
+		request.URL.IsAbs()
+	if request.Method != http.MethodConnect && !cleartextForward {
 		if handler.denyConnection(
 			request.Context(),
 			audit,
@@ -374,6 +377,20 @@ func (handler *Handler) ServeHTTP(
 		return
 	}
 	source := connectionSource(evidence)
+	// A cleartext forward-proxy request carries its target in an absolute
+	// request-target. It is authenticated exactly like a CONNECT, then
+	// forwarded to that origin; it never enters a model pipeline and never
+	// carries a provider credential.
+	if cleartextForward {
+		terminal = handler.serveCleartextForward(
+			writer,
+			request,
+			active,
+			audit,
+			source,
+		)
+		return
+	}
 	origin, host, err := connectOrigin(request.Host)
 	if err != nil {
 		if handler.denyConnection(
@@ -1627,4 +1644,185 @@ func (handler *Handler) completeBlindAudit(
 	)
 	defer cancel()
 	_, _ = handler.egressAudit.Complete(ctx, terminal)
+}
+
+// serveCleartextForward forwards a cleartext proxy request to its own origin.
+// A proxy necessarily sees an unencrypted request line, so the record says
+// plainly that this connection was not encrypted rather than implying a
+// blindness it does not have. It still records no body.
+func (handler *Handler) serveCleartextForward(
+	writer http.ResponseWriter,
+	request *http.Request,
+	active *operation,
+	audit *connectionevent.Connection,
+	source connectionevent.Source,
+) bool {
+	if handler.blindTunnels == nil {
+		if handler.denyConnection(
+			request.Context(),
+			audit,
+			source,
+			ReasonConnectOnly,
+		) != nil {
+			writeReason(
+				writer,
+				http.StatusServiceUnavailable,
+				ReasonConnectionAuditUnavailable,
+				"",
+			)
+			return false
+		}
+		writeReason(writer, http.StatusMethodNotAllowed, ReasonConnectOnly, "")
+		return true
+	}
+	if request.URL.Scheme != "http" {
+		writeReason(writer, http.StatusBadRequest, ReasonConnectAuthorityInvalid, "")
+		return true
+	}
+	host, port, err := cleartextAuthority(request.URL.Host)
+	if err != nil {
+		writeReason(writer, http.StatusBadRequest, ReasonConnectAuthorityInvalid, "")
+		return true
+	}
+	authority := net.JoinHostPort(host, strconv.Itoa(int(port)))
+	if err := audit.Decide(
+		request.Context(),
+		connectionevent.DecisionEvidence{
+			Source:     source,
+			Decision:   connectionevent.DecisionAllow,
+			RuleID:     "m0.cleartext_forward",
+			RouteHost:  host,
+			Decryption: connectionevent.DecryptionBlind,
+		},
+	); err != nil {
+		writeReason(
+			writer,
+			http.StatusServiceUnavailable,
+			ReasonConnectionAuditUnavailable,
+			"",
+		)
+		return false
+	}
+
+	egressID, err := handler.exchangeIDs.NewExchangeID(request.Context())
+	if err != nil {
+		writeReason(writer, http.StatusServiceUnavailable, ReasonProxyStopping, "")
+		return true
+	}
+	actionLease, err := handler.blindTunnels.BeginAction(
+		request.Context(),
+		offlinehold.ActionRequest{ActionID: egressID},
+	)
+	if err != nil {
+		writeReason(writer, http.StatusBadGateway, ReasonBlindTunnelFailed, "")
+		return true
+	}
+	defer actionLease.Release()
+	upstream, lease, err := handler.blindTunnels.Dial(
+		request.Context(),
+		blindtunnel.DialRequest{
+			RequestID: egressID,
+			Action:    actionLease,
+			Authority: authority,
+			Host:      host,
+			Port:      port,
+		},
+	)
+	if err != nil {
+		writeReason(writer, http.StatusBadGateway, ReasonBlindTunnelFailed, "")
+		return true
+	}
+	defer lease.Release()
+	defer upstream.Close()
+	_ = active
+
+	record, err := handler.beginBlindAudit(
+		request.Context(),
+		egressID,
+		audit.ID(),
+		authority,
+	)
+	if err != nil {
+		writeReason(writer, http.StatusServiceUnavailable, ReasonBlindTunnelFailed, "")
+		return true
+	}
+
+	// Write in origin form and without hop-by-hop or proxy headers, so the
+	// origin sees an ordinary request and never a proxy credential.
+	forwarded := request.Clone(request.Context())
+	forwarded.RequestURI = ""
+	forwarded.Header = forwardableHeaders(request.Header)
+	forwarded.Host = request.URL.Host
+	if err := forwarded.Write(upstream); err != nil {
+		handler.completeBlindAudit(
+			record,
+			egressaudit.OutcomeFailed,
+			"forward_write_failed",
+			blindtunnel.Result{},
+		)
+		writeReason(writer, http.StatusBadGateway, ReasonBlindTunnelFailed, "")
+		return true
+	}
+	response, err := http.ReadResponse(bufio.NewReader(upstream), forwarded)
+	if err != nil {
+		handler.completeBlindAudit(
+			record,
+			egressaudit.OutcomeFailed,
+			"forward_read_failed",
+			blindtunnel.Result{},
+		)
+		writeReason(writer, http.StatusBadGateway, ReasonBlindTunnelFailed, "")
+		return true
+	}
+	defer response.Body.Close()
+	copyResponseHeaders(writer.Header(), response.Header)
+	writer.WriteHeader(response.StatusCode)
+	copied, _ := io.Copy(writer, response.Body)
+	handler.completeBlindAudit(
+		record,
+		egressaudit.OutcomeCompleted,
+		"",
+		blindtunnel.Result{BytesIn: copied},
+	)
+	handler.finishConnectionAudit(audit, connectionevent.TerminalEvidence{
+		Outcome:   connectionevent.OutcomeCompleted,
+		BytesDown: uint64(copied),
+	})
+	return true
+}
+
+func cleartextAuthority(hostPort string) (string, uint16, error) {
+	if host, port, err := splitAuthority(hostPort); err == nil {
+		return host, port, nil
+	}
+	host := canonicalCONNECTHost(hostPort)
+	if host == "" || strings.Contains(host, ":") {
+		return "", 0, errors.New("cleartext authority is invalid")
+	}
+	return host, 80, nil
+}
+
+// forwardableHeaders removes proxy and hop-by-hop headers so the origin sees
+// an ordinary request and never this proxy's credential.
+func forwardableHeaders(source http.Header) http.Header {
+	headers := source.Clone()
+	if headers == nil {
+		headers = make(http.Header)
+	}
+	for _, token := range strings.Split(headers.Get("Connection"), ",") {
+		headers.Del(strings.TrimSpace(token))
+	}
+	for _, name := range []string{
+		"Connection",
+		"Proxy-Authorization",
+		"Proxy-Connection",
+		"Keep-Alive",
+		"Te",
+		"Trailer",
+		"Transfer-Encoding",
+		"Upgrade",
+	} {
+		headers.Del(name)
+	}
+	return headers
 }
