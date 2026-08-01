@@ -53,6 +53,7 @@ func Check(repositoryRoot string) error {
 	violations = append(violations, CheckDataPlaneAccessBoundary(repositoryRoot)...)
 	violations = append(violations, CheckDesktopFrontendBoundary(repositoryRoot)...)
 	violations = append(violations, CheckSystemTrustBoundary(repositoryRoot)...)
+	violations = append(violations, CheckPayloadDispatchBoundary(repositoryRoot)...)
 	violations = append(
 		violations,
 		CheckCatalogPair(
@@ -78,6 +79,72 @@ func Check(repositoryRoot string) error {
 		joined = append(joined, errors.New(violation.String()))
 	}
 	return errors.Join(joined...)
+}
+
+// CheckPayloadDispatchBoundary keeps the auxiliary and opaque ingress dispatch
+// arms separate. Merging them is the exact shape that forwarded a
+// payload-bearing auxiliary operation, including the complete prompt and the
+// client's own credential, to the inbound origin. Each arm must prove its own
+// payload-class admission, so a shared case clause is rejected structurally
+// rather than relying on review.
+func CheckPayloadDispatchBoundary(repositoryRoot string) []Violation {
+	const rule = "payload-dispatch-boundary"
+	sourcePath := filepath.Join(
+		repositoryRoot,
+		"internal",
+		"loopbackproxy",
+		"handler.go",
+	)
+	if _, err := os.Stat(sourcePath); errors.Is(err, os.ErrNotExist) {
+		return nil
+	}
+	fileSet := token.NewFileSet()
+	parsed, err := parser.ParseFile(fileSet, sourcePath, nil, 0)
+	if err != nil {
+		return []Violation{{
+			Path:    relativeDisplayPath(repositoryRoot, sourcePath),
+			Rule:    rule,
+			Message: fmt.Sprintf("ingress dispatch is unparsable: %v", err),
+		}}
+	}
+	var violations []Violation
+	ast.Inspect(parsed, func(node ast.Node) bool {
+		clause, ok := node.(*ast.CaseClause)
+		if !ok || len(clause.List) < 2 {
+			return true
+		}
+		names := make(map[string]struct{}, len(clause.List))
+		for _, expression := range clause.List {
+			names[dispatchKindName(expression)] = struct{}{}
+		}
+		_, auxiliary := names["KindAuxiliary"]
+		_, opaque := names["KindOpaque"]
+		if !auxiliary || !opaque {
+			return true
+		}
+		violations = append(violations, Violation{
+			Path: relativeDisplayPath(repositoryRoot, sourcePath),
+			Line: fileSet.Position(clause.Pos()).Line,
+			Rule: rule,
+			Message: "auxiliary and opaque ingress dispatch share one case " +
+				"clause; each arm must prove its own payload-class admission",
+		})
+		return true
+	})
+	return violations
+}
+
+// dispatchKindName returns the trailing identifier of a case expression so a
+// bare KindOpaque and a qualified pathcapability.KindOpaque compare equal.
+func dispatchKindName(expression ast.Expr) string {
+	switch typed := expression.(type) {
+	case *ast.Ident:
+		return typed.Name
+	case *ast.SelectorExpr:
+		return typed.Sel.Name
+	default:
+		return ""
+	}
 }
 
 // CheckSystemTrustBoundary protects the fixture-only trust-operation shape:

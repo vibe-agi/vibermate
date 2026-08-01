@@ -71,6 +71,7 @@ func BuiltIn() (Catalog, error) {
 			CodecFeature:   feature,
 			MaxBodyBytes:   MaxJSONBodyBytes,
 			AllowedQueries: queries,
+			PayloadClass:   access.OperationPayloadClientSemantic,
 			EgressBearing:  true,
 		})
 	}
@@ -96,6 +97,10 @@ func BuiltIn() (Catalog, error) {
 		"token_count",
 		MaxJSONBodyBytes,
 		[]string{"beta=true"},
+		// The request body is the complete messages, system text, and tool
+		// schema, so it can never be forwarded to the original origin with the
+		// client's own credentials.
+		access.OperationPayloadClientSemantic,
 		true,
 	); err != nil {
 		return Catalog{}, err
@@ -126,51 +131,59 @@ func BuiltIn() (Catalog, error) {
 		Transport:     access.ClientOperationTransportWebSocket,
 		BodyKind:      access.ClientOperationBodyNone,
 		ReplayClass:   access.ClientReplayNonReplayable,
+		PayloadClass:  access.OperationPayloadNone,
 	}); err != nil {
 		return Catalog{}, err
 	}
 
 	// Response retrieval, input-item listing, cancellation, and deletion are
 	// stateful management operations. The fixed HTTP slice only supports create.
+	// A prefix groups several methods, so it declares the highest class any of
+	// them can carry.
 	if err := addUnsupportedPrefix(
 		add,
 		OpenAIResponsesManagementID,
 		"/v1/responses",
+		access.OperationPayloadClientData,
 	); err != nil {
 		return Catalog{}, err
 	}
 	for _, unsupported := range []struct {
-		id   string
-		path string
+		id           string
+		path         string
+		payloadClass access.OperationPayloadClass
 	}{
-		{OpenAIFilesUnsupportedID, "/v1/files"},
-		{OpenAIUploadsUnsupportedID, "/v1/uploads"},
-		{OpenAIBatchesUnsupportedID, "/v1/batches"},
-		{OpenAIAudioUnsupportedID, "/v1/audio"},
-		{OpenAIImagesUnsupportedID, "/v1/images"},
-		{OpenAIVideosUnsupportedID, "/v1/videos"},
-		{OpenAIRealtimeUnsupportedID, "/v1/realtime"},
+		{OpenAIFilesUnsupportedID, "/v1/files", access.OperationPayloadClientData},
+		{OpenAIUploadsUnsupportedID, "/v1/uploads", access.OperationPayloadClientData},
+		{OpenAIBatchesUnsupportedID, "/v1/batches", access.OperationPayloadClientData},
+		{OpenAIAudioUnsupportedID, "/v1/audio", access.OperationPayloadClientData},
+		{OpenAIImagesUnsupportedID, "/v1/images", access.OperationPayloadClientData},
+		{OpenAIVideosUnsupportedID, "/v1/videos", access.OperationPayloadClientData},
+		{OpenAIRealtimeUnsupportedID, "/v1/realtime", access.OperationPayloadClientData},
 	} {
 		if err := addUnsupportedPrefix(
 			add,
 			unsupported.id,
 			unsupported.path,
+			unsupported.payloadClass,
 		); err != nil {
 			return Catalog{}, err
 		}
 	}
 	for _, unsupported := range []struct {
-		id   string
-		path string
+		id           string
+		path         string
+		payloadClass access.OperationPayloadClass
 	}{
-		{OpenAIChatUnsupportedID, "/v1/chat/completions"},
-		{OpenAICompletionsUnsupportedID, "/v1/completions"},
-		{OpenAIEmbeddingsUnsupportedID, "/v1/embeddings"},
+		{OpenAIChatUnsupportedID, "/v1/chat/completions", access.OperationPayloadClientSemantic},
+		{OpenAICompletionsUnsupportedID, "/v1/completions", access.OperationPayloadClientSemantic},
+		{OpenAIEmbeddingsUnsupportedID, "/v1/embeddings", access.OperationPayloadClientSemantic},
 	} {
 		if err := addUnsupportedExact(
 			add,
 			unsupported.id,
 			unsupported.path,
+			unsupported.payloadClass,
 		); err != nil {
 			return Catalog{}, err
 		}
@@ -191,6 +204,7 @@ func addOperation(
 	feature access.CodecFeature,
 	maxBodyBytes int64,
 	queries []string,
+	payloadClass access.OperationPayloadClass,
 	egressBearing bool,
 ) error {
 	identifier, err := access.NewClientOperationID(id)
@@ -211,6 +225,7 @@ func addOperation(
 		CodecFeature:   feature,
 		MaxBodyBytes:   maxBodyBytes,
 		AllowedQueries: queries,
+		PayloadClass:   payloadClass,
 		EgressBearing:  egressBearing,
 	})
 }
@@ -219,6 +234,7 @@ func addUnsupportedPrefix(
 	add func(access.ClientOperationOptions) error,
 	id string,
 	path string,
+	payloadClass access.OperationPayloadClass,
 ) error {
 	return addOperation(
 		add,
@@ -239,6 +255,7 @@ func addUnsupportedPrefix(
 		"",
 		MaxJSONBodyBytes,
 		nil,
+		payloadClass,
 		false,
 	)
 }
@@ -247,6 +264,7 @@ func addUnsupportedExact(
 	add func(access.ClientOperationOptions) error,
 	id string,
 	path string,
+	payloadClass access.OperationPayloadClass,
 ) error {
 	return addOperation(
 		add,
@@ -261,6 +279,7 @@ func addUnsupportedExact(
 		"",
 		MaxJSONBodyBytes,
 		nil,
+		payloadClass,
 		false,
 	)
 }

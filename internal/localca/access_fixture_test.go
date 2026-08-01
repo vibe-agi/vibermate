@@ -164,6 +164,7 @@ func newAccessCompiler(t *testing.T) *access.Compiler {
 			ReplayClass:   access.ClientReplayGenerationCostOnly,
 			CodecFeature:  "messages",
 			MaxBodyBytes:  1 << 20,
+			PayloadClass:  access.OperationPayloadClientSemantic,
 			EgressBearing: true,
 		},
 	)

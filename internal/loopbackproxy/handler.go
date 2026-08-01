@@ -63,6 +63,7 @@ const (
 	ReasonProxyStopping                 ReasonCode = "proxy_stopping"
 	ReasonConnectOnly                   ReasonCode = "connect_only"
 	ReasonConnectionAuditUnavailable    ReasonCode = "connection_audit_unavailable"
+	ReasonProfileOperationUnsupported   ReasonCode = "profile_operation_unsupported"
 )
 
 var ErrProxyStopping = errors.New("loopback proxy is stopping")
@@ -614,6 +615,19 @@ func (handler *Handler) serveInner(
 		)
 		return
 	}
+	// Admission is decided from the frozen payload class before any body is
+	// read, so a request whose typed handling plan does not exist cannot place
+	// client payload in a buffer that outlives this decision.
+	if !admitsLocalDispatch(capability, request) {
+		drainBounded(request.Body, capability.MaxBodyBytes())
+		writeDialectReason(
+			writer,
+			binding.ClientDialect(),
+			http.StatusUnprocessableEntity,
+			ReasonProfileOperationUnsupported,
+		)
+		return
+	}
 	body, err := readBounded(request.Body, capability.MaxBodyBytes())
 	if err != nil {
 		writeReason(writer, http.StatusRequestEntityTooLarge, ReasonRequestBodyInvalid, "")
@@ -637,7 +651,16 @@ func (handler *Handler) serveInner(
 			observation,
 			audit,
 		)
-	case pathcapability.KindAuxiliary, pathcapability.KindOpaque:
+	case pathcapability.KindAuxiliary:
+		handler.serveAgentProbe(
+			writer,
+			request,
+			binding,
+			capability,
+			exchangeID,
+			body,
+		)
+	case pathcapability.KindOpaque:
 		handler.serveOriginal(
 			writer,
 			request,
@@ -803,6 +826,74 @@ func (connection *countingConnection) Write(source []byte) (int, error) {
 	return count, err
 }
 
+// admitsLocalDispatch decides whether a classified request may continue to its
+// dispatch arm. Semantic operations enter the model pipeline and are governed
+// by the frozen Access plan. Every other arm forwards to the inbound origin
+// with the client's own credentials, so it requires a payload class that
+// proves no client payload travels.
+func admitsLocalDispatch(
+	capability pathcapability.Capability,
+	request *http.Request,
+) bool {
+	if capability.Kind() == pathcapability.KindSemantic {
+		return true
+	}
+	class := capability.PayloadClass()
+	if class.AllowsOriginalOrigin() {
+		return true
+	}
+	// An unclassified request without a body still reaches the inbound origin
+	// today. The connection-policy Goal replaces this with an explicit
+	// allow/deny/ask decision; until then the exception stays narrow and is
+	// never extended to a request that can carry a body.
+	return class == access.OperationPayloadUnknown && !carriesBody(request)
+}
+
+func carriesBody(request *http.Request) bool {
+	if request == nil {
+		return false
+	}
+	switch request.Method {
+	case http.MethodPost, http.MethodPut, http.MethodPatch:
+		return true
+	}
+	if request.ContentLength != 0 {
+		return true
+	}
+	return len(request.TransferEncoding) > 0
+}
+
+// serveAgentProbe forwards a catalogued no-payload probe to the inbound
+// origin. It re-proves admission so the arm stays closed even if a future
+// caller reaches it without passing the dispatch gate.
+func (handler *Handler) serveAgentProbe(
+	writer http.ResponseWriter,
+	request *http.Request,
+	binding access.IngressBinding,
+	capability pathcapability.Capability,
+	requestID string,
+	body []byte,
+) {
+	if !admitsLocalDispatch(capability, request) {
+		writeDialectReason(
+			writer,
+			binding.ClientDialect(),
+			http.StatusUnprocessableEntity,
+			ReasonProfileOperationUnsupported,
+		)
+		return
+	}
+	handler.forwardToOriginalOrigin(
+		writer,
+		request,
+		binding,
+		offlinehold.EgressAuxiliary,
+		capability.PayloadClass(),
+		requestID,
+		body,
+	)
+}
+
 func (handler *Handler) serveOriginal(
 	writer http.ResponseWriter,
 	request *http.Request,
@@ -811,19 +902,45 @@ func (handler *Handler) serveOriginal(
 	requestID string,
 	body []byte,
 ) {
-	kind := offlinehold.EgressOpaque
-	if capability.Kind() == pathcapability.KindAuxiliary {
-		kind = offlinehold.EgressAuxiliary
+	if !admitsLocalDispatch(capability, request) {
+		writeDialectReason(
+			writer,
+			binding.ClientDialect(),
+			http.StatusUnprocessableEntity,
+			ReasonProfileOperationUnsupported,
+		)
+		return
 	}
+	handler.forwardToOriginalOrigin(
+		writer,
+		request,
+		binding,
+		offlinehold.EgressOpaque,
+		capability.PayloadClass(),
+		requestID,
+		body,
+	)
+}
+
+func (handler *Handler) forwardToOriginalOrigin(
+	writer http.ResponseWriter,
+	request *http.Request,
+	binding access.IngressBinding,
+	kind offlinehold.EgressKind,
+	payloadClass access.OperationPayloadClass,
+	requestID string,
+	body []byte,
+) {
 	frozen, err := originaltransport.NewRequest(originaltransport.RequestOptions{
-		RequestID: requestID,
-		Kind:      kind,
-		Origin:    binding.ClientOrigin(),
-		Method:    request.Method,
-		Path:      request.URL.Path,
-		RawQuery:  request.URL.RawQuery,
-		Headers:   request.Header,
-		Body:      body,
+		RequestID:    requestID,
+		Kind:         kind,
+		Origin:       binding.ClientOrigin(),
+		Method:       request.Method,
+		Path:         request.URL.Path,
+		RawQuery:     request.URL.RawQuery,
+		Headers:      request.Header,
+		Body:         body,
+		PayloadClass: payloadClass,
 	})
 	if err != nil {
 		writeReason(writer, http.StatusBadRequest, ReasonRequestBodyInvalid, "")

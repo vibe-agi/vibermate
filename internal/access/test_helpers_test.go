@@ -162,6 +162,7 @@ func mustClientOperationDefinition(
 			ReplayClass:    access.ClientReplayGenerationCostOnly,
 			CodecFeature:   feature,
 			MaxBodyBytes:   16 << 20,
+			PayloadClass:   access.OperationPayloadClientSemantic,
 			EgressBearing:  true,
 			AllowedQueries: nil,
 		},

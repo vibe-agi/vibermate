@@ -48,14 +48,15 @@ func TestOriginalTransportPinsClientOriginAndStripsProxyCredentials(
 		"X-Remove":            []string{"remove"},
 	}
 	request, err := originaltransport.NewRequest(originaltransport.RequestOptions{
-		RequestID: "opaque-1",
-		Kind:      offlinehold.EgressOpaque,
-		Origin:    origin,
-		Method:    http.MethodPost,
-		Path:      "/v1/unknown",
-		RawQuery:  "page=1",
-		Headers:   headers,
-		Body:      body,
+		RequestID:    "opaque-1",
+		Kind:         offlinehold.EgressOpaque,
+		Origin:       origin,
+		Method:       http.MethodPost,
+		Path:         "/v1/unknown",
+		RawQuery:     "page=1",
+		Headers:      headers,
+		Body:         body,
+		PayloadClass: access.OperationPayloadControl,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -168,11 +169,12 @@ func originalRequest(
 		t.Fatal(err)
 	}
 	request, err := originaltransport.NewRequest(originaltransport.RequestOptions{
-		RequestID: "original-test",
-		Kind:      kind,
-		Origin:    origin,
-		Method:    http.MethodGet,
-		Path:      "/v1/status",
+		RequestID:    "original-test",
+		Kind:         kind,
+		Origin:       origin,
+		Method:       http.MethodGet,
+		Path:         "/v1/status",
+		PayloadClass: access.OperationPayloadControl,
 	})
 	if err != nil {
 		t.Fatal(err)

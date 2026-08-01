@@ -1,265 +1,138 @@
-# M1.0-C macOS Trust Observation and Read-Only UX
+# M1.0-C0a Payload-Bearing Client Operation Fail-Closed
 
-Status: planned; implementation not started
+Status: active
 Created: 2026-08-01
-Implementation baseline: `329490b859089e6c0321b60c84268c74504e7d7d`
+Implementation baseline: `e04455b`
+Branch: `m1/root-leaf-foundation`
+Defers: `docs/plans/deferred/2026-08-01-m1.0-c-macos-trust-observation.md`
+(M1.0-C macOS Trust Observation is preserved unchanged and resumes after the
+C0 egress-identity chain.)
 
 ## Objective
 
-On supported macOS builds, observe the operating-system state of VibeMate's
-current public Root through bounded read-only platform commands, normalize that
-evidence into the existing typed `systemtrust.Observation`, expose the result
-through the authenticated Desktop read capability, and render a bilingual
-read-only Root status in the Desktop UI.
+No client operation may carry client payload or client credentials to the
+original origin while its typed handling plan does not exist. Today
+`POST /v1/messages/count_tokens` and every uncatalogued body-bearing request
+inside a MITM-terminated AgentEndpoint connection are forwarded verbatim —
+full prompt plus the client's own `Authorization` — to the inbound origin.
 
-This slice must not install, trust, untrust, replace, or delete a certificate.
-It must not request OS authorization or add a mutation endpoint. It adds no
-provider, protocol, proxy, plugin, Language Bridge, SecretStore, or Server Host
-capability.
-
-The only completion claim is:
-
-> On a supported macOS build, VibeMate can perform a bounded read-only
-> observation of its current public Root, distinguish exact certificate
-> presence from the admin-domain Server-TLS trust decision, and expose that
-> typed evidence through an authenticated read-only Desktop API and bilingual
-> UI. No production path can modify the operating-system trust store.
-
-This is not evidence that authorization, installation, removal, or supported
-client TLS trust works. It remains neither Preview-ready nor Release-ready.
+This Goal closes that class locally and fails closed. It does not implement the
+replacement (Profile operations), and it does not touch opaque control-plane
+forwarding for proven no-payload operations.
 
 ## Read-only design authority
 
-The authoritative design repository is
-`/Users/null/Code/github/vibe-agi/vibermate-design`. Its current disk contents,
-including user-owned uncommitted changes, are read-only implementation
-authority. Use CodeGraph first while its `.codegraph/` directory exists, then
-re-read the relevant source sections. Reconcile the goal after contracts,
-after Host/API composition, and immediately before freeze.
+- `docs/adr/0015-egress-purpose-authority-and-audit-cardinality.md` §2, §4;
+- `docs/design/02-architecture.md` §4.1 (PayloadClass) and the
+  "未被 catalog 声明的规范 method/path" paragraph;
+- `docs/design/07-protocol-translation.md` §6.3;
+- `docs/design/12-implementation-readiness.md` §3.1–3.2.
 
-Relevant sources:
+The design repository is read-only during implementation.
 
-- `CONTRIBUTING.md`;
-- `docs/design/00-overview.md`;
-- `docs/design/02-architecture.md`;
-- `docs/design/03-ui.md`;
-- `docs/design/04-ux.md`;
-- `docs/design/06-security.md`;
-- `docs/design/10-client-compatibility.md`;
-- `docs/design/11-delivery-and-operations.md`;
-- `docs/design/14-technology-stack.md`;
-- `docs/design/15-local-control-api.md`;
-- `docs/design/16-verifiable-interaction-contract.md`;
-- `docs/design/18-production-composition.md`;
-- `docs/design/19-hosts-and-deployment.md`;
-- ADR-0006, ADR-0007, and ADR-0011.
+## Why the scope is payload class, not `Kind == auxiliary`
 
-The initial ordered manifest digest for those files is
-`5db80800925f4992a3a10d5d77eea01bcad69c0dab9236b98ae62237e88b9469`.
-A changed digest requires a semantic diff; it is not automatically accepted or
-ignored.
+`ClientOperationKind` and payload class are orthogonal axes (`02` §4.1). The
+catalog holds exactly one `auxiliary` entry today, so a blanket "reject all
+auxiliary" rule would be accidentally correct and would have to be unwound as
+soon as a proven `none/control` probe is catalogued. Keying the rule on a
+frozen `OperationPayloadClass` makes it permanently correct and covers the
+identical leak on the uncatalogued path, which `02` now also forbids.
 
-Current design reconciliation:
+`GET /api/claude_code/settings` and `GET /api/claude_code/policy_limits` are
+no-body GETs, so the fixed Claude Code control plane is unaffected.
 
-- `/api/v1/platform/root-ca` is the final Host projection route. Do not create
-  a temporary trust-status endpoint.
-- Exact certificate presence and the target trust decision remain independent
-  evidence. Neither command exit zero nor object presence proves trust.
-- Desktop owns local operating-system observation. ProductRuntime remains the
-  shared business composition and must not receive a macOS process adapter.
-- The UI uses synchronized locale keys and Host capabilities; it never infers
-  success from hidden buttons, platform names, or partial evidence.
-- Language Bridge and localization infrastructure work do not enter this
-  platform-observation slice beyond consuming the established locale catalogs.
+## Required invariants
 
-## Checkpoint 1: freeze the current-Root handoff
+1. `OperationPayloadClass` is a frozen catalog field:
+   `none | control | client_data | client_semantic | unknown`. It is never
+   inferred from an observed `Content-Length` or body shape.
+2. An operation reaches original-origin transport only when its payload class
+   is `none` or `control`.
+3. `client_semantic` and `client_data` operations that are not dispatched into
+   the model pipeline are rejected locally before any body read, transport
+   construction, credential access, egress lease, or Offline Hold action.
+4. An `unknown` payload class with a body-bearing method is rejected the same
+   way. `unknown` with a non-body method keeps the current original-origin
+   path; that remains an explicit gap for the connection-policy Goal.
+5. Local rejections inside a MITM-terminated connection use the client
+   dialect's own error envelope. The stable vibermate reason code travels in a
+   response header, never by replacing the dialect body shape.
+6. Rejection consumes at most `MaxBodyBytes` as a discard-only drain so the
+   connection stays reusable. The body never enters a retained buffer, log,
+   error value, Activity record, or database row.
+7. `internal/originaltransport` refuses a request whose frozen evidence does
+   not prove a `none/control` payload class.
+8. A structural rule, exercised through the public `repositorycheck` entry
+   point with good and injected-bad fixtures, prevents re-merging the
+   auxiliary and opaque dispatch arms.
 
-Desktop observation must always target the one current Root owned by the
-existing `localca.Authority`.
+## Non-goals
 
-Before implementing the process adapter, freeze a typed public-Root handoff
-that preserves all of these constraints:
+- `profile_endpoint`, remote token counting, `ProfileOperationTarget`;
+- Language Bridge and the prepared-handoff plane;
+- `EgressAttempt` persistence, control API, or UI;
+- blind tunnelling and connection `allow/deny/ask`;
+- Root, leaf issuance, or trust-store changes;
+- provider or backend codec changes;
+- the `CaptureRunID`/`ExchangeID` concatenation (`handler.go:627`), which needs
+  the typed identity model and belongs to M1.0-C0b.
 
-- one consistent identity-plus-certificate snapshot;
-- DER SHA-256 remains the only machine identity;
-- `CurrentPublicRootSource` remains sealed against caller-asserted Roots;
-- `*localca.Authority`, private-key material, certificate paths, and signing
-  capability never cross into Desktop Host or Control API;
-- ProductRuntime may expose a narrow public-Root capability, but it must not
-  import or own the macOS executor, observation lifecycle, or UI projection;
-- do not stitch together separate identity and certificate reads if a future
-  Root replacement could make them inconsistent;
-- tests may use explicit package-local fakes without adding a production fake
-  or a second Root authority.
+## Bottom-up implementation
 
-If production wiring would require weakening the sealed source, exposing the
-Authority, or creating a second Root model, stop for object-model review.
+### 1. Freeze the payload class in the catalog
 
-## Checkpoint 2: read-only macOS observation
+- [ ] Add `OperationPayloadClass` with constructor validation to
+  `internal/access`; reject empty and unknown enum values.
+- [ ] Require every `ClientOperationDefinition` to declare it.
+- [ ] Set `count_tokens` to `client_semantic`, model operations to
+  `client_semantic`, and unsupported entries to their true class.
+- [ ] Carry it through `pathcapability.Capability`; the uncatalogued fallback
+  reports `unknown`.
 
-Add one typed, macOS-specific read-only process boundary. Platform selection is
-explicit through typed construction and, where needed, build constraints. Do
-not use a string driver registry, global locator, blank-import registration, or
-runtime platform guessing.
+### 2. Split the dispatch arms
 
-Introduce a read-only `Observer` boundary that consumes the sealed current-Root
-source and returns the existing `Observation`. Its process interface and command
-spec type can represent inspection only. The production read-only executor must
-not satisfy the M1.0-B mutation executor interface, accept a `ChangePlan`, or be
-callable through `Coordinator.Execute`; this restriction must be enforced by
-the type system rather than a runtime string check.
+- [ ] Replace `case KindAuxiliary, KindOpaque:` with separate arms.
+- [ ] Decide rejection from payload class before `readBounded`.
+- [ ] Bounded discard-drain, then respond.
 
-The only allowed executable is `/usr/bin/security`. The only allowed command
-families in this slice are:
+### 3. Dialect error envelope
 
-- exact certificate enumeration through `find-certificate` against the fixed
-  `/Library/Keychains/System.keychain`;
-- admin trust-settings observation through `dump-trust-settings -d`.
+- [ ] Emit the Anthropic error shape for Anthropic endpoints and the OpenAI
+  error shape for OpenAI endpoints; carry `profile_operation_unsupported` in a
+  response header.
+- [ ] Prove the body parses against the dialect's error schema.
 
-The executor must:
+### 4. Tighten the transport contract
 
-- invoke no shell, `sudo`, helper, AppleScript, or authorization API;
-- accept no executable, command, keychain, path, digest, or environment value
-  from an HTTP/UI caller;
-- use fixed argv and a frozen minimal environment suitable for deterministic
-  parsing;
-- bound stdout and stderr without silently truncating successful evidence;
-- enforce a hard deadline, cancel the process, call `Wait`, and drain all owned
-  goroutines and pipes;
-- classify cancellation, timeout, non-zero exit, output overflow, unsupported
-  grammar, and ambiguous evidence with stable language-independent reasons;
-- keep raw stdout/stderr, certificate paths, unrelated certificate material,
-  subjects, serials, and local machine details out of logs, results, reports,
-  and API values.
+- [ ] `originaltransport` requires proven `none/control` evidence.
 
-No production or test source may invoke `add-trusted-cert`,
-`remove-trusted-cert`, `delete-certificate`, or any other mutation command.
+### 5. Structural guard
 
-## Checkpoint 3: normalize real evidence
+- [ ] Add the rule plus good and injected-bad repository fixtures.
 
-Replace the synthetic trust-decision input at the production boundary with a
-versioned parser for the exact supported `security` output shapes. Deterministic
-fixtures remain parser evidence; they are not a second runtime backend.
+### 6. Fixed-client evidence
 
-Normalization rules:
+- [ ] Run bounded fixed Claude Code 2.1.220 fixture; record `passed`,
+  `blocked`, or `not_observed` without presetting the result.
+- [ ] If the fixed client terminates on the rejection, keep the fail-closed
+  fix, mark the capability `blocked`, and open M1.0-C0a' for the local
+  tokenizer strategy (`07` §6.3 option 1), which needs no egress and no
+  handoff. Restoring the original-origin bypass is not an option.
 
-- presence is computed only by parsing certificate DER and comparing its
-  SHA-256 with the current `RootDigest`;
-- same-subject, same-name, same-serial, or display-fingerprint certificates
-  with different DER are foreign;
-- trust is evaluated only for the exact Root in the admin trust-settings domain
-  and `TrustUsageServerTLS`;
-- unrelated policies, certificates, domains, and usages do not promote trust;
-- missing exact trust evidence yields `untrusted` only when the captured grammar
-  is complete enough to prove absence; incomplete evidence yields `unknown`;
-- duplicate, contradictory, localized/unrecognized, oversized, malformed, or
-  version-drifted evidence yields `unknown`;
-- `absent + trusted` remains contradictory and fails closed;
-- read the current public Root again after observation and discard the result
-  if revision or digest changed.
+## Gates
 
-Raw current-machine output must not be committed. Sanitized fixtures preserve
-only grammar necessary for parsing and replace unrelated identities. A
-read-only current-machine check proves only the state actually observed; if the
-current Root is absent/untrusted, trusted behavior remains fixture-backed until
-the separately authorized mutation acceptance stage.
+`make check`, `gofmt -l .`, `go test -count=1 ./...`,
+`go test -race -count=1 ./...`, repeated race stress for `loopbackproxy`,
+`pathcapability`, `operationcatalog`, `access`, `go vet ./...`,
+`go mod tidy -diff`, `go mod verify`, pinned `govulncheck`,
+`git diff --check`, clean tree.
 
-## Checkpoint 4: Desktop Host, Control API, and UI
+## Completion statement
 
-Desktop Host owns the observation executor and its shutdown. It supplies a
-read-only provider to Desktop control after ProductRuntime has produced the
-sealed current-public-Root capability. Observation failure is represented in
-the Root projection; it must not create false ProductRuntime readiness or make
-the data plane depend on the trust store.
+> Known and unknown payload-bearing client operations are rejected locally in
+> the client's own dialect and cannot reach original-origin or provider
+> transport while their typed handling plan is unavailable.
 
-Expose `GET /api/v1/platform/root-ca` through the existing authenticated Desktop
-read capability:
-
-- Desktop-only route and route-allowlist evidence;
-- `Cache-Control: no-store`;
-- no request body, caller-selected Root, path, command, or target scope;
-- Root revision, DER-derived fingerprint, algorithm, validity, exact presence,
-  trust decision, typed evidence revision, observation time, and stable reason;
-- no certificate bytes, private-key state/material, local path, argv, raw
-  command output, or mutation/change-plan value in this slice;
-- no install, replace, remove, refresh-with-write-authority, or generic command
-  endpoint.
-
-The Desktop UI adds a read-only Root CA status surface. It may refresh the GET
-operation, but it does not poll without a bound and offers no mutation button.
-All visible text and status labels use synchronized `en-US` and `zh-CN` keys.
-API enums/reasons remain language-neutral. The UI separately displays:
-
-- current Root public identity and validity;
-- exact certificate presence;
-- admin-domain Server-TLS trust decision;
-- unknown/unavailable evidence and a non-success guidance state.
-
-The UI must not translate `present` into trusted, `untrusted` into removed, or
-`unknown` into a successful/failed mutation. Mutation and manual-recovery copy
-belong to the later authorized stage.
-
-## Required tests
-
-At minimum prove:
-
-1. fixed executable, keychain, domain, usage, argv, and environment;
-2. the production executor cannot accept a mutation spec, and no shell, helper,
-   authorization, or mutation command is reachable;
-3. bounded output, timeout, cancellation, kill/wait, pipe drain, and shutdown;
-4. exact DER presence with foreign same-subject certificates;
-5. exact admin Server-TLS trusted, untrusted, absent, and unknown fixtures;
-6. malformed, duplicate, contradictory, oversized, incomplete, localized, and
-   unknown-version evidence fails closed;
-7. Root revision/digest change during observation discards the result;
-8. input/output alias isolation and absence of raw evidence in errors/results;
-9. concurrent reads are bounded and do not leak processes or goroutines;
-10. Desktop Host owns composition and shutdown; ProductRuntime owns no OS
-    process adapter;
-11. the GET route requires read authority, is Desktop-only/no-store, rejects
-    other methods, and exposes no mutation route;
-12. the UI renders every typed state from locale keys and has no install/remove
-    action;
-13. `en-US` and `zh-CN` catalogs have identical non-empty key/parameter sets;
-14. structural good/bad fixtures protect the exact read-only allowlist and
-    continue rejecting concrete mutation executors and command tokens;
-15. a current-machine read-only acceptance records tool/OS versions, exact
-    candidate, observed state, and proves that no mutation command ran;
-16. existing M0.9 through M1.0-B ordinary/race and packaged Host behavior do
-    not regress.
-
-Concurrency tests use barriers/channels rather than sleeps. Platform parser
-fixtures are versioned and state exactly what they prove. Current-machine
-evidence is private, bounded, and contains no unrelated trust-store output.
-
-## Explicit non-goals
-
-- install, remove, replace, rotate, revoke, or delete Root state;
-- OS authorization, privileged helper, `sudo`, Keychain Access automation, or
-  reusable administrator authority;
-- mutation Control API/Tauri commands/UI/actions/manual-recovery workflow;
-- live client TLS acceptance based on the observed Root;
-- Windows, Linux, Server Host, system proxy, H2, WebSocket, protocol, provider,
-  plugin, Language Bridge, or SecretStore expansion;
-- ProductRuntime readiness depending on OS trust;
-- design-repository or TLA+ changes.
-
-## Validation and freeze
-
-Before freeze, run the complete repository gates: formatting, generated and
-structural checks, full ordinary/race tests, vet, dependency drift/verification,
-fixed Go vulnerability scan, Desktop TypeScript/tests/build, Rust formatting
-and tests, focused repeated observation/Host/control/UI tests, and
-`git diff --check`.
-
-Because this slice intentionally changes Desktop Host composition and packaged
-UI, produce a clean frozen candidate and a new deterministic packaged Host
-report. Reassess credentialed Agent/provider acceptance from the actual diff:
-rerun it only if proxy, Exchange, runtime assembly, client launch, or packaged
-data-plane behavior changes. Do not reuse an old artifact digest as new
-evidence.
-
-Freeze implementation and evidence as separate commits and leave the worktree
-clean. The evidence must state the actual live observation encountered and the
-fixture-only branches separately. It must explicitly confirm that the system
-trust store was not modified and that the result is not Preview/Release ready.
+It does not prove Profile operations, per-egress audit, blind tunnelling, or
+release readiness.

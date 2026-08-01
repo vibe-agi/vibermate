@@ -85,6 +85,7 @@ type Capability struct {
 	replayClass    exchange.ReplayClass
 	featureFlags   []string
 	allowedQueries []string
+	payloadClass   access.OperationPayloadClass
 	egressBearing  bool
 }
 
@@ -126,6 +127,13 @@ func (capability Capability) ReplayClass() exchange.ReplayClass {
 
 func (capability Capability) FeatureFlags() []string {
 	return slices.Clone(capability.featureFlags)
+}
+
+// PayloadClass reports the frozen catalog answer for what a request of this
+// operation carries. An uncatalogued request reports
+// access.OperationPayloadUnknown.
+func (capability Capability) PayloadClass() access.OperationPayloadClass {
+	return capability.payloadClass
 }
 
 func (capability Capability) EgressBearing() bool {
@@ -191,6 +199,7 @@ func NewCatalog(
 				replayClass:    replayClass,
 				featureFlags:   slices.Clone(featureFlags),
 				allowedQueries: definition.AllowedQueries(),
+				payloadClass:   definition.PayloadClass(),
 				egressBearing:  definition.EgressBearing(),
 			}
 		}
@@ -293,13 +302,16 @@ func (catalog *Catalog) Classify(
 	}
 	if !known {
 		return Capability{
-			kind:          KindOpaque,
-			transport:     access.ClientOperationTransportHTTP,
-			method:        method,
-			path:          requestPath,
-			bodyKind:      BodyOpaque,
-			maxBodyBytes:  providertransport.MaxProviderRequestBytes,
-			replayClass:   exchange.ReplayUnknown,
+			kind:         KindOpaque,
+			transport:    access.ClientOperationTransportHTTP,
+			method:       method,
+			path:         requestPath,
+			bodyKind:     BodyOpaque,
+			maxBodyBytes: providertransport.MaxProviderRequestBytes,
+			replayClass:  exchange.ReplayUnknown,
+			// No catalog entry claims this path, so nothing proves what the
+			// request carries.
+			payloadClass:  access.OperationPayloadUnknown,
 			egressBearing: true,
 		}, nil
 	}

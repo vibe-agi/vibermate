@@ -33,6 +33,7 @@ func TestClientOperationConstructorOwnsAndCanonicalizesCollections(
 			CodecFeature:   "responses",
 			MaxBodyBytes:   16 << 20,
 			AllowedQueries: queries,
+			PayloadClass:   access.OperationPayloadClientSemantic,
 			EgressBearing:  true,
 		},
 	)

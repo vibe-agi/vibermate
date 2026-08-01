@@ -77,8 +77,27 @@ or data-plane dispatch. Every request on an existing CONNECT connection
 revalidates its frozen AgentEndpoint evidence against the current active plan.
 Exact semantic Anthropic Messages and OpenAI Responses HTTP operations enter
 the same Exchange executor; semantic ingress carries no client authentication
-or hop-by-hop headers into IR or provider construction. Auxiliary/opaque
-operations use the separately gated original-origin transport. Responses
+or hop-by-hop headers into IR or provider construction.
+
+The operation catalog freezes an `OperationPayloadClass` beside the operation
+kind, and the two axes are independent. `POST /v1/messages/count_tokens` is an
+auxiliary operation whose body is the complete messages, system text, and tool
+schema, so it is declared `client_semantic`. Admission is decided from that
+frozen class before any body is read: an operation that carries client payload
+and has no typed handling plan is drained within its catalogued limit and
+rejected locally with HTTP 422, in the client dialect's own error envelope,
+carrying `profile_operation_unsupported` in `X-Vibermate-Reason`. It reaches no
+transport, credential, egress lease, or Exchange, and its body never enters a
+retained buffer, log, error, record, or row. The same rule covers an
+uncatalogued body-bearing request, which has no proven class either. Bodyless
+uncatalogued requests such as the fixed Claude Code control-plane GETs keep the
+original-origin path until connection policy replaces that narrow exception
+with an explicit allow/deny/ask decision. The agent-probe and opaque dispatch
+arms are separate, each re-proves its own admission, and a structural
+repository rule prevents them from being merged again. The original-origin
+transport refuses `client_semantic` and `client_data` outright. Profile
+operations, and therefore remote token counting, are not implemented; this is a
+fail-closed correction, not `count_tokens` support. Responses
 WebSocket upgrade is an explicit unsupported typed operation. A bounded 426 is
 available only when the CaptureRun carries the exact verified fixed-client
 feature; generic Codex versions receive the ordinary unsupported-path result.

@@ -16,27 +16,29 @@ import (
 )
 
 type RequestOptions struct {
-	RequestID string
-	Kind      offlinehold.EgressKind
-	Origin    access.ClientOrigin
-	Method    string
-	Path      string
-	RawQuery  string
-	Headers   http.Header
-	Body      []byte
+	RequestID    string
+	Kind         offlinehold.EgressKind
+	Origin       access.ClientOrigin
+	Method       string
+	Path         string
+	RawQuery     string
+	Headers      http.Header
+	Body         []byte
+	PayloadClass access.OperationPayloadClass
 }
 
 // Request freezes an original-origin auxiliary or opaque representation. It
 // cannot replace its ClientOrigin with a provider target or arbitrary URL.
 type Request struct {
-	requestID string
-	kind      offlinehold.EgressKind
-	origin    access.ClientOrigin
-	method    string
-	path      string
-	rawQuery  string
-	headers   http.Header
-	body      []byte
+	requestID    string
+	kind         offlinehold.EgressKind
+	origin       access.ClientOrigin
+	method       string
+	path         string
+	rawQuery     string
+	headers      http.Header
+	body         []byte
+	payloadClass access.OperationPayloadClass
 }
 
 func NewRequest(options RequestOptions) (Request, error) {
@@ -47,6 +49,30 @@ func NewRequest(options RequestOptions) (Request, error) {
 	case offlinehold.EgressAuxiliary, offlinehold.EgressOpaque:
 	default:
 		return Request{}, errors.New("original-origin egress kind is invalid")
+	}
+	// This is the last boundary before the client's own credential leaves the
+	// process, so the invariant is re-proved here instead of trusting the
+	// caller: an original-origin request never carries client payload.
+	//
+	// A catalogued none/control operation is proven to hold no prompt, tool, or
+	// document data, so it may carry its own small control body. An
+	// unclassified operation has no such proof and is admitted only when its
+	// empty body establishes payload-freedom on its own; the connection-policy
+	// Goal replaces that narrow exception with an explicit allow/deny/ask
+	// decision.
+	switch options.PayloadClass {
+	case access.OperationPayloadNone, access.OperationPayloadControl:
+	case access.OperationPayloadUnknown:
+		if len(options.Body) > 0 {
+			return Request{}, errors.New(
+				"unclassified original-origin request cannot carry a body",
+			)
+		}
+	default:
+		return Request{}, fmt.Errorf(
+			"original-origin transport refuses payload class %q",
+			options.PayloadClass,
+		)
 	}
 	if options.Origin.String() == "" ||
 		options.Origin.HTTPAuthority() == "" ||
@@ -63,15 +89,22 @@ func NewRequest(options RequestOptions) (Request, error) {
 		return Request{}, errors.New("original-origin request target is invalid")
 	}
 	return Request{
-		requestID: options.RequestID,
-		kind:      options.Kind,
-		origin:    options.Origin,
-		method:    options.Method,
-		path:      options.Path,
-		rawQuery:  options.RawQuery,
-		headers:   sanitizeHeaders(options.Headers),
-		body:      bytes.Clone(options.Body),
+		requestID:    options.RequestID,
+		kind:         options.Kind,
+		origin:       options.Origin,
+		method:       options.Method,
+		path:         options.Path,
+		rawQuery:     options.RawQuery,
+		headers:      sanitizeHeaders(options.Headers),
+		body:         bytes.Clone(options.Body),
+		payloadClass: options.PayloadClass,
 	}, nil
+}
+
+// PayloadClass reports the frozen proof that this request carries no client
+// payload.
+func (request Request) PayloadClass() access.OperationPayloadClass {
+	return request.payloadClass
 }
 
 func (request Request) RequestID() string {

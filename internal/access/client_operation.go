@@ -50,6 +50,62 @@ const (
 	ClientOperationTransportWebSocket ClientOperationTransport = "websocket"
 )
 
+// OperationPayloadClass is the frozen catalog answer to "what does a request
+// for this operation carry". It is orthogonal to ClientOperationKind and is
+// never inferred from an observed Content-Length or body shape.
+type OperationPayloadClass string
+
+const (
+	// OperationPayloadNone carries no request body at all.
+	OperationPayloadNone OperationPayloadClass = "none"
+	// OperationPayloadControl carries only client control-plane state that the
+	// operation catalog has verified holds no prompt, tool, or document data.
+	OperationPayloadControl OperationPayloadClass = "control"
+	// OperationPayloadClientData carries client documents such as uploads.
+	OperationPayloadClientData OperationPayloadClass = "client_data"
+	// OperationPayloadClientSemantic carries prompts, messages, system text,
+	// or tool schemas.
+	OperationPayloadClientSemantic OperationPayloadClass = "client_semantic"
+	// OperationPayloadUnknown belongs to requests no catalog entry claims. A
+	// catalogued operation may not declare it.
+	OperationPayloadUnknown OperationPayloadClass = "unknown"
+)
+
+// CarriesClientPayload reports whether a request of this class may contain
+// client-owned semantic or document data. An unclassified request is treated
+// as carrying payload because the alternative fails open.
+func (class OperationPayloadClass) CarriesClientPayload() bool {
+	switch class {
+	case OperationPayloadNone, OperationPayloadControl:
+		return false
+	default:
+		return true
+	}
+}
+
+// AllowsOriginalOrigin reports whether a request of this class may be
+// forwarded to the inbound origin with the client's own credentials.
+func (class OperationPayloadClass) AllowsOriginalOrigin() bool {
+	switch class {
+	case OperationPayloadNone, OperationPayloadControl:
+		return true
+	default:
+		return false
+	}
+}
+
+func (class OperationPayloadClass) validCatalogValue() bool {
+	switch class {
+	case OperationPayloadNone,
+		OperationPayloadControl,
+		OperationPayloadClientData,
+		OperationPayloadClientSemantic:
+		return true
+	default:
+		return false
+	}
+}
+
 type ClientReplayClass string
 
 const (
@@ -77,6 +133,7 @@ type ClientOperationOptions struct {
 	CodecFeature   CodecFeature
 	MaxBodyBytes   int64
 	AllowedQueries []string
+	PayloadClass   OperationPayloadClass
 	EgressBearing  bool
 }
 
@@ -97,6 +154,7 @@ type ClientOperationDefinition struct {
 	codecFeature   CodecFeature
 	maxBodyBytes   int64
 	allowedQueries []string
+	payloadClass   OperationPayloadClass
 	egressBearing  bool
 }
 
@@ -117,6 +175,7 @@ func NewClientOperationDefinition(
 		codecFeature:   options.CodecFeature,
 		maxBodyBytes:   options.MaxBodyBytes,
 		allowedQueries: slices.Clone(options.AllowedQueries),
+		payloadClass:   options.PayloadClass,
 		egressBearing:  options.EgressBearing,
 	}
 	sort.Strings(definition.methods)
@@ -177,6 +236,10 @@ func (definition ClientOperationDefinition) MaxBodyBytes() int64 {
 
 func (definition ClientOperationDefinition) AllowedQueries() []string {
 	return slices.Clone(definition.allowedQueries)
+}
+
+func (definition ClientOperationDefinition) PayloadClass() OperationPayloadClass {
+	return definition.payloadClass
 }
 
 func (definition ClientOperationDefinition) EgressBearing() bool {
@@ -262,6 +325,21 @@ func (definition ClientOperationDefinition) Validate() error {
 		}
 	default:
 		return errors.New("client operation body kind is invalid")
+	}
+	if !definition.payloadClass.validCatalogValue() {
+		return errors.New("client operation payload class is invalid")
+	}
+	if definition.bodyKind == ClientOperationBodyNone &&
+		definition.payloadClass.CarriesClientPayload() {
+		return errors.New(
+			"bodyless client operation cannot declare a client payload class",
+		)
+	}
+	if definition.kind == ClientOperationSemantic &&
+		definition.payloadClass != OperationPayloadClientSemantic {
+		return errors.New(
+			"semantic client operation must declare the client_semantic payload class",
+		)
 	}
 	switch definition.replayClass {
 	case ClientReplaySafe,
