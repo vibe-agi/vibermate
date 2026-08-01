@@ -119,51 +119,67 @@ func TestLeafIssuanceRejectsStaleRootAndProductionIP(t *testing.T) {
 		t.Fatalf("stale Root revision admission error = %v", err)
 	}
 
-	compiler := testCompiler(t)
-	ipAggregate := testAggregate(
-		t,
-		newAccessID(t, "access-leaf-ip"),
-		1,
-		"IP endpoint",
-	)
-	ipOrigin, err := access.NewClientOrigin("https://127.0.0.1:443")
-	if err != nil {
-		t.Fatal(err)
-	}
-	ipAggregate.AgentEndpoint.ClientOrigin = ipOrigin
-	ipPlan, err := compiler.Compile(ipAggregate)
-	if err != nil {
-		t.Fatal(err)
-	}
-	ipInvalidator := &recordingLeafCacheInvalidator{}
-	ipProjection, err := access.NewSnapshotProjection(
-		certidentity.InitialRootRevision,
-		ipInvalidator,
-	)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := ipProjection.Restore([]access.AccessPlanSnapshot{ipPlan}); err != nil {
-		t.Fatal(err)
-	}
-	ipSAN, err := certidentity.NewIPAddress("127.0.0.1")
-	if err != nil {
-		t.Fatal(err)
-	}
-	ipIntent, err := access.NewLeafIssuanceIntent(
-		certidentity.InitialRootRevision,
-		ipPlan.IngressBinding(),
-		ipSAN,
-		certidentity.LeafKeyAlgorithmECDSAP256,
-	)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, err := ipProjection.AdmitLeaf(ipIntent); !errors.Is(
-		err,
-		access.ErrLeafSANUnsupported,
-	) {
-		t.Fatalf("IP leaf admission error = %v", err)
+	for name, originValue := range map[string]string{
+		"IPv4": "https://127.0.0.1:443",
+		"IPv6": "https://[2001:db8::1]:443",
+	} {
+		name, originValue := name, originValue
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+
+			ipAggregate := testAggregate(
+				t,
+				newAccessID(t, "access-leaf-"+name),
+				1,
+				"IP endpoint",
+			)
+			ipOrigin, err := access.NewClientOrigin(originValue)
+			if err != nil {
+				t.Fatal(err)
+			}
+			ipAggregate.AgentEndpoint.ClientOrigin = ipOrigin
+			ipPlan, err := testCompiler(t).Compile(ipAggregate)
+			if err != nil {
+				t.Fatal(err)
+			}
+			ipProjection, err := access.NewSnapshotProjection(
+				certidentity.InitialRootRevision,
+				&recordingLeafCacheInvalidator{},
+			)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := ipProjection.Restore(
+				[]access.AccessPlanSnapshot{ipPlan},
+			); err != nil {
+				t.Fatal(err)
+			}
+
+			if _, err := certidentity.NewDNSName(
+				ipOrigin.TLSServerName(),
+			); !errors.Is(err, certidentity.ErrInvalidSAN) {
+				t.Fatalf("IP literal classified as DNS SAN: %v", err)
+			}
+			ipSAN, err := certidentity.NewIPAddress(ipOrigin.TLSServerName())
+			if err != nil {
+				t.Fatal(err)
+			}
+			ipIntent, err := access.NewLeafIssuanceIntent(
+				certidentity.InitialRootRevision,
+				ipPlan.IngressBinding(),
+				ipSAN,
+				certidentity.LeafKeyAlgorithmECDSAP256,
+			)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, err := ipProjection.AdmitLeaf(ipIntent); !errors.Is(
+				err,
+				access.ErrLeafSANUnsupported,
+			) {
+				t.Fatalf("IP leaf admission error = %v", err)
+			}
+		})
 	}
 }
 

@@ -50,7 +50,9 @@ func TestSubjectAlternativeNameCanonicalizesByConstruction(t *testing.T) {
 		"API.example.test",
 		"*.example.test",
 		"api.example.test.",
+		"127.0.0.1",
 		"127.0.0.1:443",
+		"2001:db8::1",
 	} {
 		if _, err := certidentity.NewDNSName(invalid); !errors.Is(
 			err,

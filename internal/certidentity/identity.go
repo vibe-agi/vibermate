@@ -139,6 +139,9 @@ func validDNSName(value string) bool {
 		strings.HasSuffix(value, ".") || strings.Contains(value, "*") {
 		return false
 	}
+	if _, err := netip.ParseAddr(value); err == nil {
+		return false
+	}
 	for _, label := range strings.Split(value, ".") {
 		if len(label) == 0 || len(label) > 63 || label[0] == '-' ||
 			label[len(label)-1] == '-' {
