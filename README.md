@@ -103,8 +103,28 @@ available only when the CaptureRun carries the exact verified fixed-client
 feature; generic Codex versions receive the ordinary unsupported-path result.
 Both decisions happen before body read or data-plane dispatch. Responses management,
 upload, batch, media, Realtime, and foreign semantic operations cannot enter
-model translation. Body-free ConnectionEvents persist connection phase
-evidence.
+model translation. Body-free ConnectionEvents persist connection phase evidence, and they now
+describe one client-side connection only. A persistent MITM connection carrying
+several requests used to overwrite its route host and credential decision with
+whichever Exchange ran last, so it reported only the final destination and an
+opaque request contributed nothing. Every real outbound now records its own
+immutable `EgressAttempt` instead: purpose, the policy authority that purpose
+requires, payload class, a typed parent, the authoritative target, the egress
+decision, pool reuse, byte counts, and a terminal that cannot be rewritten. It
+holds no secret, header, body, or tunnelled byte. Both the provider and
+original-origin transports emit one per outbound; blind tunnelling and
+runtime-originated egress have no writer yet. The authenticated control slice
+serves the two records separately.
+
+Identities are generated independently and associated by typed reference. The
+Exchange, CaptureRun, connection, upstream attempt, and egress identities no
+longer encode containment in a joined string, and a structural rule rejects
+both building and matching an identity that way.
+
+A transport resend after the provider has already answered now requires an
+explicit repeat-billing allowance that defaults to refusing. A 502, 503, or 504
+is still a response, so something upstream handled the request; resending a
+generation_cost_only operation billed the user twice with no way to decline.
 
 The local certificate authority owns one installation-persistent ECDSA P-256
 Root. Certificate DER SHA-256 is its only machine identity; the display
