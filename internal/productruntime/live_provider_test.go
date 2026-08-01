@@ -7,6 +7,7 @@ import (
 	"crypto/tls"
 	"crypto/x509"
 	"encoding/json"
+	"errors"
 	"io"
 	"net"
 	"net/http"
@@ -605,4 +606,183 @@ func readAnthropicStream(
 		t.Fatalf("read the stream: %v", err)
 	}
 	return events, text.String(), usage
+}
+
+// leavingDownstream is a client that goes away partway through a stream. It
+// writes what it received and then refuses the rest, the way a closed socket
+// does.
+type leavingDownstream struct {
+	mode        exchange.ResponseMode
+	writesAllow int
+	writes      int
+	received    bytes.Buffer
+	aborted     bool
+}
+
+func (downstream *leavingDownstream) Begin(
+	_ context.Context,
+	mode exchange.ResponseMode,
+) error {
+	downstream.mode = mode
+	return nil
+}
+
+func (downstream *leavingDownstream) Write(
+	_ context.Context,
+	body []byte,
+) (int, error) {
+	if downstream.writes >= downstream.writesAllow {
+		return 0, errors.New("client went away")
+	}
+	downstream.writes++
+	return downstream.received.Write(body)
+}
+
+func (*leavingDownstream) Keepalive(context.Context) error { return nil }
+
+func (downstream *leavingDownstream) Abort(
+	context.Context,
+	exchange.FailureNotice,
+) error {
+	downstream.aborted = true
+	return nil
+}
+
+// A stream that ends early is where the ledger's two axes are easiest to
+// confuse. Design 02 §10 keeps them apart on purpose: what the upstream was
+// asked for and answered is a billing fact, and what the client actually
+// understood is a different one. Charging for an answer nobody received is
+// wrong; so is pretending an answer was received because it was paid for.
+func TestALiveStreamThatEndsEarlyKeepsTheLedgerAxesApart(t *testing.T) {
+	provider := liveProviderFromEnvironment(t)
+
+	accessID, err := access.NewAccessID("access-live-early-end")
+	if err != nil {
+		t.Fatal(err)
+	}
+	gate, err := offlinehold.New(offlinehold.DefaultConfig())
+	if err != nil {
+		t.Fatal(err)
+	}
+	options := testOptions(t, hostcontract.Desktop(), gate)
+	factory, err := hostsecret.NewDevelopmentFileFactory(
+		filepath.Join(t.TempDir(), "secrets", "store.json"),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	secrets, err := factory.Open(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	options.Secrets = secrets
+	runtime, err := Start(context.Background(), options)
+	if err != nil {
+		t.Fatalf("start ProductRuntime: %v", err)
+	}
+	defer shutdownRuntime(t, runtime)
+
+	aggregate := liveAccessAggregate(t, accessID, provider)
+	if write, err := runtime.AccessWriter().WriteAccess(
+		context.Background(),
+		access.WriteCommand{ExpectedRevision: 0, Aggregate: aggregate},
+	); err != nil || write.Outcome != access.WriteOutcomeCommitted {
+		t.Fatalf("write Access result=%+v err=%v", write, err)
+	}
+	value, err := secretstore.NewValue([]byte(provider.key))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := runtime.Credentials().ReplaceSecret(
+		context.Background(),
+		accesscredential.ReplaceCommand{
+			AccessID:         accessID,
+			ProfileID:        aggregate.Profiles[0].ID,
+			CredentialID:     aggregate.AccountBindings[0].ID,
+			ExpectedRevision: 0,
+			Value:            value,
+		},
+	); err != nil {
+		t.Fatalf("store the provider credential: %v", err)
+	}
+
+	activePlan, err := runtime.SnapshotResolver().ResolveAccess(accessID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	request, err := exchange.NewClientRequest(
+		"exchange-live-early-end",
+		activePlan.IngressBinding(),
+		runtimeAnthropicOperationEvidence(t),
+		[]byte(`{
+			"model":"claude-client-alias",
+			"max_tokens":256,
+			"stream":true,
+			"messages":[{"role":"user","content":"Count slowly from one to twenty."}]
+		}`),
+		exchange.ReplayGenerationCostOnly,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
+	defer cancel()
+	// One write through is enough to have received something and not enough to
+	// have received an answer.
+	downstream := &leavingDownstream{writesAllow: 1}
+	result, execErr := runtime.ExchangeExecutor().Execute(ctx, request, downstream)
+
+	// The upstream axis says the provider was asked and answered. That is
+	// true whatever the client did afterwards, and it is what a bill is
+	// computed from.
+	if result.Ledger.UpstreamSends == 0 {
+		t.Fatalf("the upstream axis lost the send: %+v", result.Ledger)
+	}
+	if result.Ledger.UpstreamResponses == 0 {
+		t.Fatalf("the upstream axis lost the answer: %+v", result.Ledger)
+	}
+	// The downstream axis says the client never received a whole answer.
+	// Reporting a terminal here would tell a person they got something they
+	// did not.
+	if result.Ledger.DownstreamTerminal {
+		t.Fatalf(
+			"a client that went away was recorded as having received the answer: %+v",
+			result.Ledger,
+		)
+	}
+	if downstream.received.Len() == 0 {
+		t.Fatal("the client received nothing at all, so nothing was interrupted")
+	}
+	if execErr == nil {
+		t.Fatal("an interrupted stream reported success")
+	}
+	t.Logf(
+		"ledger=%+v received=%d bytes reason=%q",
+		result.Ledger,
+		downstream.received.Len(),
+		exchange.ReasonOf(execErr),
+	)
+
+	// The outbound still reaches a terminal. An attempt left open would leave
+	// the audit unable to say what happened to bytes that did cross.
+	attempts, err := runtime.EgressAttempts().List(
+		context.Background(),
+		egressaudit.PageRequest{Limit: 20},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	found := false
+	for _, record := range attempts.Items {
+		if record.Attempt.Purpose() != egressaudit.PurposeProviderAttempt {
+			continue
+		}
+		found = true
+		if !record.Attempt.Terminal() {
+			t.Fatalf("an interrupted outbound stayed open: %+v", record)
+		}
+	}
+	if !found {
+		t.Fatal("no provider attempt was recorded")
+	}
 }
