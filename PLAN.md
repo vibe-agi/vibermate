@@ -94,25 +94,43 @@ which `ADR-0015` §10 forbids outright.
 - [ ] Prove a persistent connection carrying several requests keeps one stable
   connection record.
 
-### 3. EgressAttempt
+### 3. EgressAttempt — record and store complete at `dd54774`
 
-- [ ] Promote the design-repository prototype shape into a production package
+- [x] Promote the design-repository prototype shape into a production package
   with constructor validation for purpose, authority, payload class, and typed
   parent.
-- [ ] Persist through `runtimepersistence` with a forward migration.
+- [x] Persist through `runtimepersistence` with a forward migration.
 - [ ] Emit from the provider transport and the original-origin transport.
 - [ ] Prove one attempt per real outbound, pool reuse marked, and no secret,
   header, or body anywhere in the record.
 
-### 4. Source confidence
+### 4. Source confidence — complete at `0292232`
 
-- [ ] Derive from CaptureRun adapter evidence, or delete the unreachable enum
-  value with a recorded reason.
+- [x] Derive from CaptureRun adapter evidence. A run carrying digest-verified
+  compound-release evidence now reports `verified`; the enum value was
+  previously unreachable in production.
 
 ### 5. Read path
 
 - [ ] Expose both records through the authenticated control slice so the two
   decisions can be read separately.
+
+## Live-harm corrections carried in this Goal
+
+The gap audit surfaced five rows that were user harm today rather than missing
+features. Four are fixed here because they sit in this Goal's code, and the
+fifth was in reach:
+
+- payload-bearing operations reaching the original origin with the client's own
+  credentials, fixed in M1.0-C0a;
+- a 502/503/504 resending a generation_cost_only request the provider had
+  already answered, billing the user twice (`46c018d`);
+- unknown token quadrants reported as known zeros, mis-pricing every cache-
+  billing provider (`7ebbb3b`);
+- observed Claude control-plane probes classifying as unknown rather than as
+  proven no-payload operations (`6c6bc54`);
+- a non-CONNECT request refused before the connection journal opened, leaving
+  no evidence of the refusal (`56969fc`).
 
 ## Gates
 
