@@ -30,11 +30,11 @@ Defers: `docs/plans/deferred/2026-08-01-m1.0-c-macos-trust-observation.md`,
 - A stream abandoned by its client is now covered through the proxy: it is
   recorded as canceled, its outbound reaches a terminal, and the runtime still
   drains.
-- Failover is not merely unverified, it is unimplemented. `RouteSet` carries
-  candidates and the pipeline selects one frozen plan with no attempt loop, so
-  there is no second attempt to test. What is pinned is the rule that has to
-  survive the day there is one: once bytes have reached the client the answer
-  is committed and must not be sent again, which design 02 §12 calls
-  `pre_first_byte_idempotent_only`.
+- Failover is unimplemented, and the blocker is not failover. The Access plan
+  compiler is single-profile from the inside, so a second candidate has no
+  compiled target to reach; see
+  `docs/plans/deferred/2026-08-02-failover-needs-a-multi-candidate-plan.md`.
+  The rule it will have to obey is pinned as a test: once bytes have reached
+  the client the answer is committed and must not be sent again.
 - The Responses WebSocket path is refused with a stable reason rather than
   attempted, which is a recorded state rather than a gap in coverage.
