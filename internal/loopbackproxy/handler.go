@@ -208,7 +208,7 @@ func (handler *Handler) ServeHTTP(
 		return
 	}
 	defer handler.finish(active)
-	if request == nil || request.Method != http.MethodConnect {
+	if request == nil {
 		writeReason(writer, http.StatusMethodNotAllowed, ReasonConnectOnly, "")
 		return
 	}
@@ -216,6 +216,11 @@ func (handler *Handler) ServeHTTP(
 	if _, parsedPort, splitErr := splitAuthority(request.Host); splitErr == nil {
 		port = parsedPort
 	}
+	// The journal opens before the method check so a rejection is recorded
+	// rather than invisible. Design 06 section 4.1 requires allowed, denied,
+	// timed-out, and failed attempts alike to leave evidence; an operator
+	// investigating "my client cannot reach anything" must be able to see the
+	// refusal.
 	audit, err := handler.connections.Start(
 		request.Context(),
 		connectionevent.Attempt{
@@ -252,6 +257,27 @@ func (handler *Handler) ServeHTTP(
 		handler.finishConnectionAudit(audit, terminalEvidence)
 	}()
 
+	if request.Method != http.MethodConnect {
+		if handler.denyConnection(
+			request.Context(),
+			audit,
+			connectionevent.Source{
+				Confidence: connectionevent.SourceConfidenceUnknown,
+			},
+			ReasonConnectOnly,
+		) != nil {
+			writeReason(
+				writer,
+				http.StatusServiceUnavailable,
+				ReasonConnectionAuditUnavailable,
+				"",
+			)
+			return
+		}
+		terminal = true
+		writeReason(writer, http.StatusMethodNotAllowed, ReasonConnectOnly, "")
+		return
+	}
 	rawCapability, authErr := consumeProxyAuthorization(request.Header)
 	if authErr != nil {
 		if handler.denyConnection(
