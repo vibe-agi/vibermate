@@ -1,59 +1,55 @@
-# M1.0-C0d Catalogued Dispatch Authority
+# M1.0-C0e Complete Ingress Protocol Surface
 
 Status: active
 Created: 2026-08-02
-Implementation baseline: `d54f35e`
+Implementation baseline: `8f5f81c`
 Branch: `m1/root-leaf-foundation`
-Predecessor: `docs/plans/archive/2026-08-02-m1.0-c0c-blind-tunnel.md`
+Predecessor: `docs/plans/archive/2026-08-02-m1.0-c0d-catalogued-dispatch.md`
 Defers: `docs/plans/deferred/2026-08-01-m1.0-c-macos-trust-observation.md`
 
 ## Objective
 
-The operation catalog is meant to be the only authority for what may be
-dispatched, but two gaps leave that authority incomplete:
+Everything that reaches the listener must be tunnelled, forwarded, or refused
+with an audit record. Two shapes still fall outside that:
 
-1. An AgentEndpoint authority is compared byte-for-byte, so a client that
-   sends a canonically equivalent authority — uppercase host, a trailing dot,
-   an internationalized name — is refused rather than matched. The design
-   requires canonicalization, and refusing a valid equivalent looks to a user
-   like the proxy is broken.
-2. The real Codex control-plane and ChatGPT-login model paths are not
-   catalogued, so they classify as unknown on a MITM-terminated connection.
+1. A cleartext `http://` request is answered 405 without any handling. An Agent
+   that reaches an `http://` host through the exported proxy simply fails.
+2. A WebSocket upgrade on an uncatalogued path inside a MITM connection is
+   silently degraded to an ordinary GET, so the client believes it negotiated
+   a protocol the proxy never spoke.
 
 ## Read-only design authority
 
-- `docs/design/02-architecture.md` §4.1 and §4.2.3;
-- `docs/design/10-client-compatibility.md` §2 and §5.1;
-- `docs/adr/0006-agent-endpoint-mitm-allowlist.md`.
+- `docs/design/02-architecture.md` §5.4 and §10.3;
+- `docs/design/06-security.md` §4.1;
+- `docs/design/07-protocol-translation.md` §6.5.
 
 ## Required invariants
 
-1. An authority is canonicalized before comparison: case-folded host, trailing
-   dot removed, IDN in its ASCII form, default port made explicit.
-   Canonicalization never widens the match — a wildcard, suffix, or regular
-   expression is still refused, and two distinct hosts never canonicalize
-   together.
-2. Canonicalization happens once and the canonical form is what every later
-   stage sees, so CONNECT, SNI, and per-request revalidation compare the same
-   value.
-3. Catalogued Codex operations classify the ChatGPT-login model path as
-   semantic and its control-plane paths as proven no-payload probes.
-4. Nothing in this Goal widens what may be decrypted. The exact-origin
-   issuance authority is unchanged.
+1. A cleartext forward-proxy request is either forwarded to its origin or
+   refused, and either way it leaves a connection record and an
+   `EgressAttempt`. It never enters a model pipeline and never carries a
+   provider credential.
+2. Design 06 is explicit that a proxy necessarily sees a cleartext request
+   line, so the record states honestly that this connection was not encrypted
+   rather than implying blindness it does not have. It still records no body.
+3. An upgrade the proxy cannot serve is refused explicitly. It is never
+   answered as though it were an ordinary request.
+4. Nothing here widens what may be decrypted, and no cleartext path may carry
+   a `SecretRef` or a provider credential.
 
 ## Non-goals
 
-- connection policy, cleartext forwarding, IngressProfile;
-- new provider dialects or codecs;
-- trust-store work.
+- WebSocket message semantics, framing, or plugins;
+- connection policy;
+- HTTP/2.
 
 ## Bottom-up implementation
 
-- [ ] Canonicalize an authority in one place and prove equivalent forms match
-      while distinct hosts still do not.
-- [ ] Prove the canonical form reaches CONNECT, SNI, and revalidation.
-- [ ] Catalogue the observed Codex control-plane and model operations.
-- [ ] Prove no catalogued addition widens issuance.
+- [ ] Classify a cleartext forward-proxy request and give it a typed decision.
+- [ ] Forward or refuse it through the gated egress boundary with both records.
+- [ ] Refuse an unsupported upgrade explicitly instead of degrading it.
+- [ ] Prove no body, credential, or model pipeline is reachable from either.
 
 ## Gates
 
@@ -63,8 +59,7 @@ dispatched, but two gaps leave that authority incomplete:
 
 ## Completion statement
 
-> A canonically equivalent authority matches its AgentEndpoint, the canonical
-> form is what every later stage compares, and the observed Codex operations
-> are catalogued rather than unknown.
+> Every shape that reaches the listener is tunnelled, forwarded, or explicitly
+> refused, and each leaves connection and per-egress evidence.
 
-It does not widen what may be decrypted.
+It does not implement WebSocket semantics, connection policy, or HTTP/2.
