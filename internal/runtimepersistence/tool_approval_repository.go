@@ -23,6 +23,10 @@ const toolApprovalColumns = `
 	plan_hash,
 	tool_call_ids_json,
 	tool_names_json,
+	kind,
+	aggregate_key,
+	request_count,
+	waiter_count,
 	state,
 	decision,
 	decision_scope,
@@ -61,11 +65,11 @@ func (repository *toolApprovalRepository) Create(
 	if err := record.Validate(); err != nil {
 		return err
 	}
-	callIDs, err := json.Marshal(record.ToolCallIDs)
+	callIDs, err := json.Marshal(record.SubjectRefs)
 	if err != nil {
 		return err
 	}
-	names, err := json.Marshal(record.ToolNames)
+	names, err := json.Marshal(record.SubjectLabels)
 	if err != nil {
 		return err
 	}
@@ -85,11 +89,15 @@ func (repository *toolApprovalRepository) Create(
 		     plan_hash,
 		     tool_call_ids_json,
 		     tool_names_json,
+		     kind,
+		     aggregate_key,
+		     request_count,
+		     waiter_count,
 		     state,
 		     created_at_unix_ms,
 		     expires_at_unix_ms
 		 )
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		record.ID,
 		record.Revision,
 		record.ExchangeID,
@@ -98,6 +106,10 @@ func (repository *toolApprovalRepository) Create(
 		record.PlanHash[:],
 		callIDs,
 		names,
+		string(record.Kind),
+		record.AggregateKey,
+		int64(record.RequestCount),
+		int64(record.WaiterCount),
 		string(record.State),
 		toUnixMillis(record.CreatedAt),
 		toUnixMillis(record.ExpiresAt),
@@ -392,6 +404,8 @@ func scanToolApproval(scanner toolApprovalScanner) (toolapproval.Record, error) 
 	var createdAt int64
 	var expiresAt int64
 	var resolvedAt int64
+	var requestCount int64
+	var waiterCount int64
 	if err := scanner.Scan(
 		&record.ID,
 		&record.Revision,
@@ -401,6 +415,10 @@ func scanToolApproval(scanner toolApprovalScanner) (toolapproval.Record, error) 
 		&planHash,
 		&callIDs,
 		&names,
+		&record.Kind,
+		&record.AggregateKey,
+		&requestCount,
+		&waiterCount,
 		&record.State,
 		&record.Decision,
 		&record.DecisionScope,
@@ -422,13 +440,19 @@ func scanToolApproval(scanner toolApprovalScanner) (toolapproval.Record, error) 
 	if len(planHash) != len(record.PlanHash) {
 		return toolapproval.Record{}, toolapproval.ErrInvalidApproval
 	}
+	if requestCount <= 0 || waiterCount <= 0 ||
+		requestCount > int64(^uint32(0)) || waiterCount > int64(^uint32(0)) {
+		return toolapproval.Record{}, toolapproval.ErrInvalidApproval
+	}
+	record.RequestCount = uint32(requestCount)
+	record.WaiterCount = uint32(waiterCount)
 	record.AccessID = typedAccessID
 	record.PlanRevision = access.Revision(planRevision)
 	copy(record.PlanHash[:], planHash)
-	if err := decodeStringArray(callIDs, &record.ToolCallIDs); err != nil {
+	if err := decodeStringArray(callIDs, &record.SubjectRefs); err != nil {
 		return toolapproval.Record{}, err
 	}
-	if err := decodeStringArray(names, &record.ToolNames); err != nil {
+	if err := decodeStringArray(names, &record.SubjectLabels); err != nil {
 		return toolapproval.Record{}, err
 	}
 	record.CreatedAt = fromUnixMillis(createdAt)

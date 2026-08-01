@@ -3,9 +3,12 @@ package toolapproval
 import (
 	"context"
 	"crypto/rand"
+	"crypto/sha256"
 	"encoding/base64"
+	"encoding/binary"
 	"errors"
 	"fmt"
+	"hash"
 	"io"
 	"sync"
 	"time"
@@ -137,17 +140,23 @@ func (authority *Authority) Decide(
 	}
 	now := authority.clock.Now().UTC()
 	record := Record{
-		ID:           identifier,
-		Revision:     1,
-		ExchangeID:   request.ExchangeID(),
-		AccessID:     request.AccessID(),
-		PlanRevision: request.PlanRevision(),
-		PlanHash:     request.PlanHash(),
-		ToolCallIDs:  callIDs,
-		ToolNames:    names,
-		State:        StatePending,
-		CreatedAt:    now,
-		ExpiresAt:    now.Add(authority.config.DecisionTimeout),
+		ID:       identifier,
+		Revision: 1,
+		Kind:     KindToolIntent,
+		// One complete tool group in one Exchange is one question. A later
+		// kind that repeats across events merges on its own stable key.
+		AggregateKey:  toolIntentAggregateKey(request.ExchangeID(), callIDs),
+		SubjectRefs:   callIDs,
+		SubjectLabels: names,
+		RequestCount:  1,
+		WaiterCount:   1,
+		ExchangeID:    request.ExchangeID(),
+		AccessID:      request.AccessID(),
+		PlanRevision:  request.PlanRevision(),
+		PlanHash:      request.PlanHash(),
+		State:         StatePending,
+		CreatedAt:     now,
+		ExpiresAt:     now.Add(authority.config.DecisionTimeout),
 	}
 	if err := record.Validate(); err != nil {
 		return exchange.ToolDecision{}, err
@@ -392,3 +401,23 @@ var (
 	_ exchange.ToolDecisionGate = (*Authority)(nil)
 	_ Controller                = (*Authority)(nil)
 )
+
+// toolIntentAggregateKey identifies one complete tool group inside one
+// Exchange. Two different groups are two questions even when their tool names
+// match, so the call identities take part.
+func toolIntentAggregateKey(exchangeID string, callIDs []string) string {
+	digest := sha256.New()
+	writeAggregateField(digest, string(KindToolIntent))
+	writeAggregateField(digest, exchangeID)
+	for _, callID := range callIDs {
+		writeAggregateField(digest, callID)
+	}
+	return base64.RawURLEncoding.EncodeToString(digest.Sum(nil))
+}
+
+func writeAggregateField(digest hash.Hash, value string) {
+	var size [8]byte
+	binary.BigEndian.PutUint64(size[:], uint64(len(value)))
+	_, _ = digest.Write(size[:])
+	_, _ = digest.Write([]byte(value))
+}

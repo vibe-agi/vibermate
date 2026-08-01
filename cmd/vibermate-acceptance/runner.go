@@ -2340,11 +2340,11 @@ func runToolApproval(
 	if err != nil {
 		return toolApprovalEvidence{}, err
 	}
-	if len(approval.ToolNames) != 1 ||
-		approval.ToolNames[0] != spec.toolName {
+	if len(approval.SubjectLabels) != 1 ||
+		approval.SubjectLabels[0] != spec.toolName {
 		return toolApprovalEvidence{}, fmt.Errorf(
 			"unexpected approval tools: %v",
-			approval.ToolNames,
+			approval.SubjectLabels,
 		)
 	}
 	_, _, toolUsesBeforeDecision, markerBeforeDecision := run.evidence()

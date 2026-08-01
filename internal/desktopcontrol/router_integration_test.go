@@ -709,8 +709,8 @@ func TestDesktopControlApprovalRouteResolvesDurableAuthority(
 		time.Sleep(10 * time.Millisecond)
 	}
 	if pending.State != toolapproval.StatePending ||
-		len(pending.ToolNames) != 1 ||
-		pending.ToolNames[0] != "read_file" {
+		len(pending.SubjectLabels) != 1 ||
+		pending.SubjectLabels[0] != "read_file" {
 		t.Fatalf("pending approval = %+v", pending)
 	}
 

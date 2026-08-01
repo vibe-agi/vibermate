@@ -48,15 +48,15 @@ func TestAuthorityDurablyBlocksAndReleasesCompleteToolGroup(t *testing.T) {
 	}()
 	pending := waitForPending(t, authority)
 	if pending.State != toolapproval.StatePending ||
-		len(pending.ToolCallIDs) != 2 ||
-		len(pending.ToolNames) != 2 ||
+		len(pending.SubjectRefs) != 2 ||
+		len(pending.SubjectLabels) != 2 ||
 		pending.TitleKey == "" ||
 		pending.SummaryKey == "" {
 		t.Fatalf("pending approval = %+v", pending)
 	}
-	if pending.ToolNames[0] != "read_file" ||
-		pending.ToolNames[1] != "list_directory" {
-		t.Fatalf("safe tool names = %v", pending.ToolNames)
+	if pending.SubjectLabels[0] != "read_file" ||
+		pending.SubjectLabels[1] != "list_directory" {
+		t.Fatalf("safe tool names = %v", pending.SubjectLabels)
 	}
 	resolved, err := authority.DecideApproval(
 		context.Background(),
@@ -236,17 +236,21 @@ func pendingRecord(t *testing.T, now time.Time) toolapproval.Record {
 		t.Fatal(err)
 	}
 	return toolapproval.Record{
-		ID:           "approval-recovery",
-		Revision:     1,
-		ExchangeID:   "exchange-recovery",
-		AccessID:     accessID,
-		PlanRevision: 1,
-		PlanHash:     access.PlanHash{0x33},
-		ToolCallIDs:  []string{"call-recovery"},
-		ToolNames:    []string{"read_file"},
-		State:        toolapproval.StatePending,
-		CreatedAt:    now,
-		ExpiresAt:    now.Add(time.Minute),
+		ID:            "approval-recovery",
+		Revision:      1,
+		ExchangeID:    "exchange-recovery",
+		AccessID:      accessID,
+		PlanRevision:  1,
+		PlanHash:      access.PlanHash{0x33},
+		Kind:          toolapproval.KindToolIntent,
+		AggregateKey:  "recovery-key",
+		SubjectRefs:   []string{"call-recovery"},
+		SubjectLabels: []string{"read_file"},
+		RequestCount:  1,
+		WaiterCount:   1,
+		State:         toolapproval.StatePending,
+		CreatedAt:     now,
+		ExpiresAt:     now.Add(time.Minute),
 	}
 }
 
