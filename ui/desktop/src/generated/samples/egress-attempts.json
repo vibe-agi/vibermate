@@ -1,0 +1,55 @@
+[
+  {
+    "sequence": 1,
+    "id": "egress-blind-sample",
+    "connectionId": "connection-blind-sample",
+    "purpose": "blind_tunnel",
+    "payloadClass": "opaque_tunnel",
+    "parent": {
+      "kind": "blind_connection",
+      "id": "connection-blind-sample"
+    },
+    "caller": "core",
+    "targetOrigin": "https://files.example.com:443",
+    "decision": {
+      "policyId": "builtin.direct",
+      "policyRevision": 1,
+      "authority": "network",
+      "ruleId": "builtin.direct.default",
+      "proxyId": "direct"
+    },
+    "reusedTransport": false,
+    "startedAt": "2026-08-02T10:00:00Z",
+    "terminal": true,
+    "outcome": "completed",
+    "bytesOut": 2048,
+    "bytesIn": 16384,
+    "completedAt": "2026-08-02T10:00:03Z"
+  },
+  {
+    "sequence": 2,
+    "id": "egress-provider-sample",
+    "connectionId": "connection-model-sample",
+    "purpose": "provider_attempt",
+    "payloadClass": "client_semantic",
+    "parent": {
+      "kind": "upstream_attempt",
+      "id": "attempt-sample",
+      "exchangeId": "exchange-sample"
+    },
+    "caller": "core",
+    "targetOrigin": "https://api.anthropic.com:443",
+    "decision": {
+      "policyId": "access-work",
+      "policyRevision": 4,
+      "authority": "access",
+      "ruleId": "anthropic-direct",
+      "proxyId": "direct"
+    },
+    "reusedTransport": false,
+    "startedAt": "2026-08-02T10:01:00Z",
+    "terminal": false,
+    "bytesOut": 0,
+    "bytesIn": 0
+  }
+]

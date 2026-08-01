@@ -20,6 +20,8 @@ import { DashboardModel, type DashboardState } from "./dashboard-model.ts";
 import type {
   ActivityRecord,
   ApprovalView,
+  ConnectionRecord,
+  EgressAttemptRecord,
   CredentialView,
   OfflineHoldSnapshot,
   StatusResponse,
@@ -150,6 +152,11 @@ export function Dashboard({ model }: DashboardProps) {
           model={model}
         />
         <ActivityPanel activities={state.activities} />
+      </div>
+
+      <div className="dashboard-grid lower-grid">
+        <ConnectionPanel connections={state.connections} />
+        <EgressPanel attempts={state.egressAttempts} />
       </div>
     </main>
   );
@@ -561,6 +568,127 @@ function subjectLabelKey(approval: ApprovalView): string {
   return approval.target === undefined
     ? "approval.tools.label"
     : "approval.target.label";
+}
+
+/**
+ * What connected where. Design 06 4.1 is what makes this screen possible
+ * without decrypting anything: the record says who connected, where, whether
+ * it was refused, whether it was read or forwarded blind, and how much
+ * crossed. It never says what was sent, and neither does this panel.
+ */
+function ConnectionPanel({
+  connections,
+}: {
+  readonly connections: readonly ConnectionRecord[];
+}) {
+  const { t } = useTranslation();
+  return (
+    <section className="panel list-panel">
+      <h2>{t("connections.title")}</h2>
+      {connections.length === 0 ? (
+        <p className="empty-state">{t("connections.empty")}</p>
+      ) : (
+        <ol className="record-list">
+          {connections.map((connection) => (
+            <li key={connection.connectionId}>
+              <h3>
+                {connection.requestedHost}:{connection.port}
+              </h3>
+              <dl className="inline-details">
+                <div>
+                  <dt>{t("connections.source.label")}</dt>
+                  <dd>
+                    {connection.sourceLabel ?? t("connections.source.unknown")}
+                    {" · "}
+                    {t(`connections.confidence.${connection.sourceConfidence}`)}
+                  </dd>
+                </div>
+                <div>
+                  <dt>{t("connections.decision.label")}</dt>
+                  <dd>
+                    {connection.decision === undefined
+                      ? t("connections.decision.undecided")
+                      : t(`connections.decision.${connection.decision}`)}
+                    {connection.ruleId === undefined
+                      ? ""
+                      : ` · ${connection.ruleId}`}
+                  </dd>
+                </div>
+                <div>
+                  <dt>{t("connections.decryption.label")}</dt>
+                  <dd>{t(`connections.decryption.${connection.decryption}`)}</dd>
+                </div>
+                <div>
+                  <dt>{t("connections.bytes.label")}</dt>
+                  <dd>
+                    {t("connections.bytes.value", {
+                      up: connection.bytesUp,
+                      down: connection.bytesDown,
+                    })}
+                  </dd>
+                </div>
+              </dl>
+            </li>
+          ))}
+        </ol>
+      )}
+    </section>
+  );
+}
+
+/**
+ * Where each request actually went. A connection can carry several requests,
+ * so an attempt is a separate fact: the last one must not overwrite the
+ * first one's destination.
+ */
+function EgressPanel({
+  attempts,
+}: {
+  readonly attempts: readonly EgressAttemptRecord[];
+}) {
+  const { t } = useTranslation();
+  return (
+    <section className="panel list-panel">
+      <h2>{t("egress.title")}</h2>
+      {attempts.length === 0 ? (
+        <p className="empty-state">{t("egress.empty")}</p>
+      ) : (
+        <ol className="record-list">
+          {attempts.map((attempt) => (
+            <li key={attempt.id}>
+              <h3>{attempt.targetOrigin}</h3>
+              <dl className="inline-details">
+                <div>
+                  <dt>{t("egress.purpose.label")}</dt>
+                  <dd>{t(`egress.purpose.${attempt.purpose}`)}</dd>
+                </div>
+                <div>
+                  <dt>{t("egress.outcome.label")}</dt>
+                  <dd>
+                    {attempt.terminal && attempt.outcome !== undefined
+                      ? t(`egress.outcome.${attempt.outcome}`)
+                      : t("egress.outcome.inFlight")}
+                    {attempt.errorClass === undefined
+                      ? ""
+                      : ` · ${attempt.errorClass}`}
+                  </dd>
+                </div>
+                <div>
+                  <dt>{t("egress.bytes.label")}</dt>
+                  <dd>
+                    {t("egress.bytes.value", {
+                      out: attempt.bytesOut,
+                      in: attempt.bytesIn,
+                    })}
+                  </dd>
+                </div>
+              </dl>
+            </li>
+          ))}
+        </ol>
+      )}
+    </section>
+  );
 }
 
 function ActivityPanel({

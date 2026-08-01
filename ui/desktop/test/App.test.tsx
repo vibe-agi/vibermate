@@ -6,11 +6,15 @@ import { ControlProblem } from "../src/control-client.ts";
 import type { ControlClient } from "../src/control-client.ts";
 import { DashboardModel } from "../src/dashboard-model.ts";
 import approvalSamples from "../src/generated/samples/approvals.json" with { type: "json" };
+import connectionSamples from "../src/generated/samples/connections.json" with { type: "json" };
+import egressSamples from "../src/generated/samples/egress-attempts.json" with { type: "json" };
 import type {
   AccessApplyInput,
   ApprovalChoice,
   ApprovalKind,
   ApprovalView,
+  ConnectionRecord,
+  EgressAttemptRecord,
   CredentialView,
   OfflineHoldSnapshot,
   StatusResponse,
@@ -94,6 +98,12 @@ function clientFixture() {
       ],
     })),
     approvals: vi.fn(async (_signal?: AbortSignal) => ({ items: [approval] })),
+    connections: vi.fn(async (_signal?: AbortSignal) => ({
+      items: connectionSamples as readonly ConnectionRecord[],
+    })),
+    egressAttempts: vi.fn(async (_signal?: AbortSignal) => ({
+      items: egressSamples as readonly EgressAttemptRecord[],
+    })),
     decideApproval: vi.fn(
       async (
         _approval: ApprovalView,
@@ -441,5 +451,70 @@ describe("the ApprovalCenter and a connection question", () => {
     expect(
       await screen.findByText("The state changed. Refresh and try again."),
     ).toBeTruthy();
+  });
+});
+
+describe("the audit panels", () => {
+  it("shows what connected where, and whether it was read", async () => {
+    const i18n = await createI18n("en-US");
+    const model = new DashboardModel(clientFixture(), 60_000);
+    render(
+      <I18nextProvider i18n={i18n}>
+        <Dashboard model={model} />
+      </I18nextProvider>,
+    );
+
+    expect(await screen.findByText("files.example.com:443")).toBeTruthy();
+    expect(screen.getByText("Forwarded without reading")).toBeTruthy();
+    expect(screen.getByText("2048 sent · 16384 received")).toBeTruthy();
+  });
+
+  it("distinguishes a refused connection from an allowed one", async () => {
+    const i18n = await createI18n("en-US");
+    const model = new DashboardModel(clientFixture(), 60_000);
+    render(
+      <I18nextProvider i18n={i18n}>
+        <Dashboard model={model} />
+      </I18nextProvider>,
+    );
+
+    expect(await screen.findByText("unknown.example.com:443")).toBeTruthy();
+    expect(screen.getByText("Refused · default.ask")).toBeTruthy();
+    expect(screen.getByText("Allowed · allow.files")).toBeTruthy();
+  });
+
+  it("shows where each request actually went", async () => {
+    const i18n = await createI18n("en-US");
+    const model = new DashboardModel(clientFixture(), 60_000);
+    render(
+      <I18nextProvider i18n={i18n}>
+        <Dashboard model={model} />
+      </I18nextProvider>,
+    );
+
+    expect(
+      await screen.findByText("https://api.anthropic.com:443"),
+    ).toBeTruthy();
+    expect(screen.getByText("Model request")).toBeTruthy();
+    // An attempt that has not finished has no outcome and no final counts to
+    // report, so it says so rather than reporting a zero.
+    expect(screen.getByText("Still going")).toBeTruthy();
+    expect(screen.getByText("Completed")).toBeTruthy();
+  });
+
+  it("renders no request content, because the records carry none", async () => {
+    const i18n = await createI18n("en-US");
+    const model = new DashboardModel(clientFixture(), 60_000);
+    const { container } = render(
+      <I18nextProvider i18n={i18n}>
+        <Dashboard model={model} />
+      </I18nextProvider>,
+    );
+
+    expect(await screen.findByText("files.example.com:443")).toBeTruthy();
+    const rendered = container.textContent ?? "";
+    for (const forbidden of ["/v1/messages", "Authorization", "sk-", "Bearer"]) {
+      expect(rendered.includes(forbidden)).toBe(false);
+    }
   });
 });

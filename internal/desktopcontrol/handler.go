@@ -1108,5 +1108,7 @@ func (handler *Handler) listEgressAttempts(
 		writeProblem(writer, http.StatusUnprocessableEntity, ReasonInvalidRequest)
 		return
 	}
-	writeJSON(writer, http.StatusOK, page)
+	// An attempt is immutable evidence with unexported fields, so it is
+	// rendered through its explicit contract rather than serialized directly.
+	writeJSON(writer, http.StatusOK, egressaudit.PageViewOf(page))
 }

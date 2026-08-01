@@ -236,3 +236,106 @@ export interface CredentialView {
   readonly secretState: "configured" | "missing" | "unavailable";
   readonly secretRevision: number;
 }
+
+export type ConnectionDecision = "allow" | "deny";
+
+export type ConnectionDecryption = "none" | "blind" | "mitm";
+
+export type ConnectionPhase =
+  | "attempted"
+  | "asked"
+  | "decided"
+  | "connected"
+  | "closed"
+  | "failed";
+
+export type ConnectionOutcome =
+  | "completed"
+  | "denied"
+  | "canceled"
+  | "failed";
+
+export type SourceConfidence = "unknown" | "configured" | "verified";
+
+/**
+ * One connection as the runtime recorded it. Design 06 4.1 bounds this: it
+ * says who connected where and how much crossed, never what was said, so
+ * there is no path, header, or body here and none in the record behind it.
+ */
+export interface ConnectionRecord {
+  readonly sequence: number;
+  readonly connectionId: string;
+  readonly ingressId?: string;
+  readonly sourceLabel?: string;
+  readonly sourceConfidence: SourceConfidence;
+  readonly requestedHost: string;
+  readonly observedSni?: string;
+  readonly routeHost?: string;
+  readonly ip?: string;
+  readonly port: number;
+  readonly decision?: ConnectionDecision;
+  readonly ruleId?: string;
+  readonly decryption: ConnectionDecryption;
+  readonly phase: ConnectionPhase;
+  readonly bytesUp: number;
+  readonly bytesDown: number;
+  readonly startedAt: string;
+  readonly endedAt?: string;
+  readonly outcome?: ConnectionOutcome;
+  readonly errorClass?: string;
+}
+
+export interface ConnectionPage {
+  readonly items: readonly ConnectionRecord[];
+  readonly nextCursor?: string;
+}
+
+export type EgressPurpose =
+  | "provider_attempt"
+  | "profile_operation"
+  | "original_origin"
+  | "agent_probe"
+  | "blind_tunnel"
+  | "auxiliary_llm"
+  | "language_transform"
+  | "update";
+
+export type EgressOutcome = "completed" | "failed" | "canceled";
+
+/** Where one request actually went, and how much crossed. */
+export interface EgressAttemptRecord {
+  readonly sequence: number;
+  readonly id: string;
+  readonly connectionId?: string;
+  readonly purpose: EgressPurpose;
+  readonly payloadClass: string;
+  readonly parent: {
+    readonly kind: string;
+    readonly id?: string;
+    readonly exchangeId?: string;
+  };
+  readonly caller: string;
+  readonly callerId?: string;
+  /** An origin: scheme, host, and port. Never a URL. */
+  readonly targetOrigin: string;
+  readonly decision: {
+    readonly policyId?: string;
+    readonly policyRevision?: number;
+    readonly authority: string;
+    readonly ruleId?: string;
+    readonly proxyId?: string;
+  };
+  readonly reusedTransport: boolean;
+  readonly startedAt: string;
+  readonly terminal: boolean;
+  readonly outcome?: EgressOutcome;
+  readonly errorClass?: string;
+  readonly bytesOut: number;
+  readonly bytesIn: number;
+  readonly completedAt?: string;
+}
+
+export interface EgressAttemptPage {
+  readonly items: readonly EgressAttemptRecord[];
+  readonly nextCursor?: string;
+}

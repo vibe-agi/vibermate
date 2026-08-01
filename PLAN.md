@@ -48,12 +48,12 @@ do serialize are invisible.
 
 ## Bottom-up implementation
 
-- [ ] Give the outbound attempt an explicit wire contract, and prove the
+- [x] Give the outbound attempt an explicit wire contract, and prove the
       endpoint carries its fields.
-- [ ] Generate samples for a connection record and an outbound attempt.
-- [ ] Show connections: source, destination, decision, decryption, bytes.
-- [ ] Show outbound attempts: purpose, target, outcome, bytes.
-- [ ] Prove no path, header, or body reaches either view.
+- [x] Generate samples for a connection record and an outbound attempt.
+- [x] Show connections: source, destination, decision, decryption, bytes.
+- [x] Show outbound attempts: purpose, target, outcome, bytes.
+- [x] Prove no path, header, or body reaches either view.
 
 ## Gates
 

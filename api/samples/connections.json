@@ -1,0 +1,40 @@
+[
+  {
+    "sequence": 1,
+    "connectionId": "connection-blind-sample",
+    "ingressId": "run-sample",
+    "sourceLabel": "claude",
+    "sourceConfidence": "verified",
+    "requestedHost": "files.example.com",
+    "routeHost": "files.example.com",
+    "port": 443,
+    "decision": "allow",
+    "ruleId": "allow.files",
+    "decryption": "blind",
+    "phase": "closed",
+    "bytesUp": 2048,
+    "bytesDown": 16384,
+    "startedAt": "2026-08-02T10:00:00Z",
+    "endedAt": "2026-08-02T10:00:03Z",
+    "outcome": "completed"
+  },
+  {
+    "sequence": 2,
+    "connectionId": "connection-refused-sample",
+    "ingressId": "run-sample",
+    "sourceLabel": "claude",
+    "sourceConfidence": "configured",
+    "requestedHost": "unknown.example.com",
+    "port": 443,
+    "decision": "deny",
+    "ruleId": "default.ask",
+    "decryption": "none",
+    "phase": "decided",
+    "bytesUp": 0,
+    "bytesDown": 0,
+    "startedAt": "2026-08-02T10:01:00Z",
+    "endedAt": "2026-08-02T10:01:00Z",
+    "outcome": "denied",
+    "errorClass": "connection_denied"
+  }
+]
