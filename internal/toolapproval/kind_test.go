@@ -16,6 +16,7 @@ func genericRecord(t *testing.T) Record {
 		AggregateKey:  "network:files.example.com:443",
 		SubjectRefs:   []string{"files.example.com:443"},
 		SubjectLabels: []string{"files.example.com"},
+		Target:        Target{Host: "files.example.com", Port: 443},
 		RequestCount:  1,
 		WaiterCount:   1,
 		State:         StatePending,
@@ -42,6 +43,7 @@ func TestToolIntentStillRequiresItsAccessPlanBinding(t *testing.T) {
 
 	record := genericRecord(t)
 	record.Kind = KindToolIntent
+	record.Target = Target{}
 	record.SubjectRefs = []string{"call-1"}
 	record.SubjectLabels = []string{"Bash"}
 	record.ExchangeID = "exchange-1"

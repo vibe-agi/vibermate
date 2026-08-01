@@ -257,12 +257,27 @@ func startWithBuilders(
 	}
 	cleanups.register("ConnectionEvent component", connections.Shutdown)
 
+	// The rules are built before the ApprovalCenter, because a remembered
+	// answer writes one and the answer has to be able to say so.
+	connectionRules, err := connectionpolicy.NewManager(
+		ownerContext,
+		connectionpolicy.ManagerOptions{
+			Repository: storageResult.store.ConnectionRuleRepository(),
+			Clock:      options.Clock,
+			Shipped:    connectionpolicy.ShippedSnapshot(1),
+		},
+	)
+	if err != nil {
+		return fail("connection policy", err)
+	}
+
 	approvals, err := builders.approval.Build(approvalBuildRequest{
 		ctx:        ctx,
 		repository: storageResult.store.ToolApprovalRepository(),
 		clock:      options.Clock,
 		random:     securityRandom,
 		config:     options.Approvals,
+		remembered: connectionRules,
 	})
 	if err != nil || approvals == nil {
 		buildErr := err
@@ -387,21 +402,6 @@ func startWithBuilders(
 	blindTunnels, err := newBlindTunnelDialer(options.OfflineHold)
 	if err != nil {
 		return fail("blind tunnel dialer", err)
-	}
-	// Every proxied connection is decided before any dial. The rules are
-	// stored, so a person's edits survive a restart; a fresh store is seeded
-	// with the shipped set, which is an explicit named placeholder for the ask
-	// path rather than a permissive default.
-	connectionRules, err := connectionpolicy.NewManager(
-		ownerContext,
-		connectionpolicy.ManagerOptions{
-			Repository: storageResult.store.ConnectionRuleRepository(),
-			Clock:      options.Clock,
-			Shipped:    connectionpolicy.ShippedSnapshot(1),
-		},
-	)
-	if err != nil {
-		return fail("connection policy", err)
 	}
 	proxy, err := builders.proxy.Build(proxyBuildRequest{
 		ownerContext: ownerContext,

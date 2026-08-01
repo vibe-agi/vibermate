@@ -48,6 +48,15 @@ type Options struct {
 	Clock      Clock
 	Random     io.Reader
 	Config     Config
+	// Remembered is told that a decision wrote a rule, in the same commit that
+	// resolved the question. The rules in force have to follow that commit, or
+	// the next connection would ask a question that was already answered.
+	Remembered RememberedListener
+}
+
+// RememberedListener hears about answers that were remembered.
+type RememberedListener interface {
+	RulesRemembered(context.Context) error
 }
 
 func DefaultOptions(repository Repository) Options {
@@ -68,6 +77,7 @@ type Authority struct {
 	clock      Clock
 	random     io.Reader
 	config     Config
+	remembered RememberedListener
 	recovery   Recovery
 
 	mu      sync.Mutex
@@ -94,6 +104,7 @@ func New(ctx context.Context, options Options) (*Authority, error) {
 		clock:      options.Clock,
 		random:     options.Random,
 		config:     options.Config,
+		remembered: options.Remembered,
 		recovery:   recovery,
 		waiters:    newWaiterRegistry(),
 		changed:    make(chan struct{}),
@@ -301,6 +312,13 @@ func (authority *Authority) DecideApproval(
 	)
 	if err != nil {
 		return View{}, err
+	}
+	// The rule landed with the decision. Putting it in force is what makes the
+	// answer stick; a waiter released before that could still be re-asked.
+	if remembers(record.DecisionScope) && authority.remembered != nil {
+		if err := authority.remembered.RulesRemembered(operation); err != nil {
+			return View{}, err
+		}
 	}
 	authority.waiters.resolve(record.ID, record.Clone())
 	authority.mu.Lock()

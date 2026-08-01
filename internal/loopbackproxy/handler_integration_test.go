@@ -649,7 +649,7 @@ type proxyFixture struct {
 	connections *connectionevent.Manager
 	egress      egressaudit.Repository
 	approvals   *toolapproval.Authority
-	policy      *connectionpolicy.Live
+	rules       *connectionpolicy.Manager
 }
 
 func newProxyFixture(t *testing.T) *proxyFixture {
@@ -685,7 +685,7 @@ func newGenericResponsesProxyFixture(t *testing.T) *proxyFixture {
 // written to test; production ships a deny default.
 func newProxyFixtureWithPolicy(
 	t *testing.T,
-	policy connectionpolicy.RuleSet,
+	policy connectionpolicy.Snapshot,
 ) *proxyFixture {
 	t.Helper()
 	return newProxyFixtureForDialectWithPolicy(
@@ -696,10 +696,10 @@ func newProxyFixtureWithPolicy(
 	)
 }
 
-func allowEverythingTestPolicy(t *testing.T) connectionpolicy.RuleSet {
+func allowEverythingTestPolicy(t *testing.T) connectionpolicy.Snapshot {
 	t.Helper()
 
-	set, err := connectionpolicy.NewRuleSet(connectionpolicy.RuleSetOptions{
+	set := connectionpolicy.Snapshot{
 		Revision: 1,
 		Rules: []connectionpolicy.Rule{{
 			ID:       "test-allow-all",
@@ -711,9 +711,6 @@ func allowEverythingTestPolicy(t *testing.T) connectionpolicy.RuleSet {
 			Decision: connectionpolicy.DecisionDeny,
 			Match:    connectionpolicy.MatchAny(),
 		},
-	})
-	if err != nil {
-		t.Fatal(err)
 	}
 	return set
 }
@@ -736,7 +733,7 @@ func newProxyFixtureForDialectWithPolicy(
 	t *testing.T,
 	clientDialect access.Dialect,
 	adapter *clientadapter.Evidence,
-	policy connectionpolicy.RuleSet,
+	policy connectionpolicy.Snapshot,
 ) *proxyFixture {
 	t.Helper()
 	directory := t.TempDir()
@@ -799,7 +796,19 @@ func newProxyFixtureForDialectWithPolicy(
 	if err != nil {
 		t.Fatal(err)
 	}
-	livePolicy := connectionpolicy.NewLive(policy)
+	// The proxy reads the same durable rules the product does, so a remembered
+	// answer in a test travels the path it travels in the product.
+	rules, err := connectionpolicy.NewManager(
+		context.Background(),
+		connectionpolicy.ManagerOptions{
+			Repository: store.ConnectionRuleRepository(),
+			Clock:      productruntime.SystemClock{},
+			Shipped:    policy,
+		},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
 	approvals, err := toolapproval.New(
 		context.Background(),
 		toolapproval.Options{
@@ -807,6 +816,7 @@ func newProxyFixtureForDialectWithPolicy(
 			Clock:      productruntime.SystemClock{},
 			Random:     rand.Reader,
 			Config:     toolapproval.DefaultConfig(),
+			Remembered: rules,
 		},
 	)
 	if err != nil {
@@ -821,7 +831,7 @@ func newProxyFixtureForDialectWithPolicy(
 		Original:         original,
 		Certificates:     authority,
 		Connections:      connections,
-		Policy:           livePolicy,
+		Policy:           rules.Source(),
 		Approvals:        approvals,
 		BlindTunnels:     newTestBlindTunnels(t),
 		EgressAudit:      store.EgressAttemptRepository(),
@@ -854,7 +864,7 @@ func newProxyFixtureForDialectWithPolicy(
 		connections: connections,
 		egress:      store.EgressAttemptRepository(),
 		approvals:   approvals,
-		policy:      livePolicy,
+		rules:       rules,
 	}
 }
 

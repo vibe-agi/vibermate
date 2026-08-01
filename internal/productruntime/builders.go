@@ -281,6 +281,7 @@ type approvalBuildRequest struct {
 	clock      toolapproval.Clock
 	random     io.Reader
 	config     toolapproval.Config
+	remembered toolapproval.RememberedListener
 }
 
 type approvalRuntime interface {
@@ -304,6 +305,7 @@ func (productionApprovalBuilder) Build(
 		Clock:      request.clock,
 		Random:     request.random,
 		Config:     request.config,
+		Remembered: request.remembered,
 	})
 }
 

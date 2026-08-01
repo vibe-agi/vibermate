@@ -43,13 +43,25 @@ rather than an interrogation.
 
 ## Bottom-up implementation
 
-- [ ] Add remembered decision scopes, refused for kinds that cannot mean them.
-- [ ] Present remembering as a distinct choice with its own subject.
-- [ ] Write the rule and the terminal decision in one commit.
-- [ ] Put the new rules in force as soon as that commit lands.
-- [ ] Prove: the pair commits or neither does, the width is exactly the
+- [x] Add remembered decision scopes, refused for kinds that cannot mean them.
+- [x] Present remembering as a distinct choice with its own subject.
+- [x] Write the rule and the terminal decision in one commit.
+- [x] Put the new rules in force as soon as that commit lands.
+- [x] Prove: the pair commits or neither does, the width is exactly the
       question, an unremembered answer changes nothing, and the next
       connection is decided without asking again.
+
+## The flip, and why it is still not here
+
+Remembering was the missing half of `ask`. The other half is that a person has
+to see the question in time to answer it. Today that means the control API and
+a capability token: there is no window and no command that shows a waiting
+question. A shipped default of `ask` would hang every first connection for the
+decision timeout in front of anyone who has not written their own client.
+
+So the flip moves to the next slice, which gives it a surface: a person can
+list what is waiting and answer it, and only then does the shipped default
+become the one design 06 asks for.
 
 ## Gates
 

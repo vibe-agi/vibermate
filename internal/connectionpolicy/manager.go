@@ -75,6 +75,31 @@ func (manager *Manager) Current() Snapshot {
 	return manager.current
 }
 
+// Reload re-reads the stored rules and puts them in force. It exists because
+// rules can be written by something other than an edit: a remembered answer
+// writes one in the same commit that resolved the question, and the rules in
+// force have to follow that commit or the next connection would ask again.
+func (manager *Manager) Reload(ctx context.Context) (Snapshot, error) {
+	stored, err := manager.repository.Load(ctx)
+	if err != nil {
+		return Snapshot{}, err
+	}
+	compiled, err := stored.Compile()
+	if err != nil {
+		return Snapshot{}, err
+	}
+	manager.mu.Lock()
+	defer manager.mu.Unlock()
+	// A reload never moves the rules backwards. A concurrent edit that already
+	// landed is not undone by a read that started before it.
+	if stored.Revision < manager.current.Revision {
+		return manager.current, nil
+	}
+	manager.current = stored
+	manager.live.Adopt(compiled)
+	return stored, nil
+}
+
 // Replace stores a whole new set and puts it in force. A set that will not
 // construct, or that was prepared against a revision that has since moved, is
 // refused and leaves the rules in force untouched.
@@ -110,4 +135,13 @@ func (manager *Manager) Replace(
 	manager.current = stored
 	manager.live.Adopt(compiled)
 	return stored, nil
+}
+
+// RulesRemembered puts a rule written by a remembered answer in force. It is
+// the same reload; the separate name is what the approval side calls, so the
+// dependency reads as "an answer changed the rules" rather than as one
+// component reaching into another.
+func (manager *Manager) RulesRemembered(ctx context.Context) error {
+	_, err := manager.Reload(ctx)
+	return err
 }

@@ -45,7 +45,40 @@ const (
 	DecisionDeny      Decision = "deny"
 )
 
-const ScopeRequest = "request"
+// A scope says how far an answer reaches. `request` answers only the question
+// in front of the person; a remembered scope also writes a rule, so the same
+// question is not asked again.
+const (
+	ScopeRequest = "request"
+	// ScopeHostPort remembers an answer for exactly the host and port that
+	// were asked about. It is deliberately no wider: allowing a host on one
+	// port is not a statement about any other port, and a broader rule stays
+	// something a person writes on purpose.
+	ScopeHostPort = "host_port"
+)
+
+// validScope reports whether this kind may be answered at this scope.
+func validScope(kind Kind, scope string) bool {
+	if scope != ScopeRequest && scope != ScopeHostPort {
+		return false
+	}
+	return kind.canRemember(scope)
+}
+
+// remembers reports whether a scope writes a rule.
+func remembers(scope string) bool {
+	return scope == ScopeHostPort
+}
+
+// canRemember reports whether a kind has anything to remember. A tool intent
+// is bound to one Exchange and one plan, so there is no later connection for a
+// remembered answer to decide.
+func (kind Kind) canRemember(scope string) bool {
+	if !remembers(scope) {
+		return true
+	}
+	return kind == KindNetworkAsk
+}
 
 const MaxSubjectLabelBytes = 512
 
@@ -69,8 +102,44 @@ type presentation struct {
 // only. Remembered scopes arrive with the rules that would store them.
 func requestChoices() []Choice {
 	return []Choice{
-		{Decision: DecisionAllowOnce, Scope: ScopeRequest},
-		{Decision: DecisionDeny, Scope: ScopeRequest},
+		{
+			Decision: DecisionAllowOnce,
+			Scope:    ScopeRequest,
+			LabelKey: "approval.toolIntent.choice.allowOnce",
+		},
+		{
+			Decision: DecisionDeny,
+			Scope:    ScopeRequest,
+			LabelKey: "approval.toolIntent.choice.deny",
+		},
+	}
+}
+
+// networkAskChoices adds remembering. The remembered choices carry the same
+// subject as the question, so what the person is agreeing to is the host and
+// port in front of them and nothing wider.
+func networkAskChoices() []Choice {
+	return []Choice{
+		{
+			Decision: DecisionAllowOnce,
+			Scope:    ScopeRequest,
+			LabelKey: "approval.networkAsk.choice.allowOnce",
+		},
+		{
+			Decision: DecisionAllowOnce,
+			Scope:    ScopeHostPort,
+			LabelKey: "approval.networkAsk.choice.allowHostPort",
+		},
+		{
+			Decision: DecisionDeny,
+			Scope:    ScopeRequest,
+			LabelKey: "approval.networkAsk.choice.denyOnce",
+		},
+		{
+			Decision: DecisionDeny,
+			Scope:    ScopeHostPort,
+			LabelKey: "approval.networkAsk.choice.denyHostPort",
+		},
 	}
 }
 
@@ -85,7 +154,7 @@ var presentations = map[Kind]presentation{
 		risk:       "medium",
 		titleKey:   "approval.networkAsk.title",
 		summaryKey: "approval.networkAsk.summary",
-		choices:    requestChoices(),
+		choices:    networkAskChoices(),
 	},
 }
 
@@ -101,6 +170,30 @@ func (kind Kind) requiresAccessPlan() bool {
 	return kind == KindToolIntent
 }
 
+// Target is the connection a network ask is about, in typed fields. A
+// remembered answer builds its rule from these rather than from taking a
+// subject string apart, so nothing has to encode structure into an identifier
+// and then recover it.
+type Target struct {
+	Host string
+	Port uint16
+}
+
+func (target Target) present() bool {
+	return target.Host != "" || target.Port != 0
+}
+
+func (target Target) validate() error {
+	if target.Host == "" ||
+		len(target.Host) > 253 ||
+		strings.ToLower(target.Host) != target.Host ||
+		strings.ContainsAny(target.Host, " \t\r\n") ||
+		target.Port == 0 {
+		return fmt.Errorf("%w: approval target is invalid", ErrInvalidApproval)
+	}
+	return nil
+}
+
 type Record struct {
 	ID       string
 	Revision uint64
@@ -113,6 +206,9 @@ type Record struct {
 	// credential.
 	SubjectRefs   []string
 	SubjectLabels []string
+	// Target is the connection this record is about, when it is about one. A
+	// remembered answer builds its rule from these typed fields.
+	Target Target
 	// RequestCount and WaiterCount describe how much this one entry stands
 	// for.
 	RequestCount   uint32
@@ -181,6 +277,18 @@ func (record Record) Validate() error {
 		len(record.SubjectRefs) != len(record.SubjectLabels) {
 		return ErrInvalidApproval
 	}
+	// A kind that can be remembered must say what it is about, and a kind that
+	// cannot must not carry a connection it would never decide.
+	switch record.Kind {
+	case KindNetworkAsk:
+		if err := record.Target.validate(); err != nil {
+			return err
+		}
+	default:
+		if record.Target.present() {
+			return ErrInvalidApproval
+		}
+	}
 	for index := range record.SubjectRefs {
 		if err := validateIdentity(
 			"approval subject reference",
@@ -211,7 +319,7 @@ func (record Record) Validate() error {
 		}
 	case StateAllowed:
 		if record.Decision != DecisionAllowOnce ||
-			record.DecisionScope != ScopeRequest ||
+			!validScope(record.Kind, record.DecisionScope) ||
 			record.DecisionReason != "" ||
 			record.IdempotencyKey == "" ||
 			record.ResolvedAt.IsZero() {
@@ -219,7 +327,7 @@ func (record Record) Validate() error {
 		}
 	case StateDenied:
 		if record.Decision != DecisionDeny ||
-			record.DecisionScope != ScopeRequest ||
+			!validScope(record.Kind, record.DecisionScope) ||
 			record.DecisionReason == "" ||
 			record.IdempotencyKey == "" ||
 			record.ResolvedAt.IsZero() {
@@ -252,6 +360,11 @@ func (record Record) Clone() Record {
 type Choice struct {
 	Decision Decision `json:"decision"`
 	Scope    string   `json:"scope"`
+	// LabelKey names the sentence a person reads before choosing. A
+	// remembered choice has to say that it is remembered, because the
+	// difference between answering once and writing a rule is the whole
+	// decision.
+	LabelKey string `json:"labelKey"`
 }
 
 type View struct {
@@ -348,7 +461,7 @@ func (command DecisionCommand) Validate() error {
 		command.ExpectedRevision == 0 ||
 		validateIdentity("idempotency key", command.IdempotencyKey, false) != nil ||
 		len(command.IdempotencyKey) < 16 ||
-		command.Scope != ScopeRequest {
+		(command.Scope != ScopeRequest && command.Scope != ScopeHostPort) {
 		return ErrInvalidApproval
 	}
 	switch command.Decision {

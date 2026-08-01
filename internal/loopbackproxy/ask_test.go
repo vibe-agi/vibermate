@@ -11,10 +11,10 @@ import (
 	"github.com/vibe-agi/vibermate/internal/toolapproval"
 )
 
-func askPolicy(t *testing.T) connectionpolicy.RuleSet {
+func askPolicy(t *testing.T) connectionpolicy.Snapshot {
 	t.Helper()
 
-	set, err := connectionpolicy.NewRuleSet(connectionpolicy.RuleSetOptions{
+	set := connectionpolicy.Snapshot{
 		Revision: 1,
 		Rules: []connectionpolicy.Rule{{
 			ID:       "ask-unknown",
@@ -26,9 +26,6 @@ func askPolicy(t *testing.T) connectionpolicy.RuleSet {
 			Decision: connectionpolicy.DecisionDeny,
 			Match:    connectionpolicy.MatchAny(),
 		},
-	})
-	if err != nil {
-		t.Fatal(err)
 	}
 	return set
 }
@@ -244,4 +241,93 @@ func waitForPendingAsk(
 	}
 	t.Fatal("no network ask became pending")
 	return toolapproval.View{}
+}
+
+// Remembering is what makes `ask` a default rather than an interrogation. The
+// answer writes a rule, and the next connection to the same host and port is
+// decided without asking anyone.
+func TestARememberedAnswerDecidesTheNextConnection(t *testing.T) {
+	t.Parallel()
+
+	fixture := newProxyFixtureWithPolicy(t, askPolicy(t))
+	defer fixture.Close(t)
+	authority, stop := echoTarget(t)
+	defer stop()
+
+	var waiting sync.WaitGroup
+	var first int
+	waiting.Add(1)
+	go func() {
+		defer waiting.Done()
+		connection, response := fixture.Connect(
+			t,
+			fixture.grant.ProxyCapability.Value(),
+			authority,
+		)
+		first = response.StatusCode
+		_ = response.Body.Close()
+		_ = connection.Close()
+	}()
+
+	pending := waitForPendingAsk(t, fixture)
+	if _, err := fixture.approvals.DecideApproval(
+		context.Background(),
+		toolapproval.DecisionCommand{
+			ApprovalID:       pending.ID,
+			ExpectedRevision: pending.Revision,
+			Decision:         toolapproval.DecisionAllowOnce,
+			Scope:            toolapproval.ScopeHostPort,
+			IdempotencyKey:   "ask-remember-idempotency-0001",
+		},
+	); err != nil {
+		t.Fatal(err)
+	}
+	waiting.Wait()
+	if first != http.StatusOK {
+		t.Fatalf("remembered allow status = %d", first)
+	}
+
+	// The second connection is decided by the rule, so nothing new is pending.
+	second, response := fixture.Connect(
+		t,
+		fixture.grant.ProxyCapability.Value(),
+		authority,
+	)
+	if response.StatusCode != http.StatusOK {
+		t.Fatalf("second connect status = %d", response.StatusCode)
+	}
+	_ = response.Body.Close()
+	_ = second.Close()
+
+	page, err := fixture.approvals.ListApprovals(
+		context.Background(),
+		toolapproval.PageRequest{Limit: 20},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, view := range page.Items {
+		if view.State == toolapproval.StatePending {
+			t.Fatalf("a remembered answer asked again: %+v", view)
+		}
+	}
+
+	// The rule is exactly as wide as the question. Another port on the same
+	// host is a different connection and is still asked about.
+	remembered := fixture.rules.Current()
+	if len(remembered.Rules) != 2 {
+		t.Fatalf("remembered rule set = %+v", remembered)
+	}
+	found := false
+	for _, rule := range remembered.Rules {
+		if rule.Match.Kind == connectionpolicy.MatchKindExactHostPort {
+			found = true
+			if rule.Decision != connectionpolicy.DecisionAllow {
+				t.Fatalf("remembered decision = %q", rule.Decision)
+			}
+		}
+	}
+	if !found {
+		t.Fatal("no rule was remembered")
+	}
 }

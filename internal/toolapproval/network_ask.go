@@ -91,6 +91,7 @@ func (authority *Authority) AskNetwork(
 		AggregateKey:  aggregateKey,
 		SubjectRefs:   []string{request.authority()},
 		SubjectLabels: []string{request.Host},
+		Target:        Target{Host: request.Host, Port: request.Port},
 		RequestCount:  1,
 		WaiterCount:   1,
 		State:         StatePending,

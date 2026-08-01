@@ -113,10 +113,10 @@ func TestAnAllowedConnectionNamesItsRule(t *testing.T) {
 	t.Fatal("an allowed connection left no allow decision")
 }
 
-func denyEverythingPolicy(t *testing.T) connectionpolicy.RuleSet {
+func denyEverythingPolicy(t *testing.T) connectionpolicy.Snapshot {
 	t.Helper()
 
-	set, err := connectionpolicy.NewRuleSet(connectionpolicy.RuleSetOptions{
+	set := connectionpolicy.Snapshot{
 		Revision: 1,
 		Rules: []connectionpolicy.Rule{{
 			ID:       "deny-all",
@@ -128,17 +128,14 @@ func denyEverythingPolicy(t *testing.T) connectionpolicy.RuleSet {
 			Decision: connectionpolicy.DecisionDeny,
 			Match:    connectionpolicy.MatchAny(),
 		},
-	})
-	if err != nil {
-		t.Fatal(err)
 	}
 	return set
 }
 
-func allowAnthropicPolicy(t *testing.T) connectionpolicy.RuleSet {
+func allowAnthropicPolicy(t *testing.T) connectionpolicy.Snapshot {
 	t.Helper()
 
-	set, err := connectionpolicy.NewRuleSet(connectionpolicy.RuleSetOptions{
+	set := connectionpolicy.Snapshot{
 		Revision: 1,
 		Rules: []connectionpolicy.Rule{{
 			ID:       "allow-anthropic",
@@ -150,9 +147,6 @@ func allowAnthropicPolicy(t *testing.T) connectionpolicy.RuleSet {
 			Decision: connectionpolicy.DecisionDeny,
 			Match:    connectionpolicy.MatchAny(),
 		},
-	})
-	if err != nil {
-		t.Fatal(err)
 	}
 	return set
 }
@@ -164,7 +158,7 @@ func allowAnthropicPolicy(t *testing.T) connectionpolicy.RuleSet {
 func TestARuleChangeReachesTheNextConnectionOnly(t *testing.T) {
 	t.Parallel()
 
-	allowAll, err := connectionpolicy.NewRuleSet(connectionpolicy.RuleSetOptions{
+	allowAll := connectionpolicy.Snapshot{
 		Revision: 1,
 		Rules: []connectionpolicy.Rule{{
 			ID:       "allow.everything-for-now",
@@ -176,9 +170,6 @@ func TestARuleChangeReachesTheNextConnectionOnly(t *testing.T) {
 			Decision: connectionpolicy.DecisionDeny,
 			Match:    connectionpolicy.MatchAny(),
 		},
-	})
-	if err != nil {
-		t.Fatal(err)
 	}
 	fixture := newProxyFixtureWithPolicy(t, allowAll)
 	defer fixture.Close(t)
@@ -198,18 +189,18 @@ func TestARuleChangeReachesTheNextConnectionOnly(t *testing.T) {
 		_ = established.Close()
 	}()
 
-	denyAll, err := connectionpolicy.NewRuleSet(connectionpolicy.RuleSetOptions{
-		Revision: 2,
-		Default: connectionpolicy.Rule{
+	if _, err := fixture.rules.Replace(
+		context.Background(),
+		1,
+		nil,
+		connectionpolicy.Rule{
 			ID:       "default.deny",
 			Decision: connectionpolicy.DecisionDeny,
 			Match:    connectionpolicy.MatchAny(),
 		},
-	})
-	if err != nil {
+	); err != nil {
 		t.Fatal(err)
 	}
-	fixture.policy.Adopt(denyAll)
 
 	// The connection decided under the old rules still carries bytes.
 	if _, err := established.Write([]byte("ping")); err != nil {

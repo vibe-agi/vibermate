@@ -24,6 +24,8 @@ const toolApprovalColumns = `
 	kind,
 	subject_refs_json,
 	subject_labels_json,
+	target_host,
+	target_port,
 	aggregate_key,
 	request_count,
 	waiter_count,
@@ -96,6 +98,8 @@ func (repository *toolApprovalRepository) Create(
 		     kind,
 		     subject_refs_json,
 		     subject_labels_json,
+		     target_host,
+		     target_port,
 		     aggregate_key,
 		     request_count,
 		     waiter_count,
@@ -103,7 +107,7 @@ func (repository *toolApprovalRepository) Create(
 		     created_at_unix_ms,
 		     expires_at_unix_ms
 		 )
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		record.ID,
 		record.Revision,
 		record.ExchangeID,
@@ -113,6 +117,8 @@ func (repository *toolApprovalRepository) Create(
 		string(record.Kind),
 		callIDs,
 		names,
+		record.Target.Host,
+		int64(record.Target.Port),
 		record.AggregateKey,
 		int64(record.RequestCount),
 		int64(record.WaiterCount),
@@ -267,6 +273,18 @@ func (repository *toolApprovalRepository) Decide(
 	if err != nil {
 		return toolapproval.Record{}, err
 	}
+	// INV-APPROVAL-TERMINAL-ATOMIC: a remembered answer and the rule it
+	// creates are one commit. A decision that survived without its rule would
+	// ask again; a rule that survived without its decision would answer a
+	// question nobody was asked.
+	if err := rememberConnectionAnswer(
+		operation,
+		transaction,
+		resolved,
+		now,
+	); err != nil {
+		return toolapproval.Record{}, err
+	}
 	if err := transaction.Commit(); err != nil {
 		return toolapproval.Record{}, fmt.Errorf("commit tool approval decision: %w", err)
 	}
@@ -412,6 +430,7 @@ func scanToolApproval(scanner toolApprovalScanner) (toolapproval.Record, error) 
 	var resolvedAt int64
 	var requestCount int64
 	var waiterCount int64
+	var targetPort int64
 	if err := scanner.Scan(
 		&record.ID,
 		&record.Revision,
@@ -422,6 +441,8 @@ func scanToolApproval(scanner toolApprovalScanner) (toolapproval.Record, error) 
 		&record.Kind,
 		&callIDs,
 		&names,
+		&record.Target.Host,
+		&targetPort,
 		&record.AggregateKey,
 		&requestCount,
 		&waiterCount,
@@ -460,6 +481,7 @@ func scanToolApproval(scanner toolApprovalScanner) (toolapproval.Record, error) 
 	}
 	record.RequestCount = uint32(requestCount)
 	record.WaiterCount = uint32(waiterCount)
+	record.Target.Port = uint16(targetPort)
 	if err := decodeStringArray(callIDs, &record.SubjectRefs); err != nil {
 		return toolapproval.Record{}, err
 	}
