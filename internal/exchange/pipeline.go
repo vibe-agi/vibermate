@@ -380,6 +380,7 @@ func (pipeline *Pipeline) observeAttempt(
 		observation.ProviderStatus = failure.ProviderStatus
 		observation.ProviderField = failure.ProviderField
 		observation.ClientField = failure.ClientField
+		observation.ClientPath = failure.ClientPath
 	}
 	ctx, cancel := context.WithTimeout(
 		context.WithoutCancel(pipeline.ownerContext),

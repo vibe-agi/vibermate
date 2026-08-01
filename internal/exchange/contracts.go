@@ -160,6 +160,10 @@ type Failure struct {
 	ProviderStatus int
 	ProviderField  ProviderField
 	ClientField    ClientField
+	// ClientPath is where in the request's shape the failure happened: field
+	// names and indices, never a value. It is what makes a rejected request
+	// diagnosable without rebuilding the runtime.
+	ClientPath     string
 	ProtocolReason protocolcore.Reason
 	ResponseIssue  ProviderResponseIssue
 	cause          error
@@ -229,9 +233,56 @@ func newFailure(
 		Code:           code,
 		ExchangeID:     exchangeID,
 		ProviderStatus: providerStatus,
+		ClientPath:     structuralPath(cause),
 		ProtocolReason: protocolcore.ReasonOf(cause),
 		cause:          cause,
 	}
+}
+
+// structuralPath extracts the failure's location in the request's shape.
+//
+// It is deliberately strict about what a path may look like. A path is a
+// sequence of field names and indices; anything else is a string that came
+// from somewhere else, and a diagnostic that leaks content is worse than no
+// diagnostic at all.
+func structuralPath(cause error) string {
+	var failure *protocolcore.Failure
+	if !errors.As(cause, &failure) || failure.Path == "" {
+		return ""
+	}
+	if len(failure.Path) > MaxClientPathBytes ||
+		!utf8.ValidString(failure.Path) ||
+		failure.Path[0] != '$' {
+		return ""
+	}
+	for _, character := range failure.Path {
+		switch {
+		case character >= 'a' && character <= 'z',
+			character >= 'A' && character <= 'Z',
+			character >= '0' && character <= '9',
+			character == '$',
+			character == '.',
+			character == '_',
+			character == '-',
+			character == '[',
+			character == ']':
+		default:
+			return ""
+		}
+	}
+	return failure.Path
+}
+
+// MaxClientPathBytes bounds the structural path.
+const MaxClientPathBytes = 256
+
+// ClientPathOf reports where in the request's shape a failure happened.
+func ClientPathOf(err error) string {
+	var failure *Failure
+	if errors.As(err, &failure) {
+		return failure.ClientPath
+	}
+	return ""
 }
 
 func ReasonOf(err error) ReasonCode {
@@ -611,6 +662,7 @@ type AttemptObservation struct {
 	ProviderStatus int
 	ProviderField  ProviderField
 	ClientField    ClientField
+	ClientPath     string
 	Transport      transportprofile.Evidence
 }
 

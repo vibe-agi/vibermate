@@ -63,7 +63,20 @@ export interface ActivityRecord {
   readonly subjectId: string;
   readonly status: string;
   readonly reasonCode?: string;
+  readonly diagnosis?: ActivityDiagnosis;
   readonly transport?: TransportEvidence;
+}
+
+/**
+ * What a failed request can say about itself without saying what it
+ * contained: an HTTP status, a field name, and a path of field names and
+ * indices. No value, credential, or provider text appears here.
+ */
+export interface ActivityDiagnosis {
+  readonly providerStatus?: number;
+  readonly providerField?: string;
+  readonly clientField?: string;
+  readonly clientPath?: string;
 }
 
 export interface TransportProfileEvidence {

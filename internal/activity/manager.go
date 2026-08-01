@@ -87,6 +87,10 @@ func (manager *Manager) Record(
 		Status:     event.Status,
 		ReasonCode: event.ReasonCode,
 	}
+	if !event.Diagnosis.Empty() {
+		diagnosis := event.Diagnosis
+		record.Diagnosis = &diagnosis
+	}
 	if event.Transport != nil {
 		transport := event.Transport.Clone()
 		record.Transport = &transport

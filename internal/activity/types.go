@@ -53,6 +53,7 @@ type Event struct {
 	SubjectID  string
 	Status     Status
 	ReasonCode string
+	Diagnosis  Diagnosis
 	Transport  *TransportEvidence
 }
 
@@ -80,6 +81,9 @@ func (event Event) Validate() error {
 		if err := validateIdentity("reason code", event.ReasonCode, false); err != nil {
 			return err
 		}
+	}
+	if err := event.Diagnosis.validate(); err != nil {
+		return err
 	}
 	if event.Kind == KindAccessApplied && event.AccessID.String() == "" {
 		return fmt.Errorf("%w: Access event has no Access ID", ErrInvalidEvent)
@@ -238,7 +242,65 @@ type Record struct {
 	SubjectID  string             `json:"subjectId"`
 	Status     Status             `json:"status"`
 	ReasonCode string             `json:"reasonCode,omitempty"`
+	Diagnosis  *Diagnosis         `json:"diagnosis,omitempty"`
 	Transport  *TransportEvidence `json:"transport,omitempty"`
+}
+
+// Diagnosis is what a failed request can say about itself without saying what
+// it contained. Design 06 §4.1 bounds it: an HTTP status, a field name from a
+// closed vocabulary, and a path of field names and indices. No value from the
+// request, no credential, and no provider text appears here.
+type Diagnosis struct {
+	ProviderStatus int    `json:"providerStatus,omitempty"`
+	ProviderField  string `json:"providerField,omitempty"`
+	ClientField    string `json:"clientField,omitempty"`
+	// ClientPath names where in the request's shape the failure happened. A
+	// closed vocabulary cannot name a field the translator does not model,
+	// which is exactly the case that was impossible to diagnose.
+	ClientPath string `json:"clientPath,omitempty"`
+}
+
+// Empty reports a diagnosis that says nothing.
+func (diagnosis Diagnosis) Empty() bool {
+	return diagnosis == Diagnosis{}
+}
+
+func (diagnosis Diagnosis) validate() error {
+	if diagnosis.ProviderStatus < 0 || diagnosis.ProviderStatus > 599 {
+		return fmt.Errorf("%w: provider status is invalid", ErrInvalidEvent)
+	}
+	for label, value := range map[string]string{
+		"provider field": diagnosis.ProviderField,
+		"client field":   diagnosis.ClientField,
+	} {
+		if len(value) > 128 || strings.TrimSpace(value) != value {
+			return fmt.Errorf("%w: %s is invalid", ErrInvalidEvent, label)
+		}
+	}
+	if len(diagnosis.ClientPath) > 256 {
+		return fmt.Errorf("%w: client path is too long", ErrInvalidEvent)
+	}
+	// A path is field names and indices. Anything else came from somewhere
+	// else, and a diagnostic that leaks content is worse than none.
+	for _, character := range diagnosis.ClientPath {
+		switch {
+		case character >= 'a' && character <= 'z',
+			character >= 'A' && character <= 'Z',
+			character >= '0' && character <= '9',
+			character == '$',
+			character == '.',
+			character == '_',
+			character == '-',
+			character == '[',
+			character == ']':
+		default:
+			return fmt.Errorf(
+				"%w: client path is not a structural path",
+				ErrInvalidEvent,
+			)
+		}
+	}
+	return nil
 }
 
 func (record Record) Validate() error {

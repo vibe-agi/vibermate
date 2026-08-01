@@ -43,6 +43,12 @@ func (repository *activityRepository) Append(
 	if err != nil {
 		return activity.Record{}, err
 	}
+	// A record with nothing to diagnose stores empty columns rather than a
+	// structure that says nothing.
+	var diagnosis activity.Diagnosis
+	if record.Diagnosis != nil {
+		diagnosis = *record.Diagnosis
+	}
 	result, err := repository.database.ExecContext(
 		operation,
 		`INSERT INTO runtime_activities (
@@ -53,9 +59,13 @@ func (repository *activityRepository) Append(
 		     subject_id,
 		     status,
 		     reason_code,
+		     provider_status,
+		     provider_field,
+		     client_field,
+		     client_path,
 		     transport_evidence_json
 		 )
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		record.ID,
 		toUnixMillis(record.OccurredAt),
 		string(record.Kind),
@@ -63,6 +73,10 @@ func (repository *activityRepository) Append(
 		record.SubjectID,
 		string(record.Status),
 		record.ReasonCode,
+		diagnosis.ProviderStatus,
+		diagnosis.ProviderField,
+		diagnosis.ClientField,
+		diagnosis.ClientPath,
 		transportEvidence,
 	)
 	if err != nil {
@@ -99,6 +113,10 @@ func (repository *activityRepository) List(
 		     subject_id,
 		     status,
 		     reason_code,
+		     provider_status,
+		     provider_field,
+		     client_field,
+		     client_path,
 		     transport_evidence_json
 		 FROM runtime_activities
 		 WHERE (? = 0 OR sequence < ?)
@@ -116,6 +134,7 @@ func (repository *activityRepository) List(
 	for rows.Next() {
 		var record activity.Record
 		var occurredAt int64
+		var diagnosis activity.Diagnosis
 		var transportEvidence []byte
 		if err := rows.Scan(
 			&record.Sequence,
@@ -126,11 +145,18 @@ func (repository *activityRepository) List(
 			&record.SubjectID,
 			&record.Status,
 			&record.ReasonCode,
+			&diagnosis.ProviderStatus,
+			&diagnosis.ProviderField,
+			&diagnosis.ClientField,
+			&diagnosis.ClientPath,
 			&transportEvidence,
 		); err != nil {
 			return activity.Page{}, fmt.Errorf("scan Activity: %w", err)
 		}
 		record.OccurredAt = fromUnixMillis(occurredAt)
+		if stored := diagnosis; !stored.Empty() {
+			record.Diagnosis = &stored
+		}
 		record.Transport, err = decodeTransportEvidence(transportEvidence)
 		if err != nil {
 			return activity.Page{}, fmt.Errorf(

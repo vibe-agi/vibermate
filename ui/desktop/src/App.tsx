@@ -717,6 +717,33 @@ function ActivityPanel({
               <span className={`activity-status ${record.status}`}>
                 {t(`activity.status.${record.status}`)}
               </span>
+              {/*
+                A failure says where it happened in the request's shape. It is
+                the difference between "my client cannot connect" and a
+                question somebody can answer.
+              */}
+              {record.diagnosis === undefined ? null : (
+                <dl className="inline-details activity-diagnosis">
+                  {record.reasonCode === undefined ? null : (
+                    <div>
+                      <dt>{t("activity.reason.label")}</dt>
+                      <dd>{record.reasonCode}</dd>
+                    </div>
+                  )}
+                  {record.diagnosis.clientPath === undefined ? null : (
+                    <div>
+                      <dt>{t("activity.clientPath.label")}</dt>
+                      <dd>{record.diagnosis.clientPath}</dd>
+                    </div>
+                  )}
+                  {record.diagnosis.providerStatus === undefined ? null : (
+                    <div>
+                      <dt>{t("activity.providerStatus.label")}</dt>
+                      <dd>{record.diagnosis.providerStatus}</dd>
+                    </div>
+                  )}
+                </dl>
+              )}
             </li>
           ))}
         </ol>

@@ -43,11 +43,11 @@ A failure has to carry enough structure to be diagnosed and no content at all.
 
 ## Bottom-up implementation
 
-- [ ] Carry the protocol failure path on the Exchange failure.
-- [ ] Give the Activity record typed diagnostic fields instead of one
+- [x] Carry the protocol failure path on the Exchange failure.
+- [x] Give the Activity record typed diagnostic fields instead of one
       concatenated reason.
-- [ ] Show them through the control API and in the window.
-- [ ] Prove no value, credential, or provider text can reach any of them.
+- [x] Show them through the control API and in the window.
+- [x] Prove no value, credential, or provider text can reach any of them.
 
 ## Gates
 

@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"io"
 	"net/http"
-	"strconv"
 	"time"
 
 	"github.com/vibe-agi/vibermate/internal/access"
@@ -401,23 +400,23 @@ func (observer activityAttemptObserver) Observe(
 	default:
 		return errors.New("Exchange observation outcome is invalid")
 	}
-	reasonCode := string(observation.ReasonCode)
-	if observation.ProviderStatus != 0 {
-		reasonCode += "_http_" + strconv.Itoa(observation.ProviderStatus)
-	}
-	if observation.ProviderField != exchange.ProviderFieldUnknown {
-		reasonCode += "_field_" + string(observation.ProviderField)
-	}
-	if observation.ClientField != exchange.ClientFieldUnknown {
-		reasonCode += "_client_field_" + string(observation.ClientField)
-	}
+	// The reason stays one stable code. The evidence beside it travels as its
+	// own typed fields: a reason with facts glued onto its end cannot be
+	// mapped to copy, matched by a rule, or told apart from a reason that
+	// happens to contain the same words.
 	_, err := observer.recorder.Record(ctx, activity.Event{
 		Kind:       activity.KindExchangeCompleted,
 		AccessID:   observation.AccessID,
 		SubjectID:  observation.ExchangeID,
 		Status:     status,
-		ReasonCode: reasonCode,
-		Transport:  activityTransportEvidence(observation.Transport),
+		ReasonCode: string(observation.ReasonCode),
+		Diagnosis: activity.Diagnosis{
+			ProviderStatus: observation.ProviderStatus,
+			ProviderField:  string(observation.ProviderField),
+			ClientField:    string(observation.ClientField),
+			ClientPath:     observation.ClientPath,
+		},
+		Transport: activityTransportEvidence(observation.Transport),
 	})
 	return err
 }

@@ -518,3 +518,48 @@ describe("the audit panels", () => {
     }
   });
 });
+
+describe("a failure a person can act on", () => {
+  const failed = {
+    sequence: 2,
+    id: "activity-failed",
+    occurredAt: "2026-08-02T10:00:00Z",
+    kind: "exchange.completed",
+    accessId: "work",
+    subjectId: "exchange-1",
+    status: "failed",
+    reasonCode: "invalid_exchange_request",
+    diagnosis: {
+      clientPath: "$.messages[1].role",
+    },
+  };
+
+  it("says where in the request it failed", async () => {
+    const i18n = await createI18n("en-US");
+    const client = clientFixture();
+    client.activities.mockResolvedValue({ items: [failed] });
+    const model = new DashboardModel(client, 60_000);
+    render(
+      <I18nextProvider i18n={i18n}>
+        <Dashboard model={model} />
+      </I18nextProvider>,
+    );
+
+    expect(await screen.findByText("$.messages[1].role")).toBeTruthy();
+    expect(screen.getByText("invalid_exchange_request")).toBeTruthy();
+    expect(screen.getByText("Where in the request")).toBeTruthy();
+  });
+
+  it("shows nothing extra when there is nothing to diagnose", async () => {
+    const i18n = await createI18n("en-US");
+    const model = new DashboardModel(clientFixture(), 60_000);
+    render(
+      <I18nextProvider i18n={i18n}>
+        <Dashboard model={model} />
+      </I18nextProvider>,
+    );
+
+    expect(await screen.findByText("Ready")).toBeTruthy();
+    expect(screen.queryByText("Where in the request")).toBeNull();
+  });
+});
