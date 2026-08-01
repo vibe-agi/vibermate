@@ -19,6 +19,8 @@ const ReasonHeader = "X-Vibermate-Reason"
 var reasonMessages = map[ReasonCode]string{
 	ReasonProfileOperationUnsupported: "This API operation is not available " +
 		"through vibermate for the selected upstream plan.",
+	ReasonUnsupportedUpgrade: "vibermate cannot serve this protocol upgrade " +
+		"on this connection.",
 }
 
 func reasonMessage(reason ReasonCode) string {

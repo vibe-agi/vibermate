@@ -67,6 +67,7 @@ const (
 	ReasonConnectionAuditUnavailable    ReasonCode = "connection_audit_unavailable"
 	ReasonProfileOperationUnsupported   ReasonCode = "profile_operation_unsupported"
 	ReasonBlindTunnelFailed             ReasonCode = "blind_tunnel_failed"
+	ReasonUnsupportedUpgrade            ReasonCode = "unsupported_upgrade"
 )
 
 var ErrProxyStopping = errors.New("loopback proxy is stopping")
@@ -659,6 +660,21 @@ func (handler *Handler) serveInner(
 			http.StatusUnprocessableEntity,
 			ReasonPathUnsupported,
 			"",
+		)
+		return
+	}
+	// An upgrade the proxy cannot serve is refused explicitly. Answering it as
+	// an ordinary request would tell a client it negotiated a protocol this
+	// proxy never spoke, which it discovers only once it starts sending
+	// frames.
+	if isWebSocketUpgrade(request) &&
+		capability.Transport() != access.ClientOperationTransportWebSocket {
+		drainBounded(request.Body, capability.MaxBodyBytes())
+		writeDialectReason(
+			writer,
+			binding.ClientDialect(),
+			http.StatusUpgradeRequired,
+			ReasonUnsupportedUpgrade,
 		)
 		return
 	}
