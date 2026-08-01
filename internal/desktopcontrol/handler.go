@@ -20,6 +20,7 @@ import (
 	"github.com/vibe-agi/vibermate/internal/accesscredential"
 	"github.com/vibe-agi/vibermate/internal/activity"
 	"github.com/vibe-agi/vibermate/internal/connectionevent"
+	"github.com/vibe-agi/vibermate/internal/egressaudit"
 	"github.com/vibe-agi/vibermate/internal/offlinehold"
 	"github.com/vibe-agi/vibermate/internal/productruntime"
 	"github.com/vibe-agi/vibermate/internal/secretstore"
@@ -73,6 +74,7 @@ type Options struct {
 	Credentials accesscredential.Controller
 	Activities  activity.Runtime
 	Connections connectionevent.Reader
+	Egress      egressaudit.Reader
 	Approvals   toolapproval.Controller
 	Offline     OfflineActions
 }
@@ -85,6 +87,7 @@ type Handler struct {
 	credentials accesscredential.Controller
 	activities  activity.Runtime
 	connections connectionevent.Reader
+	egress      egressaudit.Reader
 	approvals   toolapproval.Controller
 	offline     OfflineActions
 	idempotent  *idempotencyCache
@@ -136,6 +139,7 @@ func New(options Options) (*Handler, error) {
 		options.Credentials == nil ||
 		options.Activities == nil ||
 		options.Connections == nil ||
+		options.Egress == nil ||
 		options.Approvals == nil ||
 		options.Offline == nil {
 		return nil, errors.New("Desktop control dependencies are incomplete")
@@ -148,6 +152,7 @@ func New(options Options) (*Handler, error) {
 		credentials: options.Credentials,
 		activities:  options.Activities,
 		connections: options.Connections,
+		egress:      options.Egress,
 		approvals:   options.Approvals,
 		offline:     options.Offline,
 		idempotent:  newIdempotencyCache(),
@@ -181,6 +186,10 @@ func New(options Options) (*Handler, error) {
 	)
 	handler.mux.HandleFunc("GET /api/v1/activities", handler.listActivities)
 	handler.mux.HandleFunc("GET /api/v1/connections", handler.listConnections)
+	handler.mux.HandleFunc(
+		"GET /api/v1/egress-attempts",
+		handler.listEgressAttempts,
+	)
 	handler.mux.HandleFunc(
 		"GET /api/v1/connections/{connectionId}",
 		handler.getConnection,
@@ -1054,4 +1063,34 @@ func writeCached(writer http.ResponseWriter, response cachedResponse) {
 	writer.Header().Set("Cache-Control", "no-store")
 	writer.WriteHeader(response.status)
 	_, _ = writer.Write(response.body)
+}
+
+// listEgressAttempts serves the per-request half of the audit. A connection
+// answers who connected where from here; this answers where each request
+// actually went, which a persistent connection cannot express.
+func (handler *Handler) listEgressAttempts(
+	writer http.ResponseWriter,
+	request *http.Request,
+) {
+	limit, err := queryLimit(request, egressaudit.DefaultPageLimit)
+	if err != nil {
+		writeProblem(writer, http.StatusUnprocessableEntity, ReasonInvalidRequest)
+		return
+	}
+	page, err := handler.egress.List(
+		request.Context(),
+		egressaudit.PageRequest{
+			Limit:        limit,
+			AfterCursor:  request.URL.Query().Get("cursor"),
+			ConnectionID: request.URL.Query().Get("connectionId"),
+			ParentKind:   egressaudit.ParentKind(request.URL.Query().Get("parentKind")),
+			ParentID:     request.URL.Query().Get("parentId"),
+			Purpose:      egressaudit.EgressPurpose(request.URL.Query().Get("purpose")),
+		},
+	)
+	if err != nil {
+		writeProblem(writer, http.StatusUnprocessableEntity, ReasonInvalidRequest)
+		return
+	}
+	writeJSON(writer, http.StatusOK, page)
 }

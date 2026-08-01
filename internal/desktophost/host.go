@@ -280,6 +280,7 @@ func Start(ctx context.Context, options Options) (*Host, error) {
 		Credentials: runtime.Credentials(),
 		Activities:  runtime.Activities(),
 		Connections: runtime.ConnectionEvents(),
+		Egress:      runtime.EgressAttempts(),
 		Approvals:   runtime.ToolApprovals(),
 		Offline:     runtime,
 	})

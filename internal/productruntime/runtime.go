@@ -13,6 +13,7 @@ import (
 	"github.com/vibe-agi/vibermate/internal/activity"
 	"github.com/vibe-agi/vibermate/internal/capturerun"
 	"github.com/vibe-agi/vibermate/internal/connectionevent"
+	"github.com/vibe-agi/vibermate/internal/egressaudit"
 	"github.com/vibe-agi/vibermate/internal/exchange"
 	"github.com/vibe-agi/vibermate/internal/localca"
 	"github.com/vibe-agi/vibermate/internal/offlinehold"
@@ -33,6 +34,7 @@ type Runtime struct {
 	credentials  credentialRuntime
 	activities   activityRuntime
 	connections  connectionEventRuntime
+	egress       egressaudit.Reader
 	approvals    approvalRuntime
 	monitor      ownedComponent
 	provider     providerRuntime
@@ -444,6 +446,7 @@ func startWithBuilders(
 		credentials:  credentials,
 		activities:   activities,
 		connections:  connections,
+		egress:       storageResult.store.EgressAttemptRepository(),
 		approvals:    approvals,
 		monitor:      monitor,
 		provider:     provider,
@@ -494,6 +497,12 @@ func (r *Runtime) Activities() activity.Runtime {
 // ConnectionEvents returns the durable body-free connection audit boundary.
 func (r *Runtime) ConnectionEvents() connectionevent.Runtime {
 	return r.connections
+}
+
+// EgressAttempts returns the durable per-egress audit boundary. It answers
+// where each request actually went, which one connection record cannot.
+func (r *Runtime) EgressAttempts() egressaudit.Reader {
+	return r.egress
 }
 
 // ToolApprovals returns the durable interactive tool decision authority used

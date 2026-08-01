@@ -86,13 +86,14 @@ which `ADR-0015` §10 forbids outright.
   construction and delimiter-joined identity matching, scoped so documented
   formats such as `secret://namespace/id` stay legal.
 
-### 2. Narrow ConnectionEvent
+### 2. Narrow ConnectionEvent — complete at `f3874f0`
 
-- [ ] Remove request-level fields from the connected phase; keep client-side
+- [x] Remove request-level fields from the connected phase; keep client-side
   connection facts only.
-- [ ] Migrate the schema and mark pre-migration rows legacy.
-- [ ] Prove a persistent connection carrying several requests keeps one stable
+- [x] Prove a persistent connection carrying several requests keeps one stable
   connection record.
+- [ ] Drop the now-unwritten schema columns. Deferred to the slice that also
+  changes the control API and UI, so one migration covers the readers.
 
 ### 3. EgressAttempt — record and store complete at `dd54774`
 
@@ -100,8 +101,8 @@ which `ADR-0015` §10 forbids outright.
   with constructor validation for purpose, authority, payload class, and typed
   parent.
 - [x] Persist through `runtimepersistence` with a forward migration.
-- [ ] Emit from the provider transport and the original-origin transport.
-- [ ] Prove one attempt per real outbound, pool reuse marked, and no secret,
+- [x] Emit from the provider transport and the original-origin transport.
+- [x] Prove one attempt per real outbound, pool reuse marked, and no secret,
   header, or body anywhere in the record.
 
 ### 4. Source confidence — complete at `0292232`
@@ -110,10 +111,18 @@ which `ADR-0015` §10 forbids outright.
   compound-release evidence now reports `verified`; the enum value was
   previously unreachable in production.
 
-### 5. Read path
+### 5. Read path — complete
 
-- [ ] Expose both records through the authenticated control slice so the two
-  decisions can be read separately.
+- [x] Expose both records through the authenticated control slice so the two
+  decisions can be read separately, filtered by connection, parent, and
+  purpose.
+
+## Known unrelated flake
+
+Under full-suite race load `desktopdaemon` occasionally reports
+`stop control server: close tcp4 ...: use of closed network connection`,
+which is a listener closed twice during shutdown. It passes in isolation and
+predates this Goal; it belongs to a shutdown-ordering fix rather than here.
 
 ## Live-harm corrections carried in this Goal
 

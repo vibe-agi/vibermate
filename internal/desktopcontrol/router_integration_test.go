@@ -19,6 +19,7 @@ import (
 	"github.com/vibe-agi/vibermate/internal/activity"
 	"github.com/vibe-agi/vibermate/internal/connectionevent"
 	"github.com/vibe-agi/vibermate/internal/desktopcontrol"
+	"github.com/vibe-agi/vibermate/internal/egressaudit"
 	"github.com/vibe-agi/vibermate/internal/exchange"
 	"github.com/vibe-agi/vibermate/internal/hostcontract"
 	"github.com/vibe-agi/vibermate/internal/offlinehold"
@@ -58,6 +59,7 @@ func TestDesktopControlAppliesAccessAndControlsOfflineHoldWithScopedAuth(
 		Credentials: runtime.Credentials(),
 		Activities:  runtime.Activities(),
 		Connections: runtime.ConnectionEvents(),
+		Egress:      runtime.EgressAttempts(),
 		Approvals:   runtime.ToolApprovals(),
 		Offline:     runtime,
 	})
@@ -139,6 +141,42 @@ func TestDesktopControlAppliesAccessAndControlsOfflineHoldWithScopedAuth(
 			emptyConnections.Code,
 			emptyConnections.Body.Bytes(),
 		)
+	}
+	// ADR-0015 keeps the two decisions readable separately: the connection
+	// list answers who connected where from here, and the egress list answers
+	// where each request actually went.
+	emptyEgress := doRequest(
+		t,
+		router,
+		authority,
+		http.MethodGet,
+		"/api/v1/egress-attempts?limit=10",
+		readToken,
+		nil,
+	)
+	if emptyEgress.Code != http.StatusOK {
+		t.Fatalf(
+			"empty egress attempts code=%d body=%s",
+			emptyEgress.Code,
+			emptyEgress.Body.Bytes(),
+		)
+	}
+	var emptyEgressPage egressaudit.Page
+	decodeResponse(t, emptyEgress, &emptyEgressPage)
+	if emptyEgressPage.Items == nil || len(emptyEgressPage.Items) != 0 {
+		t.Fatalf("empty egress page = %+v", emptyEgressPage)
+	}
+	unauthenticatedEgress := doRequest(
+		t,
+		router,
+		authority,
+		http.MethodGet,
+		"/api/v1/egress-attempts",
+		"",
+		nil,
+	)
+	if unauthenticatedEgress.Code == http.StatusOK {
+		t.Fatal("the egress list served an unauthenticated request")
 	}
 	var emptyConnectionPage connectionevent.Page
 	decodeResponse(t, emptyConnections, &emptyConnectionPage)
@@ -594,6 +632,7 @@ func TestDesktopControlApprovalRouteResolvesDurableAuthority(
 		Credentials: runtime.Credentials(),
 		Activities:  runtime.Activities(),
 		Connections: runtime.ConnectionEvents(),
+		Egress:      runtime.EgressAttempts(),
 		Approvals:   approvalAuthority,
 		Offline:     runtime,
 	})
@@ -767,6 +806,7 @@ func TestDesktopControlRejectsCapabilityAndTransportBoundaryConfusion(t *testing
 		Credentials: runtime.Credentials(),
 		Activities:  runtime.Activities(),
 		Connections: runtime.ConnectionEvents(),
+		Egress:      runtime.EgressAttempts(),
 		Approvals:   runtime.ToolApprovals(),
 		Offline:     runtime,
 	})
