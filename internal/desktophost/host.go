@@ -675,7 +675,11 @@ func stopHTTPServer(
 	if server == nil {
 		return nil
 	}
-	shutdownErr := server.Shutdown(ctx)
+	// Shutdown closes the server's listeners, and this path already closed
+	// admission first, so an already-closed listener is the intended order
+	// rather than a failure. Normalizing cannot mask a real fault because
+	// these two errors mean exactly "already closed".
+	shutdownErr := normalizeClose(server.Shutdown(ctx))
 	var closeErr error
 	if shutdownErr != nil {
 		closeErr = normalizeClose(server.Close())

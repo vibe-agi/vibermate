@@ -117,12 +117,17 @@ which `ADR-0015` §10 forbids outright.
   decisions can be read separately, filtered by connection, parent, and
   purpose.
 
-## Known unrelated flake
+## Shutdown reporting correction
 
-Under full-suite race load `desktopdaemon` occasionally reports
-`stop control server: close tcp4 ...: use of closed network connection`,
-which is a listener closed twice during shutdown. It passes in isolation and
-predates this Goal; it belongs to a shutdown-ordering fix rather than here.
+Under full-suite race load `desktopdaemon` occasionally reported
+`stop control server: close tcp4 ...: use of closed network connection`.
+Shutdown closes listener admission before stopping the server, so the server's
+own listener close finds it already gone; that is the intended order. The
+error was normalized on the fallback close but not on the Shutdown result, so
+a clean shutdown reported a failure. I could not reproduce it deterministically
+in a unit test, because Go only propagates that error when Serve has not yet
+returned, so the test locks in the clean-shutdown expectation rather than the
+race.
 
 ## Live-harm corrections carried in this Goal
 
