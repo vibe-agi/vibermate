@@ -50,6 +50,7 @@ type Pipeline struct {
 	observeLimit  time.Duration
 	hold          HoldPolicy
 	streamBudgets StreamBudgets
+	attemptIDs    AttemptIDSource
 
 	ownerContext context.Context
 	cancelOwner  context.CancelCauseFunc
@@ -84,6 +85,10 @@ func New(options Options) (*Pipeline, error) {
 	if err := options.Stream.Validate(); err != nil {
 		return nil, err
 	}
+	attemptIDs := options.AttemptIDs
+	if attemptIDs == nil {
+		attemptIDs = NewCryptographicAttemptIDSource()
+	}
 	ownerContext, cancelOwner := context.WithCancelCause(options.OwnerContext)
 	return &Pipeline{
 		resolver:      options.Resolver,
@@ -96,6 +101,7 @@ func New(options Options) (*Pipeline, error) {
 		observeLimit:  options.ObservationTimeout,
 		hold:          options.Hold,
 		streamBudgets: options.Stream,
+		attemptIDs:    attemptIDs,
 		ownerContext:  ownerContext,
 		cancelOwner:   cancelOwner,
 		operations:    make(map[*operation]struct{}),
@@ -260,9 +266,18 @@ func (pipeline *Pipeline) Execute(
 		)
 	}
 	clientHello, _ := request.ClientHelloObservation()
+	attemptID, err := pipeline.attemptIDs.NewAttemptID()
+	if err != nil {
+		return result, newFailure(
+			ReasonProviderRequestInvalid,
+			request.exchangeID,
+			0,
+			err,
+		)
+	}
 	frozenRequest, err := providertransport.NewRequest(
 		providertransport.RequestOptions{
-			RequestID:      request.exchangeID + "/attempt-1",
+			RequestID:      attemptID,
 			TargetRef:      selection.targetRef,
 			Target:         selection.target,
 			AccessRevision: selection.revision,

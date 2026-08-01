@@ -77,7 +77,9 @@ func TestLoopbackProxyAuthenticatesMITMAndDispatchesByPathCapability(
 		requests[0].AccessID() != fixture.accessID ||
 		requests[0].ReplayClass() != exchange.ReplayGenerationCostOnly ||
 		string(requests[0].Body()) != `{"model":"client"}` ||
-		!strings.HasPrefix(requests[0].ExchangeID(), fixture.grant.Run.ID+"/") {
+		requests[0].CaptureRunRef() != fixture.grant.Run.ID ||
+		requests[0].ConnectionRef() == "" ||
+		strings.Contains(requests[0].ExchangeID(), fixture.grant.Run.ID) {
 		t.Fatalf("semantic Exchange requests = %+v", requests)
 	}
 
@@ -122,7 +124,7 @@ func TestLoopbackProxyAuthenticatesMITMAndDispatchesByPathCapability(
 		original.RawQuery() != "page=1" ||
 		original.Headers().Get("Authorization") != "Bearer client-owned" ||
 		original.Headers().Get("Proxy-Authorization") != "" ||
-		!strings.HasPrefix(original.RequestID(), fixture.grant.Run.ID+"/") {
+		strings.Contains(original.RequestID(), fixture.grant.Run.ID) {
 		t.Fatalf("original request = %+v headers=%v", original, original.Headers())
 	}
 	page, err := fixture.connections.List(

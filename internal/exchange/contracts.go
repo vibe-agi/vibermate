@@ -347,17 +347,25 @@ type ClientRequest struct {
 	replayClass    ReplayClass
 	clientHello    transportprofile.Observation
 	hasClientHello bool
+	captureRunRef  string
+	connectionRef  string
+	hasCorrelation bool
 }
 
 type clientRequestOptionKind uint8
 
-const clientRequestOptionClientHello clientRequestOptionKind = 1
+const (
+	clientRequestOptionClientHello clientRequestOptionKind = 1
+	clientRequestOptionCorrelation clientRequestOptionKind = 2
+)
 
 // ClientRequestOption is a closed typed option. Its fields are private so an
 // ingress adapter cannot create an unvalidated option shape.
 type ClientRequestOption struct {
-	kind        clientRequestOptionKind
-	clientHello transportprofile.Observation
+	kind          clientRequestOptionKind
+	clientHello   transportprofile.Observation
+	captureRunRef string
+	connectionRef string
 }
 
 func WithClientHelloObservation(
@@ -366,6 +374,21 @@ func WithClientHelloObservation(
 	return ClientRequestOption{
 		kind:        clientRequestOptionClientHello,
 		clientHello: observation,
+	}
+}
+
+// WithIngressCorrelation associates this Exchange with the CaptureRun and
+// client connection it entered through. ADR-0015 section 10 forbids encoding
+// that containment in an identity string, so every identity is generated
+// independently and the association travels as typed references.
+func WithIngressCorrelation(
+	captureRunRef string,
+	connectionRef string,
+) ClientRequestOption {
+	return ClientRequestOption{
+		kind:          clientRequestOptionCorrelation,
+		captureRunRef: captureRunRef,
+		connectionRef: connectionRef,
 	}
 }
 
@@ -414,6 +437,27 @@ func NewClientRequest(
 			}
 			request.clientHello = option.clientHello
 			request.hasClientHello = true
+		case clientRequestOptionCorrelation:
+			if request.hasCorrelation {
+				return ClientRequest{}, errors.New(
+					"ingress correlation option is duplicated",
+				)
+			}
+			if err := validateIdentity(
+				"CaptureRun reference",
+				option.captureRunRef,
+			); err != nil {
+				return ClientRequest{}, err
+			}
+			if err := validateIdentity(
+				"connection reference",
+				option.connectionRef,
+			); err != nil {
+				return ClientRequest{}, err
+			}
+			request.captureRunRef = option.captureRunRef
+			request.connectionRef = option.connectionRef
+			request.hasCorrelation = true
 		default:
 			return ClientRequest{}, errors.New(
 				"client request option is invalid",
@@ -421,6 +465,18 @@ func NewClientRequest(
 		}
 	}
 	return request, nil
+}
+
+// CaptureRunRef is the CaptureRun this Exchange entered through, or empty for
+// a runtime-originated Exchange that has no client connection.
+func (request ClientRequest) CaptureRunRef() string {
+	return request.captureRunRef
+}
+
+// ConnectionRef is the client connection this Exchange entered through, or
+// empty for a runtime-originated Exchange.
+func (request ClientRequest) ConnectionRef() string {
+	return request.connectionRef
 }
 
 func (request ClientRequest) ExchangeID() string {
@@ -782,6 +838,7 @@ type Options struct {
 	ObservationTimeout time.Duration
 	Hold               HoldPolicy
 	Stream             StreamBudgets
+	AttemptIDs         AttemptIDSource
 }
 
 type AttemptOutcome string

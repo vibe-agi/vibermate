@@ -638,12 +638,12 @@ func (handler *Handler) serveInner(
 		writeReason(writer, http.StatusServiceUnavailable, ReasonProxyStopping, "")
 		return
 	}
-	exchangeID = run.RunID + "/" + exchangeID
 	switch capability.Kind() {
 	case pathcapability.KindSemantic:
 		handler.serveSemantic(
 			writer,
 			request,
+			run,
 			binding,
 			capability,
 			exchangeID,
@@ -695,6 +695,7 @@ func isWebSocketUpgrade(request *http.Request) bool {
 func (handler *Handler) serveSemantic(
 	writer http.ResponseWriter,
 	request *http.Request,
+	run capturerun.Evidence,
 	binding access.IngressBinding,
 	capability pathcapability.Capability,
 	exchangeID string,
@@ -720,6 +721,9 @@ func (handler *Handler) serveSemantic(
 		body,
 		capability.ReplayClass(),
 		exchange.WithClientHelloObservation(observation),
+		// Every identity is generated independently; association travels as
+		// typed references rather than as a delimiter-joined string.
+		exchange.WithIngressCorrelation(run.RunID, audit.ID()),
 	)
 	if err != nil {
 		writeReason(writer, http.StatusBadRequest, ReasonRequestBodyInvalid, "")

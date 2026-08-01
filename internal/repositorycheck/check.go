@@ -54,6 +54,7 @@ func Check(repositoryRoot string) error {
 	violations = append(violations, CheckDesktopFrontendBoundary(repositoryRoot)...)
 	violations = append(violations, CheckSystemTrustBoundary(repositoryRoot)...)
 	violations = append(violations, CheckPayloadDispatchBoundary(repositoryRoot)...)
+	violations = append(violations, CheckIdentityComposition(repositoryRoot)...)
 	violations = append(
 		violations,
 		CheckCatalogPair(
@@ -79,6 +80,200 @@ func Check(repositoryRoot string) error {
 		joined = append(joined, errors.New(violation.String()))
 	}
 	return errors.Join(joined...)
+}
+
+// CheckIdentityComposition rejects building one identity by joining another
+// with a delimiter. ADR-0015 section 10 requires every identity to be generated
+// independently, with association expressed only by typed references, because a
+// joined string silently encodes containment that readers and storage then
+// depend on. The rule fires only when a delimiter literal joins two or more
+// operands that each read as an identity, which is the shape that derives a
+// relationship. Composing one value's own parts into a documented format, such
+// as a `secret://namespace/id` reference or a composite call key, contributes a
+// single identity operand and is therefore unaffected, as is ordinary path and
+// URL building.
+func CheckIdentityComposition(repositoryRoot string) []Violation {
+	const rule = "identity-composition"
+	delimiters := map[string]struct{}{
+		`"/"`: {}, `":"`: {}, `"|"`: {}, `"#"`: {},
+	}
+	var violations []Violation
+	for _, relativeRoot := range []string{"cmd", "internal"} {
+		sourceRoot := filepath.Join(repositoryRoot, relativeRoot)
+		if _, err := os.Stat(sourceRoot); errors.Is(err, os.ErrNotExist) {
+			continue
+		}
+		walkErr := filepath.WalkDir(
+			sourceRoot,
+			func(path string, entry fs.DirEntry, err error) error {
+				if err != nil {
+					return err
+				}
+				if entry.IsDir() {
+					if entry.Name() == "testdata" || entry.Name() == "vendor" {
+						return filepath.SkipDir
+					}
+					return nil
+				}
+				if filepath.Ext(path) != ".go" ||
+					strings.HasSuffix(path, "_test.go") {
+					return nil
+				}
+				fileSet := token.NewFileSet()
+				parsed, parseErr := parser.ParseFile(fileSet, path, nil, 0)
+				if parseErr != nil {
+					return parseErr
+				}
+				ast.Inspect(parsed, func(node ast.Node) bool {
+					if call, isCall := node.(*ast.CallExpr); isCall {
+						if line, found := identityContainmentProbe(
+							fileSet,
+							call,
+							delimiters,
+						); found {
+							violations = append(violations, Violation{
+								Path: relativeDisplayPath(repositoryRoot, path),
+								Line: line,
+								Rule: rule,
+								Message: "a containment relationship is derived " +
+									"by matching one identity against another " +
+									"joined with a delimiter; carry the " +
+									"relationship as a typed reference instead",
+							})
+						}
+						return true
+					}
+					binary, ok := node.(*ast.BinaryExpr)
+					if !ok || binary.Op != token.ADD {
+						return true
+					}
+					operands := flattenAddition(binary)
+					hasDelimiter := false
+					identityOperands := 0
+					for _, operand := range operands {
+						if literal, isLiteral := operand.(*ast.BasicLit); isLiteral {
+							if literal.Kind == token.STRING {
+								if _, found := delimiters[literal.Value]; found {
+									hasDelimiter = true
+								}
+							}
+							continue
+						}
+						if identityOperandName(operand) {
+							identityOperands++
+						}
+					}
+					if !hasDelimiter || identityOperands < 2 {
+						return true
+					}
+					violations = append(violations, Violation{
+						Path: relativeDisplayPath(repositoryRoot, path),
+						Line: fileSet.Position(binary.Pos()).Line,
+						Rule: rule,
+						Message: "an identity is composed by joining another " +
+							"identity with a delimiter; generate identities " +
+							"independently and associate them with typed " +
+							"references",
+					})
+					return true
+				})
+				return nil
+			},
+		)
+		if walkErr != nil {
+			violations = append(violations, Violation{
+				Path:    relativeRoot,
+				Rule:    rule,
+				Message: fmt.Sprintf("identity scan failed: %v", walkErr),
+			})
+		}
+	}
+	return violations
+}
+
+// identityContainmentProbe reports a string-matching call that reconstructs a
+// parent-child relationship from a delimiter-joined identity.
+func identityContainmentProbe(
+	fileSet *token.FileSet,
+	call *ast.CallExpr,
+	delimiters map[string]struct{},
+) (int, bool) {
+	selector, ok := call.Fun.(*ast.SelectorExpr)
+	if !ok {
+		return 0, false
+	}
+	pkg, ok := selector.X.(*ast.Ident)
+	if !ok || pkg.Name != "strings" {
+		return 0, false
+	}
+	switch selector.Sel.Name {
+	case "HasPrefix",
+		"HasSuffix",
+		"Contains",
+		"TrimPrefix",
+		"TrimSuffix",
+		"Index",
+		"Cut",
+		"Split",
+		"SplitN":
+	default:
+		return 0, false
+	}
+	for _, argument := range call.Args {
+		operands := flattenAddition(argument)
+		if len(operands) < 2 {
+			continue
+		}
+		hasDelimiter := false
+		hasIdentity := false
+		for _, operand := range operands {
+			if literal, isLiteral := operand.(*ast.BasicLit); isLiteral {
+				if literal.Kind == token.STRING {
+					if _, found := delimiters[literal.Value]; found {
+						hasDelimiter = true
+					}
+				}
+				continue
+			}
+			if identityOperandName(operand) {
+				hasIdentity = true
+			}
+		}
+		if hasDelimiter && hasIdentity {
+			return fileSet.Position(call.Pos()).Line, true
+		}
+	}
+	return 0, false
+}
+
+func flattenAddition(expression ast.Expr) []ast.Expr {
+	binary, ok := expression.(*ast.BinaryExpr)
+	if !ok || binary.Op != token.ADD {
+		return []ast.Expr{expression}
+	}
+	return append(
+		flattenAddition(binary.X),
+		flattenAddition(binary.Y)...,
+	)
+}
+
+// identityOperandName reports whether an operand reads as an identity value.
+func identityOperandName(expression ast.Expr) bool {
+	name := ""
+	switch typed := expression.(type) {
+	case *ast.Ident:
+		name = typed.Name
+	case *ast.SelectorExpr:
+		name = typed.Sel.Name
+	case *ast.CallExpr:
+		return identityOperandName(typed.Fun)
+	default:
+		return false
+	}
+	lowered := strings.ToLower(name)
+	return strings.HasSuffix(lowered, "id") ||
+		strings.HasSuffix(lowered, "ids") ||
+		strings.HasSuffix(lowered, "identity")
 }
 
 // CheckPayloadDispatchBoundary keeps the auxiliary and opaque ingress dispatch

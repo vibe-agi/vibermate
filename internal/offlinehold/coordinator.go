@@ -203,7 +203,7 @@ func (gate *Gate) Acquire(
 		gate.mu.Unlock()
 		return nil, ErrCoordinatorStopping
 	}
-	if !gate.validActionLocked(request.Action, request.RequestID) {
+	if !gate.validActionLocked(request.Action) {
 		gate.mu.Unlock()
 		return nil, ErrInvalidRequest
 	}
@@ -561,17 +561,14 @@ func (gate *Gate) release(request AcquireRequest) {
 	}
 }
 
-func (gate *Gate) validActionLocked(
-	action *ActionLease,
-	requestID string,
-) bool {
-	if action == nil ||
-		action.gate != gate ||
-		gate.actions[action.actionID] != action {
-		return false
-	}
-	return requestID == action.actionID ||
-		strings.HasPrefix(requestID, action.actionID+"/")
+// validActionLocked proves that this gate still owns the caller's action.
+// Membership is established by the typed ActionLease the caller already holds;
+// ADR-0015 section 10 forbids reconstructing it from an identity string, so the
+// egress request identity is independent of the action identity.
+func (gate *Gate) validActionLocked(action *ActionLease) bool {
+	return action != nil &&
+		action.gate == gate &&
+		gate.actions[action.actionID] == action
 }
 
 func (gate *Gate) releaseAction(action *ActionLease) {

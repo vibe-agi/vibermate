@@ -300,3 +300,21 @@ func TestPayloadDispatchBoundaryUsesPublicCheckWithGoodAndBadFixtures(
 		t.Fatalf("public Check did not locate the merged dispatch arm: %v", err)
 	}
 }
+
+func TestIdentityCompositionUsesPublicCheckWithGoodAndBadFixtures(t *testing.T) {
+	t.Parallel()
+
+	goodRoot := filepath.Join("testdata", "repository-identity-good")
+	if err := Check(goodRoot); err != nil {
+		t.Fatalf("known-good repository fixture failed: %v", err)
+	}
+
+	badRoot := filepath.Join("testdata", "repository-identity-bad")
+	err := Check(badRoot)
+	if !errors.Is(err, ErrCheckFailed) {
+		t.Fatalf("expected ErrCheckFailed, got %v", err)
+	}
+	if !strings.Contains(err.Error(), "identity-composition") {
+		t.Fatalf("public Check did not report identity-composition: %v", err)
+	}
+}
