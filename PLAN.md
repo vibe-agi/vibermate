@@ -1,54 +1,53 @@
-# M1.0-C0j Streaming, End to End
+# M1.0-C0k A Failure You Can Diagnose
 
 Status: active
 Created: 2026-08-02
-Implementation baseline: `b61e1f6`
+Implementation baseline: `7d18e6e`
 Branch: `m1/root-leaf-foundation`
-Predecessor: `docs/plans/archive/2026-08-02-m1.0-c0i-what-went-out-visible.md`
+Predecessor: `docs/plans/archive/2026-08-02-m1.0-c0j-streaming-end-to-end.md`
 Defers: `docs/plans/deferred/2026-08-01-m1.0-c-macos-trust-observation.md`
 
 ## Objective
 
-Two live runs now reach a real model and come back, but both ask for a whole
-answer at once. Every agent client streams. A streamed answer is a different
-path through the whole product: a different response mode, a different set of
-wire events, incremental usage, and a commit ledger that has to stay honest
-about what the client actually received when a stream ends early.
+Both defects that stopped a real client were found by patching the runtime to
+print an error. Nothing a user could see said more than
+`invalid_exchange_request`, and nothing stored afterwards said more either.
+"My client cannot connect" is the report this product will receive most often,
+and today the only way to answer it is to rebuild the runtime.
 
-Running one real streamed request is the fastest way to find what the
-non-streaming runs could not.
+A failure has to carry enough structure to be diagnosed and no content at all.
 
 ## Read-only design authority
 
-- `docs/design/02-architecture.md` §4.3 and §10 on the CommitLedger's two axes;
-- `docs/design/07-protocol-translation.md`;
-- `docs/design/10-client-compatibility.md`.
+- `docs/design/06-security.md` §4.1 on what a record may not contain;
+- `docs/design/07-protocol-translation.md` §2.3 and §3.2;
+- `docs/design/15-local-control-api.md`.
 
 ## Required invariants
 
-1. A client that asked for a stream gets a stream, in its own dialect's event
-   grammar, not a whole answer relabelled.
-2. Usage reaches the client. A streamed answer that drops the token counts
-   makes every downstream cost view wrong.
-3. The two ledger axes stay separate: what the upstream was charged for is not
-   the same fact as what the client understood.
-4. A stream that ends early is recorded as what it was, and its outbound
-   attempt still reaches a terminal.
-5. Nothing in the streamed path carries a credential or a body byte into a
-   record.
+1. A failure names where it happened in the request's structure, and never
+   what was there. A path is field names and indices; a value is content.
+2. The reason stays one stable code. Diagnostic facts travel as their own
+   typed fields rather than being concatenated into it.
+3. A field this dialect does not model is still nameable. A closed enum could
+   not name `defer_loading`, which is exactly why the failure was opaque.
+4. Nothing added here can carry a credential, a body byte, or provider text.
+5. What is stored is what is shown: a person reads the same facts in the
+   window that the record holds.
 
 ## Non-goals
 
-- the Responses WebSocket path;
-- multi-attempt failover mid-stream;
-- the packaged acceptance run with a real agent client.
+- provider-supplied error text, which is not ours to render;
+- a general request inspector;
+- retry or repair suggestions.
 
 ## Bottom-up implementation
 
-- [x] Drive one real streamed request through the proxy as a client would.
-- [x] Prove the event grammar, the usage, and the outbound terminal.
-- [ ] Prove the two ledger axes on a stream that ends early.
-- [ ] Fix what those runs find.
+- [ ] Carry the protocol failure path on the Exchange failure.
+- [ ] Give the Activity record typed diagnostic fields instead of one
+      concatenated reason.
+- [ ] Show them through the control API and in the window.
+- [ ] Prove no value, credential, or provider text can reach any of them.
 
 ## Gates
 
@@ -59,5 +58,5 @@ non-streaming runs could not.
 
 ## Completion statement
 
-> A real client streaming through vibermate receives its own dialect's events,
-> with usage, and the records afterwards say what actually happened.
+> A failed request says which reason, which field, and where in the request's
+> shape, and a person can read all three without rebuilding anything.
