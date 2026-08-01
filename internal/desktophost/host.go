@@ -273,16 +273,17 @@ func Start(ctx context.Context, options Options) (*Host, error) {
 	}
 	ready := &readiness{runtime: runtime}
 	application, err := desktopcontrol.New(desktopcontrol.Options{
-		Readiness:   ready,
-		Status:      runtime,
-		Accesses:    runtime.AccessWriter(),
-		Resolver:    runtime.SnapshotResolver(),
-		Credentials: runtime.Credentials(),
-		Activities:  runtime.Activities(),
-		Connections: runtime.ConnectionEvents(),
-		Egress:      runtime.EgressAttempts(),
-		Approvals:   runtime.ToolApprovals(),
-		Offline:     runtime,
+		Readiness:       ready,
+		Status:          runtime,
+		Accesses:        runtime.AccessWriter(),
+		Resolver:        runtime.SnapshotResolver(),
+		Credentials:     runtime.Credentials(),
+		Activities:      runtime.Activities(),
+		Connections:     runtime.ConnectionEvents(),
+		Egress:          runtime.EgressAttempts(),
+		Approvals:       runtime.ToolApprovals(),
+		Offline:         runtime,
+		ConnectionRules: runtime.ConnectionRules(),
 	})
 	if err != nil {
 		return fail("App control routes", err)

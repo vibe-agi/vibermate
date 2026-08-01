@@ -2,6 +2,7 @@ package loopbackproxy_test
 
 import (
 	"context"
+	"io"
 	"net/http"
 	"testing"
 
@@ -154,4 +155,83 @@ func allowAnthropicPolicy(t *testing.T) connectionpolicy.RuleSet {
 		t.Fatal(err)
 	}
 	return set
+}
+
+// A rule change reaches the next connection without a restart, and leaves a
+// connection that was already decided alone. Revisiting a live tunnel would
+// mean a person's edit could sever a transfer already in flight, which is not
+// what editing a firewall rule means.
+func TestARuleChangeReachesTheNextConnectionOnly(t *testing.T) {
+	t.Parallel()
+
+	allowAll, err := connectionpolicy.NewRuleSet(connectionpolicy.RuleSetOptions{
+		Revision: 1,
+		Rules: []connectionpolicy.Rule{{
+			ID:       "allow.everything-for-now",
+			Decision: connectionpolicy.DecisionAllow,
+			Match:    connectionpolicy.MatchAny(),
+		}},
+		Default: connectionpolicy.Rule{
+			ID:       "default.deny",
+			Decision: connectionpolicy.DecisionDeny,
+			Match:    connectionpolicy.MatchAny(),
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	fixture := newProxyFixtureWithPolicy(t, allowAll)
+	defer fixture.Close(t)
+	authority, stop := echoTarget(t)
+	defer stop()
+
+	established, response := fixture.Connect(
+		t,
+		fixture.grant.ProxyCapability.Value(),
+		authority,
+	)
+	if response.StatusCode != http.StatusOK {
+		t.Fatalf("first connect status = %d", response.StatusCode)
+	}
+	_ = response.Body.Close()
+	defer func() {
+		_ = established.Close()
+	}()
+
+	denyAll, err := connectionpolicy.NewRuleSet(connectionpolicy.RuleSetOptions{
+		Revision: 2,
+		Default: connectionpolicy.Rule{
+			ID:       "default.deny",
+			Decision: connectionpolicy.DecisionDeny,
+			Match:    connectionpolicy.MatchAny(),
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	fixture.policy.Adopt(denyAll)
+
+	// The connection decided under the old rules still carries bytes.
+	if _, err := established.Write([]byte("ping")); err != nil {
+		t.Fatalf("write to an established tunnel: %v", err)
+	}
+	echoed := make([]byte, len("echo:ping"))
+	if _, err := io.ReadFull(established, echoed); err != nil {
+		t.Fatalf("read from an established tunnel: %v", err)
+	}
+	if string(echoed) != "echo:ping" {
+		t.Fatalf("established tunnel echoed %q", echoed)
+	}
+
+	// The next one is decided under the new rules.
+	next, refused := fixture.Connect(
+		t,
+		fixture.grant.ProxyCapability.Value(),
+		authority,
+	)
+	if refused.StatusCode != http.StatusForbidden {
+		t.Fatalf("second connect status = %d", refused.StatusCode)
+	}
+	_ = refused.Body.Close()
+	_ = next.Close()
 }

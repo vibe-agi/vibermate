@@ -591,7 +591,7 @@ type proxyBuildRequest struct {
 	original     loopbackproxy.OriginalClient
 	certificates loopbackproxy.CertificateAuthority
 	connections  connectionevent.Runtime
-	policy       connectionpolicy.RuleSet
+	policy       connectionpolicy.Source
 	approvals    loopbackproxy.NetworkApprovals
 	blindTunnels loopbackproxy.BlindTunnelDialer
 	egressAudit  egressaudit.Writer

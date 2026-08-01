@@ -77,6 +77,9 @@ type Options struct {
 	Egress      egressaudit.Reader
 	Approvals   toolapproval.Controller
 	Offline     OfflineActions
+	// ConnectionRules is the outbound firewall a person edits. A runtime
+	// built without one keeps evaluating the rules it started with.
+	ConnectionRules ConnectionRuleController
 }
 
 type Handler struct {
@@ -90,8 +93,11 @@ type Handler struct {
 	egress      egressaudit.Reader
 	approvals   toolapproval.Controller
 	offline     OfflineActions
-	idempotent  *idempotencyCache
-	mux         *http.ServeMux
+
+	connectionRules ConnectionRuleController
+
+	idempotent *idempotencyCache
+	mux        *http.ServeMux
 }
 
 type StatusResponse struct {
@@ -145,18 +151,19 @@ func New(options Options) (*Handler, error) {
 		return nil, errors.New("Desktop control dependencies are incomplete")
 	}
 	handler := &Handler{
-		readiness:   options.Readiness,
-		status:      options.Status,
-		accesses:    options.Accesses,
-		resolver:    options.Resolver,
-		credentials: options.Credentials,
-		activities:  options.Activities,
-		connections: options.Connections,
-		egress:      options.Egress,
-		approvals:   options.Approvals,
-		offline:     options.Offline,
-		idempotent:  newIdempotencyCache(),
-		mux:         http.NewServeMux(),
+		readiness:       options.Readiness,
+		status:          options.Status,
+		accesses:        options.Accesses,
+		resolver:        options.Resolver,
+		credentials:     options.Credentials,
+		activities:      options.Activities,
+		connections:     options.Connections,
+		egress:          options.Egress,
+		approvals:       options.Approvals,
+		offline:         options.Offline,
+		connectionRules: options.ConnectionRules,
+		idempotent:      newIdempotencyCache(),
+		mux:             http.NewServeMux(),
 	}
 	handler.mux.HandleFunc("GET /api/v1/status", handler.getStatus)
 	handler.mux.HandleFunc("GET /api/v1/offline-hold", handler.getOfflineHold)
@@ -194,6 +201,15 @@ func New(options Options) (*Handler, error) {
 		"GET /api/v1/connections/{connectionId}",
 		handler.getConnection,
 	)
+	handler.mux.HandleFunc(
+		"GET /api/v1/policies/connections",
+		handler.getConnectionRules,
+	)
+	handler.mux.HandleFunc(
+		"PATCH /api/v1/policies/connections",
+		handler.replaceConnectionRules,
+	)
+	handler.mux.HandleFunc("/api/v1/policies/connections", handler.invalidRoute)
 	handler.mux.HandleFunc("GET /api/v1/approvals", handler.listApprovals)
 	handler.mux.HandleFunc(
 		"GET /api/v1/approvals/{approvalId}",

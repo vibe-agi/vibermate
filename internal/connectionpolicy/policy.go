@@ -7,6 +7,7 @@ package connectionpolicy
 import (
 	"errors"
 	"fmt"
+	"sort"
 	"strings"
 )
 
@@ -96,7 +97,13 @@ func (match Match) matches(request Request) bool {
 }
 
 type Rule struct {
-	ID       string
+	ID string
+	// Priority is precedence, declared rather than positional. A stored rule
+	// set has no order a person can see, so the order it is evaluated in must
+	// be a property of the rules themselves. Higher wins; equal precedence
+	// resolves by identifier, so the same rules always answer the same way
+	// however storage returned them.
+	Priority uint32
 	Decision Decision
 	Match    Match
 }
@@ -133,8 +140,8 @@ type RuleSetOptions struct {
 	Default Rule
 }
 
-// RuleSet is immutable and ordered. The first matching rule wins, which makes
-// evaluation deterministic and explainable.
+// RuleSet is immutable and ordered by precedence. The first matching rule
+// wins, which makes evaluation deterministic and explainable.
 type RuleSet struct {
 	revision    uint64
 	rules       []Rule
@@ -189,6 +196,12 @@ func NewRuleSet(options RuleSetOptions) (RuleSet, error) {
 		identifiers[rule.ID] = struct{}{}
 		rules = append(rules, rule)
 	}
+	sort.SliceStable(rules, func(first, second int) bool {
+		if rules[first].Priority != rules[second].Priority {
+			return rules[first].Priority > rules[second].Priority
+		}
+		return rules[first].ID < rules[second].ID
+	})
 	return RuleSet{
 		revision:    options.Revision,
 		rules:       rules,

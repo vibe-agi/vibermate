@@ -197,3 +197,107 @@ func TestAskIsAllowedAsTheDefault(t *testing.T) {
 		t.Fatal("default did not ask")
 	}
 }
+
+// A stored set has no order a person can see, so precedence is a declared
+// property of the rule rather than a position in a slice.
+func TestPrecedenceIsDeclaredNotPositional(t *testing.T) {
+	t.Parallel()
+
+	set, err := connectionpolicy.NewRuleSet(connectionpolicy.RuleSetOptions{
+		Revision: 6,
+		Rules: []connectionpolicy.Rule{
+			{
+				ID:       "broad.allow-any",
+				Priority: 10,
+				Decision: connectionpolicy.DecisionAllow,
+				Match:    connectionpolicy.MatchAny(),
+			},
+			{
+				ID:       "narrow.deny-one-host",
+				Priority: 100,
+				Decision: connectionpolicy.DecisionDeny,
+				Match:    connectionpolicy.MatchExactHost("blocked.example.com"),
+			},
+		},
+		Default: connectionpolicy.Rule{
+			ID:       "default.deny",
+			Decision: connectionpolicy.DecisionDeny,
+			Match:    connectionpolicy.MatchAny(),
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	blocked := set.Evaluate(connectionpolicy.Request{
+		Host: "blocked.example.com",
+		Port: 443,
+	})
+	if blocked.Decision != connectionpolicy.DecisionDeny ||
+		blocked.RuleID != "narrow.deny-one-host" {
+		t.Fatalf("higher precedence lost: %+v", blocked)
+	}
+	other := set.Evaluate(connectionpolicy.Request{
+		Host: "allowed.example.com",
+		Port: 443,
+	})
+	if other.Decision != connectionpolicy.DecisionAllow {
+		t.Fatalf("lower precedence did not apply: %+v", other)
+	}
+}
+
+// Equal precedence must not depend on the order storage happened to return.
+// The identifier is the tie-break, because it is the one thing a rule always
+// has and a person can see.
+func TestEqualPrecedenceResolvesByIdentifier(t *testing.T) {
+	t.Parallel()
+
+	rules := []connectionpolicy.Rule{
+		{
+			ID:       "b.allow",
+			Priority: 50,
+			Decision: connectionpolicy.DecisionAllow,
+			Match:    connectionpolicy.MatchExactHost("tied.example.com"),
+		},
+		{
+			ID:       "a.deny",
+			Priority: 50,
+			Decision: connectionpolicy.DecisionDeny,
+			Match:    connectionpolicy.MatchExactHost("tied.example.com"),
+		},
+	}
+	forward, err := connectionpolicy.NewRuleSet(connectionpolicy.RuleSetOptions{
+		Revision: 7,
+		Rules:    rules,
+		Default: connectionpolicy.Rule{
+			ID:       "default.deny",
+			Decision: connectionpolicy.DecisionDeny,
+			Match:    connectionpolicy.MatchAny(),
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	reversed, err := connectionpolicy.NewRuleSet(connectionpolicy.RuleSetOptions{
+		Revision: 7,
+		Rules:    []connectionpolicy.Rule{rules[1], rules[0]},
+		Default: connectionpolicy.Rule{
+			ID:       "default.deny",
+			Decision: connectionpolicy.DecisionDeny,
+			Match:    connectionpolicy.MatchAny(),
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	request := connectionpolicy.Request{Host: "tied.example.com", Port: 443}
+	if forward.Evaluate(request) != reversed.Evaluate(request) {
+		t.Fatalf(
+			"order of input decided the answer: %+v vs %+v",
+			forward.Evaluate(request),
+			reversed.Evaluate(request),
+		)
+	}
+	if forward.Evaluate(request).RuleID != "a.deny" {
+		t.Fatalf("tie-break = %q", forward.Evaluate(request).RuleID)
+	}
+}

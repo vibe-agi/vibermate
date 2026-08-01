@@ -30,27 +30,28 @@ var ErrInvalidBuildResult = errors.New("invalid runtime build result")
 
 // Runtime owns every successfully constructed production component.
 type Runtime struct {
-	status       *statusTracker
-	schemaReader runtimepersistence.SchemaStateReader
-	accesses     accessRuntime
-	probeCatalog access.ProviderProbeCatalog
-	credentials  credentialRuntime
-	activities   activityRuntime
-	connections  connectionEventRuntime
-	egress       egressaudit.Reader
-	approvals    approvalRuntime
-	monitor      ownedComponent
-	provider     providerRuntime
-	original     originalRuntime
-	exchanges    exchangeRuntime
-	captureRuns  captureRuntime
-	localCA      localCARuntime
-	proxy        proxyRuntime
-	offlineHold  offlinehold.RuntimeCoordinator
-	resumeProber offlinehold.Prober
-	cleanups     cleanupStack
-	clock        Clock
-	timeout      LifecycleOptions
+	status          *statusTracker
+	schemaReader    runtimepersistence.SchemaStateReader
+	accesses        accessRuntime
+	probeCatalog    access.ProviderProbeCatalog
+	credentials     credentialRuntime
+	activities      activityRuntime
+	connections     connectionEventRuntime
+	egress          egressaudit.Reader
+	approvals       approvalRuntime
+	connectionRules *connectionpolicy.Manager
+	monitor         ownedComponent
+	provider        providerRuntime
+	original        originalRuntime
+	exchanges       exchangeRuntime
+	captureRuns     captureRuntime
+	localCA         localCARuntime
+	proxy           proxyRuntime
+	offlineHold     offlinehold.RuntimeCoordinator
+	resumeProber    offlinehold.Prober
+	cleanups        cleanupStack
+	clock           Clock
+	timeout         LifecycleOptions
 
 	shutdownOnce sync.Once
 	shutdownDone chan struct{}
@@ -387,10 +388,18 @@ func startWithBuilders(
 	if err != nil {
 		return fail("blind tunnel dialer", err)
 	}
-	// Every proxied connection is decided before any dial. The rule set this
-	// stage ships is an explicit named placeholder for the ask path, not a
-	// permissive default; see connectionpolicy.InterimAllowUnmatchedRuleID.
-	connectionRules, err := connectionpolicy.InterimRuleSet(1)
+	// Every proxied connection is decided before any dial. The rules are
+	// stored, so a person's edits survive a restart; a fresh store is seeded
+	// with the shipped set, which is an explicit named placeholder for the ask
+	// path rather than a permissive default.
+	connectionRules, err := connectionpolicy.NewManager(
+		ownerContext,
+		connectionpolicy.ManagerOptions{
+			Repository: storageResult.store.ConnectionRuleRepository(),
+			Clock:      options.Clock,
+			Shipped:    connectionpolicy.ShippedSnapshot(1),
+		},
+	)
 	if err != nil {
 		return fail("connection policy", err)
 	}
@@ -402,7 +411,7 @@ func startWithBuilders(
 		original:     original,
 		certificates: certificateAuthority,
 		connections:  connections,
-		policy:       connectionRules,
+		policy:       connectionRules.Source(),
 		// A rule that asks blocks the connection on the same ApprovalCenter a
 		// tool intent goes to, so a person answers both in one place.
 		approvals:    approvals,
@@ -461,28 +470,29 @@ func startWithBuilders(
 	}
 	tracker.commitInitialized(finalState.Revision)
 	return &Runtime{
-		status:       tracker,
-		schemaReader: storageResult.store.SchemaStateReader(),
-		accesses:     accesses,
-		probeCatalog: accesses,
-		credentials:  credentials,
-		activities:   activities,
-		connections:  connections,
-		egress:       storageResult.store.EgressAttemptRepository(),
-		approvals:    approvals,
-		monitor:      monitor,
-		provider:     provider,
-		original:     original,
-		exchanges:    exchanges,
-		captureRuns:  captureRuns,
-		localCA:      certificateAuthority,
-		proxy:        proxy,
-		offlineHold:  options.OfflineHold,
-		resumeProber: resumeProber,
-		cleanups:     cleanups,
-		clock:        options.Clock,
-		timeout:      options.Lifecycle,
-		shutdownDone: make(chan struct{}),
+		status:          tracker,
+		schemaReader:    storageResult.store.SchemaStateReader(),
+		accesses:        accesses,
+		probeCatalog:    accesses,
+		credentials:     credentials,
+		activities:      activities,
+		connections:     connections,
+		egress:          storageResult.store.EgressAttemptRepository(),
+		approvals:       approvals,
+		connectionRules: connectionRules,
+		monitor:         monitor,
+		provider:        provider,
+		original:        original,
+		exchanges:       exchanges,
+		captureRuns:     captureRuns,
+		localCA:         certificateAuthority,
+		proxy:           proxy,
+		offlineHold:     options.OfflineHold,
+		resumeProber:    resumeProber,
+		cleanups:        cleanups,
+		clock:           options.Clock,
+		timeout:         options.Lifecycle,
+		shutdownDone:    make(chan struct{}),
 	}, nil
 }
 
@@ -531,6 +541,11 @@ func (r *Runtime) EgressAttempts() egressaudit.Reader {
 // by the Exchange pipeline.
 func (r *Runtime) ToolApprovals() toolapproval.Controller {
 	return r.approvals
+}
+
+// ConnectionRules is the outbound firewall a person reads and edits.
+func (r *Runtime) ConnectionRules() *connectionpolicy.Manager {
+	return r.connectionRules
 }
 
 // LocalRootIdentity returns immutable public signing-authority identity.

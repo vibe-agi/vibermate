@@ -20,6 +20,7 @@ import (
 	"github.com/vibe-agi/vibermate/internal/activity"
 	"github.com/vibe-agi/vibermate/internal/capturerun"
 	"github.com/vibe-agi/vibermate/internal/connectionevent"
+	"github.com/vibe-agi/vibermate/internal/connectionpolicy"
 	"github.com/vibe-agi/vibermate/internal/egressaudit"
 	"github.com/vibe-agi/vibermate/internal/toolapproval"
 )
@@ -52,6 +53,7 @@ type RuntimeStore interface {
 	ConnectionEventRepository() connectionevent.Repository
 	EgressAttemptRepository() egressaudit.Repository
 	ToolApprovalRepository() toolapproval.Repository
+	ConnectionRuleRepository() connectionpolicy.Repository
 	Shutdown(context.Context) error
 }
 
@@ -65,6 +67,7 @@ type Store struct {
 	connectionRepo *connectionEventRepository
 	egressAttempts *egressAttemptRepository
 	approvalRepo   *toolApprovalRepository
+	connectionRule *connectionRuleRepository
 	operations     *operationGate
 
 	closeMu   sync.Mutex
@@ -130,6 +133,7 @@ func Open(ctx context.Context, options Options) (*Store, error) {
 	connectionRepo := newConnectionEventRepository(database, operations)
 	egressRepo := newEgressAttemptRepository(database, operations)
 	approvalRepo := newToolApprovalRepository(database, operations)
+	connectionRules := newConnectionRuleRepository(database, operations)
 	if _, err := repository.ReadSchemaState(ctx); err != nil {
 		operations.closeAdmission()
 		return fail(fmt.Errorf("read initial schema state: %w", err))
@@ -144,6 +148,7 @@ func Open(ctx context.Context, options Options) (*Store, error) {
 		connectionRepo: connectionRepo,
 		egressAttempts: egressRepo,
 		approvalRepo:   approvalRepo,
+		connectionRule: connectionRules,
 		operations:     operations,
 		closeDone:      make(chan struct{}),
 	}, nil
@@ -175,6 +180,10 @@ func (s *Store) ConnectionEventRepository() connectionevent.Repository {
 
 func (s *Store) ToolApprovalRepository() toolapproval.Repository {
 	return s.approvalRepo
+}
+
+func (s *Store) ConnectionRuleRepository() connectionpolicy.Repository {
+	return s.connectionRule
 }
 
 // Settings reads the active SQLite connection policy through the same

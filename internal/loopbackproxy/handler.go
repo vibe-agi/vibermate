@@ -155,8 +155,10 @@ type Options struct {
 	Certificates CertificateAuthority
 	Connections  ConnectionJournal
 	// Policy decides every proxied connection before any dial, DNS
-	// resolution, or certificate issuance. An AgentEndpoint is not exempt.
-	Policy connectionpolicy.RuleSet
+	// resolution, or certificate issuance. An AgentEndpoint is not exempt. It
+	// is read once per connection, so a rule change reaches the next
+	// connection and never splits one across two revisions.
+	Policy connectionpolicy.Source
 	// Approvals answers a policy `ask`. Without it an ask cannot block on a
 	// person, so it denies rather than degrading into an allow.
 	Approvals        NetworkApprovals
@@ -178,7 +180,7 @@ type Handler struct {
 	original     OriginalClient
 	certificates CertificateAuthority
 	connections  ConnectionJournal
-	policy       connectionpolicy.RuleSet
+	policy       connectionpolicy.Source
 	approvals    NetworkApprovals
 	blindTunnels BlindTunnelDialer
 	egressAudit  egressaudit.Writer
@@ -393,7 +395,7 @@ func (handler *Handler) ServeHTTP(
 	// resolution, or certificate issuance, and before the AgentEndpoint match
 	// that would otherwise exempt it.
 	policyHost, policyPort := policyTarget(request, cleartextForward)
-	outcome := handler.policy.Evaluate(connectionpolicy.Request{
+	outcome := handler.rules().Evaluate(connectionpolicy.Request{
 		Host: policyHost,
 		Port: policyPort,
 	})
@@ -898,6 +900,16 @@ func (handler *Handler) serveSemantic(
 // evidence a pure proxy can obtain, so it reports `verified`; a run without one
 // reports `configured`. Neither is a claim of operating-system process
 // identity, which the proxy cannot establish.
+// rules is the set in force for one connection. A connection that has already
+// been decided is never revisited, and a connection still being decided sees
+// one revision whole.
+func (handler *Handler) rules() connectionpolicy.RuleSet {
+	if handler.policy == nil {
+		return connectionpolicy.RuleSet{}
+	}
+	return handler.policy.Current()
+}
+
 func connectionSource(run capturerun.Evidence) connectionevent.Source {
 	confidence := connectionevent.SourceConfidenceConfigured
 	if run.Adapter != nil {

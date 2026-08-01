@@ -649,6 +649,7 @@ type proxyFixture struct {
 	connections *connectionevent.Manager
 	egress      egressaudit.Repository
 	approvals   *toolapproval.Authority
+	policy      *connectionpolicy.Live
 }
 
 func newProxyFixture(t *testing.T) *proxyFixture {
@@ -798,6 +799,7 @@ func newProxyFixtureForDialectWithPolicy(
 	if err != nil {
 		t.Fatal(err)
 	}
+	livePolicy := connectionpolicy.NewLive(policy)
 	approvals, err := toolapproval.New(
 		context.Background(),
 		toolapproval.Options{
@@ -819,7 +821,7 @@ func newProxyFixtureForDialectWithPolicy(
 		Original:         original,
 		Certificates:     authority,
 		Connections:      connections,
-		Policy:           policy,
+		Policy:           livePolicy,
 		Approvals:        approvals,
 		BlindTunnels:     newTestBlindTunnels(t),
 		EgressAudit:      store.EgressAttemptRepository(),
@@ -852,6 +854,7 @@ func newProxyFixtureForDialectWithPolicy(
 		connections: connections,
 		egress:      store.EgressAttemptRepository(),
 		approvals:   approvals,
+		policy:      livePolicy,
 	}
 }
 

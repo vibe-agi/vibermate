@@ -55,15 +55,21 @@ effect on the next connection rather than the next launch.
 
 ## Bottom-up implementation
 
-- [ ] Give a rule an explicit precedence and a deterministic tie-break.
-- [ ] Store rules durably, with the default as a stored rule rather than a
+- [x] Give a rule an explicit precedence and a deterministic tie-break.
+- [x] Store rules durably, with the default as a stored rule rather than a
       constructor argument.
-- [ ] Seed the shipped set exactly once, and never seed a wildcard allow.
-- [ ] Hold the live set behind a revision the proxy reads per connection.
-- [ ] Read and change rules through the control API, with CAS on the revision.
-- [ ] Prove: a refused set leaves the old one in force, a change is visible to
+- [x] Seed the shipped set exactly once, and never seed a wildcard allow.
+- [x] Hold the live set behind a revision the proxy reads per connection.
+- [x] Read and change rules through the control API, with CAS on the revision.
+- [x] Prove: a refused set leaves the old one in force, a change is visible to
       the next connection and not to one already decided, and a restart brings
       back exactly what was stored.
+
+## What this slice did not build
+
+`POST /api/v1/policies/connections/actions/simulate` in design 15 is not
+implemented. Nothing depends on it yet, and a simulator that disagreed with
+the evaluator would be worse than none.
 
 ## Gates
 
