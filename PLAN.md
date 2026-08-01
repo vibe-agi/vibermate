@@ -1,59 +1,54 @@
-# M1.0-C0i What Went Out, Visible
+# M1.0-C0j Streaming, End to End
 
 Status: active
 Created: 2026-08-02
-Implementation baseline: `98ed776`
+Implementation baseline: `b61e1f6`
 Branch: `m1/root-leaf-foundation`
-Predecessor: `docs/plans/archive/2026-08-02-m1.0-c0h-5-the-window-that-answers.md`
+Predecessor: `docs/plans/archive/2026-08-02-m1.0-c0i-what-went-out-visible.md`
 Defers: `docs/plans/deferred/2026-08-01-m1.0-c-macos-trust-observation.md`
 
 ## Objective
 
-Design 06 §4.1 promises that vibermate can audit where an agent connected and
-how much it sent without decrypting anything. The runtime records all of it.
-Nobody can see any of it.
+Two live runs now reach a real model and come back, but both ask for a whole
+answer at once. Every agent client streams. A streamed answer is a different
+path through the whole product: a different response mode, a different set of
+wire events, incremental usage, and a commit ledger that has to stay honest
+about what the client actually received when a stream ends early.
 
-`GET /api/v1/egress-attempts` returns one empty object per attempt: the
-attempt's fields are unexported and it has no wire contract, so the endpoint
-that answers "what went out" answers nothing at all. And the window has no
-screen for either connections or outbound attempts, so even the records that
-do serialize are invisible.
+Running one real streamed request is the fastest way to find what the
+non-streaming runs could not.
 
 ## Read-only design authority
 
-- `docs/design/06-security.md` §4.1, including what a blind-tunnel record may
-  not contain;
-- `docs/design/15-local-control-api.md` §; the connection and egress reads;
-- `docs/design/03-ui.md`.
+- `docs/design/02-architecture.md` §4.3 and §10 on the CommitLedger's two axes;
+- `docs/design/07-protocol-translation.md`;
+- `docs/design/10-client-compatibility.md`.
 
 ## Required invariants
 
-1. An outbound attempt serializes as what it is. Every fact the record holds
-   reaches the reader, and a fact it does not hold is absent rather than
-   present and empty.
-2. A blind record stays blind. No URL path, header, or body byte appears in
-   any view, and no view invents a field the record does not carry.
-3. The window renders the runtime's own shapes, proven against generated
-   samples rather than hand-typed ones.
-4. A view distinguishes what was decrypted from what was forwarded blind, and
-   an allowed connection from a refused one, because that distinction is the
-   whole point of the record.
-5. Nothing here is a decision surface. These screens read.
+1. A client that asked for a stream gets a stream, in its own dialect's event
+   grammar, not a whole answer relabelled.
+2. Usage reaches the client. A streamed answer that drops the token counts
+   makes every downstream cost view wrong.
+3. The two ledger axes stay separate: what the upstream was charged for is not
+   the same fact as what the client understood.
+4. A stream that ends early is recorded as what it was, and its outbound
+   attempt still reaches a terminal.
+5. Nothing in the streamed path carries a credential or a body byte into a
+   record.
 
 ## Non-goals
 
-- filtering and search beyond what the API already accepts;
-- the single-connection detail route, which needs a screen concept first;
-- rule editing in the window.
+- the Responses WebSocket path;
+- multi-attempt failover mid-stream;
+- the packaged acceptance run with a real agent client.
 
 ## Bottom-up implementation
 
-- [x] Give the outbound attempt an explicit wire contract, and prove the
-      endpoint carries its fields.
-- [x] Generate samples for a connection record and an outbound attempt.
-- [x] Show connections: source, destination, decision, decryption, bytes.
-- [x] Show outbound attempts: purpose, target, outcome, bytes.
-- [x] Prove no path, header, or body reaches either view.
+- [ ] Drive one real streamed request through the Exchange and read the events.
+- [ ] Drive the same request through the proxy as a client would.
+- [ ] Prove usage, the ledger axes, and the outbound terminal.
+- [ ] Fix what those runs find.
 
 ## Gates
 
@@ -64,6 +59,5 @@ do serialize are invisible.
 
 ## Completion statement
 
-> A person can see which connections were made, whether each was decrypted or
-> forwarded blind, and what went out on them, without any of it carrying a
-> path, header, or body.
+> A real client streaming through vibermate receives its own dialect's events,
+> with usage, and the records afterwards say what actually happened.
