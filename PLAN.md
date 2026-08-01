@@ -24,9 +24,17 @@ Defers: `docs/plans/deferred/2026-08-01-m1.0-c-macos-trust-observation.md`,
 
 - The client catalog carries evidence for one release of each client, and a
   newer install is launched without a trust root. The window and the terminal
-  both say so; the catalog itself needs verified release material.
-- Windows and Linux release backends refuse rather than degrade, which is
-  what design 06 asks for and is not the same as supporting them.
+  both say so, and the catalog can no longer change without its revision
+  changing with it. What it still needs is verified release material for a
+  newer release, which is not something this machine can produce: digests
+  computed from whatever happens to be installed here are a record of this
+  machine rather than evidence about a release.
+- Windows and Linux release backends refuse rather than degrade, which is what
+  design 06 asks for and is not the same as supporting them. The refusal is now
+  a checked path: both release builds are cross-compiled by `make check`, and
+  the refusal is asserted under the tags that select it. Actually supporting
+  them means a Credential Manager and a Secret Service backend, on machines
+  that can run them.
 - A stream abandoned by its client is now covered through the proxy: it is
   recorded as canceled, its outbound reaches a terminal, and the runtime still
   drains.

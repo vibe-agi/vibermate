@@ -45,6 +45,14 @@ What remains is the catalog itself. Until it carries evidence for a release,
 that release is named in the window as one that cannot connect — which is
 honest, and is not the same as working.
 
+What the catalog can no longer do is change quietly. Its content is pinned
+against its revision, so adding a release, changing a digest, or changing a
+launch recipe fails the build until the revision is bumped and the new content
+is pinned beside the old. That is design 06 §4.2's requirement — a catalog
+update must not silently widen what may be decrypted — enforced rather than
+stated. Adding release evidence is still an act that needs verified material;
+it is now also an act that shows up in review.
+
 ## What the test does meanwhile
 
 It skips with the version it found and the version the catalog carries, so the
