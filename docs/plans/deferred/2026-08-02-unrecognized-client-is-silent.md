@@ -34,12 +34,11 @@ silently widen what may be decrypted; digests computed from whatever happens
 to be installed on a developer's machine are not release evidence, they are a
 recording of that machine. That work needs verified release material.
 
-Making the failure visible is a real slice of its own. A launch that could not
-be verified is a fact the runtime holds and never surfaces: the CaptureRun
-knows its adapter did not match, the launcher knows it injected no root, and
-the person sees neither. The window should be able to say "this looks like
-Codex 0.146.0, which this build has no evidence for, so it was launched
-without a trust root" — before the client fails, not after.
+Making the failure visible was done: the verifier now distinguishes a program
+nobody catalogued from a catalogued client at an uncatalogued version, and the
+launcher writes one line to the terminal the person is already watching before
+the client starts. What remains deferred is showing the same fact in the
+window, which needs a CaptureRun surface it does not have yet.
 
 ## What the test does meanwhile
 

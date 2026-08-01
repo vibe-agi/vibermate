@@ -229,8 +229,37 @@ func (evidence Evidence) Supports(feature Feature) bool {
 		evidence.Features&feature == feature
 }
 
+// Recognition says whether the catalog knows this program at all, apart from
+// whether this particular copy of it verified.
+//
+// A catalogued client at a version this build has no evidence for is launched
+// without a trust root and cannot complete a decrypted handshake. A program
+// nobody catalogued was never going to have one. The two look identical in the
+// launch recipe and are entirely different to explain.
+type Recognition string
+
+const (
+	// RecognitionUnknown: no catalogued release is invoked by this name.
+	RecognitionUnknown Recognition = "unknown"
+	// RecognitionUnverified: a catalogued release is invoked by this name, and
+	// this copy matched none of them.
+	RecognitionUnverified Recognition = "unverified"
+	// RecognitionVerified: this copy matched a catalogued release exactly.
+	RecognitionVerified Recognition = "verified"
+)
+
+func (recognition Recognition) Valid() bool {
+	switch recognition {
+	case RecognitionUnknown, RecognitionUnverified, RecognitionVerified:
+		return true
+	default:
+		return false
+	}
+}
+
 type Detection struct {
 	Status          Status          `json:"status"`
+	Recognition     Recognition     `json:"recognition"`
 	CatalogRevision CatalogRevision `json:"catalogRevision"`
 	CanonicalPath   string          `json:"canonicalPath"`
 	ExecutableLabel string          `json:"executableLabel"`
@@ -296,11 +325,15 @@ func (verifier *ReleaseVerifier) Verify(
 	}
 	detection := Detection{
 		Status:          StatusGeneric,
+		Recognition:     RecognitionUnknown,
 		CatalogRevision: verifier.revision,
 		CanonicalPath:   canonical,
 		ExecutableLabel: label,
 	}
 	candidates := verifier.releasesForLabel(label)
+	if len(candidates) > 0 {
+		detection.Recognition = RecognitionUnverified
+	}
 	var matched []Release
 	for _, candidate := range candidates {
 		ok, matchErr := verifyRelease(ctx, canonical, candidate)
@@ -337,6 +370,7 @@ func (verifier *ReleaseVerifier) Verify(
 		return detection, err
 	}
 	detection.Status = StatusVerified
+	detection.Recognition = RecognitionVerified
 	detection.Evidence = &evidence
 	return detection.clone(), nil
 }

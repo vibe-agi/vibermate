@@ -63,7 +63,8 @@ exit 7
 			"first",
 			"two words",
 		},
-		recipe: clientadapter.LaunchNodeEnvProxy,
+		recipe:      clientadapter.LaunchNodeEnvProxy,
+		recognition: clientadapter.RecognitionVerified,
 		adapter: &clientadapter.Evidence{
 			ID:              "claude-code",
 			Revision:        1,
@@ -248,6 +249,7 @@ type controlFixture struct {
 	run             string
 	expectedCommand []string
 	recipe          clientadapter.LaunchRecipe
+	recognition     clientadapter.Recognition
 	adapter         *clientadapter.Evidence
 	authorities     []string
 
@@ -290,6 +292,7 @@ func (fixture *controlFixture) ServeHTTP(
 			},
 			CatalogRevision: 7,
 			LaunchRecipe:    fixture.recipe,
+			Recognition:     fixture.recognition,
 			Adapter:         fixture.adapter,
 			ExecutablePath:  fixture.executable,
 			ProxyOrigin:     "http://" + request.Host,

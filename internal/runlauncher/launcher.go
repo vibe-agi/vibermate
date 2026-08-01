@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/vibe-agi/vibermate/internal/capturecontrol"
+	"github.com/vibe-agi/vibermate/internal/clientadapter"
 	"github.com/vibe-agi/vibermate/internal/launcherdiscovery"
 )
 
@@ -135,6 +136,12 @@ func (launcher *Launcher) Run(
 		launcher.finishBestEffort(control, grant)
 		return 1, err
 	}
+	// A catalogued client at a version this build has no evidence for is
+	// launched without a trust root, on purpose: the catalog is versioned
+	// evidence and an update must not silently widen what may be decrypted.
+	// It will fail its handshake, so it is told why here rather than being
+	// left with a transport error nobody can explain.
+	launcher.warnUnverified(grant)
 	environment, err := buildEnvironment(
 		launcher.config.BaseEnvironment,
 		grant,
@@ -285,6 +292,23 @@ func (launcher *Launcher) callWithTimeout(
 	ctx, cancel := context.WithTimeout(parent, launcher.config.ControlTimeout)
 	defer cancel()
 	return call(ctx)
+}
+
+// warnUnverified writes one line, to the stream the person is already
+// watching. It names the program and nothing else: what it does not say is
+// what the client sent, where it connected, or any credential.
+func (launcher *Launcher) warnUnverified(grant capturecontrol.LaunchGrant) {
+	if grant.Recognition != clientadapter.RecognitionUnverified ||
+		launcher.config.Stderr == nil {
+		return
+	}
+	_, _ = fmt.Fprintf(
+		launcher.config.Stderr,
+		"vibermate: %s is a client this build knows, at a version it has no "+
+			"release evidence for. It was started without a trust root, so "+
+			"requests it makes through vibermate will fail to connect.\n",
+		grant.Run.ExecutableLabel,
+	)
 }
 
 func (launcher *Launcher) finishBestEffort(

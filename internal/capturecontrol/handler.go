@@ -80,16 +80,22 @@ type CreateRequest struct {
 }
 
 type LaunchGrant struct {
-	Run                  capturerun.View               `json:"run"`
-	CatalogRevision      clientadapter.CatalogRevision `json:"catalogRevision"`
-	LaunchRecipe         clientadapter.LaunchRecipe    `json:"launchRecipe"`
-	Adapter              *clientadapter.Evidence       `json:"adapter,omitempty"`
-	ExecutablePath       string                        `json:"executablePath"`
-	ProxyOrigin          string                        `json:"proxyOrigin"`
-	ProxyCapability      string                        `json:"proxyCapability"`
-	RunCapability        string                        `json:"runCapability"`
-	RootPEMPath          string                        `json:"rootPemPath,omitempty"`
-	ProtectedAuthorities []string                      `json:"protectedAuthorities"`
+	Run             capturerun.View               `json:"run"`
+	CatalogRevision clientadapter.CatalogRevision `json:"catalogRevision"`
+	LaunchRecipe    clientadapter.LaunchRecipe    `json:"launchRecipe"`
+	// Recognition says whether the catalog knows this program at all. A
+	// catalogued client at an uncatalogued version is launched without a trust
+	// root and cannot complete a decrypted handshake; the launcher says so
+	// rather than letting the client fail with a transport error nobody can
+	// explain.
+	Recognition          clientadapter.Recognition `json:"recognition"`
+	Adapter              *clientadapter.Evidence   `json:"adapter,omitempty"`
+	ExecutablePath       string                    `json:"executablePath"`
+	ProxyOrigin          string                    `json:"proxyOrigin"`
+	ProxyCapability      string                    `json:"proxyCapability"`
+	RunCapability        string                    `json:"runCapability"`
+	RootPEMPath          string                    `json:"rootPemPath,omitempty"`
+	ProtectedAuthorities []string                  `json:"protectedAuthorities"`
 }
 
 type AttachRequest struct {
@@ -233,6 +239,7 @@ func (handler *Handler) create(
 		Run:                  grant.Run,
 		CatalogRevision:      detection.CatalogRevision,
 		LaunchRecipe:         recipe,
+		Recognition:          detection.Recognition,
 		Adapter:              adapter,
 		ExecutablePath:       detection.CanonicalPath,
 		ProxyOrigin:          handler.proxyOrigin,

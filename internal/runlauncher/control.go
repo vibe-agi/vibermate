@@ -264,6 +264,9 @@ func validateGrant(grant capturecontrol.LaunchGrant) error {
 			"CaptureRun launch grant adapter evidence is inconsistent",
 		)
 	}
+	if !grant.Recognition.Valid() {
+		return errors.New("CaptureRun launch grant recognition is invalid")
+	}
 	if grant.LaunchRecipe.RequiresRoot() && grant.RootPEMPath == "" {
 		return errors.New("CaptureRun launch grant is missing the local Root")
 	}

@@ -55,6 +55,7 @@ while :; do sleep 1; done
 		run:             capability(0x63),
 		expectedCommand: []string{"codex"},
 		recipe:          clientadapter.LaunchSSLCertFile,
+		recognition:     clientadapter.RecognitionVerified,
 		adapter: &clientadapter.Evidence{
 			ID:              "codex-cli",
 			Revision:        1,
