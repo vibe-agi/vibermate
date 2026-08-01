@@ -589,6 +589,8 @@ type proxyBuildRequest struct {
 	original     loopbackproxy.OriginalClient
 	certificates loopbackproxy.CertificateAuthority
 	connections  connectionevent.Runtime
+	blindTunnels loopbackproxy.BlindTunnelDialer
+	egressAudit  egressaudit.Writer
 	random       io.Reader
 }
 
@@ -625,6 +627,8 @@ func (productionProxyBuilder) Build(
 		Original:     request.original,
 		Certificates: request.certificates,
 		Connections:  request.connections,
+		BlindTunnels: request.blindTunnels,
+		EgressAudit:  request.egressAudit,
 		ExchangeIDs: loopbackproxy.NewRandomExchangeIDSource(
 			request.random,
 		),

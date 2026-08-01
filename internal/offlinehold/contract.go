@@ -111,6 +111,10 @@ type ProbeTransportKind string
 const (
 	ProbeTransportStrictTLS         ProbeTransportKind = "strict_tls"
 	ProbeTransportLoopbackCleartext ProbeTransportKind = "loopback_cleartext"
+	// ProbeTransportTCP belongs to blind tunnelling. A tunnel forwards bytes
+	// it never interprets, so reachability is all it can establish: there is
+	// no TLS server name to verify and no protocol to speak.
+	ProbeTransportTCP ProbeTransportKind = "tcp"
 )
 
 type ProbeTarget struct {

@@ -559,10 +559,14 @@ func TestProductRuntimeComposesCaptureIngressAndConnectionAudit(t *testing.T) {
 	)
 	recorder := httptest.NewRecorder()
 	runtime.ProxyHandler().ServeHTTP(recorder, request)
-	if recorder.Code != http.StatusForbidden ||
+	// An unregistered authority is forwarded blind rather than refused, so it
+	// reaches the gated dialer. The host does not resolve, so the dial fails;
+	// what this test guards is that the composition wired that path at all and
+	// that it left connection evidence.
+	if recorder.Code != http.StatusBadGateway ||
 		!bytes.Contains(
 			recorder.Body.Bytes(),
-			[]byte(`"reasonCode":"agent_endpoint_not_configured"`),
+			[]byte(`"reasonCode":"blind_tunnel_failed"`),
 		) {
 		t.Fatalf(
 			"proxy rejection status=%d body=%s",
@@ -577,12 +581,20 @@ func TestProductRuntimeComposesCaptureIngressAndConnectionAudit(t *testing.T) {
 	if err != nil {
 		t.Fatalf("list ConnectionEvents: %v", err)
 	}
-	if len(page.Items) != 2 ||
-		page.Items[0].Phase != connectionevent.PhaseDecided ||
-		page.Items[0].Decision != connectionevent.DecisionDeny ||
-		page.Items[0].Outcome != connectionevent.OutcomeDenied ||
-		page.Items[1].Phase != connectionevent.PhaseAttempted {
+	if len(page.Items) < 2 ||
+		page.Items[len(page.Items)-1].Phase !=
+			connectionevent.PhaseAttempted {
 		t.Fatalf("runtime proxy ConnectionEvents = %+v", page.Items)
+	}
+	allowedBlind := false
+	for _, record := range page.Items {
+		if record.Decision == connectionevent.DecisionAllow &&
+			record.Decryption == connectionevent.DecryptionBlind {
+			allowedBlind = true
+		}
+	}
+	if !allowedBlind {
+		t.Fatalf("no blind decision was recorded: %+v", page.Items)
 	}
 	identity := runtime.LocalRootIdentity()
 	certificate := runtime.LocalRootCertificate()

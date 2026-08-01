@@ -5,12 +5,14 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net"
 	"net/http"
 	"sync"
 
 	"github.com/vibe-agi/vibermate/internal/access"
 	"github.com/vibe-agi/vibermate/internal/accesscredential"
 	"github.com/vibe-agi/vibermate/internal/activity"
+	"github.com/vibe-agi/vibermate/internal/blindtunnel"
 	"github.com/vibe-agi/vibermate/internal/capturerun"
 	"github.com/vibe-agi/vibermate/internal/connectionevent"
 	"github.com/vibe-agi/vibermate/internal/egressaudit"
@@ -378,6 +380,12 @@ func startWithBuilders(
 	}
 	pending.register("CaptureRun component", captureRuns.Shutdown)
 
+	// A blind tunnel dials through the same egress admission as every other
+	// outbound, so it cannot become the one path that ignores a planned hold.
+	blindTunnels, err := newBlindTunnelDialer(options.OfflineHold)
+	if err != nil {
+		return fail("blind tunnel dialer", err)
+	}
 	proxy, err := builders.proxy.Build(proxyBuildRequest{
 		ownerContext: ownerContext,
 		runs:         captureRuns,
@@ -386,6 +394,8 @@ func startWithBuilders(
 		original:     original,
 		certificates: certificateAuthority,
 		connections:  connections,
+		blindTunnels: blindTunnels,
+		egressAudit:  storageResult.store.EgressAttemptRepository(),
 		random:       securityRandom,
 	})
 	if err != nil {
@@ -597,4 +607,35 @@ func (r *Runtime) executeShutdown() {
 	cancel()
 	r.status.finishStopping(r.clock.Now(), r.shutdownErr)
 	close(r.shutdownDone)
+}
+
+// blindTunnelDialer pairs the gated dialer with the action admission the
+// tunnel needs before it may dial.
+type blindTunnelDialer struct {
+	coordinator offlinehold.Coordinator
+	dialer      *blindtunnel.Dialer
+}
+
+func newBlindTunnelDialer(
+	coordinator offlinehold.Coordinator,
+) (*blindTunnelDialer, error) {
+	dialer, err := blindtunnel.NewDialer(coordinator)
+	if err != nil {
+		return nil, err
+	}
+	return &blindTunnelDialer{coordinator: coordinator, dialer: dialer}, nil
+}
+
+func (tunnels *blindTunnelDialer) BeginAction(
+	ctx context.Context,
+	request offlinehold.ActionRequest,
+) (*offlinehold.ActionLease, error) {
+	return tunnels.coordinator.BeginAction(ctx, request)
+}
+
+func (tunnels *blindTunnelDialer) Dial(
+	ctx context.Context,
+	request blindtunnel.DialRequest,
+) (net.Conn, offlinehold.Lease, error) {
+	return tunnels.dialer.Dial(ctx, request)
 }

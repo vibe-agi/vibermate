@@ -23,10 +23,12 @@ import (
 	"time"
 
 	"github.com/vibe-agi/vibermate/internal/access"
+	"github.com/vibe-agi/vibermate/internal/blindtunnel"
 	"github.com/vibe-agi/vibermate/internal/capturerun"
 	"github.com/vibe-agi/vibermate/internal/certidentity"
 	"github.com/vibe-agi/vibermate/internal/clientadapter"
 	"github.com/vibe-agi/vibermate/internal/connectionevent"
+	"github.com/vibe-agi/vibermate/internal/egressaudit"
 	"github.com/vibe-agi/vibermate/internal/exchange"
 	"github.com/vibe-agi/vibermate/internal/localca"
 	"github.com/vibe-agi/vibermate/internal/offlinehold"
@@ -64,6 +66,7 @@ const (
 	ReasonConnectOnly                   ReasonCode = "connect_only"
 	ReasonConnectionAuditUnavailable    ReasonCode = "connection_audit_unavailable"
 	ReasonProfileOperationUnsupported   ReasonCode = "profile_operation_unsupported"
+	ReasonBlindTunnelFailed             ReasonCode = "blind_tunnel_failed"
 )
 
 var ErrProxyStopping = errors.New("loopback proxy is stopping")
@@ -91,6 +94,20 @@ type OriginalClient interface {
 
 type ExchangeIDSource interface {
 	NewExchangeID(context.Context) (string, error)
+}
+
+// BlindTunnelDialer opens the upstream side of a connection that is forwarded
+// without decryption. It is separate from the model and original-origin
+// transports because it never learns a path, header, or protocol.
+type BlindTunnelDialer interface {
+	Dial(
+		context.Context,
+		blindtunnel.DialRequest,
+	) (net.Conn, offlinehold.Lease, error)
+	BeginAction(
+		context.Context,
+		offlinehold.ActionRequest,
+	) (*offlinehold.ActionLease, error)
 }
 
 type ConnectionJournal interface {
@@ -134,6 +151,8 @@ type Options struct {
 	Original         OriginalClient
 	Certificates     CertificateAuthority
 	Connections      ConnectionJournal
+	BlindTunnels     BlindTunnelDialer
+	EgressAudit      egressaudit.Writer
 	ExchangeIDs      ExchangeIDSource
 	HandshakeTimeout time.Duration
 }
@@ -150,6 +169,8 @@ type Handler struct {
 	original     OriginalClient
 	certificates CertificateAuthority
 	connections  ConnectionJournal
+	blindTunnels BlindTunnelDialer
+	egressAudit  egressaudit.Writer
 	exchangeIDs  ExchangeIDSource
 	handshake    time.Duration
 	ownerContext context.Context
@@ -187,6 +208,8 @@ func New(options Options) (*Handler, error) {
 		original:     options.Original,
 		certificates: options.Certificates,
 		connections:  options.Connections,
+		blindTunnels: options.BlindTunnels,
+		egressAudit:  options.EgressAudit,
 		exchangeIDs:  options.ExchangeIDs,
 		handshake:    options.HandshakeTimeout,
 		ownerContext: options.OwnerContext,
@@ -372,22 +395,20 @@ func (handler *Handler) ServeHTTP(
 	}
 	binding, err := handler.ingress.ResolveClientOrigin(origin)
 	if err != nil {
-		if handler.denyConnection(
-			request.Context(),
+		// An authority that is not an enabled AgentEndpoint is forwarded
+		// without decryption. The launcher exports the proxy to the whole
+		// child process tree, so refusing these would refuse every package
+		// install, update check, and MCP server an Agent touches.
+		terminal = handler.serveBlindTunnel(
+			writer,
+			request,
+			active,
 			audit,
 			source,
-			ReasonAgentEndpointNotConfigured,
-		) != nil {
-			writeReason(
-				writer,
-				http.StatusServiceUnavailable,
-				ReasonConnectionAuditUnavailable,
-				"",
-			)
-			return
-		}
-		terminal = true
-		writeReason(writer, http.StatusForbidden, ReasonAgentEndpointNotConfigured, "")
+			request.Host,
+			host,
+			port,
+		)
 		return
 	}
 	if err := audit.Decide(
@@ -1373,4 +1394,200 @@ func (downstream *httpDownstream) Abort(
 
 func (downstream *httpDownstream) Begun() bool {
 	return downstream.begun
+}
+
+// serveBlindTunnel forwards a connection whose authority is not an enabled
+// AgentEndpoint. It terminates no TLS, reads no request, and records only
+// counts, so nothing it carries can reach a record. It reports whether the
+// connection audit already reached a terminal.
+func (handler *Handler) serveBlindTunnel(
+	writer http.ResponseWriter,
+	request *http.Request,
+	active *operation,
+	audit *connectionevent.Connection,
+	source connectionevent.Source,
+	authority string,
+	host string,
+	port uint16,
+) bool {
+	if handler.blindTunnels == nil {
+		if handler.denyConnection(
+			request.Context(),
+			audit,
+			source,
+			ReasonAgentEndpointNotConfigured,
+		) != nil {
+			writeReason(
+				writer,
+				http.StatusServiceUnavailable,
+				ReasonConnectionAuditUnavailable,
+				"",
+			)
+			return false
+		}
+		writeReason(
+			writer,
+			http.StatusForbidden,
+			ReasonAgentEndpointNotConfigured,
+			"",
+		)
+		return true
+	}
+	if err := audit.Decide(
+		request.Context(),
+		connectionevent.DecisionEvidence{
+			Source:   source,
+			Decision: connectionevent.DecisionAllow,
+			RuleID:   "m0.blind_tunnel",
+			// A blind tunnel performs no route translation, so the client's
+			// requested authority is the actual destination.
+			RouteHost:  host,
+			Decryption: connectionevent.DecryptionBlind,
+		},
+	); err != nil {
+		writeReason(
+			writer,
+			http.StatusServiceUnavailable,
+			ReasonConnectionAuditUnavailable,
+			"",
+		)
+		return false
+	}
+
+	egressID, err := handler.exchangeIDs.NewExchangeID(request.Context())
+	if err != nil {
+		writeReason(writer, http.StatusServiceUnavailable, ReasonProxyStopping, "")
+		return true
+	}
+	actionLease, err := handler.blindTunnels.BeginAction(
+		request.Context(),
+		offlinehold.ActionRequest{ActionID: egressID},
+	)
+	if err != nil {
+		writeReason(writer, http.StatusBadGateway, ReasonBlindTunnelFailed, "")
+		return true
+	}
+	defer actionLease.Release()
+
+	upstream, lease, err := handler.blindTunnels.Dial(
+		request.Context(),
+		blindtunnel.DialRequest{
+			RequestID: egressID,
+			Action:    actionLease,
+			Authority: authority,
+			Host:      host,
+			Port:      port,
+		},
+	)
+	if err != nil {
+		writeReason(writer, http.StatusBadGateway, ReasonBlindTunnelFailed, "")
+		return true
+	}
+	defer lease.Release()
+	defer upstream.Close()
+
+	record, err := handler.beginBlindAudit(
+		request.Context(),
+		egressID,
+		audit.ID(),
+		authority,
+	)
+	if err != nil {
+		writeReason(writer, http.StatusServiceUnavailable, ReasonBlindTunnelFailed, "")
+		return true
+	}
+
+	hijacker, ok := writer.(http.Hijacker)
+	if !ok {
+		writeReason(writer, http.StatusInternalServerError, ReasonBlindTunnelFailed, "")
+		return true
+	}
+	client, buffered, err := hijacker.Hijack()
+	if err != nil {
+		return true
+	}
+	if !handler.attachConnection(active, client) {
+		_ = client.Close()
+		return false
+	}
+	defer client.Close()
+	if err := writeConnectEstablished(buffered); err != nil {
+		return false
+	}
+
+	result, copyErr := blindtunnel.Copy(handler.ownerContext, client, upstream)
+	outcome := egressaudit.OutcomeCompleted
+	errorClass := ""
+	if copyErr != nil {
+		outcome = egressaudit.OutcomeFailed
+		errorClass = "tunnel_failed"
+	}
+	handler.completeBlindAudit(record, outcome, errorClass, result)
+	handler.finishConnectionAudit(audit, connectionevent.TerminalEvidence{
+		Outcome:   connectionevent.OutcomeCompleted,
+		BytesUp:   uint64(result.BytesOut),
+		BytesDown: uint64(result.BytesIn),
+	})
+	return true
+}
+
+func (handler *Handler) beginBlindAudit(
+	ctx context.Context,
+	egressID string,
+	connectionID string,
+	authority string,
+) (egressaudit.Attempt, error) {
+	if handler.egressAudit == nil {
+		return egressaudit.Attempt{}, nil
+	}
+	attempt, err := egressaudit.New(egressaudit.NewInput{
+		ID:           egressID,
+		ConnectionID: connectionID,
+		Purpose:      egressaudit.PurposeBlindTunnel,
+		PayloadClass: egressaudit.PayloadOpaqueTunnel,
+		Parent: egressaudit.ParentRef{
+			Kind: egressaudit.ParentBlindConnection,
+			ID:   connectionID,
+		},
+		Caller:       egressaudit.CallerCore,
+		TargetOrigin: "https://" + authority,
+		Decision: egressaudit.BuiltInDirectDecision(
+			egressaudit.AuthorityNetwork,
+		),
+		StartedAt: time.Now(),
+	})
+	if err != nil {
+		return egressaudit.Attempt{}, err
+	}
+	if _, err := handler.egressAudit.Append(ctx, attempt); err != nil {
+		return egressaudit.Attempt{}, err
+	}
+	return attempt, nil
+}
+
+func (handler *Handler) completeBlindAudit(
+	attempt egressaudit.Attempt,
+	outcome egressaudit.Outcome,
+	errorClass string,
+	result blindtunnel.Result,
+) {
+	if handler.egressAudit == nil || attempt.ID() == "" {
+		return
+	}
+	terminal, err := attempt.Finish(egressaudit.TerminalInput{
+		Outcome:     outcome,
+		ErrorClass:  errorClass,
+		BytesOut:    result.BytesOut,
+		BytesIn:     result.BytesIn,
+		CompletedAt: time.Now(),
+	})
+	if err != nil {
+		return
+	}
+	ctx, cancel := context.WithTimeout(
+		context.WithoutCancel(handler.ownerContext),
+		2*time.Second,
+	)
+	defer cancel()
+	_, _ = handler.egressAudit.Complete(ctx, terminal)
 }

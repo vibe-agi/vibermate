@@ -751,6 +751,13 @@ func validateProbeTarget(target ProbeTarget) error {
 		if target.Kind != EgressProvider || target.TLSServerName != "" {
 			return ErrInvalidRequest
 		}
+	case ProbeTransportTCP:
+		// Reachability only. A raw probe verifies nothing about the peer, so
+		// it may not claim an identity, and no outbound that does terminate
+		// TLS may use it to skip verification.
+		if target.Kind != EgressBlindTunnel || target.TLSServerName != "" {
+			return ErrInvalidRequest
+		}
 	default:
 		return ErrInvalidRequest
 	}

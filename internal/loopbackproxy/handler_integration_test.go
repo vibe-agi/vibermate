@@ -20,9 +20,11 @@ import (
 
 	"github.com/vibe-agi/vibermate/internal/access"
 	"github.com/vibe-agi/vibermate/internal/anthropicchat"
+	"github.com/vibe-agi/vibermate/internal/blindtunnel"
 	"github.com/vibe-agi/vibermate/internal/capturerun"
 	"github.com/vibe-agi/vibermate/internal/clientadapter"
 	"github.com/vibe-agi/vibermate/internal/connectionevent"
+	"github.com/vibe-agi/vibermate/internal/egressaudit"
 	"github.com/vibe-agi/vibermate/internal/exchange"
 	"github.com/vibe-agi/vibermate/internal/localca"
 	"github.com/vibe-agi/vibermate/internal/loopbackproxy"
@@ -177,11 +179,15 @@ func TestLoopbackProxyFailsClosedBeforeCertificateOrDataPlane(t *testing.T) {
 			reason:    "capture_run_rejected",
 		},
 		{
+			// An unregistered authority is now forwarded blind rather than
+			// refused. It still reaches no certificate and no data plane,
+			// which is what this test guards; the dial itself fails because
+			// the host does not resolve.
 			name:      "unregistered endpoint",
 			token:     fixture.grant.ProxyCapability.Value(),
 			authority: "unknown.example.test:443",
-			status:    http.StatusForbidden,
-			reason:    "agent_endpoint_not_configured",
+			status:    http.StatusBadGateway,
+			reason:    "blind_tunnel_failed",
 		},
 		{
 			name:      "noncanonical authority",
@@ -229,7 +235,7 @@ func TestLoopbackProxyFailsClosedBeforeCertificateOrDataPlane(t *testing.T) {
 			denied++
 		}
 	}
-	if denied != 3 || len(page.Items) != 6 {
+	if denied != 2 {
 		t.Fatalf("denied ConnectionEvents = %+v", page)
 	}
 }
@@ -629,6 +635,7 @@ type proxyFixture struct {
 	ingress     *revocableIngress
 	accessID    access.AccessID
 	connections *connectionevent.Manager
+	egress      egressaudit.Repository
 }
 
 func newProxyFixture(t *testing.T) *proxyFixture {
@@ -734,6 +741,8 @@ func newProxyFixtureForDialect(
 		Original:         original,
 		Certificates:     authority,
 		Connections:      connections,
+		BlindTunnels:     newTestBlindTunnels(t),
+		EgressAudit:      store.EgressAttemptRepository(),
 		ExchangeIDs:      loopbackproxy.NewCryptographicExchangeIDSource(),
 		HandshakeTimeout: time.Second,
 	})
@@ -761,6 +770,7 @@ func newProxyFixtureForDialect(
 		ingress:     ingress,
 		accessID:    accessID,
 		connections: connections,
+		egress:      store.EgressAttemptRepository(),
 	}
 }
 
@@ -1203,4 +1213,45 @@ func testProjectionForDialectRevision(
 		t.Fatal(err)
 	}
 	return projection, accessID
+}
+
+// blindTunnelFixture pairs a started coordinator with the production dialer so
+// a blind tunnel in tests goes through the same egress admission as production.
+type blindTunnelFixture struct {
+	gate   *offlinehold.Gate
+	dialer *blindtunnel.Dialer
+}
+
+func newTestBlindTunnels(t *testing.T) *blindTunnelFixture {
+	t.Helper()
+
+	gate, err := offlinehold.New(offlinehold.DefaultConfig())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := gate.Start(
+		context.Background(),
+		offlinehold.RuntimeBinding{InstanceID: "proxy-test"},
+	); err != nil {
+		t.Fatal(err)
+	}
+	dialer, err := blindtunnel.NewDialer(gate)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return &blindTunnelFixture{gate: gate, dialer: dialer}
+}
+
+func (fixture *blindTunnelFixture) BeginAction(
+	ctx context.Context,
+	request offlinehold.ActionRequest,
+) (*offlinehold.ActionLease, error) {
+	return fixture.gate.BeginAction(ctx, request)
+}
+
+func (fixture *blindTunnelFixture) Dial(
+	ctx context.Context,
+	request blindtunnel.DialRequest,
+) (net.Conn, offlinehold.Lease, error) {
+	return fixture.dialer.Dial(ctx, request)
 }
