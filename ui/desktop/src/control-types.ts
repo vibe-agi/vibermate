@@ -96,29 +96,56 @@ export type ApprovalState =
   | "canceled"
   | "expired";
 
+export type ApprovalKind = "tool_intent" | "network_ask";
+
+export type ApprovalDecision = "allow-once" | "deny";
+
+/**
+ * A scope says how far an answer reaches. `request` answers only the question
+ * in front of the person; `host_port` also writes a connection rule for
+ * exactly the host and port that were asked about.
+ */
+export type ApprovalScope = "request" | "host_port";
+
+export interface ApprovalChoice {
+  readonly decision: ApprovalDecision;
+  readonly scope: ApprovalScope;
+  /** The sentence a person reads before taking this choice. */
+  readonly labelKey: string;
+}
+
+/** The connection a question is about, when it is about one. */
+export interface ApprovalTarget {
+  readonly host: string;
+  readonly port: number;
+}
+
 export interface ApprovalView {
   readonly id: string;
   readonly revision: number;
-  readonly kind: "tool-intent";
+  readonly kind: ApprovalKind;
   readonly state: ApprovalState;
   readonly risk: string;
   readonly titleKey: string;
   readonly summaryKey: string;
-  readonly exchangeId: string;
-  readonly accessId: string;
-  readonly planRevision: number;
-  readonly planHash: string;
-  readonly toolCallIds: readonly string[];
-  readonly toolNames: readonly string[];
-  readonly choices: readonly {
-    readonly decision: "allow-once" | "deny";
-    readonly scope: "request";
-  }[];
+  readonly aggregateKey: string;
+  /** Present only on a question decided against a resolved Access plan. */
+  readonly exchangeId?: string;
+  readonly accessId?: string;
+  readonly planRevision?: number;
+  readonly planHash?: string;
+  readonly target?: ApprovalTarget;
+  readonly subjectRefs: readonly string[];
+  readonly subjectLabels: readonly string[];
+  /** How many callers this one question is answering for. */
+  readonly requestCount: number;
+  readonly waiterCount: number;
+  readonly choices: readonly ApprovalChoice[];
   readonly createdAt: string;
   readonly expiresAt: string;
   readonly resolvedAt?: string;
-  readonly decision?: "allow-once" | "deny";
-  readonly decisionScope?: "request";
+  readonly decision?: ApprovalDecision;
+  readonly decisionScope?: ApprovalScope;
   readonly terminalReason?: string;
 }
 

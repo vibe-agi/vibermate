@@ -502,30 +502,41 @@ function ApprovalPanel({
               <p>{t(approval.summaryKey)}</p>
               <dl className="inline-details">
                 <div>
-                  <dt>{t("approval.tools.label")}</dt>
-                  <dd>{approval.toolNames.join(", ")}</dd>
+                  <dt>{t(subjectLabelKey(approval))}</dt>
+                  <dd>{approvalSubject(approval)}</dd>
                 </div>
+                {approval.requestCount > 1 ? (
+                  <div>
+                    <dt>{t("approval.waiting.label")}</dt>
+                    <dd>
+                      {t("approval.waiting.value", {
+                        count: approval.requestCount,
+                      })}
+                    </dd>
+                  </div>
+                ) : null}
                 <div>
                   <dt>{t("approval.expiresAt.label")}</dt>
                   <dd>{formatter.format(new Date(approval.expiresAt))}</dd>
                 </div>
               </dl>
               <div className="button-row">
-                <button
-                  disabled={busy}
-                  onClick={() => void model.decideApproval(approval, "allow-once")}
-                  type="button"
-                >
-                  {t("approval.allowOnce.action")}
-                </button>
-                <button
-                  className="danger"
-                  disabled={busy}
-                  onClick={() => void model.decideApproval(approval, "deny")}
-                  type="button"
-                >
-                  {t("approval.deny.action")}
-                </button>
+                {/*
+                  The window offers exactly what the runtime declared. A
+                  hard-coded button can offer an answer the runtime refuses,
+                  or hide one it allows.
+                */}
+                {approval.choices.map((choice) => (
+                  <button
+                    className={choice.decision === "deny" ? "danger" : undefined}
+                    disabled={busy}
+                    key={`${choice.decision}:${choice.scope}`}
+                    onClick={() => void model.decideApproval(approval, choice)}
+                    type="button"
+                  >
+                    {t(choice.labelKey)}
+                  </button>
+                ))}
               </div>
             </li>
           ))}
@@ -533,6 +544,23 @@ function ApprovalPanel({
       )}
     </section>
   );
+}
+
+/**
+ * A question is named in the terms it is about: a host and port for a
+ * connection, tool names for a tool call.
+ */
+function approvalSubject(approval: ApprovalView): string {
+  if (approval.target !== undefined) {
+    return `${approval.target.host}:${approval.target.port}`;
+  }
+  return approval.subjectLabels.join(", ");
+}
+
+function subjectLabelKey(approval: ApprovalView): string {
+  return approval.target === undefined
+    ? "approval.tools.label"
+    : "approval.target.label";
 }
 
 function ActivityPanel({

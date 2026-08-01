@@ -175,8 +175,8 @@ func (kind Kind) requiresAccessPlan() bool {
 // subject string apart, so nothing has to encode structure into an identifier
 // and then recover it.
 type Target struct {
-	Host string
-	Port uint16
+	Host string `json:"host"`
+	Port uint16 `json:"port"`
 }
 
 func (target Target) present() bool {
@@ -368,29 +368,32 @@ type Choice struct {
 }
 
 type View struct {
-	ID             string          `json:"id"`
-	Revision       uint64          `json:"revision"`
-	Kind           string          `json:"kind"`
-	State          State           `json:"state"`
-	Risk           string          `json:"risk"`
-	TitleKey       string          `json:"titleKey"`
-	SummaryKey     string          `json:"summaryKey"`
-	ExchangeID     string          `json:"exchangeId"`
-	AccessID       string          `json:"accessId"`
-	PlanRevision   access.Revision `json:"planRevision"`
-	PlanHash       string          `json:"planHash"`
-	AggregateKey   string          `json:"aggregateKey"`
-	SubjectRefs    []string        `json:"subjectRefs"`
-	SubjectLabels  []string        `json:"subjectLabels"`
-	RequestCount   uint32          `json:"requestCount"`
-	WaiterCount    uint32          `json:"waiterCount"`
-	Choices        []Choice        `json:"choices"`
-	CreatedAt      time.Time       `json:"createdAt"`
-	ExpiresAt      time.Time       `json:"expiresAt"`
-	ResolvedAt     *time.Time      `json:"resolvedAt,omitempty"`
-	Decision       Decision        `json:"decision,omitempty"`
-	DecisionScope  string          `json:"decisionScope,omitempty"`
-	TerminalReason string          `json:"terminalReason,omitempty"`
+	ID           string          `json:"id"`
+	Revision     uint64          `json:"revision"`
+	Kind         string          `json:"kind"`
+	State        State           `json:"state"`
+	Risk         string          `json:"risk"`
+	TitleKey     string          `json:"titleKey"`
+	SummaryKey   string          `json:"summaryKey"`
+	ExchangeID   string          `json:"exchangeId,omitempty"`
+	AccessID     string          `json:"accessId,omitempty"`
+	PlanRevision access.Revision `json:"planRevision,omitempty"`
+	PlanHash     string          `json:"planHash,omitempty"`
+	AggregateKey string          `json:"aggregateKey"`
+	// Target is what a connection question is about, so a window can name the
+	// host and port instead of taking a subject string apart.
+	Target         *Target    `json:"target,omitempty"`
+	SubjectRefs    []string   `json:"subjectRefs"`
+	SubjectLabels  []string   `json:"subjectLabels"`
+	RequestCount   uint32     `json:"requestCount"`
+	WaiterCount    uint32     `json:"waiterCount"`
+	Choices        []Choice   `json:"choices"`
+	CreatedAt      time.Time  `json:"createdAt"`
+	ExpiresAt      time.Time  `json:"expiresAt"`
+	ResolvedAt     *time.Time `json:"resolvedAt,omitempty"`
+	Decision       Decision   `json:"decision,omitempty"`
+	DecisionScope  string     `json:"decisionScope,omitempty"`
+	TerminalReason string     `json:"terminalReason,omitempty"`
 }
 
 func ViewOf(record Record) View {
@@ -407,7 +410,6 @@ func ViewOf(record Record) View {
 		ExchangeID:     record.ExchangeID,
 		AccessID:       record.AccessID.String(),
 		PlanRevision:   record.PlanRevision,
-		PlanHash:       record.PlanHash.String(),
 		SubjectRefs:    slices.Clone(record.SubjectRefs),
 		SubjectLabels:  slices.Clone(record.SubjectLabels),
 		RequestCount:   record.RequestCount,
@@ -418,6 +420,15 @@ func ViewOf(record Record) View {
 		Decision:       record.Decision,
 		DecisionScope:  record.DecisionScope,
 		TerminalReason: record.DecisionReason,
+	}
+	// A record with no plan binding has no plan hash. Presenting a zero hash
+	// would show a person a fact that does not exist.
+	if record.PlanRevision != 0 {
+		view.PlanHash = record.PlanHash.String()
+	}
+	if record.Target.present() {
+		target := record.Target
+		view.Target = &target
 	}
 	if !record.ResolvedAt.IsZero() {
 		resolved := record.ResolvedAt

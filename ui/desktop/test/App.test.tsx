@@ -2,10 +2,14 @@ import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { I18nextProvider } from "react-i18next";
 import { describe, expect, it, vi } from "vitest";
 import { Dashboard } from "../src/App.tsx";
+import { ControlProblem } from "../src/control-client.ts";
 import type { ControlClient } from "../src/control-client.ts";
 import { DashboardModel } from "../src/dashboard-model.ts";
+import approvalSamples from "../src/generated/samples/approvals.json" with { type: "json" };
 import type {
   AccessApplyInput,
+  ApprovalChoice,
+  ApprovalKind,
   ApprovalView,
   CredentialView,
   OfflineHoldSnapshot,
@@ -47,27 +51,21 @@ const status: StatusResponse = {
   },
 };
 
-const approval: ApprovalView = {
-  id: "approval-safe-view",
-  revision: 1,
-  kind: "tool-intent",
-  state: "pending",
-  risk: "high",
-  titleKey: "approval.toolIntent.title",
-  summaryKey: "approval.toolIntent.summary",
-  exchangeId: "exchange-id",
-  accessId: "work",
-  planRevision: 1,
-  planHash: "a".repeat(64),
-  toolCallIds: ["call-safe-id"],
-  toolNames: ["read_file"],
-  choices: [
-    { decision: "allow-once", scope: "request" },
-    { decision: "deny", scope: "request" },
-  ],
-  createdAt: "2026-07-29T00:00:00Z",
-  expiresAt: "2099-07-30T00:00:00Z",
-};
+// The shapes the window renders come from the runtime itself. A hand-typed
+// fixture can keep passing after the runtime stops sending the field it
+// describes, which is exactly the failure this window had.
+const samples = approvalSamples as readonly ApprovalView[];
+
+function sampleOfKind(kind: ApprovalKind): ApprovalView {
+  const found = samples.find((candidate) => candidate.kind === kind);
+  if (found === undefined) {
+    throw new Error(`no ${kind} sample is generated`);
+  }
+  return found;
+}
+
+const approval = sampleOfKind("tool_intent");
+const networkAsk = sampleOfKind("network_ask");
 
 function clientFixture() {
   return {
@@ -99,7 +97,7 @@ function clientFixture() {
     decideApproval: vi.fn(
       async (
         _approval: ApprovalView,
-        _decision: "allow-once" | "deny",
+        _choice: ApprovalChoice,
         _signal?: AbortSignal,
       ) => ({ ...approval, state: "denied" as const }),
     ),
@@ -153,17 +151,23 @@ describe("Desktop dashboard", () => {
     );
 
     expect(await screen.findByText("Ready")).toBeTruthy();
-    expect(screen.getByText("read_file")).toBeTruthy();
+    expect(screen.getByText("read_file, list_directory")).toBeTruthy();
     expect(screen.queryByText("raw-secret-tool-arguments")).toBeNull();
 
     fireEvent.click(screen.getByRole("button", { name: "Enter offline hold" }));
     await waitFor(() => expect(client.enterOfflineHold).toHaveBeenCalledWith(1, expect.any(AbortSignal)));
 
-    fireEvent.click(screen.getByRole("button", { name: "Deny" }));
+    fireEvent.click(
+      screen.getByRole("button", { name: "Refuse these tool calls" }),
+    );
     await waitFor(() =>
       expect(client.decideApproval).toHaveBeenCalledWith(
         approval,
-        "deny",
+        {
+          decision: "deny",
+          scope: "request",
+          labelKey: "approval.toolIntent.choice.deny",
+        },
         expect.any(AbortSignal),
       ),
     );
@@ -335,5 +339,107 @@ describe("Desktop dashboard", () => {
     expect(
       (screen.getByLabelText("Provider API key") as HTMLInputElement).value,
     ).toBe("");
+  });
+});
+
+describe("the ApprovalCenter and a connection question", () => {
+  function askingClient() {
+    const client = clientFixture();
+    client.approvals.mockResolvedValue({ items: [networkAsk] });
+    return client;
+  }
+
+  it("names the connection rather than describing it as a tool call", async () => {
+    const i18n = await createI18n("en-US");
+    const model = new DashboardModel(askingClient(), 60_000);
+    render(
+      <I18nextProvider i18n={i18n}>
+        <Dashboard model={model} />
+      </I18nextProvider>,
+    );
+
+    expect(await screen.findByText("api.example.com:443")).toBeTruthy();
+    expect(screen.getByText("Destination")).toBeTruthy();
+  });
+
+  it("says how many connections one answer is answering for", async () => {
+    const i18n = await createI18n("en-US");
+    const model = new DashboardModel(askingClient(), 60_000);
+    render(
+      <I18nextProvider i18n={i18n}>
+        <Dashboard model={model} />
+      </I18nextProvider>,
+    );
+
+    expect(
+      await screen.findByText("3 connections are waiting on this answer"),
+    ).toBeTruthy();
+  });
+
+  it("offers exactly the choices the runtime declared", async () => {
+    const i18n = await createI18n("en-US");
+    const model = new DashboardModel(askingClient(), 60_000);
+    render(
+      <I18nextProvider i18n={i18n}>
+        <Dashboard model={model} />
+      </I18nextProvider>,
+    );
+
+    expect(await screen.findByText("api.example.com:443")).toBeTruthy();
+    for (const choice of networkAsk.choices) {
+      expect(
+        screen.getByRole("button", { name: i18n.t(choice.labelKey) }),
+      ).toBeTruthy();
+    }
+  });
+
+  it("sends the scope of the choice that was taken", async () => {
+    const i18n = await createI18n("en-US");
+    const client = askingClient();
+    const model = new DashboardModel(client, 60_000);
+    render(
+      <I18nextProvider i18n={i18n}>
+        <Dashboard model={model} />
+      </I18nextProvider>,
+    );
+
+    expect(await screen.findByText("api.example.com:443")).toBeTruthy();
+    fireEvent.click(
+      screen.getByRole("button", { name: "Always allow this host and port" }),
+    );
+    await waitFor(() =>
+      expect(client.decideApproval).toHaveBeenCalledWith(
+        networkAsk,
+        {
+          decision: "allow-once",
+          scope: "host_port",
+          labelKey: "approval.networkAsk.choice.allowHostPort",
+        },
+        expect.any(AbortSignal),
+      ),
+    );
+  });
+
+  it("reports a stale answer rather than retrying it", async () => {
+    const i18n = await createI18n("en-US");
+    const client = askingClient();
+    client.decideApproval.mockRejectedValue(
+      new ControlProblem(409, "revision_conflict", "error.revision_conflict"),
+    );
+    const model = new DashboardModel(client, 60_000);
+    render(
+      <I18nextProvider i18n={i18n}>
+        <Dashboard model={model} />
+      </I18nextProvider>,
+    );
+
+    expect(await screen.findByText("api.example.com:443")).toBeTruthy();
+    fireEvent.click(
+      screen.getByRole("button", { name: "Refuse this connection" }),
+    );
+    await waitFor(() => expect(client.decideApproval).toHaveBeenCalledTimes(1));
+    expect(
+      await screen.findByText("The state changed. Refresh and try again."),
+    ).toBeTruthy();
   });
 });

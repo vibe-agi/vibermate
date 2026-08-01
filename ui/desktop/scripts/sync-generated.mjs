@@ -1,3 +1,8 @@
+// Copies the artifacts the desktop window is not allowed to invent: the
+// shared locale catalogues and the API samples the runtime itself emits. The
+// window renders whatever the runtime declares, so its tests have to be
+// written against the runtime's own shapes rather than against a hand-typed
+// idea of them.
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -37,6 +42,40 @@ for (const locale of locales) {
   await writeFile(destinationPath, canonical, "utf8");
 }
 
+const samples = ["approvals"];
+for (const sample of samples) {
+  const sourcePath = resolve(
+    repositoryDirectory,
+    "api",
+    "samples",
+    `${sample}.json`,
+  );
+  const destinationPath = resolve(
+    desktopDirectory,
+    "src",
+    "generated",
+    "samples",
+    `${sample}.json`,
+  );
+  const parsed = JSON.parse(await readFile(sourcePath, "utf8"));
+  const canonical = `${JSON.stringify(parsed, null, 2)}\n`;
+  if (checkOnly) {
+    let current = "";
+    try {
+      current = await readFile(destinationPath, "utf8");
+    } catch {
+      drift = true;
+      continue;
+    }
+    if (current !== canonical) {
+      drift = true;
+    }
+    continue;
+  }
+  await mkdir(dirname(destinationPath), { recursive: true, mode: 0o700 });
+  await writeFile(destinationPath, canonical, "utf8");
+}
+
 if (drift) {
-  throw new Error("Desktop locale artifacts are out of date; run pnpm generate");
+  throw new Error("Desktop generated artifacts are out of date; run pnpm generate");
 }

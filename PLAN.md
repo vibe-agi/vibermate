@@ -48,12 +48,12 @@ design 06 requires.
 
 ## Bottom-up implementation
 
-- [ ] Bring the approval types level with what the runtime sends.
-- [ ] Render the declared choices, with their own copy, instead of two fixed
+- [x] Bring the approval types level with what the runtime sends.
+- [x] Render the declared choices, with their own copy, instead of two fixed
       buttons.
-- [ ] Show the subject and the waiting count.
-- [ ] Report a stale or conflicting answer as itself.
-- [ ] Prove it against the runtime's own shapes rather than hand-written ones.
+- [x] Show the subject and the waiting count.
+- [x] Report a stale or conflicting answer as itself.
+- [x] Prove it against the runtime's own shapes rather than hand-written ones.
 
 ## Gates
 

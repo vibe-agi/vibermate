@@ -11,7 +11,7 @@ check-format:
 
 check-generated:
 	go generate ./...
-	node ui/desktop/scripts/sync-locales.mjs --check
+	node ui/desktop/scripts/sync-generated.mjs --check
 	git diff --exit-code
 
 check-dependencies:

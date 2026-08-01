@@ -4,6 +4,7 @@ import type {
   AccessPlanSummary,
   ActivityPage,
   ApprovalPage,
+  ApprovalChoice,
   ApprovalView,
   CredentialView,
   OfflineHoldSnapshot,
@@ -61,7 +62,7 @@ export interface ControlClient {
   approvals(signal?: AbortSignal): Promise<ApprovalPage>;
   decideApproval(
     approval: ApprovalView,
-    decision: "allow-once" | "deny",
+    choice: ApprovalChoice,
     signal?: AbortSignal,
   ): Promise<ApprovalView>;
   applyAccess(
@@ -204,14 +205,16 @@ export function createControlClient(
           signal,
         ),
       ),
-    decideApproval: (approval, decision, signal) =>
+    decideApproval: (approval, choice, signal) =>
       request<ApprovalView>(
         "POST",
         `/api/v1/approvals/${encodeURIComponent(approval.id)}/actions/decide`,
         {
-          decision,
-          scope: "request",
-          ...(decision === "deny" ? { reasonCode: "user_denied" } : {}),
+          decision: choice.decision,
+          scope: choice.scope,
+          ...(choice.decision === "deny"
+            ? { reasonCode: "user_denied" }
+            : {}),
         },
         approval.revision,
         signal,

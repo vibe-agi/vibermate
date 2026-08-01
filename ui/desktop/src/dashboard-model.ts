@@ -8,6 +8,7 @@ import type {
   AccessApplyResponse,
   AccessPlanSummary,
   ActivityRecord,
+  ApprovalChoice,
   ApprovalView,
   CredentialView,
   OfflineHoldSnapshot,
@@ -119,12 +120,12 @@ export class DashboardModel {
 
   async decideApproval(
     approval: ApprovalView,
-    decision: "allow-once" | "deny",
+    choice: ApprovalChoice,
   ): Promise<void> {
     await this.#mutation(async () => {
       await this.#client.decideApproval(
         approval,
-        decision,
+        choice,
         this.#owner.signal,
       );
     });
