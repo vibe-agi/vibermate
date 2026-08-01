@@ -1,85 +1,73 @@
-# M1.0-C0h-1 Connection Policy: Rules and Deny
+# M1.0-C0h-2 Connection Policy: The Ask Path
 
 Status: active
 Created: 2026-08-02
-Implementation baseline: `0080687`
+Implementation baseline: `0918d6b`
 Branch: `m1/root-leaf-foundation`
-Predecessor: `docs/plans/archive/2026-08-02-m1.0-c0f-ingress-observation.md`
+Predecessor: `docs/plans/archive/2026-08-02-m1.0-c0h-1-policy-rules-and-deny.md`
 Defers: `docs/plans/deferred/2026-08-01-m1.0-c-macos-trust-observation.md`
 
 ## Objective
 
-The product's central claim is that a user decides, before a dial, which hosts
-a captured program may reach. That decision does not exist: the proxy writes a
-fixed allow with a literal rule identifier for anything that matched an
-AgentEndpoint, and blind forwarding allows everything else. `DecisionAsk` and
-the asked phase are unreachable.
+`ask` is the decision the product is actually for: a connection waits on a
+person before it is dialled. The rule set refuses to construct one today,
+deliberately, because a blocking decision that cannot block is an allow wearing
+a different name.
 
-This is the first of three slices. It builds the rule set and the decision, and
-wires `allow` and `deny`. The `ask` path and remembered rules follow, because
-`ask` blocks a dial on a person and must not be shipped half-built: a
-half-built blocking decision fails open, which is the one outcome worse than
-not having it.
+This slice makes it real. It is the highest-risk work in the foundation,
+because it is a blocking wait in front of a dial: every way it can fail must
+fail closed, and it must not deadlock the proxy while it waits.
 
 ## Read-only design authority
 
-- `docs/design/06-security.md` §4.1, including `INV-FIREWALL-NO-WILDCARD`;
-- `docs/design/02-architecture.md` §5.5 ordering;
-- `docs/adr/0002-blind-tunnel-firewall-and-connection-events.md`.
+- `docs/design/06-security.md` §4.1, including the aggregation key and the
+  fail-closed rules;
+- `docs/design/04-ux.md` §4.1 and §4.6;
+- `docs/design/03-ui.md` §3.2.
 
 ## Required invariants
 
-1. The decision happens before any dial, DNS resolution, or certificate
-   issuance, for every proxied connection including a blind tunnel.
-2. Rules are ordered and the first match wins. Evaluation is deterministic:
-   the same rule set and the same connection always produce the same decision
-   and name the same rule.
-3. The shipped default is not a wildcard allow. Design 06 makes that an
-   invariant, because a default that allows everything makes the firewall the
-   one control that never fires.
-4. A decision names the rule that produced it, and the connection record
-   carries that name rather than a literal.
-5. `ask` is not reachable in this slice. A rule set that asks is refused at
-   construction rather than silently downgraded, so nothing depends on a
-   half-built blocking decision.
+1. An `ask` blocks before the dial. Nothing is resolved, connected, or issued
+   while the question is open.
+2. Every failure denies. Timeout, cancellation, shutdown, a full queue, and an
+   unavailable approval authority all produce deny, never allow.
+3. Identical questions merge. Design 06 keys aggregation on the kind, the
+   ingress, the host, and the port, so a burst of connections to one host is
+   one question answered once for all of them.
+4. A caller that goes away does not answer for the others. Its waiter leaves
+   and the question stays open while anyone still waits.
+5. The record carries the host and port as its subject, and no path, header,
+   body, or credential. A blind connection has none of those to begin with,
+   and the record must not acquire them.
+6. Waiting is bounded. The proxy does not hold a connection open indefinitely
+   because nobody is looking at the approval queue.
 
 ## Non-goals
 
-- the ask path, the approval integration, and remembered rules, which are the
-  next slice;
-- a control API or UI for editing rules;
-- per-ingress scoping beyond what the record already carries.
+- remembered rules and rule scopes beyond recording the chosen one;
+- rule editing through a control API or UI;
+- renaming the approval package, which now serves more than tool intent and is
+  misnamed. That is mechanical churn and is tracked separately.
 
 ## Bottom-up implementation
 
-- [x] Add an ordered rule set with deterministic first-match evaluation.
-- [x] Prove the default is not a wildcard allow and that ask is refused.
-- [x] Evaluate before dial for the MITM, blind, and cleartext paths.
-- [x] Record the matched rule rather than a literal.
-
-## The interim rule, stated plainly
-
-Design 06 forbids a wildcard allow default and makes the shipped default `ask`
-for an unknown host. The ask path does not exist yet, and neither alternative
-is honest: denying by default makes the proxy unusable while no rule editing
-exists, and allowing by default is the invariant violation.
-
-This slice therefore ships an explicit rule named
-`interim.allow-unmatched-pending-ask` rather than a permissive default. Every
-connection it admits carries that identifier in its connection record, so the
-gap is visible in the data rather than hidden in a constant, and deleting the
-rule is what turns `ask` on. It is a placeholder, not a product default, and it
-must not reach a release.
+- [ ] Add a network-ask entry point to the approval authority.
+- [ ] Key aggregation on kind, ingress, host, and port.
+- [ ] Allow the rule set to construct an ask.
+- [ ] Block the proxy on it before the dial, and deny on every failure.
+- [ ] Prove merging, independent cancellation, bounded waiting, and that no
+      failure produces allow.
 
 ## Gates
 
 `make check`, `gofmt -l .`, `go test -count=1 ./...`,
-`go test -race -count=1 ./...`, `go vet ./...`, `go mod tidy -diff`,
+`go test -race -count=1 ./...`, repeated race stress for `toolapproval`,
+`loopbackproxy`, `connectionpolicy`, `go vet ./...`, `go mod tidy -diff`,
 `go mod verify`, pinned `govulncheck`, `git diff --check`, clean tree.
 
 ## Completion statement
 
-> Every proxied connection is decided by an ordered rule set before any dial,
-> the decision names its rule, and the shipped default is not a wildcard allow.
+> A connection whose rule asks waits on a person before it is dialled,
+> identical questions are one question, and every way the wait can fail denies.
 
-It does not implement ask, remembered rules, or rule editing.
+It does not implement remembered rules or rule editing.
