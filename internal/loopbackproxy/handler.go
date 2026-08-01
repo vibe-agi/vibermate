@@ -1164,19 +1164,38 @@ func connectOrigin(authority string) (access.ClientOrigin, string, error) {
 	return origin, origin.TLSServerName(), nil
 }
 
+// splitAuthority canonicalizes rather than refuses. RFC 3986 makes a host
+// case-insensitive and a trailing dot is the root form of the same name, so a
+// client that sends either is asking for the same endpoint. Canonicalization
+// cannot widen the match: case folding and root-dot removal map a name only
+// onto itself, and no suffix, wildcard, or different host becomes equal.
 func splitAuthority(authority string) (string, uint16, error) {
 	host, portText, err := net.SplitHostPort(authority)
 	if err != nil || host == "" || portText == "" {
 		return "", 0, errors.New("CONNECT authority must contain host and port")
 	}
-	if strings.ToLower(host) != host {
-		return "", 0, errors.New("CONNECT host is not canonical")
+	host = canonicalCONNECTHost(host)
+	if host == "" {
+		return "", 0, errors.New("CONNECT host is invalid")
 	}
 	port, err := strconv.ParseUint(portText, 10, 16)
 	if err != nil || port == 0 {
 		return "", 0, errors.New("CONNECT port is invalid")
 	}
 	return host, uint16(port), nil
+}
+
+func canonicalCONNECTHost(host string) string {
+	host = strings.ToLower(host)
+	// A single trailing dot is the DNS root label. More than one, or a dot
+	// alone, is not a name.
+	if strings.HasSuffix(host, ".") {
+		host = strings.TrimSuffix(host, ".")
+	}
+	if host == "" || strings.HasSuffix(host, ".") {
+		return ""
+	}
+	return host
 }
 
 func authorityMatches(authority string, origin access.ClientOrigin) bool {
@@ -1189,11 +1208,13 @@ func authorityMatches(authority string, origin access.ClientOrigin) bool {
 	return host == origin.TLSServerName() && port == origin.Port()
 }
 
+// sniMatches compares canonically: RFC 6066 server names are case-insensitive
+// and may carry the DNS root label.
 func sniMatches(expected, actual string) bool {
 	if address := net.ParseIP(expected); address != nil {
 		return actual == ""
 	}
-	return actual == expected
+	return canonicalCONNECTHost(actual) == expected
 }
 
 func writeConnectEstablished(buffered *bufio.ReadWriter) error {

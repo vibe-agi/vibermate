@@ -190,9 +190,11 @@ func TestLoopbackProxyFailsClosedBeforeCertificateOrDataPlane(t *testing.T) {
 			reason:    "blind_tunnel_failed",
 		},
 		{
-			name:      "noncanonical authority",
+			// A case difference or a root dot is the same name and is
+			// canonicalized. A name that is only dots is not a name.
+			name:      "malformed authority",
 			token:     fixture.grant.ProxyCapability.Value(),
-			authority: "API.anthropic.com:443",
+			authority: "api.anthropic.com..:443",
 			status:    http.StatusBadRequest,
 			reason:    "connect_authority_invalid",
 		},
@@ -237,6 +239,12 @@ func TestLoopbackProxyFailsClosedBeforeCertificateOrDataPlane(t *testing.T) {
 	}
 	if denied != 2 {
 		t.Fatalf("denied ConnectionEvents = %+v", page)
+	}
+	for _, record := range page.Items {
+		if record.RequestedHost == "api.anthropic.com..:443" &&
+			record.Decryption == connectionevent.DecryptionMITM {
+			t.Fatalf("a malformed authority was decrypted: %+v", record)
+		}
 	}
 }
 
