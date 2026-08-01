@@ -41,6 +41,30 @@ const (
 	StateExpired  State = "expired"
 )
 
+// Observation answers whether traffic was actually seen through this run.
+// Launching a child proves only that a child was launched: a program that
+// ignores proxy variables, clears its environment, dials a socket directly, or
+// uses QUIC is not captured, and saying otherwise is the difference between a
+// working setup and a silently broken one.
+type Observation string
+
+const (
+	ObservationWaitingForTraffic Observation = "waiting_for_traffic"
+	ObservationObserved          Observation = "observed"
+)
+
+// valid requires an explicit state. Leaving it unset would let a writer that
+// forgot the field look the same as one that observed nothing, and those are
+// different facts.
+func (observation Observation) valid() bool {
+	switch observation {
+	case ObservationWaitingForTraffic, ObservationObserved:
+		return true
+	default:
+		return false
+	}
+}
+
 func (state State) active() bool {
 	return state == StateCreated || state == StateAttached
 }
@@ -63,14 +87,38 @@ type DurableRecord struct {
 	Adapter               *clientadapter.Evidence
 	ProcessID             int
 	State                 State
-	CreatedAt             time.Time
-	ExpiresAt             time.Time
-	UpdatedAt             time.Time
+	// Observation is recorded from real authenticated proxy traffic only. It
+	// is never inferred from a fingerprint, user agent, loopback source port,
+	// or connection reuse, because those are shared between processes.
+	Observation     Observation
+	FirstObservedAt time.Time
+	CreatedAt       time.Time
+	ExpiresAt       time.Time
+	UpdatedAt       time.Time
 }
 
 func (record DurableRecord) Validate() error {
 	if err := validateID(record.ID); err != nil {
 		return err
+	}
+	if !record.Observation.valid() {
+		return fmt.Errorf("%w: observation state is invalid", ErrInvalidRequest)
+	}
+	// An observation time is evidence: it exists exactly when something was
+	// observed, and it cannot predate the run it belongs to.
+	if record.Observed() {
+		if record.FirstObservedAt.IsZero() ||
+			record.FirstObservedAt.Before(record.CreatedAt) {
+			return fmt.Errorf(
+				"%w: observation time is inconsistent",
+				ErrInvalidRequest,
+			)
+		}
+	} else if !record.FirstObservedAt.IsZero() {
+		return fmt.Errorf(
+			"%w: an unobserved run carries an observation time",
+			ErrInvalidRequest,
+		)
 	}
 	if !record.ProxyCapabilityHash.valid() ||
 		!record.ControlCapabilityHash.valid() {
@@ -231,6 +279,8 @@ func (command CreateCommand) validate(maxLifetime time.Duration) error {
 // excludes the capability hash and raw value.
 type Evidence struct {
 	RunID           string
+	Observed        bool
+	FirstObservedAt time.Time
 	CWD             string
 	ExecutableLabel string
 	CatalogRevision clientadapter.CatalogRevision
@@ -242,6 +292,8 @@ type Evidence struct {
 func evidenceOf(record DurableRecord) Evidence {
 	return Evidence{
 		RunID:           record.ID,
+		Observed:        record.Observed(),
+		FirstObservedAt: record.FirstObservedAt,
 		CWD:             record.CWD,
 		ExecutableLabel: record.ExecutableLabel,
 		CatalogRevision: record.CatalogRevision,
@@ -351,4 +403,25 @@ func validateText(label, value string, limit int) error {
 		}
 	}
 	return nil
+}
+
+// Observed reports whether authenticated traffic actually arrived through this
+// run.
+func (record DurableRecord) Observed() bool {
+	return record.Observation == ObservationObserved
+}
+
+// WithObservedTraffic marks the first authenticated connection. It is
+// monotonic and idempotent, and a run that is no longer active cannot become
+// observed afterwards. It reports whether anything changed so a caller can
+// avoid a write it does not need.
+func (record DurableRecord) WithObservedTraffic(
+	at time.Time,
+) (DurableRecord, bool) {
+	if !record.State.active() || record.Observed() || at.IsZero() {
+		return record, false
+	}
+	record.Observation = ObservationObserved
+	record.FirstObservedAt = at.UTC()
+	return record, true
 }

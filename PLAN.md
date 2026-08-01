@@ -54,11 +54,21 @@ CaptureRun.
 
 ## Bottom-up implementation
 
-- [ ] Add a typed observation state to the CaptureRun record and persist it.
-- [ ] Mark it from the first authenticated proxy connection only.
-- [ ] Prove monotonicity, idempotence, and that a finished run cannot become
+- [x] Add a typed observation state to the CaptureRun record and persist it.
+      The state is required rather than defaulted, so a writer that forgot the
+      field cannot look like one that observed nothing.
+- [x] Mark it from the first authenticated proxy connection only, in the one
+      place that can honestly know.
+- [x] Prove monotonicity, idempotence, and that a finished run cannot become
       observed.
-- [ ] Prove a launched-but-unused run reports honestly.
+- [x] Prove a launched-but-unused run reports honestly.
+
+## A precision bug the end-to-end test caught
+
+The first authorization returned an untruncated observation time while the
+stored value was truncated to milliseconds, so the same fact differed between
+the first read and every later one. The value returned to a caller is now the
+value that was stored.
 
 ## Gates
 

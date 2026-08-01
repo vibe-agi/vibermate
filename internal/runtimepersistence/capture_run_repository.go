@@ -28,6 +28,8 @@ const captureRunColumns = `
 	adapter_features,
 	process_id,
 	state,
+	observation,
+	first_observed_at_unix_ms,
 	created_at_unix_ms,
 	expires_at_unix_ms,
 	updated_at_unix_ms`
@@ -136,7 +138,37 @@ func (repository *captureRunRepository) AuthorizeProxy(
 	if err != nil {
 		return capturerun.DurableRecord{}, fmt.Errorf("authorize CaptureRun proxy: %w", err)
 	}
-	return record, nil
+	// This is the only place that can honestly mark observation: an
+	// authenticated proxy connection is the one signal that traffic actually
+	// arrived through this run. The write is conditional so a later connection
+	// cannot move the first-observed time.
+	// The stored value is what a later read will see, so the value returned to
+	// this caller is the stored one. Handing back an untruncated time would
+	// make the same fact differ between the first call and every later one.
+	storedAt := fromUnixMillis(toUnixMillis(now))
+	observed, changed := record.WithObservedTraffic(storedAt)
+	if !changed {
+		return record, nil
+	}
+	if _, err := repository.database.ExecContext(
+		operation,
+		`UPDATE capture_runs
+		    SET observation = 'observed',
+		        first_observed_at_unix_ms = ?,
+		        updated_at_unix_ms = ?
+		  WHERE run_id = ?
+		    AND observation = 'waiting_for_traffic'
+		    AND state IN ('created', 'attached')`,
+		toUnixMillis(storedAt),
+		toUnixMillis(now),
+		record.ID,
+	); err != nil {
+		return capturerun.DurableRecord{}, fmt.Errorf(
+			"record CaptureRun observation: %w",
+			err,
+		)
+	}
+	return observed, nil
 }
 
 func (repository *captureRunRepository) Attach(
@@ -366,6 +398,8 @@ func scanCaptureRun(scanner captureRunScanner) (capturerun.DurableRecord, error)
 		adapterID, adapterVersion          string
 		adapterInstallShape, adapterRecipe string
 		state                              string
+		observation                        string
+		firstObservedAt                    sql.NullInt64
 		createdAt, expiresAt, updatedAtMS  int64
 	)
 	if err := scanner.Scan(
@@ -384,6 +418,8 @@ func scanCaptureRun(scanner captureRunScanner) (capturerun.DurableRecord, error)
 		&adapterFeatures,
 		&record.ProcessID,
 		&state,
+		&observation,
+		&firstObservedAt,
 		&createdAt,
 		&expiresAt,
 		&updatedAtMS,
@@ -396,6 +432,10 @@ func scanCaptureRun(scanner captureRunScanner) (capturerun.DurableRecord, error)
 	}
 	copy(record.ProxyCapabilityHash[:], proxyHash)
 	copy(record.ControlCapabilityHash[:], controlHash)
+	record.Observation = capturerun.Observation(observation)
+	if firstObservedAt.Valid {
+		record.FirstObservedAt = fromUnixMillis(firstObservedAt.Int64)
+	}
 	if catalogRevision <= 0 ||
 		adapterRevision < 0 ||
 		adapterFeatures < 0 {

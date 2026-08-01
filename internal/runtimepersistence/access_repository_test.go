@@ -55,8 +55,8 @@ func TestExecutablePlanMigrationUpgradesFoundationSchema(t *testing.T) {
 	if err != nil {
 		t.Fatalf("read upgraded schema state: %v", err)
 	}
-	if state.Revision != 14 {
-		t.Fatalf("upgraded schema revision = %d, want 14", state.Revision)
+	if state.Revision != 15 {
+		t.Fatalf("upgraded schema revision = %d, want 15", state.Revision)
 	}
 	mutation := accessMutation(t, "access-upgraded", 0, "Upgraded")
 	result, err := store.AccessRepository().CompareAndSwap(

@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/vibe-agi/vibermate/internal/capturerun"
 	"github.com/vibe-agi/vibermate/internal/connectionevent"
 	"github.com/vibe-agi/vibermate/internal/egressaudit"
 )
@@ -181,4 +182,64 @@ func TestBlindTunnelRecordsAConnectionWithoutContent(t *testing.T) {
 	if !found {
 		t.Fatal("a blind connection left no connection record")
 	}
+}
+
+// Launching a child proves only that a child was launched. A run reports as
+// observed only once authenticated traffic actually arrives through it, so a
+// program that ignores proxy variables or dials directly is reported honestly
+// rather than as captured.
+func TestCaptureRunIsObservedOnlyAfterRealTraffic(t *testing.T) {
+	t.Parallel()
+
+	fixture := newProxyFixture(t)
+	defer fixture.Close(t)
+	authority, stop := echoTarget(t)
+	defer stop()
+
+	first, err := fixture.runs.AuthorizeProxy(
+		context.Background(),
+		mustProxyCapability(t, fixture.grant.ProxyCapability.Value()),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !first.Observed || first.FirstObservedAt.IsZero() {
+		t.Fatalf("authenticated traffic did not mark observation: %+v", first)
+	}
+
+	// A later connection must not move the first-observed time.
+	connection, _ := fixture.Connect(
+		t,
+		fixture.grant.ProxyCapability.Value(),
+		authority,
+	)
+	_ = connection.Close()
+
+	second, err := fixture.runs.AuthorizeProxy(
+		context.Background(),
+		mustProxyCapability(t, fixture.grant.ProxyCapability.Value()),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !second.FirstObservedAt.Equal(first.FirstObservedAt) {
+		t.Fatalf(
+			"a later connection moved the observation from %v to %v",
+			first.FirstObservedAt,
+			second.FirstObservedAt,
+		)
+	}
+}
+
+func mustProxyCapability(
+	t *testing.T,
+	value string,
+) capturerun.ProxyCapability {
+	t.Helper()
+
+	capability, err := capturerun.NewProxyCapability(value)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return capability
 }

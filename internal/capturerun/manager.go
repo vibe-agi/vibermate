@@ -138,9 +138,11 @@ func (manager *Manager) Create(
 		CatalogRevision:       command.CatalogRevision,
 		Adapter:               cloneAdapter(command.Adapter),
 		State:                 StateCreated,
-		CreatedAt:             now,
-		ExpiresAt:             now.Add(command.Lifetime),
-		UpdatedAt:             now,
+		// A run is waiting until authenticated traffic actually arrives.
+		Observation: ObservationWaitingForTraffic,
+		CreatedAt:   now,
+		ExpiresAt:   now.Add(command.Lifetime),
+		UpdatedAt:   now,
 	}
 	if err := record.Validate(); err != nil {
 		return LaunchGrant{}, err
