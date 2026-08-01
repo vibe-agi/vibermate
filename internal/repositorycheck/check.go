@@ -14,6 +14,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"sort"
+	"strconv"
 	"strings"
 	"unicode"
 )
@@ -51,6 +52,7 @@ func Check(repositoryRoot string) error {
 	violations = append(violations, CheckExternalEgressGate(repositoryRoot)...)
 	violations = append(violations, CheckDataPlaneAccessBoundary(repositoryRoot)...)
 	violations = append(violations, CheckDesktopFrontendBoundary(repositoryRoot)...)
+	violations = append(violations, CheckSystemTrustBoundary(repositoryRoot)...)
 	violations = append(
 		violations,
 		CheckCatalogPair(
@@ -76,6 +78,199 @@ func Check(repositoryRoot string) error {
 		joined = append(joined, errors.New(violation.String()))
 	}
 	return errors.Join(joined...)
+}
+
+// CheckSystemTrustBoundary protects the fixture-only trust-operation shape:
+// production composition cannot import it, the package cannot acquire a live
+// process runner or concrete command executor, mutation command literals stay
+// in the one bounded macOS adapter, and the exact capability namespace cannot
+// appear in user-facing production surfaces.
+func CheckSystemTrustBoundary(repositoryRoot string) []Violation {
+	const (
+		systemTrustImport = "github.com/vibe-agi/vibermate/internal/systemtrust"
+		systemTrustRoot   = "internal/systemtrust"
+		adapterPath       = "internal/systemtrust/macos.go"
+		checkerPath       = "internal/repositorycheck/check.go"
+	)
+	mutationCommands := map[string]struct{}{
+		"add-trusted-cert":    {},
+		"remove-trusted-cert": {},
+		"delete-certificate":  {},
+	}
+	userSurfaceTokens := []string{
+		"systemtrust",
+		"system-trust",
+		"system_trust",
+		"add-trusted-cert",
+		"remove-trusted-cert",
+		"delete-certificate",
+	}
+	var violations []Violation
+	walkErr := filepath.WalkDir(repositoryRoot, func(
+		path string,
+		entry fs.DirEntry,
+		err error,
+	) error {
+		if err != nil {
+			return err
+		}
+		if entry.IsDir() {
+			switch entry.Name() {
+			case ".git", "node_modules", "target", "vendor", "testdata":
+				return filepath.SkipDir
+			default:
+				return nil
+			}
+		}
+		relative := filepath.ToSlash(relativeDisplayPath(repositoryRoot, path))
+		if filepath.Ext(path) != ".go" {
+			if !isSystemTrustUserSurface(relative) ||
+				!isSystemTrustSurfaceSource(path) {
+				return nil
+			}
+			file, openErr := os.Open(path)
+			if openErr != nil {
+				return openErr
+			}
+			scanner := bufio.NewScanner(file)
+			scanner.Buffer(make([]byte, 64*1024), 1024*1024)
+			lineNumber := 0
+			for scanner.Scan() {
+				lineNumber++
+				line := strings.ToLower(scanner.Text())
+				for _, forbidden := range userSurfaceTokens {
+					if !strings.Contains(line, forbidden) {
+						continue
+					}
+					violations = append(violations, Violation{
+						Rule:    "system-trust-user-surface",
+						Path:    relative,
+						Line:    lineNumber,
+						Message: "fixture-only system trust capability entered a user-facing production surface",
+					})
+				}
+			}
+			scanErr := scanner.Err()
+			closeErr := file.Close()
+			return errors.Join(scanErr, closeErr)
+		}
+		if strings.HasSuffix(path, "_test.go") {
+			return nil
+		}
+		fileSet := token.NewFileSet()
+		parsed, parseErr := parser.ParseFile(fileSet, path, nil, 0)
+		if parseErr != nil {
+			return parseErr
+		}
+		insideSystemTrust := relative == systemTrustRoot ||
+			strings.HasPrefix(relative, systemTrustRoot+"/")
+		for _, imported := range parsed.Imports {
+			importPath := strings.Trim(imported.Path.Value, `"`)
+			position := fileSet.Position(imported.Pos())
+			switch {
+			case importPath == systemTrustImport && !insideSystemTrust:
+				violations = append(violations, Violation{
+					Rule:    "system-trust-composition",
+					Path:    relative,
+					Line:    position.Line,
+					Message: "fixture-backed system trust cannot enter production composition",
+				})
+			case importPath == "os/exec" && insideSystemTrust:
+				violations = append(violations, Violation{
+					Rule:    "system-trust-live-executor",
+					Path:    relative,
+					Line:    position.Line,
+					Message: "system trust foundation cannot provide a live process executor",
+				})
+			}
+		}
+		if insideSystemTrust {
+			for _, declaration := range parsed.Decls {
+				method, ok := declaration.(*ast.FuncDecl)
+				if !ok || method.Recv == nil || method.Name.Name != "Execute" ||
+					!functionSignatureNamesType(method.Type, "CommandSpec") {
+					continue
+				}
+				position := fileSet.Position(method.Pos())
+				violations = append(violations, Violation{
+					Rule:    "system-trust-production-executor",
+					Path:    relative,
+					Line:    position.Line,
+					Message: "concrete command executors cannot exist in production system trust source",
+				})
+			}
+		}
+		if relative == adapterPath || relative == checkerPath {
+			return nil
+		}
+		ast.Inspect(parsed, func(node ast.Node) bool {
+			literal, ok := node.(*ast.BasicLit)
+			if !ok || literal.Kind != token.STRING {
+				return true
+			}
+			value, unquoteErr := strconv.Unquote(literal.Value)
+			if unquoteErr != nil {
+				return true
+			}
+			if _, dangerous := mutationCommands[value]; !dangerous {
+				return true
+			}
+			position := fileSet.Position(literal.Pos())
+			violations = append(violations, Violation{
+				Rule:    "system-trust-command-scope",
+				Path:    relative,
+				Line:    position.Line,
+				Message: "trust mutation command literal is outside the bounded macOS adapter",
+			})
+			return true
+		})
+		return nil
+	})
+	if walkErr != nil {
+		violations = append(violations, Violation{
+			Rule:    "system-trust-composition",
+			Path:    ".",
+			Message: walkErr.Error(),
+		})
+	}
+	return violations
+}
+
+func functionSignatureNamesType(function *ast.FuncType, name string) bool {
+	found := false
+	ast.Inspect(function, func(node ast.Node) bool {
+		identifier, ok := node.(*ast.Ident)
+		if ok && identifier.Name == name {
+			found = true
+			return false
+		}
+		return !found
+	})
+	return found
+}
+
+func isSystemTrustUserSurface(relative string) bool {
+	for _, prefix := range []string{
+		"api/",
+		"openapi/",
+		"ui/desktop/src/",
+		"ui/desktop/src-tauri/src/",
+		"ui/desktop/src-tauri/capabilities/",
+	} {
+		if strings.HasPrefix(relative, prefix) {
+			return true
+		}
+	}
+	return strings.Contains(strings.ToLower(relative), "openapi")
+}
+
+func isSystemTrustSurfaceSource(path string) bool {
+	switch strings.ToLower(filepath.Ext(path)) {
+	case ".js", ".json", ".mjs", ".rs", ".ts", ".tsx", ".yaml", ".yml":
+		return true
+	default:
+		return false
+	}
 }
 
 // CheckDesktopFrontendBoundary protects the production Desktop UI shape that

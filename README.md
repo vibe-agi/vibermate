@@ -112,6 +112,16 @@ reclassify a bare IPv4 or IPv6 literal as a DNS SAN.
 This code exports only immutable Root identity and defensive-copy public
 certificate delivery material. It does not install, remove, replace, or rotate
 an operating-system Root, and it has no trust Control API or trust UI.
+
+The system-trust foundation now models certificate-object presence and the
+target admin trust decision as separate typed axes. From the current public
+Root it can derive immutable exact-digest install/remove plans and exercise a
+fail-fast, per-step-reinspection coordinator against an injected executor. Its
+macOS command and output shapes are versioned fixtures: no production executor
+is wired, no production path observes the live trust store, and tests never run
+`security` or modify System.keychain. In particular, this is orchestration
+evidence, not proof of macOS authorization or system trust behavior.
+
 Repository tests prove the version-gated Responses behavior. A clean private
 v5 deterministic report and credentialed report bound to implementation commit
 `c19cca4eb2842aa00d8e8fc17160b342a111f0b6` exercise the revised production

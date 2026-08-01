@@ -236,3 +236,41 @@ func TestDesktopFrontendBoundaryUsesPublicCheckWithGoodAndBadFixtures(
 		}
 	}
 }
+
+func TestSystemTrustBoundaryUsesPublicCheckWithGoodAndBadFixtures(
+	t *testing.T,
+) {
+	t.Parallel()
+
+	goodRoot := filepath.Join("testdata", "repository-system-trust-good")
+	if err := Check(goodRoot); err != nil {
+		t.Fatalf("known-good repository fixture failed: %v", err)
+	}
+
+	badRoot := filepath.Join("testdata", "repository-system-trust-bad")
+	err := Check(badRoot)
+	if !errors.Is(err, ErrCheckFailed) {
+		t.Fatalf("expected ErrCheckFailed, got %v", err)
+	}
+	for _, rule := range []string{
+		"system-trust-composition",
+		"system-trust-live-executor",
+		"system-trust-production-executor",
+		"system-trust-command-scope",
+		"system-trust-user-surface",
+	} {
+		if !strings.Contains(err.Error(), rule) {
+			t.Fatalf("public Check did not report %s: %v", rule, err)
+		}
+	}
+	for _, path := range []string{
+		"api/openapi.yaml",
+		"internal/systemtrust/runner.go",
+		"ui/desktop/src-tauri/src/trust.rs",
+		"ui/desktop/src/trust.ts",
+	} {
+		if !strings.Contains(err.Error(), path) {
+			t.Fatalf("public Check did not inspect %s: %v", path, err)
+		}
+	}
+}
