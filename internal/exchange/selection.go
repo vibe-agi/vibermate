@@ -88,8 +88,32 @@ type frozenSelection struct {
 	codecPlan      access.CodecPlan
 }
 
+// errCandidatesExhausted reports that a further attempt was allowed and there
+// was nothing further to try.
+var errCandidatesExhausted = errors.New("RouteSet candidates are exhausted")
+
+// fallbackPlan reports the default RouteSet's attempt policy and how many
+// candidates the compiled plan holds.
+func fallbackPlan(
+	snapshot access.AccessPlanSnapshot,
+) (access.FallbackPolicy, int) {
+	binding := snapshot.Binding()
+	for _, candidate := range snapshot.RouteSets() {
+		if candidate.ID == binding.DefaultRouteSetID {
+			return candidate.FallbackMode(), snapshot.CandidateCount()
+		}
+	}
+	return access.FallbackDisabled, 0
+}
+
+// selectFrozenPlan freezes one candidate of the default RouteSet.
+//
+// The index is the attempt: candidate zero is what every request starts with,
+// and a later index is only reached when the policy allowed a further attempt
+// and nothing had been committed downstream.
 func selectFrozenPlan(
 	snapshot access.AccessPlanSnapshot,
+	candidateIndex int,
 ) (frozenSelection, error) {
 	binding := snapshot.Binding()
 	if binding.Status != access.AccessStatusEnabled {
@@ -141,11 +165,21 @@ func selectFrozenPlan(
 	}
 	if !foundRoute ||
 		routeSet.AccessID != binding.ID ||
-		len(routeSet.CandidateProfileIDs) != 1 {
+		len(routeSet.CandidateProfileIDs) == 0 {
 		return frozenSelection{}, errors.New("default RouteSet is unsupported")
 	}
+	compiled, withinPlan := snapshot.Candidate(candidateIndex)
+	if !withinPlan ||
+		candidateIndex >= len(routeSet.CandidateProfileIDs) {
+		return frozenSelection{}, errCandidatesExhausted
+	}
 
-	profileID := routeSet.CandidateProfileIDs[0]
+	profileID := routeSet.CandidateProfileIDs[candidateIndex]
+	if compiled.ProfileID() != profileID {
+		return frozenSelection{}, errors.New(
+			"compiled candidate does not match the RouteSet order",
+		)
+	}
 	profiles := snapshot.EndpointProfiles()
 	var profile access.EndpointProfile
 	foundProfile := false

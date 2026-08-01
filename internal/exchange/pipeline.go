@@ -192,157 +192,185 @@ func (pipeline *Pipeline) Execute(
 		)
 	}
 
-	selection, err := selectFrozenPlan(snapshot)
-	if err != nil {
-		return result, newFailure(
-			ReasonUnsupportedAccessPlan,
-			request.exchangeID,
-			0,
-			err,
-		)
-	}
-	result.RouteHost = selection.target.NetworkHost()
-	result.CredentialBindingID = selection.accountID.String()
-	if err := validateClientOperation(
-		selection.codecPlan,
-		request.operation,
-		request.replayClass,
-	); err != nil {
-		return result, newFailure(
-			ReasonUnsupportedAccessPlan,
-			request.exchangeID,
-			0,
-			err,
-		)
-	}
-	protocolPath, err := pipeline.protocolPaths.Select(
-		selection.codecPlan,
-		request.operation.id,
-	)
-	if err != nil {
-		return result, newFailure(
-			ReasonUnsupportedAccessPlan,
-			request.exchangeID,
-			0,
-			err,
-		)
-	}
-	decoded, clientRequestReport, err :=
-		protocolPath.Client().DecodeRequest(request.body)
-	result.Translation = result.Translation.Merge(clientRequestReport)
-	if err != nil {
-		reason := ReasonInvalidExchangeRequest
-		if protocolcore.ReasonOf(err) ==
-			protocolcore.ReasonUnsupportedClientInput {
-			reason = ReasonUnsupportedClientInput
-		}
-		failure := newFailure(
-			reason,
-			request.exchangeID,
-			0,
-			err,
-		)
-		failure.ClientField = classifyClientRequestField(request.body, err)
-		return result, failure
-	}
-	decoded, err = decoded.WithEffectiveModel(selection.effectiveModel)
-	if err != nil {
-		return result, newFailure(
-			ReasonUnsupportedAccessPlan,
-			request.exchangeID,
-			0,
-			err,
-		)
-	}
-	encodedProvider, backendRequestReport, err :=
-		protocolPath.Backend().EncodeRequest(decoded)
-	result.Translation = result.Translation.Merge(backendRequestReport)
-	if err != nil {
-		return result, newFailure(
-			ReasonProviderRequestInvalid,
-			request.exchangeID,
-			0,
-			err,
-		)
-	}
-	clientHello, _ := request.ClientHelloObservation()
-	attemptID, err := pipeline.attemptIDs.NewAttemptID()
-	if err != nil {
-		return result, newFailure(
-			ReasonProviderRequestInvalid,
-			request.exchangeID,
-			0,
-			err,
-		)
-	}
-	// The outbound gets an identity of its own. One value used for both makes
-	// the outbound's identity encode its parent, which the audit refuses.
-	egressID, err := pipeline.attemptIDs.NewAttemptID()
-	if err != nil {
-		return result, newFailure(
-			ReasonProviderRequestInvalid,
-			request.exchangeID,
-			0,
-			err,
-		)
-	}
-	frozenRequest, err := providertransport.NewRequest(
-		providertransport.RequestOptions{
-			RequestID:       attemptID,
-			EgressAttemptID: egressID,
-			ConnectionID:    request.connectionRef,
-			ExchangeID:      request.exchangeID,
-			ParentAttemptID: attemptID,
-			TargetRef:       selection.targetRef,
-			Target:          selection.target,
-			AccessRevision:  selection.revision,
-			PlanHash:        selection.planHash,
-			Action:          action,
-			Method:          encodedProvider.Method(),
-			RelativePath:    encodedProvider.RelativePath(),
-			Headers:         encodedProvider.Headers(),
-			Body:            encodedProvider.Body(),
-			SecretRef:       selection.secretRef,
-			AuthDriverRef:   selection.authDriverRef,
-			TransportPlan:   selection.transportPlan,
-			ClientHello:     clientHello,
-		},
-	)
-	if err != nil {
-		return result, newFailure(
-			ReasonProviderRequestInvalid,
-			request.exchangeID,
-			0,
-			err,
-		)
-	}
-
+	// A request may be attempted against more than one candidate, but only
+	// while the policy allows it and nothing has reached the client. The
+	// ledger lives outside the loop because commits accumulate across the
+	// whole logical Exchange, while everything a candidate decides does not.
 	ledger := &CommitLedger{}
-	if decoded.Stream {
-		err = pipeline.executeStream(
-			operationContext,
-			request,
-			selection,
-			protocolPath,
-			decoded,
-			frozenRequest,
-			downstream,
-			ledger,
-			&result,
+	fallback, candidates := fallbackPlan(snapshot)
+	// attemptErr is the outcome the client ends up with. The loop body has its
+	// own short-lived errors; this is the one that leaves.
+	var attemptErr error
+	for candidateIndex := 0; ; candidateIndex++ {
+		// The translation report describes the attempt whose answer the client
+		// is receiving, so it starts empty for each one.
+		result.Translation = protocolcore.TranslationReport{}
+		selection, err := selectFrozenPlan(snapshot, candidateIndex)
+		if err != nil {
+			return result, newFailure(
+				ReasonUnsupportedAccessPlan,
+				request.exchangeID,
+				0,
+				err,
+			)
+		}
+		result.RouteHost = selection.target.NetworkHost()
+		result.CredentialBindingID = selection.accountID.String()
+		if err := validateClientOperation(
+			selection.codecPlan,
+			request.operation,
+			request.replayClass,
+		); err != nil {
+			return result, newFailure(
+				ReasonUnsupportedAccessPlan,
+				request.exchangeID,
+				0,
+				err,
+			)
+		}
+		protocolPath, err := pipeline.protocolPaths.Select(
+			selection.codecPlan,
+			request.operation.id,
 		)
-	} else {
-		err = pipeline.executeComplete(
-			operationContext,
-			request,
-			selection,
-			protocolPath,
-			decoded,
-			frozenRequest,
-			downstream,
-			ledger,
-			&result,
+		if err != nil {
+			return result, newFailure(
+				ReasonUnsupportedAccessPlan,
+				request.exchangeID,
+				0,
+				err,
+			)
+		}
+		decoded, clientRequestReport, err :=
+			protocolPath.Client().DecodeRequest(request.body)
+		result.Translation = result.Translation.Merge(clientRequestReport)
+		if err != nil {
+			reason := ReasonInvalidExchangeRequest
+			if protocolcore.ReasonOf(err) ==
+				protocolcore.ReasonUnsupportedClientInput {
+				reason = ReasonUnsupportedClientInput
+			}
+			failure := newFailure(
+				reason,
+				request.exchangeID,
+				0,
+				err,
+			)
+			failure.ClientField = classifyClientRequestField(request.body, err)
+			return result, failure
+		}
+		decoded, err = decoded.WithEffectiveModel(selection.effectiveModel)
+		if err != nil {
+			return result, newFailure(
+				ReasonUnsupportedAccessPlan,
+				request.exchangeID,
+				0,
+				err,
+			)
+		}
+		encodedProvider, backendRequestReport, err :=
+			protocolPath.Backend().EncodeRequest(decoded)
+		result.Translation = result.Translation.Merge(backendRequestReport)
+		if err != nil {
+			return result, newFailure(
+				ReasonProviderRequestInvalid,
+				request.exchangeID,
+				0,
+				err,
+			)
+		}
+		clientHello, _ := request.ClientHelloObservation()
+		attemptID, err := pipeline.attemptIDs.NewAttemptID()
+		if err != nil {
+			return result, newFailure(
+				ReasonProviderRequestInvalid,
+				request.exchangeID,
+				0,
+				err,
+			)
+		}
+		// The outbound gets an identity of its own. One value used for both makes
+		// the outbound's identity encode its parent, which the audit refuses.
+		egressID, err := pipeline.attemptIDs.NewAttemptID()
+		if err != nil {
+			return result, newFailure(
+				ReasonProviderRequestInvalid,
+				request.exchangeID,
+				0,
+				err,
+			)
+		}
+		frozenRequest, err := providertransport.NewRequest(
+			providertransport.RequestOptions{
+				RequestID:       attemptID,
+				EgressAttemptID: egressID,
+				ConnectionID:    request.connectionRef,
+				ExchangeID:      request.exchangeID,
+				ParentAttemptID: attemptID,
+				TargetRef:       selection.targetRef,
+				Target:          selection.target,
+				AccessRevision:  selection.revision,
+				PlanHash:        selection.planHash,
+				Action:          action,
+				Method:          encodedProvider.Method(),
+				RelativePath:    encodedProvider.RelativePath(),
+				Headers:         encodedProvider.Headers(),
+				Body:            encodedProvider.Body(),
+				SecretRef:       selection.secretRef,
+				AuthDriverRef:   selection.authDriverRef,
+				TransportPlan:   selection.transportPlan,
+				ClientHello:     clientHello,
+			},
 		)
+		if err != nil {
+			return result, newFailure(
+				ReasonProviderRequestInvalid,
+				request.exchangeID,
+				0,
+				err,
+			)
+		}
+
+		if decoded.Stream {
+			attemptErr = pipeline.executeStream(
+				operationContext,
+				request,
+				selection,
+				protocolPath,
+				decoded,
+				frozenRequest,
+				downstream,
+				ledger,
+				&result,
+			)
+		} else {
+			attemptErr = pipeline.executeComplete(
+				operationContext,
+				request,
+				selection,
+				protocolPath,
+				decoded,
+				frozenRequest,
+				downstream,
+				ledger,
+				&result,
+			)
+		}
+
+		if attemptErr == nil {
+			break
+		}
+		if !mayTryNextCandidate(
+			fallback,
+			candidates,
+			candidateIndex,
+			ledger,
+			request.replayClass,
+			attemptErr,
+		) {
+			break
+		}
 	}
+	err = attemptErr
 	result.Ledger = ledger.Snapshot()
 	if err != nil {
 		switch {

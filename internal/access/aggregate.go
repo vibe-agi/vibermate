@@ -264,11 +264,55 @@ func (binding ProviderAccountBinding) Validate() error {
 	return binding.AuthDriverRef.validate()
 }
 
+// FallbackPolicy says whether a failed attempt may be tried against the next
+// candidate, and is closed on purpose.
+//
+// Design 02 §12 permits an automatic fallback only before a first byte has
+// been committed downstream, with no unresolved tool call, and only when the
+// policy explicitly allows the duplicate billing and possible upstream side
+// effects a second attempt brings. A timeout, a 429, or a 5xx does not prove
+// the upstream did not process the request, so choosing this is the
+// permission; the transport's opinion is not.
+type FallbackPolicy string
+
+const (
+	// FallbackDisabled attempts one candidate and reports what happened.
+	FallbackDisabled FallbackPolicy = "disabled"
+	// FallbackPreFirstByteIdempotentOnly allows the next candidate only while
+	// nothing has reached the client and the request may be sent again.
+	FallbackPreFirstByteIdempotentOnly FallbackPolicy = "pre_first_byte_idempotent_only"
+)
+
+func (policy FallbackPolicy) valid() bool {
+	switch policy {
+	case FallbackDisabled, FallbackPreFirstByteIdempotentOnly:
+		return true
+	default:
+		return false
+	}
+}
+
+// Allows reports whether this policy permits a further attempt at all.
+func (policy FallbackPolicy) Allows() bool {
+	return policy == FallbackPreFirstByteIdempotentOnly
+}
+
 type RouteSet struct {
 	ID                  RouteSetID
 	Revision            Revision
 	AccessID            AccessID
 	CandidateProfileIDs []EndpointProfileID
+	// Fallback is unstated on a route set written before it existed, and an
+	// unstated policy allows nothing.
+	Fallback FallbackPolicy
+}
+
+// FallbackMode reads an unstated policy as disabled.
+func (routeSet RouteSet) FallbackMode() FallbackPolicy {
+	if routeSet.Fallback == "" {
+		return FallbackDisabled
+	}
+	return routeSet.Fallback
 }
 
 func (routeSet RouteSet) Validate() error {
@@ -285,10 +329,31 @@ func (routeSet RouteSet) Validate() error {
 		len(routeSet.CandidateProfileIDs) > MaxEndpointProfiles {
 		return fmt.Errorf("%w: RouteSet candidates are invalid", ErrInvalidAccess)
 	}
+	seen := make(map[EndpointProfileID]struct{}, len(routeSet.CandidateProfileIDs))
 	for _, profileID := range routeSet.CandidateProfileIDs {
 		if err := profileID.validate(); err != nil {
 			return err
 		}
+		if _, duplicate := seen[profileID]; duplicate {
+			return fmt.Errorf(
+				"%w: RouteSet candidate %q is repeated",
+				ErrInvalidAccess,
+				profileID.String(),
+			)
+		}
+		seen[profileID] = struct{}{}
+	}
+	if !routeSet.FallbackMode().valid() {
+		return fmt.Errorf("%w: RouteSet fallback is invalid", ErrInvalidAccess)
+	}
+	// A policy that allows a further attempt with nothing further to try is a
+	// promise the plan cannot keep.
+	if routeSet.FallbackMode().Allows() &&
+		len(routeSet.CandidateProfileIDs) < 2 {
+		return fmt.Errorf(
+			"%w: RouteSet allows fallback with one candidate",
+			ErrInvalidAccess,
+		)
 	}
 	return nil
 }

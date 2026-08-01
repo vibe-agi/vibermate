@@ -817,10 +817,17 @@ func (compiler *Compiler) validateRelationships(aggregate Aggregate) error {
 		len(aggregate.RouteSets) > compiler.catalog.capabilities.MaxRouteSets {
 		return ErrUnsupportedCardinality
 	}
-	if len(aggregate.Profiles) != 1 ||
-		len(aggregate.ProviderTargets) != 1 ||
-		len(aggregate.AccountBindings) != 1 ||
+	// One RouteSet, and one target and one account per profile. More than one
+	// profile is what a second candidate is: an upstream a dropped attempt can
+	// be sent to, named in advance rather than guessed at.
+	if len(aggregate.Profiles) == 0 ||
+		len(aggregate.ProviderTargets) != len(aggregate.Profiles) ||
+		len(aggregate.AccountBindings) != len(aggregate.Profiles) ||
 		len(aggregate.RouteSets) != 1 {
+		return ErrUnsupportedCardinality
+	}
+	if len(aggregate.Profiles) > 1 &&
+		!compiler.catalog.capabilities.AllowMultipleRouteCandidates {
 		return ErrUnsupportedCardinality
 	}
 

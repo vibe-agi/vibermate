@@ -1,5 +1,6 @@
 # Failover needs a plan that can hold more than one candidate
 
+Status: resolved 2026-08-02
 Deferred: 2026-08-02
 Attempted at: `e04f405`
 Design: `docs/design/02-architecture.md` §12 and the automatic-fallback rule
@@ -37,13 +38,18 @@ covering all of them. That is a plan-shape change with its own migration and
 its own invariants, and it belongs in a slice of its own rather than being
 carried in on the back of this one.
 
-## What was done instead
+## What was done instead, and then
 
 The work was reverted rather than left half-built. A loop that cannot reach a
 second candidate is a feature in name only, and this repository has spent this
 whole effort refusing that trade.
 
-What survives is the rule, pinned as a test at `e04f405`: once bytes have
-reached the client the answer is committed and must not be sent again. It
-holds by construction today because there is no second attempt. It is what the
-multi-candidate plan will have to keep true.
+The prerequisite was then built on its own at `499b597`: the compiler resolves
+every RouteSet candidate in the order the plan declares them, each with its own
+frozen target, codec plan and transport plan, each checked the way the first
+always was. Candidate zero stayed the plan's own, so every accessor returned
+what it always had and a one-candidate plan hashed to the same value.
+
+Failover followed on top of it, and this note is closed. The rule it had to
+keep true is still what it was: once bytes have reached the client the answer
+is committed and must not be sent again.

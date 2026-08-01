@@ -152,9 +152,13 @@ func productionAccessPlanCompiler() (*access.Compiler, error) {
 	}
 	catalog, err := access.NewCatalog(access.CatalogOptions{
 		Capabilities: access.PlanCapabilities{
-			MaxEndpointProfiles: 1,
-			MaxAccountBindings:  1,
-			MaxRouteSets:        1,
+			// A RouteSet may name a second upstream so a dropped attempt has
+			// somewhere to go. Whether one is used is the plan's fallback
+			// policy, not this limit.
+			MaxEndpointProfiles:          access.MaxEndpointProfiles,
+			MaxAccountBindings:           access.MaxEndpointProfiles,
+			MaxRouteSets:                 1,
+			AllowMultipleRouteCandidates: true,
 		},
 		ClientOperations: operations.Definitions(),
 		CodecPairs: []access.CodecPairDefinition{

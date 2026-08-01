@@ -81,6 +81,9 @@ type routeSetPayload struct {
 	Revision            access.Revision `json:"revision"`
 	AccessID            string          `json:"accessId"`
 	CandidateProfileIDs []string        `json:"candidateProfileIds"`
+	// Fallback is omitted on a route set written before it existed, and an
+	// absent policy reads as disabled.
+	Fallback string `json:"fallback,omitempty"`
 }
 
 type egressPolicyPayload struct {
@@ -177,6 +180,7 @@ func encodeAccessAggregatePayload(aggregate access.Aggregate) ([]byte, error) {
 			Revision:            routeSet.Revision,
 			AccessID:            routeSet.AccessID.String(),
 			CandidateProfileIDs: endpointProfileIDStrings(routeSet.CandidateProfileIDs),
+			Fallback:            string(routeSet.FallbackMode()),
 		})
 	}
 	encoded, err := json.Marshal(payload)
@@ -492,6 +496,7 @@ func decodeRouteSets(payloads []routeSetPayload) ([]access.RouteSet, error) {
 			Revision:            payload.Revision,
 			AccessID:            accessID,
 			CandidateProfileIDs: candidates,
+			Fallback:            access.FallbackPolicy(payload.Fallback),
 		})
 	}
 	return routeSets, nil
