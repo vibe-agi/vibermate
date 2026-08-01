@@ -416,5 +416,14 @@ func validateHost(label, value string, allowEmpty bool) error {
 	if value == "" || len(value) > MaxHostBytes {
 		return fmt.Errorf("%w: %s is invalid", ErrInvalidEvent, label)
 	}
+	// A host is not an authority. The port is a separate field, and a host
+	// field holding one would state the port twice and render it twice.
+	if strings.ContainsAny(value, ":/") {
+		return fmt.Errorf(
+			"%w: %s carries a port or a path",
+			ErrInvalidEvent,
+			label,
+		)
+	}
 	return validateIdentity(label, value, false)
 }

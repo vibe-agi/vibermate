@@ -29,7 +29,7 @@ func TestConnectionTimelineRecordsAttemptDecisionConnectionAndClose(
 		Source: Source{
 			Confidence: SourceConfidenceUnknown,
 		},
-		RequestedHost: "api.anthropic.com:443",
+		RequestedHost: "api.anthropic.com",
 		Port:          443,
 	})
 	if err != nil {
@@ -115,7 +115,7 @@ func TestDeniedConnectionTerminatesAtDecision(t *testing.T) {
 	manager := newTestManager(t, repository)
 	connection, err := manager.Start(context.Background(), Attempt{
 		Source:        Source{Confidence: SourceConfidenceUnknown},
-		RequestedHost: "unknown.invalid:443",
+		RequestedHost: "unknown.invalid",
 		Port:          443,
 	})
 	if err != nil {
@@ -151,7 +151,7 @@ func TestAskedConnectionCanTerminateWhileAwaitingDecision(t *testing.T) {
 	manager := newTestManager(t, repository)
 	connection, err := manager.Start(context.Background(), Attempt{
 		Source:        Source{Confidence: SourceConfidenceUnknown},
-		RequestedHost: "review.example.test:443",
+		RequestedHost: "review.example.test",
 		Port:          443,
 	})
 	if err != nil {
@@ -195,7 +195,7 @@ func TestAppendFailureDoesNotAdvanceConnectionPhase(t *testing.T) {
 	manager := newTestManager(t, repository)
 	connection, err := manager.Start(context.Background(), Attempt{
 		Source:        Source{Confidence: SourceConfidenceUnknown},
-		RequestedHost: "api.anthropic.com:443",
+		RequestedHost: "api.anthropic.com",
 		Port:          443,
 	})
 	if err != nil {
@@ -260,7 +260,7 @@ func TestManagerShutdownRejectsNewRecording(t *testing.T) {
 	}
 	_, err := manager.Start(context.Background(), Attempt{
 		Source:        Source{Confidence: SourceConfidenceUnknown},
-		RequestedHost: "api.anthropic.com:443",
+		RequestedHost: "api.anthropic.com",
 		Port:          443,
 	})
 	if !errors.Is(err, ErrRuntimeStopping) {

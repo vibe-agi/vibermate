@@ -59,7 +59,8 @@ func TestConnectionRecordStaysStableAcrossSeveralRequests(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, record := range page.Items {
-		if record.RequestedHost != "api.anthropic.com:443" {
+		if record.RequestedHost != "api.anthropic.com" ||
+			record.Port != 443 {
 			t.Fatalf("connection record lost its client authority: %+v", record)
 		}
 		if record.RouteHost != "" &&

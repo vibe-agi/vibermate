@@ -148,7 +148,8 @@ func TestLoopbackProxyAuthenticatesMITMAndDispatchesByPathCapability(
 		if record.Phase == connectionevent.PhaseAttempted {
 			expectedConfidence = connectionevent.SourceConfidenceUnknown
 		}
-		if record.RequestedHost != "api.anthropic.com:443" ||
+		if record.RequestedHost != "api.anthropic.com" ||
+			record.Port != 443 ||
 			record.SourceConfidence != expectedConfidence {
 			t.Fatalf("connection record = %+v", record)
 		}

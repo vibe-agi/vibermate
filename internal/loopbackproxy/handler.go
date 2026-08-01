@@ -250,9 +250,21 @@ func (handler *Handler) ServeHTTP(
 		writeReason(writer, http.StatusMethodNotAllowed, ReasonConnectOnly, "")
 		return
 	}
+	// The host and the port are separate facts on the record. Writing the
+	// authority into the host field would state the port twice, and every
+	// reader that joins them would show it twice.
+	// The split here is syntactic on purpose. The journal records what the
+	// client asked for, including an authority that is not a usable name: an
+	// operator investigating "my client cannot reach anything" has to be able
+	// to see the refusal, and a record that refused to hold the request would
+	// hide exactly the case worth seeing.
+	requestedHost := request.Host
 	port := uint16(0)
-	if _, parsedPort, splitErr := splitAuthority(request.Host); splitErr == nil {
-		port = parsedPort
+	if splitHost, splitPort, splitErr := net.SplitHostPort(request.Host); splitErr == nil {
+		requestedHost = splitHost
+		if parsedPort, parseErr := strconv.ParseUint(splitPort, 10, 16); parseErr == nil {
+			port = uint16(parsedPort)
+		}
 	}
 	// The journal opens before the method check so a rejection is recorded
 	// rather than invisible. Design 06 section 4.1 requires allowed, denied,
@@ -265,7 +277,7 @@ func (handler *Handler) ServeHTTP(
 			Source: connectionevent.Source{
 				Confidence: connectionevent.SourceConfidenceUnknown,
 			},
-			RequestedHost: request.Host,
+			RequestedHost: requestedHost,
 			Port:          port,
 		},
 	)

@@ -32,7 +32,7 @@ func TestConnectionEventTimelinePersistsAndPaginatesAcrossReopen(
 		Source: connectionevent.Source{
 			Confidence: connectionevent.SourceConfidenceUnknown,
 		},
-		RequestedHost: "api.anthropic.com:443",
+		RequestedHost: "api.anthropic.com",
 		Port:          443,
 	})
 	if err != nil {
@@ -169,7 +169,7 @@ func TestConnectionEventRecoveryTerminatesInterruptedConnectionOnce(
 			Source: connectionevent.Source{
 				Confidence: connectionevent.SourceConfidenceUnknown,
 			},
-			RequestedHost: "api.anthropic.com:443",
+			RequestedHost: "api.anthropic.com",
 			Port:          443,
 		},
 	)
@@ -302,7 +302,7 @@ func TestConnectionEventRecoveryTerminatesPendingAsk(t *testing.T) {
 			Source: connectionevent.Source{
 				Confidence: connectionevent.SourceConfidenceUnknown,
 			},
-			RequestedHost: "review.example.test:443",
+			RequestedHost: "review.example.test",
 			Port:          443,
 		},
 	)

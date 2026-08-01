@@ -167,7 +167,11 @@ func TestBlindTunnelRecordsAConnectionWithoutContent(t *testing.T) {
 	}
 	found := false
 	for _, record := range page.Items {
-		if record.RequestedHost != authority ||
+		host, _, splitErr := net.SplitHostPort(authority)
+		if splitErr != nil {
+			t.Fatal(splitErr)
+		}
+		if record.RequestedHost != host ||
 			record.Phase == connectionevent.PhaseAttempted {
 			continue
 		}

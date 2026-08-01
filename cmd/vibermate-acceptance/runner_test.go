@@ -664,7 +664,7 @@ func responsesHTTPFallbackAuditRecords(
 		attempt := connectionevent.Event{
 			ConnectionID:     identifier,
 			SourceConfidence: connectionevent.SourceConfidenceUnknown,
-			RequestedHost:    "api.openai.com:443",
+			RequestedHost:    "api.openai.com",
 			Port:             443,
 			Decryption:       connectionevent.DecryptionNone,
 			Phase:            connectionevent.PhaseAttempted,
@@ -721,7 +721,7 @@ func providerAuditTimeline(t *testing.T) connectionevent.Timeline {
 	attempt := connectionevent.Event{
 		ConnectionID:     "connection-001",
 		SourceConfidence: connectionevent.SourceConfidenceUnknown,
-		RequestedHost:    "api.anthropic.com:443",
+		RequestedHost:    "api.anthropic.com",
 		Port:             443,
 		Decryption:       connectionevent.DecryptionNone,
 		Phase:            connectionevent.PhaseAttempted,

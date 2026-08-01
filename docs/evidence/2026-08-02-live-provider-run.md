@@ -30,17 +30,31 @@ The run passed in 1.22s. The model answered `"ready"`.
   destination, with a non-zero received byte count;
 - the credential does not appear in the audit record.
 
-## What it does not prove
+## The same thing, through the proxy
 
-The request was executed through the Exchange executor directly, not through a
-real client over the loopback proxy with TLS interception. The MITM path, the
-CONNECT authorization, and the client's own transport are covered by other
-tests but not by this one.
+`TestALiveProviderAnswersThroughTheProxy` runs the same backend the way a
+client reaches it: an ordinary `http.Client` with a proxy address, the local
+root in its trust store, and no other knowledge of vibermate. It POSTs to
+`https://api.anthropic.com/v1/messages`, the proxy authorizes the CONNECT
+against a CaptureRun capability, decides the connection against the stored
+rules, terminates TLS with a leaf issued for that exact host, and the answer
+comes back. The connection is on the record as decrypted rather than as an
+opaque tunnel.
+
+The run passed in 3.12s. The model answered `"ready"`.
+
+Note that the client sent its own `x-api-key`. It is not forwarded: the
+provider credential comes from the SecretRef in the plan.
+
+## What neither run proves
 
 The backend is a local OpenAI-compatible service over loopback cleartext. A
 strict-TLS provider origin exercises a different transport path.
 
-## What it found
+Neither run drives a real agent client (Claude Code, Codex) end to end; that is
+what the packaged acceptance harness is for.
+
+## What they found
 
 Every provider request had been failing. `internal/exchange` passed one
 generated identity as both the upstream attempt ID and the outbound's ID, so
@@ -50,3 +64,11 @@ encodes its parent — and the Exchange failed with `provider_transport_failed`.
 No test caught it, because every other test in the suite substitutes a fake
 provider that never reaches the audit. This is the first request that actually
 went out.
+
+The proxy run found a second one. Every connection record was storing the
+CONNECT authority in `RequestedHost`, a field that sits beside a separate
+`Port`, so the record stated the port twice and any reader joining the two
+rendered `api.anthropic.com:443:443`. The host field now refuses a value
+carrying a port, and the proxy writes the host alone — while still recording
+an authority the client sent that is not a usable name, because a refusal
+nobody can see is the case most worth seeing.

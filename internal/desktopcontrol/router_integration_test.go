@@ -190,7 +190,7 @@ func TestDesktopControlAppliesAccessAndControlsOfflineHoldWithScopedAuth(
 			Source: connectionevent.Source{
 				Confidence: connectionevent.SourceConfidenceUnknown,
 			},
-			RequestedHost: "api.anthropic.com:443",
+			RequestedHost: "api.anthropic.com",
 			Port:          443,
 		},
 	)

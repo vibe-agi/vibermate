@@ -1478,7 +1478,7 @@ func responsesHTTPFallbackAuditReady(
 	}
 	timelines := make(map[string][]connectionevent.Record)
 	for _, record := range records {
-		if record.RequestedHost != authority {
+		if record.RequestedHost != host {
 			continue
 		}
 		if err := record.Validate(); err != nil {
@@ -1656,7 +1656,7 @@ func waitForProviderConnectionAudit(
 		}
 		seen := make(map[string]struct{})
 		for _, record := range records {
-			if record.RequestedHost != clientOrigin.EndpointAuthority() {
+			if record.RequestedHost != clientOrigin.TLSServerName() {
 				continue
 			}
 			if _, exists := seen[record.ConnectionID]; exists {
@@ -1711,7 +1711,7 @@ func providerConnectionAuditReady(
 	if first.ConnectionID != timeline.ConnectionID ||
 		first.Phase != connectionevent.PhaseAttempted ||
 		first.SourceConfidence != connectionevent.SourceConfidenceUnknown ||
-		first.RequestedHost != clientOrigin.EndpointAuthority() ||
+		first.RequestedHost != clientOrigin.TLSServerName() ||
 		first.Port != clientOrigin.Port() {
 		return false, fmt.Errorf(
 			"provider ConnectionEvent attempt is invalid: %+v",
@@ -1727,7 +1727,7 @@ func providerConnectionAuditReady(
 			return false, err
 		}
 		if record.ConnectionID != timeline.ConnectionID ||
-			record.RequestedHost != clientOrigin.EndpointAuthority() ||
+			record.RequestedHost != clientOrigin.TLSServerName() ||
 			record.Sequence <= previousSequence {
 			return false, errors.New(
 				"provider ConnectionEvent identity or ordering changed",
@@ -1817,7 +1817,7 @@ func waitForActiveConnectionAudit(
 		}
 		seen := make(map[string]struct{})
 		for _, record := range records {
-			if record.RequestedHost != clientOrigin.EndpointAuthority() {
+			if record.RequestedHost != clientOrigin.TLSServerName() {
 				continue
 			}
 			if _, exists := seen[record.ConnectionID]; exists {
