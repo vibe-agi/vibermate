@@ -17,6 +17,7 @@ const (
 	RetryBlockedToolExposure        RetryBlockReason = "downstream_tool_exposed"
 	RetryBlockedTerminal            RetryBlockReason = "downstream_terminal_committed"
 	RetryBlockedFailure             RetryBlockReason = "downstream_failure_committed"
+	RetryBlockedUpstreamProcessed   RetryBlockReason = "upstream_may_have_processed"
 )
 
 type ledgerState struct {
@@ -166,15 +167,21 @@ func (ledger *CommitLedger) RecordFailure() error {
 	return nil
 }
 
+// CanTransportResend consults both commit axes. The downstream axis decides
+// whether the client has already formed an irrevocable understanding. The
+// upstream axis decides whether the provider may already have processed and
+// billed the request: a 502, 503, or 504 is still a response, so something
+// upstream handled it, and resending a generation_cost_only operation would
+// bill the user a second time. Design 02 permits that only when the attempt
+// policy explicitly allows repeat billing, so allowRepeatBilling is a policy
+// decision rather than a constant.
 func (ledger *CommitLedger) CanTransportResend(
 	class ReplayClass,
-	explicitlyAllowed bool,
+	allowRepeatBilling bool,
 ) (bool, RetryBlockReason) {
 	ledger.mu.Lock()
 	defer ledger.mu.Unlock()
 	switch {
-	case !explicitlyAllowed:
-		return false, RetryBlockedPolicy
 	case !class.allowsTransportResend():
 		return false, RetryBlockedReplayClass
 	case !ledger.state.downstreamHoldEnvelope:
@@ -190,6 +197,8 @@ func (ledger *CommitLedger) CanTransportResend(
 		return false, RetryBlockedTerminal
 	case ledger.state.downstreamFailure:
 		return false, RetryBlockedFailure
+	case ledger.state.upstreamResponses != 0 && !allowRepeatBilling:
+		return false, RetryBlockedUpstreamProcessed
 	default:
 		return true, RetryAllowed
 	}

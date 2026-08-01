@@ -778,6 +778,11 @@ type HoldPolicy struct {
 	MaxTransportResends uint32
 	RetryDelay          time.Duration
 	MaxDuration         time.Duration
+	// AllowResendAfterProviderResponse permits resending a request the
+	// provider already answered. Doing so may bill the user a second time and
+	// may repeat an upstream side effect, so it defaults to refusing until an
+	// attempt policy makes the decision explicit.
+	AllowResendAfterProviderResponse bool
 }
 
 func DefaultHoldPolicy() HoldPolicy {

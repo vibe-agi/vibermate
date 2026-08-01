@@ -1901,6 +1901,10 @@ func newTestPipelineWithActions(
 			MaxTransportResends: 1,
 			RetryDelay:          0,
 			MaxDuration:         time.Second,
+			// This fixture exists to exercise resend mechanics, so it opts
+			// into repeat billing explicitly. Production refuses by default;
+			// the ledger and policy tests lock that default down.
+			AllowResendAfterProviderResponse: true,
 		},
 		Stream: DefaultStreamBudgets(),
 	})

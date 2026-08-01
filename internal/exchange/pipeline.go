@@ -1213,7 +1213,10 @@ func (pipeline *Pipeline) canRetryFailure(
 	if !retryable || resends >= pipeline.hold.MaxTransportResends {
 		return false
 	}
-	allowed, _ := ledger.CanTransportResend(request.replayClass, true)
+	allowed, _ := ledger.CanTransportResend(
+		request.replayClass,
+		pipeline.hold.AllowResendAfterProviderResponse,
+	)
 	return allowed
 }
 
@@ -1228,7 +1231,10 @@ func (pipeline *Pipeline) retryBudgetExhausted(
 		(!retryableStatus(statusCode) && !retryableTransportError(err)) {
 		return false
 	}
-	allowed, _ := ledger.CanTransportResend(request.replayClass, true)
+	allowed, _ := ledger.CanTransportResend(
+		request.replayClass,
+		pipeline.hold.AllowResendAfterProviderResponse,
+	)
 	return allowed
 }
 
