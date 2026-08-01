@@ -326,8 +326,16 @@ func (compiler *Compiler) Compile(aggregate Aggregate) (AccessPlanSnapshot, erro
 		return AccessPlanSnapshot{}, errors.Join(ErrInvalidAccessPlan, err)
 	}
 
-	profile := candidate.Profiles[0]
-	target := candidate.ProviderTargets[0]
+	// The plan is compiled once per RouteSet candidate. Candidate zero is what
+	// every request starts with and what every existing accessor returns; the
+	// rest exist so a policy that allows a further attempt has somewhere to
+	// send it. Design 02 §12 names them.
+	routeOrder, err := compiler.candidateOrder(candidate)
+	if err != nil {
+		return AccessPlanSnapshot{}, errors.Join(ErrInvalidAccessPlan, err)
+	}
+	profile := routeOrder[0].profile
+	target := routeOrder[0].target
 	codecDefinition, err := compiler.resolveCodec(
 		candidate.AgentEndpoint.ClientDialect,
 		profile.BackendDialect,
@@ -409,15 +417,75 @@ func (compiler *Compiler) Compile(aggregate Aggregate) (AccessPlanSnapshot, erro
 		return AccessPlanSnapshot{}, errors.Join(ErrInvalidAccessPlan, err)
 	}
 
-	compiledTargets := []CompiledProviderTarget{{
-		target:        target,
-		basePath:      target.Origin.BasePath(),
-		httpAuthority: target.Origin.HTTPAuthority(),
-		networkHost:   target.Origin.NetworkHost(),
-		tlsServerName: target.Origin.TLSServerName(),
-		port:          target.Origin.Port(),
-		transportKind: target.Origin.TransportKind(),
-	}}
+	compiledTargets := make([]CompiledProviderTarget, 0, len(routeOrder))
+	candidates := make([]CompiledCandidate, 0, len(routeOrder))
+	for index, entry := range routeOrder {
+		compiledTarget := compileTarget(entry.target)
+		compiledTargets = append(compiledTargets, compiledTarget)
+		if index == 0 {
+			candidates = append(candidates, CompiledCandidate{
+				profileID:     entry.profile.ID,
+				target:        compiledTarget,
+				codecPlan:     CodecPlan{},
+				transportPlan: CompiledTransportFingerprintPlan{},
+			})
+			continue
+		}
+		// Every candidate is compiled against the same client dialect and the
+		// same catalog. A candidate whose backend the plan cannot translate
+		// to, or whose transport it cannot express, is not a fallback: it is a
+		// plan that would fail differently.
+		candidateCodec, codecErr := compiler.resolveCodec(
+			candidate.AgentEndpoint.ClientDialect,
+			entry.profile.BackendDialect,
+		)
+		if codecErr != nil {
+			return AccessPlanSnapshot{}, errors.Join(ErrInvalidAccessPlan, codecErr)
+		}
+		if entry.target.Protocol != entry.profile.BackendDialect {
+			return AccessPlanSnapshot{}, errors.Join(
+				ErrInvalidAccessPlan,
+				fmt.Errorf(
+					"%w: profile=%q backend=%q target=%q",
+					ErrCapabilityMismatch,
+					entry.profile.ID.String(),
+					entry.profile.BackendDialect,
+					entry.target.Protocol,
+				),
+			)
+		}
+		if err := requireCapabilities(
+			entry.target.Capabilities,
+			candidateCodec.RequiredCapabilities,
+		); err != nil {
+			return AccessPlanSnapshot{}, errors.Join(ErrInvalidAccessPlan, err)
+		}
+		candidateTransport, transportErr := compiler.resolveTransportFingerprint(
+			entry.profile.TransportProfileRef,
+		)
+		if transportErr != nil {
+			return AccessPlanSnapshot{}, errors.Join(
+				ErrInvalidAccessPlan,
+				transportErr,
+			)
+		}
+		if _, exists := compiler.catalog.modelPolicyModes[entry.profile.DefaultModelPolicy.Mode]; !exists {
+			return AccessPlanSnapshot{}, errors.Join(
+				ErrInvalidAccessPlan,
+				fmt.Errorf(
+					"%w: %q",
+					ErrUnknownModelPolicyMode,
+					entry.profile.DefaultModelPolicy.Mode,
+				),
+			)
+		}
+		candidates = append(candidates, CompiledCandidate{
+			profileID:     entry.profile.ID,
+			target:        compiledTarget,
+			codecPlan:     compileCodecPlan(compiler, candidateCodec),
+			transportPlan: candidateTransport,
+		})
+	}
 	clientOperations := make(
 		[]ClientOperationPlan,
 		0,
@@ -453,8 +521,11 @@ func (compiler *Compiler) Compile(aggregate Aggregate) (AccessPlanSnapshot, erro
 		modelDefinition,
 		transportPlan,
 	)
+	candidates[0].codecPlan = codecPlan
+	candidates[0].transportPlan = transportPlan
 	snapshot := AccessPlanSnapshot{
 		aggregate:       candidate,
+		candidates:      candidates,
 		compiledTargets: compiledTargets,
 		codecPlan:       codecPlan,
 		transportPlan:   transportPlan,
@@ -467,6 +538,111 @@ func (compiler *Compiler) Compile(aggregate Aggregate) (AccessPlanSnapshot, erro
 	}
 	snapshot.planHash = newPlanHash(canonical)
 	return snapshot, nil
+}
+
+// routeCandidate pairs a RouteSet candidate with the target it names.
+type routeCandidate struct {
+	profile EndpointProfile
+	target  ProviderTarget
+}
+
+// candidateOrder resolves the default RouteSet's candidates in the order the
+// plan declares them. The order is the plan's, not a map's: a fallback that
+// tried candidates in whatever order they hashed into would not be the
+// fallback anybody configured.
+func (compiler *Compiler) candidateOrder(
+	aggregate Aggregate,
+) ([]routeCandidate, error) {
+	var routeSet RouteSet
+	found := false
+	for _, candidate := range aggregate.RouteSets {
+		if candidate.ID == aggregate.Binding.DefaultRouteSetID {
+			routeSet = candidate
+			found = true
+			break
+		}
+	}
+	if !found || len(routeSet.CandidateProfileIDs) == 0 {
+		return nil, fmt.Errorf("%w: default RouteSet", ErrDanglingReference)
+	}
+	order := make([]routeCandidate, 0, len(routeSet.CandidateProfileIDs))
+	for _, profileID := range routeSet.CandidateProfileIDs {
+		profile, profileFound := findProfile(aggregate, profileID)
+		if !profileFound {
+			return nil, fmt.Errorf(
+				"%w: RouteSet profile %q",
+				ErrDanglingReference,
+				profileID.String(),
+			)
+		}
+		target, targetFound := findTarget(aggregate, profile.TargetID)
+		if !targetFound {
+			return nil, fmt.Errorf(
+				"%w: ProviderTarget %q",
+				ErrDanglingReference,
+				profile.TargetID.String(),
+			)
+		}
+		order = append(order, routeCandidate{profile: profile, target: target})
+	}
+	return order, nil
+}
+
+func findProfile(
+	aggregate Aggregate,
+	profileID EndpointProfileID,
+) (EndpointProfile, bool) {
+	for _, profile := range aggregate.Profiles {
+		if profile.ID == profileID {
+			return profile, true
+		}
+	}
+	return EndpointProfile{}, false
+}
+
+func findTarget(
+	aggregate Aggregate,
+	targetID ProviderTargetID,
+) (ProviderTarget, bool) {
+	for _, target := range aggregate.ProviderTargets {
+		if target.ID == targetID {
+			return target, true
+		}
+	}
+	return ProviderTarget{}, false
+}
+
+func compileTarget(target ProviderTarget) CompiledProviderTarget {
+	return CompiledProviderTarget{
+		target:        target,
+		basePath:      target.Origin.BasePath(),
+		httpAuthority: target.Origin.HTTPAuthority(),
+		networkHost:   target.Origin.NetworkHost(),
+		tlsServerName: target.Origin.TLSServerName(),
+		port:          target.Origin.Port(),
+		transportKind: target.Origin.TransportKind(),
+	}
+}
+
+func compileCodecPlan(
+	compiler *Compiler,
+	definition CodecPairDefinition,
+) CodecPlan {
+	operations := make([]ClientOperationPlan, 0, len(definition.ClientOperationIDs))
+	for _, operationID := range definition.ClientOperationIDs {
+		operations = append(
+			operations,
+			compileClientOperation(compiler.catalog.clientOperations[operationID]),
+		)
+	}
+	return CodecPlan{
+		id:                   definition.ID,
+		revision:             definition.Revision,
+		clientDialect:        definition.ClientDialect,
+		providerDialect:      definition.ProviderDialect,
+		clientOperations:     operations,
+		requiredCapabilities: slices.Clone(definition.RequiredCapabilities),
+	}
 }
 
 func compileClientOperation(

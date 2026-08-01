@@ -248,8 +248,43 @@ type DependencyRevision struct {
 
 // AccessPlanSnapshot is the only active process-local Access configuration.
 // Its fields are private and every collection getter returns a defensive copy.
+// CompiledCandidate is one RouteSet candidate, frozen. Candidate zero is what
+// every request starts with; a later one is only ever reached when the plan's
+// fallback policy allowed a further attempt.
+type CompiledCandidate struct {
+	profileID     EndpointProfileID
+	target        CompiledProviderTarget
+	codecPlan     CodecPlan
+	transportPlan CompiledTransportFingerprintPlan
+}
+
+func (candidate CompiledCandidate) ProfileID() EndpointProfileID {
+	return candidate.profileID
+}
+
+func (candidate CompiledCandidate) Target() CompiledProviderTarget {
+	compiled := candidate.target
+	compiled.target.Capabilities = slices.Clone(candidate.target.target.Capabilities)
+	return compiled
+}
+
+func (candidate CompiledCandidate) CodecPlan() CodecPlan {
+	plan := candidate.codecPlan
+	plan.clientOperations = candidate.codecPlan.ClientOperations()
+	plan.requiredCapabilities = slices.Clone(plan.requiredCapabilities)
+	return plan
+}
+
+func (candidate CompiledCandidate) TransportFingerprintPlan() CompiledTransportFingerprintPlan {
+	return CompiledTransportFingerprintPlan{
+		requested: cloneTransportTemplate(candidate.transportPlan.requested),
+		fallbacks: candidate.transportPlan.Fallbacks(),
+	}
+}
+
 type AccessPlanSnapshot struct {
 	aggregate       Aggregate
+	candidates      []CompiledCandidate
 	compiledTargets []CompiledProviderTarget
 	codecPlan       CodecPlan
 	transportPlan   CompiledTransportFingerprintPlan
@@ -287,6 +322,19 @@ func (snapshot AccessPlanSnapshot) EndpointProfiles() []EndpointProfile {
 		profiles[index].AccountBindingIDs = slices.Clone(profile.AccountBindingIDs)
 	}
 	return profiles
+}
+
+// CandidateCount is how many upstreams this plan can be attempted against.
+func (snapshot AccessPlanSnapshot) CandidateCount() int {
+	return len(snapshot.candidates)
+}
+
+// Candidate freezes one attempt's upstream, codec, and transport.
+func (snapshot AccessPlanSnapshot) Candidate(index int) (CompiledCandidate, bool) {
+	if index < 0 || index >= len(snapshot.candidates) {
+		return CompiledCandidate{}, false
+	}
+	return snapshot.candidates[index], true
 }
 
 func (snapshot AccessPlanSnapshot) ProviderTargets() []CompiledProviderTarget {
