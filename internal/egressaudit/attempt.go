@@ -454,3 +454,48 @@ func validateIdentity(label, value string) error {
 	}
 	return nil
 }
+
+// BuiltInDirectPolicyID names the decision the runtime actually makes today:
+// there is exactly one egress path and it is Direct. This is a real decision
+// with a stable identity rather than a placeholder, so an audit reader is told
+// which rule applied instead of being shown a blank. The egress-policy Goal
+// replaces it with configured rules and revisions.
+const (
+	BuiltInDirectPolicyID = "builtin.direct"
+	BuiltInDirectRuleID   = "builtin.direct.default"
+	BuiltInDirectProxyID  = "direct"
+)
+
+// BuiltInDirectDecision returns that decision for the authority a purpose
+// requires.
+func BuiltInDirectDecision(authority PolicyAuthorityKind) DecisionRef {
+	return DecisionRef{
+		PolicyID:       BuiltInDirectPolicyID,
+		PolicyRevision: 1,
+		Authority:      authority,
+		RuleID:         BuiltInDirectRuleID,
+		ProxyID:        BuiltInDirectProxyID,
+	}
+}
+
+// PurposeForEgressKind maps the Offline Hold admission class the transports
+// already carry onto an audit purpose. The two taxonomies are orthogonal, so
+// the mapping is explicit rather than a cast. The plugin class has no purpose
+// on purpose: ADR-0015 makes a plugin a caller, never a destination owner, so
+// its egress inherits the purpose of the resource it was granted.
+func PurposeForEgressKind(kind string) (EgressPurpose, error) {
+	switch kind {
+	case "provider":
+		return PurposeProviderAttempt, nil
+	case "opaque":
+		return PurposeOriginalOrigin, nil
+	case "auxiliary":
+		return PurposeAgentProbe, nil
+	case "blind_tunnel":
+		return PurposeBlindTunnel, nil
+	case "update":
+		return PurposeUpdate, nil
+	default:
+		return "", fmt.Errorf("no egress purpose for hold kind %q", kind)
+	}
+}
