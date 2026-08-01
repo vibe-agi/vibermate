@@ -25,6 +25,11 @@ type RequestOptions struct {
 	Headers      http.Header
 	Body         []byte
 	PayloadClass access.OperationPayloadClass
+	// ConnectionID and ParentID associate this outbound with the client
+	// connection and the original request that caused it. They travel as typed
+	// references so no identity encodes containment of another.
+	ConnectionID string
+	ParentID     string
 }
 
 // Request freezes an original-origin auxiliary or opaque representation. It
@@ -39,6 +44,8 @@ type Request struct {
 	headers      http.Header
 	body         []byte
 	payloadClass access.OperationPayloadClass
+	connectionID string
+	parentID     string
 }
 
 func NewRequest(options RequestOptions) (Request, error) {
@@ -74,6 +81,18 @@ func NewRequest(options RequestOptions) (Request, error) {
 			options.PayloadClass,
 		)
 	}
+	if err := validateIdentity(
+		"original-origin connection ID",
+		options.ConnectionID,
+	); err != nil {
+		return Request{}, err
+	}
+	if err := validateIdentity(
+		"original-origin parent ID",
+		options.ParentID,
+	); err != nil {
+		return Request{}, err
+	}
 	if options.Origin.String() == "" ||
 		options.Origin.HTTPAuthority() == "" ||
 		options.Origin.TLSServerName() == "" {
@@ -98,8 +117,13 @@ func NewRequest(options RequestOptions) (Request, error) {
 		headers:      sanitizeHeaders(options.Headers),
 		body:         bytes.Clone(options.Body),
 		payloadClass: options.PayloadClass,
+		connectionID: options.ConnectionID,
+		parentID:     options.ParentID,
 	}, nil
 }
+
+func (request Request) ConnectionID() string { return request.connectionID }
+func (request Request) ParentID() string     { return request.parentID }
 
 // PayloadClass reports the frozen proof that this request carries no client
 // payload.

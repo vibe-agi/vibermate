@@ -8,7 +8,9 @@ import (
 	"io"
 	"net/http"
 	"sync"
+	"time"
 
+	"github.com/vibe-agi/vibermate/internal/egressaudit"
 	"github.com/vibe-agi/vibermate/internal/offlinehold"
 )
 
@@ -20,6 +22,9 @@ var (
 type Options struct {
 	Coordinator offlinehold.Coordinator
 	Transport   http.RoundTripper
+	// Audit records one immutable attempt per real outbound. It is optional
+	// only so existing callers can be migrated; a wired runtime supplies it.
+	Audit egressaudit.Writer
 }
 
 type operation struct {
@@ -87,6 +92,8 @@ type Client struct {
 
 	coordinator offlinehold.Coordinator
 	transport   http.RoundTripper
+	audit       egressaudit.Writer
+	clock       func() time.Time
 	operations  map[*operation]struct{}
 	closing     bool
 	changed     chan struct{}
@@ -99,15 +106,21 @@ func New(options Options) (*Client, error) {
 	return &Client{
 		coordinator: options.Coordinator,
 		transport:   options.Transport,
+		audit:       options.Audit,
+		clock:       time.Now,
 		operations:  make(map[*operation]struct{}),
 		changed:     make(chan struct{}),
 	}, nil
 }
 
-func NewProduction(coordinator offlinehold.Coordinator) (*Client, error) {
+func NewProduction(
+	coordinator offlinehold.Coordinator,
+	audit egressaudit.Writer,
+) (*Client, error) {
 	return New(Options{
 		Coordinator: coordinator,
 		Transport:   newProductionStrictTransport(),
+		Audit:       audit,
 	})
 }
 
@@ -162,25 +175,64 @@ func (client *Client) Do(
 	request.Host = frozen.origin.HTTPAuthority()
 	request.Header = frozen.headers.Clone()
 	request.ContentLength = int64(len(frozen.body))
+	// The record is appended before the first outbound byte, so an outbound
+	// that fails or is cancelled still leaves evidence of where it was going.
+	record, recordErr := client.beginAudit(activeContext, frozen)
+	if recordErr != nil {
+		return nil, recordErr
+	}
 	response, err := client.transport.RoundTrip(request)
 	request.Header.Del("Authorization")
 	if err != nil {
 		if response != nil && response.Body != nil {
 			_ = response.Body.Close()
 		}
+		client.completeAudit(
+			activeContext,
+			record,
+			egressaudit.OutcomeFailed,
+			"transport_failed",
+			int64(len(frozen.body)),
+			0,
+		)
 		return nil, fmt.Errorf("send original-origin request: %w", err)
 	}
 	if response == nil || response.Body == nil {
+		client.completeAudit(
+			activeContext,
+			record,
+			egressaudit.OutcomeFailed,
+			"incomplete_response",
+			int64(len(frozen.body)),
+			0,
+		)
 		return nil, errors.New("original-origin transport returned an incomplete response")
 	}
 	if response.StatusCode >= 300 && response.StatusCode <= 399 {
 		_ = response.Body.Close()
+		client.completeAudit(
+			activeContext,
+			record,
+			egressaudit.OutcomeFailed,
+			"redirect_denied",
+			int64(len(frozen.body)),
+			0,
+		)
 		return nil, ErrRedirectNotAllowed
 	}
+	counted := &countingReader{reader: response.Body}
 	body := &leaseBody{
-		reader: response.Body,
+		reader: counted,
 		close:  response.Body,
 		finish: func() {
+			client.completeAudit(
+				context.WithoutCancel(activeContext),
+				record,
+				egressaudit.OutcomeCompleted,
+				"",
+				int64(len(frozen.body)),
+				counted.count(),
+			)
 			client.finish(active)
 		},
 	}
@@ -302,4 +354,100 @@ func (body *leaseBody) Close() error {
 
 func (body *leaseBody) finalize() {
 	body.once.Do(body.finish)
+}
+
+// beginAudit records the attempt before the first outbound byte. A record that
+// cannot be constructed is a defect in the caller's evidence, not something to
+// proceed past silently, so it fails the outbound.
+func (client *Client) beginAudit(
+	ctx context.Context,
+	frozen Request,
+) (egressaudit.Attempt, error) {
+	if client.audit == nil {
+		return egressaudit.Attempt{}, nil
+	}
+	purpose, err := egressaudit.PurposeForEgressKind(string(frozen.kind))
+	if err != nil {
+		return egressaudit.Attempt{}, err
+	}
+	authority, err := egressaudit.AuthorityForPurpose(purpose)
+	if err != nil {
+		return egressaudit.Attempt{}, err
+	}
+	attempt, err := egressaudit.New(egressaudit.NewInput{
+		ID:           frozen.requestID,
+		ConnectionID: frozen.connectionID,
+		Purpose:      purpose,
+		PayloadClass: egressaudit.PayloadClass(frozen.payloadClass),
+		Parent: egressaudit.ParentRef{
+			Kind: egressaudit.ParentOriginalRequest,
+			ID:   frozen.parentID,
+		},
+		Caller:       egressaudit.CallerCore,
+		TargetOrigin: frozen.origin.String(),
+		Decision:     egressaudit.BuiltInDirectDecision(authority),
+		StartedAt:    client.clock(),
+	})
+	if err != nil {
+		return egressaudit.Attempt{}, fmt.Errorf(
+			"construct original-origin EgressAttempt: %w",
+			err,
+		)
+	}
+	if _, err := client.audit.Append(ctx, attempt); err != nil {
+		return egressaudit.Attempt{}, fmt.Errorf(
+			"record original-origin EgressAttempt: %w",
+			err,
+		)
+	}
+	return attempt, nil
+}
+
+// completeAudit records the terminal. A terminal that cannot be written is
+// reported through the audit boundary rather than failing an outbound that
+// already happened.
+func (client *Client) completeAudit(
+	ctx context.Context,
+	attempt egressaudit.Attempt,
+	outcome egressaudit.Outcome,
+	errorClass string,
+	bytesOut int64,
+	bytesIn int64,
+) {
+	if client.audit == nil || attempt.ID() == "" {
+		return
+	}
+	terminal, err := attempt.Finish(egressaudit.TerminalInput{
+		Outcome:     outcome,
+		ErrorClass:  errorClass,
+		BytesOut:    bytesOut,
+		BytesIn:     bytesIn,
+		CompletedAt: client.clock(),
+	})
+	if err != nil {
+		return
+	}
+	_, _ = client.audit.Complete(ctx, terminal)
+}
+
+type countingReader struct {
+	reader io.Reader
+	mu     sync.Mutex
+	total  int64
+}
+
+func (reader *countingReader) Read(destination []byte) (int, error) {
+	count, err := reader.reader.Read(destination)
+	if count > 0 {
+		reader.mu.Lock()
+		reader.total += int64(count)
+		reader.mu.Unlock()
+	}
+	return count, err
+}
+
+func (reader *countingReader) count() int64 {
+	reader.mu.Lock()
+	defer reader.mu.Unlock()
+	return reader.total
 }

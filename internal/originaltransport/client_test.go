@@ -57,6 +57,8 @@ func TestOriginalTransportPinsClientOriginAndStripsProxyCredentials(
 		Headers:      headers,
 		Body:         body,
 		PayloadClass: access.OperationPayloadControl,
+		ConnectionID: "connection-test",
+		ParentID:     "original-request-test",
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -175,6 +177,8 @@ func originalRequest(
 		Method:       http.MethodGet,
 		Path:         "/v1/status",
 		PayloadClass: access.OperationPayloadControl,
+		ConnectionID: "connection-test",
+		ParentID:     "original-request-test",
 	})
 	if err != nil {
 		t.Fatal(err)

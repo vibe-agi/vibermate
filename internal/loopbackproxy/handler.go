@@ -683,6 +683,7 @@ func (handler *Handler) serveInner(
 			request,
 			binding,
 			capability,
+			audit.ID(),
 			exchangeID,
 			body,
 		)
@@ -692,6 +693,7 @@ func (handler *Handler) serveInner(
 			request,
 			binding,
 			capability,
+			audit.ID(),
 			exchangeID,
 			body,
 		)
@@ -910,6 +912,7 @@ func (handler *Handler) serveAgentProbe(
 	request *http.Request,
 	binding access.IngressBinding,
 	capability pathcapability.Capability,
+	connectionID string,
 	requestID string,
 	body []byte,
 ) {
@@ -928,6 +931,7 @@ func (handler *Handler) serveAgentProbe(
 		binding,
 		offlinehold.EgressAuxiliary,
 		capability.PayloadClass(),
+		connectionID,
 		requestID,
 		body,
 	)
@@ -938,6 +942,7 @@ func (handler *Handler) serveOriginal(
 	request *http.Request,
 	binding access.IngressBinding,
 	capability pathcapability.Capability,
+	connectionID string,
 	requestID string,
 	body []byte,
 ) {
@@ -956,6 +961,7 @@ func (handler *Handler) serveOriginal(
 		binding,
 		offlinehold.EgressOpaque,
 		capability.PayloadClass(),
+		connectionID,
 		requestID,
 		body,
 	)
@@ -967,11 +973,21 @@ func (handler *Handler) forwardToOriginalOrigin(
 	binding access.IngressBinding,
 	kind offlinehold.EgressKind,
 	payloadClass access.OperationPayloadClass,
+	connectionID string,
 	requestID string,
 	body []byte,
 ) {
+	// The egress identity and the original-request identity are generated
+	// independently; the association travels as typed references.
+	egressID, err := handler.exchangeIDs.NewExchangeID(request.Context())
+	if err != nil {
+		writeReason(writer, http.StatusServiceUnavailable, ReasonProxyStopping, "")
+		return
+	}
 	frozen, err := originaltransport.NewRequest(originaltransport.RequestOptions{
-		RequestID:    requestID,
+		RequestID:    egressID,
+		ConnectionID: connectionID,
+		ParentID:     requestID,
 		Kind:         kind,
 		Origin:       binding.ClientOrigin(),
 		Method:       request.Method,

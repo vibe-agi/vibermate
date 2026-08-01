@@ -16,6 +16,7 @@ import (
 	"github.com/vibe-agi/vibermate/internal/capturerun"
 	"github.com/vibe-agi/vibermate/internal/certidentity"
 	"github.com/vibe-agi/vibermate/internal/connectionevent"
+	"github.com/vibe-agi/vibermate/internal/egressaudit"
 	"github.com/vibe-agi/vibermate/internal/exchange"
 	"github.com/vibe-agi/vibermate/internal/localca"
 	"github.com/vibe-agi/vibermate/internal/loopbackproxy"
@@ -498,6 +499,7 @@ func (productionExchangeBuilder) Build(
 
 type originalBuildRequest struct {
 	coordinator offlinehold.Coordinator
+	audit       egressaudit.Writer
 }
 
 type originalRuntime interface {
@@ -514,7 +516,7 @@ type productionOriginalBuilder struct{}
 func (productionOriginalBuilder) Build(
 	request originalBuildRequest,
 ) (originalRuntime, error) {
-	return originaltransport.NewProduction(request.coordinator)
+	return originaltransport.NewProduction(request.coordinator, request.audit)
 }
 
 type captureBuildRequest struct {

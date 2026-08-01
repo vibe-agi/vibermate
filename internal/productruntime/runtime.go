@@ -322,6 +322,7 @@ func startWithBuilders(
 
 	original, err := builders.original.Build(originalBuildRequest{
 		coordinator: options.OfflineHold,
+		audit:       storageResult.store.EgressAttemptRepository(),
 	})
 	if err != nil {
 		return fail("original-origin transport", err)

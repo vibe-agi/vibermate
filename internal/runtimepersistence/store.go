@@ -50,6 +50,7 @@ type RuntimeStore interface {
 	ActivityRepository() activity.Repository
 	CaptureRunRepository() capturerun.Repository
 	ConnectionEventRepository() connectionevent.Repository
+	EgressAttemptRepository() egressaudit.Repository
 	ToolApprovalRepository() toolapproval.Repository
 	Shutdown(context.Context) error
 }

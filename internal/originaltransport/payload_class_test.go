@@ -26,6 +26,8 @@ func payloadClassRequestOptions(
 		Path:         "/api/claude_code/settings",
 		Headers:      http.Header{"Authorization": []string{"Bearer client"}},
 		PayloadClass: access.OperationPayloadControl,
+		ConnectionID: "connection-test",
+		ParentID:     "original-request-test",
 	}
 }
 

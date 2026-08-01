@@ -72,6 +72,13 @@ type Repository interface {
 	List(context.Context, PageRequest) (Page, error)
 }
 
+// Writer is the append side a transport depends on. It is narrower than the
+// repository so a data-plane component cannot read the audit log.
+type Writer interface {
+	Append(context.Context, Attempt) (Record, error)
+	Complete(context.Context, Attempt) (Record, error)
+}
+
 // Reader is the read-only projection used by control surfaces.
 type Reader interface {
 	List(context.Context, PageRequest) (Page, error)
