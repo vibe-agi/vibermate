@@ -199,11 +199,21 @@ type RequestOptions struct {
 	AuthDriverRef  access.AuthDriverRef
 	TransportPlan  access.CompiledTransportFingerprintPlan
 	ClientHello    transportprofile.Observation
+	// ConnectionID, ExchangeID, and ParentAttemptID associate this outbound
+	// with the client connection, the Exchange, and the upstream attempt that
+	// caused it. They travel as typed references so no identity encodes
+	// containment of another.
+	ConnectionID    string
+	ExchangeID      string
+	ParentAttemptID string
 }
 
 // Request is a frozen provider representation. Its URL, authority, body,
 // credential reference, and auth driver cannot be mutated after construction.
 type Request struct {
+	connectionID    string
+	exchangeID      string
+	parentAttemptID string
 	requestID       string
 	targetRef       string
 	target          Target
@@ -238,6 +248,24 @@ func NewRequest(options RequestOptions) (Request, error) {
 	if options.Action == nil {
 		return Request{}, errors.New("provider request has no data-plane Action lease")
 	}
+	// A downstream connection is optional: a runtime-originated Exchange has
+	// none. The Exchange and attempt identities are always present.
+	for label, value := range map[string]string{
+		"provider Exchange ID":       options.ExchangeID,
+		"provider parent attempt ID": options.ParentAttemptID,
+	} {
+		if err := validateOpaqueIdentity(label, value); err != nil {
+			return Request{}, err
+		}
+	}
+	if options.ConnectionID != "" {
+		if err := validateOpaqueIdentity(
+			"provider connection ID",
+			options.ConnectionID,
+		); err != nil {
+			return Request{}, err
+		}
+	}
 	if options.Method != http.MethodPost {
 		return Request{}, errors.New("provider request method must be POST")
 	}
@@ -265,6 +293,9 @@ func NewRequest(options RequestOptions) (Request, error) {
 		)
 	}
 	return Request{
+		connectionID:    options.ConnectionID,
+		exchangeID:      options.ExchangeID,
+		parentAttemptID: options.ParentAttemptID,
 		requestID:       options.RequestID,
 		targetRef:       options.TargetRef,
 		target:          options.Target,
@@ -360,3 +391,7 @@ func validateOpaqueIdentity(label, value string) error {
 	}
 	return nil
 }
+
+func (request Request) ConnectionID() string    { return request.connectionID }
+func (request Request) ExchangeID() string      { return request.exchangeID }
+func (request Request) ParentAttemptID() string { return request.parentAttemptID }

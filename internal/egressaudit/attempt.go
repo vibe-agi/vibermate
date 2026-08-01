@@ -369,11 +369,17 @@ func validateParent(
 		if parent.Kind != ParentUpstreamAttempt {
 			return errors.New("provider attempt requires an UpstreamAttempt parent")
 		}
+		// The Exchange and attempt identities are always present. A downstream
+		// connection may be absent, because a runtime-originated Exchange such
+		// as a quality run has no client connection.
 		if err := validateIdentity(
 			"egress parent Exchange ID",
 			parent.ExchangeID,
 		); err != nil {
 			return err
+		}
+		if connectionID == "" {
+			return nil
 		}
 		return requireConnection()
 	case PurposeProfileOperation:

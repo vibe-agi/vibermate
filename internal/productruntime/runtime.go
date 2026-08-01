@@ -308,6 +308,7 @@ func startWithBuilders(
 	provider, err := builders.provider.Build(providerBuildRequest{
 		coordinator: options.OfflineHold,
 		secrets:     options.Secrets,
+		audit:       storageResult.store.EgressAttemptRepository(),
 	})
 	if err != nil {
 		return fail("provider transport", err)

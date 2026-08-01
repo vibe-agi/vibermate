@@ -260,6 +260,7 @@ func TestClientUsesExplicitLoopbackCleartextTransport(t *testing.T) {
 		gate,
 		authenticator,
 		DefaultTransportTimeouts(),
+		nil,
 	)
 	if err != nil {
 		t.Fatal(err)
@@ -698,19 +699,21 @@ func newTestRequestWithBody(
 	t.Cleanup(action.Release)
 	plan := testRequestAccessPlan(t)
 	request, err := NewRequest(RequestOptions{
-		RequestID:      id,
-		TargetRef:      "target-test",
-		Target:         target,
-		AccessRevision: plan.Revision(),
-		PlanHash:       plan.PlanHash(),
-		Action:         action,
-		Method:         http.MethodPost,
-		RelativePath:   "chat/completions",
-		Headers:        headers,
-		Body:           body,
-		SecretRef:      secretRef,
-		AuthDriverRef:  access.StaticHeaderAuthDriverRef(),
-		TransportPlan:  plan.TransportFingerprintPlan(),
+		RequestID:       id,
+		ExchangeID:      "exchange-test",
+		ParentAttemptID: "attempt-test",
+		TargetRef:       "target-test",
+		Target:          target,
+		AccessRevision:  plan.Revision(),
+		PlanHash:        plan.PlanHash(),
+		Action:          action,
+		Method:          http.MethodPost,
+		RelativePath:    "chat/completions",
+		Headers:         headers,
+		Body:            body,
+		SecretRef:       secretRef,
+		AuthDriverRef:   access.StaticHeaderAuthDriverRef(),
+		TransportPlan:   plan.TransportFingerprintPlan(),
 	})
 	if err != nil {
 		t.Fatalf("NewRequest() error = %v", err)

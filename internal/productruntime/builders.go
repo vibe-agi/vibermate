@@ -322,6 +322,7 @@ func (productionMonitorBuilder) Build(request monitorBuildRequest) (ownedCompone
 type providerBuildRequest struct {
 	coordinator offlinehold.Coordinator
 	secrets     secretstore.Reader
+	audit       egressaudit.Writer
 }
 
 type providerRuntime interface {
@@ -348,6 +349,7 @@ func (productionProviderBuilder) Build(
 		request.coordinator,
 		authenticator,
 		providertransport.DefaultTransportTimeouts(),
+		request.audit,
 	)
 }
 

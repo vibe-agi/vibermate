@@ -9,7 +9,9 @@ import (
 	"net/http"
 	"strings"
 	"sync"
+	"time"
 
+	"github.com/vibe-agi/vibermate/internal/egressaudit"
 	"github.com/vibe-agi/vibermate/internal/offlinehold"
 	"github.com/vibe-agi/vibermate/internal/transportprofile"
 )
@@ -23,6 +25,8 @@ type ClientOptions struct {
 	Coordinator   offlinehold.Coordinator
 	Authenticator Authenticator
 	Transport     Transport
+	// Audit records one immutable attempt per real outbound.
+	Audit egressaudit.Writer
 }
 
 type Evidence struct {
@@ -75,6 +79,8 @@ type Client struct {
 	coordinator   offlinehold.Coordinator
 	authenticator Authenticator
 	transport     Transport
+	audit         egressaudit.Writer
+	clock         func() time.Time
 	operations    map[*clientOperation]struct{}
 	closing       bool
 	changed       chan struct{}
@@ -90,6 +96,8 @@ func NewClient(options ClientOptions) (*Client, error) {
 		coordinator:   options.Coordinator,
 		authenticator: options.Authenticator,
 		transport:     options.Transport,
+		audit:         options.Audit,
+		clock:         time.Now,
 		operations:    make(map[*clientOperation]struct{}),
 		changed:       make(chan struct{}),
 	}, nil
@@ -99,6 +107,7 @@ func NewProductionClient(
 	coordinator offlinehold.Coordinator,
 	authenticator Authenticator,
 	timeouts TransportTimeouts,
+	audit egressaudit.Writer,
 ) (*Client, error) {
 	transport, err := newProductionTransport(timeouts)
 	if err != nil {
@@ -108,6 +117,7 @@ func NewProductionClient(
 		Coordinator:   coordinator,
 		Authenticator: authenticator,
 		Transport:     transport,
+		Audit:         audit,
 	})
 }
 
@@ -178,6 +188,12 @@ func (client *Client) Do(
 	if err != nil {
 		return nil, Evidence{}, fmt.Errorf("finalize provider authentication: %w", err)
 	}
+	// The record is appended before the first outbound byte, so an outbound
+	// that fails or is cancelled still leaves evidence of where it was going.
+	record, recordErr := client.beginAudit(operationContext, frozen)
+	if recordErr != nil {
+		return nil, Evidence{}, recordErr
+	}
 	response, transportEvidence, err := client.transport.RoundTrip(
 		request,
 		TransportDispatch{
@@ -195,20 +211,41 @@ func (client *Client) Do(
 		if response != nil && response.Body != nil {
 			_ = response.Body.Close()
 		}
+		client.completeAudit(
+			operationContext, record, egressaudit.OutcomeFailed,
+			"transport_failed", int64(len(frozen.body)), 0,
+		)
 		return nil, attemptEvidence, fmt.Errorf("send provider request: %w", err)
 	}
 	if response == nil || response.Body == nil {
+		client.completeAudit(
+			operationContext, record, egressaudit.OutcomeFailed,
+			"incomplete_response", int64(len(frozen.body)), 0,
+		)
 		return nil, attemptEvidence, errors.New("provider transport returned an incomplete response")
 	}
 	if response.StatusCode >= 300 && response.StatusCode <= 399 {
 		_ = response.Body.Close()
+		client.completeAudit(
+			operationContext, record, egressaudit.OutcomeFailed,
+			"redirect_denied", int64(len(frozen.body)), 0,
+		)
 		return nil, attemptEvidence, ErrRedirectNotAllowed
 	}
 
+	counted := &countingReader{reader: response.Body}
 	body := &leaseBody{
-		reader: response.Body,
+		reader: counted,
 		close:  response.Body,
 		finish: func() {
+			client.completeAudit(
+				context.WithoutCancel(operationContext),
+				record,
+				egressaudit.OutcomeCompleted,
+				"",
+				int64(len(frozen.body)),
+				counted.count(),
+			)
 			client.finish(operation, nil)
 		},
 	}
@@ -347,4 +384,89 @@ func (body *leaseBody) Close() error {
 
 func (body *leaseBody) finalize() {
 	body.once.Do(body.finish)
+}
+
+func (client *Client) beginAudit(
+	ctx context.Context,
+	frozen Request,
+) (egressaudit.Attempt, error) {
+	if client.audit == nil {
+		return egressaudit.Attempt{}, nil
+	}
+	attempt, err := egressaudit.New(egressaudit.NewInput{
+		ID:           frozen.requestID,
+		ConnectionID: frozen.connectionID,
+		Purpose:      egressaudit.PurposeProviderAttempt,
+		PayloadClass: egressaudit.PayloadClientSemantic,
+		Parent: egressaudit.ParentRef{
+			Kind:       egressaudit.ParentUpstreamAttempt,
+			ID:         frozen.parentAttemptID,
+			ExchangeID: frozen.exchangeID,
+		},
+		Caller:       egressaudit.CallerCore,
+		TargetOrigin: frozen.target.origin,
+		Decision: egressaudit.BuiltInDirectDecision(
+			egressaudit.AuthorityAccess,
+		),
+		StartedAt: client.clock(),
+	})
+	if err != nil {
+		return egressaudit.Attempt{}, fmt.Errorf(
+			"construct provider EgressAttempt: %w",
+			err,
+		)
+	}
+	if _, err := client.audit.Append(ctx, attempt); err != nil {
+		return egressaudit.Attempt{}, fmt.Errorf(
+			"record provider EgressAttempt: %w",
+			err,
+		)
+	}
+	return attempt, nil
+}
+
+func (client *Client) completeAudit(
+	ctx context.Context,
+	attempt egressaudit.Attempt,
+	outcome egressaudit.Outcome,
+	errorClass string,
+	bytesOut int64,
+	bytesIn int64,
+) {
+	if client.audit == nil || attempt.ID() == "" {
+		return
+	}
+	terminal, err := attempt.Finish(egressaudit.TerminalInput{
+		Outcome:     outcome,
+		ErrorClass:  errorClass,
+		BytesOut:    bytesOut,
+		BytesIn:     bytesIn,
+		CompletedAt: client.clock(),
+	})
+	if err != nil {
+		return
+	}
+	_, _ = client.audit.Complete(ctx, terminal)
+}
+
+type countingReader struct {
+	reader io.Reader
+	mu     sync.Mutex
+	total  int64
+}
+
+func (reader *countingReader) Read(destination []byte) (int, error) {
+	count, err := reader.reader.Read(destination)
+	if count > 0 {
+		reader.mu.Lock()
+		reader.total += int64(count)
+		reader.mu.Unlock()
+	}
+	return count, err
+}
+
+func (reader *countingReader) count() int64 {
+	reader.mu.Lock()
+	defer reader.mu.Unlock()
+	return reader.total
 }
