@@ -12,10 +12,15 @@ compare-and-swap writes. A pure compiler validates ownership, references, and
 declared capabilities before producing the sole process-local immutable
 `AccessPlanSnapshot` and deterministic `PlanHash`.
 
-The current M0 plan contains one enabled Agent endpoint, one owned OpenAI Chat
-profile and provider target, one account binding that stores only `SecretRef`
-and `AuthDriverRef`, one default route set, Direct egress, a fixed model
-mapping, an explicit empty pass-through plugin plan, and dependency revisions.
+The current plan contains one enabled Agent endpoint, one default route set,
+Direct egress, an explicit empty pass-through plugin plan, and dependency
+revisions. The route set may name more than one candidate; each candidate owns
+a profile, a provider target, an account binding that stores only `SecretRef`
+and `AuthDriverRef`, and a fixed model mapping, and each is compiled and frozen
+in the order the route set declares. A route set may carry
+`pre_first_byte_idempotent_only`, which is the explicit permission for the
+duplicate billing and possible upstream side effects a second attempt brings;
+without it a failed attempt is reported rather than retried.
 The sole immutable plan can now compile either the Anthropic Messages or exact
 OpenAI Responses `POST /v1/responses` client operation against the existing
 OpenAI Chat backend. A shared typed operation catalog is the only path truth
@@ -179,8 +184,11 @@ read/write control session to the main Webview. Development and packaged
 Webview origins are selected explicitly and never accepted together.
 
 The authenticated control slice exposes status, active-plan metadata and apply,
-write-only credential replacement, Activity, ConnectionEvent, approval, and
-offline-hold actions. Credential metadata inspection never reads secret bytes,
+write-only credential replacement, Activity, ConnectionEvent, per-egress
+attempt, approval, capture-run, connection-rule, and offline-hold actions.
+Creating and controlling a capture run belongs to the launcher and its per-run
+capability; reading the list is an ordinary app read and carries no capability
+in either direction. Credential metadata inspection never reads secret bytes,
 and responses never contain a secret value or `SecretRef`. The React UI uses
 the synchronized `en-US` and `zh-CN` catalogs, can load the active Access
 revision before editing, and does not place capabilities or secrets in Web
@@ -231,8 +239,42 @@ passing private v5 report from the clean frozen artifact.
 Even a passing M0 assembly report does not prove physical network loss/sleep,
 power-loss durability, arbitrary client/provider compatibility, Root
 installation, signing, notarization, or release secret protection. The code
-does not implement Server, Windows/Linux, unmatched-endpoint blind tunneling,
-system proxy installation, multi-profile routing, or a full control API.
+does not implement Server, Windows or Linux SecretStore backends, system proxy
+installation, plugins, the quality subsystem, dashboards, or the Responses
+WebSocket path. A Windows or Linux release build compiles and refuses at
+startup rather than degrading to a file, which is what design 06 asks for and
+is not the same as supporting those platforms.
+
+## What running it proves
+
+Opt-in live runs drive a real model at a configured origin. A client request in
+Anthropic Messages reaches an OpenAI-chat backend and the answer returns in
+Anthropic Messages, with usage; the same holds for an OpenAI Responses client.
+An ordinary `http.Client` with a proxy address and the local Root in its trust
+store reaches the same backend through CONNECT authorization, the connection
+policy, and a leaf issued for that exact host. A streamed request returns
+`text/event-stream` carrying that dialect's own events. A stream abandoned by
+its client is recorded as cancelled, its outbound reaches a terminal, and the
+runtime still drains.
+
+An installed Claude Code binary, launched by the product's own launcher and
+given nothing but a proxy address, a CaptureRun credential and the local Root,
+reaches a real model and prints its answer.
+
+These runs skip loudly without their environment variables rather than passing
+quietly, and `docs/evidence/2026-08-02-live-provider-run.md` records what each
+one does and does not prove.
+
+The outbound firewall decides every proxied connection before any dial, DNS
+resolution, or certificate issuance. The released default asks about a host
+nobody has decided on and allows nothing in advance; an answer can be
+remembered as a rule that commits with the decision itself, and rules are
+stored, editable through the control API, and take effect on the next
+connection without revisiting one already decided.
+
+The macOS Keychain is the release SecretStore. `make check` builds and vets
+under the release build tag, and cross-compiles the Windows and Linux release
+builds, so the backend selection cannot silently go missing again.
 
 The implementation is not Preview-ready or Release-ready.
 
