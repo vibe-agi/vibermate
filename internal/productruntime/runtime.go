@@ -15,6 +15,7 @@ import (
 	"github.com/vibe-agi/vibermate/internal/blindtunnel"
 	"github.com/vibe-agi/vibermate/internal/capturerun"
 	"github.com/vibe-agi/vibermate/internal/connectionevent"
+	"github.com/vibe-agi/vibermate/internal/connectionpolicy"
 	"github.com/vibe-agi/vibermate/internal/egressaudit"
 	"github.com/vibe-agi/vibermate/internal/exchange"
 	"github.com/vibe-agi/vibermate/internal/localca"
@@ -386,6 +387,13 @@ func startWithBuilders(
 	if err != nil {
 		return fail("blind tunnel dialer", err)
 	}
+	// Every proxied connection is decided before any dial. The rule set this
+	// stage ships is an explicit named placeholder for the ask path, not a
+	// permissive default; see connectionpolicy.InterimAllowUnmatchedRuleID.
+	connectionRules, err := connectionpolicy.InterimRuleSet(1)
+	if err != nil {
+		return fail("connection policy", err)
+	}
 	proxy, err := builders.proxy.Build(proxyBuildRequest{
 		ownerContext: ownerContext,
 		runs:         captureRuns,
@@ -394,6 +402,7 @@ func startWithBuilders(
 		original:     original,
 		certificates: certificateAuthority,
 		connections:  connections,
+		policy:       connectionRules,
 		blindTunnels: blindTunnels,
 		egressAudit:  storageResult.store.EgressAttemptRepository(),
 		random:       securityRandom,

@@ -28,6 +28,7 @@ import (
 	"github.com/vibe-agi/vibermate/internal/certidentity"
 	"github.com/vibe-agi/vibermate/internal/clientadapter"
 	"github.com/vibe-agi/vibermate/internal/connectionevent"
+	"github.com/vibe-agi/vibermate/internal/connectionpolicy"
 	"github.com/vibe-agi/vibermate/internal/egressaudit"
 	"github.com/vibe-agi/vibermate/internal/exchange"
 	"github.com/vibe-agi/vibermate/internal/localca"
@@ -68,6 +69,7 @@ const (
 	ReasonProfileOperationUnsupported   ReasonCode = "profile_operation_unsupported"
 	ReasonBlindTunnelFailed             ReasonCode = "blind_tunnel_failed"
 	ReasonUnsupportedUpgrade            ReasonCode = "unsupported_upgrade"
+	ReasonConnectionDenied              ReasonCode = "connection_denied"
 )
 
 var ErrProxyStopping = errors.New("loopback proxy is stopping")
@@ -144,14 +146,17 @@ func (source RandomExchangeIDSource) NewExchangeID(
 }
 
 type Options struct {
-	OwnerContext     context.Context
-	Runs             RunAuthorizer
-	Ingress          IngressAuthority
-	Paths            *pathcapability.Catalog
-	Exchanges        exchange.Executor
-	Original         OriginalClient
-	Certificates     CertificateAuthority
-	Connections      ConnectionJournal
+	OwnerContext context.Context
+	Runs         RunAuthorizer
+	Ingress      IngressAuthority
+	Paths        *pathcapability.Catalog
+	Exchanges    exchange.Executor
+	Original     OriginalClient
+	Certificates CertificateAuthority
+	Connections  ConnectionJournal
+	// Policy decides every proxied connection before any dial, DNS
+	// resolution, or certificate issuance. An AgentEndpoint is not exempt.
+	Policy           connectionpolicy.RuleSet
 	BlindTunnels     BlindTunnelDialer
 	EgressAudit      egressaudit.Writer
 	ExchangeIDs      ExchangeIDSource
@@ -170,6 +175,7 @@ type Handler struct {
 	original     OriginalClient
 	certificates CertificateAuthority
 	connections  ConnectionJournal
+	policy       connectionpolicy.RuleSet
 	blindTunnels BlindTunnelDialer
 	egressAudit  egressaudit.Writer
 	exchangeIDs  ExchangeIDSource
@@ -209,6 +215,7 @@ func New(options Options) (*Handler, error) {
 		original:     options.Original,
 		certificates: options.Certificates,
 		connections:  options.Connections,
+		policy:       options.Policy,
 		blindTunnels: options.BlindTunnels,
 		egressAudit:  options.EgressAudit,
 		exchangeIDs:  options.ExchangeIDs,
@@ -377,6 +384,38 @@ func (handler *Handler) ServeHTTP(
 		return
 	}
 	source := connectionSource(evidence)
+	// Every proxied connection is decided here, before any dial, DNS
+	// resolution, or certificate issuance, and before the AgentEndpoint match
+	// that would otherwise exempt it.
+	policyHost, policyPort := policyTarget(request, cleartextForward)
+	outcome := handler.policy.Evaluate(connectionpolicy.Request{
+		Host: policyHost,
+		Port: policyPort,
+	})
+	if outcome.Decision != connectionpolicy.DecisionAllow {
+		if handler.denyConnection(
+			request.Context(),
+			audit,
+			source,
+			ReasonCode(outcome.RuleID),
+		) != nil {
+			writeReason(
+				writer,
+				http.StatusServiceUnavailable,
+				ReasonConnectionAuditUnavailable,
+				"",
+			)
+			return
+		}
+		terminal = true
+		writeReason(
+			writer,
+			http.StatusForbidden,
+			ReasonConnectionDenied,
+			outcome.RuleID,
+		)
+		return
+	}
 	// A cleartext forward-proxy request carries its target in an absolute
 	// request-target. It is authenticated exactly like a CONNECT, then
 	// forwarded to that origin; it never enters a model pipeline and never
@@ -388,6 +427,7 @@ func (handler *Handler) ServeHTTP(
 			active,
 			audit,
 			source,
+			outcome.RuleID,
 		)
 		return
 	}
@@ -423,6 +463,7 @@ func (handler *Handler) ServeHTTP(
 			active,
 			audit,
 			source,
+			outcome.RuleID,
 			request.Host,
 			host,
 			port,
@@ -434,7 +475,7 @@ func (handler *Handler) ServeHTTP(
 		connectionevent.DecisionEvidence{
 			Source:               source,
 			Decision:             connectionevent.DecisionAllow,
-			RuleID:               "m0.agent_endpoint_exact",
+			RuleID:               outcome.RuleID,
 			RouteHost:            origin.TLSServerName(),
 			EgressScope:          connectionevent.EgressScopeAccess,
 			EgressSource:         connectionevent.EgressSourceAccessDefault,
@@ -1460,6 +1501,7 @@ func (handler *Handler) serveBlindTunnel(
 	active *operation,
 	audit *connectionevent.Connection,
 	source connectionevent.Source,
+	policyRuleID string,
 	authority string,
 	host string,
 	port uint16,
@@ -1492,7 +1534,7 @@ func (handler *Handler) serveBlindTunnel(
 		connectionevent.DecisionEvidence{
 			Source:   source,
 			Decision: connectionevent.DecisionAllow,
-			RuleID:   "m0.blind_tunnel",
+			RuleID:   policyRuleID,
 			// A blind tunnel performs no route translation, so the client's
 			// requested authority is the actual destination.
 			RouteHost:  host,
@@ -1656,6 +1698,7 @@ func (handler *Handler) serveCleartextForward(
 	active *operation,
 	audit *connectionevent.Connection,
 	source connectionevent.Source,
+	policyRuleID string,
 ) bool {
 	if handler.blindTunnels == nil {
 		if handler.denyConnection(
@@ -1690,7 +1733,7 @@ func (handler *Handler) serveCleartextForward(
 		connectionevent.DecisionEvidence{
 			Source:     source,
 			Decision:   connectionevent.DecisionAllow,
-			RuleID:     "m0.cleartext_forward",
+			RuleID:     policyRuleID,
 			RouteHost:  host,
 			Decryption: connectionevent.DecryptionBlind,
 		},
@@ -1825,4 +1868,25 @@ func forwardableHeaders(source http.Header) http.Header {
 		headers.Del(name)
 	}
 	return headers
+}
+
+// policyTarget is what the connection is asking to reach. A CONNECT names it
+// in the authority; a cleartext forward names it in the absolute
+// request-target.
+func policyTarget(
+	request *http.Request,
+	cleartextForward bool,
+) (string, uint16) {
+	if cleartextForward {
+		host, port, err := cleartextAuthority(request.URL.Host)
+		if err != nil {
+			return "", 0
+		}
+		return host, port
+	}
+	host, port, err := splitAuthority(request.Host)
+	if err != nil {
+		return "", 0
+	}
+	return host, port
 }

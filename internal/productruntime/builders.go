@@ -16,6 +16,7 @@ import (
 	"github.com/vibe-agi/vibermate/internal/capturerun"
 	"github.com/vibe-agi/vibermate/internal/certidentity"
 	"github.com/vibe-agi/vibermate/internal/connectionevent"
+	"github.com/vibe-agi/vibermate/internal/connectionpolicy"
 	"github.com/vibe-agi/vibermate/internal/egressaudit"
 	"github.com/vibe-agi/vibermate/internal/exchange"
 	"github.com/vibe-agi/vibermate/internal/localca"
@@ -589,6 +590,7 @@ type proxyBuildRequest struct {
 	original     loopbackproxy.OriginalClient
 	certificates loopbackproxy.CertificateAuthority
 	connections  connectionevent.Runtime
+	policy       connectionpolicy.RuleSet
 	blindTunnels loopbackproxy.BlindTunnelDialer
 	egressAudit  egressaudit.Writer
 	random       io.Reader
@@ -627,6 +629,7 @@ func (productionProxyBuilder) Build(
 		Original:     request.original,
 		Certificates: request.certificates,
 		Connections:  request.connections,
+		Policy:       request.policy,
 		BlindTunnels: request.blindTunnels,
 		EgressAudit:  request.egressAudit,
 		ExchangeIDs: loopbackproxy.NewRandomExchangeIDSource(

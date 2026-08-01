@@ -24,6 +24,7 @@ import (
 	"github.com/vibe-agi/vibermate/internal/capturerun"
 	"github.com/vibe-agi/vibermate/internal/clientadapter"
 	"github.com/vibe-agi/vibermate/internal/connectionevent"
+	"github.com/vibe-agi/vibermate/internal/connectionpolicy"
 	"github.com/vibe-agi/vibermate/internal/egressaudit"
 	"github.com/vibe-agi/vibermate/internal/exchange"
 	"github.com/vibe-agi/vibermate/internal/localca"
@@ -674,10 +675,63 @@ func newGenericResponsesProxyFixture(t *testing.T) *proxyFixture {
 	)
 }
 
+// newProxyFixtureWithPolicy exercises a specific rule set. The default fixture
+// allows every connection so the existing suite keeps testing what it was
+// written to test; production ships a deny default.
+func newProxyFixtureWithPolicy(
+	t *testing.T,
+	policy connectionpolicy.RuleSet,
+) *proxyFixture {
+	t.Helper()
+	return newProxyFixtureForDialectWithPolicy(
+		t,
+		access.DialectAnthropicMessages,
+		nil,
+		policy,
+	)
+}
+
+func allowEverythingTestPolicy(t *testing.T) connectionpolicy.RuleSet {
+	t.Helper()
+
+	set, err := connectionpolicy.NewRuleSet(connectionpolicy.RuleSetOptions{
+		Revision: 1,
+		Rules: []connectionpolicy.Rule{{
+			ID:       "test-allow-all",
+			Decision: connectionpolicy.DecisionAllow,
+			Match:    connectionpolicy.MatchAny(),
+		}},
+		Default: connectionpolicy.Rule{
+			ID:       "test-default-deny",
+			Decision: connectionpolicy.DecisionDeny,
+			Match:    connectionpolicy.MatchAny(),
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return set
+}
+
 func newProxyFixtureForDialect(
 	t *testing.T,
 	clientDialect access.Dialect,
 	adapter *clientadapter.Evidence,
+) *proxyFixture {
+	t.Helper()
+	return newProxyFixtureForDialectWithPolicy(
+		t,
+		clientDialect,
+		adapter,
+		allowEverythingTestPolicy(t),
+	)
+}
+
+func newProxyFixtureForDialectWithPolicy(
+	t *testing.T,
+	clientDialect access.Dialect,
+	adapter *clientadapter.Evidence,
+	policy connectionpolicy.RuleSet,
 ) *proxyFixture {
 	t.Helper()
 	directory := t.TempDir()
@@ -749,6 +803,7 @@ func newProxyFixtureForDialect(
 		Original:         original,
 		Certificates:     authority,
 		Connections:      connections,
+		Policy:           policy,
 		BlindTunnels:     newTestBlindTunnels(t),
 		EgressAudit:      store.EgressAttemptRepository(),
 		ExchangeIDs:      loopbackproxy.NewCryptographicExchangeIDSource(),

@@ -52,10 +52,24 @@ not having it.
 
 ## Bottom-up implementation
 
-- [ ] Add an ordered rule set with deterministic first-match evaluation.
-- [ ] Prove the default is not a wildcard allow and that ask is refused.
-- [ ] Evaluate before dial for both the MITM and blind paths.
-- [ ] Record the matched rule rather than a literal.
+- [x] Add an ordered rule set with deterministic first-match evaluation.
+- [x] Prove the default is not a wildcard allow and that ask is refused.
+- [x] Evaluate before dial for the MITM, blind, and cleartext paths.
+- [x] Record the matched rule rather than a literal.
+
+## The interim rule, stated plainly
+
+Design 06 forbids a wildcard allow default and makes the shipped default `ask`
+for an unknown host. The ask path does not exist yet, and neither alternative
+is honest: denying by default makes the proxy unusable while no rule editing
+exists, and allowing by default is the invariant violation.
+
+This slice therefore ships an explicit rule named
+`interim.allow-unmatched-pending-ask` rather than a permissive default. Every
+connection it admits carries that identifier in its connection record, so the
+gap is visible in the data rather than hidden in a constant, and deleting the
+rule is what turns `ask` on. It is a placeholder, not a product default, and it
+must not reach a release.
 
 ## Gates
 
