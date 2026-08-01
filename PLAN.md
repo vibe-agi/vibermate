@@ -82,34 +82,34 @@ no-body GETs, so the fixed Claude Code control plane is unaffected.
 
 ### 1. Freeze the payload class in the catalog
 
-- [ ] Add `OperationPayloadClass` with constructor validation to
+- [x] Add `OperationPayloadClass` with constructor validation to
   `internal/access`; reject empty and unknown enum values.
-- [ ] Require every `ClientOperationDefinition` to declare it.
-- [ ] Set `count_tokens` to `client_semantic`, model operations to
+- [x] Require every `ClientOperationDefinition` to declare it.
+- [x] Set `count_tokens` to `client_semantic`, model operations to
   `client_semantic`, and unsupported entries to their true class.
-- [ ] Carry it through `pathcapability.Capability`; the uncatalogued fallback
+- [x] Carry it through `pathcapability.Capability`; the uncatalogued fallback
   reports `unknown`.
 
 ### 2. Split the dispatch arms
 
-- [ ] Replace `case KindAuxiliary, KindOpaque:` with separate arms.
-- [ ] Decide rejection from payload class before `readBounded`.
-- [ ] Bounded discard-drain, then respond.
+- [x] Replace `case KindAuxiliary, KindOpaque:` with separate arms.
+- [x] Decide rejection from payload class before `readBounded`.
+- [x] Bounded discard-drain, then respond.
 
 ### 3. Dialect error envelope
 
-- [ ] Emit the Anthropic error shape for Anthropic endpoints and the OpenAI
+- [x] Emit the Anthropic error shape for Anthropic endpoints and the OpenAI
   error shape for OpenAI endpoints; carry `profile_operation_unsupported` in a
   response header.
-- [ ] Prove the body parses against the dialect's error schema.
+- [x] Prove the body parses against the dialect's error schema.
 
 ### 4. Tighten the transport contract
 
-- [ ] `originaltransport` requires proven `none/control` evidence.
+- [x] `originaltransport` requires proven `none/control` evidence.
 
 ### 5. Structural guard
 
-- [ ] Add the rule plus good and injected-bad repository fixtures.
+- [x] Add the rule plus good and injected-bad repository fixtures.
 
 ### 6. Fixed-client evidence
 
