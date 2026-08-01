@@ -6,6 +6,7 @@ import type {
   ApprovalPage,
   ApprovalChoice,
   ApprovalView,
+  CaptureRunPage,
   ConnectionPage,
   EgressAttemptPage,
   CredentialView,
@@ -62,6 +63,7 @@ export interface ControlClient {
   ): Promise<OfflineHoldSnapshot>;
   activities(signal?: AbortSignal): Promise<ActivityPage>;
   approvals(signal?: AbortSignal): Promise<ApprovalPage>;
+  captureRuns(signal?: AbortSignal): Promise<CaptureRunPage>;
   connections(signal?: AbortSignal): Promise<ConnectionPage>;
   egressAttempts(signal?: AbortSignal): Promise<EgressAttemptPage>;
   decideApproval(
@@ -204,6 +206,16 @@ export function createControlClient(
         await request<unknown>(
           "GET",
           "/api/v1/approvals?state=pending&limit=50",
+          undefined,
+          undefined,
+          signal,
+        ),
+      ),
+    captureRuns: async (signal) =>
+      requireItemsPage<CaptureRunPage>(
+        await request<unknown>(
+          "GET",
+          "/api/v1/capture-runs?limit=50",
           undefined,
           undefined,
           signal,

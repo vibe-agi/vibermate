@@ -6,6 +6,7 @@ import { ControlProblem } from "../src/control-client.ts";
 import type { ControlClient } from "../src/control-client.ts";
 import { DashboardModel } from "../src/dashboard-model.ts";
 import approvalSamples from "../src/generated/samples/approvals.json" with { type: "json" };
+import captureRunSamples from "../src/generated/samples/capture-runs.json" with { type: "json" };
 import connectionSamples from "../src/generated/samples/connections.json" with { type: "json" };
 import egressSamples from "../src/generated/samples/egress-attempts.json" with { type: "json" };
 import type {
@@ -13,6 +14,7 @@ import type {
   ApprovalChoice,
   ApprovalKind,
   ApprovalView,
+  CaptureRunRecord,
   ConnectionRecord,
   EgressAttemptRecord,
   CredentialView,
@@ -98,6 +100,9 @@ function clientFixture() {
       ],
     })),
     approvals: vi.fn(async (_signal?: AbortSignal) => ({ items: [approval] })),
+    captureRuns: vi.fn(async (_signal?: AbortSignal) => ({
+      items: captureRunSamples as readonly CaptureRunRecord[],
+    })),
     connections: vi.fn(async (_signal?: AbortSignal) => ({
       items: connectionSamples as readonly ConnectionRecord[],
     })),
@@ -561,5 +566,67 @@ describe("a failure a person can act on", () => {
 
     expect(await screen.findByText("Ready")).toBeTruthy();
     expect(screen.queryByText("Where in the request")).toBeNull();
+  });
+});
+
+describe("what is captured", () => {
+  it("says whether anything has actually gone through a run", async () => {
+    const i18n = await createI18n("en-US");
+    const model = new DashboardModel(clientFixture(), 60_000);
+    render(
+      <I18nextProvider i18n={i18n}>
+        <Dashboard model={model} />
+      </I18nextProvider>,
+    );
+
+    expect(await screen.findByText("claude")).toBeTruthy();
+    expect(screen.getByText("Seen going through vibermate")).toBeTruthy();
+    expect(screen.getByText("Nothing seen yet")).toBeTruthy();
+  });
+
+  it("warns about a client this build has no evidence for", async () => {
+    const i18n = await createI18n("en-US");
+    const model = new DashboardModel(clientFixture(), 60_000);
+    render(
+      <I18nextProvider i18n={i18n}>
+        <Dashboard model={model} />
+      </I18nextProvider>,
+    );
+
+    expect(await screen.findByText("codex")).toBeTruthy();
+    expect(
+      screen.getByText(
+        "This build has no release evidence for this version, so it was " +
+          "started without a trust root and its requests will fail to connect.",
+      ),
+    ).toBeTruthy();
+  });
+
+  it("says nothing about a client it does recognize", async () => {
+    const i18n = await createI18n("en-US");
+    const client = clientFixture();
+    client.captureRuns.mockResolvedValue({
+      items: [
+        {
+          id: "run-verified",
+          executableLabel: "claude",
+          cwd: "/tmp",
+          state: "attached",
+          observation: "observed",
+          recognition: "verified",
+          createdAt: "2026-08-02T10:00:00Z",
+          expiresAt: "2026-08-02T11:00:00Z",
+        },
+      ],
+    });
+    const model = new DashboardModel(client, 60_000);
+    render(
+      <I18nextProvider i18n={i18n}>
+        <Dashboard model={model} />
+      </I18nextProvider>,
+    );
+
+    expect(await screen.findByText("claude")).toBeTruthy();
+    expect(screen.queryByText("Client")).toBeNull();
   });
 });

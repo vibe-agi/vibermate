@@ -92,8 +92,24 @@ func (router *Router) ServeHTTP(
 		router.bootstrap.ServeHTTP(writer, request)
 		return
 	}
-	if request.URL.Path == "/api/v1/capture-runs" ||
-		strings.HasPrefix(request.URL.Path, "/api/v1/capture-runs/") {
+	// The verb chooses the authority here, because they are different acts on
+	// the same resource. Creating a run and controlling one belong to the
+	// launcher and its per-run capability; reading the list is a person
+	// looking at their own machine, and it reaches the app the same way every
+	// other read does. Design 15 lists them that way.
+	if capturePath(request.URL.Path) && request.Method != http.MethodGet {
+		if !router.validLauncherTransport(request) {
+			writeProblem(writer, http.StatusForbidden, ReasonUnauthorized)
+			return
+		}
+		router.captureRuns.ServeHTTP(writer, request)
+		return
+	}
+	// A GET below the collection is still a control path shape, and nothing
+	// serves it. It must not fall through to the app and read as a route the
+	// app declined.
+	if capturePath(request.URL.Path) &&
+		request.URL.Path != "/api/v1/capture-runs" {
 		if !router.validLauncherTransport(request) {
 			writeProblem(writer, http.StatusForbidden, ReasonUnauthorized)
 			return
@@ -142,6 +158,12 @@ func (router *Router) validTransport(request *http.Request) bool {
 		}
 	}
 	return true
+}
+
+// capturePath reports the capture-run collection and everything below it.
+func capturePath(path string) bool {
+	return path == "/api/v1/capture-runs" ||
+		strings.HasPrefix(path, "/api/v1/capture-runs/")
 }
 
 func (router *Router) validLauncherTransport(request *http.Request) bool {

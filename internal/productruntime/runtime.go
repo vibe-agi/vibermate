@@ -517,6 +517,11 @@ func (r *Runtime) ExchangeExecutor() exchange.Executor {
 // CaptureRuns returns the runtime-owned short-lived child attribution
 // controller. It has no HTTP exposure until a Host composes authenticated
 // control routes.
+// CaptureRunReader is the read side of what is captured.
+func (r *Runtime) CaptureRunReader() capturerun.Reader {
+	return r.captureRuns
+}
+
 func (r *Runtime) CaptureRuns() capturerun.Controller {
 	return r.captureRuns
 }

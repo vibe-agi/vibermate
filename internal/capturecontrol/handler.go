@@ -229,6 +229,7 @@ func (handler *Handler) create(
 			Lifetime:        handler.runLifetime,
 			CatalogRevision: detection.CatalogRevision,
 			Adapter:         adapter,
+			Recognition:     detection.Recognition,
 		},
 	)
 	if err != nil {

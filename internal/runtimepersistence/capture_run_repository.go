@@ -29,6 +29,7 @@ const captureRunColumns = `
 	process_id,
 	state,
 	observation,
+	recognition,
 	first_observed_at_unix_ms,
 	created_at_unix_ms,
 	expires_at_unix_ms,
@@ -82,11 +83,12 @@ func (repository *captureRunRepository) Create(
 		     adapter_features,
 		     process_id,
 		     state,
+		     recognition,
 		     created_at_unix_ms,
 		     expires_at_unix_ms,
 		     updated_at_unix_ms
 		 )
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		record.ID,
 		record.ProxyCapabilityHash[:],
 		record.ControlCapabilityHash[:],
@@ -102,6 +104,7 @@ func (repository *captureRunRepository) Create(
 		features,
 		record.ProcessID,
 		string(record.State),
+		string(capturerun.NormalizedRecognition(record.Recognition)),
 		toUnixMillis(record.CreatedAt),
 		toUnixMillis(record.ExpiresAt),
 		toUnixMillis(record.UpdatedAt),
@@ -399,6 +402,7 @@ func scanCaptureRun(scanner captureRunScanner) (capturerun.DurableRecord, error)
 		adapterInstallShape, adapterRecipe string
 		state                              string
 		observation                        string
+		recognition                        string
 		firstObservedAt                    sql.NullInt64
 		createdAt, expiresAt, updatedAtMS  int64
 	)
@@ -419,6 +423,7 @@ func scanCaptureRun(scanner captureRunScanner) (capturerun.DurableRecord, error)
 		&record.ProcessID,
 		&state,
 		&observation,
+		&recognition,
 		&firstObservedAt,
 		&createdAt,
 		&expiresAt,
@@ -433,6 +438,7 @@ func scanCaptureRun(scanner captureRunScanner) (capturerun.DurableRecord, error)
 	copy(record.ProxyCapabilityHash[:], proxyHash)
 	copy(record.ControlCapabilityHash[:], controlHash)
 	record.Observation = capturerun.Observation(observation)
+	record.Recognition = clientadapter.Recognition(recognition)
 	if firstObservedAt.Valid {
 		record.FirstObservedAt = fromUnixMillis(firstObservedAt.Int64)
 	}
@@ -503,4 +509,45 @@ func captureRunAdapterColumns(
 		releaseDigest,
 		string(evidence.LaunchRecipe),
 		int64(evidence.Features)
+}
+
+// List returns the most recent runs for a reader. It is deliberately not a
+// control path: no capability is accepted and none is returned, so reading the
+// list can never become a way to act on a run.
+func (repository *captureRunRepository) List(
+	ctx context.Context,
+	request capturerun.PageRequest,
+) (capturerun.Page, error) {
+	request = request.Normalized()
+	operation, finish, err := repository.operations.begin(ctx)
+	if err != nil {
+		return capturerun.Page{}, err
+	}
+	defer finish()
+	rows, err := repository.database.QueryContext(
+		operation,
+		`SELECT `+captureRunColumns+`
+		 FROM capture_runs
+		 ORDER BY created_at_unix_ms DESC, run_id DESC
+		 LIMIT ?`,
+		request.Limit,
+	)
+	if err != nil {
+		return capturerun.Page{}, fmt.Errorf("list CaptureRuns: %w", err)
+	}
+	defer func() {
+		_ = rows.Close()
+	}()
+	page := capturerun.Page{Items: make([]capturerun.View, 0, request.Limit)}
+	for rows.Next() {
+		record, err := scanCaptureRun(rows)
+		if err != nil {
+			return capturerun.Page{}, err
+		}
+		page.Items = append(page.Items, capturerun.ViewOf(record))
+	}
+	if err := rows.Err(); err != nil {
+		return capturerun.Page{}, err
+	}
+	return page, nil
 }

@@ -760,6 +760,7 @@ func newProxyFixtureForDialectWithPolicy(
 		Lifetime:        5 * time.Minute,
 		CatalogRevision: 1,
 		Adapter:         adapter,
+		Recognition:     fixtureRecognition(adapter),
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -1349,4 +1350,15 @@ func (fixture *blindTunnelFixture) Dial(
 	request blindtunnel.DialRequest,
 ) (net.Conn, offlinehold.Lease, error) {
 	return fixture.dialer.Dial(ctx, request)
+}
+
+// fixtureRecognition keeps the fixture honest: a run carries verified
+// recognition exactly when it carries evidence.
+func fixtureRecognition(
+	adapter *clientadapter.Evidence,
+) clientadapter.Recognition {
+	if adapter == nil {
+		return clientadapter.RecognitionUnknown
+	}
+	return clientadapter.RecognitionVerified
 }

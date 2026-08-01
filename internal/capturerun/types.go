@@ -85,8 +85,12 @@ type DurableRecord struct {
 	ExecutableLabel       string
 	CatalogRevision       clientadapter.CatalogRevision
 	Adapter               *clientadapter.Evidence
-	ProcessID             int
-	State                 State
+	// Recognition says whether the catalog knows this client at all, which is
+	// not recoverable from Adapter alone: a run without evidence may be a
+	// program nobody catalogued or a known client at an uncatalogued version.
+	Recognition clientadapter.Recognition
+	ProcessID   int
+	State       State
 	// Observation is recorded from real authenticated proxy traffic only. It
 	// is never inferred from a fingerprint, user agent, loopback source port,
 	// or connection reuse, because those are shared between processes.
@@ -149,6 +153,19 @@ func (record DurableRecord) Validate() error {
 			)
 		}
 	}
+	// Evidence and recognition are one fact seen twice: a run that verified
+	// carries evidence, and a run that carries evidence verified. An unstated
+	// recognition reads as unknown, which is the conservative one: it is what
+	// a program nobody catalogued gets, and it grants nothing.
+	if !NormalizedRecognition(record.Recognition).Valid() ||
+		(NormalizedRecognition(record.Recognition) == clientadapter.RecognitionVerified) !=
+			(record.Adapter != nil) {
+		return fmt.Errorf(
+			"%w: client recognition and adapter evidence disagree",
+			ErrInvalidRequest,
+		)
+	}
+
 	if record.ProcessID < 0 {
 		return fmt.Errorf("%w: process ID is negative", ErrInvalidRequest)
 	}
@@ -177,22 +194,39 @@ func (record DurableRecord) Validate() error {
 
 // View is a redacted immutable representation safe for control responses.
 type View struct {
-	ID              string    `json:"id"`
-	ExecutableLabel string    `json:"executableLabel"`
-	CWD             string    `json:"cwd"`
-	ProcessID       int       `json:"processId,omitempty"`
-	State           State     `json:"state"`
-	CreatedAt       time.Time `json:"createdAt"`
-	ExpiresAt       time.Time `json:"expiresAt"`
+	ID              string `json:"id"`
+	ExecutableLabel string `json:"executableLabel"`
+	CWD             string `json:"cwd"`
+	ProcessID       int    `json:"processId,omitempty"`
+	State           State  `json:"state"`
+	// Observation says whether traffic was actually seen through this run.
+	Observation Observation `json:"observation"`
+	// Recognition says whether this build has release evidence for the client.
+	Recognition clientadapter.Recognition `json:"recognition"`
+	CreatedAt   time.Time                 `json:"createdAt"`
+	ExpiresAt   time.Time                 `json:"expiresAt"`
 }
 
-func viewOf(record DurableRecord) View {
+// ViewOf renders a run for a reader. It carries no capability.
+// NormalizedRecognition reads an unstated recognition as unknown.
+func NormalizedRecognition(
+	recognition clientadapter.Recognition,
+) clientadapter.Recognition {
+	if recognition == "" {
+		return clientadapter.RecognitionUnknown
+	}
+	return recognition
+}
+
+func ViewOf(record DurableRecord) View {
 	return View{
 		ID:              record.ID,
 		ExecutableLabel: record.ExecutableLabel,
 		CWD:             record.CWD,
 		ProcessID:       record.ProcessID,
 		State:           record.State,
+		Observation:     record.Observation,
+		Recognition:     NormalizedRecognition(record.Recognition),
 		CreatedAt:       record.CreatedAt,
 		ExpiresAt:       record.ExpiresAt,
 	}
@@ -244,6 +278,7 @@ type CreateCommand struct {
 	Lifetime        time.Duration
 	CatalogRevision clientadapter.CatalogRevision
 	Adapter         *clientadapter.Evidence
+	Recognition     clientadapter.Recognition
 }
 
 func (command CreateCommand) validate(maxLifetime time.Duration) error {
@@ -271,6 +306,17 @@ func (command CreateCommand) validate(maxLifetime time.Duration) error {
 			)
 		}
 	}
+	// Evidence and recognition are one fact seen twice: a run that verified
+	// carries evidence, and a run that carries evidence verified.
+	if !NormalizedRecognition(command.Recognition).Valid() ||
+		(NormalizedRecognition(command.Recognition) == clientadapter.RecognitionVerified) !=
+			(command.Adapter != nil) {
+		return fmt.Errorf(
+			"%w: client recognition and adapter evidence disagree",
+			ErrInvalidRequest,
+		)
+	}
+
 	label := filepath.Base(command.ExecutablePath)
 	return validateText("executable label", label, MaxExecutableLabelByte)
 }
@@ -345,8 +391,41 @@ type Repository interface {
 		digest CapabilityDigest,
 		now time.Time,
 	) error
+	// List is a read for a person, not a control path: it carries no
+	// capability and returns no capability, only what a run is and whether
+	// anything was seen through it.
+	List(context.Context, PageRequest) (Page, error)
 	Recover(context.Context, time.Time) (Recovery, error)
 	RevokeActive(context.Context, time.Time) (int, error)
+}
+
+// PageRequest bounds a read of the run list.
+type PageRequest struct {
+	Limit int
+}
+
+const (
+	DefaultPageLimit = 50
+	MaxPageLimit     = 200
+)
+
+func (request PageRequest) Normalized() PageRequest {
+	if request.Limit <= 0 {
+		request.Limit = DefaultPageLimit
+	}
+	if request.Limit > MaxPageLimit {
+		request.Limit = MaxPageLimit
+	}
+	return request
+}
+
+type Page struct {
+	Items []View `json:"items"`
+}
+
+// Reader is the read side a control API exposes.
+type Reader interface {
+	ListRuns(context.Context, PageRequest) (Page, error)
 }
 
 // Controller is the trusted control-plane lifecycle boundary. A launcher

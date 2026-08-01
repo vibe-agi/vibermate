@@ -137,6 +137,7 @@ func (manager *Manager) Create(
 		ExecutableLabel:       filepath.Base(command.ExecutablePath),
 		CatalogRevision:       command.CatalogRevision,
 		Adapter:               cloneAdapter(command.Adapter),
+		Recognition:           NormalizedRecognition(command.Recognition),
 		State:                 StateCreated,
 		// A run is waiting until authenticated traffic actually arrives.
 		Observation: ObservationWaitingForTraffic,
@@ -153,7 +154,7 @@ func (manager *Manager) Create(
 	proxy, _ := NewProxyCapability(proxyValue)
 	control, _ := NewControlCapability(controlValue)
 	return LaunchGrant{
-		Run:               viewOf(record),
+		Run:               ViewOf(record),
 		ProxyCapability:   proxy,
 		ControlCapability: control,
 	}, nil
@@ -215,7 +216,7 @@ func (manager *Manager) Attach(
 	if err != nil {
 		return View{}, err
 	}
-	return viewOf(record), record.Validate()
+	return ViewOf(record), record.Validate()
 }
 
 func (manager *Manager) Heartbeat(
@@ -252,7 +253,7 @@ func (manager *Manager) Heartbeat(
 	if err != nil {
 		return View{}, err
 	}
-	return viewOf(record), record.Validate()
+	return ViewOf(record), record.Validate()
 }
 
 func (manager *Manager) Finish(
@@ -330,4 +331,16 @@ func capabilityDigest(domain, value string) CapabilityDigest {
 	var digest CapabilityDigest
 	copy(digest[:], hash.Sum(nil))
 	return digest
+}
+
+// ListRuns is the read a control API exposes. It returns what a run is and
+// whether anything was seen through it, and never a capability.
+func (manager *Manager) ListRuns(
+	ctx context.Context,
+	request PageRequest,
+) (Page, error) {
+	if manager == nil {
+		return Page{}, errors.New("CaptureRun manager is nil")
+	}
+	return manager.repository.List(ctx, request)
 }

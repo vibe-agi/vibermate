@@ -10,6 +10,7 @@ import type {
   ActivityRecord,
   ApprovalChoice,
   ApprovalView,
+  CaptureRunRecord,
   ConnectionRecord,
   EgressAttemptRecord,
   CredentialView,
@@ -24,6 +25,7 @@ export interface DashboardState {
   readonly offline: OfflineHoldSnapshot | undefined;
   readonly activities: readonly ActivityRecord[];
   readonly approvals: readonly ApprovalView[];
+  readonly captureRuns: readonly CaptureRunRecord[];
   readonly connections: readonly ConnectionRecord[];
   readonly egressAttempts: readonly EgressAttemptRecord[];
   readonly errorKey: string | undefined;
@@ -45,6 +47,7 @@ export class DashboardModel {
     offline: undefined,
     activities: [],
     approvals: [],
+    captureRuns: [],
     connections: [],
     egressAttempts: [],
     errorKey: undefined,
@@ -243,12 +246,21 @@ export class DashboardModel {
 
   async #runRefresh(): Promise<void> {
     try {
-      const [status, offline, activities, approvals, connections, egress] =
+      const [
+        status,
+        offline,
+        activities,
+        approvals,
+        captureRuns,
+        connections,
+        egress,
+      ] =
         await Promise.all([
           this.#client.status(this.#owner.signal),
           this.#client.offlineHold(this.#owner.signal),
           this.#client.activities(this.#owner.signal),
           this.#client.approvals(this.#owner.signal),
+          this.#client.captureRuns(this.#owner.signal),
           this.#client.connections(this.#owner.signal),
           this.#client.egressAttempts(this.#owner.signal),
         ]);
@@ -259,6 +271,7 @@ export class DashboardModel {
         offline,
         activities: [...activities.items],
         approvals: [...approvals.items],
+        captureRuns: [...captureRuns.items],
         connections: [...connections.items],
         egressAttempts: [...egress.items],
         errorKey: undefined,

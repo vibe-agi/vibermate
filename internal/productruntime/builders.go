@@ -532,6 +532,7 @@ type captureBuildRequest struct {
 
 type captureRuntime interface {
 	capturerun.Controller
+	capturerun.Reader
 	capturerun.ProxyAuthorizer
 	BeginShutdown()
 	Drain(context.Context) error

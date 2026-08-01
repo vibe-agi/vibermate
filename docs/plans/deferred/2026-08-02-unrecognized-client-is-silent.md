@@ -37,8 +37,13 @@ recording of that machine. That work needs verified release material.
 Making the failure visible was done: the verifier now distinguishes a program
 nobody catalogued from a catalogued client at an uncatalogued version, and the
 launcher writes one line to the terminal the person is already watching before
-the client starts. What remains deferred is showing the same fact in the
-window, which needs a CaptureRun surface it does not have yet.
+the client starts. The window shows the same fact now too: the capture panel
+names every program started through vibermate, whether anything has actually
+come through it, and whether this build has release evidence for it.
+
+What remains is the catalog itself. Until it carries evidence for a release,
+that release is named in the window as one that cannot connect — which is
+honest, and is not the same as working.
 
 ## What the test does meanwhile
 

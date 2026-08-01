@@ -352,3 +352,35 @@ export interface EgressAttemptPage {
   readonly items: readonly EgressAttemptRecord[];
   readonly nextCursor?: string;
 }
+
+export type CaptureRunState =
+  | "created"
+  | "attached"
+  | "finished"
+  | "expired"
+  | "revoked";
+
+export type CaptureRunObservation = "waiting_for_traffic" | "observed";
+
+/**
+ * Whether this build has release evidence for the client that was launched.
+ * `unverified` is a client the catalog knows at a version it does not: it was
+ * started without a trust root and its requests will fail to connect.
+ */
+export type CaptureRunRecognition = "unknown" | "unverified" | "verified";
+
+export interface CaptureRunRecord {
+  readonly id: string;
+  readonly executableLabel: string;
+  readonly cwd: string;
+  readonly processId?: number;
+  readonly state: CaptureRunState;
+  readonly observation: CaptureRunObservation;
+  readonly recognition: CaptureRunRecognition;
+  readonly createdAt: string;
+  readonly expiresAt: string;
+}
+
+export interface CaptureRunPage {
+  readonly items: readonly CaptureRunRecord[];
+}

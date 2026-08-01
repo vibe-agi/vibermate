@@ -19,6 +19,7 @@ import (
 	"github.com/vibe-agi/vibermate/internal/accessapply"
 	"github.com/vibe-agi/vibermate/internal/accesscredential"
 	"github.com/vibe-agi/vibermate/internal/activity"
+	"github.com/vibe-agi/vibermate/internal/capturerun"
 	"github.com/vibe-agi/vibermate/internal/connectionevent"
 	"github.com/vibe-agi/vibermate/internal/egressaudit"
 	"github.com/vibe-agi/vibermate/internal/offlinehold"
@@ -80,6 +81,9 @@ type Options struct {
 	// ConnectionRules is the outbound firewall a person edits. A runtime
 	// built without one keeps evaluating the rules it started with.
 	ConnectionRules ConnectionRuleController
+	// CaptureRuns is the read side of what is captured. It is not a control
+	// path: it carries no capability in either direction.
+	CaptureRuns capturerun.Reader
 }
 
 type Handler struct {
@@ -95,6 +99,7 @@ type Handler struct {
 	offline     OfflineActions
 
 	connectionRules ConnectionRuleController
+	captureRuns     capturerun.Reader
 
 	idempotent *idempotencyCache
 	mux        *http.ServeMux
@@ -162,6 +167,7 @@ func New(options Options) (*Handler, error) {
 		approvals:       options.Approvals,
 		offline:         options.Offline,
 		connectionRules: options.ConnectionRules,
+		captureRuns:     options.CaptureRuns,
 		idempotent:      newIdempotencyCache(),
 		mux:             http.NewServeMux(),
 	}
@@ -210,6 +216,10 @@ func New(options Options) (*Handler, error) {
 		handler.replaceConnectionRules,
 	)
 	handler.mux.HandleFunc("/api/v1/policies/connections", handler.invalidRoute)
+	handler.mux.HandleFunc(
+		"GET /api/v1/capture-runs",
+		handler.listCaptureRuns,
+	)
 	handler.mux.HandleFunc("GET /api/v1/approvals", handler.listApprovals)
 	handler.mux.HandleFunc(
 		"GET /api/v1/approvals/{approvalId}",
@@ -689,6 +699,40 @@ func (handler *Handler) getConnection(
 	default:
 		writeJSON(writer, http.StatusOK, timeline)
 	}
+}
+
+// ReasonCaptureRunsUnavailable reports a runtime built without a capture read.
+const ReasonCaptureRunsUnavailable ReasonCode = "capture_runs_unavailable"
+
+// listCaptureRuns answers "is my client actually going through vibermate".
+// Until this existed, the only way to know was to watch traffic appear
+// somewhere else and infer it.
+func (handler *Handler) listCaptureRuns(
+	writer http.ResponseWriter,
+	request *http.Request,
+) {
+	if handler.captureRuns == nil {
+		writeProblem(
+			writer,
+			http.StatusServiceUnavailable,
+			ReasonCaptureRunsUnavailable,
+		)
+		return
+	}
+	limit, err := queryLimit(request, capturerun.DefaultPageLimit)
+	if err != nil {
+		writeProblem(writer, http.StatusUnprocessableEntity, ReasonInvalidRequest)
+		return
+	}
+	page, err := handler.captureRuns.ListRuns(
+		request.Context(),
+		capturerun.PageRequest{Limit: limit},
+	)
+	if err != nil {
+		writeProblem(writer, http.StatusUnprocessableEntity, ReasonInvalidRequest)
+		return
+	}
+	writeJSON(writer, http.StatusOK, page)
 }
 
 func (handler *Handler) listApprovals(

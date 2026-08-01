@@ -42,7 +42,12 @@ for (const locale of locales) {
   await writeFile(destinationPath, canonical, "utf8");
 }
 
-const samples = ["approvals", "connections", "egress-attempts"];
+const samples = [
+  "approvals",
+  "capture-runs",
+  "connections",
+  "egress-attempts",
+];
 for (const sample of samples) {
   const sourcePath = resolve(
     repositoryDirectory,

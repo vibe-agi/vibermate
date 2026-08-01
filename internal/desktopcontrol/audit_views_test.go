@@ -208,6 +208,7 @@ func newAuditFixture(t *testing.T) *auditFixture {
 			}},
 		},
 		Approvals:       runtime.ToolApprovals(),
+		CaptureRuns:     runtime.CaptureRunReader(),
 		Offline:         runtime,
 		ConnectionRules: runtime.ConnectionRules(),
 	})

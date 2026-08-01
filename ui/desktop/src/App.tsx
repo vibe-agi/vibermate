@@ -20,6 +20,7 @@ import { DashboardModel, type DashboardState } from "./dashboard-model.ts";
 import type {
   ActivityRecord,
   ApprovalView,
+  CaptureRunRecord,
   ConnectionRecord,
   EgressAttemptRecord,
   CredentialView,
@@ -155,6 +156,7 @@ export function Dashboard({ model }: DashboardProps) {
       </div>
 
       <div className="dashboard-grid lower-grid">
+        <CapturePanel runs={state.captureRuns} />
         <ConnectionPanel connections={state.connections} />
         <EgressPanel attempts={state.egressAttempts} />
       </div>
@@ -568,6 +570,57 @@ function subjectLabelKey(approval: ApprovalView): string {
   return approval.target === undefined
     ? "approval.tools.label"
     : "approval.target.label";
+}
+
+/**
+ * What is captured, and whether anything has actually come through it.
+ *
+ * "Is my client going through vibermate" had no answer in the window before
+ * this. A run that was launched but has seen no traffic is a different state
+ * from one that never started, and a client this build has no release
+ * evidence for will never connect at all — it says so here rather than
+ * failing later with a transport error nobody can explain.
+ */
+function CapturePanel({
+  runs,
+}: {
+  readonly runs: readonly CaptureRunRecord[];
+}) {
+  const { t } = useTranslation();
+  return (
+    <section className="panel list-panel">
+      <h2>{t("capture.title")}</h2>
+      {runs.length === 0 ? (
+        <p className="empty-state">{t("capture.empty")}</p>
+      ) : (
+        <ol className="record-list">
+          {runs.map((run) => (
+            <li key={run.id}>
+              <h3>{run.executableLabel}</h3>
+              <dl className="inline-details">
+                <div>
+                  <dt>{t("capture.state.label")}</dt>
+                  <dd>{t(`capture.state.${run.state}`)}</dd>
+                </div>
+                <div>
+                  <dt>{t("capture.observation.label")}</dt>
+                  <dd>{t(`capture.observation.${run.observation}`)}</dd>
+                </div>
+                {run.recognition === "unverified" ? (
+                  <div>
+                    <dt>{t("capture.recognition.label")}</dt>
+                    <dd className="attention">
+                      {t("capture.recognition.unverified")}
+                    </dd>
+                  </div>
+                ) : null}
+              </dl>
+            </li>
+          ))}
+        </ol>
+      )}
+    </section>
+  );
 }
 
 /**

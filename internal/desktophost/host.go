@@ -284,6 +284,7 @@ func Start(ctx context.Context, options Options) (*Host, error) {
 		Approvals:       runtime.ToolApprovals(),
 		Offline:         runtime,
 		ConnectionRules: runtime.ConnectionRules(),
+		CaptureRuns:     runtime.CaptureRunReader(),
 	})
 	if err != nil {
 		return fail("App control routes", err)

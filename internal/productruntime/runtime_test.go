@@ -98,8 +98,8 @@ func TestProductRuntimeStartsAndShutsDownNormally(t *testing.T) {
 	if status.Host != hostcontract.KindDesktop {
 		t.Fatalf("runtime host = %q, want desktop", status.Host)
 	}
-	if status.SchemaRevision != 20 {
-		t.Fatalf("schema revision = %d, want 20", status.SchemaRevision)
+	if status.SchemaRevision != 21 {
+		t.Fatalf("schema revision = %d, want 21", status.SchemaRevision)
 	}
 	if status.AccessProjection.State != access.ProjectionStateHealthy ||
 		status.AccessProjection.UnavailableAccessCount != 0 {

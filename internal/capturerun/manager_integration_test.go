@@ -44,6 +44,7 @@ func TestCaptureRunPersistsVerifiedAdapterEvidenceWithProxyCapability(
 			Lifetime:        2 * time.Minute,
 			CatalogRevision: 7,
 			Adapter:         &adapter,
+			Recognition:     clientadapter.RecognitionVerified,
 		},
 	)
 	if err != nil {
