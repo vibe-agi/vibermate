@@ -29,6 +29,11 @@ import (
 	"github.com/vibe-agi/vibermate/internal/toolapproval"
 )
 
+// catalogedCodexVersion is the Codex release this build carries evidence for.
+// It is not a preference: the artifact digests in the catalog are what make a
+// verified launch verified, and they belong to exactly one release.
+const catalogedCodexVersion = "0.145.0"
+
 const (
 	liveOriginEnvironment = "VIBERMATE_LIVE_PROVIDER_ORIGIN"
 	liveKeyEnvironment    = "VIBERMATE_LIVE_PROVIDER_KEY"
@@ -264,4 +269,185 @@ func liveHostOptions(
 	options.CaptureRunLifetime = 5 * time.Minute
 	options.ShutdownTimeout = 20 * time.Second
 	return options
+}
+
+// The other agent client, and the other client dialect. Codex speaks OpenAI
+// Responses; the backend here speaks OpenAI chat completions, so this is the
+// translation the Anthropic runs never touch.
+func TestARealResponsesClientReachesAModelThroughVibermate(t *testing.T) {
+	origin := os.Getenv(liveOriginEnvironment)
+	key := os.Getenv(liveKeyEnvironment)
+	model := os.Getenv(liveModelEnvironment)
+	if origin == "" || key == "" || model == "" {
+		t.Skipf(
+			"live agent run needs %s, %s, and %s",
+			liveOriginEnvironment,
+			liveKeyEnvironment,
+			liveModelEnvironment,
+		)
+	}
+	codexPath, err := exec.LookPath("codex")
+	if err != nil {
+		t.Skipf("codex is not on PATH: %v", err)
+	}
+	// A client whose release this build has no evidence for is launched
+	// without a trust root on purpose: design 06 §4.2 says the catalog is
+	// versioned evidence and an update must not silently widen what may be
+	// decrypted. Such a client cannot complete a MITM handshake, so this run
+	// says why rather than failing as if the product were broken.
+	if version, versionErr := exec.Command(codexPath, "--version").Output(); versionErr == nil {
+		if !strings.Contains(string(version), catalogedCodexVersion) {
+			t.Skipf(
+				"the installed Codex is %q; this build carries release evidence "+
+					"for %s only, so the launcher gives it no trust root",
+				strings.TrimSpace(string(version)),
+				catalogedCodexVersion,
+			)
+		}
+	}
+
+	root := t.TempDir()
+	paths := newHostPaths(t, filepath.Join(root, "cache"))
+	host := startHost(t, liveHostOptions(t, paths, filepath.Join(root, "data")))
+	defer shutdownHost(t, host)
+	runtime := host.Runtime()
+
+	accessID, err := access.NewAccessID("access-live-responses")
+	if err != nil {
+		t.Fatal(err)
+	}
+	aggregate := liveAgentAccess(t, accessID, origin, model)
+	// The client origin is OpenAI's, and the client speaks Responses.
+	clientOrigin, err := access.NewClientOrigin("https://api.openai.com:443")
+	if err != nil {
+		t.Fatal(err)
+	}
+	aggregate.AgentEndpoint.ClientOrigin = clientOrigin
+	aggregate.AgentEndpoint.ClientDialect = access.DialectOpenAIResponses
+	if write, err := runtime.AccessWriter().WriteAccess(
+		context.Background(),
+		access.WriteCommand{ExpectedRevision: 0, Aggregate: aggregate},
+	); err != nil || write.Outcome != access.WriteOutcomeCommitted {
+		t.Fatalf("write Access result=%+v err=%v", write, err)
+	}
+	value, err := secretstore.NewValue([]byte(key))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := runtime.Credentials().ReplaceSecret(
+		context.Background(),
+		accesscredential.ReplaceCommand{
+			AccessID:         accessID,
+			ProfileID:        aggregate.Profiles[0].ID,
+			CredentialID:     aggregate.AccountBindings[0].ID,
+			ExpectedRevision: 0,
+			Value:            value,
+		},
+	); err != nil {
+		t.Fatalf("store the provider credential: %v", err)
+	}
+	rules := runtime.ConnectionRules()
+	if _, err := rules.Replace(
+		context.Background(),
+		rules.Current().Revision,
+		[]connectionpolicy.Rule{{
+			ID:       "live.allow-responses-endpoint",
+			Priority: 100,
+			Decision: connectionpolicy.DecisionAllow,
+			Match:    connectionpolicy.MatchExactHostPort("api.openai.com", 443),
+		}},
+		rules.Current().Default,
+	); err != nil {
+		t.Fatal(err)
+	}
+
+	sessionFile, err := launcherdiscovery.NewFile(
+		paths.DiscoveryPath(),
+		productruntime.SystemClock{},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var output strings.Builder
+	launcher, err := runlauncher.New(runlauncher.Config{
+		Discovery: sessionFile,
+		BaseEnvironment: []string{
+			"PATH=" + os.Getenv("PATH"),
+			"HOME=" + t.TempDir(),
+			"CODEX_API_KEY=vibermate-live-placeholder",
+		},
+		Stdin:              strings.NewReader("Reply with the single word: ready"),
+		Stdout:             &output,
+		Stderr:             os.Stderr,
+		HeartbeatInterval:  100 * time.Millisecond,
+		ControlTimeout:     10 * time.Second,
+		TerminationTimeout: 10 * time.Second,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	runContext, cancelRun := context.WithTimeout(
+		context.Background(),
+		4*time.Minute,
+	)
+	defer cancelRun()
+	exitCode, err := launcher.Run(runContext, []string{
+		codexPath,
+		"-c",
+		`model_provider="vibermate-live"`,
+		"-c",
+		`model_providers.vibermate-live={name="VibeMate Live",` +
+			`base_url="https://api.openai.com/v1",env_key="CODEX_API_KEY",` +
+			`wire_api="responses",requires_openai_auth=false,` +
+			`supports_websockets=false}`,
+		"-a",
+		"never",
+		"-s",
+		"read-only",
+		"exec",
+		"--skip-git-repo-check",
+		"--ignore-user-config",
+		"--color",
+		"never",
+		"--model",
+		"gpt-client-alias",
+		"-",
+	})
+	answered := output.String()
+	if err != nil || exitCode != 0 {
+		records, listErr := runtime.Activities().List(
+			context.Background(),
+			activity.PageRequest{Limit: 20},
+		)
+		if listErr == nil {
+			for _, record := range records.Items {
+				t.Logf("activity: %+v", record)
+			}
+		}
+		t.Fatalf(
+			"a captured Responses client failed: exit=%d err=%v output=%s",
+			exitCode,
+			err,
+			answered,
+		)
+	}
+	t.Logf("Responses client output: %q", strings.TrimSpace(answered))
+
+	attempts, err := runtime.EgressAttempts().List(
+		context.Background(),
+		egressaudit.PageRequest{Limit: 50},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	reached := false
+	for _, record := range attempts.Items {
+		if record.Attempt.Purpose() == egressaudit.PurposeProviderAttempt &&
+			strings.Contains(record.Attempt.TargetOrigin(), originHost(t, origin)) {
+			reached = true
+		}
+	}
+	if !reached {
+		t.Fatalf("no provider attempt reached %q: %+v", origin, attempts.Items)
+	}
 }
