@@ -28,6 +28,14 @@ const (
 	OpenAICompletionsUnsupportedID        = "openai-completions-unsupported"
 	OpenAIEmbeddingsUnsupportedID         = "openai-embeddings-unsupported"
 
+	// Observed non-model operations on the Anthropic model origin. Real Claude
+	// Code 2.1.220 reaches these before and around a Messages request; while
+	// they stay uncatalogued they classify as unknown, which is the class the
+	// ingress gate can reason about least.
+	AnthropicClaudeCodeSettingsID     = "anthropic-claude-code-settings"
+	AnthropicClaudeCodePolicyLimitsID = "anthropic-claude-code-policy-limits"
+	AnthropicHelloProbeID             = "anthropic-hello-probe"
+
 	MaxJSONBodyBytes   = 16 << 20
 	MaxOpaqueBodyBytes = 16 << 20
 )
@@ -136,10 +144,54 @@ func BuiltIn() (Catalog, error) {
 		return Catalog{}, err
 	}
 
+	// These carry no request body at all, so they are proven no-payload probes
+	// that may keep the client's own credentials on the way back to the inbound
+	// origin. Cataloguing a path does not open it to other methods.
+	for _, probe := range []struct {
+		id      string
+		path    string
+		methods []string
+	}{
+		{
+			id:      AnthropicClaudeCodeSettingsID,
+			path:    "/api/claude_code/settings",
+			methods: []string{http.MethodGet},
+		},
+		{
+			id:      AnthropicClaudeCodePolicyLimitsID,
+			path:    "/api/claude_code/policy_limits",
+			methods: []string{http.MethodGet},
+		},
+		{
+			id:      AnthropicHelloProbeID,
+			path:    "/api/hello",
+			methods: []string{http.MethodGet, http.MethodHead},
+		},
+	} {
+		if err := addOperation(
+			add,
+			probe.id,
+			access.DialectAnthropicMessages,
+			probe.methods,
+			probe.path,
+			access.ClientOperationPathExact,
+			access.ClientOperationOpaque,
+			access.ClientOperationBodyNone,
+			access.ClientReplaySafe,
+			"",
+			0,
+			nil,
+			access.OperationPayloadNone,
+			true,
+		); err != nil {
+			return Catalog{}, err
+		}
+	}
+
 	// Response retrieval, input-item listing, cancellation, and deletion are
-	// stateful management operations. The fixed HTTP slice only supports create.
-	// A prefix groups several methods, so it declares the highest class any of
-	// them can carry.
+	// stateful management operations; the fixed HTTP slice supports only
+	// create. A prefix groups several methods, so it declares the highest class
+	// any of them can carry.
 	if err := addUnsupportedPrefix(
 		add,
 		OpenAIResponsesManagementID,

@@ -170,9 +170,9 @@ func TestUncataloguedBodyBearingRequestIsRejectedLocally(t *testing.T) {
 	assertNoClientPayloadEscaped(t, fixture)
 }
 
-// The fixed Claude Code control plane uses bodyless GETs. They keep the
-// existing original-origin path until the connection-policy Goal lands.
-func TestUncataloguedBodylessGETStillReachesTheOriginalOrigin(t *testing.T) {
+// A catalogued control probe is a proven no-payload operation, so it keeps the
+// client's own credentials on the way back to the inbound origin.
+func TestCataloguedControlProbeReachesTheOriginalOrigin(t *testing.T) {
 	t.Parallel()
 
 	fixture := newProxyFixture(t)
@@ -199,6 +199,43 @@ func TestUncataloguedBodylessGETStillReachesTheOriginalOrigin(t *testing.T) {
 	}
 	if got := fixture.original.Count(); got != 1 {
 		t.Fatalf("control-plane GET reached original transport %d times", got)
+	}
+	frozen := fixture.original.Request()
+	if got := frozen.PayloadClass(); got != access.OperationPayloadNone {
+		t.Fatalf("frozen original request payload class = %q", got)
+	}
+	if len(frozen.Body()) != 0 {
+		t.Fatal("a no-payload probe carried a body")
+	}
+}
+
+// An uncatalogued bodyless GET has no proven class. It keeps the
+// original-origin path only because an empty body establishes
+// payload-freedom on its own; connection policy replaces that exception.
+func TestUncataloguedBodylessGETStillReachesTheOriginalOrigin(t *testing.T) {
+	t.Parallel()
+
+	fixture := newProxyFixture(t)
+	defer fixture.Close(t)
+
+	secured := fixture.ConnectTLS(
+		t,
+		fixture.grant.ProxyCapability.Value(),
+		"api.anthropic.com:443",
+		"api.anthropic.com",
+	)
+	defer secured.Close()
+
+	response := writeInnerRequest(t, secured, &http.Request{
+		Method: http.MethodGet,
+		URL:    mustURL(t, "/api/claude_code/not_catalogued"),
+		Host:   "api.anthropic.com:443",
+		Header: http.Header{"Authorization": []string{"Bearer client-owned"}},
+	})
+	body, _ := io.ReadAll(response.Body)
+	_ = response.Body.Close()
+	if response.StatusCode != http.StatusAccepted || string(body) != "original" {
+		t.Fatalf("uncatalogued GET status=%d body=%q", response.StatusCode, body)
 	}
 	frozen := fixture.original.Request()
 	if got := frozen.PayloadClass(); got != access.OperationPayloadUnknown {

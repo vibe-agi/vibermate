@@ -89,7 +89,7 @@ func TestClassifyReportsUnknownPayloadClassForUncataloguedPaths(t *testing.T) {
 		capability, err := catalog.Classify(
 			access.DialectAnthropicMessages,
 			method,
-			"/api/claude_code/settings",
+			"/api/claude_code/not_catalogued",
 			"",
 			"",
 		)
