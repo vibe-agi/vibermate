@@ -51,12 +51,26 @@ fail closed, and it must not deadlock the proxy while it waits.
 
 ## Bottom-up implementation
 
-- [ ] Add a network-ask entry point to the approval authority.
-- [ ] Key aggregation on kind, ingress, host, and port.
-- [ ] Allow the rule set to construct an ask.
-- [ ] Block the proxy on it before the dial, and deny on every failure.
-- [ ] Prove merging, independent cancellation, bounded waiting, and that no
+- [x] Add a network-ask entry point to the approval authority.
+- [x] Key aggregation on kind, ingress, host, and port.
+- [x] Allow the rule set to construct an ask.
+- [x] Block the proxy on it before the dial, and deny on every failure.
+- [x] Prove merging, independent cancellation, bounded waiting, and that no
       failure produces allow.
+- [x] Make the approval record storable without a plan binding, which the
+      tool-intent schema required and a network ask cannot supply.
+- [x] Make the merged count true, so one question reports how many connections
+      are actually waiting on it.
+
+## What this slice did not turn on
+
+The shipped policy still carries `interim.allow-unmatched-pending-ask` rather
+than asking about an unknown host. `ask` now works end to end and is answerable
+through `POST /api/v1/approvals/{id}/actions/decide`, but nothing remembers an
+answer yet, so a default of `ask` would ask again for every connection to a
+host that was just allowed. Turning the default on belongs with remembered
+decisions in the next slice, and the interim rule stays named in every
+connection record until then.
 
 ## Gates
 

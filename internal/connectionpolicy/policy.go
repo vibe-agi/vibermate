@@ -12,15 +12,7 @@ import (
 
 const MaxRules = 512
 
-var (
-	ErrInvalidRuleSet = errors.New("connection rule set is invalid")
-	// ErrAskUnsupported keeps a blocking decision from shipping half-built. An
-	// ask that cannot actually block a dial on a person is an allow wearing a
-	// different name.
-	ErrAskUnsupported = errors.New(
-		"connection rule set asks, but the ask path does not exist yet",
-	)
-)
+var ErrInvalidRuleSet = errors.New("connection rule set is invalid")
 
 type Decision string
 
@@ -187,9 +179,6 @@ func NewRuleSet(options RuleSetOptions) (RuleSet, error) {
 		if err := rule.validate(); err != nil {
 			return RuleSet{}, err
 		}
-		if rule.Decision == DecisionAsk {
-			return RuleSet{}, ErrAskUnsupported
-		}
 		if _, duplicate := identifiers[rule.ID]; duplicate {
 			return RuleSet{}, fmt.Errorf(
 				"%w: rule ID %q is duplicated",
@@ -199,9 +188,6 @@ func NewRuleSet(options RuleSetOptions) (RuleSet, error) {
 		}
 		identifiers[rule.ID] = struct{}{}
 		rules = append(rules, rule)
-	}
-	if options.Default.Decision == DecisionAsk {
-		return RuleSet{}, ErrAskUnsupported
 	}
 	return RuleSet{
 		revision:    options.Revision,

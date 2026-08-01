@@ -373,6 +373,11 @@ type Recovery struct {
 type Repository interface {
 	Recover(context.Context, time.Time) (Recovery, error)
 	Create(context.Context, Record) error
+	// Join and Leave keep the counts on a pending question true while callers
+	// arrive and go. They do not move the revision: the revision guards the
+	// decision, and who is currently waiting is not a decision.
+	Join(context.Context, string) (Record, error)
+	Leave(context.Context, string) (Record, error)
 	Get(context.Context, string) (Record, error)
 	List(context.Context, PageRequest) ([]Record, error)
 	Decide(context.Context, DecisionCommand, time.Time) (Record, error)

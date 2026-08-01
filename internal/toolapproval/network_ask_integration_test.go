@@ -1,0 +1,160 @@
+package toolapproval_test
+
+import (
+	"context"
+	"crypto/rand"
+	"path/filepath"
+	"testing"
+	"time"
+
+	"github.com/vibe-agi/vibermate/internal/toolapproval"
+)
+
+func newAskAuthority(
+	t *testing.T,
+	timeout time.Duration,
+) *toolapproval.Authority {
+	t.Helper()
+
+	store := openStore(t, filepath.Join(t.TempDir(), "data", "runtime.db"))
+	t.Cleanup(func() { shutdownStore(t, store) })
+	authority, err := toolapproval.New(
+		context.Background(),
+		toolapproval.Options{
+			Repository: store.ToolApprovalRepository(),
+			Clock:      toolapproval.SystemClock{},
+			Random:     rand.Reader,
+			Config:     toolapproval.Config{DecisionTimeout: timeout},
+		},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { shutdownAuthority(t, authority) })
+	return authority
+}
+
+func askRequest() toolapproval.NetworkAskRequest {
+	return toolapproval.NetworkAskRequest{
+		IngressID: "run-1",
+		Host:      "api.example.com",
+		Port:      443,
+	}
+}
+
+// Waiting is bounded. A connection must not be held open forever because
+// nobody is looking at the queue, and the end of the wait is a denial.
+func TestAnUnansweredAskDeniesWhenItsTimeRunsOut(t *testing.T) {
+	t.Parallel()
+
+	authority := newAskAuthority(t, 150*time.Millisecond)
+	started := time.Now()
+	outcome, err := authority.AskNetwork(context.Background(), askRequest())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if outcome.Allowed {
+		t.Fatal("an unanswered ask allowed the connection")
+	}
+	if outcome.ReasonCode != "approval_expired" {
+		t.Fatalf("reason = %q", outcome.ReasonCode)
+	}
+	if elapsed := time.Since(started); elapsed > 5*time.Second {
+		t.Fatalf("waited %s", elapsed)
+	}
+}
+
+// One caller going away answers only for itself. The others are still waiting
+// on a person, and a person has not decided anything yet.
+func TestACallerLeavingDoesNotAnswerForTheOthers(t *testing.T) {
+	t.Parallel()
+
+	authority := newAskAuthority(t, 10*time.Second)
+	leaving, cancelLeaving := context.WithCancel(context.Background())
+	left := make(chan toolapproval.NetworkAskOutcome, 1)
+	stayed := make(chan toolapproval.NetworkAskOutcome, 1)
+	go func() {
+		outcome, _ := authority.AskNetwork(leaving, askRequest())
+		left <- outcome
+	}()
+	waitForPendingKind(t, authority, toolapproval.KindNetworkAsk)
+	go func() {
+		outcome, _ := authority.AskNetwork(context.Background(), askRequest())
+		stayed <- outcome
+	}()
+	waitForWaiters(t, authority, 2)
+
+	cancelLeaving()
+	departed := <-left
+	if departed.Allowed || departed.ReasonCode != "connection_canceled" {
+		t.Fatalf("departed outcome = %+v", departed)
+	}
+	select {
+	case remaining := <-stayed:
+		t.Fatalf("the remaining caller was answered too: %+v", remaining)
+	case <-time.After(150 * time.Millisecond):
+	}
+
+	pending := waitForPendingKind(t, authority, toolapproval.KindNetworkAsk)
+	if _, err := authority.DecideApproval(
+		context.Background(),
+		toolapproval.DecisionCommand{
+			ApprovalID:       pending.ID,
+			ExpectedRevision: pending.Revision,
+			Decision:         toolapproval.DecisionAllowOnce,
+			Scope:            toolapproval.ScopeRequest,
+			IdempotencyKey:   "ask-allow-idempotency-0003",
+		},
+	); err != nil {
+		t.Fatal(err)
+	}
+	if remaining := <-stayed; !remaining.Allowed {
+		t.Fatalf("remaining outcome = %+v", remaining)
+	}
+}
+
+func waitForPendingKind(
+	t *testing.T,
+	authority *toolapproval.Authority,
+	kind toolapproval.Kind,
+) toolapproval.View {
+	t.Helper()
+
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		page, err := authority.ListApprovals(
+			context.Background(),
+			toolapproval.PageRequest{Limit: 20},
+		)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, view := range page.Items {
+			if view.State == toolapproval.StatePending &&
+				view.Kind == string(kind) {
+				return view
+			}
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Fatalf("no pending %s appeared", kind)
+	return toolapproval.View{}
+}
+
+func waitForWaiters(
+	t *testing.T,
+	authority *toolapproval.Authority,
+	want uint32,
+) {
+	t.Helper()
+
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		view := waitForPendingKind(t, authority, toolapproval.KindNetworkAsk)
+		if view.WaiterCount >= want {
+			return
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Fatalf("waiter count never reached %d", want)
+}

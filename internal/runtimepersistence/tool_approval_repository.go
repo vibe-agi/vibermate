@@ -21,9 +21,9 @@ const toolApprovalColumns = `
 	access_id,
 	plan_revision,
 	plan_hash,
-	tool_call_ids_json,
-	tool_names_json,
 	kind,
+	subject_refs_json,
+	subject_labels_json,
 	aggregate_key,
 	request_count,
 	waiter_count,
@@ -73,6 +73,12 @@ func (repository *toolApprovalRepository) Create(
 	if err != nil {
 		return err
 	}
+	// A record with no plan binding stores no binding. Writing a zero hash and
+	// a zero revision would record an Access that was never resolved.
+	planHash := []byte{}
+	if record.PlanRevision != 0 {
+		planHash = record.PlanHash[:]
+	}
 	operation, finish, err := repository.operations.begin(ctx)
 	if err != nil {
 		return err
@@ -87,9 +93,9 @@ func (repository *toolApprovalRepository) Create(
 		     access_id,
 		     plan_revision,
 		     plan_hash,
-		     tool_call_ids_json,
-		     tool_names_json,
 		     kind,
+		     subject_refs_json,
+		     subject_labels_json,
 		     aggregate_key,
 		     request_count,
 		     waiter_count,
@@ -103,10 +109,10 @@ func (repository *toolApprovalRepository) Create(
 		record.ExchangeID,
 		record.AccessID.String(),
 		record.PlanRevision,
-		record.PlanHash[:],
+		planHash,
+		string(record.Kind),
 		callIDs,
 		names,
-		string(record.Kind),
 		record.AggregateKey,
 		int64(record.RequestCount),
 		int64(record.WaiterCount),
@@ -413,9 +419,9 @@ func scanToolApproval(scanner toolApprovalScanner) (toolapproval.Record, error) 
 		&accessID,
 		&planRevision,
 		&planHash,
+		&record.Kind,
 		&callIDs,
 		&names,
-		&record.Kind,
 		&record.AggregateKey,
 		&requestCount,
 		&waiterCount,
@@ -430,14 +436,22 @@ func scanToolApproval(scanner toolApprovalScanner) (toolapproval.Record, error) 
 	); err != nil {
 		return toolapproval.Record{}, err
 	}
-	typedAccessID, err := access.NewAccessID(accessID)
-	if err != nil {
-		return toolapproval.Record{}, err
-	}
-	if planRevision <= 0 || uint64(planRevision) > uint64(access.MaxRevision) {
-		return toolapproval.Record{}, toolapproval.ErrInvalidApproval
-	}
-	if len(planHash) != len(record.PlanHash) {
+	bound := planRevision != 0
+	if bound {
+		typedAccessID, err := access.NewAccessID(accessID)
+		if err != nil {
+			return toolapproval.Record{}, err
+		}
+		if planRevision < 0 || uint64(planRevision) > uint64(access.MaxRevision) {
+			return toolapproval.Record{}, toolapproval.ErrInvalidApproval
+		}
+		if len(planHash) != len(record.PlanHash) {
+			return toolapproval.Record{}, toolapproval.ErrInvalidApproval
+		}
+		record.AccessID = typedAccessID
+		record.PlanRevision = access.Revision(planRevision)
+		copy(record.PlanHash[:], planHash)
+	} else if accessID != "" || len(planHash) != 0 {
 		return toolapproval.Record{}, toolapproval.ErrInvalidApproval
 	}
 	if requestCount <= 0 || waiterCount <= 0 ||
@@ -446,9 +460,6 @@ func scanToolApproval(scanner toolApprovalScanner) (toolapproval.Record, error) 
 	}
 	record.RequestCount = uint32(requestCount)
 	record.WaiterCount = uint32(waiterCount)
-	record.AccessID = typedAccessID
-	record.PlanRevision = access.Revision(planRevision)
-	copy(record.PlanHash[:], planHash)
 	if err := decodeStringArray(callIDs, &record.SubjectRefs); err != nil {
 		return toolapproval.Record{}, err
 	}
@@ -477,4 +488,64 @@ func decodeStringArray(payload []byte, output *[]string) error {
 		return errors.New("stored string array contains trailing JSON")
 	}
 	return nil
+}
+
+// Join records one more caller waiting on a pending question. The request
+// count only ever grows, because it counts what was asked; the waiter count
+// tracks who is still listening.
+func (repository *toolApprovalRepository) Join(
+	ctx context.Context,
+	approvalID string,
+) (toolapproval.Record, error) {
+	return repository.adjustWaiters(
+		ctx,
+		approvalID,
+		`UPDATE tool_approvals
+		    SET request_count = MIN(request_count + 1, 4294967295),
+		        waiter_count = MIN(waiter_count + 1, request_count + 1)
+		  WHERE approval_id = ? AND state = 'pending'`,
+	)
+}
+
+// Leave records one caller giving up. It never reaches zero: a question with
+// no one waiting is canceled rather than left standing with an empty audience.
+func (repository *toolApprovalRepository) Leave(
+	ctx context.Context,
+	approvalID string,
+) (toolapproval.Record, error) {
+	return repository.adjustWaiters(
+		ctx,
+		approvalID,
+		`UPDATE tool_approvals
+		    SET waiter_count = MAX(waiter_count - 1, 1)
+		  WHERE approval_id = ? AND state = 'pending'`,
+	)
+}
+
+func (repository *toolApprovalRepository) adjustWaiters(
+	ctx context.Context,
+	approvalID string,
+	statement string,
+) (toolapproval.Record, error) {
+	operation, finish, err := repository.operations.begin(ctx)
+	if err != nil {
+		return toolapproval.Record{}, err
+	}
+	defer finish()
+	result, err := repository.database.ExecContext(
+		operation,
+		statement,
+		approvalID,
+	)
+	if err != nil {
+		return toolapproval.Record{}, fmt.Errorf("adjust approval waiters: %w", err)
+	}
+	affected, err := result.RowsAffected()
+	if err != nil {
+		return toolapproval.Record{}, err
+	}
+	if affected == 0 {
+		return toolapproval.Record{}, toolapproval.ErrNotFound
+	}
+	return repository.get(operation, repository.database, approvalID)
 }

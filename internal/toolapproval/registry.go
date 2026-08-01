@@ -11,20 +11,32 @@ import "sync"
 // rendezvous that decides which record a caller is waiting on.
 type waiterRegistry struct {
 	mu sync.Mutex
-	// byAggregate maps a pending question to the record that represents it.
-	byAggregate map[string]string
-	// waiters holds every caller waiting on a record.
-	waiters map[string][]*waiter
-	// aggregateOf lets a resolved or emptied record clear its own index entry
-	// without scanning.
-	aggregateOf map[string]string
+	// byAggregate maps a pending question to its entry.
+	byAggregate map[string]*registryEntry
+	// byRecord finds an entry from the record it represents.
+	byRecord map[string]*registryEntry
+}
+
+// registryEntry is one open question and everyone waiting on it.
+//
+// The entry is published to later callers before its durable record exists,
+// because the caller that creates the record must hold the entry to stop a
+// second caller from creating a second one. `ready` closes when that race is
+// over: a joiner that acted earlier would be pointing at a row that has not
+// been written yet, or at one whose write failed.
+type registryEntry struct {
+	recordID string
+	ready    chan struct{}
+	// created reports whether the durable record exists. It is written once,
+	// before ready closes, and read only after ready closes.
+	created bool
+	waiters []*waiter
 }
 
 func newWaiterRegistry() *waiterRegistry {
 	return &waiterRegistry{
-		byAggregate: make(map[string]string),
-		waiters:     make(map[string][]*waiter),
-		aggregateOf: make(map[string]string),
+		byAggregate: make(map[string]*registryEntry),
+		byRecord:    make(map[string]*registryEntry),
 	}
 }
 
@@ -34,42 +46,66 @@ func newWaiterRegistry() *waiterRegistry {
 func (registry *waiterRegistry) join(
 	aggregateKey string,
 	proposedRecordID string,
-) (*waiter, bool) {
+) (*waiter, *registryEntry, bool) {
 	pending := &waiter{result: make(chan Record, 1)}
 	registry.mu.Lock()
 	defer registry.mu.Unlock()
 	if existing, found := registry.byAggregate[aggregateKey]; found {
-		registry.waiters[existing] = append(registry.waiters[existing], pending)
-		return pending, true
+		existing.waiters = append(existing.waiters, pending)
+		return pending, existing, true
 	}
-	registry.byAggregate[aggregateKey] = proposedRecordID
-	registry.aggregateOf[proposedRecordID] = aggregateKey
-	registry.waiters[proposedRecordID] = []*waiter{pending}
-	return pending, false
+	entry := &registryEntry{
+		recordID: proposedRecordID,
+		ready:    make(chan struct{}),
+		waiters:  []*waiter{pending},
+	}
+	registry.byAggregate[aggregateKey] = entry
+	registry.byRecord[proposedRecordID] = entry
+	return pending, entry, false
 }
 
-func (registry *waiterRegistry) recordFor(aggregateKey string) string {
+// publish reports the outcome of writing the durable record and releases every
+// caller that has been waiting to hear it.
+func (registry *waiterRegistry) publish(entry *registryEntry, created bool) {
+	registry.mu.Lock()
+	entry.created = created
+	registry.mu.Unlock()
+	close(entry.ready)
+}
+
+// durable reports whether the entry's record was written. It is meaningful
+// only after the entry is ready.
+func (registry *waiterRegistry) durable(entry *registryEntry) bool {
 	registry.mu.Lock()
 	defer registry.mu.Unlock()
-	return registry.byAggregate[aggregateKey]
+	return entry.created
 }
 
 func (registry *waiterRegistry) waiterCount(recordID string) int {
 	registry.mu.Lock()
 	defer registry.mu.Unlock()
-	return len(registry.waiters[recordID])
+	entry, found := registry.byRecord[recordID]
+	if !found {
+		return 0
+	}
+	return len(entry.waiters)
 }
 
 // resolve releases every caller waiting on this record. One decision answers
 // the whole entry, which is the point of merging.
 func (registry *waiterRegistry) resolve(recordID string, record Record) {
 	registry.mu.Lock()
-	pending := registry.waiters[recordID]
+	entry, found := registry.byRecord[recordID]
+	if !found {
+		registry.mu.Unlock()
+		return
+	}
+	pending := entry.waiters
 	registry.clearLocked(recordID)
 	registry.mu.Unlock()
-	for _, entry := range pending {
+	for _, waiting := range pending {
 		select {
-		case entry.result <- record:
+		case waiting.result <- record:
 		default:
 		}
 	}
@@ -80,24 +116,35 @@ func (registry *waiterRegistry) resolve(recordID string, record Record) {
 func (registry *waiterRegistry) remove(recordID string, pending *waiter) {
 	registry.mu.Lock()
 	defer registry.mu.Unlock()
-	remaining := registry.waiters[recordID][:0]
-	for _, entry := range registry.waiters[recordID] {
-		if entry != pending {
-			remaining = append(remaining, entry)
+	entry, found := registry.byRecord[recordID]
+	if !found {
+		return
+	}
+	remaining := entry.waiters[:0]
+	for _, waiting := range entry.waiters {
+		if waiting != pending {
+			remaining = append(remaining, waiting)
 		}
 	}
 	if len(remaining) == 0 {
 		registry.clearLocked(recordID)
 		return
 	}
-	registry.waiters[recordID] = remaining
+	entry.waiters = remaining
 }
 
 func (registry *waiterRegistry) clearLocked(recordID string) {
-	delete(registry.waiters, recordID)
-	if aggregateKey, found := registry.aggregateOf[recordID]; found {
-		delete(registry.byAggregate, aggregateKey)
-		delete(registry.aggregateOf, recordID)
+	entry, found := registry.byRecord[recordID]
+	if !found {
+		return
+	}
+	entry.waiters = nil
+	delete(registry.byRecord, recordID)
+	for aggregateKey, candidate := range registry.byAggregate {
+		if candidate == entry {
+			delete(registry.byAggregate, aggregateKey)
+			break
+		}
 	}
 }
 
@@ -105,8 +152,8 @@ func (registry *waiterRegistry) clearLocked(recordID string) {
 func (registry *waiterRegistry) pendingRecordIDs() []string {
 	registry.mu.Lock()
 	defer registry.mu.Unlock()
-	identifiers := make([]string, 0, len(registry.waiters))
-	for recordID := range registry.waiters {
+	identifiers := make([]string, 0, len(registry.byRecord))
+	for recordID := range registry.byRecord {
 		identifiers = append(identifiers, recordID)
 	}
 	return identifiers

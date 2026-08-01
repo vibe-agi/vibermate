@@ -286,6 +286,7 @@ type approvalBuildRequest struct {
 type approvalRuntime interface {
 	exchange.ToolDecisionGate
 	toolapproval.Controller
+	loopbackproxy.NetworkApprovals
 	Shutdown(context.Context) error
 }
 
@@ -591,6 +592,7 @@ type proxyBuildRequest struct {
 	certificates loopbackproxy.CertificateAuthority
 	connections  connectionevent.Runtime
 	policy       connectionpolicy.RuleSet
+	approvals    loopbackproxy.NetworkApprovals
 	blindTunnels loopbackproxy.BlindTunnelDialer
 	egressAudit  egressaudit.Writer
 	random       io.Reader
@@ -630,6 +632,7 @@ func (productionProxyBuilder) Build(
 		Certificates: request.certificates,
 		Connections:  request.connections,
 		Policy:       request.policy,
+		Approvals:    request.approvals,
 		BlindTunnels: request.blindTunnels,
 		EgressAudit:  request.egressAudit,
 		ExchangeIDs: loopbackproxy.NewRandomExchangeIDSource(

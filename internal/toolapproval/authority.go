@@ -169,13 +169,38 @@ func (authority *Authority) Decide(
 	authority.mu.Unlock()
 	// An identical pending question joins the existing entry, so a repeat of
 	// the same group is one prompt answered once rather than a second prompt.
-	pending, joined := authority.waiters.join(record.AggregateKey, record.ID)
-	authority.mu.Lock()
-	authority.notifyLocked()
-	authority.mu.Unlock()
-	waitingOn := authority.waiters.recordFor(record.AggregateKey)
-	if !joined {
-		if err := authority.repository.Create(operation, record); err != nil {
+	pending, entry, joined := authority.waiters.join(record.AggregateKey, record.ID)
+	waitingOn := entry.recordID
+	timer := time.NewTimer(authority.config.DecisionTimeout)
+	defer timer.Stop()
+	if joined {
+		// The entry is published before its record is written. A joiner waits
+		// for that write, so it never counts itself onto a row that does not
+		// exist yet and never waits on a question that was never asked.
+		select {
+		case <-entry.ready:
+		case <-operation.Done():
+			authority.departFrom(waitingOn, pending, "exchange_canceled")
+			return exchange.ToolDecision{}, operation.Err()
+		case <-timer.C:
+			authority.departFrom(waitingOn, pending, "approval_expired")
+			return exchange.ToolDecision{
+				Outcome:    exchange.ToolDecisionRejected,
+				ReasonCode: "approval_expired",
+			}, nil
+		}
+		if !authority.waiters.durable(entry) {
+			authority.waiters.remove(waitingOn, pending)
+			return exchange.ToolDecision{}, ErrInvalidApproval
+		}
+		// The prompt counts what is actually waiting on it. A stale count
+		// never decides anything, so a caller that merges onto a question
+		// being answered right now keeps waiting for that answer.
+		_, _ = authority.repository.Join(operation, waitingOn)
+	} else {
+		err := authority.repository.Create(operation, record)
+		authority.waiters.publish(entry, err == nil)
+		if err != nil {
 			authority.waiters.remove(record.ID, pending)
 			return exchange.ToolDecision{}, fmt.Errorf(
 				"persist tool approval: %w",
@@ -183,23 +208,17 @@ func (authority *Authority) Decide(
 			)
 		}
 	}
-
-	timer := time.NewTimer(authority.config.DecisionTimeout)
-	defer timer.Stop()
+	authority.mu.Lock()
+	authority.notifyLocked()
+	authority.mu.Unlock()
 	var resolved Record
 	select {
 	case resolved = <-pending.result:
 	case <-operation.Done():
-		authority.waiters.remove(waitingOn, pending)
-		if authority.waiters.waiterCount(waitingOn) == 0 {
-			authority.cancelBestEffort(waitingOn, "exchange_canceled")
-		}
+		authority.departFrom(waitingOn, pending, "exchange_canceled")
 		return exchange.ToolDecision{}, operation.Err()
 	case <-timer.C:
-		authority.waiters.remove(waitingOn, pending)
-		if authority.waiters.waiterCount(waitingOn) == 0 {
-			authority.cancelBestEffort(waitingOn, "approval_expired")
-		}
+		authority.departFrom(waitingOn, pending, "approval_expired")
 		return exchange.ToolDecision{
 			Outcome:    exchange.ToolDecisionRejected,
 			ReasonCode: "approval_expired",

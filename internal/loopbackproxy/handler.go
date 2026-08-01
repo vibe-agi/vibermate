@@ -156,7 +156,10 @@ type Options struct {
 	Connections  ConnectionJournal
 	// Policy decides every proxied connection before any dial, DNS
 	// resolution, or certificate issuance. An AgentEndpoint is not exempt.
-	Policy           connectionpolicy.RuleSet
+	Policy connectionpolicy.RuleSet
+	// Approvals answers a policy `ask`. Without it an ask cannot block on a
+	// person, so it denies rather than degrading into an allow.
+	Approvals        NetworkApprovals
 	BlindTunnels     BlindTunnelDialer
 	EgressAudit      egressaudit.Writer
 	ExchangeIDs      ExchangeIDSource
@@ -176,6 +179,7 @@ type Handler struct {
 	certificates CertificateAuthority
 	connections  ConnectionJournal
 	policy       connectionpolicy.RuleSet
+	approvals    NetworkApprovals
 	blindTunnels BlindTunnelDialer
 	egressAudit  egressaudit.Writer
 	exchangeIDs  ExchangeIDSource
@@ -216,6 +220,7 @@ func New(options Options) (*Handler, error) {
 		certificates: options.Certificates,
 		connections:  options.Connections,
 		policy:       options.Policy,
+		approvals:    options.Approvals,
 		blindTunnels: options.BlindTunnels,
 		egressAudit:  options.EgressAudit,
 		exchangeIDs:  options.ExchangeIDs,
@@ -392,12 +397,28 @@ func (handler *Handler) ServeHTTP(
 		Host: policyHost,
 		Port: policyPort,
 	})
+	// An ask blocks here, still before any dial. It resolves to exactly one of
+	// allow or deny; there is no third answer this far in front of a socket.
+	denialReason := ReasonCode(outcome.RuleID)
+	if outcome.Decision == connectionpolicy.DecisionAsk {
+		resolution := handler.resolveAsk(
+			request.Context(),
+			outcome,
+			source.IngressID,
+			policyHost,
+			policyPort,
+		)
+		outcome = resolution.outcome
+		if resolution.reason != "" {
+			denialReason = resolution.reason
+		}
+	}
 	if outcome.Decision != connectionpolicy.DecisionAllow {
 		if handler.denyConnection(
 			request.Context(),
 			audit,
 			source,
-			ReasonCode(outcome.RuleID),
+			denialReason,
 		) != nil {
 			writeReason(
 				writer,

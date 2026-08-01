@@ -403,6 +403,9 @@ func startWithBuilders(
 		certificates: certificateAuthority,
 		connections:  connections,
 		policy:       connectionRules,
+		// A rule that asks blocks the connection on the same ApprovalCenter a
+		// tool intent goes to, so a person answers both in one place.
+		approvals:    approvals,
 		blindTunnels: blindTunnels,
 		egressAudit:  storageResult.store.EgressAttemptRepository(),
 		random:       securityRandom,

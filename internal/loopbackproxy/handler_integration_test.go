@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"bytes"
 	"context"
+	"crypto/rand"
 	"crypto/tls"
 	"crypto/x509"
 	"encoding/base64"
@@ -33,8 +34,10 @@ import (
 	"github.com/vibe-agi/vibermate/internal/operationcatalog"
 	"github.com/vibe-agi/vibermate/internal/originaltransport"
 	"github.com/vibe-agi/vibermate/internal/pathcapability"
+	"github.com/vibe-agi/vibermate/internal/productruntime"
 	"github.com/vibe-agi/vibermate/internal/responseschat"
 	"github.com/vibe-agi/vibermate/internal/runtimepersistence"
+	"github.com/vibe-agi/vibermate/internal/toolapproval"
 )
 
 func TestLoopbackProxyAuthenticatesMITMAndDispatchesByPathCapability(
@@ -645,6 +648,7 @@ type proxyFixture struct {
 	accessID    access.AccessID
 	connections *connectionevent.Manager
 	egress      egressaudit.Repository
+	approvals   *toolapproval.Authority
 }
 
 func newProxyFixture(t *testing.T) *proxyFixture {
@@ -794,6 +798,18 @@ func newProxyFixtureForDialectWithPolicy(
 	if err != nil {
 		t.Fatal(err)
 	}
+	approvals, err := toolapproval.New(
+		context.Background(),
+		toolapproval.Options{
+			Repository: store.ToolApprovalRepository(),
+			Clock:      productruntime.SystemClock{},
+			Random:     rand.Reader,
+			Config:     toolapproval.DefaultConfig(),
+		},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
 	handler, err := loopbackproxy.New(loopbackproxy.Options{
 		OwnerContext:     context.Background(),
 		Runs:             runs,
@@ -804,6 +820,7 @@ func newProxyFixtureForDialectWithPolicy(
 		Certificates:     authority,
 		Connections:      connections,
 		Policy:           policy,
+		Approvals:        approvals,
 		BlindTunnels:     newTestBlindTunnels(t),
 		EgressAudit:      store.EgressAttemptRepository(),
 		ExchangeIDs:      loopbackproxy.NewCryptographicExchangeIDSource(),
@@ -834,6 +851,7 @@ func newProxyFixtureForDialectWithPolicy(
 		accessID:    accessID,
 		connections: connections,
 		egress:      store.EgressAttemptRepository(),
+		approvals:   approvals,
 	}
 }
 

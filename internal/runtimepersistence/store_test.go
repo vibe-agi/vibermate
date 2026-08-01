@@ -183,7 +183,11 @@ func TestSQLiteStoreProtectsPersistentArtifacts(t *testing.T) {
 
 func openTestStore(t *testing.T, databasePath string) *Store {
 	t.Helper()
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	// The bound is a harness guard against a hung open, not a product startup
+	// contract. Applying every migration on a pure-Go SQLite driver under the
+	// race detector is slow, and trimming a migration to fit a test clock
+	// would be shaping the schema around the harness.
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
 	store, err := Open(ctx, Options{
 		DatabasePath:           databasePath,
@@ -198,8 +202,8 @@ func openTestStore(t *testing.T, databasePath string) *Store {
 
 func assertInitialSchemaState(t *testing.T, state SchemaState) {
 	t.Helper()
-	if state.Revision != 15 {
-		t.Fatalf("schema revision = %d, want 15", state.Revision)
+	if state.Revision != 16 {
+		t.Fatalf("schema revision = %d, want 16", state.Revision)
 	}
 	if state.InitializedAt == "" {
 		t.Fatal("schema initialization timestamp is empty")

@@ -109,30 +109,6 @@ func TestAWildcardAllowDefaultIsRefused(t *testing.T) {
 	}
 }
 
-// Ask blocks a dial on a person. A half-built blocking decision fails open,
-// which is worse than not having it, so a rule set that asks is refused rather
-// than downgraded.
-func TestAskIsRefusedUntilItsPathExists(t *testing.T) {
-	t.Parallel()
-
-	_, err := connectionpolicy.NewRuleSet(connectionpolicy.RuleSetOptions{
-		Revision: 1,
-		Rules: []connectionpolicy.Rule{{
-			ID:       "ask-unknown",
-			Decision: connectionpolicy.DecisionAsk,
-			Match:    connectionpolicy.MatchAny(),
-		}},
-		Default: connectionpolicy.Rule{
-			ID:       "default",
-			Decision: connectionpolicy.DecisionDeny,
-			Match:    connectionpolicy.MatchAny(),
-		},
-	})
-	if err == nil {
-		t.Fatal("an ask rule was accepted before its path exists")
-	}
-}
-
 // A port narrows a rule; it never widens one.
 func TestAPortNarrowsARule(t *testing.T) {
 	t.Parallel()
@@ -161,5 +137,63 @@ func TestARuleSetMustDeclareADefault(t *testing.T) {
 		connectionpolicy.RuleSetOptions{Revision: 1},
 	); err == nil {
 		t.Fatal("a rule set without a default was accepted")
+	}
+}
+
+// The ask path exists now, so a rule set may carry one. A decision that blocks
+// on a person is only safe to express once something can actually block.
+func TestAnAskRuleIsAccepted(t *testing.T) {
+	t.Parallel()
+
+	set, err := connectionpolicy.NewRuleSet(connectionpolicy.RuleSetOptions{
+		Revision: 4,
+		Rules: []connectionpolicy.Rule{{
+			ID:       "ask.unknown-host",
+			Decision: connectionpolicy.DecisionAsk,
+			Match:    connectionpolicy.MatchAny(),
+		}},
+		Default: connectionpolicy.Rule{
+			ID:       "default.deny",
+			Decision: connectionpolicy.DecisionDeny,
+			Match:    connectionpolicy.MatchAny(),
+		},
+	})
+	if err != nil {
+		t.Fatalf("ask rule rejected: %v", err)
+	}
+	outcome := set.Evaluate(connectionpolicy.Request{
+		Host: "api.example.com",
+		Port: 443,
+	})
+	if outcome.Decision != connectionpolicy.DecisionAsk {
+		t.Fatalf("decision = %q", outcome.Decision)
+	}
+	if outcome.RuleID != "ask.unknown-host" {
+		t.Fatalf("rule ID = %q", outcome.RuleID)
+	}
+}
+
+// Design 06 makes `ask` the shipped answer for a host nobody has decided on,
+// so it must be expressible as the default. Unlike allow, it does not admit
+// anything on its own.
+func TestAskIsAllowedAsTheDefault(t *testing.T) {
+	t.Parallel()
+
+	set, err := connectionpolicy.NewRuleSet(connectionpolicy.RuleSetOptions{
+		Revision: 5,
+		Default: connectionpolicy.Rule{
+			ID:       "default.ask",
+			Decision: connectionpolicy.DecisionAsk,
+			Match:    connectionpolicy.MatchAny(),
+		},
+	})
+	if err != nil {
+		t.Fatalf("ask default rejected: %v", err)
+	}
+	if set.Evaluate(connectionpolicy.Request{
+		Host: "unknown.example.com",
+		Port: 443,
+	}).Decision != connectionpolicy.DecisionAsk {
+		t.Fatal("default did not ask")
 	}
 }
