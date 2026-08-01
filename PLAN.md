@@ -1,9 +1,11 @@
 # M1.0-B Desktop Trust Operation Foundation
 
-Status: implementation complete; evidence freeze pending
+Status: complete
 Created: 2026-08-01
+Completed: 2026-08-01
 Implementation baseline: `f8534654cbbd3b9eec839de3d23a888111f22617`
 Prior implementation candidate: `c19cca4eb2842aa00d8e8fc17160b342a111f0b6`
+Frozen implementation candidate: `35e8a575142420f4b4c95e07a6312b3bc3a82f73`
 
 ## Objective
 
@@ -84,6 +86,16 @@ Post-contract and orchestration checkpoint, 2026-08-01:
 - The design repository's ongoing Language Bridge and localization work does
   not change this slice's Root authority, platform boundary, dependencies, or
   no-UI scope. No goal correction was required.
+
+Final pre-freeze checkpoint, 2026-08-01:
+
+- CodeGraph was consulted again before the final ordered manifest hash. The
+  digest remains
+  `2d38c6df509a15fb9ffc3b60345ce5421cc97d8a3e967887f3b86d8e93c00cea`.
+- A final semantic check found no change to exact DER authority, explicit
+  authorization, mandatory post-command observation, manual recovery, result
+  statuses, Host composition order, or the Language Bridge exclusion. The
+  candidate required no design correction.
 
 ## Authority and package boundary
 
@@ -418,34 +430,39 @@ Checks must not scan generic words such as `trust`, `Root`, or `security`.
 An implementation conflict with current CA rotation or trust design stops this
 goal for review; it is not resolved by editing the design repository.
 
-## Validation and freeze
+## Frozen candidate and evidence
 
-Before freeze run:
+- Implementation source: clean commit
+  `35e8a575142420f4b4c95e07a6312b3bc3a82f73`.
+- Design manifest digest:
+  `2d38c6df509a15fb9ffc3b60345ce5421cc97d8a3e967887f3b86d8e93c00cea`.
+- Toolchains: Go 1.25.12 darwin/arm64, Node 22.23.1, pnpm 10.33.2,
+  rustc/cargo 1.88.0.
+- `gofmt -l .` returned no files.
+- `make check` passed generated drift, dependency drift, repository structural
+  checks, Desktop TypeScript/tests/build, Rust formatting, and Rust tests.
+- `go test -count=1 ./...`, `go test -race -count=1 ./...`, and
+  `go vet ./...` passed.
+- `go mod tidy -diff` was empty and `go mod verify` reported all modules
+  verified.
+- `govulncheck@v1.6.0 ./...` reported no called vulnerabilities. It also
+  reported one vulnerability in a required module that this code does not
+  call.
+- `internal/systemtrust` and `internal/repositorycheck` passed 50 ordinary and
+  50 race repetitions after the final candidate changes.
+- `git diff --check` and the staged/generated drift checks passed.
+- `cargo audit` exited successfully with the existing 17 allowed dependency
+  warnings, including `RUSTSEC-2024-0429` for `glib`. This slice changes no
+  Rust dependency and does not describe the audit as warning-free.
+- Independent read-only review found no remaining blocker after the owner and
+  caller cancellation cuts, four-state results, per-surface structural
+  fixtures, and bounded-output evidence wording were corrected.
 
-- `gofmt -l .`;
-- `make check`;
-- `go test -count=1 ./...`;
-- `go test -race -count=1 ./...`;
-- `go vet ./...`;
-- `go mod tidy -diff`;
-- `go mod verify`;
-- fixed `govulncheck ./...`;
-- repository structural checks;
-- focused repeated ordinary and race adapter/coordinator tests;
-- `git diff --check`.
+Credentialed Agent/provider acceptance was intentionally not rerun: the frozen
+candidate does not change ProductRuntime, packaged runtime composition, or
+artifact behavior. Existing reports remain evidence for earlier slices only;
+they are not M1.0-B evidence.
 
-Freeze two commits:
-
-1. an implementation candidate containing this contract, production code,
-   tests, structural fixtures, and module documentation;
-2. an evidence commit binding the candidate hash, design digest, and exact gate
-   results without changing runtime behavior.
-
-Do not rerun credentialed Agent/provider acceptance because production
-composition and packaged behavior do not change. Old acceptance reports remain
-prior-slice evidence and are not M1.0-B evidence. If implementation changes
-ProductRuntime, Desktop packaging, or packaged behavior, stop and reassess the
-evidence scope.
-
-The final implementation worktree and any evidence checkout must be clean.
-M1.0-B remains neither Preview-ready nor Release-ready.
+No live `security` process ran, no production executor was added, and neither
+the macOS system trust store nor the design repository was modified. M1.0-B
+remains neither Preview-ready nor Release-ready.
