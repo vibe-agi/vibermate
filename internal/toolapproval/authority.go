@@ -73,7 +73,7 @@ type Authority struct {
 	mu      sync.Mutex
 	closing bool
 	active  int
-	waiters map[string]*waiter
+	waiters *waiterRegistry
 	changed chan struct{}
 }
 
@@ -95,7 +95,7 @@ func New(ctx context.Context, options Options) (*Authority, error) {
 		random:     options.Random,
 		config:     options.Config,
 		recovery:   recovery,
-		waiters:    make(map[string]*waiter),
+		waiters:    newWaiterRegistry(),
 		changed:    make(chan struct{}),
 	}, nil
 }
@@ -161,18 +161,27 @@ func (authority *Authority) Decide(
 	if err := record.Validate(); err != nil {
 		return exchange.ToolDecision{}, err
 	}
-	pending := &waiter{result: make(chan Record, 1)}
 	authority.mu.Lock()
 	if authority.closing {
 		authority.mu.Unlock()
 		return exchange.ToolDecision{}, ErrRuntimeStopping
 	}
-	authority.waiters[record.ID] = pending
+	authority.mu.Unlock()
+	// An identical pending question joins the existing entry, so a repeat of
+	// the same group is one prompt answered once rather than a second prompt.
+	pending, joined := authority.waiters.join(record.AggregateKey, record.ID)
+	authority.mu.Lock()
 	authority.notifyLocked()
 	authority.mu.Unlock()
-	if err := authority.repository.Create(operation, record); err != nil {
-		authority.removeWaiter(record.ID, pending)
-		return exchange.ToolDecision{}, fmt.Errorf("persist tool approval: %w", err)
+	waitingOn := authority.waiters.recordFor(record.AggregateKey)
+	if !joined {
+		if err := authority.repository.Create(operation, record); err != nil {
+			authority.waiters.remove(record.ID, pending)
+			return exchange.ToolDecision{}, fmt.Errorf(
+				"persist tool approval: %w",
+				err,
+			)
+		}
 	}
 
 	timer := time.NewTimer(authority.config.DecisionTimeout)
@@ -181,18 +190,22 @@ func (authority *Authority) Decide(
 	select {
 	case resolved = <-pending.result:
 	case <-operation.Done():
-		authority.cancelBestEffort(record.ID, "exchange_canceled")
-		authority.removeWaiter(record.ID, pending)
+		authority.waiters.remove(waitingOn, pending)
+		if authority.waiters.waiterCount(waitingOn) == 0 {
+			authority.cancelBestEffort(waitingOn, "exchange_canceled")
+		}
 		return exchange.ToolDecision{}, operation.Err()
 	case <-timer.C:
-		authority.cancelBestEffort(record.ID, "approval_expired")
-		authority.removeWaiter(record.ID, pending)
+		authority.waiters.remove(waitingOn, pending)
+		if authority.waiters.waiterCount(waitingOn) == 0 {
+			authority.cancelBestEffort(waitingOn, "approval_expired")
+		}
 		return exchange.ToolDecision{
 			Outcome:    exchange.ToolDecisionRejected,
 			ReasonCode: "approval_expired",
 		}, nil
 	}
-	authority.removeWaiter(record.ID, pending)
+	authority.waiters.remove(waitingOn, pending)
 	switch resolved.State {
 	case StateAllowed:
 		return exchange.ToolDecision{Outcome: exchange.ToolDecisionApproved}, nil
@@ -270,14 +283,8 @@ func (authority *Authority) DecideApproval(
 	if err != nil {
 		return View{}, err
 	}
+	authority.waiters.resolve(record.ID, record.Clone())
 	authority.mu.Lock()
-	pending := authority.waiters[record.ID]
-	if pending != nil {
-		select {
-		case pending.result <- record.Clone():
-		default:
-		}
-	}
 	authority.notifyLocked()
 	authority.mu.Unlock()
 	return ViewOf(record), nil
@@ -301,17 +308,10 @@ func (authority *Authority) Shutdown(ctx context.Context) error {
 		"runtime_stopping",
 		authority.clock.Now().UTC(),
 	)
-	authority.mu.Lock()
 	for _, record := range canceled {
-		pending := authority.waiters[record.ID]
-		if pending == nil {
-			continue
-		}
-		select {
-		case pending.result <- record.Clone():
-		default:
-		}
+		authority.waiters.resolve(record.ID, record.Clone())
 	}
+	authority.mu.Lock()
 	authority.notifyLocked()
 	for authority.active != 0 {
 		changed := authority.changed
@@ -353,18 +353,6 @@ func (authority *Authority) begin(
 			authority.mu.Unlock()
 		})
 	}, nil
-}
-
-func (authority *Authority) removeWaiter(
-	approvalID string,
-	expected *waiter,
-) {
-	authority.mu.Lock()
-	if authority.waiters[approvalID] == expected {
-		delete(authority.waiters, approvalID)
-		authority.notifyLocked()
-	}
-	authority.mu.Unlock()
 }
 
 func (authority *Authority) cancelBestEffort(

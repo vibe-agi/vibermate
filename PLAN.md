@@ -54,12 +54,25 @@ mean forking it.
 
 ## Bottom-up implementation
 
-- [ ] Generalize the durable record: kind, aggregate key, subject refs and
+- [x] Generalize the durable record: kind, aggregate key, subject refs and
       labels, request and waiter counts, optional plan binding.
-- [ ] Derive risk, copy keys, and choices from the kind.
-- [ ] Migrate the schema and preserve existing rows as tool intent.
-- [ ] Prove merging, counting, optional binding, and unchanged fail-closed
-      behaviour.
+- [x] Derive risk, copy keys, and choices from the kind.
+- [x] Migrate the schema and preserve existing rows as tool intent, each with
+      its own identity as its aggregate key so nothing merges retroactively.
+- [x] Merge identical pending questions onto one entry at runtime: one
+      decision releases every waiter, a cancelled waiter does not answer the
+      others, and the entry is freed only when its last waiter leaves.
+- [x] Prove counting, optional binding, and unchanged fail-closed behaviour.
+
+## A harness bound, not a product contract
+
+The runtime test harness allowed five seconds to start, which the whole suite
+under race instrumentation began to exceed once a fourteenth migration existed.
+Migrations run in well under a second in isolation; the pure-Go SQLite driver
+with the suite running in parallel makes that time a function of machine
+contention. The bound was raised rather than the migration trimmed, because the
+product has no five-second startup contract and trimming would have hidden
+nothing real.
 
 ## Gates
 

@@ -1367,7 +1367,11 @@ func testOptionsWithPaths(
 
 func startTestRuntime(t *testing.T, options Options) *Runtime {
 	t.Helper()
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	// Generous because this is a harness bound, not a product contract. The
+	// pure-Go SQLite driver under race instrumentation, with the whole suite
+	// running in parallel, makes migration time a function of machine
+	// contention rather than of the runtime under test.
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
 	runtime, err := Start(ctx, options)
 	if err != nil {
