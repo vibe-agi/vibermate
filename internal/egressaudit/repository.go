@@ -2,7 +2,10 @@ package egressaudit
 
 import (
 	"context"
+	"encoding/base64"
 	"errors"
+	"strconv"
+	"strings"
 )
 
 const (
@@ -72,4 +75,37 @@ type Repository interface {
 // Reader is the read-only projection used by control surfaces.
 type Reader interface {
 	List(context.Context, PageRequest) (Page, error)
+}
+
+var ErrInvalidCursor = errors.New("egress cursor is invalid")
+
+// Cursor encodes a store sequence for keyset pagination.
+func Cursor(sequence int64) (string, error) {
+	if sequence <= 0 {
+		return "", ErrInvalidCursor
+	}
+	return base64.RawURLEncoding.EncodeToString(
+		[]byte("v1:" + strconv.FormatInt(sequence, 10)),
+	), nil
+}
+
+func ParseCursor(value string) (int64, error) {
+	if value == "" ||
+		len(value) > 128 ||
+		strings.ContainsAny(value, " \t\r\n=") {
+		return 0, ErrInvalidCursor
+	}
+	decoded, err := base64.RawURLEncoding.DecodeString(value)
+	if err != nil {
+		return 0, ErrInvalidCursor
+	}
+	payload, found := strings.CutPrefix(string(decoded), "v1:")
+	if !found {
+		return 0, ErrInvalidCursor
+	}
+	sequence, err := strconv.ParseInt(payload, 10, 64)
+	if err != nil || sequence <= 0 {
+		return 0, ErrInvalidCursor
+	}
+	return sequence, nil
 }

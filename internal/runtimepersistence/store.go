@@ -20,6 +20,7 @@ import (
 	"github.com/vibe-agi/vibermate/internal/activity"
 	"github.com/vibe-agi/vibermate/internal/capturerun"
 	"github.com/vibe-agi/vibermate/internal/connectionevent"
+	"github.com/vibe-agi/vibermate/internal/egressaudit"
 	"github.com/vibe-agi/vibermate/internal/toolapproval"
 )
 
@@ -61,6 +62,7 @@ type Store struct {
 	activityRepo   *activityRepository
 	captureRepo    *captureRunRepository
 	connectionRepo *connectionEventRepository
+	egressAttempts *egressAttemptRepository
 	approvalRepo   *toolApprovalRepository
 	operations     *operationGate
 
@@ -125,6 +127,7 @@ func Open(ctx context.Context, options Options) (*Store, error) {
 	captureRepo := newCaptureRunRepository(database, operations)
 	activityRepo := newActivityRepository(database, operations)
 	connectionRepo := newConnectionEventRepository(database, operations)
+	egressRepo := newEgressAttemptRepository(database, operations)
 	approvalRepo := newToolApprovalRepository(database, operations)
 	if _, err := repository.ReadSchemaState(ctx); err != nil {
 		operations.closeAdmission()
@@ -138,6 +141,7 @@ func Open(ctx context.Context, options Options) (*Store, error) {
 		activityRepo:   activityRepo,
 		captureRepo:    captureRepo,
 		connectionRepo: connectionRepo,
+		egressAttempts: egressRepo,
 		approvalRepo:   approvalRepo,
 		operations:     operations,
 		closeDone:      make(chan struct{}),
@@ -158,6 +162,10 @@ func (s *Store) ActivityRepository() activity.Repository {
 
 func (s *Store) CaptureRunRepository() capturerun.Repository {
 	return s.captureRepo
+}
+
+func (s *Store) EgressAttemptRepository() egressaudit.Repository {
+	return s.egressAttempts
 }
 
 func (s *Store) ConnectionEventRepository() connectionevent.Repository {
