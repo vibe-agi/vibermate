@@ -394,7 +394,7 @@ func (client *Client) beginAudit(
 		return egressaudit.Attempt{}, nil
 	}
 	attempt, err := egressaudit.New(egressaudit.NewInput{
-		ID:           frozen.requestID,
+		ID:           frozen.egressAttemptID,
 		ConnectionID: frozen.connectionID,
 		Purpose:      egressaudit.PurposeProviderAttempt,
 		PayloadClass: egressaudit.PayloadClientSemantic,

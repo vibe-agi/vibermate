@@ -206,6 +206,10 @@ type RequestOptions struct {
 	ConnectionID    string
 	ExchangeID      string
 	ParentAttemptID string
+	// EgressAttemptID identifies the outbound itself. It is minted separately
+	// from ParentAttemptID, because an identity that repeats its parent
+	// encodes containment.
+	EgressAttemptID string
 }
 
 // Request is a frozen provider representation. Its URL, authority, body,
@@ -214,6 +218,7 @@ type Request struct {
 	connectionID    string
 	exchangeID      string
 	parentAttemptID string
+	egressAttemptID string
 	requestID       string
 	targetRef       string
 	target          Target
@@ -253,6 +258,7 @@ func NewRequest(options RequestOptions) (Request, error) {
 	for label, value := range map[string]string{
 		"provider Exchange ID":       options.ExchangeID,
 		"provider parent attempt ID": options.ParentAttemptID,
+		"provider egress attempt ID": options.EgressAttemptID,
 	} {
 		if err := validateOpaqueIdentity(label, value); err != nil {
 			return Request{}, err
@@ -265,6 +271,15 @@ func NewRequest(options RequestOptions) (Request, error) {
 		); err != nil {
 			return Request{}, err
 		}
+	}
+	// ADR-0015 §10: an outbound attempt's identity is independent of the
+	// attempt it belongs to. Reusing one value for both makes the identity
+	// encode its parent, which the audit refuses, which means the outbound
+	// cannot be recorded, which means it must not go out.
+	if options.EgressAttemptID == options.ParentAttemptID {
+		return Request{}, errors.New(
+			"provider egress attempt ID repeats its parent attempt ID",
+		)
 	}
 	if options.Method != http.MethodPost {
 		return Request{}, errors.New("provider request method must be POST")
@@ -296,6 +311,7 @@ func NewRequest(options RequestOptions) (Request, error) {
 		connectionID:    options.ConnectionID,
 		exchangeID:      options.ExchangeID,
 		parentAttemptID: options.ParentAttemptID,
+		egressAttemptID: options.EgressAttemptID,
 		requestID:       options.RequestID,
 		targetRef:       options.TargetRef,
 		target:          options.Target,
@@ -395,3 +411,7 @@ func validateOpaqueIdentity(label, value string) error {
 func (request Request) ConnectionID() string    { return request.connectionID }
 func (request Request) ExchangeID() string      { return request.exchangeID }
 func (request Request) ParentAttemptID() string { return request.parentAttemptID }
+
+// EgressAttemptID is the identity of the outbound itself, minted separately
+// from the attempt that owns it.
+func (request Request) EgressAttemptID() string { return request.egressAttemptID }

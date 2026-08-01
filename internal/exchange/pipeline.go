@@ -275,9 +275,21 @@ func (pipeline *Pipeline) Execute(
 			err,
 		)
 	}
+	// The outbound gets an identity of its own. One value used for both makes
+	// the outbound's identity encode its parent, which the audit refuses.
+	egressID, err := pipeline.attemptIDs.NewAttemptID()
+	if err != nil {
+		return result, newFailure(
+			ReasonProviderRequestInvalid,
+			request.exchangeID,
+			0,
+			err,
+		)
+	}
 	frozenRequest, err := providertransport.NewRequest(
 		providertransport.RequestOptions{
 			RequestID:       attemptID,
+			EgressAttemptID: egressID,
 			ConnectionID:    request.connectionRef,
 			ExchangeID:      request.exchangeID,
 			ParentAttemptID: attemptID,

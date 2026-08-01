@@ -702,6 +702,7 @@ func newTestRequestWithBody(
 		RequestID:       id,
 		ExchangeID:      "exchange-test",
 		ParentAttemptID: "attempt-test",
+		EgressAttemptID: "egress-" + id,
 		TargetRef:       "target-test",
 		Target:          target,
 		AccessRevision:  plan.Revision(),
