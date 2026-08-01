@@ -45,9 +45,9 @@ non-streaming runs could not.
 
 ## Bottom-up implementation
 
-- [ ] Drive one real streamed request through the Exchange and read the events.
-- [ ] Drive the same request through the proxy as a client would.
-- [ ] Prove usage, the ledger axes, and the outbound terminal.
+- [x] Drive one real streamed request through the proxy as a client would.
+- [x] Prove the event grammar, the usage, and the outbound terminal.
+- [ ] Prove the two ledger axes on a stream that ends early.
 - [ ] Fix what those runs find.
 
 ## Gates

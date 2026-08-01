@@ -1,6 +1,7 @@
 package productruntime
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"crypto/tls"
@@ -262,10 +263,23 @@ func liveAccessAggregate(
 // This is the path the product actually ships. The Exchange test above proves
 // the pipeline; this proves the pipeline is reachable from a client that knows
 // nothing about vibermate beyond a proxy address and a trusted root.
-func TestALiveProviderAnswersThroughTheProxy(t *testing.T) {
-	provider := liveProviderFromEnvironment(t)
+type liveProxyFixture struct {
+	runtime *Runtime
+	client  *http.Client
+}
 
-	accessID, err := access.NewAccessID("access-live-proxy")
+// newLiveProxyFixture is a runtime a real client can reach: a proxy on a real
+// socket, a CaptureRun capability to authorize with, the local root in the
+// client's trust store, and a rule that decides the endpoint the client is
+// about to ask for.
+func newLiveProxyFixture(
+	t *testing.T,
+	provider liveProvider,
+	name string,
+) liveProxyFixture {
+	t.Helper()
+
+	accessID, err := access.NewAccessID(name)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -289,7 +303,7 @@ func TestALiveProviderAnswersThroughTheProxy(t *testing.T) {
 	if err != nil {
 		t.Fatalf("start ProductRuntime: %v", err)
 	}
-	defer shutdownRuntime(t, runtime)
+	t.Cleanup(func() { shutdownRuntime(t, runtime) })
 
 	aggregate := liveAccessAggregate(t, accessID, provider)
 	if write, err := runtime.AccessWriter().WriteAccess(
@@ -338,7 +352,7 @@ func TestALiveProviderAnswersThroughTheProxy(t *testing.T) {
 	}
 	server := &http.Server{Handler: runtime.ProxyHandler()}
 	go func() { _ = server.Serve(listener) }()
-	defer func() { _ = server.Close() }()
+	t.Cleanup(func() { _ = server.Close() })
 
 	grant, err := runtime.CaptureRuns().Create(
 		context.Background(),
@@ -352,7 +366,6 @@ func TestALiveProviderAnswersThroughTheProxy(t *testing.T) {
 	if err != nil {
 		t.Fatalf("create CaptureRun: %v", err)
 	}
-
 	roots := x509.NewCertPool()
 	if !roots.AppendCertsFromPEM(runtime.LocalRootCertificate().CertificatePEM()) {
 		t.Fatal("the local root did not parse")
@@ -360,18 +373,27 @@ func TestALiveProviderAnswersThroughTheProxy(t *testing.T) {
 	proxyURL := &url.URL{
 		Scheme: "http",
 		Host:   listener.Addr().String(),
-		User: url.UserPassword(
-			"capture",
-			grant.ProxyCapability.Value(),
-		),
+		User:   url.UserPassword("capture", grant.ProxyCapability.Value()),
 	}
-	client := &http.Client{
-		Timeout: 90 * time.Second,
-		Transport: &http.Transport{
-			Proxy:           http.ProxyURL(proxyURL),
-			TLSClientConfig: &tls.Config{RootCAs: roots, MinVersion: tls.VersionTLS12},
+	return liveProxyFixture{
+		runtime: runtime,
+		client: &http.Client{
+			Timeout: 90 * time.Second,
+			Transport: &http.Transport{
+				Proxy: http.ProxyURL(proxyURL),
+				TLSClientConfig: &tls.Config{
+					RootCAs:    roots,
+					MinVersion: tls.VersionTLS12,
+				},
+			},
 		},
 	}
+}
+
+func TestALiveProviderAnswersThroughTheProxy(t *testing.T) {
+	provider := liveProviderFromEnvironment(t)
+
+	fixture := newLiveProxyFixture(t, provider, "access-live-proxy")
 	body := `{"model":"claude-client-alias","max_tokens":64,` +
 		`"messages":[{"role":"user","content":"Reply with the single word: ready"}]}`
 	clientRequest, err := http.NewRequest(
@@ -385,7 +407,7 @@ func TestALiveProviderAnswersThroughTheProxy(t *testing.T) {
 	clientRequest.Header.Set("content-type", "application/json")
 	clientRequest.Header.Set("anthropic-version", "2023-06-01")
 	clientRequest.Header.Set("x-api-key", "client-key-never-forwarded")
-	response, err := client.Do(clientRequest)
+	response, err := fixture.client.Do(clientRequest)
 	if err != nil {
 		t.Fatalf("a client request through the proxy failed: %v", err)
 	}
@@ -416,7 +438,7 @@ func TestALiveProviderAnswersThroughTheProxy(t *testing.T) {
 
 	// The connection was decrypted as an agent endpoint, and it is on the
 	// record as that rather than as an opaque tunnel.
-	connections, err := runtime.ConnectionEvents().List(
+	connections, err := fixture.runtime.ConnectionEvents().List(
 		context.Background(),
 		connectionevent.PageRequest{Limit: 20},
 	)
@@ -433,4 +455,154 @@ func TestALiveProviderAnswersThroughTheProxy(t *testing.T) {
 	if !decrypted {
 		t.Fatalf("no decrypted connection was recorded: %+v", connections.Items)
 	}
+}
+
+// Every agent client streams. A streamed answer is a different path through
+// the whole product: a different response mode, a different event grammar on
+// the wire, and a ledger that has to stay honest about what the client
+// actually received.
+func TestALiveProviderStreamsThroughTheProxy(t *testing.T) {
+	provider := liveProviderFromEnvironment(t)
+
+	fixture := newLiveProxyFixture(t, provider, "access-live-stream")
+	body := `{"model":"claude-client-alias","max_tokens":64,"stream":true,` +
+		`"messages":[{"role":"user","content":"Count: one two three"}]}`
+	request, err := http.NewRequest(
+		http.MethodPost,
+		"https://api.anthropic.com/v1/messages",
+		strings.NewReader(body),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	request.Header.Set("content-type", "application/json")
+	request.Header.Set("anthropic-version", "2023-06-01")
+	request.Header.Set("accept", "text/event-stream")
+	response, err := fixture.client.Do(request)
+	if err != nil {
+		t.Fatalf("a streamed request through the proxy failed: %v", err)
+	}
+	defer func() { _ = response.Body.Close() }()
+	if response.StatusCode != http.StatusOK {
+		answered, _ := io.ReadAll(io.LimitReader(response.Body, 1<<16))
+		t.Fatalf("status = %d body = %s", response.StatusCode, answered)
+	}
+	if mediaType := response.Header.Get("Content-Type"); !strings.HasPrefix(
+		mediaType,
+		"text/event-stream",
+	) {
+		t.Fatalf("a stream came back as %q", mediaType)
+	}
+
+	// The client asked in Anthropic Messages, so the events must be Anthropic
+	// Messages events. A whole answer relabelled as a stream is not a stream.
+	events, text, usage := readAnthropicStream(t, response.Body)
+	for _, required := range []string{
+		"message_start",
+		"content_block_delta",
+		"message_delta",
+		"message_stop",
+	} {
+		if !events[required] {
+			t.Fatalf("the stream had no %s: %v", required, events)
+		}
+	}
+	if strings.TrimSpace(text) == "" {
+		t.Fatal("the stream carried no text")
+	}
+	// Usage has to reach the client. A streamed answer that drops the token
+	// counts makes every cost view downstream of it wrong.
+	if usage.input == 0 || usage.output == 0 {
+		t.Fatalf("usage did not reach the client: %+v", usage)
+	}
+	t.Logf("streamed answer: %q usage=%+v", strings.TrimSpace(text), usage)
+
+	// The outbound reached a terminal with the bytes it actually carried.
+	attempts, err := fixture.runtime.EgressAttempts().List(
+		context.Background(),
+		egressaudit.PageRequest{Limit: 20},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	terminal := false
+	for _, record := range attempts.Items {
+		if record.Attempt.Purpose() != egressaudit.PurposeProviderAttempt {
+			continue
+		}
+		terminal = true
+		if !record.Attempt.Terminal() {
+			t.Fatalf("a streamed outbound never reached a terminal: %+v", record)
+		}
+		if record.Attempt.BytesIn() == 0 {
+			t.Fatalf("a streamed outbound recorded no bytes: %+v", record)
+		}
+	}
+	if !terminal {
+		t.Fatal("no provider attempt was recorded for the stream")
+	}
+}
+
+type streamUsage struct {
+	input  int
+	output int
+}
+
+// readAnthropicStream reads the events a client would read.
+func readAnthropicStream(
+	t *testing.T,
+	reader io.Reader,
+) (map[string]bool, string, streamUsage) {
+	t.Helper()
+
+	events := map[string]bool{}
+	var text strings.Builder
+	var usage streamUsage
+	scanner := bufio.NewScanner(reader)
+	scanner.Buffer(make([]byte, 0, 64*1024), 1<<20)
+	for scanner.Scan() {
+		line := scanner.Text()
+		switch {
+		case strings.HasPrefix(line, "event: "):
+			events[strings.TrimPrefix(line, "event: ")] = true
+		case strings.HasPrefix(line, "data: "):
+			var frame struct {
+				Type  string `json:"type"`
+				Delta struct {
+					Text string `json:"text"`
+				} `json:"delta"`
+				Message struct {
+					Usage struct {
+						InputTokens  int `json:"input_tokens"`
+						OutputTokens int `json:"output_tokens"`
+					} `json:"usage"`
+				} `json:"message"`
+				Usage struct {
+					InputTokens  int `json:"input_tokens"`
+					OutputTokens int `json:"output_tokens"`
+				} `json:"usage"`
+			}
+			payload := strings.TrimPrefix(line, "data: ")
+			if err := json.Unmarshal([]byte(payload), &frame); err != nil {
+				t.Fatalf("a stream frame did not parse: %v frame=%s", err, payload)
+			}
+			text.WriteString(frame.Delta.Text)
+			if frame.Message.Usage.InputTokens != 0 {
+				usage.input = frame.Message.Usage.InputTokens
+			}
+			if frame.Usage.InputTokens != 0 {
+				usage.input = frame.Usage.InputTokens
+			}
+			if frame.Message.Usage.OutputTokens != 0 {
+				usage.output = frame.Message.Usage.OutputTokens
+			}
+			if frame.Usage.OutputTokens != 0 {
+				usage.output = frame.Usage.OutputTokens
+			}
+		}
+	}
+	if err := scanner.Err(); err != nil {
+		t.Fatalf("read the stream: %v", err)
+	}
+	return events, text.String(), usage
 }

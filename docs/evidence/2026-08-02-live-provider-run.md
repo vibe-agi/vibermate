@@ -46,13 +46,28 @@ The run passed in 3.12s. The model answered `"ready"`.
 Note that the client sent its own `x-api-key`. It is not forwarded: the
 provider credential comes from the SecretRef in the plan.
 
+## Streaming, the way a client asks for it
+
+`TestALiveProviderStreamsThroughTheProxy` sends `"stream": true` through the
+same proxy and reads the response as a client would. It came back as
+`text/event-stream` carrying Anthropic Messages events — `message_start`,
+`content_block_delta`, `message_delta`, `message_stop` — with the text
+assembled from the deltas and usage present (`input 10, output 686` on the
+recorded run). The provider attempt reached a terminal with a non-zero
+received byte count.
+
+The run took 17.8s, which is the model's latency rather than the product's.
+
 ## What neither run proves
 
 The backend is a local OpenAI-compatible service over loopback cleartext. A
 strict-TLS provider origin exercises a different transport path.
 
-Neither run drives a real agent client (Claude Code, Codex) end to end; that is
-what the packaged acceptance harness is for.
+No run drives a real agent client (Claude Code, Codex) end to end; that is what
+the packaged acceptance harness is for.
+
+No run exercises a stream that ends early, a mid-stream failover, or the
+Responses WebSocket path.
 
 ## What they found
 
