@@ -1,77 +1,69 @@
-# M1.0-C0h-4 Connection Policy: Remembering an Answer
+# M1.0-C0h-5 The Window That Answers a Connection
 
 Status: active
 Created: 2026-08-02
-Implementation baseline: `747d057`
+Implementation baseline: `f21b81d`
 Branch: `m1/root-leaf-foundation`
-Predecessor: `docs/plans/archive/2026-08-02-m1.0-c0h-3-rules-a-person-owns.md`
+Predecessor: `docs/plans/archive/2026-08-02-m1.0-c0h-4-remembering-an-answer.md`
 Defers: `docs/plans/deferred/2026-08-01-m1.0-c-macos-trust-observation.md`
 
 ## Objective
 
-A person can answer a connection question, and a person can write a rule, but
-the two are unrelated: answering the same question about the same host forever
-is the only thing on offer. Remembering is what makes `ask` a usable default
-rather than an interrogation.
+`ask` blocks a connection on a person, and an answer can be remembered as a
+rule. Neither is reachable from the window. The ApprovalCenter still describes
+every question as a tool call, offers two choices it hard-coded, and reads
+fields the runtime stopped sending. A question about a connection arrives with
+no subject and no way to remember the answer.
+
+This slice makes the window able to answer the questions the runtime actually
+asks. It is the last thing between the product and the shipped default that
+design 06 requires.
 
 ## Read-only design authority
 
-- `docs/design/06-security.md` §4.1 and `INV-APPROVAL-TERMINAL-ATOMIC`;
+- `docs/design/03-ui.md` §3.2, the ApprovalCenter;
 - `docs/design/04-ux.md` §4.1 and §4.6;
-- `docs/design/02-architecture.md` §10.1.
+- `docs/design/06-security.md` §4.1.
 
 ## Required invariants
 
-1. The answer and the rule it creates commit together. A remembered decision
-   that survived without its rule would ask again; a rule that survived
-   without its decision would answer a question nobody was asked.
-2. A remembered answer is exactly as wide as what was asked. Allowing a host
-   and port does not allow the host on another port, and never allows anything
-   else. A wider rule stays something a person writes on purpose.
-3. The rules in force follow the commit. A remembered answer that only reached
-   storage would ask again on the next connection until a restart.
-4. An unremembered answer changes no rules at all.
-5. A person is shown what remembering will do before they choose it.
+1. The window offers exactly the choices the runtime declared, in the order it
+   declared them. A hard-coded choice can offer something the runtime will
+   refuse, or hide something it allows.
+2. Every choice says what it does before it is taken, including whether it
+   will be remembered.
+3. A question names its subject in the terms it is about: a host and port for
+   a connection, tool names for a tool call.
+4. A merged question says how many callers are waiting on it, so one prompt is
+   visibly one answer for all of them.
+5. Answering is revision-checked, and a stale answer is reported rather than
+   retried into a different question.
 
 ## Non-goals
 
-- the `policy_scope` component of the design 06 aggregation key, which needs
-  policy scopes rather than the decision scopes this slice adds;
-- flipping the shipped default to `ask`, which is decided at the end of this
-  slice on whether a person can actually see and answer a question in time;
-- a rule simulator.
+- rule editing in the window, which has an API but no screen yet;
+- the connection and egress views;
+- flipping the shipped default, which is the last step of this slice and only
+  if everything above holds.
 
 ## Bottom-up implementation
 
-- [x] Add remembered decision scopes, refused for kinds that cannot mean them.
-- [x] Present remembering as a distinct choice with its own subject.
-- [x] Write the rule and the terminal decision in one commit.
-- [x] Put the new rules in force as soon as that commit lands.
-- [x] Prove: the pair commits or neither does, the width is exactly the
-      question, an unremembered answer changes nothing, and the next
-      connection is decided without asking again.
-
-## The flip, and why it is still not here
-
-Remembering was the missing half of `ask`. The other half is that a person has
-to see the question in time to answer it. Today that means the control API and
-a capability token: there is no window and no command that shows a waiting
-question. A shipped default of `ask` would hang every first connection for the
-decision timeout in front of anyone who has not written their own client.
-
-So the flip moves to the next slice, which gives it a surface: a person can
-list what is waiting and answer it, and only then does the shipped default
-become the one design 06 asks for.
+- [ ] Bring the approval types level with what the runtime sends.
+- [ ] Render the declared choices, with their own copy, instead of two fixed
+      buttons.
+- [ ] Show the subject and the waiting count.
+- [ ] Report a stale or conflicting answer as itself.
+- [ ] Prove it against the runtime's own shapes rather than hand-written ones.
 
 ## Gates
 
 `gofmt -l .`, `go vet ./...`, `go test -count=1 ./...`,
-`go test -race -count=1 ./...`, race stress for `toolapproval`,
-`connectionpolicy`, `loopbackproxy`, `runtimepersistence`,
-`go run ./cmd/repositorycheck`, `go mod tidy -diff`, `go mod verify`,
+`go test -race -count=1 ./...`, `go run ./cmd/repositorycheck`,
+`go mod tidy -diff`, `go mod verify`, `pnpm --dir ui/desktop run check`,
 `git diff --check`, clean tree.
 
 ## Completion statement
 
-> Answering "allow this host" writes exactly that rule in the same commit as
-> the answer, and the next connection to that host is decided without asking.
+> A person can see a connection question in the window, understand what each
+> answer will do, and remember an answer, using only the choices the runtime
+> declared.
