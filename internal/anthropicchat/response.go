@@ -374,6 +374,7 @@ func decodeUsage(wire *openAIUsageWire) (protocolcore.Usage, error) {
 		)
 	}
 	cached := int64(0)
+	cachedReported := false
 	if wire.PromptTokensDetails != nil {
 		if wire.PromptTokensDetails.CachedTokens < 0 ||
 			wire.PromptTokensDetails.AudioTokens != 0 {
@@ -384,6 +385,7 @@ func decodeUsage(wire *openAIUsageWire) (protocolcore.Usage, error) {
 			)
 		}
 		cached = wire.PromptTokensDetails.CachedTokens
+		cachedReported = true
 	}
 	if cached > wire.PromptTokens {
 		return protocolcore.Usage{}, protocolcore.NewFailure(
@@ -417,16 +419,14 @@ func decodeUsage(wire *openAIUsageWire) (protocolcore.Usage, error) {
 			Known:  true,
 			Source: source,
 		},
-		CacheRead: protocolcore.UsageValue{
-			Tokens: cached,
-			Known:  true,
-			Source: source,
-		},
-		CacheWrite: protocolcore.UsageValue{
-			Tokens: 0,
-			Known:  true,
-			Source: source,
-		},
+		// An absent prompt_tokens_details object means the provider did not
+		// report a cached split, not that the split was zero. A reported zero
+		// stays known because the provider did state it.
+		CacheRead: cachedUsageValue(cached, cachedReported, source),
+		// OpenAI Chat has no cache-write concept in its usage object, so any
+		// value here would assert a fact the wire never stated and would
+		// mis-price a provider that bills cache writes.
+		CacheWrite: protocolcore.UsageValue{},
 		Output: protocolcore.UsageValue{
 			Tokens: wire.CompletionTokens,
 			Known:  true,
@@ -625,4 +625,19 @@ func (codec *Codec) EncodeClientResponse(response protocolcore.Response) ([]byte
 		)
 	}
 	return encoded, nil
+}
+
+func cachedUsageValue(
+	tokens int64,
+	reported bool,
+	source string,
+) protocolcore.UsageValue {
+	if !reported {
+		return protocolcore.UsageValue{}
+	}
+	return protocolcore.UsageValue{
+		Tokens: tokens,
+		Known:  true,
+		Source: source,
+	}
 }

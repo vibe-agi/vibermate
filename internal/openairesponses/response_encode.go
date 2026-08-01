@@ -69,8 +69,10 @@ type responseUsageWire struct {
 }
 
 type responseInputUsageWire struct {
-	CachedTokens     int64 `json:"cached_tokens"`
-	CacheWriteTokens int64 `json:"cache_write_tokens"`
+	// Both details are omitted when the backend did not report them. A zero
+	// here would claim the provider stated a split it never stated.
+	CachedTokens     *int64 `json:"cached_tokens,omitempty"`
+	CacheWriteTokens *int64 `json:"cache_write_tokens,omitempty"`
 }
 
 type responseOutputUsageWire struct {
@@ -516,13 +518,14 @@ func encodeResponseUsage(
 			err,
 		)
 	}
+	// input_tokens and output_tokens are the only usage fields the Responses
+	// wire always carries, so only those are required. A backend that cannot
+	// report a cache split must not force this edge to invent one.
 	for _, value := range []struct {
 		path  string
 		usage protocolcore.UsageValue
 	}{
 		{"$.usage.input_uncached", usage.InputUncached},
-		{"$.usage.cache_write", usage.CacheWrite},
-		{"$.usage.cache_read", usage.CacheRead},
 		{"$.usage.output", usage.Output},
 	} {
 		if !value.usage.Known {
@@ -533,10 +536,12 @@ func encodeResponseUsage(
 			)
 		}
 	}
+	// Only reported quadrants contribute to the total; an unknown quadrant is
+	// absent rather than zero.
 	inputTokens, overflow := addTokenCounts(
 		usage.InputUncached.Tokens,
-		usage.CacheWrite.Tokens,
-		usage.CacheRead.Tokens,
+		knownTokens(usage.CacheWrite),
+		knownTokens(usage.CacheRead),
 	)
 	if overflow {
 		return responseUsageWire{}, protocolcore.NewFailure(
@@ -561,8 +566,8 @@ func encodeResponseUsage(
 	return responseUsageWire{
 		InputTokens: inputTokens,
 		InputTokensDetails: responseInputUsageWire{
-			CachedTokens:     usage.CacheRead.Tokens,
-			CacheWriteTokens: usage.CacheWrite.Tokens,
+			CachedTokens:     reportedTokens(usage.CacheRead),
+			CacheWriteTokens: reportedTokens(usage.CacheWrite),
 		},
 		OutputTokens: usage.Output.Tokens,
 		OutputTokensDetails: responseOutputUsageWire{
@@ -602,4 +607,23 @@ func stableClientID(prefix string, values ...string) string {
 	}
 	sum := digest.Sum(nil)
 	return prefix + "_" + hex.EncodeToString(sum[:16])
+}
+
+// knownTokens contributes a quadrant to a total only when the backend reported
+// it.
+func knownTokens(value protocolcore.UsageValue) int64 {
+	if !value.Known {
+		return 0
+	}
+	return value.Tokens
+}
+
+// reportedTokens renders a detail field only when the backend reported it, so
+// an omitted field means unknown rather than zero.
+func reportedTokens(value protocolcore.UsageValue) *int64 {
+	if !value.Known {
+		return nil
+	}
+	tokens := value.Tokens
+	return &tokens
 }
