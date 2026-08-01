@@ -1,70 +1,65 @@
-# M1.0-C0e Complete Ingress Protocol Surface
+# M1.0-C0g Generic ApprovalCenter
 
 Status: active
 Created: 2026-08-02
-Implementation baseline: `8f5f81c`
+Implementation baseline: `12d40c6`
 Branch: `m1/root-leaf-foundation`
-Predecessor: `docs/plans/archive/2026-08-02-m1.0-c0d-catalogued-dispatch.md`
+Predecessor: `docs/plans/archive/2026-08-02-m1.0-c0e-ingress-surface.md`
 Defers: `docs/plans/deferred/2026-08-01-m1.0-c-macos-trust-observation.md`
 
 ## Objective
 
-Everything that reaches the listener must be tunnelled, forwarded, or refused
-with an audit record. Two shapes still fall outside that:
+The design has one ApprovalCenter serving network `ask`, tool intent, plugin
+permission, authorized outbound, and high-risk configuration, with identical
+pending items merged into one entry rather than one prompt per event. The
+durable record today is tool intent and nothing else: the kind, risk, copy
+keys, and choices are all constants, the subject fields are tool call IDs and
+tool names, and an Access plan binding is mandatory.
 
-1. A cleartext `http://` request is answered 405 without any handling. An Agent
-   that reaches an `http://` host through the exported proxy simply fails.
-2. A WebSocket upgrade on an uncatalogued path inside a MITM connection is
-   silently degraded to an ordinary GET, so the client believes it negotiated
-   a protocol the proxy never spoke.
+That last constraint is the blocking one. A network `ask` is decided before
+any Access is resolved, so it cannot supply a plan binding at all. Connection
+policy cannot be built on this record, and adding a second approval kind would
+mean forking it.
 
 ## Read-only design authority
 
-- `docs/design/02-architecture.md` §5.4 and §10.3;
+- `docs/design/04-ux.md` §4.1 and §4.6;
 - `docs/design/06-security.md` §4.1;
-- `docs/design/07-protocol-translation.md` §6.5.
+- `docs/design/03-ui.md` §3.2.
 
 ## Required invariants
 
-1. A cleartext forward-proxy request is either forwarded to its origin or
-   refused, and either way it leaves a connection record and an
-   `EgressAttempt`. It never enters a model pipeline and never carries a
-   provider credential.
-2. Design 06 is explicit that a proxy necessarily sees a cleartext request
-   line, so the record states honestly that this connection was not encrypted
-   rather than implying blindness it does not have. It still records no body.
-3. An upgrade the proxy cannot serve is refused explicitly. It is never
-   answered as though it were an ordinary request.
-4. Nothing here widens what may be decrypted, and no cleartext path may carry
-   a `SecretRef` or a provider credential.
+1. A record declares its `Kind`. Risk, copy keys, and available choices are
+   derived from the kind rather than assumed.
+2. Identical pending items merge on a stable `AggregateKey`, and the record
+   counts how many requests and how many waiters that entry represents. A
+   burst of the same question is one entry, not one prompt per event.
+3. The Access plan binding is optional, because a decision taken before Access
+   resolution has none. When present it is still frozen and still checked, so
+   a stale plan cannot resolve a pending item.
+4. A subject is carried as redacted identifiers and safe display labels only.
+   No record holds a path, header, body, argument value, or credential.
+5. Fail-closed behaviour is unchanged: expiry, cancellation, shutdown, and a
+   full queue all deny, and a decision remains compare-and-swap and
+   idempotency-keyed.
+6. The existing tool-intent behaviour is preserved exactly, including its
+   blocking barrier and its stable i18n keys.
 
 ## Non-goals
 
-- WebSocket message semantics, framing, or plugins;
-- connection policy;
-- HTTP/2.
+- connection policy itself, which consumes this;
+- remembered rules beyond recording the chosen scope;
+- plugin permissions and authorized outbound, which have no runtime yet;
+- UI beyond what the control contract needs.
 
 ## Bottom-up implementation
 
-- [x] Classify a cleartext forward-proxy request and give it a typed decision.
-- [x] Forward it through the gated egress boundary with both records; an
-      origin-form request and an unauthenticated forward are still refused,
-      and both leave an audit record.
-- [x] Refuse an unsupported upgrade explicitly instead of degrading it.
-- [x] Prove no body, credential, or model pipeline is reachable from either.
-- [x] Prove a real captured child process reaches a non-model host through the
-      real launcher and the real proxy over real sockets.
-
-## A test that proved nothing
-
-The captured-child test first fetched a loopback origin with an ordinary
-`http.Get`. It passed, and it proved nothing: Go unconditionally skips a proxy
-for a loopback target, so the child had connected directly with the proxy
-uninvolved. The test now asserts the proxy recorded the outbound, and the child
-builds its transport from the exported variables explicitly. What it proves is
-what belongs to vibermate: the launcher exported a usable proxy address and
-credential, and the proxy forwarded a request to a host that is not a model
-API. Go's own automatic proxy selection is not under test.
+- [ ] Generalize the durable record: kind, aggregate key, subject refs and
+      labels, request and waiter counts, optional plan binding.
+- [ ] Derive risk, copy keys, and choices from the kind.
+- [ ] Migrate the schema and preserve existing rows as tool intent.
+- [ ] Prove merging, counting, optional binding, and unchanged fail-closed
+      behaviour.
 
 ## Gates
 
@@ -74,7 +69,9 @@ API. Go's own automatic proxy selection is not under test.
 
 ## Completion statement
 
-> Every shape that reaches the listener is tunnelled, forwarded, or explicitly
-> refused, and each leaves connection and per-egress evidence.
+> One durable approval record serves more than one kind, merges identical
+> pending items with counts, and does not require an Access plan binding for a
+> decision taken before Access resolution.
 
-It does not implement WebSocket semantics, connection policy, or HTTP/2.
+It does not implement connection policy, remembered rules, or plugin
+permissions.
