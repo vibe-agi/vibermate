@@ -36,6 +36,15 @@ const (
 	AnthropicClaudeCodePolicyLimitsID = "anthropic-claude-code-policy-limits"
 	AnthropicHelloProbeID             = "anthropic-hello-probe"
 
+	// Observed operations in the Codex ChatGPT-login shape. Classifying by
+	// host alone would send this control plane into the model pipeline.
+	OpenAICodexResponsesCreateID = "openai-codex-responses-create"
+	OpenAICodexModelsProbeID     = "openai-codex-models-probe"
+	OpenAIPluginsFeaturedProbeID = "openai-plugins-featured-probe"
+	OpenAIPluginsInstalledID     = "openai-ps-plugins-installed-probe"
+	OpenAIPluginsListID          = "openai-ps-plugins-list-probe"
+	OpenAIPluginsSuggestedID     = "openai-ps-plugins-suggested-probe"
+
 	MaxJSONBodyBytes   = 16 << 20
 	MaxOpaqueBodyBytes = 16 << 20
 )
@@ -121,6 +130,48 @@ func BuiltIn() (Catalog, error) {
 		nil,
 	); err != nil {
 		return Catalog{}, err
+	}
+	if err := semantic(
+		OpenAICodexResponsesCreateID,
+		access.DialectOpenAIResponses,
+		"/backend-api/codex/responses",
+		"responses",
+		nil,
+	); err != nil {
+		return Catalog{}, err
+	}
+	// Bodyless probes. The observed MCP and analytics POSTs are deliberately
+	// absent: they carry a request body and nothing verifies it holds no
+	// prompt or tool data, so declaring them control would assert exactly
+	// that. They stay unclassified and fail closed.
+	for _, probe := range []struct {
+		id   string
+		path string
+	}{
+		{OpenAICodexModelsProbeID, "/backend-api/codex/models"},
+		{OpenAIPluginsFeaturedProbeID, "/backend-api/plugins/featured"},
+		{OpenAIPluginsInstalledID, "/backend-api/ps/plugins/installed"},
+		{OpenAIPluginsListID, "/backend-api/ps/plugins/list"},
+		{OpenAIPluginsSuggestedID, "/backend-api/ps/plugins/suggested"},
+	} {
+		if err := addOperation(
+			add,
+			probe.id,
+			access.DialectOpenAIResponses,
+			[]string{http.MethodGet},
+			probe.path,
+			access.ClientOperationPathExact,
+			access.ClientOperationOpaque,
+			access.ClientOperationBodyNone,
+			access.ClientReplaySafe,
+			"",
+			0,
+			nil,
+			access.OperationPayloadNone,
+			true,
+		); err != nil {
+			return Catalog{}, err
+		}
 	}
 	webSocketID, err := access.NewClientOperationID(
 		OpenAIResponsesWebSocketUnsupportedID,

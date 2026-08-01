@@ -86,3 +86,103 @@ func TestControlPlanePathsDoNotAcceptBodyBearingMethods(t *testing.T) {
 		t.Fatal("a POST to a control path was classified as known")
 	}
 }
+
+// Real Codex 0.145.0 in its ChatGPT-login shape reaches a model path and
+// several control-plane paths on the same origin. Design 10 section 5.1
+// records them. Classifying by host alone would send the control plane into
+// the model pipeline.
+func TestObservedCodexOperationsAreCatalogued(t *testing.T) {
+	t.Parallel()
+
+	builtIn, err := operationcatalog.BuiltIn()
+	if err != nil {
+		t.Fatal(err)
+	}
+	catalog, err := pathcapability.NewCatalog(builtIn.Definitions())
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	model, err := catalog.Classify(
+		access.DialectOpenAIResponses,
+		http.MethodPost,
+		"/backend-api/codex/responses",
+		"",
+		"",
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if model.Kind() != pathcapability.KindSemantic {
+		t.Fatalf("ChatGPT-login model path kind = %q", model.Kind())
+	}
+	if model.PayloadClass() != access.OperationPayloadClientSemantic {
+		t.Fatalf("ChatGPT-login model payload class = %q", model.PayloadClass())
+	}
+
+	for _, path := range []string{
+		"/backend-api/codex/models",
+		"/backend-api/plugins/featured",
+		"/backend-api/ps/plugins/installed",
+		"/backend-api/ps/plugins/list",
+		"/backend-api/ps/plugins/suggested",
+	} {
+		probe, probeErr := catalog.Classify(
+			access.DialectOpenAIResponses,
+			http.MethodGet,
+			path,
+			"",
+			"",
+		)
+		if probeErr != nil {
+			t.Fatalf("%s: %v", path, probeErr)
+		}
+		if probe.Kind() != pathcapability.KindOpaque ||
+			probe.PayloadClass() != access.OperationPayloadNone {
+			t.Fatalf(
+				"%s kind=%q payload=%q",
+				path,
+				probe.Kind(),
+				probe.PayloadClass(),
+			)
+		}
+	}
+}
+
+// The observed MCP and analytics operations carry a request body, and nothing
+// verifies it holds no prompt or tool data. Declaring them control would
+// assert exactly that, so they stay unclassified and fail closed.
+func TestObservedCodexBodyBearingControlPathsStayUnclassified(t *testing.T) {
+	t.Parallel()
+
+	builtIn, err := operationcatalog.BuiltIn()
+	if err != nil {
+		t.Fatal(err)
+	}
+	catalog, err := pathcapability.NewCatalog(builtIn.Definitions())
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, path := range []string{
+		"/backend-api/ps/mcp",
+		"/backend-api/codex/analytics-events/events",
+	} {
+		capability, classifyErr := catalog.Classify(
+			access.DialectOpenAIResponses,
+			http.MethodPost,
+			path,
+			"",
+			"",
+		)
+		if classifyErr != nil {
+			continue
+		}
+		if capability.PayloadClass() != access.OperationPayloadUnknown {
+			t.Fatalf(
+				"%s was classified as %q without body verification",
+				path,
+				capability.PayloadClass(),
+			)
+		}
+	}
+}

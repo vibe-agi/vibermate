@@ -7,7 +7,7 @@ import (
 	"github.com/vibe-agi/vibermate/internal/operationcatalog"
 )
 
-func TestBuiltInCatalogHasOneExactResponsesCreateOperation(t *testing.T) {
+func TestBuiltInCatalogHasExactResponsesCreateOperations(t *testing.T) {
 	t.Parallel()
 
 	catalog, err := operationcatalog.BuiltIn()
@@ -17,13 +17,34 @@ func TestBuiltInCatalogHasOneExactResponsesCreateOperation(t *testing.T) {
 	identifiers := catalog.SemanticOperationIDs(
 		access.DialectOpenAIResponses,
 	)
-	if len(identifiers) != 1 ||
-		identifiers[0].String() != operationcatalog.OpenAIResponsesCreateID {
+	// Two exact create operations: the API-key entrypoint and the observed
+	// ChatGPT-login entrypoint. Both are exact paths; neither is a prefix.
+	expected := map[string]string{
+		operationcatalog.OpenAIResponsesCreateID:      "/v1/responses",
+		operationcatalog.OpenAICodexResponsesCreateID: "/backend-api/codex/responses",
+	}
+	if len(identifiers) != len(expected) {
 		t.Fatalf("Responses semantic operation IDs = %v", identifiers)
+	}
+	for _, identifier := range identifiers {
+		path, known := expected[identifier.String()]
+		if !known {
+			t.Fatalf("unexpected Responses semantic operation %q", identifier)
+		}
+		for _, definition := range catalog.Definitions() {
+			if definition.ID() != identifier {
+				continue
+			}
+			if definition.PathPattern() != path ||
+				definition.PathMatch() != access.ClientOperationPathExact {
+				t.Fatalf("Responses operation = %+v", definition)
+			}
+		}
 	}
 	var matched access.ClientOperationDefinition
 	for _, definition := range catalog.Definitions() {
-		if definition.ID() == identifiers[0] {
+		if definition.ID().String() ==
+			operationcatalog.OpenAIResponsesCreateID {
 			matched = definition
 		}
 	}

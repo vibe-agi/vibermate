@@ -58,13 +58,25 @@ func TestProductionAccessCompilerFreezesExactResponsesOperation(t *testing.T) {
 	}
 	codec := plan.CodecPlan()
 	operations := codec.ClientOperations()
+	// Both observed Responses create entrypoints compile: the API-key path and
+	// the ChatGPT-login path share one codec and differ only in where the
+	// client sends them. Both stay exact; neither is a prefix.
+	expected := map[string]string{
+		"openai-responses-create":       "/v1/responses",
+		"openai-codex-responses-create": "/backend-api/codex/responses",
+	}
 	if codec.ID().String() != "openai-responses-to-openai-chat" ||
 		codec.ClientDialect() != access.DialectOpenAIResponses ||
 		codec.ProviderDialect() != access.DialectOpenAIChat ||
-		len(operations) != 1 ||
-		operations[0].ID().String() != "openai-responses-create" ||
-		operations[0].PathPattern() != "/v1/responses" {
+		len(operations) != len(expected) {
 		t.Fatalf("production Responses codec plan = %+v", codec)
+	}
+	for _, operation := range operations {
+		path, known := expected[operation.ID().String()]
+		if !known || operation.PathPattern() != path ||
+			operation.PathMatch() != access.ClientOperationPathExact {
+			t.Fatalf("production Responses operation = %+v", operation)
+		}
 	}
 }
 

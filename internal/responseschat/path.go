@@ -150,16 +150,24 @@ func NewProtocolPath(options Options) (*protocolpath.Path, error) {
 	if err != nil {
 		return nil, err
 	}
-	operationID, err := access.NewClientOperationID(
+	// Both observed Responses create entrypoints share these semantics: the
+	// API-key path and the ChatGPT-login path differ only in where the client
+	// sends them, so one codec serves both.
+	operationIDs := make([]access.ClientOperationID, 0, 2)
+	for _, raw := range []string{
 		operationcatalog.OpenAIResponsesCreateID,
-	)
-	if err != nil {
-		return nil, err
+		operationcatalog.OpenAICodexResponsesCreateID,
+	} {
+		operationID, idErr := access.NewClientOperationID(raw)
+		if idErr != nil {
+			return nil, idErr
+		}
+		operationIDs = append(operationIDs, operationID)
 	}
 	return protocolpath.New(protocolpath.Options{
 		ID:                 identifier,
 		Revision:           access.Revision(CodecRevision),
-		ClientOperationIDs: []access.ClientOperationID{operationID},
+		ClientOperationIDs: operationIDs,
 		Client:             clientCodec{codec: client},
 		Backend:            backendCodec{codec: chat},
 		Streaming:          streamingBridge{client: client, chat: chat},
