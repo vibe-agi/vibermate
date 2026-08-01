@@ -27,5 +27,14 @@ Defers: `docs/plans/deferred/2026-08-01-m1.0-c-macos-trust-observation.md`,
   both say so; the catalog itself needs verified release material.
 - Windows and Linux release backends refuse rather than degrade, which is
   what design 06 asks for and is not the same as supporting them.
-- No run exercises a stream that ends early through the proxy, a mid-stream
-  failover, or the Responses WebSocket path.
+- A stream abandoned by its client is now covered through the proxy: it is
+  recorded as canceled, its outbound reaches a terminal, and the runtime still
+  drains.
+- Failover is not merely unverified, it is unimplemented. `RouteSet` carries
+  candidates and the pipeline selects one frozen plan with no attempt loop, so
+  there is no second attempt to test. What is pinned is the rule that has to
+  survive the day there is one: once bytes have reached the client the answer
+  is committed and must not be sent again, which design 02 §12 calls
+  `pre_first_byte_idempotent_only`.
+- The Responses WebSocket path is refused with a stable reason rather than
+  attempted, which is a recorded state rather than a gap in coverage.

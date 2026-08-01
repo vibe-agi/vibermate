@@ -29,6 +29,7 @@ import (
 
 	"github.com/vibe-agi/vibermate/internal/access"
 	"github.com/vibe-agi/vibermate/internal/accesscredential"
+	"github.com/vibe-agi/vibermate/internal/activity"
 	"github.com/vibe-agi/vibermate/internal/egressaudit"
 	"github.com/vibe-agi/vibermate/internal/exchange"
 	"github.com/vibe-agi/vibermate/internal/hostcontract"
@@ -934,4 +935,107 @@ func TestALiveProviderAnswersAResponsesClient(t *testing.T) {
 		t.Fatalf("usage was not carried back: %+v", answer.Usage)
 	}
 	t.Logf("live Responses answer: %q", strings.TrimSpace(text))
+}
+
+// A person pressing Ctrl-C mid-answer is the most ordinary way a stream ends.
+// The proxy has to notice, stop reading from the provider, reach a terminal on
+// the outbound, and record what actually happened — and it has to do all of
+// that without leaving the runtime unable to shut down.
+func TestALiveStreamAbandonedByItsClientIsRecordedAndDrained(t *testing.T) {
+	provider := liveProviderFromEnvironment(t)
+
+	fixture := newLiveProxyFixture(t, provider, "access-live-abandoned")
+	body := `{"model":"claude-client-alias","max_tokens":512,"stream":true,` +
+		`"messages":[{"role":"user","content":"Count slowly from one to fifty."}]}`
+	request, err := http.NewRequest(
+		http.MethodPost,
+		"https://api.anthropic.com/v1/messages",
+		strings.NewReader(body),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	request.Header.Set("content-type", "application/json")
+	request.Header.Set("anthropic-version", "2023-06-01")
+	request.Header.Set("accept", "text/event-stream")
+	response, err := fixture.client.Do(request)
+	if err != nil {
+		t.Fatalf("a streamed request through the proxy failed: %v", err)
+	}
+	if response.StatusCode != http.StatusOK {
+		_ = response.Body.Close()
+		t.Fatalf("status = %d", response.StatusCode)
+	}
+
+	// Read enough to be sure the stream started, then hang up the way a
+	// terminal does.
+	buffer := make([]byte, 1)
+	if _, err := io.ReadFull(response.Body, buffer); err != nil {
+		t.Fatalf("the stream carried nothing before it was abandoned: %v", err)
+	}
+	if err := response.Body.Close(); err != nil {
+		t.Fatalf("close the abandoned stream: %v", err)
+	}
+
+	// The outbound reaches a terminal. An attempt left open would leave the
+	// audit unable to say what happened to bytes that did cross.
+	deadline := time.Now().Add(30 * time.Second)
+	for {
+		attempts, err := fixture.runtime.EgressAttempts().List(
+			context.Background(),
+			egressaudit.PageRequest{Limit: 20},
+		)
+		if err != nil {
+			t.Fatal(err)
+		}
+		settled := len(attempts.Items) > 0
+		for _, record := range attempts.Items {
+			if record.Attempt.Purpose() != egressaudit.PurposeProviderAttempt {
+				continue
+			}
+			if !record.Attempt.Terminal() {
+				settled = false
+			}
+		}
+		if settled {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("an abandoned stream left an outbound open: %+v", attempts.Items)
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+
+	// The Exchange is recorded as what it was. A stream nobody received must
+	// not be reported as completed.
+	records, err := fixture.runtime.Activities().List(
+		context.Background(),
+		activity.PageRequest{Limit: 20},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(records.Items) == 0 {
+		t.Fatal("an abandoned stream left no Activity")
+	}
+	for _, record := range records.Items {
+		if record.Kind != activity.KindExchangeCompleted {
+			continue
+		}
+		if record.Status == activity.StatusSucceeded {
+			t.Fatalf("an abandoned stream was recorded as succeeded: %+v", record)
+		}
+	}
+	t.Logf("abandoned stream activity: %+v", records.Items[0])
+
+	// And the runtime still drains. A hijacked connection that outlived its
+	// client would make shutdown wait for a person who is gone.
+	shutdownContext, cancel := context.WithTimeout(
+		context.Background(),
+		20*time.Second,
+	)
+	defer cancel()
+	if err := fixture.runtime.Shutdown(shutdownContext); err != nil {
+		t.Fatalf("shutdown after an abandoned stream: %v", err)
+	}
 }
