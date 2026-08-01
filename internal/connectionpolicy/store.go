@@ -52,28 +52,27 @@ var ErrNoRuleSet = errors.New("no connection rule set is stored")
 
 // ShippedSnapshot is what a fresh runtime starts with.
 //
-// Design 06 §4.1 makes a wildcard allow default an invariant violation, and
-// the shipped answer for an unknown host is `ask`. Remembering an answer does
-// not exist yet, so a shipped `ask` would put the same question in front of a
-// person for every connection to a host they just allowed. Until then the
-// placeholder stays an explicit named rule that shows up in every connection
-// record, rather than a permissive default hidden in a constant.
+// Design 06 §4.1 makes the released answer for an unknown host `ask`, and
+// INV-FIREWALL-NO-WILDCARD forbids a wildcard allow in the shipped
+// configuration. Allowing everything is still possible; it is a rule a person
+// writes on purpose and can see in the list.
+//
+// Nothing is allowed here in advance, not even a well-known model host: what
+// an agent is allowed to reach is a decision about that installation, and a
+// shipped allow list would be this product deciding it for everyone.
 func ShippedSnapshot(revision uint64) Snapshot {
 	return Snapshot{
 		Revision: revision,
-		Rules: []Rule{{
-			ID:       InterimAllowUnmatchedRuleID,
-			Priority: 1,
-			Decision: DecisionAllow,
-			Match:    MatchAny(),
-		}},
 		Default: Rule{
-			ID:       DefaultDenyRuleID,
-			Decision: DecisionDeny,
+			ID:       DefaultAskRuleID,
+			Decision: DecisionAsk,
 			Match:    MatchAny(),
 		},
 	}
 }
+
+// DefaultAskRuleID names the answer an undecided connection gets.
+const DefaultAskRuleID = "default.ask"
 
 // DefaultDenyRuleID names the answer a connection gets when no rule matched.
 const DefaultDenyRuleID = "default.deny"

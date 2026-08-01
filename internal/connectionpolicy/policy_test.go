@@ -301,3 +301,29 @@ func TestEqualPrecedenceResolvesByIdentifier(t *testing.T) {
 		t.Fatalf("tie-break = %q", forward.Evaluate(request).RuleID)
 	}
 }
+
+// The shipped answer for a host nobody has decided on is `ask`. Design 06
+// makes this the point of the outbound firewall: if the released default let
+// everything through, the last line before an unknown outbound connection
+// would be the one control that never fires.
+func TestTheShippedSetAsksAboutAnUnknownHost(t *testing.T) {
+	t.Parallel()
+
+	set, err := connectionpolicy.ShippedSnapshot(1).Compile()
+	if err != nil {
+		t.Fatal(err)
+	}
+	outcome := set.Evaluate(connectionpolicy.Request{
+		Host: "unknown.example.com",
+		Port: 443,
+	})
+	if outcome.Decision != connectionpolicy.DecisionAsk {
+		t.Fatalf("the shipped set answered %q", outcome.Decision)
+	}
+	for _, rule := range connectionpolicy.ShippedSnapshot(1).Rules {
+		if rule.Decision == connectionpolicy.DecisionAllow &&
+			rule.Match.Kind == connectionpolicy.MatchKindAny {
+			t.Fatalf("the shipped set allows everything through %q", rule.ID)
+		}
+	}
+}

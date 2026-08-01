@@ -21,6 +21,7 @@ import (
 	"github.com/vibe-agi/vibermate/internal/activity"
 	"github.com/vibe-agi/vibermate/internal/capturerun"
 	"github.com/vibe-agi/vibermate/internal/connectionevent"
+	"github.com/vibe-agi/vibermate/internal/connectionpolicy"
 	"github.com/vibe-agi/vibermate/internal/exchange"
 	"github.com/vibe-agi/vibermate/internal/hostcontract"
 	"github.com/vibe-agi/vibermate/internal/offlinehold"
@@ -97,8 +98,8 @@ func TestProductRuntimeStartsAndShutsDownNormally(t *testing.T) {
 	if status.Host != hostcontract.KindDesktop {
 		t.Fatalf("runtime host = %q, want desktop", status.Host)
 	}
-	if status.SchemaRevision != 18 {
-		t.Fatalf("schema revision = %d, want 18", status.SchemaRevision)
+	if status.SchemaRevision != 19 {
+		t.Fatalf("schema revision = %d, want 19", status.SchemaRevision)
 	}
 	if status.AccessProjection.State != access.ProjectionStateHealthy ||
 		status.AccessProjection.UnavailableAccessCount != 0 {
@@ -560,6 +561,26 @@ func TestProductRuntimeComposesCaptureIngressAndConnectionAudit(t *testing.T) {
 	)
 	if err != nil {
 		t.Fatalf("create CaptureRun: %v", err)
+	}
+	// The released default asks about a host nobody has decided on. This test
+	// is about the composition behind the decision, so it decides first, the
+	// way an operator configuring an unattended run would.
+	rules := runtime.ConnectionRules()
+	if _, err := rules.Replace(
+		context.Background(),
+		rules.Current().Revision,
+		[]connectionpolicy.Rule{{
+			ID:       "test.allow-unregistered-authority",
+			Priority: 100,
+			Decision: connectionpolicy.DecisionAllow,
+			Match: connectionpolicy.MatchExactHostPort(
+				"unregistered.example.test",
+				443,
+			),
+		}},
+		rules.Current().Default,
+	); err != nil {
+		t.Fatalf("configure connection rules: %v", err)
 	}
 	request := httptest.NewRequest(http.MethodConnect, "http://127.0.0.1", nil)
 	request.Host = "unregistered.example.test:443"

@@ -254,35 +254,3 @@ func validateIdentity(label, value string) error {
 	}
 	return nil
 }
-
-// InterimAllowUnmatchedRuleID names the rule that stands in for `ask`.
-//
-// Design 06 makes a wildcard allow default an invariant violation, and the
-// shipped default there is `ask` for an unknown host. The ask path does not
-// exist yet, and neither available alternative is honest as a product default:
-// denying by default makes the proxy unusable while no rule editing exists,
-// and allowing by default is the invariant violation.
-//
-// So this slice ships an explicit, named rule rather than a permissive
-// default. Every connection it admits carries this identifier in its
-// connection record, which makes the gap visible in the data rather than
-// hidden in a constant, and deleting the rule is what turns `ask` on.
-const InterimAllowUnmatchedRuleID = "interim.allow-unmatched-pending-ask"
-
-// InterimRuleSet is the policy this slice ships. It is not the product
-// default; it is the placeholder the ask slice removes.
-func InterimRuleSet(revision uint64) (RuleSet, error) {
-	return NewRuleSet(RuleSetOptions{
-		Revision: revision,
-		Rules: []Rule{{
-			ID:       InterimAllowUnmatchedRuleID,
-			Decision: DecisionAllow,
-			Match:    MatchAny(),
-		}},
-		Default: Rule{
-			ID:       "default.deny",
-			Decision: DecisionDeny,
-			Match:    MatchAny(),
-		},
-	})
-}

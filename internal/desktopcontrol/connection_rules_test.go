@@ -80,7 +80,7 @@ func TestConnectionRulesAreReadableAndEditable(t *testing.T) {
 	}
 	var current desktopcontrol.ConnectionRuleSetResponse
 	decodeResponse(t, read, &current)
-	if current.Revision == 0 || current.Default.Decision != "deny" {
+	if current.Revision == 0 || current.Default.Decision != "ask" {
 		t.Fatalf("shipped set = %+v", current)
 	}
 
@@ -161,6 +161,7 @@ func TestConnectionRulesAreReadableAndEditable(t *testing.T) {
 	if refused.Code != http.StatusUnprocessableEntity {
 		t.Fatalf("wildcard status = %d body = %s", refused.Code, refused.Body)
 	}
+	// The set in force is still the one the accepted change installed.
 	if runtime.ConnectionRules().Current().Default.Decision != "deny" {
 		t.Fatal("a refused set changed the default in force")
 	}

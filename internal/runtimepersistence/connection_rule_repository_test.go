@@ -114,6 +114,12 @@ func TestAStaleChangeIsRefused(t *testing.T) {
 		t.Fatal(err)
 	}
 	next := connectionpolicy.ShippedSnapshot(2)
+	next.Rules = []connectionpolicy.Rule{{
+		ID:       "allow.decided-host",
+		Priority: 100,
+		Decision: connectionpolicy.DecisionAllow,
+		Match:    connectionpolicy.MatchExactHost("decided.example.com"),
+	}}
 	if _, err := rules.Replace(
 		context.Background(),
 		1,
@@ -136,7 +142,9 @@ func TestAStaleChangeIsRefused(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(loaded.Rules) != 1 || loaded.Revision != 2 {
+	if len(loaded.Rules) != 1 ||
+		loaded.Rules[0].ID != "allow.decided-host" ||
+		loaded.Revision != 2 {
 		t.Fatalf("a refused change altered the set: %+v", loaded)
 	}
 }
@@ -176,7 +184,7 @@ func TestARuleSetThatWouldNotConstructIsNeverStored(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if loaded.Default.Decision != connectionpolicy.DecisionDeny {
+	if loaded.Default.Decision != connectionpolicy.DecisionAsk {
 		t.Fatalf("the stored default changed: %+v", loaded.Default)
 	}
 }

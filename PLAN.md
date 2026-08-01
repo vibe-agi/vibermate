@@ -42,9 +42,7 @@ design 06 requires.
 ## Non-goals
 
 - rule editing in the window, which has an API but no screen yet;
-- the connection and egress views;
-- flipping the shipped default, which is the last step of this slice and only
-  if everything above holds.
+- the connection and egress views.
 
 ## Bottom-up implementation
 
@@ -61,6 +59,23 @@ design 06 requires.
 `go test -race -count=1 ./...`, `go run ./cmd/repositorycheck`,
 `go mod tidy -diff`, `go mod verify`, `pnpm --dir ui/desktop run check`,
 `git diff --check`, clean tree.
+
+## The flip
+
+The shipped default is now `ask`, and nothing is allowed in advance. The five
+invariants above are what made that defensible: the window shows a waiting
+question within its polling interval, names the connection, offers the
+choices the runtime declared, and can remember an answer, and the decision
+budget is five minutes rather than seconds.
+
+Two consequences are deliberate and visible in the tests. An unattended run
+reaches nothing until somebody says what it may reach, which is what
+INV-UNATTENDED-NO-IMPLICIT-ALLOW asks for. And no model host is allowed in
+advance: what an agent may reach is a decision about that installation, and
+shipping an allow list would be this product making it for everyone.
+
+Migration 19 withdraws the placeholder rule by the exact name it shipped
+under. Rules a person wrote are untouched.
 
 ## Completion statement
 

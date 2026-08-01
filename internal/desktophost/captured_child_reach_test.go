@@ -9,10 +9,12 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/vibe-agi/vibermate/internal/connectionpolicy"
 	"github.com/vibe-agi/vibermate/internal/egressaudit"
 	"github.com/vibe-agi/vibermate/internal/launcherdiscovery"
 	"github.com/vibe-agi/vibermate/internal/productruntime"
@@ -112,6 +114,26 @@ func TestCapturedChildReachesANonModelHost(t *testing.T) {
 		t.Fatal(err)
 	}
 
+	// The released default asks about a host nobody has decided on, so an
+	// unattended run reaches nothing until somebody says what it may reach.
+	// That is the product's behaviour, not a detail of this test: what an
+	// agent is allowed to connect to is a decision about the installation.
+	probeHost, probePort := splitProbeAuthority(t, listener.Addr().String())
+	rules := host.Runtime().ConnectionRules()
+	if _, err := rules.Replace(
+		context.Background(),
+		rules.Current().Revision,
+		[]connectionpolicy.Rule{{
+			ID:       "test.allow-probe-origin",
+			Priority: 100,
+			Decision: connectionpolicy.DecisionAllow,
+			Match:    connectionpolicy.MatchExactHostPort(probeHost, probePort),
+		}},
+		rules.Current().Default,
+	); err != nil {
+		t.Fatal(err)
+	}
+
 	launcher, err := runlauncher.New(runlauncher.Config{
 		Discovery: sessionFile,
 		BaseEnvironment: []string{
@@ -165,4 +187,19 @@ func TestCapturedChildReachesANonModelHost(t *testing.T) {
 			page.Items,
 		)
 	}
+}
+
+// splitProbeAuthority names the probe origin in the terms a rule matches on.
+func splitProbeAuthority(t *testing.T, authority string) (string, uint16) {
+	t.Helper()
+
+	host, port, err := net.SplitHostPort(authority)
+	if err != nil {
+		t.Fatal(err)
+	}
+	number, err := strconv.ParseUint(port, 10, 16)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return host, uint16(number)
 }

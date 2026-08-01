@@ -84,8 +84,8 @@ func TestAnAcceptedChangeTakesEffectImmediately(t *testing.T) {
 	manager := newManager(t, store)
 	request := connectionpolicy.Request{Host: "api.example.com", Port: 443}
 	if manager.Source().Current().Evaluate(request).Decision !=
-		connectionpolicy.DecisionAllow {
-		t.Fatal("the shipped placeholder did not allow")
+		connectionpolicy.DecisionAsk {
+		t.Fatal("the shipped set did not ask about an undecided host")
 	}
 	if _, err := manager.Replace(
 		context.Background(),
