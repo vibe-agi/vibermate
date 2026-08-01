@@ -58,13 +58,24 @@ received byte count.
 
 The run took 17.8s, which is the model's latency rather than the product's.
 
+## The other client dialect
+
+`TestALiveProviderAnswersAResponsesClient` runs an OpenAI Responses request
+against the same backend, which speaks OpenAI chat completions. The answer
+comes back as a Responses object with output items and usage, not as a chat
+completion relabelled. It goes through the Exchange rather than the proxy
+because the Codex binary on this machine is a release the catalog has no
+evidence for; the translation is what is under test, not the launch.
+
+The run passed in 3.5s. The model answered `"ready"`.
+
 ## What neither run proves
 
 The backend is a local OpenAI-compatible service over loopback cleartext. A
 strict-TLS provider origin exercises a different transport path.
 
-No run drives a real agent client (Claude Code, Codex) end to end; that is what
-the packaged acceptance harness is for.
+Codex is not driven end to end; see the deferred note on the client catalog.
+Claude Code is, in `internal/desktophost`.
 
 No run exercises a stream that ends early, a mid-stream failover, or the
 Responses WebSocket path.

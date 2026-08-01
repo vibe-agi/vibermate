@@ -1,62 +1,31 @@
-# M1.0-C0k A Failure You Can Diagnose
+# M1.0-C0l Release Path and the Last Translation
 
-Status: active
+Status: complete
 Created: 2026-08-02
-Implementation baseline: `7d18e6e`
+Implementation baseline: `cb83ae8`
 Branch: `m1/root-leaf-foundation`
-Predecessor: `docs/plans/archive/2026-08-02-m1.0-c0j-streaming-end-to-end.md`
-Defers: `docs/plans/deferred/2026-08-01-m1.0-c-macos-trust-observation.md`
+Predecessor: `docs/plans/archive/2026-08-02-m1.0-c0k-a-failure-you-can-diagnose.md`
+Defers: `docs/plans/deferred/2026-08-01-m1.0-c-macos-trust-observation.md`,
+`docs/plans/deferred/2026-08-02-unrecognized-client-is-silent.md`
 
-## Objective
+## What this slice closed
 
-Both defects that stopped a real client were found by patching the runtime to
-print an error. Nothing a user could see said more than
-`invalid_exchange_request`, and nothing stored afterwards said more either.
-"My client cannot connect" is the report this product will receive most often,
-and today the only way to answer it is to rebuild the runtime.
+- The OpenAI Responses client dialect had no live evidence behind it. It has
+  one now: a real model answers a Responses request through the whole
+  Exchange, and the answer comes back as a Responses object rather than a
+  chat completion relabelled.
+- There was no release build. `-tags vibermate_native_secrets` selected a
+  factory no file provided, so the packaged acceptance harness, which
+  requires that tag, could never have run. The macOS Keychain backend exists
+  now, and `make check` builds and vets under the tag so it cannot go missing
+  again unnoticed.
 
-A failure has to carry enough structure to be diagnosed and no content at all.
+## What is still open
 
-## Read-only design authority
-
-- `docs/design/06-security.md` §4.1 on what a record may not contain;
-- `docs/design/07-protocol-translation.md` §2.3 and §3.2;
-- `docs/design/15-local-control-api.md`.
-
-## Required invariants
-
-1. A failure names where it happened in the request's structure, and never
-   what was there. A path is field names and indices; a value is content.
-2. The reason stays one stable code. Diagnostic facts travel as their own
-   typed fields rather than being concatenated into it.
-3. A field this dialect does not model is still nameable. A closed enum could
-   not name `defer_loading`, which is exactly why the failure was opaque.
-4. Nothing added here can carry a credential, a body byte, or provider text.
-5. What is stored is what is shown: a person reads the same facts in the
-   window that the record holds.
-
-## Non-goals
-
-- provider-supplied error text, which is not ours to render;
-- a general request inspector;
-- retry or repair suggestions.
-
-## Bottom-up implementation
-
-- [x] Carry the protocol failure path on the Exchange failure.
-- [x] Give the Activity record typed diagnostic fields instead of one
-      concatenated reason.
-- [x] Show them through the control API and in the window.
-- [x] Prove no value, credential, or provider text can reach any of them.
-
-## Gates
-
-`gofmt -l .`, `go vet ./...`, `go test -count=1 ./...`,
-`go test -race -count=1 ./...`, `go run ./cmd/repositorycheck`,
-`go mod tidy -diff`, `go mod verify`, `pnpm --dir ui/desktop run check`,
-`git diff --check`, clean tree.
-
-## Completion statement
-
-> A failed request says which reason, which field, and where in the request's
-> shape, and a person can read all three without rebuilding anything.
+- The client catalog carries evidence for one release of each client, and a
+  newer install is launched without a trust root. The window and the terminal
+  both say so; the catalog itself needs verified release material.
+- Windows and Linux release backends refuse rather than degrade, which is
+  what design 06 asks for and is not the same as supporting them.
+- No run exercises a stream that ends early through the proxy, a mid-stream
+  failover, or the Responses WebSocket path.
