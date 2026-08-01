@@ -125,11 +125,12 @@ func (codec *Codec) DecodeClientRequest(
 	}
 
 	var wire anthropicRequestWire
-	if err := decodeStrict(body, &wire); err != nil {
+	unknownReport, err := decodeTolerant(body, &wire, "$")
+	if err != nil {
 		return protocolcore.Request{}, protocolcore.TranslationReport{},
 			protocolcore.NewFailure(protocolcore.ReasonInvalidClientRequest, "$", err)
 	}
-	report := protocolcore.TranslationReport{}
+	report := unknownReport
 
 	system, systemReport, err := codec.decodeSystem(wire.System)
 	if err != nil {
@@ -578,12 +579,72 @@ func (codec *Codec) decodeSystem(
 	return blocks, report, nil
 }
 
+// decodeInstructionMessage carries a system or developer message. The IR
+// requires instruction content to be text, which is also all this dialect can
+// express in one.
+func (codec *Codec) decodeInstructionMessage(
+	messageIndex int,
+	role protocolcore.Role,
+	wire anthropicMessageWire,
+) (protocolcore.Message, protocolcore.TranslationReport, error) {
+	fail := func(err error) (
+		protocolcore.Message,
+		protocolcore.TranslationReport,
+		error,
+	) {
+		return protocolcore.Message{}, protocolcore.TranslationReport{},
+			protocolcore.NewFailure(
+				protocolcore.ReasonInvalidClientRequest,
+				fmt.Sprintf("$.messages[%d]", messageIndex),
+				err,
+			)
+	}
+	var text string
+	if err := json.Unmarshal(wire.Content, &text); err != nil {
+		var blocks []anthropicTextBlockWire
+		if blockErr := json.Unmarshal(wire.Content, &blocks); blockErr != nil {
+			return fail(errors.New("instruction content is not text"))
+		}
+		for _, block := range blocks {
+			if block.Type != "text" {
+				return protocolcore.Message{}, protocolcore.TranslationReport{},
+					protocolcore.NewFailure(
+						protocolcore.ReasonUnsupportedClientInput,
+						fmt.Sprintf("$.messages[%d].content", messageIndex),
+						errors.New("instruction block type is unsupported"),
+					)
+			}
+			text += block.Text
+		}
+	}
+	block, err := protocolcore.NewTextBlock(text)
+	if err != nil {
+		return fail(err)
+	}
+	message := protocolcore.Message{
+		Role:   role,
+		Blocks: []protocolcore.ContentBlock{block},
+	}
+	if err := message.Validate(); err != nil {
+		return fail(err)
+	}
+	return message, protocolcore.TranslationReport{}, nil
+}
+
 func (codec *Codec) decodeMessage(
 	messageIndex int,
 	wire anthropicMessageWire,
 ) (protocolcore.Message, protocolcore.TranslationReport, error) {
 	role := protocolcore.Role(wire.Role)
-	if role != protocolcore.RoleUser && role != protocolcore.RoleAssistant {
+	switch role {
+	case protocolcore.RoleUser, protocolcore.RoleAssistant:
+	case protocolcore.RoleSystem, protocolcore.RoleDeveloper:
+		// An instruction can arrive inside the message list rather than only
+		// as the top-level system parameter. Design 07 §3.2 normalizes it to
+		// the same IR role and keeps it where it was: hoisting it to the front
+		// would change what the model was told and when.
+		return codec.decodeInstructionMessage(messageIndex, role, wire)
+	default:
 		return protocolcore.Message{}, protocolcore.TranslationReport{},
 			protocolcore.NewFailure(
 				protocolcore.ReasonInvalidClientRequest,

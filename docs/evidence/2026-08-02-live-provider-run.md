@@ -87,3 +87,42 @@ rendered `api.anthropic.com:443:443`. The host field now refuses a value
 carrying a port, and the proxy writes the host alone — while still recording
 an authority the client sent that is not a usable name, because a refusal
 nobody can see is the case most worth seeing.
+
+## A real agent client
+
+`internal/desktophost.TestARealAgentClientReachesAModelThroughVibermate`
+launches the installed Claude Code binary through the product's own launcher —
+the same path `vibermate run --` takes — and asks it one question.
+
+```
+VIBERMATE_LIVE_PROVIDER_ORIGIN=http://127.0.0.1:23333/v1 \
+VIBERMATE_LIVE_PROVIDER_KEY=<redacted> \
+VIBERMATE_LIVE_PROVIDER_MODEL=dashscope:glm-5 \
+VIBERMATE_LIVE_AGENT=claude \
+go test ./internal/desktophost/ -run TestARealAgentClient -count=1 -v
+```
+
+Claude Code 2.1.220 printed `ready`. The launcher gave it the proxy address,
+the CaptureRun credential, and the local root; it knew nothing else about
+vibermate. The connection is recorded as decrypted, and a provider attempt
+reached the live backend.
+
+### What it took
+
+Two defects stood between the client and the model, and neither was reachable
+from a synthetic request:
+
+- Claude Code sends `system` messages inside the message list, not only as the
+  top-level `system` parameter. The decoder accepted only user and assistant
+  roles, so the client's first request was refused. Design 07 §3.2 normalizes
+  roles to system | developer | user | assistant | tool and requires the
+  original position to survive, which is what an instruction placed
+  mid-conversation means.
+- Claude Code sends `defer_loading`, a request option this dialect does not
+  model. Strict decoding refused the whole request over it. Clients add fields
+  faster than any translator learns them; design 07 §2.3 requires the wire
+  layer to keep unknown fields rather than let a typed unmarshal make them
+  disappear, so the field is now declared as not forwarded instead of fatal.
+  Only the request object is tolerant: an unknown field inside a tool
+  definition or a content block still fails closed, because there it changes
+  what the structure means.

@@ -607,16 +607,11 @@ func TestRequestDecoderRejectsUnknownAndUnsupportedContent(t *testing.T) {
 		body   string
 		reason protocolcore.Reason
 	}{
-		{
-			name: "unknown root field",
-			body: `{
-				"model":"claude",
-				"max_tokens":8,
-				"messages":[{"role":"user","content":"hello"}],
-				"untracked":true
-			}`,
-			reason: protocolcore.ReasonInvalidClientRequest,
-		},
+		// An unknown field beside the request options is no longer fatal. It
+		// is a request-level option this dialect does not model, and clients
+		// add them faster than any translator learns them; the loss is
+		// declared instead, which
+		// TestAnUnknownRequestFieldIsReportedRatherThanRefused covers.
 		{
 			name: "duplicate root field",
 			body: `{

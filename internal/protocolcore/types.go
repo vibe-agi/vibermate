@@ -1272,6 +1272,12 @@ const (
 	NoticeCustomToolKindEncoded               NoticeCode = "custom_tool_kind_encoded"
 	NoticeDeveloperRoleNormalized             NoticeCode = "developer_role_normalized"
 	NoticeToolOutputContentNormalized         NoticeCode = "tool_output_content_normalized"
+	// NoticeUnknownRequestFieldNotForwarded names a field the client sent that
+	// this dialect does not model. Clients add fields faster than any
+	// translator learns them; refusing the request would make the product
+	// unusable, and dropping it silently would be a translation nobody can
+	// audit. Design 07 §3.2 allows the loss only because it is declared here.
+	NoticeUnknownRequestFieldNotForwarded NoticeCode = "unknown_request_field_not_forwarded"
 )
 
 type TranslationNotice struct {
