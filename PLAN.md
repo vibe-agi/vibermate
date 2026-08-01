@@ -1,73 +1,70 @@
-# M1.0-C0c Network Blind Tunnel Data Plane
+# M1.0-C0d Catalogued Dispatch Authority
 
 Status: active
 Created: 2026-08-02
-Implementation baseline: `8737ab3`
+Implementation baseline: `d54f35e`
 Branch: `m1/root-leaf-foundation`
-Predecessor: `docs/plans/archive/2026-08-02-m1.0-c0b-egress-identity-and-audit.md`
+Predecessor: `docs/plans/archive/2026-08-02-m1.0-c0c-blind-tunnel.md`
 Defers: `docs/plans/deferred/2026-08-01-m1.0-c-macos-trust-observation.md`
 
 ## Objective
 
-The proxy refuses every CONNECT whose authority is not an enabled
-AgentEndpoint. The launcher exports `HTTP_PROXY` to the whole child process
-tree, so today an Agent's every non-model host is refused with 403: package
-installs, update checks, MCP servers, and the Agent's own fetch tools. The
-product is unusable for a real Agent until an unmatched CONNECT is tunnelled
-without decryption.
+The operation catalog is meant to be the only authority for what may be
+dispatched, but two gaps leave that authority incomplete:
+
+1. An AgentEndpoint authority is compared byte-for-byte, so a client that
+   sends a canonically equivalent authority — uppercase host, a trailing dot,
+   an internationalized name — is refused rather than matched. The design
+   requires canonicalization, and refusing a valid equivalent looks to a user
+   like the proxy is broken.
+2. The real Codex control-plane and ChatGPT-login model paths are not
+   catalogued, so they classify as unknown on a MITM-terminated connection.
 
 ## Read-only design authority
 
-- `docs/adr/0002-blind-tunnel-firewall-and-connection-events.md`;
-- `docs/adr/0015-egress-purpose-authority-and-audit-cardinality.md` §3, §9;
-- `docs/design/02-architecture.md` §10.3;
-- `docs/design/06-security.md` §4.1 and §4.3.
+- `docs/design/02-architecture.md` §4.1 and §4.2.3;
+- `docs/design/10-client-compatibility.md` §2 and §5.1;
+- `docs/adr/0006-agent-endpoint-mitm-allowlist.md`.
 
 ## Required invariants
 
-1. An unmatched CONNECT is forwarded byte-for-byte without terminating TLS.
-   No certificate is issued, no ClientHello is interpreted beyond what the
-   connection record already captures, and no content enters any pipeline.
-2. A blind connection records one `ConnectionEvent` with client-side facts and
-   one `EgressAttempt` with purpose `blind_tunnel`, payload class
-   `opaque_tunnel`, and a blind-connection parent.
-3. A blind tunnel never records a URL path, header, request body, response
-   body, or any tunnelled byte. Only counts, duration, and outcome.
-4. Bidirectional copying is bounded, cancellable, and drains within the
-   owner's shutdown deadline. A half-closed peer does not leak the other half.
-5. This Goal does not decide whether a connection is allowed. Admission stays
-   as it is until connection policy lands; blind forwarding is the transport,
-   not the decision.
+1. An authority is canonicalized before comparison: case-folded host, trailing
+   dot removed, IDN in its ASCII form, default port made explicit.
+   Canonicalization never widens the match — a wildcard, suffix, or regular
+   expression is still refused, and two distinct hosts never canonicalize
+   together.
+2. Canonicalization happens once and the canonical form is what every later
+   stage sees, so CONNECT, SNI, and per-request revalidation compare the same
+   value.
+3. Catalogued Codex operations classify the ChatGPT-login model path as
+   semantic and its control-plane paths as proven no-payload probes.
+4. Nothing in this Goal widens what may be decrypted. The exact-origin
+   issuance authority is unchanged.
 
 ## Non-goals
 
-- `allow/deny/ask` and the ApprovalCenter, which are separate Goals;
-- cleartext HTTP forward proxying;
-- WebSocket semantics beyond opaque byte forwarding;
-- egress policy selection and upstream proxies.
+- connection policy, cleartext forwarding, IngressProfile;
+- new provider dialects or codecs;
+- trust-store work.
 
 ## Bottom-up implementation
 
-- [ ] Add a bounded bidirectional tunnel with owner-context cancellation and
-      byte counting on both directions.
-- [ ] Dial the unmatched authority through the gated egress boundary so a
-      blind tunnel cannot bypass planned offline hold.
-- [ ] Emit the blind `EgressAttempt` and complete it on close.
-- [ ] Prove no path, header, or payload reaches any record.
-- [ ] Prove shutdown drains an active tunnel and a half-closed peer.
+- [ ] Canonicalize an authority in one place and prove equivalent forms match
+      while distinct hosts still do not.
+- [ ] Prove the canonical form reaches CONNECT, SNI, and revalidation.
+- [ ] Catalogue the observed Codex control-plane and model operations.
+- [ ] Prove no catalogued addition widens issuance.
 
 ## Gates
 
 `make check`, `gofmt -l .`, `go test -count=1 ./...`,
-`go test -race -count=1 ./...`, repeated race stress for `loopbackproxy`,
-`connectionevent`, `egressaudit`, `go vet ./...`, `go mod tidy -diff`,
+`go test -race -count=1 ./...`, `go vet ./...`, `go mod tidy -diff`,
 `go mod verify`, pinned `govulncheck`, `git diff --check`, clean tree.
 
 ## Completion statement
 
-> A connection whose authority is not an enabled AgentEndpoint is forwarded
-> without decryption and leaves both a connection record and a per-egress
-> record, neither of which contains any tunnelled byte.
+> A canonically equivalent authority matches its AgentEndpoint, the canonical
+> form is what every later stage compares, and the observed Codex operations
+> are catalogued rather than unknown.
 
-It does not prove connection policy, cleartext forwarding, or release
-readiness.
+It does not widen what may be decrypted.
