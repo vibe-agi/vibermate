@@ -38,14 +38,20 @@ Predecessor: `docs/plans/archive/2026-08-02-m1.0-c0l-release-path.md`
 
 ## 顺序
 
-- [ ] 在真运行时里断言 `count_tokens` 收到 422 + `X-Vibermate-Reason:
-      profile_operation_unsupported` + Anthropic 错误信封
-- [ ] 记录真实客户端在该运行时里请求了哪些 operation（含是否请求 count_tokens）
-- [ ] 尝试触发 count_tokens：大上下文、显式 compaction、以及静态读指出的调用点
-- [ ] 回归：拒绝路径下正文不进入任何 buffer / log / record / 原站
-- [ ] 按实际观察更新证据文档；触发不到就写清尝试与边界
-- [ ] 第 3 步：把 C0a 状态冻结（`count_tokens` 只允许 local | estimated |
-      unsupported，不实现 profile_endpoint，不夹带 Language Bridge）
+- [x] 找到可触发 `count_tokens` 的非交互路径：`claude plugin details`
+      （`--print` 从不请求它，这是上次只能记 `not_observed` 的原因）
+- [x] 自带 marketplace/插件夹具，观察不依赖机器上装了什么
+- [x] 真运行时观察：真 CaptureRun、真本地 Root、真 MITM、真准入路径
+      → `internal/desktophost` 的 `TestAFixedClaudeCode...`
+- [x] 结果：**降级**——客户端 exit 0 并给出本地估算
+- [x] 用差分证明那些数字是本地的：同夹具下端点答 `{"input_tokens":999999}`
+      时打印 `~999,999`，答 422 时打印 `~39`
+- [x] 用变异证明请求确实到达并被拒：把 `count_tokens` 改回
+      `OperationPayloadControl`，同一次运行有 **6,488 字节**发往
+      `api.anthropic.com` 并触发字节上限失败
+- [x] 按实际观察重写证据文档，并记下已知可观测性缺口
+- [x] 第 3 步：把 C0a 冻结写成代码（`internal/operationcatalog/c0a_freeze_test.go`），
+      三条断言各自经变异确认承重；核实无 `profile_endpoint`、无 Language Bridge 夹带
 
 ## 门禁
 
