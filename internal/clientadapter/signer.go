@@ -38,8 +38,21 @@ type Signer struct {
 	CanonicalEntrypointName string
 	ArtifactRoot            string
 	SignedRelativePath      string
-	Requirement             codesignature.Requirement
-	LaunchRecipe            LaunchRecipe
+	// SigningIdentifier and TeamID are what a catalog declares. It cannot
+	// declare a requirement expression: one is generated from these two
+	// fields in a single fixed shape, so a mistaken entry can name the wrong
+	// publisher but cannot express a wider claim than ADR-0016 permits.
+	SigningIdentifier codesignature.SigningIdentifier
+	TeamID            codesignature.TeamID
+	LaunchRecipe      LaunchRecipe
+}
+
+// requirement builds the platform expression this entry stands for.
+func (signer Signer) requirement() (codesignature.Requirement, error) {
+	return codesignature.DeveloperIDRequirement(
+		signer.SigningIdentifier,
+		signer.TeamID,
+	)
 }
 
 // SignerEvidence is what a recognized detection carries instead of Evidence.
@@ -88,17 +101,11 @@ func validateSigner(signer Signer) error {
 	if !signer.LaunchRecipe.RequiresRoot() {
 		return errors.New("a signer entry must declare a Root-bearing recipe")
 	}
-	if !signer.Requirement.Valid() {
-		return errors.New("client signer requirement is invalid")
-	}
-	// A catalogued publisher is a Developer ID publisher. An Apple-anchored
-	// requirement that names no team is satisfied by anything Apple ever
-	// anchored, including the operating system's own binaries, and this
-	// catalog is about third-party clients.
-	if !strings.Contains(string(signer.Requirement), "subject.OU") {
-		return errors.New(
-			"client signer requirement must name a Developer ID team",
-		)
+	// Building it is the validation. A catalogued publisher is a Developer ID
+	// publisher by construction now, rather than by a check on a string
+	// somebody wrote.
+	if _, err := signer.requirement(); err != nil {
+		return fmt.Errorf("client signer identity is invalid: %w", err)
 	}
 	if signer.ArtifactRoot == "" {
 		return errors.New("client signer artifact root is required")
@@ -199,8 +206,12 @@ func verifySigner(
 	if !info.Mode().IsRegular() {
 		return "", false, nil
 	}
+	requirement, err := signer.requirement()
+	if err != nil {
+		return "", false, fmt.Errorf("client signer identity is invalid: %w", err)
+	}
 	switch err := codesignature.Verify(
-		ctx, resolvedPath, signer.Requirement,
+		ctx, resolvedPath, requirement,
 	); {
 	case err == nil:
 		return resolvedPath, true, nil
@@ -237,25 +248,16 @@ func resolveExisting(path string) (string, error) {
 // it usable where a per-build digest is not.
 func ClaudeCodeSignerDarwin() Signer {
 	return Signer{
-		ID:              "claude-code",
-		Revision:        1,
-		OperatingSystem: "darwin",
-		Architecture:    "arm64",
-		InstallShape:    InstallNativeSingleBinary,
-		InvocationLabel: "claude",
-		ArtifactRoot:    ".",
-		// The platform's own designated requirement, frozen whole rather than
-		// hand-written. A subset of it is a weaker claim than the publisher
-		// made, and the Developer ID certificate extensions are part of what
-		// distinguishes a Developer ID signature from any other Apple-anchored
-		// one.
-		Requirement: codesignature.Requirement(
-			`identifier "com.anthropic.claude-code" and anchor apple generic ` +
-				`and certificate 1[field.1.2.840.113635.100.6.2.6] ` +
-				`and certificate leaf[field.1.2.840.113635.100.6.1.13] ` +
-				`and certificate leaf[subject.OU] = Q6L2SF6YDW`,
-		),
-		LaunchRecipe: LaunchNodeEnvProxy,
+		ID:                "claude-code",
+		Revision:          1,
+		OperatingSystem:   "darwin",
+		Architecture:      "arm64",
+		InstallShape:      InstallNativeSingleBinary,
+		InvocationLabel:   "claude",
+		ArtifactRoot:      ".",
+		SigningIdentifier: "com.anthropic.claude-code",
+		TeamID:            "Q6L2SF6YDW",
+		LaunchRecipe:      LaunchNodeEnvProxy,
 	}
 }
 
@@ -274,16 +276,8 @@ func CodexCLISignerDarwin() Signer {
 		ArtifactRoot:            "..",
 		SignedRelativePath: "../node_modules/@openai/codex-darwin-arm64/" +
 			"vendor/aarch64-apple-darwin/bin/codex",
-		// Frozen whole, for the same reason. The previous form carried the
-		// team but not the identifier, so any program signed by the same
-		// OpenAI Developer ID team satisfied it — a wider claim than
-		// ADR-0016 makes.
-		Requirement: codesignature.Requirement(
-			`identifier codex and anchor apple generic ` +
-				`and certificate 1[field.1.2.840.113635.100.6.2.6] ` +
-				`and certificate leaf[field.1.2.840.113635.100.6.1.13] ` +
-				`and certificate leaf[subject.OU] = "2DC432GLL2"`,
-		),
-		LaunchRecipe: LaunchSSLCertFile,
+		SigningIdentifier: "codex",
+		TeamID:            "2DC432GLL2",
+		LaunchRecipe:      LaunchSSLCertFile,
 	}
 }

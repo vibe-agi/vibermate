@@ -1,6 +1,6 @@
 # Signed Client Identity Hardening
 
-Status: active
+Status: complete
 Created: 2026-08-02
 Implementation baseline: `1783d4d` (design) / `bfd5df5` (implementation)
 Design authority: `docs/adr/0016-signed-identity-client-recognition.md` —
@@ -38,12 +38,13 @@ Signer 改为持有 typed `SigningIdentifier` 与 `TeamID`；requirement 由 cod
 
 ## 顺序
 
-- [ ] typed `SigningIdentifier` / `TeamID`，含字符集与长度校验
-- [ ] codesignature 从字段生成固定模板 requirement，取消 caller 提交表达式的入口
-- [ ] 删除两处 `strings.Contains` 安全判定
-- [ ] repositorycheck 增加结构门禁，禁止 catalog 出现 raw requirement literal
-- [ ] 边界测试：真实安装仍识别；错 identifier / 错 Team ID / 未签名 / 被篡改全部拒绝；
-      字符串走私不再可表达；Linux 仍无 recognized tier
+- [x] typed `SigningIdentifier` / `TeamID`，含字符集与长度校验
+- [x] `DeveloperIDRequirement` 从字段生成固定模板；`Requirement` 结构体不可从字符串构造，
+      caller 无法提交表达式
+- [x] 删除两处 `strings.Contains` 安全判定
+- [x] `CheckSignerIdentityBoundary` 结构门禁；变异确认：注释放行、literal 拦下
+- [x] 边界测试：真机 Claude 与 Codex 0.146.0 仍被识别；错 identifier / 错 Team ID / 未签名 /
+      被篡改全部拒绝；字符串走私在**类型层**不可表达（编译器拒绝）；Linux 仍无 recognized tier
 
 ## 门禁
 

@@ -2,6 +2,7 @@ package clientadapter_test
 
 import (
 	"context"
+	"errors"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -135,21 +136,120 @@ func TestAProgramNamedLikeACatalogueClientIsNotRecognized(t *testing.T) {
 	}
 }
 
-// A signer entry that names no platform anchor would accept anything claiming
-// the right identifier, so the catalog refuses to hold one.
-func TestACatalogRefusesASignerWithoutAPlatformAnchor(t *testing.T) {
+// A catalog can no longer write a requirement, so what it can get wrong is an
+// identity — and an identity that cannot produce a requirement is refused
+// before the entry exists.
+func TestACatalogRefusesAnUnusableSignerIdentity(t *testing.T) {
 	t.Parallel()
 
-	signer := clientadapter.ClaudeCodeSignerDarwin()
-	signer.Requirement = codesignature.Requirement(
-		`identifier "com.anthropic.claude-code"`,
+	for _, testCase := range []struct {
+		name       string
+		identifier codesignature.SigningIdentifier
+		team       codesignature.TeamID
+	}{
+		{"expression syntax in the identifier", `anchor apple subject.OU`, "Q6L2SF6YDW"},
+		{"a quote in the identifier", `com.example"`, "Q6L2SF6YDW"},
+		{"an empty identifier", "", "Q6L2SF6YDW"},
+		{"a lowercase team", "com.example.app", "q6l2sf6ydw"},
+		{"a short team", "com.example.app", "SHORT"},
+		{"no team at all", "com.example.app", ""},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			t.Parallel()
+
+			signer := clientadapter.ClaudeCodeSignerDarwin()
+			signer.SigningIdentifier = testCase.identifier
+			signer.TeamID = testCase.team
+			if _, err := clientadapter.NewCatalogWithSigners(
+				1,
+				[]clientadapter.Release{clientadapter.ClaudeCode221220DarwinARM64()},
+				[]clientadapter.Signer{signer},
+			); err == nil {
+				t.Fatalf("%s was accepted", testCase.name)
+			}
+		})
+	}
+}
+
+// The property the whole tier rests on, asserted against a real Developer ID
+// signature: accepting a publisher must not accept a modified copy of their
+// file. This lives here rather than in `codesignature` because Apple's own
+// platform binaries are not Developer ID signed, so that package has no
+// positive case it can reach without a client installed.
+func TestAModifiedCopyOfASignedClientIsRefused(t *testing.T) {
+	t.Parallel()
+
+	entrypoint := installedClaudePath(t)
+	resolved, err := filepath.EvalSymlinks(entrypoint)
+	if err != nil {
+		t.Skipf("claude could not be resolved: %v", err)
+	}
+	original, err := os.ReadFile(resolved)
+	if err != nil {
+		t.Skipf("the installed client is unreadable: %v", err)
+	}
+	requirement, err := codesignature.DeveloperIDRequirement(
+		clientadapter.ClaudeCodeSignerDarwin().SigningIdentifier,
+		clientadapter.ClaudeCodeSignerDarwin().TeamID,
 	)
-	if _, err := clientadapter.NewCatalogWithSigners(
-		1,
-		[]clientadapter.Release{clientadapter.ClaudeCode221220DarwinARM64()},
-		[]clientadapter.Signer{signer},
-	); err == nil {
-		t.Fatal("an unanchored signer requirement was accepted")
+	if err != nil {
+		t.Fatal(err)
+	}
+	copied := filepath.Join(t.TempDir(), "claude")
+	if err := os.WriteFile(copied, original, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := codesignature.Verify(
+		context.Background(), copied, requirement,
+	); err != nil {
+		t.Fatalf("an unmodified copy was refused, so the rest proves nothing: %v", err)
+	}
+
+	modified := append([]byte(nil), original...)
+	modified[len(modified)/2] ^= 0xFF
+	if err := os.WriteFile(copied, modified, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := codesignature.Verify(
+		context.Background(), copied, requirement,
+	); !errors.Is(err, codesignature.ErrNotSatisfied) {
+		t.Fatalf("a modified copy was accepted: %v", err)
+	}
+}
+
+// A different publisher's team, and a different program from the same
+// publisher, must both be refused by the entry that names neither.
+func TestNeitherAnotherTeamNorAnotherProgramIsAccepted(t *testing.T) {
+	t.Parallel()
+
+	entrypoint := installedClaudePath(t)
+	resolved, err := filepath.EvalSymlinks(entrypoint)
+	if err != nil {
+		t.Skipf("claude could not be resolved: %v", err)
+	}
+	for _, testCase := range []struct {
+		name       string
+		identifier codesignature.SigningIdentifier
+		team       codesignature.TeamID
+	}{
+		{"another team", "com.anthropic.claude-code", "2DC432GLL2"},
+		{"another program from the same team", "com.anthropic.other", "Q6L2SF6YDW"},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			t.Parallel()
+
+			requirement, err := codesignature.DeveloperIDRequirement(
+				testCase.identifier, testCase.team,
+			)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := codesignature.Verify(
+				context.Background(), resolved, requirement,
+			); !errors.Is(err, codesignature.ErrNotSatisfied) {
+				t.Fatalf("%s was accepted: %v", testCase.name, err)
+			}
+		})
 	}
 }
 

@@ -53,6 +53,7 @@ func Check(repositoryRoot string) error {
 	violations = append(violations, CheckDataPlaneAccessBoundary(repositoryRoot)...)
 	violations = append(violations, CheckDesktopFrontendBoundary(repositoryRoot)...)
 	violations = append(violations, CheckSystemTrustBoundary(repositoryRoot)...)
+	violations = append(violations, CheckSignerIdentityBoundary(repositoryRoot)...)
 	violations = append(violations, CheckPayloadDispatchBoundary(repositoryRoot)...)
 	violations = append(violations, CheckIdentityComposition(repositoryRoot)...)
 	violations = append(
@@ -1174,4 +1175,104 @@ func relativeDisplayPath(root, path string) string {
 		return path
 	}
 	return filepath.ToSlash(relative)
+}
+
+// CheckSignerIdentityBoundary keeps a code-signing requirement something this
+// product generates rather than something a catalog writes.
+//
+// The requirement used to be a string a signer entry carried, checked with
+// `strings.Contains`. A single literal could satisfy every check and mean
+// something else — `identifier "anchor apple subject.OU"` contains all three
+// words — so the guarantee was a comment rather than a property. It is now
+// generated from two validated fields, and this stops the string form growing
+// back: nothing outside the one generator may write requirement syntax, and
+// nothing may reach `codesign` except through `codesignature`.
+func CheckSignerIdentityBoundary(repositoryRoot string) []Violation {
+	const (
+		generatorPath   = "internal/codesignature/identity.go"
+		signaturePath   = "internal/codesignature/signature.go"
+		checkerPath     = "internal/repositorycheck/check.go"
+		codesignProgram = "/usr/bin/codesign"
+	)
+	// Fragments of the requirement language. Anywhere but the generator, one
+	// of these in a literal is a requirement being written by hand.
+	requirementSyntax := []string{
+		"anchor apple",
+		"subject.OU",
+		"certificate leaf[",
+		"1.2.840.113635.100.6",
+	}
+
+	var violations []Violation
+	fileSet := token.NewFileSet()
+	err := filepath.WalkDir(
+		repositoryRoot,
+		func(path string, entry fs.DirEntry, walkErr error) error {
+			if walkErr != nil {
+				return walkErr
+			}
+			if entry.IsDir() {
+				switch entry.Name() {
+				case ".git", "node_modules", "target", "testdata", "vendor":
+					return filepath.SkipDir
+				}
+				return nil
+			}
+			if !strings.HasSuffix(entry.Name(), ".go") {
+				return nil
+			}
+			relative, err := filepath.Rel(repositoryRoot, path)
+			if err != nil {
+				return err
+			}
+			relative = filepath.ToSlash(relative)
+			if relative == generatorPath || relative == checkerPath ||
+				strings.HasSuffix(relative, "_test.go") {
+				return nil
+			}
+			parsed, err := parser.ParseFile(fileSet, path, nil, 0)
+			if err != nil {
+				return nil
+			}
+			ast.Inspect(parsed, func(node ast.Node) bool {
+				literal, ok := node.(*ast.BasicLit)
+				if !ok || literal.Kind != token.STRING {
+					return true
+				}
+				value := literal.Value
+				position := fileSet.Position(literal.Pos())
+				for _, fragment := range requirementSyntax {
+					if !strings.Contains(value, fragment) {
+						continue
+					}
+					violations = append(violations, Violation{
+						Rule:    "signer-requirement-literal",
+						Path:    relative,
+						Line:    position.Line,
+						Message: "a code-signing requirement is generated from validated fields, not written as a literal",
+					})
+					break
+				}
+				if strings.Contains(value, codesignProgram) &&
+					relative != signaturePath {
+					violations = append(violations, Violation{
+						Rule:    "signer-verification-boundary",
+						Path:    relative,
+						Line:    position.Line,
+						Message: "signature verification goes through internal/codesignature",
+					})
+				}
+				return true
+			})
+			return nil
+		},
+	)
+	if err != nil {
+		violations = append(violations, Violation{
+			Rule:    "signer-identity-boundary",
+			Path:    ".",
+			Message: "signer identity boundary could not be inspected",
+		})
+	}
+	return violations
 }
