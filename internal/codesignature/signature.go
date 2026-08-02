@@ -54,10 +54,17 @@ func (requirement Requirement) Valid() bool {
 	if trimmed == "" || len(trimmed) > 1024 {
 		return false
 	}
-	// A requirement that does not anchor to the platform root accepts any
-	// self-signed file that claims the right name, which is the failure this
-	// package exists to avoid.
-	return strings.Contains(trimmed, "anchor apple")
+	// Two things make a requirement an identity claim rather than a category
+	// one. Without an anchor it accepts anything self-signed under the right
+	// name; without an identifier it accepts every program its publisher ever
+	// signed, which is how the first Codex entry was wider than the ADR it
+	// implemented.
+	//
+	// Whether a requirement must additionally name a Developer ID team is a
+	// question about what a catalog may hold, not about what this package can
+	// evaluate, so it is asked where signer entries are validated.
+	return strings.Contains(trimmed, "anchor apple") &&
+		strings.Contains(trimmed, "identifier ")
 }
 
 // Verify reports whether the platform accepts path as satisfying requirement.

@@ -105,14 +105,18 @@ type LaunchGrant struct {
 	// root and cannot complete a decrypted handshake; the launcher says so
 	// rather than letting the client fail with a transport error nobody can
 	// explain.
-	Recognition          clientadapter.Recognition `json:"recognition"`
-	Adapter              *clientadapter.Evidence   `json:"adapter,omitempty"`
-	ExecutablePath       string                    `json:"executablePath"`
-	ProxyOrigin          string                    `json:"proxyOrigin"`
-	ProxyCapability      string                    `json:"proxyCapability"`
-	RunCapability        string                    `json:"runCapability"`
-	RootPEMPath          string                    `json:"rootPemPath,omitempty"`
-	ProtectedAuthorities []string                  `json:"protectedAuthorities"`
+	Recognition clientadapter.Recognition `json:"recognition"`
+	Adapter     *clientadapter.Evidence   `json:"adapter,omitempty"`
+	// Signer is what a recognized launch carries instead of Adapter. The two
+	// are different claims and never both hold, and a launcher that saw only
+	// Adapter refused a recognized grant as though it had no evidence at all.
+	Signer               *clientadapter.SignerEvidence `json:"signer,omitempty"`
+	ExecutablePath       string                        `json:"executablePath"`
+	ProxyOrigin          string                        `json:"proxyOrigin"`
+	ProxyCapability      string                        `json:"proxyCapability"`
+	RunCapability        string                        `json:"runCapability"`
+	RootPEMPath          string                        `json:"rootPemPath,omitempty"`
+	ProtectedAuthorities []string                      `json:"protectedAuthorities"`
 }
 
 type AttachRequest struct {
@@ -250,13 +254,18 @@ func (handler *Handler) create(
 	// stops being silent, and a launch that cannot reach a person simply
 	// launches without a Root: that is the same place an uncatalogued program
 	// has always been, not a failure to start.
+	var signer *clientadapter.SignerEvidence
 	if detection.Recognition == clientadapter.RecognitionRecognized &&
 		detection.Signer != nil {
-		signer := *detection.Signer
-		outcome, askErr := handler.askClientRoot(request.Context(), signer)
+		evidence := *detection.Signer
+		outcome, askErr := handler.askClientRoot(request.Context(), evidence)
 		if askErr == nil && outcome {
-			recipe = signer.LaunchRecipe
+			recipe = evidence.LaunchRecipe
 			rootPath = handler.root.Path()
+			// The grant must carry what justified the recipe. Without it the
+			// launcher sees a Root-bearing recipe backed by nothing and
+			// refuses to start the client — which is what happened.
+			signer = &evidence
 		}
 	}
 	grant, err := handler.runs.Create(
@@ -280,6 +289,7 @@ func (handler *Handler) create(
 		LaunchRecipe:         recipe,
 		Recognition:          detection.Recognition,
 		Adapter:              adapter,
+		Signer:               signer,
 		ExecutablePath:       detection.CanonicalPath,
 		ProxyOrigin:          handler.proxyOrigin,
 		ProxyCapability:      grant.ProxyCapability.Value(),

@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 
 	"github.com/vibe-agi/vibermate/internal/codesignature"
@@ -90,6 +91,15 @@ func validateSigner(signer Signer) error {
 	if !signer.Requirement.Valid() {
 		return errors.New("client signer requirement is invalid")
 	}
+	// A catalogued publisher is a Developer ID publisher. An Apple-anchored
+	// requirement that names no team is satisfied by anything Apple ever
+	// anchored, including the operating system's own binaries, and this
+	// catalog is about third-party clients.
+	if !strings.Contains(string(signer.Requirement), "subject.OU") {
+		return errors.New(
+			"client signer requirement must name a Developer ID team",
+		)
+	}
 	if signer.ArtifactRoot == "" {
 		return errors.New("client signer artifact root is required")
 	}
@@ -107,15 +117,23 @@ func cloneSigner(signer Signer) Signer {
 	return signer
 }
 
-// signersForLabel returns the entries a program invoked by this name could be.
+// signersForLabel returns the entries a program invoked by this name could be
+// on this machine.
+//
 // Name alone decides nothing; it only bounds which requirements are worth
-// evaluating, exactly as it does for releases.
+// evaluating. The platform fields do the same job and were declared but not
+// consulted, so an entry describing a darwin/arm64 install was offered for a
+// requirement check on any platform at all — harmless where signature
+// verification is unavailable, and wrong in principle everywhere.
 func (verifier *ReleaseVerifier) signersForLabel(label string) []Signer {
 	var matches []Signer
 	for _, signer := range verifier.signers {
-		if signer.InvocationLabel == label {
-			matches = append(matches, signer)
+		if signer.InvocationLabel != label ||
+			signer.OperatingSystem != runtime.GOOS ||
+			signer.Architecture != runtime.GOARCH {
+			continue
 		}
+		matches = append(matches, signer)
 	}
 	return matches
 }
@@ -226,10 +244,16 @@ func ClaudeCodeSignerDarwin() Signer {
 		InstallShape:    InstallNativeSingleBinary,
 		InvocationLabel: "claude",
 		ArtifactRoot:    ".",
+		// The platform's own designated requirement, frozen whole rather than
+		// hand-written. A subset of it is a weaker claim than the publisher
+		// made, and the Developer ID certificate extensions are part of what
+		// distinguishes a Developer ID signature from any other Apple-anchored
+		// one.
 		Requirement: codesignature.Requirement(
-			`anchor apple generic and ` +
-				`certificate leaf[subject.OU] = "Q6L2SF6YDW" and ` +
-				`identifier "com.anthropic.claude-code"`,
+			`identifier "com.anthropic.claude-code" and anchor apple generic ` +
+				`and certificate 1[field.1.2.840.113635.100.6.2.6] ` +
+				`and certificate leaf[field.1.2.840.113635.100.6.1.13] ` +
+				`and certificate leaf[subject.OU] = Q6L2SF6YDW`,
 		),
 		LaunchRecipe: LaunchNodeEnvProxy,
 	}
@@ -250,9 +274,15 @@ func CodexCLISignerDarwin() Signer {
 		ArtifactRoot:            "..",
 		SignedRelativePath: "../node_modules/@openai/codex-darwin-arm64/" +
 			"vendor/aarch64-apple-darwin/bin/codex",
+		// Frozen whole, for the same reason. The previous form carried the
+		// team but not the identifier, so any program signed by the same
+		// OpenAI Developer ID team satisfied it — a wider claim than
+		// ADR-0016 makes.
 		Requirement: codesignature.Requirement(
-			`anchor apple generic and ` +
-				`certificate leaf[subject.OU] = "2DC432GLL2"`,
+			`identifier codex and anchor apple generic ` +
+				`and certificate 1[field.1.2.840.113635.100.6.2.6] ` +
+				`and certificate leaf[field.1.2.840.113635.100.6.1.13] ` +
+				`and certificate leaf[subject.OU] = "2DC432GLL2"`,
 		),
 		LaunchRecipe: LaunchSSLCertFile,
 	}

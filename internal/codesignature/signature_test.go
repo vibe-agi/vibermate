@@ -15,7 +15,13 @@ import (
 // stands in for a client binary so these runs need nothing installed.
 const appleSignedProbe = "/bin/echo"
 
-const appleAnchor = codesignature.Requirement("anchor apple")
+// appleEchoRequirement is the platform's own designated requirement for the
+// probe binary, taken whole. Apple signs its binaries with no Developer ID
+// team, which is why a catalog would never hold this one — but it is a valid
+// identity claim and that is what this package evaluates.
+const appleAnchor = codesignature.Requirement(
+	`identifier "com.apple.echo" and anchor apple`,
+)
 
 func TestARequirementMustAnchorToThePlatformRoot(t *testing.T) {
 	t.Parallel()
@@ -38,8 +44,15 @@ func TestARequirementMustAnchorToThePlatformRoot(t *testing.T) {
 			want:        false,
 		},
 		{
-			name: "anchored identity is usable",
+			name: "an anchored team without an identifier accepts every program that publisher signed",
 			requirement: `anchor apple generic and ` +
+				`certificate leaf[subject.OU] = "Q6L2SF6YDW"`,
+			want: false,
+		},
+		{
+			name: "an anchored identifier is an identity claim",
+			requirement: `identifier "com.anthropic.claude-code" and ` +
+				`anchor apple generic and ` +
 				`certificate leaf[subject.OU] = "Q6L2SF6YDW"`,
 			want: true,
 		},
@@ -67,9 +80,14 @@ func TestVerifyRejectsUnusableInput(t *testing.T) {
 		t.Fatal("a relative path was accepted")
 	}
 	if err := codesignature.Verify(
-		context.Background(), "/bin/echo", "identifier \"x\"",
+		context.Background(), "/bin/echo", `identifier "x"`,
 	); err == nil {
 		t.Fatal("an unanchored requirement was accepted")
+	}
+	if err := codesignature.Verify(
+		context.Background(), "/bin/echo", "anchor apple generic",
+	); err == nil {
+		t.Fatal("a requirement naming no identifier was accepted")
 	}
 }
 
@@ -105,7 +123,8 @@ func TestADifferentSignerIsRefused(t *testing.T) {
 	err := codesignature.Verify(
 		context.Background(),
 		appleSignedProbe,
-		`anchor apple generic and certificate leaf[subject.OU] = "Q6L2SF6YDW"`,
+		`identifier "com.anthropic.claude-code" and anchor apple generic and `+
+			`certificate leaf[subject.OU] = "Q6L2SF6YDW"`,
 	)
 	if !errors.Is(err, codesignature.ErrNotSatisfied) {
 		t.Fatalf("got %v, want ErrNotSatisfied", err)
