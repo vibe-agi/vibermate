@@ -9,35 +9,47 @@ import (
 	"strings"
 )
 
+// Composition packages, by import path. Names are never trusted: a file
+// chooses what to call an import, so `vmruntime.Start` and
+// `productruntime.Start` are the same call and only the path says so.
+const (
+	daemonImportPath  = "github.com/vibe-agi/vibermate/internal/desktopdaemon"
+	hostImportPath    = "github.com/vibe-agi/vibermate/internal/desktophost"
+	runtimeImportPath = "github.com/vibe-agi/vibermate/internal/productruntime"
+)
+
+const (
+	desktopMainFile         = "cmd/vibermated/main.go"
+	daemonPackageDir        = "internal/desktopdaemon"
+	hostPackageDir          = "internal/desktophost"
+	runtimePackageDir       = "internal/productruntime"
+	productionBuildersLocal = "productionBuilders"
+)
+
 // CheckProductionCompositionBoundary keeps one chain from the Desktop entry
 // point to the runtime, and keeps it the only one.
 //
-// Today it happens to be single:
+//	main.main → desktopdaemon.Run → desktophost.Start → productruntime.Start
+//	→ productionBuilders()
 //
-//	cmd/vibermated → desktopdaemon.ProductionOptions/Run → desktophost.Start
-//	→ productruntime.Start → productionBuilders()
+// The first version asked whether a package contained a call anywhere, and
+// resolved selectors by receiver name. Both were bypassable and a review found
+// them:
 //
-// That is a fact about the current source, not a property anything enforces.
-// Nothing stops a second path being added, nothing stops the Desktop entry
-// point reaching past the daemon into the host or the runtime, and nothing
-// stops a test builder or a development dependency being selected on the way.
-// A shipped product assembled through an unreviewed path is the failure this
-// exists to make impossible to introduce quietly.
+//   - a decoy satisfied it. `desktopdaemon.Run` could stop starting the host
+//     entirely so long as some unused function in the package still called it;
+//   - an alias defeated it. `import vmruntime ".../productruntime"` followed by
+//     `vmruntime.Start(...)` was invisible, as was a dot import or taking the
+//     function as a value.
+//
+// So a call must appear inside the exact function body that owes it, and
+// selectors resolve through the file's own import declarations. A dot import of
+// a composition package is refused outright rather than analysed, because it
+// erases the qualifier the resolution depends on.
 //
 // It checks source shape and nothing else. It does not prove the packaged
 // artefact for any commit runs.
 func CheckProductionCompositionBoundary(repositoryRoot string) []Violation {
-	const (
-		desktopMain        = "cmd/vibermated/main.go"
-		daemonPackage      = "internal/desktopdaemon"
-		hostPackage        = "internal/desktophost"
-		runtimePackage     = "internal/productruntime"
-		daemonImport       = "github.com/vibe-agi/vibermate/internal/desktopdaemon"
-		hostImport         = "github.com/vibe-agi/vibermate/internal/desktophost"
-		runtimeImport      = "github.com/vibe-agi/vibermate/internal/productruntime"
-		productionBuilders = "productionBuilders"
-	)
-
 	files, err := productionGoFiles(repositoryRoot)
 	if err != nil {
 		return []Violation{{
@@ -48,155 +60,283 @@ func CheckProductionCompositionBoundary(repositoryRoot string) []Violation {
 	}
 
 	var violations []Violation
-	// Each link is assumed absent until seen, so deleting a call is a
-	// violation rather than a silent pass. A guard that only rejects extra
-	// paths would let the chain be cut instead of widened.
-	sawDaemonStart := false
-	sawHostStart := false
-	sawRuntimeStart := false
-	sawProductionBuilders := false
-
-	// A link is only required where its component exists. Other boundary
-	// fixtures carry a Desktop entry point without a daemon, and demanding the
-	// whole chain of them would make this rule fire on repositories it has
-	// nothing to say about — a guard reporting on what it was not asked to
-	// look at is noise that gets suppressed rather than fixed.
-	hasDesktopMain := false
-	hasDaemon := false
-	hasHost := false
-	hasRuntime := false
+	present := map[string]bool{}
 	for _, file := range files {
 		switch {
-		case file.relative == desktopMain:
-			hasDesktopMain = true
-		case strings.HasPrefix(file.relative, daemonPackage+"/"):
-			hasDaemon = true
-		case strings.HasPrefix(file.relative, hostPackage+"/"):
-			hasHost = true
-		case strings.HasPrefix(file.relative, runtimePackage+"/"):
-			hasRuntime = true
+		case file.relative == desktopMainFile:
+			present["main"] = true
+		case strings.HasPrefix(file.relative, daemonPackageDir+"/"):
+			present["daemon"] = true
+		case strings.HasPrefix(file.relative, hostPackageDir+"/"):
+			present["host"] = true
+		case strings.HasPrefix(file.relative, runtimePackageDir+"/"):
+			present["runtime"] = true
 		}
+		violations = append(violations, file.dotImportViolations()...)
 	}
 
+	// Each link names the exact function that owes the call, and who else may
+	// make it. A caller outside the allowlist is a second composition path,
+	// which is what "one chain" means.
+	for _, link := range []compositionLink{{
+		required: present["main"] && present["daemon"],
+		holder:   desktopMainFile,
+		function: "main",
+		target:   calledFunction{importPath: daemonImportPath, name: "Run"},
+		callers:  []string{desktopMainFile},
+		missing:  "desktop-entry-does-not-run-the-daemon",
+		extra:    "unreviewed-daemon-composition",
+	}, {
+		required: present["daemon"] && present["host"],
+		holder:   daemonPackageDir,
+		function: "Run",
+		target:   calledFunction{importPath: hostImportPath, name: "Start"},
+		callers:  []string{daemonPackageDir + "/"},
+		missing:  "daemon-does-not-start-the-host",
+		extra:    "unreviewed-host-composition",
+	}, {
+		required: present["host"] && present["runtime"],
+		holder:   hostPackageDir,
+		function: "Start",
+		target:   calledFunction{importPath: runtimeImportPath, name: "Start"},
+		callers:  []string{hostPackageDir + "/", runtimePackageDir + "/"},
+		missing:  "host-does-not-start-the-runtime",
+		extra:    "unreviewed-runtime-composition",
+	}} {
+		violations = append(violations, link.check(files)...)
+	}
+
+	// The runtime's selection of production builders is a plain call in its
+	// own package, so it needs no import resolution — only the same insistence
+	// that it appear in the function that owes it.
+	if present["runtime"] {
+		violations = append(violations, checkLocalCallInFunction(
+			files,
+			runtimePackageDir,
+			"Start",
+			productionBuildersLocal,
+			"runtime-does-not-select-production-builders",
+		)...)
+	}
+
+	// The Desktop entry point composes through the daemon. Reaching past it is
+	// how a second chain begins, and it is checked by import path so an alias
+	// does not hide it.
 	for _, file := range files {
-		switch {
-		case file.relative == desktopMain:
-			// The entry point may reach the daemon and nothing deeper.
-			// Reaching past it is how a second composition begins.
-			for _, imported := range file.imports {
-				switch imported.path {
-				case hostImport, runtimeImport:
-					violations = append(violations, Violation{
-						Rule:    "desktop-entry-reaches-past-the-daemon",
-						Path:    file.relative,
-						Line:    imported.line,
-						Message: "the Desktop entry point composes the product through desktopdaemon, not by importing the host or runtime itself",
-					})
-				}
-			}
-			if callsSelector(file.parsed, "desktopdaemon", "Run") {
-				sawDaemonStart = true
-			}
-			if hasDaemon &&
-				!callsSelector(file.parsed, "desktopdaemon", "ProductionOptions") {
-				violations = append(violations, Violation{
-					Rule:    "desktop-entry-skips-production-options",
-					Path:    file.relative,
-					Message: "the Desktop entry point starts the product from desktopdaemon.ProductionOptions",
-				})
-			}
-
-		case strings.HasPrefix(file.relative, daemonPackage+"/"):
-			if callsSelector(file.parsed, "desktophost", "Start") {
-				sawHostStart = true
-			}
-
-		case strings.HasPrefix(file.relative, hostPackage+"/"):
-			if callsSelector(file.parsed, "productruntime", "Start") {
-				sawRuntimeStart = true
-			}
-
-		case strings.HasPrefix(file.relative, runtimePackage+"/"):
-			if callsFunction(file.parsed, productionBuilders) {
-				sawProductionBuilders = true
-			}
+		if file.relative != desktopMainFile {
+			continue
 		}
-
-		// Whoever else starts a runtime has to be a reviewed Host.
-		//
-		// The act that matters is the call, not the import. A package that
-		// builds Options or names RuntimeStatus is using the runtime's types,
-		// which several legitimately do; a package that calls Start composes a
-		// product. Guarding the import instead would have flagged both and
-		// taught everyone to widen the allowlist, which is the opposite of
-		// what a short allowlist is for.
-		if !runtimeCallerAllowed(file.relative) &&
-			callsSelector(file.parsed, "productruntime", "Start") {
+		for _, imported := range file.imports {
+			if imported.path != hostImportPath &&
+				imported.path != runtimeImportPath {
+				continue
+			}
 			violations = append(violations, Violation{
-				Rule:    "unreviewed-runtime-composition",
+				Rule:    "desktop-entry-reaches-past-the-daemon",
 				Path:    file.relative,
-				Message: "ProductRuntime is started by a reviewed Host; add a new one to the allowlist deliberately",
+				Line:    imported.line,
+				Message: "the Desktop entry point composes the product through desktopdaemon, not by importing the host or runtime itself",
+			})
+		}
+		if present["daemon"] && !file.callsInFunction(
+			"main",
+			calledFunction{importPath: daemonImportPath, name: "ProductionOptions"},
+		) {
+			violations = append(violations, Violation{
+				Rule:    "desktop-entry-skips-production-options",
+				Path:    file.relative,
+				Message: "the Desktop entry point starts the product from desktopdaemon.ProductionOptions",
 			})
 		}
 	}
+	return violations
+}
 
-	for _, link := range []struct {
-		required bool
-		seen     bool
-		rule     string
-		path     string
-		text     string
-	}{
-		{hasDesktopMain && hasDaemon, sawDaemonStart,
-			"desktop-entry-does-not-run-the-daemon", desktopMain,
-			"the Desktop entry point runs the product through desktopdaemon.Run"},
-		{hasDaemon && hasHost, sawHostStart,
-			"daemon-does-not-start-the-host", daemonPackage,
-			"the daemon starts the product through desktophost.Start"},
-		{hasHost && hasRuntime, sawRuntimeStart,
-			"host-does-not-start-the-runtime", hostPackage,
-			"the host starts the product through productruntime.Start"},
-		{hasRuntime, sawProductionBuilders,
-			"runtime-does-not-select-production-builders", runtimePackage,
-			"the runtime selects productionBuilders on its production path"},
-	} {
-		if !link.required || link.seen {
+type calledFunction struct {
+	importPath string
+	name       string
+}
+
+type compositionLink struct {
+	required bool
+	holder   string
+	function string
+	target   calledFunction
+	callers  []string
+	missing  string
+	extra    string
+}
+
+func (link compositionLink) check(files []productionFile) []Violation {
+	if !link.required {
+		return nil
+	}
+	var violations []Violation
+	satisfied := false
+	for _, file := range files {
+		inHolder := file.relative == link.holder ||
+			strings.HasPrefix(file.relative, link.holder+"/")
+		if inHolder && file.callsInFunction(link.function, link.target) {
+			satisfied = true
+		}
+		// Anyone outside the allowlist reaching this step is a second path,
+		// whether by calling it or by taking it as a value.
+		if link.allows(file.relative) {
 			continue
 		}
+		if file.referencesSelector(link.target) {
+			violations = append(violations, Violation{
+				Rule:    link.extra,
+				Path:    file.relative,
+				Message: "this composition step belongs to a reviewed caller; add a new one to the allowlist deliberately",
+			})
+		}
+	}
+	if !satisfied {
 		violations = append(violations, Violation{
-			Rule:    link.rule,
-			Path:    link.path,
-			Message: link.text,
+			Rule:    link.missing,
+			Path:    link.holder,
+			Message: "the composition call must appear in the function that owes this step, not merely somewhere in its package",
 		})
 	}
 	return violations
 }
 
-// runtimeCallerAllowed names what may compose a ProductRuntime.
-//
-// The runtime's own package is here because it builds itself; the Desktop host
-// is the one reviewed Host today. A Server host would be added here, in a diff
-// somebody reviews, rather than by simply writing the import.
-func runtimeCallerAllowed(relative string) bool {
-	switch {
-	case strings.HasPrefix(relative, "internal/productruntime/"):
-		return true
-	case strings.HasPrefix(relative, "internal/desktophost/"):
-		return true
-	default:
-		return false
+func (link compositionLink) allows(relative string) bool {
+	for _, caller := range link.callers {
+		if strings.HasSuffix(caller, "/") {
+			if strings.HasPrefix(relative, caller) {
+				return true
+			}
+			continue
+		}
+		if relative == caller {
+			return true
+		}
 	}
+	return false
+}
+
+func checkLocalCallInFunction(
+	files []productionFile,
+	packageDir string,
+	function string,
+	callee string,
+	rule string,
+) []Violation {
+	for _, file := range files {
+		if !strings.HasPrefix(file.relative, packageDir+"/") {
+			continue
+		}
+		body := file.functionBody(function)
+		if body == nil {
+			continue
+		}
+		found := false
+		ast.Inspect(body, func(node ast.Node) bool {
+			call, ok := node.(*ast.CallExpr)
+			if !ok {
+				return true
+			}
+			if identifier, ok := call.Fun.(*ast.Ident); ok &&
+				identifier.Name == callee {
+				found = true
+			}
+			return true
+		})
+		if found {
+			return nil
+		}
+	}
+	return []Violation{{
+		Rule:    rule,
+		Path:    packageDir,
+		Message: "the selection must appear in the function that owes this step, not merely somewhere in its package",
+	}}
 }
 
 type productionFile struct {
 	relative string
 	parsed   *ast.File
 	imports  []productionImport
+	// aliases maps the local name a file uses to the import path it refers to.
+	// A file decides its own names, so this is the only reliable way to say
+	// which package a selector belongs to.
+	aliases map[string]string
+	dotted  []productionImport
 }
 
 type productionImport struct {
 	path string
 	line int
+}
+
+// dotImportViolations refuses a dot import of a composition package rather
+// than trying to analyse one. A dot import removes the qualifier that says
+// which package a call belongs to, so every check here would silently stop
+// seeing it.
+func (file productionFile) dotImportViolations() []Violation {
+	var violations []Violation
+	for _, imported := range file.dotted {
+		violations = append(violations, Violation{
+			Rule:    "composition-dot-import",
+			Path:    file.relative,
+			Line:    imported.line,
+			Message: "a composition package may not be dot-imported; the qualifier is what makes its calls visible",
+		})
+	}
+	return violations
+}
+
+func (file productionFile) functionBody(name string) *ast.BlockStmt {
+	for _, declaration := range file.parsed.Decls {
+		function, ok := declaration.(*ast.FuncDecl)
+		if !ok || function.Recv != nil || function.Name.Name != name {
+			continue
+		}
+		return function.Body
+	}
+	return nil
+}
+
+func (file productionFile) callsInFunction(
+	function string,
+	target calledFunction,
+) bool {
+	body := file.functionBody(function)
+	if body == nil {
+		return false
+	}
+	return file.selectorAppears(body, target)
+}
+
+// referencesSelector finds the step however it is reached: called directly,
+// assigned to a variable, or handed to something else. `f := pkg.Start` never
+// appears as a call at the reference site and reaches the same function.
+func (file productionFile) referencesSelector(target calledFunction) bool {
+	return file.selectorAppears(file.parsed, target)
+}
+
+func (file productionFile) selectorAppears(
+	root ast.Node,
+	target calledFunction,
+) bool {
+	found := false
+	ast.Inspect(root, func(node ast.Node) bool {
+		selector, ok := node.(*ast.SelectorExpr)
+		if !ok || selector.Sel.Name != target.name {
+			return true
+		}
+		identifier, ok := selector.X.(*ast.Ident)
+		if !ok {
+			return true
+		}
+		if file.aliases[identifier.Name] == target.importPath {
+			found = true
+		}
+		return true
+	})
+	return found
 }
 
 // productionGoFiles returns non-test Go files. Tests are excluded because a
@@ -234,12 +374,32 @@ func productionGoFiles(repositoryRoot string) ([]productionFile, error) {
 			file := productionFile{
 				relative: filepath.ToSlash(relative),
 				parsed:   parsed,
+				aliases:  map[string]string{},
 			}
 			for _, imported := range parsed.Imports {
+				importPath := strings.Trim(imported.Path.Value, `"`)
+				line := fileSet.Position(imported.Pos()).Line
 				file.imports = append(file.imports, productionImport{
-					path: strings.Trim(imported.Path.Value, `"`),
-					line: fileSet.Position(imported.Pos()).Line,
+					path: importPath,
+					line: line,
 				})
+				local := defaultImportName(importPath)
+				if imported.Name != nil {
+					local = imported.Name.Name
+				}
+				if local == "." {
+					if isCompositionPackage(importPath) {
+						file.dotted = append(file.dotted, productionImport{
+							path: importPath,
+							line: line,
+						})
+					}
+					continue
+				}
+				if local == "_" {
+					continue
+				}
+				file.aliases[local] = importPath
 			}
 			files = append(files, file)
 			return nil
@@ -248,38 +408,18 @@ func productionGoFiles(repositoryRoot string) ([]productionFile, error) {
 	return files, err
 }
 
-func callsSelector(file *ast.File, receiver, name string) bool {
-	found := false
-	ast.Inspect(file, func(node ast.Node) bool {
-		call, ok := node.(*ast.CallExpr)
-		if !ok {
-			return true
-		}
-		selector, ok := call.Fun.(*ast.SelectorExpr)
-		if !ok || selector.Sel.Name != name {
-			return true
-		}
-		identifier, ok := selector.X.(*ast.Ident)
-		if ok && identifier.Name == receiver {
-			found = true
-		}
+func isCompositionPackage(importPath string) bool {
+	switch importPath {
+	case daemonImportPath, hostImportPath, runtimeImportPath:
 		return true
-	})
-	return found
+	default:
+		return false
+	}
 }
 
-func callsFunction(file *ast.File, name string) bool {
-	found := false
-	ast.Inspect(file, func(node ast.Node) bool {
-		call, ok := node.(*ast.CallExpr)
-		if !ok {
-			return true
-		}
-		if identifier, ok := call.Fun.(*ast.Ident); ok &&
-			identifier.Name == name {
-			found = true
-		}
-		return true
-	})
-	return found
+func defaultImportName(importPath string) string {
+	if index := strings.LastIndex(importPath, "/"); index >= 0 {
+		return importPath[index+1:]
+	}
+	return importPath
 }

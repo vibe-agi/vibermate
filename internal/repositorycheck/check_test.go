@@ -431,9 +431,28 @@ func TestProductionCompositionBoundaryUsesPublicCheckWithGoodAndBadFixtures(
 		"host-does-not-start-the-runtime",
 		"runtime-does-not-select-production-builders",
 		"unreviewed-runtime-composition",
+		"unreviewed-host-composition",
+		"composition-dot-import",
 	} {
 		if !strings.Contains(err.Error(), rule) {
 			t.Fatalf("public Check did not report %s: %v", rule, err)
+		}
+	}
+	// The bypasses a review found, each named by the file that carries it.
+	for _, path := range []string{
+		// A decoy call elsewhere in the package no longer satisfies the link.
+		"internal/desktopdaemon",
+		"internal/desktophost",
+		"internal/productruntime",
+		// An alias, and taking the function as a value.
+		"internal/sneakyhost/host.go",
+		// A second entry point composing the product.
+		"cmd/secondentry/main.go",
+		// A dot import, which would erase the qualifier every check needs.
+		"internal/dotimporter/dot.go",
+	} {
+		if !strings.Contains(err.Error(), path) {
+			t.Fatalf("public Check did not report %s: %v", path, err)
 		}
 	}
 }
