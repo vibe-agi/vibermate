@@ -146,11 +146,23 @@ type Release struct {
 type Catalog struct {
 	revision CatalogRevision
 	releases []Release
+	signers  []Signer
 }
 
 func NewCatalog(
 	revision CatalogRevision,
 	releases []Release,
+) (Catalog, error) {
+	return NewCatalogWithSigners(revision, releases, nil)
+}
+
+// NewCatalogWithSigners builds a catalog that can also recognize a publisher
+// for a build it does not carry. Passing no signers gives exactly the previous
+// behaviour, so a caller that wants only exact releases keeps it.
+func NewCatalogWithSigners(
+	revision CatalogRevision,
+	releases []Release,
+	signers []Signer,
 ) (Catalog, error) {
 	if !revision.Valid() ||
 		len(releases) == 0 ||
@@ -182,7 +194,41 @@ func NewCatalog(
 			)
 		}
 	}
-	return Catalog{revision: revision, releases: cloned}, nil
+	if len(signers) > maxCatalogEntries {
+		return Catalog{}, errors.New("client signer catalog is too large")
+	}
+	clonedSigners := make([]Signer, len(signers))
+	for index, signer := range signers {
+		clonedSigners[index] = cloneSigner(signer)
+		if err := validateSigner(clonedSigners[index]); err != nil {
+			return Catalog{}, err
+		}
+	}
+	slices.SortFunc(clonedSigners, func(left, right Signer) int {
+		return strings.Compare(signerSortKey(left), signerSortKey(right))
+	})
+	for index := 1; index < len(clonedSigners); index++ {
+		if signerSortKey(clonedSigners[index-1]) ==
+			signerSortKey(clonedSigners[index]) {
+			return Catalog{}, errors.New(
+				"client signer catalog contains a duplicate identity",
+			)
+		}
+	}
+	return Catalog{
+		revision: revision,
+		releases: cloned,
+		signers:  clonedSigners,
+	}, nil
+}
+
+func signerSortKey(signer Signer) string {
+	return strings.Join([]string{
+		signer.ID,
+		signer.OperatingSystem,
+		signer.Architecture,
+		signer.InvocationLabel,
+	}, "\x00")
 }
 
 func (catalog Catalog) Revision() CatalogRevision {
@@ -244,13 +290,20 @@ const (
 	// RecognitionUnverified: a catalogued release is invoked by this name, and
 	// this copy matched none of them.
 	RecognitionUnverified Recognition = "unverified"
+	// RecognitionRecognized: no catalogued release matched this copy, but the
+	// platform confirmed a catalogued publisher signed it and it has not been
+	// modified. It says who made this, not which build it is.
+	RecognitionRecognized Recognition = "recognized"
 	// RecognitionVerified: this copy matched a catalogued release exactly.
 	RecognitionVerified Recognition = "verified"
 )
 
 func (recognition Recognition) Valid() bool {
 	switch recognition {
-	case RecognitionUnknown, RecognitionUnverified, RecognitionVerified:
+	case RecognitionUnknown,
+		RecognitionUnverified,
+		RecognitionRecognized,
+		RecognitionVerified:
 		return true
 	default:
 		return false
@@ -264,6 +317,9 @@ type Detection struct {
 	CanonicalPath   string          `json:"canonicalPath"`
 	ExecutableLabel string          `json:"executableLabel"`
 	Evidence        *Evidence       `json:"evidence,omitempty"`
+	// Signer is set only for a recognized detection, and Evidence is set only
+	// for a verified one. They are different claims and never both hold.
+	Signer *SignerEvidence `json:"signer,omitempty"`
 }
 
 func (detection Detection) clone() Detection {
@@ -271,6 +327,10 @@ func (detection Detection) clone() Detection {
 	if detection.Evidence != nil {
 		evidence := *detection.Evidence
 		cloned.Evidence = &evidence
+	}
+	if detection.Signer != nil {
+		signer := *detection.Signer
+		cloned.Signer = &signer
 	}
 	return cloned
 }
@@ -288,6 +348,7 @@ type Verifier interface {
 type ReleaseVerifier struct {
 	revision CatalogRevision
 	releases []Release
+	signers  []Signer
 }
 
 func NewReleaseVerifier(
@@ -296,7 +357,11 @@ func NewReleaseVerifier(
 	if !catalog.Valid() {
 		return nil, errors.New("complete client release catalog is required")
 	}
-	normalized, err := NewCatalog(catalog.revision, catalog.releases)
+	normalized, err := NewCatalogWithSigners(
+		catalog.revision,
+		catalog.releases,
+		catalog.signers,
+	)
 	if err != nil {
 		return nil, err
 	}
@@ -304,9 +369,14 @@ func NewReleaseVerifier(
 	for index, release := range normalized.releases {
 		releases[index] = cloneRelease(release)
 	}
+	signers := make([]Signer, len(normalized.signers))
+	for index, signer := range normalized.signers {
+		signers[index] = cloneSigner(signer)
+	}
 	return &ReleaseVerifier{
 		revision: normalized.revision,
 		releases: releases,
+		signers:  signers,
 	}, nil
 }
 
@@ -346,6 +416,21 @@ func (verifier *ReleaseVerifier) Verify(
 		}
 	}
 	if len(matched) == 0 {
+		// No catalogued build matched this copy. Before calling it generic,
+		// ask the platform whether a catalogued publisher signed it: a user
+		// who updated this morning is running a real client, not an unknown
+		// program, and a release catalog frozen at our ship date can never
+		// describe every build a user base is on.
+		recognized, recognizeErr := verifier.recognizeSigner(ctx, canonical, label)
+		if recognizeErr != nil {
+			detection.Status = StatusFailed
+			return detection, recognizeErr
+		}
+		if recognized != nil {
+			detection.Recognition = RecognitionRecognized
+			detection.Signer = recognized
+			return detection.clone(), nil
+		}
 		return detection, nil
 	}
 	if len(matched) != 1 {
@@ -373,6 +458,48 @@ func (verifier *ReleaseVerifier) Verify(
 	detection.Recognition = RecognitionVerified
 	detection.Evidence = &evidence
 	return detection.clone(), nil
+}
+
+// recognizeSigner returns evidence when exactly one catalogued publisher
+// claims this file. More than one is a catalog mistake rather than a stronger
+// result, so it is refused: two publishers cannot both have signed it, and
+// picking either would be inventing an answer.
+func (verifier *ReleaseVerifier) recognizeSigner(
+	ctx context.Context,
+	canonical string,
+	label string,
+) (*SignerEvidence, error) {
+	var found []SignerEvidence
+	for _, signer := range verifier.signersForLabel(label) {
+		signedPath, ok, err := verifySigner(ctx, canonical, signer)
+		if err != nil {
+			return nil, err
+		}
+		if !ok {
+			continue
+		}
+		evidence := SignerEvidence{
+			ID:              signer.ID,
+			Revision:        signer.Revision,
+			CatalogRevision: verifier.revision,
+			InstallShape:    signer.InstallShape,
+			LaunchRecipe:    signer.LaunchRecipe,
+			SignedPath:      signedPath,
+		}
+		if err := evidence.Validate(); err != nil {
+			return nil, err
+		}
+		found = append(found, evidence)
+	}
+	if len(found) == 0 {
+		return nil, nil
+	}
+	if len(found) != 1 {
+		return nil, errors.New(
+			"client executable satisfies multiple catalogued signers",
+		)
+	}
+	return &found[0], nil
 }
 
 func (verifier *ReleaseVerifier) releasesForLabel(label string) []Release {
@@ -883,6 +1010,10 @@ func BuiltInCatalog() Catalog {
 		releases: []Release{
 			ClaudeCode221220DarwinARM64(),
 			CodexCLI01450DarwinARM64(),
+		},
+		signers: []Signer{
+			ClaudeCodeSignerDarwin(),
+			CodexCLISignerDarwin(),
 		},
 	}
 }

@@ -1,0 +1,132 @@
+// Package codesignature answers one question about a file on disk: does the
+// operating system agree it was produced by a named signer and has not been
+// modified since.
+//
+// It exists because release digests cannot describe a real user base. Claude
+// Code and Codex ship weekly, so requiring every user's build to appear in a
+// catalog frozen at our release is a constraint the product cannot meet. A
+// platform signature is stable across versions and is backed by the platform's
+// own certificate chain rather than by us. See
+// `docs/adr/0016-signed-identity-client-recognition.md` in the design
+// repository.
+//
+// What this proves and what it does not: a satisfied requirement says the file
+// came from that signer and its pages hash to what the signature covers. It
+// says nothing about the process image after attach — the same bound the
+// digest catalog already carried, and it is not restated more strongly here
+// because the mechanism changed.
+package codesignature
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"os/exec"
+	"runtime"
+	"strings"
+	"time"
+)
+
+// ErrUnsupportedPlatform is returned where no general signed-identity check
+// exists. Linux has none, so callers must degrade rather than invent one.
+var ErrUnsupportedPlatform = errors.New(
+	"this platform has no signed-identity verification",
+)
+
+// ErrNotSatisfied means the platform evaluated the requirement and refused it:
+// a different signer, a different identifier, an unsigned file, or one whose
+// contents no longer match its signature.
+var ErrNotSatisfied = errors.New("the file does not satisfy the requirement")
+
+// Requirement is a platform requirement expression naming the signer that may
+// be accepted. It is data the catalog freezes, not something built from a
+// file's own claims about itself — reading an identity out of a file and then
+// checking the file against it would accept anything.
+type Requirement string
+
+// verifyDeadline bounds the platform call. Verification reads and hashes the
+// whole file, and these clients are hundreds of megabytes, so this is not the
+// usual sub-second budget.
+const verifyDeadline = 30 * time.Second
+
+func (requirement Requirement) Valid() bool {
+	trimmed := strings.TrimSpace(string(requirement))
+	if trimmed == "" || len(trimmed) > 1024 {
+		return false
+	}
+	// A requirement that does not anchor to the platform root accepts any
+	// self-signed file that claims the right name, which is the failure this
+	// package exists to avoid.
+	return strings.Contains(trimmed, "anchor apple")
+}
+
+// Verify reports whether the platform accepts path as satisfying requirement.
+//
+// A nil error means satisfied. ErrNotSatisfied means the platform evaluated it
+// and said no, which is an ordinary answer rather than a malfunction.
+func Verify(ctx context.Context, path string, requirement Requirement) error {
+	if ctx == nil {
+		return errors.New("a context is required")
+	}
+	if path == "" || !strings.HasPrefix(path, "/") {
+		return errors.New("an absolute path is required")
+	}
+	if !requirement.Valid() {
+		return errors.New("the requirement is not usable")
+	}
+	if runtime.GOOS != "darwin" {
+		return ErrUnsupportedPlatform
+	}
+	bounded, cancel := context.WithTimeout(ctx, verifyDeadline)
+	defer cancel()
+
+	// The leading `=` is what makes codesign read the requirement as text
+	// rather than as a path to a file holding one. Without it the argument is
+	// taken as a filename, the call fails to parse, and a caller that only
+	// looked at whether output appeared would read that as a refusal.
+	command := exec.CommandContext(
+		bounded,
+		"/usr/bin/codesign",
+		"--verify",
+		"--strict",
+		"-R", "="+string(requirement),
+		"--",
+		path,
+	)
+	output, err := command.CombinedOutput()
+	if err == nil {
+		return nil
+	}
+	if bounded.Err() != nil {
+		return fmt.Errorf("signature verification did not finish: %w", bounded.Err())
+	}
+	var exitErr *exec.ExitError
+	if errors.As(err, &exitErr) {
+		return fmt.Errorf(
+			"%w: %s",
+			ErrNotSatisfied,
+			boundedReason(string(output)),
+		)
+	}
+	return fmt.Errorf("signature verification could not run: %w", err)
+}
+
+// boundedReason keeps the platform's explanation short enough to log and
+// strips the path, which the caller already knows and which can be long.
+func boundedReason(output string) string {
+	trimmed := strings.TrimSpace(output)
+	if trimmed == "" {
+		return "no reason given"
+	}
+	if index := strings.IndexByte(trimmed, '\n'); index >= 0 {
+		trimmed = trimmed[:index]
+	}
+	if index := strings.LastIndex(trimmed, ": "); index >= 0 {
+		trimmed = trimmed[index+2:]
+	}
+	const limit = 200
+	if len(trimmed) > limit {
+		trimmed = trimmed[:limit]
+	}
+	return trimmed
+}
