@@ -557,6 +557,66 @@ func TestClientConnectionAuditRequiresCompleteImmutableTimeline(
 	}
 }
 
+func TestActiveClientConnectionAuditRequiresVerifiedClientSidePrefix(
+	t *testing.T,
+) {
+	t.Parallel()
+
+	clientOrigin, err := access.NewClientOrigin("https://api.anthropic.com")
+	if err != nil {
+		t.Fatal(err)
+	}
+	timeline := clientAuditTimeline(t)
+	active := timeline
+	active.Events = append(
+		[]connectionevent.Record(nil),
+		timeline.Events[:len(timeline.Events)-1]...,
+	)
+	ready, err := activeClientConnectionAuditReady(active, clientOrigin)
+	if err != nil || !ready {
+		t.Fatalf("active timeline ready=%t error=%v", ready, err)
+	}
+
+	terminalReady, terminalErr := activeClientConnectionAuditReady(
+		timeline,
+		clientOrigin,
+	)
+	if terminalErr != nil || terminalReady {
+		t.Fatalf(
+			"terminal timeline ready=%t error=%v",
+			terminalReady,
+			terminalErr,
+		)
+	}
+
+	downgraded := active
+	downgraded.Events = append(
+		[]connectionevent.Record(nil),
+		active.Events...,
+	)
+	downgraded.Events[2].SourceConfidence =
+		connectionevent.SourceConfidenceConfigured
+	if ready, err = activeClientConnectionAuditReady(
+		downgraded,
+		clientOrigin,
+	); err == nil || ready {
+		t.Fatalf("downgraded timeline ready=%t error=%v", ready, err)
+	}
+
+	wrongHostShape := active
+	wrongHostShape.Events = append(
+		[]connectionevent.Record(nil),
+		active.Events...,
+	)
+	wrongHostShape.Events[2].RequestedHost = "api.anthropic.com:443"
+	if ready, err = activeClientConnectionAuditReady(
+		wrongHostShape,
+		clientOrigin,
+	); err == nil || ready {
+		t.Fatalf("wrong-host timeline ready=%t error=%v", ready, err)
+	}
+}
+
 func TestResponsesHTTPFallbackAuditRequiresBoundedNegotiationAndActiveHTTP(
 	t *testing.T,
 ) {

@@ -1810,6 +1810,67 @@ func clientConnectionAuditReady(
 			"client ConnectionEvent phase sequence is invalid",
 		)
 	}
+	if err := validateClientConnectionAudit(
+		timeline,
+		clientOrigin,
+	); err != nil {
+		return false, err
+	}
+	last := timeline.Events[len(timeline.Events)-1]
+	if last.Outcome != connectionevent.OutcomeCompleted ||
+		last.ErrorClass != "" ||
+		last.BytesUp == 0 ||
+		last.BytesDown == 0 {
+		return false, fmt.Errorf(
+			"client ConnectionEvent terminal evidence is invalid: %+v",
+			last,
+		)
+	}
+	return true, nil
+}
+
+func activeClientConnectionAuditReady(
+	timeline connectionevent.Timeline,
+	clientOrigin access.ClientOrigin,
+) (bool, error) {
+	if len(timeline.Events) == 0 {
+		return false, nil
+	}
+	last := timeline.Events[len(timeline.Events)-1]
+	if connectionRecordTerminal(last) {
+		return false, nil
+	}
+	if len(timeline.Events) < 3 {
+		return false, nil
+	}
+	if !connectionPhaseSequence(
+		timeline.Events,
+		[]connectionevent.Phase{
+			connectionevent.PhaseAttempted,
+			connectionevent.PhaseDecided,
+			connectionevent.PhaseConnected,
+		},
+	) {
+		return false, errors.New(
+			"active client ConnectionEvent phase sequence is invalid",
+		)
+	}
+	if err := validateClientConnectionAudit(
+		timeline,
+		clientOrigin,
+	); err != nil {
+		return false, err
+	}
+	return true, nil
+}
+
+func validateClientConnectionAudit(
+	timeline connectionevent.Timeline,
+	clientOrigin access.ClientOrigin,
+) error {
+	if len(timeline.Events) == 0 {
+		return errors.New("client ConnectionEvent timeline is empty")
+	}
 	first := timeline.Events[0]
 	if first.ConnectionID != timeline.ConnectionID ||
 		first.Phase != connectionevent.PhaseAttempted ||
@@ -1830,7 +1891,7 @@ func clientConnectionAuditReady(
 		first.EgressProxyID != "" ||
 		first.EgressPolicyRevision != 0 ||
 		first.Decryption != connectionevent.DecryptionNone {
-		return false, fmt.Errorf(
+		return fmt.Errorf(
 			"client ConnectionEvent attempt is invalid: %+v",
 			first,
 		)
@@ -1841,13 +1902,13 @@ func clientConnectionAuditReady(
 	previousSequence := int64(0)
 	for index, record := range timeline.Events {
 		if err := record.Validate(); err != nil {
-			return false, err
+			return err
 		}
 		if record.ConnectionID != timeline.ConnectionID ||
 			record.RequestedHost != expectedHost ||
 			record.Port != clientOrigin.Port() ||
 			record.Sequence <= previousSequence {
-			return false, errors.New(
+			return errors.New(
 				"client ConnectionEvent identity or ordering changed",
 			)
 		}
@@ -1869,7 +1930,7 @@ func clientConnectionAuditReady(
 			record.EgressProxyID != "" ||
 			record.EgressPolicyRevision != 1 ||
 			record.Decryption != connectionevent.DecryptionMITM {
-			return false, fmt.Errorf(
+			return fmt.Errorf(
 				"client ConnectionEvent allow evidence is invalid: %+v",
 				record,
 			)
@@ -1879,32 +1940,22 @@ func clientConnectionAuditReady(
 			expectedSource = record.SourceLabel
 		} else if record.IngressID != expectedIngress ||
 			record.SourceLabel != expectedSource {
-			return false, errors.New(
+			return errors.New(
 				"client ConnectionEvent source identity changed",
 			)
 		}
 		if index == 1 && record.ObservedSNI != "" {
-			return false, errors.New(
+			return errors.New(
 				"client ConnectionEvent observed SNI before TLS handshake",
 			)
 		}
 		if index >= 2 && record.ObservedSNI != expectedHost {
-			return false, errors.New(
+			return errors.New(
 				"client ConnectionEvent omitted the observed SNI",
 			)
 		}
 	}
-	last := timeline.Events[len(timeline.Events)-1]
-	if last.Outcome != connectionevent.OutcomeCompleted ||
-		last.ErrorClass != "" ||
-		last.BytesUp == 0 ||
-		last.BytesDown == 0 {
-		return false, fmt.Errorf(
-			"client ConnectionEvent terminal evidence is invalid: %+v",
-			last,
-		)
-	}
-	return true, nil
+	return nil
 }
 
 func waitForActiveConnectionAudit(
@@ -1926,9 +1977,19 @@ func waitForActiveConnectionAudit(
 	defer cancel()
 	ticker := time.NewTicker(50 * time.Millisecond)
 	defer ticker.Stop()
+	var lastErr error
 	for {
 		records, err := connectionRecordsAfter(waitContext, control, after)
 		if err != nil {
+			if waitContext.Err() != nil {
+				if lastErr != nil {
+					return "", lastErr
+				}
+				return "", fmt.Errorf(
+					"active held ConnectionEvent was not observed: %w",
+					waitContext.Err(),
+				)
+			}
 			return "", err
 		}
 		seen := make(map[string]struct{})
@@ -1951,22 +2012,27 @@ func waitForActiveConnectionAudit(
 				continue
 			}
 			last := timeline.Events[len(timeline.Events)-1]
-			if last.Sequence <= after ||
-				connectionRecordTerminal(last) ||
-				last.Phase != connectionevent.PhaseConnected ||
-				last.Decision != connectionevent.DecisionAllow ||
-				last.SourceConfidence !=
-					connectionevent.SourceConfidenceConfigured ||
-				last.IngressID == "" ||
-				last.RequestedHost != clientOrigin.EndpointAuthority() ||
-				last.EgressPolicyRevision != 1 {
+			if last.Sequence <= after {
 				continue
 			}
-			return timeline.ConnectionID, nil
+			ready, err := activeClientConnectionAuditReady(
+				timeline,
+				clientOrigin,
+			)
+			if err != nil {
+				lastErr = err
+				continue
+			}
+			if ready {
+				return timeline.ConnectionID, nil
+			}
 		}
 		select {
 		case <-ticker.C:
 		case <-waitContext.Done():
+			if lastErr != nil {
+				return "", lastErr
+			}
 			return "", fmt.Errorf(
 				"active held ConnectionEvent was not observed: %w",
 				waitContext.Err(),
