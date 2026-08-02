@@ -606,11 +606,12 @@ function CapturePanel({
                   <dt>{t("capture.observation.label")}</dt>
                   <dd>{t(`capture.observation.${run.observation}`)}</dd>
                 </div>
-                {run.recognition === "unverified" ? (
+                {run.recognition === "unverified" ||
+                run.recognition === "recognized" ? (
                   <div>
                     <dt>{t("capture.recognition.label")}</dt>
                     <dd className="attention">
-                      {t("capture.recognition.unverified")}
+                      {t(`capture.recognition.${run.recognition}`)}
                     </dd>
                   </div>
                 ) : null}

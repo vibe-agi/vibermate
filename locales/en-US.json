@@ -56,6 +56,7 @@
   "capture.observation.observed": "Seen going through vibermate",
   "capture.observation.waiting_for_traffic": "Nothing seen yet",
   "capture.recognition.label": "Client",
+  "capture.recognition.recognized": "This build has no release evidence for this version. Its publisher was verified, and it was started with a trust root only because you allowed it. Its protocol behaviour has not been tested here.",
   "capture.recognition.unverified": "This build has no release evidence for this version, so it was started without a trust root and its requests will fail to connect.",
   "capture.state.attached": "Running",
   "capture.state.created": "Started",

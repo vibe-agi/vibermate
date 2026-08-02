@@ -364,10 +364,18 @@ export type CaptureRunObservation = "waiting_for_traffic" | "observed";
 
 /**
  * Whether this build has release evidence for the client that was launched.
- * `unverified` is a client the catalog knows at a version it does not: it was
- * started without a trust root and its requests will fail to connect.
+ *
+ * `unverified` is a client the catalog knows at a version it does not, and
+ * whose publisher was not confirmed: it was started without a trust root and
+ * its requests will fail to connect. `recognized` is the same missing version
+ * evidence with a verified publisher, started with a trust root because the
+ * person allowed it once — it is not a claim that this version was tested.
  */
-export type CaptureRunRecognition = "unknown" | "unverified" | "verified";
+export type CaptureRunRecognition =
+  | "unknown"
+  | "unverified"
+  | "recognized"
+  | "verified";
 
 export interface CaptureRunRecord {
   readonly id: string;

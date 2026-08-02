@@ -56,6 +56,7 @@
   "capture.observation.observed": "已看到流量经过 vibermate",
   "capture.observation.waiting_for_traffic": "尚未看到流量",
   "capture.recognition.label": "客户端",
+  "capture.recognition.recognized": "本版本没有该客户端此版本的发行证据。已验证其发布者身份，并且仅因你本次允许才注入了信任根。它的协议行为尚未在此测试。",
   "capture.recognition.unverified": "本版本没有该客户端此版本的发行证据，因此启动时未注入信任根，它的请求将无法连接。",
   "capture.state.attached": "运行中",
   "capture.state.created": "已启动",
