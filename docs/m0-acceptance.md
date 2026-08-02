@@ -133,32 +133,35 @@ The deterministic sequence verifies:
 4. the packaged daemon starts from an inherited bootstrap descriptor with
    complete proxy and control routes;
 5. one executable Access commits as revision 1;
-6. the fixed client reaches the exact configured ingress while egress is held;
+6. an explicit exact-host-and-port connection rule is committed for the fixed
+   client origin while the default remains `ask`;
+7. the fixed client reaches the exact configured ingress while egress is held;
    Claude queues approved original-origin control traffic, while fixed Codex
    independently produces the bounded local 426-to-HTTP proxy audit before
    queuing the frozen provider target with zero active egress, surfaces HTTP
    426 for the rejected WebSocket request, and records
    `provider_credential_unavailable` for that Exchange;
-7. Resume performs no-credential probes for every queued frozen target before
+8. Resume performs no-credential probes for every queued frozen target before
    release; strict HTTPS targets complete TLS, while the literal-loopback
    cleartext exception completes an exact TCP peer check;
-8. the semantic request reaches the intentionally missing development
+9. the semantic request reaches the intentionally missing development
    credential boundary, records `provider_credential_unavailable`, and does not
    send provider HTTP traffic;
-9. body-free ConnectionEvent evidence correlates the configured Agent ingress,
-   observed SNI, MITM decision, selected provider host, and credential-binding
-   identifier;
-10. daemon `SIGINT` drains the Host and removes owned discovery;
-11. a new incarnation reopens SQLite and rejects `expectedRevision=0`, proving
+10. body-free ConnectionEvent evidence binds the verified Agent ingress,
+    observed SNI, MITM decision, and explicit connection-policy rule to the
+    client origin. Provider route and credential facts remain request-level
+    evidence and are deliberately absent from the connection timeline;
+11. daemon `SIGINT` drains the Host and removes owned discovery;
+12. a new incarnation reopens SQLite and rejects `expectedRevision=0`, proving
     revision 1 recovery;
-12. another fixed-client request remains queued behind Hold when the daemon is
+13. another fixed-client request remains queued behind Hold when the daemon is
     killed;
-13. daemon `SIGKILL` terminates that request without a completion marker,
+14. daemon `SIGKILL` terminates that request without a completion marker,
     releases kernel generation ownership, and leaves no resurrected in-memory
     queue;
-14. the replacement generation recovers revision 1 and appends exactly one
+15. the replacement generation recovers revision 1 and appends exactly one
     `daemon_restarted` terminal to the interrupted ConnectionEvent;
-15. the final generation drains cleanly.
+16. the final generation drains cleanly.
 
 Example:
 

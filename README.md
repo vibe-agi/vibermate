@@ -166,13 +166,15 @@ is wired, no production path observes the live trust store, and tests never run
 `security` or modify System.keychain. In particular, this is orchestration
 evidence, not proof of macOS authorization or system trust behavior.
 
-Repository tests prove the version-gated Responses behavior. A clean private
-v5 deterministic report and credentialed report bound to implementation commit
-`c19cca4eb2842aa00d8e8fc17160b342a111f0b6` exercise the revised production
-certificate path. They additionally bind a Codex-surfaced HTTP 426, the proxy's
-bounded 426-to-HTTP connection audit, and the subsequent HTTP Exchange reason
-from Runtime Activity. Neither report proves successful Responses WebSocket
-semantics or client-visible per-token TUI behavior.
+Repository tests prove the version-gated Responses behavior. The latest clean
+private v5 deterministic report is bound to implementation commit
+`1b1a1b5fe43e1e4d89243006b10ff9c67ef0ea28` and fixed Claude Code 2.1.220; it
+exercises the current certificate, explicit connection-policy, client-side
+ConnectionEvent, Hold, shutdown, and SQLite-recovery paths without a provider
+credential. The latest credentialed report remains the historical fixed-Codex
+report bound to `c19cca4eb2842aa00d8e8fc17160b342a111f0b6`; it proves neither
+current-HEAD credentialed behavior nor successful Responses WebSocket semantics
+or client-visible per-token TUI behavior.
 
 DesktopHost now owns the literal proxy and control listeners, complete routes,
 generation lock, capability separation, launcher discovery, and the only
@@ -202,7 +204,9 @@ verifies every artifact in a revisioned compound client release before granting
 version-specific behavior. Fixed Codex receives the same local Root through
 `SSL_CERT_FILE` plus a non-secret client placeholder after conflicting ambient
 proxy, CA, base-URL, and credential variables are removed. Unknown Codex
-versions remain generic clients instead of being rejected or mislabeled. Host
+versions remain generic unless macOS verifies a catalogued Developer ID signer
+identity and the user explicitly approves the recognized-client Root handoff;
+Linux has no recognized tier. Host
 integration tests exercise this path over real loopback listeners with a local
 child process, including bounded SIGINT convergence. They do not send provider
 traffic.
@@ -220,11 +224,13 @@ development file SecretStore and defaults to a local Cherry Studio API at
 takes a secret value on its command line. The Codex runner isolates
 `CODEX_HOME`, reads prompts from standard input, trusts only bounded typed
 JSONL plus bounded client-status evidence, and exercises `exec resume`. One
-clean packaged v5 deterministic report and one credentialed report bound to
-implementation commit `c19cca4eb2842aa00d8e8fc17160b342a111f0b6`
-pass 17 of 17 and 25 of 25 checks respectively. The tool proof names Codex
-`exec`, and the Hold proof claims completion through the Responses streaming
-path without claiming TUI delta rendering.
+clean packaged v5 deterministic report bound to
+`1b1a1b5fe43e1e4d89243006b10ff9c67ef0ea28` passes 17 of 17 checks with fixed
+Claude Code 2.1.220. The latest credentialed report is older: 25 of 25 checks
+bound to `c19cca4eb2842aa00d8e8fc17160b342a111f0b6` and fixed Codex CLI 0.145.0.
+It remains useful historical evidence but is not current-HEAD credentialed
+evidence. The Codex tool proof names `exec`, and its Hold proof claims completion
+through the Responses streaming path without claiming TUI delta rendering.
 
 SQLite is the only durable Access authority; active-plan publication occurs
 after commit. An indeterminate commit or post-commit publication failure marks
