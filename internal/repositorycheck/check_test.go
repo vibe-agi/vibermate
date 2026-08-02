@@ -2,6 +2,7 @@ package repositorycheck
 
 import (
 	"errors"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -316,5 +317,87 @@ func TestIdentityCompositionUsesPublicCheckWithGoodAndBadFixtures(t *testing.T) 
 	}
 	if !strings.Contains(err.Error(), "identity-composition") {
 		t.Fatalf("public Check did not report identity-composition: %v", err)
+	}
+}
+
+// The signer-identity rules get the same treatment as every other boundary:
+// a repository that keeps them and one that breaks them, both on disk.
+//
+// A mutation run by hand proved the rules discriminated on the day they were
+// written. It cannot stop them being weakened later, which is what a fixture
+// is for.
+func TestSignerIdentityBoundaryUsesPublicCheckWithGoodAndBadFixtures(
+	t *testing.T,
+) {
+	t.Parallel()
+
+	goodRoot := filepath.Join("testdata", "repository-signer-identity-good")
+	if err := Check(goodRoot); err != nil {
+		t.Fatalf("known-good repository fixture failed: %v", err)
+	}
+
+	badRoot := filepath.Join("testdata", "repository-signer-identity-bad")
+	err := Check(badRoot)
+	if !errors.Is(err, ErrCheckFailed) {
+		t.Fatalf("expected ErrCheckFailed, got %v", err)
+	}
+	for _, rule := range []string{
+		"signer-requirement-literal",
+		"signer-verification-boundary",
+	} {
+		if !strings.Contains(err.Error(), rule) {
+			t.Fatalf("public Check did not report %s: %v", rule, err)
+		}
+	}
+	// The generator itself is exempt, so a failure naming it would mean the
+	// exemption had been lost rather than a rule enforced.
+	if strings.Contains(err.Error(), "internal/codesignature/identity.go") {
+		t.Fatalf("the generator was reported as a violation: %v", err)
+	}
+}
+
+// Each fragment of the requirement language has to be doing work.
+//
+// Asserting only that the rule fired leaves every fragment but one removable:
+// the fixture's literals overlap, so one surviving fragment catches them all
+// and the rule still reports. This checks the fragments one at a time, against
+// a file that carries each of them alone.
+func TestEveryRequirementFragmentIsLoadBearing(t *testing.T) {
+	t.Parallel()
+
+	for _, testCase := range []struct {
+		name    string
+		content string
+	}{
+		{"the Apple anchor alone", "const x = `anchor apple generic`\n"},
+		{"the team field alone", "const x = `certificate 1[subject.OU]`\n"},
+		{"a leaf certificate clause alone", "const x = `certificate leaf[field.9]`\n"},
+		{"a Developer ID OID alone", "const x = `1.2.840.113635.100.6.2.6`\n"},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			t.Parallel()
+
+			root := t.TempDir()
+			directory := filepath.Join(root, "internal", "clientadapter")
+			if err := os.MkdirAll(directory, 0o755); err != nil {
+				t.Fatal(err)
+			}
+			source := "package clientadapter\n\n" + testCase.content
+			if err := os.WriteFile(
+				filepath.Join(directory, "signer.go"), []byte(source), 0o644,
+			); err != nil {
+				t.Fatal(err)
+			}
+			violations := CheckSignerIdentityBoundary(root)
+			found := false
+			for _, violation := range violations {
+				if violation.Rule == "signer-requirement-literal" {
+					found = true
+				}
+			}
+			if !found {
+				t.Fatalf("%s was not reported: %+v", testCase.name, violations)
+			}
+		})
 	}
 }
