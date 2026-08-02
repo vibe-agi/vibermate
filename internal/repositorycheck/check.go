@@ -54,6 +54,7 @@ func Check(repositoryRoot string) error {
 	violations = append(violations, CheckDesktopFrontendBoundary(repositoryRoot)...)
 	violations = append(violations, CheckSystemTrustBoundary(repositoryRoot)...)
 	violations = append(violations, CheckSignerIdentityBoundary(repositoryRoot)...)
+	violations = append(violations, CheckProductionCompositionBoundary(repositoryRoot)...)
 	violations = append(violations, CheckPayloadDispatchBoundary(repositoryRoot)...)
 	violations = append(violations, CheckIdentityComposition(repositoryRoot)...)
 	violations = append(

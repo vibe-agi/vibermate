@@ -1,6 +1,6 @@
 # Production Composition Structural Guard
 
-Status: active
+Status: complete
 Created: 2026-08-02
 Implementation baseline: `6a88a00`
 Predecessor: `docs/plans/archive/2026-08-02-signed-client-identity-hardening.md`

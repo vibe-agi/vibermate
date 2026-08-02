@@ -401,3 +401,67 @@ func TestEveryRequirementFragmentIsLoadBearing(t *testing.T) {
 		})
 	}
 }
+
+// The Desktop production chain, as fixtures rather than as a fact about the
+// current source.
+//
+// Each of the six rules is broken in the bad repository, and each is reported
+// by name. The good one keeps the chain whole. Both go through the public
+// Check, so a rule that stops being registered fails here too.
+func TestProductionCompositionBoundaryUsesPublicCheckWithGoodAndBadFixtures(
+	t *testing.T,
+) {
+	t.Parallel()
+
+	goodRoot := filepath.Join("testdata", "repository-composition-good")
+	if err := Check(goodRoot); err != nil {
+		t.Fatalf("known-good repository fixture failed: %v", err)
+	}
+
+	badRoot := filepath.Join("testdata", "repository-composition-bad")
+	err := Check(badRoot)
+	if !errors.Is(err, ErrCheckFailed) {
+		t.Fatalf("expected ErrCheckFailed, got %v", err)
+	}
+	for _, rule := range []string{
+		"desktop-entry-reaches-past-the-daemon",
+		"desktop-entry-skips-production-options",
+		"desktop-entry-does-not-run-the-daemon",
+		"daemon-does-not-start-the-host",
+		"host-does-not-start-the-runtime",
+		"runtime-does-not-select-production-builders",
+		"unreviewed-runtime-composition",
+	} {
+		if !strings.Contains(err.Error(), rule) {
+			t.Fatalf("public Check did not report %s: %v", rule, err)
+		}
+	}
+}
+
+// A package that names the runtime's types is not composing one. Both of these
+// exist in the real source, and a guard that flagged them would teach everyone
+// to widen the allowlist — which is the opposite of what a short allowlist is
+// for.
+func TestNamingRuntimeTypesIsNotComposingARuntime(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	directory := filepath.Join(root, "internal", "somepackage")
+	if err := os.MkdirAll(directory, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	source := "package somepackage\n\n" +
+		"import \"github.com/vibe-agi/vibermate/internal/productruntime\"\n\n" +
+		"type Reader interface{ Status() productruntime.RuntimeStatus }\n\n" +
+		"func options() productruntime.Options { return productruntime.Options{} }\n"
+	if err := os.WriteFile(
+		filepath.Join(directory, "reader.go"), []byte(source), 0o644,
+	); err != nil {
+		t.Fatal(err)
+	}
+	for _, violation := range CheckProductionCompositionBoundary(root) {
+		if violation.Rule == "unreviewed-runtime-composition" {
+			t.Fatalf("using runtime types was reported as composing: %+v", violation)
+		}
+	}
+}
