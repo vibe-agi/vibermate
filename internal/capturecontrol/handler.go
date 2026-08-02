@@ -527,3 +527,59 @@ func (handler *Handler) askClientRoot(
 	}
 	return outcome.Allowed, nil
 }
+
+// Validate is the one place a launch grant's shape is decided.
+//
+// It lives here, beside the type, because the producer and the consumer must
+// agree and previously did not: this package answered an approved recognized
+// launch with a Root-bearing recipe and no release evidence, and the launcher
+// refused exactly that. Both packages' tests passed. A shape checked in two
+// places is a shape checked nowhere.
+//
+// A Root-bearing recipe rests on exactly one kind of evidence. Release
+// evidence says which build this is; signer evidence says who published it.
+// Both at once would mean a detection claimed both, which cannot happen;
+// neither would mean the recipe rests on nothing.
+func (grant LaunchGrant) Validate() error {
+	if !grant.CatalogRevision.Valid() || !grant.LaunchRecipe.Valid() ||
+		!grant.Recognition.Valid() {
+		return errors.New("CaptureRun launch grant is incomplete")
+	}
+	if grant.Adapter != nil && grant.Signer != nil {
+		return errors.New(
+			"CaptureRun launch grant carries release and signer evidence at once",
+		)
+	}
+	switch {
+	case grant.Adapter != nil:
+		if err := grant.Adapter.Validate(); err != nil ||
+			grant.Adapter.CatalogRevision != grant.CatalogRevision ||
+			grant.Adapter.LaunchRecipe != grant.LaunchRecipe ||
+			grant.LaunchRecipe == clientadapter.LaunchGeneric ||
+			grant.Recognition != clientadapter.RecognitionVerified {
+			return errors.New(
+				"CaptureRun launch grant adapter evidence is inconsistent",
+			)
+		}
+	case grant.Signer != nil:
+		if err := grant.Signer.Validate(); err != nil ||
+			grant.Signer.CatalogRevision != grant.CatalogRevision ||
+			grant.Signer.LaunchRecipe != grant.LaunchRecipe ||
+			grant.LaunchRecipe == clientadapter.LaunchGeneric ||
+			grant.Recognition != clientadapter.RecognitionRecognized {
+			return errors.New(
+				"CaptureRun launch grant signer evidence is inconsistent",
+			)
+		}
+	default:
+		if grant.LaunchRecipe != clientadapter.LaunchGeneric {
+			return errors.New(
+				"CaptureRun launch grant omitted the evidence its recipe rests on",
+			)
+		}
+	}
+	if grant.LaunchRecipe.RequiresRoot() && grant.RootPEMPath == "" {
+		return errors.New("CaptureRun launch grant is missing the local Root")
+	}
+	return nil
+}

@@ -102,6 +102,24 @@ func TestTheGrantCarriesTheRootOnlyWhenARecognizedClientWasAllowed(t *testing.T)
 			if grant.Recognition != clientadapter.RecognitionRecognized {
 				t.Fatalf("recognition=%q", grant.Recognition)
 			}
+			// The grant a launcher will actually receive has to pass the shape
+			// both sides share. This is what nobody checked: the route and the
+			// launcher each tested their own half, and the combination they
+			// produced together could not start a client.
+			if err := grant.Validate(); err != nil {
+				t.Fatalf("the grant this route produced is not launchable: %v", err)
+			}
+			if testCase.allow {
+				if grant.Signer == nil {
+					t.Fatal("an allowed recognized grant carried no signer evidence")
+				}
+				if grant.Signer.LaunchRecipe != grant.LaunchRecipe ||
+					grant.Signer.CatalogRevision != grant.CatalogRevision {
+					t.Fatalf("signer evidence disagrees with its grant: %+v", grant.Signer)
+				}
+			} else if grant.Signer != nil {
+				t.Fatalf("a denied grant carried signer evidence: %+v", grant.Signer)
+			}
 			// A recognized client is not a verified one, and the grant must
 			// not describe it as though a build had been matched.
 			if grant.Adapter != nil {

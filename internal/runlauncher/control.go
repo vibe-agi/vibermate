@@ -15,7 +15,6 @@ import (
 
 	"github.com/vibe-agi/vibermate/internal/capturecontrol"
 	"github.com/vibe-agi/vibermate/internal/capturerun"
-	"github.com/vibe-agi/vibermate/internal/clientadapter"
 	"github.com/vibe-agi/vibermate/internal/launcherdiscovery"
 	"github.com/vibe-agi/vibermate/internal/loopbackclient"
 )
@@ -250,49 +249,10 @@ func validateGrant(grant capturecontrol.LaunchGrant) error {
 		!grant.LaunchRecipe.Valid() {
 		return errors.New("CaptureRun launch grant is incomplete")
 	}
-	// A Root-bearing recipe is justified by exactly one kind of evidence, and
-	// the two kinds are mutually exclusive: release evidence says which build
-	// this is, signer evidence says who published it. Carrying both would mean
-	// a detection claimed both, which cannot happen; carrying neither would
-	// mean the recipe rests on nothing.
-	if grant.Adapter != nil && grant.Signer != nil {
-		return errors.New(
-			"CaptureRun launch grant carries release and signer evidence at once",
-		)
-	}
-	switch {
-	case grant.Adapter != nil:
-		if err := grant.Adapter.Validate(); err != nil ||
-			grant.Adapter.CatalogRevision != grant.CatalogRevision ||
-			grant.Adapter.LaunchRecipe != grant.LaunchRecipe ||
-			grant.LaunchRecipe == clientadapter.LaunchGeneric ||
-			grant.Recognition != clientadapter.RecognitionVerified {
-			return errors.New(
-				"CaptureRun launch grant adapter evidence is inconsistent",
-			)
-		}
-	case grant.Signer != nil:
-		if err := grant.Signer.Validate(); err != nil ||
-			grant.Signer.CatalogRevision != grant.CatalogRevision ||
-			grant.Signer.LaunchRecipe != grant.LaunchRecipe ||
-			grant.LaunchRecipe == clientadapter.LaunchGeneric ||
-			grant.Recognition != clientadapter.RecognitionRecognized {
-			return errors.New(
-				"CaptureRun launch grant signer evidence is inconsistent",
-			)
-		}
-	default:
-		if grant.LaunchRecipe != clientadapter.LaunchGeneric {
-			return errors.New(
-				"CaptureRun launch grant omitted the evidence its recipe rests on",
-			)
-		}
-	}
-	if !grant.Recognition.Valid() {
-		return errors.New("CaptureRun launch grant recognition is invalid")
-	}
-	if grant.LaunchRecipe.RequiresRoot() && grant.RootPEMPath == "" {
-		return errors.New("CaptureRun launch grant is missing the local Root")
+	// The shape is decided by the type that defines it, so producer and
+	// consumer cannot drift apart again.
+	if err := grant.Validate(); err != nil {
+		return err
 	}
 	for _, authority := range grant.ProtectedAuthorities {
 		host, port, err := netSplitAuthority(authority)
