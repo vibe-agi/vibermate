@@ -1,50 +1,41 @@
-# Signed Client Identity Hardening
+# Production Composition Structural Guard
 
-Status: complete
+Status: active
 Created: 2026-08-02
-Implementation baseline: `1783d4d` (design) / `bfd5df5` (implementation)
-Design authority: `docs/adr/0016-signed-identity-client-recognition.md` —
-signer authority is Team ID + identifier
-Predecessor: `docs/plans/archive/2026-08-02-m1.0-c0a-fixed-client-observation.md`
+Implementation baseline: `6a88a00`
+Predecessor: `docs/plans/archive/2026-08-02-signed-client-identity-hardening.md`
 
 ## 现状
 
-ADR-0016 的 signer tier 已接通并可用。但它的安全判定**由字符串包含实现，不由结构实现**：
+审计结论（只读，已复审修正）：
 
-- `internal/codesignature/signature.go` 的 `Requirement.Valid()` 检查
-  `strings.Contains(anchor apple)` 与 `strings.Contains(identifier )`；
-- `internal/clientadapter/signer.go` 的 `validateSigner` 检查
-  `strings.Contains(subject.OU)`。
-
-因此 `identifier "anchor apple subject.OU"` 这样的字符串——三个词全在字面量里——能通过全部
-检查。当前内置的两个条目本身正确且经代码评审，所以不是现成漏洞；风险是**将来一个写错的
-catalog 条目会扩大 Root 的交付对象**。注释宣称的结构保证目前强于代码。
+- Desktop production chain 当前**事实上**唯一：
+  `cmd/vibermated` → `desktopdaemon.ProductionOptions`/`Run` → `desktophost.Start`
+  → `productruntime.Start` → `productionBuilders()`。
+- 但这是事实，不是被机器守住的性质。没有任何门禁阻止第二条路径、测试 builder、placeholder
+  或 development 依赖混入发行路径。
+- 历史 packaged evidence 存在且强（`c19cca4` 的 deterministic 17/17 与 credentialed 25/25，
+  0600，digest 与归档一致），但**只绑定 c19cca4**，当前 HEAD 已前进 85 个提交，且没有任何
+  consumer 要求「当前 commit 必须有 passing report」。
 
 ## 这一片要做什么
 
-**取消 catalog 持有任意 requirement 字符串的能力。**
+**只做源码形状的守卫。** 用 Go AST 建立 `CheckProductionCompositionBoundary`。
 
-Signer 改为持有 typed `SigningIdentifier` 与 `TeamID`；requirement 由 codesignature 从经过严格
-校验的字段生成，模板固定，caller 不能提交表达式，也不解析任何 requirement DSL。
+不构建 App、不运行 acceptance、不实现报告 verifier、不接 recognized client、不改设计仓。
 
 ## 不变量
 
-1. 生成的 requirement 模板固定包含：identifier、Apple generic anchor、Developer ID
-   intermediate 与 leaf 扩展、Team ID。缺一不可，顺序与内容不由 caller 决定。
-2. 字段有明确字符集与长度上限，拒绝引号、空白、控制字符、操作符注入与过长值。
-3. 不再有任何基于 `strings.Contains` 的安全判定。
-4. 结构门禁防止 raw requirement literal 再次进入 catalog。
-5. 语义不变：recognition 分层、Root approval、AgentEndpoint MITM 与 launch grant 都不改。
+1. `cmd/vibermated` 只能经 `desktopdaemon.ProductionOptions` 与 `desktopdaemon.Run` 启动产品；
+2. Desktop main 不得直接 import 或调用 `desktophost` / `productruntime`；
+3. `desktopdaemon.Run` 必须调用 `desktophost.Start`；
+4. `desktophost.Start` 必须调用 `productruntime.Start`；
+5. `productruntime.Start` 必须选择 `productionBuilders()`；
+6. 新的非测试 `ProductRuntime` caller 只能进入明确审查过的 Host composition allowlist；
+   当前只有 DesktopHost，将来 ServerHost 需显式扩展。
 
-## 顺序
-
-- [x] typed `SigningIdentifier` / `TeamID`，含字符集与长度校验
-- [x] `DeveloperIDRequirement` 从字段生成固定模板；`Requirement` 结构体不可从字符串构造，
-      caller 无法提交表达式
-- [x] 删除两处 `strings.Contains` 安全判定
-- [x] `CheckSignerIdentityBoundary` 结构门禁；变异确认：注释放行、literal 拦下
-- [x] 边界测试：真机 Claude 与 Codex 0.146.0 仍被识别；错 identifier / 错 Team ID / 未签名 /
-      被篡改全部拒绝；字符串走私在**类型层**不可表达（编译器拒绝）；Linux 仍无 recognized tier
+每条规则都必须有 public `Check` 路径下的 known-good / injected-bad fixture——不是手工变异，
+因为手工变异只证明写它那天有效。
 
 ## 门禁
 
@@ -54,5 +45,5 @@ Signer 改为持有 typed `SigningIdentifier` 与 `TeamID`；requirement 由 cod
 
 ## 完成陈述
 
-> 一个写错的 catalog 条目无法再扩大 Root 的交付对象，因为 requirement 不再是 catalog 能写的
-> 东西——它由受校验的字段生成。
+> 当前 Desktop production composition 的源码形状由 CI 守住；**这仍不证明当前 commit 的打包
+> 产物运行通过。**
