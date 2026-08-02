@@ -205,6 +205,58 @@ func (client *controlClient) applyAccess(
 	return result, status, problem, err
 }
 
+func (client *controlClient) connectionRules(
+	ctx context.Context,
+) (desktopcontrol.ConnectionRuleSetResponse, error) {
+	var rules desktopcontrol.ConnectionRuleSetResponse
+	status, problem, err := client.request(
+		ctx,
+		http.MethodGet,
+		"/api/v1/policies/connections",
+		false,
+		nil,
+		nil,
+		&rules,
+	)
+	if err != nil {
+		return desktopcontrol.ConnectionRuleSetResponse{}, err
+	}
+	if status != http.StatusOK {
+		return desktopcontrol.ConnectionRuleSetResponse{}, fmt.Errorf(
+			"read connection rules: %s",
+			problem.ReasonCode,
+		)
+	}
+	return rules, nil
+}
+
+func (client *controlClient) replaceConnectionRules(
+	ctx context.Context,
+	expected uint64,
+	input desktopcontrol.ConnectionRuleSetInput,
+) (desktopcontrol.ConnectionRuleSetResponse, error) {
+	var rules desktopcontrol.ConnectionRuleSetResponse
+	status, problem, err := client.request(
+		ctx,
+		http.MethodPatch,
+		"/api/v1/policies/connections",
+		true,
+		&expected,
+		input,
+		&rules,
+	)
+	if err != nil {
+		return desktopcontrol.ConnectionRuleSetResponse{}, err
+	}
+	if status != http.StatusOK {
+		return desktopcontrol.ConnectionRuleSetResponse{}, fmt.Errorf(
+			"replace connection rules: %s",
+			problem.ReasonCode,
+		)
+	}
+	return rules, nil
+}
+
 func (client *controlClient) credential(
 	ctx context.Context,
 	config config,

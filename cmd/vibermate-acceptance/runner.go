@@ -15,6 +15,7 @@ import (
 	"github.com/vibe-agi/vibermate/internal/activity"
 	"github.com/vibe-agi/vibermate/internal/clientadapter"
 	"github.com/vibe-agi/vibermate/internal/connectionevent"
+	"github.com/vibe-agi/vibermate/internal/desktopcontrol"
 	"github.com/vibe-agi/vibermate/internal/exchange"
 	"github.com/vibe-agi/vibermate/internal/instanceguard"
 	"github.com/vibe-agi/vibermate/internal/offlinehold"
@@ -192,6 +193,18 @@ func runAcceptance(
 		"access-apply",
 		checkPassed,
 		"revision 1 executable Access committed and published",
+	)
+	if err := configureAcceptanceConnectionPolicy(
+		ctx,
+		first.control,
+		config,
+	); err != nil {
+		return fail("fixed-client-connection-policy", err)
+	}
+	report.add(
+		"fixed-client-connection-policy",
+		checkPassed,
+		"an explicit exact-host-and-port rule admitted only the fixed client origin; the default remained ask",
 	)
 	preflight, err := runHeldIngressPreflight(ctx, config, first)
 	if err != nil {
@@ -562,6 +575,79 @@ func isolateDeterministicSecret(input config) (config, error) {
 	}
 	input.secretRef = reference
 	return input, nil
+}
+
+const acceptanceConnectionRuleID = "acceptance.allow-client-origin"
+
+func configureAcceptanceConnectionPolicy(
+	ctx context.Context,
+	control *controlClient,
+	config config,
+) error {
+	if ctx == nil || control == nil {
+		return errors.New("acceptance connection policy dependencies are required")
+	}
+	current, err := control.connectionRules(ctx)
+	if err != nil {
+		return err
+	}
+	input, err := acceptanceConnectionRuleSet(config, current)
+	if err != nil {
+		return err
+	}
+	replaced, err := control.replaceConnectionRules(
+		ctx,
+		current.Revision,
+		input,
+	)
+	if err != nil {
+		return err
+	}
+	if replaced.Revision != current.Revision+1 ||
+		!slices.Equal(replaced.Rules, input.Rules) ||
+		replaced.Default != input.Default {
+		return fmt.Errorf(
+			"connection rule replacement was not exact: %+v",
+			replaced,
+		)
+	}
+	return nil
+}
+
+func acceptanceConnectionRuleSet(
+	config config,
+	current desktopcontrol.ConnectionRuleSetResponse,
+) (desktopcontrol.ConnectionRuleSetInput, error) {
+	if current.Revision == 0 ||
+		len(current.Rules) != 0 ||
+		current.Default.Decision != "ask" ||
+		current.Default.Match != "any" ||
+		current.Default.Host != "" ||
+		current.Default.Port != 0 {
+		return desktopcontrol.ConnectionRuleSetInput{}, fmt.Errorf(
+			"acceptance requires a fresh fail-closed connection rule set: %+v",
+			current,
+		)
+	}
+	client, err := selectedAcceptanceClient(config)
+	if err != nil {
+		return desktopcontrol.ConnectionRuleSetInput{}, err
+	}
+	origin, err := access.NewClientOrigin(client.ClientOrigin)
+	if err != nil {
+		return desktopcontrol.ConnectionRuleSetInput{}, err
+	}
+	return desktopcontrol.ConnectionRuleSetInput{
+		Rules: []desktopcontrol.ConnectionRuleInput{{
+			ID:       acceptanceConnectionRuleID,
+			Priority: 100,
+			Decision: "allow",
+			Match:    "exact_host_port",
+			Host:     origin.TLSServerName(),
+			Port:     origin.Port(),
+		}},
+		Default: current.Default,
+	}, nil
 }
 
 func verifyFixedClient(
