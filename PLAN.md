@@ -1,65 +1,57 @@
-# M1.0-C0a Step 1: 让那个拒绝真的被触发一次
+# Signed Client Identity Hardening
 
 Status: active
 Created: 2026-08-02
-Implementation baseline: `b7ea03d`
-Design authority: `vibermate-design@336909b` — `docs/design/12-implementation-readiness.md:95-112`
-Predecessor: `docs/plans/archive/2026-08-02-m1.0-c0l-release-path.md`
+Implementation baseline: `1783d4d` (design) / `bfd5df5` (implementation)
+Design authority: `docs/adr/0016-signed-identity-client-recognition.md` —
+signer authority is Team ID + identifier
+Predecessor: `docs/plans/archive/2026-08-02-m1.0-c0a-fixed-client-observation.md`
 
 ## 现状
 
-设计把 M1.0-C0a 定为三步。第 2 步（P0 安全切点）已完成：`AllowsOriginalOrigin()`
-只对 `none`/`control` 返回真，`count_tokens` 已分类 `client_semantic`，正文不可能
-被以客户端自己的凭据发往原站。
+ADR-0016 的 signer tier 已接通并可用。但它的安全判定**由字符串包含实现，不由结构实现**：
 
-第 1 步没有完成。`docs/evidence/2026-08-02-m1.0-c0a-fixed-client-probe.md` 诚实记为
-`not_observed`：两个非交互场景里 `count_tokens` **从未被请求**，所以那个 422 拒绝
-从未被动态执行过。当时的结论来自对 bundle 的静态阅读（catch → log → return null，
-`maxRetries: 1`）。
+- `internal/codesignature/signature.go` 的 `Requirement.Valid()` 检查
+  `strings.Contains(anchor apple)` 与 `strings.Contains(identifier )`；
+- `internal/clientadapter/signer.go` 的 `validateSigner` 检查
+  `strings.Contains(subject.OU)`。
 
-而且那次探针用「本地 HTTP server 冒充 AgentEndpoint」，没有 CaptureRun、没有 MITM、
-没有本地 Root。现在这三样都有了，真实 Claude Code 端到端也已跑通。
+因此 `identifier "anchor apple subject.OU"` 这样的字符串——三个词全在字面量里——能通过全部
+检查。当前内置的两个条目本身正确且经代码评审，所以不是现成漏洞；风险是**将来一个写错的
+catalog 条目会扩大 Root 的交付对象**。注释宣称的结构保证目前强于代码。
 
 ## 这一片要做什么
 
-把那条证据从「静态推断 + 未触发」升到「真运行时里真的发生过一次」。
+**取消 catalog 持有任意 requirement 字符串的能力。**
 
-设计原文（`12-implementation-readiness.md:97-98`）：**「记录客户端是继续本地估算、
-降级还是中断；不预设结果」**。所以本片的成功标准不是「客户端没崩」，而是
-**观察到并如实记录**。
+Signer 改为持有 typed `SigningIdentifier` 与 `TeamID`；requirement 由 codesignature 从经过严格
+校验的字段生成，模板固定，caller 不能提交表达式，也不解析任何 requirement DSL。
 
 ## 不变量
 
-1. 观察不预设结果。如果客户端中断，就记 `blocked` 并给出明确原因，不为了让结论
-   好看去改判据。
-2. 拒绝必须发生在真运行时里：真 CaptureRun、真 MITM、真本地 Root、真连接策略。
-3. 无论触发与否，正文都不得流向原站——这是第 2 步已建立的性质，本片顺带回归它。
-4. 触发不了就诚实记「仍未触发」，并写清尝试过哪些路径。不把「没触发」写成「通过」。
+1. 生成的 requirement 模板固定包含：identifier、Apple generic anchor、Developer ID
+   intermediate 与 leaf 扩展、Team ID。缺一不可，顺序与内容不由 caller 决定。
+2. 字段有明确字符集与长度上限，拒绝引号、空白、控制字符、操作符注入与过长值。
+3. 不再有任何基于 `strings.Contains` 的安全判定。
+4. 结构门禁防止 raw requirement literal 再次进入 catalog。
+5. 语义不变：recognition 分层、Root approval、AgentEndpoint MITM 与 launch grant 都不改。
 
 ## 顺序
 
-- [x] 找到可触发 `count_tokens` 的非交互路径：`claude plugin details`
-      （`--print` 从不请求它，这是上次只能记 `not_observed` 的原因）
-- [x] 自带 marketplace/插件夹具，观察不依赖机器上装了什么
-- [x] 真运行时观察：真 CaptureRun、真本地 Root、真 MITM、真准入路径
-      → `internal/desktophost` 的 `TestAFixedClaudeCode...`
-- [x] 结果：**降级**——客户端 exit 0 并给出本地估算
-- [x] 用差分证明那些数字是本地的：同夹具下端点答 `{"input_tokens":999999}`
-      时打印 `~999,999`，答 422 时打印 `~39`
-- [x] 用变异证明请求确实到达并被拒：把 `count_tokens` 改回
-      `OperationPayloadControl`，同一次运行有 **6,488 字节**发往
-      `api.anthropic.com` 并触发字节上限失败
-- [x] 按实际观察重写证据文档，并记下已知可观测性缺口
-- [x] 第 3 步：把 C0a 冻结写成代码（`internal/operationcatalog/c0a_freeze_test.go`），
-      三条断言各自经变异确认承重；核实无 `profile_endpoint`、无 Language Bridge 夹带
+- [ ] typed `SigningIdentifier` / `TeamID`，含字符集与长度校验
+- [ ] codesignature 从字段生成固定模板 requirement，取消 caller 提交表达式的入口
+- [ ] 删除两处 `strings.Contains` 安全判定
+- [ ] repositorycheck 增加结构门禁，禁止 catalog 出现 raw requirement literal
+- [ ] 边界测试：真实安装仍识别；错 identifier / 错 Team ID / 未签名 / 被篡改全部拒绝；
+      字符串走私不再可表达；Linux 仍无 recognized tier
 
 ## 门禁
 
-`gofmt -l .`、`go vet ./...`、`go test -count=1 ./...`、`go test -race -count=1 ./...`、
-`go run ./cmd/repositorycheck`、`make check-release-build`、`go mod tidy -diff`、
-`pnpm --dir ui/desktop run check`、`git diff --check`、工作树干净。
+`gofmt -l .`、`go vet ./...`、`go test -count=1 ./...`、`go test -race`（触及包）、
+`go run ./cmd/repositorycheck`、`make check-release-build`、`pnpm --dir ui/desktop run check`、
+`git diff --check`、工作树干净。不 push。
 
 ## 完成陈述
 
-> 那个 422 在真运行时里被真实客户端触发过（或有据可查地触发不到），客户端的反应被
-> 如实记录，而不是从 bundle 里读出来的。
+> 一个写错的 catalog 条目无法再扩大 Root 的交付对象，因为 requirement 不再是 catalog 能写的
+> 东西——它由受校验的字段生成。
