@@ -291,7 +291,19 @@ type approvalRuntime interface {
 	exchange.ToolDecisionGate
 	toolapproval.Controller
 	loopbackproxy.NetworkApprovals
+	ClientRootApprover
 	Shutdown(context.Context) error
+}
+
+// ClientRootApprover decides whether a client recognized by its publisher,
+// rather than by a catalogued build, may be handed the local Root. It is
+// declared here rather than imported from the CaptureRun control package so
+// that the runtime does not depend on one of its own hosts.
+type ClientRootApprover interface {
+	AskClientRoot(
+		context.Context,
+		toolapproval.ClientRootAskRequest,
+	) (toolapproval.ClientRootAskOutcome, error)
 }
 
 type approvalBuilder interface {

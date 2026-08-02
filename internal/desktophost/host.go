@@ -256,6 +256,10 @@ func Start(ctx context.Context, options Options) (*Host, error) {
 		Launcher:    launcherAuthority,
 		RunLifetime: options.CaptureRunLifetime,
 		Clock:       options.Runtime.Clock,
+		// The same authority that asks about a connection asks about handing
+		// a recognized client the Root, so both questions reach a person the
+		// same way and appear in the same place.
+		ClientRootApprovals: runtime.ClientRootApprovals(),
 	})
 	if err != nil {
 		return fail("CaptureRun routes", err)

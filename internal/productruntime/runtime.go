@@ -548,6 +548,13 @@ func (r *Runtime) ToolApprovals() toolapproval.Controller {
 	return r.approvals
 }
 
+// ClientRootApprovals returns the authority asked before a client recognized
+// by its publisher is handed the Root. It is the same authority that answers a
+// connection ask, so both questions reach a person the same way.
+func (r *Runtime) ClientRootApprovals() ClientRootApprover {
+	return r.approvals
+}
+
 // ConnectionRules is the outbound firewall a person reads and edits.
 func (r *Runtime) ConnectionRules() *connectionpolicy.Manager {
 	return r.connectionRules

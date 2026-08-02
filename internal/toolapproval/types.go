@@ -89,6 +89,10 @@ type Kind string
 const (
 	KindToolIntent Kind = "tool_intent"
 	KindNetworkAsk Kind = "network_ask"
+	// KindClientRootAsk: may a client recognized by its publisher, rather than
+	// by a catalogued build, be given the local Root? Asked once per publisher
+	// entry, before the client launches.
+	KindClientRootAsk Kind = "client_root_ask"
 )
 
 type presentation struct {
@@ -156,6 +160,38 @@ var presentations = map[Kind]presentation{
 		summaryKey: "approval.networkAsk.summary",
 		choices:    networkAskChoices(),
 	},
+	KindClientRootAsk: {
+		// Handing out the Root is what makes a client's traffic readable, so
+		// this is not a medium-risk convenience prompt.
+		risk:       "high",
+		titleKey:   "approval.clientRootAsk.title",
+		summaryKey: "approval.clientRootAsk.summary",
+		choices:    clientRootAskChoices(),
+	},
+}
+
+// clientRootAskChoices offers this launch and nothing wider.
+//
+// A remembered answer would need a rule keyed on a publisher, and the only
+// remembered scope that exists writes a host and port rule, which is about a
+// connection rather than about who signed a program. Rather than reuse it for
+// something it does not mean, this kind answers one launch at a time until
+// that store exists. The cost is a prompt per launch and it is visible; the
+// alternative would have been a remembered answer that quietly decided more
+// than the person was asked.
+func clientRootAskChoices() []Choice {
+	return []Choice{
+		{
+			Decision: DecisionAllowOnce,
+			Scope:    ScopeRequest,
+			LabelKey: "approval.clientRootAsk.choice.allowOnce",
+		},
+		{
+			Decision: DecisionDeny,
+			Scope:    ScopeRequest,
+			LabelKey: "approval.clientRootAsk.choice.denyOnce",
+		},
+	}
 }
 
 func (kind Kind) valid() bool {

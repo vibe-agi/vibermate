@@ -5,6 +5,7 @@ package capturecontrol
 
 import (
 	"bytes"
+	"context"
 	"crypto/sha256"
 	"encoding/base64"
 	"encoding/json"
@@ -23,6 +24,7 @@ import (
 	"github.com/vibe-agi/vibermate/internal/capturerun"
 	"github.com/vibe-agi/vibermate/internal/clientadapter"
 	"github.com/vibe-agi/vibermate/internal/localca"
+	"github.com/vibe-agi/vibermate/internal/toolapproval"
 )
 
 const (
@@ -59,6 +61,20 @@ type Options struct {
 	Launcher    *LauncherAuthority
 	RunLifetime time.Duration
 	Clock       Clock
+	// ClientRootApprovals decides whether a client recognized by its publisher
+	// may receive the Root. Leaving it nil is a decision, not an oversight:
+	// nothing can ask, so no such client is given one.
+	ClientRootApprovals ClientRootApprovals
+}
+
+// ClientRootApprovals is the one question this handler puts in front of a
+// person. It is an interface so that a host with no way to ask has an honest
+// way to say so rather than a way to answer for them.
+type ClientRootApprovals interface {
+	AskClientRoot(
+		context.Context,
+		toolapproval.ClientRootAskRequest,
+	) (toolapproval.ClientRootAskOutcome, error)
 }
 
 type Handler struct {
@@ -68,6 +84,7 @@ type Handler struct {
 	proxyOrigin string
 	root        localca.RootCertificate
 	launcher    *LauncherAuthority
+	rootAsk     ClientRootApprovals
 	runLifetime time.Duration
 	clock       Clock
 	mux         *http.ServeMux
@@ -119,6 +136,7 @@ func New(options Options) (*Handler, error) {
 	}
 	handler := &Handler{
 		runs:        options.Runs,
+		rootAsk:     options.ClientRootApprovals,
 		verifier:    options.Verifier,
 		authorities: options.Authorities,
 		proxyOrigin: options.ProxyOrigin,
@@ -196,6 +214,12 @@ func (handler *Handler) create(
 			detection.Status != clientadapter.StatusVerified) ||
 		(detection.Status == clientadapter.StatusGeneric &&
 			detection.Evidence != nil) ||
+		(detection.Signer != nil &&
+			(detection.Recognition != clientadapter.RecognitionRecognized ||
+				detection.Evidence != nil ||
+				detection.Signer.Validate() != nil ||
+				detection.Signer.CatalogRevision !=
+					detection.CatalogRevision)) ||
 		(detection.Status == clientadapter.StatusVerified &&
 			(detection.Evidence == nil ||
 				detection.Evidence.Validate() != nil ||
@@ -218,6 +242,20 @@ func (handler *Handler) create(
 		adapter = &evidence
 		recipe = evidence.LaunchRecipe
 		if recipe.RequiresRoot() {
+			rootPath = handler.root.Path()
+		}
+	}
+	// A client recognized by its publisher rather than by a catalogued build
+	// gets the Root only after somebody says so. This is where the widening
+	// stops being silent, and a launch that cannot reach a person simply
+	// launches without a Root: that is the same place an uncatalogued program
+	// has always been, not a failure to start.
+	if detection.Recognition == clientadapter.RecognitionRecognized &&
+		detection.Signer != nil {
+		signer := *detection.Signer
+		outcome, askErr := handler.askClientRoot(request.Context(), signer)
+		if askErr == nil && outcome {
+			recipe = signer.LaunchRecipe
 			rootPath = handler.root.Path()
 		}
 	}
@@ -452,4 +490,30 @@ func writeJSON(writer http.ResponseWriter, status int, value any) {
 	writer.Header().Set("Cache-Control", "no-store")
 	writer.WriteHeader(status)
 	_ = json.NewEncoder(writer).Encode(value)
+}
+
+// askClientRoot returns whether this launch may carry the Root.
+//
+// Every failure answers no, including having nobody to ask. Handing out the
+// Root because a prompt could not be shown would be the one outcome worse than
+// not asking.
+func (handler *Handler) askClientRoot(
+	ctx context.Context,
+	signer clientadapter.SignerEvidence,
+) (bool, error) {
+	if handler.rootAsk == nil {
+		return false, nil
+	}
+	outcome, err := handler.rootAsk.AskClientRoot(
+		ctx,
+		toolapproval.ClientRootAskRequest{
+			SignerID:       signer.ID,
+			SignerRevision: uint64(signer.Revision),
+			SignedPath:     signer.SignedPath,
+		},
+	)
+	if err != nil {
+		return false, err
+	}
+	return outcome.Allowed, nil
 }

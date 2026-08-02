@@ -242,7 +242,12 @@ type fixture struct {
 	executable    string
 }
 
-func newFixture(t *testing.T) *fixture {
+// fixtureOverride adjusts the handler a fixture builds. Recognition needs a
+// verifier that reports it and something able to answer, and neither can come
+// from a file on disk in a unit test.
+type fixtureOverride func(*capturecontrol.Options)
+
+func newFixture(t *testing.T, overrides ...fixtureOverride) *fixture {
 	t.Helper()
 	directory := t.TempDir()
 	store, err := runtimepersistence.Open(
@@ -323,7 +328,7 @@ func newFixture(t *testing.T) *fixture {
 	if err != nil {
 		t.Fatal(err)
 	}
-	handler, err := capturecontrol.New(capturecontrol.Options{
+	options := capturecontrol.Options{
 		Runs:        runs,
 		Verifier:    verifier,
 		Authorities: fixedAuthorities{"api.anthropic.com:443"},
@@ -332,7 +337,11 @@ func newFixture(t *testing.T) *fixture {
 		Launcher:    launcher,
 		RunLifetime: 2 * time.Minute,
 		Clock:       clock,
-	})
+	}
+	for _, override := range overrides {
+		override(&options)
+	}
+	handler, err := capturecontrol.New(options)
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -77,35 +77,61 @@ func (authority *Authority) AskNetwork(
 	if err := request.validate(); err != nil {
 		return denied("invalid_ask"), err
 	}
+	allowed, reason, err := authority.awaitDecision(
+		ctx,
+		networkAskAggregateKey(request),
+		func(identifier string, now time.Time) Record {
+			return Record{
+				ID:            identifier,
+				Revision:      1,
+				Kind:          KindNetworkAsk,
+				AggregateKey:  networkAskAggregateKey(request),
+				SubjectRefs:   []string{request.authority()},
+				SubjectLabels: []string{request.Host},
+				Target:        Target{Host: request.Host, Port: request.Port},
+				RequestCount:  1,
+				WaiterCount:   1,
+				State:         StatePending,
+				CreatedAt:     now,
+				ExpiresAt:     now.Add(authority.config.DecisionTimeout),
+			}
+		},
+	)
+	if err != nil {
+		return denied(reason), err
+	}
+	if allowed {
+		return NetworkAskOutcome{Allowed: true}, nil
+	}
+	return denied(reason), nil
+}
+
+// awaitDecision is the waiting itself, shared by every kind that blocks a
+// caller on a person. It was extracted rather than copied because the parts
+// that are easy to get subtly wrong — publishing an entry before its record is
+// durable, counting joiners onto one question, and denying on every failure —
+// must behave identically no matter what is being asked.
+//
+// It returns (allowed, reason, err). Every error path denies.
+func (authority *Authority) awaitDecision(
+	ctx context.Context,
+	aggregateKey string,
+	build func(identifier string, now time.Time) Record,
+) (bool, string, error) {
 	operation := ctx
 	identifier, err := randomIdentifier(authority.random)
 	if err != nil {
-		return denied("approval_unavailable"), err
+		return false, "approval_unavailable", err
 	}
-	now := authority.clock.Now().UTC()
-	aggregateKey := networkAskAggregateKey(request)
-	record := Record{
-		ID:            identifier,
-		Revision:      1,
-		Kind:          KindNetworkAsk,
-		AggregateKey:  aggregateKey,
-		SubjectRefs:   []string{request.authority()},
-		SubjectLabels: []string{request.Host},
-		Target:        Target{Host: request.Host, Port: request.Port},
-		RequestCount:  1,
-		WaiterCount:   1,
-		State:         StatePending,
-		CreatedAt:     now,
-		ExpiresAt:     now.Add(authority.config.DecisionTimeout),
-	}
+	record := build(identifier, authority.clock.Now().UTC())
 	if err := record.Validate(); err != nil {
-		return denied("invalid_ask"), err
+		return false, "invalid_ask", err
 	}
 
 	authority.mu.Lock()
 	if authority.closing {
 		authority.mu.Unlock()
-		return denied("runtime_stopping"), nil
+		return false, "runtime_stopping", nil
 	}
 	authority.mu.Unlock()
 
@@ -123,14 +149,14 @@ func (authority *Authority) AskNetwork(
 		case <-entry.ready:
 		case <-operation.Done():
 			authority.departFrom(waitingOn, pending, "connection_canceled")
-			return denied("connection_canceled"), nil
+			return false, "connection_canceled", nil
 		case <-timer.C:
 			authority.departFrom(waitingOn, pending, "approval_expired")
-			return denied("approval_expired"), nil
+			return false, "approval_expired", nil
 		}
 		if !authority.waiters.durable(entry) {
 			authority.waiters.remove(waitingOn, pending)
-			return denied("approval_unavailable"), nil
+			return false, "approval_unavailable", nil
 		}
 		// The person sees one question with a true count rather than one
 		// prompt per connection. The count is what the prompt displays, not
@@ -143,7 +169,7 @@ func (authority *Authority) AskNetwork(
 		authority.waiters.publish(entry, err == nil)
 		if err != nil {
 			authority.waiters.remove(record.ID, pending)
-			return denied("approval_unavailable"), err
+			return false, "approval_unavailable", err
 		}
 	}
 	authority.mu.Lock()
@@ -155,20 +181,20 @@ func (authority *Authority) AskNetwork(
 	case resolved = <-pending.result:
 	case <-operation.Done():
 		authority.departFrom(waitingOn, pending, "connection_canceled")
-		return denied("connection_canceled"), nil
+		return false, "connection_canceled", nil
 	case <-timer.C:
 		authority.departFrom(waitingOn, pending, "approval_expired")
-		return denied("approval_expired"), nil
+		return false, "approval_expired", nil
 	}
 	authority.waiters.remove(waitingOn, pending)
 	if resolved.State == StateAllowed {
-		return NetworkAskOutcome{Allowed: true}, nil
+		return true, "", nil
 	}
 	reason := resolved.DecisionReason
 	if reason == "" {
 		reason = "denied"
 	}
-	return denied(reason), nil
+	return false, reason, nil
 }
 
 // departFrom takes one caller out of a question. The question survives while
