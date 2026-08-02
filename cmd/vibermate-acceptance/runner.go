@@ -234,7 +234,7 @@ func runAcceptance(
 		checkPassed,
 		"the subsequent provider request failed before transport at the missing development credential boundary; reason="+preflight.providerReason,
 	)
-	connectionID, err := waitForProviderConnectionAudit(
+	connectionID, err := waitForClientConnectionAudit(
 		ctx,
 		first.control,
 		config,
@@ -247,7 +247,7 @@ func runAcceptance(
 	report.add(
 		"fixed-client-connection-audit",
 		checkPassed,
-		"durable MITM ConnectionEvent correlated the configured Agent ingress with the selected provider route; connectionId="+connectionID,
+		"durable MITM ConnectionEvent bound the verified fixed client to the explicit exact-host-and-port rule without request-level provider facts; connectionId="+connectionID,
 	)
 	stopContext, stopCancel := context.WithTimeout(ctx, 30*time.Second)
 	err = first.stopGracefully(stopContext)
@@ -1710,17 +1710,13 @@ func connectionPhaseSequence(
 	return true
 }
 
-func waitForProviderConnectionAudit(
+func waitForClientConnectionAudit(
 	ctx context.Context,
 	control *controlClient,
 	config config,
 	after int64,
 	limit time.Duration,
 ) (string, error) {
-	providerOrigin, err := access.NewProviderOrigin(config.providerOrigin)
-	if err != nil {
-		return "", err
-	}
 	client, err := selectedAcceptanceClient(config)
 	if err != nil {
 		return "", err
@@ -1729,7 +1725,6 @@ func waitForProviderConnectionAudit(
 	if err != nil {
 		return "", err
 	}
-	expectedCredential := assemblyIdentifiers(config.accessID).account
 	waitContext, cancel := context.WithTimeout(ctx, limit)
 	defer cancel()
 	ticker := time.NewTicker(50 * time.Millisecond)
@@ -1738,6 +1733,15 @@ func waitForProviderConnectionAudit(
 	for {
 		records, err := connectionRecordsAfter(waitContext, control, after)
 		if err != nil {
+			if waitContext.Err() != nil {
+				if lastErr != nil {
+					return "", lastErr
+				}
+				return "", fmt.Errorf(
+					"client ConnectionEvent evidence did not become terminal: %w",
+					waitContext.Err(),
+				)
+			}
 			return "", err
 		}
 		seen := make(map[string]struct{})
@@ -1756,11 +1760,9 @@ func waitForProviderConnectionAudit(
 			if err != nil {
 				return "", err
 			}
-			ready, err := providerConnectionAuditReady(
+			ready, err := clientConnectionAuditReady(
 				timeline,
 				clientOrigin,
-				providerOrigin,
-				expectedCredential,
 			)
 			if err != nil {
 				lastErr = err
@@ -1777,101 +1779,129 @@ func waitForProviderConnectionAudit(
 				return "", lastErr
 			}
 			return "", fmt.Errorf(
-				"provider ConnectionEvent evidence did not become terminal: %w",
+				"client ConnectionEvent evidence did not become terminal: %w",
 				waitContext.Err(),
 			)
 		}
 	}
 }
 
-func providerConnectionAuditReady(
+func clientConnectionAuditReady(
 	timeline connectionevent.Timeline,
 	clientOrigin access.ClientOrigin,
-	providerOrigin access.ProviderOrigin,
-	expectedCredential string,
 ) (bool, error) {
 	if len(timeline.Events) == 0 {
-		return false, errors.New("provider ConnectionEvent timeline is empty")
+		return false, errors.New("client ConnectionEvent timeline is empty")
+	}
+	if !connectionPhaseSequence(
+		timeline.Events,
+		[]connectionevent.Phase{
+			connectionevent.PhaseAttempted,
+			connectionevent.PhaseDecided,
+			connectionevent.PhaseConnected,
+			connectionevent.PhaseClosed,
+		},
+	) {
+		last := timeline.Events[len(timeline.Events)-1]
+		if !connectionRecordTerminal(last) {
+			return false, nil
+		}
+		return false, errors.New(
+			"client ConnectionEvent phase sequence is invalid",
+		)
 	}
 	first := timeline.Events[0]
 	if first.ConnectionID != timeline.ConnectionID ||
 		first.Phase != connectionevent.PhaseAttempted ||
 		first.SourceConfidence != connectionevent.SourceConfidenceUnknown ||
+		first.IngressID != "" ||
+		first.SourceLabel != "" ||
 		first.RequestedHost != clientOrigin.TLSServerName() ||
-		first.Port != clientOrigin.Port() {
+		first.Port != clientOrigin.Port() ||
+		first.ObservedSNI != "" ||
+		first.RouteHost != "" ||
+		first.Decision != "" ||
+		first.RuleID != "" ||
+		first.CredentialBindingID != "" ||
+		first.EgressScope != "" ||
+		first.EgressSource != "" ||
+		first.EgressRuleID != "" ||
+		first.EgressSelectorRunID != "" ||
+		first.EgressProxyID != "" ||
+		first.EgressPolicyRevision != 0 ||
+		first.Decryption != connectionevent.DecryptionNone {
 		return false, fmt.Errorf(
-			"provider ConnectionEvent attempt is invalid: %+v",
+			"client ConnectionEvent attempt is invalid: %+v",
 			first,
 		)
 	}
-	allowSeen := false
-	clientConnected := false
-	providerConnected := false
+	expectedHost := clientOrigin.TLSServerName()
+	expectedIngress := ""
+	expectedSource := ""
 	previousSequence := int64(0)
-	for _, record := range timeline.Events {
+	for index, record := range timeline.Events {
 		if err := record.Validate(); err != nil {
 			return false, err
 		}
 		if record.ConnectionID != timeline.ConnectionID ||
-			record.RequestedHost != clientOrigin.TLSServerName() ||
+			record.RequestedHost != expectedHost ||
+			record.Port != clientOrigin.Port() ||
 			record.Sequence <= previousSequence {
 			return false, errors.New(
-				"provider ConnectionEvent identity or ordering changed",
+				"client ConnectionEvent identity or ordering changed",
 			)
 		}
 		previousSequence = record.Sequence
-		if record.Decision == connectionevent.DecisionAllow {
-			if record.SourceConfidence !=
-				connectionevent.SourceConfidenceConfigured ||
-				record.IngressID == "" ||
-				record.SourceLabel == "" ||
-				record.RuleID != "m0.agent_endpoint_exact" ||
-				record.EgressScope != connectionevent.EgressScopeAccess ||
-				record.EgressSource !=
-					connectionevent.EgressSourceAccessDefault ||
-				record.EgressPolicyRevision != 1 ||
-				record.Decryption != connectionevent.DecryptionMITM {
-				return false, fmt.Errorf(
-					"provider ConnectionEvent allow evidence is invalid: %+v",
-					record,
-				)
-			}
-			allowSeen = true
-		}
-		if record.Phase != connectionevent.PhaseConnected {
+		if index == 0 {
 			continue
 		}
-		if record.ObservedSNI == clientOrigin.TLSServerName() &&
-			record.RouteHost == clientOrigin.TLSServerName() {
-			clientConnected = true
+		if record.SourceConfidence != connectionevent.SourceConfidenceVerified ||
+			record.IngressID == "" ||
+			record.SourceLabel == "" ||
+			record.Decision != connectionevent.DecisionAllow ||
+			record.RuleID != acceptanceConnectionRuleID ||
+			record.RouteHost != expectedHost ||
+			record.CredentialBindingID != "" ||
+			record.EgressScope != connectionevent.EgressScopeAccess ||
+			record.EgressSource != connectionevent.EgressSourceAccessDefault ||
+			record.EgressRuleID != "" ||
+			record.EgressSelectorRunID != "" ||
+			record.EgressProxyID != "" ||
+			record.EgressPolicyRevision != 1 ||
+			record.Decryption != connectionevent.DecryptionMITM {
+			return false, fmt.Errorf(
+				"client ConnectionEvent allow evidence is invalid: %+v",
+				record,
+			)
 		}
-		if record.RouteHost == providerOrigin.NetworkHost() {
-			if record.CredentialBindingID != expectedCredential {
-				return false, fmt.Errorf(
-					"provider ConnectionEvent credential binding=%q",
-					record.CredentialBindingID,
-				)
-			}
-			providerConnected = true
+		if expectedIngress == "" {
+			expectedIngress = record.IngressID
+			expectedSource = record.SourceLabel
+		} else if record.IngressID != expectedIngress ||
+			record.SourceLabel != expectedSource {
+			return false, errors.New(
+				"client ConnectionEvent source identity changed",
+			)
 		}
-	}
-	if !providerConnected {
-		return false, nil
-	}
-	if !allowSeen || !clientConnected {
-		return false, errors.New(
-			"provider ConnectionEvent omitted ingress decision evidence",
-		)
+		if index == 1 && record.ObservedSNI != "" {
+			return false, errors.New(
+				"client ConnectionEvent observed SNI before TLS handshake",
+			)
+		}
+		if index >= 2 && record.ObservedSNI != expectedHost {
+			return false, errors.New(
+				"client ConnectionEvent omitted the observed SNI",
+			)
+		}
 	}
 	last := timeline.Events[len(timeline.Events)-1]
-	if !connectionRecordTerminal(last) {
-		return false, nil
-	}
-	if last.Phase != connectionevent.PhaseClosed &&
-		last.Phase != connectionevent.PhaseFailed {
+	if last.Outcome != connectionevent.OutcomeCompleted ||
+		last.ErrorClass != "" ||
+		last.BytesUp == 0 ||
+		last.BytesDown == 0 {
 		return false, fmt.Errorf(
-			"provider ConnectionEvent terminal phase=%q",
-			last.Phase,
+			"client ConnectionEvent terminal evidence is invalid: %+v",
+			last,
 		)
 	}
 	return true, nil

@@ -470,7 +470,7 @@ func TestQueuedKindSummaryIsStableAndRequiresCompleteAccounting(t *testing.T) {
 	}
 }
 
-func TestProviderConnectionAuditRequiresCompleteImmutableTimeline(
+func TestClientConnectionAuditRequiresCompleteImmutableTimeline(
 	t *testing.T,
 ) {
 	t.Parallel()
@@ -479,16 +479,10 @@ func TestProviderConnectionAuditRequiresCompleteImmutableTimeline(
 	if err != nil {
 		t.Fatal(err)
 	}
-	providerOrigin, err := access.NewProviderOrigin("https://api.example.com/v1")
-	if err != nil {
-		t.Fatal(err)
-	}
-	timeline := providerAuditTimeline(t)
-	ready, err := providerConnectionAuditReady(
+	timeline := clientAuditTimeline(t)
+	ready, err := clientConnectionAuditReady(
 		timeline,
 		clientOrigin,
-		providerOrigin,
-		"assembly-001-account",
 	)
 	if err != nil || !ready {
 		t.Fatalf("complete timeline ready=%t error=%v", ready, err)
@@ -499,29 +493,67 @@ func TestProviderConnectionAuditRequiresCompleteImmutableTimeline(
 		[]connectionevent.Record(nil),
 		timeline.Events[:len(timeline.Events)-1]...,
 	)
-	ready, err = providerConnectionAuditReady(
+	ready, err = clientConnectionAuditReady(
 		nonterminal,
 		clientOrigin,
-		providerOrigin,
-		"assembly-001-account",
 	)
 	if err != nil || ready {
 		t.Fatalf("nonterminal timeline ready=%t error=%v", ready, err)
 	}
 
-	wrongCredential := timeline
-	wrongCredential.Events = append(
+	providerContaminated := timeline
+	providerContaminated.Events = append(
 		[]connectionevent.Record(nil),
 		timeline.Events...,
 	)
-	wrongCredential.Events[3].CredentialBindingID = "other-account"
-	if ready, err = providerConnectionAuditReady(
-		wrongCredential,
+	providerContaminated.Events[2].RouteHost = "api.example.com"
+	providerContaminated.Events[2].CredentialBindingID = "assembly-001-account"
+	if ready, err = clientConnectionAuditReady(
+		providerContaminated,
 		clientOrigin,
-		providerOrigin,
-		"assembly-001-account",
 	); err == nil || ready {
-		t.Fatalf("wrong credential timeline ready=%t error=%v", ready, err)
+		t.Fatalf("provider-contaminated timeline ready=%t error=%v", ready, err)
+	}
+
+	downgraded := timeline
+	downgraded.Events = append(
+		[]connectionevent.Record(nil),
+		timeline.Events...,
+	)
+	downgraded.Events[1].SourceConfidence =
+		connectionevent.SourceConfidenceConfigured
+	if ready, err = clientConnectionAuditReady(
+		downgraded,
+		clientOrigin,
+	); err == nil || ready {
+		t.Fatalf("downgraded timeline ready=%t error=%v", ready, err)
+	}
+
+	wrongRule := timeline
+	wrongRule.Events = append(
+		[]connectionevent.Record(nil),
+		timeline.Events...,
+	)
+	wrongRule.Events[1].RuleID = "other.rule"
+	if ready, err = clientConnectionAuditReady(
+		wrongRule,
+		clientOrigin,
+	); err == nil || ready {
+		t.Fatalf("wrong-rule timeline ready=%t error=%v", ready, err)
+	}
+
+	contaminatedAttempt := timeline
+	contaminatedAttempt.Events = append(
+		[]connectionevent.Record(nil),
+		timeline.Events...,
+	)
+	contaminatedAttempt.Events[0].RouteHost = "api.example.com"
+	contaminatedAttempt.Events[0].CredentialBindingID = "assembly-001-account"
+	if ready, err = clientConnectionAuditReady(
+		contaminatedAttempt,
+		clientOrigin,
+	); err == nil || ready {
+		t.Fatalf("contaminated attempt ready=%t error=%v", ready, err)
 	}
 }
 
@@ -715,7 +747,7 @@ func responsesHTTPFallbackAuditRecords(
 	return records
 }
 
-func providerAuditTimeline(t *testing.T) connectionevent.Timeline {
+func clientAuditTimeline(t *testing.T) connectionevent.Timeline {
 	t.Helper()
 	started := time.Date(2026, 7, 30, 1, 2, 3, 0, time.UTC)
 	attempt := connectionevent.Event{
@@ -730,10 +762,10 @@ func providerAuditTimeline(t *testing.T) connectionevent.Timeline {
 	decided := attempt
 	decided.IngressID = "run-001"
 	decided.SourceLabel = "claude"
-	decided.SourceConfidence = connectionevent.SourceConfidenceConfigured
+	decided.SourceConfidence = connectionevent.SourceConfidenceVerified
 	decided.RouteHost = "api.anthropic.com"
 	decided.Decision = connectionevent.DecisionAllow
-	decided.RuleID = "m0.agent_endpoint_exact"
+	decided.RuleID = acceptanceConnectionRuleID
 	decided.EgressScope = connectionevent.EgressScopeAccess
 	decided.EgressSource = connectionevent.EgressSourceAccessDefault
 	decided.EgressPolicyRevision = 1
@@ -742,18 +774,16 @@ func providerAuditTimeline(t *testing.T) connectionevent.Timeline {
 	clientConnected := decided
 	clientConnected.ObservedSNI = "api.anthropic.com"
 	clientConnected.Phase = connectionevent.PhaseConnected
-	providerConnected := clientConnected
-	providerConnected.RouteHost = "api.example.com"
-	providerConnected.CredentialBindingID = "assembly-001-account"
-	terminal := providerConnected
+	terminal := clientConnected
 	terminal.Phase = connectionevent.PhaseClosed
 	terminal.Outcome = connectionevent.OutcomeCompleted
+	terminal.BytesUp = 1024
+	terminal.BytesDown = 2048
 	terminal.EndedAt = started.Add(time.Second)
 	events := []connectionevent.Event{
 		attempt,
 		decided,
 		clientConnected,
-		providerConnected,
 		terminal,
 	}
 	timeline := connectionevent.Timeline{
