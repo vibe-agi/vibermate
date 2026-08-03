@@ -506,7 +506,7 @@ func TestClientConnectionAuditRequiresCompleteImmutableTimeline(
 		[]connectionevent.Record(nil),
 		timeline.Events...,
 	)
-	providerContaminated.Events[2].RouteHost = "api.example.com"
+	providerContaminated.Events[2].RouteHost = "relay.example.test"
 	providerContaminated.Events[2].CredentialBindingID = "assembly-001-account"
 	if ready, err = clientConnectionAuditReady(
 		providerContaminated,
@@ -547,7 +547,7 @@ func TestClientConnectionAuditRequiresCompleteImmutableTimeline(
 		[]connectionevent.Record(nil),
 		timeline.Events...,
 	)
-	contaminatedAttempt.Events[0].RouteHost = "api.example.com"
+	contaminatedAttempt.Events[0].RouteHost = "relay.example.test"
 	contaminatedAttempt.Events[0].CredentialBindingID = "assembly-001-account"
 	if ready, err = clientConnectionAuditReady(
 		contaminatedAttempt,

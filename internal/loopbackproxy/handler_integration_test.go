@@ -1076,7 +1076,7 @@ func (recorder *exchangeRecorder) Execute(
 	}
 	return exchange.Result{
 		Outcome:             exchange.AttemptSucceeded,
-		RouteHost:           "api.example.com",
+		RouteHost:           "relay.example.test",
 		CredentialBindingID: "account-proxy",
 	}, nil
 }

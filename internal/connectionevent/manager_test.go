@@ -61,7 +61,7 @@ func TestConnectionTimelineRecordsAttemptDecisionConnectionAndClose(
 		context.Background(),
 		ConnectedEvidence{
 			ObservedSNI: "api.anthropic.com",
-			RouteHost:   "api.example.com",
+			RouteHost:   "relay.example.test",
 			IP:          "203.0.113.8",
 		},
 	); err != nil {
@@ -99,7 +99,7 @@ func TestConnectionTimelineRecordsAttemptDecisionConnectionAndClose(
 		}
 	}
 	terminal := records[len(records)-1]
-	if terminal.RouteHost != "api.example.com" ||
+	if terminal.RouteHost != "relay.example.test" ||
 		terminal.BytesUp != 123 ||
 		terminal.BytesDown != 456 ||
 		terminal.Outcome != OutcomeCompleted ||

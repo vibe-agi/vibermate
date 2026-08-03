@@ -61,7 +61,7 @@ func TestConnectionEventTimelinePersistsAndPaginatesAcrossReopen(
 		context.Background(),
 		connectionevent.ConnectedEvidence{
 			ObservedSNI: "api.anthropic.com",
-			RouteHost:   "api.example.com",
+			RouteHost:   "relay.example.test",
 		},
 	); err != nil {
 		t.Fatal(err)
@@ -138,7 +138,7 @@ func TestConnectionEventTimelinePersistsAndPaginatesAcrossReopen(
 	}
 	if len(recovered.Events) != 4 ||
 		recovered.Events[3].Outcome != connectionevent.OutcomeCompleted ||
-		recovered.Events[3].RouteHost != "api.example.com" {
+		recovered.Events[3].RouteHost != "relay.example.test" {
 		t.Fatalf("recovered timeline = %+v", recovered)
 	}
 }
