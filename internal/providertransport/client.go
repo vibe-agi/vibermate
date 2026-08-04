@@ -45,8 +45,9 @@ type terminalFailureReporter interface {
 }
 
 type Evidence struct {
-	Credential CredentialEvidence
-	Transport  transportprofile.Evidence
+	Credential   CredentialEvidence
+	Presentation WirePresentationEvidence
+	Transport    transportprofile.Evidence
 }
 
 type clientOperation struct {
@@ -228,6 +229,13 @@ func (client *Client) Do(
 	request.Header = sanitizeProviderHeaders(frozen.headers)
 	request.Header.Set("Content-Type", "application/json")
 	request.ContentLength = int64(len(frozen.body))
+	if err := applyUpstreamWireHeaders(
+		request.Header,
+		frozen.wireVariant,
+		frozen.clientUserAgent,
+	); err != nil {
+		return nil, Evidence{}, err
+	}
 
 	evidence, err := authenticator.Apply(
 		operationContext,
@@ -237,6 +245,14 @@ func (client *Client) Do(
 	)
 	if err != nil {
 		return nil, Evidence{}, fmt.Errorf("finalize provider authentication: %w", err)
+	}
+	if err := validateUpstreamWireHeaders(
+		request.Header,
+		frozen.wireVariant,
+		frozen.clientUserAgent,
+	); err != nil {
+		stripProviderCredentialHeaders(request.Header)
+		return nil, Evidence{}, err
 	}
 	// The record is appended before the first outbound byte, so an outbound
 	// that fails or is cancelled still leaves evidence of where it was going.
@@ -248,14 +264,15 @@ func (client *Client) Do(
 		request,
 		TransportDispatch{
 			target:      frozen.target,
-			plan:        frozen.transportPlan,
+			plan:        frozen.wireVariant.TransportFingerprintPlan(),
 			clientHello: frozen.clientHello,
 		},
 	)
 	stripProviderCredentialHeaders(request.Header)
 	attemptEvidence := Evidence{
-		Credential: evidence,
-		Transport:  transportEvidence,
+		Credential:   evidence,
+		Presentation: frozen.WirePresentationEvidence(),
+		Transport:    transportEvidence,
 	}
 	if err != nil {
 		if response != nil && response.Body != nil {
@@ -408,6 +425,86 @@ func sanitizeProviderHeaders(source http.Header) http.Header {
 	}
 	stripProviderCredentialHeaders(headers)
 	return headers
+}
+
+func applyUpstreamWireHeaders(
+	headers http.Header,
+	variant access.CompiledUpstreamWireVariant,
+	clientUserAgent string,
+) error {
+	if headers == nil {
+		return errors.New("provider headers are nil")
+	}
+	values, keys := headerValuesFold(headers, "User-Agent")
+	if keys != 0 {
+		return errors.New("provider codec conflicts with the upstream User-Agent policy")
+	}
+	switch variant.UserAgentPolicy() {
+	case access.UserAgentPolicyOmit:
+		// net/http otherwise synthesizes its own default value when the key is
+		// absent. A present nil slice is the explicit wire-level omission.
+		headers["User-Agent"] = nil
+	case access.UserAgentPolicyFollowClient:
+		if clientUserAgent == "" {
+			headers["User-Agent"] = nil
+		} else {
+			headers["User-Agent"] = []string{clientUserAgent}
+		}
+	case access.UserAgentPolicyConstant:
+		if variant.SemanticUserAgent() == "" {
+			return errors.New("upstream User-Agent profile is incomplete")
+		}
+		headers["User-Agent"] = []string{variant.SemanticUserAgent()}
+	default:
+		return errors.New("upstream User-Agent policy is unsupported")
+	}
+	_ = values
+	return nil
+}
+
+func validateUpstreamWireHeaders(
+	headers http.Header,
+	variant access.CompiledUpstreamWireVariant,
+	clientUserAgent string,
+) error {
+	values, keys := headerValuesFold(headers, "User-Agent")
+	if keys != 1 {
+		return errors.New("AuthDriver changed the upstream User-Agent identity")
+	}
+	switch variant.UserAgentPolicy() {
+	case access.UserAgentPolicyOmit:
+		if len(values) != 0 {
+			return errors.New("AuthDriver changed the upstream User-Agent identity")
+		}
+	case access.UserAgentPolicyFollowClient:
+		if clientUserAgent == "" {
+			if len(values) != 0 {
+				return errors.New("AuthDriver changed the upstream User-Agent identity")
+			}
+		} else if len(values) != 1 || values[0] != clientUserAgent {
+			return errors.New("AuthDriver changed the upstream User-Agent identity")
+		}
+	case access.UserAgentPolicyConstant:
+		if len(values) != 1 || values[0] != variant.SemanticUserAgent() {
+			return errors.New("AuthDriver changed the upstream User-Agent identity")
+		}
+	default:
+		return errors.New("upstream User-Agent policy is unsupported")
+	}
+	return nil
+}
+
+func headerValuesFold(headers http.Header, name string) ([]string, int) {
+	var values []string
+	keys := 0
+	for key, candidate := range headers {
+		if !strings.EqualFold(key, name) {
+			continue
+		}
+		keys++
+		values = append(values, candidate...)
+	}
+	return values, keys
 }
 
 type leaseBody struct {

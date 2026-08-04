@@ -9,7 +9,7 @@ import (
 	"github.com/vibe-agi/vibermate/internal/access"
 )
 
-const accessAggregateFormatVersion int64 = 2
+const accessAggregateFormatVersion int64 = 1
 
 type aggregatePayload struct {
 	Status            string                  `json:"status"`
@@ -49,7 +49,7 @@ type profilePayload struct {
 	Description             string             `json:"description"`
 	BackendDialect          string             `json:"backendDialect"`
 	TargetID                string             `json:"targetId"`
-	TransportProfileRef     string             `json:"transportProfileRef"`
+	UpstreamWireProfileRef  string             `json:"upstreamWireProfileRef"`
 	DefaultModelPolicy      modelPolicyPayload `json:"defaultModelPolicy"`
 	AccountBindingIDs       []string           `json:"accountBindingIds"`
 	DefaultAccountBindingID string             `json:"defaultAccountBindingId"`
@@ -133,14 +133,14 @@ func encodeAccessAggregatePayload(aggregate access.Aggregate) ([]byte, error) {
 	}
 	for _, profile := range aggregate.Profiles {
 		payload.Profiles = append(payload.Profiles, profilePayload{
-			ID:                  profile.ID.String(),
-			Revision:            profile.Revision,
-			AccessID:            profile.AccessID.String(),
-			Name:                profile.Name,
-			Description:         profile.Description,
-			BackendDialect:      string(profile.BackendDialect),
-			TargetID:            profile.TargetID.String(),
-			TransportProfileRef: profile.TransportProfileRef.String(),
+			ID:                     profile.ID.String(),
+			Revision:               profile.Revision,
+			AccessID:               profile.AccessID.String(),
+			Name:                   profile.Name,
+			Description:            profile.Description,
+			BackendDialect:         string(profile.BackendDialect),
+			TargetID:               profile.TargetID.String(),
+			UpstreamWireProfileRef: profile.UpstreamWireProfileRef.String(),
 			DefaultModelPolicy: modelPolicyPayload{
 				Revision:   profile.DefaultModelPolicy.Revision,
 				Mode:       string(profile.DefaultModelPolicy.Mode),
@@ -346,8 +346,8 @@ func decodeProfiles(payloads []profilePayload) ([]access.EndpointProfile, error)
 		if err != nil {
 			return nil, invalidRepositoryValue("ProviderTarget reference", err)
 		}
-		transportProfile, err := access.NewTransportProfileRef(
-			payload.TransportProfileRef,
+		transportProfile, err := access.NewUpstreamWireProfileRef(
+			payload.UpstreamWireProfileRef,
 		)
 		if err != nil {
 			return nil, invalidRepositoryValue(
@@ -375,7 +375,7 @@ func decodeProfiles(payloads []profilePayload) ([]access.EndpointProfile, error)
 			Description:             payload.Description,
 			BackendDialect:          access.Dialect(payload.BackendDialect),
 			TargetID:                targetID,
-			TransportProfileRef:     transportProfile,
+			UpstreamWireProfileRef:  transportProfile,
 			DefaultModelPolicy:      policy,
 			AccountBindingIDs:       accountIDs,
 			DefaultAccountBindingID: defaultAccountID,

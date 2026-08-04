@@ -332,6 +332,7 @@ func TestProductRuntimeWiresExchangePipelineToActiveAccessPlan(t *testing.T) {
 			"messages":[{"role":"user","content":"hello"}]
 		}`),
 		exchange.ReplayGenerationCostOnly,
+		access.ApplicationProtocolHTTP1,
 	)
 	if err != nil {
 		t.Fatal(err)
@@ -462,6 +463,7 @@ func TestProductRuntimeWiresResponsesThroughTheSameExchangeAndProvider(
 			"stream":false
 		}`),
 		exchange.ReplayGenerationCostOnly,
+		access.ApplicationProtocolHTTP1,
 	)
 	if err != nil {
 		t.Fatal(err)
@@ -1207,6 +1209,7 @@ func TestProductRuntimeProviderClosureUnblocksExchangeDrain(t *testing.T) {
 			"messages":[{"role":"user","content":"hello"}]
 		}`),
 		exchange.ReplayGenerationCostOnly,
+		access.ApplicationProtocolHTTP1,
 	)
 	if err != nil {
 		t.Fatal(err)
@@ -2147,14 +2150,14 @@ func runtimeAccessAggregate(
 			ClientDialect: access.DialectAnthropicMessages,
 		},
 		Profiles: []access.EndpointProfile{{
-			ID:                  profileID,
-			Revision:            revision,
-			AccessID:            accessID,
-			Name:                "OpenAI Chat",
-			Description:         "Fixed M0 profile",
-			BackendDialect:      access.DialectOpenAIChat,
-			TargetID:            targetID,
-			TransportProfileRef: access.ObservedClientH1TransportProfileRef(),
+			ID:                     profileID,
+			Revision:               revision,
+			AccessID:               accessID,
+			Name:                   "OpenAI Chat",
+			Description:            "Fixed M0 profile",
+			BackendDialect:         access.DialectOpenAIChat,
+			TargetID:               targetID,
+			UpstreamWireProfileRef: access.FollowClientUpstreamWireProfileRef(),
 			AccountBindingIDs: []access.AccountBindingID{
 				accountID,
 			},

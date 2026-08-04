@@ -372,7 +372,9 @@ func compiledSnapshot(t *testing.T) access.AccessPlanSnapshot {
 		TransportProfiles: []access.TransportFingerprintDefinition{
 			access.ObservedClientH1TransportFingerprintDefinition(),
 			access.StandardH1TransportFingerprintDefinition(),
+			access.ClaudeCodeH1TransportFingerprintDefinition(),
 		},
+		UpstreamWireProfiles: access.BuiltInUpstreamWireProfileDefinitions(),
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -400,13 +402,13 @@ func compiledSnapshot(t *testing.T) access.AccessPlanSnapshot {
 			ClientDialect: access.DialectAnthropicMessages,
 		},
 		Profiles: []access.EndpointProfile{{
-			ID:                  profileID,
-			Revision:            1,
-			AccessID:            accessID,
-			Name:                "Work",
-			BackendDialect:      access.DialectOpenAIChat,
-			TargetID:            targetID,
-			TransportProfileRef: access.ObservedClientH1TransportProfileRef(),
+			ID:                     profileID,
+			Revision:               1,
+			AccessID:               accessID,
+			Name:                   "Work",
+			BackendDialect:         access.DialectOpenAIChat,
+			TargetID:               targetID,
+			UpstreamWireProfileRef: access.FollowClientUpstreamWireProfileRef(),
 			DefaultModelPolicy: access.ModelPolicy{
 				Revision:   1,
 				Mode:       access.ModelPolicyModeFixed,

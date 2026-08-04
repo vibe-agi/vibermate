@@ -2,7 +2,6 @@ package transportprofile
 
 import (
 	"context"
-	"crypto/tls"
 	"crypto/x509"
 	"errors"
 	"fmt"
@@ -126,7 +125,7 @@ func (connector *Connector) Connect(
 				fallbackReason = reason
 				continue
 			}
-			connection, negotiated, err := connector.connectObserved(
+			connection, negotiated, err := connector.connectCustom(
 				ctx,
 				request,
 				spec,
@@ -148,6 +147,38 @@ func (connector *Connector) Connect(
 				)
 			}
 			fallbackReason = FallbackObservedTLSHandshakeRejected
+		case access.TransportFingerprintCaptured:
+			spec, offered, err := prepareCapturedSpec(
+				template,
+				request.TLSServerName,
+			)
+			if err != nil {
+				failures = append(failures, err)
+				fallbackReason = FallbackClientHelloUnsupported
+				continue
+			}
+			connection, negotiated, err := connector.connectCustom(
+				ctx,
+				request,
+				spec,
+				offered,
+			)
+			if err == nil {
+				evidence.effective = profileEvidence(template)
+				evidence.fallbackReason = fallbackReason
+				evidence.upstreamOfferedALPN = slices.Clone(offered)
+				evidence.upstreamNegotiatedALPN = negotiated
+				evidence.httpTransport = template.HTTPTransport()
+				return connection, evidence, nil
+			}
+			failures = append(failures, err)
+			if strictVerificationFailure(err) || ctx.Err() != nil {
+				return nil, evidence, errors.Join(
+					ErrNoTransportProfile,
+					errors.Join(failures...),
+				)
+			}
+			fallbackReason = FallbackCapturedTLSHandshakeRejected
 		case access.TransportFingerprintStandard:
 			offered := templateALPN(template)
 			connection, negotiated, err := connector.connectStandard(
@@ -199,6 +230,13 @@ func validateTemplates(
 		switch template.Source() {
 		case access.TransportFingerprintObservedClient,
 			access.TransportFingerprintStandard:
+			if template.Preset() != "" {
+				return ErrTransportPlanInvalid
+			}
+		case access.TransportFingerprintCaptured:
+			if template.Preset() != access.TransportFingerprintPresetClaudeCodeH1 {
+				return ErrTransportPlanInvalid
+			}
 		default:
 			return ErrTransportPlanInvalid
 		}
@@ -217,6 +255,68 @@ func validateTemplates(
 		}
 	}
 	return nil
+}
+
+func prepareCapturedSpec(
+	template access.TransportFingerprintTemplate,
+	serverName string,
+) (*utls.ClientHelloSpec, []string, error) {
+	if template.Preset() != access.TransportFingerprintPresetClaudeCodeH1 {
+		return nil, nil, errors.New("captured ClientHello preset is unsupported")
+	}
+	offered := templateALPN(template)
+	if !slices.Equal(offered, []string{string(access.ApplicationProtocolHTTP1)}) {
+		return nil, nil, errors.New("captured ClientHello ALPN policy is invalid")
+	}
+	return claudeCodeH1ClientHelloSpec(serverName), offered, nil
+}
+
+func claudeCodeH1ClientHelloSpec(serverName string) *utls.ClientHelloSpec {
+	return &utls.ClientHelloSpec{
+		TLSVersMin: utls.VersionTLS12,
+		TLSVersMax: utls.VersionTLS13,
+		CipherSuites: []uint16{
+			0x1301, 0x1302, 0x1303,
+			0xc02b, 0xc02f, 0xc02c, 0xc030,
+			0xcca9, 0xcca8,
+			0xc009, 0xc013, 0xc00a, 0xc014,
+			0x009c, 0x009d, 0x002f, 0x0035,
+		},
+		CompressionMethods: []uint8{0},
+		Extensions: []utls.TLSExtension{
+			&utls.SNIExtension{ServerName: serverName},
+			&utls.ExtendedMasterSecretExtension{},
+			&utls.RenegotiationInfoExtension{
+				Renegotiation: utls.RenegotiateOnceAsClient,
+			},
+			&utls.SupportedCurvesExtension{Curves: []utls.CurveID{
+				utls.X25519,
+				utls.CurveP256,
+				utls.CurveP384,
+			}},
+			&utls.SupportedPointsExtension{SupportedPoints: []uint8{0}},
+			&utls.SessionTicketExtension{},
+			&utls.ALPNExtension{AlpnProtocols: []string{"http/1.1"}},
+			&utls.StatusRequestExtension{},
+			&utls.SignatureAlgorithmsExtension{
+				SupportedSignatureAlgorithms: []utls.SignatureScheme{
+					0x0403, 0x0804, 0x0401,
+					0x0503, 0x0805, 0x0501,
+					0x0806, 0x0601, 0x0201,
+				},
+			},
+			&utls.SCTExtension{},
+			&utls.KeyShareExtension{KeyShares: []utls.KeyShare{{
+				Group: utls.X25519,
+			}}},
+			&utls.PSKKeyExchangeModesExtension{Modes: []uint8{1}},
+			&utls.SupportedVersionsExtension{Versions: []uint16{
+				utls.VersionTLS13,
+				utls.VersionTLS12,
+			}},
+			&utls.UtlsPaddingExtension{GetPaddingLen: utls.BoringPaddingStyle},
+		},
+	}
 }
 
 func prepareObservedSpec(
@@ -354,7 +454,7 @@ func enforceStrictTLSVersions(spec *utls.ClientHelloSpec) error {
 	return nil
 }
 
-func (connector *Connector) connectObserved(
+func (connector *Connector) connectCustom(
 	ctx context.Context,
 	request ConnectRequest,
 	spec *utls.ClientHelloSpec,
@@ -377,7 +477,7 @@ func (connector *Connector) connectObserved(
 	secured := utls.UClient(raw, config, utls.HelloCustom)
 	if err := secured.ApplyPreset(spec); err != nil {
 		_ = raw.Close()
-		return nil, "", fmt.Errorf("apply observed ClientHello: %w", err)
+		return nil, "", fmt.Errorf("apply ClientHello profile: %w", err)
 	}
 	if err := connector.handshake(
 		ctx,
@@ -403,12 +503,12 @@ func (connector *Connector) connectStandard(
 	if err != nil {
 		return nil, "", err
 	}
-	secured := tls.Client(raw, &tls.Config{
-		MinVersion: tls.VersionTLS12,
+	secured := utls.UClient(raw, &utls.Config{
+		MinVersion: utls.VersionTLS12,
 		RootCAs:    connector.rootCAs,
 		ServerName: request.TLSServerName,
 		NextProtos: slices.Clone(alpn),
-	})
+	}, utls.HelloGolang)
 	if err := connector.handshake(
 		ctx,
 		raw,
@@ -448,12 +548,10 @@ func strictVerificationFailure(err error) bool {
 	var unknownAuthority x509.UnknownAuthorityError
 	var hostname x509.HostnameError
 	var invalid x509.CertificateInvalidError
-	var standardVerification *tls.CertificateVerificationError
 	var utlsVerification *utls.CertificateVerificationError
 	return errors.As(err, &unknownAuthority) ||
 		errors.As(err, &hostname) ||
 		errors.As(err, &invalid) ||
-		errors.As(err, &standardVerification) ||
 		errors.As(err, &utlsVerification)
 }
 

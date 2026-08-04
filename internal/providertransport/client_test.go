@@ -141,6 +141,7 @@ func TestClientStrictTLSUsesFrozenSNIAndAuthority(t *testing.T) {
 		host          string
 		serverName    string
 		authorization string
+		userAgent     string
 		path          string
 	}, 1)
 	server := httptest.NewUnstartedServer(http.HandlerFunc(func(
@@ -152,11 +153,13 @@ func TestClientStrictTLSUsesFrozenSNIAndAuthority(t *testing.T) {
 			host          string
 			serverName    string
 			authorization string
+			userAgent     string
 			path          string
 		}{
 			host:          request.Host,
 			serverName:    request.TLS.ServerName,
 			authorization: request.Header.Get("Authorization"),
+			userAgent:     request.Header.Get("User-Agent"),
 			path:          request.URL.Path,
 		}
 		writer.Header().Set("Content-Type", "application/json")
@@ -196,9 +199,23 @@ func TestClientStrictTLSUsesFrozenSNIAndAuthority(t *testing.T) {
 
 	port := listenerPort(t, server.Listener.Addr())
 	target := testTarget("example.com", port)
+	wirePlan := testRequestAccessPlanWithWireProfile(
+		t,
+		"https://provider.example:443/v1",
+		access.DialectOpenAIChat,
+		access.ClaudeCodeUpstreamWireProfileRef(),
+	)
 	response, _, err := client.Do(
 		context.Background(),
-		newTestRequest(t, gate, "tls-success", target, nil),
+		newTestRequestWithPlan(
+			t,
+			gate,
+			"tls-success",
+			target,
+			nil,
+			[]byte(`{"input":"hello"}`),
+			wirePlan,
+		),
 	)
 	if err != nil {
 		t.Fatalf("Do() error = %v", err)
@@ -211,11 +228,126 @@ func TestClientStrictTLSUsesFrozenSNIAndAuthority(t *testing.T) {
 	if got.host != wantAuthority ||
 		got.serverName != "example.com" ||
 		got.authorization != "Bearer tls-token" ||
+		got.userAgent != "claude-cli/2.1.220 (external, sdk-cli)" ||
 		got.path != "/v1/chat/completions" {
 		t.Fatalf("observed TLS request = %+v, authority=%q", got, wantAuthority)
 	}
 	if handlerCalls.Load() != 1 {
 		t.Fatalf("handler calls = %d, want 1", handlerCalls.Load())
+	}
+}
+
+func TestClientStrictTLSAppliesCapturedUserAgentProfile(t *testing.T) {
+	t.Parallel()
+
+	observedUserAgent := make(chan string, 1)
+	server := httptest.NewUnstartedServer(http.HandlerFunc(func(
+		writer http.ResponseWriter,
+		request *http.Request,
+	) {
+		observedUserAgent <- request.Header.Get("User-Agent")
+		writer.Header().Set("Content-Type", "application/json")
+		_, _ = writer.Write([]byte(`{"ok":true}`))
+	}))
+	server.Config.ErrorLog = log.New(io.Discard, "", 0)
+	server.StartTLS()
+	defer server.Close()
+
+	roots := x509.NewCertPool()
+	roots.AddCert(server.Certificate())
+	transport, err := newStrictTransport(
+		roots,
+		&mappingDialer{address: server.Listener.Addr().String()},
+		DefaultTransportTimeouts(),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	gate := newStartedGate(t)
+	authenticator, err := NewStaticBearerAuthenticator(
+		&secretReaderStub{value: []byte("tls-token")},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	client, err := NewClient(ClientOptions{
+		Coordinator:   gate,
+		Authenticator: authenticator,
+		Transport:     transport,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer shutdownClient(t, client)
+
+	port := listenerPort(t, server.Listener.Addr())
+	target := testTarget("example.com", port)
+	plan := testRequestAccessPlanWithWireProfile(
+		t,
+		"https://"+net.JoinHostPort("example.com", strconv.Itoa(port))+"/v1",
+		access.DialectAnthropicMessages,
+		access.ClaudeCodeUpstreamWireProfileRef(),
+	)
+	request := newTestRequestWithPlan(
+		t,
+		gate,
+		"captured-user-agent",
+		target,
+		nil,
+		[]byte(`{"model":"provider-model"}`),
+		plan,
+	)
+	response, evidence, err := client.Do(context.Background(), request)
+	if err != nil {
+		t.Fatalf("Do() error = %v", err)
+	}
+	if _, err := io.ReadAll(response.Body); err != nil {
+		t.Fatalf("ReadAll() error = %v", err)
+	}
+	if got := <-observedUserAgent; got != "claude-cli/2.1.220 (external, sdk-cli)" {
+		t.Fatalf("upstream User-Agent = %q", got)
+	}
+	presentation := evidence.Presentation
+	if presentation.RequestedRef != access.ClaudeCodeUpstreamWireProfileRef().String() ||
+		presentation.EffectiveRef != access.ClaudeCodeUpstreamWireProfileRef().String() ||
+		presentation.Revision != 1 ||
+		presentation.Mode != access.UpstreamWireModeEmulateProduct ||
+		presentation.Product != access.UpstreamWireProductClaudeCode ||
+		presentation.ClientProtocol != access.ApplicationProtocolHTTP1 ||
+		presentation.UpstreamProtocol != access.ApplicationProtocolHTTP1 ||
+		presentation.EvidenceDigest == "" {
+		t.Fatalf("wire presentation evidence = %+v", presentation)
+	}
+}
+
+func TestFollowClientUserAgentPolicyPreservesTheObservedValue(t *testing.T) {
+	t.Parallel()
+
+	plan := testRequestAccessPlan(t)
+	variant, available := plan.UpstreamWireProfile().Variant(
+		access.ApplicationProtocolHTTP1,
+	)
+	if !available {
+		t.Fatal("follow-client profile has no HTTP/1.1 variant")
+	}
+	headers := make(http.Header)
+	const clientUserAgent = "agent-client/1.0"
+	if err := applyUpstreamWireHeaders(
+		headers,
+		variant,
+		clientUserAgent,
+	); err != nil {
+		t.Fatal(err)
+	}
+	if got := headers.Get("User-Agent"); got != clientUserAgent {
+		t.Fatalf("follow-client User-Agent = %q", got)
+	}
+	if err := validateUpstreamWireHeaders(
+		headers,
+		variant,
+		clientUserAgent,
+	); err != nil {
+		t.Fatal(err)
 	}
 }
 
@@ -529,6 +661,79 @@ func TestNewRequestOwnsBodyAndHeaders(t *testing.T) {
 	}
 }
 
+func TestClientRejectsCodecUserAgentBeforeSecretOrTransport(t *testing.T) {
+	t.Parallel()
+
+	gate := newStartedGate(t)
+	secrets := &secretReaderStub{value: []byte("provider-token")}
+	authenticator, err := NewStaticBearerAuthenticator(secrets)
+	if err != nil {
+		t.Fatal(err)
+	}
+	transport := &roundTripperStub{}
+	client, err := NewClient(ClientOptions{
+		Coordinator:   gate,
+		Authenticator: authenticator,
+		Transport:     transport,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer shutdownClient(t, client)
+
+	request := newTestRequest(
+		t,
+		gate,
+		"codec-user-agent",
+		testTarget("provider.example", 443),
+		http.Header{"User-Agent": []string{"codec-owned"}},
+	)
+	response, _, err := client.Do(context.Background(), request)
+	if err == nil || response != nil {
+		t.Fatalf("codec User-Agent request response=%v error=%v", response, err)
+	}
+	if secrets.readCount() != 0 || transport.callCount() != 0 {
+		t.Fatalf(
+			"conflicting User-Agent touched secret=%d transport=%d",
+			secrets.readCount(),
+			transport.callCount(),
+		)
+	}
+}
+
+func TestClientRejectsAuthDriverUserAgentMutation(t *testing.T) {
+	t.Parallel()
+
+	gate := newStartedGate(t)
+	transport := &roundTripperStub{}
+	client, err := NewClient(ClientOptions{
+		Coordinator:   gate,
+		Authenticator: userAgentMutatingAuthenticator{},
+		Transport:     transport,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer shutdownClient(t, client)
+
+	response, _, err := client.Do(
+		context.Background(),
+		newTestRequest(
+			t,
+			gate,
+			"auth-user-agent",
+			testTarget("provider.example", 443),
+			nil,
+		),
+	)
+	if err == nil || response != nil {
+		t.Fatalf("mutating AuthDriver response=%v error=%v", response, err)
+	}
+	if transport.callCount() != 0 {
+		t.Fatal("mutating AuthDriver reached the provider transport")
+	}
+}
+
 func TestStrictTransportDisablesAmbientProxyAndTLSBypass(t *testing.T) {
 	t.Parallel()
 
@@ -553,6 +758,24 @@ type secretReaderStub struct {
 	value []byte
 	err   error
 	reads int
+}
+
+type userAgentMutatingAuthenticator struct{}
+
+func (userAgentMutatingAuthenticator) Ref() access.AuthDriverRef {
+	return access.StaticHeaderAuthDriverRef()
+}
+
+func (userAgentMutatingAuthenticator) Apply(
+	_ context.Context,
+	request *http.Request,
+	_ secretstore.Reference,
+	_ Target,
+) (CredentialEvidence, error) {
+	request.Header.Set("User-Agent", "auth-owned")
+	return CredentialEvidence{
+		DriverRef: access.StaticHeaderAuthDriverRef().String(),
+	}, nil
 }
 
 func (reader *secretReaderStub) Read(
@@ -684,6 +907,26 @@ func newTestRequestWithBody(
 	headers http.Header,
 	body []byte,
 ) Request {
+	return newTestRequestWithPlan(
+		t,
+		gate,
+		id,
+		target,
+		headers,
+		body,
+		testRequestAccessPlan(t),
+	)
+}
+
+func newTestRequestWithPlan(
+	t *testing.T,
+	gate *offlinehold.Gate,
+	id string,
+	target Target,
+	headers http.Header,
+	body []byte,
+	plan access.AccessPlanSnapshot,
+) Request {
 	t.Helper()
 	secretRef, err := access.NewSecretRef("secret://provider/account")
 	if err != nil {
@@ -697,7 +940,6 @@ func newTestRequestWithBody(
 		t.Fatalf("BeginAction() error = %v", err)
 	}
 	t.Cleanup(action.Release)
-	plan := testRequestAccessPlan(t)
 	request, err := NewRequest(RequestOptions{
 		RequestID:       id,
 		ExchangeID:      "exchange-test",
@@ -714,7 +956,9 @@ func newTestRequestWithBody(
 		Body:            body,
 		SecretRef:       secretRef,
 		AuthDriverRef:   access.StaticHeaderAuthDriverRef(),
-		TransportPlan:   plan.TransportFingerprintPlan(),
+		WireProfile:     plan.UpstreamWireProfile(),
+		ClientProtocol:  access.ApplicationProtocolHTTP1,
+		ClientUserAgent: "test-client/1.0",
 	})
 	if err != nil {
 		t.Fatalf("NewRequest() error = %v", err)
@@ -735,6 +979,20 @@ func testRequestAccessPlan(
 func testRequestAccessPlanWithOrigin(
 	t *testing.T,
 	rawProviderOrigin string,
+) access.AccessPlanSnapshot {
+	return testRequestAccessPlanWithWireProfile(
+		t,
+		rawProviderOrigin,
+		access.DialectOpenAIChat,
+		access.FollowClientUpstreamWireProfileRef(),
+	)
+}
+
+func testRequestAccessPlanWithWireProfile(
+	t *testing.T,
+	rawProviderOrigin string,
+	providerDialect access.Dialect,
+	wireProfileRef access.UpstreamWireProfileRef,
 ) access.AccessPlanSnapshot {
 	t.Helper()
 	accessID, err := access.NewAccessID("provider-transport-test")
@@ -781,9 +1039,11 @@ func testRequestAccessPlanWithOrigin(
 	if err != nil {
 		t.Fatal(err)
 	}
-	codecID, err := access.NewCodecPairID(
-		"anthropic-messages-to-openai-chat",
-	)
+	codecName := "anthropic-messages-to-openai-chat"
+	if providerDialect == access.DialectAnthropicMessages {
+		codecName = "anthropic-messages-to-anthropic-messages"
+	}
+	codecID, err := access.NewCodecPairID(codecName)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -802,7 +1062,7 @@ func testRequestAccessPlanWithOrigin(
 			ID:              codecID,
 			Revision:        1,
 			ClientDialect:   access.DialectAnthropicMessages,
-			ProviderDialect: access.DialectOpenAIChat,
+			ProviderDialect: providerDialect,
 			ClientOperationIDs: operations.SemanticOperationIDs(
 				access.DialectAnthropicMessages,
 			),
@@ -831,7 +1091,9 @@ func testRequestAccessPlanWithOrigin(
 		TransportProfiles: []access.TransportFingerprintDefinition{
 			access.ObservedClientH1TransportFingerprintDefinition(),
 			access.StandardH1TransportFingerprintDefinition(),
+			access.ClaudeCodeH1TransportFingerprintDefinition(),
 		},
+		UpstreamWireProfiles: access.BuiltInUpstreamWireProfileDefinitions(),
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -859,13 +1121,13 @@ func testRequestAccessPlanWithOrigin(
 			ClientDialect: access.DialectAnthropicMessages,
 		},
 		Profiles: []access.EndpointProfile{{
-			ID:                  profileID,
-			Revision:            1,
-			AccessID:            accessID,
-			Name:                "Provider profile",
-			BackendDialect:      access.DialectOpenAIChat,
-			TargetID:            targetID,
-			TransportProfileRef: access.ObservedClientH1TransportProfileRef(),
+			ID:                     profileID,
+			Revision:               1,
+			AccessID:               accessID,
+			Name:                   "Provider profile",
+			BackendDialect:         providerDialect,
+			TargetID:               targetID,
+			UpstreamWireProfileRef: wireProfileRef,
 			DefaultModelPolicy: access.ModelPolicy{
 				Revision:   1,
 				Mode:       access.ModelPolicyModeFixed,
@@ -880,7 +1142,7 @@ func testRequestAccessPlanWithOrigin(
 			AccessID:  accessID,
 			ProfileID: profileID,
 			Origin:    providerOrigin,
-			Protocol:  access.DialectOpenAIChat,
+			Protocol:  providerDialect,
 			Capabilities: []access.ProviderCapability{
 				access.ProviderCapabilityMessages,
 				access.ProviderCapabilityStreaming,

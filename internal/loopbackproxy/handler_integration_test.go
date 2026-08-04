@@ -59,10 +59,13 @@ func TestLoopbackProxyAuthenticatesMITMAndDispatchesByPathCapability(
 	)
 	defer secured.Close()
 	response := writeInnerRequest(t, secured, &http.Request{
-		Method:        http.MethodPost,
-		URL:           mustURL(t, "/v1/messages"),
-		Host:          "api.anthropic.com:443",
-		Header:        http.Header{"Content-Type": []string{"application/json"}},
+		Method: http.MethodPost,
+		URL:    mustURL(t, "/v1/messages"),
+		Host:   "api.anthropic.com:443",
+		Header: http.Header{
+			"Content-Type": []string{"application/json"},
+			"User-Agent":   []string{"agent-client/1.0"},
+		},
 		Body:          io.NopCloser(strings.NewReader(`{"model":"client"}`)),
 		ContentLength: int64(len(`{"model":"client"}`)),
 	})
@@ -89,6 +92,7 @@ func TestLoopbackProxyAuthenticatesMITMAndDispatchesByPathCapability(
 		requests[0].CaptureRunRef() != fixture.grant.Run.ID ||
 		requests[0].IngressProfileRef() != "capture-run/"+fixture.grant.Run.ID ||
 		requests[0].ManualCaptureRef() != "" ||
+		requests[0].ClientUserAgent() != "agent-client/1.0" ||
 		requests[0].ConnectionRef() == "" ||
 		strings.Contains(requests[0].ExchangeID(), fixture.grant.Run.ID) {
 		t.Fatalf("semantic Exchange requests = %+v", requests)
@@ -109,6 +113,38 @@ func TestLoopbackProxyAuthenticatesMITMAndDispatchesByPathCapability(
 			"wrong method status=%d body=%s Exchanges=%d",
 			wrongMethod.StatusCode,
 			wrongBody,
+			len(fixture.exchanges.Requests()),
+		)
+	}
+
+	if _, err := io.WriteString(
+		secured,
+		"POST /v1/messages HTTP/1.1\r\n"+
+			"Host: api.anthropic.com:443\r\n"+
+			"Content-Type: application/json\r\n"+
+			"Content-Length: 18\r\n"+
+			"User-Agent: agent-client/1.0\r\n"+
+			"User-Agent: other-client/1.0\r\n\r\n"+
+			`{"model":"client"}`,
+	); err != nil {
+		t.Fatal(err)
+	}
+	ambiguousUserAgent, err := http.ReadResponse(
+		bufio.NewReader(secured),
+		&http.Request{Method: http.MethodPost},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ambiguousBody, _ := io.ReadAll(ambiguousUserAgent.Body)
+	_ = ambiguousUserAgent.Body.Close()
+	if ambiguousUserAgent.StatusCode != http.StatusBadRequest ||
+		!bytes.Contains(ambiguousBody, []byte(`"reasonCode":"request_body_invalid"`)) ||
+		len(fixture.exchanges.Requests()) != 1 {
+		t.Fatalf(
+			"ambiguous User-Agent status=%d body=%s Exchanges=%d",
+			ambiguousUserAgent.StatusCode,
+			ambiguousBody,
 			len(fixture.exchanges.Requests()),
 		)
 	}
@@ -1245,7 +1281,9 @@ func testProjectionForDialectRevision(
 		TransportProfiles: []access.TransportFingerprintDefinition{
 			access.ObservedClientH1TransportFingerprintDefinition(),
 			access.StandardH1TransportFingerprintDefinition(),
+			access.ClaudeCodeH1TransportFingerprintDefinition(),
 		},
+		UpstreamWireProfiles: access.BuiltInUpstreamWireProfileDefinitions(),
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -1279,7 +1317,7 @@ func testProjectionForDialectRevision(
 			Name:                    "OpenAI",
 			BackendDialect:          access.DialectOpenAIChat,
 			TargetID:                targetID,
-			TransportProfileRef:     access.ObservedClientH1TransportProfileRef(),
+			UpstreamWireProfileRef:  access.FollowClientUpstreamWireProfileRef(),
 			DefaultModelPolicy:      access.ModelPolicy{Revision: revision, Mode: access.ModelPolicyModeFixed, FixedModel: model},
 			AccountBindingIDs:       []access.AccountBindingID{accountID},
 			DefaultAccountBindingID: accountID,

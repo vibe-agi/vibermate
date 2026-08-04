@@ -161,6 +161,7 @@ func TestALiveProviderAnswersThroughTheWholePipeline(t *testing.T) {
 			"messages":[{"role":"user","content":"Reply with the single word: ready"}]
 		}`),
 		exchange.ReplayGenerationCostOnly,
+		access.ApplicationProtocolHTTP1,
 	)
 	if err != nil {
 		t.Fatal(err)
@@ -736,6 +737,7 @@ func TestALiveStreamThatEndsEarlyKeepsTheLedgerAxesApart(t *testing.T) {
 			"messages":[{"role":"user","content":"Count slowly from one to twenty."}]
 		}`),
 		exchange.ReplayGenerationCostOnly,
+		access.ApplicationProtocolHTTP1,
 	)
 	if err != nil {
 		t.Fatal(err)
@@ -886,6 +888,7 @@ func TestALiveProviderAnswersAResponsesClient(t *testing.T) {
 			"stream":false
 		}`),
 		exchange.ReplayGenerationCostOnly,
+		access.ApplicationProtocolHTTP1,
 	)
 	if err != nil {
 		t.Fatal(err)

@@ -59,6 +59,7 @@ func TestPipelineExecutesCompleteResponseFromOneFrozenPlan(t *testing.T) {
 		mustAnthropicOperationEvidence(t),
 		inputBody,
 		ReplayGenerationCostOnly,
+		access.ApplicationProtocolHTTP1,
 	)
 	if err != nil {
 		t.Fatal(err)
@@ -139,6 +140,7 @@ func TestPipelineExecutesCompleteResponsesOperationFromOneFrozenPlan(
 		mustResponsesOperationEvidence(t),
 		completeResponsesClientRequest(),
 		ReplayGenerationCostOnly,
+		access.ApplicationProtocolHTTP1,
 	)
 	if err != nil {
 		t.Fatal(err)
@@ -311,6 +313,7 @@ func TestPipelineRejectsResponsesOperationEvidenceMismatchBeforeProvider(
 				evidence,
 				completeResponsesClientRequest(),
 				ReplayGenerationCostOnly,
+				access.ApplicationProtocolHTTP1,
 			)
 			if err != nil {
 				t.Fatal(err)
@@ -401,6 +404,7 @@ func TestPipelineIsolatesConcurrentAnthropicAndResponsesAccesses(
 			evidence,
 			body,
 			ReplayGenerationCostOnly,
+			access.ApplicationProtocolHTTP1,
 		)
 		if err != nil {
 			t.Fatal(err)
@@ -649,6 +653,7 @@ func TestPipelineRejectsConnectionBindingAfterAgentEndpointChange(
 		mustAnthropicOperationEvidence(t),
 		completeClientRequest(),
 		ReplayGenerationCostOnly,
+		access.ApplicationProtocolHTTP1,
 	)
 	if err != nil {
 		t.Fatal(err)
@@ -863,6 +868,7 @@ func TestPipelineResponsesRejectsMalformedProviderStreamWithoutTerminal(
 		mustResponsesOperationEvidence(t),
 		streamingResponsesClientRequest(),
 		ReplayGenerationCostOnly,
+		access.ApplicationProtocolHTTP1,
 	)
 	if err != nil {
 		t.Fatal(err)
@@ -1382,6 +1388,7 @@ func TestPipelineResponsesDoesNotRetryAfterClientVisibleSemantics(
 		mustResponsesOperationEvidence(t),
 		streamingResponsesClientRequest(),
 		ReplayGenerationCostOnly,
+		access.ApplicationProtocolHTTP1,
 	)
 	if err != nil {
 		t.Fatal(err)
@@ -1506,6 +1513,7 @@ func TestPipelineResponsesToolDecisionBarrierRejectsWithoutToolOrTerminalLeak(
 		mustResponsesOperationEvidence(t),
 		streamingResponsesToolClientRequest(),
 		ReplayGenerationCostOnly,
+		access.ApplicationProtocolHTTP1,
 	)
 	if err != nil {
 		t.Fatal(err)
@@ -1675,6 +1683,7 @@ func TestPipelineResponsesShutdownCancelsAndDrainsActiveExchange(
 		mustResponsesOperationEvidence(t),
 		streamingResponsesClientRequest(),
 		ReplayGenerationCostOnly,
+		access.ApplicationProtocolHTTP1,
 	)
 	if err != nil {
 		t.Fatal(err)
@@ -2545,6 +2554,7 @@ func mustClientRequest(
 		mustAnthropicOperationEvidence(t),
 		body,
 		replayClass,
+		access.ApplicationProtocolHTTP1,
 	)
 	if err != nil {
 		t.Fatal(err)
@@ -2765,7 +2775,9 @@ func compileTestSnapshotWithDialect(
 		TransportProfiles: []access.TransportFingerprintDefinition{
 			access.ObservedClientH1TransportFingerprintDefinition(),
 			access.StandardH1TransportFingerprintDefinition(),
+			access.ClaudeCodeH1TransportFingerprintDefinition(),
 		},
+		UpstreamWireProfiles: access.BuiltInUpstreamWireProfileDefinitions(),
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -2827,7 +2839,7 @@ func compileTestSnapshotWithDialect(
 			Description:             "Fixed provider profile",
 			BackendDialect:          access.DialectOpenAIChat,
 			TargetID:                targetID,
-			TransportProfileRef:     access.ObservedClientH1TransportProfileRef(),
+			UpstreamWireProfileRef:  access.FollowClientUpstreamWireProfileRef(),
 			DefaultAccountBindingID: accountID,
 			AccountBindingIDs:       []access.AccountBindingID{accountID},
 			DefaultModelPolicy: access.ModelPolicy{

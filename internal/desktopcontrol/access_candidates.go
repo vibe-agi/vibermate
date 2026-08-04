@@ -33,11 +33,12 @@ const (
 // and the SecretRef are generated inside the native control plane and never
 // need to cross the browser boundary.
 type AddAccessCandidateInput struct {
-	Name          string                  `json:"name"`
-	Provider      AccessCandidateProvider `json:"provider"`
-	BaseURL       string                  `json:"baseUrl,omitempty"`
-	Model         string                  `json:"model"`
-	AuthDriverRef string                  `json:"authDriverRef,omitempty"`
+	Name                 string                  `json:"name"`
+	Provider             AccessCandidateProvider `json:"provider"`
+	BaseURL              string                  `json:"baseUrl,omitempty"`
+	Model                string                  `json:"model"`
+	AuthDriverRef        string                  `json:"authDriverRef,omitempty"`
+	UpstreamPresentation string                  `json:"upstreamPresentation,omitempty"`
 }
 
 type AccessCandidateRefResponse struct {
@@ -149,12 +150,12 @@ func (handler *Handler) addAccessCandidate(
 }
 
 type addedCandidate struct {
-	name       string
-	origin     access.ProviderOrigin
-	model      access.ModelName
-	authDriver access.AuthDriverRef
-	transport  access.TransportProfileRef
-	backend    access.Dialect
+	name        string
+	origin      access.ProviderOrigin
+	model       access.ModelName
+	authDriver  access.AuthDriverRef
+	wireProfile access.UpstreamWireProfileRef
+	backend     access.Dialect
 }
 
 func buildAddedCandidate(
@@ -232,17 +233,21 @@ func buildAddedCandidate(
 	if err != nil {
 		return addedCandidate{}, err
 	}
-	transport, found := primaryTransportProfile(aggregate)
-	if !found {
+	wireProfile := access.FollowClientUpstreamWireProfileRef()
+	switch input.UpstreamPresentation {
+	case "", access.UpstreamWireProfileFollowClientValue:
+	case access.UpstreamWireProfileClaudeCodeValue:
+		wireProfile = access.ClaudeCodeUpstreamWireProfileRef()
+	default:
 		return addedCandidate{}, access.ErrInvalidAccess
 	}
 	return addedCandidate{
-		name:       input.Name,
-		origin:     origin,
-		model:      model,
-		authDriver: authDriver,
-		transport:  transport,
-		backend:    backend,
+		name:        input.Name,
+		origin:      origin,
+		model:       model,
+		authDriver:  authDriver,
+		wireProfile: wireProfile,
+		backend:     backend,
 	}, nil
 }
 
@@ -288,24 +293,6 @@ func candidateBackendSupported(client, backend access.Dialect) bool {
 	}
 }
 
-func primaryTransportProfile(
-	aggregate access.Aggregate,
-) (access.TransportProfileRef, bool) {
-	for _, routeSet := range aggregate.RouteSets {
-		if routeSet.ID != aggregate.Binding.DefaultRouteSetID ||
-			len(routeSet.CandidateProfileIDs) == 0 {
-			continue
-		}
-		primaryID := routeSet.CandidateProfileIDs[0]
-		for _, profile := range aggregate.Profiles {
-			if profile.ID == primaryID {
-				return profile.TransportProfileRef, true
-			}
-		}
-	}
-	return access.TransportProfileRef{}, false
-}
-
 func appendCandidateCommand(
 	aggregate access.Aggregate,
 	expected access.Revision,
@@ -317,13 +304,13 @@ func appendCandidateCommand(
 	updated.Binding.Revision = next
 	updated.Binding.ProfileIDs = append(updated.Binding.ProfileIDs, ids.profile)
 	updated.Profiles = append(updated.Profiles, access.EndpointProfile{
-		ID:                  ids.profile,
-		Revision:            next,
-		AccessID:            updated.Binding.ID,
-		Name:                candidate.name,
-		BackendDialect:      candidate.backend,
-		TargetID:            ids.target,
-		TransportProfileRef: candidate.transport,
+		ID:                     ids.profile,
+		Revision:               next,
+		AccessID:               updated.Binding.ID,
+		Name:                   candidate.name,
+		BackendDialect:         candidate.backend,
+		TargetID:               ids.target,
+		UpstreamWireProfileRef: candidate.wireProfile,
 		DefaultModelPolicy: access.ModelPolicy{
 			Revision:   next,
 			Mode:       access.ModelPolicyModeFixed,

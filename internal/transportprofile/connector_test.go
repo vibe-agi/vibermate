@@ -136,7 +136,7 @@ func TestConnectorWireServiceObservesOnlyTheAllowedMITMShapeChanges(
 	if err != nil {
 		t.Fatal(err)
 	}
-	request.Header.Set("X-Vibermate-Wire-Fixture", "observed-client-h1")
+	request.Header.Set("X-Vibermate-Wire-Fixture", "follow-client")
 	response, err := client.Do(request)
 	if err != nil {
 		t.Fatal(err)
@@ -164,7 +164,7 @@ func TestConnectorWireServiceObservesOnlyTheAllowedMITMShapeChanges(
 	if result.method != http.MethodPost ||
 		result.host != "example.com" ||
 		result.path != "/v1/chat/completions" ||
-		result.marker != "observed-client-h1" {
+		result.marker != "follow-client" {
 		t.Fatalf("wire service request = %+v", result)
 	}
 	upstream := result.observation
@@ -320,7 +320,7 @@ func TestConnectorReplaysObservedShapeWithFreshConnectionState(t *testing.T) {
 	}
 }
 
-func TestConnectorUsesDeterministicStandardFallbackWithoutObservation(
+func TestConnectorRejectsMissingObservationWithoutFallback(
 	t *testing.T,
 ) {
 	t.Parallel()
@@ -344,28 +344,83 @@ func TestConnectorUsesDeterministicStandardFallbackWithoutObservation(
 			Plan:          testTransportPlan(t),
 		},
 	)
+	if !errors.Is(err, ErrNoTransportProfile) || connection != nil {
+		t.Fatalf("Connect() connection=%v evidence=%+v error=%v", connection, evidence, err)
+	}
+	if dialer.dialCount() != 0 {
+		t.Fatalf("missing observation attempted %d dials", dialer.dialCount())
+	}
+}
+
+func TestConnectorReplaysCapturedClaudeCodeH1ProfileWithFreshState(
+	t *testing.T,
+) {
+	t.Parallel()
+
+	roots, serverConfig := testTLSAuthority(t)
+	dialer := newPipeTLSDialer(serverConfig)
+	connector, err := NewConnector(ConnectorOptions{
+		Dialer:           dialer,
+		RootCAs:          roots,
+		HandshakeTimeout: time.Second,
+	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	_ = connection.Close()
-	_ = dialer.nextObservation(t)
-	chain := evidence.FallbackChain()
-	if evidence.Effective().Ref !=
-		access.TransportProfileStandardH1Value ||
-		len(chain) != 2 ||
-		chain[0].Ref != access.TransportProfileObservedClientH1Value ||
-		chain[1].Ref != access.TransportProfileStandardH1Value ||
-		evidence.FallbackReason() != FallbackObservationUnavailable ||
-		!evidence.UsedFallback() {
-		t.Fatalf("fallback evidence = %+v", evidence)
+	request := ConnectRequest{
+		Network:       "tcp",
+		Address:       "example.com:443",
+		TLSServerName: "example.com",
+		Plan: testTransportPlanWithWire(
+			t,
+			access.UpstreamWireProfileClaudeCodeValue,
+		),
 	}
-	chain[0].Ref = "mutated"
-	cloned := evidence.Clone()
-	if evidence.FallbackChain()[0].Ref !=
-		access.TransportProfileObservedClientH1Value ||
-		cloned.FallbackChain()[0].Ref !=
-			access.TransportProfileObservedClientH1Value {
-		t.Fatal("fallback evidence exposed an alias")
+
+	first, firstEvidence, err := connector.Connect(context.Background(), request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = first.Close()
+	firstObservation := dialer.nextObservation(t)
+	second, secondEvidence, err := connector.Connect(context.Background(), request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = second.Close()
+	secondObservation := dialer.nextObservation(t)
+
+	for _, evidence := range []Evidence{firstEvidence, secondEvidence} {
+		if evidence.Requested().Ref != access.TransportProfileClaudeCodeH1Value ||
+			evidence.Effective().Ref != access.TransportProfileClaudeCodeH1Value ||
+			evidence.Requested().Source != access.TransportFingerprintCaptured ||
+			evidence.UsedFallback() ||
+			!slices.Equal(evidence.UpstreamOfferedALPN(), []string{"http/1.1"}) ||
+			evidence.UpstreamNegotiatedALPN() != "http/1.1" {
+			t.Fatalf("captured transport evidence = %+v", evidence)
+		}
+	}
+
+	fingerprint, err := firstObservation.Fingerprint()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if fingerprint.JA3Hash != "d871d02cecbde59abbf8f4806134addf" ||
+		fingerprint.JA4 != "t13d1712h1h1_5b57614c22b0_43ade6aba3df" ||
+		fingerprint.JA4R != "t13d1712h1h1_002f,0035,009c,009d,1301,1302,1303,c009,c00a,c013,c014,c02b,c02c,c02f,c030,cca8,cca9_0005,000a,000b,000d,0012,0015,0017,0023,002b,002d,0033,ff01_0403,0804,0401,0503,0805,0501,0806,0601,0201" ||
+		fingerprint.PeetprintHash != "9a146ce8499057db91a1e5e5d04f4f71" {
+		t.Fatalf("captured Claude Code fingerprint = %+v", fingerprint)
+	}
+	if clientHelloServerName(t, firstObservation.fingerprintRecord) != "example.com" ||
+		bytes.Equal(
+			clientHelloRandom(t, firstObservation.fingerprintRecord),
+			clientHelloRandom(t, secondObservation.fingerprintRecord),
+		) ||
+		bytes.Equal(
+			clientHelloKeyShare(t, firstObservation.fingerprintRecord),
+			clientHelloKeyShare(t, secondObservation.fingerprintRecord),
+		) {
+		t.Fatal("captured profile reused target or per-connection TLS state")
 	}
 }
 
@@ -410,6 +465,11 @@ func TestConnectorNeverFallsBackAroundHostnameVerification(t *testing.T) {
 
 func TestConnectorHandshakeCancellationConverges(t *testing.T) {
 	t.Parallel()
+	downstream := captureGoClientHello(
+		t,
+		"agent.example",
+		[]string{"http/1.1"},
+	)
 
 	connector, err := NewConnector(ConnectorOptions{
 		Dialer:           hangingDialer{},
@@ -426,6 +486,7 @@ func TestConnectorHandshakeCancellationConverges(t *testing.T) {
 			Address:       "example.com:443",
 			TLSServerName: "example.com",
 			Plan:          testTransportPlan(t),
+			Observation:   downstream,
 		})
 		result <- connectErr
 	}()
@@ -599,7 +660,23 @@ func (dialer fixedAddressDialer) DialContext(
 }
 
 func testTransportPlan(t *testing.T) access.CompiledTransportFingerprintPlan {
+	return testTransportPlanWithWire(
+		t,
+		access.UpstreamWireProfileFollowClientValue,
+	)
+}
+
+func testTransportPlanWithWire(
+	t *testing.T,
+	wireProfileRef string,
+) access.CompiledTransportFingerprintPlan {
 	t.Helper()
+	providerDialect := access.DialectOpenAIChat
+	codecName := "anthropic-messages-to-openai-chat"
+	if wireProfileRef == access.UpstreamWireProfileClaudeCodeValue {
+		providerDialect = access.DialectAnthropicMessages
+		codecName = "anthropic-messages-to-anthropic-messages"
+	}
 	command, err := accessapply.BuildCommand("transport-test", accessapply.Input{
 		ExpectedRevision: 0,
 		Access: accessapply.AccessInput{
@@ -617,11 +694,11 @@ func testTransportPlan(t *testing.T) access.CompiledTransportFingerprintPlan {
 			ClientDialect: string(access.DialectAnthropicMessages),
 		},
 		Profiles: []accessapply.ProfileInput{{
-			ID:                  "profile",
-			Name:                "Provider",
-			BackendDialect:      string(access.DialectOpenAIChat),
-			TargetID:            "target",
-			TransportProfileRef: access.TransportProfileObservedClientH1Value,
+			ID:                     "profile",
+			Name:                   "Provider",
+			BackendDialect:         string(providerDialect),
+			TargetID:               "target",
+			UpstreamWireProfileRef: wireProfileRef,
 			DefaultModelPolicy: accessapply.ModelPolicyInput{
 				Mode:       string(access.ModelPolicyModeFixed),
 				FixedModel: "provider-model",
@@ -633,7 +710,7 @@ func testTransportPlan(t *testing.T) access.CompiledTransportFingerprintPlan {
 			ID:        "target",
 			ProfileID: "profile",
 			Origin:    "https://example.com:443/v1",
-			Protocol:  string(access.DialectOpenAIChat),
+			Protocol:  string(providerDialect),
 			Capabilities: []string{
 				string(access.ProviderCapabilityMessages),
 				string(access.ProviderCapabilityStreaming),
@@ -664,7 +741,7 @@ func testTransportPlan(t *testing.T) access.CompiledTransportFingerprintPlan {
 		t.Fatal(err)
 	}
 	codecID, err := access.NewCodecPairID(
-		"anthropic-messages-to-openai-chat",
+		codecName,
 	)
 	if err != nil {
 		t.Fatal(err)
@@ -684,7 +761,7 @@ func testTransportPlan(t *testing.T) access.CompiledTransportFingerprintPlan {
 			ID:              codecID,
 			Revision:        1,
 			ClientDialect:   access.DialectAnthropicMessages,
-			ProviderDialect: access.DialectOpenAIChat,
+			ProviderDialect: providerDialect,
 			ClientOperationIDs: operations.SemanticOperationIDs(
 				access.DialectAnthropicMessages,
 			),
@@ -713,7 +790,9 @@ func testTransportPlan(t *testing.T) access.CompiledTransportFingerprintPlan {
 		TransportProfiles: []access.TransportFingerprintDefinition{
 			access.ObservedClientH1TransportFingerprintDefinition(),
 			access.StandardH1TransportFingerprintDefinition(),
+			access.ClaudeCodeH1TransportFingerprintDefinition(),
 		},
+		UpstreamWireProfiles: access.BuiltInUpstreamWireProfileDefinitions(),
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -726,7 +805,13 @@ func testTransportPlan(t *testing.T) access.CompiledTransportFingerprintPlan {
 	if err != nil {
 		t.Fatal(err)
 	}
-	return snapshot.TransportFingerprintPlan()
+	variant, available := snapshot.UpstreamWireProfile().Variant(
+		access.ApplicationProtocolHTTP1,
+	)
+	if !available {
+		t.Fatal("compiled wire profile has no HTTP/1.1 variant")
+	}
+	return variant.TransportFingerprintPlan()
 }
 
 func clientHelloRandom(t *testing.T, record []byte) []byte {

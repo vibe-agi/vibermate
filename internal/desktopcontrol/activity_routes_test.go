@@ -36,16 +36,24 @@ func TestActivityRouteProjectsExchangePagesWithoutWireLeakage(t *testing.T) {
 		}
 		if kind == activity.KindExchangeCompleted {
 			profile := activity.TransportProfileEvidence{
-				Ref:      "standard-strict-h1",
+				Ref:      "observed-client-strict-h1",
 				Revision: 1,
-				Source:   "standard",
+				Source:   "observed_client",
 			}
 			event.Diagnosis = activity.Diagnosis{
 				ProviderStatus: 502,
 				ProviderField:  "messages",
 			}
 			event.Transport = &activity.TransportEvidence{
-				Requested:     profile,
+				Presentation: &activity.WirePresentationEvidence{
+					RequestedRef:     "follow-client",
+					EffectiveRef:     "follow-client",
+					Revision:         1,
+					Mode:             "follow_client",
+					ClientProtocol:   "http/1.1",
+					UpstreamProtocol: "http/1.1",
+				},
+				Requested:     &profile,
 				Effective:     &profile,
 				FallbackChain: []activity.TransportProfileEvidence{profile},
 				HTTPTransport: "http1",

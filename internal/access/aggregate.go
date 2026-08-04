@@ -140,7 +140,7 @@ type EndpointProfile struct {
 	Description             string
 	BackendDialect          Dialect
 	TargetID                ProviderTargetID
-	TransportProfileRef     TransportProfileRef
+	UpstreamWireProfileRef  UpstreamWireProfileRef
 	DefaultModelPolicy      ModelPolicy
 	AccountBindingIDs       []AccountBindingID
 	DefaultAccountBindingID AccountBindingID
@@ -173,7 +173,7 @@ func (profile EndpointProfile) Validate() error {
 	if err := profile.TargetID.validate(); err != nil {
 		return err
 	}
-	if err := profile.TransportProfileRef.validate(); err != nil {
+	if err := profile.UpstreamWireProfileRef.validate(); err != nil {
 		return err
 	}
 	if err := profile.DefaultModelPolicy.Validate(); err != nil {

@@ -159,16 +159,20 @@ func TestActivityPersistsImmutableTransportSelectionEvidence(t *testing.T) {
 		Revision: 1,
 		Source:   "observed_client",
 	}
-	effective := activity.TransportProfileEvidence{
-		Ref:      "standard-strict-h1",
-		Revision: 1,
-		Source:   "standard",
-	}
+	persistedRequested := requested
+	effective := requested
 	evidence := activity.TransportEvidence{
-		Requested:      requested,
-		Effective:      &effective,
-		FallbackChain:  []activity.TransportProfileEvidence{requested, effective},
-		FallbackReason: "observation_unavailable",
+		Presentation: &activity.WirePresentationEvidence{
+			RequestedRef:     "follow-client",
+			EffectiveRef:     "follow-client",
+			Revision:         1,
+			Mode:             "follow_client",
+			ClientProtocol:   "http/1.1",
+			UpstreamProtocol: "http/1.1",
+		},
+		Requested:     &requested,
+		Effective:     &effective,
+		FallbackChain: []activity.TransportProfileEvidence{requested},
 		ClientOfferedALPN: []string{
 			"h2",
 			"http/1.1",
@@ -190,6 +194,8 @@ func TestActivityPersistsImmutableTransportSelectionEvidence(t *testing.T) {
 	}
 	evidence.FallbackChain[0].Ref = "mutated"
 	evidence.ClientOfferedALPN[0] = "mutated"
+	evidence.Presentation.RequestedRef = "mutated"
+	evidence.Requested.Ref = "mutated"
 	page, err := manager.List(
 		context.Background(),
 		activity.PageRequest{Limit: 10},
@@ -203,10 +209,17 @@ func TestActivityPersistsImmutableTransportSelectionEvidence(t *testing.T) {
 		t.Fatalf("transport Activity = %+v", page)
 	}
 	want := activity.TransportEvidence{
-		Requested:                requested,
+		Presentation: &activity.WirePresentationEvidence{
+			RequestedRef:     "follow-client",
+			EffectiveRef:     "follow-client",
+			Revision:         1,
+			Mode:             "follow_client",
+			ClientProtocol:   "http/1.1",
+			UpstreamProtocol: "http/1.1",
+		},
+		Requested:                &persistedRequested,
 		Effective:                &effective,
-		FallbackChain:            []activity.TransportProfileEvidence{requested, effective},
-		FallbackReason:           "observation_unavailable",
+		FallbackChain:            []activity.TransportProfileEvidence{persistedRequested},
 		ClientOfferedALPN:        []string{"h2", "http/1.1"},
 		DownstreamNegotiatedALPN: "http/1.1",
 		UpstreamOfferedALPN:      []string{"http/1.1"},
@@ -217,6 +230,8 @@ func TestActivityPersistsImmutableTransportSelectionEvidence(t *testing.T) {
 		t.Fatalf("transport evidence = %+v, want %+v", page.Items[0].Transport, want)
 	}
 	page.Items[0].Transport.FallbackChain[0].Ref = "output-mutated"
+	page.Items[0].Transport.Presentation.RequestedRef = "output-mutated"
+	page.Items[0].Transport.Requested.Ref = "output-mutated"
 	again, err := manager.List(
 		context.Background(),
 		activity.PageRequest{Limit: 10},

@@ -109,6 +109,101 @@ type TransportProfileEvidence struct {
 	Source   string `json:"source"`
 }
 
+// WirePresentationEvidence records the user-visible product-level choice and
+// the same-protocol variant selected for this Exchange. It never stores the
+// observed ClientHello or semantic headers.
+type WirePresentationEvidence struct {
+	RequestedRef     string `json:"requestedRef"`
+	EffectiveRef     string `json:"effectiveRef,omitempty"`
+	Revision         uint64 `json:"revision"`
+	Mode             string `json:"mode"`
+	Product          string `json:"product,omitempty"`
+	ClientProtocol   string `json:"clientProtocol"`
+	UpstreamProtocol string `json:"upstreamProtocol,omitempty"`
+	EvidenceDigest   string `json:"evidenceDigest,omitempty"`
+}
+
+func (evidence WirePresentationEvidence) Validate() error {
+	if validateIdentity(
+		"requested wire presentation reference",
+		evidence.RequestedRef,
+		false,
+	) != nil ||
+		evidence.Revision == 0 {
+		return fmt.Errorf(
+			"%w: wire presentation identity is invalid",
+			ErrInvalidEvent,
+		)
+	}
+	switch evidence.Mode {
+	case "follow_client":
+		if evidence.Product != "" || evidence.EvidenceDigest != "" {
+			return fmt.Errorf(
+				"%w: follow-client presentation contains product evidence",
+				ErrInvalidEvent,
+			)
+		}
+	case "emulate_product":
+		if evidence.Product != "claude_code" {
+			return fmt.Errorf(
+				"%w: emulated presentation product is invalid",
+				ErrInvalidEvent,
+			)
+		}
+	default:
+		return fmt.Errorf(
+			"%w: wire presentation mode is invalid",
+			ErrInvalidEvent,
+		)
+	}
+	if evidence.ClientProtocol != "http/1.1" && evidence.ClientProtocol != "h2" {
+		return fmt.Errorf(
+			"%w: wire presentation client protocol is invalid",
+			ErrInvalidEvent,
+		)
+	}
+	if evidence.EffectiveRef == "" {
+		if evidence.UpstreamProtocol != "" || evidence.EvidenceDigest != "" {
+			return fmt.Errorf(
+				"%w: unavailable wire presentation contains effective evidence",
+				ErrInvalidEvent,
+			)
+		}
+		return nil
+	}
+	if evidence.EffectiveRef != evidence.RequestedRef ||
+		evidence.UpstreamProtocol != evidence.ClientProtocol {
+		return fmt.Errorf(
+			"%w: wire presentation changed profile or client protocol",
+			ErrInvalidEvent,
+		)
+	}
+	if evidence.Mode == "emulate_product" && evidence.EvidenceDigest == "" {
+		return fmt.Errorf(
+			"%w: emulated presentation has no evidence digest",
+			ErrInvalidEvent,
+		)
+	}
+	if evidence.EvidenceDigest != "" {
+		if len(evidence.EvidenceDigest) != 64 {
+			return fmt.Errorf(
+				"%w: wire presentation evidence digest is invalid",
+				ErrInvalidEvent,
+			)
+		}
+		for _, character := range evidence.EvidenceDigest {
+			if !((character >= '0' && character <= '9') ||
+				(character >= 'a' && character <= 'f')) {
+				return fmt.Errorf(
+					"%w: wire presentation evidence digest is invalid",
+					ErrInvalidEvent,
+				)
+			}
+		}
+	}
+	return nil
+}
+
 func (evidence TransportProfileEvidence) Validate() error {
 	if validateIdentity(
 		"transport profile reference",
@@ -135,7 +230,8 @@ func (evidence TransportProfileEvidence) Validate() error {
 // TransportEvidence is a redacted durable projection of actual transport
 // selection. It carries no raw ClientHello, certificate, header, or secret.
 type TransportEvidence struct {
-	Requested                TransportProfileEvidence   `json:"requested"`
+	Presentation             *WirePresentationEvidence  `json:"presentation,omitempty"`
+	Requested                *TransportProfileEvidence  `json:"requested,omitempty"`
 	Effective                *TransportProfileEvidence  `json:"effective,omitempty"`
 	FallbackChain            []TransportProfileEvidence `json:"fallbackChain"`
 	FallbackReason           string                     `json:"fallbackReason,omitempty"`
@@ -147,12 +243,53 @@ type TransportEvidence struct {
 }
 
 func (evidence TransportEvidence) Validate() error {
+	if evidence.Presentation == nil {
+		return fmt.Errorf(
+			"%w: transport evidence has no wire presentation",
+			ErrInvalidEvent,
+		)
+	}
+	if err := evidence.Presentation.Validate(); err != nil {
+		return err
+	}
+	if evidence.Requested == nil {
+		if evidence.Effective != nil ||
+			len(evidence.FallbackChain) != 0 ||
+			evidence.FallbackReason != "" ||
+			len(evidence.ClientOfferedALPN) != 0 ||
+			evidence.DownstreamNegotiatedALPN != "" ||
+			len(evidence.UpstreamOfferedALPN) != 0 ||
+			evidence.UpstreamNegotiatedALPN != "" ||
+			evidence.HTTPTransport != "" {
+			return fmt.Errorf(
+				"%w: presentation-only evidence contains transport facts",
+				ErrInvalidEvent,
+			)
+		}
+		return nil
+	}
+	if evidence.Presentation.EffectiveRef == "" {
+		return fmt.Errorf(
+			"%w: transport facts exist for an unavailable wire presentation",
+			ErrInvalidEvent,
+		)
+	}
 	if err := evidence.Requested.Validate(); err != nil {
 		return err
 	}
+	expectedSource := "observed_client"
+	if evidence.Presentation.Mode == "emulate_product" {
+		expectedSource = "named_profile"
+	}
+	if evidence.Requested.Source != expectedSource {
+		return fmt.Errorf(
+			"%w: wire presentation and transport source disagree",
+			ErrInvalidEvent,
+		)
+	}
 	if len(evidence.FallbackChain) == 0 ||
 		len(evidence.FallbackChain) > 16 ||
-		evidence.FallbackChain[0] != evidence.Requested {
+		evidence.FallbackChain[0] != *evidence.Requested {
 		return fmt.Errorf(
 			"%w: transport fallback chain is invalid",
 			ErrInvalidEvent,
@@ -211,7 +348,20 @@ func (evidence TransportEvidence) Validate() error {
 		}
 	}
 	switch evidence.HTTPTransport {
-	case "", "http1", "http2":
+	case "http1":
+		if evidence.Presentation.UpstreamProtocol != "http/1.1" {
+			return fmt.Errorf(
+				"%w: wire presentation and HTTP transport disagree",
+				ErrInvalidEvent,
+			)
+		}
+	case "http2":
+		if evidence.Presentation.UpstreamProtocol != "h2" {
+			return fmt.Errorf(
+				"%w: wire presentation and HTTP transport disagree",
+				ErrInvalidEvent,
+			)
+		}
 	default:
 		return fmt.Errorf(
 			"%w: HTTP transport evidence is invalid",
@@ -223,6 +373,14 @@ func (evidence TransportEvidence) Validate() error {
 
 func (evidence TransportEvidence) Clone() TransportEvidence {
 	cloned := evidence
+	if evidence.Presentation != nil {
+		presentation := *evidence.Presentation
+		cloned.Presentation = &presentation
+	}
+	if evidence.Requested != nil {
+		requested := *evidence.Requested
+		cloned.Requested = &requested
+	}
 	if evidence.Effective != nil {
 		effective := *evidence.Effective
 		cloned.Effective = &effective

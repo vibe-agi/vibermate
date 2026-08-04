@@ -40,6 +40,7 @@ type AuthDriverRef struct{ value string }
 type CodecPairID struct{ value string }
 type ClientOperationID struct{ value string }
 type TransportProfileRef struct{ value string }
+type UpstreamWireProfileRef struct{ value string }
 
 func NewAccessID(value string) (AccessID, error) {
 	if err := validateIdentifier("Access ID", value, MaxAccessIDBytes); err != nil {
@@ -140,6 +141,17 @@ func NewTransportProfileRef(value string) (TransportProfileRef, error) {
 	return TransportProfileRef{value: value}, nil
 }
 
+func NewUpstreamWireProfileRef(value string) (UpstreamWireProfileRef, error) {
+	if err := validateIdentifier(
+		"upstream wire profile reference",
+		value,
+		MaxResourceIDBytes,
+	); err != nil {
+		return UpstreamWireProfileRef{}, err
+	}
+	return UpstreamWireProfileRef{value: value}, nil
+}
+
 func (id AccessID) String() string          { return id.value }
 func (id AgentEndpointID) String() string   { return id.value }
 func (id EndpointProfileID) String() string { return id.value }
@@ -155,6 +167,7 @@ func (id ClientOperationID) String() string { return id.value }
 func (ref TransportProfileRef) String() string {
 	return ref.value
 }
+func (ref UpstreamWireProfileRef) String() string { return ref.value }
 
 func (id AccessID) validate() error {
 	return validateIdentifier("Access ID", id.value, MaxAccessIDBytes)
@@ -195,6 +208,13 @@ func (id ClientOperationID) validate() error {
 func (ref TransportProfileRef) validate() error {
 	return validateIdentifier(
 		"transport fingerprint profile reference",
+		ref.value,
+		MaxResourceIDBytes,
+	)
+}
+func (ref UpstreamWireProfileRef) validate() error {
+	return validateIdentifier(
+		"upstream wire profile reference",
 		ref.value,
 		MaxResourceIDBytes,
 	)
@@ -277,6 +297,12 @@ const (
 const (
 	TransportProfileObservedClientH1Value = "observed-client-strict-h1"
 	TransportProfileStandardH1Value       = "standard-strict-h1"
+	TransportProfileClaudeCodeH1Value     = "claude-code-2.1.220-darwin-arm64-strict-h1"
+)
+
+const (
+	UpstreamWireProfileFollowClientValue = "follow-client"
+	UpstreamWireProfileClaudeCodeValue   = "claude-code"
 )
 
 func StaticHeaderAuthDriverRef() AuthDriverRef {
@@ -293,6 +319,18 @@ func ObservedClientH1TransportProfileRef() TransportProfileRef {
 
 func StandardH1TransportProfileRef() TransportProfileRef {
 	return TransportProfileRef{value: TransportProfileStandardH1Value}
+}
+
+func ClaudeCodeH1TransportProfileRef() TransportProfileRef {
+	return TransportProfileRef{value: TransportProfileClaudeCodeH1Value}
+}
+
+func FollowClientUpstreamWireProfileRef() UpstreamWireProfileRef {
+	return UpstreamWireProfileRef{value: UpstreamWireProfileFollowClientValue}
+}
+
+func ClaudeCodeUpstreamWireProfileRef() UpstreamWireProfileRef {
+	return UpstreamWireProfileRef{value: UpstreamWireProfileClaudeCodeValue}
 }
 
 type ModelName struct{ value string }

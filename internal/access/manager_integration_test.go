@@ -833,21 +833,25 @@ func assertCompletePlan(
 		len(plugin.BindingIDs()) != 0 {
 		t.Fatalf("plugin plan mode=%q bindings=%v", plugin.Mode(), plugin.BindingIDs())
 	}
-	transport := plan.TransportFingerprintPlan()
+	wireProfile := plan.UpstreamWireProfile()
+	variant, ok := wireProfile.Variant(access.ApplicationProtocolHTTP1)
+	if !ok {
+		t.Fatal("active plan has no HTTP/1.1 wire variant")
+	}
+	transport := variant.TransportFingerprintPlan()
 	requestedTransport := transport.Requested()
-	transportFallbacks := transport.Fallbacks()
-	if requestedTransport.Ref() != access.ObservedClientH1TransportProfileRef() ||
+	if wireProfile.Ref() != access.FollowClientUpstreamWireProfileRef() ||
+		wireProfile.Mode() != access.UpstreamWireModeFollowClient ||
+		requestedTransport.Ref() != access.ObservedClientH1TransportProfileRef() ||
 		requestedTransport.Source() != access.TransportFingerprintObservedClient ||
 		requestedTransport.HTTPTransport() != access.HTTPTransportHTTP1 ||
 		len(requestedTransport.ALPN()) != 1 ||
 		requestedTransport.ALPN()[0] != access.ApplicationProtocolHTTP1 ||
-		len(transportFallbacks) != 1 ||
-		transportFallbacks[0].Ref() != access.StandardH1TransportProfileRef() ||
-		transportFallbacks[0].Source() != access.TransportFingerprintStandard {
+		len(transport.Fallbacks()) != 0 {
 		t.Fatalf(
 			"transport fingerprint requested=%+v fallbacks=%+v",
 			requestedTransport,
-			transportFallbacks,
+			transport.Fallbacks(),
 		)
 	}
 	routeSets := plan.RouteSets()
@@ -902,14 +906,15 @@ func assertCompletePlan(
 		access.DependencyEgressCapability,
 		access.DependencyPluginPlanCapability,
 		access.DependencyModelPolicyCapability,
+		access.DependencyUpstreamWireProfile,
 	} {
 		if seenKinds[kind] != 1 {
 			t.Fatalf("dependency kind %q count=%d, want 1", kind, seenKinds[kind])
 		}
 	}
-	if seenKinds[access.DependencyTransportFingerprint] != 2 {
+	if seenKinds[access.DependencyTransportFingerprint] != 1 {
 		t.Fatalf(
-			"transport fingerprint dependency count=%d, want 2",
+			"transport fingerprint dependency count=%d, want 1",
 			seenKinds[access.DependencyTransportFingerprint],
 		)
 	}
@@ -931,14 +936,18 @@ func assertGetterIsolation(t *testing.T, plan access.AccessPlanSnapshot) {
 	required[0] = "mutated"
 	operationMethods := codec.ClientOperations()[0].Methods()
 	operationMethods[0] = "DELETE"
-	transport := plan.TransportFingerprintPlan()
+	variant, ok := plan.UpstreamWireProfile().Variant(access.ApplicationProtocolHTTP1)
+	if !ok {
+		t.Fatal("active plan has no HTTP/1.1 wire variant")
+	}
+	transport := variant.TransportFingerprintPlan()
 	requestedALPN := transport.Requested().ALPN()
 	requestedALPN[0] = access.ApplicationProtocolHTTP2
-	fallbacks := transport.Fallbacks()
-	fallbackALPN := fallbacks[0].ALPN()
-	fallbackALPN[0] = access.ApplicationProtocolHTTP2
 	dependencies := plan.DependencyRevisions()
 	dependencies[0].ID = "mutated"
+	currentVariant, available := plan.UpstreamWireProfile().Variant(
+		access.ApplicationProtocolHTTP1,
+	)
 
 	if len(plan.Binding().ProfileIDs) != 1 ||
 		len(plan.EndpointProfiles()[0].AccountBindingIDs) != 1 ||
@@ -946,9 +955,8 @@ func assertGetterIsolation(t *testing.T, plan access.AccessPlanSnapshot) {
 		len(plan.RouteSets()[0].CandidateProfileIDs) != 1 ||
 		plan.CodecPlan().RequiredCapabilities()[0] == "mutated" ||
 		plan.CodecPlan().ClientOperations()[0].Methods()[0] != "POST" ||
-		plan.TransportFingerprintPlan().Requested().ALPN()[0] !=
-			access.ApplicationProtocolHTTP1 ||
-		plan.TransportFingerprintPlan().Fallbacks()[0].ALPN()[0] !=
+		!available ||
+		currentVariant.TransportFingerprintPlan().Requested().ALPN()[0] !=
 			access.ApplicationProtocolHTTP1 ||
 		plan.DependencyRevisions()[0].ID == "mutated" {
 		t.Fatal("a getter exposed mutable active-plan state")

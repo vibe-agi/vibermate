@@ -107,7 +107,12 @@ type TransportFingerprintSource string
 const (
 	TransportFingerprintObservedClient TransportFingerprintSource = "observed_client"
 	TransportFingerprintStandard       TransportFingerprintSource = "standard"
+	TransportFingerprintCaptured       TransportFingerprintSource = "captured_profile"
 )
+
+type TransportFingerprintPreset string
+
+const TransportFingerprintPresetClaudeCodeH1 TransportFingerprintPreset = "claude_code_2_1_220_darwin_arm64_h1"
 
 type ApplicationProtocol string
 
@@ -118,12 +123,16 @@ const (
 
 type HTTPTransportKind string
 
-const HTTPTransportHTTP1 HTTPTransportKind = "http1"
+const (
+	HTTPTransportHTTP1 HTTPTransportKind = "http1"
+	HTTPTransportHTTP2 HTTPTransportKind = "http2"
+)
 
 type TransportFingerprintTemplate struct {
 	ref           TransportProfileRef
 	revision      Revision
 	source        TransportFingerprintSource
+	preset        TransportFingerprintPreset
 	httpTransport HTTPTransportKind
 	alpn          []ApplicationProtocol
 }
@@ -137,6 +146,9 @@ func (template TransportFingerprintTemplate) Revision() Revision {
 func (template TransportFingerprintTemplate) Source() TransportFingerprintSource {
 	return template.source
 }
+func (template TransportFingerprintTemplate) Preset() TransportFingerprintPreset {
+	return template.preset
+}
 func (template TransportFingerprintTemplate) HTTPTransport() HTTPTransportKind {
 	return template.httpTransport
 }
@@ -147,6 +159,98 @@ func (template TransportFingerprintTemplate) ALPN() []ApplicationProtocol {
 type CompiledTransportFingerprintPlan struct {
 	requested TransportFingerprintTemplate
 	fallbacks []TransportFingerprintTemplate
+}
+
+type UpstreamWireMode string
+
+const (
+	UpstreamWireModeFollowClient   UpstreamWireMode = "follow_client"
+	UpstreamWireModeEmulateProduct UpstreamWireMode = "emulate_product"
+)
+
+type UpstreamWireProduct string
+
+const UpstreamWireProductClaudeCode UpstreamWireProduct = "claude_code"
+
+type CompiledUpstreamWireVariant struct {
+	protocol          ApplicationProtocol
+	transportPlan     CompiledTransportFingerprintPlan
+	userAgentPolicy   UserAgentPolicy
+	semanticUserAgent string
+	evidenceDigest    string
+}
+
+type CompiledUpstreamWireProfile struct {
+	ref      UpstreamWireProfileRef
+	revision Revision
+	mode     UpstreamWireMode
+	product  UpstreamWireProduct
+	variants []CompiledUpstreamWireVariant
+}
+
+func (profile CompiledUpstreamWireProfile) Ref() UpstreamWireProfileRef {
+	return profile.ref
+}
+func (profile CompiledUpstreamWireProfile) Revision() Revision {
+	return profile.revision
+}
+func (profile CompiledUpstreamWireProfile) Mode() UpstreamWireMode {
+	return profile.mode
+}
+func (profile CompiledUpstreamWireProfile) Product() UpstreamWireProduct {
+	return profile.product
+}
+func (profile CompiledUpstreamWireProfile) Variant(
+	protocol ApplicationProtocol,
+) (CompiledUpstreamWireVariant, bool) {
+	for _, variant := range profile.variants {
+		if variant.protocol == protocol {
+			return cloneUpstreamWireVariant(variant), true
+		}
+	}
+	return CompiledUpstreamWireVariant{}, false
+}
+func (profile CompiledUpstreamWireProfile) Variants() []CompiledUpstreamWireVariant {
+	variants := make([]CompiledUpstreamWireVariant, len(profile.variants))
+	for index, variant := range profile.variants {
+		variants[index] = cloneUpstreamWireVariant(variant)
+	}
+	return variants
+}
+
+func (variant CompiledUpstreamWireVariant) Protocol() ApplicationProtocol {
+	return variant.protocol
+}
+func (variant CompiledUpstreamWireVariant) TransportFingerprintPlan() CompiledTransportFingerprintPlan {
+	return CompiledTransportFingerprintPlan{
+		requested: cloneTransportTemplate(variant.transportPlan.requested),
+		fallbacks: variant.transportPlan.Fallbacks(),
+	}
+}
+func (variant CompiledUpstreamWireVariant) UserAgentPolicy() UserAgentPolicy {
+	return variant.userAgentPolicy
+}
+func (variant CompiledUpstreamWireVariant) SemanticUserAgent() string {
+	return variant.semanticUserAgent
+}
+func (variant CompiledUpstreamWireVariant) EvidenceDigest() string {
+	return variant.evidenceDigest
+}
+
+func cloneUpstreamWireProfile(
+	profile CompiledUpstreamWireProfile,
+) CompiledUpstreamWireProfile {
+	cloned := profile
+	cloned.variants = profile.Variants()
+	return cloned
+}
+
+func cloneUpstreamWireVariant(
+	variant CompiledUpstreamWireVariant,
+) CompiledUpstreamWireVariant {
+	cloned := variant
+	cloned.transportPlan = variant.TransportFingerprintPlan()
+	return cloned
 }
 
 func (plan CompiledTransportFingerprintPlan) Requested() TransportFingerprintTemplate {
@@ -237,6 +341,7 @@ const (
 	DependencyPluginPlanCapability  DependencyKind = "plugin_plan_capability"
 	DependencyModelPolicyCapability DependencyKind = "model_policy_capability"
 	DependencyTransportFingerprint  DependencyKind = "transport_fingerprint"
+	DependencyUpstreamWireProfile   DependencyKind = "upstream_wire_profile"
 	DependencyClientOperation       DependencyKind = "client_operation"
 )
 
@@ -252,10 +357,10 @@ type DependencyRevision struct {
 // every request starts with; a later one is only ever reached when the plan's
 // fallback policy allowed a further attempt.
 type CompiledCandidate struct {
-	profileID     EndpointProfileID
-	target        CompiledProviderTarget
-	codecPlan     CodecPlan
-	transportPlan CompiledTransportFingerprintPlan
+	profileID   EndpointProfileID
+	target      CompiledProviderTarget
+	codecPlan   CodecPlan
+	wireProfile CompiledUpstreamWireProfile
 }
 
 func (candidate CompiledCandidate) ProfileID() EndpointProfileID {
@@ -275,11 +380,8 @@ func (candidate CompiledCandidate) CodecPlan() CodecPlan {
 	return plan
 }
 
-func (candidate CompiledCandidate) TransportFingerprintPlan() CompiledTransportFingerprintPlan {
-	return CompiledTransportFingerprintPlan{
-		requested: cloneTransportTemplate(candidate.transportPlan.requested),
-		fallbacks: candidate.transportPlan.Fallbacks(),
-	}
+func (candidate CompiledCandidate) UpstreamWireProfile() CompiledUpstreamWireProfile {
+	return cloneUpstreamWireProfile(candidate.wireProfile)
 }
 
 type AccessPlanSnapshot struct {
@@ -287,7 +389,7 @@ type AccessPlanSnapshot struct {
 	candidates      []CompiledCandidate
 	compiledTargets []CompiledProviderTarget
 	codecPlan       CodecPlan
-	transportPlan   CompiledTransportFingerprintPlan
+	wireProfile     CompiledUpstreamWireProfile
 	pluginPlan      CompiledPluginPlan
 	dependencies    []DependencyRevision
 	planHash        PlanHash
@@ -370,11 +472,8 @@ func (snapshot AccessPlanSnapshot) CodecPlan() CodecPlan {
 	return plan
 }
 
-func (snapshot AccessPlanSnapshot) TransportFingerprintPlan() CompiledTransportFingerprintPlan {
-	return CompiledTransportFingerprintPlan{
-		requested: cloneTransportTemplate(snapshot.transportPlan.requested),
-		fallbacks: snapshot.transportPlan.Fallbacks(),
-	}
+func (snapshot AccessPlanSnapshot) UpstreamWireProfile() CompiledUpstreamWireProfile {
+	return cloneUpstreamWireProfile(snapshot.wireProfile)
 }
 
 func (snapshot AccessPlanSnapshot) PluginPlan() CompiledPluginPlan {
@@ -403,10 +502,11 @@ func (snapshot AccessPlanSnapshot) validate() error {
 			ErrInvalidAccessPlan,
 		)
 	}
-	if snapshot.transportPlan.requested.ref.String() == "" ||
-		len(snapshot.transportPlan.requested.alpn) == 0 {
+	if snapshot.wireProfile.ref.String() == "" ||
+		snapshot.wireProfile.revision == 0 ||
+		len(snapshot.wireProfile.variants) == 0 {
 		return fmt.Errorf(
-			"%w: transport fingerprint plan is incomplete",
+			"%w: upstream wire profile is incomplete",
 			ErrInvalidAccessPlan,
 		)
 	}
@@ -418,7 +518,7 @@ func (snapshot AccessPlanSnapshot) clone() AccessPlanSnapshot {
 	cloned.aggregate = snapshot.aggregate.Clone()
 	cloned.compiledTargets = snapshot.ProviderTargets()
 	cloned.codecPlan = snapshot.CodecPlan()
-	cloned.transportPlan = snapshot.TransportFingerprintPlan()
+	cloned.wireProfile = snapshot.UpstreamWireProfile()
 	cloned.pluginPlan = snapshot.PluginPlan()
 	cloned.dependencies = slices.Clone(snapshot.dependencies)
 	return cloned

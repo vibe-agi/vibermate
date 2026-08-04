@@ -61,6 +61,7 @@ const previewWorkAccess = buildAccessApplyInput({
   providerOrigin: "http://127.0.0.1:23333",
   fixedModel: "dashscope:glm-5",
   routeName: "Work relay",
+  upstreamPresentation: "follow-client",
 });
 
 const previewActivities: readonly ActivityRecord[] = [
@@ -501,7 +502,7 @@ class PreviewControlClient implements ControlClient {
           description: "",
           backendDialect,
           targetId,
-          transportProfileRef: "observed-client-strict-h1",
+          upstreamWireProfileRef: "follow-client",
           defaultModelPolicy: {
             mode: "fixed",
             fixedModel: candidate.model,

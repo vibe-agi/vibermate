@@ -1,29 +1,34 @@
 package access
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"slices"
 	"sort"
+	"strings"
+	"unicode/utf8"
 )
 
 var (
-	ErrOwnershipViolation       = errors.New("Access resource ownership violation")
-	ErrDanglingReference        = errors.New("Access resource reference is unresolved")
-	ErrUnsupportedCardinality   = errors.New("Access plan cardinality is unsupported")
-	ErrUnknownDialect           = errors.New("Access plan dialect is not in the catalog")
-	ErrUnsupportedCodecPair     = errors.New("Access codec pair is unsupported")
-	ErrCapabilityMismatch       = errors.New("ProviderTarget capability mismatch")
-	ErrUnknownAuthDriver        = errors.New("AuthDriver is not in the catalog")
-	ErrUnknownEgressMode        = errors.New("egress mode is not in the catalog")
-	ErrUnknownPluginPlanMode    = errors.New("plugin plan mode is not in the catalog")
-	ErrUnknownModelPolicyMode   = errors.New("model policy mode is not in the catalog")
-	ErrUnknownTransportProfile  = errors.New("transport fingerprint profile is not in the catalog")
-	ErrInvalidProviderTransport = errors.New("ProviderTarget transport is invalid")
-	ErrAccessNotEnabled         = errors.New("Access is not enabled")
-	ErrDuplicateResource        = errors.New("Access resource ID is duplicated")
-	ErrUnsupportedPluginBinding = errors.New("plugin bindings are not enabled")
+	ErrOwnershipViolation         = errors.New("Access resource ownership violation")
+	ErrDanglingReference          = errors.New("Access resource reference is unresolved")
+	ErrUnsupportedCardinality     = errors.New("Access plan cardinality is unsupported")
+	ErrUnknownDialect             = errors.New("Access plan dialect is not in the catalog")
+	ErrUnsupportedCodecPair       = errors.New("Access codec pair is unsupported")
+	ErrCapabilityMismatch         = errors.New("ProviderTarget capability mismatch")
+	ErrUnknownAuthDriver          = errors.New("AuthDriver is not in the catalog")
+	ErrUnknownEgressMode          = errors.New("egress mode is not in the catalog")
+	ErrUnknownPluginPlanMode      = errors.New("plugin plan mode is not in the catalog")
+	ErrUnknownModelPolicyMode     = errors.New("model policy mode is not in the catalog")
+	ErrUnknownTransportProfile    = errors.New("transport fingerprint profile is not in the catalog")
+	ErrUnknownUpstreamWireProfile = errors.New("upstream wire profile is not in the catalog")
+	ErrInvalidProviderTransport   = errors.New("ProviderTarget transport is invalid")
+	ErrAccessNotEnabled           = errors.New("Access is not enabled")
+	ErrDuplicateResource          = errors.New("Access resource ID is duplicated")
+	ErrUnsupportedPluginBinding   = errors.New("plugin bindings are not enabled")
 )
 
 type PlanCapabilities struct {
@@ -67,9 +72,34 @@ type TransportFingerprintDefinition struct {
 	Ref           TransportProfileRef
 	Revision      Revision
 	Source        TransportFingerprintSource
+	Preset        TransportFingerprintPreset
 	HTTPTransport HTTPTransportKind
 	ALPN          []ApplicationProtocol
 	FallbackRefs  []TransportProfileRef
+}
+
+type UserAgentPolicy string
+
+const (
+	UserAgentPolicyOmit         UserAgentPolicy = "omit"
+	UserAgentPolicyFollowClient UserAgentPolicy = "follow_client"
+	UserAgentPolicyConstant     UserAgentPolicy = "constant"
+)
+
+type UpstreamWireProfileDefinition struct {
+	Ref      UpstreamWireProfileRef
+	Revision Revision
+	Mode     UpstreamWireMode
+	Product  UpstreamWireProduct
+	Variants []UpstreamWireVariantDefinition
+}
+
+type UpstreamWireVariantDefinition struct {
+	Protocol            ApplicationProtocol
+	TransportProfileRef TransportProfileRef
+	UserAgentPolicy     UserAgentPolicy
+	SemanticUserAgent   string
+	EvidenceDigest      string
 }
 
 func ObservedClientH1TransportFingerprintDefinition() TransportFingerprintDefinition {
@@ -79,9 +109,6 @@ func ObservedClientH1TransportFingerprintDefinition() TransportFingerprintDefini
 		Source:        TransportFingerprintObservedClient,
 		HTTPTransport: HTTPTransportHTTP1,
 		ALPN:          []ApplicationProtocol{ApplicationProtocolHTTP1},
-		FallbackRefs: []TransportProfileRef{
-			StandardH1TransportProfileRef(),
-		},
 	}
 }
 
@@ -95,15 +122,63 @@ func StandardH1TransportFingerprintDefinition() TransportFingerprintDefinition {
 	}
 }
 
+func ClaudeCodeH1TransportFingerprintDefinition() TransportFingerprintDefinition {
+	return TransportFingerprintDefinition{
+		Ref:           ClaudeCodeH1TransportProfileRef(),
+		Revision:      1,
+		Source:        TransportFingerprintCaptured,
+		Preset:        TransportFingerprintPresetClaudeCodeH1,
+		HTTPTransport: HTTPTransportHTTP1,
+		ALPN:          []ApplicationProtocol{ApplicationProtocolHTTP1},
+	}
+}
+
+func FollowClientUpstreamWireProfileDefinition() UpstreamWireProfileDefinition {
+	return UpstreamWireProfileDefinition{
+		Ref:      FollowClientUpstreamWireProfileRef(),
+		Revision: 1,
+		Mode:     UpstreamWireModeFollowClient,
+		Variants: []UpstreamWireVariantDefinition{{
+			Protocol:            ApplicationProtocolHTTP1,
+			TransportProfileRef: ObservedClientH1TransportProfileRef(),
+			UserAgentPolicy:     UserAgentPolicyFollowClient,
+		}},
+	}
+}
+
+func ClaudeCodeUpstreamWireProfileDefinition() UpstreamWireProfileDefinition {
+	return UpstreamWireProfileDefinition{
+		Ref:      ClaudeCodeUpstreamWireProfileRef(),
+		Revision: 1,
+		Mode:     UpstreamWireModeEmulateProduct,
+		Product:  UpstreamWireProductClaudeCode,
+		Variants: []UpstreamWireVariantDefinition{{
+			Protocol:            ApplicationProtocolHTTP1,
+			TransportProfileRef: ClaudeCodeH1TransportProfileRef(),
+			UserAgentPolicy:     UserAgentPolicyConstant,
+			SemanticUserAgent:   "claude-cli/2.1.220 (external, sdk-cli)",
+			EvidenceDigest:      "5b4322f09d5dbf5cb3a56c3724a01a9c795f57d4b2e9178c2242b9e524543393",
+		}},
+	}
+}
+
+func BuiltInUpstreamWireProfileDefinitions() []UpstreamWireProfileDefinition {
+	return []UpstreamWireProfileDefinition{
+		FollowClientUpstreamWireProfileDefinition(),
+		ClaudeCodeUpstreamWireProfileDefinition(),
+	}
+}
+
 type CatalogOptions struct {
-	Capabilities      PlanCapabilities
-	ClientOperations  []ClientOperationDefinition
-	CodecPairs        []CodecPairDefinition
-	AuthDrivers       []AuthDriverDefinition
-	EgressModes       []EgressModeDefinition
-	PluginPlanModes   []PluginPlanModeDefinition
-	ModelPolicyModes  []ModelPolicyModeDefinition
-	TransportProfiles []TransportFingerprintDefinition
+	Capabilities         PlanCapabilities
+	ClientOperations     []ClientOperationDefinition
+	CodecPairs           []CodecPairDefinition
+	AuthDrivers          []AuthDriverDefinition
+	EgressModes          []EgressModeDefinition
+	PluginPlanModes      []PluginPlanModeDefinition
+	ModelPolicyModes     []ModelPolicyModeDefinition
+	TransportProfiles    []TransportFingerprintDefinition
+	UpstreamWireProfiles []UpstreamWireProfileDefinition
 }
 
 type codecPairKey struct {
@@ -113,16 +188,17 @@ type codecPairKey struct {
 
 // Catalog is an immutable, explicitly constructed compilation dependency.
 type Catalog struct {
-	initialized       bool
-	capabilities      PlanCapabilities
-	clientOperations  map[ClientOperationID]ClientOperationDefinition
-	codecPairs        map[codecPairKey]CodecPairDefinition
-	knownDialects     map[Dialect]struct{}
-	authDrivers       map[AuthDriverRef]AuthDriverDefinition
-	egressModes       map[EgressMode]EgressModeDefinition
-	pluginPlanModes   map[PluginPlanMode]PluginPlanModeDefinition
-	modelPolicyModes  map[ModelPolicyMode]ModelPolicyModeDefinition
-	transportProfiles map[TransportProfileRef]TransportFingerprintDefinition
+	initialized          bool
+	capabilities         PlanCapabilities
+	clientOperations     map[ClientOperationID]ClientOperationDefinition
+	codecPairs           map[codecPairKey]CodecPairDefinition
+	knownDialects        map[Dialect]struct{}
+	authDrivers          map[AuthDriverRef]AuthDriverDefinition
+	egressModes          map[EgressMode]EgressModeDefinition
+	pluginPlanModes      map[PluginPlanMode]PluginPlanModeDefinition
+	modelPolicyModes     map[ModelPolicyMode]ModelPolicyModeDefinition
+	transportProfiles    map[TransportProfileRef]TransportFingerprintDefinition
+	upstreamWireProfiles map[UpstreamWireProfileRef]UpstreamWireProfileDefinition
 }
 
 func NewCatalog(options CatalogOptions) (Catalog, error) {
@@ -147,6 +223,10 @@ func NewCatalog(options CatalogOptions) (Catalog, error) {
 		transportProfiles: make(
 			map[TransportProfileRef]TransportFingerprintDefinition,
 			len(options.TransportProfiles),
+		),
+		upstreamWireProfiles: make(
+			map[UpstreamWireProfileRef]UpstreamWireProfileDefinition,
+			len(options.UpstreamWireProfiles),
 		),
 	}
 	for _, definition := range options.ClientOperations {
@@ -290,16 +370,118 @@ func NewCatalog(options CatalogOptions) (Catalog, error) {
 	if err := validateTransportFallbacks(catalog.transportProfiles); err != nil {
 		return Catalog{}, err
 	}
+	for _, definition := range options.UpstreamWireProfiles {
+		if err := validateUpstreamWireProfileDefinition(
+			definition,
+			catalog.transportProfiles,
+		); err != nil {
+			return Catalog{}, err
+		}
+		if _, duplicate := catalog.upstreamWireProfiles[definition.Ref]; duplicate {
+			return Catalog{}, errors.New(
+				"upstream wire profile definition is duplicated",
+			)
+		}
+		definition.Variants = slices.Clone(definition.Variants)
+		catalog.upstreamWireProfiles[definition.Ref] = definition
+	}
 	if len(catalog.clientOperations) == 0 ||
 		len(catalog.codecPairs) == 0 ||
 		len(catalog.authDrivers) == 0 ||
 		len(catalog.egressModes) == 0 ||
 		len(catalog.pluginPlanModes) == 0 ||
 		len(catalog.modelPolicyModes) == 0 ||
-		len(catalog.transportProfiles) == 0 {
+		len(catalog.transportProfiles) == 0 ||
+		len(catalog.upstreamWireProfiles) == 0 {
 		return Catalog{}, errors.New("Access plan catalog is incomplete")
 	}
 	return catalog, nil
+}
+
+func validateUpstreamWireProfileDefinition(
+	definition UpstreamWireProfileDefinition,
+	transports map[TransportProfileRef]TransportFingerprintDefinition,
+) error {
+	if err := definition.Ref.validate(); err != nil {
+		return err
+	}
+	if err := validateRevision("upstream wire profile", definition.Revision); err != nil {
+		return err
+	}
+	switch definition.Mode {
+	case UpstreamWireModeFollowClient:
+		if definition.Product != "" {
+			return errors.New("follow-client wire profile names a product")
+		}
+	case UpstreamWireModeEmulateProduct:
+		if definition.Product != UpstreamWireProductClaudeCode {
+			return errors.New("upstream wire profile product is unsupported")
+		}
+	default:
+		return errors.New("upstream wire profile mode is invalid")
+	}
+	if len(definition.Variants) == 0 {
+		return errors.New("upstream wire profile has no protocol variant")
+	}
+	seenProtocols := make(map[ApplicationProtocol]struct{}, len(definition.Variants))
+	for _, variant := range definition.Variants {
+		if variant.Protocol != ApplicationProtocolHTTP1 &&
+			variant.Protocol != ApplicationProtocolHTTP2 {
+			return errors.New("upstream wire profile protocol is unsupported")
+		}
+		if _, duplicate := seenProtocols[variant.Protocol]; duplicate {
+			return errors.New("upstream wire profile protocol is duplicated")
+		}
+		seenProtocols[variant.Protocol] = struct{}{}
+		transport, exists := transports[variant.TransportProfileRef]
+		if !exists {
+			return fmt.Errorf(
+				"%w: %q",
+				ErrUnknownTransportProfile,
+				variant.TransportProfileRef.String(),
+			)
+		}
+		expectedTransport := HTTPTransportHTTP1
+		if variant.Protocol == ApplicationProtocolHTTP2 {
+			expectedTransport = HTTPTransportHTTP2
+		}
+		if transport.HTTPTransport != expectedTransport ||
+			!slices.Contains(transport.ALPN, variant.Protocol) {
+			return errors.New("upstream wire profile protocol and transport disagree")
+		}
+		switch variant.UserAgentPolicy {
+		case UserAgentPolicyOmit, UserAgentPolicyFollowClient:
+			if variant.SemanticUserAgent != "" {
+				return errors.New("dynamic User-Agent policy contains a constant value")
+			}
+		case UserAgentPolicyConstant:
+			if err := validatePresentationUserAgent(variant.SemanticUserAgent); err != nil {
+				return err
+			}
+		default:
+			return errors.New("upstream wire profile User-Agent policy is invalid")
+		}
+		if variant.EvidenceDigest != "" {
+			decoded, err := hex.DecodeString(variant.EvidenceDigest)
+			if err != nil || len(decoded) != sha256.Size ||
+				variant.EvidenceDigest != strings.ToLower(variant.EvidenceDigest) {
+				return errors.New("upstream wire profile evidence digest is invalid")
+			}
+		}
+	}
+	return nil
+}
+
+func validatePresentationUserAgent(value string) error {
+	if value == "" || len(value) > 512 || !utf8.ValidString(value) {
+		return errors.New("upstream wire profile User-Agent is invalid")
+	}
+	for _, character := range value {
+		if character < 0x20 || character > 0x7e {
+			return errors.New("upstream wire profile User-Agent is outside printable ASCII")
+		}
+	}
+	return nil
 }
 
 // Compiler is a pure value compiler. It performs no I/O and owns no registry.
@@ -410,8 +592,8 @@ func (compiler *Compiler) Compile(aggregate Aggregate) (AccessPlanSnapshot, erro
 			fmt.Errorf("%w: %q", ErrUnknownModelPolicyMode, profile.DefaultModelPolicy.Mode),
 		)
 	}
-	transportPlan, err := compiler.resolveTransportFingerprint(
-		profile.TransportProfileRef,
+	wireProfile, err := compiler.resolveUpstreamWireProfile(
+		profile.UpstreamWireProfileRef,
 	)
 	if err != nil {
 		return AccessPlanSnapshot{}, errors.Join(ErrInvalidAccessPlan, err)
@@ -424,10 +606,10 @@ func (compiler *Compiler) Compile(aggregate Aggregate) (AccessPlanSnapshot, erro
 		compiledTargets = append(compiledTargets, compiledTarget)
 		if index == 0 {
 			candidates = append(candidates, CompiledCandidate{
-				profileID:     entry.profile.ID,
-				target:        compiledTarget,
-				codecPlan:     CodecPlan{},
-				transportPlan: CompiledTransportFingerprintPlan{},
+				profileID:   entry.profile.ID,
+				target:      compiledTarget,
+				codecPlan:   CodecPlan{},
+				wireProfile: CompiledUpstreamWireProfile{},
 			})
 			continue
 		}
@@ -460,8 +642,8 @@ func (compiler *Compiler) Compile(aggregate Aggregate) (AccessPlanSnapshot, erro
 		); err != nil {
 			return AccessPlanSnapshot{}, errors.Join(ErrInvalidAccessPlan, err)
 		}
-		candidateTransport, transportErr := compiler.resolveTransportFingerprint(
-			entry.profile.TransportProfileRef,
+		candidateWireProfile, transportErr := compiler.resolveUpstreamWireProfile(
+			entry.profile.UpstreamWireProfileRef,
 		)
 		if transportErr != nil {
 			return AccessPlanSnapshot{}, errors.Join(
@@ -480,10 +662,10 @@ func (compiler *Compiler) Compile(aggregate Aggregate) (AccessPlanSnapshot, erro
 			)
 		}
 		candidates = append(candidates, CompiledCandidate{
-			profileID:     entry.profile.ID,
-			target:        compiledTarget,
-			codecPlan:     compileCodecPlan(compiler, candidateCodec),
-			transportPlan: candidateTransport,
+			profileID:   entry.profile.ID,
+			target:      compiledTarget,
+			codecPlan:   compileCodecPlan(compiler, candidateCodec),
+			wireProfile: candidateWireProfile,
 		})
 	}
 	clientOperations := make(
@@ -519,16 +701,16 @@ func (compiler *Compiler) Compile(aggregate Aggregate) (AccessPlanSnapshot, erro
 		egressDefinition,
 		pluginDefinition,
 		modelDefinition,
-		transportPlan,
+		wireProfile,
 	)
 	candidates[0].codecPlan = codecPlan
-	candidates[0].transportPlan = transportPlan
+	candidates[0].wireProfile = wireProfile
 	snapshot := AccessPlanSnapshot{
 		aggregate:       candidate,
 		candidates:      candidates,
 		compiledTargets: compiledTargets,
 		codecPlan:       codecPlan,
-		transportPlan:   transportPlan,
+		wireProfile:     wireProfile,
 		pluginPlan:      pluginPlan,
 		dependencies:    dependencies,
 	}
@@ -681,6 +863,13 @@ func validateTransportFingerprintDefinition(
 	switch definition.Source {
 	case TransportFingerprintObservedClient,
 		TransportFingerprintStandard:
+		if definition.Preset != "" {
+			return errors.New("non-captured transport fingerprint has a preset")
+		}
+	case TransportFingerprintCaptured:
+		if definition.Preset != TransportFingerprintPresetClaudeCodeH1 {
+			return errors.New("captured transport fingerprint preset is unsupported")
+		}
 	default:
 		return errors.New("transport fingerprint source is invalid")
 	}
@@ -791,6 +980,49 @@ func (compiler *Compiler) resolveTransportFingerprint(
 	return plan, nil
 }
 
+func (compiler *Compiler) resolveUpstreamWireProfile(
+	reference UpstreamWireProfileRef,
+) (CompiledUpstreamWireProfile, error) {
+	definition, exists := compiler.catalog.upstreamWireProfiles[reference]
+	if !exists {
+		return CompiledUpstreamWireProfile{}, fmt.Errorf(
+			"%w: %q",
+			ErrUnknownUpstreamWireProfile,
+			reference.String(),
+		)
+	}
+	variants := make(
+		[]CompiledUpstreamWireVariant,
+		0,
+		len(definition.Variants),
+	)
+	for _, definitionVariant := range definition.Variants {
+		transport, err := compiler.resolveTransportFingerprint(
+			definitionVariant.TransportProfileRef,
+		)
+		if err != nil {
+			return CompiledUpstreamWireProfile{}, err
+		}
+		variants = append(variants, CompiledUpstreamWireVariant{
+			protocol:          definitionVariant.Protocol,
+			transportPlan:     transport,
+			userAgentPolicy:   definitionVariant.UserAgentPolicy,
+			semanticUserAgent: definitionVariant.SemanticUserAgent,
+			evidenceDigest:    definitionVariant.EvidenceDigest,
+		})
+	}
+	sort.Slice(variants, func(left, right int) bool {
+		return variants[left].protocol < variants[right].protocol
+	})
+	return CompiledUpstreamWireProfile{
+		ref:      definition.Ref,
+		revision: definition.Revision,
+		mode:     definition.Mode,
+		product:  definition.Product,
+		variants: variants,
+	}, nil
+}
+
 func compileTransportTemplate(
 	definition TransportFingerprintDefinition,
 ) TransportFingerprintTemplate {
@@ -798,6 +1030,7 @@ func compileTransportTemplate(
 		ref:           definition.Ref,
 		revision:      definition.Revision,
 		source:        definition.Source,
+		preset:        definition.Preset,
 		httpTransport: definition.HTTPTransport,
 		alpn:          slices.Clone(definition.ALPN),
 	}
@@ -1068,7 +1301,7 @@ func buildDependencyRevisions(
 	egress EgressModeDefinition,
 	plugin PluginPlanModeDefinition,
 	model ModelPolicyModeDefinition,
-	transport CompiledTransportFingerprintPlan,
+	wire CompiledUpstreamWireProfile,
 ) []DependencyRevision {
 	dependencies := []DependencyRevision{
 		{Kind: DependencyAccessBinding, ID: aggregate.Binding.ID.String(), Revision: aggregate.Binding.Revision},
@@ -1079,6 +1312,7 @@ func buildDependencyRevisions(
 		{Kind: DependencyEgressCapability, ID: string(egress.Mode), Revision: egress.Revision},
 		{Kind: DependencyPluginPlanCapability, ID: string(plugin.Mode), Revision: plugin.Revision},
 		{Kind: DependencyModelPolicyCapability, ID: string(model.Mode), Revision: model.Revision},
+		{Kind: DependencyUpstreamWireProfile, ID: wire.ref.String(), Revision: wire.revision},
 	}
 	for _, operation := range clientOperations {
 		dependencies = append(dependencies, DependencyRevision{
@@ -1087,15 +1321,17 @@ func buildDependencyRevisions(
 			Revision: operation.revision,
 		})
 	}
-	for _, template := range append(
-		[]TransportFingerprintTemplate{transport.requested},
-		transport.fallbacks...,
-	) {
-		dependencies = append(dependencies, DependencyRevision{
-			Kind:     DependencyTransportFingerprint,
-			ID:       template.ref.String(),
-			Revision: template.revision,
-		})
+	for _, variant := range wire.variants {
+		for _, template := range append(
+			[]TransportFingerprintTemplate{variant.transportPlan.requested},
+			variant.transportPlan.fallbacks...,
+		) {
+			dependencies = append(dependencies, DependencyRevision{
+				Kind:     DependencyTransportFingerprint,
+				ID:       template.ref.String(),
+				Revision: template.revision,
+			})
+		}
 	}
 	for _, profile := range aggregate.Profiles {
 		dependencies = append(dependencies,
@@ -1162,7 +1398,7 @@ type canonicalPlan struct {
 	Egress        canonicalEgress        `json:"egress"`
 	Plugin        canonicalPlugin        `json:"plugin"`
 	Codec         canonicalCodec         `json:"codec"`
-	Transport     canonicalTransportPlan `json:"transport"`
+	WireProfile   canonicalWireProfile   `json:"wireProfile"`
 	Dependencies  []canonicalDependency  `json:"dependencies"`
 }
 
@@ -1201,10 +1437,26 @@ type canonicalProfile struct {
 	Description             string               `json:"description"`
 	BackendDialect          string               `json:"backendDialect"`
 	TargetID                string               `json:"targetId"`
-	TransportProfileRef     string               `json:"transportProfileRef"`
+	UpstreamWireProfileRef  string               `json:"upstreamWireProfileRef"`
 	DefaultModelPolicy      canonicalModelPolicy `json:"defaultModelPolicy"`
 	AccountBindingIDs       []string             `json:"accountBindingIds"`
 	DefaultAccountBindingID string               `json:"defaultAccountBindingId"`
+}
+
+type canonicalWireProfile struct {
+	Ref      string                 `json:"ref"`
+	Revision Revision               `json:"revision"`
+	Mode     string                 `json:"mode"`
+	Product  string                 `json:"product"`
+	Variants []canonicalWireVariant `json:"variants"`
+}
+
+type canonicalWireVariant struct {
+	Protocol          string                 `json:"protocol"`
+	Transport         canonicalTransportPlan `json:"transport"`
+	UserAgentPolicy   string                 `json:"userAgentPolicy"`
+	SemanticUserAgent string                 `json:"semanticUserAgent"`
+	EvidenceDigest    string                 `json:"evidenceDigest"`
 }
 
 type canonicalTransportTemplate struct {
@@ -1300,7 +1552,7 @@ type canonicalDependency struct {
 func canonicalPlanBytes(snapshot AccessPlanSnapshot) ([]byte, error) {
 	binding := snapshot.aggregate.Binding
 	canonical := canonicalPlan{
-		SchemaVersion: 4,
+		SchemaVersion: 1,
 		Binding: canonicalBinding{
 			ID:                binding.ID.String(),
 			Revision:          binding.Revision,
@@ -1348,16 +1600,45 @@ func canonicalPlanBytes(snapshot AccessPlanSnapshot) ([]byte, error) {
 			),
 			RequiredCapabilities: slices.Clone(snapshot.codecPlan.requiredCapabilities),
 		},
-		Transport: canonicalTransportPlan{
-			Requested: canonicalizeTransportTemplate(
-				snapshot.transportPlan.requested,
-			),
-			Fallbacks: make(
-				[]canonicalTransportTemplate,
+		WireProfile: canonicalWireProfile{
+			Ref:      snapshot.wireProfile.ref.String(),
+			Revision: snapshot.wireProfile.revision,
+			Mode:     string(snapshot.wireProfile.mode),
+			Product:  string(snapshot.wireProfile.product),
+			Variants: make(
+				[]canonicalWireVariant,
 				0,
-				len(snapshot.transportPlan.fallbacks),
+				len(snapshot.wireProfile.variants),
 			),
 		},
+	}
+	for _, variant := range snapshot.wireProfile.variants {
+		canonicalVariant := canonicalWireVariant{
+			Protocol: string(variant.protocol),
+			Transport: canonicalTransportPlan{
+				Requested: canonicalizeTransportTemplate(
+					variant.transportPlan.requested,
+				),
+				Fallbacks: make(
+					[]canonicalTransportTemplate,
+					0,
+					len(variant.transportPlan.fallbacks),
+				),
+			},
+			UserAgentPolicy:   string(variant.userAgentPolicy),
+			SemanticUserAgent: variant.semanticUserAgent,
+			EvidenceDigest:    variant.evidenceDigest,
+		}
+		for _, fallback := range variant.transportPlan.fallbacks {
+			canonicalVariant.Transport.Fallbacks = append(
+				canonicalVariant.Transport.Fallbacks,
+				canonicalizeTransportTemplate(fallback),
+			)
+		}
+		canonical.WireProfile.Variants = append(
+			canonical.WireProfile.Variants,
+			canonicalVariant,
+		)
 	}
 	for _, operation := range snapshot.codecPlan.clientOperations {
 		canonical.Codec.ClientOperations = append(
@@ -1380,22 +1661,16 @@ func canonicalPlanBytes(snapshot AccessPlanSnapshot) ([]byte, error) {
 			},
 		)
 	}
-	for _, fallback := range snapshot.transportPlan.fallbacks {
-		canonical.Transport.Fallbacks = append(
-			canonical.Transport.Fallbacks,
-			canonicalizeTransportTemplate(fallback),
-		)
-	}
 	for _, profile := range snapshot.aggregate.Profiles {
 		canonical.Profiles = append(canonical.Profiles, canonicalProfile{
-			ID:                  profile.ID.String(),
-			Revision:            profile.Revision,
-			AccessID:            profile.AccessID.String(),
-			Name:                profile.Name,
-			Description:         profile.Description,
-			BackendDialect:      string(profile.BackendDialect),
-			TargetID:            profile.TargetID.String(),
-			TransportProfileRef: profile.TransportProfileRef.String(),
+			ID:                     profile.ID.String(),
+			Revision:               profile.Revision,
+			AccessID:               profile.AccessID.String(),
+			Name:                   profile.Name,
+			Description:            profile.Description,
+			BackendDialect:         string(profile.BackendDialect),
+			TargetID:               profile.TargetID.String(),
+			UpstreamWireProfileRef: profile.UpstreamWireProfileRef.String(),
 			DefaultModelPolicy: canonicalModelPolicy{
 				Revision:   profile.DefaultModelPolicy.Revision,
 				Mode:       string(profile.DefaultModelPolicy.Mode),

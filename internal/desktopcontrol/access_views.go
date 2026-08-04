@@ -62,7 +62,7 @@ type AccessProfileResponse struct {
 	Description             string                    `json:"description"`
 	BackendDialect          access.Dialect            `json:"backendDialect"`
 	TargetID                string                    `json:"targetId"`
-	TransportProfileRef     string                    `json:"transportProfileRef"`
+	UpstreamWireProfileRef  string                    `json:"upstreamWireProfileRef"`
 	DefaultModelPolicy      AccessModelPolicyResponse `json:"defaultModelPolicy"`
 	AccountBindingIDs       []string                  `json:"accountBindingIds"`
 	DefaultAccountBindingID string                    `json:"defaultAccountBindingId"`
@@ -182,12 +182,12 @@ func accessDetailResponseOf(aggregate access.Aggregate) AccessDetailResponse {
 			accountBindingIDs[idIndex] = id.String()
 		}
 		profiles[index] = AccessProfileResponse{
-			ID:                  profile.ID.String(),
-			Name:                profile.Name,
-			Description:         profile.Description,
-			BackendDialect:      profile.BackendDialect,
-			TargetID:            profile.TargetID.String(),
-			TransportProfileRef: profile.TransportProfileRef.String(),
+			ID:                     profile.ID.String(),
+			Name:                   profile.Name,
+			Description:            profile.Description,
+			BackendDialect:         profile.BackendDialect,
+			TargetID:               profile.TargetID.String(),
+			UpstreamWireProfileRef: profile.UpstreamWireProfileRef.String(),
 			DefaultModelPolicy: AccessModelPolicyResponse{
 				Mode:       profile.DefaultModelPolicy.Mode,
 				FixedModel: profile.DefaultModelPolicy.FixedModel.String(),

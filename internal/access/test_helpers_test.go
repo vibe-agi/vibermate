@@ -133,7 +133,9 @@ func testCatalogOptions(t *testing.T) access.CatalogOptions {
 		TransportProfiles: []access.TransportFingerprintDefinition{
 			access.ObservedClientH1TransportFingerprintDefinition(),
 			access.StandardH1TransportFingerprintDefinition(),
+			access.ClaudeCodeH1TransportFingerprintDefinition(),
 		},
+		UpstreamWireProfiles: access.BuiltInUpstreamWireProfileDefinitions(),
 	}
 }
 
@@ -227,14 +229,14 @@ func testAggregate(
 			ClientDialect: access.DialectAnthropicMessages,
 		},
 		Profiles: []access.EndpointProfile{{
-			ID:                  profileID,
-			Revision:            revision,
-			AccessID:            accessID,
-			Name:                "OpenAI Chat",
-			Description:         "Fixed M0 profile",
-			BackendDialect:      access.DialectOpenAIChat,
-			TargetID:            targetID,
-			TransportProfileRef: access.ObservedClientH1TransportProfileRef(),
+			ID:                     profileID,
+			Revision:               revision,
+			AccessID:               accessID,
+			Name:                   "OpenAI Chat",
+			Description:            "Fixed M0 profile",
+			BackendDialect:         access.DialectOpenAIChat,
+			TargetID:               targetID,
+			UpstreamWireProfileRef: access.FollowClientUpstreamWireProfileRef(),
 			AccountBindingIDs: []access.AccountBindingID{
 				accountID,
 			},

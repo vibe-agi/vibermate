@@ -99,6 +99,7 @@ func failoverRequest(
 			"messages":[{"role":"user","content":"hello"}]
 		}`),
 		exchange.ReplayGenerationCostOnly,
+		access.ApplicationProtocolHTTP1,
 	)
 	if err != nil {
 		t.Fatal(err)

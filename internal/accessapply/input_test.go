@@ -98,12 +98,12 @@ func validInput() accessapply.Input {
 			ClientDialect: "anthropic-messages",
 		},
 		Profiles: []accessapply.ProfileInput{{
-			ID:                  "access-control-profile",
-			Name:                "OpenAI Chat",
-			Description:         "Fixed profile",
-			BackendDialect:      "openai-chat",
-			TargetID:            "access-control-target",
-			TransportProfileRef: access.TransportProfileObservedClientH1Value,
+			ID:                     "access-control-profile",
+			Name:                   "OpenAI Chat",
+			Description:            "Fixed profile",
+			BackendDialect:         "openai-chat",
+			TargetID:               "access-control-target",
+			UpstreamWireProfileRef: access.UpstreamWireProfileFollowClientValue,
 			DefaultModelPolicy: accessapply.ModelPolicyInput{
 				Mode:       "fixed",
 				FixedModel: "gpt-4.1-mini",
@@ -199,7 +199,9 @@ func testCompiler(t *testing.T) *access.Compiler {
 		TransportProfiles: []access.TransportFingerprintDefinition{
 			access.ObservedClientH1TransportFingerprintDefinition(),
 			access.StandardH1TransportFingerprintDefinition(),
+			access.ClaudeCodeH1TransportFingerprintDefinition(),
 		},
+		UpstreamWireProfiles: access.BuiltInUpstreamWireProfileDefinitions(),
 	})
 	if err != nil {
 		t.Fatal(err)

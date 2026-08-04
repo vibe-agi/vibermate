@@ -17,6 +17,7 @@ func TestBuildAddedCandidateOwnsProviderAndAuthDefaults(t *testing.T) {
 		wantOrigin  string
 		wantAuth    access.AuthDriverRef
 		wantBackend access.Dialect
+		wantWire    access.UpstreamWireProfileRef
 		wantError   bool
 	}{
 		{
@@ -29,6 +30,7 @@ func TestBuildAddedCandidateOwnsProviderAndAuthDefaults(t *testing.T) {
 			wantOrigin:  "https://api.openai.com/v1",
 			wantAuth:    access.StaticHeaderAuthDriverRef(),
 			wantBackend: access.DialectOpenAIChat,
+			wantWire:    access.FollowClientUpstreamWireProfileRef(),
 		},
 		{
 			name: "compatible OpenAI relay",
@@ -41,6 +43,7 @@ func TestBuildAddedCandidateOwnsProviderAndAuthDefaults(t *testing.T) {
 			wantOrigin:  "https://relay.example.test/v1",
 			wantAuth:    access.StaticHeaderAuthDriverRef(),
 			wantBackend: access.DialectOpenAIChat,
+			wantWire:    access.FollowClientUpstreamWireProfileRef(),
 		},
 		{
 			name: "official Anthropic",
@@ -52,19 +55,22 @@ func TestBuildAddedCandidateOwnsProviderAndAuthDefaults(t *testing.T) {
 			wantOrigin:  "https://api.anthropic.com",
 			wantAuth:    access.AnthropicAPIKeyAuthDriverRef(),
 			wantBackend: access.DialectAnthropicMessages,
+			wantWire:    access.FollowClientUpstreamWireProfileRef(),
 		},
 		{
-			name: "compatible bearer relay",
+			name: "compatible bearer relay with explicit Claude presentation",
 			input: AddAccessCandidateInput{
-				Name:          "Claude relay",
-				Provider:      AccessCandidateProviderAnthropicCompatible,
-				BaseURL:       "https://relay.example.test/anthropic",
-				Model:         "claude-sonnet-4-5",
-				AuthDriverRef: access.AuthDriverStaticHeaderValue,
+				Name:                 "Claude relay",
+				Provider:             AccessCandidateProviderAnthropicCompatible,
+				BaseURL:              "https://relay.example.test/anthropic",
+				Model:                "claude-sonnet-4-5",
+				AuthDriverRef:        access.AuthDriverStaticHeaderValue,
+				UpstreamPresentation: access.UpstreamWireProfileClaudeCodeValue,
 			},
 			wantOrigin:  "https://relay.example.test/anthropic",
 			wantAuth:    access.StaticHeaderAuthDriverRef(),
 			wantBackend: access.DialectAnthropicMessages,
+			wantWire:    access.ClaudeCodeUpstreamWireProfileRef(),
 		},
 		{
 			name: "official origin cannot be overridden",
@@ -82,6 +88,16 @@ func TestBuildAddedCandidateOwnsProviderAndAuthDefaults(t *testing.T) {
 				Name:     "Missing relay",
 				Provider: AccessCandidateProviderAnthropicCompatible,
 				Model:    "claude-sonnet-4-5",
+			},
+			wantError: true,
+		},
+		{
+			name: "unknown upstream presentation is rejected",
+			input: AddAccessCandidateInput{
+				Name:                 "Unknown presentation",
+				Provider:             AccessCandidateProviderOpenAI,
+				Model:                "gpt-5.2-codex",
+				UpstreamPresentation: "unknown-product",
 			},
 			wantError: true,
 		},
@@ -131,7 +147,7 @@ func TestBuildAddedCandidateOwnsProviderAndAuthDefaults(t *testing.T) {
 			if candidate.origin.String() != test.wantOrigin ||
 				candidate.authDriver != test.wantAuth ||
 				candidate.backend != test.wantBackend ||
-				candidate.transport != aggregate.Profiles[0].TransportProfileRef {
+				candidate.wireProfile != test.wantWire {
 				t.Fatalf("candidate = %+v", candidate)
 			}
 		})

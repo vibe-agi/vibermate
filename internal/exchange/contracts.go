@@ -395,17 +395,19 @@ func (evidence ClientOperationEvidence) validate() error {
 
 // ClientRequest is an owned immutable ingress representation.
 type ClientRequest struct {
-	exchangeID     string
-	ingress        access.IngressBinding
-	operation      ClientOperationEvidence
-	body           []byte
-	replayClass    ReplayClass
-	clientHello    transportprofile.Observation
-	hasClientHello bool
-	admission      captureadmission.Admission
-	connectionRef  string
-	hasCorrelation bool
-	anthropicBeta  string
+	exchangeID      string
+	ingress         access.IngressBinding
+	operation       ClientOperationEvidence
+	body            []byte
+	replayClass     ReplayClass
+	clientProtocol  access.ApplicationProtocol
+	clientHello     transportprofile.Observation
+	hasClientHello  bool
+	admission       captureadmission.Admission
+	connectionRef   string
+	hasCorrelation  bool
+	anthropicBeta   string
+	clientUserAgent string
 }
 
 type clientRequestOptionKind uint8
@@ -414,16 +416,18 @@ const (
 	clientRequestOptionClientHello   clientRequestOptionKind = 1
 	clientRequestOptionCorrelation   clientRequestOptionKind = 2
 	clientRequestOptionAnthropicBeta clientRequestOptionKind = 3
+	clientRequestOptionUserAgent     clientRequestOptionKind = 4
 )
 
 // ClientRequestOption is a closed typed option. Its fields are private so an
 // ingress adapter cannot create an unvalidated option shape.
 type ClientRequestOption struct {
-	kind          clientRequestOptionKind
-	clientHello   transportprofile.Observation
-	admission     captureadmission.Admission
-	connectionRef string
-	anthropicBeta string
+	kind            clientRequestOptionKind
+	clientHello     transportprofile.Observation
+	admission       captureadmission.Admission
+	connectionRef   string
+	anthropicBeta   string
+	clientUserAgent string
 }
 
 func WithClientHelloObservation(
@@ -459,12 +463,22 @@ func WithAnthropicBetaHeader(value string) ClientRequestOption {
 	}
 }
 
+// WithClientUserAgent carries one bounded semantic identity field into the
+// presentation boundary. No other arbitrary client header crosses Exchange.
+func WithClientUserAgent(value string) ClientRequestOption {
+	return ClientRequestOption{
+		kind:            clientRequestOptionUserAgent,
+		clientUserAgent: value,
+	}
+}
+
 func NewClientRequest(
 	exchangeID string,
 	ingress access.IngressBinding,
 	operation ClientOperationEvidence,
 	body []byte,
 	replayClass ReplayClass,
+	clientProtocol access.ApplicationProtocol,
 	options ...ClientRequestOption,
 ) (ClientRequest, error) {
 	if err := validateIdentity("Exchange ID", exchangeID); err != nil {
@@ -482,12 +496,17 @@ func NewClientRequest(
 	if err := replayClass.validate(); err != nil {
 		return ClientRequest{}, err
 	}
+	if clientProtocol != access.ApplicationProtocolHTTP1 &&
+		clientProtocol != access.ApplicationProtocolHTTP2 {
+		return ClientRequest{}, errors.New("client HTTP protocol is unavailable")
+	}
 	request := ClientRequest{
-		exchangeID:  exchangeID,
-		ingress:     ingress,
-		operation:   operation,
-		body:        bytes.Clone(body),
-		replayClass: replayClass,
+		exchangeID:     exchangeID,
+		ingress:        ingress,
+		operation:      operation,
+		body:           bytes.Clone(body),
+		replayClass:    replayClass,
+		clientProtocol: clientProtocol,
 	}
 	for _, option := range options {
 		switch option.kind {
@@ -530,6 +549,14 @@ func NewClientRequest(
 				)
 			}
 			request.anthropicBeta = option.anthropicBeta
+		case clientRequestOptionUserAgent:
+			if request.clientUserAgent != "" ||
+				!validClientUserAgent(option.clientUserAgent) {
+				return ClientRequest{}, errors.New(
+					"client User-Agent option is invalid",
+				)
+			}
+			request.clientUserAgent = option.clientUserAgent
 		default:
 			return ClientRequest{}, errors.New(
 				"client request option is invalid",
@@ -567,6 +594,22 @@ func (request ClientRequest) protocolHeaders() http.Header {
 		headers.Set("Anthropic-Beta", request.anthropicBeta)
 	}
 	return headers
+}
+
+func (request ClientRequest) ClientUserAgent() string {
+	return request.clientUserAgent
+}
+
+func validClientUserAgent(value string) bool {
+	if value == "" || len(value) > 512 || !utf8.ValidString(value) {
+		return false
+	}
+	for _, character := range value {
+		if character < 0x20 || character > 0x7e {
+			return false
+		}
+	}
+	return true
 }
 
 // CaptureAdmission is the authenticated, route-neutral ingress evidence for
@@ -642,6 +685,10 @@ func (request ClientRequest) ClientHelloObservation() (
 	return request.clientHello, request.hasClientHello
 }
 
+func (request ClientRequest) ClientHTTPProtocol() access.ApplicationProtocol {
+	return request.clientProtocol
+}
+
 func (request ClientRequest) validate() error {
 	if err := validateIdentity("Exchange ID", request.exchangeID); err != nil {
 		return err
@@ -658,6 +705,10 @@ func (request ClientRequest) validate() error {
 	}
 	if request.hasClientHello && !request.clientHello.Available() {
 		return errors.New("client TLS ClientHello observation is unavailable")
+	}
+	if request.clientProtocol != access.ApplicationProtocolHTTP1 &&
+		request.clientProtocol != access.ApplicationProtocolHTTP2 {
+		return errors.New("client HTTP protocol is unavailable")
 	}
 	return request.replayClass.validate()
 }
@@ -744,6 +795,7 @@ type AttemptObservation struct {
 	ProviderField  ProviderField
 	ClientField    ClientField
 	ClientPath     string
+	Presentation   providertransport.WirePresentationEvidence
 	Transport      transportprofile.Evidence
 }
 
@@ -1006,6 +1058,7 @@ type Result struct {
 	Ledger                  LedgerSnapshot
 	Translation             protocolcore.TranslationReport
 	Credential              providertransport.CredentialEvidence
+	Presentation            providertransport.WirePresentationEvidence
 	Transport               transportprofile.Evidence
 }
 

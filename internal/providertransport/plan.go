@@ -185,20 +185,22 @@ func (target Target) probeTransportKind() (
 }
 
 type RequestOptions struct {
-	RequestID      string
-	TargetRef      string
-	Target         Target
-	AccessRevision access.Revision
-	PlanHash       access.PlanHash
-	Action         *offlinehold.ActionLease
-	Method         string
-	RelativePath   string
-	Headers        http.Header
-	Body           []byte
-	SecretRef      access.SecretRef
-	AuthDriverRef  access.AuthDriverRef
-	TransportPlan  access.CompiledTransportFingerprintPlan
-	ClientHello    transportprofile.Observation
+	RequestID       string
+	TargetRef       string
+	Target          Target
+	AccessRevision  access.Revision
+	PlanHash        access.PlanHash
+	Action          *offlinehold.ActionLease
+	Method          string
+	RelativePath    string
+	Headers         http.Header
+	Body            []byte
+	SecretRef       access.SecretRef
+	AuthDriverRef   access.AuthDriverRef
+	WireProfile     access.CompiledUpstreamWireProfile
+	ClientProtocol  access.ApplicationProtocol
+	ClientUserAgent string
+	ClientHello     transportprofile.Observation
 	// ConnectionID, ExchangeID, and ParentAttemptID associate this outbound
 	// with the client connection, the Exchange, and the upstream attempt that
 	// caused it. They travel as typed references so no identity encodes
@@ -230,8 +232,46 @@ type Request struct {
 	body            []byte
 	secretReference secretstore.Reference
 	authDriverRef   access.AuthDriverRef
-	transportPlan   access.CompiledTransportFingerprintPlan
+	wireProfile     access.CompiledUpstreamWireProfile
+	wireVariant     access.CompiledUpstreamWireVariant
+	clientProtocol  access.ApplicationProtocol
+	clientUserAgent string
 	clientHello     transportprofile.Observation
+}
+
+// WirePresentationEvidence is the redacted product-level presentation chosen
+// before any secret lookup or outbound dial. It contains no raw ClientHello,
+// request header, credential, or payload.
+type WirePresentationEvidence struct {
+	RequestedRef     string
+	EffectiveRef     string
+	Revision         access.Revision
+	Mode             access.UpstreamWireMode
+	Product          access.UpstreamWireProduct
+	ClientProtocol   access.ApplicationProtocol
+	UpstreamProtocol access.ApplicationProtocol
+	EvidenceDigest   string
+}
+
+func NewWirePresentationEvidence(
+	profile access.CompiledUpstreamWireProfile,
+	clientProtocol access.ApplicationProtocol,
+) WirePresentationEvidence {
+	evidence := WirePresentationEvidence{
+		RequestedRef:   profile.Ref().String(),
+		Revision:       profile.Revision(),
+		Mode:           profile.Mode(),
+		Product:        profile.Product(),
+		ClientProtocol: clientProtocol,
+	}
+	variant, available := profile.Variant(clientProtocol)
+	if !available {
+		return evidence
+	}
+	evidence.EffectiveRef = profile.Ref().String()
+	evidence.UpstreamProtocol = variant.Protocol()
+	evidence.EvidenceDigest = variant.EvidenceDigest()
+	return evidence
 }
 
 func NewRequest(options RequestOptions) (Request, error) {
@@ -298,10 +338,34 @@ func NewRequest(options RequestOptions) (Request, error) {
 	if options.AuthDriverRef.String() == "" {
 		return Request{}, errors.New("provider AuthDriver reference is empty")
 	}
-	requestedTransport := options.TransportPlan.Requested()
+	if options.WireProfile.Ref().String() == "" ||
+		options.WireProfile.Revision() == 0 {
+		return Request{}, errors.New(
+			"provider upstream wire profile is incomplete",
+		)
+	}
+	if options.ClientProtocol != access.ApplicationProtocolHTTP1 &&
+		options.ClientProtocol != access.ApplicationProtocolHTTP2 {
+		return Request{}, errors.New("provider client HTTP protocol is invalid")
+	}
+	if options.ClientUserAgent != "" &&
+		!validPresentationUserAgent(options.ClientUserAgent) {
+		return Request{}, errors.New("provider client User-Agent is invalid")
+	}
+	wireVariant, available := options.WireProfile.Variant(options.ClientProtocol)
+	if !available {
+		return Request{}, errors.New(
+			"upstream presentation does not support the client HTTP protocol",
+		)
+	}
+	requestedTransport := wireVariant.TransportFingerprintPlan().Requested()
+	expectedTransport := access.HTTPTransportHTTP1
+	if options.ClientProtocol == access.ApplicationProtocolHTTP2 {
+		expectedTransport = access.HTTPTransportHTTP2
+	}
 	if requestedTransport.Ref().String() == "" ||
 		requestedTransport.Revision() == 0 ||
-		requestedTransport.HTTPTransport() != access.HTTPTransportHTTP1 ||
+		requestedTransport.HTTPTransport() != expectedTransport ||
 		len(requestedTransport.ALPN()) == 0 {
 		return Request{}, errors.New(
 			"provider transport fingerprint plan is incomplete",
@@ -323,7 +387,10 @@ func NewRequest(options RequestOptions) (Request, error) {
 		body:            bytes.Clone(options.Body),
 		secretReference: reference,
 		authDriverRef:   options.AuthDriverRef,
-		transportPlan:   options.TransportPlan,
+		wireProfile:     options.WireProfile,
+		wireVariant:     wireVariant,
+		clientProtocol:  options.ClientProtocol,
+		clientUserAgent: options.ClientUserAgent,
 		clientHello:     options.ClientHello,
 	}, nil
 }
@@ -362,6 +429,13 @@ func (request Request) Body() []byte {
 
 func (request Request) AuthDriverRef() access.AuthDriverRef {
 	return request.authDriverRef
+}
+
+func (request Request) WirePresentationEvidence() WirePresentationEvidence {
+	return NewWirePresentationEvidence(
+		request.wireProfile,
+		request.clientProtocol,
+	)
 }
 
 func (request Request) buildURL() *url.URL {
@@ -406,6 +480,18 @@ func validateOpaqueIdentity(label, value string) error {
 		}
 	}
 	return nil
+}
+
+func validPresentationUserAgent(value string) bool {
+	if value == "" || len(value) > 512 || !utf8.ValidString(value) {
+		return false
+	}
+	for _, character := range value {
+		if character < 0x20 || character > 0x7e {
+			return false
+		}
+	}
+	return true
 }
 
 func (request Request) ConnectionID() string    { return request.connectionID }

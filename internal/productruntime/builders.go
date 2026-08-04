@@ -240,7 +240,9 @@ func productionAccessPlanCompiler() (*access.Compiler, error) {
 		TransportProfiles: []access.TransportFingerprintDefinition{
 			access.ObservedClientH1TransportFingerprintDefinition(),
 			access.StandardH1TransportFingerprintDefinition(),
+			access.ClaudeCodeH1TransportFingerprintDefinition(),
 		},
+		UpstreamWireProfiles: access.BuiltInUpstreamWireProfileDefinitions(),
 	})
 	if err != nil {
 		return nil, err
@@ -472,16 +474,21 @@ func (observer activityAttemptObserver) Observe(
 			ClientField:    string(observation.ClientField),
 			ClientPath:     observation.ClientPath,
 		},
-		Transport: activityTransportEvidence(observation.Transport),
+		Transport: activityTransportEvidence(
+			observation.Presentation,
+			observation.Transport,
+		),
 	})
 	return err
 }
 
 func activityTransportEvidence(
+	presentation providertransport.WirePresentationEvidence,
 	evidence transportprofile.Evidence,
 ) *activity.TransportEvidence {
 	requested := evidence.Requested()
-	if requested.Ref == "" || requested.Revision == 0 {
+	if (requested.Ref == "" || requested.Revision == 0) &&
+		presentation.RequestedRef == "" {
 		return nil
 	}
 	profile := func(
@@ -493,14 +500,28 @@ func activityTransportEvidence(
 			Source:   string(value.Source),
 		}
 	}
-	converted := &activity.TransportEvidence{
-		Requested:                profile(requested),
-		FallbackReason:           string(evidence.FallbackReason()),
-		ClientOfferedALPN:        evidence.ClientOfferedALPN(),
-		DownstreamNegotiatedALPN: evidence.DownstreamNegotiatedALPN(),
-		UpstreamOfferedALPN:      evidence.UpstreamOfferedALPN(),
-		UpstreamNegotiatedALPN:   evidence.UpstreamNegotiatedALPN(),
-		HTTPTransport:            string(evidence.HTTPTransport()),
+	converted := &activity.TransportEvidence{}
+	if requested.Ref != "" && requested.Revision != 0 {
+		value := profile(requested)
+		converted.Requested = &value
+		converted.FallbackReason = string(evidence.FallbackReason())
+		converted.ClientOfferedALPN = evidence.ClientOfferedALPN()
+		converted.DownstreamNegotiatedALPN = evidence.DownstreamNegotiatedALPN()
+		converted.UpstreamOfferedALPN = evidence.UpstreamOfferedALPN()
+		converted.UpstreamNegotiatedALPN = evidence.UpstreamNegotiatedALPN()
+		converted.HTTPTransport = string(evidence.HTTPTransport())
+	}
+	if presentation.RequestedRef != "" {
+		converted.Presentation = &activity.WirePresentationEvidence{
+			RequestedRef:     presentation.RequestedRef,
+			EffectiveRef:     presentation.EffectiveRef,
+			Revision:         uint64(presentation.Revision),
+			Mode:             string(presentation.Mode),
+			Product:          string(presentation.Product),
+			ClientProtocol:   string(presentation.ClientProtocol),
+			UpstreamProtocol: string(presentation.UpstreamProtocol),
+			EvidenceDigest:   presentation.EvidenceDigest,
+		}
 	}
 	for _, attempted := range evidence.FallbackChain() {
 		converted.FallbackChain = append(

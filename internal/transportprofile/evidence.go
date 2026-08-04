@@ -14,6 +14,7 @@ const (
 	FallbackClientHelloUnsupported       FallbackReason = "client_hello_unsupported"
 	FallbackApplicationProtocolMissing   FallbackReason = "application_protocol_unavailable"
 	FallbackObservedTLSHandshakeRejected FallbackReason = "observed_tls_handshake_rejected"
+	FallbackCapturedTLSHandshakeRejected FallbackReason = "captured_tls_handshake_rejected"
 )
 
 type ProfileEvidence struct {

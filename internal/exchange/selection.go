@@ -84,7 +84,7 @@ type frozenSelection struct {
 	accountID      access.AccountBindingID
 	secretRef      access.SecretRef
 	authDriverRef  access.AuthDriverRef
-	transportPlan  access.CompiledTransportFingerprintPlan
+	wireProfile    access.CompiledUpstreamWireProfile
 	codecPlan      access.CodecPlan
 }
 
@@ -159,24 +159,12 @@ func selectFrozenPlan(
 	}
 
 	endpoint := snapshot.AgentEndpoint()
-	codecPlan := snapshot.CodecPlan()
 	if endpoint.ID != binding.AgentEndpointID ||
-		endpoint.AccessID != binding.ID ||
-		endpoint.ClientDialect != codecPlan.ClientDialect() {
+		endpoint.AccessID != binding.ID {
 		return frozenSelection{}, errors.New("AgentEndpoint is unsupported")
 	}
 	if snapshot.EgressPolicy().Mode != access.EgressModeDirect {
 		return frozenSelection{}, errors.New("Access egress policy is unsupported")
-	}
-	transportPlan := snapshot.TransportFingerprintPlan()
-	requestedTransport := transportPlan.Requested()
-	if requestedTransport.Ref().String() == "" ||
-		requestedTransport.Revision() == 0 ||
-		requestedTransport.HTTPTransport() != access.HTTPTransportHTTP1 ||
-		len(requestedTransport.ALPN()) == 0 {
-		return frozenSelection{}, errors.New(
-			"Access transport fingerprint plan is unsupported",
-		)
 	}
 	pluginPlan := snapshot.PluginPlan()
 	if pluginPlan.Mode() != access.PluginPlanModePassThrough ||
@@ -205,6 +193,7 @@ func selectFrozenPlan(
 		return frozenSelection{}, errCandidatesExhausted
 	}
 	foundCompiled := false
+	var compiledSelection access.CompiledCandidate
 	for candidateIndex := 0; candidateIndex < snapshot.CandidateCount(); candidateIndex++ {
 		candidate, ok := snapshot.Candidate(candidateIndex)
 		if !ok || candidate.ProfileID() != profileID {
@@ -214,9 +203,20 @@ func selectFrozenPlan(
 			return frozenSelection{}, errors.New("compiled candidate is duplicated")
 		}
 		foundCompiled = true
+		compiledSelection = candidate
 	}
 	if !foundCompiled {
 		return frozenSelection{}, errors.New("compiled candidate is missing")
+	}
+	codecPlan := compiledSelection.CodecPlan()
+	wireProfile := compiledSelection.UpstreamWireProfile()
+	if endpoint.ClientDialect != codecPlan.ClientDialect() ||
+		wireProfile.Ref().String() == "" ||
+		wireProfile.Revision() == 0 ||
+		len(wireProfile.Variants()) == 0 {
+		return frozenSelection{}, errors.New(
+			"Access upstream wire profile is unsupported",
+		)
 	}
 	profiles := snapshot.EndpointProfiles()
 	var profile access.EndpointProfile
@@ -233,6 +233,7 @@ func selectFrozenPlan(
 	if !foundProfile ||
 		profile.AccessID != binding.ID ||
 		profile.BackendDialect != codecPlan.ProviderDialect() ||
+		profile.UpstreamWireProfileRef != wireProfile.Ref() ||
 		profile.DefaultModelPolicy.Mode != access.ModelPolicyModeFixed ||
 		profile.DefaultModelPolicy.FixedModel.String() == "" ||
 		len(profile.AccountBindingIDs) != 1 {
@@ -304,7 +305,7 @@ func selectFrozenPlan(
 		accountID:     account.ID,
 		secretRef:     account.SecretRef,
 		authDriverRef: account.AuthDriverRef,
-		transportPlan: transportPlan,
+		wireProfile:   wireProfile,
 		codecPlan:     codecPlan,
 	}, nil
 }

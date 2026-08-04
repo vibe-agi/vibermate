@@ -3,6 +3,7 @@ package providertransport
 import (
 	"context"
 	"net/http"
+	"strings"
 	"testing"
 
 	"github.com/vibe-agi/vibermate/internal/access"
@@ -42,7 +43,8 @@ func validRequestOptions(t *testing.T) RequestOptions {
 		Body:            []byte(`{"model":"gpt-provider-model"}`),
 		SecretRef:       secretRef,
 		AuthDriverRef:   access.StaticHeaderAuthDriverRef(),
-		TransportPlan:   plan.TransportFingerprintPlan(),
+		WireProfile:     plan.UpstreamWireProfile(),
+		ClientProtocol:  access.ApplicationProtocolHTTP1,
 	}
 }
 
@@ -82,5 +84,16 @@ func TestAProviderRequestWithoutAnEgressIdentityIsRefused(t *testing.T) {
 	options.EgressAttemptID = ""
 	if _, err := NewRequest(options); err == nil {
 		t.Fatal("a request with no egress identity was accepted")
+	}
+}
+
+func TestProviderRequestRejectsMissingProtocolVariantBeforeExecution(t *testing.T) {
+	t.Parallel()
+
+	options := validRequestOptions(t)
+	options.ClientProtocol = access.ApplicationProtocolHTTP2
+	if _, err := NewRequest(options); err == nil ||
+		!strings.Contains(err.Error(), "does not support the client HTTP protocol") {
+		t.Fatalf("missing HTTP/2 variant error = %v", err)
 	}
 }

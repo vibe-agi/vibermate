@@ -44,6 +44,7 @@ func correlatedRequest(
 		mustAnthropicOperationEvidence(t),
 		[]byte(`{"model":"m","max_tokens":1,"messages":[]}`),
 		ReplayGenerationCostOnly,
+		access.ApplicationProtocolHTTP1,
 		all...,
 	)
 }
@@ -101,6 +102,7 @@ func TestCorrelationIsOptionalButValidatedWhenPresent(t *testing.T) {
 		mustAnthropicOperationEvidence(t),
 		[]byte(`{"model":"m","max_tokens":1,"messages":[]}`),
 		ReplayGenerationCostOnly,
+		access.ApplicationProtocolHTTP1,
 	)
 	if err != nil {
 		t.Fatal(err)

@@ -237,7 +237,7 @@ func (hello fingerprintHello) ja4() (string, string) {
 }
 
 func (hello fingerprintHello) peetprint() string {
-	versions := decimalUint16List(hello.extension(43), true, true)
+	versions := decimalUint16Vector8(hello.extension(43), true, true)
 	protocols := make([]string, 0, len(hello.alpn))
 	seenProtocols := make(map[string]struct{})
 	for _, protocol := range hello.alpn {
@@ -252,7 +252,7 @@ func (hello fingerprintHello) peetprint() string {
 	}
 	groups := decimalUint16VectorWithGREASE(hello.extension(10))
 	signatures := decimalUint16VectorWithGREASE(hello.extension(13))
-	pskModes := decimalUint8List(hello.extension(45), true)
+	pskModes := decimalUint8Vector(hello.extension(45))
 	if len(pskModes) == 0 {
 		pskModes = []string{"0"}
 	}
@@ -293,6 +293,21 @@ func (hello fingerprintHello) extension(id uint16) []byte {
 		}
 	}
 	return nil
+}
+
+func decimalUint16Vector8(
+	payload []byte,
+	omitGREASE bool,
+	labelGREASE bool,
+) []string {
+	if len(payload) < 1 {
+		return nil
+	}
+	length := int(payload[0])
+	if length != len(payload)-1 || length%2 != 0 {
+		return nil
+	}
+	return decimalUint16List(payload[1:], omitGREASE, labelGREASE)
 }
 
 func decimalUint16Vector(payload []byte, omitGREASE bool) []string {

@@ -46,6 +46,57 @@ func TestCompilerProducesDeterministicExecutablePlan(t *testing.T) {
 	assertGetterIsolation(t, first)
 }
 
+func TestCompilerFreezesUpstreamWireProfileAsOnePlanAuthority(t *testing.T) {
+	t.Parallel()
+
+	compiler := testCompiler(t)
+	aggregate := testAggregate(
+		t,
+		newAccessID(t, "access-wire-profile"),
+		1,
+		"Wire profile",
+	)
+	follow, err := compiler.Compile(aggregate)
+	if err != nil {
+		t.Fatal(err)
+	}
+	followProfile := follow.UpstreamWireProfile()
+	followVariant, ok := followProfile.Variant(access.ApplicationProtocolHTTP1)
+	if !ok ||
+		followProfile.Ref() != access.FollowClientUpstreamWireProfileRef() ||
+		followProfile.Mode() != access.UpstreamWireModeFollowClient ||
+		followProfile.Product() != "" ||
+		followVariant.UserAgentPolicy() != access.UserAgentPolicyFollowClient ||
+		followVariant.SemanticUserAgent() != "" ||
+		followVariant.TransportFingerprintPlan().Requested().Ref() !=
+			access.ObservedClientH1TransportProfileRef() ||
+		len(followVariant.TransportFingerprintPlan().Fallbacks()) != 0 {
+		t.Fatalf("compiled follow-client wire profile = %+v", followProfile)
+	}
+
+	aggregate.Profiles[0].UpstreamWireProfileRef =
+		access.ClaudeCodeUpstreamWireProfileRef()
+	emulated, err := compiler.Compile(aggregate)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if follow.PlanHash() == emulated.PlanHash() {
+		t.Fatal("different upstream wire profiles produced the same plan hash")
+	}
+	emulatedProfile := emulated.UpstreamWireProfile()
+	emulatedVariant, ok := emulatedProfile.Variant(access.ApplicationProtocolHTTP1)
+	if !ok ||
+		emulatedProfile.Ref() != access.ClaudeCodeUpstreamWireProfileRef() ||
+		emulatedProfile.Mode() != access.UpstreamWireModeEmulateProduct ||
+		emulatedProfile.Product() != access.UpstreamWireProductClaudeCode ||
+		emulatedVariant.UserAgentPolicy() != access.UserAgentPolicyConstant ||
+		emulatedVariant.SemanticUserAgent() == "" ||
+		emulatedVariant.TransportFingerprintPlan().Requested().Ref() !=
+			access.ClaudeCodeH1TransportProfileRef() {
+		t.Fatalf("compiled emulated wire profile = %+v", emulatedProfile)
+	}
+}
+
 func TestCompilerFreezesExactResponsesOperationInPlanHash(t *testing.T) {
 	t.Parallel()
 
@@ -287,7 +338,9 @@ func TestCompilerCatalogDoesNotRetainInputAliases(t *testing.T) {
 		TransportProfiles: []access.TransportFingerprintDefinition{
 			access.ObservedClientH1TransportFingerprintDefinition(),
 			access.StandardH1TransportFingerprintDefinition(),
+			access.ClaudeCodeH1TransportFingerprintDefinition(),
 		},
+		UpstreamWireProfiles: access.BuiltInUpstreamWireProfileDefinitions(),
 	}
 	catalog, err := access.NewCatalog(options)
 	if err != nil {
@@ -319,9 +372,13 @@ func TestCompilerCatalogDoesNotRetainInputAliases(t *testing.T) {
 		operations[0].PathPattern() != "/v1/messages" {
 		t.Fatalf("client operation catalog retained input aliases: %+v", operations)
 	}
-	transport := plan.TransportFingerprintPlan()
+	variant, ok := plan.UpstreamWireProfile().Variant(access.ApplicationProtocolHTTP1)
+	if !ok {
+		t.Fatal("compiled plan has no HTTP/1.1 wire variant")
+	}
+	transport := variant.TransportFingerprintPlan()
 	if transport.Requested().ALPN()[0] != access.ApplicationProtocolHTTP1 ||
-		len(transport.Fallbacks()) != 1 {
+		len(transport.Fallbacks()) != 0 {
 		t.Fatalf(
 			"transport catalog retained input aliases: requested=%+v fallbacks=%+v",
 			transport.Requested(),
@@ -425,13 +482,13 @@ func TestCompilerFailsClosedForInvalidExecutableReferences(t *testing.T) {
 		{
 			name: "unknown transport profile",
 			mutate: func(t *testing.T, aggregate *access.Aggregate) {
-				reference, err := access.NewTransportProfileRef("unknown-transport")
+				reference, err := access.NewUpstreamWireProfileRef("unknown-wire-profile")
 				if err != nil {
 					t.Fatalf("construct unknown transport profile reference: %v", err)
 				}
-				aggregate.Profiles[0].TransportProfileRef = reference
+				aggregate.Profiles[0].UpstreamWireProfileRef = reference
 			},
-			specific: access.ErrUnknownTransportProfile,
+			specific: access.ErrUnknownUpstreamWireProfile,
 		},
 	}
 
@@ -483,6 +540,9 @@ func TestCatalogFailsClosedForInvalidTransportProfiles(t *testing.T) {
 		{
 			name: "fallback cycle",
 			mutate: func(options *access.CatalogOptions) {
+				options.TransportProfiles[0].FallbackRefs = []access.TransportProfileRef{
+					access.StandardH1TransportProfileRef(),
+				}
 				options.TransportProfiles[1].FallbackRefs = []access.TransportProfileRef{
 					access.ObservedClientH1TransportProfileRef(),
 				}

@@ -1897,6 +1897,7 @@ interface AccessCandidateFormValues {
   readonly model: string;
   readonly name: string;
   readonly provider: AccessCandidateProvider;
+  readonly upstreamPresentation: "follow-client" | "claude-code";
 }
 
 const initialAccessCandidateForm: AccessCandidateFormValues = {
@@ -1905,6 +1906,7 @@ const initialAccessCandidateForm: AccessCandidateFormValues = {
   model: "",
   name: "",
   provider: "anthropic",
+  upstreamPresentation: "follow-client",
 };
 
 function validProviderBaseUrl(value: string): boolean {
@@ -1965,6 +1967,8 @@ function validAccessCandidateForm(values: AccessCandidateFormValues): boolean {
     values.name.length > 0 &&
     values.model.trim() === values.model &&
     values.model.length > 0 &&
+    (values.upstreamPresentation === "follow-client" ||
+      values.upstreamPresentation === "claude-code") &&
     (!requiresBaseUrl || validProviderBaseUrl(values.baseUrl))
   );
 }
@@ -1981,6 +1985,7 @@ function accessCandidateInput(
         model: values.model,
         name: values.name,
         provider: "anthropic",
+        upstreamPresentation: values.upstreamPresentation,
       };
     case "anthropic-compatible":
       return {
@@ -1991,12 +1996,14 @@ function accessCandidateInput(
         model: values.model,
         name: values.name,
         provider: "anthropic-compatible",
+        upstreamPresentation: values.upstreamPresentation,
       };
     case "openai":
       return {
         model: values.model,
         name: values.name,
         provider: "openai",
+        upstreamPresentation: values.upstreamPresentation,
       };
     case "openai-compatible":
       return {
@@ -2007,6 +2014,7 @@ function accessCandidateInput(
         model: values.model,
         name: values.name,
         provider: "openai-compatible",
+        upstreamPresentation: values.upstreamPresentation,
       };
   }
 }
@@ -2592,6 +2600,10 @@ function AccessPanel({
           : "",
       name: profile.name,
       provider,
+      upstreamPresentation:
+        profile.upstreamWireProfileRef === "claude-code"
+          ? "claude-code"
+          : "follow-client",
     });
     setCandidateAutomaticName(false);
     setCandidateAutomaticModel(false);
@@ -2955,6 +2967,30 @@ function AccessPanel({
                     {t("access.fixedModel.help")}
                   </small>
                 </div>
+                <label className="field">
+                  <span>{t("access.candidates.presentation.label")}</span>
+                  <select
+                    disabled={busy}
+                    onChange={(event) =>
+                      setForm((current) => ({
+                        ...current,
+                        upstreamPresentation:
+                          event.target.value === "claude-code"
+                            ? "claude-code"
+                            : "follow-client",
+                      }))
+                    }
+                    value={form.upstreamPresentation}
+                  >
+                    <option value="follow-client">
+                      {t("access.candidates.presentation.followClient")}
+                    </option>
+                    <option value="claude-code">
+                      {t("access.candidates.presentation.claudeCode")}
+                    </option>
+                  </select>
+                  <small>{t("access.candidates.presentation.help")}</small>
+                </label>
                 {destinationPreset === "anthropic-compatible" && (
                   <label className="field">
                     <span>{t("access.candidates.auth.label")}</span>
@@ -3311,6 +3347,15 @@ function AccessPanel({
                       <div className="access-route-facts">
                         <span>{t("access.upstreams.model", { model })}</span>
                         <span>
+                          {t("access.candidates.presentation.summary", {
+                            presentation: t(
+                              profile.upstreamWireProfileRef === "claude-code"
+                                ? "access.candidates.presentation.claudeCode"
+                                : "access.candidates.presentation.followClient",
+                            ),
+                          })}
+                        </span>
+                        <span>
                           {t("access.candidates.account", {
                             name:
                               accounts.map(({ label }) => label).join(", ") ||
@@ -3520,6 +3565,30 @@ function AccessPanel({
                       required
                       value={candidateForm.model}
                     />
+                    <label className="field">
+                      <span>{t("access.candidates.presentation.label")}</span>
+                      <select
+                        disabled={busy || pendingCandidate !== undefined}
+                        onChange={(event) =>
+                          setCandidateForm((current) => ({
+                            ...current,
+                            upstreamPresentation:
+                              event.target.value === "claude-code"
+                                ? "claude-code"
+                                : "follow-client",
+                          }))
+                        }
+                        value={candidateForm.upstreamPresentation}
+                      >
+                        <option value="follow-client">
+                          {t("access.candidates.presentation.followClient")}
+                        </option>
+                        <option value="claude-code">
+                          {t("access.candidates.presentation.claudeCode")}
+                        </option>
+                      </select>
+                      <small>{t("access.candidates.presentation.help")}</small>
+                    </label>
                     {pendingCandidate?.phase !== "activate" && (
                       <LabeledInput
                         autoComplete="off"

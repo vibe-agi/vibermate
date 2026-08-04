@@ -251,7 +251,7 @@ function accessDetailFixture(
       description: `${upstream.name} configuration`,
       backendDialect: upstream.protocol,
       targetId: upstream.targetId,
-      transportProfileRef: "observed-client-strict-h1",
+      upstreamWireProfileRef: "follow-client",
       defaultModelPolicy: {
         mode: "fixed",
         fixedModel: upstream.fixedModel,
@@ -562,8 +562,8 @@ describe("Desktop dashboard", () => {
     expect(input?.access.id).toBe(accessId);
     expect(input?.agentEndpoint.clientDialect).toBe("anthropic-messages");
     expect(input?.profiles[0]?.backendDialect).toBe("openai-chat");
-    expect(input?.profiles[0]?.transportProfileRef).toBe(
-      "observed-client-strict-h1",
+    expect(input?.profiles[0]?.upstreamWireProfileRef).toBe(
+      "follow-client",
     );
     expect(input?.accountBindings[0]?.secretRef).toBe(
       `secret://provider/${accessId}-account`,
@@ -1078,6 +1078,7 @@ describe("Desktop dashboard", () => {
           model: "claude-sonnet-4-5",
           name: "Personal Anthropic",
           provider: "anthropic",
+          upstreamPresentation: "follow-client",
         },
         expect.any(AbortSignal),
       ),

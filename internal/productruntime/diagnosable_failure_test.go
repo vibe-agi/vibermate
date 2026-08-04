@@ -60,6 +60,7 @@ func TestARejectedRequestRecordsWhereItFailed(t *testing.T) {
 			]
 		}`),
 		exchange.ReplayGenerationCostOnly,
+		access.ApplicationProtocolHTTP1,
 	)
 	if err != nil {
 		t.Fatal(err)
@@ -163,6 +164,7 @@ func TestASuccessfulRequestRecordsNoDiagnosis(t *testing.T) {
 			"messages":[{"role":"user","content":"hello"}]
 		}`),
 		exchange.ReplayGenerationCostOnly,
+		access.ApplicationProtocolHTTP1,
 	)
 	if err != nil {
 		t.Fatal(err)

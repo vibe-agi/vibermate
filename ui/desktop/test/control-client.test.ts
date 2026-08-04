@@ -402,7 +402,7 @@ function accessDetail(
         description: "Primary provider",
         backendDialect: "openai-chat",
         targetId,
-        transportProfileRef: "observed-client-strict-h1",
+        upstreamWireProfileRef: "follow-client",
         defaultModelPolicy: {
           mode: "fixed",
           fixedModel: "dashscope:glm-5",
@@ -2732,6 +2732,7 @@ describe("Desktop control client", () => {
       baseUrl: "https://relay.example/v1",
       model: "claude-sonnet-4-5",
       authDriverRef: "static_header" as const,
+      upstreamPresentation: "follow-client" as const,
     };
 
     await expect(

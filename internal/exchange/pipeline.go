@@ -341,6 +341,10 @@ func (pipeline *Pipeline) Execute(
 			)
 		}
 		clientHello, _ := request.ClientHelloObservation()
+		result.Presentation = providertransport.NewWirePresentationEvidence(
+			selection.wireProfile,
+			request.ClientHTTPProtocol(),
+		)
 		attemptID, err := pipeline.attemptIDs.NewAttemptID()
 		if err != nil {
 			return result, newFailure(
@@ -379,7 +383,9 @@ func (pipeline *Pipeline) Execute(
 				Body:            encodedProvider.Body(),
 				SecretRef:       selection.secretRef,
 				AuthDriverRef:   selection.authDriverRef,
-				TransportPlan:   selection.transportPlan,
+				WireProfile:     selection.wireProfile,
+				ClientProtocol:  request.ClientHTTPProtocol(),
+				ClientUserAgent: request.ClientUserAgent(),
 				ClientHello:     clientHello,
 			},
 		)
@@ -459,11 +465,12 @@ func (pipeline *Pipeline) observeAttempt(
 		return
 	}
 	observation := AttemptObservation{
-		ExchangeID: request.exchangeID,
-		AccessID:   request.ingress.AccessID(),
-		Outcome:    result.Outcome,
-		ReasonCode: ReasonOf(resultErr),
-		Transport:  result.Transport.Clone(),
+		ExchangeID:   request.exchangeID,
+		AccessID:     request.ingress.AccessID(),
+		Outcome:      result.Outcome,
+		ReasonCode:   ReasonOf(resultErr),
+		Presentation: result.Presentation,
+		Transport:    result.Transport.Clone(),
 	}
 	var failure *Failure
 	if errors.As(resultErr, &failure) {
@@ -661,6 +668,7 @@ func (pipeline *Pipeline) executeComplete(
 	ledger *CommitLedger,
 	result *Result,
 ) error {
+	result.Presentation = frozenRequest.WirePresentationEvidence()
 	if err := ledger.RecordUpstreamSend(int64(len(frozenRequest.Body()))); err != nil {
 		return newFailure(
 			ReasonProviderRequestInvalid,
@@ -671,6 +679,9 @@ func (pipeline *Pipeline) executeComplete(
 	}
 	response, evidence, err := pipeline.provider.Do(ctx, frozenRequest)
 	result.Credential = evidence.Credential
+	if evidence.Presentation.RequestedRef != "" {
+		result.Presentation = evidence.Presentation
+	}
 	result.Transport = evidence.Transport
 	if err != nil {
 		return pipeline.classifyProviderError(ctx, request.exchangeID, err)
@@ -845,6 +856,9 @@ func (pipeline *Pipeline) executeStream(
 		}
 		response, evidence, sendErr := pipeline.provider.Do(ctx, frozenRequest)
 		result.Credential = evidence.Credential
+		if evidence.Presentation.RequestedRef != "" {
+			result.Presentation = evidence.Presentation
+		}
 		result.Transport = evidence.Transport
 		if sendErr != nil {
 			failure := pipeline.classifyProviderError(

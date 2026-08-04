@@ -51,8 +51,14 @@ response-body ownership, and shutdown.
 
 The provider client separates origin, HTTP authority, network host, and TLS
 server name. Remote targets enforce strict certificate verification, redirect
-rejection, and the frozen transport-fingerprint plan with explicit fallback
-evidence. The only cleartext exception is an explicitly configured literal
+rejection, and one frozen product-level upstream presentation. New routes
+default to `follow-client`: VibeMate safely reconstructs the observed client
+shape for the same application protocol and preserves only the bounded current
+request User-Agent (or its absence). Product emulation is used only when
+the user explicitly chooses a named product; provider, model, account, and
+dialect selection cannot choose it. A missing protocol variant fails before
+secret access or dial and never falls back to another product, HTTP protocol,
+or the standard library. The only cleartext exception is an explicitly configured literal
 loopback IP: it is Direct-only, bypasses ambient proxies, and verifies the
 connected TCP peer before any authenticated HTTP byte is written. It
 retrieves a `SecretRef` only after egress admission, applies the typed static
@@ -65,14 +71,16 @@ release SecretStore driver or release packaging profile in this stage.
 MITM creates two independent TLS connections, so VibeMate does not claim that
 the complete client fingerprint survives unchanged. The downstream client sees
 an exact-DNS leaf issued by the local VibeMate Root, not the provider's
-certificate. For the current `observed-client-strict-h1` upstream profile,
+certificate. For the current H1 `follow-client` variant,
 VibeMate retains supported cipher-suite and extension ordering, rewrites the
 target SNI, intersects ALPN with the HTTP/1.1 transport it actually implements,
 and regenerates random, key-share, ticket, PSK, binder, and other
 connection-bound state. A real local TLS capture-service test observes the
 actual outbound ClientHello and HTTP request from outside the connector and
 checks both the retained shape and the required differences. This is bounded
-wire evidence, not exact JA3, JA4, browser, or HTTP/2 fingerprint parity.
+wire evidence, not raw ClientHello passthrough or exact browser parity. The
+current implementation has only an H1 follow-client variant; H2 ingress and
+upstream transport remain unavailable and cannot silently downgrade.
 
 ProductRuntime now owns an internal Exchange executor. Each admitted Exchange
 begins a planned-offline action before resolving configuration, resolves the
@@ -84,7 +92,8 @@ revalidated against that one plan before decoding. A commit ledger prevents
 unsafe transport replay after client-visible Anthropic or Responses semantics,
 and complete tool groups wait behind a durable fail-closed approval authority
 before any tool block or terminal event is released. Attempts append a redacted
-durable Activity record with stable reason codes and transport-selection
+durable Activity record with stable reason codes, the product-level
+presentation choice, the same-protocol variant, and lower transport-selection
 evidence, never prompt, credential, header, or raw tool-argument values.
 
 ProductRuntime also composes a handler-only loopback proxy boundary. An opaque

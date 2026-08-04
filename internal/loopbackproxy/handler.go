@@ -858,6 +858,13 @@ func (handler *Handler) serveSemantic(
 		writeReason(writer, http.StatusBadRequest, ReasonRequestBodyInvalid, "")
 		return
 	}
+	clientProtocol := access.ApplicationProtocolHTTP1
+	if request.ProtoMajor == 2 {
+		clientProtocol = access.ApplicationProtocolHTTP2
+	} else if request.ProtoMajor != 1 {
+		writeReason(writer, http.StatusBadRequest, ReasonRequestBodyInvalid, "")
+		return
+	}
 	requestOptions := []exchange.ClientRequestOption{
 		exchange.WithClientHelloObservation(observation),
 		// Every identity is generated independently; association travels as
@@ -870,12 +877,24 @@ func (handler *Handler) serveSemantic(
 			exchange.WithAnthropicBetaHeader(beta),
 		)
 	}
+	userAgents := request.Header.Values("User-Agent")
+	if len(userAgents) > 1 || (len(userAgents) == 1 && userAgents[0] == "") {
+		writeReason(writer, http.StatusBadRequest, ReasonRequestBodyInvalid, "")
+		return
+	}
+	if len(userAgents) == 1 {
+		requestOptions = append(
+			requestOptions,
+			exchange.WithClientUserAgent(userAgents[0]),
+		)
+	}
 	clientRequest, err := exchange.NewClientRequest(
 		exchangeID,
 		binding,
 		operation,
 		body,
 		capability.ReplayClass(),
+		clientProtocol,
 		requestOptions...,
 	)
 	if err != nil {

@@ -121,7 +121,7 @@ function accessDetail(
         description: "",
         backendDialect: "openai-chat",
         targetId,
-        transportProfileRef: "observed-client-strict-h1",
+        upstreamWireProfileRef: "follow-client",
         defaultModelPolicy: { mode: "fixed", fixedModel: "model" },
         accountBindingIds: [accountId],
         defaultAccountBindingId: accountId,

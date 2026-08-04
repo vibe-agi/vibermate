@@ -140,7 +140,7 @@ func workspaceRouteTestAggregate(t *testing.T) access.Aggregate {
 		Profiles: []accessapply.ProfileInput{{
 			ID: id + "-profile", Name: "Work account", Description: "Primary route",
 			BackendDialect: "openai-chat", TargetID: id + "-target",
-			TransportProfileRef:     access.TransportProfileObservedClientH1Value,
+			UpstreamWireProfileRef:  access.UpstreamWireProfileFollowClientValue,
 			DefaultModelPolicy:      accessapply.ModelPolicyInput{Mode: "fixed", FixedModel: "gpt-4.1-mini"},
 			AccountBindingIDs:       []string{id + "-account"},
 			DefaultAccountBindingID: id + "-account",

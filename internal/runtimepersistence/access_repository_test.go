@@ -601,14 +601,14 @@ func executableAggregate(
 			ClientDialect: access.DialectAnthropicMessages,
 		},
 		Profiles: []access.EndpointProfile{{
-			ID:                  profileID,
-			Revision:            revision,
-			AccessID:            accessID,
-			Name:                "OpenAI Chat",
-			Description:         "Fixed M0 profile",
-			BackendDialect:      access.DialectOpenAIChat,
-			TargetID:            targetID,
-			TransportProfileRef: access.ObservedClientH1TransportProfileRef(),
+			ID:                     profileID,
+			Revision:               revision,
+			AccessID:               accessID,
+			Name:                   "OpenAI Chat",
+			Description:            "Fixed M0 profile",
+			BackendDialect:         access.DialectOpenAIChat,
+			TargetID:               targetID,
+			UpstreamWireProfileRef: access.FollowClientUpstreamWireProfileRef(),
 			DefaultModelPolicy: access.ModelPolicy{
 				Revision:   revision,
 				Mode:       access.ModelPolicyModeFixed,
@@ -710,7 +710,9 @@ func testAccessCompiler(t *testing.T) *access.Compiler {
 		TransportProfiles: []access.TransportFingerprintDefinition{
 			access.ObservedClientH1TransportFingerprintDefinition(),
 			access.StandardH1TransportFingerprintDefinition(),
+			access.ClaudeCodeH1TransportFingerprintDefinition(),
 		},
+		UpstreamWireProfiles: access.BuiltInUpstreamWireProfileDefinitions(),
 	})
 	if err != nil {
 		t.Fatalf("construct catalog: %v", err)

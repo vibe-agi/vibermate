@@ -90,6 +90,7 @@ func TestWorkspaceRouteCASSelectsAndFreezesTheNextExchangeProfile(t *testing.T) 
 			"messages":[{"role":"user","content":"hello"}]
 		}`),
 		exchange.ReplayGenerationCostOnly,
+		access.ApplicationProtocolHTTP1,
 		exchange.WithIngressCorrelation(admission, "connection-workspace"),
 	)
 	if err != nil {

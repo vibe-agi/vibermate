@@ -934,12 +934,12 @@ func assemblyAccess(
 			ClientDialect: string(client.ClientDialect),
 		},
 		Profiles: []accessapply.ProfileInput{{
-			ID:                  identifiers.profile,
-			Name:                "Assembly Profile",
-			Description:         "Fixed client to OpenAI Chat path",
-			BackendDialect:      string(access.DialectOpenAIChat),
-			TargetID:            identifiers.target,
-			TransportProfileRef: access.TransportProfileObservedClientH1Value,
+			ID:                     identifiers.profile,
+			Name:                   "Assembly Profile",
+			Description:            "Fixed client to OpenAI Chat path",
+			BackendDialect:         string(access.DialectOpenAIChat),
+			TargetID:               identifiers.target,
+			UpstreamWireProfileRef: access.UpstreamWireProfileFollowClientValue,
 			DefaultModelPolicy: accessapply.ModelPolicyInput{
 				Mode:       string(access.ModelPolicyModeFixed),
 				FixedModel: config.providerModel,

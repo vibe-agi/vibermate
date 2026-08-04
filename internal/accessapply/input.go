@@ -45,7 +45,7 @@ type ProfileInput struct {
 	Description             string           `json:"description"`
 	BackendDialect          string           `json:"backendDialect"`
 	TargetID                string           `json:"targetId"`
-	TransportProfileRef     string           `json:"transportProfileRef"`
+	UpstreamWireProfileRef  string           `json:"upstreamWireProfileRef"`
 	DefaultModelPolicy      ModelPolicyInput `json:"defaultModelPolicy"`
 	AccountBindingIDs       []string         `json:"accountBindingIds"`
 	DefaultAccountBindingID string           `json:"defaultAccountBindingId"`
@@ -222,8 +222,8 @@ func buildProfiles(
 		if err != nil {
 			return nil, err
 		}
-		transportProfile, err := access.NewTransportProfileRef(
-			input.TransportProfileRef,
+		transportProfile, err := access.NewUpstreamWireProfileRef(
+			input.UpstreamWireProfileRef,
 		)
 		if err != nil {
 			return nil, err
@@ -250,7 +250,7 @@ func buildProfiles(
 			Description:             input.Description,
 			BackendDialect:          access.Dialect(input.BackendDialect),
 			TargetID:                targetID,
-			TransportProfileRef:     transportProfile,
+			UpstreamWireProfileRef:  transportProfile,
 			DefaultModelPolicy:      modelPolicy,
 			AccountBindingIDs:       accountIDs,
 			DefaultAccountBindingID: defaultAccountID,

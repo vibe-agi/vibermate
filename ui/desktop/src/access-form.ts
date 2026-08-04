@@ -12,6 +12,7 @@ export interface AccessFormValues {
   readonly providerOrigin: string;
   readonly fixedModel: string;
   readonly routeName: string;
+  readonly upstreamPresentation: "follow-client" | "claude-code";
 }
 
 export type AccessAppPreset = "claude" | "codex" | "custom";
@@ -61,6 +62,7 @@ export const initialAccessForm: AccessFormValues = {
   providerOrigin: "http://127.0.0.1:23333/v1",
   fixedModel: "dashscope:glm-5",
   routeName: "Primary account",
+  upstreamPresentation: "follow-client",
 };
 
 export function newAccessForm(
@@ -94,7 +96,9 @@ export function validAccessForm(values: AccessFormValues): boolean {
     validProviderOrigin(values.providerOrigin) &&
     values.fixedModel.length > 0 &&
     values.routeName.trim() === values.routeName &&
-    values.routeName.length > 0
+    values.routeName.length > 0 &&
+    (values.upstreamPresentation === "follow-client" ||
+      values.upstreamPresentation === "claude-code")
   );
 }
 
@@ -198,7 +202,7 @@ export function buildAccessApplyInput(
         description: "",
         backendDialect: values.providerDialect,
         targetId,
-        transportProfileRef: "observed-client-strict-h1",
+        upstreamWireProfileRef: values.upstreamPresentation,
         defaultModelPolicy: {
           mode: "fixed",
           fixedModel: values.fixedModel,

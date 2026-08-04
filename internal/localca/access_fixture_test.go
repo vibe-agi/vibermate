@@ -96,7 +96,7 @@ func newAccessFixture(
 			Name:                    "Provider profile",
 			BackendDialect:          access.DialectOpenAIChat,
 			TargetID:                targetID,
-			TransportProfileRef:     access.StandardH1TransportProfileRef(),
+			UpstreamWireProfileRef:  access.FollowClientUpstreamWireProfileRef(),
 			DefaultModelPolicy:      access.ModelPolicy{Revision: revision, Mode: access.ModelPolicyModeFixed, FixedModel: model},
 			AccountBindingIDs:       []access.AccountBindingID{accountID},
 			DefaultAccountBindingID: accountID,
@@ -209,8 +209,11 @@ func newAccessCompiler(t *testing.T) *access.Compiler {
 			Revision: 1,
 		}},
 		TransportProfiles: []access.TransportFingerprintDefinition{
+			access.ObservedClientH1TransportFingerprintDefinition(),
 			access.StandardH1TransportFingerprintDefinition(),
+			access.ClaudeCodeH1TransportFingerprintDefinition(),
 		},
+		UpstreamWireProfiles: access.BuiltInUpstreamWireProfileDefinitions(),
 	})
 	if err != nil {
 		t.Fatalf("construct Access catalog: %v", err)

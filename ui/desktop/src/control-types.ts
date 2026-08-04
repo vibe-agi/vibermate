@@ -172,7 +172,7 @@ export interface AccessApplyInput {
     readonly description: string;
     readonly backendDialect: "anthropic-messages" | "openai-chat";
     readonly targetId: string;
-    readonly transportProfileRef: "observed-client-strict-h1";
+    readonly upstreamWireProfileRef: "follow-client" | "claude-code";
     readonly defaultModelPolicy: {
       readonly mode: "fixed";
       readonly fixedModel: string;
@@ -274,7 +274,7 @@ export interface AccessDetail {
     readonly description: string;
     readonly backendDialect: AccessDialect;
     readonly targetId: string;
-    readonly transportProfileRef: string;
+    readonly upstreamWireProfileRef: string;
     readonly defaultModelPolicy: AccessModelPolicy;
     readonly accountBindingIds: readonly string[];
     readonly defaultAccountBindingId: string;
@@ -343,6 +343,7 @@ export type AccessAddCandidateInput =
       readonly provider: "anthropic";
       readonly model: string;
       readonly authDriverRef?: "anthropic_api_key";
+      readonly upstreamPresentation: "follow-client" | "claude-code";
     }
   | {
       readonly name: string;
@@ -350,12 +351,14 @@ export type AccessAddCandidateInput =
       readonly baseUrl: string;
       readonly model: string;
       readonly authDriverRef?: "anthropic_api_key" | "static_header";
+      readonly upstreamPresentation: "follow-client" | "claude-code";
     }
   | {
       readonly name: string;
       readonly provider: "openai";
       readonly model: string;
       readonly authDriverRef?: "static_header";
+      readonly upstreamPresentation: "follow-client" | "claude-code";
     }
   | {
       readonly name: string;
@@ -363,6 +366,7 @@ export type AccessAddCandidateInput =
       readonly baseUrl: string;
       readonly model: string;
       readonly authDriverRef?: "anthropic_api_key" | "static_header";
+      readonly upstreamPresentation: "follow-client" | "claude-code";
     };
 
 export type AccessAddCandidateResponse = AccessApplyResponse & {

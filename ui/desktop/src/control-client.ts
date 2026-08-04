@@ -2452,7 +2452,7 @@ function validAccessDetailProfile(
       "description",
       "backendDialect",
       "targetId",
-      "transportProfileRef",
+      "upstreamWireProfileRef",
       "defaultModelPolicy",
       "accountBindingIds",
       "defaultAccountBindingId",
@@ -2466,7 +2466,7 @@ function validAccessDetailProfile(
     ) &&
     accessDialects.has(String(value.backendDialect)) &&
     validResourceId(value.targetId) &&
-    validResourceId(value.transportProfileRef) &&
+    validResourceId(value.upstreamWireProfileRef) &&
     validAccessDetailModelPolicy(value.defaultModelPolicy) &&
     validUniqueResourceIds(value.accountBindingIds, maximumAccountBindings) &&
     validResourceId(value.defaultAccountBindingId) &&
