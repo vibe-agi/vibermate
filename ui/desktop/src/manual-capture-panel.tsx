@@ -19,6 +19,7 @@ import type {
   ManualCaptureCreateInput,
   ManualCaptureGrant,
   ManualCaptureLifetime,
+  ManualCapturePage,
   ManualCaptureRecord,
 } from "./control-types.ts";
 
@@ -53,14 +54,22 @@ export function ManualCapturePanel({
   const [review, setReview] = useState<ManualCaptureContext>();
   const [delivery, setDelivery] = useState<ManualCaptureGrant>();
   const [pendingAction, setPendingAction] = useState<PendingAction>();
+  const [focusCaptureID, setFocusCaptureID] = useState<string>();
   const [busy, setBusy] = useState(false);
   const [errorKey, setErrorKey] = useState<string>();
   const [copied, setCopied] = useState<"proxy" | "shell">();
+  const confirmationHeading = useRef<HTMLHeadingElement>(null);
 
   useEffect(() => {
     const current = owner.current;
     return () => current.abort();
   }, []);
+
+  useEffect(() => {
+    if (pendingAction !== undefined) {
+      confirmationHeading.current?.focus();
+    }
+  }, [pendingAction]);
 
   const captures = useQuery({
     queryKey: dashboardQueryKeys.manualCaptures,
@@ -144,6 +153,7 @@ export function ManualCapturePanel({
         input,
         owner.current.signal,
       );
+      publishManualCapture(model, result.grant.capture);
       setDelivery(result.grant);
       setCopied(undefined);
       resetCreate();
@@ -177,6 +187,7 @@ export function ManualCapturePanel({
           current.stateTag,
           owner.current.signal,
         );
+        publishManualCapture(model, result.grant.capture);
         setDelivery(result.grant);
         setCopied(undefined);
       } else {
@@ -185,6 +196,14 @@ export function ManualCapturePanel({
           current.stateTag,
           owner.current.signal,
         );
+        // DELETE confirms the state transition but carries no representation.
+        // Publish only that confirmed state bit; the background read restores
+        // server-owned timestamps and other observation fields.
+        publishManualCapture(model, {
+          ...current.capture,
+          state: "revoked",
+        });
+        setFocusCaptureID(current.capture.id);
       }
       setPendingAction(undefined);
       void captures.refetch();
@@ -227,6 +246,7 @@ export function ManualCapturePanel({
             disabled={busy || delivery !== undefined}
             onClick={() => {
               setCreating(true);
+              setFocusCaptureID(undefined);
               setErrorKey(undefined);
             }}
             type="button"
@@ -248,6 +268,7 @@ export function ManualCapturePanel({
           grant={delivery}
           onCopy={(kind, value) => void copy(kind, value)}
           onDismiss={() => {
+            setFocusCaptureID(delivery.capture.id);
             setDelivery(undefined);
             setCopied(undefined);
           }}
@@ -342,12 +363,12 @@ export function ManualCapturePanel({
       )}
 
       {pendingAction !== undefined && delivery === undefined && (
-        <div className="manual-capture-confirm" role="alert">
-          <strong>
+        <div className="manual-capture-confirm">
+          <h3 ref={confirmationHeading} tabIndex={-1}>
             {t(`manualCapture.${pendingAction.kind}.confirmTitle`, {
               name: pendingAction.capture.displayName,
             })}
-          </strong>
+          </h3>
           <p>{t(`manualCapture.${pendingAction.kind}.confirmDetail`)}</p>
           <div className="button-row">
             <button
@@ -361,7 +382,10 @@ export function ManualCapturePanel({
             <button
               className="secondary"
               disabled={busy}
-              onClick={() => setPendingAction(undefined)}
+              onClick={() => {
+                setFocusCaptureID(pendingAction.capture.id);
+                setPendingAction(undefined);
+              }}
               type="button"
             >
               {t("common.cancel.action")}
@@ -370,12 +394,19 @@ export function ManualCapturePanel({
         </div>
       )}
 
-      {!creating && review === undefined && (
+      {!creating &&
+        review === undefined &&
+        delivery === undefined &&
+        pendingAction === undefined && (
         <ManualCaptureList
           busy={busy || delivery !== undefined}
+          focusRecordID={focusCaptureID}
           locale={i18n.language}
           loading={captures.isPending}
-          onAction={(kind, capture) => setPendingAction({ kind, capture })}
+          onAction={(kind, capture) => {
+            setFocusCaptureID(undefined);
+            setPendingAction({ kind, capture });
+          }}
           records={records}
           unavailable={captures.error !== null}
         />
@@ -398,6 +429,8 @@ function ReviewTicket({
   readonly onCreate: () => void;
 }) {
   const { t } = useTranslation();
+  const heading = useRef<HTMLHeadingElement>(null);
+  useEffect(() => heading.current?.focus(), []);
   const lifetime =
     form.lifetime === "until_revoked"
       ? t("manualCapture.lifetime.until_revoked")
@@ -411,7 +444,9 @@ function ReviewTicket({
         <div className="ticket-heading">
           <div>
             <p>{t("manualCapture.review.eyebrow")}</p>
-            <h3>{form.displayName}</h3>
+            <h3 ref={heading} tabIndex={-1}>
+              {form.displayName}
+            </h3>
           </div>
           <span>{t(`manualCapture.clientClass.${form.clientClass}`)}</span>
         </div>
@@ -459,10 +494,12 @@ function CredentialDelivery({
   readonly onDismiss: () => void;
 }) {
   const { t } = useTranslation();
+  const heading = useRef<HTMLHeadingElement>(null);
+  useEffect(() => heading.current?.focus(), [grant.capture.id]);
   const proxy = proxyURL(grant);
   const shell = shellSetup(grant, proxy);
   return (
-    <div className="manual-capture-ticket delivery-ticket" aria-live="polite">
+    <div className="manual-capture-ticket delivery-ticket">
       <div className="ticket-spine" aria-hidden="true">
         <span>✓</span>
       </div>
@@ -470,7 +507,9 @@ function CredentialDelivery({
         <div className="ticket-heading">
           <div>
             <p>{t("manualCapture.delivery.eyebrow")}</p>
-            <h3>{grant.capture.displayName}</h3>
+            <h3 ref={heading} tabIndex={-1}>
+              {grant.capture.displayName}
+            </h3>
           </div>
           <span>{t("manualCapture.delivery.once")}</span>
         </div>
@@ -511,10 +550,26 @@ function CopyRow({
     <div className="manual-capture-copy-row">
       <label>
         <span>{label}</span>
-        <textarea readOnly rows={value.includes("\n") ? 4 : 2} value={value} />
+        <textarea
+          readOnly
+          rows={value.includes("\n") ? 4 : 2}
+          spellCheck={false}
+          value={value}
+          wrap="off"
+        />
       </label>
       <button onClick={onCopy} type="button">
-        {t(copied ? "common.copied" : "common.copy.action")}
+        <span className="visually-hidden">
+          {t(
+            copied
+              ? "manualCapture.copy.copied"
+              : "manualCapture.copy.action",
+            { label },
+          )}
+        </span>
+        <span aria-hidden="true">
+          {t(copied ? "common.copied" : "common.copy.action")}
+        </span>
       </button>
     </div>
   );
@@ -522,6 +577,7 @@ function CopyRow({
 
 function ManualCaptureList({
   busy,
+  focusRecordID,
   loading,
   locale,
   onAction,
@@ -529,6 +585,7 @@ function ManualCaptureList({
   unavailable,
 }: {
   readonly busy: boolean;
+  readonly focusRecordID: string | undefined;
   readonly loading: boolean;
   readonly locale: string;
   readonly onAction: (
@@ -539,6 +596,15 @@ function ManualCaptureList({
   readonly unavailable: boolean;
 }) {
   const { t } = useTranslation();
+  const focusRecord = useRef<HTMLLIElement>(null);
+  const canFocusRecord =
+    focusRecordID !== undefined &&
+    records.some((capture) => capture.id === focusRecordID);
+  useEffect(() => {
+    if (canFocusRecord) {
+      focusRecord.current?.focus();
+    }
+  }, [canFocusRecord, focusRecordID]);
   if (loading) {
     return <p className="empty-state">{t("common.data.loading")}</p>;
   }
@@ -554,6 +620,8 @@ function ManualCaptureList({
         <li
           className={capture.state === "active" ? undefined : "inactive"}
           key={capture.id}
+          ref={capture.id === focusRecordID ? focusRecord : undefined}
+          tabIndex={capture.id === focusRecordID ? -1 : undefined}
         >
           <div className="manual-capture-card-heading">
             <div>
@@ -615,6 +683,26 @@ function ManualCaptureList({
         </li>
       ))}
     </ol>
+  );
+}
+
+function publishManualCapture(
+  model: DashboardQueryRuntime,
+  capture: ManualCaptureRecord,
+) {
+  model.queryClient.setQueryData<ManualCapturePage>(
+    dashboardQueryKeys.manualCaptures,
+    (current) => {
+      const records = current?.items ?? [];
+      const found = records.some((record) => record.id === capture.id);
+      return {
+        items: found
+          ? records.map((record) =>
+              record.id === capture.id ? capture : record,
+            )
+          : [capture, ...records],
+      };
+    },
   );
 }
 

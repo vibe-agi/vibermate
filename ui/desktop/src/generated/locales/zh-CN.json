@@ -352,6 +352,8 @@
   "manualCapture.clientClass.desktop_app": "桌面应用",
   "manualCapture.clientClass.label": "应用类型",
   "manualCapture.clientClass.other": "其他应用",
+  "manualCapture.copy.action": "复制{{label}}",
+  "manualCapture.copy.copied": "已复制{{label}}",
   "manualCapture.create.action": "创建应用代理",
   "manualCapture.create.confirmAction": "创建这份代理",
   "manualCapture.delivery.dismiss": "我已保存",

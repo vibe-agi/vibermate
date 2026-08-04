@@ -470,12 +470,26 @@ test("hands off a manual app proxy once and keeps a secret-free observation card
   await panel.getByRole("button", { name: "Review proxy details" }).click();
 
   await expect(panel.getByText("Confirm before creation")).toBeVisible();
+  await expect(
+    panel.getByRole("heading", { name: "Project terminal" }),
+  ).toBeFocused();
   await expect(panel.getByText("AA:BB:CC:DD:EE:FF")).toBeVisible();
   await expect(panel.getByText("Shown once")).toHaveCount(0);
   await panel.getByRole("button", { name: "Create this proxy" }).click();
 
   const proxy = panel.getByLabel("Proxy address with password");
   await expect(proxy).toHaveValue(/capture:manual_/u);
+  await expect(
+    panel.getByRole("heading", { name: "Project terminal" }),
+  ).toBeFocused();
+  await expect(
+    panel.getByRole("button", {
+      name: "Copy Proxy address with password",
+    }),
+  ).toBeVisible();
+  await expect(
+    panel.getByRole("button", { name: "Copy Shell setup" }),
+  ).toBeVisible();
   await expect(panel.getByText("Shown once")).toBeVisible();
   await panel.getByRole("button", { name: "I've saved it" }).click();
 
@@ -487,6 +501,11 @@ test("hands off a manual app proxy once and keeps a secret-free observation card
     panel.getByRole("button", { name: "Rotate password" }),
   ).toBeVisible();
   await expect(panel.getByRole("button", { name: "Revoke" })).toBeVisible();
+  await expect(
+    panel.locator(".manual-capture-list > li").filter({
+      hasText: "Project terminal",
+    }),
+  ).toBeFocused();
   expect(
     await page.evaluate(() => ({
       local: globalThis.localStorage.length,

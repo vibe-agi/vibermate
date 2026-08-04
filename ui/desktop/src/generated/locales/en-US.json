@@ -352,6 +352,8 @@
   "manualCapture.clientClass.desktop_app": "Desktop app",
   "manualCapture.clientClass.label": "Application type",
   "manualCapture.clientClass.other": "Other app",
+  "manualCapture.copy.action": "Copy {{label}}",
+  "manualCapture.copy.copied": "{{label}} copied",
   "manualCapture.create.action": "Create app proxy",
   "manualCapture.create.confirmAction": "Create this proxy",
   "manualCapture.delivery.dismiss": "I've saved it",
