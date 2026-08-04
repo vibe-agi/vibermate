@@ -66,7 +66,10 @@ while :; do sleep 1; done
 			InstallShape: clientadapter.InstallNPMWrapperNativeChild,
 			LaunchRecipe: clientadapter.LaunchSSLCertFile,
 		},
-		authorities: []string{"api.openai.com:443"},
+		authorities: []string{
+			"api.openai.com:443",
+			"ambient.invalid:443",
+		},
 	}
 	server := httptest.NewServer(control)
 	defer server.Close()

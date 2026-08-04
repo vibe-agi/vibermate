@@ -42,6 +42,9 @@ func TestLauncherSupervisesExactChildAndCaptureRunLifecycle(t *testing.T) {
   printf 'run=%s\n' "$VIBERMATE_CAPTURE_RUN_ID"
   printf 'root=%s\n' "$NODE_EXTRA_CA_CERTS"
   printf 'node_proxy=%s\n' "$NODE_USE_ENV_PROXY"
+  printf 'client_key=%s\n' "$ANTHROPIC_API_KEY"
+  printf 'client_token=%s\n' "$CLAUDE_CODE_OAUTH_TOKEN"
+  printf 'client_origin=%s\n' "$ANTHROPIC_BASE_URL"
 } > "$LAUNCH_TEST_OUTPUT"
 sleep 0.08
 exit 7
@@ -75,7 +78,10 @@ exit 7
 			InstallShape: clientadapter.InstallNativeSingleBinary,
 			LaunchRecipe: clientadapter.LaunchNodeEnvProxy,
 		},
-		authorities: []string{"api.anthropic.com:443"},
+		authorities: []string{
+			"api.anthropic.com:443",
+			"ambient.invalid:443",
+		},
 	}
 	server := httptest.NewServer(control)
 	defer server.Close()
@@ -96,6 +102,9 @@ exit 7
 			"PATH=/usr/bin:/bin",
 			"USER=  alice  ",
 			"LAUNCH_TEST_OUTPUT=" + outputPath,
+			"ANTHROPIC_API_KEY=ambient-api-key",
+			"CLAUDE_CODE_OAUTH_TOKEN=ambient-oauth-token",
+			"ANTHROPIC_BASE_URL=https://ambient.invalid",
 			"NO_PROXY=localhost,.anthropic.com,10.0.0.0/8",
 		},
 		HeartbeatInterval: 10 * time.Millisecond,
@@ -137,7 +146,10 @@ exit 7
 		lines["no_proxy"] != "localhost" ||
 		lines["run"] != "capture-run-1" ||
 		lines["root"] != rootPath ||
-		lines["node_proxy"] != "1" {
+		lines["node_proxy"] != "1" ||
+		lines["client_key"] != "vibermate-local-proxy" ||
+		lines["client_token"] != "" ||
+		lines["client_origin"] != "" {
 		t.Fatalf("captured child output = %+v", lines)
 	}
 	control.mu.Lock()
@@ -304,6 +316,10 @@ func (fixture *controlFixture) ServeHTTP(
 			RunCapability:   fixture.run,
 			RootPEMPath:     fixture.rootPath,
 			ProtectedAuthorities: append(
+				[]string{},
+				fixture.authorities...,
+			),
+			ManagedCredentialAuthorities: append(
 				[]string{},
 				fixture.authorities...,
 			),

@@ -417,14 +417,23 @@ injects authenticated proxy variables; removes protected Agent authorities
 from inherited `NO_PROXY`; and heartbeats and finishes the run. The daemon
 verifies every artifact in a revisioned compound client release before granting
 version-specific behavior. Fixed Codex receives the same local Root through
-`SSL_CERT_FILE` plus a non-secret client placeholder after conflicting ambient
-proxy, CA, base-URL, and credential variables are removed. Unknown Codex
+`SSL_CERT_FILE`; fixed Claude receives it through `NODE_EXTRA_CA_CERTS`. A
+launch grant keeps the MITM authority set separate from its managed-credential
+subset. Only an exact effective client origin in that subset causes the
+launcher to remove conflicting client auth/base-selection inputs and inject a
+non-secret local placeholder; Core removes client authentication again before
+the selected provider AuthDriver finalizes the real upstream request. An
+origin outside that subset preserves the client's own API key/OAuth and base
+selection. The placeholder is neither a provider secret nor route authority.
+Unknown Codex
 versions remain generic unless macOS verifies a catalogued Developer ID signer
 identity and the user explicitly approves the recognized-client Root handoff;
 Linux has no recognized tier. Host
 integration tests exercise this path over real loopback listeners with a local
 child process, including bounded SIGINT convergence. They do not send provider
-traffic.
+traffic. The current production Access compiler still contains only managed
+account-backed profiles; the system `original_passthrough` profile remains an
+unimplemented design boundary.
 
 The opt-in `vibermate-acceptance` command exercises the packaged macOS arm64
 assembly with exactly one selected fixed client: Claude Code 2.1.220 or Codex

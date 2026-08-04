@@ -12,17 +12,13 @@ import (
 	"github.com/vibe-agi/vibermate/internal/clientadapter"
 )
 
-const codexClientPlaceholder = "vibermate-local-proxy"
+const clientCredentialPlaceholder = "vibermate-local-proxy"
 
 var managedEnvironment = map[string]struct{}{
 	"HTTP_PROXY":                   {},
 	"HTTPS_PROXY":                  {},
-	"http_proxy":                   {},
-	"https_proxy":                  {},
 	"ALL_PROXY":                    {},
-	"all_proxy":                    {},
 	"NO_PROXY":                     {},
-	"no_proxy":                     {},
 	"VIBERMATE_CAPTURE_RUN_ID":     {},
 	"VIBERMATE_CONNECTION":         {},
 	"VIBERMATE_CREDENTIAL_FILE":    {},
@@ -49,6 +45,20 @@ var codexManagedEnvironment = map[string]struct{}{
 	"OPENAI_PROJECT_ID":   {},
 }
 
+var claudeManagedEnvironment = map[string]struct{}{
+	"ANTHROPIC_API_KEY":          {},
+	"ANTHROPIC_AUTH_TOKEN":       {},
+	"ANTHROPIC_BASE_URL":         {},
+	"ANTHROPIC_BEDROCK_BASE_URL": {},
+	"ANTHROPIC_CUSTOM_HEADERS":   {},
+	"ANTHROPIC_FOUNDRY_BASE_URL": {},
+	"ANTHROPIC_VERTEX_BASE_URL":  {},
+	"CLAUDE_CODE_OAUTH_TOKEN":    {},
+	"CLAUDE_CODE_USE_BEDROCK":    {},
+	"CLAUDE_CODE_USE_FOUNDRY":    {},
+	"CLAUDE_CODE_USE_VERTEX":     {},
+}
+
 func buildEnvironment(
 	base []string,
 	grant capturecontrol.LaunchGrant,
@@ -63,6 +73,7 @@ func buildEnvironment(
 	if err != nil {
 		return nil, err
 	}
+	managedClientCredential := usesManagedClientCredential(base, grant)
 	preserved := make(map[string]string)
 	var noProxyValues []string
 	for _, entry := range base {
@@ -70,11 +81,15 @@ func buildEnvironment(
 		if !ok || key == "" {
 			continue
 		}
-		if key == "NO_PROXY" || key == "no_proxy" {
+		if strings.EqualFold(key, "NO_PROXY") {
 			noProxyValues = append(noProxyValues, value)
 			continue
 		}
-		if environmentManaged(key, grant.LaunchRecipe) {
+		if environmentManaged(
+			key,
+			grant.LaunchRecipe,
+			managedClientCredential,
+		) {
 			continue
 		}
 		preserved[key] = value
@@ -92,9 +107,14 @@ func buildEnvironment(
 	case clientadapter.LaunchNodeEnvProxy:
 		preserved["NODE_EXTRA_CA_CERTS"] = grant.RootPEMPath
 		preserved["NODE_USE_ENV_PROXY"] = "1"
+		if managedClientCredential {
+			preserved["ANTHROPIC_API_KEY"] = clientCredentialPlaceholder
+		}
 	case clientadapter.LaunchSSLCertFile:
 		preserved["SSL_CERT_FILE"] = grant.RootPEMPath
-		preserved["CODEX_API_KEY"] = codexClientPlaceholder
+		if managedClientCredential {
+			preserved["CODEX_API_KEY"] = clientCredentialPlaceholder
+		}
 	default:
 		return nil, errors.New("CaptureRun launch recipe is unsupported")
 	}
@@ -113,15 +133,96 @@ func buildEnvironment(
 func environmentManaged(
 	key string,
 	recipe clientadapter.LaunchRecipe,
+	managedClientCredential bool,
 ) bool {
-	if _, managed := managedEnvironment[key]; managed {
+	normalizedKey := strings.ToUpper(key)
+	if _, managed := managedEnvironment[normalizedKey]; managed {
 		return true
 	}
+	if !managedClientCredential {
+		return false
+	}
 	if recipe == clientadapter.LaunchSSLCertFile {
-		_, managed := codexManagedEnvironment[key]
+		_, managed := codexManagedEnvironment[normalizedKey]
+		return managed
+	}
+	if recipe == clientadapter.LaunchNodeEnvProxy {
+		_, managed := claudeManagedEnvironment[normalizedKey]
 		return managed
 	}
 	return false
+}
+
+func usesManagedClientCredential(
+	base []string,
+	grant capturecontrol.LaunchGrant,
+) bool {
+	if len(grant.ManagedCredentialAuthorities) == 0 {
+		return false
+	}
+	clientID := ""
+	if grant.Adapter != nil {
+		clientID = grant.Adapter.ID
+	} else if grant.Signer != nil {
+		clientID = grant.Signer.ID
+	}
+	authority, ok := clientTargetAuthority(base, clientID)
+	if !ok {
+		return false
+	}
+	for _, managed := range grant.ManagedCredentialAuthorities {
+		if strings.EqualFold(managed, authority) {
+			return true
+		}
+	}
+	return false
+}
+
+func clientTargetAuthority(base []string, clientID string) (string, bool) {
+	values := make(map[string]string)
+	for _, entry := range base {
+		key, value, ok := strings.Cut(entry, "=")
+		if ok && key != "" {
+			values[strings.ToUpper(key)] = value
+		}
+	}
+	rawOrigin := ""
+	switch clientID {
+	case "claude-code":
+		rawOrigin = values["ANTHROPIC_BASE_URL"]
+		if rawOrigin == "" {
+			rawOrigin = "https://api.anthropic.com"
+		}
+	case "codex-cli":
+		rawOrigin = values["CODEX_BASE_URL"]
+		if rawOrigin == "" {
+			rawOrigin = values["OPENAI_BASE_URL"]
+		}
+		if rawOrigin == "" {
+			rawOrigin = "https://api.openai.com"
+		}
+	default:
+		return "", false
+	}
+	parsed, err := url.Parse(rawOrigin)
+	if err != nil || parsed.User != nil || parsed.Hostname() == "" ||
+		parsed.RawQuery != "" || parsed.Fragment != "" {
+		return "", false
+	}
+	port := parsed.Port()
+	switch parsed.Scheme {
+	case "https":
+		if port == "" {
+			port = "443"
+		}
+	case "http":
+		if port == "" {
+			port = "80"
+		}
+	default:
+		return "", false
+	}
+	return net.JoinHostPort(strings.ToLower(parsed.Hostname()), port), true
 }
 
 func authenticatedProxyURL(origin string, capability string) (string, error) {

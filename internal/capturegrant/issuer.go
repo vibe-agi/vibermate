@@ -440,16 +440,17 @@ type CaptureRunRequest struct {
 }
 
 type CaptureRunGrant struct {
-	Run                  capturerun.LaunchGrant
-	CatalogRevision      clientadapter.CatalogRevision
-	Recognition          clientadapter.Recognition
-	Adapter              *clientadapter.Evidence
-	Signer               *clientadapter.SignerEvidence
-	LaunchRecipe         clientadapter.LaunchRecipe
-	ExecutablePath       string
-	ProxyAddress         string
-	RootPEMPath          string
-	ProtectedAuthorities []string
+	Run                          capturerun.LaunchGrant
+	CatalogRevision              clientadapter.CatalogRevision
+	Recognition                  clientadapter.Recognition
+	Adapter                      *clientadapter.Evidence
+	Signer                       *clientadapter.SignerEvidence
+	LaunchRecipe                 clientadapter.LaunchRecipe
+	ExecutablePath               string
+	ProxyAddress                 string
+	RootPEMPath                  string
+	ProtectedAuthorities         []string
+	ManagedCredentialAuthorities []string
 }
 
 func (issuer *Issuer) IssueCaptureRun(
@@ -534,6 +535,11 @@ func (issuer *Issuer) IssueCaptureRun(
 		ProxyAddress:         issuer.proxyOrigin,
 		RootPEMPath:          rootPath,
 		ProtectedAuthorities: append([]string{}, authorities...),
+		// Every active Access in the current production slice owns a managed
+		// account-backed route. Keeping this separate from the MITM allowlist
+		// prevents a future client-passthrough route from inheriting a local
+		// placeholder credential merely because its origin is decryptable.
+		ManagedCredentialAuthorities: append([]string{}, authorities...),
 	}, nil
 }
 

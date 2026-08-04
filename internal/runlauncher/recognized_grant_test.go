@@ -47,12 +47,13 @@ func TestARecognizedGrantIsAcceptedByTheLauncher(t *testing.T) {
 			LaunchRecipe:    clientadapter.LaunchNodeEnvProxy,
 			SignedPath:      "/opt/example/claude",
 		},
-		ExecutablePath:       "/opt/example/claude",
-		ProxyAddress:         "http://127.0.0.1:32123",
-		ProxyToken:           "proxy-capability",
-		RunCapability:        "run-capability",
-		RootPEMPath:          "/tmp/root.pem",
-		ProtectedAuthorities: []string{},
+		ExecutablePath:               "/opt/example/claude",
+		ProxyAddress:                 "http://127.0.0.1:32123",
+		ProxyToken:                   "proxy-capability",
+		RunCapability:                "run-capability",
+		RootPEMPath:                  "/tmp/root.pem",
+		ProtectedAuthorities:         []string{},
+		ManagedCredentialAuthorities: []string{},
 	}
 	if err := validateGrant(grant); err != nil {
 		t.Fatalf("a recognized grant was refused: %v", err)
@@ -65,19 +66,76 @@ func TestARootBearingGrantWithNeitherEvidenceIsRefused(t *testing.T) {
 	t.Parallel()
 
 	grant := capturecontrol.LaunchGrant{
-		Run:                  recognizedRun(),
-		CatalogRevision:      4,
-		LaunchRecipe:         clientadapter.LaunchNodeEnvProxy,
-		Recognition:          clientadapter.RecognitionRecognized,
-		ExecutablePath:       "/opt/example/claude",
-		ProxyAddress:         "http://127.0.0.1:32123",
-		ProxyToken:           "proxy-capability",
-		RunCapability:        "run-capability",
-		RootPEMPath:          "/tmp/root.pem",
-		ProtectedAuthorities: []string{},
+		Run:                          recognizedRun(),
+		CatalogRevision:              4,
+		LaunchRecipe:                 clientadapter.LaunchNodeEnvProxy,
+		Recognition:                  clientadapter.RecognitionRecognized,
+		ExecutablePath:               "/opt/example/claude",
+		ProxyAddress:                 "http://127.0.0.1:32123",
+		ProxyToken:                   "proxy-capability",
+		RunCapability:                "run-capability",
+		RootPEMPath:                  "/tmp/root.pem",
+		ProtectedAuthorities:         []string{},
+		ManagedCredentialAuthorities: []string{},
 	}
 	if err := validateGrant(grant); err == nil {
 		t.Fatal("a Root-bearing grant with no evidence at all was accepted")
+	}
+}
+
+func TestManagedCredentialAuthoritiesAreAUniqueProtectedSubset(t *testing.T) {
+	t.Parallel()
+
+	for _, testCase := range []struct {
+		name    string
+		managed []string
+	}{
+		{
+			name:    "outside protected set",
+			managed: []string{"other.example:443"},
+		},
+		{
+			name: "duplicate",
+			managed: []string{
+				"api.anthropic.com:443",
+				"api.anthropic.com:443",
+			},
+		},
+	} {
+		testCase := testCase
+		t.Run(testCase.name, func(t *testing.T) {
+			t.Parallel()
+
+			grant := capturecontrol.LaunchGrant{
+				Run:             recognizedRun(),
+				CatalogRevision: 4,
+				LaunchRecipe:    clientadapter.LaunchNodeEnvProxy,
+				Recognition:     clientadapter.RecognitionRecognized,
+				Signer: &capturecontrol.ClientSignerView{
+					ID:              "claude-code",
+					Revision:        1,
+					CatalogRevision: 4,
+					InstallShape:    clientadapter.InstallNativeSingleBinary,
+					LaunchRecipe:    clientadapter.LaunchNodeEnvProxy,
+					SignedPath:      "/opt/example/claude",
+				},
+				ExecutablePath: "/opt/example/claude",
+				ProxyAddress:   "http://127.0.0.1:32123",
+				ProxyToken:     "proxy-capability",
+				RunCapability:  "run-capability",
+				RootPEMPath:    "/tmp/root.pem",
+				ProtectedAuthorities: []string{
+					"api.anthropic.com:443",
+				},
+				ManagedCredentialAuthorities: append(
+					[]string(nil),
+					testCase.managed...,
+				),
+			}
+			if err := validateGrant(grant); err == nil {
+				t.Fatalf("%s managed authorities were accepted", testCase.name)
+			}
+		})
 	}
 }
 
@@ -135,12 +193,13 @@ func TestSignerEvidenceMustAgreeWithItsGrant(t *testing.T) {
 					LaunchRecipe:    clientadapter.LaunchNodeEnvProxy,
 					SignedPath:      "/opt/example/claude",
 				},
-				ExecutablePath:       "/opt/example/claude",
-				ProxyAddress:         "http://127.0.0.1:32123",
-				ProxyToken:           "proxy-capability",
-				RunCapability:        "run-capability",
-				RootPEMPath:          "/tmp/root.pem",
-				ProtectedAuthorities: []string{},
+				ExecutablePath:               "/opt/example/claude",
+				ProxyAddress:                 "http://127.0.0.1:32123",
+				ProxyToken:                   "proxy-capability",
+				RunCapability:                "run-capability",
+				RootPEMPath:                  "/tmp/root.pem",
+				ProtectedAuthorities:         []string{},
+				ManagedCredentialAuthorities: []string{},
 			}
 			testCase.mutate(&grant)
 			if err := validateGrant(grant); err == nil {

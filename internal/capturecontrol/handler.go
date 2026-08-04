@@ -199,6 +199,10 @@ func (handler *Handler) create(
 		RunCapability:        grant.Run.ControlCapability.Value(),
 		RootPEMPath:          grant.RootPEMPath,
 		ProtectedAuthorities: append([]string{}, grant.ProtectedAuthorities...),
+		ManagedCredentialAuthorities: append(
+			[]string{},
+			grant.ManagedCredentialAuthorities...,
+		),
 	})
 }
 

@@ -56,18 +56,23 @@ type ClientSignerView struct {
 // sensitive and memory-only; none of the nested evidence includes internal
 // release digests or feature flags.
 type LaunchGrant struct {
-	Run                  CaptureRunView                `json:"run"`
-	CatalogRevision      clientadapter.CatalogRevision `json:"catalogRevision"`
-	Recognition          clientadapter.Recognition     `json:"recognition"`
-	Adapter              *ClientAdapterView            `json:"adapter,omitempty"`
-	Signer               *ClientSignerView             `json:"signer,omitempty"`
-	LaunchRecipe         clientadapter.LaunchRecipe    `json:"launchRecipe"`
-	ExecutablePath       string                        `json:"executablePath"`
-	ProxyAddress         string                        `json:"proxyAddress"`
-	ProxyToken           string                        `json:"proxyToken"`
-	RunCapability        string                        `json:"runCapability"`
-	RootPEMPath          string                        `json:"rootPemPath,omitempty"`
-	ProtectedAuthorities []string                      `json:"protectedAuthorities"`
+	Run             CaptureRunView                `json:"run"`
+	CatalogRevision clientadapter.CatalogRevision `json:"catalogRevision"`
+	Recognition     clientadapter.Recognition     `json:"recognition"`
+	Adapter         *ClientAdapterView            `json:"adapter,omitempty"`
+	Signer          *ClientSignerView             `json:"signer,omitempty"`
+	LaunchRecipe    clientadapter.LaunchRecipe    `json:"launchRecipe"`
+	ExecutablePath  string                        `json:"executablePath"`
+	ProxyAddress    string                        `json:"proxyAddress"`
+	ProxyToken      string                        `json:"proxyToken"`
+	RunCapability   string                        `json:"runCapability"`
+	RootPEMPath     string                        `json:"rootPemPath,omitempty"`
+	// ProtectedAuthorities is the exact MITM/NO_PROXY boundary. A member does
+	// not by itself authorize replacing the client's model-service credential.
+	ProtectedAuthorities []string `json:"protectedAuthorities"`
+	// ManagedCredentialAuthorities is the subset for which this launch may replace
+	// ambient client authentication with a non-provider local placeholder.
+	ManagedCredentialAuthorities []string `json:"managedCredentialAuthorities"`
 }
 
 // CaptureRunViewOf projects a trusted lifecycle view onto the contracted
@@ -191,6 +196,7 @@ func (grant LaunchGrant) Validate() error {
 		grant.RunCapability == "" ||
 		grant.ProxyToken == grant.RunCapability ||
 		grant.ProtectedAuthorities == nil ||
+		grant.ManagedCredentialAuthorities == nil ||
 		grant.Run.CatalogRevision != grant.CatalogRevision ||
 		grant.Run.ClientRecognition != grant.Recognition {
 		return errors.New("CaptureRun launch grant is incomplete")
@@ -238,6 +244,28 @@ func (grant LaunchGrant) Validate() error {
 		}
 	} else if grant.RootPEMPath != "" {
 		return errors.New("generic CaptureRun launch grant carries a local Root")
+	}
+	protected := make(map[string]struct{}, len(grant.ProtectedAuthorities))
+	for _, authority := range grant.ProtectedAuthorities {
+		if authority == "" {
+			return errors.New("CaptureRun protected authority is empty")
+		}
+		protected[authority] = struct{}{}
+	}
+	managed := make(
+		map[string]struct{},
+		len(grant.ManagedCredentialAuthorities),
+	)
+	for _, authority := range grant.ManagedCredentialAuthorities {
+		if _, allowed := protected[authority]; !allowed {
+			return errors.New(
+				"CaptureRun managed authority is outside the protected set",
+			)
+		}
+		if _, duplicate := managed[authority]; duplicate {
+			return errors.New("CaptureRun managed authority is duplicated")
+		}
+		managed[authority] = struct{}{}
 	}
 	return nil
 }

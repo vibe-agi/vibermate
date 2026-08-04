@@ -30,13 +30,29 @@ func TestBuildEnvironmentPinsProxyAndRemovesProtectedBypasses(t *testing.T) {
 		RootPEMPath:     "/tmp/root.pem",
 		ProtectedAuthorities: []string{
 			"api.anthropic.com:443",
+			"ambient.invalid:443",
 			"192.0.2.8:8443",
 		},
+		ManagedCredentialAuthorities: []string{"ambient.invalid:443"},
 	}
 	base := []string{
 		"PATH=/usr/bin:/bin",
+		"UNRELATED=value",
 		"HTTP_PROXY=http://untrusted.invalid",
 		"NODE_EXTRA_CA_CERTS=/tmp/untrusted.pem",
+		"ANTHROPIC_API_KEY=ambient-api-key",
+		"Anthropic_Auth_Token=mixed-case-ambient-auth-token",
+		"ANTHROPIC_AUTH_TOKEN=ambient-auth-token",
+		"CLAUDE_CODE_OAUTH_TOKEN=ambient-oauth-token",
+		"ANTHROPIC_BASE_URL=https://ambient.invalid",
+		"ANTHROPIC_BEDROCK_BASE_URL=https://bedrock.invalid",
+		"ANTHROPIC_CUSTOM_HEADERS=x-ambient: secret",
+		"ANTHROPIC_FOUNDRY_BASE_URL=https://foundry.invalid",
+		"ANTHROPIC_VERTEX_BASE_URL=https://vertex.invalid",
+		"CLAUDE_CODE_USE_BEDROCK=1",
+		"CLAUDE_CODE_USE_FOUNDRY=1",
+		"CLAUDE_CODE_USE_VERTEX=1",
+		"CLAUDE_CONFIG_DIR=/tmp/client-state",
 		"VIBERMATE_CONNECTION=office",
 		"VIBERMATE_CREDENTIAL_FILE=/tmp/control-credential",
 		"VIBERMATE_TOKEN=raw-control-secret",
@@ -69,8 +85,28 @@ func TestBuildEnvironmentPinsProxyAndRemovesProtectedBypasses(t *testing.T) {
 	}
 	if values["NODE_EXTRA_CA_CERTS"] != "/tmp/root.pem" ||
 		values["NODE_USE_ENV_PROXY"] != "1" ||
+		values["ANTHROPIC_API_KEY"] != "vibermate-local-proxy" ||
+		values["CLAUDE_CONFIG_DIR"] != "/tmp/client-state" ||
+		values["UNRELATED"] != "value" ||
 		values["VIBERMATE_CAPTURE_RUN_ID"] != "run-1" {
 		t.Fatalf("managed environment = %+v", values)
+	}
+	for _, forbidden := range []string{
+		"ANTHROPIC_AUTH_TOKEN",
+		"Anthropic_Auth_Token",
+		"CLAUDE_CODE_OAUTH_TOKEN",
+		"ANTHROPIC_BASE_URL",
+		"ANTHROPIC_BEDROCK_BASE_URL",
+		"ANTHROPIC_CUSTOM_HEADERS",
+		"ANTHROPIC_FOUNDRY_BASE_URL",
+		"ANTHROPIC_VERTEX_BASE_URL",
+		"CLAUDE_CODE_USE_BEDROCK",
+		"CLAUDE_CODE_USE_FOUNDRY",
+		"CLAUDE_CODE_USE_VERTEX",
+	} {
+		if _, exists := values[forbidden]; exists {
+			t.Fatalf("fixed Claude inherited conflicting %s", forbidden)
+		}
 	}
 	for _, forbidden := range []string{
 		"VIBERMATE_CONNECTION",
@@ -100,14 +136,15 @@ func TestBuildEnvironmentDoesNotTrustRootForGenericClient(t *testing.T) {
 			clientadapter.RecognitionUnknown,
 			nil,
 		),
-		CatalogRevision:      7,
-		LaunchRecipe:         clientadapter.LaunchGeneric,
-		Recognition:          clientadapter.RecognitionUnknown,
-		ExecutablePath:       "/tmp/agent",
-		ProxyAddress:         "http://127.0.0.1:43210",
-		ProxyToken:           "proxy-capability",
-		RunCapability:        "run-capability",
-		ProtectedAuthorities: []string{},
+		CatalogRevision:              7,
+		LaunchRecipe:                 clientadapter.LaunchGeneric,
+		Recognition:                  clientadapter.RecognitionUnknown,
+		ExecutablePath:               "/tmp/agent",
+		ProxyAddress:                 "http://127.0.0.1:43210",
+		ProxyToken:                   "proxy-capability",
+		RunCapability:                "run-capability",
+		ProtectedAuthorities:         []string{},
+		ManagedCredentialAuthorities: []string{},
 	}
 	environment, err := buildEnvironment(
 		[]string{
@@ -125,6 +162,140 @@ func TestBuildEnvironmentDoesNotTrustRootForGenericClient(t *testing.T) {
 	}
 	if _, exists := values["NODE_USE_ENV_PROXY"]; exists {
 		t.Fatal("generic client inherited adapter-specific proxy behavior")
+	}
+}
+
+func TestBuildEnvironmentPreservesClientAuthOutsideManagedAuthority(t *testing.T) {
+	t.Parallel()
+
+	for _, testCase := range []struct {
+		name        string
+		recipe      clientadapter.LaunchRecipe
+		base        []string
+		want        map[string]string
+		managedHost string
+	}{
+		{
+			name:   "Claude",
+			recipe: clientadapter.LaunchNodeEnvProxy,
+			base: []string{
+				"ANTHROPIC_API_KEY=client-api-key",
+				"CLAUDE_CODE_OAUTH_TOKEN=client-oauth-token",
+			},
+			want: map[string]string{
+				"ANTHROPIC_API_KEY":       "client-api-key",
+				"CLAUDE_CODE_OAUTH_TOKEN": "client-oauth-token",
+			},
+			managedHost: "managed.example:443",
+		},
+		{
+			name:   "Codex",
+			recipe: clientadapter.LaunchSSLCertFile,
+			base: []string{
+				"CODEX_API_KEY=client-api-key",
+				"OPENAI_BASE_URL=https://api.openai.com/v1",
+			},
+			want: map[string]string{
+				"CODEX_API_KEY":   "client-api-key",
+				"OPENAI_BASE_URL": "https://api.openai.com/v1",
+			},
+			managedHost: "managed.example:443",
+		},
+	} {
+		testCase := testCase
+		t.Run(testCase.name, func(t *testing.T) {
+			t.Parallel()
+			adapter := testAdapterEvidence(testCase.recipe)
+			grant := capturecontrol.LaunchGrant{
+				Run: testCaptureRunView(
+					"run-client-auth",
+					clientadapter.RecognitionVerified,
+					adapter,
+				),
+				CatalogRevision:              7,
+				LaunchRecipe:                 testCase.recipe,
+				Recognition:                  clientadapter.RecognitionVerified,
+				Adapter:                      adapter,
+				ExecutablePath:               "/tmp/agent",
+				ProxyAddress:                 "http://127.0.0.1:43210",
+				ProxyToken:                   "proxy-capability",
+				RunCapability:                "run-capability",
+				RootPEMPath:                  "/tmp/root.pem",
+				ProtectedAuthorities:         []string{testCase.managedHost},
+				ManagedCredentialAuthorities: []string{testCase.managedHost},
+			}
+			environment, err := buildEnvironment(testCase.base, grant)
+			if err != nil {
+				t.Fatal(err)
+			}
+			values := environmentMap(environment)
+			for key, want := range testCase.want {
+				if values[key] != want {
+					t.Fatalf("%s = %q, want %q", key, values[key], want)
+				}
+			}
+		})
+	}
+}
+
+func TestBuildEnvironmentBootstrapsDefaultManagedClientOrigins(t *testing.T) {
+	t.Parallel()
+
+	for _, testCase := range []struct {
+		name             string
+		recipe           clientadapter.LaunchRecipe
+		managedAuthority string
+		ambientKey       string
+		placeholderKey   string
+	}{
+		{
+			name:             "Claude",
+			recipe:           clientadapter.LaunchNodeEnvProxy,
+			managedAuthority: "api.anthropic.com:443",
+			ambientKey:       "ANTHROPIC_API_KEY=client-api-key",
+			placeholderKey:   "ANTHROPIC_API_KEY",
+		},
+		{
+			name:             "Codex",
+			recipe:           clientadapter.LaunchSSLCertFile,
+			managedAuthority: "api.openai.com:443",
+			ambientKey:       "CODEX_API_KEY=client-api-key",
+			placeholderKey:   "CODEX_API_KEY",
+		},
+	} {
+		testCase := testCase
+		t.Run(testCase.name, func(t *testing.T) {
+			t.Parallel()
+			adapter := testAdapterEvidence(testCase.recipe)
+			grant := capturecontrol.LaunchGrant{
+				Run: testCaptureRunView(
+					"run-managed-default",
+					clientadapter.RecognitionVerified,
+					adapter,
+				),
+				CatalogRevision:              7,
+				LaunchRecipe:                 testCase.recipe,
+				Recognition:                  clientadapter.RecognitionVerified,
+				Adapter:                      adapter,
+				ExecutablePath:               "/tmp/agent",
+				ProxyAddress:                 "http://127.0.0.1:43210",
+				ProxyToken:                   "proxy-capability",
+				RunCapability:                "run-capability",
+				RootPEMPath:                  "/tmp/root.pem",
+				ProtectedAuthorities:         []string{testCase.managedAuthority},
+				ManagedCredentialAuthorities: []string{testCase.managedAuthority},
+			}
+			environment, err := buildEnvironment(
+				[]string{testCase.ambientKey},
+				grant,
+			)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got := environmentMap(environment)[testCase.placeholderKey]; got != "vibermate-local-proxy" {
+				t.Fatalf("%s = %q", testCase.placeholderKey, got)
+			}
+		})
 	}
 }
 
@@ -149,7 +320,9 @@ func TestBuildEnvironmentIsolatesFixedCodexInputs(t *testing.T) {
 		RootPEMPath:     "/tmp/root.pem",
 		ProtectedAuthorities: []string{
 			"api.openai.com:443",
+			"ambient.invalid:443",
 		},
+		ManagedCredentialAuthorities: []string{"ambient.invalid:443"},
 	}
 	base := []string{
 		"PATH=/usr/bin:/bin",
@@ -214,16 +387,17 @@ func TestBuildEnvironmentRejectsUnboundAdapterRecipes(t *testing.T) {
 			clientadapter.RecognitionVerified,
 			adapter,
 		),
-		CatalogRevision:      7,
-		LaunchRecipe:         clientadapter.LaunchSSLCertFile,
-		Recognition:          clientadapter.RecognitionVerified,
-		Adapter:              adapter,
-		ExecutablePath:       "/tmp/codex.js",
-		ProxyAddress:         "http://127.0.0.1:43210",
-		ProxyToken:           "proxy-capability",
-		RunCapability:        "run-capability",
-		RootPEMPath:          "/tmp/root.pem",
-		ProtectedAuthorities: []string{},
+		CatalogRevision:              7,
+		LaunchRecipe:                 clientadapter.LaunchSSLCertFile,
+		Recognition:                  clientadapter.RecognitionVerified,
+		Adapter:                      adapter,
+		ExecutablePath:               "/tmp/codex.js",
+		ProxyAddress:                 "http://127.0.0.1:43210",
+		ProxyToken:                   "proxy-capability",
+		RunCapability:                "run-capability",
+		RootPEMPath:                  "/tmp/root.pem",
+		ProtectedAuthorities:         []string{},
+		ManagedCredentialAuthorities: []string{},
 	}
 	for _, test := range []struct {
 		name   string
