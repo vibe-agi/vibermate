@@ -198,13 +198,15 @@ func TestToolApprovalSpecUsesTheSelectedClientToolAndBoundedProof(
 				t.Fatalf("invalid proof specification: %+v", spec)
 			}
 			if test.clientID == acceptanceClientCodexCLI &&
-				(!strings.Contains(spec.prompt, "VIBEMATE_TOOL_EXEC_OK") ||
+				(!strings.Contains(spec.prompt, "await tools.exec_command") ||
+					!strings.Contains(spec.prompt, "workdir:") ||
+					!strings.Contains(spec.prompt, "VIBEMATE_TOOL_EXEC_OK") ||
 					!strings.Contains(
 						spec.prompt,
-						"Treat that output as success and do not call any tool again",
+						"Treat its output as success and do not call any tool again",
 					)) {
 				t.Fatalf(
-					"Codex proof specification omitted deterministic success output: %+v",
+					"Codex proof specification omitted typed exec orchestration: %+v",
 					spec,
 				)
 			}

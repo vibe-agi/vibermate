@@ -3405,17 +3405,26 @@ func newToolApprovalSpec(
 		)
 	case acceptanceClientCodexCLI:
 		toolName = "exec"
+		command := fmt.Sprintf(
+			"printf %%s %s > approval-proof.txt && printf %%s %s",
+			proofContent,
+			toolOutput,
+		)
+		execSource := fmt.Sprintf(
+			"const result = await tools.exec_command({cmd:%q,workdir:%q}); text(result.output);",
+			command,
+			filepath.Clean(workingDirectory),
+		)
 		prompt = fmt.Sprintf(
 			"In working directory %q, the expected proof file is %q. "+
-				"Use the %s tool exactly once with exactly this input: "+
-				"`printf %%s %s > approval-proof.txt && printf %%s %s`. "+
-				"Treat that output as success and do not call any tool again. "+
+				"Use the %s tool exactly once with exactly this JavaScript source, "+
+				"without Markdown fences: %s "+
+				"Treat its output as success and do not call any tool again. "+
 				"After it succeeds, reply exactly %s.",
 			filepath.Clean(workingDirectory),
 			proofPath,
 			toolName,
-			proofContent,
-			toolOutput,
+			execSource,
 			marker,
 		)
 	default:
