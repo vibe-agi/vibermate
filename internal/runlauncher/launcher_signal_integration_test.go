@@ -56,15 +56,19 @@ while :; do sleep 1; done
 		expectedCommand: []string{"codex"},
 		recipe:          clientadapter.LaunchSSLCertFile,
 		recognition:     clientadapter.RecognitionVerified,
-		adapter: &capturecontrol.ClientAdapterView{
-			ID:              "codex-cli",
-			Revision:        1,
-			Version:         "0.145.0",
-			CatalogRevision: 7,
-			Source: capturecontrol.
-				ClientAdapterSourcePrelaunchDigestCatalog,
-			InstallShape: clientadapter.InstallNPMWrapperNativeChild,
-			LaunchRecipe: clientadapter.LaunchSSLCertFile,
+		adapter: &capturecontrol.ClientLaunchAdapterView{
+			ClientAdapterView: capturecontrol.ClientAdapterView{
+				ID:              "codex-cli",
+				Revision:        1,
+				Version:         "0.145.0",
+				CatalogRevision: 7,
+				Source: capturecontrol.
+					ClientAdapterSourcePrelaunchDigestCatalog,
+				InstallShape: clientadapter.InstallNPMWrapperNativeChild,
+				LaunchRecipe: clientadapter.LaunchSSLCertFile,
+			},
+			StreamingFallbackPolicy: clientadapter.
+				StreamingFallbackClientDefault,
 		},
 		authorities: []string{
 			"api.openai.com:443",

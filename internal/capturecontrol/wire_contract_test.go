@@ -60,7 +60,7 @@ func TestCaptureRunPOSTResponsesMatchTheClosedOpenAPIWire(t *testing.T) {
 		"id",
 	}
 	runObject := exactJSONObject(t, grantObject["run"], runKeys)
-	adapterKeys := []string{
+	runAdapterKeys := []string{
 		"catalogRevision",
 		"id",
 		"installShape",
@@ -69,8 +69,12 @@ func TestCaptureRunPOSTResponsesMatchTheClosedOpenAPIWire(t *testing.T) {
 		"source",
 		"version",
 	}
-	exactJSONObject(t, grantObject["adapter"], adapterKeys)
-	exactJSONObject(t, runObject["clientAdapter"], adapterKeys)
+	launchAdapterKeys := append(
+		append([]string{}, runAdapterKeys...),
+		"streamingFallbackPolicy",
+	)
+	exactJSONObject(t, grantObject["adapter"], launchAdapterKeys)
+	exactJSONObject(t, runObject["clientAdapter"], runAdapterKeys)
 	for _, forbidden := range [][]byte{
 		[]byte(`"releaseSha256"`),
 		[]byte(`"features"`),
@@ -91,7 +95,8 @@ func TestCaptureRunPOSTResponsesMatchTheClosedOpenAPIWire(t *testing.T) {
 		grant.Run.CatalogRevision != grant.CatalogRevision ||
 		grant.Adapter == nil ||
 		grant.Adapter.Source !=
-			capturecontrol.ClientAdapterSourcePrelaunchDigestCatalog {
+			capturecontrol.ClientAdapterSourcePrelaunchDigestCatalog ||
+		grant.Adapter.StreamingFallbackPolicy != "core_owned" {
 		t.Fatalf("verified launch grant = %+v", grant)
 	}
 

@@ -45,6 +45,7 @@ func TestLauncherSupervisesExactChildAndCaptureRunLifecycle(t *testing.T) {
   printf 'client_key=%s\n' "$ANTHROPIC_API_KEY"
   printf 'client_token=%s\n' "$CLAUDE_CODE_OAUTH_TOKEN"
   printf 'client_origin=%s\n' "$ANTHROPIC_BASE_URL"
+  printf 'fallback=%s\n' "$CLAUDE_CODE_DISABLE_NONSTREAMING_FALLBACK"
 } > "$LAUNCH_TEST_OUTPUT"
 sleep 0.08
 exit 7
@@ -68,15 +69,19 @@ exit 7
 		userLabel:   "alice",
 		recipe:      clientadapter.LaunchNodeEnvProxy,
 		recognition: clientadapter.RecognitionVerified,
-		adapter: &capturecontrol.ClientAdapterView{
-			ID:              "claude-code",
-			Revision:        1,
-			Version:         "test",
-			CatalogRevision: 7,
-			Source: capturecontrol.
-				ClientAdapterSourcePrelaunchDigestCatalog,
-			InstallShape: clientadapter.InstallNativeSingleBinary,
-			LaunchRecipe: clientadapter.LaunchNodeEnvProxy,
+		adapter: &capturecontrol.ClientLaunchAdapterView{
+			ClientAdapterView: capturecontrol.ClientAdapterView{
+				ID:              "claude-code",
+				Revision:        1,
+				Version:         "test",
+				CatalogRevision: 7,
+				Source: capturecontrol.
+					ClientAdapterSourcePrelaunchDigestCatalog,
+				InstallShape: clientadapter.InstallNativeSingleBinary,
+				LaunchRecipe: clientadapter.LaunchNodeEnvProxy,
+			},
+			StreamingFallbackPolicy: clientadapter.
+				StreamingFallbackCoreOwned,
 		},
 		authorities: []string{
 			"api.anthropic.com:443",
@@ -149,7 +154,8 @@ exit 7
 		lines["node_proxy"] != "1" ||
 		lines["client_key"] != "vibermate-local-proxy" ||
 		lines["client_token"] != "" ||
-		lines["client_origin"] != "" {
+		lines["client_origin"] != "" ||
+		lines["fallback"] != "1" {
 		t.Fatalf("captured child output = %+v", lines)
 	}
 	control.mu.Lock()
@@ -270,7 +276,7 @@ type controlFixture struct {
 	userLabel       string
 	recipe          clientadapter.LaunchRecipe
 	recognition     clientadapter.Recognition
-	adapter         *capturecontrol.ClientAdapterView
+	adapter         *capturecontrol.ClientLaunchAdapterView
 	authorities     []string
 
 	mu             sync.Mutex
@@ -359,6 +365,11 @@ func (fixture *controlFixture) runView(processID int) capturecontrol.CaptureRunV
 	if fixture.adapter != nil {
 		state = clientadapter.StatusVerified
 	}
+	var runAdapter *capturecontrol.ClientAdapterView
+	if fixture.adapter != nil {
+		identity := fixture.adapter.ClientAdapterView
+		runAdapter = &identity
+	}
 	return capturecontrol.CaptureRunView{
 		ID:                 "capture-run-1",
 		ExecutableLabel:    "agent",
@@ -369,7 +380,7 @@ func (fixture *controlFixture) runView(processID int) capturecontrol.CaptureRunV
 		ClientAdapterState: state,
 		ClientRecognition:  fixture.recognition,
 		CatalogRevision:    7,
-		ClientAdapter:      fixture.adapter,
+		ClientAdapter:      runAdapter,
 	}
 }
 

@@ -41,6 +41,14 @@ type ClientAdapterView struct {
 	LaunchRecipe    clientadapter.LaunchRecipe    `json:"launchRecipe"`
 }
 
+// ClientLaunchAdapterView adds only the exact-version behavior the launcher
+// must enforce. CaptureRun audit projections intentionally retain the smaller
+// identity-only ClientAdapterView.
+type ClientLaunchAdapterView struct {
+	ClientAdapterView
+	StreamingFallbackPolicy clientadapter.StreamingFallbackPolicy `json:"streamingFallbackPolicy"`
+}
+
 // ClientSignerView freezes the signer wire independently of the internal
 // evidence type so future verifier fields cannot silently expand the grant.
 type ClientSignerView struct {
@@ -59,7 +67,7 @@ type LaunchGrant struct {
 	Run             CaptureRunView                `json:"run"`
 	CatalogRevision clientadapter.CatalogRevision `json:"catalogRevision"`
 	Recognition     clientadapter.Recognition     `json:"recognition"`
-	Adapter         *ClientAdapterView            `json:"adapter,omitempty"`
+	Adapter         *ClientLaunchAdapterView      `json:"adapter,omitempty"`
 	Signer          *ClientSignerView             `json:"signer,omitempty"`
 	LaunchRecipe    clientadapter.LaunchRecipe    `json:"launchRecipe"`
 	ExecutablePath  string                        `json:"executablePath"`
@@ -111,6 +119,20 @@ func clientAdapterViewOf(
 		Source:          ClientAdapterSourcePrelaunchDigestCatalog,
 		InstallShape:    evidence.InstallShape,
 		LaunchRecipe:    evidence.LaunchRecipe,
+	}
+}
+
+func clientLaunchAdapterViewOf(
+	evidence *clientadapter.Evidence,
+) *ClientLaunchAdapterView {
+	identity := clientAdapterViewOf(evidence)
+	if identity == nil {
+		return nil
+	}
+	return &ClientLaunchAdapterView{
+		ClientAdapterView: *identity,
+		StreamingFallbackPolicy: clientadapter.
+			StreamingFallbackPolicyOf(evidence),
 	}
 }
 
@@ -175,6 +197,20 @@ func (evidence ClientAdapterView) validate() error {
 	return nil
 }
 
+func (evidence ClientLaunchAdapterView) validate() error {
+	if err := evidence.ClientAdapterView.validate(); err != nil ||
+		!evidence.StreamingFallbackPolicy.Valid() {
+		return errors.New("client launch adapter wire evidence is invalid")
+	}
+	if evidence.StreamingFallbackPolicy ==
+		clientadapter.StreamingFallbackCoreOwned &&
+		(evidence.ID != "claude-code" ||
+			evidence.LaunchRecipe != clientadapter.LaunchNodeEnvProxy) {
+		return errors.New("client adapter fallback policy is unsupported")
+	}
+	return nil
+}
+
 func (evidence ClientSignerView) validate() error {
 	if evidence.ID == "" || !evidence.Revision.Valid() ||
 		!evidence.CatalogRevision.Valid() || !evidence.InstallShape.Valid() ||
@@ -214,7 +250,7 @@ func (grant LaunchGrant) Validate() error {
 			grant.LaunchRecipe == clientadapter.LaunchGeneric ||
 			grant.Recognition != clientadapter.RecognitionVerified ||
 			grant.Run.ClientAdapter == nil ||
-			*grant.Run.ClientAdapter != *grant.Adapter {
+			*grant.Run.ClientAdapter != grant.Adapter.ClientAdapterView {
 			return errors.New(
 				"CaptureRun launch grant adapter evidence is inconsistent",
 			)

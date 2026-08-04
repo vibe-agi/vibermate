@@ -52,6 +52,7 @@ func TestBuildEnvironmentPinsProxyAndRemovesProtectedBypasses(t *testing.T) {
 		"CLAUDE_CODE_USE_BEDROCK=1",
 		"CLAUDE_CODE_USE_FOUNDRY=1",
 		"CLAUDE_CODE_USE_VERTEX=1",
+		"CLAUDE_CODE_DISABLE_NONSTREAMING_FALLBACK=0",
 		"CLAUDE_CONFIG_DIR=/tmp/client-state",
 		"VIBERMATE_CONNECTION=office",
 		"VIBERMATE_CREDENTIAL_FILE=/tmp/control-credential",
@@ -86,6 +87,7 @@ func TestBuildEnvironmentPinsProxyAndRemovesProtectedBypasses(t *testing.T) {
 	if values["NODE_EXTRA_CA_CERTS"] != "/tmp/root.pem" ||
 		values["NODE_USE_ENV_PROXY"] != "1" ||
 		values["ANTHROPIC_API_KEY"] != "vibermate-local-proxy" ||
+		values[claudeDisableNonStreamingFallback] != "1" ||
 		values["CLAUDE_CONFIG_DIR"] != "/tmp/client-state" ||
 		values["UNRELATED"] != "value" ||
 		values["VIBERMATE_CAPTURE_RUN_ID"] != "run-1" {
@@ -150,6 +152,7 @@ func TestBuildEnvironmentDoesNotTrustRootForGenericClient(t *testing.T) {
 		[]string{
 			"NODE_EXTRA_CA_CERTS=/tmp/inherited.pem",
 			"NODE_USE_ENV_PROXY=1",
+			"CLAUDE_CODE_DISABLE_NONSTREAMING_FALLBACK=0",
 		},
 		grant,
 	)
@@ -162,6 +165,9 @@ func TestBuildEnvironmentDoesNotTrustRootForGenericClient(t *testing.T) {
 	}
 	if _, exists := values["NODE_USE_ENV_PROXY"]; exists {
 		t.Fatal("generic client inherited adapter-specific proxy behavior")
+	}
+	if values[claudeDisableNonStreamingFallback] != "0" {
+		t.Fatal("generic client did not keep its own streaming fallback policy")
 	}
 }
 
@@ -454,34 +460,44 @@ func environmentMap(environment []string) map[string]string {
 
 func testAdapterEvidence(
 	recipe clientadapter.LaunchRecipe,
-) *capturecontrol.ClientAdapterView {
+) *capturecontrol.ClientLaunchAdapterView {
 	id := "claude-code"
 	shape := clientadapter.InstallNativeSingleBinary
+	fallbackPolicy := clientadapter.StreamingFallbackCoreOwned
 	if recipe == clientadapter.LaunchSSLCertFile {
 		id = "codex-cli"
 		shape = clientadapter.InstallNPMWrapperNativeChild
+		fallbackPolicy = clientadapter.StreamingFallbackClientDefault
 	}
-	return &capturecontrol.ClientAdapterView{
-		ID:              id,
-		Revision:        1,
-		Version:         "test",
-		CatalogRevision: 7,
-		Source: capturecontrol.
-			ClientAdapterSourcePrelaunchDigestCatalog,
-		InstallShape: shape,
-		LaunchRecipe: recipe,
+	return &capturecontrol.ClientLaunchAdapterView{
+		ClientAdapterView: capturecontrol.ClientAdapterView{
+			ID:              id,
+			Revision:        1,
+			Version:         "test",
+			CatalogRevision: 7,
+			Source: capturecontrol.
+				ClientAdapterSourcePrelaunchDigestCatalog,
+			InstallShape: shape,
+			LaunchRecipe: recipe,
+		},
+		StreamingFallbackPolicy: fallbackPolicy,
 	}
 }
 
 func testCaptureRunView(
 	id string,
 	recognition clientadapter.Recognition,
-	adapter *capturecontrol.ClientAdapterView,
+	adapter *capturecontrol.ClientLaunchAdapterView,
 ) capturecontrol.CaptureRunView {
 	createdAt := time.Date(2026, 8, 3, 8, 0, 0, 0, time.UTC)
 	state := clientadapter.StatusGeneric
 	if adapter != nil {
 		state = clientadapter.StatusVerified
+	}
+	var runAdapter *capturecontrol.ClientAdapterView
+	if adapter != nil {
+		identity := adapter.ClientAdapterView
+		runAdapter = &identity
 	}
 	return capturecontrol.CaptureRunView{
 		ID:                 id,
@@ -492,6 +508,6 @@ func testCaptureRunView(
 		ClientAdapterState: state,
 		ClientRecognition:  recognition,
 		CatalogRevision:    7,
-		ClientAdapter:      adapter,
+		ClientAdapter:      runAdapter,
 	}
 }

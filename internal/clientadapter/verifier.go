@@ -108,9 +108,15 @@ type Feature uint64
 
 const (
 	FeatureResponsesWebSocketHTTPFallback Feature = 1 << iota
+	// FeatureCoreOwnedStreamingFallback proves that the captured client accepts
+	// a launch-time instruction to leave stream-to-complete fallback to the
+	// VibeMate Exchange runtime. Without it, a failure after the Hold envelope
+	// is committed can become a second, independently billable client request.
+	FeatureCoreOwnedStreamingFallback
 )
 
-const knownFeatures = FeatureResponsesWebSocketHTTPFallback
+const knownFeatures = FeatureResponsesWebSocketHTTPFallback |
+	FeatureCoreOwnedStreamingFallback
 
 func (features Feature) valid() bool {
 	return features&^knownFeatures == 0
@@ -303,6 +309,36 @@ func (evidence Evidence) Supports(feature Feature) bool {
 	return feature != 0 &&
 		feature&^knownFeatures == 0 &&
 		evidence.Features&feature == feature
+}
+
+// StreamingFallbackPolicy is the narrow launcher-facing projection of exact
+// adapter evidence. Raw feature bits remain inside the verifier and data plane.
+type StreamingFallbackPolicy string
+
+const (
+	StreamingFallbackClientDefault StreamingFallbackPolicy = "client_default"
+	StreamingFallbackCoreOwned     StreamingFallbackPolicy = "core_owned"
+)
+
+func (policy StreamingFallbackPolicy) Valid() bool {
+	switch policy {
+	case StreamingFallbackClientDefault, StreamingFallbackCoreOwned:
+		return true
+	default:
+		return false
+	}
+}
+
+// StreamingFallbackPolicyOf never upgrades absent or unverified evidence.
+func StreamingFallbackPolicyOf(
+	evidence *Evidence,
+) StreamingFallbackPolicy {
+	if evidence != nil && evidence.Supports(
+		FeatureCoreOwnedStreamingFallback,
+	) {
+		return StreamingFallbackCoreOwned
+	}
+	return StreamingFallbackClientDefault
 }
 
 // Recognition says whether the catalog knows this program at all, apart from
@@ -984,6 +1020,7 @@ func ClaudeCode221220DarwinARM64() Release {
 			SHA256: "8addc857f3fe64d5a0368af9ee50321b50afb4a6918ba3ef018ab84f5dbbe081",
 		}},
 		LaunchRecipe: LaunchNodeEnvProxy,
+		Features:     FeatureCoreOwnedStreamingFallback,
 	}
 }
 

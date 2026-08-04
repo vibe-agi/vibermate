@@ -165,15 +165,19 @@ func TestSignerEvidenceMustAgreeWithItsGrant(t *testing.T) {
 	}, {
 		name: "signer evidence alongside release evidence",
 		mutate: func(grant *capturecontrol.LaunchGrant) {
-			grant.Adapter = &capturecontrol.ClientAdapterView{
-				ID:              "claude-code",
-				Revision:        1,
-				Version:         "2.1.220",
-				CatalogRevision: 4,
-				Source: capturecontrol.
-					ClientAdapterSourcePrelaunchDigestCatalog,
-				InstallShape: clientadapter.InstallNativeSingleBinary,
-				LaunchRecipe: clientadapter.LaunchNodeEnvProxy,
+			grant.Adapter = &capturecontrol.ClientLaunchAdapterView{
+				ClientAdapterView: capturecontrol.ClientAdapterView{
+					ID:              "claude-code",
+					Revision:        1,
+					Version:         "2.1.220",
+					CatalogRevision: 4,
+					Source: capturecontrol.
+						ClientAdapterSourcePrelaunchDigestCatalog,
+					InstallShape: clientadapter.InstallNativeSingleBinary,
+					LaunchRecipe: clientadapter.LaunchNodeEnvProxy,
+				},
+				StreamingFallbackPolicy: clientadapter.
+					StreamingFallbackCoreOwned,
 			}
 		},
 	}} {

@@ -14,6 +14,8 @@ import (
 
 const clientCredentialPlaceholder = "vibermate-local-proxy"
 
+const claudeDisableNonStreamingFallback = "CLAUDE_CODE_DISABLE_NONSTREAMING_FALLBACK"
+
 var managedEnvironment = map[string]struct{}{
 	"HTTP_PROXY":                   {},
 	"HTTPS_PROXY":                  {},
@@ -89,7 +91,7 @@ func buildEnvironment(
 			key,
 			grant.LaunchRecipe,
 			managedClientCredential,
-		) {
+		) || launchPolicyManagesEnvironment(key, grant) {
 			continue
 		}
 		preserved[key] = value
@@ -102,6 +104,11 @@ func buildEnvironment(
 	preserved["NO_PROXY"] = noProxy
 	preserved["no_proxy"] = noProxy
 	preserved["VIBERMATE_CAPTURE_RUN_ID"] = grant.Run.ID
+	if grant.Adapter != nil &&
+		grant.Adapter.StreamingFallbackPolicy ==
+			clientadapter.StreamingFallbackCoreOwned {
+		preserved[claudeDisableNonStreamingFallback] = "1"
+	}
 	switch grant.LaunchRecipe {
 	case clientadapter.LaunchGeneric:
 	case clientadapter.LaunchNodeEnvProxy:
@@ -128,6 +135,16 @@ func buildEnvironment(
 		result = append(result, key+"="+preserved[key])
 	}
 	return result, nil
+}
+
+func launchPolicyManagesEnvironment(
+	key string,
+	grant capturecontrol.LaunchGrant,
+) bool {
+	return grant.Adapter != nil &&
+		grant.Adapter.StreamingFallbackPolicy ==
+			clientadapter.StreamingFallbackCoreOwned &&
+		strings.EqualFold(key, claudeDisableNonStreamingFallback)
 }
 
 func environmentManaged(

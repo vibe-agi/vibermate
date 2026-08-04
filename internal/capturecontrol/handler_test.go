@@ -597,6 +597,8 @@ func newFixture(t *testing.T, overrides ...fixtureOverride) *fixture {
 				SHA256: hex.EncodeToString(executableDigest[:]),
 			}},
 			LaunchRecipe: clientadapter.LaunchNodeEnvProxy,
+			Features: clientadapter.
+				FeatureCoreOwnedStreamingFallback,
 		}},
 	)
 	if err != nil {

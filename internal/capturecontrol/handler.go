@@ -191,7 +191,7 @@ func (handler *Handler) create(
 		CatalogRevision:      grant.CatalogRevision,
 		LaunchRecipe:         grant.LaunchRecipe,
 		Recognition:          grant.Recognition,
-		Adapter:              runView.ClientAdapter,
+		Adapter:              clientLaunchAdapterViewOf(grant.Adapter),
 		Signer:               clientSignerViewOf(grant.Signer),
 		ExecutablePath:       grant.ExecutablePath,
 		ProxyAddress:         grant.ProxyAddress,
