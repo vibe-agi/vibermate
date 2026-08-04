@@ -127,6 +127,122 @@ func TestManagedLinkInstallRefreshAndRemove(t *testing.T) {
 	assertOnlyNames(t, filepath.Dir(fixture.spec.ReceiptPath))
 }
 
+func TestUserCommandOwnsOneUserLocalTerminalEntry(t *testing.T) {
+	requireManagedLinkTestPlatform(t)
+	realRoot, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	home := filepath.Join(realRoot, "home")
+	configuration := filepath.Join(realRoot, "configuration")
+	source := filepath.Join(
+		realRoot,
+		"Applications",
+		"VibeMate.app",
+		"Contents",
+		"MacOS",
+		"vibermate",
+	)
+	if err := os.MkdirAll(home, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Dir(source), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := writeExecutable(source, "#!/bin/sh\nexit 0\n"); err != nil {
+		t.Fatal(err)
+	}
+	installedAt := time.Date(2026, 8, 4, 1, 2, 3, 0, time.UTC)
+	command, err := NewUserCommand(
+		source,
+		home,
+		configuration,
+		"0.1.0+test",
+		func() time.Time { return installedAt },
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	spec := command.Spec()
+	if spec.TargetPath != filepath.Join(home, ".local", "bin", "vibermate") ||
+		spec.ReceiptPath != filepath.Join(
+			configuration,
+			"io.vibermate.desktop",
+			"terminal-command.json",
+		) {
+		t.Fatalf("user terminal command spec = %+v", spec)
+	}
+	observation, err := command.Inspect()
+	if err != nil || observation.State != StateNotInstalled {
+		t.Fatalf("initial observation = %+v, %v", observation, err)
+	}
+	receipt, err := command.Install()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if receipt.TargetPath != spec.TargetPath || receipt.SourcePath != source {
+		t.Fatalf("installed receipt = %+v", receipt)
+	}
+	observation, err = command.Inspect()
+	if err != nil || observation.State != StateCurrent {
+		t.Fatalf("installed observation = %+v, %v", observation, err)
+	}
+	if profileMatches, _ := filepath.Glob(filepath.Join(home, ".*rc")); len(profileMatches) != 0 {
+		t.Fatalf("user terminal command created shell profiles: %v", profileMatches)
+	}
+	removed, err := command.Remove()
+	if err != nil || removed.State != RemoveRemoved {
+		t.Fatalf("remove = %+v, %v", removed, err)
+	}
+	observation, err = command.Inspect()
+	if err != nil || observation.State != StateNotInstalled {
+		t.Fatalf("removed observation = %+v, %v", observation, err)
+	}
+}
+
+func TestUserCommandCanonicalizesAnExistingManagedSourceLink(t *testing.T) {
+	t.Parallel()
+	realRoot, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	home := filepath.Join(realRoot, "home")
+	source := filepath.Join(
+		realRoot,
+		"Applications",
+		"VibeMate.app",
+		"Contents",
+		"MacOS",
+		"vibermate",
+	)
+	alias := filepath.Join(realRoot, "vibermate")
+	if err := os.MkdirAll(home, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Dir(source), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := writeExecutable(source, "#!/bin/sh\nexit 0\n"); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(source, alias); err != nil {
+		t.Fatal(err)
+	}
+	command, err := NewUserCommand(
+		alias,
+		home,
+		filepath.Join(realRoot, "configuration"),
+		"0.1.0+test",
+		nil,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if command.Spec().SourcePath != source {
+		t.Fatalf("canonical source = %q, want %q", command.Spec().SourcePath, source)
+	}
+}
+
 func TestManagedLinkNeverOverwritesExistingTerminalObject(t *testing.T) {
 	requireManagedLinkTestPlatform(t)
 	tests := []struct {

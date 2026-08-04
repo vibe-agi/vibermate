@@ -26,7 +26,10 @@ type SchemaState struct {
 	InitializedAt string
 }
 
-const currentSchemaIdentity = "vibermate-runtime"
+// currentSchemaIdentity distinguishes this single unreleased clean baseline
+// from every earlier development database that happened to use goose version
+// 1. It is a format identity, not a product or migration revision.
+const currentSchemaIdentity = "vibermate-runtime-clean-baseline"
 
 // DatabaseSettings records connection invariants that must hold on every
 // SQLite connection used by the runtime.

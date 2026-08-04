@@ -7,6 +7,10 @@
   "permissions": [
     "core:default",
     "allow-take-control-session",
+    "allow-inspect-terminal-command",
+    "allow-install-terminal-command",
+    "allow-refresh-terminal-command",
+    "allow-remove-terminal-command",
     "allow-load-navigation-state",
     "allow-save-navigation-state"
   ]

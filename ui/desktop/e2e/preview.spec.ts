@@ -199,6 +199,29 @@ test("keeps all eight production routes addressable without simulating features"
   expect(errors).toEqual([]);
 });
 
+test("keeps terminal installation behind the native Desktop boundary", async ({
+  page,
+}) => {
+  const errors = collectBrowserErrors(page);
+  await page.goto("/?preview=1#settings");
+
+  const panel = page.locator(".terminal-command-panel");
+  await expect(
+    panel.getByRole("heading", { name: "Terminal command" }),
+  ).toBeVisible();
+  await expect(panel.getByText("Desktop only", { exact: true })).toBeVisible();
+  await expect(
+    panel.getByText(
+      "Terminal setup is available only in the installed Desktop app.",
+    ),
+  ).toBeVisible();
+  await expect(
+    panel.getByRole("button", { name: "Install terminal command" }),
+  ).toHaveCount(0);
+  await expect(panel.getByLabel("Command path")).toHaveCount(0);
+  expect(errors).toEqual([]);
+});
+
 test("opens every frozen ICM route without changing its object locator", async ({
   page,
 }) => {

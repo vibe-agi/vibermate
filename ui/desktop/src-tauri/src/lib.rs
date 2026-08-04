@@ -36,6 +36,8 @@ const SIDECAR_EXIT_WAIT_TIMEOUT: Duration = Duration::from_secs(35);
 const DESKTOP_RUNTIME_EVENT: &str = "vibermate-desktop-runtime";
 const DESKTOP_RUNTIME_EVENT_SCHEMA: &str = "vibermate-desktop-runtime-event-v1";
 const SIDECAR_EXIT_REASON: &str = "daemon_exited";
+const TERMINAL_COMMAND_SCHEMA: &str = "vibermate-terminal-command/v1";
+const MAXIMUM_TERMINAL_COMMAND_BYTES: usize = 16 * 1024;
 
 // This is the Webview asset origin sent by Tauri, not a user-facing deep-link
 // scheme. Development and packaged origins are intentionally never co-enabled.
@@ -101,6 +103,36 @@ struct ControlSession {
     write_token: String,
     instance_id: String,
     expires_at: String,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct TerminalCommandStatus {
+    schema: String,
+    state: String,
+    source_path: String,
+    target_path: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    detail: String,
+}
+
+#[derive(Clone, Copy)]
+enum TerminalCommandOperation {
+    Status,
+    Install,
+    Refresh,
+    Remove,
+}
+
+impl TerminalCommandOperation {
+    fn argument(self) -> &'static str {
+        match self {
+            Self::Status => "status",
+            Self::Install => "install",
+            Self::Refresh => "refresh",
+            Self::Remove => "remove",
+        }
+    }
 }
 
 #[derive(Clone, Serialize)]
@@ -805,6 +837,112 @@ async fn take_control_session(
         .map_err(|error| error.to_string())
 }
 
+#[tauri::command]
+async fn inspect_terminal_command(
+    window: tauri::WebviewWindow,
+    app: tauri::AppHandle,
+) -> Result<TerminalCommandStatus, String> {
+    require_main_webview(&window)?;
+    run_terminal_command(&app, TerminalCommandOperation::Status)
+        .await
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+async fn install_terminal_command(
+    window: tauri::WebviewWindow,
+    app: tauri::AppHandle,
+) -> Result<TerminalCommandStatus, String> {
+    require_main_webview(&window)?;
+    run_terminal_command(&app, TerminalCommandOperation::Install)
+        .await
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+async fn refresh_terminal_command(
+    window: tauri::WebviewWindow,
+    app: tauri::AppHandle,
+) -> Result<TerminalCommandStatus, String> {
+    require_main_webview(&window)?;
+    run_terminal_command(&app, TerminalCommandOperation::Refresh)
+        .await
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+async fn remove_terminal_command(
+    window: tauri::WebviewWindow,
+    app: tauri::AppHandle,
+) -> Result<TerminalCommandStatus, String> {
+    require_main_webview(&window)?;
+    run_terminal_command(&app, TerminalCommandOperation::Remove)
+        .await
+        .map_err(|error| error.to_string())
+}
+
+fn require_main_webview(window: &tauri::WebviewWindow) -> Result<(), String> {
+    if window.label() != "main" {
+        return Err("Terminal command is not available to this Webview".to_string());
+    }
+    Ok(())
+}
+
+async fn run_terminal_command(
+    app: &tauri::AppHandle,
+    operation: TerminalCommandOperation,
+) -> Result<TerminalCommandStatus, ShellError> {
+    let output = app
+        .shell()
+        .sidecar("vibermate")
+        .map_err(|_| ShellError("Packaged terminal command is unavailable"))?
+        .arg("terminal-command")
+        .arg(operation.argument())
+        .arg("--json")
+        .output()
+        .await
+        .map_err(|_| ShellError("Packaged terminal command could not be inspected"))?;
+    if !output.status.success() {
+        return Err(ShellError("Managed terminal command could not be changed"));
+    }
+    decode_terminal_command_status(&output.stdout)
+}
+
+fn decode_terminal_command_status(payload: &[u8]) -> Result<TerminalCommandStatus, ShellError> {
+    if payload.is_empty() || payload.len() > MAXIMUM_TERMINAL_COMMAND_BYTES {
+        return Err(ShellError(
+            "Managed terminal command returned invalid status",
+        ));
+    }
+    let status: TerminalCommandStatus = serde_json::from_slice(payload)
+        .map_err(|_| ShellError("Managed terminal command returned invalid status"))?;
+    let valid_state = matches!(
+        status.state.as_str(),
+        "not_installed"
+            | "current"
+            | "source_updated"
+            | "source_missing"
+            | "target_missing"
+            | "unowned_target"
+            | "conflict"
+    );
+    if status.schema != TERMINAL_COMMAND_SCHEMA
+        || !valid_state
+        || status.source_path.is_empty()
+        || status.target_path.is_empty()
+        || !Path::new(&status.source_path).is_absolute()
+        || !Path::new(&status.target_path).is_absolute()
+        || status.source_path.len() > 4096
+        || status.target_path.len() > 4096
+        || status.detail.len() > 4096
+    {
+        return Err(ShellError(
+            "Managed terminal command returned invalid status",
+        ));
+    }
+    Ok(status)
+}
+
 fn generation_command(app: &tauri::AppHandle) -> Result<Command, ShellError> {
     let app_cache = absolute_utf8_path(
         app.path()
@@ -1241,6 +1379,10 @@ pub fn run() {
         })
         .invoke_handler(tauri::generate_handler![
             take_control_session,
+            inspect_terminal_command,
+            install_terminal_command,
+            refresh_terminal_command,
+            remove_terminal_command,
             navigation_state::load_navigation_state,
             navigation_state::save_navigation_state,
         ])
@@ -1333,6 +1475,58 @@ mod tests {
             instance_id: "runtime-instance".to_owned(),
             expires_at: "2026-07-30T00:00:00Z".to_owned(),
         }
+    }
+
+    #[test]
+    fn terminal_command_status_is_closed_bounded_and_absolute() {
+        let payload = serde_json::to_vec(&serde_json::json!({
+            "schema": TERMINAL_COMMAND_SCHEMA,
+            "state": "current",
+            "sourcePath": "/Applications/VibeMate.app/Contents/MacOS/vibermate",
+            "targetPath": "/Users/example/.local/bin/vibermate"
+        }))
+        .expect("encode terminal command status");
+        let decoded =
+            decode_terminal_command_status(&payload).expect("decode terminal command status");
+        assert_eq!(decoded.state, "current");
+        assert_eq!(decoded.detail, "");
+
+        for invalid in [
+            serde_json::json!({
+                "schema": TERMINAL_COMMAND_SCHEMA,
+                "state": "current",
+                "sourcePath": "relative/vibermate",
+                "targetPath": "/Users/example/.local/bin/vibermate"
+            }),
+            serde_json::json!({
+                "schema": TERMINAL_COMMAND_SCHEMA,
+                "state": "installed_and_trusted",
+                "sourcePath": "/Applications/VibeMate.app/Contents/MacOS/vibermate",
+                "targetPath": "/Users/example/.local/bin/vibermate"
+            }),
+            serde_json::json!({
+                "schema": TERMINAL_COMMAND_SCHEMA,
+                "state": "current",
+                "sourcePath": "/Applications/VibeMate.app/Contents/MacOS/vibermate",
+                "targetPath": "/Users/example/.local/bin/vibermate",
+                "receiptPath": "/private/forbidden"
+            }),
+        ] {
+            let payload = serde_json::to_vec(&invalid).expect("encode invalid status");
+            assert!(decode_terminal_command_status(&payload).is_err());
+        }
+        assert!(
+            decode_terminal_command_status(&vec![b'x'; MAXIMUM_TERMINAL_COMMAND_BYTES + 1])
+                .is_err()
+        );
+    }
+
+    #[test]
+    fn terminal_command_operations_have_no_caller_controlled_arguments() {
+        assert_eq!(TerminalCommandOperation::Status.argument(), "status");
+        assert_eq!(TerminalCommandOperation::Install.argument(), "install");
+        assert_eq!(TerminalCommandOperation::Refresh.argument(), "refresh");
+        assert_eq!(TerminalCommandOperation::Remove.argument(), "remove");
     }
 
     fn progress_frame() -> Vec<u8> {
@@ -2284,6 +2478,10 @@ mod tests {
             serde_json::json!([
                 "core:default",
                 "allow-take-control-session",
+                "allow-inspect-terminal-command",
+                "allow-install-terminal-command",
+                "allow-refresh-terminal-command",
+                "allow-remove-terminal-command",
                 "allow-load-navigation-state",
                 "allow-save-navigation-state"
             ])

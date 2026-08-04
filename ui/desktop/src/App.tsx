@@ -62,6 +62,13 @@ import { compareResourceIds } from "./control-client.ts";
 import type { SupportedLocale } from "./i18n.ts";
 import { ManualCapturePanel } from "./manual-capture-panel.tsx";
 import {
+  inspectTerminalCommand,
+  installTerminalCommand,
+  refreshTerminalCommand,
+  removeTerminalCommand,
+  type TerminalCommandStatus,
+} from "./desktop-host.ts";
+import {
   dashboardRoutePaths,
   dashboardTaskRoutePaths,
   type DashboardNavigation,
@@ -74,6 +81,7 @@ interface DashboardRuntime {
   readonly model: DashboardQueryRuntime;
   readonly navigation: DashboardNavigation;
   readonly state: DashboardState;
+  readonly preview: boolean;
 }
 
 type SourceAvailability = "loading" | "ready" | "stale" | "unavailable";
@@ -159,8 +167,8 @@ export function DashboardShell({
     [navigate],
   );
   const runtime = useMemo<DashboardRuntime>(
-    () => ({ actions, model, navigation: { openView }, state }),
-    [actions, model, openView, state],
+    () => ({ actions, model, navigation: { openView }, preview, state }),
+    [actions, model, openView, preview, state],
   );
 
   const changeLocale = (locale: SupportedLocale) => {
@@ -1033,7 +1041,7 @@ export function ActivityRequestRoutePage({
 
 export function SettingsRoutePage() {
   const { t } = useTranslation();
-  const { actions, state } = useDashboardRuntime();
+  const { actions, preview, state } = useDashboardRuntime();
   return (
     <>
       <PageHeading
@@ -1051,9 +1059,167 @@ export function SettingsRoutePage() {
           busy={state.busy}
           snapshot={state.offline}
         />
+        <TerminalCommandPanel preview={preview} />
       </div>
     </>
   );
+}
+
+type TerminalCommandMutation = "install" | "refresh" | "remove";
+
+function TerminalCommandPanel({ preview }: { readonly preview: boolean }) {
+  const { t } = useTranslation();
+  const [status, setStatus] = useState<TerminalCommandStatus>();
+  const [busy, setBusy] = useState(false);
+  const [failed, setFailed] = useState(false);
+  const [copied, setCopied] = useState(false);
+
+  useEffect(() => {
+    if (preview) {
+      return;
+    }
+    let active = true;
+    setFailed(false);
+    void inspectTerminalCommand().then(
+      (next) => {
+        if (active) {
+          setStatus(next);
+        }
+      },
+      () => {
+        if (active) {
+          setFailed(true);
+        }
+      },
+    );
+    return () => {
+      active = false;
+    };
+  }, [preview]);
+
+  const mutate = async (operation: TerminalCommandMutation) => {
+    setBusy(true);
+    setFailed(false);
+    try {
+      const next = await (operation === "install"
+        ? installTerminalCommand()
+        : operation === "refresh"
+          ? refreshTerminalCommand()
+          : removeTerminalCommand());
+      setStatus(next);
+    } catch {
+      setFailed(true);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const commandPath =
+    status?.state === "current" ? status.targetPath : status?.sourcePath;
+  const copyCommand = async () => {
+    if (commandPath === undefined) {
+      return;
+    }
+    try {
+      await navigator.clipboard.writeText(shellQuoted(commandPath));
+      setCopied(true);
+      globalThis.setTimeout(() => setCopied(false), 2_000);
+    } catch {
+      setFailed(true);
+    }
+  };
+
+  return (
+    <section className="panel terminal-command-panel">
+      <div className="section-heading">
+        <div>
+          <h2>{t("terminalCommand.title")}</h2>
+          <p>{t("terminalCommand.description")}</p>
+        </div>
+        <span className={`terminal-command-state ${status?.state ?? "loading"}`}>
+          {preview
+            ? t("terminalCommand.state.desktopOnly")
+            : failed
+              ? t("terminalCommand.state.unavailable")
+              : status === undefined
+                ? t("common.data.loading")
+                : t(`terminalCommand.state.${status.state}`)}
+        </span>
+      </div>
+      {preview ? (
+        <p className="boundary-note">{t("terminalCommand.preview")}</p>
+      ) : (
+        <>
+          {commandPath !== undefined && (
+            <div className="terminal-command-copy-row">
+              <label htmlFor="terminal-command-path">
+                {t("terminalCommand.command.label")}
+              </label>
+              <div>
+                <input
+                  id="terminal-command-path"
+                  readOnly
+                  spellCheck={false}
+                  value={shellQuoted(commandPath)}
+                />
+                <button className="secondary" onClick={() => void copyCommand()} type="button">
+                  {t(copied ? "common.copied" : "common.copy.action")}
+                </button>
+              </div>
+              <p>{t("terminalCommand.command.help")}</p>
+            </div>
+          )}
+          {status !== undefined && (
+            <dl className="terminal-command-paths">
+              <div>
+                <dt>{t("terminalCommand.source.label")}</dt>
+                <dd>{status.sourcePath}</dd>
+              </div>
+              <div>
+                <dt>{t("terminalCommand.target.label")}</dt>
+                <dd>{status.targetPath}</dd>
+              </div>
+            </dl>
+          )}
+          {failed && (
+            <p className="inline-error" role="alert">
+              {t("terminalCommand.error")}
+            </p>
+          )}
+          <div className="button-row">
+            {status?.state === "not_installed" && (
+              <button disabled={busy} onClick={() => void mutate("install")} type="button">
+                {t("terminalCommand.install.action")}
+              </button>
+            )}
+            {status?.state === "source_updated" && (
+              <button disabled={busy} onClick={() => void mutate("refresh")} type="button">
+                {t("terminalCommand.refresh.action")}
+              </button>
+            )}
+            {status !== undefined &&
+              ["current", "source_updated", "source_missing", "target_missing"].includes(
+                status.state,
+              ) && (
+                <button
+                  className="secondary"
+                  disabled={busy}
+                  onClick={() => void mutate("remove")}
+                  type="button"
+                >
+                  {t("terminalCommand.remove.action")}
+                </button>
+              )}
+          </div>
+          <p className="boundary-note">{t("terminalCommand.boundary")}</p>
+        </>
+      )}
+    </section>
+  );
+}
+
+function shellQuoted(value: string): string {
+  return `'${value.replaceAll("'", `'"'"'`)}'`;
 }
 
 function NavGroup({

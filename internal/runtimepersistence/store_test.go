@@ -164,41 +164,51 @@ func TestSQLiteStoreRejectsThePreBaselineDevelopmentSchema(t *testing.T) {
 	}
 }
 
-func TestSQLiteStoreRejectsAnObsoleteDevelopmentBaselineIdentity(t *testing.T) {
+func TestSQLiteStoreRejectsEveryEarlierDevelopmentBaselineIdentity(t *testing.T) {
 	t.Parallel()
-	databasePath := filepath.Join(t.TempDir(), "runtime.db")
-	seedGooseHistory(t, databasePath, 1, true)
-	database := sql.OpenDB(newSQLiteConnector(databasePath, DefaultBusyTimeout))
-	database.SetMaxOpenConns(1)
-	database.SetMaxIdleConns(1)
-	if _, err := database.ExecContext(
-		context.Background(),
-		`CREATE TABLE runtime_metadata (
+	for _, identity := range []string{
+		"vibermate-runtime",
+		"obsolete-development-baseline",
+	} {
+		identity := identity
+		t.Run(identity, func(t *testing.T) {
+			t.Parallel()
+			databasePath := filepath.Join(t.TempDir(), "runtime.db")
+			seedGooseHistory(t, databasePath, 1, true)
+			database := sql.OpenDB(newSQLiteConnector(databasePath, DefaultBusyTimeout))
+			database.SetMaxOpenConns(1)
+			database.SetMaxIdleConns(1)
+			if _, err := database.ExecContext(
+				context.Background(),
+				`CREATE TABLE runtime_metadata (
 			singleton INTEGER PRIMARY KEY NOT NULL CHECK (singleton = 1),
 			schema_identity TEXT NOT NULL,
 			initialized_at TEXT NOT NULL
 		) STRICT;
 		INSERT INTO runtime_metadata (singleton, schema_identity, initialized_at)
-		VALUES (1, 'obsolete-development-baseline', '2026-08-04T00:00:00Z')`,
-	); err != nil {
-		_ = database.Close()
-		t.Fatalf("create obsolete baseline metadata: %v", err)
-	}
-	if err := database.Close(); err != nil {
-		t.Fatalf("close obsolete baseline fixture: %v", err)
-	}
+		VALUES (1, ?, '2026-08-04T00:00:00Z')`,
+				identity,
+			); err != nil {
+				_ = database.Close()
+				t.Fatalf("create obsolete baseline metadata: %v", err)
+			}
+			if err := database.Close(); err != nil {
+				t.Fatalf("close obsolete baseline fixture: %v", err)
+			}
 
-	store, err := Open(context.Background(), Options{
-		DatabasePath:           databasePath,
-		BusyTimeout:            DefaultBusyTimeout,
-		CommitReconcileTimeout: DefaultCommitReconcileTimeout,
-	})
-	if store != nil {
-		_ = store.Shutdown(context.Background())
-		t.Fatal("obsolete baseline database returned a store")
-	}
-	if !errors.Is(err, ErrSchemaBaselineMismatch) {
-		t.Fatalf("obsolete baseline open error = %v", err)
+			store, err := Open(context.Background(), Options{
+				DatabasePath:           databasePath,
+				BusyTimeout:            DefaultBusyTimeout,
+				CommitReconcileTimeout: DefaultCommitReconcileTimeout,
+			})
+			if store != nil {
+				_ = store.Shutdown(context.Background())
+				t.Fatal("obsolete baseline database returned a store")
+			}
+			if !errors.Is(err, ErrSchemaBaselineMismatch) {
+				t.Fatalf("obsolete baseline open error = %v", err)
+			}
+		})
 	}
 }
 

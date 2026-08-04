@@ -35,6 +35,24 @@ const navigationRestoreTimedOut = Symbol("navigation-restore-timed-out");
 const nativeSessionTimeoutMilliseconds = 130_000;
 const desktopRuntimeEventName = "vibermate-desktop-runtime";
 const desktopRuntimeEventSchema = "vibermate-desktop-runtime-event-v1";
+const terminalCommandSchema = "vibermate-terminal-command/v1";
+
+export type TerminalCommandState =
+  | "not_installed"
+  | "current"
+  | "source_updated"
+  | "source_missing"
+  | "target_missing"
+  | "unowned_target"
+  | "conflict";
+
+export interface TerminalCommandStatus {
+  readonly schema: typeof terminalCommandSchema;
+  readonly state: TerminalCommandState;
+  readonly sourcePath: string;
+  readonly targetPath: string;
+  readonly detail?: string;
+}
 
 export async function connectDesktopControl(): Promise<ControlClient> {
   await ensureDesktopRuntimeListener();
@@ -224,6 +242,30 @@ export function persistDesktopNavigation(locator: string): Promise<void> {
   return attempt;
 }
 
+export async function inspectTerminalCommand(): Promise<TerminalCommandStatus> {
+  return decodeTerminalCommandStatus(
+    await invoke<unknown>("inspect_terminal_command"),
+  );
+}
+
+export async function installTerminalCommand(): Promise<TerminalCommandStatus> {
+  return decodeTerminalCommandStatus(
+    await invoke<unknown>("install_terminal_command"),
+  );
+}
+
+export async function refreshTerminalCommand(): Promise<TerminalCommandStatus> {
+  return decodeTerminalCommandStatus(
+    await invoke<unknown>("refresh_terminal_command"),
+  );
+}
+
+export async function removeTerminalCommand(): Promise<TerminalCommandStatus> {
+  return decodeTerminalCommandStatus(
+    await invoke<unknown>("remove_terminal_command"),
+  );
+}
+
 function takeNativeSessionPayload(): Promise<unknown> {
   if (nativeSessionPayload !== undefined) {
     return nativeSessionPayload;
@@ -312,4 +354,48 @@ function decodeNavigationState(
     throw new Error("Desktop shell returned invalid navigation state");
   }
   return candidate as unknown as PersistedNavigationState;
+}
+
+function decodeTerminalCommandStatus(payload: unknown): TerminalCommandStatus {
+  if (payload === null || typeof payload !== "object" || Array.isArray(payload)) {
+    throw new Error("Desktop shell returned invalid terminal command status");
+  }
+  const candidate = payload as Record<string, unknown>;
+  const required = ["schema", "state", "sourcePath", "targetPath"] as const;
+  const allowed = new Set([...required, "detail"]);
+  if (
+    Object.keys(candidate).some((field) => !allowed.has(field)) ||
+    Object.keys(candidate).length < required.length ||
+    required.some((field) => typeof candidate[field] !== "string") ||
+    candidate.schema !== terminalCommandSchema ||
+    !validTerminalCommandState(candidate.state) ||
+    !validAbsoluteTerminalPath(candidate.sourcePath) ||
+    !validAbsoluteTerminalPath(candidate.targetPath) ||
+    (candidate.detail !== undefined &&
+      (typeof candidate.detail !== "string" || candidate.detail.length > 4096))
+  ) {
+    throw new Error("Desktop shell returned invalid terminal command status");
+  }
+  return candidate as unknown as TerminalCommandStatus;
+}
+
+function validTerminalCommandState(value: unknown): value is TerminalCommandState {
+  return [
+    "not_installed",
+    "current",
+    "source_updated",
+    "source_missing",
+    "target_missing",
+    "unowned_target",
+    "conflict",
+  ].includes(String(value));
+}
+
+function validAbsoluteTerminalPath(value: unknown): value is string {
+  return (
+    typeof value === "string" &&
+    value.startsWith("/") &&
+    value.length <= 4096 &&
+    !/[\u0000\r\n]/u.test(value)
+  );
 }

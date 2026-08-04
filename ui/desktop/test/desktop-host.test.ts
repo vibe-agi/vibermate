@@ -15,6 +15,10 @@ let disposeDesktopRuntimeObservation: typeof import("../src/desktop-host.ts").di
 let observeDesktopRuntimeFailure: typeof import("../src/desktop-host.ts").observeDesktopRuntimeFailure;
 let persistDesktopNavigation: typeof import("../src/desktop-host.ts").persistDesktopNavigation;
 let restoreDesktopNavigation: typeof import("../src/desktop-host.ts").restoreDesktopNavigation;
+let inspectTerminalCommand: typeof import("../src/desktop-host.ts").inspectTerminalCommand;
+let installTerminalCommand: typeof import("../src/desktop-host.ts").installTerminalCommand;
+let refreshTerminalCommand: typeof import("../src/desktop-host.ts").refreshTerminalCommand;
+let removeTerminalCommand: typeof import("../src/desktop-host.ts").removeTerminalCommand;
 let runtimeEventHandler:
   | ((event: { readonly payload: unknown }) => void)
   | undefined;
@@ -61,6 +65,10 @@ beforeEach(async () => {
     observeDesktopRuntimeFailure,
     persistDesktopNavigation,
     restoreDesktopNavigation,
+    inspectTerminalCommand,
+    installTerminalCommand,
+    refreshTerminalCommand,
+    removeTerminalCommand,
   } = await import("../src/desktop-host.ts"));
   history.replaceState(null, "", "/");
 });
@@ -340,6 +348,42 @@ describe("Desktop host connection", () => {
     expect(tauri.invoke).toHaveBeenCalledTimes(1);
     expect(fetchImplementation).toHaveBeenCalledOnce();
     expect(vi.getTimerCount()).toBe(0);
+  });
+});
+
+describe("Managed terminal command bridge", () => {
+  const status = {
+    schema: "vibermate-terminal-command/v1",
+    state: "current",
+    sourcePath: "/Applications/VibeMate.app/Contents/MacOS/vibermate",
+    targetPath: "/Users/example/.local/bin/vibermate",
+  } as const;
+
+  it("exposes only four fixed native operations with a closed status", async () => {
+    tauri.invoke.mockResolvedValue(status);
+
+    await expect(inspectTerminalCommand()).resolves.toEqual(status);
+    await expect(installTerminalCommand()).resolves.toEqual(status);
+    await expect(refreshTerminalCommand()).resolves.toEqual(status);
+    await expect(removeTerminalCommand()).resolves.toEqual(status);
+
+    expect(tauri.invoke).toHaveBeenNthCalledWith(1, "inspect_terminal_command");
+    expect(tauri.invoke).toHaveBeenNthCalledWith(2, "install_terminal_command");
+    expect(tauri.invoke).toHaveBeenNthCalledWith(3, "refresh_terminal_command");
+    expect(tauri.invoke).toHaveBeenNthCalledWith(4, "remove_terminal_command");
+  });
+
+  it.each([
+    { ...status, sourcePath: "relative/vibermate" },
+    { ...status, state: "trusted" },
+    { ...status, receiptPath: "/private/forbidden" },
+    { ...status, detail: "x".repeat(4097) },
+  ])("rejects an unsafe native terminal status", async (unsafeStatus) => {
+    tauri.invoke.mockResolvedValue(unsafeStatus);
+
+    await expect(inspectTerminalCommand()).rejects.toThrow(
+      /invalid terminal command status/u,
+    );
   });
 });
 

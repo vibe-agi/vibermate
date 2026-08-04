@@ -1,14 +1,17 @@
 package transportprofile
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"crypto/tls"
 	"crypto/x509"
 	"errors"
+	"io"
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"sync"
 	"testing"
 	"time"
@@ -17,6 +20,186 @@ import (
 	"github.com/vibe-agi/vibermate/internal/accessapply"
 	"github.com/vibe-agi/vibermate/internal/operationcatalog"
 )
+
+func TestConnectorWireServiceObservesOnlyTheAllowedMITMShapeChanges(
+	t *testing.T,
+) {
+	t.Parallel()
+
+	downstream := captureGoClientHello(
+		t,
+		"agent.example",
+		[]string{"h2", "http/1.1"},
+	)
+	roots, serverConfig := testTLSAuthority(t)
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = listener.Close() })
+	type wireResult struct {
+		observation Observation
+		method      string
+		host        string
+		path        string
+		marker      string
+		err         error
+	}
+	wireResults := make(chan wireResult, 1)
+	go func() {
+		raw, acceptErr := listener.Accept()
+		if acceptErr != nil {
+			wireResults <- wireResult{err: acceptErr}
+			return
+		}
+		defer raw.Close()
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		observation, replay, captureErr := CaptureClientHello(
+			ctx,
+			raw,
+			DefaultMaxClientHelloBytes,
+		)
+		if captureErr != nil {
+			wireResults <- wireResult{err: captureErr}
+			return
+		}
+		secured := tls.Server(replay, serverConfig.Clone())
+		if handshakeErr := secured.HandshakeContext(ctx); handshakeErr != nil {
+			wireResults <- wireResult{err: handshakeErr}
+			return
+		}
+		request, requestErr := http.ReadRequest(bufio.NewReader(secured))
+		if requestErr != nil {
+			wireResults <- wireResult{err: requestErr}
+			return
+		}
+		_ = request.Body.Close()
+		_, responseErr := io.WriteString(
+			secured,
+			"HTTP/1.1 200 OK\r\n"+
+				"Content-Type: application/json\r\n"+
+				"Content-Length: 2\r\n"+
+				"Connection: close\r\n\r\n{}",
+		)
+		wireResults <- wireResult{
+			observation: observation,
+			method:      request.Method,
+			host:        request.Host,
+			path:        request.URL.Path,
+			marker:      request.Header.Get("X-Vibermate-Wire-Fixture"),
+			err:         responseErr,
+		}
+	}()
+
+	connector, err := NewConnector(ConnectorOptions{
+		Dialer: fixedAddressDialer{
+			address: listener.Addr().String(),
+		},
+		RootCAs:          roots,
+		HandshakeTimeout: 5 * time.Second,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	plan := testTransportPlan(t)
+	var evidence Evidence
+	transport := &http.Transport{
+		DisableKeepAlives: true,
+		ForceAttemptHTTP2: false,
+		DialTLSContext: func(
+			ctx context.Context,
+			network string,
+			address string,
+		) (net.Conn, error) {
+			connection, observed, connectErr := connector.Connect(
+				ctx,
+				ConnectRequest{
+					Network:       network,
+					Address:       address,
+					TLSServerName: "example.com",
+					Plan:          plan,
+					Observation:   downstream,
+				},
+			)
+			evidence = observed
+			return connection, connectErr
+		},
+	}
+	t.Cleanup(transport.CloseIdleConnections)
+	client := &http.Client{Transport: transport, Timeout: 10 * time.Second}
+	request, err := http.NewRequest(
+		http.MethodPost,
+		"https://example.com/v1/chat/completions",
+		bytes.NewReader([]byte(`{}`)),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	request.Header.Set("X-Vibermate-Wire-Fixture", "observed-client-h1")
+	response, err := client.Do(request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	answered, err := io.ReadAll(response.Body)
+	_ = response.Body.Close()
+	if err != nil || response.StatusCode != http.StatusOK || string(answered) != "{}" {
+		t.Fatalf(
+			"wire service response status=%d body=%q error=%v",
+			response.StatusCode,
+			answered,
+			err,
+		)
+	}
+
+	var result wireResult
+	select {
+	case result = <-wireResults:
+	case <-time.After(10 * time.Second):
+		t.Fatal("wire service did not observe the outbound request")
+	}
+	if result.err != nil {
+		t.Fatal(result.err)
+	}
+	if result.method != http.MethodPost ||
+		result.host != "example.com" ||
+		result.path != "/v1/chat/completions" ||
+		result.marker != "observed-client-h1" {
+		t.Fatalf("wire service request = %+v", result)
+	}
+	upstream := result.observation
+	if !slices.Equal(upstream.CipherSuites(), downstream.CipherSuites()) ||
+		!slices.Equal(upstream.ExtensionOrder(), downstream.ExtensionOrder()) {
+		t.Fatalf(
+			"safe ClientHello shape changed: downstream ciphers=%v extensions=%v; upstream ciphers=%v extensions=%v",
+			downstream.CipherSuites(),
+			downstream.ExtensionOrder(),
+			upstream.CipherSuites(),
+			upstream.ExtensionOrder(),
+		)
+	}
+	if !slices.Equal(downstream.OfferedALPN(), []string{"h2", "http/1.1"}) ||
+		!slices.Equal(upstream.OfferedALPN(), []string{"http/1.1"}) ||
+		clientHelloServerName(t, upstream.fingerprintRecord) != "example.com" ||
+		bytes.Equal(
+			clientHelloRandom(t, downstream.fingerprintRecord),
+			clientHelloRandom(t, upstream.fingerprintRecord),
+		) ||
+		bytes.Equal(
+			clientHelloKeyShare(t, downstream.fingerprintRecord),
+			clientHelloKeyShare(t, upstream.fingerprintRecord),
+		) {
+		t.Fatalf("MITM dynamic-field boundary was not preserved")
+	}
+	if evidence.Requested().Ref != access.TransportProfileObservedClientH1Value ||
+		evidence.Effective().Ref != access.TransportProfileObservedClientH1Value ||
+		evidence.UsedFallback() ||
+		!slices.Equal(evidence.ClientOfferedALPN(), []string{"h2", "http/1.1"}) ||
+		!slices.Equal(evidence.UpstreamOfferedALPN(), []string{"http/1.1"}) ||
+		evidence.UpstreamNegotiatedALPN() != "http/1.1" {
+		t.Fatalf("wire transport evidence = %+v", evidence)
+	}
+}
 
 func TestConnectorReplaysObservedShapeWithFreshConnectionState(t *testing.T) {
 	t.Parallel()
@@ -86,10 +269,36 @@ func TestConnectorReplaysObservedShapeWithFreshConnectionState(t *testing.T) {
 		t.Fatalf("upstream SNI = %q", got)
 	}
 	if !slicesEqual(
+		downstream.OfferedALPN(),
+		[]string{"h2", "http/1.1"},
+	) {
+		t.Fatalf("downstream ALPN fixture = %v", downstream.OfferedALPN())
+	}
+	if !slicesEqual(
 		firstUpstream.OfferedALPN(),
 		[]string{"http/1.1"},
 	) {
 		t.Fatalf("upstream ALPN = %v", firstUpstream.OfferedALPN())
+	}
+	if !slices.Equal(
+		firstUpstream.CipherSuites(),
+		downstream.CipherSuites(),
+	) {
+		t.Fatalf(
+			"upstream cipher-suite shape = %v, downstream = %v",
+			firstUpstream.CipherSuites(),
+			downstream.CipherSuites(),
+		)
+	}
+	if !slices.Equal(
+		firstUpstream.ExtensionOrder(),
+		downstream.ExtensionOrder(),
+	) {
+		t.Fatalf(
+			"upstream extension order = %v, downstream = %v",
+			firstUpstream.ExtensionOrder(),
+			downstream.ExtensionOrder(),
+		)
 	}
 	if bytes.Equal(
 		clientHelloRandom(t, downstream.fingerprintRecord),
@@ -375,6 +584,18 @@ func (hangingDialer) DialContext(
 		_ = serverSide.Close()
 	}()
 	return clientSide, nil
+}
+
+type fixedAddressDialer struct {
+	address string
+}
+
+func (dialer fixedAddressDialer) DialContext(
+	ctx context.Context,
+	network string,
+	_ string,
+) (net.Conn, error) {
+	return (&net.Dialer{}).DialContext(ctx, network, dialer.address)
 }
 
 func testTransportPlan(t *testing.T) access.CompiledTransportFingerprintPlan {

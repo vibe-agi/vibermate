@@ -19,10 +19,7 @@ import (
 )
 
 const (
-	// v2 adds the symbolic-link filesystem identity required for exact removal.
-	// The design prototype's v1 record was never shipped and cannot safely be
-	// upgraded in place because it did not record that identity.
-	receiptSchema = "vibermate.cli-link/v2"
+	receiptSchema = "vibermate.cli-link/v1"
 	maxCLIBytes   = int64(512 << 20)
 	maxReceipt    = int64(32 << 10)
 	maxPathBytes  = 4096

@@ -62,6 +62,18 @@ development sidecar uses one private file-backed driver; its contents are
 plaintext-equivalent at rest and are not release secret protection. There is no
 release SecretStore driver or release packaging profile in this stage.
 
+MITM creates two independent TLS connections, so VibeMate does not claim that
+the complete client fingerprint survives unchanged. The downstream client sees
+an exact-DNS leaf issued by the local VibeMate Root, not the provider's
+certificate. For the current `observed-client-strict-h1` upstream profile,
+VibeMate retains supported cipher-suite and extension ordering, rewrites the
+target SNI, intersects ALPN with the HTTP/1.1 transport it actually implements,
+and regenerates random, key-share, ticket, PSK, binder, and other
+connection-bound state. A real local TLS capture-service test observes the
+actual outbound ClientHello and HTTP request from outside the connector and
+checks both the retained shape and the required differences. This is bounded
+wire evidence, not exact JA3, JA4, browser, or HTTP/2 fingerprint parity.
+
 ProductRuntime now owns an internal Exchange executor. Each admitted Exchange
 begins a planned-offline action before resolving configuration, resolves the
 active plan exactly once, revalidates the frozen ingress identity, translates
@@ -362,20 +374,25 @@ Multi-window restore and synchronization are not implemented. Windows
 owner/DACL and reparse-point protections are also not implemented, so the
 non-Unix store fails closed. The UI event/WebSocket
 invalidation and recovery contract is not frozen; the current snapshots
-continue polling. SQLite and the Access Manager can now read a complete durable
-aggregate by ID, including a disabled Access, but the current control API still
-returns only the active revision and credential coordinates. The canonical
-OpenAPI does not yet define the root Access GET/PATCH DTOs and conflicts with
-the design prose on ETag/If-Match representation, so the UI deliberately locks
-aggregate editing while leaving credential rotation available. It will not
-invent a third wire contract, synthesize defaults, or overwrite configuration
-it could not hydrate. The existing transitional apply route accepts only an
-enabled aggregate and rejects every other status before calling the writer. A
-successful response is a closed commit receipt: `active` includes the exact
-candidate plan hash frozen at publication, while a known durable commit whose
-projection failed returns `unavailable` without a hash. The UI reports that
-state as unavailable and asks for a restart instead of claiming traffic is
+continue polling. SQLite, the Access Manager, the canonical control contract,
+and the UI now share one complete Access shape. The control API lists Accesses,
+hydrates a complete aggregate and active plan by ID, applies a typed CAS update,
+and rotates only the selected credential through its separate write-only
+boundary. The UI can create a complete enabled Access, reopen an existing one,
+add an account/route candidate, and submit the next revision without exposing
+internal identifiers or inventing defaults for fields it did not read. A
+successful apply response is a closed commit receipt: `active` includes the
+exact candidate plan hash frozen at publication, while a known durable commit
+whose projection failed returns `unavailable` without a hash. The UI reports
+that state as unavailable and asks for a restart instead of claiming traffic is
 active; the route never performs a racy post-commit plan lookup.
+
+Desktop Settings also inspects the exact packaged `vibermate` sidecar and can
+install, refresh, or remove one receipt-owned link at `~/.local/bin/vibermate`.
+The operation never edits a shell profile, never accepts a caller-selected
+source or destination, never overwrites an unrelated filesystem object, and
+shows an absolute command that can be copied even when the managed link is not
+installed.
 
 The `vibermate run -- <command>` launcher consumes only short-lived, private,
 generation-scoped discovery; creates one CaptureRun; supervises one child;

@@ -8,6 +8,12 @@ package desktophost_test
 import (
 	"context"
 	"crypto/rand"
+	"crypto/tls"
+	"encoding/json"
+	"fmt"
+	"io"
+	"net/http"
+	"net/http/httptest"
 	"net/url"
 	"os"
 	"os/exec"
@@ -33,6 +39,8 @@ import (
 	"github.com/vibe-agi/vibermate/internal/secretstore"
 	"github.com/vibe-agi/vibermate/internal/toolapproval"
 )
+
+const capturedProcessHelperEnvironment = "GO_WANT_VIBERMATE_CAPTURE_HELPER"
 
 // catalogedCodexVersion is the Codex release this build carries evidence for.
 // It is not a preference: the artifact digests in the catalog are what make a
@@ -219,6 +227,268 @@ func TestARealAgentClientReachesAModelThroughVibermate(t *testing.T) {
 	}
 	if !reached {
 		t.Fatalf("no provider attempt reached %q: %+v", origin, attempts.Items)
+	}
+}
+
+// TestACapturedProcessStreamsThroughTheCompleteLocalDataPlane keeps every
+// network dependency local while exercising the same CaptureRun, proxy, TLS,
+// Access, credential, codec, transport, stream and audit composition used by a
+// real terminal client. It is intentionally separate from the credentialed
+// live-provider tests above.
+func TestACapturedProcessStreamsThroughTheCompleteLocalDataPlane(t *testing.T) {
+	providerRequests := make(chan struct{}, 1)
+	provider := httptest.NewServer(http.HandlerFunc(func(
+		writer http.ResponseWriter,
+		request *http.Request,
+	) {
+		defer request.Body.Close()
+		if request.Method != http.MethodPost ||
+			request.URL.Path != "/v1/chat/completions" {
+			t.Errorf("provider request = %s %s", request.Method, request.URL.Path)
+			writer.WriteHeader(http.StatusNotFound)
+			return
+		}
+		if request.Header.Get("Authorization") != "Bearer local-provider-key" ||
+			request.Header.Get("x-api-key") != "" {
+			t.Errorf("provider authorization was not replaced")
+			writer.WriteHeader(http.StatusUnauthorized)
+			return
+		}
+		var body struct {
+			Model         string `json:"model"`
+			MaxTokens     int    `json:"max_tokens"`
+			Stream        bool   `json:"stream"`
+			StreamOptions struct {
+				IncludeUsage bool `json:"include_usage"`
+			} `json:"stream_options"`
+			Messages []struct {
+				Role    string `json:"role"`
+				Content string `json:"content"`
+			} `json:"messages"`
+		}
+		decoder := json.NewDecoder(io.LimitReader(request.Body, 1<<20))
+		decoder.DisallowUnknownFields()
+		if err := decoder.Decode(&body); err != nil ||
+			body.Model != "local-provider-model" ||
+			body.MaxTokens != 32 ||
+			!body.Stream ||
+			!body.StreamOptions.IncludeUsage ||
+			len(body.Messages) != 1 ||
+			body.Messages[0].Role != "user" ||
+			body.Messages[0].Content != "stream locally" {
+			t.Errorf("provider body = %+v, err=%v", body, err)
+			writer.WriteHeader(http.StatusBadRequest)
+			return
+		}
+		providerRequests <- struct{}{}
+		writer.Header().Set("Content-Type", "text/event-stream")
+		writer.WriteHeader(http.StatusOK)
+		flusher, ok := writer.(http.Flusher)
+		if !ok {
+			t.Error("fixture response writer cannot flush")
+			return
+		}
+		for _, event := range []string{
+			`{"id":"chatcmpl-local","object":"chat.completion.chunk","created":1,"model":"local-provider-model","choices":[{"index":0,"delta":{"role":"assistant","content":"Hello "},"finish_reason":null}]}`,
+			`{"id":"chatcmpl-local","object":"chat.completion.chunk","created":1,"model":"local-provider-model","choices":[{"index":0,"delta":{"content":"world"},"finish_reason":"stop"}]}`,
+			`{"id":"chatcmpl-local","object":"chat.completion.chunk","created":1,"model":"local-provider-model","choices":[],"usage":{"prompt_tokens":3,"completion_tokens":2,"total_tokens":5}}`,
+		} {
+			_, _ = fmt.Fprintf(writer, "data: %s\n\n", event)
+			flusher.Flush()
+			time.Sleep(15 * time.Millisecond)
+		}
+		_, _ = io.WriteString(writer, "data: [DONE]\n\n")
+		flusher.Flush()
+	}))
+	defer provider.Close()
+
+	root := t.TempDir()
+	paths := newHostPaths(t, filepath.Join(root, "cache"))
+	options := liveHostOptions(t, paths, filepath.Join(root, "data"))
+	host := startHost(t, options)
+	defer shutdownHost(t, host)
+	runtime := host.Runtime()
+
+	accessID, err := access.NewAccessID("access-local-captured-process")
+	if err != nil {
+		t.Fatal(err)
+	}
+	aggregate := liveAgentAccess(
+		t,
+		accessID,
+		provider.URL+"/v1",
+		"local-provider-model",
+	)
+	if write, err := runtime.AccessWriter().WriteAccess(
+		context.Background(),
+		access.WriteCommand{ExpectedRevision: 0, Aggregate: aggregate},
+	); err != nil || write.Outcome != access.WriteOutcomeCommitted {
+		t.Fatalf("write Access result=%+v err=%v", write, err)
+	}
+	value, err := secretstore.NewValue([]byte("local-provider-key"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := runtime.Credentials().ReplaceSecret(
+		context.Background(),
+		accesscredential.ReplaceCommand{
+			AccessID:         accessID,
+			ProfileID:        aggregate.Profiles[0].ID,
+			CredentialID:     aggregate.AccountBindings[0].ID,
+			ExpectedRevision: 0,
+			Value:            value,
+		},
+	); err != nil {
+		t.Fatalf("store provider credential: %v", err)
+	}
+	rules := runtime.ConnectionRules()
+	if _, err := rules.Replace(
+		context.Background(),
+		rules.Current().Revision,
+		[]connectionpolicy.Rule{{
+			ID:       "local.allow-agent-endpoint",
+			Priority: 100,
+			Decision: connectionpolicy.DecisionAllow,
+			Match:    connectionpolicy.MatchExactHostPort("api.anthropic.com", 443),
+		}},
+		rules.Current().Default,
+	); err != nil {
+		t.Fatal(err)
+	}
+
+	discovery, err := localdiscovery.NewFile(
+		paths.DiscoveryPath(),
+		productruntime.SystemClock{},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	executable, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	var output strings.Builder
+	launcher, err := runlauncher.New(runlauncher.Config{
+		Discovery: discovery,
+		BaseEnvironment: []string{
+			"PATH=" + os.Getenv("PATH"),
+			"HOME=" + t.TempDir(),
+			capturedProcessHelperEnvironment + "=1",
+		},
+		Stdin:              strings.NewReader(""),
+		Stdout:             &output,
+		Stderr:             &output,
+		HeartbeatInterval:  50 * time.Millisecond,
+		ControlTimeout:     5 * time.Second,
+		TerminationTimeout: 5 * time.Second,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	runContext, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	exitCode, err := launcher.Run(runContext, []string{
+		executable,
+		"-test.run=^TestCapturedProcessHelper$",
+		"-test.count=1",
+	})
+	if err != nil || exitCode != 0 {
+		t.Fatalf("captured helper exit=%d err=%v output=%s", exitCode, err, output.String())
+	}
+	select {
+	case <-providerRequests:
+	default:
+		t.Fatal("captured process never reached the local provider")
+	}
+	for _, expected := range []string{
+		`"type":"message_start"`,
+		`"type":"content_block_delta"`,
+		`"text":"Hello "`,
+		`"text":"world"`,
+		`"type":"message_stop"`,
+	} {
+		if !strings.Contains(output.String(), expected) {
+			t.Fatalf("captured stream omitted %s: %s", expected, output.String())
+		}
+	}
+
+	connections, err := runtime.ConnectionEvents().List(
+		context.Background(),
+		connectionevent.PageRequest{Limit: 20},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	decrypted := false
+	for _, record := range connections.Items {
+		if record.RequestedHost == "api.anthropic.com" &&
+			record.Decryption == connectionevent.DecryptionMITM {
+			decrypted = true
+		}
+	}
+	if !decrypted {
+		t.Fatalf("captured connection was not recorded as MITM: %+v", connections.Items)
+	}
+	attempts, err := runtime.EgressAttempts().List(
+		context.Background(),
+		egressaudit.PageRequest{Limit: 20},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	providerAttempt := false
+	for _, record := range attempts.Items {
+		if record.Attempt.Purpose() == egressaudit.PurposeProviderAttempt &&
+			record.Attempt.Terminal() &&
+			record.Attempt.BytesOut() > 0 &&
+			record.Attempt.BytesIn() > 0 {
+			providerAttempt = true
+		}
+	}
+	if !providerAttempt {
+		t.Fatalf("captured provider attempt is incomplete: %+v", attempts.Items)
+	}
+}
+
+func TestCapturedProcessHelper(t *testing.T) {
+	if os.Getenv(capturedProcessHelperEnvironment) != "1" {
+		return
+	}
+	transport := http.DefaultTransport.(*http.Transport).Clone()
+	transport.Proxy = http.ProxyFromEnvironment
+	// This synthetic process deliberately trusts only the local test proxy by
+	// skipping verification. Production clients receive the scoped VibeMate Root
+	// through their verified or explicitly recognized launch recipe.
+	transport.TLSClientConfig = &tls.Config{ //nolint:gosec -- test-only local proxy
+		MinVersion:         tls.VersionTLS12,
+		InsecureSkipVerify: true, // #nosec G402 -- test-only local proxy
+	}
+	client := &http.Client{Transport: transport, Timeout: 20 * time.Second}
+	body := `{"model":"client-alias","max_tokens":32,"stream":true,` +
+		`"messages":[{"role":"user","content":"stream locally"}]}`
+	request, err := http.NewRequest(
+		http.MethodPost,
+		"https://api.anthropic.com/v1/messages",
+		strings.NewReader(body),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	request.Header.Set("content-type", "application/json")
+	request.Header.Set("accept", "text/event-stream")
+	request.Header.Set("anthropic-version", "2023-06-01")
+	request.Header.Set("x-api-key", "client-key-must-not-reach-provider")
+	response, err := client.Do(request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer response.Body.Close()
+	if response.StatusCode != http.StatusOK {
+		answered, _ := io.ReadAll(io.LimitReader(response.Body, 1<<16))
+		t.Fatalf("status=%d body=%s", response.StatusCode, answered)
+	}
+	if _, err := io.Copy(os.Stdout, io.LimitReader(response.Body, 1<<20)); err != nil {
+		t.Fatal(err)
 	}
 }
 

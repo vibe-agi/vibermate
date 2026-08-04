@@ -69,6 +69,9 @@ func execute(
 			stderr,
 		)
 	}
+	if len(arguments) > 0 && arguments[0] == "terminal-command" {
+		return executeTerminalCommand(arguments[1:], stdout)
+	}
 	if len(arguments) < 3 ||
 		arguments[0] != "run" ||
 		arguments[1] != "--" ||

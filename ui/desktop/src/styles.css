@@ -739,6 +739,105 @@ dd {
   overflow: hidden;
 }
 
+.terminal-command-panel {
+  grid-column: 1 / -1;
+  overflow: hidden;
+}
+
+.terminal-command-panel .section-heading {
+  align-items: flex-start;
+}
+
+.terminal-command-panel .section-heading h2 {
+  margin-bottom: 0.25rem;
+}
+
+.terminal-command-panel .section-heading p,
+.terminal-command-copy-row p {
+  margin: 0;
+  color: var(--muted);
+  font-size: 0.78rem;
+}
+
+.terminal-command-state {
+  flex: 0 0 auto;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  padding: 0.22rem 0.58rem;
+  color: var(--muted);
+  background: var(--raised);
+  font-size: 0.72rem;
+  font-weight: 700;
+}
+
+.terminal-command-state.current {
+  border-color: color-mix(in srgb, var(--allow) 46%, var(--border));
+  color: var(--allow);
+  background: var(--allow-soft);
+}
+
+.terminal-command-state.source_updated,
+.terminal-command-state.target_missing,
+.terminal-command-state.source_missing,
+.terminal-command-state.conflict,
+.terminal-command-state.unowned_target {
+  border-color: color-mix(in srgb, var(--ask) 46%, var(--border));
+  color: var(--ask);
+  background: var(--ask-soft);
+}
+
+.terminal-command-copy-row {
+  display: grid;
+  gap: 0.4rem;
+}
+
+.terminal-command-copy-row > label {
+  color: var(--muted);
+  font-size: 0.72rem;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.terminal-command-copy-row > div {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 0.55rem;
+}
+
+.terminal-command-copy-row input {
+  min-width: 0;
+  font-family: var(--mono);
+}
+
+.terminal-command-paths {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0.75rem;
+  margin: 1rem 0;
+}
+
+.terminal-command-paths > div {
+  min-width: 0;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 0.65rem 0.75rem;
+  background: var(--raised);
+}
+
+.terminal-command-paths dt {
+  color: var(--muted);
+  font-size: 0.7rem;
+  font-weight: 700;
+}
+
+.terminal-command-paths dd {
+  overflow-wrap: anywhere;
+  margin: 0.3rem 0 0;
+  font-family: var(--mono);
+  font-size: 0.75rem;
+}
+
 .workspace-route-heading {
   align-items: flex-start;
 }
@@ -2497,6 +2596,11 @@ dd {
 
   .request-detail-heading {
     flex-direction: column;
+  }
+
+  .terminal-command-copy-row > div,
+  .terminal-command-paths {
+    grid-template-columns: minmax(0, 1fr);
   }
 
   .focus-action,
