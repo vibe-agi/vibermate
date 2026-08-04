@@ -3,7 +3,7 @@
 Status: complete
 Created: 2026-08-04
 Implementation baseline: `a51a4576acdb7a6770b37172d8e808a9bf96b00f`
-Implementation candidate: `cfb3ecbff4bc8aab0db8e6cceaedc53b51152ba7`
+Implementation candidate: `a4b56a5685731bcdd316aba85bf7753992c46779`
 Design authority: `vibermate-design` ADR-0019 at `6fd70d49fc563e6ca8a95e35e6806ec80d0fe922`
 
 ## Goal
@@ -70,4 +70,8 @@ version counters or pretending that traffic observation proves app identity.
 The implementation satisfies this Goal. The UI follows a three-state handoff:
 review ticket, one-time credential-delivery ticket, and permanent secret-free
 observation card. Both supported locales and the 390-pixel layout were
-inspected through a real Chromium session. The product remains pre-Preview.
+inspected through a real Chromium session. A follow-up frontend-design review
+also verified the light and dark palettes and made each task transition own
+keyboard focus, gave both copy actions distinct accessible names, suppressed
+stale list content during one-time delivery, and kept exact proxy values on
+unwrapped lines. The product remains pre-Preview.
