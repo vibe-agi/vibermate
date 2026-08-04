@@ -13,6 +13,7 @@ import (
 	"github.com/vibe-agi/vibermate/internal/accesscredential"
 	"github.com/vibe-agi/vibermate/internal/activity"
 	"github.com/vibe-agi/vibermate/internal/blindtunnel"
+	"github.com/vibe-agi/vibermate/internal/captureadmission"
 	"github.com/vibe-agi/vibermate/internal/capturerun"
 	"github.com/vibe-agi/vibermate/internal/connectionevent"
 	"github.com/vibe-agi/vibermate/internal/connectionpolicy"
@@ -448,6 +449,10 @@ func startWithBuilders(
 		)
 	}
 	pending.register("CaptureRun component", captureRuns.Shutdown)
+	captureAdmissions, err := captureadmission.NewManagedRunAuthorizer(captureRuns)
+	if err != nil {
+		return fail("capture admission", err)
+	}
 
 	// A blind tunnel dials through the same egress admission as every other
 	// outbound, so it cannot become the one path that ignores a planned hold.
@@ -457,7 +462,7 @@ func startWithBuilders(
 	}
 	proxy, err := builders.proxy.Build(proxyBuildRequest{
 		ownerContext: ownerContext,
-		runs:         captureRuns,
+		admissions:   captureAdmissions,
 		ingress:      accesses,
 		exchanges:    exchanges,
 		original:     original,

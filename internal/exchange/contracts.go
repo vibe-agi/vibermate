@@ -18,6 +18,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/vibe-agi/vibermate/internal/access"
+	"github.com/vibe-agi/vibermate/internal/captureadmission"
 	"github.com/vibe-agi/vibermate/internal/offlinehold"
 	"github.com/vibe-agi/vibermate/internal/protocolcore"
 	"github.com/vibe-agi/vibermate/internal/protocolpath"
@@ -401,11 +402,9 @@ type ClientRequest struct {
 	replayClass    ReplayClass
 	clientHello    transportprofile.Observation
 	hasClientHello bool
-	captureRunRef  string
+	admission      captureadmission.Admission
 	connectionRef  string
 	hasCorrelation bool
-	workspace      workspaceidentity.Scope
-	hasWorkspace   bool
 	anthropicBeta  string
 }
 
@@ -415,7 +414,6 @@ const (
 	clientRequestOptionClientHello   clientRequestOptionKind = 1
 	clientRequestOptionCorrelation   clientRequestOptionKind = 2
 	clientRequestOptionAnthropicBeta clientRequestOptionKind = 3
-	clientRequestOptionWorkspace     clientRequestOptionKind = 4
 )
 
 // ClientRequestOption is a closed typed option. Its fields are private so an
@@ -423,10 +421,9 @@ const (
 type ClientRequestOption struct {
 	kind          clientRequestOptionKind
 	clientHello   transportprofile.Observation
-	captureRunRef string
+	admission     captureadmission.Admission
 	connectionRef string
 	anthropicBeta string
-	workspace     workspaceidentity.Scope
 }
 
 func WithClientHelloObservation(
@@ -438,28 +435,18 @@ func WithClientHelloObservation(
 	}
 }
 
-// WithIngressCorrelation associates this Exchange with the CaptureRun and
-// client connection it entered through. ADR-0015 section 10 forbids encoding
-// that containment in an identity string, so every identity is generated
-// independently and the association travels as typed references.
+// WithIngressCorrelation associates this Exchange with the route-neutral
+// capture admission and client connection it entered through. ADR-0015
+// section 10 forbids encoding containment in an identity string, so every
+// identity is generated independently and association travels as typed data.
 func WithIngressCorrelation(
-	captureRunRef string,
+	admission captureadmission.Admission,
 	connectionRef string,
 ) ClientRequestOption {
 	return ClientRequestOption{
 		kind:          clientRequestOptionCorrelation,
-		captureRunRef: captureRunRef,
+		admission:     admission,
 		connectionRef: connectionRef,
-	}
-}
-
-// WithWorkspaceScope carries identity already authenticated by the
-// CaptureRun capability. The scope is used only after AgentEndpoint resolves
-// an Access and cannot widen that Access's allowed RouteSet.
-func WithWorkspaceScope(scope workspaceidentity.Scope) ClientRequestOption {
-	return ClientRequestOption{
-		kind:      clientRequestOptionWorkspace,
-		workspace: scope,
 	}
 }
 
@@ -523,10 +510,7 @@ func NewClientRequest(
 					"ingress correlation option is duplicated",
 				)
 			}
-			if err := validateIdentity(
-				"CaptureRun reference",
-				option.captureRunRef,
-			); err != nil {
+			if err := option.admission.Validate(); err != nil {
 				return ClientRequest{}, err
 			}
 			if err := validateIdentity(
@@ -535,7 +519,7 @@ func NewClientRequest(
 			); err != nil {
 				return ClientRequest{}, err
 			}
-			request.captureRunRef = option.captureRunRef
+			request.admission = option.admission
 			request.connectionRef = option.connectionRef
 			request.hasCorrelation = true
 		case clientRequestOptionAnthropicBeta:
@@ -546,14 +530,6 @@ func NewClientRequest(
 				)
 			}
 			request.anthropicBeta = option.anthropicBeta
-		case clientRequestOptionWorkspace:
-			if request.hasWorkspace || option.workspace.Validate() != nil {
-				return ClientRequest{}, errors.New(
-					"workspace scope option is invalid",
-				)
-			}
-			request.workspace = option.workspace
-			request.hasWorkspace = true
 		default:
 			return ClientRequest{}, errors.New(
 				"client request option is invalid",
@@ -593,10 +569,33 @@ func (request ClientRequest) protocolHeaders() http.Header {
 	return headers
 }
 
-// CaptureRunRef is the CaptureRun this Exchange entered through, or empty for
-// a runtime-originated Exchange that has no client connection.
+// CaptureAdmission is the authenticated, route-neutral ingress evidence for
+// this Exchange, or absent for a runtime-originated Exchange.
+func (request ClientRequest) CaptureAdmission() (
+	captureadmission.Admission,
+	bool,
+) {
+	return request.admission, request.hasCorrelation
+}
+
+func (request ClientRequest) IngressProfileRef() string {
+	if !request.hasCorrelation {
+		return ""
+	}
+	return request.admission.IngressProfileID()
+}
+
+// CaptureRunRef is present only for an Exchange admitted through managed run.
 func (request ClientRequest) CaptureRunRef() string {
-	return request.captureRunRef
+	value, _ := request.admission.CaptureRunID()
+	return value
+}
+
+// ManualCaptureRef is present only for an Exchange admitted through a manual
+// capture grant.
+func (request ClientRequest) ManualCaptureRef() string {
+	value, _ := request.admission.ManualCaptureID()
+	return value
 }
 
 // ConnectionRef is the client connection this Exchange entered through, or
@@ -606,7 +605,10 @@ func (request ClientRequest) ConnectionRef() string {
 }
 
 func (request ClientRequest) WorkspaceScope() (workspaceidentity.Scope, bool) {
-	return request.workspace, request.hasWorkspace
+	if !request.hasCorrelation {
+		return workspaceidentity.Scope{}, false
+	}
+	return request.admission.WorkspaceScope()
 }
 
 func (request ClientRequest) ExchangeID() string {
@@ -653,11 +655,6 @@ func (request ClientRequest) validate() error {
 	if len(request.body) == 0 ||
 		len(request.body) > providertransport.MaxProviderRequestBytes {
 		return errors.New("client request body has an invalid size")
-	}
-	if request.hasWorkspace {
-		if !request.hasCorrelation || request.workspace.Validate() != nil {
-			return errors.New("client request workspace scope is invalid")
-		}
 	}
 	if request.hasClientHello && !request.clientHello.Available() {
 		return errors.New("client TLS ClientHello observation is unavailable")

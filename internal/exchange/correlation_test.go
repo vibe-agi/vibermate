@@ -1,9 +1,11 @@
 package exchange
 
 import (
-	"github.com/vibe-agi/vibermate/internal/access"
 	"strings"
 	"testing"
+
+	"github.com/vibe-agi/vibermate/internal/access"
+	"github.com/vibe-agi/vibermate/internal/captureadmission"
 )
 
 func mustCorrelationAccessID(t *testing.T) access.AccessID {
@@ -18,14 +20,22 @@ func mustCorrelationAccessID(t *testing.T) access.AccessID {
 
 func correlatedRequest(
 	t *testing.T,
-	runID string,
+	manualCaptureID string,
 	connectionID string,
 	options ...ClientRequestOption,
 ) (ClientRequest, error) {
 	t.Helper()
+	admission, err := captureadmission.NewManual(
+		manualCaptureID,
+		1,
+		"Manual capture",
+	)
+	if err != nil {
+		return ClientRequest{}, err
+	}
 
 	all := append(
-		[]ClientRequestOption{WithIngressCorrelation(runID, connectionID)},
+		[]ClientRequestOption{WithIngressCorrelation(admission, connectionID)},
 		options...,
 	)
 	return NewClientRequest(
@@ -47,8 +57,12 @@ func TestClientRequestCarriesTypedCorrelationRefs(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got := request.CaptureRunRef(); got != "capture-run-1" {
-		t.Fatalf("CaptureRun reference = %q", got)
+	if got := request.ManualCaptureRef(); got != "capture-run-1" {
+		t.Fatalf("ManualCapture reference = %q", got)
+	}
+	if request.CaptureRunRef() != "" ||
+		request.IngressProfileRef() != "manual-capture/capture-run-1" {
+		t.Fatalf("route-neutral references are inconsistent")
 	}
 	if got := request.ConnectionRef(); got != "connection-1" {
 		t.Fatalf("connection reference = %q", got)
@@ -59,15 +73,15 @@ func TestExchangeIDDoesNotEncodeAnotherIdentity(t *testing.T) {
 	t.Parallel()
 
 	const (
-		runID        = "capture-run-1"
+		captureID    = "capture-run-1"
 		connectionID = "connection-1"
 	)
-	request, err := correlatedRequest(t, runID, connectionID)
+	request, err := correlatedRequest(t, captureID, connectionID)
 	if err != nil {
 		t.Fatal(err)
 	}
 	exchangeID := request.ExchangeID()
-	for _, other := range []string{runID, connectionID} {
+	for _, other := range []string{captureID, connectionID} {
 		if strings.Contains(exchangeID, other) {
 			t.Fatalf(
 				"Exchange ID %q encodes identity %q as a substring",
@@ -91,26 +105,27 @@ func TestCorrelationIsOptionalButValidatedWhenPresent(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if plain.CaptureRunRef() != "" || plain.ConnectionRef() != "" {
+	if plain.CaptureRunRef() != "" || plain.ManualCaptureRef() != "" ||
+		plain.IngressProfileRef() != "" || plain.ConnectionRef() != "" {
 		t.Fatal("an uncorrelated request reported a reference")
 	}
 
 	for _, invalid := range []struct {
 		name         string
-		runID        string
+		captureID    string
 		connectionID string
 	}{
-		{name: "blank run", runID: " ", connectionID: "connection-1"},
-		{name: "blank connection", runID: "capture-run-1", connectionID: " "},
-		{name: "empty run", runID: "", connectionID: "connection-1"},
-		{name: "empty connection", runID: "capture-run-1", connectionID: ""},
+		{name: "blank capture", captureID: " ", connectionID: "connection-1"},
+		{name: "blank connection", captureID: "capture-one", connectionID: " "},
+		{name: "empty capture", captureID: "", connectionID: "connection-1"},
+		{name: "empty connection", captureID: "capture-one", connectionID: ""},
 	} {
 		t.Run(invalid.name, func(t *testing.T) {
 			t.Parallel()
 
 			if _, err := correlatedRequest(
 				t,
-				invalid.runID,
+				invalid.captureID,
 				invalid.connectionID,
 			); err == nil {
 				t.Fatal("invalid correlation reference was accepted")
@@ -126,10 +141,25 @@ func TestCorrelationOptionCannotBeDuplicated(t *testing.T) {
 		t,
 		"capture-run-1",
 		"connection-1",
-		WithIngressCorrelation("capture-run-2", "connection-2"),
+		WithIngressCorrelation(
+			mustManualAdmission(t, "capture-run-2"),
+			"connection-2",
+		),
 	); err == nil {
 		t.Fatal("duplicate ingress correlation was accepted")
 	}
+}
+
+func mustManualAdmission(
+	t *testing.T,
+	id string,
+) captureadmission.Admission {
+	t.Helper()
+	admission, err := captureadmission.NewManual(id, 1, "Manual capture")
+	if err != nil {
+		t.Fatal(err)
+	}
+	return admission
 }
 
 func TestClientRequestCarriesOnlyValidatedAnthropicBetaHeader(t *testing.T) {

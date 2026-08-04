@@ -24,7 +24,7 @@ import (
 
 	"github.com/vibe-agi/vibermate/internal/access"
 	"github.com/vibe-agi/vibermate/internal/blindtunnel"
-	"github.com/vibe-agi/vibermate/internal/capturerun"
+	"github.com/vibe-agi/vibermate/internal/captureadmission"
 	"github.com/vibe-agi/vibermate/internal/certidentity"
 	"github.com/vibe-agi/vibermate/internal/clientadapter"
 	"github.com/vibe-agi/vibermate/internal/connectionevent"
@@ -41,7 +41,6 @@ import (
 )
 
 const (
-	proxyUsername               = "capture"
 	maxInnerHeaderBytes         = 1 << 20
 	defaultHandshakeLimit       = 10 * time.Second
 	defaultAuditCompletionLimit = 2 * time.Second
@@ -53,7 +52,7 @@ type ReasonCode string
 
 const (
 	ReasonProxyAuthenticationRequired   ReasonCode = "proxy_authentication_required"
-	ReasonCaptureRunRejected            ReasonCode = "capture_run_rejected"
+	ReasonCaptureAdmissionRejected      ReasonCode = "capture_admission_rejected"
 	ReasonAgentEndpointNotConfigured    ReasonCode = "agent_endpoint_not_configured"
 	ReasonConnectAuthorityInvalid       ReasonCode = "connect_authority_invalid"
 	ReasonConnectSNIMismatch            ReasonCode = "connect_sni_mismatch"
@@ -75,13 +74,6 @@ const (
 )
 
 var ErrProxyStopping = errors.New("loopback proxy is stopping")
-
-type RunAuthorizer interface {
-	AuthorizeProxy(
-		context.Context,
-		capturerun.ProxyCapability,
-	) (capturerun.Evidence, error)
-}
 
 type CertificateAuthority interface {
 	Identity() localca.RootIdentity
@@ -149,7 +141,7 @@ func (source RandomExchangeIDSource) NewExchangeID(
 
 type Options struct {
 	OwnerContext context.Context
-	Runs         RunAuthorizer
+	Admissions   captureadmission.Authorizer
 	Ingress      IngressAuthority
 	Paths        *pathcapability.Catalog
 	Exchanges    exchange.Executor
@@ -182,7 +174,7 @@ type operation struct {
 }
 
 type Handler struct {
-	runs         RunAuthorizer
+	admissions   captureadmission.Authorizer
 	ingress      IngressAuthority
 	paths        *pathcapability.Catalog
 	exchanges    exchange.Executor
@@ -208,7 +200,7 @@ type Handler struct {
 
 func New(options Options) (*Handler, error) {
 	if options.OwnerContext == nil ||
-		options.Runs == nil ||
+		options.Admissions == nil ||
 		options.Ingress == nil ||
 		options.Paths == nil ||
 		options.Exchanges == nil ||
@@ -225,7 +217,7 @@ func New(options Options) (*Handler, error) {
 		return nil, errors.New("TLS handshake timeout must be positive")
 	}
 	handler := &Handler{
-		runs:         options.Runs,
+		admissions:   options.Admissions,
 		ingress:      options.Ingress,
 		paths:        options.Paths,
 		exchanges:    options.Exchanges,
@@ -371,7 +363,11 @@ func (handler *Handler) ServeHTTP(
 		)
 		return
 	}
-	capability, err := capturerun.NewProxyCapability(rawCapability)
+	admission, err := authorizeCaptureAdmission(
+		request.Context(),
+		handler.admissions,
+		rawCapability,
+	)
 	if err != nil {
 		if handler.denyConnection(
 			request.Context(),
@@ -379,7 +375,7 @@ func (handler *Handler) ServeHTTP(
 			connectionevent.Source{
 				Confidence: connectionevent.SourceConfidenceUnknown,
 			},
-			ReasonCaptureRunRejected,
+			ReasonCaptureAdmissionRejected,
 		) != nil {
 			writeReason(
 				writer,
@@ -390,32 +386,10 @@ func (handler *Handler) ServeHTTP(
 			return
 		}
 		terminal = true
-		writeReason(writer, http.StatusForbidden, ReasonCaptureRunRejected, "")
+		writeReason(writer, http.StatusForbidden, ReasonCaptureAdmissionRejected, "")
 		return
 	}
-	evidence, err := handler.runs.AuthorizeProxy(request.Context(), capability)
-	if err != nil {
-		if handler.denyConnection(
-			request.Context(),
-			audit,
-			connectionevent.Source{
-				Confidence: connectionevent.SourceConfidenceUnknown,
-			},
-			ReasonCaptureRunRejected,
-		) != nil {
-			writeReason(
-				writer,
-				http.StatusServiceUnavailable,
-				ReasonConnectionAuditUnavailable,
-				"",
-			)
-			return
-		}
-		terminal = true
-		writeReason(writer, http.StatusForbidden, ReasonCaptureRunRejected, "")
-		return
-	}
-	source := connectionSource(evidence)
+	source := connectionSource(admission)
 	// Every proxied connection is decided here, before any dial, DNS
 	// resolution, or certificate issuance, and before the AgentEndpoint match
 	// that would otherwise exempt it.
@@ -563,7 +537,7 @@ func (handler *Handler) ServeHTTP(
 		request.Context(),
 		counted,
 		host,
-		evidence,
+		admission,
 		binding,
 		audit,
 	); err != nil {
@@ -579,7 +553,7 @@ func (handler *Handler) serveTLS(
 	parent context.Context,
 	connection net.Conn,
 	expectedHost string,
-	run capturerun.Evidence,
+	admission captureadmission.Admission,
 	binding access.IngressBinding,
 	audit *connectionevent.Connection,
 ) error {
@@ -675,7 +649,7 @@ func (handler *Handler) serveTLS(
 			handler.serveInner(
 				writer,
 				request,
-				run,
+				admission,
 				binding,
 				observation,
 				audit,
@@ -696,7 +670,7 @@ func (handler *Handler) serveTLS(
 func (handler *Handler) serveInner(
 	writer http.ResponseWriter,
 	request *http.Request,
-	run capturerun.Evidence,
+	admission captureadmission.Admission,
 	binding access.IngressBinding,
 	observation transportprofile.Observation,
 	audit *connectionevent.Connection,
@@ -749,8 +723,7 @@ func (handler *Handler) serveInner(
 		if capability.Transport() ==
 			access.ClientOperationTransportWebSocket &&
 			isWebSocketUpgrade(request) &&
-			run.Adapter != nil &&
-			run.Adapter.Supports(
+			admission.Supports(
 				clientadapter.FeatureResponsesWebSocketHTTPFallback,
 			) {
 			writeReason(
@@ -812,7 +785,7 @@ func (handler *Handler) serveInner(
 		handler.serveSemantic(
 			writer,
 			request,
-			run,
+			admission,
 			binding,
 			capability,
 			exchangeID,
@@ -866,7 +839,7 @@ func isWebSocketUpgrade(request *http.Request) bool {
 func (handler *Handler) serveSemantic(
 	writer http.ResponseWriter,
 	request *http.Request,
-	run capturerun.Evidence,
+	admission captureadmission.Admission,
 	binding access.IngressBinding,
 	capability pathcapability.Capability,
 	exchangeID string,
@@ -889,13 +862,7 @@ func (handler *Handler) serveSemantic(
 		exchange.WithClientHelloObservation(observation),
 		// Every identity is generated independently; association travels as
 		// typed references rather than as a delimiter-joined string.
-		exchange.WithIngressCorrelation(run.RunID, audit.ID()),
-	}
-	if run.Workspace.Validate() == nil {
-		requestOptions = append(
-			requestOptions,
-			exchange.WithWorkspaceScope(run.Workspace),
-		)
+		exchange.WithIngressCorrelation(admission, audit.ID()),
 	}
 	if beta := strings.Join(request.Header.Values("Anthropic-Beta"), ","); beta != "" {
 		requestOptions = append(
@@ -950,14 +917,17 @@ func (handler *Handler) rules() connectionpolicy.RuleSet {
 	return handler.policy.Current()
 }
 
-func connectionSource(run capturerun.Evidence) connectionevent.Source {
-	confidence := connectionevent.SourceConfidenceConfigured
-	if run.Adapter != nil {
+func connectionSource(admission captureadmission.Admission) connectionevent.Source {
+	confidence := connectionevent.SourceConfidenceUnknown
+	switch admission.AttributionConfidence() {
+	case captureadmission.AttributionVerified:
 		confidence = connectionevent.SourceConfidenceVerified
+	case captureadmission.AttributionConfigured:
+		confidence = connectionevent.SourceConfidenceConfigured
 	}
 	return connectionevent.Source{
-		IngressID:  run.RunID,
-		Label:      run.ExecutableLabel,
+		IngressID:  admission.IngressProfileID(),
+		Label:      admission.SourceLabel(),
 		Confidence: confidence,
 	}
 }
@@ -1290,11 +1260,37 @@ func consumeProxyAuthorization(header http.Header) (string, error) {
 		return "", err
 	}
 	username, password, found := strings.Cut(string(decoded), ":")
-	if !found || username != proxyUsername || password == "" ||
+	if !found || username != captureadmission.ProxyUsername || password == "" ||
 		strings.Contains(password, ":") {
 		return "", errors.New("proxy authorization credentials are invalid")
 	}
 	return password, nil
+}
+
+func authorizeCaptureAdmission(
+	ctx context.Context,
+	authorizer captureadmission.Authorizer,
+	rawCredential string,
+) (captureadmission.Admission, error) {
+	if authorizer == nil {
+		return captureadmission.Admission{},
+			captureadmission.ErrCredentialRejected
+	}
+	credential, err := captureadmission.NewProxyCredential(rawCredential)
+	if err != nil {
+		return captureadmission.Admission{}, err
+	}
+	admission, err := authorizer.Authorize(ctx, credential)
+	if err != nil {
+		return captureadmission.Admission{}, err
+	}
+	if err := admission.Validate(); err != nil {
+		return captureadmission.Admission{}, errors.Join(
+			captureadmission.ErrCredentialRejected,
+			err,
+		)
+	}
+	return admission, nil
 }
 
 func connectOrigin(authority string) (access.ClientOrigin, string, error) {

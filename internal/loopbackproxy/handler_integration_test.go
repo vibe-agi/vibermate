@@ -22,6 +22,7 @@ import (
 	"github.com/vibe-agi/vibermate/internal/access"
 	"github.com/vibe-agi/vibermate/internal/anthropicchat"
 	"github.com/vibe-agi/vibermate/internal/blindtunnel"
+	"github.com/vibe-agi/vibermate/internal/captureadmission"
 	"github.com/vibe-agi/vibermate/internal/capturerun"
 	"github.com/vibe-agi/vibermate/internal/clientadapter"
 	"github.com/vibe-agi/vibermate/internal/connectionevent"
@@ -85,6 +86,8 @@ func TestLoopbackProxyAuthenticatesMITMAndDispatchesByPathCapability(
 		requests[0].ReplayClass() != exchange.ReplayGenerationCostOnly ||
 		string(requests[0].Body()) != `{"model":"client"}` ||
 		requests[0].CaptureRunRef() != fixture.grant.Run.ID ||
+		requests[0].IngressProfileRef() != "capture-run/"+fixture.grant.Run.ID ||
+		requests[0].ManualCaptureRef() != "" ||
 		requests[0].ConnectionRef() == "" ||
 		strings.Contains(requests[0].ExchangeID(), fixture.grant.Run.ID) {
 		t.Fatalf("semantic Exchange requests = %+v", requests)
@@ -146,12 +149,18 @@ func TestLoopbackProxyAuthenticatesMITMAndDispatchesByPathCapability(
 	// EgressAttempt, so they never appear here.
 	for _, record := range page.Items {
 		expectedConfidence := connectionevent.SourceConfidenceConfigured
+		expectedIngressID := "capture-run/" + fixture.grant.Run.ID
+		expectedLabel := fixture.grant.Run.ExecutableLabel
 		if record.Phase == connectionevent.PhaseAttempted {
 			expectedConfidence = connectionevent.SourceConfidenceUnknown
+			expectedIngressID = ""
+			expectedLabel = ""
 		}
 		if record.RequestedHost != "api.anthropic.com" ||
 			record.Port != 443 ||
-			record.SourceConfidence != expectedConfidence {
+			record.SourceConfidence != expectedConfidence ||
+			record.IngressID != expectedIngressID ||
+			record.SourceLabel != expectedLabel {
 			t.Fatalf("connection record = %+v", record)
 		}
 		if record.CredentialBindingID != "" {
@@ -182,7 +191,7 @@ func TestLoopbackProxyFailsClosedBeforeCertificateOrDataPlane(t *testing.T) {
 			token:     base64.RawURLEncoding.EncodeToString(bytes.Repeat([]byte{1}, 32)),
 			authority: "api.anthropic.com:443",
 			status:    http.StatusForbidden,
-			reason:    "capture_run_rejected",
+			reason:    "capture_admission_rejected",
 		},
 		{
 			// An unregistered authority is now forwarded blind rather than
@@ -826,9 +835,13 @@ func newProxyFixtureForDialectWithPolicy(
 	if err != nil {
 		t.Fatal(err)
 	}
+	admissions, err := captureadmission.NewManagedRunAuthorizer(runs)
+	if err != nil {
+		t.Fatal(err)
+	}
 	handler, err := loopbackproxy.New(loopbackproxy.Options{
 		OwnerContext:     context.Background(),
-		Runs:             runs,
+		Admissions:       admissions,
 		Ingress:          ingress,
 		Paths:            paths,
 		Exchanges:        exchanges,

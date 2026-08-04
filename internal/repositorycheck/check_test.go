@@ -434,6 +434,7 @@ func TestProductionCompositionBoundaryUsesPublicCheckWithGoodAndBadFixtures(
 		"host-does-not-create-capture-grant-issuer",
 		"host-does-not-create-capture-control-handler",
 		"capture-run-create-outside-issuer",
+		"proxy-imports-capture-run",
 		"unreviewed-runtime-composition",
 		"unreviewed-host-composition",
 		"unreviewed-control-authority-composition",
@@ -451,6 +452,7 @@ func TestProductionCompositionBoundaryUsesPublicCheckWithGoodAndBadFixtures(
 		"internal/desktopdaemon",
 		"internal/desktophost",
 		"internal/productruntime",
+		"internal/loopbackproxy/handler.go",
 		// An alias, and taking the function as a value.
 		"internal/sneakyhost/host.go",
 		// A second entry point composing the product.

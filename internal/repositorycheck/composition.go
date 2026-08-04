@@ -20,6 +20,7 @@ const (
 	captureGrantImportPath     = "github.com/vibe-agi/vibermate/internal/capturegrant"
 	captureControlImportPath   = "github.com/vibe-agi/vibermate/internal/capturecontrol"
 	captureRunImportPath       = "github.com/vibe-agi/vibermate/internal/capturerun"
+	loopbackProxyPackageDir    = "internal/loopbackproxy"
 )
 
 const (
@@ -83,6 +84,26 @@ func CheckProductionCompositionBoundary(repositoryRoot string) []Violation {
 			present["capture-control"] = true
 		}
 		violations = append(violations, file.dotImportViolations()...)
+	}
+
+	// The listener consumes one route-neutral CaptureAdmission. Importing the
+	// CaptureRun aggregate here would recreate a managed-only data plane and
+	// force ManualCapture to grow a parallel handler later.
+	for _, file := range files {
+		if !strings.HasPrefix(file.relative, loopbackProxyPackageDir+"/") {
+			continue
+		}
+		for _, imported := range file.imports {
+			if imported.path != captureRunImportPath {
+				continue
+			}
+			violations = append(violations, Violation{
+				Rule:    "proxy-imports-capture-run",
+				Path:    file.relative,
+				Line:    imported.line,
+				Message: "the proxy authenticates through route-neutral capture admission, not the CaptureRun aggregate",
+			})
+		}
 	}
 
 	// Each link names the exact function that owes the call, and who else may

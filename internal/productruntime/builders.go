@@ -12,6 +12,7 @@ import (
 	"github.com/vibe-agi/vibermate/internal/accesscredential"
 	"github.com/vibe-agi/vibermate/internal/activity"
 	"github.com/vibe-agi/vibermate/internal/anthropicchat"
+	"github.com/vibe-agi/vibermate/internal/captureadmission"
 	"github.com/vibe-agi/vibermate/internal/capturerun"
 	"github.com/vibe-agi/vibermate/internal/certidentity"
 	"github.com/vibe-agi/vibermate/internal/connectionevent"
@@ -649,7 +650,7 @@ func (productionLocalCABuilder) Build(
 
 type proxyBuildRequest struct {
 	ownerContext context.Context
-	runs         loopbackproxy.RunAuthorizer
+	admissions   captureadmission.Authorizer
 	ingress      loopbackproxy.IngressAuthority
 	exchanges    exchange.Executor
 	original     loopbackproxy.OriginalClient
@@ -688,7 +689,7 @@ func (productionProxyBuilder) Build(
 	}
 	return loopbackproxy.New(loopbackproxy.Options{
 		OwnerContext: request.ownerContext,
-		Runs:         request.runs,
+		Admissions:   request.admissions,
 		Ingress:      request.ingress,
 		Paths:        paths,
 		Exchanges:    request.exchanges,

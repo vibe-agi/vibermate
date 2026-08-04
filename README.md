@@ -75,11 +75,18 @@ before any tool block or terminal event is released. Attempts append a redacted
 durable Activity record with stable reason codes and transport-selection
 evidence, never prompt, credential, header, or raw tool-argument values.
 
-ProductRuntime also composes a handler-only loopback proxy boundary. An
-authenticated, persisted CaptureRun capability must be accepted before exact
-`ClientOrigin` lookup, local leaf issuance, CONNECT MITM, path classification,
-or data-plane dispatch. Every request on an existing CONNECT connection
-revalidates its frozen AgentEndpoint evidence against the current active plan.
+ProductRuntime also composes a handler-only loopback proxy boundary. An opaque
+proxy credential must first resolve to one immutable, route-neutral
+`CaptureAdmission` before exact `ClientOrigin` lookup, policy-dependent dial,
+local leaf issuance, CONNECT MITM, path classification, or data-plane dispatch.
+The current producer adapts an authenticated persisted CaptureRun capability;
+the proxy no longer imports or understands the CaptureRun aggregate. Admission
+records ingress profile, optional run/manual identity, credential revision,
+attribution confidence, and any already-authenticated workspace/client-adapter
+evidence. It cannot carry or select Access, Profile, route, account, model,
+plugin, or provider credential. Every request on an existing CONNECT
+connection revalidates its frozen AgentEndpoint evidence against the current
+active plan.
 Exact semantic Anthropic Messages and OpenAI Responses HTTP operations enter
 the same Exchange executor; semantic ingress carries no client authentication
 or hop-by-hop headers into IR or provider construction.
@@ -104,7 +111,11 @@ durable CaptureRun creation. Its returned per-run proxy and lifecycle
 credentials are separate from the control credential: mixed credential
 namespaces fail closed, and the child process never receives the control
 credential or discovery path. Manual capture and remote enrollment are not
-implemented in this slice.
+implemented in this slice. Exchange correlation now carries the complete
+admission and a separately generated connection identity; workspace routing can
+read only the scope frozen into that admission, not a second caller-supplied
+option. The managed-run ingress profile is mechanically
+`capture-run/<run-id>` and its non-rotating per-run capability revision is 1.
 
 After an exact AgentEndpoint resolves an Access, the runtime atomically creates
 or reads the durable `(AccessID, MachineID, WorkspaceID)` route binding. Each

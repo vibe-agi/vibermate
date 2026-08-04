@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/vibe-agi/vibermate/internal/access"
+	"github.com/vibe-agi/vibermate/internal/captureadmission"
 	"github.com/vibe-agi/vibermate/internal/exchange"
 	"github.com/vibe-agi/vibermate/internal/workspaceroute"
 )
@@ -69,6 +70,16 @@ func TestWorkspaceRouteCASSelectsAndFreezesTheNextExchangeProfile(t *testing.T) 
 	}
 
 	operation := runtimeAnthropicOperationEvidence(t)
+	admission, err := captureadmission.NewManagedRun(
+		captureadmission.ManagedRunEvidence{
+			CaptureRunID: "capture-run-workspace",
+			SourceLabel:  "test-agent",
+			Workspace:    scope,
+		},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
 	request, err := exchange.NewClientRequest(
 		"exchange-workspace-secondary",
 		snapshot.IngressBinding(),
@@ -79,8 +90,7 @@ func TestWorkspaceRouteCASSelectsAndFreezesTheNextExchangeProfile(t *testing.T) 
 			"messages":[{"role":"user","content":"hello"}]
 		}`),
 		exchange.ReplayGenerationCostOnly,
-		exchange.WithIngressCorrelation("capture-run-workspace", "connection-workspace"),
-		exchange.WithWorkspaceScope(scope),
+		exchange.WithIngressCorrelation(admission, "connection-workspace"),
 	)
 	if err != nil {
 		t.Fatal(err)
