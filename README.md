@@ -426,9 +426,11 @@ development file SecretStore and defaults to a local Cherry Studio API at
 takes a secret value on its command line. The Codex runner isolates
 `CODEX_HOME`, reads prompts from standard input, trusts only bounded typed
 JSONL plus bounded client-status evidence, and exercises `exec resume`. One
-clean packaged v5 deterministic report bound to
-`1b1a1b5fe43e1e4d89243006b10ff9c67ef0ea28` passes 17 of 17 checks with fixed
-Claude Code 2.1.220. The latest credentialed report is older: 25 of 25 checks
+clean packaged v6 deterministic report bound to
+`f26db1195653afedcbdb0071a639ea33690fc34c` passes 18 of 18 checks with fixed
+Claude Code 2.1.220 and independently verifies the selected source, App,
+sidecars, acceptance executable, client entrypoint, and frozen configuration.
+The latest credentialed report is older: 25 of 25 checks
 bound to `c19cca4eb2842aa00d8e8fc17160b342a111f0b6` and fixed Codex CLI 0.145.0.
 It remains useful historical evidence but is not current-HEAD credentialed
 evidence. The Codex tool proof names `exec`, and its Hold proof claims completion
