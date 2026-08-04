@@ -23,6 +23,7 @@ import (
 	"github.com/vibe-agi/vibermate/internal/connectionpolicy"
 	"github.com/vibe-agi/vibermate/internal/egressaudit"
 	"github.com/vibe-agi/vibermate/internal/manualcapture"
+	"github.com/vibe-agi/vibermate/internal/proxyclient"
 	"github.com/vibe-agi/vibermate/internal/toolapproval"
 	"github.com/vibe-agi/vibermate/internal/workspaceroute"
 )
@@ -53,6 +54,7 @@ type RuntimeStore interface {
 	ActivityRepository() activity.Repository
 	CaptureRunRepository() capturerun.Repository
 	ManualCaptureRepository() manualcapture.Repository
+	ProxyClientRepository() proxyclient.Repository
 	ConnectionEventRepository() connectionevent.Repository
 	EgressAttemptRepository() egressaudit.Repository
 	ToolApprovalRepository() toolapproval.Repository
@@ -69,6 +71,7 @@ type Store struct {
 	activityRepo    *activityRepository
 	captureRepo     *captureRunRepository
 	manualCapture   *manualCaptureRepository
+	proxyClients    *proxyClientRepository
 	connectionRepo  *connectionEventRepository
 	egressAttempts  *egressAttemptRepository
 	approvalRepo    *toolApprovalRepository
@@ -137,6 +140,12 @@ func Open(ctx context.Context, options Options) (*Store, error) {
 	)
 	captureRepo := newCaptureRunRepository(database, operations)
 	manualCaptureRepo := newManualCaptureRepository(database, operations)
+	proxyClientRepo := newProxyClientRepository(
+		database,
+		operations,
+		options.CommitReconcileTimeout,
+		sqlTransactionCommitter{},
+	)
 	activityRepo := newActivityRepository(database, operations)
 	connectionRepo := newConnectionEventRepository(database, operations)
 	egressRepo := newEgressAttemptRepository(database, operations)
@@ -165,6 +174,7 @@ func Open(ctx context.Context, options Options) (*Store, error) {
 		activityRepo:    activityRepo,
 		captureRepo:     captureRepo,
 		manualCapture:   manualCaptureRepo,
+		proxyClients:    proxyClientRepo,
 		connectionRepo:  connectionRepo,
 		egressAttempts:  egressRepo,
 		approvalRepo:    approvalRepo,
@@ -193,6 +203,10 @@ func (s *Store) CaptureRunRepository() capturerun.Repository {
 
 func (s *Store) ManualCaptureRepository() manualcapture.Repository {
 	return s.manualCapture
+}
+
+func (s *Store) ProxyClientRepository() proxyclient.Repository {
+	return s.proxyClients
 }
 
 func (s *Store) EgressAttemptRepository() egressaudit.Repository {

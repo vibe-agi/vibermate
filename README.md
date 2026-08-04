@@ -111,7 +111,9 @@ durable CaptureRun creation. Its returned per-run proxy and lifecycle
 credentials are separate from the control credential: mixed credential
 namespaces fail closed, and the child process never receives the control
 credential or discovery path. The same local principal can now request a
-ManualCapture through the shared handler; remote enrollment is not implemented.
+ManualCapture through the shared handler. The durable authority for remote
+enrollment now exists below product composition, but no Server listener or
+`vibermate login` path is wired.
 Exchange correlation now
 carries the complete admission and a separately generated connection identity;
 workspace routing can read only the scope frozen into that admission, not a
@@ -140,9 +142,23 @@ Activity surface now provides the same two-step review and creation contract,
 delivers the proxy password exactly once, and then retains only a secret-free
 observation card with rotate and revoke actions. The UI never places the
 one-time grant in its query cache or Web Storage. It reports whether traffic
-has arrived, but it does not prove application identity; remote enrollment and
-current packaged evidence are still absent, so the feature remains an
-engineering surface rather than a Preview product.
+has arrived, but it does not prove application identity; the remote login and
+traffic paths plus current packaged evidence are still absent, so the feature
+remains an engineering surface rather than a Preview product.
+
+The remote-client foundation now owns durable ProxyClientBinding,
+ClientEnrollmentGrant, MachineRegistration, and enrolled ControlPrincipal
+state. Enrollment and long-lived control credentials use disjoint typed
+namespaces and are stored only as domain-separated digests. Completing one
+active, unexpired enrollment atomically consumes it and creates exactly one
+machine and principal; concurrent consumers have at most one winner. Every
+control authentication rereads the principal, machine, and binding, and
+binding revocation closes pending enrollment and existing control admission.
+MachineID and display name remain attribution metadata and cannot select a
+route, Access, Profile, account, model, plugin, or provider credential. This
+authority is exposed only through the RuntimeStore for a later Server
+composition slice: there is no remote HTTP/TLS endpoint, Root delivery,
+client-side credential file, remote proxy grant, or remote traffic path yet.
 
 After an exact AgentEndpoint resolves an Access, the runtime atomically creates
 or reads the durable `(AccessID, MachineID, WorkspaceID)` route binding. Each

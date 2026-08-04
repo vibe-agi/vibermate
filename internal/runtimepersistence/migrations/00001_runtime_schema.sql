@@ -471,6 +471,101 @@ ON workspace_route_bindings(
   updated_at_unix_ms DESC,
   binding_id ASC
 );
+CREATE TABLE proxy_client_bindings(
+  binding_id TEXT PRIMARY KEY NOT NULL
+  CHECK(length(CAST(binding_id AS BLOB)) BETWEEN 1 AND 128),
+  revision INTEGER NOT NULL
+  CHECK(revision BETWEEN 1 AND 9223372036854775807),
+  state TEXT NOT NULL
+  CHECK(state IN('active', 'revoked')),
+  display_name TEXT NOT NULL
+  CHECK(length(CAST(display_name AS BLOB)) BETWEEN 1 AND 128),
+  allowed_ingress_scopes_json BLOB NOT NULL
+  CHECK(length(allowed_ingress_scopes_json) BETWEEN 3 AND 65536
+    AND json_valid(CAST(allowed_ingress_scopes_json AS TEXT))),
+  allowed_profile_ids_json BLOB NOT NULL
+  CHECK(length(allowed_profile_ids_json) BETWEEN 3 AND 65536
+    AND json_valid(CAST(allowed_profile_ids_json AS TEXT))),
+  quota_policy_id TEXT NOT NULL
+  CHECK(length(CAST(quota_policy_id AS BLOB)) BETWEEN 1 AND 128),
+  allowed_grant_kinds INTEGER NOT NULL
+  CHECK(allowed_grant_kinds BETWEEN 1 AND 3),
+  created_at_unix_ms INTEGER NOT NULL,
+  updated_at_unix_ms INTEGER NOT NULL,
+  CHECK(updated_at_unix_ms >= created_at_unix_ms)
+) STRICT;
+CREATE TABLE client_enrollments(
+  enrollment_id TEXT PRIMARY KEY NOT NULL
+  CHECK(length(CAST(enrollment_id AS BLOB)) BETWEEN 1 AND 128),
+  binding_id TEXT NOT NULL
+  REFERENCES proxy_client_bindings(binding_id),
+  binding_revision INTEGER NOT NULL
+  CHECK(binding_revision BETWEEN 1 AND 9223372036854775807),
+  state TEXT NOT NULL
+  CHECK(state IN('active', 'consumed', 'revoked', 'expired')),
+  credential_digest BLOB NOT NULL UNIQUE
+  CHECK(length(credential_digest) = 32),
+  created_at_unix_ms INTEGER NOT NULL,
+  expires_at_unix_ms INTEGER NOT NULL,
+  updated_at_unix_ms INTEGER NOT NULL,
+  consumed_at_unix_ms INTEGER,
+  machine_registration_id TEXT
+  REFERENCES machine_registrations(machine_registration_id),
+  CHECK(expires_at_unix_ms > created_at_unix_ms),
+  CHECK(updated_at_unix_ms >= created_at_unix_ms),
+  CHECK((state = 'consumed'
+    AND consumed_at_unix_ms IS NOT NULL
+    AND machine_registration_id IS NOT NULL
+    AND length(CAST(machine_registration_id AS BLOB)) BETWEEN 1 AND 128)
+    OR(state <> 'consumed'
+      AND consumed_at_unix_ms IS NULL
+      AND machine_registration_id IS NULL))
+) STRICT;
+CREATE INDEX client_enrollments_binding_state
+ON client_enrollments(binding_id, state, expires_at_unix_ms);
+CREATE TABLE machine_registrations(
+  machine_registration_id TEXT PRIMARY KEY NOT NULL
+  CHECK(length(CAST(machine_registration_id AS BLOB)) BETWEEN 1 AND 128),
+  machine_id TEXT NOT NULL
+  CHECK(length(CAST(machine_id AS BLOB)) BETWEEN 1 AND 128),
+  binding_id TEXT NOT NULL
+  REFERENCES proxy_client_bindings(binding_id),
+  binding_revision INTEGER NOT NULL
+  CHECK(binding_revision BETWEEN 1 AND 9223372036854775807),
+  revision INTEGER NOT NULL
+  CHECK(revision BETWEEN 1 AND 9223372036854775807),
+  state TEXT NOT NULL
+  CHECK(state IN('active', 'revoked', 're_enrollment_required')),
+  display_name TEXT NOT NULL
+  CHECK(length(CAST(display_name AS BLOB)) BETWEEN 1 AND 128),
+  created_at_unix_ms INTEGER NOT NULL,
+  updated_at_unix_ms INTEGER NOT NULL,
+  CHECK(updated_at_unix_ms >= created_at_unix_ms),
+  UNIQUE(binding_id, machine_id)
+) STRICT;
+CREATE TABLE enrolled_control_principals(
+  principal_id TEXT PRIMARY KEY NOT NULL
+  CHECK(length(CAST(principal_id AS BLOB)) BETWEEN 1 AND 128),
+  binding_id TEXT NOT NULL
+  REFERENCES proxy_client_bindings(binding_id),
+  binding_revision INTEGER NOT NULL
+  CHECK(binding_revision BETWEEN 1 AND 9223372036854775807),
+  machine_registration_id TEXT NOT NULL UNIQUE
+  REFERENCES machine_registrations(machine_registration_id),
+  credential_revision INTEGER NOT NULL
+  CHECK(credential_revision BETWEEN 1 AND 9223372036854775807),
+  credential_digest BLOB NOT NULL UNIQUE
+  CHECK(length(credential_digest) = 32),
+  allowed_grant_kinds INTEGER NOT NULL
+  CHECK(allowed_grant_kinds BETWEEN 1 AND 3),
+  state TEXT NOT NULL
+  CHECK(state IN('active', 'revoked')),
+  created_at_unix_ms INTEGER NOT NULL,
+  updated_at_unix_ms INTEGER NOT NULL,
+  CHECK(updated_at_unix_ms >= created_at_unix_ms)
+) STRICT;
+CREATE INDEX enrolled_control_principals_binding_state
+ON enrolled_control_principals(binding_id, state);
 CREATE TABLE manual_captures(
   capture_id TEXT PRIMARY KEY NOT NULL
   CHECK(length(CAST(capture_id AS BLOB)) BETWEEN 1 AND 128),
