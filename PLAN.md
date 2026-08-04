@@ -1,8 +1,9 @@
 # Remote Enrollment Authority Foundation
 
-Status: in_progress
+Status: complete
 Created: 2026-08-04
 Implementation baseline: `06bda4fca779d18ab3e20793926a4e8e6cb3ab86`
+Implementation candidate: `95e2c6682af038293602543fa60c084c71c9d1c9`
 Design authority: `vibermate-design` ADR-0019 at `6fd70d49fc563e6ca8a95e35e6806ec80d0fe922`
 
 ## Goal
@@ -72,3 +73,22 @@ location, MachineID, or a previously decoded claim.
 > and authenticate a binding-scoped enrolled ControlPrincipal while rechecking
 > the active binding and machine on every request. No Server listener, login
 > command, remote proxy, Root delivery or Preview-ready product is claimed.
+
+## Frozen result
+
+The implementation candidate satisfies this foundation. Its unreleased
+SQLite baseline contains one binding, enrollment, machine, and enrolled
+principal authority without a compatibility chain. Enrollment and control
+credentials have different canonical prefixes and domain-separated digests;
+only their one-time grants contain raw values. Completion is one transaction,
+one concurrent consumer wins, wrong credentials have no durable side effect,
+and a binding revocation closes pending enrollment and existing control
+authentication together. Post-commit errors are reconciled against the exact
+candidate before a one-time credential is returned.
+
+The complete repository passed `make check` under the repository-pinned Node
+22.23.1 toolchain, uncached full Go tests, full race tests, `go vet`, tidy drift,
+module verification, and fixed `govulncheck@v1.6.0`. The Desktop portion passed
+370 unit tests, 22 Chromium tests, Rust clippy, and 29 Rust tests. No Server
+route, login command, remote Root handoff, proxy grant, external traffic, or
+packaged acceptance was exercised.
