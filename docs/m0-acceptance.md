@@ -231,7 +231,10 @@ The credentialed continuation additionally verifies:
 4. a real client tool intent (`Write` for Claude or `exec` for Codex) becomes
    durable pending approval without raw
    arguments; neither the tool block, completion marker, nor bounded proof file
-   exists before `allow-once`, and the exact proof file exists afterward;
+   exists before `allow-once`, and the exact proof file exists afterward. Claude
+   completes the turn normally; Codex is deliberately interrupted immediately
+   after its one completed `exec` and exact proof, so this check does not depend
+   on a model choosing whether to issue another provider request;
 5. a new request queues while Hold is active, sends nothing before Resume, and
    returns a trusted marker after the exact route probe; Claude also exposes at
    least two content deltas;

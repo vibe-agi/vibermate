@@ -246,20 +246,22 @@ func TestAcceptanceReportDetailsMatchTheObservedClientEvidence(t *testing.T) {
 		{
 			name: "Claude Write",
 			evidence: toolApprovalEvidence{
-				ClientID: acceptanceClientClaudeCode,
-				ToolName: "Write",
-				Approved: true,
+				ClientID:  acceptanceClientClaudeCode,
+				ToolName:  "Write",
+				Approved:  true,
+				Completed: true,
 			},
-			wantDetail: "Write remained behind the durable allow-once barrier and produced the bounded proof file",
+			wantDetail: "Write remained behind the durable allow-once barrier and produced the bounded proof file before the client completed normally",
 		},
 		{
 			name: "Codex exec",
 			evidence: toolApprovalEvidence{
-				ClientID: acceptanceClientCodexCLI,
-				ToolName: "exec",
-				Approved: true,
+				ClientID:              acceptanceClientCodexCLI,
+				ToolName:              "exec",
+				Approved:              true,
+				InterruptedAfterProof: true,
 			},
-			wantDetail: "exec remained behind the durable allow-once barrier and produced the bounded proof file",
+			wantDetail: "exec remained behind the durable allow-once barrier and produced the bounded proof file before the captured client was deliberately interrupted",
 		},
 	} {
 		test := test
@@ -275,9 +277,10 @@ func TestAcceptanceReportDetailsMatchTheObservedClientEvidence(t *testing.T) {
 	}
 
 	if _, err := (toolApprovalEvidence{
-		ClientID: acceptanceClientCodexCLI,
-		ToolName: "Write",
-		Approved: true,
+		ClientID:              acceptanceClientCodexCLI,
+		ToolName:              "Write",
+		Approved:              true,
+		InterruptedAfterProof: true,
 	}).reportDetail(); err == nil {
 		t.Fatal("mismatched Codex tool produced report evidence")
 	}
@@ -639,6 +642,56 @@ func TestAcceptancePhasesAlwaysIsolateConfiguredSecretReference(t *testing.T) {
 				credentialed.AccountBindings,
 			)
 		}
+	}
+}
+
+func TestCodexApprovedToolProofRequiresOneCompletedToolAndExactProof(t *testing.T) {
+	t.Parallel()
+
+	workingDirectory := t.TempDir()
+	spec, err := newToolApprovalSpec(
+		acceptanceClientCodexCLI,
+		workingDirectory,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(
+		spec.proofPath,
+		[]byte(spec.proofContent),
+		0o600,
+	); err != nil {
+		t.Fatal(err)
+	}
+	run := &agentRun{
+		clientID: acceptanceClientCodexCLI,
+		done:     make(chan struct{}),
+		toolUses: 1,
+	}
+	if err := waitForCodexApprovedToolProof(
+		context.Background(),
+		run,
+		spec,
+	); err != nil {
+		t.Fatal(err)
+	}
+
+	run.toolUses = 2
+	if err := waitForCodexApprovedToolProof(
+		context.Background(),
+		run,
+		spec,
+	); err == nil {
+		t.Fatal("two completed tools passed one allow-once proof")
+	}
+
+	run.clientID = acceptanceClientClaudeCode
+	if err := waitForCodexApprovedToolProof(
+		context.Background(),
+		run,
+		spec,
+	); err == nil {
+		t.Fatal("non-Codex run passed Codex proof")
 	}
 }
 

@@ -3104,10 +3104,12 @@ func agentExitedBeforeHeldEgress(
 }
 
 type toolApprovalEvidence struct {
-	ClientID        acceptanceClientID
-	ToolName        string
-	Approved        bool
-	DeniedFollowups int
+	ClientID              acceptanceClientID
+	ToolName              string
+	Approved              bool
+	Completed             bool
+	InterruptedAfterProof bool
+	DeniedFollowups       int
 }
 
 func (evidence toolApprovalEvidence) reportDetail() (string, error) {
@@ -3118,8 +3120,18 @@ func (evidence toolApprovalEvidence) reportDetail() (string, error) {
 	switch evidence.ClientID {
 	case acceptanceClientClaudeCode:
 		expected = "Write"
+		if !evidence.Completed || evidence.InterruptedAfterProof {
+			return "", errors.New(
+				"Claude tool approval evidence did not complete normally",
+			)
+		}
 	case acceptanceClientCodexCLI:
 		expected = "exec"
+		if evidence.Completed || !evidence.InterruptedAfterProof {
+			return "", errors.New(
+				"Codex tool approval evidence was not bounded after proof",
+			)
+		}
 	default:
 		return "", errors.New("tool approval report client is unsupported")
 	}
@@ -3130,6 +3142,11 @@ func (evidence toolApprovalEvidence) reportDetail() (string, error) {
 	}
 	detail := evidence.ToolName +
 		" remained behind the durable allow-once barrier and produced the bounded proof file"
+	if evidence.InterruptedAfterProof {
+		detail += " before the captured client was deliberately interrupted"
+	} else {
+		detail += " before the client completed normally"
+	}
 	if evidence.DeniedFollowups > 0 {
 		detail += fmt.Sprintf(
 			"; %d follow-up tool attempt(s) were separately denied",
@@ -3229,47 +3246,122 @@ func runToolApproval(
 			resolved,
 		)
 	}
-	knownApprovals := maps.Clone(baselineApprovals)
-	knownApprovals[approval.ID] = struct{}{}
-	waitContext, cancel := context.WithTimeout(ctx, 3*time.Minute)
-	defer cancel()
-	exitCode, deniedFollowups, err := waitForToolCompletion(
-		waitContext,
-		generation.control,
-		run,
-		knownApprovals,
-		config.accessID,
-		spec.toolName,
-	)
-	if err != nil || exitCode != 0 {
-		return toolApprovalEvidence{}, agentProcessFailure(
-			"tool",
-			exitCode,
-			err,
+	completed := false
+	interruptedAfterProof := false
+	deniedFollowups := 0
+	if config.clientID == acceptanceClientCodexCLI {
+		waitContext, cancel := context.WithTimeout(ctx, 3*time.Minute)
+		err = waitForCodexApprovedToolProof(waitContext, run, spec)
+		cancel()
+		if err != nil {
+			return toolApprovalEvidence{}, err
+		}
+		if err := run.signalInterrupt(); err != nil {
+			return toolApprovalEvidence{}, err
+		}
+		interruptedAfterProof = true
+		waitContext, cancel = context.WithTimeout(ctx, 20*time.Second)
+		exitCode, waitErr := run.wait(waitContext)
+		cancel()
+		if waitErr != nil {
+			return toolApprovalEvidence{}, agentProcessFailure(
+				"tool post-proof interrupt",
+				exitCode,
+				waitErr,
+				run,
+			)
+		}
+	} else {
+		knownApprovals := maps.Clone(baselineApprovals)
+		knownApprovals[approval.ID] = struct{}{}
+		waitContext, cancel := context.WithTimeout(ctx, 3*time.Minute)
+		defer cancel()
+		exitCode, followups, waitErr := waitForToolCompletion(
+			waitContext,
+			generation.control,
 			run,
+			knownApprovals,
+			config.accessID,
+			spec.toolName,
 		)
+		deniedFollowups = followups
+		if waitErr != nil || exitCode != 0 {
+			return toolApprovalEvidence{}, agentProcessFailure(
+				"tool",
+				exitCode,
+				waitErr,
+				run,
+			)
+		}
+		completed = true
 	}
 	_, _, toolUses, marker := run.evidence()
-	if toolUses != 1 || !marker {
+	if toolUses != 1 || (completed && !marker) {
 		return toolApprovalEvidence{}, fmt.Errorf(
-			"tool approval evidence toolUses=%d marker=%t",
+			"tool approval evidence toolUses=%d marker=%t completed=%t",
 			toolUses,
 			marker,
+			completed,
 		)
 	}
 	if err := verifyToolApprovalProof(spec); err != nil {
 		return toolApprovalEvidence{}, err
 	}
 	evidence := toolApprovalEvidence{
-		ClientID:        config.clientID,
-		ToolName:        spec.toolName,
-		Approved:        true,
-		DeniedFollowups: deniedFollowups,
+		ClientID:              config.clientID,
+		ToolName:              spec.toolName,
+		Approved:              true,
+		Completed:             completed,
+		InterruptedAfterProof: interruptedAfterProof,
+		DeniedFollowups:       deniedFollowups,
 	}
 	if _, err := evidence.reportDetail(); err != nil {
 		return toolApprovalEvidence{}, err
 	}
 	return evidence, nil
+}
+
+func waitForCodexApprovedToolProof(
+	ctx context.Context,
+	run *agentRun,
+	spec toolApprovalSpec,
+) error {
+	if run == nil || run.clientID != acceptanceClientCodexCLI {
+		return errors.New("Codex tool proof requires the fixed Codex client")
+	}
+	ticker := time.NewTicker(20 * time.Millisecond)
+	defer ticker.Stop()
+	for {
+		_, _, toolUses, _ := run.evidence()
+		if toolUses > 1 {
+			return fmt.Errorf(
+				"Codex completed %d tools after one allow-once decision",
+				toolUses,
+			)
+		}
+		if toolUses == 1 {
+			if err := verifyToolApprovalProof(spec); err != nil {
+				return fmt.Errorf(
+					"verify completed Codex tool proof: %w",
+					err,
+				)
+			}
+			return nil
+		}
+		select {
+		case <-ticker.C:
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-run.done:
+			exitCode, waitErr := run.wait(ctx)
+			return agentProcessFailure(
+				"tool before approved proof",
+				exitCode,
+				waitErr,
+				run,
+			)
+		}
+	}
 }
 
 type toolApprovalSpec struct {
