@@ -456,12 +456,17 @@ func TestCapturedProcessHelper(t *testing.T) {
 	}
 	transport := http.DefaultTransport.(*http.Transport).Clone()
 	transport.Proxy = http.ProxyFromEnvironment
+	// The fixture provider is an HTTP/1.1-only loopback service. Model that
+	// client capability explicitly: production never downgrades a downstream
+	// HTTP/2 request to make an H1-only local target appear compatible.
+	transport.ForceAttemptHTTP2 = false
 	// This synthetic process deliberately trusts only the local test proxy by
 	// skipping verification. Production clients receive the scoped VibeMate Root
 	// through their verified or explicitly recognized launch recipe.
 	transport.TLSClientConfig = &tls.Config{ //nolint:gosec -- test-only local proxy
 		MinVersion:         tls.VersionTLS12,
 		InsecureSkipVerify: true, // #nosec G402 -- test-only local proxy
+		NextProtos:         []string{string(access.ApplicationProtocolHTTP1)},
 	}
 	client := &http.Client{Transport: transport, Timeout: 20 * time.Second}
 	body := `{"model":"client-alias","max_tokens":32,"stream":true,` +

@@ -2,6 +2,7 @@ package providertransport
 
 import (
 	"context"
+	"crypto/tls"
 	"crypto/x509"
 	"errors"
 	"io"
@@ -166,6 +167,10 @@ func TestClientStrictTLSUsesFrozenSNIAndAuthority(t *testing.T) {
 		_, _ = writer.Write([]byte(`{"ok":true}`))
 	}))
 	server.EnableHTTP2 = true
+	server.TLS = &tls.Config{
+		MinVersion: tls.VersionTLS12,
+		NextProtos: []string{"h2", "http/1.1"},
+	}
 	server.Config.ErrorLog = log.New(io.Discard, "", 0)
 	server.StartTLS()
 	defer server.Close()
@@ -442,6 +447,23 @@ func TestClientUsesExplicitLoopbackCleartextTransport(t *testing.T) {
 		}
 	case <-time.After(time.Second):
 		t.Fatal("loopback provider did not receive the request")
+	}
+}
+
+func TestNewRequestRejectsHTTP2LoopbackBeforeEgress(t *testing.T) {
+	t.Parallel()
+
+	options := validRequestOptions(t)
+	origin, err := access.NewProviderOrigin("http://127.0.0.1:23333/v1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	options.Target = targetFromProviderOrigin(origin)
+	options.ClientProtocol = access.ApplicationProtocolHTTP2
+
+	_, err = NewRequest(options)
+	if err == nil || !strings.Contains(err.Error(), "does not support HTTP/2") {
+		t.Fatalf("NewRequest() error = %v, want HTTP/2 loopback rejection", err)
 	}
 }
 
@@ -1088,11 +1110,7 @@ func testRequestAccessPlanWithWireProfile(
 			Mode:     access.ModelPolicyModeFixed,
 			Revision: 1,
 		}},
-		TransportProfiles: []access.TransportFingerprintDefinition{
-			access.ObservedClientH1TransportFingerprintDefinition(),
-			access.StandardH1TransportFingerprintDefinition(),
-			access.ClaudeCodeH1TransportFingerprintDefinition(),
-		},
+		TransportProfiles:    access.BuiltInTransportFingerprintDefinitions(),
 		UpstreamWireProfiles: access.BuiltInUpstreamWireProfileDefinitions(),
 	})
 	if err != nil {

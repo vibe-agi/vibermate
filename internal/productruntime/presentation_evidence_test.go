@@ -21,9 +21,10 @@ func TestUnavailableWireVariantStillProducesPresentationOnlyActivityEvidence(
 	if err != nil {
 		t.Fatal(err)
 	}
-	plan, err := compiler.Compile(
-		runtimeAccessAggregate(t, accessID, 1, "Presentation evidence"),
-	)
+	aggregate := runtimeAccessAggregate(t, accessID, 1, "Presentation evidence")
+	aggregate.Profiles[0].UpstreamWireProfileRef =
+		access.ClaudeCodeUpstreamWireProfileRef()
+	plan, err := compiler.Compile(aggregate)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -39,7 +40,7 @@ func TestUnavailableWireVariantStillProducesPresentationOnlyActivityEvidence(
 		t.Fatal("missing presentation-only Activity evidence")
 	}
 	if evidence.Presentation.RequestedRef !=
-		access.FollowClientUpstreamWireProfileRef().String() ||
+		access.ClaudeCodeUpstreamWireProfileRef().String() ||
 		evidence.Presentation.EffectiveRef != "" ||
 		evidence.Presentation.ClientProtocol != "h2" ||
 		evidence.Presentation.UpstreamProtocol != "" ||

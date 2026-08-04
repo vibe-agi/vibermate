@@ -2,6 +2,7 @@ package providertransport
 
 import (
 	"context"
+	"crypto/tls"
 	"crypto/x509"
 	"errors"
 	"fmt"
@@ -10,6 +11,8 @@ import (
 	"net/http"
 	"sync"
 	"time"
+
+	"golang.org/x/net/http2"
 
 	"github.com/vibe-agi/vibermate/internal/access"
 	"github.com/vibe-agi/vibermate/internal/transportprofile"
@@ -185,7 +188,22 @@ func (transport *profileTransport) RoundTrip(
 			"provider HTTP and transport target identities disagree",
 		)
 	}
+	switch dispatch.plan.Requested().HTTPTransport() {
+	case access.HTTPTransportHTTP1:
+		return transport.roundTripHTTP1(request, dispatch)
+	case access.HTTPTransportHTTP2:
+		return transport.roundTripHTTP2(request, dispatch)
+	default:
+		return nil, transportprofile.Evidence{}, errors.New(
+			"provider HTTP transport kind is unsupported",
+		)
+	}
+}
 
+func (transport *profileTransport) roundTripHTTP1(
+	request *http.Request,
+	dispatch TransportDispatch,
+) (*http.Response, transportprofile.Evidence, error) {
 	var evidenceMu sync.Mutex
 	var evidence transportprofile.Evidence
 	httpTransport := &http.Transport{
@@ -245,6 +263,95 @@ func (transport *profileTransport) RoundTrip(
 		reader: response.Body,
 		close:  response.Body,
 		finish: httpTransport.CloseIdleConnections,
+	}
+	return response, resultEvidence, nil
+}
+
+func (transport *profileTransport) roundTripHTTP2(
+	request *http.Request,
+	dispatch TransportDispatch,
+) (*http.Response, transportprofile.Evidence, error) {
+	var evidenceMu sync.Mutex
+	var evidence transportprofile.Evidence
+	h2Transport := &http2.Transport{
+		DisableCompression:         true,
+		MaxHeaderListSize:          1 << 20,
+		StrictMaxConcurrentStreams: true,
+		IdleConnTimeout:            transport.timeouts.ResponseIdle,
+		ReadIdleTimeout:            30 * time.Second,
+		PingTimeout:                10 * time.Second,
+		WriteByteTimeout:           transport.timeouts.ResponseIdle,
+	}
+	h2Transport.DialTLSContext = func(
+		ctx context.Context,
+		network string,
+		address string,
+		_ *tls.Config,
+	) (net.Conn, error) {
+		connection, dialEvidence, connectErr := transport.connector.Connect(
+			ctx,
+			transportprofile.ConnectRequest{
+				Network:       network,
+				Address:       address,
+				TLSServerName: dispatch.target.tlsServerName,
+				Plan:          dispatch.plan,
+				Observation:   dispatch.clientHello,
+			},
+		)
+		evidenceMu.Lock()
+		evidence = dialEvidence
+		evidenceMu.Unlock()
+		if connectErr != nil {
+			return nil, connectErr
+		}
+		return newIdleReadConnection(
+			ctx,
+			connection,
+			transport.timeouts.ResponseIdle,
+		), nil
+	}
+	requestContext, cancelRequest := context.WithCancelCause(request.Context())
+	request = request.Clone(requestContext)
+	var headMu sync.Mutex
+	waitingForHead := true
+	headTimer := time.AfterFunc(transport.timeouts.ResponseHead, func() {
+		headMu.Lock()
+		defer headMu.Unlock()
+		if waitingForHead {
+			cancelRequest(errors.New(
+				"provider response headers exceeded their timeout",
+			))
+		}
+	})
+	response, err := h2Transport.RoundTrip(request)
+	headMu.Lock()
+	waitingForHead = false
+	_ = headTimer.Stop()
+	headMu.Unlock()
+	evidenceMu.Lock()
+	resultEvidence := evidence
+	evidenceMu.Unlock()
+	finish := func() {
+		cancelRequest(nil)
+		h2Transport.CloseIdleConnections()
+	}
+	if err != nil {
+		finish()
+		if response != nil && response.Body != nil {
+			_ = response.Body.Close()
+		}
+		return nil, resultEvidence, err
+	}
+	if response == nil || response.Body == nil {
+		finish()
+		return response, resultEvidence, errors.New(
+			"provider HTTP/2 transport returned an incomplete response",
+		)
+	}
+	response.Body = &transportBody{
+		reader: response.Body,
+		close:  response.Body,
+		finish: finish,
 	}
 	return response, resultEvidence, nil
 }

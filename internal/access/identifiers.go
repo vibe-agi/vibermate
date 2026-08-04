@@ -296,7 +296,9 @@ const (
 )
 const (
 	TransportProfileObservedClientH1Value = "observed-client-strict-h1"
+	TransportProfileObservedClientH2Value = "observed-client-strict-h2"
 	TransportProfileStandardH1Value       = "standard-strict-h1"
+	TransportProfileStandardH2Value       = "standard-strict-h2"
 	TransportProfileClaudeCodeH1Value     = "claude-code-2.1.220-darwin-arm64-strict-h1"
 )
 
@@ -317,8 +319,16 @@ func ObservedClientH1TransportProfileRef() TransportProfileRef {
 	return TransportProfileRef{value: TransportProfileObservedClientH1Value}
 }
 
+func ObservedClientH2TransportProfileRef() TransportProfileRef {
+	return TransportProfileRef{value: TransportProfileObservedClientH2Value}
+}
+
 func StandardH1TransportProfileRef() TransportProfileRef {
 	return TransportProfileRef{value: TransportProfileStandardH1Value}
+}
+
+func StandardH2TransportProfileRef() TransportProfileRef {
+	return TransportProfileRef{value: TransportProfileStandardH2Value}
 }
 
 func ClaudeCodeH1TransportProfileRef() TransportProfileRef {

@@ -91,6 +91,12 @@ func TestProviderRequestRejectsMissingProtocolVariantBeforeExecution(t *testing.
 	t.Parallel()
 
 	options := validRequestOptions(t)
+	options.WireProfile = testRequestAccessPlanWithWireProfile(
+		t,
+		"https://provider.example:443/v1",
+		access.DialectOpenAIChat,
+		access.ClaudeCodeUpstreamWireProfileRef(),
+	).UpstreamWireProfile()
 	options.ClientProtocol = access.ApplicationProtocolHTTP2
 	if _, err := NewRequest(options); err == nil ||
 		!strings.Contains(err.Error(), "does not support the client HTTP protocol") {

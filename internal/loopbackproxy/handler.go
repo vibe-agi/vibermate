@@ -22,6 +22,8 @@ import (
 	"sync/atomic"
 	"time"
 
+	"golang.org/x/net/http2"
+
 	"github.com/vibe-agi/vibermate/internal/access"
 	"github.com/vibe-agi/vibermate/internal/blindtunnel"
 	"github.com/vibe-agi/vibermate/internal/captureadmission"
@@ -570,7 +572,10 @@ func (handler *Handler) serveTLS(
 	observedSNI := ""
 	config := &tls.Config{
 		MinVersion: tls.VersionTLS12,
-		NextProtos: []string{string(access.ApplicationProtocolHTTP1)},
+		NextProtos: []string{
+			string(access.ApplicationProtocolHTTP2),
+			string(access.ApplicationProtocolHTTP1),
+		},
 		GetCertificate: func(hello *tls.ClientHelloInfo) (*tls.Certificate, error) {
 			if hello == nil {
 				return nil, errors.New(string(ReasonMITMUnavailable))
@@ -659,6 +664,26 @@ func (handler *Handler) serveTLS(
 		IdleTimeout:       90 * time.Second,
 		MaxHeaderBytes:    maxInnerHeaderBytes,
 		ErrorLog:          log.New(io.Discard, "", 0),
+	}
+	h2Server := &http2.Server{
+		MaxConcurrentStreams:         32,
+		MaxDecoderHeaderTableSize:    4096,
+		MaxEncoderHeaderTableSize:    4096,
+		MaxReadFrameSize:             1 << 20,
+		MaxUploadBufferPerConnection: 1 << 20,
+		MaxUploadBufferPerStream:     1 << 20,
+		ReadIdleTimeout:              30 * time.Second,
+		PingTimeout:                  10 * time.Second,
+		WriteByteTimeout:             handler.handshake,
+	}
+	if connectionState.NegotiatedProtocol ==
+		string(access.ApplicationProtocolHTTP2) {
+		h2Server.ServeConn(secured, &http2.ServeConnOpts{
+			Context:    parent,
+			BaseConfig: inner,
+			Handler:    inner.Handler,
+		})
+		return nil
 	}
 	err = inner.Serve(listener)
 	if errors.Is(err, net.ErrClosed) || errors.Is(err, http.ErrServerClosed) {

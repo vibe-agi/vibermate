@@ -71,16 +71,22 @@ release SecretStore driver or release packaging profile in this stage.
 MITM creates two independent TLS connections, so VibeMate does not claim that
 the complete client fingerprint survives unchanged. The downstream client sees
 an exact-DNS leaf issued by the local VibeMate Root, not the provider's
-certificate. For the current H1 `follow-client` variant,
+certificate. The default `follow-client` profile has H1 and H2 variants:
 VibeMate retains supported cipher-suite and extension ordering, rewrites the
-target SNI, intersects ALPN with the HTTP/1.1 transport it actually implements,
-and regenerates random, key-share, ticket, PSK, binder, and other
-connection-bound state. A real local TLS capture-service test observes the
-actual outbound ClientHello and HTTP request from outside the connector and
-checks both the retained shape and the required differences. This is bounded
-wire evidence, not raw ClientHello passthrough or exact browser parity. The
-current implementation has only an H1 follow-client variant; H2 ingress and
-upstream transport remain unavailable and cannot silently downgrade.
+target SNI, narrows ALPN to the application protocol negotiated downstream, and
+regenerates random, key-share, ticket, PSK, binder, and other connection-bound
+state. A downstream H1 request remains H1 and a downstream H2 request remains
+H2; protocol selection is not a user setting. Real local TLS and H2 services
+observe the actual outbound ClientHello, request protocol, authority, bounded
+User-Agent, incremental response delivery, and redacted transport evidence.
+This is bounded wire evidence, not raw ClientHello passthrough or exact browser
+parity. Generic H2 currently uses the fixed `x/net/http2` serializer, so it does
+not claim to reproduce an observed client's SETTINGS, flow windows, pseudo
+header order, or regular-header order. A named Codex H2 presentation therefore
+remains unavailable until those shapes are executable and independently
+captured. Literal-loopback cleartext currently supports H1 only; an H2 request
+for such a target fails during frozen request construction, before secret
+access, egress admission, or dial, rather than silently downgrading.
 
 ProductRuntime now owns an internal Exchange executor. Each admitted Exchange
 begins a planned-offline action before resolving configuration, resolves the

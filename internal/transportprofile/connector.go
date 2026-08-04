@@ -224,7 +224,8 @@ func validateTemplates(
 	for _, template := range templates {
 		if template.Ref().String() == "" ||
 			template.Revision() == 0 ||
-			template.HTTPTransport() != access.HTTPTransportHTTP1 {
+			(template.HTTPTransport() != access.HTTPTransportHTTP1 &&
+				template.HTTPTransport() != access.HTTPTransportHTTP2) {
 			return ErrTransportPlanInvalid
 		}
 		switch template.Source() {
@@ -248,10 +249,12 @@ func validateTemplates(
 		if len(alpn) == 0 {
 			return ErrTransportPlanInvalid
 		}
-		for _, protocol := range alpn {
-			if protocol != string(access.ApplicationProtocolHTTP1) {
-				return ErrTransportPlanInvalid
-			}
+		expectedALPN := string(access.ApplicationProtocolHTTP1)
+		if template.HTTPTransport() == access.HTTPTransportHTTP2 {
+			expectedALPN = string(access.ApplicationProtocolHTTP2)
+		}
+		if !slices.Equal(alpn, []string{expectedALPN}) {
+			return ErrTransportPlanInvalid
 		}
 	}
 	return nil
@@ -487,7 +490,14 @@ func (connector *Connector) connectCustom(
 		_ = raw.Close()
 		return nil, "", err
 	}
-	return secured, secured.ConnectionState().NegotiatedProtocol, nil
+	negotiated := secured.ConnectionState().NegotiatedProtocol
+	if len(alpn) != 1 || negotiated != alpn[0] {
+		_ = secured.Close()
+		return nil, negotiated, errors.New(
+			"upstream TLS negotiated an unexpected application protocol",
+		)
+	}
+	return secured, negotiated, nil
 }
 
 func (connector *Connector) connectStandard(
@@ -517,7 +527,14 @@ func (connector *Connector) connectStandard(
 		_ = raw.Close()
 		return nil, "", err
 	}
-	return secured, secured.ConnectionState().NegotiatedProtocol, nil
+	negotiated := secured.ConnectionState().NegotiatedProtocol
+	if len(alpn) != 1 || negotiated != alpn[0] {
+		_ = secured.Close()
+		return nil, negotiated, errors.New(
+			"upstream TLS negotiated an unexpected application protocol",
+		)
+	}
+	return secured, negotiated, nil
 }
 
 func (connector *Connector) handshake(

@@ -112,6 +112,16 @@ func ObservedClientH1TransportFingerprintDefinition() TransportFingerprintDefini
 	}
 }
 
+func ObservedClientH2TransportFingerprintDefinition() TransportFingerprintDefinition {
+	return TransportFingerprintDefinition{
+		Ref:           ObservedClientH2TransportProfileRef(),
+		Revision:      1,
+		Source:        TransportFingerprintObservedClient,
+		HTTPTransport: HTTPTransportHTTP2,
+		ALPN:          []ApplicationProtocol{ApplicationProtocolHTTP2},
+	}
+}
+
 func StandardH1TransportFingerprintDefinition() TransportFingerprintDefinition {
 	return TransportFingerprintDefinition{
 		Ref:           StandardH1TransportProfileRef(),
@@ -119,6 +129,16 @@ func StandardH1TransportFingerprintDefinition() TransportFingerprintDefinition {
 		Source:        TransportFingerprintStandard,
 		HTTPTransport: HTTPTransportHTTP1,
 		ALPN:          []ApplicationProtocol{ApplicationProtocolHTTP1},
+	}
+}
+
+func StandardH2TransportFingerprintDefinition() TransportFingerprintDefinition {
+	return TransportFingerprintDefinition{
+		Ref:           StandardH2TransportProfileRef(),
+		Revision:      1,
+		Source:        TransportFingerprintStandard,
+		HTTPTransport: HTTPTransportHTTP2,
+		ALPN:          []ApplicationProtocol{ApplicationProtocolHTTP2},
 	}
 }
 
@@ -133,16 +153,33 @@ func ClaudeCodeH1TransportFingerprintDefinition() TransportFingerprintDefinition
 	}
 }
 
+func BuiltInTransportFingerprintDefinitions() []TransportFingerprintDefinition {
+	return []TransportFingerprintDefinition{
+		ObservedClientH1TransportFingerprintDefinition(),
+		ObservedClientH2TransportFingerprintDefinition(),
+		StandardH1TransportFingerprintDefinition(),
+		StandardH2TransportFingerprintDefinition(),
+		ClaudeCodeH1TransportFingerprintDefinition(),
+	}
+}
+
 func FollowClientUpstreamWireProfileDefinition() UpstreamWireProfileDefinition {
 	return UpstreamWireProfileDefinition{
 		Ref:      FollowClientUpstreamWireProfileRef(),
 		Revision: 1,
 		Mode:     UpstreamWireModeFollowClient,
-		Variants: []UpstreamWireVariantDefinition{{
-			Protocol:            ApplicationProtocolHTTP1,
-			TransportProfileRef: ObservedClientH1TransportProfileRef(),
-			UserAgentPolicy:     UserAgentPolicyFollowClient,
-		}},
+		Variants: []UpstreamWireVariantDefinition{
+			{
+				Protocol:            ApplicationProtocolHTTP1,
+				TransportProfileRef: ObservedClientH1TransportProfileRef(),
+				UserAgentPolicy:     UserAgentPolicyFollowClient,
+			},
+			{
+				Protocol:            ApplicationProtocolHTTP2,
+				TransportProfileRef: ObservedClientH2TransportProfileRef(),
+				UserAgentPolicy:     UserAgentPolicyFollowClient,
+			},
+		},
 	}
 }
 
@@ -873,7 +910,8 @@ func validateTransportFingerprintDefinition(
 	default:
 		return errors.New("transport fingerprint source is invalid")
 	}
-	if definition.HTTPTransport != HTTPTransportHTTP1 {
+	if definition.HTTPTransport != HTTPTransportHTTP1 &&
+		definition.HTTPTransport != HTTPTransportHTTP2 {
 		return errors.New("transport fingerprint HTTP transport is unsupported")
 	}
 	if len(definition.ALPN) == 0 {
@@ -884,9 +922,6 @@ func validateTransportFingerprintDefinition(
 		switch protocol {
 		case ApplicationProtocolHTTP1:
 		case ApplicationProtocolHTTP2:
-			return errors.New(
-				"HTTP/2 fingerprint transport is not implemented by the current runtime",
-			)
 		default:
 			return errors.New("transport fingerprint ALPN value is invalid")
 		}
@@ -894,6 +929,13 @@ func validateTransportFingerprintDefinition(
 			return errors.New("transport fingerprint ALPN value is duplicated")
 		}
 		seenALPN[protocol] = struct{}{}
+	}
+	expectedProtocol := ApplicationProtocolHTTP1
+	if definition.HTTPTransport == HTTPTransportHTTP2 {
+		expectedProtocol = ApplicationProtocolHTTP2
+	}
+	if !slices.Equal(definition.ALPN, []ApplicationProtocol{expectedProtocol}) {
+		return errors.New("transport fingerprint HTTP transport and ALPN disagree")
 	}
 	seenFallback := make(map[TransportProfileRef]struct{}, len(definition.FallbackRefs))
 	for _, reference := range definition.FallbackRefs {

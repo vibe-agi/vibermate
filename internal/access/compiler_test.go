@@ -73,6 +73,15 @@ func TestCompilerFreezesUpstreamWireProfileAsOnePlanAuthority(t *testing.T) {
 		len(followVariant.TransportFingerprintPlan().Fallbacks()) != 0 {
 		t.Fatalf("compiled follow-client wire profile = %+v", followProfile)
 	}
+	followH2Variant, ok := followProfile.Variant(access.ApplicationProtocolHTTP2)
+	if !ok ||
+		followH2Variant.UserAgentPolicy() != access.UserAgentPolicyFollowClient ||
+		followH2Variant.TransportFingerprintPlan().Requested().Ref() !=
+			access.ObservedClientH2TransportProfileRef() ||
+		followH2Variant.TransportFingerprintPlan().Requested().HTTPTransport() !=
+			access.HTTPTransportHTTP2 {
+		t.Fatalf("compiled follow-client HTTP/2 variant = %+v", followH2Variant)
+	}
 
 	aggregate.Profiles[0].UpstreamWireProfileRef =
 		access.ClaudeCodeUpstreamWireProfileRef()
@@ -335,11 +344,7 @@ func TestCompilerCatalogDoesNotRetainInputAliases(t *testing.T) {
 			Mode:     access.ModelPolicyModeFixed,
 			Revision: 1,
 		}},
-		TransportProfiles: []access.TransportFingerprintDefinition{
-			access.ObservedClientH1TransportFingerprintDefinition(),
-			access.StandardH1TransportFingerprintDefinition(),
-			access.ClaudeCodeH1TransportFingerprintDefinition(),
-		},
+		TransportProfiles:    access.BuiltInTransportFingerprintDefinitions(),
 		UpstreamWireProfiles: access.BuiltInUpstreamWireProfileDefinitions(),
 	}
 	catalog, err := access.NewCatalog(options)
@@ -543,16 +548,16 @@ func TestCatalogFailsClosedForInvalidTransportProfiles(t *testing.T) {
 				options.TransportProfiles[0].FallbackRefs = []access.TransportProfileRef{
 					access.StandardH1TransportProfileRef(),
 				}
-				options.TransportProfiles[1].FallbackRefs = []access.TransportProfileRef{
+				options.TransportProfiles[2].FallbackRefs = []access.TransportProfileRef{
 					access.ObservedClientH1TransportProfileRef(),
 				}
 			},
 		},
 		{
-			name: "HTTP2 transport",
+			name: "invalid HTTP transport",
 			mutate: func(options *access.CatalogOptions) {
 				options.TransportProfiles[0].HTTPTransport =
-					access.HTTPTransportKind("http2")
+					access.HTTPTransportKind("http3")
 				options.TransportProfiles[0].ALPN = []access.ApplicationProtocol{
 					access.ApplicationProtocolHTTP2,
 				}

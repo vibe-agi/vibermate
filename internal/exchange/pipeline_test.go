@@ -2772,11 +2772,7 @@ func compileTestSnapshotWithDialect(
 			Mode:     access.ModelPolicyModeFixed,
 			Revision: 1,
 		}},
-		TransportProfiles: []access.TransportFingerprintDefinition{
-			access.ObservedClientH1TransportFingerprintDefinition(),
-			access.StandardH1TransportFingerprintDefinition(),
-			access.ClaudeCodeH1TransportFingerprintDefinition(),
-		},
+		TransportProfiles:    access.BuiltInTransportFingerprintDefinitions(),
 		UpstreamWireProfiles: access.BuiltInUpstreamWireProfileDefinitions(),
 	})
 	if err != nil {

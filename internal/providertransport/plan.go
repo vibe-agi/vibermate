@@ -363,6 +363,12 @@ func NewRequest(options RequestOptions) (Request, error) {
 	if options.ClientProtocol == access.ApplicationProtocolHTTP2 {
 		expectedTransport = access.HTTPTransportHTTP2
 	}
+	if options.Target.transportKind == access.ProviderTransportLoopbackCleartext &&
+		expectedTransport == access.HTTPTransportHTTP2 {
+		return Request{}, errors.New(
+			"loopback cleartext provider does not support HTTP/2 presentation",
+		)
+	}
 	if requestedTransport.Ref().String() == "" ||
 		requestedTransport.Revision() == 0 ||
 		requestedTransport.HTTPTransport() != expectedTransport ||

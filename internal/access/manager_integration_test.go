@@ -854,6 +854,14 @@ func assertCompletePlan(
 			transport.Fallbacks(),
 		)
 	}
+	h2Variant, ok := wireProfile.Variant(access.ApplicationProtocolHTTP2)
+	if !ok ||
+		h2Variant.TransportFingerprintPlan().Requested().Ref() !=
+			access.ObservedClientH2TransportProfileRef() ||
+		h2Variant.TransportFingerprintPlan().Requested().HTTPTransport() !=
+			access.HTTPTransportHTTP2 {
+		t.Fatalf("HTTP/2 transport variant = %+v", h2Variant)
+	}
 	routeSets := plan.RouteSets()
 	if len(routeSets) != 1 ||
 		routeSets[0].ID != plan.Binding().DefaultRouteSetID ||
@@ -862,7 +870,7 @@ func assertCompletePlan(
 		t.Fatalf("route sets = %+v", routeSets)
 	}
 	dependencies := plan.DependencyRevisions()
-	if len(dependencies) != 17 {
+	if len(dependencies) != 18 {
 		t.Fatalf(
 			"routeSets=%d dependencyRevisions=%d",
 			len(routeSets),
@@ -912,9 +920,9 @@ func assertCompletePlan(
 			t.Fatalf("dependency kind %q count=%d, want 1", kind, seenKinds[kind])
 		}
 	}
-	if seenKinds[access.DependencyTransportFingerprint] != 1 {
+	if seenKinds[access.DependencyTransportFingerprint] != 2 {
 		t.Fatalf(
-			"transport fingerprint dependency count=%d, want 1",
+			"transport fingerprint dependency count=%d, want 2",
 			seenKinds[access.DependencyTransportFingerprint],
 		)
 	}

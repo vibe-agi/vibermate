@@ -19,6 +19,8 @@ import (
 	"testing"
 	"time"
 
+	"golang.org/x/net/http2"
+
 	"github.com/vibe-agi/vibermate/internal/access"
 	"github.com/vibe-agi/vibermate/internal/anthropicchat"
 	"github.com/vibe-agi/vibermate/internal/blindtunnel"
@@ -207,6 +209,83 @@ func TestLoopbackProxyAuthenticatesMITMAndDispatchesByPathCapability(
 			record.RouteHost != "api.anthropic.com" {
 			t.Fatalf("connection record carries a provider route: %+v", record)
 		}
+	}
+}
+
+func TestLoopbackProxyNegotiatesHTTP2AndPreservesTheRequestProtocol(
+	t *testing.T,
+) {
+	t.Parallel()
+
+	fixture := newProxyFixture(t)
+	defer fixture.Close(t)
+	connection, response := fixture.Connect(
+		t,
+		fixture.grant.ProxyCapability.Value(),
+		"api.anthropic.com:443",
+	)
+	if response.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(response.Body)
+		_ = response.Body.Close()
+		_ = connection.Close()
+		t.Fatalf("CONNECT status=%d body=%s", response.StatusCode, body)
+	}
+	_ = response.Body.Close()
+	pool := x509.NewCertPool()
+	if !pool.AppendCertsFromPEM(
+		fixture.authority.Certificate().CertificatePEM(),
+	) {
+		t.Fatal("append local Root")
+	}
+	secured := tls.Client(connection, &tls.Config{
+		RootCAs:    pool,
+		ServerName: "api.anthropic.com",
+		MinVersion: tls.VersionTLS12,
+		NextProtos: []string{string(access.ApplicationProtocolHTTP2)},
+	})
+	if err := secured.Handshake(); err != nil {
+		_ = secured.Close()
+		t.Fatalf("HTTP/2 TLS handshake: %v", err)
+	}
+	defer secured.Close()
+	if got := secured.ConnectionState().NegotiatedProtocol; got != "h2" {
+		t.Fatalf("negotiated protocol = %q", got)
+	}
+	h2Transport := &http2.Transport{DisableCompression: true}
+	clientConnection, err := h2Transport.NewClientConn(secured)
+	if err != nil {
+		t.Fatalf("create HTTP/2 client connection: %v", err)
+	}
+	request, err := http.NewRequestWithContext(
+		context.Background(),
+		http.MethodPost,
+		"https://api.anthropic.com/v1/messages",
+		strings.NewReader(`{"model":"client"}`),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	request.Host = "api.anthropic.com:443"
+	request.Header.Set("Content-Type", "application/json")
+	request.Header.Set("User-Agent", "agent-h2/1.0")
+	response, err = clientConnection.RoundTrip(request)
+	if err != nil {
+		t.Fatalf("send inner HTTP/2 request: %v", err)
+	}
+	body, err := io.ReadAll(response.Body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = response.Body.Close()
+	if response.StatusCode != http.StatusOK ||
+		string(body) != `{"result":"proxied"}` {
+		t.Fatalf("HTTP/2 response status=%d body=%q", response.StatusCode, body)
+	}
+	requests := fixture.exchanges.Requests()
+	if len(requests) != 1 ||
+		requests[0].ClientHTTPProtocol() != access.ApplicationProtocolHTTP2 ||
+		requests[0].ClientUserAgent() != "agent-h2/1.0" {
+		t.Fatalf("HTTP/2 Exchange requests = %+v", requests)
 	}
 }
 
@@ -1278,11 +1357,7 @@ func testProjectionForDialectRevision(
 			Mode:     access.ModelPolicyModeFixed,
 			Revision: 1,
 		}},
-		TransportProfiles: []access.TransportFingerprintDefinition{
-			access.ObservedClientH1TransportFingerprintDefinition(),
-			access.StandardH1TransportFingerprintDefinition(),
-			access.ClaudeCodeH1TransportFingerprintDefinition(),
-		},
+		TransportProfiles:    access.BuiltInTransportFingerprintDefinitions(),
 		UpstreamWireProfiles: access.BuiltInUpstreamWireProfileDefinitions(),
 	})
 	if err != nil {
