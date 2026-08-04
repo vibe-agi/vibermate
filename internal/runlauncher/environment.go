@@ -15,17 +15,24 @@ import (
 const codexClientPlaceholder = "vibermate-local-proxy"
 
 var managedEnvironment = map[string]struct{}{
-	"HTTP_PROXY":               {},
-	"HTTPS_PROXY":              {},
-	"http_proxy":               {},
-	"https_proxy":              {},
-	"ALL_PROXY":                {},
-	"all_proxy":                {},
-	"NO_PROXY":                 {},
-	"no_proxy":                 {},
-	"VIBERMATE_CAPTURE_RUN_ID": {},
-	"NODE_EXTRA_CA_CERTS":      {},
-	"NODE_USE_ENV_PROXY":       {},
+	"HTTP_PROXY":                   {},
+	"HTTPS_PROXY":                  {},
+	"http_proxy":                   {},
+	"https_proxy":                  {},
+	"ALL_PROXY":                    {},
+	"all_proxy":                    {},
+	"NO_PROXY":                     {},
+	"no_proxy":                     {},
+	"VIBERMATE_CAPTURE_RUN_ID":     {},
+	"VIBERMATE_CONNECTION":         {},
+	"VIBERMATE_CREDENTIAL_FILE":    {},
+	"VIBERMATE_TOKEN":              {},
+	"VIBERMATE_CONTROL_CREDENTIAL": {},
+	"VIBERMATE_ENROLLMENT_TOKEN":   {},
+	"VIBERMATE_ADMIN_TOKEN":        {},
+	"VIBERMATE_DISCOVERY_PATH":     {},
+	"NODE_EXTRA_CA_CERTS":          {},
+	"NODE_USE_ENV_PROXY":           {},
 }
 
 var codexManagedEnvironment = map[string]struct{}{

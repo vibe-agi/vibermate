@@ -18,7 +18,7 @@ import (
 	"github.com/vibe-agi/vibermate/internal/connectionevent"
 	"github.com/vibe-agi/vibermate/internal/connectionpolicy"
 	"github.com/vibe-agi/vibermate/internal/egressaudit"
-	"github.com/vibe-agi/vibermate/internal/launcherdiscovery"
+	"github.com/vibe-agi/vibermate/internal/localdiscovery"
 	"github.com/vibe-agi/vibermate/internal/productruntime"
 	"github.com/vibe-agi/vibermate/internal/runlauncher"
 	"github.com/vibe-agi/vibermate/internal/secretstore"
@@ -129,7 +129,7 @@ func TestAFixedClaudeCodeDegradesWhenCountTokensIsRejectedLocallyOnManagedRoute(
 		t.Fatal(err)
 	}
 
-	sessionFile, err := launcherdiscovery.NewFile(
+	sessionFile, err := localdiscovery.NewFile(
 		paths.DiscoveryPath(),
 		productruntime.SystemClock{},
 	)

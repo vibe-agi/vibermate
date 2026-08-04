@@ -1,4 +1,4 @@
-package capturecontrol
+package capturegrant
 
 import (
 	"context"
@@ -47,7 +47,7 @@ func TestARecognizedClientReceivesTheRootOnlyAfterAnAllow(t *testing.T) {
 
 	signer := recognizedSigner()
 	approver := &recordingApprover{allow: true}
-	granted, err := (&Handler{rootAsk: approver}).askClientRoot(
+	granted, err := (&Issuer{rootAsk: approver}).askClientRoot(
 		context.Background(), signer,
 	)
 	if err != nil {
@@ -71,7 +71,7 @@ func TestARecognizedClientIsRefusedTheRootOnADeny(t *testing.T) {
 	t.Parallel()
 
 	approver := &recordingApprover{allow: false}
-	granted, err := (&Handler{rootAsk: approver}).askClientRoot(
+	granted, err := (&Issuer{rootAsk: approver}).askClientRoot(
 		context.Background(), recognizedSigner(),
 	)
 	if err != nil {
@@ -87,7 +87,7 @@ func TestARecognizedClientIsRefusedTheRootOnADeny(t *testing.T) {
 func TestNobodyToAskMeansNoRoot(t *testing.T) {
 	t.Parallel()
 
-	granted, err := (&Handler{}).askClientRoot(
+	granted, err := (&Issuer{}).askClientRoot(
 		context.Background(), recognizedSigner(),
 	)
 	if err != nil {
@@ -102,7 +102,7 @@ func TestAFailedAskMeansNoRoot(t *testing.T) {
 	t.Parallel()
 
 	approver := &recordingApprover{fail: errors.New("the approval store is down")}
-	granted, _ := (&Handler{rootAsk: approver}).askClientRoot(
+	granted, _ := (&Issuer{rootAsk: approver}).askClientRoot(
 		context.Background(), recognizedSigner(),
 	)
 	if granted {

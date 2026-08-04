@@ -18,7 +18,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/vibe-agi/vibermate/internal/launcherdiscovery"
+	"github.com/vibe-agi/vibermate/internal/localdiscovery"
 	"github.com/vibe-agi/vibermate/internal/runtimepath"
 )
 
@@ -163,7 +163,7 @@ func exercisePackagedDesktopLaunch(
 	if len(runningApplications) != 0 {
 		return errors.New("another VibeMate Desktop application is already running")
 	}
-	discovery, err := launcherdiscovery.NewFile(
+	discovery, err := localdiscovery.NewFile(
 		layout.LauncherRecord,
 		wallClock{},
 	)
@@ -173,7 +173,7 @@ func exercisePackagedDesktopLaunch(
 	previous, previousErr := discovery.Load()
 	if previousErr != nil &&
 		!errors.Is(previousErr, os.ErrNotExist) &&
-		!errors.Is(previousErr, launcherdiscovery.ErrExpired) {
+		!errors.Is(previousErr, localdiscovery.ErrExpired) {
 		return fmt.Errorf("inspect prior Desktop generation: %w", previousErr)
 	}
 
@@ -193,7 +193,7 @@ func exercisePackagedDesktopLaunch(
 	go func() {
 		done <- command.Wait()
 	}()
-	var generation launcherdiscovery.Session
+	var generation localdiscovery.Session
 	var desktopApplication desktopApplicationIdentity
 	var desktopGuardian *desktopApplicationGuardian
 	cleaned := false
@@ -225,7 +225,7 @@ func exercisePackagedDesktopLaunch(
 		}
 		if loadErr != nil &&
 			!errors.Is(loadErr, os.ErrNotExist) &&
-			!errors.Is(loadErr, launcherdiscovery.ErrExpired) {
+			!errors.Is(loadErr, localdiscovery.ErrExpired) {
 			return fmt.Errorf("load packaged Desktop generation: %w", loadErr)
 		}
 		select {

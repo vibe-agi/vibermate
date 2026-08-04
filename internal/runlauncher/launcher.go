@@ -17,7 +17,7 @@ import (
 	"github.com/vibe-agi/vibermate/internal/capturecontrol"
 	"github.com/vibe-agi/vibermate/internal/capturerun"
 	"github.com/vibe-agi/vibermate/internal/clientadapter"
-	"github.com/vibe-agi/vibermate/internal/launcherdiscovery"
+	"github.com/vibe-agi/vibermate/internal/localdiscovery"
 )
 
 const (
@@ -49,7 +49,7 @@ const (
 var ErrRuntimeUnavailable = errors.New("local VibeMate runtime is unavailable")
 
 type Discovery interface {
-	Load() (launcherdiscovery.Session, error)
+	Load() (localdiscovery.Session, error)
 }
 
 type Config struct {
@@ -75,7 +75,7 @@ type Launcher struct {
 
 func New(config Config) (*Launcher, error) {
 	if config.Discovery == nil {
-		return nil, errors.New("launcher discovery is required")
+		return nil, errors.New("local control discovery is required")
 	}
 	if config.HeartbeatInterval == 0 {
 		config.HeartbeatInterval = defaultHeartbeatInterval
@@ -134,14 +134,14 @@ func (launcher *Launcher) Run(
 	session, err := launcher.config.Discovery.Load()
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) ||
-			errors.Is(err, launcherdiscovery.ErrExpired) {
+			errors.Is(err, localdiscovery.ErrExpired) {
 			return 1, fmt.Errorf("%w: %v", ErrRuntimeUnavailable, err)
 		}
-		return 1, fmt.Errorf("load launcher discovery: %w", err)
+		return 1, fmt.Errorf("load local control discovery: %w", err)
 	}
 	control, err := newControlClient(session)
 	if err != nil {
-		return 1, fmt.Errorf("construct launcher control client: %w", err)
+		return 1, fmt.Errorf("construct local control client: %w", err)
 	}
 	defer control.close()
 	var grant capturecontrol.LaunchGrant
@@ -404,4 +404,4 @@ func childExit(waitErr error) (int, error) {
 	return 1, fmt.Errorf("wait for captured process: %w", waitErr)
 }
 
-var _ Discovery = (*launcherdiscovery.File)(nil)
+var _ Discovery = (*localdiscovery.File)(nil)

@@ -16,7 +16,7 @@ import (
 
 	"github.com/vibe-agi/vibermate/internal/capturecontrol"
 	"github.com/vibe-agi/vibermate/internal/clientadapter"
-	"github.com/vibe-agi/vibermate/internal/launcherdiscovery"
+	"github.com/vibe-agi/vibermate/internal/localdiscovery"
 	"github.com/vibe-agi/vibermate/internal/runlauncher"
 )
 
@@ -50,7 +50,7 @@ while :; do sleep 1; done
 		executable:      executable,
 		workspace:       directory,
 		rootPath:        rootPath,
-		launcher:        capability(0x61),
+		credential:      capability(0x61),
 		proxy:           capability(0x62),
 		run:             capability(0x63),
 		expectedCommand: []string{"codex"},
@@ -70,13 +70,13 @@ while :; do sleep 1; done
 	}
 	server := httptest.NewServer(control)
 	defer server.Close()
-	discovery := fixedDiscovery{session: launcherdiscovery.Session{
-		Schema:        launcherdiscovery.SchemaV1,
-		InstanceID:    base64.RawURLEncoding.EncodeToString(bytes.Repeat([]byte{0x64}, 20)),
-		ProcessID:     os.Getpid(),
-		BaseURL:       server.URL,
-		LauncherToken: control.launcher,
-		ExpiresAt:     time.Now().UTC().Add(time.Minute),
+	discovery := fixedDiscovery{session: localdiscovery.Session{
+		Schema:            localdiscovery.Schema,
+		InstanceID:        base64.RawURLEncoding.EncodeToString(bytes.Repeat([]byte{0x64}, 20)),
+		ProcessID:         os.Getpid(),
+		BaseURL:           server.URL,
+		ControlCredential: control.credential,
+		ExpiresAt:         time.Now().UTC().Add(time.Minute),
 	}}
 	launcher, err := runlauncher.New(runlauncher.Config{
 		Discovery: discovery,

@@ -405,7 +405,7 @@ func TestEveryRequirementFragmentIsLoadBearing(t *testing.T) {
 // The Desktop production chain, as fixtures rather than as a fact about the
 // current source.
 //
-// Each of the six rules is broken in the bad repository, and each is reported
+// Each composition rule is broken in the bad repository, and each is reported
 // by name. The good one keeps the chain whole. Both go through the public
 // Check, so a rule that stops being registered fails here too.
 func TestProductionCompositionBoundaryUsesPublicCheckWithGoodAndBadFixtures(
@@ -430,8 +430,15 @@ func TestProductionCompositionBoundaryUsesPublicCheckWithGoodAndBadFixtures(
 		"daemon-does-not-start-the-host",
 		"host-does-not-start-the-runtime",
 		"runtime-does-not-select-production-builders",
+		"host-does-not-create-control-authority",
+		"host-does-not-create-capture-grant-issuer",
+		"host-does-not-create-capture-control-handler",
+		"capture-run-create-outside-issuer",
 		"unreviewed-runtime-composition",
 		"unreviewed-host-composition",
+		"unreviewed-control-authority-composition",
+		"unreviewed-capture-grant-composition",
+		"unreviewed-capture-control-composition",
 		"composition-dot-import",
 	} {
 		if !strings.Contains(err.Error(), rule) {

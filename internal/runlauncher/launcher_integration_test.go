@@ -18,7 +18,7 @@ import (
 
 	"github.com/vibe-agi/vibermate/internal/capturecontrol"
 	"github.com/vibe-agi/vibermate/internal/clientadapter"
-	"github.com/vibe-agi/vibermate/internal/launcherdiscovery"
+	"github.com/vibe-agi/vibermate/internal/localdiscovery"
 	"github.com/vibe-agi/vibermate/internal/runlauncher"
 )
 
@@ -54,7 +54,7 @@ exit 7
 		executable: executable,
 		workspace:  directory,
 		rootPath:   rootPath,
-		launcher:   capability(0x11),
+		credential: capability(0x11),
 		proxy:      capability(0x22),
 		run:        capability(0x33),
 		expectedCommand: []string{
@@ -82,13 +82,13 @@ exit 7
 	if !strings.HasPrefix(server.URL, "http://127.0.0.1:") {
 		t.Fatalf("test control server is not literal loopback: %s", server.URL)
 	}
-	discovery := fixedDiscovery{session: launcherdiscovery.Session{
-		Schema:        launcherdiscovery.SchemaV1,
-		InstanceID:    base64.RawURLEncoding.EncodeToString(bytes.Repeat([]byte{0x44}, 20)),
-		ProcessID:     os.Getpid(),
-		BaseURL:       server.URL,
-		LauncherToken: control.launcher,
-		ExpiresAt:     time.Now().UTC().Add(time.Minute),
+	discovery := fixedDiscovery{session: localdiscovery.Session{
+		Schema:            localdiscovery.Schema,
+		InstanceID:        base64.RawURLEncoding.EncodeToString(bytes.Repeat([]byte{0x44}, 20)),
+		ProcessID:         os.Getpid(),
+		BaseURL:           server.URL,
+		ControlCredential: control.credential,
+		ExpiresAt:         time.Now().UTC().Add(time.Minute),
 	}}
 	launcher, err := runlauncher.New(runlauncher.Config{
 		Discovery: discovery,
@@ -162,9 +162,9 @@ func TestLauncherRejectsControlRedirectWithoutStartingChild(t *testing.T) {
 	}))
 	defer server.Close()
 	launcher, err := runlauncher.New(runlauncher.Config{
-		Discovery: fixedDiscovery{session: launcherdiscovery.Session{
-			BaseURL:       server.URL,
-			LauncherToken: capability(0x51),
+		Discovery: fixedDiscovery{session: localdiscovery.Session{
+			BaseURL:           server.URL,
+			ControlCredential: capability(0x51),
 		}},
 		BaseEnvironment: []string{"PATH=/usr/bin:/bin"},
 		Getwd: func() (string, error) {
@@ -198,9 +198,9 @@ func TestLauncherBoundsCaptureRunCreation(t *testing.T) {
 		server.Close()
 	}()
 	launcher, err := runlauncher.New(runlauncher.Config{
-		Discovery: fixedDiscovery{session: launcherdiscovery.Session{
-			BaseURL:       server.URL,
-			LauncherToken: capability(0x52),
+		Discovery: fixedDiscovery{session: localdiscovery.Session{
+			BaseURL:           server.URL,
+			ControlCredential: capability(0x52),
 		}},
 		BaseEnvironment: []string{"PATH=/usr/bin:/bin"},
 		ControlTimeout:  50 * time.Millisecond,
@@ -238,11 +238,11 @@ func TestLauncherBoundsCaptureRunCreation(t *testing.T) {
 }
 
 type fixedDiscovery struct {
-	session launcherdiscovery.Session
+	session localdiscovery.Session
 	err     error
 }
 
-func (discovery fixedDiscovery) Load() (launcherdiscovery.Session, error) {
+func (discovery fixedDiscovery) Load() (localdiscovery.Session, error) {
 	return discovery.session, discovery.err
 }
 
@@ -251,7 +251,7 @@ type controlFixture struct {
 	executable      string
 	workspace       string
 	rootPath        string
-	launcher        string
+	credential      string
 	proxy           string
 	run             string
 	expectedCommand []string
@@ -279,7 +279,7 @@ func (fixture *controlFixture) ServeHTTP(
 	switch request.URL.Path {
 	case "/api/v1/capture-runs":
 		if request.Method != http.MethodPost ||
-			request.Header.Get("Authorization") != "Bearer "+fixture.launcher {
+			request.Header.Get("Authorization") != "Bearer "+fixture.credential {
 			writeControlProblem(writer, http.StatusUnauthorized)
 			return
 		}

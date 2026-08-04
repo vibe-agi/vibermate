@@ -10,7 +10,7 @@ import (
 	"os"
 	"time"
 
-	"github.com/vibe-agi/vibermate/internal/launcherdiscovery"
+	"github.com/vibe-agi/vibermate/internal/localdiscovery"
 	"github.com/vibe-agi/vibermate/internal/runlauncher"
 	"github.com/vibe-agi/vibermate/internal/runtimepath"
 	"github.com/vibe-agi/vibermate/locales"
@@ -70,7 +70,7 @@ func execute(
 	if err != nil {
 		return 1, keyRuntimePath
 	}
-	discovery, err := launcherdiscovery.NewFile(
+	discovery, err := localdiscovery.NewFile(
 		layout.LauncherRecord,
 		commandClock{},
 	)

@@ -15,11 +15,13 @@ import (
 	"time"
 
 	"github.com/vibe-agi/vibermate/internal/capturecontrol"
+	"github.com/vibe-agi/vibermate/internal/capturegrant"
 	"github.com/vibe-agi/vibermate/internal/clientadapter"
+	"github.com/vibe-agi/vibermate/internal/controlprincipal"
 	"github.com/vibe-agi/vibermate/internal/desktopbootstrap"
 	"github.com/vibe-agi/vibermate/internal/desktopcontrol"
 	"github.com/vibe-agi/vibermate/internal/instanceguard"
-	"github.com/vibe-agi/vibermate/internal/launcherdiscovery"
+	"github.com/vibe-agi/vibermate/internal/localdiscovery"
 	"github.com/vibe-agi/vibermate/internal/productruntime"
 )
 
@@ -80,26 +82,26 @@ func (state *readiness) Ready() bool {
 
 // Host owns one complete Desktop generation.
 type Host struct {
-	runtime        *productruntime.Runtime
-	guard          *instanceguard.Guard
-	discovery      *launcherdiscovery.File
-	bootstrap      *desktopbootstrap.Authority
-	descriptor     desktopbootstrap.Descriptor
-	router         *desktopcontrol.Router
-	readiness      *readiness
-	controlServer  *http.Server
-	proxyServer    *http.Server
-	control        *trackedListener
-	proxy          *trackedListener
-	appSession     AppSession
-	instanceID     string
-	shutdownLimit  time.Duration
-	clock          productruntime.Clock
-	random         io.Reader
-	launcher       *capturecontrol.LauncherAuthority
-	launcherTTL    time.Duration
-	controlBaseURL string
-	processID      int
+	runtime              *productruntime.Runtime
+	guard                *instanceguard.Guard
+	discovery            *localdiscovery.File
+	bootstrap            *desktopbootstrap.Authority
+	descriptor           desktopbootstrap.Descriptor
+	router               *desktopcontrol.Router
+	readiness            *readiness
+	controlServer        *http.Server
+	proxyServer          *http.Server
+	control              *trackedListener
+	proxy                *trackedListener
+	appSession           AppSession
+	instanceID           string
+	shutdownLimit        time.Duration
+	clock                productruntime.Clock
+	cliControl           *controlprincipal.Authority
+	cliControlCredential string
+	discoveryTTL         time.Duration
+	controlBaseURL       string
+	processID            int
 
 	statusMu sync.RWMutex
 	status   Status
@@ -110,15 +112,15 @@ type Host struct {
 	shutdownDone chan struct{}
 	shutdownErr  error
 
-	failureMu      sync.Mutex
-	failureRoot    error
-	serveWG        sync.WaitGroup
-	rotationWG     sync.WaitGroup
-	rotationCancel context.CancelCauseFunc
+	failureMu       sync.Mutex
+	failureRoot     error
+	serveWG         sync.WaitGroup
+	discoveryWG     sync.WaitGroup
+	discoveryCancel context.CancelCauseFunc
 }
 
 // Start establishes both listeners and every route before atomically
-// publishing launcher discovery. The returned Host is externally ready.
+// publishing local control discovery. The returned Host is externally ready.
 func Start(ctx context.Context, options Options) (*Host, error) {
 	if ctx == nil {
 		return nil, errors.New("Desktop Host startup context is nil")
@@ -154,18 +156,18 @@ func Start(ctx context.Context, options Options) (*Host, error) {
 			rollback.run(rollbackContext),
 		)
 	}
-	discovery, err := launcherdiscovery.NewPublisher(
+	discovery, err := localdiscovery.NewPublisher(
 		options.Paths.DiscoveryPath(),
 		options.Runtime.Clock,
 		guard,
 	)
 	if err != nil {
-		return fail("launcher discovery ownership", err)
+		return fail("local control discovery ownership", err)
 	}
 
-	launcherToken, err := randomCapability(options.Runtime.SecurityRandom)
+	cliControlCredential, err := randomCapability(options.Runtime.SecurityRandom)
 	if err != nil {
-		return fail("launcher capability", err)
+		return fail("CLI control credential", err)
 	}
 	readToken, err := randomCapability(options.Runtime.SecurityRandom)
 	if err != nil {
@@ -179,9 +181,9 @@ func Start(ctx context.Context, options Options) (*Host, error) {
 	if err != nil {
 		return fail("native-shell bootstrap nonce", err)
 	}
-	if launcherToken == readToken ||
-		launcherToken == writeToken ||
-		launcherToken == bootstrapNonce ||
+	if cliControlCredential == readToken ||
+		cliControlCredential == writeToken ||
+		cliControlCredential == bootstrapNonce ||
 		readToken == writeToken ||
 		readToken == bootstrapNonce ||
 		writeToken == bootstrapNonce {
@@ -215,7 +217,7 @@ func Start(ctx context.Context, options Options) (*Host, error) {
 	controlBaseURL := "http://" + controlTracked.Addr().String()
 
 	now := options.Runtime.Clock.Now().UTC()
-	launcherExpiresAt := now.Add(options.LauncherTTL)
+	discoveryExpiresAt := now.Add(options.CLIControlDiscoveryTTL)
 	bootstrapExpiresAt := now.Add(options.BootstrapTTL)
 	appExpiresAt := now.Add(options.AppSessionTTL)
 	appSession := AppSession{
@@ -237,33 +239,57 @@ func Start(ctx context.Context, options Options) (*Host, error) {
 	if err != nil {
 		return fail("native-shell bootstrap authority", err)
 	}
-	launcherAuthority, err := capturecontrol.NewLauncherAuthority(
-		capturecontrol.LauncherGrant{
-			Token:     launcherToken,
-			ExpiresAt: launcherExpiresAt,
+	localPrincipal, err := controlprincipal.New(controlprincipal.Attributes{
+		ID:                 "local-cli:" + runtime.Status().InstanceID,
+		Kind:               controlprincipal.KindLocalCLI,
+		CredentialRevision: 1,
+		AllowedGrantKinds: []controlprincipal.GrantKind{
+			controlprincipal.GrantCaptureRun,
+			controlprincipal.GrantManualCapture,
 		},
-		options.Runtime.Clock,
+	})
+	if err != nil {
+		return fail("local CLI principal", err)
+	}
+	cliControl, err := controlprincipal.NewAuthority(
+		controlprincipal.CredentialGrant{
+			Credential: cliControlCredential,
+			Principal:  localPrincipal,
+		},
 	)
 	if err != nil {
-		return fail("launcher capability authority", err)
+		return fail("CLI control authority", err)
 	}
-	captureHandler, err := capturecontrol.New(capturecontrol.Options{
+	workspaceResolver, err := capturegrant.NewLocalWorkspaceResolver(
+		runtime.WorkspaceIdentity(),
+	)
+	if err != nil {
+		return fail("CaptureRun workspace adapter", err)
+	}
+	grantIssuer, err := capturegrant.New(capturegrant.Options{
 		Runs:        runtime.CaptureRuns(),
 		Verifier:    verifier,
 		Authorities: runtime,
 		ProxyOrigin: proxyOrigin,
 		Root:        runtime.LocalRootCertificate(),
-		Launcher:    launcherAuthority,
 		RunLifetime: options.CaptureRunLifetime,
-		Clock:       options.Runtime.Clock,
-		Workspaces:  runtime.WorkspaceIdentity(),
+		Workspaces:  workspaceResolver,
 		// The same authority that asks about a connection asks about handing
 		// a recognized client the Root, so both questions reach a person the
 		// same way and appear in the same place.
 		ClientRootApprovals: runtime.ClientRootApprovals(),
 	})
 	if err != nil {
-		return fail("CaptureRun routes", err)
+		return fail("capture grant issuer", err)
+	}
+	captureHandler, err := capturecontrol.New(capturecontrol.Options{
+		Runs:        runtime.CaptureRuns(),
+		Principals:  cliControl,
+		Issuer:      grantIssuer,
+		RunLifetime: options.CaptureRunLifetime,
+	})
+	if err != nil {
+		return fail("capture control routes", err)
 	}
 	authenticator, err := desktopcontrol.NewAuthenticator(
 		desktopcontrol.CapabilityGrant{
@@ -333,14 +359,14 @@ func Start(ctx context.Context, options Options) (*Host, error) {
 			EventVersions:  []string{},
 			BootstrapNonce: bootstrapNonce,
 		},
-		instanceID:     runtime.Status().InstanceID,
-		shutdownLimit:  options.ShutdownTimeout,
-		clock:          options.Runtime.Clock,
-		random:         random,
-		launcher:       launcherAuthority,
-		launcherTTL:    options.LauncherTTL,
-		controlBaseURL: controlBaseURL,
-		processID:      os.Getpid(),
+		instanceID:           runtime.Status().InstanceID,
+		shutdownLimit:        options.ShutdownTimeout,
+		clock:                options.Runtime.Clock,
+		cliControl:           cliControl,
+		cliControlCredential: cliControlCredential,
+		discoveryTTL:         options.CLIControlDiscoveryTTL,
+		controlBaseURL:       controlBaseURL,
+		processID:            os.Getpid(),
 		status: Status{
 			State:          StateStarting,
 			InstanceID:     runtime.Status().InstanceID,
@@ -352,10 +378,10 @@ func Start(ctx context.Context, options Options) (*Host, error) {
 	}
 	host.controlServer = newHTTPServer(router)
 	host.proxyServer = newHTTPServer(runtime.ProxyHandler())
-	rotationContext, cancelRotation := context.WithCancelCause(context.Background())
-	host.rotationCancel = cancelRotation
-	rollback.register("launcher refresh owner", func(context.Context) error {
-		cancelRotation(errors.New("Desktop Host startup rolled back"))
+	discoveryContext, cancelDiscovery := context.WithCancelCause(context.Background())
+	host.discoveryCancel = cancelDiscovery
+	rollback.register("CLI control discovery refresh owner", func(context.Context) error {
+		cancelDiscovery(errors.New("Desktop Host startup rolled back"))
 		return nil
 	})
 	routerStarted := false
@@ -377,20 +403,20 @@ func Start(ctx context.Context, options Options) (*Host, error) {
 		return stopHTTPServer(shutdownContext, host.controlServer, controlTracked)
 	})
 
-	session := launcherdiscovery.Session{
-		Schema:        launcherdiscovery.SchemaV1,
-		InstanceID:    host.instanceID,
-		ProcessID:     host.processID,
-		BaseURL:       controlBaseURL,
-		LauncherToken: launcherToken,
-		ExpiresAt:     launcherExpiresAt,
+	session := localdiscovery.Session{
+		Schema:            localdiscovery.Schema,
+		InstanceID:        host.instanceID,
+		ProcessID:         host.processID,
+		BaseURL:           controlBaseURL,
+		ControlCredential: cliControlCredential,
+		ExpiresAt:         discoveryExpiresAt,
 	}
 	if err := discovery.Publish(session); err != nil {
 		host.closing.Store(true)
 		router.BeginShutdown()
-		return fail("launcher discovery publication", err)
+		return fail("local control discovery publication", err)
 	}
-	rollback.register("launcher discovery", func(context.Context) error {
+	rollback.register("local control discovery", func(context.Context) error {
 		return discovery.Remove(host.instanceID)
 	})
 
@@ -410,8 +436,8 @@ func Start(ctx context.Context, options Options) (*Host, error) {
 	host.status.State = StateReady
 	host.status.Ready = true
 	host.statusMu.Unlock()
-	host.rotationWG.Add(1)
-	go host.refreshLauncher(rotationContext)
+	host.discoveryWG.Add(1)
+	go host.refreshCLIControlDiscovery(discoveryContext)
 	routerStarted = true
 	rollback = startupRollback{}
 	return host, nil
@@ -497,10 +523,10 @@ func (host *Host) beginShutdown(root error) {
 	host.shutdownOnce.Do(func() {
 		host.closing.Store(true)
 		host.readiness.published.Store(false)
-		if host.rotationCancel != nil {
-			host.rotationCancel(errors.New("Desktop Host is stopping"))
+		if host.discoveryCancel != nil {
+			host.discoveryCancel(errors.New("Desktop Host is stopping"))
 		}
-		host.launcher.Revoke()
+		host.cliControl.Revoke()
 		host.bootstrap.Revoke()
 		host.router.BeginShutdown()
 		host.statusMu.Lock()
@@ -521,9 +547,9 @@ func (host *Host) executeShutdown() {
 	root := host.failureRoot
 	host.failureMu.Unlock()
 	var shutdownErr error
-	host.rotationWG.Wait()
+	host.discoveryWG.Wait()
 	if err := host.discovery.Remove(host.instanceID); err != nil {
-		shutdownErr = errors.Join(shutdownErr, fmt.Errorf("withdraw launcher discovery: %w", err))
+		shutdownErr = errors.Join(shutdownErr, fmt.Errorf("withdraw local control discovery: %w", err))
 	}
 	if err := normalizeClose(host.control.Close()); err != nil {
 		shutdownErr = errors.Join(shutdownErr, fmt.Errorf("close control admission: %w", err))
@@ -623,11 +649,11 @@ func randomCapability(source io.Reader) (string, error) {
 	return base64.RawURLEncoding.EncodeToString(value), nil
 }
 
-func (host *Host) refreshLauncher(ctx context.Context) {
-	defer host.rotationWG.Done()
-	interval := host.launcherTTL / 2
+func (host *Host) refreshCLIControlDiscovery(ctx context.Context) {
+	defer host.discoveryWG.Done()
+	interval := host.discoveryTTL / 2
 	if interval <= 0 {
-		host.beginShutdown(errors.New("launcher refresh interval is invalid"))
+		host.beginShutdown(errors.New("CLI control discovery refresh interval is invalid"))
 		return
 	}
 	timer := time.NewTimer(interval)
@@ -637,8 +663,8 @@ func (host *Host) refreshLauncher(ctx context.Context) {
 		case <-ctx.Done():
 			return
 		case <-timer.C:
-			if err := host.rotateLauncher(); err != nil {
-				host.beginShutdown(fmt.Errorf("rotate launcher capability: %w", err))
+			if err := host.publishFreshCLIControlDiscovery(); err != nil {
+				host.beginShutdown(fmt.Errorf("refresh CLI control discovery: %w", err))
 				return
 			}
 			timer.Reset(interval)
@@ -646,40 +672,15 @@ func (host *Host) refreshLauncher(ctx context.Context) {
 	}
 }
 
-func (host *Host) rotateLauncher() error {
-	token, err := randomCapability(host.random)
-	if err != nil {
-		return err
-	}
-	expiresAt := host.clock.Now().UTC().Add(host.launcherTTL)
-	rotation, err := host.launcher.Prepare(capturecontrol.LauncherGrant{
-		Token:     token,
-		ExpiresAt: expiresAt,
+func (host *Host) publishFreshCLIControlDiscovery() error {
+	return host.discovery.Publish(localdiscovery.Session{
+		Schema:            localdiscovery.Schema,
+		InstanceID:        host.instanceID,
+		ProcessID:         host.processID,
+		BaseURL:           host.controlBaseURL,
+		ControlCredential: host.cliControlCredential,
+		ExpiresAt:         host.clock.Now().UTC().Add(host.discoveryTTL),
 	})
-	if err != nil {
-		return err
-	}
-	committed := false
-	defer func() {
-		if !committed {
-			_ = rotation.Abort()
-		}
-	}()
-	if err := host.discovery.Publish(launcherdiscovery.Session{
-		Schema:        launcherdiscovery.SchemaV1,
-		InstanceID:    host.instanceID,
-		ProcessID:     host.processID,
-		BaseURL:       host.controlBaseURL,
-		LauncherToken: token,
-		ExpiresAt:     expiresAt,
-	}); err != nil {
-		return err
-	}
-	if err := rotation.Commit(); err != nil {
-		return err
-	}
-	committed = true
-	return nil
 }
 
 func stopHTTPServer(

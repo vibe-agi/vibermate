@@ -26,7 +26,7 @@ import (
 	"github.com/vibe-agi/vibermate/internal/exchange"
 	"github.com/vibe-agi/vibermate/internal/hostcontract"
 	"github.com/vibe-agi/vibermate/internal/hostsecret"
-	"github.com/vibe-agi/vibermate/internal/launcherdiscovery"
+	"github.com/vibe-agi/vibermate/internal/localdiscovery"
 	"github.com/vibe-agi/vibermate/internal/offlinehold"
 	"github.com/vibe-agi/vibermate/internal/productruntime"
 	"github.com/vibe-agi/vibermate/internal/runlauncher"
@@ -121,7 +121,7 @@ func TestARealAgentClientReachesAModelThroughVibermate(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	sessionFile, err := launcherdiscovery.NewFile(
+	sessionFile, err := localdiscovery.NewFile(
 		paths.DiscoveryPath(),
 		productruntime.SystemClock{},
 	)
@@ -269,7 +269,7 @@ func liveHostOptions(
 		SecurityRandom: rand.Reader,
 		Lifecycle:      productruntime.DefaultLifecycleOptions(),
 	})
-	options.LauncherTTL = 10 * time.Minute
+	options.CLIControlDiscoveryTTL = 10 * time.Minute
 	options.AppSessionTTL = time.Hour
 	options.CaptureRunLifetime = 5 * time.Minute
 	options.ShutdownTimeout = 20 * time.Second
@@ -366,7 +366,7 @@ func TestARealResponsesClientReachesAModelThroughVibermate(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	sessionFile, err := launcherdiscovery.NewFile(
+	sessionFile, err := localdiscovery.NewFile(
 		paths.DiscoveryPath(),
 		productruntime.SystemClock{},
 	)

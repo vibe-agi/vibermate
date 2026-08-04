@@ -12,28 +12,28 @@ import (
 )
 
 const (
-	defaultLauncherTTL         = 15 * time.Minute
-	defaultBootstrapTTL        = 30 * time.Second
-	defaultAppSessionTTL       = 12 * time.Hour
-	defaultAppSessionReplayTTL = 2 * time.Minute
-	defaultCaptureRunLifetime  = 90 * time.Second
-	defaultShutdownTimeout     = 20 * time.Second
+	defaultCLIControlDiscoveryTTL = 15 * time.Minute
+	defaultBootstrapTTL           = 30 * time.Second
+	defaultAppSessionTTL          = 12 * time.Hour
+	defaultAppSessionReplayTTL    = 2 * time.Minute
+	defaultCaptureRunLifetime     = 90 * time.Second
+	defaultShutdownTimeout        = 20 * time.Second
 )
 
 // Options is the complete typed Desktop Host construction input.
 type Options struct {
-	Paths                Paths
-	Runtime              productruntime.Options
-	ProxyListenAddress   string
-	ControlListenAddress string
-	AllowedOrigins       []string
-	ClientCatalog        clientadapter.Catalog
-	LauncherTTL          time.Duration
-	BootstrapTTL         time.Duration
-	AppSessionTTL        time.Duration
-	AppSessionReplayTTL  time.Duration
-	CaptureRunLifetime   time.Duration
-	ShutdownTimeout      time.Duration
+	Paths                  Paths
+	Runtime                productruntime.Options
+	ProxyListenAddress     string
+	ControlListenAddress   string
+	AllowedOrigins         []string
+	ClientCatalog          clientadapter.Catalog
+	CLIControlDiscoveryTTL time.Duration
+	BootstrapTTL           time.Duration
+	AppSessionTTL          time.Duration
+	AppSessionReplayTTL    time.Duration
+	CaptureRunLifetime     time.Duration
+	ShutdownTimeout        time.Duration
 }
 
 // DefaultOptions creates the current macOS arm64 Host policy. Callers still
@@ -43,18 +43,18 @@ func DefaultOptions(
 	runtimeOptions productruntime.Options,
 ) Options {
 	return Options{
-		Paths:                paths,
-		Runtime:              runtimeOptions,
-		ProxyListenAddress:   "127.0.0.1:0",
-		ControlListenAddress: "127.0.0.1:0",
-		AllowedOrigins:       []string{"tauri://localhost"},
-		ClientCatalog:        clientadapter.BuiltInCatalog(),
-		LauncherTTL:          defaultLauncherTTL,
-		BootstrapTTL:         defaultBootstrapTTL,
-		AppSessionTTL:        defaultAppSessionTTL,
-		AppSessionReplayTTL:  defaultAppSessionReplayTTL,
-		CaptureRunLifetime:   defaultCaptureRunLifetime,
-		ShutdownTimeout:      defaultShutdownTimeout,
+		Paths:                  paths,
+		Runtime:                runtimeOptions,
+		ProxyListenAddress:     "127.0.0.1:0",
+		ControlListenAddress:   "127.0.0.1:0",
+		AllowedOrigins:         []string{"tauri://localhost"},
+		ClientCatalog:          clientadapter.BuiltInCatalog(),
+		CLIControlDiscoveryTTL: defaultCLIControlDiscoveryTTL,
+		BootstrapTTL:           defaultBootstrapTTL,
+		AppSessionTTL:          defaultAppSessionTTL,
+		AppSessionReplayTTL:    defaultAppSessionReplayTTL,
+		CaptureRunLifetime:     defaultCaptureRunLifetime,
+		ShutdownTimeout:        defaultShutdownTimeout,
 	}
 }
 
@@ -77,7 +77,7 @@ func (options Options) validate() error {
 	if len(options.AllowedOrigins) == 0 ||
 		!options.ClientCatalog.Valid() ||
 		options.Runtime.SecurityRandom == nil ||
-		options.LauncherTTL <= 0 ||
+		options.CLIControlDiscoveryTTL <= 0 ||
 		options.BootstrapTTL <= 0 ||
 		options.AppSessionTTL <= 0 ||
 		options.AppSessionReplayTTL <= 0 ||
@@ -87,8 +87,8 @@ func (options Options) validate() error {
 		options.ShutdownTimeout <= 0 {
 		return errors.New("Desktop Host policy is incomplete")
 	}
-	if options.LauncherTTL > time.Hour {
-		return errors.New("launcher capability lifetime exceeds the supported bound")
+	if options.CLIControlDiscoveryTTL > time.Hour {
+		return errors.New("CLI control discovery freshness exceeds the supported bound")
 	}
 	if options.BootstrapTTL > 5*time.Minute {
 		return errors.New("Desktop bootstrap lifetime exceeds the supported bound")

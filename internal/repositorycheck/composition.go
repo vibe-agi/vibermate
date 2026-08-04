@@ -13,9 +13,13 @@ import (
 // chooses what to call an import, so `vmruntime.Start` and
 // `productruntime.Start` are the same call and only the path says so.
 const (
-	daemonImportPath  = "github.com/vibe-agi/vibermate/internal/desktopdaemon"
-	hostImportPath    = "github.com/vibe-agi/vibermate/internal/desktophost"
-	runtimeImportPath = "github.com/vibe-agi/vibermate/internal/productruntime"
+	daemonImportPath           = "github.com/vibe-agi/vibermate/internal/desktopdaemon"
+	hostImportPath             = "github.com/vibe-agi/vibermate/internal/desktophost"
+	runtimeImportPath          = "github.com/vibe-agi/vibermate/internal/productruntime"
+	controlPrincipalImportPath = "github.com/vibe-agi/vibermate/internal/controlprincipal"
+	captureGrantImportPath     = "github.com/vibe-agi/vibermate/internal/capturegrant"
+	captureControlImportPath   = "github.com/vibe-agi/vibermate/internal/capturecontrol"
+	captureRunImportPath       = "github.com/vibe-agi/vibermate/internal/capturerun"
 )
 
 const (
@@ -71,6 +75,12 @@ func CheckProductionCompositionBoundary(repositoryRoot string) []Violation {
 			present["host"] = true
 		case strings.HasPrefix(file.relative, runtimePackageDir+"/"):
 			present["runtime"] = true
+		case strings.HasPrefix(file.relative, "internal/controlprincipal/"):
+			present["control-principal"] = true
+		case strings.HasPrefix(file.relative, "internal/capturegrant/"):
+			present["capture-grant"] = true
+		case strings.HasPrefix(file.relative, "internal/capturecontrol/"):
+			present["capture-control"] = true
 		}
 		violations = append(violations, file.dotImportViolations()...)
 	}
@@ -102,6 +112,39 @@ func CheckProductionCompositionBoundary(repositoryRoot string) []Violation {
 		callers:  []string{hostPackageDir + "/", runtimePackageDir + "/"},
 		missing:  "host-does-not-start-the-runtime",
 		extra:    "unreviewed-runtime-composition",
+	}, {
+		required: present["host"] && present["control-principal"],
+		holder:   hostPackageDir,
+		function: "Start",
+		target: calledFunction{
+			importPath: controlPrincipalImportPath,
+			name:       "NewAuthority",
+		},
+		callers: []string{hostPackageDir + "/"},
+		missing: "host-does-not-create-control-authority",
+		extra:   "unreviewed-control-authority-composition",
+	}, {
+		required: present["host"] && present["capture-grant"],
+		holder:   hostPackageDir,
+		function: "Start",
+		target: calledFunction{
+			importPath: captureGrantImportPath,
+			name:       "New",
+		},
+		callers: []string{hostPackageDir + "/"},
+		missing: "host-does-not-create-capture-grant-issuer",
+		extra:   "unreviewed-capture-grant-composition",
+	}, {
+		required: present["host"] && present["capture-control"],
+		holder:   hostPackageDir,
+		function: "Start",
+		target: calledFunction{
+			importPath: captureControlImportPath,
+			name:       "New",
+		},
+		callers: []string{hostPackageDir + "/"},
+		missing: "host-does-not-create-capture-control-handler",
+		extra:   "unreviewed-capture-control-composition",
 	}} {
 		violations = append(violations, link.check(files)...)
 	}
@@ -117,6 +160,27 @@ func CheckProductionCompositionBoundary(repositoryRoot string) []Violation {
 			productionBuildersLocal,
 			"runtime-does-not-select-production-builders",
 		)...)
+	}
+
+	// A CaptureRun can be created only by the typed grant issuer. Tests may
+	// construct manager commands directly, but production transports and Hosts
+	// cannot regain a second create path by importing the command type.
+	createCommand := calledFunction{
+		importPath: captureRunImportPath,
+		name:       "CreateCommand",
+	}
+	for _, file := range files {
+		if strings.HasPrefix(file.relative, "internal/capturegrant/") ||
+			strings.HasPrefix(file.relative, "internal/capturerun/") {
+			continue
+		}
+		if file.referencesSelector(createCommand) {
+			violations = append(violations, Violation{
+				Rule:    "capture-run-create-outside-issuer",
+				Path:    file.relative,
+				Message: "production CaptureRun creation belongs to the typed capture-grant issuer",
+			})
+		}
 	}
 
 	// The Desktop entry point composes through the daemon. Reaching past it is
@@ -410,7 +474,13 @@ func productionGoFiles(repositoryRoot string) ([]productionFile, error) {
 
 func isCompositionPackage(importPath string) bool {
 	switch importPath {
-	case daemonImportPath, hostImportPath, runtimeImportPath:
+	case daemonImportPath,
+		hostImportPath,
+		runtimeImportPath,
+		controlPrincipalImportPath,
+		captureGrantImportPath,
+		captureControlImportPath,
+		captureRunImportPath:
 		return true
 	default:
 		return false

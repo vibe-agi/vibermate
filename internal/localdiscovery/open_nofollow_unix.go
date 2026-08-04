@@ -1,6 +1,6 @@
 //go:build unix
 
-package launcherdiscovery
+package localdiscovery
 
 import (
 	"errors"
@@ -36,13 +36,13 @@ func validatePrivateDirectory(path string) error {
 		return err
 	}
 	if state.Mode&unix.S_IFMT != unix.S_IFDIR {
-		return errors.New("launcher discovery parent is not a directory")
+		return errors.New("local control discovery parent is not a directory")
 	}
 	if int(state.Uid) != os.Geteuid() {
-		return errors.New("launcher discovery directory is not owned by the current user")
+		return errors.New("local control discovery directory is not owned by the current user")
 	}
 	if os.FileMode(state.Mode).Perm() != 0o700 {
-		return errors.New("launcher discovery directory must have mode 0700")
+		return errors.New("local control discovery directory must have mode 0700")
 	}
 	return nil
 }
@@ -53,13 +53,13 @@ func validateOpenedPrivateFile(file *os.File) error {
 		return err
 	}
 	if state.Mode&unix.S_IFMT != unix.S_IFREG {
-		return errors.New("launcher discovery is not a regular file")
+		return errors.New("local control discovery is not a regular file")
 	}
 	if int(state.Uid) != os.Geteuid() {
-		return errors.New("launcher discovery file is not owned by the current user")
+		return errors.New("local control discovery file is not owned by the current user")
 	}
 	if os.FileMode(state.Mode).Perm() != 0o600 {
-		return errors.New("launcher discovery file must have mode 0600")
+		return errors.New("local control discovery file must have mode 0600")
 	}
 	return nil
 }

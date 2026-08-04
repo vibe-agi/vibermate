@@ -95,6 +95,17 @@ optional `LocalUserLabel`. That label is trimmed, bounded, and display-only: it
 is not authentication evidence and cannot affect machine/workspace identity,
 Access selection, routing, approval, quota, or upstream headers.
 
+The local CLI finds the current daemon through a private, expiring discovery
+record, then authenticates as an immutable generation-scoped
+`ControlPrincipal`. Discovery refresh changes only rendezvous freshness; it
+does not silently rotate login authority. One Core capture-grant issuer owns
+client verification, Root-delivery decisions, workspace resolution, and
+durable CaptureRun creation. Its returned per-run proxy and lifecycle
+credentials are separate from the control credential: mixed credential
+namespaces fail closed, and the child process never receives the control
+credential or discovery path. Manual capture and remote enrollment are not
+implemented in this slice.
+
 After an exact AgentEndpoint resolves an Access, the runtime atomically creates
 or reads the durable `(AccessID, MachineID, WorkspaceID)` route binding. Each
 Exchange freezes the binding and profile revisions once, so a Desktop CAS
@@ -204,7 +215,7 @@ current-HEAD credentialed behavior nor successful Responses WebSocket semantics
 or client-visible per-token TUI behavior.
 
 DesktopHost now owns the literal proxy and control listeners, complete routes,
-generation lock, capability separation, launcher discovery, and the only
+generation lock, capability separation, local control discovery, and the only
 product readiness publication. It publishes discovery only after
 ProductRuntime, both listeners, and every route are ready. The packaged
 `vibermated` sidecar writes a one-shot bootstrap descriptor to the native shell;

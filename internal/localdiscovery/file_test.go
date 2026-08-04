@@ -1,7 +1,9 @@
-package launcherdiscovery_test
+package localdiscovery_test
 
 import (
+	"bytes"
 	"encoding/base64"
+	"encoding/json"
 	"errors"
 	"os"
 	"path/filepath"
@@ -10,8 +12,41 @@ import (
 	"time"
 
 	"github.com/vibe-agi/vibermate/internal/instanceguard"
-	"github.com/vibe-agi/vibermate/internal/launcherdiscovery"
+	"github.com/vibe-agi/vibermate/internal/localdiscovery"
 )
+
+func TestLocalDiscoveryWireHasNoLauncherTokenAlias(t *testing.T) {
+	t.Parallel()
+
+	now := time.Date(2026, 7, 29, 8, 0, 0, 0, time.UTC)
+	payload, err := json.Marshal(validSession(now, 0x09))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Contains(payload, []byte(`"controlCredential"`)) ||
+		bytes.Contains(payload, []byte(`"launcherToken"`)) {
+		t.Fatalf("local discovery wire = %s", payload)
+	}
+
+	clock := &fixedClock{now: now}
+	path := filepath.Join(t.TempDir(), "private", "local-control.json")
+	file := newPublisher(t, path, clock)
+	if err := file.Publish(validSession(now, 0x0a)); err != nil {
+		t.Fatal(err)
+	}
+	legacy := bytes.Replace(
+		payload,
+		[]byte(`"controlCredential"`),
+		[]byte(`"launcherToken"`),
+		1,
+	)
+	if err := os.WriteFile(path, append(legacy, '\n'), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := file.Load(); err == nil {
+		t.Fatal("local discovery accepted the removed launcherToken field")
+	}
+}
 
 func TestFilePublishesLoadsAndRemovesOnlyItsInstance(t *testing.T) {
 	t.Parallel()
@@ -49,7 +84,7 @@ func TestFilePublishesLoadsAndRemovesOnlyItsInstance(t *testing.T) {
 	}
 	if err := file.Remove(validSession(clock.now, 0x22).InstanceID); !errors.Is(
 		err,
-		launcherdiscovery.ErrOwnerConflict,
+		localdiscovery.ErrOwnerConflict,
 	) {
 		t.Fatalf("Remove(other instance) error = %v", err)
 	}
@@ -83,7 +118,7 @@ func TestFileRejectsExpiredUnsafeAndConflictingRecords(t *testing.T) {
 		t.Fatalf("Load(new generation) = %+v, err=%v", loaded, err)
 	}
 	clock.now = replacement.ExpiresAt
-	if _, err := file.Load(); !errors.Is(err, launcherdiscovery.ErrExpired) {
+	if _, err := file.Load(); !errors.Is(err, localdiscovery.ErrExpired) {
 		t.Fatalf("Load(expired) error = %v", err)
 	}
 	fresh := validSession(clock.now, 0x34)
@@ -125,7 +160,7 @@ func TestFileRejectsUnsafeParentAndRecordModes(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer guard.Release()
-	file, err := launcherdiscovery.NewPublisher(path, clock, guard)
+	file, err := localdiscovery.NewPublisher(path, clock, guard)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -159,14 +194,14 @@ func TestFileRejectsNonLoopbackAndMalformedSession(t *testing.T) {
 		filepath.Join(t.TempDir(), "private", "launcher.json"),
 		clock,
 	)
-	cases := []launcherdiscovery.Session{
+	cases := []localdiscovery.Session{
 		{},
 		validSession(clock.now, 0x41),
 		validSession(clock.now, 0x42),
 		validSession(clock.now, 0x43),
 	}
 	cases[1].BaseURL = "http://localhost:4321"
-	cases[2].LauncherToken = "not-a-capability"
+	cases[2].ControlCredential = "not-a-capability"
 	cases[3].Schema = "unknown"
 	for _, session := range cases {
 		if err := file.Publish(session); err == nil {
@@ -179,7 +214,7 @@ func TestFileReaderCannotPublishWithoutGenerationOwnership(t *testing.T) {
 	t.Parallel()
 
 	clock := &fixedClock{now: time.Now().UTC()}
-	file, err := launcherdiscovery.NewFile(
+	file, err := localdiscovery.NewFile(
 		filepath.Join(t.TempDir(), "launcher.json"),
 		clock,
 	)
@@ -187,15 +222,15 @@ func TestFileReaderCannotPublishWithoutGenerationOwnership(t *testing.T) {
 		t.Fatal(err)
 	}
 	if err := file.Publish(validSession(clock.now, 0x51)); err == nil {
-		t.Fatal("read-only discovery boundary published a launcher session")
+		t.Fatal("read-only discovery boundary published a local control session")
 	}
 }
 
 func newPublisher(
 	t *testing.T,
 	path string,
-	clock launcherdiscovery.Clock,
-) *launcherdiscovery.File {
+	clock localdiscovery.Clock,
+) *localdiscovery.File {
 	t.Helper()
 	guard, err := instanceguard.Acquire(
 		filepath.Join(filepath.Dir(path), "daemon.lock"),
@@ -208,21 +243,21 @@ func newPublisher(
 			t.Error(err)
 		}
 	})
-	file, err := launcherdiscovery.NewPublisher(path, clock, guard)
+	file, err := localdiscovery.NewPublisher(path, clock, guard)
 	if err != nil {
 		t.Fatal(err)
 	}
 	return file
 }
 
-func validSession(now time.Time, fill byte) launcherdiscovery.Session {
-	return launcherdiscovery.Session{
-		Schema:        launcherdiscovery.SchemaV1,
-		InstanceID:    base64.RawURLEncoding.EncodeToString(repeat(fill, 20)),
-		ProcessID:     1234,
-		BaseURL:       "http://127.0.0.1:43210",
-		LauncherToken: base64.RawURLEncoding.EncodeToString(repeat(fill, 32)),
-		ExpiresAt:     now.Add(time.Minute),
+func validSession(now time.Time, fill byte) localdiscovery.Session {
+	return localdiscovery.Session{
+		Schema:            localdiscovery.Schema,
+		InstanceID:        base64.RawURLEncoding.EncodeToString(repeat(fill, 20)),
+		ProcessID:         1234,
+		BaseURL:           "http://127.0.0.1:43210",
+		ControlCredential: base64.RawURLEncoding.EncodeToString(repeat(fill, 32)),
+		ExpiresAt:         now.Add(time.Minute),
 	}
 }
 

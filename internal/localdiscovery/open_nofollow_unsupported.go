@@ -1,6 +1,6 @@
 //go:build !unix
 
-package launcherdiscovery
+package localdiscovery
 
 import (
 	"errors"
@@ -17,7 +17,7 @@ func validatePrivateDirectory(path string) error {
 		return err
 	}
 	if !info.IsDir() || info.Mode()&os.ModeSymlink != 0 {
-		return errors.New("launcher discovery parent must be a directory")
+		return errors.New("local control discovery parent must be a directory")
 	}
 	return nil
 }
@@ -28,7 +28,7 @@ func validateOpenedPrivateFile(file *os.File) error {
 		return err
 	}
 	if !info.Mode().IsRegular() {
-		return errors.New("launcher discovery is not a regular file")
+		return errors.New("local control discovery is not a regular file")
 	}
 	return nil
 }

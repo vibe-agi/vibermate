@@ -20,7 +20,7 @@ import (
 	"github.com/vibe-agi/vibermate/internal/exchange"
 	"github.com/vibe-agi/vibermate/internal/hostcontract"
 	"github.com/vibe-agi/vibermate/internal/instanceguard"
-	"github.com/vibe-agi/vibermate/internal/launcherdiscovery"
+	"github.com/vibe-agi/vibermate/internal/localdiscovery"
 	"github.com/vibe-agi/vibermate/internal/offlinehold"
 	"github.com/vibe-agi/vibermate/internal/productruntime"
 	"github.com/vibe-agi/vibermate/internal/runlauncher"
@@ -36,7 +36,7 @@ func TestHostPublishesReadyGenerationAndRunsCapturedChildOverRealSockets(
 	root := t.TempDir()
 	paths := newHostPaths(t, filepath.Join(root, "cache"))
 	host := startHost(t, hostOptions(t, paths, filepath.Join(root, "data")))
-	sessionFile, err := launcherdiscovery.NewFile(
+	sessionFile, err := localdiscovery.NewFile(
 		paths.DiscoveryPath(),
 		productruntime.SystemClock{},
 	)
@@ -59,8 +59,8 @@ func TestHostPublishesReadyGenerationAndRunsCapturedChildOverRealSockets(
 		len(bootstrap.EventVersions) != 0 ||
 		session.InstanceID != status.InstanceID ||
 		session.BaseURL != app.BaseURL ||
-		session.LauncherToken == app.ReadToken ||
-		session.LauncherToken == app.WriteToken ||
+		session.ControlCredential == app.ReadToken ||
+		session.ControlCredential == app.WriteToken ||
 		app.ReadToken == app.WriteToken {
 		t.Fatalf(
 			"Host publication status=%+v session=%+v app=%+v",
@@ -256,16 +256,16 @@ func TestHostRejectsSecondGenerationWithoutChangingFirstDiscovery(t *testing.T) 
 	}
 }
 
-func TestHostRotatesShortLivedLauncherDiscoveryWithoutReadinessGap(t *testing.T) {
+func TestHostRefreshesDiscoveryWithoutRotatingControlCredential(t *testing.T) {
 	t.Parallel()
 
 	root := t.TempDir()
 	paths := newHostPaths(t, filepath.Join(root, "cache"))
 	options := hostOptions(t, paths, filepath.Join(root, "data"))
-	options.LauncherTTL = 300 * time.Millisecond
+	options.CLIControlDiscoveryTTL = 300 * time.Millisecond
 	host := startHost(t, options)
 	defer shutdownHost(t, host)
-	sessionFile, err := launcherdiscovery.NewFile(
+	sessionFile, err := localdiscovery.NewFile(
 		paths.DiscoveryPath(),
 		productruntime.SystemClock{},
 	)
@@ -277,34 +277,35 @@ func TestHostRotatesShortLivedLauncherDiscoveryWithoutReadinessGap(t *testing.T)
 		t.Fatal(err)
 	}
 	deadline := time.Now().Add(5 * time.Second)
-	var rotated launcherdiscovery.Session
+	var refreshed localdiscovery.Session
 	for time.Now().Before(deadline) {
 		current, loadErr := sessionFile.Load()
-		if loadErr == nil && current.LauncherToken != first.LauncherToken {
-			response := launcherCreateProbe(t, current.BaseURL, first.LauncherToken)
-			_ = response.Body.Close()
-			if response.StatusCode == http.StatusUnauthorized {
-				rotated = current
-				break
-			}
+		if loadErr == nil &&
+			current.ControlCredential == first.ControlCredential &&
+			current.ExpiresAt.After(first.ExpiresAt) {
+			refreshed = current
+			break
 		}
 		time.Sleep(10 * time.Millisecond)
 	}
-	if rotated.LauncherToken == "" ||
-		!rotated.ExpiresAt.After(first.ExpiresAt) ||
+	if refreshed.ControlCredential == "" ||
 		!host.Status().Ready {
 		t.Fatalf(
-			"launcher rotation first=%+v rotated=%+v status=%+v",
+			"discovery refresh first=%+v refreshed=%+v status=%+v",
 			first,
-			rotated,
+			refreshed,
 			host.Status(),
 		)
 	}
-	response := launcherCreateProbe(t, rotated.BaseURL, rotated.LauncherToken)
+	response := controlCreateProbe(
+		t,
+		refreshed.BaseURL,
+		refreshed.ControlCredential,
+	)
 	defer response.Body.Close()
 	if response.StatusCode != http.StatusUnprocessableEntity {
 		t.Fatalf(
-			"rotated launcher status=%d, want authorized request validation",
+			"refreshed control status=%d, want authorized request validation",
 			response.StatusCode,
 		)
 	}
@@ -329,7 +330,7 @@ func TestHostDiscoveryPublicationFailureRollsBackBothListenersAndRuntime(
 	options.ProxyListenAddress = proxyAddress
 	options.ControlListenAddress = controlAddress
 	_, err := desktophost.Start(context.Background(), options)
-	if err == nil || !strings.Contains(err.Error(), "launcher discovery publication") {
+	if err == nil || !strings.Contains(err.Error(), "local control discovery publication") {
 		t.Fatalf("Host Start() error = %v", err)
 	}
 	for _, address := range []string{proxyAddress, controlAddress} {
@@ -354,7 +355,7 @@ func TestHostDiscoveryPublicationFailureRollsBackBothListenersAndRuntime(
 	shutdownHost(t, reopened)
 }
 
-func launcherCreateProbe(
+func controlCreateProbe(
 	t *testing.T,
 	baseURL string,
 	token string,
@@ -417,7 +418,7 @@ func hostOptions(
 		SecurityRandom: rand.Reader,
 		Lifecycle:      productruntime.DefaultLifecycleOptions(),
 	})
-	options.LauncherTTL = time.Minute
+	options.CLIControlDiscoveryTTL = time.Minute
 	options.AppSessionTTL = time.Hour
 	options.CaptureRunLifetime = 3 * time.Second
 	options.ShutdownTimeout = 15 * time.Second

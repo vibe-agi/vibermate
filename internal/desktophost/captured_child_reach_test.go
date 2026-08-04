@@ -16,7 +16,7 @@ import (
 
 	"github.com/vibe-agi/vibermate/internal/connectionpolicy"
 	"github.com/vibe-agi/vibermate/internal/egressaudit"
-	"github.com/vibe-agi/vibermate/internal/launcherdiscovery"
+	"github.com/vibe-agi/vibermate/internal/localdiscovery"
 	"github.com/vibe-agi/vibermate/internal/productruntime"
 	"github.com/vibe-agi/vibermate/internal/runlauncher"
 )
@@ -106,7 +106,7 @@ func TestCapturedChildReachesANonModelHost(t *testing.T) {
 	paths := newHostPaths(t, filepath.Join(root, "cache"))
 	host := startHost(t, hostOptions(t, paths, filepath.Join(root, "data")))
 	defer shutdownHost(t, host)
-	sessionFile, err := launcherdiscovery.NewFile(
+	sessionFile, err := localdiscovery.NewFile(
 		paths.DiscoveryPath(),
 		productruntime.SystemClock{},
 	)

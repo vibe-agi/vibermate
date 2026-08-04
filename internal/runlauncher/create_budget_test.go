@@ -7,7 +7,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/vibe-agi/vibermate/internal/launcherdiscovery"
+	"github.com/vibe-agi/vibermate/internal/localdiscovery"
 	"github.com/vibe-agi/vibermate/internal/runlauncher"
 )
 
@@ -47,9 +47,9 @@ func TestADefaultLaunchOutlastsAnAskThatTakesLongerThanAControlCall(t *testing.T
 	defer server.Close()
 
 	launcher, err := runlauncher.New(runlauncher.Config{
-		Discovery: fixedDiscovery{session: launcherdiscovery.Session{
-			BaseURL:       server.URL,
-			LauncherToken: capability(0x71),
+		Discovery: fixedDiscovery{session: localdiscovery.Session{
+			BaseURL:           server.URL,
+			ControlCredential: capability(0x71),
 		}},
 		BaseEnvironment: []string{"PATH=/usr/bin:/bin"},
 		// Deliberately not set: this is about what a user's installation does,

@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"github.com/vibe-agi/vibermate/internal/capturecontrol"
+	"github.com/vibe-agi/vibermate/internal/capturegrant"
 	"github.com/vibe-agi/vibermate/internal/clientadapter"
 	"github.com/vibe-agi/vibermate/internal/toolapproval"
 )
@@ -79,7 +80,7 @@ func TestTheGrantCarriesTheRootOnlyWhenARecognizedClientWasAllowed(t *testing.T)
 		t.Run(testCase.name, func(t *testing.T) {
 			t.Parallel()
 
-			fixture := newFixture(t, func(options *capturecontrol.Options) {
+			fixture := newFixture(t, func(options *capturegrant.Options) {
 				options.Verifier = recognizingVerifier{}
 				options.ClientRootApprovals = fixedApprover{allow: testCase.allow}
 			})
@@ -136,7 +137,7 @@ func (fixture *fixture) createRun(t *testing.T) capturecontrol.LaunchGrant {
 		t,
 		http.MethodPost,
 		"/api/v1/capture-runs",
-		fixture.launcherToken,
+		fixture.controlCredential,
 		"",
 		capturecontrol.CreateRequest{
 			CWD:            fixture.workspace,

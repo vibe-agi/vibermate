@@ -14,7 +14,7 @@ import (
 	"time"
 
 	"github.com/vibe-agi/vibermate/internal/capturecontrol"
-	"github.com/vibe-agi/vibermate/internal/launcherdiscovery"
+	"github.com/vibe-agi/vibermate/internal/localdiscovery"
 	"github.com/vibe-agi/vibermate/internal/loopbackclient"
 )
 
@@ -27,7 +27,7 @@ type ControlFailure struct {
 
 func (failure *ControlFailure) Error() string {
 	return fmt.Sprintf(
-		"launcher control request failed with status %d and reason %s",
+		"local control request failed with status %d and reason %s",
 		failure.Status,
 		failure.ReasonCode,
 	)
@@ -35,24 +35,24 @@ func (failure *ControlFailure) Error() string {
 
 type controlClient struct {
 	origin     string
-	launcher   string
+	credential string
 	httpClient *loopbackclient.Client
 }
 
 func newControlClient(
-	session launcherdiscovery.Session,
+	session localdiscovery.Session,
 ) (*controlClient, error) {
 	client, err := loopbackclient.New(session.BaseURL, 10*time.Second)
 	if err != nil {
 		return nil, err
 	}
-	if session.LauncherToken == "" {
+	if session.ControlCredential == "" {
 		client.Close()
-		return nil, errors.New("launcher capability is missing")
+		return nil, errors.New("local control credential is missing")
 	}
 	return &controlClient{
 		origin:     session.BaseURL,
-		launcher:   session.LauncherToken,
+		credential: session.ControlCredential,
 		httpClient: client,
 	}, nil
 }
@@ -72,7 +72,7 @@ func (client *controlClient) create(
 		ctx,
 		http.MethodPost,
 		"/api/v1/capture-runs",
-		client.launcher,
+		client.credential,
 		"",
 		input,
 		http.StatusCreated,
@@ -143,13 +143,13 @@ func (client *controlClient) jsonRequest(
 	output any,
 ) error {
 	if client == nil || ctx == nil {
-		return errors.New("launcher control client and context are required")
+		return errors.New("local control client and context are required")
 	}
 	var body io.Reader
 	if input != nil {
 		encoded, err := json.Marshal(input)
 		if err != nil {
-			return fmt.Errorf("encode launcher control request: %w", err)
+			return fmt.Errorf("encode local control request: %w", err)
 		}
 		body = bytes.NewReader(encoded)
 	}
@@ -174,7 +174,7 @@ func (client *controlClient) jsonRequest(
 	}
 	response, err := client.httpClient.Do(request)
 	if err != nil {
-		return fmt.Errorf("call launcher control API: %w", err)
+		return fmt.Errorf("call local control API: %w", err)
 	}
 	defer response.Body.Close()
 	payload, err := io.ReadAll(io.LimitReader(
@@ -182,28 +182,28 @@ func (client *controlClient) jsonRequest(
 		maxControlResponseBytes+1,
 	))
 	if err != nil {
-		return fmt.Errorf("read launcher control response: %w", err)
+		return fmt.Errorf("read local control response: %w", err)
 	}
 	if len(payload) > maxControlResponseBytes {
-		return errors.New("launcher control response exceeds the size limit")
+		return errors.New("local control response exceeds the size limit")
 	}
 	if response.StatusCode != wantStatus {
 		return decodeControlFailure(response.StatusCode, payload)
 	}
 	if output == nil {
 		if len(bytes.TrimSpace(payload)) != 0 {
-			return errors.New("launcher control response body is unexpected")
+			return errors.New("local control response body is unexpected")
 		}
 		return nil
 	}
 	decoder := json.NewDecoder(bytes.NewReader(payload))
 	decoder.DisallowUnknownFields()
 	if err := decoder.Decode(output); err != nil {
-		return fmt.Errorf("decode launcher control response: %w", err)
+		return fmt.Errorf("decode local control response: %w", err)
 	}
 	var trailing any
 	if err := decoder.Decode(&trailing); !errors.Is(err, io.EOF) {
-		return errors.New("launcher control response contains trailing JSON")
+		return errors.New("local control response contains trailing JSON")
 	}
 	return nil
 }
@@ -225,7 +225,7 @@ func decodeControlFailure(status int, payload []byte) error {
 		problem.Type != "urn:vibermate:error:"+
 			strings.ReplaceAll(string(problem.Code), "_", "-") {
 		return fmt.Errorf(
-			"launcher control returned invalid error response with status %d",
+			"local control returned invalid error response with status %d",
 			status,
 		)
 	}

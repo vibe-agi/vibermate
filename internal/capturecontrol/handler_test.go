@@ -16,14 +16,16 @@ import (
 	"time"
 
 	"github.com/vibe-agi/vibermate/internal/capturecontrol"
+	"github.com/vibe-agi/vibermate/internal/capturegrant"
 	"github.com/vibe-agi/vibermate/internal/capturerun"
 	"github.com/vibe-agi/vibermate/internal/clientadapter"
+	"github.com/vibe-agi/vibermate/internal/controlprincipal"
 	"github.com/vibe-agi/vibermate/internal/localca"
 	"github.com/vibe-agi/vibermate/internal/runtimepersistence"
 	"github.com/vibe-agi/vibermate/internal/workspaceidentity"
 )
 
-func TestCaptureControlSeparatesLauncherAndPerRunCapabilities(t *testing.T) {
+func TestCaptureControlSeparatesControlAndPerRunCredentials(t *testing.T) {
 	t.Parallel()
 
 	fixture := newFixture(t)
@@ -37,7 +39,7 @@ func TestCaptureControlSeparatesLauncherAndPerRunCapabilities(t *testing.T) {
 		t,
 		http.MethodPost,
 		"/api/v1/capture-runs",
-		fixture.launcherToken,
+		fixture.controlCredential,
 		"",
 		create,
 	)
@@ -107,6 +109,37 @@ func TestCaptureControlSeparatesLauncherAndPerRunCapabilities(t *testing.T) {
 	if unauthorized.Code != http.StatusUnauthorized {
 		t.Fatalf("unauthorized create status=%d", unauthorized.Code)
 	}
+	mixedCreate := fixture.DoJSON(
+		t,
+		http.MethodPost,
+		"/api/v1/capture-runs",
+		fixture.controlCredential,
+		grant.RunCapability,
+		create,
+	)
+	if mixedCreate.Code != http.StatusUnauthorized {
+		t.Fatalf(
+			"mixed control/run create status=%d body=%s",
+			mixedCreate.Code,
+			mixedCreate.Body.Bytes(),
+		)
+	}
+
+	mixedRun := fixture.DoJSON(
+		t,
+		http.MethodPost,
+		"/api/v1/capture-runs/"+grant.Run.ID+"/actions/heartbeat",
+		fixture.controlCredential,
+		grant.RunCapability,
+		nil,
+	)
+	if mixedRun.Code != http.StatusForbidden {
+		t.Fatalf(
+			"mixed control/run heartbeat status=%d body=%s",
+			mixedRun.Code,
+			mixedRun.Body.Bytes(),
+		)
+	}
 
 	attach := fixture.DoJSON(
 		t,
@@ -154,7 +187,7 @@ func TestCaptureControlSeparatesLauncherAndPerRunCapabilities(t *testing.T) {
 		http.MethodPost,
 		"/api/v1/capture-runs/"+grant.Run.ID+"/actions/heartbeat",
 		"",
-		fixture.launcherToken,
+		fixture.controlCredential,
 		nil,
 	)
 	if rejected.Code != http.StatusForbidden {
@@ -162,7 +195,7 @@ func TestCaptureControlSeparatesLauncherAndPerRunCapabilities(t *testing.T) {
 	}
 }
 
-func TestCaptureControlExpiresLauncherCapability(t *testing.T) {
+func TestCaptureControlCredentialDoesNotExpireWithDiscoveryLease(t *testing.T) {
 	t.Parallel()
 
 	fixture := newFixture(t)
@@ -172,7 +205,7 @@ func TestCaptureControlExpiresLauncherCapability(t *testing.T) {
 		t,
 		http.MethodPost,
 		"/api/v1/capture-runs",
-		fixture.launcherToken,
+		fixture.controlCredential,
 		"",
 		capturecontrol.CreateRequest{
 			CWD:            fixture.workspace,
@@ -180,8 +213,8 @@ func TestCaptureControlExpiresLauncherCapability(t *testing.T) {
 			ExecutablePath: fixture.executable,
 		},
 	)
-	if response.Code != http.StatusUnauthorized {
-		t.Fatalf("expired launcher status=%d body=%s", response.Code, response.Body.Bytes())
+	if response.Code != http.StatusCreated {
+		t.Fatalf("generation control status=%d body=%s", response.Code, response.Body.Bytes())
 	}
 }
 
@@ -195,7 +228,7 @@ func TestLocalUserLabelDoesNotChangeMachineWorkspaceIdentity(t *testing.T) {
 			t,
 			http.MethodPost,
 			"/api/v1/capture-runs",
-			fixture.launcherToken,
+			fixture.controlCredential,
 			"",
 			capturecontrol.CreateRequest{
 				CWD:            fixture.workspace,
@@ -251,7 +284,7 @@ func TestCaptureControlKeepsUnknownClientBuildGeneric(t *testing.T) {
 		t,
 		http.MethodPost,
 		"/api/v1/capture-runs",
-		fixture.launcherToken,
+		fixture.controlCredential,
 		"",
 		capturecontrol.CreateRequest{
 			CWD:            fixture.workspace,
@@ -293,21 +326,21 @@ func TestCaptureControlKeepsUnknownClientBuildGeneric(t *testing.T) {
 }
 
 type fixture struct {
-	handler       *capturecontrol.Handler
-	store         *runtimepersistence.Store
-	runs          *capturerun.Manager
-	authority     *localca.Authority
-	workspaces    *workspaceidentity.Manager
-	clock         *fakeClock
-	launcherToken string
-	workspace     string
-	executable    string
+	handler           *capturecontrol.Handler
+	store             *runtimepersistence.Store
+	runs              *capturerun.Manager
+	authority         *localca.Authority
+	workspaces        *workspaceidentity.Manager
+	clock             *fakeClock
+	controlCredential string
+	workspace         string
+	executable        string
 }
 
 // fixtureOverride adjusts the handler a fixture builds. Recognition needs a
 // verifier that reports it and something able to answer, and neither can come
 // from a file on disk in a unit test.
-type fixtureOverride func(*capturecontrol.Options)
+type fixtureOverride func(*capturegrant.Options)
 
 func newFixture(t *testing.T, overrides ...fixtureOverride) *fixture {
 	t.Helper()
@@ -380,12 +413,23 @@ func newFixture(t *testing.T, overrides ...fixtureOverride) *fixture {
 		t.Fatal(err)
 	}
 	token := base64.RawURLEncoding.EncodeToString(bytes.Repeat([]byte{0x42}, 32))
-	launcher, err := capturecontrol.NewLauncherAuthority(
-		capturecontrol.LauncherGrant{
-			Token:     token,
-			ExpiresAt: clock.Now().Add(time.Minute),
+	principal, err := controlprincipal.New(controlprincipal.Attributes{
+		ID:                 "local-cli:test-instance",
+		Kind:               controlprincipal.KindLocalCLI,
+		CredentialRevision: 1,
+		AllowedGrantKinds: []controlprincipal.GrantKind{
+			controlprincipal.GrantCaptureRun,
+			controlprincipal.GrantManualCapture,
 		},
-		clock,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	principals, err := controlprincipal.NewAuthority(
+		controlprincipal.CredentialGrant{
+			Credential: token,
+			Principal:  principal,
+		},
 	)
 	if err != nil {
 		t.Fatal(err)
@@ -399,34 +443,45 @@ func newFixture(t *testing.T, overrides ...fixtureOverride) *fixture {
 	if err != nil {
 		t.Fatal(err)
 	}
-	options := capturecontrol.Options{
+	workspaceResolver, err := capturegrant.NewLocalWorkspaceResolver(workspaces)
+	if err != nil {
+		t.Fatal(err)
+	}
+	issuerOptions := capturegrant.Options{
 		Runs:        runs,
 		Verifier:    verifier,
 		Authorities: fixedAuthorities{"api.anthropic.com:443"},
 		ProxyOrigin: "http://127.0.0.1:32123",
 		Root:        authority.Certificate(),
-		Launcher:    launcher,
 		RunLifetime: 2 * time.Minute,
-		Clock:       clock,
-		Workspaces:  workspaces,
+		Workspaces:  workspaceResolver,
 	}
 	for _, override := range overrides {
-		override(&options)
+		override(&issuerOptions)
 	}
-	handler, err := capturecontrol.New(options)
+	issuer, err := capturegrant.New(issuerOptions)
+	if err != nil {
+		t.Fatal(err)
+	}
+	handler, err := capturecontrol.New(capturecontrol.Options{
+		Runs:        runs,
+		Principals:  principals,
+		Issuer:      issuer,
+		RunLifetime: 2 * time.Minute,
+	})
 	if err != nil {
 		t.Fatal(err)
 	}
 	return &fixture{
-		handler:       handler,
-		store:         store,
-		runs:          runs,
-		authority:     authority,
-		workspaces:    workspaces,
-		clock:         clock,
-		launcherToken: token,
-		workspace:     workspace,
-		executable:    executable,
+		handler:           handler,
+		store:             store,
+		runs:              runs,
+		authority:         authority,
+		workspaces:        workspaces,
+		clock:             clock,
+		controlCredential: token,
+		workspace:         workspace,
+		executable:        executable,
 	}
 }
 

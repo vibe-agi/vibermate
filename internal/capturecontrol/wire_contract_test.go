@@ -10,6 +10,7 @@ import (
 	"testing"
 
 	"github.com/vibe-agi/vibermate/internal/capturecontrol"
+	"github.com/vibe-agi/vibermate/internal/capturegrant"
 )
 
 func TestCaptureRunPOSTResponsesMatchTheClosedOpenAPIWire(t *testing.T) {
@@ -21,7 +22,7 @@ func TestCaptureRunPOSTResponsesMatchTheClosedOpenAPIWire(t *testing.T) {
 		t,
 		http.MethodPost,
 		"/api/v1/capture-runs",
-		fixture.launcherToken,
+		fixture.controlCredential,
 		"",
 		capturecontrol.CreateRequest{
 			CWD:            fixture.workspace,
@@ -136,7 +137,7 @@ func TestGenericCaptureRunGrantUsesTheContractedRecipeAndShape(t *testing.T) {
 		t,
 		http.MethodPost,
 		"/api/v1/capture-runs",
-		fixture.launcherToken,
+		fixture.controlCredential,
 		"",
 		capturecontrol.CreateRequest{
 			CWD:            fixture.workspace,
@@ -180,7 +181,7 @@ func TestGenericCaptureRunGrantUsesTheContractedRecipeAndShape(t *testing.T) {
 func TestRecognizedCaptureRunGrantProjectsExactSignerEvidence(t *testing.T) {
 	t.Parallel()
 
-	fixture := newFixture(t, func(options *capturecontrol.Options) {
+	fixture := newFixture(t, func(options *capturegrant.Options) {
 		options.Verifier = recognizingVerifier{}
 		options.ClientRootApprovals = fixedApprover{allow: true}
 	})
@@ -189,7 +190,7 @@ func TestRecognizedCaptureRunGrantProjectsExactSignerEvidence(t *testing.T) {
 		t,
 		http.MethodPost,
 		"/api/v1/capture-runs",
-		fixture.launcherToken,
+		fixture.controlCredential,
 		"",
 		capturecontrol.CreateRequest{
 			CWD:            fixture.workspace,
@@ -251,7 +252,7 @@ func TestCaptureRunProblemMatchesTheClosedOpenAPIWire(t *testing.T) {
 		t,
 		http.MethodPost,
 		"/api/v1/capture-runs",
-		fixture.launcherToken,
+		fixture.controlCredential,
 		"",
 		map[string]any{"cwd": fixture.workspace},
 	)

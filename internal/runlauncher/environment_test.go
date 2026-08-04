@@ -37,6 +37,13 @@ func TestBuildEnvironmentPinsProxyAndRemovesProtectedBypasses(t *testing.T) {
 		"PATH=/usr/bin:/bin",
 		"HTTP_PROXY=http://untrusted.invalid",
 		"NODE_EXTRA_CA_CERTS=/tmp/untrusted.pem",
+		"VIBERMATE_CONNECTION=office",
+		"VIBERMATE_CREDENTIAL_FILE=/tmp/control-credential",
+		"VIBERMATE_TOKEN=raw-control-secret",
+		"VIBERMATE_CONTROL_CREDENTIAL=raw-control-secret",
+		"VIBERMATE_ENROLLMENT_TOKEN=one-time-secret",
+		"VIBERMATE_ADMIN_TOKEN=admin-secret",
+		"VIBERMATE_DISCOVERY_PATH=/tmp/private-discovery",
 		"NO_PROXY=localhost,.anthropic.com,example.org,192.0.2.8:8443,10.0.0.0/8,*",
 		"no_proxy=localhost,api.anthropic.com:443",
 	}
@@ -64,6 +71,19 @@ func TestBuildEnvironmentPinsProxyAndRemovesProtectedBypasses(t *testing.T) {
 		values["NODE_USE_ENV_PROXY"] != "1" ||
 		values["VIBERMATE_CAPTURE_RUN_ID"] != "run-1" {
 		t.Fatalf("managed environment = %+v", values)
+	}
+	for _, forbidden := range []string{
+		"VIBERMATE_CONNECTION",
+		"VIBERMATE_CREDENTIAL_FILE",
+		"VIBERMATE_TOKEN",
+		"VIBERMATE_CONTROL_CREDENTIAL",
+		"VIBERMATE_ENROLLMENT_TOKEN",
+		"VIBERMATE_ADMIN_TOKEN",
+		"VIBERMATE_DISCOVERY_PATH",
+	} {
+		if _, exists := values[forbidden]; exists {
+			t.Fatalf("captured child inherited %s", forbidden)
+		}
 	}
 	base[0] = "PATH=/mutated"
 	if environmentMap(environment)["PATH"] != "/usr/bin:/bin" {

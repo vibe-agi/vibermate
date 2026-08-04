@@ -1,5 +1,5 @@
 // Package desktopbootstrap owns the one-shot native-shell exchange that keeps
-// App capabilities out of argv, URLs, launcher discovery, and logs.
+// App capabilities out of argv, URLs, local control discovery, and logs.
 package desktopbootstrap
 
 import (

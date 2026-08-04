@@ -1,96 +1,68 @@
-// Package capturecontrol exposes the narrow launcher and per-run lifecycle
-// routes. Launcher capability can only create a CaptureRun; the returned
-// control capability can only operate that run.
+// Package capturecontrol exposes the narrow capture-grant and per-run
+// lifecycle routes. A Host-authenticated ControlPrincipal can request only its
+// allowed grant kinds; the returned run capability can operate only that run.
 package capturecontrol
 
 import (
 	"bytes"
 	"context"
-	"crypto/sha256"
-	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"io"
 	"mime"
-	"net"
 	"net/http"
-	"net/url"
-	"path/filepath"
-	"strconv"
 	"strings"
 	"time"
 
-	"github.com/vibe-agi/vibermate/internal/access"
+	"github.com/vibe-agi/vibermate/internal/capturegrant"
 	"github.com/vibe-agi/vibermate/internal/capturerun"
-	"github.com/vibe-agi/vibermate/internal/clientadapter"
-	"github.com/vibe-agi/vibermate/internal/localca"
-	"github.com/vibe-agi/vibermate/internal/toolapproval"
-	"github.com/vibe-agi/vibermate/internal/workspaceidentity"
+	"github.com/vibe-agi/vibermate/internal/controlprincipal"
 )
 
 const (
-	RunCapabilityHeader  = "X-Vibermate-Run-Capability"
-	maxCreateBytes       = 64 << 10
-	maxArguments         = 256
-	maxArgumentBytes     = 32 << 10
-	launcherDigestDomain = "vibermate:launcher-control:v1:"
+	RunCapabilityHeader = "X-Vibermate-Run-Capability"
+	maxCreateBytes      = 64 << 10
 )
 
 type ReasonCode string
 
 const (
-	ReasonLauncherUnauthorized  ReasonCode = "launcher_unauthorized"
-	ReasonInvalidCaptureRun     ReasonCode = "invalid_capture_run"
-	ReasonAdapterVerification   ReasonCode = "adapter_verification_failed"
-	ReasonProjectionUnavailable ReasonCode = "access_projection_unavailable"
-	ReasonCaptureRunCreate      ReasonCode = "capture_run_create_failed"
-	ReasonWorkspaceUnavailable  ReasonCode = "workspace_identity_unavailable"
-	ReasonRunCapabilityRejected ReasonCode = "run_capability_rejected"
-	ReasonInvalidProcess        ReasonCode = "invalid_process_attachment"
-	ReasonInvalidRoute          ReasonCode = "control_route_not_found"
+	ReasonControlPrincipalUnauthorized ReasonCode = "control_principal_unauthorized"
+	ReasonCaptureGrantNotAllowed       ReasonCode = "capture_grant_not_allowed"
+	ReasonInvalidCaptureRun            ReasonCode = "invalid_capture_run"
+	ReasonAdapterVerification          ReasonCode = "adapter_verification_failed"
+	ReasonProjectionUnavailable        ReasonCode = "access_projection_unavailable"
+	ReasonCaptureRunCreate             ReasonCode = "capture_run_create_failed"
+	ReasonWorkspaceUnavailable         ReasonCode = "workspace_identity_unavailable"
+	ReasonRunCapabilityRejected        ReasonCode = "run_capability_rejected"
+	ReasonInvalidProcess               ReasonCode = "invalid_process_attachment"
+	ReasonInvalidRoute                 ReasonCode = "control_route_not_found"
 )
 
-type Clock interface {
-	Now() time.Time
+type PrincipalAuthenticator interface {
+	Authenticate(string) (controlprincipal.Principal, bool)
+}
+
+type CaptureRunIssuer interface {
+	IssueCaptureRun(
+		context.Context,
+		controlprincipal.Principal,
+		capturegrant.CaptureRunRequest,
+	) (capturegrant.CaptureRunGrant, error)
 }
 
 type Options struct {
 	Runs        capturerun.Controller
-	Verifier    clientadapter.Verifier
-	Authorities access.IngressCatalogReader
-	ProxyOrigin string
-	Root        localca.RootCertificate
-	Launcher    *LauncherAuthority
+	Principals  PrincipalAuthenticator
+	Issuer      CaptureRunIssuer
 	RunLifetime time.Duration
-	Clock       Clock
-	Workspaces  workspaceidentity.LocalResolver
-	// ClientRootApprovals decides whether a client recognized by its publisher
-	// may receive the Root. Leaving it nil is a decision, not an oversight:
-	// nothing can ask, so no such client is given one.
-	ClientRootApprovals ClientRootApprovals
-}
-
-// ClientRootApprovals is the one question this handler puts in front of a
-// person. It is an interface so that a host with no way to ask has an honest
-// way to say so rather than a way to answer for them.
-type ClientRootApprovals interface {
-	AskClientRoot(
-		context.Context,
-		toolapproval.ClientRootAskRequest,
-	) (toolapproval.ClientRootAskOutcome, error)
 }
 
 type Handler struct {
 	runs        capturerun.Controller
-	verifier    clientadapter.Verifier
-	authorities access.IngressCatalogReader
-	proxyOrigin string
-	root        localca.RootCertificate
-	launcher    *LauncherAuthority
-	rootAsk     ClientRootApprovals
+	principals  PrincipalAuthenticator
+	issuer      CaptureRunIssuer
 	runLifetime time.Duration
-	clock       Clock
-	workspaces  workspaceidentity.LocalResolver
 	mux         *http.ServeMux
 }
 
@@ -107,31 +79,16 @@ type AttachRequest struct {
 
 func New(options Options) (*Handler, error) {
 	if options.Runs == nil ||
-		options.Verifier == nil ||
-		options.Authorities == nil ||
-		options.Clock == nil ||
-		options.Workspaces == nil ||
-		options.Launcher == nil ||
+		options.Principals == nil ||
+		options.Issuer == nil ||
 		options.RunLifetime <= 0 {
 		return nil, errors.New("CaptureRun control dependencies are incomplete")
 	}
-	if err := validateLoopbackOrigin(options.ProxyOrigin); err != nil {
-		return nil, err
-	}
-	if options.Root.Path() == "" || len(options.Root.CertificatePEM()) == 0 {
-		return nil, errors.New("CaptureRun control Root export is incomplete")
-	}
 	handler := &Handler{
 		runs:        options.Runs,
-		rootAsk:     options.ClientRootApprovals,
-		verifier:    options.Verifier,
-		authorities: options.Authorities,
-		proxyOrigin: options.ProxyOrigin,
-		root:        options.Root,
-		launcher:    options.Launcher,
+		principals:  options.Principals,
+		issuer:      options.Issuer,
 		runLifetime: options.RunLifetime,
-		clock:       options.Clock,
-		workspaces:  options.Workspaces,
 		mux:         http.NewServeMux(),
 	}
 	handler.mux.HandleFunc("POST /api/v1/capture-runs", handler.create)
@@ -174,120 +131,48 @@ func (handler *Handler) create(
 	writer http.ResponseWriter,
 	request *http.Request,
 ) {
-	if !handler.authorizeLauncher(request) {
-		writeProblem(writer, http.StatusUnauthorized, ReasonLauncherUnauthorized)
+	principal, ok := handler.authenticatePrincipal(request)
+	if !ok {
+		writeProblem(
+			writer,
+			http.StatusUnauthorized,
+			ReasonControlPrincipalUnauthorized,
+		)
 		return
 	}
 	var input CreateRequest
-	if err := decodeJSON(request, &input, maxCreateBytes); err != nil ||
-		validateCreateRequest(input) != nil {
+	if err := decodeJSON(request, &input, maxCreateBytes); err != nil {
 		writeProblem(writer, http.StatusUnprocessableEntity, ReasonInvalidCaptureRun)
 		return
 	}
-	detection, err := handler.verifier.Verify(
+	grant, err := handler.issuer.IssueCaptureRun(
 		request.Context(),
-		clientadapter.Request{
-			Command:        append([]string(nil), input.Command...),
+		principal,
+		capturegrant.CaptureRunRequest{
 			CWD:            input.CWD,
+			Command:        append([]string(nil), input.Command...),
 			ExecutablePath: input.ExecutablePath,
+			LocalUserLabel: input.LocalUserLabel,
 		},
 	)
 	if err != nil {
-		writeProblem(writer, http.StatusUnprocessableEntity, ReasonAdapterVerification)
+		handler.writeIssueFailure(writer, err)
 		return
 	}
-	if !detection.CatalogRevision.Valid() ||
-		detection.CanonicalPath == "" ||
-		(detection.Status != clientadapter.StatusGeneric &&
-			detection.Status != clientadapter.StatusVerified) ||
-		(detection.Status == clientadapter.StatusGeneric &&
-			detection.Evidence != nil) ||
-		(detection.Signer != nil &&
-			(detection.Recognition != clientadapter.RecognitionRecognized ||
-				detection.Evidence != nil ||
-				detection.Signer.Validate() != nil ||
-				detection.Signer.CatalogRevision !=
-					detection.CatalogRevision)) ||
-		(detection.Status == clientadapter.StatusVerified &&
-			(detection.Evidence == nil ||
-				detection.Evidence.Validate() != nil ||
-				detection.Evidence.CatalogRevision !=
-					detection.CatalogRevision)) {
-		writeProblem(writer, http.StatusUnprocessableEntity, ReasonAdapterVerification)
-		return
-	}
-	authorities, err := handler.authorities.ActiveClientAuthorities()
-	if err != nil {
-		writeProblem(writer, http.StatusServiceUnavailable, ReasonProjectionUnavailable)
-		return
-	}
-	recipe := clientadapter.LaunchGeneric
-	var adapter *clientadapter.Evidence
-	rootPath := ""
-	if detection.Status == clientadapter.StatusVerified &&
-		detection.Evidence != nil {
-		evidence := *detection.Evidence
-		adapter = &evidence
-		recipe = evidence.LaunchRecipe
-		if recipe.RequiresRoot() {
-			rootPath = handler.root.Path()
-		}
-	}
-	// A client recognized by its publisher rather than by a catalogued build
-	// gets the Root only after somebody says so. This is where the widening
-	// stops being silent, and a launch that cannot reach a person simply
-	// launches without a Root: that is the same place an uncatalogued program
-	// has always been, not a failure to start.
-	var signer *clientadapter.SignerEvidence
-	if detection.Recognition == clientadapter.RecognitionRecognized &&
-		detection.Signer != nil {
-		evidence := *detection.Signer
-		outcome, askErr := handler.askClientRoot(request.Context(), evidence)
-		if askErr == nil && outcome {
-			recipe = evidence.LaunchRecipe
-			rootPath = handler.root.Path()
-			// The grant must carry what justified the recipe. Without it the
-			// launcher sees a Root-bearing recipe backed by nothing and
-			// refuses to start the client — which is what happened.
-			signer = &evidence
-		}
-	}
-	workspace, err := handler.workspaces.ResolveLocal(request.Context(), input.CWD)
-	if err != nil && !errors.Is(err, workspaceidentity.ErrInvalidIdentity) {
-		writeProblem(writer, http.StatusServiceUnavailable, ReasonWorkspaceUnavailable)
-		return
-	}
-	grant, err := handler.runs.Create(
-		request.Context(),
-		capturerun.CreateCommand{
-			CWD:             input.CWD,
-			ExecutablePath:  detection.CanonicalPath,
-			Lifetime:        handler.runLifetime,
-			CatalogRevision: detection.CatalogRevision,
-			Adapter:         adapter,
-			Recognition:     detection.Recognition,
-			Workspace:       workspace,
-			LocalUserLabel:  input.LocalUserLabel,
-		},
-	)
-	if err != nil {
-		writeProblem(writer, http.StatusUnprocessableEntity, ReasonCaptureRunCreate)
-		return
-	}
-	runView := CaptureRunViewOf(grant.Run)
+	runView := CaptureRunViewOf(grant.Run.Run)
 	writeJSON(writer, http.StatusCreated, LaunchGrant{
 		Run:                  runView,
-		CatalogRevision:      detection.CatalogRevision,
-		LaunchRecipe:         recipe,
-		Recognition:          detection.Recognition,
+		CatalogRevision:      grant.CatalogRevision,
+		LaunchRecipe:         grant.LaunchRecipe,
+		Recognition:          grant.Recognition,
 		Adapter:              runView.ClientAdapter,
-		Signer:               clientSignerViewOf(signer),
-		ExecutablePath:       detection.CanonicalPath,
-		ProxyAddress:         handler.proxyOrigin,
-		ProxyToken:           grant.ProxyCapability.Value(),
-		RunCapability:        grant.ControlCapability.Value(),
-		RootPEMPath:          rootPath,
-		ProtectedAuthorities: append([]string{}, authorities...),
+		Signer:               clientSignerViewOf(grant.Signer),
+		ExecutablePath:       grant.ExecutablePath,
+		ProxyAddress:         grant.ProxyAddress,
+		ProxyToken:           grant.Run.ProxyCapability.Value(),
+		RunCapability:        grant.Run.ControlCapability.Value(),
+		RootPEMPath:          grant.RootPEMPath,
+		ProtectedAuthorities: append([]string{}, grant.ProtectedAuthorities...),
 	})
 }
 
@@ -362,45 +247,56 @@ func (handler *Handler) finish(
 	writer.WriteHeader(http.StatusNoContent)
 }
 
-func (handler *Handler) authorizeLauncher(request *http.Request) bool {
-	return handler.launcher.Authorize(request)
+func (handler *Handler) authenticatePrincipal(
+	request *http.Request,
+) (controlprincipal.Principal, bool) {
+	if request == nil {
+		return controlprincipal.Principal{}, false
+	}
+	authorization := request.Header.Values("Authorization")
+	runCapabilities := request.Header.Values(RunCapabilityHeader)
+	request.Header.Del("Authorization")
+	request.Header.Del(RunCapabilityHeader)
+	if len(authorization) != 1 || len(runCapabilities) != 0 ||
+		!strings.HasPrefix(authorization[0], "Bearer ") {
+		return controlprincipal.Principal{}, false
+	}
+	credential := strings.TrimPrefix(authorization[0], "Bearer ")
+	return handler.principals.Authenticate(credential)
 }
 
 func consumeRunCapability(
 	request *http.Request,
 ) (capturerun.ControlCapability, bool) {
 	values := request.Header.Values(RunCapabilityHeader)
+	authorization := request.Header.Values("Authorization")
 	request.Header.Del(RunCapabilityHeader)
 	request.Header.Del("Authorization")
-	if len(values) != 1 {
+	if len(values) != 1 || len(authorization) != 0 {
 		return capturerun.ControlCapability{}, false
 	}
 	capability, err := capturerun.NewControlCapability(values[0])
 	return capability, err == nil
 }
 
-func validateCreateRequest(input CreateRequest) error {
-	if input.CWD == "" ||
-		!filepath.IsAbs(input.CWD) ||
-		filepath.Clean(input.CWD) != input.CWD ||
-		input.ExecutablePath == "" ||
-		!filepath.IsAbs(input.ExecutablePath) ||
-		len(input.Command) == 0 ||
-		len(input.Command) > maxArguments ||
-		!capturerun.ValidLocalUserLabel(input.LocalUserLabel) {
-		return errors.New("CaptureRun create request is invalid")
+func (handler *Handler) writeIssueFailure(
+	writer http.ResponseWriter,
+	err error,
+) {
+	switch {
+	case errors.Is(err, capturegrant.ErrPrincipalUnauthorized):
+		writeProblem(writer, http.StatusForbidden, ReasonCaptureGrantNotAllowed)
+	case errors.Is(err, capturegrant.ErrInvalidCaptureRun):
+		writeProblem(writer, http.StatusUnprocessableEntity, ReasonInvalidCaptureRun)
+	case errors.Is(err, capturegrant.ErrAdapterVerification):
+		writeProblem(writer, http.StatusUnprocessableEntity, ReasonAdapterVerification)
+	case errors.Is(err, capturegrant.ErrProjectionUnavailable):
+		writeProblem(writer, http.StatusServiceUnavailable, ReasonProjectionUnavailable)
+	case errors.Is(err, capturegrant.ErrWorkspaceUnavailable):
+		writeProblem(writer, http.StatusServiceUnavailable, ReasonWorkspaceUnavailable)
+	default:
+		writeProblem(writer, http.StatusUnprocessableEntity, ReasonCaptureRunCreate)
 	}
-	total := 0
-	for _, argument := range input.Command {
-		if strings.ContainsRune(argument, '\x00') {
-			return errors.New("CaptureRun argument contains NUL")
-		}
-		total += len(argument)
-	}
-	if input.Command[0] == "" || total > maxArgumentBytes {
-		return errors.New("CaptureRun command is outside the limit")
-	}
-	return nil
 }
 
 func decodeJSON(request *http.Request, output any, limit int64) error {
@@ -435,40 +331,6 @@ func emptyBody(body io.Reader) bool {
 	return err == nil && len(data) == 0
 }
 
-func validateLoopbackOrigin(raw string) error {
-	parsed, err := url.Parse(raw)
-	if err != nil ||
-		parsed.Scheme != "http" ||
-		parsed.User != nil ||
-		parsed.Path != "" ||
-		parsed.RawPath != "" ||
-		parsed.RawQuery != "" ||
-		parsed.Fragment != "" {
-		return errors.New("control proxy origin is invalid")
-	}
-	host, port, err := net.SplitHostPort(parsed.Host)
-	if err != nil || host != "127.0.0.1" {
-		return errors.New("control proxy origin is not literal IPv4 loopback")
-	}
-	number, err := strconv.ParseUint(port, 10, 16)
-	if err != nil || number == 0 {
-		return errors.New("control proxy port is invalid")
-	}
-	return nil
-}
-
-func launcherDigest(token string) [sha256.Size]byte {
-	return sha256.Sum256([]byte(launcherDigestDomain + token))
-}
-
-func decodeCapability(value string) ([]byte, error) {
-	decoded, err := base64.RawURLEncoding.DecodeString(value)
-	if err != nil || len(decoded) != 32 {
-		return nil, errors.New("capability is invalid")
-	}
-	return decoded, nil
-}
-
 func writeProblem(
 	writer http.ResponseWriter,
 	status int,
@@ -495,30 +357,4 @@ func writeJSON(writer http.ResponseWriter, status int, value any) {
 	writer.Header().Set("Cache-Control", "no-store")
 	writer.WriteHeader(status)
 	_ = json.NewEncoder(writer).Encode(value)
-}
-
-// askClientRoot returns whether this launch may carry the Root.
-//
-// Every failure answers no, including having nobody to ask. Handing out the
-// Root because a prompt could not be shown would be the one outcome worse than
-// not asking.
-func (handler *Handler) askClientRoot(
-	ctx context.Context,
-	signer clientadapter.SignerEvidence,
-) (bool, error) {
-	if handler.rootAsk == nil {
-		return false, nil
-	}
-	outcome, err := handler.rootAsk.AskClientRoot(
-		ctx,
-		toolapproval.ClientRootAskRequest{
-			SignerID:       signer.ID,
-			SignerRevision: uint64(signer.Revision),
-			SignedPath:     signer.SignedPath,
-		},
-	)
-	if err != nil {
-		return false, err
-	}
-	return outcome.Allowed, nil
 }
