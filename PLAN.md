@@ -1,95 +1,99 @@
-# Route-Neutral Capture Admission
+# Durable ManualCapture Authority Foundation
 
 Status: complete
 Created: 2026-08-04
-Completed: 2026-08-04
-Implementation baseline: `6e10b1ef2ca66950bde0529619cd6f3a21ca2d5f`
+Implementation baseline: `4a18508`
 Design authority: `vibermate-design` ADR-0019 at `ff822a58cf8ee8c08ee840f9e70676ec08a856c5`
 
 ## Goal
 
-Remove CaptureRun as a data-plane authentication type. The proxy must consume
-one immutable, route-neutral `CaptureAdmission` that can later be produced by
-either a managed run or ManualCapture without creating another listener,
-handler, Exchange shape, workspace authority, or route selector.
+Create one durable, route-neutral ManualCapture authority beneath future
+Desktop and Server adapters. A capture can be created, observed through its
+opaque proxy credential, rotated, revoked, expired, listed within its owner
+scope, and recovered after restart without retaining a raw credential.
 
-This slice converts the existing CaptureRun path only. It does not create a
-ManualCapture grant, route, API, CLI command, or UI surface.
+This slice does not expose the authority through HTTP, CLI, UI, or the proxy.
+Those surfaces must consume this same authority in the next slice.
+
+## Clean unreleased database baseline
+
+VibeMate has not shipped a database format. The repository's accumulated
+development migrations are therefore not a product compatibility contract.
+This slice replaces them with one complete schema baseline at revision 1 and
+rejects databases created from the pre-baseline development schema. No
+best-effort compatibility aliases or migration paths are retained.
+
+ManualCapture `CredentialRevision` remains. It is live security state, not
+schema history: rotation must identify the credential that was closed, prevent
+a stale control action, and keep evidence from an old password out of a new
+grant.
 
 ## Invariants
 
-1. A proxy credential authenticates into one typed admission before policy,
-   DNS, dial, certificate issuance, AgentEndpoint lookup, or body read.
-2. Admission contains ingress attribution only. It cannot contain or select an
-   Access, Profile, route, provider account, model, plugin, or credential.
-3. Managed-run admission mechanically derives `capture-run/<run-id>`, binds
-   exactly one CaptureRun, and gives its non-rotating per-run capability
-   revision 1.
-4. Manual admission mechanically derives `manual-capture/<capture-id>`, binds
-   one positive credential revision, and cannot assert client-adapter,
-   process, machine, or workspace evidence.
-5. Digest-verified adapter evidence is defensively copied. Configured or manual
-   admission cannot acquire a version feature by naming a client.
-6. Workspace scope has one authority: the admission. Exchange has no second
-   workspace option that could disagree with it.
-7. Connection, ingress profile, CaptureRun/ManualCapture, and Exchange
-   identities remain separate typed references; none is delimiter-encoded into
-   another identity.
-8. The production proxy cannot import `internal/capturerun`; a repository
-   fixture must reject that managed-only dependency if it returns.
+1. SQLite stores a domain-separated SHA-256 credential digest, never a raw
+   proxy password or secret-bearing URI.
+2. `manual-capture/<capture-id>` is mechanically derived and is not a stored
+   second authority.
+3. A capture contains no Access, Profile, route, account, model, plugin,
+   provider credential, process, adapter, machine, or workspace selection.
+4. Ownership is either this local installation or one exact future
+   ProxyClientBinding. Local control-principal rotation does not orphan a
+   capture, and Server owners cannot read or mutate each other.
+5. Create and rotate disclose one raw credential once. Rotate atomically
+   replaces the digest and advances its credential revision; the old value is
+   immediately unusable.
+6. Revoke is idempotent only at the current credential revision. Stale
+   revisions fail closed.
+7. Temporary expiry, authorization observation, rotation, and revocation are
+   SQLite transactions. Startup recovery expires elapsed captures and restores
+   active until-revoked or unexpired captures without recovering plaintext.
+8. Only an authenticated proxy operation can move observation to
+   `observed`; create, copy, list, and get cannot.
+9. Manager shutdown closes admission and drains owned work but does not revoke
+   active ManualCaptures. Their declared lifetime or explicit control action
+   owns validity.
+10. Every repository operation uses the existing SQLite operation gate, so
+    store shutdown cancels and drains it before closing the database.
 
 ## Deliverables
 
-- immutable `internal/captureadmission` domain values, opaque redacted proxy
-  credential, closed kind/confidence enums, and strict constructors;
-- one managed-run authorizer adapter from durable CaptureRun capability
-  evidence to the shared admission;
-- proxy options and handler refactored to consume only the shared authorizer;
-- Exchange correlation refactored to carry admission plus independent
-  connection identity and optional managed/manual references;
-- workspace routing derived only from admitted scope;
-- ProductRuntime production composition and structural fixtures updated;
-- direct, integration, race, full-repository, and cross-platform validation.
+- typed immutable ManualCapture ID, owner, lifecycle, view, one-time grant,
+  redacted credential, evidence, commands, repository, and manager;
+- one clean complete SQLite schema baseline with a fixed identity;
+- durable create/CAS rotate/idempotent revoke/authorize/get/list/recover;
+- owner isolation, exact expiry, restart, credential redaction, concurrent CAS,
+  lifecycle cancellation, race, full repository, and cross-build evidence;
+- implementation map and README updated with exact proof and non-proof scope.
 
 ## Explicitly out of scope
 
-- durable ManualCapture state and proxy credential index;
-- create/rotate/revoke/list/verification control API, CLI, or UI;
-- remote enrollment and Server proxy listener;
-- changes to Access/Profile routing or provider behavior;
+- HTTP routes, OpenAPI, local discovery, CLI, UI, or Server Web adapters;
+- parsing Proxy-Authorization or composing a shared CaptureAdmission;
+- closing already-established proxy connections after rotate/revoke;
+- verification projection from ConnectionEvent/TLS/Exchange evidence;
+- ProxyClientBinding quota and remote enrollment;
 - packaged Preview or Release evidence.
 
 ## Completion statement
 
 When complete, the repository may claim only:
 
-> The production proxy and Exchange path consume one immutable route-neutral
-> CaptureAdmission. The current producer is the durable CaptureRun authority;
-> ManualCapture remains unimplemented, and the result is not Preview or
+> VibeMate has one durable, owner-scoped ManualCapture authority whose opaque
+> proxy credentials can be created, atomically rotated, revoked, expired,
+> observed, and recovered without persisting plaintext. It is not yet exposed
+> through a product control or data-plane surface, and it is not Preview or
 > Release evidence.
 
 ## Frozen result
 
-- `internal/captureadmission` owns a closed, immutable admission and redacted
-  proxy credential; manual evidence cannot assert managed attribution;
-- ProductRuntime wraps its durable CaptureRun authority once and gives the
-  proxy only the shared admission interface;
-- the proxy revalidates every authorizer result before policy, dial, DNS,
-  certificate issuance, endpoint lookup, or body read and reports the generic
-  `capture_admission_rejected` reason on failure;
-- Exchange correlation freezes the admission and independent connection ID;
-  optional run/manual references and workspace scope can only be derived from
-  that admission;
-- ConnectionEvent uses the admission's ingress profile and confidence rather
-  than treating a CaptureRun ID as the complete ingress identity;
-- a public-entry known-good/injected-bad repository fixture rejects any direct
-  production import of `capturerun` from `loopbackproxy`.
-
-Validation passed with uncached full Go tests, full Go race tests, vet, module
-verification, generated/tidy/format checks, structural fixtures, immutable
-workflow pins, native-secret and Windows/Linux cross-builds, 360 frontend unit
-tests, 21 Playwright tests, 29 Rust tests, and dependency vulnerability gates.
-The local Node runtime was 25.8.1 rather than the repository-pinned 22.23.1;
-the commands ran rather than skipping work, and CI remains pinned to the exact
-declared version. Rust audit retains 16 allowed unmaintained warnings. No
-packaged acceptance report was produced for this refactor.
+- the unreleased SQLite format is one complete revision-1 baseline with a
+  fixed schema identity; pre-baseline development databases fail closed;
+- ManualCapture create, rotate, revoke, expire, authorize, list, recover, and
+  owner isolation use real SQLite through the shared operation gate;
+- raw proxy credentials exist only in the one-time create/rotate return value;
+  persistence and diagnostic formatting retain no plaintext;
+- targeted and full ordinary/race tests, vet, module checks, generated-source
+  checks, repository structural checks, native-tag builds, and cross-builds
+  pass;
+- no proxy parser, product composition, HTTP route, CLI, or UI consumes this
+  authority yet.

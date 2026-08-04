@@ -110,12 +110,23 @@ client verification, Root-delivery decisions, workspace resolution, and
 durable CaptureRun creation. Its returned per-run proxy and lifecycle
 credentials are separate from the control credential: mixed credential
 namespaces fail closed, and the child process never receives the control
-credential or discovery path. Manual capture and remote enrollment are not
-implemented in this slice. Exchange correlation now carries the complete
-admission and a separately generated connection identity; workspace routing can
-read only the scope frozen into that admission, not a second caller-supplied
-option. The managed-run ingress profile is mechanically
+credential or discovery path. ManualCapture product surfaces/composition and
+remote enrollment are not implemented in this slice. Exchange correlation now
+carries the complete admission and a separately generated connection identity;
+workspace routing can read only the scope frozen into that admission, not a
+second caller-supplied option. The managed-run ingress profile is mechanically
 `capture-run/<run-id>` and its non-rotating per-run capability revision is 1.
+
+The next ingress foundation now exists below product composition: one durable,
+owner-scoped ManualCapture authority can create, atomically rotate, revoke,
+expire, observe, list, and recover an opaque proxy capability. SQLite stores
+only a domain-separated credential digest; raw values are returned once on
+create or rotation, and `manual-capture/<capture-id>` is mechanically derived.
+Local-installation and future ProxyClientBinding owners are isolated, while a
+ManualCapture deliberately has no Access, Profile, route, client adapter,
+process, machine, or workspace authority. This foundation is not yet wired to
+the proxy, control API, CLI, or UI, so it is not a usable manual-capture
+feature.
 
 After an exact AgentEndpoint resolves an Access, the runtime atomically creates
 or reads the durable `(AccessID, MachineID, WorkspaceID)` route binding. Each
@@ -380,18 +391,20 @@ only the affected Access projection unavailable, so new reads and writes fail
 closed instead of serving an unmarked stale plan. A normal close/reopen recovery
 recompiles the same revision and hash from SQLite. ProductRuntime reports only
 `initialized`; DesktopHost derives product readiness and withdraws discovery
-before shutdown. The embedded migration set is revision 27 and its revision is
-derived from the ordered sources rather than a production constant. A database
-with newer Goose history is rejected before any migration is applied. Runtime
+before shutdown. Because no database format has shipped, the embedded database
+is one complete development baseline at schema revision 1 rather than a chain
+of compatibility migrations. Its fixed schema identity rejects an older
+development database, and newer Goose history is rejected before any migration
+is applied. Runtime
 startup reconstructs every durable EgressAttempt through the domain
 constructors before changing a row; corrupt or partial terminal evidence aborts
 the transaction and startup, while valid nonterminals left by an earlier daemon
 become `failed(daemon_restarted)` with a completion time no earlier than start.
 Terminal construction and persistence errors latch storage unavailable, cancel
 the runtime owner, and make bounded shutdown fail instead of leaving an
-outbound nonterminal silently. The same migration adds the typed
-`plugin_catalog_sync` and `plugin_artifact_fetch` runtime egress purposes while
-preserving revision-25 rows, AUTOINCREMENT continuity, and all query indexes.
+outbound nonterminal silently. The baseline includes the typed
+`plugin_catalog_sync` and `plugin_artifact_fetch` runtime egress purposes and
+all current query indexes without carrying pre-release migration history.
 Unit and component tests do not by themselves prove packaged Claude, provider,
 `SIGINT`, or force-kill behavior; those claims require a passing private report
 from the clean frozen artifact. The current producer emits v6; the verifier

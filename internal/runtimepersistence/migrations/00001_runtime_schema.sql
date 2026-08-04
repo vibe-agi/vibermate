@@ -4,7 +4,7 @@
 -- format exists.
 CREATE TABLE runtime_metadata(
   singleton INTEGER PRIMARY KEY NOT NULL CHECK(singleton = 1),
-  schema_identity TEXT NOT NULL CHECK(schema_identity = 'vibermate-runtime-baseline-1'),
+  schema_identity TEXT NOT NULL CHECK(schema_identity = 'vibermate-runtime-manual-capture-foundation'),
   initialized_at TEXT NOT NULL CHECK(length(initialized_at) > 0)
 ) STRICT;
 CREATE TABLE access_bindings(
@@ -471,9 +471,56 @@ ON workspace_route_bindings(
   updated_at_unix_ms DESC,
   binding_id ASC
 );
+CREATE TABLE manual_captures(
+  capture_id TEXT PRIMARY KEY NOT NULL
+  CHECK(length(CAST(capture_id AS BLOB)) BETWEEN 1 AND 128),
+  owner_kind TEXT NOT NULL
+  CHECK(owner_kind IN('local_installation', 'proxy_client_binding')),
+  owner_id TEXT NOT NULL
+  CHECK(length(CAST(owner_id AS BLOB)) <= 128),
+  display_name TEXT NOT NULL
+  CHECK(length(CAST(display_name AS BLOB)) BETWEEN 1 AND 128),
+  client_class TEXT NOT NULL
+  CHECK(client_class IN('cli', 'desktop_app', 'other')),
+  lifetime TEXT NOT NULL
+  CHECK(lifetime IN('temporary', 'until_revoked')),
+  state TEXT NOT NULL
+  CHECK(state IN('active', 'revoked', 'expired')),
+  credential_revision INTEGER NOT NULL
+  CHECK(credential_revision BETWEEN 1 AND 9223372036854775807),
+  proxy_credential_hash BLOB NOT NULL UNIQUE
+  CHECK(length(proxy_credential_hash) = 32),
+  observation TEXT NOT NULL
+  CHECK(observation IN('waiting_for_traffic', 'observed')),
+  created_at_unix_ms INTEGER NOT NULL,
+  updated_at_unix_ms INTEGER NOT NULL,
+  expires_at_unix_ms INTEGER,
+  last_observed_at_unix_ms INTEGER,
+  CHECK((owner_kind = 'local_installation' AND owner_id = '') OR(owner_kind = 'proxy_client_binding' AND length(CAST(owner_id AS BLOB)) BETWEEN 1 AND 128)),
+  CHECK((lifetime = 'temporary' AND expires_at_unix_ms IS NOT NULL) OR(lifetime = 'until_revoked' AND expires_at_unix_ms IS NULL AND state != 'expired')),
+  CHECK((observation = 'waiting_for_traffic' AND last_observed_at_unix_ms IS NULL) OR(observation = 'observed' AND last_observed_at_unix_ms IS NOT NULL)),
+  CHECK(updated_at_unix_ms >= created_at_unix_ms),
+  CHECK(expires_at_unix_ms IS NULL OR expires_at_unix_ms >= created_at_unix_ms),
+  CHECK(last_observed_at_unix_ms IS NULL OR(last_observed_at_unix_ms >= created_at_unix_ms AND last_observed_at_unix_ms <= updated_at_unix_ms))
+) STRICT;
+CREATE INDEX manual_captures_owner_updated
+ON manual_captures(
+  owner_kind,
+  owner_id,
+  updated_at_unix_ms DESC,
+  capture_id ASC
+);
+CREATE INDEX manual_captures_active_expiry
+ON manual_captures(
+  state,
+  expires_at_unix_ms
+)
+WHERE state = 'active'
+    AND lifetime = 'temporary';
+
 INSERT INTO runtime_metadata (singleton, schema_identity, initialized_at)
 VALUES (
   1,
-  'vibermate-runtime-baseline-1',
+  'vibermate-runtime-manual-capture-foundation',
   strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
 );

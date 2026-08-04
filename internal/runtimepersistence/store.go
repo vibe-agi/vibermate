@@ -22,6 +22,7 @@ import (
 	"github.com/vibe-agi/vibermate/internal/connectionevent"
 	"github.com/vibe-agi/vibermate/internal/connectionpolicy"
 	"github.com/vibe-agi/vibermate/internal/egressaudit"
+	"github.com/vibe-agi/vibermate/internal/manualcapture"
 	"github.com/vibe-agi/vibermate/internal/toolapproval"
 	"github.com/vibe-agi/vibermate/internal/workspaceroute"
 )
@@ -51,6 +52,7 @@ type RuntimeStore interface {
 	AccessRepository() access.Repository
 	ActivityRepository() activity.Repository
 	CaptureRunRepository() capturerun.Repository
+	ManualCaptureRepository() manualcapture.Repository
 	ConnectionEventRepository() connectionevent.Repository
 	EgressAttemptRepository() egressaudit.Repository
 	ToolApprovalRepository() toolapproval.Repository
@@ -66,6 +68,7 @@ type Store struct {
 	accessRepo      *accessRepository
 	activityRepo    *activityRepository
 	captureRepo     *captureRunRepository
+	manualCapture   *manualCaptureRepository
 	connectionRepo  *connectionEventRepository
 	egressAttempts  *egressAttemptRepository
 	approvalRepo    *toolApprovalRepository
@@ -133,6 +136,7 @@ func Open(ctx context.Context, options Options) (*Store, error) {
 		sqlTransactionCommitter{},
 	)
 	captureRepo := newCaptureRunRepository(database, operations)
+	manualCaptureRepo := newManualCaptureRepository(database, operations)
 	activityRepo := newActivityRepository(database, operations)
 	connectionRepo := newConnectionEventRepository(database, operations)
 	egressRepo := newEgressAttemptRepository(database, operations)
@@ -160,6 +164,7 @@ func Open(ctx context.Context, options Options) (*Store, error) {
 		accessRepo:      accessRepo,
 		activityRepo:    activityRepo,
 		captureRepo:     captureRepo,
+		manualCapture:   manualCaptureRepo,
 		connectionRepo:  connectionRepo,
 		egressAttempts:  egressRepo,
 		approvalRepo:    approvalRepo,
@@ -184,6 +189,10 @@ func (s *Store) ActivityRepository() activity.Repository {
 
 func (s *Store) CaptureRunRepository() capturerun.Repository {
 	return s.captureRepo
+}
+
+func (s *Store) ManualCaptureRepository() manualcapture.Repository {
+	return s.manualCapture
 }
 
 func (s *Store) EgressAttemptRepository() egressaudit.Repository {

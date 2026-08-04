@@ -26,7 +26,7 @@ type SchemaState struct {
 	InitializedAt string
 }
 
-const currentSchemaIdentity = "vibermate-runtime-baseline-1"
+const currentSchemaIdentity = "vibermate-runtime-manual-capture-foundation"
 
 // DatabaseSettings records connection invariants that must hold on every
 // SQLite connection used by the runtime.
