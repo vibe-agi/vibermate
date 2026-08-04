@@ -947,12 +947,7 @@ func (handler *Handler) serveSemantic(
 	// connection would leave only the last request's answer on a persistent
 	// connection carrying several.
 	if err != nil && !downstream.Begun() {
-		writeReason(
-			writer,
-			exchangeStatus(err),
-			ReasonExchangeFailed,
-			string(exchange.ReasonOf(err)),
-		)
+		writeExchangeFailure(writer, binding.ClientDialect(), err)
 	}
 }
 
@@ -1505,6 +1500,12 @@ func exchangeStatus(err error) int {
 		return http.StatusBadRequest
 	case exchange.ReasonUnsupportedClientInput:
 		return http.StatusUnprocessableEntity
+	case exchange.ReasonProviderCredentialUnavailable:
+		// The client reached the selected managed route, but that route cannot
+		// authenticate its provider attempt. Reporting a generic gateway failure
+		// asks SDKs to retry an operator configuration error and hides the action
+		// the user needs to take.
+		return http.StatusUnauthorized
 	case exchange.ReasonAccessPlanUnavailable,
 		exchange.ReasonExchangeRuntimeStopping,
 		exchange.ReasonToolDecisionUnavailable:

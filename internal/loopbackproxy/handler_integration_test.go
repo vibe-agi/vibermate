@@ -1294,6 +1294,7 @@ func mustURL(t *testing.T, target string) *url.URL {
 type exchangeRecorder struct {
 	mu       sync.Mutex
 	requests []exchange.ClientRequest
+	failure  error
 }
 
 func (recorder *exchangeRecorder) Execute(
@@ -1303,7 +1304,11 @@ func (recorder *exchangeRecorder) Execute(
 ) (exchange.Result, error) {
 	recorder.mu.Lock()
 	recorder.requests = append(recorder.requests, request)
+	failure := recorder.failure
 	recorder.mu.Unlock()
+	if failure != nil {
+		return exchange.Result{}, failure
+	}
 	if err := downstream.Begin(ctx, exchange.ResponseModeJSON); err != nil {
 		return exchange.Result{}, err
 	}
@@ -1315,6 +1320,12 @@ func (recorder *exchangeRecorder) Execute(
 		RouteHost:           "relay.example.test",
 		CredentialBindingID: "account-proxy",
 	}, nil
+}
+
+func (recorder *exchangeRecorder) FailWith(err error) {
+	recorder.mu.Lock()
+	recorder.failure = err
+	recorder.mu.Unlock()
 }
 
 func (recorder *exchangeRecorder) Requests() []exchange.ClientRequest {

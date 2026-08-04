@@ -6,6 +6,7 @@ import (
 	"net/http"
 
 	"github.com/vibe-agi/vibermate/internal/access"
+	"github.com/vibe-agi/vibermate/internal/exchange"
 )
 
 // ReasonHeader carries the stable vibermate reason code beside a dialect-shaped
@@ -83,6 +84,97 @@ func dialectErrorEnvelope(dialect access.Dialect, reason ReasonCode) any {
 				Message: message,
 			},
 		}
+	}
+}
+
+// writeExchangeFailure returns a fixed, dialect-shaped local failure. It never
+// serializes err: an Exchange error may wrap transport or provider details that
+// are not part of the client contract. The stable reason remains visible in a
+// response header and in the bounded message/code fields clients already know
+// how to render.
+func writeExchangeFailure(
+	writer http.ResponseWriter,
+	dialect access.Dialect,
+	err error,
+) {
+	reason := exchange.ReasonOf(err)
+	if reason == "" {
+		reason = exchange.ReasonProviderTransportFailed
+	}
+	writer.Header().Set("Content-Type", "application/json")
+	writer.Header().Set("Cache-Control", "no-store")
+	writer.Header().Set(ReasonHeader, string(reason))
+	if reason == exchange.ReasonProviderCredentialUnavailable {
+		// The Anthropic SDK recognizes this as a terminal configuration failure.
+		// It must not turn a missing managed-route credential into a second model
+		// request merely because a generic 5xx looks transient.
+		writer.Header().Set("X-Should-Retry", "false")
+	}
+	writer.WriteHeader(exchangeStatus(err))
+	_ = json.NewEncoder(writer).Encode(
+		exchangeErrorEnvelope(dialect, reason),
+	)
+}
+
+func exchangeErrorEnvelope(
+	dialect access.Dialect,
+	reason exchange.ReasonCode,
+) any {
+	message := exchangeReasonMessage(reason)
+	switch dialect {
+	case access.DialectOpenAIResponses:
+		type openAIError struct {
+			Message string  `json:"message"`
+			Type    string  `json:"type"`
+			Param   *string `json:"param"`
+			Code    string  `json:"code"`
+		}
+		return struct {
+			Error openAIError `json:"error"`
+		}{
+			Error: openAIError{
+				Message: message,
+				Type:    exchangeErrorType(reason),
+				Code:    string(reason),
+			},
+		}
+	default:
+		type anthropicError struct {
+			Type    string `json:"type"`
+			Message string `json:"message"`
+		}
+		return struct {
+			Type  string         `json:"type"`
+			Error anthropicError `json:"error"`
+		}{
+			Type: "error",
+			Error: anthropicError{
+				Type:    exchangeErrorType(reason),
+				Message: message,
+			},
+		}
+	}
+}
+
+func exchangeErrorType(reason exchange.ReasonCode) string {
+	switch reason {
+	case exchange.ReasonProviderCredentialUnavailable:
+		return "authentication_error"
+	case exchange.ReasonInvalidExchangeRequest,
+		exchange.ReasonUnsupportedClientInput:
+		return "invalid_request_error"
+	default:
+		return "api_error"
+	}
+}
+
+func exchangeReasonMessage(reason exchange.ReasonCode) string {
+	switch reason {
+	case exchange.ReasonProviderCredentialUnavailable:
+		return "VibeMate has no provider credential configured for the selected route (" +
+			string(reason) + ")."
+	default:
+		return "VibeMate could not complete this request (" + string(reason) + ")."
 	}
 }
 
