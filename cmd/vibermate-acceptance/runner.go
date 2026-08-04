@@ -2191,7 +2191,7 @@ func responsesHTTPFallbackAuditReady(
 		if record.IngressID == "" ||
 			record.SourceLabel == "" ||
 			record.SourceConfidence !=
-				connectionevent.SourceConfidenceConfigured ||
+				connectionevent.SourceConfidenceVerified ||
 			record.Decision != connectionevent.DecisionAllow ||
 			record.Decryption != connectionevent.DecryptionMITM ||
 			record.ObservedSNI != host ||

@@ -862,6 +862,28 @@ func TestResponsesHTTPFallbackAuditRequiresBoundedNegotiationAndActiveHTTP(
 			err,
 		)
 	}
+
+	downgradedAttribution := append(
+		[]connectionevent.Record(nil),
+		records...,
+	)
+	for index := range downgradedAttribution {
+		if downgradedAttribution[index].SourceConfidence ==
+			connectionevent.SourceConfidenceVerified {
+			downgradedAttribution[index].SourceConfidence =
+				connectionevent.SourceConfidenceConfigured
+		}
+	}
+	if ready, err = responsesHTTPFallbackAuditReady(
+		downgradedAttribution,
+		clientOrigin,
+	); err == nil || ready {
+		t.Fatalf(
+			"configured fallback ready=%t error=%v",
+			ready,
+			err,
+		)
+	}
 }
 
 func TestCodexHTTPFallbackEvidenceRequiresClientOutcomeAndConnectionAudit(
@@ -959,7 +981,7 @@ func responsesHTTPFallbackAuditRecords(
 		decided := attempt
 		decided.IngressID = "run-001"
 		decided.SourceLabel = "codex.js"
-		decided.SourceConfidence = connectionevent.SourceConfidenceConfigured
+		decided.SourceConfidence = connectionevent.SourceConfidenceVerified
 		decided.RouteHost = "api.openai.com"
 		decided.Decision = connectionevent.DecisionAllow
 		decided.RuleID = "agent_endpoint_exact"
