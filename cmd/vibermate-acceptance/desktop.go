@@ -164,7 +164,7 @@ func exercisePackagedDesktopLaunch(
 		return errors.New("another VibeMate Desktop application is already running")
 	}
 	discovery, err := localdiscovery.NewFile(
-		layout.LauncherRecord,
+		layout.CLIControlRecord,
 		wallClock{},
 	)
 	if err != nil {
@@ -307,7 +307,7 @@ func exercisePackagedDesktopLaunch(
 		if inspectErr != nil {
 			return fmt.Errorf("inspect packaged Desktop sidecar after exit: %w", inspectErr)
 		}
-		removed, err := discoveryRemoved(layout.LauncherRecord)
+		removed, err := discoveryRemoved(layout.CLIControlRecord)
 		if err != nil {
 			return err
 		}

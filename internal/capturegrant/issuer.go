@@ -5,6 +5,11 @@ package capturegrant
 
 import (
 	"context"
+	"crypto/sha256"
+	"crypto/subtle"
+	"crypto/x509"
+	"encoding/base64"
+	"encoding/pem"
 	"errors"
 	"fmt"
 	"net"
@@ -16,6 +21,7 @@ import (
 
 	"github.com/vibe-agi/vibermate/internal/access"
 	"github.com/vibe-agi/vibermate/internal/capturerun"
+	"github.com/vibe-agi/vibermate/internal/certidentity"
 	"github.com/vibe-agi/vibermate/internal/clientadapter"
 	"github.com/vibe-agi/vibermate/internal/controlprincipal"
 	"github.com/vibe-agi/vibermate/internal/localca"
@@ -30,14 +36,19 @@ const (
 )
 
 var (
-	ErrPrincipalUnauthorized = errors.New("control principal is not authorized for the grant")
-	ErrInvalidCaptureRun     = errors.New("CaptureRun request is invalid")
-	ErrAdapterVerification   = errors.New("client adapter verification failed")
-	ErrProjectionUnavailable = errors.New("Access projection is unavailable")
-	ErrWorkspaceUnavailable  = errors.New("workspace identity is unavailable")
-	ErrCaptureRunCreate      = errors.New("CaptureRun creation failed")
-	ErrInvalidManualCapture  = errors.New("ManualCapture request is invalid")
-	ErrManualCaptureCreate   = errors.New("ManualCapture creation failed")
+	ErrPrincipalUnauthorized    = errors.New("control principal is not authorized for the grant")
+	ErrInvalidCaptureRun        = errors.New("CaptureRun request is invalid")
+	ErrAdapterVerification      = errors.New("client adapter verification failed")
+	ErrProjectionUnavailable    = errors.New("Access projection is unavailable")
+	ErrWorkspaceUnavailable     = errors.New("workspace identity is unavailable")
+	ErrCaptureRunCreate         = errors.New("CaptureRun creation failed")
+	ErrInvalidManualCapture     = errors.New("ManualCapture request is invalid")
+	ErrManualCaptureCreate      = errors.New("ManualCapture creation failed")
+	ErrManualCaptureNotFound    = errors.New("ManualCapture was not found")
+	ErrManualCaptureConflict    = errors.New("ManualCapture state conflicts with the request")
+	ErrManualCaptureUnavailable = errors.New(
+		"ManualCapture authority is unavailable",
+	)
 )
 
 type ClientRootApprovals interface {
@@ -88,6 +99,8 @@ type Options struct {
 	Verifier            clientadapter.Verifier
 	Authorities         access.IngressCatalogReader
 	ProxyOrigin         string
+	Generation          string
+	RootIdentity        localca.RootIdentity
 	Root                localca.RootCertificate
 	RunLifetime         time.Duration
 	Workspaces          WorkspaceResolver
@@ -103,6 +116,8 @@ type Issuer struct {
 	verifier    clientadapter.Verifier
 	authorities access.IngressCatalogReader
 	proxyOrigin string
+	generation  string
+	rootID      localca.RootIdentity
 	root        localca.RootCertificate
 	runLifetime time.Duration
 	workspaces  WorkspaceResolver
@@ -121,7 +136,10 @@ func New(options Options) (*Issuer, error) {
 	if err := validateProxyOrigin(options.ProxyOrigin); err != nil {
 		return nil, err
 	}
-	if !options.Root.Valid() {
+	if !validGeneration(options.Generation) ||
+		!options.RootIdentity.Valid() ||
+		!options.Root.Valid() ||
+		!rootDeliveryMatches(options.RootIdentity, options.Root) {
 		return nil, errors.New("capture grant public Root delivery is incomplete")
 	}
 	return &Issuer{
@@ -130,6 +148,8 @@ func New(options Options) (*Issuer, error) {
 		verifier:    options.Verifier,
 		authorities: options.Authorities,
 		proxyOrigin: options.ProxyOrigin,
+		generation:  options.Generation,
+		rootID:      options.RootIdentity,
 		root:        options.Root,
 		runLifetime: options.RunLifetime,
 		workspaces:  options.Workspaces,
@@ -138,17 +158,46 @@ func New(options Options) (*Issuer, error) {
 }
 
 type ManualCaptureRequest struct {
-	DisplayName string
-	ClientClass manualcapture.ClientClass
-	Lifetime    manualcapture.Lifetime
-	ExpiresIn   time.Duration
+	DisplayName       string
+	ClientClass       manualcapture.ClientClass
+	Lifetime          manualcapture.Lifetime
+	ExpiresIn         time.Duration
+	ConfirmationToken string
+}
+
+type ManualCaptureContext struct {
+	ConfirmationToken        string
+	ProxyAddress             string
+	RootIdentity             localca.RootIdentity
+	RootCertificate          localca.RootCertificate
+	DefaultTemporaryLifetime time.Duration
+	MaximumTemporaryLifetime time.Duration
 }
 
 type ManualCaptureGrant struct {
-	Capture              manualcapture.Grant
-	ProxyAddress         string
-	RootPEMPath          string
-	ProtectedAuthorities []string
+	Capture manualcapture.Grant
+	Context ManualCaptureContext
+}
+
+type ManualCaptureRotateRequest struct {
+	ID                         manualcapture.ID
+	ExpectedCredentialRevision manualcapture.CredentialRevision
+}
+
+type ManualCaptureRevokeRequest struct {
+	ID                         manualcapture.ID
+	ExpectedCredentialRevision manualcapture.CredentialRevision
+}
+
+func (issuer *Issuer) GetManualCaptureContext(
+	ctx context.Context,
+	principal controlprincipal.Principal,
+) (ManualCaptureContext, error) {
+	owner, err := issuer.manualCaptureOwner(ctx, principal)
+	if err != nil {
+		return ManualCaptureContext{}, err
+	}
+	return issuer.manualCaptureContext(owner), nil
 }
 
 func (issuer *Issuer) IssueManualCapture(
@@ -156,21 +205,20 @@ func (issuer *Issuer) IssueManualCapture(
 	principal controlprincipal.Principal,
 	request ManualCaptureRequest,
 ) (ManualCaptureGrant, error) {
-	if issuer == nil || ctx == nil || !principal.Valid() ||
-		!principal.Allows(controlprincipal.GrantManualCapture) {
-		return ManualCaptureGrant{}, ErrPrincipalUnauthorized
-	}
-	if err := ctx.Err(); err != nil {
+	owner, err := issuer.manualCaptureOwner(ctx, principal)
+	if err != nil {
 		return ManualCaptureGrant{}, err
 	}
-	owner, err := manualCaptureOwner(principal)
-	if err != nil || request.DisplayName == "" ||
-		!request.ClientClass.Valid() || !request.Lifetime.Valid() {
+	if request.DisplayName == "" ||
+		!request.ClientClass.Valid() || !request.Lifetime.Valid() ||
+		request.ConfirmationToken == "" {
 		return ManualCaptureGrant{}, ErrInvalidManualCapture
 	}
-	authorities, err := issuer.authorities.ActiveClientAuthorities()
-	if err != nil {
-		return ManualCaptureGrant{}, ErrProjectionUnavailable
+	if !sameManualCaptureConfirmation(
+		request.ConfirmationToken,
+		issuer.manualCaptureConfirmation(owner),
+	) {
+		return ManualCaptureGrant{}, ErrManualCaptureConflict
 	}
 	grant, err := issuer.manuals.Create(ctx, manualcapture.CreateCommand{
 		Owner:       owner,
@@ -180,22 +228,130 @@ func (issuer *Issuer) IssueManualCapture(
 		ExpiresIn:   request.ExpiresIn,
 	})
 	if err != nil {
-		if errors.Is(err, manualcapture.ErrInvalidCommand) {
-			return ManualCaptureGrant{}, errors.Join(ErrInvalidManualCapture, err)
-		}
-		return ManualCaptureGrant{}, errors.Join(ErrManualCaptureCreate, err)
+		return ManualCaptureGrant{}, classifyManualCaptureError(
+			err,
+			ErrManualCaptureCreate,
+		)
 	}
 	return ManualCaptureGrant{
-		Capture:              grant,
-		ProxyAddress:         issuer.proxyOrigin,
-		RootPEMPath:          issuer.root.Path(),
-		ProtectedAuthorities: append([]string(nil), authorities...),
+		Capture: grant,
+		Context: issuer.manualCaptureContext(owner),
 	}, nil
 }
 
-func manualCaptureOwner(
+func (issuer *Issuer) ListManualCaptures(
+	ctx context.Context,
+	principal controlprincipal.Principal,
+	limit int,
+) (manualcapture.Page, error) {
+	owner, err := issuer.manualCaptureOwner(ctx, principal)
+	if err != nil {
+		return manualcapture.Page{}, err
+	}
+	page, err := issuer.manuals.List(ctx, manualcapture.PageRequest{
+		Owner: owner,
+		Limit: limit,
+	})
+	if err != nil {
+		return manualcapture.Page{}, classifyManualCaptureError(
+			err,
+			ErrManualCaptureUnavailable,
+		)
+	}
+	return page, nil
+}
+
+func (issuer *Issuer) GetManualCapture(
+	ctx context.Context,
+	principal controlprincipal.Principal,
+	id manualcapture.ID,
+) (manualcapture.View, error) {
+	owner, err := issuer.manualCaptureOwner(ctx, principal)
+	if err != nil {
+		return manualcapture.View{}, err
+	}
+	if !id.Valid() {
+		return manualcapture.View{}, ErrInvalidManualCapture
+	}
+	view, err := issuer.manuals.Get(ctx, owner, id)
+	if err != nil {
+		return manualcapture.View{}, classifyManualCaptureError(
+			err,
+			ErrManualCaptureUnavailable,
+		)
+	}
+	return view, nil
+}
+
+func (issuer *Issuer) RotateManualCapture(
+	ctx context.Context,
+	principal controlprincipal.Principal,
+	request ManualCaptureRotateRequest,
+) (ManualCaptureGrant, error) {
+	owner, err := issuer.manualCaptureOwner(ctx, principal)
+	if err != nil {
+		return ManualCaptureGrant{}, err
+	}
+	if !request.ID.Valid() ||
+		!request.ExpectedCredentialRevision.Valid() {
+		return ManualCaptureGrant{}, ErrInvalidManualCapture
+	}
+	grant, err := issuer.manuals.Rotate(ctx, manualcapture.RotateCommand{
+		Owner:                      owner,
+		ID:                         request.ID,
+		ExpectedCredentialRevision: request.ExpectedCredentialRevision,
+	})
+	if err != nil {
+		return ManualCaptureGrant{}, classifyManualCaptureError(
+			err,
+			ErrManualCaptureUnavailable,
+		)
+	}
+	return ManualCaptureGrant{
+		Capture: grant,
+		Context: issuer.manualCaptureContext(owner),
+	}, nil
+}
+
+func (issuer *Issuer) RevokeManualCapture(
+	ctx context.Context,
+	principal controlprincipal.Principal,
+	request ManualCaptureRevokeRequest,
+) (manualcapture.View, error) {
+	owner, err := issuer.manualCaptureOwner(ctx, principal)
+	if err != nil {
+		return manualcapture.View{}, err
+	}
+	if !request.ID.Valid() ||
+		!request.ExpectedCredentialRevision.Valid() {
+		return manualcapture.View{}, ErrInvalidManualCapture
+	}
+	view, err := issuer.manuals.Revoke(ctx, manualcapture.RevokeCommand{
+		Owner:                      owner,
+		ID:                         request.ID,
+		ExpectedCredentialRevision: request.ExpectedCredentialRevision,
+	})
+	if err != nil {
+		return manualcapture.View{}, classifyManualCaptureError(
+			err,
+			ErrManualCaptureUnavailable,
+		)
+	}
+	return view, nil
+}
+
+func (issuer *Issuer) manualCaptureOwner(
+	ctx context.Context,
 	principal controlprincipal.Principal,
 ) (manualcapture.OwnerScope, error) {
+	if issuer == nil || issuer.manuals == nil || ctx == nil ||
+		!principal.Valid() ||
+		!principal.Allows(controlprincipal.GrantManualCapture) {
+		return manualcapture.OwnerScope{}, ErrPrincipalUnauthorized
+	}
+	if err := ctx.Err(); err != nil {
+		return manualcapture.OwnerScope{}, err
+	}
 	switch principal.Kind() {
 	case controlprincipal.KindDesktopApp, controlprincipal.KindLocalCLI:
 		return manualcapture.NewLocalOwnerScope(), nil
@@ -211,6 +367,68 @@ func manualCaptureOwner(
 		return owner, nil
 	default:
 		return manualcapture.OwnerScope{}, ErrPrincipalUnauthorized
+	}
+}
+
+func (issuer *Issuer) manualCaptureContext(
+	owner manualcapture.OwnerScope,
+) ManualCaptureContext {
+	return ManualCaptureContext{
+		ConfirmationToken:        issuer.manualCaptureConfirmation(owner),
+		ProxyAddress:             issuer.proxyOrigin,
+		RootIdentity:             issuer.rootID,
+		RootCertificate:          issuer.root,
+		DefaultTemporaryLifetime: manualcapture.DefaultTemporaryLifetime,
+		MaximumTemporaryLifetime: manualcapture.MaximumTemporaryLifetime,
+	}
+}
+
+// manualCaptureConfirmation is an opaque review token, not an authorization
+// credential. It collapses the runtime instance, Root identity, listener, and
+// owner scope into one value so a create cannot silently consume a context
+// different from the one the caller reviewed.
+func (issuer *Issuer) manualCaptureConfirmation(
+	owner manualcapture.OwnerScope,
+) string {
+	hash := sha256.New()
+	for _, value := range []string{
+		"vibermate:manual-capture-confirmation:v1",
+		issuer.generation,
+		issuer.proxyOrigin,
+		issuer.rootID.Digest().String(),
+		issuer.root.Path(),
+		string(owner.Kind()),
+		strconv.FormatInt(int64(manualcapture.DefaultTemporaryLifetime/time.Second), 10),
+		strconv.FormatInt(int64(manualcapture.MaximumTemporaryLifetime/time.Second), 10),
+	} {
+		_, _ = hash.Write([]byte(value))
+		_, _ = hash.Write([]byte{0})
+	}
+	if bindingID, ok := owner.ProxyClientBindingID(); ok {
+		_, _ = hash.Write([]byte(bindingID))
+	}
+	return "ctx_" + base64.RawURLEncoding.EncodeToString(hash.Sum(nil))
+}
+
+func sameManualCaptureConfirmation(left, right string) bool {
+	return len(left) == len(right) &&
+		subtle.ConstantTimeCompare([]byte(left), []byte(right)) == 1
+}
+
+func classifyManualCaptureError(err error, fallback error) error {
+	switch {
+	case errors.Is(err, manualcapture.ErrInvalidCommand):
+		return errors.Join(ErrInvalidManualCapture, err)
+	case errors.Is(err, manualcapture.ErrNotFound):
+		return errors.Join(ErrManualCaptureNotFound, err)
+	case errors.Is(err, manualcapture.ErrRevisionConflict),
+		errors.Is(err, manualcapture.ErrNotActive),
+		errors.Is(err, manualcapture.ErrStateConflict):
+		return errors.Join(ErrManualCaptureConflict, err)
+	case errors.Is(err, manualcapture.ErrRuntimeStopping):
+		return errors.Join(ErrManualCaptureUnavailable, err)
+	default:
+		return errors.Join(fallback, err)
 	}
 }
 
@@ -405,4 +623,26 @@ func validateProxyOrigin(raw string) error {
 		return errors.New("capture grant proxy port is invalid")
 	}
 	return nil
+}
+
+func validGeneration(value string) bool {
+	decoded, err := base64.RawURLEncoding.DecodeString(value)
+	return err == nil && len(decoded) >= 16 &&
+		base64.RawURLEncoding.EncodeToString(decoded) == value
+}
+
+func rootDeliveryMatches(
+	identity localca.RootIdentity,
+	certificate localca.RootCertificate,
+) bool {
+	block, rest := pem.Decode(certificate.CertificatePEM())
+	if block == nil || block.Type != "CERTIFICATE" || len(rest) != 0 {
+		return false
+	}
+	parsed, err := x509.ParseCertificate(block.Bytes)
+	if err != nil {
+		return false
+	}
+	digest, err := certidentity.DigestRootCertificate(parsed.Raw)
+	return err == nil && digest == identity.Digest()
 }

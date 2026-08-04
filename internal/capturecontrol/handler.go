@@ -34,6 +34,10 @@ const (
 	ReasonProjectionUnavailable        ReasonCode = "access_projection_unavailable"
 	ReasonCaptureRunCreate             ReasonCode = "capture_run_create_failed"
 	ReasonWorkspaceUnavailable         ReasonCode = "workspace_identity_unavailable"
+	ReasonInvalidManualCapture         ReasonCode = "invalid_manual_capture"
+	ReasonManualCaptureNotFound        ReasonCode = "manual_capture_not_found"
+	ReasonManualCaptureConflict        ReasonCode = "manual_capture_conflict"
+	ReasonManualCaptureUnavailable     ReasonCode = "manual_capture_unavailable"
 	ReasonRunCapabilityRejected        ReasonCode = "run_capability_rejected"
 	ReasonInvalidProcess               ReasonCode = "invalid_process_attachment"
 	ReasonInvalidRoute                 ReasonCode = "control_route_not_found"
@@ -55,6 +59,7 @@ type Options struct {
 	Runs        capturerun.Controller
 	Principals  PrincipalAuthenticator
 	Issuer      CaptureRunIssuer
+	Manual      *ManualHandler
 	RunLifetime time.Duration
 }
 
@@ -62,6 +67,7 @@ type Handler struct {
 	runs        capturerun.Controller
 	principals  PrincipalAuthenticator
 	issuer      CaptureRunIssuer
+	manual      *ManualHandler
 	runLifetime time.Duration
 	mux         *http.ServeMux
 }
@@ -81,6 +87,7 @@ func New(options Options) (*Handler, error) {
 	if options.Runs == nil ||
 		options.Principals == nil ||
 		options.Issuer == nil ||
+		options.Manual == nil ||
 		options.RunLifetime <= 0 {
 		return nil, errors.New("CaptureRun control dependencies are incomplete")
 	}
@@ -88,6 +95,7 @@ func New(options Options) (*Handler, error) {
 		runs:        options.Runs,
 		principals:  options.Principals,
 		issuer:      options.Issuer,
+		manual:      options.Manual,
 		runLifetime: options.RunLifetime,
 		mux:         http.NewServeMux(),
 	}
@@ -104,6 +112,8 @@ func New(options Options) (*Handler, error) {
 		"POST /api/v1/capture-runs/{runId}/actions/finish",
 		handler.finish,
 	)
+	handler.mux.HandleFunc("/api/v1/manual-captures", handler.manualCapture)
+	handler.mux.HandleFunc("/api/v1/manual-captures/", handler.manualCapture)
 	handler.mux.HandleFunc("/api/v1/capture-runs", handler.invalidRoute)
 	handler.mux.HandleFunc(
 		"/api/v1/capture-runs/{runId}/actions/{action}",
@@ -111,6 +121,22 @@ func New(options Options) (*Handler, error) {
 	)
 	handler.mux.HandleFunc("/", handler.invalidRoute)
 	return handler, nil
+}
+
+func (handler *Handler) manualCapture(
+	writer http.ResponseWriter,
+	request *http.Request,
+) {
+	principal, ok := handler.authenticatePrincipal(request)
+	if !ok {
+		writeProblem(
+			writer,
+			http.StatusUnauthorized,
+			ReasonControlPrincipalUnauthorized,
+		)
+		return
+	}
+	handler.manual.ServeHTTP(writer, request, principal)
 }
 
 func (handler *Handler) ServeHTTP(

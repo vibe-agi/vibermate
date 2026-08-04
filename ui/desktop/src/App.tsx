@@ -369,11 +369,6 @@ export function DashboardShell({
         <footer className="app-footer">
           <span>{t(preview ? "host.preview" : "host.desktop")}</span>
           <span>{t("footer.coverage")}</span>
-          <span className="footer-spacer" />
-          <span className="identifier">
-            {state.status?.generation ??
-              (statusAvailability === "unavailable" ? "—" : t("app.loading"))}
-          </span>
         </footer>
       </div>
     </DashboardRuntimeContext.Provider>
@@ -1602,19 +1597,7 @@ function StatusPanel({
       {status === undefined ? (
         <p className="empty-state">{t(`common.data.${availability}`)}</p>
       ) : (
-        <>
-          <p className="hero-state">{t(status.statusKey)}</p>
-          <dl className="metrics">
-            <div>
-              <dt>{t("status.schemaRevision.label")}</dt>
-              <dd>{status.runtime.schemaRevision}</dd>
-            </div>
-            <div>
-              <dt>{t("status.instance.label")}</dt>
-              <dd className="identifier">{status.generation}</dd>
-            </div>
-          </dl>
-        </>
+        <p className="hero-state">{t(status.statusKey)}</p>
       )}
     </section>
   );
@@ -1652,10 +1635,6 @@ function OfflinePanel({
           <div>
             <dt>{t("offlineHold.queuedRequests.label")}</dt>
             <dd>{snapshot.queuedRequests}</dd>
-          </div>
-          <div>
-            <dt>{t("common.revision.label")}</dt>
-            <dd>{snapshot.revision}</dd>
           </div>
         </dl>
       )}
@@ -3040,10 +3019,6 @@ function AccessPanel({
                 <dd>{t(`access.dialect.${selectedAccess.clientDialect}`)}</dd>
               </div>
               <div>
-                <dt>{t("access.applicationRevision.label")}</dt>
-                <dd>{activeRevision ?? selectedAccess.revision}</dd>
-              </div>
-              <div>
                 <dt>{t("access.upstreams.label")}</dt>
                 <dd>
                   {selectionState === "ready"
@@ -3448,13 +3423,6 @@ function AccessPanel({
                   : t(
                       `credential.state.${activeCredential?.secretState ?? "missing"}`,
                     )}
-                {activeCredential !== undefined && (
-                  <span className="credential-revision">
-                    {t("credential.revision", {
-                      revision: activeCredential.secretRevision,
-                    })}
-                  </span>
-                )}
                 {activeCredential !== undefined && credentialUnavailable && (
                   <span className="credential-revision">
                     {t("common.data.stale")}
@@ -3707,10 +3675,6 @@ function CapturePanel({
                   >
                     {t(`capture.recognition.${run.clientRecognition}`)}
                   </dd>
-                </div>
-                <div>
-                  <dt>{t("capture.catalogRevision.label")}</dt>
-                  <dd className="identifier">{run.catalogRevision}</dd>
                 </div>
                 {run.clientAdapterReason !== undefined && (
                   <div>

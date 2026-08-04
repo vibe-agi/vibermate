@@ -289,7 +289,7 @@ func runAcceptance(
 	); err != nil {
 		return fail("sqlite-reopen", err)
 	}
-	removed, err := discoveryRemoved(layout.LauncherRecord)
+	removed, err := discoveryRemoved(layout.CLIControlRecord)
 	if err != nil || !removed {
 		return fail(
 			"daemon-sigint",

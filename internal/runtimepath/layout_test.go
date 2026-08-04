@@ -18,7 +18,7 @@ func TestLayoutUsesOneFixedApplicationRendezvous(t *testing.T) {
 	if layout.AppCacheDirectory != cache ||
 		layout.RuntimeDirectory != filepath.Join(cache, "runtime") ||
 		layout.GenerationLock != filepath.Join(cache, "runtime", "daemon.lock") ||
-		layout.LauncherRecord != filepath.Join(cache, "runtime", "launcher-v1.json") {
+		layout.CLIControlRecord != filepath.Join(cache, "runtime", "control.json") {
 		t.Fatalf("layout = %+v", layout)
 	}
 }

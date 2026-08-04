@@ -196,6 +196,192 @@ func TestCaptureControlSeparatesControlAndPerRunCredentials(t *testing.T) {
 	}
 }
 
+func TestManualCaptureControlHidesInternalEpochAndUsesOpaqueStateTags(
+	t *testing.T,
+) {
+	t.Parallel()
+
+	fixture := newFixture(t)
+	defer fixture.Close(t)
+
+	contextResponse := fixture.DoJSON(
+		t,
+		http.MethodGet,
+		"/api/v1/manual-captures/context",
+		fixture.controlCredential,
+		"",
+		nil,
+	)
+	if contextResponse.Code != http.StatusOK ||
+		contextResponse.Header().Get("Cache-Control") != "no-store" ||
+		bytes.Contains(contextResponse.Body.Bytes(), []byte("generation")) ||
+		bytes.Contains(contextResponse.Body.Bytes(), []byte("revision")) {
+		t.Fatalf(
+			"context status=%d headers=%v body=%s",
+			contextResponse.Code,
+			contextResponse.Header(),
+			contextResponse.Body.Bytes(),
+		)
+	}
+	var captureContext capturecontrol.ManualCaptureContext
+	decodeRecorder(t, contextResponse, &captureContext)
+	if captureContext.ConfirmationToken == "" ||
+		captureContext.ProxyAddress != "http://127.0.0.1:32123" ||
+		captureContext.Root.DERSHA256 == "" ||
+		captureContext.Root.PEMPath == "" {
+		t.Fatalf("context=%+v", captureContext)
+	}
+
+	expiresIn := int64((24 * time.Hour) / time.Second)
+	createResponse := fixture.DoJSON(
+		t,
+		http.MethodPost,
+		"/api/v1/manual-captures",
+		fixture.controlCredential,
+		"",
+		capturecontrol.ManualCaptureCreateRequest{
+			DisplayName:       "Terminal in project alpha",
+			ClientClass:       manualcapture.ClientCLI,
+			Lifetime:          manualcapture.LifetimeTemporary,
+			ExpiresInSeconds:  &expiresIn,
+			ConfirmationToken: captureContext.ConfirmationToken,
+		},
+	)
+	firstTag := createResponse.Header().Get("ETag")
+	if createResponse.Code != http.StatusCreated || firstTag == "" ||
+		createResponse.Header().Get("Cache-Control") != "no-store" ||
+		bytes.Contains(createResponse.Body.Bytes(), []byte("credentialRevision")) ||
+		bytes.Contains(createResponse.Body.Bytes(), []byte(`"revision"`)) {
+		t.Fatalf(
+			"create status=%d headers=%v body=%s",
+			createResponse.Code,
+			createResponse.Header(),
+			createResponse.Body.Bytes(),
+		)
+	}
+	var created capturecontrol.ManualCaptureGrant
+	decodeRecorder(t, createResponse, &created)
+	if created.Capture.ID == "" || created.ProxyPassword == "" ||
+		created.ProxyUsername != manualcapture.ProxyUsername {
+		t.Fatalf("grant=%+v", created)
+	}
+
+	detailPath := "/api/v1/manual-captures/" + created.Capture.ID
+	detail := fixture.DoJSON(
+		t,
+		http.MethodGet,
+		detailPath,
+		fixture.controlCredential,
+		"",
+		nil,
+	)
+	if detail.Code != http.StatusOK || detail.Header().Get("ETag") != firstTag ||
+		bytes.Contains(detail.Body.Bytes(), []byte("proxyPassword")) ||
+		bytes.Contains(detail.Body.Bytes(), []byte("credentialRevision")) {
+		t.Fatalf("detail status=%d headers=%v body=%s", detail.Code, detail.Header(), detail.Body.Bytes())
+	}
+
+	proxyCredential, err := manualcapture.NewProxyCredential(created.ProxyPassword)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := fixture.manuals.AuthorizeProxy(context.Background(), proxyCredential); err != nil {
+		t.Fatal(err)
+	}
+	observed := fixture.DoJSON(
+		t,
+		http.MethodGet,
+		detailPath,
+		fixture.controlCredential,
+		"",
+		nil,
+	)
+	if observed.Code != http.StatusOK || observed.Header().Get("ETag") != firstTag {
+		t.Fatalf("observation changed mutation tag: headers=%v body=%s", observed.Header(), observed.Body.Bytes())
+	}
+
+	stale := `"mc_AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"`
+	staleRotate := fixture.DoJSONWithHeaders(
+		t,
+		http.MethodPost,
+		detailPath+"/actions/rotate-credential",
+		fixture.controlCredential,
+		"",
+		nil,
+		map[string]string{"If-Match": stale},
+	)
+	if staleRotate.Code != http.StatusConflict {
+		t.Fatalf("stale rotate status=%d body=%s", staleRotate.Code, staleRotate.Body.Bytes())
+	}
+
+	rotate := fixture.DoJSONWithHeaders(
+		t,
+		http.MethodPost,
+		detailPath+"/actions/rotate-credential",
+		fixture.controlCredential,
+		"",
+		nil,
+		map[string]string{"If-Match": firstTag},
+	)
+	secondTag := rotate.Header().Get("ETag")
+	if rotate.Code != http.StatusOK || secondTag == "" || secondTag == firstTag ||
+		bytes.Contains(rotate.Body.Bytes(), []byte("credentialRevision")) {
+		t.Fatalf("rotate status=%d headers=%v body=%s", rotate.Code, rotate.Header(), rotate.Body.Bytes())
+	}
+	var rotated capturecontrol.ManualCaptureGrant
+	decodeRecorder(t, rotate, &rotated)
+	if rotated.ProxyPassword == "" || rotated.ProxyPassword == created.ProxyPassword {
+		t.Fatal("rotation did not return one new credential")
+	}
+	if _, err := fixture.manuals.AuthorizeProxy(context.Background(), proxyCredential); err == nil {
+		t.Fatal("old proxy credential remained active after rotation")
+	}
+
+	revoke := fixture.DoJSONWithHeaders(
+		t,
+		http.MethodPost,
+		detailPath+"/actions/revoke",
+		fixture.controlCredential,
+		"",
+		nil,
+		map[string]string{"If-Match": secondTag},
+	)
+	if revoke.Code != http.StatusNoContent || revoke.Body.Len() != 0 {
+		t.Fatalf("revoke status=%d body=%s", revoke.Code, revoke.Body.Bytes())
+	}
+}
+
+func TestManualCaptureCreateRejectsStaleConfirmationWithoutMutation(t *testing.T) {
+	t.Parallel()
+
+	fixture := newFixture(t)
+	defer fixture.Close(t)
+	expiresIn := int64((24 * time.Hour) / time.Second)
+	response := fixture.DoJSON(
+		t,
+		http.MethodPost,
+		"/api/v1/manual-captures",
+		fixture.controlCredential,
+		"",
+		capturecontrol.ManualCaptureCreateRequest{
+			DisplayName:       "Stale review",
+			ClientClass:       manualcapture.ClientOther,
+			Lifetime:          manualcapture.LifetimeTemporary,
+			ExpiresInSeconds:  &expiresIn,
+			ConfirmationToken: "ctx_AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+		},
+	)
+	if response.Code != http.StatusConflict {
+		t.Fatalf("stale confirmation status=%d body=%s", response.Code, response.Body.Bytes())
+	}
+	page, err := fixture.manuals.List(context.Background(), manualcapture.PageRequest{
+		Owner: manualcapture.NewLocalOwnerScope(),
+	})
+	if err != nil || len(page.Items) != 0 {
+		t.Fatalf("stale confirmation mutated authority: page=%+v err=%v", page, err)
+	}
+}
+
 func TestCaptureControlCredentialDoesNotExpireWithDiscoveryLease(t *testing.T) {
 	t.Parallel()
 
@@ -330,6 +516,7 @@ type fixture struct {
 	handler           *capturecontrol.Handler
 	store             *runtimepersistence.Store
 	runs              *capturerun.Manager
+	manuals           *manualcapture.Manager
 	authority         *localca.Authority
 	workspaces        *workspaceidentity.Manager
 	clock             *fakeClock
@@ -361,6 +548,12 @@ func newFixture(t *testing.T, overrides ...fixtureOverride) *fixture {
 	runOptions := capturerun.DefaultOptions(store.CaptureRunRepository())
 	runOptions.Clock = clock
 	runs, err := capturerun.NewManager(context.Background(), runOptions)
+	if err != nil {
+		t.Fatal(err)
+	}
+	manualOptions := manualcapture.DefaultOptions(store.ManualCaptureRepository())
+	manualOptions.Clock = clock
+	manuals, err := manualcapture.NewManager(context.Background(), manualOptions)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -450,13 +643,17 @@ func newFixture(t *testing.T, overrides ...fixtureOverride) *fixture {
 	}
 	issuerOptions := capturegrant.Options{
 		Runs:           runs,
-		ManualCaptures: rejectingManualCaptures{},
+		ManualCaptures: manuals,
 		Verifier:       verifier,
 		Authorities:    fixedAuthorities{"api.anthropic.com:443"},
 		ProxyOrigin:    "http://127.0.0.1:32123",
-		Root:           authority.Certificate(),
-		RunLifetime:    2 * time.Minute,
-		Workspaces:     workspaceResolver,
+		Generation: base64.RawURLEncoding.EncodeToString(
+			bytes.Repeat([]byte{0x31}, 32),
+		),
+		RootIdentity: authority.Identity(),
+		Root:         authority.Certificate(),
+		RunLifetime:  2 * time.Minute,
+		Workspaces:   workspaceResolver,
 	}
 	for _, override := range overrides {
 		override(&issuerOptions)
@@ -465,10 +662,15 @@ func newFixture(t *testing.T, overrides ...fixtureOverride) *fixture {
 	if err != nil {
 		t.Fatal(err)
 	}
+	manualHandler, err := capturecontrol.NewManualHandler(issuer)
+	if err != nil {
+		t.Fatal(err)
+	}
 	handler, err := capturecontrol.New(capturecontrol.Options{
 		Runs:        runs,
 		Principals:  principals,
 		Issuer:      issuer,
+		Manual:      manualHandler,
 		RunLifetime: 2 * time.Minute,
 	})
 	if err != nil {
@@ -478,6 +680,7 @@ func newFixture(t *testing.T, overrides ...fixtureOverride) *fixture {
 		handler:           handler,
 		store:             store,
 		runs:              runs,
+		manuals:           manuals,
 		authority:         authority,
 		workspaces:        workspaces,
 		clock:             clock,
@@ -491,6 +694,23 @@ func (fixture *fixture) DoJSON(
 	t *testing.T,
 	method, path, bearer, runCapability string,
 	body any,
+) *httptest.ResponseRecorder {
+	return fixture.DoJSONWithHeaders(
+		t,
+		method,
+		path,
+		bearer,
+		runCapability,
+		body,
+		nil,
+	)
+}
+
+func (fixture *fixture) DoJSONWithHeaders(
+	t *testing.T,
+	method, path, bearer, runCapability string,
+	body any,
+	headers map[string]string,
 ) *httptest.ResponseRecorder {
 	t.Helper()
 	var encoded []byte
@@ -511,6 +731,9 @@ func (fixture *fixture) DoJSON(
 	if runCapability != "" {
 		request.Header.Set(capturecontrol.RunCapabilityHeader, runCapability)
 	}
+	for name, value := range headers {
+		request.Header.Set(name, value)
+	}
 	recorder := httptest.NewRecorder()
 	fixture.handler.ServeHTTP(recorder, request)
 	return recorder
@@ -520,6 +743,9 @@ func (fixture *fixture) Close(t *testing.T) {
 	t.Helper()
 	if err := fixture.runs.Shutdown(context.Background()); err != nil {
 		t.Errorf("shutdown runs: %v", err)
+	}
+	if err := fixture.manuals.Shutdown(context.Background()); err != nil {
+		t.Errorf("shutdown manual captures: %v", err)
 	}
 	if err := fixture.authority.Shutdown(context.Background()); err != nil {
 		t.Errorf("shutdown authority: %v", err)
@@ -544,47 +770,6 @@ type fixedAuthorities []string
 
 func (authorities fixedAuthorities) ActiveClientAuthorities() ([]string, error) {
 	return append([]string(nil), authorities...), nil
-}
-
-// rejectingManualCaptures keeps this CaptureRun-only handler fixture honest:
-// the shared issuer is fully constructed, while an unexpected ManualCapture
-// call cannot silently succeed.
-type rejectingManualCaptures struct{}
-
-func (rejectingManualCaptures) Create(
-	context.Context,
-	manualcapture.CreateCommand,
-) (manualcapture.Grant, error) {
-	return manualcapture.Grant{}, manualcapture.ErrRuntimeStopping
-}
-
-func (rejectingManualCaptures) Rotate(
-	context.Context,
-	manualcapture.RotateCommand,
-) (manualcapture.Grant, error) {
-	return manualcapture.Grant{}, manualcapture.ErrRuntimeStopping
-}
-
-func (rejectingManualCaptures) Revoke(
-	context.Context,
-	manualcapture.RevokeCommand,
-) (manualcapture.View, error) {
-	return manualcapture.View{}, manualcapture.ErrRuntimeStopping
-}
-
-func (rejectingManualCaptures) Get(
-	context.Context,
-	manualcapture.OwnerScope,
-	manualcapture.ID,
-) (manualcapture.View, error) {
-	return manualcapture.View{}, manualcapture.ErrRuntimeStopping
-}
-
-func (rejectingManualCaptures) List(
-	context.Context,
-	manualcapture.PageRequest,
-) (manualcapture.Page, error) {
-	return manualcapture.Page{}, manualcapture.ErrRuntimeStopping
 }
 
 func decodeRecorder(

@@ -235,11 +235,13 @@ func newAuditFixture(
 		Authenticator:  authenticator,
 		Application:    application,
 		Bootstrap:      emptyBootstrap(),
-		CaptureRuns: http.HandlerFunc(func(
+		CLIControl: http.HandlerFunc(func(
 			http.ResponseWriter,
 			*http.Request,
 		) {
 		}),
+		ManualCaptures:   rejectingManualCaptureHandler{},
+		DesktopPrincipal: desktopManualPrincipal(t),
 	})
 	if err != nil {
 		t.Fatal(err)

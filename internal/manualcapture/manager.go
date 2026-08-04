@@ -17,8 +17,10 @@ const (
 	manualCaptureIDBytes   = 20
 	createCollisionRetries = 3
 	proxyDigestDomain      = "vibermate:manual-capture:proxy:v1:"
-	defaultMaxLifetime     = 7 * 24 * time.Hour
-	minimumLifetime        = time.Minute
+
+	MinimumTemporaryLifetime = time.Minute
+	DefaultTemporaryLifetime = 24 * time.Hour
+	MaximumTemporaryLifetime = 7 * 24 * time.Hour
 )
 
 type Clock interface {
@@ -43,7 +45,7 @@ func DefaultOptions(repository Repository) Options {
 		Repository:           repository,
 		Clock:                SystemClock{},
 		Random:               rand.Reader,
-		MaxTemporaryLifetime: defaultMaxLifetime,
+		MaxTemporaryLifetime: MaximumTemporaryLifetime,
 	}
 }
 
@@ -61,7 +63,7 @@ func NewManager(ctx context.Context, options Options) (*Manager, error) {
 		return nil, fmt.Errorf("%w: startup context is nil", ErrInvalidCommand)
 	}
 	if options.Repository == nil || options.Clock == nil || options.Random == nil ||
-		options.MaxTemporaryLifetime < minimumLifetime {
+		options.MaxTemporaryLifetime < MinimumTemporaryLifetime {
 		return nil, fmt.Errorf("%w: Manager dependencies are incomplete", ErrInvalidCommand)
 	}
 	now := canonicalTime(options.Clock.Now())
@@ -337,7 +339,7 @@ func (manager *Manager) validateCreate(command CreateCommand) error {
 	}
 	switch command.Lifetime {
 	case LifetimeTemporary:
-		if command.ExpiresIn < minimumLifetime ||
+		if command.ExpiresIn < MinimumTemporaryLifetime ||
 			command.ExpiresIn > manager.maxTemporaryLifetime {
 			return ErrInvalidCommand
 		}

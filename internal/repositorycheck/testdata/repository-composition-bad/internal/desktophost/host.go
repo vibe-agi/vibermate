@@ -14,5 +14,6 @@ func unused() {
 	_, _ = productruntime.Start(nil)
 	_, _ = controlprincipal.NewAuthority()
 	_, _ = capturegrant.New()
+	_, _ = capturecontrol.NewManualHandler()
 	_, _ = capturecontrol.New()
 }

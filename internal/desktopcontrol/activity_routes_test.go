@@ -322,12 +322,14 @@ func newActivityRouteFixture(
 	}
 	const authority = "127.0.0.1:43129"
 	router, err := desktopcontrol.NewRouter(desktopcontrol.RouterOptions{
-		Authority:      authority,
-		AllowedOrigins: []string{"tauri://localhost"},
-		Authenticator:  authenticator,
-		Application:    application,
-		Bootstrap:      emptyBootstrap(),
-		CaptureRuns:    http.NotFoundHandler(),
+		Authority:        authority,
+		AllowedOrigins:   []string{"tauri://localhost"},
+		Authenticator:    authenticator,
+		Application:      application,
+		Bootstrap:        emptyBootstrap(),
+		CLIControl:       http.NotFoundHandler(),
+		ManualCaptures:   rejectingManualCaptureHandler{},
+		DesktopPrincipal: desktopManualPrincipal(t),
 	})
 	if err != nil {
 		t.Fatal(err)

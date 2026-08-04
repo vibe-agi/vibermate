@@ -79,9 +79,9 @@ ProductRuntime also composes a handler-only loopback proxy boundary. An opaque
 proxy credential must first resolve to one immutable, route-neutral
 `CaptureAdmission` before exact `ClientOrigin` lookup, policy-dependent dial,
 local leaf issuance, CONNECT MITM, path classification, or data-plane dispatch.
-The current producer adapts an authenticated persisted CaptureRun capability;
-the proxy no longer imports or understands the CaptureRun aggregate. Admission
-records ingress profile, optional run/manual identity, credential revision,
+One closed authorizer dispatches disjoint persisted CaptureRun and
+ManualCapture credential namespaces; the proxy imports neither aggregate.
+Admission records ingress profile, optional run/manual identity, an internal credential epoch,
 attribution confidence, and any already-authenticated workspace/client-adapter
 evidence. It cannot carry or select Access, Profile, route, account, model,
 plugin, or provider credential. Every request on an existing CONNECT
@@ -110,8 +110,9 @@ client verification, Root-delivery decisions, workspace resolution, and
 durable CaptureRun creation. Its returned per-run proxy and lifecycle
 credentials are separate from the control credential: mixed credential
 namespaces fail closed, and the child process never receives the control
-credential or discovery path. ManualCapture product surfaces and remote
-enrollment are not implemented in this slice. Exchange correlation now
+credential or discovery path. The same local principal can now request a
+ManualCapture through the shared handler; remote enrollment is not implemented.
+Exchange correlation now
 carries the complete admission and a separately generated connection identity;
 workspace routing can read only the scope frozen into that admission, not a
 second caller-supplied option. The managed-run ingress profile is mechanically
@@ -127,9 +128,16 @@ ManualCapture deliberately has no Access, Profile, route, client adapter,
 process, machine, or workspace authority. ProductRuntime now restores this
 authority before building its existing proxy and dispatches the disjoint
 `run_…` and `manual_…` credential namespaces into the same route-neutral
-admission and downstream pipeline. The runtime-owned controller is present in
-the shared capture-grant issuer, but no control API, CLI, or UI invokes it yet,
-so this is still not a usable manual-capture feature.
+admission and downstream pipeline. One authenticated ManualCapture HTTP adapter
+is shared by the local CLI and Desktop control router. It exposes review
+context, create, list, detail, rotate and revoke without exposing the raw
+password after create/rotate or the internal credential epoch. Creation uses an
+opaque context-confirmation token; mutation CAS uses opaque ETags. The bounded
+`vibermate capture create` command defaults interactive confirmation to no,
+requires explicit `--yes` for non-terminal use, and emits either human-readable
+or shell output without accepting route or account coordinates. The Desktop
+creation wizard and verification projection are still absent, so the feature
+remains an engineering surface rather than a Preview product.
 
 After an exact AgentEndpoint resolves an Access, the runtime atomically creates
 or reads the durable `(AccessID, MachineID, WorkspaceID)` route binding. Each

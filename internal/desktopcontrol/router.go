@@ -7,25 +7,39 @@ import (
 	"net/url"
 	"strings"
 	"sync/atomic"
+
+	"github.com/vibe-agi/vibermate/internal/controlprincipal"
 )
 
 type RouterOptions struct {
-	Authority      string
-	AllowedOrigins []string
-	Authenticator  *Authenticator
-	Application    *Handler
-	Bootstrap      http.Handler
-	CaptureRuns    http.Handler
+	Authority        string
+	AllowedOrigins   []string
+	Authenticator    *Authenticator
+	Application      *Handler
+	Bootstrap        http.Handler
+	CLIControl       http.Handler
+	ManualCaptures   ManualCaptureHandler
+	DesktopPrincipal controlprincipal.Principal
+}
+
+type ManualCaptureHandler interface {
+	ServeHTTP(
+		http.ResponseWriter,
+		*http.Request,
+		controlprincipal.Principal,
+	)
 }
 
 type Router struct {
-	authority     string
-	origins       map[string]struct{}
-	authenticator *Authenticator
-	application   *Handler
-	bootstrap     http.Handler
-	captureRuns   http.Handler
-	closing       atomic.Bool
+	authority        string
+	origins          map[string]struct{}
+	authenticator    *Authenticator
+	application      *Handler
+	bootstrap        http.Handler
+	cliControl       http.Handler
+	manualCaptures   ManualCaptureHandler
+	desktopPrincipal controlprincipal.Principal
+	closing          atomic.Bool
 }
 
 func NewRouter(options RouterOptions) (*Router, error) {
@@ -33,7 +47,11 @@ func NewRouter(options RouterOptions) (*Router, error) {
 		options.Authenticator == nil ||
 		options.Application == nil ||
 		options.Bootstrap == nil ||
-		options.CaptureRuns == nil ||
+		options.CLIControl == nil ||
+		options.ManualCaptures == nil ||
+		!options.DesktopPrincipal.Valid() ||
+		options.DesktopPrincipal.Kind() != controlprincipal.KindDesktopApp ||
+		!options.DesktopPrincipal.Allows(controlprincipal.GrantManualCapture) ||
 		len(options.AllowedOrigins) == 0 {
 		return nil, errors.New("Desktop control router dependencies are incomplete")
 	}
@@ -59,12 +77,14 @@ func NewRouter(options RouterOptions) (*Router, error) {
 		origins[raw] = struct{}{}
 	}
 	return &Router{
-		authority:     options.Authority,
-		origins:       origins,
-		authenticator: options.Authenticator,
-		application:   options.Application,
-		bootstrap:     options.Bootstrap,
-		captureRuns:   options.CaptureRuns,
+		authority:        options.Authority,
+		origins:          origins,
+		authenticator:    options.Authenticator,
+		application:      options.Application,
+		bootstrap:        options.Bootstrap,
+		cliControl:       options.CLIControl,
+		manualCaptures:   options.ManualCaptures,
+		desktopPrincipal: options.DesktopPrincipal,
 	}, nil
 }
 
@@ -85,7 +105,7 @@ func (router *Router) ServeHTTP(
 		return
 	}
 	if request.URL.Path == "/api/v1/auth/sessions" {
-		if !router.validLauncherTransport(request) {
+		if !router.validCLIControlTransport(request) {
 			writeProblem(writer, http.StatusForbidden, ReasonUnauthorized)
 			return
 		}
@@ -94,15 +114,15 @@ func (router *Router) ServeHTTP(
 	}
 	// The verb chooses the authority here, because they are different acts on
 	// the same resource. Creating a run and controlling one belong to the
-	// launcher and its per-run capability; reading the list is a person
+	// local CLI and its per-run capability; reading the list is a person
 	// looking at their own machine, and it reaches the app the same way every
 	// other read does. Design 15 lists them that way.
 	if capturePath(request.URL.Path) && request.Method != http.MethodGet {
-		if !router.validLauncherTransport(request) {
+		if !router.validCLIControlTransport(request) {
 			writeProblem(writer, http.StatusForbidden, ReasonUnauthorized)
 			return
 		}
-		router.captureRuns.ServeHTTP(writer, request)
+		router.cliControl.ServeHTTP(writer, request)
 		return
 	}
 	// A GET below the collection is still a control path shape, and nothing
@@ -110,11 +130,16 @@ func (router *Router) ServeHTTP(
 	// app declined.
 	if capturePath(request.URL.Path) &&
 		request.URL.Path != "/api/v1/capture-runs" {
-		if !router.validLauncherTransport(request) {
+		if !router.validCLIControlTransport(request) {
 			writeProblem(writer, http.StatusForbidden, ReasonUnauthorized)
 			return
 		}
-		router.captureRuns.ServeHTTP(writer, request)
+		router.cliControl.ServeHTTP(writer, request)
+		return
+	}
+	if manualCapturePath(request.URL.Path) &&
+		router.validCLIControlTransport(request) {
+		router.cliControl.ServeHTTP(writer, request)
 		return
 	}
 	origin := request.Header.Get("Origin")
@@ -159,6 +184,23 @@ func (router *Router) ServeHTTP(
 		writeJSON(writer, http.StatusOK, rotation)
 		return
 	}
+	if manualCapturePath(request.URL.Path) {
+		scope := requestScope(request)
+		if scope == "" || !router.authenticator.Authorize(request, scope) {
+			writeProblem(writer, http.StatusUnauthorized, ReasonUnauthorized)
+			return
+		}
+		// Authentication terminates at this router. The shared business handler
+		// receives an authenticated principal, never the credential that proved
+		// it, even though its current implementation does not forward requests.
+		request.Header.Del("Authorization")
+		router.manualCaptures.ServeHTTP(
+			writer,
+			request,
+			router.desktopPrincipal,
+		)
+		return
+	}
 	scope := router.application.RequiredScope(request)
 	if scope == "" || !router.authenticator.Authorize(request, scope) {
 		writeProblem(writer, http.StatusUnauthorized, ReasonUnauthorized)
@@ -197,7 +239,25 @@ func capturePath(path string) bool {
 		strings.HasPrefix(path, "/api/v1/capture-runs/")
 }
 
-func (router *Router) validLauncherTransport(request *http.Request) bool {
+func manualCapturePath(path string) bool {
+	return path == "/api/v1/manual-captures" ||
+		strings.HasPrefix(path, "/api/v1/manual-captures/")
+}
+
+func requestScope(request *http.Request) Scope {
+	if request == nil {
+		return ""
+	}
+	if request.Method == http.MethodGet {
+		return ScopeRead
+	}
+	if request.Method == http.MethodPost {
+		return ScopeWrite
+	}
+	return ""
+}
+
+func (router *Router) validCLIControlTransport(request *http.Request) bool {
 	return request.Header.Get("Origin") == "" &&
 		request.Header.Get("Sec-Fetch-Site") == "" &&
 		request.Header.Get("Sec-Fetch-Mode") == "" &&

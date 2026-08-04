@@ -11,8 +11,6 @@ describe("Desktop locales", () => {
   it("renders synchronized parameterized messages", async () => {
     const english = await createI18n("en-US");
     const chinese = await createI18n("zh-CN");
-    expect(english.t("access.revision.compact", { revision: 7 })).toContain("7");
-    expect(chinese.t("access.revision.compact", { revision: 7 })).toContain("7");
     expect(english.t("access.apply.succeeded")).not.toBe("");
     expect(chinese.t("access.apply.succeeded")).not.toBe("");
   });

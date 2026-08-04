@@ -272,6 +272,8 @@ func Start(ctx context.Context, options Options) (*Host, error) {
 		Verifier:       verifier,
 		Authorities:    runtime,
 		ProxyOrigin:    proxyOrigin,
+		Generation:     runtime.Status().InstanceID,
+		RootIdentity:   runtime.LocalRootIdentity(),
 		Root:           runtime.LocalRootCertificate(),
 		RunLifetime:    options.CaptureRunLifetime,
 		Workspaces:     workspaceResolver,
@@ -283,10 +285,15 @@ func Start(ctx context.Context, options Options) (*Host, error) {
 	if err != nil {
 		return fail("capture grant issuer", err)
 	}
+	manualCaptureHandler, err := capturecontrol.NewManualHandler(grantIssuer)
+	if err != nil {
+		return fail("ManualCapture control routes", err)
+	}
 	captureHandler, err := capturecontrol.New(capturecontrol.Options{
 		Runs:        runtime.CaptureRuns(),
 		Principals:  cliControl,
 		Issuer:      grantIssuer,
+		Manual:      manualCaptureHandler,
 		RunLifetime: options.CaptureRunLifetime,
 	})
 	if err != nil {
@@ -329,13 +336,26 @@ func Start(ctx context.Context, options Options) (*Host, error) {
 	if err != nil {
 		return fail("App control routes", err)
 	}
+	desktopPrincipal, err := controlprincipal.New(controlprincipal.Attributes{
+		ID:                 "desktop-app:" + runtime.Status().InstanceID,
+		Kind:               controlprincipal.KindDesktopApp,
+		CredentialRevision: 1,
+		AllowedGrantKinds: []controlprincipal.GrantKind{
+			controlprincipal.GrantManualCapture,
+		},
+	})
+	if err != nil {
+		return fail("Desktop App principal", err)
+	}
 	router, err := desktopcontrol.NewRouter(desktopcontrol.RouterOptions{
-		Authority:      controlTracked.Addr().String(),
-		AllowedOrigins: append([]string(nil), options.AllowedOrigins...),
-		Authenticator:  authenticator,
-		Application:    application,
-		Bootstrap:      bootstrapAuthority,
-		CaptureRuns:    captureHandler,
+		Authority:        controlTracked.Addr().String(),
+		AllowedOrigins:   append([]string(nil), options.AllowedOrigins...),
+		Authenticator:    authenticator,
+		Application:      application,
+		Bootstrap:        bootstrapAuthority,
+		CLIControl:       captureHandler,
+		ManualCaptures:   manualCaptureHandler,
+		DesktopPrincipal: desktopPrincipal,
 	})
 	if err != nil {
 		return fail("control router", err)

@@ -17,7 +17,7 @@ import (
 )
 
 const (
-	keyUsage              = "cli.usage.run"
+	keyUsage              = "cli.usage"
 	keyRuntimeUnavailable = "cli.error.runtimeUnavailable"
 	keyRuntimePath        = "cli.error.runtimePathUnavailable"
 	keyLaunchFailed       = "cli.error.launchFailed"
@@ -60,6 +60,15 @@ func execute(
 	stdout io.Writer,
 	stderr io.Writer,
 ) (int, string) {
+	if len(arguments) > 0 && arguments[0] == "capture" {
+		return executeCapture(
+			arguments[1:],
+			environment,
+			stdin,
+			stdout,
+			stderr,
+		)
+	}
 	if len(arguments) < 3 ||
 		arguments[0] != "run" ||
 		arguments[1] != "--" ||
@@ -71,7 +80,7 @@ func execute(
 		return 1, keyRuntimePath
 	}
 	discovery, err := localdiscovery.NewFile(
-		layout.LauncherRecord,
+		layout.CLIControlRecord,
 		commandClock{},
 	)
 	if err != nil {

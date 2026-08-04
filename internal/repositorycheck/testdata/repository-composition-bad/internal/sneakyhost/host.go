@@ -12,6 +12,7 @@ func Start() {
 	_, _ = vmruntime.Start(nil)
 	_, _ = vmprincipal.NewAuthority()
 	_, _ = vmcapturegrant.New()
+	_, _ = vmcapturecontrol.NewManualHandler()
 	_, _ = vmcapturecontrol.New()
 }
 

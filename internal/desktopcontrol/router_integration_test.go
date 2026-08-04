@@ -19,6 +19,7 @@ import (
 	"github.com/vibe-agi/vibermate/internal/accessapply"
 	"github.com/vibe-agi/vibermate/internal/activity"
 	"github.com/vibe-agi/vibermate/internal/connectionevent"
+	"github.com/vibe-agi/vibermate/internal/controlprincipal"
 	"github.com/vibe-agi/vibermate/internal/desktopcontrol"
 	"github.com/vibe-agi/vibermate/internal/egressaudit"
 	"github.com/vibe-agi/vibermate/internal/exchange"
@@ -32,6 +33,49 @@ import (
 )
 
 const desktopControlIntegrationStartupTimeout = 60 * time.Second
+
+type rejectingManualCaptureHandler struct{}
+
+func (rejectingManualCaptureHandler) ServeHTTP(
+	writer http.ResponseWriter,
+	_ *http.Request,
+	_ controlprincipal.Principal,
+) {
+	writer.WriteHeader(http.StatusServiceUnavailable)
+}
+
+type recordingManualCaptureHandler struct {
+	called        bool
+	authorization string
+	principal     controlprincipal.Principal
+}
+
+func (handler *recordingManualCaptureHandler) ServeHTTP(
+	writer http.ResponseWriter,
+	request *http.Request,
+	principal controlprincipal.Principal,
+) {
+	handler.called = true
+	handler.authorization = request.Header.Get("Authorization")
+	handler.principal = principal
+	writer.WriteHeader(http.StatusNoContent)
+}
+
+func desktopManualPrincipal(t *testing.T) controlprincipal.Principal {
+	t.Helper()
+	principal, err := controlprincipal.New(controlprincipal.Attributes{
+		ID:                 "desktop-app:test",
+		Kind:               controlprincipal.KindDesktopApp,
+		CredentialRevision: 1,
+		AllowedGrantKinds: []controlprincipal.GrantKind{
+			controlprincipal.GrantManualCapture,
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return principal
+}
 
 func TestDesktopControlAppliesAccessAndControlsOfflineHoldWithScopedAuth(
 	t *testing.T,
@@ -76,14 +120,17 @@ func TestDesktopControlAppliesAccessAndControlsOfflineHoldWithScopedAuth(
 	) {
 		writer.WriteHeader(http.StatusNoContent)
 	})
+	manualCaptures := &recordingManualCaptureHandler{}
 	const authority = "127.0.0.1:43127"
 	router, err := desktopcontrol.NewRouter(desktopcontrol.RouterOptions{
-		Authority:      authority,
-		AllowedOrigins: []string{"tauri://localhost"},
-		Authenticator:  authenticator,
-		Application:    application,
-		Bootstrap:      emptyBootstrap(),
-		CaptureRuns:    capture,
+		Authority:        authority,
+		AllowedOrigins:   []string{"tauri://localhost"},
+		Authenticator:    authenticator,
+		Application:      application,
+		Bootstrap:        emptyBootstrap(),
+		CLIControl:       capture,
+		ManualCaptures:   manualCaptures,
+		DesktopPrincipal: desktopManualPrincipal(t),
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -107,6 +154,29 @@ func TestDesktopControlAppliesAccessAndControlsOfflineHoldWithScopedAuth(
 		statusBody.Generation != runtime.Status().InstanceID ||
 		statusBody.StatusKey != "runtime.state.initialized" {
 		t.Fatalf("status response = %+v", statusBody)
+	}
+
+	manualCapturesResponse := doRequest(
+		t,
+		router,
+		authority,
+		http.MethodGet,
+		"/api/v1/manual-captures",
+		readToken,
+		nil,
+	)
+	if manualCapturesResponse.Code != http.StatusNoContent ||
+		!manualCaptures.called ||
+		manualCaptures.authorization != "" ||
+		manualCaptures.principal.ID() != desktopManualPrincipal(t).ID() ||
+		manualCaptures.principal.Kind() != controlprincipal.KindDesktopApp ||
+		!manualCaptures.principal.Allows(controlprincipal.GrantManualCapture) {
+		t.Fatalf(
+			"manual capture status=%d handler=%+v principal=%s",
+			manualCapturesResponse.Code,
+			manualCaptures,
+			manualCaptures.principal.ID(),
+		)
 	}
 
 	emptyActivities := doRequest(
@@ -788,11 +858,13 @@ func TestDesktopControlApprovalRouteResolvesDurableAuthority(
 		Authenticator:  authenticator,
 		Application:    application,
 		Bootstrap:      emptyBootstrap(),
-		CaptureRuns: http.HandlerFunc(func(
+		CLIControl: http.HandlerFunc(func(
 			http.ResponseWriter,
 			*http.Request,
 		) {
 		}),
+		ManualCaptures:   rejectingManualCaptureHandler{},
+		DesktopPrincipal: desktopManualPrincipal(t),
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -958,12 +1030,14 @@ func TestDesktopControlRejectsCapabilityAndTransportBoundaryConfusion(t *testing
 	}
 	const authority = "127.0.0.1:43128"
 	router, err := desktopcontrol.NewRouter(desktopcontrol.RouterOptions{
-		Authority:      authority,
-		AllowedOrigins: []string{"tauri://localhost"},
-		Authenticator:  authenticator,
-		Application:    application,
-		Bootstrap:      emptyBootstrap(),
-		CaptureRuns:    http.HandlerFunc(func(http.ResponseWriter, *http.Request) {}),
+		Authority:        authority,
+		AllowedOrigins:   []string{"tauri://localhost"},
+		Authenticator:    authenticator,
+		Application:      application,
+		Bootstrap:        emptyBootstrap(),
+		CLIControl:       http.HandlerFunc(func(http.ResponseWriter, *http.Request) {}),
+		ManualCaptures:   rejectingManualCaptureHandler{},
+		DesktopPrincipal: desktopManualPrincipal(t),
 	})
 	if err != nil {
 		t.Fatal(err)

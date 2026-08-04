@@ -56,12 +56,14 @@ func TestConnectionRulesAreReadableAndEditable(t *testing.T) {
 		Authenticator:  authenticator,
 		Application:    application,
 		Bootstrap:      emptyBootstrap(),
-		CaptureRuns: http.HandlerFunc(func(
+		CLIControl: http.HandlerFunc(func(
 			writer http.ResponseWriter,
 			_ *http.Request,
 		) {
 			writer.WriteHeader(http.StatusNoContent)
 		}),
+		ManualCaptures:   rejectingManualCaptureHandler{},
+		DesktopPrincipal: desktopManualPrincipal(t),
 	})
 	if err != nil {
 		t.Fatal(err)

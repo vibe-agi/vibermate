@@ -190,6 +190,17 @@ func CheckProductionCompositionBoundary(repositoryRoot string) []Violation {
 		function: "Start",
 		target: calledFunction{
 			importPath: captureControlImportPath,
+			name:       "NewManualHandler",
+		},
+		callers: []string{hostPackageDir + "/"},
+		missing: "host-does-not-create-manual-capture-handler",
+		extra:   "unreviewed-manual-capture-handler-composition",
+	}, {
+		required: present["host"] && present["capture-control"],
+		holder:   hostPackageDir,
+		function: "Start",
+		target: calledFunction{
+			importPath: captureControlImportPath,
 			name:       "New",
 		},
 		callers: []string{hostPackageDir + "/"},

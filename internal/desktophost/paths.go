@@ -29,5 +29,5 @@ func (paths Paths) LockPath() string {
 }
 
 func (paths Paths) DiscoveryPath() string {
-	return paths.layout.LauncherRecord
+	return paths.layout.CLIControlRecord
 }

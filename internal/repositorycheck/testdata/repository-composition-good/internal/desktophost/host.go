@@ -10,6 +10,7 @@ import (
 func Start(options any) (any, error) {
 	_, _ = controlprincipal.NewAuthority()
 	_, _ = capturegrant.New()
+	_, _ = capturecontrol.NewManualHandler()
 	_, _ = capturecontrol.New()
 	return productruntime.Start(options)
 }

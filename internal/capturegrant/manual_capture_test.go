@@ -1,13 +1,16 @@
 package capturegrant
 
 import (
+	"bytes"
 	"context"
+	"encoding/base64"
 	"errors"
+	"path/filepath"
 	"testing"
 
-	"github.com/vibe-agi/vibermate/internal/access"
 	"github.com/vibe-agi/vibermate/internal/capturecredential"
 	"github.com/vibe-agi/vibermate/internal/controlprincipal"
+	"github.com/vibe-agi/vibermate/internal/localca"
 	"github.com/vibe-agi/vibermate/internal/manualcapture"
 )
 
@@ -56,18 +59,6 @@ func (*recordingManualCaptures) List(
 	return manualcapture.Page{}, errors.New("unexpected list")
 }
 
-type fixedIngressAuthorities struct {
-	values []string
-	calls  int
-}
-
-func (reader *fixedIngressAuthorities) ActiveClientAuthorities() ([]string, error) {
-	reader.calls++
-	return append([]string(nil), reader.values...), nil
-}
-
-var _ access.IngressCatalogReader = (*fixedIngressAuthorities)(nil)
-
 func TestIssueManualCaptureDerivesOwnerFromPrincipal(t *testing.T) {
 	t.Parallel()
 	credential, err := capturecredential.New(
@@ -85,11 +76,28 @@ func TestIssueManualCaptureDerivesOwnerFromPrincipal(t *testing.T) {
 		Capture:    manualcapture.View{ID: "manual-one"},
 		Credential: proxyCredential,
 	}}
-	authorities := &fixedIngressAuthorities{values: []string{"api.example.test:443"}}
+	authority, err := localca.Open(
+		context.Background(),
+		localca.DefaultOptions(
+			filepath.Join(t.TempDir(), "ca"),
+			context.Background(),
+		),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		if err := authority.Shutdown(context.Background()); err != nil {
+			t.Errorf("shutdown local CA: %v", err)
+		}
+	})
+	generation := base64.RawURLEncoding.EncodeToString(bytes.Repeat([]byte{0x42}, 32))
 	issuer := &Issuer{
 		manuals:     manuals,
-		authorities: authorities,
 		proxyOrigin: "http://127.0.0.1:41080",
+		generation:  generation,
+		rootID:      authority.Identity(),
+		root:        authority.Certificate(),
 	}
 	principal, err := controlprincipal.New(controlprincipal.Attributes{
 		ID:                    "enrolled:one",
@@ -104,13 +112,21 @@ func TestIssueManualCaptureDerivesOwnerFromPrincipal(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	captureContext, err := issuer.GetManualCaptureContext(
+		context.Background(),
+		principal,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
 	grant, err := issuer.IssueManualCapture(
 		context.Background(),
 		principal,
 		ManualCaptureRequest{
-			DisplayName: "Remote desktop",
-			ClientClass: manualcapture.ClientDesktopApp,
-			Lifetime:    manualcapture.LifetimeUntilRevoked,
+			DisplayName:       "Remote desktop",
+			ClientClass:       manualcapture.ClientDesktopApp,
+			Lifetime:          manualcapture.LifetimeUntilRevoked,
+			ConfirmationToken: captureContext.ConfirmationToken,
 		},
 	)
 	if err != nil {
@@ -118,19 +134,16 @@ func TestIssueManualCaptureDerivesOwnerFromPrincipal(t *testing.T) {
 	}
 	bindingID, ok := manuals.command.Owner.ProxyClientBindingID()
 	if manuals.calls != 1 || !ok || bindingID != "binding-one" ||
-		grant.ProxyAddress != issuer.proxyOrigin ||
-		len(grant.ProtectedAuthorities) != 1 || authorities.calls != 1 {
+		grant.Context.ProxyAddress != issuer.proxyOrigin ||
+		grant.Context.ConfirmationToken != captureContext.ConfirmationToken ||
+		grant.Context.RootIdentity != authority.Identity() ||
+		grant.Context.RootCertificate.Path() != authority.Certificate().Path() {
 		t.Fatalf(
-			"command=%+v grant=%+v controller calls=%d authority calls=%d",
+			"command=%+v grant=%+v controller calls=%d",
 			manuals.command,
 			grant,
 			manuals.calls,
-			authorities.calls,
 		)
-	}
-	grant.ProtectedAuthorities[0] = "mutated"
-	if authorities.values[0] != "api.example.test:443" {
-		t.Fatal("ManualCapture grant aliased authority input")
 	}
 }
 

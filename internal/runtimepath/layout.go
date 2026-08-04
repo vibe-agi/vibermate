@@ -12,14 +12,14 @@ const (
 	ApplicationID        = "io.vibermate.desktop"
 	runtimeDirectoryName = "runtime"
 	lockFileName         = "daemon.lock"
-	launcherFileName     = "launcher-v1.json"
+	cliControlFileName   = "control.json"
 )
 
 type Layout struct {
 	AppCacheDirectory string
 	RuntimeDirectory  string
 	GenerationLock    string
-	LauncherRecord    string
+	CLIControlRecord  string
 }
 
 func Default() (Layout, error) {
@@ -44,6 +44,6 @@ func FromAppCache(appCacheDirectory string) (Layout, error) {
 		AppCacheDirectory: appCacheDirectory,
 		RuntimeDirectory:  runtimeDirectory,
 		GenerationLock:    filepath.Join(runtimeDirectory, lockFileName),
-		LauncherRecord:    filepath.Join(runtimeDirectory, launcherFileName),
+		CLIControlRecord:  filepath.Join(runtimeDirectory, cliControlFileName),
 	}, nil
 }

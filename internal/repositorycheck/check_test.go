@@ -432,6 +432,7 @@ func TestProductionCompositionBoundaryUsesPublicCheckWithGoodAndBadFixtures(
 		"runtime-does-not-select-production-builders",
 		"host-does-not-create-control-authority",
 		"host-does-not-create-capture-grant-issuer",
+		"host-does-not-create-manual-capture-handler",
 		"host-does-not-create-capture-control-handler",
 		"capture-run-create-outside-issuer",
 		"manual-capture-create-outside-issuer",
@@ -441,6 +442,7 @@ func TestProductionCompositionBoundaryUsesPublicCheckWithGoodAndBadFixtures(
 		"unreviewed-host-composition",
 		"unreviewed-control-authority-composition",
 		"unreviewed-capture-grant-composition",
+		"unreviewed-manual-capture-handler-composition",
 		"unreviewed-capture-control-composition",
 		"composition-dot-import",
 	} {

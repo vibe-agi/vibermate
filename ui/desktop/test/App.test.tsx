@@ -787,7 +787,7 @@ describe("Desktop dashboard", () => {
     expect(client.applyAccess).not.toHaveBeenCalled();
   });
 
-  it("switches the complete user copy catalog without changing runtime data", async () => {
+  it("switches the complete user copy catalog without exposing runtime identity", async () => {
     const i18n = await createI18n("en-US");
     const model = new DashboardQueryRuntime(clientFixture(), 60_000);
     render(
@@ -800,7 +800,7 @@ describe("Desktop dashboard", () => {
     expect(screen.getByText("Status")).toBeTruthy();
     fireEvent.click(screen.getByRole("button", { name: "简体中文" }));
     expect(await screen.findByText("状态")).toBeTruthy();
-    expect(screen.getAllByText("runtime-instance").length).toBeGreaterThan(0);
+    expect(screen.queryByText("runtime-instance")).toBeNull();
   });
 
   it("lists multiple Accesses and automatically loads a protected existing one", async () => {
