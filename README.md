@@ -288,12 +288,13 @@ is wired, no production path observes the live trust store, and tests never run
 evidence, not proof of macOS authorization or system trust behavior.
 
 Repository tests prove the version-gated Responses behavior. The latest clean
-private v6 deterministic report is bound to implementation commit
-`c16b2f9556fd4123adba9d5a6f72bb7fbb855905` and fixed Claude Code 2.1.220; it
-passes 18 of 18 checks and exercises the current managed-client bootstrap,
-certificate, explicit connection-policy, client-side ConnectionEvent, Hold,
-shutdown, and SQLite-recovery paths without a provider credential. The latest
-credentialed report remains the historical fixed-Codex
+private v6 deterministic reports are bound to implementation commit
+`bbe3d2d35574481e2c10a57e28ca456ef51780b5`: fixed Claude Code 2.1.220 passes
+18 of 18 checks and fixed Codex CLI 0.145.0 passes 19 of 19. Together they
+exercise the current managed-client bootstrap, certificate, explicit
+connection-policy, client-side ConnectionEvent, client-specific fallback,
+Hold, shutdown, and SQLite-recovery paths without a provider credential. The
+latest credentialed report remains the historical fixed-Codex
 report bound to `c19cca4eb2842aa00d8e8fc17160b342a111f0b6`; it proves neither
 current-HEAD credentialed behavior nor successful Responses WebSocket semantics
 or client-visible per-token TUI behavior.
@@ -452,11 +453,12 @@ development file SecretStore and defaults to a local Cherry Studio API at
 `http://127.0.0.1:23333/v1` with model `dashscope:glm-5`. No acceptance mode
 takes a secret value on its command line. The Codex runner isolates
 `CODEX_HOME`, reads prompts from standard input, trusts only bounded typed
-JSONL plus bounded client-status evidence, and exercises `exec resume`. One
-clean packaged v6 deterministic report bound to
-`c16b2f9556fd4123adba9d5a6f72bb7fbb855905` passes 18 of 18 checks with fixed
-Claude Code 2.1.220 and independently verifies the selected source, App,
-sidecars, acceptance executable, client entrypoint, and frozen configuration.
+JSONL plus bounded client-status evidence, and exercises `exec resume`. Two
+clean packaged v6 deterministic reports bound to
+`bbe3d2d35574481e2c10a57e28ca456ef51780b5` pass 18 of 18 checks with fixed
+Claude Code 2.1.220 and 19 of 19 checks with fixed Codex CLI 0.145.0. Both
+independently verify the selected source, App, sidecars, acceptance executable,
+client entrypoint, and frozen configuration.
 The latest credentialed report is older: 25 of 25 checks
 bound to `c19cca4eb2842aa00d8e8fc17160b342a111f0b6` and fixed Codex CLI 0.145.0.
 It remains useful historical evidence but is not current-HEAD credentialed
