@@ -289,7 +289,7 @@ evidence, not proof of macOS authorization or system trust behavior.
 
 Repository tests prove the version-gated Responses behavior. The latest clean
 private v6 deterministic and credentialed reports are bound to implementation
-commit `3064a417baa93426ad221947c3eeba920938ab5b`: fixed Claude Code
+commit `203bae6e90219fe36bc20b9c32da8d7b53ed7446`: fixed Claude Code
 2.1.220 passes 18 of 18 deterministic and 26 of 26 credentialed checks; fixed
 Codex CLI 0.145.0 passes 19 of 19 and 29 of 29. Together they exercise the
 managed-client bootstrap, certificate, explicit connection-policy,
@@ -454,13 +454,13 @@ takes a secret value on its command line. The Codex runner isolates
 `CODEX_HOME`, reads prompts from standard input, trusts only bounded typed
 JSONL plus bounded client-status evidence, and exercises `exec resume`. Two
 clean packaged v6 deterministic reports and two credentialed reports bound to
-implementation candidate `3064a417baa93426ad221947c3eeba920938ab5b`
+implementation candidate `203bae6e90219fe36bc20b9c32da8d7b53ed7446`
 pass 18 of 18 and 26 of 26 checks with fixed Claude Code 2.1.220, and 19 of 19
 and 29 of 29 checks with fixed Codex CLI 0.145.0. The deterministic reports
 independently verify the selected source, App, sidecars, acceptance executable,
 client entrypoint, and frozen configuration. The complete digests and evidence
 boundary are recorded in
-[`docs/evidence/2026-08-05-fixed-client-credentialed-closure.md`](docs/evidence/2026-08-05-fixed-client-credentialed-closure.md).
+[`docs/evidence/2026-08-05-explicit-provider-closure.md`](docs/evidence/2026-08-05-explicit-provider-closure.md).
 The Codex tool proof names `exec`, and its Hold proof claims completion through
 the Responses streaming path without claiming TUI delta rendering.
 
