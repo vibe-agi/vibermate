@@ -94,11 +94,24 @@ test("lists existing tools and creates the next one without asking for a name", 
   await expect(
     page.getByRole("heading", { name: "Accounts and routes" }),
   ).toBeVisible();
-  await expect(page.getByText("Work relay", { exact: true })).toBeVisible();
+  const currentPath = page.getByRole("list", {
+    name: "Where new requests go",
+  });
+  await expect(currentPath).toBeVisible();
+  await expect(currentPath.getByText("Work Claude", { exact: true })).toBeVisible();
+  await expect(currentPath.getByText("Work relay", { exact: true })).toBeVisible();
+  await expect(
+    currentPath.getByText("dashscope:glm-5", { exact: true }),
+  ).toBeVisible();
+  await expect(page.getByText("New requests", { exact: true })).toBeVisible();
+  await expect(
+    page.getByText("Presentation: Follow current client (default)", {
+      exact: true,
+    }),
+  ).toBeVisible();
   await expect(
     page.getByText("OpenAI-compatible service", { exact: true }),
   ).toBeVisible();
-  await expect(page.getByText("Model: dashscope:glm-5")).toBeVisible();
   await expect(page.getByText("http://127.0.0.1:23333")).toBeVisible();
   await expect(
     page.getByRole("button", { name: "Add account or route" }),
@@ -143,6 +156,17 @@ test("lists existing tools and creates the next one without asking for a name", 
       session: globalThis.sessionStorage.length,
     })),
   ).toEqual({ local: 0, session: 0 });
+  expect(errors).toEqual([]);
+});
+
+test("opens the evidence trail from the current request path", async ({ page }) => {
+  const errors = collectBrowserErrors(page);
+  await page.goto("/?preview=1#access");
+  await page.getByRole("button", { name: /^Work Claude/u }).click();
+  await page.getByRole("link", { name: "View activity" }).click();
+  await expect(
+    page.getByRole("heading", { level: 1, name: "Activity" }),
+  ).toBeVisible();
   expect(errors).toEqual([]);
 });
 

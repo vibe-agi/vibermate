@@ -952,7 +952,7 @@ describe("Desktop dashboard", () => {
     ).toHaveLength(2);
     expect(screen.getByText("Primary OpenAI")).toBeTruthy();
     expect(screen.getByText("https://primary.example/v1")).toBeTruthy();
-    expect(screen.getByText("Model: gpt-5.4")).toBeTruthy();
+    expect(screen.getByText("gpt-5.4", { exact: true })).toBeTruthy();
     expect(screen.getByText("Account: Primary account")).toBeTruthy();
     expect(screen.getByText("Fallback Responses")).toBeTruthy();
     expect(screen.getByText("https://fallback.example/v1")).toBeTruthy();

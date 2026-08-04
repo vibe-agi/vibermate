@@ -1618,7 +1618,7 @@ dd {
   list-style: none;
 }
 
-.access-upstream-list li {
+.access-upstream-list > li {
   display: grid;
   gap: 0.7rem;
   min-width: 0;
@@ -1628,17 +1628,18 @@ dd {
   background: var(--raised);
 }
 
-.access-upstream-list li.active {
+.access-upstream-list > li.active {
   border-color: var(--allow);
   box-shadow: inset 3px 0 0 var(--allow);
 }
 
-.access-upstream-list li.incomplete {
+.access-upstream-list > li.incomplete {
   border-color: var(--ask);
   background: var(--ask-soft);
 }
 
-.access-upstream-list span {
+.access-route-title > div span,
+.access-route-facts > span {
   overflow-wrap: anywhere;
   color: var(--muted);
   font-size: 0.78rem;
@@ -1696,6 +1697,171 @@ dd {
 .access-route-action {
   display: flex;
   justify-content: flex-end;
+}
+
+.access-upstream-list > li.access-current-path {
+  gap: 1rem;
+  overflow: hidden;
+  border-color: var(--focus-border);
+  border-top: 3px solid var(--signal);
+  border-radius: 11px;
+  padding: 1.05rem;
+  color: var(--focus-text);
+  background: var(--focus-panel);
+  box-shadow: none;
+}
+
+.access-current-path-heading {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 1rem;
+}
+
+.access-current-path-heading > div {
+  display: grid;
+  gap: 0.15rem;
+}
+
+.access-current-path-heading h4,
+.access-current-path-heading p {
+  margin: 0;
+}
+
+.access-current-path-heading h4 {
+  color: var(--focus-text);
+  font-size: 1rem;
+}
+
+.access-current-path-heading p {
+  color: var(--focus-muted);
+  font-size: 0.78rem;
+}
+
+.access-current-path-kicker {
+  color: var(--signal);
+  font-size: 0.68rem;
+  font-weight: 750;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+}
+
+.access-current-path-state {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  border: 1px solid #285c46;
+  border-radius: 999px;
+  padding: 0.3rem 0.55rem;
+  color: #7ce5a7;
+  background: #173228;
+  font-size: 0.72rem;
+  white-space: nowrap;
+}
+
+.access-current-path-state .state-dot {
+  width: 7px;
+  height: 7px;
+  background: #45c979;
+}
+
+.access-current-path-flow {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 1.8rem;
+}
+
+.access-current-path-node {
+  position: relative;
+  display: grid;
+  min-width: 0;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: 0.65rem;
+  align-items: center;
+  border: 1px solid var(--focus-border);
+  border-radius: 9px;
+  padding: 0.75rem;
+  background: var(--focus-raised);
+}
+
+.access-current-path-node:not(:last-child)::after {
+  position: absolute;
+  right: -1.35rem;
+  color: var(--signal);
+  content: "→";
+  font-size: 1rem;
+  font-weight: 750;
+}
+
+.access-current-path-node > div {
+  display: grid;
+  min-width: 0;
+  gap: 0.05rem;
+}
+
+.access-current-path-node > div > span,
+.access-current-path-node small {
+  overflow-wrap: anywhere;
+  color: var(--focus-muted);
+  font-size: 0.68rem;
+}
+
+.access-current-path-node strong {
+  overflow-wrap: anywhere;
+  color: var(--focus-text);
+  font-size: 0.82rem;
+}
+
+.access-current-path-vibermate {
+  display: grid;
+  width: 36px;
+  height: 36px;
+  place-items: center;
+  border: 1px solid #237b88;
+  border-radius: 10px;
+  color: #9aeaf1;
+  background: #163136;
+  font-family: var(--mono);
+  font-size: 0.66rem;
+  font-weight: 800;
+}
+
+.access-current-path-evidence {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(180px, 1fr) auto;
+  gap: 0.8rem;
+  align-items: center;
+  border-top: 1px solid var(--focus-border);
+  padding-top: 0.85rem;
+}
+
+.access-current-path-evidence > div {
+  display: flex;
+  min-width: 0;
+  flex-wrap: wrap;
+  gap: 0.3rem 0.7rem;
+}
+
+.access-current-path-evidence span,
+.access-current-path-evidence p {
+  margin: 0;
+  overflow-wrap: anywhere;
+  color: var(--focus-muted);
+  font-size: 0.7rem;
+}
+
+.access-current-path-evidence .identifier {
+  max-width: 100%;
+  color: var(--focus-muted);
+}
+
+.access-current-path-evidence .route-action {
+  min-height: 34px;
+  border-color: var(--focus-border);
+  color: var(--focus-text);
+  background: transparent;
+  font-size: 0.72rem;
+  white-space: nowrap;
 }
 
 .access-candidate-form {
@@ -2676,8 +2842,26 @@ dd {
   }
 
   .access-route-heading,
-  .access-candidate-form-heading {
+  .access-candidate-form-heading,
+  .access-current-path-heading {
     flex-direction: column;
+  }
+
+  .access-current-path-flow,
+  .access-current-path-evidence {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .access-current-path-node:not(:last-child)::after {
+    right: auto;
+    bottom: -1.5rem;
+    left: 50%;
+    content: "↓";
+    transform: translateX(-50%);
+  }
+
+  .access-current-path-evidence .route-action {
+    justify-self: start;
   }
 
   .access-route-title {

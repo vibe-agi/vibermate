@@ -2124,6 +2124,115 @@ interface PendingAccessCandidate {
   readonly phase: "secret" | "activate";
 }
 
+function AccessCurrentPath({
+  account,
+  access,
+  model,
+  profile,
+  provider,
+  target,
+  toolName,
+}: {
+  readonly account?: AccessDetail["accountBindings"][number];
+  readonly access: AccessDirectoryItem;
+  readonly model: string;
+  readonly profile: AccessDetail["profiles"][number];
+  readonly provider: AccessCandidateProvider;
+  readonly target: AccessDetail["providerTargets"][number];
+  readonly toolName: string;
+}) {
+  const { t } = useTranslation();
+  const accessPreset = accessPresetForItem(access);
+  const official = provider === "anthropic" || provider === "openai";
+  return (
+    <>
+      <div className="access-current-path-heading">
+        <div>
+          <span className="access-current-path-kicker">
+            {t("access.path.eyebrow")}
+          </span>
+          <h4>{t("access.path.title")}</h4>
+          <p>{t("access.path.description")}</p>
+        </div>
+        <span className="access-current-path-state">
+          <span className="state-dot" aria-hidden="true" />
+          {t("access.path.newRequests")}
+        </span>
+      </div>
+      <div
+        aria-label={t("access.path.title")}
+        className="access-current-path-flow"
+        role="list"
+      >
+        <div className="access-current-path-node" role="listitem">
+          <span
+            className={`access-app-mark ${accessPreset}`}
+            aria-hidden="true"
+          >
+            <AccessAppIcon preset={accessPreset} />
+          </span>
+          <div>
+            <span>{t("access.path.tool")}</span>
+            <strong>{toolName}</strong>
+            <small>{t(`access.dialect.${access.clientDialect}`)}</small>
+          </div>
+        </div>
+        <div className="access-current-path-node" role="listitem">
+          <span className="access-current-path-vibermate" aria-hidden="true">
+            {t("app.mark")}
+          </span>
+          <div>
+            <span>{t("access.path.route")}</span>
+            <strong>{profile.name}</strong>
+            <small>
+              {t("access.candidates.account", {
+                name: account?.label ?? profile.name,
+              })}
+            </small>
+          </div>
+        </div>
+        <div className="access-current-path-node" role="listitem">
+          <span
+            className={`access-service-mark ${
+              provider.startsWith("anthropic") ? "anthropic" : "openai"
+            }`}
+            aria-hidden="true"
+          >
+            <AccessProviderIcon provider={provider} />
+          </span>
+          <div>
+            <span>{t("access.path.destination")}</span>
+            <strong>{model}</strong>
+            <small>{t(`access.candidates.provider.${provider}.name`)}</small>
+          </div>
+        </div>
+      </div>
+      <div className="access-current-path-evidence">
+        <div>
+          <span>
+            {t("access.candidates.presentation.summary", {
+              presentation: t(
+                profile.upstreamWireProfileRef === "claude-code"
+                  ? "access.candidates.presentation.claudeCode"
+                  : "access.candidates.presentation.followClient",
+              ),
+            })}
+          </span>
+          {!official && <span className="identifier">{target.origin}</span>}
+        </div>
+        <p>{t("access.path.observation")}</p>
+        <Link
+          className="route-action"
+          search={{}}
+          to={dashboardRoutePaths.activity}
+        >
+          {t("access.path.activityAction")}
+        </Link>
+      </div>
+    </>
+  );
+}
+
 function AccessPanel({
   actions,
   busy,
@@ -2511,6 +2620,27 @@ function AccessPanel({
   const selectedActiveProfile = selectedDetail?.profiles.find(
     ({ id }) => id === selectedActiveProfileId,
   );
+  const selectedActiveTarget = selectedDetail?.providerTargets.find(
+    ({ id }) => id === selectedActiveProfile?.targetId,
+  );
+  const selectedActiveAccount = selectedDetail?.accountBindings.find(
+    ({ enabled, id, profileId }) =>
+      enabled &&
+      id === selectedActiveProfile?.defaultAccountBindingId &&
+      profileId === selectedActiveProfile?.id,
+  );
+  const selectedActiveModel =
+    selectedActiveProfile?.defaultModelPolicy.mode === "fixed"
+      ? selectedActiveProfile.defaultModelPolicy.fixedModel
+      : selectedActiveProfile === undefined
+        ? undefined
+        : t(
+            `access.modelPolicy.${selectedActiveProfile.defaultModelPolicy.mode}`,
+          );
+  const selectedActiveProvider =
+    selectedActiveTarget === undefined
+      ? undefined
+      : candidateProviderForTarget(selectedActiveTarget);
   const creationDestinationPresets: readonly AccessDestinationPreset[] =
     accessPreset === "codex"
       ? ["openai", "custom"]
@@ -3310,62 +3440,83 @@ function AccessPanel({
                   const anthropicProvider = provider.startsWith("anthropic");
                   return (
                     <li
-                      className={`${active ? "active" : ""} ${
+                      className={`${active ? "active access-current-path" : ""} ${
                         ready ? "" : "incomplete"
                       }`}
                       key={profile.id}
                     >
-                      <div className="access-route-title">
-                        <span
-                          className={`access-service-mark ${
-                            anthropicProvider ? "anthropic" : "openai"
-                          }`}
-                          aria-hidden="true"
-                        >
-                          <AccessProviderIcon provider={provider} />
-                        </span>
-                        <div>
-                          <strong>{profile.name}</strong>
-                          <span>
-                            {t(`access.candidates.provider.${provider}.name`)}
-                          </span>
-                        </div>
-                        <span
-                          className={`access-route-state ${
-                            active ? "active" : ready ? "ready" : "incomplete"
-                          }`}
-                        >
-                          {t(
-                            active
-                              ? "access.candidates.state.active"
-                              : ready
-                                ? "access.candidates.state.ready"
-                                : "access.candidates.state.incomplete",
-                          )}
-                        </span>
-                      </div>
-                      <div className="access-route-facts">
-                        <span>{t("access.upstreams.model", { model })}</span>
-                        <span>
-                          {t("access.candidates.presentation.summary", {
-                            presentation: t(
-                              profile.upstreamWireProfileRef === "claude-code"
-                                ? "access.candidates.presentation.claudeCode"
-                                : "access.candidates.presentation.followClient",
-                            ),
-                          })}
-                        </span>
-                        <span>
-                          {t("access.candidates.account", {
-                            name:
-                              accounts.map(({ label }) => label).join(", ") ||
-                              profile.name,
-                          })}
-                        </span>
-                        {target !== undefined && !official && (
-                          <span className="identifier">{target.origin}</span>
-                        )}
-                      </div>
+                      {active &&
+                      selectedAccess !== undefined &&
+                      selectedActiveProfile !== undefined &&
+                      selectedActiveTarget !== undefined &&
+                      selectedActiveProvider !== undefined &&
+                      selectedActiveModel !== undefined ? (
+                        <AccessCurrentPath
+                          {...(selectedActiveAccount === undefined
+                            ? {}
+                            : { account: selectedActiveAccount })}
+                          access={selectedAccess}
+                          model={selectedActiveModel}
+                          profile={selectedActiveProfile}
+                          provider={selectedActiveProvider}
+                          target={selectedActiveTarget}
+                          toolName={displayAccessName(selectedAccess)}
+                        />
+                      ) : (
+                        <>
+                          <div className="access-route-title">
+                            <span
+                              className={`access-service-mark ${
+                                anthropicProvider ? "anthropic" : "openai"
+                              }`}
+                              aria-hidden="true"
+                            >
+                              <AccessProviderIcon provider={provider} />
+                            </span>
+                            <div>
+                              <strong>{profile.name}</strong>
+                              <span>
+                                {t(`access.candidates.provider.${provider}.name`)}
+                              </span>
+                            </div>
+                            <span
+                              className={`access-route-state ${
+                                active ? "active" : ready ? "ready" : "incomplete"
+                              }`}
+                            >
+                              {t(
+                                active
+                                  ? "access.candidates.state.active"
+                                  : ready
+                                    ? "access.candidates.state.ready"
+                                    : "access.candidates.state.incomplete",
+                              )}
+                            </span>
+                          </div>
+                          <div className="access-route-facts">
+                            <span>{t("access.upstreams.model", { model })}</span>
+                            <span>
+                              {t("access.candidates.presentation.summary", {
+                                presentation: t(
+                                  profile.upstreamWireProfileRef === "claude-code"
+                                    ? "access.candidates.presentation.claudeCode"
+                                    : "access.candidates.presentation.followClient",
+                                ),
+                              })}
+                            </span>
+                            <span>
+                              {t("access.candidates.account", {
+                                name:
+                                  accounts.map(({ label }) => label).join(", ") ||
+                                  profile.name,
+                              })}
+                            </span>
+                            {target !== undefined && !official && (
+                              <span className="identifier">{target.origin}</span>
+                            )}
+                          </div>
+                        </>
+                      )}
                       {!active && (
                         <div className="access-route-action">
                           <button
