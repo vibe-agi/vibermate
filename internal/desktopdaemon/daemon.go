@@ -155,6 +155,7 @@ func classifyStartupFailure(err error) desktopbootstrap.Failure {
 	case errors.Is(err, runtimepersistence.ErrSchemaNewerThanBinary):
 		reason = desktopbootstrap.FailureStorageSchemaNewer
 	case errors.Is(err, runtimepersistence.ErrInvalidDatabasePath),
+		errors.Is(err, runtimepersistence.ErrSchemaBaselineMismatch),
 		errors.Is(err, runtimepersistence.ErrSchemaNotInitialized),
 		errors.Is(err, runtimepersistence.ErrSchemaRevisionMismatch):
 		reason = desktopbootstrap.FailureStorageUnavailable

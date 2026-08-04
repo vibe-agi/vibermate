@@ -4,69 +4,15 @@ import (
 	"context"
 	"database/sql"
 	"errors"
-	"io"
-	"io/fs"
-	"log/slog"
-	"os"
 	"path/filepath"
 	"testing"
 
-	"github.com/pressly/goose/v3"
 	"github.com/vibe-agi/vibermate/internal/access"
 	"github.com/vibe-agi/vibermate/internal/certidentity"
 	"github.com/vibe-agi/vibermate/internal/operationcatalog"
 )
 
 var errInjectedCommitResult = errors.New("injected commit result error")
-
-func TestExecutablePlanMigrationUpgradesFoundationSchema(t *testing.T) {
-	t.Parallel()
-
-	databasePath := filepath.Join(t.TempDir(), "data", "runtime.db")
-	if err := os.MkdirAll(filepath.Dir(databasePath), 0o700); err != nil {
-		t.Fatalf("create foundation data directory: %v", err)
-	}
-	database := sql.OpenDB(newSQLiteConnector(databasePath, DefaultBusyTimeout))
-	database.SetMaxOpenConns(1)
-	database.SetMaxIdleConns(1)
-	migrations, err := fs.Sub(migrationFiles, "migrations")
-	if err != nil {
-		t.Fatalf("open embedded migrations: %v", err)
-	}
-	provider, err := goose.NewProvider(
-		goose.DialectSQLite3,
-		database,
-		migrations,
-		goose.WithSlog(slog.New(slog.NewTextHandler(io.Discard, nil))),
-	)
-	if err != nil {
-		t.Fatalf("construct foundation migration provider: %v", err)
-	}
-	if _, err := provider.UpTo(context.Background(), 2); err != nil {
-		t.Fatalf("create schema revision 2 fixture: %v", err)
-	}
-	if err := database.Close(); err != nil {
-		t.Fatalf("close schema revision 2 fixture: %v", err)
-	}
-
-	store := openTestStore(t, databasePath)
-	defer shutdownTestStore(t, store)
-	state, err := store.SchemaStateReader().ReadSchemaState(context.Background())
-	if err != nil {
-		t.Fatalf("read upgraded schema state: %v", err)
-	}
-	if state.Revision != 27 {
-		t.Fatalf("upgraded schema revision = %d, want 27", state.Revision)
-	}
-	mutation := accessMutation(t, "access-upgraded", 0, "Upgraded")
-	result, err := store.AccessRepository().CompareAndSwap(
-		context.Background(),
-		mutation,
-	)
-	if err != nil || result.Outcome != access.CommitOutcomeCommitted {
-		t.Fatalf("write Access after schema upgrade result=%+v err=%v", result, err)
-	}
-}
 
 func TestAccessRepositoryPersistsWholeAggregateWithCAS(t *testing.T) {
 	t.Parallel()

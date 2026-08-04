@@ -127,20 +127,56 @@ func TestSQLiteStoreRejectsFutureGooseHistoryBeforeMigrations(t *testing.T) {
 	}
 }
 
+func TestSQLiteStoreRejectsThePreBaselineDevelopmentSchema(t *testing.T) {
+	t.Parallel()
+	databasePath := filepath.Join(t.TempDir(), "runtime.db")
+	seedGooseHistory(t, databasePath, 1, true)
+	database := sql.OpenDB(newSQLiteConnector(databasePath, DefaultBusyTimeout))
+	database.SetMaxOpenConns(1)
+	database.SetMaxIdleConns(1)
+	if _, err := database.ExecContext(
+		context.Background(),
+		`CREATE TABLE runtime_metadata (
+			singleton INTEGER PRIMARY KEY NOT NULL CHECK (singleton = 1),
+			initialized_at TEXT NOT NULL
+		) STRICT;
+		INSERT INTO runtime_metadata (singleton, initialized_at)
+		VALUES (1, '2026-08-04T00:00:00Z')`,
+	); err != nil {
+		_ = database.Close()
+		t.Fatalf("create pre-baseline metadata: %v", err)
+	}
+	if err := database.Close(); err != nil {
+		t.Fatalf("close pre-baseline fixture: %v", err)
+	}
+
+	store, err := Open(context.Background(), Options{
+		DatabasePath:           databasePath,
+		BusyTimeout:            DefaultBusyTimeout,
+		CommitReconcileTimeout: DefaultCommitReconcileTimeout,
+	})
+	if store != nil {
+		_ = store.Shutdown(context.Background())
+		t.Fatal("pre-baseline database returned a store")
+	}
+	if !errors.Is(err, ErrSchemaBaselineMismatch) {
+		t.Fatalf("pre-baseline open error = %v", err)
+	}
+}
+
 func TestSchemaRevisionOfSources(t *testing.T) {
 	t.Parallel()
 
 	revision, err := schemaRevisionOfSources([]*goose.Source{
 		{Version: 1},
-		{Version: 4},
-		{Version: 26},
-		{Version: 27},
+		{Version: 2},
+		{Version: 3},
 	})
 	if err != nil {
 		t.Fatalf("derive schema revision: %v", err)
 	}
-	if revision != 27 {
-		t.Fatalf("derived schema revision = %d, want 27", revision)
+	if revision != 3 {
+		t.Fatalf("derived schema revision = %d, want 3", revision)
 	}
 
 	invalidSources := []struct {
@@ -404,10 +440,13 @@ func assertSQLiteTableAbsent(t *testing.T, databasePath string, tableName string
 
 func assertInitialSchemaState(t *testing.T, state SchemaState) {
 	t.Helper()
-	if state.Revision != 27 {
-		t.Fatalf("schema revision = %d, want 27", state.Revision)
+	if state.Revision != 1 {
+		t.Fatalf("schema revision = %d, want 1", state.Revision)
 	}
 	if state.InitializedAt == "" {
 		t.Fatal("schema initialization timestamp is empty")
+	}
+	if state.Identity != currentSchemaIdentity {
+		t.Fatalf("schema identity = %q, want %q", state.Identity, currentSchemaIdentity)
 	}
 }

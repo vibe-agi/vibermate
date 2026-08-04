@@ -10,6 +10,7 @@ import (
 var (
 	ErrSchemaNotInitialized   = errors.New("schema is not initialized")
 	ErrSchemaNewerThanBinary  = errors.New("database schema is newer than this binary")
+	ErrSchemaBaselineMismatch = errors.New("database was created from an unsupported development baseline")
 	ErrSchemaRevisionMismatch = errors.New(
 		"database schema revision does not match embedded migrations",
 	)
@@ -21,8 +22,11 @@ var (
 // application schema does not maintain a duplicate revision counter.
 type SchemaState struct {
 	Revision      int64
+	Identity      string
 	InitializedAt string
 }
+
+const currentSchemaIdentity = "vibermate-runtime-baseline-1"
 
 // DatabaseSettings records connection invariants that must hold on every
 // SQLite connection used by the runtime.
@@ -70,11 +74,18 @@ func (r *Repository) ReadSchemaState(ctx context.Context) (SchemaState, error) {
 	var state SchemaState
 	if err := transaction.QueryRowContext(
 		operationContext,
-		`SELECT initialized_at
+		`SELECT schema_identity, initialized_at
 		 FROM runtime_metadata
 		 WHERE singleton = 1`,
-	).Scan(&state.InitializedAt); err != nil {
-		return SchemaState{}, fmt.Errorf("read runtime metadata: %w", err)
+	).Scan(&state.Identity, &state.InitializedAt); err != nil {
+		return SchemaState{}, fmt.Errorf("%w: read runtime metadata: %v", ErrSchemaBaselineMismatch, err)
+	}
+	if state.Identity != currentSchemaIdentity {
+		return SchemaState{}, fmt.Errorf(
+			"%w: identity %q",
+			ErrSchemaBaselineMismatch,
+			state.Identity,
+		)
 	}
 
 	if err := transaction.QueryRowContext(
