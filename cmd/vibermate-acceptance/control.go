@@ -851,7 +851,8 @@ func (client *controlClient) pendingApprovals(
 	status, problem, err := client.request(
 		ctx,
 		http.MethodGet,
-		"/api/v1/approvals?state=pending&limit=10",
+		"/api/v1/approvals?state=pending&limit="+
+			strconv.Itoa(toolapproval.MaxPageSize),
 		false,
 		nil,
 		nil,
@@ -893,6 +894,37 @@ func (client *controlClient) allowOnce(
 	if status != http.StatusOK {
 		return toolapproval.View{}, fmt.Errorf(
 			"allow approval failed: %s",
+			problem.ReasonCode,
+		)
+	}
+	return view, nil
+}
+
+func (client *controlClient) denyOnce(
+	ctx context.Context,
+	approval toolapproval.View,
+) (toolapproval.View, error) {
+	expected := approval.Revision
+	var view toolapproval.View
+	status, problem, err := client.request(
+		ctx,
+		http.MethodPost,
+		"/api/v1/approvals/"+approval.ID+"/actions/decide",
+		true,
+		&expected,
+		desktopcontrol.ApprovalDecisionInput{
+			Decision:   toolapproval.DecisionDeny,
+			Scope:      toolapproval.ScopeRequest,
+			ReasonCode: "acceptance_followup_denied",
+		},
+		&view,
+	)
+	if err != nil {
+		return toolapproval.View{}, err
+	}
+	if status != http.StatusOK {
+		return toolapproval.View{}, fmt.Errorf(
+			"deny approval failed: %s",
 			problem.ReasonCode,
 		)
 	}

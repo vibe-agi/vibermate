@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"maps"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -3103,9 +3104,10 @@ func agentExitedBeforeHeldEgress(
 }
 
 type toolApprovalEvidence struct {
-	ClientID acceptanceClientID
-	ToolName string
-	Approved bool
+	ClientID        acceptanceClientID
+	ToolName        string
+	Approved        bool
+	DeniedFollowups int
 }
 
 func (evidence toolApprovalEvidence) reportDetail() (string, error) {
@@ -3126,8 +3128,15 @@ func (evidence toolApprovalEvidence) reportDetail() (string, error) {
 			"tool approval evidence does not match the selected client",
 		)
 	}
-	return evidence.ToolName +
-		" remained behind the durable allow-once barrier and produced the bounded proof file", nil
+	detail := evidence.ToolName +
+		" remained behind the durable allow-once barrier and produced the bounded proof file"
+	if evidence.DeniedFollowups > 0 {
+		detail += fmt.Sprintf(
+			"; %d follow-up tool attempt(s) were separately denied",
+			evidence.DeniedFollowups,
+		)
+	}
+	return detail, nil
 }
 
 func runToolApproval(
@@ -3146,6 +3155,14 @@ func runToolApproval(
 	)
 	if err != nil {
 		return toolApprovalEvidence{}, err
+	}
+	baselinePage, err := generation.control.pendingApprovals(ctx)
+	if err != nil {
+		return toolApprovalEvidence{}, err
+	}
+	baselineApprovals := make(map[string]struct{}, len(baselinePage.Items))
+	for _, approval := range baselinePage.Items {
+		baselineApprovals[approval.ID] = struct{}{}
 	}
 	run, err := startAgent(
 		config,
@@ -3176,7 +3193,14 @@ func runToolApproval(
 			statErr,
 		)
 	}
-	approval, err := waitForApproval(ctx, generation.control, run)
+	approval, err := waitForToolApproval(
+		ctx,
+		generation.control,
+		run,
+		baselineApprovals,
+		config.accessID,
+		spec.toolName,
+	)
 	if err != nil {
 		return toolApprovalEvidence{}, err
 	}
@@ -3205,9 +3229,18 @@ func runToolApproval(
 			resolved,
 		)
 	}
+	knownApprovals := maps.Clone(baselineApprovals)
+	knownApprovals[approval.ID] = struct{}{}
 	waitContext, cancel := context.WithTimeout(ctx, 3*time.Minute)
 	defer cancel()
-	exitCode, err := run.wait(waitContext)
+	exitCode, deniedFollowups, err := waitForToolCompletion(
+		waitContext,
+		generation.control,
+		run,
+		knownApprovals,
+		config.accessID,
+		spec.toolName,
+	)
 	if err != nil || exitCode != 0 {
 		return toolApprovalEvidence{}, agentProcessFailure(
 			"tool",
@@ -3217,7 +3250,7 @@ func runToolApproval(
 		)
 	}
 	_, _, toolUses, marker := run.evidence()
-	if toolUses == 0 || !marker {
+	if toolUses != 1 || !marker {
 		return toolApprovalEvidence{}, fmt.Errorf(
 			"tool approval evidence toolUses=%d marker=%t",
 			toolUses,
@@ -3228,9 +3261,10 @@ func runToolApproval(
 		return toolApprovalEvidence{}, err
 	}
 	evidence := toolApprovalEvidence{
-		ClientID: config.clientID,
-		ToolName: spec.toolName,
-		Approved: true,
+		ClientID:        config.clientID,
+		ToolName:        spec.toolName,
+		Approved:        true,
+		DeniedFollowups: deniedFollowups,
 	}
 	if _, err := evidence.reportDetail(); err != nil {
 		return toolApprovalEvidence{}, err
@@ -3346,10 +3380,13 @@ func agentProcessFailure(
 	return errors.New(message)
 }
 
-func waitForApproval(
+func waitForToolApproval(
 	ctx context.Context,
 	control *controlClient,
 	run *agentRun,
+	baseline map[string]struct{},
+	accessID string,
+	toolName string,
 ) (toolapproval.View, error) {
 	ticker := time.NewTicker(50 * time.Millisecond)
 	defer ticker.Stop()
@@ -3358,11 +3395,17 @@ func waitForApproval(
 		if err != nil {
 			return toolapproval.View{}, err
 		}
-		if len(page.Items) != 0 {
-			slices.SortFunc(page.Items, func(left, right toolapproval.View) int {
-				return left.CreatedAt.Compare(right.CreatedAt)
-			})
-			return page.Items[0], nil
+		approval, found, err := selectToolApproval(
+			page,
+			baseline,
+			accessID,
+			toolName,
+		)
+		if err != nil {
+			return toolapproval.View{}, err
+		}
+		if found {
+			return approval, nil
 		}
 		select {
 		case <-ticker.C:
@@ -3370,6 +3413,94 @@ func waitForApproval(
 			return toolapproval.View{}, ctx.Err()
 		case <-run.done:
 			return toolapproval.View{}, agentExitedBeforeApproval(ctx, run)
+		}
+	}
+}
+
+func selectToolApproval(
+	page toolapproval.Page,
+	baseline map[string]struct{},
+	accessID string,
+	toolName string,
+) (toolapproval.View, bool, error) {
+	items := append([]toolapproval.View(nil), page.Items...)
+	slices.SortFunc(items, func(left, right toolapproval.View) int {
+		return left.CreatedAt.Compare(right.CreatedAt)
+	})
+	for _, approval := range items {
+		if _, existed := baseline[approval.ID]; existed ||
+			approval.Kind != string(toolapproval.KindToolIntent) ||
+			approval.AccessID != accessID {
+			continue
+		}
+		if approval.State != toolapproval.StatePending ||
+			approval.ExchangeID == "" ||
+			approval.PlanRevision == 0 ||
+			len(approval.PlanHash) != 64 {
+			return toolapproval.View{}, false, errors.New(
+				"new tool approval is missing its active request binding",
+			)
+		}
+		if len(approval.SubjectLabels) != 1 ||
+			approval.SubjectLabels[0] != toolName {
+			return toolapproval.View{}, false, fmt.Errorf(
+				"new tool approval subjects are %v, want %q",
+				approval.SubjectLabels,
+				toolName,
+			)
+		}
+		return approval, true, nil
+	}
+	return toolapproval.View{}, false, nil
+}
+
+func waitForToolCompletion(
+	ctx context.Context,
+	control *controlClient,
+	run *agentRun,
+	known map[string]struct{},
+	accessID string,
+	toolName string,
+) (int, int, error) {
+	ticker := time.NewTicker(50 * time.Millisecond)
+	defer ticker.Stop()
+	denied := 0
+	for {
+		page, err := control.pendingApprovals(ctx)
+		if err != nil {
+			return -1, denied, err
+		}
+		approval, found, err := selectToolApproval(
+			page,
+			known,
+			accessID,
+			toolName,
+		)
+		if err != nil {
+			return -1, denied, err
+		}
+		if found {
+			known[approval.ID] = struct{}{}
+			resolved, denyErr := control.denyOnce(ctx, approval)
+			if denyErr != nil {
+				return -1, denied, denyErr
+			}
+			if resolved.State != toolapproval.StateDenied {
+				return -1, denied, fmt.Errorf(
+					"follow-up tool approval did not resolve denied: %+v",
+					resolved,
+				)
+			}
+			denied++
+			continue
+		}
+		select {
+		case <-ticker.C:
+		case <-ctx.Done():
+			return -1, denied, ctx.Err()
+		case <-run.done:
+			exitCode, waitErr := run.wait(ctx)
+			return exitCode, denied, waitErr
 		}
 	}
 }

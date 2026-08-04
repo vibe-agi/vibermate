@@ -17,6 +17,7 @@ import (
 	"github.com/vibe-agi/vibermate/internal/connectionevent"
 	"github.com/vibe-agi/vibermate/internal/exchange"
 	"github.com/vibe-agi/vibermate/internal/offlinehold"
+	"github.com/vibe-agi/vibermate/internal/toolapproval"
 )
 
 func TestDeterministicProducerMatchesTheCurrentVerifierCheckContract(t *testing.T) {
@@ -638,6 +639,71 @@ func TestAcceptancePhasesAlwaysIsolateConfiguredSecretReference(t *testing.T) {
 				credentialed.AccountBindings,
 			)
 		}
+	}
+}
+
+func TestToolApprovalSelectionIgnoresOtherKindsAndPreexistingRows(t *testing.T) {
+	t.Parallel()
+
+	current := toolapproval.View{
+		ID:            "approval-current",
+		Kind:          string(toolapproval.KindToolIntent),
+		State:         toolapproval.StatePending,
+		ExchangeID:    "exchange-current",
+		AccessID:      "Acc-001",
+		PlanRevision:  1,
+		PlanHash:      strings.Repeat("a", 64),
+		SubjectLabels: []string{"exec"},
+		CreatedAt:     time.Unix(3, 0),
+	}
+	page := toolapproval.Page{Items: []toolapproval.View{
+		current,
+		{
+			ID:            "approval-network",
+			Kind:          string(toolapproval.KindNetworkAsk),
+			State:         toolapproval.StatePending,
+			SubjectLabels: []string{"chatgpt.com"},
+			CreatedAt:     time.Unix(1, 0),
+		},
+		{
+			ID:            "approval-old-tool",
+			Kind:          string(toolapproval.KindToolIntent),
+			State:         toolapproval.StatePending,
+			ExchangeID:    "exchange-old",
+			AccessID:      "Acc-001",
+			PlanRevision:  1,
+			PlanHash:      strings.Repeat("b", 64),
+			SubjectLabels: []string{"exec"},
+			CreatedAt:     time.Unix(2, 0),
+		},
+	}}
+	selected, found, err := selectToolApproval(
+		page,
+		map[string]struct{}{"approval-old-tool": {}},
+		"Acc-001",
+		"exec",
+	)
+	if err != nil || !found || selected.ID != current.ID {
+		t.Fatalf("selected approval = %+v found=%t err=%v", selected, found, err)
+	}
+
+	wrong := current
+	wrong.SubjectLabels = []string{"shell"}
+	if _, _, err := selectToolApproval(
+		toolapproval.Page{Items: []toolapproval.View{wrong}},
+		nil,
+		"Acc-001",
+		"exec",
+	); err == nil {
+		t.Fatal("a new tool approval for a different tool was ignored")
+	}
+	if _, found, err := selectToolApproval(
+		toolapproval.Page{Items: page.Items[1:2]},
+		nil,
+		"Acc-001",
+		"exec",
+	); err != nil || found {
+		t.Fatalf("network-only page found=%t err=%v", found, err)
 	}
 }
 
