@@ -113,6 +113,14 @@ test("lists existing tools and creates the next one without asking for a name", 
     page.getByText("OpenAI-compatible service", { exact: true }),
   ).toBeVisible();
   await expect(page.getByText("http://127.0.0.1:23333")).toBeVisible();
+  const launch = page.locator(".access-launch-panel");
+  await expect(
+    launch.getByRole("heading", { name: "Start Work Claude" }),
+  ).toBeVisible();
+  await expect(
+    launch.getByText("vibermate run -- claude", { exact: true }),
+  ).toBeVisible();
+  await expect(launch.getByText("Desktop only", { exact: true })).toBeVisible();
   await expect(
     page.getByRole("button", { name: "Add account or route" }),
   ).toBeEnabled();
@@ -149,6 +157,12 @@ test("lists existing tools and creates the next one without asking for a name", 
   await expect(personal).toContainText("Configured");
   await expect(
     page.getByText("The connection was saved and enabled."),
+  ).toBeVisible();
+  await expect(
+    launch.getByRole("heading", { name: "Start Codex" }),
+  ).toBeVisible();
+  await expect(
+    launch.getByText("vibermate run -- codex", { exact: true }),
   ).toBeVisible();
   expect(
     await page.evaluate(() => ({

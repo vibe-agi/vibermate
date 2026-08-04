@@ -75,6 +75,7 @@ import {
   type DashboardView,
   viewFromPathname,
 } from "./navigation.ts";
+import { shellQuoted, terminalRunCommand } from "./terminal-command.ts";
 
 interface DashboardRuntime {
   readonly actions: DashboardActions;
@@ -397,14 +398,19 @@ export function OverviewRoutePage() {
 
 export function AccessRoutePage() {
   const { t } = useTranslation();
-  const { actions, model, state } = useDashboardRuntime();
+  const { actions, model, preview, state } = useDashboardRuntime();
   return (
     <>
       <PageHeading
         description={t("page.access.description")}
         title={t("page.access.title")}
       />
-      <AccessPanel actions={actions} busy={state.busy} model={model} />
+      <AccessPanel
+        actions={actions}
+        busy={state.busy}
+        model={model}
+        preview={preview}
+      />
     </>
   );
 }
@@ -1067,12 +1073,20 @@ export function SettingsRoutePage() {
 
 type TerminalCommandMutation = "install" | "refresh" | "remove";
 
-function TerminalCommandPanel({ preview }: { readonly preview: boolean }) {
-  const { t } = useTranslation();
+interface TerminalCommandController {
+  readonly busy: boolean;
+  readonly failed: boolean;
+  readonly markFailed: () => void;
+  readonly mutate: (operation: TerminalCommandMutation) => Promise<void>;
+  readonly status: TerminalCommandStatus | undefined;
+}
+
+function useTerminalCommand(
+  preview: boolean,
+): TerminalCommandController {
   const [status, setStatus] = useState<TerminalCommandStatus>();
   const [busy, setBusy] = useState(false);
   const [failed, setFailed] = useState(false);
-  const [copied, setCopied] = useState(false);
 
   useEffect(() => {
     if (preview) {
@@ -1097,7 +1111,7 @@ function TerminalCommandPanel({ preview }: { readonly preview: boolean }) {
     };
   }, [preview]);
 
-  const mutate = async (operation: TerminalCommandMutation) => {
+  const mutate = useCallback(async (operation: TerminalCommandMutation) => {
     setBusy(true);
     setFailed(false);
     try {
@@ -1112,7 +1126,22 @@ function TerminalCommandPanel({ preview }: { readonly preview: boolean }) {
     } finally {
       setBusy(false);
     }
+  }, []);
+
+  return {
+    busy,
+    failed,
+    markFailed: () => setFailed(true),
+    mutate,
+    status,
   };
+}
+
+function TerminalCommandPanel({ preview }: { readonly preview: boolean }) {
+  const { t } = useTranslation();
+  const { busy, failed, markFailed, mutate, status } =
+    useTerminalCommand(preview);
+  const [copied, setCopied] = useState(false);
 
   const commandPath =
     status?.state === "current" ? status.targetPath : status?.sourcePath;
@@ -1125,7 +1154,7 @@ function TerminalCommandPanel({ preview }: { readonly preview: boolean }) {
       setCopied(true);
       globalThis.setTimeout(() => setCopied(false), 2_000);
     } catch {
-      setFailed(true);
+      markFailed();
     }
   };
 
@@ -1216,10 +1245,6 @@ function TerminalCommandPanel({ preview }: { readonly preview: boolean }) {
       )}
     </section>
   );
-}
-
-function shellQuoted(value: string): string {
-  return `'${value.replaceAll("'", `'"'"'`)}'`;
 }
 
 function NavGroup({
@@ -2233,14 +2258,184 @@ function AccessCurrentPath({
   );
 }
 
+function AccessLaunchPanel({
+  preset,
+  preview,
+  toolName,
+}: {
+  readonly preset: Exclude<AccessAppPreset, "custom">;
+  readonly preview: boolean;
+  readonly toolName: string;
+}) {
+  const { t } = useTranslation();
+  const { busy, failed, markFailed, mutate, status } =
+    useTerminalCommand(preview);
+  const [copied, setCopied] = useState(false);
+  const executable = preset === "claude" ? "claude" : "codex";
+  const exampleCommand = `vibermate run -- ${executable}`;
+  const command =
+    status?.state === "current"
+      ? terminalRunCommand(status.targetPath, executable)
+      : undefined;
+
+  useEffect(() => {
+    setCopied(false);
+  }, [executable]);
+
+  const copyCommand = async () => {
+    if (command === undefined) {
+      return;
+    }
+    try {
+      await navigator.clipboard.writeText(command);
+      setCopied(true);
+      globalThis.setTimeout(() => setCopied(false), 2_000);
+    } catch {
+      markFailed();
+    }
+  };
+
+  const stateKey = preview
+    ? "terminalCommand.state.desktopOnly"
+    : failed
+      ? "terminalCommand.state.unavailable"
+      : status === undefined
+        ? "common.data.loading"
+        : `terminalCommand.state.${status.state}`;
+  const needsSettings =
+    failed ||
+    (status !== undefined &&
+      !["current", "not_installed", "source_updated"].includes(status.state));
+
+  return (
+    <section className="access-launch-panel">
+      <div className="access-launch-heading">
+        <div>
+          <span className="access-launch-eyebrow">
+            {t("access.launch.eyebrow")}
+          </span>
+          <h3>{t("access.launch.title", { tool: toolName })}</h3>
+          <p>{t("access.launch.description")}</p>
+        </div>
+        <span
+          className={`terminal-command-state ${
+            preview ? "desktopOnly" : status?.state ?? "loading"
+          }`}
+        >
+          {t(stateKey)}
+        </span>
+      </div>
+      <div className="access-launch-runway">
+        <span aria-hidden="true" className="access-launch-prompt">
+          &gt;_
+        </span>
+        {preview ? (
+          <div className="access-launch-preview">
+            <span>{t("access.launch.command.example")}</span>
+            <code>{exampleCommand}</code>
+            <small>{t("access.launch.preview")}</small>
+          </div>
+        ) : command !== undefined ? (
+          <div className="access-launch-command">
+            <label htmlFor={`access-launch-command-${preset}`}>
+              {t("access.launch.command.label")}
+            </label>
+            <input
+              id={`access-launch-command-${preset}`}
+              readOnly
+              spellCheck={false}
+              value={command}
+            />
+          </div>
+        ) : (
+          <div className="access-launch-setup">
+            <strong>
+              {t(
+                status?.state === "not_installed"
+                  ? "access.launch.setup.notInstalled.title"
+                  : status?.state === "source_updated"
+                    ? "access.launch.setup.update.title"
+                    : needsSettings
+                      ? "access.launch.setup.review.title"
+                      : "access.launch.setup.loading.title",
+              )}
+            </strong>
+            <span>
+              {t(
+                status?.state === "not_installed"
+                  ? "access.launch.setup.notInstalled.detail"
+                  : status?.state === "source_updated"
+                    ? "access.launch.setup.update.detail"
+                    : needsSettings
+                      ? "access.launch.setup.review.detail"
+                      : "access.launch.setup.loading.detail",
+              )}
+            </span>
+          </div>
+        )}
+        <div className="access-launch-actions">
+          {command !== undefined && (
+            <button
+              className="secondary"
+              onClick={() => void copyCommand()}
+              type="button"
+            >
+              {t(copied ? "common.copied" : "access.launch.copy.action")}
+            </button>
+          )}
+          {!preview && status?.state === "not_installed" && (
+            <button
+              disabled={busy}
+              onClick={() => void mutate("install")}
+              type="button"
+            >
+              {t("terminalCommand.install.action")}
+            </button>
+          )}
+          {!preview && status?.state === "source_updated" && (
+            <button
+              disabled={busy}
+              onClick={() => void mutate("refresh")}
+              type="button"
+            >
+              {t("terminalCommand.refresh.action")}
+            </button>
+          )}
+          {!preview && needsSettings && (
+            <Link
+              className="route-action"
+              search={{}}
+              to={dashboardRoutePaths.settings}
+            >
+              {t("access.launch.settings.action")}
+            </Link>
+          )}
+        </div>
+      </div>
+      <div className="access-launch-footer">
+        <p>{t("access.launch.boundary")}</p>
+        <Link
+          className="route-action"
+          search={{}}
+          to={dashboardRoutePaths.activity}
+        >
+          {t("access.launch.activity.action")}
+        </Link>
+      </div>
+    </section>
+  );
+}
+
 function AccessPanel({
   actions,
   busy,
   model,
+  preview,
 }: {
   readonly actions: DashboardActions;
   readonly busy: boolean;
   readonly model: DashboardQueryRuntime;
+  readonly preview: boolean;
 }) {
   const { t } = useTranslation();
   const directory = useAccessDirectory(model);
@@ -2604,6 +2799,10 @@ function AccessPanel({
   const selectedAccess = visibleItems.find(
     ({ accessId }) => accessId === selectedAccessId,
   );
+  const selectedAccessPreset =
+    selectedAccess === undefined
+      ? undefined
+      : accessPresetForItem(selectedAccess);
   const selectedDetail =
     loadedDetail?.access.id === selectedAccess?.accessId
       ? loadedDetail
@@ -3332,6 +3531,18 @@ function AccessPanel({
               <span>{t("credential.saveFailed.detail")}</span>
             </div>
           )}
+          {selectedAccess !== undefined &&
+            selectedStatus === "enabled" &&
+            activePlanAvailable === true &&
+            activeCredential?.secretState === "configured" &&
+            selectedAccessPreset !== undefined &&
+            selectedAccessPreset !== "custom" && (
+              <AccessLaunchPanel
+                preset={selectedAccessPreset}
+                preview={preview}
+                toolName={displayAccessName(selectedAccess)}
+              />
+            )}
           {selectedAccess.description.length > 0 && (
             <div className="access-description">
               <h3>{t("access.description.label")}</h3>

@@ -589,6 +589,9 @@ describe("Desktop dashboard", () => {
       await screen.findByText("Configured", { selector: ".credential-state" }),
     ).toBeTruthy();
     expect(
+      await screen.findByRole("heading", { name: "Start Work" }),
+    ).toBeTruthy();
+    expect(
       (screen.getByLabelText("API Key") as HTMLInputElement).value,
     ).toBe("");
   });
