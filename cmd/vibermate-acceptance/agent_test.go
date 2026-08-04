@@ -67,12 +67,58 @@ func TestAgentEvidenceTrustsOnlyAssistantOutput(t *testing.T) {
 			"index": 1,
 			"content_block": map[string]any{
 				"type": "tool_use",
+				"id":   "tool-use-1",
 				"name": "TodoWrite",
 			},
 		},
 	}))
 	if run.toolUses != 1 {
 		t.Fatalf("tool use count = %d", run.toolUses)
+	}
+	run.observeLine(mustJSON(t, map[string]any{
+		"type": "assistant",
+		"message": map[string]any{
+			"content": []any{
+				map[string]any{
+					"type": "tool_use",
+					"id":   "tool-use-1",
+					"name": "TodoWrite",
+					"input": map[string]any{
+						"nested": map[string]any{
+							"type": "tool_use",
+							"id":   "untrusted-nested-id",
+						},
+					},
+				},
+			},
+		},
+	}))
+	if run.toolUses != 1 {
+		t.Fatalf("duplicate or nested tool evidence count = %d", run.toolUses)
+	}
+}
+
+func TestClaudeToolEvidenceRejectsMissingIdentity(t *testing.T) {
+	t.Parallel()
+
+	run := &agentRun{}
+	run.observeLine(mustJSON(t, map[string]any{
+		"type": "assistant",
+		"message": map[string]any{
+			"content": []any{
+				map[string]any{
+					"type": "tool_use",
+					"name": "Write",
+				},
+			},
+		},
+	}))
+	if run.readErr == nil || run.toolUses != 0 {
+		t.Fatalf(
+			"missing tool identity readErr=%v toolUses=%d",
+			run.readErr,
+			run.toolUses,
+		)
 	}
 }
 

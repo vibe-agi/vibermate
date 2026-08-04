@@ -52,6 +52,7 @@ type agentRun struct {
 	lines      int
 	deltas     int
 	toolUses   int
+	toolUseIDs map[string]struct{}
 	markerSeen bool
 	markerTail string
 	lastType   string
@@ -749,7 +750,20 @@ func (run *agentRun) observeClaudeLine(line []byte) {
 		return
 	}
 	run.deltas += countType(envelope, "content_block_delta")
-	run.toolUses += trustedToolUseCount(envelope)
+	toolUseIDs, err := trustedClaudeToolUseIDs(envelope)
+	if err != nil {
+		run.setReadError(err)
+		return
+	}
+	if len(toolUseIDs) > 0 {
+		if run.toolUseIDs == nil {
+			run.toolUseIDs = make(map[string]struct{})
+		}
+		for _, identifier := range toolUseIDs {
+			run.toolUseIDs[identifier] = struct{}{}
+		}
+		run.toolUses = len(run.toolUseIDs)
+	}
 	run.failure.merge(failureEvidenceFromEnvelope(envelope))
 	if tools, initialized := trustedConfiguredTools(envelope); initialized {
 		run.configurationSeen = true
@@ -1330,16 +1344,59 @@ func (evidence *agentFailureEvidence) merge(candidate agentFailureEvidence) {
 	}
 }
 
-func trustedToolUseCount(value any) int {
+func trustedClaudeToolUseIDs(value any) ([]string, error) {
 	envelope, ok := value.(map[string]any)
 	if !ok {
-		return 0
+		return nil, nil
 	}
 	kind, _ := envelope["type"].(string)
-	if kind != "assistant" && kind != "stream_event" {
-		return 0
+	switch kind {
+	case "assistant":
+		message, _ := envelope["message"].(map[string]any)
+		blocks, _ := message["content"].([]any)
+		identifiers := make([]string, 0, len(blocks))
+		for _, value := range blocks {
+			identifier, found, err := directToolUseID(value)
+			if err != nil {
+				return nil, err
+			}
+			if found {
+				identifiers = append(identifiers, identifier)
+			}
+		}
+		return identifiers, nil
+	case "stream_event":
+		event, _ := envelope["event"].(map[string]any)
+		eventKind, _ := event["type"].(string)
+		if eventKind != "content_block_start" {
+			return nil, nil
+		}
+		identifier, found, err := directToolUseID(event["content_block"])
+		if err != nil || !found {
+			return nil, err
+		}
+		return []string{identifier}, nil
+	default:
+		return nil, nil
 	}
-	return countType(envelope, "tool_use")
+}
+
+func directToolUseID(value any) (string, bool, error) {
+	block, ok := value.(map[string]any)
+	if !ok {
+		return "", false, nil
+	}
+	kind, _ := block["type"].(string)
+	if kind != "tool_use" {
+		return "", false, nil
+	}
+	identifier, _ := block["id"].(string)
+	if identifier == "" || len(identifier) > 512 {
+		return "", false, errors.New(
+			"Claude tool-use evidence omitted its bounded identity",
+		)
+	}
+	return identifier, true, nil
 }
 
 func trustedAssistantText(value any) string {
