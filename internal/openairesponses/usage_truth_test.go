@@ -15,10 +15,10 @@ func knownUsageValue(tokens int64) protocolcore.UsageValue {
 	}
 }
 
-// A backend that cannot report a quadrant must not force the client edge to
-// invent one. input_tokens and output_tokens are the only usage fields the
-// Responses wire always carries, so only those are required.
-func TestResponsesUsageOmitsUnknownDetailsInsteadOfRequiringThem(t *testing.T) {
+// Responses requires cached_tokens when usage is present. A Chat backend that
+// reports only aggregate prompt tokens is represented conservatively as fully
+// uncached; buildResponseWire separately records that approximation.
+func TestResponsesUsageTreatsUnknownCacheReadAsUncached(t *testing.T) {
 	t.Parallel()
 
 	wire, err := encodeResponseUsage(protocolcore.Usage{
@@ -41,11 +41,33 @@ func TestResponsesUsageOmitsUnknownDetailsInsteadOfRequiringThem(t *testing.T) {
 		t.Fatal(err)
 	}
 	details, _ := decoded["input_tokens_details"].(map[string]any)
-	if _, found := details["cached_tokens"]; found {
-		t.Fatalf("unknown cache read was reported: %s", encoded)
+	if value, found := details["cached_tokens"].(float64); !found || value != 0 {
+		t.Fatalf("unknown cache read was not normalized conservatively: %s", encoded)
 	}
 	if _, found := details["cache_write_tokens"]; found {
 		t.Fatalf("unknown cache write was reported: %s", encoded)
+	}
+}
+
+func TestResponsesUsageReportsTheUnknownCacheApproximation(t *testing.T) {
+	t.Parallel()
+
+	request := streamingRequestFixture(t)
+	response := completeResponseFixture(t)
+	response.Usage.CacheRead = protocolcore.UsageValue{}
+	_, report, err := buildResponseWire(request, response)
+	if err != nil {
+		t.Fatal(err)
+	}
+	found := false
+	for _, notice := range report.Notices() {
+		if notice.Code == protocolcore.NoticeCacheReadUsageAssumedUncached &&
+			notice.Path == "$.usage.input_tokens_details.cached_tokens" {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("translation report = %#v", report.Notices())
 	}
 }
 

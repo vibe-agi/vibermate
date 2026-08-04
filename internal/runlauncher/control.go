@@ -41,8 +41,9 @@ type controlClient struct {
 
 func newControlClient(
 	session localdiscovery.Session,
+	timeout time.Duration,
 ) (*controlClient, error) {
-	client, err := loopbackclient.New(session.BaseURL, 10*time.Second)
+	client, err := loopbackclient.New(session.BaseURL, timeout)
 	if err != nil {
 		return nil, err
 	}

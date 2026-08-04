@@ -1188,6 +1188,12 @@ func (p *blockingProjection) ResolveClientOrigin(
 	return p.delegate.ResolveClientOrigin(origin)
 }
 
+func (p *blockingProjection) ResolveDownstreamProtocols(
+	binding access.IngressBinding,
+) ([]access.ApplicationProtocol, error) {
+	return p.delegate.ResolveDownstreamProtocols(binding)
+}
+
 func (p *blockingProjection) AdmitLeaf(
 	intent access.LeafIssuanceIntent,
 ) (access.LeafIssuanceAdmission, error) {
@@ -1264,6 +1270,12 @@ func (p *failingProjection) ResolveClientOrigin(
 	origin access.ClientOrigin,
 ) (access.IngressBinding, error) {
 	return p.delegate.ResolveClientOrigin(origin)
+}
+
+func (p *failingProjection) ResolveDownstreamProtocols(
+	binding access.IngressBinding,
+) ([]access.ApplicationProtocol, error) {
+	return p.delegate.ResolveDownstreamProtocols(binding)
 }
 
 func (p *failingProjection) AdmitLeaf(

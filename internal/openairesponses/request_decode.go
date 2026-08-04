@@ -13,6 +13,7 @@ import (
 
 type requestWire struct {
 	Model             string            `json:"model"`
+	Instructions      *string           `json:"instructions,omitempty"`
 	Input             []json.RawMessage `json:"input"`
 	MaxOutputTokens   *int64            `json:"max_output_tokens,omitempty"`
 	ToolChoice        json.RawMessage   `json:"tool_choice,omitempty"`
@@ -41,6 +42,7 @@ type additionalToolsWire struct {
 
 type inputMessageWire struct {
 	Type             string          `json:"type"`
+	ID               string          `json:"id,omitempty"`
 	Role             string          `json:"role"`
 	Content          json.RawMessage `json:"content"`
 	Phase            string          `json:"phase,omitempty"`
@@ -137,6 +139,11 @@ type namespaceToolWire struct {
 	Tools       []json.RawMessage `json:"tools"`
 }
 
+type webSearchToolWire struct {
+	Type              string `json:"type"`
+	ExternalWebAccess *bool  `json:"external_web_access,omitempty"`
+}
+
 type reasoningWire struct {
 	Context         string `json:"context,omitempty"`
 	Effort          string `json:"effort,omitempty"`
@@ -192,6 +199,15 @@ func (codec *Codec) DecodeClientRequest(
 	}
 
 	report := protocolcore.TranslationReport{}
+	system := make([]protocolcore.ContentBlock, 0, 1)
+	if wire.Instructions != nil {
+		block, err := protocolcore.NewTextBlock(*wire.Instructions)
+		if err != nil {
+			return protocolcore.Request{}, report,
+				invalidClient("$.instructions", err)
+		}
+		system = append(system, block)
+	}
 	messages := make([]protocolcore.Message, 0, len(wire.Input))
 	tools := make([]protocolcore.ToolDefinition, 0, len(wire.Tools))
 	namespaces := make([]protocolcore.ToolNamespace, 0)
@@ -207,9 +223,25 @@ func (codec *Codec) DecodeClientRequest(
 		report = report.Merge(itemReport)
 	}
 	for index, raw := range wire.Tools {
+		path := fmt.Sprintf("$.tools[%d]", index)
+		kind, err := peekType(raw)
+		if err != nil {
+			return protocolcore.Request{}, report, invalidClient(path, err)
+		}
+		if kind == "web_search" {
+			var hosted webSearchToolWire
+			if err := decodeStrict(raw, &hosted); err != nil {
+				return protocolcore.Request{}, report, invalidClient(path, err)
+			}
+			report = report.Merge(notice(
+				protocolcore.NoticeHostedToolNotForwarded,
+				path,
+			))
+			continue
+		}
 		tool, namespace, err := codec.decodeTool(
 			raw,
-			fmt.Sprintf("$.tools[%d]", index),
+			path,
 			true,
 		)
 		if err != nil {
@@ -277,6 +309,7 @@ func (codec *Codec) DecodeClientRequest(
 		EffectiveModel:  wire.Model,
 		MaxOutputTokens: maxOutputTokens,
 		Stream:          wire.Stream,
+		System:          system,
 		Messages:        messages,
 		Tools:           tools,
 		ToolNamespaces:  namespaces,
@@ -399,23 +432,35 @@ func decodeInputMessage(
 				errors.New("Responses assistant phase is unsupported"),
 			)
 	}
+	report := protocolcore.TranslationReport{}
+	if wire.ID != "" {
+		if err := validateBoundedString(wire.ID, 512, false); err != nil {
+			return protocolcore.Message{}, report,
+				invalidClient(path+".id", err)
+		}
+		report = report.Merge(notice(
+			protocolcore.NoticeMessageItemIdentityNotForwarded,
+			path+".id",
+		))
+	}
 	metadataReport, err := decodeInternalMessageMetadata(
 		wire.InternalMetadata,
 		path+".internal_chat_message_metadata_passthrough",
 	)
 	if err != nil {
-		return protocolcore.Message{}, protocolcore.TranslationReport{}, err
+		return protocolcore.Message{}, report, err
 	}
+	report = report.Merge(metadataReport)
 	blocks, err := decodeMessageContent(wire.Content, role, path+".content")
 	if err != nil {
-		return protocolcore.Message{}, protocolcore.TranslationReport{}, err
+		return protocolcore.Message{}, report, err
 	}
 	message := protocolcore.Message{Role: role, Blocks: blocks}
 	if err := message.Validate(); err != nil {
-		return protocolcore.Message{}, protocolcore.TranslationReport{},
+		return protocolcore.Message{}, report,
 			invalidClient(path, err)
 	}
-	return message, metadataReport, nil
+	return message, report, nil
 }
 
 func decodeInternalMessageMetadata(

@@ -162,6 +162,61 @@ func TestDecodeFixedCodexRequestProducesTypedIRAndExplicitNotices(t *testing.T) 
 	}
 }
 
+func TestDecodeCurrentResponsesInstructionsIdentityAndHostedToolHonestly(t *testing.T) {
+	t.Parallel()
+
+	body := []byte(`{
+		"model":"gpt-client-alias",
+		"instructions":"Keep the response exact.",
+		"input":[{
+			"type":"message",
+			"id":"msg_current_1",
+			"role":"user",
+			"content":[{"type":"input_text","text":"Reply with ready."}]
+		}],
+		"tools":[{"type":"web_search","external_web_access":true}],
+		"tool_choice":"auto",
+		"store":false,
+		"stream":true
+	}`)
+	var oracle responses.ResponseNewParams
+	if err := json.Unmarshal(body, &oracle); err != nil {
+		t.Fatalf("official OpenAI SDK rejected fixture: %v", err)
+	}
+
+	request, report, err := newTestCodec(t).DecodeClientRequest(body)
+	if err != nil {
+		t.Fatalf("DecodeClientRequest() error = %v", err)
+	}
+	if len(request.System) != 1 ||
+		request.System[0].Text != "Keep the response exact." ||
+		len(request.Messages) != 1 ||
+		request.Messages[0].Role != protocolcore.RoleUser ||
+		len(request.Tools) != 0 ||
+		len(request.ToolNamespaces) != 0 ||
+		request.ToolChoice.Mode != protocolcore.ToolChoiceAuto {
+		t.Fatalf("decoded request = %#v", request)
+	}
+	for _, code := range []protocolcore.NoticeCode{
+		protocolcore.NoticeMessageItemIdentityNotForwarded,
+		protocolcore.NoticeHostedToolNotForwarded,
+	} {
+		if !reportHasNotice(report, code) {
+			t.Fatalf("translation report = %#v, want %q", report.Notices(), code)
+		}
+	}
+
+	unknownHostedField := []byte(`{
+		"model":"gpt-client-alias",
+		"input":[{"type":"message","role":"user","content":"ready"}],
+		"tools":[{"type":"web_search","silent_passthrough":true}],
+		"stream":true
+	}`)
+	if _, _, err := newTestCodec(t).DecodeClientRequest(unknownHostedField); err == nil {
+		t.Fatal("unknown hosted-tool semantics were silently accepted")
+	}
+}
+
 func TestDecodeResponsesToolHistoryKeepsItemAndCallIdentitiesSeparate(t *testing.T) {
 	t.Parallel()
 

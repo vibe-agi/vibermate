@@ -28,14 +28,15 @@ type Manager struct {
 }
 
 var (
-	_ AggregateCatalog       = (*Manager)(nil)
-	_ Writer                 = (*Manager)(nil)
-	_ SnapshotResolver       = (*Manager)(nil)
-	_ IngressResolver        = (*Manager)(nil)
-	_ LeafIssuanceAdmitter   = (*Manager)(nil)
-	_ IngressCatalogReader   = (*Manager)(nil)
-	_ ProviderProbeCatalog   = (*Manager)(nil)
-	_ ProjectionHealthReader = (*Manager)(nil)
+	_ AggregateCatalog           = (*Manager)(nil)
+	_ Writer                     = (*Manager)(nil)
+	_ SnapshotResolver           = (*Manager)(nil)
+	_ IngressResolver            = (*Manager)(nil)
+	_ DownstreamProtocolResolver = (*Manager)(nil)
+	_ LeafIssuanceAdmitter       = (*Manager)(nil)
+	_ IngressCatalogReader       = (*Manager)(nil)
+	_ ProviderProbeCatalog       = (*Manager)(nil)
+	_ ProjectionHealthReader     = (*Manager)(nil)
 )
 
 func NewManager(
@@ -166,6 +167,12 @@ func (m *Manager) ResolveAccess(accessID AccessID) (AccessPlanSnapshot, error) {
 
 func (m *Manager) ResolveClientOrigin(origin ClientOrigin) (IngressBinding, error) {
 	return m.projection.ResolveClientOrigin(origin)
+}
+
+func (m *Manager) ResolveDownstreamProtocols(
+	binding IngressBinding,
+) ([]ApplicationProtocol, error) {
+	return m.projection.ResolveDownstreamProtocols(binding)
 }
 
 func (m *Manager) AdmitLeaf(

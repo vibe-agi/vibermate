@@ -73,10 +73,12 @@ the complete client fingerprint survives unchanged. The downstream client sees
 an exact-DNS leaf issued by the local VibeMate Root, not the provider's
 certificate. The default `follow-client` profile has H1 and H2 variants:
 VibeMate retains supported cipher-suite and extension ordering, rewrites the
-target SNI, narrows ALPN to the application protocol negotiated downstream, and
-regenerates random, key-share, ticket, PSK, binder, and other connection-bound
-state. A downstream H1 request remains H1 and a downstream H2 request remains
-H2; protocol selection is not a user setting. Real local TLS and H2 services
+target SNI, and regenerates random, key-share, ticket, PSK, binder, and other
+connection-bound state. Before the downstream TLS handshake, the current
+Access projection intersects the client's offered ALPN values with the
+protocols executable by every profile that the connection may select. The
+protocol negotiated from that set is then preserved upstream; there is no
+later H1/H2 downgrade, and protocol selection is not a user setting. Real local TLS and H2 services
 observe the actual outbound ClientHello, request protocol, authority, bounded
 User-Agent, incremental response delivery, and redacted transport evidence.
 This is bounded wire evidence, not raw ClientHello passthrough or exact browser
@@ -84,9 +86,9 @@ parity. Generic H2 currently uses the fixed `x/net/http2` serializer, so it does
 not claim to reproduce an observed client's SETTINGS, flow windows, pseudo
 header order, or regular-header order. A named Codex H2 presentation therefore
 remains unavailable until those shapes are executable and independently
-captured. Literal-loopback cleartext currently supports H1 only; an H2 request
-for such a target fails during frozen request construction, before secret
-access, egress admission, or dial, rather than silently downgrading.
+captured. Literal-loopback cleartext currently supports H1 only. A client that
+offers H1 and H2 can therefore negotiate H1 for such an Access; an H2-only
+client fails before leaf issuance, secret access, egress admission, or dial.
 
 ProductRuntime now owns an internal Exchange executor. Each admitted Exchange
 begins a planned-offline action before resolving configuration, resolves the

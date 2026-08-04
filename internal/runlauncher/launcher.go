@@ -139,7 +139,10 @@ func (launcher *Launcher) Run(
 		}
 		return 1, fmt.Errorf("load local control discovery: %w", err)
 	}
-	control, err := newControlClient(session)
+	control, err := newControlClient(
+		session,
+		controlTransportTimeout(launcher.config),
+	)
 	if err != nil {
 		return 1, fmt.Errorf("construct local control client: %w", err)
 	}
@@ -257,6 +260,15 @@ func (launcher *Launcher) Run(
 		return exitCode, fmt.Errorf("finish CaptureRun: %w", finishErr)
 	}
 	return exitCode, childErr
+}
+
+// controlTransportTimeout is only a backstop around the pinned loopback HTTP
+// transport. Each operation still owns its narrower context deadline. The
+// transport must cover the widest operation, however, or http.Client can
+// cancel a valid create while code-signature verification or a Root decision
+// is still inside its own bound.
+func controlTransportTimeout(config Config) time.Duration {
+	return max(config.ControlTimeout, config.CreateTimeout)
 }
 
 func localUserLabel(environment []string) string {

@@ -85,6 +85,7 @@ type accessRuntime interface {
 	access.Writer
 	access.SnapshotResolver
 	access.IngressResolver
+	access.DownstreamProtocolResolver
 	access.LeafIssuanceAdmitter
 	access.IngressCatalogReader
 	access.ProviderProbeCatalog

@@ -42,16 +42,13 @@ import (
 
 const capturedProcessHelperEnvironment = "GO_WANT_VIBERMATE_CAPTURE_HELPER"
 
-// catalogedCodexVersion is the Codex release this build carries evidence for.
-// It is not a preference: the artifact digests in the catalog are what make a
-// verified launch verified, and they belong to exactly one release.
-const catalogedCodexVersion = "0.145.0"
-
 const (
 	liveOriginEnvironment = "VIBERMATE_LIVE_PROVIDER_ORIGIN"
 	liveKeyEnvironment    = "VIBERMATE_LIVE_PROVIDER_KEY"
 	liveModelEnvironment  = "VIBERMATE_LIVE_PROVIDER_MODEL"
 	liveAgentEnvironment  = "VIBERMATE_LIVE_AGENT"
+	localClaudeFixture    = "claude-local-fixture"
+	localResponsesFixture = "codex-local-fixture"
 )
 
 // A real agent client, launched the way the product launches one, reaching a
@@ -66,6 +63,14 @@ func TestARealAgentClientReachesAModelThroughVibermate(t *testing.T) {
 	key := os.Getenv(liveKeyEnvironment)
 	model := os.Getenv(liveModelEnvironment)
 	agent := os.Getenv(liveAgentEnvironment)
+	if agent == localClaudeFixture {
+		provider := newLocalResponsesChatProvider(t)
+		defer provider.Close()
+		origin = provider.URL + "/v1"
+		key = "local-provider-key"
+		model = "local-provider-model"
+		agent = "claude"
+	}
 	if origin == "" || key == "" || model == "" || agent == "" {
 		t.Skipf(
 			"live agent run needs %s, %s, %s, and %s",
@@ -160,6 +165,11 @@ func TestARealAgentClientReachesAModelThroughVibermate(t *testing.T) {
 		4*time.Minute,
 	)
 	defer cancelRun()
+	approvalContext, cancelApproval := context.WithCancel(runContext)
+	approvalResult := approveRecognizedClientRoot(
+		approvalContext,
+		runtime.ToolApprovals(),
+	)
 	exitCode, err := launcher.Run(runContext, []string{
 		agentPath,
 		"--print",
@@ -167,6 +177,14 @@ func TestARealAgentClientReachesAModelThroughVibermate(t *testing.T) {
 		"claude-client-alias",
 		"Reply with the single word: ready",
 	})
+	cancelApproval()
+	approval := <-approvalResult
+	if approval.err != nil {
+		t.Fatalf("answer the recognized-client Root question: %v", approval.err)
+	}
+	if approval.allowed {
+		t.Log("approved the recognized client to receive the local Root for this launch")
+	}
 	answered := output.String()
 	if err != nil || exitCode != 0 {
 		// A failed live run is worth explaining, so the records that would
@@ -228,6 +246,72 @@ func TestARealAgentClientReachesAModelThroughVibermate(t *testing.T) {
 	if !reached {
 		t.Fatalf("no provider attempt reached %q: %+v", origin, attempts.Items)
 	}
+}
+
+type clientRootApprovalResult struct {
+	allowed bool
+	err     error
+}
+
+// approveRecognizedClientRoot plays the one explicit user decision made in the
+// real Approval Center. It is deliberately test-only: a client known only by
+// its publisher must never receive the Root through an automatic production
+// bypass. A fully verified release does not ask, so cancellation without a
+// pending question is a valid no-op.
+func approveRecognizedClientRoot(
+	ctx context.Context,
+	approvals toolapproval.Controller,
+) <-chan clientRootApprovalResult {
+	result := make(chan clientRootApprovalResult, 1)
+	go func() {
+		defer close(result)
+		ticker := time.NewTicker(10 * time.Millisecond)
+		defer ticker.Stop()
+		for {
+			page, err := approvals.ListApprovals(
+				ctx,
+				toolapproval.PageRequest{
+					State: toolapproval.StatePending,
+					Limit: 20,
+				},
+			)
+			if err != nil {
+				if ctx.Err() != nil {
+					result <- clientRootApprovalResult{}
+					return
+				}
+				result <- clientRootApprovalResult{err: err}
+				return
+			}
+			for _, pending := range page.Items {
+				if pending.Kind != string(toolapproval.KindClientRootAsk) {
+					continue
+				}
+				_, err = approvals.DecideApproval(
+					ctx,
+					toolapproval.DecisionCommand{
+						ApprovalID:       pending.ID,
+						ExpectedRevision: pending.Revision,
+						IdempotencyKey:   "live-agent-root-approval-0001",
+						Decision:         toolapproval.DecisionAllowOnce,
+						Scope:            toolapproval.ScopeRequest,
+					},
+				)
+				result <- clientRootApprovalResult{
+					allowed: err == nil,
+					err:     err,
+				}
+				return
+			}
+			select {
+			case <-ctx.Done():
+				result <- clientRootApprovalResult{}
+				return
+			case <-ticker.C:
+			}
+		}
+	}()
+	return result
 }
 
 // TestACapturedProcessStreamsThroughTheCompleteLocalDataPlane keeps every
@@ -558,6 +642,13 @@ func TestARealResponsesClientReachesAModelThroughVibermate(t *testing.T) {
 	origin := os.Getenv(liveOriginEnvironment)
 	key := os.Getenv(liveKeyEnvironment)
 	model := os.Getenv(liveModelEnvironment)
+	if os.Getenv(liveAgentEnvironment) == localResponsesFixture {
+		provider := newLocalResponsesChatProvider(t)
+		defer provider.Close()
+		origin = provider.URL + "/v1"
+		key = "local-provider-key"
+		model = "local-provider-model"
+	}
 	if origin == "" || key == "" || model == "" {
 		t.Skipf(
 			"live agent run needs %s, %s, and %s",
@@ -570,20 +661,8 @@ func TestARealResponsesClientReachesAModelThroughVibermate(t *testing.T) {
 	if err != nil {
 		t.Skipf("codex is not on PATH: %v", err)
 	}
-	// A client whose release this build has no evidence for is launched
-	// without a trust root on purpose: design 06 §4.2 says the catalog is
-	// versioned evidence and an update must not silently widen what may be
-	// decrypted. Such a client cannot complete a MITM handshake, so this run
-	// says why rather than failing as if the product were broken.
 	if version, versionErr := exec.Command(codexPath, "--version").Output(); versionErr == nil {
-		if !strings.Contains(string(version), catalogedCodexVersion) {
-			t.Skipf(
-				"the installed Codex is %q; this build carries release evidence "+
-					"for %s only, so the launcher gives it no trust root",
-				strings.TrimSpace(string(version)),
-				catalogedCodexVersion,
-			)
-		}
+		t.Logf("Responses client version: %s", strings.TrimSpace(string(version)))
 	}
 
 	root := t.TempDir()
@@ -671,6 +750,11 @@ func TestARealResponsesClientReachesAModelThroughVibermate(t *testing.T) {
 		4*time.Minute,
 	)
 	defer cancelRun()
+	approvalContext, cancelApproval := context.WithCancel(runContext)
+	approvalResult := approveRecognizedClientRoot(
+		approvalContext,
+		runtime.ToolApprovals(),
+	)
 	exitCode, err := launcher.Run(runContext, []string{
 		codexPath,
 		"-c",
@@ -693,6 +777,14 @@ func TestARealResponsesClientReachesAModelThroughVibermate(t *testing.T) {
 		"gpt-client-alias",
 		"-",
 	})
+	cancelApproval()
+	approval := <-approvalResult
+	if approval.err != nil {
+		t.Fatalf("answer the recognized-client Root question: %v", approval.err)
+	}
+	if approval.allowed {
+		t.Log("approved the recognized client to receive the local Root for this launch")
+	}
 	answered := output.String()
 	if err != nil || exitCode != 0 {
 		records, listErr := runtime.Activities().List(
@@ -730,4 +822,39 @@ func TestARealResponsesClientReachesAModelThroughVibermate(t *testing.T) {
 	if !reached {
 		t.Fatalf("no provider attempt reached %q: %+v", origin, attempts.Items)
 	}
+}
+
+func newLocalResponsesChatProvider(t *testing.T) *httptest.Server {
+	t.Helper()
+	return httptest.NewServer(http.HandlerFunc(func(
+		writer http.ResponseWriter,
+		request *http.Request,
+	) {
+		if request.Method != http.MethodPost ||
+			request.URL.Path != "/v1/chat/completions" {
+			http.NotFound(writer, request)
+			return
+		}
+		body, err := io.ReadAll(io.LimitReader(request.Body, (16<<20)+1))
+		if err != nil || len(body) == 0 || len(body) > 16<<20 {
+			http.Error(writer, "invalid request", http.StatusBadRequest)
+			return
+		}
+		writer.Header().Set("Content-Type", "text/event-stream")
+		writer.Header().Set("Cache-Control", "no-cache")
+		flusher, ok := writer.(http.Flusher)
+		if !ok {
+			t.Error("fixture response writer cannot flush")
+			return
+		}
+		for _, event := range []string{
+			`{"id":"chatcmpl-local","object":"chat.completion.chunk","created":1,"model":"local-provider-model","choices":[{"index":0,"delta":{"role":"assistant","content":"ready"},"finish_reason":null}]}`,
+			`{"id":"chatcmpl-local","object":"chat.completion.chunk","created":1,"model":"local-provider-model","choices":[{"index":0,"delta":{},"finish_reason":"stop"}],"usage":{"prompt_tokens":3,"completion_tokens":1,"total_tokens":4}}`,
+		} {
+			_, _ = fmt.Fprintf(writer, "data: %s\n\n", event)
+			flusher.Flush()
+		}
+		_, _ = io.WriteString(writer, "data: [DONE]\n\n")
+		flusher.Flush()
+	}))
 }

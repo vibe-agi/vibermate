@@ -46,6 +46,45 @@ func TestTheCreateBudgetCoversWhatACreateCanContain(t *testing.T) {
 	}
 }
 
+// The pinned loopback client has its own response-header and whole-request
+// timeout. It is a backstop rather than the owner of operation budgets, so it
+// must not expire before either per-operation context can. A real recognized
+// Claude launch exposed the old hard-coded 10s cap: the create context still
+// had eighty seconds left while http.Client abandoned the request.
+func TestTheControlTransportCoversTheWidestOperation(t *testing.T) {
+	t.Parallel()
+
+	for _, test := range []struct {
+		name    string
+		config  Config
+		expects time.Duration
+	}{
+		{
+			name: "create is wider",
+			config: Config{
+				ControlTimeout: 5 * time.Second,
+				CreateTimeout:  defaultCreateTimeout,
+			},
+			expects: defaultCreateTimeout,
+		},
+		{
+			name: "ordinary control is wider",
+			config: Config{
+				ControlTimeout: 2 * time.Minute,
+				CreateTimeout:  time.Minute,
+			},
+			expects: 2 * time.Minute,
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+			if actual := controlTransportTimeout(test.config); actual != test.expects {
+				t.Fatalf("control transport timeout = %v, want %v", actual, test.expects)
+			}
+		})
+	}
+}
+
 // Create is the only control call that can contain a person. Every other one
 // keeps the short budget, and must: giving them the create budget would let a
 // hung runtime hold an attach or a heartbeat for a minute and a half.

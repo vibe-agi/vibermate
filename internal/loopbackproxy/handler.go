@@ -53,26 +53,27 @@ const (
 type ReasonCode string
 
 const (
-	ReasonProxyAuthenticationRequired   ReasonCode = "proxy_authentication_required"
-	ReasonCaptureAdmissionRejected      ReasonCode = "capture_admission_rejected"
-	ReasonAgentEndpointNotConfigured    ReasonCode = "agent_endpoint_not_configured"
-	ReasonConnectAuthorityInvalid       ReasonCode = "connect_authority_invalid"
-	ReasonConnectSNIMismatch            ReasonCode = "connect_sni_mismatch"
-	ReasonMITMUnavailable               ReasonCode = "mitm_unavailable"
-	ReasonRequestAuthorityMismatch      ReasonCode = "request_authority_mismatch"
-	ReasonAgentEndpointChanged          ReasonCode = "agent_endpoint_changed"
-	ReasonPathUnsupported               ReasonCode = "path_unsupported"
-	ReasonResponsesWebSocketUnsupported ReasonCode = "responses_websocket_unsupported"
-	ReasonRequestBodyInvalid            ReasonCode = "request_body_invalid"
-	ReasonExchangeFailed                ReasonCode = "exchange_failed"
-	ReasonOriginalEgressFailed          ReasonCode = "original_egress_failed"
-	ReasonProxyStopping                 ReasonCode = "proxy_stopping"
-	ReasonConnectOnly                   ReasonCode = "connect_only"
-	ReasonConnectionAuditUnavailable    ReasonCode = "connection_audit_unavailable"
-	ReasonProfileOperationUnsupported   ReasonCode = "profile_operation_unsupported"
-	ReasonBlindTunnelFailed             ReasonCode = "blind_tunnel_failed"
-	ReasonUnsupportedUpgrade            ReasonCode = "unsupported_upgrade"
-	ReasonConnectionDenied              ReasonCode = "connection_denied"
+	ReasonProxyAuthenticationRequired    ReasonCode = "proxy_authentication_required"
+	ReasonCaptureAdmissionRejected       ReasonCode = "capture_admission_rejected"
+	ReasonAgentEndpointNotConfigured     ReasonCode = "agent_endpoint_not_configured"
+	ReasonConnectAuthorityInvalid        ReasonCode = "connect_authority_invalid"
+	ReasonConnectSNIMismatch             ReasonCode = "connect_sni_mismatch"
+	ReasonApplicationProtocolUnavailable ReasonCode = "application_protocol_unavailable"
+	ReasonMITMUnavailable                ReasonCode = "mitm_unavailable"
+	ReasonRequestAuthorityMismatch       ReasonCode = "request_authority_mismatch"
+	ReasonAgentEndpointChanged           ReasonCode = "agent_endpoint_changed"
+	ReasonPathUnsupported                ReasonCode = "path_unsupported"
+	ReasonResponsesWebSocketUnsupported  ReasonCode = "responses_websocket_unsupported"
+	ReasonRequestBodyInvalid             ReasonCode = "request_body_invalid"
+	ReasonExchangeFailed                 ReasonCode = "exchange_failed"
+	ReasonOriginalEgressFailed           ReasonCode = "original_egress_failed"
+	ReasonProxyStopping                  ReasonCode = "proxy_stopping"
+	ReasonConnectOnly                    ReasonCode = "connect_only"
+	ReasonConnectionAuditUnavailable     ReasonCode = "connection_audit_unavailable"
+	ReasonProfileOperationUnsupported    ReasonCode = "profile_operation_unsupported"
+	ReasonBlindTunnelFailed              ReasonCode = "blind_tunnel_failed"
+	ReasonUnsupportedUpgrade             ReasonCode = "unsupported_upgrade"
+	ReasonConnectionDenied               ReasonCode = "connection_denied"
 )
 
 var ErrProxyStopping = errors.New("loopback proxy is stopping")
@@ -85,6 +86,7 @@ type CertificateAuthority interface {
 type IngressAuthority interface {
 	access.IngressResolver
 	access.LeafIssuanceAdmitter
+	access.DownstreamProtocolResolver
 }
 
 type OriginalClient interface {
@@ -569,13 +571,21 @@ func (handler *Handler) serveTLS(
 	if err != nil {
 		return err
 	}
+	protocols, err := handler.ingress.ResolveDownstreamProtocols(binding)
+	if err != nil {
+		return errors.Join(
+			errors.New(string(ReasonApplicationProtocolUnavailable)),
+			err,
+		)
+	}
+	nextProtos, err := downstreamNextProtos(protocols, observation.OfferedALPN())
+	if err != nil {
+		return err
+	}
 	observedSNI := ""
 	config := &tls.Config{
 		MinVersion: tls.VersionTLS12,
-		NextProtos: []string{
-			string(access.ApplicationProtocolHTTP2),
-			string(access.ApplicationProtocolHTTP1),
-		},
+		NextProtos: nextProtos,
 		GetCertificate: func(hello *tls.ClientHelloInfo) (*tls.Certificate, error) {
 			if hello == nil {
 				return nil, errors.New(string(ReasonMITMUnavailable))
@@ -1017,9 +1027,52 @@ func connectionTerminalOf(err error) (connectionevent.Outcome, string) {
 		return connectionevent.OutcomeFailed, "deadline"
 	case strings.Contains(err.Error(), string(ReasonConnectSNIMismatch)):
 		return connectionevent.OutcomeFailed, string(ReasonConnectSNIMismatch)
+	case strings.Contains(
+		err.Error(),
+		string(ReasonApplicationProtocolUnavailable),
+	):
+		return connectionevent.OutcomeFailed,
+			string(ReasonApplicationProtocolUnavailable)
 	default:
 		return connectionevent.OutcomeFailed, string(ReasonMITMUnavailable)
 	}
+}
+
+func downstreamNextProtos(
+	protocols []access.ApplicationProtocol,
+	offered []string,
+) ([]string, error) {
+	if len(protocols) == 0 || len(protocols) > 2 {
+		return nil, errors.New(string(ReasonApplicationProtocolUnavailable))
+	}
+	seen := make(map[access.ApplicationProtocol]struct{}, len(protocols))
+	next := make([]string, 0, len(protocols))
+	compatible := false
+	for _, protocol := range protocols {
+		if protocol != access.ApplicationProtocolHTTP1 &&
+			protocol != access.ApplicationProtocolHTTP2 {
+			return nil, errors.New(string(ReasonApplicationProtocolUnavailable))
+		}
+		if _, duplicate := seen[protocol]; duplicate {
+			return nil, errors.New(string(ReasonApplicationProtocolUnavailable))
+		}
+		seen[protocol] = struct{}{}
+		next = append(next, string(protocol))
+		if len(offered) == 0 && protocol == access.ApplicationProtocolHTTP1 {
+			// A TLS client that omits ALPN is an HTTP/1.1 client. It cannot
+			// satisfy an H2-only Access plan merely because no token was sent.
+			compatible = true
+		}
+		for _, candidate := range offered {
+			if candidate == string(protocol) {
+				compatible = true
+			}
+		}
+	}
+	if !compatible {
+		return nil, errors.New(string(ReasonApplicationProtocolUnavailable))
+	}
+	return next, nil
 }
 
 type countingConnection struct {

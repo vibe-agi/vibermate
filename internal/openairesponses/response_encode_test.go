@@ -129,7 +129,7 @@ func TestEncodeMaxTokenResponseIsIncompleteRatherThanCompleted(t *testing.T) {
 	}
 }
 
-func TestEncodeResponsePreservesUnknownReasoningUsageAsNull(t *testing.T) {
+func TestEncodeResponseTreatsUnknownReasoningAsOrdinaryOutput(t *testing.T) {
 	t.Parallel()
 
 	request := streamingRequestFixture(t)
@@ -137,7 +137,7 @@ func TestEncodeResponsePreservesUnknownReasoningUsageAsNull(t *testing.T) {
 	response.Blocks = response.Blocks[:1]
 	response.StopReason = protocolcore.StopReasonEndTurn
 	response.Usage.Reasoning = protocolcore.UsageValue{}
-	encoded, _, err := newTestCodec(t).EncodeClientResponse(request, response)
+	encoded, report, err := newTestCodec(t).EncodeClientResponse(request, response)
 	if err != nil {
 		t.Fatalf("EncodeClientResponse() error = %v", err)
 	}
@@ -150,8 +150,17 @@ func TestEncodeResponsePreservesUnknownReasoningUsageAsNull(t *testing.T) {
 		t.Fatal(err)
 	}
 	reasoning, exists := wire.Usage.OutputTokensDetails["reasoning_tokens"]
-	if !exists || string(reasoning) != "null" {
-		t.Fatalf("reasoning_tokens = %s, want null", reasoning)
+	if !exists || string(reasoning) != "0" {
+		t.Fatalf("reasoning_tokens = %s, want 0", reasoning)
+	}
+	found := false
+	for _, notice := range report.Notices() {
+		if notice.Code == protocolcore.NoticeReasoningUsageAssumedNonReasoning {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("translation report = %#v", report.Notices())
 	}
 }
 

@@ -289,6 +289,70 @@ func TestLoopbackProxyNegotiatesHTTP2AndPreservesTheRequestProtocol(
 	}
 }
 
+func TestLoopbackProxyNegotiatesOnlyAProtocolTheAccessCanPreserve(
+	t *testing.T,
+) {
+	t.Parallel()
+
+	fixture := newProxyFixture(t)
+	defer fixture.Close(t)
+	fixture.ingress.SetProtocols([]access.ApplicationProtocol{
+		access.ApplicationProtocolHTTP1,
+	})
+	connection, response := fixture.Connect(
+		t,
+		fixture.grant.ProxyCapability.Value(),
+		"api.anthropic.com:443",
+	)
+	if response.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(response.Body)
+		_ = response.Body.Close()
+		_ = connection.Close()
+		t.Fatalf("CONNECT status=%d body=%s", response.StatusCode, body)
+	}
+	_ = response.Body.Close()
+	pool := x509.NewCertPool()
+	if !pool.AppendCertsFromPEM(
+		fixture.authority.Certificate().CertificatePEM(),
+	) {
+		t.Fatal("append local Root")
+	}
+	secured := tls.Client(connection, &tls.Config{
+		RootCAs:    pool,
+		ServerName: "api.anthropic.com",
+		MinVersion: tls.VersionTLS12,
+		NextProtos: []string{
+			string(access.ApplicationProtocolHTTP2),
+			string(access.ApplicationProtocolHTTP1),
+		},
+	})
+	if err := secured.Handshake(); err != nil {
+		_ = secured.Close()
+		t.Fatalf("TLS handshake: %v", err)
+	}
+	defer secured.Close()
+	if got := secured.ConnectionState().NegotiatedProtocol; got !=
+		string(access.ApplicationProtocolHTTP1) {
+		t.Fatalf("negotiated protocol = %q", got)
+	}
+	response = writeInnerRequest(t, secured, &http.Request{
+		Method: http.MethodPost,
+		URL:    mustURL(t, "/v1/messages"),
+		Host:   "api.anthropic.com:443",
+		Header: http.Header{
+			"Content-Type": []string{"application/json"},
+		},
+		Body:          io.NopCloser(strings.NewReader(`{"model":"client"}`)),
+		ContentLength: int64(len(`{"model":"client"}`)),
+	})
+	_ = response.Body.Close()
+	requests := fixture.exchanges.Requests()
+	if len(requests) != 1 ||
+		requests[0].ClientHTTPProtocol() != access.ApplicationProtocolHTTP1 {
+		t.Fatalf("preserved requests = %+v", requests)
+	}
+}
+
 func TestLoopbackProxyFailsClosedBeforeCertificateOrDataPlane(t *testing.T) {
 	t.Parallel()
 
@@ -1022,10 +1086,41 @@ func fixedCodexAdapterEvidence() clientadapter.Evidence {
 }
 
 type revocableIngress struct {
-	delegate loopbackproxy.IngressAuthority
-	revoked  atomic.Bool
-	mu       sync.RWMutex
-	current  *access.IngressBinding
+	delegate  loopbackproxy.IngressAuthority
+	revoked   atomic.Bool
+	mu        sync.RWMutex
+	current   *access.IngressBinding
+	protocols []access.ApplicationProtocol
+}
+
+func (ingress *revocableIngress) ResolveDownstreamProtocols(
+	binding access.IngressBinding,
+) ([]access.ApplicationProtocol, error) {
+	if ingress.revoked.Load() {
+		return nil, access.ErrAgentEndpointNotConfigured
+	}
+	ingress.mu.RLock()
+	if ingress.protocols != nil {
+		protocols := append(
+			[]access.ApplicationProtocol(nil),
+			ingress.protocols...,
+		)
+		ingress.mu.RUnlock()
+		return protocols, nil
+	}
+	ingress.mu.RUnlock()
+	return ingress.delegate.ResolveDownstreamProtocols(binding)
+}
+
+func (ingress *revocableIngress) SetProtocols(
+	protocols []access.ApplicationProtocol,
+) {
+	ingress.mu.Lock()
+	defer ingress.mu.Unlock()
+	ingress.protocols = append(
+		[]access.ApplicationProtocol(nil),
+		protocols...,
+	)
 }
 
 func (ingress *revocableIngress) AdmitLeaf(

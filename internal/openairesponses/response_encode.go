@@ -69,14 +69,16 @@ type responseUsageWire struct {
 }
 
 type responseInputUsageWire struct {
-	// Both details are omitted when the backend did not report them. A zero
-	// here would claim the provider stated a split it never stated.
-	CachedTokens     *int64 `json:"cached_tokens,omitempty"`
+	// Responses requires cached_tokens whenever usage is present. When a Chat
+	// backend reports only aggregate prompt tokens, the edge conservatively
+	// treats the unknown cache share as uncached and records that approximation
+	// in TranslationReport.
+	CachedTokens     int64  `json:"cached_tokens"`
 	CacheWriteTokens *int64 `json:"cache_write_tokens,omitempty"`
 }
 
 type responseOutputUsageWire struct {
-	ReasoningTokens *int64 `json:"reasoning_tokens"`
+	ReasoningTokens int64 `json:"reasoning_tokens"`
 }
 
 type responseMessageItemWire struct {
@@ -211,7 +213,24 @@ func buildResponseWire(
 	)
 	wire.IncompleteDetails = incomplete
 	wire.Usage = usage
-	return wire, responseExtensionReport(response), nil
+	report := responseExtensionReport(response)
+	if !response.Usage.CacheRead.Known {
+		report = report.Merge(protocolcore.NewTranslationReport(
+			protocolcore.TranslationNotice{
+				Code: protocolcore.NoticeCacheReadUsageAssumedUncached,
+				Path: "$.usage.input_tokens_details.cached_tokens",
+			},
+		))
+	}
+	if !response.Usage.Reasoning.Known {
+		report = report.Merge(protocolcore.NewTranslationReport(
+			protocolcore.TranslationNotice{
+				Code: protocolcore.NoticeReasoningUsageAssumedNonReasoning,
+				Path: "$.usage.output_tokens_details.reasoning_tokens",
+			},
+		))
+	}
+	return wire, report, nil
 }
 
 func baseResponseWire(
@@ -558,20 +577,15 @@ func encodeResponseUsage(
 			errors.New("total usage overflows"),
 		)
 	}
-	var reasoningTokens *int64
-	if usage.Reasoning.Known {
-		value := usage.Reasoning.Tokens
-		reasoningTokens = &value
-	}
 	return responseUsageWire{
 		InputTokens: inputTokens,
 		InputTokensDetails: responseInputUsageWire{
-			CachedTokens:     reportedTokens(usage.CacheRead),
+			CachedTokens:     knownTokens(usage.CacheRead),
 			CacheWriteTokens: reportedTokens(usage.CacheWrite),
 		},
 		OutputTokens: usage.Output.Tokens,
 		OutputTokensDetails: responseOutputUsageWire{
-			ReasoningTokens: reasoningTokens,
+			ReasoningTokens: knownTokens(usage.Reasoning),
 		},
 		TotalTokens: totalTokens,
 	}, nil

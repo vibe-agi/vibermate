@@ -82,6 +82,7 @@ type ProviderProbeCatalog interface {
 type SnapshotProjection interface {
 	SnapshotResolver
 	IngressResolver
+	DownstreamProtocolResolver
 	LeafIssuanceAdmitter
 	IngressCatalogReader
 	ProviderProbeCatalog
