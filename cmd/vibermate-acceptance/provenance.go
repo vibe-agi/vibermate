@@ -10,7 +10,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"io/fs"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -18,50 +17,27 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/vibe-agi/vibermate/internal/acceptancereport"
 )
 
 const (
-	expectedGoVersion    = "go1.25.12"
-	expectedNodeVersion  = "v22.23.1"
-	expectedRustVersion  = "1.88.0"
-	expectedPNPMVersion  = "10.33.2"
-	expectedTauriVersion = "tauri-cli 2.11.4"
+	expectedGoVersion    = acceptancereport.ExpectedGoVersion
+	expectedNodeVersion  = acceptancereport.ExpectedNodeVersion
+	expectedRustVersion  = acceptancereport.ExpectedRustVersion
+	expectedPNPMVersion  = acceptancereport.ExpectedPNPMVersion
+	expectedTauriVersion = acceptancereport.ExpectedTauriVersion
 
-	desktopBuildManifestSchema = "vibermate.desktop-build/v1"
+	desktopBuildManifestSchema = acceptancereport.DesktopBuildManifestSchema
+	desktopBuildManifestV2     = acceptancereport.DesktopBuildManifestSchemaV2
 	desktopBuildManifestName   = "vibermate-build-manifest.json"
 	maxBuildManifestBytes      = 128 << 10
 )
 
-type sourceProvenance struct {
-	VCS        string `json:"vcs"`
-	Revision   string `json:"revision"`
-	CommitTime string `json:"commitTime"`
-	Dirty      bool   `json:"dirty"`
-}
-
-type artifactProvenance struct {
-	Role   string `json:"role"`
-	Path   string `json:"path"`
-	SHA256 string `json:"sha256"`
-	Bytes  int64  `json:"bytes"`
-}
-
-type toolchainProvenance struct {
-	Go    string `json:"go"`
-	Node  string `json:"node"`
-	Rustc string `json:"rustc"`
-	Cargo string `json:"cargo"`
-	PNPM  string `json:"pnpm"`
-}
-
-type desktopBuildToolchains struct {
-	Go    string `json:"go"`
-	Node  string `json:"node"`
-	Rustc string `json:"rustc"`
-	Cargo string `json:"cargo"`
-	PNPM  string `json:"pnpm"`
-	Tauri string `json:"tauri"`
-}
+type sourceProvenance = acceptancereport.SourceProvenance
+type artifactProvenance = acceptancereport.ArtifactProvenance
+type toolchainProvenance = acceptancereport.ToolchainProvenance
+type desktopBuildToolchains = acceptancereport.DesktopBuildToolchains
 
 type desktopBuildProfiles struct {
 	Desktop  string `json:"desktop"`
@@ -78,34 +54,9 @@ type desktopBuildManifest struct {
 	SidecarSHA256       map[string]string      `json:"sidecarSHA256"`
 }
 
-type buildProvenance struct {
-	ManifestSchema      string                 `json:"manifestSchema"`
-	DesktopProfile      string                 `json:"desktopProfile"`
-	SidecarProfile      string                 `json:"sidecarProfile"`
-	Target              string                 `json:"target"`
-	Toolchains          desktopBuildToolchains `json:"toolchains"`
-	ConfigurationSHA256 map[string]string      `json:"configurationSHA256"`
-	GoBuildVersions     map[string]string      `json:"goBuildVersions"`
-	GoBuildTags         map[string]string      `json:"goBuildTags"`
-}
-
-type acceptanceConfiguration struct {
-	DeterministicOnly bool   `json:"deterministicOnly"`
-	ClientID          string `json:"clientId"`
-	ClientVersion     string `json:"clientVersion"`
-	AccessID          string `json:"accessId"`
-	ProviderOrigin    string `json:"providerOrigin"`
-	ProviderModel     string `json:"providerModel"`
-	Timeout           string `json:"timeout"`
-}
-
-type acceptanceProvenance struct {
-	Source        sourceProvenance        `json:"source"`
-	Artifacts     []artifactProvenance    `json:"artifacts"`
-	Toolchains    toolchainProvenance     `json:"toolchains"`
-	Build         buildProvenance         `json:"build"`
-	Configuration acceptanceConfiguration `json:"configuration"`
-}
+type buildProvenance = acceptancereport.BuildProvenance
+type acceptanceConfiguration = acceptancereport.Configuration
+type acceptanceProvenance = acceptancereport.Provenance
 
 type goBinaryEvidence struct {
 	role       string
@@ -165,7 +116,7 @@ func collectAcceptanceProvenance(
 		return provenance, fmt.Errorf("read Desktop build manifest: %w", err)
 	}
 
-	bundle, err := digestBundle(config.desktopAppPath)
+	bundle, err := acceptancereport.DigestBundle(config.desktopAppPath)
 	if err != nil {
 		return provenance, fmt.Errorf("digest Desktop App bundle: %w", err)
 	}
@@ -182,7 +133,10 @@ func collectAcceptanceProvenance(
 		{role: "client-entrypoint", path: clientPath},
 		{role: "desktop-build-manifest", path: manifestPath},
 	} {
-		evidence, digestErr := digestArtifact(artifact.role, artifact.path)
+		evidence, digestErr := acceptancereport.DigestArtifact(
+			artifact.role,
+			artifact.path,
+		)
 		if digestErr != nil {
 			return provenance, digestErr
 		}
@@ -299,8 +253,8 @@ func validateDesktopBuildManifest(
 	sidecarProfile string,
 	artifacts []artifactProvenance,
 ) error {
-	if manifest.Schema != desktopBuildManifestSchema {
-		return errors.New("Desktop build manifest schema is unsupported")
+	if manifest.Schema != desktopBuildManifestV2 {
+		return errors.New("current acceptance requires Desktop build manifest v2")
 	}
 	if manifest.Source != source || manifest.Source.Dirty {
 		return errors.New(
@@ -318,6 +272,7 @@ func validateDesktopBuildManifest(
 	requiredConfiguration := []string{
 		"go.mod",
 		"go.sum",
+		"rust-toolchain.toml",
 		"ui/desktop/package.json",
 		"ui/desktop/pnpm-lock.yaml",
 		"ui/desktop/src-tauri/Cargo.toml",
@@ -428,109 +383,6 @@ func validateFrozenProvenance(provenance acceptanceProvenance) error {
 		return errors.New("acceptance Git revision is not a full commit identity")
 	}
 	return nil
-}
-
-func digestArtifact(role, path string) (artifactProvenance, error) {
-	if role == "" {
-		return artifactProvenance{}, errors.New("artifact role is empty")
-	}
-	file, err := os.Open(path)
-	if err != nil {
-		return artifactProvenance{}, fmt.Errorf("open %s artifact: %w", role, err)
-	}
-	defer file.Close()
-	info, err := file.Stat()
-	if err != nil {
-		return artifactProvenance{}, err
-	}
-	if !info.Mode().IsRegular() {
-		return artifactProvenance{}, fmt.Errorf("%s artifact is not regular", role)
-	}
-	hash := sha256.New()
-	if _, err := io.Copy(hash, file); err != nil {
-		return artifactProvenance{}, fmt.Errorf("digest %s artifact: %w", role, err)
-	}
-	return artifactProvenance{
-		Role:   role,
-		Path:   path,
-		SHA256: hex.EncodeToString(hash.Sum(nil)),
-		Bytes:  info.Size(),
-	}, nil
-}
-
-func digestBundle(root string) (artifactProvenance, error) {
-	hash := sha256.New()
-	var total int64
-	err := filepath.WalkDir(root, func(
-		path string,
-		entry fs.DirEntry,
-		walkErr error,
-	) error {
-		if walkErr != nil {
-			return walkErr
-		}
-		relative, err := filepath.Rel(root, path)
-		if err != nil {
-			return err
-		}
-		if relative == "." {
-			return nil
-		}
-		info, err := entry.Info()
-		if err != nil {
-			return err
-		}
-		switch {
-		case entry.Type().IsRegular():
-			fileEvidence, err := digestArtifact("bundle-member", path)
-			if err != nil {
-				return err
-			}
-			total += fileEvidence.Bytes
-			_, err = fmt.Fprintf(
-				hash,
-				"file\x00%s\x00%04o\x00%d\x00%s\x00",
-				filepath.ToSlash(relative),
-				info.Mode().Perm(),
-				fileEvidence.Bytes,
-				fileEvidence.SHA256,
-			)
-			return err
-		case entry.IsDir():
-			_, err = fmt.Fprintf(
-				hash,
-				"dir\x00%s\x00%04o\x00",
-				filepath.ToSlash(relative),
-				info.Mode().Perm(),
-			)
-			return err
-		case entry.Type()&os.ModeSymlink != 0:
-			target, err := os.Readlink(path)
-			if err != nil {
-				return err
-			}
-			_, err = fmt.Fprintf(
-				hash,
-				"link\x00%s\x00%s\x00",
-				filepath.ToSlash(relative),
-				target,
-			)
-			return err
-		default:
-			return fmt.Errorf(
-				"unsupported App bundle member type: %s",
-				filepath.ToSlash(relative),
-			)
-		}
-	})
-	if err != nil {
-		return artifactProvenance{}, err
-	}
-	return artifactProvenance{
-		Path:   root,
-		SHA256: hex.EncodeToString(hash.Sum(nil)),
-		Bytes:  total,
-	}, nil
 }
 
 func readGoBinaryEvidence(role, path string) (goBinaryEvidence, error) {

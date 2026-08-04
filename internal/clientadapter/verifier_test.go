@@ -12,6 +12,46 @@ import (
 	"github.com/vibe-agi/vibermate/internal/clientadapter"
 )
 
+func TestBuiltInCatalogPublishesExactExpectedEvidence(t *testing.T) {
+	t.Parallel()
+	catalog := clientadapter.BuiltInCatalog()
+	for _, expected := range []struct {
+		id      string
+		version string
+		shape   clientadapter.InstallShape
+		recipe  clientadapter.LaunchRecipe
+	}{
+		{
+			id: "claude-code", version: "2.1.220",
+			shape:  clientadapter.InstallNativeSingleBinary,
+			recipe: clientadapter.LaunchNodeEnvProxy,
+		},
+		{
+			id: "codex-cli", version: "0.145.0",
+			shape:  clientadapter.InstallNPMWrapperNativeChild,
+			recipe: clientadapter.LaunchSSLCertFile,
+		},
+	} {
+		evidence, ok := catalog.ExpectedEvidence(expected.id, expected.version)
+		if !ok {
+			t.Fatalf("ExpectedEvidence(%q, %q) is missing", expected.id, expected.version)
+		}
+		if err := evidence.Validate(); err != nil {
+			t.Fatalf("ExpectedEvidence(%q, %q): %v", expected.id, expected.version, err)
+		}
+		if evidence.ID != expected.id ||
+			evidence.Version != expected.version ||
+			evidence.CatalogRevision != catalog.Revision() ||
+			evidence.InstallShape != expected.shape ||
+			evidence.LaunchRecipe != expected.recipe {
+			t.Fatalf("ExpectedEvidence(%q, %q) = %+v", expected.id, expected.version, evidence)
+		}
+	}
+	if _, ok := catalog.ExpectedEvidence("claude-code", "latest"); ok {
+		t.Fatal("ExpectedEvidence() accepted an unfrozen client version")
+	}
+}
+
 func TestReleaseVerifierMatchesFixedDigestWithoutExecutingCandidate(t *testing.T) {
 	t.Parallel()
 

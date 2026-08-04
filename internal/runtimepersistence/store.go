@@ -23,6 +23,7 @@ import (
 	"github.com/vibe-agi/vibermate/internal/connectionpolicy"
 	"github.com/vibe-agi/vibermate/internal/egressaudit"
 	"github.com/vibe-agi/vibermate/internal/toolapproval"
+	"github.com/vibe-agi/vibermate/internal/workspaceroute"
 )
 
 const (
@@ -54,21 +55,23 @@ type RuntimeStore interface {
 	EgressAttemptRepository() egressaudit.Repository
 	ToolApprovalRepository() toolapproval.Repository
 	ConnectionRuleRepository() connectionpolicy.Repository
+	WorkspaceRouteRepository() workspaceroute.Repository
 	Shutdown(context.Context) error
 }
 
 // Store owns a SQLite connection pool and its repositories.
 type Store struct {
-	database       *sql.DB
-	repo           *Repository
-	accessRepo     *accessRepository
-	activityRepo   *activityRepository
-	captureRepo    *captureRunRepository
-	connectionRepo *connectionEventRepository
-	egressAttempts *egressAttemptRepository
-	approvalRepo   *toolApprovalRepository
-	connectionRule *connectionRuleRepository
-	operations     *operationGate
+	database        *sql.DB
+	repo            *Repository
+	accessRepo      *accessRepository
+	activityRepo    *activityRepository
+	captureRepo     *captureRunRepository
+	connectionRepo  *connectionEventRepository
+	egressAttempts  *egressAttemptRepository
+	approvalRepo    *toolApprovalRepository
+	connectionRule  *connectionRuleRepository
+	workspaceRoutes *workspaceRouteRepository
+	operations      *operationGate
 
 	closeMu   sync.Mutex
 	closing   bool
@@ -113,7 +116,8 @@ func Open(ctx context.Context, options Options) (*Store, error) {
 	if err := database.PingContext(ctx); err != nil {
 		return fail(fmt.Errorf("open SQLite database: %w", err))
 	}
-	if err := applyMigrations(ctx, database); err != nil {
+	embeddedRevision, err := applyMigrations(ctx, database)
+	if err != nil {
 		return fail(err)
 	}
 	if err := protectDatabaseArtifacts(options.DatabasePath); err != nil {
@@ -134,23 +138,35 @@ func Open(ctx context.Context, options Options) (*Store, error) {
 	egressRepo := newEgressAttemptRepository(database, operations)
 	approvalRepo := newToolApprovalRepository(database, operations)
 	connectionRules := newConnectionRuleRepository(database, operations)
-	if _, err := repository.ReadSchemaState(ctx); err != nil {
+	workspaceRoutes := newWorkspaceRouteRepository(database, operations)
+	schemaState, err := repository.ReadSchemaState(ctx)
+	if err != nil {
 		operations.closeAdmission()
 		return fail(fmt.Errorf("read initial schema state: %w", err))
 	}
+	if schemaState.Revision != embeddedRevision {
+		operations.closeAdmission()
+		return fail(fmt.Errorf(
+			"%w: runtime revision %d, embedded revision %d",
+			ErrSchemaRevisionMismatch,
+			schemaState.Revision,
+			embeddedRevision,
+		))
+	}
 
 	return &Store{
-		database:       database,
-		repo:           repository,
-		accessRepo:     accessRepo,
-		activityRepo:   activityRepo,
-		captureRepo:    captureRepo,
-		connectionRepo: connectionRepo,
-		egressAttempts: egressRepo,
-		approvalRepo:   approvalRepo,
-		connectionRule: connectionRules,
-		operations:     operations,
-		closeDone:      make(chan struct{}),
+		database:        database,
+		repo:            repository,
+		accessRepo:      accessRepo,
+		activityRepo:    activityRepo,
+		captureRepo:     captureRepo,
+		connectionRepo:  connectionRepo,
+		egressAttempts:  egressRepo,
+		approvalRepo:    approvalRepo,
+		connectionRule:  connectionRules,
+		workspaceRoutes: workspaceRoutes,
+		operations:      operations,
+		closeDone:       make(chan struct{}),
 	}, nil
 }
 
@@ -184,6 +200,10 @@ func (s *Store) ToolApprovalRepository() toolapproval.Repository {
 
 func (s *Store) ConnectionRuleRepository() connectionpolicy.Repository {
 	return s.connectionRule
+}
+
+func (s *Store) WorkspaceRouteRepository() workspaceroute.Repository {
+	return s.workspaceRoutes
 }
 
 // Settings reads the active SQLite connection policy through the same
@@ -236,10 +256,10 @@ func (s *Store) Shutdown(ctx context.Context) error {
 	return closeErr
 }
 
-func applyMigrations(ctx context.Context, database *sql.DB) error {
+func applyMigrations(ctx context.Context, database *sql.DB) (int64, error) {
 	migrations, err := fs.Sub(migrationFiles, "migrations")
 	if err != nil {
-		return fmt.Errorf("open embedded migrations: %w", err)
+		return 0, fmt.Errorf("open embedded migrations: %w", err)
 	}
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
 	provider, err := goose.NewProvider(
@@ -247,14 +267,63 @@ func applyMigrations(ctx context.Context, database *sql.DB) error {
 		database,
 		migrations,
 		goose.WithSlog(logger),
+		goose.WithDisableGlobalRegistry(true),
 	)
 	if err != nil {
-		return fmt.Errorf("construct migration provider: %w", err)
+		return 0, fmt.Errorf("construct migration provider: %w", err)
+	}
+	embeddedRevision, err := schemaRevisionOfSources(provider.ListSources())
+	if err != nil {
+		return 0, fmt.Errorf("inspect embedded migrations: %w", err)
+	}
+	databaseRevision, err := provider.GetDBVersion(ctx)
+	if err != nil {
+		return 0, fmt.Errorf("read SQLite migration revision before apply: %w", err)
+	}
+	if databaseRevision > embeddedRevision {
+		return 0, fmt.Errorf(
+			"%w: database revision %d, embedded revision %d",
+			ErrSchemaNewerThanBinary,
+			databaseRevision,
+			embeddedRevision,
+		)
 	}
 	if _, err := provider.Up(ctx); err != nil {
-		return fmt.Errorf("apply SQLite migrations: %w", err)
+		return 0, fmt.Errorf("apply SQLite migrations: %w", err)
 	}
-	return nil
+	databaseRevision, err = provider.GetDBVersion(ctx)
+	if err != nil {
+		return 0, fmt.Errorf("read SQLite migration revision after apply: %w", err)
+	}
+	if databaseRevision != embeddedRevision {
+		return 0, fmt.Errorf(
+			"%w: database revision %d, embedded revision %d",
+			ErrSchemaRevisionMismatch,
+			databaseRevision,
+			embeddedRevision,
+		)
+	}
+	return embeddedRevision, nil
+}
+
+func schemaRevisionOfSources(sources []*goose.Source) (int64, error) {
+	if len(sources) == 0 {
+		return 0, errors.New("embedded migration set is empty")
+	}
+	var revision int64
+	for index, source := range sources {
+		if source == nil || source.Version <= 0 {
+			return 0, fmt.Errorf("embedded migration source %d is invalid", index)
+		}
+		if source.Version <= revision {
+			return 0, fmt.Errorf(
+				"embedded migration sources are not strictly increasing at version %d",
+				source.Version,
+			)
+		}
+		revision = source.Version
+	}
+	return revision, nil
 }
 
 func prepareDatabasePath(databasePath string) error {

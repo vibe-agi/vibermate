@@ -55,51 +55,31 @@ export interface StatusResponse {
 }
 
 export interface ActivityRecord {
-  readonly sequence: number;
   readonly id: string;
   readonly occurredAt: string;
-  readonly kind: string;
-  readonly accessId?: string;
-  readonly subjectId: string;
+  readonly accessId: string;
   readonly status: string;
-  readonly reasonCode?: string;
-  readonly diagnosis?: ActivityDiagnosis;
-  readonly transport?: TransportEvidence;
-}
-
-/**
- * What a failed request can say about itself without saying what it
- * contained: an HTTP status, a field name, and a path of field names and
- * indices. No value, credential, or provider text appears here.
- */
-export interface ActivityDiagnosis {
-  readonly providerStatus?: number;
-  readonly providerField?: string;
-  readonly clientField?: string;
-  readonly clientPath?: string;
-}
-
-export interface TransportProfileEvidence {
-  readonly ref: string;
-  readonly revision: number;
-  readonly source: "observed_client" | "named_profile" | "standard";
-}
-
-export interface TransportEvidence {
-  readonly requested: TransportProfileEvidence;
-  readonly effective?: TransportProfileEvidence;
-  readonly fallbackChain: readonly TransportProfileEvidence[];
-  readonly fallbackReason?: string;
-  readonly clientOfferedAlpn: readonly string[];
-  readonly downstreamNegotiatedAlpn?: string;
-  readonly upstreamOfferedAlpn: readonly string[];
-  readonly upstreamNegotiatedAlpn?: string;
-  readonly httpTransport?: "http1" | "http2";
 }
 
 export interface ActivityPage {
   readonly items: readonly ActivityRecord[];
-  readonly nextBeforeSequence?: number;
+  readonly nextCursor?: string;
+}
+
+export interface ExchangeProcessingTrace {
+  readonly upstreamProfileId?: string;
+  readonly credentialId?: string;
+  readonly egressProxyId?: string;
+  readonly pluginRunIds: readonly string[];
+  readonly attemptIds: readonly string[];
+  readonly result: string;
+}
+
+export interface ExchangeDetail {
+  readonly id: string;
+  readonly accessId: string;
+  readonly status: string;
+  readonly processingTrace: ExchangeProcessingTrace;
 }
 
 export type ApprovalState =
@@ -109,7 +89,10 @@ export type ApprovalState =
   | "canceled"
   | "expired";
 
-export type ApprovalKind = "tool_intent" | "network_ask";
+export type ApprovalKind =
+  | "tool_intent"
+  | "network_ask"
+  | "client_root_ask";
 
 export type ApprovalDecision = "allow-once" | "deny";
 
@@ -181,13 +164,13 @@ export interface AccessApplyInput {
   readonly agentEndpoint: {
     readonly id: string;
     readonly clientOrigin: string;
-    readonly clientDialect: "anthropic-messages";
+    readonly clientDialect: "anthropic-messages" | "openai-responses";
   };
   readonly profiles: readonly {
     readonly id: string;
     readonly name: string;
     readonly description: string;
-    readonly backendDialect: "openai-chat";
+    readonly backendDialect: "anthropic-messages" | "openai-chat";
     readonly targetId: string;
     readonly transportProfileRef: "observed-client-strict-h1";
     readonly defaultModelPolicy: {
@@ -201,7 +184,7 @@ export interface AccessApplyInput {
     readonly id: string;
     readonly profileId: string;
     readonly origin: string;
-    readonly protocol: "openai-chat";
+    readonly protocol: "anthropic-messages" | "openai-chat";
     readonly capabilities: readonly ["messages", "streaming", "tool_calls"];
   }[];
   readonly accountBindings: readonly {
@@ -209,7 +192,7 @@ export interface AccessApplyInput {
     readonly profileId: string;
     readonly label: string;
     readonly secretRef: string;
-    readonly authDriverRef: "static_header";
+    readonly authDriverRef: "anthropic_api_key" | "static_header";
     readonly enabled: true;
   }[];
   readonly routeSets: readonly {
@@ -226,11 +209,168 @@ export interface AccessApplyInput {
   };
 }
 
-export interface AccessApplyResponse {
-  readonly outcome: "committed";
+export type AccessStatus = "draft" | "enabled" | "disabled";
+
+export interface AccessDirectoryItem {
+  readonly accessId: string;
+  readonly name: string;
+  readonly description: string;
+  readonly status: AccessStatus;
   readonly revision: number;
-  readonly planHash: string;
+  readonly clientOrigin: string;
+  readonly clientDialect:
+    | "anthropic-messages"
+    | "openai-chat"
+    | "openai-responses";
 }
+
+export interface AccessDirectoryPage {
+  readonly items: readonly AccessDirectoryItem[];
+}
+
+export type AccessDialect =
+  | "anthropic-messages"
+  | "openai-chat"
+  | "openai-responses";
+
+export type AccessModelPolicy =
+  | {
+      readonly mode: "passthrough";
+    }
+  | {
+      readonly mode: "fixed";
+      readonly fixedModel: string;
+    }
+  | {
+      readonly mode: "map";
+      readonly mappingRef: string;
+    };
+
+/**
+ * The durable Access configuration safe to expose to the desktop UI.
+ * Credential values and their internal SecretRefs intentionally have no
+ * representation here; credential changes use the scoped secret action.
+ */
+export interface AccessDetail {
+  readonly revision: number;
+  readonly access: {
+    readonly id: string;
+    readonly name: string;
+    readonly description: string;
+    readonly status: AccessStatus;
+    readonly agentEndpointId: string;
+    readonly defaultRouteSetId: string;
+    readonly profileIds: readonly string[];
+    readonly egressPolicyId: string;
+  };
+  readonly agentEndpoint: {
+    readonly id: string;
+    readonly clientOrigin: string;
+    readonly clientDialect: AccessDialect;
+  };
+  readonly profiles: readonly {
+    readonly id: string;
+    readonly name: string;
+    readonly description: string;
+    readonly backendDialect: AccessDialect;
+    readonly targetId: string;
+    readonly transportProfileRef: string;
+    readonly defaultModelPolicy: AccessModelPolicy;
+    readonly accountBindingIds: readonly string[];
+    readonly defaultAccountBindingId: string;
+  }[];
+  readonly providerTargets: readonly {
+    readonly id: string;
+    readonly profileId: string;
+    readonly origin: string;
+    readonly protocol: AccessDialect;
+    readonly capabilities: readonly (
+      | "messages"
+      | "streaming"
+      | "tool_calls"
+    )[];
+  }[];
+  readonly accountBindings: readonly {
+    readonly id: string;
+    readonly profileId: string;
+    readonly label: string;
+    readonly authDriverRef: string;
+    readonly enabled: boolean;
+    readonly secretHandling: "preserve_existing";
+  }[];
+  readonly routeSets: readonly {
+    readonly id: string;
+    readonly candidateProfileIds: readonly string[];
+    readonly fallback: "disabled" | "pre_first_byte_idempotent_only";
+  }[];
+  readonly egressPolicy: {
+    readonly id: string;
+    readonly mode: "direct";
+  };
+  readonly pluginPlan: {
+    readonly mode: "pass_through";
+    readonly bindingIds: readonly string[];
+  };
+}
+
+export type AccessApplyResponse =
+  | {
+      readonly outcome: "committed";
+      readonly revision: number;
+      readonly applicationState: "active";
+      readonly planHash: string;
+    }
+  | {
+      readonly outcome: "committed";
+      readonly revision: number;
+      readonly applicationState: "unavailable";
+    };
+
+/**
+ * One provider route added to an existing tool. The preset is deliberately
+ * closed: the server owns protocol, authentication-header, and SecretRef
+ * selection, while the browser supplies only values a person can review.
+ */
+export type AccessCandidateProvider =
+  | "anthropic"
+  | "anthropic-compatible"
+  | "openai"
+  | "openai-compatible";
+
+export type AccessAddCandidateInput =
+  | {
+      readonly name: string;
+      readonly provider: "anthropic";
+      readonly model: string;
+      readonly authDriverRef?: "anthropic_api_key";
+    }
+  | {
+      readonly name: string;
+      readonly provider: "anthropic-compatible";
+      readonly baseUrl: string;
+      readonly model: string;
+      readonly authDriverRef?: "anthropic_api_key" | "static_header";
+    }
+  | {
+      readonly name: string;
+      readonly provider: "openai";
+      readonly model: string;
+      readonly authDriverRef?: "static_header";
+    }
+  | {
+      readonly name: string;
+      readonly provider: "openai-compatible";
+      readonly baseUrl: string;
+      readonly model: string;
+      readonly authDriverRef?: "anthropic_api_key" | "static_header";
+    };
+
+export type AccessAddCandidateResponse = AccessApplyResponse & {
+  readonly candidate: {
+    readonly profileId: string;
+    readonly credentialId: string;
+  };
+};
 
 export interface AccessPlanSummary {
   readonly accessId: string;
@@ -250,7 +390,16 @@ export interface CredentialView {
   readonly secretRevision: number;
 }
 
-export type ConnectionDecision = "allow" | "deny";
+export type ConnectionDecision = "allow" | "deny" | "ask";
+
+export type ConnectionEgressScope = "access" | "network";
+
+export type ConnectionEgressSource =
+  | "access_rule"
+  | "access_plugin"
+  | "access_default"
+  | "network_rule"
+  | "network_default";
 
 export type ConnectionDecryption = "none" | "blind" | "mitm";
 
@@ -288,6 +437,13 @@ export interface ConnectionRecord {
   readonly port: number;
   readonly decision?: ConnectionDecision;
   readonly ruleId?: string;
+  readonly credentialBindingId?: string;
+  readonly egressScope?: ConnectionEgressScope;
+  readonly egressSource?: ConnectionEgressSource;
+  readonly egressRuleId?: string;
+  readonly egressSelectorRunId?: string;
+  readonly egressProxyId?: string;
+  readonly egressPolicyRevision?: number;
   readonly decryption: ConnectionDecryption;
   readonly phase: ConnectionPhase;
   readonly bytesUp: number;
@@ -311,6 +467,8 @@ export type EgressPurpose =
   | "blind_tunnel"
   | "auxiliary_llm"
   | "language_transform"
+  | "plugin_catalog_sync"
+  | "plugin_artifact_fetch"
   | "update";
 
 export type EgressOutcome = "completed" | "failed" | "canceled";
@@ -377,18 +535,95 @@ export type CaptureRunRecognition =
   | "recognized"
   | "verified";
 
+export type CaptureRunAdapterState = "verified" | "generic" | "failed";
+
+export interface CaptureRunAdapterEvidence {
+  readonly id: string;
+  readonly revision: number;
+  readonly version: string;
+  readonly catalogRevision: number;
+  readonly source: "prelaunch_digest_catalog";
+  readonly installShape: string;
+  readonly launchRecipe: string;
+}
+
 export interface CaptureRunRecord {
   readonly id: string;
   readonly executableLabel: string;
   readonly cwd: string;
+  /** Untrusted launcher environment label for display only. */
+  readonly localUserLabel?: string;
+  readonly machineId?: string;
+  readonly workspaceId?: string;
+  readonly workspaceLabel?: string;
+  readonly workspaceEvidence?: "local_launcher" | "registered_companion";
   readonly processId?: number;
   readonly state: CaptureRunState;
   readonly observation: CaptureRunObservation;
+  /** Compatibility field on the Desktop audit projection. */
   readonly recognition: CaptureRunRecognition;
+  readonly clientAdapterState: CaptureRunAdapterState;
+  readonly clientRecognition: CaptureRunRecognition;
+  readonly catalogRevision: number;
+  readonly clientAdapter?: CaptureRunAdapterEvidence;
+  readonly clientAdapterReason?: string;
   readonly createdAt: string;
   readonly expiresAt: string;
 }
 
 export interface CaptureRunPage {
   readonly items: readonly CaptureRunRecord[];
+}
+
+export type WorkspaceRouteState =
+  | "active"
+  | "workspace_route_unavailable";
+
+export type WorkspaceRouteAuthPresentation =
+  | "vibermate_account"
+  | "client_oauth"
+  | "client_auth"
+  | "none";
+
+export interface WorkspaceRouteRunSummary {
+  readonly runId: string;
+  readonly clientLabel: string;
+  /** Untrusted launcher environment label for display only. */
+  readonly localUserLabel?: string;
+  readonly state: "active" | "idle";
+  readonly startedAt: string;
+  readonly lastActivityAt: string;
+}
+
+export interface WorkspaceRouteProfileOption {
+  readonly profileId: string;
+  readonly label: string;
+  readonly modelPresentation: string;
+  readonly authPresentation: WorkspaceRouteAuthPresentation;
+  readonly authLabel: string;
+  readonly available: boolean;
+}
+
+export interface WorkspaceRouteBinding {
+  readonly id: string;
+  readonly accessId: string;
+  readonly machineId: string;
+  readonly machineShortId: string;
+  readonly machineDisplayName: string;
+  readonly machineRegistrationRevision: number;
+  readonly workspaceId: string;
+  readonly workspaceLabel: string;
+  readonly workspaceEvidence: "local_launcher" | "registered_companion";
+  readonly profileId: string;
+  readonly revision: number;
+  readonly state: WorkspaceRouteState;
+  readonly activeRunCount: number;
+  readonly activeRuns: readonly WorkspaceRouteRunSummary[];
+  readonly pinnedRequestCount: number;
+  readonly approvedProfiles: readonly WorkspaceRouteProfileOption[];
+  readonly updatedAt: string;
+}
+
+export interface WorkspaceRouteBindingPage {
+  readonly items: readonly WorkspaceRouteBinding[];
 }

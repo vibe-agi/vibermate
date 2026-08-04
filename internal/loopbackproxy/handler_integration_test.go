@@ -38,6 +38,7 @@ import (
 	"github.com/vibe-agi/vibermate/internal/responseschat"
 	"github.com/vibe-agi/vibermate/internal/runtimepersistence"
 	"github.com/vibe-agi/vibermate/internal/toolapproval"
+	"github.com/vibe-agi/vibermate/internal/workspaceidentity"
 )
 
 func TestLoopbackProxyAuthenticatesMITMAndDispatchesByPathCapability(
@@ -761,6 +762,7 @@ func newProxyFixtureForDialectWithPolicy(
 		CatalogRevision: 1,
 		Adapter:         adapter,
 		Recognition:     fixtureRecognition(adapter),
+		Workspace:       proxyWorkspaceScope(t),
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -1361,4 +1363,32 @@ func fixtureRecognition(
 		return clientadapter.RecognitionUnknown
 	}
 	return clientadapter.RecognitionVerified
+}
+
+func proxyWorkspaceScope(t *testing.T) workspaceidentity.Scope {
+	t.Helper()
+	machineID, err := workspaceidentity.ParseMachineID(
+		base64.RawURLEncoding.EncodeToString(bytes.Repeat([]byte{0x61}, 32)),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	workspaceID, err := workspaceidentity.ParseWorkspaceID(
+		base64.RawURLEncoding.EncodeToString(bytes.Repeat([]byte{0x62}, 32)),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	scope, err := workspaceidentity.NewScope(
+		machineID,
+		workspaceID,
+		"workspace",
+		workspaceidentity.EvidenceLocalLauncher,
+		1,
+		1,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return scope
 }

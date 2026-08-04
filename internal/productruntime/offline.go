@@ -14,18 +14,21 @@ import (
 type runtimeResumeProber struct {
 	provider offlinehold.Prober
 	original offlinehold.Prober
+	blind    offlinehold.Prober
 }
 
 func newRuntimeResumeProber(
 	provider offlinehold.Prober,
 	original offlinehold.Prober,
+	blind offlinehold.Prober,
 ) (*runtimeResumeProber, error) {
-	if provider == nil || original == nil {
+	if provider == nil || original == nil || blind == nil {
 		return nil, errors.New("runtime resume probe dependencies are incomplete")
 	}
 	return &runtimeResumeProber{
 		provider: provider,
 		original: original,
+		blind:    blind,
 	}, nil
 }
 
@@ -36,6 +39,7 @@ func (prober *runtimeResumeProber) Probe(
 	if prober == nil ||
 		prober.provider == nil ||
 		prober.original == nil ||
+		prober.blind == nil ||
 		ctx == nil ||
 		len(request.Targets) == 0 {
 		return offlinehold.NewProbeFailure(
@@ -50,10 +54,24 @@ func (prober *runtimeResumeProber) Probe(
 			selected = prober.provider
 		case offlinehold.EgressOpaque, offlinehold.EgressAuxiliary:
 			selected = prober.original
+		case offlinehold.EgressBlindTunnel:
+			// A CONNECT that arrived after Enter is queued like anything else,
+			// so resume has to clear it. Having no arm here meant one tunnel
+			// failed the whole probe set and released nothing — including
+			// every provider request waiting behind it.
+			selected = prober.blind
 		default:
+			// Plugin distribution and update egress have Hold kinds but no
+			// subsystem that can queue one yet, so reaching here is a
+			// programming error rather than a network condition. Saying that
+			// is more useful than a reason code a person would read as "the
+			// network is down".
 			return offlinehold.NewProbeFailure(
 				offlinehold.ProbeReasonFailed,
-				errors.New("runtime resume probe target kind is unsupported"),
+				fmt.Errorf(
+					"runtime resume has no prober for egress kind %q",
+					target.Kind,
+				),
 			)
 		}
 		if err := selected.Probe(

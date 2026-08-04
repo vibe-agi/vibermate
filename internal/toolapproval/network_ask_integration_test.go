@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/rand"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -39,6 +40,98 @@ func askRequest() toolapproval.NetworkAskRequest {
 		IngressID: "run-1",
 		Host:      "api.example.com",
 		Port:      443,
+	}
+}
+
+func TestAClientRootSignedPathIsLiveEvidenceNotDurableApprovalData(t *testing.T) {
+	t.Parallel()
+
+	store := openStore(t, filepath.Join(t.TempDir(), "data", "runtime.db"))
+	t.Cleanup(func() { shutdownStore(t, store) })
+	repository := store.ToolApprovalRepository()
+	authority, err := toolapproval.New(
+		context.Background(),
+		toolapproval.Options{
+			Repository: repository,
+			Clock:      toolapproval.SystemClock{},
+			Random:     rand.Reader,
+			Config:     toolapproval.Config{DecisionTimeout: 10 * time.Second},
+		},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { shutdownAuthority(t, authority) })
+
+	const signedPath = "/Applications/Claude.app/Contents/MacOS/claude"
+	type askResult struct {
+		outcome toolapproval.ClientRootAskOutcome
+		err     error
+	}
+	result := make(chan askResult, 1)
+	go func() {
+		outcome, askErr := authority.AskClientRoot(
+			context.Background(),
+			toolapproval.ClientRootAskRequest{
+				SignerID:       "claude-code",
+				SignerRevision: 1,
+				SignedPath:     signedPath,
+			},
+		)
+		result <- askResult{outcome: outcome, err: askErr}
+	}()
+	select {
+	case early := <-result:
+		t.Fatalf(
+			"client Root ask returned before a decision: outcome=%+v err=%v",
+			early.outcome,
+			early.err,
+		)
+	case <-time.After(50 * time.Millisecond):
+	}
+
+	pending := waitForPendingKind(t, authority, toolapproval.KindClientRootAsk)
+	if len(pending.SubjectLabels) != 1 || pending.SubjectLabels[0] != signedPath {
+		t.Fatalf("live approval labels = %q", pending.SubjectLabels)
+	}
+	stored, err := repository.Get(context.Background(), pending.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(strings.Join(stored.SubjectLabels, "\n"), signedPath) {
+		t.Fatalf("signed path entered the durable approval: %q", stored.SubjectLabels)
+	}
+	if len(stored.SubjectLabels) != 1 || stored.SubjectLabels[0] != "claude-code" {
+		t.Fatalf("durable safe labels = %q", stored.SubjectLabels)
+	}
+
+	resolved, err := authority.DecideApproval(
+		context.Background(),
+		toolapproval.DecisionCommand{
+			ApprovalID:       pending.ID,
+			ExpectedRevision: pending.Revision,
+			IdempotencyKey:   "client-root-no-store-0001",
+			Decision:         toolapproval.DecisionDeny,
+			Scope:            toolapproval.ScopeRequest,
+			ReasonCode:       "user_denied",
+		},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(resolved.SubjectLabels) != 1 || resolved.SubjectLabels[0] != signedPath {
+		t.Fatalf("decision response lost live evidence: %q", resolved.SubjectLabels)
+	}
+	answer := <-result
+	if answer.err != nil || answer.outcome.Allowed {
+		t.Fatalf("ask result = %+v", answer)
+	}
+	after, err := authority.GetApproval(context.Background(), pending.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(strings.Join(after.SubjectLabels, "\n"), signedPath) {
+		t.Fatalf("terminal read retained signed path: %q", after.SubjectLabels)
 	}
 }
 

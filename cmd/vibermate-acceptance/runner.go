@@ -11,6 +11,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/vibe-agi/vibermate/internal/acceptancereport"
 	"github.com/vibe-agi/vibermate/internal/access"
 	"github.com/vibe-agi/vibermate/internal/activity"
 	"github.com/vibe-agi/vibermate/internal/clientadapter"
@@ -23,6 +24,8 @@ import (
 	"github.com/vibe-agi/vibermate/internal/secretstore"
 	"github.com/vibe-agi/vibermate/internal/toolapproval"
 )
+
+const packagedAcceptanceLockName = "packaged-acceptance.lock"
 
 func runAcceptance(
 	parent context.Context,
@@ -78,6 +81,14 @@ func runAcceptance(
 	if err != nil {
 		return fail("runtime-layout", err)
 	}
+	acceptanceGuard, err := instanceguard.Acquire(filepath.Join(
+		layout.AppCacheDirectory,
+		packagedAcceptanceLockName,
+	))
+	if err != nil {
+		return fail("exclusive-generation-preflight", err)
+	}
+	defer acceptanceGuard.Release()
 	guard, err := instanceguard.Acquire(layout.GenerationLock)
 	if err != nil {
 		return fail("exclusive-generation-preflight", err)
@@ -88,7 +99,7 @@ func runAcceptance(
 	report.add(
 		"exclusive-generation-preflight",
 		checkPassed,
-		"no other Desktop generation owned the runtime",
+		"no other Desktop generation owned the runtime and this packaged acceptance owns the per-user serialization lock",
 	)
 	desktopHome, err := os.MkdirTemp("", "vibermate-desktop-shell-*")
 	if err != nil {
@@ -113,12 +124,17 @@ func runAcceptance(
 		desktopLayout,
 		desktopHome,
 	); err != nil {
-		return fail("packaged-desktop-shell", err)
+		return fail("packaged-main-navigation-cold-restore", err)
 	}
 	report.add(
 		"packaged-desktop-shell",
 		checkPassed,
 		"packaged App used an isolated user directory, exchanged bootstrap, and gracefully drained its sidecar",
+	)
+	report.add(
+		"packaged-main-navigation-cold-restore",
+		checkPassed,
+		"two fresh packaged main-window launches restored one non-default private locator, atomically persisted Router mount state, and flushed it on exit",
 	)
 
 	dataDirectory := config.dataDirectory
@@ -176,6 +192,7 @@ func runAcceptance(
 		problem.ReasonCode != "" ||
 		applied.Outcome != access.WriteOutcomeCommitted ||
 		applied.Revision != 1 ||
+		applied.ApplicationState != desktopcontrol.AccessApplicationStateActive ||
 		len(applied.PlanHash) != 64 {
 		return fail(
 			"access-apply",
@@ -206,7 +223,12 @@ func runAcceptance(
 		checkPassed,
 		"an explicit exact-host-and-port rule admitted only the fixed client origin; the default remained ask",
 	)
-	preflight, err := runHeldIngressPreflight(ctx, config, first)
+	firstAudit, err := openExchangeAuditReader(ctx, dataDirectory)
+	if err != nil {
+		return fail("fixed-client-ingress-preflight", err)
+	}
+	defer firstAudit.Close()
+	preflight, err := runHeldIngressPreflight(ctx, config, first, firstAudit)
 	if err != nil {
 		return fail("fixed-client-ingress-preflight", err)
 	}
@@ -232,7 +254,7 @@ func runAcceptance(
 	report.add(
 		"fixed-client-provider-fail-closed",
 		checkPassed,
-		"the subsequent provider request failed before transport at the missing development credential boundary; reason="+preflight.providerReason,
+		"the subsequent provider request failed before transport at the missing credential boundary; reason="+preflight.providerReason,
 	)
 	connectionID, err := waitForClientConnectionAudit(
 		ctx,
@@ -255,6 +277,17 @@ func runAcceptance(
 	firstStopped = true
 	if err != nil {
 		return fail("daemon-sigint", err)
+	}
+	if err := firstAudit.Close(); err != nil {
+		return fail("sqlite-reopen", err)
+	}
+	if err := requireReopenedExchangeAudit(
+		ctx,
+		dataDirectory,
+		nil,
+		preflight.providerFailure,
+	); err != nil {
+		return fail("sqlite-reopen", err)
 	}
 	removed, err := discoveryRemoved(layout.LauncherRecord)
 	if err != nil || !removed {
@@ -298,10 +331,18 @@ func runAcceptance(
 	if err := requireRecoveredAccess(ctx, second.control, config); err != nil {
 		return fail("sqlite-reopen", err)
 	}
+	if err := requireReopenedExchangeAudit(
+		ctx,
+		dataDirectory,
+		second.control,
+		preflight.providerFailure,
+	); err != nil {
+		return fail("sqlite-reopen", err)
+	}
 	report.add(
 		"sqlite-reopen",
 		checkPassed,
-		"new incarnation recovered Access revision 1 from SQLite",
+		"new incarnation recovered Access revision 1 and the exact committed Exchange failure from SQLite",
 	)
 	heldAgent, err := queueHeldIngressForDaemonKill(
 		ctx,
@@ -391,6 +432,14 @@ func runAcceptance(
 	if err := requireSettledOfflineState(offlineSnapshot); err != nil {
 		return fail("daemon-sigkill", err)
 	}
+	if err := requireReopenedExchangeAudit(
+		ctx,
+		dataDirectory,
+		third.control,
+		preflight.providerFailure,
+	); err != nil {
+		return fail("daemon-sigkill", err)
+	}
 	report.add(
 		"daemon-sigkill",
 		checkPassed,
@@ -422,6 +471,9 @@ func runAcceptance(
 			checkPassed,
 			"deterministic acceptance generation drained",
 		)
+		if err := requireDeterministicCheckContract(report); err != nil {
+			return fail("acceptance-report-contract", err)
+		}
 		return report, nil
 	}
 	credentialedApplied, credentialedStatus, credentialedProblem, credentialedErr :=
@@ -431,6 +483,7 @@ func runAcceptance(
 		credentialedProblem.ReasonCode != "" ||
 		credentialedApplied.Outcome != access.WriteOutcomeCommitted ||
 		credentialedApplied.Revision != 2 ||
+		credentialedApplied.ApplicationState != desktopcontrol.AccessApplicationStateActive ||
 		len(credentialedApplied.PlanHash) != 64 ||
 		credentialedApplied.PlanHash == deterministicPlanHash {
 		return fail(
@@ -468,8 +521,13 @@ func runAcceptance(
 		checkPassed,
 		"active credential metadata is configured without reading its value",
 	)
+	thirdAudit, err := openExchangeAuditReader(ctx, dataDirectory)
+	if err != nil {
+		return fail("normal-streaming-reply", err)
+	}
+	defer thirdAudit.Close()
 
-	if err := runNormalReply(ctx, config, third); err != nil {
+	if err := runNormalReply(ctx, config, third, thirdAudit); err != nil {
 		return fail("normal-streaming-reply", err)
 	}
 	report.add(
@@ -479,7 +537,7 @@ func runAcceptance(
 			" completed an unheld streamed provider reply",
 	)
 	if client.ID == acceptanceClientCodexCLI {
-		if err := runCodexResume(ctx, config, third); err != nil {
+		if err := runCodexResume(ctx, config, third, thirdAudit); err != nil {
 			return fail("fixed-codex-exec-resume", err)
 		}
 		report.add(
@@ -543,6 +601,32 @@ func runAcceptance(
 		"credentialed assembly generation drained cleanly",
 	)
 	return report, nil
+}
+
+func requireDeterministicCheckContract(report acceptanceReport) error {
+	if report.Schema != acceptancereport.SchemaV6 {
+		return errors.New("deterministic report producer schema is not current")
+	}
+	required, err := acceptancereport.RequiredCheckIDs(
+		report.Client.ID,
+		report.Client.Version,
+	)
+	if err != nil {
+		return err
+	}
+	if len(report.Checks) != len(required) {
+		return errors.New("deterministic report check set is incomplete or contains extras")
+	}
+	for index, id := range required {
+		if report.Checks[index].ID != id ||
+			report.Checks[index].Status != checkPassed {
+			return fmt.Errorf(
+				"deterministic report check contract differs at position %d",
+				index,
+			)
+		}
+	}
+	return nil
 }
 
 type acceptancePhases struct {
@@ -713,9 +797,86 @@ func requireRecoveredAccess(
 	return nil
 }
 
+func requireReopenedExchangeAudit(
+	ctx context.Context,
+	dataDirectory string,
+	control *controlClient,
+	expected exchangeAuditRecord,
+) (resultErr error) {
+	audit, err := openExchangeAuditReader(ctx, dataDirectory)
+	if err != nil {
+		return err
+	}
+	defer func() {
+		resultErr = errors.Join(resultErr, audit.Close())
+	}()
+	if err := requireExchangeAuditRecord(ctx, audit, expected); err != nil {
+		return err
+	}
+	if control != nil {
+		return requireCanonicalExchangeSummary(ctx, control, expected)
+	}
+	return nil
+}
+
+func requireCanonicalExchangeSummary(
+	ctx context.Context,
+	control *controlClient,
+	expected exchangeAuditRecord,
+) error {
+	if ctx == nil || control == nil {
+		return errors.New("canonical Exchange summary dependencies are required")
+	}
+	if err := expected.validate(); err != nil {
+		return err
+	}
+	const maxPages = 32
+	cursor := ""
+	seenCursors := make(map[string]struct{})
+	found := false
+	for range maxPages {
+		page, err := control.activities(ctx, cursor)
+		if err != nil {
+			return err
+		}
+		for _, summary := range page.Items {
+			if summary.ID != expected.ExchangeID {
+				continue
+			}
+			if summary.AccessID != expected.AccessID ||
+				summary.Status != string(expected.Status) {
+				return fmt.Errorf(
+					"canonical Exchange summary does not match its committed audit: %+v",
+					summary,
+				)
+			}
+			if found {
+				return errors.New("canonical Exchange summary is duplicated")
+			}
+			found = true
+		}
+		if page.NextCursor == "" {
+			if !found {
+				return errors.New("canonical Exchange summary is missing")
+			}
+			return nil
+		}
+		if page.NextCursor == cursor {
+			return errors.New("canonical Activity cursor did not advance")
+		}
+		if _, repeated := seenCursors[page.NextCursor]; repeated {
+			return errors.New("canonical Activity cursor repeated")
+		}
+		seenCursors[page.NextCursor] = struct{}{}
+		cursor = page.NextCursor
+	}
+	return errors.New("canonical Exchange summary exceeded its page bound")
+}
+
 type ingressPreflightEvidence struct {
 	queuedKinds        string
 	providerReason     string
+	providerFailure    exchangeAuditRecord
 	connectionBaseline int64
 	codexHTTPFallback  codexHTTPFallbackEvidence
 }
@@ -725,6 +886,11 @@ type codexHTTPFallbackEvidence struct {
 	RuntimeReason    exchange.ReasonCode
 	ConnectionAudit  bool
 }
+
+const (
+	claudeStartupControlRequestCount = 2
+	claudeStartupQueueStableFor      = 200 * time.Millisecond
+)
 
 func (evidence codexHTTPFallbackEvidence) validate() error {
 	if evidence.ClientHTTPStatus != http.StatusUpgradeRequired ||
@@ -778,6 +944,7 @@ func runHeldIngressPreflight(
 	ctx context.Context,
 	config config,
 	generation *daemonGeneration,
+	audit *exchangeAuditReader,
 ) (ingressPreflightEvidence, error) {
 	current, err := generation.control.offline(ctx)
 	if err != nil {
@@ -799,10 +966,7 @@ func runHeldIngressPreflight(
 			held,
 		)
 	}
-	activityBaseline, err := latestActivitySequence(
-		ctx,
-		generation.control,
-	)
+	activityBaseline, err := audit.latestSequence(ctx)
 	if err != nil {
 		return ingressPreflightEvidence{}, err
 	}
@@ -818,20 +982,25 @@ func runHeldIngressPreflight(
 		return ingressPreflightEvidence{}, err
 	}
 	defer os.RemoveAll(workingDirectory)
-	var run *agentRun
+	const prompt = "Reply exactly VIBEMATE_PREFLIGHT and nothing else."
+	var (
+		run    *agentRun
+		queued offlinehold.Snapshot
+	)
 	if config.clientID == acceptanceClientCodexCLI {
 		run, err = startFallbackAgent(
 			config,
 			workingDirectory,
-			"Reply exactly VIBEMATE_PREFLIGHT and nothing else.",
+			prompt,
 			"",
 		)
 	} else {
-		run, err = startAgent(
+		run, queued, err = queueDeferredClaudeProviderRequest(
+			ctx,
 			config,
+			generation,
 			workingDirectory,
-			"Reply exactly VIBEMATE_PREFLIGHT and nothing else.",
-			"",
+			prompt,
 			"",
 		)
 	}
@@ -855,13 +1024,18 @@ func runHeldIngressPreflight(
 	if err != nil {
 		return ingressPreflightEvidence{}, err
 	}
-	queued, err := waitForHeldQueuedEgressKind(
-		ctx,
-		generation.control,
-		run,
-		egressKind,
-	)
-	if err != nil {
+	if config.clientID == acceptanceClientCodexCLI {
+		queued, err = waitForHeldQueuedEgressKind(
+			ctx,
+			generation.control,
+			run,
+			egressKind,
+		)
+		if err != nil {
+			return ingressPreflightEvidence{}, err
+		}
+	}
+	if err := requireSingleHeldQueuedEgress(queued, egressKind); err != nil {
 		return ingressPreflightEvidence{}, err
 	}
 	fallbackEvidence := codexHTTPFallbackEvidence{}
@@ -894,12 +1068,12 @@ func runHeldIngressPreflight(
 	if err != nil {
 		return ingressPreflightEvidence{}, err
 	}
-	if err := requireReleasedOfflineRequest(releasing); err != nil {
+	if err := requireSingleReleasedEgress(releasing, egressKind); err != nil {
 		return ingressPreflightEvidence{}, err
 	}
-	reasonCode, err := waitForExchangeFailureAfter(
+	failure, err := waitForExchangeFailureAfter(
 		ctx,
-		generation.control,
+		audit,
 		config.accessID,
 		activityBaseline,
 		exchange.ReasonProviderCredentialUnavailable,
@@ -909,7 +1083,7 @@ func runHeldIngressPreflight(
 		return ingressPreflightEvidence{}, err
 	}
 	if config.clientID == acceptanceClientCodexCLI {
-		fallbackEvidence.RuntimeReason = exchange.ReasonCode(reasonCode)
+		fallbackEvidence.RuntimeReason = exchange.ReasonCode(failure.ReasonCode)
 		fallbackContext, cancelFallback := context.WithTimeout(
 			ctx,
 			10*time.Second,
@@ -948,12 +1122,298 @@ func runHeldIngressPreflight(
 	); err != nil {
 		return ingressPreflightEvidence{}, err
 	}
+	if err := requireOnlyExchangeFailureAfter(
+		ctx,
+		audit,
+		config.accessID,
+		activityBaseline,
+		exchange.ReasonProviderCredentialUnavailable,
+		failure,
+	); err != nil {
+		return ingressPreflightEvidence{}, err
+	}
+	if err := requireCanonicalExchangeSummary(
+		ctx,
+		generation.control,
+		failure,
+	); err != nil {
+		return ingressPreflightEvidence{}, err
+	}
 	return ingressPreflightEvidence{
 		queuedKinds:        queuedKinds,
-		providerReason:     reasonCode,
+		providerReason:     failure.ReasonCode,
+		providerFailure:    failure,
 		connectionBaseline: connectionBaseline,
 		codexHTTPFallback:  fallbackEvidence,
 	}, nil
+}
+
+func queueDeferredClaudeProviderRequest(
+	ctx context.Context,
+	config config,
+	generation *daemonGeneration,
+	workingDirectory string,
+	prompt string,
+	marker string,
+) (*agentRun, offlinehold.Snapshot, error) {
+	if ctx == nil ||
+		generation == nil ||
+		generation.control == nil ||
+		config.clientID != acceptanceClientClaudeCode {
+		return nil, offlinehold.Snapshot{}, errors.New(
+			"deferred Claude provider request dependencies are invalid",
+		)
+	}
+	initial, err := generation.control.offline(ctx)
+	if err != nil {
+		return nil, offlinehold.Snapshot{}, err
+	}
+	if err := requireCleanHeldEgress(initial); err != nil {
+		return nil, offlinehold.Snapshot{}, err
+	}
+	run, input, err := startDeferredClaudeAgent(
+		config,
+		workingDirectory,
+		"",
+		marker,
+	)
+	if err != nil {
+		return nil, offlinehold.Snapshot{}, err
+	}
+	cleanup := func(root error) (*agentRun, offlinehold.Snapshot, error) {
+		_ = input.close()
+		interruptErr := run.signalInterrupt()
+		if interruptErr != nil && !errors.Is(interruptErr, os.ErrProcessDone) {
+			root = errors.Join(root, interruptErr)
+		}
+		waitContext, cancelWait := context.WithTimeout(
+			context.Background(),
+			10*time.Second,
+		)
+		_, waitErr := run.wait(waitContext)
+		cancelWait()
+		return nil, offlinehold.Snapshot{}, errors.Join(root, waitErr)
+	}
+	startup, err := waitForClaudeStartupControlEgress(
+		ctx,
+		generation.control,
+		run,
+	)
+	if err != nil {
+		return cleanup(err)
+	}
+	releasing, err := generation.control.offlineAction(
+		ctx,
+		"resume",
+		startup.Revision,
+	)
+	if err != nil {
+		return cleanup(err)
+	}
+	if err := requireClaudeStartupControlRelease(releasing); err != nil {
+		return cleanup(err)
+	}
+	if err := waitForOfflineSettlementOrAgentExit(
+		ctx,
+		generation.control,
+		run,
+		45*time.Second,
+		"deferred-input startup",
+	); err != nil {
+		return cleanup(err)
+	}
+	current, err := generation.control.offline(ctx)
+	if err != nil {
+		return cleanup(err)
+	}
+	held, err := generation.control.offlineAction(
+		ctx,
+		"enter",
+		current.Revision,
+	)
+	if err != nil {
+		return cleanup(err)
+	}
+	if err := requireCleanHeldEgress(held); err != nil {
+		return cleanup(err)
+	}
+	if err := input.sendClaudePrompt(prompt); err != nil {
+		return cleanup(err)
+	}
+	queued, err := waitForHeldQueuedEgressKind(
+		ctx,
+		generation.control,
+		run,
+		offlinehold.EgressProvider,
+	)
+	if err != nil {
+		return cleanup(err)
+	}
+	return run, queued, nil
+}
+
+func requireCleanHeldEgress(snapshot offlinehold.Snapshot) error {
+	if snapshot.State != offlinehold.StateHeld ||
+		!snapshot.SafeToDisconnect ||
+		snapshot.ActiveActions != 0 ||
+		snapshot.EnteringActions != 0 ||
+		snapshot.ActiveEgress != 0 ||
+		snapshot.QueuedRequests != 0 ||
+		snapshot.HeldBytes != 0 ||
+		len(snapshot.ActiveByKind) != 0 ||
+		len(snapshot.QueuedByKind) != 0 {
+		return fmt.Errorf(
+			"offline hold was not empty before one client request: %+v",
+			snapshot,
+		)
+	}
+	return nil
+}
+
+func waitForClaudeStartupControlEgress(
+	ctx context.Context,
+	control *controlClient,
+	run *agentRun,
+) (offlinehold.Snapshot, error) {
+	ticker := time.NewTicker(25 * time.Millisecond)
+	defer ticker.Stop()
+	var stableSince time.Time
+	for {
+		snapshot, err := control.offline(ctx)
+		if err != nil {
+			return offlinehold.Snapshot{}, err
+		}
+		if err := requireClaudeStartupControlEgress(snapshot, false); err != nil {
+			return offlinehold.Snapshot{}, err
+		}
+		if snapshot.QueuedRequests == claudeStartupControlRequestCount {
+			if stableSince.IsZero() {
+				stableSince = time.Now()
+			} else if time.Since(stableSince) >= claudeStartupQueueStableFor {
+				if err := requireClaudeStartupControlEgress(
+					snapshot,
+					true,
+				); err != nil {
+					return offlinehold.Snapshot{}, err
+				}
+				return snapshot, nil
+			}
+		} else {
+			stableSince = time.Time{}
+		}
+		select {
+		case <-ticker.C:
+		case <-ctx.Done():
+			return offlinehold.Snapshot{}, ctx.Err()
+		case <-run.done:
+			return offlinehold.Snapshot{}, agentExitedBeforeHeldEgress(
+				ctx,
+				run,
+				offlinehold.EgressOpaque,
+			)
+		}
+	}
+}
+
+func requireClaudeStartupControlEgress(
+	snapshot offlinehold.Snapshot,
+	requireComplete bool,
+) error {
+	opaque := snapshot.QueuedByKind[offlinehold.EgressOpaque]
+	if snapshot.State != offlinehold.StateHeld ||
+		!snapshot.SafeToDisconnect ||
+		snapshot.ActiveEgress != 0 ||
+		snapshot.EnteringActions != 0 ||
+		snapshot.HeldBytes != 0 ||
+		snapshot.QueuedRequests < 0 ||
+		snapshot.QueuedRequests > claudeStartupControlRequestCount ||
+		opaque != snapshot.QueuedRequests ||
+		snapshot.ActiveActions < snapshot.QueuedRequests ||
+		snapshot.ActiveActions > claudeStartupControlRequestCount ||
+		(requireComplete &&
+			(snapshot.QueuedRequests != claudeStartupControlRequestCount ||
+				snapshot.ActiveActions != claudeStartupControlRequestCount)) {
+		return fmt.Errorf(
+			"fixed Claude startup did not isolate its exact bodyless control pair: %+v",
+			snapshot,
+		)
+	}
+	for kind, count := range snapshot.QueuedByKind {
+		if count < 0 || (count != 0 && kind != offlinehold.EgressOpaque) {
+			return fmt.Errorf(
+				"fixed Claude startup held an unexpected %s egress: %+v",
+				kind,
+				snapshot,
+			)
+		}
+	}
+	if len(snapshot.ActiveByKind) != 0 {
+		return fmt.Errorf(
+			"fixed Claude startup had active egress while held: %+v",
+			snapshot,
+		)
+	}
+	return nil
+}
+
+func requireClaudeStartupControlRelease(
+	snapshot offlinehold.Snapshot,
+) error {
+	if snapshot.State != offlinehold.StateReleasing ||
+		snapshot.ActiveActions != claudeStartupControlRequestCount ||
+		snapshot.EnteringActions != 0 ||
+		snapshot.ActiveEgress != claudeStartupControlRequestCount ||
+		snapshot.ActiveByKind[offlinehold.EgressOpaque] != claudeStartupControlRequestCount ||
+		snapshot.QueuedRequests != 0 ||
+		len(snapshot.QueuedByKind) != 0 ||
+		snapshot.HeldBytes != 0 {
+		return fmt.Errorf(
+			"fixed Claude startup control pair was not released exactly: %+v",
+			snapshot,
+		)
+	}
+	return nil
+}
+
+func waitForOfflineSettlementOrAgentExit(
+	ctx context.Context,
+	control *controlClient,
+	run *agentRun,
+	limit time.Duration,
+	phase string,
+) error {
+	waitContext, cancel := context.WithTimeout(ctx, limit)
+	defer cancel()
+	ticker := time.NewTicker(25 * time.Millisecond)
+	defer ticker.Stop()
+	var latest offlinehold.Snapshot
+	for {
+		snapshot, err := control.offline(waitContext)
+		if err != nil {
+			return err
+		}
+		latest = snapshot
+		if requireSettledOfflineState(snapshot) == nil {
+			return nil
+		}
+		select {
+		case <-ticker.C:
+		case <-waitContext.Done():
+			return fmt.Errorf(
+				"%s did not settle before deadline: %+v: %w",
+				phase,
+				latest,
+				waitContext.Err(),
+			)
+		case <-run.done:
+			exitCode, waitErr := run.wait(waitContext)
+			return fmt.Errorf(
+				"fixed client exited during %s: %w",
+				phase,
+				agentProcessFailure(phase, exitCode, waitErr, run),
+			)
+		}
+	}
 }
 
 func heldPreflightEgressKind(
@@ -961,7 +1421,7 @@ func heldPreflightEgressKind(
 ) (offlinehold.EgressKind, error) {
 	switch clientID {
 	case acceptanceClientClaudeCode:
-		return offlinehold.EgressOpaque, nil
+		return offlinehold.EgressProvider, nil
 	case acceptanceClientCodexCLI:
 		return offlinehold.EgressProvider, nil
 	default:
@@ -969,6 +1429,60 @@ func heldPreflightEgressKind(
 			"fixed client preflight egress boundary is unsupported",
 		)
 	}
+}
+
+func requireSingleHeldQueuedEgress(
+	snapshot offlinehold.Snapshot,
+	kind offlinehold.EgressKind,
+) error {
+	if snapshot.State != offlinehold.StateHeld ||
+		!snapshot.SafeToDisconnect ||
+		snapshot.ActiveEgress != 0 ||
+		snapshot.QueuedRequests != 1 ||
+		snapshot.HeldBytes <= 0 ||
+		snapshot.QueuedByKind[kind] != 1 {
+		return fmt.Errorf(
+			"preflight did not isolate one held %s egress: %+v",
+			kind,
+			snapshot,
+		)
+	}
+	for observedKind, count := range snapshot.QueuedByKind {
+		if count < 0 || (count != 0 && observedKind != kind) {
+			return fmt.Errorf(
+				"preflight held an unexpected %s egress: %+v",
+				observedKind,
+				snapshot,
+			)
+		}
+	}
+	return nil
+}
+
+func requireSingleReleasedEgress(
+	snapshot offlinehold.Snapshot,
+	kind offlinehold.EgressKind,
+) error {
+	if snapshot.State != offlinehold.StateReleasing ||
+		snapshot.QueuedRequests != 0 ||
+		snapshot.ActiveEgress != 1 ||
+		snapshot.ActiveByKind[kind] != 1 {
+		return fmt.Errorf(
+			"offline resume did not isolate one released %s egress: %+v",
+			kind,
+			snapshot,
+		)
+	}
+	for observedKind, count := range snapshot.ActiveByKind {
+		if count < 0 || (count != 0 && observedKind != kind) {
+			return fmt.Errorf(
+				"offline resume released an unexpected %s egress: %+v",
+				observedKind,
+				snapshot,
+			)
+		}
+	}
+	return nil
 }
 
 type heldAgentRun struct {
@@ -1022,13 +1536,29 @@ func queueHeldIngressForDaemonKill(
 	if err != nil {
 		return nil, err
 	}
-	run, err := startAgent(
-		config,
-		workingDirectory,
-		"Reply exactly VIBEMATE_KILLED_REQUEST and nothing else.",
-		"",
-		"VIBEMATE_KILLED_REQUEST",
+	const prompt = "Reply exactly VIBEMATE_KILLED_REQUEST and nothing else."
+	var (
+		run    *agentRun
+		queued offlinehold.Snapshot
 	)
+	if config.clientID == acceptanceClientClaudeCode {
+		run, queued, err = queueDeferredClaudeProviderRequest(
+			ctx,
+			config,
+			generation,
+			workingDirectory,
+			prompt,
+			"VIBEMATE_KILLED_REQUEST",
+		)
+	} else {
+		run, err = startAgent(
+			config,
+			workingDirectory,
+			prompt,
+			"",
+			"VIBEMATE_KILLED_REQUEST",
+		)
+	}
 	if err != nil {
 		_ = os.RemoveAll(workingDirectory)
 		return nil, err
@@ -1044,12 +1574,14 @@ func queueHeldIngressForDaemonKill(
 		_ = os.RemoveAll(workingDirectory)
 		return nil, root
 	}
-	if err := waitForQueuedEgress(ctx, generation.control, run); err != nil {
-		return cleanup(err)
-	}
-	queued, err := generation.control.offline(ctx)
-	if err != nil {
-		return cleanup(err)
+	if config.clientID != acceptanceClientClaudeCode {
+		if err := waitForQueuedEgress(ctx, generation.control, run); err != nil {
+			return cleanup(err)
+		}
+		queued, err = generation.control.offline(ctx)
+		if err != nil {
+			return cleanup(err)
+		}
 	}
 	if queued.State != offlinehold.StateHeld ||
 		!queued.SafeToDisconnect ||
@@ -1157,6 +1689,7 @@ func runNormalReply(
 	ctx context.Context,
 	config config,
 	generation *daemonGeneration,
+	audit *exchangeAuditReader,
 ) error {
 	workingDirectory, err := os.MkdirTemp("", "vibermate-agent-normal-*")
 	if err != nil {
@@ -1180,7 +1713,7 @@ func runNormalReply(
 		processFailure := agentProcessFailure("normal", exitCode, err, run)
 		reasonCode, activityErr := latestExchangeFailure(
 			ctx,
-			generation.control,
+			audit,
 			config.accessID,
 		)
 		if activityErr == nil && reasonCode != "" {
@@ -1242,80 +1775,59 @@ func requireSuccessfulAgentEvidence(
 
 func latestExchangeFailure(
 	ctx context.Context,
-	control *controlClient,
+	audit *exchangeAuditReader,
 	accessID string,
 ) (string, error) {
-	page, err := control.activities(ctx)
+	record, exists, err := audit.latestFailure(ctx, accessID)
 	if err != nil {
 		return "", err
 	}
-	for _, record := range page.Items {
-		if record.Kind == activity.KindExchangeCompleted &&
-			record.AccessID == accessID &&
-			record.Status == activity.StatusFailed {
-			return record.ReasonCode, nil
-		}
+	if !exists {
+		return "", nil
 	}
-	return "", nil
-}
-
-func latestActivitySequence(
-	ctx context.Context,
-	control *controlClient,
-) (int64, error) {
-	page, err := control.activities(ctx)
-	if err != nil {
-		return 0, err
-	}
-	var latest int64
-	for _, record := range page.Items {
-		if record.Sequence > latest {
-			latest = record.Sequence
-		}
-	}
-	return latest, nil
+	return record.ReasonCode, nil
 }
 
 func successfulExchangeSubjectsAfter(
-	records []activity.Record,
+	records []exchangeAuditRecord,
 	accessID string,
 	after int64,
 ) []string {
-	matches := make([]activity.Record, 0, len(records))
+	matches := make([]exchangeAuditRecord, 0, len(records))
 	for _, record := range records {
 		if record.Sequence <= after ||
-			record.Kind != activity.KindExchangeCompleted ||
 			record.AccessID != accessID ||
 			record.Status != activity.StatusSucceeded ||
-			record.SubjectID == "" {
+			record.ExchangeID == "" {
 			continue
 		}
 		matches = append(matches, record)
 	}
-	slices.SortFunc(matches, func(left, right activity.Record) int {
+	slices.SortFunc(matches, func(left, right exchangeAuditRecord) int {
 		switch {
 		case left.Sequence < right.Sequence:
 			return -1
 		case left.Sequence > right.Sequence:
 			return 1
 		default:
-			return strings.Compare(left.SubjectID, right.SubjectID)
+			return strings.Compare(left.ExchangeID, right.ExchangeID)
 		}
 	})
 	seen := make(map[string]struct{}, len(matches))
 	subjects := make([]string, 0, len(matches))
 	for _, record := range matches {
-		if _, duplicate := seen[record.SubjectID]; duplicate {
+		if _, duplicate := seen[record.ExchangeID]; duplicate {
 			continue
 		}
-		seen[record.SubjectID] = struct{}{}
-		subjects = append(subjects, record.SubjectID)
+		seen[record.ExchangeID] = struct{}{}
+		subjects = append(subjects, record.ExchangeID)
 	}
 	return subjects
 }
 
 func waitForSuccessfulExchangesAfter(
 	ctx context.Context,
+	audit *exchangeAuditReader,
 	control *controlClient,
 	accessID string,
 	after int64,
@@ -1331,16 +1843,41 @@ func waitForSuccessfulExchangesAfter(
 	defer ticker.Stop()
 	observed := 0
 	for {
-		page, err := control.activities(waitContext)
+		records, err := audit.terminalsAfter(
+			waitContext,
+			accessID,
+			after,
+		)
 		if err != nil {
 			return err
 		}
 		observed = len(successfulExchangeSubjectsAfter(
-			page.Items,
+			records,
 			accessID,
 			after,
 		))
-		if observed >= expected {
+		if len(records) > observed {
+			return errors.New(
+				"post-baseline Codex resume produced a non-successful or duplicate Exchange",
+			)
+		}
+		if observed > expected {
+			return fmt.Errorf(
+				"successful Exchange evidence count=%d exceeded=%d",
+				observed,
+				expected,
+			)
+		}
+		if observed == expected {
+			for _, record := range records {
+				if err := requireCanonicalExchangeSummary(
+					waitContext,
+					control,
+					record,
+				); err != nil {
+					return err
+				}
+			}
 			return nil
 		}
 		select {
@@ -1360,14 +1897,12 @@ func runCodexResume(
 	ctx context.Context,
 	config config,
 	generation *daemonGeneration,
+	audit *exchangeAuditReader,
 ) error {
 	if config.clientID != acceptanceClientCodexCLI {
 		return errors.New("Codex resume requires the fixed Codex client")
 	}
-	activityBaseline, err := latestActivitySequence(
-		ctx,
-		generation.control,
-	)
+	activityBaseline, err := audit.latestSequence(ctx)
 	if err != nil {
 		return err
 	}
@@ -1444,6 +1979,7 @@ func runCodexResume(
 	}
 	return waitForSuccessfulExchangesAfter(
 		ctx,
+		audit,
 		generation.control,
 		config.accessID,
 		activityBaseline,
@@ -2152,53 +2688,105 @@ func connectionRecordTerminal(record connectionevent.Record) bool {
 
 func waitForExchangeFailureAfter(
 	ctx context.Context,
-	control *controlClient,
+	audit *exchangeAuditReader,
 	accessID string,
 	after int64,
 	expected exchange.ReasonCode,
 	limit time.Duration,
-) (string, error) {
+) (exchangeAuditRecord, error) {
 	waitContext, cancel := context.WithTimeout(ctx, limit)
 	defer cancel()
 	ticker := time.NewTicker(50 * time.Millisecond)
 	defer ticker.Stop()
 	for {
-		page, err := control.activities(waitContext)
+		records, err := audit.terminalsAfter(
+			waitContext,
+			accessID,
+			after,
+		)
 		if err != nil {
-			return "", err
+			return exchangeAuditRecord{}, err
 		}
-		var latest *activity.Record
-		for index := range page.Items {
-			record := &page.Items[index]
-			if record.Sequence <= after ||
-				record.Kind != activity.KindExchangeCompleted ||
-				record.AccessID != accessID ||
-				record.Status != activity.StatusFailed {
-				continue
-			}
-			if latest == nil || record.Sequence > latest.Sequence {
-				latest = record
-			}
+		latest, exists, err := singleExpectedExchangeFailure(
+			records,
+			accessID,
+			expected,
+		)
+		if err != nil {
+			return exchangeAuditRecord{}, err
 		}
-		if latest != nil {
-			if latest.ReasonCode != string(expected) {
-				return "", fmt.Errorf(
-					"deterministic provider failure reason=%q, want %q",
-					latest.ReasonCode,
-					expected,
-				)
-			}
-			return latest.ReasonCode, nil
+		if exists {
+			return latest, nil
 		}
 		select {
 		case <-ticker.C:
 		case <-waitContext.Done():
-			return "", fmt.Errorf(
+			return exchangeAuditRecord{}, fmt.Errorf(
 				"expected Exchange failure was not recorded: %w",
 				waitContext.Err(),
 			)
 		}
 	}
+}
+
+func singleExpectedExchangeFailure(
+	records []exchangeAuditRecord,
+	accessID string,
+	expected exchange.ReasonCode,
+) (exchangeAuditRecord, bool, error) {
+	if accessID == "" || expected == "" {
+		return exchangeAuditRecord{}, false, errors.New(
+			"expected Exchange failure is incomplete",
+		)
+	}
+	if len(records) == 0 {
+		return exchangeAuditRecord{}, false, nil
+	}
+	if len(records) != 1 {
+		return exchangeAuditRecord{}, false, fmt.Errorf(
+			"post-baseline Exchange terminal count=%d, want=1",
+			len(records),
+		)
+	}
+	record := records[0]
+	if record.AccessID != accessID ||
+		record.Status != activity.StatusFailed ||
+		record.ReasonCode != string(expected) {
+		return exchangeAuditRecord{}, false, fmt.Errorf(
+			"deterministic provider Exchange is not the expected failure: %+v",
+			record,
+		)
+	}
+	return record, true, nil
+}
+
+func requireOnlyExchangeFailureAfter(
+	ctx context.Context,
+	audit *exchangeAuditReader,
+	accessID string,
+	after int64,
+	expectedReason exchange.ReasonCode,
+	expectedRecord exchangeAuditRecord,
+) error {
+	records, err := audit.terminalsAfter(ctx, accessID, after)
+	if err != nil {
+		return err
+	}
+	record, exists, err := singleExpectedExchangeFailure(
+		records,
+		accessID,
+		expectedReason,
+	)
+	if err != nil {
+		return err
+	}
+	if !exists {
+		return errors.New("post-baseline Exchange failure disappeared")
+	}
+	if record != expectedRecord {
+		return errors.New("post-baseline Exchange failure changed after settlement")
+	}
+	return nil
 }
 
 type heldStreamingEvidence struct {
@@ -2410,10 +2998,10 @@ func waitForHeldQueuedEgressKind(
 		if err != nil {
 			return offlinehold.Snapshot{}, err
 		}
-		if snapshot.State == offlinehold.StateHeld &&
-			snapshot.SafeToDisconnect &&
-			snapshot.ActiveEgress == 0 &&
-			snapshot.QueuedByKind[kind] > 0 {
+		if snapshot.QueuedByKind[kind] > 0 {
+			if err := requireSingleHeldQueuedEgress(snapshot, kind); err != nil {
+				return offlinehold.Snapshot{}, err
+			}
 			return snapshot, nil
 		}
 		select {

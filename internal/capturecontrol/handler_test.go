@@ -20,6 +20,7 @@ import (
 	"github.com/vibe-agi/vibermate/internal/clientadapter"
 	"github.com/vibe-agi/vibermate/internal/localca"
 	"github.com/vibe-agi/vibermate/internal/runtimepersistence"
+	"github.com/vibe-agi/vibermate/internal/workspaceidentity"
 )
 
 func TestCaptureControlSeparatesLauncherAndPerRunCapabilities(t *testing.T) {
@@ -56,17 +57,17 @@ func TestCaptureControlSeparatesLauncherAndPerRunCapabilities(t *testing.T) {
 		grant.Adapter.CatalogRevision != grant.CatalogRevision ||
 		grant.Adapter.Version != "2.1.220" ||
 		grant.ExecutablePath == "" ||
-		grant.ProxyOrigin != "http://127.0.0.1:32123" ||
-		grant.ProxyCapability == "" ||
+		grant.ProxyAddress != "http://127.0.0.1:32123" ||
+		grant.ProxyToken == "" ||
 		grant.RunCapability == "" ||
-		grant.ProxyCapability == grant.RunCapability ||
+		grant.ProxyToken == grant.RunCapability ||
 		grant.RootPEMPath != fixture.authority.Certificate().Path() ||
 		len(grant.ProtectedAuthorities) != 1 ||
 		grant.ProtectedAuthorities[0] != "api.anthropic.com:443" {
 		t.Fatalf("launch grant = %+v", grant)
 	}
 	proxyCapability, err := capturerun.NewProxyCapability(
-		grant.ProxyCapability,
+		grant.ProxyToken,
 	)
 	if err != nil {
 		t.Fatal(err)
@@ -80,7 +81,14 @@ func TestCaptureControlSeparatesLauncherAndPerRunCapabilities(t *testing.T) {
 	}
 	if proxyEvidence.CatalogRevision != grant.CatalogRevision ||
 		proxyEvidence.Adapter == nil ||
-		*proxyEvidence.Adapter != *grant.Adapter {
+		proxyEvidence.Adapter.ID != grant.Adapter.ID ||
+		proxyEvidence.Adapter.Revision != grant.Adapter.Revision ||
+		proxyEvidence.Adapter.Version != grant.Adapter.Version ||
+		proxyEvidence.Adapter.CatalogRevision != grant.Adapter.CatalogRevision ||
+		proxyEvidence.Adapter.InstallShape != grant.Adapter.InstallShape ||
+		proxyEvidence.Adapter.LaunchRecipe != grant.Adapter.LaunchRecipe ||
+		grant.Adapter.Source !=
+			capturecontrol.ClientAdapterSourcePrelaunchDigestCatalog {
 		t.Fatalf(
 			"proxy evidence=%+v grant adapter=%+v",
 			proxyEvidence,
@@ -111,9 +119,12 @@ func TestCaptureControlSeparatesLauncherAndPerRunCapabilities(t *testing.T) {
 	if attach.Code != http.StatusOK {
 		t.Fatalf("attach status=%d body=%s", attach.Code, attach.Body.Bytes())
 	}
-	var attached capturerun.View
+	var attached capturecontrol.CaptureRunView
 	decodeRecorder(t, attach, &attached)
-	if attached.ProcessID != 444 || attached.State != capturerun.StateAttached {
+	if attached.ProcessID != 444 ||
+		attached.ClientAdapterState != clientadapter.StatusVerified ||
+		attached.ClientRecognition != clientadapter.RecognitionVerified ||
+		attached.CatalogRevision != grant.CatalogRevision {
 		t.Fatalf("attached view = %+v", attached)
 	}
 	heartbeat := fixture.DoJSON(
@@ -174,6 +185,56 @@ func TestCaptureControlExpiresLauncherCapability(t *testing.T) {
 	}
 }
 
+func TestLocalUserLabelDoesNotChangeMachineWorkspaceIdentity(t *testing.T) {
+	t.Parallel()
+
+	fixture := newFixture(t)
+	defer fixture.Close(t)
+	for _, user := range []string{"alice", "bob"} {
+		response := fixture.DoJSON(
+			t,
+			http.MethodPost,
+			"/api/v1/capture-runs",
+			fixture.launcherToken,
+			"",
+			capturecontrol.CreateRequest{
+				CWD:            fixture.workspace,
+				Command:        []string{"claude"},
+				ExecutablePath: fixture.executable,
+				LocalUserLabel: user,
+			},
+		)
+		if response.Code != http.StatusCreated {
+			t.Fatalf("create for %s status=%d body=%s", user, response.Code, response.Body.Bytes())
+		}
+	}
+	page, err := fixture.runs.ListRuns(
+		context.Background(),
+		capturerun.PageRequest{Limit: 10},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(page.Items) != 2 {
+		t.Fatalf("run count = %d", len(page.Items))
+	}
+	byUser := make(map[string]capturerun.View, len(page.Items))
+	for _, run := range page.Items {
+		byUser[run.LocalUserLabel] = run
+	}
+	alice, aliceOK := byUser["alice"]
+	bob, bobOK := byUser["bob"]
+	if !aliceOK || !bobOK {
+		t.Fatalf("local user labels = %#v", byUser)
+	}
+	if alice.MachineID == "" || alice.WorkspaceID == "" ||
+		alice.MachineID != bob.MachineID ||
+		alice.WorkspaceID != bob.WorkspaceID ||
+		alice.WorkspaceLabel != bob.WorkspaceLabel {
+		t.Fatalf("user labels changed stable scope: alice=%+v bob=%+v", alice, bob)
+	}
+}
+
 func TestCaptureControlKeepsUnknownClientBuildGeneric(t *testing.T) {
 	t.Parallel()
 
@@ -214,7 +275,7 @@ func TestCaptureControlKeepsUnknownClientBuildGeneric(t *testing.T) {
 		t.Fatalf("unknown build launch grant = %+v", grant)
 	}
 	proxyCapability, err := capturerun.NewProxyCapability(
-		grant.ProxyCapability,
+		grant.ProxyToken,
 	)
 	if err != nil {
 		t.Fatal(err)
@@ -236,6 +297,7 @@ type fixture struct {
 	store         *runtimepersistence.Store
 	runs          *capturerun.Manager
 	authority     *localca.Authority
+	workspaces    *workspaceidentity.Manager
 	clock         *fakeClock
 	launcherToken string
 	workspace     string
@@ -328,6 +390,15 @@ func newFixture(t *testing.T, overrides ...fixtureOverride) *fixture {
 	if err != nil {
 		t.Fatal(err)
 	}
+	workspaces, err := workspaceidentity.Open(
+		context.Background(),
+		filepath.Join(directory, "identity"),
+		bytes.NewReader(bytes.Repeat([]byte{0x53}, 64)),
+		clock.Now(),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
 	options := capturecontrol.Options{
 		Runs:        runs,
 		Verifier:    verifier,
@@ -337,6 +408,7 @@ func newFixture(t *testing.T, overrides ...fixtureOverride) *fixture {
 		Launcher:    launcher,
 		RunLifetime: 2 * time.Minute,
 		Clock:       clock,
+		Workspaces:  workspaces,
 	}
 	for _, override := range overrides {
 		override(&options)
@@ -350,6 +422,7 @@ func newFixture(t *testing.T, overrides ...fixtureOverride) *fixture {
 		store:         store,
 		runs:          runs,
 		authority:     authority,
+		workspaces:    workspaces,
 		clock:         clock,
 		launcherToken: token,
 		workspace:     workspace,
@@ -393,6 +466,9 @@ func (fixture *fixture) Close(t *testing.T) {
 	}
 	if err := fixture.authority.Shutdown(context.Background()); err != nil {
 		t.Errorf("shutdown authority: %v", err)
+	}
+	if err := fixture.workspaces.Shutdown(context.Background()); err != nil {
+		t.Errorf("shutdown workspaces: %v", err)
 	}
 	if err := fixture.store.Shutdown(context.Background()); err != nil {
 		t.Errorf("shutdown store: %v", err)

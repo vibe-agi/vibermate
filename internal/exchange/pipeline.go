@@ -20,6 +20,7 @@ import (
 	"github.com/vibe-agi/vibermate/internal/protocolpath"
 	"github.com/vibe-agi/vibermate/internal/providertransport"
 	"github.com/vibe-agi/vibermate/internal/secretstore"
+	"github.com/vibe-agi/vibermate/internal/workspaceroute"
 )
 
 const (
@@ -40,17 +41,18 @@ var errOfflineHoldAdmission = errors.New(
 // Pipeline owns all active Exchange contexts. It has no listener and cannot be
 // reached without an ingress component explicitly receiving its Executor.
 type Pipeline struct {
-	resolver      access.SnapshotResolver
-	actions       offlinehold.ActionAdmission
-	protocolPaths *protocolpath.Selector
-	provider      Provider
-	toolDecisions ToolDecisionGate
-	retryWaiter   RetryWaiter
-	observer      AttemptObserver
-	observeLimit  time.Duration
-	hold          HoldPolicy
-	streamBudgets StreamBudgets
-	attemptIDs    AttemptIDSource
+	resolver        access.SnapshotResolver
+	workspaceRoutes workspaceroute.Resolver
+	actions         offlinehold.ActionAdmission
+	protocolPaths   *protocolpath.Selector
+	provider        Provider
+	toolDecisions   ToolDecisionGate
+	retryWaiter     RetryWaiter
+	observer        AttemptObserver
+	observeLimit    time.Duration
+	hold            HoldPolicy
+	streamBudgets   StreamBudgets
+	attemptIDs      AttemptIDSource
 
 	ownerContext context.Context
 	cancelOwner  context.CancelCauseFunc
@@ -91,21 +93,22 @@ func New(options Options) (*Pipeline, error) {
 	}
 	ownerContext, cancelOwner := context.WithCancelCause(options.OwnerContext)
 	return &Pipeline{
-		resolver:      options.Resolver,
-		actions:       options.Actions,
-		protocolPaths: options.ProtocolPaths,
-		provider:      options.Provider,
-		toolDecisions: options.ToolDecisions,
-		retryWaiter:   options.RetryWaiter,
-		observer:      options.Observer,
-		observeLimit:  options.ObservationTimeout,
-		hold:          options.Hold,
-		streamBudgets: options.Stream,
-		attemptIDs:    attemptIDs,
-		ownerContext:  ownerContext,
-		cancelOwner:   cancelOwner,
-		operations:    make(map[*operation]struct{}),
-		changed:       make(chan struct{}),
+		resolver:        options.Resolver,
+		workspaceRoutes: options.WorkspaceRoutes,
+		actions:         options.Actions,
+		protocolPaths:   options.ProtocolPaths,
+		provider:        options.Provider,
+		toolDecisions:   options.ToolDecisions,
+		retryWaiter:     options.RetryWaiter,
+		observer:        options.Observer,
+		observeLimit:    options.ObservationTimeout,
+		hold:            options.Hold,
+		streamBudgets:   options.Stream,
+		attemptIDs:      attemptIDs,
+		ownerContext:    ownerContext,
+		cancelOwner:     cancelOwner,
+		operations:      make(map[*operation]struct{}),
+		changed:         make(chan struct{}),
 	}, nil
 }
 
@@ -192,12 +195,59 @@ func (pipeline *Pipeline) Execute(
 		)
 	}
 
+	orderedProfiles, err := orderedCandidateProfileIDs(snapshot, access.EndpointProfileID{})
+	if err != nil {
+		return result, newFailure(
+			ReasonUnsupportedAccessPlan,
+			request.exchangeID,
+			0,
+			err,
+		)
+	}
+	if scope, scoped := request.WorkspaceScope(); scoped {
+		if pipeline.workspaceRoutes == nil {
+			return result, newFailure(
+				ReasonWorkspaceRouteUnavailable,
+				request.exchangeID,
+				0,
+				errors.New("workspace route resolver is unavailable"),
+			)
+		}
+		resolution, resolveErr := pipeline.workspaceRoutes.Resolve(
+			operationContext,
+			snapshot,
+			scope,
+		)
+		if resolveErr != nil {
+			return result, newFailure(
+				ReasonWorkspaceRouteUnavailable,
+				request.exchangeID,
+				0,
+				resolveErr,
+			)
+		}
+		defer resolution.Release()
+		orderedProfiles, err = orderedCandidateProfileIDs(snapshot, resolution.ProfileID)
+		if err != nil {
+			return result, newFailure(
+				ReasonWorkspaceRouteUnavailable,
+				request.exchangeID,
+				0,
+				err,
+			)
+		}
+		result.WorkspaceRouteBindingID = resolution.BindingID.String()
+		result.WorkspaceRouteRevision = resolution.BindingRevision
+		result.WorkspaceProfileID = resolution.ProfileID.String()
+	}
+
 	// A request may be attempted against more than one candidate, but only
 	// while the policy allows it and nothing has reached the client. The
 	// ledger lives outside the loop because commits accumulate across the
 	// whole logical Exchange, while everything a candidate decides does not.
 	ledger := &CommitLedger{}
-	fallback, candidates := fallbackPlan(snapshot)
+	fallback, _ := fallbackPlan(snapshot)
+	candidates := len(orderedProfiles)
 	// attemptErr is the outcome the client ends up with. The loop body has its
 	// own short-lived errors; this is the one that leaves.
 	var attemptErr error
@@ -205,7 +255,15 @@ func (pipeline *Pipeline) Execute(
 		// The translation report describes the attempt whose answer the client
 		// is receiving, so it starts empty for each one.
 		result.Translation = protocolcore.TranslationReport{}
-		selection, err := selectFrozenPlan(snapshot, candidateIndex)
+		if candidateIndex >= len(orderedProfiles) {
+			return result, newFailure(
+				ReasonUnsupportedAccessPlan,
+				request.exchangeID,
+				0,
+				errCandidatesExhausted,
+			)
+		}
+		selection, err := selectFrozenPlan(snapshot, orderedProfiles[candidateIndex])
 		if err != nil {
 			return result, newFailure(
 				ReasonUnsupportedAccessPlan,
@@ -268,7 +326,11 @@ func (pipeline *Pipeline) Execute(
 			)
 		}
 		encodedProvider, backendRequestReport, err :=
-			protocolPath.Backend().EncodeRequest(decoded)
+			protocolPath.EncodeProviderRequest(
+				decoded,
+				request.body,
+				request.protocolHeaders(),
+			)
 		result.Translation = result.Translation.Merge(backendRequestReport)
 		if err != nil {
 			return result, newFailure(
@@ -667,9 +729,10 @@ func (pipeline *Pipeline) executeComplete(
 		return err
 	}
 	clientBody, clientResponseReport, err :=
-		protocolPath.Client().EncodeResponse(
+		protocolPath.EncodeClientResponse(
 			decoded,
 			providerResponse,
+			body,
 		)
 	result.Translation = result.Translation.Merge(clientResponseReport)
 	if err != nil {

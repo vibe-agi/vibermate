@@ -1,16 +1,25 @@
 package runlauncher
 
 import (
-	"strings"
 	"testing"
+	"time"
 
 	"github.com/vibe-agi/vibermate/internal/capturecontrol"
-	"github.com/vibe-agi/vibermate/internal/capturerun"
 	"github.com/vibe-agi/vibermate/internal/clientadapter"
 )
 
-func recognizedRun() capturerun.View {
-	return capturerun.View{ID: "run-recognized"}
+func recognizedRun() capturecontrol.CaptureRunView {
+	createdAt := time.Date(2026, 8, 3, 8, 0, 0, 0, time.UTC)
+	return capturecontrol.CaptureRunView{
+		ID:                 "run-recognized",
+		ExecutableLabel:    "claude",
+		CWD:                "/opt/example",
+		CreatedAt:          createdAt,
+		ExpiresAt:          createdAt.Add(time.Minute),
+		ClientAdapterState: clientadapter.StatusGeneric,
+		ClientRecognition:  clientadapter.RecognitionRecognized,
+		CatalogRevision:    4,
+	}
 }
 
 // The grant a recognized client actually produces has to be one the launcher
@@ -30,7 +39,7 @@ func TestARecognizedGrantIsAcceptedByTheLauncher(t *testing.T) {
 		CatalogRevision: 4,
 		LaunchRecipe:    clientadapter.LaunchNodeEnvProxy,
 		Recognition:     clientadapter.RecognitionRecognized,
-		Signer: &clientadapter.SignerEvidence{
+		Signer: &capturecontrol.ClientSignerView{
 			ID:              "claude-code",
 			Revision:        1,
 			CatalogRevision: 4,
@@ -38,11 +47,12 @@ func TestARecognizedGrantIsAcceptedByTheLauncher(t *testing.T) {
 			LaunchRecipe:    clientadapter.LaunchNodeEnvProxy,
 			SignedPath:      "/opt/example/claude",
 		},
-		ExecutablePath:  "/opt/example/claude",
-		ProxyOrigin:     "http://127.0.0.1:32123",
-		ProxyCapability: "proxy-capability",
-		RunCapability:   "run-capability",
-		RootPEMPath:     "/tmp/root.pem",
+		ExecutablePath:       "/opt/example/claude",
+		ProxyAddress:         "http://127.0.0.1:32123",
+		ProxyToken:           "proxy-capability",
+		RunCapability:        "run-capability",
+		RootPEMPath:          "/tmp/root.pem",
+		ProtectedAuthorities: []string{},
 	}
 	if err := validateGrant(grant); err != nil {
 		t.Fatalf("a recognized grant was refused: %v", err)
@@ -55,15 +65,16 @@ func TestARootBearingGrantWithNeitherEvidenceIsRefused(t *testing.T) {
 	t.Parallel()
 
 	grant := capturecontrol.LaunchGrant{
-		Run:             recognizedRun(),
-		CatalogRevision: 4,
-		LaunchRecipe:    clientadapter.LaunchNodeEnvProxy,
-		Recognition:     clientadapter.RecognitionRecognized,
-		ExecutablePath:  "/opt/example/claude",
-		ProxyOrigin:     "http://127.0.0.1:32123",
-		ProxyCapability: "proxy-capability",
-		RunCapability:   "run-capability",
-		RootPEMPath:     "/tmp/root.pem",
+		Run:                  recognizedRun(),
+		CatalogRevision:      4,
+		LaunchRecipe:         clientadapter.LaunchNodeEnvProxy,
+		Recognition:          clientadapter.RecognitionRecognized,
+		ExecutablePath:       "/opt/example/claude",
+		ProxyAddress:         "http://127.0.0.1:32123",
+		ProxyToken:           "proxy-capability",
+		RunCapability:        "run-capability",
+		RootPEMPath:          "/tmp/root.pem",
+		ProtectedAuthorities: []string{},
 	}
 	if err := validateGrant(grant); err == nil {
 		t.Fatal("a Root-bearing grant with no evidence at all was accepted")
@@ -96,14 +107,15 @@ func TestSignerEvidenceMustAgreeWithItsGrant(t *testing.T) {
 	}, {
 		name: "signer evidence alongside release evidence",
 		mutate: func(grant *capturecontrol.LaunchGrant) {
-			grant.Adapter = &clientadapter.Evidence{
+			grant.Adapter = &capturecontrol.ClientAdapterView{
 				ID:              "claude-code",
 				Revision:        1,
 				Version:         "2.1.220",
 				CatalogRevision: 4,
-				InstallShape:    clientadapter.InstallNativeSingleBinary,
-				ReleaseSHA256:   strings.Repeat("a", 64),
-				LaunchRecipe:    clientadapter.LaunchNodeEnvProxy,
+				Source: capturecontrol.
+					ClientAdapterSourcePrelaunchDigestCatalog,
+				InstallShape: clientadapter.InstallNativeSingleBinary,
+				LaunchRecipe: clientadapter.LaunchNodeEnvProxy,
 			}
 		},
 	}} {
@@ -115,7 +127,7 @@ func TestSignerEvidenceMustAgreeWithItsGrant(t *testing.T) {
 				CatalogRevision: 4,
 				LaunchRecipe:    clientadapter.LaunchNodeEnvProxy,
 				Recognition:     clientadapter.RecognitionRecognized,
-				Signer: &clientadapter.SignerEvidence{
+				Signer: &capturecontrol.ClientSignerView{
 					ID:              "claude-code",
 					Revision:        1,
 					CatalogRevision: 4,
@@ -123,11 +135,12 @@ func TestSignerEvidenceMustAgreeWithItsGrant(t *testing.T) {
 					LaunchRecipe:    clientadapter.LaunchNodeEnvProxy,
 					SignedPath:      "/opt/example/claude",
 				},
-				ExecutablePath:  "/opt/example/claude",
-				ProxyOrigin:     "http://127.0.0.1:32123",
-				ProxyCapability: "proxy-capability",
-				RunCapability:   "run-capability",
-				RootPEMPath:     "/tmp/root.pem",
+				ExecutablePath:       "/opt/example/claude",
+				ProxyAddress:         "http://127.0.0.1:32123",
+				ProxyToken:           "proxy-capability",
+				RunCapability:        "run-capability",
+				RootPEMPath:          "/tmp/root.pem",
+				ProtectedAuthorities: []string{},
 			}
 			testCase.mutate(&grant)
 			if err := validateGrant(grant); err == nil {

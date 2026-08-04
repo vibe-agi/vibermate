@@ -1,9 +1,10 @@
-# M0 Assembly Acceptance
+# Initial macOS arm64 Packaged-App Acceptance (M0)
 
 `cmd/vibermate-acceptance` is the opt-in macOS arm64 runner for the
-packaged M0 Desktop assembly. It exercises production entrypoints and the real
-fixed Agent executable. It is not a fixture server, an installer test, or a
-replacement for deterministic repository gates.
+initial packaged Desktop milestone, whose internal milestone code is M0. It
+exercises production entrypoints and the real fixed Agent executable. It is not
+a fixture server, an installer test, or a replacement for deterministic
+repository gates.
 
 ## Fixed boundary
 
@@ -57,14 +58,16 @@ egress. This is an acceptance invocation choice, not a production client
 branch, Access setting, provider bypass, or claim of successful WebSocket
 semantics.
 
-The ordinary M0 build intentionally uses the development file SecretStore:
+The ordinary build for this initial milestone intentionally uses the
+development file SecretStore:
 
 ```text
 <user config>/io.vibermate.desktop/development-secrets/store.json
 ```
 
-Its contents are plaintext-equivalent. Use only a development credential. No
-Keychain or other native secret backend is built, selected, or tested in M0.
+Its contents are plaintext-equivalent. Use only a development credential.
+Neither Keychain nor another native secret backend is built, selected, or
+tested in this milestone.
 Credential control exposes state and revision metadata but never reads a value
 to render status and never returns a `SecretRef` or secret value.
 
@@ -91,12 +94,22 @@ The acceptance runner rejects:
 - an unpinned build or acceptance-host toolchain;
 - a missing, malformed, oversized, or unknown-field manifest.
 
-The v5 report records the selected client identity and typed compound adapter
-evidence, deterministic App-bundle manifest digest, individual artifact
+The current v6 report records the selected client identity and typed compound
+adapter evidence, deterministic App-bundle manifest digest, individual artifact
 digests, build and host toolchains, build profiles, configuration digests, and
 redacted run configuration. It is atomically replaced with mode `0600`. It
 contains no prompt, response body, header, tool arguments, thread ID, or secret
-value.
+value. Historical v5 reports retain their frozen schema and check set, but they
+are accepted only when the verifier caller explicitly requests v5.
+
+Current v6 verification does not trust artifact paths or digests merely because
+they occur in the report. The caller independently supplies the source checkout,
+selected App, acceptance executable, and fixed-client entrypoint. The verifier
+requires a clean Git top-level checkout at the expected full revision and commit
+time, hashes the actual App and each executable, parses the actual v2 build
+manifest, and hashes every frozen configuration input from that checkout. A
+missing coordinate, substituted artifact, dirty checkout, v1 manifest, stale
+revision, or digest mismatch fails the gate.
 
 Build from a clean frozen commit with the pinned toolchains:
 
@@ -111,7 +124,8 @@ go build -buildvcs=true -trimpath \
 ```
 
 The development bundle is not a release package. Signing, notarization,
-native secret protection, installation, and distribution remain outside M0.
+native secret protection, installation, and distribution remain outside this
+initial milestone.
 The final artifact must be built from a standalone clean checkout. Some linked
 Git worktrees omit Go `vcs.*` build settings even when the build requests VCS
 stamping; the runner rejects such an artifact instead of inventing provenance.

@@ -22,8 +22,9 @@ const (
 )
 
 var (
-	ErrInvalidEvent    = errors.New("invalid Activity event")
-	ErrRuntimeStopping = errors.New("Activity runtime is stopping")
+	ErrExchangeNotFound = errors.New("Activity Exchange was not found")
+	ErrInvalidEvent     = errors.New("invalid Activity event")
+	ErrRuntimeStopping  = errors.New("Activity runtime is stopping")
 )
 
 type Kind string
@@ -348,7 +349,9 @@ type Page struct {
 
 type Repository interface {
 	Append(context.Context, Record) (Record, error)
+	GetExchange(context.Context, string) (Record, error)
 	List(context.Context, PageRequest) (Page, error)
+	ListExchanges(context.Context, PageRequest) (Page, error)
 }
 
 type Recorder interface {
@@ -356,7 +359,9 @@ type Recorder interface {
 }
 
 type Reader interface {
+	GetExchange(context.Context, string) (Record, error)
 	List(context.Context, PageRequest) (Page, error)
+	ListExchanges(context.Context, PageRequest) (Page, error)
 }
 
 type Runtime interface {

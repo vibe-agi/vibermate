@@ -80,6 +80,10 @@ func (authority *Authority) AskNetwork(
 	allowed, reason, err := authority.awaitDecision(
 		ctx,
 		networkAskAggregateKey(request),
+		// A held connection can wait out the installation's full budget: it
+		// is already open and nothing else is blocked behind this answer.
+		authority.config.DecisionTimeout,
+		nil,
 		func(identifier string, now time.Time) Record {
 			return Record{
 				ID:            identifier,
@@ -112,10 +116,21 @@ func (authority *Authority) AskNetwork(
 // durable, counting joiners onto one question, and denying on every failure —
 // must behave identically no matter what is being asked.
 //
+// budget is how long this particular caller may be kept waiting. It is a
+// parameter rather than a field because the kinds do not agree on it: a held
+// connection can wait out the installation's decision timeout, while an ask
+// sitting inside a program launch gets a short grace and then denies. Bounding
+// it by cancelling the caller's context instead would have produced the same
+// timing and the wrong reason code — "the connection went away" rather than
+// "nobody answered in time" — and those two are required to stay
+// distinguishable.
+//
 // It returns (allowed, reason, err). Every error path denies.
 func (authority *Authority) awaitDecision(
 	ctx context.Context,
 	aggregateKey string,
+	budget time.Duration,
+	ephemeralSubjectLabels []string,
 	build func(identifier string, now time.Time) Record,
 ) (bool, string, error) {
 	operation := ctx
@@ -137,9 +152,13 @@ func (authority *Authority) awaitDecision(
 
 	pending, entry, joined := authority.waiters.join(aggregateKey, record.ID)
 	waitingOn := entry.recordID
+	authority.rememberEphemeralSubjectLabels(
+		waitingOn,
+		ephemeralSubjectLabels,
+	)
 	// Waiting is bounded from the moment the caller arrives, including the
 	// wait for the question itself to become durable.
-	timer := time.NewTimer(authority.config.DecisionTimeout)
+	timer := time.NewTimer(budget)
 	defer timer.Stop()
 	if joined {
 		// The entry is published before its record is written, so a joiner
@@ -169,6 +188,7 @@ func (authority *Authority) awaitDecision(
 		authority.waiters.publish(entry, err == nil)
 		if err != nil {
 			authority.waiters.remove(record.ID, pending)
+			authority.forgetEphemeralSubjectLabels(record.ID)
 			return false, "approval_unavailable", err
 		}
 	}

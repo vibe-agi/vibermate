@@ -30,8 +30,11 @@ const catalogedClaudeVersion = "2.1.220"
 
 // countTokensSkillMarker is written into the fixture skill text. The client
 // puts that text in the `count_tokens` request body, so it is a canary with a
-// real client's real payload: M1.0-C0a says that body may never leave the
-// machine with the client's own credentials.
+// real client's real payload. This C0a fixture explicitly selects a managed
+// route with no typed ProfileOperationTarget, so that body may not leave the
+// machine with the client's own credentials. A future original_passthrough
+// system profile is a different, exact-origin route and is outside this
+// observation.
 const countTokensSkillMarker = "vibermate-c0a-count-tokens-canary-do-not-egress"
 
 // M1.0-C0a step 1: what a fixed Claude Code does when `count_tokens` is
@@ -47,7 +50,7 @@ const countTokensSkillMarker = "vibermate-c0a-count-tokens-canary-do-not-egress"
 // The design fixes the order at 12-implementation-readiness §3.2: step 1
 // observes the compatibility outcome and does not authorise anything. So this
 // asserts what the client does, not that any particular thing is acceptable.
-func TestAFixedClaudeCodeDegradesWhenCountTokensIsRejectedLocally(t *testing.T) {
+func TestAFixedClaudeCodeDegradesWhenCountTokensIsRejectedLocallyOnManagedRoute(t *testing.T) {
 	agent := os.Getenv(liveAgentEnvironment)
 	if agent == "" {
 		t.Skipf("this observation needs %s", liveAgentEnvironment)
@@ -88,6 +91,7 @@ func TestAFixedClaudeCodeDegradesWhenCountTokensIsRejectedLocally(t *testing.T) 
 		"https://backend.invalid:443",
 		"model-that-is-never-called",
 	)
+	managedProfileID, managedAccountID := requireOnlyManagedCountTokensRoute(t, aggregate)
 	if write, err := runtime.AccessWriter().WriteAccess(
 		context.Background(),
 		access.WriteCommand{ExpectedRevision: 0, Aggregate: aggregate},
@@ -102,8 +106,8 @@ func TestAFixedClaudeCodeDegradesWhenCountTokensIsRejectedLocally(t *testing.T) 
 		context.Background(),
 		accesscredential.ReplaceCommand{
 			AccessID:         accessID,
-			ProfileID:        aggregate.Profiles[0].ID,
-			CredentialID:     aggregate.AccountBindings[0].ID,
+			ProfileID:        managedProfileID,
+			CredentialID:     managedAccountID,
 			ExpectedRevision: 0,
 			Value:            value,
 		},
@@ -234,13 +238,13 @@ func TestAFixedClaudeCodeDegradesWhenCountTokensIsRejectedLocally(t *testing.T) 
 		switch attempt.Purpose() {
 		case egressaudit.PurposeProfileOperation:
 			t.Fatalf(
-				"a profile operation reached the network; basic Preview "+
+				"a profile operation left the explicitly selected managed route; basic Preview "+
 					"implements no ProfileOperationTarget: %+v",
 				attempt,
 			)
 		case egressaudit.PurposeProviderAttempt:
 			t.Fatalf(
-				"this run contacts no provider, so a provider attempt means "+
+				"this managed-route observation contacts no provider, so a provider attempt means "+
 					"count_tokens entered the model pipeline: %+v",
 				attempt,
 			)
@@ -267,4 +271,48 @@ func TestAFixedClaudeCodeDegradesWhenCountTokensIsRejectedLocally(t *testing.T) 
 			countTokensSkillMarker,
 		)
 	}
+}
+
+// requireOnlyManagedCountTokensRoute makes this evidence fail loudly when the
+// Access fixture grows a system original_passthrough profile. The observation
+// is valid only after the test has explicitly selected its account-backed
+// managed profile; a slice position is not route authority.
+func requireOnlyManagedCountTokensRoute(
+	t *testing.T,
+	aggregate access.Aggregate,
+) (access.EndpointProfileID, access.AccountBindingID) {
+	t.Helper()
+	var selectedRoute *access.RouteSet
+	for index := range aggregate.RouteSets {
+		if aggregate.RouteSets[index].ID == aggregate.Binding.DefaultRouteSetID {
+			selectedRoute = &aggregate.RouteSets[index]
+			break
+		}
+	}
+	if selectedRoute == nil || len(selectedRoute.CandidateProfileIDs) != 1 {
+		t.Fatal("count_tokens evidence requires one explicitly selected managed route")
+	}
+	profileID := selectedRoute.CandidateProfileIDs[0]
+	var selectedProfile *access.EndpointProfile
+	for index := range aggregate.Profiles {
+		if aggregate.Profiles[index].ID == profileID {
+			selectedProfile = &aggregate.Profiles[index]
+			break
+		}
+	}
+	if selectedProfile == nil || len(selectedProfile.AccountBindingIDs) == 0 {
+		t.Fatal("count_tokens evidence must not run on the system original_passthrough profile")
+	}
+	accountBacksProfile := false
+	for _, binding := range aggregate.AccountBindings {
+		if binding.ID == selectedProfile.DefaultAccountBindingID &&
+			binding.ProfileID == profileID {
+			accountBacksProfile = true
+			break
+		}
+	}
+	if !accountBacksProfile {
+		t.Fatal("count_tokens managed profile has no matching account binding")
+	}
+	return profileID, selectedProfile.DefaultAccountBindingID
 }

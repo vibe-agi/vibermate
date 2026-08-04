@@ -4,20 +4,35 @@
     "executableLabel": "claude",
     "cwd": "/Users/example/project",
     "processId": 4242,
+    "createdAt": "2026-08-02T10:00:00Z",
+    "expiresAt": "2026-08-02T11:00:00Z",
+    "clientAdapterState": "verified",
+    "clientRecognition": "verified",
+    "catalogRevision": 4,
+    "clientAdapter": {
+      "id": "claude-code",
+      "revision": 1,
+      "version": "2.1.220",
+      "catalogRevision": 4,
+      "source": "prelaunch_digest_catalog",
+      "installShape": "native_single_binary",
+      "launchRecipe": "node_env_proxy"
+    },
     "state": "attached",
     "observation": "observed",
-    "recognition": "verified",
-    "createdAt": "2026-08-02T10:00:00Z",
-    "expiresAt": "2026-08-02T11:00:00Z"
+    "recognition": "verified"
   },
   {
     "id": "run-unverified-sample",
     "executableLabel": "codex",
     "cwd": "/Users/example/project",
+    "createdAt": "2026-08-02T10:01:00Z",
+    "expiresAt": "2026-08-02T11:00:00Z",
+    "clientAdapterState": "generic",
+    "clientRecognition": "unverified",
+    "catalogRevision": 4,
     "state": "created",
     "observation": "waiting_for_traffic",
-    "recognition": "unverified",
-    "createdAt": "2026-08-02T10:01:00Z",
-    "expiresAt": "2026-08-02T11:00:00Z"
+    "recognition": "unverified"
   }
 ]

@@ -26,6 +26,7 @@ import (
 	"github.com/vibe-agi/vibermate/internal/productruntime"
 	"github.com/vibe-agi/vibermate/internal/secretstore"
 	"github.com/vibe-agi/vibermate/internal/toolapproval"
+	"github.com/vibe-agi/vibermate/internal/workspaceroute"
 )
 
 const (
@@ -37,20 +38,24 @@ const (
 type ReasonCode string
 
 const (
-	ReasonUnauthorized           ReasonCode = "control_unauthorized"
-	ReasonRouteNotFound          ReasonCode = "control_route_not_found"
-	ReasonInvalidRequest         ReasonCode = "invalid_control_request"
-	ReasonRevisionConflict       ReasonCode = "revision_conflict"
-	ReasonAccessNotConfigured    ReasonCode = "access_not_configured"
-	ReasonProjectionUnavailable  ReasonCode = "access_projection_unavailable"
-	ReasonRuntimeUnavailable     ReasonCode = "runtime_unavailable"
-	ReasonApprovalNotFound       ReasonCode = "approval_not_found"
-	ReasonProbeFailed            ReasonCode = "offline_probe_failed"
-	ReasonCredentialNotFound     ReasonCode = "credential_not_found"
-	ReasonCredentialValueInvalid ReasonCode = "credential_value_invalid"
-	ReasonConnectionNotFound     ReasonCode = "connection_not_found"
-	ReasonSecretStoreUnavailable ReasonCode = "secret_store_unavailable"
-	ReasonSecretStoreReadOnly    ReasonCode = "secret_store_read_only"
+	ReasonUnauthorized              ReasonCode = "control_unauthorized"
+	ReasonRouteNotFound             ReasonCode = "control_route_not_found"
+	ReasonInvalidRequest            ReasonCode = "invalid_control_request"
+	ReasonRevisionConflict          ReasonCode = "revision_conflict"
+	ReasonAccessNotConfigured       ReasonCode = "access_not_configured"
+	ReasonProjectionUnavailable     ReasonCode = "access_projection_unavailable"
+	ReasonRuntimeUnavailable        ReasonCode = "runtime_unavailable"
+	ReasonApprovalNotFound          ReasonCode = "approval_not_found"
+	ReasonProbeFailed               ReasonCode = "offline_probe_failed"
+	ReasonCredentialNotFound        ReasonCode = "credential_not_found"
+	ReasonCredentialNotConfigured   ReasonCode = "credential_not_configured"
+	ReasonCredentialValueInvalid    ReasonCode = "credential_value_invalid"
+	ReasonConnectionNotFound        ReasonCode = "connection_not_found"
+	ReasonExchangeNotFound          ReasonCode = "exchange_not_found"
+	ReasonSecretStoreUnavailable    ReasonCode = "secret_store_unavailable"
+	ReasonSecretStoreReadOnly       ReasonCode = "secret_store_read_only"
+	ReasonWorkspaceRouteNotFound    ReasonCode = "workspace_route_not_found"
+	ReasonWorkspaceRouteUnavailable ReasonCode = "workspace_route_unavailable"
 )
 
 type StatusReader interface {
@@ -68,38 +73,42 @@ type OfflineActions interface {
 }
 
 type Options struct {
-	Readiness   ReadinessReader
-	Status      StatusReader
-	Accesses    access.Writer
-	Resolver    access.SnapshotResolver
-	Credentials accesscredential.Controller
-	Activities  activity.Runtime
-	Connections connectionevent.Reader
-	Egress      egressaudit.Reader
-	Approvals   toolapproval.Controller
-	Offline     OfflineActions
+	Readiness     ReadinessReader
+	Status        StatusReader
+	Accesses      access.Writer
+	AccessCatalog access.AggregateCatalog
+	Resolver      access.SnapshotResolver
+	Credentials   accesscredential.Controller
+	Activities    activity.Runtime
+	Connections   connectionevent.Reader
+	Egress        egressaudit.Reader
+	Approvals     toolapproval.Controller
+	Offline       OfflineActions
 	// ConnectionRules is the outbound firewall a person edits. A runtime
 	// built without one keeps evaluating the rules it started with.
 	ConnectionRules ConnectionRuleController
 	// CaptureRuns is the read side of what is captured. It is not a control
 	// path: it carries no capability in either direction.
-	CaptureRuns capturerun.Reader
+	CaptureRuns     capturerun.Reader
+	WorkspaceRoutes workspaceroute.Controller
 }
 
 type Handler struct {
-	readiness   ReadinessReader
-	status      StatusReader
-	accesses    access.Writer
-	resolver    access.SnapshotResolver
-	credentials accesscredential.Controller
-	activities  activity.Runtime
-	connections connectionevent.Reader
-	egress      egressaudit.Reader
-	approvals   toolapproval.Controller
-	offline     OfflineActions
+	readiness     ReadinessReader
+	status        StatusReader
+	accesses      access.Writer
+	accessCatalog access.AggregateCatalog
+	resolver      access.SnapshotResolver
+	credentials   accesscredential.Controller
+	activities    activity.Runtime
+	connections   connectionevent.Reader
+	egress        egressaudit.Reader
+	approvals     toolapproval.Controller
+	offline       OfflineActions
 
 	connectionRules ConnectionRuleController
 	captureRuns     capturerun.Reader
+	workspaceRoutes workspaceroute.Controller
 
 	idempotent *idempotencyCache
 	mux        *http.ServeMux
@@ -114,10 +123,18 @@ type StatusResponse struct {
 }
 
 type AccessApplyResponse struct {
-	Outcome  access.WriteOutcome `json:"outcome"`
-	Revision access.Revision     `json:"revision"`
-	PlanHash string              `json:"planHash"`
+	Outcome          access.WriteOutcome    `json:"outcome"`
+	Revision         access.Revision        `json:"revision"`
+	ApplicationState AccessApplicationState `json:"applicationState"`
+	PlanHash         string                 `json:"planHash,omitempty"`
 }
+
+type AccessApplicationState string
+
+const (
+	AccessApplicationStateActive      AccessApplicationState = "active"
+	AccessApplicationStateUnavailable AccessApplicationState = "unavailable"
+)
 
 type AccessPlanSummaryResponse struct {
 	AccessID        string                        `json:"accessId"`
@@ -146,6 +163,7 @@ func New(options Options) (*Handler, error) {
 	if options.Readiness == nil ||
 		options.Status == nil ||
 		options.Accesses == nil ||
+		options.AccessCatalog == nil ||
 		options.Resolver == nil ||
 		options.Credentials == nil ||
 		options.Activities == nil ||
@@ -159,6 +177,7 @@ func New(options Options) (*Handler, error) {
 		readiness:       options.Readiness,
 		status:          options.Status,
 		accesses:        options.Accesses,
+		accessCatalog:   options.AccessCatalog,
 		resolver:        options.Resolver,
 		credentials:     options.Credentials,
 		activities:      options.Activities,
@@ -168,6 +187,7 @@ func New(options Options) (*Handler, error) {
 		offline:         options.Offline,
 		connectionRules: options.ConnectionRules,
 		captureRuns:     options.CaptureRuns,
+		workspaceRoutes: options.WorkspaceRoutes,
 		idempotent:      newIdempotencyCache(),
 		mux:             http.NewServeMux(),
 	}
@@ -182,8 +202,20 @@ func New(options Options) (*Handler, error) {
 		handler.resumeOfflineHold,
 	)
 	handler.mux.HandleFunc(
+		"GET /api/v1/accesses",
+		handler.listAccesses,
+	)
+	handler.mux.HandleFunc(
+		"GET /api/v1/accesses/{accessId}",
+		handler.getAccess,
+	)
+	handler.mux.HandleFunc(
 		"PUT /api/v1/accesses/{accessId}/actions/apply",
 		handler.applyAccess,
+	)
+	handler.mux.HandleFunc(
+		"POST /api/v1/accesses/{accessId}/actions/add-candidate",
+		handler.addAccessCandidate,
 	)
 	handler.mux.HandleFunc(
 		"GET /api/v1/accesses/{accessId}/plan",
@@ -197,7 +229,15 @@ func New(options Options) (*Handler, error) {
 		"POST /api/v1/accesses/{accessId}/profiles/{profileId}/credentials/{credentialId}/actions/replace-secret",
 		handler.replaceCredentialSecret,
 	)
+	handler.mux.HandleFunc(
+		"POST /api/v1/accesses/{accessId}/profiles/{profileId}/actions/select-candidate",
+		handler.selectAccessCandidate,
+	)
 	handler.mux.HandleFunc("GET /api/v1/activities", handler.listActivities)
+	handler.mux.HandleFunc(
+		"GET /api/v1/exchanges/{exchangeId}",
+		handler.getExchange,
+	)
 	handler.mux.HandleFunc("GET /api/v1/connections", handler.listConnections)
 	handler.mux.HandleFunc(
 		"GET /api/v1/egress-attempts",
@@ -220,6 +260,26 @@ func New(options Options) (*Handler, error) {
 		"GET /api/v1/capture-runs",
 		handler.listCaptureRuns,
 	)
+	handler.mux.HandleFunc(
+		"GET /api/v1/workspace-route-bindings",
+		handler.listWorkspaceRouteBindings,
+	)
+	handler.mux.HandleFunc(
+		"GET /api/v1/workspace-route-bindings/{bindingId}",
+		handler.getWorkspaceRouteBinding,
+	)
+	handler.mux.HandleFunc(
+		"PATCH /api/v1/workspace-route-bindings/{bindingId}",
+		handler.updateWorkspaceRouteBinding,
+	)
+	handler.mux.HandleFunc(
+		"/api/v1/workspace-route-bindings/{bindingId}",
+		handler.invalidRoute,
+	)
+	handler.mux.HandleFunc(
+		"/api/v1/workspace-route-bindings",
+		handler.invalidRoute,
+	)
 	handler.mux.HandleFunc("GET /api/v1/approvals", handler.listApprovals)
 	handler.mux.HandleFunc(
 		"GET /api/v1/approvals/{approvalId}",
@@ -233,6 +293,10 @@ func New(options Options) (*Handler, error) {
 	handler.mux.HandleFunc("/api/v1/offline-hold", handler.invalidRoute)
 	handler.mux.HandleFunc(
 		"/api/v1/offline-hold/actions/{action}",
+		handler.invalidRoute,
+	)
+	handler.mux.HandleFunc(
+		"/api/v1/accesses",
 		handler.invalidRoute,
 	)
 	handler.mux.HandleFunc(
@@ -251,7 +315,19 @@ func New(options Options) (*Handler, error) {
 		"/api/v1/accesses/{accessId}/profiles/{profileId}/credentials/{credentialId}/actions/{action}",
 		handler.invalidRoute,
 	)
+	handler.mux.HandleFunc(
+		"/api/v1/accesses/{accessId}/profiles/{profileId}/actions/{action}",
+		handler.invalidRoute,
+	)
+	handler.mux.HandleFunc(
+		"/api/v1/accesses/{accessId}",
+		handler.invalidRoute,
+	)
 	handler.mux.HandleFunc("/api/v1/activities", handler.invalidRoute)
+	handler.mux.HandleFunc(
+		"/api/v1/exchanges/{exchangeId}",
+		handler.invalidRoute,
+	)
 	handler.mux.HandleFunc("/api/v1/connections", handler.invalidRoute)
 	handler.mux.HandleFunc(
 		"/api/v1/connections/{connectionId}",
@@ -422,11 +498,20 @@ func (handler *Handler) applyAccess(
 		func() cachedResponse {
 			var input accessapply.Input
 			if decodeStrictJSON(body, &input) != nil ||
-				input.ExpectedRevision != expected {
+				input.ExpectedRevision != expected ||
+				input.Access.Status != string(access.AccessStatusEnabled) {
 				return problemResponse(problemSpec{
 					status: http.StatusUnprocessableEntity,
 					reason: ReasonInvalidRequest,
 				})
+			}
+			if spec := handler.preserveExistingAccountSecretRefs(
+				request.Context(),
+				request.PathValue("accessId"),
+				access.Revision(expected),
+				&input,
+			); spec != nil {
+				return problemResponse(*spec)
 			}
 			command, buildErr := accessapply.BuildCommand(
 				request.PathValue("accessId"),
@@ -440,13 +525,22 @@ func (handler *Handler) applyAccess(
 				command,
 			)
 			if writeErr != nil {
+				if result.Outcome == access.WriteOutcomeCommitted &&
+					errors.Is(writeErr, access.ErrProjectionUnavailable) {
+					handler.recordActivity(request.Context(), activity.Event{
+						Kind:       activity.KindAccessApplied,
+						AccessID:   command.Aggregate.Binding.ID,
+						SubjectID:  strconv.FormatUint(uint64(result.Revision), 10),
+						Status:     activity.StatusFailed,
+						ReasonCode: string(access.ReasonProjectionUnavailable),
+					})
+					return jsonResponse(http.StatusOK, AccessApplyResponse{
+						Outcome:          result.Outcome,
+						Revision:         result.Revision,
+						ApplicationState: AccessApplicationStateUnavailable,
+					})
+				}
 				return problemResponse(classifyAccessError(writeErr))
-			}
-			snapshot, resolveErr := handler.resolver.ResolveAccess(
-				command.Aggregate.Binding.ID,
-			)
-			if resolveErr != nil {
-				return problemResponse(classifyAccessError(resolveErr))
 			}
 			handler.recordActivity(request.Context(), activity.Event{
 				Kind:      activity.KindAccessApplied,
@@ -455,9 +549,10 @@ func (handler *Handler) applyAccess(
 				Status:    activity.StatusSucceeded,
 			})
 			return jsonResponse(http.StatusOK, AccessApplyResponse{
-				Outcome:  result.Outcome,
-				Revision: result.Revision,
-				PlanHash: snapshot.PlanHash().String(),
+				Outcome:          result.Outcome,
+				Revision:         result.Revision,
+				ApplicationState: AccessApplicationStateActive,
+				PlanHash:         result.PlanHash.String(),
 			})
 		},
 	)
@@ -621,31 +716,28 @@ func (handler *Handler) listActivities(
 	writer http.ResponseWriter,
 	request *http.Request,
 ) {
-	limit, err := queryLimit(request, 50)
+	query, err := parseActivityListQuery(request.URL.RawQuery)
 	if err != nil {
 		writeProblem(writer, http.StatusUnprocessableEntity, ReasonInvalidRequest)
 		return
 	}
-	var before int64
-	if raw := request.URL.Query().Get("beforeSequence"); raw != "" {
-		before, err = strconv.ParseInt(raw, 10, 64)
-		if err != nil || before <= 0 {
-			writeProblem(writer, http.StatusUnprocessableEntity, ReasonInvalidRequest)
-			return
-		}
-	}
-	page, err := handler.activities.List(
+	page, err := handler.activities.ListExchanges(
 		request.Context(),
 		activity.PageRequest{
-			BeforeSequence: before,
-			Limit:          limit,
+			BeforeSequence: query.beforeSequence,
+			Limit:          query.limit,
 		},
 	)
 	if err != nil {
 		writeProblem(writer, http.StatusServiceUnavailable, ReasonRuntimeUnavailable)
 		return
 	}
-	writeJSON(writer, http.StatusOK, page)
+	view, err := activityPageOf(page)
+	if err != nil {
+		writeProblem(writer, http.StatusServiceUnavailable, ReasonRuntimeUnavailable)
+		return
+	}
+	writeJSON(writer, http.StatusOK, view)
 }
 
 func (handler *Handler) listConnections(
@@ -732,7 +824,7 @@ func (handler *Handler) listCaptureRuns(
 		writeProblem(writer, http.StatusUnprocessableEntity, ReasonInvalidRequest)
 		return
 	}
-	writeJSON(writer, http.StatusOK, page)
+	writeJSON(writer, http.StatusOK, CaptureRunAuditPageOf(page))
 }
 
 func (handler *Handler) listApprovals(
@@ -1102,15 +1194,15 @@ func writeProblem(
 
 func problemBody(status int, reason ReasonCode) any {
 	return struct {
-		Type       string     `json:"type"`
-		Status     int        `json:"status"`
-		ReasonCode ReasonCode `json:"reasonCode"`
-		MessageKey string     `json:"messageKey"`
+		Type   string     `json:"type"`
+		Title  string     `json:"title"`
+		Status int        `json:"status"`
+		Code   ReasonCode `json:"code"`
 	}{
-		Type:       "urn:vibermate:error:" + strings.ReplaceAll(string(reason), "_", "-"),
-		Status:     status,
-		ReasonCode: reason,
-		MessageKey: "error." + string(reason),
+		Type:   "urn:vibermate:error:" + strings.ReplaceAll(string(reason), "_", "-"),
+		Title:  http.StatusText(status),
+		Status: status,
+		Code:   reason,
 	}
 }
 
@@ -1143,6 +1235,7 @@ func (handler *Handler) listEgressAttempts(
 			Limit:        limit,
 			AfterCursor:  request.URL.Query().Get("cursor"),
 			ConnectionID: request.URL.Query().Get("connectionId"),
+			ExchangeID:   request.URL.Query().Get("exchangeId"),
 			ParentKind:   egressaudit.ParentKind(request.URL.Query().Get("parentKind")),
 			ParentID:     request.URL.Query().Get("parentId"),
 			Purpose:      egressaudit.EgressPurpose(request.URL.Query().Get("purpose")),

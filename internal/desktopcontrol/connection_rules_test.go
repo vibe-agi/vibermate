@@ -36,6 +36,7 @@ func TestConnectionRulesAreReadableAndEditable(t *testing.T) {
 		Readiness:       readyState(true),
 		Status:          runtime,
 		Accesses:        runtime.AccessWriter(),
+		AccessCatalog:   runtime.AccessCatalog(),
 		Resolver:        runtime.SnapshotResolver(),
 		Credentials:     runtime.Credentials(),
 		Activities:      runtime.Activities(),

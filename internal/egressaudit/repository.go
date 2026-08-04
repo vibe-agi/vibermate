@@ -6,6 +6,7 @@ import (
 	"errors"
 	"strconv"
 	"strings"
+	"time"
 )
 
 const (
@@ -22,6 +23,7 @@ type PageRequest struct {
 	Limit        int
 	AfterCursor  string
 	ConnectionID string
+	ExchangeID   string
 	ParentKind   ParentKind
 	ParentID     string
 	Purpose      EgressPurpose
@@ -43,6 +45,11 @@ func (request PageRequest) Normalized() (PageRequest, error) {
 		return PageRequest{}, errors.New(
 			"an egress parent filter requires both a kind and an ID",
 		)
+	}
+	if request.ExchangeID != "" {
+		if err := validateIdentity("Exchange ID", request.ExchangeID); err != nil {
+			return PageRequest{}, err
+		}
 	}
 	if request.Purpose != "" {
 		if _, err := AuthorityForPurpose(request.Purpose); err != nil {
@@ -70,6 +77,10 @@ type Repository interface {
 	Append(context.Context, Attempt) (Record, error)
 	Complete(context.Context, Attempt) (Record, error)
 	List(context.Context, PageRequest) (Page, error)
+	// Recover terminalizes attempts left in flight by a previous daemon
+	// incarnation. It is a startup-only ownership operation and is deliberately
+	// absent from Writer so data-plane callers cannot invoke it.
+	Recover(context.Context, time.Time) (int, error)
 }
 
 // Writer is the append side a transport depends on. It is narrower than the

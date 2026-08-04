@@ -92,22 +92,36 @@ func (authority *Authority) AskClientRoot(
 	if err := request.validate(); err != nil {
 		return deniedClientRoot("invalid_ask"), err
 	}
+	grace := authority.config.clientRootGrace()
 	allowed, reason, err := authority.awaitDecision(
 		ctx,
 		clientRootAskAggregateKey(request),
+		// Nothing is open behind this one. A person is waiting at a terminal
+		// for a program to start, so an unanswered question denies after a
+		// grace and the client starts without a Root.
+		grace,
+		[]string{request.SignedPath},
 		func(identifier string, now time.Time) Record {
 			return Record{
-				ID:            identifier,
-				Revision:      1,
-				Kind:          KindClientRootAsk,
-				AggregateKey:  clientRootAskAggregateKey(request),
-				SubjectRefs:   []string{request.subject()},
-				SubjectLabels: []string{request.SignedPath},
+				ID:           identifier,
+				Revision:     1,
+				Kind:         KindClientRootAsk,
+				AggregateKey: clientRootAskAggregateKey(request),
+				SubjectRefs:  []string{request.subject()},
+				// The exact path is no-store evidence projected from process
+				// memory while this question is pending. The durable row keeps
+				// only the safe signer label.
+				SubjectLabels: []string{request.SignerID},
 				RequestCount:  1,
 				WaiterCount:   1,
 				State:         StatePending,
 				CreatedAt:     now,
-				ExpiresAt:     now.Add(authority.config.DecisionTimeout),
+				// The row expires when the wait does. A question that outlived
+				// its caller would be shown as still live and could be
+				// answered by somebody after the launch had already gone ahead
+				// without a Root — a late allow with nobody left to receive
+				// it, which is precisely what must not happen.
+				ExpiresAt: now.Add(grace),
 			}
 		},
 	)

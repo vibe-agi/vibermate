@@ -14,6 +14,8 @@ import (
 	"github.com/vibe-agi/vibermate/internal/runtimepersistence"
 )
 
+const activityIntegrationStartupTimeout = 60 * time.Second
+
 func TestActivityTimelinePersistsRedactedEventsAndPaginates(t *testing.T) {
 	t.Parallel()
 
@@ -109,6 +111,12 @@ func TestActivityTimelinePersistsRedactedEventsAndPaginates(t *testing.T) {
 		activity.PageRequest{Limit: 1},
 	); !errors.Is(err, activity.ErrRuntimeStopping) {
 		t.Fatalf("stopped Activity runtime accepted a read: %v", err)
+	}
+	if _, err := manager.ListExchanges(
+		context.Background(),
+		activity.PageRequest{Limit: 1},
+	); !errors.Is(err, activity.ErrRuntimeStopping) {
+		t.Fatalf("stopped Activity runtime accepted an Exchange read: %v", err)
 	}
 	shutdownStore(t, store)
 
@@ -242,7 +250,13 @@ func TestActivityPersistsImmutableTransportSelectionEvidence(t *testing.T) {
 
 func openStore(t *testing.T, path string) *runtimepersistence.Store {
 	t.Helper()
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	// Full-suite race instrumentation runs this migration beside the other
+	// repository fixtures. Preserve a hard test bound without making scheduler
+	// contention look like a migration defect.
+	ctx, cancel := context.WithTimeout(
+		context.Background(),
+		activityIntegrationStartupTimeout,
+	)
 	defer cancel()
 	store, err := runtimepersistence.Open(ctx, runtimepersistence.Options{
 		DatabasePath:           path,

@@ -17,7 +17,7 @@ func TestRuntimeResumeProberDispatchesOnlyTypedSupportedTargets(t *testing.T) {
 
 	provider := &recordingProber{}
 	original := &recordingProber{}
-	prober, err := newRuntimeResumeProber(provider, original)
+	prober, err := newRuntimeResumeProber(provider, original, &recordingProber{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -62,7 +62,7 @@ func TestRuntimeResumeProberStopsAtFirstFailedTarget(t *testing.T) {
 	)
 	provider := &recordingProber{err: providerFailure}
 	original := &recordingProber{}
-	prober, err := newRuntimeResumeProber(provider, original)
+	prober, err := newRuntimeResumeProber(provider, original, &recordingProber{})
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -12,11 +12,12 @@ import (
 )
 
 const (
-	defaultLauncherTTL        = 15 * time.Minute
-	defaultBootstrapTTL       = 30 * time.Second
-	defaultAppSessionTTL      = 12 * time.Hour
-	defaultCaptureRunLifetime = 90 * time.Second
-	defaultShutdownTimeout    = 20 * time.Second
+	defaultLauncherTTL         = 15 * time.Minute
+	defaultBootstrapTTL        = 30 * time.Second
+	defaultAppSessionTTL       = 12 * time.Hour
+	defaultAppSessionReplayTTL = 2 * time.Minute
+	defaultCaptureRunLifetime  = 90 * time.Second
+	defaultShutdownTimeout     = 20 * time.Second
 )
 
 // Options is the complete typed Desktop Host construction input.
@@ -30,6 +31,7 @@ type Options struct {
 	LauncherTTL          time.Duration
 	BootstrapTTL         time.Duration
 	AppSessionTTL        time.Duration
+	AppSessionReplayTTL  time.Duration
 	CaptureRunLifetime   time.Duration
 	ShutdownTimeout      time.Duration
 }
@@ -50,6 +52,7 @@ func DefaultOptions(
 		LauncherTTL:          defaultLauncherTTL,
 		BootstrapTTL:         defaultBootstrapTTL,
 		AppSessionTTL:        defaultAppSessionTTL,
+		AppSessionReplayTTL:  defaultAppSessionReplayTTL,
 		CaptureRunLifetime:   defaultCaptureRunLifetime,
 		ShutdownTimeout:      defaultShutdownTimeout,
 	}
@@ -77,6 +80,9 @@ func (options Options) validate() error {
 		options.LauncherTTL <= 0 ||
 		options.BootstrapTTL <= 0 ||
 		options.AppSessionTTL <= 0 ||
+		options.AppSessionReplayTTL <= 0 ||
+		options.AppSessionReplayTTL > options.AppSessionTTL ||
+		options.AppSessionReplayTTL > 5*time.Minute ||
 		options.CaptureRunLifetime <= 0 ||
 		options.ShutdownTimeout <= 0 {
 		return errors.New("Desktop Host policy is incomplete")

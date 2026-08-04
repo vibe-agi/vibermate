@@ -10,6 +10,7 @@ import (
 
 	"github.com/vibe-agi/vibermate/internal/capturerun"
 	"github.com/vibe-agi/vibermate/internal/clientadapter"
+	"github.com/vibe-agi/vibermate/internal/workspaceidentity"
 )
 
 const captureRunColumns = `
@@ -17,6 +18,13 @@ const captureRunColumns = `
 	proxy_capability_hash,
 	control_capability_hash,
 	cwd,
+	local_user_label,
+	machine_id,
+	machine_registration_revision,
+	workspace_id,
+	workspace_label,
+	workspace_evidence,
+	workspace_derivation_revision,
 	executable_label,
 	client_catalog_revision,
 	adapter_id,
@@ -72,6 +80,13 @@ func (repository *captureRunRepository) Create(
 		     proxy_capability_hash,
 		     control_capability_hash,
 		     cwd,
+		     local_user_label,
+		     machine_id,
+		     machine_registration_revision,
+		     workspace_id,
+		     workspace_label,
+		     workspace_evidence,
+		     workspace_derivation_revision,
 		     executable_label,
 		     client_catalog_revision,
 		     adapter_id,
@@ -88,11 +103,18 @@ func (repository *captureRunRepository) Create(
 		     expires_at_unix_ms,
 		     updated_at_unix_ms
 		 )
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		record.ID,
 		record.ProxyCapabilityHash[:],
 		record.ControlCapabilityHash[:],
 		record.CWD,
+		record.LocalUserLabel,
+		record.MachineID.String(),
+		int64(record.MachineRegistrationRevision),
+		record.WorkspaceID.String(),
+		record.WorkspaceLabel,
+		string(record.WorkspaceEvidence),
+		int64(record.WorkspaceDerivationRevision),
 		record.ExecutableLabel,
 		int64(record.CatalogRevision),
 		adapterID,
@@ -393,24 +415,34 @@ type captureRunScanner interface {
 
 func scanCaptureRun(scanner captureRunScanner) (capturerun.DurableRecord, error) {
 	var (
-		record                             capturerun.DurableRecord
-		proxyHash, controlHash             []byte
-		releaseHash                        []byte
-		catalogRevision, adapterRevision   int64
-		adapterFeatures                    int64
-		adapterID, adapterVersion          string
-		adapterInstallShape, adapterRecipe string
-		state                              string
-		observation                        string
-		recognition                        string
-		firstObservedAt                    sql.NullInt64
-		createdAt, expiresAt, updatedAtMS  int64
+		record                              capturerun.DurableRecord
+		proxyHash, controlHash              []byte
+		releaseHash                         []byte
+		catalogRevision, adapterRevision    int64
+		adapterFeatures                     int64
+		adapterID, adapterVersion           string
+		adapterInstallShape, adapterRecipe  string
+		state                               string
+		observation                         string
+		recognition                         string
+		firstObservedAt                     sql.NullInt64
+		createdAt, expiresAt, updatedAtMS   int64
+		machineID, workspaceID              string
+		workspaceLabel, workspaceEvidence   string
+		machineRevision, derivationRevision int64
 	)
 	if err := scanner.Scan(
 		&record.ID,
 		&proxyHash,
 		&controlHash,
 		&record.CWD,
+		&record.LocalUserLabel,
+		&machineID,
+		&machineRevision,
+		&workspaceID,
+		&workspaceLabel,
+		&workspaceEvidence,
+		&derivationRevision,
 		&record.ExecutableLabel,
 		&catalogRevision,
 		&adapterID,
@@ -439,6 +471,28 @@ func scanCaptureRun(scanner captureRunScanner) (capturerun.DurableRecord, error)
 	copy(record.ControlCapabilityHash[:], controlHash)
 	record.Observation = capturerun.Observation(observation)
 	record.Recognition = clientadapter.Recognition(recognition)
+	if machineRevision < 0 || derivationRevision < 0 {
+		return capturerun.DurableRecord{}, errors.New(
+			"CaptureRun workspace identity revision is invalid",
+		)
+	}
+	if machineID != "" || workspaceID != "" || workspaceLabel != "" ||
+		workspaceEvidence != "" || machineRevision != 0 || derivationRevision != 0 {
+		parsedMachine, err := workspaceidentity.ParseMachineID(machineID)
+		if err != nil {
+			return capturerun.DurableRecord{}, err
+		}
+		parsedWorkspace, err := workspaceidentity.ParseWorkspaceID(workspaceID)
+		if err != nil {
+			return capturerun.DurableRecord{}, err
+		}
+		record.MachineID = parsedMachine
+		record.MachineRegistrationRevision = uint64(machineRevision)
+		record.WorkspaceID = parsedWorkspace
+		record.WorkspaceLabel = workspaceLabel
+		record.WorkspaceEvidence = workspaceidentity.Evidence(workspaceEvidence)
+		record.WorkspaceDerivationRevision = uint64(derivationRevision)
+	}
 	if firstObservedAt.Valid {
 		record.FirstObservedAt = fromUnixMillis(firstObservedAt.Int64)
 	}

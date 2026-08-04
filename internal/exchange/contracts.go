@@ -23,6 +23,8 @@ import (
 	"github.com/vibe-agi/vibermate/internal/protocolpath"
 	"github.com/vibe-agi/vibermate/internal/providertransport"
 	"github.com/vibe-agi/vibermate/internal/transportprofile"
+	"github.com/vibe-agi/vibermate/internal/workspaceidentity"
+	"github.com/vibe-agi/vibermate/internal/workspaceroute"
 )
 
 const MaxExchangeIdentityBytes = 512
@@ -34,6 +36,7 @@ const (
 	ReasonUnsupportedClientInput        ReasonCode = "unsupported_client_input"
 	ReasonAccessPlanUnavailable         ReasonCode = "access_plan_unavailable"
 	ReasonIngressBindingStale           ReasonCode = "ingress_binding_stale"
+	ReasonWorkspaceRouteUnavailable     ReasonCode = "workspace_route_unavailable"
 	ReasonOfflineHoldUnavailable        ReasonCode = "offline_hold_unavailable"
 	ReasonUnsupportedAccessPlan         ReasonCode = "unsupported_access_plan"
 	ReasonProviderRequestInvalid        ReasonCode = "provider_request_invalid"
@@ -401,13 +404,18 @@ type ClientRequest struct {
 	captureRunRef  string
 	connectionRef  string
 	hasCorrelation bool
+	workspace      workspaceidentity.Scope
+	hasWorkspace   bool
+	anthropicBeta  string
 }
 
 type clientRequestOptionKind uint8
 
 const (
-	clientRequestOptionClientHello clientRequestOptionKind = 1
-	clientRequestOptionCorrelation clientRequestOptionKind = 2
+	clientRequestOptionClientHello   clientRequestOptionKind = 1
+	clientRequestOptionCorrelation   clientRequestOptionKind = 2
+	clientRequestOptionAnthropicBeta clientRequestOptionKind = 3
+	clientRequestOptionWorkspace     clientRequestOptionKind = 4
 )
 
 // ClientRequestOption is a closed typed option. Its fields are private so an
@@ -417,6 +425,8 @@ type ClientRequestOption struct {
 	clientHello   transportprofile.Observation
 	captureRunRef string
 	connectionRef string
+	anthropicBeta string
+	workspace     workspaceidentity.Scope
 }
 
 func WithClientHelloObservation(
@@ -440,6 +450,25 @@ func WithIngressCorrelation(
 		kind:          clientRequestOptionCorrelation,
 		captureRunRef: captureRunRef,
 		connectionRef: connectionRef,
+	}
+}
+
+// WithWorkspaceScope carries identity already authenticated by the
+// CaptureRun capability. The scope is used only after AgentEndpoint resolves
+// an Access and cannot widen that Access's allowed RouteSet.
+func WithWorkspaceScope(scope workspaceidentity.Scope) ClientRequestOption {
+	return ClientRequestOption{
+		kind:      clientRequestOptionWorkspace,
+		workspace: scope,
+	}
+}
+
+// WithAnthropicBetaHeader preserves only Anthropic's public feature selector.
+// Credentials and arbitrary client headers never enter the Exchange request.
+func WithAnthropicBetaHeader(value string) ClientRequestOption {
+	return ClientRequestOption{
+		kind:          clientRequestOptionAnthropicBeta,
+		anthropicBeta: value,
 	}
 }
 
@@ -509,6 +538,22 @@ func NewClientRequest(
 			request.captureRunRef = option.captureRunRef
 			request.connectionRef = option.connectionRef
 			request.hasCorrelation = true
+		case clientRequestOptionAnthropicBeta:
+			if request.anthropicBeta != "" ||
+				!validAnthropicBetaHeader(option.anthropicBeta) {
+				return ClientRequest{}, errors.New(
+					"Anthropic beta header option is invalid",
+				)
+			}
+			request.anthropicBeta = option.anthropicBeta
+		case clientRequestOptionWorkspace:
+			if request.hasWorkspace || option.workspace.Validate() != nil {
+				return ClientRequest{}, errors.New(
+					"workspace scope option is invalid",
+				)
+			}
+			request.workspace = option.workspace
+			request.hasWorkspace = true
 		default:
 			return ClientRequest{}, errors.New(
 				"client request option is invalid",
@@ -516,6 +561,36 @@ func NewClientRequest(
 		}
 	}
 	return request, nil
+}
+
+func validAnthropicBetaHeader(value string) bool {
+	if value == "" || len(value) > 4096 || !utf8.ValidString(value) {
+		return false
+	}
+	for _, item := range strings.Split(value, ",") {
+		item = strings.TrimSpace(item)
+		if item == "" {
+			return false
+		}
+		for _, character := range item {
+			if (character >= 'a' && character <= 'z') ||
+				(character >= 'A' && character <= 'Z') ||
+				(character >= '0' && character <= '9') ||
+				character == '-' || character == '_' || character == '.' {
+				continue
+			}
+			return false
+		}
+	}
+	return true
+}
+
+func (request ClientRequest) protocolHeaders() http.Header {
+	headers := make(http.Header)
+	if request.anthropicBeta != "" {
+		headers.Set("Anthropic-Beta", request.anthropicBeta)
+	}
+	return headers
 }
 
 // CaptureRunRef is the CaptureRun this Exchange entered through, or empty for
@@ -528,6 +603,10 @@ func (request ClientRequest) CaptureRunRef() string {
 // empty for a runtime-originated Exchange.
 func (request ClientRequest) ConnectionRef() string {
 	return request.connectionRef
+}
+
+func (request ClientRequest) WorkspaceScope() (workspaceidentity.Scope, bool) {
+	return request.workspace, request.hasWorkspace
 }
 
 func (request ClientRequest) ExchangeID() string {
@@ -574,6 +653,11 @@ func (request ClientRequest) validate() error {
 	if len(request.body) == 0 ||
 		len(request.body) > providertransport.MaxProviderRequestBytes {
 		return errors.New("client request body has an invalid size")
+	}
+	if request.hasWorkspace {
+		if !request.hasCorrelation || request.workspace.Validate() != nil {
+			return errors.New("client request workspace scope is invalid")
+		}
 	}
 	if request.hasClientHello && !request.clientHello.Available() {
 		return errors.New("client TLS ClientHello observation is unavailable")
@@ -887,6 +971,7 @@ type Options struct {
 	OwnerContext       context.Context
 	Actions            offlinehold.ActionAdmission
 	Resolver           access.SnapshotResolver
+	WorkspaceRoutes    workspaceroute.Resolver
 	ProtocolPaths      *protocolpath.Selector
 	Provider           Provider
 	ToolDecisions      ToolDecisionGate
@@ -910,18 +995,21 @@ const (
 // Result is evidence for one logical Exchange and its one provider Attempt. It does
 // not expose the Access plan handle or provider response body.
 type Result struct {
-	ExchangeID          string
-	AccessID            string
-	AccessRevision      access.Revision
-	PlanHash            string
-	RouteHost           string
-	CredentialBindingID string
-	Outcome             AttemptOutcome
-	TransportResends    uint32
-	Ledger              LedgerSnapshot
-	Translation         protocolcore.TranslationReport
-	Credential          providertransport.CredentialEvidence
-	Transport           transportprofile.Evidence
+	ExchangeID              string
+	AccessID                string
+	AccessRevision          access.Revision
+	PlanHash                string
+	RouteHost               string
+	CredentialBindingID     string
+	WorkspaceRouteBindingID string
+	WorkspaceRouteRevision  workspaceroute.Revision
+	WorkspaceProfileID      string
+	Outcome                 AttemptOutcome
+	TransportResends        uint32
+	Ledger                  LedgerSnapshot
+	Translation             protocolcore.TranslationReport
+	Credential              providertransport.CredentialEvidence
+	Transport               transportprofile.Evidence
 }
 
 func cloneToolIntents(

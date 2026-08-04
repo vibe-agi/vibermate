@@ -102,6 +102,56 @@ func (manager *Manager) List(
 	ctx context.Context,
 	request PageRequest,
 ) (Page, error) {
+	if manager == nil {
+		return Page{}, ErrInvalidEvent
+	}
+	return manager.list(ctx, request, manager.repository.List)
+}
+
+// GetExchange returns the one durable terminal record for a logical Exchange.
+// A duplicate terminal is a storage contradiction and is rejected by the
+// repository rather than selecting whichever row happened to sort first.
+func (manager *Manager) GetExchange(
+	ctx context.Context,
+	exchangeID string,
+) (Record, error) {
+	if manager == nil || validateIdentity("Exchange ID", exchangeID, false) != nil {
+		return Record{}, ErrInvalidEvent
+	}
+	operation, finish, err := manager.begin(ctx)
+	if err != nil {
+		return Record{}, err
+	}
+	defer finish()
+	record, err := manager.repository.GetExchange(operation, exchangeID)
+	if err != nil {
+		return Record{}, err
+	}
+	if record.Transport != nil {
+		transport := record.Transport.Clone()
+		record.Transport = &transport
+	}
+	return record, nil
+}
+
+// ListExchanges returns only durable Exchange terminal records. Keeping this
+// read distinct from List prevents a control-surface projection from filtering
+// a mixed page after pagination has already been applied.
+func (manager *Manager) ListExchanges(
+	ctx context.Context,
+	request PageRequest,
+) (Page, error) {
+	if manager == nil {
+		return Page{}, ErrInvalidEvent
+	}
+	return manager.list(ctx, request, manager.repository.ListExchanges)
+}
+
+func (manager *Manager) list(
+	ctx context.Context,
+	request PageRequest,
+	read func(context.Context, PageRequest) (Page, error),
+) (Page, error) {
 	if err := request.Validate(); err != nil {
 		return Page{}, err
 	}
@@ -110,7 +160,7 @@ func (manager *Manager) List(
 		return Page{}, err
 	}
 	defer finish()
-	page, err := manager.repository.List(operation, request)
+	page, err := read(operation, request)
 	if err != nil {
 		return Page{}, err
 	}

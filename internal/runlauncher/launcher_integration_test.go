@@ -17,7 +17,6 @@ import (
 	"time"
 
 	"github.com/vibe-agi/vibermate/internal/capturecontrol"
-	"github.com/vibe-agi/vibermate/internal/capturerun"
 	"github.com/vibe-agi/vibermate/internal/clientadapter"
 	"github.com/vibe-agi/vibermate/internal/launcherdiscovery"
 	"github.com/vibe-agi/vibermate/internal/runlauncher"
@@ -63,16 +62,18 @@ exit 7
 			"first",
 			"two words",
 		},
+		userLabel:   "alice",
 		recipe:      clientadapter.LaunchNodeEnvProxy,
 		recognition: clientadapter.RecognitionVerified,
-		adapter: &clientadapter.Evidence{
+		adapter: &capturecontrol.ClientAdapterView{
 			ID:              "claude-code",
 			Revision:        1,
 			Version:         "test",
 			CatalogRevision: 7,
-			InstallShape:    clientadapter.InstallNativeSingleBinary,
-			ReleaseSHA256:   strings.Repeat("d", 64),
-			LaunchRecipe:    clientadapter.LaunchNodeEnvProxy,
+			Source: capturecontrol.
+				ClientAdapterSourcePrelaunchDigestCatalog,
+			InstallShape: clientadapter.InstallNativeSingleBinary,
+			LaunchRecipe: clientadapter.LaunchNodeEnvProxy,
 		},
 		authorities: []string{"api.anthropic.com:443"},
 	}
@@ -93,6 +94,7 @@ exit 7
 		Discovery: discovery,
 		BaseEnvironment: []string{
 			"PATH=/usr/bin:/bin",
+			"USER=  alice  ",
 			"LAUNCH_TEST_OUTPUT=" + outputPath,
 			"NO_PROXY=localhost,.anthropic.com,10.0.0.0/8",
 		},
@@ -202,6 +204,11 @@ func TestLauncherBoundsCaptureRunCreation(t *testing.T) {
 		}},
 		BaseEnvironment: []string{"PATH=/usr/bin:/bin"},
 		ControlTimeout:  50 * time.Millisecond,
+		// Create carries its own budget because it is the only control call
+		// that can contain signature verification and a question put to a
+		// person. That it is a separate number does not make it unbounded,
+		// which is what this test is for.
+		CreateTimeout: 50 * time.Millisecond,
 		Getwd: func() (string, error) {
 			return t.TempDir(), nil
 		},
@@ -226,7 +233,7 @@ func TestLauncherBoundsCaptureRunCreation(t *testing.T) {
 			t.Fatal("unresponsive CaptureRun creation succeeded")
 		}
 	case <-time.After(2 * time.Second):
-		t.Fatal("CaptureRun creation ignored the configured control timeout")
+		t.Fatal("CaptureRun creation ignored the configured create timeout")
 	}
 }
 
@@ -248,9 +255,10 @@ type controlFixture struct {
 	proxy           string
 	run             string
 	expectedCommand []string
+	userLabel       string
 	recipe          clientadapter.LaunchRecipe
 	recognition     clientadapter.Recognition
-	adapter         *clientadapter.Evidence
+	adapter         *capturecontrol.ClientAdapterView
 	authorities     []string
 
 	mu             sync.Mutex
@@ -279,28 +287,24 @@ func (fixture *controlFixture) ServeHTTP(
 		decodeRequest(fixture.t, request, &input)
 		if input.CWD != fixture.workspace ||
 			input.ExecutablePath != fixture.executable ||
+			input.LocalUserLabel != fixture.userLabel ||
 			!slices.Equal(input.Command, fixture.expectedCommand) {
 			fixture.t.Errorf("create request = %+v", input)
 		}
 		fixture.createCalls++
 		writeControlJSON(writer, http.StatusCreated, capturecontrol.LaunchGrant{
-			Run: capturerun.View{
-				ID:              "capture-run-1",
-				ExecutableLabel: "agent",
-				CWD:             fixture.workspace,
-				State:           capturerun.StateCreated,
-			},
+			Run:             fixture.runView(0),
 			CatalogRevision: 7,
 			LaunchRecipe:    fixture.recipe,
 			Recognition:     fixture.recognition,
 			Adapter:         fixture.adapter,
 			ExecutablePath:  fixture.executable,
-			ProxyOrigin:     "http://" + request.Host,
-			ProxyCapability: fixture.proxy,
+			ProxyAddress:    "http://" + request.Host,
+			ProxyToken:      fixture.proxy,
 			RunCapability:   fixture.run,
 			RootPEMPath:     fixture.rootPath,
 			ProtectedAuthorities: append(
-				[]string(nil),
+				[]string{},
 				fixture.authorities...,
 			),
 		})
@@ -313,21 +317,14 @@ func (fixture *controlFixture) ServeHTTP(
 		decodeRequest(fixture.t, request, &input)
 		fixture.attachCalls++
 		fixture.attachedPID = input.ProcessID
-		writeControlJSON(writer, http.StatusOK, capturerun.View{
-			ID:        "capture-run-1",
-			ProcessID: input.ProcessID,
-			State:     capturerun.StateAttached,
-		})
+		writeControlJSON(writer, http.StatusOK, fixture.runView(input.ProcessID))
 	case "/api/v1/capture-runs/capture-run-1/actions/heartbeat":
 		if !fixture.authorizeRun(request) {
 			writeControlProblem(writer, http.StatusForbidden)
 			return
 		}
 		fixture.heartbeatCalls++
-		writeControlJSON(writer, http.StatusOK, capturerun.View{
-			ID:    "capture-run-1",
-			State: capturerun.StateAttached,
-		})
+		writeControlJSON(writer, http.StatusOK, fixture.runView(fixture.attachedPID))
 	case "/api/v1/capture-runs/capture-run-1/actions/finish":
 		if !fixture.authorizeRun(request) {
 			writeControlProblem(writer, http.StatusForbidden)
@@ -337,6 +334,26 @@ func (fixture *controlFixture) ServeHTTP(
 		writer.WriteHeader(http.StatusNoContent)
 	default:
 		writeControlProblem(writer, http.StatusNotFound)
+	}
+}
+
+func (fixture *controlFixture) runView(processID int) capturecontrol.CaptureRunView {
+	createdAt := time.Date(2026, 8, 3, 8, 0, 0, 0, time.UTC)
+	state := clientadapter.StatusGeneric
+	if fixture.adapter != nil {
+		state = clientadapter.StatusVerified
+	}
+	return capturecontrol.CaptureRunView{
+		ID:                 "capture-run-1",
+		ExecutableLabel:    "agent",
+		CWD:                fixture.workspace,
+		ProcessID:          processID,
+		CreatedAt:          createdAt,
+		ExpiresAt:          createdAt.Add(time.Minute),
+		ClientAdapterState: state,
+		ClientRecognition:  fixture.recognition,
+		CatalogRevision:    7,
+		ClientAdapter:      fixture.adapter,
 	}
 }
 
@@ -363,9 +380,12 @@ func writeControlJSON(writer http.ResponseWriter, status int, value any) {
 func writeControlProblem(writer http.ResponseWriter, status int) {
 	writer.Header().Set("Content-Type", "application/problem+json")
 	writer.WriteHeader(status)
+	code := capturecontrol.ReasonInvalidRoute
 	_ = json.NewEncoder(writer).Encode(map[string]any{
-		"status":     status,
-		"reasonCode": capturecontrol.ReasonInvalidRoute,
+		"type":   "urn:vibermate:error:control-route-not-found",
+		"title":  http.StatusText(status),
+		"status": status,
+		"code":   code,
 	})
 }
 

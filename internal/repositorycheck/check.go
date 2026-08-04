@@ -768,6 +768,18 @@ func CheckExternalEgressGate(repositoryRoot string) []Violation {
 		"internal/originaltransport/probe.go":     {},
 		"internal/loopbackclient/client.go":       {},
 		"internal/blindtunnel/dialer.go":          {},
+		// The third egress kind's typed probe, alongside the two above it.
+		//
+		// A probe cannot reach its target through the gated dialer that sits
+		// beside it: that dialer acquires an egress lease first, and the probe
+		// is what decides whether the gate may release leases at all. It would
+		// be asking permission from the gate it is trying to open.
+		//
+		// What keeps this narrow is the same thing that keeps the other two
+		// narrow: the file connects and immediately closes. It writes nothing
+		// and reads nothing, because a tunnel forwards bytes this product
+		// never interprets.
+		"internal/blindtunnel/probe.go": {},
 	}
 	protectedSymbols := map[string]map[string]struct{}{
 		"net": {

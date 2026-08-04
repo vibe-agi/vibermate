@@ -5,6 +5,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/vibe-agi/vibermate/internal/acceptancereport"
 )
 
 func TestBundleDigestIsDeterministicAndCoversMemberContent(t *testing.T) {
@@ -18,11 +20,11 @@ func TestBundleDigestIsDeterministicAndCoversMemberContent(t *testing.T) {
 	if err := os.WriteFile(member, []byte("first"), 0o700); err != nil {
 		t.Fatal(err)
 	}
-	first, err := digestBundle(bundle)
+	first, err := acceptancereport.DigestBundle(bundle)
 	if err != nil {
 		t.Fatal(err)
 	}
-	repeated, err := digestBundle(bundle)
+	repeated, err := acceptancereport.DigestBundle(bundle)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -34,7 +36,7 @@ func TestBundleDigestIsDeterministicAndCoversMemberContent(t *testing.T) {
 	if err := os.WriteFile(member, []byte("second"), 0o700); err != nil {
 		t.Fatal(err)
 	}
-	changed, err := digestBundle(bundle)
+	changed, err := acceptancereport.DigestBundle(bundle)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -192,6 +194,7 @@ func TestDesktopBuildManifestBindsSourceSidecarsAndConfiguration(
 		ConfigurationSHA256: map[string]string{
 			"go.mod":                               hash,
 			"go.sum":                               hash,
+			"rust-toolchain.toml":                  hash,
 			"ui/desktop/package.json":              hash,
 			"ui/desktop/pnpm-lock.yaml":            hash,
 			"ui/desktop/src-tauri/Cargo.toml":      hash,
@@ -225,6 +228,26 @@ func TestDesktopBuildManifestBindsSourceSidecarsAndConfiguration(
 		t.Fatal("manifest with a mismatched daemon digest was accepted")
 	}
 	manifest.SidecarSHA256["vibermated"] = strings.Repeat("b", 64)
+	delete(manifest.ConfigurationSHA256, "rust-toolchain.toml")
+	if err := validateDesktopBuildManifest(
+		manifest,
+		source,
+		"development",
+		artifacts,
+	); err == nil {
+		t.Fatal("v2 manifest without the Rust declaration digest was accepted")
+	}
+	manifest.Schema = acceptancereport.DesktopBuildManifestSchemaV1
+	if err := validateDesktopBuildManifest(
+		manifest,
+		source,
+		"development",
+		artifacts,
+	); err == nil {
+		t.Fatal("current acceptance accepted a historical v1 manifest")
+	}
+	manifest.ConfigurationSHA256["rust-toolchain.toml"] = hash
+	manifest.Schema = desktopBuildManifestV2
 	manifest.Source.Dirty = true
 	if err := validateDesktopBuildManifest(
 		manifest,

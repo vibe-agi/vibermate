@@ -8,9 +8,11 @@ import (
 	"testing"
 	"time"
 
+	"github.com/vibe-agi/vibermate/internal/capturerun"
 	"github.com/vibe-agi/vibermate/internal/connectionevent"
 	"github.com/vibe-agi/vibermate/internal/desktopcontrol"
 	"github.com/vibe-agi/vibermate/internal/egressaudit"
+	"github.com/vibe-agi/vibermate/internal/productruntime"
 )
 
 // The endpoint that answers "what went out" must actually answer it. It used
@@ -102,9 +104,11 @@ func TestAuditViewsCarryNoRequestContent(t *testing.T) {
 }
 
 type auditFixture struct {
-	router    http.Handler
-	authority string
-	readToken string
+	router     http.Handler
+	authority  string
+	readToken  string
+	writeToken string
+	runtime    *productruntime.Runtime
 }
 
 type fixedEgressReader struct {
@@ -171,7 +175,10 @@ func sampleAttempt(t *testing.T) egressaudit.Record {
 	return egressaudit.Record{Sequence: 1, Attempt: finished}
 }
 
-func newAuditFixture(t *testing.T) *auditFixture {
+func newAuditFixture(
+	t *testing.T,
+	captureReaders ...capturerun.Reader,
+) *auditFixture {
 	t.Helper()
 
 	runtime := startRuntime(t)
@@ -190,13 +197,18 @@ func newAuditFixture(t *testing.T) *auditFixture {
 	if err != nil {
 		t.Fatal(err)
 	}
+	captureReader := runtime.CaptureRunReader()
+	if len(captureReaders) > 0 {
+		captureReader = captureReaders[0]
+	}
 	application, err := desktopcontrol.New(desktopcontrol.Options{
-		Readiness:   readyState(true),
-		Status:      runtime,
-		Accesses:    runtime.AccessWriter(),
-		Resolver:    runtime.SnapshotResolver(),
-		Credentials: runtime.Credentials(),
-		Activities:  runtime.Activities(),
+		Readiness:     readyState(true),
+		Status:        runtime,
+		Accesses:      runtime.AccessWriter(),
+		AccessCatalog: runtime.AccessCatalog(),
+		Resolver:      runtime.SnapshotResolver(),
+		Credentials:   runtime.Credentials(),
+		Activities:    runtime.Activities(),
 		Connections: fixedConnectionReader{
 			page: connectionevent.Page{Items: []connectionevent.Record{
 				sampleConnection(),
@@ -208,9 +220,10 @@ func newAuditFixture(t *testing.T) *auditFixture {
 			}},
 		},
 		Approvals:       runtime.ToolApprovals(),
-		CaptureRuns:     runtime.CaptureRunReader(),
+		CaptureRuns:     captureReader,
 		Offline:         runtime,
 		ConnectionRules: runtime.ConnectionRules(),
+		WorkspaceRoutes: runtime.WorkspaceRoutes(),
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -232,9 +245,11 @@ func newAuditFixture(t *testing.T) *auditFixture {
 		t.Fatal(err)
 	}
 	return &auditFixture{
-		router:    router,
-		authority: authority,
-		readToken: readToken,
+		router:     router,
+		authority:  authority,
+		readToken:  readToken,
+		writeToken: writeToken,
+		runtime:    runtime,
 	}
 }
 

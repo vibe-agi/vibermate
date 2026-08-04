@@ -1,10 +1,12 @@
 package main
 
 import (
+	"bytes"
 	"encoding/base64"
 	"encoding/json"
 	"io"
 	"slices"
+	"strings"
 	"testing"
 	"time"
 
@@ -31,6 +33,10 @@ func TestDecodeDescriptorCompletesAtNewlineWithoutWaitingForEOF(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	progress, err := json.Marshal(desktopbootstrap.RuntimeStartingProgress())
+	if err != nil {
+		t.Fatal(err)
+	}
 	decoded := make(chan struct {
 		descriptor desktopbootstrap.Descriptor
 		err        error
@@ -42,7 +48,8 @@ func TestDecodeDescriptorCompletesAtNewlineWithoutWaitingForEOF(t *testing.T) {
 			err        error
 		}{descriptor: descriptor, err: decodeErr}
 	}()
-	if _, err := writer.Write(append(payload, '\n')); err != nil {
+	frames := append(append(progress, '\n'), append(payload, '\n')...)
+	if _, err := writer.Write(frames); err != nil {
 		t.Fatal(err)
 	}
 
@@ -74,5 +81,28 @@ func TestDaemonInvocationPinsPackagedWebviewOrigin(t *testing.T) {
 		"--webview-origin=http://127.0.0.1:1420",
 	) {
 		t.Fatalf("daemon arguments enabled development origin = %v", arguments)
+	}
+}
+
+func TestDecodeDescriptorAcceptsOnlyClosedStartupFailure(t *testing.T) {
+	t.Parallel()
+
+	progress, err := json.Marshal(desktopbootstrap.RuntimeStartingProgress())
+	if err != nil {
+		t.Fatal(err)
+	}
+	failure, err := json.Marshal(desktopbootstrap.StartupFailure(
+		desktopbootstrap.FailureStorageSchemaNewer,
+	))
+	if err != nil {
+		t.Fatal(err)
+	}
+	payload := append(append(progress, '\n'), append(failure, '\n')...)
+	_, err = decodeDescriptor(bytes.NewReader(payload))
+	if err == nil || !strings.Contains(
+		err.Error(),
+		"reason=storage_schema_newer",
+	) {
+		t.Fatalf("typed startup failure error = %v", err)
 	}
 }

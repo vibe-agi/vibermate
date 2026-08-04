@@ -1,0 +1,952 @@
+# This manually dispatched workflow signs one inert macOS candidate as bounded
+# review evidence. It does not publish a release or grant release approval.
+#
+# Repository administrators must configure both referenced GitHub Environments
+# with required reviewers and deployment-branch rules limited to the default
+# branch. The jobs also enforce that branch in-band before any checkout/secret.
+name: protected macOS Developer ID candidate
+
+on:
+  workflow_dispatch:
+    inputs:
+      candidate_revision:
+        description: Full lowercase Git SHA, already merged into the default branch
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: vibermate-macos-developer-id-${{ inputs.candidate_revision }}
+  cancel-in-progress: false
+
+env:
+  DEVELOPER_DIR: /Applications/Xcode_16.2.app/Contents/Developer
+  REF_PROTECTED: ${{ github.ref_protected }}
+  SYFT_DARWIN_ARM64_ARCHIVE_SHA256: 24e4d34078ae81da7c82539616f0ccac3e226cf4f74a38ce6fb3463619e50a55
+  VIBERMATE_CANDIDATE_REVISION: ${{ inputs.candidate_revision }}
+  VIBERMATE_TOOLING_REVISION: ${{ github.workflow_sha }}
+  WORKFLOW_REF: ${{ github.workflow_ref }}
+
+jobs:
+  unsigned:
+    name: unsigned Universal App without Apple distribution credentials
+    runs-on: macos-15
+    timeout-minutes: 90
+    outputs:
+      artifact_name: ${{ steps.artifact_name.outputs.name }}
+      r0_input_artifact_name: ${{ steps.artifact_name.outputs.r0_input_name }}
+    env:
+      DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+      DISPATCH_REF: ${{ github.ref }}
+      UNSIGNED_ARTIFACT_NAME: macos-unsigned-${{ inputs.candidate_revision }}-${{ github.run_id }}-${{ github.run_attempt }}
+      R0_INPUT_ARTIFACT_NAME: macos-r0-build-input-${{ inputs.candidate_revision }}-${{ github.run_id }}-${{ github.run_attempt }}
+
+    steps:
+      - name: Admit only the protected default-branch workflow and candidate SHA
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(uname -m)" = "arm64"
+          [[ "${VIBERMATE_CANDIDATE_REVISION}" =~ ^[0-9a-f]{40}$ ]]
+          [[ "${VIBERMATE_TOOLING_REVISION}" =~ ^[0-9a-f]{40}$ ]]
+          [[ "${DEFAULT_BRANCH}" =~ ^[A-Za-z0-9._/-]+$ ]]
+          test "${DISPATCH_REF}" = "refs/heads/${DEFAULT_BRANCH}"
+          test "${REF_PROTECTED}" = "true"
+          test "${WORKFLOW_REF}" = "${GITHUB_REPOSITORY}/.github/workflows/macos-developer-id-candidate.yml@refs/heads/${DEFAULT_BRANCH}"
+          printf 'name=%s\n' "${UNSIGNED_ARTIFACT_NAME}" >> "${GITHUB_OUTPUT}"
+          printf 'r0_input_name=%s\n' "${R0_INPUT_ARTIFACT_NAME}" >> "${GITHUB_OUTPUT}"
+          {
+            printf 'VIBERMATE_UNSIGNED_TRANSFER_DIRECTORY=%s/vibermate-unsigned-%s-%s\n' \
+              "${RUNNER_TEMP}" "${GITHUB_RUN_ID}" "${GITHUB_RUN_ATTEMPT}"
+            printf 'VIBERMATE_R0_INPUT_ROOT=%s/vibermate-r0-input-source-%s-%s\n' \
+              "${RUNNER_TEMP}" "${GITHUB_RUN_ID}" "${GITHUB_RUN_ATTEMPT}"
+            printf 'VIBERMATE_R0_INPUT_TRANSFER_DIRECTORY=%s/vibermate-r0-input-%s-%s\n' \
+              "${RUNNER_TEMP}" "${GITHUB_RUN_ID}" "${GITHUB_RUN_ATTEMPT}"
+          } >> "${GITHUB_ENV}"
+        id: artifact_name
+
+      - name: Check out trusted workflow tooling
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          ref: ${{ github.workflow_sha }}
+          path: trusted-tooling
+          fetch-depth: 1
+          clean: true
+          persist-credentials: false
+
+      - name: Check out the candidate with full history and no persisted credential
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          ref: ${{ inputs.candidate_revision }}
+          path: candidate
+          fetch-depth: 0
+          fetch-tags: true
+          clean: true
+          persist-credentials: false
+
+      - name: Prove trusted tooling and ancestor admission
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git -C trusted-tooling rev-parse HEAD)" = "${VIBERMATE_TOOLING_REVISION}"
+          test "$(git -C candidate rev-parse HEAD)" = "${VIBERMATE_CANDIDATE_REVISION}"
+          test -z "$(git -C trusted-tooling status --porcelain=v1 --untracked-files=all)"
+          test -z "$(git -C candidate status --porcelain=v1 --untracked-files=all)"
+          test -z "$(git -C candidate config --local --get-all http.https://github.com/.extraheader || true)"
+          git -C candidate cat-file -e "${VIBERMATE_TOOLING_REVISION}^{commit}"
+          git -C candidate merge-base --is-ancestor \
+            "${VIBERMATE_CANDIDATE_REVISION}" \
+            "${VIBERMATE_TOOLING_REVISION}"
+
+      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6.5.0
+        with:
+          go-version-file: candidate/go.mod
+          check-latest: false
+          cache: true
+          cache-dependency-path: candidate/go.sum
+
+      - uses: pnpm/action-setup@a15d269cd4658e1107c09f1fabf4cbd7bd1f308a # v4.4.0
+        with:
+          version: 10.33.2
+
+      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5.0.0
+        with:
+          node-version: 22.23.1
+          cache: pnpm
+          cache-dependency-path: candidate/ui/desktop/pnpm-lock.yaml
+
+      - uses: dtolnay/rust-toolchain@39b0b3842c7e8bbf6904c0bfc3d9006fdd4dc4e0 # 1.88.0
+        with:
+          components: rustfmt
+          targets: aarch64-apple-darwin,x86_64-apple-darwin
+
+      - name: Execute candidate build code without Apple distribution credentials
+        shell: bash
+        run: |
+          set -euo pipefail
+          while IFS='=' read -r name _; do
+            case "${name}" in
+              APPLE_*|TAURI_SIGNING_*|API_PRIVATE_KEYS_DIR|CODE_SIGN_IDENTITY|CODESIGN_ALLOCATE|DEVELOPMENT_TEAM|EXPANDED_CODE_SIGN_IDENTITY|OTHER_CODE_SIGN_FLAGS|PROVISIONING_PROFILE|PROVISIONING_PROFILE_SPECIFIER|ACTIONS_ID_TOKEN_REQUEST_TOKEN)
+                echo "unsigned build received forbidden configuration: ${name}" >&2
+                exit 1
+                ;;
+            esac
+          done < <(env)
+          pnpm --dir candidate/ui/desktop install --frozen-lockfile
+          pnpm --dir candidate/ui/desktop candidate:macos:build-unsigned
+
+      - name: Convert the candidate App into the closed inert archive profile
+        shell: bash
+        run: |
+          set -euo pipefail
+          source_directory="candidate/ui/desktop/src-tauri/target/universal-apple-darwin/release/bundle/macos"
+          source_app="${source_directory}/VibeMate.app"
+          test -d "${source_app}"
+          test ! -L "${source_app}"
+          test "$(find "${source_directory}" -mindepth 1 -maxdepth 1 -print | wc -l | tr -d ' ')" -eq 1
+
+          target_directory="trusted-tooling/ui/desktop/src-tauri/target/universal-apple-darwin/release/bundle/macos"
+          test ! -e "trusted-tooling/ui/desktop/src-tauri/target"
+          /usr/bin/install -d -m 0700 "${target_directory}"
+          COPYFILE_DISABLE=1 /usr/bin/ditto \
+            --norsrc --noextattr --noacl --noqtn -X \
+            "${source_app}" \
+            "${target_directory}/VibeMate.app"
+          node trusted-tooling/ui/desktop/scripts/create-macos-unsigned-archive.mjs
+
+      - name: Stage and close the exact source-traceability build-input transfer (R0)
+        shell: bash
+        run: |
+          set -euo pipefail
+          test ! -e "${VIBERMATE_R0_INPUT_ROOT}"
+          /usr/bin/install -d -m 0755 "${VIBERMATE_R0_INPUT_ROOT}"
+
+          main_source="candidate/ui/desktop/src-tauri/target/universal-apple-darwin/release/vibermate-desktop"
+          launcher_source="candidate/ui/desktop/src-tauri/binaries/vibermate-universal-apple-darwin"
+          daemon_source="candidate/ui/desktop/src-tauri/binaries/vibermated-universal-apple-darwin"
+          build_manifest_source="candidate/ui/desktop/src-tauri/binaries/vibermate-build-manifest.json"
+          license_source="candidate/LICENSE"
+          dist_source="candidate/ui/desktop/dist"
+          for source in \
+            "${main_source}" \
+            "${launcher_source}" \
+            "${daemon_source}" \
+            "${build_manifest_source}" \
+            "${license_source}"; do
+            test -f "${source}"
+            test ! -L "${source}"
+          done
+          test -d "${dist_source}"
+          test ! -L "${dist_source}"
+
+          /usr/bin/install -m 0755 "${main_source}" "${VIBERMATE_R0_INPUT_ROOT}/vibermate-desktop"
+          /usr/bin/install -m 0755 "${launcher_source}" "${VIBERMATE_R0_INPUT_ROOT}/vibermate"
+          /usr/bin/install -m 0755 "${daemon_source}" "${VIBERMATE_R0_INPUT_ROOT}/vibermated"
+          /usr/bin/install -m 0600 "${build_manifest_source}" "${VIBERMATE_R0_INPUT_ROOT}/vibermate-build-manifest.json"
+          /usr/bin/install -m 0644 "${license_source}" "${VIBERMATE_R0_INPUT_ROOT}/LICENSE"
+          COPYFILE_DISABLE=1 /usr/bin/ditto \
+            --norsrc --noextattr --noacl --noqtn -X \
+            "${dist_source}" \
+            "${VIBERMATE_R0_INPUT_ROOT}/dist"
+          /usr/bin/find "${VIBERMATE_R0_INPUT_ROOT}/dist" -type d -exec /bin/chmod 0755 {} +
+          /usr/bin/find "${VIBERMATE_R0_INPUT_ROOT}/dist" -type f -exec /bin/chmod 0644 {} +
+          test "$(/usr/bin/find "${VIBERMATE_R0_INPUT_ROOT}" -mindepth 1 -maxdepth 1 -print | /usr/bin/wc -l | /usr/bin/tr -d ' ')" -eq 6
+          node trusted-tooling/ui/desktop/scripts/create-r0-build-input-transfer.mjs
+
+      - name: Upload only the closed source-traceability build-input and checksum (R0)
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: ${{ steps.artifact_name.outputs.r0_input_name }}
+          path: |
+            ${{ runner.temp }}/vibermate-r0-input-${{ github.run_id }}-${{ github.run_attempt }}/vibermate-r0-build-input.vma
+            ${{ runner.temp }}/vibermate-r0-input-${{ github.run_id }}-${{ github.run_attempt }}/vibermate-r0-build-input.vma.sha256
+          if-no-files-found: error
+          retention-days: 3
+
+      - name: Upload only the closed unsigned archive and checksum
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: ${{ steps.artifact_name.outputs.name }}
+          path: |
+            ${{ runner.temp }}/vibermate-unsigned-${{ github.run_id }}-${{ github.run_attempt }}/VibeMate.unsigned.app.vma
+            ${{ runner.temp }}/vibermate-unsigned-${{ github.run_id }}-${{ github.run_attempt }}/VibeMate.unsigned.app.vma.sha256
+          if-no-files-found: error
+          retention-days: 3
+
+  r0_evidence:
+    name: fresh trusted source-traceability payload and SBOM evidence (R0)
+    needs: unsigned
+    runs-on: macos-15
+    timeout-minutes: 45
+    outputs:
+      artifact_name: ${{ steps.admit.outputs.name }}
+    env:
+      DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+      DISPATCH_REF: ${{ github.ref }}
+      R0_EVIDENCE_ARTIFACT_NAME: macos-r0-evidence-${{ inputs.candidate_revision }}-${{ github.run_id }}-${{ github.run_attempt }}
+
+    steps:
+      - name: Admit the fresh trusted evidence context
+        id: admit
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(uname -m)" = "arm64"
+          [[ "${VIBERMATE_CANDIDATE_REVISION}" =~ ^[0-9a-f]{40}$ ]]
+          [[ "${VIBERMATE_TOOLING_REVISION}" =~ ^[0-9a-f]{40}$ ]]
+          [[ "${DEFAULT_BRANCH}" =~ ^[A-Za-z0-9._/-]+$ ]]
+          test "${DISPATCH_REF}" = "refs/heads/${DEFAULT_BRANCH}"
+          test "${REF_PROTECTED}" = "true"
+          test "${WORKFLOW_REF}" = "${GITHUB_REPOSITORY}/.github/workflows/macos-developer-id-candidate.yml@refs/heads/${DEFAULT_BRANCH}"
+          printf 'name=%s\n' "${R0_EVIDENCE_ARTIFACT_NAME}" >> "${GITHUB_OUTPUT}"
+          {
+            printf 'VIBERMATE_R0_INPUT_DOWNLOAD_DIRECTORY=%s/vibermate-r0-input-download-%s-%s\n' \
+              "${RUNNER_TEMP}" "${GITHUB_RUN_ID}" "${GITHUB_RUN_ATTEMPT}"
+            printf 'VIBERMATE_R0_RESTORED_INPUT_ROOT=%s/vibermate-r0-input-restored-%s-%s\n' \
+              "${RUNNER_TEMP}" "${GITHUB_RUN_ID}" "${GITHUB_RUN_ATTEMPT}"
+            printf 'VIBERMATE_R0_EVIDENCE_ROOT=%s/vibermate-r0-evidence-%s-%s\n' \
+              "${RUNNER_TEMP}" "${GITHUB_RUN_ID}" "${GITHUB_RUN_ATTEMPT}"
+            printf 'VIBERMATE_R0_FINAL_DIRECTORY=%s/vibermate-r0-final-%s-%s\n' \
+              "${RUNNER_TEMP}" "${GITHUB_RUN_ID}" "${GITHUB_RUN_ATTEMPT}"
+            printf 'VIBERMATE_SYFT_DIRECTORY=%s/vibermate-syft-1.44.0-%s-%s\n' \
+              "${RUNNER_TEMP}" "${GITHUB_RUN_ID}" "${GITHUB_RUN_ATTEMPT}"
+          } >> "${GITHUB_ENV}"
+
+      - name: Check out only the trusted evidence tooling SHA
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          ref: ${{ github.workflow_sha }}
+          path: trusted-tooling
+          fetch-depth: 1
+          clean: true
+          persist-credentials: false
+
+      - name: Check out the candidate only as inert source data
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          ref: ${{ inputs.candidate_revision }}
+          path: candidate
+          fetch-depth: 0
+          fetch-tags: true
+          clean: true
+          persist-credentials: false
+
+      - name: Prove the trusted evidence source and candidate ancestry
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git -C trusted-tooling rev-parse HEAD)" = "${VIBERMATE_TOOLING_REVISION}"
+          test "$(git -C candidate rev-parse HEAD)" = "${VIBERMATE_CANDIDATE_REVISION}"
+          test -z "$(git -C trusted-tooling status --porcelain=v1 --untracked-files=all)"
+          test -z "$(git -C candidate status --porcelain=v1 --untracked-files=all)"
+          test -z "$(git -C trusted-tooling config --local --get-all http.https://github.com/.extraheader || true)"
+          test -z "$(git -C candidate config --local --get-all http.https://github.com/.extraheader || true)"
+          git -C candidate cat-file -e "${VIBERMATE_TOOLING_REVISION}^{commit}"
+          git -C candidate merge-base --is-ancestor \
+            "${VIBERMATE_CANDIDATE_REVISION}" \
+            "${VIBERMATE_TOOLING_REVISION}"
+
+      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5.0.0
+        with:
+          node-version: 22.23.1
+
+      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6.5.0
+        with:
+          go-version-file: trusted-tooling/go.mod
+          check-latest: false
+          cache: false
+
+      - name: Download the exact closed source-traceability build-input (R0)
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: ${{ needs.unsigned.outputs.r0_input_artifact_name }}
+          path: ${{ runner.temp }}/vibermate-r0-input-download-${{ github.run_id }}-${{ github.run_attempt }}
+
+      - name: Restore source-traceability build inputs with the trusted closed parser (R0)
+        shell: bash
+        run: |
+          set -euo pipefail
+          restore_output="$(node trusted-tooling/ui/desktop/scripts/restore-r0-build-input-transfer.mjs)"
+          test "$(printf '%s\n' "${restore_output}" | /usr/bin/wc -l | /usr/bin/tr -d ' ')" -eq 2
+          archive_digest="${restore_output#archiveSHA256=}"
+          archive_digest="${archive_digest%%$'\n'*}"
+          tree_digest="${restore_output##*$'\n'inputTreeSHA256=}"
+          [[ "${archive_digest}" =~ ^[0-9a-f]{64}$ ]]
+          [[ "${tree_digest}" =~ ^[0-9a-f]{64}$ ]]
+
+      - name: Download and authenticate the admitted Syft archive
+        shell: bash
+        run: |
+          set -euo pipefail
+          test ! -e "${VIBERMATE_SYFT_DIRECTORY}"
+          /usr/bin/install -d -m 0700 "${VIBERMATE_SYFT_DIRECTORY}"
+          archive="${VIBERMATE_SYFT_DIRECTORY}/syft_1.44.0_darwin_arm64.tar.gz"
+          /usr/bin/curl \
+            --fail \
+            --location \
+            --proto '=https' \
+            --tlsv1.2 \
+            --retry 3 \
+            --connect-timeout 30 \
+            --max-time 300 \
+            --output "${archive}" \
+            https://github.com/anchore/syft/releases/download/v1.44.0/syft_1.44.0_darwin_arm64.tar.gz
+          actual_archive_digest="$(/usr/bin/shasum -a 256 "${archive}" | /usr/bin/awk '{print $1}')"
+          test "${actual_archive_digest}" = "${SYFT_DARWIN_ARM64_ARCHIVE_SHA256}"
+          /usr/bin/tar -xzf "${archive}" -C "${VIBERMATE_SYFT_DIRECTORY}" syft
+          /bin/chmod 0755 "${VIBERMATE_SYFT_DIRECTORY}/syft"
+
+      - name: Generate source-traceability evidence from inert candidate data (R0)
+        shell: bash
+        run: |
+          set -euo pipefail
+          node trusted-tooling/ui/desktop/scripts/prepare-r0-release-evidence.mjs \
+            --artifact-root="${VIBERMATE_R0_EVIDENCE_ROOT}" \
+            --expected-revision="${VIBERMATE_CANDIDATE_REVISION}" \
+            --input-root="${VIBERMATE_R0_RESTORED_INPUT_ROOT}" \
+            --source-root="${GITHUB_WORKSPACE}/candidate" \
+            --syft-bin="${VIBERMATE_SYFT_DIRECTORY}/syft"
+
+      - name: Run the independent final release-evidence verifier
+        shell: bash
+        run: |
+          set -euo pipefail
+          test ! -e "${VIBERMATE_R0_FINAL_DIRECTORY}"
+          /usr/bin/install -d -m 0700 "${VIBERMATE_R0_FINAL_DIRECTORY}"
+          (
+            cd trusted-tooling
+            go run ./cmd/vibermate-release-evidence \
+              --spec "${VIBERMATE_R0_EVIDENCE_ROOT}/release-spec.json" \
+              --artifact-root "${VIBERMATE_R0_EVIDENCE_ROOT}" \
+              --source-root "${GITHUB_WORKSPACE}/candidate" \
+              --expected-revision "${VIBERMATE_CANDIDATE_REVISION}" \
+              --output "${VIBERMATE_R0_FINAL_DIRECTORY}/release.json"
+          )
+          test -f "${VIBERMATE_R0_FINAL_DIRECTORY}/release.json"
+          test -f "${VIBERMATE_R0_FINAL_DIRECTORY}/release.json.sha256"
+          test "$(/usr/bin/find "${VIBERMATE_R0_FINAL_DIRECTORY}" -mindepth 1 -maxdepth 1 -type f -print | /usr/bin/wc -l | /usr/bin/tr -d ' ')" -eq 2
+          test "$(/usr/bin/find "${VIBERMATE_R0_EVIDENCE_ROOT}" -mindepth 1 -maxdepth 1 -print | /usr/bin/wc -l | /usr/bin/tr -d ' ')" -eq 6
+
+      - name: Upload only the verifier-closed source-traceability payload and evidence (R0)
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: ${{ steps.admit.outputs.name }}
+          path: |
+            ${{ runner.temp }}/vibermate-r0-evidence-${{ github.run_id }}-${{ github.run_attempt }}/app-tree.json
+            ${{ runner.temp }}/vibermate-r0-evidence-${{ github.run_id }}-${{ github.run_attempt }}/desktop-build-manifest.json
+            ${{ runner.temp }}/vibermate-r0-evidence-${{ github.run_id }}-${{ github.run_attempt }}/known-issues.json
+            ${{ runner.temp }}/vibermate-r0-evidence-${{ github.run_id }}-${{ github.run_attempt }}/release-spec.json
+            ${{ runner.temp }}/vibermate-r0-evidence-${{ github.run_id }}-${{ github.run_attempt }}/sbom.spdx.json
+            ${{ runner.temp }}/vibermate-r0-evidence-${{ github.run_id }}-${{ github.run_attempt }}/unsigned-payload
+            ${{ runner.temp }}/vibermate-r0-final-${{ github.run_id }}-${{ github.run_attempt }}/release.json
+            ${{ runner.temp }}/vibermate-r0-final-${{ github.run_id }}-${{ github.run_attempt }}/release.json.sha256
+          if-no-files-found: error
+          retention-days: 3
+
+  sign:
+    name: protected trusted Developer ID transformation
+    needs: [unsigned, r0_evidence]
+    environment: macos-signing
+    runs-on: macos-15
+    timeout-minutes: 55
+    outputs:
+      artifact_name: ${{ steps.artifact_name.outputs.name }}
+    env:
+      DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+      DISPATCH_REF: ${{ github.ref }}
+      SIGNED_ARTIFACT_NAME: macos-signed-${{ inputs.candidate_revision }}-${{ github.run_id }}-${{ github.run_attempt }}
+
+    steps:
+      - name: Re-admit the protected workflow context
+        id: artifact_name
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(uname -m)" = "arm64"
+          [[ "${VIBERMATE_CANDIDATE_REVISION}" =~ ^[0-9a-f]{40}$ ]]
+          [[ "${VIBERMATE_TOOLING_REVISION}" =~ ^[0-9a-f]{40}$ ]]
+          [[ "${DEFAULT_BRANCH}" =~ ^[A-Za-z0-9._/-]+$ ]]
+          test "${DISPATCH_REF}" = "refs/heads/${DEFAULT_BRANCH}"
+          test "${REF_PROTECTED}" = "true"
+          test "${WORKFLOW_REF}" = "${GITHUB_REPOSITORY}/.github/workflows/macos-developer-id-candidate.yml@refs/heads/${DEFAULT_BRANCH}"
+          printf 'name=%s\n' "${SIGNED_ARTIFACT_NAME}" >> "${GITHUB_OUTPUT}"
+          {
+            printf 'SIGNING_KEYCHAIN_PATH=%s/vibermate-signing-%s-%s.keychain-db\n' \
+              "${RUNNER_TEMP}" "${GITHUB_RUN_ID}" "${GITHUB_RUN_ATTEMPT}"
+            printf 'SIGNING_STATE_DIRECTORY=%s/vibermate-signing-state-%s-%s\n' \
+              "${RUNNER_TEMP}" "${GITHUB_RUN_ID}" "${GITHUB_RUN_ATTEMPT}"
+            printf 'VIBERMATE_SIGNED_TRANSFER_DIRECTORY=%s/vibermate-signed-%s-%s\n' \
+              "${RUNNER_TEMP}" "${GITHUB_RUN_ID}" "${GITHUB_RUN_ATTEMPT}"
+            printf 'VIBERMATE_UNSIGNED_TRANSFER_DIRECTORY=%s/vibermate-unsigned-download-%s-%s\n' \
+              "${RUNNER_TEMP}" "${GITHUB_RUN_ID}" "${GITHUB_RUN_ATTEMPT}"
+          } >> "${GITHUB_ENV}"
+
+      - name: Check out only the trusted workflow tooling SHA
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          ref: ${{ github.workflow_sha }}
+          fetch-depth: 1
+          clean: true
+          persist-credentials: false
+
+      - name: Prove the trusted signing source
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "${VIBERMATE_TOOLING_REVISION}"
+          test -z "$(git status --porcelain=v1 --untracked-files=all)"
+          test -z "$(git config --local --get-all http.https://github.com/.extraheader || true)"
+
+      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5.0.0
+        with:
+          node-version: 22.23.1
+
+      - name: Download the exact unsigned producer artifact
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: ${{ needs.unsigned.outputs.artifact_name }}
+          path: ${{ runner.temp }}/vibermate-unsigned-download-${{ github.run_id }}-${{ github.run_attempt }}
+
+      - name: Restore candidate data with the one trusted closed parser
+        id: unsigned_archive
+        shell: bash
+        run: |
+          set -euo pipefail
+          restore_output="$(node ui/desktop/scripts/restore-macos-unsigned-archive.mjs)"
+          test "$(printf '%s\n' "${restore_output}" | /usr/bin/wc -l | /usr/bin/tr -d ' ')" -eq 2
+          archive_digest="${restore_output#archiveSHA256=}"
+          archive_digest="${archive_digest%%$'\n'*}"
+          tree_digest="${restore_output##*$'\n'applicationTreeSHA256=}"
+          [[ "${archive_digest}" =~ ^[0-9a-f]{64}$ ]]
+          [[ "${tree_digest}" =~ ^[0-9a-f]{64}$ ]]
+          printf 'sha256=%s\n' "${archive_digest}" >> "${GITHUB_OUTPUT}"
+          printf 'tree_sha256=%s\n' "${tree_digest}" >> "${GITHUB_OUTPUT}"
+
+      - name: Import the one protected Developer ID identity
+        timeout-minutes: 5
+        shell: bash
+        env:
+          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+        run: |
+          set -euo pipefail
+          test -n "${APPLE_CERTIFICATE}"
+          test -n "${APPLE_CERTIFICATE_PASSWORD}"
+          test ! -e "${SIGNING_KEYCHAIN_PATH}"
+          test ! -e "${SIGNING_STATE_DIRECTORY}"
+          /usr/bin/install -d -m 0700 "${SIGNING_STATE_DIRECTORY}"
+          certificate_path="${SIGNING_STATE_DIRECTORY}/developer-id.p12"
+          trap '/bin/rm -f -- "${certificate_path}"' EXIT
+          umask 077
+          printf '%s' "${APPLE_CERTIFICATE}" | /usr/bin/base64 -D > "${certificate_path}"
+          test -s "${certificate_path}"
+          test "$(/usr/bin/stat -f '%z' "${certificate_path}")" -le 1048576
+          keychain_password="$(/usr/bin/openssl rand -hex 32)"
+          /usr/bin/security create-keychain -p "${keychain_password}" "${SIGNING_KEYCHAIN_PATH}"
+          /usr/bin/security set-keychain-settings -lut 1800 "${SIGNING_KEYCHAIN_PATH}"
+          /usr/bin/security unlock-keychain -p "${keychain_password}" "${SIGNING_KEYCHAIN_PATH}"
+          /usr/bin/security import "${certificate_path}" \
+            -k "${SIGNING_KEYCHAIN_PATH}" \
+            -P "${APPLE_CERTIFICATE_PASSWORD}" \
+            -T /usr/bin/codesign \
+            -T /usr/bin/security
+          /bin/rm -f -- "${certificate_path}"
+          /usr/bin/security set-key-partition-list \
+            -S apple-tool:,apple: \
+            -s \
+            -k "${keychain_password}" \
+            "${SIGNING_KEYCHAIN_PATH}"
+
+      - name: Select exactly one Team-matched Developer ID identity
+        id: signing_identity
+        timeout-minutes: 5
+        shell: bash
+        env:
+          EXPECTED_TEAM_ID: ${{ vars.VIBERMATE_APPLE_TEAM_ID }}
+        run: |
+          set -euo pipefail
+          [[ "${EXPECTED_TEAM_ID}" =~ ^[A-Z0-9]{10}$ ]]
+          identity_output="$(/usr/bin/security find-identity -v -p codesigning "${SIGNING_KEYCHAIN_PATH}")"
+          identity_records="$(printf '%s\n' "${identity_output}" | /usr/bin/sed -En 's/^[[:space:]]*[0-9]+\) ([[:xdigit:]]{40}) "(.*)"$/\1|\2/p')"
+          test "$(printf '%s\n' "${identity_records}" | /usr/bin/awk 'NF { count += 1 } END { print count + 0 }')" -eq 1
+          identity_sha1="${identity_records%%|*}"
+          identity_label="${identity_records#*|}"
+          [[ "${identity_sha1}" =~ ^[0-9a-fA-F]{40}$ ]]
+          identity_pattern='^Developer ID Application: .+ \(([A-Z0-9]{10})\)$'
+          [[ "${identity_label}" =~ ${identity_pattern} ]]
+          test "${BASH_REMATCH[1]}" = "${EXPECTED_TEAM_ID}"
+          identity_sha1="$(printf '%s' "${identity_sha1}" | tr '[:upper:]' '[:lower:]')"
+          printf 'sha1=%s\n' "${identity_sha1}" >> "${GITHUB_OUTPUT}"
+
+      - name: Perform the trusted inside-out signing transformation
+        timeout-minutes: 35
+        shell: bash
+        env:
+          APPLE_SIGNING_IDENTITY: ${{ steps.signing_identity.outputs.sha1 }}
+          VIBERMATE_APPLE_TEAM_ID: ${{ vars.VIBERMATE_APPLE_TEAM_ID }}
+          VIBERMATE_UNSIGNED_APPLICATION_TREE_SHA256: ${{ steps.unsigned_archive.outputs.tree_sha256 }}
+          VIBERMATE_UNSIGNED_ARCHIVE_SHA256: ${{ steps.unsigned_archive.outputs.sha256 }}
+        run: |
+          set -euo pipefail
+          node ui/desktop/scripts/bundle-macos-distribution-candidate.mjs
+
+      - name: Lock and delete the signing keychain before packaging
+        if: ${{ always() }}
+        shell: bash
+        run: |
+          set -uo pipefail
+          expected_keychain="${RUNNER_TEMP}/vibermate-signing-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}.keychain-db"
+          expected_state="${RUNNER_TEMP}/vibermate-signing-state-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          test "${SIGNING_KEYCHAIN_PATH}" = "${expected_keychain}" || exit 1
+          test "${SIGNING_STATE_DIRECTORY}" = "${expected_state}" || exit 1
+          cleanup_status=0
+          if [ -e "${SIGNING_KEYCHAIN_PATH}" ]; then
+            /usr/bin/security lock-keychain "${SIGNING_KEYCHAIN_PATH}" || cleanup_status=1
+            /usr/bin/security delete-keychain "${SIGNING_KEYCHAIN_PATH}" || cleanup_status=1
+          fi
+          if [ -d "${SIGNING_STATE_DIRECTORY}" ]; then
+            /bin/rm -rf -- "${SIGNING_STATE_DIRECTORY}" || cleanup_status=1
+          fi
+          exit "${cleanup_status}"
+
+      - name: Create the exact signed transfer after credential cleanup
+        shell: bash
+        env:
+          VIBERMATE_APPLE_TEAM_ID: ${{ vars.VIBERMATE_APPLE_TEAM_ID }}
+        run: |
+          set -euo pipefail
+          node ui/desktop/scripts/create-macos-signed-transfer.mjs
+
+      - name: Upload only the signed App archive, DMG, evidence, and checksum
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: ${{ steps.artifact_name.outputs.name }}
+          path: |
+            ${{ runner.temp }}/vibermate-signed-${{ github.run_id }}-${{ github.run_attempt }}/VibeMate.signed.app.vma
+            ${{ runner.temp }}/vibermate-signed-${{ github.run_id }}-${{ github.run_attempt }}/VibeMate_0.1.0_universal.dmg
+            ${{ runner.temp }}/vibermate-signed-${{ github.run_id }}-${{ github.run_attempt }}/signing-transformation.json
+            ${{ runner.temp }}/vibermate-signed-${{ github.run_id }}-${{ github.run_attempt }}/vibermate-macos-signed.sha256
+          if-no-files-found: error
+          retention-days: 3
+
+  notarize:
+    name: protected trusted DMG notarization
+    needs: sign
+    environment: macos-notarization
+    runs-on: macos-15
+    timeout-minutes: 150
+    outputs:
+      artifact_name: ${{ steps.artifact_name.outputs.name }}
+    env:
+      DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+      DISPATCH_REF: ${{ github.ref }}
+      NOTARIZED_ARTIFACT_NAME: macos-notarized-${{ inputs.candidate_revision }}-${{ github.run_id }}-${{ github.run_attempt }}
+      NOTARY_ATTEMPT_ARTIFACT_NAME: private-macos-notary-attempt-${{ inputs.candidate_revision }}-${{ github.run_id }}-${{ github.run_attempt }}
+
+    steps:
+      - name: Re-admit the protected workflow context
+        id: artifact_name
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(uname -m)" = "arm64"
+          [[ "${VIBERMATE_CANDIDATE_REVISION}" =~ ^[0-9a-f]{40}$ ]]
+          [[ "${VIBERMATE_TOOLING_REVISION}" =~ ^[0-9a-f]{40}$ ]]
+          [[ "${DEFAULT_BRANCH}" =~ ^[A-Za-z0-9._/-]+$ ]]
+          test "${DISPATCH_REF}" = "refs/heads/${DEFAULT_BRANCH}"
+          test "${REF_PROTECTED}" = "true"
+          test "${WORKFLOW_REF}" = "${GITHUB_REPOSITORY}/.github/workflows/macos-developer-id-candidate.yml@refs/heads/${DEFAULT_BRANCH}"
+          printf 'name=%s\n' "${NOTARIZED_ARTIFACT_NAME}" >> "${GITHUB_OUTPUT}"
+          {
+            printf 'PRIVATE_KEY_PATH=%s/vibermate-notary-%s-%s/AuthKey.p8\n' \
+              "${RUNNER_TEMP}" "${GITHUB_RUN_ID}" "${GITHUB_RUN_ATTEMPT}"
+            printf 'VIBERMATE_SIGNED_TRANSFER_DIRECTORY=%s/vibermate-signed-download-%s-%s\n' \
+              "${RUNNER_TEMP}" "${GITHUB_RUN_ID}" "${GITHUB_RUN_ATTEMPT}"
+          } >> "${GITHUB_ENV}"
+
+      - name: Check out only the trusted workflow tooling SHA
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          ref: ${{ github.workflow_sha }}
+          fetch-depth: 1
+          clean: true
+          persist-credentials: false
+
+      - name: Prove the trusted notarization source
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "${VIBERMATE_TOOLING_REVISION}"
+          test -z "$(git status --porcelain=v1 --untracked-files=all)"
+          test -z "$(git config --local --get-all http.https://github.com/.extraheader || true)"
+
+      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5.0.0
+        with:
+          node-version: 22.23.1
+
+      - name: Download the exact signed producer artifact
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: ${{ needs.sign.outputs.artifact_name }}
+          path: ${{ runner.temp }}/vibermate-signed-download-${{ github.run_id }}-${{ github.run_attempt }}
+
+      - name: Restore signed data with the one trusted closed parser
+        shell: bash
+        env:
+          VIBERMATE_APPLE_TEAM_ID: ${{ vars.VIBERMATE_APPLE_TEAM_ID }}
+        run: |
+          set -euo pipefail
+          node ui/desktop/scripts/restore-macos-signed-transfer.mjs
+
+      - name: Prepare the private App Store Connect key
+        timeout-minutes: 5
+        shell: bash
+        env:
+          APPLE_API_PRIVATE_KEY: ${{ secrets.APPLE_API_PRIVATE_KEY }}
+        run: |
+          set -euo pipefail
+          test -n "${APPLE_API_PRIVATE_KEY}"
+          key_directory="$(dirname "${PRIVATE_KEY_PATH}")"
+          expected_directory="${RUNNER_TEMP}/vibermate-notary-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          test "${key_directory}" = "${expected_directory}"
+          test ! -e "${key_directory}"
+          /usr/bin/install -d -m 0700 "${key_directory}"
+          umask 077
+          printf '%s' "${APPLE_API_PRIVATE_KEY}" > "${PRIVATE_KEY_PATH}"
+          /bin/chmod 0600 "${PRIVATE_KEY_PATH}"
+          test -s "${PRIVATE_KEY_PATH}"
+
+      - name: Submit and staple only the signed DMG
+        id: notarize_candidate
+        timeout-minutes: 120
+        shell: bash
+        env:
+          APPLE_API_ISSUER: ${{ vars.APPLE_API_ISSUER }}
+          APPLE_API_KEY: ${{ vars.APPLE_API_KEY }}
+          APPLE_API_KEY_PATH: ${{ env.PRIVATE_KEY_PATH }}
+          VIBERMATE_APPLE_TEAM_ID: ${{ vars.VIBERMATE_APPLE_TEAM_ID }}
+        run: |
+          set -euo pipefail
+          node ui/desktop/scripts/notarize-macos-distribution-candidate.mjs
+
+      - name: Delete the App Store Connect key before every artifact action
+        id: credential_cleanup
+        if: ${{ always() }}
+        shell: bash
+        run: |
+          set -uo pipefail
+          expected_key="${RUNNER_TEMP}/vibermate-notary-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}/AuthKey.p8"
+          expected_directory="${RUNNER_TEMP}/vibermate-notary-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          test "${PRIVATE_KEY_PATH}" = "${expected_key}" || exit 1
+          /bin/rm -f -- "${expected_key}"
+          if [ -d "${expected_directory}" ]; then
+            /bin/rmdir "${expected_directory}"
+          fi
+
+      - name: Prove the exact successful evidence inventory
+        if: ${{ steps.notarize_candidate.outcome == 'success' && steps.credential_cleanup.outcome == 'success' }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          release_directory="ui/desktop/src-tauri/target/universal-apple-darwin/release"
+          evidence_directory="${release_directory}/.vibermate-private/notarization"
+          test "$(find "${evidence_directory}" -mindepth 1 -maxdepth 1 -type f -print | wc -l | tr -d ' ')" -eq 3
+          test "$(find "${evidence_directory}" -mindepth 1 -maxdepth 1 -print | wc -l | tr -d ' ')" -eq 3
+          for name in apple-notary-submit.json apple-notary-log.json notarization-evidence.json; do
+            test -f "${evidence_directory}/${name}"
+            test ! -L "${evidence_directory}/${name}"
+            test "$(/usr/bin/stat -f '%Lp' "${evidence_directory}/${name}")" = "600"
+          done
+          test -f "${release_directory}/.vibermate-private/signing/signing-transformation.json"
+          test -f "${release_directory}/bundle/dmg/VibeMate_0.1.0_universal.dmg"
+
+      - name: Upload the stapled DMG and exact evidence files
+        if: ${{ steps.notarize_candidate.outcome == 'success' && steps.credential_cleanup.outcome == 'success' }}
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: ${{ env.NOTARIZED_ARTIFACT_NAME }}
+          path: |
+            ui/desktop/src-tauri/target/universal-apple-darwin/release/bundle/dmg/VibeMate_0.1.0_universal.dmg
+            ui/desktop/src-tauri/target/universal-apple-darwin/release/.vibermate-private/signing/signing-transformation.json
+            ui/desktop/src-tauri/target/universal-apple-darwin/release/.vibermate-private/notarization/apple-notary-submit.json
+            ui/desktop/src-tauri/target/universal-apple-darwin/release/.vibermate-private/notarization/apple-notary-log.json
+            ui/desktop/src-tauri/target/universal-apple-darwin/release/.vibermate-private/notarization/notarization-evidence.json
+          if-no-files-found: error
+          include-hidden-files: true
+          retention-days: 7
+
+      - name: Upload only fixed raw files from a failed Apple attempt
+        if: ${{ always() && steps.credential_cleanup.outcome == 'success' && steps.notarize_candidate.outcome != 'success' }}
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: ${{ env.NOTARY_ATTEMPT_ARTIFACT_NAME }}
+          path: |
+            ui/desktop/src-tauri/target/universal-apple-darwin/release/.vibermate-private/notarization/apple-notary-submit.json
+            ui/desktop/src-tauri/target/universal-apple-darwin/release/.vibermate-private/notarization/apple-notary-log.json
+          if-no-files-found: warn
+          include-hidden-files: true
+          retention-days: 7
+
+  installed_evidence:
+    name: installed candidate evidence without Apple distribution credentials
+    needs: notarize
+    runs-on: macos-15
+    timeout-minutes: 35
+    env:
+      DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+      DISPATCH_REF: ${{ github.ref }}
+      INSTALLATION_EVIDENCE_ARTIFACT_NAME: macos-installed-evidence-${{ inputs.candidate_revision }}-${{ github.run_id }}-${{ github.run_attempt }}
+
+    steps:
+      - name: Admit the fresh installed-candidate evidence context
+        id: artifact_name
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(uname -m)" = "arm64"
+          [[ "${VIBERMATE_CANDIDATE_REVISION}" =~ ^[0-9a-f]{40}$ ]]
+          [[ "${VIBERMATE_TOOLING_REVISION}" =~ ^[0-9a-f]{40}$ ]]
+          [[ "${DEFAULT_BRANCH}" =~ ^[A-Za-z0-9._/-]+$ ]]
+          test "${DISPATCH_REF}" = "refs/heads/${DEFAULT_BRANCH}"
+          test "${REF_PROTECTED}" = "true"
+          test "${WORKFLOW_REF}" = "${GITHUB_REPOSITORY}/.github/workflows/macos-developer-id-candidate.yml@refs/heads/${DEFAULT_BRANCH}"
+          printf 'name=%s\n' "${INSTALLATION_EVIDENCE_ARTIFACT_NAME}" >> "${GITHUB_OUTPUT}"
+          {
+            printf 'VIBERMATE_NOTARIZED_DOWNLOAD_DIRECTORY=%s/vibermate-notarized-download-%s-%s\n' \
+              "${RUNNER_TEMP}" "${GITHUB_RUN_ID}" "${GITHUB_RUN_ATTEMPT}"
+            printf 'VIBERMATE_INSTALL_MOUNT_DIRECTORY=%s/vibermate-install-mount-%s-%s\n' \
+              "${RUNNER_TEMP}" "${GITHUB_RUN_ID}" "${GITHUB_RUN_ATTEMPT}"
+            printf 'VIBERMATE_INSTALL_ROOT=%s/vibermate-install-root-%s-%s\n' \
+              "${RUNNER_TEMP}" "${GITHUB_RUN_ID}" "${GITHUB_RUN_ATTEMPT}"
+            printf 'VIBERMATE_INSTALL_HOME=%s/vibermate-install-home-%s-%s\n' \
+              "${RUNNER_TEMP}" "${GITHUB_RUN_ID}" "${GITHUB_RUN_ATTEMPT}"
+            printf 'VIBERMATE_INSTALL_STATE_DIRECTORY=%s/vibermate-install-state-%s-%s\n' \
+              "${RUNNER_TEMP}" "${GITHUB_RUN_ID}" "${GITHUB_RUN_ATTEMPT}"
+            printf 'VIBERMATE_INSTALL_EVIDENCE_DIRECTORY=%s/vibermate-installed-evidence-%s-%s\n' \
+              "${RUNNER_TEMP}" "${GITHUB_RUN_ID}" "${GITHUB_RUN_ATTEMPT}"
+            printf 'VIBERMATE_INSTALL_SMOKE_BINARY=%s/vibermate-installed-smoke-%s-%s\n' \
+              "${RUNNER_TEMP}" "${GITHUB_RUN_ID}" "${GITHUB_RUN_ATTEMPT}"
+          } >> "${GITHUB_ENV}"
+
+      - name: Check out trusted installed-evidence tooling
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          ref: ${{ github.workflow_sha }}
+          path: trusted-tooling
+          fetch-depth: 1
+          clean: true
+          persist-credentials: false
+
+      - name: Check out the candidate inertly for ancestry only
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          ref: ${{ inputs.candidate_revision }}
+          path: candidate
+          fetch-depth: 0
+          fetch-tags: true
+          clean: true
+          persist-credentials: false
+
+      - name: Prove trusted tooling and inert candidate ancestry
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git -C trusted-tooling rev-parse HEAD)" = "${VIBERMATE_TOOLING_REVISION}"
+          test "$(git -C candidate rev-parse HEAD)" = "${VIBERMATE_CANDIDATE_REVISION}"
+          test -z "$(git -C trusted-tooling status --porcelain=v1 --untracked-files=all)"
+          test -z "$(git -C candidate status --porcelain=v1 --untracked-files=all)"
+          test -z "$(git -C trusted-tooling config --local --get-all http.https://github.com/.extraheader || true)"
+          test -z "$(git -C candidate config --local --get-all http.https://github.com/.extraheader || true)"
+          git -C candidate cat-file -e "${VIBERMATE_TOOLING_REVISION}^{commit}"
+          git -C candidate merge-base --is-ancestor \
+            "${VIBERMATE_CANDIDATE_REVISION}" \
+            "${VIBERMATE_TOOLING_REVISION}"
+
+      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5.0.0
+        with:
+          node-version: 22.23.1
+
+      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6.5.0
+        with:
+          go-version-file: trusted-tooling/go.mod
+          check-latest: false
+          cache: false
+
+      - name: Download the exact notarized producer artifact
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: ${{ needs.notarize.outputs.artifact_name }}
+          path: ${{ runner.temp }}/vibermate-notarized-download-${{ github.run_id }}-${{ github.run_attempt }}
+
+      - name: Build the trusted bounded installed-App smoke helper
+        shell: bash
+        run: |
+          set -euo pipefail
+          test ! -e "${VIBERMATE_INSTALL_SMOKE_BINARY}"
+          go -C trusted-tooling build -trimpath \
+            -o "${VIBERMATE_INSTALL_SMOKE_BINARY}" \
+            ./cmd/vibermate-acceptance
+          test -f "${VIBERMATE_INSTALL_SMOKE_BINARY}"
+          test ! -L "${VIBERMATE_INSTALL_SMOKE_BINARY}"
+          test -x "${VIBERMATE_INSTALL_SMOKE_BINARY}"
+
+      - name: Install and exercise only the exact notarized candidate
+        timeout-minutes: 20
+        shell: bash
+        env:
+          VIBERMATE_APPLE_TEAM_ID: ${{ vars.VIBERMATE_APPLE_TEAM_ID }}
+        run: |
+          set -euo pipefail
+          node trusted-tooling/ui/desktop/scripts/create-macos-installed-candidate-evidence.mjs
+
+      - name: Independently verify the closed installation report
+        shell: bash
+        env:
+          VIBERMATE_APPLE_TEAM_ID: ${{ vars.VIBERMATE_APPLE_TEAM_ID }}
+        run: |
+          set -euo pipefail
+          node trusted-tooling/ui/desktop/scripts/verify-macos-installed-candidate-evidence.mjs
+
+      - name: Prove exact installed-state cleanup and evidence inventory
+        shell: bash
+        run: |
+          set -euo pipefail
+          for path in \
+            "${VIBERMATE_INSTALL_MOUNT_DIRECTORY}" \
+            "${VIBERMATE_INSTALL_ROOT}" \
+            "${VIBERMATE_INSTALL_HOME}" \
+            "${VIBERMATE_INSTALL_STATE_DIRECTORY}"; do
+            test ! -e "${path}"
+          done
+          test ! -e "${VIBERMATE_INSTALL_EVIDENCE_DIRECTORY}.staging"
+          test -d "${VIBERMATE_INSTALL_EVIDENCE_DIRECTORY}"
+          test ! -L "${VIBERMATE_INSTALL_EVIDENCE_DIRECTORY}"
+          test "$(find "${VIBERMATE_INSTALL_EVIDENCE_DIRECTORY}" -mindepth 1 -maxdepth 1 -type f -print | wc -l | tr -d ' ')" -eq 2
+          test "$(find "${VIBERMATE_INSTALL_EVIDENCE_DIRECTORY}" -mindepth 1 -maxdepth 1 -print | wc -l | tr -d ' ')" -eq 2
+          for name in \
+            signed-package-installation-report.json \
+            signed-package-installation-report.sha256; do
+            path="${VIBERMATE_INSTALL_EVIDENCE_DIRECTORY}/${name}"
+            test -f "${path}"
+            test ! -L "${path}"
+            test "$(/usr/bin/stat -f '%Lp' "${path}")" = "600"
+          done
+
+      - name: Upload only the closed installation report and checksum
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: ${{ steps.artifact_name.outputs.name }}
+          path: |
+            ${{ runner.temp }}/vibermate-installed-evidence-${{ github.run_id }}-${{ github.run_attempt }}/signed-package-installation-report.json
+            ${{ runner.temp }}/vibermate-installed-evidence-${{ github.run_id }}-${{ github.run_attempt }}/signed-package-installation-report.sha256
+          if-no-files-found: error
+          retention-days: 7
+
+      - name: Remove only the exact transient installation paths
+        if: ${{ always() }}
+        shell: bash
+        run: |
+          set -uo pipefail
+          if [ -z "${VIBERMATE_INSTALL_ROOT:-}" ]; then
+            test -z "${VIBERMATE_NOTARIZED_DOWNLOAD_DIRECTORY:-}" || exit 1
+            test -z "${VIBERMATE_INSTALL_MOUNT_DIRECTORY:-}" || exit 1
+            test -z "${VIBERMATE_INSTALL_HOME:-}" || exit 1
+            test -z "${VIBERMATE_INSTALL_STATE_DIRECTORY:-}" || exit 1
+            test -z "${VIBERMATE_INSTALL_EVIDENCE_DIRECTORY:-}" || exit 1
+            test -z "${VIBERMATE_INSTALL_SMOKE_BINARY:-}" || exit 1
+            exit 0
+          fi
+          suffix="${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          evidence_staging="${VIBERMATE_INSTALL_EVIDENCE_DIRECTORY}.staging"
+          test "${VIBERMATE_NOTARIZED_DOWNLOAD_DIRECTORY}" = "${RUNNER_TEMP}/vibermate-notarized-download-${suffix}" || exit 1
+          test "${VIBERMATE_INSTALL_MOUNT_DIRECTORY}" = "${RUNNER_TEMP}/vibermate-install-mount-${suffix}" || exit 1
+          test "${VIBERMATE_INSTALL_ROOT}" = "${RUNNER_TEMP}/vibermate-install-root-${suffix}" || exit 1
+          test "${VIBERMATE_INSTALL_HOME}" = "${RUNNER_TEMP}/vibermate-install-home-${suffix}" || exit 1
+          test "${VIBERMATE_INSTALL_STATE_DIRECTORY}" = "${RUNNER_TEMP}/vibermate-install-state-${suffix}" || exit 1
+          test "${VIBERMATE_INSTALL_EVIDENCE_DIRECTORY}" = "${RUNNER_TEMP}/vibermate-installed-evidence-${suffix}" || exit 1
+          test "${VIBERMATE_INSTALL_SMOKE_BINARY}" = "${RUNNER_TEMP}/vibermate-installed-smoke-${suffix}" || exit 1
+
+          cleanup_status=0
+          mount_cleanup_ready=true
+          if [ -d "${VIBERMATE_INSTALL_MOUNT_DIRECTORY}" ] && \
+            /sbin/mount | /usr/bin/grep -Fq " on ${VIBERMATE_INSTALL_MOUNT_DIRECTORY} ("; then
+            if ! /usr/bin/hdiutil detach "${VIBERMATE_INSTALL_MOUNT_DIRECTORY}"; then
+              cleanup_status=1
+              mount_cleanup_ready=false
+            fi
+          fi
+          if [ "${mount_cleanup_ready}" = "true" ] && [ -e "${VIBERMATE_INSTALL_MOUNT_DIRECTORY}" ]; then
+            if [ -L "${VIBERMATE_INSTALL_MOUNT_DIRECTORY}" ] || [ ! -d "${VIBERMATE_INSTALL_MOUNT_DIRECTORY}" ]; then
+              cleanup_status=1
+            else
+              /bin/rmdir "${VIBERMATE_INSTALL_MOUNT_DIRECTORY}" || cleanup_status=1
+            fi
+          fi
+          for path in \
+            "${VIBERMATE_INSTALL_ROOT}" \
+            "${VIBERMATE_INSTALL_ROOT}.cleanup" \
+            "${VIBERMATE_INSTALL_HOME}" \
+            "${VIBERMATE_INSTALL_HOME}.cleanup" \
+            "${VIBERMATE_INSTALL_STATE_DIRECTORY}" \
+            "${VIBERMATE_INSTALL_STATE_DIRECTORY}.cleanup" \
+            "${VIBERMATE_NOTARIZED_DOWNLOAD_DIRECTORY}" \
+            "${VIBERMATE_INSTALL_EVIDENCE_DIRECTORY}" \
+            "${evidence_staging}"; do
+            if [ -e "${path}" ]; then
+              if [ -L "${path}" ] || [ ! -d "${path}" ]; then
+                cleanup_status=1
+              else
+                /bin/rm -rf -- "${path}" || cleanup_status=1
+              fi
+            fi
+          done
+          if [ -e "${VIBERMATE_INSTALL_SMOKE_BINARY}" ]; then
+            if [ -L "${VIBERMATE_INSTALL_SMOKE_BINARY}" ] || [ ! -f "${VIBERMATE_INSTALL_SMOKE_BINARY}" ]; then
+              cleanup_status=1
+            else
+              /bin/rm -f -- "${VIBERMATE_INSTALL_SMOKE_BINARY}" || cleanup_status=1
+            fi
+          fi
+          exit "${cleanup_status}"

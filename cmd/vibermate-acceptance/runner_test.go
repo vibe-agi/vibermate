@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"maps"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -10,12 +11,45 @@ import (
 	"testing"
 	"time"
 
+	"github.com/vibe-agi/vibermate/internal/acceptancereport"
 	"github.com/vibe-agi/vibermate/internal/access"
 	"github.com/vibe-agi/vibermate/internal/activity"
 	"github.com/vibe-agi/vibermate/internal/connectionevent"
 	"github.com/vibe-agi/vibermate/internal/exchange"
 	"github.com/vibe-agi/vibermate/internal/offlinehold"
 )
+
+func TestDeterministicProducerMatchesTheCurrentVerifierCheckContract(t *testing.T) {
+	t.Parallel()
+	for _, client := range []acceptanceClient{
+		{ID: acceptanceClientClaudeCode, Version: "2.1.220"},
+		{ID: acceptanceClientCodexCLI, Version: "0.145.0"},
+	} {
+		client := client
+		t.Run(string(client.ID), func(t *testing.T) {
+			t.Parallel()
+			report := newReport(time.Unix(1, 0), client)
+			required, err := acceptancereport.RequiredCheckIDs(
+				string(client.ID),
+				client.Version,
+			)
+			if err != nil {
+				t.Fatal(err)
+			}
+			for _, id := range required {
+				report.add(id, checkPassed, "passed")
+			}
+			if err := requireDeterministicCheckContract(report); err != nil {
+				t.Fatal(err)
+			}
+
+			report.Checks = report.Checks[:len(report.Checks)-1]
+			if err := requireDeterministicCheckContract(report); err == nil {
+				t.Fatal("incomplete producer check set was accepted")
+			}
+		})
+	}
+}
 
 func TestWaitForActiveProviderEgressRequiresAnAdmittedProviderExchange(
 	t *testing.T,
@@ -307,7 +341,7 @@ func TestHeldPreflightUsesTheClientSpecificEgressBoundary(t *testing.T) {
 	}{
 		{
 			client: acceptanceClientClaudeCode,
-			kind:   offlinehold.EgressOpaque,
+			kind:   offlinehold.EgressProvider,
 		},
 		{
 			client: acceptanceClientCodexCLI,
@@ -331,53 +365,213 @@ func TestHeldPreflightUsesTheClientSpecificEgressBoundary(t *testing.T) {
 	}
 }
 
+func TestClaudeDeferredStartupRequiresExactBodylessControlPair(
+	t *testing.T,
+) {
+	t.Parallel()
+
+	held := offlinehold.Snapshot{
+		State:            offlinehold.StateHeld,
+		SafeToDisconnect: true,
+		ActiveActions:    2,
+		QueuedRequests:   2,
+		QueuedByKind: map[offlinehold.EgressKind]int{
+			offlinehold.EgressOpaque: 2,
+		},
+	}
+	if err := requireClaudeStartupControlEgress(held, true); err != nil {
+		t.Fatal(err)
+	}
+	for name, mutate := range map[string]func(*offlinehold.Snapshot){
+		"third request": func(snapshot *offlinehold.Snapshot) {
+			snapshot.ActiveActions = 3
+			snapshot.QueuedRequests = 3
+			snapshot.QueuedByKind[offlinehold.EgressOpaque] = 3
+		},
+		"request body": func(snapshot *offlinehold.Snapshot) {
+			snapshot.HeldBytes = 1
+		},
+		"provider request": func(snapshot *offlinehold.Snapshot) {
+			snapshot.QueuedByKind[offlinehold.EgressOpaque] = 1
+			snapshot.QueuedByKind[offlinehold.EgressProvider] = 1
+		},
+	} {
+		name, mutate := name, mutate
+		t.Run(name, func(t *testing.T) {
+			candidate := held
+			candidate.QueuedByKind = maps.Clone(held.QueuedByKind)
+			mutate(&candidate)
+			if err := requireClaudeStartupControlEgress(
+				candidate,
+				true,
+			); err == nil {
+				t.Fatalf("unexpected startup snapshot accepted: %+v", candidate)
+			}
+		})
+	}
+
+	releasing := offlinehold.Snapshot{
+		State:         offlinehold.StateReleasing,
+		ActiveActions: 2,
+		ActiveEgress:  2,
+		ActiveByKind: map[offlinehold.EgressKind]int{
+			offlinehold.EgressOpaque: 2,
+		},
+	}
+	if err := requireClaudeStartupControlRelease(releasing); err != nil {
+		t.Fatal(err)
+	}
+	releasing.QueuedRequests = 1
+	releasing.QueuedByKind = map[offlinehold.EgressKind]int{
+		offlinehold.EgressOpaque: 1,
+	}
+	if err := requireClaudeStartupControlRelease(releasing); err == nil {
+		t.Fatal("extra queued Claude startup request was accepted")
+	}
+}
+
+func TestHeldPreflightRequiresExactlyOneClientSpecificEgress(t *testing.T) {
+	t.Parallel()
+
+	held := offlinehold.Snapshot{
+		State:            offlinehold.StateHeld,
+		SafeToDisconnect: true,
+		QueuedRequests:   1,
+		HeldBytes:        128,
+		QueuedByKind: map[offlinehold.EgressKind]int{
+			offlinehold.EgressProvider: 1,
+		},
+	}
+	if err := requireSingleHeldQueuedEgress(
+		held,
+		offlinehold.EgressProvider,
+	); err != nil {
+		t.Fatal(err)
+	}
+	released := offlinehold.Snapshot{
+		State:        offlinehold.StateReleasing,
+		ActiveEgress: 1,
+		ActiveByKind: map[offlinehold.EgressKind]int{
+			offlinehold.EgressProvider: 1,
+		},
+	}
+	if err := requireSingleReleasedEgress(
+		released,
+		offlinehold.EgressProvider,
+	); err != nil {
+		t.Fatal(err)
+	}
+
+	held.QueuedRequests = 2
+	held.QueuedByKind[offlinehold.EgressOpaque] = 1
+	if err := requireSingleHeldQueuedEgress(
+		held,
+		offlinehold.EgressProvider,
+	); err == nil {
+		t.Fatal("multiple held egresses passed preflight isolation")
+	}
+	released.ActiveEgress = 2
+	released.ActiveByKind[offlinehold.EgressOpaque] = 1
+	if err := requireSingleReleasedEgress(
+		released,
+		offlinehold.EgressProvider,
+	); err == nil {
+		t.Fatal("multiple released egresses passed preflight isolation")
+	}
+}
+
+func TestExpectedExchangeFailureRequiresExactlyOneTerminal(t *testing.T) {
+	t.Parallel()
+
+	expected := exchangeAuditRecord{
+		Sequence:   10,
+		AccessID:   "Acc-001",
+		ExchangeID: "exchange-expected",
+		Status:     activity.StatusFailed,
+		ReasonCode: string(exchange.ReasonProviderCredentialUnavailable),
+	}
+	record, exists, err := singleExpectedExchangeFailure(
+		[]exchangeAuditRecord{expected},
+		"Acc-001",
+		exchange.ReasonProviderCredentialUnavailable,
+	)
+	if err != nil || !exists || record != expected {
+		t.Fatalf("single expected failure=%+v exists=%t err=%v", record, exists, err)
+	}
+
+	for name, records := range map[string][]exchangeAuditRecord{
+		"extra success": {
+			expected,
+			{
+				Sequence:   11,
+				AccessID:   "Acc-001",
+				ExchangeID: "exchange-extra",
+				Status:     activity.StatusSucceeded,
+			},
+		},
+		"wrong terminal": {{
+			Sequence:   10,
+			AccessID:   "Acc-001",
+			ExchangeID: "exchange-wrong",
+			Status:     activity.StatusCanceled,
+			ReasonCode: "exchange_canceled",
+		}},
+	} {
+		records := records
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			if _, _, err := singleExpectedExchangeFailure(
+				records,
+				"Acc-001",
+				exchange.ReasonProviderCredentialUnavailable,
+			); err == nil {
+				t.Fatal("non-unique or mismatched Exchange terminal was accepted")
+			}
+		})
+	}
+}
+
 func TestSuccessfulExchangeEvidenceCountsDistinctPostBaselineSubjects(
 	t *testing.T,
 ) {
 	t.Parallel()
 
-	records := []activity.Record{
+	records := []exchangeAuditRecord{
 		{
-			Sequence:  9,
-			Kind:      activity.KindExchangeCompleted,
-			AccessID:  "Acc-001",
-			SubjectID: "exchange-before",
-			Status:    activity.StatusSucceeded,
+			Sequence:   9,
+			AccessID:   "Acc-001",
+			ExchangeID: "exchange-before",
+			Status:     activity.StatusSucceeded,
 		},
 		{
-			Sequence:  10,
-			Kind:      activity.KindExchangeCompleted,
-			AccessID:  "Acc-001",
-			SubjectID: "exchange-first",
-			Status:    activity.StatusSucceeded,
+			Sequence:   10,
+			AccessID:   "Acc-001",
+			ExchangeID: "exchange-first",
+			Status:     activity.StatusSucceeded,
 		},
 		{
-			Sequence:  11,
-			Kind:      activity.KindExchangeCompleted,
-			AccessID:  "Acc-001",
-			SubjectID: "exchange-first",
-			Status:    activity.StatusSucceeded,
+			Sequence:   11,
+			AccessID:   "Acc-001",
+			ExchangeID: "exchange-first",
+			Status:     activity.StatusSucceeded,
 		},
 		{
-			Sequence:  12,
-			Kind:      activity.KindExchangeCompleted,
-			AccessID:  "Acc-002",
-			SubjectID: "exchange-other",
-			Status:    activity.StatusSucceeded,
+			Sequence:   12,
+			AccessID:   "Acc-002",
+			ExchangeID: "exchange-other",
+			Status:     activity.StatusSucceeded,
 		},
 		{
-			Sequence:  13,
-			Kind:      activity.KindExchangeCompleted,
-			AccessID:  "Acc-001",
-			SubjectID: "exchange-failed",
-			Status:    activity.StatusFailed,
+			Sequence:   13,
+			AccessID:   "Acc-001",
+			ExchangeID: "exchange-failed",
+			Status:     activity.StatusFailed,
 		},
 		{
-			Sequence:  14,
-			Kind:      activity.KindExchangeCompleted,
-			AccessID:  "Acc-001",
-			SubjectID: "exchange-second",
-			Status:    activity.StatusSucceeded,
+			Sequence:   14,
+			AccessID:   "Acc-001",
+			ExchangeID: "exchange-second",
+			Status:     activity.StatusSucceeded,
 		},
 	}
 	subjects := successfulExchangeSubjectsAfter(

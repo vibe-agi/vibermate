@@ -1,0 +1,136 @@
+# This release-runner workflow builds and exercises one clean macOS arm64
+# release-profile App with native Keychain storage and the catalogued Claude
+# Code 2.1.220 executable.
+# It does not download a client, use a provider credential, install a Root,
+# change the system proxy, sign/notarize, test installers, or grant Preview or
+# Release approval. Those remain separate gates.
+name: packaged deterministic acceptance
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: vibermate-packaged-deterministic
+  cancel-in-progress: false
+
+jobs:
+  macos-arm64:
+    name: clean release-profile App + fixed Claude + fresh verifier
+    environment: packaged-acceptance
+    runs-on: [self-hosted, macOS, ARM64, vibermate-acceptance]
+    timeout-minutes: 30
+    env:
+      DESKTOP_APP: ${{ github.workspace }}/ui/desktop/src-tauri/target/aarch64-apple-darwin/release/bundle/macos/VibeMate.app
+      FIXED_CLAUDE_PATH: ${{ vars.VIBERMATE_CLAUDE_2_1_220_PATH }}
+
+    steps:
+      - name: Check out the selected candidate
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 1
+          clean: true
+
+      - name: Establish isolated acceptance paths
+        shell: bash
+        run: |
+          set -euo pipefail
+          acceptance_root="${RUNNER_TEMP}/vibermate-packaged-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          {
+            printf 'ACCEPTANCE_ROOT=%s\n' "${acceptance_root}"
+            printf 'ACCEPTANCE_BIN=%s/vibermate-acceptance\n' "${acceptance_root}"
+            printf 'VERIFY_BIN=%s/vibermate-acceptance-verify\n' "${acceptance_root}"
+            printf 'REPORT_PATH=%s/deterministic-v6.json\n' "${acceptance_root}"
+          } >> "${GITHUB_ENV}"
+
+      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6.5.0
+        with:
+          go-version-file: go.mod
+          check-latest: false
+          cache: true
+
+      - uses: pnpm/action-setup@a15d269cd4658e1107c09f1fabf4cbd7bd1f308a # v4.4.0
+        with:
+          version: 10.33.2
+
+      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5.0.0
+        with:
+          node-version: 22.23.1
+          cache: pnpm
+          cache-dependency-path: ui/desktop/pnpm-lock.yaml
+
+      - uses: dtolnay/rust-toolchain@39b0b3842c7e8bbf6904c0bfc3d9006fdd4dc4e0 # 1.88.0
+        with:
+          components: rustfmt
+
+      - name: Prove the isolated runner inputs
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(uname -m)" = "arm64"
+          test -n "${FIXED_CLAUDE_PATH}"
+          test "${FIXED_CLAUDE_PATH}" != "${FIXED_CLAUDE_PATH#/}"
+          test -f "${FIXED_CLAUDE_PATH}"
+          test -x "${FIXED_CLAUDE_PATH}"
+          test -z "$(git status --porcelain=v1 --untracked-files=all)"
+          install -d -m 0700 "${ACCEPTANCE_ROOT}"
+
+      - name: Build the selected packaged candidate
+        id: build
+        shell: bash
+        run: |
+          set -euo pipefail
+          pnpm --dir ui/desktop install --frozen-lockfile
+          pnpm --dir ui/desktop bundle:packaged-acceptance
+          go build -buildvcs=true -trimpath -o "${ACCEPTANCE_BIN}" ./cmd/vibermate-acceptance
+          go build -buildvcs=true -trimpath -o "${VERIFY_BIN}" ./cmd/vibermate-acceptance-verify
+
+      - name: Run deterministic packaged acceptance
+        id: acceptance
+        shell: bash
+        run: |
+          set -euo pipefail
+          "${ACCEPTANCE_BIN}" \
+            --desktop-app "${DESKTOP_APP}" \
+            --claude "${FIXED_CLAUDE_PATH}" \
+            --deterministic-only \
+            --report "${REPORT_PATH}" \
+            --timeout 10m
+
+      - name: Reject missing, failed, malformed, or stale evidence
+        if: ${{ always() && steps.build.outcome == 'success' }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          "${VERIFY_BIN}" \
+            --report "${REPORT_PATH}" \
+            --expected-schema vibermate.m0-assembly-acceptance/v6 \
+            --expected-revision "${GITHUB_SHA}" \
+            --expected-client-id claude-code \
+            --expected-client-version 2.1.220 \
+            --source-root "${GITHUB_WORKSPACE}" \
+            --desktop-app "${DESKTOP_APP}" \
+            --acceptance-executable "${ACCEPTANCE_BIN}" \
+            --client-entrypoint "${FIXED_CLAUDE_PATH}"
+
+      - name: Retain the private report for bounded review
+        if: ${{ always() && steps.build.outcome == 'success' }}
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: private-packaged-deterministic-v6-${{ github.sha }}
+          path: ${{ env.REPORT_PATH }}
+          if-no-files-found: error
+          retention-days: 7
+
+      - name: Remove private runner state
+        if: ${{ always() }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          expected_root="${RUNNER_TEMP}/vibermate-packaged-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          test -n "${ACCEPTANCE_ROOT:-}"
+          test "${ACCEPTANCE_ROOT}" = "${expected_root}"
+          rm -rf -- "${ACCEPTANCE_ROOT}"

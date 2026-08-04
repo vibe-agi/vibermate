@@ -59,8 +59,16 @@ func TestDaemonPublishesBootstrapThenShutsDownWithOwnerContext(t *testing.T) {
 			ShutdownTimeout: 20 * time.Second,
 		})
 	}()
+	decoder := json.NewDecoder(bootstrapReader)
+	var progress desktopbootstrap.Progress
+	if err := decoder.Decode(&progress); err != nil {
+		t.Fatal(err)
+	}
+	if err := progress.Validate(); err != nil {
+		t.Fatalf("bootstrap progress = %+v: %v", progress, err)
+	}
 	var descriptor desktopbootstrap.Descriptor
-	if err := json.NewDecoder(bootstrapReader).Decode(&descriptor); err != nil {
+	if err := decoder.Decode(&descriptor); err != nil {
 		t.Fatal(err)
 	}
 	if descriptor.Schema != desktopbootstrap.DescriptorSchema ||

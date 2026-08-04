@@ -15,6 +15,7 @@ import (
 	"github.com/vibe-agi/vibermate/internal/capturerun"
 	"github.com/vibe-agi/vibermate/internal/clientadapter"
 	"github.com/vibe-agi/vibermate/internal/runtimepersistence"
+	"github.com/vibe-agi/vibermate/internal/workspaceidentity"
 )
 
 func TestCaptureRunPersistsVerifiedAdapterEvidenceWithProxyCapability(
@@ -45,6 +46,7 @@ func TestCaptureRunPersistsVerifiedAdapterEvidenceWithProxyCapability(
 			CatalogRevision: 7,
 			Adapter:         &adapter,
 			Recognition:     clientadapter.RecognitionVerified,
+			Workspace:       testWorkspaceScope(t),
 		},
 	)
 	if err != nil {
@@ -89,6 +91,7 @@ func TestCaptureRunCapabilitiesArePersistedAsHashesAndDriveLifecycle(
 		ExecutablePath:  "/usr/local/bin/claude",
 		Lifetime:        2 * time.Minute,
 		CatalogRevision: 1,
+		Workspace:       testWorkspaceScope(t),
 	})
 	if err != nil {
 		t.Fatalf("create CaptureRun: %v", err)
@@ -209,6 +212,7 @@ func TestCaptureRunRestartRecoveryRetainsOnlyFreshCapabilityHashes(
 		ExecutablePath:  "/opt/vibermate/claude",
 		Lifetime:        90 * time.Second,
 		CatalogRevision: 1,
+		Workspace:       testWorkspaceScope(t),
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -260,6 +264,7 @@ func TestCaptureRunShutdownRevokesBeforeSQLiteClose(t *testing.T) {
 		ExecutablePath:  "/usr/bin/true",
 		Lifetime:        time.Minute,
 		CatalogRevision: 1,
+		Workspace:       testWorkspaceScope(t),
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -363,4 +368,32 @@ func shutdownStore(t *testing.T, store *runtimepersistence.Store) {
 	if err := store.Shutdown(ctx); err != nil {
 		t.Fatalf("shutdown store: %v", err)
 	}
+}
+
+func testWorkspaceScope(t *testing.T) workspaceidentity.Scope {
+	t.Helper()
+	machineID, err := workspaceidentity.ParseMachineID(
+		base64.RawURLEncoding.EncodeToString(bytes.Repeat([]byte{0x71}, 32)),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	workspaceID, err := workspaceidentity.ParseWorkspaceID(
+		base64.RawURLEncoding.EncodeToString(bytes.Repeat([]byte{0x72}, 32)),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	scope, err := workspaceidentity.NewScope(
+		machineID,
+		workspaceID,
+		"workspace",
+		workspaceidentity.EvidenceLocalLauncher,
+		1,
+		1,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return scope
 }

@@ -7,7 +7,13 @@ import (
 	"fmt"
 )
 
-var ErrSchemaNotInitialized = errors.New("schema is not initialized")
+var (
+	ErrSchemaNotInitialized   = errors.New("schema is not initialized")
+	ErrSchemaNewerThanBinary  = errors.New("database schema is newer than this binary")
+	ErrSchemaRevisionMismatch = errors.New(
+		"database schema revision does not match embedded migrations",
+	)
+)
 
 // SchemaState is an immutable view of the durable schema authority.
 //

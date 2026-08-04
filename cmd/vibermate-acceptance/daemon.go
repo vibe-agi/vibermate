@@ -22,8 +22,10 @@ import (
 )
 
 const (
-	bootstrapLimit  = 16 << 10
-	capabilityBytes = 32
+	bootstrapLimit    = 16 << 10
+	bootstrapFrames   = 2
+	bootstrapDeadline = 2 * time.Minute
+	capabilityBytes   = 32
 )
 
 type daemonGeneration struct {
@@ -94,7 +96,7 @@ func startDaemon(
 		_ = command.Process.Kill()
 		<-done
 		return nil, ctx.Err()
-	case <-time.After(20 * time.Second):
+	case <-time.After(bootstrapDeadline):
 		_ = command.Process.Kill()
 		<-done
 		return nil, errors.New("packaged daemon bootstrap deadline exceeded")
@@ -133,47 +135,91 @@ func daemonArguments(
 
 func decodeDescriptor(reader io.Reader) (desktopbootstrap.Descriptor, error) {
 	buffered := bufio.NewReader(io.LimitReader(reader, bootstrapLimit+1))
-	payload, err := buffered.ReadBytes('\n')
-	if err != nil {
-		return desktopbootstrap.Descriptor{}, fmt.Errorf(
-			"read daemon bootstrap descriptor: %w",
-			err,
-		)
+	var total int
+	for index := range bootstrapFrames {
+		payload, err := buffered.ReadBytes('\n')
+		if err != nil {
+			return desktopbootstrap.Descriptor{}, fmt.Errorf(
+				"read daemon bootstrap frame %d: %w",
+				index+1,
+				err,
+			)
+		}
+		total += len(payload)
+		if total > bootstrapLimit {
+			return desktopbootstrap.Descriptor{}, errors.New(
+				"daemon bootstrap exceeds its size limit",
+			)
+		}
+		if index == 0 {
+			var progress desktopbootstrap.Progress
+			if err := decodeBootstrapFrame(payload, &progress); err != nil ||
+				progress.Validate() != nil {
+				return desktopbootstrap.Descriptor{}, errors.New(
+					"daemon bootstrap progress is invalid",
+				)
+			}
+			continue
+		}
+		var envelope struct {
+			Schema string `json:"schema"`
+		}
+		if err := json.Unmarshal(payload, &envelope); err != nil {
+			return desktopbootstrap.Descriptor{}, errors.New(
+				"daemon bootstrap descriptor is invalid",
+			)
+		}
+		if envelope.Schema == desktopbootstrap.FailureSchema {
+			var failure desktopbootstrap.Failure
+			if err := decodeBootstrapFrame(payload, &failure); err != nil ||
+				failure.Validate() != nil {
+				return desktopbootstrap.Descriptor{}, errors.New(
+					"daemon bootstrap failure is invalid",
+				)
+			}
+			return desktopbootstrap.Descriptor{}, fmt.Errorf(
+				"daemon startup failed: reason=%s",
+				failure.Reason,
+			)
+		}
+		var descriptor desktopbootstrap.Descriptor
+		if err := decodeBootstrapFrame(payload, &descriptor); err != nil {
+			return desktopbootstrap.Descriptor{}, fmt.Errorf(
+				"decode daemon bootstrap descriptor: %w",
+				err,
+			)
+		}
+		if descriptor.Schema != desktopbootstrap.DescriptorSchema ||
+			descriptor.InstanceID == "" ||
+			descriptor.ProcessID <= 0 ||
+			descriptor.BaseURL == "" ||
+			len(descriptor.APIVersions) != 1 ||
+			descriptor.APIVersions[0] != "v1" ||
+			descriptor.EventVersions == nil ||
+			len(descriptor.EventVersions) != 0 ||
+			!validCapability(descriptor.BootstrapNonce) {
+			return desktopbootstrap.Descriptor{}, errors.New(
+				"daemon bootstrap descriptor is incomplete",
+			)
+		}
+		return descriptor, nil
 	}
-	if len(payload) > bootstrapLimit {
-		return desktopbootstrap.Descriptor{}, errors.New(
-			"daemon bootstrap descriptor exceeds its size limit",
-		)
-	}
-	var descriptor desktopbootstrap.Descriptor
+	return desktopbootstrap.Descriptor{}, errors.New(
+		"daemon bootstrap descriptor is missing",
+	)
+}
+
+func decodeBootstrapFrame(payload []byte, target any) error {
 	decoder := json.NewDecoder(bytes.NewReader(payload))
 	decoder.DisallowUnknownFields()
-	if err := decoder.Decode(&descriptor); err != nil {
-		return desktopbootstrap.Descriptor{}, fmt.Errorf(
-			"decode daemon bootstrap descriptor: %w",
-			err,
-		)
+	if err := decoder.Decode(target); err != nil {
+		return err
 	}
 	var trailing any
 	if err := decoder.Decode(&trailing); !errors.Is(err, io.EOF) {
-		return desktopbootstrap.Descriptor{}, errors.New(
-			"daemon bootstrap descriptor contains trailing data",
-		)
+		return errors.New("daemon bootstrap frame contains trailing data")
 	}
-	if descriptor.Schema != desktopbootstrap.DescriptorSchema ||
-		descriptor.InstanceID == "" ||
-		descriptor.ProcessID <= 0 ||
-		descriptor.BaseURL == "" ||
-		len(descriptor.APIVersions) != 1 ||
-		descriptor.APIVersions[0] != "v1" ||
-		descriptor.EventVersions == nil ||
-		len(descriptor.EventVersions) != 0 ||
-		!validCapability(descriptor.BootstrapNonce) {
-		return desktopbootstrap.Descriptor{}, errors.New(
-			"daemon bootstrap descriptor is incomplete",
-		)
-	}
-	return descriptor, nil
+	return nil
 }
 
 func (generation *daemonGeneration) stopGracefully(

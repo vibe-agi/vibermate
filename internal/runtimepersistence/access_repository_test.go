@@ -55,8 +55,8 @@ func TestExecutablePlanMigrationUpgradesFoundationSchema(t *testing.T) {
 	if err != nil {
 		t.Fatalf("read upgraded schema state: %v", err)
 	}
-	if state.Revision != 22 {
-		t.Fatalf("upgraded schema revision = %d, want 22", state.Revision)
+	if state.Revision != 27 {
+		t.Fatalf("upgraded schema revision = %d, want 27", state.Revision)
 	}
 	mutation := accessMutation(t, "access-upgraded", 0, "Upgraded")
 	result, err := store.AccessRepository().CompareAndSwap(
@@ -106,6 +106,126 @@ func TestAccessRepositoryPersistsWholeAggregateWithCAS(t *testing.T) {
 	if len(aggregates) != 1 || !aggregates[0].Equal(update.Candidate) {
 		t.Fatalf("durable aggregates = %+v", aggregates)
 	}
+}
+
+func TestAccessRepositoryLoadsAggregateByID(t *testing.T) {
+	t.Parallel()
+
+	store := openTestStore(t, filepath.Join(t.TempDir(), "data", "runtime.db"))
+	defer shutdownTestStore(t, store)
+	repository := store.AccessRepository()
+	mutation := accessMutation(t, "access-load-one", 0, "Loaded")
+	if result, err := repository.CompareAndSwap(
+		context.Background(),
+		mutation,
+	); err != nil || result.Outcome != access.CommitOutcomeCommitted {
+		t.Fatalf("create Access result=%+v err=%v", result, err)
+	}
+
+	loaded, exists, err := repository.Load(
+		context.Background(),
+		mutation.Candidate.Binding.ID,
+	)
+	if err != nil || !exists || !loaded.Equal(mutation.Candidate) {
+		t.Fatalf("loaded aggregate exists=%t value=%+v err=%v", exists, loaded, err)
+	}
+}
+
+func TestAccessRepositoryLoadReportsMissingAccess(t *testing.T) {
+	t.Parallel()
+
+	store := openTestStore(t, filepath.Join(t.TempDir(), "data", "runtime.db"))
+	defer shutdownTestStore(t, store)
+
+	loaded, exists, err := store.AccessRepository().Load(
+		context.Background(),
+		mustAccessID(t, "access-missing"),
+	)
+	if err != nil || exists {
+		t.Fatalf("missing aggregate exists=%t value=%+v err=%v", exists, loaded, err)
+	}
+	if loaded.Binding.ID.String() != "" ||
+		len(loaded.Profiles) != 0 ||
+		len(loaded.ProviderTargets) != 0 ||
+		len(loaded.AccountBindings) != 0 ||
+		len(loaded.RouteSets) != 0 {
+		t.Fatalf("missing aggregate returned non-zero state: %+v", loaded)
+	}
+}
+
+func TestAccessRepositoryLoadReturnsDefensiveCopy(t *testing.T) {
+	t.Parallel()
+
+	store := openTestStore(t, filepath.Join(t.TempDir(), "data", "runtime.db"))
+	defer shutdownTestStore(t, store)
+	repository := store.AccessRepository()
+	mutation := accessMutation(t, "access-load-copy", 0, "Persisted")
+	if result, err := repository.CompareAndSwap(
+		context.Background(),
+		mutation,
+	); err != nil || result.Outcome != access.CommitOutcomeCommitted {
+		t.Fatalf("create Access result=%+v err=%v", result, err)
+	}
+
+	first, exists, err := repository.Load(
+		context.Background(),
+		mutation.Candidate.Binding.ID,
+	)
+	if err != nil || !exists {
+		t.Fatalf("first load exists=%t err=%v", exists, err)
+	}
+	first.Binding.ProfileIDs[0] = access.EndpointProfileID{}
+	first.Profiles[0].Name = "mutated"
+	first.Profiles[0].AccountBindingIDs[0] = access.AccountBindingID{}
+	first.ProviderTargets[0].Capabilities[0] = "mutated"
+	first.AccountBindings[0].Label = "mutated"
+	first.RouteSets[0].CandidateProfileIDs[0] = access.EndpointProfileID{}
+	if first.Equal(mutation.Candidate) {
+		t.Fatal("test mutation did not change the first loaded value")
+	}
+
+	second, exists, err := repository.Load(
+		context.Background(),
+		mutation.Candidate.Binding.ID,
+	)
+	if err != nil || !exists || !second.Equal(mutation.Candidate) {
+		t.Fatalf("second load aliases first value: exists=%t value=%+v err=%v", exists, second, err)
+	}
+}
+
+func TestAccessRepositoryLoadRejectsCanceledAndClosedOperations(t *testing.T) {
+	t.Parallel()
+
+	t.Run("canceled caller", func(t *testing.T) {
+		store := openTestStore(t, filepath.Join(t.TempDir(), "data", "runtime.db"))
+		defer shutdownTestStore(t, store)
+		ctx, cancel := context.WithCancel(context.Background())
+		cancel()
+
+		_, exists, err := store.AccessRepository().Load(
+			ctx,
+			mustAccessID(t, "access-canceled-load"),
+		)
+		if exists || !errors.Is(err, context.Canceled) {
+			t.Fatalf("canceled load exists=%t err=%v", exists, err)
+		}
+	})
+
+	t.Run("closed store", func(t *testing.T) {
+		store := openTestStore(t, filepath.Join(t.TempDir(), "data", "runtime.db"))
+		repository := store.AccessRepository()
+		if err := store.Shutdown(context.Background()); err != nil {
+			t.Fatalf("shutdown store: %v", err)
+		}
+
+		_, exists, err := repository.Load(
+			context.Background(),
+			mustAccessID(t, "access-closed-load"),
+		)
+		if exists || !errors.Is(err, ErrStoreClosing) {
+			t.Fatalf("closed load exists=%t err=%v", exists, err)
+		}
+	})
 }
 
 func TestAccessRepositoryRejectsDuplicateClientOriginAtomically(t *testing.T) {
@@ -389,6 +509,16 @@ func TestAccessRecoveryRejectsMissingOrInvalidPlanPayload(t *testing.T) {
 				t.Fatalf("create valid aggregate: %v", err)
 			}
 			test.corrupt(t, store, mutation.Candidate.Binding.ID)
+			if _, exists, err := store.AccessRepository().Load(
+				context.Background(),
+				mutation.Candidate.Binding.ID,
+			); exists || !errors.Is(err, access.ErrInvalidRepositoryState) {
+				t.Fatalf(
+					"point load accepted invalid durable aggregate: exists=%t err=%v",
+					exists,
+					err,
+				)
+			}
 			if _, err := store.AccessRepository().LoadAll(
 				context.Background(),
 			); !errors.Is(err, access.ErrInvalidRepositoryState) {

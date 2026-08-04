@@ -106,14 +106,47 @@ func fallbackPlan(
 	return access.FallbackDisabled, 0
 }
 
-// selectFrozenPlan freezes one candidate of the default RouteSet.
-//
-// The index is the attempt: candidate zero is what every request starts with,
-// and a later index is only reached when the policy allowed a further attempt
-// and nothing had been committed downstream.
+// orderedCandidateProfileIDs places a workspace-selected profile first while
+// preserving the configured RouteSet order for any later fallback attempt.
+// A zero primary selects the RouteSet's first candidate.
+func orderedCandidateProfileIDs(
+	snapshot access.AccessPlanSnapshot,
+	primary access.EndpointProfileID,
+) ([]access.EndpointProfileID, error) {
+	binding := snapshot.Binding()
+	var configured []access.EndpointProfileID
+	for _, routeSet := range snapshot.RouteSets() {
+		if routeSet.ID != binding.DefaultRouteSetID {
+			continue
+		}
+		if configured != nil {
+			return nil, errors.New("default RouteSet is duplicated")
+		}
+		configured = slices.Clone(routeSet.CandidateProfileIDs)
+	}
+	if len(configured) == 0 {
+		return nil, errors.New("default RouteSet is unsupported")
+	}
+	if primary.String() == "" {
+		return configured, nil
+	}
+	if !slices.Contains(configured, primary) {
+		return nil, errors.New("workspace profile is outside the default RouteSet")
+	}
+	ordered := make([]access.EndpointProfileID, 0, len(configured))
+	ordered = append(ordered, primary)
+	for _, profileID := range configured {
+		if profileID != primary {
+			ordered = append(ordered, profileID)
+		}
+	}
+	return ordered, nil
+}
+
+// selectFrozenPlan freezes one named candidate of the default RouteSet.
 func selectFrozenPlan(
 	snapshot access.AccessPlanSnapshot,
-	candidateIndex int,
+	profileID access.EndpointProfileID,
 ) (frozenSelection, error) {
 	binding := snapshot.Binding()
 	if binding.Status != access.AccessStatusEnabled {
@@ -168,17 +201,22 @@ func selectFrozenPlan(
 		len(routeSet.CandidateProfileIDs) == 0 {
 		return frozenSelection{}, errors.New("default RouteSet is unsupported")
 	}
-	compiled, withinPlan := snapshot.Candidate(candidateIndex)
-	if !withinPlan ||
-		candidateIndex >= len(routeSet.CandidateProfileIDs) {
+	if !slices.Contains(routeSet.CandidateProfileIDs, profileID) {
 		return frozenSelection{}, errCandidatesExhausted
 	}
-
-	profileID := routeSet.CandidateProfileIDs[candidateIndex]
-	if compiled.ProfileID() != profileID {
-		return frozenSelection{}, errors.New(
-			"compiled candidate does not match the RouteSet order",
-		)
+	foundCompiled := false
+	for candidateIndex := 0; candidateIndex < snapshot.CandidateCount(); candidateIndex++ {
+		candidate, ok := snapshot.Candidate(candidateIndex)
+		if !ok || candidate.ProfileID() != profileID {
+			continue
+		}
+		if foundCompiled {
+			return frozenSelection{}, errors.New("compiled candidate is duplicated")
+		}
+		foundCompiled = true
+	}
+	if !foundCompiled {
+		return frozenSelection{}, errors.New("compiled candidate is missing")
 	}
 	profiles := snapshot.EndpointProfiles()
 	var profile access.EndpointProfile
@@ -221,7 +259,8 @@ func selectFrozenPlan(
 		!account.Enabled ||
 		account.AccessID != binding.ID ||
 		account.ProfileID != profile.ID ||
-		account.AuthDriverRef != access.StaticHeaderAuthDriverRef() {
+		(account.AuthDriverRef != access.StaticHeaderAuthDriverRef() &&
+			account.AuthDriverRef != access.AnthropicAPIKeyAuthDriverRef()) {
 		return frozenSelection{}, errors.New("provider account binding is unsupported")
 	}
 

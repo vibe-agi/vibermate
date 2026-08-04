@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"io"
@@ -137,6 +138,14 @@ func TestAcceptanceEnvironmentIsolatesEachFixedClient(t *testing.T) {
 		"ANTHROPIC_BASE_URL=https://ambient.invalid",
 		"ANTHROPIC_CUSTOM_HEADERS=Authorization: ambient",
 		"CLAUDE_CODE_OAUTH_TOKEN=ambient",
+		"CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=ambient",
+		"CLAUDE_CODE_MAX_RETRIES=ambient",
+		"CLAUDE_CODE_MANAGED_SETTINGS_PATH=/ambient/managed.json",
+		"CLAUDE_CODE_REMOTE_SETTINGS_PATH=/ambient/remote.json",
+		"CLAUDE_CODE_SAFE_MODE=ambient",
+		"CLAUDE_CODE_SIMPLE=ambient",
+		"CLAUDE_CONFIG_DIR=/ambient/claude",
+		"DISABLE_GROWTHBOOK=ambient",
 		"OPENAI_ACCESS_TOKEN=ambient",
 		"OPENAI_API_KEY=ambient",
 		"OPENAI_BASE_URL=https://ambient.invalid/v1",
@@ -152,10 +161,15 @@ func TestAcceptanceEnvironmentIsolatesEachFixedClient(t *testing.T) {
 		expected []string
 	}{
 		{
-			name:   "Claude",
-			client: acceptanceClientClaudeCode,
+			name:     "Claude",
+			client:   acceptanceClientClaudeCode,
+			stateDir: "/private/claude-home",
 			expected: []string{
 				"ANTHROPIC_API_KEY=vibermate-assembly-placeholder",
+				"CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1",
+				"CLAUDE_CODE_MAX_RETRIES=0",
+				"CLAUDE_CONFIG_DIR=/private/claude-home",
+				"DISABLE_GROWTHBOOK=1",
 				"PATH=/usr/bin",
 			},
 		},
@@ -201,7 +215,9 @@ func TestFixedClaudeInvocationEnablesBoundedAPIDiagnostics(t *testing.T) {
 		"",
 	)
 	if !slices.Contains(arguments, "--debug") ||
-		!slices.Contains(arguments, "api") {
+		!slices.Contains(arguments, "api") ||
+		!slices.Contains(arguments, "--bare") ||
+		!slices.Contains(arguments, "--safe-mode") {
 		t.Fatalf("Claude arguments = %q", arguments)
 	}
 	if slices.Contains(arguments, "") ||
@@ -239,6 +255,94 @@ func TestAgentPromptUsesStandardInputInsteadOfProcessArguments(t *testing.T) {
 	}
 	if command.Dir != "/trusted/workspace" {
 		t.Fatalf("Claude working directory = %q", command.Dir)
+	}
+	expectedState := filepath.Join(
+		"/trusted/workspace",
+		claudeStateDirectoryName,
+	)
+	if !slices.Contains(command.Env, "CLAUDE_CONFIG_DIR="+expectedState) ||
+		!slices.Contains(
+			command.Env,
+			"CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1",
+		) ||
+		!slices.Contains(
+			command.Env,
+			"CLAUDE_CODE_MAX_RETRIES=0",
+		) ||
+		!slices.Contains(
+			command.Env,
+			"DISABLE_GROWTHBOOK=1",
+		) {
+		t.Fatalf("Claude environment = %v", command.Env)
+	}
+}
+
+func TestDeferredClaudeInputIsOneTypedJSONLMessage(t *testing.T) {
+	t.Parallel()
+
+	reader, writer := io.Pipe()
+	input := &deferredAgentInput{writer: writer}
+	sent := make(chan error, 1)
+	go func() {
+		sent <- input.sendClaudePrompt("one deferred prompt")
+	}()
+	payload, err := io.ReadAll(reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := <-sent; err != nil {
+		t.Fatal(err)
+	}
+	var message claudeStreamingUserMessage
+	if err := json.Unmarshal(bytes.TrimSpace(payload), &message); err != nil {
+		t.Fatal(err)
+	}
+	if message.Type != "user" ||
+		message.Message.Role != "user" ||
+		message.Message.Content != "one deferred prompt" ||
+		message.ParentToolUseID != nil {
+		t.Fatalf("deferred message = %+v", message)
+	}
+	if err := input.sendClaudePrompt("second prompt"); err == nil {
+		t.Fatal("deferred input accepted a second prompt")
+	}
+}
+
+func TestDeferredClaudeCommandUsesStreamingInput(t *testing.T) {
+	t.Parallel()
+
+	command, err := newDeferredClaudeCommand(
+		config{
+			clientID:     acceptanceClientClaudeCode,
+			launcherPath: "/absolute/launcher",
+			claudePath:   "/absolute/claude",
+		},
+		"/trusted/workspace",
+		"",
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	inputIndex := slices.Index(command.Args, "--input-format")
+	if inputIndex < 0 ||
+		inputIndex+1 >= len(command.Args) ||
+		command.Args[inputIndex+1] != "stream-json" ||
+		command.Stdin != nil {
+		t.Fatalf("deferred Claude command = %+v", command)
+	}
+	expectedState := filepath.Join(
+		"/trusted/workspace",
+		claudeStateDirectoryName,
+	)
+	if !slices.Contains(command.Env, "CLAUDE_CONFIG_DIR="+expectedState) {
+		t.Fatalf("deferred Claude environment = %v", command.Env)
+	}
+	if _, err := newDeferredClaudeCommand(
+		config{clientID: acceptanceClientCodexCLI},
+		"/trusted/workspace",
+		"",
+	); err == nil {
+		t.Fatal("Codex was accepted by deferred Claude input")
 	}
 }
 

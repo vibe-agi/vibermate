@@ -1,4 +1,4 @@
-// Command vibermate-acceptance runs the opt-in macOS arm64 M0 assembly
+// Command vibermate-acceptance runs the opt-in macOS arm64 packaged-app
 // acceptance against packaged runtime executables. It never receives a secret
 // value; provider credentials remain behind SecretRef and the selected Store.
 package main
@@ -13,17 +13,25 @@ import (
 )
 
 func main() {
-	config, err := parseConfig(os.Args[1:])
-	if err != nil {
-		fmt.Fprintln(os.Stderr, err)
-		os.Exit(2)
-	}
 	ctx, cancel := signal.NotifyContext(
 		context.Background(),
 		os.Interrupt,
 		syscall.SIGTERM,
 	)
 	defer cancel()
+	if len(os.Args) > 1 && os.Args[1] == installedSmokeCommand {
+		if err := runInstalledSmokeCommand(ctx, os.Args[2:]); err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			os.Exit(1)
+		}
+		fmt.Println("Installed macOS Desktop smoke passed")
+		return
+	}
+	config, err := parseConfig(os.Args[1:])
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		os.Exit(2)
+	}
 	report, runErr := runAcceptance(ctx, config)
 	if config.reportPath != "" {
 		if err := writeReport(config.reportPath, report); err != nil {
@@ -39,5 +47,5 @@ func main() {
 		}
 		os.Exit(1)
 	}
-	fmt.Println("M0 assembly acceptance passed")
+	fmt.Println("macOS arm64 packaged-app acceptance passed")
 }

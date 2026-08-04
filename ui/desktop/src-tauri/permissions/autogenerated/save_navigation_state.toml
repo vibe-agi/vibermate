@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-save-navigation-state"
+description = "Enables the save_navigation_state command without any pre-configured scope."
+commands.allow = ["save_navigation_state"]
+
+[[permission]]
+identifier = "deny-save-navigation-state"
+description = "Denies the save_navigation_state command without any pre-configured scope."
+commands.deny = ["save_navigation_state"]

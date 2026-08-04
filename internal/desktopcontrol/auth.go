@@ -7,6 +7,7 @@ import (
 	"errors"
 	"net/http"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -31,13 +32,21 @@ type CapabilityGrant struct {
 	ReadToken  string
 	WriteToken string
 	ExpiresAt  time.Time
+	// Revision is the optimistic-concurrency revision of this token pair. A
+	// zero value selects the initial revision, one, for bootstrap compatibility.
+	Revision uint64
+	// Rotation is nil only for deliberately non-rotating test or embedded
+	// authorities. DesktopHost always supplies a policy.
+	Rotation *SessionRotationPolicy
 }
 
 type Authenticator struct {
-	readDigest  [sha256.Size]byte
-	writeDigest [sha256.Size]byte
-	expiresAt   time.Time
-	clock       Clock
+	mu sync.Mutex
+
+	current  sessionCapabilityGeneration
+	replay   *sessionRotationReplay
+	rotation *sessionRotationPolicy
+	clock    Clock
 }
 
 func NewAuthenticator(
@@ -53,11 +62,23 @@ func NewAuthenticator(
 	if !validCapability(grant.ReadToken) || !validCapability(grant.WriteToken) {
 		return nil, errors.New("Desktop control capability is invalid")
 	}
+	revision := grant.Revision
+	if revision == 0 {
+		revision = initialSessionRevision
+	}
+	rotation, err := compileSessionRotationPolicy(grant.Rotation)
+	if err != nil {
+		return nil, err
+	}
 	return &Authenticator{
-		readDigest:  capabilityDigest(readDomain, grant.ReadToken),
-		writeDigest: capabilityDigest(writeDomain, grant.WriteToken),
-		expiresAt:   grant.ExpiresAt.UTC(),
-		clock:       clock,
+		current: sessionCapabilityGeneration{
+			revision:    revision,
+			readDigest:  capabilityDigest(readDomain, grant.ReadToken),
+			writeDigest: capabilityDigest(writeDomain, grant.WriteToken),
+			expiresAt:   grant.ExpiresAt.UTC(),
+		},
+		rotation: rotation,
+		clock:    clock,
 	}, nil
 }
 
@@ -65,18 +86,18 @@ func (authenticator *Authenticator) Authorize(
 	request *http.Request,
 	scope Scope,
 ) bool {
-	if authenticator == nil ||
-		request == nil ||
-		!authenticator.clock.Now().UTC().Before(authenticator.expiresAt) {
+	if authenticator == nil || request == nil {
 		return false
 	}
-	values := request.Header.Values("Authorization")
-	request.Header.Del("Authorization")
-	if len(values) != 1 || !strings.HasPrefix(values[0], "Bearer ") {
+	token, valid := takeBearerCapability(request)
+	if !valid {
 		return false
 	}
-	token := strings.TrimPrefix(values[0], "Bearer ")
-	if !validCapability(token) {
+	authenticator.mu.Lock()
+	defer authenticator.mu.Unlock()
+	now := authenticator.clock.Now().UTC()
+	authenticator.clearExpiredReplayLocked(now)
+	if !now.Before(authenticator.current.expiresAt) {
 		return false
 	}
 	switch scope {
@@ -84,17 +105,30 @@ func (authenticator *Authenticator) Authorize(
 		digest := capabilityDigest(readDomain, token)
 		return subtle.ConstantTimeCompare(
 			digest[:],
-			authenticator.readDigest[:],
+			authenticator.current.readDigest[:],
 		) == 1
 	case ScopeWrite:
 		digest := capabilityDigest(writeDomain, token)
 		return subtle.ConstantTimeCompare(
 			digest[:],
-			authenticator.writeDigest[:],
+			authenticator.current.writeDigest[:],
 		) == 1
 	default:
 		return false
 	}
+}
+
+func takeBearerCapability(request *http.Request) (string, bool) {
+	if request == nil {
+		return "", false
+	}
+	values := request.Header.Values("Authorization")
+	request.Header.Del("Authorization")
+	if len(values) != 1 || !strings.HasPrefix(values[0], "Bearer ") {
+		return "", false
+	}
+	token := strings.TrimPrefix(values[0], "Bearer ")
+	return token, validCapability(token)
 }
 
 func validCapability(value string) bool {

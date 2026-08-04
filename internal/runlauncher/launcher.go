@@ -10,16 +10,39 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
+	"strings"
 	"time"
 
 	"github.com/vibe-agi/vibermate/internal/capturecontrol"
+	"github.com/vibe-agi/vibermate/internal/capturerun"
 	"github.com/vibe-agi/vibermate/internal/clientadapter"
 	"github.com/vibe-agi/vibermate/internal/launcherdiscovery"
 )
 
 const (
-	defaultHeartbeatInterval  = 30 * time.Second
-	defaultControlTimeout     = 5 * time.Second
+	defaultHeartbeatInterval = 30 * time.Second
+	defaultControlTimeout    = 5 * time.Second
+	// defaultCreateTimeout is the one control call that can contain work
+	// measured in people rather than in milliseconds.
+	//
+	// Creating a run makes the runtime verify the launched artifact's platform
+	// signature (bounded by codesignature.VerifyDeadline, 30s — it hashes a
+	// binary that can be hundreds of megabytes) and, for a client recognized by
+	// its publisher rather than by a catalogued build, ask a person whether it
+	// may carry the Root (bounded by toolapproval.DefaultClientRootGrace, 30s).
+	//
+	// The short budget was applied to it too, so the sum of the inner bounds
+	// was twelve times the outer one and the recognized tier could not
+	// complete: the launcher abandoned the request, the runtime went on to
+	// create a run nobody would collect, and the client did not start at all —
+	// where the design says a launch that cannot reach a person starts without
+	// a Root instead. This is a ceiling and not a delay: a generic client never
+	// reaches the ask and answers as fast as it always did.
+	//
+	// runlauncher_budget_test.go holds this to the sum of what it must cover,
+	// so the three numbers cannot drift apart again in silence.
+	defaultCreateTimeout      = 90 * time.Second
 	defaultTerminationTimeout = 3 * time.Second
 )
 
@@ -30,13 +53,17 @@ type Discovery interface {
 }
 
 type Config struct {
-	Discovery          Discovery
-	BaseEnvironment    []string
-	Stdin              io.Reader
-	Stdout             io.Writer
-	Stderr             io.Writer
-	HeartbeatInterval  time.Duration
+	Discovery         Discovery
+	BaseEnvironment   []string
+	Stdin             io.Reader
+	Stdout            io.Writer
+	Stderr            io.Writer
+	HeartbeatInterval time.Duration
+	// ControlTimeout bounds every control call except create. None of them can
+	// contain a person, so none of them may be given a budget that would let a
+	// launch hang on one.
 	ControlTimeout     time.Duration
+	CreateTimeout      time.Duration
 	TerminationTimeout time.Duration
 	Getwd              func() (string, error)
 	LookPath           func(string) (string, error)
@@ -56,11 +83,15 @@ func New(config Config) (*Launcher, error) {
 	if config.ControlTimeout == 0 {
 		config.ControlTimeout = defaultControlTimeout
 	}
+	if config.CreateTimeout == 0 {
+		config.CreateTimeout = defaultCreateTimeout
+	}
 	if config.TerminationTimeout == 0 {
 		config.TerminationTimeout = defaultTerminationTimeout
 	}
 	if config.HeartbeatInterval <= 0 ||
 		config.ControlTimeout <= 0 ||
+		config.CreateTimeout <= 0 ||
 		config.TerminationTimeout <= 0 {
 		return nil, errors.New("launcher lifecycle timeouts must be positive")
 	}
@@ -114,8 +145,9 @@ func (launcher *Launcher) Run(
 	}
 	defer control.close()
 	var grant capturecontrol.LaunchGrant
-	err = launcher.callWithTimeout(
+	err = launcher.callWithin(
 		ctx,
+		launcher.config.CreateTimeout,
 		func(call context.Context) error {
 			var createErr error
 			grant, createErr = control.create(
@@ -124,6 +156,7 @@ func (launcher *Launcher) Run(
 					CWD:            cwd,
 					Command:        append([]string(nil), command...),
 					ExecutablePath: executable,
+					LocalUserLabel: localUserLabel(launcher.config.BaseEnvironment),
 				},
 			)
 			return createErr
@@ -226,6 +259,29 @@ func (launcher *Launcher) Run(
 	return exitCode, childErr
 }
 
+func localUserLabel(environment []string) string {
+	keys := []string{"USER", "USERNAME"}
+	if runtime.GOOS == "windows" {
+		keys = []string{"USERNAME", "USER"}
+	}
+	for _, key := range keys {
+		prefix := key + "="
+		for index := len(environment) - 1; index >= 0; index-- {
+			if !strings.HasPrefix(environment[index], prefix) {
+				continue
+			}
+			value := strings.TrimSpace(
+				strings.TrimPrefix(environment[index], prefix),
+			)
+			if capturerun.ValidLocalUserLabel(value) {
+				return value
+			}
+			return ""
+		}
+	}
+	return ""
+}
+
 func (launcher *Launcher) resolveCommand(
 	command []string,
 ) (string, string, error) {
@@ -289,7 +345,15 @@ func (launcher *Launcher) callWithTimeout(
 	parent context.Context,
 	call func(context.Context) error,
 ) error {
-	ctx, cancel := context.WithTimeout(parent, launcher.config.ControlTimeout)
+	return launcher.callWithin(parent, launcher.config.ControlTimeout, call)
+}
+
+func (launcher *Launcher) callWithin(
+	parent context.Context,
+	budget time.Duration,
+	call func(context.Context) error,
+) error {
+	ctx, cancel := context.WithTimeout(parent, budget)
 	defer cancel()
 	return call(ctx)
 }

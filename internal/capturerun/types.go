@@ -16,12 +16,14 @@ import (
 	"unicode/utf8"
 
 	"github.com/vibe-agi/vibermate/internal/clientadapter"
+	"github.com/vibe-agi/vibermate/internal/workspaceidentity"
 )
 
 const (
 	MaxRunIDBytes          = 128
 	MaxPathBytes           = 4096
 	MaxExecutableLabelByte = 256
+	MaxLocalUserLabelBytes = 128
 )
 
 var (
@@ -78,13 +80,20 @@ func (digest CapabilityDigest) valid() bool {
 // DurableRecord is the complete SQLite representation. It contains hashes,
 // never bearer values or child argv.
 type DurableRecord struct {
-	ID                    string
-	ProxyCapabilityHash   CapabilityDigest
-	ControlCapabilityHash CapabilityDigest
-	CWD                   string
-	ExecutableLabel       string
-	CatalogRevision       clientadapter.CatalogRevision
-	Adapter               *clientadapter.Evidence
+	ID                          string
+	ProxyCapabilityHash         CapabilityDigest
+	ControlCapabilityHash       CapabilityDigest
+	CWD                         string
+	LocalUserLabel              string
+	ExecutableLabel             string
+	CatalogRevision             clientadapter.CatalogRevision
+	Adapter                     *clientadapter.Evidence
+	MachineID                   workspaceidentity.MachineID
+	MachineRegistrationRevision uint64
+	WorkspaceID                 workspaceidentity.WorkspaceID
+	WorkspaceLabel              string
+	WorkspaceEvidence           workspaceidentity.Evidence
+	WorkspaceDerivationRevision uint64
 	// Recognition says whether the catalog knows this client at all, which is
 	// not recoverable from Adapter alone: a run without evidence may be a
 	// program nobody catalogued or a known client at an uncatalogued version.
@@ -131,6 +140,9 @@ func (record DurableRecord) Validate() error {
 	if err := validateAbsolutePath("working directory", record.CWD); err != nil {
 		return err
 	}
+	if !ValidLocalUserLabel(record.LocalUserLabel) {
+		return fmt.Errorf("%w: local user label is invalid", ErrInvalidRequest)
+	}
 	if err := validateText(
 		"executable label",
 		record.ExecutableLabel,
@@ -151,6 +163,18 @@ func (record DurableRecord) Validate() error {
 				"%w: client adapter evidence is invalid",
 				ErrInvalidRequest,
 			)
+		}
+	}
+	if !record.workspaceScopeEmpty() {
+		if _, err := workspaceidentity.NewScope(
+			record.MachineID,
+			record.WorkspaceID,
+			record.WorkspaceLabel,
+			record.WorkspaceEvidence,
+			record.MachineRegistrationRevision,
+			record.WorkspaceDerivationRevision,
+		); err != nil {
+			return fmt.Errorf("%w: workspace scope is invalid", ErrInvalidRequest)
 		}
 	}
 	// Evidence and recognition are one fact seen twice: a run that verified
@@ -194,17 +218,30 @@ func (record DurableRecord) Validate() error {
 
 // View is a redacted immutable representation safe for control responses.
 type View struct {
-	ID              string `json:"id"`
-	ExecutableLabel string `json:"executableLabel"`
-	CWD             string `json:"cwd"`
-	ProcessID       int    `json:"processId,omitempty"`
-	State           State  `json:"state"`
+	ID                          string                     `json:"id"`
+	ExecutableLabel             string                     `json:"executableLabel"`
+	CWD                         string                     `json:"cwd"`
+	LocalUserLabel              string                     `json:"localUserLabel,omitempty"`
+	MachineID                   string                     `json:"machineId,omitempty"`
+	MachineRegistrationRevision uint64                     `json:"machineRegistrationRevision,omitempty"`
+	WorkspaceID                 string                     `json:"workspaceId,omitempty"`
+	WorkspaceLabel              string                     `json:"workspaceLabel,omitempty"`
+	WorkspaceEvidence           workspaceidentity.Evidence `json:"workspaceEvidence,omitempty"`
+	WorkspaceDerivationRevision uint64                     `json:"workspaceDerivationRevision,omitempty"`
+	ProcessID                   int                        `json:"processId,omitempty"`
+	State                       State                      `json:"state"`
 	// Observation says whether traffic was actually seen through this run.
 	Observation Observation `json:"observation"`
 	// Recognition says whether this build has release evidence for the client.
 	Recognition clientadapter.Recognition `json:"recognition"`
-	CreatedAt   time.Time                 `json:"createdAt"`
-	ExpiresAt   time.Time                 `json:"expiresAt"`
+	// CatalogRevision and Adapter remain available to trusted projections but
+	// are never serialized directly. The contracted launcher wire deliberately
+	// omits release hashes and feature flags carried by internal evidence.
+	CatalogRevision clientadapter.CatalogRevision `json:"-"`
+	Adapter         *clientadapter.Evidence       `json:"-"`
+	CreatedAt       time.Time                     `json:"createdAt"`
+	ExpiresAt       time.Time                     `json:"expiresAt"`
+	UpdatedAt       time.Time                     `json:"-"`
 }
 
 // ViewOf renders a run for a reader. It carries no capability.
@@ -220,15 +257,25 @@ func NormalizedRecognition(
 
 func ViewOf(record DurableRecord) View {
 	return View{
-		ID:              record.ID,
-		ExecutableLabel: record.ExecutableLabel,
-		CWD:             record.CWD,
-		ProcessID:       record.ProcessID,
-		State:           record.State,
-		Observation:     record.Observation,
-		Recognition:     NormalizedRecognition(record.Recognition),
-		CreatedAt:       record.CreatedAt,
-		ExpiresAt:       record.ExpiresAt,
+		ID:                          record.ID,
+		ExecutableLabel:             record.ExecutableLabel,
+		CWD:                         record.CWD,
+		LocalUserLabel:              record.LocalUserLabel,
+		MachineID:                   record.MachineID.String(),
+		MachineRegistrationRevision: record.MachineRegistrationRevision,
+		WorkspaceID:                 record.WorkspaceID.String(),
+		WorkspaceLabel:              record.WorkspaceLabel,
+		WorkspaceEvidence:           record.WorkspaceEvidence,
+		WorkspaceDerivationRevision: record.WorkspaceDerivationRevision,
+		ProcessID:                   record.ProcessID,
+		State:                       record.State,
+		Observation:                 record.Observation,
+		Recognition:                 NormalizedRecognition(record.Recognition),
+		CatalogRevision:             record.CatalogRevision,
+		Adapter:                     cloneAdapter(record.Adapter),
+		CreatedAt:                   record.CreatedAt,
+		ExpiresAt:                   record.ExpiresAt,
+		UpdatedAt:                   record.UpdatedAt,
 	}
 }
 
@@ -279,6 +326,8 @@ type CreateCommand struct {
 	CatalogRevision clientadapter.CatalogRevision
 	Adapter         *clientadapter.Evidence
 	Recognition     clientadapter.Recognition
+	Workspace       workspaceidentity.Scope
+	LocalUserLabel  string
 }
 
 func (command CreateCommand) validate(maxLifetime time.Duration) error {
@@ -296,6 +345,13 @@ func (command CreateCommand) validate(maxLifetime time.Duration) error {
 			"%w: client catalog revision is invalid",
 			ErrInvalidRequest,
 		)
+	}
+	if command.Workspace != (workspaceidentity.Scope{}) &&
+		command.Workspace.Validate() != nil {
+		return fmt.Errorf("%w: workspace scope is invalid", ErrInvalidRequest)
+	}
+	if !ValidLocalUserLabel(command.LocalUserLabel) {
+		return fmt.Errorf("%w: local user label is invalid", ErrInvalidRequest)
 	}
 	if command.Adapter != nil {
 		if err := command.Adapter.Validate(); err != nil ||
@@ -333,9 +389,19 @@ type Evidence struct {
 	Adapter         *clientadapter.Evidence
 	ProcessID       int
 	ExpiresAt       time.Time
+	Workspace       workspaceidentity.Scope
+	LocalUserLabel  string
 }
 
 func evidenceOf(record DurableRecord) Evidence {
+	workspace, _ := workspaceidentity.NewScope(
+		record.MachineID,
+		record.WorkspaceID,
+		record.WorkspaceLabel,
+		record.WorkspaceEvidence,
+		record.MachineRegistrationRevision,
+		record.WorkspaceDerivationRevision,
+	)
 	return Evidence{
 		RunID:           record.ID,
 		Observed:        record.Observed(),
@@ -346,7 +412,29 @@ func evidenceOf(record DurableRecord) Evidence {
 		Adapter:         cloneAdapter(record.Adapter),
 		ProcessID:       record.ProcessID,
 		ExpiresAt:       record.ExpiresAt,
+		Workspace:       workspace,
+		LocalUserLabel:  record.LocalUserLabel,
 	}
+}
+
+// ValidLocalUserLabel validates display-only launcher metadata. The value is
+// never authentication evidence and an empty value means unavailable.
+func ValidLocalUserLabel(value string) bool {
+	if value == "" {
+		return true
+	}
+	return len(value) <= MaxLocalUserLabelBytes && utf8.ValidString(value) &&
+		strings.TrimSpace(value) == value &&
+		!strings.ContainsAny(value, "\x00\r\n")
+}
+
+func (record DurableRecord) workspaceScopeEmpty() bool {
+	return record.MachineID.String() == "" &&
+		record.MachineRegistrationRevision == 0 &&
+		record.WorkspaceID.String() == "" &&
+		record.WorkspaceLabel == "" &&
+		record.WorkspaceEvidence == "" &&
+		record.WorkspaceDerivationRevision == 0
 }
 
 func cloneAdapter(

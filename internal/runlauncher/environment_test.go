@@ -3,24 +3,29 @@ package runlauncher
 import (
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/vibe-agi/vibermate/internal/capturecontrol"
-	"github.com/vibe-agi/vibermate/internal/capturerun"
 	"github.com/vibe-agi/vibermate/internal/clientadapter"
 )
 
 func TestBuildEnvironmentPinsProxyAndRemovesProtectedBypasses(t *testing.T) {
 	t.Parallel()
 
+	adapter := testAdapterEvidence(clientadapter.LaunchNodeEnvProxy)
 	grant := capturecontrol.LaunchGrant{
-		Run:             capturerun.View{ID: "run-1"},
+		Run: testCaptureRunView(
+			"run-1",
+			clientadapter.RecognitionVerified,
+			adapter,
+		),
 		CatalogRevision: 7,
 		LaunchRecipe:    clientadapter.LaunchNodeEnvProxy,
 		Recognition:     clientadapter.RecognitionVerified,
-		Adapter:         testAdapterEvidence(clientadapter.LaunchNodeEnvProxy),
+		Adapter:         adapter,
 		ExecutablePath:  "/tmp/claude",
-		ProxyOrigin:     "http://127.0.0.1:43210",
-		ProxyCapability: "proxy-capability",
+		ProxyAddress:    "http://127.0.0.1:43210",
+		ProxyToken:      "proxy-capability",
 		RunCapability:   "run-capability",
 		RootPEMPath:     "/tmp/root.pem",
 		ProtectedAuthorities: []string{
@@ -70,14 +75,19 @@ func TestBuildEnvironmentDoesNotTrustRootForGenericClient(t *testing.T) {
 	t.Parallel()
 
 	grant := capturecontrol.LaunchGrant{
-		Run:             capturerun.View{ID: "run-2"},
-		CatalogRevision: 7,
-		LaunchRecipe:    clientadapter.LaunchGeneric,
-		Recognition:     clientadapter.RecognitionUnknown,
-		ExecutablePath:  "/tmp/agent",
-		ProxyOrigin:     "http://127.0.0.1:43210",
-		ProxyCapability: "proxy-capability",
-		RunCapability:   "run-capability",
+		Run: testCaptureRunView(
+			"run-2",
+			clientadapter.RecognitionUnknown,
+			nil,
+		),
+		CatalogRevision:      7,
+		LaunchRecipe:         clientadapter.LaunchGeneric,
+		Recognition:          clientadapter.RecognitionUnknown,
+		ExecutablePath:       "/tmp/agent",
+		ProxyAddress:         "http://127.0.0.1:43210",
+		ProxyToken:           "proxy-capability",
+		RunCapability:        "run-capability",
+		ProtectedAuthorities: []string{},
 	}
 	environment, err := buildEnvironment(
 		[]string{
@@ -101,15 +111,20 @@ func TestBuildEnvironmentDoesNotTrustRootForGenericClient(t *testing.T) {
 func TestBuildEnvironmentIsolatesFixedCodexInputs(t *testing.T) {
 	t.Parallel()
 
+	adapter := testAdapterEvidence(clientadapter.LaunchSSLCertFile)
 	grant := capturecontrol.LaunchGrant{
-		Run:             capturerun.View{ID: "run-codex"},
+		Run: testCaptureRunView(
+			"run-codex",
+			clientadapter.RecognitionVerified,
+			adapter,
+		),
 		CatalogRevision: 7,
 		LaunchRecipe:    clientadapter.LaunchSSLCertFile,
 		Recognition:     clientadapter.RecognitionVerified,
-		Adapter:         testAdapterEvidence(clientadapter.LaunchSSLCertFile),
+		Adapter:         adapter,
 		ExecutablePath:  "/tmp/codex.js",
-		ProxyOrigin:     "http://127.0.0.1:43210",
-		ProxyCapability: "proxy-capability",
+		ProxyAddress:    "http://127.0.0.1:43210",
+		ProxyToken:      "proxy-capability",
 		RunCapability:   "run-capability",
 		RootPEMPath:     "/tmp/root.pem",
 		ProtectedAuthorities: []string{
@@ -172,17 +187,23 @@ func TestBuildEnvironmentIsolatesFixedCodexInputs(t *testing.T) {
 func TestBuildEnvironmentRejectsUnboundAdapterRecipes(t *testing.T) {
 	t.Parallel()
 
+	adapter := testAdapterEvidence(clientadapter.LaunchSSLCertFile)
 	base := capturecontrol.LaunchGrant{
-		Run:             capturerun.View{ID: "run-invalid"},
-		CatalogRevision: 7,
-		LaunchRecipe:    clientadapter.LaunchSSLCertFile,
-		Recognition:     clientadapter.RecognitionVerified,
-		Adapter:         testAdapterEvidence(clientadapter.LaunchSSLCertFile),
-		ExecutablePath:  "/tmp/codex.js",
-		ProxyOrigin:     "http://127.0.0.1:43210",
-		ProxyCapability: "proxy-capability",
-		RunCapability:   "run-capability",
-		RootPEMPath:     "/tmp/root.pem",
+		Run: testCaptureRunView(
+			"run-invalid",
+			clientadapter.RecognitionVerified,
+			adapter,
+		),
+		CatalogRevision:      7,
+		LaunchRecipe:         clientadapter.LaunchSSLCertFile,
+		Recognition:          clientadapter.RecognitionVerified,
+		Adapter:              adapter,
+		ExecutablePath:       "/tmp/codex.js",
+		ProxyAddress:         "http://127.0.0.1:43210",
+		ProxyToken:           "proxy-capability",
+		RunCapability:        "run-capability",
+		RootPEMPath:          "/tmp/root.pem",
+		ProtectedAuthorities: []string{},
 	}
 	for _, test := range []struct {
 		name   string
@@ -239,23 +260,44 @@ func environmentMap(environment []string) map[string]string {
 
 func testAdapterEvidence(
 	recipe clientadapter.LaunchRecipe,
-) *clientadapter.Evidence {
+) *capturecontrol.ClientAdapterView {
 	id := "claude-code"
 	shape := clientadapter.InstallNativeSingleBinary
-	features := clientadapter.Feature(0)
 	if recipe == clientadapter.LaunchSSLCertFile {
 		id = "codex-cli"
 		shape = clientadapter.InstallNPMWrapperNativeChild
-		features = clientadapter.FeatureResponsesWebSocketHTTPFallback
 	}
-	return &clientadapter.Evidence{
+	return &capturecontrol.ClientAdapterView{
 		ID:              id,
 		Revision:        1,
 		Version:         "test",
 		CatalogRevision: 7,
-		InstallShape:    shape,
-		ReleaseSHA256:   strings.Repeat("c", 64),
-		LaunchRecipe:    recipe,
-		Features:        features,
+		Source: capturecontrol.
+			ClientAdapterSourcePrelaunchDigestCatalog,
+		InstallShape: shape,
+		LaunchRecipe: recipe,
+	}
+}
+
+func testCaptureRunView(
+	id string,
+	recognition clientadapter.Recognition,
+	adapter *capturecontrol.ClientAdapterView,
+) capturecontrol.CaptureRunView {
+	createdAt := time.Date(2026, 8, 3, 8, 0, 0, 0, time.UTC)
+	state := clientadapter.StatusGeneric
+	if adapter != nil {
+		state = clientadapter.StatusVerified
+	}
+	return capturecontrol.CaptureRunView{
+		ID:                 id,
+		ExecutableLabel:    "agent",
+		CWD:                "/tmp",
+		CreatedAt:          createdAt,
+		ExpiresAt:          createdAt.Add(time.Minute),
+		ClientAdapterState: state,
+		ClientRecognition:  recognition,
+		CatalogRevision:    7,
+		ClientAdapter:      adapter,
 	}
 }

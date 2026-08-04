@@ -121,7 +121,7 @@ func parseConfig(arguments []string) (config, error) {
 		return config{}, errors.New("vibermate-acceptance does not accept positional arguments")
 	}
 	if runtime.GOOS != "darwin" || runtime.GOARCH != "arm64" {
-		return config{}, errors.New("M0 assembly acceptance requires macOS arm64")
+		return config{}, errors.New("packaged-app acceptance requires macOS arm64")
 	}
 	desktopAppPath, err := appBundlePath(parsed.desktopAppPath)
 	if err != nil {

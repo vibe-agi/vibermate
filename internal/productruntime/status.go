@@ -49,8 +49,9 @@ type RuntimeStatus struct {
 }
 
 type statusTracker struct {
-	mu     sync.RWMutex
-	status RuntimeStatus
+	mu                    sync.RWMutex
+	status                RuntimeStatus
+	storageFailureLatched bool
 }
 
 func newStatusTracker(instanceID string, host hostcontract.Kind, startedAt time.Time) *statusTracker {
@@ -74,8 +75,13 @@ func (t *statusTracker) snapshot() RuntimeStatus {
 func (t *statusTracker) commitInitialized(schemaRevision int64) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
-	t.status.State = RuntimeStateInitialized
 	t.status.SchemaRevision = schemaRevision
+	if t.storageFailureLatched {
+		t.status.State = RuntimeStateDegraded
+		t.status.Storage = StorageStateUnavailable
+		return
+	}
+	t.status.State = RuntimeStateInitialized
 	t.status.Storage = StorageStateHealthy
 }
 
@@ -92,10 +98,36 @@ func (t *statusTracker) observeStorage(schemaRevision int64, err error) {
 		}
 		return
 	}
+	if t.storageFailureLatched {
+		t.status.Storage = StorageStateUnavailable
+		t.status.SchemaRevision = schemaRevision
+		if t.status.State == RuntimeStateInitialized {
+			t.status.State = RuntimeStateDegraded
+		}
+		return
+	}
 	t.status.Storage = StorageStateHealthy
 	t.status.SchemaRevision = schemaRevision
 	if t.status.State == RuntimeStateDegraded {
 		t.status.State = RuntimeStateInitialized
+	}
+}
+
+// failStorage latches a write-path durability failure for this process
+// incarnation. A later read-only schema poll cannot prove that an omitted
+// audit terminal was persisted, so only a restart and recovery may clear it.
+func (t *statusTracker) failStorage() {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	t.storageFailureLatched = true
+	t.status.Storage = StorageStateUnavailable
+	switch t.status.State {
+	case RuntimeStateInitialized:
+		t.status.State = RuntimeStateDegraded
+	case RuntimeStateStopped:
+		t.status.State = RuntimeStateStopFailed
+		t.status.StoppedAt = nil
+		t.status.StopReasonCode = StopReasonShutdownFailed
 	}
 }
 
@@ -111,6 +143,12 @@ func (t *statusTracker) beginStopping() {
 func (t *statusTracker) finishStopping(stoppedAt time.Time, shutdownErr error) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
+	if t.storageFailureLatched {
+		t.status.State = RuntimeStateStopFailed
+		t.status.Storage = StorageStateUnavailable
+		t.status.StopReasonCode = StopReasonShutdownFailed
+		return
+	}
 	if shutdownErr != nil {
 		t.status.State = RuntimeStateStopFailed
 		t.status.StopReasonCode = StopReasonShutdownFailed

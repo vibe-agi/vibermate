@@ -15,6 +15,8 @@ import (
 	"github.com/vibe-agi/vibermate/internal/toolapproval"
 )
 
+const approvalIntegrationStartupTimeout = 60 * time.Second
+
 func TestAuthorityDurablyBlocksAndReleasesCompleteToolGroup(t *testing.T) {
 	t.Parallel()
 
@@ -283,7 +285,13 @@ func waitForPending(
 
 func openStore(t *testing.T, path string) *runtimepersistence.Store {
 	t.Helper()
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	// The repository race job migrates many independent SQLite fixtures at the
+	// same time. Keep startup bounded without treating race-instrumented CPU
+	// contention as a product migration failure.
+	ctx, cancel := context.WithTimeout(
+		context.Background(),
+		approvalIntegrationStartupTimeout,
+	)
 	defer cancel()
 	store, err := runtimepersistence.Open(ctx, runtimepersistence.Options{
 		DatabasePath:           path,

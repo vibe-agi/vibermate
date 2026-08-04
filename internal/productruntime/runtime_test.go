@@ -98,8 +98,8 @@ func TestProductRuntimeStartsAndShutsDownNormally(t *testing.T) {
 	if status.Host != hostcontract.KindDesktop {
 		t.Fatalf("runtime host = %q, want desktop", status.Host)
 	}
-	if status.SchemaRevision != 22 {
-		t.Fatalf("schema revision = %d, want 22", status.SchemaRevision)
+	if status.SchemaRevision != 27 {
+		t.Fatalf("schema revision = %d, want 27", status.SchemaRevision)
 	}
 	if status.AccessProjection.State != access.ProjectionStateHealthy ||
 		status.AccessProjection.UnavailableAccessCount != 0 {
@@ -550,13 +550,22 @@ func TestProductRuntimeComposesCaptureIngressAndConnectionAudit(t *testing.T) {
 		t.Fatalf("active client authorities=%v error=%v", authorities, err)
 	}
 
+	captureDirectory := t.TempDir()
+	workspace, err := runtime.WorkspaceIdentity().ResolveLocal(
+		context.Background(),
+		captureDirectory,
+	)
+	if err != nil {
+		t.Fatalf("resolve workspace identity: %v", err)
+	}
 	grant, err := runtime.CaptureRuns().Create(
 		context.Background(),
 		capturerun.CreateCommand{
-			CWD:             t.TempDir(),
+			CWD:             captureDirectory,
 			ExecutablePath:  "/usr/bin/true",
 			Lifetime:        time.Minute,
 			CatalogRevision: 1,
+			Workspace:       workspace,
 		},
 	)
 	if err != nil {

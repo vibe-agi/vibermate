@@ -10,11 +10,11 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
-	"strings"
 	"syscall"
 	"testing"
 	"time"
 
+	"github.com/vibe-agi/vibermate/internal/capturecontrol"
 	"github.com/vibe-agi/vibermate/internal/clientadapter"
 	"github.com/vibe-agi/vibermate/internal/launcherdiscovery"
 	"github.com/vibe-agi/vibermate/internal/runlauncher"
@@ -56,15 +56,15 @@ while :; do sleep 1; done
 		expectedCommand: []string{"codex"},
 		recipe:          clientadapter.LaunchSSLCertFile,
 		recognition:     clientadapter.RecognitionVerified,
-		adapter: &clientadapter.Evidence{
+		adapter: &capturecontrol.ClientAdapterView{
 			ID:              "codex-cli",
 			Revision:        1,
 			Version:         "0.145.0",
 			CatalogRevision: 7,
-			InstallShape:    clientadapter.InstallNPMWrapperNativeChild,
-			ReleaseSHA256:   strings.Repeat("e", 64),
-			LaunchRecipe:    clientadapter.LaunchSSLCertFile,
-			Features:        clientadapter.FeatureResponsesWebSocketHTTPFallback,
+			Source: capturecontrol.
+				ClientAdapterSourcePrelaunchDigestCatalog,
+			InstallShape: clientadapter.InstallNPMWrapperNativeChild,
+			LaunchRecipe: clientadapter.LaunchSSLCertFile,
 		},
 		authorities: []string{"api.openai.com:443"},
 	}

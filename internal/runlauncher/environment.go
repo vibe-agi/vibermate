@@ -50,8 +50,8 @@ func buildEnvironment(
 		return nil, err
 	}
 	proxy, err := authenticatedProxyURL(
-		grant.ProxyOrigin,
-		grant.ProxyCapability,
+		grant.ProxyAddress,
+		grant.ProxyToken,
 	)
 	if err != nil {
 		return nil, err

@@ -17,10 +17,75 @@ import (
 
 const (
 	DescriptorSchema = "vibermate-daemon-bootstrap-v1"
+	FailureSchema    = "vibermate-daemon-failure-v1"
+	ProgressSchema   = "vibermate-daemon-progress-v1"
 	SessionSchema    = "vibermate-app-session-v1"
 	nonceDomain      = "vibermate:desktop-bootstrap:v1:"
 	capabilityBytes  = 32
 )
+
+type ProgressPhase string
+
+const ProgressRuntimeStarting ProgressPhase = "runtime_starting"
+
+type FailureReason string
+
+const (
+	FailureRuntimeUnavailable     FailureReason = "runtime_unavailable"
+	FailureSecretStoreUnavailable FailureReason = "secret_store_unavailable"
+	FailureStorageSchemaNewer     FailureReason = "storage_schema_newer"
+	FailureStorageUnavailable     FailureReason = "storage_unavailable"
+)
+
+// Failure is the only startup diagnosis that crosses the native pipe. It is a
+// closed reason code and deliberately carries no error text, paths, or secret
+// material.
+type Failure struct {
+	Schema string        `json:"schema"`
+	Reason FailureReason `json:"reason"`
+}
+
+func StartupFailure(reason FailureReason) Failure {
+	return Failure{Schema: FailureSchema, Reason: reason}
+}
+
+func (failure Failure) Validate() error {
+	if failure.Schema != FailureSchema {
+		return errors.New("Desktop bootstrap failure is invalid")
+	}
+	switch failure.Reason {
+	case FailureRuntimeUnavailable,
+		FailureSecretStoreUnavailable,
+		FailureStorageSchemaNewer,
+		FailureStorageUnavailable:
+		return nil
+	default:
+		return errors.New("Desktop bootstrap failure is invalid")
+	}
+}
+
+// Progress is a bounded, capability-free native bootstrap frame. It lets the
+// shell distinguish a live process entering storage/runtime initialization
+// from a process that never reached its own startup path.
+type Progress struct {
+	Schema string        `json:"schema"`
+	Phase  ProgressPhase `json:"phase"`
+}
+
+func RuntimeStartingProgress() Progress {
+	return Progress{
+		Schema: ProgressSchema,
+		Phase:  ProgressRuntimeStarting,
+	}
+}
+
+func (progress Progress) Validate() error {
+	if progress.Schema != ProgressSchema ||
+		progress.Phase != ProgressRuntimeStarting {
+		return errors.New("Desktop bootstrap progress is invalid")
+	}
+	return nil
+}
 
 type Clock interface {
 	Now() time.Time
@@ -183,12 +248,14 @@ func writeProblem(writer http.ResponseWriter, status int, reasonCode string) {
 	writer.Header().Set("Cache-Control", "no-store")
 	writer.WriteHeader(status)
 	_ = json.NewEncoder(writer).Encode(struct {
-		Type       string `json:"type"`
-		Status     int    `json:"status"`
-		ReasonCode string `json:"reasonCode"`
+		Type   string `json:"type"`
+		Title  string `json:"title"`
+		Status int    `json:"status"`
+		Code   string `json:"code"`
 	}{
-		Type:       "urn:vibermate:error:" + strings.ReplaceAll(reasonCode, "_", "-"),
-		Status:     status,
-		ReasonCode: reasonCode,
+		Type:   "urn:vibermate:error:" + strings.ReplaceAll(reasonCode, "_", "-"),
+		Title:  http.StatusText(status),
+		Status: status,
+		Code:   reasonCode,
 	})
 }

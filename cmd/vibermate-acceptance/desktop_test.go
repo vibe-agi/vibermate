@@ -1,9 +1,20 @@
 package main
 
 import (
+	"bytes"
+	"context"
+	"encoding/hex"
+	"encoding/json"
+	"errors"
+	"os"
+	"path/filepath"
 	"slices"
+	"strings"
 	"testing"
+	"time"
 )
+
+const testDesktopNavigationLocator = "settings/recovery"
 
 func TestPackagedDesktopInvocationUsesIsolatedHome(t *testing.T) {
 	t.Parallel()
@@ -18,7 +29,323 @@ func TestPackagedDesktopInvocationUsesIsolatedHome(t *testing.T) {
 	) {
 		t.Fatalf("Desktop open arguments = %v", arguments)
 	}
+	if !slices.Contains(arguments, "-F") {
+		t.Fatalf("Desktop open arguments do not disable saved-window restore: %v", arguments)
+	}
 	if arguments[len(arguments)-1] != "/private/tmp/VibeMate.app" {
 		t.Fatalf("Desktop App argument = %q", arguments[len(arguments)-1])
+	}
+}
+
+func TestDesktopNavigationFixtureProvesAtomicCanonicalRewrite(t *testing.T) {
+	t.Parallel()
+
+	homeDirectory := filepath.Join(t.TempDir(), "home")
+	path := desktopNavigationStatePath(homeDirectory)
+	seed, err := publishDesktopNavigationFixture(
+		path,
+		nonCanonicalDesktopNavigationState(testDesktopNavigationLocator),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	expected := canonicalDesktopNavigationState(testDesktopNavigationLocator)
+	if bytes.Equal(seed.encoded, expected) {
+		t.Fatal("navigation seed was already canonical")
+	}
+	assertDesktopNavigationValue(t, seed.encoded, testDesktopNavigationLocator)
+
+	committed, err := publishDesktopNavigationFixture(path, expected)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if os.SameFile(seed.info, committed.info) {
+		t.Fatal("navigation fixture replaced contents without replacing the inode")
+	}
+	observed, err := waitForDesktopNavigationRewrite(
+		context.Background(),
+		make(chan error),
+		path,
+		seed,
+		expected,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !os.SameFile(committed.info, observed.info) {
+		t.Fatal("navigation observation returned the wrong committed file")
+	}
+	info, err := os.Stat(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if info.Mode().Perm() != 0o600 {
+		t.Fatalf("navigation permission=%04o", info.Mode().Perm())
+	}
+}
+
+func TestDesktopNavigationObservationFailsOnPrematureExit(t *testing.T) {
+	t.Parallel()
+
+	path := desktopNavigationStatePath(filepath.Join(t.TempDir(), "home"))
+	seed, err := publishDesktopNavigationFixture(
+		path,
+		nonCanonicalDesktopNavigationState(testDesktopNavigationLocator),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	done := make(chan error, 1)
+	done <- nil
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	if _, err := waitForDesktopNavigationRewrite(
+		ctx,
+		done,
+		path,
+		seed,
+		canonicalDesktopNavigationState(testDesktopNavigationLocator),
+	); err == nil {
+		t.Fatal("premature packaged Desktop exit was accepted")
+	}
+}
+
+func TestDesktopNavigationFixtureRejectsSymbolicLinkDestination(t *testing.T) {
+	t.Parallel()
+
+	homeDirectory := filepath.Join(t.TempDir(), "home")
+	path := desktopNavigationStatePath(homeDirectory)
+	if _, err := publishDesktopNavigationFixture(
+		path,
+		nonCanonicalDesktopNavigationState(testDesktopNavigationLocator),
+	); err != nil {
+		t.Fatal(err)
+	}
+	target := filepath.Join(t.TempDir(), "target.json")
+	if err := os.WriteFile(target, canonicalDesktopNavigationState("overview"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Remove(path); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(target, path); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := publishDesktopNavigationFixture(
+		path,
+		canonicalDesktopNavigationState(testDesktopNavigationLocator),
+	); err == nil {
+		t.Fatal("symbolic-link navigation destination was accepted")
+	}
+}
+
+func TestDesktopNavigationRestoreLocatorIsFreshAndBounded(t *testing.T) {
+	t.Parallel()
+
+	locator, err := newDesktopNavigationRestoreLocator()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.HasPrefix(locator, "access/") ||
+		!strings.HasSuffix(locator, "/routing") {
+		t.Fatalf("navigation locator = %q", locator)
+	}
+	encodedIdentity := strings.TrimSuffix(
+		strings.TrimPrefix(locator, "access/"),
+		"/routing",
+	)
+	identity, err := hex.DecodeString(encodedIdentity)
+	if err != nil || len(identity) != 16 {
+		t.Fatalf("navigation locator identity = %q, error = %v", encodedIdentity, err)
+	}
+	if locator == desktopNavigationSentinelLocator ||
+		locator == testDesktopNavigationLocator {
+		t.Fatalf("navigation locator reused a static route: %q", locator)
+	}
+}
+
+func TestDesktopApplicationIdentityOutputIsClosedAndExact(t *testing.T) {
+	t.Parallel()
+
+	payload := []byte(`[
+  {"processId":101,"bundlePath":"/Applications/VibeMate.app","executablePath":"/Applications/VibeMate.app/Contents/MacOS/VibeMate"},
+  {"processId":202,"bundlePath":"/private/tmp/VibeMate.app","executablePath":"/private/tmp/VibeMate.app/Contents/MacOS/VibeMate"}
+]`)
+	applications, err := parseDesktopApplications(payload)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(applications) != 2 || applications[0].ProcessID != 101 ||
+		applications[1].ProcessID != 202 {
+		t.Fatalf("Desktop applications = %+v", applications)
+	}
+	for _, invalid := range [][]byte{
+		[]byte(`[{"processId":0,"bundlePath":"/a","executablePath":"/b"}]`),
+		[]byte(`[
+  {"processId":101,"bundlePath":"/a","executablePath":"/b"},
+  {"processId":101,"bundlePath":"/c","executablePath":"/d"}
+]`),
+		[]byte(`[{"processId":101,"bundlePath":"relative","executablePath":"/b"}]`),
+		[]byte(`[{"processId":101,"bundlePath":"/a","executablePath":"/b","extra":true}]`),
+		[]byte(`[] trailing`),
+	} {
+		if _, err := parseDesktopApplications(invalid); err == nil {
+			t.Fatalf("accepted invalid Desktop process output %q", invalid)
+		}
+	}
+	if applications, err := parseDesktopApplications([]byte(`[]`)); err != nil ||
+		applications == nil || len(applications) != 0 {
+		t.Fatalf("empty Desktop process output = %v, %v", applications, err)
+	}
+
+	identity := desktopApplicationIdentity{
+		ProcessID:      4242,
+		BundlePath:     "/private/tmp/VibeMate.app",
+		ExecutablePath: "/private/tmp/VibeMate.app/Contents/MacOS/VibeMate",
+	}
+	query := desktopApplicationsScript()
+	guardian := desktopApplicationGuardianScript(identity)
+	if !strings.Contains(query, desktopBundleID) ||
+		!strings.Contains(guardian, desktopBundleID) ||
+		!strings.Contains(guardian, "=== 4242") ||
+		!strings.Contains(guardian, identity.BundlePath) ||
+		!strings.Contains(guardian, identity.ExecutablePath) ||
+		!strings.Contains(guardian, "matched.terminate") ||
+		!strings.Contains(guardian, "matched.forceTerminate") ||
+		!strings.Contains(guardian, "availableData") ||
+		strings.Contains(guardian, "tell application id") {
+		t.Fatalf(
+			"Desktop application scripts are not exact: query=%q guardian=%q",
+			query,
+			guardian,
+		)
+	}
+}
+
+func TestDesktopProcessExitRequiresTheBoundBirthIdentityToDisappear(t *testing.T) {
+	t.Parallel()
+
+	expected := desktopProcessStart{seconds: 41, microseconds: 73}
+	for name, test := range map[string]struct {
+		snapshot desktopProcessSnapshot
+		err      error
+		present  bool
+		wantErr  bool
+	}{
+		"same process": {
+			snapshot: desktopProcessSnapshot{started: expected},
+			present:  true,
+		},
+		"PID reused": {
+			snapshot: desktopProcessSnapshot{
+				started: desktopProcessStart{seconds: 42, microseconds: 73},
+			},
+		},
+		"process gone": {err: errDesktopProcessUnavailable},
+		"inspection failed": {
+			err:     errors.New("process table unavailable"),
+			wantErr: true,
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			present, err := desktopProcessIdentityPresent(
+				expected,
+				test.snapshot,
+				test.err,
+			)
+			if present != test.present {
+				t.Fatalf("present = %v, want %v", present, test.present)
+			}
+			if !test.wantErr && err != nil {
+				t.Fatal(err)
+			}
+			if test.wantErr && err == nil {
+				t.Fatal("process inspection failure was treated as an exit")
+			}
+		})
+	}
+	if _, err := desktopProcessIdentityPresent(
+		desktopProcessStart{},
+		desktopProcessSnapshot{},
+		nil,
+	); err == nil {
+		t.Fatal("invalid process birth identity was accepted")
+	}
+}
+
+func TestPackagedDesktopApplicationSelectionRequiresSidecarParentAndExactPath(
+	t *testing.T,
+) {
+	t.Parallel()
+
+	appPath := filepath.Join(t.TempDir(), "VibeMate.app")
+	executablePath := filepath.Join(appPath, "Contents", "MacOS", "VibeMate")
+	if err := os.MkdirAll(filepath.Dir(executablePath), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(executablePath, []byte("fixture"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	canonicalAppPath, err := canonicalDesktopBundlePath(appPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	canonicalExecutablePath, err := canonicalDesktopExecutablePath(executablePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	expected := desktopApplicationIdentity{
+		ProcessID:      4242,
+		BundlePath:     canonicalAppPath,
+		ExecutablePath: canonicalExecutablePath,
+	}
+
+	selected, err := selectPackagedDesktopApplication(
+		[]desktopApplicationIdentity{expected},
+		9999,
+		canonicalAppPath,
+	)
+	if err != nil || selected.ProcessID != 0 {
+		t.Fatalf("unrelated unique Desktop was adopted: %+v, %v", selected, err)
+	}
+
+	selected, err = selectPackagedDesktopApplication(
+		[]desktopApplicationIdentity{
+			expected,
+			{
+				ProcessID:      5252,
+				BundlePath:     "/Applications/VibeMate.app",
+				ExecutablePath: "/Applications/VibeMate.app/Contents/MacOS/VibeMate",
+			},
+		},
+		expected.ProcessID,
+		canonicalAppPath,
+	)
+	if err == nil || selected.ProcessID != expected.ProcessID {
+		t.Fatalf("overlap did not retain only the bound process: %+v, %v", selected, err)
+	}
+
+	wrong := expected
+	wrong.BundlePath = filepath.Dir(canonicalAppPath)
+	selected, err = selectPackagedDesktopApplication(
+		[]desktopApplicationIdentity{wrong},
+		wrong.ProcessID,
+		canonicalAppPath,
+	)
+	if err == nil || selected.ProcessID != 0 {
+		t.Fatalf("wrong App path was accepted or made killable: %+v, %v", selected, err)
+	}
+}
+
+func assertDesktopNavigationValue(t *testing.T, encoded []byte, locator string) {
+	t.Helper()
+	var state desktopNavigationState
+	decoder := json.NewDecoder(bytes.NewReader(encoded))
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&state); err != nil {
+		t.Fatal(err)
+	}
+	if state.Schema != desktopNavigationSchema || state.Locator != locator {
+		t.Fatalf("navigation state=%+v", state)
 	}
 }

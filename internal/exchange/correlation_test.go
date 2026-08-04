@@ -131,3 +131,51 @@ func TestCorrelationOptionCannotBeDuplicated(t *testing.T) {
 		t.Fatal("duplicate ingress correlation was accepted")
 	}
 }
+
+func TestClientRequestCarriesOnlyValidatedAnthropicBetaHeader(t *testing.T) {
+	t.Parallel()
+
+	request, err := correlatedRequest(
+		t,
+		"capture-run-beta",
+		"connection-beta",
+		WithAnthropicBetaHeader(
+			"claude-code-20250219,interleaved-thinking-2025-05-14",
+		),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	headers := request.protocolHeaders()
+	if headers.Get("Anthropic-Beta") !=
+		"claude-code-20250219,interleaved-thinking-2025-05-14" ||
+		len(headers) != 1 {
+		t.Fatalf("protocol headers = %#v", headers)
+	}
+
+	for _, invalid := range []string{
+		"",
+		"beta\r\nAuthorization: secret",
+		"beta,",
+		"beta token with spaces",
+	} {
+		if _, err := correlatedRequest(
+			t,
+			"capture-run-invalid-beta",
+			"connection-invalid-beta",
+			WithAnthropicBetaHeader(invalid),
+		); err == nil {
+			t.Fatalf("invalid Anthropic beta header %q was accepted", invalid)
+		}
+	}
+
+	if _, err := correlatedRequest(
+		t,
+		"capture-run-duplicate-beta",
+		"connection-duplicate-beta",
+		WithAnthropicBetaHeader("one-2025-01-01"),
+		WithAnthropicBetaHeader("two-2025-01-02"),
+	); err == nil {
+		t.Fatal("duplicate Anthropic beta header option was accepted")
+	}
+}

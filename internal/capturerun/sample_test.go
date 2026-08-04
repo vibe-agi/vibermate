@@ -4,11 +4,13 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/vibe-agi/vibermate/internal/capturerun"
 	"github.com/vibe-agi/vibermate/internal/clientadapter"
+	"github.com/vibe-agi/vibermate/internal/desktopcontrol"
 )
 
 // The window renders these shapes, so they come from the runtime rather than
@@ -24,8 +26,18 @@ func TestCaptureRunSamplesDescribeWhatTheRuntimeSends(t *testing.T) {
 			State:           capturerun.StateAttached,
 			Observation:     capturerun.ObservationObserved,
 			Recognition:     clientadapter.RecognitionVerified,
-			CreatedAt:       created,
-			ExpiresAt:       created.Add(time.Hour),
+			CatalogRevision: 4,
+			Adapter: &clientadapter.Evidence{
+				ID:              "claude-code",
+				Revision:        1,
+				Version:         "2.1.220",
+				CatalogRevision: 4,
+				InstallShape:    clientadapter.InstallNativeSingleBinary,
+				ReleaseSHA256:   strings.Repeat("a", 64),
+				LaunchRecipe:    clientadapter.LaunchNodeEnvProxy,
+			},
+			CreatedAt: created,
+			ExpiresAt: created.Add(time.Hour),
 		},
 		{
 			ID:              "run-unverified-sample",
@@ -34,11 +46,13 @@ func TestCaptureRunSamplesDescribeWhatTheRuntimeSends(t *testing.T) {
 			State:           capturerun.StateCreated,
 			Observation:     capturerun.ObservationWaitingForTraffic,
 			Recognition:     clientadapter.RecognitionUnverified,
+			CatalogRevision: 4,
 			CreatedAt:       created.Add(time.Minute),
 			ExpiresAt:       created.Add(time.Hour),
 		},
 	}
-	encoded, err := json.MarshalIndent(views, "", "  ")
+	page := desktopcontrol.CaptureRunAuditPageOf(capturerun.Page{Items: views})
+	encoded, err := json.MarshalIndent(page.Items, "", "  ")
 	if err != nil {
 		t.Fatal(err)
 	}

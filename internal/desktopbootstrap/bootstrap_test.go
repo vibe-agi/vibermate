@@ -76,6 +76,50 @@ func TestDescriptorClonePreservesExplicitEmptyWireCollections(t *testing.T) {
 	}
 }
 
+func TestRuntimeStartingProgressIsCapabilityFreeAndClosed(t *testing.T) {
+	t.Parallel()
+
+	progress := desktopbootstrap.RuntimeStartingProgress()
+	if err := progress.Validate(); err != nil {
+		t.Fatal(err)
+	}
+	payload, err := json.Marshal(progress)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(payload) !=
+		`{"schema":"vibermate-daemon-progress-v1","phase":"runtime_starting"}` {
+		t.Fatalf("progress wire payload = %s", payload)
+	}
+	progress.Phase = "unknown"
+	if err := progress.Validate(); err == nil {
+		t.Fatal("unknown bootstrap progress phase was accepted")
+	}
+}
+
+func TestStartupFailureCarriesOnlyAClosedReason(t *testing.T) {
+	t.Parallel()
+
+	failure := desktopbootstrap.StartupFailure(
+		desktopbootstrap.FailureStorageSchemaNewer,
+	)
+	if err := failure.Validate(); err != nil {
+		t.Fatal(err)
+	}
+	payload, err := json.Marshal(failure)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(payload) !=
+		`{"schema":"vibermate-daemon-failure-v1","reason":"storage_schema_newer"}` {
+		t.Fatalf("failure wire payload = %s", payload)
+	}
+	failure.Reason = "raw_database_error"
+	if err := failure.Validate(); err == nil {
+		t.Fatal("open-ended bootstrap failure was accepted")
+	}
+}
+
 func bootstrapRequest(
 	handler http.Handler,
 	nonce string,

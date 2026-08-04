@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"sync"
 	"time"
@@ -19,12 +20,25 @@ var (
 	ErrRedirectNotAllowed = errors.New("original-origin redirect is not allowed")
 )
 
+const (
+	responseCanceledClass = "response_canceled"
+	responseTimeoutClass  = "response_timeout"
+	responseFailureClass  = "response_body_failed"
+)
+
 type Options struct {
 	Coordinator offlinehold.Coordinator
 	Transport   http.RoundTripper
 	// Audit records one immutable attempt per real outbound. It is optional
 	// only so existing callers can be migrated; a wired runtime supplies it.
 	Audit egressaudit.Writer
+}
+
+// terminalFailureReporter is implemented by the production audit boundary.
+// Complete cannot return an error once an outbound response has been handed
+// off, so an invalid terminal must cross this explicit durability boundary.
+type terminalFailureReporter interface {
+	ReportTerminalFailure(error)
 }
 
 type operation struct {
@@ -224,12 +238,16 @@ func (client *Client) Do(
 	body := &leaseBody{
 		reader: counted,
 		close:  response.Body,
-		finish: func() {
+		finish: func(terminalErr error) {
+			outcome, errorClass := responseAuditTerminal(
+				activeContext,
+				terminalErr,
+			)
 			client.completeAudit(
 				context.WithoutCancel(activeContext),
 				record,
-				egressaudit.OutcomeCompleted,
-				"",
+				outcome,
+				errorClass,
 				int64(len(frozen.body)),
 				counted.count(),
 			)
@@ -333,13 +351,13 @@ type leaseBody struct {
 
 	reader io.Reader
 	close  io.Closer
-	finish func()
+	finish func(error)
 }
 
 func (body *leaseBody) Read(destination []byte) (int, error) {
 	count, err := body.reader.Read(destination)
 	if err != nil {
-		body.finalize()
+		body.finalize(err)
 	}
 	return count, err
 }
@@ -348,12 +366,42 @@ func (body *leaseBody) Close() error {
 	body.closeOnce.Do(func() {
 		body.closeErr = body.close.Close()
 	})
-	body.finalize()
+	body.finalize(body.closeErr)
 	return body.closeErr
 }
 
-func (body *leaseBody) finalize() {
-	body.once.Do(body.finish)
+func (body *leaseBody) finalize(err error) {
+	body.once.Do(func() {
+		body.finish(err)
+	})
+}
+
+func responseAuditTerminal(
+	operationContext context.Context,
+	terminalErr error,
+) (egressaudit.Outcome, string) {
+	cause := context.Cause(operationContext)
+	switch {
+	case errors.Is(cause, context.DeadlineExceeded):
+		return egressaudit.OutcomeFailed, responseTimeoutClass
+	case cause != nil:
+		return egressaudit.OutcomeCanceled, responseCanceledClass
+	case terminalErr == nil, errors.Is(terminalErr, io.EOF):
+		return egressaudit.OutcomeCompleted, ""
+	case errors.Is(terminalErr, context.Canceled),
+		errors.Is(terminalErr, ErrClientClosing):
+		return egressaudit.OutcomeCanceled, responseCanceledClass
+	case errors.Is(terminalErr, context.DeadlineExceeded),
+		responseErrorIsTimeout(terminalErr):
+		return egressaudit.OutcomeFailed, responseTimeoutClass
+	default:
+		return egressaudit.OutcomeFailed, responseFailureClass
+	}
+}
+
+func responseErrorIsTimeout(err error) bool {
+	var networkError net.Error
+	return errors.As(err, &networkError) && networkError.Timeout()
 }
 
 // beginAudit records the attempt before the first outbound byte. A record that
@@ -422,12 +470,30 @@ func (client *Client) completeAudit(
 		ErrorClass:  errorClass,
 		BytesOut:    bytesOut,
 		BytesIn:     bytesIn,
-		CompletedAt: client.clock(),
+		CompletedAt: completionTime(attempt, client.clock()),
 	})
 	if err != nil {
+		client.reportTerminalFailure(fmt.Errorf(
+			"construct original-origin EgressAttempt terminal: %w",
+			err,
+		))
 		return
 	}
 	_, _ = client.audit.Complete(ctx, terminal)
+}
+
+func (client *Client) reportTerminalFailure(err error) {
+	reporter, ok := client.audit.(terminalFailureReporter)
+	if ok {
+		reporter.ReportTerminalFailure(err)
+	}
+}
+
+func completionTime(attempt egressaudit.Attempt, completedAt time.Time) time.Time {
+	if !completedAt.IsZero() && completedAt.Before(attempt.StartedAt()) {
+		return attempt.StartedAt()
+	}
+	return completedAt
 }
 
 type countingReader struct {

@@ -5,6 +5,7 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 
@@ -94,12 +95,77 @@ func (repository *activityRepository) List(
 	ctx context.Context,
 	request activity.PageRequest,
 ) (activity.Page, error) {
+	return repository.list(
+		ctx,
+		request,
+		`SELECT
+		     sequence,
+		     activity_id,
+		     occurred_at_unix_ms,
+		     kind,
+		     access_id,
+		     subject_id,
+		     status,
+		     reason_code,
+		     provider_status,
+		     provider_field,
+		     client_field,
+		     client_path,
+		     transport_evidence_json
+		 FROM runtime_activities
+		 WHERE (? = 0 OR sequence < ?)
+		 ORDER BY sequence DESC
+		 LIMIT ?`,
+		false,
+		request.BeforeSequence,
+		request.BeforeSequence,
+		request.Limit,
+	)
+}
+
+func (repository *activityRepository) ListExchanges(
+	ctx context.Context,
+	request activity.PageRequest,
+) (activity.Page, error) {
 	if err := request.Validate(); err != nil {
 		return activity.Page{}, err
 	}
+	return repository.list(
+		ctx,
+		request,
+		`SELECT
+		     sequence,
+		     activity_id,
+		     occurred_at_unix_ms,
+		     kind,
+		     access_id,
+		     subject_id,
+		     status,
+		     reason_code,
+		     provider_status,
+		     provider_field,
+		     client_field,
+		     client_path,
+		     transport_evidence_json
+		 FROM runtime_activities
+		 WHERE kind = 'exchange.completed'
+		   AND (? = 0 OR sequence < ?)
+		 ORDER BY sequence DESC
+		 LIMIT ?`,
+		true,
+		request.BeforeSequence,
+		request.BeforeSequence,
+		request.Limit+1,
+	)
+}
+
+func (repository *activityRepository) GetExchange(
+	ctx context.Context,
+	exchangeID string,
+) (activity.Record, error) {
 	operation, finish, err := repository.operations.begin(ctx)
 	if err != nil {
-		return activity.Page{}, err
+		return activity.Record{}, err
 	}
 	defer finish()
 	rows, err := repository.database.QueryContext(
@@ -119,12 +185,56 @@ func (repository *activityRepository) List(
 		     client_path,
 		     transport_evidence_json
 		 FROM runtime_activities
-		 WHERE (? = 0 OR sequence < ?)
+		 WHERE kind = 'exchange.completed'
+		   AND subject_id = ?
 		 ORDER BY sequence DESC
-		 LIMIT ?`,
-		request.BeforeSequence,
-		request.BeforeSequence,
-		request.Limit,
+		 LIMIT 2`,
+		exchangeID,
+	)
+	if err != nil {
+		return activity.Record{}, fmt.Errorf("read Activity Exchange: %w", err)
+	}
+	defer rows.Close()
+	if !rows.Next() {
+		if err := rows.Err(); err != nil {
+			return activity.Record{}, fmt.Errorf("read Activity Exchange: %w", err)
+		}
+		return activity.Record{}, activity.ErrExchangeNotFound
+	}
+	record, err := scanActivityRecord(rows)
+	if err != nil {
+		return activity.Record{}, err
+	}
+	if rows.Next() {
+		return activity.Record{}, errors.New(
+			"Activity Exchange has more than one terminal record",
+		)
+	}
+	if err := rows.Err(); err != nil {
+		return activity.Record{}, fmt.Errorf("read Activity Exchange: %w", err)
+	}
+	return record, nil
+}
+
+func (repository *activityRepository) list(
+	ctx context.Context,
+	request activity.PageRequest,
+	query string,
+	lookAhead bool,
+	arguments ...any,
+) (activity.Page, error) {
+	if err := request.Validate(); err != nil {
+		return activity.Page{}, err
+	}
+	operation, finish, err := repository.operations.begin(ctx)
+	if err != nil {
+		return activity.Page{}, err
+	}
+	defer finish()
+	rows, err := repository.database.QueryContext(
+		operation,
+		query,
+		arguments...,
 	)
 	if err != nil {
 		return activity.Page{}, fmt.Errorf("list Activities: %w", err)
@@ -132,50 +242,66 @@ func (repository *activityRepository) List(
 	defer rows.Close()
 	page := activity.Page{Items: make([]activity.Record, 0)}
 	for rows.Next() {
-		var record activity.Record
-		var occurredAt int64
-		var diagnosis activity.Diagnosis
-		var transportEvidence []byte
-		if err := rows.Scan(
-			&record.Sequence,
-			&record.ID,
-			&occurredAt,
-			&record.Kind,
-			&record.AccessID,
-			&record.SubjectID,
-			&record.Status,
-			&record.ReasonCode,
-			&diagnosis.ProviderStatus,
-			&diagnosis.ProviderField,
-			&diagnosis.ClientField,
-			&diagnosis.ClientPath,
-			&transportEvidence,
-		); err != nil {
-			return activity.Page{}, fmt.Errorf("scan Activity: %w", err)
-		}
-		record.OccurredAt = fromUnixMillis(occurredAt)
-		if stored := diagnosis; !stored.Empty() {
-			record.Diagnosis = &stored
-		}
-		record.Transport, err = decodeTransportEvidence(transportEvidence)
+		record, err := scanActivityRecord(rows)
 		if err != nil {
-			return activity.Page{}, fmt.Errorf(
-				"decode Activity transport evidence: %w",
-				err,
-			)
-		}
-		if err := record.Validate(); err != nil {
-			return activity.Page{}, fmt.Errorf("validate stored Activity: %w", err)
+			return activity.Page{}, err
 		}
 		page.Items = append(page.Items, record)
 	}
 	if err := rows.Err(); err != nil {
 		return activity.Page{}, fmt.Errorf("iterate Activities: %w", err)
 	}
-	if len(page.Items) == request.Limit {
+	if lookAhead && len(page.Items) > request.Limit {
+		page.Items = page.Items[:request.Limit]
+		page.NextBeforeSequence = page.Items[len(page.Items)-1].Sequence
+	} else if !lookAhead && len(page.Items) == request.Limit {
 		page.NextBeforeSequence = page.Items[len(page.Items)-1].Sequence
 	}
 	return page, nil
+}
+
+type activityScanner interface {
+	Scan(...any) error
+}
+
+func scanActivityRecord(scanner activityScanner) (activity.Record, error) {
+	var record activity.Record
+	var occurredAt int64
+	var diagnosis activity.Diagnosis
+	var transportEvidence []byte
+	if err := scanner.Scan(
+		&record.Sequence,
+		&record.ID,
+		&occurredAt,
+		&record.Kind,
+		&record.AccessID,
+		&record.SubjectID,
+		&record.Status,
+		&record.ReasonCode,
+		&diagnosis.ProviderStatus,
+		&diagnosis.ProviderField,
+		&diagnosis.ClientField,
+		&diagnosis.ClientPath,
+		&transportEvidence,
+	); err != nil {
+		return activity.Record{}, fmt.Errorf("scan Activity: %w", err)
+	}
+	record.OccurredAt = fromUnixMillis(occurredAt)
+	if stored := diagnosis; !stored.Empty() {
+		record.Diagnosis = &stored
+	}
+	var err error
+	record.Transport, err = decodeTransportEvidence(transportEvidence)
+	if err != nil {
+		return activity.Record{}, fmt.Errorf(
+			"decode Activity transport evidence: %w",
+			err,
+		)
+	}
+	if err := record.Validate(); err != nil {
+		return activity.Record{}, fmt.Errorf("validate stored Activity: %w", err)
+	}
+	return record, nil
 }
 
 func encodeTransportEvidence(

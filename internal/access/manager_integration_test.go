@@ -59,7 +59,9 @@ func TestAccessPlanCASPublishesImmutablePlanAndRestores(t *testing.T) {
 	if err != nil {
 		t.Fatalf("create Access: %v", err)
 	}
-	if created.Outcome != access.WriteOutcomeCommitted || created.Revision != 1 {
+	if created.Outcome != access.WriteOutcomeCommitted ||
+		created.Revision != 1 ||
+		created.PlanHash.IsZero() {
 		t.Fatalf("create result = %+v", created)
 	}
 	first, err := manager.ResolveAccess(accessID)
@@ -67,6 +69,9 @@ func TestAccessPlanCASPublishesImmutablePlanAndRestores(t *testing.T) {
 		t.Fatalf("resolve revision one: %v", err)
 	}
 	assertCompletePlan(t, first, 1, "Primary")
+	if created.PlanHash != first.PlanHash() {
+		t.Fatal("create receipt does not identify the published candidate")
+	}
 
 	// Mutating every mutable input collection after the write cannot alter the
 	// compiled active plan.
@@ -90,7 +95,9 @@ func TestAccessPlanCASPublishesImmutablePlanAndRestores(t *testing.T) {
 	if err != nil {
 		t.Fatalf("update Access: %v", err)
 	}
-	if updated.Outcome != access.WriteOutcomeCommitted || updated.Revision != 2 {
+	if updated.Outcome != access.WriteOutcomeCommitted ||
+		updated.Revision != 2 ||
+		updated.PlanHash.IsZero() {
 		t.Fatalf("update result = %+v", updated)
 	}
 	if oldHandle.Revision() != 1 || oldHandle.Binding().Name != "Primary" {
@@ -105,6 +112,9 @@ func TestAccessPlanCASPublishesImmutablePlanAndRestores(t *testing.T) {
 		t.Fatalf("resolve revision two: %v", err)
 	}
 	assertCompletePlan(t, current, 2, "Primary updated")
+	if updated.PlanHash != current.PlanHash() {
+		t.Fatal("update receipt does not identify the published candidate")
+	}
 	if current.PlanHash() == oldHandle.PlanHash() {
 		t.Fatal("different aggregate revisions produced the same plan hash")
 	}
@@ -290,12 +300,14 @@ func TestConcurrentCASPublishesExactlyOneNewPlan(t *testing.T) {
 	close(start)
 
 	var committed, conflicts int
+	var committedHash access.PlanHash
 	for range 2 {
 		response := <-responses
 		switch {
 		case response.err == nil &&
 			response.result.Outcome == access.WriteOutcomeCommitted:
 			committed++
+			committedHash = response.result.PlanHash
 		case errors.Is(response.err, access.ErrRevisionConflict) &&
 			response.result.Outcome == access.WriteOutcomeNotCommitted:
 			conflicts++
@@ -317,6 +329,9 @@ func TestConcurrentCASPublishesExactlyOneNewPlan(t *testing.T) {
 	if plan.Revision() != 2 ||
 		(plan.Binding().Name != "Writer A" && plan.Binding().Name != "Writer B") {
 		t.Fatalf("active winner revision=%d name=%q", plan.Revision(), plan.Binding().Name)
+	}
+	if committedHash.IsZero() || committedHash != plan.PlanHash() {
+		t.Fatal("concurrent winner receipt does not identify its published candidate")
 	}
 }
 
@@ -440,6 +455,11 @@ func TestWriterOwnershipSpansCommitThroughPlanPublication(t *testing.T) {
 			err,
 		)
 	}
+	if first.result.PlanHash.IsZero() ||
+		second.result.PlanHash != active.PlanHash() ||
+		first.result.PlanHash == second.result.PlanHash {
+		t.Fatal("serialized writes did not retain their exact publication receipts")
+	}
 }
 
 func TestPublicationFailurePoisonsOnlyAffectedAccess(t *testing.T) {
@@ -474,6 +494,7 @@ func TestPublicationFailurePoisonsOnlyAffectedAccess(t *testing.T) {
 	})
 	if result.Outcome != access.WriteOutcomeCommitted ||
 		result.Revision != 2 ||
+		!result.PlanHash.IsZero() ||
 		!errors.Is(err, access.ErrProjectionUnavailable) {
 		t.Fatalf("publication failure result=%+v err=%v", result, err)
 	}
@@ -580,6 +601,7 @@ func TestDisabledWithdrawalPublicationFailurePoisonsUntilRecovery(
 	)
 	if result.Outcome != access.WriteOutcomeCommitted ||
 		result.Revision != 2 ||
+		!result.PlanHash.IsZero() ||
 		!errors.Is(err, access.ErrProjectionUnavailable) {
 		t.Fatalf("withdrawal failure result=%+v error=%v", result, err)
 	}
@@ -1015,7 +1037,8 @@ func TestDisabledAccessCommitsWithdrawalAndRestoresAsInactive(t *testing.T) {
 		},
 	)
 	if err != nil || result.Outcome != access.WriteOutcomeCommitted ||
-		result.Revision != 2 {
+		result.Revision != 2 ||
+		!result.PlanHash.IsZero() {
 		t.Fatalf("disable result=%+v error=%v", result, err)
 	}
 	if _, err := manager.ResolveAccess(accessID); !errors.Is(
@@ -1023,6 +1046,16 @@ func TestDisabledAccessCommitsWithdrawalAndRestoresAsInactive(t *testing.T) {
 		access.ErrAccessNotConfigured,
 	) {
 		t.Fatalf("disabled active projection error = %v", err)
+	}
+	durable, exists, err := manager.ReadAccess(context.Background(), accessID)
+	if err != nil || !exists || durable.Binding.Revision != 2 ||
+		durable.Binding.Status != access.AccessStatusDisabled {
+		t.Fatalf("read disabled Access exists=%t aggregate=%+v error=%v", exists, durable, err)
+	}
+	durable.Profiles[0].Name = "mutated caller copy"
+	again, exists, err := manager.ReadAccess(context.Background(), accessID)
+	if err != nil || !exists || again.Profiles[0].Name == "mutated caller copy" {
+		t.Fatalf("manager read exposed mutable aggregate exists=%t aggregate=%+v error=%v", exists, again, err)
 	}
 	aggregates, err := store.AccessRepository().LoadAll(context.Background())
 	if err != nil || len(aggregates) != 1 ||
@@ -1033,6 +1066,12 @@ func TestDisabledAccessCommitsWithdrawalAndRestoresAsInactive(t *testing.T) {
 	if err := manager.Shutdown(context.Background()); err != nil {
 		t.Fatal(err)
 	}
+	if _, exists, err := manager.ReadAccess(
+		context.Background(),
+		accessID,
+	); exists || !errors.Is(err, access.ErrAccessRuntimeStopping) {
+		t.Fatalf("stopped manager read exists=%t error=%v", exists, err)
+	}
 
 	recovered := newManager(t, store, newProjection(t))
 	defer shutdownManager(t, recovered)
@@ -1041,6 +1080,26 @@ func TestDisabledAccessCommitsWithdrawalAndRestoresAsInactive(t *testing.T) {
 		access.ErrAccessNotConfigured,
 	) {
 		t.Fatalf("recovered disabled Access error = %v", err)
+	}
+	recoveredAggregate, exists, err := recovered.ReadAccess(
+		context.Background(),
+		accessID,
+	)
+	if err != nil || !exists ||
+		recoveredAggregate.Binding.Status != access.AccessStatusDisabled {
+		t.Fatalf("read recovered disabled Access exists=%t aggregate=%+v error=%v", exists, recoveredAggregate, err)
+	}
+	canceled, cancel := context.WithCancel(context.Background())
+	cancel()
+	if _, exists, err := recovered.ReadAccess(canceled, accessID); exists ||
+		!errors.Is(err, context.Canceled) {
+		t.Fatalf("canceled manager read exists=%t error=%v", exists, err)
+	}
+	if _, exists, err := recovered.ReadAccess(
+		context.Background(),
+		newAccessID(t, "access-missing-read"),
+	); err != nil || exists {
+		t.Fatalf("missing manager read exists=%t error=%v", exists, err)
 	}
 	reenabled := testAggregate(t, accessID, 3, "Re-enabled Access")
 	reenabled.AgentEndpoint.Revision = 2

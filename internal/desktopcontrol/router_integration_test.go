@@ -10,6 +10,7 @@ import (
 	"net/http/httptest"
 	"path/filepath"
 	"strconv"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -29,6 +30,8 @@ import (
 	"github.com/vibe-agi/vibermate/internal/secretstore"
 	"github.com/vibe-agi/vibermate/internal/toolapproval"
 )
+
+const desktopControlIntegrationStartupTimeout = 60 * time.Second
 
 func TestDesktopControlAppliesAccessAndControlsOfflineHoldWithScopedAuth(
 	t *testing.T,
@@ -52,16 +55,17 @@ func TestDesktopControlAppliesAccessAndControlsOfflineHoldWithScopedAuth(
 		t.Fatal(err)
 	}
 	application, err := desktopcontrol.New(desktopcontrol.Options{
-		Readiness:   readyState(true),
-		Status:      runtime,
-		Accesses:    runtime.AccessWriter(),
-		Resolver:    runtime.SnapshotResolver(),
-		Credentials: runtime.Credentials(),
-		Activities:  runtime.Activities(),
-		Connections: runtime.ConnectionEvents(),
-		Egress:      runtime.EgressAttempts(),
-		Approvals:   runtime.ToolApprovals(),
-		Offline:     runtime,
+		Readiness:     readyState(true),
+		Status:        runtime,
+		Accesses:      runtime.AccessWriter(),
+		AccessCatalog: runtime.AccessCatalog(),
+		Resolver:      runtime.SnapshotResolver(),
+		Credentials:   runtime.Credentials(),
+		Activities:    runtime.Activities(),
+		Connections:   runtime.ConnectionEvents(),
+		Egress:        runtime.EgressAttempts(),
+		Approvals:     runtime.ToolApprovals(),
+		Offline:       runtime,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -121,7 +125,10 @@ func TestDesktopControlAppliesAccessAndControlsOfflineHoldWithScopedAuth(
 			emptyActivities.Body.Bytes(),
 		)
 	}
-	var emptyActivityPage activity.Page
+	if strings.TrimSpace(emptyActivities.Body.String()) != `{"items":[]}` {
+		t.Fatalf("empty Activity wire = %s", emptyActivities.Body.Bytes())
+	}
+	var emptyActivityPage desktopcontrol.ActivityPage
 	decodeResponse(t, emptyActivities, &emptyActivityPage)
 	if emptyActivityPage.Items == nil || len(emptyActivityPage.Items) != 0 {
 		t.Fatalf("empty Activity page = %+v", emptyActivityPage)
@@ -321,15 +328,58 @@ func TestDesktopControlAppliesAccessAndControlsOfflineHoldWithScopedAuth(
 		readToken,
 		nil,
 	)
+	var notConfiguredProblem map[string]json.RawMessage
+	if err := json.Unmarshal(
+		notConfigured.Body.Bytes(),
+		&notConfiguredProblem,
+	); err != nil {
+		t.Fatal(err)
+	}
 	if notConfigured.Code != http.StatusNotFound ||
-		!bytes.Contains(
-			notConfigured.Body.Bytes(),
-			[]byte(`"reasonCode":"access_not_configured"`),
-		) {
+		len(notConfiguredProblem) != 4 ||
+		string(notConfiguredProblem["type"]) !=
+			`"urn:vibermate:error:access-not-configured"` ||
+		string(notConfiguredProblem["title"]) != `"Not Found"` ||
+		string(notConfiguredProblem["status"]) != "404" ||
+		string(notConfiguredProblem["code"]) != `"access_not_configured"` {
 		t.Fatalf(
 			"missing plan code=%d body=%s",
 			notConfigured.Code,
 			notConfigured.Body.Bytes(),
+		)
+	}
+
+	unauthenticatedAccesses := doRequest(
+		t,
+		router,
+		authority,
+		http.MethodGet,
+		"/api/v1/accesses",
+		"",
+		nil,
+	)
+	if unauthenticatedAccesses.Code != http.StatusUnauthorized {
+		t.Fatalf(
+			"unauthenticated Access list code=%d body=%s",
+			unauthenticatedAccesses.Code,
+			unauthenticatedAccesses.Body.Bytes(),
+		)
+	}
+	emptyAccesses := doRequest(
+		t,
+		router,
+		authority,
+		http.MethodGet,
+		"/api/v1/accesses",
+		readToken,
+		nil,
+	)
+	if emptyAccesses.Code != http.StatusOK ||
+		strings.TrimSpace(emptyAccesses.Body.String()) != `{"items":[]}` {
+		t.Fatalf(
+			"empty Access list code=%d body=%s",
+			emptyAccesses.Code,
+			emptyAccesses.Body.Bytes(),
 		)
 	}
 
@@ -356,6 +406,7 @@ func TestDesktopControlAppliesAccessAndControlsOfflineHoldWithScopedAuth(
 	decodeResponse(t, applied, &applyResult)
 	if applyResult.Outcome != access.WriteOutcomeCommitted ||
 		applyResult.Revision != 1 ||
+		applyResult.ApplicationState != desktopcontrol.AccessApplicationStateActive ||
 		len(applyResult.PlanHash) != 64 {
 		t.Fatalf("Access apply response = %+v", applyResult)
 	}
@@ -363,6 +414,62 @@ func TestDesktopControlAppliesAccessAndControlsOfflineHoldWithScopedAuth(
 	active, err := runtime.SnapshotResolver().ResolveAccess(accessID)
 	if err != nil || active.Revision() != 1 {
 		t.Fatalf("active Access revision=%d err=%v", active.Revision(), err)
+	}
+	accesses := doRequest(
+		t,
+		router,
+		authority,
+		http.MethodGet,
+		"/api/v1/accesses",
+		readToken,
+		nil,
+	)
+	if accesses.Code != http.StatusOK {
+		t.Fatalf("Access list code=%d body=%s", accesses.Code, accesses.Body.Bytes())
+	}
+	var accessList desktopcontrol.AccessListResponse
+	decodeResponse(t, accesses, &accessList)
+	if len(accessList.Items) != 1 ||
+		accessList.Items[0].AccessID != "access-control" ||
+		accessList.Items[0].Name != "Control Access" ||
+		accessList.Items[0].Revision != 1 {
+		t.Fatalf("Access list = %+v", accessList)
+	}
+	accessDetail := doRequest(
+		t,
+		router,
+		authority,
+		http.MethodGet,
+		"/api/v1/accesses/access-control",
+		readToken,
+		nil,
+	)
+	if accessDetail.Code != http.StatusOK ||
+		accessDetail.Header().Get("ETag") != `"revision-1"` ||
+		bytes.Contains(accessDetail.Body.Bytes(), []byte("secret://")) ||
+		bytes.Contains(accessDetail.Body.Bytes(), []byte("secretRef")) {
+		t.Fatalf(
+			"Access detail code=%d ETag=%q body=%s",
+			accessDetail.Code,
+			accessDetail.Header().Get("ETag"),
+			accessDetail.Body.Bytes(),
+		)
+	}
+	missingAccess := doRequest(
+		t,
+		router,
+		authority,
+		http.MethodGet,
+		"/api/v1/accesses/missing-access",
+		readToken,
+		nil,
+	)
+	if missingAccess.Code != http.StatusNotFound {
+		t.Fatalf(
+			"missing Access code=%d body=%s",
+			missingAccess.Code,
+			missingAccess.Body.Bytes(),
+		)
 	}
 	plan := doRequest(
 		t,
@@ -434,6 +541,30 @@ func TestDesktopControlAppliesAccessAndControlsOfflineHoldWithScopedAuth(
 		active.Binding().Name != "Control Access" {
 		t.Fatalf("idempotency conflict changed active plan: %+v err=%v", active.Binding(), err)
 	}
+	disabledInput := validApplyInput()
+	disabledInput.ExpectedRevision = 1
+	disabledInput.Access.Status = string(access.AccessStatusDisabled)
+	disabledBody, err := json.Marshal(disabledInput)
+	if err != nil {
+		t.Fatal(err)
+	}
+	disabled := doMutation(
+		t,
+		router,
+		authority,
+		"/api/v1/accesses/access-control/actions/apply",
+		writeToken,
+		1,
+		"access-apply-disabled-0001",
+		disabledBody,
+	)
+	if disabled.Code != http.StatusUnprocessableEntity {
+		t.Fatalf("disabled apply code=%d body=%s", disabled.Code, disabled.Body.Bytes())
+	}
+	active, err = runtime.SnapshotResolver().ResolveAccess(accessID)
+	if err != nil || active.Revision() != 1 {
+		t.Fatalf("disabled apply changed active plan revision=%d err=%v", active.Revision(), err)
+	}
 
 	credentialPath := "/api/v1/accesses/access-control/profiles/" +
 		"access-control-profile/credentials/access-control-account"
@@ -479,11 +610,11 @@ func TestDesktopControlAppliesAccessAndControlsOfflineHoldWithScopedAuth(
 	if invalidCredential.Code != http.StatusUnprocessableEntity ||
 		!bytes.Contains(
 			invalidCredential.Body.Bytes(),
-			[]byte(`"reasonCode":"credential_value_invalid"`),
+			[]byte(`"code":"credential_value_invalid"`),
 		) ||
 		!bytes.Contains(
 			invalidCredential.Body.Bytes(),
-			[]byte(`"messageKey":"error.credential_value_invalid"`),
+			[]byte(`"title":"Unprocessable Entity"`),
 		) {
 		t.Fatalf(
 			"invalid credential code=%d body=%s",
@@ -554,11 +685,21 @@ func TestDesktopControlAppliesAccessAndControlsOfflineHoldWithScopedAuth(
 	if activities.Code != http.StatusOK {
 		t.Fatalf("activities code=%d body=%s", activities.Code, activities.Body.Bytes())
 	}
-	var page activity.Page
+	var page desktopcontrol.ActivityPage
 	decodeResponse(t, activities, &page)
+	if len(page.Items) != 0 {
+		t.Fatalf("public Activity page exposed management events: %+v", page)
+	}
+	rawPage, err := runtime.Activities().List(
+		context.Background(),
+		activity.PageRequest{Limit: 20},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
 	foundApply := false
 	foundCredential := false
-	for _, record := range page.Items {
+	for _, record := range rawPage.Items {
 		if record.Kind == activity.KindAccessApplied &&
 			record.AccessID == "access-control" {
 			foundApply = true
@@ -570,7 +711,7 @@ func TestDesktopControlAppliesAccessAndControlsOfflineHoldWithScopedAuth(
 		}
 	}
 	if !foundApply || !foundCredential {
-		t.Fatalf("Activity page does not contain Access apply: %+v", page)
+		t.Fatalf("raw Activity page lost management evidence: %+v", rawPage)
 	}
 }
 
@@ -625,16 +766,17 @@ func TestDesktopControlApprovalRouteResolvesDurableAuthority(
 		t.Fatal(err)
 	}
 	application, err := desktopcontrol.New(desktopcontrol.Options{
-		Readiness:   readyState(true),
-		Status:      runtime,
-		Accesses:    runtime.AccessWriter(),
-		Resolver:    runtime.SnapshotResolver(),
-		Credentials: runtime.Credentials(),
-		Activities:  runtime.Activities(),
-		Connections: runtime.ConnectionEvents(),
-		Egress:      runtime.EgressAttempts(),
-		Approvals:   approvalAuthority,
-		Offline:     runtime,
+		Readiness:     readyState(true),
+		Status:        runtime,
+		Accesses:      runtime.AccessWriter(),
+		AccessCatalog: runtime.AccessCatalog(),
+		Resolver:      runtime.SnapshotResolver(),
+		Credentials:   runtime.Credentials(),
+		Activities:    runtime.Activities(),
+		Connections:   runtime.ConnectionEvents(),
+		Egress:        runtime.EgressAttempts(),
+		Approvals:     approvalAuthority,
+		Offline:       runtime,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -799,16 +941,17 @@ func TestDesktopControlRejectsCapabilityAndTransportBoundaryConfusion(t *testing
 		t.Fatal(err)
 	}
 	application, err := desktopcontrol.New(desktopcontrol.Options{
-		Readiness:   readyState(true),
-		Status:      runtime,
-		Accesses:    runtime.AccessWriter(),
-		Resolver:    runtime.SnapshotResolver(),
-		Credentials: runtime.Credentials(),
-		Activities:  runtime.Activities(),
-		Connections: runtime.ConnectionEvents(),
-		Egress:      runtime.EgressAttempts(),
-		Approvals:   runtime.ToolApprovals(),
-		Offline:     runtime,
+		Readiness:     readyState(true),
+		Status:        runtime,
+		Accesses:      runtime.AccessWriter(),
+		AccessCatalog: runtime.AccessCatalog(),
+		Resolver:      runtime.SnapshotResolver(),
+		Credentials:   runtime.Credentials(),
+		Activities:    runtime.Activities(),
+		Connections:   runtime.ConnectionEvents(),
+		Egress:        runtime.EgressAttempts(),
+		Approvals:     runtime.ToolApprovals(),
+		Offline:       runtime,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -1024,7 +1167,13 @@ func startRuntime(t *testing.T) *productruntime.Runtime {
 	if err != nil {
 		t.Fatal(err)
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	// This starts the complete production runtime, including all embedded SQLite
+	// migrations. Under the full repository race job many such fixtures compete
+	// for CPU, so this harness bound must not masquerade as a product deadline.
+	ctx, cancel := context.WithTimeout(
+		context.Background(),
+		desktopControlIntegrationStartupTimeout,
+	)
 	defer cancel()
 	runtime, err := productruntime.Start(ctx, productruntime.Options{
 		Paths:          paths,

@@ -44,8 +44,16 @@ type CommitResult struct {
 	ActualRevision Revision
 }
 
+// AggregateReader reads the durable Access configuration rather than the
+// process-local active-plan projection. A missing Access is not a repository
+// failure: Load returns a zero Aggregate, false, and a nil error.
+type AggregateReader interface {
+	Load(context.Context, AccessID) (Aggregate, bool, error)
+}
+
 // Repository is the SQLite persistence port consumed by Manager.
 type Repository interface {
+	AggregateReader
 	LoadAll(context.Context) ([]Aggregate, error)
 	CompareAndSwap(context.Context, Mutation) (CommitResult, error)
 }

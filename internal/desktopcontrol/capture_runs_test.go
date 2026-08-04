@@ -1,19 +1,63 @@
 package desktopcontrol_test
 
 import (
+	"bytes"
+	"context"
 	"encoding/json"
 	"net/http"
+	"reflect"
+	"sort"
+	"strings"
 	"testing"
+	"time"
+
+	"github.com/vibe-agi/vibermate/internal/capturerun"
+	"github.com/vibe-agi/vibermate/internal/clientadapter"
+	"github.com/vibe-agi/vibermate/internal/desktopcontrol"
 )
 
-// "Is my client actually going through vibermate" had no answer through the
-// control API. The read carries no capability in either direction: it says
-// what a run is and whether anything was seen through it, and never how to
-// act on one.
-func TestCaptureRunsAreReadableWithoutCarryingACapability(t *testing.T) {
+type fixedCaptureRunReader struct {
+	page capturerun.Page
+}
+
+func (reader fixedCaptureRunReader) ListRuns(
+	context.Context,
+	capturerun.PageRequest,
+) (capturerun.Page, error) {
+	return reader.page, nil
+}
+
+// The Desktop-only GET keeps lifecycle/observation diagnostics while sharing
+// the exact safe adapter projection used by the contracted launcher routes.
+func TestCaptureRunsUseASeparateCapabilityFreeAuditProjection(t *testing.T) {
 	t.Parallel()
 
-	fixture := newAuditFixture(t)
+	createdAt := time.Date(2026, 8, 2, 10, 0, 0, 0, time.UTC)
+	fixture := newAuditFixture(t, fixedCaptureRunReader{
+		page: capturerun.Page{Items: []capturerun.View{{
+			ID:              "run-verified-sample",
+			ExecutableLabel: "claude",
+			CWD:             "/Users/example/project",
+			ProcessID:       4242,
+			State:           capturerun.StateAttached,
+			Observation:     capturerun.ObservationObserved,
+			Recognition:     clientadapter.RecognitionVerified,
+			CatalogRevision: 4,
+			Adapter: &clientadapter.Evidence{
+				ID:              "claude-code",
+				Revision:        1,
+				Version:         "2.1.220",
+				CatalogRevision: 4,
+				InstallShape:    clientadapter.InstallNativeSingleBinary,
+				ReleaseSHA256:   strings.Repeat("a", 64),
+				LaunchRecipe:    clientadapter.LaunchNodeEnvProxy,
+				Features: clientadapter.
+					FeatureResponsesWebSocketHTTPFallback,
+			},
+			CreatedAt: createdAt,
+			ExpiresAt: createdAt.Add(time.Hour),
+		}}},
+	})
 	recorded := doRequest(
 		t,
 		fixture.router,
@@ -26,47 +70,82 @@ func TestCaptureRunsAreReadableWithoutCarryingACapability(t *testing.T) {
 	if recorded.Code != http.StatusOK {
 		t.Fatalf("status = %d body = %s", recorded.Code, recorded.Body)
 	}
-	var page struct {
-		Items []map[string]any `json:"items"`
+	pageObject := exactCaptureObject(t, recorded.Body.Bytes(), []string{"items"})
+	var items []json.RawMessage
+	if err := json.Unmarshal(pageObject["items"], &items); err != nil || len(items) != 1 {
+		t.Fatalf("capture items=%d err=%v body=%s", len(items), err, recorded.Body.Bytes())
 	}
+	runObject := exactCaptureObject(t, items[0], []string{
+		"catalogRevision",
+		"clientAdapter",
+		"clientAdapterState",
+		"clientRecognition",
+		"createdAt",
+		"cwd",
+		"executableLabel",
+		"expiresAt",
+		"id",
+		"observation",
+		"processId",
+		"recognition",
+		"state",
+	})
+	exactCaptureObject(t, runObject["clientAdapter"], []string{
+		"catalogRevision",
+		"id",
+		"installShape",
+		"launchRecipe",
+		"revision",
+		"source",
+		"version",
+	})
+	var page desktopcontrol.CaptureRunAuditPage
 	if err := json.Unmarshal(recorded.Body.Bytes(), &page); err != nil {
 		t.Fatal(err)
 	}
-	body := recorded.Body.String()
-	for _, forbidden := range []string{
-		"proxyCapability",
-		"controlCapability",
-		"capabilityHash",
+	run := page.Items[0]
+	if run.State != capturerun.StateAttached ||
+		run.Observation != capturerun.ObservationObserved ||
+		run.Recognition != clientadapter.RecognitionVerified ||
+		run.ClientAdapterState != clientadapter.StatusVerified ||
+		run.ClientRecognition != clientadapter.RecognitionVerified ||
+		run.CatalogRevision != 4 || run.ClientAdapter == nil {
+		t.Fatalf("capture audit view = %+v", run)
+	}
+	for _, forbidden := range [][]byte{
+		[]byte(`"proxyToken"`),
+		[]byte(`"runCapability"`),
+		[]byte(`"proxyCapability"`),
+		[]byte(`"controlCapability"`),
+		[]byte(`"capabilityHash"`),
+		[]byte(`"releaseSha256"`),
+		[]byte(`"features"`),
 	} {
-		if bodyContains(body, forbidden) {
-			t.Fatalf("the read carried %q: %s", forbidden, body)
-		}
-	}
-	for _, item := range page.Items {
-		for _, field := range []string{
-			"id",
-			"executableLabel",
-			"state",
-			"observation",
-			"recognition",
-		} {
-			if _, found := item[field]; !found {
-				t.Fatalf("a run is missing %q: %+v", field, item)
-			}
+		if bytes.Contains(recorded.Body.Bytes(), forbidden) {
+			t.Fatalf("the audit read leaked %s: %s", forbidden, recorded.Body.Bytes())
 		}
 	}
 }
 
-func bodyContains(body string, needle string) bool {
-	return len(needle) > 0 && len(body) >= len(needle) &&
-		indexOf(body, needle) >= 0
-}
-
-func indexOf(haystack string, needle string) int {
-	for index := 0; index+len(needle) <= len(haystack); index++ {
-		if haystack[index:index+len(needle)] == needle {
-			return index
-		}
+func exactCaptureObject(
+	t *testing.T,
+	payload []byte,
+	wantKeys []string,
+) map[string]json.RawMessage {
+	t.Helper()
+	var object map[string]json.RawMessage
+	if err := json.Unmarshal(payload, &object); err != nil {
+		t.Fatalf("decode JSON object: %v; payload=%s", err, payload)
 	}
-	return -1
+	gotKeys := make([]string, 0, len(object))
+	for key := range object {
+		gotKeys = append(gotKeys, key)
+	}
+	sort.Strings(gotKeys)
+	wantKeys = append([]string(nil), wantKeys...)
+	sort.Strings(wantKeys)
+	if !reflect.DeepEqual(gotKeys, wantKeys) {
+		t.Fatalf("JSON keys=%v want=%v payload=%s", gotKeys, wantKeys, payload)
+	}
+	return object
 }

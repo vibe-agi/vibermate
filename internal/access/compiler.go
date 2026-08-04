@@ -894,8 +894,17 @@ func (compiler *Compiler) validateRelationships(aggregate Aggregate) error {
 			return ErrUnsupportedCardinality
 		}
 		for _, profileID := range routeSet.CandidateProfileIDs {
-			if _, exists := profiles[profileID]; !exists {
+			profile, exists := profiles[profileID]
+			if !exists {
 				return fmt.Errorf("%w: RouteSet profile %q", ErrDanglingReference, profileID.String())
+			}
+			defaultAccount, exists := accounts[profile.DefaultAccountBindingID]
+			if !exists || !defaultAccount.Enabled {
+				return fmt.Errorf(
+					"%w: RouteSet profile %q has a disabled default account",
+					ErrInvalidAccessPlan,
+					profileID.String(),
+				)
 			}
 		}
 		if _, duplicate := routeSets[routeSet.ID]; duplicate {
@@ -1013,9 +1022,6 @@ func validateProfileAccounts(
 	defaultAccount, exists := accounts[profile.DefaultAccountBindingID]
 	if !exists || defaultAccount.ProfileID != profile.ID {
 		return fmt.Errorf("%w: default account", ErrDanglingReference)
-	}
-	if !defaultAccount.Enabled {
-		return fmt.Errorf("%w: default account is disabled", ErrInvalidAccessPlan)
 	}
 	return nil
 }

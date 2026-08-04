@@ -51,7 +51,7 @@ func (revision AdapterRevision) Valid() bool {
 type LaunchRecipe string
 
 const (
-	LaunchGeneric      LaunchRecipe = "generic_proxy"
+	LaunchGeneric      LaunchRecipe = "generic_http_proxy"
 	LaunchNodeEnvProxy LaunchRecipe = "node_env_proxy"
 	LaunchSSLCertFile  LaunchRecipe = "ssl_cert_file"
 )
@@ -233,6 +233,36 @@ func signerSortKey(signer Signer) string {
 
 func (catalog Catalog) Revision() CatalogRevision {
 	return catalog.revision
+}
+
+// ExpectedEvidence returns the exact immutable evidence values for one catalog
+// release. It does not verify an executable; callers use it to compare evidence
+// that a Verifier already produced with the catalog entry they selected.
+func (catalog Catalog) ExpectedEvidence(id, version string) (Evidence, bool) {
+	normalized, err := NewCatalogWithSigners(
+		catalog.revision,
+		catalog.releases,
+		catalog.signers,
+	)
+	if err != nil {
+		return Evidence{}, false
+	}
+	for _, release := range normalized.releases {
+		if release.ID != id || release.Version != version {
+			continue
+		}
+		return Evidence{
+			ID:              release.ID,
+			Revision:        release.Revision,
+			Version:         release.Version,
+			CatalogRevision: normalized.revision,
+			InstallShape:    release.InstallShape,
+			ReleaseSHA256:   releaseEvidenceDigest(release),
+			LaunchRecipe:    release.LaunchRecipe,
+			Features:        release.Features,
+		}, true
+	}
+	return Evidence{}, false
 }
 
 func (catalog Catalog) Valid() bool {

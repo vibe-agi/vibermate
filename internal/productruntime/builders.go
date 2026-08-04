@@ -31,6 +31,7 @@ import (
 	"github.com/vibe-agi/vibermate/internal/secretstore"
 	"github.com/vibe-agi/vibermate/internal/toolapproval"
 	"github.com/vibe-agi/vibermate/internal/transportprofile"
+	"github.com/vibe-agi/vibermate/internal/workspaceroute"
 )
 
 type storageBuildRequest struct {
@@ -78,6 +79,7 @@ type accessBuildRequest struct {
 }
 
 type accessRuntime interface {
+	access.AggregateCatalog
 	access.Writer
 	access.SnapshotResolver
 	access.IngressResolver
@@ -150,6 +152,12 @@ func productionAccessPlanCompiler() (*access.Compiler, error) {
 	if err != nil {
 		return nil, err
 	}
+	messagesCodecPairID, err := access.NewCodecPairID(
+		anthropicchat.MessagesCodecPairID,
+	)
+	if err != nil {
+		return nil, err
+	}
 	catalog, err := access.NewCatalog(access.CatalogOptions{
 		Capabilities: access.PlanCapabilities{
 			// A RouteSet may name a second upstream so a dropped attempt has
@@ -177,6 +185,20 @@ func productionAccessPlanCompiler() (*access.Compiler, error) {
 				},
 			},
 			{
+				ID:              messagesCodecPairID,
+				Revision:        anthropicchat.MessagesCodecRevision,
+				ClientDialect:   access.DialectAnthropicMessages,
+				ProviderDialect: access.DialectAnthropicMessages,
+				ClientOperationIDs: operations.SemanticOperationIDs(
+					access.DialectAnthropicMessages,
+				),
+				RequiredCapabilities: []access.ProviderCapability{
+					access.ProviderCapabilityMessages,
+					access.ProviderCapabilityStreaming,
+					access.ProviderCapabilityToolCalls,
+				},
+			},
+			{
 				ID:              responsesCodecPairID,
 				Revision:        responseschat.CodecRevision,
 				ClientDialect:   access.DialectOpenAIResponses,
@@ -191,10 +213,16 @@ func productionAccessPlanCompiler() (*access.Compiler, error) {
 				},
 			},
 		},
-		AuthDrivers: []access.AuthDriverDefinition{{
-			Ref:      access.StaticHeaderAuthDriverRef(),
-			Revision: 1,
-		}},
+		AuthDrivers: []access.AuthDriverDefinition{
+			{
+				Ref:      access.StaticHeaderAuthDriverRef(),
+				Revision: 1,
+			},
+			{
+				Ref:      access.AnthropicAPIKeyAuthDriverRef(),
+				Revision: 1,
+			},
+		},
 		EgressModes: []access.EgressModeDefinition{{
 			Mode:     access.EgressModeDirect,
 			Revision: 1,
@@ -358,28 +386,38 @@ type productionProviderBuilder struct{}
 func (productionProviderBuilder) Build(
 	request providerBuildRequest,
 ) (providerRuntime, error) {
-	authenticator, err := providertransport.NewStaticBearerAuthenticator(
+	bearerAuthenticator, err := providertransport.NewStaticBearerAuthenticator(
 		request.secrets,
 	)
 	if err != nil {
 		return nil, fmt.Errorf("build static bearer AuthDriver: %w", err)
 	}
-	return providertransport.NewProductionClient(
+	anthropicAuthenticator, err := providertransport.NewAnthropicAPIKeyAuthenticator(
+		request.secrets,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("build Anthropic API-key AuthDriver: %w", err)
+	}
+	return providertransport.NewProductionClientWithAuthenticators(
 		request.coordinator,
-		authenticator,
+		[]providertransport.Authenticator{
+			bearerAuthenticator,
+			anthropicAuthenticator,
+		},
 		providertransport.DefaultTransportTimeouts(),
 		request.audit,
 	)
 }
 
 type exchangeBuildRequest struct {
-	ownerContext  context.Context
-	actions       offlinehold.ActionAdmission
-	resolver      access.SnapshotResolver
-	provider      exchange.Provider
-	toolDecisions exchange.ToolDecisionGate
-	activities    activity.Recorder
-	hold          exchange.HoldPolicy
+	ownerContext    context.Context
+	actions         offlinehold.ActionAdmission
+	resolver        access.SnapshotResolver
+	workspaceRoutes workspaceroute.Resolver
+	provider        exchange.Provider
+	toolDecisions   exchange.ToolDecisionGate
+	activities      activity.Recorder
+	hold            exchange.HoldPolicy
 }
 
 type exchangeRuntime interface {
@@ -494,21 +532,29 @@ func (productionExchangeBuilder) Build(
 	if err != nil {
 		return nil, fmt.Errorf("build Responses Chat protocol path: %w", err)
 	}
+	messagesPath, err := anthropicchat.NewMessagesProtocolPath(
+		anthropicchat.DefaultOptions(),
+	)
+	if err != nil {
+		return nil, fmt.Errorf("build Anthropic Messages protocol path: %w", err)
+	}
 	protocolPaths, err := protocolpath.NewSelector(
 		anthropicPath,
 		responsesPath,
+		messagesPath,
 	)
 	if err != nil {
 		return nil, fmt.Errorf("build protocol path selector: %w", err)
 	}
 	return exchange.New(exchange.Options{
-		OwnerContext:  request.ownerContext,
-		Actions:       request.actions,
-		Resolver:      request.resolver,
-		ProtocolPaths: protocolPaths,
-		Provider:      request.provider,
-		ToolDecisions: request.toolDecisions,
-		RetryWaiter:   exchange.TimerRetryWaiter{},
+		OwnerContext:    request.ownerContext,
+		Actions:         request.actions,
+		Resolver:        request.resolver,
+		WorkspaceRoutes: request.workspaceRoutes,
+		ProtocolPaths:   protocolPaths,
+		Provider:        request.provider,
+		ToolDecisions:   request.toolDecisions,
+		RetryWaiter:     exchange.TimerRetryWaiter{},
 		Observer: activityAttemptObserver{
 			recorder: request.activities,
 		},

@@ -38,10 +38,16 @@ var ErrUnsupportedPlatform = errors.New(
 // contents no longer match its signature.
 var ErrNotSatisfied = errors.New("the file does not satisfy the requirement")
 
-// verifyDeadline bounds the platform call. Verification reads and hashes the
+// VerifyDeadline bounds the platform call. Verification reads and hashes the
 // whole file, and these clients are hundreds of megabytes, so this is not the
 // usual sub-second budget.
-const verifyDeadline = 30 * time.Second
+//
+// It is exported because it is not private to this package in practice:
+// verification happens inside a launch, and whoever budgets that launch has to
+// be able to cover this. Leaving it unexported is how three independently
+// chosen timeouts came to disagree, with the outer one smaller than the sum of
+// the inner ones.
+const VerifyDeadline = 30 * time.Second
 
 // Verify reports whether the platform accepts path as satisfying requirement.
 //
@@ -60,7 +66,7 @@ func Verify(ctx context.Context, path string, requirement Requirement) error {
 	if runtime.GOOS != "darwin" {
 		return ErrUnsupportedPlatform
 	}
-	bounded, cancel := context.WithTimeout(ctx, verifyDeadline)
+	bounded, cancel := context.WithTimeout(ctx, VerifyDeadline)
 	defer cancel()
 
 	// The leading `=` is what makes codesign read the requirement as text

@@ -14,21 +14,47 @@ import (
 	"unicode/utf8"
 )
 
+// RecoveryErrorClass marks an attempt whose process disappeared before it
+// could persist the transport's real terminal. The outcome remains the closed
+// failed outcome; this stable class is the explicit evidence that the failure
+// was reconstructed at the next daemon start rather than observed live.
+const RecoveryErrorClass = "daemon_restarted"
+
 // EgressPurpose answers what an outbound attempt was for. It is orthogonal to
 // both the policy authority that selected the route and the Offline Hold queue
 // class that admitted it.
 type EgressPurpose string
 
 const (
-	PurposeProviderAttempt   EgressPurpose = "provider_attempt"
-	PurposeProfileOperation  EgressPurpose = "profile_operation"
-	PurposeOriginalOrigin    EgressPurpose = "original_origin"
-	PurposeAgentProbe        EgressPurpose = "agent_probe"
-	PurposeBlindTunnel       EgressPurpose = "blind_tunnel"
-	PurposeAuxiliaryLLM      EgressPurpose = "auxiliary_llm"
-	PurposeLanguageTransform EgressPurpose = "language_transform"
-	PurposeUpdate            EgressPurpose = "update"
+	PurposeProviderAttempt     EgressPurpose = "provider_attempt"
+	PurposeProfileOperation    EgressPurpose = "profile_operation"
+	PurposeOriginalOrigin      EgressPurpose = "original_origin"
+	PurposeAgentProbe          EgressPurpose = "agent_probe"
+	PurposeBlindTunnel         EgressPurpose = "blind_tunnel"
+	PurposeAuxiliaryLLM        EgressPurpose = "auxiliary_llm"
+	PurposeLanguageTransform   EgressPurpose = "language_transform"
+	PurposePluginCatalogSync   EgressPurpose = "plugin_catalog_sync"
+	PurposePluginArtifactFetch EgressPurpose = "plugin_artifact_fetch"
+	PurposeUpdate              EgressPurpose = "update"
 )
+
+// Purposes returns the complete set of supported logical egress purposes.
+// Mappings into another closed taxonomy must iterate this catalog so adding a
+// purpose cannot silently skip authority, Offline Hold, or audit validation.
+func Purposes() []EgressPurpose {
+	return []EgressPurpose{
+		PurposeProviderAttempt,
+		PurposeProfileOperation,
+		PurposeOriginalOrigin,
+		PurposeAgentProbe,
+		PurposeBlindTunnel,
+		PurposeAuxiliaryLLM,
+		PurposeLanguageTransform,
+		PurposePluginCatalogSync,
+		PurposePluginArtifactFetch,
+		PurposeUpdate,
+	}
+}
 
 // PolicyAuthorityKind names the configuration that owns the candidates and the
 // default rule for a purpose.
@@ -50,7 +76,8 @@ func AuthorityForPurpose(
 		return AuthorityAccess, nil
 	case PurposeOriginalOrigin, PurposeAgentProbe, PurposeBlindTunnel:
 		return AuthorityNetwork, nil
-	case PurposeAuxiliaryLLM, PurposeLanguageTransform, PurposeUpdate:
+	case PurposeAuxiliaryLLM, PurposeLanguageTransform,
+		PurposePluginCatalogSync, PurposePluginArtifactFetch, PurposeUpdate:
 		return AuthorityRuntime, nil
 	default:
 		return "", fmt.Errorf("unknown egress purpose %q", purpose)
@@ -224,7 +251,11 @@ func New(input NewInput) (Attempt, error) {
 	); err != nil {
 		return Attempt{}, err
 	}
-	if err := validateCaller(input.Caller, input.CallerID); err != nil {
+	if err := validateCaller(
+		input.Purpose,
+		input.Caller,
+		input.CallerID,
+	); err != nil {
 		return Attempt{}, err
 	}
 	if err := validateDecision(input.Decision); err != nil {
@@ -312,6 +343,8 @@ func validatePayloadClass(
 	class PayloadClass,
 ) error {
 	switch purpose {
+	case PurposeProviderAttempt, PurposeProfileOperation:
+		return nil
 	case PurposeOriginalOrigin, PurposeAgentProbe:
 		if class.carriesClientPayload() {
 			return fmt.Errorf(
@@ -327,7 +360,8 @@ func validatePayloadClass(
 				class,
 			)
 		}
-	case PurposeAuxiliaryLLM, PurposeLanguageTransform, PurposeUpdate:
+	case PurposeAuxiliaryLLM, PurposeLanguageTransform,
+		PurposePluginCatalogSync, PurposePluginArtifactFetch, PurposeUpdate:
 		if class != PayloadRuntime {
 			return fmt.Errorf(
 				"runtime purpose %q must record the runtime payload class, got %q",
@@ -335,6 +369,8 @@ func validatePayloadClass(
 				class,
 			)
 		}
+	default:
+		return fmt.Errorf("unknown egress purpose %q", purpose)
 	}
 	return nil
 }
@@ -403,7 +439,8 @@ func validateParent(
 			)
 		}
 		return requireConnection()
-	default:
+	case PurposeAuxiliaryLLM, PurposeLanguageTransform,
+		PurposePluginCatalogSync, PurposePluginArtifactFetch, PurposeUpdate:
 		if parent.Kind != ParentRuntimeAction || parent.ExchangeID != "" {
 			return errors.New(
 				"runtime egress requires a runtime-action parent with no Exchange",
@@ -413,10 +450,21 @@ func validateParent(
 			return errors.New("runtime egress has no client connection")
 		}
 		return nil
+	default:
+		return fmt.Errorf("unknown egress purpose %q", purpose)
 	}
 }
 
-func validateCaller(caller CallerKind, callerID string) error {
+func validateCaller(
+	purpose EgressPurpose,
+	caller CallerKind,
+	callerID string,
+) error {
+	if (purpose == PurposePluginCatalogSync ||
+		purpose == PurposePluginArtifactFetch) &&
+		caller != CallerCore {
+		return errors.New("plugin distribution egress must be created by core")
+	}
 	switch caller {
 	case CallerCore:
 		if callerID != "" {
@@ -484,11 +532,12 @@ func BuiltInDirectDecision(authority PolicyAuthorityKind) DecisionRef {
 	}
 }
 
-// PurposeForEgressKind maps the Offline Hold admission class the transports
-// already carry onto an audit purpose. The two taxonomies are orthogonal, so
-// the mapping is explicit rather than a cast. The plugin class has no purpose
-// on purpose: ADR-0015 makes a plugin a caller, never a destination owner, so
-// its egress inherits the purpose of the resource it was granted.
+// PurposeForEgressKind maps the coarse Offline Hold class carried by the
+// original-origin transport onto that transport's exact audit purpose. It is
+// deliberately not a general inverse of offlinehold.KindForPurpose: several
+// purposes collapse into auxiliary or plugin, so a caller must freeze the typed
+// purpose before projecting it to Hold. In particular, a plugin Hold class
+// cannot choose between catalog sync and artifact fetch and fails closed here.
 func PurposeForEgressKind(kind string) (EgressPurpose, error) {
 	switch kind {
 	case "provider":

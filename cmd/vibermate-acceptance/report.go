@@ -8,49 +8,30 @@ import (
 	"path/filepath"
 	"time"
 
+	"github.com/vibe-agi/vibermate/internal/acceptancereport"
 	"github.com/vibe-agi/vibermate/internal/clientadapter"
 )
 
-const reportSchema = "vibermate.m0-assembly-acceptance/v5"
+const reportSchema = acceptancereport.SchemaV6
 
-type checkStatus string
+type checkStatus = acceptancereport.Status
 
 const (
-	checkPassed  checkStatus = "passed"
-	checkFailed  checkStatus = "failed"
-	checkBlocked checkStatus = "blocked"
+	checkPassed  checkStatus = acceptancereport.StatusPassed
+	checkFailed  checkStatus = acceptancereport.StatusFailed
+	checkBlocked checkStatus = acceptancereport.StatusBlocked
 )
 
-type acceptanceCheck struct {
-	ID     string      `json:"id"`
-	Status checkStatus `json:"status"`
-	Detail string      `json:"detail"`
-}
-
-type acceptanceClientReport struct {
-	ID      string                  `json:"id"`
-	Version string                  `json:"version"`
-	Adapter *clientadapter.Evidence `json:"adapter,omitempty"`
-}
-
-type acceptanceReport struct {
-	Schema       string                 `json:"schema"`
-	StartedAt    time.Time              `json:"startedAt"`
-	FinishedAt   time.Time              `json:"finishedAt"`
-	Platform     string                 `json:"platform"`
-	Architecture string                 `json:"architecture"`
-	Client       acceptanceClientReport `json:"client"`
-	Provenance   *acceptanceProvenance  `json:"provenance,omitempty"`
-	Status       checkStatus            `json:"status"`
-	Checks       []acceptanceCheck      `json:"checks"`
-}
+type acceptanceCheck = acceptancereport.Check
+type acceptanceClientReport = acceptancereport.Client
+type acceptanceReport acceptancereport.Report
 
 func newReport(now time.Time, client acceptanceClient) acceptanceReport {
 	return acceptanceReport{
 		Schema:       reportSchema,
 		StartedAt:    now.UTC(),
-		Platform:     "darwin",
-		Architecture: "arm64",
+		Platform:     acceptancereport.ExpectedPlatform,
+		Architecture: acceptancereport.ExpectedArchitecture,
 		Client: acceptanceClientReport{
 			ID:      string(client.ID),
 			Version: client.Version,
@@ -142,5 +123,5 @@ type blockedError struct {
 }
 
 func (err *blockedError) Error() string {
-	return "M0 assembly acceptance blocked: " + err.reason
+	return "packaged-app acceptance blocked: " + err.reason
 }

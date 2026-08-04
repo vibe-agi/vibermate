@@ -361,13 +361,22 @@ func newLiveProxyFixture(
 	go func() { _ = server.Serve(listener) }()
 	t.Cleanup(func() { _ = server.Close() })
 
+	captureDirectory := t.TempDir()
+	workspace, err := runtime.WorkspaceIdentity().ResolveLocal(
+		context.Background(),
+		captureDirectory,
+	)
+	if err != nil {
+		t.Fatalf("resolve workspace identity: %v", err)
+	}
 	grant, err := runtime.CaptureRuns().Create(
 		context.Background(),
 		capturerun.CreateCommand{
-			CWD:             t.TempDir(),
+			CWD:             captureDirectory,
 			ExecutablePath:  "/usr/bin/true",
 			Lifetime:        time.Minute,
 			CatalogRevision: 1,
+			Workspace:       workspace,
 		},
 	)
 	if err != nil {

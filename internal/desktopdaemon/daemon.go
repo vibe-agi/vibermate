@@ -8,14 +8,17 @@ import (
 	"crypto/rand"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"time"
 
+	"github.com/vibe-agi/vibermate/internal/desktopbootstrap"
 	"github.com/vibe-agi/vibermate/internal/desktophost"
 	"github.com/vibe-agi/vibermate/internal/exchange"
 	"github.com/vibe-agi/vibermate/internal/hostcontract"
 	"github.com/vibe-agi/vibermate/internal/offlinehold"
 	"github.com/vibe-agi/vibermate/internal/productruntime"
+	"github.com/vibe-agi/vibermate/internal/runtimepersistence"
 	"github.com/vibe-agi/vibermate/internal/secretstore"
 	"github.com/vibe-agi/vibermate/internal/toolapproval"
 )
@@ -86,19 +89,35 @@ func ProductionOptions(
 	}, nil
 }
 
-// Run starts one Host, writes one bootstrap descriptor to the inherited pipe,
-// and owns shutdown until the process context or Host fails.
+// Run first announces capability-free runtime initialization, then starts one
+// Host, writes one capability-bearing descriptor to the inherited pipe, and
+// owns shutdown until the process context or Host fails.
 func Run(ctx context.Context, options Options) error {
 	if ctx == nil ||
 		options.BootstrapWriter == nil ||
 		options.ShutdownTimeout <= 0 {
 		return errors.New("Desktop daemon options are incomplete")
 	}
-	host, err := desktophost.Start(ctx, options.Host)
-	if err != nil {
+	encoder := json.NewEncoder(options.BootstrapWriter)
+	progress := desktopbootstrap.RuntimeStartingProgress()
+	if err := progress.Validate(); err != nil {
 		return err
 	}
-	if err := json.NewEncoder(options.BootstrapWriter).Encode(host.Bootstrap()); err != nil {
+	if err := encoder.Encode(progress); err != nil {
+		return fmt.Errorf("write native-shell bootstrap progress: %w", err)
+	}
+	host, err := desktophost.Start(ctx, options.Host)
+	if err != nil {
+		failure := classifyStartupFailure(err)
+		if writeErr := encoder.Encode(failure); writeErr != nil {
+			return errors.Join(
+				err,
+				fmt.Errorf("write native-shell bootstrap failure: %w", writeErr),
+			)
+		}
+		return err
+	}
+	if err := encoder.Encode(host.Bootstrap()); err != nil {
 		shutdownContext, cancel := context.WithTimeout(
 			context.Background(),
 			options.ShutdownTimeout,
@@ -128,4 +147,21 @@ func Run(ctx context.Context, options Options) error {
 		defer cancel()
 		return host.Shutdown(waitContext)
 	}
+}
+
+func classifyStartupFailure(err error) desktopbootstrap.Failure {
+	reason := desktopbootstrap.FailureRuntimeUnavailable
+	switch {
+	case errors.Is(err, runtimepersistence.ErrSchemaNewerThanBinary):
+		reason = desktopbootstrap.FailureStorageSchemaNewer
+	case errors.Is(err, runtimepersistence.ErrInvalidDatabasePath),
+		errors.Is(err, runtimepersistence.ErrSchemaNotInitialized),
+		errors.Is(err, runtimepersistence.ErrSchemaRevisionMismatch):
+		reason = desktopbootstrap.FailureStorageUnavailable
+	case errors.Is(err, secretstore.ErrLocked),
+		errors.Is(err, secretstore.ErrDenied),
+		errors.Is(err, secretstore.ErrUnavailable):
+		reason = desktopbootstrap.FailureSecretStoreUnavailable
+	}
+	return desktopbootstrap.StartupFailure(reason)
 }

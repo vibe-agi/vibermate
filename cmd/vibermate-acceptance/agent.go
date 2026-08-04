@@ -24,6 +24,7 @@ import (
 const (
 	maxAgentLineBytes        = 8 << 20
 	maxAgentLines            = 8192
+	claudeStateDirectoryName = ".vibermate-claude"
 	codexStateDirectoryName  = ".vibermate-codex"
 	fixedCodexRequestedModel = "gpt-5.6-sol"
 	codexHTTPFallbackPrefix  = "Falling back from WebSockets to HTTPS transport. "
@@ -112,6 +113,21 @@ type agentFailureEvidence struct {
 	resultSubtype  string
 }
 
+type deferredAgentInput struct {
+	mu     sync.Mutex
+	writer *io.PipeWriter
+	sent   bool
+}
+
+type claudeStreamingUserMessage struct {
+	Type    string `json:"type"`
+	Message struct {
+		Role    string `json:"role"`
+		Content string `json:"content"`
+	} `json:"message"`
+	ParentToolUseID *string `json:"parent_tool_use_id"`
+}
+
 func startAgent(
 	config config,
 	workingDirectory string,
@@ -123,12 +139,12 @@ func startAgent(
 	if err != nil {
 		return nil, err
 	}
-	if client.ID == acceptanceClientCodexCLI {
-		if err := privateDirectory(
-			filepath.Join(workingDirectory, codexStateDirectoryName),
-		); err != nil {
-			return nil, fmt.Errorf("prepare Codex state: %w", err)
-		}
+	stateDirectory, err := agentStateDirectory(client.ID, workingDirectory)
+	if err != nil {
+		return nil, err
+	}
+	if err := privateDirectory(stateDirectory); err != nil {
+		return nil, fmt.Errorf("prepare %s state: %w", client.ReportLabel, err)
 	}
 	command, err := newAgentCommand(
 		config,
@@ -140,6 +156,85 @@ func startAgent(
 		return nil, err
 	}
 	return startAgentProcess(command, client, marker)
+}
+
+func startDeferredClaudeAgent(
+	config config,
+	workingDirectory string,
+	tools string,
+	marker string,
+) (*agentRun, *deferredAgentInput, error) {
+	client, err := selectedAcceptanceClient(config)
+	if err != nil {
+		return nil, nil, err
+	}
+	if client.ID != acceptanceClientClaudeCode {
+		return nil, nil, errors.New(
+			"deferred input requires the fixed Claude client",
+		)
+	}
+	stateDirectory, err := agentStateDirectory(client.ID, workingDirectory)
+	if err != nil {
+		return nil, nil, err
+	}
+	if err := privateDirectory(stateDirectory); err != nil {
+		return nil, nil, fmt.Errorf("prepare Claude Code state: %w", err)
+	}
+	command, err := newDeferredClaudeCommand(
+		config,
+		workingDirectory,
+		tools,
+	)
+	if err != nil {
+		return nil, nil, err
+	}
+	reader, writer := io.Pipe()
+	command.Stdin = reader
+	run, err := startAgentProcess(command, client, marker)
+	if err != nil {
+		_ = writer.CloseWithError(err)
+		_ = reader.CloseWithError(err)
+		return nil, nil, err
+	}
+	return run, &deferredAgentInput{writer: writer}, nil
+}
+
+func (input *deferredAgentInput) sendClaudePrompt(prompt string) error {
+	if input == nil || input.writer == nil || prompt == "" {
+		return errors.New("deferred Claude input is invalid")
+	}
+	input.mu.Lock()
+	defer input.mu.Unlock()
+	if input.sent {
+		return errors.New("deferred Claude input was already sent")
+	}
+	input.sent = true
+	message := claudeStreamingUserMessage{Type: "user"}
+	message.Message.Role = "user"
+	message.Message.Content = prompt
+	payload, err := json.Marshal(message)
+	if err != nil {
+		return errors.Join(err, input.writer.CloseWithError(err))
+	}
+	payload = append(payload, '\n')
+	written, writeErr := input.writer.Write(payload)
+	if writeErr == nil && written != len(payload) {
+		writeErr = io.ErrShortWrite
+	}
+	return errors.Join(writeErr, input.writer.Close())
+}
+
+func (input *deferredAgentInput) close() error {
+	if input == nil || input.writer == nil {
+		return nil
+	}
+	input.mu.Lock()
+	defer input.mu.Unlock()
+	if input.sent {
+		return nil
+	}
+	input.sent = true
+	return input.writer.Close()
 }
 
 func startFallbackAgent(
@@ -273,6 +368,43 @@ func newFallbackAgentCommand(
 	)
 }
 
+func newDeferredClaudeCommand(
+	config config,
+	workingDirectory string,
+	tools string,
+) (*exec.Cmd, error) {
+	client, err := selectedAcceptanceClient(config)
+	if err != nil {
+		return nil, err
+	}
+	if client.ID != acceptanceClientClaudeCode {
+		return nil, errors.New(
+			"deferred input requires the fixed Claude client",
+		)
+	}
+	stateDirectory, err := agentStateDirectory(client.ID, workingDirectory)
+	if err != nil {
+		return nil, err
+	}
+	environment, err := clientAcceptanceEnvironment(
+		client.ID,
+		os.Environ(),
+		stateDirectory,
+	)
+	if err != nil {
+		return nil, err
+	}
+	arguments := append(
+		fixedClaudeArguments(client.ExecutablePath, tools),
+		"--input-format",
+		"stream-json",
+	)
+	command := exec.Command(config.launcherPath, arguments...)
+	command.Dir = workingDirectory
+	command.Env = environment
+	return command, nil
+}
+
 func newAgentCommandWithCodexTransport(
 	config config,
 	workingDirectory string,
@@ -294,6 +426,10 @@ func newAgentCommandWithCodexTransport(
 			)
 		}
 		arguments = fixedClaudeArguments(client.ExecutablePath, tools)
+		stateDirectory = filepath.Join(
+			workingDirectory,
+			claudeStateDirectoryName,
+		)
 	case acceptanceClientCodexCLI:
 		arguments, err = fixedCodexArguments(
 			client.ExecutablePath,
@@ -339,6 +475,7 @@ func fixedClaudeArguments(
 		"--debug",
 		"api",
 		"--safe-mode",
+		"--bare",
 		"--no-session-persistence",
 		"--model",
 		"sonnet",
@@ -459,19 +596,21 @@ func clientAcceptanceEnvironment(
 	result := acceptanceEnvironment(base)
 	switch clientID {
 	case acceptanceClientClaudeCode:
-		if stateDirectory != "" {
+		if !validAgentStateDirectory(stateDirectory) {
 			return nil, errors.New(
-				"Claude acceptance state directory is unexpected",
+				"Claude acceptance state directory is invalid",
 			)
 		}
 		result = append(
 			result,
 			"ANTHROPIC_API_KEY=vibermate-assembly-placeholder",
+			"CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1",
+			"CLAUDE_CODE_MAX_RETRIES=0",
+			"CLAUDE_CONFIG_DIR="+stateDirectory,
+			"DISABLE_GROWTHBOOK=1",
 		)
 	case acceptanceClientCodexCLI:
-		if stateDirectory == "" ||
-			!filepath.IsAbs(stateDirectory) ||
-			filepath.Clean(stateDirectory) != stateDirectory {
+		if !validAgentStateDirectory(stateDirectory) {
 			return nil, errors.New(
 				"Codex acceptance state directory is invalid",
 			)
@@ -486,32 +625,40 @@ func clientAcceptanceEnvironment(
 
 func acceptanceEnvironment(base []string) []string {
 	managed := map[string]struct{}{
-		"ANTHROPIC_API_KEY":          {},
-		"ANTHROPIC_AUTH_TOKEN":       {},
-		"ANTHROPIC_BASE_URL":         {},
-		"ANTHROPIC_BEDROCK_BASE_URL": {},
-		"ANTHROPIC_CUSTOM_HEADERS":   {},
-		"ANTHROPIC_FOUNDRY_BASE_URL": {},
-		"ANTHROPIC_VERTEX_BASE_URL":  {},
-		"CLAUDE_CODE_OAUTH_TOKEN":    {},
-		"CLAUDE_CODE_USE_BEDROCK":    {},
-		"CLAUDE_CODE_USE_FOUNDRY":    {},
-		"CLAUDE_CODE_USE_VERTEX":     {},
-		"CODEX_API_KEY":              {},
-		"CODEX_BASE_URL":             {},
-		"CODEX_HOME":                 {},
-		"CURL_CA_BUNDLE":             {},
-		"NODE_EXTRA_CA_CERTS":        {},
-		"NODE_USE_ENV_PROXY":         {},
-		"OPENAI_ACCESS_TOKEN":        {},
-		"OPENAI_API_KEY":             {},
-		"OPENAI_BASE_URL":            {},
-		"OPENAI_ORGANIZATION":        {},
-		"OPENAI_ORG_ID":              {},
-		"OPENAI_PROJECT":             {},
-		"OPENAI_PROJECT_ID":          {},
-		"REQUESTS_CA_BUNDLE":         {},
-		"SSL_CERT_FILE":              {},
+		"ANTHROPIC_API_KEY":                        {},
+		"ANTHROPIC_AUTH_TOKEN":                     {},
+		"ANTHROPIC_BASE_URL":                       {},
+		"ANTHROPIC_BEDROCK_BASE_URL":               {},
+		"ANTHROPIC_CUSTOM_HEADERS":                 {},
+		"ANTHROPIC_FOUNDRY_BASE_URL":               {},
+		"ANTHROPIC_VERTEX_BASE_URL":                {},
+		"CLAUDE_CODE_OAUTH_TOKEN":                  {},
+		"CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC": {},
+		"CLAUDE_CODE_MAX_RETRIES":                  {},
+		"CLAUDE_CODE_MANAGED_SETTINGS_PATH":        {},
+		"CLAUDE_CODE_REMOTE_SETTINGS_PATH":         {},
+		"CLAUDE_CODE_SAFE_MODE":                    {},
+		"CLAUDE_CODE_SIMPLE":                       {},
+		"CLAUDE_CONFIG_DIR":                        {},
+		"CLAUDE_CODE_USE_BEDROCK":                  {},
+		"CLAUDE_CODE_USE_FOUNDRY":                  {},
+		"CLAUDE_CODE_USE_VERTEX":                   {},
+		"DISABLE_GROWTHBOOK":                       {},
+		"CODEX_API_KEY":                            {},
+		"CODEX_BASE_URL":                           {},
+		"CODEX_HOME":                               {},
+		"CURL_CA_BUNDLE":                           {},
+		"NODE_EXTRA_CA_CERTS":                      {},
+		"NODE_USE_ENV_PROXY":                       {},
+		"OPENAI_ACCESS_TOKEN":                      {},
+		"OPENAI_API_KEY":                           {},
+		"OPENAI_BASE_URL":                          {},
+		"OPENAI_ORGANIZATION":                      {},
+		"OPENAI_ORG_ID":                            {},
+		"OPENAI_PROJECT":                           {},
+		"OPENAI_PROJECT_ID":                        {},
+		"REQUESTS_CA_BUNDLE":                       {},
+		"SSL_CERT_FILE":                            {},
 	}
 	result := make([]string, 0, len(base))
 	for _, entry := range base {
@@ -526,6 +673,33 @@ func acceptanceEnvironment(base []string) []string {
 	}
 	slices.Sort(result)
 	return result
+}
+
+func agentStateDirectory(
+	clientID acceptanceClientID,
+	workingDirectory string,
+) (string, error) {
+	if workingDirectory == "" ||
+		!filepath.IsAbs(workingDirectory) ||
+		filepath.Clean(workingDirectory) != workingDirectory {
+		return "", errors.New("agent working directory is invalid")
+	}
+	var name string
+	switch clientID {
+	case acceptanceClientClaudeCode:
+		name = claudeStateDirectoryName
+	case acceptanceClientCodexCLI:
+		name = codexStateDirectoryName
+	default:
+		return "", errors.New("acceptance client state is unsupported")
+	}
+	return filepath.Join(workingDirectory, name), nil
+}
+
+func validAgentStateDirectory(path string) bool {
+	return path != "" &&
+		filepath.IsAbs(path) &&
+		filepath.Clean(path) == path
 }
 
 func (run *agentRun) consume(reader io.Reader) {

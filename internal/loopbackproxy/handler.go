@@ -41,10 +41,12 @@ import (
 )
 
 const (
-	proxyUsername         = "capture"
-	maxInnerHeaderBytes   = 1 << 20
-	defaultHandshakeLimit = 10 * time.Second
-	exchangeIDBytes       = 20
+	proxyUsername               = "capture"
+	maxInnerHeaderBytes         = 1 << 20
+	defaultHandshakeLimit       = 10 * time.Second
+	defaultAuditCompletionLimit = 2 * time.Second
+	exchangeIDBytes             = 20
+	blindTunnelFailureClass     = "tunnel_failed"
 )
 
 type ReasonCode string
@@ -168,6 +170,13 @@ type Options struct {
 	HandshakeTimeout time.Duration
 }
 
+// terminalFailureReporter is implemented by the production audit boundary.
+// A blind tunnel has already moved bytes when its terminal is constructed, so
+// an invalid terminal must cross this explicit durability boundary.
+type terminalFailureReporter interface {
+	ReportTerminalFailure(error)
+}
+
 type operation struct {
 	connection net.Conn
 }
@@ -186,6 +195,8 @@ type Handler struct {
 	egressAudit  egressaudit.Writer
 	exchangeIDs  ExchangeIDSource
 	handshake    time.Duration
+	clock        func() time.Time
+	auditTimeout time.Duration
 	ownerContext context.Context
 
 	mu        sync.Mutex
@@ -227,6 +238,8 @@ func New(options Options) (*Handler, error) {
 		egressAudit:  options.EgressAudit,
 		exchangeIDs:  options.ExchangeIDs,
 		handshake:    options.HandshakeTimeout,
+		clock:        time.Now,
+		auditTimeout: defaultAuditCompletionLimit,
 		ownerContext: options.OwnerContext,
 		accepting:    true,
 		active:       make(map[*operation]struct{}),
@@ -872,16 +885,31 @@ func (handler *Handler) serveSemantic(
 		writeReason(writer, http.StatusBadRequest, ReasonRequestBodyInvalid, "")
 		return
 	}
+	requestOptions := []exchange.ClientRequestOption{
+		exchange.WithClientHelloObservation(observation),
+		// Every identity is generated independently; association travels as
+		// typed references rather than as a delimiter-joined string.
+		exchange.WithIngressCorrelation(run.RunID, audit.ID()),
+	}
+	if run.Workspace.Validate() == nil {
+		requestOptions = append(
+			requestOptions,
+			exchange.WithWorkspaceScope(run.Workspace),
+		)
+	}
+	if beta := strings.Join(request.Header.Values("Anthropic-Beta"), ","); beta != "" {
+		requestOptions = append(
+			requestOptions,
+			exchange.WithAnthropicBetaHeader(beta),
+		)
+	}
 	clientRequest, err := exchange.NewClientRequest(
 		exchangeID,
 		binding,
 		operation,
 		body,
 		capability.ReplayClass(),
-		exchange.WithClientHelloObservation(observation),
-		// Every identity is generated independently; association travels as
-		// typed references rather than as a delimiter-joined string.
-		exchange.WithIngressCorrelation(run.RunID, audit.ID()),
+		requestOptions...,
 	)
 	if err != nil {
 		writeReason(writer, http.StatusBadRequest, ReasonRequestBodyInvalid, "")
@@ -1594,9 +1622,18 @@ func (handler *Handler) serveBlindTunnel(
 		)
 		return false
 	}
+	connectionTerminal := connectionevent.TerminalEvidence{
+		Outcome:    connectionevent.OutcomeFailed,
+		ErrorClass: blindTunnelFailureClass,
+	}
+	defer func() {
+		handler.finishConnectionAudit(audit, connectionTerminal)
+	}()
 
 	egressID, err := handler.exchangeIDs.NewExchangeID(request.Context())
 	if err != nil {
+		_, connectionTerminal.Outcome, connectionTerminal.ErrorClass =
+			blindTunnelTerminal(err)
 		writeReason(writer, http.StatusServiceUnavailable, ReasonProxyStopping, "")
 		return true
 	}
@@ -1605,10 +1642,37 @@ func (handler *Handler) serveBlindTunnel(
 		offlinehold.ActionRequest{ActionID: egressID},
 	)
 	if err != nil {
+		_, connectionTerminal.Outcome, connectionTerminal.ErrorClass =
+			blindTunnelTerminal(err)
 		writeReason(writer, http.StatusBadGateway, ReasonBlindTunnelFailed, "")
 		return true
 	}
 	defer actionLease.Release()
+
+	// The attempt is durable before Dial reaches egress admission or opens a
+	// socket. A failed dial is still evidence of the exact destination that was
+	// attempted; an audit failure means no external connection is permitted.
+	record, err := handler.beginBlindAudit(
+		request.Context(),
+		egressID,
+		audit.ID(),
+		authority,
+	)
+	if err != nil {
+		writeReason(writer, http.StatusServiceUnavailable, ReasonBlindTunnelFailed, "")
+		return true
+	}
+	egressOutcome := egressaudit.OutcomeFailed
+	egressErrorClass := blindTunnelFailureClass
+	result := blindtunnel.Result{}
+	defer func() {
+		handler.completeBlindAudit(
+			record,
+			egressOutcome,
+			egressErrorClass,
+			result,
+		)
+	}()
 
 	upstream, lease, err := handler.blindTunnels.Dial(
 		request.Context(),
@@ -1621,22 +1685,14 @@ func (handler *Handler) serveBlindTunnel(
 		},
 	)
 	if err != nil {
+		egressOutcome, connectionTerminal.Outcome, egressErrorClass =
+			blindTunnelTerminal(err)
+		connectionTerminal.ErrorClass = egressErrorClass
 		writeReason(writer, http.StatusBadGateway, ReasonBlindTunnelFailed, "")
 		return true
 	}
 	defer lease.Release()
 	defer upstream.Close()
-
-	record, err := handler.beginBlindAudit(
-		request.Context(),
-		egressID,
-		audit.ID(),
-		authority,
-	)
-	if err != nil {
-		writeReason(writer, http.StatusServiceUnavailable, ReasonBlindTunnelFailed, "")
-		return true
-	}
 
 	hijacker, ok := writer.(http.Hijacker)
 	if !ok {
@@ -1645,31 +1701,52 @@ func (handler *Handler) serveBlindTunnel(
 	}
 	client, buffered, err := hijacker.Hijack()
 	if err != nil {
+		egressOutcome, connectionTerminal.Outcome, egressErrorClass =
+			blindTunnelTerminal(err)
+		connectionTerminal.ErrorClass = egressErrorClass
 		return true
 	}
 	if !handler.attachConnection(active, client) {
+		egressOutcome, connectionTerminal.Outcome, egressErrorClass =
+			blindTunnelTerminal(context.Canceled)
+		connectionTerminal.ErrorClass = egressErrorClass
 		_ = client.Close()
-		return false
+		return true
 	}
 	defer client.Close()
 	if err := writeConnectEstablished(buffered); err != nil {
-		return false
+		egressOutcome, connectionTerminal.Outcome, egressErrorClass =
+			blindTunnelTerminal(err)
+		connectionTerminal.ErrorClass = egressErrorClass
+		return true
 	}
 
-	result, copyErr := blindtunnel.Copy(handler.ownerContext, client, upstream)
-	outcome := egressaudit.OutcomeCompleted
-	errorClass := ""
-	if copyErr != nil {
-		outcome = egressaudit.OutcomeFailed
-		errorClass = "tunnel_failed"
-	}
-	handler.completeBlindAudit(record, outcome, errorClass, result)
-	handler.finishConnectionAudit(audit, connectionevent.TerminalEvidence{
-		Outcome:   connectionevent.OutcomeCompleted,
-		BytesUp:   uint64(result.BytesOut),
-		BytesDown: uint64(result.BytesIn),
-	})
+	result, err = blindtunnel.Copy(handler.ownerContext, client, upstream)
+	egressOutcome, connectionTerminal.Outcome, egressErrorClass =
+		blindTunnelTerminal(err)
+	connectionTerminal.ErrorClass = egressErrorClass
+	connectionTerminal.BytesUp = uint64(result.BytesOut)
+	connectionTerminal.BytesDown = uint64(result.BytesIn)
 	return true
+}
+
+func blindTunnelTerminal(
+	err error,
+) (egressaudit.Outcome, connectionevent.Outcome, string) {
+	switch {
+	case err == nil:
+		return egressaudit.OutcomeCompleted,
+			connectionevent.OutcomeCompleted, ""
+	case errors.Is(err, context.Canceled), errors.Is(err, net.ErrClosed):
+		return egressaudit.OutcomeCanceled,
+			connectionevent.OutcomeCanceled, "canceled"
+	case errors.Is(err, context.DeadlineExceeded):
+		return egressaudit.OutcomeFailed,
+			connectionevent.OutcomeFailed, "deadline"
+	default:
+		return egressaudit.OutcomeFailed,
+			connectionevent.OutcomeFailed, blindTunnelFailureClass
+	}
 }
 
 func (handler *Handler) beginBlindAudit(
@@ -1695,7 +1772,7 @@ func (handler *Handler) beginBlindAudit(
 		Decision: egressaudit.BuiltInDirectDecision(
 			egressaudit.AuthorityNetwork,
 		),
-		StartedAt: time.Now(),
+		StartedAt: handler.clock(),
 	})
 	if err != nil {
 		return egressaudit.Attempt{}, err
@@ -1720,17 +1797,39 @@ func (handler *Handler) completeBlindAudit(
 		ErrorClass:  errorClass,
 		BytesOut:    result.BytesOut,
 		BytesIn:     result.BytesIn,
-		CompletedAt: time.Now(),
+		CompletedAt: completionTime(attempt, handler.clock()),
 	})
 	if err != nil {
+		handler.reportTerminalFailure(fmt.Errorf(
+			"construct blind-tunnel EgressAttempt terminal: %w",
+			err,
+		))
 		return
+	}
+	auditTimeout := handler.auditTimeout
+	if auditTimeout <= 0 {
+		auditTimeout = defaultAuditCompletionLimit
 	}
 	ctx, cancel := context.WithTimeout(
 		context.WithoutCancel(handler.ownerContext),
-		2*time.Second,
+		auditTimeout,
 	)
 	defer cancel()
 	_, _ = handler.egressAudit.Complete(ctx, terminal)
+}
+
+func (handler *Handler) reportTerminalFailure(err error) {
+	reporter, ok := handler.egressAudit.(terminalFailureReporter)
+	if ok {
+		reporter.ReportTerminalFailure(err)
+	}
+}
+
+func completionTime(attempt egressaudit.Attempt, completedAt time.Time) time.Time {
+	if !completedAt.IsZero() && completedAt.Before(attempt.StartedAt()) {
+		return attempt.StartedAt()
+	}
+	return completedAt
 }
 
 // serveCleartextForward forwards a cleartext proxy request to its own origin.

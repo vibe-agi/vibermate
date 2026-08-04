@@ -24,34 +24,39 @@ import (
 	"github.com/vibe-agi/vibermate/internal/providertransport"
 	"github.com/vibe-agi/vibermate/internal/runtimepersistence"
 	"github.com/vibe-agi/vibermate/internal/toolapproval"
+	"github.com/vibe-agi/vibermate/internal/workspaceidentity"
+	"github.com/vibe-agi/vibermate/internal/workspaceroute"
 )
 
 var ErrInvalidBuildResult = errors.New("invalid runtime build result")
 
 // Runtime owns every successfully constructed production component.
 type Runtime struct {
-	status          *statusTracker
-	schemaReader    runtimepersistence.SchemaStateReader
-	accesses        accessRuntime
-	probeCatalog    access.ProviderProbeCatalog
-	credentials     credentialRuntime
-	activities      activityRuntime
-	connections     connectionEventRuntime
-	egress          egressaudit.Reader
-	approvals       approvalRuntime
-	connectionRules *connectionpolicy.Manager
-	monitor         ownedComponent
-	provider        providerRuntime
-	original        originalRuntime
-	exchanges       exchangeRuntime
-	captureRuns     captureRuntime
-	localCA         localCARuntime
-	proxy           proxyRuntime
-	offlineHold     offlinehold.RuntimeCoordinator
-	resumeProber    offlinehold.Prober
-	cleanups        cleanupStack
-	clock           Clock
-	timeout         LifecycleOptions
+	status            *statusTracker
+	schemaReader      runtimepersistence.SchemaStateReader
+	accesses          accessRuntime
+	probeCatalog      access.ProviderProbeCatalog
+	credentials       credentialRuntime
+	workspaceIdentity *workspaceidentity.Manager
+	workspaceRoutes   *workspaceroute.Manager
+	activities        activityRuntime
+	connections       connectionEventRuntime
+	egress            egressaudit.Reader
+	egressCompletion  *runtimeEgressRepository
+	approvals         approvalRuntime
+	connectionRules   *connectionpolicy.Manager
+	monitor           ownedComponent
+	provider          providerRuntime
+	original          originalRuntime
+	exchanges         exchangeRuntime
+	captureRuns       captureRuntime
+	localCA           localCARuntime
+	proxy             proxyRuntime
+	offlineHold       offlinehold.RuntimeCoordinator
+	resumeProber      offlinehold.Prober
+	cleanups          cleanupStack
+	clock             Clock
+	timeout           LifecycleOptions
 
 	shutdownOnce sync.Once
 	shutdownDone chan struct{}
@@ -146,6 +151,22 @@ func startWithBuilders(
 		return fail("sqlite", incompleteErr)
 	}
 	cleanups.register("sqlite", storageResult.store.Shutdown)
+	egressRepository := storageResult.store.EgressAttemptRepository()
+	if egressRepository == nil {
+		return fail(
+			"EgressAttempt recovery",
+			fmt.Errorf(
+				"%w: EgressAttempt repository is nil",
+				ErrInvalidBuildResult,
+			),
+		)
+	}
+	if _, err := egressRepository.Recover(
+		ctx,
+		options.Clock.Now().UTC(),
+	); err != nil {
+		return fail("EgressAttempt recovery", err)
+	}
 
 	securityRandom := newSynchronizedReader(options.SecurityRandom)
 	ownerContext, cancelOwner := context.WithCancelCause(context.WithoutCancel(ctx))
@@ -153,6 +174,23 @@ func startWithBuilders(
 		cancelOwner(errors.New("runtime owner context stopped"))
 		return nil
 	})
+	runtimeEgress := newRuntimeEgressRepository(
+		egressRepository,
+		tracker,
+		ownerContext,
+		options.Lifecycle,
+		cancelOwner,
+	)
+	workspaceIdentity, err := workspaceidentity.Open(
+		ctx,
+		options.Paths.DataDirectory(),
+		securityRandom,
+		options.Clock.Now(),
+	)
+	if err != nil {
+		return fail("machine and workspace identity", err)
+	}
+	cleanups.register("machine and workspace identity", workspaceIdentity.Shutdown)
 
 	certificateAuthority, err := builders.localCA.Build(ctx, localCABuildRequest{
 		ownerContext: ownerContext,
@@ -207,6 +245,14 @@ func startWithBuilders(
 		)
 	}
 	cleanups.register("Access runtime", accesses.Shutdown)
+	workspaceRoutes, err := workspaceroute.New(
+		storageResult.store.WorkspaceRouteRepository(),
+		accesses,
+		options.Clock,
+	)
+	if err != nil {
+		return fail("workspace route binding", err)
+	}
 
 	credentials, err := builders.credential.Build(credentialBuildRequest{
 		resolver: accesses,
@@ -318,9 +364,14 @@ func startWithBuilders(
 	if err != nil {
 		return fail("offline-hold original-origin probe", err)
 	}
+	blindResumeProber, err := blindtunnel.NewReachabilityProber()
+	if err != nil {
+		return fail("offline-hold blind tunnel probe", err)
+	}
 	resumeProber, err := newRuntimeResumeProber(
 		providerResumeProber,
 		originalResumeProber,
+		blindResumeProber,
 	)
 	if err != nil {
 		return fail("offline-hold resume probe", err)
@@ -329,7 +380,7 @@ func startWithBuilders(
 	provider, err := builders.provider.Build(providerBuildRequest{
 		coordinator: options.OfflineHold,
 		secrets:     options.Secrets,
-		audit:       storageResult.store.EgressAttemptRepository(),
+		audit:       runtimeEgress,
 	})
 	if err != nil {
 		return fail("provider transport", err)
@@ -344,7 +395,7 @@ func startWithBuilders(
 
 	original, err := builders.original.Build(originalBuildRequest{
 		coordinator: options.OfflineHold,
-		audit:       storageResult.store.EgressAttemptRepository(),
+		audit:       runtimeEgress,
 	})
 	if err != nil {
 		return fail("original-origin transport", err)
@@ -361,13 +412,14 @@ func startWithBuilders(
 	pending.register("original-origin transport", original.Shutdown)
 
 	exchanges, err := builders.exchange.Build(exchangeBuildRequest{
-		ownerContext:  ownerContext,
-		actions:       options.OfflineHold,
-		resolver:      accesses,
-		provider:      provider,
-		toolDecisions: approvals,
-		activities:    activities,
-		hold:          options.ExchangeHold,
+		ownerContext:    ownerContext,
+		actions:         options.OfflineHold,
+		resolver:        accesses,
+		workspaceRoutes: workspaceRoutes,
+		provider:        provider,
+		toolDecisions:   approvals,
+		activities:      activities,
+		hold:            options.ExchangeHold,
 	})
 	if err != nil || exchanges == nil {
 		buildErr := err
@@ -416,7 +468,7 @@ func startWithBuilders(
 		// tool intent goes to, so a person answers both in one place.
 		approvals:    approvals,
 		blindTunnels: blindTunnels,
-		egressAudit:  storageResult.store.EgressAttemptRepository(),
+		egressAudit:  runtimeEgress,
 		random:       securityRandom,
 	})
 	if err != nil {
@@ -470,29 +522,32 @@ func startWithBuilders(
 	}
 	tracker.commitInitialized(finalState.Revision)
 	return &Runtime{
-		status:          tracker,
-		schemaReader:    storageResult.store.SchemaStateReader(),
-		accesses:        accesses,
-		probeCatalog:    accesses,
-		credentials:     credentials,
-		activities:      activities,
-		connections:     connections,
-		egress:          storageResult.store.EgressAttemptRepository(),
-		approvals:       approvals,
-		connectionRules: connectionRules,
-		monitor:         monitor,
-		provider:        provider,
-		original:        original,
-		exchanges:       exchanges,
-		captureRuns:     captureRuns,
-		localCA:         certificateAuthority,
-		proxy:           proxy,
-		offlineHold:     options.OfflineHold,
-		resumeProber:    resumeProber,
-		cleanups:        cleanups,
-		clock:           options.Clock,
-		timeout:         options.Lifecycle,
-		shutdownDone:    make(chan struct{}),
+		status:            tracker,
+		schemaReader:      storageResult.store.SchemaStateReader(),
+		accesses:          accesses,
+		probeCatalog:      accesses,
+		credentials:       credentials,
+		workspaceIdentity: workspaceIdentity,
+		workspaceRoutes:   workspaceRoutes,
+		activities:        activities,
+		connections:       connections,
+		egress:            runtimeEgress,
+		egressCompletion:  runtimeEgress,
+		approvals:         approvals,
+		connectionRules:   connectionRules,
+		monitor:           monitor,
+		provider:          provider,
+		original:          original,
+		exchanges:         exchanges,
+		captureRuns:       captureRuns,
+		localCA:           certificateAuthority,
+		proxy:             proxy,
+		offlineHold:       options.OfflineHold,
+		resumeProber:      resumeProber,
+		cleanups:          cleanups,
+		clock:             options.Clock,
+		timeout:           options.Lifecycle,
+		shutdownDone:      make(chan struct{}),
 	}, nil
 }
 
@@ -524,6 +579,18 @@ func (r *Runtime) CaptureRunReader() capturerun.Reader {
 
 func (r *Runtime) CaptureRuns() capturerun.Controller {
 	return r.captureRuns
+}
+
+// WorkspaceIdentity resolves local working directories into opaque,
+// installation-scoped identities. It is not an authentication authority.
+func (r *Runtime) WorkspaceIdentity() workspaceidentity.LocalResolver {
+	return r.workspaceIdentity
+}
+
+// WorkspaceRoutes is the single Core authority for machine-scoped default
+// profile selection inside an already-resolved Access.
+func (r *Runtime) WorkspaceRoutes() workspaceroute.Controller {
+	return r.workspaceRoutes
 }
 
 // Activities returns the runtime-owned durable redacted timeline.
@@ -590,6 +657,12 @@ func (r *Runtime) AccessWriter() access.Writer {
 	return r.accesses
 }
 
+// AccessCatalog returns the durable editable Access aggregates. Unlike the
+// active SnapshotResolver, it also includes draft and disabled Accesses.
+func (r *Runtime) AccessCatalog() access.AggregateCatalog {
+	return r.accesses
+}
+
 // Credentials returns the write-only credential control boundary bound to the
 // active Access plan and host SecretStore.
 func (r *Runtime) Credentials() accesscredential.Controller {
@@ -642,8 +715,17 @@ func (r *Runtime) executeShutdown() {
 		context.Background(),
 		r.timeout.ShutdownTimeout,
 	)
-	r.shutdownErr = r.cleanups.shutdown(shutdownContext)
+	if r.egressCompletion != nil {
+		r.egressCompletion.beginShutdown(shutdownContext)
+	}
+	cleanupErr := r.cleanups.shutdown(shutdownContext)
 	cancel()
+	var durabilityErr error
+	if r.egressCompletion != nil {
+		r.egressCompletion.finishShutdown()
+		durabilityErr = r.egressCompletion.failure()
+	}
+	r.shutdownErr = errors.Join(cleanupErr, durabilityErr)
 	r.status.finishStopping(r.clock.Now(), r.shutdownErr)
 	close(r.shutdownDone)
 }

@@ -256,6 +256,7 @@ func Start(ctx context.Context, options Options) (*Host, error) {
 		Launcher:    launcherAuthority,
 		RunLifetime: options.CaptureRunLifetime,
 		Clock:       options.Runtime.Clock,
+		Workspaces:  runtime.WorkspaceIdentity(),
 		// The same authority that asks about a connection asks about handing
 		// a recognized client the Root, so both questions reach a person the
 		// same way and appear in the same place.
@@ -269,6 +270,12 @@ func Start(ctx context.Context, options Options) (*Host, error) {
 			ReadToken:  readToken,
 			WriteToken: writeToken,
 			ExpiresAt:  appExpiresAt,
+			Revision:   1,
+			Rotation: &desktopcontrol.SessionRotationPolicy{
+				Lifetime:  options.AppSessionTTL,
+				ReplayTTL: options.AppSessionReplayTTL,
+				Random:    random,
+			},
 		},
 		options.Runtime.Clock,
 	)
@@ -280,6 +287,7 @@ func Start(ctx context.Context, options Options) (*Host, error) {
 		Readiness:       ready,
 		Status:          runtime,
 		Accesses:        runtime.AccessWriter(),
+		AccessCatalog:   runtime.AccessCatalog(),
 		Resolver:        runtime.SnapshotResolver(),
 		Credentials:     runtime.Credentials(),
 		Activities:      runtime.Activities(),
@@ -289,6 +297,7 @@ func Start(ctx context.Context, options Options) (*Host, error) {
 		Offline:         runtime,
 		ConnectionRules: runtime.ConnectionRules(),
 		CaptureRuns:     runtime.CaptureRunReader(),
+		WorkspaceRoutes: runtime.WorkspaceRoutes(),
 	})
 	if err != nil {
 		return fail("App control routes", err)

@@ -84,6 +84,30 @@ Exact semantic Anthropic Messages and OpenAI Responses HTTP operations enter
 the same Exchange executor; semantic ingress carries no client authentication
 or hop-by-hop headers into IR or provider construction.
 
+`vibermate run -- ...` now gives local launches a stable installation and
+workspace scope without asking for a route name. The runtime creates one
+private random `MachineID` plus a private workspace HMAC key, derives an opaque
+`WorkspaceID` from the exact canonical launch directory, and keeps the absolute
+path out of the route identity and route row. The current local-only CaptureRun
+audit still retains its cwd; no remote Host is implemented. The launcher also
+copies `$USER` on Unix or `%USERNAME%` on Windows into the CaptureRun as an
+optional `LocalUserLabel`. That label is trimmed, bounded, and display-only: it
+is not authentication evidence and cannot affect machine/workspace identity,
+Access selection, routing, approval, quota, or upstream headers.
+
+After an exact AgentEndpoint resolves an Access, the runtime atomically creates
+or reads the durable `(AccessID, MachineID, WorkspaceID)` route binding. Each
+Exchange freezes the binding and profile revisions once, so a Desktop CAS
+switch affects only later requests while already admitted requests finish on
+their pinned route. The Activity UI groups current runs by stable workspace,
+shows the untrusted local-user labels, lists the Access/model/account attached
+to each route, and can switch among profiles already approved by that Access.
+Before a workspace has any Access-scoped binding, the group appears immediately
+as `Waiting for first request`; the UI does not guess an Access from the client
+name or working directory. This slice implements the local Desktop path only.
+Remote MachineRegistration, enrollment, and per-run Server capabilities remain
+unimplemented.
+
 The operation catalog freezes an `OperationPayloadClass` beside the operation
 kind, and the two axes are independent. `POST /v1/messages/count_tokens` is an
 auxiliary operation whose body is the complete messages, system text, and tool
@@ -117,9 +141,12 @@ immutable `EgressAttempt` instead: purpose, the policy authority that purpose
 requires, payload class, a typed parent, the authoritative target, the egress
 decision, pool reuse, byte counts, and a terminal that cannot be rewritten. It
 holds no secret, header, body, or tunnelled byte. Both the provider and
-original-origin transports emit one per outbound; blind tunnelling and
-runtime-originated egress have no writer yet. The authenticated control slice
-serves the two records separately.
+original-origin transports emit one per outbound and classify response EOF,
+read failure, timeout, and cancellation rather than treating every body close
+as success. Blind tunnelling appends its attempt before dialing and keeps its
+attempt and client-connection terminals consistent. Runtime-originated egress
+has no writer yet. The authenticated control slice serves the two records
+separately.
 
 Identities are generated independently and associated by typed reference. The
 Exchange, CaptureRun, connection, upstream attempt, and egress identities no
@@ -183,7 +210,25 @@ ProductRuntime, both listeners, and every route are ready. The packaged
 `vibermated` sidecar writes a one-shot bootstrap descriptor to the native shell;
 the Tauri shell exchanges that nonce outside the Webview and transfers one
 read/write control session to the main Webview. Development and packaged
-Webview origins are selected explicitly and never accepted together.
+Webview origins are selected explicitly and never accepted together. Bootstrap
+is a two-frame, capability-free progress/final contract with separate progress
+and ready deadlines. Storage-newer-than-binary, storage unavailable,
+SecretStore unavailable, and generic runtime failures cross as closed reason
+codes and map to synchronized localized recovery guidance; raw Go/Rust errors
+do not cross into the Webview.
+
+After readiness, the Rust host retains the packaged child and its generation
+identity. An unexpected exit before or after one-shot session delivery closes
+that generation, drops any undelivered capability, and emits only
+`{schema, reason: "daemon_exited"}` to the `main` Webview. The React boundary is
+listening before spawn, closes the old control client (aborting active and
+future requests), presents bilingual blocking guidance, and starts a new
+generation only after the user selects Restart. Intentional bounded App
+shutdown enters `stopping` before SIGTERM/kill and does not emit the crash
+event. Process status, stderr, paths, argv, environment, and capabilities are
+never event payloads. The retained minimal fault-record store and user-driven
+diagnostic export required by design 11 remain open because their
+storage/retention/export contract is not yet frozen.
 
 The authenticated control slice exposes status, active-plan metadata and apply,
 write-only credential replacement, Activity, ConnectionEvent, per-egress
@@ -192,9 +237,80 @@ Creating and controlling a capture run belongs to the launcher and its per-run
 capability; reading the list is an ordinary app read and carries no capability
 in either direction. Credential metadata inspection never reads secret bytes,
 and responses never contain a secret value or `SecretRef`. The React UI uses
-the synchronized `en-US` and `zh-CN` catalogs, can load the active Access
-revision before editing, and does not place capabilities or secrets in Web
-Storage.
+the synchronized `en-US` and `zh-CN` catalogs and uses neither `localStorage`
+nor `sessionStorage`. Its eight top-level views are real pinned TanStack Router
+routes. A Policy URL can carry one validated approval locator, legacy
+`#/…`, `/policy`, `/policies`, `/approvals`, and `/system` links replace into
+their canonical locations without retaining unsafe state, and the nested
+main-content scroller participates in browser history restoration. External
+hashes use the design's exact `#overview` spelling rather than `#/overview`.
+All 14 frozen ICM hash-route skeletons are direct-entry routes:
+`#overview`, `#access`, `#access/{accessId}/routing`,
+`#activity/requests/{exchangeId}`, `#extensions/discover`,
+`#extensions/installed`, `#extensions/detail/{extensionId}`,
+`#quality/sites`, `#dashboards/system`, `#activity/requests`,
+`#policies/approvals`, `#settings/recovery`, `#extensions/develop`, and
+`#dashboards/extensions/{dashboardId}`. Policy approvals reuse the real
+bounded queue, and `#activity/requests` is a real read-only Exchange-summary
+feed with explicit cursor pagination. Its dynamic
+`#activity/requests/{exchangeId}` route reads a closed, redacted projection from
+durable Activity and EgressAttempt evidence: Exchange/Access/status, a stable
+result code, ordered upstream-attempt IDs, an optional egress-proxy ID, and
+plugin-run IDs. Missing Exchanges return a typed 404 and incomplete evidence
+fails closed. Other deeper tasks without an authoritative control contract keep
+their exact URL and render an explicit unavailable boundary without simulating
+an object or reflecting an arbitrary locator into the document.
+
+For the current macOS main window, the native Tauri host also owns navigation
+restart persistence. A non-empty explicit launch hash always wins. Otherwise,
+the host loads a validated locator before the Router module is imported and
+installs it with history replacement. Route updates save only the schema and
+canonical locator in a bounded app-data file: the locator is at most 2 KiB and
+the complete file at most 4 KiB. The current macOS store requires an owned
+`0700` directory and owned regular `0600` file, refuses symlink traversal, and
+uses an atomic synchronized replacement. Native commands reject Webviews other
+than `main`. Capabilities, secrets, business records, and Query snapshots are
+not part of this file; after restart, business and Query state is read again
+from the authenticated control plane.
+
+Its session-scoped TanStack Query client owns seven independently polled
+loopback sources plus Access-plan and credential-metadata reads. Activity polls
+only its first page and loads older pages explicitly; each item is the closed
+four-field summary `id`, `occurredAt`, `accessId`, and `status`, and unknown
+status values render neutrally after bounded control-character validation.
+Partial failure keeps last-success evidence with per-source freshness,
+including when another source has not produced its first snapshot. Stale empty
+data is never presented as an authoritative empty result. Control writes do not
+retry, complete independently of follow-up reads, and invalidate only related
+snapshots after success; browser offline state does not pause local-daemon
+reads. Credential values and complete Access-apply payloads remain only in
+short-lived command memory and never enter Query or Mutation cache. The native
+one-shot session is consumed once under React StrictMode and is reused if the
+first loopback inspection needs a UI retry. The wider entity tab families and
+unfrozen filter/time-range/inspector grammar remain open. Browser preview does
+not invoke the native navigation store and therefore does not itself prove a
+macOS restart. The current v6 packaged acceptance contract instead seeds a
+noncanonical safe locator in an isolated HOME, requires the Router to rewrite
+it atomically, verifies the exit flush, and repeats the proof in a second cold
+launch. No clean v6 report has yet been produced for this dirty worktree.
+Multi-window restore and synchronization are not implemented. Windows
+owner/DACL and reparse-point protections are also not implemented, so the
+non-Unix store fails closed. The UI event/WebSocket
+invalidation and recovery contract is not frozen; the current snapshots
+continue polling. SQLite and the Access Manager can now read a complete durable
+aggregate by ID, including a disabled Access, but the current control API still
+returns only the active revision and credential coordinates. The canonical
+OpenAPI does not yet define the root Access GET/PATCH DTOs and conflicts with
+the design prose on ETag/If-Match representation, so the UI deliberately locks
+aggregate editing while leaving credential rotation available. It will not
+invent a third wire contract, synthesize defaults, or overwrite configuration
+it could not hydrate. The existing transitional apply route accepts only an
+enabled aggregate and rejects every other status before calling the writer. A
+successful response is a closed commit receipt: `active` includes the exact
+candidate plan hash frozen at publication, while a known durable commit whose
+projection failed returns `unavailable` without a hash. The UI reports that
+state as unavailable and asks for a restart instead of claiming traffic is
+active; the route never performs a racy post-commit plan lookup.
 
 The `vibermate run -- <command>` launcher consumes only short-lived, private,
 generation-scoped discovery; creates one CaptureRun; supervises one child;
@@ -216,9 +332,13 @@ assembly with exactly one selected fixed client: Claude Code 2.1.220 or Codex
 CLI 0.145.0. It derives the daemon and launcher from one App bundle and
 cross-checks an embedded build manifest against actual artifact digests and Go
 build metadata. The manifest binds the App build to one clean Git revision,
-pinned toolchains, explicit Desktop/development-sidecar profiles,
+pinned toolchains, an explicit Desktop/sidecar profile,
 configuration digests, and both packaged sidecars. The deterministic sequence
-uses a unique missing SecretRef; the credentialed continuation uses the
+anchors a fixed read-only SQLite connection before the client run, requires
+exactly one new terminal Exchange failure, and cross-checks its ID, Access, and
+status through the canonical paged `/activities` API before and after a true
+cold reopen; the private seam contributes only ordering and terminal reason.
+It uses a unique missing SecretRef; the credentialed continuation uses the
 development file SecretStore and defaults to a local Cherry Studio API at
 `http://127.0.0.1:23333/v1` with model `dashscope:glm-5`. No acceptance mode
 takes a secret value on its command line. The Codex runner isolates
@@ -238,11 +358,26 @@ only the affected Access projection unavailable, so new reads and writes fail
 closed instead of serving an unmarked stale plan. A normal close/reopen recovery
 recompiles the same revision and hash from SQLite. ProductRuntime reports only
 `initialized`; DesktopHost derives product readiness and withdraws discovery
-before shutdown. Unit and component tests do not by themselves prove packaged
-Claude, provider, `SIGINT`, or force-kill behavior; those claims require a
-passing private v5 report from the clean frozen artifact.
+before shutdown. The embedded migration set is revision 27 and its revision is
+derived from the ordered sources rather than a production constant. A database
+with newer Goose history is rejected before any migration is applied. Runtime
+startup reconstructs every durable EgressAttempt through the domain
+constructors before changing a row; corrupt or partial terminal evidence aborts
+the transaction and startup, while valid nonterminals left by an earlier daemon
+become `failed(daemon_restarted)` with a completion time no earlier than start.
+Terminal construction and persistence errors latch storage unavailable, cancel
+the runtime owner, and make bounded shutdown fail instead of leaving an
+outbound nonterminal silently. The same migration adds the typed
+`plugin_catalog_sync` and `plugin_artifact_fetch` runtime egress purposes while
+preserving revision-25 rows, AUTOINCREMENT continuity, and all query indexes.
+Unit and component tests do not by themselves prove packaged Claude, provider,
+`SIGINT`, or force-kill behavior; those claims require a passing private report
+from the clean frozen artifact. The current producer emits v6; the verifier
+retains the historical v5 contract solely so older evidence remains checkable
+against its original, smaller check set.
 
-Even a passing M0 assembly report does not prove physical network loss/sleep,
+Even a passing initial macOS arm64 packaged-app acceptance report (M0) does not
+prove physical network loss/sleep,
 power-loss durability, arbitrary client/provider compatibility, Root
 installation, signing, notarization, or release secret protection. The code
 does not implement Server, Windows or Linux SecretStore backends, system proxy
@@ -297,16 +432,122 @@ make vet
 make vuln
 ```
 
+For browser-only UI work, start Vite and open the explicit preview URL:
+
+```text
+pnpm --dir ui/desktop install --frozen-lockfile
+pnpm --dir ui/desktop dev
+open 'http://127.0.0.1:1420/?preview=1#overview'
+pnpm --dir ui/desktop check:browser
+```
+
+Preview mode exists only in a development build and only when `preview=1` is
+present. It uses one stateful in-memory `ControlClient`; it does not start the
+daemon, proxy traffic, change host state, or read a real credential. The
+preview client is removed from the production bundle, whose CSP remains strict.
+The browser suite exercises the same route tree through direct entry, reload,
+back/forward history, precise approval links, invalid and missing locators,
+nested-scroll restoration, keyboard skip navigation, and narrow viewports. Its
+permanent boundary cases also cover maximum-size identities in both locales,
+all five Policy actions at phone width, cyclic cursor refusal, honest initial
+metric loading, a source that fails before its first success, and missing
+Exchange retry/back recovery without horizontal document overflow. Its reload
+checks cover browser URL/history behavior; preview disables native navigation
+load/save, so this suite is not macOS cold-start restoration acceptance. That
+proof belongs to the packaged v6 acceptance command and still requires a clean
+runner result.
+
+The manual `packaged deterministic acceptance` workflow is the fail-closed
+freshness runner for the initial macOS arm64 packaged-app slice (M0). Its
+protected environment
+must provide a self-hosted runner labelled `vibermate-acceptance` and an
+absolute `VIBERMATE_CLAUDE_2_1_220_PATH`. The workflow never installs or
+downloads a client: the pre-provisioned executable must match the complete
+built-in Claude Code 2.1.220 release evidence. It builds the selected clean SHA,
+runs deterministic-only acceptance without a provider credential, verifies the
+private v6 report against that exact SHA and client even after an acceptance
+failure, and retains the uncommitted report artifact for seven days. The
+workflow explicitly requires the v6 schema, so a report cannot remove the new
+checks by relabelling itself as v5. The verifier accepts a historical v5 report
+only when its caller explicitly expects v5 and it has the exact frozen v5 check
+set. For current v6 evidence, the workflow also supplies trusted source, App,
+acceptance-executable, and client coordinates independently of the report. The
+verifier rehashes those bytes and the frozen configuration, requires the source
+coordinate to be the clean Git top-level checkout at the selected full commit,
+and re-parses the selected App's v2 build manifest. A syntactically valid digest
+inside a report is therefore not accepted as proof of current bytes.
+A passing run contributes packaged production-wiring evidence for the
+architecture gate (G0); it is not Preview or Release approval.
+
+Desktop bundling has two deliberately named entry points. `pnpm --dir
+ui/desktop bundle:development` builds a local, unsigned development bundle and
+refuses inherited Apple distribution credentials. `pnpm --dir ui/desktop
+bundle:packaged-acceptance` requires the clean macOS arm64 candidate profile,
+native Keychain sidecars, the pinned Node/Go/Rust/pnpm/Tauri toolchains, and a
+pre-bundle manifest/sidecar digest recheck. A raw `tauri build` has no implicit
+profile and fails closed. There is still no publish or `bundle:release`
+command. The manual `protected macOS Developer ID candidate` workflow instead
+builds one unsigned Universal candidate without Apple distribution
+credentials, transfers it through a closed archive, and generates
+source-traceability evidence (R0) on a fresh runner that never executes
+candidate code. R0 is an internal release-evidence stage code, not an industry
+acronym. Here it binds the selected commit, dependency lock files, exact
+toolchain, SPDX SBOM, build manifest, and staged artifact digests. That
+runner invokes the admitted Syft 1.44.0 binary directly, matches its complete
+file inventory and SHA-256 values to the staged payload ledger, and then runs
+the independent Go artifact verifier. Protected signing is gated on that
+result; separate reviewed environments perform inside-out Developer ID signing
+and DMG-only notarization/stapling, with credential cleanup before artifact
+upload.
+After successful notarization, a fresh standard `macos-15` arm64 job with no
+GitHub Environment and without Apple distribution credentials downloads that
+exact stapled-DMG artifact. It checks out the candidate inertly only to prove
+ancestry, executes trusted tooling plus the notarized App, mounts the DMG
+read-only, and copies `VibeMate.app` into a private stable
+`$RUNNER_TEMP/.../Applications` root rather than the real `/Applications`.
+Its only Apple identity input is the non-secret repository variable
+`VIBERMATE_APPLE_TEAM_ID`; an absent or malformed value fails closed.
+The job rechecks the Team ID, certificate, hardened signatures, exact Mach-O
+inventory, Universal slices, minimum macOS version, build manifest, tree
+ledger, and Gatekeeper decisions. It then reuses packaged acceptance for two
+bounded launches, launcher-discovery/router readiness, navigation persistence,
+and graceful exit from the installed path. Only after inode-bound cleanup of
+the mount, App, isolated home, and state does it create the closed
+`signed-package-installation-report.json` and checksum; a separate verifier
+rebinds them to the raw signing/notary evidence and stapled DMG. The report
+explicitly does not assert real-system `/Applications` installation, CLI-path
+installation, updater behavior, system trust/proxy behavior, or uninstall.
+
+This workflow creates bounded review evidence, not a release. Before any real
+Apple-credentialed run, repository administrators must confirm that Apple
+secrets exist only in the named environments and that required reviewers,
+prevention of self-review, protected default-branch deployment policy, and
+administrator bypass restrictions are active. The 2026-08-03 external audit
+found zero GitHub Environments in the private repository (default branch
+`main`); branch
+protection and rulesets APIs both returned 403 with the current plan's
+“Upgrade to GitHub Pro or make public” restriction. Consequently
+`github.ref_protected` is currently false and every job correctly fails closed;
+that assertion must not be weakened. The PAT also received 403 when enumerating
+repository secret/variable names, so their configuration remains unverified.
+Release still requires provisioned protected environments, a successful real
+Developer ID/notary/installed-evidence run, current packaged conformance,
+independent reproducibility (R2), signed-package association (R3), release
+approval, and update and uninstall evidence. The packaged-acceptance artifact,
+unsigned
+source-traceability payload (R0), and workflow definition must not be
+represented as distributable or as completed installation evidence.
+
 `make check` generates development-only Desktop icons and sidecars in ignored
 build directories before running the UI and native-shell tests. It also
-generates the build manifest later embedded by Tauri. The generated sidecar
-uses the plaintext-equivalent development SecretStore; it must not be
-distributed as a release build.
+generates the build manifest later embedded by Tauri and runs Rust formatting,
+warning-free clippy, and native tests under the exact pinned toolchain. The
+generated sidecar uses the plaintext-equivalent development SecretStore; it
+must not be distributed as a release build.
 
-`cargo audit` currently exits successfully with 17 allowed transitive warnings,
-including `RUSTSEC-2024-0429` in `glib`. That dependency is absent from the
-current `aarch64-apple-darwin` tree, but the lockfile warning is not described as
-a warning-free audit and still requires release-time disposition.
+`cargo audit` findings are checked against the repository's explicit policy.
+An allowed or target-inactive transitive warning is not described as a
+warning-free audit and still requires release-time disposition.
 
 The runtime and package ownership map is in
 [`docs/module-map.md`](docs/module-map.md).

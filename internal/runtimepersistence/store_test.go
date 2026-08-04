@@ -2,12 +2,18 @@ package runtimepersistence
 
 import (
 	"context"
+	"database/sql"
 	"errors"
+	"fmt"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"runtime"
+	"strings"
 	"testing"
 	"time"
+
+	"github.com/pressly/goose/v3"
 )
 
 func TestSQLiteStoreReopensWithContinuousSchemaRevision(t *testing.T) {
@@ -64,6 +70,108 @@ func TestSQLiteStoreReopensWithContinuousSchemaRevision(t *testing.T) {
 			firstState,
 			secondState,
 		)
+	}
+}
+
+func TestSQLiteStoreRejectsFutureGooseHistoryBeforeMigrations(t *testing.T) {
+	t.Parallel()
+
+	embeddedRevision := embeddedSchemaRevisionForTest(t)
+	tests := []struct {
+		name      string
+		revision  int64
+		isApplied bool
+	}{
+		{
+			name:      "current plus one applied",
+			revision:  embeddedRevision + 1,
+			isApplied: true,
+		},
+		{
+			name:      "distant rolled back history",
+			revision:  embeddedRevision + 100,
+			isApplied: false,
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+
+			databasePath := filepath.Join(t.TempDir(), "runtime.db")
+			seedGooseHistory(t, databasePath, test.revision, test.isApplied)
+
+			ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+			defer cancel()
+			store, err := Open(ctx, Options{
+				DatabasePath:           databasePath,
+				BusyTimeout:            DefaultBusyTimeout,
+				CommitReconcileTimeout: DefaultCommitReconcileTimeout,
+			})
+			if store != nil {
+				_ = store.Shutdown(context.Background())
+				t.Fatal("future-schema open returned a store")
+			}
+			if !errors.Is(err, ErrSchemaNewerThanBinary) {
+				t.Fatalf("future-schema open error = %v, want ErrSchemaNewerThanBinary", err)
+			}
+			wantDiagnostic := fmt.Sprintf(
+				"database revision %d, embedded revision %d",
+				test.revision,
+				embeddedRevision,
+			)
+			if !strings.Contains(err.Error(), wantDiagnostic) {
+				t.Fatalf("future-schema diagnostic = %q, want %q", err, wantDiagnostic)
+			}
+			assertSQLiteTableAbsent(t, databasePath, "runtime_metadata")
+		})
+	}
+}
+
+func TestSchemaRevisionOfSources(t *testing.T) {
+	t.Parallel()
+
+	revision, err := schemaRevisionOfSources([]*goose.Source{
+		{Version: 1},
+		{Version: 4},
+		{Version: 26},
+		{Version: 27},
+	})
+	if err != nil {
+		t.Fatalf("derive schema revision: %v", err)
+	}
+	if revision != 27 {
+		t.Fatalf("derived schema revision = %d, want 27", revision)
+	}
+
+	invalidSources := []struct {
+		name    string
+		sources []*goose.Source
+	}{
+		{name: "empty"},
+		{name: "nil source", sources: []*goose.Source{nil}},
+		{name: "zero version", sources: []*goose.Source{{Version: 0}}},
+		{
+			name: "duplicate version",
+			sources: []*goose.Source{
+				{Version: 1},
+				{Version: 1},
+			},
+		},
+		{
+			name: "descending version",
+			sources: []*goose.Source{
+				{Version: 2},
+				{Version: 1},
+			},
+		},
+	}
+	for _, test := range invalidSources {
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+			if _, err := schemaRevisionOfSources(test.sources); err == nil {
+				t.Fatal("invalid migration sources were accepted")
+			}
+		})
 	}
 }
 
@@ -200,10 +308,104 @@ func openTestStore(t *testing.T, databasePath string) *Store {
 	return store
 }
 
+func embeddedSchemaRevisionForTest(t *testing.T) int64 {
+	t.Helper()
+	migrations, err := fs.Sub(migrationFiles, "migrations")
+	if err != nil {
+		t.Fatalf("open embedded migrations: %v", err)
+	}
+	database := sql.OpenDB(newSQLiteConnector(
+		filepath.Join(t.TempDir(), "embedded-revision.db"),
+		DefaultBusyTimeout,
+	))
+	defer func() {
+		if err := database.Close(); err != nil {
+			t.Errorf("close embedded-revision database: %v", err)
+		}
+	}()
+	provider, err := goose.NewProvider(
+		goose.DialectSQLite3,
+		database,
+		migrations,
+		goose.WithDisableGlobalRegistry(true),
+	)
+	if err != nil {
+		t.Fatalf("construct migration provider: %v", err)
+	}
+	revision, err := schemaRevisionOfSources(provider.ListSources())
+	if err != nil {
+		t.Fatalf("derive embedded schema revision: %v", err)
+	}
+	return revision
+}
+
+func seedGooseHistory(
+	t *testing.T,
+	databasePath string,
+	revision int64,
+	isApplied bool,
+) {
+	t.Helper()
+	database := sql.OpenDB(newSQLiteConnector(databasePath, DefaultBusyTimeout))
+	database.SetMaxOpenConns(1)
+	database.SetMaxIdleConns(1)
+	if err := database.PingContext(context.Background()); err != nil {
+		_ = database.Close()
+		t.Fatalf("open future-schema fixture: %v", err)
+	}
+	if _, err := database.ExecContext(
+		context.Background(),
+		`CREATE TABLE goose_db_version (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			version_id INTEGER NOT NULL,
+			is_applied INTEGER NOT NULL,
+			tstamp TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+		)`,
+	); err != nil {
+		_ = database.Close()
+		t.Fatalf("create Goose history fixture: %v", err)
+	}
+	if _, err := database.ExecContext(
+		context.Background(),
+		`INSERT INTO goose_db_version (version_id, is_applied) VALUES (0, 1), (?, ?)`,
+		revision,
+		isApplied,
+	); err != nil {
+		_ = database.Close()
+		t.Fatalf("seed Goose history fixture: %v", err)
+	}
+	if err := database.Close(); err != nil {
+		t.Fatalf("close future-schema fixture: %v", err)
+	}
+}
+
+func assertSQLiteTableAbsent(t *testing.T, databasePath string, tableName string) {
+	t.Helper()
+	database := sql.OpenDB(newSQLiteConnector(databasePath, DefaultBusyTimeout))
+	database.SetMaxOpenConns(1)
+	database.SetMaxIdleConns(1)
+	defer func() {
+		if err := database.Close(); err != nil {
+			t.Errorf("close inspected database: %v", err)
+		}
+	}()
+	var count int
+	if err := database.QueryRowContext(
+		context.Background(),
+		`SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = ?`,
+		tableName,
+	).Scan(&count); err != nil {
+		t.Fatalf("inspect SQLite table %q: %v", tableName, err)
+	}
+	if count != 0 {
+		t.Fatalf("SQLite table %q exists after rejected migration", tableName)
+	}
+}
+
 func assertInitialSchemaState(t *testing.T, state SchemaState) {
 	t.Helper()
-	if state.Revision != 22 {
-		t.Fatalf("schema revision = %d, want 22", state.Revision)
+	if state.Revision != 27 {
+		t.Fatalf("schema revision = %d, want 27", state.Revision)
 	}
 	if state.InitializedAt == "" {
 		t.Fatal("schema initialization timestamp is empty")

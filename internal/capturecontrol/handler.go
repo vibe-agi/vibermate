@@ -25,6 +25,7 @@ import (
 	"github.com/vibe-agi/vibermate/internal/clientadapter"
 	"github.com/vibe-agi/vibermate/internal/localca"
 	"github.com/vibe-agi/vibermate/internal/toolapproval"
+	"github.com/vibe-agi/vibermate/internal/workspaceidentity"
 )
 
 const (
@@ -43,6 +44,7 @@ const (
 	ReasonAdapterVerification   ReasonCode = "adapter_verification_failed"
 	ReasonProjectionUnavailable ReasonCode = "access_projection_unavailable"
 	ReasonCaptureRunCreate      ReasonCode = "capture_run_create_failed"
+	ReasonWorkspaceUnavailable  ReasonCode = "workspace_identity_unavailable"
 	ReasonRunCapabilityRejected ReasonCode = "run_capability_rejected"
 	ReasonInvalidProcess        ReasonCode = "invalid_process_attachment"
 	ReasonInvalidRoute          ReasonCode = "control_route_not_found"
@@ -61,6 +63,7 @@ type Options struct {
 	Launcher    *LauncherAuthority
 	RunLifetime time.Duration
 	Clock       Clock
+	Workspaces  workspaceidentity.LocalResolver
 	// ClientRootApprovals decides whether a client recognized by its publisher
 	// may receive the Root. Leaving it nil is a decision, not an oversight:
 	// nothing can ask, so no such client is given one.
@@ -87,6 +90,7 @@ type Handler struct {
 	rootAsk     ClientRootApprovals
 	runLifetime time.Duration
 	clock       Clock
+	workspaces  workspaceidentity.LocalResolver
 	mux         *http.ServeMux
 }
 
@@ -94,29 +98,7 @@ type CreateRequest struct {
 	CWD            string   `json:"cwd"`
 	Command        []string `json:"command"`
 	ExecutablePath string   `json:"executablePath"`
-}
-
-type LaunchGrant struct {
-	Run             capturerun.View               `json:"run"`
-	CatalogRevision clientadapter.CatalogRevision `json:"catalogRevision"`
-	LaunchRecipe    clientadapter.LaunchRecipe    `json:"launchRecipe"`
-	// Recognition says whether the catalog knows this program at all. A
-	// catalogued client at an uncatalogued version is launched without a trust
-	// root and cannot complete a decrypted handshake; the launcher says so
-	// rather than letting the client fail with a transport error nobody can
-	// explain.
-	Recognition clientadapter.Recognition `json:"recognition"`
-	Adapter     *clientadapter.Evidence   `json:"adapter,omitempty"`
-	// Signer is what a recognized launch carries instead of Adapter. The two
-	// are different claims and never both hold, and a launcher that saw only
-	// Adapter refused a recognized grant as though it had no evidence at all.
-	Signer               *clientadapter.SignerEvidence `json:"signer,omitempty"`
-	ExecutablePath       string                        `json:"executablePath"`
-	ProxyOrigin          string                        `json:"proxyOrigin"`
-	ProxyCapability      string                        `json:"proxyCapability"`
-	RunCapability        string                        `json:"runCapability"`
-	RootPEMPath          string                        `json:"rootPemPath,omitempty"`
-	ProtectedAuthorities []string                      `json:"protectedAuthorities"`
+	LocalUserLabel string   `json:"localUserLabel,omitempty"`
 }
 
 type AttachRequest struct {
@@ -128,6 +110,7 @@ func New(options Options) (*Handler, error) {
 		options.Verifier == nil ||
 		options.Authorities == nil ||
 		options.Clock == nil ||
+		options.Workspaces == nil ||
 		options.Launcher == nil ||
 		options.RunLifetime <= 0 {
 		return nil, errors.New("CaptureRun control dependencies are incomplete")
@@ -148,6 +131,7 @@ func New(options Options) (*Handler, error) {
 		launcher:    options.Launcher,
 		runLifetime: options.RunLifetime,
 		clock:       options.Clock,
+		workspaces:  options.Workspaces,
 		mux:         http.NewServeMux(),
 	}
 	handler.mux.HandleFunc("POST /api/v1/capture-runs", handler.create)
@@ -268,6 +252,11 @@ func (handler *Handler) create(
 			signer = &evidence
 		}
 	}
+	workspace, err := handler.workspaces.ResolveLocal(request.Context(), input.CWD)
+	if err != nil && !errors.Is(err, workspaceidentity.ErrInvalidIdentity) {
+		writeProblem(writer, http.StatusServiceUnavailable, ReasonWorkspaceUnavailable)
+		return
+	}
 	grant, err := handler.runs.Create(
 		request.Context(),
 		capturerun.CreateCommand{
@@ -277,25 +266,28 @@ func (handler *Handler) create(
 			CatalogRevision: detection.CatalogRevision,
 			Adapter:         adapter,
 			Recognition:     detection.Recognition,
+			Workspace:       workspace,
+			LocalUserLabel:  input.LocalUserLabel,
 		},
 	)
 	if err != nil {
 		writeProblem(writer, http.StatusUnprocessableEntity, ReasonCaptureRunCreate)
 		return
 	}
+	runView := CaptureRunViewOf(grant.Run)
 	writeJSON(writer, http.StatusCreated, LaunchGrant{
-		Run:                  grant.Run,
+		Run:                  runView,
 		CatalogRevision:      detection.CatalogRevision,
 		LaunchRecipe:         recipe,
 		Recognition:          detection.Recognition,
-		Adapter:              adapter,
-		Signer:               signer,
+		Adapter:              runView.ClientAdapter,
+		Signer:               clientSignerViewOf(signer),
 		ExecutablePath:       detection.CanonicalPath,
-		ProxyOrigin:          handler.proxyOrigin,
-		ProxyCapability:      grant.ProxyCapability.Value(),
+		ProxyAddress:         handler.proxyOrigin,
+		ProxyToken:           grant.ProxyCapability.Value(),
 		RunCapability:        grant.ControlCapability.Value(),
 		RootPEMPath:          rootPath,
-		ProtectedAuthorities: append([]string(nil), authorities...),
+		ProtectedAuthorities: append([]string{}, authorities...),
 	})
 }
 
@@ -324,7 +316,7 @@ func (handler *Handler) attach(
 		writeProblem(writer, http.StatusForbidden, ReasonRunCapabilityRejected)
 		return
 	}
-	writeJSON(writer, http.StatusOK, view)
+	writeJSON(writer, http.StatusOK, CaptureRunViewOf(view))
 }
 
 func (handler *Handler) heartbeat(
@@ -346,7 +338,7 @@ func (handler *Handler) heartbeat(
 		writeProblem(writer, http.StatusForbidden, ReasonRunCapabilityRejected)
 		return
 	}
-	writeJSON(writer, http.StatusOK, view)
+	writeJSON(writer, http.StatusOK, CaptureRunViewOf(view))
 }
 
 func (handler *Handler) finish(
@@ -394,7 +386,8 @@ func validateCreateRequest(input CreateRequest) error {
 		input.ExecutablePath == "" ||
 		!filepath.IsAbs(input.ExecutablePath) ||
 		len(input.Command) == 0 ||
-		len(input.Command) > maxArguments {
+		len(input.Command) > maxArguments ||
+		!capturerun.ValidLocalUserLabel(input.LocalUserLabel) {
 		return errors.New("CaptureRun create request is invalid")
 	}
 	total := 0
@@ -485,13 +478,15 @@ func writeProblem(
 	writer.Header().Set("Cache-Control", "no-store")
 	writer.WriteHeader(status)
 	_ = json.NewEncoder(writer).Encode(struct {
-		Type       string     `json:"type"`
-		Status     int        `json:"status"`
-		ReasonCode ReasonCode `json:"reasonCode"`
+		Type   string     `json:"type"`
+		Title  string     `json:"title"`
+		Status int        `json:"status"`
+		Code   ReasonCode `json:"code"`
 	}{
-		Type:       "urn:vibermate:error:" + strings.ReplaceAll(string(reason), "_", "-"),
-		Status:     status,
-		ReasonCode: reason,
+		Type:   "urn:vibermate:error:" + strings.ReplaceAll(string(reason), "_", "-"),
+		Title:  http.StatusText(status),
+		Status: status,
+		Code:   reason,
 	})
 }
 
@@ -526,60 +521,4 @@ func (handler *Handler) askClientRoot(
 		return false, err
 	}
 	return outcome.Allowed, nil
-}
-
-// Validate is the one place a launch grant's shape is decided.
-//
-// It lives here, beside the type, because the producer and the consumer must
-// agree and previously did not: this package answered an approved recognized
-// launch with a Root-bearing recipe and no release evidence, and the launcher
-// refused exactly that. Both packages' tests passed. A shape checked in two
-// places is a shape checked nowhere.
-//
-// A Root-bearing recipe rests on exactly one kind of evidence. Release
-// evidence says which build this is; signer evidence says who published it.
-// Both at once would mean a detection claimed both, which cannot happen;
-// neither would mean the recipe rests on nothing.
-func (grant LaunchGrant) Validate() error {
-	if !grant.CatalogRevision.Valid() || !grant.LaunchRecipe.Valid() ||
-		!grant.Recognition.Valid() {
-		return errors.New("CaptureRun launch grant is incomplete")
-	}
-	if grant.Adapter != nil && grant.Signer != nil {
-		return errors.New(
-			"CaptureRun launch grant carries release and signer evidence at once",
-		)
-	}
-	switch {
-	case grant.Adapter != nil:
-		if err := grant.Adapter.Validate(); err != nil ||
-			grant.Adapter.CatalogRevision != grant.CatalogRevision ||
-			grant.Adapter.LaunchRecipe != grant.LaunchRecipe ||
-			grant.LaunchRecipe == clientadapter.LaunchGeneric ||
-			grant.Recognition != clientadapter.RecognitionVerified {
-			return errors.New(
-				"CaptureRun launch grant adapter evidence is inconsistent",
-			)
-		}
-	case grant.Signer != nil:
-		if err := grant.Signer.Validate(); err != nil ||
-			grant.Signer.CatalogRevision != grant.CatalogRevision ||
-			grant.Signer.LaunchRecipe != grant.LaunchRecipe ||
-			grant.LaunchRecipe == clientadapter.LaunchGeneric ||
-			grant.Recognition != clientadapter.RecognitionRecognized {
-			return errors.New(
-				"CaptureRun launch grant signer evidence is inconsistent",
-			)
-		}
-	default:
-		if grant.LaunchRecipe != clientadapter.LaunchGeneric {
-			return errors.New(
-				"CaptureRun launch grant omitted the evidence its recipe rests on",
-			)
-		}
-	}
-	if grant.LaunchRecipe.RequiresRoot() && grant.RootPEMPath == "" {
-		return errors.New("CaptureRun launch grant is missing the local Root")
-	}
-	return nil
 }

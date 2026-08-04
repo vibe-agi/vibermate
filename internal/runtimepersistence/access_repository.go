@@ -90,6 +90,38 @@ func (r *accessRepository) LoadAll(ctx context.Context) ([]access.Aggregate, err
 	return aggregates, nil
 }
 
+func (r *accessRepository) Load(
+	ctx context.Context,
+	accessID access.AccessID,
+) (access.Aggregate, bool, error) {
+	validatedID, err := access.NewAccessID(accessID.String())
+	if err != nil {
+		return access.Aggregate{}, false, err
+	}
+	permit, err := r.operations.admit(ctx)
+	if err != nil {
+		return access.Aggregate{}, false, err
+	}
+	defer permit.finish()
+
+	aggregate, exists, err := loadAccessAggregate(
+		permit.context,
+		r.database,
+		validatedID,
+	)
+	if err != nil {
+		return access.Aggregate{}, false, fmt.Errorf(
+			"load Access aggregate accessId=%q: %w",
+			validatedID.String(),
+			err,
+		)
+	}
+	if !exists {
+		return access.Aggregate{}, false, nil
+	}
+	return aggregate.Clone(), true, nil
+}
+
 func (r *accessRepository) CompareAndSwap(
 	ctx context.Context,
 	mutation access.Mutation,

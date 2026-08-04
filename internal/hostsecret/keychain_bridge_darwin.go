@@ -122,10 +122,17 @@ func (store *KeychainStore) addItem(
 func (store *KeychainStore) updateItem(
 	reference secretstore.Reference,
 	value []byte,
-	revision secretstore.Revision,
+	expectedRevision secretstore.Revision,
+	nextRevision secretstore.Revision,
 ) error {
 	query := store.query(reference)
 	defer C.CFRelease(C.CFTypeRef(query))
+	expected := cfData(encodeRevision(expectedRevision))
+	defer C.CFRelease(C.CFTypeRef(expected))
+	// kSecAttrGeneric is part of the search dictionary, so SecItemUpdate only
+	// matches the exact physical revision observed by Replace. Two processes
+	// racing from one revision cannot both update the item.
+	C.vibermateDictionarySet(query, C.kSecAttrGeneric, C.CFTypeRef(expected))
 	changes := C.CFDictionaryCreateMutable(
 		C.kCFAllocatorDefault,
 		0,
@@ -136,13 +143,19 @@ func (store *KeychainStore) updateItem(
 	data := cfData(value)
 	defer C.CFRelease(C.CFTypeRef(data))
 	C.vibermateDictionarySet(changes, C.kSecValueData, C.CFTypeRef(data))
-	generic := cfData(encodeRevision(revision))
+	generic := cfData(encodeRevision(nextRevision))
 	defer C.CFRelease(C.CFTypeRef(generic))
 	C.vibermateDictionarySet(changes, C.kSecAttrGeneric, C.CFTypeRef(generic))
-	return keychainError(C.SecItemUpdate(
+	status := C.SecItemUpdate(
 		C.CFDictionaryRef(query),
 		C.CFDictionaryRef(changes),
-	))
+	)
+	if status == C.errSecItemNotFound {
+		// The item was deleted or its revision advanced between the attribute
+		// read and this conditional update. Both are CAS conflicts.
+		return secretstore.ErrRevisionConflict
+	}
+	return keychainError(status)
 }
 
 func revisionFrom(attributes C.CFDictionaryRef) (secretstore.Revision, error) {

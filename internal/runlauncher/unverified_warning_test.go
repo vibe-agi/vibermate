@@ -5,7 +5,6 @@ import (
 	"testing"
 
 	"github.com/vibe-agi/vibermate/internal/capturecontrol"
-	"github.com/vibe-agi/vibermate/internal/capturerun"
 	"github.com/vibe-agi/vibermate/internal/clientadapter"
 )
 
@@ -19,7 +18,7 @@ func TestAnUnverifiedClientIsToldWhyItWillFail(t *testing.T) {
 	var stderr strings.Builder
 	launcher := &Launcher{config: Config{Stderr: &stderr}}
 	launcher.warnUnverified(capturecontrol.LaunchGrant{
-		Run:         capturerun.View{ExecutableLabel: "codex"},
+		Run:         capturecontrol.CaptureRunView{ExecutableLabel: "codex"},
 		Recognition: clientadapter.RecognitionUnverified,
 	})
 	warning := stderr.String()
@@ -44,7 +43,7 @@ func TestOnlyAnUnverifiedClientIsWarnedAbout(t *testing.T) {
 		var stderr strings.Builder
 		launcher := &Launcher{config: Config{Stderr: &stderr}}
 		launcher.warnUnverified(capturecontrol.LaunchGrant{
-			Run:         capturerun.View{ExecutableLabel: "agent"},
+			Run:         capturecontrol.CaptureRunView{ExecutableLabel: "agent"},
 			Recognition: recognition,
 		})
 		if stderr.Len() != 0 {

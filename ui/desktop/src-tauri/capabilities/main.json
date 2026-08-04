@@ -6,6 +6,8 @@
   ],
   "permissions": [
     "core:default",
-    "allow-take-control-session"
+    "allow-take-control-session",
+    "allow-load-navigation-state",
+    "allow-save-navigation-state"
   ]
 }

@@ -14,7 +14,6 @@ import (
 	"time"
 
 	"github.com/vibe-agi/vibermate/internal/capturecontrol"
-	"github.com/vibe-agi/vibermate/internal/capturerun"
 	"github.com/vibe-agi/vibermate/internal/launcherdiscovery"
 	"github.com/vibe-agi/vibermate/internal/loopbackclient"
 )
@@ -87,7 +86,7 @@ func (client *controlClient) attach(
 	grant capturecontrol.LaunchGrant,
 	processID int,
 ) error {
-	var output capturerun.View
+	var output capturecontrol.CaptureRunView
 	return client.jsonRequest(
 		ctx,
 		http.MethodPost,
@@ -104,7 +103,7 @@ func (client *controlClient) heartbeat(
 	ctx context.Context,
 	grant capturecontrol.LaunchGrant,
 ) error {
-	var output capturerun.View
+	var output capturecontrol.CaptureRunView
 	return client.jsonRequest(
 		ctx,
 		http.MethodPost,
@@ -211,15 +210,20 @@ func (client *controlClient) jsonRequest(
 
 func decodeControlFailure(status int, payload []byte) error {
 	var problem struct {
-		Type       string                    `json:"type"`
-		Status     int                       `json:"status"`
-		ReasonCode capturecontrol.ReasonCode `json:"reasonCode"`
+		Type        string                    `json:"type"`
+		Title       string                    `json:"title"`
+		Status      int                       `json:"status"`
+		Code        capturecontrol.ReasonCode `json:"code"`
+		OperationID string                    `json:"operationId,omitempty"`
 	}
 	decoder := json.NewDecoder(bytes.NewReader(payload))
 	decoder.DisallowUnknownFields()
 	if err := decoder.Decode(&problem); err != nil ||
 		problem.Status != status ||
-		problem.ReasonCode == "" {
+		problem.Title == "" ||
+		problem.Code == "" ||
+		problem.Type != "urn:vibermate:error:"+
+			strings.ReplaceAll(string(problem.Code), "_", "-") {
 		return fmt.Errorf(
 			"launcher control returned invalid error response with status %d",
 			status,
@@ -227,7 +231,7 @@ func decodeControlFailure(status int, payload []byte) error {
 	}
 	return &ControlFailure{
 		Status:     status,
-		ReasonCode: problem.ReasonCode,
+		ReasonCode: problem.Code,
 	}
 }
 
@@ -241,10 +245,10 @@ func runActionPath(runID string, action string) string {
 func validateGrant(grant capturecontrol.LaunchGrant) error {
 	if grant.Run.ID == "" ||
 		grant.RunCapability == "" ||
-		grant.ProxyCapability == "" ||
-		grant.ProxyCapability == grant.RunCapability ||
+		grant.ProxyToken == "" ||
+		grant.ProxyToken == grant.RunCapability ||
 		grant.ExecutablePath == "" ||
-		grant.ProxyOrigin == "" ||
+		grant.ProxyAddress == "" ||
 		!grant.CatalogRevision.Valid() ||
 		!grant.LaunchRecipe.Valid() {
 		return errors.New("CaptureRun launch grant is incomplete")

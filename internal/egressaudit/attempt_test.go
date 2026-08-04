@@ -57,16 +57,28 @@ func TestNewFreezesACompleteAttempt(t *testing.T) {
 func TestPurposeAndAuthorityMustAgree(t *testing.T) {
 	t.Parallel()
 
-	for purpose, authority := range map[egressaudit.EgressPurpose]egressaudit.PolicyAuthorityKind{
-		egressaudit.PurposeProviderAttempt:   egressaudit.AuthorityAccess,
-		egressaudit.PurposeProfileOperation:  egressaudit.AuthorityAccess,
-		egressaudit.PurposeOriginalOrigin:    egressaudit.AuthorityNetwork,
-		egressaudit.PurposeAgentProbe:        egressaudit.AuthorityNetwork,
-		egressaudit.PurposeBlindTunnel:       egressaudit.AuthorityNetwork,
-		egressaudit.PurposeAuxiliaryLLM:      egressaudit.AuthorityRuntime,
-		egressaudit.PurposeLanguageTransform: egressaudit.AuthorityRuntime,
-		egressaudit.PurposeUpdate:            egressaudit.AuthorityRuntime,
-	} {
+	expected := map[egressaudit.EgressPurpose]egressaudit.PolicyAuthorityKind{
+		egressaudit.PurposeProviderAttempt:     egressaudit.AuthorityAccess,
+		egressaudit.PurposeProfileOperation:    egressaudit.AuthorityAccess,
+		egressaudit.PurposeOriginalOrigin:      egressaudit.AuthorityNetwork,
+		egressaudit.PurposeAgentProbe:          egressaudit.AuthorityNetwork,
+		egressaudit.PurposeBlindTunnel:         egressaudit.AuthorityNetwork,
+		egressaudit.PurposeAuxiliaryLLM:        egressaudit.AuthorityRuntime,
+		egressaudit.PurposeLanguageTransform:   egressaudit.AuthorityRuntime,
+		egressaudit.PurposePluginCatalogSync:   egressaudit.AuthorityRuntime,
+		egressaudit.PurposePluginArtifactFetch: egressaudit.AuthorityRuntime,
+		egressaudit.PurposeUpdate:              egressaudit.AuthorityRuntime,
+	}
+	seen := make(map[egressaudit.EgressPurpose]struct{}, len(expected))
+	for _, purpose := range egressaudit.Purposes() {
+		if _, duplicate := seen[purpose]; duplicate {
+			t.Fatalf("purpose %q appears more than once", purpose)
+		}
+		seen[purpose] = struct{}{}
+		authority, exists := expected[purpose]
+		if !exists {
+			t.Fatalf("purpose %q is absent from the expected authority catalog", purpose)
+		}
 		got, err := egressaudit.AuthorityForPurpose(purpose)
 		if err != nil {
 			t.Fatalf("purpose %q has no authority: %v", purpose, err)
@@ -74,6 +86,9 @@ func TestPurposeAndAuthorityMustAgree(t *testing.T) {
 		if got != authority {
 			t.Fatalf("purpose %q authority = %q, want %q", purpose, got, authority)
 		}
+	}
+	if len(seen) != len(expected) {
+		t.Fatalf("authority catalog covers %d purposes, want %d", len(seen), len(expected))
 	}
 	if _, err := egressaudit.AuthorityForPurpose("invented"); err == nil {
 		t.Fatal("an unknown purpose resolved an authority")
@@ -83,6 +98,46 @@ func TestPurposeAndAuthorityMustAgree(t *testing.T) {
 	input.Decision.Authority = egressaudit.AuthorityRuntime
 	if _, err := egressaudit.New(input); err == nil {
 		t.Fatal("a mismatched purpose and authority were accepted")
+	}
+}
+
+func TestPluginDistributionPurposeIsCoreOwnedRuntime(t *testing.T) {
+	t.Parallel()
+
+	for _, purpose := range []egressaudit.EgressPurpose{
+		egressaudit.PurposePluginCatalogSync,
+		egressaudit.PurposePluginArtifactFetch,
+	} {
+		purpose := purpose
+		t.Run(string(purpose), func(t *testing.T) {
+			t.Parallel()
+
+			input := baseInput()
+			input.ConnectionID = ""
+			input.Purpose = purpose
+			input.PayloadClass = egressaudit.PayloadRuntime
+			input.Parent = egressaudit.ParentRef{
+				Kind: egressaudit.ParentRuntimeAction,
+				ID:   "plugin-distribution-action-1",
+			}
+			input.Decision.Authority = egressaudit.AuthorityRuntime
+			if _, err := egressaudit.New(input); err != nil {
+				t.Fatalf("core-owned plugin distribution was refused: %v", err)
+			}
+
+			plugin := input
+			plugin.Caller = egressaudit.CallerPlugin
+			plugin.CallerID = "plugin-1"
+			if _, err := egressaudit.New(plugin); err == nil {
+				t.Fatal("a plugin forged a core-owned distribution purpose")
+			}
+
+			wrongPayload := input
+			wrongPayload.PayloadClass = egressaudit.PayloadControl
+			if _, err := egressaudit.New(wrongPayload); err == nil {
+				t.Fatal("plugin distribution recorded a non-runtime payload class")
+			}
+		})
 	}
 }
 

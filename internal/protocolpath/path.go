@@ -37,6 +37,31 @@ type BackendCodec interface {
 	) (protocolcore.Response, protocolcore.TranslationReport, error)
 }
 
+// SourceRequestEncoder is implemented by an identity-compatible backend edge
+// that needs the validated client wire alongside the neutral request. It lets
+// a same-dialect path preserve provider-specific fields while still applying
+// the compiled model policy. Cross-dialect codecs intentionally do not
+// implement it.
+type SourceRequestEncoder interface {
+	EncodeSourceRequest(
+		protocolcore.Request,
+		[]byte,
+		http.Header,
+	) (ProviderRequest, protocolcore.TranslationReport, error)
+}
+
+// SourceResponseEncoder is the response-side counterpart used by a validated
+// same-dialect path. The backend decoder still produces neutral semantics for
+// policy and tool-decision checks; the exact provider wire can then be returned
+// to the compatible client without a lossy decode/re-encode cycle.
+type SourceResponseEncoder interface {
+	EncodeSourceResponse(
+		protocolcore.Request,
+		protocolcore.Response,
+		[]byte,
+	) ([]byte, protocolcore.TranslationReport, error)
+}
+
 type ProviderRequest struct {
 	method       string
 	relativePath string
@@ -170,6 +195,36 @@ func (path *Path) Backend() BackendCodec {
 		return nil
 	}
 	return path.backend
+}
+
+func (path *Path) EncodeProviderRequest(
+	request protocolcore.Request,
+	sourceBody []byte,
+	sourceHeaders http.Header,
+) (ProviderRequest, protocolcore.TranslationReport, error) {
+	if path == nil || path.backend == nil {
+		return ProviderRequest{}, protocolcore.TranslationReport{},
+			errors.New("protocol path backend is unavailable")
+	}
+	if encoder, ok := path.backend.(SourceRequestEncoder); ok {
+		return encoder.EncodeSourceRequest(request, sourceBody, sourceHeaders)
+	}
+	return path.backend.EncodeRequest(request)
+}
+
+func (path *Path) EncodeClientResponse(
+	request protocolcore.Request,
+	response protocolcore.Response,
+	sourceBody []byte,
+) ([]byte, protocolcore.TranslationReport, error) {
+	if path == nil || path.client == nil {
+		return nil, protocolcore.TranslationReport{},
+			errors.New("protocol path client is unavailable")
+	}
+	if encoder, ok := path.client.(SourceResponseEncoder); ok {
+		return encoder.EncodeSourceResponse(request, response, sourceBody)
+	}
+	return path.client.EncodeResponse(request, response)
 }
 
 func (path *Path) Streaming() StreamingBridge {

@@ -163,3 +163,81 @@ func TestAnAbsentKeychainSecretIsNotFound(t *testing.T) {
 		t.Fatalf("absent read error = %v", err)
 	}
 }
+
+// The revision predicate must live in the SecItemUpdate query, not only in a
+// preceding read. Otherwise two independent writers can both observe revision
+// one and silently overwrite each other.
+func TestConcurrentKeychainReplaceIsPhysicalCAS(t *testing.T) {
+	store := keychainStore(t)
+	reference, err := secretstore.ParseReference(
+		"secret://provider/keychain-cas-test",
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = store.Delete(context.Background(), reference)
+	t.Cleanup(func() {
+		_ = store.Delete(context.Background(), reference)
+	})
+
+	initial, err := secretstore.NewValue([]byte("initial-secret-value"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer initial.Destroy()
+	if _, err := store.Replace(
+		context.Background(),
+		secretstore.ReplaceCommand{Reference: reference, Value: initial},
+	); err != nil {
+		t.Fatal(err)
+	}
+
+	start := make(chan struct{})
+	results := make(chan error, 2)
+	for _, raw := range [][]byte{
+		[]byte("concurrent-writer-one"),
+		[]byte("concurrent-writer-two"),
+	} {
+		value, valueErr := secretstore.NewValue(raw)
+		if valueErr != nil {
+			t.Fatal(valueErr)
+		}
+		defer value.Destroy()
+		go func(candidate *secretstore.Value) {
+			<-start
+			_, replaceErr := store.Replace(
+				context.Background(),
+				secretstore.ReplaceCommand{
+					Reference:        reference,
+					ExpectedRevision: 1,
+					Value:            candidate,
+				},
+			)
+			results <- replaceErr
+		}(value)
+	}
+	close(start)
+
+	successes := 0
+	conflicts := 0
+	for range 2 {
+		switch replaceErr := <-results; {
+		case replaceErr == nil:
+			successes++
+		case errors.Is(replaceErr, secretstore.ErrRevisionConflict):
+			conflicts++
+		default:
+			t.Fatalf("concurrent Replace() error = %v", replaceErr)
+		}
+	}
+	if successes != 1 || conflicts != 1 {
+		t.Fatalf("successes=%d conflicts=%d", successes, conflicts)
+	}
+	metadata, err := store.Inspect(context.Background(), reference)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if metadata.State != secretstore.StateConfigured || metadata.Revision != 2 {
+		t.Fatalf("concurrent replacement metadata = %+v", metadata)
+	}
+}

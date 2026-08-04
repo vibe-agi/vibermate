@@ -11,6 +11,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/vibe-agi/vibermate/internal/access"
 	"github.com/vibe-agi/vibermate/internal/egressaudit"
 	"github.com/vibe-agi/vibermate/internal/offlinehold"
 	"github.com/vibe-agi/vibermate/internal/transportprofile"
@@ -21,12 +22,26 @@ var (
 	ErrRedirectNotAllowed = errors.New("upstream redirect is not allowed")
 )
 
+const (
+	responseCanceledClass = "response_canceled"
+	responseTimeoutClass  = "response_timeout"
+	responseFailureClass  = "response_body_failed"
+)
+
 type ClientOptions struct {
-	Coordinator   offlinehold.Coordinator
-	Authenticator Authenticator
-	Transport     Transport
+	Coordinator    offlinehold.Coordinator
+	Authenticator  Authenticator
+	Authenticators []Authenticator
+	Transport      Transport
 	// Audit records one immutable attempt per real outbound.
 	Audit egressaudit.Writer
+}
+
+// terminalFailureReporter is implemented by the production audit boundary.
+// Complete cannot return an error once an outbound response has been handed
+// off, so an invalid terminal must cross this explicit durability boundary.
+type terminalFailureReporter interface {
+	ReportTerminalFailure(error)
 }
 
 type Evidence struct {
@@ -76,30 +91,46 @@ func (operation *clientOperation) takeLease() offlinehold.Lease {
 type Client struct {
 	mu sync.Mutex
 
-	coordinator   offlinehold.Coordinator
-	authenticator Authenticator
-	transport     Transport
-	audit         egressaudit.Writer
-	clock         func() time.Time
-	operations    map[*clientOperation]struct{}
-	closing       bool
-	changed       chan struct{}
+	coordinator    offlinehold.Coordinator
+	authenticators map[access.AuthDriverRef]Authenticator
+	transport      Transport
+	audit          egressaudit.Writer
+	clock          func() time.Time
+	operations     map[*clientOperation]struct{}
+	closing        bool
+	changed        chan struct{}
 }
 
 func NewClient(options ClientOptions) (*Client, error) {
-	if options.Coordinator == nil ||
-		options.Authenticator == nil ||
-		options.Transport == nil {
+	if options.Coordinator == nil || options.Transport == nil {
 		return nil, errors.New("provider client dependencies are incomplete")
 	}
+	authenticators := make([]Authenticator, 0, len(options.Authenticators)+1)
+	if options.Authenticator != nil {
+		authenticators = append(authenticators, options.Authenticator)
+	}
+	authenticators = append(authenticators, options.Authenticators...)
+	if len(authenticators) == 0 {
+		return nil, errors.New("provider client has no authenticators")
+	}
+	byRef := make(map[access.AuthDriverRef]Authenticator, len(authenticators))
+	for _, authenticator := range authenticators {
+		if authenticator == nil || authenticator.Ref().String() == "" {
+			return nil, errors.New("provider client authenticator is invalid")
+		}
+		if _, duplicate := byRef[authenticator.Ref()]; duplicate {
+			return nil, errors.New("provider client authenticator is duplicated")
+		}
+		byRef[authenticator.Ref()] = authenticator
+	}
 	return &Client{
-		coordinator:   options.Coordinator,
-		authenticator: options.Authenticator,
-		transport:     options.Transport,
-		audit:         options.Audit,
-		clock:         time.Now,
-		operations:    make(map[*clientOperation]struct{}),
-		changed:       make(chan struct{}),
+		coordinator:    options.Coordinator,
+		authenticators: byRef,
+		transport:      options.Transport,
+		audit:          options.Audit,
+		clock:          time.Now,
+		operations:     make(map[*clientOperation]struct{}),
+		changed:        make(chan struct{}),
 	}, nil
 }
 
@@ -121,6 +152,24 @@ func NewProductionClient(
 	})
 }
 
+func NewProductionClientWithAuthenticators(
+	coordinator offlinehold.Coordinator,
+	authenticators []Authenticator,
+	timeouts TransportTimeouts,
+	audit egressaudit.Writer,
+) (*Client, error) {
+	transport, err := newProductionTransport(timeouts)
+	if err != nil {
+		return nil, err
+	}
+	return NewClient(ClientOptions{
+		Coordinator:    coordinator,
+		Authenticators: authenticators,
+		Transport:      transport,
+		Audit:          audit,
+	})
+}
+
 // Do acquires the global egress lease before secret access, authentication, or
 // transport use. The lease remains active until the response body reaches EOF
 // or is closed.
@@ -134,7 +183,8 @@ func (client *Client) Do(
 	if err := frozen.target.validate(); err != nil {
 		return nil, Evidence{}, err
 	}
-	if frozen.authDriverRef != client.authenticator.Ref() {
+	authenticator, supported := client.authenticators[frozen.authDriverRef]
+	if !supported {
 		return nil, Evidence{}, errors.New("provider AuthDriver does not match the frozen plan")
 	}
 	operationContext, operation, err := client.begin(ctx)
@@ -179,7 +229,7 @@ func (client *Client) Do(
 	request.Header.Set("Content-Type", "application/json")
 	request.ContentLength = int64(len(frozen.body))
 
-	evidence, err := client.authenticator.Apply(
+	evidence, err := authenticator.Apply(
 		operationContext,
 		request,
 		frozen.secretReference,
@@ -202,7 +252,7 @@ func (client *Client) Do(
 			clientHello: frozen.clientHello,
 		},
 	)
-	request.Header.Del("Authorization")
+	stripProviderCredentialHeaders(request.Header)
 	attemptEvidence := Evidence{
 		Credential: evidence,
 		Transport:  transportEvidence,
@@ -237,16 +287,20 @@ func (client *Client) Do(
 	body := &leaseBody{
 		reader: counted,
 		close:  response.Body,
-		finish: func() {
+		finish: func(terminalErr error) {
+			outcome, errorClass := responseAuditTerminal(
+				operationContext,
+				terminalErr,
+			)
 			client.completeAudit(
 				context.WithoutCancel(operationContext),
 				record,
-				egressaudit.OutcomeCompleted,
-				"",
+				outcome,
+				errorClass,
 				int64(len(frozen.body)),
 				counted.count(),
 			)
-			client.finish(operation, nil)
+			client.finish(operation, terminalErr)
 		},
 	}
 	operation.setBody(body)
@@ -363,13 +417,13 @@ type leaseBody struct {
 
 	reader io.Reader
 	close  io.Closer
-	finish func()
+	finish func(error)
 }
 
 func (body *leaseBody) Read(destination []byte) (int, error) {
 	count, err := body.reader.Read(destination)
 	if err != nil {
-		body.finalize()
+		body.finalize(err)
 	}
 	return count, err
 }
@@ -378,12 +432,37 @@ func (body *leaseBody) Close() error {
 	body.closeOnce.Do(func() {
 		body.closeErr = body.close.Close()
 	})
-	body.finalize()
+	body.finalize(body.closeErr)
 	return body.closeErr
 }
 
-func (body *leaseBody) finalize() {
-	body.once.Do(body.finish)
+func (body *leaseBody) finalize(err error) {
+	body.once.Do(func() {
+		body.finish(err)
+	})
+}
+
+func responseAuditTerminal(
+	operationContext context.Context,
+	terminalErr error,
+) (egressaudit.Outcome, string) {
+	cause := context.Cause(operationContext)
+	switch {
+	case errors.Is(cause, context.DeadlineExceeded):
+		return egressaudit.OutcomeFailed, responseTimeoutClass
+	case cause != nil:
+		return egressaudit.OutcomeCanceled, responseCanceledClass
+	case terminalErr == nil, errors.Is(terminalErr, io.EOF):
+		return egressaudit.OutcomeCompleted, ""
+	case errors.Is(terminalErr, context.Canceled),
+		errors.Is(terminalErr, ErrClientClosing):
+		return egressaudit.OutcomeCanceled, responseCanceledClass
+	case errors.Is(terminalErr, context.DeadlineExceeded),
+		isTimeout(terminalErr):
+		return egressaudit.OutcomeFailed, responseTimeoutClass
+	default:
+		return egressaudit.OutcomeFailed, responseFailureClass
+	}
 }
 
 func (client *Client) beginAudit(
@@ -441,12 +520,30 @@ func (client *Client) completeAudit(
 		ErrorClass:  errorClass,
 		BytesOut:    bytesOut,
 		BytesIn:     bytesIn,
-		CompletedAt: client.clock(),
+		CompletedAt: completionTime(attempt, client.clock()),
 	})
 	if err != nil {
+		client.reportTerminalFailure(fmt.Errorf(
+			"construct provider EgressAttempt terminal: %w",
+			err,
+		))
 		return
 	}
 	_, _ = client.audit.Complete(ctx, terminal)
+}
+
+func (client *Client) reportTerminalFailure(err error) {
+	reporter, ok := client.audit.(terminalFailureReporter)
+	if ok {
+		reporter.ReportTerminalFailure(err)
+	}
+}
+
+func completionTime(attempt egressaudit.Attempt, completedAt time.Time) time.Time {
+	if !completedAt.IsZero() && completedAt.Before(attempt.StartedAt()) {
+		return attempt.StartedAt()
+	}
+	return completedAt
 }
 
 type countingReader struct {

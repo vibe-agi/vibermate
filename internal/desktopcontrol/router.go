@@ -128,6 +128,37 @@ func (router *Router) ServeHTTP(
 		router.preflight(writer, request)
 		return
 	}
+	if request.Method == http.MethodGet && request.URL.Path == SessionStatePath {
+		state, err := router.authenticator.InspectSession(request)
+		if err != nil {
+			if errors.Is(err, errSessionInvalid) {
+				writeProblem(writer, http.StatusUnprocessableEntity, ReasonInvalidRequest)
+			} else {
+				writeProblem(writer, http.StatusUnauthorized, ReasonUnauthorized)
+			}
+			return
+		}
+		writeJSON(writer, http.StatusOK, state)
+		return
+	}
+	if request.Method == http.MethodPost && request.URL.Path == SessionRenewalPath {
+		rotation, err := router.authenticator.RenewSession(request)
+		if err != nil {
+			switch {
+			case errors.Is(err, errSessionUnauthorized):
+				writeProblem(writer, http.StatusUnauthorized, ReasonUnauthorized)
+			case errors.Is(err, errSessionInvalid):
+				writeProblem(writer, http.StatusUnprocessableEntity, ReasonInvalidRequest)
+			case errors.Is(err, errSessionConflict):
+				writeProblem(writer, http.StatusConflict, ReasonRevisionConflict)
+			default:
+				writeProblem(writer, http.StatusServiceUnavailable, ReasonRuntimeUnavailable)
+			}
+			return
+		}
+		writeJSON(writer, http.StatusOK, rotation)
+		return
+	}
 	scope := router.application.RequiredScope(request)
 	if scope == "" || !router.authenticator.Authorize(request, scope) {
 		writeProblem(writer, http.StatusUnauthorized, ReasonUnauthorized)
@@ -181,7 +212,8 @@ func (router *Router) preflight(
 	switch method {
 	case http.MethodGet,
 		http.MethodPut,
-		http.MethodPost:
+		http.MethodPost,
+		http.MethodPatch:
 	default:
 		writeProblem(writer, http.StatusForbidden, ReasonUnauthorized)
 		return

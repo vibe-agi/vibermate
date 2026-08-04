@@ -12,6 +12,8 @@ import (
 	"github.com/vibe-agi/vibermate/internal/runtimepersistence"
 )
 
+const accessIntegrationStartupTimeout = 60 * time.Second
+
 type discardLeafCacheInvalidator struct{}
 
 func (discardLeafCacheInvalidator) InvalidateLeafCache(
@@ -351,7 +353,13 @@ func mustEgressPolicyID(t *testing.T, value string) access.EgressPolicyID {
 
 func openStore(t *testing.T, databasePath string) *runtimepersistence.Store {
 	t.Helper()
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	// The full repository race job starts several independently migrated SQLite
+	// fixtures in parallel. Keep a hard bound, but do not turn race-detector CPU
+	// contention into a false migration failure.
+	ctx, cancel := context.WithTimeout(
+		context.Background(),
+		accessIntegrationStartupTimeout,
+	)
 	defer cancel()
 	store, err := runtimepersistence.Open(ctx, runtimepersistence.Options{
 		DatabasePath:           databasePath,
@@ -384,7 +392,10 @@ func newManager(
 	projection access.SnapshotProjection,
 ) *access.Manager {
 	t.Helper()
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	ctx, cancel := context.WithTimeout(
+		context.Background(),
+		accessIntegrationStartupTimeout,
+	)
 	defer cancel()
 	manager, err := access.NewManager(
 		ctx,

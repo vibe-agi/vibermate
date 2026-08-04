@@ -11,6 +11,13 @@ type Writer interface {
 	WriteAccess(context.Context, WriteCommand) (WriteResult, error)
 }
 
+// Catalog returns durable editable aggregates, including disabled Accesses
+// that are intentionally absent from the active-plan projection.
+type AggregateCatalog interface {
+	ListAccesses(context.Context) ([]Aggregate, error)
+	ReadAccess(context.Context, AccessID) (Aggregate, bool, error)
+}
+
 // Manager owns Access recovery, write serialization, and snapshot publication.
 type Manager struct {
 	repository Repository
@@ -21,6 +28,7 @@ type Manager struct {
 }
 
 var (
+	_ AggregateCatalog       = (*Manager)(nil)
 	_ Writer                 = (*Manager)(nil)
 	_ SnapshotResolver       = (*Manager)(nil)
 	_ IngressResolver        = (*Manager)(nil)
@@ -110,6 +118,46 @@ func NewManager(
 		writer:     writer,
 		lifecycle:  newLifecycleGate(),
 	}, nil
+}
+
+func (m *Manager) ListAccesses(ctx context.Context) ([]Aggregate, error) {
+	operationContext, finish, err := m.lifecycle.begin(ctx)
+	if err != nil {
+		return nil, err
+	}
+	defer finish()
+	aggregates, err := m.repository.LoadAll(operationContext)
+	if err != nil {
+		return nil, fmt.Errorf("list Access aggregates: %w", err)
+	}
+	cloned := make([]Aggregate, len(aggregates))
+	for index, aggregate := range aggregates {
+		cloned[index] = aggregate.Clone()
+	}
+	return cloned, nil
+}
+
+func (m *Manager) ReadAccess(
+	ctx context.Context,
+	accessID AccessID,
+) (Aggregate, bool, error) {
+	operationContext, finish, err := m.lifecycle.begin(ctx)
+	if err != nil {
+		return Aggregate{}, false, err
+	}
+	defer finish()
+	aggregate, exists, err := m.repository.Load(operationContext, accessID)
+	if err != nil {
+		return Aggregate{}, false, fmt.Errorf(
+			"read Access aggregate accessId=%q: %w",
+			accessID.String(),
+			err,
+		)
+	}
+	if !exists {
+		return Aggregate{}, false, nil
+	}
+	return aggregate.Clone(), true, nil
 }
 
 func (m *Manager) ResolveAccess(accessID AccessID) (AccessPlanSnapshot, error) {
@@ -305,6 +353,7 @@ func (m *Manager) WriteAccess(
 		return WriteResult{
 			Outcome:  WriteOutcomeCommitted,
 			Revision: candidate.Binding.Revision,
+			PlanHash: candidatePlan.PlanHash(),
 		}, nil
 
 	case CommitOutcomeConflict:

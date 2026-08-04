@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/vibe-agi/vibermate/internal/egressaudit"
 )
@@ -148,7 +149,12 @@ func (repository *egressAttemptRepository) Complete(
 		        error_class = ?,
 		        bytes_out = ?,
 		        bytes_in = ?
-		  WHERE attempt_id = ? AND outcome = ''`,
+		  WHERE attempt_id = ?
+		    AND outcome = ''
+		    AND completed_at_unix_ms IS NULL
+		    AND error_class = ''
+		    AND bytes_out = 0
+		    AND bytes_in = 0`,
 		toUnixMillis(attempt.CompletedAt()),
 		string(attempt.Outcome()),
 		attempt.ErrorClass(),
@@ -177,6 +183,98 @@ func (repository *egressAttemptRepository) Complete(
 	return egressaudit.Record{Attempt: attempt}, nil
 }
 
+// Recover terminalizes every attempt that was durably appended but not
+// completed by the previous daemon incarnation. ProductRuntime calls it while
+// it exclusively owns the database and before constructing any transport, so
+// one transaction is both the recovery boundary and the generation boundary.
+func (repository *egressAttemptRepository) Recover(
+	ctx context.Context,
+	completedAt time.Time,
+) (int, error) {
+	if completedAt.IsZero() {
+		return 0, errors.New("EgressAttempt recovery time is required")
+	}
+	operation, finish, err := repository.operations.begin(ctx)
+	if err != nil {
+		return 0, err
+	}
+	defer finish()
+
+	transaction, err := repository.database.BeginTx(operation, nil)
+	if err != nil {
+		return 0, fmt.Errorf("begin EgressAttempt recovery: %w", err)
+	}
+	defer func() {
+		_ = transaction.Rollback()
+	}()
+
+	// Reconstruct every durable row through the domain constructors before
+	// writing anything. That rejects partial terminals as well as complete
+	// terminals with impossible timestamps, outcomes, error classes, or byte
+	// evidence. Recovery must never preserve invalid prior evidence by merely
+	// skipping it, and the shared transaction keeps rejection atomic for the
+	// otherwise eligible rows.
+	rows, err := transaction.QueryContext(
+		operation,
+		egressAttemptSelect+" ORDER BY sequence ASC",
+	)
+	if err != nil {
+		return 0, fmt.Errorf("inspect EgressAttempt recovery state: %w", err)
+	}
+	var validationErr error
+	for rows.Next() {
+		if _, scanErr := scanEgressAttempt(rows); scanErr != nil {
+			validationErr = scanErr
+			break
+		}
+	}
+	if validationErr == nil {
+		validationErr = rows.Err()
+	}
+	closeErr := rows.Close()
+	if validationErr != nil {
+		return 0, fmt.Errorf(
+			"validate EgressAttempt recovery state: %w",
+			validationErr,
+		)
+	}
+	if closeErr != nil {
+		return 0, fmt.Errorf(
+			"close EgressAttempt recovery inspection: %w",
+			closeErr,
+		)
+	}
+
+	recoveryMillis := toUnixMillis(completedAt.UTC())
+	result, err := transaction.ExecContext(
+		operation,
+		`UPDATE runtime_egress_attempts
+		    SET completed_at_unix_ms = CASE
+		            WHEN started_at_unix_ms > ? THEN started_at_unix_ms
+		            ELSE ?
+		        END,
+		        outcome = ?,
+		        error_class = ?
+		  WHERE outcome = ''
+		    AND completed_at_unix_ms IS NULL`,
+		recoveryMillis,
+		recoveryMillis,
+		string(egressaudit.OutcomeFailed),
+		egressaudit.RecoveryErrorClass,
+	)
+	if err != nil {
+		return 0, fmt.Errorf("recover EgressAttempts: %w", err)
+	}
+	count, err := result.RowsAffected()
+	if err != nil {
+		return 0, fmt.Errorf("read recovered EgressAttempt count: %w", err)
+	}
+	if err := transaction.Commit(); err != nil {
+		return 0, fmt.Errorf("commit EgressAttempt recovery: %w", err)
+	}
+	return int(count), nil
+}
+
 func (repository *egressAttemptRepository) List(
 	ctx context.Context,
 	request egressaudit.PageRequest,
@@ -191,8 +289,8 @@ func (repository *egressAttemptRepository) List(
 	}
 	defer finish()
 
-	conditions := make([]string, 0, 4)
-	arguments := make([]any, 0, 5)
+	conditions := make([]string, 0, 5)
+	arguments := make([]any, 0, 6)
 	if normalized.AfterCursor != "" {
 		sequence, cursorErr := egressaudit.ParseCursor(normalized.AfterCursor)
 		if cursorErr != nil {
@@ -204,6 +302,10 @@ func (repository *egressAttemptRepository) List(
 	if normalized.ConnectionID != "" {
 		conditions = append(conditions, "connection_id = ?")
 		arguments = append(arguments, normalized.ConnectionID)
+	}
+	if normalized.ExchangeID != "" {
+		conditions = append(conditions, "parent_exchange_id = ?")
+		arguments = append(arguments, normalized.ExchangeID)
 	}
 	if normalized.ParentID != "" {
 		conditions = append(conditions, "parent_kind = ?", "parent_id = ?")
@@ -312,6 +414,16 @@ func scanEgressAttempt(rows *sql.Rows) (egressaudit.Record, error) {
 			err,
 		)
 	}
+	if reused != 0 && reused != 1 {
+		return egressaudit.Record{}, errors.New(
+			"restore EgressAttempt: reused transport flag is invalid",
+		)
+	}
+	if policyRev <= 0 {
+		return egressaudit.Record{}, errors.New(
+			"restore EgressAttempt: policy revision is invalid",
+		)
+	}
 	attempt, err := egressaudit.New(egressaudit.NewInput{
 		ID:           attemptID,
 		ConnectionID: connectionID,
@@ -341,7 +453,17 @@ func scanEgressAttempt(rows *sql.Rows) (egressaudit.Record, error) {
 			err,
 		)
 	}
-	if outcome != "" && completedAt.Valid {
+	if (outcome == "") != !completedAt.Valid {
+		return egressaudit.Record{}, errors.New(
+			"restore EgressAttempt: terminal evidence is partial",
+		)
+	}
+	if outcome == "" && (errorClass != "" || bytesOut != 0 || bytesIn != 0) {
+		return egressaudit.Record{}, errors.New(
+			"restore EgressAttempt: nonterminal evidence is not empty",
+		)
+	}
+	if outcome != "" {
 		attempt, err = attempt.Finish(egressaudit.TerminalInput{
 			Outcome:     egressaudit.Outcome(outcome),
 			ErrorClass:  errorClass,

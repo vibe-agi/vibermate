@@ -82,5 +82,37 @@
     ],
     "createdAt": "2026-08-02T09:00:00Z",
     "expiresAt": "2026-08-02T09:01:00Z"
+  },
+  {
+    "id": "approval-client-root-sample",
+    "revision": 1,
+    "kind": "client_root_ask",
+    "state": "pending",
+    "risk": "high",
+    "titleKey": "approval.clientRootAsk.title",
+    "summaryKey": "approval.clientRootAsk.summary",
+    "aggregateKey": "aggregate-client-root-sample",
+    "subjectRefs": [
+      "client-signer:developer-id-application-anthropic-pbc"
+    ],
+    "subjectLabels": [
+      "/Applications/Claude.app/Contents/MacOS/claude"
+    ],
+    "requestCount": 1,
+    "waiterCount": 1,
+    "choices": [
+      {
+        "decision": "allow-once",
+        "scope": "request",
+        "labelKey": "approval.clientRootAsk.choice.allowOnce"
+      },
+      {
+        "decision": "deny",
+        "scope": "request",
+        "labelKey": "approval.clientRootAsk.choice.denyOnce"
+      }
+    ],
+    "createdAt": "2026-08-02T09:00:00Z",
+    "expiresAt": "2026-08-02T09:01:00Z"
   }
 ]

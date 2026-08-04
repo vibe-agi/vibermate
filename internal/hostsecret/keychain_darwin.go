@@ -142,7 +142,12 @@ func (store *KeychainStore) Replace(
 		if err := store.addItem(command.Reference, value, next); err != nil {
 			return secretstore.Metadata{}, err
 		}
-	} else if err := store.updateItem(command.Reference, value, next); err != nil {
+	} else if err := store.updateItem(
+		command.Reference,
+		value,
+		current,
+		next,
+	); err != nil {
 		return secretstore.Metadata{}, err
 	}
 	return secretstore.Metadata{

@@ -270,7 +270,10 @@ type PluginPlanMode string
 
 const PluginPlanModePassThrough PluginPlanMode = "pass_through"
 
-const AuthDriverStaticHeaderValue = "static_header"
+const (
+	AuthDriverStaticHeaderValue    = "static_header"
+	AuthDriverAnthropicAPIKeyValue = "anthropic_api_key"
+)
 const (
 	TransportProfileObservedClientH1Value = "observed-client-strict-h1"
 	TransportProfileStandardH1Value       = "standard-strict-h1"
@@ -278,6 +281,10 @@ const (
 
 func StaticHeaderAuthDriverRef() AuthDriverRef {
 	return AuthDriverRef{value: AuthDriverStaticHeaderValue}
+}
+
+func AnthropicAPIKeyAuthDriverRef() AuthDriverRef {
+	return AuthDriverRef{value: AuthDriverAnthropicAPIKeyValue}
 }
 
 func ObservedClientH1TransportProfileRef() TransportProfileRef {

@@ -125,9 +125,12 @@ const (
 	WriteOutcomeIndeterminate WriteOutcome = "indeterminate"
 )
 
-// WriteResult intentionally contains no plan handle. Callers must use
-// SnapshotResolver after a successful write to obtain the active plan.
+// WriteResult is the receipt from the serialized commit-to-publication
+// boundary. PlanHash is non-zero only when this write successfully published
+// the exact active candidate; callers must not resolve the mutable current
+// projection to reconstruct this receipt.
 type WriteResult struct {
 	Outcome  WriteOutcome
 	Revision Revision
+	PlanHash PlanHash
 }

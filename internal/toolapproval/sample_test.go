@@ -64,9 +64,33 @@ func sampleViews(t *testing.T) []toolapproval.View {
 	if err := intent.Validate(); err != nil {
 		t.Fatal(err)
 	}
+	clientRoot := toolapproval.Record{
+		ID:            "approval-client-root-sample",
+		Revision:      1,
+		Kind:          toolapproval.KindClientRootAsk,
+		AggregateKey:  "aggregate-client-root-sample",
+		SubjectRefs:   []string{"client-signer:developer-id-application-anthropic-pbc"},
+		SubjectLabels: []string{"developer-id-application-anthropic-pbc"},
+		RequestCount:  1,
+		WaiterCount:   1,
+		State:         toolapproval.StatePending,
+		CreatedAt:     created,
+		ExpiresAt:     created.Add(time.Minute),
+	}
+	if err := clientRoot.Validate(); err != nil {
+		t.Fatal(err)
+	}
+	clientRootView := toolapproval.ViewOf(clientRoot)
+	// The real authority overlays this no-store evidence only while the
+	// question is live. The wire sample describes that live projection without
+	// putting the path in the durable Record fixture.
+	clientRootView.SubjectLabels = []string{
+		"/Applications/Claude.app/Contents/MacOS/claude",
+	}
 	return []toolapproval.View{
 		toolapproval.ViewOf(network),
 		toolapproval.ViewOf(intent),
+		clientRootView,
 	}
 }
 
