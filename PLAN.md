@@ -1,77 +1,74 @@
-# Desktop Manual App Capture
+# Remote Enrollment Authority Foundation
 
-Status: complete
+Status: in_progress
 Created: 2026-08-04
-Implementation baseline: `a51a4576acdb7a6770b37172d8e808a9bf96b00f`
-Implementation candidate: `a4b56a5685731bcdd316aba85bf7753992c46779`
+Implementation baseline: `06bda4fca779d18ab3e20793926a4e8e6cb3ab86`
 Design authority: `vibermate-design` ADR-0019 at `6fd70d49fc563e6ca8a95e35e6806ec80d0fe922`
 
 ## Goal
 
-Turn the existing authenticated ManualCapture control contract into one honest
-Desktop task for applications started outside `vibermate run`: review the
-local proxy and Root delivery, create one route-neutral login, save its
-password once, and then observe, rotate, or revoke it without seeing internal
-version counters or pretending that traffic observation proves app identity.
+Establish the durable Core authority behind remote `vibermate login`: an
+administrator-scoped ProxyClientBinding can mint one expiring, one-time
+enrollment; consuming it atomically creates one MachineRegistration and one
+digest-only enrolled ControlPrincipal credential. Every later authentication
+rechecks the active principal, machine and binding rather than trusting network
+location, MachineID, or a previously decoded claim.
 
 ## Invariants
 
-1. The Desktop sends only display name, application class, lifetime, and the
-   opaque review confirmation. It cannot submit Access, Profile, route,
-   account, model, plugin, owner, machine, workspace, or version coordinates.
-2. Create and rotate use the existing shared authenticated handler and are
-   never retried. A lost one-time response remains an explicit ambiguous
-   outcome.
-3. The raw proxy password exists only in the immediate component-local
-   delivery state. It never enters React Query, Web Storage, a log, an error,
-   the durable list projection, or a later detail response.
-4. Once the person dismisses the delivery ticket, the Desktop cannot display
-   the password again. Recovery means explicit credential rotation.
-5. Product concurrency is an opaque `ETag`/`If-Match` contract. No numeric
-   runtime, schema, aggregate, Root, credential, catalog, or plan counter is
-   shown or accepted by this task.
-6. `waiting_for_traffic` and `observed` describe only whether the generated
-   login reached VibeMate. They do not identify the application or choose an
-   upstream route.
-7. All visible copy comes from the canonical English and Simplified Chinese
-   catalogs. Desktop and narrow layouts remain usable without horizontal
-   overflow.
+1. Enrollment, enrolled-control and proxy-grant credentials are disjoint typed
+   namespaces. None can authenticate as another.
+2. Raw enrollment and control credentials are returned once and never stored;
+   SQLite stores only domain-separated SHA-256 digests.
+3. Enrollment completion consumes exactly one active, unexpired enrollment and
+   creates the machine and principal in the same SQLite transaction. Concurrent
+   consumers have at most one winner.
+4. An enrollment is bound to the exact active ProxyClientBinding generation
+   observed when it was created. Binding change or revocation makes it fail
+   closed.
+5. Authentication rereads durable state and succeeds only while the principal,
+   MachineRegistration and ProxyClientBinding are all active and still bound to
+   the same internal generation.
+6. MachineID and display name are public attribution metadata, never
+   credentials, proxy selectors, routes, Access IDs, Profile IDs or model
+   account selectors.
+7. Allowed grant kinds come only from the durable binding/principal policy and
+   are returned as the existing immutable `controlprincipal.Principal`.
+8. Binding revocation immediately rejects new enrollment completion and new
+   control authentication without rotating provider or ManualCapture secrets.
+9. The unreleased database remains one clean baseline migration; no synthetic
+   compatibility migration or product-facing numeric revision is introduced.
+10. Cancellation, shutdown admission and ambiguous SQLite commit outcomes are
+    bounded and fail closed; a reconciled exact durable commit may still return
+    its one-time credential.
 
 ## Deliverables
 
-- strict Desktop wire validation for ManualCapture context, list, detail,
-  create, rotate and revoke, including no-store and opaque state headers;
-- review-first creation form and explicit route-neutral boundary copy;
-- one-time proxy URL and shell setup delivery with explicit copy actions;
-- secret-free observation cards with bounded traffic state, expiry, rotate and
-  revoke;
-- deterministic preview adapter, unit tests, Playwright interaction tests, and
-  desktop/mobile visual inspection in both locales;
-- synchronized implementation README and module map.
+- typed ProxyClientBinding, MachineRegistration, ClientEnrollmentGrant and
+  enrolled-principal records with immutable public views;
+- a lifecycle-owned authority for binding creation/revocation, one-time
+  enrollment issuance/completion and durable control authentication;
+- SQLite tables and one transactional repository behind the existing operation
+  admission/drain fence;
+- concurrency, expiry, revocation, restart, cancellation, digest-only storage,
+  namespace separation and commit-reconciliation tests;
+- RuntimeStore exposure for the next Server composition slice, without wiring
+  a listener or declaring Server readiness;
+- synchronized README and module map with exact proof boundaries.
 
 ## Explicitly out of scope
 
-- remote enrollment, Server listener and shared-team administration;
-- application identity verification beyond current traffic observation;
-- automatic application proxy configuration or OS network extension;
-- Keychain or system Root trust mutation;
-- Access/Profile/route/provider changes;
+- Server HTTP/TLS listener, Web admin session, OpenAPI handlers and UI;
+- `vibermate login`, ConnectionProfile files or client-side credential storage;
+- public Root delivery and remote proxy address delivery;
+- remote CaptureRun or ManualCapture issuance and quota enforcement;
+- binding policy editing, principal credential rotation or machine re-enrollment;
+- Access/Profile/route/provider/plugin changes;
 - packaged Preview or Release evidence.
 
 ## Completion statement
 
-> The authenticated Desktop App can review, create, observe, rotate and revoke
-> a route-neutral ManualCapture, while delivering each proxy password exactly
-> once and retaining no secret in its query or browser-storage planes. This
-> does not prove application identity, remote access, or Preview readiness.
-
-## Frozen result
-
-The implementation satisfies this Goal. The UI follows a three-state handoff:
-review ticket, one-time credential-delivery ticket, and permanent secret-free
-observation card. Both supported locales and the 390-pixel layout were
-inspected through a real Chromium session. A follow-up frontend-design review
-also verified the light and dark palettes and made each task transition own
-keyboard focus, gave both copy actions distinct accessible names, suppressed
-stale list content during one-time delivery, and kept exact proxy values on
-unwrapped lines. The product remains pre-Preview.
+> VibeMate has a durable, one-time remote enrollment authority that can produce
+> and authenticate a binding-scoped enrolled ControlPrincipal while rechecking
+> the active binding and machine on every request. No Server listener, login
+> command, remote proxy, Root delivery or Preview-ready product is claimed.
