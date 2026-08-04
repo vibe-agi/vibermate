@@ -19,6 +19,7 @@ import (
 	"github.com/vibe-agi/vibermate/internal/clientadapter"
 	"github.com/vibe-agi/vibermate/internal/controlprincipal"
 	"github.com/vibe-agi/vibermate/internal/localca"
+	"github.com/vibe-agi/vibermate/internal/manualcapture"
 	"github.com/vibe-agi/vibermate/internal/toolapproval"
 	"github.com/vibe-agi/vibermate/internal/workspaceidentity"
 )
@@ -35,6 +36,8 @@ var (
 	ErrProjectionUnavailable = errors.New("Access projection is unavailable")
 	ErrWorkspaceUnavailable  = errors.New("workspace identity is unavailable")
 	ErrCaptureRunCreate      = errors.New("CaptureRun creation failed")
+	ErrInvalidManualCapture  = errors.New("ManualCapture request is invalid")
+	ErrManualCaptureCreate   = errors.New("ManualCapture creation failed")
 )
 
 type ClientRootApprovals interface {
@@ -81,6 +84,7 @@ func (resolver localWorkspaceResolver) ResolveCaptureRun(
 
 type Options struct {
 	Runs                capturerun.Controller
+	ManualCaptures      manualcapture.Controller
 	Verifier            clientadapter.Verifier
 	Authorities         access.IngressCatalogReader
 	ProxyOrigin         string
@@ -90,12 +94,12 @@ type Options struct {
 	ClientRootApprovals ClientRootApprovals
 }
 
-// Issuer is the single Core owner of capture grant creation. Only CaptureRun
-// is implemented in the current product slice; ManualCapture will be another
-// method on this same authority, not another transport handler's business
-// implementation.
+// Issuer is the single Core owner of CaptureRun and ManualCapture grant
+// creation. Transport handlers authenticate and decode; neither may recreate
+// ownership, Root delivery, or proxy grant policy.
 type Issuer struct {
 	runs        capturerun.Controller
+	manuals     manualcapture.Controller
 	verifier    clientadapter.Verifier
 	authorities access.IngressCatalogReader
 	proxyOrigin string
@@ -107,6 +111,7 @@ type Issuer struct {
 
 func New(options Options) (*Issuer, error) {
 	if options.Runs == nil ||
+		options.ManualCaptures == nil ||
 		options.Verifier == nil ||
 		options.Authorities == nil ||
 		options.RunLifetime <= 0 ||
@@ -121,6 +126,7 @@ func New(options Options) (*Issuer, error) {
 	}
 	return &Issuer{
 		runs:        options.Runs,
+		manuals:     options.ManualCaptures,
 		verifier:    options.Verifier,
 		authorities: options.Authorities,
 		proxyOrigin: options.ProxyOrigin,
@@ -129,6 +135,83 @@ func New(options Options) (*Issuer, error) {
 		workspaces:  options.Workspaces,
 		rootAsk:     options.ClientRootApprovals,
 	}, nil
+}
+
+type ManualCaptureRequest struct {
+	DisplayName string
+	ClientClass manualcapture.ClientClass
+	Lifetime    manualcapture.Lifetime
+	ExpiresIn   time.Duration
+}
+
+type ManualCaptureGrant struct {
+	Capture              manualcapture.Grant
+	ProxyAddress         string
+	RootPEMPath          string
+	ProtectedAuthorities []string
+}
+
+func (issuer *Issuer) IssueManualCapture(
+	ctx context.Context,
+	principal controlprincipal.Principal,
+	request ManualCaptureRequest,
+) (ManualCaptureGrant, error) {
+	if issuer == nil || ctx == nil || !principal.Valid() ||
+		!principal.Allows(controlprincipal.GrantManualCapture) {
+		return ManualCaptureGrant{}, ErrPrincipalUnauthorized
+	}
+	if err := ctx.Err(); err != nil {
+		return ManualCaptureGrant{}, err
+	}
+	owner, err := manualCaptureOwner(principal)
+	if err != nil || request.DisplayName == "" ||
+		!request.ClientClass.Valid() || !request.Lifetime.Valid() {
+		return ManualCaptureGrant{}, ErrInvalidManualCapture
+	}
+	authorities, err := issuer.authorities.ActiveClientAuthorities()
+	if err != nil {
+		return ManualCaptureGrant{}, ErrProjectionUnavailable
+	}
+	grant, err := issuer.manuals.Create(ctx, manualcapture.CreateCommand{
+		Owner:       owner,
+		DisplayName: request.DisplayName,
+		ClientClass: request.ClientClass,
+		Lifetime:    request.Lifetime,
+		ExpiresIn:   request.ExpiresIn,
+	})
+	if err != nil {
+		if errors.Is(err, manualcapture.ErrInvalidCommand) {
+			return ManualCaptureGrant{}, errors.Join(ErrInvalidManualCapture, err)
+		}
+		return ManualCaptureGrant{}, errors.Join(ErrManualCaptureCreate, err)
+	}
+	return ManualCaptureGrant{
+		Capture:              grant,
+		ProxyAddress:         issuer.proxyOrigin,
+		RootPEMPath:          issuer.root.Path(),
+		ProtectedAuthorities: append([]string(nil), authorities...),
+	}, nil
+}
+
+func manualCaptureOwner(
+	principal controlprincipal.Principal,
+) (manualcapture.OwnerScope, error) {
+	switch principal.Kind() {
+	case controlprincipal.KindDesktopApp, controlprincipal.KindLocalCLI:
+		return manualcapture.NewLocalOwnerScope(), nil
+	case controlprincipal.KindEnrolledClient:
+		bindingID, ok := principal.ProxyClientBindingID()
+		if !ok {
+			return manualcapture.OwnerScope{}, ErrPrincipalUnauthorized
+		}
+		owner, err := manualcapture.NewProxyClientOwnerScope(bindingID)
+		if err != nil {
+			return manualcapture.OwnerScope{}, ErrPrincipalUnauthorized
+		}
+		return owner, nil
+	default:
+		return manualcapture.OwnerScope{}, ErrPrincipalUnauthorized
+	}
 }
 
 type CaptureRunRequest struct {

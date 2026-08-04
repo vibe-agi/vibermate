@@ -11,6 +11,8 @@ import (
 	"path/filepath"
 	"sync"
 	"time"
+
+	"github.com/vibe-agi/vibermate/internal/capturecredential"
 )
 
 const (
@@ -120,7 +122,7 @@ func (manager *Manager) Create(
 	if err != nil {
 		return LaunchGrant{}, fmt.Errorf("generate CaptureRun ID: %w", err)
 	}
-	proxyValue, err := randomValue(manager.random, capabilityBytes)
+	proxyValue, err := randomProxyCapability(manager.random)
 	if err != nil {
 		return LaunchGrant{}, fmt.Errorf("generate proxy capability: %w", err)
 	}
@@ -171,7 +173,7 @@ func (manager *Manager) AuthorizeProxy(
 	ctx context.Context,
 	capability ProxyCapability,
 ) (Evidence, error) {
-	if err := validateCapability(capability.value); err != nil {
+	if _, err := NewProxyCapability(capability.value); err != nil {
 		return Evidence{}, err
 	}
 	operation, finish, err := manager.lifecycle.begin(ctx)
@@ -329,6 +331,21 @@ func randomValue(source io.Reader, size int) (string, error) {
 		return "", err
 	}
 	return base64.RawURLEncoding.EncodeToString(data), nil
+}
+
+func randomProxyCapability(source io.Reader) (string, error) {
+	entropy := make([]byte, capturecredential.EntropyBytes)
+	if _, err := io.ReadFull(source, entropy); err != nil {
+		return "", err
+	}
+	credential, err := capturecredential.New(
+		capturecredential.KindManagedRun,
+		entropy,
+	)
+	if err != nil {
+		return "", err
+	}
+	return credential.Value(), nil
 }
 
 func capabilityDigest(domain, value string) CapabilityDigest {

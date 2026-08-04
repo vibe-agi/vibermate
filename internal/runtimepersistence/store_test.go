@@ -179,7 +179,7 @@ func TestSQLiteStoreRejectsAnObsoleteDevelopmentBaselineIdentity(t *testing.T) {
 			initialized_at TEXT NOT NULL
 		) STRICT;
 		INSERT INTO runtime_metadata (singleton, schema_identity, initialized_at)
-		VALUES (1, 'vibermate-runtime-baseline-1', '2026-08-04T00:00:00Z')`,
+		VALUES (1, 'obsolete-development-baseline', '2026-08-04T00:00:00Z')`,
 	); err != nil {
 		_ = database.Close()
 		t.Fatalf("create obsolete baseline metadata: %v", err)

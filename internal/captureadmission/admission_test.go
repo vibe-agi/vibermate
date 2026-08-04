@@ -8,8 +8,10 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/vibe-agi/vibermate/internal/capturecredential"
 	"github.com/vibe-agi/vibermate/internal/capturerun"
 	"github.com/vibe-agi/vibermate/internal/clientadapter"
+	"github.com/vibe-agi/vibermate/internal/manualcapture"
 	"github.com/vibe-agi/vibermate/internal/workspaceidentity"
 )
 
@@ -18,6 +20,24 @@ type frozenRunAuthorizer struct {
 	evidence   capturerun.Evidence
 	err        error
 	authorized int
+}
+
+type frozenManualAuthorizer struct {
+	want       string
+	evidence   manualcapture.Evidence
+	err        error
+	authorized int
+}
+
+func (authorizer *frozenManualAuthorizer) AuthorizeProxy(
+	_ context.Context,
+	credential manualcapture.ProxyCredential,
+) (manualcapture.Evidence, error) {
+	authorizer.authorized++
+	if credential.Value() != authorizer.want {
+		return manualcapture.Evidence{}, manualcapture.ErrCredentialRejected
+	}
+	return authorizer.evidence, authorizer.err
 }
 
 func (authorizer *frozenRunAuthorizer) AuthorizeProxy(
@@ -31,8 +51,16 @@ func (authorizer *frozenRunAuthorizer) AuthorizeProxy(
 	return authorizer.evidence, authorizer.err
 }
 
-func testCredentialValue() string {
-	return base64.RawURLEncoding.EncodeToString([]byte(strings.Repeat("c", 32)))
+func testCredentialValue(t *testing.T, kind capturecredential.Kind) string {
+	t.Helper()
+	credential, err := capturecredential.New(
+		kind,
+		[]byte(strings.Repeat("c", capturecredential.EntropyBytes)),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return credential.Value()
 }
 
 func testWorkspace(t *testing.T) workspaceidentity.Scope {
@@ -67,7 +95,7 @@ func testWorkspace(t *testing.T) workspaceidentity.Scope {
 
 func TestManagedRunAuthorizationProducesRouteNeutralAdmission(t *testing.T) {
 	t.Parallel()
-	value := testCredentialValue()
+	value := testCredentialValue(t, capturecredential.KindManagedRun)
 	runs := &frozenRunAuthorizer{
 		want: value,
 		evidence: capturerun.Evidence{
@@ -76,7 +104,8 @@ func TestManagedRunAuthorizationProducesRouteNeutralAdmission(t *testing.T) {
 			Workspace:       testWorkspace(t),
 		},
 	}
-	authorizer, err := NewManagedRunAuthorizer(runs)
+	manuals := &frozenManualAuthorizer{err: manualcapture.ErrCredentialRejected}
+	authorizer, err := NewAuthorizer(runs, manuals)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -92,7 +121,8 @@ func TestManagedRunAuthorizationProducesRouteNeutralAdmission(t *testing.T) {
 		admission.IngressProfileID() != "capture-run/run-one" ||
 		admission.CredentialRevision() != 1 ||
 		admission.AttributionConfidence() != AttributionConfigured ||
-		admission.SourceLabel() != "claude" || runs.authorized != 1 {
+		admission.SourceLabel() != "claude" || runs.authorized != 1 ||
+		manuals.authorized != 0 {
 		t.Fatalf("admission = %#v, authorizations = %d", admission, runs.authorized)
 	}
 	if runID, ok := admission.CaptureRunID(); !ok || runID != "run-one" {
@@ -170,7 +200,7 @@ func TestCredentialAndMalformedEvidenceFailClosed(t *testing.T) {
 	if _, err := NewProxyCredential("not-a-capability"); !errors.Is(err, ErrCredentialRejected) {
 		t.Fatalf("malformed credential error = %v", err)
 	}
-	value := testCredentialValue()
+	value := testCredentialValue(t, capturecredential.KindManagedRun)
 	credential, err := NewProxyCredential(value)
 	if err != nil {
 		t.Fatal(err)
@@ -178,12 +208,12 @@ func TestCredentialAndMalformedEvidenceFailClosed(t *testing.T) {
 	if rendered := fmt.Sprintf("%#v %v", credential, credential); strings.Contains(rendered, value) {
 		t.Fatalf("formatted credential disclosed bearer value: %q", rendered)
 	}
-	authorizer, err := NewManagedRunAuthorizer(&frozenRunAuthorizer{
+	authorizer, err := NewAuthorizer(&frozenRunAuthorizer{
 		want: value,
 		evidence: capturerun.Evidence{
 			RunID: "run-invalid",
 		},
-	})
+	}, &frozenManualAuthorizer{err: manualcapture.ErrCredentialRejected})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -194,17 +224,60 @@ func TestCredentialAndMalformedEvidenceFailClosed(t *testing.T) {
 
 func TestManagedRunAuthorizerPreservesCredentialRejection(t *testing.T) {
 	t.Parallel()
-	value := testCredentialValue()
+	value := testCredentialValue(t, capturecredential.KindManagedRun)
 	credential, _ := NewProxyCredential(value)
-	authorizer, err := NewManagedRunAuthorizer(&frozenRunAuthorizer{
+	authorizer, err := NewAuthorizer(&frozenRunAuthorizer{
 		want: value,
 		err:  capturerun.ErrCapabilityRejected,
-	})
+	}, &frozenManualAuthorizer{err: manualcapture.ErrCredentialRejected})
 	if err != nil {
 		t.Fatal(err)
 	}
 	if _, err := authorizer.Authorize(context.Background(), credential); !errors.Is(err, ErrCredentialRejected) ||
 		!errors.Is(err, capturerun.ErrCapabilityRejected) {
 		t.Fatalf("authorization error = %v", err)
+	}
+}
+
+func TestManualCredentialSelectsOnlyManualAuthority(t *testing.T) {
+	t.Parallel()
+	value := testCredentialValue(t, capturecredential.KindManualCapture)
+	id, err := manualcapture.ParseID("manual-one")
+	if err != nil {
+		t.Fatal(err)
+	}
+	runs := &frozenRunAuthorizer{err: capturerun.ErrCapabilityRejected}
+	manuals := &frozenManualAuthorizer{
+		want: value,
+		evidence: manualcapture.Evidence{
+			ManualCaptureID:    id,
+			CredentialRevision: 4,
+			DisplayName:        "Desktop app",
+			Owner:              manualcapture.NewLocalOwnerScope(),
+		},
+	}
+	authorizer, err := NewAuthorizer(runs, manuals)
+	if err != nil {
+		t.Fatal(err)
+	}
+	credential, err := NewProxyCredential(value)
+	if err != nil {
+		t.Fatal(err)
+	}
+	admission, err := authorizer.Authorize(context.Background(), credential)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if admission.Kind() != KindManual ||
+		admission.IngressProfileID() != "manual-capture/manual-one" ||
+		admission.CredentialRevision() != 4 ||
+		admission.SourceLabel() != "Desktop app" ||
+		manuals.authorized != 1 || runs.authorized != 0 {
+		t.Fatalf(
+			"admission=%#v run calls=%d manual calls=%d",
+			admission,
+			runs.authorized,
+			manuals.authorized,
+		)
 	}
 }

@@ -7,7 +7,6 @@ package manualcapture
 import (
 	"context"
 	"crypto/sha256"
-	"encoding/base64"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -15,6 +14,8 @@ import (
 	"time"
 	"unicode"
 	"unicode/utf8"
+
+	"github.com/vibe-agi/vibermate/internal/capturecredential"
 )
 
 const (
@@ -268,9 +269,8 @@ type ProxyCredential struct {
 }
 
 func NewProxyCredential(value string) (ProxyCredential, error) {
-	decoded, err := base64.RawURLEncoding.DecodeString(value)
-	if err != nil || len(decoded) != 32 ||
-		base64.RawURLEncoding.EncodeToString(decoded) != value {
+	credential, err := capturecredential.Parse(value)
+	if err != nil || credential.Kind() != capturecredential.KindManualCapture {
 		return ProxyCredential{}, ErrCredentialRejected
 	}
 	return ProxyCredential{value: value}, nil

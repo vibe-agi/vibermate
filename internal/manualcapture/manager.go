@@ -9,11 +9,12 @@ import (
 	"fmt"
 	"io"
 	"time"
+
+	"github.com/vibe-agi/vibermate/internal/capturecredential"
 )
 
 const (
 	manualCaptureIDBytes   = 20
-	proxyCredentialBytes   = 32
 	createCollisionRetries = 3
 	proxyDigestDomain      = "vibermate:manual-capture:proxy:v1:"
 	defaultMaxLifetime     = 7 * 24 * time.Hour
@@ -107,7 +108,7 @@ func (manager *Manager) Create(
 			return Grant{}, fmt.Errorf("generate ManualCapture ID: %w", randomErr)
 		}
 		id, _ := ParseID(idValue)
-		credentialValue, randomErr := randomValue(manager.random, proxyCredentialBytes)
+		credentialValue, randomErr := randomProxyCredential(manager.random)
 		if randomErr != nil {
 			return Grant{}, fmt.Errorf("generate ManualCapture credential: %w", randomErr)
 		}
@@ -162,7 +163,7 @@ func (manager *Manager) Rotate(
 		return Grant{}, err
 	}
 	defer finish()
-	credentialValue, err := randomValue(manager.random, proxyCredentialBytes)
+	credentialValue, err := randomProxyCredential(manager.random)
 	if err != nil {
 		return Grant{}, fmt.Errorf("generate ManualCapture credential: %w", err)
 	}
@@ -362,6 +363,21 @@ func randomValue(source io.Reader, size int) (string, error) {
 		return "", err
 	}
 	return base64.RawURLEncoding.EncodeToString(data), nil
+}
+
+func randomProxyCredential(source io.Reader) (string, error) {
+	entropy := make([]byte, capturecredential.EntropyBytes)
+	if _, err := io.ReadFull(source, entropy); err != nil {
+		return "", err
+	}
+	credential, err := capturecredential.New(
+		capturecredential.KindManualCapture,
+		entropy,
+	)
+	if err != nil {
+		return "", err
+	}
+	return credential.Value(), nil
 }
 
 func credentialDigest(value string) CredentialDigest {

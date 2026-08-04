@@ -267,13 +267,14 @@ func Start(ctx context.Context, options Options) (*Host, error) {
 		return fail("CaptureRun workspace adapter", err)
 	}
 	grantIssuer, err := capturegrant.New(capturegrant.Options{
-		Runs:        runtime.CaptureRuns(),
-		Verifier:    verifier,
-		Authorities: runtime,
-		ProxyOrigin: proxyOrigin,
-		Root:        runtime.LocalRootCertificate(),
-		RunLifetime: options.CaptureRunLifetime,
-		Workspaces:  workspaceResolver,
+		Runs:           runtime.CaptureRuns(),
+		ManualCaptures: runtime.ManualCaptures(),
+		Verifier:       verifier,
+		Authorities:    runtime,
+		ProxyOrigin:    proxyOrigin,
+		Root:           runtime.LocalRootCertificate(),
+		RunLifetime:    options.CaptureRunLifetime,
+		Workspaces:     workspaceResolver,
 		// The same authority that asks about a connection asks about handing
 		// a recognized client the Root, so both questions reach a person the
 		// same way and appear in the same place.

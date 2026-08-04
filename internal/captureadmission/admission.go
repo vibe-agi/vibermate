@@ -4,13 +4,13 @@
 package captureadmission
 
 import (
-	"encoding/base64"
 	"errors"
 	"fmt"
 	"strings"
 	"unicode"
 	"unicode/utf8"
 
+	"github.com/vibe-agi/vibermate/internal/capturecredential"
 	"github.com/vibe-agi/vibermate/internal/clientadapter"
 	"github.com/vibe-agi/vibermate/internal/workspaceidentity"
 )
@@ -20,7 +20,6 @@ const (
 	// or other business metadata; the random password is the capability.
 	ProxyUsername = "capture"
 
-	credentialBytes   = 32
 	maxOpaqueIDBytes  = 128
 	maxIngressIDBytes = 256
 	maxSourceLabelLen = 256
@@ -62,16 +61,15 @@ func (confidence AttributionConfidence) valid() bool {
 // ProxyCredential is an opaque capability consumed only by an Authorizer. It
 // has no raw value or JSON accessor, and both formatting methods redact it.
 type ProxyCredential struct {
-	value string
+	value capturecredential.Credential
 }
 
 func NewProxyCredential(value string) (ProxyCredential, error) {
-	decoded, err := base64.RawURLEncoding.DecodeString(value)
-	if err != nil || len(decoded) != credentialBytes ||
-		base64.RawURLEncoding.EncodeToString(decoded) != value {
+	credential, err := capturecredential.Parse(value)
+	if err != nil {
 		return ProxyCredential{}, ErrCredentialRejected
 	}
-	return ProxyCredential{value: value}, nil
+	return ProxyCredential{value: credential}, nil
 }
 
 func (ProxyCredential) String() string {

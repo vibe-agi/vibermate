@@ -2,12 +2,13 @@ package manualcapture
 
 import (
 	"context"
-	"encoding/base64"
 	"errors"
 	"reflect"
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/vibe-agi/vibermate/internal/capturecredential"
 )
 
 type fixedClock struct {
@@ -122,10 +123,27 @@ func TestManagerShutdownCancelsAndDrainsOperationsWithoutRevokingCaptures(t *tes
 }
 
 func TestManualCaptureTypesRejectRouteAuthorityAndRedactCredentials(t *testing.T) {
-	credentialValue := base64.RawURLEncoding.EncodeToString([]byte(strings.Repeat("c", 32)))
+	wireCredential, err := capturecredential.New(
+		capturecredential.KindManualCapture,
+		[]byte(strings.Repeat("c", capturecredential.EntropyBytes)),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	credentialValue := wireCredential.Value()
 	credential, err := NewProxyCredential(credentialValue)
 	if err != nil {
 		t.Fatal(err)
+	}
+	managedCredential, err := capturecredential.New(
+		capturecredential.KindManagedRun,
+		[]byte(strings.Repeat("r", capturecredential.EntropyBytes)),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := NewProxyCredential(managedCredential.Value()); !errors.Is(err, ErrCredentialRejected) {
+		t.Fatalf("managed credential accepted as ManualCapture credential: %v", err)
 	}
 	if strings.Contains(credential.String(), credentialValue) ||
 		strings.Contains(credential.GoString(), credentialValue) {

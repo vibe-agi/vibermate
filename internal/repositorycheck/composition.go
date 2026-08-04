@@ -20,6 +20,7 @@ const (
 	captureGrantImportPath     = "github.com/vibe-agi/vibermate/internal/capturegrant"
 	captureControlImportPath   = "github.com/vibe-agi/vibermate/internal/capturecontrol"
 	captureRunImportPath       = "github.com/vibe-agi/vibermate/internal/capturerun"
+	manualCaptureImportPath    = "github.com/vibe-agi/vibermate/internal/manualcapture"
 	loopbackProxyPackageDir    = "internal/loopbackproxy"
 )
 
@@ -86,22 +87,50 @@ func CheckProductionCompositionBoundary(repositoryRoot string) []Violation {
 		violations = append(violations, file.dotImportViolations()...)
 	}
 
-	// The listener consumes one route-neutral CaptureAdmission. Importing the
-	// CaptureRun aggregate here would recreate a managed-only data plane and
-	// force ManualCapture to grow a parallel handler later.
+	// Importing either capture aggregate here would recreate a mode-specific
+	// data plane.
+	// The listener consumes only the route-neutral shared admission authority.
 	for _, file := range files {
 		if !strings.HasPrefix(file.relative, loopbackProxyPackageDir+"/") {
 			continue
 		}
 		for _, imported := range file.imports {
-			if imported.path != captureRunImportPath {
+			if imported.path != captureRunImportPath &&
+				imported.path != manualCaptureImportPath {
 				continue
 			}
+			rule := "proxy-imports-capture-run"
+			message := "the proxy authenticates through route-neutral capture admission, not the CaptureRun aggregate"
+			if imported.path == manualCaptureImportPath {
+				rule = "proxy-imports-manual-capture"
+				message = "the proxy authenticates through route-neutral capture admission, not the ManualCapture aggregate"
+			}
 			violations = append(violations, Violation{
-				Rule:    "proxy-imports-capture-run",
+				Rule:    rule,
 				Path:    file.relative,
 				Line:    imported.line,
-				Message: "the proxy authenticates through route-neutral capture admission, not the CaptureRun aggregate",
+				Message: message,
+			})
+		}
+	}
+
+	// A ManualCapture can likewise be created only by the same typed grant
+	// issuer. Owner scope must come from its authenticated principal rather than
+	// a transport body or Host-specific handler.
+	manualCreateCommand := calledFunction{
+		importPath: manualCaptureImportPath,
+		name:       "CreateCommand",
+	}
+	for _, file := range files {
+		if strings.HasPrefix(file.relative, "internal/capturegrant/") ||
+			strings.HasPrefix(file.relative, "internal/manualcapture/") {
+			continue
+		}
+		if file.referencesSelector(manualCreateCommand) {
+			violations = append(violations, Violation{
+				Rule:    "manual-capture-create-outside-issuer",
+				Path:    file.relative,
+				Message: "production ManualCapture creation belongs to the typed capture-grant issuer",
 			})
 		}
 	}

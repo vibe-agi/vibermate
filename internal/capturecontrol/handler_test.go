@@ -21,6 +21,7 @@ import (
 	"github.com/vibe-agi/vibermate/internal/clientadapter"
 	"github.com/vibe-agi/vibermate/internal/controlprincipal"
 	"github.com/vibe-agi/vibermate/internal/localca"
+	"github.com/vibe-agi/vibermate/internal/manualcapture"
 	"github.com/vibe-agi/vibermate/internal/runtimepersistence"
 	"github.com/vibe-agi/vibermate/internal/workspaceidentity"
 )
@@ -448,13 +449,14 @@ func newFixture(t *testing.T, overrides ...fixtureOverride) *fixture {
 		t.Fatal(err)
 	}
 	issuerOptions := capturegrant.Options{
-		Runs:        runs,
-		Verifier:    verifier,
-		Authorities: fixedAuthorities{"api.anthropic.com:443"},
-		ProxyOrigin: "http://127.0.0.1:32123",
-		Root:        authority.Certificate(),
-		RunLifetime: 2 * time.Minute,
-		Workspaces:  workspaceResolver,
+		Runs:           runs,
+		ManualCaptures: rejectingManualCaptures{},
+		Verifier:       verifier,
+		Authorities:    fixedAuthorities{"api.anthropic.com:443"},
+		ProxyOrigin:    "http://127.0.0.1:32123",
+		Root:           authority.Certificate(),
+		RunLifetime:    2 * time.Minute,
+		Workspaces:     workspaceResolver,
 	}
 	for _, override := range overrides {
 		override(&issuerOptions)
@@ -542,6 +544,47 @@ type fixedAuthorities []string
 
 func (authorities fixedAuthorities) ActiveClientAuthorities() ([]string, error) {
 	return append([]string(nil), authorities...), nil
+}
+
+// rejectingManualCaptures keeps this CaptureRun-only handler fixture honest:
+// the shared issuer is fully constructed, while an unexpected ManualCapture
+// call cannot silently succeed.
+type rejectingManualCaptures struct{}
+
+func (rejectingManualCaptures) Create(
+	context.Context,
+	manualcapture.CreateCommand,
+) (manualcapture.Grant, error) {
+	return manualcapture.Grant{}, manualcapture.ErrRuntimeStopping
+}
+
+func (rejectingManualCaptures) Rotate(
+	context.Context,
+	manualcapture.RotateCommand,
+) (manualcapture.Grant, error) {
+	return manualcapture.Grant{}, manualcapture.ErrRuntimeStopping
+}
+
+func (rejectingManualCaptures) Revoke(
+	context.Context,
+	manualcapture.RevokeCommand,
+) (manualcapture.View, error) {
+	return manualcapture.View{}, manualcapture.ErrRuntimeStopping
+}
+
+func (rejectingManualCaptures) Get(
+	context.Context,
+	manualcapture.OwnerScope,
+	manualcapture.ID,
+) (manualcapture.View, error) {
+	return manualcapture.View{}, manualcapture.ErrRuntimeStopping
+}
+
+func (rejectingManualCaptures) List(
+	context.Context,
+	manualcapture.PageRequest,
+) (manualcapture.Page, error) {
+	return manualcapture.Page{}, manualcapture.ErrRuntimeStopping
 }
 
 func decodeRecorder(

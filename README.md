@@ -110,8 +110,8 @@ client verification, Root-delivery decisions, workspace resolution, and
 durable CaptureRun creation. Its returned per-run proxy and lifecycle
 credentials are separate from the control credential: mixed credential
 namespaces fail closed, and the child process never receives the control
-credential or discovery path. ManualCapture product surfaces/composition and
-remote enrollment are not implemented in this slice. Exchange correlation now
+credential or discovery path. ManualCapture product surfaces and remote
+enrollment are not implemented in this slice. Exchange correlation now
 carries the complete admission and a separately generated connection identity;
 workspace routing can read only the scope frozen into that admission, not a
 second caller-supplied option. The managed-run ingress profile is mechanically
@@ -124,9 +124,12 @@ only a domain-separated credential digest; raw values are returned once on
 create or rotation, and `manual-capture/<capture-id>` is mechanically derived.
 Local-installation and future ProxyClientBinding owners are isolated, while a
 ManualCapture deliberately has no Access, Profile, route, client adapter,
-process, machine, or workspace authority. This foundation is not yet wired to
-the proxy, control API, CLI, or UI, so it is not a usable manual-capture
-feature.
+process, machine, or workspace authority. ProductRuntime now restores this
+authority before building its existing proxy and dispatches the disjoint
+`run_…` and `manual_…` credential namespaces into the same route-neutral
+admission and downstream pipeline. The runtime-owned controller is present in
+the shared capture-grant issuer, but no control API, CLI, or UI invokes it yet,
+so this is still not a usable manual-capture feature.
 
 After an exact AgentEndpoint resolves an Access, the runtime atomically creates
 or reads the durable `(AccessID, MachineID, WorkspaceID)` route binding. Each

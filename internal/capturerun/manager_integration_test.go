@@ -12,6 +12,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/vibe-agi/vibermate/internal/capturecredential"
 	"github.com/vibe-agi/vibermate/internal/capturerun"
 	"github.com/vibe-agi/vibermate/internal/clientadapter"
 	"github.com/vibe-agi/vibermate/internal/runtimepersistence"
@@ -112,11 +113,26 @@ func TestCaptureRunCapabilitiesArePersistedAsHashesAndDriveLifecycle(
 		t.Fatalf("JSON exposed a bearer capability: %s", encoded)
 	}
 
-	wrong, err := capturerun.NewProxyCapability(
-		base64.RawURLEncoding.EncodeToString(bytes.Repeat([]byte{0x7f}, 32)),
+	wrongCredential, err := capturecredential.New(
+		capturecredential.KindManagedRun,
+		bytes.Repeat([]byte{0x7f}, capturecredential.EntropyBytes),
 	)
 	if err != nil {
 		t.Fatal(err)
+	}
+	wrong, err := capturerun.NewProxyCapability(wrongCredential.Value())
+	if err != nil {
+		t.Fatal(err)
+	}
+	manualCredential, err := capturecredential.New(
+		capturecredential.KindManualCapture,
+		bytes.Repeat([]byte{0x6f}, capturecredential.EntropyBytes),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := capturerun.NewProxyCapability(manualCredential.Value()); !errors.Is(err, capturerun.ErrCapabilityRejected) {
+		t.Fatalf("manual credential accepted as CaptureRun capability: %v", err)
 	}
 	if _, err := manager.AuthorizeProxy(
 		context.Background(),

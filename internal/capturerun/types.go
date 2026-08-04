@@ -15,6 +15,7 @@ import (
 	"unicode"
 	"unicode/utf8"
 
+	"github.com/vibe-agi/vibermate/internal/capturecredential"
 	"github.com/vibe-agi/vibermate/internal/clientadapter"
 	"github.com/vibe-agi/vibermate/internal/workspaceidentity"
 )
@@ -294,8 +295,12 @@ func (capability ProxyCapability) Value() string {
 }
 
 func NewProxyCapability(value string) (ProxyCapability, error) {
-	if err := validateCapability(value); err != nil {
-		return ProxyCapability{}, err
+	credential, err := capturecredential.Parse(value)
+	if err != nil || credential.Kind() != capturecredential.KindManagedRun {
+		return ProxyCapability{}, fmt.Errorf(
+			"%w: proxy capability encoding is invalid",
+			ErrCapabilityRejected,
+		)
 	}
 	return ProxyCapability{value: value}, nil
 }

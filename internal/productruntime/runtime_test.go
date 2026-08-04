@@ -24,6 +24,7 @@ import (
 	"github.com/vibe-agi/vibermate/internal/connectionpolicy"
 	"github.com/vibe-agi/vibermate/internal/exchange"
 	"github.com/vibe-agi/vibermate/internal/hostcontract"
+	"github.com/vibe-agi/vibermate/internal/manualcapture"
 	"github.com/vibe-agi/vibermate/internal/offlinehold"
 	"github.com/vibe-agi/vibermate/internal/operationcatalog"
 	"github.com/vibe-agi/vibermate/internal/originaltransport"
@@ -650,6 +651,90 @@ func TestProductRuntimeComposesCaptureIngressAndConnectionAudit(t *testing.T) {
 	}
 }
 
+func TestProductRuntimeManualCaptureUsesTheSharedProxyAdmission(t *testing.T) {
+	t.Parallel()
+	runtime := startTestRuntime(
+		t,
+		testOptions(t, hostcontract.Desktop(), &coordinatorDouble{}),
+	)
+	defer shutdownRuntime(t, runtime)
+	grant, err := runtime.ManualCaptures().Create(
+		context.Background(),
+		manualcapture.CreateCommand{
+			Owner:       manualcapture.NewLocalOwnerScope(),
+			DisplayName: "Desktop app",
+			ClientClass: manualcapture.ClientDesktopApp,
+			Lifetime:    manualcapture.LifetimeUntilRevoked,
+		},
+	)
+	if err != nil {
+		t.Fatalf("create ManualCapture: %v", err)
+	}
+	rules := runtime.ConnectionRules()
+	if _, err := rules.Replace(
+		context.Background(),
+		rules.Current().Revision,
+		[]connectionpolicy.Rule{{
+			ID:       "test.allow-manual-capture",
+			Priority: 100,
+			Decision: connectionpolicy.DecisionAllow,
+			Match: connectionpolicy.MatchExactHostPort(
+				"manual.example.test",
+				443,
+			),
+		}},
+		rules.Current().Default,
+	); err != nil {
+		t.Fatalf("configure connection rules: %v", err)
+	}
+	request := httptest.NewRequest(http.MethodConnect, "http://127.0.0.1", nil)
+	request.Host = "manual.example.test:443"
+	request.Header.Set(
+		"Proxy-Authorization",
+		"Basic "+base64.StdEncoding.EncodeToString(
+			[]byte("capture:"+grant.Credential.Value()),
+		),
+	)
+	recorder := httptest.NewRecorder()
+	runtime.ProxyHandler().ServeHTTP(recorder, request)
+	if recorder.Code != http.StatusBadGateway ||
+		!bytes.Contains(recorder.Body.Bytes(), []byte(`"reasonCode":"blind_tunnel_failed"`)) {
+		t.Fatalf("proxy status=%d body=%s", recorder.Code, recorder.Body.Bytes())
+	}
+	id, err := manualcapture.ParseID(grant.Capture.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	view, err := runtime.ManualCaptures().Get(
+		context.Background(),
+		manualcapture.NewLocalOwnerScope(),
+		id,
+	)
+	if err != nil || view.Observation != manualcapture.ObservationObserved {
+		t.Fatalf("ManualCapture view=%+v err=%v", view, err)
+	}
+	page, err := runtime.ConnectionEvents().List(
+		context.Background(),
+		connectionevent.PageRequest{Limit: 20},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	wantIngress := "manual-capture/" + grant.Capture.ID
+	found := false
+	for _, record := range page.Items {
+		if record.IngressID == wantIngress &&
+			record.SourceLabel == "Desktop app" &&
+			record.SourceConfidence == connectionevent.SourceConfidenceConfigured {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Fatalf("manual admission was not recorded: %+v", page.Items)
+	}
+}
+
 func TestProductRuntimeStatusDegradesWhenAccessProjectionIsUnavailable(t *testing.T) {
 	t.Parallel()
 
@@ -1031,6 +1116,10 @@ func TestProductRuntimeShutdownClosesIngressAndExchangeBeforeTransportDrain(
 		delegate: builders.capture,
 		events:   &events,
 	}
+	builders.manualCapture = tracingManualCaptureBuilder{
+		delegate: builders.manualCapture,
+		events:   &events,
+	}
 	builders.proxy = tracingProxyBuilder{
 		delegate: builders.proxy,
 		events:   &events,
@@ -1047,9 +1136,11 @@ func TestProductRuntimeShutdownClosesIngressAndExchangeBeforeTransportDrain(
 
 	want := []string{
 		"proxy.begin-shutdown",
+		"manual-capture.begin-shutdown",
 		"capture.begin-shutdown",
 		"offline.begin-shutdown",
 		"exchange.begin-shutdown",
+		"manual-capture.shutdown",
 		"capture.shutdown",
 		"original.shutdown",
 		"provider.shutdown",
@@ -1819,6 +1910,40 @@ func (runtime *tracingCaptureRuntime) BeginShutdown() {
 func (runtime *tracingCaptureRuntime) Shutdown(ctx context.Context) error {
 	runtime.events.add("capture.shutdown")
 	return runtime.captureRuntime.Shutdown(ctx)
+}
+
+type tracingManualCaptureBuilder struct {
+	delegate manualCaptureBuilder
+	events   *eventLog
+}
+
+func (builder tracingManualCaptureBuilder) Build(
+	ctx context.Context,
+	request manualCaptureBuildRequest,
+) (manualCaptureRuntime, error) {
+	runtime, err := builder.delegate.Build(ctx, request)
+	if err != nil {
+		return nil, err
+	}
+	return &tracingManualCaptureRuntime{
+		manualCaptureRuntime: runtime,
+		events:               builder.events,
+	}, nil
+}
+
+type tracingManualCaptureRuntime struct {
+	manualCaptureRuntime
+	events *eventLog
+}
+
+func (runtime *tracingManualCaptureRuntime) BeginShutdown() {
+	runtime.events.add("manual-capture.begin-shutdown")
+	runtime.manualCaptureRuntime.BeginShutdown()
+}
+
+func (runtime *tracingManualCaptureRuntime) Shutdown(ctx context.Context) error {
+	runtime.events.add("manual-capture.shutdown")
+	return runtime.manualCaptureRuntime.Shutdown(ctx)
 }
 
 type tracingProxyBuilder struct {

@@ -20,6 +20,7 @@ import (
 	"github.com/vibe-agi/vibermate/internal/egressaudit"
 	"github.com/vibe-agi/vibermate/internal/exchange"
 	"github.com/vibe-agi/vibermate/internal/localca"
+	"github.com/vibe-agi/vibermate/internal/manualcapture"
 	"github.com/vibe-agi/vibermate/internal/offlinehold"
 	"github.com/vibe-agi/vibermate/internal/originaltransport"
 	"github.com/vibe-agi/vibermate/internal/providertransport"
@@ -51,6 +52,7 @@ type Runtime struct {
 	original          originalRuntime
 	exchanges         exchangeRuntime
 	captureRuns       captureRuntime
+	manualCaptures    manualCaptureRuntime
 	localCA           localCARuntime
 	proxy             proxyRuntime
 	offlineHold       offlinehold.RuntimeCoordinator
@@ -94,6 +96,7 @@ func startWithBuilders(
 		builders.original == nil ||
 		builders.exchange == nil ||
 		builders.capture == nil ||
+		builders.manualCapture == nil ||
 		builders.localCA == nil ||
 		builders.proxy == nil {
 		return nil, fmt.Errorf("%w: component builder is missing", ErrInvalidBuildResult)
@@ -449,7 +452,25 @@ func startWithBuilders(
 		)
 	}
 	pending.register("CaptureRun component", captureRuns.Shutdown)
-	captureAdmissions, err := captureadmission.NewManagedRunAuthorizer(captureRuns)
+	manualCaptures, err := builders.manualCapture.Build(ctx, manualCaptureBuildRequest{
+		repository: storageResult.store.ManualCaptureRepository(),
+		clock:      options.Clock,
+		random:     securityRandom,
+	})
+	if err != nil {
+		return fail("ManualCapture recovery", err)
+	}
+	if manualCaptures == nil {
+		return fail(
+			"ManualCapture recovery",
+			fmt.Errorf("%w: ManualCapture component is nil", ErrInvalidBuildResult),
+		)
+	}
+	pending.register("ManualCapture component", manualCaptures.Shutdown)
+	captureAdmissions, err := captureadmission.NewAuthorizer(
+		captureRuns,
+		manualCaptures,
+	)
 	if err != nil {
 		return fail("capture admission", err)
 	}
@@ -503,6 +524,7 @@ func startWithBuilders(
 	cleanups.register("provider transport", provider.Shutdown)
 	cleanups.register("original-origin transport", original.Shutdown)
 	cleanups.register("CaptureRun component", captureRuns.Shutdown)
+	cleanups.register("ManualCapture component", manualCaptures.Shutdown)
 	cleanups.register("Exchange admission", func(context.Context) error {
 		exchanges.BeginShutdown()
 		return nil
@@ -513,6 +535,10 @@ func startWithBuilders(
 	})
 	cleanups.register("CaptureRun admission", func(context.Context) error {
 		captureRuns.BeginShutdown()
+		return nil
+	})
+	cleanups.register("ManualCapture admission", func(context.Context) error {
+		manualCaptures.BeginShutdown()
 		return nil
 	})
 	cleanups.register("loopback proxy admission", func(context.Context) error {
@@ -545,6 +571,7 @@ func startWithBuilders(
 		original:          original,
 		exchanges:         exchanges,
 		captureRuns:       captureRuns,
+		manualCaptures:    manualCaptures,
 		localCA:           certificateAuthority,
 		proxy:             proxy,
 		offlineHold:       options.OfflineHold,
@@ -584,6 +611,13 @@ func (r *Runtime) CaptureRunReader() capturerun.Reader {
 
 func (r *Runtime) CaptureRuns() capturerun.Controller {
 	return r.captureRuns
+}
+
+// ManualCaptures returns the runtime-owned durable manual capture authority.
+// It has no HTTP exposure until a Host composes an authenticated control
+// adapter through the shared capture-grant issuer.
+func (r *Runtime) ManualCaptures() manualcapture.Controller {
+	return r.manualCaptures
 }
 
 // WorkspaceIdentity resolves local working directories into opaque,

@@ -31,6 +31,7 @@ import (
 	"github.com/vibe-agi/vibermate/internal/exchange"
 	"github.com/vibe-agi/vibermate/internal/localca"
 	"github.com/vibe-agi/vibermate/internal/loopbackproxy"
+	"github.com/vibe-agi/vibermate/internal/manualcapture"
 	"github.com/vibe-agi/vibermate/internal/offlinehold"
 	"github.com/vibe-agi/vibermate/internal/operationcatalog"
 	"github.com/vibe-agi/vibermate/internal/originaltransport"
@@ -651,6 +652,7 @@ type proxyFixture struct {
 	handler     *loopbackproxy.Handler
 	store       *runtimepersistence.Store
 	runs        *capturerun.Manager
+	manuals     *manualcapture.Manager
 	grant       capturerun.LaunchGrant
 	authority   *localca.Authority
 	exchanges   *exchangeRecorder
@@ -764,6 +766,11 @@ func newProxyFixtureForDialectWithPolicy(
 	if err != nil {
 		t.Fatal(err)
 	}
+	manualOptions := manualcapture.DefaultOptions(store.ManualCaptureRepository())
+	manuals, err := manualcapture.NewManager(context.Background(), manualOptions)
+	if err != nil {
+		t.Fatal(err)
+	}
 	grant, err := runs.Create(context.Background(), capturerun.CreateCommand{
 		CWD:             filepath.Join(directory, "workspace"),
 		ExecutablePath:  "/usr/local/bin/claude",
@@ -835,7 +842,7 @@ func newProxyFixtureForDialectWithPolicy(
 	if err != nil {
 		t.Fatal(err)
 	}
-	admissions, err := captureadmission.NewManagedRunAuthorizer(runs)
+	admissions, err := captureadmission.NewAuthorizer(runs, manuals)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -872,6 +879,7 @@ func newProxyFixtureForDialectWithPolicy(
 		handler:     handler,
 		store:       store,
 		runs:        runs,
+		manuals:     manuals,
 		grant:       grant,
 		authority:   authority,
 		exchanges:   exchanges,
@@ -1027,6 +1035,9 @@ func (fixture *proxyFixture) Close(t *testing.T) {
 	}
 	if err := fixture.runs.Shutdown(ctx); err != nil {
 		t.Errorf("shutdown CaptureRun manager: %v", err)
+	}
+	if err := fixture.manuals.Shutdown(ctx); err != nil {
+		t.Errorf("shutdown ManualCapture manager: %v", err)
 	}
 	if err := fixture.authority.Shutdown(ctx); err != nil {
 		t.Errorf("shutdown local CA: %v", err)

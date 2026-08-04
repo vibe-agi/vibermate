@@ -21,6 +21,7 @@ import (
 	"github.com/vibe-agi/vibermate/internal/exchange"
 	"github.com/vibe-agi/vibermate/internal/localca"
 	"github.com/vibe-agi/vibermate/internal/loopbackproxy"
+	"github.com/vibe-agi/vibermate/internal/manualcapture"
 	"github.com/vibe-agi/vibermate/internal/offlinehold"
 	"github.com/vibe-agi/vibermate/internal/operationcatalog"
 	"github.com/vibe-agi/vibermate/internal/originaltransport"
@@ -618,6 +619,36 @@ func (productionCaptureBuilder) Build(
 	return capturerun.NewManager(ctx, options)
 }
 
+type manualCaptureBuildRequest struct {
+	repository manualcapture.Repository
+	clock      manualcapture.Clock
+	random     io.Reader
+}
+
+type manualCaptureRuntime interface {
+	manualcapture.Controller
+	manualcapture.ProxyAuthorizer
+	BeginShutdown()
+	Drain(context.Context) error
+	Shutdown(context.Context) error
+}
+
+type manualCaptureBuilder interface {
+	Build(context.Context, manualCaptureBuildRequest) (manualCaptureRuntime, error)
+}
+
+type productionManualCaptureBuilder struct{}
+
+func (productionManualCaptureBuilder) Build(
+	ctx context.Context,
+	request manualCaptureBuildRequest,
+) (manualCaptureRuntime, error) {
+	options := manualcapture.DefaultOptions(request.repository)
+	options.Clock = request.clock
+	options.Random = request.random
+	return manualcapture.NewManager(ctx, options)
+}
+
 type localCABuildRequest struct {
 	ownerContext context.Context
 	directory    string
@@ -707,36 +738,38 @@ func (productionProxyBuilder) Build(
 }
 
 type runtimeBuilders struct {
-	storage    storageBuilder
-	access     accessBuilder
-	credential credentialBuilder
-	activity   activityBuilder
-	connection connectionEventBuilder
-	approval   approvalBuilder
-	monitor    monitorBuilder
-	provider   providerBuilder
-	original   originalBuilder
-	exchange   exchangeBuilder
-	capture    captureBuilder
-	localCA    localCABuilder
-	proxy      proxyBuilder
+	storage       storageBuilder
+	access        accessBuilder
+	credential    credentialBuilder
+	activity      activityBuilder
+	connection    connectionEventBuilder
+	approval      approvalBuilder
+	monitor       monitorBuilder
+	provider      providerBuilder
+	original      originalBuilder
+	exchange      exchangeBuilder
+	capture       captureBuilder
+	manualCapture manualCaptureBuilder
+	localCA       localCABuilder
+	proxy         proxyBuilder
 }
 
 func productionBuilders() runtimeBuilders {
 	return runtimeBuilders{
-		storage:    productionStorageBuilder{},
-		access:     productionAccessBuilder{},
-		credential: productionCredentialBuilder{},
-		activity:   productionActivityBuilder{},
-		connection: productionConnectionEventBuilder{},
-		approval:   productionApprovalBuilder{},
-		monitor:    productionMonitorBuilder{},
-		provider:   productionProviderBuilder{},
-		original:   productionOriginalBuilder{},
-		exchange:   productionExchangeBuilder{},
-		capture:    productionCaptureBuilder{},
-		localCA:    productionLocalCABuilder{},
-		proxy:      productionProxyBuilder{},
+		storage:       productionStorageBuilder{},
+		access:        productionAccessBuilder{},
+		credential:    productionCredentialBuilder{},
+		activity:      productionActivityBuilder{},
+		connection:    productionConnectionEventBuilder{},
+		approval:      productionApprovalBuilder{},
+		monitor:       productionMonitorBuilder{},
+		provider:      productionProviderBuilder{},
+		original:      productionOriginalBuilder{},
+		exchange:      productionExchangeBuilder{},
+		capture:       productionCaptureBuilder{},
+		manualCapture: productionManualCaptureBuilder{},
+		localCA:       productionLocalCABuilder{},
+		proxy:         productionProxyBuilder{},
 	}
 }
 

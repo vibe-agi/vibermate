@@ -2,12 +2,11 @@ package loopbackproxy
 
 import (
 	"context"
-	"encoding/base64"
 	"errors"
-	"strings"
 	"testing"
 
 	"github.com/vibe-agi/vibermate/internal/captureadmission"
+	"github.com/vibe-agi/vibermate/internal/capturecredential"
 )
 
 type fixedCaptureAuthorizer struct {
@@ -24,8 +23,16 @@ func (authorizer *fixedCaptureAuthorizer) Authorize(
 	return authorizer.admission, authorizer.err
 }
 
-func validCaptureCredential() string {
-	return base64.RawURLEncoding.EncodeToString([]byte(strings.Repeat("p", 32)))
+func validCaptureCredential(t *testing.T) string {
+	t.Helper()
+	credential, err := capturecredential.New(
+		capturecredential.KindManualCapture,
+		make([]byte, capturecredential.EntropyBytes),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return credential.Value()
 }
 
 func TestCaptureAdmissionBoundaryRevalidatesAuthorizerOutput(t *testing.T) {
@@ -35,7 +42,7 @@ func TestCaptureAdmissionBoundaryRevalidatesAuthorizerOutput(t *testing.T) {
 	if _, err := authorizeCaptureAdmission(
 		context.Background(),
 		authorizer,
-		validCaptureCredential(),
+		validCaptureCredential(t),
 	); !errors.Is(err, captureadmission.ErrCredentialRejected) ||
 		!errors.Is(err, captureadmission.ErrInvalidAdmission) {
 		t.Fatalf("invalid authorizer output error = %v", err)
@@ -72,7 +79,7 @@ func TestValidCaptureAdmissionCrossesBoundaryUnchanged(t *testing.T) {
 	got, err := authorizeCaptureAdmission(
 		context.Background(),
 		authorizer,
-		validCaptureCredential(),
+		validCaptureCredential(t),
 	)
 	if err != nil {
 		t.Fatal(err)

@@ -4,7 +4,7 @@
 -- format exists.
 CREATE TABLE runtime_metadata(
   singleton INTEGER PRIMARY KEY NOT NULL CHECK(singleton = 1),
-  schema_identity TEXT NOT NULL CHECK(schema_identity = 'vibermate-runtime-manual-capture-foundation'),
+  schema_identity TEXT NOT NULL CHECK(schema_identity = 'vibermate-runtime'),
   initialized_at TEXT NOT NULL CHECK(length(initialized_at) > 0)
 ) STRICT;
 CREATE TABLE access_bindings(
@@ -521,6 +521,6 @@ WHERE state = 'active'
 INSERT INTO runtime_metadata (singleton, schema_identity, initialized_at)
 VALUES (
   1,
-  'vibermate-runtime-manual-capture-foundation',
+  'vibermate-runtime',
   strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
 );
