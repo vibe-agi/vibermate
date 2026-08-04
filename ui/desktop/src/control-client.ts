@@ -15,6 +15,13 @@ import type {
   ConnectionPage,
   EgressAttemptPage,
   CredentialView,
+  ManualCaptureContext,
+  ManualCaptureCreateInput,
+  ManualCaptureGrant,
+  ManualCaptureGrantStateTag,
+  ManualCapturePage,
+  ManualCaptureRecord,
+  ManualCaptureStateTag,
   OfflineHoldSnapshot,
   StatusResponse,
   WorkspaceRouteBinding,
@@ -135,6 +142,26 @@ export interface ControlClient {
   exchange(exchangeId: string, signal?: AbortSignal): Promise<ExchangeDetail>;
   approvals(signal?: AbortSignal): Promise<ApprovalPage>;
   captureRuns(signal?: AbortSignal): Promise<CaptureRunPage>;
+  manualCaptureContext(signal?: AbortSignal): Promise<ManualCaptureContext>;
+  manualCaptures(signal?: AbortSignal): Promise<ManualCapturePage>;
+  manualCapture(
+    manualCaptureId: string,
+    signal?: AbortSignal,
+  ): Promise<ManualCaptureStateTag>;
+  createManualCapture(
+    input: ManualCaptureCreateInput,
+    signal?: AbortSignal,
+  ): Promise<ManualCaptureGrantStateTag>;
+  rotateManualCapture(
+    manualCaptureId: string,
+    stateTag: string,
+    signal?: AbortSignal,
+  ): Promise<ManualCaptureGrantStateTag>;
+  revokeManualCapture(
+    manualCaptureId: string,
+    stateTag: string,
+    signal?: AbortSignal,
+  ): Promise<void>;
   workspaceRouteBindings?(
     signal?: AbortSignal,
   ): Promise<WorkspaceRouteBindingPage>;
@@ -244,6 +271,8 @@ export async function createControlClient(
     token: string,
     signal: AbortSignal | undefined,
     expectedSuccessStatus: number,
+    opaqueStateTag?: string,
+    observeResponse?: (response: Response) => void,
   ): Promise<T> {
     const destination = new URL(path, `${validatedBootstrap.baseUrl}/`);
     if (
@@ -252,7 +281,13 @@ export async function createControlClient(
     ) {
       throw new Error("Desktop control request escaped the bootstrap origin");
     }
-    if ((expectedRevision === undefined) !== (idempotencyKey === undefined)) {
+    if (
+      (expectedRevision === undefined) !== (idempotencyKey === undefined) ||
+      (opaqueStateTag !== undefined &&
+        (expectedRevision !== undefined ||
+          idempotencyKey !== undefined ||
+          !validManualCaptureStateTag(opaqueStateTag)))
+    ) {
       throw new Error("Desktop control mutation headers are incomplete");
     }
     const headers = new Headers({
@@ -265,6 +300,9 @@ export async function createControlClient(
     if (expectedRevision !== undefined && idempotencyKey !== undefined) {
       headers.set("If-Match", String(expectedRevision));
       headers.set("Idempotency-Key", idempotencyKey);
+    }
+    if (opaqueStateTag !== undefined) {
+      headers.set("If-Match", opaqueStateTag);
     }
     const requestOptions: RequestInit = {
       method,
@@ -287,21 +325,33 @@ export async function createControlClient(
         fetchImplementation(destination, requestOptions),
         requestAbort.signal,
       );
-      const payload = await readBoundedResponse(response, requestAbort.signal);
+      const payload =
+        response.status === 204 && response.body === null
+          ? ""
+          : await readBoundedResponse(response, requestAbort.signal);
       if (!response.ok) {
         if (!exactControlContentType(response, "application/problem+json")) {
           throw new ControlContractError();
         }
         throw new ControlWireProblem(decodeProblem(response.status, payload));
       }
-      if (
-        response.status !== expectedSuccessStatus ||
-        !exactControlContentType(response, "application/json")
-      ) {
+      if (response.status !== expectedSuccessStatus) {
+        throw new ControlContractError();
+      }
+      if (expectedSuccessStatus === 204) {
+        if (payload !== "" || response.headers.get("Content-Type") !== null) {
+          throw new ControlContractError();
+        }
+        observeResponse?.(response);
+        return undefined as T;
+      }
+      if (!exactControlContentType(response, "application/json")) {
         throw new ControlContractError();
       }
       try {
-        return JSON.parse(payload) as T;
+        const result = JSON.parse(payload) as T;
+        observeResponse?.(response);
+        return result;
       } catch {
         throw new ControlContractError();
       }
@@ -472,6 +522,101 @@ export async function createControlClient(
         throw exposeControlWireProblem(error);
       }
       throw error;
+    }
+  }
+
+  async function requestManualRead<T>(
+    path: string,
+    signal: AbortSignal | undefined,
+    decode: (value: unknown) => T,
+    requireStateTag: boolean,
+  ): Promise<{ readonly value: T; readonly stateTag?: string }> {
+    const current = await currentSession(signal);
+    let stateTag: string | undefined;
+    try {
+      const payload = await requestWithCapability<unknown>(
+        "GET",
+        path,
+        undefined,
+        undefined,
+        undefined,
+        current.readToken,
+        signal,
+        200,
+        undefined,
+        (response) => {
+          stateTag = requireManualCaptureHeaders(response, requireStateTag);
+        },
+      );
+      return {
+        value: decode(payload),
+        ...(stateTag === undefined ? {} : { stateTag }),
+      };
+    } catch (error) {
+      if (error instanceof ControlWireProblem) {
+        throw exposeControlWireProblem(error);
+      }
+      throw error;
+    }
+  }
+
+  // ManualCapture create and credential rotation return a one-time secret.
+  // They intentionally bypass the generic idempotent mutation replay plane:
+  // a lost response is ambiguous and must never trigger an automatic retry.
+  async function requestManualMutation<T>(
+    path: string,
+    body: unknown,
+    stateTag: string | undefined,
+    signal: AbortSignal | undefined,
+    expectedSuccessStatus: 200 | 201 | 204,
+    decode: (value: unknown) => T,
+    requireResponseStateTag: boolean,
+  ): Promise<{ readonly value: T; readonly stateTag?: string }> {
+    throwIfMutationAborted(signal);
+    if (stateTag !== undefined && !validManualCaptureStateTag(stateTag)) {
+      throw new ControlContractError();
+    }
+    const encodedBody = body === undefined ? undefined : encodeControlBody(body);
+    throwIfMutationAborted(signal);
+    if (activeMutationCalls >= maximumActiveMutationCalls) {
+      throw new Error("Desktop control has too many active mutation calls");
+    }
+    activeMutationCalls += 1;
+    try {
+      const current = await currentSession(signal);
+      let responseStateTag: string | undefined;
+      try {
+        const payload = await requestWithCapability<unknown>(
+          "POST",
+          path,
+          encodedBody,
+          undefined,
+          undefined,
+          current.writeToken,
+          signal,
+          expectedSuccessStatus,
+          stateTag,
+          (response) => {
+            responseStateTag = requireManualCaptureHeaders(
+              response,
+              requireResponseStateTag,
+            );
+          },
+        );
+        return {
+          value: decode(payload),
+          ...(responseStateTag === undefined
+            ? {}
+            : { stateTag: responseStateTag }),
+        };
+      } catch (error) {
+        if (error instanceof ControlWireProblem) {
+          throw exposeControlWireProblem(error);
+        }
+        throw error;
+      }
+    } finally {
+      activeMutationCalls -= 1;
     }
   }
 
@@ -933,6 +1078,93 @@ export async function createControlClient(
       requireCaptureRunPage(
         await requestRead<unknown>("/api/v1/capture-runs?limit=50", signal),
       ),
+    manualCaptureContext: async (signal) =>
+      (
+        await requestManualRead(
+          "/api/v1/manual-captures/context",
+          signal,
+          requireManualCaptureContext,
+          false,
+        )
+      ).value,
+    manualCaptures: async (signal) =>
+      (
+        await requestManualRead(
+          "/api/v1/manual-captures",
+          signal,
+          requireManualCapturePage,
+          false,
+        )
+      ).value,
+    manualCapture: async (manualCaptureId, signal) => {
+      if (!validResourceId(manualCaptureId)) {
+        throw new ControlContractError();
+      }
+      const result = await requestManualRead(
+        `/api/v1/manual-captures/${encodeURIComponent(manualCaptureId)}`,
+        signal,
+        (value) => requireManualCaptureRecord(value, manualCaptureId),
+        true,
+      );
+      if (result.stateTag === undefined) {
+        throw new ControlContractError();
+      }
+      return { capture: result.value, stateTag: result.stateTag };
+    },
+    createManualCapture: async (input, signal) => {
+      if (!validManualCaptureCreateInput(input)) {
+        throw new ControlContractError();
+      }
+      const result = await requestManualMutation(
+        "/api/v1/manual-captures",
+        input,
+        undefined,
+        signal,
+        201,
+        requireManualCaptureGrant,
+        true,
+      );
+      if (result.stateTag === undefined) {
+        throw new ControlContractError();
+      }
+      return { grant: result.value, stateTag: result.stateTag };
+    },
+    rotateManualCapture: async (manualCaptureId, stateTag, signal) => {
+      if (!validResourceId(manualCaptureId)) {
+        throw new ControlContractError();
+      }
+      const result = await requestManualMutation(
+        `/api/v1/manual-captures/${encodeURIComponent(manualCaptureId)}/actions/rotate-credential`,
+        undefined,
+        stateTag,
+        signal,
+        200,
+        (value) => requireManualCaptureGrant(value, manualCaptureId),
+        true,
+      );
+      if (result.stateTag === undefined) {
+        throw new ControlContractError();
+      }
+      return { grant: result.value, stateTag: result.stateTag };
+    },
+    revokeManualCapture: async (manualCaptureId, stateTag, signal) => {
+      if (!validResourceId(manualCaptureId)) {
+        throw new ControlContractError();
+      }
+      await requestManualMutation(
+        `/api/v1/manual-captures/${encodeURIComponent(manualCaptureId)}/actions/revoke`,
+        undefined,
+        stateTag,
+        signal,
+        204,
+        (value) => {
+          if (value !== undefined) {
+            throw new ControlContractError();
+          }
+        },
+        false,
+      );
+    },
     workspaceRouteBindings: async (signal) =>
       requireWorkspaceRouteBindingPage(
         await requestRead<unknown>(
@@ -3714,6 +3946,241 @@ const captureRunRecognitions = new Set([
   "verified",
 ]);
 const captureRunAdapterStates = new Set(["verified", "generic", "failed"]);
+
+function validManualCaptureStateTag(value: unknown): value is string {
+  return typeof value === "string" && /^"mc_[A-Za-z0-9_-]{43}"$/u.test(value);
+}
+
+function requireManualCaptureHeaders(
+  response: Response,
+  requireStateTag: boolean,
+): string | undefined {
+  if (response.headers.get("Cache-Control") !== "no-store") {
+    throw new ControlContractError();
+  }
+  const stateTag = response.headers.get("ETag") ?? undefined;
+  if (
+    (requireStateTag && !validManualCaptureStateTag(stateTag)) ||
+    (!requireStateTag && stateTag !== undefined)
+  ) {
+    throw new ControlContractError();
+  }
+  return stateTag;
+}
+
+function validManualCaptureProxyAddress(value: unknown): value is string {
+  if (!validTrimmedString(value, maximumAccessOriginBytes, false)) {
+    return false;
+  }
+  try {
+    const parsed = new URL(value);
+    return (
+      parsed.protocol === "http:" &&
+      parsed.hostname === "127.0.0.1" &&
+      parsed.port !== "" &&
+      parsed.username === "" &&
+      parsed.password === "" &&
+      parsed.pathname === "/" &&
+      parsed.search === "" &&
+      parsed.hash === ""
+    );
+  } catch {
+    return false;
+  }
+}
+
+function validManualCaptureRoot(value: unknown): boolean {
+  return (
+    hasClosedFields(value, ["kind", "derSha256", "fingerprint", "pemPath"]) &&
+    value.kind === "local_path" &&
+    typeof value.derSha256 === "string" &&
+    /^[a-f0-9]{64}$/u.test(value.derSha256) &&
+    validTrimmedString(value.fingerprint, 128, false) &&
+    validManualCaptureLocalPath(value.pemPath)
+  );
+}
+
+function validManualCaptureLocalPath(value: unknown): value is string {
+  if (!validTrimmedString(value, 4_096, false)) {
+    return false;
+  }
+  const normalized = value.replaceAll("\\", "/");
+  let relative: string;
+  if (/^[A-Za-z]:\//u.test(normalized)) {
+    relative = normalized.slice(3);
+  } else if (/^\/[^/]/u.test(normalized)) {
+    relative = normalized.slice(1);
+  } else {
+    const unc = /^\/\/[^/]+\/[^/]+\/(.+)$/u.exec(normalized);
+    if (unc?.[1] === undefined) {
+      return false;
+    }
+    relative = unc[1];
+  }
+  return (
+    relative.length > 0 &&
+    !relative.endsWith("/") &&
+    relative.split("/").every((segment) =>
+      segment.length > 0 && segment !== "." && segment !== ".."
+    )
+  );
+}
+
+function validManualCaptureConfirmationToken(value: unknown): value is string {
+  return typeof value === "string" && /^ctx_[A-Za-z0-9_-]{43}$/u.test(value);
+}
+
+function requireManualCaptureContext(value: unknown): ManualCaptureContext {
+  if (
+    !hasClosedFields(value, [
+      "confirmationToken",
+      "proxyAddress",
+      "root",
+      "defaultTemporarySeconds",
+      "maxTemporarySeconds",
+    ]) ||
+    !validManualCaptureConfirmationToken(value.confirmationToken) ||
+    !validManualCaptureProxyAddress(value.proxyAddress) ||
+    !validManualCaptureRoot(value.root) ||
+    !positiveInteger(value.defaultTemporarySeconds) ||
+    !positiveInteger(value.maxTemporarySeconds) ||
+    value.defaultTemporarySeconds < 60 ||
+    value.defaultTemporarySeconds > value.maxTemporarySeconds ||
+    value.maxTemporarySeconds > 7 * 24 * 60 * 60
+  ) {
+    throw new ControlContractError();
+  }
+  return value as unknown as ManualCaptureContext;
+}
+
+function validManualCaptureCreateInput(
+  value: ManualCaptureCreateInput,
+): boolean {
+  if (
+    !hasClosedFields(
+      value,
+      ["displayName", "clientClass", "lifetime", "confirmationToken"],
+      ["expiresInSeconds"],
+    ) ||
+    !validTrimmedString(value.displayName, 128, false) ||
+    !["cli", "desktop_app", "other"].includes(value.clientClass) ||
+    !["temporary", "until_revoked"].includes(value.lifetime) ||
+    !validManualCaptureConfirmationToken(value.confirmationToken)
+  ) {
+    return false;
+  }
+  return value.lifetime === "temporary"
+    ? positiveInteger(value.expiresInSeconds) &&
+        value.expiresInSeconds >= 60 &&
+        value.expiresInSeconds <= 7 * 24 * 60 * 60
+    : value.expiresInSeconds === undefined;
+}
+
+function validManualCaptureRecord(
+  value: unknown,
+  expectedId?: string,
+): value is ManualCaptureRecord {
+  if (
+    !hasClosedFields(
+      value,
+      [
+        "id",
+        "ingressProfileId",
+        "displayName",
+        "clientClass",
+        "lifetime",
+        "state",
+        "observation",
+        "createdAt",
+        "updatedAt",
+      ],
+      ["expiresAt", "lastObservedAt"],
+    ) ||
+    !validResourceId(value.id) ||
+    (expectedId !== undefined && value.id !== expectedId) ||
+    value.ingressProfileId !== `manual-capture/${value.id}` ||
+    !validTrimmedString(value.displayName, 128, false) ||
+    !["cli", "desktop_app", "other"].includes(String(value.clientClass)) ||
+    !["temporary", "until_revoked"].includes(String(value.lifetime)) ||
+    !["active", "revoked", "expired"].includes(String(value.state)) ||
+    !["waiting_for_traffic", "observed"].includes(String(value.observation)) ||
+    !validTimestamp(value.createdAt) ||
+    !validTimestamp(value.updatedAt) ||
+    (value.expiresAt !== undefined && !validTimestamp(value.expiresAt)) ||
+    (value.lastObservedAt !== undefined && !validTimestamp(value.lastObservedAt))
+  ) {
+    return false;
+  }
+  if (
+    (value.lifetime === "temporary") !== (value.expiresAt !== undefined) ||
+    (value.observation === "observed") !== (value.lastObservedAt !== undefined)
+  ) {
+    return false;
+  }
+  const createdAt = Date.parse(value.createdAt);
+  const updatedAt = Date.parse(value.updatedAt);
+  const expiresAt =
+    value.expiresAt === undefined ? undefined : Date.parse(value.expiresAt);
+  const observedAt =
+    value.lastObservedAt === undefined
+      ? undefined
+      : Date.parse(value.lastObservedAt);
+  return (
+    updatedAt >= createdAt &&
+    (expiresAt === undefined || expiresAt >= createdAt) &&
+    (observedAt === undefined ||
+      (observedAt >= createdAt && observedAt <= updatedAt))
+  );
+}
+
+function requireManualCaptureRecord(
+  value: unknown,
+  expectedId?: string,
+): ManualCaptureRecord {
+  if (!validManualCaptureRecord(value, expectedId)) {
+    throw new ControlContractError();
+  }
+  return value;
+}
+
+function requireManualCapturePage(value: unknown): ManualCapturePage {
+  if (
+    !hasClosedFields(value, ["items"]) ||
+    !Array.isArray(value.items) ||
+    value.items.length > maximumDashboardPageItems ||
+    !value.items.every((item) => validManualCaptureRecord(item)) ||
+    new Set(value.items.map((item) => (item as ManualCaptureRecord).id)).size !==
+      value.items.length
+  ) {
+    throw new ControlContractError();
+  }
+  return value as unknown as ManualCapturePage;
+}
+
+function requireManualCaptureGrant(
+  value: unknown,
+  expectedId?: string,
+): ManualCaptureGrant {
+  if (
+    !hasClosedFields(value, [
+      "capture",
+      "proxyAddress",
+      "proxyUsername",
+      "proxyPassword",
+      "root",
+    ]) ||
+    !validManualCaptureRecord(value.capture, expectedId) ||
+    value.capture.state !== "active" ||
+    !validManualCaptureProxyAddress(value.proxyAddress) ||
+    value.proxyUsername !== "capture" ||
+    typeof value.proxyPassword !== "string" ||
+    !/^manual_[A-Za-z0-9_-]{43}$/u.test(value.proxyPassword) ||
+    !validManualCaptureRoot(value.root)
+  ) {
+    throw new ControlContractError();
+  }
+  return value as unknown as ManualCaptureGrant;
+}
 
 function requireCaptureRunPage(value: unknown): CaptureRunPage {
   if (

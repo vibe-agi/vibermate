@@ -519,11 +519,260 @@ function workspaceRouteBinding(
   };
 }
 
+const manualCaptureTag = `"mc_${"A".repeat(43)}"`;
+
+function manualCaptureContext(overrides: Record<string, unknown> = {}) {
+  return {
+    confirmationToken: `ctx_${"B".repeat(43)}`,
+    proxyAddress: "http://127.0.0.1:32123",
+    root: {
+      kind: "local_path",
+      derSha256: "a".repeat(64),
+      fingerprint: "AA:BB:CC:DD",
+      pemPath: "/private/vibermate/root.pem",
+    },
+    defaultTemporarySeconds: 86_400,
+    maxTemporarySeconds: 604_800,
+    ...overrides,
+  };
+}
+
+function manualCaptureRecord(overrides: Record<string, unknown> = {}) {
+  return {
+    id: "capture-one",
+    ingressProfileId: "manual-capture/capture-one",
+    displayName: "Project terminal",
+    clientClass: "cli",
+    lifetime: "temporary",
+    state: "active",
+    observation: "waiting_for_traffic",
+    createdAt: "2026-08-03T08:00:00Z",
+    updatedAt: "2026-08-03T08:00:00Z",
+    expiresAt: "2026-08-04T08:00:00Z",
+    ...overrides,
+  };
+}
+
+function manualCaptureGrant(overrides: Record<string, unknown> = {}) {
+  return {
+    capture: manualCaptureRecord(),
+    proxyAddress: "http://127.0.0.1:32123",
+    proxyUsername: "capture",
+    proxyPassword: `manual_${"C".repeat(43)}`,
+    root: manualCaptureContext().root,
+    ...overrides,
+  };
+}
+
+function manualJSONResponse(
+  value: unknown,
+  status = 200,
+  stateTag?: string,
+): Response {
+  const headers = new Headers({
+    "Cache-Control": "no-store",
+    "Content-Type": "application/json",
+  });
+  if (stateTag !== undefined) {
+    headers.set("ETag", stateTag);
+  }
+  return new Response(JSON.stringify(value), { status, headers });
+}
+
 afterEach(() => {
   vi.useRealTimers();
 });
 
 describe("Desktop control client", () => {
+  it("uses the closed ManualCapture contract without exposing numeric state", async () => {
+    const bootstrap = session();
+    const calls: FetchCall[] = [];
+    const fetchImplementation = withSessionState(
+      bootstrap,
+      (url, init) => {
+        if (
+          url.pathname === "/api/v1/manual-captures/context" &&
+          init.method === "GET"
+        ) {
+          return manualJSONResponse(manualCaptureContext());
+        }
+        if (
+          url.pathname === "/api/v1/manual-captures" &&
+          init.method === "GET"
+        ) {
+          return manualJSONResponse({ items: [manualCaptureRecord()] });
+        }
+        if (
+          url.pathname === "/api/v1/manual-captures/capture-one" &&
+          init.method === "GET"
+        ) {
+          return manualJSONResponse(manualCaptureRecord(), 200, manualCaptureTag);
+        }
+        if (
+          url.pathname === "/api/v1/manual-captures" &&
+          init.method === "POST"
+        ) {
+          return manualJSONResponse(
+            manualCaptureGrant(),
+            201,
+            manualCaptureTag,
+          );
+        }
+        if (url.pathname.endsWith("/actions/rotate-credential")) {
+          return manualJSONResponse(
+            manualCaptureGrant(),
+            200,
+            `"mc_${"D".repeat(43)}"`,
+          );
+        }
+        if (url.pathname.endsWith("/actions/revoke")) {
+          return new Response(null, {
+            status: 204,
+            headers: { "Cache-Control": "no-store" },
+          });
+        }
+        throw new Error(`unexpected ManualCapture request ${init.method} ${url}`);
+      },
+      calls,
+    );
+    const client = await createControlClient(bootstrap, fetchImplementation);
+
+    await expect(client.manualCaptureContext()).resolves.toEqual(
+      manualCaptureContext(),
+    );
+    await expect(client.manualCaptures()).resolves.toEqual({
+      items: [manualCaptureRecord()],
+    });
+    await expect(client.manualCapture("capture-one")).resolves.toEqual({
+      capture: manualCaptureRecord(),
+      stateTag: manualCaptureTag,
+    });
+    await expect(
+      client.createManualCapture({
+        displayName: "Project terminal",
+        clientClass: "cli",
+        lifetime: "temporary",
+        expiresInSeconds: 86_400,
+        confirmationToken: `ctx_${"B".repeat(43)}`,
+      }),
+    ).resolves.toEqual({
+      grant: manualCaptureGrant(),
+      stateTag: manualCaptureTag,
+    });
+    await expect(
+      client.rotateManualCapture("capture-one", manualCaptureTag),
+    ).resolves.toEqual({
+      grant: manualCaptureGrant(),
+      stateTag: `"mc_${"D".repeat(43)}"`,
+    });
+    await expect(
+      client.revokeManualCapture("capture-one", manualCaptureTag),
+    ).resolves.toBeUndefined();
+
+    const manualCalls = calls.filter(({ url }) =>
+      url.pathname.startsWith("/api/v1/manual-captures"),
+    );
+    expect(manualCalls).toHaveLength(6);
+    for (const call of manualCalls) {
+      const headers = new Headers(call.init.headers);
+      expect(headers.get("Idempotency-Key")).toBeNull();
+      expect(headers.get("Authorization")).toMatch(/^Bearer /u);
+      if (
+        call.url.pathname.endsWith("/actions/rotate-credential") ||
+        call.url.pathname.endsWith("/actions/revoke")
+      ) {
+        expect(headers.get("If-Match")).toBe(manualCaptureTag);
+      } else {
+        expect(headers.get("If-Match")).toBeNull();
+      }
+    }
+    const createBody = String(
+      manualCalls.find(
+        ({ url, init }) =>
+          url.pathname === "/api/v1/manual-captures" && init.method === "POST",
+      )?.init.body,
+    );
+    expect(createBody).not.toContain("revision");
+    expect(createBody).not.toContain("route");
+  });
+
+  it("never retries a ManualCapture mutation after a lost response", async () => {
+    const bootstrap = session();
+    let attempts = 0;
+    const client = await createControlClient(
+      bootstrap,
+      withSessionState(bootstrap, (url, init) => {
+        expect(url.pathname).toBe("/api/v1/manual-captures");
+        expect(init.method).toBe("POST");
+        attempts += 1;
+        throw new TypeError("response was lost after commit");
+      }),
+    );
+
+    await expect(
+      client.createManualCapture({
+        displayName: "Project terminal",
+        clientClass: "cli",
+        lifetime: "until_revoked",
+        confirmationToken: `ctx_${"B".repeat(43)}`,
+      }),
+    ).rejects.toThrow("response was lost after commit");
+    expect(attempts).toBe(1);
+  });
+
+  it.each([
+    {
+      name: "a missing state tag",
+      response: manualJSONResponse(manualCaptureRecord()),
+    },
+    {
+      name: "a numeric-looking state tag",
+      response: manualJSONResponse(manualCaptureRecord(), 200, '"revision-1"'),
+    },
+    {
+      name: "a cacheable response",
+      response: new Response(JSON.stringify(manualCaptureRecord()), {
+        status: 200,
+        headers: {
+          "Cache-Control": "private",
+          "Content-Type": "application/json",
+          ETag: manualCaptureTag,
+        },
+      }),
+    },
+  ])("rejects $name on ManualCapture detail", async ({ response }) => {
+    const bootstrap = session();
+    const client = await createControlClient(
+      bootstrap,
+      withSessionState(bootstrap, () => response),
+    );
+
+    await expect(client.manualCapture("capture-one")).rejects.toBeInstanceOf(
+      ControlContractError,
+    );
+  });
+
+  it.each(["relative/root.pem", "/private/../root.pem"])(
+    "rejects the non-canonical ManualCapture Root path %s",
+    async (pemPath) => {
+      const bootstrap = session();
+      const context = manualCaptureContext();
+      const client = await createControlClient(
+        bootstrap,
+        withSessionState(bootstrap, () =>
+          manualJSONResponse({
+            ...context,
+            root: { ...context.root, pemPath },
+          }),
+        ),
+      );
+
+      await expect(client.manualCaptureContext()).rejects.toBeInstanceOf(
+        ControlContractError,
+      );
+    },
+  );
+
   it("reads and CAS-updates one stable machine workspace route", async () => {
     const bootstrap = session();
     const calls: FetchCall[] = [];

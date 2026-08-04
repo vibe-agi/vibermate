@@ -1934,6 +1934,298 @@ dd {
   font-size: 0.68rem;
 }
 
+.manual-capture-panel {
+  grid-column: 1 / -1;
+}
+
+.manual-capture-heading {
+  align-items: flex-start;
+}
+
+.manual-capture-heading > div {
+  max-width: 700px;
+}
+
+.manual-capture-heading p:last-child,
+.manual-capture-boundary,
+.manual-capture-card-heading p,
+.manual-capture-meta dt {
+  color: var(--muted);
+}
+
+.manual-capture-form {
+  display: grid;
+  grid-template-columns: minmax(220px, 1.5fr) repeat(3, minmax(130px, 0.65fr));
+  gap: 0.8rem;
+  margin-top: 1rem;
+  border-top: 1px solid var(--border);
+  padding-top: 1rem;
+}
+
+.manual-capture-form label,
+.manual-capture-copy-row label {
+  display: grid;
+  min-width: 0;
+  gap: 0.35rem;
+  color: var(--muted);
+  font-size: 0.78rem;
+  font-weight: 700;
+}
+
+.manual-capture-form input,
+.manual-capture-form select,
+.manual-capture-copy-row textarea {
+  width: 100%;
+  border: 1px solid var(--border-strong);
+  border-radius: 8px;
+  padding: 0.65rem 0.7rem;
+  color: var(--text);
+  background: var(--raised);
+}
+
+.manual-capture-form select:focus-visible,
+.manual-capture-copy-row textarea:focus-visible {
+  outline: 2px solid var(--signal);
+  outline-offset: 2px;
+}
+
+.manual-capture-boundary,
+.manual-capture-form-actions {
+  grid-column: 1 / -1;
+}
+
+.manual-capture-boundary {
+  margin: 0;
+  font-size: 0.78rem;
+}
+
+.manual-capture-error {
+  margin: 0.9rem 0;
+  border-left-color: var(--deny);
+}
+
+.manual-capture-ticket {
+  display: grid;
+  grid-template-columns: 64px minmax(0, 1fr);
+  margin-top: 1rem;
+  overflow: hidden;
+  border: 1px solid color-mix(in srgb, var(--signal) 55%, var(--border));
+  border-radius: 12px;
+  background: color-mix(in srgb, var(--signal-soft) 52%, var(--panel));
+}
+
+.delivery-ticket {
+  border-color: color-mix(in srgb, var(--allow) 58%, var(--border));
+  background: color-mix(in srgb, var(--allow-soft) 52%, var(--panel));
+}
+
+.ticket-spine {
+  display: grid;
+  place-items: center;
+  border-right: 1px dashed color-mix(in srgb, var(--signal) 50%, var(--border));
+  color: #ffffff;
+  background: var(--signal);
+  font-family: var(--mono);
+  font-size: 1.25rem;
+}
+
+.delivery-ticket .ticket-spine {
+  border-right-color: color-mix(in srgb, var(--allow) 50%, var(--border));
+  background: var(--allow);
+}
+
+.ticket-body {
+  display: grid;
+  min-width: 0;
+  gap: 0.9rem;
+  padding: 1rem;
+}
+
+.ticket-heading,
+.manual-capture-card-heading {
+  display: flex;
+  justify-content: space-between;
+  gap: 1rem;
+  align-items: flex-start;
+}
+
+.ticket-heading p {
+  margin: 0 0 0.2rem;
+  color: var(--signal);
+  font-size: 0.7rem;
+  font-weight: 750;
+  letter-spacing: 0.09em;
+  text-transform: uppercase;
+}
+
+.ticket-heading h3,
+.manual-capture-card-heading h3 {
+  margin: 0;
+}
+
+.ticket-heading > span,
+.manual-capture-state {
+  flex: 0 0 auto;
+  border: 1px solid var(--border-strong);
+  border-radius: 999px;
+  padding: 0.25rem 0.55rem;
+  color: var(--muted);
+  background: var(--panel);
+  font-size: 0.7rem;
+  font-weight: 700;
+}
+
+.ticket-body dl,
+.manual-capture-meta {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0.65rem 1rem;
+  margin: 0;
+}
+
+.ticket-body dl div,
+.manual-capture-meta div {
+  min-width: 0;
+}
+
+.ticket-body dt,
+.manual-capture-meta dt {
+  margin-bottom: 0.15rem;
+  font-size: 0.7rem;
+  font-weight: 700;
+}
+
+.ticket-body dd,
+.manual-capture-meta dd {
+  margin: 0;
+  overflow-wrap: anywhere;
+  font-family: var(--mono);
+  font-size: 0.78rem;
+}
+
+.ticket-boundary,
+.delivery-warning {
+  margin: 0;
+  border-top: 1px dashed var(--border-strong);
+  padding-top: 0.75rem;
+  color: var(--muted);
+  font-size: 0.78rem;
+}
+
+.delivery-warning {
+  color: var(--ask);
+  font-weight: 650;
+}
+
+.manual-capture-copy-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 0.6rem;
+  align-items: end;
+}
+
+.manual-capture-copy-row textarea {
+  resize: vertical;
+  font-family: var(--mono);
+  font-size: 0.74rem;
+  line-height: 1.45;
+}
+
+.manual-capture-copy-row button {
+  min-width: 74px;
+}
+
+.manual-capture-confirm {
+  display: grid;
+  gap: 0.45rem;
+  margin-top: 1rem;
+  border: 1px solid var(--ask);
+  border-radius: 10px;
+  padding: 0.85rem;
+  background: var(--ask-soft);
+}
+
+.manual-capture-confirm p {
+  margin: 0;
+  color: var(--muted);
+}
+
+.manual-capture-list {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0.75rem;
+  margin: 1rem 0 0;
+  padding: 0;
+  list-style: none;
+}
+
+.manual-capture-list > li {
+  display: grid;
+  min-width: 0;
+  gap: 0.75rem;
+  border: 1px solid var(--border);
+  border-left: 4px solid var(--signal);
+  border-radius: 10px;
+  padding: 0.9rem;
+  background: var(--raised);
+}
+
+.manual-capture-list > li.inactive {
+  border-left-color: var(--quiet);
+}
+
+.manual-capture-card-heading p {
+  margin: 0.15rem 0 0;
+  font-size: 0.75rem;
+}
+
+.manual-capture-state.active {
+  border-color: color-mix(in srgb, var(--allow) 48%, var(--border));
+  color: var(--allow);
+  background: var(--allow-soft);
+}
+
+.manual-capture-observation {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: 0.55rem;
+  align-items: center;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 0.55rem 0.65rem;
+  background: var(--panel);
+}
+
+.manual-capture-observation > span {
+  width: 0.55rem;
+  height: 0.55rem;
+  border-radius: 50%;
+  background: var(--ask);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--ask) 14%, transparent);
+}
+
+.manual-capture-observation.observed > span {
+  background: var(--allow);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--allow) 14%, transparent);
+}
+
+.manual-capture-observation div {
+  display: grid;
+}
+
+.manual-capture-observation strong {
+  font-size: 0.78rem;
+}
+
+.manual-capture-observation small {
+  color: var(--muted);
+  font-size: 0.7rem;
+}
+
+.manual-capture-card-actions {
+  margin-top: auto;
+}
+
 @media (max-width: 1099px) {
   .app-shell {
     grid-template-columns: 76px minmax(0, 1fr);
@@ -2172,6 +2464,9 @@ dd {
   .access-candidate-fields,
   .access-candidate-provider-options,
   .credential-form,
+  .manual-capture-form,
+  .manual-capture-list,
+  .ticket-body dl,
   .workspace-route-body,
   .request-detail-grid {
     grid-template-columns: minmax(0, 1fr);
@@ -2288,6 +2583,23 @@ dd {
   .preview-banner {
     display: grid;
     gap: 0.2rem;
+  }
+
+  .manual-capture-ticket {
+    grid-template-columns: 42px minmax(0, 1fr);
+  }
+
+  .manual-capture-copy-row {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .manual-capture-copy-row button {
+    justify-self: start;
+  }
+
+  .ticket-heading,
+  .manual-capture-card-heading {
+    flex-direction: column;
   }
 }
 

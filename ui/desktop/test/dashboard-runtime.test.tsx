@@ -192,6 +192,29 @@ function clientFixture(): ControlClient {
     })),
     approvals: vi.fn(async () => ({ items: [] })),
     captureRuns: vi.fn(async () => ({ items: [] })),
+    manualCaptureContext: vi.fn(async () => ({
+      confirmationToken: `ctx_${"A".repeat(43)}`,
+      proxyAddress: "http://127.0.0.1:32123",
+      root: {
+        kind: "local_path" as const,
+        derSha256: "a".repeat(64),
+        fingerprint: "AA:BB:CC",
+        pemPath: "/private/vibermate/root.pem",
+      },
+      defaultTemporarySeconds: 86_400,
+      maxTemporarySeconds: 604_800,
+    })),
+    manualCaptures: vi.fn(async () => ({ items: [] })),
+    manualCapture: vi.fn(async () => {
+      throw new Error("Manual capture fixture is unavailable");
+    }),
+    createManualCapture: vi.fn(async () => {
+      throw new Error("Manual capture fixture is unavailable");
+    }),
+    rotateManualCapture: vi.fn(async () => {
+      throw new Error("Manual capture fixture is unavailable");
+    }),
+    revokeManualCapture: vi.fn(async () => undefined),
     connections: vi.fn(async () => ({ items: [] })),
     credential: vi.fn(
       async (

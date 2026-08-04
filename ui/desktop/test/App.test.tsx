@@ -9,7 +9,10 @@ import {
 } from "../src/app-router.tsx";
 import { ControlProblem } from "../src/control-client.ts";
 import type { ControlClient } from "../src/control-client.ts";
-import { DashboardQueryRuntime } from "../src/dashboard-runtime.ts";
+import {
+  dashboardQueryKeys,
+  DashboardQueryRuntime,
+} from "../src/dashboard-runtime.ts";
 import approvalSamples from "../src/generated/samples/approvals.json" with { type: "json" };
 import captureRunSamples from "../src/generated/samples/capture-runs.json" with { type: "json" };
 import connectionSamples from "../src/generated/samples/connections.json" with { type: "json" };
@@ -30,6 +33,7 @@ import type {
   EgressAttemptRecord,
   ExchangeDetail,
   CredentialView,
+  ManualCaptureRecord,
   OfflineHoldSnapshot,
   StatusResponse,
   WorkspaceRouteBinding,
@@ -196,6 +200,19 @@ const workspaceRoute: WorkspaceRouteBinding = {
   updatedAt: "2026-08-03T08:00:00Z",
 };
 
+const manualCaptureRecord: ManualCaptureRecord = {
+  id: "manual-preview-terminal",
+  ingressProfileId: "manual-capture/manual-preview-terminal",
+  displayName: "Project terminal",
+  clientClass: "cli",
+  lifetime: "temporary",
+  state: "active",
+  observation: "waiting_for_traffic",
+  createdAt: "2026-08-04T08:00:00Z",
+  updatedAt: "2026-08-04T08:00:00Z",
+  expiresAt: "2026-08-05T08:00:00Z",
+};
+
 function accessDetailFixture(
   item: AccessDirectoryItem,
   upstreams: readonly AccessUpstreamFixture[] = [
@@ -331,6 +348,39 @@ function clientFixture() {
     captureRuns: vi.fn(async (_signal?: AbortSignal) => ({
       items: captureRunSamples as readonly CaptureRunRecord[],
     })),
+    manualCaptureContext: vi.fn<ControlClient["manualCaptureContext"]>(
+      async () => ({
+        confirmationToken: `ctx_${"A".repeat(43)}`,
+        proxyAddress: "http://127.0.0.1:32123",
+        root: {
+          kind: "local_path" as const,
+          derSha256: "a".repeat(64),
+          fingerprint: "AA:BB:CC",
+          pemPath: "/private/vibermate/root.pem",
+        },
+        defaultTemporarySeconds: 86_400,
+        maxTemporarySeconds: 604_800,
+      }),
+    ),
+    manualCaptures: vi.fn<ControlClient["manualCaptures"]>(async () => ({
+      items: [],
+    })),
+    manualCapture: vi.fn<ControlClient["manualCapture"]>(async () => {
+      throw new Error("Manual capture fixture is unavailable");
+    }),
+    createManualCapture: vi.fn<ControlClient["createManualCapture"]>(
+      async () => {
+        throw new Error("Manual capture fixture is unavailable");
+      },
+    ),
+    rotateManualCapture: vi.fn<ControlClient["rotateManualCapture"]>(
+      async () => {
+        throw new Error("Manual capture fixture is unavailable");
+      },
+    ),
+    revokeManualCapture: vi.fn<ControlClient["revokeManualCapture"]>(
+      async () => undefined,
+    ),
     connections: vi.fn(async (_signal?: AbortSignal) => ({
       items: connectionSamples as readonly ConnectionRecord[],
     })),
@@ -1835,6 +1885,161 @@ describe("canonical Activity request summaries", () => {
 });
 
 describe("what is captured", () => {
+  it("creates a route-neutral app proxy and forgets its one-time password", async () => {
+    const i18n = await createI18n("en-US");
+    let records: readonly ManualCaptureRecord[] = [];
+    const client = clientFixture();
+    client.manualCaptures.mockImplementation(async () => ({ items: records }));
+    client.createManualCapture.mockImplementation(async () => {
+      records = [manualCaptureRecord];
+      return {
+        grant: {
+          capture: manualCaptureRecord,
+          proxyAddress: "http://127.0.0.1:32123/",
+          proxyUsername: "capture",
+          proxyPassword: `manual_${"P".repeat(43)}`,
+          root: {
+            kind: "local_path",
+            derSha256: "a".repeat(64),
+            fingerprint: "AA:BB:CC",
+            pemPath: "/private/vibermate/root.pem",
+          },
+        },
+        stateTag: `"mc_${"S".repeat(43)}"`,
+      };
+    });
+    const model = new DashboardQueryRuntime(client, 60_000);
+    render(
+      <I18nextProvider i18n={i18n}>
+        <Dashboard initialEntry="/activity" model={model} />
+      </I18nextProvider>,
+    );
+
+    await screen.findByText("Manual app capture");
+    fireEvent.click(screen.getByRole("button", { name: "Create app proxy" }));
+    fireEvent.change(screen.getByLabelText("Name"), {
+      target: { value: "Project terminal" },
+    });
+    fireEvent.click(
+      screen.getByRole("button", { name: "Review proxy details" }),
+    );
+
+    expect(await screen.findByText("Confirm before creation")).toBeTruthy();
+    expect(screen.getByText("http://127.0.0.1:32123")).toBeTruthy();
+    expect(screen.getByText("AA:BB:CC")).toBeTruthy();
+    expect(screen.queryByText(/manual_/u)).toBeNull();
+    fireEvent.click(
+      screen.getByRole("button", { name: "Create this proxy" }),
+    );
+
+    const proxy = await screen.findByLabelText("Proxy address with password");
+    expect((proxy as HTMLTextAreaElement).value).toContain(
+      `capture:manual_${"P".repeat(43)}@127.0.0.1:32123`,
+    );
+    expect(client.createManualCapture).toHaveBeenCalledTimes(1);
+    const [input] = client.createManualCapture.mock.calls[0] ?? [];
+    expect(input).toEqual({
+      displayName: "Project terminal",
+      clientClass: "cli",
+      lifetime: "temporary",
+      expiresInSeconds: 86_400,
+      confirmationToken: `ctx_${"A".repeat(43)}`,
+    });
+    for (const forbidden of ["route", "model", "account", "revision"]) {
+      expect(Object.hasOwn(input ?? {}, forbidden)).toBe(false);
+    }
+
+    fireEvent.click(screen.getByRole("button", { name: "I've saved it" }));
+    expect(screen.queryByLabelText("Proxy address with password")).toBeNull();
+    expect(screen.queryByText(/manual_/u)).toBeNull();
+    const cached = JSON.stringify(
+      model.queryClient.getQueryData(dashboardQueryKeys.manualCaptures),
+    ) ?? "";
+    expect(cached).not.toContain("proxyPassword");
+    expect(cached).not.toContain("manual_");
+    expect(await screen.findByText("Project terminal")).toBeTruthy();
+    expect(screen.getByText("Waiting for traffic")).toBeTruthy();
+  });
+
+  it("does not call a confirmed create rejection an unknown outcome", async () => {
+    const i18n = await createI18n("en-US");
+    const client = clientFixture();
+    client.createManualCapture.mockRejectedValue(
+      new ControlProblem(
+        400,
+        "invalid_manual_capture",
+        "error.invalid_manual_capture",
+      ),
+    );
+    const model = new DashboardQueryRuntime(client, 60_000);
+    render(
+      <I18nextProvider i18n={i18n}>
+        <Dashboard initialEntry="/activity" model={model} />
+      </I18nextProvider>,
+    );
+
+    await screen.findByText("Manual app capture");
+    fireEvent.click(screen.getByRole("button", { name: "Create app proxy" }));
+    fireEvent.change(screen.getByLabelText("Name"), {
+      target: { value: "Project terminal" },
+    });
+    fireEvent.click(
+      screen.getByRole("button", { name: "Review proxy details" }),
+    );
+    await screen.findByText("Confirm before creation");
+    fireEvent.click(
+      screen.getByRole("button", { name: "Create this proxy" }),
+    );
+
+    expect(
+      await screen.findByText(
+        "Review the application name, use, and lifetime, then try again.",
+      ),
+    ).toBeTruthy();
+    expect(
+      screen.queryByText(/could not confirm whether this proxy was created/u),
+    ).toBeNull();
+  });
+
+  it("revokes an app proxy using only its opaque state tag", async () => {
+    const i18n = await createI18n("en-US");
+    let record = manualCaptureRecord;
+    const client = clientFixture();
+    client.manualCaptures.mockImplementation(async () => ({ items: [record] }));
+    client.manualCapture.mockImplementation(async () => ({
+      capture: record,
+      stateTag: `"mc_${"S".repeat(43)}"`,
+    }));
+    client.revokeManualCapture.mockImplementation(async () => {
+      record = {
+        ...record,
+        state: "revoked",
+        updatedAt: "2026-08-04T09:00:00Z",
+      };
+    });
+    const model = new DashboardQueryRuntime(client, 60_000);
+    render(
+      <I18nextProvider i18n={i18n}>
+        <Dashboard initialEntry="/activity" model={model} />
+      </I18nextProvider>,
+    );
+
+    await screen.findByText("Project terminal");
+    fireEvent.click(screen.getByRole("button", { name: "Revoke" }));
+    expect(screen.getByText("Revoke Project terminal?")).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "Revoke proxy" }));
+
+    await waitFor(() =>
+      expect(client.revokeManualCapture).toHaveBeenCalledWith(
+        manualCaptureRecord.id,
+        `"mc_${"S".repeat(43)}"`,
+        expect.any(AbortSignal),
+      ),
+    );
+    expect(await screen.findByText("Revoked")).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "Revoke" })).toBeNull();
+  });
+
   it("lists a started workspace before its first request chooses an Access", async () => {
     const i18n = await createI18n("en-US");
     const pendingRun: CaptureRunRecord = {

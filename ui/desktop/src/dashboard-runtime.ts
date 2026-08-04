@@ -123,6 +123,7 @@ export const dashboardQueryKeys = {
   activities: ["vibermate", "dashboard", "activities"] as const,
   approvals: ["vibermate", "dashboard", "approvals"] as const,
   captureRuns: ["vibermate", "dashboard", "capture-runs"] as const,
+  manualCaptures: ["vibermate", "dashboard", "manual-captures"] as const,
   connections: ["vibermate", "dashboard", "connections"] as const,
   egressAttempts: ["vibermate", "dashboard", "egress-attempts"] as const,
   workspaceRoutes: ["vibermate", "dashboard", "workspace-routes"] as const,

@@ -455,6 +455,47 @@ test("groups three terminals by stable workspace and switches later requests", a
   expect(errors).toEqual([]);
 });
 
+test("hands off a manual app proxy once and keeps a secret-free observation card", async ({
+  page,
+}) => {
+  const errors = collectBrowserErrors(page);
+  await page.goto("/?preview=1#activity");
+
+  const panel = page.locator(".manual-capture-panel");
+  await expect(
+    panel.getByRole("heading", { name: "Manual app capture" }),
+  ).toBeVisible();
+  await panel.getByRole("button", { name: "Create app proxy" }).click();
+  await panel.getByLabel("Name", { exact: true }).fill("Project terminal");
+  await panel.getByRole("button", { name: "Review proxy details" }).click();
+
+  await expect(panel.getByText("Confirm before creation")).toBeVisible();
+  await expect(panel.getByText("AA:BB:CC:DD:EE:FF")).toBeVisible();
+  await expect(panel.getByText("Shown once")).toHaveCount(0);
+  await panel.getByRole("button", { name: "Create this proxy" }).click();
+
+  const proxy = panel.getByLabel("Proxy address with password");
+  await expect(proxy).toHaveValue(/capture:manual_/u);
+  await expect(panel.getByText("Shown once")).toBeVisible();
+  await panel.getByRole("button", { name: "I've saved it" }).click();
+
+  await expect(proxy).toHaveCount(0);
+  await expect(panel.getByText("Shown once")).toHaveCount(0);
+  await expect(panel.getByText("Project terminal")).toBeVisible();
+  await expect(panel.getByText("Waiting for traffic")).toBeVisible();
+  await expect(
+    panel.getByRole("button", { name: "Rotate password" }),
+  ).toBeVisible();
+  await expect(panel.getByRole("button", { name: "Revoke" })).toBeVisible();
+  expect(
+    await page.evaluate(() => ({
+      local: globalThis.localStorage.length,
+      session: globalThis.sessionStorage.length,
+    })),
+  ).toEqual({ local: 0, session: 0 });
+  expect(errors).toEqual([]);
+});
+
 test("keeps the current route when keyboard users skip to main content", async ({
   page,
 }) => {

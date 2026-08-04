@@ -18,6 +18,12 @@ import type {
   CredentialView,
   EgressAttemptRecord,
   ExchangeDetail,
+  ManualCaptureContext,
+  ManualCaptureCreateInput,
+  ManualCaptureGrantStateTag,
+  ManualCapturePage,
+  ManualCaptureRecord,
+  ManualCaptureStateTag,
   OfflineHoldSnapshot,
   StatusResponse,
   WorkspaceRouteBinding,
@@ -29,6 +35,19 @@ import egressSamples from "./generated/samples/egress-attempts.json" with { type
 
 const previewStartedAt = "2026-08-02T08:42:00Z";
 const previewActivityCursor = "cHJldmlldy1wYWdlLTI";
+
+const previewManualCaptureContext: ManualCaptureContext = {
+  confirmationToken: `ctx_${"A".repeat(43)}`,
+  proxyAddress: "http://127.0.0.1:32123",
+  root: {
+    kind: "local_path",
+    derSha256: "a".repeat(64),
+    fingerprint: "AA:BB:CC:DD:EE:FF",
+    pemPath: "/Users/demo/Library/Application Support/VibeMate/root.pem",
+  },
+  defaultTemporarySeconds: 86_400,
+  maxTemporarySeconds: 604_800,
+};
 
 const previewWorkAccess = buildAccessApplyInput({
   accessId: "work",
@@ -117,6 +136,8 @@ class PreviewControlClient implements ControlClient {
       },
     ],
   ]);
+  #manualCaptures = new Map<string, ManualCaptureRecord>();
+  #nextManualCapture = 1;
   #workspaceRoutes: WorkspaceRouteBinding[] = [
     {
       id: "Z".repeat(43),
@@ -663,8 +684,139 @@ class PreviewControlClient implements ControlClient {
     };
   }
 
+  async manualCaptureContext(
+    _signal?: AbortSignal,
+  ): Promise<ManualCaptureContext> {
+    return structuredClone(previewManualCaptureContext);
+  }
+
+  async manualCaptures(_signal?: AbortSignal): Promise<ManualCapturePage> {
+    return {
+      items: [...this.#manualCaptures.values()]
+        .map((item) => structuredClone(item))
+        .sort((left, right) => right.createdAt.localeCompare(left.createdAt)),
+    };
+  }
+
+  async manualCapture(
+    manualCaptureId: string,
+    _signal?: AbortSignal,
+  ): Promise<ManualCaptureStateTag> {
+    const capture = this.#manualCaptures.get(manualCaptureId);
+    if (capture === undefined) {
+      throw new ControlProblem(
+        404,
+        "manual_capture_not_found",
+        "error.manual_capture_not_found",
+      );
+    }
+    return {
+      capture: structuredClone(capture),
+      stateTag: this.#manualCaptureStateTag(capture),
+    };
+  }
+
+  async createManualCapture(
+    input: ManualCaptureCreateInput,
+    _signal?: AbortSignal,
+  ): Promise<ManualCaptureGrantStateTag> {
+    const sequence = this.#nextManualCapture++;
+    const id = `preview-manual-${sequence}`;
+    const now = new Date(Date.parse(previewStartedAt) + sequence * 1_000);
+    const capture: ManualCaptureRecord = {
+      id,
+      ingressProfileId: `manual-capture/${id}`,
+      displayName: input.displayName,
+      clientClass: input.clientClass,
+      lifetime: input.lifetime,
+      state: "active",
+      observation: "waiting_for_traffic",
+      createdAt: now.toISOString(),
+      updatedAt: now.toISOString(),
+      ...(input.expiresInSeconds === undefined
+        ? {}
+        : {
+            expiresAt: new Date(
+              now.getTime() + input.expiresInSeconds * 1_000,
+            ).toISOString(),
+          }),
+    };
+    this.#manualCaptures.set(id, capture);
+    return this.#manualCaptureGrant(capture, sequence);
+  }
+
+  async rotateManualCapture(
+    manualCaptureId: string,
+    stateTag: string,
+    _signal?: AbortSignal,
+  ): Promise<ManualCaptureGrantStateTag> {
+    const current = await this.manualCapture(manualCaptureId);
+    if (current.stateTag !== stateTag || current.capture.state !== "active") {
+      throw new ControlProblem(
+        409,
+        "manual_capture_conflict",
+        "error.manual_capture_conflict",
+      );
+    }
+    const sequence = this.#nextManualCapture++;
+    const updated: ManualCaptureRecord = {
+      ...current.capture,
+      updatedAt: new Date(
+        Date.parse(current.capture.updatedAt) + 1_000,
+      ).toISOString(),
+    };
+    this.#manualCaptures.set(manualCaptureId, updated);
+    return this.#manualCaptureGrant(updated, sequence);
+  }
+
+  async revokeManualCapture(
+    manualCaptureId: string,
+    stateTag: string,
+    _signal?: AbortSignal,
+  ): Promise<void> {
+    const current = await this.manualCapture(manualCaptureId);
+    if (current.stateTag !== stateTag || current.capture.state !== "active") {
+      throw new ControlProblem(
+        409,
+        "manual_capture_conflict",
+        "error.manual_capture_conflict",
+      );
+    }
+    this.#manualCaptures.set(manualCaptureId, {
+      ...current.capture,
+      state: "revoked",
+      updatedAt: new Date(
+        Date.parse(current.capture.updatedAt) + 1_000,
+      ).toISOString(),
+    });
+  }
+
   #credentialKey(profileId: string, credentialId: string): string {
     return `${profileId}\u0000${credentialId}`;
+  }
+
+  #manualCaptureGrant(
+    capture: ManualCaptureRecord,
+    sequence: number,
+  ): ManualCaptureGrantStateTag {
+    return {
+      grant: {
+        capture: structuredClone(capture),
+        proxyAddress: previewManualCaptureContext.proxyAddress,
+        proxyUsername: "capture",
+        proxyPassword: `manual_${String(sequence).padStart(43, "A")}`,
+        root: structuredClone(previewManualCaptureContext.root),
+      },
+      stateTag: this.#manualCaptureStateTag(capture),
+    };
+  }
+
+  #manualCaptureStateTag(capture: ManualCaptureRecord): string {
+    const encoded = btoa(`${capture.id}:${capture.updatedAt}:${capture.state}`)
+      .replaceAll("+", "-")
+      .replaceAll("/", "_")
+      .replace(/=+$/u, "");
+    return `"mc_${encoded.padEnd(43, "A").slice(0, 43)}"`;
   }
 
   #requireOfflineRevision(expectedRevision: number): void {

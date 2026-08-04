@@ -136,8 +136,13 @@ opaque context-confirmation token; mutation CAS uses opaque ETags. The bounded
 `vibermate capture create` command defaults interactive confirmation to no,
 requires explicit `--yes` for non-terminal use, and emits either human-readable
 or shell output without accepting route or account coordinates. The Desktop
-creation wizard and verification projection are still absent, so the feature
-remains an engineering surface rather than a Preview product.
+Activity surface now provides the same two-step review and creation contract,
+delivers the proxy password exactly once, and then retains only a secret-free
+observation card with rotate and revoke actions. The UI never places the
+one-time grant in its query cache or Web Storage. It reports whether traffic
+has arrived, but it does not prove application identity; remote enrollment and
+current packaged evidence are still absent, so the feature remains an
+engineering surface rather than a Preview product.
 
 After an exact AgentEndpoint resolves an Access, the runtime atomically creates
 or reads the durable `(AccessID, MachineID, WorkspaceID)` route binding. Each

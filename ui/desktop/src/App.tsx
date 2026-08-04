@@ -60,6 +60,7 @@ import type {
 } from "./control-types.ts";
 import { compareResourceIds } from "./control-client.ts";
 import type { SupportedLocale } from "./i18n.ts";
+import { ManualCapturePanel } from "./manual-capture-panel.tsx";
 import {
   dashboardRoutePaths,
   dashboardTaskRoutePaths,
@@ -563,7 +564,7 @@ export function UnavailableTaskRoutePage({
 
 export function ActivityRoutePage() {
   const { t } = useTranslation();
-  const { state } = useDashboardRuntime();
+  const { model, state } = useDashboardRuntime();
   return (
     <>
       <PageHeading
@@ -577,6 +578,7 @@ export function ActivityRoutePage() {
           emptyAccessAction
         />
         <WorkspaceRoutePanel runs={state.captureRuns} />
+        <ManualCapturePanel model={model} />
         <CapturePanel
           availability={sourceAvailability(state, "captureRuns")}
           runs={state.captureRuns}

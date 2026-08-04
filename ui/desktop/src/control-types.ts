@@ -575,6 +575,72 @@ export interface CaptureRunPage {
   readonly items: readonly CaptureRunRecord[];
 }
 
+export type ManualCaptureClientClass = "cli" | "desktop_app" | "other";
+export type ManualCaptureLifetime = "temporary" | "until_revoked";
+export type ManualCaptureState = "active" | "revoked" | "expired";
+export type ManualCaptureObservation = "waiting_for_traffic" | "observed";
+
+export interface ManualCaptureRoot {
+  readonly kind: "local_path";
+  readonly derSha256: string;
+  readonly fingerprint: string;
+  readonly pemPath: string;
+}
+
+export interface ManualCaptureContext {
+  readonly confirmationToken: string;
+  readonly proxyAddress: string;
+  readonly root: ManualCaptureRoot;
+  readonly defaultTemporarySeconds: number;
+  readonly maxTemporarySeconds: number;
+}
+
+export interface ManualCaptureRecord {
+  readonly id: string;
+  readonly ingressProfileId: string;
+  readonly displayName: string;
+  readonly clientClass: ManualCaptureClientClass;
+  readonly lifetime: ManualCaptureLifetime;
+  readonly state: ManualCaptureState;
+  readonly observation: ManualCaptureObservation;
+  readonly createdAt: string;
+  readonly updatedAt: string;
+  readonly expiresAt?: string;
+  readonly lastObservedAt?: string;
+}
+
+export interface ManualCapturePage {
+  readonly items: readonly ManualCaptureRecord[];
+}
+
+export interface ManualCaptureCreateInput {
+  readonly displayName: string;
+  readonly clientClass: ManualCaptureClientClass;
+  readonly lifetime: ManualCaptureLifetime;
+  readonly expiresInSeconds?: number;
+  readonly confirmationToken: string;
+}
+
+export interface ManualCaptureGrant {
+  readonly capture: ManualCaptureRecord;
+  readonly proxyAddress: string;
+  readonly proxyUsername: string;
+  readonly proxyPassword: string;
+  readonly root: ManualCaptureRoot;
+}
+
+export interface ManualCaptureStateTag {
+  readonly capture: ManualCaptureRecord;
+  /** Opaque concurrency token. It is not a product version. */
+  readonly stateTag: string;
+}
+
+export interface ManualCaptureGrantStateTag {
+  readonly grant: ManualCaptureGrant;
+  /** Opaque concurrency token. It is not a product version. */
+  readonly stateTag: string;
+}
+
 export type WorkspaceRouteState =
   | "active"
   | "workspace_route_unavailable";
