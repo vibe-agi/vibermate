@@ -1,8 +1,9 @@
 # ManualCapture Authenticated Control and CLI
 
-Status: active
+Status: complete
 Created: 2026-08-04
 Implementation baseline: `81c4853`
+Implementation candidate: `1f3e83925a78e6b601e5875f6cda96ca7c8fd18b`
 Design authority: `vibermate-design` ADR-0019 at `6fd70d49fc563e6ca8a95e35e6806ec80d0fe922`
 
 ## Goal
@@ -71,3 +72,12 @@ When complete, the repository may claim only:
 > `vibermate capture create` can deliver a one-time standard proxy credential.
 > The Desktop wizard, remote enrollment, verification projection and packaged
 > evidence remain incomplete, so the product is not Preview or Release ready.
+
+## Frozen result
+
+The implementation candidate satisfies this Goal. ManualCapture mutations use
+opaque product-facing state tags while their monotonic credential epoch remains
+an internal Core concurrency and revocation mechanism. The Desktop UI does not
+display runtime, schema, Access, credential, offline-hold, or client-catalog
+revision numbers. The repository still contains one current schema baseline,
+not an unreleased compatibility migration chain.
