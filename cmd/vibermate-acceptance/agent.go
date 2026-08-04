@@ -475,7 +475,6 @@ func fixedClaudeArguments(
 		"--debug",
 		"api",
 		"--safe-mode",
-		"--bare",
 		"--no-session-persistence",
 		"--model",
 		"sonnet",
@@ -487,6 +486,8 @@ func fixedClaudeArguments(
 			"--permission-mode",
 			"bypassPermissions",
 		)
+	} else {
+		arguments = append(arguments, "--bare")
 	}
 	return arguments
 }

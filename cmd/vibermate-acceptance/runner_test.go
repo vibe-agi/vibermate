@@ -590,7 +590,11 @@ func TestAcceptancePhasesAlwaysIsolateConfiguredSecretReference(t *testing.T) {
 	t.Parallel()
 
 	input := config{
+		clientID:          acceptanceClientClaudeCode,
+		accessID:          "Acc-001",
 		deterministicOnly: false,
+		providerOrigin:    "https://provider.example.test/v1",
+		providerModel:     "fixed-model",
 		secretRef:         "secret://provider/configured-development-key",
 	}
 	first, err := splitAcceptancePhases(input)
@@ -615,6 +619,25 @@ func TestAcceptancePhasesAlwaysIsolateConfiguredSecretReference(t *testing.T) {
 			second.deterministic.secretRef,
 			input.secretRef,
 		)
+	}
+	for _, phases := range []acceptancePhases{first, second} {
+		deterministic, deterministicErr := assemblyAccess(phases.deterministic, 0)
+		if deterministicErr != nil {
+			t.Fatal(deterministicErr)
+		}
+		credentialed, credentialedErr := assemblyAccess(phases.credentialed, 1)
+		if credentialedErr != nil {
+			t.Fatal(credentialedErr)
+		}
+		if deterministic.AccountBindings[0].ID != "Acc-001-account" ||
+			credentialed.AccountBindings[0].ID != "Acc-001-account" ||
+			credentialed.AccountBindings[0].SecretRef != input.secretRef {
+			t.Fatalf(
+				"phase bindings deterministic=%+v credentialed=%+v",
+				deterministic.AccountBindings,
+				credentialed.AccountBindings,
+			)
+		}
 	}
 }
 

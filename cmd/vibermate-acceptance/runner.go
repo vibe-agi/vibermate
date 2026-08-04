@@ -205,7 +205,6 @@ func runAcceptance(
 			),
 		)
 	}
-	deterministicPlanHash := applied.PlanHash
 	report.add(
 		"access-apply",
 		checkPassed,
@@ -476,16 +475,68 @@ func runAcceptance(
 		}
 		return report, nil
 	}
+	stopContext, stopCancel = context.WithTimeout(ctx, 30*time.Second)
+	err = third.stopGracefully(stopContext)
+	stopCancel()
+	thirdStopped = true
+	if err != nil {
+		return fail("deterministic-phase-shutdown", err)
+	}
+	report.add(
+		"deterministic-phase-shutdown",
+		checkPassed,
+		"the isolated deterministic generation drained before credentialed state was created",
+	)
+
+	credentialedDataDirectory, err := os.MkdirTemp(
+		"",
+		"vibermate-credentialed-assembly-*",
+	)
+	if err != nil {
+		return fail("credentialed-private-data-directory", err)
+	}
+	if err := privateDirectory(credentialedDataDirectory); err != nil {
+		return fail("credentialed-private-data-directory", err)
+	}
+	if !config.keepData {
+		defer cleanTemporaryData(credentialedDataDirectory)
+	}
+	report.add(
+		"credentialed-private-data-directory",
+		checkPassed,
+		"credentialed acceptance uses a second private runtime data directory",
+	)
+
+	config = phases.credentialed
+	credentialed, err := startDaemon(
+		ctx,
+		config,
+		layout.AppCacheDirectory,
+		credentialedDataDirectory,
+	)
+	if err != nil {
+		return fail("credentialed-daemon-start", err)
+	}
+	credentialedStopped := false
+	defer func() {
+		if !credentialedStopped {
+			stopContext, stopCancel := context.WithTimeout(
+				context.Background(),
+				10*time.Second,
+			)
+			_ = credentialed.stopGracefully(stopContext)
+			stopCancel()
+		}
+	}()
 	credentialedApplied, credentialedStatus, credentialedProblem, credentialedErr :=
-		third.control.applyAccess(ctx, phases.credentialed, 1)
+		credentialed.control.applyAccess(ctx, config, 0)
 	if credentialedErr != nil ||
 		credentialedStatus != http.StatusOK ||
 		credentialedProblem.ReasonCode != "" ||
 		credentialedApplied.Outcome != access.WriteOutcomeCommitted ||
-		credentialedApplied.Revision != 2 ||
+		credentialedApplied.Revision != 1 ||
 		credentialedApplied.ApplicationState != desktopcontrol.AccessApplicationStateActive ||
-		len(credentialedApplied.PlanHash) != 64 ||
-		credentialedApplied.PlanHash == deterministicPlanHash {
+		len(credentialedApplied.PlanHash) != 64 {
 		return fail(
 			"credentialed-access-apply",
 			fmt.Errorf(
@@ -497,13 +548,19 @@ func runAcceptance(
 			),
 		)
 	}
-	config = phases.credentialed
+	if err := configureAcceptanceConnectionPolicy(
+		ctx,
+		credentialed.control,
+		config,
+	); err != nil {
+		return fail("credentialed-connection-policy", err)
+	}
 	report.add(
 		"credentialed-access-apply",
 		checkPassed,
-		"configured SecretRef rebound the Access as revision 2 without exposing its value",
+		"revision 1 created an isolated credentialed Access without exposing the logical reference or secret value",
 	)
-	credential, err := third.control.credential(ctx, config)
+	credential, err := credentialed.control.credential(ctx, config)
 	if err != nil ||
 		credential.SecretState != secretstore.StateConfigured ||
 		credential.SecretRevision == 0 {
@@ -521,13 +578,21 @@ func runAcceptance(
 		checkPassed,
 		"active credential metadata is configured without reading its value",
 	)
-	thirdAudit, err := openExchangeAuditReader(ctx, dataDirectory)
+	credentialedAudit, err := openExchangeAuditReader(
+		ctx,
+		credentialedDataDirectory,
+	)
 	if err != nil {
 		return fail("normal-streaming-reply", err)
 	}
-	defer thirdAudit.Close()
+	defer credentialedAudit.Close()
 
-	if err := runNormalReply(ctx, config, third, thirdAudit); err != nil {
+	if err := runNormalReply(
+		ctx,
+		config,
+		credentialed,
+		credentialedAudit,
+	); err != nil {
 		return fail("normal-streaming-reply", err)
 	}
 	report.add(
@@ -537,7 +602,12 @@ func runAcceptance(
 			" completed an unheld streamed provider reply",
 	)
 	if client.ID == acceptanceClientCodexCLI {
-		if err := runCodexResume(ctx, config, third, thirdAudit); err != nil {
+		if err := runCodexResume(
+			ctx,
+			config,
+			credentialed,
+			credentialedAudit,
+		); err != nil {
 			return fail("fixed-codex-exec-resume", err)
 		}
 		report.add(
@@ -546,7 +616,7 @@ func runAcceptance(
 			"two successful Exchanges retained one private Codex thread identity across exec resume",
 		)
 	}
-	toolEvidence, err := runToolApproval(ctx, config, third)
+	toolEvidence, err := runToolApproval(ctx, config, credentialed)
 	if err != nil {
 		return fail("tool-approval", err)
 	}
@@ -559,7 +629,7 @@ func runAcceptance(
 		checkPassed,
 		toolDetail,
 	)
-	streamingEvidence, err := runHeldStreaming(ctx, config, third)
+	streamingEvidence, err := runHeldStreaming(ctx, config, credentialed)
 	if err != nil {
 		return fail("planned-hold-streaming", err)
 	}
@@ -572,7 +642,7 @@ func runAcceptance(
 		checkPassed,
 		streamingDetail,
 	)
-	if err := runAgentInterrupt(ctx, config, third); err != nil {
+	if err := runAgentInterrupt(ctx, config, credentialed); err != nil {
 		return fail("agent-sigint", err)
 	}
 	report.add(
@@ -589,9 +659,9 @@ func runAcceptance(
 		)
 	}
 	stopContext, stopCancel = context.WithTimeout(ctx, 30*time.Second)
-	err = third.stopGracefully(stopContext)
+	err = credentialed.stopGracefully(stopContext)
 	stopCancel()
-	thirdStopped = true
+	credentialedStopped = true
 	if err != nil {
 		return fail("final-shutdown", err)
 	}

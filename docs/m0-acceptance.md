@@ -206,16 +206,23 @@ The default logical reference is
 reference may be supplied explicitly, but no secret value may be passed on the
 command line.
 
-Full mode first runs the complete deterministic sequence with a fresh,
-run-local missing `SecretRef`. After revision 1 recovery succeeds, it applies
-revision 2 with the configured `SecretRef` before inspecting credential
-metadata or permitting provider HTTP. This keeps every deterministic no-send
-claim independent of credentials already present on the host.
+Full mode first runs the complete deterministic sequence in a private runtime
+data directory with a fresh, run-local missing `SecretRef`. After revision 1
+recovery succeeds, that generation drains. A second private runtime data
+directory and daemon generation then create the credentialed Access from an
+empty database at revision 1 with the configured `SecretRef`. The runner never
+mutates an existing binding's `SecretRef`, never adds a caller-chosen
+`SecretRef` through ordinary Access edit, and never copies a secret value.
+This keeps every deterministic no-send claim independent of credentials
+already present on the host while preserving the scoped secret-action
+boundary.
 
 The credentialed continuation additionally verifies:
 
-1. revision 2 atomically replaces the run-local missing `SecretRef` with the
-   configured logical reference without exposing its value;
+1. an isolated credentialed database creates revision 1 with the configured
+   credential binding without exposing its logical reference or value, while
+   an existing binding's `SecretRef` remains immutable through ordinary Access
+   apply;
 2. the fixed client completes an unheld provider reply with a trusted assistant
    marker; Claude exposes at least one incremental content delta, while Codex
    exposes a complete typed JSONL turn bound to a trusted thread identity;
