@@ -27,13 +27,14 @@ wrapper hash. The built-in client catalog is the authority for every required
 artifact digest and the fixed `ssl_cert_file` launch recipe. Other executable
 versions remain valid generic proxy clients, but they cannot be used to
 produce this fixed-client acceptance evidence.
-The default provider route for this acceptance slice is
-`http://127.0.0.1:23333/v1` with model `dashscope:glm-5`.
+The runner has no provider or model default. Every invocation must provide
+`--provider-origin` and `--provider-model`, so a local developer fixture cannot
+silently become somebody else's route.
 
 Remote provider origins remain HTTPS-only with strict system-root validation.
-The default exercises the design's narrower development exception: cleartext
-is accepted only for a literal loopback IP, is forced through Direct egress,
-does not use ambient proxies, and verifies the connected TCP peer before any
+When explicitly selected, the narrower development exception accepts
+cleartext only for a literal loopback IP, forces it through Direct egress, does
+not use ambient proxies, and verifies the connected TCP peer before any
 authenticated HTTP byte is written. `localhost`, LAN, private-CIDR, and public
 HTTP origins are rejected.
 
@@ -182,13 +183,17 @@ Example:
 ```text
 /private/tmp/vibermate-acceptance \
   --desktop-app=/absolute/path/to/VibeMate.app \
-  --claude=/Users/null/.local/bin/claude \
+  --claude=/absolute/path/to/the/fixed/claude \
+  --provider-origin=https://gateway.example/v1 \
+  --provider-model=example-model \
   --deterministic-only \
   --report=/absolute/private/path/m0-deterministic.json
 ```
 
 Use `--codex=/absolute/path/to/the/fixed/codex` instead of `--claude` to
-select the fixed Codex vertical. Supplying both or neither is rejected.
+select the fixed Codex vertical. Supplying both or neither is rejected. Replace
+the example provider coordinates with a reachable target under the operator's
+control.
 
 ## Credentialed continuation
 
@@ -196,8 +201,8 @@ Before the credentialed run, use the same development-profile App to apply the
 acceptance Access and save its provider key:
 
 1. set Access ID to `assembly-001`;
-2. set the provider origin to `http://127.0.0.1:23333/v1`;
-3. set the fixed model to `dashscope:glm-5`;
+2. set the provider origin to the same explicit value passed to the runner;
+3. set the fixed model to the same explicit value passed to the runner;
 4. apply the Access at the currently loaded revision;
 5. save the provider credential once and confirm a nonzero secret revision.
 
@@ -249,6 +254,8 @@ Example:
 /private/tmp/vibermate-acceptance \
   --desktop-app=/absolute/path/to/VibeMate.app \
   --codex=/absolute/path/to/the/fixed/codex \
+  --provider-origin=https://gateway.example/v1 \
+  --provider-model=example-model \
   --report=/absolute/private/path/m0-credentialed.json
 ```
 

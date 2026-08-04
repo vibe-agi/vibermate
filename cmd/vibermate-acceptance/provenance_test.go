@@ -149,16 +149,16 @@ func TestAcceptanceConfigurationBindsTheSelectedFixedClient(t *testing.T) {
 	configuration := newAcceptanceConfiguration(config{
 		deterministicOnly: true,
 		accessID:          "Acc-001",
-		providerOrigin:    "http://127.0.0.1:23333/v1",
-		providerModel:     "dashscope:glm-5",
+		providerOrigin:    "https://gateway.example/v1",
+		providerModel:     "example-model",
 		timeout:           9,
 	}, client)
 	if configuration.ClientID != string(acceptanceClientCodexCLI) ||
 		configuration.ClientVersion != "0.145.0" ||
 		!configuration.DeterministicOnly ||
 		configuration.AccessID != "Acc-001" ||
-		configuration.ProviderOrigin != "http://127.0.0.1:23333/v1" ||
-		configuration.ProviderModel != "dashscope:glm-5" ||
+		configuration.ProviderOrigin != "https://gateway.example/v1" ||
+		configuration.ProviderModel != "example-model" ||
 		configuration.Timeout != "9ns" {
 		t.Fatalf("acceptance configuration = %+v", configuration)
 	}

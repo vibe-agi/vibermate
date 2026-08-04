@@ -58,9 +58,9 @@ const previewWorkAccess = buildAccessApplyInput({
   clientDialect: "anthropic-messages",
   providerDialect: "openai-chat",
   authDriverRef: "static_header",
-  providerOrigin: "http://127.0.0.1:23333",
-  fixedModel: "dashscope:glm-5",
-  routeName: "Work relay",
+  providerOrigin: "https://gateway.example/v1",
+  fixedModel: "example-model",
+  routeName: "Demo route",
   upstreamPresentation: "follow-client",
 });
 
@@ -184,8 +184,8 @@ class PreviewControlClient implements ControlClient {
       approvedProfiles: [
         {
           profileId: "work-openai",
-          label: "001 · Work relay",
-          modelPresentation: "dashscope:glm-5",
+          label: "001 · Demo route",
+          modelPresentation: "example-model",
           authPresentation: "vibermate_account",
           authLabel: "001",
           available: true,

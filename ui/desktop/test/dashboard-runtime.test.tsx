@@ -665,8 +665,10 @@ describe("TanStack Query dashboard runtime", () => {
     const input = buildAccessApplyInput({
       ...initialAccessForm,
       accessId: "work",
+      fixedModel: "example-model",
       name: "Private workspace marker",
       providerOrigin: "https://private-provider.invalid/v1",
+      routeName: "Primary route",
     });
 
     let applying: Promise<unknown> | undefined;

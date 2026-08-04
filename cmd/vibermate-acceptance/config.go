@@ -13,11 +13,6 @@ import (
 	"github.com/vibe-agi/vibermate/internal/accessapply"
 )
 
-const (
-	defaultProviderOrigin = "http://127.0.0.1:23333/v1"
-	defaultProviderModel  = "dashscope:glm-5"
-)
-
 type config struct {
 	desktopAppPath    string
 	daemonPath        string
@@ -70,13 +65,13 @@ func parseConfig(arguments []string) (config, error) {
 		&parsed.providerOrigin,
 		"provider-origin",
 		parsed.providerOrigin,
-		"OpenAI Chat provider origin",
+		"required provider origin",
 	)
 	flags.StringVar(
 		&parsed.providerModel,
 		"provider-model",
 		parsed.providerModel,
-		"fixed provider model",
+		"required fixed provider model",
 	)
 	flags.StringVar(
 		&parsed.secretRef,
@@ -200,7 +195,9 @@ func parseConfig(arguments []string) (config, error) {
 		parsed.providerModel == "" ||
 		strings.TrimSpace(parsed.providerModel) != parsed.providerModel ||
 		parsed.timeout <= 0 {
-		return config{}, errors.New("provider and timeout inputs are incomplete")
+		return config{}, errors.New(
+			"--provider-origin, --provider-model, Access, and timeout inputs are required",
+		)
 	}
 	if parsed.secretRef == "" {
 		parsed.secretRef = "secret://provider/" + parsed.accessID + "-account"
@@ -234,11 +231,9 @@ func parseConfig(arguments []string) (config, error) {
 
 func defaultConfig() config {
 	return config{
-		clientID:       acceptanceClientClaudeCode,
-		accessID:       "assembly-001",
-		providerOrigin: defaultProviderOrigin,
-		providerModel:  defaultProviderModel,
-		timeout:        8 * time.Minute,
+		clientID: acceptanceClientClaudeCode,
+		accessID: "assembly-001",
+		timeout:  8 * time.Minute,
 	}
 }
 

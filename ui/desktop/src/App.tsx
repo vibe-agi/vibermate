@@ -1892,7 +1892,7 @@ const accessDestinationDefaults = {
   },
   "anthropic-compatible": {
     authDriverRef: "anthropic_api_key",
-    fixedModel: "claude-sonnet-4-5",
+    fixedModel: "",
     providerDialect: "anthropic-messages",
     providerOrigin: "",
   },
@@ -1904,7 +1904,7 @@ const accessDestinationDefaults = {
   },
   custom: {
     authDriverRef: "static_header",
-    fixedModel: "gpt-5",
+    fixedModel: "",
     providerDialect: "openai-chat",
     providerOrigin: "",
   },

@@ -349,7 +349,10 @@ function accessApplyInput() {
   return buildAccessApplyInput({
     ...initialAccessForm,
     accessId: "work",
+    fixedModel: "example-model",
     name: "Work",
+    providerOrigin: "https://gateway.example/v1",
+    routeName: "Primary route",
   });
 }
 
@@ -2656,7 +2659,10 @@ describe("Desktop control client", () => {
     const input = buildAccessApplyInput({
       ...initialAccessForm,
       accessId: "work",
+      fixedModel: "example-model",
       name: "Work",
+      providerOrigin: "https://gateway.example/v1",
+      routeName: "Primary route",
     });
 
     await client.applyAccess("work", input);

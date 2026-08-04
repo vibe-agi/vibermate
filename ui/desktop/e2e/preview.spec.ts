@@ -99,9 +99,9 @@ test("lists existing tools and creates the next one without asking for a name", 
   });
   await expect(currentPath).toBeVisible();
   await expect(currentPath.getByText("Work Claude", { exact: true })).toBeVisible();
-  await expect(currentPath.getByText("Work relay", { exact: true })).toBeVisible();
+  await expect(currentPath.getByText("Demo route", { exact: true })).toBeVisible();
   await expect(
-    currentPath.getByText("dashscope:glm-5", { exact: true }),
+    currentPath.getByText("example-model", { exact: true }),
   ).toBeVisible();
   await expect(page.getByText("New requests", { exact: true })).toBeVisible();
   await expect(
@@ -112,7 +112,7 @@ test("lists existing tools and creates the next one without asking for a name", 
   await expect(
     page.getByText("OpenAI-compatible service", { exact: true }),
   ).toBeVisible();
-  await expect(page.getByText("http://127.0.0.1:23333")).toBeVisible();
+  await expect(page.getByText("https://gateway.example/v1")).toBeVisible();
   const launch = page.locator(".access-launch-panel");
   await expect(
     launch.getByRole("heading", { name: "Start Work Claude" }),
@@ -139,6 +139,13 @@ test("lists existing tools and creates the next one without asking for a name", 
     "https://api.openai.com",
   );
   await expect(page.getByLabel("Name", { exact: true })).toHaveValue("Codex");
+  await page
+    .getByRole("button", { name: /^OpenAI-compatible service/u })
+    .click();
+  await expect(page.getByLabel("Model", { exact: true })).toHaveValue("");
+  await expect(
+    page.getByRole("button", { name: "Save and enable" }),
+  ).toBeDisabled();
   await page.getByRole("button", { name: /^OpenAI API/u }).click();
   await page.getByLabel("API Key").fill("preview-provider-key");
   await expect(page.getByLabel("Access ID")).toHaveCount(0);

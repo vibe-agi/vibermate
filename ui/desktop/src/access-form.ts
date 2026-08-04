@@ -59,9 +59,9 @@ export const initialAccessForm: AccessFormValues = {
   clientDialect: "anthropic-messages",
   providerDialect: "openai-chat",
   authDriverRef: "static_header",
-  providerOrigin: "http://127.0.0.1:23333/v1",
-  fixedModel: "dashscope:glm-5",
-  routeName: "Primary account",
+  providerOrigin: "",
+  fixedModel: "",
+  routeName: "",
   upstreamPresentation: "follow-client",
 };
 

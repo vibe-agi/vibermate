@@ -137,28 +137,30 @@ func TestClientInvocationPathPreservesVerifiedWrapperLabel(t *testing.T) {
 	}
 }
 
-func TestDefaultAcceptanceRouteUsesApprovedRelay(t *testing.T) {
+func TestAcceptanceRouteRequiresExplicitProviderIdentity(t *testing.T) {
 	t.Parallel()
 
 	defaults := defaultConfig()
-	if defaults.providerOrigin != defaultProviderOrigin ||
-		defaults.providerModel != defaultProviderModel {
+	if defaults.providerOrigin != "" || defaults.providerModel != "" {
 		t.Fatalf(
-			"default route origin=%q model=%q",
+			"implicit route origin=%q model=%q",
 			defaults.providerOrigin,
 			defaults.providerModel,
 		)
 	}
-	aggregate, err := assemblyAccess(defaults, 0)
+	explicit := defaults
+	explicit.providerOrigin = "https://gateway.example/v1"
+	explicit.providerModel = "example-model"
+	aggregate, err := assemblyAccess(explicit, 0)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if len(aggregate.ProviderTargets) != 1 ||
-		aggregate.ProviderTargets[0].Origin != defaultProviderOrigin ||
+		aggregate.ProviderTargets[0].Origin != explicit.providerOrigin ||
 		len(aggregate.Profiles) != 1 ||
 		aggregate.Profiles[0].DefaultModelPolicy.FixedModel !=
-			defaultProviderModel {
-		t.Fatalf("default executable route = %+v", aggregate)
+			explicit.providerModel {
+		t.Fatalf("explicit executable route = %+v", aggregate)
 	}
 }
 

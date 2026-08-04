@@ -288,16 +288,15 @@ is wired, no production path observes the live trust store, and tests never run
 evidence, not proof of macOS authorization or system trust behavior.
 
 Repository tests prove the version-gated Responses behavior. The latest clean
-private v6 deterministic reports are bound to implementation commit
-`bbe3d2d35574481e2c10a57e28ca456ef51780b5`: fixed Claude Code 2.1.220 passes
-18 of 18 checks and fixed Codex CLI 0.145.0 passes 19 of 19. Together they
-exercise the current managed-client bootstrap, certificate, explicit
-connection-policy, client-side ConnectionEvent, client-specific fallback,
-Hold, shutdown, and SQLite-recovery paths without a provider credential. The
-latest credentialed report remains the historical fixed-Codex
-report bound to `c19cca4eb2842aa00d8e8fc17160b342a111f0b6`; it proves neither
-current-HEAD credentialed behavior nor successful Responses WebSocket semantics
-or client-visible per-token TUI behavior.
+private v6 deterministic and credentialed reports are bound to implementation
+commit `3064a417baa93426ad221947c3eeba920938ab5b`: fixed Claude Code
+2.1.220 passes 18 of 18 deterministic and 26 of 26 credentialed checks; fixed
+Codex CLI 0.145.0 passes 19 of 19 and 29 of 29. Together they exercise the
+managed-client bootstrap, certificate, explicit connection-policy,
+client-side ConnectionEvent, client-specific fallback, Hold, tool execution,
+shutdown, SQLite recovery, and one explicitly configured provider route. They
+do not prove successful Responses WebSocket semantics or client-visible
+per-token TUI behavior.
 
 DesktopHost now owns the literal proxy and control listeners, complete routes,
 generation lock, capability separation, local control discovery, and the only
@@ -449,21 +448,21 @@ exactly one new terminal Exchange failure, and cross-checks its ID, Access, and
 status through the canonical paged `/activities` API before and after a true
 cold reopen; the private seam contributes only ordering and terminal reason.
 It uses a unique missing SecretRef; the credentialed continuation uses the
-development file SecretStore and defaults to a local Cherry Studio API at
-`http://127.0.0.1:23333/v1` with model `dashscope:glm-5`. No acceptance mode
+development file SecretStore. Provider origin and model have no hidden
+default: every acceptance run must provide both explicitly. No acceptance mode
 takes a secret value on its command line. The Codex runner isolates
 `CODEX_HOME`, reads prompts from standard input, trusts only bounded typed
 JSONL plus bounded client-status evidence, and exercises `exec resume`. Two
-clean packaged v6 deterministic reports bound to
-`bbe3d2d35574481e2c10a57e28ca456ef51780b5` pass 18 of 18 checks with fixed
-Claude Code 2.1.220 and 19 of 19 checks with fixed Codex CLI 0.145.0. Both
+clean packaged v6 deterministic reports and two credentialed reports bound to
+implementation candidate `3064a417baa93426ad221947c3eeba920938ab5b`
+pass 18 of 18 and 26 of 26 checks with fixed Claude Code 2.1.220, and 19 of 19
+and 29 of 29 checks with fixed Codex CLI 0.145.0. The deterministic reports
 independently verify the selected source, App, sidecars, acceptance executable,
-client entrypoint, and frozen configuration.
-The latest credentialed report is older: 25 of 25 checks
-bound to `c19cca4eb2842aa00d8e8fc17160b342a111f0b6` and fixed Codex CLI 0.145.0.
-It remains useful historical evidence but is not current-HEAD credentialed
-evidence. The Codex tool proof names `exec`, and its Hold proof claims completion
-through the Responses streaming path without claiming TUI delta rendering.
+client entrypoint, and frozen configuration. The complete digests and evidence
+boundary are recorded in
+[`docs/evidence/2026-08-05-fixed-client-credentialed-closure.md`](docs/evidence/2026-08-05-fixed-client-credentialed-closure.md).
+The Codex tool proof names `exec`, and its Hold proof claims completion through
+the Responses streaming path without claiming TUI delta rendering.
 
 SQLite is the only durable Access authority; active-plan publication occurs
 after commit. An indeterminate commit or post-commit publication failure marks
@@ -583,10 +582,13 @@ The manual `packaged deterministic acceptance` workflow is the fail-closed
 freshness runner for the initial macOS arm64 packaged-app slice (M0). Its
 protected environment
 must provide a self-hosted runner labelled `vibermate-acceptance` and an
-absolute `VIBERMATE_CLAUDE_2_1_220_PATH`. The workflow never installs or
-downloads a client: the pre-provisioned executable must match the complete
-built-in Claude Code 2.1.220 release evidence. It builds the selected clean SHA,
-runs deterministic-only acceptance without a provider credential, verifies the
+absolute `VIBERMATE_CLAUDE_2_1_220_PATH`. It also requires explicit non-secret
+`VIBERMATE_ACCEPTANCE_PROVIDER_ORIGIN` and
+`VIBERMATE_ACCEPTANCE_PROVIDER_MODEL` environment variables; the workflow has
+no repository-owned route default. It never installs or downloads a client:
+the pre-provisioned executable must match the complete built-in Claude Code
+2.1.220 release evidence. It builds the selected clean SHA, runs
+deterministic-only acceptance without a provider credential, verifies the
 private v6 report against that exact SHA and client even after an acceptance
 failure, and retains the uncommitted report artifact for seven days. The
 workflow explicitly requires the v6 schema, so a report cannot remove the new
