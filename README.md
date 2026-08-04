@@ -505,6 +505,13 @@ An installed Claude Code binary, launched by the product's own launcher and
 given nothing but a proxy address, a CaptureRun credential and the local Root,
 reaches a real model and prints its answer.
 
+Separate no-credential local-fixture runs at clean source
+`59b687ba1205e295e44e91e22756e61410492079` drive installed Claude Code 2.1.221
+and Codex CLI 0.146.0 through the same launcher, explicit recognized-client
+Root decision, proxy, MITM, protocol conversion, streaming provider path, and
+audit boundaries. Both print `ready`; the exact proof and non-proof boundary is
+recorded in `docs/evidence/2026-08-05-current-client-local-fixture.md`.
+
 These runs skip loudly without their environment variables rather than passing
 quietly, and `docs/evidence/2026-08-02-live-provider-run.md` records what each
 one does and does not prove.
