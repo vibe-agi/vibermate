@@ -269,30 +269,41 @@ for (const boundary of [
       await page.getByRole("button", { name: "简体中文" }).click();
     }
 
-    const row = page.locator(".activity-list li");
+    const panel = page.locator(".activity-panel");
+    const tableScroll = panel.locator(".compact-table-scroll");
+    const row = panel.locator(".activity-table tbody tr");
     await expect(row).toContainText(activity.id);
     await expect(row).toContainText(activity.accessId);
     await expect(row).toContainText(activity.status);
     await expectNoHorizontalOverflow([
       page.locator("html"),
       page.locator("#main-content"),
-      page.locator(".activity-list"),
-      row,
+      panel,
     ]);
+    await expect(tableScroll).toBeVisible();
+    expect(
+      await tableScroll.evaluate(
+        (element) => element.getBoundingClientRect().right <= innerWidth + 1,
+      ),
+    ).toBe(true);
     expect(errors).toEqual([]);
   });
 }
 
-test("keeps all five Policy actions horizontally reachable at 390px in both locales", async ({
+test("keeps common Policy actions compact and reveals persistent rules on demand at 390px", async ({
   page,
 }) => {
   const errors = collectBrowserErrors(page);
   await page.setViewportSize({ width: 390, height: 844 });
   await page.goto("/?preview=1#policies/approvals");
-  const actions = page
-    .locator('[data-approval-id="approval-network-sample"]')
-    .locator(".button-row > *");
-  await expect(actions).toHaveCount(5);
+  const approval = page.locator(
+    '[data-approval-id="approval-network-sample"]',
+  );
+  const quickActions = approval.locator(".approval-quick-actions button");
+  await expect(quickActions).toHaveCount(2);
+  await expect(approval.locator(".approval-rule-actions")).toHaveCount(0);
+  await approval.getByRole("link", { name: "Open approval" }).click();
+  await expect(approval.locator(".approval-rule-actions button")).toHaveCount(2);
 
   for (const localeButton of [undefined, "简体中文"] as const) {
     if (localeButton !== undefined) {
@@ -300,11 +311,14 @@ test("keeps all five Policy actions horizontally reachable at 390px in both loca
     }
     await expectNoHorizontalOverflow([
       page.locator("html"),
-      page
-        .locator('[data-approval-id="approval-network-sample"]')
-        .locator(".button-row"),
+      page.locator("#main-content"),
+      approval,
     ]);
-    for (const action of await actions.all()) {
+    for (const action of await approval
+      .locator(
+        ".approval-quick-actions button, .approval-more-link, .approval-rule-actions button",
+      )
+      .all()) {
       await expect(action).toBeVisible();
       const box = await action.boundingBox();
       expect(box).not.toBeNull();

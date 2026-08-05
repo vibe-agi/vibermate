@@ -96,7 +96,93 @@ const previewActivities: readonly ActivityRecord[] = [
     accessId: "work",
     status: "canceled",
   },
+  ...Array.from({ length: 35 }, (_, index): ActivityRecord => ({
+    id: `exchange-preview-history-${String(index + 1).padStart(2, "0")}`,
+    occurredAt: new Date(
+      Date.parse("2026-08-02T09:54:00Z") - index * 47_000,
+    ).toISOString(),
+    accessId: index % 4 === 0 ? "personal" : "work",
+    status:
+      index % 11 === 0
+        ? "failed"
+        : index % 7 === 0
+          ? "canceled"
+          : "succeeded",
+  })),
 ];
+
+const previewWorkspaces = [
+  "payments-api",
+  "desktop-app",
+  "documentation",
+  "mobile-client",
+  "infra",
+  "research",
+  "release",
+  "support-tools",
+] as const;
+
+const previewCaptureRuns: readonly CaptureRunRecord[] = Array.from(
+  { length: 8 },
+  (_, index) => {
+    const samples = captureRunSamples as readonly CaptureRunRecord[];
+    const base = samples[index % samples.length]!;
+    const workspace = previewWorkspaces[index]!;
+    return {
+      ...base,
+      id: `run-preview-${index + 1}`,
+      executableLabel: index % 3 === 1 ? "codex" : "claude",
+      cwd: `/Users/example/${workspace}`,
+      workspaceLabel: workspace,
+      processId: 4_200 + index,
+      createdAt: new Date(
+        Date.parse("2026-08-02T10:08:00Z") - index * 71_000,
+      ).toISOString(),
+    };
+  },
+);
+
+const previewConnections: readonly ConnectionRecord[] = Array.from(
+  { length: 36 },
+  (_, index) => {
+    const samples = connectionSamples as readonly ConnectionRecord[];
+    const base = samples[index % samples.length]!;
+    const source = previewCaptureRuns[index % previewCaptureRuns.length]!;
+    return {
+      ...base,
+      sequence: index + 1,
+      connectionId: `connection-preview-${index + 1}`,
+      ingressId: source.id,
+      sourceLabel: `${source.executableLabel} · ${source.workspaceLabel}`,
+      requestedHost:
+        index % 3 === 0
+          ? "api.anthropic.com"
+          : index % 3 === 1
+            ? "api.openai.com"
+            : `service-${index + 1}.example.com`,
+      startedAt: new Date(
+        Date.parse("2026-08-02T10:10:00Z") - index * 19_000,
+      ).toISOString(),
+    };
+  },
+);
+
+const previewEgressAttempts: readonly EgressAttemptRecord[] = Array.from(
+  { length: 36 },
+  (_, index) => {
+    const samples = egressSamples as readonly EgressAttemptRecord[];
+    const base = samples[index % samples.length]!;
+    const connection = previewConnections[index]!;
+    return {
+      ...base,
+      sequence: index + 1,
+      id: `egress-preview-${index + 1}`,
+      connectionId: connection.connectionId,
+      targetOrigin: `https://${connection.requestedHost}:${connection.port}`,
+      startedAt: connection.startedAt,
+    };
+  },
+);
 
 function initialOfflineHold(): OfflineHoldSnapshot {
   return {
@@ -282,12 +368,12 @@ class PreviewControlClient implements ControlClient {
   async activities(cursor?: string, _signal?: AbortSignal) {
     if (cursor === undefined) {
       return {
-        items: previewActivities.slice(0, 3),
+        items: previewActivities.slice(0, 20),
         nextCursor: previewActivityCursor,
       };
     }
     if (cursor === previewActivityCursor) {
-      return { items: previewActivities.slice(3) };
+      return { items: previewActivities.slice(20) };
     }
     throw new Error("Preview Activity cursor is invalid");
   }
@@ -342,7 +428,7 @@ class PreviewControlClient implements ControlClient {
 
   async captureRuns(_signal?: AbortSignal) {
     return {
-      items: captureRunSamples as readonly CaptureRunRecord[],
+      items: previewCaptureRuns,
     };
   }
 
@@ -389,13 +475,13 @@ class PreviewControlClient implements ControlClient {
 
   async connections(_signal?: AbortSignal) {
     return {
-      items: connectionSamples as readonly ConnectionRecord[],
+      items: previewConnections,
     };
   }
 
   async egressAttempts(_signal?: AbortSignal) {
     return {
-      items: egressSamples as readonly EgressAttemptRecord[],
+      items: previewEgressAttempts,
     };
   }
 

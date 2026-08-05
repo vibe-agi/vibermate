@@ -43,7 +43,7 @@ describe("the browser preview host", () => {
   it("paginates only canonical Exchange summaries", async () => {
     const client = await connectPreviewControl();
     const first = await client.activities();
-    expect(first.items).toHaveLength(3);
+    expect(first.items).toHaveLength(20);
     expect(first.nextCursor).toBe("cHJldmlldy1wYWdlLTI");
     for (const item of first.items) {
       expect(Object.keys(item).sort()).toEqual([
@@ -55,9 +55,9 @@ describe("the browser preview host", () => {
     }
 
     const second = await client.activities(first.nextCursor);
-    expect(second.items).toHaveLength(2);
+    expect(second.items).toHaveLength(20);
     expect(second.nextCursor).toBeUndefined();
-    expect(second.items.some(({ status }) => status === "reviewed")).toBe(true);
+    expect(second.items.some(({ status }) => status === "succeeded")).toBe(true);
     await expect(client.activities("dW5rbm93bg")).rejects.toThrow(
       "Preview Activity cursor is invalid",
     );

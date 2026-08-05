@@ -1627,7 +1627,7 @@ describe("the ApprovalCenter and a connection question", () => {
     await waitForDashboard();
     await openView(/^Policy/);
     expect(screen.getByText("api.example.com:443")).toBeTruthy();
-    expect(screen.getByText("Destination")).toBeTruthy();
+    expect(screen.getByText("Network")).toBeTruthy();
   });
 
   it("says how many connections one answer is answering for", async () => {
@@ -1641,9 +1641,11 @@ describe("the ApprovalCenter and a connection question", () => {
 
     await waitForDashboard();
     await openView(/^Policy/);
-    expect(
-      screen.getByText("3 connections are waiting on this answer"),
-    ).toBeTruthy();
+    const row = screen
+      .getByText("api.example.com:443")
+      .closest("[data-approval-id]");
+    expect(row).not.toBeNull();
+    expect(within(row as HTMLElement).getByText("3")).toBeTruthy();
   });
 
   it("offers exactly the choices the runtime declared", async () => {
@@ -1658,6 +1660,8 @@ describe("the ApprovalCenter and a connection question", () => {
     await waitForDashboard();
     await openView(/^Policy/);
     expect(screen.getByText("api.example.com:443")).toBeTruthy();
+    fireEvent.click(screen.getByRole("link", { name: "Open approval" }));
+    await screen.findByText("Network access confirmation required");
     for (const choice of networkAsk.choices) {
       expect(
         screen.getByRole("button", { name: i18n.t(choice.labelKey) }),
@@ -1678,6 +1682,8 @@ describe("the ApprovalCenter and a connection question", () => {
     await waitForDashboard();
     await openView(/^Policy/);
     expect(screen.getByText("api.example.com:443")).toBeTruthy();
+    fireEvent.click(screen.getByRole("link", { name: "Open approval" }));
+    await screen.findByText("Network access confirmation required");
     fireEvent.click(
       screen.getByRole("button", { name: "Always allow this host and port" }),
     );
@@ -1732,10 +1738,11 @@ describe("the ApprovalCenter and a connection question", () => {
 
     await waitForDashboard();
     await openView(/^Policy/);
+    fireEvent.click(screen.getByRole("link", { name: "Open approval" }));
     expect(
-      screen.getByText("Allow a recognized client to use the local Root?"),
+      await screen.findByText("Allow a recognized client to use the local Root?"),
     ).toBeTruthy();
-    expect(screen.getByText("Signed application")).toBeTruthy();
+    expect(screen.getByText("Client trust")).toBeTruthy();
     expect(
       screen.getByText("/Applications/Claude.app/Contents/MacOS/claude"),
     ).toBeTruthy();
@@ -1760,9 +1767,10 @@ describe("the audit panels", () => {
 
     await waitForDashboard();
     await openView("Activity");
+    fireEvent.click(screen.getByRole("tab", { name: /Connections/u }));
     expect(screen.getByText("files.example.com:443")).toBeTruthy();
     expect(screen.getByText("Forwarded without reading")).toBeTruthy();
-    expect(screen.getByText("2048 sent · 16384 received")).toBeTruthy();
+    expect(screen.getByLabelText("2048 sent · 16384 received")).toBeTruthy();
   });
 
   it("distinguishes a refused connection from an allowed one", async () => {
@@ -1776,9 +1784,12 @@ describe("the audit panels", () => {
 
     await waitForDashboard();
     await openView("Activity");
+    fireEvent.click(screen.getByRole("tab", { name: /Connections/u }));
     expect(screen.getByText("unknown.example.com:443")).toBeTruthy();
-    expect(screen.getByText("Refused · default.ask")).toBeTruthy();
-    expect(screen.getByText("Allowed · allow.files")).toBeTruthy();
+    expect(screen.getByText("Refused")).toBeTruthy();
+    expect(screen.getByText("default.ask")).toBeTruthy();
+    expect(screen.getByText("Allowed")).toBeTruthy();
+    expect(screen.getByText("allow.files")).toBeTruthy();
   });
 
   it("shows where each request actually went", async () => {
@@ -1792,6 +1803,7 @@ describe("the audit panels", () => {
 
     await waitForDashboard();
     await openView("Activity");
+    fireEvent.click(screen.getByRole("tab", { name: /Outbound attempts/u }));
     expect(screen.getByText("https://api.anthropic.com:443")).toBeTruthy();
     expect(screen.getByText("Model request")).toBeTruthy();
     // An attempt that has not finished has no outcome and no final counts to
@@ -1811,6 +1823,7 @@ describe("the audit panels", () => {
 
     await waitForDashboard();
     await openView("Activity");
+    fireEvent.click(screen.getByRole("tab", { name: /Connections/u }));
     expect(screen.getByText("files.example.com:443")).toBeTruthy();
     const rendered = container.textContent ?? "";
     for (const forbidden of [
@@ -1843,10 +1856,10 @@ describe("canonical Activity request summaries", () => {
       </I18nextProvider>,
     );
 
-    expect(await screen.findByText("Exchange exchange-failed")).toBeTruthy();
+    expect(await screen.findByText("exchange-failed")).toBeTruthy();
     expect(
       screen
-        .getByRole("link", { name: "Exchange exchange-failed" })
+        .getByRole("link", { name: "exchange-failed" })
         .getAttribute("href"),
     ).toBe("/activity/requests/exchange-failed");
     expect(screen.getByText("work")).toBeTruthy();
@@ -1888,8 +1901,8 @@ describe("canonical Activity request summaries", () => {
     );
 
     fireEvent.click(await screen.findByRole("button", { name: "Load more" }));
-    expect(await screen.findByText("Exchange exchange-older")).toBeTruthy();
-    expect(screen.getAllByText("Exchange exchange-failed")).toHaveLength(1);
+    expect(await screen.findByText("exchange-older")).toBeTruthy();
+    expect(screen.getAllByText("exchange-failed")).toHaveLength(1);
     expect(client.activities).toHaveBeenCalledWith(
       cursor,
       expect.any(AbortSignal),
@@ -1925,7 +1938,7 @@ describe("canonical Activity request summaries", () => {
     );
 
     fireEvent.click(await screen.findByRole("button", { name: "Load more" }));
-    expect(await screen.findByText("Exchange exchange-older")).toBeTruthy();
+    expect(await screen.findByText("exchange-older")).toBeTruthy();
     expect(
       screen.getByText("Older paging stopped at the safety limit"),
     ).toBeTruthy();
@@ -2225,11 +2238,15 @@ describe("what is captured", () => {
       </I18nextProvider>,
     );
 
-    expect(await screen.findByText("Machines & workspaces")).toBeTruthy();
-    expect(screen.getByText("vibermate")).toBeTruthy();
-    expect(screen.getByText("alice")).toBeTruthy();
-    expect(screen.getByText("Waiting for first request")).toBeTruthy();
-    expect(screen.queryByRole("combobox", {
+    const heading = await screen.findByText("Machines & workspaces");
+    const panel = heading.closest("section");
+    expect(panel).not.toBeNull();
+    expect(within(panel as HTMLElement).getByText("vibermate")).toBeTruthy();
+    expect(within(panel as HTMLElement).getByText("alice")).toBeTruthy();
+    expect(
+      within(panel as HTMLElement).getByText("Waiting for first request"),
+    ).toBeTruthy();
+    expect(within(panel as HTMLElement).queryByRole("combobox", {
       name: "Route for new requests",
     })).toBeNull();
   });

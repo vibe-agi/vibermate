@@ -217,9 +217,13 @@ h3 {
 
 .visually-hidden {
   position: absolute;
+  inset: 0 auto auto 0;
   width: 1px;
   height: 1px;
   overflow: hidden;
+  border: 0;
+  margin: -1px;
+  padding: 0;
   clip: rect(0 0 0 0);
   clip-path: inset(50%);
   white-space: nowrap;
@@ -725,6 +729,7 @@ dd {
 }
 
 .overview-evidence {
+  min-width: 0;
   margin-top: 0.4rem;
 }
 
@@ -1019,6 +1024,422 @@ dd {
   border-radius: 6px;
   padding: 0.85rem;
   background: var(--panel);
+}
+
+.compact-panel-heading {
+  display: flex;
+  min-height: 30px;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+  margin-bottom: 0.45rem;
+}
+
+.compact-panel-heading h2 {
+  margin: 0;
+}
+
+.compact-count {
+  min-width: 1.5rem;
+  border-radius: 999px;
+  padding: 0.08rem 0.4rem;
+  color: var(--muted);
+  background: var(--raised);
+  font-family: var(--mono);
+  font-size: 0.68rem;
+  text-align: center;
+}
+
+.compact-add-button {
+  display: inline-flex;
+  min-height: 28px;
+  align-items: center;
+  gap: 0.35rem;
+  padding: 0.22rem 0.55rem;
+}
+
+.compact-add-icon {
+  color: var(--signal);
+  font-size: 1rem;
+  line-height: 1;
+}
+
+.compact-record-panel {
+  min-width: 0;
+  max-width: 100%;
+  overflow: visible;
+  padding: 0.65rem 0.75rem;
+}
+
+.approval-queue {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.approval-queue > li {
+  display: grid;
+  min-width: 0;
+  grid-template-columns: minmax(230px, 1.6fr) minmax(62px, 0.35fr) minmax(
+      155px,
+      0.7fr
+    ) minmax(220px, auto);
+  gap: 0.65rem;
+  align-items: center;
+  border-top: 1px solid var(--border);
+  padding: 0.48rem 0.2rem;
+}
+
+.approval-queue > li.selected-record {
+  margin-inline: -0.35rem;
+  border-radius: 5px;
+  padding-inline: 0.55rem;
+  background: var(--signal-soft);
+}
+
+.approval-queue > li.approval-columns {
+  border-top: 0;
+  padding-top: 0.15rem;
+  padding-bottom: 0.3rem;
+  color: var(--quiet);
+  font-size: 0.66rem;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.approval-question {
+  display: grid;
+  min-width: 0;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: 0.55rem;
+  align-items: center;
+}
+
+.approval-question > div {
+  display: grid;
+  min-width: 0;
+  gap: 0.03rem;
+}
+
+.approval-question strong {
+  overflow: hidden;
+  font-family: var(--mono);
+  font-size: 0.76rem;
+  font-weight: 550;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.approval-kind {
+  color: var(--muted);
+  font-size: 0.68rem;
+}
+
+.approval-kind-dot,
+.compact-state > span:first-child {
+  width: 0.48rem;
+  height: 0.48rem;
+  flex: none;
+  border-radius: 50%;
+  background: var(--ask);
+}
+
+.approval-kind-dot.tool_intent {
+  background: var(--review);
+}
+
+.approval-kind-dot.client_root_ask {
+  background: var(--signal);
+}
+
+.approval-waiting,
+.compact-time,
+.table-numeric {
+  font-variant-numeric: tabular-nums;
+}
+
+.approval-waiting {
+  font-family: var(--mono);
+  font-size: 0.74rem;
+}
+
+.compact-time {
+  color: var(--muted);
+  font-size: 0.72rem;
+  white-space: nowrap;
+}
+
+.approval-quick-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 0.3rem;
+}
+
+.approval-quick-actions button,
+.approval-more-link {
+  min-height: 26px;
+  padding: 0.18rem 0.48rem;
+  font-size: 0.72rem;
+}
+
+.approval-more-link {
+  display: grid;
+  min-width: 28px;
+  place-items: center;
+  border: 1px solid transparent;
+  border-radius: 4px;
+  color: var(--muted);
+}
+
+.approval-more-link:hover,
+.approval-more-link:focus-visible {
+  border-color: var(--border-strong);
+  background: var(--raised);
+}
+
+button.quiet-danger {
+  border-color: transparent;
+  background: transparent;
+}
+
+.approval-expanded {
+  display: flex;
+  grid-column: 1 / -1;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  border-top: 1px solid color-mix(in srgb, var(--signal) 22%, var(--border));
+  padding: 0.55rem 0 0.15rem 1.05rem;
+}
+
+.approval-expanded h3,
+.approval-expanded p {
+  margin: 0;
+}
+
+.approval-expanded p {
+  max-width: 72ch;
+  margin-top: 0.15rem;
+  color: var(--muted);
+  font-size: 0.72rem;
+}
+
+.approval-rule-actions {
+  display: flex;
+  flex: none;
+  align-items: center;
+  gap: 0.35rem;
+}
+
+.approval-rule-actions > span {
+  color: var(--muted);
+  font-size: 0.68rem;
+}
+
+.approval-rule-actions button {
+  min-height: 27px;
+  padding: 0.18rem 0.5rem;
+  font-size: 0.72rem;
+}
+
+.traffic-panel {
+  min-width: 0;
+  max-width: 100%;
+  grid-column: 1 / -1;
+  overflow: hidden;
+  padding: 0.65rem 0.75rem 0.55rem;
+}
+
+.traffic-heading {
+  flex-wrap: wrap;
+}
+
+.compact-tabs {
+  display: inline-flex;
+  gap: 0.15rem;
+  border: 1px solid var(--border);
+  border-radius: 5px;
+  padding: 0.12rem;
+  background: var(--raised);
+}
+
+.compact-tabs button {
+  display: inline-flex;
+  min-height: 25px;
+  align-items: center;
+  gap: 0.35rem;
+  border: 0;
+  padding: 0.14rem 0.5rem;
+  color: var(--muted);
+  background: transparent;
+  font-size: 0.7rem;
+}
+
+.compact-tabs button[aria-selected="true"] {
+  color: var(--text);
+  background: var(--panel);
+  box-shadow: 0 1px 2px rgb(0 0 0 / 9%);
+}
+
+.compact-tabs button span {
+  color: var(--quiet);
+  font-family: var(--mono);
+  font-size: 0.65rem;
+}
+
+.compact-table-scroll {
+  min-width: 0;
+  max-width: 100%;
+  width: 100%;
+  overflow-x: auto;
+  border-top: 1px solid var(--border);
+}
+
+.compact-table {
+  width: 100%;
+  min-width: 720px;
+  border-collapse: collapse;
+  table-layout: fixed;
+}
+
+.compact-table th,
+.compact-table td {
+  overflow: hidden;
+  border-bottom: 1px solid var(--border);
+  padding: 0.42rem 0.48rem;
+  text-align: left;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.compact-table th {
+  color: var(--quiet);
+  background: color-mix(in srgb, var(--raised) 62%, transparent);
+  font-size: 0.64rem;
+  font-weight: 700;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+}
+
+.compact-table td {
+  height: 36px;
+  font-size: 0.74rem;
+}
+
+.compact-table tbody tr:last-child td {
+  border-bottom: 0;
+}
+
+.compact-table tbody tr:hover td {
+  background: color-mix(in srgb, var(--signal-soft) 40%, transparent);
+}
+
+.compact-table .table-primary {
+  color: var(--text);
+  font-weight: 600;
+}
+
+.table-secondary {
+  display: block;
+  overflow: hidden;
+  margin-top: 0.08rem;
+  color: var(--quiet);
+  font-family: var(--mono);
+  font-size: 0.62rem;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.traffic-table .table-secondary {
+  display: inline;
+  margin: 0 0 0 0.35rem;
+}
+
+.compact-table .table-ellipsis {
+  text-overflow: ellipsis;
+}
+
+.compact-table .table-numeric {
+  font-family: var(--mono);
+  font-size: 0.68rem;
+}
+
+.compact-state {
+  display: inline-flex;
+  max-width: 100%;
+  align-items: center;
+  gap: 0.36rem;
+  overflow: hidden;
+  color: var(--muted);
+  font-size: 0.7rem;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.compact-state.succeeded > span,
+.compact-state.completed > span,
+.compact-state.allow > span,
+.compact-state.attached > span {
+  background: var(--allow);
+}
+
+.compact-state.failed > span,
+.compact-state.deny > span,
+.compact-state.expired > span,
+.compact-state.revoked > span {
+  background: var(--deny);
+}
+
+.compact-state.pending > span,
+.compact-state.ask > span,
+.compact-state.created > span {
+  background: var(--ask);
+}
+
+.activity-table th:nth-child(1),
+.activity-table td:nth-child(1) {
+  width: 125px;
+}
+
+.activity-table th:nth-child(3),
+.activity-table td:nth-child(3) {
+  width: 20%;
+}
+
+.activity-table th:last-child,
+.activity-table td:last-child,
+.traffic-table th:last-child,
+.traffic-table td:last-child {
+  width: 145px;
+  text-align: right;
+}
+
+.compact-pager {
+  display: flex;
+  min-height: 34px;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 0.65rem;
+  border-top: 1px solid var(--border);
+  padding-top: 0.4rem;
+  color: var(--muted);
+  font-family: var(--mono);
+  font-size: 0.67rem;
+}
+
+.compact-pager > div {
+  display: flex;
+  gap: 0.2rem;
+}
+
+.compact-pager button {
+  display: grid;
+  width: 26px;
+  min-height: 25px;
+  place-items: center;
+  padding: 0;
+  font-size: 1rem;
 }
 
 .boundary-page {
@@ -2960,6 +3381,30 @@ dd {
     display: none;
   }
 
+  .approval-queue > li {
+    grid-template-columns: minmax(0, 1fr) auto;
+  }
+
+  .approval-queue > li.approval-columns,
+  .approval-waiting {
+    display: none;
+  }
+
+  .approval-quick-actions {
+    grid-column: 2;
+    grid-row: 1 / span 2;
+  }
+
+  .approval-expanded {
+    grid-column: 1 / -1;
+    align-items: flex-start;
+    flex-direction: column;
+  }
+
+  .approval-rule-actions {
+    flex-wrap: wrap;
+  }
+
   .hold-action {
     min-height: 34px;
     padding-inline: 0.6rem;
@@ -3057,6 +3502,40 @@ dd {
   .top-status strong,
   .pending-link {
     font-size: 0.75rem;
+  }
+
+  .compact-add-button > span:last-child {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+    clip: rect(0 0 0 0);
+  }
+
+  .compact-add-button {
+    width: 28px;
+    justify-content: center;
+    padding: 0;
+  }
+
+  .approval-queue > li {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .approval-quick-actions {
+    grid-column: 1;
+    grid-row: auto;
+    justify-content: flex-start;
+  }
+
+  .compact-tabs {
+    width: 100%;
+    overflow-x: auto;
+  }
+
+  .compact-tabs button {
+    flex: 1 0 auto;
+    justify-content: center;
   }
 
   .pending-link {

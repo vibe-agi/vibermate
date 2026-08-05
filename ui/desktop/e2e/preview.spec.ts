@@ -39,13 +39,17 @@ test("decides the recognized-client Root handoff from the shared queue", async (
   const errors = collectBrowserErrors(page);
   await page.goto("/?preview=1#overview");
   await page.getByRole("link", { name: /^Policy/ }).click();
+  const clientApproval = page.locator(
+    '[data-approval-id="approval-client-root-sample"]',
+  );
+  await clientApproval.getByRole("link", { name: "Open approval" }).click();
 
   await expect(
     page.getByRole("heading", {
       name: "Allow a recognized client to use the local Root?",
     }),
   ).toBeVisible();
-  await expect(page.getByText("Signed application")).toBeVisible();
+  await expect(clientApproval.getByText("Client trust")).toBeVisible();
   await expect(
     page.getByText("/Applications/Claude.app/Contents/MacOS/claude"),
   ).toBeVisible();
@@ -396,11 +400,20 @@ test("loads canonical Activity request summaries without raw evidence", async ({
   const errors = collectBrowserErrors(page);
   await page.goto("/?preview=1#activity/requests");
 
-  await expect(page.locator(".activity-list li")).toHaveCount(3);
-  await expect(page.getByText("Exchange exchange-preview-5")).toBeVisible();
+  const activityPanel = page.locator(".activity-panel");
+  const rows = activityPanel.locator(".activity-table tbody tr");
+  await expect(rows).toHaveCount(10);
+  await expect(page.getByText("exchange-preview-5", { exact: true })).toBeVisible();
+  await activityPanel.getByRole("button", { name: "Next page" }).click();
+  await expect(
+    page.getByText("exchange-preview-history-06", { exact: true }),
+  ).toBeVisible();
+  await activityPanel.getByRole("button", { name: "Previous page" }).click();
   await page.getByRole("button", { name: "Load more" }).click();
-  await expect(page.locator(".activity-list li")).toHaveCount(5);
-  await expect(page.getByText("reviewed")).toHaveClass(/neutral/u);
+  await expect(activityPanel.locator(".compact-count")).toHaveText("40");
+  await expect(page.getByText("reviewed", { exact: true })).toHaveClass(
+    /neutral/u,
+  );
   await expect(page.getByRole("button", { name: "Load more" })).toHaveCount(0);
 
   const rendered = await page.locator("#main-content").innerText();
@@ -414,6 +427,37 @@ test("loads canonical Activity request summaries without raw evidence", async ({
   ]) {
     expect(rendered).not.toContain(forbidden);
   }
+  expect(errors).toEqual([]);
+});
+
+test("keeps eight captured agents and high-volume traffic operable in dense tables", async ({
+  page,
+}) => {
+  const errors = collectBrowserErrors(page);
+  await page.setViewportSize({ width: 1280, height: 800 });
+  await page.goto("/?preview=1#activity");
+
+  const traffic = page.locator(".traffic-panel");
+  await traffic.getByRole("tab", { name: /Captured programs\s*8/u }).click();
+  await expect(traffic.locator(".traffic-table tbody tr")).toHaveCount(8);
+
+  await traffic.getByRole("tab", { name: /Connections\s*36/u }).click();
+  const rows = traffic.locator(".traffic-table tbody tr");
+  await expect(rows).toHaveCount(10);
+  await expect(rows.first()).toContainText("api.anthropic.com:443");
+  await traffic.getByRole("button", { name: "Next page" }).click();
+  await expect(rows).toHaveCount(10);
+  await expect(rows.first()).toContainText("api.openai.com:443");
+
+  const heights = await rows.evaluateAll((items) =>
+    items.map((item) => item.getBoundingClientRect().height),
+  );
+  expect(Math.max(...heights)).toBeLessThanOrEqual(44);
+  expect(
+    await page.evaluate(
+      () => document.documentElement.scrollWidth <= globalThis.innerWidth,
+    ),
+  ).toBe(true);
   expect(errors).toEqual([]);
 });
 

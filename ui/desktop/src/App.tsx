@@ -581,7 +581,7 @@ export function UnavailableTaskRoutePage({
 
 export function ActivityRoutePage() {
   const { t } = useTranslation();
-  const { model, state } = useDashboardRuntime();
+  const { actions, model, state } = useDashboardRuntime();
   return (
     <>
       <PageHeading
@@ -593,21 +593,21 @@ export function ActivityRoutePage() {
           activities={state.activities}
           availability={sourceAvailability(state, "activities")}
           emptyAccessAction
+          hasMore={state.activitiesHasMore}
+          loadMoreErrorKey={state.activitiesLoadMoreErrorKey}
+          loadingMore={state.activitiesLoadingMore}
+          onLoadMore={actions.loadMoreActivities}
+        />
+        <TrafficPanel
+          attempts={state.egressAttempts}
+          attemptsAvailability={sourceAvailability(state, "egressAttempts")}
+          connections={state.connections}
+          connectionsAvailability={sourceAvailability(state, "connections")}
+          runs={state.captureRuns}
+          runsAvailability={sourceAvailability(state, "captureRuns")}
         />
         <WorkspaceRoutePanel runs={state.captureRuns} />
         <ManualCapturePanel model={model} />
-        <CapturePanel
-          availability={sourceAvailability(state, "captureRuns")}
-          runs={state.captureRuns}
-        />
-        <ConnectionPanel
-          availability={sourceAvailability(state, "connections")}
-          connections={state.connections}
-        />
-        <EgressPanel
-          attempts={state.egressAttempts}
-          availability={sourceAvailability(state, "egressAttempts")}
-        />
       </div>
     </>
   );
@@ -1476,16 +1476,15 @@ function OverviewPage({
             {t("overview.activity.action")}
           </button>
         </div>
-        <div className="overview-evidence-grid">
-          <CapturePanel
-            availability={sourceAvailability(state, "captureRuns")}
-            runs={state.captureRuns.slice(0, 2)}
-          />
-          <EgressPanel
-            attempts={state.egressAttempts.slice(0, 2)}
-            availability={sourceAvailability(state, "egressAttempts")}
-          />
-        </div>
+        <TrafficPanel
+          attempts={state.egressAttempts}
+          attemptsAvailability={sourceAvailability(state, "egressAttempts")}
+          connections={state.connections}
+          connectionsAvailability={sourceAvailability(state, "connections")}
+          previewRowLimit={5}
+          runs={state.captureRuns}
+          runsAvailability={sourceAvailability(state, "captureRuns")}
+        />
       </section>
     </>
   );
@@ -3185,12 +3184,16 @@ function AccessPanel({
       {!creating && (
         <section className="panel access-directory-panel">
         <div className="section-heading">
-          <div>
-            <h2>{t("access.directory.title")}</h2>
-            <p>{t("access.directory.description")}</p>
-          </div>
-          <button disabled={busy} onClick={beginCreate} type="button">
-            {t("access.create.action")}
+          <h2>{t("access.directory.title")}</h2>
+          <button
+            aria-label={t("access.create.ariaLabel")}
+            className="compact-add-button"
+            disabled={busy}
+            onClick={beginCreate}
+            type="button"
+          >
+            <span aria-hidden="true" className="compact-add-icon">+</span>
+            <span>{t("access.create.action")}</span>
           </button>
         </div>
         {directory.isPending && visibleItems.length === 0 ? (
@@ -4325,8 +4328,11 @@ function ApprovalPanel({
     }
   }, [approvals, selectedApprovalId]);
   return (
-    <section className="panel list-panel">
-      <h2>{t("approvals.title")}</h2>
+    <section className="panel compact-record-panel">
+      <div className="compact-panel-heading">
+        <h2>{t("approvals.title")}</h2>
+        <span className="compact-count">{approvals.length}</span>
+      </div>
       {approvals.length === 0 ? (
         <p className="empty-state">
           {t(
@@ -4336,9 +4342,26 @@ function ApprovalPanel({
           )}
         </p>
       ) : (
-        <ol className="record-list">
+        <ol className="approval-queue">
+          <li aria-hidden="true" className="approval-columns">
+            <span>{t("approval.queue.question")}</span>
+            <span>{t("approval.waiting.label")}</span>
+            <span>{t("approval.expiresAt.label")}</span>
+            <span>{t("approval.queue.actions")}</span>
+          </li>
           {approvals.map((approval) => {
             const selected = approval.id === selectedApprovalId;
+            const quickAllow = approval.choices.find(
+              (choice) =>
+                choice.decision === "allow-once" && choice.scope === "request",
+            );
+            const quickDeny = approval.choices.find(
+              (choice) =>
+                choice.decision === "deny" && choice.scope === "request",
+            );
+            const extendedChoices = approval.choices.filter(
+              (choice) => choice !== quickAllow && choice !== quickDeny,
+            );
             return (
               <li
                 className={selected ? "selected-record" : undefined}
@@ -4348,57 +4371,92 @@ function ApprovalPanel({
                 ref={selected ? selectedApproval : undefined}
                 tabIndex={selected ? -1 : undefined}
               >
-                <h3>{t(approval.titleKey)}</h3>
-                <p>{t(approval.summaryKey)}</p>
-                <dl className="inline-details">
+                <div className="approval-question">
+                  <span
+                    aria-hidden="true"
+                    className={`approval-kind-dot ${approval.kind}`}
+                  />
                   <div>
-                    <dt>{t(subjectLabelKey(approval))}</dt>
-                    <dd>{approvalSubject(approval)}</dd>
+                    <span className="approval-kind">
+                      {t(`approval.kind.${approval.kind}`)}
+                    </span>
+                    <strong title={approvalSubject(approval)}>
+                      {approvalSubject(approval)}
+                    </strong>
                   </div>
-                  {approval.requestCount > 1 ? (
-                    <div>
-                      <dt>{t("approval.waiting.label")}</dt>
-                      <dd>
-                        {t("approval.waiting.value", {
-                          count: approval.requestCount,
-                        })}
-                      </dd>
-                    </div>
-                  ) : null}
-                  <div>
-                    <dt>{t("approval.expiresAt.label")}</dt>
-                    <dd>{formatter.format(new Date(approval.expiresAt))}</dd>
-                  </div>
-                </dl>
-                <div className="button-row">
-                  <Link
-                    className="route-action"
-                    search={{ selected: approval.id }}
-                    to={dashboardRoutePaths.policy}
-                  >
-                    {t("approval.open.action")}
-                  </Link>
-                  {/*
-                  The window offers exactly what the runtime declared. A
-                  hard-coded button can offer an answer the runtime refuses,
-                  or hide one it allows.
-                */}
-                  {approval.choices.map((choice) => (
+                </div>
+                <span className="approval-waiting">
+                  {approval.requestCount > 1 ? approval.requestCount : "—"}
+                </span>
+                <time
+                  className="compact-time"
+                  dateTime={approval.expiresAt}
+                >
+                  {formatter.format(new Date(approval.expiresAt))}
+                </time>
+                <div className="approval-quick-actions">
+                  {quickAllow !== undefined && (
                     <button
-                      className={
-                        choice.decision === "deny" ? "danger" : undefined
-                      }
+                      aria-label={t(quickAllow.labelKey)}
                       disabled={busy || availability !== "ready"}
-                      key={`${choice.decision}:${choice.scope}`}
                       onClick={() =>
-                        void actions.decideApproval(approval, choice)
+                        void actions.decideApproval(approval, quickAllow)
                       }
                       type="button"
                     >
-                      {t(choice.labelKey)}
+                      {t("approval.allowOnce.action")}
                     </button>
-                  ))}
+                  )}
+                  {quickDeny !== undefined && (
+                    <button
+                      aria-label={t(quickDeny.labelKey)}
+                      className="danger quiet-danger"
+                      disabled={busy || availability !== "ready"}
+                      onClick={() =>
+                        void actions.decideApproval(approval, quickDeny)
+                      }
+                      type="button"
+                    >
+                      {t("approval.deny.action")}
+                    </button>
+                  )}
+                  <Link
+                    aria-label={t("approval.open.action")}
+                    className="approval-more-link"
+                    search={{ selected: approval.id }}
+                    to={dashboardRoutePaths.policy}
+                  >
+                    <span aria-hidden="true">•••</span>
+                  </Link>
                 </div>
+                {selected && (
+                  <div className="approval-expanded">
+                    <div>
+                      <h3>{t(approval.titleKey)}</h3>
+                      <p>{t(approval.summaryKey)}</p>
+                    </div>
+                    {extendedChoices.length > 0 && (
+                      <div className="approval-rule-actions">
+                        <span>{t("approval.queue.remember")}</span>
+                        {extendedChoices.map((choice) => (
+                          <button
+                            className={
+                              choice.decision === "deny" ? "danger" : undefined
+                            }
+                            disabled={busy || availability !== "ready"}
+                            key={`${choice.decision}:${choice.scope}`}
+                            onClick={() =>
+                              void actions.decideApproval(approval, choice)
+                            }
+                            type="button"
+                          >
+                            {t(choice.labelKey)}
+                          </button>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                )}
               </li>
             );
           })}
@@ -4428,221 +4486,371 @@ function subjectLabelKey(approval: ApprovalView): string {
     : "approval.tools.label";
 }
 
-/**
- * What is captured, and whether anything has actually come through it.
- *
- * "Is my client going through vibermate" had no answer in the window before
- * this. A run that was launched but has seen no traffic is a different state
- * from one that never started, and a client this build has no release
- * evidence for will never connect at all — it says so here rather than
- * failing later with a transport error nobody can explain.
- */
-function CapturePanel({
-  availability,
-  runs,
+type TrafficView = "runs" | "connections" | "attempts";
+
+const compactPageSize = 10;
+
+function useCompactPage(itemCount: number, resetKey?: string) {
+  const [page, setPage] = useState(0);
+  const pageCount = Math.max(1, Math.ceil(itemCount / compactPageSize));
+  const boundedPage = Math.min(page, pageCount - 1);
+  useEffect(() => setPage(0), [resetKey]);
+  useEffect(() => {
+    setPage((current) => Math.min(current, pageCount - 1));
+  }, [pageCount]);
+  const start = boundedPage * compactPageSize;
+  return {
+    end: Math.min(itemCount, start + compactPageSize),
+    page: boundedPage,
+    pageCount,
+    setPage,
+    start,
+  };
+}
+
+function CompactPager({
+  end,
+  page,
+  pageCount,
+  setPage,
+  start,
+  total,
 }: {
-  readonly availability: SourceAvailability;
-  readonly runs: readonly CaptureRunRecord[];
+  readonly end: number;
+  readonly page: number;
+  readonly pageCount: number;
+  readonly setPage: (page: number) => void;
+  readonly start: number;
+  readonly total: number;
 }) {
   const { t } = useTranslation();
+  if (total <= compactPageSize) {
+    return null;
+  }
   return (
-    <section className="panel list-panel">
-      <h2>{t("capture.title")}</h2>
-      {runs.length === 0 ? (
-        <p className="empty-state">
-          {t(
-            availability === "ready"
-              ? "capture.empty"
-              : `common.data.${availability}`,
-          )}
-        </p>
-      ) : (
-        <ol className="record-list">
-          {runs.map((run) => (
-            <li key={run.id}>
-              <h3>{run.executableLabel}</h3>
-              <dl className="inline-details">
-                <div>
-                  <dt>{t("capture.state.label")}</dt>
-                  <dd>{t(`capture.state.${run.state}`)}</dd>
-                </div>
-                <div>
-                  <dt>{t("capture.observation.label")}</dt>
-                  <dd>{t(`capture.observation.${run.observation}`)}</dd>
-                </div>
-                <div>
-                  <dt>{t("capture.adapterState.label")}</dt>
-                  <dd
-                    className={
-                      run.clientAdapterState === "failed"
-                        ? "attention"
-                        : undefined
-                    }
-                  >
-                    {t(`capture.adapterState.${run.clientAdapterState}`)}
-                  </dd>
-                </div>
-                <div>
-                  <dt>{t("capture.recognition.label")}</dt>
-                  <dd
-                    className={
-                      run.clientRecognition === "verified"
-                        ? undefined
-                        : "attention"
-                    }
-                  >
-                    {t(`capture.recognition.${run.clientRecognition}`)}
-                  </dd>
-                </div>
-                {run.clientAdapterReason !== undefined && (
-                  <div>
-                    <dt>{t("capture.adapterReason.label")}</dt>
-                    <dd className="identifier">{run.clientAdapterReason}</dd>
-                  </div>
-                )}
-              </dl>
-            </li>
-          ))}
-        </ol>
-      )}
-    </section>
+    <nav className="compact-pager" aria-label={t("pagination.label")}>
+      <span>
+        {t("pagination.range", { from: start + 1, to: end, total })}
+      </span>
+      <div>
+        <button
+          aria-label={t("pagination.previous")}
+          disabled={page === 0}
+          onClick={() => setPage(page - 1)}
+          type="button"
+        >
+          <span aria-hidden="true">‹</span>
+        </button>
+        <button
+          aria-label={t("pagination.next")}
+          disabled={page + 1 >= pageCount}
+          onClick={() => setPage(page + 1)}
+          type="button"
+        >
+          <span aria-hidden="true">›</span>
+        </button>
+      </div>
+    </nav>
   );
 }
 
-/**
- * What connected where. Design 06 4.1 is what makes this screen possible
- * without decrypting anything: the record says who connected, where, whether
- * it was refused, whether it was read or forwarded blind, and how much
- * crossed. It never says what was sent, and neither does this panel.
- */
-function ConnectionPanel({
-  availability,
-  connections,
-}: {
-  readonly availability: SourceAvailability;
-  readonly connections: readonly ConnectionRecord[];
-}) {
-  const { t } = useTranslation();
-  return (
-    <section className="panel list-panel">
-      <h2>{t("connections.title")}</h2>
-      {connections.length === 0 ? (
-        <p className="empty-state">
-          {t(
-            availability === "ready"
-              ? "connections.empty"
-              : `common.data.${availability}`,
-          )}
-        </p>
-      ) : (
-        <ol className="record-list">
-          {connections.map((connection) => (
-            <li key={connection.connectionId}>
-              <h3>
-                {connection.requestedHost}:{connection.port}
-              </h3>
-              <dl className="inline-details">
-                <div>
-                  <dt>{t("connections.source.label")}</dt>
-                  <dd>
-                    {connection.sourceLabel ?? t("connections.source.unknown")}
-                    {" · "}
-                    {t(`connections.confidence.${connection.sourceConfidence}`)}
-                  </dd>
-                </div>
-                <div>
-                  <dt>{t("connections.decision.label")}</dt>
-                  <dd>
-                    {connection.decision === undefined
-                      ? t("connections.decision.undecided")
-                      : t(`connections.decision.${connection.decision}`)}
-                    {connection.ruleId === undefined
-                      ? ""
-                      : ` · ${connection.ruleId}`}
-                  </dd>
-                </div>
-                <div>
-                  <dt>{t("connections.decryption.label")}</dt>
-                  <dd>
-                    {t(`connections.decryption.${connection.decryption}`)}
-                  </dd>
-                </div>
-                <div>
-                  <dt>{t("connections.bytes.label")}</dt>
-                  <dd>
-                    {t("connections.bytes.value", {
-                      up: connection.bytesUp,
-                      down: connection.bytesDown,
-                    })}
-                  </dd>
-                </div>
-              </dl>
-            </li>
-          ))}
-        </ol>
-      )}
-    </section>
-  );
-}
-
-/**
- * Where each request actually went. A connection can carry several requests,
- * so an attempt is a separate fact: the last one must not overwrite the
- * first one's destination.
- */
-function EgressPanel({
+/** A dense, bounded view of the three distinct runtime observation planes. */
+function TrafficPanel({
   attempts,
-  availability,
+  attemptsAvailability,
+  connections,
+  connectionsAvailability,
+  previewRowLimit,
+  runs,
+  runsAvailability,
 }: {
   readonly attempts: readonly EgressAttemptRecord[];
-  readonly availability: SourceAvailability;
+  readonly attemptsAvailability: SourceAvailability;
+  readonly connections: readonly ConnectionRecord[];
+  readonly connectionsAvailability: SourceAvailability;
+  readonly previewRowLimit?: number;
+  readonly runs: readonly CaptureRunRecord[];
+  readonly runsAvailability: SourceAvailability;
 }) {
-  const { t } = useTranslation();
+  const { t, i18n } = useTranslation();
+  const [view, setView] = useState<TrafficView>("runs");
+  const rows =
+    view === "runs" ? runs : view === "connections" ? connections : attempts;
+  const availability =
+    view === "runs"
+      ? runsAvailability
+      : view === "connections"
+        ? connectionsAvailability
+        : attemptsAvailability;
+  const emptyKey =
+    view === "runs"
+      ? "capture.empty"
+      : view === "connections"
+        ? "connections.empty"
+        : "egress.empty";
+  const pagination = useCompactPage(rows.length, view);
+  const visibleRows =
+    previewRowLimit === undefined
+      ? rows.slice(pagination.start, pagination.end)
+      : rows.slice(0, previewRowLimit);
+  const formatter = useMemo(
+    () =>
+      new Intl.DateTimeFormat(i18n.language, {
+        day: "numeric",
+        hour: "2-digit",
+        minute: "2-digit",
+        month: "short",
+      }),
+    [i18n.language],
+  );
+  const number = useMemo(
+    () => new Intl.NumberFormat(i18n.language, { notation: "compact" }),
+    [i18n.language],
+  );
+  const tabs: readonly {
+    readonly count: number;
+    readonly key: TrafficView;
+    readonly label: string;
+  }[] = [
+    { count: runs.length, key: "runs", label: t("capture.title") },
+    {
+      count: connections.length,
+      key: "connections",
+      label: t("connections.title"),
+    },
+    { count: attempts.length, key: "attempts", label: t("egress.title") },
+  ];
   return (
-    <section className="panel list-panel">
-      <h2>{t("egress.title")}</h2>
-      {attempts.length === 0 ? (
+    <section className="panel traffic-panel">
+      <div className="compact-panel-heading traffic-heading">
+        <h2>{t("activity.traffic.title")}</h2>
+        <div className="compact-tabs" role="tablist">
+          {tabs.map((tab) => (
+            <button
+              aria-selected={view === tab.key}
+              key={tab.key}
+              onClick={() => setView(tab.key)}
+              role="tab"
+              type="button"
+            >
+              {tab.label}
+              <span>{tab.count}</span>
+            </button>
+          ))}
+        </div>
+      </div>
+      {rows.length === 0 ? (
         <p className="empty-state">
-          {t(
-            availability === "ready"
-              ? "egress.empty"
-              : `common.data.${availability}`,
-          )}
+          {t(availability === "ready" ? emptyKey : `common.data.${availability}`)}
         </p>
       ) : (
-        <ol className="record-list">
-          {attempts.map((attempt) => (
-            <li key={attempt.id}>
-              <h3>{attempt.targetOrigin}</h3>
-              <dl className="inline-details">
-                <div>
-                  <dt>{t("egress.purpose.label")}</dt>
-                  <dd>{t(`egress.purpose.${attempt.purpose}`)}</dd>
-                </div>
-                <div>
-                  <dt>{t("egress.outcome.label")}</dt>
-                  <dd>
-                    {attempt.terminal && attempt.outcome !== undefined
-                      ? t(`egress.outcome.${attempt.outcome}`)
-                      : t("egress.outcome.inFlight")}
-                    {attempt.errorClass === undefined
-                      ? ""
-                      : ` · ${attempt.errorClass}`}
-                  </dd>
-                </div>
-                <div>
-                  <dt>{t("egress.bytes.label")}</dt>
-                  <dd>
-                    {t("egress.bytes.value", {
-                      out: attempt.bytesOut,
-                      in: attempt.bytesIn,
-                    })}
-                  </dd>
-                </div>
-              </dl>
-            </li>
-          ))}
-        </ol>
+        <div
+          aria-label={tabs.find((tab) => tab.key === view)?.label}
+          className="compact-table-scroll"
+          role="tabpanel"
+        >
+          {view === "runs" ? (
+            <table
+              aria-label={t("capture.title")}
+              className="compact-table traffic-table"
+            >
+              <thead>
+                <tr>
+                  <th>{t("table.state")}</th>
+                  <th>{t("table.agent")}</th>
+                  <th>{t("table.workspace")}</th>
+                  <th>{t("capture.observation.label")}</th>
+                  <th>{t("capture.recognition.label")}</th>
+                  <th>{t("table.started")}</th>
+                </tr>
+              </thead>
+              <tbody>
+                {(visibleRows as readonly CaptureRunRecord[]).map((run) => {
+                  const recognitionDetail = [
+                    t(`capture.adapterState.${run.clientAdapterState}`),
+                    t(`capture.recognition.${run.clientRecognition}`),
+                    run.clientAdapterReason,
+                  ]
+                    .filter((part) => part !== undefined && part !== "")
+                    .join(" · ");
+                  return (
+                    <tr key={run.id}>
+                      <td>
+                        <span className={`compact-state ${run.state}`}>
+                          <span aria-hidden="true" />
+                          {t(`capture.state.${run.state}`)}
+                        </span>
+                      </td>
+                      <td className="table-primary">{run.executableLabel}</td>
+                      <td
+                        className="table-ellipsis"
+                        title={run.workspaceLabel ?? run.cwd}
+                      >
+                        {run.workspaceLabel ?? run.cwd}
+                      </td>
+                      <td>{t(`capture.observation.${run.observation}`)}</td>
+                      <td
+                        aria-label={recognitionDetail}
+                        title={recognitionDetail}
+                      >
+                        <span>
+                          {t(
+                            `capture.recognitionShort.${run.clientRecognition}`,
+                          )}
+                        </span>
+                        <span className="visually-hidden">
+                          {t(`capture.adapterState.${run.clientAdapterState}`)}
+                        </span>
+                        <span className="visually-hidden">
+                          {t(`capture.recognition.${run.clientRecognition}`)}
+                        </span>
+                        {run.clientAdapterReason !== undefined && (
+                          <span className="visually-hidden">
+                            {run.clientAdapterReason}
+                          </span>
+                        )}
+                      </td>
+                      <td className="compact-time">
+                        <time dateTime={run.createdAt}>
+                          {formatter.format(new Date(run.createdAt))}
+                        </time>
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          ) : view === "connections" ? (
+            <table
+              aria-label={t("connections.title")}
+              className="compact-table traffic-table"
+            >
+              <thead>
+                <tr>
+                  <th>{t("connections.decision.label")}</th>
+                  <th>{t("table.destination")}</th>
+                  <th>{t("connections.source.label")}</th>
+                  <th>{t("connections.decryption.label")}</th>
+                  <th>{t("connections.bytes.label")}</th>
+                  <th>{t("table.started")}</th>
+                </tr>
+              </thead>
+              <tbody>
+                {(visibleRows as readonly ConnectionRecord[]).map((connection) => {
+                  const sourceLabel =
+                    connection.sourceLabel ?? t("connections.source.unknown");
+                  const confidence = t(
+                    `connections.confidence.${connection.sourceConfidence}`,
+                  );
+                  return (
+                    <tr key={connection.connectionId}>
+                      <td>
+                        <span
+                          className={`compact-state ${connection.decision ?? "ask"}`}
+                        >
+                          <span aria-hidden="true" />
+                          {connection.decision === undefined
+                            ? t("connections.decision.undecided")
+                            : t(`connections.decision.${connection.decision}`)}
+                        </span>
+                        {connection.ruleId !== undefined && (
+                          <span className="table-secondary">
+                            {connection.ruleId}
+                          </span>
+                        )}
+                      </td>
+                      <td className="table-primary identifier">
+                        {connection.requestedHost}:{connection.port}
+                      </td>
+                      <td title={`${sourceLabel} · ${confidence}`}>
+                        {sourceLabel}
+                        <span className="table-secondary">{confidence}</span>
+                      </td>
+                      <td>
+                        {t(`connections.decryption.${connection.decryption}`)}
+                      </td>
+                      <td
+                        aria-label={t("connections.bytes.value", {
+                          down: connection.bytesDown,
+                          up: connection.bytesUp,
+                        })}
+                        className="table-numeric"
+                      >
+                        ↑{number.format(connection.bytesUp)} ↓
+                        {number.format(connection.bytesDown)}
+                      </td>
+                      <td className="compact-time">
+                        <time dateTime={connection.startedAt}>
+                          {formatter.format(new Date(connection.startedAt))}
+                        </time>
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          ) : (
+            <table
+              aria-label={t("egress.title")}
+              className="compact-table traffic-table"
+            >
+              <thead>
+                <tr>
+                  <th>{t("egress.outcome.label")}</th>
+                  <th>{t("table.destination")}</th>
+                  <th>{t("egress.purpose.label")}</th>
+                  <th>{t("table.authority")}</th>
+                  <th>{t("egress.bytes.label")}</th>
+                  <th>{t("table.started")}</th>
+                </tr>
+              </thead>
+              <tbody>
+                {(visibleRows as readonly EgressAttemptRecord[]).map((attempt) => (
+                  <tr key={attempt.id}>
+                    <td>
+                      <span
+                        className={`compact-state ${attempt.terminal ? (attempt.outcome ?? "failed") : "pending"}`}
+                      >
+                        <span aria-hidden="true" />
+                        {attempt.terminal && attempt.outcome !== undefined
+                          ? t(`egress.outcome.${attempt.outcome}`)
+                          : t("egress.outcome.inFlight")}
+                      </span>
+                      {attempt.errorClass !== undefined && (
+                        <span className="table-secondary">
+                          {attempt.errorClass}
+                        </span>
+                      )}
+                    </td>
+                    <td className="table-primary identifier">
+                      {attempt.targetOrigin}
+                    </td>
+                    <td>{t(`egress.purpose.${attempt.purpose}`)}</td>
+                    <td>{attempt.decision.authority}</td>
+                    <td
+                      aria-label={t("egress.bytes.value", {
+                        in: attempt.bytesIn,
+                        out: attempt.bytesOut,
+                      })}
+                      className="table-numeric"
+                    >
+                      ↑{number.format(attempt.bytesOut)} ↓
+                      {number.format(attempt.bytesIn)}
+                    </td>
+                    <td className="compact-time">
+                      <time dateTime={attempt.startedAt}>
+                        {formatter.format(new Date(attempt.startedAt))}
+                      </time>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          )}
+        </div>
+      )}
+      {previewRowLimit === undefined && (
+        <CompactPager {...pagination} total={rows.length} />
       )}
     </section>
   );
@@ -4673,14 +4881,21 @@ function ActivityPanel({
   const formatter = useMemo(
     () =>
       new Intl.DateTimeFormat(i18n.language, {
-        dateStyle: "medium",
-        timeStyle: "short",
+        day: "numeric",
+        hour: "2-digit",
+        minute: "2-digit",
+        month: "short",
       }),
     [i18n.language],
   );
+  const pagination = useCompactPage(activities.length);
+  const visibleActivities = activities.slice(pagination.start, pagination.end);
   return (
-    <section className="panel list-panel">
-      <h2>{title ?? t("activity.title")}</h2>
+    <section className="panel compact-record-panel activity-panel">
+      <div className="compact-panel-heading">
+        <h2>{title ?? t("activity.title")}</h2>
+        <span className="compact-count">{activities.length}</span>
+      </div>
       {activities.length === 0 ? (
         <div className="empty-state activity-empty">
           <p>
@@ -4697,47 +4912,62 @@ function ActivityPanel({
           ) : null}
         </div>
       ) : (
-        <ol className="record-list activity-list">
-          {activities.map((record) => {
-            const knownStatus =
-              record.status === "succeeded" ||
-              record.status === "pending" ||
-              record.status === "failed" ||
-              record.status === "canceled";
-            return (
-              <li key={record.id}>
-                <div>
-                  <Link
-                    className="activity-request-link"
-                    params={{ exchangeId: record.id }}
-                    search={{}}
-                    to={dashboardTaskRoutePaths.activityRequest}
-                  >
-                    <h3>{t("activity.request.summary", { id: record.id })}</h3>
-                  </Link>
-                  <dl className="inline-details activity-summary">
-                    <div>
-                      <dt>{t("activity.access.label")}</dt>
-                      <dd>{record.accessId}</dd>
-                    </div>
-                    <div>
-                      <dt>{t("activity.occurredAt.label")}</dt>
-                      <dd>{formatter.format(new Date(record.occurredAt))}</dd>
-                    </div>
-                  </dl>
-                </div>
-                <span
-                  className={`activity-status ${knownStatus ? record.status : "neutral"}`}
-                >
-                  {knownStatus
-                    ? t(`activity.status.${record.status}`)
-                    : record.status}
-                </span>
-              </li>
-            );
-          })}
-        </ol>
+        <div className="compact-table-scroll">
+          <table
+            aria-label={title ?? t("activity.title")}
+            className="compact-table activity-table"
+          >
+            <thead>
+              <tr>
+                <th>{t("table.state")}</th>
+                <th>{t("table.request")}</th>
+                <th>{t("activity.access.label")}</th>
+                <th>{t("activity.occurredAt.label")}</th>
+              </tr>
+            </thead>
+            <tbody>
+              {visibleActivities.map((record) => {
+                const knownStatus =
+                  record.status === "succeeded" ||
+                  record.status === "pending" ||
+                  record.status === "failed" ||
+                  record.status === "canceled";
+                return (
+                  <tr key={record.id}>
+                    <td>
+                      <span
+                        className={`compact-state ${knownStatus ? record.status : "neutral"}`}
+                      >
+                        <span aria-hidden="true" />
+                        {knownStatus
+                          ? t(`activity.status.${record.status}`)
+                          : record.status}
+                      </span>
+                    </td>
+                    <td className="table-primary identifier">
+                      <Link
+                        className="activity-request-link"
+                        params={{ exchangeId: record.id }}
+                        search={{}}
+                        to={dashboardTaskRoutePaths.activityRequest}
+                      >
+                        {record.id}
+                      </Link>
+                    </td>
+                    <td>{record.accessId}</td>
+                    <td className="compact-time">
+                      <time dateTime={record.occurredAt}>
+                        {formatter.format(new Date(record.occurredAt))}
+                      </time>
+                    </td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        </div>
       )}
+      <CompactPager {...pagination} total={activities.length} />
       {activities.length > 0 &&
       (hasMore || loadingMore || loadMoreErrorKey !== undefined) ? (
         <div className="activity-pagination">
