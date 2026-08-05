@@ -452,6 +452,18 @@ function queryDefaults(model: DashboardQueryRuntime) {
   };
 }
 
+function queryHasUnresolvedError(query: {
+  readonly dataUpdatedAt: number;
+  readonly error: unknown;
+  readonly errorUpdatedAt: number;
+}): boolean {
+  // TanStack may clear `error` while a background refetch is in flight. Keep
+  // the last failed observation authoritative until a later successful value
+  // replaces it; otherwise a polling failure makes availability flicker every
+  // time the next request starts.
+  return query.error !== null || query.errorUpdatedAt > query.dataUpdatedAt;
+}
+
 export function useDashboardQueryRuntime(
   model: DashboardQueryRuntime,
 ): DashboardRuntimeState {
@@ -852,7 +864,7 @@ export function useDashboardQueryRuntime(
   ] as const;
   const loading = sourceQueries.some(({ query }) => query.isPending);
   const unavailableSources = sourceQueries
-    .filter(({ query }) => query.error !== null)
+    .filter(({ query }) => queryHasUnresolvedError(query))
     .map(({ source }) => source);
   const refreshedAtBySource: Partial<Record<DashboardSource, string>> = {};
   for (const { query, source } of sourceQueries) {
@@ -864,8 +876,9 @@ export function useDashboardQueryRuntime(
     0,
     ...sourceQueries.map(({ query }) => query.dataUpdatedAt),
   );
-  const queryError = sourceQueries.find(({ query }) => query.error !== null)
-    ?.query.error;
+  const queryError = sourceQueries.find(({ query }) =>
+    queryHasUnresolvedError(query),
+  )?.query.error;
   const state = useMemo<DashboardState>(
     () => ({
       activities: activityFeed.records,

@@ -384,14 +384,19 @@ test("distinguishes unavailable information from a stale update", async ({
   await installDesktopApi(page, { failFirstSource: true });
   await page.goto("/#overview");
 
-  const alert = page.getByRole("alert");
-  await expect(alert).toContainText("Some information is unavailable");
-  await expect(alert).not.toContainText("last update");
+  const heading = page.getByRole("heading", { name: "Overview" });
+  await expect(heading).toBeVisible();
+  const initialHeadingBox = await heading.boundingBox();
+  expect(initialHeadingBox).not.toBeNull();
+  await expect(page.getByRole("alert")).toHaveCount(0);
   const approvalMetric = page.getByRole("button", {
     name: /Pending decisions/u,
   });
   await expect(approvalMetric).toContainText("Unavailable · decisions");
   await expect(approvalMetric).not.toContainText("Stale since");
+  await page.waitForTimeout(2_200);
+  const refreshedHeadingBox = await heading.boundingBox();
+  expect(refreshedHeadingBox?.y).toBe(initialHeadingBox?.y);
   expect(
     errors.filter(
       (error) =>

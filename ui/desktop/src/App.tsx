@@ -106,24 +106,6 @@ function sourceAvailability(
   return "loading";
 }
 
-function sourceIsRelevantToView(
-  source: DashboardSource,
-  view: DashboardView,
-): boolean {
-  if (view === "overview") {
-    return true;
-  }
-  if (view === "activity") {
-    return ["activities", "captureRuns", "connections", "egressAttempts"].includes(
-      source,
-    );
-  }
-  if (view === "policy") {
-    return source === "approvals";
-  }
-  return false;
-}
-
 const DashboardRuntimeContext = createContext<DashboardRuntime | undefined>(
   undefined,
 );
@@ -191,23 +173,9 @@ export function DashboardShell({
     state.busy ||
     offlineAvailability !== "ready" ||
     (holdAction === "enter" ? holdState !== "online" : holdState !== "held");
-  const relevantUnavailableSources = state.unavailableSources.filter((source) =>
-    sourceIsRelevantToView(source, view),
-  );
-  const partialErrorKey = relevantUnavailableSources.some(
-    (source) => state.refreshedAtBySource[source] === undefined,
-  )
-    ? "error.dashboard_partial_unavailable"
-    : "error.dashboard_partial";
   const errorMessage =
     state.errorKey === "error.dashboard_partial"
-      ? relevantUnavailableSources.length === 0
-        ? undefined
-        : t(partialErrorKey, {
-            sources: relevantUnavailableSources
-              .map((source) => t(`dashboard.source.${source}`))
-              .join(", "),
-          })
+      ? undefined
       : state.errorKey === undefined
         ? undefined
         : t(state.errorKey);

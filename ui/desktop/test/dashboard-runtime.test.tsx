@@ -502,6 +502,51 @@ describe("TanStack Query dashboard runtime", () => {
     await model.dispose();
   });
 
+  it("keeps a failed source unavailable until its background refresh succeeds", async () => {
+    const client = clientFixture();
+    let captureAttempt = 0;
+    let finishCaptureRefresh:
+      | ((page: { readonly items: readonly [] }) => void)
+      | undefined;
+    vi.mocked(client.captureRuns).mockImplementation(() => {
+      captureAttempt += 1;
+      if (captureAttempt === 1) {
+        return Promise.reject(new Error("capture unavailable"));
+      }
+      return new Promise((resolve) => {
+        finishCaptureRefresh = resolve;
+      });
+    });
+    const model = new DashboardQueryRuntime(client, 60_000);
+    const dashboard = renderDashboard(model);
+
+    await waitFor(() =>
+      expect(dashboard.result.current.state.unavailableSources).toContain(
+        "captureRuns",
+      ),
+    );
+
+    let refresh: Promise<void> | undefined;
+    act(() => {
+      refresh = dashboard.result.current.actions.refresh();
+    });
+    await waitFor(() => expect(client.captureRuns).toHaveBeenCalledTimes(2));
+    expect(dashboard.result.current.state.unavailableSources).toContain(
+      "captureRuns",
+    );
+
+    finishCaptureRefresh?.({ items: [] });
+    await act(async () => refresh);
+    await waitFor(() =>
+      expect(dashboard.result.current.state.unavailableSources).not.toContain(
+        "captureRuns",
+      ),
+    );
+
+    dashboard.unmount();
+    await model.dispose();
+  });
+
   it("continues loopback reads while the browser reports offline", async () => {
     onlineManager.setOnline(false);
     const client = clientFixture();

@@ -339,7 +339,7 @@
   "common.refresh.action": "刷新",
   "dashboard.source.activities": "请求记录",
   "dashboard.source.approvals": "待处理决定",
-  "dashboard.source.captureRuns": "已启动工具",
+  "dashboard.source.captureRuns": "捕获客户端",
   "dashboard.source.connections": "连接记录",
   "dashboard.source.egressAttempts": "对外请求",
   "dashboard.source.offline": "离线模式",

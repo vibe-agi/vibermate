@@ -339,7 +339,7 @@
   "common.refresh.action": "Refresh",
   "dashboard.source.activities": "requests",
   "dashboard.source.approvals": "decisions",
-  "dashboard.source.captureRuns": "started tools",
+  "dashboard.source.captureRuns": "captured clients",
   "dashboard.source.connections": "connections",
   "dashboard.source.egressAttempts": "outbound requests",
   "dashboard.source.offline": "offline mode",
