@@ -23,6 +23,7 @@ import (
 func TestLauncherRelaysSIGINTAndFinishesFixedCodexCaptureRun(
 	t *testing.T,
 ) {
+	deadline := time.Now().Add(30 * time.Second)
 	directory := t.TempDir()
 	readyPath := filepath.Join(directory, "ready")
 	outputPath := filepath.Join(directory, "child-output")
@@ -118,11 +119,18 @@ while :; do sleep 1; done
 		code, runErr := launcher.Run(context.Background(), []string{"codex"})
 		finished <- launcherOutcome{code: code, err: runErr}
 	}()
-	waitForChildReady(t, readyPath, finished, 10*time.Second)
-	waitForHeartbeat(t, control, 10*time.Second)
+	waitForChildReady(
+		t,
+		readyPath,
+		finished,
+		remainingSignalTestBudget(t, deadline),
+	)
+	waitForHeartbeat(t, control, remainingSignalTestBudget(t, deadline))
 	if err := syscall.Kill(os.Getpid(), syscall.SIGINT); err != nil {
 		t.Fatalf("send SIGINT to launcher: %v", err)
 	}
+	convergence := time.NewTimer(remainingSignalTestBudget(t, deadline))
+	defer convergence.Stop()
 	select {
 	case outcome := <-finished:
 		if outcome.err != nil || outcome.code != 42 {
@@ -132,7 +140,7 @@ while :; do sleep 1; done
 				outcome.err,
 			)
 		}
-	case <-time.After(10 * time.Second):
+	case <-convergence.C:
 		t.Fatal("fixed Codex child did not converge after SIGINT")
 	}
 	if _, err := os.Stat(interruptedPath); err != nil {
@@ -156,6 +164,15 @@ while :; do sleep 1; done
 		control.finishCalls != 1 {
 		t.Fatalf("fixed Codex control lifecycle = %+v", control)
 	}
+}
+
+func remainingSignalTestBudget(t *testing.T, deadline time.Time) time.Duration {
+	t.Helper()
+	remaining := time.Until(deadline)
+	if remaining <= 0 {
+		t.Fatal("fixed Codex signal integration exceeded its total deadline")
+	}
+	return remaining
 }
 
 type launcherOutcome struct {

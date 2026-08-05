@@ -159,6 +159,11 @@ test("lists existing tools and creates the next one without asking for a name", 
   await expect(
     page.getByRole("button", { name: /^Use the tool's current login/u }),
   ).toHaveAttribute("aria-pressed", "true");
+  await expect(
+    page.getByText(
+      "Supported model requests keep their original shape and streaming. VibeMate records operational evidence, sends only to the exact original service, and stops unsupported request types locally.",
+    ),
+  ).toBeVisible();
   await expect(page.getByLabel("API Key")).toHaveCount(0);
   await expect(
     page.getByRole("button", { name: "Save and enable" }),

@@ -683,6 +683,10 @@ func TestARealResponsesClientReachesAModelThroughVibermate(t *testing.T) {
 	}
 	aggregate.AgentEndpoint.ClientOrigin = clientOrigin
 	aggregate.AgentEndpoint.ClientDialect = access.DialectOpenAIResponses
+	aggregate, err = access.RefreshOriginalPassthrough(aggregate)
+	if err != nil {
+		t.Fatalf("refresh Core original passthrough profile: %v", err)
+	}
 	if write, err := runtime.AccessWriter().WriteAccess(
 		context.Background(),
 		access.WriteCommand{ExpectedRevision: 0, Aggregate: aggregate},
