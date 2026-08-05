@@ -1,8 +1,9 @@
 # Safe Access Retirement Closure
 
-Status: implementation_complete_evidence_pending
+Status: complete
 Created: 2026-08-05
 Implementation baseline: `e3f5ffae88957692d376390d3749f707c80b003f`
+Implementation candidate: `5bcb6d8b66f4e3bf550ff93dd58933d47596c9d2`
 
 ## Goal
 
@@ -62,6 +63,10 @@ row into permission to reuse the same durable identity.
   single Activity event, strict closed response validation, and UI workflow.
 - Full Go, race-touched packages, vet, structural/cross-platform builds,
   TypeScript, React, and Playwright checks.
+
+All evidence above passed from the clean implementation candidate. The
+development macOS bundle was then rebuilt from that commit and both the
+Desktop process and packaged daemon reached their live loopback listeners.
 
 ## Explicitly deferred
 
