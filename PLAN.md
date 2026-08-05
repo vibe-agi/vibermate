@@ -1,9 +1,12 @@
 # Reversible Access Lifecycle Closure
 
-Status: in_progress
+Status: completed
 Created: 2026-08-05
 Implementation baseline: `ce80b657a37afc240861ce27b2271cfda35bc5da`
 Design authority: `vibermate-design` at `e856138a0e04761120319ec76f21204a92c0e119`
+Implementation candidate: `b12b6a4fa2d759a0c522f4c934656ee2fe76953f`
+Design evidence sync: `vibermate-design` at `e0854723486bd62349ea38ed547fac443330c127`
+Evidence archive: `docs/evidence/2026-08-05-reversible-access-lifecycle-closure.md`
 
 ## Goal
 
@@ -45,5 +48,8 @@ restore only future admissions through one typed CAS transition.
 
 ## Completion statement
 
-This statement will be filled only after the implementation and evidence gates
-are complete.
+> An existing Access can be disabled without deleting its configuration or
+> history and can later be re-enabled. Each change is one aggregate-local CAS;
+> disable withdraws only future admission, re-enable publishes only for future
+> requests, and ambiguous projection state is never displayed as success. Safe
+> deletion remains deliberately absent.
