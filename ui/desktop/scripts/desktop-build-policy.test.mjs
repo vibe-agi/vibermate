@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { readdirSync, readFileSync } from "node:fs";
 import test from "node:test";
 import {
   bundleProfileFromEnvironment,
@@ -22,6 +23,37 @@ import {
   validatePreparedBundle,
   validateReleaseToolchains,
 } from "./desktop-build-policy.mjs";
+
+test("selected brand assets stay pinned, local, and attributed", () => {
+  const iconDirectory = new URL("../src/assets/brand-icons/", import.meta.url);
+  assert.deepEqual(readdirSync(iconDirectory).sort(), [
+    "README.md",
+    "anthropic.svg",
+    "claude-code.svg",
+    "codex.svg",
+    "openai.svg",
+  ]);
+
+  const sourceNotice = readFileSync(new URL("README.md", iconDirectory), "utf8");
+  assert.match(sourceNotice, /f07e9be35aef452ce735f95ea8204a14ecc513f7/u);
+  assert.match(sourceNotice, /Compatible and custom services deliberately use/u);
+
+  for (const filename of readdirSync(iconDirectory).filter((name) =>
+    name.endsWith(".svg"),
+  )) {
+    const svg = readFileSync(new URL(filename, iconDirectory), "utf8");
+    assert.match(svg, /^<svg\b/u);
+    assert.match(svg, /viewBox="0 0 24 24"/u);
+    assert.doesNotMatch(svg, /<script\b|\bhref\s*=|\bon\w+\s*=/iu);
+  }
+
+  const license = readFileSync(
+    new URL("../public/licenses/lobe-icons.txt", import.meta.url),
+    "utf8",
+  );
+  assert.match(license, /^MIT License/u);
+  assert.match(license, /Copyright \(c\) 2023 LobeHub/u);
+});
 
 test("sidecar profiles are explicit and non-development builds use native secrets", () => {
   assert.equal(parseSidecarProfile(["--profile=development"]), "development");

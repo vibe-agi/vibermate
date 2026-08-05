@@ -63,6 +63,15 @@
     --deny-soft: #3c2524;
     --review: #b3a1df;
   }
+
+  .access-service-mark.anthropic,
+  .access-service-mark.openai {
+    background: #303030;
+  }
+
+  .brand-icon.monochrome {
+    filter: invert(1);
+  }
 }
 
 * {
@@ -1468,10 +1477,15 @@ dd {
   font-weight: 750;
 }
 
-.access-service-mark.custom {
+.access-service-mark.compatible {
   color: var(--signal);
   background: var(--signal-soft);
-  font-family: var(--mono);
+}
+
+.access-service-mark.anthropic,
+.access-service-mark.openai {
+  color: #202020;
+  background: #f0f0f0;
 }
 
 .access-service-fields {
@@ -1543,7 +1557,6 @@ dd {
 }
 
 .access-app-mark.claude {
-  color: #c15f3c;
   background: #fff0e8;
 }
 
@@ -1566,6 +1579,14 @@ dd {
   stroke-linecap: round;
   stroke-linejoin: round;
   stroke-width: 2.2;
+}
+
+.brand-icon {
+  display: block;
+  width: 20px;
+  height: 20px;
+  object-fit: contain;
+  user-select: none;
 }
 
 .access-app-option-copy {
@@ -1909,12 +1930,6 @@ dd {
   display: grid;
   min-width: 0;
   gap: 0.15rem;
-}
-
-.access-service-mark.anthropic,
-.access-service-mark.anthropic-compatible {
-  color: #fff8ef;
-  background: #c6663d;
 }
 
 .access-route-state {

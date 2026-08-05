@@ -32,6 +32,7 @@ import {
   type CodexLoginPreset,
   validAccessForm,
 } from "./access-form.ts";
+import { BrandIcon } from "./brand-icons.tsx";
 import {
   DashboardQueryRuntime,
   controlErrorKey,
@@ -2114,27 +2115,10 @@ function candidateProviderForTarget(
 
 function AccessAppIcon({ preset }: { readonly preset: AccessAppPreset }) {
   if (preset === "claude") {
-    return (
-      <svg
-        aria-hidden="true"
-        className="access-app-icon"
-        viewBox="0 0 32 32"
-      >
-        <path d="M16 3v10M16 19v10M3 16h10M19 16h10M6.8 6.8l7.1 7.1M18.1 18.1l7.1 7.1M25.2 6.8l-7.1 7.1M13.9 18.1l-7.1 7.1" />
-      </svg>
-    );
+    return <BrandIcon name="claude-code" />;
   }
   if (preset === "codex") {
-    return (
-      <svg
-        aria-hidden="true"
-        className="access-app-icon"
-        viewBox="0 0 32 32"
-      >
-        <path d="M16 4.5a7.2 7.2 0 0 1 6.2 3.6 7.2 7.2 0 0 1 4.6 10.7 7.2 7.2 0 0 1-8.1 8.2 7.2 7.2 0 0 1-10.9-4.5A7.2 7.2 0 0 1 9.1 10 7.2 7.2 0 0 1 16 4.5Z" />
-        <path d="m11.2 13.2 4.8-2.8 4.8 2.8v5.6L16 21.6l-4.8-2.8Z" />
-      </svg>
-    );
+    return <BrandIcon name="codex" />;
   }
   return (
     <svg aria-hidden="true" className="access-app-icon" viewBox="0 0 32 32">
@@ -2146,16 +2130,37 @@ function AccessAppIcon({ preset }: { readonly preset: AccessAppPreset }) {
   );
 }
 
+function CompatibleServiceIcon() {
+  return (
+    <svg aria-hidden="true" className="access-app-icon" viewBox="0 0 32 32">
+      <circle cx="8" cy="16" r="3" />
+      <circle cx="24" cy="16" r="3" />
+      <path d="M11 16h10M17 11l5 5-5 5" />
+    </svg>
+  );
+}
+
+function providerMarkClass(
+  provider: AccessCandidateProvider | AccessDestinationPreset,
+): "anthropic" | "openai" | "compatible" {
+  if (provider === "anthropic" || provider === "openai") {
+    return provider;
+  }
+  return "compatible";
+}
+
 function AccessProviderIcon({
   provider,
 }: {
   readonly provider: AccessCandidateProvider | AccessDestinationPreset;
 }) {
-  return (
-    <AccessAppIcon
-      preset={provider.startsWith("anthropic") ? "claude" : "codex"}
-    />
-  );
+  if (provider === "anthropic") {
+    return <BrandIcon name="anthropic" />;
+  }
+  if (provider === "openai") {
+    return <BrandIcon name="openai" />;
+  }
+  return <CompatibleServiceIcon />;
 }
 
 function defaultCredentialCoordinates(
@@ -2262,9 +2267,7 @@ function AccessCurrentPath({
         </div>
         <div className="access-current-path-node" role="listitem">
           <span
-            className={`access-service-mark ${
-              provider.startsWith("anthropic") ? "anthropic" : "openai"
-            }`}
+            className={`access-service-mark ${providerMarkClass(provider)}`}
             aria-hidden="true"
           >
             <AccessProviderIcon provider={provider} />
@@ -3386,7 +3389,7 @@ function AccessPanel({
                   >
                     <span
                       aria-hidden="true"
-                      className={`access-service-mark ${preset}`}
+                      className={`access-service-mark ${providerMarkClass(preset)}`}
                     >
                       <AccessProviderIcon provider={preset} />
                     </span>
@@ -3853,7 +3856,6 @@ function AccessPanel({
                       : candidateProviderForTarget(target);
                   const official =
                     provider === "anthropic" || provider === "openai";
-                  const anthropicProvider = provider.startsWith("anthropic");
                   const original = profile.kind === "original_passthrough";
                   return (
                     <li
@@ -3883,9 +3885,9 @@ function AccessPanel({
                         <>
                           <div className="access-route-title">
                             <span
-                              className={`access-service-mark ${
-                                anthropicProvider ? "anthropic" : "openai"
-                              }`}
+                              className={`access-service-mark ${providerMarkClass(
+                                provider,
+                              )}`}
                               aria-hidden="true"
                             >
                               <AccessProviderIcon provider={provider} />
@@ -4018,11 +4020,9 @@ function AccessPanel({
                           type="button"
                         >
                           <span
-                            className={`access-service-mark ${
-                              provider.startsWith("anthropic")
-                                ? "anthropic"
-                                : "openai"
-                            }`}
+                            className={`access-service-mark ${providerMarkClass(
+                              provider,
+                            )}`}
                             aria-hidden="true"
                           >
                             <AccessProviderIcon provider={provider} />

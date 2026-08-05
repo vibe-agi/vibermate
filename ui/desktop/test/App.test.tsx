@@ -1202,14 +1202,20 @@ describe("Desktop dashboard", () => {
     fireEvent.click(
       await screen.findByRole("button", { name: "Add account or route" }),
     );
+    const officialProvider = screen.getByRole("button", {
+      name: /^Anthropic official/u,
+    });
+    const compatibleProvider = screen.getByRole("button", {
+      name: /^OpenAI-compatible service/u,
+    });
+    expect(officialProvider.getAttribute("aria-pressed")).toBe("true");
     expect(
-      screen.getByRole("button", { name: /^Anthropic official/u }).getAttribute(
-        "aria-pressed",
-      ),
-    ).toBe("true");
+      officialProvider.querySelector('[data-brand-icon="anthropic"]'),
+    ).not.toBeNull();
     expect(
-      screen.getByRole("button", { name: /^OpenAI-compatible service/u }),
-    ).toBeTruthy();
+      compatibleProvider.querySelector(".access-service-mark.compatible"),
+    ).not.toBeNull();
+    expect(compatibleProvider.querySelector("[data-brand-icon]")).toBeNull();
     fireEvent.change(screen.getByLabelText("Route name"), {
       target: { value: "Personal Anthropic" },
     });
