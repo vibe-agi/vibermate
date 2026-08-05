@@ -77,6 +77,13 @@ type ProviderProbeCatalog interface {
 	ActiveProviderProbeTargets() ([]ProviderProbeTarget, error)
 }
 
+// ActivePlanCatalog returns one immutable, atomically observed set of enabled
+// Access plans. It exists for composition boundaries that must derive one
+// decision across every active AgentEndpoint without racing per-Access reads.
+type ActivePlanCatalog interface {
+	ActiveAccessPlans() ([]AccessPlanSnapshot, error)
+}
+
 // SnapshotProjection is the explicit process-local active-plan publication
 // dependency. Manager is its only production mutation authority.
 type SnapshotProjection interface {
@@ -85,6 +92,7 @@ type SnapshotProjection interface {
 	DownstreamProtocolResolver
 	LeafIssuanceAdmitter
 	IngressCatalogReader
+	ActivePlanCatalog
 	ProviderProbeCatalog
 	ProjectionHealthReader
 	Restore([]AccessPlanSnapshot) error
@@ -111,6 +119,27 @@ func (p *AtomicSnapshotProjection) ActiveClientAuthorities() ([]string, error) {
 	}
 	sort.Strings(authorities)
 	return authorities, nil
+}
+
+func (p *AtomicSnapshotProjection) ActiveAccessPlans() ([]AccessPlanSnapshot, error) {
+	state := p.state.Load()
+	plans := make([]AccessPlanSnapshot, 0, len(state.byAccess))
+	for accessID, snapshot := range state.byAccess {
+		if _, unavailable := state.unavailable[accessID]; unavailable {
+			return nil, fmt.Errorf(
+				"%w: accessId=%q",
+				ErrProjectionUnavailable,
+				accessID.String(),
+			)
+		}
+		if snapshot.Binding().Status == AccessStatusEnabled {
+			plans = append(plans, snapshot.clone())
+		}
+	}
+	sort.Slice(plans, func(left, right int) bool {
+		return plans[left].AccessID().String() < plans[right].AccessID().String()
+	})
+	return plans, nil
 }
 
 type projectionState struct {

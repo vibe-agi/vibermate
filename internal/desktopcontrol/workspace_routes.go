@@ -48,6 +48,7 @@ type WorkspaceRouteRunSummary struct {
 
 type WorkspaceRouteProfileOptionResponse struct {
 	ProfileID         string                          `json:"profileId"`
+	Kind              access.EndpointProfileKind      `json:"kind"`
 	Label             string                          `json:"label"`
 	ModelPresentation string                          `json:"modelPresentation"`
 	AuthPresentation  workspaceroute.AuthPresentation `json:"authPresentation"`
@@ -245,6 +246,7 @@ func workspaceRouteBindingResponseOf(
 	for index, profile := range view.Profiles {
 		profiles[index] = WorkspaceRouteProfileOptionResponse{
 			ProfileID:         profile.ProfileID.String(),
+			Kind:              profile.Kind,
 			Label:             profile.Label,
 			ModelPresentation: profile.ModelPresentation,
 			AuthPresentation:  profile.AuthPresentation,
@@ -280,6 +282,11 @@ func classifyWorkspaceRouteError(err error) problemSpec {
 		return problemSpec{status: http.StatusNotFound, reason: ReasonWorkspaceRouteNotFound}
 	case errors.Is(err, workspaceroute.ErrRevisionConflict):
 		return problemSpec{status: http.StatusConflict, reason: ReasonRevisionConflict}
+	case errors.Is(err, workspaceroute.ErrCaptureRunRestartRequired):
+		return problemSpec{
+			status: http.StatusConflict,
+			reason: ReasonCaptureRunRestartRequired,
+		}
 	case errors.Is(err, workspaceroute.ErrRouteUnavailable):
 		return problemSpec{status: http.StatusUnprocessableEntity, reason: ReasonWorkspaceRouteUnavailable}
 	default:

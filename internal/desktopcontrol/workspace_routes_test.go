@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strconv"
+	"strings"
 	"testing"
 	"time"
 
@@ -13,6 +14,7 @@ import (
 	"github.com/vibe-agi/vibermate/internal/accessapply"
 	"github.com/vibe-agi/vibermate/internal/capturerun"
 	"github.com/vibe-agi/vibermate/internal/desktopcontrol"
+	"github.com/vibe-agi/vibermate/internal/workspaceroute"
 )
 
 func TestWorkspaceRouteProjectionGroupsRunsAndSwitchesWithCAS(t *testing.T) {
@@ -50,7 +52,7 @@ func TestWorkspaceRouteProjectionGroupsRunsAndSwitchesWithCAS(t *testing.T) {
 		t.Fatal(err)
 	}
 	resolution.Release()
-	if _, err := fixture.runtime.CaptureRuns().Create(
+	runGrant, err := fixture.runtime.CaptureRuns().Create(
 		context.Background(),
 		capturerun.CreateCommand{
 			CWD:             workspaceDirectory,
@@ -60,7 +62,8 @@ func TestWorkspaceRouteProjectionGroupsRunsAndSwitchesWithCAS(t *testing.T) {
 			Workspace:       scope,
 			LocalUserLabel:  "alice",
 		},
-	); err != nil {
+	)
+	if err != nil {
 		t.Fatal(err)
 	}
 
@@ -82,18 +85,24 @@ func TestWorkspaceRouteProjectionGroupsRunsAndSwitchesWithCAS(t *testing.T) {
 		page.Items[0].ID != resolution.BindingID.String() ||
 		page.Items[0].ActiveRunCount != 1 ||
 		len(page.Items[0].ActiveRuns) != 1 ||
+		len(page.Items[0].ApprovedProfiles) != 2 ||
+		page.Items[0].ApprovedProfiles[0].Kind != access.EndpointProfileManaged ||
+		page.Items[0].ApprovedProfiles[1].Kind !=
+			access.EndpointProfileOriginalPassthrough ||
+		page.Items[0].ApprovedProfiles[1].AuthPresentation !=
+			workspaceroute.AuthClient ||
 		page.Items[0].ActiveRuns[0].LocalUserLabel != "alice" ||
 		page.Items[0].WorkspaceLabel != scope.WorkspaceLabel() {
 		t.Fatalf("workspace route page = %+v", page)
 	}
 
 	body, err := json.Marshal(desktopcontrol.WorkspaceRouteBindingUpdate{
-		ProfileID: aggregate.Profiles[0].ID.String(),
+		ProfileID: access.OriginalPassthroughProfileID().String(),
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	updated := workspaceRouteMutation(
+	restartRequired := workspaceRouteMutation(
 		t,
 		fixture,
 		resolution.BindingID.String(),
@@ -101,12 +110,39 @@ func TestWorkspaceRouteProjectionGroupsRunsAndSwitchesWithCAS(t *testing.T) {
 		"workspace-route-update-0001",
 		body,
 	)
+	if restartRequired.Code != http.StatusConflict ||
+		!strings.Contains(
+			restartRequired.Body.String(),
+			string(desktopcontrol.ReasonCaptureRunRestartRequired),
+		) {
+		t.Fatalf(
+			"cross-login update status=%d body=%s",
+			restartRequired.Code,
+			restartRequired.Body,
+		)
+	}
+	if err := fixture.runtime.CaptureRuns().Finish(
+		context.Background(),
+		runGrant.Run.ID,
+		runGrant.ControlCapability,
+	); err != nil {
+		t.Fatal(err)
+	}
+	updated := workspaceRouteMutation(
+		t,
+		fixture,
+		resolution.BindingID.String(),
+		1,
+		"workspace-route-update-0002",
+		body,
+	)
 	if updated.Code != http.StatusOK {
 		t.Fatalf("update status=%d body=%s", updated.Code, updated.Body)
 	}
 	var view desktopcontrol.WorkspaceRouteBindingResponse
 	decodeResponse(t, updated, &view)
-	if view.Revision != 2 || view.ProfileID != aggregate.Profiles[0].ID.String() {
+	if view.Revision != 2 ||
+		view.ProfileID != access.OriginalPassthroughProfileID().String() {
 		t.Fatalf("updated view = %+v", view)
 	}
 	stale := workspaceRouteMutation(
@@ -114,7 +150,7 @@ func TestWorkspaceRouteProjectionGroupsRunsAndSwitchesWithCAS(t *testing.T) {
 		fixture,
 		resolution.BindingID.String(),
 		1,
-		"workspace-route-update-0002",
+		"workspace-route-update-0003",
 		body,
 	)
 	if stale.Code != http.StatusConflict {

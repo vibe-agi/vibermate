@@ -791,6 +791,15 @@ function WorkspaceRouteCard({
     ({ profileId }) => profileId === binding.profileId,
   );
   const selectedIsAvailable = selected?.available === true;
+  const hasRestartOnlyChoice =
+    binding.activeRunCount > 0 &&
+    selected !== undefined &&
+    binding.approvedProfiles.some(
+      (profile) =>
+        profile.available &&
+        profile.profileId !== selected.profileId &&
+        workspaceBootstrapSource(profile) !== workspaceBootstrapSource(selected),
+    );
   return (
     <li
       className={
@@ -838,7 +847,13 @@ function WorkspaceRouteCard({
             )}
             {binding.approvedProfiles.map((profile) => (
               <option
-                disabled={!profile.available}
+                disabled={
+                  !profile.available ||
+                  (binding.activeRunCount > 0 &&
+                    selected !== undefined &&
+                    workspaceBootstrapSource(profile) !==
+                      workspaceBootstrapSource(selected))
+                }
                 key={profile.profileId}
                 value={profile.profileId}
               >
@@ -855,6 +870,11 @@ function WorkspaceRouteCard({
                   model: selected.modelPresentation,
                 })}
           </p>
+          {hasRestartOnlyChoice && (
+            <p className="workspace-route-restart-note">
+              {t("workspaceRoutes.route.restartRequired")}
+            </p>
+          )}
         </div>
         <div className="workspace-route-runs">
           <p className="workspace-route-section-label">
@@ -890,6 +910,14 @@ function WorkspaceRouteCard({
       )}
     </li>
   );
+}
+
+function workspaceBootstrapSource(
+  profile: WorkspaceRouteBinding["approvedProfiles"][number],
+): "client" | "managed" {
+  return profile.authPresentation === "vibermate_account"
+    ? "managed"
+    : "client";
 }
 
 export function ActivityRequestsRoutePage() {
@@ -2121,24 +2149,22 @@ function defaultCredentialCoordinates(
   detail: AccessDetail,
 ): AccessCredentialCoordinates | undefined {
   const activeProfileId = activeAccessProfileId(detail);
-  const profiles = [
-    ...detail.profiles.filter(({ id }) => id === activeProfileId),
-    ...detail.profiles.filter(({ id }) => id !== activeProfileId),
-  ];
-  for (const profile of profiles) {
-    const binding = detail.accountBindings.find(
-      ({ enabled, id, profileId }) =>
-        enabled &&
-        id === profile.defaultAccountBindingId &&
-        profileId === profile.id,
-    );
-    if (binding !== undefined) {
-      return {
-        accessId: detail.access.id,
-        profileId: profile.id,
-        credentialId: binding.id,
-      };
-    }
+  const profile = detail.profiles.find(({ id }) => id === activeProfileId);
+  if (profile === undefined || profile.kind !== "managed") {
+    return undefined;
+  }
+  const binding = detail.accountBindings.find(
+    ({ enabled, id, profileId }) =>
+      enabled &&
+      id === profile.defaultAccountBindingId &&
+      profileId === profile.id,
+  );
+  if (binding !== undefined) {
+    return {
+      accessId: detail.access.id,
+      profileId: profile.id,
+      credentialId: binding.id,
+    };
   }
   return undefined;
 }
@@ -2169,6 +2195,7 @@ function AccessCurrentPath({
   const { t } = useTranslation();
   const accessPreset = accessPresetForItem(access);
   const official = provider === "anthropic" || provider === "openai";
+  const original = profile.kind === "original_passthrough";
   return (
     <>
       <div className="access-current-path-heading">
@@ -2208,11 +2235,15 @@ function AccessCurrentPath({
           </span>
           <div>
             <span>{t("access.path.route")}</span>
-            <strong>{profile.name}</strong>
+            <strong>
+              {original ? t("access.mode.observeOnly") : profile.name}
+            </strong>
             <small>
-              {t("access.candidates.account", {
-                name: account?.label ?? profile.name,
-              })}
+              {original
+                ? t("access.path.currentLoginAuth")
+                : t("access.candidates.account", {
+                    name: account?.label ?? profile.name,
+                  })}
             </small>
           </div>
         </div>
@@ -2227,8 +2258,14 @@ function AccessCurrentPath({
           </span>
           <div>
             <span>{t("access.path.destination")}</span>
-            <strong>{model}</strong>
-            <small>{t(`access.candidates.provider.${provider}.name`)}</small>
+            <strong>
+              {original ? t("access.path.keepClientModel") : model}
+            </strong>
+            <small>
+              {original
+                ? target.origin
+                : t(`access.candidates.provider.${provider}.name`)}
+            </small>
           </div>
         </div>
       </div>
@@ -2243,7 +2280,9 @@ function AccessCurrentPath({
               ),
             })}
           </span>
-          {!official && <span className="identifier">{target.origin}</span>}
+          {!original && !official && (
+            <span className="identifier">{target.origin}</span>
+          )}
         </div>
         <p>{t("access.path.observation")}</p>
         <Link
@@ -2461,6 +2500,8 @@ function AccessPanel({
   const [creating, setCreating] = useState(false);
   const [selectedAccessId, setSelectedAccessId] = useState<string>();
   const [pendingAccess, setPendingAccess] = useState<AccessDirectoryItem>();
+  const [pendingAccessMode, setPendingAccessMode] =
+    useState<AccessFormValues["mode"]>();
   const [selectionState, setSelectionState] =
     useState<"idle" | "loading" | "ready" | "unavailable">("idle");
   const [activeRevision, setActiveRevision] = useState<number>();
@@ -2551,6 +2592,7 @@ function AccessPanel({
     setLoadedDetail(undefined);
     setLoadedCredential(undefined);
     setLoadedProfileCount(0);
+    setPendingAccessMode(undefined);
     setSelectionState("idle");
   };
 
@@ -2583,6 +2625,7 @@ function AccessPanel({
         : defaultCredentialCoordinates(result.detail),
     );
     setLoadedProfileCount(result.detail.profiles.length);
+    setPendingAccessMode(undefined);
     setSelectionState("ready");
     return true;
   };
@@ -2603,6 +2646,7 @@ function AccessPanel({
     const identityGeneration = beginAccessGeneration(accessId);
     setCreating(false);
     setPendingAccess(undefined);
+    setPendingAccessMode(undefined);
     setSelectedAccessId(accessId);
     setSecret("");
     setCredentialSaveFailed(false);
@@ -2701,15 +2745,24 @@ function AccessPanel({
     setForm((current) => ({
       ...current,
       ...accessDestinationDefaults[preset],
+      mode: "managed",
       routeName: t(`access.destination.${preset}.defaultRouteName`),
     }));
+  };
+
+  const chooseAccessMode = (mode: AccessFormValues["mode"]) => {
+    setForm((current) => ({ ...current, mode }));
+    if (mode === "current-login") {
+      setDestinationPreset(undefined);
+      setSecret("");
+    }
   };
 
   const submit = async (event: FormEvent) => {
     event.preventDefault();
     if (
-      destinationPreset === undefined ||
-      secret.length === 0 ||
+      (form.mode === "managed" &&
+        (destinationPreset === undefined || secret.length === 0)) ||
       !validAccessForm(form) ||
       conflictingAccess !== undefined
     ) {
@@ -2728,21 +2781,28 @@ function AccessPanel({
       result !== undefined &&
       currentAccessIdentity(accessId, identityGeneration)
     ) {
-      const coordinates = {
-        accessId,
-        ...credentialCoordinates(submittedForm),
-      };
-      const credential = await actions.replaceCredentialSecret(
-        coordinates,
-        submittedSecret,
-      );
-      if (!currentAccessIdentity(accessId, identityGeneration)) {
-        return;
+      const coordinates =
+        submittedForm.mode === "managed"
+          ? {
+              accessId,
+              ...credentialCoordinates(submittedForm),
+            }
+          : undefined;
+      if (coordinates !== undefined) {
+        const credential = await actions.replaceCredentialSecret(
+          coordinates,
+          submittedSecret,
+        );
+        if (!currentAccessIdentity(accessId, identityGeneration)) {
+          return;
+        }
+        if (credential !== undefined) {
+          setSecret("");
+        }
+        setCredentialSaveFailed(credential === undefined);
+      } else {
+        setCredentialSaveFailed(false);
       }
-      if (credential !== undefined) {
-        setSecret("");
-      }
-      setCredentialSaveFailed(credential === undefined);
       const created: AccessDirectoryItem = {
         accessId,
         name: submittedForm.name,
@@ -2753,6 +2813,7 @@ function AccessPanel({
         clientDialect: submittedForm.clientDialect,
       };
       setPendingAccess(created);
+      setPendingAccessMode(submittedForm.mode);
       setSelectedAccessId(accessId);
       setCreating(false);
       setSelectionState("ready");
@@ -2761,7 +2822,7 @@ function AccessPanel({
       setActivePlanAvailable(result.applicationState === "active");
       setLoadedDetail(undefined);
       setLoadedCredential(coordinates);
-      setLoadedProfileCount(1);
+      setLoadedProfileCount(submittedForm.mode === "managed" ? 2 : 1);
       setForm((current) =>
         current.accessId !== accessId
           ? current
@@ -2844,6 +2905,9 @@ function AccessPanel({
     accessPreset === "codex"
       ? ["openai", "custom"]
       : ["anthropic", "anthropic-compatible", "openai", "custom"];
+  const creationNeedsManagedSetup =
+    form.mode === "managed" &&
+    (destinationPreset === undefined || secret.length === 0);
   const candidateProviderPresets: readonly AccessCandidateProvider[] =
     selectedDetail?.agentEndpoint.clientDialect === "openai-responses"
       ? ["openai", "openai-compatible"]
@@ -2861,7 +2925,9 @@ function AccessPanel({
       : item.name;
   const defaultCandidateName = (provider: AccessCandidateProvider): string =>
     t(`access.candidates.defaultName.${provider}`, {
-      number: (selectedDetail?.profiles.length ?? 0) + 1,
+      number:
+        (selectedDetail?.profiles.filter(({ kind }) => kind === "managed")
+          .length ?? 0) + 1,
     });
   const defaultCandidateModel = (provider: AccessCandidateProvider): string =>
     provider.startsWith("anthropic") ? "claude-sonnet-4-5" : "gpt-5";
@@ -3146,8 +3212,7 @@ function AccessPanel({
               <button
                 disabled={
                   busy ||
-                  destinationPreset === undefined ||
-                  secret.length === 0 ||
+                  creationNeedsManagedSetup ||
                   !validAccessForm(form) ||
                   conflictingAccess !== undefined
                 }
@@ -3198,36 +3263,75 @@ function AccessPanel({
             <div className="access-create-step wide-action">
               <span aria-hidden="true">2</span>
               <div>
-                <strong>{t("access.destination.stepTitle")}</strong>
-                <p>{t("access.destination.stepDescription")}</p>
+                <strong>{t("access.mode.stepTitle")}</strong>
+                <p>{t("access.mode.stepDescription")}</p>
               </div>
             </div>
-            {accessPreset === "claude" && (
+            <div className="access-mode-options wide-action">
+              <button
+                aria-pressed={form.mode === "current-login"}
+                className="access-mode-option current-login"
+                disabled={busy}
+                onClick={() => chooseAccessMode("current-login")}
+                type="button"
+              >
+                <span className="access-mode-option-heading">
+                  <strong>{t("access.mode.currentLogin.title")}</strong>
+                  <span>{t("access.mode.recommended")}</span>
+                </span>
+                <small>{t("access.mode.currentLogin.description")}</small>
+                <span aria-hidden="true" className="access-mode-rail">
+                  <span>{t(`access.preset.${accessPreset}.name`)}</span>
+                  <i>→</i>
+                  <span>{t("access.mode.observeOnly")}</span>
+                  <i>→</i>
+                  <span>{t("access.mode.originalService")}</span>
+                </span>
+              </button>
+              <button
+                aria-pressed={form.mode === "managed"}
+                className="access-mode-option managed"
+                disabled={busy}
+                onClick={() => chooseAccessMode("managed")}
+                type="button"
+              >
+                <span className="access-mode-option-heading">
+                  <strong>{t("access.mode.managed.title")}</strong>
+                </span>
+                <small>{t("access.mode.managed.description")}</small>
+              </button>
+            </div>
+            {form.mode === "managed" && accessPreset === "claude" && (
               <p className="access-destination-note wide-action">
                 {t("access.destination.claudeNotice")}
               </p>
             )}
-            <div className="access-destination-options wide-action">
-              {creationDestinationPresets.map((preset) => (
-                <button
-                  aria-pressed={destinationPreset === preset}
-                  className="access-destination-option"
-                  disabled={busy}
-                  key={preset}
-                  onClick={() => chooseDestinationPreset(preset)}
-                  type="button"
-                >
-                  <span className={`access-service-mark ${preset}`} aria-hidden="true">
-                    <AccessProviderIcon provider={preset} />
-                  </span>
-                  <span>
-                    <strong>{t(`access.destination.${preset}.name`)}</strong>
-                    <small>{t(`access.destination.${preset}.description`)}</small>
-                  </span>
-                </button>
-              ))}
-            </div>
-            {destinationPreset !== undefined && (
+            {form.mode === "managed" && (
+              <div className="access-destination-options wide-action">
+                {creationDestinationPresets.map((preset) => (
+                  <button
+                    aria-pressed={destinationPreset === preset}
+                    className="access-destination-option"
+                    disabled={busy}
+                    key={preset}
+                    onClick={() => chooseDestinationPreset(preset)}
+                    type="button"
+                  >
+                    <span
+                      aria-hidden="true"
+                      className={`access-service-mark ${preset}`}
+                    >
+                      <AccessProviderIcon provider={preset} />
+                    </span>
+                    <span>
+                      <strong>{t(`access.destination.${preset}.name`)}</strong>
+                      <small>{t(`access.destination.${preset}.description`)}</small>
+                    </span>
+                  </button>
+                ))}
+              </div>
+            )}
+            {form.mode === "managed" && destinationPreset !== undefined && (
               <div className="access-service-fields wide-action">
                 {(destinationPreset === "anthropic-compatible" ||
                   destinationPreset === "custom") && (
@@ -3372,7 +3476,7 @@ function AccessPanel({
                 </div>
               </div>
             )}
-            {destinationPreset !== undefined && validAccessForm(form) && (
+            {!creationNeedsManagedSetup && validAccessForm(form) && (
               <div className="access-review wide-action">
                 <div className="access-create-step">
                   <span aria-hidden="true">3</span>
@@ -3390,11 +3494,15 @@ function AccessPanel({
                   <span className="access-review-vibermate">{t("app.title")}</span>
                   <span aria-hidden="true">→</span>
                   <strong>
-                    {t(`access.destination.${destinationPreset}.shortName`)}
+                    {form.mode === "current-login"
+                      ? t("access.mode.originalService")
+                      : t(`access.destination.${destinationPreset}.shortName`)}
                   </strong>
                 </div>
                 <p>
-                  {t("access.review.model", { model: form.fixedModel })}
+                  {form.mode === "current-login"
+                    ? t("access.review.currentLogin")
+                    : t("access.review.model", { model: form.fixedModel })}
                 </p>
               </div>
             )}
@@ -3444,20 +3552,22 @@ function AccessPanel({
                     </option>
                   </select>
                 </label>
-                <LabeledInput
-                  disabled={busy}
-                  label={t("access.providerOrigin.label")}
-                  onChange={(event) => {
-                    setDestinationPreset("custom");
-                    setForm((current) => ({
-                      ...current,
-                      providerOrigin: event.target.value,
-                    }));
-                  }}
-                  required
-                  type="url"
-                  value={form.providerOrigin}
-                />
+                {form.mode === "managed" && (
+                  <LabeledInput
+                    disabled={busy}
+                    label={t("access.providerOrigin.label")}
+                    onChange={(event) => {
+                      setDestinationPreset("custom");
+                      setForm((current) => ({
+                        ...current,
+                        providerOrigin: event.target.value,
+                      }));
+                    }}
+                    required
+                    type="url"
+                    value={form.providerOrigin}
+                  />
+                )}
                 <label className="field">
                   <span>{t("access.description.label")}</span>
                   <textarea
@@ -3534,7 +3644,9 @@ function AccessPanel({
           {selectedAccess !== undefined &&
             selectedStatus === "enabled" &&
             activePlanAvailable === true &&
-            activeCredential?.secretState === "configured" &&
+            (selectedActiveProfile?.kind === "original_passthrough" ||
+              pendingAccessMode === "current-login" ||
+              activeCredential?.secretState === "configured") &&
             selectedAccessPreset !== undefined &&
             selectedAccessPreset !== "custom" && (
               <AccessLaunchPanel
@@ -3641,7 +3753,9 @@ function AccessPanel({
                           `access.modelPolicy.${profile.defaultModelPolicy.mode}`,
                         );
                   const active = profile.id === selectedActiveProfileId;
-                  const ready = selectedCandidateProfileIds.has(profile.id);
+                  const ready =
+                    profile.kind === "original_passthrough" ||
+                    selectedCandidateProfileIds.has(profile.id);
                   const provider =
                     target === undefined
                       ? "openai-compatible"
@@ -3649,6 +3763,7 @@ function AccessPanel({
                   const official =
                     provider === "anthropic" || provider === "openai";
                   const anthropicProvider = provider.startsWith("anthropic");
+                  const original = profile.kind === "original_passthrough";
                   return (
                     <li
                       className={`${active ? "active access-current-path" : ""} ${
@@ -3685,9 +3800,15 @@ function AccessPanel({
                               <AccessProviderIcon provider={provider} />
                             </span>
                             <div>
-                              <strong>{profile.name}</strong>
+                              <strong>
+                                {original
+                                  ? t("access.mode.currentLogin.title")
+                                  : profile.name}
+                              </strong>
                               <span>
-                                {t(`access.candidates.provider.${provider}.name`)}
+                                {original
+                                  ? t("access.mode.currentLogin.title")
+                                  : t(`access.candidates.provider.${provider}.name`)}
                               </span>
                             </div>
                             <span
@@ -3716,13 +3837,16 @@ function AccessPanel({
                               })}
                             </span>
                             <span>
-                              {t("access.candidates.account", {
-                                name:
-                                  accounts.map(({ label }) => label).join(", ") ||
-                                  profile.name,
-                              })}
+                              {original
+                                ? t("access.path.currentLoginAuth")
+                                : t("access.candidates.account", {
+                                    name:
+                                      accounts
+                                        .map(({ label }) => label)
+                                        .join(", ") || profile.name,
+                                  })}
                             </span>
-                            {target !== undefined && !official && (
+                            {target !== undefined && (original || !official) && (
                               <span className="identifier">{target.origin}</span>
                             )}
                           </div>
@@ -3992,7 +4116,11 @@ function AccessPanel({
               )}
             </section>
           )}
-          {selectedStatus === "enabled" && (
+          {selectedStatus === "enabled" &&
+            (selectedActiveProfile?.kind === "managed" ||
+              pendingAccessMode === "managed" ||
+              (selectedActiveProfile === undefined &&
+                loadedCredential !== undefined)) && (
             <form
               className="credential-form"
               onSubmit={(event) => void submitCredential(event)}

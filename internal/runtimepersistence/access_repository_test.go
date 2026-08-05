@@ -581,7 +581,7 @@ func executableAggregate(
 	if err != nil {
 		t.Fatalf("construct SecretRef: %v", err)
 	}
-	return access.Aggregate{
+	aggregate := access.Aggregate{
 		Binding: access.AccessBinding{
 			ID:                accessID,
 			Revision:          revision,
@@ -604,6 +604,9 @@ func executableAggregate(
 			ID:                     profileID,
 			Revision:               revision,
 			AccessID:               accessID,
+			Kind:                   access.EndpointProfileManaged,
+			CredentialSource:       access.CredentialSourceManagedAccount,
+			ProcessingMode:         access.ProfileProcessingManaged,
 			Name:                   "OpenAI Chat",
 			Description:            "Fixed M0 profile",
 			BackendDialect:         access.DialectOpenAIChat,
@@ -658,6 +661,11 @@ func executableAggregate(
 			Mode:     access.PluginPlanModePassThrough,
 		},
 	}
+	aggregate, err = access.AttachOriginalPassthrough(aggregate)
+	if err != nil {
+		t.Fatalf("attach original passthrough profile: %v", err)
+	}
+	return aggregate
 }
 
 func testAccessCompiler(t *testing.T) *access.Compiler {
@@ -672,7 +680,7 @@ func testAccessCompiler(t *testing.T) *access.Compiler {
 	}
 	catalog, err := access.NewCatalog(access.CatalogOptions{
 		Capabilities: access.PlanCapabilities{
-			MaxEndpointProfiles: 1,
+			MaxEndpointProfiles: 2,
 			MaxAccountBindings:  1,
 			MaxRouteSets:        1,
 		},

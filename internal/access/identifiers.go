@@ -251,6 +251,32 @@ const (
 	DialectOpenAIChat        Dialect = "openai-chat"
 )
 
+// EndpointProfileKind separates the immutable Access-owned route that keeps
+// the client's provider identity from user-created managed routes. A profile
+// kind is configuration authority, not a presentation label.
+type EndpointProfileKind string
+
+const (
+	EndpointProfileOriginalPassthrough EndpointProfileKind = "original_passthrough"
+	EndpointProfileManaged             EndpointProfileKind = "managed"
+)
+
+// CredentialSource says who owns the provider credential lifecycle.
+type CredentialSource string
+
+const (
+	CredentialSourceClientPassthrough CredentialSource = "client_passthrough"
+	CredentialSourceManagedAccount    CredentialSource = "managed_account"
+)
+
+// ProfileProcessingMode defines whether user-controlled processing may run.
+type ProfileProcessingMode string
+
+const (
+	ProfileProcessingObserveOnly ProfileProcessingMode = "observe_only"
+	ProfileProcessingManaged     ProfileProcessingMode = "managed"
+)
+
 type ProviderCapability string
 
 const (

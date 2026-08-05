@@ -75,17 +75,20 @@ func exchangeReplayClass(
 }
 
 type frozenSelection struct {
-	accessID       access.AccessID
-	revision       access.Revision
-	planHash       access.PlanHash
-	effectiveModel string
-	targetRef      string
-	target         providertransport.Target
-	accountID      access.AccountBindingID
-	secretRef      access.SecretRef
-	authDriverRef  access.AuthDriverRef
-	wireProfile    access.CompiledUpstreamWireProfile
-	codecPlan      access.CodecPlan
+	accessID         access.AccessID
+	revision         access.Revision
+	planHash         access.PlanHash
+	kind             access.EndpointProfileKind
+	credentialSource access.CredentialSource
+	clientOrigin     access.ClientOrigin
+	effectiveModel   string
+	targetRef        string
+	target           providertransport.Target
+	accountID        access.AccountBindingID
+	secretRef        access.SecretRef
+	authDriverRef    access.AuthDriverRef
+	wireProfile      access.CompiledUpstreamWireProfile
+	codecPlan        access.CodecPlan
 }
 
 // errCandidatesExhausted reports that a further attempt was allowed and there
@@ -232,37 +235,10 @@ func selectFrozenPlan(
 	}
 	if !foundProfile ||
 		profile.AccessID != binding.ID ||
+		profile.Kind != compiledSelection.Kind() ||
 		profile.BackendDialect != codecPlan.ProviderDialect() ||
-		profile.UpstreamWireProfileRef != wireProfile.Ref() ||
-		profile.DefaultModelPolicy.Mode != access.ModelPolicyModeFixed ||
-		profile.DefaultModelPolicy.FixedModel.String() == "" ||
-		len(profile.AccountBindingIDs) != 1 {
+		profile.UpstreamWireProfileRef != wireProfile.Ref() {
 		return frozenSelection{}, errors.New("EndpointProfile is unsupported")
-	}
-
-	accountID := profile.DefaultAccountBindingID
-	if profile.AccountBindingIDs[0] != accountID {
-		return frozenSelection{}, errors.New("default account is not the sole profile account")
-	}
-	accounts := snapshot.AccountBindings()
-	var account access.ProviderAccountBinding
-	foundAccount := false
-	for _, candidate := range accounts {
-		if candidate.ID == accountID {
-			if foundAccount {
-				return frozenSelection{}, errors.New("account binding is duplicated")
-			}
-			account = candidate
-			foundAccount = true
-		}
-	}
-	if !foundAccount ||
-		!account.Enabled ||
-		account.AccessID != binding.ID ||
-		account.ProfileID != profile.ID ||
-		(account.AuthDriverRef != access.StaticHeaderAuthDriverRef() &&
-			account.AuthDriverRef != access.AnthropicAPIKeyAuthDriverRef()) {
-		return frozenSelection{}, errors.New("provider account binding is unsupported")
 	}
 
 	targets := snapshot.ProviderTargets()
@@ -292,20 +268,90 @@ func selectFrozenPlan(
 		return frozenSelection{}, fmt.Errorf("compile provider transport target: %w", err)
 	}
 
-	return frozenSelection{
-		accessID:       binding.ID,
-		revision:       binding.Revision,
-		planHash:       snapshot.PlanHash(),
-		effectiveModel: profile.DefaultModelPolicy.FixedModel.String(),
+	selection := frozenSelection{
+		accessID:         binding.ID,
+		revision:         binding.Revision,
+		planHash:         snapshot.PlanHash(),
+		kind:             profile.Kind,
+		credentialSource: profile.CredentialSource,
+		clientOrigin:     endpoint.ClientOrigin,
 		targetRef: access.ProviderTargetReference(
 			binding.ID,
 			targetResource.ID,
 		),
-		target:        target,
-		accountID:     account.ID,
-		secretRef:     account.SecretRef,
-		authDriverRef: account.AuthDriverRef,
-		wireProfile:   wireProfile,
-		codecPlan:     codecPlan,
-	}, nil
+		target:      target,
+		wireProfile: wireProfile,
+		codecPlan:   codecPlan,
+	}
+
+	switch profile.Kind {
+	case access.EndpointProfileOriginalPassthrough:
+		if profile.ID != access.OriginalPassthroughProfileID() ||
+			profile.TargetID != access.OriginalPassthroughTargetID() ||
+			profile.CredentialSource != access.CredentialSourceClientPassthrough ||
+			profile.ProcessingMode != access.ProfileProcessingObserveOnly ||
+			profile.DefaultModelPolicy.Mode != access.ModelPolicyModePassthrough ||
+			profile.DefaultModelPolicy.FixedModel.String() != "" ||
+			len(profile.AccountBindingIDs) != 0 ||
+			profile.DefaultAccountBindingID.String() != "" ||
+			codecPlan.ClientDialect() != codecPlan.ProviderDialect() ||
+			targetResource.Origin.String() != endpoint.ClientOrigin.String() ||
+			targetResource.Origin.BasePath() != "" {
+			return frozenSelection{}, errors.New(
+				"original passthrough profile is unsupported",
+			)
+		}
+		for _, account := range snapshot.AccountBindings() {
+			if account.ProfileID == profile.ID {
+				return frozenSelection{}, errors.New(
+					"original passthrough profile owns an account",
+				)
+			}
+		}
+	case access.EndpointProfileManaged:
+		if profile.CredentialSource != access.CredentialSourceManagedAccount ||
+			profile.ProcessingMode != access.ProfileProcessingManaged ||
+			profile.DefaultModelPolicy.Mode != access.ModelPolicyModeFixed ||
+			profile.DefaultModelPolicy.FixedModel.String() == "" ||
+			len(profile.AccountBindingIDs) != 1 {
+			return frozenSelection{}, errors.New("managed EndpointProfile is unsupported")
+		}
+		accountID := profile.DefaultAccountBindingID
+		if profile.AccountBindingIDs[0] != accountID {
+			return frozenSelection{}, errors.New(
+				"default account is not the sole profile account",
+			)
+		}
+		var account access.ProviderAccountBinding
+		foundAccount := false
+		for _, candidate := range snapshot.AccountBindings() {
+			if candidate.ID == accountID {
+				if foundAccount {
+					return frozenSelection{}, errors.New(
+						"account binding is duplicated",
+					)
+				}
+				account = candidate
+				foundAccount = true
+			}
+		}
+		if !foundAccount ||
+			!account.Enabled ||
+			account.AccessID != binding.ID ||
+			account.ProfileID != profile.ID ||
+			(account.AuthDriverRef != access.StaticHeaderAuthDriverRef() &&
+				account.AuthDriverRef != access.AnthropicAPIKeyAuthDriverRef()) {
+			return frozenSelection{}, errors.New(
+				"provider account binding is unsupported",
+			)
+		}
+		selection.effectiveModel = profile.DefaultModelPolicy.FixedModel.String()
+		selection.accountID = account.ID
+		selection.secretRef = account.SecretRef
+		selection.authDriverRef = account.AuthDriverRef
+	default:
+		return frozenSelection{}, errors.New("EndpointProfile kind is unsupported")
+	}
+
+	return selection, nil
 }

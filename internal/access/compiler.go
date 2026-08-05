@@ -644,6 +644,7 @@ func (compiler *Compiler) Compile(aggregate Aggregate) (AccessPlanSnapshot, erro
 		if index == 0 {
 			candidates = append(candidates, CompiledCandidate{
 				profileID:   entry.profile.ID,
+				kind:        entry.profile.Kind,
 				target:      compiledTarget,
 				codecPlan:   CodecPlan{},
 				wireProfile: CompiledUpstreamWireProfile{},
@@ -700,6 +701,7 @@ func (compiler *Compiler) Compile(aggregate Aggregate) (AccessPlanSnapshot, erro
 		}
 		candidates = append(candidates, CompiledCandidate{
 			profileID:   entry.profile.ID,
+			kind:        entry.profile.Kind,
 			target:      compiledTarget,
 			codecPlan:   compileCodecPlan(compiler, candidateCodec),
 			wireProfile: candidateWireProfile,
@@ -1093,20 +1095,17 @@ func (compiler *Compiler) validateRelationships(aggregate Aggregate) error {
 		return ErrUnsupportedCardinality
 	}
 	// One RouteSet, and one target and one account per profile. More than one
-	// profile is what a second candidate is: an upstream a dropped attempt can
-	// be sent to, named in advance rather than guessed at.
+	// managed profile is what a second candidate is: an upstream a dropped
+	// attempt can be sent to, named in advance rather than guessed at. The one
+	// system original profile deliberately owns no account.
 	if len(aggregate.Profiles) == 0 ||
 		len(aggregate.ProviderTargets) != len(aggregate.Profiles) ||
-		len(aggregate.AccountBindings) != len(aggregate.Profiles) ||
 		len(aggregate.RouteSets) != 1 {
 		return ErrUnsupportedCardinality
 	}
-	if len(aggregate.Profiles) > 1 &&
-		!compiler.catalog.capabilities.AllowMultipleRouteCandidates {
-		return ErrUnsupportedCardinality
-	}
-
 	profiles := make(map[EndpointProfileID]EndpointProfile, len(aggregate.Profiles))
+	originalProfiles := 0
+	managedProfiles := 0
 	for _, profile := range aggregate.Profiles {
 		if profile.AccessID != accessID {
 			return fmt.Errorf("%w: EndpointProfile %q", ErrOwnershipViolation, profile.ID.String())
@@ -1114,7 +1113,22 @@ func (compiler *Compiler) validateRelationships(aggregate Aggregate) error {
 		if _, duplicate := profiles[profile.ID]; duplicate {
 			return fmt.Errorf("%w: EndpointProfile %q", ErrDuplicateResource, profile.ID.String())
 		}
+		switch profile.Kind {
+		case EndpointProfileOriginalPassthrough:
+			originalProfiles++
+		case EndpointProfileManaged:
+			managedProfiles++
+		default:
+			return fmt.Errorf(
+				"%w: EndpointProfile %q has an unknown kind",
+				ErrInvalidAccessPlan,
+				profile.ID.String(),
+			)
+		}
 		profiles[profile.ID] = profile
+	}
+	if originalProfiles != 1 || len(aggregate.AccountBindings) != managedProfiles {
+		return ErrUnsupportedCardinality
 	}
 	if err := sameProfileSet(aggregate.Binding.ProfileIDs, profiles); err != nil {
 		return err
@@ -1133,6 +1147,20 @@ func (compiler *Compiler) validateRelationships(aggregate Aggregate) error {
 			return fmt.Errorf("%w: ProviderTarget %q", ErrDuplicateResource, target.ID.String())
 		}
 		targets[target.ID] = target
+		if profile.Kind == EndpointProfileOriginalPassthrough {
+			if profile.ID != OriginalPassthroughProfileID() ||
+				target.ID != OriginalPassthroughTargetID() ||
+				profile.BackendDialect != aggregate.AgentEndpoint.ClientDialect ||
+				target.Protocol != aggregate.AgentEndpoint.ClientDialect ||
+				target.Origin.String() != aggregate.AgentEndpoint.ClientOrigin.String() ||
+				profile.UpstreamWireProfileRef != FollowClientUpstreamWireProfileRef() ||
+				profile.DefaultModelPolicy.Mode != ModelPolicyModePassthrough {
+				return fmt.Errorf(
+					"%w: original passthrough profile is not derived from AgentEndpoint",
+					ErrInvalidAccessPlan,
+				)
+			}
+		}
 	}
 	for _, profile := range aggregate.Profiles {
 		if _, exists := targets[profile.TargetID]; !exists {
@@ -1172,6 +1200,15 @@ func (compiler *Compiler) validateRelationships(aggregate Aggregate) error {
 			profile, exists := profiles[profileID]
 			if !exists {
 				return fmt.Errorf("%w: RouteSet profile %q", ErrDanglingReference, profileID.String())
+			}
+			if profile.Kind == EndpointProfileOriginalPassthrough {
+				if routeSet.FallbackMode() != FallbackDisabled {
+					return fmt.Errorf(
+						"%w: original passthrough cannot participate in fallback",
+						ErrInvalidAccessPlan,
+					)
+				}
+				continue
 			}
 			defaultAccount, exists := accounts[profile.DefaultAccountBindingID]
 			if !exists || !defaultAccount.Enabled {
@@ -1280,6 +1317,24 @@ func validateProfileAccounts(
 	profile EndpointProfile,
 	accounts map[AccountBindingID]ProviderAccountBinding,
 ) error {
+	if profile.Kind == EndpointProfileOriginalPassthrough {
+		if len(profile.AccountBindingIDs) != 0 ||
+			profile.DefaultAccountBindingID.String() != "" {
+			return fmt.Errorf(
+				"%w: original passthrough profile owns an account",
+				ErrOwnershipViolation,
+			)
+		}
+		for _, account := range accounts {
+			if account.ProfileID == profile.ID {
+				return fmt.Errorf(
+					"%w: account points at original passthrough profile",
+					ErrOwnershipViolation,
+				)
+			}
+		}
+		return nil
+	}
 	seen := make(map[AccountBindingID]struct{}, len(profile.AccountBindingIDs))
 	for _, accountID := range profile.AccountBindingIDs {
 		account, exists := accounts[accountID]
@@ -1475,6 +1530,9 @@ type canonicalProfile struct {
 	ID                      string               `json:"id"`
 	Revision                Revision             `json:"revision"`
 	AccessID                string               `json:"accessId"`
+	Kind                    string               `json:"kind"`
+	CredentialSource        string               `json:"credentialSource"`
+	ProcessingMode          string               `json:"processingMode"`
 	Name                    string               `json:"name"`
 	Description             string               `json:"description"`
 	BackendDialect          string               `json:"backendDialect"`
@@ -1708,6 +1766,9 @@ func canonicalPlanBytes(snapshot AccessPlanSnapshot) ([]byte, error) {
 			ID:                     profile.ID.String(),
 			Revision:               profile.Revision,
 			AccessID:               profile.AccessID.String(),
+			Kind:                   string(profile.Kind),
+			CredentialSource:       string(profile.CredentialSource),
+			ProcessingMode:         string(profile.ProcessingMode),
 			Name:                   profile.Name,
 			Description:            profile.Description,
 			BackendDialect:         string(profile.BackendDialect),

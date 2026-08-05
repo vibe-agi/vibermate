@@ -71,7 +71,7 @@ func newAccessFixture(
 		t.Fatalf("construct SecretRef: %v", err)
 	}
 	compiler := newAccessCompiler(t)
-	plan, err := compiler.Compile(access.Aggregate{
+	aggregate := access.Aggregate{
 		Binding: access.AccessBinding{
 			ID:                accessID,
 			Revision:          revision,
@@ -93,6 +93,9 @@ func newAccessFixture(
 			ID:                      profileID,
 			Revision:                revision,
 			AccessID:                accessID,
+			Kind:                    access.EndpointProfileManaged,
+			CredentialSource:        access.CredentialSourceManagedAccount,
+			ProcessingMode:          access.ProfileProcessingManaged,
 			Name:                    "Provider profile",
 			BackendDialect:          access.DialectOpenAIChat,
 			TargetID:                targetID,
@@ -137,7 +140,12 @@ func newAccessFixture(
 			AccessID: accessID,
 			Mode:     access.PluginPlanModePassThrough,
 		},
-	})
+	}
+	aggregate, err = access.AttachOriginalPassthrough(aggregate)
+	if err != nil {
+		t.Fatalf("attach original passthrough profile: %v", err)
+	}
+	plan, err := compiler.Compile(aggregate)
 	if err != nil {
 		t.Fatalf("compile Access fixture: %v", err)
 	}
@@ -179,7 +187,7 @@ func newAccessCompiler(t *testing.T) *access.Compiler {
 	}
 	catalog, err := access.NewCatalog(access.CatalogOptions{
 		Capabilities: access.PlanCapabilities{
-			MaxEndpointProfiles: 1,
+			MaxEndpointProfiles: 2,
 			MaxAccountBindings:  1,
 			MaxRouteSets:        1,
 		},

@@ -131,13 +131,9 @@ func (repository *workspaceRouteRepository) Get(
 
 func (repository *workspaceRouteRepository) CompareAndSwap(
 	ctx context.Context,
-	id workspaceroute.BindingID,
-	expected workspaceroute.Revision,
-	profileID access.EndpointProfileID,
-	updatedAt time.Time,
+	mutation workspaceroute.UpdateMutation,
 ) (workspaceroute.Record, error) {
-	if _, err := workspaceroute.ParseBindingID(id.String()); err != nil ||
-		!expected.Valid() || profileID.String() == "" || updatedAt.IsZero() {
+	if err := mutation.Validate(); err != nil {
 		return workspaceroute.Record{}, workspaceroute.ErrInvalidBinding
 	}
 	operation, finish, err := repository.operations.begin(ctx)
@@ -154,11 +150,23 @@ func (repository *workspaceRouteRepository) CompareAndSwap(
 		operation,
 		`UPDATE workspace_route_bindings
 		 SET profile_id = ?, revision = revision + 1, updated_at_unix_ms = ?
-		 WHERE binding_id = ? AND revision = ? AND revision < 9223372036854775807`,
-		profileID.String(),
-		toUnixMillis(updatedAt),
-		id.String(),
-		int64(expected),
+		 WHERE binding_id = ?
+		   AND revision = ?
+		   AND revision < 9223372036854775807
+		   AND (? = 0 OR NOT EXISTS (
+		       SELECT 1
+		       FROM capture_runs
+		       WHERE capture_runs.machine_id = workspace_route_bindings.machine_id
+		         AND capture_runs.workspace_id = workspace_route_bindings.workspace_id
+		         AND capture_runs.state IN ('created', 'attached')
+		         AND capture_runs.expires_at_unix_ms > ?
+		   ))`,
+		mutation.ProfileID.String(),
+		toUnixMillis(mutation.UpdatedAt),
+		mutation.ID.String(),
+		int64(mutation.Expected),
+		boolInteger(mutation.RequireNoActiveCaptureRun),
+		toUnixMillis(mutation.UpdatedAt),
 	)
 	if err != nil {
 		return workspaceroute.Record{}, fmt.Errorf("update workspace route binding: %w", err)
@@ -168,13 +176,46 @@ func (repository *workspaceRouteRepository) CompareAndSwap(
 		return workspaceroute.Record{}, fmt.Errorf("read workspace route update result: %w", err)
 	}
 	if affected != 1 {
+		record, readErr := scanWorkspaceRoute(transaction.QueryRowContext(
+			operation,
+			`SELECT `+workspaceRouteColumns+`
+			 FROM workspace_route_bindings WHERE binding_id = ?`,
+			mutation.ID.String(),
+		))
+		if errors.Is(readErr, sql.ErrNoRows) {
+			return workspaceroute.Record{}, workspaceroute.ErrBindingNotFound
+		}
+		if readErr != nil {
+			return workspaceroute.Record{}, fmt.Errorf(
+				"inspect rejected workspace route update: %w",
+				readErr,
+			)
+		}
+		if record.Revision != mutation.Expected {
+			return workspaceroute.Record{}, workspaceroute.ErrRevisionConflict
+		}
+		if mutation.RequireNoActiveCaptureRun {
+			active, activeErr := activeCaptureRunForWorkspace(
+				operation,
+				transaction,
+				record,
+				mutation.UpdatedAt,
+			)
+			if activeErr != nil {
+				return workspaceroute.Record{}, activeErr
+			}
+			if active {
+				return workspaceroute.Record{},
+					workspaceroute.ErrCaptureRunRestartRequired
+			}
+		}
 		return workspaceroute.Record{}, workspaceroute.ErrRevisionConflict
 	}
 	record, err := scanWorkspaceRoute(transaction.QueryRowContext(
 		operation,
 		`SELECT `+workspaceRouteColumns+`
 		 FROM workspace_route_bindings WHERE binding_id = ?`,
-		id.String(),
+		mutation.ID.String(),
 	))
 	if err != nil {
 		return workspaceroute.Record{}, fmt.Errorf("read updated workspace route binding: %w", err)
@@ -183,6 +224,40 @@ func (repository *workspaceRouteRepository) CompareAndSwap(
 		return workspaceroute.Record{}, fmt.Errorf("commit workspace route update: %w", err)
 	}
 	return record, nil
+}
+
+func activeCaptureRunForWorkspace(
+	ctx context.Context,
+	transaction *sql.Tx,
+	record workspaceroute.Record,
+	now time.Time,
+) (bool, error) {
+	var active int
+	err := transaction.QueryRowContext(
+		ctx,
+		`SELECT EXISTS(
+			SELECT 1
+			FROM capture_runs
+			WHERE machine_id = ?
+			  AND workspace_id = ?
+			  AND state IN ('created', 'attached')
+			  AND expires_at_unix_ms > ?
+		)`,
+		record.MachineID.String(),
+		record.WorkspaceID.String(),
+		toUnixMillis(now),
+	).Scan(&active)
+	if err != nil {
+		return false, fmt.Errorf("inspect active CaptureRuns for workspace: %w", err)
+	}
+	return active == 1, nil
+}
+
+func boolInteger(value bool) int {
+	if value {
+		return 1
+	}
+	return 0
 }
 
 func (repository *workspaceRouteRepository) List(

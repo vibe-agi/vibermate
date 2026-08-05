@@ -104,8 +104,9 @@ test("lists existing tools and creates the next one without asking for a name", 
     currentPath.getByText("example-model", { exact: true }),
   ).toBeVisible();
   await expect(page.getByText("New requests", { exact: true })).toBeVisible();
+  const liveRoute = page.locator(".access-current-path");
   await expect(
-    page.getByText("Presentation: Follow current client (default)", {
+    liveRoute.getByText("Presentation: Follow current client (default)", {
       exact: true,
     }),
   ).toBeVisible();
@@ -131,6 +132,22 @@ test("lists existing tools and creates the next one without asking for a name", 
   await expect(page.getByLabel("Access ID")).toHaveCount(0);
   await expect(page.getByLabel("Expected revision")).toHaveCount(0);
 
+  const originalRoute = page
+    .locator(".access-upstream-list > li")
+    .filter({ hasText: "Use the tool's current login" });
+  await originalRoute
+    .getByRole("button", { name: "Set as current route" })
+    .click();
+  await expect(
+    currentPath.getByText("Observe only", { exact: true }),
+  ).toBeVisible();
+  await expect(
+    currentPath.getByText("Keep the tool's selected model", {
+      exact: true,
+    }),
+  ).toBeVisible();
+  await expect(page.getByLabel("API Key")).toHaveCount(0);
+
   await page.getByRole("button", { name: "Add AI Access" }).click();
   await expect(page.getByLabel("Client protocol")).toHaveValue(
     "openai-responses",
@@ -139,6 +156,16 @@ test("lists existing tools and creates the next one without asking for a name", 
     "https://api.openai.com",
   );
   await expect(page.getByLabel("Name", { exact: true })).toHaveValue("Codex");
+  await expect(
+    page.getByRole("button", { name: /^Use the tool's current login/u }),
+  ).toHaveAttribute("aria-pressed", "true");
+  await expect(page.getByLabel("API Key")).toHaveCount(0);
+  await expect(
+    page.getByRole("button", { name: "Save and enable" }),
+  ).toBeEnabled();
+  await page
+    .getByRole("button", { name: /^Use another model service/u })
+    .click();
   await page
     .getByRole("button", { name: /^OpenAI-compatible service/u })
     .click();
@@ -515,6 +542,14 @@ test("groups three terminals by stable workspace and switches later requests", a
   ).toBeVisible();
 
   const route = page.getByLabel("Route for new requests");
+  await expect(
+    route.locator('option[value="original-passthrough"]'),
+  ).toBeDisabled();
+  await expect(
+    page.getByText(
+      "Stop this workspace's running tools before switching between the client's current login and VibeMate-managed credentials. Start them again after selecting the route.",
+    ),
+  ).toBeVisible();
   await route.selectOption("work-secondary");
   await expect(route).toHaveValue("work-secondary");
   await expect(

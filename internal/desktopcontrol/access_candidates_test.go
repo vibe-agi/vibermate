@@ -89,7 +89,7 @@ func TestAccessCandidateMutationStagesCredentialBeforeSelectingRoute(t *testing.
 		bytes.Contains(addedWire, []byte("secret://")) {
 		t.Fatalf("add candidate exposed SecretRef: %s", addedWire)
 	}
-	var addResult desktopcontrol.AccessCandidateMutationResponse
+	var addResult desktopcontrol.AccessAddCandidateResponse
 	decodeResponse(t, added, &addResult)
 	if addResult.Outcome != access.WriteOutcomeCommitted ||
 		addResult.Revision != 2 ||
@@ -124,8 +124,8 @@ func TestAccessCandidateMutationStagesCredentialBeforeSelectingRoute(t *testing.
 		t.Fatalf("read staged aggregate exists=%t err=%v", exists, err)
 	}
 	if staged.Binding.Revision != 2 ||
-		len(staged.Profiles) != 2 ||
-		len(staged.ProviderTargets) != 2 ||
+		len(staged.Profiles) != 3 ||
+		len(staged.ProviderTargets) != 3 ||
 		len(staged.AccountBindings) != 2 ||
 		staged.AccountBindings[0].SecretRef != oldSecretRef {
 		t.Fatalf("staged aggregate changed existing resources: %+v", staged)
@@ -160,8 +160,9 @@ func TestAccessCandidateMutationStagesCredentialBeforeSelectingRoute(t *testing.
 		)
 	}
 	if len(staged.RouteSets) != 1 ||
-		len(staged.RouteSets[0].CandidateProfileIDs) != 1 ||
-		staged.RouteSets[0].CandidateProfileIDs[0].String() != "access-control-profile" {
+		len(staged.RouteSets[0].CandidateProfileIDs) != 2 ||
+		staged.RouteSets[0].CandidateProfileIDs[0].String() != "access-control-profile" ||
+		staged.RouteSets[0].CandidateProfileIDs[1] != access.OriginalPassthroughProfileID() {
 		t.Fatalf("unconfigured candidate entered RouteSet: %+v", staged.RouteSets)
 	}
 
@@ -249,21 +250,25 @@ func TestAccessCandidateMutationStagesCredentialBeforeSelectingRoute(t *testing.
 		t.Fatalf("select candidate code=%d body=%s", selected.Code, selected.Body.Bytes())
 	}
 	selectedWire := append([]byte(nil), selected.Body.Bytes()...)
-	var selectResult desktopcontrol.AccessCandidateMutationResponse
+	var selectResult desktopcontrol.AccessApplyResponse
 	decodeResponse(t, selected, &selectResult)
 	if selectResult.Revision != 3 ||
-		selectResult.Candidate != addResult.Candidate ||
 		len(selectResult.PlanHash) != 64 {
 		t.Fatalf("select response = %+v", selectResult)
+	}
+	if bytes.Contains(selectedWire, []byte("candidate")) ||
+		bytes.Contains(selectedWire, []byte("credentialId")) {
+		t.Fatalf("select response leaked staging coordinates: %s", selectedWire)
 	}
 	active, exists, err := runtime.AccessCatalog().ReadAccess(t.Context(), accessID)
 	if err != nil || !exists {
 		t.Fatalf("read selected aggregate exists=%t err=%v", exists, err)
 	}
 	if active.Binding.Revision != 3 ||
-		len(active.RouteSets[0].CandidateProfileIDs) != 2 ||
+		len(active.RouteSets[0].CandidateProfileIDs) != 3 ||
 		active.RouteSets[0].CandidateProfileIDs[0] != profileID ||
 		active.RouteSets[0].CandidateProfileIDs[1].String() != "access-control-profile" ||
+		active.RouteSets[0].CandidateProfileIDs[2] != access.OriginalPassthroughProfileID() ||
 		active.RouteSets[0].FallbackMode() != access.FallbackDisabled {
 		t.Fatalf("selected RouteSet = %+v", active.RouteSets[0])
 	}
@@ -297,6 +302,57 @@ func TestAccessCandidateMutationStagesCredentialBeforeSelectingRoute(t *testing.
 			replayedSelect.Code,
 			replayedSelect.Body.Bytes(),
 		)
+	}
+
+	originalPath := "/api/v1/accesses/access-control/profiles/" +
+		access.OriginalPassthroughProfileID().String() +
+		"/actions/select-candidate"
+	originalSelected := doMutation(
+		t,
+		application,
+		"127.0.0.1:43141",
+		originalPath,
+		"unused",
+		3,
+		"candidate-select-original-0001",
+		nil,
+	)
+	if originalSelected.Code != http.StatusOK ||
+		bytes.Contains(originalSelected.Body.Bytes(), []byte("credential")) {
+		t.Fatalf(
+			"select original code=%d body=%s",
+			originalSelected.Code,
+			originalSelected.Body.Bytes(),
+		)
+	}
+	var originalResult desktopcontrol.AccessApplyResponse
+	decodeResponse(t, originalSelected, &originalResult)
+	if originalResult.Revision != 4 || len(originalResult.PlanHash) != 64 {
+		t.Fatalf("select original response = %+v", originalResult)
+	}
+	originalSnapshot, err := runtime.SnapshotResolver().ResolveAccess(accessID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	originalPrimary, found := originalSnapshot.Candidate(0)
+	if !found ||
+		originalPrimary.ProfileID() != access.OriginalPassthroughProfileID() ||
+		originalPrimary.Kind() != access.EndpointProfileOriginalPassthrough {
+		t.Fatalf(
+			"selected original candidate=%+v found=%t",
+			originalPrimary,
+			found,
+		)
+	}
+	originalAggregate, _, err := runtime.AccessCatalog().ReadAccess(t.Context(), accessID)
+	if err != nil ||
+		len(originalAggregate.RouteSets[0].CandidateProfileIDs) != 3 ||
+		originalAggregate.RouteSets[0].CandidateProfileIDs[0] !=
+			access.OriginalPassthroughProfileID() ||
+		originalAggregate.RouteSets[0].CandidateProfileIDs[1] != profileID ||
+		originalAggregate.RouteSets[0].CandidateProfileIDs[2].String() !=
+			"access-control-profile" {
+		t.Fatalf("original route choices = %+v err=%v", originalAggregate.RouteSets, err)
 	}
 
 	detail := doRequest(
@@ -381,7 +437,7 @@ func TestCodexAccessAddsConfiguresAndSelectsOpenAICandidate(t *testing.T) {
 	if added.Code != http.StatusCreated {
 		t.Fatalf("Codex add code=%d body=%s", added.Code, added.Body.Bytes())
 	}
-	var addResult desktopcontrol.AccessCandidateMutationResponse
+	var addResult desktopcontrol.AccessAddCandidateResponse
 	decodeResponse(t, added, &addResult)
 	profileID, err := access.NewEndpointProfileID(addResult.Candidate.ProfileID)
 	if err != nil {
@@ -407,7 +463,9 @@ func TestCodexAccessAddsConfiguresAndSelectsOpenAICandidate(t *testing.T) {
 		target.Origin.String() != "https://codex-relay.example.test/v1" ||
 		account.AuthDriverRef != access.StaticHeaderAuthDriverRef() ||
 		account.Enabled ||
-		len(staged.RouteSets[0].CandidateProfileIDs) != 1 {
+		len(staged.RouteSets[0].CandidateProfileIDs) != 2 ||
+		staged.RouteSets[0].CandidateProfileIDs[1] !=
+			access.OriginalPassthroughProfileID() {
 		t.Fatalf(
 			"Codex staged resources profile=%+v target=%+v account=%+v routes=%+v",
 			profile,

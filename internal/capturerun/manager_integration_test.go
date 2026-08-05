@@ -86,13 +86,14 @@ func TestCaptureRunCapabilitiesArePersistedAsHashesAndDriveLifecycle(
 	store := openStore(t, databasePath)
 	clock := newClock(time.Date(2026, 7, 29, 1, 2, 3, 0, time.UTC))
 	manager := newManager(t, store, clock)
+	workspace := testWorkspaceScope(t)
 
 	grant, err := manager.Create(context.Background(), capturerun.CreateCommand{
 		CWD:             filepath.Join(t.TempDir(), "workspace"),
 		ExecutablePath:  "/usr/local/bin/claude",
 		Lifetime:        2 * time.Minute,
 		CatalogRevision: 1,
-		Workspace:       testWorkspaceScope(t),
+		Workspace:       workspace,
 	})
 	if err != nil {
 		t.Fatalf("create CaptureRun: %v", err)

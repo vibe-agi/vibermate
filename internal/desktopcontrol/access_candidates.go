@@ -46,7 +46,7 @@ type AccessCandidateRefResponse struct {
 	CredentialID string `json:"credentialId"`
 }
 
-type AccessCandidateMutationResponse struct {
+type AccessAddCandidateResponse struct {
 	Outcome          access.WriteOutcome        `json:"outcome"`
 	Revision         access.Revision            `json:"revision"`
 	ApplicationState AccessApplicationState     `json:"applicationState"`
@@ -131,7 +131,7 @@ func (handler *Handler) addAccessCandidate(
 				candidate,
 				ids,
 			)
-			return handler.writeCandidateMutation(
+			return handler.writeAddedCandidateMutation(
 				request.Context(),
 				command,
 				AccessCandidateRefResponse{
@@ -307,6 +307,9 @@ func appendCandidateCommand(
 		ID:                     ids.profile,
 		Revision:               next,
 		AccessID:               updated.Binding.ID,
+		Kind:                   access.EndpointProfileManaged,
+		CredentialSource:       access.CredentialSourceManagedAccount,
+		ProcessingMode:         access.ProfileProcessingManaged,
 		Name:                   candidate.name,
 		BackendDialect:         candidate.backend,
 		TargetID:               ids.target,
@@ -437,33 +440,62 @@ func (handler *Handler) selectAccessCandidate(
 			if spec != nil {
 				return problemResponse(*spec)
 			}
-			credentialID, found := candidateCredential(aggregate, profileID)
+			profile, found := candidateProfile(aggregate, profileID)
 			if !found {
 				return problemResponse(problemSpec{
 					status: http.StatusNotFound,
-					reason: ReasonCredentialNotFound,
+					reason: ReasonAccessNotConfigured,
 				})
 			}
-			credential, credentialErr := handler.credentials.GetCredential(
-				request.Context(),
-				accessID,
-				profileID,
-				credentialID,
-			)
-			if credentialErr != nil {
-				return problemResponse(classifyCredentialError(credentialErr))
-			}
-			switch credential.SecretState {
-			case secretstore.StateConfigured:
-			case secretstore.StateUnavailable:
-				return problemResponse(problemSpec{
-					status: http.StatusServiceUnavailable,
-					reason: ReasonSecretStoreUnavailable,
-				})
+			var credentialID access.AccountBindingID
+			switch profile.Kind {
+			case access.EndpointProfileOriginalPassthrough:
+				if profile.ID != access.OriginalPassthroughProfileID() ||
+					profile.CredentialSource !=
+						access.CredentialSourceClientPassthrough {
+					return problemResponse(problemSpec{
+						status: http.StatusUnprocessableEntity,
+						reason: ReasonInvalidRequest,
+					})
+				}
+			case access.EndpointProfileManaged:
+				var credentialFound bool
+				credentialID, credentialFound = candidateCredential(
+					aggregate,
+					profileID,
+				)
+				if !credentialFound {
+					return problemResponse(problemSpec{
+						status: http.StatusNotFound,
+						reason: ReasonCredentialNotFound,
+					})
+				}
+				credential, credentialErr := handler.credentials.GetCredential(
+					request.Context(),
+					accessID,
+					profileID,
+					credentialID,
+				)
+				if credentialErr != nil {
+					return problemResponse(classifyCredentialError(credentialErr))
+				}
+				switch credential.SecretState {
+				case secretstore.StateConfigured:
+				case secretstore.StateUnavailable:
+					return problemResponse(problemSpec{
+						status: http.StatusServiceUnavailable,
+						reason: ReasonSecretStoreUnavailable,
+					})
+				default:
+					return problemResponse(problemSpec{
+						status: http.StatusUnprocessableEntity,
+						reason: ReasonCredentialNotConfigured,
+					})
+				}
 			default:
 				return problemResponse(problemSpec{
 					status: http.StatusUnprocessableEntity,
-					reason: ReasonCredentialNotConfigured,
+					reason: ReasonInvalidRequest,
 				})
 			}
 			command, buildErr := selectCandidateCommand(
@@ -478,13 +510,10 @@ func (handler *Handler) selectAccessCandidate(
 					reason: ReasonInvalidRequest,
 				})
 			}
-			return handler.writeCandidateMutation(
+			return handler.writeCandidateSelection(
 				request.Context(),
 				command,
-				AccessCandidateRefResponse{
-					ProfileID:    profileID.String(),
-					CredentialID: credentialID.String(),
-				},
+				profileID,
 				http.StatusOK,
 			)
 		},
@@ -494,6 +523,18 @@ func (handler *Handler) selectAccessCandidate(
 		return
 	}
 	writeCached(writer, response)
+}
+
+func candidateProfile(
+	aggregate access.Aggregate,
+	profileID access.EndpointProfileID,
+) (access.EndpointProfile, bool) {
+	for _, profile := range aggregate.Profiles {
+		if profile.ID == profileID && profile.AccessID == aggregate.Binding.ID {
+			return profile, true
+		}
+	}
+	return access.EndpointProfile{}, false
 }
 
 func candidateCredential(
@@ -525,17 +566,26 @@ func selectCandidateCommand(
 	next := expected + 1
 	updated := aggregate.Clone()
 	updated.Binding.Revision = next
-	accountFound := false
-	for index := range updated.AccountBindings {
-		account := &updated.AccountBindings[index]
-		if account.ID == credentialID && account.ProfileID == profileID {
-			account.Enabled = true
-			account.Revision = next
-			accountFound = true
-			break
-		}
+	profile, found := candidateProfile(updated, profileID)
+	if !found {
+		return access.WriteCommand{}, access.ErrInvalidAccess
 	}
-	if !accountFound {
+	if profile.Kind == access.EndpointProfileManaged {
+		accountFound := false
+		for index := range updated.AccountBindings {
+			account := &updated.AccountBindings[index]
+			if account.ID == credentialID && account.ProfileID == profileID {
+				account.Enabled = true
+				account.Revision = next
+				accountFound = true
+				break
+			}
+		}
+		if !accountFound {
+			return access.WriteCommand{}, access.ErrInvalidAccess
+		}
+	} else if profile.Kind != access.EndpointProfileOriginalPassthrough ||
+		credentialID.String() != "" {
 		return access.WriteCommand{}, access.ErrInvalidAccess
 	}
 	for index := range updated.RouteSets {
@@ -546,9 +596,17 @@ func selectCandidateCommand(
 		order := make([]access.EndpointProfileID, 0, len(routeSet.CandidateProfileIDs)+1)
 		order = append(order, profileID)
 		for _, existing := range routeSet.CandidateProfileIDs {
-			if existing != profileID {
-				order = append(order, existing)
+			if existing == profileID {
+				continue
 			}
+			if routeSet.FallbackMode().Allows() &&
+				existing == access.OriginalPassthroughProfileID() {
+				continue
+			}
+			order = append(order, existing)
+		}
+		if profile.Kind == access.EndpointProfileOriginalPassthrough {
+			routeSet.Fallback = access.FallbackDisabled
 		}
 		routeSet.CandidateProfileIDs = order
 		routeSet.Revision = next
@@ -587,7 +645,7 @@ func (handler *Handler) readAggregateForMutation(
 	return aggregate, nil
 }
 
-func (handler *Handler) writeCandidateMutation(
+func (handler *Handler) writeAddedCandidateMutation(
 	ctx context.Context,
 	command access.WriteCommand,
 	candidate AccessCandidateRefResponse,
@@ -597,7 +655,7 @@ func (handler *Handler) writeCandidateMutation(
 	if err != nil {
 		if result.Outcome == access.WriteOutcomeCommitted &&
 			errors.Is(err, access.ErrProjectionUnavailable) {
-			return jsonResponse(status, AccessCandidateMutationResponse{
+			return jsonResponse(status, AccessAddCandidateResponse{
 				Outcome:          result.Outcome,
 				Revision:         result.Revision,
 				ApplicationState: AccessApplicationStateUnavailable,
@@ -612,12 +670,44 @@ func (handler *Handler) writeCandidateMutation(
 		SubjectID: candidate.ProfileID,
 		Status:    activity.StatusSucceeded,
 	})
-	return jsonResponse(status, AccessCandidateMutationResponse{
+	return jsonResponse(status, AccessAddCandidateResponse{
 		Outcome:          result.Outcome,
 		Revision:         result.Revision,
 		ApplicationState: AccessApplicationStateActive,
 		PlanHash:         result.PlanHash.String(),
 		Candidate:        candidate,
+	})
+}
+
+func (handler *Handler) writeCandidateSelection(
+	ctx context.Context,
+	command access.WriteCommand,
+	profileID access.EndpointProfileID,
+	status int,
+) cachedResponse {
+	result, err := handler.accesses.WriteAccess(ctx, command)
+	if err != nil {
+		if result.Outcome == access.WriteOutcomeCommitted &&
+			errors.Is(err, access.ErrProjectionUnavailable) {
+			return jsonResponse(status, AccessApplyResponse{
+				Outcome:          result.Outcome,
+				Revision:         result.Revision,
+				ApplicationState: AccessApplicationStateUnavailable,
+			})
+		}
+		return problemResponse(classifyAccessError(err))
+	}
+	handler.recordActivity(ctx, activity.Event{
+		Kind:      activity.KindAccessApplied,
+		AccessID:  command.Aggregate.Binding.ID,
+		SubjectID: profileID.String(),
+		Status:    activity.StatusSucceeded,
+	})
+	return jsonResponse(status, AccessApplyResponse{
+		Outcome:          result.Outcome,
+		Revision:         result.Revision,
+		ApplicationState: AccessApplicationStateActive,
+		PlanHash:         result.PlanHash.String(),
 	})
 }
 

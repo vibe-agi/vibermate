@@ -112,6 +112,264 @@ func TestPipelineExecutesCompleteResponseFromOneFrozenPlan(t *testing.T) {
 	}
 }
 
+func TestPipelineOriginalPassthroughPreservesRequestAndResponseEnvelope(
+	t *testing.T,
+) {
+	t.Parallel()
+
+	accessID := mustAccessID(t, "access-original-passthrough")
+	snapshot := compileOriginalTestSnapshot(
+		t,
+		accessID,
+		access.DialectAnthropicMessages,
+		"https://api.anthropic.com:443",
+	)
+	providerBody := []byte(`{"id":"msg_original","content":[{"type":"text","text":"unchanged"}]}`)
+	provider := &providerDouble{results: []providerResult{{
+		response: &http.Response{
+			StatusCode: http.StatusCreated,
+			Header: http.Header{
+				"Content-Type": []string{"application/json; charset=utf-8"},
+				"X-Upstream":   []string{"preserved"},
+			},
+			Body: io.NopCloser(bytes.NewReader(providerBody)),
+		},
+		evidence: providertransport.CredentialEvidence{
+			DriverRef: string(access.CredentialSourceClientPassthrough),
+		},
+	}}}
+	decisions := &decisionDouble{decision: ToolDecision{
+		Outcome: ToolDecisionRejected,
+	}}
+	pipeline := newTestPipeline(
+		t,
+		&resolverDouble{snapshots: []access.AccessPlanSnapshot{snapshot}},
+		provider,
+		decisions,
+	)
+	t.Cleanup(func() { shutdownPipeline(t, pipeline) })
+
+	clientBody := []byte(`{"model":"claude-client-choice","messages":[{"role":"user","content":"hello"}],"client_extension":{"keep":true}}`)
+	clientHeaders := http.Header{
+		"Authorization":     []string{"Bearer client-oauth"},
+		"Cookie":            []string{"session=client"},
+		"Anthropic-Version": []string{"2023-06-01"},
+		"X-Client-Exact":    []string{"keep"},
+		"User-Agent":        []string{"client-cli/1.0"},
+	}
+	operationID, err := access.NewClientOperationID(
+		operationcatalog.AnthropicMessagesCreateID,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	operation, err := NewClientOperationEvidence(
+		operationID,
+		1,
+		http.MethodPost,
+		"/v1/messages",
+		"beta=true",
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	request, err := NewClientRequest(
+		"exchange-original-passthrough",
+		snapshot.IngressBinding(),
+		operation,
+		clientBody,
+		ReplayGenerationCostOnly,
+		access.ApplicationProtocolHTTP1,
+		WithOriginalHeaders(clientHeaders),
+		WithClientUserAgent("client-cli/1.0"),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	downstream := &downstreamRecorder{}
+	result, err := pipeline.Execute(context.Background(), request, downstream)
+	if err != nil {
+		t.Fatalf("Execute() error = %v", err)
+	}
+	requests := provider.requestsSnapshot()
+	if len(requests) != 1 ||
+		requests[0].CredentialSource() !=
+			access.CredentialSourceClientPassthrough ||
+		requests[0].Target().Origin() != "https://api.anthropic.com:443" ||
+		requests[0].RelativePath() != "v1/messages" ||
+		requests[0].RawQuery() != "beta=true" ||
+		!bytes.Equal(requests[0].Body(), clientBody) ||
+		requests[0].Headers().Get("Authorization") != "Bearer client-oauth" ||
+		requests[0].Headers().Get("Cookie") != "session=client" ||
+		requests[0].AuthDriverRef().String() != "" {
+		t.Fatalf("original provider requests = %#v", requests)
+	}
+	envelopes := downstream.envelopesSnapshot()
+	if len(envelopes) != 1 ||
+		envelopes[0].StatusCode() != http.StatusCreated ||
+		envelopes[0].Headers().Get("Content-Type") !=
+			"application/json; charset=utf-8" ||
+		envelopes[0].Headers().Get("X-Upstream") != "preserved" ||
+		!bytes.Equal(downstream.bytesSnapshot(), providerBody) {
+		t.Fatalf(
+			"downstream envelopes=%+v body=%q",
+			envelopes,
+			downstream.bytesSnapshot(),
+		)
+	}
+	if decisions.callCount() != 0 ||
+		result.Outcome != AttemptSucceeded ||
+		result.CredentialBindingID != "" ||
+		!result.Ledger.DownstreamOrdinaryHeaders ||
+		!result.Ledger.DownstreamTerminal ||
+		result.Ledger.UpstreamSends != 1 ||
+		result.Ledger.UpstreamResponses != 1 {
+		t.Fatalf("result=%+v toolDecisions=%d", result, decisions.callCount())
+	}
+}
+
+func TestPipelineOriginalResponsesPreservesSSE(t *testing.T) {
+	t.Parallel()
+
+	accessID := mustAccessID(t, "access-original-responses")
+	snapshot := compileOriginalTestSnapshot(
+		t,
+		accessID,
+		access.DialectOpenAIResponses,
+		"https://api.openai.com:443",
+	)
+	providerBody := []byte("event: response.output_text.delta\ndata: {\"delta\":\"hi\"}\n\n")
+	provider := &providerDouble{results: []providerResult{{
+		response: &http.Response{
+			StatusCode: http.StatusOK,
+			Header: http.Header{
+				"Content-Type":  []string{"text/event-stream; charset=utf-8"},
+				"Cache-Control": []string{"no-cache"},
+			},
+			Body: io.NopCloser(bytes.NewReader(providerBody)),
+		},
+	}}}
+	pipeline := newTestPipeline(
+		t,
+		&resolverDouble{snapshots: []access.AccessPlanSnapshot{snapshot}},
+		provider,
+		&decisionDouble{},
+	)
+	t.Cleanup(func() { shutdownPipeline(t, pipeline) })
+	operationID, err := access.NewClientOperationID(
+		operationcatalog.OpenAIResponsesCreateID,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	operation, err := NewClientOperationEvidence(
+		operationID,
+		1,
+		http.MethodPost,
+		"/v1/responses",
+		"",
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	clientBody := []byte(`{"model":"client-choice","stream":true,"input":"hello"}`)
+	request, err := NewClientRequest(
+		"exchange-original-responses",
+		snapshot.IngressBinding(),
+		operation,
+		clientBody,
+		ReplayGenerationCostOnly,
+		access.ApplicationProtocolHTTP2,
+		WithOriginalHeaders(http.Header{
+			"Authorization": []string{"Bearer client-oauth"},
+			"Content-Type":  []string{"application/json"},
+		}),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	downstream := &downstreamRecorder{}
+	result, err := pipeline.Execute(context.Background(), request, downstream)
+	if err != nil {
+		t.Fatalf("Execute() error = %v", err)
+	}
+	requests := provider.requestsSnapshot()
+	if len(requests) != 1 ||
+		requests[0].RelativePath() != "v1/responses" ||
+		requests[0].RawQuery() != "" ||
+		requests[0].Headers().Get("Authorization") != "Bearer client-oauth" ||
+		!bytes.Equal(requests[0].Body(), clientBody) {
+		t.Fatalf("original Responses request = %#v", requests)
+	}
+	envelopes := downstream.envelopesSnapshot()
+	if len(envelopes) != 1 ||
+		envelopes[0].Mode() != ResponseModeEventStream ||
+		envelopes[0].Headers().Get("Cache-Control") != "no-cache" ||
+		!bytes.Equal(downstream.bytesSnapshot(), providerBody) ||
+		result.Outcome != AttemptSucceeded {
+		t.Fatalf("result=%+v envelopes=%+v body=%q", result, envelopes, downstream.bytesSnapshot())
+	}
+}
+
+func TestPipelineOriginalPassthroughForwardsProviderAuthenticationFailure(
+	t *testing.T,
+) {
+	t.Parallel()
+
+	accessID := mustAccessID(t, "access-original-auth-failure")
+	snapshot := compileOriginalTestSnapshot(
+		t,
+		accessID,
+		access.DialectAnthropicMessages,
+		"https://api.anthropic.com:443",
+	)
+	providerBody := []byte(`{"type":"error","error":{"type":"authentication_error"}}`)
+	provider := &providerDouble{results: []providerResult{{
+		response: &http.Response{
+			StatusCode: http.StatusUnauthorized,
+			Header: http.Header{
+				"Content-Type":     []string{"application/json"},
+				"Www-Authenticate": []string{`Bearer realm="provider"`},
+			},
+			Body: io.NopCloser(bytes.NewReader(providerBody)),
+		},
+	}}}
+	pipeline := newTestPipeline(
+		t,
+		&resolverDouble{snapshots: []access.AccessPlanSnapshot{snapshot}},
+		provider,
+		&decisionDouble{},
+	)
+	t.Cleanup(func() { shutdownPipeline(t, pipeline) })
+	request, err := NewClientRequest(
+		"exchange-original-auth-failure",
+		snapshot.IngressBinding(),
+		mustAnthropicOperationEvidence(t),
+		[]byte(`{"model":"client-choice","messages":[]}`),
+		ReplayGenerationCostOnly,
+		access.ApplicationProtocolHTTP1,
+		WithOriginalHeaders(http.Header{
+			"Authorization": []string{"Bearer expired-client-oauth"},
+		}),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	downstream := &downstreamRecorder{}
+	result, err := pipeline.Execute(context.Background(), request, downstream)
+	if err == nil {
+		t.Fatal("Execute() error = nil, want provider status failure")
+	}
+	envelopes := downstream.envelopesSnapshot()
+	if len(envelopes) != 1 ||
+		envelopes[0].StatusCode() != http.StatusUnauthorized ||
+		envelopes[0].Headers().Get("Www-Authenticate") != `Bearer realm="provider"` ||
+		!bytes.Equal(downstream.bytesSnapshot(), providerBody) ||
+		result.Outcome != AttemptFailed {
+		t.Fatalf("result=%+v envelopes=%+v body=%q err=%v", result, envelopes, downstream.bytesSnapshot(), err)
+	}
+}
+
 func TestPipelineExecutesCompleteResponsesOperationFromOneFrozenPlan(
 	t *testing.T,
 ) {
@@ -2094,6 +2352,7 @@ func (provider *blockingProvider) Do(
 type downstreamRecorder struct {
 	mu           sync.Mutex
 	modes        []ResponseMode
+	envelopes    []ResponseEnvelope
 	body         bytes.Buffer
 	aborts       []FailureNotice
 	keepalives   int
@@ -2166,11 +2425,20 @@ func (body *blockingProviderBody) Close() error {
 
 func (downstream *downstreamRecorder) Begin(
 	_ context.Context,
-	mode ResponseMode,
+	envelope ResponseEnvelope,
 ) error {
 	downstream.mu.Lock()
 	defer downstream.mu.Unlock()
-	downstream.modes = append(downstream.modes, mode)
+	downstream.modes = append(downstream.modes, envelope.Mode())
+	cloned, err := NewResponseEnvelope(
+		envelope.Mode(),
+		envelope.StatusCode(),
+		envelope.Headers(),
+	)
+	if err != nil {
+		return err
+	}
+	downstream.envelopes = append(downstream.envelopes, cloned)
 	return nil
 }
 
@@ -2217,6 +2485,20 @@ func (downstream *downstreamRecorder) modesSnapshot() []ResponseMode {
 	downstream.mu.Lock()
 	defer downstream.mu.Unlock()
 	return slices.Clone(downstream.modes)
+}
+
+func (downstream *downstreamRecorder) envelopesSnapshot() []ResponseEnvelope {
+	downstream.mu.Lock()
+	defer downstream.mu.Unlock()
+	envelopes := make([]ResponseEnvelope, len(downstream.envelopes))
+	for index, envelope := range downstream.envelopes {
+		envelopes[index], _ = NewResponseEnvelope(
+			envelope.Mode(),
+			envelope.StatusCode(),
+			envelope.Headers(),
+		)
+	}
+	return envelopes
 }
 
 func (downstream *downstreamRecorder) bytesSnapshot() []byte {
@@ -2706,6 +2988,50 @@ func compileTestSnapshotWithDialect(
 	clientDialect access.Dialect,
 	clientOriginValue string,
 ) access.AccessPlanSnapshot {
+	return compileTestSnapshotWithDialectMode(
+		t,
+		accessID,
+		revision,
+		modelValue,
+		endpointValue,
+		endpointRevision,
+		clientDialect,
+		clientOriginValue,
+		false,
+	)
+}
+
+func compileOriginalTestSnapshot(
+	t *testing.T,
+	accessID access.AccessID,
+	clientDialect access.Dialect,
+	clientOriginValue string,
+) access.AccessPlanSnapshot {
+	t.Helper()
+	return compileTestSnapshotWithDialectMode(
+		t,
+		accessID,
+		1,
+		"unused-managed-model",
+		accessID.String()+"-endpoint",
+		1,
+		clientDialect,
+		clientOriginValue,
+		true,
+	)
+}
+
+func compileTestSnapshotWithDialectMode(
+	t *testing.T,
+	accessID access.AccessID,
+	revision access.Revision,
+	modelValue string,
+	endpointValue string,
+	endpointRevision access.Revision,
+	clientDialect access.Dialect,
+	clientOriginValue string,
+	original bool,
+) access.AccessPlanSnapshot {
 	t.Helper()
 	anthropicCodecID, err := access.NewCodecPairID(anthropicchat.CodecPairID)
 	if err != nil {
@@ -2715,13 +3041,25 @@ func compileTestSnapshotWithDialect(
 	if err != nil {
 		t.Fatal(err)
 	}
+	anthropicPassthroughID, err := access.NewCodecPairID(
+		anthropicchat.MessagesCodecPairID,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	responsesPassthroughID, err := access.NewCodecPairID(
+		"openai-responses-original-passthrough",
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
 	operations, err := operationcatalog.BuiltIn()
 	if err != nil {
 		t.Fatal(err)
 	}
 	catalog, err := access.NewCatalog(access.CatalogOptions{
 		Capabilities: access.PlanCapabilities{
-			MaxEndpointProfiles: 1,
+			MaxEndpointProfiles: 2,
 			MaxAccountBindings:  1,
 			MaxRouteSets:        1,
 		},
@@ -2755,6 +3093,34 @@ func compileTestSnapshotWithDialect(
 					access.ProviderCapabilityToolCalls,
 				},
 			},
+			{
+				ID:              anthropicPassthroughID,
+				Revision:        anthropicchat.MessagesCodecRevision,
+				ClientDialect:   access.DialectAnthropicMessages,
+				ProviderDialect: access.DialectAnthropicMessages,
+				ClientOperationIDs: operations.SemanticOperationIDs(
+					access.DialectAnthropicMessages,
+				),
+				RequiredCapabilities: []access.ProviderCapability{
+					access.ProviderCapabilityMessages,
+					access.ProviderCapabilityStreaming,
+					access.ProviderCapabilityToolCalls,
+				},
+			},
+			{
+				ID:              responsesPassthroughID,
+				Revision:        1,
+				ClientDialect:   access.DialectOpenAIResponses,
+				ProviderDialect: access.DialectOpenAIResponses,
+				ClientOperationIDs: operations.SemanticOperationIDs(
+					access.DialectOpenAIResponses,
+				),
+				RequiredCapabilities: []access.ProviderCapability{
+					access.ProviderCapabilityMessages,
+					access.ProviderCapabilityStreaming,
+					access.ProviderCapabilityToolCalls,
+				},
+			},
 		},
 		AuthDrivers: []access.AuthDriverDefinition{{
 			Ref:      access.StaticHeaderAuthDriverRef(),
@@ -2768,10 +3134,10 @@ func compileTestSnapshotWithDialect(
 			Mode:     access.PluginPlanModePassThrough,
 			Revision: 1,
 		}},
-		ModelPolicyModes: []access.ModelPolicyModeDefinition{{
-			Mode:     access.ModelPolicyModeFixed,
-			Revision: 1,
-		}},
+		ModelPolicyModes: []access.ModelPolicyModeDefinition{
+			{Mode: access.ModelPolicyModePassthrough, Revision: 1},
+			{Mode: access.ModelPolicyModeFixed, Revision: 1},
+		},
 		TransportProfiles:    access.BuiltInTransportFingerprintDefinitions(),
 		UpstreamWireProfiles: access.BuiltInUpstreamWireProfileDefinitions(),
 	})
@@ -2808,7 +3174,7 @@ func compileTestSnapshotWithDialect(
 	if err != nil {
 		t.Fatal(err)
 	}
-	snapshot, err := compiler.Compile(access.Aggregate{
+	aggregate := access.Aggregate{
 		Binding: access.AccessBinding{
 			ID:                accessID,
 			Revision:          revision,
@@ -2831,6 +3197,9 @@ func compileTestSnapshotWithDialect(
 			ID:                      profileID,
 			Revision:                revision,
 			AccessID:                accessID,
+			Kind:                    access.EndpointProfileManaged,
+			CredentialSource:        access.CredentialSourceManagedAccount,
+			ProcessingMode:          access.ProfileProcessingManaged,
 			Name:                    "OpenAI Chat",
 			Description:             "Fixed provider profile",
 			BackendDialect:          access.DialectOpenAIChat,
@@ -2884,7 +3253,16 @@ func compileTestSnapshotWithDialect(
 			AccessID: accessID,
 			Mode:     access.PluginPlanModePassThrough,
 		},
-	})
+	}
+	aggregate, err = access.AttachOriginalPassthrough(aggregate)
+	if err != nil {
+		t.Fatalf("AttachOriginalPassthrough() error = %v", err)
+	}
+	if original {
+		aggregate.RouteSets[0].CandidateProfileIDs =
+			[]access.EndpointProfileID{access.OriginalPassthroughProfileID()}
+	}
+	snapshot, err := compiler.Compile(aggregate)
 	if err != nil {
 		t.Fatalf("Compile() error = %v", err)
 	}

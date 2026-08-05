@@ -9,6 +9,8 @@ import (
 	"time"
 
 	"github.com/vibe-agi/vibermate/internal/access"
+	"github.com/vibe-agi/vibermate/internal/capturerun"
+	"github.com/vibe-agi/vibermate/internal/clientadapter"
 	"github.com/vibe-agi/vibermate/internal/workspaceidentity"
 	"github.com/vibe-agi/vibermate/internal/workspaceroute"
 )
@@ -67,10 +69,12 @@ func TestWorkspaceRouteRepositoryCreatesCASUpdatesAndReopens(t *testing.T) {
 	updatedAt := createdAt.Add(time.Minute)
 	updated, err := repository.CompareAndSwap(
 		context.Background(),
-		bindingID,
-		1,
-		secondProfile,
-		updatedAt,
+		workspaceroute.UpdateMutation{
+			ID:        bindingID,
+			Expected:  1,
+			ProfileID: secondProfile,
+			UpdatedAt: updatedAt,
+		},
 	)
 	if err != nil {
 		t.Fatal(err)
@@ -81,10 +85,12 @@ func TestWorkspaceRouteRepositoryCreatesCASUpdatesAndReopens(t *testing.T) {
 	}
 	if _, err := repository.CompareAndSwap(
 		context.Background(),
-		bindingID,
-		1,
-		firstProfile,
-		updatedAt.Add(time.Minute),
+		workspaceroute.UpdateMutation{
+			ID:        bindingID,
+			Expected:  1,
+			ProfileID: firstProfile,
+			UpdatedAt: updatedAt.Add(time.Minute),
+		},
 	); !errors.Is(err, workspaceroute.ErrRevisionConflict) {
 		t.Fatalf("stale CAS error = %v", err)
 	}
@@ -113,6 +119,116 @@ func TestWorkspaceRouteRepositoryCreatesCASUpdatesAndReopens(t *testing.T) {
 	}
 	if len(page) != 1 || page[0] != updated {
 		t.Fatalf("page = %+v", page)
+	}
+}
+
+func TestWorkspaceRouteAuthSourceGuardSharesTheCaptureRunWriteOrder(
+	t *testing.T,
+) {
+	t.Parallel()
+	store := openTestStore(t, filepath.Join(t.TempDir(), "runtime.db"))
+	defer func() { _ = store.Shutdown(context.Background()) }()
+	routes := store.WorkspaceRouteRepository()
+	runs := store.CaptureRunRepository()
+	accessID, err := access.NewAccessID("access-guarded")
+	if err != nil {
+		t.Fatal(err)
+	}
+	firstProfile, err := access.NewEndpointProfileID("profile-client-auth")
+	if err != nil {
+		t.Fatal(err)
+	}
+	managedProfile, err := access.NewEndpointProfileID("profile-managed")
+	if err != nil {
+		t.Fatal(err)
+	}
+	machineID := mustMachineID(t, 0x31)
+	workspaceID := mustWorkspaceID(t, 0x32)
+	bindingID, err := workspaceroute.BindingIDFor(
+		accessID,
+		machineID,
+		workspaceID,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	now := time.Unix(1_800_100_000, 0).UTC()
+	if _, err := routes.ResolveOrCreate(
+		context.Background(),
+		workspaceroute.CreateRequest{
+			ID:                          bindingID,
+			AccessID:                    accessID,
+			MachineID:                   machineID,
+			WorkspaceID:                 workspaceID,
+			MachineRegistrationRevision: 1,
+			WorkspaceLabel:              "project",
+			WorkspaceEvidence:           workspaceidentity.EvidenceLocalLauncher,
+			ProfileID:                   firstProfile,
+			UpdatedAt:                   now,
+		},
+	); err != nil {
+		t.Fatal(err)
+	}
+	controlDigest := capturerun.CapabilityDigest{2}
+	if err := runs.Create(context.Background(), capturerun.DurableRecord{
+		ID:                          "run-guarded",
+		ProxyCapabilityHash:         capturerun.CapabilityDigest{1},
+		ControlCapabilityHash:       controlDigest,
+		CWD:                         filepath.Join(t.TempDir(), "workspace"),
+		ExecutableLabel:             "claude",
+		CatalogRevision:             clientadapter.CatalogRevision(1),
+		MachineID:                   machineID,
+		MachineRegistrationRevision: 1,
+		WorkspaceID:                 workspaceID,
+		WorkspaceLabel:              "project",
+		WorkspaceEvidence:           workspaceidentity.EvidenceLocalLauncher,
+		WorkspaceDerivationRevision: 1,
+		Recognition:                 clientadapter.RecognitionUnknown,
+		State:                       capturerun.StateCreated,
+		Observation:                 capturerun.ObservationWaitingForTraffic,
+		CreatedAt:                   now,
+		ExpiresAt:                   now.Add(10 * time.Minute),
+		UpdatedAt:                   now,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	guarded := workspaceroute.UpdateMutation{
+		ID:                        bindingID,
+		Expected:                  1,
+		ProfileID:                 managedProfile,
+		UpdatedAt:                 now.Add(time.Minute),
+		RequireNoActiveCaptureRun: true,
+	}
+	if _, err := routes.CompareAndSwap(
+		context.Background(),
+		guarded,
+	); !errors.Is(err, workspaceroute.ErrCaptureRunRestartRequired) {
+		t.Fatalf("active CaptureRun guard error = %v", err)
+	}
+	current, err := routes.Get(context.Background(), bindingID)
+	if err != nil || current.Revision != 1 || current.ProfileID != firstProfile {
+		t.Fatalf("guarded route changed: record=%+v err=%v", current, err)
+	}
+	if err := runs.Finish(
+		context.Background(),
+		"run-guarded",
+		controlDigest,
+		now.Add(2*time.Minute),
+	); err != nil {
+		t.Fatal(err)
+	}
+	updated, err := routes.CompareAndSwap(
+		context.Background(),
+		workspaceroute.UpdateMutation{
+			ID:                        bindingID,
+			Expected:                  1,
+			ProfileID:                 managedProfile,
+			UpdatedAt:                 now.Add(3 * time.Minute),
+			RequireNoActiveCaptureRun: true,
+		},
+	)
+	if err != nil || updated.Revision != 2 || updated.ProfileID != managedProfile {
+		t.Fatalf("route after run finish=%+v err=%v", updated, err)
 	}
 }
 

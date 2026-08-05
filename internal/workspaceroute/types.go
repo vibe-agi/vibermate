@@ -23,10 +23,11 @@ const (
 )
 
 var (
-	ErrInvalidBinding   = errors.New("workspace route binding is invalid")
-	ErrBindingNotFound  = errors.New("workspace route binding was not found")
-	ErrRevisionConflict = errors.New("workspace route binding revision conflict")
-	ErrRouteUnavailable = errors.New("workspace route is unavailable")
+	ErrInvalidBinding            = errors.New("workspace route binding is invalid")
+	ErrBindingNotFound           = errors.New("workspace route binding was not found")
+	ErrRevisionConflict          = errors.New("workspace route binding revision conflict")
+	ErrRouteUnavailable          = errors.New("workspace route is unavailable")
+	ErrCaptureRunRestartRequired = errors.New("active CaptureRun must stop before changing credential source")
 )
 
 type BindingID string
@@ -153,14 +154,28 @@ func (request PageRequest) Normalized() PageRequest {
 type Repository interface {
 	ResolveOrCreate(context.Context, CreateRequest) (Record, error)
 	Get(context.Context, BindingID) (Record, error)
-	CompareAndSwap(
-		context.Context,
-		BindingID,
-		Revision,
-		access.EndpointProfileID,
-		time.Time,
-	) (Record, error)
+	CompareAndSwap(context.Context, UpdateMutation) (Record, error)
 	List(context.Context, PageRequest) ([]Record, error)
+}
+
+// UpdateMutation keeps the auth-bootstrap safety condition in the same SQLite
+// transaction as the route CAS. A separate preflight read would race a newly
+// created CaptureRun.
+type UpdateMutation struct {
+	ID                        BindingID
+	Expected                  Revision
+	ProfileID                 access.EndpointProfileID
+	UpdatedAt                 time.Time
+	RequireNoActiveCaptureRun bool
+}
+
+func (mutation UpdateMutation) Validate() error {
+	if _, err := ParseBindingID(mutation.ID.String()); err != nil ||
+		!mutation.Expected.Valid() || mutation.ProfileID.String() == "" ||
+		mutation.UpdatedAt.IsZero() {
+		return ErrInvalidBinding
+	}
+	return nil
 }
 
 type Resolution struct {
@@ -216,6 +231,7 @@ const (
 type ProfileOption struct {
 	ProfileID         access.EndpointProfileID
 	ProfileRevision   access.Revision
+	Kind              access.EndpointProfileKind
 	Label             string
 	ModelPresentation string
 	AuthPresentation  AuthPresentation

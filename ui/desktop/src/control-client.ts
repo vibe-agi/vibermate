@@ -2182,6 +2182,12 @@ const accessFallbackPolicies = new Set([
   "disabled",
   "pre_first_byte_idempotent_only",
 ]);
+const accessProfileKinds = new Set(["original_passthrough", "managed"]);
+const accessCredentialSources = new Set([
+  "client_passthrough",
+  "managed_account",
+]);
+const accessProcessingModes = new Set(["observe_only", "managed"]);
 const maximumAccessDirectoryItems = 1_024;
 const maximumAccessNameBytes = 256;
 const maximumAccessDescriptionBytes = 4_096;
@@ -2284,7 +2290,6 @@ function requireAccessDetail(
     value.providerTargets.length === 0 ||
     value.providerTargets.length > maximumEndpointProfiles ||
     !Array.isArray(value.accountBindings) ||
-    value.accountBindings.length === 0 ||
     value.accountBindings.length > maximumAccountBindings ||
     !Array.isArray(value.routeSets) ||
     value.routeSets.length === 0 ||
@@ -2321,7 +2326,12 @@ function requireAccessDetail(
     if (
       profile === undefined ||
       profile.targetId !== target.id ||
-      profile.backendDialect !== target.protocol
+      profile.backendDialect !== target.protocol ||
+      (profile.kind === "original_passthrough" &&
+        (target.origin !==
+          (value.agentEndpoint as Record<string, unknown>).clientOrigin ||
+          target.protocol !==
+            (value.agentEndpoint as Record<string, unknown>).clientDialect))
     ) {
       throw new ControlContractError();
     }
@@ -2361,12 +2371,19 @@ function requireAccessDetail(
       }
       referencedAccountIds.add(bindingId);
     }
-    const defaultBinding = accountBindings.get(
-      String(profile.defaultAccountBindingId),
-    );
-    if (
-      defaultBinding === undefined ||
-      defaultBinding.profileId !== profile.id
+    if (profile.kind === "managed") {
+      const defaultBinding = accountBindings.get(
+        String(profile.defaultAccountBindingId),
+      );
+      if (
+        defaultBinding === undefined ||
+        defaultBinding.profileId !== profile.id
+      ) {
+        throw new ControlContractError();
+      }
+    } else if (
+      accountBindingIds.length !== 0 ||
+      profile.defaultAccountBindingId !== ""
     ) {
       throw new ControlContractError();
     }
@@ -2444,10 +2461,15 @@ function validAccessDetailProfile(
 ): value is Record<string, unknown> & {
   id: string;
   accountBindingIds: string[];
+  defaultAccountBindingId: string;
+  kind: "original_passthrough" | "managed";
 } {
   return (
     hasClosedFields(value, [
       "id",
+      "kind",
+      "credentialSource",
+      "processingMode",
       "name",
       "description",
       "backendDialect",
@@ -2458,6 +2480,9 @@ function validAccessDetailProfile(
       "defaultAccountBindingId",
     ]) &&
     validResourceId(value.id) &&
+    accessProfileKinds.has(String(value.kind)) &&
+    accessCredentialSources.has(String(value.credentialSource)) &&
+    accessProcessingModes.has(String(value.processingMode)) &&
     validTrimmedString(value.name, maximumAccessNameBytes, false) &&
     validTrimmedString(
       value.description,
@@ -2468,9 +2493,24 @@ function validAccessDetailProfile(
     validResourceId(value.targetId) &&
     validResourceId(value.upstreamWireProfileRef) &&
     validAccessDetailModelPolicy(value.defaultModelPolicy) &&
-    validUniqueResourceIds(value.accountBindingIds, maximumAccountBindings) &&
-    validResourceId(value.defaultAccountBindingId) &&
-    value.accountBindingIds.includes(value.defaultAccountBindingId)
+    validUniqueResourceIdsAllowEmpty(
+      value.accountBindingIds,
+      maximumAccountBindings,
+    ) &&
+    ((value.kind === "original_passthrough" &&
+      value.credentialSource === "client_passthrough" &&
+      value.processingMode === "observe_only" &&
+      value.upstreamWireProfileRef === "follow-client" &&
+      (value.defaultModelPolicy as Record<string, unknown>).mode ===
+        "passthrough" &&
+      value.accountBindingIds.length === 0 &&
+      value.defaultAccountBindingId === "") ||
+      (value.kind === "managed" &&
+        value.credentialSource === "managed_account" &&
+        value.processingMode === "managed" &&
+        value.accountBindingIds.length > 0 &&
+        validResourceId(value.defaultAccountBindingId) &&
+        value.accountBindingIds.includes(value.defaultAccountBindingId)))
   );
 }
 
@@ -2617,7 +2657,6 @@ function requireAccessPlanSummary(
     !validPlanHash(value.planHash) ||
     !validUniqueResourceIds(value.profiles, maximumEndpointProfiles) ||
     !Array.isArray(value.accountBindings) ||
-    value.accountBindings.length === 0 ||
     value.accountBindings.length > maximumAccountBindings
   ) {
     throw new ControlContractError();
@@ -2638,11 +2677,20 @@ function requireAccessPlanSummary(
     bindingIds.add(binding.id);
     referencedProfiles.add(binding.profileId);
   }
-  if (referencedProfiles.size !== profileIds.size) {
+  const unboundProfiles = value.profiles.filter(
+    (profileId) => !referencedProfiles.has(profileId),
+  );
+  if (
+    referencedProfiles.has(originalPassthroughProfileId) ||
+    unboundProfiles.length !== 1 ||
+    unboundProfiles[0] !== originalPassthroughProfileId
+  ) {
     throw new ControlContractError();
   }
   return value as unknown as AccessPlanSummary;
 }
+
+const originalPassthroughProfileId = "original-passthrough";
 
 function validUniqueResourceIds(
   value: unknown,
@@ -4395,6 +4443,7 @@ function validWorkspaceRouteProfile(value: unknown): boolean {
   return (
     hasExactFields(value, [
       "profileId",
+      "kind",
       "label",
       "modelPresentation",
       "authPresentation",
@@ -4402,6 +4451,7 @@ function validWorkspaceRouteProfile(value: unknown): boolean {
       "available",
     ]) &&
     validResourceId(value.profileId) &&
+    (value.kind === "original_passthrough" || value.kind === "managed") &&
     validDisplayLabel(value.label, 256, false) &&
     validDisplayLabel(value.modelPresentation, 256, false) &&
     workspaceRouteAuthPresentations.has(String(value.authPresentation)) &&

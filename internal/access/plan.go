@@ -358,6 +358,7 @@ type DependencyRevision struct {
 // fallback policy allowed a further attempt.
 type CompiledCandidate struct {
 	profileID   EndpointProfileID
+	kind        EndpointProfileKind
 	target      CompiledProviderTarget
 	codecPlan   CodecPlan
 	wireProfile CompiledUpstreamWireProfile
@@ -365,6 +366,10 @@ type CompiledCandidate struct {
 
 func (candidate CompiledCandidate) ProfileID() EndpointProfileID {
 	return candidate.profileID
+}
+
+func (candidate CompiledCandidate) Kind() EndpointProfileKind {
+	return candidate.kind
 }
 
 func (candidate CompiledCandidate) Target() CompiledProviderTarget {

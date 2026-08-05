@@ -266,11 +266,18 @@ func Start(ctx context.Context, options Options) (*Host, error) {
 	if err != nil {
 		return fail("CaptureRun workspace adapter", err)
 	}
+	captureAuthorities, err := capturegrant.NewRouteAwareAuthorityResolver(
+		runtime,
+		runtime.WorkspaceRoutes(),
+	)
+	if err != nil {
+		return fail("CaptureRun route authority", err)
+	}
 	grantIssuer, err := capturegrant.New(capturegrant.Options{
 		Runs:           runtime.CaptureRuns(),
 		ManualCaptures: runtime.ManualCaptures(),
 		Verifier:       verifier,
-		Authorities:    runtime,
+		Authorities:    captureAuthorities,
 		ProxyOrigin:    proxyOrigin,
 		Generation:     runtime.Status().InstanceID,
 		RootIdentity:   runtime.LocalRootIdentity(),

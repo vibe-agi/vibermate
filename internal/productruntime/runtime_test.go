@@ -54,6 +54,10 @@ func TestProductionAccessCompilerFreezesExactResponsesOperation(t *testing.T) {
 	}
 	aggregate.AgentEndpoint.ClientOrigin = clientOrigin
 	aggregate.AgentEndpoint.ClientDialect = access.DialectOpenAIResponses
+	aggregate, err = access.RefreshOriginalPassthrough(aggregate)
+	if err != nil {
+		t.Fatalf("refresh original passthrough profile: %v", err)
+	}
 	plan, err := compiler.Compile(aggregate)
 	if err != nil {
 		t.Fatalf("compile Responses Access: %v", err)
@@ -434,6 +438,10 @@ func TestProductRuntimeWiresResponsesThroughTheSameExchangeAndProvider(
 	}
 	aggregate.AgentEndpoint.ClientOrigin = clientOrigin
 	aggregate.AgentEndpoint.ClientDialect = access.DialectOpenAIResponses
+	aggregate, err = access.RefreshOriginalPassthrough(aggregate)
+	if err != nil {
+		t.Fatalf("refresh original passthrough profile: %v", err)
+	}
 	write, err := runtime.AccessWriter().WriteAccess(
 		context.Background(),
 		access.WriteCommand{
@@ -1812,9 +1820,9 @@ type runtimeDownstream struct {
 
 func (downstream *runtimeDownstream) Begin(
 	_ context.Context,
-	mode exchange.ResponseMode,
+	envelope exchange.ResponseEnvelope,
 ) error {
-	downstream.mode = mode
+	downstream.mode = envelope.Mode()
 	return nil
 }
 
@@ -2130,7 +2138,7 @@ func runtimeAccessAggregate(
 	if err != nil {
 		t.Fatalf("construct SecretRef: %v", err)
 	}
-	return access.Aggregate{
+	aggregate := access.Aggregate{
 		Binding: access.AccessBinding{
 			ID:                accessID,
 			Revision:          revision,
@@ -2153,6 +2161,9 @@ func runtimeAccessAggregate(
 			ID:                     profileID,
 			Revision:               revision,
 			AccessID:               accessID,
+			Kind:                   access.EndpointProfileManaged,
+			CredentialSource:       access.CredentialSourceManagedAccount,
+			ProcessingMode:         access.ProfileProcessingManaged,
 			Name:                   "OpenAI Chat",
 			Description:            "Fixed M0 profile",
 			BackendDialect:         access.DialectOpenAIChat,
@@ -2209,6 +2220,11 @@ func runtimeAccessAggregate(
 			Mode:     access.PluginPlanModePassThrough,
 		},
 	}
+	aggregate, err = access.AttachOriginalPassthrough(aggregate)
+	if err != nil {
+		t.Fatalf("attach original passthrough profile: %v", err)
+	}
+	return aggregate
 }
 
 type ownedComponentDouble struct {

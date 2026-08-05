@@ -45,6 +45,9 @@ type profilePayload struct {
 	ID                      string             `json:"id"`
 	Revision                access.Revision    `json:"revision"`
 	AccessID                string             `json:"accessId"`
+	Kind                    string             `json:"kind"`
+	CredentialSource        string             `json:"credentialSource"`
+	ProcessingMode          string             `json:"processingMode"`
 	Name                    string             `json:"name"`
 	Description             string             `json:"description"`
 	BackendDialect          string             `json:"backendDialect"`
@@ -136,6 +139,9 @@ func encodeAccessAggregatePayload(aggregate access.Aggregate) ([]byte, error) {
 			ID:                     profile.ID.String(),
 			Revision:               profile.Revision,
 			AccessID:               profile.AccessID.String(),
+			Kind:                   string(profile.Kind),
+			CredentialSource:       string(profile.CredentialSource),
+			ProcessingMode:         string(profile.ProcessingMode),
 			Name:                   profile.Name,
 			Description:            profile.Description,
 			BackendDialect:         string(profile.BackendDialect),
@@ -359,9 +365,12 @@ func decodeProfiles(payloads []profilePayload) ([]access.EndpointProfile, error)
 		if err != nil {
 			return nil, err
 		}
-		defaultAccountID, err := access.NewAccountBindingID(payload.DefaultAccountBindingID)
-		if err != nil {
-			return nil, invalidRepositoryValue("default account reference", err)
+		var defaultAccountID access.AccountBindingID
+		if payload.DefaultAccountBindingID != "" {
+			defaultAccountID, err = access.NewAccountBindingID(payload.DefaultAccountBindingID)
+			if err != nil {
+				return nil, invalidRepositoryValue("default account reference", err)
+			}
 		}
 		policy, err := decodeModelPolicy(payload.DefaultModelPolicy)
 		if err != nil {
@@ -371,6 +380,9 @@ func decodeProfiles(payloads []profilePayload) ([]access.EndpointProfile, error)
 			ID:                      id,
 			Revision:                payload.Revision,
 			AccessID:                accessID,
+			Kind:                    access.EndpointProfileKind(payload.Kind),
+			CredentialSource:        access.CredentialSource(payload.CredentialSource),
+			ProcessingMode:          access.ProfileProcessingMode(payload.ProcessingMode),
 			Name:                    payload.Name,
 			Description:             payload.Description,
 			BackendDialect:          access.Dialect(payload.BackendDialect),

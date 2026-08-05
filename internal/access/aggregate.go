@@ -136,6 +136,9 @@ type EndpointProfile struct {
 	ID                      EndpointProfileID
 	Revision                Revision
 	AccessID                AccessID
+	Kind                    EndpointProfileKind
+	CredentialSource        CredentialSource
+	ProcessingMode          ProfileProcessingMode
 	Name                    string
 	Description             string
 	BackendDialect          Dialect
@@ -155,6 +158,26 @@ func (profile EndpointProfile) Validate() error {
 	}
 	if err := profile.AccessID.validate(); err != nil {
 		return err
+	}
+	switch profile.Kind {
+	case EndpointProfileOriginalPassthrough:
+		if profile.CredentialSource != CredentialSourceClientPassthrough ||
+			profile.ProcessingMode != ProfileProcessingObserveOnly {
+			return fmt.Errorf(
+				"%w: original passthrough profile authority is inconsistent",
+				ErrInvalidAccess,
+			)
+		}
+	case EndpointProfileManaged:
+		if profile.CredentialSource != CredentialSourceManagedAccount ||
+			profile.ProcessingMode != ProfileProcessingManaged {
+			return fmt.Errorf(
+				"%w: managed profile authority is inconsistent",
+				ErrInvalidAccess,
+			)
+		}
+	default:
+		return fmt.Errorf("%w: EndpointProfile kind is invalid", ErrInvalidAccess)
 	}
 	if err := validateBoundedText("EndpointProfile name", profile.Name, MaxAccessNameBytes, false); err != nil {
 		return err
@@ -179,14 +202,27 @@ func (profile EndpointProfile) Validate() error {
 	if err := profile.DefaultModelPolicy.Validate(); err != nil {
 		return err
 	}
-	if len(profile.AccountBindingIDs) == 0 ||
-		len(profile.AccountBindingIDs) > MaxAccountBindings {
+	if len(profile.AccountBindingIDs) > MaxAccountBindings {
 		return fmt.Errorf("%w: profile account references are invalid", ErrInvalidAccess)
 	}
 	for _, accountID := range profile.AccountBindingIDs {
 		if err := accountID.validate(); err != nil {
 			return err
 		}
+	}
+	if profile.Kind == EndpointProfileOriginalPassthrough {
+		if len(profile.AccountBindingIDs) != 0 ||
+			profile.DefaultAccountBindingID.String() != "" ||
+			profile.DefaultModelPolicy.Mode != ModelPolicyModePassthrough {
+			return fmt.Errorf(
+				"%w: original passthrough profile contains managed fields",
+				ErrInvalidAccess,
+			)
+		}
+		return nil
+	}
+	if len(profile.AccountBindingIDs) == 0 {
+		return fmt.Errorf("%w: managed profile has no account", ErrInvalidAccess)
 	}
 	return profile.DefaultAccountBindingID.validate()
 }
@@ -435,8 +471,7 @@ func (aggregate Aggregate) Validate() error {
 		len(aggregate.ProviderTargets) > MaxEndpointProfiles {
 		return fmt.Errorf("%w: ProviderTarget count is invalid", ErrInvalidAccess)
 	}
-	if len(aggregate.AccountBindings) == 0 ||
-		len(aggregate.AccountBindings) > MaxAccountBindings {
+	if len(aggregate.AccountBindings) > MaxAccountBindings {
 		return fmt.Errorf("%w: account binding count is invalid", ErrInvalidAccess)
 	}
 	if len(aggregate.RouteSets) == 0 || len(aggregate.RouteSets) > MaxRouteSets {
@@ -518,6 +553,9 @@ func (aggregate Aggregate) Equal(other Aggregate) bool {
 		if left.ID != right.ID ||
 			left.Revision != right.Revision ||
 			left.AccessID != right.AccessID ||
+			left.Kind != right.Kind ||
+			left.CredentialSource != right.CredentialSource ||
+			left.ProcessingMode != right.ProcessingMode ||
 			left.Name != right.Name ||
 			left.Description != right.Description ||
 			left.BackendDialect != right.BackendDialect ||

@@ -50,6 +50,7 @@ const previewManualCaptureContext: ManualCaptureContext = {
 };
 
 const previewWorkAccess = buildAccessApplyInput({
+  mode: "managed",
   accessId: "work",
   name: "Work Claude",
   description: "Primary work connection",
@@ -184,6 +185,7 @@ class PreviewControlClient implements ControlClient {
       approvedProfiles: [
         {
           profileId: "work-openai",
+          kind: "managed",
           label: "001 · Demo route",
           modelPresentation: "example-model",
           authPresentation: "vibermate_account",
@@ -192,10 +194,20 @@ class PreviewControlClient implements ControlClient {
         },
         {
           profileId: "work-secondary",
+          kind: "managed",
           label: "002 · Backup relay",
           modelPresentation: "gpt-5.6-sol",
           authPresentation: "vibermate_account",
           authLabel: "002",
+          available: true,
+        },
+        {
+          profileId: "original-passthrough",
+          kind: "original_passthrough",
+          label: "Current client login",
+          modelPresentation: "passthrough",
+          authPresentation: "client_auth",
+          authLabel: "Claude Code login",
           available: true,
         },
       ],
@@ -443,22 +455,74 @@ class PreviewControlClient implements ControlClient {
       );
     }
     const input = entry.input;
+    const originalProfileId = "original-passthrough";
+    const originalTargetId = "original-client-origin";
+    const defaultRouteSetId = "default-route";
+    const managedProfiles = input.profiles.map((profile) => ({
+      ...profile,
+      kind: "managed" as const,
+      credentialSource: "managed_account" as const,
+      processingMode: "managed" as const,
+    }));
+    const originalProfile = {
+      id: originalProfileId,
+      kind: "original_passthrough" as const,
+      credentialSource: "client_passthrough" as const,
+      processingMode: "observe_only" as const,
+      name: "Current client login",
+      description: "",
+      backendDialect: input.agentEndpoint.clientDialect,
+      targetId: originalTargetId,
+      upstreamWireProfileRef: "follow-client",
+      defaultModelPolicy: { mode: "passthrough" as const },
+      accountBindingIds: [] as string[],
+      defaultAccountBindingId: "",
+    };
+    const routeSets =
+      input.routeSets.length === 0
+        ? [
+            {
+              id: defaultRouteSetId,
+              candidateProfileIds: [originalProfileId],
+              fallback: "disabled" as const,
+            },
+          ]
+        : input.routeSets.map((routeSet) => ({
+            ...routeSet,
+            candidateProfileIds: routeSet.candidateProfileIds.includes(
+              originalProfileId,
+            )
+              ? [...routeSet.candidateProfileIds]
+              : [...routeSet.candidateProfileIds, originalProfileId],
+            fallback: "disabled" as const,
+          }));
     return {
       revision: entry.revision,
-      access: input.access,
+      access: {
+        ...input.access,
+        defaultRouteSetId:
+          input.access.defaultRouteSetId || defaultRouteSetId,
+        profileIds: [...input.access.profileIds, originalProfileId],
+      },
       agentEndpoint: input.agentEndpoint,
-      profiles: input.profiles,
-      providerTargets: input.providerTargets,
+      profiles: [...managedProfiles, originalProfile],
+      providerTargets: [
+        ...input.providerTargets,
+        {
+          id: originalTargetId,
+          profileId: originalProfileId,
+          origin: input.agentEndpoint.clientOrigin,
+          protocol: input.agentEndpoint.clientDialect,
+          capabilities: ["messages", "streaming", "tool_calls"] as const,
+        },
+      ],
       accountBindings: input.accountBindings.map(
         ({ secretRef: _secretRef, ...binding }) => ({
           ...binding,
           secretHandling: "preserve_existing" as const,
         }),
       ),
-      routeSets: input.routeSets.map((routeSet) => ({
-        ...routeSet,
-        fallback: "disabled" as const,
-      })),
+      routeSets,
       egressPolicy: input.egressPolicy,
       pluginPlan: input.pluginPlan,
     };
@@ -596,7 +660,10 @@ class PreviewControlClient implements ControlClient {
       accessId,
       revision: entry.revision,
       planHash: "7f".repeat(32),
-      profiles: entry.input.profiles.map(({ id }) => id),
+      profiles: [
+        "original-passthrough",
+        ...entry.input.profiles.map(({ id }) => id),
+      ],
       accountBindings: entry.input.accountBindings.map(({ id, profileId }) => ({
         id,
         profileId,
@@ -658,7 +725,8 @@ class PreviewControlClient implements ControlClient {
     if (
       entry === undefined ||
       entry.revision !== expectedRevision ||
-      !entry.input.profiles.some(({ id }) => id === profileId)
+      (profileId !== "original-passthrough" &&
+        !entry.input.profiles.some(({ id }) => id === profileId))
     ) {
       throw new Error("Preview Access candidate changed");
     }
@@ -668,12 +736,17 @@ class PreviewControlClient implements ControlClient {
       expectedRevision,
       routeSets: entry.input.routeSets.map((routeSet) => ({
         ...routeSet,
-        candidateProfileIds: [
-          profileId,
-          ...routeSet.candidateProfileIds.filter(
-            (candidateId) => candidateId !== profileId,
-          ),
-        ],
+        candidateProfileIds:
+          profileId === "original-passthrough"
+            ? [profileId]
+            : [
+                profileId,
+                ...routeSet.candidateProfileIds.filter(
+                  (candidateId) =>
+                    candidateId !== profileId &&
+                    candidateId !== "original-passthrough",
+                ),
+              ],
       })),
     };
     this.#accesses.set(accessId, { input, revision });

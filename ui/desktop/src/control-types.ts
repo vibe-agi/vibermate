@@ -270,6 +270,9 @@ export interface AccessDetail {
   };
   readonly profiles: readonly {
     readonly id: string;
+    readonly kind: "original_passthrough" | "managed";
+    readonly credentialSource: "client_passthrough" | "managed_account";
+    readonly processingMode: "observe_only" | "managed";
     readonly name: string;
     readonly description: string;
     readonly backendDialect: AccessDialect;
@@ -667,6 +670,7 @@ export interface WorkspaceRouteRunSummary {
 
 export interface WorkspaceRouteProfileOption {
   readonly profileId: string;
+  readonly kind: "original_passthrough" | "managed";
   readonly label: string;
   readonly modelPresentation: string;
   readonly authPresentation: WorkspaceRouteAuthPresentation;

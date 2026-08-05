@@ -1,6 +1,7 @@
 import type { AccessApplyInput } from "./control-types.ts";
 
 export interface AccessFormValues {
+  readonly mode: "current-login" | "managed";
   readonly accessId: string;
   readonly name: string;
   readonly description: string;
@@ -51,6 +52,7 @@ export interface CredentialCoordinates {
 }
 
 export const initialAccessForm: AccessFormValues = {
+  mode: "current-login",
   accessId: "",
   name: "",
   description: "",
@@ -79,7 +81,7 @@ export function newAccessForm(
 
 export function validAccessForm(values: AccessFormValues): boolean {
   const revision = Number(values.expectedRevision);
-  return (
+  const commonFieldsAreValid =
     values.accessId.trim() === values.accessId &&
     values.accessId.length > 0 &&
     values.name.trim() === values.name &&
@@ -88,7 +90,15 @@ export function validAccessForm(values: AccessFormValues): boolean {
     revision >= 0 &&
     clientOriginIdentity(values.clientOrigin) !== undefined &&
     (values.clientDialect === "anthropic-messages" ||
-      values.clientDialect === "openai-responses") &&
+      values.clientDialect === "openai-responses");
+  if (!commonFieldsAreValid) {
+    return false;
+  }
+  if (values.mode === "current-login") {
+    return true;
+  }
+  return (
+    values.mode === "managed" &&
     (values.providerDialect === "anthropic-messages" ||
       values.providerDialect === "openai-chat") &&
     (values.authDriverRef === "anthropic_api_key" ||
@@ -173,11 +183,43 @@ export function buildAccessApplyInput(
   }
   const prefix = values.accessId;
   const endpointId = `${prefix}-agent`;
+  const egressPolicyId = `${prefix}-egress`;
+  if (values.mode === "current-login") {
+    return {
+      expectedRevision: Number(values.expectedRevision),
+      access: {
+        id: prefix,
+        name: values.name,
+        description: values.description,
+        status: "enabled",
+        agentEndpointId: endpointId,
+        defaultRouteSetId: "",
+        profileIds: [],
+        egressPolicyId,
+      },
+      agentEndpoint: {
+        id: endpointId,
+        clientOrigin,
+        clientDialect: values.clientDialect,
+      },
+      profiles: [],
+      providerTargets: [],
+      accountBindings: [],
+      routeSets: [],
+      egressPolicy: {
+        id: egressPolicyId,
+        mode: "direct",
+      },
+      pluginPlan: {
+        mode: "pass_through",
+        bindingIds: [],
+      },
+    };
+  }
   const { profileId, credentialId: accountId } =
     credentialCoordinates(values);
   const targetId = `${prefix}-target`;
   const routeSetId = `${prefix}-routes`;
-  const egressPolicyId = `${prefix}-egress`;
   return {
     expectedRevision: Number(values.expectedRevision),
     access: {

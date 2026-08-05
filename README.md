@@ -14,10 +14,14 @@ declared capabilities before producing the sole process-local immutable
 
 The current plan contains one enabled Agent endpoint, one default route set,
 Direct egress, an explicit empty pass-through plugin plan, and dependency
-revisions. The route set may name more than one candidate; each candidate owns
-a profile, a provider target, an account binding that stores only `SecretRef`
-and `AuthDriverRef`, and a fixed model mapping, and each is compiled and frozen
-in the order the route set declares. A route set may carry
+revisions. Core always derives one invisible system `original_passthrough`
+profile that targets the exact client origin, keeps client authentication, and
+observes without semantic rewriting. The same route set may also name one or
+more managed candidates; each owns a profile, provider target, account binding that
+stores only `SecretRef` and `AuthDriverRef`, and fixed model mapping. Candidates
+are compiled and frozen in the order the route set declares. The original
+profile remains a selectable workspace route but can never be an automatic
+fallback; any route set that contains it must disable fallback. A managed-only route set may carry
 `pre_first_byte_idempotent_only`, which is the explicit permission for the
 duplicate billing and possible upstream side effects a second attempt brings;
 without it a failed attempt is reported rather than retried.
@@ -396,9 +400,12 @@ continue polling. SQLite, the Access Manager, the canonical control contract,
 and the UI now share one complete Access shape. The control API lists Accesses,
 hydrates a complete aggregate and active plan by ID, applies a typed CAS update,
 and rotates only the selected credential through its separate write-only
-boundary. The UI can create a complete enabled Access, reopen an existing one,
-add an account/route candidate, and submit the next revision without exposing
-internal identifiers or inventing defaults for fields it did not read. A
+boundary. The UI can create a complete enabled Access in the recommended
+current-login mode without a provider account or API key, or explicitly create
+managed provider routes. It can reopen an existing Access, switch its current
+route between the system original path and configured managed candidates, add
+a managed account/route candidate, and submit the next revision without
+exposing internal identifiers or inventing defaults for fields it did not read. A
 successful apply response is a closed commit receipt: `active` includes the
 exact candidate plan hash frozen at publication, while a known durable commit
 whose projection failed returns `unavailable` without a hash. The UI reports
@@ -432,9 +439,29 @@ identity and the user explicitly approves the recognized-client Root handoff;
 Linux has no recognized tier. Host
 integration tests exercise this path over real loopback listeners with a local
 child process, including bounded SIGINT convergence. They do not send provider
-traffic. The current production Access compiler still contains only managed
-account-backed profiles; the system `original_passthrough` profile remains an
-unimplemented design boundary.
+traffic. The production Access compiler now requires the Core-derived system
+`original_passthrough` profile and keeps it account-free. Selecting it sends
+the supported operation to the exact configured client origin with the
+client's current authentication, preserves the downstream H1/H2 protocol, and
+uses the default `follow-client` presentation. It does not run model mapping,
+plugins, language transformation, provider authentication, or semantic retry.
+Workspace route selection exposes both original and managed profiles. Managed
+profile changes that use the same VibeMate-owned credential bootstrap affect
+new requests without restarting a running tool. Changing between the tool's
+own login and VibeMate-managed credentials is rejected while that workspace
+has an active CaptureRun; the operator stops the tool, selects the route, and
+starts it again. The guard uses an exact SQLite workspace query rather than a
+page of recent activity, and the route repository evaluates it in the same
+write transaction as the route CAS. CaptureRun creation precedes route-aware
+launch authority resolution, so a concurrently starting run cannot pass
+between the guard and the update.
+Payload-bearing auxiliary operations such as Anthropic `count_tokens` still
+receive the local typed 422 response on both route kinds in this changeset.
+The fixed client is known to continue with its local estimate. Original-route
+forwarding for that operation requires the separate typed ClientOperationRun
+and `profile_operation` audit path; it is not reintroduced through the generic
+original-origin forwarding arm.
+No packaged credentialed acceptance report yet proves this original route.
 
 The opt-in `vibermate-acceptance` command exercises the packaged macOS arm64
 assembly with exactly one selected fixed client: Claude Code 2.1.220 or Codex

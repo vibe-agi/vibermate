@@ -334,7 +334,7 @@ func compiledSnapshot(t *testing.T) access.AccessPlanSnapshot {
 	}
 	catalog, err := access.NewCatalog(access.CatalogOptions{
 		Capabilities: access.PlanCapabilities{
-			MaxEndpointProfiles: 1,
+			MaxEndpointProfiles: 2,
 			MaxAccountBindings:  1,
 			MaxRouteSets:        1,
 		},
@@ -379,7 +379,7 @@ func compiledSnapshot(t *testing.T) access.AccessPlanSnapshot {
 	if err != nil {
 		t.Fatal(err)
 	}
-	snapshot, err := compiler.Compile(access.Aggregate{
+	aggregate := access.Aggregate{
 		Binding: access.AccessBinding{
 			ID:                accessID,
 			Revision:          1,
@@ -401,6 +401,9 @@ func compiledSnapshot(t *testing.T) access.AccessPlanSnapshot {
 			ID:                     profileID,
 			Revision:               1,
 			AccessID:               accessID,
+			Kind:                   access.EndpointProfileManaged,
+			CredentialSource:       access.CredentialSourceManagedAccount,
+			ProcessingMode:         access.ProfileProcessingManaged,
 			Name:                   "Work",
 			BackendDialect:         access.DialectOpenAIChat,
 			TargetID:               targetID,
@@ -453,7 +456,12 @@ func compiledSnapshot(t *testing.T) access.AccessPlanSnapshot {
 			AccessID: accessID,
 			Mode:     access.PluginPlanModePassThrough,
 		},
-	})
+	}
+	aggregate, err = access.AttachOriginalPassthrough(aggregate)
+	if err != nil {
+		t.Fatal(err)
+	}
+	snapshot, err := compiler.Compile(aggregate)
 	if err != nil {
 		t.Fatal(err)
 	}

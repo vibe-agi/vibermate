@@ -56,6 +56,7 @@ const (
 	ReasonSecretStoreReadOnly       ReasonCode = "secret_store_read_only"
 	ReasonWorkspaceRouteNotFound    ReasonCode = "workspace_route_not_found"
 	ReasonWorkspaceRouteUnavailable ReasonCode = "workspace_route_unavailable"
+	ReasonCaptureRunRestartRequired ReasonCode = "capture_run_restart_required"
 )
 
 type StatusReader interface {

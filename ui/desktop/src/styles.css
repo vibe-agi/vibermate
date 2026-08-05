@@ -958,6 +958,12 @@ dd {
   font-size: 0.78rem;
 }
 
+.workspace-route-assignment .workspace-route-restart-note {
+  border-left: 2px solid var(--ask);
+  padding-left: 0.55rem;
+  color: var(--ask);
+}
+
 .workspace-route-runs ul {
   display: grid;
   gap: 0.4rem;
@@ -1308,6 +1314,73 @@ dd {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 0.7rem;
+}
+
+.access-mode-options {
+  display: grid;
+  grid-template-columns: minmax(0, 1.35fr) minmax(220px, 0.65fr);
+  gap: 0.7rem;
+}
+
+.access-mode-option {
+  display: grid;
+  min-height: 132px;
+  align-content: start;
+  gap: 0.55rem;
+  border-width: 1.5px;
+  padding: 0.95rem;
+  text-align: left;
+}
+
+.access-mode-option[aria-pressed="true"] {
+  border-color: var(--signal);
+  background: var(--signal-soft);
+  box-shadow: inset 0 0 0 1px var(--signal);
+}
+
+.access-mode-option > small {
+  color: var(--muted);
+  line-height: 1.45;
+}
+
+.access-mode-option-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.7rem;
+}
+
+.access-mode-option-heading > span {
+  border: 1px solid color-mix(in srgb, var(--allow) 35%, transparent);
+  border-radius: 999px;
+  padding: 0.2rem 0.45rem;
+  color: var(--allow);
+  background: color-mix(in srgb, var(--allow) 8%, transparent);
+  font-size: 0.68rem;
+  font-weight: 700;
+}
+
+.access-mode-rail {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr) auto minmax(0, 1fr);
+  align-items: center;
+  gap: 0.35rem;
+  margin-top: 0.2rem;
+  color: var(--muted);
+  font-size: 0.7rem;
+}
+
+.access-mode-rail > span {
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 0.35rem 0.4rem;
+  text-align: center;
+  background: var(--panel);
+}
+
+.access-mode-rail > i {
+  color: var(--signal);
+  font-style: normal;
 }
 
 .access-destination-note {
@@ -2889,6 +2962,7 @@ dd {
   .activity-layout,
   .access-form,
   .access-advanced-grid,
+  .access-mode-options,
   .access-destination-options,
   .access-service-fields,
   .access-candidate-fields,

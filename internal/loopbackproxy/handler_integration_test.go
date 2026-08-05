@@ -65,8 +65,10 @@ func TestLoopbackProxyAuthenticatesMITMAndDispatchesByPathCapability(
 		URL:    mustURL(t, "/v1/messages"),
 		Host:   "api.anthropic.com:443",
 		Header: http.Header{
-			"Content-Type": []string{"application/json"},
-			"User-Agent":   []string{"agent-client/1.0"},
+			"Authorization": []string{"Bearer fixture-client-auth"},
+			"Content-Type":  []string{"application/json"},
+			"Cookie":        []string{"session=fixture"},
+			"User-Agent":    []string{"agent-client/1.0"},
 		},
 		Body:          io.NopCloser(strings.NewReader(`{"model":"client"}`)),
 		ContentLength: int64(len(`{"model":"client"}`)),
@@ -87,14 +89,20 @@ func TestLoopbackProxyAuthenticatesMITMAndDispatchesByPathCapability(
 		)
 	}
 	requests := fixture.exchanges.Requests()
-	if len(requests) != 1 ||
-		requests[0].AccessID() != fixture.accessID ||
+	if len(requests) != 1 {
+		t.Fatalf("semantic Exchange requests = %+v", requests)
+	}
+	originalHeaders, hasOriginalHeaders := requests[0].OriginalHeaders()
+	if requests[0].AccessID() != fixture.accessID ||
 		requests[0].ReplayClass() != exchange.ReplayGenerationCostOnly ||
 		string(requests[0].Body()) != `{"model":"client"}` ||
 		requests[0].CaptureRunRef() != fixture.grant.Run.ID ||
 		requests[0].IngressProfileRef() != "capture-run/"+fixture.grant.Run.ID ||
 		requests[0].ManualCaptureRef() != "" ||
 		requests[0].ClientUserAgent() != "agent-client/1.0" ||
+		!hasOriginalHeaders ||
+		originalHeaders.Get("Authorization") != "Bearer fixture-client-auth" ||
+		originalHeaders.Get("Cookie") != "session=fixture" ||
 		requests[0].ConnectionRef() == "" ||
 		strings.Contains(requests[0].ExchangeID(), fixture.grant.Run.ID) {
 		t.Fatalf("semantic Exchange requests = %+v", requests)
@@ -1309,7 +1317,15 @@ func (recorder *exchangeRecorder) Execute(
 	if failure != nil {
 		return exchange.Result{}, failure
 	}
-	if err := downstream.Begin(ctx, exchange.ResponseModeJSON); err != nil {
+	envelope, err := exchange.NewResponseEnvelope(
+		exchange.ResponseModeJSON,
+		http.StatusOK,
+		http.Header{"Content-Type": []string{"application/json"}},
+	)
+	if err != nil {
+		return exchange.Result{}, err
+	}
+	if err := downstream.Begin(ctx, envelope); err != nil {
 		return exchange.Result{}, err
 	}
 	if _, err := downstream.Write(ctx, []byte(`{"result":"proxied"}`)); err != nil {
@@ -1428,7 +1444,7 @@ func testProjectionForDialectRevision(
 	}
 	catalog, err := access.NewCatalog(access.CatalogOptions{
 		Capabilities: access.PlanCapabilities{
-			MaxEndpointProfiles: 1,
+			MaxEndpointProfiles: 2,
 			MaxAccountBindings:  1,
 			MaxRouteSets:        1,
 		},
@@ -1473,7 +1489,7 @@ func testProjectionForDialectRevision(
 	if err != nil {
 		t.Fatal(err)
 	}
-	plan, err := compiler.Compile(access.Aggregate{
+	aggregate := access.Aggregate{
 		Binding: access.AccessBinding{
 			ID:                accessID,
 			Revision:          revision,
@@ -1495,6 +1511,9 @@ func testProjectionForDialectRevision(
 			ID:                      profileID,
 			Revision:                revision,
 			AccessID:                accessID,
+			Kind:                    access.EndpointProfileManaged,
+			CredentialSource:        access.CredentialSourceManagedAccount,
+			ProcessingMode:          access.ProfileProcessingManaged,
 			Name:                    "OpenAI",
 			BackendDialect:          access.DialectOpenAIChat,
 			TargetID:                targetID,
@@ -1539,7 +1558,12 @@ func testProjectionForDialectRevision(
 			AccessID: accessID,
 			Mode:     access.PluginPlanModePassThrough,
 		},
-	})
+	}
+	aggregate, err = access.AttachOriginalPassthrough(aggregate)
+	if err != nil {
+		t.Fatal(err)
+	}
+	plan, err := compiler.Compile(aggregate)
 	if err != nil {
 		t.Fatal(err)
 	}

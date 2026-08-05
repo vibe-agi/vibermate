@@ -185,22 +185,25 @@ func (target Target) probeTransportKind() (
 }
 
 type RequestOptions struct {
-	RequestID       string
-	TargetRef       string
-	Target          Target
-	AccessRevision  access.Revision
-	PlanHash        access.PlanHash
-	Action          *offlinehold.ActionLease
-	Method          string
-	RelativePath    string
-	Headers         http.Header
-	Body            []byte
-	SecretRef       access.SecretRef
-	AuthDriverRef   access.AuthDriverRef
-	WireProfile     access.CompiledUpstreamWireProfile
-	ClientProtocol  access.ApplicationProtocol
-	ClientUserAgent string
-	ClientHello     transportprofile.Observation
+	RequestID        string
+	TargetRef        string
+	Target           Target
+	AccessRevision   access.Revision
+	PlanHash         access.PlanHash
+	Action           *offlinehold.ActionLease
+	Method           string
+	RelativePath     string
+	Headers          http.Header
+	Body             []byte
+	RawQuery         string
+	CredentialSource access.CredentialSource
+	ClientOrigin     access.ClientOrigin
+	SecretRef        access.SecretRef
+	AuthDriverRef    access.AuthDriverRef
+	WireProfile      access.CompiledUpstreamWireProfile
+	ClientProtocol   access.ApplicationProtocol
+	ClientUserAgent  string
+	ClientHello      transportprofile.Observation
 	// ConnectionID, ExchangeID, and ParentAttemptID associate this outbound
 	// with the client connection, the Exchange, and the upstream attempt that
 	// caused it. They travel as typed references so no identity encodes
@@ -217,26 +220,28 @@ type RequestOptions struct {
 // Request is a frozen provider representation. Its URL, authority, body,
 // credential reference, and auth driver cannot be mutated after construction.
 type Request struct {
-	connectionID    string
-	exchangeID      string
-	parentAttemptID string
-	egressAttemptID string
-	requestID       string
-	targetRef       string
-	target          Target
-	probeTarget     offlinehold.ProbeTarget
-	action          *offlinehold.ActionLease
-	method          string
-	relativePath    string
-	headers         http.Header
-	body            []byte
-	secretReference secretstore.Reference
-	authDriverRef   access.AuthDriverRef
-	wireProfile     access.CompiledUpstreamWireProfile
-	wireVariant     access.CompiledUpstreamWireVariant
-	clientProtocol  access.ApplicationProtocol
-	clientUserAgent string
-	clientHello     transportprofile.Observation
+	connectionID     string
+	exchangeID       string
+	parentAttemptID  string
+	egressAttemptID  string
+	requestID        string
+	targetRef        string
+	target           Target
+	probeTarget      offlinehold.ProbeTarget
+	action           *offlinehold.ActionLease
+	method           string
+	relativePath     string
+	headers          http.Header
+	body             []byte
+	rawQuery         string
+	credentialSource access.CredentialSource
+	secretReference  secretstore.Reference
+	authDriverRef    access.AuthDriverRef
+	wireProfile      access.CompiledUpstreamWireProfile
+	wireVariant      access.CompiledUpstreamWireVariant
+	clientProtocol   access.ApplicationProtocol
+	clientUserAgent  string
+	clientHello      transportprofile.Observation
 }
 
 // WirePresentationEvidence is the redacted product-level presentation chosen
@@ -331,12 +336,47 @@ func NewRequest(options RequestOptions) (Request, error) {
 	if len(options.Body) == 0 || len(options.Body) > MaxProviderRequestBytes {
 		return Request{}, errors.New("provider request body has an invalid size")
 	}
-	reference, err := secretstore.ParseReference(options.SecretRef.String())
-	if err != nil {
+	if err := validateRawQuery(options.RawQuery); err != nil {
 		return Request{}, err
 	}
-	if options.AuthDriverRef.String() == "" {
-		return Request{}, errors.New("provider AuthDriver reference is empty")
+	var reference secretstore.Reference
+	switch options.CredentialSource {
+	case access.CredentialSourceManagedAccount:
+		reference, err = secretstore.ParseReference(options.SecretRef.String())
+		if err != nil {
+			return Request{}, err
+		}
+		if options.AuthDriverRef.String() == "" {
+			return Request{}, errors.New("provider AuthDriver reference is empty")
+		}
+		if options.ClientOrigin.String() != "" {
+			return Request{}, errors.New(
+				"managed provider request carries a client origin authority",
+			)
+		}
+	case access.CredentialSourceClientPassthrough:
+		clientOrigin, originErr := access.NewClientOrigin(
+			options.ClientOrigin.String(),
+		)
+		if originErr != nil || clientOrigin != options.ClientOrigin {
+			return Request{}, errors.New(
+				"client passthrough origin is not canonical",
+			)
+		}
+		if options.Target.origin != options.ClientOrigin.String() ||
+			options.Target.basePath != "" {
+			return Request{}, errors.New(
+				"client passthrough target differs from the exact client origin",
+			)
+		}
+		if options.SecretRef.String() != "" ||
+			options.AuthDriverRef.String() != "" {
+			return Request{}, errors.New(
+				"client passthrough request carries managed credential authority",
+			)
+		}
+	default:
+		return Request{}, errors.New("provider credential source is invalid")
 	}
 	if options.WireProfile.Ref().String() == "" ||
 		options.WireProfile.Revision() == 0 {
@@ -378,26 +418,28 @@ func NewRequest(options RequestOptions) (Request, error) {
 		)
 	}
 	return Request{
-		connectionID:    options.ConnectionID,
-		exchangeID:      options.ExchangeID,
-		parentAttemptID: options.ParentAttemptID,
-		egressAttemptID: options.EgressAttemptID,
-		requestID:       options.RequestID,
-		targetRef:       options.TargetRef,
-		target:          options.Target,
-		probeTarget:     probeTarget,
-		action:          options.Action,
-		method:          options.Method,
-		relativePath:    relativePath,
-		headers:         options.Headers.Clone(),
-		body:            bytes.Clone(options.Body),
-		secretReference: reference,
-		authDriverRef:   options.AuthDriverRef,
-		wireProfile:     options.WireProfile,
-		wireVariant:     wireVariant,
-		clientProtocol:  options.ClientProtocol,
-		clientUserAgent: options.ClientUserAgent,
-		clientHello:     options.ClientHello,
+		connectionID:     options.ConnectionID,
+		exchangeID:       options.ExchangeID,
+		parentAttemptID:  options.ParentAttemptID,
+		egressAttemptID:  options.EgressAttemptID,
+		requestID:        options.RequestID,
+		targetRef:        options.TargetRef,
+		target:           options.Target,
+		probeTarget:      probeTarget,
+		action:           options.Action,
+		method:           options.Method,
+		relativePath:     relativePath,
+		headers:          options.Headers.Clone(),
+		body:             bytes.Clone(options.Body),
+		rawQuery:         options.RawQuery,
+		credentialSource: options.CredentialSource,
+		secretReference:  reference,
+		authDriverRef:    options.AuthDriverRef,
+		wireProfile:      options.WireProfile,
+		wireVariant:      wireVariant,
+		clientProtocol:   options.ClientProtocol,
+		clientUserAgent:  options.ClientUserAgent,
+		clientHello:      options.ClientHello,
 	}, nil
 }
 
@@ -425,12 +467,18 @@ func (request Request) RelativePath() string {
 	return request.relativePath
 }
 
+func (request Request) RawQuery() string { return request.rawQuery }
+
 func (request Request) Headers() http.Header {
 	return request.headers.Clone()
 }
 
 func (request Request) Body() []byte {
 	return bytes.Clone(request.body)
+}
+
+func (request Request) CredentialSource() access.CredentialSource {
+	return request.credentialSource
 }
 
 func (request Request) AuthDriverRef() access.AuthDriverRef {
@@ -450,10 +498,25 @@ func (request Request) buildURL() *url.URL {
 		path = "/" + path
 	}
 	return &url.URL{
-		Scheme: request.target.scheme,
-		Host:   request.target.httpAuthority,
-		Path:   path,
+		Scheme:   request.target.scheme,
+		Host:     request.target.httpAuthority,
+		Path:     path,
+		RawQuery: request.rawQuery,
 	}
+}
+
+func validateRawQuery(value string) error {
+	if value == "" {
+		return nil
+	}
+	if len(value) > 4096 || !utf8.ValidString(value) ||
+		strings.ContainsAny(value, "#?") {
+		return errors.New("provider request query is invalid")
+	}
+	if _, err := url.ParseQuery(value); err != nil {
+		return errors.New("provider request query is invalid")
+	}
+	return nil
 }
 
 func canonicalRelativePath(value string) (string, error) {

@@ -117,6 +117,9 @@ function accessDetail(
     profiles: [
       {
         id: profileId,
+        kind: "managed",
+        credentialSource: "managed_account",
+        processingMode: "managed",
         name: "Primary upstream",
         description: "",
         backendDialect: "openai-chat",
@@ -665,6 +668,7 @@ describe("TanStack Query dashboard runtime", () => {
     const input = buildAccessApplyInput({
       ...initialAccessForm,
       accessId: "work",
+      mode: "managed",
       fixedModel: "example-model",
       name: "Private workspace marker",
       providerOrigin: "https://private-provider.invalid/v1",

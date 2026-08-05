@@ -88,6 +88,7 @@ type accessRuntime interface {
 	access.DownstreamProtocolResolver
 	access.LeafIssuanceAdmitter
 	access.IngressCatalogReader
+	access.ActivePlanCatalog
 	access.ProviderProbeCatalog
 	access.ProjectionHealthReader
 	Shutdown(context.Context) error
@@ -161,6 +162,12 @@ func productionAccessPlanCompiler() (*access.Compiler, error) {
 	if err != nil {
 		return nil, err
 	}
+	responsesPassthroughCodecPairID, err := access.NewCodecPairID(
+		"openai-responses-original-passthrough",
+	)
+	if err != nil {
+		return nil, err
+	}
 	catalog, err := access.NewCatalog(access.CatalogOptions{
 		Capabilities: access.PlanCapabilities{
 			// A RouteSet may name a second upstream so a dropped attempt has
@@ -215,6 +222,20 @@ func productionAccessPlanCompiler() (*access.Compiler, error) {
 					access.ProviderCapabilityToolCalls,
 				},
 			},
+			{
+				ID:              responsesPassthroughCodecPairID,
+				Revision:        1,
+				ClientDialect:   access.DialectOpenAIResponses,
+				ProviderDialect: access.DialectOpenAIResponses,
+				ClientOperationIDs: operations.SemanticOperationIDs(
+					access.DialectOpenAIResponses,
+				),
+				RequiredCapabilities: []access.ProviderCapability{
+					access.ProviderCapabilityMessages,
+					access.ProviderCapabilityStreaming,
+					access.ProviderCapabilityToolCalls,
+				},
+			},
 		},
 		AuthDrivers: []access.AuthDriverDefinition{
 			{
@@ -234,10 +255,16 @@ func productionAccessPlanCompiler() (*access.Compiler, error) {
 			Mode:     access.PluginPlanModePassThrough,
 			Revision: 1,
 		}},
-		ModelPolicyModes: []access.ModelPolicyModeDefinition{{
-			Mode:     access.ModelPolicyModeFixed,
-			Revision: 1,
-		}},
+		ModelPolicyModes: []access.ModelPolicyModeDefinition{
+			{
+				Mode:     access.ModelPolicyModePassthrough,
+				Revision: 1,
+			},
+			{
+				Mode:     access.ModelPolicyModeFixed,
+				Revision: 1,
+			},
+		},
 		TransportProfiles:    access.BuiltInTransportFingerprintDefinitions(),
 		UpstreamWireProfiles: access.BuiltInUpstreamWireProfileDefinitions(),
 	})

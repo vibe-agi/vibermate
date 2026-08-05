@@ -138,6 +138,7 @@ func TestLeafIssuanceRejectsStaleRootAndProductionIP(t *testing.T) {
 				t.Fatal(err)
 			}
 			ipAggregate.AgentEndpoint.ClientOrigin = ipOrigin
+			ipAggregate = refreshOriginalPassthrough(t, ipAggregate)
 			ipPlan, err := testCompiler(t).Compile(ipAggregate)
 			if err != nil {
 				t.Fatal(err)

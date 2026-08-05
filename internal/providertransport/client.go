@@ -184,9 +184,20 @@ func (client *Client) Do(
 	if err := frozen.target.validate(); err != nil {
 		return nil, Evidence{}, err
 	}
-	authenticator, supported := client.authenticators[frozen.authDriverRef]
-	if !supported {
-		return nil, Evidence{}, errors.New("provider AuthDriver does not match the frozen plan")
+	var authenticator Authenticator
+	if frozen.credentialSource == access.CredentialSourceManagedAccount {
+		var supported bool
+		authenticator, supported = client.authenticators[frozen.authDriverRef]
+		if !supported {
+			return nil, Evidence{}, errors.New(
+				"provider AuthDriver does not match the frozen plan",
+			)
+		}
+	} else if frozen.credentialSource !=
+		access.CredentialSourceClientPassthrough {
+		return nil, Evidence{}, errors.New(
+			"provider credential source does not match the frozen plan",
+		)
 	}
 	operationContext, operation, err := client.begin(ctx)
 	if err != nil {
@@ -226,8 +237,13 @@ func (client *Client) Do(
 		return nil, Evidence{}, err
 	}
 	request.Host = frozen.target.httpAuthority
-	request.Header = sanitizeProviderHeaders(frozen.headers)
-	request.Header.Set("Content-Type", "application/json")
+	request.Header = prepareProviderHeaders(
+		frozen.headers,
+		frozen.credentialSource,
+	)
+	if frozen.credentialSource == access.CredentialSourceManagedAccount {
+		request.Header.Set("Content-Type", "application/json")
+	}
 	request.ContentLength = int64(len(frozen.body))
 	if err := applyUpstreamWireHeaders(
 		request.Header,
@@ -237,14 +253,23 @@ func (client *Client) Do(
 		return nil, Evidence{}, err
 	}
 
-	evidence, err := authenticator.Apply(
-		operationContext,
-		request,
-		frozen.secretReference,
-		frozen.target,
-	)
-	if err != nil {
-		return nil, Evidence{}, fmt.Errorf("finalize provider authentication: %w", err)
+	evidence := CredentialEvidence{
+		DriverRef:  string(frozen.credentialSource),
+		SecretRead: false,
+	}
+	if authenticator != nil {
+		evidence, err = authenticator.Apply(
+			operationContext,
+			request,
+			frozen.secretReference,
+			frozen.target,
+		)
+		if err != nil {
+			return nil, Evidence{}, fmt.Errorf(
+				"finalize provider authentication: %w",
+				err,
+			)
+		}
 	}
 	if err := validateUpstreamWireHeaders(
 		request.Header,
@@ -396,7 +421,10 @@ func (client *Client) signalLocked() {
 	client.changed = make(chan struct{})
 }
 
-func sanitizeProviderHeaders(source http.Header) http.Header {
+func prepareProviderHeaders(
+	source http.Header,
+	credentialSource access.CredentialSource,
+) http.Header {
 	headers := source.Clone()
 	if headers == nil {
 		headers = make(http.Header)
@@ -423,7 +451,17 @@ func sanitizeProviderHeaders(source http.Header) http.Header {
 	} {
 		headers.Del(name)
 	}
-	stripProviderCredentialHeaders(headers)
+	switch credentialSource {
+	case access.CredentialSourceManagedAccount:
+		stripProviderCredentialHeaders(headers)
+	case access.CredentialSourceClientPassthrough:
+		// User-Agent is carried as a separately validated presentation field.
+		// Removing it here prevents the raw header bag from becoming a second
+		// authority while preserving the exact observed value below.
+		headers.Del("User-Agent")
+	default:
+		stripProviderCredentialHeaders(headers)
+	}
 	return headers
 }
 

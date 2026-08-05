@@ -35,6 +35,7 @@ var (
 	_ DownstreamProtocolResolver = (*Manager)(nil)
 	_ LeafIssuanceAdmitter       = (*Manager)(nil)
 	_ IngressCatalogReader       = (*Manager)(nil)
+	_ ActivePlanCatalog          = (*Manager)(nil)
 	_ ProviderProbeCatalog       = (*Manager)(nil)
 	_ ProjectionHealthReader     = (*Manager)(nil)
 )
@@ -183,6 +184,10 @@ func (m *Manager) AdmitLeaf(
 
 func (m *Manager) ActiveClientAuthorities() ([]string, error) {
 	return m.projection.ActiveClientAuthorities()
+}
+
+func (m *Manager) ActiveAccessPlans() ([]AccessPlanSnapshot, error) {
+	return m.projection.ActiveAccessPlans()
 }
 
 func (m *Manager) ActiveProviderProbeTargets() ([]ProviderProbeTarget, error) {

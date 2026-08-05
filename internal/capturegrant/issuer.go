@@ -19,7 +19,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/vibe-agi/vibermate/internal/access"
 	"github.com/vibe-agi/vibermate/internal/capturerun"
 	"github.com/vibe-agi/vibermate/internal/certidentity"
 	"github.com/vibe-agi/vibermate/internal/clientadapter"
@@ -97,7 +96,7 @@ type Options struct {
 	Runs                capturerun.Controller
 	ManualCaptures      manualcapture.Controller
 	Verifier            clientadapter.Verifier
-	Authorities         access.IngressCatalogReader
+	Authorities         CaptureAuthorityResolver
 	ProxyOrigin         string
 	Generation          string
 	RootIdentity        localca.RootIdentity
@@ -114,7 +113,7 @@ type Issuer struct {
 	runs        capturerun.Controller
 	manuals     manualcapture.Controller
 	verifier    clientadapter.Verifier
-	authorities access.IngressCatalogReader
+	authorities CaptureAuthorityResolver
 	proxyOrigin string
 	generation  string
 	rootID      localca.RootIdentity
@@ -476,10 +475,6 @@ func (issuer *Issuer) IssueCaptureRun(
 	if err != nil || validateDetection(detection) != nil {
 		return CaptureRunGrant{}, ErrAdapterVerification
 	}
-	authorities, err := issuer.authorities.ActiveClientAuthorities()
-	if err != nil {
-		return CaptureRunGrant{}, ErrProjectionUnavailable
-	}
 	recipe := clientadapter.LaunchGeneric
 	var adapter *clientadapter.Evidence
 	rootPath := ""
@@ -524,22 +519,42 @@ func (issuer *Issuer) IssueCaptureRun(
 	if err != nil {
 		return CaptureRunGrant{}, ErrCaptureRunCreate
 	}
+	// Persist the active run before resolving route-dependent launcher
+	// authority. Workspace-route CAS checks the same SQLite state inside its
+	// write transaction, so an auth-source change is ordered either entirely
+	// before this resolution or rejected until this run finishes.
+	authorities, err := issuer.authorities.ResolveCaptureAuthorities(ctx, workspace)
+	if err != nil {
+		cleanupContext, cancelCleanup := context.WithTimeout(
+			context.WithoutCancel(ctx),
+			2*time.Second,
+		)
+		cleanupErr := issuer.runs.Finish(
+			cleanupContext,
+			grant.Run.ID,
+			grant.ControlCapability,
+		)
+		cancelCleanup()
+		if cleanupErr != nil {
+			return CaptureRunGrant{}, errors.Join(
+				ErrProjectionUnavailable,
+				fmt.Errorf("finish unused CaptureRun: %w", cleanupErr),
+			)
+		}
+		return CaptureRunGrant{}, ErrProjectionUnavailable
+	}
 	return CaptureRunGrant{
-		Run:                  grant,
-		CatalogRevision:      detection.CatalogRevision,
-		Recognition:          detection.Recognition,
-		Adapter:              adapter,
-		Signer:               signer,
-		LaunchRecipe:         recipe,
-		ExecutablePath:       detection.CanonicalPath,
-		ProxyAddress:         issuer.proxyOrigin,
-		RootPEMPath:          rootPath,
-		ProtectedAuthorities: append([]string{}, authorities...),
-		// Every active Access in the current production slice owns a managed
-		// account-backed route. Keeping this separate from the MITM allowlist
-		// prevents a future client-passthrough route from inheriting a local
-		// placeholder credential merely because its origin is decryptable.
-		ManagedCredentialAuthorities: append([]string{}, authorities...),
+		Run:                          grant,
+		CatalogRevision:              detection.CatalogRevision,
+		Recognition:                  detection.Recognition,
+		Adapter:                      adapter,
+		Signer:                       signer,
+		LaunchRecipe:                 recipe,
+		ExecutablePath:               detection.CanonicalPath,
+		ProxyAddress:                 issuer.proxyOrigin,
+		RootPEMPath:                  rootPath,
+		ProtectedAuthorities:         authorities.ProtectedAuthorities(),
+		ManagedCredentialAuthorities: authorities.ManagedCredentialAuthorities(),
 	}, nil
 }
 

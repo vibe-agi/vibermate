@@ -1,4 +1,11 @@
-import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import {
+  act,
+  fireEvent,
+  render,
+  screen,
+  waitFor,
+  within,
+} from "@testing-library/react";
 import { createMemoryHistory } from "@tanstack/react-router";
 import { useState } from "react";
 import { I18nextProvider } from "react-i18next";
@@ -182,6 +189,7 @@ const workspaceRoute: WorkspaceRouteBinding = {
   approvedProfiles: [
     {
       profileId: "work-primary",
+      kind: "managed",
       label: "001",
       modelPresentation: "gpt-5.6-sol",
       authPresentation: "vibermate_account",
@@ -190,10 +198,20 @@ const workspaceRoute: WorkspaceRouteBinding = {
     },
     {
       profileId: "work-backup",
+      kind: "managed",
       label: "002",
       modelPresentation: "claude-sonnet-4-5",
       authPresentation: "vibermate_account",
       authLabel: "002",
+      available: true,
+    },
+    {
+      profileId: "original-passthrough",
+      kind: "original_passthrough",
+      label: "Current client login",
+      modelPresentation: "passthrough",
+      authPresentation: "client_auth",
+      authLabel: "Claude Code login",
       available: true,
     },
   ],
@@ -228,6 +246,8 @@ function accessDetailFixture(
     },
   ],
 ): AccessDetail {
+  const originalProfileId = "original-passthrough";
+  const originalTargetId = "original-client-origin";
   return {
     revision: item.revision,
     access: {
@@ -237,7 +257,10 @@ function accessDetailFixture(
       status: item.status,
       agentEndpointId: `${item.accessId}-agent`,
       defaultRouteSetId: `${item.accessId}-routes`,
-      profileIds: upstreams.map(({ profileId }) => profileId),
+      profileIds: [
+        ...upstreams.map(({ profileId }) => profileId),
+        originalProfileId,
+      ],
       egressPolicyId: `${item.accessId}-egress`,
     },
     agentEndpoint: {
@@ -245,27 +268,55 @@ function accessDetailFixture(
       clientOrigin: item.clientOrigin,
       clientDialect: item.clientDialect,
     },
-    profiles: upstreams.map((upstream) => ({
-      id: upstream.profileId,
-      name: upstream.name,
-      description: `${upstream.name} configuration`,
-      backendDialect: upstream.protocol,
-      targetId: upstream.targetId,
-      upstreamWireProfileRef: "follow-client",
-      defaultModelPolicy: {
-        mode: "fixed",
-        fixedModel: upstream.fixedModel,
+    profiles: [
+      ...upstreams.map((upstream) => ({
+        id: upstream.profileId,
+        kind: "managed" as const,
+        credentialSource: "managed_account" as const,
+        processingMode: "managed" as const,
+        name: upstream.name,
+        description: `${upstream.name} configuration`,
+        backendDialect: upstream.protocol,
+        targetId: upstream.targetId,
+        upstreamWireProfileRef: "follow-client",
+        defaultModelPolicy: {
+          mode: "fixed" as const,
+          fixedModel: upstream.fixedModel,
+        },
+        accountBindingIds: [upstream.accountId],
+        defaultAccountBindingId: upstream.accountId,
+      })),
+      {
+        id: originalProfileId,
+        kind: "original_passthrough",
+        credentialSource: "client_passthrough",
+        processingMode: "observe_only",
+        name: "Current client login",
+        description: "",
+        backendDialect: item.clientDialect,
+        targetId: originalTargetId,
+        upstreamWireProfileRef: "follow-client",
+        defaultModelPolicy: { mode: "passthrough" },
+        accountBindingIds: [],
+        defaultAccountBindingId: "",
       },
-      accountBindingIds: [upstream.accountId],
-      defaultAccountBindingId: upstream.accountId,
-    })),
-    providerTargets: upstreams.map((upstream) => ({
-      id: upstream.targetId,
-      profileId: upstream.profileId,
-      origin: upstream.origin,
-      protocol: upstream.protocol,
-      capabilities: ["messages", "streaming", "tool_calls"],
-    })),
+    ],
+    providerTargets: [
+      ...upstreams.map((upstream) => ({
+        id: upstream.targetId,
+        profileId: upstream.profileId,
+        origin: upstream.origin,
+        protocol: upstream.protocol,
+        capabilities: ["messages", "streaming", "tool_calls"] as const,
+      })),
+      {
+        id: originalTargetId,
+        profileId: originalProfileId,
+        origin: item.clientOrigin,
+        protocol: item.clientDialect,
+        capabilities: ["messages", "streaming", "tool_calls"],
+      },
+    ],
     accountBindings: upstreams.map((upstream) => ({
       id: upstream.accountId,
       profileId: upstream.profileId,
@@ -465,6 +516,13 @@ async function configureOpenAIDestination(
   apiKey = "provider-secret-value",
   name?: string,
 ): Promise<void> {
+  const managedMode = screen.getByRole("button", {
+    name: /^Use another model service/u,
+  });
+  fireEvent.click(managedMode);
+  await waitFor(() =>
+    expect(managedMode.getAttribute("aria-pressed")).toBe("true"),
+  );
   const destination = screen.getByRole("button", {
     name: /^OpenAI API/u,
   });
@@ -483,6 +541,43 @@ async function configureOpenAIDestination(
 }
 
 describe("Desktop dashboard", () => {
+  it("creates the default current-login Access without asking for an API key", async () => {
+    const i18n = await createI18n("en-US");
+    const client = clientFixture();
+    client.accesses.mockResolvedValue({ items: [] });
+    const model = new DashboardQueryRuntime(client, 60_000);
+    render(
+      <I18nextProvider i18n={i18n}>
+        <Dashboard initialEntry="/access" model={model} />
+      </I18nextProvider>,
+    );
+
+    await waitForDashboard();
+    await screen.findByText("No AI access has been configured yet.");
+    fireEvent.click(screen.getByRole("button", { name: "Add AI Access" }));
+    expect(
+      screen
+        .getByRole("button", { name: /^Use the tool's current login/u })
+        .getAttribute("aria-pressed"),
+    ).toBe("true");
+    expect(screen.queryByLabelText("API Key")).toBeNull();
+    const save = screen.getByRole("button", { name: "Save and enable" });
+    expect(save.hasAttribute("disabled")).toBe(false);
+    expect((save.closest("form") as HTMLFormElement).checkValidity()).toBe(true);
+    fireEvent.click(save);
+
+    await waitFor(() => expect(client.applyAccess).toHaveBeenCalledTimes(1));
+    const input = client.applyAccess.mock.calls[0]?.[1];
+    expect(input?.profiles).toEqual([]);
+    expect(input?.providerTargets).toEqual([]);
+    expect(input?.accountBindings).toEqual([]);
+    expect(client.replaceCredentialSecret).not.toHaveBeenCalled();
+    expect(await screen.findByRole("heading", { name: /^Start /u })).toBeTruthy();
+    expect(
+      screen.getByText(/The current-login route keeps the tool's own authentication/u),
+    ).toBeTruthy();
+  });
+
   it("offers only canonical Router locations to the Desktop host", async () => {
     const i18n = await createI18n("en-US");
     const model = new DashboardQueryRuntime(clientFixture(), 60_000);
@@ -952,7 +1047,7 @@ describe("Desktop dashboard", () => {
     ).toBeTruthy();
     expect(
       document.querySelectorAll(".access-upstream-list li"),
-    ).toHaveLength(2);
+    ).toHaveLength(3);
     expect(screen.getByText("Primary OpenAI")).toBeTruthy();
     expect(screen.getByText("https://primary.example/v1")).toBeTruthy();
     expect(screen.getByText("gpt-5.4", { exact: true })).toBeTruthy();
@@ -977,6 +1072,46 @@ describe("Desktop dashboard", () => {
       ),
     );
     expect(client.applyAccess).not.toHaveBeenCalled();
+  });
+
+  it("switches an existing Access back to the tool's current login without a key", async () => {
+    const i18n = await createI18n("en-US");
+    const client = clientFixture();
+    const model = new DashboardQueryRuntime(client, 60_000);
+    render(
+      <I18nextProvider i18n={i18n}>
+        <Dashboard initialEntry="/access" model={model} />
+      </I18nextProvider>,
+    );
+
+    await waitForDashboard();
+    fireEvent.click(
+      await screen.findByRole("button", { name: /^Work Claude/u }),
+    );
+    const originalLabel = (
+      await screen.findAllByText("Use the tool's current login", {
+        exact: true,
+      })
+    ).find((label) => label.closest("li") !== null);
+    const originalCard = originalLabel?.closest("li");
+    if (originalCard === null || originalCard === undefined) {
+      throw new Error("the original route card is unavailable");
+    }
+    fireEvent.click(
+      within(originalCard).getByRole("button", {
+        name: "Set as current route",
+      }),
+    );
+
+    await waitFor(() =>
+      expect(client.selectAccessCandidate).toHaveBeenCalledWith(
+        "work",
+        "original-passthrough",
+        4,
+        expect.any(AbortSignal),
+      ),
+    );
+    expect(client.replaceCredentialSecret).not.toHaveBeenCalled();
   });
 
   it.each([
@@ -2138,6 +2273,15 @@ describe("what is captured", () => {
     const route = screen.getByRole("combobox", {
       name: "Route for new requests",
     });
+    const currentLogin = screen.getByRole("option", {
+      name: /Current client login/u,
+    });
+    expect((currentLogin as HTMLOptionElement).disabled).toBe(true);
+    expect(
+      screen.getByText(
+        "Stop this workspace's running tools before switching between the client's current login and VibeMate-managed credentials. Start them again after selecting the route.",
+      ),
+    ).toBeTruthy();
     fireEvent.change(route, { target: { value: "work-backup" } });
 
     await waitFor(() =>

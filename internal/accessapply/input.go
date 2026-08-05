@@ -119,14 +119,6 @@ func BuildCommand(
 	if err != nil {
 		return access.WriteCommand{}, err
 	}
-	profileIDs, err := profileIdentifiers(input.Access.ProfileIDs)
-	if err != nil {
-		return access.WriteCommand{}, err
-	}
-	defaultRouteSetID, err := access.NewRouteSetID(input.Access.DefaultRouteSetID)
-	if err != nil {
-		return access.WriteCommand{}, err
-	}
 	egressPolicyID, err := access.NewEgressPolicyID(input.EgressPolicy.ID)
 	if err != nil {
 		return access.WriteCommand{}, err
@@ -143,6 +135,16 @@ func BuildCommand(
 	if err != nil {
 		return access.WriteCommand{}, err
 	}
+	declaredProfileIDs, err := profileIdentifiers(input.Access.ProfileIDs)
+	if err != nil {
+		return access.WriteCommand{}, err
+	}
+	if err := validateManagedProfileReferences(
+		declaredProfileIDs,
+		profiles,
+	); err != nil {
+		return access.WriteCommand{}, err
+	}
 	targets, err := buildTargets(accessID, revision, input.ProviderTargets)
 	if err != nil {
 		return access.WriteCommand{}, err
@@ -151,9 +153,87 @@ func BuildCommand(
 	if err != nil {
 		return access.WriteCommand{}, err
 	}
+	endpoint := access.AgentEndpoint{
+		ID:            endpointID,
+		Revision:      revision,
+		AccessID:      accessID,
+		ClientOrigin:  clientOrigin,
+		ClientDialect: access.Dialect(input.AgentEndpoint.ClientDialect),
+	}
+	originalProfile, originalTarget, err := access.BuildOriginalPassthrough(
+		accessID,
+		endpoint,
+	)
+	if err != nil {
+		return access.WriteCommand{}, err
+	}
+	for _, profile := range profiles {
+		if profile.ID == originalProfile.ID {
+			return access.WriteCommand{}, errors.New(
+				"managed profile collides with the system profile",
+			)
+		}
+	}
+	for _, target := range targets {
+		if target.ID == originalTarget.ID {
+			return access.WriteCommand{}, errors.New(
+				"managed target collides with the system target",
+			)
+		}
+	}
+	profiles = append(profiles, originalProfile)
+	targets = append(targets, originalTarget)
+	profileIDs := make([]access.EndpointProfileID, 0, len(profiles))
+	for _, profile := range profiles {
+		profileIDs = append(profileIDs, profile.ID)
+	}
 	routeSets, err := buildRouteSets(accessID, revision, input.RouteSets)
 	if err != nil {
 		return access.WriteCommand{}, err
+	}
+	var defaultRouteSetID access.RouteSetID
+	if len(routeSets) == 0 {
+		if input.Access.DefaultRouteSetID != "" {
+			return access.WriteCommand{}, errors.New(
+				"system original route does not accept a caller-selected ID",
+			)
+		}
+		defaultRouteSetID = access.OriginalPassthroughRouteSetID()
+		routeSets = []access.RouteSet{{
+			ID:                  defaultRouteSetID,
+			Revision:            revision,
+			AccessID:            accessID,
+			CandidateProfileIDs: []access.EndpointProfileID{originalProfile.ID},
+		}}
+	} else {
+		if input.Access.DefaultRouteSetID == "" {
+			return access.WriteCommand{}, errors.New(
+				"managed route set requires an explicit default reference",
+			)
+		}
+		defaultRouteSetID, err = access.NewRouteSetID(
+			input.Access.DefaultRouteSetID,
+		)
+		if err != nil {
+			return access.WriteCommand{}, err
+		}
+		for index := range routeSets {
+			routeSet := &routeSets[index]
+			for _, profileID := range routeSet.CandidateProfileIDs {
+				if profileID == originalProfile.ID {
+					return access.WriteCommand{}, errors.New(
+						"caller cannot submit the system original profile",
+					)
+				}
+			}
+			if routeSet.ID == defaultRouteSetID &&
+				routeSet.FallbackMode() == access.FallbackDisabled {
+				routeSet.CandidateProfileIDs = append(
+					routeSet.CandidateProfileIDs,
+					originalProfile.ID,
+				)
+			}
+		}
 	}
 	pluginBindings := make([]access.PluginBindingID, len(input.PluginPlan.BindingIDs))
 	for index, value := range input.PluginPlan.BindingIDs {
@@ -176,13 +256,7 @@ func BuildCommand(
 				ProfileIDs:        profileIDs,
 				EgressPolicyID:    bindingEgressID,
 			},
-			AgentEndpoint: access.AgentEndpoint{
-				ID:            endpointID,
-				Revision:      revision,
-				AccessID:      accessID,
-				ClientOrigin:  clientOrigin,
-				ClientDialect: access.Dialect(input.AgentEndpoint.ClientDialect),
-			},
+			AgentEndpoint:   endpoint,
 			Profiles:        profiles,
 			ProviderTargets: targets,
 			AccountBindings: accounts,
@@ -246,6 +320,9 @@ func buildProfiles(
 			ID:                      id,
 			Revision:                revision,
 			AccessID:                accessID,
+			Kind:                    access.EndpointProfileManaged,
+			CredentialSource:        access.CredentialSourceManagedAccount,
+			ProcessingMode:          access.ProfileProcessingManaged,
 			Name:                    input.Name,
 			Description:             input.Description,
 			BackendDialect:          access.Dialect(input.BackendDialect),
@@ -394,6 +471,33 @@ func profileIdentifiers(values []string) ([]access.EndpointProfileID, error) {
 		identifiers[index] = identifier
 	}
 	return identifiers, nil
+}
+
+func validateManagedProfileReferences(
+	declared []access.EndpointProfileID,
+	profiles []access.EndpointProfile,
+) error {
+	if len(declared) != len(profiles) {
+		return errors.New("Access managed profile references do not match profiles")
+	}
+	expected := make(map[access.EndpointProfileID]struct{}, len(profiles))
+	for _, profile := range profiles {
+		if _, duplicate := expected[profile.ID]; duplicate {
+			return errors.New("managed profile is duplicated")
+		}
+		expected[profile.ID] = struct{}{}
+	}
+	seen := make(map[access.EndpointProfileID]struct{}, len(declared))
+	for _, identifier := range declared {
+		if _, duplicate := seen[identifier]; duplicate {
+			return errors.New("Access managed profile reference is duplicated")
+		}
+		seen[identifier] = struct{}{}
+		if _, exists := expected[identifier]; !exists {
+			return errors.New("Access managed profile reference is unknown")
+		}
+	}
+	return nil
 }
 
 func accountIdentifiers(values []string) ([]access.AccountBindingID, error) {

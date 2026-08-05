@@ -564,8 +564,9 @@ func TestDesktopControlAppliesAccessAndControlsOfflineHoldWithScopedAuth(
 	if planSummary.AccessID != "access-control" ||
 		planSummary.Revision != 1 ||
 		planSummary.PlanHash != applyResult.PlanHash ||
-		len(planSummary.Profiles) != 1 ||
+		len(planSummary.Profiles) != 2 ||
 		planSummary.Profiles[0] != "access-control-profile" ||
+		planSummary.Profiles[1] != "original-passthrough" ||
 		len(planSummary.AccountBindings) != 1 ||
 		planSummary.AccountBindings[0].ID != "access-control-account" ||
 		planSummary.AccountBindings[0].ProfileID != "access-control-profile" {

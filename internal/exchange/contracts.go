@@ -395,28 +395,31 @@ func (evidence ClientOperationEvidence) validate() error {
 
 // ClientRequest is an owned immutable ingress representation.
 type ClientRequest struct {
-	exchangeID      string
-	ingress         access.IngressBinding
-	operation       ClientOperationEvidence
-	body            []byte
-	replayClass     ReplayClass
-	clientProtocol  access.ApplicationProtocol
-	clientHello     transportprofile.Observation
-	hasClientHello  bool
-	admission       captureadmission.Admission
-	connectionRef   string
-	hasCorrelation  bool
-	anthropicBeta   string
-	clientUserAgent string
+	exchangeID         string
+	ingress            access.IngressBinding
+	operation          ClientOperationEvidence
+	body               []byte
+	replayClass        ReplayClass
+	clientProtocol     access.ApplicationProtocol
+	clientHello        transportprofile.Observation
+	hasClientHello     bool
+	admission          captureadmission.Admission
+	connectionRef      string
+	hasCorrelation     bool
+	anthropicBeta      string
+	clientUserAgent    string
+	originalHeaders    http.Header
+	hasOriginalHeaders bool
 }
 
 type clientRequestOptionKind uint8
 
 const (
-	clientRequestOptionClientHello   clientRequestOptionKind = 1
-	clientRequestOptionCorrelation   clientRequestOptionKind = 2
-	clientRequestOptionAnthropicBeta clientRequestOptionKind = 3
-	clientRequestOptionUserAgent     clientRequestOptionKind = 4
+	clientRequestOptionClientHello     clientRequestOptionKind = 1
+	clientRequestOptionCorrelation     clientRequestOptionKind = 2
+	clientRequestOptionAnthropicBeta   clientRequestOptionKind = 3
+	clientRequestOptionUserAgent       clientRequestOptionKind = 4
+	clientRequestOptionOriginalHeaders clientRequestOptionKind = 5
 )
 
 // ClientRequestOption is a closed typed option. Its fields are private so an
@@ -428,6 +431,7 @@ type ClientRequestOption struct {
 	connectionRef   string
 	anthropicBeta   string
 	clientUserAgent string
+	originalHeaders http.Header
 }
 
 func WithClientHelloObservation(
@@ -469,6 +473,17 @@ func WithClientUserAgent(value string) ClientRequestOption {
 	return ClientRequestOption{
 		kind:            clientRequestOptionUserAgent,
 		clientUserAgent: value,
+	}
+}
+
+// WithOriginalHeaders carries the client-owned request envelope needed only
+// by the system original-passthrough profile. The managed path never reads it;
+// selection must prove exact ClientOrigin equality before these headers can
+// reach a transport. Values remain in memory only and are never evidence.
+func WithOriginalHeaders(headers http.Header) ClientRequestOption {
+	return ClientRequestOption{
+		kind:            clientRequestOptionOriginalHeaders,
+		originalHeaders: headers.Clone(),
 	}
 }
 
@@ -557,6 +572,20 @@ func NewClientRequest(
 				)
 			}
 			request.clientUserAgent = option.clientUserAgent
+		case clientRequestOptionOriginalHeaders:
+			if request.hasOriginalHeaders {
+				return ClientRequest{}, errors.New(
+					"original request header option is duplicated",
+				)
+			}
+			originalHeaders, err := validateOriginalHeaders(
+				option.originalHeaders,
+			)
+			if err != nil {
+				return ClientRequest{}, err
+			}
+			request.originalHeaders = originalHeaders
+			request.hasOriginalHeaders = true
 		default:
 			return ClientRequest{}, errors.New(
 				"client request option is invalid",
@@ -598,6 +627,57 @@ func (request ClientRequest) protocolHeaders() http.Header {
 
 func (request ClientRequest) ClientUserAgent() string {
 	return request.clientUserAgent
+}
+
+func (request ClientRequest) OriginalHeaders() (http.Header, bool) {
+	return request.originalHeaders.Clone(), request.hasOriginalHeaders
+}
+
+func validateOriginalHeaders(source http.Header) (http.Header, error) {
+	headers := source.Clone()
+	if headers == nil {
+		headers = make(http.Header)
+	}
+	headers.Del("Proxy-Authorization")
+	headers.Del("Proxy-Connection")
+	total := 0
+	for name, values := range headers {
+		if !validHTTPHeaderName(name) {
+			return nil, errors.New("original request header name is invalid")
+		}
+		total += len(name)
+		for _, value := range values {
+			if strings.ContainsAny(value, "\r\n") || !utf8.ValidString(value) {
+				return nil, errors.New("original request header value is invalid")
+			}
+			total += len(value)
+		}
+		if total > 64<<10 {
+			return nil, errors.New("original request headers exceed the size limit")
+		}
+	}
+	return headers, nil
+}
+
+func validHTTPHeaderName(value string) bool {
+	if value == "" {
+		return false
+	}
+	for index := 0; index < len(value); index++ {
+		character := value[index]
+		if (character >= 'a' && character <= 'z') ||
+			(character >= 'A' && character <= 'Z') ||
+			(character >= '0' && character <= '9') {
+			continue
+		}
+		switch character {
+		case '!', '#', '$', '%', '&', '\'', '*', '+', '-', '.', '^', '_', '`', '|', '~':
+			continue
+		default:
+			return false
+		}
+	}
+	return true
 }
 
 func validClientUserAgent(value string) bool {
@@ -710,6 +790,11 @@ func (request ClientRequest) validate() error {
 		request.clientProtocol != access.ApplicationProtocolHTTP2 {
 		return errors.New("client HTTP protocol is unavailable")
 	}
+	if request.hasOriginalHeaders {
+		if _, err := validateOriginalHeaders(request.originalHeaders); err != nil {
+			return err
+		}
+	}
 	return request.replayClass.validate()
 }
 
@@ -759,6 +844,75 @@ const (
 	ResponseModeJSON        ResponseMode = "json"
 )
 
+// ResponseEnvelope is the immutable downstream status and header boundary.
+// It contains no body bytes. Hop-by-hop headers are removed at construction;
+// original passthrough may preserve end-to-end provider headers without giving
+// the transport control over the client connection.
+type ResponseEnvelope struct {
+	mode       ResponseMode
+	statusCode int
+	headers    http.Header
+}
+
+func NewResponseEnvelope(
+	mode ResponseMode,
+	statusCode int,
+	headers http.Header,
+) (ResponseEnvelope, error) {
+	if mode != ResponseModeJSON && mode != ResponseModeEventStream {
+		return ResponseEnvelope{}, errors.New("downstream response mode is invalid")
+	}
+	if statusCode < 200 || statusCode > 599 {
+		return ResponseEnvelope{}, errors.New("downstream status code is invalid")
+	}
+	clean := headers.Clone()
+	if clean == nil {
+		clean = make(http.Header)
+	}
+	for _, token := range strings.Split(clean.Get("Connection"), ",") {
+		clean.Del(strings.TrimSpace(token))
+	}
+	for _, name := range []string{
+		"Connection",
+		"Proxy-Authenticate",
+		"Proxy-Authorization",
+		"Proxy-Connection",
+		"Keep-Alive",
+		"Te",
+		"Trailer",
+		"Transfer-Encoding",
+		"Upgrade",
+	} {
+		clean.Del(name)
+	}
+	return ResponseEnvelope{
+		mode:       mode,
+		statusCode: statusCode,
+		headers:    clean,
+	}, nil
+}
+
+func (envelope ResponseEnvelope) Mode() ResponseMode { return envelope.mode }
+func (envelope ResponseEnvelope) StatusCode() int    { return envelope.statusCode }
+func (envelope ResponseEnvelope) Headers() http.Header {
+	return envelope.headers.Clone()
+}
+
+func managedResponseEnvelope(mode ResponseMode) ResponseEnvelope {
+	contentType := "application/json"
+	if mode == ResponseModeEventStream {
+		contentType = "text/event-stream"
+	}
+	return ResponseEnvelope{
+		mode:       mode,
+		statusCode: http.StatusOK,
+		headers: http.Header{
+			"Cache-Control": []string{"no-store"},
+			"Content-Type":  []string{contentType},
+		},
+	}
+}
+
 // FailureNotice is the in-band streaming failure contract. It intentionally
 // contains no localized or provider-supplied text.
 type FailureNotice struct {
@@ -773,7 +927,7 @@ type FailureNotice struct {
 // response envelope, Write reports exact committed bytes, and Abort emits the
 // stable in-band stream failure representation.
 type Downstream interface {
-	Begin(context.Context, ResponseMode) error
+	Begin(context.Context, ResponseEnvelope) error
 	Write(context.Context, []byte) (int, error)
 	Keepalive(context.Context) error
 	Abort(context.Context, FailureNotice) error

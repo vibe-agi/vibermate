@@ -349,6 +349,7 @@ function accessApplyInput() {
   return buildAccessApplyInput({
     ...initialAccessForm,
     accessId: "work",
+    mode: "managed",
     fixedModel: "example-model",
     name: "Work",
     providerOrigin: "https://gateway.example/v1",
@@ -401,6 +402,9 @@ function accessDetail(
     profiles: [
       {
         id: profileId,
+        kind: "managed",
+        credentialSource: "managed_account",
+        processingMode: "managed",
         name: "Work OpenAI",
         description: "Primary provider",
         backendDialect: "openai-chat",
@@ -445,6 +449,42 @@ function accessDetail(
   };
 }
 
+function originalAccessDetail(accessId = "work"): Record<string, unknown> {
+  const payload = accessDetail(accessId);
+  const endpoint = payload.agentEndpoint as Record<string, unknown>;
+  const binding = payload.access as Record<string, unknown>;
+  const routeSets = payload.routeSets as Record<string, unknown>[];
+  binding.profileIds = ["original-passthrough"];
+  payload.profiles = [
+    {
+      id: "original-passthrough",
+      kind: "original_passthrough",
+      credentialSource: "client_passthrough",
+      processingMode: "observe_only",
+      name: "Current client login",
+      description: "",
+      backendDialect: endpoint.clientDialect,
+      targetId: "original-client-origin",
+      upstreamWireProfileRef: "follow-client",
+      defaultModelPolicy: { mode: "passthrough" },
+      accountBindingIds: [],
+      defaultAccountBindingId: "",
+    },
+  ];
+  payload.providerTargets = [
+    {
+      id: "original-client-origin",
+      profileId: "original-passthrough",
+      origin: endpoint.clientOrigin,
+      protocol: endpoint.clientDialect,
+      capabilities: ["messages", "streaming", "tool_calls"],
+    },
+  ];
+  payload.accountBindings = [];
+  routeSets[0]!.candidateProfileIds = ["original-passthrough"];
+  return payload;
+}
+
 function accessPlanSummary(
   overrides: Record<string, unknown> = {},
 ): Record<string, unknown> {
@@ -452,7 +492,7 @@ function accessPlanSummary(
     accessId: "work",
     revision: 1,
     planHash: "a".repeat(64),
-    profiles: ["work-openai"],
+    profiles: ["original-passthrough", "work-openai"],
     accountBindings: [{ id: "work-account", profileId: "work-openai" }],
     ...overrides,
   };
@@ -502,6 +542,7 @@ function workspaceRouteBinding(
     approvedProfiles: [
       {
         profileId: "work-openai",
+        kind: "managed",
         label: "Primary",
         modelPresentation: "gpt-5.6-sol",
         authPresentation: "vibermate_account",
@@ -510,6 +551,7 @@ function workspaceRouteBinding(
       },
       {
         profileId: "work-backup",
+        kind: "managed",
         label: "Backup",
         modelPresentation: "claude-sonnet-4-5",
         authPresentation: "vibermate_account",
@@ -2659,6 +2701,7 @@ describe("Desktop control client", () => {
     const input = buildAccessApplyInput({
       ...initialAccessForm,
       accessId: "work",
+      mode: "managed",
       fixedModel: "example-model",
       name: "Work",
       providerOrigin: "https://gateway.example/v1",
@@ -3788,6 +3831,33 @@ describe("Desktop control client", () => {
     expect(JSON.stringify(payload)).not.toContain("secret://");
   });
 
+  it("loads the exact current-login profile without an account binding", async () => {
+    const bootstrap = session();
+    const payload = originalAccessDetail();
+    const client = await createControlClient(
+      bootstrap,
+      withSessionState(bootstrap, () => jsonResponse(payload)),
+    );
+
+    await expect(client.access("work")).resolves.toEqual(payload);
+    expect(payload.accountBindings).toEqual([]);
+  });
+
+  it("rejects a current-login profile that asks for managed credentials", async () => {
+    const bootstrap = session();
+    const payload = originalAccessDetail();
+    const profiles = payload.profiles as Record<string, unknown>[];
+    profiles[0]!.credentialSource = "managed_account";
+    const client = await createControlClient(
+      bootstrap,
+      withSessionState(bootstrap, () => jsonResponse(payload)),
+    );
+
+    await expect(client.access("work")).rejects.toBeInstanceOf(
+      ControlContractError,
+    );
+  });
+
   it.each(["draft", "disabled"] as const)(
     "loads a durable %s Access even though it has no active plan",
     async (status) => {
@@ -3963,7 +4033,7 @@ describe("Desktop control client", () => {
           accessId: "work",
           revision: 4,
           planHash: "a".repeat(64),
-          profiles: ["work-openai"],
+          profiles: ["original-passthrough", "work-openai"],
           accountBindings: [{ id: "work-account", profileId: "work-openai" }],
         }),
       calls,
@@ -3977,6 +4047,30 @@ describe("Desktop control client", () => {
     const headers = new Headers(request?.init.headers);
     expect(headers.get("Authorization")).toBe(`Bearer ${bootstrap.readToken}`);
     expect(headers.has("If-Match")).toBe(false);
+  });
+
+  it("accepts the one uncredentialed Core original route", async () => {
+    const bootstrap = session();
+    const client = await createControlClient(
+      bootstrap,
+      withSessionState(bootstrap, () =>
+        jsonResponse({
+          accessId: "work",
+          revision: 4,
+          planHash: "a".repeat(64),
+          profiles: ["original-passthrough"],
+          accountBindings: [],
+        }),
+      ),
+    );
+
+    await expect(client.accessPlan("work")).resolves.toEqual({
+      accessId: "work",
+      revision: 4,
+      planHash: "a".repeat(64),
+      profiles: ["original-passthrough"],
+      accountBindings: [],
+    });
   });
 
   it("rejects ambient authorities and preserves stable problem codes", async () => {
@@ -4036,7 +4130,7 @@ describe("Desktop control client", () => {
       accessId: "work",
       revision: 1,
       planHash: "a".repeat(64),
-      profiles: ["work-openai"],
+      profiles: ["original-passthrough", "work-openai"],
       accountBindings: [{ id: "work-account", profileId: "work-openai" }],
     };
     const fetchImplementation = withSessionState(bootstrap, (url, init) => {
@@ -4611,6 +4705,17 @@ describe("Desktop control client", () => {
       path: "/api/v1/accesses/work/plan",
       payload: accessPlanSummary({
         accountBindings: [{ id: "work-account", profileId: "missing-profile" }],
+      }),
+      invoke: (client) => client.accessPlan("work"),
+    },
+    {
+      name: "a credential bound to the Core original route",
+      path: "/api/v1/accesses/work/plan",
+      payload: accessPlanSummary({
+        profiles: ["original-passthrough"],
+        accountBindings: [
+          { id: "work-account", profileId: "original-passthrough" },
+        ],
       }),
       invoke: (client) => client.accessPlan("work"),
     },

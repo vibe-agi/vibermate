@@ -57,15 +57,18 @@ type AgentEndpointResponse struct {
 }
 
 type AccessProfileResponse struct {
-	ID                      string                    `json:"id"`
-	Name                    string                    `json:"name"`
-	Description             string                    `json:"description"`
-	BackendDialect          access.Dialect            `json:"backendDialect"`
-	TargetID                string                    `json:"targetId"`
-	UpstreamWireProfileRef  string                    `json:"upstreamWireProfileRef"`
-	DefaultModelPolicy      AccessModelPolicyResponse `json:"defaultModelPolicy"`
-	AccountBindingIDs       []string                  `json:"accountBindingIds"`
-	DefaultAccountBindingID string                    `json:"defaultAccountBindingId"`
+	ID                      string                       `json:"id"`
+	Kind                    access.EndpointProfileKind   `json:"kind"`
+	CredentialSource        access.CredentialSource      `json:"credentialSource"`
+	ProcessingMode          access.ProfileProcessingMode `json:"processingMode"`
+	Name                    string                       `json:"name"`
+	Description             string                       `json:"description"`
+	BackendDialect          access.Dialect               `json:"backendDialect"`
+	TargetID                string                       `json:"targetId"`
+	UpstreamWireProfileRef  string                       `json:"upstreamWireProfileRef"`
+	DefaultModelPolicy      AccessModelPolicyResponse    `json:"defaultModelPolicy"`
+	AccountBindingIDs       []string                     `json:"accountBindingIds"`
+	DefaultAccountBindingID string                       `json:"defaultAccountBindingId"`
 }
 
 type AccessModelPolicyResponse struct {
@@ -183,6 +186,9 @@ func accessDetailResponseOf(aggregate access.Aggregate) AccessDetailResponse {
 		}
 		profiles[index] = AccessProfileResponse{
 			ID:                     profile.ID.String(),
+			Kind:                   profile.Kind,
+			CredentialSource:       profile.CredentialSource,
+			ProcessingMode:         profile.ProcessingMode,
 			Name:                   profile.Name,
 			Description:            profile.Description,
 			BackendDialect:         profile.BackendDialect,

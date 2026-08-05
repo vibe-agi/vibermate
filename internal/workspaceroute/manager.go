@@ -170,20 +170,33 @@ func (manager *Manager) UpdateBinding(
 	if err != nil {
 		return View{}, fmt.Errorf("%w: Access projection cannot be resolved", ErrRouteUnavailable)
 	}
-	if _, err := selectedProfile(snapshot, profileID); err != nil {
+	currentProfile, err := selectedProfile(snapshot, record.ProfileID)
+	if err != nil {
+		return View{}, err
+	}
+	targetProfile, err := selectedProfile(snapshot, profileID)
+	if err != nil {
 		return View{}, err
 	}
 	updated, err := manager.repository.CompareAndSwap(
 		ctx,
-		id,
-		expected,
-		profileID,
-		manager.clock.Now().UTC(),
+		UpdateMutation{
+			ID:        id,
+			Expected:  expected,
+			ProfileID: profileID,
+			UpdatedAt: manager.clock.Now().UTC(),
+			RequireNoActiveCaptureRun: credentialBootstrapSource(currentProfile) !=
+				credentialBootstrapSource(targetProfile),
+		},
 	)
 	if err != nil {
 		return View{}, err
 	}
 	return manager.inspect(updated)
+}
+
+func credentialBootstrapSource(profile access.EndpointProfile) access.CredentialSource {
+	return profile.CredentialSource
 }
 
 func (manager *Manager) inspect(record Record) (View, error) {
@@ -323,32 +336,41 @@ func profileOptions(
 		if err != nil {
 			return nil, err
 		}
-		var account access.ProviderAccountBinding
-		foundAccount := false
-		for _, candidate := range accounts {
-			if candidate.ID != profile.DefaultAccountBindingID {
-				continue
-			}
-			if foundAccount || candidate.ProfileID != profile.ID || !candidate.Enabled {
-				return nil, ErrRouteUnavailable
-			}
-			account = candidate
-			foundAccount = true
-		}
-		if !foundAccount {
-			return nil, ErrRouteUnavailable
-		}
 		model := string(profile.DefaultModelPolicy.Mode)
 		if profile.DefaultModelPolicy.Mode == access.ModelPolicyModeFixed {
 			model = profile.DefaultModelPolicy.FixedModel.String()
 		}
+		authPresentation := AuthClient
+		authLabel := "Current client login"
+		if profile.Kind == access.EndpointProfileManaged {
+			var account access.ProviderAccountBinding
+			foundAccount := false
+			for _, candidate := range accounts {
+				if candidate.ID != profile.DefaultAccountBindingID {
+					continue
+				}
+				if foundAccount || candidate.ProfileID != profile.ID || !candidate.Enabled {
+					return nil, ErrRouteUnavailable
+				}
+				account = candidate
+				foundAccount = true
+			}
+			if !foundAccount {
+				return nil, ErrRouteUnavailable
+			}
+			authPresentation = AuthVibeMateAccount
+			authLabel = account.Label
+		} else if profile.Kind != access.EndpointProfileOriginalPassthrough {
+			return nil, ErrRouteUnavailable
+		}
 		options = append(options, ProfileOption{
 			ProfileID:         profile.ID,
 			ProfileRevision:   profile.Revision,
+			Kind:              profile.Kind,
 			Label:             profile.Name,
 			ModelPresentation: model,
-			AuthPresentation:  AuthVibeMateAccount,
-			AuthLabel:         account.Label,
+			AuthPresentation:  authPresentation,
+			AuthLabel:         authLabel,
 			Available:         true,
 		})
 	}

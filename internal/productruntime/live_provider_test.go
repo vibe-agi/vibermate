@@ -637,9 +637,9 @@ type leavingDownstream struct {
 
 func (downstream *leavingDownstream) Begin(
 	_ context.Context,
-	mode exchange.ResponseMode,
+	envelope exchange.ResponseEnvelope,
 ) error {
-	downstream.mode = mode
+	downstream.mode = envelope.Mode()
 	return nil
 }
 

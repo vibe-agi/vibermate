@@ -182,6 +182,7 @@ func TestResponsesAccessPlanRestoresIdenticalOperationAndHash(t *testing.T) {
 	accessID := newAccessID(t, "access-responses-reopen")
 	aggregate := testAggregate(t, accessID, 1, "Responses")
 	aggregate.AgentEndpoint.ClientDialect = access.DialectOpenAIResponses
+	aggregate = refreshOriginalPassthrough(t, aggregate)
 	result, err := manager.WriteAccess(
 		context.Background(),
 		access.WriteCommand{
@@ -792,10 +793,14 @@ func assertCompletePlan(
 		t.Fatalf("AgentEndpoint = %+v", endpoint)
 	}
 	profiles := plan.EndpointProfiles()
-	if len(profiles) != 1 ||
+	if len(profiles) != 2 ||
 		profiles[0].BackendDialect != access.DialectOpenAIChat ||
 		profiles[0].DefaultModelPolicy.Mode != access.ModelPolicyModeFixed ||
-		profiles[0].DefaultModelPolicy.FixedModel.String() != "gpt-4.1-mini" {
+		profiles[0].DefaultModelPolicy.FixedModel.String() != "gpt-4.1-mini" ||
+		profiles[1].ID != access.OriginalPassthroughProfileID() ||
+		profiles[1].Kind != access.EndpointProfileOriginalPassthrough ||
+		profiles[1].CredentialSource != access.CredentialSourceClientPassthrough ||
+		profiles[1].ProcessingMode != access.ProfileProcessingObserveOnly {
 		t.Fatalf("profiles = %+v", profiles)
 	}
 	targets := plan.ProviderTargets()
@@ -870,7 +875,7 @@ func assertCompletePlan(
 		t.Fatalf("route sets = %+v", routeSets)
 	}
 	dependencies := plan.DependencyRevisions()
-	if len(dependencies) != 18 {
+	if len(dependencies) != 21 {
 		t.Fatalf(
 			"routeSets=%d dependencyRevisions=%d",
 			len(routeSets),
@@ -916,8 +921,20 @@ func assertCompletePlan(
 		access.DependencyModelPolicyCapability,
 		access.DependencyUpstreamWireProfile,
 	} {
-		if seenKinds[kind] != 1 {
-			t.Fatalf("dependency kind %q count=%d, want 1", kind, seenKinds[kind])
+		want := 1
+		switch kind {
+		case access.DependencyEndpointProfile,
+			access.DependencyProviderTarget,
+			access.DependencyModelPolicy:
+			want = 2
+		}
+		if seenKinds[kind] != want {
+			t.Fatalf(
+				"dependency kind %q count=%d, want %d",
+				kind,
+				seenKinds[kind],
+				want,
+			)
 		}
 	}
 	if seenKinds[access.DependencyTransportFingerprint] != 2 {
@@ -957,7 +974,7 @@ func assertGetterIsolation(t *testing.T, plan access.AccessPlanSnapshot) {
 		access.ApplicationProtocolHTTP1,
 	)
 
-	if len(plan.Binding().ProfileIDs) != 1 ||
+	if len(plan.Binding().ProfileIDs) != 2 ||
 		len(plan.EndpointProfiles()[0].AccountBindingIDs) != 1 ||
 		len(plan.ProviderTargets()[0].Target().Capabilities) != 3 ||
 		len(plan.RouteSets()[0].CandidateProfileIDs) != 1 ||
@@ -1204,6 +1221,10 @@ func (p *blockingProjection) ActiveClientAuthorities() ([]string, error) {
 	return p.delegate.ActiveClientAuthorities()
 }
 
+func (p *blockingProjection) ActiveAccessPlans() ([]access.AccessPlanSnapshot, error) {
+	return p.delegate.ActiveAccessPlans()
+}
+
 func (p *blockingProjection) ActiveProviderProbeTargets() (
 	[]access.ProviderProbeTarget,
 	error,
@@ -1286,6 +1307,10 @@ func (p *failingProjection) AdmitLeaf(
 
 func (p *failingProjection) ActiveClientAuthorities() ([]string, error) {
 	return p.delegate.ActiveClientAuthorities()
+}
+
+func (p *failingProjection) ActiveAccessPlans() ([]access.AccessPlanSnapshot, error) {
+	return p.delegate.ActiveAccessPlans()
 }
 
 func (p *failingProjection) ActiveProviderProbeTargets() (

@@ -73,6 +73,7 @@ func TestProjectionRejectsDuplicateClientOriginsAcrossAccesses(t *testing.T) {
 	)
 	secondAggregate.AgentEndpoint.ClientOrigin =
 		firstAggregate.AgentEndpoint.ClientOrigin
+	secondAggregate = refreshOriginalPassthrough(t, secondAggregate)
 	first, err := compiler.Compile(firstAggregate)
 	if err != nil {
 		t.Fatal(err)

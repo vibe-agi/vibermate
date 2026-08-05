@@ -57,7 +57,7 @@ func liveAgentAccess(
 	if err != nil {
 		t.Fatalf("construct SecretRef: %v", err)
 	}
-	return access.Aggregate{
+	aggregate := access.Aggregate{
 		Binding: access.AccessBinding{
 			ID:                accessID,
 			Revision:          revision,
@@ -80,6 +80,9 @@ func liveAgentAccess(
 			ID:                     profileID,
 			Revision:               revision,
 			AccessID:               accessID,
+			Kind:                   access.EndpointProfileManaged,
+			CredentialSource:       access.CredentialSourceManagedAccount,
+			ProcessingMode:         access.ProfileProcessingManaged,
 			Name:                   "OpenAI Chat",
 			Description:            "Fixed M0 profile",
 			BackendDialect:         access.DialectOpenAIChat,
@@ -136,4 +139,9 @@ func liveAgentAccess(
 			Mode:     access.PluginPlanModePassThrough,
 		},
 	}
+	aggregate, err = access.AttachOriginalPassthrough(aggregate)
+	if err != nil {
+		t.Fatalf("attach original passthrough profile: %v", err)
+	}
+	return aggregate
 }

@@ -74,11 +74,24 @@ func testCatalogOptions(t *testing.T) access.CatalogOptions {
 		"/v1/responses",
 		"responses",
 	)
+	anthropicPassthroughID, err := access.NewCodecPairID(
+		"anthropic-messages-original-passthrough",
+	)
+	if err != nil {
+		t.Fatalf("construct Anthropic passthrough codec pair ID: %v", err)
+	}
+	responsesPassthroughID, err := access.NewCodecPairID(
+		"openai-responses-original-passthrough",
+	)
+	if err != nil {
+		t.Fatalf("construct Responses passthrough codec pair ID: %v", err)
+	}
 	return access.CatalogOptions{
 		Capabilities: access.PlanCapabilities{
-			MaxEndpointProfiles: 1,
-			MaxAccountBindings:  1,
-			MaxRouteSets:        1,
+			MaxEndpointProfiles:          2,
+			MaxAccountBindings:           1,
+			MaxRouteSets:                 1,
+			AllowMultipleRouteCandidates: true,
 		},
 		ClientOperations: []access.ClientOperationDefinition{
 			operation,
@@ -113,6 +126,34 @@ func testCatalogOptions(t *testing.T) access.CatalogOptions {
 					access.ProviderCapabilityToolCalls,
 				},
 			},
+			{
+				ID:              anthropicPassthroughID,
+				Revision:        1,
+				ClientDialect:   access.DialectAnthropicMessages,
+				ProviderDialect: access.DialectAnthropicMessages,
+				ClientOperationIDs: []access.ClientOperationID{
+					operation.ID(),
+				},
+				RequiredCapabilities: []access.ProviderCapability{
+					access.ProviderCapabilityMessages,
+					access.ProviderCapabilityStreaming,
+					access.ProviderCapabilityToolCalls,
+				},
+			},
+			{
+				ID:              responsesPassthroughID,
+				Revision:        1,
+				ClientDialect:   access.DialectOpenAIResponses,
+				ProviderDialect: access.DialectOpenAIResponses,
+				ClientOperationIDs: []access.ClientOperationID{
+					responsesOperation.ID(),
+				},
+				RequiredCapabilities: []access.ProviderCapability{
+					access.ProviderCapabilityMessages,
+					access.ProviderCapabilityStreaming,
+					access.ProviderCapabilityToolCalls,
+				},
+			},
 		},
 		AuthDrivers: []access.AuthDriverDefinition{{
 			Ref:      access.StaticHeaderAuthDriverRef(),
@@ -126,10 +167,10 @@ func testCatalogOptions(t *testing.T) access.CatalogOptions {
 			Mode:     access.PluginPlanModePassThrough,
 			Revision: 1,
 		}},
-		ModelPolicyModes: []access.ModelPolicyModeDefinition{{
-			Mode:     access.ModelPolicyModeFixed,
-			Revision: 1,
-		}},
+		ModelPolicyModes: []access.ModelPolicyModeDefinition{
+			{Mode: access.ModelPolicyModePassthrough, Revision: 1},
+			{Mode: access.ModelPolicyModeFixed, Revision: 1},
+		},
 		TransportProfiles:    access.BuiltInTransportFingerprintDefinitions(),
 		UpstreamWireProfiles: access.BuiltInUpstreamWireProfileDefinitions(),
 	}
@@ -205,7 +246,7 @@ func testAggregate(
 	if err != nil {
 		t.Fatalf("construct SecretRef: %v", err)
 	}
-	return access.Aggregate{
+	aggregate := access.Aggregate{
 		Binding: access.AccessBinding{
 			ID:                accessID,
 			Revision:          revision,
@@ -228,6 +269,9 @@ func testAggregate(
 			ID:                     profileID,
 			Revision:               revision,
 			AccessID:               accessID,
+			Kind:                   access.EndpointProfileManaged,
+			CredentialSource:       access.CredentialSourceManagedAccount,
+			ProcessingMode:         access.ProfileProcessingManaged,
 			Name:                   "OpenAI Chat",
 			Description:            "Fixed M0 profile",
 			BackendDialect:         access.DialectOpenAIChat,
@@ -284,6 +328,23 @@ func testAggregate(
 			Mode:     access.PluginPlanModePassThrough,
 		},
 	}
+	withOriginal, err := access.AttachOriginalPassthrough(aggregate)
+	if err != nil {
+		t.Fatalf("attach original passthrough profile: %v", err)
+	}
+	return withOriginal
+}
+
+func refreshOriginalPassthrough(
+	t *testing.T,
+	aggregate access.Aggregate,
+) access.Aggregate {
+	t.Helper()
+	refreshed, err := access.RefreshOriginalPassthrough(aggregate)
+	if err != nil {
+		t.Fatalf("refresh original passthrough profile: %v", err)
+	}
+	return refreshed
 }
 
 func newAccessID(t *testing.T, value string) access.AccessID {

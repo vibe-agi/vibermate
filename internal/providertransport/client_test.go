@@ -134,6 +134,195 @@ func TestClientWaitsForHoldLeaseBeforeSecretAndTransport(t *testing.T) {
 	waitForGateState(t, gate, offlinehold.StateOnline)
 }
 
+func TestClientPassthroughPreservesClientCredentialsOnlyForExactOrigin(
+	t *testing.T,
+) {
+	t.Parallel()
+
+	gate := newStartedGate(t)
+	secrets := &secretReaderStub{value: []byte("must-not-be-read")}
+	authenticator, err := NewStaticBearerAuthenticator(secrets)
+	if err != nil {
+		t.Fatal(err)
+	}
+	transport := &roundTripperStub{response: &http.Response{
+		StatusCode: http.StatusOK,
+		Header:     make(http.Header),
+		Body:       io.NopCloser(strings.NewReader("response")),
+	}}
+	client, err := NewClient(ClientOptions{
+		Coordinator:   gate,
+		Authenticator: authenticator,
+		Transport:     transport,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer shutdownClient(t, client)
+
+	plan := testOriginalRequestAccessPlan(t)
+	candidate, found := plan.Candidate(0)
+	if !found {
+		t.Fatal("original candidate is unavailable")
+	}
+	target, err := NewTarget(candidate.Target())
+	if err != nil {
+		t.Fatal(err)
+	}
+	action, err := gate.BeginAction(
+		context.Background(),
+		offlinehold.ActionRequest{ActionID: "original-client-auth"},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(action.Release)
+	frozen, err := NewRequest(RequestOptions{
+		RequestID:       "original-client-auth",
+		ExchangeID:      "exchange-original-client-auth",
+		ParentAttemptID: "attempt-original-client-auth",
+		EgressAttemptID: "egress-original-client-auth",
+		TargetRef:       "target-original-client-auth",
+		Target:          target,
+		AccessRevision:  plan.Revision(),
+		PlanHash:        plan.PlanHash(),
+		Action:          action,
+		Method:          http.MethodPost,
+		RelativePath:    "v1/messages",
+		RawQuery:        "beta=true",
+		Headers: http.Header{
+			"Authorization": []string{"Bearer client-oauth"},
+			"Cookie":        []string{"session=client"},
+			"X-Api-Key":     []string{"client-api-key"},
+			"Forwarded":     []string{"host=client.example"},
+			"Connection":    []string{"X-Remove"},
+			"X-Remove":      []string{"remove-me"},
+			"X-Keep":        []string{"keep-me"},
+			"User-Agent":    []string{"raw-second-authority"},
+		},
+		Body:             []byte(`{"model":"client-model"}`),
+		CredentialSource: access.CredentialSourceClientPassthrough,
+		ClientOrigin:     plan.AgentEndpoint().ClientOrigin,
+		WireProfile:      candidate.UpstreamWireProfile(),
+		ClientProtocol:   access.ApplicationProtocolHTTP1,
+		ClientUserAgent:  "client-cli/1.0",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	response, evidence, err := client.Do(context.Background(), frozen)
+	if err != nil {
+		t.Fatalf("Do() error = %v", err)
+	}
+	defer response.Body.Close()
+	request := transport.lastRequest()
+	if secrets.readCount() != 0 ||
+		request.URL.RawQuery != "beta=true" ||
+		request.Header.Get("Authorization") != "Bearer client-oauth" ||
+		request.Header.Get("Cookie") != "session=client" ||
+		request.Header.Get("X-Api-Key") != "client-api-key" ||
+		request.Header.Get("X-Keep") != "keep-me" ||
+		request.Header.Get("User-Agent") != "client-cli/1.0" ||
+		request.Header.Get("Forwarded") != "" ||
+		request.Header.Get("X-Remove") != "" ||
+		evidence.Credential.DriverRef !=
+			string(access.CredentialSourceClientPassthrough) ||
+		evidence.Credential.SecretRead ||
+		response.StatusCode != http.StatusOK {
+		t.Fatalf(
+			"passthrough request=%v evidence=%+v response=%d secretReads=%d",
+			request.Header,
+			evidence,
+			response.StatusCode,
+			secrets.readCount(),
+		)
+	}
+}
+
+func TestClientPassthroughRejectsRedirectWithoutReturningLocationOrResponse(
+	t *testing.T,
+) {
+	t.Parallel()
+
+	gate := newStartedGate(t)
+	authenticator, err := NewStaticBearerAuthenticator(
+		&secretReaderStub{value: []byte("must-not-be-read")},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	transport := &roundTripperStub{response: &http.Response{
+		StatusCode: http.StatusTemporaryRedirect,
+		Header: http.Header{
+			"Location": []string{"https://other.example/path?secret=value"},
+		},
+		Body: io.NopCloser(strings.NewReader("redirect")),
+	}}
+	client, err := NewClient(ClientOptions{
+		Coordinator:   gate,
+		Authenticator: authenticator,
+		Transport:     transport,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer shutdownClient(t, client)
+
+	plan := testOriginalRequestAccessPlan(t)
+	candidate, found := plan.Candidate(0)
+	if !found {
+		t.Fatal("original candidate is unavailable")
+	}
+	target, err := NewTarget(candidate.Target())
+	if err != nil {
+		t.Fatal(err)
+	}
+	action, err := gate.BeginAction(
+		context.Background(),
+		offlinehold.ActionRequest{ActionID: "original-redirect"},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(action.Release)
+	frozen, err := NewRequest(RequestOptions{
+		RequestID:       "original-redirect",
+		ExchangeID:      "exchange-original-redirect",
+		ParentAttemptID: "attempt-original-redirect",
+		EgressAttemptID: "egress-original-redirect",
+		TargetRef:       "target-original-redirect",
+		Target:          target,
+		AccessRevision:  plan.Revision(),
+		PlanHash:        plan.PlanHash(),
+		Action:          action,
+		Method:          http.MethodPost,
+		RelativePath:    "v1/messages",
+		Headers: http.Header{
+			"Authorization": []string{"Bearer client-oauth"},
+		},
+		Body:             []byte(`{"model":"client-model"}`),
+		CredentialSource: access.CredentialSourceClientPassthrough,
+		ClientOrigin:     plan.AgentEndpoint().ClientOrigin,
+		WireProfile:      candidate.UpstreamWireProfile(),
+		ClientProtocol:   access.ApplicationProtocolHTTP1,
+		ClientUserAgent:  "client-cli/1.0",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	response, _, err := client.Do(context.Background(), frozen)
+	if !errors.Is(err, ErrRedirectNotAllowed) || response != nil {
+		t.Fatalf("Do() response=%v error=%v", response, err)
+	}
+	if strings.Contains(err.Error(), "other.example") ||
+		strings.Contains(err.Error(), "secret=value") {
+		t.Fatalf("redirect error exposed Location: %v", err)
+	}
+	if gate.Snapshot().ActiveEgress != 0 {
+		t.Fatalf("redirect leaked an egress lease: %+v", gate.Snapshot())
+	}
+}
+
 func TestClientStrictTLSUsesFrozenSNIAndAuthority(t *testing.T) {
 	t.Parallel()
 
@@ -963,24 +1152,25 @@ func newTestRequestWithPlan(
 	}
 	t.Cleanup(action.Release)
 	request, err := NewRequest(RequestOptions{
-		RequestID:       id,
-		ExchangeID:      "exchange-test",
-		ParentAttemptID: "attempt-test",
-		EgressAttemptID: "egress-" + id,
-		TargetRef:       "target-test",
-		Target:          target,
-		AccessRevision:  plan.Revision(),
-		PlanHash:        plan.PlanHash(),
-		Action:          action,
-		Method:          http.MethodPost,
-		RelativePath:    "chat/completions",
-		Headers:         headers,
-		Body:            body,
-		SecretRef:       secretRef,
-		AuthDriverRef:   access.StaticHeaderAuthDriverRef(),
-		WireProfile:     plan.UpstreamWireProfile(),
-		ClientProtocol:  access.ApplicationProtocolHTTP1,
-		ClientUserAgent: "test-client/1.0",
+		RequestID:        id,
+		ExchangeID:       "exchange-test",
+		ParentAttemptID:  "attempt-test",
+		EgressAttemptID:  "egress-" + id,
+		TargetRef:        "target-test",
+		Target:           target,
+		AccessRevision:   plan.Revision(),
+		PlanHash:         plan.PlanHash(),
+		Action:           action,
+		Method:           http.MethodPost,
+		RelativePath:     "chat/completions",
+		Headers:          headers,
+		Body:             body,
+		CredentialSource: access.CredentialSourceManagedAccount,
+		SecretRef:        secretRef,
+		AuthDriverRef:    access.StaticHeaderAuthDriverRef(),
+		WireProfile:      plan.UpstreamWireProfile(),
+		ClientProtocol:   access.ApplicationProtocolHTTP1,
+		ClientUserAgent:  "test-client/1.0",
 	})
 	if err != nil {
 		t.Fatalf("NewRequest() error = %v", err)
@@ -1015,6 +1205,33 @@ func testRequestAccessPlanWithWireProfile(
 	rawProviderOrigin string,
 	providerDialect access.Dialect,
 	wireProfileRef access.UpstreamWireProfileRef,
+) access.AccessPlanSnapshot {
+	return testRequestAccessPlanWithWireProfileMode(
+		t,
+		rawProviderOrigin,
+		providerDialect,
+		wireProfileRef,
+		false,
+	)
+}
+
+func testOriginalRequestAccessPlan(t *testing.T) access.AccessPlanSnapshot {
+	t.Helper()
+	return testRequestAccessPlanWithWireProfileMode(
+		t,
+		"https://agent.example:443",
+		access.DialectAnthropicMessages,
+		access.FollowClientUpstreamWireProfileRef(),
+		true,
+	)
+}
+
+func testRequestAccessPlanWithWireProfileMode(
+	t *testing.T,
+	rawProviderOrigin string,
+	providerDialect access.Dialect,
+	wireProfileRef access.UpstreamWireProfileRef,
+	original bool,
 ) access.AccessPlanSnapshot {
 	t.Helper()
 	accessID, err := access.NewAccessID("provider-transport-test")
@@ -1075,7 +1292,7 @@ func testRequestAccessPlanWithWireProfile(
 	}
 	catalog, err := access.NewCatalog(access.CatalogOptions{
 		Capabilities: access.PlanCapabilities{
-			MaxEndpointProfiles: 1,
+			MaxEndpointProfiles: 2,
 			MaxAccountBindings:  1,
 			MaxRouteSets:        1,
 		},
@@ -1106,10 +1323,10 @@ func testRequestAccessPlanWithWireProfile(
 			Mode:     access.PluginPlanModePassThrough,
 			Revision: 1,
 		}},
-		ModelPolicyModes: []access.ModelPolicyModeDefinition{{
-			Mode:     access.ModelPolicyModeFixed,
-			Revision: 1,
-		}},
+		ModelPolicyModes: []access.ModelPolicyModeDefinition{
+			{Mode: access.ModelPolicyModePassthrough, Revision: 1},
+			{Mode: access.ModelPolicyModeFixed, Revision: 1},
+		},
 		TransportProfiles:    access.BuiltInTransportFingerprintDefinitions(),
 		UpstreamWireProfiles: access.BuiltInUpstreamWireProfileDefinitions(),
 	})
@@ -1120,7 +1337,7 @@ func testRequestAccessPlanWithWireProfile(
 	if err != nil {
 		t.Fatal(err)
 	}
-	snapshot, err := compiler.Compile(access.Aggregate{
+	aggregate := access.Aggregate{
 		Binding: access.AccessBinding{
 			ID:                accessID,
 			Revision:          1,
@@ -1142,6 +1359,9 @@ func testRequestAccessPlanWithWireProfile(
 			ID:                     profileID,
 			Revision:               1,
 			AccessID:               accessID,
+			Kind:                   access.EndpointProfileManaged,
+			CredentialSource:       access.CredentialSourceManagedAccount,
+			ProcessingMode:         access.ProfileProcessingManaged,
 			Name:                   "Provider profile",
 			BackendDialect:         providerDialect,
 			TargetID:               targetID,
@@ -1194,7 +1414,16 @@ func testRequestAccessPlanWithWireProfile(
 			AccessID: accessID,
 			Mode:     access.PluginPlanModePassThrough,
 		},
-	})
+	}
+	aggregate, err = access.AttachOriginalPassthrough(aggregate)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if original {
+		aggregate.RouteSets[0].CandidateProfileIDs =
+			[]access.EndpointProfileID{access.OriginalPassthroughProfileID()}
+	}
+	snapshot, err := compiler.Compile(aggregate)
 	if err != nil {
 		t.Fatal(err)
 	}

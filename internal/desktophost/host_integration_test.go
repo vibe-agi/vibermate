@@ -14,6 +14,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/vibe-agi/vibermate/internal/access"
+	"github.com/vibe-agi/vibermate/internal/capturecontrol"
 	"github.com/vibe-agi/vibermate/internal/desktopbootstrap"
 	"github.com/vibe-agi/vibermate/internal/desktopcontrol"
 	"github.com/vibe-agi/vibermate/internal/desktophost"
@@ -27,6 +29,102 @@ import (
 	"github.com/vibe-agi/vibermate/internal/secretstore"
 	"github.com/vibe-agi/vibermate/internal/toolapproval"
 )
+
+func TestHostCaptureGrantSeparatesOriginalAndManagedCredentialBootstrap(
+	t *testing.T,
+) {
+	for _, testCase := range []struct {
+		name        string
+		useOriginal bool
+		wantManaged bool
+	}{
+		{name: "current login", useOriginal: true, wantManaged: false},
+		{name: "managed provider", useOriginal: false, wantManaged: true},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			root := t.TempDir()
+			paths := newHostPaths(t, filepath.Join(root, "cache"))
+			host := startHost(t, hostOptions(t, paths, filepath.Join(root, "data")))
+			defer shutdownHost(t, host)
+
+			accessID, err := access.NewAccessID("capture-authority")
+			if err != nil {
+				t.Fatal(err)
+			}
+			aggregate := liveAgentAccess(
+				t,
+				accessID,
+				"https://provider.example.test:443/v1",
+				"example-model",
+			)
+			if testCase.useOriginal {
+				aggregate.RouteSets[0].CandidateProfileIDs =
+					[]access.EndpointProfileID{access.OriginalPassthroughProfileID()}
+			}
+			result, err := host.Runtime().AccessWriter().WriteAccess(
+				context.Background(),
+				access.WriteCommand{ExpectedRevision: 0, Aggregate: aggregate},
+			)
+			if err != nil || result.Outcome != access.WriteOutcomeCommitted {
+				t.Fatalf("write Access result=%+v err=%v", result, err)
+			}
+
+			discovery, err := localdiscovery.NewFile(
+				paths.DiscoveryPath(),
+				productruntime.SystemClock{},
+			)
+			if err != nil {
+				t.Fatal(err)
+			}
+			session, err := discovery.Load()
+			if err != nil {
+				t.Fatal(err)
+			}
+			body, err := json.Marshal(capturecontrol.CreateRequest{
+				CWD:            root,
+				Command:        []string{"/bin/sh", "-c", "exit 0"},
+				ExecutablePath: "/bin/sh",
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			request, err := http.NewRequest(
+				http.MethodPost,
+				session.BaseURL+"/api/v1/capture-runs",
+				strings.NewReader(string(body)),
+			)
+			if err != nil {
+				t.Fatal(err)
+			}
+			request.Header.Set("Authorization", "Bearer "+session.ControlCredential)
+			request.Header.Set("Content-Type", "application/json")
+			response, err := (&http.Client{Timeout: 5 * time.Second}).Do(request)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer response.Body.Close()
+			if response.StatusCode != http.StatusCreated {
+				payload, _ := io.ReadAll(response.Body)
+				t.Fatalf("CaptureRun status=%d body=%s", response.StatusCode, payload)
+			}
+			var grant capturecontrol.LaunchGrant
+			if err := json.NewDecoder(response.Body).Decode(&grant); err != nil {
+				t.Fatal(err)
+			}
+			if got := grant.ProtectedAuthorities; len(got) != 1 ||
+				got[0] != "api.anthropic.com:443" {
+				t.Fatalf("protected authorities = %v", got)
+			}
+			if got := len(grant.ManagedCredentialAuthorities); (got == 1) != testCase.wantManaged {
+				t.Fatalf(
+					"managed credential authorities=%v wantManaged=%t",
+					grant.ManagedCredentialAuthorities,
+					testCase.wantManaged,
+				)
+			}
+		})
+	}
+}
 
 func TestHostPublishesReadyGenerationAndRunsCapturedChildOverRealSockets(
 	t *testing.T,

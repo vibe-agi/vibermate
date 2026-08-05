@@ -750,18 +750,32 @@ func testTransportPlanWithWire(
 	if err != nil {
 		t.Fatal(err)
 	}
-	catalog, err := access.NewCatalog(access.CatalogOptions{
-		Capabilities: access.PlanCapabilities{
-			MaxEndpointProfiles: 1,
-			MaxAccountBindings:  1,
-			MaxRouteSets:        1,
+	codecPairs := []access.CodecPairDefinition{{
+		ID:              codecID,
+		Revision:        1,
+		ClientDialect:   access.DialectAnthropicMessages,
+		ProviderDialect: providerDialect,
+		ClientOperationIDs: operations.SemanticOperationIDs(
+			access.DialectAnthropicMessages,
+		),
+		RequiredCapabilities: []access.ProviderCapability{
+			access.ProviderCapabilityMessages,
+			access.ProviderCapabilityStreaming,
+			access.ProviderCapabilityToolCalls,
 		},
-		ClientOperations: operations.Definitions(),
-		CodecPairs: []access.CodecPairDefinition{{
-			ID:              codecID,
+	}}
+	if providerDialect != access.DialectAnthropicMessages {
+		originalCodecID, originalErr := access.NewCodecPairID(
+			"anthropic-messages-original-passthrough",
+		)
+		if originalErr != nil {
+			t.Fatal(originalErr)
+		}
+		codecPairs = append(codecPairs, access.CodecPairDefinition{
+			ID:              originalCodecID,
 			Revision:        1,
 			ClientDialect:   access.DialectAnthropicMessages,
-			ProviderDialect: providerDialect,
+			ProviderDialect: access.DialectAnthropicMessages,
 			ClientOperationIDs: operations.SemanticOperationIDs(
 				access.DialectAnthropicMessages,
 			),
@@ -770,7 +784,17 @@ func testTransportPlanWithWire(
 				access.ProviderCapabilityStreaming,
 				access.ProviderCapabilityToolCalls,
 			},
-		}},
+		})
+	}
+	catalog, err := access.NewCatalog(access.CatalogOptions{
+		Capabilities: access.PlanCapabilities{
+			MaxEndpointProfiles:          2,
+			MaxAccountBindings:           1,
+			MaxRouteSets:                 1,
+			AllowMultipleRouteCandidates: true,
+		},
+		ClientOperations: operations.Definitions(),
+		CodecPairs:       codecPairs,
 		AuthDrivers: []access.AuthDriverDefinition{{
 			Ref:      access.StaticHeaderAuthDriverRef(),
 			Revision: 1,
@@ -785,6 +809,9 @@ func testTransportPlanWithWire(
 		}},
 		ModelPolicyModes: []access.ModelPolicyModeDefinition{{
 			Mode:     access.ModelPolicyModeFixed,
+			Revision: 1,
+		}, {
+			Mode:     access.ModelPolicyModePassthrough,
 			Revision: 1,
 		}},
 		TransportProfiles:    access.BuiltInTransportFingerprintDefinitions(),

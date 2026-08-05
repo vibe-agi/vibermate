@@ -47,6 +47,7 @@ func TestDownstreamProtocolsFollowTheActiveAccessTransport(t *testing.T) {
 	loopback.RouteSets[0].Revision = 2
 	loopback.EgressPolicy.Revision = 2
 	loopback.PluginPlan.Revision = 2
+	loopback = refreshOriginalPassthrough(t, loopback)
 	loopbackOrigin, err := access.NewProviderOrigin("http://127.0.0.1:23333/v1")
 	if err != nil {
 		t.Fatal(err)

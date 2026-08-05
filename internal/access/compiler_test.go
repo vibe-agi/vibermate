@@ -106,6 +106,81 @@ func TestCompilerFreezesUpstreamWireProfileAsOnePlanAuthority(t *testing.T) {
 	}
 }
 
+func TestCompilerOriginalPassthroughDefaultsToFollowClientWireShape(
+	t *testing.T,
+) {
+	t.Parallel()
+
+	compiler := testCompiler(t)
+	aggregate := testAggregate(
+		t,
+		newAccessID(t, "access-original-wire-profile"),
+		1,
+		"Original wire profile",
+	)
+	aggregate.RouteSets[0].CandidateProfileIDs = []access.EndpointProfileID{
+		access.OriginalPassthroughProfileID(),
+	}
+	plan, err := compiler.Compile(aggregate)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	wireProfile := plan.UpstreamWireProfile()
+	h1, h1OK := wireProfile.Variant(access.ApplicationProtocolHTTP1)
+	h2, h2OK := wireProfile.Variant(access.ApplicationProtocolHTTP2)
+	if wireProfile.Ref() != access.FollowClientUpstreamWireProfileRef() ||
+		wireProfile.Mode() != access.UpstreamWireModeFollowClient ||
+		wireProfile.Product() != "" ||
+		!h1OK ||
+		!h2OK ||
+		h1.UserAgentPolicy() != access.UserAgentPolicyFollowClient ||
+		h2.UserAgentPolicy() != access.UserAgentPolicyFollowClient ||
+		h1.TransportFingerprintPlan().Requested().Ref() !=
+			access.ObservedClientH1TransportProfileRef() ||
+		h2.TransportFingerprintPlan().Requested().Ref() !=
+			access.ObservedClientH2TransportProfileRef() ||
+		len(h1.TransportFingerprintPlan().Fallbacks()) != 0 ||
+		len(h2.TransportFingerprintPlan().Fallbacks()) != 0 {
+		t.Fatalf("original passthrough wire profile = %+v", wireProfile)
+	}
+}
+
+func TestCompilerKeepsOriginalSelectableButNeverUsesItAsFallback(
+	t *testing.T,
+) {
+	t.Parallel()
+
+	compiler := testCompiler(t)
+	aggregate := testAggregate(
+		t,
+		newAccessID(t, "access-original-route-choice"),
+		1,
+		"Original route choice",
+	)
+	aggregate.RouteSets[0].CandidateProfileIDs = []access.EndpointProfileID{
+		aggregate.Profiles[0].ID,
+		access.OriginalPassthroughProfileID(),
+	}
+	aggregate.RouteSets[0].Fallback = access.FallbackDisabled
+	plan, err := compiler.Compile(aggregate)
+	if err != nil {
+		t.Fatalf("Compile() selectable original error = %v", err)
+	}
+	managed, managedOK := plan.Candidate(0)
+	original, originalOK := plan.Candidate(1)
+	if plan.CandidateCount() != 2 || !managedOK || !originalOK ||
+		managed.Kind() != access.EndpointProfileManaged ||
+		original.Kind() != access.EndpointProfileOriginalPassthrough {
+		t.Fatalf("compiled route choices managed=%+v original=%+v", managed, original)
+	}
+
+	aggregate.RouteSets[0].Fallback = access.FallbackPreFirstByteIdempotentOnly
+	if _, err := compiler.Compile(aggregate); err == nil {
+		t.Fatal("Compile() accepted original passthrough in an automatic fallback set")
+	}
+}
+
 func TestCompilerFreezesExactResponsesOperationInPlanHash(t *testing.T) {
 	t.Parallel()
 
@@ -144,6 +219,7 @@ func TestCompilerFreezesExactResponsesOperationInPlanHash(t *testing.T) {
 	)
 	responsesAggregate.AgentEndpoint.ClientDialect =
 		access.DialectOpenAIResponses
+	responsesAggregate = refreshOriginalPassthrough(t, responsesAggregate)
 	responsesPlan, err := compiler.Compile(responsesAggregate)
 	if err != nil {
 		t.Fatalf("compile Responses plan: %v", err)
@@ -313,7 +389,7 @@ func TestCompilerCatalogDoesNotRetainInputAliases(t *testing.T) {
 	)
 	options := access.CatalogOptions{
 		Capabilities: access.PlanCapabilities{
-			MaxEndpointProfiles: 1,
+			MaxEndpointProfiles: 2,
 			MaxAccountBindings:  1,
 			MaxRouteSets:        1,
 		},
@@ -436,8 +512,9 @@ func TestCompilerFailsClosedForInvalidExecutableReferences(t *testing.T) {
 		},
 		{
 			name: "unknown client dialect",
-			mutate: func(_ *testing.T, aggregate *access.Aggregate) {
+			mutate: func(t *testing.T, aggregate *access.Aggregate) {
 				aggregate.AgentEndpoint.ClientDialect = "unknown-client"
+				*aggregate = refreshOriginalPassthrough(t, *aggregate)
 			},
 			specific: access.ErrUnknownDialect,
 		},

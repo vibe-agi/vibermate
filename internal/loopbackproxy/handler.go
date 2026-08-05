@@ -902,6 +902,7 @@ func (handler *Handler) serveSemantic(
 	}
 	requestOptions := []exchange.ClientRequestOption{
 		exchange.WithClientHelloObservation(observation),
+		exchange.WithOriginalHeaders(request.Header),
 		// Every identity is generated independently; association travels as
 		// typed references rather than as a delimiter-joined string.
 		exchange.WithIngressCorrelation(admission, audit.ID()),
@@ -1552,7 +1553,7 @@ func newHTTPDownstream(writer http.ResponseWriter) *httpDownstream {
 
 func (downstream *httpDownstream) Begin(
 	ctx context.Context,
-	mode exchange.ResponseMode,
+	envelope exchange.ResponseEnvelope,
 ) error {
 	if err := ctx.Err(); err != nil {
 		return err
@@ -1560,18 +1561,18 @@ func (downstream *httpDownstream) Begin(
 	if downstream.begun {
 		return errors.New("downstream response already began")
 	}
-	downstream.mode = mode
-	downstream.begun = true
-	downstream.writer.Header().Set("Cache-Control", "no-store")
-	switch mode {
-	case exchange.ResponseModeJSON:
-		downstream.writer.Header().Set("Content-Type", "application/json")
-	case exchange.ResponseModeEventStream:
-		downstream.writer.Header().Set("Content-Type", "text/event-stream")
-	default:
+	mode := envelope.Mode()
+	if mode != exchange.ResponseModeJSON &&
+		mode != exchange.ResponseModeEventStream {
 		return errors.New("downstream response mode is invalid")
 	}
-	downstream.writer.WriteHeader(http.StatusOK)
+	if envelope.StatusCode() < 200 || envelope.StatusCode() > 599 {
+		return errors.New("downstream status code is invalid")
+	}
+	downstream.mode = mode
+	downstream.begun = true
+	copyResponseHeaders(downstream.writer.Header(), envelope.Headers())
+	downstream.writer.WriteHeader(envelope.StatusCode())
 	if mode == exchange.ResponseModeEventStream {
 		if flusher, ok := downstream.writer.(http.Flusher); ok {
 			flusher.Flush()

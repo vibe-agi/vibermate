@@ -719,6 +719,12 @@ func (r *Runtime) ActiveClientAuthorities() ([]string, error) {
 	return r.accesses.ActiveClientAuthorities()
 }
 
+// ActiveAccessPlans returns one atomically observed immutable active-plan set.
+// It is used by Host-owned CaptureRun grant composition, not by the UI.
+func (r *Runtime) ActiveAccessPlans() ([]access.AccessPlanSnapshot, error) {
+	return r.accesses.ActiveAccessPlans()
+}
+
 // AccessProjectionHealth reports whether process-local Access snapshots can be
 // trusted. It is an internal health signal, not product readiness.
 func (r *Runtime) AccessProjectionHealth() access.ProjectionHealth {

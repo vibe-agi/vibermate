@@ -7,6 +7,7 @@ import (
 	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -193,6 +194,50 @@ func TestCaptureControlSeparatesControlAndPerRunCredentials(t *testing.T) {
 	)
 	if rejected.Code != http.StatusForbidden {
 		t.Fatalf("wrong per-run capability status=%d", rejected.Code)
+	}
+}
+
+func TestCaptureAuthorityFailureObservesThenFinishesTheActiveRun(t *testing.T) {
+	t.Parallel()
+	sawActive := false
+	fixture := newFixture(t, func(options *capturegrant.Options) {
+		reader, ok := options.Runs.(capturerun.Reader)
+		if !ok {
+			t.Fatal("CaptureRun controller does not expose its read projection")
+		}
+		options.Authorities = inspectingFailingAuthorities{
+			reader:    reader,
+			sawActive: &sawActive,
+		}
+	})
+	defer fixture.Close(t)
+	response := fixture.DoJSON(
+		t,
+		http.MethodPost,
+		"/api/v1/capture-runs",
+		fixture.controlCredential,
+		"",
+		capturecontrol.CreateRequest{
+			CWD:            fixture.workspace,
+			Command:        []string{"claude", "--print", "prompt"},
+			ExecutablePath: fixture.executable,
+		},
+	)
+	if response.Code != http.StatusServiceUnavailable || !sawActive {
+		t.Fatalf(
+			"authority failure status=%d sawActive=%t body=%s",
+			response.Code,
+			sawActive,
+			response.Body.Bytes(),
+		)
+	}
+	page, err := fixture.runs.ListRuns(
+		context.Background(),
+		capturerun.PageRequest{Limit: 10},
+	)
+	if err != nil || len(page.Items) != 1 ||
+		page.Items[0].State != capturerun.StateFinished {
+		t.Fatalf("unused CaptureRun page=%+v err=%v", page, err)
 	}
 }
 
@@ -770,8 +815,38 @@ func (clock *fakeClock) Now() time.Time {
 
 type fixedAuthorities []string
 
-func (authorities fixedAuthorities) ActiveClientAuthorities() ([]string, error) {
-	return append([]string(nil), authorities...), nil
+func (authorities fixedAuthorities) ResolveCaptureAuthorities(
+	context.Context,
+	workspaceidentity.Scope,
+) (capturegrant.CaptureAuthoritySet, error) {
+	return capturegrant.NewCaptureAuthoritySet(authorities, authorities)
+}
+
+type inspectingFailingAuthorities struct {
+	reader    capturerun.Reader
+	sawActive *bool
+}
+
+func (resolver inspectingFailingAuthorities) ResolveCaptureAuthorities(
+	ctx context.Context,
+	_ workspaceidentity.Scope,
+) (capturegrant.CaptureAuthoritySet, error) {
+	page, err := resolver.reader.ListRuns(
+		ctx,
+		capturerun.PageRequest{Limit: 10},
+	)
+	if err != nil {
+		return capturegrant.CaptureAuthoritySet{}, err
+	}
+	for _, run := range page.Items {
+		if run.State == capturerun.StateCreated ||
+			run.State == capturerun.StateAttached {
+			*resolver.sawActive = true
+		}
+	}
+	return capturegrant.CaptureAuthoritySet{}, errors.New(
+		"injected authority resolution failure",
+	)
 }
 
 func decodeRecorder(

@@ -111,13 +111,19 @@ func TestAccessDetailIsCompleteButNeverDisclosesSecretReference(t *testing.T) {
 		detail.Access.ID != "access-detail" ||
 		detail.Access.Name != "Detail" ||
 		detail.AgentEndpoint.ClientOrigin != "https://access-detail.example.test:443" ||
-		len(detail.Profiles) != 1 ||
-		len(detail.ProviderTargets) != 1 ||
+		len(detail.Profiles) != 2 ||
+		len(detail.ProviderTargets) != 2 ||
 		len(detail.AccountBindings) != 1 ||
 		len(detail.RouteSets) != 1 ||
 		detail.AccountBindings[0].SecretHandling != AccessSecretHandlingPreserveExisting ||
 		detail.RouteSets[0].Fallback != access.FallbackDisabled {
 		t.Fatalf("Access detail = %+v", detail)
+	}
+	if detail.Profiles[1].Kind != access.EndpointProfileOriginalPassthrough ||
+		detail.Profiles[1].CredentialSource !=
+			access.CredentialSourceClientPassthrough ||
+		detail.Profiles[1].ProcessingMode != access.ProfileProcessingObserveOnly {
+		t.Fatalf("original profile detail = %+v", detail.Profiles[1])
 	}
 	var object map[string]json.RawMessage
 	if err := json.Unmarshal(body, &object); err != nil {

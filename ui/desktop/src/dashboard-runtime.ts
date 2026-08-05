@@ -215,7 +215,7 @@ type DashboardCommand =
   | {
       readonly kind: "apply-access";
       readonly accessId: string;
-      readonly coordinates: AccessCredentialCoordinates;
+      readonly coordinates?: AccessCredentialCoordinates;
     }
   | {
       readonly kind: "replace-credential";
@@ -601,7 +601,7 @@ export function useDashboardQueryRuntime(
               dashboardQueryKeys.activities,
             ]),
           ]).catch(() => undefined);
-          if (input.kind === "apply-access") {
+          if (input.kind === "apply-access" && input.coordinates !== undefined) {
             void model.queryClient.invalidateQueries({
               queryKey: credentialQueryKey(input.coordinates),
               refetchType: "active",
@@ -687,13 +687,14 @@ export function useDashboardQueryRuntime(
       applyAccess: (accessId, input) => {
         const profileId = input.profiles[0]?.id;
         const credentialId = input.accountBindings[0]?.id;
-        if (profileId === undefined || credentialId === undefined) {
-          return Promise.resolve(undefined);
-        }
         return runCommand<AccessApplyResponse>(
           {
             accessId,
-            coordinates: { accessId, credentialId, profileId },
+            ...(profileId === undefined || credentialId === undefined
+              ? {}
+              : {
+                  coordinates: { accessId, credentialId, profileId },
+                }),
             kind: "apply-access",
           },
           { accessApplyInput: input },

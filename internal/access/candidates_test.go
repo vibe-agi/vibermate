@@ -41,7 +41,7 @@ func TestDisabledAccountMayBeStagedButCannotEnterRouteSet(t *testing.T) {
 	t.Parallel()
 
 	options := testCatalogOptions(t)
-	options.Capabilities.MaxEndpointProfiles = 2
+	options.Capabilities.MaxEndpointProfiles = 3
 	options.Capabilities.MaxAccountBindings = 2
 	options.Capabilities.AllowMultipleRouteCandidates = true
 	catalog, err := access.NewCatalog(options)

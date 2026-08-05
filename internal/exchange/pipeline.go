@@ -286,6 +286,97 @@ func (pipeline *Pipeline) Execute(
 				err,
 			)
 		}
+		if selection.kind == access.EndpointProfileOriginalPassthrough {
+			headers, available := request.OriginalHeaders()
+			if !available {
+				return result, newFailure(
+					ReasonUnsupportedAccessPlan,
+					request.exchangeID,
+					0,
+					errors.New(
+						"original passthrough request envelope is unavailable",
+					),
+				)
+			}
+			clientHello, _ := request.ClientHelloObservation()
+			result.Presentation = providertransport.NewWirePresentationEvidence(
+				selection.wireProfile,
+				request.ClientHTTPProtocol(),
+			)
+			attemptID, err := pipeline.attemptIDs.NewAttemptID()
+			if err != nil {
+				return result, newFailure(
+					ReasonProviderRequestInvalid,
+					request.exchangeID,
+					0,
+					err,
+				)
+			}
+			egressID, err := pipeline.attemptIDs.NewAttemptID()
+			if err != nil {
+				return result, newFailure(
+					ReasonProviderRequestInvalid,
+					request.exchangeID,
+					0,
+					err,
+				)
+			}
+			frozenRequest, err := providertransport.NewRequest(
+				providertransport.RequestOptions{
+					RequestID:        attemptID,
+					EgressAttemptID:  egressID,
+					ConnectionID:     request.connectionRef,
+					ExchangeID:       request.exchangeID,
+					ParentAttemptID:  attemptID,
+					TargetRef:        selection.targetRef,
+					Target:           selection.target,
+					AccessRevision:   selection.revision,
+					PlanHash:         selection.planHash,
+					Action:           action,
+					Method:           request.operation.Method(),
+					RelativePath:     strings.TrimPrefix(request.operation.Path(), "/"),
+					RawQuery:         request.operation.RawQuery(),
+					Headers:          headers,
+					Body:             request.body,
+					CredentialSource: selection.credentialSource,
+					ClientOrigin:     selection.clientOrigin,
+					WireProfile:      selection.wireProfile,
+					ClientProtocol:   request.ClientHTTPProtocol(),
+					ClientUserAgent:  request.ClientUserAgent(),
+					ClientHello:      clientHello,
+				},
+			)
+			if err != nil {
+				return result, newFailure(
+					ReasonProviderRequestInvalid,
+					request.exchangeID,
+					0,
+					err,
+				)
+			}
+			attemptErr = pipeline.executeOriginal(
+				operationContext,
+				request,
+				frozenRequest,
+				downstream,
+				ledger,
+				&result,
+			)
+			if attemptErr == nil {
+				break
+			}
+			if !mayTryNextCandidate(
+				fallback,
+				candidates,
+				candidateIndex,
+				ledger,
+				request.replayClass,
+				attemptErr,
+			) {
+				break
+			}
+			continue
+		}
 		protocolPath, err := pipeline.protocolPaths.Select(
 			selection.codecPlan,
 			request.operation.id,
@@ -367,26 +458,27 @@ func (pipeline *Pipeline) Execute(
 		}
 		frozenRequest, err := providertransport.NewRequest(
 			providertransport.RequestOptions{
-				RequestID:       attemptID,
-				EgressAttemptID: egressID,
-				ConnectionID:    request.connectionRef,
-				ExchangeID:      request.exchangeID,
-				ParentAttemptID: attemptID,
-				TargetRef:       selection.targetRef,
-				Target:          selection.target,
-				AccessRevision:  selection.revision,
-				PlanHash:        selection.planHash,
-				Action:          action,
-				Method:          encodedProvider.Method(),
-				RelativePath:    encodedProvider.RelativePath(),
-				Headers:         encodedProvider.Headers(),
-				Body:            encodedProvider.Body(),
-				SecretRef:       selection.secretRef,
-				AuthDriverRef:   selection.authDriverRef,
-				WireProfile:     selection.wireProfile,
-				ClientProtocol:  request.ClientHTTPProtocol(),
-				ClientUserAgent: request.ClientUserAgent(),
-				ClientHello:     clientHello,
+				RequestID:        attemptID,
+				EgressAttemptID:  egressID,
+				ConnectionID:     request.connectionRef,
+				ExchangeID:       request.exchangeID,
+				ParentAttemptID:  attemptID,
+				TargetRef:        selection.targetRef,
+				Target:           selection.target,
+				AccessRevision:   selection.revision,
+				PlanHash:         selection.planHash,
+				Action:           action,
+				Method:           encodedProvider.Method(),
+				RelativePath:     encodedProvider.RelativePath(),
+				Headers:          encodedProvider.Headers(),
+				Body:             encodedProvider.Body(),
+				CredentialSource: access.CredentialSourceManagedAccount,
+				SecretRef:        selection.secretRef,
+				AuthDriverRef:    selection.authDriverRef,
+				WireProfile:      selection.wireProfile,
+				ClientProtocol:   request.ClientHTTPProtocol(),
+				ClientUserAgent:  request.ClientUserAgent(),
+				ClientHello:      clientHello,
 			},
 		)
 		if err != nil {
@@ -754,7 +846,7 @@ func (pipeline *Pipeline) executeComplete(
 			err,
 		)
 	}
-	if err := downstream.Begin(ctx, ResponseModeJSON); err != nil {
+	if err := downstream.Begin(ctx, managedResponseEnvelope(ResponseModeJSON)); err != nil {
 		return newFailure(
 			ReasonDownstreamCommitFailed,
 			request.exchangeID,
@@ -810,6 +902,142 @@ func (pipeline *Pipeline) executeComplete(
 	return nil
 }
 
+// executeOriginal preserves the bounded same-dialect request and response body
+// bytes plus end-to-end headers after mandatory proxy sanitation. HTTP framing,
+// hop-by-hop fields, TLS state, and connection reuse are transport-owned and are
+// not claimed to pass through byte for byte. The exchange still crosses the
+// provider transport, Offline Hold, and EgressAttempt boundaries; only codec,
+// model, credential, plugin, retry, and tool-decision mutation are absent.
+func (pipeline *Pipeline) executeOriginal(
+	ctx context.Context,
+	request ClientRequest,
+	frozenRequest providertransport.Request,
+	downstream Downstream,
+	ledger *CommitLedger,
+	result *Result,
+) error {
+	result.Presentation = frozenRequest.WirePresentationEvidence()
+	if err := ledger.RecordUpstreamSend(int64(len(frozenRequest.Body()))); err != nil {
+		return newFailure(
+			ReasonProviderRequestInvalid,
+			request.exchangeID,
+			0,
+			err,
+		)
+	}
+	response, evidence, err := pipeline.provider.Do(ctx, frozenRequest)
+	result.Credential = evidence.Credential
+	if evidence.Presentation.RequestedRef != "" {
+		result.Presentation = evidence.Presentation
+	}
+	result.Transport = evidence.Transport
+	if err != nil {
+		return pipeline.classifyProviderError(ctx, request.exchangeID, err)
+	}
+	if response == nil || response.Body == nil {
+		return newFailure(
+			ReasonProviderTransportFailed,
+			request.exchangeID,
+			0,
+			errors.New("provider returned an incomplete response"),
+		)
+	}
+	defer response.Body.Close()
+	ledger.RecordUpstreamResponse()
+	mode := ResponseModeJSON
+	if contentTypeMatches(
+		response.Header.Get("Content-Type"),
+		"text/event-stream",
+	) {
+		mode = ResponseModeEventStream
+	}
+	envelope, err := NewResponseEnvelope(
+		mode,
+		response.StatusCode,
+		response.Header,
+	)
+	if err != nil {
+		return newFailure(
+			ReasonProviderResponseInvalid,
+			request.exchangeID,
+			response.StatusCode,
+			err,
+		)
+	}
+	if err := downstream.Begin(ctx, envelope); err != nil {
+		return newFailure(
+			ReasonDownstreamCommitFailed,
+			request.exchangeID,
+			response.StatusCode,
+			err,
+		)
+	}
+	if err := ledger.RecordOrdinaryHeaders(); err != nil {
+		return newFailure(
+			ReasonDownstreamCommitFailed,
+			request.exchangeID,
+			response.StatusCode,
+			err,
+		)
+	}
+	buffer := make([]byte, streamReadBufferBytes)
+	for {
+		count, readErr := response.Body.Read(buffer)
+		if count > 0 {
+			committed, writeErr := writeDownstream(
+				ctx,
+				downstream,
+				buffer[:count],
+			)
+			if committed > 0 {
+				if err := ledger.RecordSemanticWrite(committed); err != nil {
+					return newFailure(
+						ReasonDownstreamCommitFailed,
+						request.exchangeID,
+						response.StatusCode,
+						err,
+					)
+				}
+			}
+			if writeErr != nil {
+				return newFailure(
+					ReasonDownstreamCommitFailed,
+					request.exchangeID,
+					response.StatusCode,
+					writeErr,
+				)
+			}
+		}
+		if errors.Is(readErr, io.EOF) {
+			break
+		}
+		if readErr != nil {
+			return newFailure(
+				ReasonProviderResponseInvalid,
+				request.exchangeID,
+				response.StatusCode,
+				readErr,
+			)
+		}
+	}
+	if err := ledger.RecordTerminal(); err != nil {
+		return newFailure(
+			ReasonDownstreamCommitFailed,
+			request.exchangeID,
+			response.StatusCode,
+			err,
+		)
+	}
+	if response.StatusCode < 200 || response.StatusCode > 299 {
+		return newProviderStatusFailure(
+			request.exchangeID,
+			response.StatusCode,
+			ProviderFieldUnknown,
+		)
+	}
+	return nil
+}
+
 func (pipeline *Pipeline) executeStream(
 	ctx context.Context,
 	request ClientRequest,
@@ -821,7 +1049,10 @@ func (pipeline *Pipeline) executeStream(
 	ledger *CommitLedger,
 	result *Result,
 ) error {
-	if err := downstream.Begin(ctx, ResponseModeEventStream); err != nil {
+	if err := downstream.Begin(
+		ctx,
+		managedResponseEnvelope(ResponseModeEventStream),
+	); err != nil {
 		return newFailure(
 			ReasonDownstreamCommitFailed,
 			request.exchangeID,
