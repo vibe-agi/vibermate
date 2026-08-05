@@ -218,7 +218,7 @@ async function prepareDiskImage(appPath, dmgPath) {
     );
     await symlink("/Applications", resolve(stagingDirectory, "Applications"));
     const names = (await readdir(stagingDirectory)).sort();
-    if (JSON.stringify(names) !== JSON.stringify(["Applications", "VibeMate.app"])) {
+    if (JSON.stringify(names) !== JSON.stringify(["Applications", "ViberMate.app"])) {
       throw new Error("The DMG staging root is not the fixed minimal inventory");
     }
     validateTreeLedgerEquality(
@@ -312,7 +312,7 @@ async function main() {
       inputs.keychainPath,
       unsigned.appPath,
     ),
-    "VibeMate.app Developer ID signing",
+    "ViberMate.app Developer ID signing",
   );
 
   await mkdir(macOSDistributionDirectories.dmgDirectory, {

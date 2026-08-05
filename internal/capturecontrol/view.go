@@ -268,7 +268,8 @@ func (grant LaunchGrant) Validate() error {
 		}
 	default:
 		if grant.LaunchRecipe != clientadapter.LaunchGeneric ||
-			grant.Run.ClientAdapter != nil {
+			(grant.Run.ClientAdapter != nil &&
+				len(grant.ProtectedAuthorities) != 0) {
 			return errors.New(
 				"CaptureRun launch grant omitted the evidence its recipe rests on",
 			)

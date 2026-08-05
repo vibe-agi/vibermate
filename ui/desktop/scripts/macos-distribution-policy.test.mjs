@@ -28,7 +28,7 @@ import {
 
 const teamID = "A1B2C3D4E5";
 const submissionID = "12345678-1234-4abc-8def-1234567890ab";
-const archiveFilename = "VibeMate_0.1.0_universal.dmg";
+const archiveFilename = "ViberMate_0.1.0_universal.dmg";
 const preStapleSHA256 = "a".repeat(64);
 
 function admittedAppleTools() {
@@ -71,11 +71,11 @@ function developerIDMetadata(overrides = {}) {
   const flags = overrides.flags ?? "0x10000(runtime)";
   const signature = overrides.signature ?? "8991 bytes";
   return [
-    "Executable=/candidate/VibeMate.app/Contents/MacOS/vibermate-desktop",
+    "Executable=/candidate/ViberMate.app/Contents/MacOS/vibermate-desktop",
     `Identifier=${overrides.identifier ?? macOSDistributionPolicy.appIdentifier}`,
     `CodeDirectory v=20500 size=123 flags=${flags} hashes=4+7 location=embedded`,
     `Signature size=${signature}`,
-    `Authority=Developer ID Application: VibeMate (${team})`,
+    `Authority=Developer ID Application: ViberMate (${team})`,
     "Authority=Developer ID Certification Authority",
     "Authority=Apple Root CA",
     "Timestamp=Aug 3, 2026 at 12:00:00 PM",
@@ -94,7 +94,7 @@ function acceptedTicketContents() {
   for (const name of macOSDistributionPolicy.executableNames) {
     for (const architecture of macOSDistributionPolicy.architectures) {
       tickets.push({
-        path: `${archiveFilename}/VibeMate.app/Contents/MacOS/${name}`,
+        path: `${archiveFilename}/ViberMate.app/Contents/MacOS/${name}`,
         digestAlgorithm: "SHA-256",
         cdhash: "2".repeat(40),
         arch: architecture,
@@ -124,10 +124,10 @@ test("Developer ID metadata requires the team, timestamp, and runtime", () => {
   assert.deepEqual(
     validateCodesignMetadata(developerIDMetadata(), teamID, {
       expectedIdentifier: macOSDistributionPolicy.appIdentifier,
-      label: "VibeMate.app",
+      label: "ViberMate.app",
     }),
     {
-      authority: `Developer ID Application: VibeMate (${teamID})`,
+      authority: `Developer ID Application: ViberMate (${teamID})`,
       teamIdentifier: teamID,
     },
   );
@@ -365,13 +365,13 @@ test("embedded build manifest is clean distribution provenance", () => {
 test("mounted DMG shape and full app tree must match exactly", () => {
   assert.doesNotThrow(() =>
     validateMountedDMGTopLevel([
-      { name: "VibeMate.app", type: "directory" },
+      { name: "ViberMate.app", type: "directory" },
       { name: "Applications", target: "/Applications", type: "symlink" },
     ]),
   );
   assert.throws(() =>
     validateMountedDMGTopLevel([
-      { name: "VibeMate.app", type: "directory" },
+      { name: "ViberMate.app", type: "directory" },
       { name: "Applications", target: "/tmp/Applications", type: "symlink" },
     ]),
   );
@@ -454,10 +454,10 @@ test("signing evidence binds the hostile archive to both App ledgers", () => {
     schema: macOSDistributionPolicy.signingEvidenceSchema,
     createdAt: "2026-08-03T12:30:00Z",
     candidate: {
-      app: "ui/desktop/src-tauri/target/universal-apple-darwin/release/bundle/macos/VibeMate.app",
+      app: "ui/desktop/src-tauri/target/universal-apple-darwin/release/bundle/macos/ViberMate.app",
       buildManifestSHA256: "1".repeat(64),
       diskImage:
-        "ui/desktop/src-tauri/target/universal-apple-darwin/release/bundle/dmg/VibeMate_0.1.0_universal.dmg",
+        "ui/desktop/src-tauri/target/universal-apple-darwin/release/bundle/dmg/ViberMate_0.1.0_universal.dmg",
       diskImageSHA256: "2".repeat(64),
       signedApplicationTreeSHA256: "3".repeat(64),
       signedExecutableSHA256: {
@@ -468,7 +468,7 @@ test("signing evidence binds the hostile archive to both App ledgers", () => {
       sourceRevision: "7".repeat(40),
       toolingRevision: "8".repeat(40),
       unsignedApplicationTreeSHA256: treeLedgerSHA256(ledger),
-      unsignedArchiveFilename: "VibeMate.unsigned.app.vma",
+      unsignedArchiveFilename: "ViberMate.unsigned.app.vma",
       unsignedArchiveSHA256: "9".repeat(64),
       unsignedExecutableSHA256: {
         vibermate: "a".repeat(64),
@@ -544,13 +544,13 @@ test("notarization accepts only the API-key credential family", () => {
 test("Gatekeeper output is closed over notarized Developer ID", () => {
   assert.doesNotThrow(() =>
     validateGatekeeperAssessment(
-      `/candidate/VibeMate.app: accepted\nsource=Notarized Developer ID\norigin=Developer ID Application: VibeMate (${teamID})\n`,
+      `/candidate/ViberMate.app: accepted\nsource=Notarized Developer ID\norigin=Developer ID Application: ViberMate (${teamID})\n`,
       teamID,
     ),
   );
   assert.throws(() =>
     validateGatekeeperAssessment(
-      "/candidate/VibeMate.app: accepted\nsource=Developer ID\n",
+      "/candidate/ViberMate.app: accepted\nsource=Developer ID\n",
       teamID,
     ),
   );
@@ -561,13 +561,13 @@ test("private evidence has a closed secret-free schema", () => {
     schema: macOSDistributionPolicy.evidenceSchema,
     createdAt: "2026-08-03T12:30:00Z",
     candidate: {
-      app: "ui/desktop/src-tauri/target/universal-apple-darwin/release/bundle/macos/VibeMate.app",
+      app: "ui/desktop/src-tauri/target/universal-apple-darwin/release/bundle/macos/ViberMate.app",
       applicationTreeSHA256: "1".repeat(64),
       architectures: ["arm64", "x86_64"],
       buildManifestSHA256: "2".repeat(64),
       bundleIdentifier: "io.vibermate.desktop",
       diskImage:
-        "ui/desktop/src-tauri/target/universal-apple-darwin/release/bundle/dmg/VibeMate_0.1.0_universal.dmg",
+        "ui/desktop/src-tauri/target/universal-apple-darwin/release/bundle/dmg/ViberMate_0.1.0_universal.dmg",
       finalSHA256: "3".repeat(64),
       minimumSystemVersion: "14.0",
       preStapleSHA256,

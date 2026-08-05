@@ -577,7 +577,7 @@ export async function createR0BuildInputTransfer(environment = process.env) {
     r0BuildInputTransferPolicy.archiveFilename,
   );
 
-  // The audited VibeMate.app archive v1 root is intentionally reused only as
+  // The audited ViberMate.app archive v1 root is intentionally reused only as
   // an internal serialization token. The external artifact and restored tree
   // retain their machine-level R0 names while the human description stays
   // source-traceability build inputs.

@@ -13,8 +13,8 @@ describe("terminal command formatting", () => {
         `/Applications/Vibe Mate'"'"'s.app/vibermate` +
         `' run -- claude`,
     );
-    expect(terminalRunCommand("/opt/VibeMate/vibermate", "codex")).toBe(
-      "'/opt/VibeMate/vibermate' run -- codex",
+    expect(terminalRunCommand("/opt/ViberMate/vibermate", "codex")).toBe(
+      "'/opt/ViberMate/vibermate' run -- codex",
     );
   });
 

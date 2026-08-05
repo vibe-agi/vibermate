@@ -574,7 +574,7 @@ func runAcceptance(
 			"active credential is missing or unreadable by the current App identity",
 		)
 		return report, &blockedError{
-			reason: "save the active provider credential through the current VibeMate App",
+			reason: "save the active provider credential through the current ViberMate App",
 		}
 	}
 	report.add(

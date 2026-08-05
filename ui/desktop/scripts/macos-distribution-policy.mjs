@@ -31,12 +31,12 @@ const signingConfigurationNames = new Set([
 ]);
 
 export const macOSDistributionPolicy = Object.freeze({
-  appBundleName: "VibeMate.app",
+  appBundleName: "ViberMate.app",
   appIdentifier: "io.vibermate.desktop",
   appVersion: "0.1.0",
   architectures: Object.freeze(["arm64", "x86_64"]),
   developerDirectory: "/Applications/Xcode_16.2.app/Contents/Developer",
-  diskImageFilename: "VibeMate_0.1.0_universal.dmg",
+  diskImageFilename: "ViberMate_0.1.0_universal.dmg",
   diskImageIdentifier: "io.vibermate.desktop.dmg",
   evidenceSchema: "vibermate.macos-distribution-notarization/v1",
   executableNames: Object.freeze([
@@ -55,12 +55,12 @@ export const macOSDistributionPolicy = Object.freeze({
   notarySubmitFilename: "apple-notary-submit.json",
   signingEvidenceFilename: "signing-transformation.json",
   signingEvidenceSchema: "vibermate.macos-distribution-signing/v1",
-  signedAppArchiveFilename: "VibeMate.signed.app.vma",
+  signedAppArchiveFilename: "ViberMate.signed.app.vma",
   signedTransferChecksumFilename: "vibermate-macos-signed.sha256",
   target: "universal-apple-darwin",
-  unsignedAppArchiveChecksumFilename: "VibeMate.unsigned.app.vma.sha256",
-  unsignedAppArchiveFilename: "VibeMate.unsigned.app.vma",
-  volumeName: "VibeMate",
+  unsignedAppArchiveChecksumFilename: "ViberMate.unsigned.app.vma.sha256",
+  unsignedAppArchiveFilename: "ViberMate.unsigned.app.vma",
+  volumeName: "ViberMate",
   xcodeSDKVersion: "15.2",
   xcodeVersion: "Xcode 16.2\nBuild version 16C5032a",
 });
@@ -764,9 +764,9 @@ export function validateSigningTransformationEvidence(value) {
     "Unsigned application tree ledger",
   );
   const expectedApp =
-    "ui/desktop/src-tauri/target/universal-apple-darwin/release/bundle/macos/VibeMate.app";
+    "ui/desktop/src-tauri/target/universal-apple-darwin/release/bundle/macos/ViberMate.app";
   const expectedDMG =
-    "ui/desktop/src-tauri/target/universal-apple-darwin/release/bundle/dmg/VibeMate_0.1.0_universal.dmg";
+    "ui/desktop/src-tauri/target/universal-apple-darwin/release/bundle/dmg/ViberMate_0.1.0_universal.dmg";
   if (
     value.schema !== macOSDistributionPolicy.signingEvidenceSchema ||
     typeof value.createdAt !== "string" ||
@@ -1115,7 +1115,7 @@ export function validateNotarizationEvidence(value) {
   );
   const expectedArchitectures = [...macOSDistributionPolicy.architectures];
   const expectedApp =
-    "ui/desktop/src-tauri/target/universal-apple-darwin/release/bundle/macos/VibeMate.app";
+    "ui/desktop/src-tauri/target/universal-apple-darwin/release/bundle/macos/ViberMate.app";
   const expectedDMG =
     `ui/desktop/src-tauri/target/universal-apple-darwin/release/bundle/dmg/${macOSDistributionPolicy.diskImageFilename}`;
   if (

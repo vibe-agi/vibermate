@@ -475,28 +475,11 @@ func (issuer *Issuer) IssueCaptureRun(
 	if err != nil || validateDetection(detection) != nil {
 		return CaptureRunGrant{}, ErrAdapterVerification
 	}
-	recipe := clientadapter.LaunchGeneric
-	var adapter *clientadapter.Evidence
-	rootPath := ""
+	var runAdapter *clientadapter.Evidence
 	if detection.Status == clientadapter.StatusVerified &&
 		detection.Evidence != nil {
 		evidence := *detection.Evidence
-		adapter = &evidence
-		recipe = evidence.LaunchRecipe
-		if recipe.RequiresRoot() {
-			rootPath = issuer.root.Path()
-		}
-	}
-	var signer *clientadapter.SignerEvidence
-	if detection.Recognition == clientadapter.RecognitionRecognized &&
-		detection.Signer != nil {
-		evidence := *detection.Signer
-		outcome, askErr := issuer.askClientRoot(ctx, evidence)
-		if askErr == nil && outcome {
-			recipe = evidence.LaunchRecipe
-			rootPath = issuer.root.Path()
-			signer = &evidence
-		}
+		runAdapter = &evidence
 	}
 	workspace, err := issuer.workspaces.ResolveCaptureRun(
 		ctx,
@@ -511,7 +494,7 @@ func (issuer *Issuer) IssueCaptureRun(
 		ExecutablePath:  detection.CanonicalPath,
 		Lifetime:        issuer.runLifetime,
 		CatalogRevision: detection.CatalogRevision,
-		Adapter:         adapter,
+		Adapter:         runAdapter,
 		Recognition:     detection.Recognition,
 		Workspace:       workspace,
 		LocalUserLabel:  request.LocalUserLabel,
@@ -543,18 +526,48 @@ func (issuer *Issuer) IssueCaptureRun(
 		}
 		return CaptureRunGrant{}, ErrProjectionUnavailable
 	}
+	protectedAuthorities := authorities.ProtectedAuthorities()
+	managedAuthorities := authorities.ManagedCredentialAuthorities()
+	recipe := clientadapter.LaunchGeneric
+	rootPath := ""
+	var launchAdapter *clientadapter.Evidence
+	var signer *clientadapter.SignerEvidence
+	// Root delivery exists only to decrypt an exact protected authority. An
+	// empty Access projection is transparent capture: keep the verified client
+	// identity on the durable run, but launch with an ordinary authenticated
+	// proxy and never ask for or deliver the Root.
+	if len(protectedAuthorities) != 0 {
+		if runAdapter != nil {
+			evidence := *runAdapter
+			launchAdapter = &evidence
+			recipe = evidence.LaunchRecipe
+			if recipe.RequiresRoot() {
+				rootPath = issuer.root.Path()
+			}
+		}
+		if detection.Recognition == clientadapter.RecognitionRecognized &&
+			detection.Signer != nil {
+			evidence := *detection.Signer
+			outcome, askErr := issuer.askClientRoot(ctx, evidence)
+			if askErr == nil && outcome {
+				recipe = evidence.LaunchRecipe
+				rootPath = issuer.root.Path()
+				signer = &evidence
+			}
+		}
+	}
 	return CaptureRunGrant{
 		Run:                          grant,
 		CatalogRevision:              detection.CatalogRevision,
 		Recognition:                  detection.Recognition,
-		Adapter:                      adapter,
+		Adapter:                      launchAdapter,
 		Signer:                       signer,
 		LaunchRecipe:                 recipe,
 		ExecutablePath:               detection.CanonicalPath,
 		ProxyAddress:                 issuer.proxyOrigin,
 		RootPEMPath:                  rootPath,
-		ProtectedAuthorities:         authorities.ProtectedAuthorities(),
-		ManagedCredentialAuthorities: authorities.ManagedCredentialAuthorities(),
+		ProtectedAuthorities:         protectedAuthorities,
+		ManagedCredentialAuthorities: managedAuthorities,
 	}, nil
 }
 

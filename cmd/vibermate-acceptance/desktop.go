@@ -165,7 +165,7 @@ func exercisePackagedDesktopLaunch(
 		return fmt.Errorf("inspect packaged Desktop application instances: %w", err)
 	}
 	if len(runningApplications) != 0 {
-		return errors.New("another VibeMate Desktop application is already running")
+		return errors.New("another ViberMate Desktop application is already running")
 	}
 	discovery, err := localdiscovery.NewFile(
 		layout.CLIControlRecord,

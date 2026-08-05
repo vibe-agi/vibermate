@@ -3,6 +3,7 @@ package runtimepersistence
 import (
 	"context"
 	"database/sql"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"io/fs"
@@ -11,6 +12,7 @@ import (
 	"runtime"
 	"strings"
 	"testing"
+	"testing/fstest"
 	"time"
 
 	"github.com/pressly/goose/v3"
@@ -164,6 +166,45 @@ func TestSQLiteStoreRejectsThePreBaselineDevelopmentSchema(t *testing.T) {
 	}
 }
 
+func TestSQLiteStoreRejectsDevelopmentDatabaseWithoutSourceBinding(t *testing.T) {
+	t.Parallel()
+	databasePath := filepath.Join(t.TempDir(), "runtime.db")
+	seedGooseHistory(t, databasePath, 1, true)
+	database := sql.OpenDB(newSQLiteConnector(databasePath, DefaultBusyTimeout))
+	database.SetMaxOpenConns(1)
+	database.SetMaxIdleConns(1)
+	if _, err := database.ExecContext(
+		context.Background(),
+		`CREATE TABLE runtime_metadata (
+			singleton INTEGER PRIMARY KEY NOT NULL CHECK (singleton = 1),
+			schema_identity TEXT NOT NULL,
+			initialized_at TEXT NOT NULL
+		) STRICT;
+		INSERT INTO runtime_metadata (singleton, schema_identity, initialized_at)
+		VALUES (1, ?, '2026-08-04T00:00:00Z')`,
+		currentSchemaIdentity,
+	); err != nil {
+		_ = database.Close()
+		t.Fatalf("create unbound development metadata: %v", err)
+	}
+	if err := database.Close(); err != nil {
+		t.Fatalf("close unbound development fixture: %v", err)
+	}
+
+	store, err := Open(context.Background(), Options{
+		DatabasePath:           databasePath,
+		BusyTimeout:            DefaultBusyTimeout,
+		CommitReconcileTimeout: DefaultCommitReconcileTimeout,
+	})
+	if store != nil {
+		_ = store.Shutdown(context.Background())
+		t.Fatal("unbound development database returned a store")
+	}
+	if !errors.Is(err, ErrSchemaBaselineMismatch) {
+		t.Fatalf("unbound development database error = %v", err)
+	}
+}
+
 func TestSQLiteStoreRejectsEveryEarlierDevelopmentBaselineIdentity(t *testing.T) {
 	t.Parallel()
 	for _, identity := range []string{
@@ -256,6 +297,48 @@ func TestSchemaRevisionOfSources(t *testing.T) {
 				t.Fatal("invalid migration sources were accepted")
 			}
 		})
+	}
+}
+
+func TestMigrationSourceDigestBindsNamesAndContents(t *testing.T) {
+	t.Parallel()
+	first := fstest.MapFS{
+		"00001.sql": {Data: []byte("SELECT 1;")},
+		"00002.sql": {Data: []byte("SELECT 2;")},
+	}
+	digest, err := migrationSourceDigest(first)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(digest) != 64 {
+		t.Fatalf("digest length = %d, want 64", len(digest))
+	}
+	if _, err := hex.DecodeString(digest); err != nil {
+		t.Fatalf("digest is not lowercase hexadecimal: %q", digest)
+	}
+
+	contentChanged := fstest.MapFS{
+		"00001.sql": {Data: []byte("SELECT 1;")},
+		"00002.sql": {Data: []byte("SELECT 3;")},
+	}
+	changedDigest, err := migrationSourceDigest(contentChanged)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if changedDigest == digest {
+		t.Fatal("migration content change preserved the source digest")
+	}
+
+	nameChanged := fstest.MapFS{
+		"00001.sql": {Data: []byte("SELECT 1;")},
+		"00003.sql": {Data: []byte("SELECT 2;")},
+	}
+	renamedDigest, err := migrationSourceDigest(nameChanged)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if renamedDigest == digest {
+		t.Fatal("migration name change preserved the source digest")
 	}
 }
 
@@ -496,5 +579,11 @@ func assertInitialSchemaState(t *testing.T, state SchemaState) {
 	}
 	if state.Identity != currentSchemaIdentity {
 		t.Fatalf("schema identity = %q, want %q", state.Identity, currentSchemaIdentity)
+	}
+	if len(state.SourceSHA256) != 64 {
+		t.Fatalf("schema source digest length = %d, want 64", len(state.SourceSHA256))
+	}
+	if _, err := hex.DecodeString(state.SourceSHA256); err != nil {
+		t.Fatalf("schema source digest = %q: %v", state.SourceSHA256, err)
 	}
 }

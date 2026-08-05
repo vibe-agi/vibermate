@@ -6,12 +6,16 @@ import (
 	"encoding/base64"
 	"io"
 	"net"
+	"net/http"
 	"testing"
 	"time"
 
+	"github.com/vibe-agi/vibermate/internal/access"
 	"github.com/vibe-agi/vibermate/internal/capturerun"
 	"github.com/vibe-agi/vibermate/internal/connectionevent"
+	"github.com/vibe-agi/vibermate/internal/connectionpolicy"
 	"github.com/vibe-agi/vibermate/internal/egressaudit"
+	"github.com/vibe-agi/vibermate/internal/toolapproval"
 )
 
 // echoTarget stands in for any host an Agent touches that is not a model API:
@@ -137,6 +141,64 @@ func TestUnmatchedAuthorityIsTunnelledWithoutDecryption(t *testing.T) {
 		time.Sleep(20 * time.Millisecond)
 	}
 	t.Fatal("no blind EgressAttempt reached a terminal")
+}
+
+func TestNoAccessIsTransparentEvenWhenConfiguredDefaultWouldAsk(t *testing.T) {
+	t.Parallel()
+
+	fixture := newProxyFixtureWithPolicy(t, connectionpolicy.Snapshot{
+		Revision: 1,
+		Default: connectionpolicy.Rule{
+			ID:       "test-default-ask",
+			Decision: connectionpolicy.DecisionAsk,
+			Match:    connectionpolicy.MatchAny(),
+		},
+	})
+	defer fixture.Close(t)
+	empty, err := access.NewSnapshotProjection(
+		fixture.authority.Identity().Revision(),
+		fixture.authority,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := empty.Restore(nil); err != nil {
+		t.Fatal(err)
+	}
+	fixture.ingress.delegate = empty
+
+	authority, stop := echoTarget(t)
+	defer stop()
+	connection, response := fixture.Connect(
+		t,
+		fixture.grant.ProxyCapability.Value(),
+		authority,
+	)
+	defer connection.Close()
+	if response.StatusCode != http.StatusOK {
+		t.Fatalf("transparent CONNECT status = %d", response.StatusCode)
+	}
+	if _, err := connection.Write([]byte("transparent")); err != nil {
+		t.Fatal(err)
+	}
+	reader := bufio.NewReader(connection)
+	echoed := make([]byte, len("echo:transparent"))
+	if _, err := io.ReadFull(reader, echoed); err != nil {
+		t.Fatal(err)
+	}
+	if string(echoed) != "echo:transparent" {
+		t.Fatalf("transparent tunnel payload = %q", echoed)
+	}
+	page, err := fixture.approvals.ListApprovals(
+		context.Background(),
+		toolapproval.PageRequest{State: toolapproval.StatePending, Limit: 20},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(page.Items) != 0 {
+		t.Fatalf("zero-Access capture created approvals: %+v", page.Items)
+	}
 }
 
 // A blind connection still leaves a connection record, and the record still

@@ -45,8 +45,8 @@ func TestDesktopApplicationGuardianScriptParsesBeforeFailingClosed(t *testing.T)
 		"-e",
 		desktopApplicationGuardianScript(desktopApplicationIdentity{
 			ProcessID:      int(^uint32(0) >> 1),
-			BundlePath:     "/nonexistent/VibeMate.app",
-			ExecutablePath: "/nonexistent/VibeMate.app/Contents/MacOS/VibeMate",
+			BundlePath:     "/nonexistent/ViberMate.app",
+			ExecutablePath: "/nonexistent/ViberMate.app/Contents/MacOS/ViberMate",
 		}),
 	)
 	output, err := command.CombinedOutput()

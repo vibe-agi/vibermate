@@ -1394,7 +1394,7 @@ pub fn run() {
             navigation_state::save_navigation_state,
         ])
         .build(tauri::generate_context!())
-        .expect("VibeMate Desktop shell could not be built");
+        .expect("ViberMate Desktop shell could not be built");
     application.run(move |handle, event| match event {
         tauri::RunEvent::WindowEvent {
             label,
@@ -1491,7 +1491,7 @@ mod tests {
         let payload = serde_json::to_vec(&serde_json::json!({
             "schema": TERMINAL_COMMAND_SCHEMA,
             "state": "current",
-            "sourcePath": "/Applications/VibeMate.app/Contents/MacOS/vibermate",
+            "sourcePath": "/Applications/ViberMate.app/Contents/MacOS/vibermate",
             "targetPath": "/Users/example/.local/bin/vibermate"
         }))
         .expect("encode terminal command status");
@@ -1510,13 +1510,13 @@ mod tests {
             serde_json::json!({
                 "schema": TERMINAL_COMMAND_SCHEMA,
                 "state": "installed_and_trusted",
-                "sourcePath": "/Applications/VibeMate.app/Contents/MacOS/vibermate",
+                "sourcePath": "/Applications/ViberMate.app/Contents/MacOS/vibermate",
                 "targetPath": "/Users/example/.local/bin/vibermate"
             }),
             serde_json::json!({
                 "schema": TERMINAL_COMMAND_SCHEMA,
                 "state": "current",
-                "sourcePath": "/Applications/VibeMate.app/Contents/MacOS/vibermate",
+                "sourcePath": "/Applications/ViberMate.app/Contents/MacOS/vibermate",
                 "targetPath": "/Users/example/.local/bin/vibermate",
                 "receiptPath": "/private/forbidden"
             }),
@@ -2550,7 +2550,7 @@ mod tests {
         let document = include_str!("../../index.html");
         assert!(document.contains("http://127.0.0.1:*"));
         assert!(document.contains("aria-live=\"polite\""));
-        assert!(document.contains("<p>VibeMate…</p>"));
+        assert!(document.contains("<p>ViberMate…</p>"));
         assert!(!document.contains("connect-src 'self' http://localhost"));
         assert!(!document.contains("unsafe-eval"));
     }

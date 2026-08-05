@@ -100,7 +100,7 @@ func parseInstalledSmokeConfig(
 	var config installedSmokeConfig
 	flags := flag.NewFlagSet("vibermate-acceptance installed-smoke", flag.ContinueOnError)
 	flags.SetOutput(os.Stderr)
-	flags.StringVar(&config.appPath, "desktop-app", "", "installed VibeMate.app path")
+	flags.StringVar(&config.appPath, "desktop-app", "", "installed ViberMate.app path")
 	flags.StringVar(&config.homePath, "home", "", "isolated Desktop home")
 	flags.StringVar(&config.reportPath, "report", "", "private smoke evidence path")
 	flags.DurationVar(&config.timeout, "timeout", 2*time.Minute, "smoke deadline")
@@ -137,7 +137,7 @@ func validateInstalledSmokePaths(runnerTemp, appPath, homePath, reportPath strin
 	}
 	installRoot := filepath.Dir(filepath.Dir(appPath))
 	if filepath.Base(filepath.Dir(appPath)) != "Applications" ||
-		filepath.Base(appPath) != "VibeMate.app" ||
+		filepath.Base(appPath) != "ViberMate.app" ||
 		!directRunnerChild(runnerTemp, installRoot, "vibermate-install-root-") ||
 		!directRunnerChild(runnerTemp, homePath, "vibermate-install-home-") ||
 		filepath.Base(reportPath) != installedSmokeReport ||

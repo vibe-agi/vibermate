@@ -10,7 +10,7 @@ repository gates.
 
 The runner requires:
 
-- one packaged `VibeMate.app`;
+- one packaged `ViberMate.app`;
 - the `vibermated` and `vibermate` executables that are direct members of that
   same App bundle;
 - exactly one absolute fixed-client executable:
@@ -41,7 +41,7 @@ HTTP origins are rejected.
 The runner never accepts a secret value. It removes ambient Anthropic,
 alternate-provider, Claude, Codex, and OpenAI credential/base-URL variables,
 plus conflicting CA inputs, from the captured child environment. A non-secret
-client placeholder forces the selected Agent to enter the VibeMate proxy. A
+client placeholder forces the selected Agent to enter the ViberMate proxy. A
 Codex run also receives a private run-owned `CODEX_HOME`, ignores user config
 and rules, and receives prompts only over standard input. The active provider
 value is resolved by the runtime's selected SecretStore only after the
@@ -185,7 +185,7 @@ Example:
 
 ```text
 /private/tmp/vibermate-acceptance \
-  --desktop-app=/absolute/path/to/VibeMate.app \
+  --desktop-app=/absolute/path/to/ViberMate.app \
   --claude=/absolute/path/to/the/fixed/claude \
   --provider-origin=https://gateway.example/v1 \
   --provider-model=example-model \
@@ -257,7 +257,7 @@ Example:
 
 ```text
 /private/tmp/vibermate-acceptance \
-  --desktop-app=/absolute/path/to/VibeMate.app \
+  --desktop-app=/absolute/path/to/ViberMate.app \
   --codex=/absolute/path/to/the/fixed/codex \
   --provider-origin=https://gateway.example/v1 \
   --provider-model=example-model \
@@ -290,7 +290,7 @@ Example for a current credentialed Claude report:
   --expected-client-id=claude-code \
   --expected-client-version=2.1.220 \
   --source-root=/absolute/path/to/clean/source \
-  --desktop-app=/absolute/path/to/VibeMate.app \
+  --desktop-app=/absolute/path/to/ViberMate.app \
   --acceptance-executable=/private/tmp/vibermate-acceptance \
   --client-entrypoint=/absolute/path/to/the/fixed/claude
 ```

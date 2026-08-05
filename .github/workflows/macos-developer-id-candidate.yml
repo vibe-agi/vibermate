@@ -142,7 +142,7 @@ jobs:
         run: |
           set -euo pipefail
           source_directory="candidate/ui/desktop/src-tauri/target/universal-apple-darwin/release/bundle/macos"
-          source_app="${source_directory}/VibeMate.app"
+          source_app="${source_directory}/ViberMate.app"
           test -d "${source_app}"
           test ! -L "${source_app}"
           test "$(find "${source_directory}" -mindepth 1 -maxdepth 1 -print | wc -l | tr -d ' ')" -eq 1
@@ -153,7 +153,7 @@ jobs:
           COPYFILE_DISABLE=1 /usr/bin/ditto \
             --norsrc --noextattr --noacl --noqtn -X \
             "${source_app}" \
-            "${target_directory}/VibeMate.app"
+            "${target_directory}/ViberMate.app"
           node trusted-tooling/ui/desktop/scripts/create-macos-unsigned-archive.mjs
 
       - name: Stage and close the exact source-traceability build-input transfer (R0)
@@ -210,8 +210,8 @@ jobs:
         with:
           name: ${{ steps.artifact_name.outputs.name }}
           path: |
-            ${{ runner.temp }}/vibermate-unsigned-${{ github.run_id }}-${{ github.run_attempt }}/VibeMate.unsigned.app.vma
-            ${{ runner.temp }}/vibermate-unsigned-${{ github.run_id }}-${{ github.run_attempt }}/VibeMate.unsigned.app.vma.sha256
+            ${{ runner.temp }}/vibermate-unsigned-${{ github.run_id }}-${{ github.run_attempt }}/ViberMate.unsigned.app.vma
+            ${{ runner.temp }}/vibermate-unsigned-${{ github.run_id }}-${{ github.run_attempt }}/ViberMate.unsigned.app.vma.sha256
           if-no-files-found: error
           retention-days: 3
 
@@ -564,8 +564,8 @@ jobs:
         with:
           name: ${{ steps.artifact_name.outputs.name }}
           path: |
-            ${{ runner.temp }}/vibermate-signed-${{ github.run_id }}-${{ github.run_attempt }}/VibeMate.signed.app.vma
-            ${{ runner.temp }}/vibermate-signed-${{ github.run_id }}-${{ github.run_attempt }}/VibeMate_0.1.0_universal.dmg
+            ${{ runner.temp }}/vibermate-signed-${{ github.run_id }}-${{ github.run_attempt }}/ViberMate.signed.app.vma
+            ${{ runner.temp }}/vibermate-signed-${{ github.run_id }}-${{ github.run_attempt }}/ViberMate_0.1.0_universal.dmg
             ${{ runner.temp }}/vibermate-signed-${{ github.run_id }}-${{ github.run_attempt }}/signing-transformation.json
             ${{ runner.temp }}/vibermate-signed-${{ github.run_id }}-${{ github.run_attempt }}/vibermate-macos-signed.sha256
           if-no-files-found: error
@@ -700,7 +700,7 @@ jobs:
             test "$(/usr/bin/stat -f '%Lp' "${evidence_directory}/${name}")" = "600"
           done
           test -f "${release_directory}/.vibermate-private/signing/signing-transformation.json"
-          test -f "${release_directory}/bundle/dmg/VibeMate_0.1.0_universal.dmg"
+          test -f "${release_directory}/bundle/dmg/ViberMate_0.1.0_universal.dmg"
 
       - name: Upload the stapled DMG and exact evidence files
         if: ${{ steps.notarize_candidate.outcome == 'success' && steps.credential_cleanup.outcome == 'success' }}
@@ -708,7 +708,7 @@ jobs:
         with:
           name: ${{ env.NOTARIZED_ARTIFACT_NAME }}
           path: |
-            ui/desktop/src-tauri/target/universal-apple-darwin/release/bundle/dmg/VibeMate_0.1.0_universal.dmg
+            ui/desktop/src-tauri/target/universal-apple-darwin/release/bundle/dmg/ViberMate_0.1.0_universal.dmg
             ui/desktop/src-tauri/target/universal-apple-darwin/release/.vibermate-private/signing/signing-transformation.json
             ui/desktop/src-tauri/target/universal-apple-darwin/release/.vibermate-private/notarization/apple-notary-submit.json
             ui/desktop/src-tauri/target/universal-apple-darwin/release/.vibermate-private/notarization/apple-notary-log.json

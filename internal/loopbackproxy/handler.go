@@ -74,7 +74,10 @@ const (
 	ReasonBlindTunnelFailed              ReasonCode = "blind_tunnel_failed"
 	ReasonUnsupportedUpgrade             ReasonCode = "unsupported_upgrade"
 	ReasonConnectionDenied               ReasonCode = "connection_denied"
+	ReasonAccessProjectionUnavailable    ReasonCode = "access_projection_unavailable"
 )
+
+const noAccessPassthroughRuleID = "no_access_passthrough"
 
 var ErrProxyStopping = errors.New("loopback proxy is stopping")
 
@@ -87,6 +90,7 @@ type IngressAuthority interface {
 	access.IngressResolver
 	access.LeafIssuanceAdmitter
 	access.DownstreamProtocolResolver
+	access.ActivePlanCatalog
 }
 
 type OriginalClient interface {
@@ -398,14 +402,47 @@ func (handler *Handler) ServeHTTP(
 		return
 	}
 	source := connectionSource(admission)
-	// Every proxied connection is decided here, before any dial, DNS
-	// resolution, or certificate issuance, and before the AgentEndpoint match
-	// that would otherwise exempt it.
+	// With no enabled Access, capture is transparent: the authenticated child
+	// still traverses this listener and leaves body-free connection evidence,
+	// but no firewall question, TLS decryption, or semantic processing applies.
+	// Once an Access is active, every proxied connection is decided by the
+	// configured policy before any dial, DNS resolution, or certificate issue.
 	policyHost, policyPort := policyTarget(request, cleartextForward)
-	outcome := handler.rules().Evaluate(connectionpolicy.Request{
-		Host: policyHost,
-		Port: policyPort,
-	})
+	plans, err := handler.ingress.ActiveAccessPlans()
+	if err != nil {
+		if handler.denyConnection(
+			request.Context(),
+			audit,
+			source,
+			ReasonAccessProjectionUnavailable,
+		) != nil {
+			writeReason(
+				writer,
+				http.StatusServiceUnavailable,
+				ReasonConnectionAuditUnavailable,
+				"",
+			)
+			return
+		}
+		terminal = true
+		writeReason(
+			writer,
+			http.StatusServiceUnavailable,
+			ReasonAccessProjectionUnavailable,
+			"",
+		)
+		return
+	}
+	outcome := connectionpolicy.Outcome{
+		Decision: connectionpolicy.DecisionAllow,
+		RuleID:   noAccessPassthroughRuleID,
+	}
+	if len(plans) != 0 {
+		outcome = handler.rules().Evaluate(connectionpolicy.Request{
+			Host: policyHost,
+			Port: policyPort,
+		})
+	}
 	// An ask blocks here, still before any dial. It resolves to exactly one of
 	// allow or deny; there is no third answer this far in front of a socket.
 	denialReason := ReasonCode(outcome.RuleID)

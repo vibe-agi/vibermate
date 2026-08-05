@@ -67,7 +67,7 @@ function validateArchivePath(path, seenPortablePaths) {
   }
   const components = path.split("/");
   if (
-    components[0] !== "VibeMate.app" ||
+    components[0] !== "ViberMate.app" ||
     components.some(
       (component) =>
         component.length === 0 ||
@@ -101,11 +101,11 @@ function validateMode(mode, type) {
 }
 
 function archivePathFromLedger(path) {
-  return path === "." ? "VibeMate.app" : `VibeMate.app/${path}`;
+  return path === "." ? "ViberMate.app" : `ViberMate.app/${path}`;
 }
 
 function ledgerPathFromArchive(path) {
-  return path === "VibeMate.app" ? "." : path.slice("VibeMate.app/".length);
+  return path === "ViberMate.app" ? "." : path.slice("ViberMate.app/".length);
 }
 
 function entryHeader(entry) {
@@ -532,7 +532,7 @@ export async function extractMacOSApplicationArchive(archivePath, appPath) {
       if (lastPath !== undefined && comparePaths(lastPath, header.path) >= 0) {
         throw new Error("The application archive paths are not strictly ordered");
       }
-      if (entryCount === 0 && (header.path !== "VibeMate.app" || header.type !== "directory")) {
+      if (entryCount === 0 && (header.path !== "ViberMate.app" || header.type !== "directory")) {
         throw new Error("The application archive does not begin with its fixed root");
       }
       const parentPath = header.path.includes("/")

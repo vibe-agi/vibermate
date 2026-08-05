@@ -54,7 +54,7 @@ test("decides the recognized-client Root handoff from the shared queue", async (
     page.getByText("/Applications/Claude.app/Contents/MacOS/claude"),
   ).toBeVisible();
   await page
-    .getByRole("button", { name: "Launch without the VibeMate Root" })
+    .getByRole("button", { name: "Launch without the ViberMate Root" })
     .click();
   await expect(page.locator(".pending-link span")).toHaveText("2");
   await expect(
@@ -175,7 +175,7 @@ test("lists existing tools and creates then retires the next one without hidden 
   ).toHaveAttribute("aria-pressed", "true");
   await expect(
     page.getByText(
-      "Supported model requests keep their original shape and streaming. VibeMate records operational evidence, sends only to the exact original service, and stops unsupported request types locally.",
+      "Supported model requests keep their original shape and streaming. ViberMate records operational evidence, sends only to the exact original service, and stops unsupported request types locally.",
     ),
   ).toBeVisible();
   expect(
@@ -693,7 +693,7 @@ test("groups three terminals by stable workspace and switches later requests", a
   ).toBeDisabled();
   await expect(
     page.getByText(
-      "Stop this workspace's running tools before switching between the client's current login and VibeMate-managed credentials. Start them again after selecting the route.",
+      "Stop this workspace's running tools before switching between the client's current login and ViberMate-managed credentials. Start them again after selecting the route.",
     ),
   ).toBeVisible();
   await route.selectOption("work-secondary");

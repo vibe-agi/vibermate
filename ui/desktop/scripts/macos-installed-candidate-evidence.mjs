@@ -49,7 +49,7 @@ const timestampPattern =
 
 export const macOSInstalledEvidencePolicy = Object.freeze({
   checksumFilename: "signed-package-installation-report.sha256",
-  installedApplicationRelativePath: "Applications/VibeMate.app",
+  installedApplicationRelativePath: "Applications/ViberMate.app",
   reportFilename: "signed-package-installation-report.json",
   schema: "vibermate.macos-signed-package-installation/v1",
   smokeFilename: "desktop-smoke.json",

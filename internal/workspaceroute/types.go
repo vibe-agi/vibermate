@@ -222,10 +222,10 @@ const (
 type AuthPresentation string
 
 const (
-	AuthVibeMateAccount AuthPresentation = "vibermate_account"
-	AuthClientOAuth     AuthPresentation = "client_oauth"
-	AuthClient          AuthPresentation = "client_auth"
-	AuthNone            AuthPresentation = "none"
+	AuthViberMateAccount AuthPresentation = "vibermate_account"
+	AuthClientOAuth      AuthPresentation = "client_oauth"
+	AuthClient           AuthPresentation = "client_auth"
+	AuthNone             AuthPresentation = "none"
 )
 
 type ProfileOption struct {

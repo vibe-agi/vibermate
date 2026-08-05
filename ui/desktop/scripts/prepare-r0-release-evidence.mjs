@@ -930,7 +930,7 @@ function normalizeSyftSPDX(
     pairs.add(key);
     if (name === "vibermate") {
       if (packageVersion !== version) {
-        throw new Error("Syft SPDX contains a conflicting VibeMate package version");
+        throw new Error("Syft SPDX contains a conflicting ViberMate package version");
       }
       continue;
     }

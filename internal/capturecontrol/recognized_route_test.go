@@ -55,6 +55,16 @@ func (approver fixedApprover) AskClientRoot(
 	return toolapproval.ClientRootAskOutcome{Allowed: approver.allow}, nil
 }
 
+type countingApprover struct{ calls int }
+
+func (approver *countingApprover) AskClientRoot(
+	_ context.Context,
+	_ toolapproval.ClientRootAskRequest,
+) (toolapproval.ClientRootAskOutcome, error) {
+	approver.calls++
+	return toolapproval.ClientRootAskOutcome{Allowed: true}, nil
+}
+
 // The grant is where the decision becomes an effect, so this is what has to
 // distinguish an allow from a deny. Asserting only that the ask returns false
 // would leave a route that ignores the answer passing.
@@ -127,6 +137,34 @@ func TestTheGrantCarriesTheRootOnlyWhenARecognizedClientWasAllowed(t *testing.T)
 				t.Fatalf("a recognized grant carried release evidence: %+v", grant.Adapter)
 			}
 		})
+	}
+}
+
+func TestRecognizedClientIsNotAskedForRootWithoutProtectedAuthorities(t *testing.T) {
+	t.Parallel()
+
+	approver := &countingApprover{}
+	fixture := newFixture(t, func(options *capturegrant.Options) {
+		options.Verifier = recognizingVerifier{}
+		options.ClientRootApprovals = approver
+		options.Authorities = fixedAuthorities{}
+	})
+	defer fixture.Close(t)
+
+	grant := fixture.createRun(t)
+	if approver.calls != 0 {
+		t.Fatalf("Root approval calls = %d, want 0", approver.calls)
+	}
+	if grant.LaunchRecipe != clientadapter.LaunchGeneric ||
+		grant.RootPEMPath != "" || grant.Adapter != nil || grant.Signer != nil ||
+		len(grant.ProtectedAuthorities) != 0 {
+		t.Fatalf("recognized transparent launch grant = %+v", grant)
+	}
+	if grant.Recognition != clientadapter.RecognitionRecognized {
+		t.Fatalf("recognition = %q", grant.Recognition)
+	}
+	if err := grant.Validate(); err != nil {
+		t.Fatalf("recognized transparent grant is invalid: %v", err)
 	}
 }
 

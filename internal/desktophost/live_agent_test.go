@@ -546,7 +546,7 @@ func TestCapturedProcessHelper(t *testing.T) {
 	// HTTP/2 request to make an H1-only local target appear compatible.
 	transport.ForceAttemptHTTP2 = false
 	// This synthetic process deliberately trusts only the local test proxy by
-	// skipping verification. Production clients receive the scoped VibeMate Root
+	// skipping verification. Production clients receive the scoped ViberMate Root
 	// through their verified or explicitly recognized launch recipe.
 	transport.TLSClientConfig = &tls.Config{ //nolint:gosec -- test-only local proxy
 		MinVersion:         tls.VersionTLS12,
@@ -765,7 +765,7 @@ func TestARealResponsesClientReachesAModelThroughVibermate(t *testing.T) {
 		"-c",
 		`model_provider="vibermate-live"`,
 		"-c",
-		`model_providers.vibermate-live={name="VibeMate Live",` +
+		`model_providers.vibermate-live={name="ViberMate Live",` +
 			`base_url="https://api.openai.com/v1",env_key="CODEX_API_KEY",` +
 			`wire_api="responses",requires_openai_auth=false,` +
 			`supports_websockets=false}`,

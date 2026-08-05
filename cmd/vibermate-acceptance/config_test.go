@@ -11,7 +11,7 @@ import (
 func TestAppBundlePathRequiresPackagedMembers(t *testing.T) {
 	t.Parallel()
 
-	bundle := filepath.Join(t.TempDir(), "VibeMate.app")
+	bundle := filepath.Join(t.TempDir(), "ViberMate.app")
 	executableDirectory := filepath.Join(bundle, "Contents", "MacOS")
 	if err := os.MkdirAll(executableDirectory, 0o700); err != nil {
 		t.Fatal(err)
@@ -62,7 +62,7 @@ func TestPackagedExecutableInputCannotSelectAnotherBinary(t *testing.T) {
 	t.Parallel()
 
 	directory := t.TempDir()
-	packaged := filepath.Join(directory, "VibeMate.app", "Contents", "MacOS", "vibermated")
+	packaged := filepath.Join(directory, "ViberMate.app", "Contents", "MacOS", "vibermated")
 	external := filepath.Join(directory, "external-vibermated")
 	for _, path := range []string{packaged, external} {
 		if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {

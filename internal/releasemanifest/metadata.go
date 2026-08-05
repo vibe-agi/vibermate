@@ -557,12 +557,12 @@ func validateSPDXDocument(payload []byte, manifest Manifest) error {
 		if pkg.Name == "vibermate" {
 			releasePackageCount++
 			if pkg.VersionInfo != manifest.Version {
-				return errors.New("SPDX VibeMate package does not bind the release version")
+				return errors.New("SPDX ViberMate package does not bind the release version")
 			}
 		}
 	}
 	if releasePackageCount != 1 {
-		return errors.New("SPDX document must contain exactly one VibeMate release package")
+		return errors.New("SPDX document must contain exactly one ViberMate release package")
 	}
 	return nil
 }

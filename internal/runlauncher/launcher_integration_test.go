@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -252,6 +253,61 @@ func TestLauncherBoundsCaptureRunCreation(t *testing.T) {
 		}
 	case <-time.After(2 * time.Second):
 		t.Fatal("CaptureRun creation ignored the configured create timeout")
+	}
+}
+
+func TestLauncherCancelsCaptureRunCreationFromCallerContext(t *testing.T) {
+	t.Parallel()
+
+	requestStarted := make(chan struct{})
+	releaseRequest := make(chan struct{})
+	server := httptest.NewServer(http.HandlerFunc(func(
+		_ http.ResponseWriter,
+		_ *http.Request,
+	) {
+		close(requestStarted)
+		<-releaseRequest
+	}))
+	defer func() {
+		close(releaseRequest)
+		server.Close()
+	}()
+	launcher, err := runlauncher.New(runlauncher.Config{
+		Discovery: fixedDiscovery{session: localdiscovery.Session{
+			BaseURL:           server.URL,
+			ControlCredential: capability(0x53),
+		}},
+		BaseEnvironment: []string{"PATH=/usr/bin:/bin"},
+		CreateTimeout:   time.Minute,
+		Getwd: func() (string, error) {
+			return t.TempDir(), nil
+		},
+		LookPath: func(string) (string, error) {
+			return "/bin/echo", nil
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	finished := make(chan error, 1)
+	go func() {
+		_, runErr := launcher.Run(ctx, []string{"echo"})
+		finished <- runErr
+	}()
+	select {
+	case <-requestStarted:
+	case <-time.After(time.Second):
+		t.Fatal("CaptureRun creation did not start")
+	}
+	cancel()
+	select {
+	case runErr := <-finished:
+		if !errors.Is(runErr, context.Canceled) {
+			t.Fatalf("Run() cancellation error = %v", runErr)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("CaptureRun creation did not stop after caller cancellation")
 	}
 }
 

@@ -53,15 +53,15 @@ test("protected jobs check out and execute trusted tooling only", () => {
     protectedJobs,
     /\bpnpm\b|setup-go|rust-toolchain|exec tauri|candidate\/ui\/desktop/u,
   );
-  assert.doesNotMatch(protectedJobs, /VibeMate\.app\/Contents\/MacOS\//u);
+  assert.doesNotMatch(protectedJobs, /ViberMate\.app\/Contents\/MacOS\//u);
   assert.match(signJob, /node ui\/desktop\/scripts\/restore-macos-unsigned-archive\.mjs/u);
   assert.match(signJob, /node ui\/desktop\/scripts\/bundle-macos-distribution-candidate\.mjs/u);
   assert.match(notaryJob, /node ui\/desktop\/scripts\/restore-macos-signed-transfer\.mjs/u);
 });
 
 test("candidate transfer uses the same closed parser, not tar or zip extraction", () => {
-  assert.match(workflow, /VibeMate\.unsigned\.app\.vma/u);
-  assert.match(workflow, /VibeMate\.signed\.app\.vma/u);
+  assert.match(workflow, /ViberMate\.unsigned\.app\.vma/u);
+  assert.match(workflow, /ViberMate\.signed\.app\.vma/u);
   assert.match(workflow, /vibermate-r0-build-input\.vma/u);
   const syftStart = workflow.indexOf(
     "      - name: Download and authenticate the admitted Syft archive",
@@ -199,8 +199,8 @@ test("signing commands are closed, inside-out, and entitlement-free", () => {
   const identity = "1".repeat(40);
   const keychain = "/runner/keychain";
   const nested = signingCommandArguments("vibermate", identity, keychain, "/app/vibermate");
-  const app = signingCommandArguments("application", identity, keychain, "/app/VibeMate.app");
-  const dmg = signingCommandArguments("diskImage", identity, keychain, "/app/VibeMate.dmg");
+  const app = signingCommandArguments("application", identity, keychain, "/app/ViberMate.app");
+  const dmg = signingCommandArguments("diskImage", identity, keychain, "/app/ViberMate.dmg");
   for (const arguments_ of [nested, app, dmg]) {
     assert.ok(arguments_.includes("--force"));
     assert.ok(arguments_.includes("--timestamp"));
@@ -218,13 +218,13 @@ test("signing commands are closed, inside-out, and entitlement-free", () => {
 });
 
 test("DMG creation is fixed read-only UDZO with no overwrite option", () => {
-  const arguments_ = diskImageCreationArguments("/staging", "/output/VibeMate.dmg");
+  const arguments_ = diskImageCreationArguments("/staging", "/output/ViberMate.dmg");
   assert.deepEqual(arguments_.slice(0, 5), [
     "create",
     "-srcfolder",
     "/staging",
     "-volname",
-    "VibeMate",
+    "ViberMate",
   ]);
   assert.ok(arguments_.includes("UDZO"));
   assert.ok(arguments_.includes("HFS+"));

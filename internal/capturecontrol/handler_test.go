@@ -557,6 +557,34 @@ func TestCaptureControlKeepsUnknownClientBuildGeneric(t *testing.T) {
 	}
 }
 
+func TestCaptureControlUsesTransparentGenericLaunchWithoutProtectedAuthorities(
+	t *testing.T,
+) {
+	t.Parallel()
+
+	fixture := newFixture(t, func(options *capturegrant.Options) {
+		options.Authorities = fixedAuthorities{}
+	})
+	defer fixture.Close(t)
+	grant := fixture.createRun(t)
+
+	if grant.LaunchRecipe != clientadapter.LaunchGeneric ||
+		grant.RootPEMPath != "" ||
+		grant.Adapter != nil ||
+		grant.Signer != nil ||
+		len(grant.ProtectedAuthorities) != 0 ||
+		len(grant.ManagedCredentialAuthorities) != 0 {
+		t.Fatalf("transparent launch grant = %+v", grant)
+	}
+	if grant.Run.ClientAdapter == nil ||
+		grant.Recognition != clientadapter.RecognitionVerified {
+		t.Fatalf("transparent launch lost client identity evidence: %+v", grant)
+	}
+	if err := grant.Validate(); err != nil {
+		t.Fatalf("transparent launch grant is invalid: %v", err)
+	}
+}
+
 type fixture struct {
 	handler           *capturecontrol.Handler
 	store             *runtimepersistence.Store

@@ -1,6 +1,6 @@
 {
   "identifier": "main-window",
-  "description": "Capabilities for the trusted VibeMate main Webview",
+  "description": "Capabilities for the trusted ViberMate main Webview",
   "webviews": [
     "main"
   ],

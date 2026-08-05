@@ -138,7 +138,7 @@ func TestUserCommandOwnsOneUserLocalTerminalEntry(t *testing.T) {
 	source := filepath.Join(
 		realRoot,
 		"Applications",
-		"VibeMate.app",
+		"ViberMate.app",
 		"Contents",
 		"MacOS",
 		"vibermate",
@@ -210,7 +210,7 @@ func TestUserCommandCanonicalizesAnExistingManagedSourceLink(t *testing.T) {
 	source := filepath.Join(
 		realRoot,
 		"Applications",
-		"VibeMate.app",
+		"ViberMate.app",
 		"Contents",
 		"MacOS",
 		"vibermate",
@@ -370,7 +370,7 @@ func TestInstallValidatesPathsAndPackagedCommandIdentity(t *testing.T) {
 	t.Run("source path traverses symlink", func(t *testing.T) {
 		fixture := newLinkFixture(t)
 		alias := filepath.Join(fixture.root, "Alias.app")
-		appRoot := filepath.Join(fixture.root, "VibeMate.app")
+		appRoot := filepath.Join(fixture.root, "ViberMate.app")
 		if err := os.Symlink(appRoot, alias); err != nil {
 			t.Fatal(err)
 		}
@@ -427,8 +427,8 @@ func TestInstallValidatesPathsAndPackagedCommandIdentity(t *testing.T) {
 func TestStableMacAppLayoutsAreAcceptedByPathPolicy(t *testing.T) {
 	t.Parallel()
 	for _, source := range []string{
-		"/Applications/VibeMate.app/Contents/MacOS/vibermate",
-		"/Users/example/Applications/VibeMate.app/Contents/MacOS/vibermate",
+		"/Applications/ViberMate.app/Contents/MacOS/vibermate",
+		"/Users/example/Applications/ViberMate.app/Contents/MacOS/vibermate",
 	} {
 		source := source
 		t.Run(source, func(t *testing.T) {
@@ -436,7 +436,7 @@ func TestStableMacAppLayoutsAreAcceptedByPathPolicy(t *testing.T) {
 			spec := LinkSpec{
 				SourcePath:  source,
 				TargetPath:  "/usr/local/bin/vibermate",
-				ReceiptPath: "/Users/example/Library/Application Support/VibeMate/terminal-command.json",
+				ReceiptPath: "/Users/example/Library/Application Support/ViberMate/terminal-command.json",
 				Version:     "1.0.0",
 			}
 			if err := validateSpec(spec); err != nil {
@@ -449,10 +449,10 @@ func TestStableMacAppLayoutsAreAcceptedByPathPolicy(t *testing.T) {
 func TestTransientMacAppLayoutsAreRejectedByPathPolicy(t *testing.T) {
 	t.Parallel()
 	for _, source := range []string{
-		"/Volumes/VibeMate/VibeMate.app/Contents/MacOS/vibermate",
-		"/Users/example/Downloads/VibeMate.app/Contents/MacOS/vibermate",
-		"/private/var/folders/AppTranslocation/VibeMate.app/Contents/MacOS/vibermate",
-		"/Users/example/.Trash/VibeMate.app/Contents/MacOS/vibermate",
+		"/Volumes/ViberMate/ViberMate.app/Contents/MacOS/vibermate",
+		"/Users/example/Downloads/ViberMate.app/Contents/MacOS/vibermate",
+		"/private/var/folders/AppTranslocation/ViberMate.app/Contents/MacOS/vibermate",
+		"/Users/example/.Trash/ViberMate.app/Contents/MacOS/vibermate",
 	} {
 		source := source
 		t.Run(source, func(t *testing.T) {
@@ -460,7 +460,7 @@ func TestTransientMacAppLayoutsAreRejectedByPathPolicy(t *testing.T) {
 			spec := LinkSpec{
 				SourcePath:  source,
 				TargetPath:  "/usr/local/bin/vibermate",
-				ReceiptPath: "/Users/example/Library/Application Support/VibeMate/terminal-command.json",
+				ReceiptPath: "/Users/example/Library/Application Support/ViberMate/terminal-command.json",
 				Version:     "1.0.0",
 			}
 			if err := validateSpec(spec); err == nil {
@@ -1020,7 +1020,7 @@ func newLinkFixture(t *testing.T) linkFixture {
 	}
 	source := filepath.Join(
 		realRoot,
-		"VibeMate.app",
+		"ViberMate.app",
 		"Contents",
 		"MacOS",
 		"vibermate",

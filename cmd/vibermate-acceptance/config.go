@@ -39,7 +39,7 @@ func parseConfig(arguments []string) (config, error) {
 		&parsed.desktopAppPath,
 		"desktop-app",
 		"",
-		"absolute packaged VibeMate.app path",
+		"absolute packaged ViberMate.app path",
 	)
 	flags.StringVar(
 		&parsed.daemonPath,

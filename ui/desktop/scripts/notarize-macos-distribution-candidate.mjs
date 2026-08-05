@@ -387,7 +387,7 @@ async function main() {
     finalCandidate.appPath,
     "execute",
     credentials.teamID,
-    "VibeMate.app Gatekeeper assessment",
+    "ViberMate.app Gatekeeper assessment",
   );
   assessWithGatekeeper(
     finalCandidate.dmgPath,

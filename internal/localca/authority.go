@@ -790,8 +790,8 @@ func createRoot(
 	template := &x509.Certificate{
 		SerialNumber: serial,
 		Subject: pkix.Name{
-			Organization: []string{"VibeMate"},
-			CommonName:   "VibeMate Local Root",
+			Organization: []string{"ViberMate"},
+			CommonName:   "ViberMate Local Root",
 		},
 		NotBefore:             now.Add(-clockSkew),
 		NotAfter:              now.Add(rootLifetime),

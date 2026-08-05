@@ -26,7 +26,7 @@ function installedReport() {
       buildManifestSHA256: "2".repeat(64),
       bundleIdentifier: "io.vibermate.desktop",
       certificateSHA256: "3".repeat(64),
-      diskImageFilename: "VibeMate_0.1.0_universal.dmg",
+      diskImageFilename: "ViberMate_0.1.0_universal.dmg",
       diskImageSHA256: "4".repeat(64),
       minimumSystemVersion: "14.0",
       notarizationEvidenceSHA256: "5".repeat(64),
@@ -47,7 +47,7 @@ function installedReport() {
       installShape: "isolated-runner-applications",
       installedApplicationGatekeeperAssessment:
         "accepted-notarized-developer-id",
-      installedRelativePath: "Applications/VibeMate.app",
+      installedRelativePath: "Applications/ViberMate.app",
       source: "read-only-mounted-dmg",
       stateRemovedAfterVerification: true,
     },
@@ -152,7 +152,7 @@ test("all mutable paths are distinct direct runner children", () => {
   const paths = installedCandidatePathsFromEnvironment(environment());
   assert.equal(
     paths.installedAppPath,
-    "/private/runner-temp/vibermate-install-root-1-1/Applications/VibeMate.app",
+    "/private/runner-temp/vibermate-install-root-1-1/Applications/ViberMate.app",
   );
   assert.equal(
     paths.smokeReportPath,

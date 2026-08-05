@@ -171,10 +171,10 @@ func exchangeErrorType(reason exchange.ReasonCode) string {
 func exchangeReasonMessage(reason exchange.ReasonCode) string {
 	switch reason {
 	case exchange.ReasonProviderCredentialUnavailable:
-		return "VibeMate has no provider credential configured for the selected route (" +
+		return "ViberMate has no provider credential configured for the selected route (" +
 			string(reason) + ")."
 	default:
-		return "VibeMate could not complete this request (" + string(reason) + ")."
+		return "ViberMate could not complete this request (" + string(reason) + ")."
 	}
 }
 

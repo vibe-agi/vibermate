@@ -83,7 +83,7 @@ describe("BootstrapRoot", () => {
     await renderBootstrap(connect);
 
     const alert = await screen.findByRole("alert");
-    expect(alert.textContent).toContain("created by a newer VibeMate version");
+    expect(alert.textContent).toContain("created by a newer ViberMate version");
     expect(alert.textContent).not.toContain("database");
     expect(
       (screen.getByRole("button", { name: "Try again" }) as HTMLButtonElement)
@@ -101,7 +101,7 @@ describe("BootstrapRoot", () => {
     await renderBootstrap(connect);
 
     const alert = await screen.findByRole("alert");
-    expect(alert.textContent).toContain("Close the other VibeMate window");
+    expect(alert.textContent).toContain("Close the other ViberMate window");
     expect(alert.textContent).toContain("No provider request was sent");
   });
 

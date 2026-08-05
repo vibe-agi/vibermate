@@ -20,7 +20,7 @@ func TestPackagedDesktopInvocationUsesIsolatedHome(t *testing.T) {
 	t.Parallel()
 
 	arguments := desktopOpenArguments(
-		"/private/tmp/VibeMate.app",
+		"/private/tmp/ViberMate.app",
 		"/private/tmp/vibermate-home",
 	)
 	if !slices.Contains(
@@ -32,7 +32,7 @@ func TestPackagedDesktopInvocationUsesIsolatedHome(t *testing.T) {
 	if !slices.Contains(arguments, "-F") {
 		t.Fatalf("Desktop open arguments do not disable saved-window restore: %v", arguments)
 	}
-	if arguments[len(arguments)-1] != "/private/tmp/VibeMate.app" {
+	if arguments[len(arguments)-1] != "/private/tmp/ViberMate.app" {
 		t.Fatalf("Desktop App argument = %q", arguments[len(arguments)-1])
 	}
 }
@@ -168,8 +168,8 @@ func TestDesktopApplicationIdentityOutputIsClosedAndExact(t *testing.T) {
 	t.Parallel()
 
 	payload := []byte(`[
-  {"processId":101,"bundlePath":"/Applications/VibeMate.app","executablePath":"/Applications/VibeMate.app/Contents/MacOS/VibeMate"},
-  {"processId":202,"bundlePath":"/private/tmp/VibeMate.app","executablePath":"/private/tmp/VibeMate.app/Contents/MacOS/VibeMate"}
+  {"processId":101,"bundlePath":"/Applications/ViberMate.app","executablePath":"/Applications/ViberMate.app/Contents/MacOS/ViberMate"},
+  {"processId":202,"bundlePath":"/private/tmp/ViberMate.app","executablePath":"/private/tmp/ViberMate.app/Contents/MacOS/ViberMate"}
 ]`)
 	applications, err := parseDesktopApplications(payload)
 	if err != nil {
@@ -200,8 +200,8 @@ func TestDesktopApplicationIdentityOutputIsClosedAndExact(t *testing.T) {
 
 	identity := desktopApplicationIdentity{
 		ProcessID:      4242,
-		BundlePath:     "/private/tmp/VibeMate.app",
-		ExecutablePath: "/private/tmp/VibeMate.app/Contents/MacOS/VibeMate",
+		BundlePath:     "/private/tmp/ViberMate.app",
+		ExecutablePath: "/private/tmp/ViberMate.app/Contents/MacOS/ViberMate",
 	}
 	query := desktopApplicationsScript()
 	guardian := desktopApplicationGuardianScript(identity)
@@ -278,8 +278,8 @@ func TestPackagedDesktopApplicationSelectionRequiresSidecarParentAndExactPath(
 ) {
 	t.Parallel()
 
-	appPath := filepath.Join(t.TempDir(), "VibeMate.app")
-	executablePath := filepath.Join(appPath, "Contents", "MacOS", "VibeMate")
+	appPath := filepath.Join(t.TempDir(), "ViberMate.app")
+	executablePath := filepath.Join(appPath, "Contents", "MacOS", "ViberMate")
 	if err := os.MkdirAll(filepath.Dir(executablePath), 0o755); err != nil {
 		t.Fatal(err)
 	}
@@ -314,8 +314,8 @@ func TestPackagedDesktopApplicationSelectionRequiresSidecarParentAndExactPath(
 			expected,
 			{
 				ProcessID:      5252,
-				BundlePath:     "/Applications/VibeMate.app",
-				ExecutablePath: "/Applications/VibeMate.app/Contents/MacOS/VibeMate",
+				BundlePath:     "/Applications/ViberMate.app",
+				ExecutablePath: "/Applications/ViberMate.app/Contents/MacOS/ViberMate",
 			},
 		},
 		expected.ProcessID,

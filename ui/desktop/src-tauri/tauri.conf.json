@@ -1,6 +1,6 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
-  "productName": "VibeMate",
+  "productName": "ViberMate",
   "version": "0.1.0",
   "identifier": "io.vibermate.desktop",
   "build": {
@@ -14,7 +14,7 @@
     "windows": [
       {
         "label": "main",
-        "title": "VibeMate",
+        "title": "ViberMate",
         "width": 1180,
         "height": 760,
         "minWidth": 920,

@@ -329,7 +329,9 @@ function egressAttemptRecord(
   };
 }
 
-function captureRunRecord(): Record<string, unknown> {
+function captureRunRecord(
+  overrides: Record<string, unknown> = {},
+): Record<string, unknown> {
   return {
     id: "capture-1",
     executableLabel: "agent",
@@ -342,6 +344,7 @@ function captureRunRecord(): Record<string, unknown> {
     catalogRevision: 1,
     createdAt: "2026-08-03T08:00:00Z",
     expiresAt: "2026-08-03T08:05:00Z",
+    ...overrides,
   };
 }
 
@@ -4422,6 +4425,30 @@ describe("Desktop control client", () => {
     await expect(
       client.decideApproval(pendingApproval, pendingApproval.choices[0]!),
     ).resolves.toEqual(resolvedApproval);
+  });
+
+  it("accepts a recognized captured client with workspace provenance", async () => {
+    const bootstrap = session();
+    const recognized = captureRunRecord({
+      id: "Om-wJu4EOgyx4cEGziWSQ6NSyqc",
+      executableLabel: "2.1.221",
+      cwd: "/Users/example/project",
+      processId: 37_584,
+      state: "revoked",
+      recognition: "recognized",
+      clientRecognition: "recognized",
+      localUserLabel: "example-user",
+      machineId: capability(0x55),
+      workspaceId: capability(0x66),
+      workspaceLabel: "project",
+      workspaceEvidence: "local_launcher",
+    });
+    const client = await createControlClient(
+      bootstrap,
+      withSessionState(bootstrap, () => jsonResponse({ items: [recognized] })),
+    );
+
+    await expect(client.captureRuns()).resolves.toEqual({ items: [recognized] });
   });
 
   it.each([

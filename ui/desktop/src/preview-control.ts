@@ -46,7 +46,7 @@ const previewManualCaptureContext: ManualCaptureContext = {
     kind: "local_path",
     derSha256: "a".repeat(64),
     fingerprint: "AA:BB:CC:DD:EE:FF",
-    pemPath: "/Users/demo/Library/Application Support/VibeMate/root.pem",
+    pemPath: "/Users/demo/Library/Application Support/ViberMate/root.pem",
   },
   defaultTemporarySeconds: 86_400,
   maxTemporarySeconds: 604_800,

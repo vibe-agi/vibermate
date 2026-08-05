@@ -5,6 +5,7 @@ package connectionevent
 import (
 	"context"
 	"encoding/base64"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"strconv"
@@ -143,6 +144,26 @@ type Event struct {
 	EndedAt              time.Time        `json:"endedAt,omitempty"`
 	Outcome              Outcome          `json:"outcome,omitempty"`
 	ErrorClass           string           `json:"errorClass,omitempty"`
+}
+
+// MarshalJSON omits EndedAt until a connection reaches a terminal phase.
+// time.Time is a struct, so encoding/json does not honor omitempty for its zero
+// value. Exposing year 1 as a terminal timestamp would make a valid in-flight
+// record fail the control-contract validator.
+func (event Event) MarshalJSON() ([]byte, error) {
+	type eventAlias Event
+	var endedAt *time.Time
+	if !event.EndedAt.IsZero() {
+		value := event.EndedAt
+		endedAt = &value
+	}
+	return json.Marshal(struct {
+		eventAlias
+		EndedAt *time.Time `json:"endedAt,omitempty"`
+	}{
+		eventAlias: eventAlias(event),
+		EndedAt:    endedAt,
+	})
 }
 
 func (event Event) Validate() error {
@@ -317,6 +338,27 @@ func (event Event) validateTerminal() error {
 type Record struct {
 	Sequence int64 `json:"sequence"`
 	Event
+}
+
+// MarshalJSON keeps the durable sequence alongside Event's zero-time
+// omission. Without an explicit outer projection, Event.MarshalJSON would be
+// promoted through embedding and hide Sequence from the wire document.
+func (record Record) MarshalJSON() ([]byte, error) {
+	type eventAlias Event
+	var endedAt *time.Time
+	if !record.EndedAt.IsZero() {
+		value := record.EndedAt
+		endedAt = &value
+	}
+	return json.Marshal(struct {
+		Sequence int64 `json:"sequence"`
+		eventAlias
+		EndedAt *time.Time `json:"endedAt,omitempty"`
+	}{
+		Sequence:   record.Sequence,
+		eventAlias: eventAlias(record.Event),
+		EndedAt:    endedAt,
+	})
 }
 
 func (record Record) Validate() error {

@@ -358,7 +358,7 @@ func profileOptions(
 			if !foundAccount {
 				return nil, ErrRouteUnavailable
 			}
-			authPresentation = AuthVibeMateAccount
+			authPresentation = AuthViberMateAccount
 			authLabel = account.Label
 		} else if profile.Kind != access.EndpointProfileOriginalPassthrough {
 			return nil, ErrRouteUnavailable

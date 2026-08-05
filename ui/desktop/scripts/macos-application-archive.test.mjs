@@ -34,14 +34,14 @@ test("closed App archive round-trips bytes and POSIX modes", async (context) => 
     await mkdtemp(resolve(tmpdir(), "vibermate-archive-test-")),
   );
   context.after(() => rm(directory, { recursive: true, force: true }));
-  const source = resolve(directory, "source", "VibeMate.app");
+  const source = resolve(directory, "source", "ViberMate.app");
   await mkdir(resolve(source, "Contents", "MacOS"), { recursive: true, mode: 0o755 });
   const executable = resolve(source, "Contents", "MacOS", "vibermate-desktop");
   await writeFile(executable, "candidate bytes\n");
   await chmod(executable, 0o755);
   const archive = resolve(directory, "candidate.vma");
   await createMacOSApplicationArchive(source, archive);
-  const restored = resolve(directory, "restored", "VibeMate.app");
+  const restored = resolve(directory, "restored", "ViberMate.app");
   await extractMacOSApplicationArchive(archive, restored);
   validateTreeLedgerEquality(
     await applicationTreeLedger(source),
@@ -58,7 +58,7 @@ test("closed App archive rejects replacement of its opened output inode", async 
     await mkdtemp(resolve(tmpdir(), "vibermate-archive-output-race-")),
   );
   context.after(() => rm(directory, { recursive: true, force: true }));
-  const source = resolve(directory, "source", "VibeMate.app");
+  const source = resolve(directory, "source", "ViberMate.app");
   await mkdir(source, { recursive: true, mode: 0o755 });
   await writeFile(resolve(source, "payload"), Buffer.alloc(16 << 20, 0x61));
   const archive = resolve(directory, "candidate.vma");
@@ -116,15 +116,15 @@ test("closed App archive rejects links, extensions, and traversal records", asyn
   for (const [name, header] of [
     [
       "symlink",
-      { mode: 0o777, path: "VibeMate.app/link", size: 0, type: "symlink" },
+      { mode: 0o777, path: "ViberMate.app/link", size: 0, type: "symlink" },
     ],
     [
       "pax",
-      { mode: 0o644, path: "VibeMate.app/pax", size: 0, type: "pax" },
+      { mode: 0o644, path: "ViberMate.app/pax", size: 0, type: "pax" },
     ],
     [
       "traversal",
-      { mode: 0o755, path: "VibeMate.app/../escape", size: 0, type: "directory" },
+      { mode: 0o755, path: "ViberMate.app/../escape", size: 0, type: "directory" },
     ],
   ]) {
     const archive = resolve(directory, `${name}.vma`);
@@ -132,14 +132,14 @@ test("closed App archive rejects links, extensions, and traversal records", asyn
       archive,
       Buffer.concat([
         magic,
-        record({ mode: 0o755, path: "VibeMate.app", size: 0, type: "directory" }),
+        record({ mode: 0o755, path: "ViberMate.app", size: 0, type: "directory" }),
         record(header),
       ]),
     );
     await assert.rejects(() =>
       extractMacOSApplicationArchive(
         archive,
-        resolve(directory, `${name}-output`, "VibeMate.app"),
+        resolve(directory, `${name}-output`, "ViberMate.app"),
       ),
     );
   }
@@ -155,10 +155,10 @@ test("closed App archive rejects owner-unreadable file modes", async (context) =
       archive,
       Buffer.concat([
         magic,
-        record({ mode: 0o755, path: "VibeMate.app", size: 0, type: "directory" }),
+        record({ mode: 0o755, path: "ViberMate.app", size: 0, type: "directory" }),
         record({
           mode,
-          path: "VibeMate.app/unreadable",
+          path: "ViberMate.app/unreadable",
           sha256: "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
           size: 0,
           type: "file",
@@ -168,7 +168,7 @@ test("closed App archive rejects owner-unreadable file modes", async (context) =
     await assert.rejects(() =>
       extractMacOSApplicationArchive(
         archive,
-        resolve(directory, `mode-${mode.toString(8)}-output`, "VibeMate.app"),
+        resolve(directory, `mode-${mode.toString(8)}-output`, "ViberMate.app"),
       ),
     );
   }
@@ -181,15 +181,15 @@ test("closed App archive rejects group/world-writable modes on both boundaries",
   for (const [name, headers] of [
     [
       "directory-777",
-      [record({ mode: 0o777, path: "VibeMate.app", size: 0, type: "directory" })],
+      [record({ mode: 0o777, path: "ViberMate.app", size: 0, type: "directory" })],
     ],
     [
       "file-666",
       [
-        record({ mode: 0o755, path: "VibeMate.app", size: 0, type: "directory" }),
+        record({ mode: 0o755, path: "ViberMate.app", size: 0, type: "directory" }),
         record({
           mode: 0o666,
-          path: "VibeMate.app/writable",
+          path: "ViberMate.app/writable",
           sha256: "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
           size: 0,
           type: "file",
@@ -202,12 +202,12 @@ test("closed App archive rejects group/world-writable modes on both boundaries",
     await assert.rejects(() =>
       extractMacOSApplicationArchive(
         archive,
-        resolve(directory, `${name}-output`, "VibeMate.app"),
+        resolve(directory, `${name}-output`, "ViberMate.app"),
       ),
     );
   }
 
-  const source = resolve(directory, "source", "VibeMate.app");
+  const source = resolve(directory, "source", "ViberMate.app");
   await mkdir(source, { recursive: true, mode: 0o755 });
   await chmod(source, 0o777);
   await assert.rejects(() => applicationTreeLedger(source));
@@ -234,15 +234,15 @@ test("closed App archive rejects case aliases and duplicate paths", async (conte
     archive,
     Buffer.concat([
       magic,
-      record({ mode: 0o755, path: "VibeMate.app", size: 0, type: "directory" }),
-      record({ mode: 0o755, path: "VibeMate.app/Data", size: 0, type: "directory" }),
-      record({ mode: 0o755, path: "VibeMate.app/data", size: 0, type: "directory" }),
+      record({ mode: 0o755, path: "ViberMate.app", size: 0, type: "directory" }),
+      record({ mode: 0o755, path: "ViberMate.app/Data", size: 0, type: "directory" }),
+      record({ mode: 0o755, path: "ViberMate.app/data", size: 0, type: "directory" }),
     ]),
   );
   await assert.rejects(() =>
     extractMacOSApplicationArchive(
       archive,
-      resolve(directory, "output", "VibeMate.app"),
+      resolve(directory, "output", "ViberMate.app"),
     ),
   );
 });
@@ -252,23 +252,23 @@ test("closed App archive rejects non-ASCII and ill-formed path aliases", async (
   context.after(() => rm(directory, { recursive: true, force: true }));
   const magic = Buffer.from("VIBERMATE-APP-ARCHIVE-V1\n", "ascii");
   for (const [name, path] of [
-    ["unpaired-surrogate", "VibeMate.app/\ud800"],
-    ["long-s-alias", "VibeMate.app/ſ"],
-    ["sharp-s-alias", "VibeMate.app/ß"],
+    ["unpaired-surrogate", "ViberMate.app/\ud800"],
+    ["long-s-alias", "ViberMate.app/ſ"],
+    ["sharp-s-alias", "ViberMate.app/ß"],
   ]) {
     const archive = resolve(directory, `${name}.vma`);
     await writeFile(
       archive,
       Buffer.concat([
         magic,
-        record({ mode: 0o755, path: "VibeMate.app", size: 0, type: "directory" }),
+        record({ mode: 0o755, path: "ViberMate.app", size: 0, type: "directory" }),
         record({ mode: 0o644, path, sha256: "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855", size: 0, type: "file" }),
       ]),
     );
     await assert.rejects(() =>
       extractMacOSApplicationArchive(
         archive,
-        resolve(directory, `${name}-output`, "VibeMate.app"),
+        resolve(directory, `${name}-output`, "ViberMate.app"),
       ),
     );
   }
@@ -282,7 +282,7 @@ test("closed App archive rejects semantically equivalent reordered headers", asy
     archive,
     Buffer.concat([
       Buffer.from("VIBERMATE-APP-ARCHIVE-V1\n", "ascii"),
-      record({ type: "directory", size: 0, path: "VibeMate.app", mode: 0o755 }),
+      record({ type: "directory", size: 0, path: "ViberMate.app", mode: 0o755 }),
       record({
         type: "end",
         treeSHA256: "0".repeat(64),
@@ -294,7 +294,7 @@ test("closed App archive rejects semantically equivalent reordered headers", asy
   await assert.rejects(() =>
     extractMacOSApplicationArchive(
       archive,
-      resolve(directory, "output", "VibeMate.app"),
+      resolve(directory, "output", "ViberMate.app"),
     ),
   );
 });

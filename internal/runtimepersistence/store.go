@@ -3,8 +3,10 @@ package runtimepersistence
 
 import (
 	"context"
+	"crypto/sha256"
 	"database/sql"
 	"embed"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"io"
@@ -12,6 +14,8 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"sort"
+	"strings"
 	"sync"
 	"time"
 
@@ -122,7 +126,7 @@ func Open(ctx context.Context, options Options) (*Store, error) {
 	if err := database.PingContext(ctx); err != nil {
 		return fail(fmt.Errorf("open SQLite database: %w", err))
 	}
-	embeddedRevision, err := applyMigrations(ctx, database)
+	embeddedRevision, schemaSourceSHA256, err := applyMigrations(ctx, database)
 	if err != nil {
 		return fail(err)
 	}
@@ -131,7 +135,7 @@ func Open(ctx context.Context, options Options) (*Store, error) {
 	}
 
 	operations := newOperationGate()
-	repository := newRepository(database, operations)
+	repository := newRepository(database, operations, schemaSourceSHA256)
 	accessRepo := newAccessRepository(
 		database,
 		operations,
@@ -279,10 +283,17 @@ func (s *Store) Shutdown(ctx context.Context) error {
 	return closeErr
 }
 
-func applyMigrations(ctx context.Context, database *sql.DB) (int64, error) {
+func applyMigrations(
+	ctx context.Context,
+	database *sql.DB,
+) (int64, string, error) {
 	migrations, err := fs.Sub(migrationFiles, "migrations")
 	if err != nil {
-		return 0, fmt.Errorf("open embedded migrations: %w", err)
+		return 0, "", fmt.Errorf("open embedded migrations: %w", err)
+	}
+	schemaSourceSHA256, err := migrationSourceDigest(migrations)
+	if err != nil {
+		return 0, "", err
 	}
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
 	provider, err := goose.NewProvider(
@@ -293,18 +304,19 @@ func applyMigrations(ctx context.Context, database *sql.DB) (int64, error) {
 		goose.WithDisableGlobalRegistry(true),
 	)
 	if err != nil {
-		return 0, fmt.Errorf("construct migration provider: %w", err)
+		return 0, "", fmt.Errorf("construct migration provider: %w", err)
 	}
 	embeddedRevision, err := schemaRevisionOfSources(provider.ListSources())
 	if err != nil {
-		return 0, fmt.Errorf("inspect embedded migrations: %w", err)
+		return 0, "", fmt.Errorf("inspect embedded migrations: %w", err)
 	}
 	databaseRevision, err := provider.GetDBVersion(ctx)
 	if err != nil {
-		return 0, fmt.Errorf("read SQLite migration revision before apply: %w", err)
+		return 0, "", fmt.Errorf("read SQLite migration revision before apply: %w", err)
 	}
+	initialRevision := databaseRevision
 	if databaseRevision > embeddedRevision {
-		return 0, fmt.Errorf(
+		return 0, "", fmt.Errorf(
 			"%w: database revision %d, embedded revision %d",
 			ErrSchemaNewerThanBinary,
 			databaseRevision,
@@ -312,21 +324,81 @@ func applyMigrations(ctx context.Context, database *sql.DB) (int64, error) {
 		)
 	}
 	if _, err := provider.Up(ctx); err != nil {
-		return 0, fmt.Errorf("apply SQLite migrations: %w", err)
+		return 0, "", fmt.Errorf("apply SQLite migrations: %w", err)
+	}
+	if initialRevision == 0 {
+		result, updateErr := database.ExecContext(
+			ctx,
+			`UPDATE runtime_metadata
+			 SET schema_source_sha256 = ?
+			 WHERE singleton = 1
+			   AND schema_source_sha256 = ?`,
+			schemaSourceSHA256,
+			strings.Repeat("0", sha256.Size*2),
+		)
+		if updateErr != nil {
+			return 0, "", fmt.Errorf(
+				"bind fresh SQLite schema source: %w",
+				updateErr,
+			)
+		}
+		affected, rowsErr := result.RowsAffected()
+		if rowsErr != nil {
+			return 0, "", fmt.Errorf(
+				"read fresh SQLite schema binding result: %w",
+				rowsErr,
+			)
+		}
+		if affected != 1 {
+			return 0, "", fmt.Errorf(
+				"bind fresh SQLite schema source: affected=%d",
+				affected,
+			)
+		}
 	}
 	databaseRevision, err = provider.GetDBVersion(ctx)
 	if err != nil {
-		return 0, fmt.Errorf("read SQLite migration revision after apply: %w", err)
+		return 0, "", fmt.Errorf("read SQLite migration revision after apply: %w", err)
 	}
 	if databaseRevision != embeddedRevision {
-		return 0, fmt.Errorf(
+		return 0, "", fmt.Errorf(
 			"%w: database revision %d, embedded revision %d",
 			ErrSchemaRevisionMismatch,
 			databaseRevision,
 			embeddedRevision,
 		)
 	}
-	return embeddedRevision, nil
+	return embeddedRevision, schemaSourceSHA256, nil
+}
+
+func migrationSourceDigest(migrations fs.FS) (string, error) {
+	entries, err := fs.ReadDir(migrations, ".")
+	if err != nil {
+		return "", fmt.Errorf("list embedded migrations: %w", err)
+	}
+	names := make([]string, 0, len(entries))
+	for _, entry := range entries {
+		if entry.IsDir() || filepath.Ext(entry.Name()) != ".sql" {
+			continue
+		}
+		names = append(names, entry.Name())
+	}
+	if len(names) == 0 {
+		return "", errors.New("embedded migration set is empty")
+	}
+	sort.Strings(names)
+	hash := sha256.New()
+	for _, name := range names {
+		payload, readErr := fs.ReadFile(migrations, name)
+		if readErr != nil {
+			return "", fmt.Errorf("read embedded migration %q: %w", name, readErr)
+		}
+		_, _ = hash.Write([]byte(name))
+		_, _ = hash.Write([]byte{0})
+		_, _ = hash.Write(payload)
+		_, _ = hash.Write([]byte{0})
+	}
+	return hex.EncodeToString(hash.Sum(nil)), nil
 }
 
 func schemaRevisionOfSources(sources []*goose.Source) (int64, error) {

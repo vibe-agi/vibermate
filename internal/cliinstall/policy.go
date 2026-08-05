@@ -1,5 +1,5 @@
 // Package cliinstall owns the narrow policy for exposing the CLI packaged in
-// VibeMate Desktop as a terminal command. Platform installers keep ownership
+// ViberMate Desktop as a terminal command. Platform installers keep ownership
 // everywhere except a receipt-owned macOS application link.
 package cliinstall
 

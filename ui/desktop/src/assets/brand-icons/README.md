@@ -10,5 +10,5 @@ copy of that license is shipped in `public/licenses/lobe-icons.txt`.
 
 The brand names and logos remain trademarks of their respective owners. Their
 presence identifies an exact client or official provider choice; it does not
-imply endorsement. Compatible and custom services deliberately use VibeMate's
+imply endorsement. Compatible and custom services deliberately use ViberMate's
 neutral protocol mark instead of an official brand logo.

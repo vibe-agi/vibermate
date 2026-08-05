@@ -13,7 +13,7 @@ func TestInstalledSmokePathsStayInExactRunnerChildren(t *testing.T) {
 		runner,
 		"vibermate-install-root-1-1",
 		"Applications",
-		"VibeMate.app",
+		"ViberMate.app",
 	)
 	home := filepath.Join(runner, "vibermate-install-home-1-1")
 	report := filepath.Join(
@@ -25,8 +25,8 @@ func TestInstalledSmokePathsStayInExactRunnerChildren(t *testing.T) {
 		t.Fatal(err)
 	}
 	for name, changed := range map[string]string{
-		"real Applications": filepath.Join("/Applications", "VibeMate.app"),
-		"wrong App":         filepath.Join(runner, "vibermate-install-root-1-1", "VibeMate.app"),
+		"real Applications": filepath.Join("/Applications", "ViberMate.app"),
+		"wrong App":         filepath.Join(runner, "vibermate-install-root-1-1", "ViberMate.app"),
 		"broad home":        runner,
 		"wrong report":      filepath.Join(runner, "vibermate-install-state-1-1", "other.json"),
 	} {

@@ -213,14 +213,14 @@ path continues to own its wire codec and transport.
 This plan is complete only when evidence supports:
 
 > A generic Agent can submit the exact supported OpenAI Chat Completions HTTP
-> operation through the authenticated VibeMate proxy; the sole ProductRuntime
+> operation through the authenticated ViberMate proxy; the sole ProductRuntime
 > resolves one immutable Access plan, converts the bounded request and response
 > through canonical IR and explicit Chat client/backend codecs, preserves
 > streaming and durable tool approval, and sends provider traffic only through
 > controlled egress. No concrete Agent, provider, or model is encoded in the
 > production path.
 
-Even then, VibeMate is not Preview-ready or Release-ready. Anthropic Messages
+Even then, ViberMate is not Preview-ready or Release-ready. Anthropic Messages
 and OpenAI Responses backend edges, the remaining cross-dialect matrix,
 programmable WebSocket/Realtime, HTTP/2 fingerprint profiles, proxy-chain
 profiles, native secret protection, Root installation, signing/notarization,

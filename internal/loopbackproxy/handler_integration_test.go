@@ -1197,6 +1197,13 @@ type revocableIngress struct {
 	protocols              []access.ApplicationProtocol
 }
 
+func (ingress *revocableIngress) ActiveAccessPlans() (
+	[]access.AccessPlanSnapshot,
+	error,
+) {
+	return ingress.delegate.ActiveAccessPlans()
+}
+
 func (ingress *revocableIngress) AdmitRequest(
 	ctx context.Context,
 	binding access.IngressBinding,

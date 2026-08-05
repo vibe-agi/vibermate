@@ -1,5 +1,5 @@
 // Package captureadmission owns the immutable result of authenticating one
-// proxy credential. Admission records how traffic entered VibeMate; it does
+// proxy credential. Admission records how traffic entered ViberMate; it does
 // not select an Access, Profile, route, account, model, or plugin plan.
 package captureadmission
 

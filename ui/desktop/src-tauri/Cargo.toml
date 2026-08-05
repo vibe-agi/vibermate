@@ -1,7 +1,7 @@
 [package]
 name = "vibermate-desktop"
 version = "0.1.0"
-description = "Native shell for the local VibeMate runtime"
+description = "Native shell for the local ViberMate runtime"
 license = "Apache-2.0"
 authors = ["vibermate contributors"]
 edition = "2024"

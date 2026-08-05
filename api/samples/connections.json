@@ -15,8 +15,8 @@
     "bytesUp": 2048,
     "bytesDown": 16384,
     "startedAt": "2026-08-02T10:00:00Z",
-    "endedAt": "2026-08-02T10:00:03Z",
-    "outcome": "completed"
+    "outcome": "completed",
+    "endedAt": "2026-08-02T10:00:03Z"
   },
   {
     "sequence": 2,
@@ -33,8 +33,8 @@
     "bytesUp": 0,
     "bytesDown": 0,
     "startedAt": "2026-08-02T10:01:00Z",
-    "endedAt": "2026-08-02T10:01:00Z",
     "outcome": "denied",
-    "errorClass": "connection_denied"
+    "errorClass": "connection_denied",
+    "endedAt": "2026-08-02T10:01:00Z"
   }
 ]

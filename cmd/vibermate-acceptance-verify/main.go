@@ -120,7 +120,7 @@ func parseConfig(arguments []string, stderr io.Writer) (config, error) {
 		&parsed.desktopApp,
 		"desktop-app",
 		"",
-		"trusted absolute current v6 VibeMate.app path",
+		"trusted absolute current v6 ViberMate.app path",
 	)
 	flags.StringVar(
 		&parsed.acceptanceExecutable,

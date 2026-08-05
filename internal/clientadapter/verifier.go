@@ -110,7 +110,7 @@ const (
 	FeatureResponsesWebSocketHTTPFallback Feature = 1 << iota
 	// FeatureCoreOwnedStreamingFallback proves that the captured client accepts
 	// a launch-time instruction to leave stream-to-complete fallback to the
-	// VibeMate Exchange runtime. Without it, a failure after the Hold envelope
+	// ViberMate Exchange runtime. Without it, a failure after the Hold envelope
 	// is committed can become a second, independently billable client request.
 	FeatureCoreOwnedStreamingFallback
 )

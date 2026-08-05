@@ -236,7 +236,7 @@ async function resolveUnsignedApplicationPath() {
     entries[0].name !== macOSDistributionPolicy.appBundleName ||
     !entries[0].isDirectory()
   ) {
-    throw new Error("The unsigned candidate must contain exactly VibeMate.app");
+    throw new Error("The unsigned candidate must contain exactly ViberMate.app");
   }
   await requireCanonicalPath(
     expectedAppPath,
@@ -574,11 +574,11 @@ export async function inspectSignedMacOSApplicationAtPath(
   inspectCodeSignature(appPath, expectedTeamID, {
     deep: true,
     expectedIdentifier: macOSDistributionPolicy.appIdentifier,
-    label: "VibeMate.app",
+    label: "ViberMate.app",
     requireRuntime: true,
   });
   certificateFingerprints.add(
-    await signingCertificateSHA256(appPath, "VibeMate.app"),
+    await signingCertificateSHA256(appPath, "ViberMate.app"),
   );
   for (const [name, path] of Object.entries(executablePaths)) {
     validateLipoArchitectures(
@@ -649,7 +649,7 @@ export async function inspectUnsignedMacOSDistributionCandidate() {
   );
   const ledger = await applicationTreeLedger(appPath);
   const executablePaths = await inspectMachOPaths(appPath, ledger);
-  inspectUnsignedCodeObject(appPath, "VibeMate.app");
+  inspectUnsignedCodeObject(appPath, "ViberMate.app");
   for (const [name, path] of Object.entries(executablePaths)) {
     validateLipoArchitectures(
       runTool(toolchain.paths.lipo, ["-archs", path], `${name} architecture inspection`)
@@ -721,13 +721,13 @@ async function verifyMountedApplication(paths, expectedTeamID, externalLedger) {
     const mountedAppPath = resolve(mountDirectory, macOSDistributionPolicy.appBundleName);
     const metadata = await lstat(mountedAppPath);
     if (metadata.isSymbolicLink() || !metadata.isDirectory()) {
-      throw new Error("The mounted VibeMate.app is invalid");
+      throw new Error("The mounted ViberMate.app is invalid");
     }
     validateTreeLedgerEquality(externalLedger, await applicationTreeLedger(mountedAppPath));
     inspectCodeSignature(mountedAppPath, expectedTeamID, {
       deep: true,
       expectedIdentifier: macOSDistributionPolicy.appIdentifier,
-      label: "Mounted VibeMate.app",
+      label: "Mounted ViberMate.app",
       requireRuntime: true,
     });
   } catch (error) {

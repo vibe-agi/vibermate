@@ -64,7 +64,7 @@ async function main() {
     }
   }
   const checksumSource = await readFile(checksumPath, "utf8");
-  const match = checksumSource.match(/^([0-9a-f]{64})  VibeMate\.unsigned\.app\.vma\n$/u);
+  const match = checksumSource.match(/^([0-9a-f]{64})  ViberMate\.unsigned\.app\.vma\n$/u);
   if (match === null || match[1] !== (await sha256File(archivePath))) {
     throw new Error("The unsigned App archive checksum is invalid");
   }

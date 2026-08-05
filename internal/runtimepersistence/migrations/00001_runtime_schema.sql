@@ -1,10 +1,12 @@
 -- +goose Up
--- VibeMate has not shipped a database format. This file is the single clean
+-- ViberMate has not shipped a database format. This file is the single clean
 -- development baseline; compatibility migrations start only after a released
 -- format exists.
 CREATE TABLE runtime_metadata(
   singleton INTEGER PRIMARY KEY NOT NULL CHECK(singleton = 1),
   schema_identity TEXT NOT NULL CHECK(schema_identity = 'vibermate-runtime-clean-baseline'),
+  schema_source_sha256 TEXT NOT NULL
+  CHECK(length(schema_source_sha256) = 64),
   initialized_at TEXT NOT NULL CHECK(length(initialized_at) > 0)
 ) STRICT;
 CREATE TABLE access_bindings(
@@ -625,9 +627,15 @@ ON manual_captures(
 WHERE state = 'active'
     AND lifetime = 'temporary';
 
-INSERT INTO runtime_metadata (singleton, schema_identity, initialized_at)
+INSERT INTO runtime_metadata (
+  singleton,
+  schema_identity,
+  schema_source_sha256,
+  initialized_at
+)
 VALUES (
   1,
   'vibermate-runtime-clean-baseline',
+  '0000000000000000000000000000000000000000000000000000000000000000',
   strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
 );

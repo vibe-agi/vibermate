@@ -46,7 +46,7 @@ const (
 	defaultTerminationTimeout = 3 * time.Second
 )
 
-var ErrRuntimeUnavailable = errors.New("local VibeMate runtime is unavailable")
+var ErrRuntimeUnavailable = errors.New("local ViberMate runtime is unavailable")
 
 type Discovery interface {
 	Load() (localdiscovery.Session, error)

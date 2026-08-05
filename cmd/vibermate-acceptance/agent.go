@@ -29,7 +29,7 @@ const (
 	fixedCodexRequestedModel = "gpt-5.6-sol"
 	codexHTTPFallbackPrefix  = "Falling back from WebSockets to HTTPS transport. "
 	codexHTTPProviderSelect  = `model_provider="vibermate-http"`
-	codexHTTPProviderDefine  = `model_providers.vibermate-http={name="VibeMate Responses HTTP",base_url="https://api.openai.com/v1",env_key="CODEX_API_KEY",wire_api="responses",requires_openai_auth=false,supports_websockets=false}`
+	codexHTTPProviderDefine  = `model_providers.vibermate-http={name="ViberMate Responses HTTP",base_url="https://api.openai.com/v1",env_key="CODEX_API_KEY",wire_api="responses",requires_openai_auth=false,supports_websockets=false}`
 )
 
 type codexResponsesTransport uint8

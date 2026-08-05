@@ -364,7 +364,7 @@ describe("Managed terminal command bridge", () => {
   const status = {
     schema: "vibermate-terminal-command/v1",
     state: "current",
-    sourcePath: "/Applications/VibeMate.app/Contents/MacOS/vibermate",
+    sourcePath: "/Applications/ViberMate.app/Contents/MacOS/vibermate",
     targetPath: "/Users/example/.local/bin/vibermate",
   } as const;
 

@@ -1,6 +1,6 @@
-# VibeMate
+# ViberMate
 
-This repository contains the production implementation of VibeMate.
+This repository contains the production implementation of ViberMate.
 
 The current code is a narrow runtime, executable Access-plan, protocol,
 controlled-egress, Exchange, loopback-ingress, Desktop-host, and local
@@ -68,7 +68,7 @@ response-body ownership, and shutdown.
 The provider client separates origin, HTTP authority, network host, and TLS
 server name. Remote targets enforce strict certificate verification, redirect
 rejection, and one frozen product-level upstream presentation. New routes
-default to `follow-client`: VibeMate safely reconstructs the observed client
+default to `follow-client`: ViberMate safely reconstructs the observed client
 shape for the same application protocol and preserves only the bounded current
 request User-Agent (or its absence). Product emulation is used only when
 the user explicitly chooses a named product; provider, model, account, and
@@ -84,11 +84,11 @@ development sidecar uses one private file-backed driver; its contents are
 plaintext-equivalent at rest and are not release secret protection. There is no
 release SecretStore driver or release packaging profile in this stage.
 
-MITM creates two independent TLS connections, so VibeMate does not claim that
+MITM creates two independent TLS connections, so ViberMate does not claim that
 the complete client fingerprint survives unchanged. The downstream client sees
-an exact-DNS leaf issued by the local VibeMate Root, not the provider's
+an exact-DNS leaf issued by the local ViberMate Root, not the provider's
 certificate. The default `follow-client` profile has H1 and H2 variants:
-VibeMate retains supported cipher-suite and extension ordering, rewrites the
+ViberMate retains supported cipher-suite and extension ordering, rewrites the
 target SNI, and regenerates random, key-share, ticket, PSK, binder, and other
 connection-bound state. Before the downstream TLS handshake, the current
 Access projection intersects the client's offered ALPN values with the
@@ -132,6 +132,12 @@ evidence. It cannot carry or select Access, Profile, route, account, model,
 plugin, or provider credential. Every request on an existing CONNECT
 connection revalidates its frozen AgentEndpoint evidence against the current
 active plan.
+With no active Access plan, an authenticated capture is intentionally
+transparent: the proxy skips the editable network-policy question, never
+terminates TLS or enters the semantic pipeline, and blind-forwards the original
+HTTP/CONNECT target while retaining only body-free connection and egress
+evidence. Projection read failure still fails closed. Once an Access is active,
+the normal policy-first and exact-AgentEndpoint rules apply again.
 Exact semantic Anthropic Messages and OpenAI Responses HTTP operations enter
 the same Exchange executor; semantic ingress carries no client authentication
 or hop-by-hop headers into IR or provider construction.
@@ -470,9 +476,9 @@ client's current authentication, preserves the downstream H1/H2 protocol, and
 uses the default `follow-client` presentation. It does not run model mapping,
 plugins, language transformation, provider authentication, or semantic retry.
 Workspace route selection exposes both original and managed profiles. Managed
-profile changes that use the same VibeMate-owned credential bootstrap affect
+profile changes that use the same ViberMate-owned credential bootstrap affect
 new requests without restarting a running tool. Changing between the tool's
-own login and VibeMate-managed credentials is rejected while that workspace
+own login and ViberMate-managed credentials is rejected while that workspace
 has an active CaptureRun; the operator stops the tool, selects the route, and
 starts it again. The guard uses an exact SQLite workspace query rather than a
 page of recent activity, and the route repository evaluates it in the same
@@ -490,7 +496,7 @@ A clean development-Host opt-in run at
 preserve its existing ChatGPT login, cross the exact `chatgpt.com`
 AgentEndpoint, fall back from the locally rejected WebSocket upgrade to HTTPS,
 produce model output, and leave a completed exact-origin EgressAttempt without
-a VibeMate provider account or API key. The UI therefore distinguishes ChatGPT
+a ViberMate provider account or API key. The UI therefore distinguishes ChatGPT
 sign-in from an OpenAI API-key origin instead of presenting one ambiguous Codex
 setup. The bounded run is recorded in
 [`docs/evidence/2026-08-05-current-login-original-route.md`](docs/evidence/2026-08-05-current-login-original-route.md).
@@ -528,6 +534,10 @@ recorded in
 [`docs/evidence/2026-08-05-current-credentialed-packaged-acceptance.md`](docs/evidence/2026-08-05-current-credentialed-packaged-acceptance.md).
 The Codex tool proof names `exec`, and its Hold proof claims completion through
 the Responses streaming path without claiming TUI delta rendering.
+If no Access is active at launch, the child receives an authenticated generic
+proxy environment but no local Root and no protected authority. Interrupting
+the CLI cancels supervision and escalates child termination within the existing
+bounded shutdown interval, returning the conventional exit code 130.
 
 SQLite is the only durable Access authority; active-plan publication occurs
 after commit. An indeterminate commit or post-commit publication failure marks
@@ -537,9 +547,12 @@ recompiles the same revision and hash from SQLite. ProductRuntime reports only
 `initialized`; DesktopHost derives product readiness and withdraws discovery
 before shutdown. Because no database format has shipped, the embedded database
 is one complete development baseline at schema revision 1 rather than a chain
-of compatibility migrations. Its fixed schema identity rejects an older
-development database, and newer Goose history is rejected before any migration
-is applied. Runtime
+of compatibility migrations. Its identity and exact embedded-source digest
+reject an older same-revision development database, while newer Goose history
+is rejected before any migration is applied. The Desktop development host
+archives an unsupported old database, WAL, and SHM into a private backup
+directory and retries once with the clean baseline; it never deletes the old
+files. Runtime
 startup reconstructs every durable EgressAttempt through the domain
 constructors before changing a row; corrupt or partial terminal evidence aborts
 the transaction and startup, while valid nonterminals left by an earlier daemon
@@ -695,7 +708,7 @@ After successful notarization, a fresh standard `macos-15` arm64 job with no
 GitHub Environment and without Apple distribution credentials downloads that
 exact stapled-DMG artifact. It checks out the candidate inertly only to prove
 ancestry, executes trusted tooling plus the notarized App, mounts the DMG
-read-only, and copies `VibeMate.app` into a private stable
+read-only, and copies `ViberMate.app` into a private stable
 `$RUNNER_TEMP/.../Applications` root rather than the real `/Applications`.
 Its only Apple identity input is the non-secret repository variable
 `VIBERMATE_APPLE_TEAM_ID`; an absent or malformed value fails closed.
@@ -748,5 +761,5 @@ The opt-in packaged acceptance contract is in
 
 ## License
 
-VibeMate is licensed under the Apache License 2.0. See
+ViberMate is licensed under the Apache License 2.0. See
 [`LICENSE`](LICENSE).

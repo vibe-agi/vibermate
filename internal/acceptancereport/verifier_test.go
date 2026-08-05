@@ -942,7 +942,7 @@ func validFixture(
 	}
 	root := t.TempDir()
 	sourceRoot := filepath.Join(root, "source")
-	bundle := filepath.Join(root, "VibeMate.app")
+	bundle := filepath.Join(root, "ViberMate.app")
 	macOSDirectory := filepath.Join(bundle, "Contents", "MacOS")
 	resourcesDirectory := filepath.Join(bundle, "Contents", "Resources")
 	if err := os.MkdirAll(sourceRoot, 0o755); err != nil {
@@ -1124,7 +1124,7 @@ func commitGitFixture(t *testing.T, root, message, commitTime string) {
 		"-C",
 		root,
 		"-c",
-		"user.name=VibeMate Fixture",
+		"user.name=ViberMate Fixture",
 		"-c",
 		"user.email=fixture@vibermate.invalid",
 		"commit",

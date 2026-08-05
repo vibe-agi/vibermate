@@ -23,6 +23,7 @@ var (
 type SchemaState struct {
 	Revision      int64
 	Identity      string
+	SourceSHA256  string
 	InitializedAt string
 }
 
@@ -46,16 +47,22 @@ type SchemaStateReader interface {
 }
 
 type Repository struct {
-	database   *sql.DB
-	operations *operationGate
+	database                   *sql.DB
+	operations                 *operationGate
+	expectedSchemaSourceSHA256 string
 }
 
 var _ SchemaStateReader = (*Repository)(nil)
 
-func newRepository(database *sql.DB, operations *operationGate) *Repository {
+func newRepository(
+	database *sql.DB,
+	operations *operationGate,
+	expectedSchemaSourceSHA256 string,
+) *Repository {
 	return &Repository{
-		database:   database,
-		operations: operations,
+		database:                   database,
+		operations:                 operations,
+		expectedSchemaSourceSHA256: expectedSchemaSourceSHA256,
 	}
 }
 
@@ -77,10 +84,14 @@ func (r *Repository) ReadSchemaState(ctx context.Context) (SchemaState, error) {
 	var state SchemaState
 	if err := transaction.QueryRowContext(
 		operationContext,
-		`SELECT schema_identity, initialized_at
+		`SELECT schema_identity, schema_source_sha256, initialized_at
 		 FROM runtime_metadata
 		 WHERE singleton = 1`,
-	).Scan(&state.Identity, &state.InitializedAt); err != nil {
+	).Scan(
+		&state.Identity,
+		&state.SourceSHA256,
+		&state.InitializedAt,
+	); err != nil {
 		return SchemaState{}, fmt.Errorf("%w: read runtime metadata: %v", ErrSchemaBaselineMismatch, err)
 	}
 	if state.Identity != currentSchemaIdentity {
@@ -88,6 +99,13 @@ func (r *Repository) ReadSchemaState(ctx context.Context) (SchemaState, error) {
 			"%w: identity %q",
 			ErrSchemaBaselineMismatch,
 			state.Identity,
+		)
+	}
+	if state.SourceSHA256 != r.expectedSchemaSourceSHA256 {
+		return SchemaState{}, fmt.Errorf(
+			"%w: source digest %q",
+			ErrSchemaBaselineMismatch,
+			state.SourceSHA256,
 		)
 	}
 

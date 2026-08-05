@@ -758,7 +758,7 @@ describe("Desktop dashboard", () => {
 
     expect(
       await screen.findByText(
-        "The connection was saved, but VibeMate needs to restart before it can be used.",
+        "The connection was saved, but ViberMate needs to restart before it can be used.",
       ),
     ).toBeTruthy();
     expect(
@@ -2005,7 +2005,7 @@ describe("the ApprovalCenter and a connection question", () => {
     ).toBeTruthy();
     expect(
       screen.getByRole("button", {
-        name: "Allow this launch to use the VibeMate Root",
+        name: "Allow this launch to use the ViberMate Root",
       }),
     ).toBeTruthy();
     expect(screen.queryByText("Tools")).toBeNull();
@@ -2574,7 +2574,7 @@ describe("what is captured", () => {
     expect((currentLogin as HTMLOptionElement).disabled).toBe(true);
     expect(
       screen.getByText(
-        "Stop this workspace's running tools before switching between the client's current login and VibeMate-managed credentials. Start them again after selecting the route.",
+        "Stop this workspace's running tools before switching between the client's current login and ViberMate-managed credentials. Start them again after selecting the route.",
       ),
     ).toBeTruthy();
     fireEvent.change(route, { target: { value: "work-backup" } });
@@ -2618,7 +2618,7 @@ describe("what is captured", () => {
     expect(await screen.findByText("codex")).toBeTruthy();
     expect(
       screen.getByText(
-        "VibeMate has not verified this exact app version, so it was started " +
+        "ViberMate has not verified this exact app version, so it was started " +
           "without connection access and its requests will fail.",
       ),
     ).toBeTruthy();
@@ -2655,7 +2655,7 @@ describe("what is captured", () => {
     expect(screen.getByText("Verified adapter")).toBeTruthy();
     expect(
       screen.getByText(
-        "VibeMate has tested and verified this exact app version.",
+        "ViberMate has tested and verified this exact app version.",
       ),
     ).toBeTruthy();
   });

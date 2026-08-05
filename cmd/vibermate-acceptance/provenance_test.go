@@ -12,7 +12,7 @@ import (
 func TestBundleDigestIsDeterministicAndCoversMemberContent(t *testing.T) {
 	t.Parallel()
 
-	bundle := filepath.Join(t.TempDir(), "VibeMate.app")
+	bundle := filepath.Join(t.TempDir(), "ViberMate.app")
 	member := filepath.Join(bundle, "Contents", "MacOS", "vibermate")
 	if err := os.MkdirAll(filepath.Dir(member), 0o700); err != nil {
 		t.Fatal(err)

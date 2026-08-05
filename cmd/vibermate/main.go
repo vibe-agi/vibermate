@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"os/signal"
 	"time"
 
 	"github.com/vibe-agi/vibermate/internal/localdiscovery"
@@ -31,7 +32,10 @@ func main() {
 		fmt.Fprintln(os.Stderr, reasonCatalogMissing)
 		os.Exit(1)
 	}
-	code, key := execute(
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
+	defer stop()
+	code, key := executeContext(
+		ctx,
 		os.Args[1:],
 		os.Environ(),
 		os.Stdin,
@@ -60,6 +64,27 @@ func execute(
 	stdout io.Writer,
 	stderr io.Writer,
 ) (int, string) {
+	return executeContext(
+		context.Background(),
+		arguments,
+		environment,
+		stdin,
+		stdout,
+		stderr,
+	)
+}
+
+func executeContext(
+	ctx context.Context,
+	arguments []string,
+	environment []string,
+	stdin io.Reader,
+	stdout io.Writer,
+	stderr io.Writer,
+) (int, string) {
+	if ctx == nil {
+		return 1, keyLaunchFailed
+	}
 	if len(arguments) > 0 && arguments[0] == "capture" {
 		return executeCapture(
 			arguments[1:],
@@ -99,9 +124,12 @@ func execute(
 	if err != nil {
 		return 1, keyLaunchFailed
 	}
-	code, err := launcher.Run(context.Background(), arguments[2:])
+	code, err := launcher.Run(ctx, arguments[2:])
 	if err == nil {
 		return code, ""
+	}
+	if errors.Is(err, context.Canceled) {
+		return 130, ""
 	}
 	if errors.Is(err, runlauncher.ErrRuntimeUnavailable) {
 		return code, keyRuntimeUnavailable

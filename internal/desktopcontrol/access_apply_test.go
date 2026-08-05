@@ -5,6 +5,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -129,6 +130,25 @@ func TestAccessApplyKeepsNoncommittedProjectionFailureAsProblem(t *testing.T) {
 	}
 	if events := activities.recorded(); len(events) != 0 {
 		t.Fatalf("noncommitted apply recorded Activity: %+v", events)
+	}
+}
+
+func TestAccessApplyReportsUnknownPersistenceFailureAsRuntimeUnavailable(t *testing.T) {
+	writer := &applyWriter{err: errors.New("SQLite table is unavailable")}
+	handler := applyTestHandler(writer, &applyActivities{})
+	response := applyRequest(t, handler, validAccessApplyInput())
+
+	if response.Code != http.StatusServiceUnavailable {
+		t.Fatalf("apply code=%d body=%s", response.Code, response.Body.Bytes())
+	}
+	var problem struct {
+		Code ReasonCode `json:"code"`
+	}
+	if err := json.Unmarshal(response.Body.Bytes(), &problem); err != nil {
+		t.Fatal(err)
+	}
+	if problem.Code != ReasonRuntimeUnavailable {
+		t.Fatalf("apply reason=%q body=%s", problem.Code, response.Body.Bytes())
 	}
 }
 

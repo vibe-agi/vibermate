@@ -556,7 +556,10 @@ func (handler *Handler) applyAccess(
 				input,
 			)
 			if buildErr != nil {
-				return problemResponse(classifyAccessError(buildErr))
+				return problemResponse(problemSpec{
+					status: http.StatusUnprocessableEntity,
+					reason: ReasonInvalidRequest,
+				})
 			}
 			result, writeErr := handler.accesses.WriteAccess(
 				request.Context(),
@@ -1028,8 +1031,13 @@ func classifyAccessError(err error) problemSpec {
 		}
 	}
 	spec := problemSpec{
-		status: http.StatusUnprocessableEntity,
-		reason: ReasonInvalidRequest,
+		status: http.StatusServiceUnavailable,
+		reason: ReasonRuntimeUnavailable,
+	}
+	if errors.Is(err, access.ErrInvalidAccess) ||
+		errors.Is(err, access.ErrInvalidAccessPlan) {
+		spec.status = http.StatusUnprocessableEntity
+		spec.reason = ReasonInvalidRequest
 	}
 	var failure *access.Failure
 	if errors.As(err, &failure) {
