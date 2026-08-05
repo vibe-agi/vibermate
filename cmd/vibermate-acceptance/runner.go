@@ -471,7 +471,10 @@ func runAcceptance(
 			checkPassed,
 			"deterministic acceptance generation drained",
 		)
-		if err := requireDeterministicCheckContract(report); err != nil {
+		if err := requireCurrentCheckContract(
+			report,
+			acceptancereport.ModeDeterministic,
+		); err != nil {
 			return fail("acceptance-report-contract", err)
 		}
 		return report, nil
@@ -671,14 +674,24 @@ func runAcceptance(
 		checkPassed,
 		"credentialed assembly generation drained cleanly",
 	)
+	if err := requireCurrentCheckContract(
+		report,
+		acceptancereport.ModeCredentialed,
+	); err != nil {
+		return fail("acceptance-report-contract", err)
+	}
 	return report, nil
 }
 
-func requireDeterministicCheckContract(report acceptanceReport) error {
+func requireCurrentCheckContract(
+	report acceptanceReport,
+	mode acceptancereport.Mode,
+) error {
 	if report.Schema != acceptancereport.SchemaV6 {
-		return errors.New("deterministic report producer schema is not current")
+		return errors.New("acceptance report producer schema is not current")
 	}
 	required, err := acceptancereport.RequiredCheckIDs(
+		mode,
 		report.Client.ID,
 		report.Client.Version,
 	)
@@ -686,13 +699,13 @@ func requireDeterministicCheckContract(report acceptanceReport) error {
 		return err
 	}
 	if len(report.Checks) != len(required) {
-		return errors.New("deterministic report check set is incomplete or contains extras")
+		return errors.New("acceptance report check set is incomplete or contains extras")
 	}
 	for index, id := range required {
 		if report.Checks[index].ID != id ||
 			report.Checks[index].Status != checkPassed {
 			return fmt.Errorf(
-				"deterministic report check contract differs at position %d",
+				"acceptance report check contract differs at position %d",
 				index,
 			)
 		}

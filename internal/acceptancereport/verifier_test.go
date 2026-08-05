@@ -844,12 +844,20 @@ func TestVerifyFileIsSafeForConcurrentGateCalls(t *testing.T) {
 }
 
 func TestRequiredCheckIDsReturnsAnIsolatedCopy(t *testing.T) {
-	first, err := RequiredCheckIDs("claude-code", "2.1.220")
+	first, err := RequiredCheckIDs(
+		ModeDeterministic,
+		"claude-code",
+		"2.1.220",
+	)
 	if err != nil {
 		t.Fatal(err)
 	}
 	first[0] = "mutated"
-	second, err := RequiredCheckIDs("claude-code", "2.1.220")
+	second, err := RequiredCheckIDs(
+		ModeDeterministic,
+		"claude-code",
+		"2.1.220",
+	)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -867,6 +875,47 @@ func TestRequiredCheckIDsReturnsAnIsolatedCopy(t *testing.T) {
 	}
 }
 
+func TestVerifyFileRequiresAnExplicitMatchingCredentialedMode(t *testing.T) {
+	t.Parallel()
+	report, expected := validFixture(t, "claude-code", "2.1.220")
+	report.Provenance.Configuration.DeterministicOnly = false
+	expected.Mode = ModeCredentialed
+	checkIDs, err := RequiredCheckIDs(
+		ModeCredentialed,
+		report.Client.ID,
+		report.Client.Version,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	report.Checks = make([]Check, len(checkIDs))
+	for index, id := range checkIDs {
+		report.Checks[index] = Check{
+			ID: id, Status: StatusPassed, Detail: "passed",
+		}
+	}
+	if err := VerifyFile(writeFixture(t, report), expected); err != nil {
+		t.Fatalf("VerifyFile(credentialed) error = %v", err)
+	}
+
+	expected.Mode = ModeDeterministic
+	if err := VerifyFile(writeFixture(t, report), expected); err == nil {
+		t.Fatal("VerifyFile() accepted credentialed evidence as deterministic")
+	}
+
+	expected.Mode = ""
+	if err := VerifyFile(writeFixture(t, report), expected); err == nil {
+		t.Fatal("VerifyFile() inferred a missing expected mode from the report")
+	}
+
+	expected.Mode = ModeCredentialed
+	expected.Schema = SchemaV5
+	expected.Artifacts = ArtifactCoordinates{}
+	if err := VerifyFile(writeFixture(t, report), expected); err == nil {
+		t.Fatal("VerifyFile() accepted credentialed evidence under historical v5")
+	}
+}
+
 func validFixture(
 	t *testing.T,
 	clientID, clientVersion string,
@@ -879,7 +928,11 @@ func validFixture(
 	if !ok {
 		t.Fatal("fixed fixture client is missing")
 	}
-	checkIDs, err := RequiredCheckIDs(clientID, clientVersion)
+	checkIDs, err := RequiredCheckIDs(
+		ModeDeterministic,
+		clientID,
+		clientVersion,
+	)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1042,6 +1095,7 @@ func validFixture(
 		Checks: checks,
 	}
 	return report, Expectations{
+		Mode:   ModeDeterministic,
 		Schema: SchemaV6, Revision: revision,
 		ClientID: clientID, ClientVersion: clientVersion,
 		Artifacts: ArtifactCoordinates{

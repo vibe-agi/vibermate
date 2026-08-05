@@ -49,6 +49,47 @@ func TestRunVerifiesExactReportRevisionAndFixedClient(t *testing.T) {
 	}
 }
 
+func TestRunVerifiesCredentialedReportOnlyWhenExplicitlyExpected(t *testing.T) {
+	t.Parallel()
+	report := validCLIReport(t)
+	report.Provenance.Configuration.DeterministicOnly = false
+	checkIDs, err := acceptancereport.RequiredCheckIDs(
+		acceptancereport.ModeCredentialed,
+		report.Client.ID,
+		report.Client.Version,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	report.Checks = make([]acceptancereport.Check, len(checkIDs))
+	for index, id := range checkIDs {
+		report.Checks[index] = acceptancereport.Check{
+			ID: id, Status: acceptancereport.StatusPassed, Detail: "passed",
+		}
+	}
+	revision := report.Provenance.Source.Revision
+	path := writeCLIReport(t, report)
+	arguments := cliArguments(path, revision, report)
+	modeValueIndex := -1
+	for index := 0; index+1 < len(arguments); index++ {
+		if arguments[index] == "--expected-mode" {
+			modeValueIndex = index + 1
+			break
+		}
+	}
+	if modeValueIndex == -1 {
+		t.Fatal("CLI fixture omitted --expected-mode")
+	}
+	arguments[modeValueIndex] = string(acceptancereport.ModeCredentialed)
+	var stdout, stderr bytes.Buffer
+	if exitCode := run(arguments, &stdout, &stderr); exitCode != 0 {
+		t.Fatalf("run() exit = %d, stderr = %q", exitCode, stderr.String())
+	}
+	if !strings.Contains(stdout.String(), "packaged credentialed acceptance verified") {
+		t.Fatalf("run() stdout = %q", stdout.String())
+	}
+}
+
 func TestRunRequiresAnExplicitNonDowngradedSchema(t *testing.T) {
 	t.Parallel()
 	report := validCLIReport(t)
@@ -190,6 +231,7 @@ func cliArgumentsForSchema(
 ) []string {
 	arguments := []string{
 		"--report", path,
+		"--expected-mode", string(acceptancereport.ModeDeterministic),
 		"--expected-schema", schema,
 		"--expected-revision", revision,
 		"--expected-client-id", "claude-code",
@@ -218,6 +260,7 @@ func validCLIReport(t *testing.T) acceptancereport.Report {
 		t.Fatal("fixed Claude evidence is missing")
 	}
 	checkIDs, err := acceptancereport.RequiredCheckIDs(
+		acceptancereport.ModeDeterministic,
 		"claude-code",
 		"2.1.220",
 	)

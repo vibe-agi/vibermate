@@ -20,35 +20,42 @@ import (
 	"github.com/vibe-agi/vibermate/internal/toolapproval"
 )
 
-func TestDeterministicProducerMatchesTheCurrentVerifierCheckContract(t *testing.T) {
+func TestProducerMatchesTheCurrentVerifierCheckContract(t *testing.T) {
 	t.Parallel()
-	for _, client := range []acceptanceClient{
-		{ID: acceptanceClientClaudeCode, Version: "2.1.220"},
-		{ID: acceptanceClientCodexCLI, Version: "0.145.0"},
+	for _, mode := range []acceptancereport.Mode{
+		acceptancereport.ModeDeterministic,
+		acceptancereport.ModeCredentialed,
 	} {
-		client := client
-		t.Run(string(client.ID), func(t *testing.T) {
-			t.Parallel()
-			report := newReport(time.Unix(1, 0), client)
-			required, err := acceptancereport.RequiredCheckIDs(
-				string(client.ID),
-				client.Version,
-			)
-			if err != nil {
-				t.Fatal(err)
-			}
-			for _, id := range required {
-				report.add(id, checkPassed, "passed")
-			}
-			if err := requireDeterministicCheckContract(report); err != nil {
-				t.Fatal(err)
-			}
+		mode := mode
+		for _, client := range []acceptanceClient{
+			{ID: acceptanceClientClaudeCode, Version: "2.1.220"},
+			{ID: acceptanceClientCodexCLI, Version: "0.145.0"},
+		} {
+			client := client
+			t.Run(string(mode)+"/"+string(client.ID), func(t *testing.T) {
+				t.Parallel()
+				report := newReport(time.Unix(1, 0), client)
+				required, err := acceptancereport.RequiredCheckIDs(
+					mode,
+					string(client.ID),
+					client.Version,
+				)
+				if err != nil {
+					t.Fatal(err)
+				}
+				for _, id := range required {
+					report.add(id, checkPassed, "passed")
+				}
+				if err := requireCurrentCheckContract(report, mode); err != nil {
+					t.Fatal(err)
+				}
 
-			report.Checks = report.Checks[:len(report.Checks)-1]
-			if err := requireDeterministicCheckContract(report); err == nil {
-				t.Fatal("incomplete producer check set was accepted")
-			}
-		})
+				report.Checks = report.Checks[:len(report.Checks)-1]
+				if err := requireCurrentCheckContract(report, mode); err == nil {
+					t.Fatal("incomplete producer check set was accepted")
+				}
+			})
+		}
 	}
 }
 

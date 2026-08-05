@@ -122,6 +122,9 @@ RUSTUP_TOOLCHAIN=1.88.0 fnm exec --using=22.23.1 -- \
 go build -buildvcs=true -trimpath \
   -o /private/tmp/vibermate-acceptance \
   ./cmd/vibermate-acceptance
+go build -buildvcs=true -trimpath \
+  -o /private/tmp/vibermate-acceptance-verify \
+  ./cmd/vibermate-acceptance-verify
 ```
 
 The development bundle is not a release package. Signing, notarization,
@@ -264,6 +267,39 @@ Example:
 Exit status `0` means every selected check passed. Exit status `3` means the
 deterministic sequence passed but configured credential metadata was absent.
 Other nonzero statuses are failures.
+
+## Independent report verification
+
+The report does not choose its own authority. The independent verifier requires
+the caller to state whether deterministic or credentialed evidence is expected,
+along with the exact schema, clean source revision, fixed client, source
+checkout, App bundle, acceptance executable, and client entrypoint. A
+credentialed report cannot satisfy a deterministic expectation, a deterministic
+report cannot satisfy a credentialed expectation, and omitting the expected
+mode fails closed. Credentialed verification is supported only for the current
+v6 schema; historical v5 remains deterministic-only evidence.
+
+Example for a current credentialed Claude report:
+
+```text
+/private/tmp/vibermate-acceptance-verify \
+  --report=/absolute/private/path/m0-credentialed.json \
+  --expected-mode=credentialed \
+  --expected-schema=vibermate.m0-assembly-acceptance/v6 \
+  --expected-revision=<full-clean-git-revision> \
+  --expected-client-id=claude-code \
+  --expected-client-version=2.1.220 \
+  --source-root=/absolute/path/to/clean/source \
+  --desktop-app=/absolute/path/to/VibeMate.app \
+  --acceptance-executable=/private/tmp/vibermate-acceptance \
+  --client-entrypoint=/absolute/path/to/the/fixed/claude
+```
+
+Use `--expected-mode=deterministic` for `--deterministic-only` output. The
+manual packaged workflow uses that explicit deterministic expectation. The
+credentialed command is an operator-controlled gate because it depends on a
+real secret and provider; verification reads only the private report and the
+independently named local artifacts, never the secret value.
 
 ## Evidence boundary
 

@@ -135,12 +135,44 @@ var (
 		"daemon-sigkill-connection-recovery",
 		"deterministic-shutdown",
 	}
+	requiredClaudeCredentialedChecksV6 = credentialedCheckIDs(
+		requiredClaudeChecksV6,
+		false,
+	)
+	requiredCodexCredentialedChecksV6 = credentialedCheckIDs(
+		requiredCodexChecksV6,
+		true,
+	)
 )
 
 type fixedClientExpectation struct {
-	evidence clientadapter.Evidence
-	checksV5 []string
-	checksV6 []string
+	evidence             clientadapter.Evidence
+	checksV5             []string
+	checksV6             []string
+	credentialedChecksV6 []string
+}
+
+func credentialedCheckIDs(deterministic []string, codex bool) []string {
+	checks := append([]string(nil), deterministic[:len(deterministic)-1]...)
+	checks = append(checks,
+		"deterministic-phase-shutdown",
+		"credentialed-private-data-directory",
+		"credentialed-access-apply",
+		"provider-secret",
+		"normal-streaming-reply",
+	)
+	if codex {
+		checks = append(checks, "fixed-codex-exec-resume")
+	}
+	checks = append(checks,
+		"tool-approval",
+		"planned-hold-streaming",
+		"agent-sigint",
+	)
+	if codex {
+		checks = append(checks, "fixed-codex-http-scope")
+	}
+	return append(checks, "final-shutdown")
 }
 
 // VerifyFile verifies one private current or historical report through the
@@ -165,18 +197,33 @@ func VerifyFile(path string, expected Expectations) error {
 	return nil
 }
 
-// RequiredCheckIDs returns a copy of the current deterministic check contract
-// for a supported fixed client. It is primarily useful to producers and
-// fixtures that emit SchemaV6 reports.
-func RequiredCheckIDs(clientID, clientVersion string) ([]string, error) {
+// RequiredCheckIDs returns a copy of the current check contract for one mode
+// and supported fixed client. It is primarily useful to producers and fixtures
+// that emit SchemaV6 reports.
+func RequiredCheckIDs(
+	mode Mode,
+	clientID, clientVersion string,
+) ([]string, error) {
 	expected, err := fixedClient(clientID, clientVersion)
 	if err != nil {
 		return nil, err
 	}
-	return append([]string(nil), expected.checksV6...), nil
+	switch mode {
+	case ModeDeterministic:
+		return append([]string(nil), expected.checksV6...), nil
+	case ModeCredentialed:
+		return append([]string(nil), expected.credentialedChecksV6...), nil
+	default:
+		return nil, errors.New("acceptance mode is unsupported")
+	}
 }
 
 func validateExpectations(expected Expectations) (fixedClientExpectation, error) {
+	if !expected.Mode.Valid() {
+		return fixedClientExpectation{}, errors.New(
+			"expected mode must be deterministic or credentialed",
+		)
+	}
 	if expected.Schema != SchemaV5 && expected.Schema != SchemaV6 {
 		return fixedClientExpectation{}, errors.New(
 			"expected schema must be an explicitly supported report schema",
@@ -194,6 +241,11 @@ func validateExpectations(expected Expectations) (fixedClientExpectation, error)
 				err,
 			)
 		}
+	}
+	if expected.Mode == ModeCredentialed && expected.Schema != SchemaV6 {
+		return fixedClientExpectation{}, errors.New(
+			"credentialed verification requires the current report schema",
+		)
 	}
 	return fixedClient(expected.ClientID, expected.ClientVersion)
 }
@@ -222,6 +274,12 @@ func fixedClient(id, version string) (fixedClientExpectation, error) {
 		evidence: evidence,
 		checksV5: checksV5,
 		checksV6: checksV6,
+		credentialedChecksV6: func() []string {
+			if id == "codex-cli" {
+				return requiredCodexCredentialedChecksV6
+			}
+			return requiredClaudeCredentialedChecksV6
+		}(),
 	}, nil
 }
 
@@ -373,7 +431,11 @@ func verifyReport(
 	if report.Schema != expected.Schema {
 		return errors.New("report schema differs from the expected schema")
 	}
-	requiredChecks, err := requiredChecksForSchema(expected.Schema, fixed)
+	requiredChecks, err := requiredChecksForSchema(
+		expected.Schema,
+		expected.Mode,
+		fixed,
+	)
 	if err != nil {
 		return errors.New("report schema is unsupported")
 	}
@@ -449,8 +511,15 @@ func verifyReport(
 
 func requiredChecksForSchema(
 	schema string,
+	mode Mode,
 	fixed fixedClientExpectation,
 ) ([]string, error) {
+	if mode == ModeCredentialed {
+		if schema != SchemaV6 {
+			return nil, errors.New("credentialed report schema is unsupported")
+		}
+		return append([]string(nil), fixed.credentialedChecksV6...), nil
+	}
 	switch schema {
 	case SchemaV6:
 		return append([]string(nil), fixed.checksV6...), nil
@@ -482,8 +551,9 @@ func verifyConfiguration(
 	configuration Configuration,
 	expected Expectations,
 ) error {
-	if !configuration.DeterministicOnly {
-		return errors.New("report configuration is not deterministic-only")
+	deterministicOnly := expected.Mode == ModeDeterministic
+	if configuration.DeterministicOnly != deterministicOnly {
+		return errors.New("report configuration mode differs from the expected mode")
 	}
 	if configuration.ClientID != expected.ClientID ||
 		configuration.ClientVersion != expected.ClientVersion {

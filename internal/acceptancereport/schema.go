@@ -1,6 +1,6 @@
-// Package acceptancereport defines and verifies the private packaged
-// deterministic acceptance report. The report is evidence, not configuration:
-// callers must supply the exact source revision and fixed client they expect.
+// Package acceptancereport defines and verifies private packaged acceptance
+// reports. A report is evidence, not configuration: callers must supply the
+// exact mode, source revision, and fixed client they expect.
 package acceptancereport
 
 import (
@@ -33,6 +33,19 @@ const (
 	StatusFailed  Status = "failed"
 	StatusBlocked Status = "blocked"
 )
+
+// Mode distinguishes an offline deterministic run from its credentialed
+// continuation. The verifier never infers this authority from the report.
+type Mode string
+
+const (
+	ModeDeterministic Mode = "deterministic"
+	ModeCredentialed  Mode = "credentialed"
+)
+
+func (mode Mode) Valid() bool {
+	return mode == ModeDeterministic || mode == ModeCredentialed
+}
 
 type Check struct {
 	ID     string `json:"id"`
@@ -132,6 +145,7 @@ type ArtifactCoordinates struct {
 // Expectations are intentionally explicit. VerifyFile never obtains these
 // coordinates from the worktree, the environment, or the report itself.
 type Expectations struct {
+	Mode          Mode
 	Schema        string
 	Revision      string
 	ClientID      string

@@ -629,8 +629,11 @@ set. For current v6 evidence, the workflow also supplies trusted source, App,
 acceptance-executable, and client coordinates independently of the report. The
 verifier rehashes those bytes and the frozen configuration, requires the source
 coordinate to be the clean Git top-level checkout at the selected full commit,
-and re-parses the selected App's v2 build manifest. A syntactically valid digest
-inside a report is therefore not accepted as proof of current bytes.
+and re-parses the selected App's v2 build manifest. The caller must explicitly
+expect `deterministic`; the same verifier accepts current v6 credentialed
+evidence only under an explicit `credentialed` expectation. A report cannot
+select or downgrade its own mode, and a syntactically valid digest inside a
+report is not accepted as proof of current bytes.
 A passing run contributes packaged production-wiring evidence for the
 architecture gate (G0); it is not Preview or Release approval.
 

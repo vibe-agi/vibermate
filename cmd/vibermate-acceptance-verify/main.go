@@ -1,5 +1,5 @@
 // Command vibermate-acceptance-verify fail-closes on a missing, unsafe,
-// malformed, failed, or stale packaged deterministic acceptance report.
+// malformed, failed, stale, or mode-mismatched packaged acceptance report.
 package main
 
 import (
@@ -14,6 +14,7 @@ import (
 
 type config struct {
 	reportPath            string
+	expectedMode          string
 	expectedSchema        string
 	expectedRevision      string
 	expectedClientID      string
@@ -37,6 +38,7 @@ func run(arguments []string, stdout, stderr io.Writer) int {
 	err = acceptancereport.VerifyFile(
 		configuration.reportPath,
 		acceptancereport.Expectations{
+			Mode:          acceptancereport.Mode(configuration.expectedMode),
 			Schema:        configuration.expectedSchema,
 			Revision:      configuration.expectedRevision,
 			ClientID:      configuration.expectedClientID,
@@ -55,7 +57,8 @@ func run(arguments []string, stdout, stderr io.Writer) int {
 	}
 	fmt.Fprintf(
 		stdout,
-		"packaged deterministic acceptance verified: schema=%s revision=%s client=%s@%s\n",
+		"packaged %s acceptance verified: schema=%s revision=%s client=%s@%s\n",
+		configuration.expectedMode,
 		configuration.expectedSchema,
 		configuration.expectedRevision,
 		configuration.expectedClientID,
@@ -76,6 +79,12 @@ func parseConfig(arguments []string, stderr io.Writer) (config, error) {
 		"report",
 		"",
 		"absolute private v5 or v6 report path",
+	)
+	flags.StringVar(
+		&parsed.expectedMode,
+		"expected-mode",
+		"",
+		"exact expected report mode: deterministic or credentialed",
 	)
 	flags.StringVar(
 		&parsed.expectedSchema,
@@ -134,12 +143,13 @@ func parseConfig(arguments []string, stderr io.Writer) (config, error) {
 		)
 	}
 	if parsed.reportPath == "" ||
+		parsed.expectedMode == "" ||
 		parsed.expectedSchema == "" ||
 		parsed.expectedRevision == "" ||
 		parsed.expectedClientID == "" ||
 		parsed.expectedClientVersion == "" {
 		return config{}, errors.New(
-			"--report, --expected-schema, --expected-revision, --expected-client-id, and --expected-client-version are required",
+			"--report, --expected-mode, --expected-schema, --expected-revision, --expected-client-id, and --expected-client-version are required",
 		)
 	}
 	if parsed.expectedSchema == acceptancereport.SchemaV6 &&
