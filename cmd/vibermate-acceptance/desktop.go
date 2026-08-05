@@ -28,6 +28,10 @@ const (
 	desktopNavigationStateFile       = "navigation-state-v1.json"
 	desktopNavigationSentinelLocator = "overview"
 	desktopNavigationStateLimit      = 4 << 10
+	// A Desktop that remains registered beyond this bound is user-visible as a
+	// hung application. Deeper daemon cleanup budgets must never leak into the
+	// AppKit exit callback.
+	packagedDesktopExitTimeout = 3 * time.Second
 )
 
 var errDesktopProcessUnavailable = errors.New("Desktop process is unavailable")
@@ -274,7 +278,7 @@ func exercisePackagedDesktopLaunch(
 	if err := requestDesktopQuit(ctx, desktopGuardian); err != nil {
 		return err
 	}
-	exitContext, cancelExit := context.WithTimeout(ctx, 35*time.Second)
+	exitContext, cancelExit := context.WithTimeout(ctx, packagedDesktopExitTimeout)
 	defer cancelExit()
 	select {
 	case waitErr := <-done:

@@ -587,7 +587,7 @@ func (host *Host) executeShutdown() {
 	if err := normalizeClose(host.proxy.Close()); err != nil {
 		shutdownErr = errors.Join(shutdownErr, fmt.Errorf("close proxy admission: %w", err))
 	}
-	if err := stopHTTPServer(ctx, host.controlServer, host.control); err != nil {
+	if err := stopControlServer(ctx, host.controlServer, host.control); err != nil {
 		shutdownErr = errors.Join(shutdownErr, fmt.Errorf("stop control server: %w", err))
 	}
 	if err := host.runtime.Shutdown(ctx); err != nil {
@@ -734,6 +734,23 @@ func stopHTTPServer(
 		listener.closeTracked()
 	}
 	return errors.Join(shutdownErr, closeErr)
+}
+
+// stopControlServer breaks the native Webview/control-server shutdown cycle.
+// The Webview cannot finish exiting while its requests are alive, and a
+// graceful http.Server shutdown cannot finish while those requests are alive.
+// Control mutations are revisioned, idempotent, and transaction bounded, so
+// canceling their request contexts at process shutdown is the correct edge;
+// data-plane proxy connections continue to use the graceful path above.
+func stopControlServer(
+	ctx context.Context,
+	server *http.Server,
+	listener *trackedListener,
+) error {
+	if listener != nil {
+		listener.closeTracked()
+	}
+	return stopHTTPServer(ctx, server, listener)
 }
 
 func normalizeClose(err error) error {

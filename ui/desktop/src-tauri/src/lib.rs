@@ -28,11 +28,15 @@ const SIDECAR_PROGRESS_TIMEOUT: Duration = Duration::from_secs(5);
 const SIDECAR_READY_TIMEOUT: Duration = Duration::from_secs(120);
 const SIDECAR_SESSION_EXCHANGE_TIMEOUT: Duration = Duration::from_secs(5);
 const SIDECAR_STARTUP_CANCEL_TIMEOUT: Duration = Duration::from_secs(5);
-const SIDECAR_SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(30);
-// A terminal Cocoa exit can race the asynchronous ExitRequested drain. Give
-// that already-owned 30-second stop a small scheduling margin before the App
-// process itself returns from RunEvent::Exit.
-const SIDECAR_EXIT_WAIT_TIMEOUT: Duration = Duration::from_secs(35);
+// An ordinary, preventable exit gets a short background grace period. The Go
+// daemon still owns its deeper component deadlines, but the native shell must
+// never make a person wait for those deadlines before the window disappears.
+const SIDECAR_SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(2);
+// Cocoa can deliver applicationWillTerminate without an earlier preventable
+// ExitRequested event. RunEvent::Exit is on the AppKit thread and cannot be
+// deferred, so it only permits a very small final grace before force-reaping
+// the owned child.
+const SIDECAR_TERMINAL_EXIT_TIMEOUT: Duration = Duration::from_millis(250);
 const DESKTOP_RUNTIME_EVENT: &str = "vibermate-desktop-runtime";
 const DESKTOP_RUNTIME_EVENT_SCHEMA: &str = "vibermate-desktop-runtime-event-v1";
 const SIDECAR_EXIT_REASON: &str = "daemon_exited";
@@ -253,6 +257,20 @@ where
                 let _ = completion.wait(startup_timeout);
             }
             Self::Running(sidecar) => stop_sidecar_bounded(sidecar, sidecar_timeout),
+        }
+    }
+
+    fn stop_terminal(self) {
+        match self {
+            Self::Empty => {}
+            Self::Starting { child, .. } => {
+                if let Some(child) = child {
+                    child.kill_target();
+                }
+            }
+            Self::Running(sidecar) => {
+                stop_sidecar_bounded(sidecar, SIDECAR_TERMINAL_EXIT_TIMEOUT);
+            }
         }
     }
 }
@@ -586,7 +604,6 @@ enum ExitPhase {
 #[derive(Default)]
 struct ExitCoordinator {
     phase: Mutex<ExitPhase>,
-    changed: Condvar,
 }
 
 impl ExitCoordinator {
@@ -623,19 +640,6 @@ impl ExitCoordinator {
         }
     }
 
-    fn wait_for_stop(&self, timeout: Duration) -> bool {
-        let phase = self
-            .phase
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner());
-        self.changed
-            .wait_timeout_while(phase, timeout, |phase| {
-                matches!(*phase, ExitPhase::Stopping { .. })
-            })
-            .map(|(phase, _)| !matches!(*phase, ExitPhase::Stopping { .. }))
-            .unwrap_or(false)
-    }
-
     fn stop_finished(&self) -> Option<i32> {
         let mut phase = self
             .phase
@@ -645,7 +649,6 @@ impl ExitCoordinator {
             return None;
         };
         *phase = ExitPhase::Ready { code };
-        self.changed.notify_all();
         Some(code)
     }
 
@@ -655,7 +658,6 @@ impl ExitCoordinator {
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner());
         *phase = ExitPhase::Exited;
-        self.changed.notify_all();
     }
 }
 
@@ -1323,9 +1325,12 @@ fn flush_main_window_navigation(app: &tauri::AppHandle) {
     let _ = store.close_with_fragment(locator.as_deref());
 }
 
-fn hide_main_window(app: &tauri::AppHandle) {
+fn destroy_main_window(app: &tauri::AppHandle) {
     if let Some(window) = app.get_webview_window("main") {
-        let _ = window.hide();
+        // The Webview owns authenticated control-plane HTTP connections. A
+        // hidden window keeps its polling requests alive and makes the daemon
+        // wait for the UI that is simultaneously waiting for the daemon.
+        let _ = window.destroy();
     }
 }
 
@@ -1400,8 +1405,8 @@ pub fn run() {
             match run_exit_coordinator.request(code) {
                 ExitRequestDecision::Start(_) => {
                     api.prevent_exit();
-                    hide_main_window(handle);
                     flush_main_window_navigation(handle);
+                    destroy_main_window(handle);
                     let background_handle = handle.clone();
                     let background_state = Arc::clone(&exit_state);
                     let background_coordinator = Arc::clone(&run_exit_coordinator);
@@ -1416,23 +1421,25 @@ pub fn run() {
                 }
                 ExitRequestDecision::Wait => {
                     api.prevent_exit();
-                    hide_main_window(handle);
+                    destroy_main_window(handle);
                 }
                 ExitRequestDecision::Allow => {}
             }
         }
         tauri::RunEvent::Exit => {
             flush_main_window_navigation(handle);
+            destroy_main_window(handle);
             match run_exit_coordinator.begin_terminal_exit() {
                 ExitRequestDecision::Start(_) => {
                     let stop_work = exit_state.begin_stop();
-                    stop_work.stop(SIDECAR_STARTUP_CANCEL_TIMEOUT, SIDECAR_SHUTDOWN_TIMEOUT);
+                    stop_work.stop_terminal();
                     exit_state.finish_stop();
                     let _ = run_exit_coordinator.stop_finished();
                 }
-                ExitRequestDecision::Wait => {
-                    let _ = run_exit_coordinator.wait_for_stop(SIDECAR_EXIT_WAIT_TIMEOUT);
-                }
+                // A preventable exit already owns the graceful stop. This
+                // terminal AppKit callback cannot wait for it; returning also
+                // closes the parent-lifetime pipe watched by the daemon.
+                ExitRequestDecision::Wait => {}
                 ExitRequestDecision::Allow => {}
             }
             run_exit_coordinator.mark_exited();
@@ -2354,10 +2361,8 @@ mod tests {
         assert_eq!(coordinator.request(Some(0)), ExitRequestDecision::Wait);
         assert_eq!(coordinator.request(Some(19)), ExitRequestDecision::Wait);
         assert_eq!(coordinator.begin_terminal_exit(), ExitRequestDecision::Wait);
-        assert!(!coordinator.wait_for_stop(Duration::ZERO));
         termination.mark();
         assert_eq!(stopping.join().expect("join graceful stop"), Some(0));
-        assert!(coordinator.wait_for_stop(Duration::ZERO));
         assert!(!killed.load(Ordering::SeqCst));
         assert_eq!(coordinator.request(Some(0)), ExitRequestDecision::Allow);
         assert_eq!(
@@ -2397,9 +2402,28 @@ mod tests {
             coordinator.begin_terminal_exit(),
             ExitRequestDecision::Start(0)
         );
-        assert!(!coordinator.wait_for_stop(Duration::ZERO));
         assert_eq!(coordinator.stop_finished(), Some(0));
-        assert!(coordinator.wait_for_stop(Duration::ZERO));
+    }
+
+    #[test]
+    fn terminal_exit_force_reaps_an_unresponsive_sidecar_within_the_ui_budget() {
+        let actions = Arc::new(Mutex::new(Vec::new()));
+
+        GenerationStopWork::<FakeChild, IgnoringSidecar>::Running(IgnoringSidecar {
+            actions: Arc::clone(&actions),
+        })
+        .stop_terminal();
+
+        assert_eq!(
+            *actions.lock().expect("lock terminal stop actions"),
+            [
+                StopAction::Wait(Duration::ZERO),
+                StopAction::Terminate,
+                StopAction::Wait(SIDECAR_TERMINAL_EXIT_TIMEOUT),
+                StopAction::Kill,
+            ]
+        );
+        assert!(SIDECAR_TERMINAL_EXIT_TIMEOUT <= Duration::from_millis(250));
     }
 
     #[test]

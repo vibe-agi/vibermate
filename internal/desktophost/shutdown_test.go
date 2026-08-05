@@ -4,6 +4,7 @@ import (
 	"context"
 	"net"
 	"net/http"
+	"sync"
 	"testing"
 	"time"
 )
@@ -42,5 +43,73 @@ func TestStoppingAServerWhoseListenerIsAlreadyClosedIsClean(t *testing.T) {
 	defer cancel()
 	if err := stopHTTPServer(ctx, server, tracked); err != nil {
 		t.Fatalf("stopping an already-closed listener reported: %v", err)
+	}
+}
+
+func TestControlShutdownCancelsAWebviewRequestBeforeWaitingForServerDrain(t *testing.T) {
+	t.Parallel()
+
+	listener, err := net.Listen("tcp4", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	tracked := newTrackedListener(listener)
+	requestStarted := make(chan struct{})
+	requestCanceled := make(chan struct{})
+	var startedOnce sync.Once
+	server := &http.Server{
+		Handler: http.HandlerFunc(func(
+			_ http.ResponseWriter,
+			request *http.Request,
+		) {
+			startedOnce.Do(func() { close(requestStarted) })
+			<-request.Context().Done()
+			close(requestCanceled)
+		}),
+	}
+	serveDone := make(chan struct{})
+	go func() {
+		defer close(serveDone)
+		_ = server.Serve(tracked)
+	}()
+
+	client := &http.Client{Timeout: 5 * time.Second}
+	requestDone := make(chan error, 1)
+	go func() {
+		response, requestErr := client.Get("http://" + listener.Addr().String())
+		if response != nil {
+			_ = response.Body.Close()
+		}
+		requestDone <- requestErr
+	}()
+	select {
+	case <-requestStarted:
+	case <-time.After(time.Second):
+		t.Fatal("control request did not reach the server")
+	}
+
+	shutdownContext, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	started := time.Now()
+	if err := stopControlServer(shutdownContext, server, tracked); err != nil {
+		t.Fatalf("stop control server: %v", err)
+	}
+	if elapsed := time.Since(started); elapsed > 500*time.Millisecond {
+		t.Fatalf("control shutdown waited for the Webview: %v", elapsed)
+	}
+	select {
+	case <-requestCanceled:
+	case <-time.After(time.Second):
+		t.Fatal("control request context was not canceled")
+	}
+	select {
+	case <-requestDone:
+	case <-time.After(time.Second):
+		t.Fatal("control client did not observe shutdown")
+	}
+	select {
+	case <-serveDone:
+	case <-time.After(time.Second):
+		t.Fatal("control server did not stop")
 	}
 }
