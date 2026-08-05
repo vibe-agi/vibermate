@@ -3197,30 +3197,6 @@ function AccessPanel({
             </div>
           </div>
           <form className="access-form" onSubmit={(event) => void submit(event)}>
-            <div className="form-action wide-action access-create-actions">
-              <button
-                className="secondary"
-                disabled={busy}
-                onClick={() => {
-                  setCreating(false);
-                  resetDetail();
-                }}
-                type="button"
-              >
-                {t("common.cancel.action")}
-              </button>
-              <button
-                disabled={
-                  busy ||
-                  creationNeedsManagedSetup ||
-                  !validAccessForm(form) ||
-                  conflictingAccess !== undefined
-                }
-                type="submit"
-              >
-                {t("access.create.submit")}
-              </button>
-            </div>
             <fieldset className="access-app-picker wide-action">
               <legend>{t("access.preset.title")}</legend>
               <p>{t("access.preset.description")}</p>
@@ -3598,6 +3574,30 @@ function AccessPanel({
                 </button>
               </div>
             )}
+            <div className="form-action wide-action access-create-actions">
+              <button
+                className="secondary"
+                disabled={busy}
+                onClick={() => {
+                  setCreating(false);
+                  resetDetail();
+                }}
+                type="button"
+              >
+                {t("common.cancel.action")}
+              </button>
+              <button
+                disabled={
+                  busy ||
+                  creationNeedsManagedSetup ||
+                  !validAccessForm(form) ||
+                  conflictingAccess !== undefined
+                }
+                type="submit"
+              >
+                {t("access.create.submit")}
+              </button>
+            </div>
           </form>
         </section>
       ) : selectedAccess === undefined ? (

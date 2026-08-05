@@ -164,6 +164,20 @@ test("lists existing tools and creates the next one without asking for a name", 
       "Supported model requests keep their original shape and streaming. VibeMate records operational evidence, sends only to the exact original service, and stops unsupported request types locally.",
     ),
   ).toBeVisible();
+  expect(
+    await page.evaluate(() => {
+      const review = document.querySelector(".access-review");
+      const actions = document.querySelector(".access-create-actions");
+      return (
+        review !== null &&
+        actions !== null &&
+        Boolean(
+          review.compareDocumentPosition(actions) &
+            Node.DOCUMENT_POSITION_FOLLOWING,
+        )
+      );
+    }),
+  ).toBe(true);
   await expect(page.getByLabel("API Key")).toHaveCount(0);
   await expect(
     page.getByRole("button", { name: "Save and enable" }),
