@@ -462,7 +462,17 @@ The fixed client is known to continue with its local estimate. Original-route
 forwarding for that operation requires the separate typed ClientOperationRun
 and `profile_operation` audit path; it is not reintroduced through the generic
 original-origin forwarding arm.
-No packaged credentialed acceptance report yet proves this original route.
+A clean development-Host opt-in run at
+`6803c07925927d84b8ddbbe4b7906715aa69b49c` proves that Codex CLI 0.146.0 can
+preserve its existing ChatGPT login, cross the exact `chatgpt.com`
+AgentEndpoint, fall back from the locally rejected WebSocket upgrade to HTTPS,
+produce model output, and leave a completed exact-origin EgressAttempt without
+a VibeMate provider account or API key. The UI therefore distinguishes ChatGPT
+sign-in from an OpenAI API-key origin instead of presenting one ambiguous Codex
+setup. The bounded run is recorded in
+[`docs/evidence/2026-08-05-current-login-original-route.md`](docs/evidence/2026-08-05-current-login-original-route.md).
+It is not packaged acceptance. No packaged credentialed report yet proves this
+original route.
 
 The opt-in `vibermate-acceptance` command exercises the packaged macOS arm64
 assembly with exactly one selected fixed client: Claude Code 2.1.220 or Codex
