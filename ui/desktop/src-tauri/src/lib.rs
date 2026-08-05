@@ -961,6 +961,7 @@ fn generation_command(app: &tauri::AppHandle) -> Result<Command, ShellError> {
         .arg(format!("--app-cache-dir={app_cache}"))
         .arg(format!("--data-dir={app_data}"))
         .arg(format!("--webview-origin={WEBVIEW_ORIGIN}"))
+        .arg("--parent-lifetime-fd=0")
         .arg("--bootstrap-fd=1");
     Ok(command)
 }
@@ -1161,6 +1162,7 @@ fn shell_error_for_failure(failure: &DaemonFailure) -> Result<ShellError, ShellE
         "storage_schema_newer" => Ok(ShellError("Desktop storage schema requires a newer app")),
         "storage_unavailable" => Ok(ShellError("Desktop storage could not be opened")),
         "secret_store_unavailable" => Ok(ShellError("Desktop secret storage is unavailable")),
+        "runtime_already_active" => Ok(ShellError("Desktop runtime is already active")),
         "runtime_unavailable" => Ok(ShellError("Desktop runtime could not be started")),
         _ => Err(ShellError(
             "Desktop bootstrap failure contract did not match",
@@ -1793,6 +1795,26 @@ mod tests {
             error.to_string(),
             "Desktop storage schema requires a newer app"
         );
+
+        let (sender, mut events) = tauri::async_runtime::channel(2);
+        sender
+            .send(CommandEvent::Stdout(progress_frame()))
+            .await
+            .expect("send bootstrap progress");
+        sender
+            .send(CommandEvent::Stdout(failure_frame(
+                "runtime_already_active",
+            )))
+            .await
+            .expect("send bootstrap failure");
+        let error = receive_descriptor_with_timeouts(
+            &mut events,
+            Duration::from_millis(10),
+            Duration::from_millis(100),
+        )
+        .await
+        .expect_err("active runtime failure produced a descriptor");
+        assert_eq!(error.to_string(), "Desktop runtime is already active");
 
         let (sender, mut events) = tauri::async_runtime::channel(2);
         sender

@@ -14,13 +14,14 @@ import (
 	"github.com/vibe-agi/vibermate/internal/desktophost"
 	"github.com/vibe-agi/vibermate/internal/exchange"
 	"github.com/vibe-agi/vibermate/internal/hostcontract"
+	"github.com/vibe-agi/vibermate/internal/instanceguard"
 	"github.com/vibe-agi/vibermate/internal/offlinehold"
 	"github.com/vibe-agi/vibermate/internal/productruntime"
 	"github.com/vibe-agi/vibermate/internal/secretstore"
 	"github.com/vibe-agi/vibermate/internal/toolapproval"
 )
 
-func TestDaemonPublishesBootstrapThenShutsDownWithOwnerContext(t *testing.T) {
+func TestDaemonPublishesBootstrapThenParentEOFReleasesGeneration(t *testing.T) {
 	t.Parallel()
 
 	root := t.TempDir()
@@ -37,12 +38,21 @@ func TestDaemonPublishesBootstrapThenShutsDownWithOwnerContext(t *testing.T) {
 		t.Fatal(err)
 	}
 	bootstrapReader, bootstrapWriter := io.Pipe()
+	parentLifetime, parentOwner := io.Pipe()
 	defer bootstrapReader.Close()
 	defer bootstrapWriter.Close()
-	ctx, cancel := context.WithCancel(context.Background())
+	defer parentOwner.Close()
+	parentOwnership, err := desktopdaemon.NewParentOwnership(
+		context.Background(),
+		parentLifetime,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer parentOwnership.Close()
 	done := make(chan error, 1)
 	go func() {
-		done <- desktopdaemon.Run(ctx, desktopdaemon.Options{
+		done <- desktopdaemon.Run(parentOwnership.Context(), desktopdaemon.Options{
 			Host: desktophost.DefaultOptions(hostPaths, productruntime.Options{
 				Paths:          runtimePaths,
 				Host:           hostcontract.Desktop(),
@@ -76,14 +86,23 @@ func TestDaemonPublishesBootstrapThenShutsDownWithOwnerContext(t *testing.T) {
 		descriptor.BootstrapNonce == "" {
 		t.Fatalf("bootstrap descriptor = %+v", descriptor)
 	}
-	cancel()
+	if err := parentOwner.Close(); err != nil {
+		t.Fatal(err)
+	}
 	select {
 	case err := <-done:
 		if err != nil {
 			t.Fatal(err)
 		}
 	case <-time.After(20 * time.Second):
-		t.Fatal("Desktop daemon did not converge after cancellation")
+		t.Fatal("Desktop daemon did not converge after parent EOF")
+	}
+	guard, err := instanceguard.Acquire(hostPaths.LockPath())
+	if err != nil {
+		t.Fatalf("generation lock remained owned after parent EOF: %v", err)
+	}
+	if err := guard.Release(); err != nil {
+		t.Fatal(err)
 	}
 }
 

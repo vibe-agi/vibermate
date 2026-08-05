@@ -280,6 +280,15 @@ describe("Desktop host connection", () => {
     });
   });
 
+  it("classifies an already active runtime without exposing native detail", async () => {
+    tauri.invoke.mockRejectedValue("Desktop runtime is already active");
+
+    await expect(connectDesktopControl()).rejects.toMatchObject({
+      name: "DesktopBootstrapProblem",
+      messageKey: "app.bootstrap.failure.runtime_already_active",
+    });
+  });
+
   it("times out one native wait but reuses its late one-shot delivery", async () => {
     vi.useFakeTimers();
     let deliverSession: ((payload: unknown) => void) | undefined;

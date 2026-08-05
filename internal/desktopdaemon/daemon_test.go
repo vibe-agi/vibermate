@@ -5,11 +5,13 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"io"
 	"testing"
 	"time"
 
 	"github.com/vibe-agi/vibermate/internal/desktopbootstrap"
 	"github.com/vibe-agi/vibermate/internal/desktophost"
+	"github.com/vibe-agi/vibermate/internal/instanceguard"
 	"github.com/vibe-agi/vibermate/internal/runtimepersistence"
 )
 
@@ -21,6 +23,11 @@ func TestStartupFailureClassificationIsClosed(t *testing.T) {
 		err    error
 		reason desktopbootstrap.FailureReason
 	}{
+		{
+			name:   "generation already active",
+			err:    errors.Join(errors.New("wrapped"), instanceguard.ErrAlreadyOwned),
+			reason: desktopbootstrap.FailureRuntimeAlreadyActive,
+		},
 		{
 			name:   "future schema",
 			err:    errors.Join(errors.New("wrapped"), runtimepersistence.ErrSchemaNewerThanBinary),
@@ -71,5 +78,45 @@ func TestRunPublishesTypedFailureAfterProgress(t *testing.T) {
 	}
 	if failure.Reason != desktopbootstrap.FailureRuntimeUnavailable {
 		t.Fatalf("failure reason = %q", failure.Reason)
+	}
+}
+
+func TestParentLifetimeEOFRevokesDaemonOwnership(t *testing.T) {
+	t.Parallel()
+
+	reader, writer := io.Pipe()
+	ownership, err := NewParentOwnership(context.Background(), reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ownership.Close()
+
+	if err = writer.Close(); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-ownership.Context().Done():
+	case <-time.After(time.Second):
+		t.Fatal("parent lifetime EOF did not cancel daemon ownership")
+	}
+}
+
+func TestParentLifetimeInputFailsClosed(t *testing.T) {
+	t.Parallel()
+
+	reader, writer := io.Pipe()
+	ownership, err := NewParentOwnership(context.Background(), reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ownership.Close()
+
+	if _, err = writer.Write([]byte{0x01}); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-ownership.Context().Done():
+	case <-time.After(time.Second):
+		t.Fatal("parent lifetime input did not fail closed")
 	}
 }

@@ -223,6 +223,7 @@
   "activity.title": "请求活动",
   "app.bootstrap.failed": "无法启动本机桌面运行时。",
   "app.bootstrap.failure.runtime_unavailable": "本机运行时无法启动。请重试；未向提供商发送请求。",
+  "app.bootstrap.failure.runtime_already_active": "另一个 VibeMate 运行时正在运行。请关闭另一个 VibeMate 窗口后重试；未向提供商发送请求。",
   "app.bootstrap.failure.secret_store_unavailable": "系统密钥存储已锁定或不可用。请解锁后重试。",
   "app.bootstrap.failure.storage_schema_newer": "此本机数据由较新版本的 VibeMate 创建。请先更新 VibeMate；数据未被修改。",
   "app.bootstrap.failure.storage_unavailable": "VibeMate 无法打开本机数据。请重试；VibeMate 未重置或删除数据。",

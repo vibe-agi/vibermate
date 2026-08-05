@@ -313,9 +313,12 @@ read/write control session to the main Webview. Development and packaged
 Webview origins are selected explicitly and never accepted together. Bootstrap
 is a two-frame, capability-free progress/final contract with separate progress
 and ready deadlines. Storage-newer-than-binary, storage unavailable,
-SecretStore unavailable, and generic runtime failures cross as closed reason
-codes and map to synchronized localized recovery guidance; raw Go/Rust errors
-do not cross into the Webview.
+SecretStore unavailable, an already active generation, and generic runtime
+failures cross as closed reason codes and map to synchronized localized
+recovery guidance; raw Go/Rust errors do not cross into the Webview. The native
+shell also lends the daemon an inherited parent-lifetime pipe. Closing that
+pipe cancels and drains the daemon even when the shell is killed before its
+ordinary exit handler can run, so an orphan cannot retain the generation lock.
 
 After readiness, the Rust host retains the packaged child and its generation
 identity. An unexpected exit before or after one-shot session delivery closes

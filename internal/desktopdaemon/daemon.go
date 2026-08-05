@@ -16,6 +16,7 @@ import (
 	"github.com/vibe-agi/vibermate/internal/desktophost"
 	"github.com/vibe-agi/vibermate/internal/exchange"
 	"github.com/vibe-agi/vibermate/internal/hostcontract"
+	"github.com/vibe-agi/vibermate/internal/instanceguard"
 	"github.com/vibe-agi/vibermate/internal/offlinehold"
 	"github.com/vibe-agi/vibermate/internal/productruntime"
 	"github.com/vibe-agi/vibermate/internal/runtimepersistence"
@@ -44,6 +45,9 @@ func ProductionOptions(
 	}
 	if secretsFactory == nil {
 		return Options{}, errors.New("Desktop SecretStore factory is nil")
+	}
+	if bootstrapWriter == nil {
+		return Options{}, errors.New("Desktop bootstrap descriptor is unavailable")
 	}
 	if webviewOrigin != "tauri://localhost" &&
 		webviewOrigin != "http://127.0.0.1:1420" {
@@ -152,6 +156,8 @@ func Run(ctx context.Context, options Options) error {
 func classifyStartupFailure(err error) desktopbootstrap.Failure {
 	reason := desktopbootstrap.FailureRuntimeUnavailable
 	switch {
+	case errors.Is(err, instanceguard.ErrAlreadyOwned):
+		reason = desktopbootstrap.FailureRuntimeAlreadyActive
 	case errors.Is(err, runtimepersistence.ErrSchemaNewerThanBinary):
 		reason = desktopbootstrap.FailureStorageSchemaNewer
 	case errors.Is(err, runtimepersistence.ErrInvalidDatabasePath),

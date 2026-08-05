@@ -32,6 +32,7 @@ type FailureReason string
 
 const (
 	FailureRuntimeUnavailable     FailureReason = "runtime_unavailable"
+	FailureRuntimeAlreadyActive   FailureReason = "runtime_already_active"
 	FailureSecretStoreUnavailable FailureReason = "secret_store_unavailable"
 	FailureStorageSchemaNewer     FailureReason = "storage_schema_newer"
 	FailureStorageUnavailable     FailureReason = "storage_unavailable"
@@ -55,6 +56,7 @@ func (failure Failure) Validate() error {
 	}
 	switch failure.Reason {
 	case FailureRuntimeUnavailable,
+		FailureRuntimeAlreadyActive,
 		FailureSecretStoreUnavailable,
 		FailureStorageSchemaNewer,
 		FailureStorageUnavailable:

@@ -1,6 +1,7 @@
 export type BootstrapFailureMessageKey =
   | "app.bootstrap.failed"
   | "app.bootstrap.failure.runtime_unavailable"
+  | "app.bootstrap.failure.runtime_already_active"
   | "app.bootstrap.failure.secret_store_unavailable"
   | "app.bootstrap.failure.storage_schema_newer"
   | "app.bootstrap.failure.storage_unavailable";

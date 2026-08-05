@@ -153,6 +153,8 @@ const nativeStartupMessageKeys: Readonly<
 > = {
   "Desktop runtime could not be started":
     "app.bootstrap.failure.runtime_unavailable",
+  "Desktop runtime is already active":
+    "app.bootstrap.failure.runtime_already_active",
   "Desktop secret storage is unavailable":
     "app.bootstrap.failure.secret_store_unavailable",
   "Desktop storage schema requires a newer app":

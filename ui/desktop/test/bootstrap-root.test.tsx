@@ -91,6 +91,20 @@ describe("BootstrapRoot", () => {
     ).toBe(false);
   });
 
+  it("explains how to recover from another active Desktop runtime", async () => {
+    const connect = vi.fn<() => Promise<ControlClient>>().mockRejectedValue(
+      new DesktopBootstrapProblem(
+        "app.bootstrap.failure.runtime_already_active",
+      ),
+    );
+
+    await renderBootstrap(connect);
+
+    const alert = await screen.findByRole("alert");
+    expect(alert.textContent).toContain("Close the other VibeMate window");
+    expect(alert.textContent).toContain("No provider request was sent");
+  });
+
   it("announces the pending desktop connection as busy", async () => {
     const connect = vi.fn(
       () => new Promise<ControlClient>(() => undefined),

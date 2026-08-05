@@ -223,6 +223,7 @@
   "activity.title": "Request activity",
   "app.bootstrap.failed": "The local desktop runtime could not be started.",
   "app.bootstrap.failure.runtime_unavailable": "The local runtime could not start. Retry; no provider request was sent.",
+  "app.bootstrap.failure.runtime_already_active": "Another VibeMate runtime is already active. Close the other VibeMate window, then try again. No provider request was sent.",
   "app.bootstrap.failure.secret_store_unavailable": "The system secret store is locked or unavailable. Unlock it, then retry.",
   "app.bootstrap.failure.storage_schema_newer": "This local data was created by a newer VibeMate version. Update VibeMate before opening it; the data was not changed.",
   "app.bootstrap.failure.storage_unavailable": "VibeMate could not open its local data. Retry; VibeMate did not reset or delete it.",

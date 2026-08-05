@@ -14,6 +14,20 @@ func TestParseArgumentsRequiresExplicitHostPathsAndPipe(t *testing.T) {
 			"--data-dir=/tmp/data",
 			"--webview-origin=https://example.com",
 			"--bootstrap-fd=1",
+			"--parent-lifetime-fd=0",
+		},
+		{
+			"--app-cache-dir=/tmp/cache",
+			"--data-dir=/tmp/data",
+			"--webview-origin=tauri://localhost",
+			"--bootstrap-fd=1",
+		},
+		{
+			"--app-cache-dir=/tmp/cache",
+			"--data-dir=/tmp/data",
+			"--webview-origin=tauri://localhost",
+			"--bootstrap-fd=1",
+			"--parent-lifetime-fd=2",
 		},
 		{"--unknown=value"},
 	} {
