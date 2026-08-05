@@ -35,6 +35,7 @@ const (
 	CommitOutcomeIndeterminate CommitOutcome = "indeterminate"
 	CommitOutcomeConflict      CommitOutcome = "revision_conflict"
 	CommitOutcomeNotConfigured CommitOutcome = "access_not_configured"
+	CommitOutcomeRetired       CommitOutcome = "access_retired"
 )
 
 // CommitResult contains authoritative state when the outcome makes it known.
@@ -56,4 +57,5 @@ type Repository interface {
 	AggregateReader
 	LoadAll(context.Context) ([]Aggregate, error)
 	CompareAndSwap(context.Context, Mutation) (CommitResult, error)
+	DeletionRepository
 }

@@ -202,13 +202,15 @@ func newAuditFixture(
 		captureReader = captureReaders[0]
 	}
 	application, err := desktopcontrol.New(desktopcontrol.Options{
-		Readiness:     readyState(true),
-		Status:        runtime,
-		Accesses:      runtime.AccessWriter(),
-		AccessCatalog: runtime.AccessCatalog(),
-		Resolver:      runtime.SnapshotResolver(),
-		Credentials:   runtime.Credentials(),
-		Activities:    runtime.Activities(),
+		Readiness:      readyState(true),
+		Status:         runtime,
+		Accesses:       runtime.AccessWriter(),
+		AccessDeletion: runtime.AccessDeleter(),
+		Clock:          desktopcontrol.SystemClock{},
+		AccessCatalog:  runtime.AccessCatalog(),
+		Resolver:       runtime.SnapshotResolver(),
+		Credentials:    runtime.Credentials(),
+		Activities:     runtime.Activities(),
 		Connections: fixedConnectionReader{
 			page: connectionevent.Page{Items: []connectionevent.Record{
 				sampleConnection(),

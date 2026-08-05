@@ -2856,6 +2856,122 @@ describe("Desktop control client", () => {
     ).toBeTruthy();
   });
 
+  it("binds Access deletion confirmation to a read preview and one idempotent DELETE", async () => {
+    const bootstrap = session();
+    const calls: FetchCall[] = [];
+    const impactToken = "A".repeat(43);
+    const fetchImplementation = withSessionState(
+      bootstrap,
+      (url, init) =>
+        url.pathname.endsWith("/deletion-preview")
+          ? jsonResponse({
+              accessId: "work",
+              name: "Work Claude",
+              revision: 4,
+              status: "disabled",
+              workspaceBindingCount: 1,
+              activeCaptureRunCount: 0,
+              proxyClientBindingCount: 0,
+              exclusiveSecretCount: 1,
+              sharedSecretCount: 1,
+              impactToken,
+              blockers: ["confirm_workspace_retirement"],
+            })
+          : init.method === "DELETE"
+            ? jsonResponse({ outcome: "deleted", revision: 4 })
+            : problemResponse(404, "access_not_configured"),
+      calls,
+    );
+    const client = await createControlClient(bootstrap, fetchImplementation);
+
+    await expect(client.previewAccessDeletion("work", 4)).resolves.toMatchObject({
+      accessId: "work",
+      impactToken,
+      workspaceBindingCount: 1,
+    });
+    await expect(
+      client.deleteAccess("work", 4, impactToken, true),
+    ).resolves.toEqual({ outcome: "deleted", revision: 4 });
+
+    const previewCall = calls.find(({ url }) =>
+      url.pathname.endsWith("/deletion-preview"),
+    );
+    expect(previewCall?.init.method).toBe("GET");
+    expect(previewCall?.init.body).toBeUndefined();
+    const previewHeaders = new Headers(previewCall?.init.headers);
+    expect(previewHeaders.get("Authorization")).toBe(
+      `Bearer ${bootstrap.readToken}`,
+    );
+    expect(previewHeaders.get("If-Match")).toBe("4");
+    expect(previewHeaders.get("Idempotency-Key")).toBeNull();
+
+    const deleteCall = calls.find(({ init }) => init.method === "DELETE");
+    expect(JSON.parse(String(deleteCall?.init.body))).toEqual({
+      impactToken,
+      retireWorkspaceBindings: true,
+    });
+    const deleteHeaders = new Headers(deleteCall?.init.headers);
+    expect(deleteHeaders.get("Authorization")).toBe(
+      `Bearer ${bootstrap.writeToken}`,
+    );
+    expect(deleteHeaders.get("If-Match")).toBe("4");
+    expect(deleteHeaders.get("Idempotency-Key")).toBeTruthy();
+  });
+
+  it.each([
+    ["unknown field", { leakedField: "not-closed" }],
+    ["active run without a workspace", {
+      workspaceBindingCount: 0,
+      activeCaptureRunCount: 1,
+      blockers: ["active_capture_runs"],
+    }],
+    ["missing active-run blocker", {
+      workspaceBindingCount: 1,
+      activeCaptureRunCount: 1,
+      blockers: ["confirm_workspace_retirement"],
+    }],
+    ["missing remote-client blocker", {
+      proxyClientBindingCount: 1,
+      blockers: [],
+    }],
+    ["enabled Access without a disable blocker", {
+      status: "enabled",
+      blockers: [],
+    }],
+    ["duplicate blocker", {
+      workspaceBindingCount: 1,
+      blockers: [
+        "confirm_workspace_retirement",
+        "confirm_workspace_retirement",
+      ],
+    }],
+  ] as const)("rejects a malformed Access deletion preview: %s", async (_name, patch) => {
+    const bootstrap = session();
+    const impactToken = "A".repeat(43);
+    const response = {
+      accessId: "work",
+      name: "Work Claude",
+      revision: 4,
+      status: "disabled",
+      workspaceBindingCount: 0,
+      activeCaptureRunCount: 0,
+      proxyClientBindingCount: 0,
+      exclusiveSecretCount: 1,
+      sharedSecretCount: 0,
+      impactToken,
+      blockers: [],
+      ...patch,
+    };
+    const client = await createControlClient(
+      bootstrap,
+      withSessionState(bootstrap, () => jsonResponse(response), []),
+    );
+
+    await expect(client.previewAccessDeletion("work", 4)).rejects.toThrow(
+      ControlContractError,
+    );
+  });
+
   it("replays a lost Access receipt with the exact same command", async () => {
     const bootstrap = session();
     const calls: FetchCall[] = [];

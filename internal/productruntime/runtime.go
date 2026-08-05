@@ -238,6 +238,7 @@ func startWithBuilders(
 		repository:   storageResult.store.AccessRepository(),
 		rootRevision: certificateAuthority.Identity().Revision(),
 		leafCache:    certificateAuthority,
+		secrets:      options.Secrets,
 	})
 	if err != nil {
 		return fail("Access recovery", err)
@@ -482,14 +483,15 @@ func startWithBuilders(
 		return fail("blind tunnel dialer", err)
 	}
 	proxy, err := builders.proxy.Build(proxyBuildRequest{
-		ownerContext: ownerContext,
-		admissions:   captureAdmissions,
-		ingress:      accesses,
-		exchanges:    exchanges,
-		original:     original,
-		certificates: certificateAuthority,
-		connections:  connections,
-		policy:       connectionRules.Source(),
+		ownerContext:   ownerContext,
+		admissions:     captureAdmissions,
+		ingress:        accesses,
+		accessRequests: accesses,
+		exchanges:      exchanges,
+		original:       original,
+		certificates:   certificateAuthority,
+		connections:    connections,
+		policy:         connectionRules.Source(),
 		// A rule that asks blocks the connection on the same ApprovalCenter a
 		// tool intent goes to, so a person answers both in one place.
 		approvals:    approvals,
@@ -693,6 +695,13 @@ func (r *Runtime) SchemaStateReader() runtimepersistence.SchemaStateReader {
 
 // AccessWriter returns the serialized Access aggregate mutation boundary.
 func (r *Runtime) AccessWriter() access.Writer {
+	return r.accesses
+}
+
+// AccessDeleter returns the preview-confirm-drain deletion boundary. It is
+// separate from Writer so a control surface cannot mistake an aggregate write
+// for authority to retire credentials and durable workspace references.
+func (r *Runtime) AccessDeleter() access.Deleter {
 	return r.accesses
 }
 

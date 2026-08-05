@@ -461,11 +461,18 @@ func newManager(
 		store.AccessRepository(),
 		testCompiler(t),
 		projection,
+		discardSecretRetirer{},
 	)
 	if err != nil {
 		t.Fatalf("construct Access manager: %v", err)
 	}
 	return manager
+}
+
+type discardSecretRetirer struct{}
+
+func (discardSecretRetirer) RetireSecret(context.Context, access.SecretRef) error {
+	return nil
 }
 
 func shutdownManager(t *testing.T, manager *access.Manager) {

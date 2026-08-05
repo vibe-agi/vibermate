@@ -78,6 +78,7 @@ type accessBuildRequest struct {
 	repository   access.Repository
 	rootRevision certidentity.RootRevision
 	leafCache    access.LeafCacheInvalidator
+	secrets      secretstore.Store
 }
 
 type accessRuntime interface {
@@ -91,6 +92,8 @@ type accessRuntime interface {
 	access.ActivePlanCatalog
 	access.ProviderProbeCatalog
 	access.ProjectionHealthReader
+	access.RequestUseAdmitter
+	access.Deleter
 	Shutdown(context.Context) error
 }
 
@@ -115,7 +118,35 @@ func (productionAccessBuilder) Build(
 	if err != nil {
 		return nil, fmt.Errorf("build Access projection: %w", err)
 	}
-	return access.NewManager(ctx, request.repository, compiler, projection)
+	return access.NewManager(
+		ctx,
+		request.repository,
+		compiler,
+		projection,
+		accessSecretRetirer{store: request.secrets},
+	)
+}
+
+type accessSecretRetirer struct {
+	store secretstore.Store
+}
+
+func (retirer accessSecretRetirer) RetireSecret(
+	ctx context.Context,
+	reference access.SecretRef,
+) error {
+	if retirer.store == nil {
+		return secretstore.ErrUnavailable
+	}
+	physicalReference, err := secretstore.ParseReference(reference.String())
+	if err != nil {
+		return secretstore.ErrInvalidReference
+	}
+	err = retirer.store.Delete(ctx, physicalReference)
+	if errors.Is(err, secretstore.ErrNotFound) {
+		return nil
+	}
+	return err
 }
 
 type credentialBuildRequest struct {
@@ -725,18 +756,19 @@ func (productionLocalCABuilder) Build(
 }
 
 type proxyBuildRequest struct {
-	ownerContext context.Context
-	admissions   captureadmission.Authorizer
-	ingress      loopbackproxy.IngressAuthority
-	exchanges    exchange.Executor
-	original     loopbackproxy.OriginalClient
-	certificates loopbackproxy.CertificateAuthority
-	connections  connectionevent.Runtime
-	policy       connectionpolicy.Source
-	approvals    loopbackproxy.NetworkApprovals
-	blindTunnels loopbackproxy.BlindTunnelDialer
-	egressAudit  egressaudit.Writer
-	random       io.Reader
+	ownerContext   context.Context
+	admissions     captureadmission.Authorizer
+	ingress        loopbackproxy.IngressAuthority
+	accessRequests access.RequestUseAdmitter
+	exchanges      exchange.Executor
+	original       loopbackproxy.OriginalClient
+	certificates   loopbackproxy.CertificateAuthority
+	connections    connectionevent.Runtime
+	policy         connectionpolicy.Source
+	approvals      loopbackproxy.NetworkApprovals
+	blindTunnels   loopbackproxy.BlindTunnelDialer
+	egressAudit    egressaudit.Writer
+	random         io.Reader
 }
 
 type proxyRuntime interface {
@@ -764,18 +796,19 @@ func (productionProxyBuilder) Build(
 		return nil, fmt.Errorf("build PathCapability catalog: %w", err)
 	}
 	return loopbackproxy.New(loopbackproxy.Options{
-		OwnerContext: request.ownerContext,
-		Admissions:   request.admissions,
-		Ingress:      request.ingress,
-		Paths:        paths,
-		Exchanges:    request.exchanges,
-		Original:     request.original,
-		Certificates: request.certificates,
-		Connections:  request.connections,
-		Policy:       request.policy,
-		Approvals:    request.approvals,
-		BlindTunnels: request.blindTunnels,
-		EgressAudit:  request.egressAudit,
+		OwnerContext:   request.ownerContext,
+		Admissions:     request.admissions,
+		Ingress:        request.ingress,
+		AccessRequests: request.accessRequests,
+		Paths:          paths,
+		Exchanges:      request.exchanges,
+		Original:       request.original,
+		Certificates:   request.certificates,
+		Connections:    request.connections,
+		Policy:         request.policy,
+		Approvals:      request.approvals,
+		BlindTunnels:   request.blindTunnels,
+		EgressAudit:    request.egressAudit,
 		ExchangeIDs: loopbackproxy.NewRandomExchangeIDSource(
 			request.random,
 		),

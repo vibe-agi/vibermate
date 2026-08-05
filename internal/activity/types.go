@@ -33,6 +33,7 @@ const (
 	KindAccessApplied            Kind = "access.applied"
 	KindAccessDisabled           Kind = "access.disabled"
 	KindAccessEnabled            Kind = "access.enabled"
+	KindAccessDeleted            Kind = "access.deleted"
 	KindCredentialSecretReplaced Kind = "credential.secret_replaced"
 	KindOfflineHoldEntered       Kind = "offline_hold.entered"
 	KindOfflineHoldResumed       Kind = "offline_hold.resumed"
@@ -65,6 +66,7 @@ func (event Event) Validate() error {
 	case KindAccessApplied,
 		KindAccessDisabled,
 		KindAccessEnabled,
+		KindAccessDeleted,
 		KindCredentialSecretReplaced,
 		KindOfflineHoldEntered,
 		KindOfflineHoldResumed,
@@ -92,7 +94,8 @@ func (event Event) Validate() error {
 	}
 	if (event.Kind == KindAccessApplied ||
 		event.Kind == KindAccessDisabled ||
-		event.Kind == KindAccessEnabled) && event.AccessID.String() == "" {
+		event.Kind == KindAccessEnabled ||
+		event.Kind == KindAccessDeleted) && event.AccessID.String() == "" {
 		return fmt.Errorf("%w: Access event has no Access ID", ErrInvalidEvent)
 	}
 	if event.Transport != nil {

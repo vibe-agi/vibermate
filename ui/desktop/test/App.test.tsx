@@ -503,6 +503,27 @@ function clientFixture() {
             planHash: "b".repeat(64),
           },
     ),
+    previewAccessDeletion: vi.fn<ControlClient["previewAccessDeletion"]>(
+      async (accessId, expectedRevision) => ({
+        accessId,
+        name: "Work Claude",
+        revision: expectedRevision,
+        status: "disabled" as const,
+        workspaceBindingCount: 0,
+        activeCaptureRunCount: 0,
+        proxyClientBindingCount: 0,
+        exclusiveSecretCount: 1,
+        sharedSecretCount: 0,
+        impactToken: "A".repeat(43),
+        blockers: [],
+      }),
+    ),
+    deleteAccess: vi.fn<ControlClient["deleteAccess"]>(
+      async (_accessId, expectedRevision) => ({
+        outcome: "deleted" as const,
+        revision: expectedRevision,
+      }),
+    ),
     accessPlan: vi.fn(
       async (accessId: string): Promise<AccessPlanSummary> => {
         if (accessId !== workAccess.accessId) {
@@ -1271,6 +1292,142 @@ describe("Desktop dashboard", () => {
     await waitFor(() =>
       expect(screen.getByRole("button", { name: "Disable" })).toBeTruthy(),
     );
+  });
+
+  it("previews exact deletion impact before retiring a disabled Access", async () => {
+    const i18n = await createI18n("en-US");
+    const client = clientFixture();
+    const disabledAccess: AccessDirectoryItem = {
+      ...workAccess,
+      revision: 4,
+      status: "disabled",
+    };
+    let deleted = false;
+    client.accesses.mockImplementation(async () => ({
+      items: deleted ? [] : [disabledAccess],
+    }));
+    client.access.mockResolvedValue(accessDetailFixture(disabledAccess));
+    client.previewAccessDeletion.mockResolvedValue({
+      accessId: "work",
+      name: "Work Claude",
+      revision: 4,
+      status: "disabled",
+      workspaceBindingCount: 2,
+      activeCaptureRunCount: 0,
+      proxyClientBindingCount: 0,
+      exclusiveSecretCount: 1,
+      sharedSecretCount: 1,
+      impactToken: "A".repeat(43),
+      blockers: ["confirm_workspace_retirement"],
+    });
+    client.deleteAccess.mockImplementation(async () => {
+      deleted = true;
+      return { outcome: "deleted" as const, revision: 4 };
+    });
+    const model = new DashboardQueryRuntime(client, 60_000);
+    render(
+      <I18nextProvider i18n={i18n}>
+        <Dashboard initialEntry="/access" model={model} />
+      </I18nextProvider>,
+    );
+
+    await waitForDashboard();
+    fireEvent.click(
+      await screen.findByRole("button", { name: /^Work Claude/u }),
+    );
+    fireEvent.click(await screen.findByRole("button", { name: "Delete" }));
+
+    expect(
+      await screen.findByRole("group", {
+        name: "Access deletion confirmation",
+      }),
+    ).toBeTruthy();
+    await waitFor(() =>
+      expect(client.previewAccessDeletion).toHaveBeenCalledWith(
+        "work",
+        4,
+        expect.any(AbortSignal),
+      ),
+    );
+    expect(
+      screen.getByText(
+        "Removes 2 workspace assignments and 1 saved credentials. Activity history remains.",
+      ),
+    ).toBeTruthy();
+    expect(
+      screen.getByText(
+        "1 shared credentials remain because another Access still uses them.",
+      ),
+    ).toBeTruthy();
+    const confirmDelete = screen.getByRole("button", { name: "Delete Access" });
+    expect((confirmDelete as HTMLButtonElement).disabled).toBe(true);
+    fireEvent.click(
+      screen.getByRole("checkbox", {
+        name: "Also remove 2 workspace assignments",
+      }),
+    );
+    expect((confirmDelete as HTMLButtonElement).disabled).toBe(false);
+    fireEvent.click(confirmDelete);
+
+    await waitFor(() =>
+      expect(client.deleteAccess).toHaveBeenCalledWith(
+        "work",
+        4,
+        "A".repeat(43),
+        true,
+        expect.any(AbortSignal),
+      ),
+    );
+    await waitFor(() =>
+      expect(screen.queryByRole("button", { name: /^Work Claude/u })).toBeNull(),
+    );
+  });
+
+  it("keeps deletion blocked while a remote client policy references the Access", async () => {
+    const i18n = await createI18n("en-US");
+    const client = clientFixture();
+    const disabledAccess: AccessDirectoryItem = {
+      ...workAccess,
+      revision: 4,
+      status: "disabled",
+    };
+    client.accesses.mockResolvedValue({ items: [disabledAccess] });
+    client.access.mockResolvedValue(accessDetailFixture(disabledAccess));
+    client.previewAccessDeletion.mockResolvedValue({
+      accessId: "work",
+      name: "Work Claude",
+      revision: 4,
+      status: "disabled",
+      workspaceBindingCount: 0,
+      activeCaptureRunCount: 0,
+      proxyClientBindingCount: 2,
+      exclusiveSecretCount: 1,
+      sharedSecretCount: 0,
+      impactToken: "A".repeat(43),
+      blockers: ["proxy_client_bindings"],
+    });
+    const model = new DashboardQueryRuntime(client, 60_000);
+    render(
+      <I18nextProvider i18n={i18n}>
+        <Dashboard initialEntry="/access" model={model} />
+      </I18nextProvider>,
+    );
+
+    await waitForDashboard();
+    fireEvent.click(
+      await screen.findByRole("button", { name: /^Work Claude/u }),
+    );
+    fireEvent.click(await screen.findByRole("button", { name: "Delete" }));
+
+    expect(
+      await screen.findByText(
+        "2 remote client policies still reference this Access. Update or remove them first.",
+      ),
+    ).toBeTruthy();
+    const confirmDelete = screen.getByRole("button", { name: "Delete Access" });
+    expect((confirmDelete as HTMLButtonElement).disabled).toBe(true);
+    fireEvent.click(confirmDelete);
+    expect(client.deleteAccess).not.toHaveBeenCalled();
   });
 
   it("adds a named provider route, saves its key, and only then makes it current", async () => {

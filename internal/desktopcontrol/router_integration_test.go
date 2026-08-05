@@ -100,17 +100,19 @@ func TestDesktopControlAppliesAccessAndControlsOfflineHoldWithScopedAuth(
 		t.Fatal(err)
 	}
 	application, err := desktopcontrol.New(desktopcontrol.Options{
-		Readiness:     readyState(true),
-		Status:        runtime,
-		Accesses:      runtime.AccessWriter(),
-		AccessCatalog: runtime.AccessCatalog(),
-		Resolver:      runtime.SnapshotResolver(),
-		Credentials:   runtime.Credentials(),
-		Activities:    runtime.Activities(),
-		Connections:   runtime.ConnectionEvents(),
-		Egress:        runtime.EgressAttempts(),
-		Approvals:     runtime.ToolApprovals(),
-		Offline:       runtime,
+		Readiness:      readyState(true),
+		Status:         runtime,
+		Accesses:       runtime.AccessWriter(),
+		AccessDeletion: runtime.AccessDeleter(),
+		Clock:          desktopcontrol.SystemClock{},
+		AccessCatalog:  runtime.AccessCatalog(),
+		Resolver:       runtime.SnapshotResolver(),
+		Credentials:    runtime.Credentials(),
+		Activities:     runtime.Activities(),
+		Connections:    runtime.ConnectionEvents(),
+		Egress:         runtime.EgressAttempts(),
+		Approvals:      runtime.ToolApprovals(),
+		Offline:        runtime,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -884,6 +886,159 @@ func TestDesktopControlAppliesAccessAndControlsOfflineHoldWithScopedAuth(
 	if !foundApply || !foundCredential || !foundDisabled || !foundEnabled {
 		t.Fatalf("raw Activity page lost management evidence: %+v", rawPage)
 	}
+
+	deleteLifecycleBody, err := json.Marshal(desktopcontrol.AccessStatusUpdate{
+		Status: access.AccessStatusDisabled,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	deletedAccessDisabled := doMutationWithMethod(
+		t,
+		router,
+		authority,
+		http.MethodPatch,
+		"/api/v1/accesses/access-control",
+		writeToken,
+		3,
+		"access-disable-for-delete-0001",
+		deleteLifecycleBody,
+	)
+	if deletedAccessDisabled.Code != http.StatusOK {
+		t.Fatalf(
+			"disable before delete code=%d body=%s",
+			deletedAccessDisabled.Code,
+			deletedAccessDisabled.Body.Bytes(),
+		)
+	}
+	deletionPreview := doRevisionedRequest(
+		t,
+		router,
+		authority,
+		http.MethodGet,
+		"/api/v1/accesses/access-control/deletion-preview",
+		readToken,
+		4,
+		nil,
+	)
+	if deletionPreview.Code != http.StatusOK {
+		t.Fatalf(
+			"deletion preview code=%d body=%s",
+			deletionPreview.Code,
+			deletionPreview.Body.Bytes(),
+		)
+	}
+	var deletionView desktopcontrol.AccessDeletionPreviewResponse
+	decodeResponse(t, deletionPreview, &deletionView)
+	if deletionView.AccessID != "access-control" ||
+		deletionView.Revision != 4 ||
+		deletionView.Status != access.AccessStatusDisabled ||
+		deletionView.ExclusiveSecretCount != 1 ||
+		deletionView.SharedSecretCount != 0 ||
+		deletionView.ProxyClientBindingCount != 0 ||
+		deletionView.ImpactToken == "" ||
+		len(deletionView.Blockers) != 0 {
+		t.Fatalf("deletion preview = %+v", deletionView)
+	}
+	deletionBody, err := json.Marshal(desktopcontrol.AccessDeletionInput{
+		ImpactToken: deletionView.ImpactToken,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	deleted := doMutationWithMethod(
+		t,
+		router,
+		authority,
+		http.MethodDelete,
+		"/api/v1/accesses/access-control",
+		writeToken,
+		4,
+		"access-delete-0001",
+		deletionBody,
+	)
+	if deleted.Code != http.StatusOK {
+		t.Fatalf("delete code=%d body=%s", deleted.Code, deleted.Body.Bytes())
+	}
+	var deletionResult desktopcontrol.AccessDeletionResponse
+	decodeResponse(t, deleted, &deletionResult)
+	if deletionResult.Outcome != access.DeleteOutcomeCommitted ||
+		deletionResult.Revision != 4 {
+		t.Fatalf("delete result = %+v", deletionResult)
+	}
+	repeatedDelete := doMutationWithMethod(
+		t,
+		router,
+		authority,
+		http.MethodDelete,
+		"/api/v1/accesses/access-control",
+		writeToken,
+		4,
+		"access-delete-0002",
+		deletionBody,
+	)
+	if repeatedDelete.Code != http.StatusOK {
+		t.Fatalf(
+			"repeated delete code=%d body=%s",
+			repeatedDelete.Code,
+			repeatedDelete.Body.Bytes(),
+		)
+	}
+	activityPage, err := runtime.Activities().List(t.Context(), activity.PageRequest{
+		Limit: activity.MaxPageSize,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	deletedEvents := 0
+	for _, event := range activityPage.Items {
+		if event.Kind == activity.KindAccessDeleted &&
+			event.AccessID == "access-control" {
+			deletedEvents++
+		}
+	}
+	if deletedEvents != 1 {
+		t.Fatalf("Access deletion activity count = %d, want 1", deletedEvents)
+	}
+	missingAfterDelete := doRequest(
+		t,
+		router,
+		authority,
+		http.MethodGet,
+		"/api/v1/accesses/access-control",
+		readToken,
+		nil,
+	)
+	if missingAfterDelete.Code != http.StatusNotFound {
+		t.Fatalf(
+			"deleted Access detail code=%d body=%s",
+			missingAfterDelete.Code,
+			missingAfterDelete.Body.Bytes(),
+		)
+	}
+	reuseInput := validApplyInput()
+	reuseBody, err := json.Marshal(reuseInput)
+	if err != nil {
+		t.Fatal(err)
+	}
+	reused := doMutation(
+		t,
+		router,
+		authority,
+		"/api/v1/accesses/access-control/actions/apply",
+		writeToken,
+		0,
+		"access-reuse-after-delete-0001",
+		reuseBody,
+	)
+	if reused.Code != http.StatusConflict ||
+		!bytes.Contains(reused.Body.Bytes(), []byte(`"code":"access_retired"`)) {
+		t.Fatalf(
+			"retired Access reuse code=%d body=%s",
+			reused.Code,
+			reused.Body.Bytes(),
+		)
+	}
 }
 
 func TestDesktopControlApprovalRouteResolvesDurableAuthority(
@@ -937,17 +1092,19 @@ func TestDesktopControlApprovalRouteResolvesDurableAuthority(
 		t.Fatal(err)
 	}
 	application, err := desktopcontrol.New(desktopcontrol.Options{
-		Readiness:     readyState(true),
-		Status:        runtime,
-		Accesses:      runtime.AccessWriter(),
-		AccessCatalog: runtime.AccessCatalog(),
-		Resolver:      runtime.SnapshotResolver(),
-		Credentials:   runtime.Credentials(),
-		Activities:    runtime.Activities(),
-		Connections:   runtime.ConnectionEvents(),
-		Egress:        runtime.EgressAttempts(),
-		Approvals:     approvalAuthority,
-		Offline:       runtime,
+		Readiness:      readyState(true),
+		Status:         runtime,
+		Accesses:       runtime.AccessWriter(),
+		AccessDeletion: runtime.AccessDeleter(),
+		Clock:          desktopcontrol.SystemClock{},
+		AccessCatalog:  runtime.AccessCatalog(),
+		Resolver:       runtime.SnapshotResolver(),
+		Credentials:    runtime.Credentials(),
+		Activities:     runtime.Activities(),
+		Connections:    runtime.ConnectionEvents(),
+		Egress:         runtime.EgressAttempts(),
+		Approvals:      approvalAuthority,
+		Offline:        runtime,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -1114,17 +1271,19 @@ func TestDesktopControlRejectsCapabilityAndTransportBoundaryConfusion(t *testing
 		t.Fatal(err)
 	}
 	application, err := desktopcontrol.New(desktopcontrol.Options{
-		Readiness:     readyState(true),
-		Status:        runtime,
-		Accesses:      runtime.AccessWriter(),
-		AccessCatalog: runtime.AccessCatalog(),
-		Resolver:      runtime.SnapshotResolver(),
-		Credentials:   runtime.Credentials(),
-		Activities:    runtime.Activities(),
-		Connections:   runtime.ConnectionEvents(),
-		Egress:        runtime.EgressAttempts(),
-		Approvals:     runtime.ToolApprovals(),
-		Offline:       runtime,
+		Readiness:      readyState(true),
+		Status:         runtime,
+		Accesses:       runtime.AccessWriter(),
+		AccessDeletion: runtime.AccessDeleter(),
+		Clock:          desktopcontrol.SystemClock{},
+		AccessCatalog:  runtime.AccessCatalog(),
+		Resolver:       runtime.SnapshotResolver(),
+		Credentials:    runtime.Credentials(),
+		Activities:     runtime.Activities(),
+		Connections:    runtime.ConnectionEvents(),
+		Egress:         runtime.EgressAttempts(),
+		Approvals:      runtime.ToolApprovals(),
+		Offline:        runtime,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -1321,6 +1480,24 @@ func doRequest(
 	return recorder
 }
 
+func doRevisionedRequest(
+	t *testing.T,
+	handler http.Handler,
+	authority string,
+	method string,
+	path string,
+	token string,
+	revision uint64,
+	body []byte,
+) *httptest.ResponseRecorder {
+	t.Helper()
+	request := newRequest(method, authority, path, token, body)
+	request.Header.Set("If-Match", strconv.FormatUint(revision, 10))
+	recorder := httptest.NewRecorder()
+	handler.ServeHTTP(recorder, request)
+	return recorder
+}
+
 func newRequest(
 	method string,
 	authority string,
@@ -1491,6 +1668,21 @@ func (store *credentialStoreFixture) Replace(
 		State:    secretstore.StateConfigured,
 		Revision: revision,
 	}, nil
+}
+
+func (store *credentialStoreFixture) Delete(
+	_ context.Context,
+	reference secretstore.Reference,
+) error {
+	store.mu.Lock()
+	defer store.mu.Unlock()
+	item, found := store.items[reference.String()]
+	if !found {
+		return secretstore.ErrNotFound
+	}
+	clear(item.bytes)
+	delete(store.items, reference.String())
+	return nil
 }
 
 type fixedClock struct {

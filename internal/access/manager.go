@@ -23,8 +23,10 @@ type Manager struct {
 	repository Repository
 	compiler   PlanCompiler
 	projection SnapshotProjection
+	secrets    SecretRetirer
 	writer     chan struct{}
 	lifecycle  *lifecycleGate
+	requests   *requestUsageGate
 }
 
 var (
@@ -38,6 +40,8 @@ var (
 	_ ActivePlanCatalog          = (*Manager)(nil)
 	_ ProviderProbeCatalog       = (*Manager)(nil)
 	_ ProjectionHealthReader     = (*Manager)(nil)
+	_ RequestUseAdmitter         = (*Manager)(nil)
+	_ Deleter                    = (*Manager)(nil)
 )
 
 func NewManager(
@@ -45,6 +49,7 @@ func NewManager(
 	repository Repository,
 	compiler PlanCompiler,
 	projection SnapshotProjection,
+	secrets SecretRetirer,
 ) (*Manager, error) {
 	if ctx == nil {
 		return nil, errors.New("Access recovery context is nil")
@@ -57,6 +62,9 @@ func NewManager(
 	}
 	if projection == nil {
 		return nil, errors.New("Access plan projection is nil")
+	}
+	if secrets == nil {
+		return nil, errors.New("Access secret retirer is nil")
 	}
 
 	aggregates, err := repository.LoadAll(ctx)
@@ -117,8 +125,10 @@ func NewManager(
 		repository: repository,
 		compiler:   compiler,
 		projection: projection,
+		secrets:    secrets,
 		writer:     writer,
 		lifecycle:  newLifecycleGate(),
+		requests:   newRequestUsageGate(),
 	}, nil
 }
 
@@ -196,6 +206,15 @@ func (m *Manager) ActiveProviderProbeTargets() ([]ProviderProbeTarget, error) {
 
 func (m *Manager) ProjectionHealth() ProjectionHealth {
 	return m.projection.ProjectionHealth()
+}
+
+// AdmitRequest pins one Access lifetime before the proxy revalidates the
+// current ingress projection. It deliberately does not select a route or plan.
+func (m *Manager) AdmitRequest(
+	ctx context.Context,
+	binding IngressBinding,
+) (RequestUse, error) {
+	return m.requests.admit(ctx, binding)
 }
 
 // WriteAccess serializes CAS read through pointer publication. SQLite commits
@@ -391,6 +410,16 @@ func (m *Manager) WriteAccess(
 			commitErr,
 		)
 
+	case CommitOutcomeRetired:
+		return WriteResult{Outcome: WriteOutcomeNotCommitted}, newFailure(
+			ReasonAccessRetired,
+			ErrAccessRetired,
+			accessID,
+			command.ExpectedRevision,
+			0,
+			commitErr,
+		)
+
 	case CommitOutcomeNotCommitted:
 		return WriteResult{
 				Outcome:  WriteOutcomeNotCommitted,
@@ -459,5 +488,6 @@ func compileCandidate(
 // Shutdown rejects new writes, cancels pre-commit work, and drains operations
 // through their commit-to-publish boundary.
 func (m *Manager) Shutdown(ctx context.Context) error {
+	m.requests.close()
 	return m.lifecycle.closeAndDrain(ctx)
 }

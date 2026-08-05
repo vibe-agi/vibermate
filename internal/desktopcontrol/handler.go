@@ -57,6 +57,10 @@ const (
 	ReasonWorkspaceRouteNotFound    ReasonCode = "workspace_route_not_found"
 	ReasonWorkspaceRouteUnavailable ReasonCode = "workspace_route_unavailable"
 	ReasonCaptureRunRestartRequired ReasonCode = "capture_run_restart_required"
+	ReasonAccessRetired             ReasonCode = "access_retired"
+	ReasonAccessDeletionBlocked     ReasonCode = "access_deletion_blocked"
+	ReasonAccessDeletionChanged     ReasonCode = "access_deletion_impact_changed"
+	ReasonAccessDeletionFailed      ReasonCode = "access_deletion_not_committed"
 )
 
 type StatusReader interface {
@@ -67,6 +71,14 @@ type ReadinessReader interface {
 	Ready() bool
 }
 
+// SystemClock is available to standalone control-contract tests and tools.
+// Product composition passes its single runtime Clock instead.
+type SystemClock struct{}
+
+func (SystemClock) Now() time.Time {
+	return time.Now()
+}
+
 type OfflineActions interface {
 	OfflineHoldSnapshot() offlinehold.Snapshot
 	EnterOfflineHold(context.Context, uint64) (offlinehold.Snapshot, error)
@@ -74,17 +86,18 @@ type OfflineActions interface {
 }
 
 type Options struct {
-	Readiness     ReadinessReader
-	Status        StatusReader
-	Accesses      access.Writer
-	AccessCatalog access.AggregateCatalog
-	Resolver      access.SnapshotResolver
-	Credentials   accesscredential.Controller
-	Activities    activity.Runtime
-	Connections   connectionevent.Reader
-	Egress        egressaudit.Reader
-	Approvals     toolapproval.Controller
-	Offline       OfflineActions
+	Readiness      ReadinessReader
+	Status         StatusReader
+	Accesses       access.Writer
+	AccessDeletion access.Deleter
+	AccessCatalog  access.AggregateCatalog
+	Resolver       access.SnapshotResolver
+	Credentials    accesscredential.Controller
+	Activities     activity.Runtime
+	Connections    connectionevent.Reader
+	Egress         egressaudit.Reader
+	Approvals      toolapproval.Controller
+	Offline        OfflineActions
 	// ConnectionRules is the outbound firewall a person edits. A runtime
 	// built without one keeps evaluating the rules it started with.
 	ConnectionRules ConnectionRuleController
@@ -92,24 +105,27 @@ type Options struct {
 	// path: it carries no capability in either direction.
 	CaptureRuns     capturerun.Reader
 	WorkspaceRoutes workspaceroute.Controller
+	Clock           Clock
 }
 
 type Handler struct {
-	readiness     ReadinessReader
-	status        StatusReader
-	accesses      access.Writer
-	accessCatalog access.AggregateCatalog
-	resolver      access.SnapshotResolver
-	credentials   accesscredential.Controller
-	activities    activity.Runtime
-	connections   connectionevent.Reader
-	egress        egressaudit.Reader
-	approvals     toolapproval.Controller
-	offline       OfflineActions
+	readiness      ReadinessReader
+	status         StatusReader
+	accesses       access.Writer
+	accessDeletion access.Deleter
+	accessCatalog  access.AggregateCatalog
+	resolver       access.SnapshotResolver
+	credentials    accesscredential.Controller
+	activities     activity.Runtime
+	connections    connectionevent.Reader
+	egress         egressaudit.Reader
+	approvals      toolapproval.Controller
+	offline        OfflineActions
 
 	connectionRules ConnectionRuleController
 	captureRuns     capturerun.Reader
 	workspaceRoutes workspaceroute.Controller
+	clock           Clock
 
 	idempotent *idempotencyCache
 	mux        *http.ServeMux
@@ -165,6 +181,7 @@ func New(options Options) (*Handler, error) {
 	if options.Readiness == nil ||
 		options.Status == nil ||
 		options.Accesses == nil ||
+		options.AccessDeletion == nil ||
 		options.AccessCatalog == nil ||
 		options.Resolver == nil ||
 		options.Credentials == nil ||
@@ -172,13 +189,15 @@ func New(options Options) (*Handler, error) {
 		options.Connections == nil ||
 		options.Egress == nil ||
 		options.Approvals == nil ||
-		options.Offline == nil {
+		options.Offline == nil ||
+		options.Clock == nil {
 		return nil, errors.New("Desktop control dependencies are incomplete")
 	}
 	handler := &Handler{
 		readiness:       options.Readiness,
 		status:          options.Status,
 		accesses:        options.Accesses,
+		accessDeletion:  options.AccessDeletion,
 		accessCatalog:   options.AccessCatalog,
 		resolver:        options.Resolver,
 		credentials:     options.Credentials,
@@ -190,6 +209,7 @@ func New(options Options) (*Handler, error) {
 		connectionRules: options.ConnectionRules,
 		captureRuns:     options.CaptureRuns,
 		workspaceRoutes: options.WorkspaceRoutes,
+		clock:           options.Clock,
 		idempotent:      newIdempotencyCache(),
 		mux:             http.NewServeMux(),
 	}
@@ -214,6 +234,14 @@ func New(options Options) (*Handler, error) {
 	handler.mux.HandleFunc(
 		"PATCH /api/v1/accesses/{accessId}",
 		handler.updateAccess,
+	)
+	handler.mux.HandleFunc(
+		"GET /api/v1/accesses/{accessId}/deletion-preview",
+		handler.previewAccessDeletion,
+	)
+	handler.mux.HandleFunc(
+		"DELETE /api/v1/accesses/{accessId}",
+		handler.deleteAccess,
 	)
 	handler.mux.HandleFunc(
 		"PUT /api/v1/accesses/{accessId}/actions/apply",
@@ -311,6 +339,10 @@ func New(options Options) (*Handler, error) {
 	)
 	handler.mux.HandleFunc(
 		"/api/v1/accesses/{accessId}/plan",
+		handler.invalidRoute,
+	)
+	handler.mux.HandleFunc(
+		"/api/v1/accesses/{accessId}/deletion-preview",
 		handler.invalidRoute,
 	)
 	handler.mux.HandleFunc(
@@ -1012,6 +1044,18 @@ func classifyAccessError(err error) problemSpec {
 		case access.ReasonAccessRuntimeStopping:
 			spec.status = http.StatusServiceUnavailable
 			spec.reason = ReasonRuntimeUnavailable
+		case access.ReasonAccessRetired:
+			spec.status = http.StatusConflict
+			spec.reason = ReasonAccessRetired
+		case access.ReasonDeletionBlocked:
+			spec.status = http.StatusConflict
+			spec.reason = ReasonAccessDeletionBlocked
+		case access.ReasonDeletionChanged:
+			spec.status = http.StatusConflict
+			spec.reason = ReasonAccessDeletionChanged
+		case access.ReasonDeletionNotCommitted:
+			spec.status = http.StatusServiceUnavailable
+			spec.reason = ReasonAccessDeletionFailed
 		}
 	}
 	return spec

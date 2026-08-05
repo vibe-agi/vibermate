@@ -202,6 +202,46 @@ func TestDevelopmentFileStoreSerializesConcurrentCAS(t *testing.T) {
 	}
 }
 
+func TestDevelopmentFileStoreDeleteIsDurableAndMissingIsExplicit(t *testing.T) {
+	t.Parallel()
+
+	path := filepath.Join(t.TempDir(), "private", "store.json")
+	factory, err := NewDevelopmentFileFactory(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	store, err := factory.Open(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	reference := mustDevelopmentReference(t, "secret://provider/delete-account")
+	value := mustDevelopmentValue(t, "delete-secret")
+	defer value.Destroy()
+	if _, err := store.Replace(t.Context(), secretstore.ReplaceCommand{
+		Reference: reference,
+		Value:     value,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.Delete(t.Context(), reference); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.Read(t.Context(), reference); !errors.Is(err, secretstore.ErrNotFound) {
+		t.Fatalf("deleted secret read error = %v", err)
+	}
+	if err := store.Delete(t.Context(), reference); !errors.Is(err, secretstore.ErrNotFound) {
+		t.Fatalf("repeated delete error = %v", err)
+	}
+	reopened, err := factory.Open(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	metadata, err := reopened.Inspect(t.Context(), reference)
+	if err != nil || metadata.State != secretstore.StateMissing || metadata.Revision != 0 {
+		t.Fatalf("reopened deleted metadata=%+v err=%v", metadata, err)
+	}
+}
+
 func TestDevelopmentFileStoreRejectsInvalidOrAliasedFiles(t *testing.T) {
 	t.Parallel()
 

@@ -215,6 +215,36 @@ func (store *developmentFileStore) Replace(
 	}, nil
 }
 
+func (store *developmentFileStore) Delete(
+	ctx context.Context,
+	reference secretstore.Reference,
+) error {
+	key, err := validateDevelopmentOperation(ctx, reference)
+	if err != nil {
+		return err
+	}
+	store.mu.Lock()
+	defer store.mu.Unlock()
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	current, found := store.items[key]
+	if !found {
+		return secretstore.ErrNotFound
+	}
+	candidate := cloneDevelopmentItems(store.items)
+	removed := candidate[key]
+	clear(removed.value)
+	delete(candidate, key)
+	defer destroyDevelopmentItems(candidate)
+	if err := persistDevelopmentFile(store.path, candidate); err != nil {
+		return err
+	}
+	clear(current.value)
+	delete(store.items, key)
+	return nil
+}
+
 func prepareDevelopmentDirectory(path string) error {
 	if err := os.MkdirAll(path, 0o700); err != nil {
 		return fmt.Errorf(

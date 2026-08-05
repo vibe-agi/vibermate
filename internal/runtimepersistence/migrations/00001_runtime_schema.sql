@@ -17,6 +17,15 @@ CREATE TABLE access_bindings(
   description TEXT NOT NULL
   CHECK(length(CAST(description AS BLOB)) <= 4096)
 ) STRICT;
+CREATE TABLE access_tombstones(
+  access_id TEXT PRIMARY KEY NOT NULL
+  CHECK(length(CAST(access_id AS BLOB)) BETWEEN 1 AND 128),
+  last_revision INTEGER NOT NULL
+  CHECK(last_revision BETWEEN 1 AND 9223372036854775807),
+  name TEXT NOT NULL
+  CHECK(length(CAST(name AS BLOB)) BETWEEN 1 AND 256),
+  deleted_at_unix_ms INTEGER NOT NULL
+) STRICT;
 CREATE TABLE access_client_origins(
   access_id TEXT PRIMARY KEY NOT NULL
   REFERENCES access_bindings(access_id) ON DELETE CASCADE,
@@ -108,9 +117,10 @@ CREATE TABLE runtime_activities(
   CHECK(length(CAST(activity_id AS BLOB)) BETWEEN 1 AND 512),
   occurred_at_unix_ms INTEGER NOT NULL,
   kind TEXT NOT NULL
-  CHECK(kind IN('access.applied',
+CHECK(kind IN('access.applied',
 'access.disabled',
 'access.enabled',
+'access.deleted',
 'credential.secret_replaced',
 'offline_hold.entered',
 'offline_hold.resumed',

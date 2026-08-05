@@ -273,7 +273,8 @@ func (router *Router) preflight(
 	case http.MethodGet,
 		http.MethodPut,
 		http.MethodPost,
-		http.MethodPatch:
+		http.MethodPatch,
+		http.MethodDelete:
 	default:
 		writeProblem(writer, http.StatusForbidden, ReasonUnauthorized)
 		return

@@ -297,6 +297,16 @@ func (store *storeFixture) Replace(
 	return store.metadata, nil
 }
 
+func (store *storeFixture) Delete(
+	_ context.Context,
+	reference secretstore.Reference,
+) error {
+	store.mu.Lock()
+	defer store.mu.Unlock()
+	store.reference = reference
+	return secretstore.ErrNotFound
+}
+
 func identifiers(
 	t *testing.T,
 ) (access.AccessID, access.EndpointProfileID, access.AccountBindingID) {

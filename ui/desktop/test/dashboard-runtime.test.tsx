@@ -207,6 +207,27 @@ function clientFixture(): ControlClient {
             revision: expectedRevision + 1,
           },
     ),
+    previewAccessDeletion: vi.fn<ControlClient["previewAccessDeletion"]>(
+      async (accessId, expectedRevision) => ({
+        accessId,
+        name: accessId,
+        revision: expectedRevision,
+        status: "disabled" as const,
+        workspaceBindingCount: 0,
+        activeCaptureRunCount: 0,
+        proxyClientBindingCount: 0,
+        exclusiveSecretCount: 0,
+        sharedSecretCount: 0,
+        impactToken: "A".repeat(43),
+        blockers: [],
+      }),
+    ),
+    deleteAccess: vi.fn<ControlClient["deleteAccess"]>(
+      async (_accessId, expectedRevision) => ({
+        outcome: "deleted" as const,
+        revision: expectedRevision,
+      }),
+    ),
     approvals: vi.fn(async () => ({ items: [] })),
     captureRuns: vi.fn(async () => ({ items: [] })),
     manualCaptureContext: vi.fn(async () => ({

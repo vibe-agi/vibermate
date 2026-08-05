@@ -84,7 +84,7 @@ test("uses authoritative hold state before saying disconnection is safe", async 
   expect(errors).toEqual([]);
 });
 
-test("lists existing tools and creates the next one without asking for a name", async ({
+test("lists existing tools and creates then retires the next one without hidden identifiers", async ({
   page,
 }) => {
   const errors = collectBrowserErrors(page);
@@ -234,6 +234,22 @@ test("lists existing tools and creates the next one without asking for a name", 
   await expect(
     launch.getByText("vibermate run -- codex", { exact: true }),
   ).toBeVisible();
+  await page.getByRole("button", { name: "Disable" }).click();
+  await page.getByRole("button", { name: "Disable Access" }).click();
+  await expect(page.getByText("This Access is disabled")).toBeVisible();
+  await page.getByRole("button", { name: "Delete" }).click();
+  const deletion = page.getByRole("group", {
+    name: "Access deletion confirmation",
+  });
+  await expect(deletion.getByText("Delete Codex?")).toBeVisible();
+  await expect(
+    deletion.getByText(
+      "Removes 0 workspace assignments and 1 saved credentials. Activity history remains.",
+    ),
+  ).toBeVisible();
+  await deletion.getByRole("button", { name: "Delete Access" }).click();
+  await expect(directory.locator("li")).toHaveCount(1);
+  await expect(directory.getByText("Codex", { exact: true })).toHaveCount(0);
   expect(
     await page.evaluate(() => ({
       local: globalThis.localStorage.length,
@@ -270,6 +286,30 @@ test("stops new Access traffic and restores it without losing configuration", as
   await expect(
     page.getByRole("heading", { name: "Start Work Claude" }),
   ).toBeVisible();
+  expect(errors).toEqual([]);
+});
+
+test("keeps Access deletion blocked while captured agents still use it", async ({
+  page,
+}) => {
+  const errors = collectBrowserErrors(page);
+  await page.goto("/?preview=1#access");
+  await page.getByRole("button", { name: /^Work Claude/u }).click();
+
+  await page.getByRole("button", { name: "Disable" }).click();
+  await page.getByRole("button", { name: "Disable Access" }).click();
+  await expect(page.getByText("This Access is disabled")).toBeVisible();
+  await page.getByRole("button", { name: "Delete" }).click();
+
+  const deletion = page.getByRole("group", {
+    name: "Access deletion confirmation",
+  });
+  await expect(
+    deletion.getByText("3 running captures must finish first."),
+  ).toBeVisible();
+  await expect(
+    deletion.getByRole("button", { name: "Delete Access" }),
+  ).toBeDisabled();
   expect(errors).toEqual([]);
 });
 

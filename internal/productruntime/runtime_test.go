@@ -1656,6 +1656,13 @@ func (unavailableSecretStore) Replace(
 	return secretstore.Metadata{}, secretstore.ErrReadOnly
 }
 
+func (unavailableSecretStore) Delete(
+	context.Context,
+	secretstore.Reference,
+) error {
+	return secretstore.ErrNotFound
+}
+
 type eventLog struct {
 	mu     sync.Mutex
 	events []string
@@ -2074,7 +2081,13 @@ func (b failingPublicationAccessBuilder) Build(
 		SnapshotProjection: baseProjection,
 		failRevision:       b.failRevision,
 	}
-	return access.NewManager(ctx, request.repository, compiler, projection)
+	return access.NewManager(
+		ctx,
+		request.repository,
+		compiler,
+		projection,
+		accessSecretRetirer{store: request.secrets},
+	)
 }
 
 type failingPublicationProjection struct {

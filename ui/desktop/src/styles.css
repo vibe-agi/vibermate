@@ -1569,6 +1569,57 @@ button.quiet-danger {
   font-size: 0.78rem;
 }
 
+.access-delete-confirmation {
+  display: grid;
+  gap: 0.45rem;
+  margin: -0.25rem 0 0.75rem;
+  border: 1px solid color-mix(in srgb, var(--deny) 42%, var(--border));
+  border-radius: 5px;
+  padding: 0.55rem;
+  background: color-mix(in srgb, var(--deny-soft) 48%, var(--surface));
+  color: var(--muted);
+  font-size: 0.76rem;
+}
+
+.access-delete-confirmation p {
+  margin: 0;
+}
+
+.access-delete-heading,
+.access-delete-state,
+.access-delete-blocker,
+.access-delete-workspaces {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.65rem;
+}
+
+.access-delete-heading strong {
+  color: var(--text);
+  font-size: 0.8rem;
+}
+
+.access-delete-blocker {
+  border-left: 2px solid var(--ask);
+  padding-left: 0.5rem;
+  color: var(--ask);
+}
+
+.access-delete-workspaces {
+  justify-content: flex-start;
+  cursor: pointer;
+}
+
+.access-delete-workspaces input {
+  flex: none;
+  margin: 0;
+}
+
+.access-delete-actions {
+  justify-content: flex-end;
+}
+
 .compact-action {
   display: inline-flex;
   align-items: center;

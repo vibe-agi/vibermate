@@ -8,11 +8,13 @@ import (
 	"crypto/tls"
 	"crypto/x509"
 	"encoding/base64"
+	"errors"
 	"io"
 	"net"
 	"net/http"
 	"net/url"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -833,6 +835,97 @@ func TestLoopbackProxyRevalidatesEndpointOnEveryPersistentConnectionRequest(
 	}
 }
 
+func TestLoopbackProxyPinsAccessUsageForTheWholeInnerRequest(t *testing.T) {
+	t.Parallel()
+
+	fixture := newProxyFixture(t)
+	defer fixture.Close(t)
+	secured := fixture.ConnectTLS(
+		t,
+		fixture.grant.ProxyCapability.Value(),
+		"api.anthropic.com:443",
+		"api.anthropic.com",
+	)
+	defer secured.Close()
+	started, releaseExchange := fixture.exchanges.Block()
+	request := &http.Request{
+		Method: http.MethodPost,
+		URL:    mustURL(t, "/v1/messages"),
+		Host:   "api.anthropic.com:443",
+		Header: http.Header{
+			"Content-Type": []string{"application/json"},
+		},
+		Body:          io.NopCloser(strings.NewReader(`{"model":"client"}`)),
+		ContentLength: int64(len(`{"model":"client"}`)),
+	}
+	type responseResult struct {
+		response *http.Response
+		err      error
+	}
+	completed := make(chan responseResult, 1)
+	go func() {
+		if err := request.Write(secured); err != nil {
+			completed <- responseResult{err: err}
+			return
+		}
+		response, err := http.ReadResponse(bufio.NewReader(secured), request)
+		completed <- responseResult{response: response, err: err}
+	}()
+	select {
+	case <-started:
+	case <-time.After(time.Second):
+		t.Fatal("inner request did not reach the blocked Exchange")
+	}
+	if active := fixture.ingress.activeRequests.Load(); active != 1 {
+		t.Fatalf("active Access request leases = %d, want 1", active)
+	}
+	fixture.ingress.CloseRequestAdmission()
+	if active := fixture.ingress.activeRequests.Load(); active != 1 {
+		t.Fatalf("closing admission released an active request: %d", active)
+	}
+	releaseExchange()
+	result := <-completed
+	if result.err != nil {
+		t.Fatal(result.err)
+	}
+	_ = result.response.Body.Close()
+	deadline := time.Now().Add(time.Second)
+	for fixture.ingress.activeRequests.Load() != 0 {
+		if time.Now().After(deadline) {
+			t.Fatal("Access request lease outlived the completed response")
+		}
+		runtime.Gosched()
+	}
+
+	response := writeInnerRequest(t, secured, &http.Request{
+		Method: http.MethodPost,
+		URL:    mustURL(t, "/v1/messages"),
+		Host:   "api.anthropic.com:443",
+		Header: http.Header{
+			"Content-Type": []string{"application/json"},
+		},
+		Body:          io.NopCloser(strings.NewReader(`{"model":"client"}`)),
+		ContentLength: int64(len(`{"model":"client"}`)),
+	})
+	body, err := io.ReadAll(response.Body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = response.Body.Close()
+	if response.StatusCode != http.StatusMisdirectedRequest ||
+		!response.Close ||
+		!bytes.Contains(body, []byte(`"reasonCode":"agent_endpoint_changed"`)) ||
+		len(fixture.exchanges.Requests()) != 1 {
+		t.Fatalf(
+			"closed admission status=%d close=%t body=%s exchanges=%d",
+			response.StatusCode,
+			response.Close,
+			body,
+			len(fixture.exchanges.Requests()),
+		)
+	}
+}
+
 type proxyFixture struct {
 	listener    net.Listener
 	server      *http.Server
@@ -1037,6 +1130,7 @@ func newProxyFixtureForDialectWithPolicy(
 		OwnerContext:     context.Background(),
 		Admissions:       admissions,
 		Ingress:          ingress,
+		AccessRequests:   ingress,
 		Paths:            paths,
 		Exchanges:        exchanges,
 		Original:         original,
@@ -1094,11 +1188,51 @@ func fixedCodexAdapterEvidence() clientadapter.Evidence {
 }
 
 type revocableIngress struct {
-	delegate  loopbackproxy.IngressAuthority
-	revoked   atomic.Bool
-	mu        sync.RWMutex
-	current   *access.IngressBinding
-	protocols []access.ApplicationProtocol
+	delegate               loopbackproxy.IngressAuthority
+	revoked                atomic.Bool
+	requestAdmissionClosed atomic.Bool
+	activeRequests         atomic.Int64
+	mu                     sync.RWMutex
+	current                *access.IngressBinding
+	protocols              []access.ApplicationProtocol
+}
+
+func (ingress *revocableIngress) AdmitRequest(
+	ctx context.Context,
+	binding access.IngressBinding,
+) (access.RequestUse, error) {
+	if ctx == nil {
+		return nil, errors.New("request context is nil")
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	if err := binding.Validate(); err != nil {
+		return nil, err
+	}
+	if ingress.requestAdmissionClosed.Load() {
+		return nil, access.ErrAccessRequestAdmissionClosed
+	}
+	ingress.activeRequests.Add(1)
+	return &trackedRequestUse{release: func() {
+		ingress.activeRequests.Add(-1)
+	}}, nil
+}
+
+func (ingress *revocableIngress) CloseRequestAdmission() {
+	ingress.requestAdmissionClosed.Store(true)
+}
+
+type trackedRequestUse struct {
+	once    sync.Once
+	release func()
+}
+
+func (use *trackedRequestUse) Release() {
+	if use == nil {
+		return
+	}
+	use.once.Do(use.release)
 }
 
 func (ingress *revocableIngress) ResolveDownstreamProtocols(
@@ -1300,9 +1434,12 @@ func mustURL(t *testing.T, target string) *url.URL {
 }
 
 type exchangeRecorder struct {
-	mu       sync.Mutex
-	requests []exchange.ClientRequest
-	failure  error
+	mu           sync.Mutex
+	requests     []exchange.ClientRequest
+	failure      error
+	blockStarted chan struct{}
+	blockRelease chan struct{}
+	startOnce    sync.Once
 }
 
 func (recorder *exchangeRecorder) Execute(
@@ -1313,9 +1450,19 @@ func (recorder *exchangeRecorder) Execute(
 	recorder.mu.Lock()
 	recorder.requests = append(recorder.requests, request)
 	failure := recorder.failure
+	blockStarted := recorder.blockStarted
+	blockRelease := recorder.blockRelease
 	recorder.mu.Unlock()
 	if failure != nil {
 		return exchange.Result{}, failure
+	}
+	if blockRelease != nil {
+		recorder.startOnce.Do(func() { close(blockStarted) })
+		select {
+		case <-blockRelease:
+		case <-ctx.Done():
+			return exchange.Result{}, context.Cause(ctx)
+		}
 	}
 	envelope, err := exchange.NewResponseEnvelope(
 		exchange.ResponseModeJSON,
@@ -1336,6 +1483,19 @@ func (recorder *exchangeRecorder) Execute(
 		RouteHost:           "relay.example.test",
 		CredentialBindingID: "account-proxy",
 	}, nil
+}
+
+func (recorder *exchangeRecorder) Block() (<-chan struct{}, func()) {
+	recorder.mu.Lock()
+	defer recorder.mu.Unlock()
+	if recorder.blockRelease != nil {
+		panic("exchange recorder is already blocked")
+	}
+	started := make(chan struct{})
+	release := make(chan struct{})
+	recorder.blockStarted = started
+	recorder.blockRelease = release
+	return started, func() { close(release) }
 }
 
 func (recorder *exchangeRecorder) FailWith(err error) {

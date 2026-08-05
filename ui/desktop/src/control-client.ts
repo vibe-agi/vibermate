@@ -5,6 +5,8 @@ import type {
   AccessAddCandidateResponse,
   AccessApplyInput,
   AccessApplyResponse,
+  AccessDeletionPreview,
+  AccessDeletionResponse,
   AccessPlanSummary,
   AccessStatus,
   ActivityPage,
@@ -198,6 +200,18 @@ export interface ControlClient {
     status: Extract<AccessStatus, "enabled" | "disabled">,
     signal?: AbortSignal,
   ): Promise<AccessApplyResponse>;
+  previewAccessDeletion(
+    accessId: string,
+    expectedRevision: number,
+    signal?: AbortSignal,
+  ): Promise<AccessDeletionPreview>;
+  deleteAccess(
+    accessId: string,
+    expectedRevision: number,
+    impactToken: string,
+    retireWorkspaceBindings: boolean,
+    signal?: AbortSignal,
+  ): Promise<AccessDeletionResponse>;
   accessPlan(
     accessId: string,
     signal?: AbortSignal,
@@ -270,7 +284,7 @@ export async function createControlClient(
   };
 
   async function requestWithCapability<T>(
-    method: "GET" | "POST" | "PUT" | "PATCH",
+    method: "GET" | "POST" | "PUT" | "PATCH" | "DELETE",
     path: string,
     encodedBody: string | undefined,
     expectedRevision: number | undefined,
@@ -280,6 +294,7 @@ export async function createControlClient(
     expectedSuccessStatus: number,
     opaqueStateTag?: string,
     observeResponse?: (response: Response) => void,
+    readRevision?: number,
   ): Promise<T> {
     const destination = new URL(path, `${validatedBootstrap.baseUrl}/`);
     if (
@@ -293,7 +308,14 @@ export async function createControlClient(
       (opaqueStateTag !== undefined &&
         (expectedRevision !== undefined ||
           idempotencyKey !== undefined ||
-          !validManualCaptureStateTag(opaqueStateTag)))
+          readRevision !== undefined ||
+          !validManualCaptureStateTag(opaqueStateTag))) ||
+      (readRevision !== undefined &&
+        (method !== "GET" ||
+          expectedRevision !== undefined ||
+          idempotencyKey !== undefined ||
+          opaqueStateTag !== undefined ||
+          !positiveInteger(readRevision)))
     ) {
       throw new Error("Desktop control mutation headers are incomplete");
     }
@@ -307,6 +329,9 @@ export async function createControlClient(
     if (expectedRevision !== undefined && idempotencyKey !== undefined) {
       headers.set("If-Match", String(expectedRevision));
       headers.set("Idempotency-Key", idempotencyKey);
+    }
+    if (readRevision !== undefined) {
+      headers.set("If-Match", String(readRevision));
     }
     if (opaqueStateTag !== undefined) {
       headers.set("If-Match", opaqueStateTag);
@@ -532,6 +557,37 @@ export async function createControlClient(
     }
   }
 
+  async function requestRevisionedRead<T>(
+    path: string,
+    expectedRevision: number,
+    signal: AbortSignal | undefined,
+  ): Promise<T> {
+    if (!positiveInteger(expectedRevision)) {
+      throw new ControlContractError();
+    }
+    const current = await currentSession(signal);
+    try {
+      return await requestWithCapability<T>(
+        "GET",
+        path,
+        undefined,
+        undefined,
+        undefined,
+        current.readToken,
+        signal,
+        200,
+        undefined,
+        undefined,
+        expectedRevision,
+      );
+    } catch (error) {
+      if (error instanceof ControlWireProblem) {
+        throw exposeControlWireProblem(error);
+      }
+      throw error;
+    }
+  }
+
   async function requestManualRead<T>(
     path: string,
     signal: AbortSignal | undefined,
@@ -628,7 +684,7 @@ export async function createControlClient(
   }
 
   async function mutationAttempt(
-    method: "POST" | "PUT" | "PATCH",
+    method: "POST" | "PUT" | "PATCH" | "DELETE",
     path: string,
     encodedBody: string | undefined,
     expectedRevision: number,
@@ -650,7 +706,7 @@ export async function createControlClient(
   }
 
   async function requestMutation<T>(
-    method: "POST" | "PUT" | "PATCH",
+    method: "POST" | "PUT" | "PATCH" | "DELETE",
     path: string,
     body: unknown,
     expectedRevision: number,
@@ -692,7 +748,7 @@ export async function createControlClient(
   }
 
   async function requestMutationWithinLimit<T>(
-    method: "POST" | "PUT" | "PATCH",
+    method: "POST" | "PUT" | "PATCH" | "DELETE",
     path: string,
     encodedBody: string | undefined,
     expectedRevision: number,
@@ -1287,6 +1343,44 @@ export async function createControlClient(
         (value) => requireAccessApplyResponse(value, expectedRevision),
       );
     },
+    previewAccessDeletion: async (accessId, expectedRevision, signal) => {
+      if (!validResourceId(accessId) || !positiveInteger(expectedRevision)) {
+        throw new ControlContractError();
+      }
+      return requireAccessDeletionPreview(
+        await requestRevisionedRead<unknown>(
+          `/api/v1/accesses/${encodeURIComponent(accessId)}/deletion-preview`,
+          expectedRevision,
+          signal,
+        ),
+        accessId,
+        expectedRevision,
+      );
+    },
+    deleteAccess: async (
+      accessId,
+      expectedRevision,
+      impactToken,
+      retireWorkspaceBindings,
+      signal,
+    ) => {
+      if (
+        !validResourceId(accessId) ||
+        !positiveInteger(expectedRevision) ||
+        !validAccessDeletionImpactToken(impactToken) ||
+        typeof retireWorkspaceBindings !== "boolean"
+      ) {
+        throw new ControlContractError();
+      }
+      return requestMutation<AccessDeletionResponse>(
+        "DELETE",
+        `/api/v1/accesses/${encodeURIComponent(accessId)}`,
+        { impactToken, retireWorkspaceBindings },
+        expectedRevision,
+        signal,
+        (value) => requireAccessDeletionResponse(value, expectedRevision),
+      );
+    },
     accessPlan: async (accessId, signal) =>
       requireAccessPlanSummary(
         await requestRead<unknown>(
@@ -1580,7 +1674,7 @@ function encodeControlBody(body: unknown): string | undefined {
 }
 
 async function mutationCommandIdentity(
-  method: "POST" | "PUT" | "PATCH",
+  method: "POST" | "PUT" | "PATCH" | "DELETE",
   path: string,
   expectedRevision: number,
   encodedBody: string | undefined,
@@ -2170,6 +2264,82 @@ function requireAccessApplyResponse(
     throw new ControlContractError();
   }
   return response as unknown as AccessApplyResponse;
+}
+
+const accessDeletionBlockers = new Set([
+  "disable_access_first",
+  "active_capture_runs",
+  "confirm_workspace_retirement",
+  "proxy_client_bindings",
+]);
+
+function validAccessDeletionImpactToken(value: unknown): value is string {
+  return typeof value === "string" && /^[A-Za-z0-9_-]{43}$/u.test(value);
+}
+
+function requireAccessDeletionPreview(
+  value: unknown,
+  expectedAccessId: string,
+  expectedRevision: number,
+): AccessDeletionPreview {
+  if (
+    !hasClosedFields(value, [
+      "accessId",
+      "name",
+      "revision",
+      "status",
+      "workspaceBindingCount",
+      "activeCaptureRunCount",
+      "proxyClientBindingCount",
+      "exclusiveSecretCount",
+      "sharedSecretCount",
+      "impactToken",
+      "blockers",
+    ]) ||
+    value.accessId !== expectedAccessId ||
+    value.revision !== expectedRevision ||
+    !validDisplayLabel(value.name, 256, false) ||
+    !accessStatuses.has(String(value.status)) ||
+    !nonNegativeInteger(value.workspaceBindingCount) ||
+    !nonNegativeInteger(value.activeCaptureRunCount) ||
+    (value.workspaceBindingCount === 0 && value.activeCaptureRunCount !== 0) ||
+    !nonNegativeInteger(value.proxyClientBindingCount) ||
+    !nonNegativeInteger(value.exclusiveSecretCount) ||
+    !nonNegativeInteger(value.sharedSecretCount) ||
+    !validAccessDeletionImpactToken(value.impactToken) ||
+    !Array.isArray(value.blockers) ||
+    value.blockers.length > accessDeletionBlockers.size ||
+    new Set(value.blockers).size !== value.blockers.length ||
+    !value.blockers.every(
+      (blocker) =>
+        typeof blocker === "string" && accessDeletionBlockers.has(blocker),
+    ) ||
+    (value.status === "disabled") !==
+      !value.blockers.includes("disable_access_first") ||
+    (value.activeCaptureRunCount > 0) !==
+      value.blockers.includes("active_capture_runs") ||
+    (value.workspaceBindingCount > 0) !==
+      value.blockers.includes("confirm_workspace_retirement") ||
+    (value.proxyClientBindingCount > 0) !==
+      value.blockers.includes("proxy_client_bindings")
+  ) {
+    throw new ControlContractError();
+  }
+  return value as unknown as AccessDeletionPreview;
+}
+
+function requireAccessDeletionResponse(
+  value: unknown,
+  expectedRevision: number,
+): AccessDeletionResponse {
+  if (
+    !hasClosedFields(value, ["outcome", "revision"]) ||
+    value.outcome !== "deleted" ||
+    value.revision !== expectedRevision
+  ) {
+    throw new ControlContractError();
+  }
+  return value as unknown as AccessDeletionResponse;
 }
 
 function requireAccessAddCandidateResponse(

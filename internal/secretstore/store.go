@@ -207,6 +207,7 @@ type Store interface {
 	Reader
 	Inspect(context.Context, Reference) (Metadata, error)
 	Replace(context.Context, ReplaceCommand) (Metadata, error)
+	Delete(context.Context, Reference) error
 }
 
 // Factory opens exactly one host-selected physical Store. ProductRuntime

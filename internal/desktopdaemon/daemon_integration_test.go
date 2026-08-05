@@ -191,3 +191,10 @@ func (unavailableSecrets) Replace(
 ) (secretstore.Metadata, error) {
 	return secretstore.Metadata{}, secretstore.ErrReadOnly
 }
+
+func (unavailableSecrets) Delete(
+	context.Context,
+	secretstore.Reference,
+) error {
+	return secretstore.ErrNotFound
+}

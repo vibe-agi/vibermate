@@ -475,6 +475,7 @@ func TestAccessRecoveryRejectsMissingOrInvalidPlanPayload(t *testing.T) {
 				store.AccessRepository(),
 				testAccessCompiler(t),
 				newTestSnapshotProjection(t),
+				discardAccessSecretRetirer{},
 			); !errors.Is(err, access.ErrInvalidRepositoryState) {
 				t.Fatalf("manager recovered invalid durable aggregate: %v", err)
 			}
@@ -735,11 +736,21 @@ func newTestAccessManager(t *testing.T, store *Store) *access.Manager {
 		store.AccessRepository(),
 		testAccessCompiler(t),
 		newTestSnapshotProjection(t),
+		discardAccessSecretRetirer{},
 	)
 	if err != nil {
 		t.Fatalf("construct Access manager: %v", err)
 	}
 	return manager
+}
+
+type discardAccessSecretRetirer struct{}
+
+func (discardAccessSecretRetirer) RetireSecret(
+	context.Context,
+	access.SecretRef,
+) error {
+	return nil
 }
 
 type discardLeafCacheInvalidator struct{}

@@ -1,55 +1,72 @@
-# Reversible Access Lifecycle Closure
+# Safe Access Retirement Closure
 
-Status: completed
+Status: implementation_complete_evidence_pending
 Created: 2026-08-05
-Implementation baseline: `ce80b657a37afc240861ce27b2271cfda35bc5da`
-Design authority: `vibermate-design` at `e856138a0e04761120319ec76f21204a92c0e119`
-Implementation candidate: `b12b6a4fa2d759a0c522f4c934656ee2fe76953f`
-Design evidence sync: `vibermate-design` at `e0854723486bd62349ea38ed547fac443330c127`
-Evidence archive: `docs/evidence/2026-08-05-reversible-access-lifecycle-closure.md`
+Implementation baseline: `e3f5ffae88957692d376390d3749f707c80b003f`
 
 ## Goal
 
-Close the already-designed reversible Access lifecycle through the real
-SQLite, projection, Control API, Desktop UI, and Activity paths. A person must
-be able to stop new traffic without deleting configuration or history, then
-restore only future admissions through one typed CAS transition.
+Close permanent Access retirement through the existing SQLite, immutable
+projection, request data plane, SecretStore, authenticated Desktop control
+plane, and compact UI. The operation must be explicit, revision-bound,
+retryable, and safe under concurrent requests; it must not turn a missing UI
+row into permission to reuse the same durable identity.
+
+## Invariants
+
+1. Only a disabled Access can be retired. Deletion never acts as an implicit
+   disable operation.
+2. Preview is evidence, not authority. Execution re-reads the aggregate,
+   workspace revisions, active CaptureRun IDs, ProxyClientBinding Profile
+   references, and cross-Access secret ownership and compares one exact impact
+   token.
+3. A per-Access request-admission cut closes before drain. Every MITM request
+   holds its Access-use lease through its complete downstream response.
+4. Active CaptureRuns block deletion. Durable workspace assignments require a
+   separate explicit confirmation and are removed in the SQLite transaction.
+   A ProxyClientBinding policy that names any owned Profile blocks deletion;
+   it is never rewritten or swept implicitly.
+5. A secret referenced by another Access is preserved. Only exclusive
+   references are passed to the host SecretStore, whose missing result is
+   idempotent and whose errors never contain the reference.
+6. Durable deletion writes an immutable tombstone before removing the Access
+   aggregate in the same transaction. The `AccessID` cannot be created again.
+7. A lost success response can be retried without repeating secret cleanup or
+   recording another deletion Activity event. Commit ambiguity is reconciled
+   from SQLite; an unresolvable result fails closed.
+8. Activity, ConnectionEvent, and EgressAttempt history is retained. Deletion
+   never claims to erase historical evidence or force-cancel an Agent process.
 
 ## Product acceptance
 
-1. `PATCH /api/v1/accesses/{accessId}` accepts only enabled-to-disabled and
-   disabled-to-enabled transitions under aggregate-local `If-Match` and an
-   idempotency key. The browser sends only the target status, never the full
-   aggregate or a credential reference.
-2. Disable commits the durable next revision and synchronously withdraws the
-   active projection before success. New endpoint, leaf, route, and request
-   admissions fail closed; already pinned immutable snapshots may finish.
-3. Re-enable recompiles the durable aggregate and publishes its next immutable
-   snapshot before success. It affects only subsequent admissions.
-4. Failed pre-commit work does not change durable or active state. A known
-   commit followed by projection failure is reported as unavailable and never
-   shown as success.
-5. Activity records distinct enabled and disabled management events without
-   prompt, header, credential, or aggregate payload data.
-6. Desktop presents one compact reversible control, one concise disable impact
-   confirmation, and equivalent English and Simplified Chinese behavior.
-7. Integration and race evidence covers CAS conflict, withdrawal, re-enable,
-   restart recovery, old-snapshot completion, and shutdown boundaries.
+- The Desktop shows `Delete` only for a disabled Access.
+- The confirmation is compact and names only bounded counts: workspace
+  assignments, active captures, remote-client policy references, exclusive
+  credentials, and preserved shared credentials.
+- Workspace retirement requires a checkbox; active captures leave the action
+  disabled and expose Refresh.
+- A successful deletion removes the Access from the directory. A later create
+  using the retired identity returns `access_retired`.
+- Activity and traffic views remain ten-row paginated tables and stay operable
+  with at least eight captured Agents and dozens of connection/attempt rows.
+
+## Required evidence
+
+- Request admission close/drain/release through the real proxy handler.
+- SQLite impact CAS, workspace retirement, ProxyClientBinding reference fence,
+  tombstone reopen, identity non-reuse, commit-then-error and rollback-then-error
+  reconciliation.
+- Exclusive/shared secret classification, cleanup failure/retry, and changed
+  ownership between preview and execution.
+- Authenticated control preview/DELETE, capability separation, idempotency,
+  single Activity event, strict closed response validation, and UI workflow.
+- Full Go, race-touched packages, vet, structural/cross-platform builds,
+  TypeScript, React, and Playwright checks.
 
 ## Explicitly deferred
 
-- Safe deletion. It needs one authority that proves disabled, no pinned
-  request, drained runtime work, and no workspace or other configuration
-  reference while retaining historical Activity identity.
-- Renaming and arbitrary aggregate editing through this PATCH route.
-- Packaged original-route acceptance, Keychain, system Root installation,
-  Server/LAN mode, plugins, Language Bridge, transparent application capture,
-  and Release readiness.
-
-## Completion statement
-
-> An existing Access can be disabled without deleting its configuration or
-> history and can later be re-enabled. Each change is one aggregate-local CAS;
-> disable withdraws only future admission, re-enable publishes only for future
-> requests, and ambiguous projection state is never displayed as success. Safe
-> deletion remains deliberately absent.
+- Force-terminating running CaptureRuns or requests.
+- Erasing retained Activity, ConnectionEvent, or EgressAttempt history.
+- Native release secret storage, Keychain, system Root installation,
+  Server/LAN composition, plugins, Language Bridge, transparent application
+  capture, and Preview/Release readiness.

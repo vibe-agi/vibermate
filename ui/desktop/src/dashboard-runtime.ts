@@ -18,6 +18,8 @@ import type {
   AccessAddCandidateResponse,
   AccessApplyInput,
   AccessApplyResponse,
+  AccessDeletionPreview,
+  AccessDeletionResponse,
   AccessPlanSummary,
   AccessStatus,
   ActivityPage,
@@ -106,6 +108,16 @@ export interface DashboardActions {
     expectedRevision: number,
     status: Extract<AccessStatus, "enabled" | "disabled">,
   ) => Promise<AccessApplyResponse | undefined>;
+  readonly previewAccessDeletion: (
+    accessId: string,
+    expectedRevision: number,
+  ) => Promise<AccessDeletionPreview | undefined>;
+  readonly deleteAccess: (
+    accessId: string,
+    expectedRevision: number,
+    impactToken: string,
+    retireWorkspaceBindings: boolean,
+  ) => Promise<AccessDeletionResponse | undefined>;
   readonly replaceCredentialSecret: (
     coordinates: AccessCredentialCoordinates,
     secret: string,
@@ -230,6 +242,18 @@ type DashboardCommand =
       readonly status: Extract<AccessStatus, "enabled" | "disabled">;
     }
   | {
+      readonly kind: "preview-access-deletion";
+      readonly accessId: string;
+      readonly expectedRevision: number;
+    }
+  | {
+      readonly kind: "delete-access";
+      readonly accessId: string;
+      readonly expectedRevision: number;
+      readonly impactToken: string;
+      readonly retireWorkspaceBindings: boolean;
+    }
+  | {
       readonly kind: "replace-credential";
       readonly coordinates: AccessCredentialCoordinates;
     }
@@ -249,6 +273,8 @@ interface TransientCommandInput {
 type DashboardCommandResult =
   | AccessAddCandidateResponse
   | AccessApplyResponse
+  | AccessDeletionPreview
+  | AccessDeletionResponse
   | AccessLoadResult
   | ApprovalView
   | CredentialView
@@ -627,6 +653,17 @@ export function useDashboardQueryRuntime(
             dashboardQueryKeys.activities,
           ]);
           break;
+        case "delete-access":
+          model.queryClient.removeQueries({
+            queryKey: ["vibermate", "access", input.accessId],
+          });
+          invalidateQueriesInBackground(model.queryClient, [
+            dashboardQueryKeys.accesses,
+            dashboardQueryKeys.status,
+            dashboardQueryKeys.activities,
+          ]);
+          break;
+        case "preview-access-deletion":
         case "load-access":
           break;
       }
@@ -719,6 +756,25 @@ export function useDashboardQueryRuntime(
           expectedRevision,
           kind: "update-access-status",
           status,
+        }),
+      previewAccessDeletion: (accessId, expectedRevision) =>
+        runCommand<AccessDeletionPreview>({
+          accessId,
+          expectedRevision,
+          kind: "preview-access-deletion",
+        }),
+      deleteAccess: (
+        accessId,
+        expectedRevision,
+        impactToken,
+        retireWorkspaceBindings,
+      ) =>
+        runCommand<AccessDeletionResponse>({
+          accessId,
+          expectedRevision,
+          impactToken,
+          kind: "delete-access",
+          retireWorkspaceBindings,
         }),
       decideApproval: async (approval, choice) => {
         await runCommand<ApprovalView>({
@@ -1120,6 +1176,20 @@ async function executeCommand(
         input.accessId,
         input.expectedRevision,
         input.status,
+        signal,
+      );
+    case "preview-access-deletion":
+      return model.client.previewAccessDeletion(
+        input.accessId,
+        input.expectedRevision,
+        signal,
+      );
+    case "delete-access":
+      return model.client.deleteAccess(
+        input.accessId,
+        input.expectedRevision,
+        input.impactToken,
+        input.retireWorkspaceBindings,
         signal,
       );
     case "replace-credential": {

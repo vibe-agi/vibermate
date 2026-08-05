@@ -32,6 +32,18 @@ used by Access compilation and ingress classification. `ClientOrigin` and the
 actual provider target are separate network identities, and no secret value
 can enter the aggregate or snapshot.
 
+Access lifecycle is reversible until an explicit retirement. Disable is one
+aggregate-local CAS that withdraws only future admission; re-enable publishes
+only for later requests. Permanent deletion is available only for a disabled
+Access and starts with a revision-bound impact preview. Execution closes that
+Access's per-request admission, drains requests admitted before the cut,
+requires explicit retirement of workspace assignments, refuses while matching
+CaptureRuns remain active or a ProxyClientBinding policy still references one
+of its Profiles, preserves secrets shared by another Access, removes exclusive
+saved credentials, and commits an immutable SQLite tombstone so the same
+`AccessID` cannot be reused. Historical Activity, connection, and egress facts
+remain. This does not force-cancel running Agents or erase historical evidence.
+
 The protocol layer now implements the corresponding network-free bilateral
 path. Constructor-validated immutable IR separates Anthropic Messages client
 semantics from OpenAI Chat provider semantics; the typed codec composition
@@ -418,7 +430,11 @@ active; the route never performs a racy post-commit plan lookup. An existing
 Access can also be disabled and re-enabled through a status-only CAS mutation.
 Disable withdraws new admission while preserving the complete durable
 configuration and historical Activity; re-enable recompiles and publishes the
-next revision for later requests only. Safe deletion remains unimplemented.
+next revision for later requests only. Safe deletion is now an explicit
+preview-then-delete workflow: it closes and drains per-Access request admission,
+blocks on active captures or remote-client Profile references, requires
+confirmation before retiring workspace assignments, cleans up only exclusive
+saved credentials, and preserves history plus an immutable identity tombstone.
 
 Desktop Settings also inspects the exact packaged `vibermate` sidecar and can
 install, refresh, or remove one receipt-owned link at `~/.local/bin/vibermate`.

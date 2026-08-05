@@ -10,6 +10,8 @@ import (
 	"time"
 
 	"github.com/vibe-agi/vibermate/internal/access"
+	"github.com/vibe-agi/vibermate/internal/controlprincipal"
+	"github.com/vibe-agi/vibermate/internal/proxyclient"
 	"github.com/vibe-agi/vibermate/internal/runtimepersistence"
 )
 
@@ -171,6 +173,479 @@ func TestAccessPlanCASPublishesImmutablePlanAndRestores(t *testing.T) {
 			current.PlanHash(),
 		)
 	}
+}
+
+func TestAccessDeletionDrainsRequestsRetiresSecretAndBlocksIdentityReuse(
+	t *testing.T,
+) {
+	t.Parallel()
+
+	store := openStore(t, filepath.Join(t.TempDir(), "data", "runtime.db"))
+	retirer := &recordingSecretRetirer{}
+	manager, err := access.NewManager(
+		t.Context(),
+		store.AccessRepository(),
+		testCompiler(t),
+		newProjection(t),
+		retirer,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer shutdownStore(t, store)
+	defer shutdownManager(t, manager)
+
+	accessID := newAccessID(t, "access-delete-manager")
+	aggregate := testAggregate(t, accessID, 1, "Delete manager")
+	if _, err := manager.WriteAccess(t.Context(), access.WriteCommand{
+		ExpectedRevision: 0,
+		Aggregate:        aggregate,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	binding, err := manager.ResolveClientOrigin(aggregate.AgentEndpoint.ClientOrigin)
+	if err != nil {
+		t.Fatal(err)
+	}
+	disabled := aggregate.Clone()
+	disabled.Binding.Revision = 2
+	disabled.Binding.Status = access.AccessStatusDisabled
+	if _, err := manager.WriteAccess(t.Context(), access.WriteCommand{
+		ExpectedRevision: 1,
+		Aggregate:        disabled,
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	now := time.Date(2026, 8, 5, 12, 0, 0, 0, time.UTC)
+	preview, err := manager.PreviewDeleteAccess(
+		t.Context(),
+		access.PreviewDeletionCommand{
+			AccessID:         accessID,
+			ExpectedRevision: 2,
+			ObservedAt:       now,
+		},
+	)
+	if err != nil || !preview.CanDelete(false) ||
+		preview.ExclusiveSecretCount != 1 || preview.SharedSecretCount != 0 {
+		t.Fatalf("deletion preview=%+v err=%v", preview, err)
+	}
+	lease, err := manager.AdmitRequest(t.Context(), binding)
+	if err != nil {
+		t.Fatal(err)
+	}
+	type deletionResult struct {
+		result access.DeleteResult
+		err    error
+	}
+	completed := make(chan deletionResult, 1)
+	go func() {
+		result, deleteErr := manager.DeleteAccess(t.Context(), access.DeleteCommand{
+			AccessID:            accessID,
+			ExpectedRevision:    2,
+			ExpectedImpactToken: preview.ImpactToken,
+			DeletedAt:           now,
+		})
+		completed <- deletionResult{result: result, err: deleteErr}
+	}()
+
+	deadline := time.Now().Add(time.Second)
+	for {
+		probe, admissionErr := manager.AdmitRequest(t.Context(), binding)
+		if errors.Is(admissionErr, access.ErrAccessRequestAdmissionClosed) {
+			break
+		}
+		if admissionErr == nil {
+			probe.Release()
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("Access deletion did not close request admission")
+		}
+	}
+	select {
+	case outcome := <-completed:
+		t.Fatalf("Access deleted before request drain: %+v", outcome)
+	default:
+	}
+	lease.Release()
+	outcome := <-completed
+	if outcome.err != nil || outcome.result.Outcome != access.DeleteOutcomeCommitted ||
+		outcome.result.Revision != 2 {
+		t.Fatalf("Access deletion result=%+v err=%v", outcome.result, outcome.err)
+	}
+	if retired := retirer.references(); len(retired) != 1 ||
+		retired[0] != "secret://provider/"+accessID.String() {
+		t.Fatalf("retired secret references = %v", retired)
+	}
+	repeated, err := manager.DeleteAccess(t.Context(), access.DeleteCommand{
+		AccessID:            accessID,
+		ExpectedRevision:    2,
+		ExpectedImpactToken: preview.ImpactToken,
+		DeletedAt:           now.Add(time.Second),
+	})
+	if err != nil || repeated.Outcome != access.DeleteOutcomeRetired ||
+		repeated.Revision != 2 {
+		t.Fatalf("repeated Access deletion result=%+v err=%v", repeated, err)
+	}
+	if retired := retirer.references(); len(retired) != 1 {
+		t.Fatalf("repeated deletion retired secrets again: %v", retired)
+	}
+	if _, exists, err := store.AccessRepository().Load(t.Context(), accessID); err != nil || exists {
+		t.Fatalf("deleted Access load exists=%t err=%v", exists, err)
+	}
+	if _, err := manager.WriteAccess(t.Context(), access.WriteCommand{
+		ExpectedRevision: 0,
+		Aggregate:        testAggregate(t, accessID, 1, "Reused"),
+	}); !errors.Is(err, access.ErrAccessRetired) {
+		t.Fatalf("retired Access identity was reusable: %v", err)
+	}
+}
+
+func TestAccessDeletionPreservesSecretReferencedByAnotherAccess(t *testing.T) {
+	t.Parallel()
+
+	store := openStore(t, filepath.Join(t.TempDir(), "data", "runtime.db"))
+	retirer := &recordingSecretRetirer{}
+	manager, err := access.NewManager(
+		t.Context(),
+		store.AccessRepository(),
+		testCompiler(t),
+		newProjection(t),
+		retirer,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer shutdownStore(t, store)
+	defer shutdownManager(t, manager)
+
+	deletedID := newAccessID(t, "access-delete-shared-secret")
+	retainedID := newAccessID(t, "access-retain-shared-secret")
+	deletedAggregate := testAggregate(t, deletedID, 1, "Delete shared")
+	retainedAggregate := testAggregate(t, retainedID, 1, "Retain shared")
+	retainedAggregate.AccountBindings[0].SecretRef =
+		deletedAggregate.AccountBindings[0].SecretRef
+	for _, aggregate := range []access.Aggregate{deletedAggregate, retainedAggregate} {
+		if _, err := manager.WriteAccess(t.Context(), access.WriteCommand{
+			ExpectedRevision: 0,
+			Aggregate:        aggregate,
+		}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	disabled := deletedAggregate.Clone()
+	disabled.Binding.Revision = 2
+	disabled.Binding.Status = access.AccessStatusDisabled
+	if _, err := manager.WriteAccess(t.Context(), access.WriteCommand{
+		ExpectedRevision: 1,
+		Aggregate:        disabled,
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	now := time.Date(2026, 8, 5, 12, 30, 0, 0, time.UTC)
+	preview, err := manager.PreviewDeleteAccess(t.Context(), access.PreviewDeletionCommand{
+		AccessID:         deletedID,
+		ExpectedRevision: 2,
+		ObservedAt:       now,
+	})
+	if err != nil || preview.ExclusiveSecretCount != 0 ||
+		preview.SharedSecretCount != 1 || !preview.CanDelete(false) {
+		t.Fatalf("shared-secret deletion preview=%+v err=%v", preview, err)
+	}
+	result, err := manager.DeleteAccess(t.Context(), access.DeleteCommand{
+		AccessID:            deletedID,
+		ExpectedRevision:    2,
+		ExpectedImpactToken: preview.ImpactToken,
+		DeletedAt:           now,
+	})
+	if err != nil || result.Outcome != access.DeleteOutcomeCommitted {
+		t.Fatalf("shared-secret deletion result=%+v err=%v", result, err)
+	}
+	if retired := retirer.references(); len(retired) != 0 {
+		t.Fatalf("shared secret was retired: %v", retired)
+	}
+	retained, err := manager.ResolveAccess(retainedID)
+	if err != nil || retained.Revision() != 1 {
+		t.Fatalf("retaining Access changed revision=%d err=%v", retained.Revision(), err)
+	}
+}
+
+func TestAccessDeletionBlocksProxyClientProfileReferences(t *testing.T) {
+	t.Parallel()
+
+	store := openStore(t, filepath.Join(t.TempDir(), "data", "runtime.db"))
+	retirer := &recordingSecretRetirer{}
+	manager, err := access.NewManager(
+		t.Context(),
+		store.AccessRepository(),
+		testCompiler(t),
+		newProjection(t),
+		retirer,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer shutdownStore(t, store)
+	defer shutdownManager(t, manager)
+
+	accessID := newAccessID(t, "access-delete-proxy-policy")
+	aggregate := testAggregate(t, accessID, 1, "Remote policy")
+	if _, err := manager.WriteAccess(t.Context(), access.WriteCommand{
+		ExpectedRevision: 0,
+		Aggregate:        aggregate,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	disabled := aggregate.Clone()
+	disabled.Binding.Revision = 2
+	disabled.Binding.Status = access.AccessStatusDisabled
+	if _, err := manager.WriteAccess(t.Context(), access.WriteCommand{
+		ExpectedRevision: 1,
+		Aggregate:        disabled,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	now := time.Date(2026, 8, 5, 12, 40, 0, 0, time.UTC)
+	bindingID, err := proxyclient.ParseBindingID("proxy-policy-reference")
+	if err != nil {
+		t.Fatal(err)
+	}
+	policy, err := proxyclient.NewBindingPolicy(
+		[]string{"agent-endpoints"},
+		[]string{aggregate.Profiles[0].ID.String()},
+		"quota-default",
+		[]controlprincipal.GrantKind{controlprincipal.GrantCaptureRun},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.ProxyClientRepository().CreateBinding(
+		t.Context(),
+		proxyclient.BindingRecord{
+			ID:          bindingID,
+			Revision:    1,
+			State:       proxyclient.BindingActive,
+			DisplayName: "Remote policy",
+			Policy:      policy,
+			CreatedAt:   now,
+			UpdatedAt:   now,
+		},
+	); err != nil {
+		t.Fatal(err)
+	}
+
+	preview, err := manager.PreviewDeleteAccess(
+		t.Context(),
+		access.PreviewDeletionCommand{
+			AccessID:         accessID,
+			ExpectedRevision: 2,
+			ObservedAt:       now,
+		},
+	)
+	if err != nil || preview.ProxyClientBindingCount != 1 ||
+		preview.CanDelete(false) {
+		t.Fatalf("proxy-client deletion preview=%+v err=%v", preview, err)
+	}
+	result, err := manager.DeleteAccess(t.Context(), access.DeleteCommand{
+		AccessID:            accessID,
+		ExpectedRevision:    2,
+		ExpectedImpactToken: preview.ImpactToken,
+		DeletedAt:           now,
+	})
+	if result.Outcome != access.DeleteOutcomeBlocked ||
+		!errors.Is(err, access.ErrAccessDeletionBlocked) {
+		t.Fatalf("proxy-client deletion result=%+v err=%v", result, err)
+	}
+	if retired := retirer.references(); len(retired) != 0 {
+		t.Fatalf("blocked deletion retired secrets: %v", retired)
+	}
+}
+
+func TestAccessDeletionSecretFailureLeavesAggregateAndReopensAdmission(
+	t *testing.T,
+) {
+	t.Parallel()
+
+	store := openStore(t, filepath.Join(t.TempDir(), "data", "runtime.db"))
+	retireFailure := errors.New("injected secret retirement failure")
+	retirer := &recordingSecretRetirer{failNext: retireFailure}
+	manager, err := access.NewManager(
+		t.Context(),
+		store.AccessRepository(),
+		testCompiler(t),
+		newProjection(t),
+		retirer,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer shutdownStore(t, store)
+	defer shutdownManager(t, manager)
+
+	accessID := newAccessID(t, "access-delete-secret-failure")
+	aggregate := testAggregate(t, accessID, 1, "Delete retry")
+	if _, err := manager.WriteAccess(t.Context(), access.WriteCommand{
+		ExpectedRevision: 0,
+		Aggregate:        aggregate,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	binding, err := manager.ResolveClientOrigin(aggregate.AgentEndpoint.ClientOrigin)
+	if err != nil {
+		t.Fatal(err)
+	}
+	disabled := aggregate.Clone()
+	disabled.Binding.Revision = 2
+	disabled.Binding.Status = access.AccessStatusDisabled
+	if _, err := manager.WriteAccess(t.Context(), access.WriteCommand{
+		ExpectedRevision: 1,
+		Aggregate:        disabled,
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	now := time.Date(2026, 8, 5, 12, 45, 0, 0, time.UTC)
+	preview, err := manager.PreviewDeleteAccess(t.Context(), access.PreviewDeletionCommand{
+		AccessID:         accessID,
+		ExpectedRevision: 2,
+		ObservedAt:       now,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	result, err := manager.DeleteAccess(t.Context(), access.DeleteCommand{
+		AccessID:            accessID,
+		ExpectedRevision:    2,
+		ExpectedImpactToken: preview.ImpactToken,
+		DeletedAt:           now,
+	})
+	if result.Outcome != access.DeleteOutcomeNotCommitted ||
+		!errors.Is(err, access.ErrAccessDeletionNotCommitted) ||
+		!errors.Is(err, retireFailure) {
+		t.Fatalf("failed secret retirement result=%+v err=%v", result, err)
+	}
+	if _, exists, err := store.AccessRepository().Load(t.Context(), accessID); err != nil || !exists {
+		t.Fatalf("Access after failed retirement exists=%t err=%v", exists, err)
+	}
+	lease, err := manager.AdmitRequest(t.Context(), binding)
+	if err != nil {
+		t.Fatalf("request admission did not reopen: %v", err)
+	}
+	lease.Release()
+	if retired := retirer.references(); len(retired) != 0 {
+		t.Fatalf("failed retirement was recorded as completed: %v", retired)
+	}
+
+	result, err = manager.DeleteAccess(t.Context(), access.DeleteCommand{
+		AccessID:            accessID,
+		ExpectedRevision:    2,
+		ExpectedImpactToken: preview.ImpactToken,
+		DeletedAt:           now.Add(time.Second),
+	})
+	if err != nil || result.Outcome != access.DeleteOutcomeCommitted {
+		t.Fatalf("retry deletion result=%+v err=%v", result, err)
+	}
+}
+
+func TestAccessDeletionRejectsChangedSecretOwnershipBeforeCleanup(t *testing.T) {
+	t.Parallel()
+
+	store := openStore(t, filepath.Join(t.TempDir(), "data", "runtime.db"))
+	retirer := &recordingSecretRetirer{}
+	manager, err := access.NewManager(
+		t.Context(),
+		store.AccessRepository(),
+		testCompiler(t),
+		newProjection(t),
+		retirer,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer shutdownStore(t, store)
+	defer shutdownManager(t, manager)
+
+	deletedID := newAccessID(t, "access-delete-impact-change")
+	deletedAggregate := testAggregate(t, deletedID, 1, "Delete changed")
+	if _, err := manager.WriteAccess(t.Context(), access.WriteCommand{
+		ExpectedRevision: 0,
+		Aggregate:        deletedAggregate,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	disabled := deletedAggregate.Clone()
+	disabled.Binding.Revision = 2
+	disabled.Binding.Status = access.AccessStatusDisabled
+	if _, err := manager.WriteAccess(t.Context(), access.WriteCommand{
+		ExpectedRevision: 1,
+		Aggregate:        disabled,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	now := time.Date(2026, 8, 5, 13, 0, 0, 0, time.UTC)
+	preview, err := manager.PreviewDeleteAccess(t.Context(), access.PreviewDeletionCommand{
+		AccessID:         deletedID,
+		ExpectedRevision: 2,
+		ObservedAt:       now,
+	})
+	if err != nil || preview.ExclusiveSecretCount != 1 {
+		t.Fatalf("initial deletion preview=%+v err=%v", preview, err)
+	}
+
+	retainedID := newAccessID(t, "access-retain-impact-change")
+	retained := testAggregate(t, retainedID, 1, "Retain changed")
+	retained.AccountBindings[0].SecretRef =
+		deletedAggregate.AccountBindings[0].SecretRef
+	if _, err := manager.WriteAccess(t.Context(), access.WriteCommand{
+		ExpectedRevision: 0,
+		Aggregate:        retained,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	result, err := manager.DeleteAccess(t.Context(), access.DeleteCommand{
+		AccessID:            deletedID,
+		ExpectedRevision:    2,
+		ExpectedImpactToken: preview.ImpactToken,
+		DeletedAt:           now.Add(time.Second),
+	})
+	if result.Outcome != access.DeleteOutcomeImpactChanged ||
+		!errors.Is(err, access.ErrAccessDeletionChanged) {
+		t.Fatalf("changed deletion result=%+v err=%v", result, err)
+	}
+	if retired := retirer.references(); len(retired) != 0 {
+		t.Fatalf("secret cleanup ran before impact revalidation: %v", retired)
+	}
+	if _, exists, err := store.AccessRepository().Load(t.Context(), deletedID); err != nil || !exists {
+		t.Fatalf("changed Access load exists=%t err=%v", exists, err)
+	}
+}
+
+type recordingSecretRetirer struct {
+	mu       sync.Mutex
+	retired  []string
+	failNext error
+}
+
+func (retirer *recordingSecretRetirer) RetireSecret(
+	_ context.Context,
+	reference access.SecretRef,
+) error {
+	retirer.mu.Lock()
+	defer retirer.mu.Unlock()
+	if retirer.failNext != nil {
+		err := retirer.failNext
+		retirer.failNext = nil
+		return err
+	}
+	retirer.retired = append(retirer.retired, reference.String())
+	return nil
+}
+
+func (retirer *recordingSecretRetirer) references() []string {
+	retirer.mu.Lock()
+	defer retirer.mu.Unlock()
+	return append([]string(nil), retirer.retired...)
 }
 
 func TestResponsesAccessPlanRestoresIdenticalOperationAndHash(t *testing.T) {

@@ -157,12 +157,16 @@ func (r *accessRepository) CompareAndSwap(
 			`INSERT INTO access_bindings (
 			     access_id, revision, name, description
 			 )
-			 VALUES (?, ?, ?, ?)
+			 SELECT ?, ?, ?, ?
+			 WHERE NOT EXISTS (
+			   SELECT 1 FROM access_tombstones WHERE access_id = ?
+			 )
 			 ON CONFLICT(access_id) DO NOTHING`,
 			candidate.Binding.ID.String(),
 			int64(candidate.Binding.Revision),
 			candidate.Binding.Name,
 			candidate.Binding.Description,
+			candidate.Binding.ID.String(),
 		)
 	} else {
 		result, err = transaction.ExecContext(
@@ -198,6 +202,18 @@ func (r *accessRepository) CompareAndSwap(
 				fmt.Errorf("read Access CAS state: %w", readErr)
 		}
 		if !exists {
+			retired, retiredErr := accessIdentityRetired(
+				permit.context,
+				transaction,
+				candidate.Binding.ID,
+			)
+			if retiredErr != nil {
+				return access.CommitResult{Outcome: access.CommitOutcomeNotCommitted},
+					fmt.Errorf("read Access retirement state: %w", retiredErr)
+			}
+			if retired {
+				return access.CommitResult{Outcome: access.CommitOutcomeRetired}, nil
+			}
 			return access.CommitResult{
 				Outcome: access.CommitOutcomeNotConfigured,
 			}, nil

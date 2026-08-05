@@ -50,6 +50,7 @@ import {
 import type {
   AccessAddCandidateInput,
   AccessCandidateProvider,
+  AccessDeletionPreview,
   AccessDetail,
   AccessDirectoryItem,
   ActivityRecord,
@@ -2524,6 +2525,12 @@ function AccessPanel({
     useState<"active" | "inactive" | "unavailable">();
   const [statusConfirmation, setStatusConfirmation] = useState(false);
   const [statusChangeFailed, setStatusChangeFailed] = useState(false);
+  const [deletionPreview, setDeletionPreview] =
+    useState<AccessDeletionPreview>();
+  const [deletionPreviewOpen, setDeletionPreviewOpen] = useState(false);
+  const [deletionFailed, setDeletionFailed] = useState(false);
+  const [retireWorkspaceBindings, setRetireWorkspaceBindings] =
+    useState(false);
   const [activePlanAvailable, setActivePlanAvailable] = useState<boolean>();
   const [loadedDetail, setLoadedDetail] = useState<AccessDetail>();
   const [loadedCredential, setLoadedCredential] =
@@ -2618,6 +2625,10 @@ function AccessPanel({
     setLastApplicationState(undefined);
     setStatusConfirmation(false);
     setStatusChangeFailed(false);
+    setDeletionPreview(undefined);
+    setDeletionPreviewOpen(false);
+    setDeletionFailed(false);
+    setRetireWorkspaceBindings(false);
     setActivePlanAvailable(undefined);
     setLoadedDetail(undefined);
     setLoadedCredential(undefined);
@@ -2645,6 +2656,10 @@ function AccessPanel({
     setLastApplicationState(undefined);
     setStatusConfirmation(false);
     setStatusChangeFailed(false);
+    setDeletionPreview(undefined);
+    setDeletionPreviewOpen(false);
+    setDeletionFailed(false);
+    setRetireWorkspaceBindings(false);
     setActivePlanAvailable(
       result.detail.access.status === "enabled"
         ? result.plan !== undefined
@@ -2689,6 +2704,10 @@ function AccessPanel({
     setCandidateSecret("");
     setCandidateSaveFailed(undefined);
     setPendingCandidate(undefined);
+    setDeletionPreview(undefined);
+    setDeletionPreviewOpen(false);
+    setDeletionFailed(false);
+    setRetireWorkspaceBindings(false);
     setActiveRevision(item.revision);
     setLastApplicationState(undefined);
     setLoadedCredential(undefined);
@@ -2892,6 +2911,14 @@ function AccessPanel({
               expectedRevision: String(result.revision),
             },
       );
+      if ((await reloadAccess(accessId, identityGeneration)) === undefined) {
+        if (currentAccessIdentity(accessId, identityGeneration)) {
+          setSelectionState("unavailable");
+        }
+      } else {
+        setActiveRevision(result.revision);
+        setLastApplicationState(result.applicationState);
+      }
     }
   };
 
@@ -3061,6 +3088,68 @@ function AccessPanel({
     setStatusConfirmation(false);
     setActiveRevision(result.revision);
     setLastApplicationState(result.applicationState);
+  };
+
+  const loadDeletionPreview = async (): Promise<void> => {
+    if (
+      selectedDetail === undefined ||
+      selectedDetail.access.status !== "disabled"
+    ) {
+      return;
+    }
+    const accessId = selectedDetail.access.id;
+    const identityGeneration = accessIdentity.current.generation;
+    setDeletionPreviewOpen(true);
+    setDeletionPreview(undefined);
+    setDeletionFailed(false);
+    setRetireWorkspaceBindings(false);
+    const previewResult = await actions.previewAccessDeletion(
+      accessId,
+      selectedDetail.revision,
+    );
+    if (
+      previewResult === undefined ||
+      !currentAccessIdentity(accessId, identityGeneration)
+    ) {
+      setDeletionFailed(true);
+      return;
+    }
+    setDeletionPreview(previewResult);
+  };
+
+  const deleteSelectedAccess = async (): Promise<void> => {
+    if (
+      selectedDetail === undefined ||
+      deletionPreview === undefined ||
+      deletionPreview.activeCaptureRunCount !== 0 ||
+      deletionPreview.proxyClientBindingCount !== 0 ||
+      (deletionPreview.workspaceBindingCount !== 0 &&
+        !retireWorkspaceBindings)
+    ) {
+      return;
+    }
+    const accessId = selectedDetail.access.id;
+    const identityGeneration = accessIdentity.current.generation;
+    setDeletionFailed(false);
+    const result = await actions.deleteAccess(
+      accessId,
+      deletionPreview.revision,
+      deletionPreview.impactToken,
+      retireWorkspaceBindings,
+    );
+    if (
+      result === undefined ||
+      !currentAccessIdentity(accessId, identityGeneration)
+    ) {
+      setDeletionPreview(undefined);
+      setDeletionFailed(true);
+      return;
+    }
+    beginAccessGeneration("");
+    setSelectedAccessId(undefined);
+    setPendingAccess(undefined);
+    resetDetail();
+    await directory.refetch();
   };
 
   const beginCandidateSetup = (profileId: string) => {
@@ -3770,14 +3859,24 @@ function AccessPanel({
                 </button>
               )}
               {selectionState === "ready" && selectedStatus === "disabled" && (
-                <button
-                  className="compact-action"
-                  disabled={busy}
-                  onClick={() => void updateSelectedStatus("enabled")}
-                  type="button"
-                >
-                  {t("access.lifecycle.enable.action")}
-                </button>
+                <>
+                  <button
+                    className="compact-action"
+                    disabled={busy}
+                    onClick={() => void updateSelectedStatus("enabled")}
+                    type="button"
+                  >
+                    {t("access.lifecycle.enable.action")}
+                  </button>
+                  <button
+                    className="quiet-danger compact-action"
+                    disabled={busy}
+                    onClick={() => void loadDeletionPreview()}
+                    type="button"
+                  >
+                    {t("access.lifecycle.delete.action")}
+                  </button>
+                </>
               )}
             </div>
           </div>
@@ -3802,6 +3901,129 @@ function AccessPanel({
                   {t("access.lifecycle.disable.confirm.action")}
                 </button>
               </div>
+            </div>
+          )}
+          {deletionPreviewOpen && selectedStatus === "disabled" && (
+            <div
+              aria-label={t("access.lifecycle.delete.regionLabel")}
+              className="access-delete-confirmation"
+              role="group"
+            >
+              <div className="access-delete-heading">
+                <strong>
+                  {t("access.lifecycle.delete.title", {
+                    name: displayAccessName(selectedAccess),
+                  })}
+                </strong>
+                <button
+                  aria-label={t("common.cancel.action")}
+                  className="secondary compact-action"
+                  disabled={busy}
+                  onClick={() => {
+                    setDeletionPreviewOpen(false);
+                    setDeletionPreview(undefined);
+                    setDeletionFailed(false);
+                    setRetireWorkspaceBindings(false);
+                  }}
+                  type="button"
+                >
+                  {t("common.cancel.action")}
+                </button>
+              </div>
+              {deletionPreview === undefined && !deletionFailed && (
+                <span className="access-delete-state">
+                  {t("access.lifecycle.delete.checking")}
+                </span>
+              )}
+              {deletionFailed && (
+                <div className="access-delete-state" role="alert">
+                  <span>{t("access.lifecycle.delete.failed")}</span>
+                  <button
+                    className="secondary compact-action"
+                    disabled={busy}
+                    onClick={() => void loadDeletionPreview()}
+                    type="button"
+                  >
+                    {t("common.refresh.action")}
+                  </button>
+                </div>
+              )}
+              {deletionPreview !== undefined && (
+                <>
+                  <p>
+                    {t("access.lifecycle.delete.impact", {
+                      routes: deletionPreview.workspaceBindingCount,
+                      secrets: deletionPreview.exclusiveSecretCount,
+                    })}
+                  </p>
+                  {deletionPreview.sharedSecretCount > 0 && (
+                    <p>
+                      {t("access.lifecycle.delete.sharedSecrets", {
+                        count: deletionPreview.sharedSecretCount,
+                      })}
+                    </p>
+                  )}
+                  {deletionPreview.activeCaptureRunCount > 0 && (
+                    <div className="access-delete-blocker" role="alert">
+                      <span>
+                        {t("access.lifecycle.delete.activeRuns", {
+                          count: deletionPreview.activeCaptureRunCount,
+                        })}
+                      </span>
+                      <button
+                        className="secondary compact-action"
+                        disabled={busy}
+                        onClick={() => void loadDeletionPreview()}
+                        type="button"
+                      >
+                        {t("common.refresh.action")}
+                      </button>
+                    </div>
+                  )}
+                  {deletionPreview.proxyClientBindingCount > 0 && (
+                    <div className="access-delete-blocker" role="alert">
+                      <span>
+                        {t("access.lifecycle.delete.proxyClients", {
+                          count: deletionPreview.proxyClientBindingCount,
+                        })}
+                      </span>
+                    </div>
+                  )}
+                  {deletionPreview.workspaceBindingCount > 0 && (
+                    <label className="access-delete-workspaces">
+                      <input
+                        checked={retireWorkspaceBindings}
+                        disabled={busy}
+                        onChange={(event) =>
+                          setRetireWorkspaceBindings(event.target.checked)
+                        }
+                        type="checkbox"
+                      />
+                      <span>
+                        {t("access.lifecycle.delete.workspaceConfirmation", {
+                          count: deletionPreview.workspaceBindingCount,
+                        })}
+                      </span>
+                    </label>
+                  )}
+                  <div className="button-row access-delete-actions">
+                    <button
+                      className="danger compact-action"
+                      disabled={
+                        busy ||
+                        deletionPreview.activeCaptureRunCount !== 0 ||
+                        deletionPreview.proxyClientBindingCount !== 0 ||
+                        (deletionPreview.workspaceBindingCount !== 0 &&
+                          !retireWorkspaceBindings)
+                      }
+                      onClick={() => void deleteSelectedAccess()}
+                      type="button"
+                    >
+                      {t("access.lifecycle.delete.confirm.action")}
+                    </button>
+                  </div>
+                </>
+              )}
             </div>
           )}
           {statusChangeFailed && (

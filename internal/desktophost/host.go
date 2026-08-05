@@ -328,6 +328,7 @@ func Start(ctx context.Context, options Options) (*Host, error) {
 		Readiness:       ready,
 		Status:          runtime,
 		Accesses:        runtime.AccessWriter(),
+		AccessDeletion:  runtime.AccessDeleter(),
 		AccessCatalog:   runtime.AccessCatalog(),
 		Resolver:        runtime.SnapshotResolver(),
 		Credentials:     runtime.Credentials(),
@@ -339,6 +340,7 @@ func Start(ctx context.Context, options Options) (*Host, error) {
 		ConnectionRules: runtime.ConnectionRules(),
 		CaptureRuns:     runtime.CaptureRunReader(),
 		WorkspaceRoutes: runtime.WorkspaceRoutes(),
+		Clock:           options.Runtime.Clock,
 	})
 	if err != nil {
 		return fail("App control routes", err)

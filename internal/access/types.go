@@ -31,6 +31,10 @@ const (
 	ReasonCommitOutcomeUnknown  ReasonCode = "access_commit_outcome_unknown"
 	ReasonProjectionUnavailable ReasonCode = "access_projection_unavailable"
 	ReasonAccessRuntimeStopping ReasonCode = "access_runtime_stopping"
+	ReasonAccessRetired         ReasonCode = "access_retired"
+	ReasonDeletionBlocked       ReasonCode = "access_deletion_blocked"
+	ReasonDeletionChanged       ReasonCode = "access_deletion_impact_changed"
+	ReasonDeletionNotCommitted  ReasonCode = "access_deletion_not_committed"
 )
 
 // Failure carries a stable reason code without embedding localized copy.

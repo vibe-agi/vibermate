@@ -211,6 +211,31 @@ export interface AccessApplyInput {
 
 export type AccessStatus = "draft" | "enabled" | "disabled";
 
+export type AccessDeletionBlocker =
+  | "disable_access_first"
+  | "active_capture_runs"
+  | "confirm_workspace_retirement"
+  | "proxy_client_bindings";
+
+export interface AccessDeletionPreview {
+  readonly accessId: string;
+  readonly name: string;
+  readonly revision: number;
+  readonly status: AccessStatus;
+  readonly workspaceBindingCount: number;
+  readonly activeCaptureRunCount: number;
+  readonly proxyClientBindingCount: number;
+  readonly exclusiveSecretCount: number;
+  readonly sharedSecretCount: number;
+  readonly impactToken: string;
+  readonly blockers: readonly AccessDeletionBlocker[];
+}
+
+export interface AccessDeletionResponse {
+  readonly outcome: "deleted";
+  readonly revision: number;
+}
+
 export interface AccessDirectoryItem {
   readonly accessId: string;
   readonly name: string;

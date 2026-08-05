@@ -9,6 +9,8 @@ import type {
   AccessAddCandidateInput,
   AccessAddCandidateResponse,
   AccessApplyResponse,
+  AccessDeletionPreview,
+  AccessDeletionResponse,
   AccessPlanSummary,
   AccessStatus,
   ActivityRecord,
@@ -221,6 +223,8 @@ class PreviewControlClient implements ControlClient {
       },
     ],
   ]);
+  #deletionTokens = new Map<string, string>();
+  #retiredAccesses = new Set<string>();
   #credentials = new Map<string, CredentialView>([
     [
       "work-openai\u0000work-account",
@@ -724,6 +728,9 @@ class PreviewControlClient implements ControlClient {
     input: AccessApplyInput,
     _signal?: AbortSignal,
   ) {
+    if (this.#retiredAccesses.has(accessId)) {
+      throw new ControlProblem(409, "access_retired", "error.access_retired");
+    }
     const currentRevision = this.#accesses.get(accessId)?.revision ?? 0;
     if (
       input.access.id !== accessId ||
@@ -780,6 +787,86 @@ class PreviewControlClient implements ControlClient {
       applicationState: "active",
       planHash: "7f".repeat(32),
     };
+  }
+
+  async previewAccessDeletion(
+    accessId: string,
+    expectedRevision: number,
+    _signal?: AbortSignal,
+  ): Promise<AccessDeletionPreview> {
+    const entry = this.#accesses.get(accessId);
+    if (entry === undefined || entry.revision !== expectedRevision) {
+      throw new Error("Preview Access deletion revision changed");
+    }
+    const routes = this.#workspaceRoutes.filter(
+      (binding) => binding.accessId === accessId,
+    );
+    const activeCaptureRunCount = routes.reduce(
+      (total, binding) => total + binding.activeRuns.length,
+      0,
+    );
+    const blockers = [
+      ...(entry.status === "disabled" ? [] : ["disable_access_first" as const]),
+      ...(activeCaptureRunCount === 0 ? [] : ["active_capture_runs" as const]),
+      ...(routes.length === 0
+        ? []
+        : ["confirm_workspace_retirement" as const]),
+    ];
+    const impactToken = `${"A".repeat(42)}${expectedRevision % 10}`;
+    this.#deletionTokens.set(accessId, impactToken);
+    return {
+      accessId,
+      name: entry.input.access.name,
+      revision: expectedRevision,
+      status: entry.status,
+      workspaceBindingCount: routes.length,
+      activeCaptureRunCount,
+      proxyClientBindingCount: 0,
+      exclusiveSecretCount: new Set(
+        entry.input.accountBindings.map(({ secretRef }) => secretRef),
+      ).size,
+      sharedSecretCount: 0,
+      impactToken,
+      blockers,
+    };
+  }
+
+  async deleteAccess(
+    accessId: string,
+    expectedRevision: number,
+    impactToken: string,
+    retireWorkspaceBindings: boolean,
+    _signal?: AbortSignal,
+  ): Promise<AccessDeletionResponse> {
+    const entry = this.#accesses.get(accessId);
+    const routes = this.#workspaceRoutes.filter(
+      (binding) => binding.accessId === accessId,
+    );
+    if (
+      entry === undefined ||
+      entry.revision !== expectedRevision ||
+      entry.status !== "disabled" ||
+      this.#deletionTokens.get(accessId) !== impactToken ||
+      routes.some((binding) => binding.activeRuns.length !== 0) ||
+      (routes.length !== 0 && !retireWorkspaceBindings)
+    ) {
+      throw new Error("Preview Access deletion changed or is blocked");
+    }
+    const credentialKeys = new Set(
+      entry.input.accountBindings.map(({ id, profileId }) =>
+        this.#credentialKey(profileId, id),
+      ),
+    );
+    for (const key of credentialKeys) {
+      this.#credentials.delete(key);
+    }
+    this.#workspaceRoutes = this.#workspaceRoutes.filter(
+      (binding) => binding.accessId !== accessId,
+    );
+    this.#accesses.delete(accessId);
+    this.#deletionTokens.delete(accessId);
+    this.#retiredAccesses.add(accessId);
+    return { outcome: "deleted", revision: expectedRevision };
   }
 
   async accessPlan(accessId: string, _signal?: AbortSignal): Promise<AccessPlanSummary> {

@@ -144,14 +144,15 @@ func (source RandomExchangeIDSource) NewExchangeID(
 }
 
 type Options struct {
-	OwnerContext context.Context
-	Admissions   captureadmission.Authorizer
-	Ingress      IngressAuthority
-	Paths        *pathcapability.Catalog
-	Exchanges    exchange.Executor
-	Original     OriginalClient
-	Certificates CertificateAuthority
-	Connections  ConnectionJournal
+	OwnerContext   context.Context
+	Admissions     captureadmission.Authorizer
+	Ingress        IngressAuthority
+	AccessRequests access.RequestUseAdmitter
+	Paths          *pathcapability.Catalog
+	Exchanges      exchange.Executor
+	Original       OriginalClient
+	Certificates   CertificateAuthority
+	Connections    ConnectionJournal
 	// Policy decides every proxied connection before any dial, DNS
 	// resolution, or certificate issuance. An AgentEndpoint is not exempt. It
 	// is read once per connection, so a rule change reaches the next
@@ -178,22 +179,23 @@ type operation struct {
 }
 
 type Handler struct {
-	admissions   captureadmission.Authorizer
-	ingress      IngressAuthority
-	paths        *pathcapability.Catalog
-	exchanges    exchange.Executor
-	original     OriginalClient
-	certificates CertificateAuthority
-	connections  ConnectionJournal
-	policy       connectionpolicy.Source
-	approvals    NetworkApprovals
-	blindTunnels BlindTunnelDialer
-	egressAudit  egressaudit.Writer
-	exchangeIDs  ExchangeIDSource
-	handshake    time.Duration
-	clock        func() time.Time
-	auditTimeout time.Duration
-	ownerContext context.Context
+	admissions     captureadmission.Authorizer
+	ingress        IngressAuthority
+	accessRequests access.RequestUseAdmitter
+	paths          *pathcapability.Catalog
+	exchanges      exchange.Executor
+	original       OriginalClient
+	certificates   CertificateAuthority
+	connections    ConnectionJournal
+	policy         connectionpolicy.Source
+	approvals      NetworkApprovals
+	blindTunnels   BlindTunnelDialer
+	egressAudit    egressaudit.Writer
+	exchangeIDs    ExchangeIDSource
+	handshake      time.Duration
+	clock          func() time.Time
+	auditTimeout   time.Duration
+	ownerContext   context.Context
 
 	mu        sync.Mutex
 	accepting bool
@@ -206,6 +208,7 @@ func New(options Options) (*Handler, error) {
 	if options.OwnerContext == nil ||
 		options.Admissions == nil ||
 		options.Ingress == nil ||
+		options.AccessRequests == nil ||
 		options.Paths == nil ||
 		options.Exchanges == nil ||
 		options.Original == nil ||
@@ -221,25 +224,26 @@ func New(options Options) (*Handler, error) {
 		return nil, errors.New("TLS handshake timeout must be positive")
 	}
 	handler := &Handler{
-		admissions:   options.Admissions,
-		ingress:      options.Ingress,
-		paths:        options.Paths,
-		exchanges:    options.Exchanges,
-		original:     options.Original,
-		certificates: options.Certificates,
-		connections:  options.Connections,
-		policy:       options.Policy,
-		approvals:    options.Approvals,
-		blindTunnels: options.BlindTunnels,
-		egressAudit:  options.EgressAudit,
-		exchangeIDs:  options.ExchangeIDs,
-		handshake:    options.HandshakeTimeout,
-		clock:        time.Now,
-		auditTimeout: defaultAuditCompletionLimit,
-		ownerContext: options.OwnerContext,
-		accepting:    true,
-		active:       make(map[*operation]struct{}),
-		changed:      make(chan struct{}),
+		admissions:     options.Admissions,
+		ingress:        options.Ingress,
+		accessRequests: options.AccessRequests,
+		paths:          options.Paths,
+		exchanges:      options.Exchanges,
+		original:       options.Original,
+		certificates:   options.Certificates,
+		connections:    options.Connections,
+		policy:         options.Policy,
+		approvals:      options.Approvals,
+		blindTunnels:   options.BlindTunnels,
+		egressAudit:    options.EgressAudit,
+		exchangeIDs:    options.ExchangeIDs,
+		handshake:      options.HandshakeTimeout,
+		clock:          time.Now,
+		auditTimeout:   defaultAuditCompletionLimit,
+		ownerContext:   options.OwnerContext,
+		accepting:      true,
+		active:         make(map[*operation]struct{}),
+		changed:        make(chan struct{}),
 	}
 	handler.stopOwner = context.AfterFunc(options.OwnerContext, handler.BeginShutdown)
 	return handler, nil
@@ -723,6 +727,21 @@ func (handler *Handler) serveInner(
 		)
 		return
 	}
+	requestLease, err := handler.accessRequests.AdmitRequest(
+		request.Context(),
+		binding,
+	)
+	if err != nil {
+		writer.Header().Set("Connection", "close")
+		writeReason(
+			writer,
+			http.StatusMisdirectedRequest,
+			ReasonAgentEndpointChanged,
+			"",
+		)
+		return
+	}
+	defer requestLease.Release()
 	currentBinding, err := handler.ingress.ResolveClientOrigin(
 		binding.ClientOrigin(),
 	)

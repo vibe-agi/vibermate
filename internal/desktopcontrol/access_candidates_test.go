@@ -18,17 +18,19 @@ func TestAccessCandidateMutationStagesCredentialBeforeSelectingRoute(t *testing.
 	runtime := startRuntime(t)
 	defer shutdownRuntime(t, runtime)
 	application, err := desktopcontrol.New(desktopcontrol.Options{
-		Readiness:     readyState(true),
-		Status:        runtime,
-		Accesses:      runtime.AccessWriter(),
-		AccessCatalog: runtime.AccessCatalog(),
-		Resolver:      runtime.SnapshotResolver(),
-		Credentials:   runtime.Credentials(),
-		Activities:    runtime.Activities(),
-		Connections:   runtime.ConnectionEvents(),
-		Egress:        runtime.EgressAttempts(),
-		Approvals:     runtime.ToolApprovals(),
-		Offline:       runtime,
+		Readiness:      readyState(true),
+		Status:         runtime,
+		Accesses:       runtime.AccessWriter(),
+		AccessDeletion: runtime.AccessDeleter(),
+		Clock:          desktopcontrol.SystemClock{},
+		AccessCatalog:  runtime.AccessCatalog(),
+		Resolver:       runtime.SnapshotResolver(),
+		Credentials:    runtime.Credentials(),
+		Activities:     runtime.Activities(),
+		Connections:    runtime.ConnectionEvents(),
+		Egress:         runtime.EgressAttempts(),
+		Approvals:      runtime.ToolApprovals(),
+		Offline:        runtime,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -377,17 +379,19 @@ func TestCodexAccessAddsConfiguresAndSelectsOpenAICandidate(t *testing.T) {
 	runtime := startRuntime(t)
 	defer shutdownRuntime(t, runtime)
 	application, err := desktopcontrol.New(desktopcontrol.Options{
-		Readiness:     readyState(true),
-		Status:        runtime,
-		Accesses:      runtime.AccessWriter(),
-		AccessCatalog: runtime.AccessCatalog(),
-		Resolver:      runtime.SnapshotResolver(),
-		Credentials:   runtime.Credentials(),
-		Activities:    runtime.Activities(),
-		Connections:   runtime.ConnectionEvents(),
-		Egress:        runtime.EgressAttempts(),
-		Approvals:     runtime.ToolApprovals(),
-		Offline:       runtime,
+		Readiness:      readyState(true),
+		Status:         runtime,
+		Accesses:       runtime.AccessWriter(),
+		AccessDeletion: runtime.AccessDeleter(),
+		Clock:          desktopcontrol.SystemClock{},
+		AccessCatalog:  runtime.AccessCatalog(),
+		Resolver:       runtime.SnapshotResolver(),
+		Credentials:    runtime.Credentials(),
+		Activities:     runtime.Activities(),
+		Connections:    runtime.ConnectionEvents(),
+		Egress:         runtime.EgressAttempts(),
+		Approvals:      runtime.ToolApprovals(),
+		Offline:        runtime,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -545,17 +549,19 @@ func TestAccessFullApplyPreservesExistingSecretRefServerSide(t *testing.T) {
 	runtime := startRuntime(t)
 	defer shutdownRuntime(t, runtime)
 	application, err := desktopcontrol.New(desktopcontrol.Options{
-		Readiness:     readyState(true),
-		Status:        runtime,
-		Accesses:      runtime.AccessWriter(),
-		AccessCatalog: runtime.AccessCatalog(),
-		Resolver:      runtime.SnapshotResolver(),
-		Credentials:   runtime.Credentials(),
-		Activities:    runtime.Activities(),
-		Connections:   runtime.ConnectionEvents(),
-		Egress:        runtime.EgressAttempts(),
-		Approvals:     runtime.ToolApprovals(),
-		Offline:       runtime,
+		Readiness:      readyState(true),
+		Status:         runtime,
+		Accesses:       runtime.AccessWriter(),
+		AccessDeletion: runtime.AccessDeleter(),
+		Clock:          desktopcontrol.SystemClock{},
+		AccessCatalog:  runtime.AccessCatalog(),
+		Resolver:       runtime.SnapshotResolver(),
+		Credentials:    runtime.Credentials(),
+		Activities:     runtime.Activities(),
+		Connections:    runtime.ConnectionEvents(),
+		Egress:         runtime.EgressAttempts(),
+		Approvals:      runtime.ToolApprovals(),
+		Offline:        runtime,
 	})
 	if err != nil {
 		t.Fatal(err)
