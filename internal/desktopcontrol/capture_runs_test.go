@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"net/http"
+	"net/http/httptest"
 	"reflect"
 	"sort"
 	"strings"
@@ -15,6 +16,53 @@ import (
 	"github.com/vibe-agi/vibermate/internal/clientadapter"
 	"github.com/vibe-agi/vibermate/internal/desktopcontrol"
 )
+
+func TestCaptureRunAuditCollectionAdmitsOnlyItsWebviewPreflight(t *testing.T) {
+	t.Parallel()
+
+	fixture := newAuditFixture(t, fixedCaptureRunReader{})
+	preflight := func(path string) *httptest.ResponseRecorder {
+		request := httptest.NewRequest(
+			http.MethodOptions,
+			"http://"+fixture.authority+path,
+			nil,
+		)
+		request.Host = fixture.authority
+		request.RemoteAddr = "127.0.0.1:50000"
+		request.Header.Set("Origin", "tauri://localhost")
+		request.Header.Set("Sec-Fetch-Site", "cross-site")
+		request.Header.Set("Sec-Fetch-Mode", "cors")
+		request.Header.Set("Sec-Fetch-Dest", "empty")
+		request.Header.Set("Access-Control-Request-Method", http.MethodGet)
+		request.Header.Set("Access-Control-Request-Headers", "authorization")
+		recorder := httptest.NewRecorder()
+		fixture.router.ServeHTTP(recorder, request)
+		return recorder
+	}
+
+	collection := preflight("/api/v1/capture-runs?limit=20")
+	if collection.Code != http.StatusNoContent ||
+		collection.Header().Get("Access-Control-Allow-Origin") !=
+			"tauri://localhost" ||
+		collection.Header().Get("Access-Control-Allow-Methods") !=
+			http.MethodGet {
+		t.Fatalf(
+			"capture audit preflight status=%d headers=%v body=%s",
+			collection.Code,
+			collection.Header(),
+			collection.Body.Bytes(),
+		)
+	}
+
+	controlPath := preflight("/api/v1/capture-runs/run-1/actions/attach")
+	if controlPath.Code != http.StatusForbidden {
+		t.Fatalf(
+			"capture control preflight status=%d body=%s",
+			controlPath.Code,
+			controlPath.Body.Bytes(),
+		)
+	}
+}
 
 type fixedCaptureRunReader struct {
 	page capturerun.Page

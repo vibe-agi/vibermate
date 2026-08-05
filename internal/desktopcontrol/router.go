@@ -117,7 +117,11 @@ func (router *Router) ServeHTTP(
 	// local CLI and its per-run capability; reading the list is a person
 	// looking at their own machine, and it reaches the app the same way every
 	// other read does. Design 15 lists them that way.
-	if capturePath(request.URL.Path) && request.Method != http.MethodGet {
+	webviewCapturePreflight := request.Method == http.MethodOptions &&
+		request.URL.Path == "/api/v1/capture-runs"
+	if capturePath(request.URL.Path) &&
+		request.Method != http.MethodGet &&
+		!webviewCapturePreflight {
 		if !router.validCLIControlTransport(request) {
 			writeProblem(writer, http.StatusForbidden, ReasonUnauthorized)
 			return

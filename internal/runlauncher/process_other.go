@@ -3,13 +3,19 @@
 package runlauncher
 
 import (
+	"io"
 	"os"
 	"os/exec"
 	"time"
 )
 
-func configureChild(command *exec.Cmd, timeout time.Duration) {
+func configureChild(
+	command *exec.Cmd,
+	timeout time.Duration,
+	_ io.Reader,
+) func() {
 	command.WaitDelay = timeout
+	return func() {}
 }
 
 func relaySignals(*os.Process) func() {

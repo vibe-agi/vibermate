@@ -199,11 +199,17 @@ func (launcher *Launcher) Run(
 	child.Stdin = launcher.config.Stdin
 	child.Stdout = launcher.config.Stdout
 	child.Stderr = launcher.config.Stderr
-	configureChild(child, launcher.config.TerminationTimeout)
+	restoreTerminal := configureChild(
+		child,
+		launcher.config.TerminationTimeout,
+		launcher.config.Stdin,
+	)
 	if err := child.Start(); err != nil {
+		restoreTerminal()
 		launcher.finishBestEffort(control, grant)
 		return 1, fmt.Errorf("start captured process: %w", err)
 	}
+	defer restoreTerminal()
 	stopSignals := relaySignals(child.Process)
 	defer stopSignals()
 	if err := launcher.callWithTimeout(
@@ -214,6 +220,7 @@ func (launcher *Launcher) Run(
 	); err != nil {
 		cancelChild(errors.New("CaptureRun attachment failed"))
 		_ = child.Wait()
+		restoreTerminal()
 		launcher.finishBestEffort(control, grant)
 		return 1, fmt.Errorf("attach captured process: %w", err)
 	}
@@ -239,15 +246,18 @@ func (launcher *Launcher) Run(
 		stopHeartbeat(heartbeatErr)
 		cancelChild(heartbeatErr)
 		waitErr = <-waitResult
+		restoreTerminal()
 		launcher.finishBestEffort(control, grant)
 		return 1, fmt.Errorf("CaptureRun heartbeat failed: %w", heartbeatErr)
 	case <-ctx.Done():
 		stopHeartbeat(ctx.Err())
 		cancelChild(ctx.Err())
 		waitErr = <-waitResult
+		restoreTerminal()
 		launcher.finishBestEffort(control, grant)
 		return 1, ctx.Err()
 	}
+	restoreTerminal()
 	stopHeartbeat(errors.New("captured process exited"))
 	finishErr := launcher.callWithTimeout(
 		context.Background(),

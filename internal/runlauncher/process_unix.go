@@ -4,16 +4,34 @@ package runlauncher
 
 import (
 	"errors"
+	"io"
 	"os"
 	"os/exec"
 	"os/signal"
 	"sync"
 	"syscall"
 	"time"
+
+	"golang.org/x/sys/unix"
+	"golang.org/x/term"
 )
 
-func configureChild(command *exec.Cmd, timeout time.Duration) {
-	command.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+func configureChild(
+	command *exec.Cmd,
+	timeout time.Duration,
+	stdin io.Reader,
+) func() {
+	return configureChildWithTerminalCheck(command, timeout, stdin, term.IsTerminal)
+}
+
+func configureChildWithTerminalCheck(
+	command *exec.Cmd,
+	timeout time.Duration,
+	stdin io.Reader,
+	isTerminal func(int) bool,
+) func() {
+	attributes := &syscall.SysProcAttr{Setpgid: true}
+	command.SysProcAttr = attributes
 	command.WaitDelay = timeout
 	command.Cancel = func() error {
 		if command.Process == nil {
@@ -24,6 +42,36 @@ func configureChild(command *exec.Cmd, timeout time.Duration) {
 			return os.ErrProcessDone
 		}
 		return err
+	}
+	input, ok := stdin.(*os.File)
+	if !ok || !isTerminal(int(input.Fd())) {
+		return func() {}
+	}
+
+	// The child owns a separate process group so cancellation can terminate its
+	// descendants. An interactive child must also own the terminal foreground;
+	// otherwise its first read receives SIGTTIN and a CLI such as Claude appears
+	// to hang after launch.
+	attributes.Foreground = true
+	attributes.Ctty = int(input.Fd())
+	launcherProcessGroup := unix.Getpgrp()
+	var once sync.Once
+	return func() {
+		once.Do(func() {
+			// A process restoring itself from the background would normally receive
+			// SIGTTOU. Preserve the only signal disposition that survives exec
+			// (ignored), ignore it across this ioctl, then restore the prior state.
+			wasIgnored := signal.Ignored(syscall.SIGTTOU)
+			signal.Ignore(syscall.SIGTTOU)
+			_ = unix.IoctlSetPointerInt(
+				int(input.Fd()),
+				unix.TIOCSPGRP,
+				launcherProcessGroup,
+			)
+			if !wasIgnored {
+				signal.Reset(syscall.SIGTTOU)
+			}
+		})
 	}
 }
 
