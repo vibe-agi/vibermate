@@ -106,7 +106,7 @@ test("lists existing tools and creates the next one without asking for a name", 
   await expect(page.getByText("New requests", { exact: true })).toBeVisible();
   const liveRoute = page.locator(".access-current-path");
   await expect(
-    liveRoute.getByText("Presentation: Follow current client (default)", {
+    liveRoute.getByText("Fingerprint: Pass through current client (default)", {
       exact: true,
     }),
   ).toBeVisible();
