@@ -19,6 +19,7 @@ import type {
   AccessApplyInput,
   AccessApplyResponse,
   AccessPlanSummary,
+  AccessStatus,
   ActivityPage,
   ActivityRecord,
   ApprovalChoice,
@@ -99,6 +100,11 @@ export interface DashboardActions {
   readonly applyAccess: (
     accessId: string,
     input: AccessApplyInput,
+  ) => Promise<AccessApplyResponse | undefined>;
+  readonly updateAccessStatus: (
+    accessId: string,
+    expectedRevision: number,
+    status: Extract<AccessStatus, "enabled" | "disabled">,
   ) => Promise<AccessApplyResponse | undefined>;
   readonly replaceCredentialSecret: (
     coordinates: AccessCredentialCoordinates,
@@ -216,6 +222,12 @@ type DashboardCommand =
       readonly kind: "apply-access";
       readonly accessId: string;
       readonly coordinates?: AccessCredentialCoordinates;
+    }
+  | {
+      readonly kind: "update-access-status";
+      readonly accessId: string;
+      readonly expectedRevision: number;
+      readonly status: Extract<AccessStatus, "enabled" | "disabled">;
     }
   | {
       readonly kind: "replace-credential";
@@ -581,6 +593,7 @@ export function useDashboardQueryRuntime(
           ]);
           break;
         case "apply-access":
+        case "update-access-status":
         case "add-access-candidate":
         case "select-access-candidate":
           void Promise.all([
@@ -700,6 +713,13 @@ export function useDashboardQueryRuntime(
           { accessApplyInput: input },
         );
       },
+      updateAccessStatus: (accessId, expectedRevision, status) =>
+        runCommand<AccessApplyResponse>({
+          accessId,
+          expectedRevision,
+          kind: "update-access-status",
+          status,
+        }),
       decideApproval: async (approval, choice) => {
         await runCommand<ApprovalView>({
           approval,
@@ -1095,6 +1115,13 @@ async function executeCommand(
       );
       return result;
     }
+    case "update-access-status":
+      return model.client.updateAccessStatus(
+        input.accessId,
+        input.expectedRevision,
+        input.status,
+        signal,
+      );
     case "replace-credential": {
       if (credentialSecret.length === 0) {
         throw new Error("Credential replacement secret is missing");

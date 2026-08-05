@@ -860,6 +860,42 @@ describe("Desktop control client", () => {
     );
   });
 
+  it("CAS-updates an Access status without round-tripping its aggregate", async () => {
+    const bootstrap = session();
+    const calls: FetchCall[] = [];
+    const client = await createControlClient(
+      bootstrap,
+      withSessionState(
+        bootstrap,
+        (url, init) => {
+          if (url.pathname === "/api/v1/accesses/work") {
+            expect(init.method).toBe("PATCH");
+            return jsonResponse({
+              outcome: "committed",
+              revision: 5,
+              applicationState: "inactive",
+            });
+          }
+          return jsonResponse(statusResponse());
+        },
+        calls,
+      ),
+    );
+
+    await expect(client.updateAccessStatus("work", 4, "disabled")).resolves.toEqual({
+      outcome: "committed",
+      revision: 5,
+      applicationState: "inactive",
+    });
+
+    expect(calls[1]?.url.pathname).toBe("/api/v1/accesses/work");
+    expect(calls[1]?.init.method).toBe("PATCH");
+    expect(new Headers(calls[1]?.init.headers).get("If-Match")).toBe("4");
+    expect(calls[1]?.init.body).toBe(JSON.stringify({ status: "disabled" }));
+    expect(String(calls[1]?.init.body)).not.toContain("profile");
+    expect(String(calls[1]?.init.body)).not.toContain("secret");
+  });
+
   it("rejects a CaptureRun audit projection missing adapter evidence state", async () => {
     const bootstrap = session();
     const fetchImplementation = withSessionState(bootstrap, (url) => {

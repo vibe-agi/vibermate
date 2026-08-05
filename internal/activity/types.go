@@ -31,6 +31,8 @@ type Kind string
 
 const (
 	KindAccessApplied            Kind = "access.applied"
+	KindAccessDisabled           Kind = "access.disabled"
+	KindAccessEnabled            Kind = "access.enabled"
 	KindCredentialSecretReplaced Kind = "credential.secret_replaced"
 	KindOfflineHoldEntered       Kind = "offline_hold.entered"
 	KindOfflineHoldResumed       Kind = "offline_hold.resumed"
@@ -61,6 +63,8 @@ type Event struct {
 func (event Event) Validate() error {
 	switch event.Kind {
 	case KindAccessApplied,
+		KindAccessDisabled,
+		KindAccessEnabled,
 		KindCredentialSecretReplaced,
 		KindOfflineHoldEntered,
 		KindOfflineHoldResumed,
@@ -86,7 +90,9 @@ func (event Event) Validate() error {
 	if err := event.Diagnosis.validate(); err != nil {
 		return err
 	}
-	if event.Kind == KindAccessApplied && event.AccessID.String() == "" {
+	if (event.Kind == KindAccessApplied ||
+		event.Kind == KindAccessDisabled ||
+		event.Kind == KindAccessEnabled) && event.AccessID.String() == "" {
 		return fmt.Errorf("%w: Access event has no Access ID", ErrInvalidEvent)
 	}
 	if event.Transport != nil {

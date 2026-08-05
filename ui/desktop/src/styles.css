@@ -1551,6 +1551,33 @@ button.quiet-danger {
   background: var(--ask-soft);
 }
 
+.access-lifecycle-actions,
+.access-lifecycle-confirmation {
+  display: flex;
+  align-items: center;
+  gap: 0.45rem;
+}
+
+.access-lifecycle-confirmation {
+  justify-content: space-between;
+  margin: -0.25rem 0 0.75rem;
+  border: 1px solid var(--ask);
+  border-radius: 5px;
+  padding: 0.45rem 0.55rem;
+  color: var(--muted);
+  background: var(--ask-soft);
+  font-size: 0.78rem;
+}
+
+.compact-action {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.2rem;
+  min-height: 26px;
+  padding: 0.2rem 0.5rem;
+  font-size: 0.74rem;
+}
+
 .access-directory-empty,
 .access-selection-empty {
   display: grid;

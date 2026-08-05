@@ -193,6 +193,20 @@ function clientFixture(): ControlClient {
       planHash: "b".repeat(64),
       revision: 2,
     })),
+    updateAccessStatus: vi.fn(async (_accessId, expectedRevision, status) =>
+      status === "disabled"
+        ? {
+            outcome: "committed" as const,
+            applicationState: "inactive" as const,
+            revision: expectedRevision + 1,
+          }
+        : {
+            outcome: "committed" as const,
+            applicationState: "active" as const,
+            planHash: "b".repeat(64),
+            revision: expectedRevision + 1,
+          },
+    ),
     approvals: vi.fn(async () => ({ items: [] })),
     captureRuns: vi.fn(async () => ({ items: [] })),
     manualCaptureContext: vi.fn(async () => ({

@@ -489,6 +489,20 @@ function clientFixture() {
         planHash: "b".repeat(64),
       }),
     ),
+    updateAccessStatus: vi.fn(async (_accessId, expectedRevision, status) =>
+      status === "disabled"
+        ? {
+            outcome: "committed" as const,
+            revision: expectedRevision + 1,
+            applicationState: "inactive" as const,
+          }
+        : {
+            outcome: "committed" as const,
+            revision: expectedRevision + 1,
+            applicationState: "active" as const,
+            planHash: "b".repeat(64),
+          },
+    ),
     accessPlan: vi.fn(
       async (accessId: string): Promise<AccessPlanSummary> => {
         if (accessId !== workAccess.accessId) {
@@ -1138,7 +1152,7 @@ describe("Desktop dashboard", () => {
     [
       "disabled",
       "This Access is disabled",
-      "Its configuration and history are preserved, but new traffic will not use it. Enablement editing is not available in this build yet.",
+      "Its configuration and history are preserved. New traffic will not use it until you enable it again.",
     ],
   ] as const)(
     "renders a saved %s Access without loading an active plan or credential",
@@ -1179,11 +1193,85 @@ describe("Desktop dashboard", () => {
       ).toBeTruthy();
       expect(screen.getByText("http://127.0.0.1:23333/v1")).toBeTruthy();
       expect(screen.queryByLabelText("API Key")).toBeNull();
-      expect(
-        screen.queryByRole("button", { name: "Add account or route" }),
-      ).toBeNull();
+      const routeSection = (
+        await screen.findByRole("heading", { name: "Accounts and routes" })
+      ).closest("section");
+      if (routeSection === null) {
+        throw new Error("the route section is unavailable");
+      }
+      expect(within(routeSection).queryByRole("button", { name: "Add" })).toBeNull();
     },
   );
+
+  it("disables and re-enables an Access through a concise reversible control", async () => {
+    const i18n = await createI18n("en-US");
+    const client = clientFixture();
+    let current = workAccess;
+    client.access.mockImplementation(async () => accessDetailFixture(current));
+    client.updateAccessStatus.mockImplementation(
+      async (_accessId, expectedRevision, nextStatus) => {
+        current = {
+          ...current,
+          revision: expectedRevision + 1,
+          status: nextStatus,
+        };
+        return nextStatus === "disabled"
+          ? {
+              outcome: "committed" as const,
+              revision: current.revision,
+              applicationState: "inactive" as const,
+            }
+          : {
+              outcome: "committed" as const,
+              revision: current.revision,
+              applicationState: "active" as const,
+              planHash: "e".repeat(64),
+            };
+      },
+    );
+    const model = new DashboardQueryRuntime(client, 60_000);
+    render(
+      <I18nextProvider i18n={i18n}>
+        <Dashboard initialEntry="/access" model={model} />
+      </I18nextProvider>,
+    );
+
+    await waitForDashboard();
+    fireEvent.click(
+      await screen.findByRole("button", { name: /^Work Claude/u }),
+    );
+    fireEvent.click(await screen.findByRole("button", { name: "Disable" }));
+    expect(
+      screen.getByText(
+        "New requests will stop. Requests already in progress may finish.",
+      ),
+    ).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "Disable Access" }));
+
+    await waitFor(() =>
+      expect(client.updateAccessStatus).toHaveBeenCalledWith(
+        "work",
+        4,
+        "disabled",
+        expect.any(AbortSignal),
+      ),
+    );
+    expect(await screen.findByText("This Access is disabled")).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Enable" })).toBeTruthy();
+
+    fireEvent.click(screen.getByRole("button", { name: "Enable" }));
+    await waitFor(() =>
+      expect(client.updateAccessStatus).toHaveBeenLastCalledWith(
+        "work",
+        5,
+        "enabled",
+        expect.any(AbortSignal),
+      ),
+    );
+    await waitFor(() =>
+      expect(screen.getByRole("button", { name: "Disable" })).toBeTruthy(),
+    );
+  });
 
   it("adds a named provider route, saves its key, and only then makes it current", async () => {
     const i18n = await createI18n("en-US");
@@ -1199,9 +1287,13 @@ describe("Desktop dashboard", () => {
     fireEvent.click(
       await screen.findByRole("button", { name: /^Work Claude/u }),
     );
-    fireEvent.click(
-      await screen.findByRole("button", { name: "Add account or route" }),
-    );
+    const routeSection = (
+      await screen.findByRole("heading", { name: "Accounts and routes" })
+    ).closest("section");
+    if (routeSection === null) {
+      throw new Error("the route section is unavailable");
+    }
+    fireEvent.click(within(routeSection).getByRole("button", { name: "Add" }));
     const officialProvider = screen.getByRole("button", {
       name: /^Anthropic official/u,
     });
@@ -1378,9 +1470,13 @@ describe("Desktop dashboard", () => {
     fireEvent.click(
       await screen.findByRole("button", { name: /^Work Claude/u }),
     );
-    fireEvent.click(
-      await screen.findByRole("button", { name: "Add account or route" }),
-    );
+    const routeSection = (
+      await screen.findByRole("heading", { name: "Accounts and routes" })
+    ).closest("section");
+    if (routeSection === null) {
+      throw new Error("the route section is unavailable");
+    }
+    fireEvent.click(within(routeSection).getByRole("button", { name: "Add" }));
     expect(screen.getByLabelText("Route name").getAttribute("value")).toBe(
       "Anthropic account 2",
     );
@@ -1445,9 +1541,13 @@ describe("Desktop dashboard", () => {
     fireEvent.click(
       await screen.findByRole("button", { name: /^Work Codex/u }),
     );
-    fireEvent.click(
-      await screen.findByRole("button", { name: "Add account or route" }),
-    );
+    const routeSection = (
+      await screen.findByRole("heading", { name: "Accounts and routes" })
+    ).closest("section");
+    if (routeSection === null) {
+      throw new Error("the route section is unavailable");
+    }
+    fireEvent.click(within(routeSection).getByRole("button", { name: "Add" }));
 
     expect(
       screen.getByRole("button", { name: /^OpenAI official/u }),

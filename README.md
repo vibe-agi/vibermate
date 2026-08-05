@@ -414,7 +414,11 @@ successful apply response is a closed commit receipt: `active` includes the
 exact candidate plan hash frozen at publication, while a known durable commit
 whose projection failed returns `unavailable` without a hash. The UI reports
 that state as unavailable and asks for a restart instead of claiming traffic is
-active; the route never performs a racy post-commit plan lookup.
+active; the route never performs a racy post-commit plan lookup. An existing
+Access can also be disabled and re-enabled through a status-only CAS mutation.
+Disable withdraws new admission while preserving the complete durable
+configuration and historical Activity; re-enable recompiles and publishes the
+next revision for later requests only. Safe deletion remains unimplemented.
 
 Desktop Settings also inspects the exact packaged `vibermate` sidecar and can
 install, refresh, or remove one receipt-owned link at `~/.local/bin/vibermate`.

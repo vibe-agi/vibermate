@@ -134,6 +134,7 @@ type AccessApplicationState string
 
 const (
 	AccessApplicationStateActive      AccessApplicationState = "active"
+	AccessApplicationStateInactive    AccessApplicationState = "inactive"
 	AccessApplicationStateUnavailable AccessApplicationState = "unavailable"
 )
 
@@ -209,6 +210,10 @@ func New(options Options) (*Handler, error) {
 	handler.mux.HandleFunc(
 		"GET /api/v1/accesses/{accessId}",
 		handler.getAccess,
+	)
+	handler.mux.HandleFunc(
+		"PATCH /api/v1/accesses/{accessId}",
+		handler.updateAccess,
 	)
 	handler.mux.HandleFunc(
 		"PUT /api/v1/accesses/{accessId}/actions/apply",

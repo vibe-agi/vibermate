@@ -10,6 +10,7 @@ import type {
   AccessAddCandidateResponse,
   AccessApplyResponse,
   AccessPlanSummary,
+  AccessStatus,
   ActivityRecord,
   ApprovalChoice,
   ApprovalView,
@@ -211,7 +212,14 @@ class PreviewControlClient implements ControlClient {
       choices: item.choices.map((choice) => ({ ...choice })),
     }));
   #accesses = new Map([
-    ["work", { input: previewWorkAccess, revision: 4 }],
+    [
+      "work",
+      {
+        input: previewWorkAccess,
+        revision: 4,
+        status: "enabled" as AccessStatus,
+      },
+    ],
   ]);
   #credentials = new Map<string, CredentialView>([
     [
@@ -523,7 +531,7 @@ class PreviewControlClient implements ControlClient {
           accessId,
           name: entry.input.access.name,
           description: entry.input.access.description,
-          status: entry.input.access.status,
+          status: entry.status,
           revision: entry.revision,
           clientOrigin: entry.input.agentEndpoint.clientOrigin,
           clientDialect: entry.input.agentEndpoint.clientDialect,
@@ -586,6 +594,7 @@ class PreviewControlClient implements ControlClient {
       revision: entry.revision,
       access: {
         ...input.access,
+        status: entry.status,
         defaultRouteSetId:
           input.access.defaultRouteSetId || defaultRouteSetId,
         profileIds: [...input.access.profileIds, originalProfileId],
@@ -690,7 +699,11 @@ class PreviewControlClient implements ControlClient {
       // saved and the explicit select action succeeds.
       routeSets: entry.input.routeSets,
     };
-    this.#accesses.set(accessId, { input, revision: sequence });
+    this.#accesses.set(accessId, {
+      input,
+      revision: sequence,
+      status: entry.status,
+    });
     this.#credentials.set(this.#credentialKey(profileId, credentialId), {
       credentialId,
       profileId,
@@ -719,7 +732,7 @@ class PreviewControlClient implements ControlClient {
       throw new Error("Preview Access revision changed");
     }
     const revision = input.expectedRevision + 1;
-    this.#accesses.set(accessId, { input, revision });
+    this.#accesses.set(accessId, { input, revision, status: "enabled" });
     const binding = input.accountBindings[0];
     if (binding !== undefined) {
       this.#credentials.set(this.#credentialKey(binding.profileId, binding.id), {
@@ -733,6 +746,38 @@ class PreviewControlClient implements ControlClient {
       outcome: "committed" as const,
       revision,
       applicationState: "active" as const,
+      planHash: "7f".repeat(32),
+    };
+  }
+
+  async updateAccessStatus(
+    accessId: string,
+    expectedRevision: number,
+    status: Extract<AccessStatus, "enabled" | "disabled">,
+    _signal?: AbortSignal,
+  ): Promise<AccessApplyResponse> {
+    const entry = this.#accesses.get(accessId);
+    if (
+      entry === undefined ||
+      entry.revision !== expectedRevision ||
+      entry.status === status ||
+      (entry.status !== "enabled" && entry.status !== "disabled")
+    ) {
+      throw new Error("Preview Access status changed");
+    }
+    const revision = expectedRevision + 1;
+    this.#accesses.set(accessId, { ...entry, revision, status });
+    if (status === "disabled") {
+      return {
+        outcome: "committed",
+        revision,
+        applicationState: "inactive",
+      };
+    }
+    return {
+      outcome: "committed",
+      revision,
+      applicationState: "active",
       planHash: "7f".repeat(32),
     };
   }
@@ -835,7 +880,11 @@ class PreviewControlClient implements ControlClient {
               ],
       })),
     };
-    this.#accesses.set(accessId, { input, revision });
+    this.#accesses.set(accessId, {
+      input,
+      revision,
+      status: entry.status,
+    });
     return {
       outcome: "committed",
       revision,

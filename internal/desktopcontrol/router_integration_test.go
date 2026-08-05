@@ -6,6 +6,7 @@ import (
 	"crypto/rand"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
@@ -636,6 +637,95 @@ func TestDesktopControlAppliesAccessAndControlsOfflineHoldWithScopedAuth(
 	if err != nil || active.Revision() != 1 {
 		t.Fatalf("disabled apply changed active plan revision=%d err=%v", active.Revision(), err)
 	}
+	lifecycleBody, err := json.Marshal(desktopcontrol.AccessStatusUpdate{
+		Status: access.AccessStatusDisabled,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	disabled = doMutationWithMethod(
+		t,
+		router,
+		authority,
+		http.MethodPatch,
+		"/api/v1/accesses/access-control",
+		writeToken,
+		1,
+		"access-disable-0001",
+		lifecycleBody,
+	)
+	if disabled.Code != http.StatusOK {
+		t.Fatalf("disable code=%d body=%s", disabled.Code, disabled.Body.Bytes())
+	}
+	var disabledResult desktopcontrol.AccessApplyResponse
+	decodeResponse(t, disabled, &disabledResult)
+	if disabledResult.Outcome != access.WriteOutcomeCommitted ||
+		disabledResult.Revision != 2 ||
+		disabledResult.ApplicationState != desktopcontrol.AccessApplicationStateInactive ||
+		disabledResult.PlanHash != "" {
+		t.Fatalf("disable result = %+v", disabledResult)
+	}
+	if _, err = runtime.SnapshotResolver().ResolveAccess(accessID); !errors.Is(
+		err,
+		access.ErrAccessNotConfigured,
+	) {
+		t.Fatalf("disabled Access remained active: %v", err)
+	}
+	disabledDetail := doRequest(
+		t,
+		router,
+		authority,
+		http.MethodGet,
+		"/api/v1/accesses/access-control",
+		readToken,
+		nil,
+	)
+	if disabledDetail.Code != http.StatusOK ||
+		disabledDetail.Header().Get("ETag") != `"revision-2"` {
+		t.Fatalf(
+			"disabled detail code=%d ETag=%q body=%s",
+			disabledDetail.Code,
+			disabledDetail.Header().Get("ETag"),
+			disabledDetail.Body.Bytes(),
+		)
+	}
+	var disabledView desktopcontrol.AccessDetailResponse
+	decodeResponse(t, disabledDetail, &disabledView)
+	if disabledView.Access.Status != access.AccessStatusDisabled {
+		t.Fatalf("disabled detail = %+v", disabledView.Access)
+	}
+	lifecycleBody, err = json.Marshal(desktopcontrol.AccessStatusUpdate{
+		Status: access.AccessStatusEnabled,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	reenabled := doMutationWithMethod(
+		t,
+		router,
+		authority,
+		http.MethodPatch,
+		"/api/v1/accesses/access-control",
+		writeToken,
+		2,
+		"access-enable-0001",
+		lifecycleBody,
+	)
+	if reenabled.Code != http.StatusOK {
+		t.Fatalf("re-enable code=%d body=%s", reenabled.Code, reenabled.Body.Bytes())
+	}
+	var reenabledResult desktopcontrol.AccessApplyResponse
+	decodeResponse(t, reenabled, &reenabledResult)
+	if reenabledResult.Outcome != access.WriteOutcomeCommitted ||
+		reenabledResult.Revision != 3 ||
+		reenabledResult.ApplicationState != desktopcontrol.AccessApplicationStateActive ||
+		len(reenabledResult.PlanHash) != 64 {
+		t.Fatalf("re-enable result = %+v", reenabledResult)
+	}
+	active, err = runtime.SnapshotResolver().ResolveAccess(accessID)
+	if err != nil || active.Revision() != 3 {
+		t.Fatalf("re-enabled Access revision=%d err=%v", active.Revision(), err)
+	}
 
 	credentialPath := "/api/v1/accesses/access-control/profiles/" +
 		"access-control-profile/credentials/access-control-account"
@@ -770,6 +860,8 @@ func TestDesktopControlAppliesAccessAndControlsOfflineHoldWithScopedAuth(
 	}
 	foundApply := false
 	foundCredential := false
+	foundDisabled := false
+	foundEnabled := false
 	for _, record := range rawPage.Items {
 		if record.Kind == activity.KindAccessApplied &&
 			record.AccessID == "access-control" {
@@ -780,8 +872,16 @@ func TestDesktopControlAppliesAccessAndControlsOfflineHoldWithScopedAuth(
 			record.SubjectID == "access-control-account" {
 			foundCredential = true
 		}
+		if record.Kind == activity.KindAccessDisabled &&
+			record.AccessID == "access-control" {
+			foundDisabled = true
+		}
+		if record.Kind == activity.KindAccessEnabled &&
+			record.AccessID == "access-control" {
+			foundEnabled = true
+		}
 	}
-	if !foundApply || !foundCredential {
+	if !foundApply || !foundCredential || !foundDisabled || !foundEnabled {
 		t.Fatalf("raw Activity page lost management evidence: %+v", rawPage)
 	}
 }
@@ -1157,16 +1257,42 @@ func doMutation(
 	body []byte,
 ) *httptest.ResponseRecorder {
 	t.Helper()
+	method := http.MethodPost
+	if bytes.HasSuffix([]byte(path), []byte("/actions/apply")) {
+		method = http.MethodPut
+	}
+	return doMutationWithMethod(
+		t,
+		handler,
+		authority,
+		method,
+		path,
+		token,
+		revision,
+		key,
+		body,
+	)
+}
+
+func doMutationWithMethod(
+	t *testing.T,
+	handler http.Handler,
+	authority string,
+	method string,
+	path string,
+	token string,
+	revision uint64,
+	key string,
+	body []byte,
+) *httptest.ResponseRecorder {
+	t.Helper()
 	request := newRequest(
-		http.MethodPost,
+		method,
 		authority,
 		path,
 		token,
 		body,
 	)
-	if bytes.HasSuffix([]byte(path), []byte("/actions/apply")) {
-		request.Method = http.MethodPut
-	}
 	request.Header.Set("If-Match", json.Number(
 		strconv.FormatUint(revision, 10),
 	).String())

@@ -1,61 +1,49 @@
-# Observable Original Route Closure
+# Reversible Access Lifecycle Closure
 
-Status: completed
+Status: in_progress
 Created: 2026-08-05
-Implementation baseline: `665390c21b40a9ece552687fa556c542da6e12a8`
-Design authority: `vibermate-design` at `70240511bae006a58c526c93c677a0d4eca13534`
-Implementation candidate: `efb62989e584fb7810f18af83dc6b3bd35dfa3b1`
-Evidence archive: `docs/evidence/2026-08-05-observable-original-route-closure.md`
+Implementation baseline: `ce80b657a37afc240861ce27b2271cfda35bc5da`
+Design authority: `vibermate-design` at `e856138a0e04761120319ec76f21204a92c0e119`
 
 ## Goal
 
-Make a newly created Access useful before the user configures a VibeMate-managed
-provider account. Core owns one invisible original route that preserves the
-tool's current login and exact origin while keeping the same immutable Access,
-workspace routing, egress admission, Hold, and audit authorities as managed
-routes.
+Close the already-designed reversible Access lifecycle through the real
+SQLite, projection, Control API, Desktop UI, and Activity paths. A person must
+be able to stop new traffic without deleting configuration or history, then
+restore only future admissions through one typed CAS transition.
 
 ## Product acceptance
 
-1. Core derives exactly one account-free `original_passthrough` Profile and
-   exact-origin target for every Access. Callers cannot submit, retarget,
-   delete, or use the system Profile as automatic fallback.
-2. A new Access can contain zero managed Profiles, accounts, credentials, or
-   provider routes. Its default route is the Core-owned original Profile.
-3. Original semantic traffic preserves method, path, query, bounded end-to-end
-   headers, body, client authentication, dialect, model, streaming, and the
-   downstream H1/H2 protocol to the exact ClientOrigin. It runs no model map,
-   AuthDriver, plugin, Language Bridge, or semantic retry.
-4. Upstream presentation defaults to `follow-client`. Named product
-   presentation is an explicit advanced choice and cannot be inferred from the
-   provider, model, account, dialect, or client classification. H1/H2 is not a
-   user setting.
-5. Original and managed Profiles can coexist as explicit workspace choices.
-   Switching between client-owned and VibeMate-managed authentication fails
-   with a restart-required conflict while the workspace has an active
-   CaptureRun. The guard and route CAS share one SQLite write transaction.
-6. CaptureRun creation precedes route-aware bootstrap-authority resolution, so
-   a launch racing a cross-auth route update has one deterministic winner.
-7. The Desktop UI recommends current login, keeps managed provider setup
-   advanced, explains restart-required switches, and provides the same English
-   and Simplified Chinese contract.
-8. Both credential modes reject upstream redirects without returning a
-   Location value to the client.
+1. `PATCH /api/v1/accesses/{accessId}` accepts only enabled-to-disabled and
+   disabled-to-enabled transitions under aggregate-local `If-Match` and an
+   idempotency key. The browser sends only the target status, never the full
+   aggregate or a credential reference.
+2. Disable commits the durable next revision and synchronously withdraws the
+   active projection before success. New endpoint, leaf, route, and request
+   admissions fail closed; already pinned immutable snapshots may finish.
+3. Re-enable recompiles the durable aggregate and publishes its next immutable
+   snapshot before success. It affects only subsequent admissions.
+4. Failed pre-commit work does not change durable or active state. A known
+   commit followed by projection failure is reported as unavailable and never
+   shown as success.
+5. Activity records distinct enabled and disabled management events without
+   prompt, header, credential, or aggregate payload data.
+6. Desktop presents one compact reversible control, one concise disable impact
+   confirmation, and equivalent English and Simplified Chinese behavior.
+7. Integration and race evidence covers CAS conflict, withdrawal, re-enable,
+   restart recovery, old-snapshot completion, and shutdown boundaries.
 
 ## Explicitly deferred
 
-- Anthropic `count_tokens` forwarding on the original route. It remains a
-  typed local 422 until a separate ClientOperationRun/`profile_operation`
-  path exists; the generic original-origin arm cannot carry its payload.
-- Packaged credentialed proof for the original route.
-- Keychain, system Root installation, Server/LAN mode, plugins, Language
-  Bridge, transparent application capture, and Release readiness.
+- Safe deletion. It needs one authority that proves disabled, no pinned
+  request, drained runtime work, and no workspace or other configuration
+  reference while retaining historical Activity identity.
+- Renaming and arbitrary aggregate editing through this PATCH route.
+- Packaged original-route acceptance, Keychain, system Root installation,
+  Server/LAN mode, plugins, Language Bridge, transparent application capture,
+  and Release readiness.
 
 ## Completion statement
 
-> A user can create an Access without choosing a provider or saving a second
-> credential, run a supported CLI with its existing login, observe its supported
-> semantic traffic, and later select a managed route per workspace. The default
-> upstream wire policy follows the current client; product emulation is
-> opt-in. Payload-bearing auxiliary operations and packaged original-route
-> acceptance remain explicitly unclaimed.
+This statement will be filled only after the implementation and evidence gates
+are complete.

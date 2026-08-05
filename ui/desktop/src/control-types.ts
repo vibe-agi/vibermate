@@ -326,6 +326,11 @@ export type AccessApplyResponse =
   | {
       readonly outcome: "committed";
       readonly revision: number;
+      readonly applicationState: "inactive";
+    }
+  | {
+      readonly outcome: "committed";
+      readonly revision: number;
       readonly applicationState: "unavailable";
     };
 

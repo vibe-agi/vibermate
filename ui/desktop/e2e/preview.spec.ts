@@ -127,7 +127,9 @@ test("lists existing tools and creates the next one without asking for a name", 
   ).toBeVisible();
   await expect(launch.getByText("Desktop only", { exact: true })).toBeVisible();
   await expect(
-    page.getByRole("button", { name: "Add account or route" }),
+    page
+      .locator(".access-upstream-section")
+      .getByRole("button", { name: "Add" }),
   ).toBeEnabled();
   await expect(
     page.getByRole("button", { name: "Apply Access" }),
@@ -238,6 +240,36 @@ test("lists existing tools and creates the next one without asking for a name", 
       session: globalThis.sessionStorage.length,
     })),
   ).toEqual({ local: 0, session: 0 });
+  expect(errors).toEqual([]);
+});
+
+test("stops new Access traffic and restores it without losing configuration", async ({
+  page,
+}) => {
+  const errors = collectBrowserErrors(page);
+  await page.goto("/?preview=1#access");
+  await page.getByRole("button", { name: /^Work Claude/u }).click();
+
+  await page.getByRole("button", { name: "Disable" }).click();
+  await expect(
+    page.getByText(
+      "New requests will stop. Requests already in progress may finish.",
+    ),
+  ).toBeVisible();
+  await page.getByRole("button", { name: "Disable Access" }).click();
+
+  await expect(page.getByText("This Access is disabled")).toBeVisible();
+  await expect(page.getByRole("button", { name: "Enable" })).toBeVisible();
+  await expect(
+    page.getByRole("heading", { name: "Accounts and routes" }),
+  ).toBeVisible();
+  await expect(page.getByText("https://gateway.example/v1")).toBeVisible();
+
+  await page.getByRole("button", { name: "Enable" }).click();
+  await expect(page.getByRole("button", { name: "Disable" })).toBeVisible();
+  await expect(
+    page.getByRole("heading", { name: "Start Work Claude" }),
+  ).toBeVisible();
   expect(errors).toEqual([]);
 });
 

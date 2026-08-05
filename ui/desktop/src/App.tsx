@@ -2521,7 +2521,9 @@ function AccessPanel({
     useState<"idle" | "loading" | "ready" | "unavailable">("idle");
   const [activeRevision, setActiveRevision] = useState<number>();
   const [lastApplicationState, setLastApplicationState] =
-    useState<"active" | "unavailable">();
+    useState<"active" | "inactive" | "unavailable">();
+  const [statusConfirmation, setStatusConfirmation] = useState(false);
+  const [statusChangeFailed, setStatusChangeFailed] = useState(false);
   const [activePlanAvailable, setActivePlanAvailable] = useState<boolean>();
   const [loadedDetail, setLoadedDetail] = useState<AccessDetail>();
   const [loadedCredential, setLoadedCredential] =
@@ -2614,6 +2616,8 @@ function AccessPanel({
     setPendingCandidate(undefined);
     setActiveRevision(undefined);
     setLastApplicationState(undefined);
+    setStatusConfirmation(false);
+    setStatusChangeFailed(false);
     setActivePlanAvailable(undefined);
     setLoadedDetail(undefined);
     setLoadedCredential(undefined);
@@ -2639,6 +2643,8 @@ function AccessPanel({
     }
     setActiveRevision(result.detail.revision);
     setLastApplicationState(undefined);
+    setStatusConfirmation(false);
+    setStatusChangeFailed(false);
     setActivePlanAvailable(
       result.detail.access.status === "enabled"
         ? result.plan !== undefined
@@ -3019,6 +3025,42 @@ function AccessPanel({
     setCandidateSaveFailed(undefined);
     setPendingCandidate(undefined);
     setCandidateEditorOpen(true);
+  };
+
+  const updateSelectedStatus = async (
+    status: "enabled" | "disabled",
+  ): Promise<void> => {
+    if (
+      selectedDetail === undefined ||
+      selectedDetail.access.status === status ||
+      (selectedDetail.access.status !== "enabled" &&
+        selectedDetail.access.status !== "disabled")
+    ) {
+      return;
+    }
+    const accessId = selectedDetail.access.id;
+    const identityGeneration = accessIdentity.current.generation;
+    setStatusChangeFailed(false);
+    const result = await actions.updateAccessStatus(
+      accessId,
+      selectedDetail.revision,
+      status,
+    );
+    if (
+      result === undefined ||
+      !currentAccessIdentity(accessId, identityGeneration)
+    ) {
+      setStatusChangeFailed(true);
+      return;
+    }
+    const loaded = await reloadAccess(accessId, identityGeneration);
+    if (loaded === undefined) {
+      setStatusChangeFailed(true);
+      return;
+    }
+    setStatusConfirmation(false);
+    setActiveRevision(result.revision);
+    setLastApplicationState(result.applicationState);
   };
 
   const beginCandidateSetup = (profileId: string) => {
@@ -3713,10 +3755,61 @@ function AccessPanel({
                 )}
               </p>
             </div>
-            <span className={`access-status ${selectedStatus}`}>
-              {t(`access.status.${selectedStatus}`)}
-            </span>
+            <div className="access-lifecycle-actions">
+              <span className={`access-status ${selectedStatus}`}>
+                {t(`access.status.${selectedStatus}`)}
+              </span>
+              {selectionState === "ready" && selectedStatus === "enabled" && (
+                <button
+                  className="secondary compact-action"
+                  disabled={busy}
+                  onClick={() => setStatusConfirmation(true)}
+                  type="button"
+                >
+                  {t("access.lifecycle.disable.action")}
+                </button>
+              )}
+              {selectionState === "ready" && selectedStatus === "disabled" && (
+                <button
+                  className="compact-action"
+                  disabled={busy}
+                  onClick={() => void updateSelectedStatus("enabled")}
+                  type="button"
+                >
+                  {t("access.lifecycle.enable.action")}
+                </button>
+              )}
+            </div>
           </div>
+          {statusConfirmation && selectedStatus === "enabled" && (
+            <div className="access-lifecycle-confirmation" role="alert">
+              <span>{t("access.lifecycle.disable.confirmation")}</span>
+              <div className="button-row">
+                <button
+                  className="secondary compact-action"
+                  disabled={busy}
+                  onClick={() => setStatusConfirmation(false)}
+                  type="button"
+                >
+                  {t("common.cancel.action")}
+                </button>
+                <button
+                  className="danger compact-action"
+                  disabled={busy}
+                  onClick={() => void updateSelectedStatus("disabled")}
+                  type="button"
+                >
+                  {t("access.lifecycle.disable.confirm.action")}
+                </button>
+              </div>
+            </div>
+          )}
+          {statusChangeFailed && (
+            <div className="boundary-note" role="alert">
+              <strong>{t("access.lifecycle.failed.title")}</strong>
+              <span>{t("access.lifecycle.failed.detail")}</span>
+            </div>
+          )}
           {activeRevision !== undefined && lastApplicationState !== undefined && (
             <span
               className={`success-note ${
@@ -3727,6 +3820,8 @@ function AccessPanel({
               {t(
                 lastApplicationState === "unavailable"
                   ? "access.apply.committedUnavailable"
+                  : lastApplicationState === "inactive"
+                    ? "access.lifecycle.disable.succeeded"
                   : "access.apply.succeeded",
                 { revision: activeRevision },
               )}
@@ -3816,11 +3911,12 @@ function AccessPanel({
                 </div>
                 {selectedDetail.access.status === "enabled" && (
                   <button
-                    className="secondary"
+                    className="secondary compact-action"
                     disabled={busy || candidateEditorOpen}
                     onClick={beginCandidateAdd}
                     type="button"
                   >
+                    <span aria-hidden="true">+</span>
                     {t("access.candidates.add.action")}
                   </button>
                 )}

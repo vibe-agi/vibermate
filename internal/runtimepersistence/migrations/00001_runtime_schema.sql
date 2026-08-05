@@ -109,6 +109,8 @@ CREATE TABLE runtime_activities(
   occurred_at_unix_ms INTEGER NOT NULL,
   kind TEXT NOT NULL
   CHECK(kind IN('access.applied',
+'access.disabled',
+'access.enabled',
 'credential.secret_replaced',
 'offline_hold.entered',
 'offline_hold.resumed',

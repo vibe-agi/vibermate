@@ -6,6 +6,7 @@ import type {
   AccessApplyInput,
   AccessApplyResponse,
   AccessPlanSummary,
+  AccessStatus,
   ActivityPage,
   ExchangeDetail,
   ApprovalPage,
@@ -189,6 +190,12 @@ export interface ControlClient {
   applyAccess(
     accessId: string,
     input: AccessApplyInput,
+    signal?: AbortSignal,
+  ): Promise<AccessApplyResponse>;
+  updateAccessStatus(
+    accessId: string,
+    expectedRevision: number,
+    status: Extract<AccessStatus, "enabled" | "disabled">,
     signal?: AbortSignal,
   ): Promise<AccessApplyResponse>;
   accessPlan(
@@ -1258,6 +1265,28 @@ export async function createControlClient(
       );
     },
     applyAccess: requestAccessApply,
+    updateAccessStatus: async (
+      accessId,
+      expectedRevision,
+      status,
+      signal,
+    ) => {
+      if (
+        !validResourceId(accessId) ||
+        !positiveInteger(expectedRevision) ||
+        (status !== "enabled" && status !== "disabled")
+      ) {
+        throw new ControlContractError();
+      }
+      return requestMutation<AccessApplyResponse>(
+        "PATCH",
+        `/api/v1/accesses/${encodeURIComponent(accessId)}`,
+        { status },
+        expectedRevision,
+        signal,
+        (value) => requireAccessApplyResponse(value, expectedRevision),
+      );
+    },
     accessPlan: async (accessId, signal) =>
       requireAccessPlanSummary(
         await requestRead<unknown>(
@@ -2134,7 +2163,8 @@ function requireAccessApplyResponse(
       throw new ControlContractError();
     }
   } else if (
-    response.applicationState !== "unavailable" ||
+    (response.applicationState !== "inactive" &&
+      response.applicationState !== "unavailable") ||
     !hasClosedFields(response, ["outcome", "revision", "applicationState"])
   ) {
     throw new ControlContractError();
