@@ -8,7 +8,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"path/filepath"
 	"sync"
 	"time"
 
@@ -137,7 +136,7 @@ func (manager *Manager) Create(
 		ControlCapabilityHash:       capabilityDigest(controlDigestDomain, controlValue),
 		CWD:                         command.CWD,
 		LocalUserLabel:              command.LocalUserLabel,
-		ExecutableLabel:             filepath.Base(command.ExecutablePath),
+		ExecutableLabel:             command.ExecutableLabel,
 		CatalogRevision:             command.CatalogRevision,
 		Adapter:                     cloneAdapter(command.Adapter),
 		Recognition:                 NormalizedRecognition(command.Recognition),

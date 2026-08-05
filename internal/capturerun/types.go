@@ -325,8 +325,11 @@ type LaunchGrant struct {
 }
 
 type CreateCommand struct {
-	CWD             string
-	ExecutablePath  string
+	CWD string
+	// ExecutableLabel is the verifier-confirmed invocation name shown to a
+	// person. The canonical executable path remains launch authority and never
+	// enters this persisted attribution record.
+	ExecutableLabel string
 	Lifetime        time.Duration
 	CatalogRevision clientadapter.CatalogRevision
 	Adapter         *clientadapter.Evidence
@@ -339,7 +342,11 @@ func (command CreateCommand) validate(maxLifetime time.Duration) error {
 	if err := validateAbsolutePath("working directory", command.CWD); err != nil {
 		return err
 	}
-	if err := validateAbsolutePath("executable path", command.ExecutablePath); err != nil {
+	if err := validateText(
+		"executable label",
+		command.ExecutableLabel,
+		MaxExecutableLabelByte,
+	); err != nil {
 		return err
 	}
 	if command.Lifetime <= 0 || command.Lifetime > maxLifetime {
@@ -377,9 +384,7 @@ func (command CreateCommand) validate(maxLifetime time.Duration) error {
 			ErrInvalidRequest,
 		)
 	}
-
-	label := filepath.Base(command.ExecutablePath)
-	return validateText("executable label", label, MaxExecutableLabelByte)
+	return nil
 }
 
 // Evidence is frozen after proxy capability authorization. It intentionally

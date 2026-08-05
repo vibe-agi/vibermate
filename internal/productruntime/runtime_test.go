@@ -573,7 +573,7 @@ func TestProductRuntimeComposesCaptureIngressAndConnectionAudit(t *testing.T) {
 		context.Background(),
 		capturerun.CreateCommand{
 			CWD:             captureDirectory,
-			ExecutablePath:  "/usr/bin/true",
+			ExecutableLabel: "true",
 			Lifetime:        time.Minute,
 			CatalogRevision: 1,
 			Workspace:       workspace,

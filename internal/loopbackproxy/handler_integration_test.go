@@ -1053,7 +1053,7 @@ func newProxyFixtureForDialectWithPolicy(
 	}
 	grant, err := runs.Create(context.Background(), capturerun.CreateCommand{
 		CWD:             filepath.Join(directory, "workspace"),
-		ExecutablePath:  "/usr/local/bin/claude",
+		ExecutableLabel: "claude",
 		Lifetime:        5 * time.Minute,
 		CatalogRevision: 1,
 		Adapter:         adapter,

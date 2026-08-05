@@ -56,7 +56,7 @@ func TestWorkspaceRouteProjectionGroupsRunsAndSwitchesWithCAS(t *testing.T) {
 		context.Background(),
 		capturerun.CreateCommand{
 			CWD:             workspaceDirectory,
-			ExecutablePath:  "/usr/bin/true",
+			ExecutableLabel: "true",
 			Lifetime:        time.Minute,
 			CatalogRevision: 1,
 			Workspace:       scope,

@@ -491,7 +491,7 @@ func (issuer *Issuer) IssueCaptureRun(
 	}
 	grant, err := issuer.runs.Create(ctx, capturerun.CreateCommand{
 		CWD:             request.CWD,
-		ExecutablePath:  detection.CanonicalPath,
+		ExecutableLabel: detection.ExecutableLabel,
 		Lifetime:        issuer.runLifetime,
 		CatalogRevision: detection.CatalogRevision,
 		Adapter:         runAdapter,

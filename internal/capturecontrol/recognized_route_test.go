@@ -46,6 +46,25 @@ func (recognizingVerifier) Verify(
 	}, nil
 }
 
+type versionNamedVerifier struct{}
+
+func (versionNamedVerifier) Verify(
+	_ context.Context,
+	request clientadapter.Request,
+) (clientadapter.Detection, error) {
+	return clientadapter.Detection{
+		Status:          clientadapter.StatusGeneric,
+		Recognition:     clientadapter.RecognitionUnknown,
+		CatalogRevision: 4,
+		CanonicalPath: filepath.Join(
+			filepath.Dir(request.ExecutablePath),
+			"versions",
+			"2.1.221",
+		),
+		ExecutableLabel: "claude",
+	}, nil
+}
+
 type fixedApprover struct{ allow bool }
 
 func (approver fixedApprover) AskClientRoot(
@@ -165,6 +184,25 @@ func TestRecognizedClientIsNotAskedForRootWithoutProtectedAuthorities(t *testing
 	}
 	if err := grant.Validate(); err != nil {
 		t.Fatalf("recognized transparent grant is invalid: %v", err)
+	}
+}
+
+func TestCaptureRunKeepsInvocationLabelSeparateFromCanonicalExecutable(
+	t *testing.T,
+) {
+	t.Parallel()
+
+	fixture := newFixture(t, func(options *capturegrant.Options) {
+		options.Verifier = versionNamedVerifier{}
+	})
+	defer fixture.Close(t)
+
+	grant := fixture.createRun(t)
+	if grant.Run.ExecutableLabel != "claude" {
+		t.Fatalf("display label = %q, want claude", grant.Run.ExecutableLabel)
+	}
+	if filepath.Base(grant.ExecutablePath) != "2.1.221" {
+		t.Fatalf("canonical executable = %q", grant.ExecutablePath)
 	}
 }
 

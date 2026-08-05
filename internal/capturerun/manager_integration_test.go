@@ -42,7 +42,7 @@ func TestCaptureRunPersistsVerifiedAdapterEvidenceWithProxyCapability(
 		context.Background(),
 		capturerun.CreateCommand{
 			CWD:             filepath.Join(t.TempDir(), "workspace"),
-			ExecutablePath:  "/usr/local/bin/codex",
+			ExecutableLabel: "codex",
 			Lifetime:        2 * time.Minute,
 			CatalogRevision: 7,
 			Adapter:         &adapter,
@@ -90,7 +90,7 @@ func TestCaptureRunCapabilitiesArePersistedAsHashesAndDriveLifecycle(
 
 	grant, err := manager.Create(context.Background(), capturerun.CreateCommand{
 		CWD:             filepath.Join(t.TempDir(), "workspace"),
-		ExecutablePath:  "/usr/local/bin/claude",
+		ExecutableLabel: "claude",
 		Lifetime:        2 * time.Minute,
 		CatalogRevision: 1,
 		Workspace:       workspace,
@@ -226,7 +226,7 @@ func TestCaptureRunRestartRecoveryRetainsOnlyFreshCapabilityHashes(
 	first := newManager(t, firstStore, clock)
 	grant, err := first.Create(context.Background(), capturerun.CreateCommand{
 		CWD:             filepath.Join(t.TempDir(), "workspace"),
-		ExecutablePath:  "/opt/vibermate/claude",
+		ExecutableLabel: "claude",
 		Lifetime:        90 * time.Second,
 		CatalogRevision: 1,
 		Workspace:       testWorkspaceScope(t),
@@ -278,7 +278,7 @@ func TestCaptureRunShutdownRevokesBeforeSQLiteClose(t *testing.T) {
 	manager := newManager(t, store, clock)
 	grant, err := manager.Create(context.Background(), capturerun.CreateCommand{
 		CWD:             filepath.Join(t.TempDir(), "workspace"),
-		ExecutablePath:  "/usr/bin/true",
+		ExecutableLabel: "true",
 		Lifetime:        time.Minute,
 		CatalogRevision: 1,
 		Workspace:       testWorkspaceScope(t),
