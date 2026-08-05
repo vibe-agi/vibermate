@@ -23,11 +23,13 @@ import {
   applyAccessAppPreset,
   buildAccessApplyInput,
   clientOriginIdentity,
+  codexLoginPresetDefaults,
   credentialCoordinates,
   initialAccessForm,
   newAccessForm,
   type AccessAppPreset,
   type AccessFormValues,
+  type CodexLoginPreset,
   validAccessForm,
 } from "./access-form.ts";
 import {
@@ -1898,11 +1900,22 @@ function accessPresetForItem(item: AccessDirectoryItem): AccessAppPreset {
   }
   if (
     item.clientDialect === "openai-responses" &&
-    origin === clientOriginIdentity(accessAppPresetDefaults.codex.clientOrigin)
+    Object.values(codexLoginPresetDefaults).some(
+      (candidate) => origin === clientOriginIdentity(candidate),
+    )
   ) {
     return "codex";
   }
   return "custom";
+}
+
+function codexLoginPresetForOrigin(
+  clientOrigin: string,
+): CodexLoginPreset | undefined {
+  const identity = clientOriginIdentity(clientOrigin);
+  return (Object.entries(codexLoginPresetDefaults) as ReadonlyArray<
+    readonly [CodexLoginPreset, string]
+  >).find(([, origin]) => clientOriginIdentity(origin) === identity)?.[0];
 }
 
 type AccessDestinationPreset =
@@ -2520,6 +2533,17 @@ function AccessPanel({
       : [...serverItems, pendingAccess].sort((left, right) =>
           compareResourceIds(left.accessId, right.accessId),
         );
+  const configuredOrigins = new Set(
+    visibleItems
+      .map(({ clientOrigin }) => clientOriginIdentity(clientOrigin))
+      .filter((identity) => identity !== undefined),
+  );
+  const unconfiguredCodexOrigin = Object.values(
+    codexLoginPresetDefaults,
+  ).find(
+    (origin) =>
+      !configuredOrigins.has(clientOriginIdentity(origin) ?? ""),
+  );
   const candidateClientOrigin = clientOriginIdentity(form.clientOrigin);
   const conflictingAccess = creating
     ? visibleItems.find(
@@ -2671,22 +2695,21 @@ function AccessPanel({
   };
 
   const beginCreate = () => {
-    const configuredOrigins = new Set(
-      visibleItems
-        .map(({ clientOrigin }) => clientOriginIdentity(clientOrigin))
-        .filter((identity) => identity !== undefined),
-    );
     const preferredPreset: AccessAppPreset = !configuredOrigins.has(
       clientOriginIdentity(defaultClientOrigins["anthropic-messages"]) ?? "",
     )
       ? "claude"
-      : !configuredOrigins.has(
-            clientOriginIdentity(defaultClientOrigins["openai-responses"]) ??
-              "",
-          )
+      : unconfiguredCodexOrigin !== undefined
         ? "codex"
         : "custom";
-    const next = newAccessForm(accessAppPresetDefaults[preferredPreset]);
+    const preferredDefaults =
+      preferredPreset === "codex" && unconfiguredCodexOrigin !== undefined
+        ? {
+            ...accessAppPresetDefaults.codex,
+            clientOrigin: unconfiguredCodexOrigin,
+          }
+        : accessAppPresetDefaults[preferredPreset];
+    const next = newAccessForm(preferredDefaults);
     beginAccessGeneration(next.accessId);
     resetDetail();
     setPendingAccess(undefined);
@@ -2708,6 +2731,11 @@ function AccessPanel({
   const configuredAccessForPreset = (
     preset: Exclude<AccessAppPreset, "custom">,
   ): AccessDirectoryItem | undefined => {
+    if (preset === "codex") {
+      return visibleItems.find(
+        (item) => accessPresetForItem(item) === "codex",
+      );
+    }
     const presetOrigin = clientOriginIdentity(
       accessAppPresetDefaults[preset].clientOrigin,
     );
@@ -2718,8 +2746,22 @@ function AccessPanel({
     );
   };
 
+  const configuredAccessForCodexLogin = (
+    preset: CodexLoginPreset,
+  ): AccessDirectoryItem | undefined => {
+    const identity = clientOriginIdentity(codexLoginPresetDefaults[preset]);
+    return visibleItems.find(
+      ({ clientOrigin }) =>
+        identity !== undefined &&
+        clientOriginIdentity(clientOrigin) === identity,
+    );
+  };
+
   const chooseAccessPreset = (preset: AccessAppPreset) => {
-    if (preset !== "custom") {
+    if (
+      preset !== "custom" &&
+      (preset !== "codex" || unconfiguredCodexOrigin === undefined)
+    ) {
       const configured = configuredAccessForPreset(preset);
       if (configured !== undefined) {
         void selectAccess(configured);
@@ -2731,12 +2773,23 @@ function AccessPanel({
     setAdvancedOpen(preset === "custom");
     setForm((current) => ({
       ...applyAccessAppPreset(current, preset),
+      ...(preset === "codex" && unconfiguredCodexOrigin !== undefined
+        ? { clientOrigin: unconfiguredCodexOrigin }
+        : {}),
       fixedModel: "",
       name: automaticName
         ? t(`access.preset.${preset}.defaultName`)
         : current.name,
       providerOrigin: "",
       routeName: "",
+    }));
+  };
+
+  const chooseCodexLoginPreset = (preset: CodexLoginPreset) => {
+    setForm((current) => ({
+      ...current,
+      clientDialect: "openai-responses",
+      clientOrigin: codexLoginPresetDefaults[preset],
     }));
   };
 
@@ -2901,6 +2954,9 @@ function AccessPanel({
     selectedActiveTarget === undefined
       ? undefined
       : candidateProviderForTarget(selectedActiveTarget);
+  const selectedCodexLoginPreset = codexLoginPresetForOrigin(
+    form.clientOrigin,
+  );
   const creationDestinationPresets: readonly AccessDestinationPreset[] =
     accessPreset === "codex"
       ? ["openai", "custom"]
@@ -3236,6 +3292,41 @@ function AccessPanel({
                 })}
               </div>
             </fieldset>
+            {accessPreset === "codex" && (
+              <fieldset className="access-login-picker wide-action">
+                <legend>{t("access.codexLogin.title")}</legend>
+                <p>{t("access.codexLogin.description")}</p>
+                <div className="access-login-options">
+                  {(["chatgpt", "openai-api"] as const).map((preset) => {
+                    const configured = configuredAccessForCodexLogin(preset);
+                    return (
+                      <button
+                        aria-pressed={selectedCodexLoginPreset === preset}
+                        className="access-login-option"
+                        disabled={busy}
+                        key={preset}
+                        onClick={() => chooseCodexLoginPreset(preset)}
+                        type="button"
+                      >
+                        <span>
+                          <strong>{t(`access.codexLogin.${preset}.title`)}</strong>
+                          <small>
+                            {t(`access.codexLogin.${preset}.description`)}
+                          </small>
+                        </span>
+                        {configured !== undefined && (
+                          <span className="access-app-configured">
+                            {t("access.preset.configured", {
+                              name: configured.name,
+                            })}
+                          </span>
+                        )}
+                      </button>
+                    );
+                  })}
+                </div>
+              </fieldset>
+            )}
             <div className="access-create-step wide-action">
               <span aria-hidden="true">2</span>
               <div>

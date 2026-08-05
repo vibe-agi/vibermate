@@ -153,8 +153,16 @@ test("lists existing tools and creates the next one without asking for a name", 
     "openai-responses",
   );
   await expect(page.getByLabel("Client API address")).toHaveValue(
+    "https://chatgpt.com",
+  );
+  await expect(
+    page.getByRole("button", { name: /^ChatGPT sign-in/u }),
+  ).toHaveAttribute("aria-pressed", "true");
+  await page.getByRole("button", { name: /^OpenAI API key/u }).click();
+  await expect(page.getByLabel("Client API address")).toHaveValue(
     "https://api.openai.com",
   );
+  await page.getByRole("button", { name: /^ChatGPT sign-in/u }).click();
   await expect(page.getByLabel("Name", { exact: true })).toHaveValue("Codex");
   await expect(
     page.getByRole("button", { name: /^Use the tool's current login/u }),
@@ -192,7 +200,10 @@ test("lists existing tools and creates the next one without asking for a name", 
   await expect(
     page.getByRole("button", { name: "Save and enable" }),
   ).toBeDisabled();
-  await page.getByRole("button", { name: /^OpenAI API/u }).click();
+  await page
+    .locator(".access-destination-options")
+    .getByRole("button", { name: /^OpenAI API/u })
+    .click();
   await page.getByLabel("API Key").fill("preview-provider-key");
   await expect(page.getByLabel("Access ID")).toHaveCount(0);
   await expect(page.getByLabel("Expected revision")).toHaveCount(0);

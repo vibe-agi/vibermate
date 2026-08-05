@@ -49,6 +49,7 @@ const (
 	liveAgentEnvironment  = "VIBERMATE_LIVE_AGENT"
 	localClaudeFixture    = "claude-local-fixture"
 	localResponsesFixture = "codex-local-fixture"
+	currentLoginCodex     = "codex-current-login"
 )
 
 // A real agent client, launched the way the product launches one, reaching a
@@ -825,6 +826,155 @@ func TestARealResponsesClientReachesAModelThroughVibermate(t *testing.T) {
 	}
 	if !reached {
 		t.Fatalf("no provider attempt reached %q: %+v", origin, attempts.Items)
+	}
+}
+
+// A current-login run is deliberately separate from the managed-provider
+// fixture above. It preserves the Codex login already owned by the child and
+// proves the zero-account original_passthrough Access against the exact client
+// origin. The explicit opt-in may consume a small amount of the operator's
+// existing Codex allowance and may contact only the first-party origin.
+func TestARealResponsesClientUsesItsOwnLoginThroughOriginalRoute(t *testing.T) {
+	if os.Getenv(liveAgentEnvironment) != currentLoginCodex {
+		t.Skipf("current-login run needs %s=%s", liveAgentEnvironment, currentLoginCodex)
+	}
+	codexPath, err := exec.LookPath("codex")
+	if err != nil {
+		t.Skipf("codex is not on PATH: %v", err)
+	}
+	if statusErr := exec.Command(codexPath, "login", "status").Run(); statusErr != nil {
+		t.Skipf("Codex has no usable current login: %v", statusErr)
+	}
+	if version, versionErr := exec.Command(codexPath, "--version").Output(); versionErr == nil {
+		t.Logf("current-login Responses client version: %s", strings.TrimSpace(string(version)))
+	}
+
+	root := t.TempDir()
+	paths := newHostPaths(t, filepath.Join(root, "cache"))
+	host := startHost(t, liveHostOptions(t, paths, filepath.Join(root, "data")))
+	defer shutdownHost(t, host)
+	runtime := host.Runtime()
+
+	accessID, err := access.NewAccessID("access-current-login-responses")
+	if err != nil {
+		t.Fatal(err)
+	}
+	aggregate := liveOriginalAccess(
+		t,
+		accessID,
+		"https://chatgpt.com:443",
+		access.DialectOpenAIResponses,
+	)
+	if len(aggregate.AccountBindings) != 0 ||
+		len(aggregate.Profiles) != 1 ||
+		aggregate.Profiles[0].ID != access.OriginalPassthroughProfileID() {
+		t.Fatalf("current-login Access unexpectedly owns managed state: %+v", aggregate)
+	}
+	if write, writeErr := runtime.AccessWriter().WriteAccess(
+		context.Background(),
+		access.WriteCommand{ExpectedRevision: 0, Aggregate: aggregate},
+	); writeErr != nil || write.Outcome != access.WriteOutcomeCommitted {
+		t.Fatalf("write Access result=%+v err=%v", write, writeErr)
+	}
+	rules := runtime.ConnectionRules()
+	if _, err := rules.Replace(
+		context.Background(),
+		rules.Current().Revision,
+		[]connectionpolicy.Rule{{
+			ID:       "live.allow-current-login-responses-endpoint",
+			Priority: 100,
+			Decision: connectionpolicy.DecisionAllow,
+			Match:    connectionpolicy.MatchExactHostPort("chatgpt.com", 443),
+		}},
+		rules.Current().Default,
+	); err != nil {
+		t.Fatal(err)
+	}
+
+	sessionFile, err := localdiscovery.NewFile(
+		paths.DiscoveryPath(),
+		productruntime.SystemClock{},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	baseEnvironment := []string{
+		"PATH=" + os.Getenv("PATH"),
+		"HOME=" + os.Getenv("HOME"),
+	}
+	if codexHome := os.Getenv("CODEX_HOME"); codexHome != "" {
+		baseEnvironment = append(baseEnvironment, "CODEX_HOME="+codexHome)
+	}
+	var output strings.Builder
+	launcher, err := runlauncher.New(runlauncher.Config{
+		Discovery:          sessionFile,
+		BaseEnvironment:    baseEnvironment,
+		Stdin:              strings.NewReader("Reply with the single word: ready"),
+		Stdout:             &output,
+		Stderr:             os.Stderr,
+		HeartbeatInterval:  100 * time.Millisecond,
+		ControlTimeout:     10 * time.Second,
+		TerminationTimeout: 10 * time.Second,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	runContext, cancelRun := context.WithTimeout(context.Background(), 4*time.Minute)
+	defer cancelRun()
+	approvalContext, cancelApproval := context.WithCancel(runContext)
+	approvalResult := approveRecognizedClientRoot(
+		approvalContext,
+		runtime.ToolApprovals(),
+	)
+	exitCode, runErr := launcher.Run(runContext, []string{
+		codexPath,
+		"-a", "never",
+		"-s", "read-only",
+		"exec",
+		"--skip-git-repo-check",
+		"--ignore-user-config",
+		"--color", "never",
+		"-",
+	})
+	cancelApproval()
+	approval := <-approvalResult
+	if approval.err != nil {
+		t.Fatalf("answer the recognized-client Root question: %v", approval.err)
+	}
+	if approval.allowed {
+		t.Log("approved the recognized client to receive the local Root for this launch")
+	}
+	answered := strings.TrimSpace(output.String())
+	if runErr != nil || exitCode != 0 {
+		t.Fatalf(
+			"a current-login Responses client failed: exit=%d err=%v output=%s",
+			exitCode,
+			runErr,
+			answered,
+		)
+	}
+	if !strings.Contains(strings.ToLower(answered), "ready") {
+		t.Fatalf("current-login Responses output did not contain the proof marker: %q", answered)
+	}
+	t.Logf("current-login Responses client output: %q", answered)
+
+	attempts, err := runtime.EgressAttempts().List(
+		context.Background(),
+		egressaudit.PageRequest{Limit: 50},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	reached := false
+	for _, record := range attempts.Items {
+		if record.Attempt.Purpose() == egressaudit.PurposeProviderAttempt &&
+			record.Attempt.TargetOrigin() == "https://chatgpt.com:443" &&
+			record.Attempt.Outcome() == egressaudit.OutcomeCompleted {
+			reached = true
+		}
+	}
+	if !reached {
+		t.Fatalf("no successful original-origin attempt reached the exact client origin: %+v", attempts.Items)
 	}
 }
 

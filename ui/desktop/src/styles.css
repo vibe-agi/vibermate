@@ -1,42 +1,40 @@
 :root {
-  color: #102023;
-  background: #f4f7f8;
+  color: #242424;
+  background: #f3f3f3;
   font-family:
-    Inter,
-    "Public Sans",
-    "IBM Plex Sans",
-    system-ui,
     -apple-system,
     BlinkMacSystemFont,
     "Segoe UI",
+    Inter,
+    system-ui,
     "PingFang SC",
     "Noto Sans SC",
     sans-serif;
   font-synthesis: none;
   text-rendering: optimizeLegibility;
   color-scheme: light;
-  --canvas: #f4f7f8;
+  --canvas: #f3f3f3;
   --panel: #ffffff;
-  --raised: #edf2f3;
-  --border: #d5e0e3;
-  --border-strong: #bdccd0;
-  --text: #102023;
-  --muted: #607176;
-  --quiet: #829196;
-  --signal: #087f91;
-  --signal-soft: #e3f3f5;
-  --allow: #16874a;
-  --allow-soft: #e5f5eb;
-  --ask: #a76413;
-  --ask-soft: #fff2dd;
-  --deny: #c3443c;
-  --deny-soft: #fdebea;
-  --review: #7357b3;
-  --focus-panel: #131b1e;
-  --focus-raised: #1a2529;
-  --focus-border: #29383e;
-  --focus-text: #e7eff1;
-  --focus-muted: #91a4aa;
+  --raised: #f5f5f5;
+  --border: #dedede;
+  --border-strong: #c7c7c7;
+  --text: #242424;
+  --muted: #616161;
+  --quiet: #858585;
+  --signal: #2f6f9f;
+  --signal-soft: #e8f1f7;
+  --allow: #247a46;
+  --allow-soft: #eaf5ee;
+  --ask: #946200;
+  --ask-soft: #fff4d6;
+  --deny: #b43a35;
+  --deny-soft: #fceceb;
+  --review: #6f5aa8;
+  --focus-panel: #202124;
+  --focus-raised: #292a2d;
+  --focus-border: #414246;
+  --focus-text: #f1f1f1;
+  --focus-muted: #b5b5b5;
   --mono:
     ui-monospace, SFMono-Regular, Menlo, Consolas, "Noto Sans Mono CJK SC",
     monospace;
@@ -44,26 +42,26 @@
 
 @media (prefers-color-scheme: dark) {
   :root {
-    color: #e7eff1;
-    background: #0d1214;
+    color: #e7e7e7;
+    background: #181818;
     color-scheme: dark;
-    --canvas: #0d1214;
-    --panel: #131b1e;
-    --raised: #1a2529;
-    --border: #29383e;
-    --border-strong: #3d5057;
-    --text: #e7eff1;
-    --muted: #91a4aa;
-    --quiet: #6f8389;
-    --signal: #43cbd9;
-    --signal-soft: #163136;
-    --allow: #45c979;
-    --allow-soft: #173228;
-    --ask: #e7a93a;
-    --ask-soft: #352a18;
-    --deny: #f17870;
-    --deny-soft: #38201f;
-    --review: #b5a0ea;
+    --canvas: #181818;
+    --panel: #1f1f1f;
+    --raised: #262626;
+    --border: #353535;
+    --border-strong: #4a4a4a;
+    --text: #e7e7e7;
+    --muted: #b0b0b0;
+    --quiet: #858585;
+    --signal: #6ba3cf;
+    --signal-soft: #243746;
+    --allow: #56b878;
+    --allow-soft: #22372a;
+    --ask: #d7a13b;
+    --ask-soft: #3a301d;
+    --deny: #e16f68;
+    --deny-soft: #3c2524;
+    --review: #b3a1df;
   }
 }
 
@@ -83,8 +81,8 @@ body {
   min-height: 100vh;
   background: var(--canvas);
   color: var(--text);
-  font-size: 15px;
-  line-height: 1.5;
+  font-size: 13px;
+  line-height: 1.42;
   -webkit-font-smoothing: antialiased;
 }
 
@@ -98,10 +96,10 @@ textarea {
 button,
 .pending-link,
 .route-action {
-  min-height: 38px;
+  min-height: 30px;
   border: 1px solid var(--border-strong);
-  border-radius: 7px;
-  padding: 0.5rem 0.8rem;
+  border-radius: 5px;
+  padding: 0.32rem 0.65rem;
   color: var(--text);
   background: var(--panel);
   cursor: pointer;
@@ -166,7 +164,7 @@ button.text-button {
 }
 
 button.icon-button {
-  width: 38px;
+  width: 30px;
   padding: 0;
   font-size: 1.15rem;
 }
@@ -190,22 +188,22 @@ p {
 }
 
 h1 {
-  margin-bottom: 0.35rem;
-  font-size: 1.55rem;
+  margin-bottom: 0.2rem;
+  font-size: 1.42rem;
   line-height: 1.25;
   letter-spacing: -0.025em;
 }
 
 h2 {
-  margin-bottom: 0.25rem;
-  font-size: 1.08rem;
+  margin-bottom: 0.18rem;
+  font-size: 1.02rem;
   line-height: 1.35;
   letter-spacing: -0.01em;
 }
 
 h3 {
-  margin-bottom: 0.3rem;
-  font-size: 0.95rem;
+  margin-bottom: 0.22rem;
+  font-size: 0.92rem;
 }
 
 .visually-hidden {
@@ -234,8 +232,8 @@ h3 {
 
 .app-shell {
   display: grid;
-  grid-template-columns: 220px minmax(0, 1fr);
-  grid-template-rows: 58px minmax(0, 1fr) 32px;
+  grid-template-columns: 196px minmax(0, 1fr);
+  grid-template-rows: 44px minmax(0, 1fr) 24px;
   height: 100vh;
   min-height: 100vh;
 }
@@ -251,10 +249,10 @@ h3 {
 
 .brand {
   display: flex;
-  min-height: 58px;
+  min-height: 44px;
   align-items: center;
-  gap: 0.65rem;
-  padding: 0 1.15rem;
+  gap: 0.5rem;
+  padding: 0 0.75rem;
   border-bottom: 1px solid var(--border);
   font-weight: 700;
   letter-spacing: -0.02em;
@@ -262,12 +260,12 @@ h3 {
 
 .brand-mark {
   display: grid;
-  width: 21px;
-  height: 21px;
+  width: 19px;
+  height: 19px;
   flex: none;
   place-items: center;
   border: 1px solid var(--signal);
-  border-radius: 5px;
+  border-radius: 4px;
   color: var(--signal);
   font-family: var(--mono);
   font-size: 0.63rem;
@@ -295,17 +293,17 @@ h3 {
 .primary-nav {
   display: flex;
   flex-direction: column;
-  gap: 0.15rem;
-  padding: 0.8rem 0.65rem;
+  gap: 0.08rem;
+  padding: 0.55rem 0.4rem;
 }
 
 .nav-group + .nav-group {
-  margin-top: 0.9rem;
+  margin-top: 0.65rem;
 }
 
 .nav-group-label {
   display: block;
-  padding: 0 0.65rem 0.35rem;
+  padding: 0 0.5rem 0.25rem;
   color: var(--quiet);
   font-size: 0.66rem;
   font-weight: 700;
@@ -316,11 +314,11 @@ h3 {
 .nav-item {
   position: relative;
   display: flex;
-  min-height: 40px;
+  min-height: 32px;
   align-items: center;
-  gap: 0.7rem;
-  border-radius: 7px;
-  padding: 0 0.7rem;
+  gap: 0.5rem;
+  border-radius: 4px;
+  padding: 0 0.5rem;
   color: var(--muted);
 }
 
@@ -332,22 +330,22 @@ h3 {
 .nav-item[aria-current="page"] {
   color: var(--signal);
   background: var(--signal-soft);
-  font-weight: 650;
+  font-weight: 600;
 }
 
 .nav-item[aria-current="page"]::before {
   position: absolute;
-  top: 9px;
-  bottom: 9px;
-  left: -0.65rem;
+  top: 6px;
+  bottom: 6px;
+  left: -0.4rem;
   width: 2px;
   background: var(--signal);
   content: "";
 }
 
 .nav-icon {
-  width: 18px;
-  height: 18px;
+  width: 16px;
+  height: 16px;
   flex: none;
   fill: none;
   stroke: currentcolor;
@@ -369,12 +367,12 @@ h3 {
 }
 
 .sidebar-note {
-  margin: auto 0.9rem 0.9rem;
-  padding-top: 0.8rem;
+  margin: auto 0.7rem 0.65rem;
+  padding-top: 0.55rem;
   border-top: 1px solid var(--border);
   color: var(--muted);
-  font-size: 0.75rem;
-  line-height: 1.45;
+  font-size: 0.7rem;
+  line-height: 1.35;
 }
 
 .topbar {
@@ -382,8 +380,8 @@ h3 {
   display: flex;
   min-width: 0;
   align-items: center;
-  gap: 0.8rem;
-  padding: 0 1.2rem;
+  gap: 0.55rem;
+  padding: 0 0.8rem;
   border-bottom: 1px solid var(--border);
   background: var(--panel);
 }
@@ -410,7 +408,7 @@ h3 {
 
 .top-context {
   color: var(--muted);
-  font-size: 0.8rem;
+  font-size: 0.74rem;
   white-space: nowrap;
 }
 
@@ -426,7 +424,7 @@ h3 {
 .pending-link {
   display: inline-flex;
   align-items: center;
-  gap: 0.45rem;
+  gap: 0.35rem;
   white-space: nowrap;
 }
 
@@ -457,7 +455,7 @@ h3 {
 
 .header-actions,
 .button-row {
-  gap: 0.5rem;
+  gap: 0.4rem;
 }
 
 .button-row {
@@ -468,8 +466,8 @@ h3 {
   gap: 0.1rem;
   margin: 0;
   border: 1px solid var(--border);
-  border-radius: 7px;
-  padding: 0.15rem;
+  border-radius: 5px;
+  padding: 0.1rem;
 }
 
 .locale-switcher legend {
@@ -481,9 +479,9 @@ h3 {
 }
 
 .locale-switcher button {
-  min-height: 30px;
+  min-height: 24px;
   border: 0;
-  padding: 0.25rem 0.45rem;
+  padding: 0.15rem 0.38rem;
   color: var(--muted);
   background: transparent;
   font-size: 0.72rem;
@@ -502,13 +500,13 @@ h3 {
   grid-column: 2;
   min-width: 0;
   overflow: auto;
-  padding: 1.55rem clamp(1.25rem, 3vw, 2.4rem) 2.5rem;
+  padding: 1rem clamp(1rem, 2vw, 1.4rem) 1.6rem;
 }
 
 .page-heading {
   justify-content: space-between;
-  gap: 1.5rem;
-  margin: 0 auto 1.45rem;
+  gap: 1rem;
+  margin: 0 auto 0.85rem;
 }
 
 .page-heading p,
@@ -521,11 +519,11 @@ h3 {
 .error-banner {
   display: flex;
   align-items: baseline;
-  gap: 0.65rem;
-  margin-bottom: 1rem;
+  gap: 0.5rem;
+  margin-bottom: 0.7rem;
   border: 1px solid var(--ask);
-  border-radius: 8px;
-  padding: 0.7rem 0.85rem;
+  border-radius: 5px;
+  padding: 0.5rem 0.65rem;
   color: var(--ask);
   background: var(--ask-soft);
   font-size: 0.8rem;
@@ -541,12 +539,12 @@ h3 {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 1rem;
-  margin-bottom: 1rem;
+  gap: 0.75rem;
+  margin-bottom: 0.7rem;
   border: 1px solid var(--border);
   border-left: 3px solid var(--ask);
-  border-radius: 10px;
-  padding: 1.05rem 1.2rem;
+  border-radius: 5px;
+  padding: 0.7rem 0.8rem;
   background: var(--panel);
 }
 
@@ -1009,8 +1007,8 @@ dd {
 .panel {
   min-width: 0;
   border: 1px solid var(--border);
-  border-radius: 10px;
-  padding: 1.15rem;
+  border-radius: 6px;
+  padding: 0.85rem;
   background: var(--panel);
 }
 
@@ -1030,13 +1028,13 @@ dd {
 
 .access-layout {
   display: grid;
-  grid-template-columns: minmax(250px, 0.72fr) minmax(0, 1.8fr);
-  gap: 1rem;
-  max-width: 1160px;
+  grid-template-columns: minmax(230px, 0.62fr) minmax(0, 1.8fr);
+  gap: 0.75rem;
+  max-width: 1240px;
 }
 
 .access-layout.creating {
-  grid-template-columns: minmax(0, 860px);
+  grid-template-columns: minmax(0, 1020px);
   justify-content: center;
 }
 
@@ -1052,8 +1050,8 @@ dd {
 
 .access-directory-list {
   display: grid;
-  gap: 0.55rem;
-  margin: 1rem 0 0;
+  gap: 0.35rem;
+  margin: 0.65rem 0 0;
   padding: 0;
   list-style: none;
 }
@@ -1061,9 +1059,9 @@ dd {
 .access-directory-list button {
   display: grid;
   width: 100%;
-  gap: 0.35rem;
+  gap: 0.25rem;
   border: 1px solid var(--border);
-  padding: 0.75rem;
+  padding: 0.55rem;
   color: var(--text);
   background: var(--raised);
   text-align: left;
@@ -1072,7 +1070,8 @@ dd {
 .access-directory-list button:hover,
 .access-directory-list button.selected {
   border-color: var(--signal);
-  background: var(--signal-soft);
+  background: color-mix(in srgb, var(--signal-soft) 58%, var(--panel));
+  box-shadow: inset 2px 0 0 var(--signal);
 }
 
 .access-directory-copy > span:last-child {
@@ -1084,14 +1083,14 @@ dd {
   display: grid;
   min-width: 0;
   grid-template-columns: auto minmax(0, 1fr);
-  gap: 0.65rem;
+  gap: 0.5rem;
   align-items: start;
 }
 
 .access-directory-copy {
   display: grid;
   min-width: 0;
-  gap: 0.28rem;
+  gap: 0.18rem;
 }
 
 .access-directory-name {
@@ -1140,15 +1139,15 @@ dd {
 .access-summary {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 0.75rem;
-  margin: 1.25rem 0;
+  gap: 0.5rem;
+  margin: 0.8rem 0;
 }
 
 .access-summary div {
   min-width: 0;
   border: 1px solid var(--border);
-  border-radius: 8px;
-  padding: 0.75rem;
+  border-radius: 5px;
+  padding: 0.55rem;
   background: var(--raised);
 }
 
@@ -1165,7 +1164,7 @@ dd {
 }
 
 .access-description {
-  margin-bottom: 1rem;
+  margin-bottom: 0.7rem;
 }
 
 .access-description h3,
@@ -1179,9 +1178,9 @@ dd {
 }
 
 .access-technical-details {
-  margin: 1rem 0;
+  margin: 0.7rem 0;
   border: 1px solid var(--border);
-  border-radius: 8px;
+  border-radius: 5px;
   background: var(--raised);
 }
 
@@ -1191,7 +1190,7 @@ dd {
   flex-wrap: wrap;
   justify-content: space-between;
   gap: 0.35rem 0.8rem;
-  padding: 0.75rem;
+  padding: 0.55rem;
 }
 
 .access-technical-details summary small {
@@ -1200,7 +1199,7 @@ dd {
 
 .access-technical-details .access-summary {
   margin: 0;
-  padding: 0 0.75rem 0.75rem;
+  padding: 0 0.55rem 0.55rem;
 }
 
 .wide-action {
@@ -1271,31 +1270,34 @@ dd {
 .access-form {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 1rem;
-  margin-top: 1.25rem;
+  gap: 0.7rem;
+  margin-top: 0.8rem;
 }
 
 .access-create-actions {
   margin-top: -0.1rem;
   border-top: 1px solid var(--border);
-  padding-top: 0.9rem;
+  padding-top: 0.65rem;
 }
 
-.access-app-picker {
+.access-app-picker,
+.access-login-picker {
   min-width: 0;
   margin: 0;
   border: 0;
   padding: 0;
 }
 
-.access-app-picker legend {
+.access-app-picker legend,
+.access-login-picker legend {
   padding: 0;
-  font-size: 1rem;
-  font-weight: 650;
+  font-size: 0.94rem;
+  font-weight: 600;
 }
 
-.access-app-picker > p {
-  margin: 0.2rem 0 0.8rem;
+.access-app-picker > p,
+.access-login-picker > p {
+  margin: 0.12rem 0 0.5rem;
   color: var(--muted);
   font-size: 0.82rem;
 }
@@ -1303,40 +1305,79 @@ dd {
 .access-app-options {
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));
-  gap: 0.7rem;
+  gap: 0.45rem;
+}
+
+.access-login-options {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0.45rem;
+}
+
+.access-login-option {
+  display: flex;
+  min-height: 62px;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 0.6rem;
+  border-width: 1px;
+  padding: 0.55rem;
+  text-align: left;
+}
+
+.access-login-option > span:first-child {
+  display: grid;
+  gap: 0.22rem;
+}
+
+.access-login-option small {
+  color: var(--muted);
+  line-height: 1.4;
+}
+
+.access-login-option[aria-pressed="true"] {
+  border-color: var(--signal);
+  background: color-mix(in srgb, var(--signal-soft) 58%, var(--panel));
+  box-shadow: inset 2px 0 0 var(--signal);
+}
+
+.access-login-option .access-app-configured {
+  color: var(--allow);
+  font-size: 0.72rem;
+  font-weight: 600;
 }
 
 .access-destination-options {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 0.7rem;
+  gap: 0.45rem;
 }
 
 .access-mode-options {
   display: grid;
   grid-template-columns: minmax(0, 1.35fr) minmax(220px, 0.65fr);
-  gap: 0.7rem;
+  gap: 0.45rem;
 }
 
 .access-mode-option {
   display: grid;
-  min-height: 132px;
+  min-height: 98px;
   align-content: start;
-  gap: 0.55rem;
-  border-width: 1.5px;
-  padding: 0.95rem;
+  gap: 0.38rem;
+  border-width: 1px;
+  padding: 0.65rem;
   text-align: left;
 }
 
 .access-mode-option[aria-pressed="true"] {
   border-color: var(--signal);
-  background: var(--signal-soft);
-  box-shadow: inset 0 0 0 1px var(--signal);
+  background: color-mix(in srgb, var(--signal-soft) 58%, var(--panel));
+  box-shadow: inset 2px 0 0 var(--signal);
 }
 
 .access-mode-option > small {
   color: var(--muted);
-  line-height: 1.45;
+  line-height: 1.35;
 }
 
 .access-mode-option-heading {
@@ -1349,7 +1390,7 @@ dd {
 .access-mode-option-heading > span {
   border: 1px solid color-mix(in srgb, var(--allow) 35%, transparent);
   border-radius: 999px;
-  padding: 0.2rem 0.45rem;
+  padding: 0.12rem 0.35rem;
   color: var(--allow);
   background: color-mix(in srgb, var(--allow) 8%, transparent);
   font-size: 0.68rem;
@@ -1361,15 +1402,15 @@ dd {
   grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr) auto minmax(0, 1fr);
   align-items: center;
   gap: 0.35rem;
-  margin-top: 0.2rem;
+  margin-top: 0.05rem;
   color: var(--muted);
   font-size: 0.7rem;
 }
 
 .access-mode-rail > span {
   border: 1px solid var(--border);
-  border-radius: 6px;
-  padding: 0.35rem 0.4rem;
+  border-radius: 4px;
+  padding: 0.25rem 0.3rem;
   text-align: center;
   background: var(--panel);
 }
@@ -1380,9 +1421,9 @@ dd {
 }
 
 .access-destination-note {
-  margin: -0.35rem 0 0;
-  border-left: 3px solid var(--signal);
-  padding: 0.55rem 0.7rem;
+  margin: -0.2rem 0 0;
+  border-left: 2px solid var(--signal);
+  padding: 0.4rem 0.55rem;
   color: var(--muted);
   background: var(--signal-soft);
   font-size: 0.8rem;
@@ -1390,19 +1431,19 @@ dd {
 
 .access-destination-option {
   display: grid;
-  min-height: 92px;
+  min-height: 68px;
   grid-template-columns: auto minmax(0, 1fr);
-  gap: 0.75rem;
+  gap: 0.55rem;
   align-items: center;
-  border-width: 1.5px;
-  padding: 0.85rem;
+  border-width: 1px;
+  padding: 0.55rem;
   text-align: left;
 }
 
 .access-destination-option[aria-pressed="true"] {
   border-color: var(--signal);
-  background: var(--signal-soft);
-  box-shadow: inset 0 0 0 1px var(--signal);
+  background: color-mix(in srgb, var(--signal-soft) 58%, var(--panel));
+  box-shadow: inset 2px 0 0 var(--signal);
 }
 
 .access-destination-option > span:last-child {
@@ -1417,10 +1458,10 @@ dd {
 
 .access-service-mark {
   display: grid;
-  width: 38px;
-  height: 38px;
+  width: 30px;
+  height: 30px;
   place-items: center;
-  border-radius: 11px;
+  border-radius: 6px;
   color: #f7faf9;
   background: #18201e;
   font-size: 0.74rem;
@@ -1436,19 +1477,19 @@ dd {
 .access-service-fields {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 1rem;
+  gap: 0.65rem;
   border: 1px solid var(--border);
-  border-radius: 9px;
-  padding: 1rem;
+  border-radius: 5px;
+  padding: 0.65rem;
   background: var(--raised);
 }
 
 .access-review {
   display: grid;
-  gap: 0.8rem;
+  gap: 0.55rem;
   border: 1px solid var(--border);
-  border-radius: 9px;
-  padding: 1rem;
+  border-radius: 5px;
+  padding: 0.65rem;
 }
 
 .access-review-route {
@@ -1460,8 +1501,8 @@ dd {
 }
 
 .access-review-vibermate {
-  border-radius: 999px;
-  padding: 0.3rem 0.55rem;
+  border-radius: 4px;
+  padding: 0.2rem 0.4rem;
   color: var(--signal);
   background: var(--signal-soft);
   font-weight: 700;
@@ -1475,28 +1516,28 @@ dd {
 
 .access-app-option {
   display: grid;
-  min-height: 104px;
+  min-height: 72px;
   grid-template-columns: auto minmax(0, 1fr);
-  gap: 0.7rem;
+  gap: 0.55rem;
   align-items: start;
-  border-width: 1.5px;
-  padding: 0.85rem;
+  border-width: 1px;
+  padding: 0.6rem;
   text-align: left;
 }
 
 .access-app-option[aria-pressed="true"] {
   border-color: var(--signal);
-  background: var(--signal-soft);
-  box-shadow: inset 0 0 0 1px var(--signal);
+  background: color-mix(in srgb, var(--signal-soft) 58%, var(--panel));
+  box-shadow: inset 2px 0 0 var(--signal);
 }
 
 .access-app-mark {
   display: grid;
-  width: 36px;
-  height: 36px;
+  width: 30px;
+  height: 30px;
   flex: 0 0 auto;
   place-items: center;
-  border-radius: 10px;
+  border-radius: 6px;
   color: var(--text);
   background: var(--raised);
 }
@@ -1517,8 +1558,8 @@ dd {
 }
 
 .access-app-icon {
-  width: 24px;
-  height: 24px;
+  width: 20px;
+  height: 20px;
   overflow: visible;
   fill: none;
   stroke: currentcolor;
@@ -1530,7 +1571,7 @@ dd {
 .access-app-option-copy {
   display: grid;
   min-width: 0;
-  gap: 0.18rem;
+  gap: 0.12rem;
 }
 
 .access-app-option-copy > span {
@@ -1540,7 +1581,7 @@ dd {
 }
 
 .access-app-option-copy .access-app-configured {
-  margin-top: 0.25rem;
+  margin-top: 0.12rem;
   color: var(--allow);
   font-weight: 600;
 }
@@ -1549,14 +1590,14 @@ dd {
 .access-next-step {
   display: flex;
   align-items: flex-start;
-  gap: 0.7rem;
+  gap: 0.5rem;
 }
 
 .access-create-step > span,
 .access-next-step > span:first-child {
   display: grid;
-  width: 24px;
-  height: 24px;
+  width: 20px;
+  height: 20px;
   flex: 0 0 auto;
   place-items: center;
   border-radius: 999px;
@@ -1567,14 +1608,14 @@ dd {
 }
 
 .access-create-step p {
-  margin: 0.15rem 0 0;
+  margin: 0.08rem 0 0;
   color: var(--muted);
   font-size: 0.82rem;
 }
 
 .access-next-step {
-  border-radius: 8px;
-  padding: 0.75rem;
+  border-radius: 5px;
+  padding: 0.5rem;
   color: var(--muted);
   background: var(--raised);
   font-size: 0.82rem;
@@ -1590,10 +1631,10 @@ dd {
   min-width: 0;
   align-items: center;
   justify-content: space-between;
-  gap: 1rem;
+  gap: 0.65rem;
   border: 1px solid var(--border);
-  border-radius: 9px;
-  padding: 0.8rem;
+  border-radius: 5px;
+  padding: 0.55rem;
   background: var(--raised);
 }
 
@@ -1615,7 +1656,7 @@ dd {
 
 .access-advanced {
   border-top: 1px solid var(--border);
-  padding-top: 0.85rem;
+  padding-top: 0.6rem;
 }
 
 .access-advanced summary {
@@ -1635,8 +1676,8 @@ dd {
 .access-advanced-grid {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 1rem;
-  margin-top: 1rem;
+  gap: 0.65rem;
+  margin-top: 0.65rem;
 }
 
 .access-launch-panel {
@@ -2169,7 +2210,7 @@ dd {
 
 .field {
   display: grid;
-  gap: 0.4rem;
+  gap: 0.28rem;
 }
 
 .field small {
@@ -2186,16 +2227,16 @@ dd {
 .field select,
 .field textarea {
   width: 100%;
-  min-height: 40px;
+  min-height: 32px;
   border: 1px solid var(--border-strong);
-  border-radius: 7px;
-  padding: 0.6rem 0.7rem;
+  border-radius: 5px;
+  padding: 0.4rem 0.55rem;
   color: var(--text);
   background: var(--raised);
 }
 
 .field textarea {
-  min-height: 5rem;
+  min-height: 4rem;
   resize: vertical;
 }
 
@@ -2413,10 +2454,10 @@ dd {
   grid-column: 2;
   display: flex;
   align-items: center;
-  gap: 1rem;
+  gap: 0.65rem;
   min-width: 0;
   border-top: 1px solid var(--border);
-  padding: 0 1.2rem;
+  padding: 0 0.8rem;
   color: var(--muted);
   background: var(--panel);
   font-size: 0.68rem;
@@ -2727,7 +2768,7 @@ dd {
 
 @media (max-width: 1099px) {
   .app-shell {
-    grid-template-columns: 76px minmax(0, 1fr);
+    grid-template-columns: 52px minmax(0, 1fr);
   }
 
   .brand {
@@ -2749,7 +2790,7 @@ dd {
 
   .primary-nav {
     align-items: center;
-    padding-inline: 0.55rem;
+    padding-inline: 0.35rem;
   }
 
   .nav-group,
@@ -2772,7 +2813,7 @@ dd {
   }
 
   .nav-item[aria-current="page"]::before {
-    left: -0.55rem;
+    left: -0.35rem;
   }
 
   .focus-stage {
@@ -2826,8 +2867,8 @@ dd {
   }
 
   .brand {
-    width: 64px;
-    min-height: 52px;
+    width: 52px;
+    min-height: 44px;
     border-bottom: 0;
     border-right: 1px solid var(--border);
   }
@@ -2847,7 +2888,7 @@ dd {
     top: 0;
     right: 0;
     width: 18px;
-    height: 52px;
+    height: 44px;
     background: linear-gradient(to right, transparent, var(--panel));
     content: "";
     pointer-events: none;
@@ -2862,8 +2903,8 @@ dd {
   }
 
   .nav-item {
-    width: 45px;
-    min-width: 45px;
+    width: 38px;
+    min-width: 38px;
   }
 
   .nav-item[aria-current="page"]::before {
@@ -2883,20 +2924,20 @@ dd {
 
   .topbar {
     grid-row: 2;
-    min-height: 52px;
-    padding: 0.4rem 0.7rem;
+    min-height: 44px;
+    padding: 0.3rem 0.55rem;
   }
 
   .main-content {
     grid-row: 3;
     overflow: visible;
-    padding: 1.15rem 0.85rem 2rem;
+    padding: 0.8rem 0.7rem 1.4rem;
   }
 
   .app-footer {
     grid-row: 4;
-    min-height: 32px;
-    padding: 0 0.75rem;
+    min-height: 24px;
+    padding: 0 0.55rem;
   }
 
   .top-context,
@@ -2959,6 +3000,7 @@ dd {
   .access-form,
   .access-advanced-grid,
   .access-mode-options,
+  .access-login-options,
   .access-destination-options,
   .access-service-fields,
   .access-candidate-fields,

@@ -4,7 +4,49 @@ import (
 	"testing"
 
 	"github.com/vibe-agi/vibermate/internal/access"
+	"github.com/vibe-agi/vibermate/internal/accessapply"
 )
+
+// liveOriginalAccess is the smallest Access a person can create: one exact
+// AgentEndpoint and the Core-owned current-login route, with no managed
+// profile, provider account, or secret.
+func liveOriginalAccess(
+	t *testing.T,
+	accessID access.AccessID,
+	clientOrigin string,
+	clientDialect access.Dialect,
+) access.Aggregate {
+	t.Helper()
+	command, err := accessapply.BuildCommand(
+		accessID.String(),
+		accessapply.Input{
+			ExpectedRevision: 0,
+			Access: accessapply.AccessInput{
+				ID:              accessID.String(),
+				Name:            "Current Client Login",
+				Status:          string(access.AccessStatusEnabled),
+				AgentEndpointID: accessID.String() + "-endpoint",
+				EgressPolicyID:  accessID.String() + "-egress",
+			},
+			AgentEndpoint: accessapply.AgentEndpointInput{
+				ID:            accessID.String() + "-endpoint",
+				ClientOrigin:  clientOrigin,
+				ClientDialect: string(clientDialect),
+			},
+			EgressPolicy: accessapply.EgressPolicyInput{
+				ID:   accessID.String() + "-egress",
+				Mode: string(access.EgressModeDirect),
+			},
+			PluginPlan: accessapply.PluginPlanInput{
+				Mode: string(access.PluginPlanModePassThrough),
+			},
+		},
+	)
+	if err != nil {
+		t.Fatalf("construct current-login Access: %v", err)
+	}
+	return command.Aggregate
+}
 
 // liveAgentAccess is the plan a real agent client runs against: its own
 // origin as the AgentEndpoint, and the live backend behind it.

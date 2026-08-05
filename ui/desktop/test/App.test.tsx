@@ -523,7 +523,13 @@ async function configureOpenAIDestination(
   await waitFor(() =>
     expect(managedMode.getAttribute("aria-pressed")).toBe("true"),
   );
-  const destination = screen.getByRole("button", {
+  const destinationOptions = document.querySelector<HTMLElement>(
+    ".access-destination-options",
+  );
+  if (destinationOptions === null) {
+    throw new Error("managed destination options are unavailable");
+  }
+  const destination = within(destinationOptions).getByRole("button", {
     name: /^OpenAI API/u,
   });
   fireEvent.click(destination);
@@ -888,7 +894,16 @@ describe("Desktop dashboard", () => {
     ).toBe("openai-responses");
     expect(
       (screen.getByLabelText("Client API address") as HTMLInputElement).value,
+    ).toBe("https://chatgpt.com");
+    fireEvent.click(
+      screen.getByRole("button", { name: /^OpenAI API key/u }),
+    );
+    expect(
+      (screen.getByLabelText("Client API address") as HTMLInputElement).value,
     ).toBe("https://api.openai.com");
+    fireEvent.click(
+      screen.getByRole("button", { name: /^ChatGPT sign-in/u }),
+    );
     await configureOpenAIDestination("personal-provider-secret", "Personal");
     expect(screen.queryByLabelText("Access ID")).toBeNull();
     expect(screen.queryByLabelText("Expected revision")).toBeNull();
@@ -899,7 +914,7 @@ describe("Desktop dashboard", () => {
     expect(generatedId).toMatch(/^access-/u);
     expect(createdInput?.agentEndpoint).toMatchObject({
       clientDialect: "openai-responses",
-      clientOrigin: "https://api.openai.com",
+      clientOrigin: "https://chatgpt.com",
     });
     expect(document.body.textContent).not.toContain(generatedId);
     expect(screen.queryByLabelText("Access ID")).toBeNull();

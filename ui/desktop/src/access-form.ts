@@ -18,13 +18,20 @@ export interface AccessFormValues {
 
 export type AccessAppPreset = "claude" | "codex" | "custom";
 
+export type CodexLoginPreset = "chatgpt" | "openai-api";
+
+export const codexLoginPresetDefaults = {
+  chatgpt: "https://chatgpt.com",
+  "openai-api": "https://api.openai.com",
+} as const satisfies Record<CodexLoginPreset, string>;
+
 export const accessAppPresetDefaults = {
   claude: {
     clientOrigin: "https://api.anthropic.com",
     clientDialect: "anthropic-messages",
   },
   codex: {
-    clientOrigin: "https://api.openai.com",
+    clientOrigin: codexLoginPresetDefaults.chatgpt,
     clientDialect: "openai-responses",
   },
   custom: {
