@@ -193,7 +193,9 @@ Example:
 Use `--codex=/absolute/path/to/the/fixed/codex` instead of `--claude` to
 select the fixed Codex vertical. Supplying both or neither is rejected. Replace
 the example provider coordinates with a reachable target under the operator's
-control.
+control. The lexical invocation path must retain the catalogued executable
+label (`claude` or `codex`) even when it is a symlink to a versioned file; the
+runner verifies the resolved artifacts separately.
 
 ## Credentialed continuation
 

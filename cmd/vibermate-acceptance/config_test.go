@@ -117,7 +117,7 @@ func TestClientInvocationPathPreservesVerifiedWrapperLabel(t *testing.T) {
 	if err := os.Symlink(native, invocation); err != nil {
 		t.Fatal(err)
 	}
-	selected, err := clientInvocationPath(invocation)
+	selected, err := clientInvocationPath(invocation, "codex")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -134,6 +134,9 @@ func TestClientInvocationPathPreservesVerifiedWrapperLabel(t *testing.T) {
 	}
 	if canonical != canonicalNative {
 		t.Fatalf("canonical client target = %q", canonical)
+	}
+	if _, err := clientInvocationPath(native, "codex"); err == nil {
+		t.Fatal("resolved target name was accepted as an invocation label")
 	}
 }
 

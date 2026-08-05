@@ -174,7 +174,10 @@ func parseConfig(arguments []string) (config, error) {
 	if err != nil {
 		return config{}, err
 	}
-	clientInvocation, err := clientInvocationPath(client.ExecutablePath)
+	clientInvocation, err := clientInvocationPath(
+		client.ExecutablePath,
+		client.Release.InvocationLabel,
+	)
 	if err != nil {
 		return config{}, fmt.Errorf(
 			"%s executable: %w",
@@ -328,9 +331,18 @@ func executablePath(path string) (string, error) {
 	return canonical, nil
 }
 
-func clientInvocationPath(path string) (string, error) {
+func clientInvocationPath(path, expectedLabel string) (string, error) {
 	if _, err := executablePath(path); err != nil {
 		return "", err
+	}
+	if expectedLabel == "" || filepath.Base(expectedLabel) != expectedLabel {
+		return "", errors.New("fixed client invocation label is invalid")
+	}
+	if filepath.Base(path) != expectedLabel {
+		return "", fmt.Errorf(
+			"invocation path must be named %q so release selection cannot depend on its resolved target name",
+			expectedLabel,
+		)
 	}
 	return path, nil
 }
