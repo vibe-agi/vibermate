@@ -43,6 +43,7 @@ import {
   type DashboardState,
   useCredentialMetadata,
   useAccessDirectory,
+  useCaptureRunDetail,
   useDashboardQueryRuntime,
   useExchangeDetail,
   useWorkspaceRoutes,
@@ -315,7 +316,7 @@ export function DashboardShell({
                     {t(`locale.${locale}`)}
                   </span>
                   <span aria-hidden="true" className="locale-label-compact">
-                    {locale === "en-US" ? "EN" : "中"}
+                    {t(`locale.${locale}.short`)}
                   </span>
                 </button>
               ))}
@@ -925,12 +926,6 @@ export function ActivityRequestRoutePage({
   const { model } = useDashboardRuntime();
   const detail = useExchangeDetail(model, exchangeId);
   const record = detail.data;
-  const knownStatus =
-    record !== undefined &&
-    (record.status === "succeeded" ||
-      record.status === "pending" ||
-      record.status === "failed" ||
-      record.status === "canceled");
   return (
     <>
       <PageHeading
@@ -960,11 +955,9 @@ export function ActivityRequestRoutePage({
             <div className="request-detail-heading">
               <h2>{t("activity.request.summary", { id: record.id })}</h2>
               <span
-                className={`activity-status ${knownStatus ? record.status : "neutral"}`}
+                className={`activity-status ${record.status}`}
               >
-                {knownStatus
-                  ? t(`activity.status.${record.status}`)
-                  : record.status}
+                {t(`activity.status.${record.status}`)}
               </span>
             </div>
             <dl className="request-detail-grid">
@@ -1042,6 +1035,292 @@ export function ActivityRequestRoutePage({
         </Link>
       </section>
     </>
+  );
+}
+
+export function ActivityRunRoutePage({
+  runId,
+}: {
+  readonly runId: string;
+}) {
+  const { t, i18n } = useTranslation();
+  const { model } = useDashboardRuntime();
+  const detail = useCaptureRunDetail(model, runId);
+  const run = detail.run.data;
+  const activities = detail.activities.data?.items ?? [];
+  const connections = detail.connections.data?.items ?? [];
+  const activitiesHaveMore = detail.activities.data?.nextCursor !== undefined;
+  const connectionsHaveMore = detail.connections.data?.nextCursor !== undefined;
+  const accessBranches = useMemo(() => {
+    const branches = new Map<
+      string,
+      { readonly id: string; readonly name: string; connections: number; requests: number }
+    >();
+    for (const connection of connections) {
+      if (connection.accessId === undefined || connection.accessName === undefined) {
+        continue;
+      }
+      const branch = branches.get(connection.accessId) ?? {
+        id: connection.accessId,
+        name: connection.accessName,
+        connections: 0,
+        requests: 0,
+      };
+      branch.connections += 1;
+      branches.set(connection.accessId, branch);
+    }
+    for (const request of activities) {
+      const branch = branches.get(request.access.id) ?? {
+        id: request.access.id,
+        name: request.access.displayName,
+        connections: 0,
+        requests: 0,
+      };
+      branch.requests += 1;
+      branches.set(request.access.id, branch);
+    }
+    return [...branches.values()].sort((left, right) => left.name.localeCompare(right.name));
+  }, [activities, connections]);
+  const blindConnections = connections.filter(
+    ({ accessId }) => accessId === undefined,
+  ).length;
+  const formatter = useMemo(
+    () =>
+      new Intl.DateTimeFormat(i18n.language, {
+        dateStyle: "medium",
+        timeStyle: "short",
+      }),
+    [i18n.language],
+  );
+  const pending = detail.run.isPending ||
+    detail.activities.isPending ||
+    detail.connections.isPending;
+  const failed = detail.run.error !== null ||
+    detail.activities.error !== null ||
+    detail.connections.error !== null;
+  return (
+    <>
+      <div className="run-detail-breadcrumb">
+        <a className="link-button" href="#activity">
+          {t("runDetail.back")}
+        </a>
+      </div>
+      {pending ? (
+        <section className="panel run-detail-state" aria-busy="true">
+          {t("app.loading")}
+        </section>
+      ) : failed || run === undefined ? (
+        <section className="panel run-detail-state" role="alert">
+          <h1>{t("runDetail.unavailable.title")}</h1>
+          <p>{t("runDetail.unavailable.detail")}</p>
+          <button
+            className="secondary-action"
+            onClick={() => {
+              void detail.run.refetch();
+              void detail.activities.refetch();
+              void detail.connections.refetch();
+            }}
+            type="button"
+          >
+            {t("common.retry")}
+          </button>
+        </section>
+      ) : (
+        <div className="run-detail-layout">
+          <header className="run-detail-header">
+            <div>
+              <p className="eyebrow">{t("runDetail.eyebrow")}</p>
+              <h1>{run.executableLabel}</h1>
+              <p>{run.workspaceLabel ?? run.cwd}</p>
+            </div>
+            <span className={`compact-state ${run.state}`}>
+              <span aria-hidden="true" />
+              {t(`capture.state.${run.state}`)}
+            </span>
+          </header>
+
+          <section className="run-stat-strip" aria-label={t("runDetail.summary") }>
+            <RunStat
+              label={t("runDetail.stat.connections")}
+              value={countLabel(connections.length, connectionsHaveMore)}
+            />
+            <RunStat
+              label={t("runDetail.stat.accesses")}
+              value={countLabel(accessBranches.length, connectionsHaveMore)}
+            />
+            <RunStat
+              label={t("runDetail.stat.requests")}
+              value={countLabel(activities.length, activitiesHaveMore)}
+            />
+            <RunStat
+              label={t("runDetail.stat.passthrough")}
+              value={countLabel(blindConnections, connectionsHaveMore)}
+            />
+          </section>
+
+          <section className="panel run-path-panel">
+            <div className="compact-panel-heading">
+              <div>
+                <p className="eyebrow">{t("runDetail.path.eyebrow")}</p>
+                <h2>{t("runDetail.path.title")}</h2>
+              </div>
+            </div>
+            <div className="run-path" role="list">
+              <div className="run-path-node source" role="listitem">
+                <span>{t("runDetail.path.source")}</span>
+                <strong>{run.executableLabel}</strong>
+                <small>{run.workspaceLabel ?? run.cwd}</small>
+              </div>
+              <span className="run-path-arrow" aria-hidden="true">→</span>
+              <div className="run-path-node" role="listitem">
+                <span>{t("runDetail.path.connections")}</span>
+                <strong>{countLabel(connections.length, connectionsHaveMore)}</strong>
+                <small>{t("runDetail.path.targetDecides")}</small>
+              </div>
+              <span className="run-path-arrow" aria-hidden="true">→</span>
+              <div className="run-path-branches">
+                {blindConnections > 0 && (
+                  <div className="run-path-node passthrough" role="listitem">
+                    <span>{t("runDetail.path.noAccess")}</span>
+                    <strong>{t("runDetail.path.passthrough")}</strong>
+                    <small>
+                      {t("runDetail.path.passthroughDetail", {
+                        count: countLabel(blindConnections, connectionsHaveMore),
+                      })}
+                    </small>
+                  </div>
+                )}
+                {accessBranches.map((branch) => (
+                  <div className="run-path-node access" key={branch.id} role="listitem">
+                    <span>{t("runDetail.path.access")}</span>
+                    <strong>{branch.name}</strong>
+                    <small>
+                      {t("runDetail.path.accessDetail", {
+                        connections: countLabel(
+                          branch.connections,
+                          connectionsHaveMore,
+                        ),
+                        requests: countLabel(branch.requests, activitiesHaveMore),
+                      })}
+                    </small>
+                  </div>
+                ))}
+                {connections.length === 0 && (
+                  <div className="run-path-node waiting" role="listitem">
+                    <span>{t("runDetail.path.waiting")}</span>
+                    <strong>{t("capture.observation.waiting_for_traffic")}</strong>
+                  </div>
+                )}
+              </div>
+            </div>
+            <p className="run-path-boundary">{t("runDetail.path.boundary")}</p>
+            {(activitiesHaveMore || connectionsHaveMore) && (
+              <p className="run-path-boundary">{t("runDetail.path.more")}</p>
+            )}
+          </section>
+
+          <div className="run-detail-columns">
+            <section className="panel run-evidence-panel">
+              <h2>{t("runDetail.evidence.title")}</h2>
+              <dl className="run-evidence-grid">
+                <div>
+                  <dt>{t("runDetail.evidence.executable")}</dt>
+                  <dd title={run.canonicalExecutablePath}>{run.canonicalExecutablePath}</dd>
+                </div>
+                <div>
+                  <dt>{t("runDetail.evidence.workspace")}</dt>
+                  <dd title={run.cwd}>{run.workspaceLabel ?? run.cwd}</dd>
+                </div>
+                <div>
+                  <dt>{t("runDetail.evidence.machine")}</dt>
+                  <dd>{run.machineId ?? t("runDetail.evidence.localMachine")}</dd>
+                </div>
+                <div>
+                  <dt>{t("runDetail.evidence.user")}</dt>
+                  <dd>{run.localUserLabel ?? t("common.notAvailable")}</dd>
+                </div>
+                <div>
+                  <dt>{t("runDetail.evidence.identity")}</dt>
+                  <dd>{t(`capture.recognitionShort.${run.clientRecognition}`)}</dd>
+                </div>
+                <div>
+                  <dt>{t("runDetail.evidence.started")}</dt>
+                  <dd>{formatter.format(new Date(run.createdAt))}</dd>
+                </div>
+              </dl>
+            </section>
+            <section className="panel run-policy-panel">
+              <h2>{t("runDetail.policy.title")}</h2>
+              <p>{t("runDetail.policy.detail")}</p>
+              <ul>
+                <li>{t("runDetail.policy.target")}</li>
+                <li>{t("runDetail.policy.workspace")}</li>
+                <li>{t("runDetail.policy.audit")}</li>
+              </ul>
+              <a className="secondary-action" href="#policies/approvals">
+                {t("runDetail.policy.open")}
+              </a>
+            </section>
+          </div>
+
+          <section className="panel run-requests-panel">
+            <div className="compact-panel-heading">
+              <h2>{t("runDetail.requests.title")}</h2>
+              <span>{activities.length}</span>
+            </div>
+            {activities.length === 0 ? (
+              <p className="empty-state">
+                {connections.length === 0
+                  ? t("runDetail.requests.waiting")
+                  : t("runDetail.requests.none")}
+              </p>
+            ) : (
+              <div className="compact-table-scroll">
+                <table className="compact-table">
+                  <thead>
+                    <tr>
+                      <th>{t("table.state")}</th>
+                      <th>{t("table.request")}</th>
+                      <th>{t("runDetail.stat.accesses")}</th>
+                      <th>{t("activity.occurredAt.label")}</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {activities.map((request) => (
+                      <tr key={request.id}>
+                        <td>{t(`activity.status.${request.status}`)}</td>
+                        <td>
+                          <a
+                            href={`#activity/requests/${encodeURIComponent(request.id)}`}
+                          >
+                            {request.id}
+                          </a>
+                        </td>
+                        <td>{request.access.displayName}</td>
+                        <td>{formatter.format(new Date(request.occurredAt))}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
+          </section>
+        </div>
+      )}
+    </>
+  );
+}
+
+function countLabel(count: number, hasMore: boolean): string {
+  return `${count}${hasMore ? "+" : ""}`;
+}
+
+function RunStat({ label, value }: { readonly label: string; readonly value: string }) {
+  return (
+    <div>
+      <span>{label}</span>
+      <strong>{value}</strong>
+    </div>
   );
 }
 
@@ -4967,12 +5246,25 @@ function TrafficPanel({
                           {t(`capture.state.${run.state}`)}
                         </span>
                       </td>
-                      <td className="table-primary">{run.executableLabel}</td>
+                      <td className="table-primary">
+                        <a
+                          className="run-detail-link"
+                          href={`#activity/runs/${encodeURIComponent(run.id)}`}
+                          title={run.canonicalExecutablePath}
+                        >
+                          {run.executableLabel}
+                        </a>
+                      </td>
                       <td
                         className="table-ellipsis"
                         title={run.workspaceLabel ?? run.cwd}
                       >
                         {run.workspaceLabel ?? run.cwd}
+                        {run.machineId !== undefined && (
+                          <span className="table-secondary">
+                            {run.machineId.slice(0, 10)}
+                          </span>
+                        )}
                       </td>
                       <td>{t(`capture.observation.${run.observation}`)}</td>
                       <td
@@ -5213,21 +5505,14 @@ function ActivityPanel({
             </thead>
             <tbody>
               {visibleActivities.map((record) => {
-                const knownStatus =
-                  record.status === "succeeded" ||
-                  record.status === "pending" ||
-                  record.status === "failed" ||
-                  record.status === "canceled";
                 return (
                   <tr key={record.id}>
                     <td>
                       <span
-                        className={`compact-state ${knownStatus ? record.status : "neutral"}`}
+                        className={`compact-state ${record.status}`}
                       >
                         <span aria-hidden="true" />
-                        {knownStatus
-                          ? t(`activity.status.${record.status}`)
-                          : record.status}
+                        {t(`activity.status.${record.status}`)}
                       </span>
                     </td>
                     <td className="table-primary identifier">
@@ -5240,7 +5525,7 @@ function ActivityPanel({
                         {record.id}
                       </Link>
                     </td>
-                    <td>{record.accessId}</td>
+                    <td>{record.access.displayName}</td>
                     <td className="compact-time">
                       <time dateTime={record.occurredAt}>
                         {formatter.format(new Date(record.occurredAt))}

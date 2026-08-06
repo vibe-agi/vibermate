@@ -135,6 +135,7 @@ func (manager *Manager) Create(
 		ProxyCapabilityHash:         capabilityDigest(proxyDigestDomain, proxyValue),
 		ControlCapabilityHash:       capabilityDigest(controlDigestDomain, controlValue),
 		CWD:                         command.CWD,
+		CanonicalExecutablePath:     command.CanonicalExecutablePath,
 		LocalUserLabel:              command.LocalUserLabel,
 		ExecutableLabel:             command.ExecutableLabel,
 		CatalogRevision:             command.CatalogRevision,
@@ -366,4 +367,12 @@ func (manager *Manager) ListRuns(
 		return Page{}, errors.New("CaptureRun manager is nil")
 	}
 	return manager.repository.List(ctx, request)
+}
+
+// GetRun returns one redacted run without accepting or returning a capability.
+func (manager *Manager) GetRun(ctx context.Context, runID string) (View, error) {
+	if manager == nil || validateID(runID) != nil {
+		return View{}, ErrInvalidRequest
+	}
+	return manager.repository.Get(ctx, runID)
 }

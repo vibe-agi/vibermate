@@ -649,7 +649,15 @@ func TestControlActivitiesUsesCanonicalCursorPage(t *testing.T) {
 		_, _ = writer.Write([]byte(
 			`{"items":[{"id":"Exchange-1",` +
 				`"occurredAt":"2026-08-03T01:02:03Z",` +
-				`"accessId":"Access-1","status":"failed"}],` +
+				`"kind":"exchange","title":"claude","status":"failed",` +
+				`"source":{"kind":"capture_run","displayName":"claude",` +
+				`"recognition":"configured"},` +
+				`"access":{"id":"Access-1","displayName":"Work",` +
+				`"applicationRevision":1},` +
+				`"parentRefs":{"captureRunId":"Run-1",` +
+				`"ingressProfileId":"capture-run/Run-1",` +
+				`"connectionId":"Connection-1","accessId":"Access-1",` +
+				`"exchangeId":"Exchange-1"}}],` +
 				`"nextCursor":"` + cursor + `"}`,
 		))
 	})
@@ -669,7 +677,15 @@ func TestControlActivitiesUsesCanonicalCursorPage(t *testing.T) {
 func TestControlActivitiesRejectsInvalidWireShape(t *testing.T) {
 	validItem := `{"id":"Exchange-1",` +
 		`"occurredAt":"2026-08-03T01:02:03Z",` +
-		`"accessId":"Access-1","status":"failed"}`
+		`"kind":"exchange","title":"claude","status":"failed",` +
+		`"source":{"kind":"capture_run","displayName":"claude",` +
+		`"recognition":"configured"},` +
+		`"access":{"id":"Access-1","displayName":"Work",` +
+		`"applicationRevision":1},` +
+		`"parentRefs":{"captureRunId":"Run-1",` +
+		`"ingressProfileId":"capture-run/Run-1",` +
+		`"connectionId":"Connection-1","accessId":"Access-1",` +
+		`"exchangeId":"Exchange-1"}}`
 	for _, test := range []struct {
 		name    string
 		payload string

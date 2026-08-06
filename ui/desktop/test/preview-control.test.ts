@@ -47,10 +47,14 @@ describe("the browser preview host", () => {
     expect(first.nextCursor).toBe("cHJldmlldy1wYWdlLTI");
     for (const item of first.items) {
       expect(Object.keys(item).sort()).toEqual([
-        "accessId",
+        "access",
         "id",
+        "kind",
         "occurredAt",
+        "parentRefs",
+        "source",
         "status",
+        "title",
       ]);
     }
 

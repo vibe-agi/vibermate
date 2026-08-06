@@ -18,6 +18,7 @@ const captureRunColumns = `
 	proxy_capability_hash,
 	control_capability_hash,
 	cwd,
+	canonical_executable_path,
 	local_user_label,
 	machine_id,
 	machine_registration_revision,
@@ -80,6 +81,7 @@ func (repository *captureRunRepository) Create(
 		     proxy_capability_hash,
 		     control_capability_hash,
 		     cwd,
+		     canonical_executable_path,
 		     local_user_label,
 		     machine_id,
 		     machine_registration_revision,
@@ -103,11 +105,12 @@ func (repository *captureRunRepository) Create(
 		     expires_at_unix_ms,
 		     updated_at_unix_ms
 		 )
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		record.ID,
 		record.ProxyCapabilityHash[:],
 		record.ControlCapabilityHash[:],
 		record.CWD,
+		record.CanonicalExecutablePath,
 		record.LocalUserLabel,
 		record.MachineID.String(),
 		int64(record.MachineRegistrationRevision),
@@ -436,6 +439,7 @@ func scanCaptureRun(scanner captureRunScanner) (capturerun.DurableRecord, error)
 		&proxyHash,
 		&controlHash,
 		&record.CWD,
+		&record.CanonicalExecutablePath,
 		&record.LocalUserLabel,
 		&machineID,
 		&machineRevision,
@@ -604,4 +608,29 @@ func (repository *captureRunRepository) List(
 		return capturerun.Page{}, err
 	}
 	return page, nil
+}
+
+// Get returns one redacted run source record without accepting a control
+// capability. Authorization remains at the Desktop read boundary.
+func (repository *captureRunRepository) Get(
+	ctx context.Context,
+	runID string,
+) (capturerun.View, error) {
+	operation, finish, err := repository.operations.begin(ctx)
+	if err != nil {
+		return capturerun.View{}, err
+	}
+	defer finish()
+	record, err := scanCaptureRun(repository.database.QueryRowContext(
+		operation,
+		`SELECT `+captureRunColumns+` FROM capture_runs WHERE run_id = ?`,
+		runID,
+	))
+	if errors.Is(err, sql.ErrNoRows) {
+		return capturerun.View{}, capturerun.ErrNotFound
+	}
+	if err != nil {
+		return capturerun.View{}, fmt.Errorf("get CaptureRun: %w", err)
+	}
+	return capturerun.ViewOf(record), nil
 }

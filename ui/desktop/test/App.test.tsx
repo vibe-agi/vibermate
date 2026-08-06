@@ -24,6 +24,7 @@ import approvalSamples from "../src/generated/samples/approvals.json" with { typ
 import captureRunSamples from "../src/generated/samples/capture-runs.json" with { type: "json" };
 import connectionSamples from "../src/generated/samples/connections.json" with { type: "json" };
 import egressSamples from "../src/generated/samples/egress-attempts.json" with { type: "json" };
+import zhCN from "../src/generated/locales/zh-CN.json" with { type: "json" };
 import type {
   AccessApplyInput,
   AccessApplyResponse,
@@ -32,6 +33,7 @@ import type {
   AccessDirectoryPage,
   AccessPlanSummary,
   ActivityRecord,
+  ActivityStatus,
   ApprovalChoice,
   ApprovalKind,
   ApprovalView,
@@ -356,6 +358,37 @@ function accessPlanFixture(detail: AccessDetail): AccessPlanSummary {
   };
 }
 
+function activityFixture(
+  id: string,
+  accessId = "work",
+  status: ActivityStatus = "succeeded",
+): ActivityRecord {
+  return {
+    id,
+    occurredAt: "2026-07-29T00:00:00Z",
+    kind: "exchange",
+    title: "claude",
+    status,
+    source: {
+      kind: "capture_run",
+      displayName: "claude",
+      recognition: "verified",
+    },
+    access: {
+      id: accessId,
+      displayName: accessId === "work" ? "Work Claude" : "Personal Claude",
+      applicationRevision: 3,
+    },
+    parentRefs: {
+      captureRunId: "run-test",
+      ingressProfileId: "capture-run/run-test",
+      connectionId: `connection-${id}`,
+      accessId,
+      exchangeId: id,
+    },
+  };
+}
+
 function clientFixture() {
   const workDetail = accessDetailFixture(workAccess);
   return {
@@ -375,16 +408,10 @@ function clientFixture() {
         revision: 2,
       }),
     ),
-    activities: vi.fn(async (_cursor?: string, _signal?: AbortSignal) => ({
-      items: [
-        {
-          id: "exchange-id",
-          occurredAt: "2026-07-29T00:00:00Z",
-          accessId: "work",
-          status: "succeeded",
-        },
-      ],
+    activities: vi.fn<ControlClient["activities"]>(async () => ({
+      items: [activityFixture("exchange-id")],
     })),
+    runActivities: vi.fn(async (_runId: string) => ({ items: [] })),
     exchange: vi.fn(async (exchangeId: string): Promise<ExchangeDetail> => ({
       id: exchangeId,
       accessId: "work",
@@ -399,6 +426,15 @@ function clientFixture() {
     captureRuns: vi.fn(async (_signal?: AbortSignal) => ({
       items: captureRunSamples as readonly CaptureRunRecord[],
     })),
+    captureRun: vi.fn(async (runId: string) => {
+      const run = (captureRunSamples as readonly CaptureRunRecord[]).find(
+        (item) => item.id === runId,
+      );
+      if (run === undefined) {
+        throw new Error("CaptureRun not found");
+      }
+      return run;
+    }),
     manualCaptureContext: vi.fn<ControlClient["manualCaptureContext"]>(
       async () => ({
         confirmationToken: `ctx_${"A".repeat(43)}`,
@@ -434,6 +470,11 @@ function clientFixture() {
     ),
     connections: vi.fn(async (_signal?: AbortSignal) => ({
       items: connectionSamples as readonly ConnectionRecord[],
+    })),
+    runConnections: vi.fn(async (runId: string, _signal?: AbortSignal) => ({
+      items: (connectionSamples as readonly ConnectionRecord[]).filter(
+        (item) => item.ingressId === `capture-run/${runId}`,
+      ),
     })),
     egressAttempts: vi.fn(async (_signal?: AbortSignal) => ({
       items: egressSamples as readonly EgressAttemptRecord[],
@@ -996,8 +1037,10 @@ describe("Desktop dashboard", () => {
     await waitForDashboard();
     await openView("Settings");
     expect(screen.getByText("Status")).toBeTruthy();
-    fireEvent.click(screen.getByRole("button", { name: "简体中文" }));
-    expect(await screen.findByText("状态")).toBeTruthy();
+    fireEvent.click(
+      screen.getByRole("button", { name: zhCN["locale.zh-CN"] }),
+    );
+    expect(await screen.findByText(zhCN["status.title"])).toBeTruthy();
     expect(screen.queryByText("runtime-instance")).toBeNull();
   });
 
@@ -2096,13 +2139,11 @@ describe("the audit panels", () => {
 
 describe("canonical Activity request summaries", () => {
   const summary: ActivityRecord = {
-    id: "exchange-failed",
+    ...activityFixture("exchange-failed", "work", "canceled"),
     occurredAt: "2026-08-02T10:00:00Z",
-    accessId: "work",
-    status: "reviewed",
   };
 
-  it("renders the real requests route and treats unknown status as neutral raw text", async () => {
+  it("renders the real requests route with a closed localized status", async () => {
     const i18n = await createI18n("en-US");
     const client = clientFixture();
     client.activities.mockResolvedValue({ items: [summary] });
@@ -2119,9 +2160,9 @@ describe("canonical Activity request summaries", () => {
         .getByRole("link", { name: "exchange-failed" })
         .getAttribute("href"),
     ).toBe("/activity/requests/exchange-failed");
-    expect(screen.getByText("work")).toBeTruthy();
-    const unknown = screen.getByText("reviewed");
-    expect(unknown.classList.contains("neutral")).toBe(true);
+    expect(screen.getByText("Work Claude")).toBeTruthy();
+    const canceled = screen.getByText("Canceled");
+    expect(canceled.classList.contains("canceled")).toBe(true);
     expect(screen.getByRole("heading", { name: "Requests" })).toBeTruthy();
   });
 
@@ -2137,10 +2178,8 @@ describe("canonical Activity request summaries", () => {
         items: [
           summary,
           {
-            accessId: "personal",
-            id: "exchange-older",
+            ...activityFixture("exchange-older", "personal", "failed"),
             occurredAt: "2026-08-02T09:00:00Z",
-            status: "failed",
             reasonCode: "raw_provider_reason",
             diagnosis: { clientPath: "$.secret" },
           } as ActivityRecord & {
@@ -2178,10 +2217,8 @@ describe("canonical Activity request summaries", () => {
         : {
             items: [
               {
-                accessId: "personal",
-                id: "exchange-older",
+                ...activityFixture("exchange-older", "personal", "failed"),
                 occurredAt: "2026-08-02T09:00:00Z",
-                status: "failed",
               },
             ],
             nextCursor: cursor,
@@ -2631,7 +2668,9 @@ describe("what is captured", () => {
       items: [
         {
           id: "run-verified",
+          ingressProfileId: "capture-run/run-verified",
           executableLabel: "claude",
+          canonicalExecutablePath: "/usr/local/bin/claude",
           cwd: "/tmp",
           state: "attached",
           observation: "observed",
@@ -2641,6 +2680,7 @@ describe("what is captured", () => {
           catalogRevision: 4,
           createdAt: "2026-08-02T10:00:00Z",
           expiresAt: "2026-08-02T11:00:00Z",
+          updatedAt: "2026-08-02T10:05:00Z",
         },
       ],
     });

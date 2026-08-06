@@ -41,13 +41,14 @@ func TestCaptureRunPersistsVerifiedAdapterEvidenceWithProxyCapability(
 	grant, err := first.Create(
 		context.Background(),
 		capturerun.CreateCommand{
-			CWD:             filepath.Join(t.TempDir(), "workspace"),
-			ExecutableLabel: "codex",
-			Lifetime:        2 * time.Minute,
-			CatalogRevision: 7,
-			Adapter:         &adapter,
-			Recognition:     clientadapter.RecognitionVerified,
-			Workspace:       testWorkspaceScope(t),
+			CWD:                     filepath.Join(t.TempDir(), "workspace"),
+			CanonicalExecutablePath: filepath.Join(t.TempDir(), "bin", "codex"),
+			ExecutableLabel:         "codex",
+			Lifetime:                2 * time.Minute,
+			CatalogRevision:         7,
+			Adapter:                 &adapter,
+			Recognition:             clientadapter.RecognitionVerified,
+			Workspace:               testWorkspaceScope(t),
 		},
 	)
 	if err != nil {
@@ -89,11 +90,12 @@ func TestCaptureRunCapabilitiesArePersistedAsHashesAndDriveLifecycle(
 	workspace := testWorkspaceScope(t)
 
 	grant, err := manager.Create(context.Background(), capturerun.CreateCommand{
-		CWD:             filepath.Join(t.TempDir(), "workspace"),
-		ExecutableLabel: "claude",
-		Lifetime:        2 * time.Minute,
-		CatalogRevision: 1,
-		Workspace:       workspace,
+		CWD:                     filepath.Join(t.TempDir(), "workspace"),
+		CanonicalExecutablePath: filepath.Join(t.TempDir(), "bin", "claude"),
+		ExecutableLabel:         "claude",
+		Lifetime:                2 * time.Minute,
+		CatalogRevision:         1,
+		Workspace:               workspace,
 	})
 	if err != nil {
 		t.Fatalf("create CaptureRun: %v", err)
@@ -225,11 +227,12 @@ func TestCaptureRunRestartRecoveryRetainsOnlyFreshCapabilityHashes(
 	firstStore := openStore(t, databasePath)
 	first := newManager(t, firstStore, clock)
 	grant, err := first.Create(context.Background(), capturerun.CreateCommand{
-		CWD:             filepath.Join(t.TempDir(), "workspace"),
-		ExecutableLabel: "claude",
-		Lifetime:        90 * time.Second,
-		CatalogRevision: 1,
-		Workspace:       testWorkspaceScope(t),
+		CWD:                     filepath.Join(t.TempDir(), "workspace"),
+		CanonicalExecutablePath: filepath.Join(t.TempDir(), "bin", "claude"),
+		ExecutableLabel:         "claude",
+		Lifetime:                90 * time.Second,
+		CatalogRevision:         1,
+		Workspace:               testWorkspaceScope(t),
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -277,11 +280,12 @@ func TestCaptureRunShutdownRevokesBeforeSQLiteClose(t *testing.T) {
 	store := openStore(t, databasePath)
 	manager := newManager(t, store, clock)
 	grant, err := manager.Create(context.Background(), capturerun.CreateCommand{
-		CWD:             filepath.Join(t.TempDir(), "workspace"),
-		ExecutableLabel: "true",
-		Lifetime:        time.Minute,
-		CatalogRevision: 1,
-		Workspace:       testWorkspaceScope(t),
+		CWD:                     filepath.Join(t.TempDir(), "workspace"),
+		CanonicalExecutablePath: "/usr/bin/true",
+		ExecutableLabel:         "true",
+		Lifetime:                time.Minute,
+		CatalogRevision:         1,
+		Workspace:               testWorkspaceScope(t),
 	})
 	if err != nil {
 		t.Fatal(err)

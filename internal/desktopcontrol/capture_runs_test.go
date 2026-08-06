@@ -75,6 +75,18 @@ func (reader fixedCaptureRunReader) ListRuns(
 	return reader.page, nil
 }
 
+func (reader fixedCaptureRunReader) GetRun(
+	_ context.Context,
+	runID string,
+) (capturerun.View, error) {
+	for _, run := range reader.page.Items {
+		if run.ID == runID {
+			return run, nil
+		}
+	}
+	return capturerun.View{}, capturerun.ErrNotFound
+}
+
 // The Desktop-only GET keeps lifecycle/observation diagnostics while sharing
 // the exact safe adapter projection used by the contracted launcher routes.
 func TestCaptureRunsUseASeparateCapabilityFreeAuditProjection(t *testing.T) {
@@ -83,14 +95,15 @@ func TestCaptureRunsUseASeparateCapabilityFreeAuditProjection(t *testing.T) {
 	createdAt := time.Date(2026, 8, 2, 10, 0, 0, 0, time.UTC)
 	fixture := newAuditFixture(t, fixedCaptureRunReader{
 		page: capturerun.Page{Items: []capturerun.View{{
-			ID:              "run-verified-sample",
-			ExecutableLabel: "claude",
-			CWD:             "/Users/example/project",
-			ProcessID:       4242,
-			State:           capturerun.StateAttached,
-			Observation:     capturerun.ObservationObserved,
-			Recognition:     clientadapter.RecognitionVerified,
-			CatalogRevision: 4,
+			ID:                      "run-verified-sample",
+			ExecutableLabel:         "claude",
+			CWD:                     "/Users/example/project",
+			CanonicalExecutablePath: "/Users/example/.local/bin/claude",
+			ProcessID:               4242,
+			State:                   capturerun.StateAttached,
+			Observation:             capturerun.ObservationObserved,
+			Recognition:             clientadapter.RecognitionVerified,
+			CatalogRevision:         4,
 			Adapter: &clientadapter.Evidence{
 				ID:              "claude-code",
 				Revision:        1,
@@ -102,8 +115,10 @@ func TestCaptureRunsUseASeparateCapabilityFreeAuditProjection(t *testing.T) {
 				Features: clientadapter.
 					FeatureResponsesWebSocketHTTPFallback,
 			},
-			CreatedAt: createdAt,
-			ExpiresAt: createdAt.Add(time.Hour),
+			CreatedAt:       createdAt,
+			FirstObservedAt: createdAt.Add(time.Second),
+			ExpiresAt:       createdAt.Add(time.Hour),
+			UpdatedAt:       createdAt.Add(time.Minute),
 		}}},
 	})
 	recorded := doRequest(
@@ -124,6 +139,7 @@ func TestCaptureRunsUseASeparateCapabilityFreeAuditProjection(t *testing.T) {
 		t.Fatalf("capture items=%d err=%v body=%s", len(items), err, recorded.Body.Bytes())
 	}
 	runObject := exactCaptureObject(t, items[0], []string{
+		"canonicalExecutablePath",
 		"catalogRevision",
 		"clientAdapter",
 		"clientAdapterState",
@@ -132,11 +148,14 @@ func TestCaptureRunsUseASeparateCapabilityFreeAuditProjection(t *testing.T) {
 		"cwd",
 		"executableLabel",
 		"expiresAt",
+		"firstObservedAt",
 		"id",
+		"ingressProfileId",
 		"observation",
 		"processId",
 		"recognition",
 		"state",
+		"updatedAt",
 	})
 	exactCaptureObject(t, runObject["clientAdapter"], []string{
 		"catalogRevision",
@@ -160,6 +179,42 @@ func TestCaptureRunsUseASeparateCapabilityFreeAuditProjection(t *testing.T) {
 		run.CatalogRevision != 4 || run.ClientAdapter == nil {
 		t.Fatalf("capture audit view = %+v", run)
 	}
+	detailResponse := doRequest(
+		t,
+		fixture.router,
+		fixture.authority,
+		http.MethodGet,
+		"/api/v1/capture-runs/run-verified-sample",
+		fixture.readToken,
+		nil,
+	)
+	if detailResponse.Code != http.StatusOK {
+		t.Fatalf(
+			"capture detail status=%d body=%s",
+			detailResponse.Code,
+			detailResponse.Body,
+		)
+	}
+	var detail desktopcontrol.CaptureRunAuditView
+	if err := json.Unmarshal(detailResponse.Body.Bytes(), &detail); err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(detail, run) {
+		t.Fatalf("capture detail=%+v list item=%+v", detail, run)
+	}
+	missing := doRequest(
+		t,
+		fixture.router,
+		fixture.authority,
+		http.MethodGet,
+		"/api/v1/capture-runs/run-missing",
+		fixture.readToken,
+		nil,
+	)
+	if missing.Code != http.StatusNotFound ||
+		!strings.Contains(missing.Body.String(), "capture_run_not_found") {
+		t.Fatalf("missing capture detail=%d %s", missing.Code, missing.Body)
+	}
 	for _, forbidden := range [][]byte{
 		[]byte(`"proxyToken"`),
 		[]byte(`"runCapability"`),
@@ -169,8 +224,14 @@ func TestCaptureRunsUseASeparateCapabilityFreeAuditProjection(t *testing.T) {
 		[]byte(`"releaseSha256"`),
 		[]byte(`"features"`),
 	} {
-		if bytes.Contains(recorded.Body.Bytes(), forbidden) {
-			t.Fatalf("the audit read leaked %s: %s", forbidden, recorded.Body.Bytes())
+		if bytes.Contains(recorded.Body.Bytes(), forbidden) ||
+			bytes.Contains(detailResponse.Body.Bytes(), forbidden) {
+			t.Fatalf(
+				"the audit read leaked %s: list=%s detail=%s",
+				forbidden,
+				recorded.Body.Bytes(),
+				detailResponse.Body.Bytes(),
+			)
 		}
 	}
 }

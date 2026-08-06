@@ -167,10 +167,48 @@ function activityRecord(
   return {
     id: "exchange-1",
     occurredAt: "2026-08-03T16:00:00+08:00",
-    accessId: "work",
+    kind: "exchange",
+    title: "agent",
     status: "failed",
+    source: {
+      kind: "capture_run",
+      displayName: "agent",
+      recognition: "configured",
+    },
+    access: {
+      id: "work",
+      displayName: "Work",
+      applicationRevision: 1,
+    },
+    parentRefs: {
+      captureRunId: "capture-1",
+      ingressProfileId: "capture-run/capture-1",
+      connectionId: "connection-1",
+      accessId: "work",
+      exchangeId: "exchange-1",
+    },
     ...overrides,
   };
+}
+
+function systemActivityRecord(
+  overrides: Record<string, unknown> = {},
+): Record<string, unknown> {
+  return activityRecord({
+    title: "ViberMate runtime",
+    source: {
+      kind: "system_proxy",
+      displayName: "ViberMate runtime",
+      recognition: "unknown",
+    },
+    parentRefs: {
+      ingressProfileId: "system-proxy",
+      connectionId: "connection-1",
+      accessId: "work",
+      exchangeId: "exchange-1",
+    },
+    ...overrides,
+  });
 }
 
 function exchangeDetail(
@@ -251,6 +289,11 @@ function connectionRecord(
     sequence: 1,
     connectionId: "connection-1",
     sourceConfidence: "unknown",
+    accessId: "work",
+    accessName: "Work",
+    accessRevision: 1,
+    agentEndpointId: "work-agent",
+    agentEndpointRevision: 1,
     requestedHost: "api.example.com",
     routeHost: "api.example.com",
     ip: "2001:db8::1",
@@ -334,7 +377,9 @@ function captureRunRecord(
 ): Record<string, unknown> {
   return {
     id: "capture-1",
+    ingressProfileId: "capture-run/capture-1",
     executableLabel: "agent",
+    canonicalExecutablePath: "/usr/local/bin/agent",
     cwd: "/tmp/project",
     state: "created",
     observation: "waiting_for_traffic",
@@ -344,6 +389,7 @@ function captureRunRecord(
     catalogRevision: 1,
     createdAt: "2026-08-03T08:00:00Z",
     expiresAt: "2026-08-03T08:05:00Z",
+    updatedAt: "2026-08-03T08:00:00Z",
     ...overrides,
   };
 }
@@ -4371,11 +4417,18 @@ describe("Desktop control client", () => {
       switch (url.pathname) {
         case "/api/v1/activities":
           expect(url.searchParams.get("limit")).toBe("50");
+          if (url.searchParams.get("captureRunId") === "capture-1") {
+            expect(url.searchParams.get("kind")).toBe("exchange");
+            expect(url.searchParams.get("cursor")).toBeNull();
+            return jsonResponse({
+              items: [activityRecord({ status: "succeeded" })],
+            });
+          }
           expect(url.searchParams.get("cursor")).toBe(
             "cHJldmlldy1wYWdlLTI",
           );
           return jsonResponse({
-            items: [activityRecord({ status: "reviewed" })],
+            items: [systemActivityRecord({ status: "canceled" })],
             nextCursor: "b3BhcXVlLW5leHQ",
           });
         case "/api/v1/exchanges/exchange-1":
@@ -4387,6 +4440,13 @@ describe("Desktop control client", () => {
           }
           return jsonResponse({ items: [pendingApproval] });
         case "/api/v1/connections":
+          if (url.searchParams.get("ingressId") === "capture-run/capture-1") {
+            expect(url.searchParams.get("limit")).toBe("50");
+            expect(url.searchParams.get("view")).toBe("latest");
+            return jsonResponse({
+              items: [connectionRecord({ ingressId: "capture-run/capture-1" })],
+            });
+          }
           return jsonResponse({
             items: [connectionRecord(), askedConnectionRecord()],
           });
@@ -4394,6 +4454,8 @@ describe("Desktop control client", () => {
           return jsonResponse({ items: [egressAttemptRecord()] });
         case "/api/v1/capture-runs":
           return jsonResponse({ items: [captureRunRecord()] });
+        case "/api/v1/capture-runs/capture-1":
+          return jsonResponse(captureRunRecord());
         default:
           if (url.pathname.endsWith("/actions/decide")) {
             return jsonResponse(resolvedApproval);
@@ -4406,7 +4468,7 @@ describe("Desktop control client", () => {
     await expect(
       client.activities("cHJldmlldy1wYWdlLTI"),
     ).resolves.toEqual({
-      items: [activityRecord({ status: "reviewed" })],
+      items: [systemActivityRecord({ status: "canceled" })],
       nextCursor: "b3BhcXVlLW5leHQ",
     });
     await expect(client.exchange("exchange-1")).resolves.toEqual(
@@ -4416,11 +4478,20 @@ describe("Desktop control client", () => {
     await expect(client.connections()).resolves.toEqual({
       items: [connectionRecord(), askedConnectionRecord()],
     });
+    await expect(client.runConnections("capture-1")).resolves.toEqual({
+      items: [connectionRecord({ ingressId: "capture-run/capture-1" })],
+    });
     await expect(client.egressAttempts()).resolves.toEqual({
       items: [egressAttemptRecord()],
     });
     await expect(client.captureRuns()).resolves.toEqual({
       items: [captureRunRecord()],
+    });
+    await expect(client.captureRun("capture-1")).resolves.toEqual(
+      captureRunRecord(),
+    );
+    await expect(client.runActivities("capture-1")).resolves.toEqual({
+      items: [activityRecord({ status: "succeeded" })],
     });
     await expect(
       client.decideApproval(pendingApproval, pendingApproval.choices[0]!),
@@ -5102,6 +5173,54 @@ describe("Desktop control client", () => {
       invoke: (client) => client.activities(),
     },
     {
+      name: "an Exchange activity without an AI Access relation",
+      path: "/api/v1/activities",
+      payload: { items: [activityRecord({ access: undefined })] },
+      invoke: (client) => client.activities(),
+    },
+    {
+      name: "an activity whose Exchange identity disagrees with its parent relation",
+      path: "/api/v1/activities",
+      payload: {
+        items: [
+          activityRecord({
+            parentRefs: {
+              captureRunId: "capture-1",
+              ingressProfileId: "capture-run/capture-1",
+              connectionId: "connection-1",
+              accessId: "work",
+              exchangeId: "exchange-other",
+            },
+          }),
+        ],
+      },
+      invoke: (client) => client.activities(),
+    },
+    {
+      name: "a CaptureRun activity with a mismatched ingress identity",
+      path: "/api/v1/activities",
+      payload: {
+        items: [
+          activityRecord({
+            parentRefs: {
+              captureRunId: "capture-1",
+              ingressProfileId: "capture-run/capture-other",
+              connectionId: "connection-1",
+              accessId: "work",
+              exchangeId: "exchange-1",
+            },
+          }),
+        ],
+      },
+      invoke: (client) => client.activities(),
+    },
+    {
+      name: "a run-filtered page containing another run",
+      path: "/api/v1/activities",
+      payload: { items: [activityRecord()] },
+      invoke: (client) => client.runActivities("capture-other"),
+    },
+    {
       name: "legacy raw diagnosis fields",
       path: "/api/v1/activities",
       payload: {
@@ -5252,6 +5371,41 @@ describe("Desktop control client", () => {
       invoke: (client) => client.connections(),
     },
     {
+      name: "a connection outside the requested run",
+      path: "/api/v1/connections",
+      payload: {
+        items: [connectionRecord({ ingressId: "capture-run/capture-2" })],
+      },
+      invoke: (client) => client.runConnections("capture-1"),
+    },
+    {
+      name: "an allowed MITM decision without its AI Access relation",
+      path: "/api/v1/connections",
+      payload: {
+        items: [
+          connectionRecord({
+            accessId: undefined,
+            accessName: undefined,
+            accessRevision: undefined,
+            agentEndpointId: undefined,
+            agentEndpointRevision: undefined,
+            phase: "decided",
+            endedAt: undefined,
+            outcome: undefined,
+          }),
+        ],
+      },
+      invoke: (client) => client.connections(),
+    },
+    {
+      name: "a blind connection carrying an AI Access relation",
+      path: "/api/v1/connections",
+      payload: {
+        items: [connectionRecord({ decryption: "blind" })],
+      },
+      invoke: (client) => client.connections(),
+    },
+    {
       name: "a zero connection port",
       path: "/api/v1/connections",
       payload: { items: [connectionRecord({ port: 0 })] },
@@ -5361,6 +5515,20 @@ describe("Desktop control client", () => {
       path: "/api/v1/capture-runs",
       payload: { items: [captureRunRecord()], rawEnvironment: "secret" },
       invoke: (client) => client.captureRuns(),
+    },
+    {
+      name: "a relative canonical executable path",
+      path: "/api/v1/capture-runs",
+      payload: {
+        items: [captureRunRecord({ canonicalExecutablePath: "bin/agent" })],
+      },
+      invoke: (client) => client.captureRuns(),
+    },
+    {
+      name: "a relative capture working directory",
+      path: "/api/v1/capture-runs/capture-1",
+      payload: captureRunRecord({ cwd: "project" }),
+      invoke: (client) => client.captureRun("capture-1"),
     },
     {
       name: "more than fifty capture records",

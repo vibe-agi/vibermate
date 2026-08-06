@@ -673,16 +673,12 @@ func activityPageFromWire(
 		)
 	}
 	for _, item := range items {
-		if !validControlIdentity(item.ID, activity.MaxIdentityBytes) ||
+		if item.Validate() != nil ||
+			!validControlIdentity(item.ID, activity.MaxIdentityBytes) ||
 			item.OccurredAt.IsZero() ||
 			!validExchangeSummaryStatus(item.Status) {
 			return desktopcontrol.ActivityPage{}, errors.New(
 				"Activity summary is invalid",
-			)
-		}
-		if _, err := access.NewAccessID(item.AccessID); err != nil {
-			return desktopcontrol.ActivityPage{}, errors.New(
-				"Activity summary Access ID is invalid",
 			)
 		}
 	}

@@ -513,16 +513,56 @@ func (observer activityAttemptObserver) Observe(
 	default:
 		return errors.New("Exchange observation outcome is invalid")
 	}
+	sourceKind := activity.SourceSystemProxy
+	sourceDisplayName := "ViberMate runtime"
+	sourceRecognition := activity.SourceRecognitionUnknown
+	captureRunID := ""
+	manualCaptureID := ""
+	ingressProfileID := "system-proxy"
+	if observation.HasAdmission {
+		if err := observation.Admission.Validate(); err != nil {
+			return errors.New("Exchange capture admission is invalid")
+		}
+		sourceDisplayName = observation.Admission.SourceLabel()
+		ingressProfileID = observation.Admission.IngressProfileID()
+		switch observation.Admission.AttributionConfidence() {
+		case captureadmission.AttributionVerified:
+			sourceRecognition = activity.SourceRecognitionVerified
+		case captureadmission.AttributionConfigured:
+			sourceRecognition = activity.SourceRecognitionConfigured
+		default:
+			return errors.New("Exchange source recognition is invalid")
+		}
+		switch observation.Admission.Kind() {
+		case captureadmission.KindManagedRun:
+			sourceKind = activity.SourceCaptureRun
+			captureRunID, _ = observation.Admission.CaptureRunID()
+		case captureadmission.KindManual:
+			sourceKind = activity.SourceManualProxy
+			manualCaptureID, _ = observation.Admission.ManualCaptureID()
+		default:
+			return errors.New("Exchange source kind is invalid")
+		}
+	}
 	// The reason stays one stable code. The evidence beside it travels as its
 	// own typed fields: a reason with facts glued onto its end cannot be
 	// mapped to copy, matched by a rule, or told apart from a reason that
 	// happens to contain the same words.
 	_, err := observer.recorder.Record(ctx, activity.Event{
-		Kind:       activity.KindExchangeCompleted,
-		AccessID:   observation.AccessID,
-		SubjectID:  observation.ExchangeID,
-		Status:     status,
-		ReasonCode: string(observation.ReasonCode),
+		Kind:              activity.KindExchangeCompleted,
+		AccessID:          observation.AccessID,
+		AccessName:        observation.AccessName,
+		AccessRevision:    uint64(observation.AccessRevision),
+		SubjectID:         observation.ExchangeID,
+		Status:            status,
+		ReasonCode:        string(observation.ReasonCode),
+		SourceKind:        sourceKind,
+		SourceDisplayName: sourceDisplayName,
+		SourceRecognition: sourceRecognition,
+		CaptureRunID:      captureRunID,
+		ManualCaptureID:   manualCaptureID,
+		IngressProfileID:  ingressProfileID,
+		ConnectionID:      observation.ConnectionID,
 		Diagnosis: activity.Diagnosis{
 			ProviderStatus: observation.ProviderStatus,
 			ProviderField:  string(observation.ProviderField),

@@ -2854,6 +2854,239 @@ button.quiet-danger {
   gap: 1.25rem;
 }
 
+.run-detail-breadcrumb {
+  margin: 0 0 10px;
+}
+
+.run-detail-breadcrumb a,
+.run-detail-link {
+  color: var(--signal);
+  text-decoration: none;
+}
+
+.link-button,
+button.run-detail-link {
+  background: transparent;
+  border: 0;
+  cursor: pointer;
+  font: inherit;
+  padding: 0;
+}
+
+.link-button {
+  color: var(--signal);
+}
+
+.run-detail-breadcrumb a:hover,
+.run-detail-link:hover {
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+
+.run-detail-layout {
+  display: grid;
+  gap: 16px;
+}
+
+.run-detail-state {
+  padding: 24px;
+}
+
+.run-detail-header {
+  align-items: flex-end;
+  display: flex;
+  gap: 20px;
+  justify-content: space-between;
+}
+
+.run-detail-header h1 {
+  font-size: clamp(28px, 4vw, 42px);
+  letter-spacing: -0.035em;
+  margin: 2px 0 3px;
+}
+
+.run-detail-header p:last-child {
+  color: var(--muted);
+  margin: 0;
+}
+
+.run-stat-strip {
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  overflow: hidden;
+}
+
+.run-stat-strip > div {
+  border-right: 1px solid var(--border);
+  display: grid;
+  gap: 3px;
+  padding: 13px 16px;
+}
+
+.run-stat-strip > div:last-child {
+  border-right: 0;
+}
+
+.run-stat-strip span,
+.run-path-node span,
+.run-evidence-grid dt {
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.run-stat-strip strong {
+  font-family: var(--mono);
+  font-size: 22px;
+}
+
+.run-path-panel,
+.run-evidence-panel,
+.run-policy-panel,
+.run-requests-panel {
+  padding: 18px 20px;
+}
+
+.run-path {
+  align-items: stretch;
+  display: grid;
+  gap: 10px;
+  grid-template-columns: minmax(150px, 0.8fr) auto minmax(140px, 0.55fr) auto minmax(230px, 1.35fr);
+  margin-top: 14px;
+}
+
+.run-path-node {
+  background: var(--raised);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  display: grid;
+  gap: 5px;
+  min-width: 0;
+  padding: 13px 14px;
+}
+
+.run-path-node strong,
+.run-path-node small {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.run-path-node small {
+  color: var(--muted);
+  white-space: normal;
+}
+
+.run-path-node.source {
+  border-left: 3px solid var(--signal);
+}
+
+.run-path-node.access {
+  border-left: 3px solid var(--allow);
+}
+
+.run-path-node.passthrough {
+  border-left: 3px solid var(--ask);
+}
+
+.run-path-arrow {
+  align-self: center;
+  color: var(--muted);
+  font-size: 18px;
+}
+
+.run-path-branches {
+  display: grid;
+  gap: 8px;
+}
+
+.run-path-boundary {
+  border-top: 1px solid var(--border);
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.55;
+  margin: 16px 0 0;
+  padding-top: 12px;
+}
+
+.run-detail-columns {
+  display: grid;
+  gap: 16px;
+  grid-template-columns: minmax(0, 1.35fr) minmax(280px, 0.65fr);
+}
+
+.run-evidence-grid {
+  display: grid;
+  gap: 0;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  margin: 10px 0 0;
+}
+
+.run-evidence-grid > div {
+  border-top: 1px solid var(--border);
+  min-width: 0;
+  padding: 11px 12px 11px 0;
+}
+
+.run-evidence-grid dd {
+  font-family: var(--mono);
+  font-size: 12px;
+  margin: 5px 0 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.run-policy-panel p,
+.run-policy-panel li {
+  color: var(--muted);
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+.run-policy-panel ul {
+  margin: 12px 0 18px;
+  padding-left: 18px;
+}
+
+.run-policy-panel li + li {
+  margin-top: 6px;
+}
+
+@media (max-width: 960px) {
+  .run-path {
+    grid-template-columns: 1fr;
+  }
+
+  .run-path-arrow {
+    justify-self: center;
+    transform: rotate(90deg);
+  }
+
+  .run-detail-columns {
+    grid-template-columns: 1fr;
+  }
+}
+
+@media (max-width: 680px) {
+  .run-stat-strip,
+  .run-evidence-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .run-stat-strip > div:nth-child(2) {
+    border-right: 0;
+  }
+
+  .run-stat-strip > div:nth-child(-n + 2) {
+    border-bottom: 1px solid var(--border);
+  }
+}
+
 .request-detail-heading {
   display: flex;
   align-items: flex-start;

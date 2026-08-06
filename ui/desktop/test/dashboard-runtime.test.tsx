@@ -17,6 +17,7 @@ import type {
   AccessDetail,
   AccessApplyInput,
   ActivityRecord,
+  ActivityStatus,
   ApprovalChoice,
   ApprovalView,
   CredentialView,
@@ -61,13 +62,31 @@ const status: StatusResponse = {
 function activity(
   id: string,
   occurredAt: string,
-  statusValue = "succeeded",
+  statusValue: ActivityStatus = "succeeded",
 ): ActivityRecord {
   return {
-    accessId: "work",
     id,
     occurredAt,
+    kind: "exchange",
+    title: "claude",
     status: statusValue,
+    source: {
+      kind: "capture_run",
+      displayName: "claude",
+      recognition: "verified",
+    },
+    access: {
+      id: "work",
+      displayName: "Work Claude",
+      applicationRevision: 3,
+    },
+    parentRefs: {
+      captureRunId: "run-test",
+      ingressProfileId: "capture-run/run-test",
+      connectionId: `connection-${id}`,
+      accessId: "work",
+      exchangeId: id,
+    },
   };
 }
 
@@ -187,6 +206,7 @@ function clientFixture(): ControlClient {
       revision: 1,
     })),
     activities: vi.fn(async () => ({ items: [] })),
+    runActivities: vi.fn(async () => ({ items: [] })),
     applyAccess: vi.fn(async (_accessId: string, _input: AccessApplyInput) => ({
       outcome: "committed" as const,
       applicationState: "active" as const,
@@ -230,6 +250,9 @@ function clientFixture(): ControlClient {
     ),
     approvals: vi.fn(async () => ({ items: [] })),
     captureRuns: vi.fn(async () => ({ items: [] })),
+    captureRun: vi.fn(async () => {
+      throw new Error("CaptureRun not found");
+    }),
     manualCaptureContext: vi.fn(async () => ({
       confirmationToken: `ctx_${"A".repeat(43)}`,
       proxyAddress: "http://127.0.0.1:32123",
@@ -254,6 +277,7 @@ function clientFixture(): ControlClient {
     }),
     revokeManualCapture: vi.fn(async () => undefined),
     connections: vi.fn(async () => ({ items: [] })),
+    runConnections: vi.fn(async () => ({ items: [] })),
     credential: vi.fn(
       async (
         _accessId: string,
@@ -276,7 +300,7 @@ function clientFixture(): ControlClient {
     exchange: vi.fn(async (exchangeId: string) => ({
       id: exchangeId,
       accessId: "work",
-      status: "succeeded",
+      status: "succeeded" as const,
       processingTrace: {
         attemptIds: [],
         pluginRunIds: [],
@@ -457,6 +481,8 @@ describe("TanStack Query dashboard runtime", () => {
             catalogRevision: 1,
             clientAdapterState: "generic",
             clientRecognition: "unknown",
+            ingressProfileId: "capture-run/run-stale",
+            canonicalExecutablePath: "/usr/local/bin/client",
             createdAt: "2026-08-03T07:00:00Z",
             cwd: "/tmp",
             executableLabel: "client",
@@ -465,6 +491,7 @@ describe("TanStack Query dashboard runtime", () => {
             observation: "observed",
             recognition: "unknown",
             state: "attached",
+            updatedAt: "2026-08-03T07:30:00Z",
           },
         ],
       };

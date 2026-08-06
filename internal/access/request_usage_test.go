@@ -125,6 +125,7 @@ func requestUsageBinding(t *testing.T, rawAccessID string) IngressBinding {
 	hash := PlanHash{1}
 	return IngressBinding{
 		accessID:         accessID,
+		accessName:       "Request usage test",
 		endpointID:       endpointID,
 		endpointRevision: 1,
 		clientOrigin:     origin,

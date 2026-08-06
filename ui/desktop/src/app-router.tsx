@@ -17,6 +17,7 @@ import {
   AccessRoutePage,
   ActivityRequestsRoutePage,
   ActivityRequestRoutePage,
+  ActivityRunRoutePage,
   ActivityRoutePage,
   DashboardShell,
   DashboardsRoutePage,
@@ -264,6 +265,29 @@ const activityRequestRoute = createRoute({
   validateSearch: validateEmptyTaskSearch,
 });
 
+const activityRunRoute = createRoute({
+  beforeLoad: ({ search }) => {
+    if (search.invalid === true) {
+      throw redirect({
+        replace: true,
+        search: {},
+        to: dashboardRoutePaths.activity,
+      });
+    }
+  },
+  component: function ActivityRunRoute() {
+    const { runId } = activityRunRoute.useParams();
+    return <ActivityRunRoutePage runId={runId} />;
+  },
+  getParentRoute: () => rootRoute,
+  params: {
+    parse: ({ runId }) =>
+      validRouteLocator(runId, maximumRouteLocatorBytes) ? { runId } : false,
+  },
+  path: dashboardTaskRoutePaths.activityRun,
+  validateSearch: validateEmptyTaskSearch,
+});
+
 const extensionDiscoverRoute = createRoute({
   component: function ExtensionDiscoverRoute() {
     const { invalid } = extensionDiscoverRoute.useSearch();
@@ -459,6 +483,7 @@ const routeTree = rootRoute.addChildren([
   accessRoutingRoute,
   activityRequestsRoute,
   activityRequestRoute,
+  activityRunRoute,
   extensionDiscoverRoute,
   extensionInstalledRoute,
   extensionDetailRoute,
@@ -556,11 +581,11 @@ export const dashboardRouter = createDashboardRouter(
   },
 );
 
-export type DashboardRouter = ReturnType<typeof createDashboardRouter>;
+export type DashboardRouter = typeof dashboardRouter;
 
 declare module "@tanstack/react-router" {
   interface Register {
-    router: typeof dashboardRouter;
+    router: DashboardRouter;
   }
 }
 

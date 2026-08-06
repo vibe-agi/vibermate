@@ -41,14 +41,21 @@ func TestExchangeDetailProjectsOrderedRedactedEvidence(t *testing.T) {
 		return attempt
 	}
 	record := activity.Record{
-		Sequence:   7,
-		ID:         "activity-detail",
-		OccurredAt: time.Date(2026, 8, 3, 12, 0, 2, 0, time.UTC),
-		Kind:       activity.KindExchangeCompleted,
-		AccessID:   "access-detail",
-		SubjectID:  "exchange-detail",
-		Status:     activity.StatusFailed,
-		ReasonCode: "provider_transport_failed",
+		Sequence:          7,
+		ID:                "activity-detail",
+		OccurredAt:        time.Date(2026, 8, 3, 12, 0, 2, 0, time.UTC),
+		Kind:              activity.KindExchangeCompleted,
+		AccessID:          "access-detail",
+		AccessName:        "Detail Access",
+		AccessRevision:    4,
+		SubjectID:         "exchange-detail",
+		Status:            activity.StatusFailed,
+		ReasonCode:        "provider_transport_failed",
+		SourceKind:        activity.SourceSystemProxy,
+		SourceDisplayName: "ViberMate runtime",
+		SourceRecognition: activity.SourceRecognitionUnknown,
+		IngressProfileID:  "system-proxy",
+		ConnectionID:      "connection-detail",
 	}
 	detail, err := exchangeDetailOf(record, egressaudit.Page{
 		Items: []egressaudit.Record{
@@ -124,8 +131,15 @@ func TestActivityListQueryIsClosedAndBounded(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	parsed, err := parseActivityListQuery("limit=200&cursor=" + cursor)
-	if err != nil || parsed.limit != 200 || parsed.beforeSequence != 91 {
+	parsed, err := parseActivityListQuery(
+		"limit=200&cursor=" + cursor +
+			"&kind=exchange&captureRunId=run-one&accessId=work",
+	)
+	if err != nil ||
+		parsed.limit != 200 ||
+		parsed.beforeSequence != 91 ||
+		parsed.captureRunID != "run-one" ||
+		parsed.accessID != "work" {
 		t.Fatalf("parsed Activity query = %+v, %v", parsed, err)
 	}
 	for _, invalid := range []string{
@@ -139,6 +153,12 @@ func TestActivityListQueryIsClosedAndBounded(t *testing.T) {
 		"beforeSequence=91",
 		"limit=1&limit=2",
 		"cursor=" + cursor + "&cursor=" + cursor,
+		"captureRunId=",
+		"captureRunId=run-one&captureRunId=run-two",
+		"accessId=",
+		"accessId=work&accessId=personal",
+		"kind=connection",
+		"kind=exchange&kind=exchange",
 		"limit=10;cursor=" + cursor,
 		"cursor=%zz",
 	} {

@@ -118,32 +118,37 @@ func (source Source) validate() error {
 // Event is one immutable phase snapshot for a connection. It contains no URL
 // path, header, body, raw credential, or TLS byte sequence.
 type Event struct {
-	ConnectionID         string           `json:"connectionId"`
-	IngressID            string           `json:"ingressId,omitempty"`
-	SourceLabel          string           `json:"sourceLabel,omitempty"`
-	SourceConfidence     SourceConfidence `json:"sourceConfidence"`
-	RequestedHost        string           `json:"requestedHost"`
-	ObservedSNI          string           `json:"observedSni,omitempty"`
-	RouteHost            string           `json:"routeHost,omitempty"`
-	IP                   string           `json:"ip,omitempty"`
-	Port                 uint16           `json:"port"`
-	Decision             Decision         `json:"decision,omitempty"`
-	RuleID               string           `json:"ruleId,omitempty"`
-	CredentialBindingID  string           `json:"credentialBindingId,omitempty"`
-	EgressScope          EgressScope      `json:"egressScope,omitempty"`
-	EgressSource         EgressSource     `json:"egressSource,omitempty"`
-	EgressRuleID         string           `json:"egressRuleId,omitempty"`
-	EgressSelectorRunID  string           `json:"egressSelectorRunId,omitempty"`
-	EgressProxyID        string           `json:"egressProxyId,omitempty"`
-	EgressPolicyRevision uint64           `json:"egressPolicyRevision,omitempty"`
-	Decryption           Decryption       `json:"decryption"`
-	Phase                Phase            `json:"phase"`
-	BytesUp              uint64           `json:"bytesUp"`
-	BytesDown            uint64           `json:"bytesDown"`
-	StartedAt            time.Time        `json:"startedAt"`
-	EndedAt              time.Time        `json:"endedAt,omitempty"`
-	Outcome              Outcome          `json:"outcome,omitempty"`
-	ErrorClass           string           `json:"errorClass,omitempty"`
+	ConnectionID          string           `json:"connectionId"`
+	IngressID             string           `json:"ingressId,omitempty"`
+	SourceLabel           string           `json:"sourceLabel,omitempty"`
+	SourceConfidence      SourceConfidence `json:"sourceConfidence"`
+	AccessID              string           `json:"accessId,omitempty"`
+	AccessName            string           `json:"accessName,omitempty"`
+	AccessRevision        uint64           `json:"accessRevision,omitempty"`
+	AgentEndpointID       string           `json:"agentEndpointId,omitempty"`
+	AgentEndpointRevision uint64           `json:"agentEndpointRevision,omitempty"`
+	RequestedHost         string           `json:"requestedHost"`
+	ObservedSNI           string           `json:"observedSni,omitempty"`
+	RouteHost             string           `json:"routeHost,omitempty"`
+	IP                    string           `json:"ip,omitempty"`
+	Port                  uint16           `json:"port"`
+	Decision              Decision         `json:"decision,omitempty"`
+	RuleID                string           `json:"ruleId,omitempty"`
+	CredentialBindingID   string           `json:"credentialBindingId,omitempty"`
+	EgressScope           EgressScope      `json:"egressScope,omitempty"`
+	EgressSource          EgressSource     `json:"egressSource,omitempty"`
+	EgressRuleID          string           `json:"egressRuleId,omitempty"`
+	EgressSelectorRunID   string           `json:"egressSelectorRunId,omitempty"`
+	EgressProxyID         string           `json:"egressProxyId,omitempty"`
+	EgressPolicyRevision  uint64           `json:"egressPolicyRevision,omitempty"`
+	Decryption            Decryption       `json:"decryption"`
+	Phase                 Phase            `json:"phase"`
+	BytesUp               uint64           `json:"bytesUp"`
+	BytesDown             uint64           `json:"bytesDown"`
+	StartedAt             time.Time        `json:"startedAt"`
+	EndedAt               time.Time        `json:"endedAt,omitempty"`
+	Outcome               Outcome          `json:"outcome,omitempty"`
+	ErrorClass            string           `json:"errorClass,omitempty"`
 }
 
 // MarshalJSON omits EndedAt until a connection reaches a terminal phase.
@@ -180,6 +185,29 @@ func (event Event) Validate() error {
 		Confidence: event.SourceConfidence,
 	}).validate(); err != nil {
 		return err
+	}
+	accessEvidencePresent := event.AccessID != "" ||
+		event.AccessName != "" ||
+		event.AccessRevision != 0 ||
+		event.AgentEndpointID != "" ||
+		event.AgentEndpointRevision != 0
+	if accessEvidencePresent {
+		if validateIdentity("Access ID", event.AccessID, false) != nil ||
+			validateIdentity("Access name", event.AccessName, false) != nil ||
+			validateIdentity("AgentEndpoint ID", event.AgentEndpointID, false) != nil ||
+			event.AccessRevision == 0 ||
+			event.AgentEndpointRevision == 0 {
+			return fmt.Errorf(
+				"%w: Access relation evidence is incomplete",
+				ErrInvalidEvent,
+			)
+		}
+		if event.Decryption != DecryptionMITM || event.Decision != DecisionAllow {
+			return fmt.Errorf(
+				"%w: Access relation exists without an allowed MITM decision",
+				ErrInvalidEvent,
+			)
+		}
 	}
 	if err := validateHost("requested host", event.RequestedHost, false); err != nil {
 		return err
@@ -220,6 +248,14 @@ func (event Event) Validate() error {
 		PhaseConnected, PhaseClosed, PhaseFailed:
 	default:
 		return fmt.Errorf("%w: phase is invalid", ErrInvalidEvent)
+	}
+	if event.Decryption == DecryptionMITM &&
+		event.Decision == DecisionAllow &&
+		!accessEvidencePresent {
+		return fmt.Errorf(
+			"%w: allowed MITM has no Access relation",
+			ErrInvalidEvent,
+		)
 	}
 	if err := event.validateDecision(); err != nil {
 		return err
@@ -369,14 +405,17 @@ func (record Record) Validate() error {
 }
 
 type PageRequest struct {
-	BeforeSequence int64
-	Limit          int
+	BeforeSequence      int64
+	Limit               int
+	IngressID           string
+	LatestPerConnection bool
 }
 
 func (request PageRequest) Validate() error {
 	if request.BeforeSequence < 0 ||
 		request.Limit <= 0 ||
-		request.Limit > MaxPageSize {
+		request.Limit > MaxPageSize ||
+		validateIdentity("ingress filter", request.IngressID, true) != nil {
 		return ErrInvalidEvent
 	}
 	return nil

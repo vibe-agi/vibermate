@@ -27,6 +27,7 @@ import type {
   ApprovalChoice,
   ApprovalView,
   CaptureRunRecord,
+  ConnectionPage,
   ConnectionRecord,
   CredentialView,
   EgressAttemptRecord,
@@ -176,6 +177,12 @@ export const credentialQueryKey = ({
   ] as const;
 export const exchangeDetailQueryKey = (exchangeId: string) =>
   ["vibermate", "exchange", exchangeId, "detail"] as const;
+export const captureRunDetailQueryKey = (runId: string) =>
+  ["vibermate", "capture-run", runId, "detail"] as const;
+export const captureRunActivitiesQueryKey = (runId: string) =>
+  ["vibermate", "capture-run", runId, "activities"] as const;
+export const captureRunConnectionsQueryKey = (runId: string) =>
+  ["vibermate", "capture-run", runId, "connections"] as const;
 
 /**
  * Session-scoped dependencies for one authenticated Desktop control session.
@@ -1099,6 +1106,32 @@ export function useExchangeDetail(
     refetchInterval: false,
     staleTime: Number.POSITIVE_INFINITY,
   });
+}
+
+export function useCaptureRunDetail(
+  model: DashboardQueryRuntime,
+  runId: string,
+) {
+  const defaults = queryDefaults(model);
+  const run = useQuery<CaptureRunRecord>({
+    ...defaults,
+    queryFn: ({ signal }) => model.client.captureRun(runId, signal),
+    queryKey: captureRunDetailQueryKey(runId),
+    refetchInterval: false,
+  });
+  const activities = useQuery<ActivityPage>({
+    ...defaults,
+    queryFn: ({ signal }) => model.client.runActivities(runId, undefined, signal),
+    queryKey: captureRunActivitiesQueryKey(runId),
+    refetchInterval: false,
+  });
+  const connections = useQuery<ConnectionPage>({
+    ...defaults,
+    queryFn: ({ signal }) => model.client.runConnections(runId, signal),
+    queryKey: captureRunConnectionsQueryKey(runId),
+    refetchInterval: false,
+  });
+  return { activities, connections, run };
 }
 
 async function executeCommand(

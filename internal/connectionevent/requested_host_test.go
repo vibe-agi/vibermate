@@ -29,3 +29,45 @@ func TestARequestedHostIsAHostAndNotAnAuthority(t *testing.T) {
 		t.Fatalf("a plain host was rejected: %v", err)
 	}
 }
+
+func TestAllowedMITMRequiresOneCompleteDecisionTimeAccessRelation(t *testing.T) {
+	t.Parallel()
+
+	event := Event{
+		ConnectionID:         "connection-mitm",
+		IngressID:            "capture-run/run-one",
+		SourceLabel:          "claude",
+		SourceConfidence:     SourceConfidenceConfigured,
+		RequestedHost:        "api.example.com",
+		RouteHost:            "gateway.example.com",
+		Port:                 443,
+		Decision:             DecisionAllow,
+		RuleID:               "agent_endpoint_exact",
+		EgressScope:          EgressScopeAccess,
+		EgressSource:         EgressSourceAccessDefault,
+		EgressPolicyRevision: 1,
+		Decryption:           DecryptionMITM,
+		Phase:                PhaseDecided,
+		StartedAt:            time.Date(2026, 8, 5, 10, 0, 0, 0, time.UTC),
+	}
+	if err := event.Validate(); err == nil {
+		t.Fatal("an allowed MITM decision without an Access relation was accepted")
+	}
+	event.AccessID = "access-one"
+	event.AccessName = "Work Claude"
+	event.AccessRevision = 3
+	event.AgentEndpointID = "endpoint-one"
+	event.AgentEndpointRevision = 2
+	if err := event.Validate(); err != nil {
+		t.Fatalf("a complete decision-time MITM Access relation was rejected: %v", err)
+	}
+	event.Phase = PhaseConnected
+	event.ObservedSNI = "api.example.com"
+	if err := event.Validate(); err != nil {
+		t.Fatalf("the frozen relation did not survive connection: %v", err)
+	}
+	event.Decryption = DecryptionBlind
+	if err := event.Validate(); err == nil {
+		t.Fatal("a blind connection carrying an Access relation was accepted")
+	}
+}

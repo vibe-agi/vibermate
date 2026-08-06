@@ -142,6 +142,21 @@ Exact semantic Anthropic Messages and OpenAI Responses HTTP operations enter
 the same Exchange executor; semantic ingress carries no client authentication
 or hop-by-hop headers into IR or provider construction.
 
+CaptureRun and Access are deliberately orthogonal. A run proves which program,
+machine, user label, and exact workspace supplied a connection; it never picks
+an Access, Profile, account, route, model, or plugin. Each connection resolves
+its exact target independently. A target that matches an enabled AgentEndpoint
+freezes the Access and endpoint identities on the body-free connection record,
+and every resulting Exchange from those capture paths carries explicit
+run/manual ingress, connection, Access, and Exchange references. A target that
+does not match has no Access
+reference, is forwarded without content inspection, and cannot create an
+Exchange or request Activity row. Consequently one run may observe zero, one,
+or several Accesses, while one Access may serve many runs. The Desktop control
+API exposes an exact CaptureRun read plus run-filtered connection and Exchange
+pages; the addressable run detail renders those relationships without turning
+the evidence view into a second routing or policy authority.
+
 `vibermate run -- ...` now gives local launches a stable installation and
 workspace scope without asking for a route name. The runtime creates one
 private random `MachineID` plus a private workspace HMAC key, derives an opaque

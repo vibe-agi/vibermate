@@ -14,6 +14,7 @@ var (
 // connection before it issues a certificate or admits an Exchange.
 type IngressBinding struct {
 	accessID         AccessID
+	accessName       string
 	endpointID       AgentEndpointID
 	endpointRevision Revision
 	clientOrigin     ClientOrigin
@@ -24,6 +25,12 @@ type IngressBinding struct {
 
 func (binding IngressBinding) AccessID() AccessID {
 	return binding.accessID
+}
+
+// AccessName is frozen display evidence from the same Access revision that
+// authorized this connection. It is never used as an identity or lookup key.
+func (binding IngressBinding) AccessName() string {
+	return binding.accessName
 }
 
 func (binding IngressBinding) AgentEndpointID() AgentEndpointID {
@@ -52,6 +59,14 @@ func (binding IngressBinding) PlanHash() PlanHash {
 
 func (binding IngressBinding) validate() error {
 	if err := binding.accessID.validate(); err != nil {
+		return err
+	}
+	if err := validateBoundedText(
+		"Access name",
+		binding.accessName,
+		MaxAccessNameBytes,
+		false,
+	); err != nil {
 		return err
 	}
 	if err := binding.endpointID.validate(); err != nil {
@@ -146,6 +161,7 @@ func ingressBindingFromSnapshot(snapshot AccessPlanSnapshot) IngressBinding {
 	endpoint := snapshot.AgentEndpoint()
 	return IngressBinding{
 		accessID:         snapshot.AccessID(),
+		accessName:       snapshot.Binding().Name,
 		endpointID:       endpoint.ID,
 		endpointRevision: endpoint.Revision,
 		clientOrigin:     endpoint.ClientOrigin,

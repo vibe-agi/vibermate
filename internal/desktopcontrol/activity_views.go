@@ -10,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/vibe-agi/vibermate/internal/access"
 	"github.com/vibe-agi/vibermate/internal/activity"
 	"github.com/vibe-agi/vibermate/internal/egressaudit"
 )
@@ -22,10 +23,75 @@ var errInvalidActivityQuery = errors.New("Activity query is invalid")
 // one request in the local control contract. Its ID is the Exchange identity,
 // not the identity of the internal Activity audit record.
 type ActivitySummary struct {
-	ID         string    `json:"id"`
-	OccurredAt time.Time `json:"occurredAt"`
-	AccessID   string    `json:"accessId"`
-	Status     string    `json:"status"`
+	ID         string             `json:"id"`
+	OccurredAt time.Time          `json:"occurredAt"`
+	Kind       string             `json:"kind"`
+	Title      string             `json:"title"`
+	Status     string             `json:"status"`
+	Source     ActivitySourceRef  `json:"source"`
+	Access     ActivityAccessRef  `json:"access"`
+	ParentRefs ActivityParentRefs `json:"parentRefs"`
+}
+
+type ActivitySourceRef struct {
+	Kind        string `json:"kind"`
+	DisplayName string `json:"displayName"`
+	Recognition string `json:"recognition"`
+}
+
+type ActivityAccessRef struct {
+	ID                  string `json:"id"`
+	DisplayName         string `json:"displayName"`
+	ApplicationRevision uint64 `json:"applicationRevision"`
+}
+
+type ActivityParentRefs struct {
+	CaptureRunID     string `json:"captureRunId,omitempty"`
+	ManualCaptureID  string `json:"manualCaptureId,omitempty"`
+	IngressProfileID string `json:"ingressProfileId"`
+	ConnectionID     string `json:"connectionId,omitempty"`
+	AccessID         string `json:"accessId"`
+	ExchangeID       string `json:"exchangeId"`
+}
+
+// Validate checks the closed public relationship rather than only its JSON
+// shape. CaptureRun, connection, Access, and Exchange identifiers remain
+// independent fields; none is inferred by splitting another identifier.
+func (summary ActivitySummary) Validate() error {
+	if summary.OccurredAt.IsZero() ||
+		summary.Kind != "exchange" ||
+		summary.Title != summary.Source.DisplayName ||
+		len(summary.Title) > access.MaxAccessNameBytes ||
+		summary.ParentRefs.AccessID != summary.Access.ID ||
+		summary.ParentRefs.ExchangeID != summary.ID ||
+		len(summary.Access.DisplayName) > access.MaxAccessNameBytes {
+		return errors.New("Activity summary relationship is invalid")
+	}
+	accessID, err := access.NewAccessID(summary.Access.ID)
+	if err != nil {
+		return errors.New("Activity summary Access is invalid")
+	}
+	status := activity.Status(summary.Status)
+	if status != activity.StatusSucceeded &&
+		status != activity.StatusFailed &&
+		status != activity.StatusCanceled {
+		return errors.New("Activity summary status is invalid")
+	}
+	return (activity.Event{
+		Kind:              activity.KindExchangeCompleted,
+		AccessID:          accessID,
+		AccessName:        summary.Access.DisplayName,
+		AccessRevision:    summary.Access.ApplicationRevision,
+		SubjectID:         summary.ID,
+		Status:            status,
+		SourceKind:        activity.SourceKind(summary.Source.Kind),
+		SourceDisplayName: summary.Source.DisplayName,
+		SourceRecognition: activity.SourceRecognition(summary.Source.Recognition),
+		CaptureRunID:      summary.ParentRefs.CaptureRunID,
+		ManualCaptureID:   summary.ParentRefs.ManualCaptureID,
+		IngressProfileID:  summary.ParentRefs.IngressProfileID,
+		ConnectionID:      summary.ParentRefs.ConnectionID,
+	}).Validate()
 }
 
 // ActivityPage is the exact cursor-paginated public Activity representation.
@@ -57,6 +123,8 @@ type ExchangeProcessingTrace struct {
 type activityListQuery struct {
 	beforeSequence int64
 	limit          int
+	captureRunID   string
+	accessID       string
 }
 
 func parseActivityListQuery(rawQuery string) (activityListQuery, error) {
@@ -65,7 +133,11 @@ func parseActivityListQuery(rawQuery string) (activityListQuery, error) {
 		return activityListQuery{}, errInvalidActivityQuery
 	}
 	for name, entries := range values {
-		if (name != "cursor" && name != "limit") || len(entries) != 1 {
+		if (name != "cursor" &&
+			name != "limit" &&
+			name != "captureRunId" &&
+			name != "accessId" &&
+			name != "kind") || len(entries) != 1 {
 			return activityListQuery{}, errInvalidActivityQuery
 		}
 	}
@@ -85,6 +157,21 @@ func parseActivityListQuery(rawQuery string) (activityListQuery, error) {
 			return activityListQuery{}, errInvalidActivityQuery
 		}
 	}
+	if entries, present := values["captureRunId"]; present {
+		query.captureRunID = entries[0]
+		if query.captureRunID == "" {
+			return activityListQuery{}, errInvalidActivityQuery
+		}
+	}
+	if entries, present := values["accessId"]; present {
+		query.accessID = entries[0]
+		if query.accessID == "" {
+			return activityListQuery{}, errInvalidActivityQuery
+		}
+	}
+	if entries, present := values["kind"]; present && entries[0] != "exchange" {
+		return activityListQuery{}, errInvalidActivityQuery
+	}
 	return query, nil
 }
 
@@ -94,12 +181,35 @@ func activityPageOf(page activity.Page) (ActivityPage, error) {
 		if record.Kind != activity.KindExchangeCompleted || record.Validate() != nil {
 			return ActivityPage{}, errors.New("Activity Exchange projection is invalid")
 		}
-		view.Items = append(view.Items, ActivitySummary{
+		summary := ActivitySummary{
 			ID:         record.SubjectID,
 			OccurredAt: record.OccurredAt,
-			AccessID:   record.AccessID,
+			Kind:       "exchange",
+			Title:      record.SourceDisplayName,
 			Status:     string(record.Status),
-		})
+			Source: ActivitySourceRef{
+				Kind:        string(record.SourceKind),
+				DisplayName: record.SourceDisplayName,
+				Recognition: string(record.SourceRecognition),
+			},
+			Access: ActivityAccessRef{
+				ID:                  record.AccessID,
+				DisplayName:         record.AccessName,
+				ApplicationRevision: record.AccessRevision,
+			},
+			ParentRefs: ActivityParentRefs{
+				CaptureRunID:     record.CaptureRunID,
+				ManualCaptureID:  record.ManualCaptureID,
+				IngressProfileID: record.IngressProfileID,
+				ConnectionID:     record.ConnectionID,
+				AccessID:         record.AccessID,
+				ExchangeID:       record.SubjectID,
+			},
+		}
+		if err := summary.Validate(); err != nil {
+			return ActivityPage{}, err
+		}
+		view.Items = append(view.Items, summary)
 	}
 	if page.NextBeforeSequence != 0 {
 		cursor, err := activityCursor(page.NextBeforeSequence)

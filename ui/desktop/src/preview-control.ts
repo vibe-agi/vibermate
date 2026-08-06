@@ -14,6 +14,8 @@ import type {
   AccessPlanSummary,
   AccessStatus,
   ActivityRecord,
+  ActivityStatus,
+  ActivityPage,
   ApprovalChoice,
   ApprovalView,
   CaptureRunRecord,
@@ -68,50 +70,55 @@ const previewWorkAccess = buildAccessApplyInput({
   upstreamPresentation: "follow-client",
 });
 
+function previewActivity(
+  id: string,
+  occurredAt: string,
+  accessId: "work" | "personal",
+  status: ActivityStatus,
+  runId = "run-one-access",
+): ActivityRecord {
+  const accessName = accessId === "work" ? "Work Claude" : "Personal Claude";
+  return {
+    id,
+    occurredAt,
+    kind: "exchange",
+    title: "claude",
+    status,
+    source: {
+      kind: "capture_run",
+      displayName: "claude",
+      recognition: "configured",
+    },
+    access: { id: accessId, displayName: accessName, applicationRevision: 4 },
+    parentRefs: {
+      captureRunId: runId,
+      ingressProfileId: `capture-run/${runId}`,
+      connectionId: `connection-${id}`,
+      accessId,
+      exchangeId: id,
+    },
+  };
+}
+
 const previewActivities: readonly ActivityRecord[] = [
-  {
-    id: "exchange-preview-5",
-    occurredAt: "2026-08-02T10:01:03Z",
-    accessId: "work",
-    status: "pending",
-  },
-  {
-    id: "exchange-preview-4",
-    occurredAt: "2026-08-02T10:01:00Z",
-    accessId: "work",
-    status: "succeeded",
-  },
-  {
-    id: "exchange-preview-3",
-    occurredAt: "2026-08-02T10:00:03Z",
-    accessId: "work",
-    status: "failed",
-  },
-  {
-    id: "exchange-preview-2",
-    occurredAt: "2026-08-02T09:58:00Z",
-    accessId: "personal",
-    status: "reviewed",
-  },
-  {
-    id: "exchange-preview-1",
-    occurredAt: "2026-08-02T09:55:00Z",
-    accessId: "work",
-    status: "canceled",
-  },
-  ...Array.from({ length: 35 }, (_, index): ActivityRecord => ({
-    id: `exchange-preview-history-${String(index + 1).padStart(2, "0")}`,
-    occurredAt: new Date(
-      Date.parse("2026-08-02T09:54:00Z") - index * 47_000,
-    ).toISOString(),
-    accessId: index % 4 === 0 ? "personal" : "work",
-    status:
-      index % 11 === 0
-        ? "failed"
-        : index % 7 === 0
-          ? "canceled"
-          : "succeeded",
-  })),
+  previewActivity("exchange-preview-5", "2026-08-02T10:01:03Z", "work", "succeeded"),
+  previewActivity("exchange-preview-4", "2026-08-02T10:01:00Z", "work", "succeeded"),
+  previewActivity("exchange-preview-3", "2026-08-02T10:00:03Z", "work", "failed", "run-multi-access"),
+  previewActivity("exchange-preview-2", "2026-08-02T09:58:00Z", "personal", "succeeded", "run-multi-access"),
+  previewActivity("exchange-preview-1", "2026-08-02T09:55:00Z", "work", "canceled"),
+  ...Array.from(
+    { length: 35 },
+    (_, index): ActivityRecord => {
+      const accessId = index % 4 === 0 ? "personal" : "work";
+      return previewActivity(
+        `exchange-preview-history-${String(index + 1).padStart(2, "0")}`,
+        new Date(Date.parse("2026-08-02T09:54:00Z") - index * 47_000).toISOString(),
+        accessId,
+        index % 11 === 0 ? "failed" : index % 7 === 0 ? "canceled" : "succeeded",
+        accessId === "personal" ? "run-multi-access" : "run-one-access",
+      );
+    },
+  ),
 ];
 
 const previewWorkspaces = [
@@ -131,15 +138,27 @@ const previewCaptureRuns: readonly CaptureRunRecord[] = Array.from(
     const samples = captureRunSamples as readonly CaptureRunRecord[];
     const base = samples[index % samples.length]!;
     const workspace = previewWorkspaces[index]!;
+    const id =
+      index === 0
+        ? "run-no-access"
+        : index === 1
+          ? "run-one-access"
+          : index === 2
+            ? "run-multi-access"
+            : `run-preview-${index + 1}`;
     return {
       ...base,
-      id: `run-preview-${index + 1}`,
+      id,
+      ingressProfileId: `capture-run/${id}`,
       executableLabel: index % 3 === 1 ? "codex" : "claude",
       cwd: `/Users/example/${workspace}`,
       workspaceLabel: workspace,
       processId: 4_200 + index,
       createdAt: new Date(
         Date.parse("2026-08-02T10:08:00Z") - index * 71_000,
+      ).toISOString(),
+      updatedAt: new Date(
+        Date.parse("2026-08-02T10:10:00Z") - index * 63_000,
       ).toISOString(),
     };
   },
@@ -149,20 +168,38 @@ const previewConnections: readonly ConnectionRecord[] = Array.from(
   { length: 36 },
   (_, index) => {
     const samples = connectionSamples as readonly ConnectionRecord[];
-    const base = samples[index % samples.length]!;
+    const base = samples[0]!;
     const source = previewCaptureRuns[index % previewCaptureRuns.length]!;
+    const requestedHost =
+      index % 3 === 0
+        ? "api.anthropic.com"
+        : index % 3 === 1
+          ? "api.openai.com"
+          : `service-${index + 1}.example.com`;
+    const access =
+      source.id === "run-no-access" || requestedHost.startsWith("service-")
+        ? undefined
+        : source.id === "run-multi-access" && requestedHost === "api.openai.com"
+          ? { id: "personal", name: "Personal Claude" }
+          : { id: "work", name: "Work Claude" };
     return {
       ...base,
       sequence: index + 1,
       connectionId: `connection-preview-${index + 1}`,
-      ingressId: source.id,
+      ingressId: source.ingressProfileId,
       sourceLabel: `${source.executableLabel} · ${source.workspaceLabel}`,
-      requestedHost:
-        index % 3 === 0
-          ? "api.anthropic.com"
-          : index % 3 === 1
-            ? "api.openai.com"
-            : `service-${index + 1}.example.com`,
+      requestedHost,
+      routeHost: requestedHost,
+      decryption: access === undefined ? "blind" as const : "mitm" as const,
+      ...(access === undefined
+        ? {}
+        : {
+            accessId: access.id,
+            accessName: access.name,
+            accessRevision: 4,
+            agentEndpointId: `${access.id}-endpoint`,
+            agentEndpointRevision: 2,
+          }),
       startedAt: new Date(
         Date.parse("2026-08-02T10:10:00Z") - index * 19_000,
       ).toISOString(),
@@ -390,6 +427,18 @@ class PreviewControlClient implements ControlClient {
     throw new Error("Preview Activity cursor is invalid");
   }
 
+  async runActivities(
+    runId: string,
+    cursor?: string,
+    signal?: AbortSignal,
+  ): Promise<ActivityPage> {
+    const page = await this.activities(cursor, signal);
+    return {
+      ...page,
+      items: page.items.filter((item) => item.parentRefs.captureRunId === runId),
+    };
+  }
+
   async exchange(
     exchangeId: string,
     _signal?: AbortSignal,
@@ -417,7 +466,7 @@ class PreviewControlClient implements ControlClient {
     }
     return {
       id: record.id,
-      accessId: record.accessId,
+      accessId: record.access.id,
       status: record.status,
       processingTrace: {
         egressProxyId: "direct",
@@ -442,6 +491,14 @@ class PreviewControlClient implements ControlClient {
     return {
       items: previewCaptureRuns,
     };
+  }
+
+  async captureRun(runId: string, _signal?: AbortSignal): Promise<CaptureRunRecord> {
+    const run = previewCaptureRuns.find((item) => item.id === runId);
+    if (run === undefined) {
+      throw new ControlProblem(404, "capture_run_not_found", "error.capture_run_not_found");
+    }
+    return run;
   }
 
   async workspaceRouteBindings(_signal?: AbortSignal) {
@@ -488,6 +545,13 @@ class PreviewControlClient implements ControlClient {
   async connections(_signal?: AbortSignal) {
     return {
       items: previewConnections,
+    };
+  }
+
+  async runConnections(runId: string, _signal?: AbortSignal) {
+    const ingressId = `capture-run/${runId}`;
+    return {
+      items: previewConnections.filter((item) => item.ingressId === ingressId),
     };
   }
 

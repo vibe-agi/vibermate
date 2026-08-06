@@ -10,17 +10,18 @@ func observationRecord(t *testing.T) DurableRecord {
 
 	now := time.Unix(1785600000, 0).UTC()
 	return DurableRecord{
-		ID:                    "0123456789abcdefghij0123456789ab",
-		ProxyCapabilityHash:   CapabilityDigest{0x11},
-		ControlCapabilityHash: CapabilityDigest{0x22},
-		Observation:           ObservationWaitingForTraffic,
-		CWD:                   "/tmp/workspace",
-		ExecutableLabel:       "claude",
-		CatalogRevision:       1,
-		State:                 StateCreated,
-		CreatedAt:             now,
-		ExpiresAt:             now.Add(time.Minute),
-		UpdatedAt:             now,
+		ID:                      "0123456789abcdefghij0123456789ab",
+		ProxyCapabilityHash:     CapabilityDigest{0x11},
+		ControlCapabilityHash:   CapabilityDigest{0x22},
+		Observation:             ObservationWaitingForTraffic,
+		CWD:                     "/tmp/workspace",
+		CanonicalExecutablePath: "/usr/local/bin/claude",
+		ExecutableLabel:         "claude",
+		CatalogRevision:         1,
+		State:                   StateCreated,
+		CreatedAt:               now,
+		ExpiresAt:               now.Add(time.Minute),
+		UpdatedAt:               now,
 	}
 }
 

@@ -28,6 +28,7 @@ const staticPaths = new Set(
 
 const dynamicPaths = [
   [dashboardTaskRoutePaths.accessRouting, maximumAccessIdBytes],
+  [dashboardTaskRoutePaths.activityRun, maximumEntityIdBytes],
   [dashboardTaskRoutePaths.activityRequest, maximumEntityIdBytes],
   [dashboardTaskRoutePaths.extensionDetail, maximumEntityIdBytes],
   [dashboardTaskRoutePaths.dashboardExtension, maximumEntityIdBytes],

@@ -183,11 +183,18 @@ func TestActivityPersistsImmutableTransportSelectionEvidence(t *testing.T) {
 		HTTPTransport:            "http1",
 	}
 	recorded, err := manager.Record(context.Background(), activity.Event{
-		Kind:      activity.KindExchangeCompleted,
-		AccessID:  accessID,
-		SubjectID: "exchange-transport",
-		Status:    activity.StatusSucceeded,
-		Transport: &evidence,
+		Kind:              activity.KindExchangeCompleted,
+		AccessID:          accessID,
+		AccessName:        "Transport Access",
+		AccessRevision:    1,
+		SubjectID:         "exchange-transport",
+		Status:            activity.StatusSucceeded,
+		SourceKind:        activity.SourceSystemProxy,
+		SourceDisplayName: "ViberMate runtime",
+		SourceRecognition: activity.SourceRecognitionUnknown,
+		IngressProfileID:  "system-proxy",
+		ConnectionID:      "connection-transport",
+		Transport:         &evidence,
 	})
 	if err != nil {
 		t.Fatal(err)

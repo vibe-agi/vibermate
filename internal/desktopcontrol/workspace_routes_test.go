@@ -55,12 +55,13 @@ func TestWorkspaceRouteProjectionGroupsRunsAndSwitchesWithCAS(t *testing.T) {
 	runGrant, err := fixture.runtime.CaptureRuns().Create(
 		context.Background(),
 		capturerun.CreateCommand{
-			CWD:             workspaceDirectory,
-			ExecutableLabel: "true",
-			Lifetime:        time.Minute,
-			CatalogRevision: 1,
-			Workspace:       scope,
-			LocalUserLabel:  "alice",
+			CWD:                     workspaceDirectory,
+			CanonicalExecutablePath: "/usr/bin/true",
+			ExecutableLabel:         "true",
+			Lifetime:                time.Minute,
+			CatalogRevision:         1,
+			Workspace:               scope,
+			LocalUserLabel:          "alice",
 		},
 	)
 	if err != nil {

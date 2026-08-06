@@ -10,8 +10,8 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
-	"time"
 
+	"github.com/vibe-agi/vibermate/internal/access"
 	"github.com/vibe-agi/vibermate/internal/activity"
 	_ "modernc.org/sqlite"
 )
@@ -33,18 +33,22 @@ type exchangeAuditRecord struct {
 }
 
 func (record exchangeAuditRecord) validate() error {
-	candidate := activity.Record{
-		Sequence:   record.Sequence,
-		ID:         "acceptance-audit",
-		OccurredAt: time.Unix(1, 0).UTC(),
-		Kind:       activity.KindExchangeCompleted,
-		AccessID:   record.AccessID,
-		SubjectID:  record.ExchangeID,
-		Status:     record.Status,
-		ReasonCode: record.ReasonCode,
+	if record.Sequence <= 0 ||
+		!validControlIdentity(record.ExchangeID, activity.MaxIdentityBytes) {
+		return errors.New("committed Exchange audit identity is invalid")
 	}
-	if err := candidate.Validate(); err != nil {
-		return fmt.Errorf("validate committed Exchange audit record: %w", err)
+	if _, err := access.NewAccessID(record.AccessID); err != nil {
+		return errors.New("committed Exchange audit Access is invalid")
+	}
+	switch record.Status {
+	case activity.StatusSucceeded, activity.StatusFailed, activity.StatusCanceled:
+	default:
+		return errors.New("committed Exchange audit status is invalid")
+	}
+	if record.ReasonCode != "" &&
+		(!validControlIdentity(record.ReasonCode, activity.MaxIdentityBytes) ||
+			!controlReasonCodePattern.MatchString(record.ReasonCode)) {
+		return errors.New("committed Exchange audit reason is invalid")
 	}
 	return nil
 }

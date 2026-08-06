@@ -79,13 +79,22 @@ func (manager *Manager) Record(
 		return Record{}, fmt.Errorf("generate Activity ID: %w", err)
 	}
 	record := Record{
-		ID:         base64.RawURLEncoding.EncodeToString(identifier),
-		OccurredAt: manager.clock.Now().UTC(),
-		Kind:       event.Kind,
-		AccessID:   event.AccessID.String(),
-		SubjectID:  event.SubjectID,
-		Status:     event.Status,
-		ReasonCode: event.ReasonCode,
+		ID:                base64.RawURLEncoding.EncodeToString(identifier),
+		OccurredAt:        manager.clock.Now().UTC(),
+		Kind:              event.Kind,
+		AccessID:          event.AccessID.String(),
+		AccessName:        event.AccessName,
+		AccessRevision:    event.AccessRevision,
+		SubjectID:         event.SubjectID,
+		Status:            event.Status,
+		ReasonCode:        event.ReasonCode,
+		SourceKind:        event.SourceKind,
+		SourceDisplayName: event.SourceDisplayName,
+		SourceRecognition: event.SourceRecognition,
+		CaptureRunID:      event.CaptureRunID,
+		ManualCaptureID:   event.ManualCaptureID,
+		IngressProfileID:  event.IngressProfileID,
+		ConnectionID:      event.ConnectionID,
 	}
 	if !event.Diagnosis.Empty() {
 		diagnosis := event.Diagnosis

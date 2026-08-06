@@ -407,6 +407,15 @@ func appendAuditActivity(
 	record activity.Record,
 ) activity.Record {
 	t.Helper()
+	if record.Kind == activity.KindExchangeCompleted {
+		record.AccessName = "Acceptance Access"
+		record.AccessRevision = 1
+		record.SourceKind = activity.SourceSystemProxy
+		record.SourceDisplayName = "ViberMate runtime"
+		record.SourceRecognition = activity.SourceRecognitionUnknown
+		record.IngressProfileID = "system-proxy"
+		record.ConnectionID = "connection-" + record.SubjectID
+	}
 	stored, err := repository.Append(context.Background(), record)
 	if err != nil {
 		t.Fatal(err)

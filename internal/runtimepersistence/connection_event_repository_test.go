@@ -46,13 +46,18 @@ func TestConnectionEventTimelinePersistsAndPaginatesAcrossReopen(
 				Label:      "claude",
 				Confidence: connectionevent.SourceConfidenceConfigured,
 			},
-			Decision:             connectionevent.DecisionAllow,
-			RuleID:               "m0.agent_endpoint_exact",
-			RouteHost:            "api.anthropic.com",
-			EgressScope:          connectionevent.EgressScopeAccess,
-			EgressSource:         connectionevent.EgressSourceAccessDefault,
-			EgressPolicyRevision: 1,
-			Decryption:           connectionevent.DecryptionMITM,
+			Decision:              connectionevent.DecisionAllow,
+			RuleID:                "m0.agent_endpoint_exact",
+			RouteHost:             "api.anthropic.com",
+			AccessID:              "access-test",
+			AccessName:            "Test Access",
+			AccessRevision:        1,
+			AgentEndpointID:       "endpoint-test",
+			AgentEndpointRevision: 1,
+			EgressScope:           connectionevent.EgressScopeAccess,
+			EgressSource:          connectionevent.EgressSourceAccessDefault,
+			EgressPolicyRevision:  1,
+			Decryption:            connectionevent.DecryptionMITM,
 		},
 	); err != nil {
 		t.Fatal(err)
@@ -106,6 +111,34 @@ func TestConnectionEventTimelinePersistsAndPaginatesAcrossReopen(
 		secondPage.Items[0].Phase != connectionevent.PhaseDecided ||
 		secondPage.Items[1].Phase != connectionevent.PhaseAttempted {
 		t.Fatalf("second page = %+v", secondPage)
+	}
+	filtered, err := manager.List(
+		context.Background(),
+		connectionevent.PageRequest{Limit: 10, IngressID: "run-001"},
+	)
+	if err != nil || len(filtered.Items) != 3 {
+		t.Fatalf("ingress-filtered page = %+v, %v", filtered, err)
+	}
+	empty, err := manager.List(
+		context.Background(),
+		connectionevent.PageRequest{Limit: 10, IngressID: "run-other"},
+	)
+	if err != nil || len(empty.Items) != 0 {
+		t.Fatalf("mismatched ingress page = %+v, %v", empty, err)
+	}
+	latest, err := manager.List(
+		context.Background(),
+		connectionevent.PageRequest{
+			Limit:               10,
+			IngressID:           "run-001",
+			LatestPerConnection: true,
+		},
+	)
+	if err != nil || len(latest.Items) != 1 ||
+		latest.Items[0].ConnectionID != connectionID ||
+		latest.Items[0].Phase != connectionevent.PhaseClosed ||
+		latest.Items[0].AccessID != "access-test" {
+		t.Fatalf("latest-per-connection page = %+v, %v", latest, err)
 	}
 	timeline, err := manager.Timeline(context.Background(), connectionID)
 	if err != nil {
@@ -184,13 +217,18 @@ func TestConnectionEventRecoveryTerminatesInterruptedConnectionOnce(
 				Label:      "claude",
 				Confidence: connectionevent.SourceConfidenceConfigured,
 			},
-			Decision:             connectionevent.DecisionAllow,
-			RuleID:               "m0.agent_endpoint_exact",
-			RouteHost:            "api.anthropic.com",
-			EgressScope:          connectionevent.EgressScopeAccess,
-			EgressSource:         connectionevent.EgressSourceAccessDefault,
-			EgressPolicyRevision: 1,
-			Decryption:           connectionevent.DecryptionMITM,
+			Decision:              connectionevent.DecisionAllow,
+			RuleID:                "m0.agent_endpoint_exact",
+			RouteHost:             "api.anthropic.com",
+			AccessID:              "access-test",
+			AccessName:            "Test Access",
+			AccessRevision:        1,
+			AgentEndpointID:       "endpoint-test",
+			AgentEndpointRevision: 1,
+			EgressScope:           connectionevent.EgressScopeAccess,
+			EgressSource:          connectionevent.EgressSourceAccessDefault,
+			EgressPolicyRevision:  1,
+			Decryption:            connectionevent.DecryptionMITM,
 		},
 	); err != nil {
 		t.Fatal(err)

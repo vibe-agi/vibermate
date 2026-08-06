@@ -540,14 +540,19 @@ func (handler *Handler) ServeHTTP(
 	if err := audit.Decide(
 		request.Context(),
 		connectionevent.DecisionEvidence{
-			Source:               source,
-			Decision:             connectionevent.DecisionAllow,
-			RuleID:               outcome.RuleID,
-			RouteHost:            origin.TLSServerName(),
-			EgressScope:          connectionevent.EgressScopeAccess,
-			EgressSource:         connectionevent.EgressSourceAccessDefault,
-			EgressPolicyRevision: uint64(binding.AccessRevision()),
-			Decryption:           connectionevent.DecryptionMITM,
+			Source:                source,
+			Decision:              connectionevent.DecisionAllow,
+			RuleID:                outcome.RuleID,
+			RouteHost:             origin.TLSServerName(),
+			AccessID:              binding.AccessID().String(),
+			AccessName:            binding.AccessName(),
+			AccessRevision:        uint64(binding.AccessRevision()),
+			AgentEndpointID:       binding.AgentEndpointID().String(),
+			AgentEndpointRevision: uint64(binding.AgentEndpointRevision()),
+			EgressScope:           connectionevent.EgressScopeAccess,
+			EgressSource:          connectionevent.EgressSourceAccessDefault,
+			EgressPolicyRevision:  uint64(binding.AccessRevision()),
+			Decryption:            connectionevent.DecryptionMITM,
 		},
 	); err != nil {
 		writeReason(

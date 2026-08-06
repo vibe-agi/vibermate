@@ -175,6 +175,7 @@ func TestWorkspaceRouteAuthSourceGuardSharesTheCaptureRunWriteOrder(
 		ProxyCapabilityHash:         capturerun.CapabilityDigest{1},
 		ControlCapabilityHash:       controlDigest,
 		CWD:                         filepath.Join(t.TempDir(), "workspace"),
+		CanonicalExecutablePath:     "/usr/local/bin/claude",
 		ExecutableLabel:             "claude",
 		CatalogRevision:             clientadapter.CatalogRevision(1),
 		MachineID:                   machineID,

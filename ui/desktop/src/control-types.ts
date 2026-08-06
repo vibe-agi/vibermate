@@ -54,11 +54,36 @@ export interface StatusResponse {
   readonly runtime: RuntimeStatus;
 }
 
+export type ActivityStatus =
+  | "succeeded"
+  | "failed"
+  | "canceled";
+
 export interface ActivityRecord {
   readonly id: string;
   readonly occurredAt: string;
-  readonly accessId: string;
-  readonly status: string;
+  readonly kind: "exchange";
+  readonly title: string;
+  readonly status: ActivityStatus;
+  readonly source: {
+    readonly kind: "capture_run" | "manual_proxy" | "system_proxy";
+    readonly displayName: string;
+    readonly recognition: "verified" | "configured" | "unknown";
+  };
+  readonly access: {
+    readonly id: string;
+    readonly displayName: string;
+    readonly applicationRevision: number;
+  };
+  readonly parentRefs: {
+    readonly captureRunId?: string;
+    readonly manualCaptureId?: string;
+    readonly ingressProfileId: string;
+    readonly connectionId?: string;
+    readonly accessId: string;
+    readonly exchangeId: string;
+    readonly egressAttemptId?: string;
+  };
 }
 
 export interface ActivityPage {
@@ -78,7 +103,7 @@ export interface ExchangeProcessingTrace {
 export interface ExchangeDetail {
   readonly id: string;
   readonly accessId: string;
-  readonly status: string;
+  readonly status: ActivityStatus;
   readonly processingTrace: ExchangeProcessingTrace;
 }
 
@@ -467,6 +492,11 @@ export interface ConnectionRecord {
   readonly ingressId?: string;
   readonly sourceLabel?: string;
   readonly sourceConfidence: SourceConfidence;
+  readonly accessId?: string;
+  readonly accessName?: string;
+  readonly accessRevision?: number;
+  readonly agentEndpointId?: string;
+  readonly agentEndpointRevision?: number;
   readonly requestedHost: string;
   readonly observedSni?: string;
   readonly routeHost?: string;
@@ -586,7 +616,9 @@ export interface CaptureRunAdapterEvidence {
 
 export interface CaptureRunRecord {
   readonly id: string;
+  readonly ingressProfileId: string;
   readonly executableLabel: string;
+  readonly canonicalExecutablePath: string;
   readonly cwd: string;
   /** Untrusted launcher environment label for display only. */
   readonly localUserLabel?: string;
@@ -597,7 +629,6 @@ export interface CaptureRunRecord {
   readonly processId?: number;
   readonly state: CaptureRunState;
   readonly observation: CaptureRunObservation;
-  /** Compatibility field on the Desktop audit projection. */
   readonly recognition: CaptureRunRecognition;
   readonly clientAdapterState: CaptureRunAdapterState;
   readonly clientRecognition: CaptureRunRecognition;
@@ -606,6 +637,8 @@ export interface CaptureRunRecord {
   readonly clientAdapterReason?: string;
   readonly createdAt: string;
   readonly expiresAt: string;
+  readonly firstObservedAt?: string;
+  readonly updatedAt: string;
 }
 
 export interface CaptureRunPage {

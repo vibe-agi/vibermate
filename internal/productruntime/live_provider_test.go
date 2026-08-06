@@ -373,11 +373,12 @@ func newLiveProxyFixture(
 	grant, err := runtime.CaptureRuns().Create(
 		context.Background(),
 		capturerun.CreateCommand{
-			CWD:             captureDirectory,
-			ExecutableLabel: "true",
-			Lifetime:        time.Minute,
-			CatalogRevision: 1,
-			Workspace:       workspace,
+			CWD:                     captureDirectory,
+			CanonicalExecutablePath: "/usr/bin/true",
+			ExecutableLabel:         "true",
+			Lifetime:                time.Minute,
+			CatalogRevision:         1,
+			Workspace:               workspace,
 		},
 	)
 	if err != nil {

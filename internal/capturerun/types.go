@@ -29,6 +29,7 @@ const (
 
 var (
 	ErrInvalidRequest     = errors.New("invalid CaptureRun request")
+	ErrNotFound           = errors.New("CaptureRun not found")
 	ErrCapabilityRejected = errors.New("CaptureRun capability rejected")
 	ErrStateConflict      = errors.New("CaptureRun state conflict")
 	ErrRuntimeStopping    = errors.New("CaptureRun runtime is stopping")
@@ -85,6 +86,7 @@ type DurableRecord struct {
 	ProxyCapabilityHash         CapabilityDigest
 	ControlCapabilityHash       CapabilityDigest
 	CWD                         string
+	CanonicalExecutablePath     string
 	LocalUserLabel              string
 	ExecutableLabel             string
 	CatalogRevision             clientadapter.CatalogRevision
@@ -139,6 +141,12 @@ func (record DurableRecord) Validate() error {
 		return fmt.Errorf("%w: capability hash is empty", ErrInvalidRequest)
 	}
 	if err := validateAbsolutePath("working directory", record.CWD); err != nil {
+		return err
+	}
+	if err := validateAbsolutePath(
+		"canonical executable",
+		record.CanonicalExecutablePath,
+	); err != nil {
 		return err
 	}
 	if !ValidLocalUserLabel(record.LocalUserLabel) {
@@ -219,9 +227,12 @@ func (record DurableRecord) Validate() error {
 
 // View is a redacted immutable representation safe for control responses.
 type View struct {
-	ID                          string                     `json:"id"`
-	ExecutableLabel             string                     `json:"executableLabel"`
-	CWD                         string                     `json:"cwd"`
+	ID              string `json:"id"`
+	ExecutableLabel string `json:"executableLabel"`
+	CWD             string `json:"cwd"`
+	// CanonicalExecutablePath is Desktop-local read-only diagnostic evidence.
+	// Launcher and Server projections deliberately do not serialize it.
+	CanonicalExecutablePath     string                     `json:"-"`
 	LocalUserLabel              string                     `json:"localUserLabel,omitempty"`
 	MachineID                   string                     `json:"machineId,omitempty"`
 	MachineRegistrationRevision uint64                     `json:"machineRegistrationRevision,omitempty"`
@@ -232,7 +243,8 @@ type View struct {
 	ProcessID                   int                        `json:"processId,omitempty"`
 	State                       State                      `json:"state"`
 	// Observation says whether traffic was actually seen through this run.
-	Observation Observation `json:"observation"`
+	Observation     Observation `json:"observation"`
+	FirstObservedAt time.Time   `json:"-"`
 	// Recognition says whether this build has release evidence for the client.
 	Recognition clientadapter.Recognition `json:"recognition"`
 	// CatalogRevision and Adapter remain available to trusted projections but
@@ -261,6 +273,7 @@ func ViewOf(record DurableRecord) View {
 		ID:                          record.ID,
 		ExecutableLabel:             record.ExecutableLabel,
 		CWD:                         record.CWD,
+		CanonicalExecutablePath:     record.CanonicalExecutablePath,
 		LocalUserLabel:              record.LocalUserLabel,
 		MachineID:                   record.MachineID.String(),
 		MachineRegistrationRevision: record.MachineRegistrationRevision,
@@ -271,6 +284,7 @@ func ViewOf(record DurableRecord) View {
 		ProcessID:                   record.ProcessID,
 		State:                       record.State,
 		Observation:                 record.Observation,
+		FirstObservedAt:             record.FirstObservedAt,
 		Recognition:                 NormalizedRecognition(record.Recognition),
 		CatalogRevision:             record.CatalogRevision,
 		Adapter:                     cloneAdapter(record.Adapter),
@@ -325,10 +339,11 @@ type LaunchGrant struct {
 }
 
 type CreateCommand struct {
-	CWD string
+	CWD                     string
+	CanonicalExecutablePath string
 	// ExecutableLabel is the verifier-confirmed invocation name shown to a
-	// person. The canonical executable path remains launch authority and never
-	// enters this persisted attribution record.
+	// person. CanonicalExecutablePath is persisted only as Desktop-local,
+	// read-only audit evidence; reading it back never restores launch authority.
 	ExecutableLabel string
 	Lifetime        time.Duration
 	CatalogRevision clientadapter.CatalogRevision
@@ -340,6 +355,12 @@ type CreateCommand struct {
 
 func (command CreateCommand) validate(maxLifetime time.Duration) error {
 	if err := validateAbsolutePath("working directory", command.CWD); err != nil {
+		return err
+	}
+	if err := validateAbsolutePath(
+		"canonical executable",
+		command.CanonicalExecutablePath,
+	); err != nil {
 		return err
 	}
 	if err := validateText(
@@ -401,6 +422,15 @@ type Evidence struct {
 	ExpiresAt       time.Time
 	Workspace       workspaceidentity.Scope
 	LocalUserLabel  string
+}
+
+// IngressProfileID returns the exact short-lived ingress identity owned by a
+// run. It is safe to expose as an audit join key and never carries a bearer.
+func IngressProfileID(runID string) (string, error) {
+	if err := validateID(runID); err != nil {
+		return "", err
+	}
+	return "capture-run/" + runID, nil
 }
 
 func evidenceOf(record DurableRecord) Evidence {
@@ -493,6 +523,7 @@ type Repository interface {
 	// capability and returns no capability, only what a run is and whether
 	// anything was seen through it.
 	List(context.Context, PageRequest) (Page, error)
+	Get(context.Context, string) (View, error)
 	Recover(context.Context, time.Time) (Recovery, error)
 	RevokeActive(context.Context, time.Time) (int, error)
 }
@@ -524,6 +555,7 @@ type Page struct {
 // Reader is the read side a control API exposes.
 type Reader interface {
 	ListRuns(context.Context, PageRequest) (Page, error)
+	GetRun(context.Context, string) (View, error)
 }
 
 // Controller is the trusted control-plane lifecycle boundary. A launcher

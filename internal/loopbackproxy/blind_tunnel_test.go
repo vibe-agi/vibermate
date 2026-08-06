@@ -244,6 +244,13 @@ func TestBlindTunnelRecordsAConnectionWithoutContent(t *testing.T) {
 		if record.RouteHost == "" {
 			t.Fatalf("blind connection has no destination: %+v", record)
 		}
+		if record.AccessID != "" ||
+			record.AccessName != "" ||
+			record.AccessRevision != 0 ||
+			record.AgentEndpointID != "" ||
+			record.AgentEndpointRevision != 0 {
+			t.Fatalf("blind connection acquired an Access relation: %+v", record)
+		}
 	}
 	if !found {
 		t.Fatal("a blind connection left no connection record")

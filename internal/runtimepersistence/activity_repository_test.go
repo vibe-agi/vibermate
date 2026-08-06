@@ -22,7 +22,7 @@ func TestActivityRepositoryGetsExactlyOneExchangeTerminal(t *testing.T) {
 	repository := store.ActivityRepository()
 	appendRecord := func(id string, kind activity.Kind, subject string) activity.Record {
 		t.Helper()
-		record, err := repository.Append(context.Background(), activity.Record{
+		candidate := activity.Record{
 			ID:         id,
 			OccurredAt: time.Date(2026, 8, 3, 12, 0, 0, 0, time.UTC),
 			Kind:       kind,
@@ -30,7 +30,17 @@ func TestActivityRepositoryGetsExactlyOneExchangeTerminal(t *testing.T) {
 			SubjectID:  subject,
 			Status:     activity.StatusFailed,
 			ReasonCode: "provider_transport_failed",
-		})
+		}
+		if kind == activity.KindExchangeCompleted {
+			candidate.AccessName = "Detail Access"
+			candidate.AccessRevision = 1
+			candidate.SourceKind = activity.SourceSystemProxy
+			candidate.SourceDisplayName = "ViberMate runtime"
+			candidate.SourceRecognition = activity.SourceRecognitionUnknown
+			candidate.IngressProfileID = "system-proxy"
+			candidate.ConnectionID = "connection-" + subject
+		}
+		record, err := repository.Append(context.Background(), candidate)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -74,14 +84,24 @@ func TestActivityRepositoryListsExchangePagesWithoutSkips(t *testing.T) {
 	now := time.Date(2026, 8, 3, 12, 0, 0, 0, time.UTC)
 	appendRecord := func(id string, kind activity.Kind, subject string) activity.Record {
 		t.Helper()
-		record, err := repository.Append(context.Background(), activity.Record{
+		candidate := activity.Record{
 			ID:         id,
 			OccurredAt: now,
 			Kind:       kind,
 			AccessID:   "activity-page-access",
 			SubjectID:  subject,
 			Status:     activity.StatusSucceeded,
-		})
+		}
+		if kind == activity.KindExchangeCompleted {
+			candidate.AccessName = "Page Access"
+			candidate.AccessRevision = 1
+			candidate.SourceKind = activity.SourceSystemProxy
+			candidate.SourceDisplayName = "ViberMate runtime"
+			candidate.SourceRecognition = activity.SourceRecognitionUnknown
+			candidate.IngressProfileID = "system-proxy"
+			candidate.ConnectionID = "connection-" + subject
+		}
+		record, err := repository.Append(context.Background(), candidate)
 		if err != nil {
 			t.Fatal(err)
 		}

@@ -556,13 +556,19 @@ func (pipeline *Pipeline) observeAttempt(
 	if pipeline == nil || pipeline.observer == nil {
 		return
 	}
+	admission, hasAdmission := request.CaptureAdmission()
 	observation := AttemptObservation{
-		ExchangeID:   request.exchangeID,
-		AccessID:     request.ingress.AccessID(),
-		Outcome:      result.Outcome,
-		ReasonCode:   ReasonOf(resultErr),
-		Presentation: result.Presentation,
-		Transport:    result.Transport.Clone(),
+		ExchangeID:     request.exchangeID,
+		AccessID:       request.ingress.AccessID(),
+		AccessName:     request.ingress.AccessName(),
+		AccessRevision: request.ingress.AccessRevision(),
+		Admission:      admission,
+		HasAdmission:   hasAdmission,
+		ConnectionID:   request.connectionRef,
+		Outcome:        result.Outcome,
+		ReasonCode:     ReasonOf(resultErr),
+		Presentation:   result.Presentation,
+		Transport:      result.Transport.Clone(),
 	}
 	var failure *Failure
 	if errors.As(resultErr, &failure) {

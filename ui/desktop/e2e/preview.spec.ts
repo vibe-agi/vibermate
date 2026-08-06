@@ -1,4 +1,5 @@
 import { expect, test, type Page } from "@playwright/test";
+import zhCN from "../src/generated/locales/zh-CN.json" with { type: "json" };
 
 function collectBrowserErrors(page: Page): string[] {
   const errors: string[] = [];
@@ -483,8 +484,8 @@ test("loads canonical Activity request summaries without raw evidence", async ({
   await activityPanel.getByRole("button", { name: "Previous page" }).click();
   await page.getByRole("button", { name: "Load more" }).click();
   await expect(activityPanel.locator(".compact-count")).toHaveText("40");
-  await expect(page.getByText("reviewed", { exact: true })).toHaveClass(
-    /neutral/u,
+  await expect(page.getByText("Canceled", { exact: true }).first()).toHaveClass(
+    /canceled/u,
   );
   await expect(page.getByRole("button", { name: "Load more" })).toHaveCount(0);
 
@@ -701,6 +702,97 @@ test("groups three terminals by stable workspace and switches later requests", a
   await expect(
     page.getByText("AI Access work · model gpt-5.6-sol · account 002"),
   ).toBeVisible();
+  expect(errors).toEqual([]);
+});
+
+test("explains a managed run whose destinations matched no AI Access", async ({
+  page,
+}) => {
+  const errors = collectBrowserErrors(page);
+  await page.goto("/?preview=1#activity");
+
+  const row = page
+    .getByRole("row")
+    .filter({ hasText: "payments-api" });
+  await row.getByRole("link", { name: "claude" }).click();
+  await expect(page).toHaveURL(/#activity\/runs\/run-no-access$/u);
+
+  await expect(
+    page.getByRole("heading", { level: 2, name: "Where this run's traffic went" }),
+  ).toBeVisible();
+  const path = page.locator(".run-path");
+  await expect(path.getByText("No AI Access matched")).toBeVisible();
+  await expect(path.getByText("Forwarded unchanged")).toBeVisible();
+  await expect(
+    page.getByText(
+      "This run made connections, but none became semantic AI requests.",
+    ),
+  ).toBeVisible();
+  const summary = page.getByLabel("Run summary");
+  await expect(summary).toContainText("AI Accesses0");
+  await expect(summary).toContainText("AI requests0");
+  await page.reload();
+  await expect(path.getByText("Forwarded unchanged")).toBeVisible();
+  expect(errors).toEqual([]);
+});
+
+test("keeps the no-Access explanation usable in Simplified Chinese at a narrow width", async ({
+  page,
+}) => {
+  const errors = collectBrowserErrors(page);
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.goto("/?preview=1#activity/runs/run-no-access");
+  await page.getByRole("button", { name: zhCN["locale.zh-CN"] }).click();
+
+  await expect(
+    page.getByRole("heading", {
+      level: 2,
+      name: zhCN["runDetail.path.title"],
+    }),
+  ).toBeVisible();
+  const path = page.locator(".run-path");
+  await expect(path.getByText(zhCN["runDetail.path.noAccess"])).toBeVisible();
+  await expect(path.getByText(zhCN["runDetail.path.passthrough"])).toBeVisible();
+  await expect(
+    page.getByText(zhCN["runDetail.requests.none"]),
+  ).toBeVisible();
+  expect(
+    await page.evaluate(
+      () => document.documentElement.scrollWidth <= globalThis.innerWidth,
+    ),
+  ).toBe(true);
+  expect(errors).toEqual([]);
+});
+
+test("shows the exact AI Access selected by each destination, not by the run", async ({
+  page,
+}) => {
+  const errors = collectBrowserErrors(page);
+  await page.goto("/?preview=1#activity");
+
+  const oneAccessRow = page
+    .getByRole("row")
+    .filter({ hasText: "desktop-app" });
+  await oneAccessRow.getByRole("link", { name: "codex" }).click();
+  const oneAccessPath = page.locator(".run-path");
+  await expect(oneAccessPath.getByText("Work Claude")).toBeVisible();
+  await expect(oneAccessPath.getByText("Personal Claude")).toHaveCount(0);
+  await page.getByRole("link", { name: "Back to activity" }).click();
+
+  const multiAccessRow = page
+    .getByRole("row")
+    .filter({ hasText: "documentation" });
+  await multiAccessRow.getByRole("link", { name: "claude" }).click();
+  const multiAccessPath = page.locator(".run-path");
+  await expect(multiAccessPath.getByText("Work Claude")).toBeVisible();
+  await expect(multiAccessPath.getByText("Personal Claude")).toBeVisible();
+  await expect(
+    page.getByText(
+      "A run identifies the program and workspace. It never chooses an AI Access or account. Each exact destination resolves an AI Access independently; every other destination is forwarded without reading its contents.",
+    ),
+  ).toBeVisible();
+  const summary = page.getByLabel("Run summary");
+  await expect(summary).toContainText("AI Accesses2");
   expect(errors).toEqual([]);
 });
 

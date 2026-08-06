@@ -943,6 +943,11 @@ type Provider interface {
 type AttemptObservation struct {
 	ExchangeID     string
 	AccessID       access.AccessID
+	AccessName     string
+	AccessRevision access.Revision
+	Admission      captureadmission.Admission
+	HasAdmission   bool
+	ConnectionID   string
 	Outcome        AttemptOutcome
 	ReasonCode     ReasonCode
 	ProviderStatus int

@@ -10,11 +10,14 @@ import type {
   AccessPlanSummary,
   AccessStatus,
   ActivityPage,
+  ActivityRecord,
+  ActivityStatus,
   ExchangeDetail,
   ApprovalPage,
   ApprovalChoice,
   ApprovalView,
   CaptureRunPage,
+  CaptureRunRecord,
   ConnectionPage,
   EgressAttemptPage,
   CredentialView,
@@ -142,9 +145,15 @@ export interface ControlClient {
     signal?: AbortSignal,
   ): Promise<OfflineHoldSnapshot>;
   activities(cursor?: string, signal?: AbortSignal): Promise<ActivityPage>;
+  runActivities(
+    runId: string,
+    cursor?: string,
+    signal?: AbortSignal,
+  ): Promise<ActivityPage>;
   exchange(exchangeId: string, signal?: AbortSignal): Promise<ExchangeDetail>;
   approvals(signal?: AbortSignal): Promise<ApprovalPage>;
   captureRuns(signal?: AbortSignal): Promise<CaptureRunPage>;
+  captureRun(runId: string, signal?: AbortSignal): Promise<CaptureRunRecord>;
   manualCaptureContext(signal?: AbortSignal): Promise<ManualCaptureContext>;
   manualCaptures(signal?: AbortSignal): Promise<ManualCapturePage>;
   manualCapture(
@@ -175,6 +184,7 @@ export interface ControlClient {
     signal?: AbortSignal,
   ): Promise<WorkspaceRouteBinding>;
   connections(signal?: AbortSignal): Promise<ConnectionPage>;
+  runConnections(runId: string, signal?: AbortSignal): Promise<ConnectionPage>;
   egressAttempts(signal?: AbortSignal): Promise<EgressAttemptPage>;
   decideApproval(
     approval: ApprovalView,
@@ -1118,6 +1128,36 @@ export async function createControlClient(
         ),
       );
     },
+    runActivities: async (runId, cursor, signal) => {
+      if (!validRouteIdentity(runId) ||
+          (cursor !== undefined && !validOpaqueCursor(cursor))) {
+        throw new ControlContractError();
+      }
+      const query = new URLSearchParams({
+        captureRunId: runId,
+        kind: "exchange",
+        limit: "50",
+      });
+      if (cursor !== undefined) {
+        query.set("cursor", cursor);
+      }
+      const page = requireActivityPage(
+        await requestRead<unknown>(
+          `/api/v1/activities?${query.toString()}`,
+          signal,
+        ),
+      );
+      if (
+        page.items.some(
+          (item) =>
+            item.source.kind !== "capture_run" ||
+            item.parentRefs.captureRunId !== runId,
+        )
+      ) {
+        throw new ControlContractError();
+      }
+      return page;
+    },
     exchange: async (exchangeId, signal) => {
       if (!validRouteIdentity(exchangeId)) {
         throw new ControlContractError();
@@ -1141,6 +1181,18 @@ export async function createControlClient(
       requireCaptureRunPage(
         await requestRead<unknown>("/api/v1/capture-runs?limit=50", signal),
       ),
+    captureRun: async (runId, signal) => {
+      if (!validRouteIdentity(runId)) {
+        throw new ControlContractError();
+      }
+      return requireCaptureRun(
+        await requestRead<unknown>(
+          `/api/v1/capture-runs/${encodeURIComponent(runId)}`,
+          signal,
+        ),
+        runId,
+      );
+    },
     manualCaptureContext: async (signal) =>
       (
         await requestManualRead(
@@ -1267,6 +1319,22 @@ export async function createControlClient(
       requireConnectionPage(
         await requestRead<unknown>("/api/v1/connections?limit=50", signal),
       ),
+    runConnections: async (runId, signal) => {
+      if (!validRouteIdentity(runId)) {
+        throw new ControlContractError();
+      }
+      const ingressId = `capture-run/${runId}`;
+      const page = requireConnectionPage(
+        await requestRead<unknown>(
+          `/api/v1/connections?limit=50&ingressId=${encodeURIComponent(ingressId)}&view=latest`,
+          signal,
+        ),
+      );
+      if (page.items.some((item) => item.ingressId !== ingressId)) {
+        throw new ControlContractError();
+      }
+      return page;
+    },
     egressAttempts: async (signal) =>
       requireEgressAttemptPage(
         await requestRead<unknown>("/api/v1/egress-attempts?limit=50", signal),
@@ -2978,22 +3046,135 @@ function requireActivityPage(value: unknown): ActivityPage {
 }
 
 function validActivityRecord(value: unknown): boolean {
-  if (!hasClosedFields(value, ["id", "occurredAt", "accessId", "status"])) {
+  if (
+    !hasClosedFields(value, [
+      "id",
+      "occurredAt",
+      "kind",
+      "title",
+      "status",
+      "source",
+      "parentRefs",
+      "access",
+    ])
+  ) {
     return false;
   }
+  if (
+    !validRouteIdentity(value.id) ||
+    !validTimestamp(value.occurredAt) ||
+    value.kind !== "exchange" ||
+    !validDisplayLabel(value.title, 256, false) ||
+    !validActivityStatus(value.status) ||
+    !validActivitySource(value.source) ||
+    !validActivityAccess(value.access) ||
+    !validActivityParentRefs(value.parentRefs)
+  ) {
+    return false;
+  }
+  const source = value.source as ActivityRecord["source"];
+  const access = value.access as ActivityRecord["access"];
+  const refs = value.parentRefs as ActivityRecord["parentRefs"];
+  if (
+    refs.exchangeId !== value.id ||
+    refs.accessId !== access.id
+  ) {
+    return false;
+  }
+  switch (source.kind) {
+    case "capture_run":
+      return (
+        (source.recognition === "verified" ||
+          source.recognition === "configured") &&
+        refs.captureRunId !== undefined &&
+        refs.manualCaptureId === undefined &&
+        refs.connectionId !== undefined &&
+        refs.ingressProfileId === `capture-run/${refs.captureRunId}`
+      );
+    case "manual_proxy":
+      return (
+        (source.recognition === "verified" ||
+          source.recognition === "configured") &&
+        refs.manualCaptureId !== undefined &&
+        refs.captureRunId === undefined &&
+        refs.connectionId !== undefined &&
+        refs.ingressProfileId === `manual-capture/${refs.manualCaptureId}`
+      );
+    case "system_proxy":
+      return (
+        source.recognition === "unknown" &&
+        refs.captureRunId === undefined &&
+        refs.manualCaptureId === undefined &&
+        refs.ingressProfileId === "system-proxy"
+      );
+  }
+  return false;
+}
+
+function validActivitySource(value: unknown): boolean {
+  if (
+    !hasClosedFields(value, ["kind", "displayName", "recognition"]) ||
+    (value.kind !== "capture_run" &&
+      value.kind !== "manual_proxy" &&
+      value.kind !== "system_proxy") ||
+    !validDisplayLabel(value.displayName, 256, false)
+  ) {
+    return false;
+  }
+  return value.recognition === "verified" ||
+    value.recognition === "configured" ||
+    value.recognition === "unknown";
+}
+
+function validActivityAccess(value: unknown): boolean {
+  return hasClosedFields(value, ["id", "displayName", "applicationRevision"]) &&
+    validResourceId(value.id) &&
+    validDisplayLabel(value.displayName, 256, false) &&
+    positiveInteger(value.applicationRevision);
+}
+
+function validActivityParentRefs(value: unknown): boolean {
+  if (!hasClosedFields(value, [
+    "ingressProfileId",
+    "accessId",
+    "exchangeId",
+  ], [
+    "captureRunId",
+    "manualCaptureId",
+    "connectionId",
+    "egressAttemptId",
+  ])) {
+    return false;
+  }
+  const requiredRouteIdentities = [
+    value.accessId,
+    value.exchangeId,
+  ];
+  const optionalRouteIdentities = [
+    value.captureRunId,
+    value.manualCaptureId,
+    value.connectionId,
+    value.egressAttemptId,
+  ];
+  return requiredRouteIdentities.every(validRouteIdentity) &&
+    optionalRouteIdentities.every(
+    (entry) => entry === undefined || validRouteIdentity(entry),
+    ) &&
+    validIngressProfileIdentity(value.ingressProfileId);
+}
+
+function validIngressProfileIdentity(value: unknown): value is string {
   return (
-    validRouteIdentity(value.id) &&
-    validTimestamp(value.occurredAt) &&
-    validResourceId(value.accessId) &&
-    validActivityStatus(value.status)
+    value === "system-proxy" ||
+    (validIdentity(value) &&
+      /^(?:capture-run|manual-capture)\/[A-Za-z0-9_-]+$/u.test(value))
   );
 }
 
-function validActivityStatus(value: unknown): value is string {
-  return (
-    validTrimmedString(value, 128, false) &&
-    !/\p{C}/u.test(value)
-  );
+function validActivityStatus(value: unknown): value is ActivityStatus {
+  return value === "succeeded" ||
+    value === "failed" ||
+    value === "canceled";
 }
 
 function requireExchangeDetail(
@@ -3506,6 +3687,11 @@ function validConnectionRecord(value: unknown): boolean {
       [
         "ingressId",
         "sourceLabel",
+        "accessId",
+        "accessName",
+        "accessRevision",
+        "agentEndpointId",
+        "agentEndpointRevision",
         "observedSni",
         "routeHost",
         "ip",
@@ -3537,7 +3723,39 @@ function validConnectionRecord(value: unknown): boolean {
       !connectionDecisions.has(String(value.decision))) ||
     (value.endedAt !== undefined && !validTimestamp(value.endedAt)) ||
     (value.outcome !== undefined &&
-      !connectionOutcomes.has(String(value.outcome)))
+      !connectionOutcomes.has(String(value.outcome))) ||
+    (value.accessId !== undefined && !validResourceId(value.accessId)) ||
+    (value.accessName !== undefined &&
+      !validDisplayLabel(value.accessName, 256, false)) ||
+    (value.accessRevision !== undefined && !positiveInteger(value.accessRevision)) ||
+    (value.agentEndpointId !== undefined &&
+      !validResourceId(value.agentEndpointId)) ||
+    (value.agentEndpointRevision !== undefined &&
+      !positiveInteger(value.agentEndpointRevision))
+  ) {
+    return false;
+  }
+
+  const accessRelationship = [
+    value.accessId,
+    value.accessName,
+    value.accessRevision,
+    value.agentEndpointId,
+    value.agentEndpointRevision,
+  ];
+  if (accessRelationship.some((field) => field !== undefined) &&
+      accessRelationship.some((field) => field === undefined)) {
+    return false;
+  }
+  const hasAccessRelationship = accessRelationship.every(
+    (field) => field !== undefined,
+  );
+  if (
+    (hasAccessRelationship &&
+      (value.decryption !== "mitm" || value.decision !== "allow")) ||
+    (value.decryption === "mitm" &&
+      value.decision === "allow" &&
+      !hasAccessRelationship)
   ) {
     return false;
   }
@@ -4244,11 +4462,11 @@ function validManualCaptureRoot(value: unknown): boolean {
     typeof value.derSha256 === "string" &&
     /^[a-f0-9]{64}$/u.test(value.derSha256) &&
     validTrimmedString(value.fingerprint, 128, false) &&
-    validManualCaptureLocalPath(value.pemPath)
+    validAbsoluteLocalPath(value.pemPath)
   );
 }
 
-function validManualCaptureLocalPath(value: unknown): value is string {
+function validAbsoluteLocalPath(value: unknown): value is string {
   if (!validTrimmedString(value, 4_096, false)) {
     return false;
   }
@@ -4442,14 +4660,26 @@ function requireCaptureRunPage(value: unknown): CaptureRunPage {
   return value as unknown as CaptureRunPage;
 }
 
-function validCaptureRun(value: unknown): boolean {
+function requireCaptureRun(
+  value: unknown,
+  expectedRunId: string,
+): CaptureRunRecord {
+  if (!validCaptureRun(value) || value.id !== expectedRunId) {
+    throw new ControlContractError();
+  }
+  return value;
+}
+
+function validCaptureRun(value: unknown): value is CaptureRunRecord {
   if (value === null || typeof value !== "object" || Array.isArray(value)) {
     return false;
   }
   const run = value as Record<string, unknown>;
   const allowed = new Set([
     "id",
+    "ingressProfileId",
     "executableLabel",
+    "canonicalExecutablePath",
     "cwd",
     "localUserLabel",
     "machineId",
@@ -4467,14 +4697,18 @@ function validCaptureRun(value: unknown): boolean {
     "clientAdapterReason",
     "createdAt",
     "expiresAt",
+    "firstObservedAt",
+    "updatedAt",
   ]);
   if (Object.keys(run).some((key) => !allowed.has(key))) {
     return false;
   }
   if (
     !nonEmptyString(run.id) ||
+    !nonEmptyString(run.ingressProfileId) ||
     !nonEmptyString(run.executableLabel) ||
-    !nonEmptyString(run.cwd) ||
+    !validAbsoluteLocalPath(run.canonicalExecutablePath) ||
+    !validAbsoluteLocalPath(run.cwd) ||
     !captureRunStates.has(String(run.state)) ||
     (run.observation !== "waiting_for_traffic" && run.observation !== "observed") ||
     !captureRunRecognitions.has(String(run.recognition)) ||
@@ -4484,6 +4718,8 @@ function validCaptureRun(value: unknown): boolean {
     !positiveInteger(run.catalogRevision) ||
     !validTimestamp(run.createdAt) ||
     !validTimestamp(run.expiresAt) ||
+    !validTimestamp(run.updatedAt) ||
+    (run.firstObservedAt !== undefined && !validTimestamp(run.firstObservedAt)) ||
     Date.parse(run.expiresAt as string) < Date.parse(run.createdAt as string) ||
     (run.processId !== undefined && !positiveInteger(run.processId)) ||
     (run.localUserLabel !== undefined &&

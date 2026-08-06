@@ -109,6 +109,33 @@ func TestLoopbackProxyAuthenticatesMITMAndDispatchesByPathCapability(
 		strings.Contains(requests[0].ExchangeID(), fixture.grant.Run.ID) {
 		t.Fatalf("semantic Exchange requests = %+v", requests)
 	}
+	connectionPage, err := fixture.connections.List(
+		context.Background(),
+		connectionevent.PageRequest{Limit: 20},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	foundAccessRelation := false
+	for _, record := range connectionPage.Items {
+		if record.ConnectionID != requests[0].ConnectionRef() ||
+			(record.Phase != connectionevent.PhaseConnected &&
+				record.Phase != connectionevent.PhaseClosed) {
+			continue
+		}
+		if record.AccessID != fixture.accessID.String() ||
+			record.AccessName == "" ||
+			record.AccessRevision == 0 ||
+			record.AgentEndpointID == "" ||
+			record.AgentEndpointRevision == 0 ||
+			record.Decryption != connectionevent.DecryptionMITM {
+			t.Fatalf("semantic connection relation = %+v", record)
+		}
+		foundAccessRelation = true
+	}
+	if !foundAccessRelation {
+		t.Fatal("semantic connection left no Access relation")
+	}
 
 	wrongMethod := writeInnerRequest(t, secured, &http.Request{
 		Method: http.MethodGet,
@@ -700,6 +727,39 @@ func TestLoopbackProxyRejectsSNIMismatchAndDrainsHijackedConnections(
 		t.Fatal("SNI mismatch completed TLS handshake")
 	}
 	_ = wrongSNI.Close()
+	ingressID, err := capturerun.IngressProfileID(fixture.grant.Run.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	deadline := time.Now().Add(time.Second)
+	for {
+		page, listErr := fixture.connections.List(
+			context.Background(),
+			connectionevent.PageRequest{
+				Limit:               10,
+				IngressID:           ingressID,
+				LatestPerConnection: true,
+			},
+		)
+		if listErr != nil {
+			t.Fatal(listErr)
+		}
+		if len(page.Items) == 1 &&
+			page.Items[0].Phase == connectionevent.PhaseFailed {
+			failed := page.Items[0]
+			if failed.AccessID != fixture.accessID.String() ||
+				failed.AccessName == "" ||
+				failed.AgentEndpointID == "" ||
+				failed.Decryption != connectionevent.DecryptionMITM {
+				t.Fatalf("failed handshake lost its Access relation: %+v", failed)
+			}
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("failed handshake was not journaled: %+v", page)
+		}
+		runtime.Gosched()
+	}
 
 	open := fixture.ConnectTLS(
 		t,
@@ -1052,13 +1112,14 @@ func newProxyFixtureForDialectWithPolicy(
 		t.Fatal(err)
 	}
 	grant, err := runs.Create(context.Background(), capturerun.CreateCommand{
-		CWD:             filepath.Join(directory, "workspace"),
-		ExecutableLabel: "claude",
-		Lifetime:        5 * time.Minute,
-		CatalogRevision: 1,
-		Adapter:         adapter,
-		Recognition:     fixtureRecognition(adapter),
-		Workspace:       proxyWorkspaceScope(t),
+		CWD:                     filepath.Join(directory, "workspace"),
+		CanonicalExecutablePath: filepath.Join(directory, "bin", "claude"),
+		ExecutableLabel:         "claude",
+		Lifetime:                5 * time.Minute,
+		CatalogRevision:         1,
+		Adapter:                 adapter,
+		Recognition:             fixtureRecognition(adapter),
+		Workspace:               proxyWorkspaceScope(t),
 	})
 	if err != nil {
 		t.Fatal(err)

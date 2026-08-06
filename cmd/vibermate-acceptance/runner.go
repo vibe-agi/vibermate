@@ -927,7 +927,7 @@ func requireCanonicalExchangeSummary(
 			if summary.ID != expected.ExchangeID {
 				continue
 			}
-			if summary.AccessID != expected.AccessID ||
+			if summary.Access.ID != expected.AccessID ||
 				summary.Status != string(expected.Status) {
 				return fmt.Errorf(
 					"canonical Exchange summary does not match its committed audit: %+v",

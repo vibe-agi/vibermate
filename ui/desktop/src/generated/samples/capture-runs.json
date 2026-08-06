@@ -18,9 +18,13 @@
       "installShape": "native_single_binary",
       "launchRecipe": "node_env_proxy"
     },
+    "ingressProfileId": "capture-run/run-verified-sample",
+    "canonicalExecutablePath": "/Users/example/.local/bin/claude",
     "state": "attached",
     "observation": "observed",
-    "recognition": "verified"
+    "recognition": "verified",
+    "firstObservedAt": "2026-08-02T10:00:10Z",
+    "updatedAt": "2026-08-02T10:01:00Z"
   },
   {
     "id": "run-unverified-sample",
@@ -31,8 +35,11 @@
     "clientAdapterState": "generic",
     "clientRecognition": "unverified",
     "catalogRevision": 4,
+    "ingressProfileId": "capture-run/run-unverified-sample",
+    "canonicalExecutablePath": "/Applications/Codex.app/Contents/MacOS/codex",
     "state": "created",
     "observation": "waiting_for_traffic",
-    "recognition": "unverified"
+    "recognition": "unverified",
+    "updatedAt": "2026-08-02T10:01:00Z"
   }
 ]

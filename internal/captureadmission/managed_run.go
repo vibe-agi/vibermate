@@ -3,6 +3,7 @@ package captureadmission
 import (
 	"errors"
 
+	"github.com/vibe-agi/vibermate/internal/capturerun"
 	"github.com/vibe-agi/vibermate/internal/clientadapter"
 	"github.com/vibe-agi/vibermate/internal/workspaceidentity"
 )
@@ -18,13 +19,17 @@ type ManagedRunEvidence struct {
 }
 
 func NewManagedRun(evidence ManagedRunEvidence) (Admission, error) {
+	ingressProfileID, err := capturerun.IngressProfileID(evidence.CaptureRunID)
+	if err != nil {
+		return Admission{}, errors.Join(ErrInvalidAdmission, err)
+	}
 	confidence := AttributionConfigured
 	if evidence.Adapter != nil {
 		confidence = AttributionVerified
 	}
 	admission := Admission{
 		kind:               KindManagedRun,
-		ingressProfileID:   "capture-run/" + evidence.CaptureRunID,
+		ingressProfileID:   ingressProfileID,
 		captureRunID:       evidence.CaptureRunID,
 		credentialRevision: 1,
 		confidence:         confidence,

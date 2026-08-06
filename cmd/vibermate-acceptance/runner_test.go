@@ -1140,6 +1140,11 @@ func responsesHTTPFallbackAuditRecords(
 		decided.EgressSource = connectionevent.EgressSourceAccessDefault
 		decided.EgressPolicyRevision = 1
 		decided.Decryption = connectionevent.DecryptionMITM
+		decided.AccessID = "assembly-access"
+		decided.AccessName = "Assembly Access"
+		decided.AccessRevision = 1
+		decided.AgentEndpointID = "assembly-agent-endpoint"
+		decided.AgentEndpointRevision = 1
 		decided.Phase = connectionevent.PhaseDecided
 		connected := decided
 		connected.ObservedSNI = "api.openai.com"
@@ -1197,6 +1202,11 @@ func clientAuditTimeline(t *testing.T) connectionevent.Timeline {
 	decided.EgressSource = connectionevent.EgressSourceAccessDefault
 	decided.EgressPolicyRevision = 1
 	decided.Decryption = connectionevent.DecryptionMITM
+	decided.AccessID = "assembly-access"
+	decided.AccessName = "Assembly Access"
+	decided.AccessRevision = 1
+	decided.AgentEndpointID = "assembly-agent-endpoint"
+	decided.AgentEndpointRevision = 1
 	decided.Phase = connectionevent.PhaseDecided
 	clientConnected := decided
 	clientConnected.ObservedSNI = "api.anthropic.com"

@@ -51,14 +51,41 @@ const (
 	StatusCanceled  Status = "canceled"
 )
 
+// SourceKind names the authenticated ingress class that produced an Exchange.
+// It is attribution evidence, never a route selector.
+type SourceKind string
+
+const (
+	SourceCaptureRun  SourceKind = "capture_run"
+	SourceManualProxy SourceKind = "manual_proxy"
+	SourceSystemProxy SourceKind = "system_proxy"
+)
+
+type SourceRecognition string
+
+const (
+	SourceRecognitionVerified   SourceRecognition = "verified"
+	SourceRecognitionConfigured SourceRecognition = "configured"
+	SourceRecognitionUnknown    SourceRecognition = "unknown"
+)
+
 type Event struct {
-	Kind       Kind
-	AccessID   access.AccessID
-	SubjectID  string
-	Status     Status
-	ReasonCode string
-	Diagnosis  Diagnosis
-	Transport  *TransportEvidence
+	Kind              Kind
+	AccessID          access.AccessID
+	AccessName        string
+	AccessRevision    uint64
+	SubjectID         string
+	Status            Status
+	ReasonCode        string
+	SourceKind        SourceKind
+	SourceDisplayName string
+	SourceRecognition SourceRecognition
+	CaptureRunID      string
+	ManualCaptureID   string
+	IngressProfileID  string
+	ConnectionID      string
+	Diagnosis         Diagnosis
+	Transport         *TransportEvidence
 }
 
 func (event Event) Validate() error {
@@ -97,6 +124,61 @@ func (event Event) Validate() error {
 		event.Kind == KindAccessEnabled ||
 		event.Kind == KindAccessDeleted) && event.AccessID.String() == "" {
 		return fmt.Errorf("%w: Access event has no Access ID", ErrInvalidEvent)
+	}
+	if event.Kind == KindExchangeCompleted {
+		if event.AccessID.String() == "" ||
+			validateIdentity("Access name", event.AccessName, false) != nil ||
+			event.AccessRevision == 0 ||
+			validateIdentity("source display name", event.SourceDisplayName, false) != nil ||
+			validateIdentity("connection ID", event.ConnectionID, true) != nil ||
+			validateIdentity("ingress profile ID", event.IngressProfileID, false) != nil {
+			return fmt.Errorf(
+				"%w: Exchange relationship evidence is incomplete",
+				ErrInvalidEvent,
+			)
+		}
+		switch event.SourceKind {
+		case SourceCaptureRun:
+			if validateIdentity("CaptureRun ID", event.CaptureRunID, false) != nil ||
+				event.ManualCaptureID != "" ||
+				event.ConnectionID == "" ||
+				event.IngressProfileID != "capture-run/"+event.CaptureRunID ||
+				(event.SourceRecognition != SourceRecognitionVerified &&
+					event.SourceRecognition != SourceRecognitionConfigured) {
+				return fmt.Errorf("%w: CaptureRun source is invalid", ErrInvalidEvent)
+			}
+		case SourceManualProxy:
+			if validateIdentity("ManualCapture ID", event.ManualCaptureID, false) != nil ||
+				event.CaptureRunID != "" ||
+				event.ConnectionID == "" ||
+				event.IngressProfileID != "manual-capture/"+event.ManualCaptureID ||
+				(event.SourceRecognition != SourceRecognitionVerified &&
+					event.SourceRecognition != SourceRecognitionConfigured) {
+				return fmt.Errorf("%w: manual proxy source is invalid", ErrInvalidEvent)
+			}
+		case SourceSystemProxy:
+			if event.CaptureRunID != "" ||
+				event.ManualCaptureID != "" ||
+				event.IngressProfileID != "system-proxy" ||
+				event.SourceRecognition != SourceRecognitionUnknown {
+				return fmt.Errorf("%w: system proxy source is invalid", ErrInvalidEvent)
+			}
+		default:
+			return fmt.Errorf("%w: source kind is invalid", ErrInvalidEvent)
+		}
+	} else if event.AccessName != "" ||
+		event.AccessRevision != 0 ||
+		event.SourceKind != "" ||
+		event.SourceDisplayName != "" ||
+		event.SourceRecognition != "" ||
+		event.CaptureRunID != "" ||
+		event.ManualCaptureID != "" ||
+		event.IngressProfileID != "" ||
+		event.ConnectionID != "" {
+		return fmt.Errorf(
+			"%w: Exchange relationship evidence belongs only to an Exchange",
+			ErrInvalidEvent,
+		)
 	}
 	if event.Transport != nil {
 		if event.Kind != KindExchangeCompleted {
@@ -402,16 +484,25 @@ func (evidence TransportEvidence) Clone() TransportEvidence {
 
 // Record is the immutable durable projection returned by readers.
 type Record struct {
-	Sequence   int64              `json:"sequence"`
-	ID         string             `json:"id"`
-	OccurredAt time.Time          `json:"occurredAt"`
-	Kind       Kind               `json:"kind"`
-	AccessID   string             `json:"accessId,omitempty"`
-	SubjectID  string             `json:"subjectId"`
-	Status     Status             `json:"status"`
-	ReasonCode string             `json:"reasonCode,omitempty"`
-	Diagnosis  *Diagnosis         `json:"diagnosis,omitempty"`
-	Transport  *TransportEvidence `json:"transport,omitempty"`
+	Sequence          int64              `json:"sequence"`
+	ID                string             `json:"id"`
+	OccurredAt        time.Time          `json:"occurredAt"`
+	Kind              Kind               `json:"kind"`
+	AccessID          string             `json:"accessId,omitempty"`
+	AccessName        string             `json:"accessName,omitempty"`
+	AccessRevision    uint64             `json:"accessRevision,omitempty"`
+	SubjectID         string             `json:"subjectId"`
+	Status            Status             `json:"status"`
+	ReasonCode        string             `json:"reasonCode,omitempty"`
+	SourceKind        SourceKind         `json:"sourceKind,omitempty"`
+	SourceDisplayName string             `json:"sourceDisplayName,omitempty"`
+	SourceRecognition SourceRecognition  `json:"sourceRecognition,omitempty"`
+	CaptureRunID      string             `json:"captureRunId,omitempty"`
+	ManualCaptureID   string             `json:"manualCaptureId,omitempty"`
+	IngressProfileID  string             `json:"ingressProfileId,omitempty"`
+	ConnectionID      string             `json:"connectionId,omitempty"`
+	Diagnosis         *Diagnosis         `json:"diagnosis,omitempty"`
+	Transport         *TransportEvidence `json:"transport,omitempty"`
 }
 
 // Diagnosis is what a failed request can say about itself without saying what
@@ -486,24 +577,45 @@ func (record Record) Validate() error {
 		}
 	}
 	return Event{
-		Kind:       record.Kind,
-		AccessID:   accessID,
-		SubjectID:  record.SubjectID,
-		Status:     record.Status,
-		ReasonCode: record.ReasonCode,
-		Transport:  record.Transport,
+		Kind:              record.Kind,
+		AccessID:          accessID,
+		AccessName:        record.AccessName,
+		AccessRevision:    record.AccessRevision,
+		SubjectID:         record.SubjectID,
+		Status:            record.Status,
+		ReasonCode:        record.ReasonCode,
+		SourceKind:        record.SourceKind,
+		SourceDisplayName: record.SourceDisplayName,
+		SourceRecognition: record.SourceRecognition,
+		CaptureRunID:      record.CaptureRunID,
+		ManualCaptureID:   record.ManualCaptureID,
+		IngressProfileID:  record.IngressProfileID,
+		ConnectionID:      record.ConnectionID,
+		Diagnosis:         diagnosisValue(record.Diagnosis),
+		Transport:         record.Transport,
 	}.Validate()
+}
+
+func diagnosisValue(value *Diagnosis) Diagnosis {
+	if value == nil {
+		return Diagnosis{}
+	}
+	return *value
 }
 
 type PageRequest struct {
 	BeforeSequence int64
 	Limit          int
+	CaptureRunID   string
+	AccessID       string
 }
 
 func (request PageRequest) Validate() error {
 	if request.BeforeSequence < 0 ||
 		request.Limit <= 0 ||
-		request.Limit > MaxPageSize {
+		request.Limit > MaxPageSize ||
+		validateIdentity("CaptureRun filter", request.CaptureRunID, true) != nil ||
+		validateIdentity("Access filter", request.AccessID, true) != nil {
 		return ErrInvalidEvent
 	}
 	return nil

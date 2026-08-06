@@ -118,7 +118,7 @@ func (router *Router) ServeHTTP(
 	// looking at their own machine, and it reaches the app the same way every
 	// other read does. Design 15 lists them that way.
 	webviewCapturePreflight := request.Method == http.MethodOptions &&
-		request.URL.Path == "/api/v1/capture-runs"
+		captureReadPath(request.URL.Path)
 	if capturePath(request.URL.Path) &&
 		request.Method != http.MethodGet &&
 		!webviewCapturePreflight {
@@ -132,8 +132,7 @@ func (router *Router) ServeHTTP(
 	// A GET below the collection is still a control path shape, and nothing
 	// serves it. It must not fall through to the app and read as a route the
 	// app declined.
-	if capturePath(request.URL.Path) &&
-		request.URL.Path != "/api/v1/capture-runs" {
+	if capturePath(request.URL.Path) && !captureReadPath(request.URL.Path) {
 		if !router.validCLIControlTransport(request) {
 			writeProblem(writer, http.StatusForbidden, ReasonUnauthorized)
 			return
@@ -241,6 +240,14 @@ func (router *Router) validTransport(request *http.Request) bool {
 func capturePath(path string) bool {
 	return path == "/api/v1/capture-runs" ||
 		strings.HasPrefix(path, "/api/v1/capture-runs/")
+}
+
+func captureReadPath(path string) bool {
+	if path == "/api/v1/capture-runs" {
+		return true
+	}
+	remainder, found := strings.CutPrefix(path, "/api/v1/capture-runs/")
+	return found && remainder != "" && !strings.Contains(remainder, "/")
 }
 
 func manualCapturePath(path string) bool {

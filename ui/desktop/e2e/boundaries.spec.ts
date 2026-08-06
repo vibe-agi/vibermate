@@ -1,4 +1,6 @@
 import { expect, test, type Locator, type Page } from "@playwright/test";
+import enUS from "../src/generated/locales/en-US.json" with { type: "json" };
+import zhCN from "../src/generated/locales/zh-CN.json" with { type: "json" };
 
 const controlOrigin = "http://127.0.0.1:43123";
 const instanceId = "browser-boundary-runtime";
@@ -7,10 +9,28 @@ const occurredAt = "2026-08-03T00:00:00Z";
 const repeatingCursor = "cGFnZS0x";
 
 interface ActivityRecordFixture {
-  readonly accessId: string;
+  readonly access: {
+    readonly applicationRevision: number;
+    readonly displayName: string;
+    readonly id: string;
+  };
   readonly id: string;
+  readonly kind: "exchange";
   readonly occurredAt: string;
-  readonly status: string;
+  readonly parentRefs: {
+    readonly accessId: string;
+    readonly captureRunId: string;
+    readonly connectionId: string;
+    readonly exchangeId: string;
+    readonly ingressProfileId: string;
+  };
+  readonly source: {
+    readonly displayName: string;
+    readonly kind: "capture_run";
+    readonly recognition: "configured";
+  };
+  readonly status: "succeeded" | "pending" | "failed" | "canceled";
+  readonly title: string;
 }
 
 interface DesktopApiOptions {
@@ -183,13 +203,32 @@ async function installDesktopApi(
     }
     if (url.pathname === "/api/v1/activities") {
       activityPage += 1;
+      const id = `activity-${activityPage}`;
       const activity =
         options.activity ??
         ({
-          id: `activity-${activityPage}`,
+          access: {
+            applicationRevision: 1,
+            displayName: "Work",
+            id: "work",
+          },
+          id,
+          kind: "exchange",
           occurredAt,
-          accessId: "work",
+          parentRefs: {
+            accessId: "work",
+            captureRunId: "run-boundary",
+            connectionId: `connection-${activityPage}`,
+            exchangeId: id,
+            ingressProfileId: "capture-run/run-boundary",
+          },
+          source: {
+            displayName: "claude",
+            kind: "capture_run",
+            recognition: "configured",
+          },
           status: "succeeded",
+          title: "claude",
         } satisfies ActivityRecordFixture);
       await fulfill({
         items: [activity],
@@ -258,23 +297,45 @@ for (const boundary of [
     const errors = collectBrowserErrors(page);
     await page.setViewportSize({ width: boundary.width, height: 900 });
     const activity = {
+      access: {
+        applicationRevision: 1,
+        displayName: "A".repeat(256),
+        id: "a".repeat(128),
+      },
       id: "x".repeat(512),
+      kind: "exchange" as const,
       occurredAt,
-      accessId: "a".repeat(128),
-      status: "s".repeat(128),
+      parentRefs: {
+        accessId: "a".repeat(128),
+        captureRunId: "r".repeat(128),
+        connectionId: "c".repeat(512),
+        exchangeId: "x".repeat(512),
+        ingressProfileId: `capture-run/${"r".repeat(128)}`,
+      },
+      source: {
+        displayName: "S".repeat(256),
+        kind: "capture_run" as const,
+        recognition: "configured" as const,
+      },
+      status: "failed" as const,
+      title: "T".repeat(256),
     };
     await installDesktopApi(page, { activity });
     await page.goto("/#activity/requests");
     if (boundary.locale === "zh-CN") {
-      await page.getByRole("button", { name: "简体中文" }).click();
+      await page.getByRole("button", { name: zhCN["locale.zh-CN"] }).click();
     }
 
     const panel = page.locator(".activity-panel");
     const tableScroll = panel.locator(".compact-table-scroll");
     const row = panel.locator(".activity-table tbody tr");
     await expect(row).toContainText(activity.id);
-    await expect(row).toContainText(activity.accessId);
-    await expect(row).toContainText(activity.status);
+    await expect(row).toContainText(activity.access.displayName);
+    await expect(row).toContainText(
+      boundary.locale === "zh-CN"
+        ? zhCN["activity.status.failed"]
+        : enUS["activity.status.failed"],
+    );
     await expectNoHorizontalOverflow([
       page.locator("html"),
       page.locator("#main-content"),
@@ -305,7 +366,7 @@ test("keeps common Policy actions compact and reveals persistent rules on demand
   await approval.getByRole("link", { name: "Open approval" }).click();
   await expect(approval.locator(".approval-rule-actions button")).toHaveCount(2);
 
-  for (const localeButton of [undefined, "简体中文"] as const) {
+  for (const localeButton of [undefined, zhCN["locale.zh-CN"]] as const) {
     if (localeButton !== undefined) {
       await page.getByRole("button", { name: localeButton }).click();
     }
@@ -424,12 +485,23 @@ test("keeps Retry and Back usable for a missing Exchange in both locales", async
     "This request evidence was not found.",
   );
 
-  await page.getByRole("button", { name: "简体中文" }).click();
-  await expect(page.getByRole("alert")).toContainText("未找到这条请求证据。");
-  await expect(page.getByRole("button", { name: "重试" })).toBeEnabled();
-  const back = page.getByRole("link", { name: "返回全部请求" });
+  await page.getByRole("button", { name: zhCN["locale.zh-CN"] }).click();
+  await expect(page.getByRole("alert")).toContainText(
+    zhCN["error.exchange_not_found"],
+  );
+  await expect(
+    page.getByRole("button", { name: zhCN["common.retry"] }),
+  ).toBeEnabled();
+  const back = page.getByRole("link", {
+    name: zhCN["activity.detail.back"],
+  });
   await expect(back).toBeVisible();
   await back.click();
-  await expect(page.getByRole("heading", { level: 1, name: "请求" })).toBeVisible();
+  await expect(
+    page.getByRole("heading", {
+      level: 1,
+      name: zhCN["navigation.task.activityRequests"],
+    }),
+  ).toBeVisible();
   expect(errors).toEqual([]);
 });

@@ -315,6 +315,29 @@ func TestDesktopControlAppliesAccessAndControlsOfflineHoldWithScopedAuth(
 		connectionPage.Items[0].Outcome != connectionevent.OutcomeDenied {
 		t.Fatalf("ConnectionEvent page = %+v", connectionPage)
 	}
+	latestConnections := doRequest(
+		t,
+		router,
+		authority,
+		http.MethodGet,
+		"/api/v1/connections?limit=10&view=latest",
+		readToken,
+		nil,
+	)
+	if latestConnections.Code != http.StatusOK {
+		t.Fatalf(
+			"latest connections code=%d body=%s",
+			latestConnections.Code,
+			latestConnections.Body.Bytes(),
+		)
+	}
+	var latestConnectionPage connectionevent.Page
+	decodeResponse(t, latestConnections, &latestConnectionPage)
+	if len(latestConnectionPage.Items) != 1 ||
+		latestConnectionPage.Items[0].ConnectionID != connection.ID() ||
+		latestConnectionPage.Items[0].Outcome != connectionevent.OutcomeDenied {
+		t.Fatalf("latest ConnectionEvent page = %+v", latestConnectionPage)
+	}
 	timelineResponse := doRequest(
 		t,
 		router,

@@ -101,6 +101,26 @@ func TestAuditViewsCarryNoRequestContent(t *testing.T) {
 			}
 		}
 	}
+	for _, path := range []string{
+		"/api/v1/connections?ingressId=",
+		"/api/v1/connections?ingressId=run-a&ingressId=run-b",
+		"/api/v1/connections?view=events",
+		"/api/v1/connections?view=latest&view=latest",
+		"/api/v1/connections?unknown=value",
+	} {
+		response := doRequest(
+			t,
+			fixture.router,
+			fixture.authority,
+			http.MethodGet,
+			path,
+			fixture.readToken,
+			nil,
+		)
+		if response.Code != http.StatusUnprocessableEntity {
+			t.Fatalf("%s status = %d", path, response.Code)
+		}
+	}
 }
 
 type auditFixture struct {

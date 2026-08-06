@@ -56,6 +56,16 @@ CREATE TABLE runtime_connection_events(
   CHECK(length(CAST(source_label AS BLOB)) <= 512),
   source_confidence TEXT NOT NULL
   CHECK(source_confidence IN('verified', 'configured', 'unknown')),
+  access_id TEXT NOT NULL DEFAULT ''
+  CHECK(length(CAST(access_id AS BLOB)) <= 128),
+  access_name TEXT NOT NULL DEFAULT ''
+  CHECK(length(CAST(access_name AS BLOB)) <= 256),
+  access_revision INTEGER NOT NULL DEFAULT 0
+  CHECK(access_revision >= 0),
+  agent_endpoint_id TEXT NOT NULL DEFAULT ''
+  CHECK(length(CAST(agent_endpoint_id AS BLOB)) <= 128),
+  agent_endpoint_revision INTEGER NOT NULL DEFAULT 0
+  CHECK(agent_endpoint_revision >= 0),
   requested_host TEXT NOT NULL
   CHECK(length(CAST(requested_host AS BLOB)) BETWEEN 1 AND 1024),
   observed_sni TEXT NOT NULL DEFAULT ''
@@ -113,6 +123,11 @@ ON runtime_connection_events(
   connection_id,
   sequence
 );
+CREATE INDEX runtime_connection_events_ingress_latest
+ON runtime_connection_events(
+  ingress_id,
+  sequence DESC
+);
 CREATE TABLE runtime_activities(
   sequence INTEGER PRIMARY KEY AUTOINCREMENT,
   activity_id TEXT NOT NULL UNIQUE
@@ -131,12 +146,30 @@ CHECK(kind IN('access.applied',
 'exchange.completed')),
   access_id TEXT NOT NULL DEFAULT ''
   CHECK(length(CAST(access_id AS BLOB)) <= 128),
+  access_name TEXT NOT NULL DEFAULT ''
+  CHECK(length(CAST(access_name AS BLOB)) <= 256),
+  access_revision INTEGER NOT NULL DEFAULT 0
+  CHECK(access_revision >= 0),
   subject_id TEXT NOT NULL
   CHECK(length(CAST(subject_id AS BLOB)) BETWEEN 1 AND 512),
   status TEXT NOT NULL
   CHECK(status IN('succeeded', 'pending', 'failed', 'canceled')),
   reason_code TEXT NOT NULL DEFAULT ''
   CHECK(length(CAST(reason_code AS BLOB)) <= 512),
+  source_kind TEXT NOT NULL DEFAULT ''
+  CHECK(source_kind IN('', 'capture_run', 'manual_proxy', 'system_proxy')),
+  source_display_name TEXT NOT NULL DEFAULT ''
+  CHECK(length(CAST(source_display_name AS BLOB)) <= 512),
+  source_recognition TEXT NOT NULL DEFAULT ''
+  CHECK(source_recognition IN('', 'verified', 'configured', 'unknown')),
+  capture_run_id TEXT NOT NULL DEFAULT ''
+  CHECK(length(CAST(capture_run_id AS BLOB)) <= 128),
+  manual_capture_id TEXT NOT NULL DEFAULT ''
+  CHECK(length(CAST(manual_capture_id AS BLOB)) <= 128),
+  ingress_profile_id TEXT NOT NULL DEFAULT ''
+  CHECK(length(CAST(ingress_profile_id AS BLOB)) <= 128),
+  connection_id TEXT NOT NULL DEFAULT ''
+  CHECK(length(CAST(connection_id AS BLOB)) <= 128),
   transport_evidence_json BLOB
   CHECK(transport_evidence_json IS NULL OR(kind = 'exchange.completed' AND
 length(transport_evidence_json) BETWEEN 2 AND 65536 AND
@@ -162,6 +195,8 @@ CREATE TABLE capture_runs(
   CHECK(length(control_capability_hash) = 32),
   cwd TEXT NOT NULL
   CHECK(length(CAST(cwd AS BLOB)) BETWEEN 1 AND 4096),
+  canonical_executable_path TEXT NOT NULL
+  CHECK(length(CAST(canonical_executable_path AS BLOB)) BETWEEN 1 AND 4096),
   executable_label TEXT NOT NULL
   CHECK(length(CAST(executable_label AS BLOB)) BETWEEN 1 AND 256),
   client_catalog_revision INTEGER NOT NULL

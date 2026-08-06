@@ -46,13 +46,18 @@ func TestConnectionTimelineRecordsAttemptDecisionConnectionAndClose(
 				Label:      "claude",
 				Confidence: SourceConfidenceConfigured,
 			},
-			Decision:             DecisionAllow,
-			RuleID:               "m0.agent_endpoint_exact",
-			RouteHost:            "api.anthropic.com",
-			EgressScope:          EgressScopeAccess,
-			EgressSource:         EgressSourceAccessDefault,
-			EgressPolicyRevision: 4,
-			Decryption:           DecryptionMITM,
+			Decision:              DecisionAllow,
+			RuleID:                "m0.agent_endpoint_exact",
+			RouteHost:             "api.anthropic.com",
+			AccessID:              "access-test",
+			AccessName:            "Test Access",
+			AccessRevision:        1,
+			AgentEndpointID:       "endpoint-test",
+			AgentEndpointRevision: 1,
+			EgressScope:           EgressScopeAccess,
+			EgressSource:          EgressSourceAccessDefault,
+			EgressPolicyRevision:  4,
+			Decryption:            DecryptionMITM,
 		},
 	); err != nil {
 		t.Fatal(err)
@@ -96,6 +101,12 @@ func TestConnectionTimelineRecordsAttemptDecisionConnectionAndClose(
 	} {
 		if records[index].Phase != phase {
 			t.Fatalf("record %d phase = %q", index, records[index].Phase)
+		}
+	}
+	for index, record := range records[1:] {
+		if record.AccessID != "access-test" ||
+			record.AgentEndpointID != "endpoint-test" {
+			t.Fatalf("record %d lost the decision-time Access relation: %+v", index+1, record)
 		}
 	}
 	terminal := records[len(records)-1]
@@ -208,13 +219,18 @@ func TestAppendFailureDoesNotAdvanceConnectionPhase(t *testing.T) {
 			Label:      "claude",
 			Confidence: SourceConfidenceConfigured,
 		},
-		Decision:             DecisionAllow,
-		RuleID:               "m0.agent_endpoint_exact",
-		RouteHost:            "api.anthropic.com",
-		EgressScope:          EgressScopeAccess,
-		EgressSource:         EgressSourceAccessDefault,
-		EgressPolicyRevision: 1,
-		Decryption:           DecryptionMITM,
+		Decision:              DecisionAllow,
+		RuleID:                "m0.agent_endpoint_exact",
+		RouteHost:             "api.anthropic.com",
+		AccessID:              "access-test",
+		AccessName:            "Test Access",
+		AccessRevision:        1,
+		AgentEndpointID:       "endpoint-test",
+		AgentEndpointRevision: 1,
+		EgressScope:           EgressScopeAccess,
+		EgressSource:          EgressSourceAccessDefault,
+		EgressPolicyRevision:  1,
+		Decryption:            DecryptionMITM,
 	}
 	if err := connection.Decide(
 		context.Background(),

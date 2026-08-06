@@ -50,6 +50,11 @@ func (repository *connectionEventRepository) Append(
 		     ingress_id,
 		     source_label,
 		     source_confidence,
+		     access_id,
+		     access_name,
+		     access_revision,
+		     agent_endpoint_id,
+		     agent_endpoint_revision,
 		     requested_host,
 		     observed_sni,
 		     route_host,
@@ -73,11 +78,16 @@ func (repository *connectionEventRepository) Append(
 		     outcome,
 		     error_class
 		 )
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		event.ConnectionID,
 		event.IngressID,
 		event.SourceLabel,
 		string(event.SourceConfidence),
+		event.AccessID,
+		event.AccessName,
+		event.AccessRevision,
+		event.AgentEndpointID,
+		event.AgentEndpointRevision,
 		event.RequestedHost,
 		event.ObservedSNI,
 		event.RouteHost,
@@ -130,12 +140,28 @@ func (repository *connectionEventRepository) List(
 		return connectionevent.Page{}, err
 	}
 	defer finish()
+	query := connectionEventSelect + `
+		 WHERE (? = '' OR ingress_id = ?)
+		   AND (? = 0 OR sequence < ?)
+		 ORDER BY sequence DESC
+		 LIMIT ?`
+	if request.LatestPerConnection {
+		query = connectionEventSelect + ` AS current
+		 WHERE (? = '' OR current.ingress_id = ?)
+		   AND current.sequence = (
+		       SELECT MAX(latest.sequence)
+		       FROM runtime_connection_events AS latest
+		       WHERE latest.connection_id = current.connection_id
+		   )
+		   AND (? = 0 OR current.sequence < ?)
+		 ORDER BY current.sequence DESC
+		 LIMIT ?`
+	}
 	rows, err := repository.database.QueryContext(
 		operation,
-		connectionEventSelect+`
-		 WHERE (? = 0 OR sequence < ?)
-		 ORDER BY sequence DESC
-		 LIMIT ?`,
+		query,
+		request.IngressID,
+		request.IngressID,
 		request.BeforeSequence,
 		request.BeforeSequence,
 		request.Limit,
@@ -244,6 +270,11 @@ func (repository *connectionEventRepository) Recover(
 		     ingress_id,
 		     source_label,
 		     source_confidence,
+		     access_id,
+		     access_name,
+		     access_revision,
+		     agent_endpoint_id,
+		     agent_endpoint_revision,
 		     requested_host,
 		     observed_sni,
 		     route_host,
@@ -272,6 +303,11 @@ func (repository *connectionEventRepository) Recover(
 		     current.ingress_id,
 		     current.source_label,
 		     current.source_confidence,
+		     current.access_id,
+		     current.access_name,
+		     current.access_revision,
+		     current.agent_endpoint_id,
+		     current.agent_endpoint_revision,
 		     current.requested_host,
 		     current.observed_sni,
 		     current.route_host,
@@ -330,9 +366,14 @@ const connectionEventSelect = `SELECT
     sequence,
     connection_id,
     ingress_id,
-    source_label,
-    source_confidence,
-    requested_host,
+	    source_label,
+	    source_confidence,
+	    access_id,
+	    access_name,
+	    access_revision,
+	    agent_endpoint_id,
+	    agent_endpoint_revision,
+	    requested_host,
     observed_sni,
     route_host,
     ip,
@@ -372,6 +413,11 @@ func scanConnectionEvent(
 		&record.IngressID,
 		&record.SourceLabel,
 		&record.SourceConfidence,
+		&record.AccessID,
+		&record.AccessName,
+		&record.AccessRevision,
+		&record.AgentEndpointID,
+		&record.AgentEndpointRevision,
 		&record.RequestedHost,
 		&record.ObservedSNI,
 		&record.RouteHost,

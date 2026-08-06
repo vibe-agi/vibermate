@@ -21,6 +21,7 @@ export const dashboardRoutePaths = {
 
 export const dashboardTaskRoutePaths = {
   accessRouting: "/access/$accessId/routing",
+  activityRun: "/activity/runs/$runId",
   activityRequest: "/activity/requests/$exchangeId",
   activityRequests: "/activity/requests",
   dashboardExtension: "/dashboards/extensions/$dashboardId",

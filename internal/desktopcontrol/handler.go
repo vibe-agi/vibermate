@@ -295,6 +295,10 @@ func New(options Options) (*Handler, error) {
 		handler.listCaptureRuns,
 	)
 	handler.mux.HandleFunc(
+		"GET /api/v1/capture-runs/{runId}",
+		handler.getCaptureRun,
+	)
+	handler.mux.HandleFunc(
 		"GET /api/v1/workspace-route-bindings",
 		handler.listWorkspaceRouteBindings,
 	)
@@ -767,6 +771,8 @@ func (handler *Handler) listActivities(
 		activity.PageRequest{
 			BeforeSequence: query.beforeSequence,
 			Limit:          query.limit,
+			CaptureRunID:   query.captureRunID,
+			AccessID:       query.accessID,
 		},
 	)
 	if err != nil {
@@ -785,6 +791,26 @@ func (handler *Handler) listConnections(
 	writer http.ResponseWriter,
 	request *http.Request,
 ) {
+	values := request.URL.Query()
+	for name, entries := range values {
+		if (name != "limit" && name != "cursor" && name != "ingressId" && name != "view") ||
+			len(entries) != 1 {
+			writeProblem(writer, http.StatusUnprocessableEntity, ReasonInvalidRequest)
+			return
+		}
+	}
+	if entries, present := values["ingressId"]; present && entries[0] == "" {
+		writeProblem(writer, http.StatusUnprocessableEntity, ReasonInvalidRequest)
+		return
+	}
+	latestPerConnection := false
+	if entries, present := values["view"]; present {
+		if entries[0] != "latest" {
+			writeProblem(writer, http.StatusUnprocessableEntity, ReasonInvalidRequest)
+			return
+		}
+		latestPerConnection = true
+	}
 	limit, err := queryLimit(request, 50)
 	if err != nil {
 		writeProblem(writer, http.StatusUnprocessableEntity, ReasonInvalidRequest)
@@ -805,8 +831,10 @@ func (handler *Handler) listConnections(
 	page, err := handler.connections.List(
 		request.Context(),
 		connectionevent.PageRequest{
-			BeforeSequence: before,
-			Limit:          limit,
+			BeforeSequence:      before,
+			Limit:               limit,
+			IngressID:           values.Get("ingressId"),
+			LatestPerConnection: latestPerConnection,
 		},
 	)
 	if err != nil {
@@ -837,6 +865,8 @@ func (handler *Handler) getConnection(
 // ReasonCaptureRunsUnavailable reports a runtime built without a capture read.
 const ReasonCaptureRunsUnavailable ReasonCode = "capture_runs_unavailable"
 
+const ReasonCaptureRunNotFound ReasonCode = "capture_run_not_found"
+
 // listCaptureRuns answers "is my client actually going through vibermate".
 // Until this existed, the only way to know was to watch traffic appear
 // somewhere else and infer it.
@@ -866,6 +896,28 @@ func (handler *Handler) listCaptureRuns(
 		return
 	}
 	writeJSON(writer, http.StatusOK, CaptureRunAuditPageOf(page))
+}
+
+func (handler *Handler) getCaptureRun(
+	writer http.ResponseWriter,
+	request *http.Request,
+) {
+	if handler.captureRuns == nil {
+		writeProblem(writer, http.StatusServiceUnavailable, ReasonCaptureRunsUnavailable)
+		return
+	}
+	view, err := handler.captureRuns.GetRun(
+		request.Context(),
+		request.PathValue("runId"),
+	)
+	switch {
+	case errors.Is(err, capturerun.ErrNotFound):
+		writeProblem(writer, http.StatusNotFound, ReasonCaptureRunNotFound)
+	case err != nil:
+		writeProblem(writer, http.StatusUnprocessableEntity, ReasonInvalidRequest)
+	default:
+		writeJSON(writer, http.StatusOK, CaptureRunAuditViewOf(view))
+	}
 }
 
 func (handler *Handler) listApprovals(

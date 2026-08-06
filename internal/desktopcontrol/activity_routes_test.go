@@ -35,6 +35,14 @@ func TestActivityRouteProjectsExchangePagesWithoutWireLeakage(t *testing.T) {
 			ReasonCode: "private_failure_reason",
 		}
 		if kind == activity.KindExchangeCompleted {
+			event.AccessName = "Activity Route Access"
+			event.AccessRevision = 3
+			event.SourceKind = activity.SourceCaptureRun
+			event.SourceDisplayName = "claude"
+			event.SourceRecognition = activity.SourceRecognitionVerified
+			event.CaptureRunID = "run-activity-route"
+			event.IngressProfileID = "capture-run/run-activity-route"
+			event.ConnectionID = "connection-activity-route"
 			profile := activity.TransportProfileEvidence{
 				Ref:      "observed-client-strict-h1",
 				Revision: 1,
@@ -114,7 +122,10 @@ func TestActivityRouteProjectsExchangePagesWithoutWireLeakage(t *testing.T) {
 		first.Items[0].ID != newest.SubjectID ||
 		first.Items[1].ID != middle.SubjectID ||
 		first.Items[0].ID == newest.ID ||
-		first.Items[0].AccessID != accessID.String() ||
+		first.Items[0].Access.ID != accessID.String() ||
+		first.Items[0].Access.DisplayName != "Activity Route Access" ||
+		first.Items[0].Source.DisplayName != "claude" ||
+		first.Items[0].ParentRefs.CaptureRunID != "run-activity-route" ||
 		first.Items[0].OccurredAt.IsZero() ||
 		first.NextCursor == "" {
 		t.Fatalf("first Activity page = %+v", first)
@@ -172,17 +183,20 @@ func TestActivityRouteProjectsExchangePagesWithoutWireLeakage(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, item := range itemFields {
-		if len(item) != 4 ||
+		if len(item) != 8 ||
 			item["id"] == nil ||
 			item["occurredAt"] == nil ||
-			item["accessId"] == nil ||
-			item["status"] == nil {
+			item["kind"] == nil ||
+			item["title"] == nil ||
+			item["status"] == nil ||
+			item["source"] == nil ||
+			item["access"] == nil ||
+			item["parentRefs"] == nil {
 			t.Fatalf("Activity summary fields = %v", item)
 		}
 	}
 	for _, forbidden := range []string{
 		`"sequence"`,
-		`"kind"`,
 		`"subjectId"`,
 		`"reasonCode"`,
 		`"diagnosis"`,
@@ -291,6 +305,78 @@ func TestActivityRouteRejectsNonCanonicalQueries(t *testing.T) {
 				response.Body,
 			)
 		}
+	}
+}
+
+func TestActivityRouteFiltersByTypedRunAndAccessRelations(t *testing.T) {
+	t.Parallel()
+
+	runtime := startRuntime(t)
+	defer shutdownRuntime(t, runtime)
+	router, authority, readToken := newActivityRouteFixture(t, runtime)
+	record := func(runID, accessID, accessName, exchangeID string) {
+		t.Helper()
+		typedAccessID, err := access.NewAccessID(accessID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		_, err = runtime.Activities().Record(context.Background(), activity.Event{
+			Kind:              activity.KindExchangeCompleted,
+			AccessID:          typedAccessID,
+			AccessName:        accessName,
+			AccessRevision:    1,
+			SubjectID:         exchangeID,
+			Status:            activity.StatusSucceeded,
+			SourceKind:        activity.SourceCaptureRun,
+			SourceDisplayName: "claude",
+			SourceRecognition: activity.SourceRecognitionConfigured,
+			CaptureRunID:      runID,
+			IngressProfileID:  "capture-run/" + runID,
+			ConnectionID:      "connection-" + runID,
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	record("run-one", "work", "Work Claude", "exchange-work")
+	record("run-two", "personal", "Personal Claude", "exchange-personal")
+
+	filtered := doRequest(
+		t,
+		router,
+		authority,
+		http.MethodGet,
+		"/api/v1/activities?kind=exchange&captureRunId=run-one&accessId=work",
+		readToken,
+		nil,
+	)
+	if filtered.Code != http.StatusOK {
+		t.Fatalf("filtered Activity status=%d body=%s", filtered.Code, filtered.Body)
+	}
+	var page desktopcontrol.ActivityPage
+	decodeResponse(t, filtered, &page)
+	if len(page.Items) != 1 ||
+		page.Items[0].ID != "exchange-work" ||
+		page.Items[0].ParentRefs.CaptureRunID != "run-one" ||
+		page.Items[0].Access.ID != "work" {
+		t.Fatalf("filtered Activity page = %+v", page)
+	}
+
+	empty := doRequest(
+		t,
+		router,
+		authority,
+		http.MethodGet,
+		"/api/v1/activities?captureRunId=run-one&accessId=personal",
+		readToken,
+		nil,
+	)
+	if empty.Code != http.StatusOK {
+		t.Fatalf("empty Activity status=%d body=%s", empty.Code, empty.Body)
+	}
+	decodeResponse(t, empty, &page)
+	if len(page.Items) != 0 {
+		t.Fatalf("mismatched relation filter returned %+v", page.Items)
 	}
 }
 

@@ -490,14 +490,15 @@ func (issuer *Issuer) IssueCaptureRun(
 		return CaptureRunGrant{}, ErrWorkspaceUnavailable
 	}
 	grant, err := issuer.runs.Create(ctx, capturerun.CreateCommand{
-		CWD:             request.CWD,
-		ExecutableLabel: detection.ExecutableLabel,
-		Lifetime:        issuer.runLifetime,
-		CatalogRevision: detection.CatalogRevision,
-		Adapter:         runAdapter,
-		Recognition:     detection.Recognition,
-		Workspace:       workspace,
-		LocalUserLabel:  request.LocalUserLabel,
+		CWD:                     request.CWD,
+		CanonicalExecutablePath: detection.CanonicalPath,
+		ExecutableLabel:         detection.ExecutableLabel,
+		Lifetime:                issuer.runLifetime,
+		CatalogRevision:         detection.CatalogRevision,
+		Adapter:                 runAdapter,
+		Recognition:             detection.Recognition,
+		Workspace:               workspace,
+		LocalUserLabel:          request.LocalUserLabel,
 	})
 	if err != nil {
 		return CaptureRunGrant{}, ErrCaptureRunCreate
