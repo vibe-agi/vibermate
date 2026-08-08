@@ -2063,14 +2063,31 @@ function requireEnvironmentPage(value: unknown): EnvironmentPage {
   ) {
     throw new ControlContractError();
   }
-  let previous = "";
+  let previous: (Record<string, unknown> & { id: string }) | undefined;
   for (const item of value.items) {
-    if (!validEnvironmentRecord(item, false) || (previous !== "" && compareResourceIds(previous, item.id) >= 0)) {
+    if (
+      !validEnvironmentRecord(item, false) ||
+      (previous !== undefined && compareEnvironmentDirectoryRecords(previous, item) >= 0)
+    ) {
       throw new ControlContractError();
     }
-    previous = item.id;
+    previous = item;
   }
   return value as unknown as EnvironmentPage;
+}
+
+// Core owns system_transparent and deliberately keeps it at the top of the
+// Environment directory. User-owned Environments are bytewise-ID ordered
+// within the second partition. This is the wire order produced by the runtime,
+// not a presentation-only reorder performed after validation.
+function compareEnvironmentDirectoryRecords(
+  left: Record<string, unknown> & { id: string },
+  right: Record<string, unknown> & { id: string },
+): number {
+  if (left.systemOwned !== right.systemOwned) {
+    return left.systemOwned === true ? -1 : 1;
+  }
+  return compareResourceIds(left.id, right.id);
 }
 
 const providerAccountKinds = new Set(["anthropic_api_key", "openai_api_key"]);
@@ -2216,6 +2233,7 @@ function validEnvironmentRecord(
       "contentRecording",
     ]) &&
     validResourceId(value.id) &&
+    value.systemOwned === (value.id === "system_transparent") &&
     validDisplayLabel(value.name, 256, false) &&
     (value.state === "active" || value.state === "disabled") &&
     (allowUncommitted ? nonNegativeInteger(value.revision) : positiveInteger(value.revision)) &&

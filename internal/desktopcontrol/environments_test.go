@@ -34,6 +34,13 @@ func TestEnvironmentDraftPreviewPublishAndHistoricalRevisionRoutes(t *testing.T)
 	if list.Code != http.StatusOK || !bytes.Contains(list.Body.Bytes(), []byte(`"id":"system_transparent"`)) {
 		t.Fatalf("list status=%d body=%s", list.Code, list.Body.Bytes())
 	}
+	var listed desktopcontrol.EnvironmentListResponse
+	if err := json.Unmarshal(list.Body.Bytes(), &listed); err != nil ||
+		len(listed.Items) == 0 ||
+		listed.Items[0].ClientEndpoints == nil ||
+		listed.Items[0].PluginBindings == nil {
+		t.Fatalf("Environment directory emitted nullable collections: body=%s err=%v", list.Body.Bytes(), err)
+	}
 
 	draftBody := []byte(`{
   "expectedDraftRevision": 0,

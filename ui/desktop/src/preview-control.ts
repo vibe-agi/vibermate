@@ -1,5 +1,5 @@
 import type { ControlClient } from "./control-client.ts";
-import { ControlProblem } from "./control-client.ts";
+import { compareResourceIds, ControlProblem } from "./control-client.ts";
 import type {
   ActivityPage,
   ActivityQuery,
@@ -425,7 +425,16 @@ class PreviewControlClient implements ControlClient {
 
   async environments(): Promise<EnvironmentPage> {
     this.requireOpen();
-    return { items: [...this.environmentRecords.values()].sort((left, right) => left.id.localeCompare(right.id)).map(clone) };
+    return {
+      items: [...this.environmentRecords.values()]
+        .sort((left, right) => {
+          if (left.systemOwned !== right.systemOwned) {
+            return left.systemOwned ? -1 : 1;
+          }
+          return compareResourceIds(left.id, right.id);
+        })
+        .map(clone),
+    };
   }
 
   async providerAccounts(): Promise<ProviderAccountPage> {

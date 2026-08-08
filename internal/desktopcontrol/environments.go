@@ -77,11 +77,15 @@ func environmentResponseOf(snapshot environment.EnvironmentSnapshot) Environment
 }
 
 func environmentResponseOfAggregate(aggregate environment.Environment, digest string, systemOwned bool) EnvironmentResponse {
+	clientEndpoints := make([]environment.ClientEndpoint, len(aggregate.ClientEndpoints))
+	copy(clientEndpoints, aggregate.ClientEndpoints)
+	pluginBindings := make([]environment.PluginBinding, len(aggregate.PluginBindings))
+	copy(pluginBindings, aggregate.PluginBindings)
 	return EnvironmentResponse{
 		ID: aggregate.ID, Name: aggregate.Name, State: aggregate.State,
 		Revision: aggregate.Revision, Digest: digest,
-		SystemOwned: systemOwned, ClientEndpoints: aggregate.ClientEndpoints,
-		PluginBindings: aggregate.PluginBindings, BudgetPolicy: aggregate.BudgetPolicy,
+		SystemOwned: systemOwned, ClientEndpoints: clientEndpoints,
+		PluginBindings: pluginBindings, BudgetPolicy: aggregate.BudgetPolicy,
 		EgressPolicy: aggregate.EgressPolicy, ContentRecording: aggregate.ContentRecording,
 	}
 }

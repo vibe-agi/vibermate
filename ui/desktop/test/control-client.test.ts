@@ -90,6 +90,42 @@ describe("Environment-first desktop control client", () => {
     });
   });
 
+  it("accepts the Core-owned transparent Environment before bytewise user IDs", async () => {
+    const transparent = environment({
+      id: "system_transparent",
+      name: "Transparent",
+      revision: 1,
+      systemOwned: true,
+      contentRecording: { mode: "off", retentionDays: 0 },
+    });
+    const inspect = environment({ id: "claude-inspect", name: "Claude inspect" });
+    const client = await createControlClient(
+      session(),
+      sessionAwareFetch(() => jsonResponse({ items: [transparent, inspect] })),
+    );
+
+    await expect(client.environments()).resolves.toEqual({
+      items: [transparent, inspect],
+    });
+  });
+
+  it("rejects a user Environment placed before the Core-owned directory entry", async () => {
+    const transparent = environment({
+      id: "system_transparent",
+      name: "Transparent",
+      revision: 1,
+      systemOwned: true,
+      contentRecording: { mode: "off", retentionDays: 0 },
+    });
+    const inspect = environment({ id: "claude-inspect", name: "Claude inspect" });
+    const client = await createControlClient(
+      session(),
+      sessionAwareFetch(() => jsonResponse({ items: [inspect, transparent] })),
+    );
+
+    await expect(client.environments()).rejects.toBeInstanceOf(ControlContractError);
+  });
+
   it("sets and clears the next-run Environment for one exact machine and workspace", async () => {
     const machineId = capability(0x31);
     const workspaceId = capability(0x32);

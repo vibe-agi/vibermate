@@ -263,6 +263,14 @@ export function CaptureDetailRoutePage({ captureKey }: { readonly captureKey: st
   if (capture.isPending || assignment.isPending || environments.isPending) {
     return <div className="page"><LoadingRows count={7} /></div>;
   }
+  const detailError = capture.error ?? assignment.error ?? environments.error;
+  if (detailError !== null) {
+    return (
+      <div className="page">
+        <InlineProblem message={t(controlErrorKey(detailError))} />
+      </div>
+    );
+  }
   if (capture.data === undefined || assignment.data === undefined || environments.data === undefined) {
     return <div className="page"><InlineProblem message={t("error.runtime_unavailable")} /></div>;
   }
