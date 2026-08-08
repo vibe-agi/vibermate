@@ -131,7 +131,7 @@ function CaptureRow({
 
   return (
     <tr>
-      <td data-label={t("captures.column.state")}><StatePill state={capture.state} /></td>
+      <td data-label={t("captures.column.state")}><StatePill label={t(`captures.state.${capture.state}`)} state={capture.state} /></td>
       <td data-label={t("captures.column.agent")}>
         <Link
           className="row-link agent-cell"
@@ -430,8 +430,8 @@ function RequestTable({ items }: { readonly items: readonly import("./control-ty
         <thead><tr><th>{t("requests.column.status")}</th><th>{t("requests.column.request")}</th><th>{t("requests.column.environment")}</th><th>{t("requests.column.route")}</th><th className="align-right">{t("requests.column.occurred")}</th></tr></thead>
         <tbody>{items.map((item) => (
           <tr key={item.id}>
-            <td data-label={t("requests.column.status")}><StatePill state={item.status} /></td>
-            <td data-label={t("requests.column.request")}><Link className="row-link" params={{ exchangeId: item.id }} search={{}} to={dashboardTaskRoutePaths.activityRequest}><strong>{item.title}</strong><small>{item.id}</small></Link></td>
+            <td data-label={t("requests.column.status")}><StatePill label={t(`requests.state.${item.status}`)} state={item.status} /></td>
+            <td data-label={t("requests.column.request")}><Link className="row-link request-link" params={{ exchangeId: item.id }} search={{}} to={dashboardTaskRoutePaths.activityRequest}><strong>{item.title}</strong><small>{item.id}</small></Link></td>
             <td data-label={t("requests.column.environment")}>{item.environment.id} <small>r{item.environment.revision}</small></td>
             <td data-label={t("requests.column.route")}>{item.environment.routeId}</td>
             <td className="align-right" data-label={t("requests.column.occurred")}><time dateTime={item.occurredAt}>{formatRelative(item.occurredAt, i18n.language)}</time></td>
@@ -530,9 +530,8 @@ function SpineNode({ label, value }: { readonly label: string; readonly value: s
   return <div><span>{label}</span><strong>{value}</strong></div>;
 }
 
-function StatePill({ state }: { readonly state: string }) {
-  const { t } = useTranslation();
-  return <span className={`state-pill state-${state}`}><i />{t(`captures.state.${state}`)}</span>;
+function StatePill({ label, state }: { readonly label: string; readonly state: string }) {
+  return <span className={`state-pill state-${state}`}><i />{label}</span>;
 }
 
 function captureBrand(capture: CaptureRecord): "claude-code" | "codex" | undefined {

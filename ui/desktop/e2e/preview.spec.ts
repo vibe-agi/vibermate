@@ -149,6 +149,9 @@ test("connects a managed account without ever rendering the credential", async (
 test("opens a request through its frozen Environment to the exact attempt", async ({ page }) => {
   const errors = collectBrowserErrors(page);
   await openPreview(page, "captures/requests");
+  await expect(page.getByText("Succeeded", { exact: true })).toBeVisible();
+  await expect(page.locator(".request-link small").first()).toHaveCSS("display", "block");
+  await expect(page.locator(".request-table")).not.toContainText("captures.state.succeeded");
   await page.getByRole("link", { name: /Claude request/u }).click();
 
   await expect(page.getByRole("heading", { name: "Request trace" })).toBeVisible();

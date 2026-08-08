@@ -149,11 +149,13 @@ button.danger-text { border-color: transparent; color: var(--deny); background: 
 .data-table tbody tr:hover { background: var(--hover); }
 .align-right { text-align: right !important; }
 .row-link { display: block; margin: -6px -10px; padding: 6px 10px; font-weight: 600; }
+.request-link strong, .request-link small { display: block; overflow: hidden; text-overflow: ellipsis; }
+.request-link small { color: var(--muted); font-family: var(--mono); font-size: 10px; font-weight: 400; }
 .muted-copy, .agent-cell small, .approval-row small, .route-stack small, .protocol-row small { display: block; color: var(--muted); }
 .brand-icon { width: 22px; height: 22px; object-fit: contain; }
 .agent-cell { display: flex; align-items: center; gap: 9px; }
 .state-pill, .state-badge, .decision, .compatibility-badge { display: inline-flex; width: fit-content; align-items: center; border: 1px solid var(--border-strong); border-radius: 999px; padding: 2px 7px; font-size: 11px; white-space: nowrap; }
-.state-active, .state-running, .decision-allow, .terminal-current { border-color: var(--allow); color: var(--allow); background: var(--allow-soft); }
+.state-active, .state-running, .state-succeeded, .decision-allow, .terminal-current { border-color: var(--allow); color: var(--allow); background: var(--allow-soft); }
 .state-disabled, .decision-deny, .terminal-conflict, .terminal-unowned_target { border-color: var(--deny); color: var(--deny); background: var(--deny-soft); }
 .decision-ask, .compatibility-reconnect_required, .compatibility-restart_required { border-color: var(--ask); color: var(--ask); background: var(--ask-soft); }
 
