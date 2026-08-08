@@ -234,6 +234,31 @@ describe("Environment-first desktop control client", () => {
     expect(calls[1]?.init.body).toBe(JSON.stringify({ environmentId: "personal" }));
   });
 
+  it("accepts base64url Capture IDs that begin with an underscore", async () => {
+    const runId = "_qrF8c7WA75MqClA2xoiPqyS8eg";
+    const capture = {
+      key: `managed_run:${runId}`,
+      id: runId,
+      kind: "managed_run",
+      displayName: "claude",
+      state: "finished",
+      observation: "waiting_for_traffic",
+      createdAt: "2026-08-08T08:00:00Z",
+      updatedAt: "2026-08-08T08:00:01Z",
+      managedRun: {
+        executableLabel: "claude",
+        cwd: "/Users/example/project",
+        canonicalExecutablePath: "/Users/example/.local/bin/claude",
+        recognition: "recognized",
+        expiresAt: "2026-08-08T08:02:00Z",
+      },
+    } as const;
+    const fetch = sessionAwareFetch(() => jsonResponse({ items: [capture] }));
+    const client = await createControlClient(session(), fetch);
+
+    await expect(client.captures()).resolves.toEqual({ items: [capture] });
+  });
+
   it("requests ManualCapture authority in one explicit Environment", async () => {
     const fetch = sessionAwareFetch((url) => {
       expect(url.pathname).toBe("/api/v1/manual-captures/context");

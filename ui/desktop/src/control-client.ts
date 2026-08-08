@@ -2344,7 +2344,7 @@ function validCaptureRecord(
     !isRecord(value) ||
     !hasClosedFields(value, ["key", "id", "kind", "displayName", "state", "observation", "createdAt", "updatedAt"], ["managedRun", "manualCapture"]) ||
     typeof value.key !== "string" ||
-    !validResourceId(value.id) ||
+    !validCaptureId(value.id) ||
     !validCaptureKind(value.kind) ||
     value.key !== `${value.kind}:${value.id}` ||
     !validDisplayLabel(value.displayName, 256, false) ||
@@ -2407,7 +2407,7 @@ function validCaptureAssignment(
     !isRecord(value) ||
     !hasClosedFields(value, ["captureKey", "captureId", "captureKind", "environmentId", "revision", "source", "updatedAt"]) ||
     typeof value.captureKey !== "string" ||
-    !validResourceId(value.captureId) ||
+    !validCaptureId(value.captureId) ||
     !validCaptureKind(value.captureKind) ||
     value.captureKey !== `${value.captureKind}:${value.captureId}` ||
     !validResourceId(value.environmentId) ||
@@ -2925,6 +2925,10 @@ function requireResourceId(value: unknown): asserts value is string {
 
 function validResourceId(value: unknown): value is string {
   return typeof value === "string" && /^[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}$/.test(value);
+}
+
+function validCaptureId(value: unknown): value is string {
+  return typeof value === "string" && /^[A-Za-z0-9_.:-]{1,128}$/.test(value);
 }
 
 function validDigest(value: unknown): value is string {
