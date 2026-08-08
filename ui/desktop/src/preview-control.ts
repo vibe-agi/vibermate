@@ -69,6 +69,7 @@ const transparentEnvironment: EnvironmentRecord = {
   pluginBindings: [],
   budgetPolicy: { id: "", revision: 0 },
   egressPolicy: { id: "", revision: 0, mode: "" },
+  contentRecording: { mode: "off", retentionDays: 0 },
 };
 
 const workEnvironment: EnvironmentRecord = {
@@ -132,6 +133,7 @@ const workEnvironment: EnvironmentRecord = {
   pluginBindings: [],
   budgetPolicy: { id: "work-budget", revision: 1 },
   egressPolicy: { id: "work-egress", revision: 1, mode: "direct" },
+  contentRecording: { mode: "full", retentionDays: 30 },
 };
 
 const managedCapture: CaptureRecord = {
@@ -219,6 +221,50 @@ const previewExchange: ExchangeDetail = {
     pluginRunIds: [],
     attemptIds: ["attempt-preview"],
     result: "completed",
+  },
+  content: {
+    state: "recorded",
+    mode: "full",
+    recordedAt: "2026-08-08T02:00:00Z",
+    expiresAt: "2026-09-07T02:00:00Z",
+    request: {
+      requestedModel: "claude-sonnet",
+      effectiveModel: "claude-sonnet",
+      maxOutputTokens: 4096,
+      stream: true,
+      messages: [{
+        role: "user",
+        blocks: [{
+          kind: "text",
+          availability: "recorded",
+          text: "Inspect the current package and summarize the failing test.",
+          originalSize: 59,
+        }],
+      }],
+      tools: [{ name: "read_file" }],
+    },
+    response: {
+      id: "response-preview",
+      requestedModel: "claude-sonnet",
+      effectiveModel: "claude-sonnet",
+      reportedModel: "claude-sonnet",
+      stopReason: "tool_use",
+      blocks: [{
+        kind: "tool_call",
+        availability: "recorded",
+        originalSize: 32,
+        callId: "tool-preview",
+        toolName: "read_file",
+        arguments: { path: "~/Code/project/package.json" },
+      }],
+      usage: {
+        inputUncached: { known: true, tokens: 120, source: "provider" },
+        cacheWrite: { known: false },
+        cacheRead: { known: true, tokens: 48, source: "provider" },
+        output: { known: true, tokens: 16, source: "provider" },
+        reasoning: { known: false },
+      },
+    },
   },
 };
 
@@ -491,6 +537,7 @@ class PreviewControlClient implements ControlClient {
         pluginBindings: clone(input.pluginBindings),
         budgetPolicy: clone(input.budgetPolicy),
         egressPolicy: clone(input.egressPolicy),
+        contentRecording: clone(input.contentRecording),
       },
     };
     this.drafts.set(environmentId, draft);

@@ -145,6 +145,58 @@ const (
 	FailoverAccountScopedSafe FailoverPolicy = "account_scoped_safe"
 )
 
+// ContentRecordingMode controls the separate conversation-evidence plane.
+// Activity, ConnectionEvent, and EgressAttempt remain body-free in every
+// mode; this policy never weakens their redaction contract.
+type ContentRecordingMode string
+
+const (
+	ContentRecordingFull         ContentRecordingMode = "full"
+	ContentRecordingMetadataOnly ContentRecordingMode = "metadata_only"
+	ContentRecordingOff          ContentRecordingMode = "off"
+
+	DefaultContentRetentionDays uint16 = 30
+	MaxContentRetentionDays     uint16 = 3650
+)
+
+type ContentRecordingPolicy struct {
+	Mode          ContentRecordingMode `json:"mode"`
+	RetentionDays uint16               `json:"retentionDays"`
+}
+
+func DefaultContentRecordingPolicy() ContentRecordingPolicy {
+	return ContentRecordingPolicy{
+		Mode:          ContentRecordingFull,
+		RetentionDays: DefaultContentRetentionDays,
+	}
+}
+
+func (policy ContentRecordingPolicy) Validate() error {
+	switch policy.Mode {
+	case ContentRecordingFull, ContentRecordingMetadataOnly:
+		if policy.RetentionDays == 0 ||
+			policy.RetentionDays > MaxContentRetentionDays {
+			return fmt.Errorf(
+				"%w: content retention is outside the supported range",
+				ErrInvalidEnvironment,
+			)
+		}
+	case ContentRecordingOff:
+		if policy.RetentionDays != 0 {
+			return fmt.Errorf(
+				"%w: disabled content recording retains content",
+				ErrInvalidEnvironment,
+			)
+		}
+	default:
+		return fmt.Errorf(
+			"%w: content recording mode is unsupported",
+			ErrInvalidEnvironment,
+		)
+	}
+	return nil
+}
+
 // Environment is the complete user-editable aggregate. Draft is lifecycle
 // metadata and is deliberately not a State value.
 type Environment struct {
@@ -156,6 +208,7 @@ type Environment struct {
 	PluginBindings         []PluginBinding         `json:"pluginBindings"`
 	BudgetPolicy           BudgetPolicy            `json:"budgetPolicy"`
 	EgressPolicy           EnvironmentEgressPolicy `json:"egressPolicy"`
+	ContentRecording       ContentRecordingPolicy  `json:"contentRecording"`
 	RetiredChildIdentities []RetiredChildIdentity  `json:"retiredChildIdentities,omitempty"`
 }
 

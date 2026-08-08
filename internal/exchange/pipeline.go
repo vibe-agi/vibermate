@@ -15,6 +15,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/vibe-agi/vibermate/internal/environment"
 	"github.com/vibe-agi/vibermate/internal/offlinehold"
 	"github.com/vibe-agi/vibermate/internal/protocolcore"
 	"github.com/vibe-agi/vibermate/internal/protocolpath"
@@ -34,6 +35,11 @@ type operation struct {
 	stopClient func() bool
 }
 
+type contentCapture struct {
+	request  *protocolcore.Request
+	response *protocolcore.Response
+}
+
 var errOfflineHoldAdmission = errors.New(
 	"offline-hold Exchange admission failed",
 )
@@ -48,6 +54,7 @@ type Pipeline struct {
 	toolDecisions ToolDecisionGate
 	retryWaiter   RetryWaiter
 	observer      AttemptObserver
+	content       ContentObserver
 	observeLimit  time.Duration
 	hold          HoldPolicy
 	streamBudgets StreamBudgets
@@ -76,6 +83,7 @@ func New(options Options) (*Pipeline, error) {
 		options.ToolDecisions == nil ||
 		options.RetryWaiter == nil ||
 		options.Observer == nil ||
+		options.ContentObserver == nil ||
 		options.ObservationTimeout <= 0 {
 		return nil, errors.New("Exchange pipeline dependencies are incomplete")
 	}
@@ -98,6 +106,7 @@ func New(options Options) (*Pipeline, error) {
 		toolDecisions: options.ToolDecisions,
 		retryWaiter:   options.RetryWaiter,
 		observer:      options.Observer,
+		content:       options.ContentObserver,
 		observeLimit:  options.ObservationTimeout,
 		hold:          options.Hold,
 		streamBudgets: options.Stream,
@@ -114,12 +123,16 @@ func (pipeline *Pipeline) Execute(
 	request ClientRequest,
 	downstream Downstream,
 ) (result Result, resultErr error) {
+	captured := &contentCapture{}
 	result = Result{
 		ExchangeID: request.exchangeID,
 		Outcome:    AttemptFailed,
 	}
 	defer func() {
 		pipeline.observeAttempt(request, result, resultErr)
+	}()
+	defer func() {
+		pipeline.observeContent(request, captured)
 	}()
 	if ctx == nil {
 		return result, newFailure(
@@ -247,6 +260,7 @@ func (pipeline *Pipeline) Execute(
 				downstream,
 				ledger,
 				&result,
+				captured,
 			)
 			material.Release()
 		}
@@ -292,6 +306,7 @@ func (pipeline *Pipeline) executeCandidate(
 	downstream Downstream,
 	ledger *CommitLedger,
 	result *Result,
+	captured *contentCapture,
 ) error {
 	if selection.original {
 		if credential.mode != providerauth.CredentialClientPassthrough {
@@ -325,6 +340,20 @@ func (pipeline *Pipeline) executeCandidate(
 		if err != nil {
 			return newFailure(ReasonProviderRequestInvalid, request.exchangeID, 0, err)
 		}
+		var contentPath *protocolpath.Path
+		var decodedContent *protocolcore.Request
+		if request.plan.ContentRecording().Mode != environment.ContentRecordingOff {
+			if candidatePath, selectErr := pipeline.protocolPaths.Select(
+				selection.codecPlan,
+				request.operation.id,
+			); selectErr == nil {
+				if decoded, _, decodeErr := candidatePath.Client().DecodeRequest(request.body); decodeErr == nil {
+					contentPath = candidatePath
+					decodedContent = &decoded
+					captured.request = &decoded
+				}
+			}
+		}
 		return pipeline.executeOriginal(
 			ctx,
 			request,
@@ -332,6 +361,9 @@ func (pipeline *Pipeline) executeCandidate(
 			downstream,
 			ledger,
 			result,
+			contentPath,
+			decodedContent,
+			captured,
 		)
 	}
 
@@ -359,6 +391,8 @@ func (pipeline *Pipeline) executeCandidate(
 			return newFailure(ReasonEnvironmentPlanInvalid, request.exchangeID, 0, err)
 		}
 	}
+	decodedForEvidence := decoded.Clone()
+	captured.request = &decodedForEvidence
 	encodedProvider, backendRequestReport, err := protocolPath.EncodeProviderRequest(
 		decoded,
 		request.body,
@@ -409,6 +443,7 @@ func (pipeline *Pipeline) executeCandidate(
 			downstream,
 			ledger,
 			result,
+			captured,
 		)
 	}
 	return pipeline.executeComplete(
@@ -421,6 +456,7 @@ func (pipeline *Pipeline) executeCandidate(
 		downstream,
 		ledger,
 		result,
+		captured,
 	)
 }
 
@@ -552,6 +588,40 @@ func (pipeline *Pipeline) observeAttempt(
 	)
 	defer cancel()
 	_ = pipeline.observer.Observe(ctx, observation)
+}
+
+func (pipeline *Pipeline) observeContent(
+	request ClientRequest,
+	captured *contentCapture,
+) {
+	if pipeline == nil || pipeline.content == nil || captured == nil ||
+		captured.request == nil ||
+		request.plan.ContentRecording().Mode == environment.ContentRecordingOff {
+		return
+	}
+	plan := request.plan
+	endpoint := plan.Endpoint()
+	protocolPlan := plan.ProtocolPlan()
+	route := plan.Route()
+	observation := ContentObservation{
+		ExchangeID:    request.exchangeID,
+		EnvironmentID: plan.EnvironmentID(), EnvironmentRevision: plan.EnvironmentRevision(),
+		EnvironmentDigest: plan.EnvironmentDigest().String(),
+		EndpointID:        endpoint.ID(), EndpointRevision: endpoint.Revision(),
+		ProtocolPlanID: protocolPlan.ID(), ProtocolPlanRevision: protocolPlan.Revision(),
+		RouteID: route.ID(), RouteRevision: route.Revision(),
+		Recording: plan.ContentRecording(), Request: captured.request.Clone(),
+	}
+	if captured.response != nil {
+		response := captured.response.Clone()
+		observation.Response = &response
+	}
+	ctx, cancel := context.WithTimeout(
+		context.WithoutCancel(pipeline.ownerContext),
+		pipeline.observeLimit,
+	)
+	defer cancel()
+	_ = pipeline.content.ObserveContent(ctx, observation)
 }
 
 func classifyClientRequestField(body []byte, failure error) ClientField {
@@ -734,6 +804,7 @@ func (pipeline *Pipeline) executeComplete(
 	downstream Downstream,
 	ledger *CommitLedger,
 	result *Result,
+	captured *contentCapture,
 ) error {
 	result.Presentation = frozenRequest.WirePresentationEvidence()
 	if err := ledger.RecordUpstreamSend(int64(len(frozenRequest.Body()))); err != nil {
@@ -874,6 +945,8 @@ func (pipeline *Pipeline) executeComplete(
 			err,
 		)
 	}
+	responseForEvidence := providerResponse.Clone()
+	captured.response = &responseForEvidence
 	return nil
 }
 
@@ -890,6 +963,9 @@ func (pipeline *Pipeline) executeOriginal(
 	downstream Downstream,
 	ledger *CommitLedger,
 	result *Result,
+	contentPath *protocolpath.Path,
+	decodedContent *protocolcore.Request,
+	captured *contentCapture,
 ) error {
 	result.Presentation = frozenRequest.WirePresentationEvidence()
 	if err := ledger.RecordUpstreamSend(int64(len(frozenRequest.Body()))); err != nil {
@@ -955,6 +1031,11 @@ func (pipeline *Pipeline) executeOriginal(
 			err,
 		)
 	}
+	contentDecoder := newOriginalContentDecoder(
+		contentPath,
+		decodedContent,
+		mode,
+	)
 	buffer := make([]byte, streamReadBufferBytes)
 	for {
 		count, readErr := response.Body.Read(buffer)
@@ -965,6 +1046,7 @@ func (pipeline *Pipeline) executeOriginal(
 				buffer[:count],
 			)
 			if committed > 0 {
+				contentDecoder.Feed(ctx, buffer[:committed])
 				if err := ledger.RecordSemanticWrite(committed); err != nil {
 					return newFailure(
 						ReasonDownstreamCommitFailed,
@@ -1010,7 +1092,82 @@ func (pipeline *Pipeline) executeOriginal(
 			ProviderFieldUnknown,
 		)
 	}
+	if decodedResponse := contentDecoder.Finish(ctx); decodedResponse != nil {
+		captured.response = decodedResponse
+	}
 	return nil
+}
+
+type originalContentDecoder struct {
+	path    *protocolpath.Path
+	request *protocolcore.Request
+	mode    ResponseMode
+	stream  protocolpath.Stream
+	body    bytes.Buffer
+	failed  bool
+}
+
+func newOriginalContentDecoder(
+	path *protocolpath.Path,
+	request *protocolcore.Request,
+	mode ResponseMode,
+) *originalContentDecoder {
+	decoder := &originalContentDecoder{path: path, request: request, mode: mode}
+	if path == nil || request == nil {
+		decoder.failed = true
+		return decoder
+	}
+	if mode == ResponseModeEventStream {
+		stream, err := path.Streaming().NewStream(request.Clone())
+		if err != nil {
+			decoder.failed = true
+			return decoder
+		}
+		decoder.stream = stream
+	}
+	return decoder
+}
+
+func (decoder *originalContentDecoder) Feed(ctx context.Context, fragment []byte) {
+	if decoder == nil || decoder.failed || len(fragment) == 0 {
+		return
+	}
+	if decoder.mode == ResponseModeEventStream {
+		if _, err := decoder.stream.Feed(ctx, fragment); err != nil {
+			decoder.failed = true
+		}
+		return
+	}
+	if decoder.body.Len()+len(fragment) > maxCompleteResponseBytes {
+		decoder.failed = true
+		decoder.body.Reset()
+		return
+	}
+	_, _ = decoder.body.Write(fragment)
+}
+
+func (decoder *originalContentDecoder) Finish(ctx context.Context) *protocolcore.Response {
+	if decoder == nil || decoder.failed || decoder.path == nil || decoder.request == nil {
+		return nil
+	}
+	if decoder.mode == ResponseModeEventStream {
+		terminal, err := decoder.stream.FinishDecoded(ctx)
+		if err != nil {
+			return nil
+		}
+		response := terminal.DecodedResponse().Clone()
+		_, _ = terminal.Approve()
+		return &response
+	}
+	response, _, err := decoder.path.Backend().DecodeResponse(
+		decoder.request.Clone(),
+		decoder.body.Bytes(),
+	)
+	if err != nil {
+		return nil
+	}
+	cloned := response.Clone()
+	return &cloned
 }
 
 func (pipeline *Pipeline) executeStream(
@@ -1023,6 +1180,7 @@ func (pipeline *Pipeline) executeStream(
 	downstream Downstream,
 	ledger *CommitLedger,
 	result *Result,
+	captured *contentCapture,
 ) error {
 	if err := downstream.Begin(
 		ctx,
@@ -1239,6 +1397,7 @@ func (pipeline *Pipeline) executeStream(
 			downstream,
 			ledger,
 			result,
+			captured,
 		)
 		if streamErr == nil {
 			return nil
@@ -1309,6 +1468,7 @@ func (pipeline *Pipeline) consumeProviderStream(
 	downstream Downstream,
 	ledger *CommitLedger,
 	result *Result,
+	captured *contentCapture,
 ) error {
 	readContext, cancelRead := context.WithCancelCause(ctx)
 	readResults := make(chan providerReadResult)
@@ -1430,7 +1590,12 @@ func (pipeline *Pipeline) consumeProviderStream(
 			writeErr,
 		)
 	}
-	return ledger.RecordTerminal()
+	if err := ledger.RecordTerminal(); err != nil {
+		return err
+	}
+	responseForEvidence := terminal.DecodedResponse().Clone()
+	captured.response = &responseForEvidence
+	return nil
 }
 
 type providerReadResult struct {

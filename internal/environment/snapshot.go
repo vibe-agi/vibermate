@@ -87,10 +87,11 @@ func SystemTransparentSnapshot() EnvironmentSnapshot {
 	digest := sha256.Sum256([]byte("vibermate/environment/system_transparent/v1"))
 	return EnvironmentSnapshot{
 		aggregate: Environment{
-			ID:       SystemTransparentID,
-			Name:     "System Transparent",
-			State:    StateActive,
-			Revision: 1,
+			ID:               SystemTransparentID,
+			Name:             "System Transparent",
+			State:            StateActive,
+			Revision:         1,
+			ContentRecording: ContentRecordingPolicy{Mode: ContentRecordingOff},
 		},
 		digest:   CandidateDigest(digest),
 		byOrigin: make(map[string]int), compiledOrigins: make(map[string]int),
@@ -220,8 +221,10 @@ func (snapshot EnvironmentSnapshot) ResolveRequest(
 	}
 	return RequestPlan{
 		environmentID: snapshot.ID(), environmentRevision: snapshot.Revision(),
-		environmentDigest: snapshot.Digest(), endpoint: endpoint,
-		protocol: cloneCompiledProtocol(matches[0].protocol), operation: matches[0].operation,
+		environmentDigest: snapshot.Digest(),
+		contentRecording:  snapshot.aggregate.ContentRecording,
+		endpoint:          endpoint,
+		protocol:          cloneCompiledProtocol(matches[0].protocol), operation: matches[0].operation,
 		route: route, wireVariant: variant,
 	}, nil
 }

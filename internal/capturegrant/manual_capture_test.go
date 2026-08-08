@@ -625,6 +625,7 @@ func semanticEnvironmentSnapshot(t *testing.T) environment.EnvironmentSnapshot {
 	}
 	returnValue, err := compiler.Compile(environment.Environment{
 		ID: "work", Name: "Work", State: environment.StateActive, Revision: 1,
+		ContentRecording: environment.DefaultContentRecordingPolicy(),
 		ClientEndpoints: []environment.ClientEndpoint{{
 			ID: "endpoint.api", Revision: 1, ClientOrigin: clientOrigin,
 			ProtocolPlans: []environment.ClientProtocolPlan{{

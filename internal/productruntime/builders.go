@@ -18,6 +18,7 @@ import (
 	"github.com/vibe-agi/vibermate/internal/egressaudit"
 	"github.com/vibe-agi/vibermate/internal/environment"
 	"github.com/vibe-agi/vibermate/internal/exchange"
+	"github.com/vibe-agi/vibermate/internal/exchangecontent"
 	"github.com/vibe-agi/vibermate/internal/localca"
 	"github.com/vibe-agi/vibermate/internal/loopbackproxy"
 	"github.com/vibe-agi/vibermate/internal/manualcapture"
@@ -264,6 +265,31 @@ func (productionActivityBuilder) Build(
 	})
 }
 
+type exchangeContentBuildRequest struct {
+	ctx        context.Context
+	repository exchangecontent.Repository
+	clock      exchangecontent.Clock
+}
+
+type exchangeContentRuntime interface {
+	exchangecontent.Runtime
+}
+
+type exchangeContentBuilder interface {
+	Build(exchangeContentBuildRequest) (exchangeContentRuntime, error)
+}
+
+type productionExchangeContentBuilder struct{}
+
+func (productionExchangeContentBuilder) Build(
+	request exchangeContentBuildRequest,
+) (exchangeContentRuntime, error) {
+	return exchangecontent.New(request.ctx, exchangecontent.Options{
+		Repository: request.repository,
+		Clock:      request.clock,
+	})
+}
+
 type connectionEventBuildRequest struct {
 	repository connectionevent.Repository
 	clock      connectionevent.Clock
@@ -401,6 +427,8 @@ type exchangeBuildRequest struct {
 	provider      exchange.Provider
 	toolDecisions exchange.ToolDecisionGate
 	activities    activity.Recorder
+	contents      exchangecontent.Recorder
+	clock         Clock
 	hold          exchange.HoldPolicy
 }
 
@@ -419,6 +447,42 @@ type productionExchangeBuilder struct{}
 
 type activityAttemptObserver struct {
 	recorder activity.Recorder
+}
+
+type exchangeContentObserver struct {
+	recorder exchangecontent.Recorder
+	clock    Clock
+}
+
+func (observer exchangeContentObserver) ObserveContent(
+	ctx context.Context,
+	observation exchange.ContentObservation,
+) error {
+	if observer.recorder == nil || observer.clock == nil {
+		return errors.New("Exchange content recorder is nil")
+	}
+	record, err := exchangecontent.NewRecord(
+		observation.ExchangeID,
+		exchangecontent.FrozenRef{
+			EnvironmentID:          observation.EnvironmentID.String(),
+			EnvironmentRevision:    uint64(observation.EnvironmentRevision),
+			EnvironmentDigest:      observation.EnvironmentDigest,
+			ClientEndpointID:       observation.EndpointID.String(),
+			ClientEndpointRevision: uint64(observation.EndpointRevision),
+			ProtocolPlanID:         observation.ProtocolPlanID.String(),
+			ProtocolPlanRevision:   uint64(observation.ProtocolPlanRevision),
+			RouteID:                observation.RouteID.String(),
+			RouteRevision:          uint64(observation.RouteRevision),
+		},
+		observation.Recording,
+		observer.clock.Now(),
+		observation.Request,
+		observation.Response,
+	)
+	if err != nil {
+		return err
+	}
+	return observer.recorder.Record(ctx, record)
 }
 
 func (observer activityAttemptObserver) Observe(
@@ -566,8 +630,8 @@ func activityTransportEvidence(
 func (productionExchangeBuilder) Build(
 	request exchangeBuildRequest,
 ) (exchangeRuntime, error) {
-	if request.activities == nil {
-		return nil, errors.New("Exchange Activity recorder is nil")
+	if request.activities == nil || request.contents == nil || request.clock == nil {
+		return nil, errors.New("Exchange evidence dependencies are incomplete")
 	}
 	anthropicPath, err := anthropicchat.NewProtocolPath(
 		anthropicchat.DefaultOptions(),
@@ -605,6 +669,10 @@ func (productionExchangeBuilder) Build(
 		RetryWaiter:   exchange.TimerRetryWaiter{},
 		Observer: activityAttemptObserver{
 			recorder: request.activities,
+		},
+		ContentObserver: exchangeContentObserver{
+			recorder: request.contents,
+			clock:    request.clock,
 		},
 		ObservationTimeout: 2 * time.Second,
 		Hold:               request.hold,
@@ -778,6 +846,7 @@ type runtimeBuilders struct {
 	storage       storageBuilder
 	environment   environmentBuilder
 	activity      activityBuilder
+	content       exchangeContentBuilder
 	connection    connectionEventBuilder
 	approval      approvalBuilder
 	monitor       monitorBuilder
@@ -795,6 +864,7 @@ func productionBuilders() runtimeBuilders {
 		storage:       productionStorageBuilder{},
 		environment:   productionEnvironmentBuilder{},
 		activity:      productionActivityBuilder{},
+		content:       productionExchangeContentBuilder{},
 		connection:    productionConnectionEventBuilder{},
 		approval:      productionApprovalBuilder{},
 		monitor:       productionMonitorBuilder{},

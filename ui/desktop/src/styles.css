@@ -221,6 +221,33 @@ input, select { width: 100%; min-height: 32px; border: 1px solid var(--border-st
 .trace-rail > div::before { position: absolute; left: -1px; top: 13px; width: 7px; height: 7px; border: 2px solid var(--panel); border-radius: 50%; background: var(--signal); content: ""; }
 .trace-rail span { display: block; color: var(--quiet); font-size: 10px; text-transform: uppercase; }
 .trace-rail strong { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.exchange-inspector-stack { min-width: 0; }
+.exchange-inspector-heading { display: flex; align-items: center; justify-content: space-between; border-bottom: 1px solid var(--border); }
+.exchange-inspector-heading .section-heading { flex: 1; border-bottom: 0; }
+.recording-state { margin-right: 12px; border: 1px solid var(--border); border-radius: 999px; padding: 2px 7px; color: var(--muted); font-size: 10px; }
+.conversation-evidence { display: grid; gap: 8px; padding: 10px; }
+.content-retention { display: flex; justify-content: flex-end; gap: 6px; color: var(--quiet); font-size: 10px; }
+.exchange-message { max-width: min(88%, 760px); border: 1px solid var(--border); border-radius: 7px; background: var(--raised); }
+.exchange-message-user { margin-left: auto; border-color: color-mix(in srgb, var(--signal) 38%, var(--border)); background: var(--signal-soft); }
+.exchange-message-assistant { margin-right: auto; }
+.exchange-message-system, .exchange-message-developer, .exchange-message-tool { max-width: 100%; border-style: dashed; }
+.exchange-message > header { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 6px 9px; border-bottom: 1px solid var(--border); color: var(--muted); font-size: 10px; font-weight: 700; text-transform: uppercase; }
+.exchange-message > header small { color: var(--quiet); font-weight: 500; text-transform: none; }
+.exchange-blocks { display: grid; gap: 7px; padding: 8px 9px; }
+.exchange-blocks > p { margin: 0; white-space: pre-wrap; overflow-wrap: anywhere; }
+.model-refusal { color: var(--deny); }
+.omitted-content { border-left: 2px solid var(--quiet); padding: 5px 7px; color: var(--muted); font-size: 11px; }
+.tool-evidence { overflow: hidden; border: 1px solid var(--border); border-radius: 5px; background: var(--panel); }
+.tool-evidence > div { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 6px 8px; }
+.tool-evidence span { color: var(--muted); font-size: 10px; }
+.tool-evidence pre { max-height: 260px; margin: 0; overflow: auto; border-top: 1px solid var(--border); padding: 8px; color: var(--text); background: var(--canvas); font: 11px/1.45 var(--mono); white-space: pre-wrap; overflow-wrap: anywhere; }
+.tool-evidence.failed { border-color: var(--deny); }
+.usage-strip { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); margin: 0; border-top: 1px solid var(--border); }
+.usage-strip > div { padding: 6px 8px; border-right: 1px solid var(--border); }
+.usage-strip > div:last-child { border-right: 0; }
+.usage-strip dt { color: var(--quiet); font-size: 9px; text-transform: uppercase; }
+.usage-strip dd { margin: 2px 0 0; font-family: var(--mono); }
+.exchange-facts .facts-list { border-bottom: 1px solid var(--border); }
 .attempt-list { margin: 0; padding: 0 12px 12px; list-style: none; }
 .attempt-list li { display: flex; gap: 8px; padding: 7px 0; border-top: 1px solid var(--border); }
 .attempt-list li span { color: var(--quiet); font-family: var(--mono); }
@@ -285,6 +312,9 @@ input, select { width: 100%; min-height: 32px; border: 1px solid var(--border-st
   .capture-summary-strip > div:nth-child(2) { border-right: 0; }
   .capture-summary-strip > div:nth-child(-n+2) { border-bottom: 1px solid var(--border); }
   .detail-grid, .trace-layout { grid-template-columns: 1fr; }
+  .exchange-message { max-width: 100%; }
+  .usage-strip { grid-template-columns: repeat(2, 1fr); }
+  .usage-strip > div { border-bottom: 1px solid var(--border); }
   .environment-grid { grid-template-columns: 1fr; }
   .policy-mode-panel { align-items: stretch; flex-direction: column; }
   .approval-row { grid-template-columns: 1fr; }

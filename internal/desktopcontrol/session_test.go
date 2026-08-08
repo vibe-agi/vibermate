@@ -352,6 +352,7 @@ func newSessionFixture(
 		Assignments:     runtime.CaptureAssignments(),
 		Clock:           desktopcontrol.SystemClock{},
 		Activities:      runtime.Activities(),
+		Contents:        runtime.ExchangeContents(),
 		Connections:     runtime.ConnectionEvents(),
 		Egress:          runtime.EgressAttempts(),
 		Approvals:       runtime.ToolApprovals(),

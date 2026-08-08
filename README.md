@@ -91,6 +91,15 @@ preserving the client envelope, upstream target, response shape, model choice,
 and ambient client credential. It is the lowest-friction inspection path;
 `system_transparent` remains the separate no-MITM connection-only path.
 
+Each user Environment explicitly chooses its Request evidence policy. New
+Environments default to redacted full-content evidence for 30 days; users may
+choose metadata-only evidence or disable content recording. Conversation and
+tool evidence is kept in a separate retention-bound SQLite surface. Activity,
+ConnectionEvent, and EgressAttempt remain body-free, and captured credential
+fields/authentication headers have no representation in the content record.
+Secrets typed into a message are content and may be retained. The transparent
+system Environment always keeps content recording off.
+
 ## Environment publication
 
 Environment configuration has one write path:
@@ -176,7 +185,8 @@ The preview implementation uses the same Environment/Capture DTOs as the real
 Control client. Playwright covers desktop and 390 px layouts, keyboard focus,
 both locales, Capture switching, transparent Manual Capture creation,
 Environment impact publication, frozen Request drill-down, policy decisions,
-managed-account connection/selection, and Offline Hold.
+managed-account connection/selection, conversation/tool/usage inspection, and
+Offline Hold.
 
 ## Validation
 

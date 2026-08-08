@@ -182,6 +182,20 @@ protocol_plan_revision > 0 AND route_id <> '' AND route_revision > 0)),
 ) STRICT;
 CREATE INDEX runtime_activities_latest
 ON runtime_activities(sequence DESC);
+CREATE TABLE runtime_exchange_contents(
+  exchange_id TEXT PRIMARY KEY NOT NULL
+  CHECK(length(CAST(exchange_id AS BLOB)) BETWEEN 1 AND 512),
+  mode TEXT NOT NULL
+  CHECK(mode IN('full', 'metadata_only')),
+  recorded_at_unix_ms INTEGER NOT NULL,
+  expires_at_unix_ms INTEGER NOT NULL
+  CHECK(expires_at_unix_ms > recorded_at_unix_ms),
+  evidence_json BLOB NOT NULL
+  CHECK(length(evidence_json) BETWEEN 2 AND 33554432 AND
+  json_valid(CAST(evidence_json AS TEXT)))
+) STRICT;
+CREATE INDEX runtime_exchange_contents_expiry
+ON runtime_exchange_contents(expires_at_unix_ms);
 CREATE TABLE capture_runs(
   run_id TEXT PRIMARY KEY NOT NULL
   CHECK(length(CAST(run_id AS BLOB)) BETWEEN 1 AND 128),

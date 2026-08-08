@@ -177,6 +177,7 @@ type RequestPlan struct {
 	environmentID       EnvironmentID
 	environmentRevision Revision
 	environmentDigest   CandidateDigest
+	contentRecording    ContentRecordingPolicy
 	endpoint            CompiledEndpointPlan
 	protocol            CompiledProtocolPlan
 	operation           protocolspec.ClientOperationPlan
@@ -187,7 +188,10 @@ type RequestPlan struct {
 func (plan RequestPlan) EnvironmentID() EnvironmentID       { return plan.environmentID }
 func (plan RequestPlan) EnvironmentRevision() Revision      { return plan.environmentRevision }
 func (plan RequestPlan) EnvironmentDigest() CandidateDigest { return plan.environmentDigest }
-func (plan RequestPlan) Endpoint() CompiledEndpointPlan     { return cloneCompiledEndpoint(plan.endpoint) }
+func (plan RequestPlan) ContentRecording() ContentRecordingPolicy {
+	return plan.contentRecording
+}
+func (plan RequestPlan) Endpoint() CompiledEndpointPlan { return cloneCompiledEndpoint(plan.endpoint) }
 func (plan RequestPlan) ProtocolPlan() CompiledProtocolPlan {
 	return cloneCompiledProtocol(plan.protocol)
 }

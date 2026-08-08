@@ -160,6 +160,14 @@ export interface EnvironmentRecord {
   readonly pluginBindings: readonly EnvironmentPluginBinding[];
   readonly budgetPolicy: EnvironmentBudgetPolicy;
   readonly egressPolicy: EnvironmentEgressPolicy;
+  readonly contentRecording: EnvironmentContentRecordingPolicy;
+}
+
+export type EnvironmentContentRecordingMode = "full" | "metadata_only" | "off";
+
+export interface EnvironmentContentRecordingPolicy {
+  readonly mode: EnvironmentContentRecordingMode;
+  readonly retentionDays: number;
 }
 
 export interface EnvironmentPage {
@@ -216,6 +224,7 @@ export interface EnvironmentDraftInput {
   readonly pluginBindings: readonly EnvironmentPluginBinding[];
   readonly budgetPolicy: EnvironmentBudgetPolicy;
   readonly egressPolicy: EnvironmentEgressPolicy;
+  readonly contentRecording: EnvironmentContentRecordingPolicy;
 }
 
 export type EnvironmentCompatibility =
@@ -389,6 +398,59 @@ export interface ExchangeDetail {
     readonly pluginRunIds: readonly string[];
     readonly attemptIds: readonly string[];
     readonly result: string;
+  };
+  readonly content: ExchangeContentDetail;
+}
+
+export interface ExchangeContentBlock {
+  readonly kind: "text" | "refusal" | "tool_call" | "tool_result";
+  readonly availability: "recorded" | "omitted";
+  readonly text?: string;
+  readonly originalSize: number;
+  readonly callId?: string;
+  readonly toolName?: string;
+  readonly arguments?: Readonly<Record<string, unknown>>;
+  readonly toolError?: boolean;
+}
+
+export interface ExchangeContentMessage {
+  readonly role: "system" | "developer" | "user" | "assistant" | "tool";
+  readonly blocks: readonly ExchangeContentBlock[];
+}
+
+export interface ExchangeUsageValue {
+  readonly known: boolean;
+  readonly tokens?: number;
+  readonly source?: string;
+}
+
+export interface ExchangeContentDetail {
+  readonly state: "recorded" | "not_recorded";
+  readonly mode?: "full" | "metadata_only";
+  readonly recordedAt?: string;
+  readonly expiresAt?: string;
+  readonly request?: {
+    readonly requestedModel: string;
+    readonly effectiveModel: string;
+    readonly maxOutputTokens: number;
+    readonly stream: boolean;
+    readonly messages: readonly ExchangeContentMessage[];
+    readonly tools: readonly { readonly name: string; readonly namespace?: string }[];
+  };
+  readonly response?: {
+    readonly id: string;
+    readonly requestedModel: string;
+    readonly effectiveModel: string;
+    readonly reportedModel: string;
+    readonly stopReason: "end_turn" | "max_tokens" | "tool_use" | "stop_sequence";
+    readonly blocks: readonly ExchangeContentBlock[];
+    readonly usage: {
+      readonly inputUncached: ExchangeUsageValue;
+      readonly cacheWrite: ExchangeUsageValue;
+      readonly cacheRead: ExchangeUsageValue;
+      readonly output: ExchangeUsageValue;
+      readonly reasoning: ExchangeUsageValue;
+    };
   };
 }
 

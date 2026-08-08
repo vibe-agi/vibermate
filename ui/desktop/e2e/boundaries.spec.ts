@@ -65,6 +65,20 @@ test("presents high-cardinality Capture and Request data without a desktop-width
   expect(errors).toEqual([]);
 });
 
+test("keeps the Request inspector readable on a narrow screen", async ({ page }) => {
+  const errors = collectBrowserErrors(page);
+  await page.setViewportSize(mobile);
+  await page.goto("/?preview=1#captures/requests");
+  await page.getByRole("link", { name: /Claude request/u }).click();
+
+  await expect(page.getByRole("heading", { name: "Request trace" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Request snapshot" })).toBeVisible();
+  await expect(page.getByText("Inspect the current package and summarize the failing test.")).toBeVisible();
+  await expect(page.getByText("Proposed by the model", { exact: true })).toBeVisible();
+  await expectNoHorizontalOverflow(page);
+  expect(errors).toEqual([]);
+});
+
 test("moves keyboard focus to the destination heading after navigation", async ({ page }) => {
   const errors = collectBrowserErrors(page);
   await page.goto("/?preview=1#captures");

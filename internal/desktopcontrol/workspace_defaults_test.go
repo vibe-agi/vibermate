@@ -22,7 +22,8 @@ func TestWorkspaceEnvironmentDefaultHTTPContract(t *testing.T) {
   "clientEndpoints": [],
   "pluginBindings": [],
   "budgetPolicy": {"id":"","revision":0},
-  "egressPolicy": {"id":"","revision":0,"mode":""}
+  "egressPolicy": {"id":"","revision":0,"mode":""},
+  "contentRecording": {"mode":"full","retentionDays":30}
 }`)
 	for _, action := range []struct {
 		method, path, key string
@@ -70,7 +71,7 @@ func newWorkspaceDefaultApplication(t *testing.T, runtime *productruntime.Runtim
 	t.Helper()
 	application, err := desktopcontrol.New(desktopcontrol.Options{
 		Readiness: readyState(true), Status: runtime, Environments: runtime.Environments(),
-		Assignments: runtime.CaptureAssignments(), Activities: runtime.Activities(),
+		Assignments: runtime.CaptureAssignments(), Activities: runtime.Activities(), Contents: runtime.ExchangeContents(),
 		Connections: runtime.ConnectionEvents(), Egress: runtime.EgressAttempts(),
 		Approvals: runtime.ToolApprovals(), Accounts: runtime.ProviderAccounts(),
 		Offline: runtime, ManualCaptures: runtime.ManualCaptures(),

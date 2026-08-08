@@ -874,6 +874,7 @@ func fixture(t *testing.T, id string, origin originidentity.ClientOrigin) Enviro
 		}
 	}
 	return Environment{ID: EnvironmentID(id), Name: "Work", State: StateActive, Revision: 1,
+		ContentRecording: DefaultContentRecordingPolicy(),
 		ClientEndpoints: []ClientEndpoint{{ID: "endpoint.shared", Revision: 1, ClientOrigin: origin,
 			ProtocolPlans: []ClientProtocolPlan{plan("plan.anthropic", ClientProtocolAnthropicMessages, "route.anthropic", "realm.anthropic"), plan("plan.responses", ClientProtocolOpenAIResponses, "route.responses", "realm.openai")}}}}
 }

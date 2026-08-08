@@ -20,7 +20,7 @@ func TestEnvironmentDraftPreviewPublishAndHistoricalRevisionRoutes(t *testing.T)
 	defer shutdownRuntime(t, runtime)
 	application, err := desktopcontrol.New(desktopcontrol.Options{
 		Readiness: readyState(true), Status: runtime, Environments: runtime.Environments(),
-		Assignments: runtime.CaptureAssignments(), Activities: runtime.Activities(),
+		Assignments: runtime.CaptureAssignments(), Activities: runtime.Activities(), Contents: runtime.ExchangeContents(),
 		Connections: runtime.ConnectionEvents(), Egress: runtime.EgressAttempts(),
 		Approvals: runtime.ToolApprovals(), Accounts: runtime.ProviderAccounts(),
 		Offline: runtime, Clock: desktopcontrol.SystemClock{},
@@ -42,7 +42,8 @@ func TestEnvironmentDraftPreviewPublishAndHistoricalRevisionRoutes(t *testing.T)
   "clientEndpoints": [],
   "pluginBindings": [],
   "budgetPolicy": {"id":"","revision":0},
-  "egressPolicy": {"id":"","revision":0,"mode":""}
+  "egressPolicy": {"id":"","revision":0,"mode":""},
+  "contentRecording": {"mode":"full","retentionDays":30}
 }`)
 	draft := environmentRequest(t, application, http.MethodPut, "/api/v1/environments/work/draft", 0, "environment-draft-0001", draftBody)
 	if draft.Code != http.StatusOK {
@@ -83,7 +84,7 @@ func TestEnvironmentDraftAcceptsCanonicalOriginalCredentialRoute(t *testing.T) {
 	defer shutdownRuntime(t, runtime)
 	application, err := desktopcontrol.New(desktopcontrol.Options{
 		Readiness: readyState(true), Status: runtime, Environments: runtime.Environments(),
-		Assignments: runtime.CaptureAssignments(), Activities: runtime.Activities(),
+		Assignments: runtime.CaptureAssignments(), Activities: runtime.Activities(), Contents: runtime.ExchangeContents(),
 		Connections: runtime.ConnectionEvents(), Egress: runtime.EgressAttempts(),
 		Approvals: runtime.ToolApprovals(), Accounts: runtime.ProviderAccounts(),
 		Offline: runtime, Clock: desktopcontrol.SystemClock{},
@@ -140,7 +141,8 @@ func TestEnvironmentDraftAcceptsCanonicalOriginalCredentialRoute(t *testing.T) {
   }],
   "pluginBindings": [],
   "budgetPolicy": {"id":"","revision":0},
-  "egressPolicy": {"id":"","revision":0,"mode":""}
+  "egressPolicy": {"id":"","revision":0,"mode":""},
+  "contentRecording": {"mode":"full","retentionDays":30}
 }`)
 	draft := environmentRequest(
 		t,
@@ -207,7 +209,7 @@ func TestActivityRouteFiltersAndReturnsFrozenEnvironmentReferences(t *testing.T)
 	}
 	application, err := desktopcontrol.New(desktopcontrol.Options{
 		Readiness: readyState(true), Status: runtime, Environments: runtime.Environments(),
-		Assignments: runtime.CaptureAssignments(), Activities: runtime.Activities(),
+		Assignments: runtime.CaptureAssignments(), Activities: runtime.Activities(), Contents: runtime.ExchangeContents(),
 		Connections: runtime.ConnectionEvents(), Egress: runtime.EgressAttempts(),
 		Approvals: runtime.ToolApprovals(), Accounts: runtime.ProviderAccounts(),
 		Offline: runtime, Clock: desktopcontrol.SystemClock{},

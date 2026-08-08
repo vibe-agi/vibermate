@@ -2,11 +2,15 @@ package desktopcontrol
 
 import (
 	"encoding/base64"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/vibe-agi/vibermate/internal/activity"
 	"github.com/vibe-agi/vibermate/internal/egressaudit"
+	"github.com/vibe-agi/vibermate/internal/environment"
+	"github.com/vibe-agi/vibermate/internal/exchangecontent"
+	"github.com/vibe-agi/vibermate/internal/protocolcore"
 )
 
 func TestExchangeDetailProjectsOrderedRedactedEvidence(t *testing.T) {
@@ -68,7 +72,7 @@ func TestExchangeDetailProjectsOrderedRedactedEvidence(t *testing.T) {
 			{Sequence: 11, Attempt: newAttempt("egress-1", "attempt-1")},
 			{Sequence: 10, Attempt: newAttempt("egress-0", "attempt-1")},
 		},
-	})
+	}, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -87,9 +91,101 @@ func TestExchangeDetailProjectsOrderedRedactedEvidence(t *testing.T) {
 	}
 	if _, err := exchangeDetailOf(record, egressaudit.Page{
 		NextCursor: "more-evidence",
-	}); err == nil {
+	}, nil); err == nil {
 		t.Fatal("a truncated Exchange detail was accepted")
 	}
+}
+
+func TestExchangeDetailJoinsOnlyMatchingFrozenConversationEvidence(t *testing.T) {
+	t.Parallel()
+
+	record := activity.Record{
+		Sequence: 7, ID: "activity-content",
+		OccurredAt:    time.Date(2026, 8, 8, 2, 0, 0, 0, time.UTC),
+		Kind:          activity.KindExchangeCompleted,
+		EnvironmentID: "work", EnvironmentRevision: 4,
+		EnvironmentDigest: strings.Repeat("a", 64),
+		ClientEndpointID:  "endpoint.claude", ClientEndpointRevision: 2,
+		ProtocolPlanID: "plan.claude", ProtocolPlanRevision: 3,
+		RouteID: "route.claude", RouteRevision: 5,
+		SubjectID: "exchange-content", Status: activity.StatusSucceeded,
+		SourceKind: activity.SourceSystemProxy, SourceDisplayName: "system proxy",
+		SourceRecognition: activity.SourceRecognitionUnknown,
+	}
+	content := exchangeContentFixture(t, record)
+	detail, err := exchangeDetailOf(record, egressaudit.Page{}, &content)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if detail.Content.State != ExchangeContentRecorded ||
+		detail.Content.Mode != string(environment.ContentRecordingFull) ||
+		detail.Content.Request == nil ||
+		detail.Content.Request.Messages[0].Blocks[0].Text != "inspect this" ||
+		detail.Content.Response == nil ||
+		detail.Content.Response.Blocks[0].ToolName != "read_file" ||
+		detail.Content.Response.Usage.Output.Tokens != 3 {
+		t.Fatalf("Exchange content detail = %+v", detail.Content)
+	}
+
+	tampered := content.Clone()
+	tampered.Frozen.RouteRevision++
+	if _, err := exchangeDetailOf(record, egressaudit.Page{}, &tampered); err == nil {
+		t.Fatal("content from a different frozen Route revision was joined")
+	}
+}
+
+func exchangeContentFixture(t *testing.T, activityRecord activity.Record) exchangecontent.Record {
+	t.Helper()
+	user, err := protocolcore.NewTextBlock("inspect this")
+	if err != nil {
+		t.Fatal(err)
+	}
+	arguments, err := protocolcore.NewJSONObject([]byte(`{"path":"~/README.md"}`), protocolcore.MaxToolJSONBytes)
+	if err != nil {
+		t.Fatal(err)
+	}
+	key, err := protocolcore.NewCallKey("anthropic", "call-read")
+	if err != nil {
+		t.Fatal(err)
+	}
+	call, err := protocolcore.NewToolCallBlock(protocolcore.ToolCall{
+		Key: key, Name: "read_file", Arguments: arguments,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	request := protocolcore.Request{
+		RequestedModel: "claude", EffectiveModel: "claude", MaxOutputTokens: 128,
+		Messages: []protocolcore.Message{{
+			Role: protocolcore.RoleUser, Blocks: []protocolcore.ContentBlock{user},
+		}},
+	}
+	response := protocolcore.Response{
+		ID: "response-content", RequestedModel: "claude", EffectiveModel: "claude",
+		ReportedModel: "claude", Blocks: []protocolcore.ContentBlock{call},
+		StopReason: protocolcore.StopReasonToolUse,
+		Usage: protocolcore.Usage{
+			Output: protocolcore.UsageValue{Known: true, Tokens: 3, Source: "provider"},
+		},
+	}
+	content, err := exchangecontent.NewRecord(
+		activityRecord.SubjectID,
+		exchangecontent.FrozenRef{
+			EnvironmentID: activityRecord.EnvironmentID, EnvironmentRevision: activityRecord.EnvironmentRevision,
+			EnvironmentDigest: activityRecord.EnvironmentDigest,
+			ClientEndpointID:  activityRecord.ClientEndpointID, ClientEndpointRevision: activityRecord.ClientEndpointRevision,
+			ProtocolPlanID: activityRecord.ProtocolPlanID, ProtocolPlanRevision: activityRecord.ProtocolPlanRevision,
+			RouteID: activityRecord.RouteID, RouteRevision: activityRecord.RouteRevision,
+		},
+		environment.DefaultContentRecordingPolicy(),
+		activityRecord.OccurredAt,
+		request,
+		&response,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return content
 }
 
 func TestActivityCursorIsCanonicalAndCollectionScoped(t *testing.T) {

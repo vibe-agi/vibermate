@@ -19,6 +19,7 @@ import (
 	"github.com/vibe-agi/vibermate/internal/egressaudit"
 	"github.com/vibe-agi/vibermate/internal/environment"
 	"github.com/vibe-agi/vibermate/internal/exchange"
+	"github.com/vibe-agi/vibermate/internal/exchangecontent"
 	"github.com/vibe-agi/vibermate/internal/localca"
 	"github.com/vibe-agi/vibermate/internal/manualcapture"
 	"github.com/vibe-agi/vibermate/internal/offlinehold"
@@ -42,6 +43,7 @@ type Runtime struct {
 	workspaceIdentity *workspaceidentity.Manager
 	workspaceDefaults *workspacedefault.Manager
 	activities        activityRuntime
+	contents          exchangeContentRuntime
 	connections       connectionEventRuntime
 	egress            egressaudit.Reader
 	egressCompletion  *runtimeEgressRepository
@@ -89,6 +91,7 @@ func startWithBuilders(
 	if builders.storage == nil ||
 		builders.environment == nil ||
 		builders.activity == nil ||
+		builders.content == nil ||
 		builders.connection == nil ||
 		builders.approval == nil ||
 		builders.monitor == nil ||
@@ -294,6 +297,23 @@ func startWithBuilders(
 	}
 	cleanups.register("Activity component", activities.Shutdown)
 
+	contents, err := builders.content.Build(exchangeContentBuildRequest{
+		ctx:        ctx,
+		repository: storageResult.store.ExchangeContentRepository(),
+		clock:      options.Clock,
+	})
+	if err != nil || contents == nil {
+		buildErr := err
+		if buildErr == nil {
+			buildErr = fmt.Errorf(
+				"%w: Exchange content component is nil",
+				ErrInvalidBuildResult,
+			)
+		}
+		return fail("Exchange content recovery", buildErr)
+	}
+	cleanups.register("Exchange content component", contents.Shutdown)
+
 	connections, err := builders.connection.Build(ctx, connectionEventBuildRequest{
 		repository: storageResult.store.ConnectionEventRepository(),
 		clock:      options.Clock,
@@ -426,6 +446,8 @@ func startWithBuilders(
 		provider:      provider,
 		toolDecisions: approvals,
 		activities:    activities,
+		contents:      contents,
+		clock:         options.Clock,
 		hold:          options.ExchangeHold,
 	})
 	if err != nil || exchanges == nil {
@@ -568,6 +590,7 @@ func startWithBuilders(
 		workspaceIdentity: workspaceIdentity,
 		workspaceDefaults: workspaceDefaults,
 		activities:        activities,
+		contents:          contents,
 		connections:       connections,
 		egress:            runtimeEgress,
 		egressCompletion:  runtimeEgress,
@@ -644,6 +667,12 @@ func (r *Runtime) WorkspaceDefaults() workspacedefault.Controller {
 // Activities returns the runtime-owned durable redacted timeline.
 func (r *Runtime) Activities() activity.Runtime {
 	return r.activities
+}
+
+// ExchangeContents returns the separate, retention-bound semantic evidence
+// reader. Body-free Activity and egress journals never expose this content.
+func (r *Runtime) ExchangeContents() exchangecontent.Reader {
+	return r.contents
 }
 
 // ConnectionEvents returns the durable body-free connection audit boundary.

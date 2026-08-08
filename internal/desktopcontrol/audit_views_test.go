@@ -228,6 +228,7 @@ func newAuditFixture(
 		Assignments:  runtime.CaptureAssignments(),
 		Clock:        desktopcontrol.SystemClock{},
 		Activities:   runtime.Activities(),
+		Contents:     runtime.ExchangeContents(),
 		Connections: fixedConnectionReader{
 			page: connectionevent.Page{Items: []connectionevent.Record{
 				sampleConnection(),

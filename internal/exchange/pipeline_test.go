@@ -98,6 +98,144 @@ func TestManagedRequestUsesOnlyFrozenEnvironmentRouteAndAccount(t *testing.T) {
 	}
 }
 
+func TestManagedRequestPublishesFrozenConversationEvidence(t *testing.T) {
+	plan := mustEnvironmentRequestPlan(t, testPlanOptions{
+		mode:           environment.PlanModeManaged,
+		providerOrigin: "https://provider.example/v1",
+		backend:        protocolspec.DialectOpenAIChat,
+		modelMode:      modelModeFixed,
+		fixedModel:     "gpt-provider",
+		accounts:       []testAccount{{id: "account.primary", revision: 3, epoch: 7}},
+		preferred:      "account.primary",
+	})
+	content := &contentObserverDouble{}
+	pipeline := newTestPipelineWithContentObserver(
+		t,
+		newAccountAuthority(t, testAccount{id: "account.primary", revision: 3, epoch: 7}),
+		&providerDouble{results: []providerResult{{
+			response: jsonResponse(http.StatusOK, completeToolProviderResponse("gpt-provider")),
+		}}},
+		approvedDecisions(),
+		&attemptObserverDouble{},
+		content,
+	)
+	defer shutdownPipeline(t, pipeline)
+
+	result, err := pipeline.Execute(
+		context.Background(),
+		mustClientRequest(t, "exchange-content", plan, toolClientRequest()),
+		&downstreamRecorder{},
+	)
+	if err != nil || result.Outcome != AttemptSucceeded {
+		t.Fatalf("Execute() = %+v, %v", result, err)
+	}
+	observation, ok := content.latest()
+	if !ok || observation.ExchangeID != "exchange-content" ||
+		observation.EnvironmentID.String() != "environment.test" ||
+		observation.EnvironmentRevision != 9 ||
+		observation.EndpointID.String() != "endpoint.anthropic" ||
+		observation.EndpointRevision != 7 ||
+		observation.ProtocolPlanID.String() != "protocol.anthropic" ||
+		observation.ProtocolPlanRevision != 8 ||
+		observation.RouteID.String() != "route.primary" ||
+		observation.RouteRevision != 6 ||
+		observation.Recording.Mode != environment.ContentRecordingFull {
+		t.Fatalf("content observation = %+v", observation)
+	}
+	if len(observation.Request.Messages) != 1 ||
+		observation.Request.Messages[0].Role != "user" ||
+		observation.Request.Messages[0].Blocks[0].Text != "hello" ||
+		len(observation.Request.Tools) != 1 ||
+		observation.Request.Tools[0].Name != "shell" {
+		t.Fatalf("captured request = %+v", observation.Request)
+	}
+	if observation.Response == nil || len(observation.Response.Blocks) != 1 ||
+		observation.Response.Blocks[0].Kind != "tool_call" ||
+		observation.Response.Blocks[0].ToolCall.Name != "shell" ||
+		observation.Response.StopReason != "tool_use" ||
+		!observation.Response.Usage.Output.Known ||
+		observation.Response.Usage.Output.Tokens != 2 {
+		t.Fatalf("captured response = %+v", observation.Response)
+	}
+}
+
+func TestDisabledContentRecordingCreatesNoConversationEvidence(t *testing.T) {
+	plan := mustEnvironmentRequestPlan(t, testPlanOptions{
+		mode:           environment.PlanModeManaged,
+		providerOrigin: "https://provider.example/v1",
+		backend:        protocolspec.DialectOpenAIChat,
+		modelMode:      modelModeFixed,
+		fixedModel:     "gpt-provider",
+		accounts:       []testAccount{{id: "account.primary", revision: 3, epoch: 7}},
+		preferred:      "account.primary",
+		recording: environment.ContentRecordingPolicy{
+			Mode: environment.ContentRecordingOff,
+		},
+	})
+	content := &contentObserverDouble{}
+	pipeline := newTestPipelineWithContentObserver(
+		t,
+		newAccountAuthority(t, testAccount{id: "account.primary", revision: 3, epoch: 7}),
+		&providerDouble{results: []providerResult{{
+			response: jsonResponse(http.StatusOK, completeProviderResponse("gpt-provider")),
+		}}},
+		approvedDecisions(),
+		&attemptObserverDouble{},
+		content,
+	)
+	defer shutdownPipeline(t, pipeline)
+
+	result, err := pipeline.Execute(
+		context.Background(),
+		mustClientRequest(t, "exchange-no-content", plan, completeClientRequest()),
+		&downstreamRecorder{},
+	)
+	if err != nil || result.Outcome != AttemptSucceeded {
+		t.Fatalf("Execute() = %+v, %v", result, err)
+	}
+	if _, ok := content.latest(); ok {
+		t.Fatal("recording-off Environment emitted conversation evidence")
+	}
+}
+
+func TestContentObserverFailureDoesNotChangeCommittedExchange(t *testing.T) {
+	plan := mustEnvironmentRequestPlan(t, testPlanOptions{
+		mode:           environment.PlanModeManaged,
+		providerOrigin: "https://provider.example/v1",
+		backend:        protocolspec.DialectOpenAIChat,
+		modelMode:      modelModeFixed,
+		fixedModel:     "gpt-provider",
+		accounts:       []testAccount{{id: "account.primary", revision: 3, epoch: 7}},
+		preferred:      "account.primary",
+	})
+	content := &contentObserverDouble{err: errors.New("content store unavailable")}
+	pipeline := newTestPipelineWithContentObserver(
+		t,
+		newAccountAuthority(t, testAccount{id: "account.primary", revision: 3, epoch: 7}),
+		&providerDouble{results: []providerResult{{
+			response: jsonResponse(http.StatusOK, completeProviderResponse("gpt-provider")),
+		}}},
+		approvedDecisions(),
+		&attemptObserverDouble{},
+		content,
+	)
+	defer shutdownPipeline(t, pipeline)
+
+	downstream := &downstreamRecorder{}
+	result, err := pipeline.Execute(
+		context.Background(),
+		mustClientRequest(t, "exchange-observer-failure", plan, completeClientRequest()),
+		downstream,
+	)
+	if err != nil || result.Outcome != AttemptSucceeded ||
+		!bytes.Contains(downstream.bytesSnapshot(), []byte("Done.")) {
+		t.Fatalf("Execute() = %+v, %v; downstream=%q", result, err, downstream.bytesSnapshot())
+	}
+	if _, ok := content.latest(); !ok {
+		t.Fatal("failing observer was not called")
+	}
+}
+
 func TestOriginalPassthroughPreservesClientEnvelopeAndResponse(t *testing.T) {
 	plan := mustEnvironmentRequestPlan(t, testPlanOptions{
 		mode:           environment.PlanModeOriginalPassthrough,
@@ -105,7 +243,11 @@ func TestOriginalPassthroughPreservesClientEnvelopeAndResponse(t *testing.T) {
 		backend:        protocolspec.DialectAnthropicMessages,
 		modelMode:      modelModePreserve,
 	})
-	responseBody := []byte(`{"opaque":"provider-compatible"}`)
+	responseBody := []byte(`{
+		"id":"msg_original","type":"message","role":"assistant","model":"claude-client-alias",
+		"content":[{"type":"text","text":"provider-compatible"}],"stop_reason":"end_turn",
+		"stop_sequence":null,"usage":{"input_tokens":4,"output_tokens":2}
+	}`)
 	provider := &providerDouble{results: []providerResult{{response: &http.Response{
 		StatusCode: http.StatusCreated,
 		Header: http.Header{
@@ -116,7 +258,10 @@ func TestOriginalPassthroughPreservesClientEnvelopeAndResponse(t *testing.T) {
 		},
 		Body: io.NopCloser(bytes.NewReader(responseBody)),
 	}}}}
-	pipeline := newTestPipeline(t, nil, provider, approvedDecisions(), &attemptObserverDouble{})
+	content := &contentObserverDouble{}
+	pipeline := newTestPipelineWithContentObserver(
+		t, nil, provider, approvedDecisions(), &attemptObserverDouble{}, content,
+	)
 	defer shutdownPipeline(t, pipeline)
 	body := completeClientRequest()
 	request := mustClientRequestWithOptions(
@@ -151,6 +296,12 @@ func TestOriginalPassthroughPreservesClientEnvelopeAndResponse(t *testing.T) {
 	if len(envelopes) != 1 || envelopes[0].StatusCode() != http.StatusCreated ||
 		envelopes[0].Headers().Get("X-Upstream") != "kept" || envelopes[0].Headers().Get("X-Hop") != "" {
 		t.Fatalf("downstream envelopes = %+v", envelopes)
+	}
+	observation, ok := content.latest()
+	if !ok || observation.Request.Messages[0].Blocks[0].Text != "hello" ||
+		observation.Response == nil || observation.Response.Blocks[0].Text != "provider-compatible" ||
+		observation.Response.Usage.Output.Tokens != 2 {
+		t.Fatalf("original passthrough content = %+v", observation)
 	}
 }
 
@@ -207,7 +358,10 @@ func TestStreamingStillPublishesIncrementalClientEvents(t *testing.T) {
 		http.StatusOK,
 		normalProviderStream(t, "gpt-provider"),
 	)}}}
-	pipeline := newTestPipeline(t, authority, provider, approvedDecisions(), &attemptObserverDouble{})
+	content := &contentObserverDouble{}
+	pipeline := newTestPipelineWithContentObserver(
+		t, authority, provider, approvedDecisions(), &attemptObserverDouble{}, content,
+	)
 	defer shutdownPipeline(t, pipeline)
 	downstream := &downstreamRecorder{}
 	result, err := pipeline.Execute(
@@ -222,6 +376,14 @@ func TestStreamingStillPublishesIncrementalClientEvents(t *testing.T) {
 	if result.Outcome != AttemptSucceeded || result.Ledger.DownstreamSemanticWrites < 2 ||
 		!bytes.Contains(wire, []byte("Hello")) || !bytes.Contains(wire, []byte("message_stop")) {
 		t.Fatalf("result=%+v stream=%s", result, wire)
+	}
+	observation, ok := content.latest()
+	if !ok || observation.Response == nil ||
+		len(observation.Response.Blocks) != 1 ||
+		observation.Response.Blocks[0].Text != "Hello" ||
+		!observation.Response.Usage.Output.Known ||
+		observation.Response.Usage.Output.Tokens != 1 {
+		t.Fatalf("stream content observation = %+v", observation)
 	}
 }
 
@@ -502,6 +664,7 @@ type testPlanOptions struct {
 	accounts       []testAccount
 	preferred      string
 	failover       environment.FailoverPolicy
+	recording      environment.ContentRecordingPolicy
 }
 
 type testAccount struct {
@@ -556,8 +719,13 @@ func mustEnvironmentRequestPlan(t *testing.T, options testPlanOptions) environme
 		}
 	}
 	accountPolicy.PreferredAccountID = options.preferred
+	recording := options.recording
+	if recording.Mode == "" {
+		recording = environment.DefaultContentRecordingPolicy()
+	}
 	aggregate := environment.Environment{
 		ID: "environment.test", Name: "Test", State: environment.StateActive, Revision: 9,
+		ContentRecording: recording,
 		ClientEndpoints: []environment.ClientEndpoint{{
 			ID: "endpoint.anthropic", Revision: 7, ClientOrigin: clientOrigin,
 			ProtocolPlans: []environment.ClientProtocolPlan{{
@@ -729,13 +897,32 @@ func newTestPipeline(
 	decisions ToolDecisionGate,
 	observer AttemptObserver,
 ) *Pipeline {
+	return newTestPipelineWithContentObserver(
+		t,
+		accounts,
+		provider,
+		decisions,
+		observer,
+		&contentObserverDouble{},
+	)
+}
+
+func newTestPipelineWithContentObserver(
+	t *testing.T,
+	accounts AccountLeaseAuthority,
+	provider Provider,
+	decisions ToolDecisionGate,
+	observer AttemptObserver,
+	content ContentObserver,
+) *Pipeline {
 	t.Helper()
 	pipeline, err := New(Options{
 		OwnerContext: context.Background(), Actions: newTestActionGate(t), Accounts: accounts,
 		ProtocolPaths: mustProtocolPathSelector(t), Provider: provider, ToolDecisions: decisions,
-		RetryWaiter: &retryWaiterDouble{}, Observer: observer, ObservationTimeout: time.Second,
-		Hold:   HoldPolicy{MaxTransportResends: 0, RetryDelay: 0, MaxDuration: time.Second},
-		Stream: DefaultStreamBudgets(),
+		RetryWaiter: &retryWaiterDouble{}, Observer: observer, ContentObserver: content,
+		ObservationTimeout: time.Second,
+		Hold:               HoldPolicy{MaxTransportResends: 0, RetryDelay: 0, MaxDuration: time.Second},
+		Stream:             DefaultStreamBudgets(),
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -979,6 +1166,31 @@ func (decisions *decisionDouble) lastRequest() ToolDecisionRequest {
 type attemptObserverDouble struct {
 	mu           sync.Mutex
 	observations []AttemptObservation
+}
+
+type contentObserverDouble struct {
+	mu           sync.Mutex
+	observations []ContentObservation
+	err          error
+}
+
+func (observer *contentObserverDouble) ObserveContent(
+	_ context.Context,
+	observation ContentObservation,
+) error {
+	observer.mu.Lock()
+	defer observer.mu.Unlock()
+	observer.observations = append(observer.observations, observation)
+	return observer.err
+}
+
+func (observer *contentObserverDouble) latest() (ContentObservation, bool) {
+	observer.mu.Lock()
+	defer observer.mu.Unlock()
+	if len(observer.observations) == 0 {
+		return ContentObservation{}, false
+	}
+	return observer.observations[len(observer.observations)-1], true
 }
 
 func (observer *attemptObserverDouble) Observe(_ context.Context, observation AttemptObservation) error {

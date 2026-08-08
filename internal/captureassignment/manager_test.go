@@ -458,10 +458,11 @@ func environmentFixture(t *testing.T, id string, adapterID string) environment.E
 		t.Fatal(err)
 	}
 	return environment.Environment{
-		ID:       environment.EnvironmentID(id),
-		Name:     id,
-		State:    environment.StateActive,
-		Revision: 1,
+		ID:               environment.EnvironmentID(id),
+		Name:             id,
+		State:            environment.StateActive,
+		Revision:         1,
+		ContentRecording: environment.DefaultContentRecordingPolicy(),
 		ClientEndpoints: []environment.ClientEndpoint{
 			{
 				ID:           "endpoint.api",

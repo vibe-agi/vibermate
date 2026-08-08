@@ -157,6 +157,7 @@ func compileEnvironment(t *testing.T, id string, state environment.State) enviro
 	}
 	snapshot, err := compiler.Compile(environment.Environment{
 		ID: environment.EnvironmentID(id), Name: id, State: state, Revision: 1,
+		ContentRecording: environment.ContentRecordingPolicy{Mode: environment.ContentRecordingOff},
 	})
 	if err != nil {
 		t.Fatal(err)

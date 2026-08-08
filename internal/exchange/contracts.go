@@ -1021,6 +1021,29 @@ type AttemptObserver interface {
 	Observe(context.Context, AttemptObservation) error
 }
 
+// ContentObservation is the explicit plaintext boundary for one semantic
+// Exchange. It is independent from AttemptObservation so body-free audit
+// consumers cannot accidentally gain access to messages or tool arguments.
+type ContentObservation struct {
+	ExchangeID           string
+	EnvironmentID        environment.EnvironmentID
+	EnvironmentRevision  environment.Revision
+	EnvironmentDigest    string
+	EndpointID           environment.ClientEndpointID
+	EndpointRevision     environment.Revision
+	ProtocolPlanID       environment.ClientProtocolPlanID
+	ProtocolPlanRevision environment.Revision
+	RouteID              environment.UpstreamRouteID
+	RouteRevision        environment.Revision
+	Recording            environment.ContentRecordingPolicy
+	Request              protocolcore.Request
+	Response             *protocolcore.Response
+}
+
+type ContentObserver interface {
+	ObserveContent(context.Context, ContentObservation) error
+}
+
 type ToolDecisionOutcome string
 
 const (
@@ -1259,6 +1282,7 @@ type Options struct {
 	ToolDecisions      ToolDecisionGate
 	RetryWaiter        RetryWaiter
 	Observer           AttemptObserver
+	ContentObserver    ContentObserver
 	ObservationTimeout time.Duration
 	Hold               HoldPolicy
 	Stream             StreamBudgets

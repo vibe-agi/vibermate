@@ -27,6 +27,7 @@ describe("the Environment-first browser preview host", () => {
         pluginBindings: current.pluginBindings,
         budgetPolicy: current.budgetPolicy,
         egressPolicy: current.egressPolicy,
+        contentRecording: current.contentRecording,
       },
     );
     await expect(client.environmentDraft("work")).resolves.toEqual(saved);

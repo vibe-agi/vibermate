@@ -12,6 +12,7 @@ import (
 
 	"github.com/vibe-agi/vibermate/internal/activity"
 	"github.com/vibe-agi/vibermate/internal/egressaudit"
+	"github.com/vibe-agi/vibermate/internal/exchangecontent"
 )
 
 const activityCursorPrefix = "v1:activity-requests:"
@@ -81,6 +82,23 @@ type ExchangeDetail struct {
 	Environment     FrozenEnvironmentRef    `json:"environment"`
 	ParentRefs      ActivityParentRefs      `json:"parentRefs"`
 	ProcessingTrace ExchangeProcessingTrace `json:"processingTrace"`
+	Content         ExchangeContentDetail   `json:"content"`
+}
+
+type ExchangeContentState string
+
+const (
+	ExchangeContentRecorded    ExchangeContentState = "recorded"
+	ExchangeContentNotRecorded ExchangeContentState = "not_recorded"
+)
+
+type ExchangeContentDetail struct {
+	State      ExchangeContentState      `json:"state"`
+	Mode       string                    `json:"mode,omitempty"`
+	RecordedAt time.Time                 `json:"recordedAt,omitempty"`
+	ExpiresAt  time.Time                 `json:"expiresAt,omitempty"`
+	Request    *exchangecontent.Request  `json:"request,omitempty"`
+	Response   *exchangecontent.Response `json:"response,omitempty"`
 }
 
 type ExchangeProcessingTrace struct {
@@ -182,7 +200,11 @@ func activityPageOf(page activity.Page) (ActivityPage, error) {
 	return view, nil
 }
 
-func exchangeDetailOf(record activity.Record, egressPage egressaudit.Page) (ExchangeDetail, error) {
+func exchangeDetailOf(
+	record activity.Record,
+	egressPage egressaudit.Page,
+	content *exchangecontent.Record,
+) (ExchangeDetail, error) {
 	if record.Kind != activity.KindExchangeCompleted || record.Validate() != nil || egressPage.NextCursor != "" {
 		return ExchangeDetail{}, errors.New("Exchange detail projection is incomplete")
 	}
@@ -216,6 +238,31 @@ func exchangeDetailOf(record activity.Record, egressPage egressaudit.Page) (Exch
 	detail := ExchangeDetail{
 		ID: record.SubjectID, Status: string(record.Status), Environment: frozenEnvironmentRefOf(record), ParentRefs: parentRefsOf(record),
 		ProcessingTrace: ExchangeProcessingTrace{PluginRunIDs: []string{}, AttemptIDs: make([]string, 0, len(ordered)), Result: result},
+		Content:         ExchangeContentDetail{State: ExchangeContentNotRecorded},
+	}
+	if content != nil {
+		if content.Validate() != nil || content.ExchangeID != record.SubjectID ||
+			content.Frozen.EnvironmentID != record.EnvironmentID ||
+			content.Frozen.EnvironmentRevision != record.EnvironmentRevision ||
+			content.Frozen.EnvironmentDigest != record.EnvironmentDigest ||
+			content.Frozen.ClientEndpointID != record.ClientEndpointID ||
+			content.Frozen.ClientEndpointRevision != record.ClientEndpointRevision ||
+			content.Frozen.ProtocolPlanID != record.ProtocolPlanID ||
+			content.Frozen.ProtocolPlanRevision != record.ProtocolPlanRevision ||
+			content.Frozen.RouteID != record.RouteID ||
+			content.Frozen.RouteRevision != record.RouteRevision {
+			return ExchangeDetail{}, errors.New("Exchange content does not match frozen Activity evidence")
+		}
+		requestView := content.Request
+		detail.Content = ExchangeContentDetail{
+			State: ExchangeContentRecorded, Mode: string(content.Mode),
+			RecordedAt: content.RecordedAt, ExpiresAt: content.ExpiresAt,
+			Request: &requestView,
+		}
+		if content.Response != nil {
+			responseView := *content.Response
+			detail.Content.Response = &responseView
+		}
 	}
 	for _, attempt := range ordered {
 		detail.ProcessingTrace.AttemptIDs = append(detail.ProcessingTrace.AttemptIDs, attempt.id)
@@ -282,7 +329,17 @@ func (handler *Handler) getExchange(writer http.ResponseWriter, request *http.Re
 		writeProblem(writer, http.StatusServiceUnavailable, ReasonRuntimeUnavailable)
 		return
 	}
-	detail, err := exchangeDetailOf(record, egressPage)
+	var content *exchangecontent.Record
+	contentRecord, contentErr := handler.contents.Get(request.Context(), exchangeID)
+	switch {
+	case contentErr == nil:
+		content = &contentRecord
+	case errors.Is(contentErr, exchangecontent.ErrNotFound):
+	default:
+		writeProblem(writer, http.StatusServiceUnavailable, ReasonRuntimeUnavailable)
+		return
+	}
+	detail, err := exchangeDetailOf(record, egressPage, content)
 	if err != nil {
 		writeProblem(writer, http.StatusServiceUnavailable, ReasonRuntimeUnavailable)
 		return

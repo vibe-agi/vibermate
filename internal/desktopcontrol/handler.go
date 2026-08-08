@@ -21,6 +21,7 @@ import (
 	"github.com/vibe-agi/vibermate/internal/connectionevent"
 	"github.com/vibe-agi/vibermate/internal/egressaudit"
 	"github.com/vibe-agi/vibermate/internal/environment"
+	"github.com/vibe-agi/vibermate/internal/exchangecontent"
 	"github.com/vibe-agi/vibermate/internal/manualcapture"
 	"github.com/vibe-agi/vibermate/internal/offlinehold"
 	"github.com/vibe-agi/vibermate/internal/productruntime"
@@ -92,6 +93,7 @@ type Options struct {
 	Environments environment.Controller
 	Assignments  captureassignment.Controller
 	Activities   activity.Runtime
+	Contents     exchangecontent.Reader
 	Connections  connectionevent.Reader
 	Egress       egressaudit.Reader
 	Approvals    toolapproval.Controller
@@ -114,6 +116,7 @@ type Handler struct {
 	environments environment.Controller
 	assignments  captureassignment.Controller
 	activities   activity.Runtime
+	contents     exchangecontent.Reader
 	connections  connectionevent.Reader
 	egress       egressaudit.Reader
 	approvals    toolapproval.Controller
@@ -150,6 +153,7 @@ func New(options Options) (*Handler, error) {
 		options.Environments == nil ||
 		options.Assignments == nil ||
 		options.Activities == nil ||
+		options.Contents == nil ||
 		options.Connections == nil ||
 		options.Egress == nil ||
 		options.Approvals == nil ||
@@ -164,6 +168,7 @@ func New(options Options) (*Handler, error) {
 		environments:      options.Environments,
 		assignments:       options.Assignments,
 		activities:        options.Activities,
+		contents:          options.Contents,
 		connections:       options.Connections,
 		egress:            options.Egress,
 		approvals:         options.Approvals,

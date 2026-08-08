@@ -269,6 +269,9 @@ func validateRoot(value Environment) error {
 	if value.State != StateActive && value.State != StateDisabled {
 		return fmt.Errorf("%w: state must be active or disabled", ErrInvalidEnvironment)
 	}
+	if err := value.ContentRecording.Validate(); err != nil {
+		return err
+	}
 	return nil
 }
 

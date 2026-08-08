@@ -132,6 +132,7 @@ func newEnvironmentFixture(
 	}
 	aggregate := environment.Environment{
 		ID: environmentID, Name: "Local CA test Environment", State: environment.StateActive, Revision: revision,
+		ContentRecording: environment.DefaultContentRecordingPolicy(),
 		ClientEndpoints: []environment.ClientEndpoint{{
 			ID: "endpoint-" + environment.ClientEndpointID(suffix), Revision: revision, ClientOrigin: origin,
 			ProtocolPlans: []environment.ClientProtocolPlan{{

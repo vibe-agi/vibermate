@@ -331,6 +331,7 @@ func Start(ctx context.Context, options Options) (*Host, error) {
 		Environments:      runtime.Environments(),
 		Assignments:       runtime.CaptureAssignments(),
 		Activities:        runtime.Activities(),
+		Contents:          runtime.ExchangeContents(),
 		Connections:       runtime.ConnectionEvents(),
 		Egress:            runtime.EgressAttempts(),
 		Approvals:         runtime.ToolApprovals(),

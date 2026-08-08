@@ -27,6 +27,7 @@ import (
 	"github.com/vibe-agi/vibermate/internal/connectionpolicy"
 	"github.com/vibe-agi/vibermate/internal/egressaudit"
 	"github.com/vibe-agi/vibermate/internal/environment"
+	"github.com/vibe-agi/vibermate/internal/exchangecontent"
 	"github.com/vibe-agi/vibermate/internal/manualcapture"
 	"github.com/vibe-agi/vibermate/internal/provideraccount"
 	"github.com/vibe-agi/vibermate/internal/proxyclient"
@@ -59,6 +60,7 @@ type RuntimeStore interface {
 	EnvironmentRepository() environment.Repository
 	CaptureAssignmentRepository() captureassignment.Repository
 	ActivityRepository() activity.Repository
+	ExchangeContentRepository() exchangecontent.Repository
 	CaptureRunRepository() capturerun.Repository
 	ManualCaptureRepository() manualcapture.Repository
 	ProxyClientRepository() proxyclient.Repository
@@ -76,6 +78,7 @@ type Store struct {
 	database           *sql.DB
 	repo               *Repository
 	activityRepo       *activityRepository
+	exchangeContents   *exchangeContentRepository
 	captureRepo        *captureRunRepository
 	manualCapture      *manualCaptureRepository
 	proxyClients       *proxyClientRepository
@@ -151,6 +154,7 @@ func Open(ctx context.Context, options Options) (*Store, error) {
 		sqlTransactionCommitter{},
 	)
 	activityRepo := newActivityRepository(database, operations)
+	exchangeContents := newExchangeContentRepository(database, operations)
 	connectionRepo := newConnectionEventRepository(database, operations)
 	egressRepo := newEgressAttemptRepository(database, operations)
 	approvalRepo := newToolApprovalRepository(database, operations)
@@ -198,6 +202,7 @@ func Open(ctx context.Context, options Options) (*Store, error) {
 		database:           database,
 		repo:               repository,
 		activityRepo:       activityRepo,
+		exchangeContents:   exchangeContents,
 		captureRepo:        captureRepo,
 		manualCapture:      manualCaptureRepo,
 		proxyClients:       proxyClientRepo,
@@ -220,6 +225,10 @@ func (s *Store) SchemaStateReader() SchemaStateReader {
 
 func (s *Store) ActivityRepository() activity.Repository {
 	return s.activityRepo
+}
+
+func (s *Store) ExchangeContentRepository() exchangecontent.Repository {
+	return s.exchangeContents
 }
 
 func (s *Store) CaptureRunRepository() capturerun.Repository {

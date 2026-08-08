@@ -889,7 +889,8 @@ func assemblyEnvironment(
 	)
 	return environment.Environment{
 		ID: environmentID, Name: "Assembly Environment", State: environment.StateActive,
-		Revision: revision,
+		Revision:         revision,
+		ContentRecording: environment.DefaultContentRecordingPolicy(),
 		ClientEndpoints: []environment.ClientEndpoint{{
 			ID: endpointID, Revision: revision, ClientOrigin: clientOrigin,
 			ProtocolPlans: []environment.ClientProtocolPlan{{

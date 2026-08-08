@@ -15,6 +15,9 @@ import type {
   ApprovalChoice,
   ApprovalView,
   ConnectionRuleSet,
+  ExchangeContentBlock,
+  ExchangeContentDetail,
+  ExchangeContentMessage,
   ProviderAccountKind,
   ProviderAccountRecord,
 } from "./control-types.ts";
@@ -93,10 +96,35 @@ export function ExchangeRoutePage({ exchangeId }: { readonly exchangeId: string 
   if (exchange.isPending) return <div className="page"><LoadingRows count={8} /></div>;
   if (exchange.data === undefined) return <div className="page"><InlineProblem message={t(controlErrorKey(exchange.error))} /></div>;
   const detail = exchange.data;
-  return <div className="page exchange-page"><PageHeading description={detail.id} eyebrow={t("exchange.eyebrow")} title={t("exchange.title")} /><section className="trace-layout"><div className="trace-rail"><TraceStep label={t("exchange.trace.capture")} value={detail.parentRefs.captureRunId ?? detail.parentRefs.manualCaptureId ?? t("common.unavailable")} /><TraceStep label={t("exchange.trace.environment")} value={`${detail.environment.id} · r${detail.environment.revision}`} /><TraceStep label={t("exchange.trace.endpoint")} value={detail.environment.clientEndpointId} /><TraceStep label={t("exchange.trace.protocol")} value={detail.environment.protocolPlanId} /><TraceStep label={t("exchange.trace.route")} value={detail.environment.routeId} /><TraceStep label={t("exchange.trace.attempts")} value={String(detail.processingTrace.attemptIds.length)} /></div><section className="data-panel exchange-inspector"><SectionHeading title={t("exchange.inspector.title")} /><dl className="facts-list"><dt>{t("exchange.status")}</dt><dd>{detail.status}</dd><dt>{t("exchange.result")}</dt><dd>{detail.processingTrace.result}</dd><dt>{t("exchange.account")}</dt><dd>{detail.environment.accountId ?? t("exchange.account.client")}</dd><dt>{t("exchange.snapshot")}</dt><dd><code>{detail.environment.digest}</code></dd></dl><SectionHeading title={t("exchange.attempts.title")} />{detail.processingTrace.attemptIds.length === 0 ? <EmptyState description={t("exchange.attempts.empty.description")} title={t("exchange.attempts.empty.title")} /> : <ol className="attempt-list">{detail.processingTrace.attemptIds.map((id, index) => <li key={id}><span>{index + 1}</span><code>{id}</code></li>)}</ol>}</section></section></div>;
+  const response = detail.content.response;
+  return <div className="page exchange-page"><PageHeading description={detail.id} eyebrow={t("exchange.eyebrow")} title={t("exchange.title")} /><section className="trace-layout"><aside aria-label={t("exchange.trace.title")} className="trace-rail"><TraceStep label={t("exchange.trace.capture")} value={detail.parentRefs.captureRunId ?? detail.parentRefs.manualCaptureId ?? t("common.unavailable")} /><TraceStep label={t("exchange.trace.environment")} value={`${detail.environment.id} · r${detail.environment.revision}`} /><TraceStep label={t("exchange.trace.endpoint")} value={detail.environment.clientEndpointId} /><TraceStep label={t("exchange.trace.protocol")} value={detail.environment.protocolPlanId} /><TraceStep label={t("exchange.trace.route")} value={detail.environment.routeId} /><TraceStep label={t("exchange.trace.attempts")} value={String(detail.processingTrace.attemptIds.length)} /><TraceStep label={t("exchange.trace.result")} value={detail.processingTrace.result} /></aside><div className="exchange-inspector-stack"><section className="data-panel exchange-inspector"><div className="exchange-inspector-heading"><SectionHeading title={t("exchange.inspector.title")} />{detail.content.state === "recorded" && <span className="recording-state">{t(`exchange.content.mode.${detail.content.mode ?? "full"}`)}</span>}</div>{detail.content.state === "not_recorded" || detail.content.request === undefined ? <EmptyState description={t("exchange.content.empty.description")} title={t("exchange.content.empty.title")} /> : <div className="conversation-evidence"><div className="content-retention"><span>{t("exchange.content.expires")}</span><time dateTime={detail.content.expiresAt}>{detail.content.expiresAt === undefined ? t("common.unavailable") : new Intl.DateTimeFormat(undefined, { dateStyle: "medium", timeStyle: "short" }).format(Date.parse(detail.content.expiresAt))}</time></div>{detail.content.request.messages.map((message, index) => <ExchangeMessage key={`${message.role}:${index}`} message={message} />)}{response !== undefined && <article className="exchange-message exchange-message-assistant"><header><span>{t("exchange.role.assistant")}</span><small>{response.reportedModel} · {t(`exchange.stop.${response.stopReason}`)}</small></header><ExchangeBlocks blocks={response.blocks} /><UsageSummary usage={response.usage} /></article>}</div>}</section><section className="data-panel exchange-facts"><dl className="facts-list"><dt>{t("exchange.status")}</dt><dd>{detail.status}</dd><dt>{t("exchange.account")}</dt><dd>{detail.environment.accountId ?? t("exchange.account.client")}</dd><dt>{t("exchange.snapshot")}</dt><dd><code title={detail.environment.digest}>{shortValue(detail.environment.digest)}</code></dd></dl><SectionHeading title={t("exchange.attempts.title")} />{detail.processingTrace.attemptIds.length === 0 ? <p className="muted-copy">{t("exchange.attempts.empty.description")}</p> : <ol className="attempt-list">{detail.processingTrace.attemptIds.map((id, index) => <li key={id}><span>{index + 1}</span><code>{id}</code></li>)}</ol>}</section></div></section></div>;
 }
 
 function TraceStep({ label, value }: { readonly label: string; readonly value: string }) { return <div><span>{label}</span><strong>{value}</strong></div>; }
+
+function ExchangeMessage({ message }: { readonly message: ExchangeContentMessage }) {
+  const { t } = useTranslation();
+  return <article className={`exchange-message exchange-message-${message.role}`}><header><span>{t(`exchange.role.${message.role}`)}</span></header><ExchangeBlocks blocks={message.blocks} /></article>;
+}
+
+function ExchangeBlocks({ blocks }: { readonly blocks: readonly ExchangeContentBlock[] }) {
+  const { t } = useTranslation();
+  return <div className="exchange-blocks">{blocks.map((block, index) => {
+    const key = `${block.kind}:${block.callId ?? index}`;
+    if (block.availability === "omitted") return <div className="omitted-content" key={key}>{t("exchange.content.omitted", { bytes: block.originalSize })}</div>;
+    if (block.kind === "tool_call") return <div className="tool-evidence tool-call" key={key}><div><strong>{block.toolName}</strong><span>{t("exchange.tool.proposed")}</span></div>{block.arguments !== undefined && <pre>{JSON.stringify(block.arguments, null, 2)}</pre>}</div>;
+    if (block.kind === "tool_result") return <div className={`tool-evidence tool-result${block.toolError === true ? " failed" : ""}`} key={key}><div><strong>{t("exchange.tool.result")}</strong><span>{t("exchange.tool.reported")}</span></div><pre>{block.text}</pre></div>;
+    return <p className={block.kind === "refusal" ? "model-refusal" : undefined} key={key}>{block.text}</p>;
+  })}</div>;
+}
+
+function UsageSummary({ usage }: { readonly usage: NonNullable<ExchangeContentDetail["response"]>["usage"] }) {
+  const { t } = useTranslation();
+  const values = [["input", usage.inputUncached], ["cacheRead", usage.cacheRead], ["cacheWrite", usage.cacheWrite], ["output", usage.output], ["reasoning", usage.reasoning]] as const;
+  return <dl className="usage-strip">{values.map(([key, value]) => <div key={key}><dt>{t(`exchange.usage.${key}`)}</dt><dd>{value.known ? value.tokens : t("common.unavailable")}</dd></div>)}</dl>;
+}
+
+function shortValue(value: string): string { return value.length <= 22 ? value : `${value.slice(0, 12)}…${value.slice(-6)}`; }
 
 type AccountDialogState =
   | { readonly mode: "create" }

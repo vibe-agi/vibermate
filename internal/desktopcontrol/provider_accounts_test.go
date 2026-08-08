@@ -17,7 +17,7 @@ func TestProviderAccountControlStoresCredentialWithoutReturningItAndCompilesMana
 	application, err := desktopcontrol.New(desktopcontrol.Options{
 		Readiness: readyState(true), Status: runtime,
 		Environments: runtime.Environments(), Assignments: runtime.CaptureAssignments(),
-		Activities: runtime.Activities(), Connections: runtime.ConnectionEvents(),
+		Activities: runtime.Activities(), Contents: runtime.ExchangeContents(), Connections: runtime.ConnectionEvents(),
 		Egress: runtime.EgressAttempts(), Approvals: runtime.ToolApprovals(),
 		Accounts: runtime.ProviderAccounts(), Offline: runtime,
 		ManualCaptures: runtime.ManualCaptures(), Clock: desktopcontrol.SystemClock{},
@@ -115,7 +115,8 @@ func TestProviderAccountControlStoresCredentialWithoutReturningItAndCompilesMana
   }],
   "pluginBindings":[],
   "budgetPolicy":{"id":"","revision":0},
-  "egressPolicy":{"id":"","revision":0,"mode":""}
+  "egressPolicy":{"id":"","revision":0,"mode":""},
+  "contentRecording":{"mode":"full","retentionDays":30}
 }`),
 	)
 	if managedDraft.Code != http.StatusOK {

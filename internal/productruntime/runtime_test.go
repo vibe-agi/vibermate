@@ -442,6 +442,7 @@ func passthroughEnvironment(t *testing.T, id, rawOrigin string, protocol environ
 	}
 	return environment.Environment{
 		ID: environment.EnvironmentID(id), Name: "Work", State: environment.StateActive, Revision: 1,
+		ContentRecording: environment.DefaultContentRecordingPolicy(),
 		ClientEndpoints: []environment.ClientEndpoint{{
 			ID: environment.ClientEndpointID("endpoint." + id), Revision: 1, ClientOrigin: clientOrigin,
 			ProtocolPlans: []environment.ClientProtocolPlan{{

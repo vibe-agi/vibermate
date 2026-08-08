@@ -90,7 +90,7 @@ test("reviews impact before atomically publishing an Environment", async ({ page
   await dialog.getByLabel("Name").fill("Review lab");
   await dialog.getByLabel("Stable ID").fill("review-lab");
   await dialog.getByRole("button", { name: /Claude/u }).click();
-  await dialog.getByLabel("Authentication").selectOption("anthropic-work");
+  await dialog.getByText("Authentication", { exact: true }).locator("..").getByRole("combobox").selectOption("anthropic-work");
   await dialog.getByRole("button", { name: "Review changes" }).click();
   let impact = dialog.getByRole("group", { name: "Impact preview" });
   await expect(impact).toBeVisible();
@@ -117,7 +117,7 @@ test("creates a useful Claude inspection Environment without requiring another a
   const dialog = page.getByRole("dialog", { name: "Create Environment" });
   await dialog.getByLabel("Name").fill("Claude inspection");
   await dialog.getByLabel("Stable ID").fill("claude-inspection");
-  await expect(dialog.getByLabel("Authentication")).toHaveValue("");
+  await expect(dialog.getByText("Authentication", { exact: true }).locator("..").getByRole("combobox")).toHaveValue("");
   await dialog.getByRole("button", { name: "Review changes" }).click();
   await dialog.getByRole("button", { name: "Publish revision" }).click();
 
@@ -157,6 +157,12 @@ test("opens a request through its frozen Environment to the exact attempt", asyn
   await expect(page.getByText("claude-messages", { exact: true })).toBeVisible();
   await expect(page.getByText("claude-official", { exact: true })).toBeVisible();
   await expect(page.getByText("attempt-preview", { exact: true })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Request snapshot" })).toBeVisible();
+  await expect(page.getByText("Inspect the current package and summarize the failing test.")).toBeVisible();
+  await expect(page.getByText("read_file", { exact: true })).toBeVisible();
+  await expect(page.getByText("Proposed by the model", { exact: true })).toBeVisible();
+  await expect(page.getByText("120", { exact: true })).toBeVisible();
+  await expect(page.locator("body")).not.toContainText("/Users/");
   expect(errors).toEqual([]);
 });
 

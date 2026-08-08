@@ -15,16 +15,17 @@ type EnvironmentListResponse struct {
 }
 
 type EnvironmentResponse struct {
-	ID              environment.EnvironmentID           `json:"id"`
-	Name            string                              `json:"name"`
-	State           environment.State                   `json:"state"`
-	Revision        environment.Revision                `json:"revision"`
-	Digest          string                              `json:"digest"`
-	SystemOwned     bool                                `json:"systemOwned"`
-	ClientEndpoints []environment.ClientEndpoint        `json:"clientEndpoints"`
-	PluginBindings  []environment.PluginBinding         `json:"pluginBindings"`
-	BudgetPolicy    environment.BudgetPolicy            `json:"budgetPolicy"`
-	EgressPolicy    environment.EnvironmentEgressPolicy `json:"egressPolicy"`
+	ID               environment.EnvironmentID           `json:"id"`
+	Name             string                              `json:"name"`
+	State            environment.State                   `json:"state"`
+	Revision         environment.Revision                `json:"revision"`
+	Digest           string                              `json:"digest"`
+	SystemOwned      bool                                `json:"systemOwned"`
+	ClientEndpoints  []environment.ClientEndpoint        `json:"clientEndpoints"`
+	PluginBindings   []environment.PluginBinding         `json:"pluginBindings"`
+	BudgetPolicy     environment.BudgetPolicy            `json:"budgetPolicy"`
+	EgressPolicy     environment.EnvironmentEgressPolicy `json:"egressPolicy"`
+	ContentRecording environment.ContentRecordingPolicy  `json:"contentRecording"`
 }
 
 type EnvironmentDraftResponse struct {
@@ -43,6 +44,7 @@ type EnvironmentDraftInput struct {
 	PluginBindings        []environment.PluginBinding         `json:"pluginBindings"`
 	BudgetPolicy          environment.BudgetPolicy            `json:"budgetPolicy"`
 	EgressPolicy          environment.EnvironmentEgressPolicy `json:"egressPolicy"`
+	ContentRecording      environment.ContentRecordingPolicy  `json:"contentRecording"`
 }
 
 type EnvironmentImpactResponse struct {
@@ -80,7 +82,7 @@ func environmentResponseOfAggregate(aggregate environment.Environment, digest st
 		Revision: aggregate.Revision, Digest: digest,
 		SystemOwned: systemOwned, ClientEndpoints: aggregate.ClientEndpoints,
 		PluginBindings: aggregate.PluginBindings, BudgetPolicy: aggregate.BudgetPolicy,
-		EgressPolicy: aggregate.EgressPolicy,
+		EgressPolicy: aggregate.EgressPolicy, ContentRecording: aggregate.ContentRecording,
 	}
 }
 
@@ -204,7 +206,7 @@ func (handler *Handler) putEnvironmentDraft(writer http.ResponseWriter, request 
 			ID: id, Name: input.Name, State: input.State,
 			Revision: environment.Revision(expectedBase + 1), ClientEndpoints: input.ClientEndpoints,
 			PluginBindings: input.PluginBindings, BudgetPolicy: input.BudgetPolicy,
-			EgressPolicy: input.EgressPolicy,
+			EgressPolicy: input.EgressPolicy, ContentRecording: input.ContentRecording,
 		}
 		draft, saveErr := handler.environments.SaveDraft(request.Context(), environment.DraftCommand{
 			ExpectedBaseRevision:  environment.Revision(expectedBase),

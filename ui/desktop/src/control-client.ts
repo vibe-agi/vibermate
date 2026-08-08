@@ -2213,6 +2213,7 @@ function validEnvironmentRecord(
       "pluginBindings",
       "budgetPolicy",
       "egressPolicy",
+      "contentRecording",
     ]) &&
     validResourceId(value.id) &&
     validDisplayLabel(value.name, 256, false) &&
@@ -2223,7 +2224,20 @@ function validEnvironmentRecord(
     validEnvironmentEndpoints(value.clientEndpoints) &&
     validPluginBindings(value.pluginBindings) &&
     validSimplePolicy(value.budgetPolicy, false) &&
-    validSimplePolicy(value.egressPolicy, true)
+    validSimplePolicy(value.egressPolicy, true) &&
+    validContentRecordingPolicy(value.contentRecording)
+  );
+}
+
+function validContentRecordingPolicy(value: unknown): boolean {
+  return (
+    isRecord(value) &&
+    hasClosedFields(value, ["mode", "retentionDays"]) &&
+    (value.mode === "full" || value.mode === "metadata_only" || value.mode === "off") &&
+    nonNegativeInteger(value.retentionDays) &&
+    (value.mode === "off"
+      ? value.retentionDays === 0
+      : value.retentionDays >= 1 && value.retentionDays <= 3650)
   );
 }
 
@@ -2445,6 +2459,7 @@ function validEnvironmentDraftInput(value: unknown): value is EnvironmentDraftIn
       "pluginBindings",
       "budgetPolicy",
       "egressPolicy",
+      "contentRecording",
     ]) &&
     nonNegativeInteger(value.expectedDraftRevision) &&
     validDisplayLabel(value.name, 256, false) &&
@@ -2452,7 +2467,8 @@ function validEnvironmentDraftInput(value: unknown): value is EnvironmentDraftIn
     validEnvironmentEndpoints(value.clientEndpoints) &&
     validPluginBindings(value.pluginBindings) &&
     validSimplePolicy(value.budgetPolicy, false) &&
-    validSimplePolicy(value.egressPolicy, true)
+    validSimplePolicy(value.egressPolicy, true) &&
+    validContentRecordingPolicy(value.contentRecording)
   );
 }
 
@@ -2763,14 +2779,110 @@ function validActivityStatus(value: unknown): value is ActivityStatus {
 function requireExchangeDetail(value: unknown, expectedId: string): ExchangeDetail {
   if (
     !isRecord(value) ||
-    !hasClosedFields(value, ["id", "status", "environment", "parentRefs", "processingTrace"]) ||
+    !hasClosedFields(value, ["id", "status", "environment", "parentRefs", "processingTrace", "content"]) ||
     value.id !== expectedId ||
     !validActivityStatus(value.status) ||
     !validFrozenEnvironmentRef(value.environment) ||
     !validActivityParentRefs(value.parentRefs, expectedId) ||
-    !validExchangeTrace(value.processingTrace)
+    !validExchangeTrace(value.processingTrace) ||
+    !validExchangeContent(value.content)
   ) throw new ControlContractError();
   return value as unknown as ExchangeDetail;
+}
+
+function validExchangeContent(value: unknown): boolean {
+  if (!isRecord(value) || value.state === "not_recorded") {
+    return isRecord(value) && hasClosedFields(value, ["state"]) && value.state === "not_recorded";
+  }
+  return (
+    value.state === "recorded" &&
+    hasClosedFields(
+      value,
+      ["state", "mode", "recordedAt", "expiresAt", "request"],
+      ["response"],
+    ) &&
+    (value.mode === "full" || value.mode === "metadata_only") &&
+    validTimestamp(value.recordedAt) &&
+    validTimestamp(value.expiresAt) &&
+    validExchangeContentRequest(value.request, value.mode) &&
+    (value.response === undefined || validExchangeContentResponse(value.response, value.mode))
+  );
+}
+
+function validExchangeContentRequest(value: unknown, mode: "full" | "metadata_only"): boolean {
+  return (
+    isRecord(value) &&
+    hasClosedFields(value, ["requestedModel", "effectiveModel", "maxOutputTokens", "stream", "messages", "tools"]) &&
+    validIdentity(value.requestedModel) &&
+    validIdentity(value.effectiveModel) &&
+    nonNegativeInteger(value.maxOutputTokens) &&
+    typeof value.stream === "boolean" &&
+    Array.isArray(value.messages) &&
+    value.messages.length > 0 &&
+    value.messages.length <= maximumCollectionItems &&
+    value.messages.every((message) => validExchangeContentMessage(message, mode)) &&
+    Array.isArray(value.tools) &&
+    value.tools.length <= maximumCollectionItems &&
+    value.tools.every((tool) => isRecord(tool) &&
+      hasClosedFields(tool, ["name"], ["namespace"]) &&
+      validIdentity(tool.name) && optionalIdentity(tool.namespace))
+  );
+}
+
+function validExchangeContentResponse(value: unknown, mode: "full" | "metadata_only"): boolean {
+  return (
+    isRecord(value) &&
+    hasClosedFields(value, ["id", "requestedModel", "effectiveModel", "reportedModel", "stopReason", "blocks", "usage"]) &&
+    validIdentity(value.id) && validIdentity(value.requestedModel) &&
+    validIdentity(value.effectiveModel) && validIdentity(value.reportedModel) &&
+    (value.stopReason === "end_turn" || value.stopReason === "max_tokens" ||
+      value.stopReason === "tool_use" || value.stopReason === "stop_sequence") &&
+    Array.isArray(value.blocks) && value.blocks.length > 0 &&
+    value.blocks.length <= maximumCollectionItems &&
+    value.blocks.every((block) => validExchangeContentBlock(block, mode)) &&
+    validExchangeUsage(value.usage)
+  );
+}
+
+function validExchangeContentMessage(value: unknown, mode: "full" | "metadata_only"): boolean {
+  return (
+    isRecord(value) && hasClosedFields(value, ["role", "blocks"]) &&
+    (value.role === "system" || value.role === "developer" || value.role === "user" ||
+      value.role === "assistant" || value.role === "tool") &&
+    Array.isArray(value.blocks) && value.blocks.length > 0 &&
+    value.blocks.length <= maximumCollectionItems &&
+    value.blocks.every((block) => validExchangeContentBlock(block, mode))
+  );
+}
+
+function validExchangeContentBlock(value: unknown, mode: "full" | "metadata_only"): boolean {
+  if (!isRecord(value) || !hasClosedFields(
+    value,
+    ["kind", "availability", "originalSize"],
+    ["text", "callId", "toolName", "arguments", "toolError"],
+  )) return false;
+  const expectedAvailability = mode === "full" ? "recorded" : "omitted";
+  if ((value.kind !== "text" && value.kind !== "refusal" && value.kind !== "tool_call" && value.kind !== "tool_result") ||
+    value.availability !== expectedAvailability || !nonNegativeInteger(value.originalSize) ||
+    (value.text !== undefined && typeof value.text !== "string") ||
+    !optionalIdentity(value.callId) || !optionalIdentity(value.toolName) ||
+    (value.arguments !== undefined && !isRecord(value.arguments)) ||
+    (value.toolError !== undefined && typeof value.toolError !== "boolean")) return false;
+  if (mode === "metadata_only" && (value.text !== undefined || value.arguments !== undefined)) return false;
+  return true;
+}
+
+function validExchangeUsage(value: unknown): boolean {
+  return isRecord(value) && hasClosedFields(value, ["inputUncached", "cacheWrite", "cacheRead", "output", "reasoning"]) &&
+    [value.inputUncached, value.cacheWrite, value.cacheRead, value.output, value.reasoning].every(validExchangeUsageValue);
+}
+
+function validExchangeUsageValue(value: unknown): boolean {
+  return isRecord(value) && hasClosedFields(value, ["known"], ["tokens", "source"]) &&
+    typeof value.known === "boolean" &&
+    (value.known
+      ? nonNegativeInteger(value.tokens) && validIdentity(value.source)
+      : value.tokens === undefined && value.source === undefined);
 }
 
 function validExchangeTrace(value: unknown): boolean {

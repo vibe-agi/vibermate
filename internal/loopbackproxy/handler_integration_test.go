@@ -1568,6 +1568,7 @@ func testEnvironmentForDialectRevision(
 	return environment.Environment{
 		ID: environment.EnvironmentID(environmentID), Name: "Proxy Environment",
 		State: environment.StateActive, Revision: revision,
+		ContentRecording: environment.DefaultContentRecordingPolicy(),
 		ClientEndpoints: []environment.ClientEndpoint{{
 			ID: "endpoint-proxy", Revision: 1, ClientOrigin: clientOrigin,
 			ProtocolPlans: []environment.ClientProtocolPlan{{

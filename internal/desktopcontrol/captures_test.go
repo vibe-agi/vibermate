@@ -102,7 +102,7 @@ func unifiedCaptureApplication(t *testing.T, assignments captureassignment.Contr
 	now := time.Date(2026, 8, 8, 10, 0, 0, 0, time.UTC)
 	application, err := desktopcontrol.New(desktopcontrol.Options{
 		Readiness: readyState(true), Status: runtime, Environments: runtime.Environments(),
-		Assignments: assignments, Activities: runtime.Activities(), Connections: runtime.ConnectionEvents(),
+		Assignments: assignments, Activities: runtime.Activities(), Contents: runtime.ExchangeContents(), Connections: runtime.ConnectionEvents(),
 		Egress: runtime.EgressAttempts(), Approvals: runtime.ToolApprovals(),
 		Accounts: runtime.ProviderAccounts(), Offline: runtime,
 		CaptureRuns: captureReaderFixture{view: capturerun.View{

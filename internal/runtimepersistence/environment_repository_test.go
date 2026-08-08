@@ -270,6 +270,7 @@ func environmentFixture(t *testing.T, id string, revision environment.Revision) 
 	providerOrigin := runtimeProviderOrigin(t, origin.String())
 	return environment.Environment{
 		ID: environment.EnvironmentID(id), Name: "Work", State: environment.StateActive, Revision: revision,
+		ContentRecording: environment.DefaultContentRecordingPolicy(),
 		ClientEndpoints: []environment.ClientEndpoint{{
 			ID: "endpoint.shared", Revision: 1, ClientOrigin: origin,
 			ProtocolPlans: []environment.ClientProtocolPlan{{

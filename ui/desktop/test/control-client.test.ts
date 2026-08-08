@@ -53,6 +53,7 @@ function environment(overrides: Partial<EnvironmentRecord> = {}): EnvironmentRec
     pluginBindings: [],
     budgetPolicy: { id: "", revision: 0 },
     egressPolicy: { id: "", revision: 0, mode: "" },
+    contentRecording: { mode: "full", retentionDays: 30 },
     ...overrides,
   };
 }

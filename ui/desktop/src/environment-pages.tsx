@@ -22,6 +22,7 @@ import type {
   EnvironmentClientEndpoint,
   EnvironmentCompatibility,
   EnvironmentDraftInput,
+  EnvironmentContentRecordingMode,
   EnvironmentImpact,
   EnvironmentRecord,
   ProviderAccountRecord,
@@ -88,6 +89,8 @@ export function EnvironmentDetailRoutePage({
   const [name, setName] = useState<string>();
   const [state, setState] = useState<"active" | "disabled">();
   const [endpoints, setEndpoints] = useState<readonly EnvironmentClientEndpoint[]>();
+	const [recordingMode, setRecordingMode] = useState<EnvironmentContentRecordingMode>();
+	const [retentionDays, setRetentionDays] = useState<number>();
   const [impact, setImpact] = useState<EnvironmentImpact>();
   const [draftRevision, setDraftRevision] = useState<number>();
   const [errorKey, setErrorKey] = useState<string>();
@@ -101,6 +104,8 @@ export function EnvironmentDetailRoutePage({
   const candidateName = name ?? current?.name ?? "";
   const candidateState = state ?? current?.state ?? "active";
   const candidateEndpoints = endpoints ?? current?.clientEndpoints ?? [];
+	const candidateRecordingMode = recordingMode ?? current?.contentRecording.mode ?? "full";
+	const candidateRetentionDays = candidateRecordingMode === "off" ? 0 : retentionDays ?? current?.contentRecording.retentionDays ?? 30;
   const saveDraft = useMutation({
     mutationFn: async () => {
       if (current === undefined || current.systemOwned) throw new Error("Environment is not editable");
@@ -116,6 +121,7 @@ export function EnvironmentDetailRoutePage({
         pluginBindings: current.pluginBindings,
         budgetPolicy: current.budgetPolicy,
         egressPolicy: current.egressPolicy,
+		contentRecording: { mode: candidateRecordingMode, retentionDays: candidateRetentionDays },
       };
       const draft = await model.client.saveEnvironmentDraft(current.id, current.revision, input);
       const preview = await model.client.previewEnvironmentDraft(current.id, draft.draftRevision);
@@ -133,7 +139,7 @@ export function EnvironmentDetailRoutePage({
     onSuccess: (result) => {
       queryClient.setQueryData(dashboardQueryKeys.environment(environmentId), result.environment);
       void queryClient.invalidateQueries({ queryKey: dashboardQueryKeys.environments });
-      setImpact(undefined); setDraftRevision(undefined); setEditing(false); setName(undefined); setState(undefined); setEndpoints(undefined); setErrorKey(undefined);
+      setImpact(undefined); setDraftRevision(undefined); setEditing(false); setName(undefined); setState(undefined); setEndpoints(undefined); setRecordingMode(undefined); setRetentionDays(undefined); setErrorKey(undefined);
     },
   });
 
@@ -149,7 +155,7 @@ export function EnvironmentDetailRoutePage({
         eyebrow={t("environmentDetail.eyebrow")}
         title={current.name}
       />
-      {editing && <section className="data-panel environment-editor"><SectionHeading title={t("environmentDetail.edit.title")} /><div className="compact-form-row"><label><span>{t("environmentDetail.name")}</span><input maxLength={256} onChange={(event) => setName(event.target.value)} value={candidateName} /></label><label><span>{t("environmentDetail.state")}</span><select onChange={(event) => setState(event.target.value as "active" | "disabled")} value={candidateState}><option value="active">{t("environments.state.active")}</option><option value="disabled">{t("environments.state.disabled")}</option></select></label></div><div className="template-actions"><span>{t("environmentDetail.endpoints.add")}</span><button onClick={() => setEndpoints(addEndpoint(candidateEndpoints, "claude"))} type="button"><BrandIcon name="claude-code" />{t("environmentDetail.endpoints.claude")}</button><button onClick={() => setEndpoints(addEndpoint(candidateEndpoints, "codex"))} type="button"><BrandIcon name="codex" />{t("environmentDetail.endpoints.codex")}</button></div><RouteAccountSelectors accounts={accounts.data?.items ?? []} endpoints={candidateEndpoints} onChange={setEndpoints} />{errorKey !== undefined && <InlineProblem message={t(errorKey)} />}<div className="editor-actions"><button className="primary-action" disabled={saveDraft.isPending || candidateName.trim().length === 0} onClick={() => saveDraft.mutate()} type="button">{saveDraft.isPending ? t("common.checking") : t("environmentDetail.review")}</button></div></section>}
+      {editing && <section className="data-panel environment-editor"><SectionHeading title={t("environmentDetail.edit.title")} /><div className="compact-form-row"><label><span>{t("environmentDetail.name")}</span><input maxLength={256} onChange={(event) => setName(event.target.value)} value={candidateName} /></label><label><span>{t("environmentDetail.state")}</span><select onChange={(event) => setState(event.target.value as "active" | "disabled")} value={candidateState}><option value="active">{t("environments.state.active")}</option><option value="disabled">{t("environments.state.disabled")}</option></select></label><label><span>{t("environmentDetail.recording.mode")}</span><select onChange={(event) => setRecordingMode(event.target.value as EnvironmentContentRecordingMode)} value={candidateRecordingMode}><option value="full">{t("environmentDetail.recording.full")}</option><option value="metadata_only">{t("environmentDetail.recording.metadata")}</option><option value="off">{t("environmentDetail.recording.off")}</option></select></label>{candidateRecordingMode !== "off" && <label><span>{t("environmentDetail.recording.retention")}</span><input max={3650} min={1} onChange={(event) => setRetentionDays(Number(event.target.value))} type="number" value={candidateRetentionDays} /></label>}</div><p className="field-help">{t("environmentDetail.recording.disclosure")}</p><div className="template-actions"><span>{t("environmentDetail.endpoints.add")}</span><button onClick={() => setEndpoints(addEndpoint(candidateEndpoints, "claude"))} type="button"><BrandIcon name="claude-code" />{t("environmentDetail.endpoints.claude")}</button><button onClick={() => setEndpoints(addEndpoint(candidateEndpoints, "codex"))} type="button"><BrandIcon name="codex" />{t("environmentDetail.endpoints.codex")}</button></div><RouteAccountSelectors accounts={accounts.data?.items ?? []} endpoints={candidateEndpoints} onChange={setEndpoints} />{errorKey !== undefined && <InlineProblem message={t(errorKey)} />}<div className="editor-actions"><button className="primary-action" disabled={saveDraft.isPending || candidateName.trim().length === 0} onClick={() => saveDraft.mutate()} type="button">{saveDraft.isPending ? t("common.checking") : t("environmentDetail.review")}</button></div></section>}
 
       <section className="data-panel plan-panel">
         <SectionHeading title={t("environmentDetail.plan.title")} />
@@ -157,7 +163,7 @@ export function EnvironmentDetailRoutePage({
       </section>
 
       <div className="detail-grid">
-        <section className="data-panel"><SectionHeading title={t("environmentDetail.boundaries.title")} /><dl className="facts-list"><dt>{t("environmentDetail.boundaries.budget")}</dt><dd>{current.budgetPolicy.id || t("common.default")}</dd><dt>{t("environmentDetail.boundaries.egress")}</dt><dd>{current.egressPolicy.mode || t("common.default")}</dd><dt>{t("environmentDetail.boundaries.plugins")}</dt><dd>{t("common.count", { count: current.pluginBindings.length })}</dd></dl></section>
+        <section className="data-panel"><SectionHeading title={t("environmentDetail.boundaries.title")} /><dl className="facts-list"><dt>{t("environmentDetail.boundaries.recording")}</dt><dd>{t(`environmentDetail.recording.${current.contentRecording.mode === "metadata_only" ? "metadata" : current.contentRecording.mode}`)}{current.contentRecording.mode === "off" ? "" : ` · ${t("environmentDetail.recording.days", { count: current.contentRecording.retentionDays })}`}</dd><dt>{t("environmentDetail.boundaries.budget")}</dt><dd>{current.budgetPolicy.id || t("common.default")}</dd><dt>{t("environmentDetail.boundaries.egress")}</dt><dd>{current.egressPolicy.mode || t("common.default")}</dd><dt>{t("environmentDetail.boundaries.plugins")}</dt><dd>{t("common.count", { count: current.pluginBindings.length })}</dd></dl></section>
         <section className="data-panel"><SectionHeading title={t("environmentDetail.evidence.title")} /><dl className="facts-list"><dt>{t("environments.revision")}</dt><dd>{current.revision}</dd><dt>{t("environmentDetail.digest")}</dt><dd><code title={current.digest}>{shortDigest(current.digest)}</code></dd><dt>{t("environmentDetail.systemOwned")}</dt><dd>{current.systemOwned ? t("common.yes") : t("common.no")}</dd></dl></section>
       </div>
 
@@ -180,6 +186,7 @@ function NewEnvironmentDialog({ onClose }: { readonly onClose: () => void }) {
   const [id, setID] = useState("");
   const [template, setTemplate] = useState<EnvironmentTemplate>("claude");
   const [accountID, setAccountID] = useState("");
+	const [recordingMode, setRecordingMode] = useState<EnvironmentContentRecordingMode>("full");
   const [impact, setImpact] = useState<EnvironmentImpact>();
   const [draftRevision, setDraftRevision] = useState<number>();
   const [errorKey, setErrorKey] = useState<string>();
@@ -191,7 +198,7 @@ function NewEnvironmentDialog({ onClose }: { readonly onClose: () => void }) {
   const canonicalID = id.trim() || slug(name);
   const compatibleAccounts = compatibleProviderAccounts(accounts.data?.items ?? [], template);
   const selectedAccount = compatibleAccounts.find((account) => account.id === accountID);
-  const input = useMemo(() => newEnvironmentInput(name.trim(), template, selectedAccount), [name, selectedAccount, template]);
+  const input = useMemo(() => newEnvironmentInput(name.trim(), template, selectedAccount, recordingMode), [name, selectedAccount, template, recordingMode]);
   const review = useMutation({
     mutationFn: async () => {
       const expectedDraftRevision = await currentDraftRevision(
@@ -219,7 +226,7 @@ function NewEnvironmentDialog({ onClose }: { readonly onClose: () => void }) {
   });
   const submit = (event: FormEvent) => { event.preventDefault(); if (name.trim() !== "" && canonicalID !== "") review.mutate(); };
   const chooseTemplate = (next: EnvironmentTemplate) => { setTemplate(next); setAccountID(""); };
-  return <div className="modal-backdrop"><section aria-labelledby="new-environment-title" aria-modal="true" className="modal environment-modal" role="dialog"><header><div><p className="eyebrow">{t("environments.new.eyebrow")}</p><h2 id="new-environment-title">{t("environments.new.title")}</h2></div><button aria-label={t("common.close")} className="icon-button" onClick={onClose} type="button">×</button></header><form onSubmit={submit}><label><span>{t("environmentDetail.name")}</span><input autoFocus maxLength={256} onChange={(event) => setName(event.target.value)} value={name} /></label><label><span>{t("environments.new.id")}</span><input maxLength={128} onChange={(event) => setID(event.target.value)} placeholder={slug(name)} value={id} /></label><fieldset><legend>{t("environments.new.template")}</legend><div className="template-picker"><TemplateChoice active={template === "claude"} description={t("environments.new.claude.description")} icon={<BrandIcon name="claude-code" />} label={t("environments.new.claude")} onClick={() => chooseTemplate("claude")} /><TemplateChoice active={template === "codex"} description={t("environments.new.codex.description")} icon={<BrandIcon name="codex" />} label={t("environments.new.codex")} onClick={() => chooseTemplate("codex")} /></div></fieldset><label><span>{t("environments.new.account")}</span><select onChange={(event) => setAccountID(event.target.value)} value={accountID}><option value="">{t("environmentDetail.account.client")}</option>{compatibleAccounts.map((account) => <option key={account.id} value={account.id}>{account.displayName}</option>)}</select><small className="field-help">{compatibleAccounts.length === 0 ? t("environments.new.account.none") : t("environments.new.account.help")}</small></label>{errorKey !== undefined && <InlineProblem message={t(errorKey)} />}<footer><button onClick={onClose} type="button">{t("common.cancel")}</button><button className="primary-action" disabled={review.isPending || name.trim() === "" || canonicalID === ""} type="submit">{t("environmentDetail.review")}</button></footer></form>{impact !== undefined && <ImpactDialog impact={impact} onCancel={() => setImpact(undefined)} onPublish={() => publish.mutate()} publishing={publish.isPending} />}</section></div>;
+  return <div className="modal-backdrop"><section aria-labelledby="new-environment-title" aria-modal="true" className="modal environment-modal" role="dialog"><header><div><p className="eyebrow">{t("environments.new.eyebrow")}</p><h2 id="new-environment-title">{t("environments.new.title")}</h2></div><button aria-label={t("common.close")} className="icon-button" onClick={onClose} type="button">×</button></header><form onSubmit={submit}><label><span>{t("environmentDetail.name")}</span><input autoFocus maxLength={256} onChange={(event) => setName(event.target.value)} value={name} /></label><label><span>{t("environments.new.id")}</span><input maxLength={128} onChange={(event) => setID(event.target.value)} placeholder={slug(name)} value={id} /></label><fieldset><legend>{t("environments.new.template")}</legend><div className="template-picker"><TemplateChoice active={template === "claude"} description={t("environments.new.claude.description")} icon={<BrandIcon name="claude-code" />} label={t("environments.new.claude")} onClick={() => chooseTemplate("claude")} /><TemplateChoice active={template === "codex"} description={t("environments.new.codex.description")} icon={<BrandIcon name="codex" />} label={t("environments.new.codex")} onClick={() => chooseTemplate("codex")} /></div></fieldset><label><span>{t("environments.new.account")}</span><select onChange={(event) => setAccountID(event.target.value)} value={accountID}><option value="">{t("environmentDetail.account.client")}</option>{compatibleAccounts.map((account) => <option key={account.id} value={account.id}>{account.displayName}</option>)}</select><small className="field-help">{compatibleAccounts.length === 0 ? t("environments.new.account.none") : t("environments.new.account.help")}</small></label><label><span>{t("environmentDetail.recording.mode")}</span><select onChange={(event) => setRecordingMode(event.target.value as EnvironmentContentRecordingMode)} value={recordingMode}><option value="full">{t("environmentDetail.recording.full")}</option><option value="metadata_only">{t("environmentDetail.recording.metadata")}</option><option value="off">{t("environmentDetail.recording.off")}</option></select><small className="field-help">{t("environmentDetail.recording.disclosure")}</small></label>{errorKey !== undefined && <InlineProblem message={t(errorKey)} />}<footer><button onClick={onClose} type="button">{t("common.cancel")}</button><button className="primary-action" disabled={review.isPending || name.trim() === "" || canonicalID === ""} type="submit">{t("environmentDetail.review")}</button></footer></form>{impact !== undefined && <ImpactDialog impact={impact} onCancel={() => setImpact(undefined)} onPublish={() => publish.mutate()} publishing={publish.isPending} />}</section></div>;
 }
 
 function TemplateChoice({ active, description, icon, label, onClick }: { readonly active: boolean; readonly description: string; readonly icon?: ReactNode; readonly label: string; readonly onClick: () => void }) {
@@ -241,8 +248,8 @@ function RouteAccountSelectors({ accounts, endpoints, onChange }: { readonly acc
   })))}</div>;
 }
 
-function newEnvironmentInput(name: string, template: EnvironmentTemplate, account?: ProviderAccountRecord): EnvironmentDraftInput {
-  return { expectedDraftRevision: 0, name, state: "active", clientEndpoints: [endpointTemplate(template, account)], pluginBindings: [], budgetPolicy: { id: "", revision: 0 }, egressPolicy: { id: "", revision: 0, mode: "" } };
+function newEnvironmentInput(name: string, template: EnvironmentTemplate, account: ProviderAccountRecord | undefined, recordingMode: EnvironmentContentRecordingMode): EnvironmentDraftInput {
+  return { expectedDraftRevision: 0, name, state: "active", clientEndpoints: [endpointTemplate(template, account)], pluginBindings: [], budgetPolicy: { id: "", revision: 0 }, egressPolicy: { id: "", revision: 0, mode: "" }, contentRecording: { mode: recordingMode, retentionDays: recordingMode === "off" ? 0 : 30 } };
 }
 
 function addEndpoint(current: readonly EnvironmentClientEndpoint[], template: EnvironmentTemplate): readonly EnvironmentClientEndpoint[] {
