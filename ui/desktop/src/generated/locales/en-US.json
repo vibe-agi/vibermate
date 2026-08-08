@@ -503,6 +503,8 @@
   "error.invalidLocator": "This address is not a valid ViberMate view.",
   "exchange.account": "Effective account",
   "exchange.account.client": "Client login",
+  "exchange.account.credentialEpoch": "Credential epoch",
+  "exchange.account.revision": "Account revision",
   "exchange.attempts.empty.description": "No upstream attempt was created for this request.",
   "exchange.attempts.empty.title": "No attempts",
   "exchange.attempts.title": "Upstream attempts",

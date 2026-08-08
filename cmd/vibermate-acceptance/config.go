@@ -23,6 +23,7 @@ type config struct {
 	environmentID     string
 	dataDirectory     string
 	reportPath        string
+	anthropicKeyPath  string
 	deterministicOnly bool
 	keepData          bool
 	timeout           time.Duration
@@ -69,6 +70,12 @@ func parseConfig(arguments []string) (config, error) {
 		"report",
 		"",
 		"optional absolute JSON evidence path",
+	)
+	flags.StringVar(
+		&parsed.anthropicKeyPath,
+		"anthropic-api-key-file",
+		"",
+		"absolute private 0600 file used only by opt-in credentialed acceptance",
 	)
 	flags.BoolVar(
 		&parsed.deterministicOnly,
@@ -177,15 +184,34 @@ func parseConfig(arguments []string) (config, error) {
 			"Environment and timeout inputs are required",
 		)
 	}
+	if parsed.deterministicOnly {
+		if parsed.anthropicKeyPath != "" {
+			return config{}, errors.New(
+				"deterministic acceptance cannot receive a provider credential file",
+			)
+		}
+	} else {
+		if parsed.clientID != acceptanceClientClaudeCode {
+			return config{}, errors.New(
+				"credentialed acceptance currently requires the fixed Claude client",
+			)
+		}
+		if parsed.anthropicKeyPath == "" {
+			return config{}, errors.New(
+				"credentialed acceptance requires --anthropic-api-key-file",
+			)
+		}
+	}
 	if _, err := environment.NewEnvironmentID(parsed.environmentID); err != nil {
 		return config{}, fmt.Errorf("acceptance Environment: %w", err)
 	}
-	if _, err := assemblyEnvironment(parsed, 1); err != nil {
+	if _, err := assemblyEnvironment(parsed, 1, nil); err != nil {
 		return config{}, fmt.Errorf("acceptance Environment: %w", err)
 	}
 	for label, value := range map[string]string{
-		"data directory": parsed.dataDirectory,
-		"report path":    parsed.reportPath,
+		"data directory":         parsed.dataDirectory,
+		"report path":            parsed.reportPath,
+		"Anthropic API key file": parsed.anthropicKeyPath,
 	} {
 		if value == "" {
 			continue

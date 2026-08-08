@@ -5,6 +5,8 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"io"
+	"os"
+	"path/filepath"
 	"slices"
 	"strings"
 	"testing"
@@ -63,6 +65,31 @@ func TestDecodeDescriptorCompletesAtNewlineWithoutWaitingForEOF(t *testing.T) {
 		}
 	case <-time.After(time.Second):
 		t.Fatal("descriptor decoder waited for EOF after a complete frame")
+	}
+}
+
+func TestDaemonEnvironmentUsesAPrivateDataScopedHome(t *testing.T) {
+	t.Parallel()
+	directory := filepath.Join(t.TempDir(), "data")
+	if err := os.Mkdir(directory, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	environment, err := isolatedDaemonEnvironment(
+		[]string{"PATH=/usr/bin", "HOME=/Users/example", "TOKEN=sentinel"},
+		directory,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	home := "HOME=" + filepath.Join(directory, "acceptance-home")
+	if !slices.Contains(environment, home) ||
+		slices.Contains(environment, "HOME=/Users/example") ||
+		!slices.Contains(environment, "TOKEN=sentinel") {
+		t.Fatalf("isolated daemon environment = %v", environment)
+	}
+	info, err := os.Stat(filepath.Join(directory, "acceptance-home"))
+	if err != nil || !info.IsDir() || info.Mode().Perm() != 0o700 {
+		t.Fatalf("isolated daemon home = %+v, %v", info, err)
 	}
 }
 

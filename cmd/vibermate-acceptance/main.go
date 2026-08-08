@@ -1,12 +1,11 @@
 // Command vibermate-acceptance runs the opt-in macOS arm64 packaged-app
-// acceptance against packaged runtime executables. It never receives a secret
-// value. Managed provider-account evidence remains blocked until the runtime
-// assembles that authority.
+// acceptance against packaged runtime executables. Credentialed mode accepts
+// only a path to one private file and never accepts raw secret bytes in argv or
+// environment variables.
 package main
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"os"
 	"os/signal"
@@ -42,10 +41,6 @@ func main() {
 	}
 	if runErr != nil {
 		fmt.Fprintln(os.Stderr, runErr)
-		var blocked *blockedError
-		if errors.As(runErr, &blocked) {
-			os.Exit(3)
-		}
 		os.Exit(1)
 	}
 	fmt.Println("macOS arm64 packaged-app acceptance passed")

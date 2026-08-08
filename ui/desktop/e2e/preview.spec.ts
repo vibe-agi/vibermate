@@ -156,10 +156,16 @@ test("opens a request through its frozen Environment to the exact attempt", asyn
 
   await expect(page.getByRole("heading", { name: "Request trace" })).toBeVisible();
   await expect(page.getByText("work · r3", { exact: true })).toBeVisible();
-  await expect(page.getByText("claude-endpoint", { exact: true })).toBeVisible();
-  await expect(page.getByText("claude-messages", { exact: true })).toBeVisible();
-  await expect(page.getByText("claude-official", { exact: true })).toBeVisible();
+  await expect(page.getByText("claude-endpoint · r2", { exact: true })).toBeVisible();
+  await expect(page.getByText("claude-messages · r2", { exact: true })).toBeVisible();
+  await expect(page.getByText("claude-official · r2", { exact: true })).toBeVisible();
+  await expect(page.getByText("anthropic-work", { exact: true })).toBeVisible();
+  await expect(page.getByText("r4", { exact: true })).toBeVisible();
+  await expect(page.getByText("7", { exact: true })).toBeVisible();
+  await expect(page.getByText("https://api.anthropic.com", { exact: true })).toBeVisible();
+  await expect(page.getByText("egress-preview", { exact: true })).toBeVisible();
   await expect(page.getByText("attempt-preview", { exact: true })).toBeVisible();
+  await expect(page.getByText(/Completed .* 384 out .* 192 in/u)).toBeVisible();
   await expect(page.getByRole("heading", { name: "Request snapshot" })).toBeVisible();
   await expect(page.getByText("Inspect the current package and summarize the failing test.")).toBeVisible();
   await expect(page.getByText("read_file", { exact: true })).toBeVisible();

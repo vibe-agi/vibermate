@@ -31,11 +31,15 @@ import (
 	"github.com/vibe-agi/vibermate/internal/offlinehold"
 	"github.com/vibe-agi/vibermate/internal/originidentity"
 	"github.com/vibe-agi/vibermate/internal/protocolspec"
+	"github.com/vibe-agi/vibermate/internal/provideraccount"
+	"github.com/vibe-agi/vibermate/internal/secretstore"
 	"github.com/vibe-agi/vibermate/internal/toolapproval"
 	"github.com/vibe-agi/vibermate/internal/wireprofile"
 )
 
 const controlResponseLimit = 2 << 20
+
+const acceptanceManagedAccountID = "acceptance.anthropic"
 
 var controlReasonCodePattern = regexp.MustCompile(`^[a-z][a-z0-9_]*$`)
 
@@ -306,6 +310,101 @@ func (client *controlClient) status(
 	return status, nil
 }
 
+func (client *controlClient) createAnthropicAccount(
+	ctx context.Context,
+	secret *secretstore.Value,
+) (desktopcontrol.ProviderAccountResponse, error) {
+	if ctx == nil || secret == nil {
+		return desktopcontrol.ProviderAccountResponse{}, errors.New(
+			"managed account dependencies are required",
+		)
+	}
+	payload, err := secret.CopyBytes()
+	if err != nil {
+		return desktopcontrol.ProviderAccountResponse{}, err
+	}
+	input := desktopcontrol.ProviderAccountCreateInput{
+		ID: acceptanceManagedAccountID, DisplayName: "Anthropic acceptance",
+		Kind:   desktopcontrol.ProviderAccountKindAnthropicAPIKey,
+		Secret: string(payload),
+	}
+	clear(payload)
+	encoded, err := json.Marshal(input)
+	input.Secret = ""
+	if err != nil {
+		return desktopcontrol.ProviderAccountResponse{}, err
+	}
+	defer clear(encoded)
+	key, err := idempotencyKey()
+	if err != nil {
+		return desktopcontrol.ProviderAccountResponse{}, err
+	}
+	expected := uint64(0)
+	var response desktopcontrol.ProviderAccountResponse
+	status, problem, err := client.requestEncoded(
+		ctx, http.MethodPost, "/api/v1/provider-accounts", true,
+		&expected, encoded, true, key, &response,
+	)
+	if err != nil {
+		return desktopcontrol.ProviderAccountResponse{}, err
+	}
+	if status != http.StatusCreated || problem.ReasonCode != "" {
+		return desktopcontrol.ProviderAccountResponse{}, fmt.Errorf(
+			"create managed account: status=%d reason=%s",
+			status,
+			problem.ReasonCode,
+		)
+	}
+	if err := validateAnthropicAccount(response); err != nil {
+		return desktopcontrol.ProviderAccountResponse{}, err
+	}
+	return response, nil
+}
+
+func (client *controlClient) providerAccount(
+	ctx context.Context,
+	accountID string,
+) (desktopcontrol.ProviderAccountResponse, error) {
+	if _, err := provideraccount.NewID(accountID); err != nil {
+		return desktopcontrol.ProviderAccountResponse{}, err
+	}
+	var response desktopcontrol.ProviderAccountResponse
+	status, problem, err := client.request(
+		ctx, http.MethodGet,
+		"/api/v1/provider-accounts/"+url.PathEscape(accountID),
+		false, nil, nil, &response,
+	)
+	if err != nil {
+		return desktopcontrol.ProviderAccountResponse{}, err
+	}
+	if status != http.StatusOK || problem.ReasonCode != "" {
+		return desktopcontrol.ProviderAccountResponse{}, fmt.Errorf(
+			"read managed account: status=%d reason=%s",
+			status,
+			problem.ReasonCode,
+		)
+	}
+	if err := validateAnthropicAccount(response); err != nil {
+		return desktopcontrol.ProviderAccountResponse{}, err
+	}
+	return response, nil
+}
+
+func validateAnthropicAccount(
+	response desktopcontrol.ProviderAccountResponse,
+) error {
+	if response.ID != acceptanceManagedAccountID ||
+		response.Kind != desktopcontrol.ProviderAccountKindAnthropicAPIKey ||
+		response.RealmID != "anthropic.official" ||
+		response.State != provideraccount.StateActive ||
+		response.Revision != 1 ||
+		response.CredentialState != provideraccount.HealthReady ||
+		response.CredentialEpoch != 1 {
+		return errors.New("managed Anthropic account response is inconsistent")
+	}
+	return nil
+}
+
 type environmentPublication struct {
 	Draft   desktopcontrol.EnvironmentDraftResponse
 	Preview desktopcontrol.EnvironmentImpactResponse
@@ -316,6 +415,7 @@ func (client *controlClient) publishInitialEnvironment(
 	ctx context.Context,
 	config config,
 	expectedBase uint64,
+	account *desktopcontrol.ProviderAccountResponse,
 ) (environmentPublication, int, controlProblem, error) {
 	if ctx == nil {
 		return environmentPublication{}, 0, controlProblem{},
@@ -324,7 +424,11 @@ func (client *controlClient) publishInitialEnvironment(
 	if err := ctx.Err(); err != nil {
 		return environmentPublication{}, 0, controlProblem{}, err
 	}
-	candidate, err := assemblyEnvironment(config, environment.Revision(expectedBase+1))
+	candidate, err := assemblyEnvironment(
+		config,
+		environment.Revision(expectedBase+1),
+		account,
+	)
 	if err != nil {
 		return environmentPublication{}, 0, controlProblem{}, err
 	}
@@ -564,6 +668,35 @@ func (client *controlClient) activities(
 		)
 	}
 	return page, nil
+}
+
+func (client *controlClient) exchange(
+	ctx context.Context,
+	exchangeID string,
+) (desktopcontrol.ExchangeDetail, error) {
+	if !validControlIdentity(exchangeID, activity.MaxIdentityBytes) {
+		return desktopcontrol.ExchangeDetail{}, errors.New(
+			"Exchange identity is invalid",
+		)
+	}
+	var detail desktopcontrol.ExchangeDetail
+	status, problem, err := client.request(
+		ctx, http.MethodGet,
+		"/api/v1/exchanges/"+url.PathEscape(exchangeID),
+		false, nil, nil, &detail,
+	)
+	if err != nil {
+		return desktopcontrol.ExchangeDetail{}, err
+	}
+	if status != http.StatusOK || problem.ReasonCode != "" ||
+		detail.ID != exchangeID ||
+		detail.ParentRefs.ExchangeID != exchangeID ||
+		!validFrozenEnvironmentRef(detail.Environment) {
+		return desktopcontrol.ExchangeDetail{}, errors.New(
+			"Exchange detail is inconsistent",
+		)
+	}
+	return detail, nil
 }
 
 func activityPageFromWire(
@@ -862,6 +995,7 @@ func idempotencyKey() (string, error) {
 func assemblyEnvironment(
 	config config,
 	revision environment.Revision,
+	account *desktopcontrol.ProviderAccountResponse,
 ) (environment.Environment, error) {
 	client, err := selectedAcceptanceClient(config)
 	if err != nil {
@@ -887,6 +1021,38 @@ func assemblyEnvironment(
 		planID     = environment.ClientProtocolPlanID("acceptance.protocol")
 		routeID    = environment.UpstreamRouteID("acceptance.route")
 	)
+	planMode := environment.PlanModeOriginalPassthrough
+	accountPolicy := environment.RouteAccountPolicy{
+		Revision: revision, Mode: environment.AccountModeClientPassthrough,
+		FailoverPolicy: environment.FailoverOff,
+	}
+	if account != nil {
+		if account.Kind != desktopcontrol.ProviderAccountKindAnthropicAPIKey ||
+			account.RealmID != "anthropic.official" ||
+			account.State != provideraccount.StateActive ||
+			account.Revision == 0 ||
+			account.CredentialState != provideraccount.HealthReady ||
+			account.CredentialEpoch == 0 {
+			return environment.Environment{}, errors.New(
+				"managed acceptance account is not ready for Anthropic",
+			)
+		}
+		if _, accountErr := provideraccount.NewID(account.ID); accountErr != nil {
+			return environment.Environment{}, accountErr
+		}
+		planMode = environment.PlanModeManaged
+		accountPolicy = environment.RouteAccountPolicy{
+			Revision:            revision,
+			Mode:                environment.AccountModeManaged,
+			AllowedRealmIDs:     []string{account.RealmID},
+			PreferredAccountID:  account.ID,
+			CandidateAccountIDs: []string{account.ID},
+			AccountRevisions: map[string]environment.Revision{
+				account.ID: environment.Revision(account.Revision),
+			},
+			FailoverPolicy: environment.FailoverOff,
+		}
+	}
 	return environment.Environment{
 		ID: environmentID, Name: "Assembly Environment", State: environment.StateActive,
 		Revision:         revision,
@@ -896,7 +1062,7 @@ func assemblyEnvironment(
 			ProtocolPlans: []environment.ClientProtocolPlan{{
 				ID: planID, Revision: revision, ClientProtocol: client.ClientProtocol,
 				ClientAdapterPolicy: environment.ClientAdapterPolicy{ID: "acceptance.adapter", Revision: revision},
-				Mode:                environment.PlanModeOriginalPassthrough,
+				Mode:                planMode,
 				UpstreamPlan: environment.UpstreamPlan{
 					DefaultRouteID: routeID,
 					RouteSet:       environment.RouteSet{ID: "acceptance.routes", Revision: revision, CandidateRouteIDs: []environment.UpstreamRouteID{routeID}},
@@ -911,12 +1077,9 @@ func assemblyEnvironment(
 							},
 						},
 						BackendProtocol: string(client.ClientProtocol),
-						AccountPolicy: environment.RouteAccountPolicy{
-							Revision: revision, Mode: environment.AccountModeClientPassthrough,
-							FailoverPolicy: environment.FailoverOff,
-						},
-						ModelPolicy:    environment.ModelPolicy{Revision: revision, Mode: "preserve"},
-						WireProfileRef: wireprofile.UpstreamWireProfileFollowClientValue,
+						AccountPolicy:   accountPolicy,
+						ModelPolicy:     environment.ModelPolicy{Revision: revision, Mode: "preserve"},
+						WireProfileRef:  wireprofile.UpstreamWireProfileFollowClientValue,
 					}},
 				},
 			}},

@@ -206,6 +206,9 @@ const frozenEnvironment = {
   protocolPlanRevision: 2,
   routeId: "claude-official",
   routeRevision: 2,
+  accountId: "anthropic-work",
+  accountRevision: 4,
+  credentialEpoch: 7,
 } as const;
 
 const previewExchange: ExchangeDetail = {
@@ -219,7 +222,23 @@ const previewExchange: ExchangeDetail = {
   },
   processingTrace: {
     pluginRunIds: [],
-    attemptIds: ["attempt-preview"],
+    attempts: [{
+      sequence: 1,
+      id: "egress-preview",
+      purpose: "provider_attempt",
+      payloadClass: "client_semantic",
+      parent: { kind: "upstream_attempt", id: "attempt-preview", exchangeId: "exchange-preview" },
+      caller: "core",
+      targetOrigin: "https://api.anthropic.com",
+      decision: { authority: "environment", policyId: "egress.work", policyRevision: 1 },
+      reusedTransport: false,
+      startedAt: "2026-08-08T08:00:00.000Z",
+      terminal: true,
+      outcome: "completed",
+      bytesOut: 384,
+      bytesIn: 192,
+      completedAt: "2026-08-08T08:00:01.000Z",
+    }],
     result: "completed",
   },
   content: {

@@ -5,7 +5,9 @@ import (
 	"path/filepath"
 	"testing"
 
+	"github.com/vibe-agi/vibermate/internal/desktopcontrol"
 	"github.com/vibe-agi/vibermate/internal/environment"
+	"github.com/vibe-agi/vibermate/internal/provideraccount"
 )
 
 func TestAppBundlePathRequiresPackagedMembers(t *testing.T) {
@@ -145,7 +147,7 @@ func TestAcceptanceEnvironmentIsExplicitAndOriginalPassthrough(t *testing.T) {
 
 	explicit := defaultConfig()
 	explicit.claudePath = "/fixed/claude"
-	aggregate, err := assemblyEnvironment(explicit, 1)
+	aggregate, err := assemblyEnvironment(explicit, 1, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -153,6 +155,34 @@ func TestAcceptanceEnvironmentIsExplicitAndOriginalPassthrough(t *testing.T) {
 		len(aggregate.ClientEndpoints) != 1 ||
 		aggregate.ClientEndpoints[0].ProtocolPlans[0].Mode != environment.PlanModeOriginalPassthrough {
 		t.Fatalf("explicit Environment = %+v", aggregate)
+	}
+}
+
+func TestAcceptanceManagedEnvironmentFreezesOneReadyAnthropicAccount(t *testing.T) {
+	t.Parallel()
+	configured := defaultConfig()
+	configured.claudePath = "/fixed/claude"
+	account := desktopcontrol.ProviderAccountResponse{
+		ID: acceptanceManagedAccountID, DisplayName: "Anthropic acceptance",
+		Kind:    desktopcontrol.ProviderAccountKindAnthropicAPIKey,
+		RealmID: "anthropic.official", State: provideraccount.StateActive,
+		Revision: 1, CredentialState: provideraccount.HealthReady,
+		CredentialEpoch: 1,
+	}
+	aggregate, err := assemblyEnvironment(configured, 1, &account)
+	if err != nil {
+		t.Fatal(err)
+	}
+	plan := aggregate.ClientEndpoints[0].ProtocolPlans[0]
+	route := plan.UpstreamPlan.Routes[0]
+	if plan.Mode != environment.PlanModeManaged ||
+		route.AccountPolicy.Mode != environment.AccountModeManaged ||
+		route.AccountPolicy.PreferredAccountID != account.ID ||
+		len(route.AccountPolicy.CandidateAccountIDs) != 1 ||
+		route.AccountPolicy.CandidateAccountIDs[0] != account.ID ||
+		route.AccountPolicy.AccountRevisions[account.ID] != 1 ||
+		route.AccountPolicy.FailoverPolicy != environment.FailoverOff {
+		t.Fatalf("managed Environment = %+v", aggregate)
 	}
 }
 

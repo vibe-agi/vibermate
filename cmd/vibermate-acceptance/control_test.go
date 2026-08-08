@@ -329,7 +329,7 @@ func TestAssemblyEnvironmentKeepsClientAndProviderIdentityExact(t *testing.T) {
 	t.Parallel()
 	for _, clientID := range []acceptanceClientID{acceptanceClientClaudeCode, acceptanceClientCodexCLI} {
 		configured := config{clientID: clientID, environmentID: "assembly-001"}
-		aggregate, err := assemblyEnvironment(configured, 1)
+		aggregate, err := assemblyEnvironment(configured, 1, nil)
 		if err != nil {
 			t.Fatal(err)
 		}

@@ -61,6 +61,12 @@ func startDaemon(
 		config.daemonPath,
 		daemonArguments(appCacheDirectory, dataDirectory)...,
 	)
+	command.Env, err = isolatedDaemonEnvironment(os.Environ(), dataDirectory)
+	if err != nil {
+		_ = writer.Close()
+		_ = parentWriter.Close()
+		return nil, err
+	}
 	command.Stdin = parentReader
 	command.ExtraFiles = []*os.File{writer}
 	stderr := newBoundedBuffer(64 << 10)
@@ -135,6 +141,28 @@ func startDaemon(
 		stderr:         stderr,
 		parentLifetime: parentWriter,
 	}, nil
+}
+
+func isolatedDaemonEnvironment(base []string, dataDirectory string) ([]string, error) {
+	if dataDirectory == "" || !filepath.IsAbs(dataDirectory) ||
+		filepath.Clean(dataDirectory) != dataDirectory {
+		return nil, errors.New("daemon data directory is invalid")
+	}
+	home := filepath.Join(dataDirectory, "acceptance-home")
+	if err := os.MkdirAll(home, 0o700); err != nil {
+		return nil, fmt.Errorf("create isolated daemon home: %w", err)
+	}
+	if err := os.Chmod(home, 0o700); err != nil {
+		return nil, fmt.Errorf("protect isolated daemon home: %w", err)
+	}
+	result := make([]string, 0, len(base)+1)
+	for _, entry := range base {
+		if strings.HasPrefix(entry, "HOME=") {
+			continue
+		}
+		result = append(result, entry)
+	}
+	return append(result, "HOME="+home), nil
 }
 
 func daemonArguments(

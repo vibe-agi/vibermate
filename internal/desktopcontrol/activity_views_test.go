@@ -84,9 +84,12 @@ func TestExchangeDetailProjectsOrderedRedactedEvidence(t *testing.T) {
 		detail.ProcessingTrace.Result != record.ReasonCode ||
 		detail.ProcessingTrace.EgressProxyID != "company-proxy" ||
 		len(detail.ProcessingTrace.PluginRunIDs) != 0 ||
-		len(detail.ProcessingTrace.AttemptIDs) != 2 ||
-		detail.ProcessingTrace.AttemptIDs[0] != "attempt-1" ||
-		detail.ProcessingTrace.AttemptIDs[1] != "attempt-2" {
+		len(detail.ProcessingTrace.Attempts) != 3 ||
+		detail.ProcessingTrace.Attempts[0].ID != "egress-0" ||
+		detail.ProcessingTrace.Attempts[0].Parent.ID != "attempt-1" ||
+		detail.ProcessingTrace.Attempts[1].ID != "egress-1" ||
+		detail.ProcessingTrace.Attempts[2].ID != "egress-2" ||
+		detail.ProcessingTrace.Attempts[2].TargetOrigin != "https://provider.example:443" {
 		t.Fatalf("Exchange detail = %+v", detail)
 	}
 	if _, err := exchangeDetailOf(record, egressaudit.Page{

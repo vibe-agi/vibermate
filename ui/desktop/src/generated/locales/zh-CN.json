@@ -503,6 +503,8 @@
   "error.invalidLocator": "这个地址不是有效的 ViberMate 页面。",
   "exchange.account": "实际账号",
   "exchange.account.client": "客户端登录",
+  "exchange.account.credentialEpoch": "凭据世代",
+  "exchange.account.revision": "账号版本",
   "exchange.attempts.empty.description": "这个请求没有创建上游尝试。",
   "exchange.attempts.empty.title": "没有尝试",
   "exchange.attempts.title": "上游尝试",

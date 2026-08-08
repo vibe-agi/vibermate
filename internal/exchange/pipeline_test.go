@@ -621,6 +621,58 @@ func TestAccountFailoverCannotEscapeFrozenRouteCandidateSet(t *testing.T) {
 	}
 }
 
+func TestManagedAuthenticationRejectionIsTerminalWhenFailoverIsOff(t *testing.T) {
+	t.Parallel()
+	for _, status := range []int{http.StatusUnauthorized, http.StatusForbidden} {
+		status := status
+		t.Run(http.StatusText(status), func(t *testing.T) {
+			t.Parallel()
+			accounts := []testAccount{
+				{id: "account.primary", revision: 2, epoch: 3},
+				{id: "account.backup", revision: 4, epoch: 5},
+			}
+			plan := mustEnvironmentRequestPlan(t, testPlanOptions{
+				mode: environment.PlanModeManaged, providerOrigin: "https://provider.example/v1",
+				backend: protocolspec.DialectOpenAIChat, modelMode: modelModeFixed,
+				fixedModel: "gpt-provider", accounts: accounts,
+				preferred: "account.primary", failover: environment.FailoverOff,
+			})
+			authority := newAccountAuthority(t, accounts...)
+			provider := &providerDouble{results: []providerResult{
+				{response: jsonResponse(status, []byte(`{"error":{"type":"authentication_error"}}`))},
+				{response: jsonResponse(http.StatusOK, completeProviderResponse("gpt-provider"))},
+			}}
+			pipeline := newTestPipeline(
+				t, authority, provider, approvedDecisions(), &attemptObserverDouble{},
+			)
+			defer shutdownPipeline(t, pipeline)
+
+			_, err := pipeline.Execute(
+				context.Background(),
+				mustClientRequest(t, "exchange-auth-rejected", plan, completeClientRequest()),
+				&downstreamRecorder{},
+			)
+			var failure *Failure
+			if !errors.As(err, &failure) ||
+				failure.Code != ReasonProviderStatusRejected ||
+				failure.ProviderStatus != status {
+				t.Fatalf("authentication rejection = %v", err)
+			}
+			if got := provider.requestsSnapshot(); len(got) != 1 {
+				t.Fatalf("provider attempts = %d, want 1", len(got))
+			}
+			if got := authority.snapshot(); len(got) != 1 ||
+				got[0].AccountID() != "account.primary" {
+				t.Fatalf("account lease requests = %+v", got)
+			}
+			if authority.releaseCount("account.primary") != 1 ||
+				authority.releaseCount("account.backup") != 0 {
+				t.Fatal("authentication rejection crossed the frozen account boundary")
+			}
+		})
+	}
+}
+
 func TestToolDecisionRejectsBeforeAnyToolBytesReachClient(t *testing.T) {
 	plan := mustEnvironmentRequestPlan(t, testPlanOptions{
 		mode:           environment.PlanModeManaged,

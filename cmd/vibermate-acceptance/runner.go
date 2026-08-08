@@ -21,6 +21,7 @@ import (
 	"github.com/vibe-agi/vibermate/internal/connectionevent"
 	"github.com/vibe-agi/vibermate/internal/connectionpolicy"
 	"github.com/vibe-agi/vibermate/internal/desktopcontrol"
+	"github.com/vibe-agi/vibermate/internal/egressaudit"
 	"github.com/vibe-agi/vibermate/internal/environment"
 	"github.com/vibe-agi/vibermate/internal/exchange"
 	"github.com/vibe-agi/vibermate/internal/instanceguard"
@@ -185,7 +186,7 @@ func runAcceptance(
 		checkPassed,
 		"packaged daemon published a ready Desktop generation",
 	)
-	published, status, problem, err := first.control.publishInitialEnvironment(ctx, config, 0)
+	published, status, problem, err := first.control.publishInitialEnvironment(ctx, config, 0, nil)
 	if err != nil ||
 		status != http.StatusOK ||
 		problem.ReasonCode != "" ||
@@ -337,6 +338,11 @@ func runAcceptance(
 			checkPassed,
 			"credentialed acceptance uses a second private runtime data directory",
 		)
+		credential, credentialErr := readPrivateCredential(config.anthropicKeyPath)
+		if credentialErr != nil {
+			return fail("provider-account", credentialErr)
+		}
+		defer credential.Destroy()
 		credentialed, credentialedErr := startDaemon(
 			ctx,
 			config,
@@ -357,8 +363,21 @@ func runAcceptance(
 				stopCancel()
 			}
 		}()
+		account, accountErr := credentialed.control.createAnthropicAccount(
+			ctx,
+			credential,
+		)
+		credential.Destroy()
+		if accountErr != nil {
+			return fail("provider-account", accountErr)
+		}
+		report.add(
+			"provider-account",
+			checkPassed,
+			"the private control plane stored one Anthropic credential without returning it and published account revision 1 / credential epoch 1",
+		)
 		credentialedPublished, credentialedStatus, credentialedProblem, credentialedErr :=
-			credentialed.control.publishInitialEnvironment(ctx, config, 0)
+			credentialed.control.publishInitialEnvironment(ctx, config, 0, &account)
 		if credentialedErr != nil ||
 			credentialedStatus != http.StatusOK ||
 			credentialedProblem.ReasonCode != "" ||
@@ -393,26 +412,166 @@ func runAcceptance(
 			checkPassed,
 			"the credentialed runtime independently persisted the launch-scoped Environment assignment",
 		)
+		if err := configureAcceptanceConnectionPolicy(
+			ctx,
+			credentialed.control,
+			config,
+		); err != nil {
+			return fail("credentialed-managed-request", err)
+		}
+		audit, auditErr := openExchangeAuditReader(ctx, credentialedDirectory)
+		if auditErr != nil {
+			return fail("credentialed-managed-request", auditErr)
+		}
+		baseline, baselineErr := audit.latestSequence(ctx)
+		if baselineErr != nil {
+			_ = audit.Close()
+			return fail("credentialed-managed-request", baselineErr)
+		}
+		if err := runNormalReply(ctx, config, credentialed, audit); err != nil {
+			_ = audit.Close()
+			return fail("credentialed-managed-request", err)
+		}
 		report.add(
-			"provider-account",
-			checkBlocked,
-			"managed ProviderAccount composition is not implemented in the current Environment runtime",
+			"credentialed-managed-request",
+			checkPassed,
+			"the fixed Claude client completed through the managed Anthropic route",
+		)
+		firstExchange, evidenceErr := waitForManagedReplyEvidence(
+			ctx,
+			audit,
+			credentialed.control,
+			config,
+			baseline,
+			account,
+			credentialedPublished.Publish.Environment,
+			15*time.Second,
+		)
+		if closeErr := audit.Close(); evidenceErr == nil {
+			evidenceErr = closeErr
+		}
+		if evidenceErr != nil {
+			return fail("credentialed-managed-evidence", evidenceErr)
+		}
+		report.add(
+			"credentialed-managed-evidence",
+			checkPassed,
+			"frozen Environment, route, account revision, credential epoch, usage, and one terminal provider Attempt agree",
 		)
 		stopContext, stopCancel = context.WithTimeout(ctx, 30*time.Second)
 		stopErr = credentialed.stopGracefully(stopContext)
 		stopCancel()
 		credentialedStopped = true
 		if stopErr != nil {
+			return fail("credentialed-recovery", stopErr)
+		}
+		credentialedRestarted, restartErr := startDaemon(
+			ctx,
+			config,
+			layout.AppCacheDirectory,
+			credentialedDirectory,
+		)
+		if restartErr != nil {
+			return fail("credentialed-recovery", restartErr)
+		}
+		credentialedRestartedStopped := false
+		defer func() {
+			if !credentialedRestartedStopped {
+				stopContext, stopCancel := context.WithTimeout(
+					context.Background(),
+					10*time.Second,
+				)
+				_ = credentialedRestarted.stopGracefully(stopContext)
+				stopCancel()
+			}
+		}()
+		recoveredAccount, recoveryErr := credentialedRestarted.control.providerAccount(
+			ctx,
+			account.ID,
+		)
+		if recoveryErr != nil || recoveredAccount != account {
+			return fail(
+				"credentialed-recovery",
+				fmt.Errorf("recovered account=%+v: %w", recoveredAccount, recoveryErr),
+			)
+		}
+		if recoveryErr = requireRecoveredEnvironment(
+			ctx,
+			credentialedRestarted.control,
+			config,
+		); recoveryErr != nil {
+			return fail("credentialed-recovery", recoveryErr)
+		}
+		report.add(
+			"credentialed-recovery",
+			checkPassed,
+			"a fresh daemon recovered the exact managed Environment and ready account from SQLite and the private file SecretStore",
+		)
+		reopenedAudit, reopenErr := openExchangeAuditReader(ctx, credentialedDirectory)
+		if reopenErr != nil {
+			return fail("credentialed-recovered-request", reopenErr)
+		}
+		restartBaseline, baselineErr := reopenedAudit.latestSequence(ctx)
+		if baselineErr == nil {
+			baselineErr = requireExchangeAuditRecord(
+				ctx,
+				reopenedAudit,
+				firstExchange,
+			)
+		}
+		if baselineErr != nil {
+			_ = reopenedAudit.Close()
+			return fail("credentialed-recovered-request", baselineErr)
+		}
+		if err := runNormalReply(
+			ctx,
+			config,
+			credentialedRestarted,
+			reopenedAudit,
+		); err != nil {
+			_ = reopenedAudit.Close()
+			return fail("credentialed-recovered-request", err)
+		}
+		_, evidenceErr = waitForManagedReplyEvidence(
+			ctx,
+			reopenedAudit,
+			credentialedRestarted.control,
+			config,
+			restartBaseline,
+			recoveredAccount,
+			credentialedPublished.Publish.Environment,
+			15*time.Second,
+		)
+		if closeErr := reopenedAudit.Close(); evidenceErr == nil {
+			evidenceErr = closeErr
+		}
+		if evidenceErr != nil {
+			return fail("credentialed-recovered-request", evidenceErr)
+		}
+		report.add(
+			"credentialed-recovered-request",
+			checkPassed,
+			"the reopened packaged runtime completed a second request with the same frozen managed authority",
+		)
+		stopContext, stopCancel = context.WithTimeout(ctx, 30*time.Second)
+		stopErr = credentialedRestarted.stopGracefully(stopContext)
+		stopCancel()
+		credentialedRestartedStopped = true
+		if stopErr != nil {
 			return fail("final-shutdown", stopErr)
 		}
 		report.add(
 			"final-shutdown",
 			checkPassed,
-			"the blocked credentialed Environment generation drained without provider traffic",
+			"the credentialed Environment generation drained after recovered provider traffic",
 		)
-		return report, &blockedError{
-			reason: "implement and assemble the typed ProviderAccount authority before credentialed provider evidence",
+		if contractErr := requireCurrentCheckContract(
+			report,
+			acceptancereport.ModeCredentialed,
+		); contractErr != nil {
+			return fail("acceptance-report-contract", contractErr)
 		}
+		return report, nil
 	}
 }
 
@@ -1658,6 +1817,121 @@ func runNormalReply(
 		return fmt.Errorf("normal reply evidence: %w", err)
 	}
 	return waitForOfflineSettlement(ctx, generation.control, 10*time.Second)
+}
+
+func waitForManagedReplyEvidence(
+	ctx context.Context,
+	audit *exchangeAuditReader,
+	control *controlClient,
+	config config,
+	after int64,
+	account desktopcontrol.ProviderAccountResponse,
+	published desktopcontrol.EnvironmentResponse,
+	limit time.Duration,
+) (exchangeAuditRecord, error) {
+	if ctx == nil || audit == nil || control == nil || after < 0 ||
+		len(published.ClientEndpoints) != 1 ||
+		len(published.ClientEndpoints[0].ProtocolPlans) != 1 ||
+		len(published.ClientEndpoints[0].ProtocolPlans[0].UpstreamPlan.Routes) != 1 {
+		return exchangeAuditRecord{}, errors.New(
+			"managed reply evidence dependencies are incomplete",
+		)
+	}
+	plan := published.ClientEndpoints[0].ProtocolPlans[0]
+	route := plan.UpstreamPlan.Routes[0]
+	waitContext, cancel := context.WithTimeout(ctx, limit)
+	defer cancel()
+	ticker := time.NewTicker(50 * time.Millisecond)
+	defer ticker.Stop()
+	for {
+		records, err := audit.terminalsAfter(
+			waitContext,
+			config.environmentID,
+			after,
+		)
+		if err != nil {
+			return exchangeAuditRecord{}, err
+		}
+		for _, record := range records {
+			if record.Status != activity.StatusSucceeded {
+				return exchangeAuditRecord{}, fmt.Errorf(
+					"managed route produced terminal %s reason=%s",
+					record.Status,
+					record.ReasonCode,
+				)
+			}
+			detail, err := control.exchange(waitContext, record.ExchangeID)
+			if err != nil {
+				return exchangeAuditRecord{}, err
+			}
+			if !exchangeContainsMarker(detail, "VIBEMATE_NORMAL_OK") {
+				continue
+			}
+			if detail.Status != string(activity.StatusSucceeded) ||
+				detail.Environment.ID != config.environmentID ||
+				detail.Environment.Revision != uint64(published.Revision) ||
+				detail.Environment.Digest != published.Digest ||
+				detail.Environment.ClientEndpointID != published.ClientEndpoints[0].ID.String() ||
+				detail.Environment.ClientEndpointRevision != uint64(published.ClientEndpoints[0].Revision) ||
+				detail.Environment.ProtocolPlanID != plan.ID.String() ||
+				detail.Environment.ProtocolPlanRevision != uint64(plan.Revision) ||
+				detail.Environment.RouteID != route.ID.String() ||
+				detail.Environment.RouteRevision != uint64(route.Revision) ||
+				detail.Environment.AccountID != account.ID ||
+				detail.Environment.AccountRevision != account.Revision ||
+				detail.Environment.CredentialEpoch != account.CredentialEpoch ||
+				detail.ProcessingTrace.Result != string(activity.StatusSucceeded) ||
+				len(detail.ProcessingTrace.PluginRunIDs) != 0 ||
+				len(detail.ProcessingTrace.Attempts) != 1 {
+				return exchangeAuditRecord{}, errors.New(
+					"managed Exchange frozen evidence is inconsistent",
+				)
+			}
+			attempt := detail.ProcessingTrace.Attempts[0]
+			if attempt.Purpose != egressaudit.PurposeProviderAttempt ||
+				attempt.TargetOrigin != route.ProviderTarget.Origin.String() ||
+				attempt.Decision.Authority != egressaudit.AuthorityEnvironment ||
+				attempt.Parent.ExchangeID != record.ExchangeID ||
+				!attempt.Terminal || attempt.Outcome != egressaudit.OutcomeCompleted ||
+				attempt.ErrorClass != "" || attempt.BytesOut <= 0 || attempt.BytesIn <= 0 ||
+				attempt.CompletedAt == nil {
+				return exchangeAuditRecord{}, errors.New(
+					"managed provider Attempt evidence is inconsistent",
+				)
+			}
+			if detail.Content.Response == nil ||
+				!detail.Content.Response.Usage.Output.Known ||
+				detail.Content.Response.Usage.Output.Tokens <= 0 {
+				return exchangeAuditRecord{}, errors.New(
+					"managed provider usage evidence is unavailable",
+				)
+			}
+			return record, nil
+		}
+		select {
+		case <-ticker.C:
+		case <-waitContext.Done():
+			return exchangeAuditRecord{}, fmt.Errorf(
+				"managed reply evidence did not arrive: %w",
+				waitContext.Err(),
+			)
+		}
+	}
+}
+
+func exchangeContainsMarker(
+	detail desktopcontrol.ExchangeDetail,
+	marker string,
+) bool {
+	if detail.Content.Response == nil || marker == "" {
+		return false
+	}
+	for _, block := range detail.Content.Response.Blocks {
+		if strings.Contains(block.Text, marker) {
+			return true
+		}
+	}
+	return false
 }
 
 func requireSuccessfulAgentEvidence(

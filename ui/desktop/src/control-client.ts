@@ -2906,10 +2906,12 @@ function validExchangeUsageValue(value: unknown): boolean {
 function validExchangeTrace(value: unknown): boolean {
   return (
     isRecord(value) &&
-    hasClosedFields(value, ["pluginRunIds", "attemptIds", "result"], ["egressProxyId"]) &&
+    hasClosedFields(value, ["pluginRunIds", "attempts", "result"], ["egressProxyId"]) &&
     optionalIdentity(value.egressProxyId) &&
     validIdentityArray(value.pluginRunIds, maximumCollectionItems, true) &&
-    validIdentityArray(value.attemptIds, maximumCollectionItems, true) &&
+    Array.isArray(value.attempts) &&
+    value.attempts.length <= maximumCollectionItems &&
+    value.attempts.every(validEgressAttempt) &&
     validIdentity(value.result)
   );
 }

@@ -18,6 +18,7 @@ import type {
   ExchangeContentBlock,
   ExchangeContentDetail,
   ExchangeContentMessage,
+  EgressAttemptRecord,
   ProviderAccountKind,
   ProviderAccountRecord,
 } from "./control-types.ts";
@@ -97,7 +98,70 @@ export function ExchangeRoutePage({ exchangeId }: { readonly exchangeId: string 
   if (exchange.data === undefined) return <div className="page"><InlineProblem message={t(controlErrorKey(exchange.error))} /></div>;
   const detail = exchange.data;
   const response = detail.content.response;
-  return <div className="page exchange-page"><PageHeading description={detail.id} eyebrow={t("exchange.eyebrow")} title={t("exchange.title")} /><section className="trace-layout"><aside aria-label={t("exchange.trace.title")} className="trace-rail"><TraceStep label={t("exchange.trace.capture")} value={detail.parentRefs.captureRunId ?? detail.parentRefs.manualCaptureId ?? t("common.unavailable")} /><TraceStep label={t("exchange.trace.environment")} value={`${detail.environment.id} · r${detail.environment.revision}`} /><TraceStep label={t("exchange.trace.endpoint")} value={detail.environment.clientEndpointId} /><TraceStep label={t("exchange.trace.protocol")} value={detail.environment.protocolPlanId} /><TraceStep label={t("exchange.trace.route")} value={detail.environment.routeId} /><TraceStep label={t("exchange.trace.attempts")} value={String(detail.processingTrace.attemptIds.length)} /><TraceStep label={t("exchange.trace.result")} value={detail.processingTrace.result} /></aside><div className="exchange-inspector-stack"><section className="data-panel exchange-inspector"><div className="exchange-inspector-heading"><SectionHeading title={t("exchange.inspector.title")} />{detail.content.state === "recorded" && <span className="recording-state">{t(`exchange.content.mode.${detail.content.mode ?? "full"}`)}</span>}</div>{detail.content.state === "not_recorded" || detail.content.request === undefined ? <EmptyState description={t("exchange.content.empty.description")} title={t("exchange.content.empty.title")} /> : <div className="conversation-evidence"><div className="content-retention"><span>{t("exchange.content.expires")}</span><time dateTime={detail.content.expiresAt}>{detail.content.expiresAt === undefined ? t("common.unavailable") : new Intl.DateTimeFormat(undefined, { dateStyle: "medium", timeStyle: "short" }).format(Date.parse(detail.content.expiresAt))}</time></div>{detail.content.request.messages.map((message, index) => <ExchangeMessage key={`${message.role}:${index}`} message={message} />)}{response !== undefined && <article className="exchange-message exchange-message-assistant"><header><span>{t("exchange.role.assistant")}</span><small>{response.reportedModel} · {t(`exchange.stop.${response.stopReason}`)}</small></header><ExchangeBlocks blocks={response.blocks} /><UsageSummary usage={response.usage} /></article>}</div>}</section><section className="data-panel exchange-facts"><dl className="facts-list"><dt>{t("exchange.status")}</dt><dd>{detail.status}</dd><dt>{t("exchange.account")}</dt><dd>{detail.environment.accountId ?? t("exchange.account.client")}</dd><dt>{t("exchange.snapshot")}</dt><dd><code title={detail.environment.digest}>{shortValue(detail.environment.digest)}</code></dd></dl><SectionHeading title={t("exchange.attempts.title")} />{detail.processingTrace.attemptIds.length === 0 ? <p className="muted-copy">{t("exchange.attempts.empty.description")}</p> : <ol className="attempt-list">{detail.processingTrace.attemptIds.map((id, index) => <li key={id}><span>{index + 1}</span><code>{id}</code></li>)}</ol>}</section></div></section></div>;
+  const attempts = detail.processingTrace.attempts;
+  return (
+    <div className="page exchange-page">
+      <PageHeading description={detail.id} eyebrow={t("exchange.eyebrow")} title={t("exchange.title")} />
+      <section className="trace-layout">
+        <aside aria-label={t("exchange.trace.title")} className="trace-rail">
+          <TraceStep label={t("exchange.trace.capture")} value={detail.parentRefs.captureRunId ?? detail.parentRefs.manualCaptureId ?? t("common.unavailable")} />
+          <TraceStep label={t("exchange.trace.environment")} value={`${detail.environment.id} · r${detail.environment.revision}`} />
+          <TraceStep label={t("exchange.trace.endpoint")} value={`${detail.environment.clientEndpointId} · r${detail.environment.clientEndpointRevision}`} />
+          <TraceStep label={t("exchange.trace.protocol")} value={`${detail.environment.protocolPlanId} · r${detail.environment.protocolPlanRevision}`} />
+          <TraceStep label={t("exchange.trace.route")} value={`${detail.environment.routeId} · r${detail.environment.routeRevision}`} />
+          <TraceStep label={t("exchange.trace.attempts")} value={String(attempts.length)} />
+          <TraceStep label={t("exchange.trace.result")} value={detail.processingTrace.result} />
+        </aside>
+        <div className="exchange-inspector-stack">
+          <section className="data-panel exchange-inspector">
+            <div className="exchange-inspector-heading">
+              <SectionHeading title={t("exchange.inspector.title")} />
+              {detail.content.state === "recorded" && <span className="recording-state">{t(`exchange.content.mode.${detail.content.mode ?? "full"}`)}</span>}
+            </div>
+            {detail.content.state === "not_recorded" || detail.content.request === undefined
+              ? <EmptyState description={t("exchange.content.empty.description")} title={t("exchange.content.empty.title")} />
+              : <div className="conversation-evidence">
+                  <div className="content-retention">
+                    <span>{t("exchange.content.expires")}</span>
+                    <time dateTime={detail.content.expiresAt}>{detail.content.expiresAt === undefined ? t("common.unavailable") : new Intl.DateTimeFormat(undefined, { dateStyle: "medium", timeStyle: "short" }).format(Date.parse(detail.content.expiresAt))}</time>
+                  </div>
+                  {detail.content.request.messages.map((message, index) => <ExchangeMessage key={`${message.role}:${index}`} message={message} />)}
+                  {response !== undefined && <article className="exchange-message exchange-message-assistant"><header><span>{t("exchange.role.assistant")}</span><small>{response.reportedModel} · {t(`exchange.stop.${response.stopReason}`)}</small></header><ExchangeBlocks blocks={response.blocks} /><UsageSummary usage={response.usage} /></article>}
+                </div>}
+          </section>
+          <section className="data-panel exchange-facts">
+            <dl className="facts-list">
+              <dt>{t("exchange.status")}</dt><dd>{detail.status}</dd>
+              <dt>{t("exchange.account")}</dt><dd>{detail.environment.accountId ?? t("exchange.account.client")}</dd>
+              <dt>{t("exchange.account.revision")}</dt><dd>{detail.environment.accountRevision === undefined ? t("common.unavailable") : `r${detail.environment.accountRevision}`}</dd>
+              <dt>{t("exchange.account.credentialEpoch")}</dt><dd>{detail.environment.credentialEpoch ?? t("common.unavailable")}</dd>
+              <dt>{t("exchange.snapshot")}</dt><dd><code title={detail.environment.digest}>{shortValue(detail.environment.digest)}</code></dd>
+            </dl>
+            <SectionHeading title={t("exchange.attempts.title")} />
+            {attempts.length === 0
+              ? <p className="muted-copy">{t("exchange.attempts.empty.description")}</p>
+              : <ol className="attempt-list">{attempts.map((attempt) => <AttemptEvidence attempt={attempt} key={attempt.id} />)}</ol>}
+          </section>
+        </div>
+      </section>
+    </div>
+  );
+}
+
+function AttemptEvidence({ attempt }: { readonly attempt: EgressAttemptRecord }) {
+  const { t } = useTranslation();
+  return (
+    <li className="attempt-evidence">
+      <span>{attempt.sequence}</span>
+      <div>
+        <strong>{t(`egress.purpose.${attempt.purpose}`)}</strong>
+        <code title={attempt.targetOrigin}>{attempt.targetOrigin}</code>
+        <small><code>{attempt.id}</code>{attempt.parent.id === undefined ? null : <><span> · </span><code>{attempt.parent.id}</code></>}</small>
+        <small>{attempt.terminal ? t(`egress.outcome.${attempt.outcome ?? "failed"}`) : t("egress.outcome.inFlight")} · {t("egress.bytes.value", { out: attempt.bytesOut, in: attempt.bytesIn })}</small>
+        {attempt.errorClass !== undefined && <small className="attempt-error">{attempt.errorClass}</small>}
+      </div>
+    </li>
+  );
 }
 
 function TraceStep({ label, value }: { readonly label: string; readonly value: string }) { return <div><span>{label}</span><strong>{value}</strong></div>; }

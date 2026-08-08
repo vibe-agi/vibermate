@@ -81,9 +81,13 @@ func credentialedCheckIDs(deterministic []string, _ bool) []string {
 	checks = append(checks,
 		"deterministic-phase-shutdown",
 		"credentialed-private-data-directory",
+		"provider-account",
 		"credentialed-environment-publish",
 		"credentialed-capture-environment-assignment",
-		"provider-account",
+		"credentialed-managed-request",
+		"credentialed-managed-evidence",
+		"credentialed-recovery",
+		"credentialed-recovered-request",
 	)
 	return append(checks, "final-shutdown")
 }

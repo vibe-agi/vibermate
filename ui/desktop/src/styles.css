@@ -253,6 +253,10 @@ input, select { width: 100%; min-height: 32px; border: 1px solid var(--border-st
 .attempt-list { margin: 0; padding: 0 12px 12px; list-style: none; }
 .attempt-list li { display: flex; gap: 8px; padding: 7px 0; border-top: 1px solid var(--border); }
 .attempt-list li span { color: var(--quiet); font-family: var(--mono); }
+.attempt-evidence > div { display: grid; min-width: 0; gap: 3px; }
+.attempt-evidence code { overflow: hidden; color: var(--text); text-overflow: ellipsis; white-space: nowrap; }
+.attempt-evidence small { color: var(--quiet); }
+.attempt-evidence .attempt-error { color: var(--danger); }
 
 .modal-backdrop { position: fixed; z-index: 50; inset: 0; display: grid; place-items: center; padding: 20px; background: rgb(0 0 0 / 46%); }
 .modal { width: min(680px, 100%); max-height: calc(100vh - 40px); overflow: auto; border: 1px solid var(--border-strong); border-radius: 9px; background: var(--panel); box-shadow: 0 20px 60px rgb(0 0 0 / 28%); }

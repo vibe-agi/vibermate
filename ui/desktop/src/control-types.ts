@@ -396,7 +396,7 @@ export interface ExchangeDetail {
   readonly processingTrace: {
     readonly egressProxyId?: string;
     readonly pluginRunIds: readonly string[];
-    readonly attemptIds: readonly string[];
+    readonly attempts: readonly EgressAttemptRecord[];
     readonly result: string;
   };
   readonly content: ExchangeContentDetail;

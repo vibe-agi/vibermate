@@ -25,9 +25,12 @@ Every run also requires:
 - a clean, fully committed source checkout for independently verified
   provenance.
 
-The runner has no provider-origin, model, account, credential, or secret-value
-argument. Deterministic assembly evidence must not acquire those authorities
-from ambient environment variables or developer state.
+The runner has no provider-origin, model, account, or raw secret-value
+argument. Deterministic assembly evidence cannot acquire those authorities
+from ambient environment variables or developer state. Credentialed mode
+accepts only `--anthropic-api-key-file`, an absolute regular `0600` file that
+is opened without following links. The key itself never appears in argv, an
+environment variable, the report, SQLite, UI, or logs.
 
 ## Artifact and report provenance
 
@@ -108,21 +111,45 @@ Example:
 Use `--codex=/absolute/path/to/the/fixed/codex` instead of `--claude` for the
 fixed Codex path. Supplying both or neither is rejected.
 
-## Provider-account continuation
+## Opt-in managed-provider continuation
 
 Without `--deterministic-only`, the runner first completes the deterministic
-phase, then starts a second fresh private runtime and independently proves
-Environment publication and Capture assignment again. It currently records
-`provider-account` as `blocked`, drains without provider traffic, writes the
-truthful blocked report, and exits with status 3.
+phase, then uses a second fresh private runtime and an isolated acceptance
+`HOME`. Credentialed mode is currently deliberately narrow: it requires fixed
+Claude Code 2.1.220 plus one Anthropic API key. It then:
 
-This is deliberate. The current Environment-first runtime does not yet
-assemble the typed ProviderAccount authority needed for managed provider
-traffic. The runner must not recreate the retired Access/secret path or
-fabricate a credentialed success. A successful credentialed acceptance can be
-defined only after ProviderAccount selection, credential ownership, final
-header injection, attempt evidence, and commit-safe retry are part of the same
-production composition.
+1. reads the private credential file into a destroyable process-memory value;
+2. creates one Anthropic ProviderAccount through the authenticated private
+   Control API and verifies that the response contains metadata only;
+3. publishes an Environment whose frozen Route selects exactly that account,
+   with failover disabled;
+4. launches Claude through the packaged `vibermate run --env ...` member and
+   completes one real Messages request;
+5. verifies the frozen Environment/Endpoint/Protocol/Route, account revision,
+   credential epoch, usage, target, byte counts, and the single terminal
+   provider Attempt through the production Activity API;
+6. drains and restarts the daemon on the same SQLite database and private file
+   SecretStore; and
+7. proves a second real request uses the recovered authority before final
+   bounded shutdown.
+
+Example (the file must contain only the key bytes, with no newline):
+
+```sh
+umask 077
+printf '%s' "$ANTHROPIC_API_KEY" > /private/tmp/vibermate-anthropic.key
+chmod 600 /private/tmp/vibermate-anthropic.key
+/private/tmp/vibermate-acceptance \
+  --desktop-app=/absolute/path/to/ViberMate.app \
+  --claude=/absolute/path/to/claude-2.1.220 \
+  --environment-id=assembly-managed \
+  --anthropic-api-key-file=/private/tmp/vibermate-anthropic.key \
+  --report=/absolute/private/path/credentialed.json
+```
+
+This path is opt-in because it sends two bounded real prompts and incurs real
+provider usage. It does not accept Codex, client OAuth reuse, automatic account
+failover, an arbitrary ProviderTarget, or ambient credentials.
 
 ## What this evidence does not prove
 
@@ -135,6 +162,11 @@ Even a passing deterministic report does not prove:
 - plugin execution, Language Bridge, quality evaluation, or account failover;
 - signed/notarized packaging, install, upgrade, or uninstall; or
 - Preview or Release readiness.
+
+A passing credentialed report adds exactly the fixed Claude/Anthropic managed
+route, restart, and evidence claims above. It still does not prove arbitrary
+models, accounts, provider availability, Keychain protection, failover,
+plugins, Language Bridge, Server/LAN operation, or Preview/Release readiness.
 
 Those statements remain blocked until their own production path and evidence
 exist.

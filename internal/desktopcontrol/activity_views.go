@@ -102,10 +102,10 @@ type ExchangeContentDetail struct {
 }
 
 type ExchangeProcessingTrace struct {
-	EgressProxyID string   `json:"egressProxyId,omitempty"`
-	PluginRunIDs  []string `json:"pluginRunIds"`
-	AttemptIDs    []string `json:"attemptIds"`
-	Result        string   `json:"result"`
+	EgressProxyID string             `json:"egressProxyId,omitempty"`
+	PluginRunIDs  []string           `json:"pluginRunIds"`
+	Attempts      []egressaudit.View `json:"attempts"`
+	Result        string             `json:"result"`
 }
 
 type activityListQuery struct {
@@ -208,36 +208,26 @@ func exchangeDetailOf(
 	if record.Kind != activity.KindExchangeCompleted || record.Validate() != nil || egressPage.NextCursor != "" {
 		return ExchangeDetail{}, errors.New("Exchange detail projection is incomplete")
 	}
-	type orderedAttempt struct {
-		sequence int64
-		id       string
-	}
-	ordered := make([]orderedAttempt, 0, len(egressPage.Items))
-	seenAttempts := make(map[string]struct{}, len(egressPage.Items))
+	ordered := make([]egressaudit.View, 0, len(egressPage.Items))
 	proxyIDs := make(map[string]struct{})
 	for _, item := range egressPage.Items {
 		parent := item.Attempt.Parent()
 		if parent.ExchangeID != record.SubjectID {
 			return ExchangeDetail{}, errors.New("Exchange detail contains unrelated egress evidence")
 		}
-		if parent.Kind == egressaudit.ParentUpstreamAttempt {
-			if _, seen := seenAttempts[parent.ID]; !seen {
-				seenAttempts[parent.ID] = struct{}{}
-				ordered = append(ordered, orderedAttempt{sequence: item.Sequence, id: parent.ID})
-			}
-		}
+		ordered = append(ordered, egressaudit.ViewOf(item))
 		if proxyID := item.Attempt.Decision().ProxyID; proxyID != "" {
 			proxyIDs[proxyID] = struct{}{}
 		}
 	}
-	sort.Slice(ordered, func(left, right int) bool { return ordered[left].sequence < ordered[right].sequence })
+	sort.Slice(ordered, func(left, right int) bool { return ordered[left].Sequence < ordered[right].Sequence })
 	result := record.ReasonCode
 	if result == "" {
 		result = string(record.Status)
 	}
 	detail := ExchangeDetail{
 		ID: record.SubjectID, Status: string(record.Status), Environment: frozenEnvironmentRefOf(record), ParentRefs: parentRefsOf(record),
-		ProcessingTrace: ExchangeProcessingTrace{PluginRunIDs: []string{}, AttemptIDs: make([]string, 0, len(ordered)), Result: result},
+		ProcessingTrace: ExchangeProcessingTrace{PluginRunIDs: []string{}, Attempts: ordered, Result: result},
 		Content:         ExchangeContentDetail{State: ExchangeContentNotRecorded},
 	}
 	if content != nil {
@@ -263,9 +253,6 @@ func exchangeDetailOf(
 			responseView := *content.Response
 			detail.Content.Response = &responseView
 		}
-	}
-	for _, attempt := range ordered {
-		detail.ProcessingTrace.AttemptIDs = append(detail.ProcessingTrace.AttemptIDs, attempt.id)
 	}
 	if len(proxyIDs) == 1 {
 		for proxyID := range proxyIDs {

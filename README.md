@@ -176,7 +176,7 @@ The Desktop workspace exposes seven focused destinations:
 
 - Captures and frozen Requests;
 - Environments;
-- managed Accounts and Plugins as an honest deferred resource surface;
+- managed Accounts, plus Plugins as an honest deferred resource surface;
 - Policy & approvals;
 - Quality as an honest deferred analysis surface;
 - Settings and receipt-backed CLI installation.
@@ -187,6 +187,15 @@ both locales, Capture switching, transparent Manual Capture creation,
 Environment impact publication, frozen Request drill-down, policy decisions,
 managed-account connection/selection, conversation/tool/usage inspection, and
 Offline Hold.
+
+The current source composition includes one complete managed-account vertical:
+an Anthropic API key is stored behind the private SecretStore, selected by one
+Environment Route, stripped/injected only at the final provider boundary, and
+reported back as frozen account revision, credential epoch, usage, and
+terminal EgressAttempt evidence. Real composition tests repeat it after a full
+SQLite/SecretStore reopen and prove that 401/403, missing credentials,
+cancellation, and shutdown do not fall back to client OAuth or another
+account.
 
 ## Validation
 
