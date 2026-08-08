@@ -26,7 +26,6 @@ import (
 	"github.com/vibe-agi/vibermate/internal/originaltransport"
 	"github.com/vibe-agi/vibermate/internal/protocolpath"
 	"github.com/vibe-agi/vibermate/internal/protocolspec"
-	"github.com/vibe-agi/vibermate/internal/providerauth"
 	"github.com/vibe-agi/vibermate/internal/providertransport"
 	"github.com/vibe-agi/vibermate/internal/responseschat"
 	"github.com/vibe-agi/vibermate/internal/runtimepersistence"
@@ -136,27 +135,6 @@ func (productionEnvironmentBuilder) Build(
 		)
 	}
 	return environmentBuildResult{environments: environments, assignments: assignments}, nil
-}
-
-// unavailableAccountAuthority is the honest boundary for the current slice:
-// client-passthrough routes need no managed lease, while a managed route may
-// not compile or execute until the ProviderAccount authority is composed.
-type unavailableAccountAuthority struct{}
-
-var (
-	_ environment.AccountCatalog     = unavailableAccountAuthority{}
-	_ exchange.AccountLeaseAuthority = unavailableAccountAuthority{}
-)
-
-func (unavailableAccountAuthority) LookupAccount(string) (environment.AccountDescriptor, bool) {
-	return environment.AccountDescriptor{}, false
-}
-
-func (unavailableAccountAuthority) Acquire(
-	context.Context,
-	exchange.AccountLeaseRequest,
-) (providerauth.Lease, error) {
-	return nil, errors.New("managed ProviderAccount authority is unavailable")
 }
 
 func productionEnvironmentCompiler(accounts environment.AccountCatalog) (environment.Compiler, error) {

@@ -103,7 +103,8 @@ func unifiedCaptureApplication(t *testing.T, assignments captureassignment.Contr
 	application, err := desktopcontrol.New(desktopcontrol.Options{
 		Readiness: readyState(true), Status: runtime, Environments: runtime.Environments(),
 		Assignments: assignments, Activities: runtime.Activities(), Connections: runtime.ConnectionEvents(),
-		Egress: runtime.EgressAttempts(), Approvals: runtime.ToolApprovals(), Offline: runtime,
+		Egress: runtime.EgressAttempts(), Approvals: runtime.ToolApprovals(),
+		Accounts: runtime.ProviderAccounts(), Offline: runtime,
 		CaptureRuns: captureReaderFixture{view: capturerun.View{
 			ID: "same-id", ExecutableLabel: "claude", CWD: "/workspace", State: capturerun.StateFinished,
 			Observation: capturerun.ObservationObserved, CreatedAt: now, UpdatedAt: now,

@@ -28,6 +28,7 @@ import (
 	"github.com/vibe-agi/vibermate/internal/egressaudit"
 	"github.com/vibe-agi/vibermate/internal/environment"
 	"github.com/vibe-agi/vibermate/internal/manualcapture"
+	"github.com/vibe-agi/vibermate/internal/provideraccount"
 	"github.com/vibe-agi/vibermate/internal/proxyclient"
 	"github.com/vibe-agi/vibermate/internal/toolapproval"
 )
@@ -64,6 +65,7 @@ type RuntimeStore interface {
 	EgressAttemptRepository() egressaudit.Repository
 	ToolApprovalRepository() toolapproval.Repository
 	ConnectionRuleRepository() connectionpolicy.Repository
+	ProviderAccountRepository() provideraccount.Repository
 	Shutdown(context.Context) error
 }
 
@@ -81,6 +83,7 @@ type Store struct {
 	connectionRule     *connectionRuleRepository
 	environments       *environmentRepository
 	captureAssignments *captureAssignmentRepository
+	providerAccounts   *providerAccountRepository
 	operations         *operationGate
 
 	closeMu   sync.Mutex
@@ -161,6 +164,12 @@ func Open(ctx context.Context, options Options) (*Store, error) {
 		options.CommitReconcileTimeout,
 		sqlTransactionCommitter{},
 	)
+	providerAccounts := newProviderAccountRepository(
+		database,
+		operations,
+		options.CommitReconcileTimeout,
+		sqlTransactionCommitter{},
+	)
 	schemaState, err := repository.ReadSchemaState(ctx)
 	if err != nil {
 		operations.closeAdmission()
@@ -189,6 +198,7 @@ func Open(ctx context.Context, options Options) (*Store, error) {
 		connectionRule:     connectionRules,
 		environments:       environments,
 		captureAssignments: captureAssignments,
+		providerAccounts:   providerAccounts,
 		operations:         operations,
 		closeDone:          make(chan struct{}),
 	}, nil
@@ -240,6 +250,12 @@ func (s *Store) EnvironmentRepository() environment.Repository {
 // managed runs and manual captures.
 func (s *Store) CaptureAssignmentRepository() captureassignment.Repository {
 	return s.captureAssignments
+}
+
+// ProviderAccountRepository persists only non-secret account configuration.
+// Secret bytes remain owned by the host-selected SecretStore.
+func (s *Store) ProviderAccountRepository() provideraccount.Repository {
+	return s.providerAccounts
 }
 
 // Settings reads the active SQLite connection policy through the same

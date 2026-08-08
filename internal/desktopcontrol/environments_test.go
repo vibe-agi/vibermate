@@ -22,7 +22,8 @@ func TestEnvironmentDraftPreviewPublishAndHistoricalRevisionRoutes(t *testing.T)
 		Readiness: readyState(true), Status: runtime, Environments: runtime.Environments(),
 		Assignments: runtime.CaptureAssignments(), Activities: runtime.Activities(),
 		Connections: runtime.ConnectionEvents(), Egress: runtime.EgressAttempts(),
-		Approvals: runtime.ToolApprovals(), Offline: runtime, Clock: desktopcontrol.SystemClock{},
+		Approvals: runtime.ToolApprovals(), Accounts: runtime.ProviderAccounts(),
+		Offline: runtime, Clock: desktopcontrol.SystemClock{},
 		ManualCaptures: runtime.ManualCaptures(),
 	})
 	if err != nil {
@@ -84,7 +85,8 @@ func TestEnvironmentDraftAcceptsCanonicalOriginalCredentialRoute(t *testing.T) {
 		Readiness: readyState(true), Status: runtime, Environments: runtime.Environments(),
 		Assignments: runtime.CaptureAssignments(), Activities: runtime.Activities(),
 		Connections: runtime.ConnectionEvents(), Egress: runtime.EgressAttempts(),
-		Approvals: runtime.ToolApprovals(), Offline: runtime, Clock: desktopcontrol.SystemClock{},
+		Approvals: runtime.ToolApprovals(), Accounts: runtime.ProviderAccounts(),
+		Offline: runtime, Clock: desktopcontrol.SystemClock{},
 		ManualCaptures: runtime.ManualCaptures(),
 	})
 	if err != nil {
@@ -207,7 +209,8 @@ func TestActivityRouteFiltersAndReturnsFrozenEnvironmentReferences(t *testing.T)
 		Readiness: readyState(true), Status: runtime, Environments: runtime.Environments(),
 		Assignments: runtime.CaptureAssignments(), Activities: runtime.Activities(),
 		Connections: runtime.ConnectionEvents(), Egress: runtime.EgressAttempts(),
-		Approvals: runtime.ToolApprovals(), Offline: runtime, Clock: desktopcontrol.SystemClock{},
+		Approvals: runtime.ToolApprovals(), Accounts: runtime.ProviderAccounts(),
+		Offline: runtime, Clock: desktopcontrol.SystemClock{},
 		ManualCaptures: runtime.ManualCaptures(),
 	})
 	if err != nil {

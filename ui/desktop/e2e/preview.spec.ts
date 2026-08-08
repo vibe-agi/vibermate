@@ -11,7 +11,7 @@ function collectBrowserErrors(page: Page): string[] {
 
 async function openPreview(page: Page, route = "captures") {
   await page.goto(`/?preview=1#${route}`);
-  await expect(page.getByText("Ready", { exact: true })).toBeVisible();
+  await expect(page.getByRole("banner").getByText("Ready", { exact: true })).toBeVisible();
 }
 
 test("opens the Environment-first workspace with one clear navigation focus", async ({ page }) => {
@@ -75,6 +75,7 @@ test("reviews impact before atomically publishing an Environment", async ({ page
   await dialog.getByLabel("Name").fill("Review lab");
   await dialog.getByLabel("Stable ID").fill("review-lab");
   await dialog.getByRole("button", { name: /Claude/u }).click();
+  await dialog.getByLabel("Authentication").selectOption("anthropic-work");
   await dialog.getByRole("button", { name: "Review changes" }).click();
   let impact = dialog.getByRole("group", { name: "Impact preview" });
   await expect(impact).toBeVisible();
@@ -89,6 +90,25 @@ test("reviews impact before atomically publishing an Environment", async ({ page
   await expect(page.getByRole("heading", { name: "Review lab revised" })).toBeVisible();
   await expect(page.getByRole("heading", { name: "https://api.anthropic.com" })).toBeVisible();
   await expect(page.getByText("Anthropic Messages", { exact: true })).toBeVisible();
+  await expect(page.getByText("Managed account", { exact: true })).toBeVisible();
+  expect(errors).toEqual([]);
+});
+
+test("connects a managed account without ever rendering the credential", async ({ page }) => {
+  const errors = collectBrowserErrors(page);
+  const secret = "sk-preview-secret-must-not-render";
+  await openPreview(page, "accounts");
+  await page.getByRole("button", { name: "Add account" }).click();
+
+  const dialog = page.getByRole("dialog", { name: "Connect an account" });
+  await dialog.getByRole("button", { name: /OpenAI/u }).click();
+  await dialog.getByLabel("Name").fill("OpenAI Preview");
+  await dialog.getByLabel("API key").fill(secret);
+  await dialog.getByRole("button", { name: "Connect account" }).click();
+
+  await expect(page.getByRole("table")).toContainText("OpenAI Preview");
+  await expect(page.getByRole("table")).toContainText("Ready");
+  await expect(page.locator("body")).not.toContainText(secret);
   expect(errors).toEqual([]);
 });
 

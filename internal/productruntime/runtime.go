@@ -23,6 +23,7 @@ import (
 	"github.com/vibe-agi/vibermate/internal/manualcapture"
 	"github.com/vibe-agi/vibermate/internal/offlinehold"
 	"github.com/vibe-agi/vibermate/internal/originaltransport"
+	"github.com/vibe-agi/vibermate/internal/provideraccount"
 	"github.com/vibe-agi/vibermate/internal/providertransport"
 	"github.com/vibe-agi/vibermate/internal/runtimepersistence"
 	"github.com/vibe-agi/vibermate/internal/toolapproval"
@@ -42,6 +43,7 @@ type Runtime struct {
 	connections       connectionEventRuntime
 	egress            egressaudit.Reader
 	egressCompletion  *runtimeEgressRepository
+	accounts          *provideraccount.Manager
 	approvals         approvalRuntime
 	connectionRules   *connectionpolicy.Manager
 	monitor           ownedComponent
@@ -230,7 +232,18 @@ func startWithBuilders(
 	}
 	cleanups.register("local Root CA", certificateAuthority.Shutdown)
 
-	accounts := unavailableAccountAuthority{}
+	accounts, err := provideraccount.NewManager(
+		ctx,
+		storageResult.store.ProviderAccountRepository(),
+		options.Secrets,
+		provideraccount.BuiltInRealms(),
+		options.Clock,
+	)
+	if err != nil {
+		return fail("ProviderAccount recovery", err)
+	}
+	cleanups.register("ProviderAccount manager", accounts.Shutdown)
+
 	environmentResult, err := builders.environment.Build(ctx, environmentBuildRequest{
 		repository:           storageResult.store.EnvironmentRepository(),
 		assignmentRepository: storageResult.store.CaptureAssignmentRepository(),
@@ -547,6 +560,7 @@ func startWithBuilders(
 		connections:       connections,
 		egress:            runtimeEgress,
 		egressCompletion:  runtimeEgress,
+		accounts:          accounts,
 		approvals:         approvals,
 		connectionRules:   connectionRules,
 		monitor:           monitor,
@@ -623,6 +637,13 @@ func (r *Runtime) ConnectionEvents() connectionevent.Runtime {
 // where each request actually went, which one connection record cannot.
 func (r *Runtime) EgressAttempts() egressaudit.Reader {
 	return r.egress
+}
+
+// ProviderAccounts returns the runtime-owned non-secret account authority.
+// Credentials remain in the Host-selected SecretStore and are never exposed
+// through this interface.
+func (r *Runtime) ProviderAccounts() provideraccount.Controller {
+	return r.accounts
 }
 
 // ToolApprovals returns the durable interactive tool decision authority used

@@ -28,6 +28,10 @@ import type {
   ManualCaptureRecord,
   ManualCaptureStateTag,
   OfflineHoldSnapshot,
+  ProviderAccountCreateInput,
+  ProviderAccountCredentialInput,
+  ProviderAccountPage,
+  ProviderAccountRecord,
   StatusResponse,
 } from "./control-types.ts";
 
@@ -142,6 +146,10 @@ export interface ControlClient {
     signal?: AbortSignal,
   ): Promise<OfflineHoldSnapshot>;
   environments(signal?: AbortSignal): Promise<EnvironmentPage>;
+  providerAccounts(signal?: AbortSignal): Promise<ProviderAccountPage>;
+  providerAccount(accountId: string, signal?: AbortSignal): Promise<ProviderAccountRecord>;
+  createProviderAccount(input: ProviderAccountCreateInput, signal?: AbortSignal): Promise<ProviderAccountRecord>;
+  replaceProviderAccountCredential(accountId: string, expectedCredentialEpoch: number, input: ProviderAccountCredentialInput, signal?: AbortSignal): Promise<ProviderAccountRecord>;
   environment(environmentId: string, signal?: AbortSignal): Promise<EnvironmentRecord>;
   environmentRevision(environmentId: string, revision: number, signal?: AbortSignal): Promise<EnvironmentRecord>;
   environmentDraft(environmentId: string, signal?: AbortSignal): Promise<EnvironmentDraft>;
@@ -1007,6 +1015,46 @@ export async function createControlClient(
       requireEnvironmentPage(
         await requestRead<unknown>("/api/v1/environments", signal),
       ),
+    providerAccounts: async (signal) =>
+      requireProviderAccountPage(
+        await requestRead<unknown>("/api/v1/provider-accounts", signal),
+      ),
+    providerAccount: async (accountId, signal) => {
+      requireResourceId(accountId);
+      return requireProviderAccountRecord(
+        await requestRead<unknown>(
+          `/api/v1/provider-accounts/${encodeURIComponent(accountId)}`,
+          signal,
+        ),
+        accountId,
+      );
+    },
+    createProviderAccount: async (input, signal) => {
+      if (!validProviderAccountCreateInput(input)) throw new ControlContractError();
+      return requestMutation<ProviderAccountRecord>(
+        "POST",
+        "/api/v1/provider-accounts",
+        input,
+        0,
+        signal,
+        requireProviderAccountRecord,
+        201,
+      );
+    },
+    replaceProviderAccountCredential: async (accountId, expectedCredentialEpoch, input, signal) => {
+      requireResourceId(accountId);
+      if (!nonNegativeInteger(expectedCredentialEpoch) || !validProviderAccountCredentialInput(input)) {
+        throw new ControlContractError();
+      }
+      return requestMutation<ProviderAccountRecord>(
+        "PUT",
+        `/api/v1/provider-accounts/${encodeURIComponent(accountId)}/credential`,
+        input,
+        expectedCredentialEpoch,
+        signal,
+        (value) => requireProviderAccountRecord(value, accountId),
+      );
+    },
     environment: async (environmentId, signal) => {
       requireResourceId(environmentId);
       return requireEnvironmentRecord(
@@ -1973,6 +2021,114 @@ function requireEnvironmentPage(value: unknown): EnvironmentPage {
     previous = item.id;
   }
   return value as unknown as EnvironmentPage;
+}
+
+const providerAccountKinds = new Set(["anthropic_api_key", "openai_api_key"]);
+const providerCredentialStates = new Set([
+  "ready",
+  "disabled",
+  "credential_missing",
+  "credential_unavailable",
+]);
+
+function requireProviderAccountPage(value: unknown): ProviderAccountPage {
+  if (
+    !isRecord(value) ||
+    !hasClosedFields(value, ["items"]) ||
+    !Array.isArray(value.items) ||
+    value.items.length > maximumDashboardPageItems
+  ) {
+    throw new ControlContractError();
+  }
+  let previous = "";
+  for (const item of value.items) {
+    if (
+      !validProviderAccountRecord(item) ||
+      (previous !== "" && compareResourceIds(previous, item.id) >= 0)
+    ) {
+      throw new ControlContractError();
+    }
+    previous = item.id;
+  }
+  return value as unknown as ProviderAccountPage;
+}
+
+function requireProviderAccountRecord(
+  value: unknown,
+  expectedId?: string,
+): ProviderAccountRecord {
+  if (
+    !validProviderAccountRecord(value) ||
+    (expectedId !== undefined && value.id !== expectedId)
+  ) {
+    throw new ControlContractError();
+  }
+  return value as unknown as ProviderAccountRecord;
+}
+
+function validProviderAccountRecord(
+  value: unknown,
+): value is Record<string, unknown> & { id: string } {
+  if (
+    !isRecord(value) ||
+    !hasClosedFields(value, [
+      "id",
+      "displayName",
+      "kind",
+      "realmId",
+      "state",
+      "revision",
+      "credentialState",
+      "credentialEpoch",
+    ]) ||
+    !validResourceId(value.id) ||
+    !validDisplayLabel(value.displayName, 256, false) ||
+    !providerAccountKinds.has(String(value.kind)) ||
+    !validResourceId(value.realmId) ||
+    (value.state !== "active" && value.state !== "disabled") ||
+    !positiveInteger(value.revision) ||
+    !providerCredentialStates.has(String(value.credentialState)) ||
+    !nonNegativeInteger(value.credentialEpoch)
+  ) {
+    return false;
+  }
+  return value.credentialState === "ready"
+    ? positiveInteger(value.credentialEpoch)
+    : value.credentialState === "credential_unavailable"
+      ? true
+      : value.credentialEpoch === 0;
+}
+
+function validProviderAccountCreateInput(
+  value: ProviderAccountCreateInput,
+): boolean {
+  return (
+    isRecord(value) &&
+    hasClosedFields(value, ["id", "displayName", "kind", "secret"]) &&
+    validResourceId(value.id) &&
+    validDisplayLabel(value.displayName, 256, false) &&
+    providerAccountKinds.has(value.kind) &&
+    validSecretInput(value.secret)
+  );
+}
+
+function validProviderAccountCredentialInput(
+  value: ProviderAccountCredentialInput,
+): boolean {
+  return (
+    isRecord(value) &&
+    hasClosedFields(value, ["secret"]) &&
+    validSecretInput(value.secret)
+  );
+}
+
+function validSecretInput(value: unknown): value is string {
+  return (
+    typeof value === "string" &&
+    value.length > 0 &&
+    new TextEncoder().encode(value).length <= 64 * 1024 &&
+    !/[\0\r\n]/u.test(value)
+  );
 }
 
 function requireEnvironmentRecord(

@@ -242,6 +242,17 @@ input, select { width: 100%; min-height: 32px; border: 1px solid var(--border-st
 .credential-line code { flex: 1; border: 1px solid var(--border); border-radius: 5px; padding: 7px; background: var(--raised); }
 
 .deferred-resource { min-height: 240px; }
+.resource-boundary, .credential-boundary { color: var(--muted); font-size: 11px; }
+.resource-boundary { margin: 8px 2px; }
+.credential-boundary { margin: 2px 12px 10px; }
+.provider-picker { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 7px; }
+.provider-picker button { display: flex; min-height: 58px; align-items: center; gap: 9px; text-align: left; }
+.provider-picker button[aria-pressed="true"] { border-color: var(--signal); background: var(--signal-soft); }
+.provider-picker span, .provider-picker small { display: block; }
+.provider-picker small { color: var(--muted); }
+.account-health-ready { border-color: var(--allow); color: var(--allow); background: var(--allow-soft); }
+.account-health-credential_missing, .account-health-credential_unavailable { border-color: var(--ask); color: var(--ask); background: var(--ask-soft); }
+.account-health-disabled { border-color: var(--deny); color: var(--deny); background: var(--deny-soft); }
 .terminal-command-panel, .settings-boundary { padding-bottom: 12px; }
 .terminal-command-control, .terminal-command-state { padding: 0 12px; }
 .terminal-command-summary { display: grid; grid-template-columns: auto 1fr; align-items: center; gap: 7px 10px; }
@@ -278,6 +289,7 @@ input, select { width: 100%; min-height: 32px; border: 1px solid var(--border-st
   .approval-actions { flex-wrap: wrap; }
   .compact-form-row, .field-row { grid-template-columns: 1fr; }
   .template-picker { grid-template-columns: 1fr; }
+  .provider-picker { grid-template-columns: 1fr; }
   .protocol-row { grid-template-columns: 1fr; }
   .route-arrow { transform: rotate(90deg); }
   .routing-spine { grid-template-columns: 1fr; overflow: visible; }

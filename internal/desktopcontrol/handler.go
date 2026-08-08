@@ -24,6 +24,7 @@ import (
 	"github.com/vibe-agi/vibermate/internal/manualcapture"
 	"github.com/vibe-agi/vibermate/internal/offlinehold"
 	"github.com/vibe-agi/vibermate/internal/productruntime"
+	"github.com/vibe-agi/vibermate/internal/provideraccount"
 	"github.com/vibe-agi/vibermate/internal/toolapproval"
 )
 
@@ -36,25 +37,28 @@ const (
 type ReasonCode string
 
 const (
-	ReasonUnauthorized              ReasonCode = "control_unauthorized"
-	ReasonRouteNotFound             ReasonCode = "control_route_not_found"
-	ReasonInvalidRequest            ReasonCode = "invalid_control_request"
-	ReasonRevisionConflict          ReasonCode = "revision_conflict"
-	ReasonEnvironmentNotFound       ReasonCode = "environment_not_found"
-	ReasonEnvironmentDraftNotFound  ReasonCode = "environment_draft_not_found"
-	ReasonProjectionUnavailable     ReasonCode = "environment_projection_unavailable"
-	ReasonRuntimeUnavailable        ReasonCode = "runtime_unavailable"
-	ReasonApprovalNotFound          ReasonCode = "approval_not_found"
-	ReasonProbeFailed               ReasonCode = "offline_probe_failed"
-	ReasonConnectionNotFound        ReasonCode = "connection_not_found"
-	ReasonExchangeNotFound          ReasonCode = "exchange_not_found"
-	ReasonEnvironmentSystemOwned    ReasonCode = "environment_system_owned"
-	ReasonEnvironmentPreviewStale   ReasonCode = "environment_preview_stale"
-	ReasonCaptureNotFound           ReasonCode = "capture_not_found"
-	ReasonCaptureAssignmentNotFound ReasonCode = "capture_assignment_not_found"
-	ReasonCaptureUnavailable        ReasonCode = "capture_unavailable"
-	ReasonCaptureRestartRequired    ReasonCode = "capture_restart_required"
-	ReasonEnvironmentUnavailable    ReasonCode = "environment_unavailable"
+	ReasonUnauthorized               ReasonCode = "control_unauthorized"
+	ReasonRouteNotFound              ReasonCode = "control_route_not_found"
+	ReasonInvalidRequest             ReasonCode = "invalid_control_request"
+	ReasonRevisionConflict           ReasonCode = "revision_conflict"
+	ReasonEnvironmentNotFound        ReasonCode = "environment_not_found"
+	ReasonEnvironmentDraftNotFound   ReasonCode = "environment_draft_not_found"
+	ReasonProjectionUnavailable      ReasonCode = "environment_projection_unavailable"
+	ReasonRuntimeUnavailable         ReasonCode = "runtime_unavailable"
+	ReasonApprovalNotFound           ReasonCode = "approval_not_found"
+	ReasonProbeFailed                ReasonCode = "offline_probe_failed"
+	ReasonConnectionNotFound         ReasonCode = "connection_not_found"
+	ReasonExchangeNotFound           ReasonCode = "exchange_not_found"
+	ReasonEnvironmentSystemOwned     ReasonCode = "environment_system_owned"
+	ReasonEnvironmentPreviewStale    ReasonCode = "environment_preview_stale"
+	ReasonCaptureNotFound            ReasonCode = "capture_not_found"
+	ReasonCaptureAssignmentNotFound  ReasonCode = "capture_assignment_not_found"
+	ReasonCaptureUnavailable         ReasonCode = "capture_unavailable"
+	ReasonCaptureRestartRequired     ReasonCode = "capture_restart_required"
+	ReasonEnvironmentUnavailable     ReasonCode = "environment_unavailable"
+	ReasonProviderAccountNotFound    ReasonCode = "provider_account_not_found"
+	ReasonProviderAccountConflict    ReasonCode = "provider_account_conflict"
+	ReasonProviderAccountUnavailable ReasonCode = "provider_account_unavailable"
 )
 
 type StatusReader interface {
@@ -88,6 +92,7 @@ type Options struct {
 	Connections  connectionevent.Reader
 	Egress       egressaudit.Reader
 	Approvals    toolapproval.Controller
+	Accounts     provideraccount.Controller
 	Offline      OfflineActions
 	// ConnectionRules is the outbound firewall a person edits. A runtime
 	// built without one keeps evaluating the rules it started with.
@@ -108,6 +113,7 @@ type Handler struct {
 	connections  connectionevent.Reader
 	egress       egressaudit.Reader
 	approvals    toolapproval.Controller
+	accounts     provideraccount.Controller
 	offline      OfflineActions
 
 	connectionRules ConnectionRuleController
@@ -142,6 +148,7 @@ func New(options Options) (*Handler, error) {
 		options.Connections == nil ||
 		options.Egress == nil ||
 		options.Approvals == nil ||
+		options.Accounts == nil ||
 		options.Offline == nil ||
 		options.Clock == nil {
 		return nil, errors.New("Desktop control dependencies are incomplete")
@@ -155,6 +162,7 @@ func New(options Options) (*Handler, error) {
 		connections:     options.Connections,
 		egress:          options.Egress,
 		approvals:       options.Approvals,
+		accounts:        options.Accounts,
 		offline:         options.Offline,
 		connectionRules: options.ConnectionRules,
 		captureRuns:     options.CaptureRuns,
@@ -174,6 +182,10 @@ func New(options Options) (*Handler, error) {
 		handler.resumeOfflineHold,
 	)
 	handler.mux.HandleFunc("GET /api/v1/environments", handler.listEnvironments)
+	handler.mux.HandleFunc("GET /api/v1/provider-accounts", handler.listProviderAccounts)
+	handler.mux.HandleFunc("POST /api/v1/provider-accounts", handler.createProviderAccount)
+	handler.mux.HandleFunc("GET /api/v1/provider-accounts/{accountId}", handler.getProviderAccount)
+	handler.mux.HandleFunc("PUT /api/v1/provider-accounts/{accountId}/credential", handler.replaceProviderAccountCredential)
 	handler.mux.HandleFunc("GET /api/v1/environments/{environmentId}", handler.getEnvironment)
 	handler.mux.HandleFunc("GET /api/v1/environments/{environmentId}/draft", handler.getEnvironmentDraft)
 	handler.mux.HandleFunc("PUT /api/v1/environments/{environmentId}/draft", handler.putEnvironmentDraft)
@@ -233,6 +245,9 @@ func New(options Options) (*Handler, error) {
 		handler.invalidRoute,
 	)
 	handler.mux.HandleFunc("/api/v1/approvals", handler.invalidRoute)
+	handler.mux.HandleFunc("/api/v1/provider-accounts", handler.invalidRoute)
+	handler.mux.HandleFunc("/api/v1/provider-accounts/{accountId}", handler.invalidRoute)
+	handler.mux.HandleFunc("/api/v1/provider-accounts/{accountId}/{remainder}", handler.invalidRoute)
 	handler.mux.HandleFunc(
 		"/api/v1/approvals/{approvalId}",
 		handler.invalidRoute,

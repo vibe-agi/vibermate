@@ -132,6 +132,7 @@ func TestDesktopControlApprovalRouteResolvesDurableAuthority(
 		Connections:  runtime.ConnectionEvents(),
 		Egress:       runtime.EgressAttempts(),
 		Approvals:    approvalAuthority,
+		Accounts:     runtime.ProviderAccounts(),
 		Offline:      runtime,
 	})
 	if err != nil {
@@ -308,6 +309,7 @@ func TestDesktopControlRejectsCapabilityAndTransportBoundaryConfusion(t *testing
 		Connections:  runtime.ConnectionEvents(),
 		Egress:       runtime.EgressAttempts(),
 		Approvals:    runtime.ToolApprovals(),
+		Accounts:     runtime.ProviderAccounts(),
 		Offline:      runtime,
 	})
 	if err != nil {

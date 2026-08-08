@@ -1,5 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { useState } from "react";
+import { type FormEvent, useState } from "react";
 import { useTranslation } from "react-i18next";
 import {
   EmptyState,
@@ -10,11 +10,14 @@ import {
   useDashboardModel,
 } from "./App.tsx";
 import { controlErrorKey, dashboardQueryKeys } from "./dashboard-runtime.ts";
+import { BrandIcon } from "./brand-icons.tsx";
 import type {
   ApprovalChoice,
   ApprovalView,
   ConnectionDecision,
   ConnectionRuleSet,
+  ProviderAccountKind,
+  ProviderAccountRecord,
 } from "./control-types.ts";
 
 type PolicyMode = "open" | "ask" | "block";
@@ -97,11 +100,72 @@ export function ExchangeRoutePage({ exchangeId }: { readonly exchangeId: string 
 
 function TraceStep({ label, value }: { readonly label: string; readonly value: string }) { return <div><span>{label}</span><strong>{value}</strong></div>; }
 
-export function AccountsRoutePage() { return <DeferredResourcePage kind="accounts" />; }
+type AccountDialogState =
+  | { readonly mode: "create" }
+  | { readonly mode: "replace"; readonly account: ProviderAccountRecord };
+
+export function AccountsRoutePage() {
+  const { t } = useTranslation();
+  const model = useDashboardModel();
+  const [dialog, setDialog] = useState<AccountDialogState>();
+  const accounts = useQuery({
+    queryKey: dashboardQueryKeys.accounts,
+    queryFn: ({ signal }) => model.client.providerAccounts(signal),
+    placeholderData: (previous) => previous,
+  });
+  const records = accounts.data?.items ?? [];
+  return (
+    <div className="page accounts-page">
+      <PageHeading
+        actions={<button className="primary-action" onClick={() => setDialog({ mode: "create" })} type="button">{t("accounts.add")}</button>}
+        description={t("accounts.description")}
+        title={t("accounts.title")}
+      />
+      <section className="data-panel account-table-panel">
+        <SectionHeading title={t("accounts.connected", { count: records.length })} />
+        {accounts.isPending && accounts.data === undefined ? <LoadingRows count={4} /> : accounts.isError && accounts.data === undefined ? <InlineProblem message={t(controlErrorKey(accounts.error))} /> : records.length === 0 ? <EmptyState action={<button onClick={() => setDialog({ mode: "create" })} type="button">{t("accounts.add")}</button>} description={t("accounts.empty.description")} title={t("accounts.empty.title")} /> : <div className="table-scroll"><table className="data-table responsive-table account-table"><thead><tr><th>{t("accounts.column.account")}</th><th>{t("accounts.column.provider")}</th><th>{t("accounts.column.credential")}</th><th>{t("accounts.column.revision")}</th><th className="align-right">{t("accounts.column.action")}</th></tr></thead><tbody>{records.map((account) => <tr key={account.id}><td data-label={t("accounts.column.account")}><div className="agent-cell"><BrandIcon name={account.kind === "anthropic_api_key" ? "anthropic" : "openai"} /><span><strong>{account.displayName}</strong><small>{account.id}</small></span></div></td><td data-label={t("accounts.column.provider")}>{t(`accounts.kind.${account.kind}`)}</td><td data-label={t("accounts.column.credential")}><span className={`state-pill account-health-${account.credentialState}`}>{t(`accounts.health.${account.credentialState}`)}</span></td><td data-label={t("accounts.column.revision")}>r{account.revision} · {t("accounts.credentialEpoch", { epoch: account.credentialEpoch })}</td><td className="align-right" data-label={t("accounts.column.action")}><button className="quiet-button" onClick={() => setDialog({ mode: "replace", account })} type="button">{t("accounts.updateKey")}</button></td></tr>)}</tbody></table></div>}
+      </section>
+      <p className="resource-boundary">{t("accounts.boundary")}</p>
+      {dialog !== undefined && <ProviderAccountDialog dialog={dialog} onClose={() => setDialog(undefined)} />}
+    </div>
+  );
+}
+
+function ProviderAccountDialog({ dialog, onClose }: { readonly dialog: AccountDialogState; readonly onClose: () => void }) {
+  const { t } = useTranslation();
+  const model = useDashboardModel();
+  const queryClient = useQueryClient();
+  const [kind, setKind] = useState<ProviderAccountKind>(dialog.mode === "replace" ? dialog.account.kind : "anthropic_api_key");
+  const [displayName, setDisplayName] = useState(dialog.mode === "replace" ? dialog.account.displayName : "");
+  const [secret, setSecret] = useState("");
+  const [errorKey, setErrorKey] = useState<string>();
+  const save = useMutation({
+    mutationFn: () => dialog.mode === "create"
+      ? model.client.createProviderAccount({ id: newProviderAccountID(kind), displayName: displayName.trim(), kind, secret })
+      : model.client.replaceProviderAccountCredential(dialog.account.id, dialog.account.credentialEpoch, { secret }),
+    onError: (error) => setErrorKey(controlErrorKey(error)),
+    onSuccess: () => {
+      setSecret("");
+      void queryClient.invalidateQueries({ queryKey: dashboardQueryKeys.accounts });
+      onClose();
+    },
+  });
+  const submit = (event: FormEvent) => {
+    event.preventDefault();
+    if (secret.length > 0 && (dialog.mode === "replace" || displayName.trim().length > 0)) save.mutate();
+  };
+  return <div className="modal-backdrop"><section aria-labelledby="provider-account-title" aria-modal="true" className="modal account-modal" role="dialog"><header><div><p className="eyebrow">{t("accounts.dialog.eyebrow")}</p><h2 id="provider-account-title">{t(dialog.mode === "create" ? "accounts.dialog.create" : "accounts.dialog.replace", { name: dialog.mode === "replace" ? dialog.account.displayName : "" })}</h2></div><button aria-label={t("common.close")} className="icon-button" onClick={onClose} type="button">×</button></header><form onSubmit={submit}>{dialog.mode === "create" && <><fieldset><legend>{t("accounts.dialog.provider")}</legend><div className="provider-picker"><button aria-pressed={kind === "anthropic_api_key"} onClick={() => setKind("anthropic_api_key")} type="button"><BrandIcon name="anthropic" /><span><strong>{t("accounts.provider.anthropic")}</strong><small>{t("accounts.kind.anthropic_api_key")}</small></span></button><button aria-pressed={kind === "openai_api_key"} onClick={() => setKind("openai_api_key")} type="button"><BrandIcon name="openai" /><span><strong>{t("accounts.provider.openai")}</strong><small>{t("accounts.kind.openai_api_key")}</small></span></button></div></fieldset><label><span>{t("accounts.dialog.name")}</span><input autoFocus maxLength={256} onChange={(event) => setDisplayName(event.target.value)} placeholder={t("accounts.dialog.namePlaceholder")} value={displayName} /></label></>}<label><span>{t("accounts.dialog.secret")}</span><input autoComplete="off" autoFocus={dialog.mode === "replace"} onChange={(event) => setSecret(event.target.value)} spellCheck={false} type="password" value={secret} /></label><p className="credential-boundary">{t("accounts.dialog.secretBoundary")}</p>{errorKey !== undefined && <InlineProblem message={t(errorKey)} />}<footer><button onClick={onClose} type="button">{t("common.cancel")}</button><button className="primary-action" disabled={save.isPending || secret.length === 0 || (dialog.mode === "create" && displayName.trim().length === 0)} type="submit">{save.isPending ? t("accounts.dialog.saving") : t(dialog.mode === "create" ? "accounts.dialog.connect" : "accounts.dialog.update")}</button></footer></form></section></div>;
+}
+
+function newProviderAccountID(kind: ProviderAccountKind): string {
+  const provider = kind === "anthropic_api_key" ? "anthropic" : "openai";
+  return `account.${provider}.${globalThis.crypto.randomUUID().toLowerCase()}`;
+}
+
 export function ExtensionsRoutePage() { return <DeferredResourcePage kind="extensions" />; }
 export function QualityRoutePage() { return <DeferredResourcePage kind="quality" />; }
 
-function DeferredResourcePage({ kind }: { readonly kind: "accounts" | "extensions" | "quality" }) {
+function DeferredResourcePage({ kind }: { readonly kind: "extensions" | "quality" }) {
   const { t } = useTranslation();
   return <div className="page"><PageHeading description={t(`${kind}.description`)} title={t(`${kind}.title`)} /><section className="data-panel deferred-resource"><EmptyState description={t(`${kind}.deferred.description`)} title={t(`${kind}.deferred.title`)} /></section></div>;
 }

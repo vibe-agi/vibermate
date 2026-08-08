@@ -24,6 +24,7 @@ import type {
   EnvironmentDraftInput,
   EnvironmentImpact,
   EnvironmentRecord,
+  ProviderAccountRecord,
 } from "./control-types.ts";
 
 type EnvironmentTemplate = "observe" | "claude" | "codex";
@@ -90,6 +91,11 @@ export function EnvironmentDetailRoutePage({
   const [impact, setImpact] = useState<EnvironmentImpact>();
   const [draftRevision, setDraftRevision] = useState<number>();
   const [errorKey, setErrorKey] = useState<string>();
+  const accounts = useQuery({
+    queryKey: dashboardQueryKeys.accounts,
+    queryFn: ({ signal }) => model.client.providerAccounts(signal),
+    placeholderData: (previous) => previous,
+  });
 
   const current = environment.data;
   const candidateName = name ?? current?.name ?? "";
@@ -143,7 +149,7 @@ export function EnvironmentDetailRoutePage({
         eyebrow={t("environmentDetail.eyebrow")}
         title={current.name}
       />
-      {editing && <section className="data-panel environment-editor"><SectionHeading title={t("environmentDetail.edit.title")} /><div className="compact-form-row"><label><span>{t("environmentDetail.name")}</span><input maxLength={256} onChange={(event) => setName(event.target.value)} value={candidateName} /></label><label><span>{t("environmentDetail.state")}</span><select onChange={(event) => setState(event.target.value as "active" | "disabled")} value={candidateState}><option value="active">{t("environments.state.active")}</option><option value="disabled">{t("environments.state.disabled")}</option></select></label></div><div className="template-actions"><span>{t("environmentDetail.endpoints.add")}</span><button onClick={() => setEndpoints(addEndpoint(candidateEndpoints, "claude"))} type="button"><BrandIcon name="claude-code" />{t("environmentDetail.endpoints.claude")}</button><button onClick={() => setEndpoints(addEndpoint(candidateEndpoints, "codex"))} type="button"><BrandIcon name="codex" />{t("environmentDetail.endpoints.codex")}</button></div>{errorKey !== undefined && <InlineProblem message={t(errorKey)} />}<div className="editor-actions"><button className="primary-action" disabled={saveDraft.isPending || candidateName.trim().length === 0} onClick={() => saveDraft.mutate()} type="button">{saveDraft.isPending ? t("common.checking") : t("environmentDetail.review")}</button></div></section>}
+      {editing && <section className="data-panel environment-editor"><SectionHeading title={t("environmentDetail.edit.title")} /><div className="compact-form-row"><label><span>{t("environmentDetail.name")}</span><input maxLength={256} onChange={(event) => setName(event.target.value)} value={candidateName} /></label><label><span>{t("environmentDetail.state")}</span><select onChange={(event) => setState(event.target.value as "active" | "disabled")} value={candidateState}><option value="active">{t("environments.state.active")}</option><option value="disabled">{t("environments.state.disabled")}</option></select></label></div><div className="template-actions"><span>{t("environmentDetail.endpoints.add")}</span><button onClick={() => setEndpoints(addEndpoint(candidateEndpoints, "claude"))} type="button"><BrandIcon name="claude-code" />{t("environmentDetail.endpoints.claude")}</button><button onClick={() => setEndpoints(addEndpoint(candidateEndpoints, "codex"))} type="button"><BrandIcon name="codex" />{t("environmentDetail.endpoints.codex")}</button></div><RouteAccountSelectors accounts={accounts.data?.items ?? []} endpoints={candidateEndpoints} onChange={setEndpoints} />{errorKey !== undefined && <InlineProblem message={t(errorKey)} />}<div className="editor-actions"><button className="primary-action" disabled={saveDraft.isPending || candidateName.trim().length === 0} onClick={() => saveDraft.mutate()} type="button">{saveDraft.isPending ? t("common.checking") : t("environmentDetail.review")}</button></div></section>}
 
       <section className="data-panel plan-panel">
         <SectionHeading title={t("environmentDetail.plan.title")} />
@@ -173,11 +179,19 @@ function NewEnvironmentDialog({ onClose }: { readonly onClose: () => void }) {
   const [name, setName] = useState("");
   const [id, setID] = useState("");
   const [template, setTemplate] = useState<EnvironmentTemplate>("observe");
+  const [accountID, setAccountID] = useState("");
   const [impact, setImpact] = useState<EnvironmentImpact>();
   const [draftRevision, setDraftRevision] = useState<number>();
   const [errorKey, setErrorKey] = useState<string>();
+  const accounts = useQuery({
+    queryKey: dashboardQueryKeys.accounts,
+    queryFn: ({ signal }) => model.client.providerAccounts(signal),
+    placeholderData: (previous) => previous,
+  });
   const canonicalID = id.trim() || slug(name);
-  const input = useMemo(() => newEnvironmentInput(name.trim(), template), [name, template]);
+  const compatibleAccounts = compatibleProviderAccounts(accounts.data?.items ?? [], template);
+  const selectedAccount = compatibleAccounts.find((account) => account.id === accountID);
+  const input = useMemo(() => newEnvironmentInput(name.trim(), template, selectedAccount), [name, selectedAccount, template]);
   const review = useMutation({
     mutationFn: async () => {
       const expectedDraftRevision = await currentDraftRevision(
@@ -204,7 +218,8 @@ function NewEnvironmentDialog({ onClose }: { readonly onClose: () => void }) {
     },
   });
   const submit = (event: FormEvent) => { event.preventDefault(); if (name.trim() !== "" && canonicalID !== "") review.mutate(); };
-  return <div className="modal-backdrop"><section aria-labelledby="new-environment-title" aria-modal="true" className="modal environment-modal" role="dialog"><header><div><p className="eyebrow">{t("environments.new.eyebrow")}</p><h2 id="new-environment-title">{t("environments.new.title")}</h2></div><button aria-label={t("common.close")} className="icon-button" onClick={onClose} type="button">×</button></header><form onSubmit={submit}><label><span>{t("environmentDetail.name")}</span><input autoFocus maxLength={256} onChange={(event) => setName(event.target.value)} value={name} /></label><label><span>{t("environments.new.id")}</span><input maxLength={128} onChange={(event) => setID(event.target.value)} placeholder={slug(name)} value={id} /></label><fieldset><legend>{t("environments.new.template")}</legend><div className="template-picker"><TemplateChoice active={template === "observe"} description={t("environments.new.observe.description")} label={t("environments.new.observe")} onClick={() => setTemplate("observe")} /><TemplateChoice active={template === "claude"} description={t("environments.new.claude.description")} icon={<BrandIcon name="claude-code" />} label={t("environments.new.claude")} onClick={() => setTemplate("claude")} /><TemplateChoice active={template === "codex"} description={t("environments.new.codex.description")} icon={<BrandIcon name="codex" />} label={t("environments.new.codex")} onClick={() => setTemplate("codex")} /></div></fieldset>{errorKey !== undefined && <InlineProblem message={t(errorKey)} />}<footer><button onClick={onClose} type="button">{t("common.cancel")}</button><button className="primary-action" disabled={review.isPending || name.trim() === "" || canonicalID === ""} type="submit">{t("environmentDetail.review")}</button></footer></form>{impact !== undefined && <ImpactDialog impact={impact} onCancel={() => setImpact(undefined)} onPublish={() => publish.mutate()} publishing={publish.isPending} />}</section></div>;
+  const chooseTemplate = (next: EnvironmentTemplate) => { setTemplate(next); setAccountID(""); };
+  return <div className="modal-backdrop"><section aria-labelledby="new-environment-title" aria-modal="true" className="modal environment-modal" role="dialog"><header><div><p className="eyebrow">{t("environments.new.eyebrow")}</p><h2 id="new-environment-title">{t("environments.new.title")}</h2></div><button aria-label={t("common.close")} className="icon-button" onClick={onClose} type="button">×</button></header><form onSubmit={submit}><label><span>{t("environmentDetail.name")}</span><input autoFocus maxLength={256} onChange={(event) => setName(event.target.value)} value={name} /></label><label><span>{t("environments.new.id")}</span><input maxLength={128} onChange={(event) => setID(event.target.value)} placeholder={slug(name)} value={id} /></label><fieldset><legend>{t("environments.new.template")}</legend><div className="template-picker"><TemplateChoice active={template === "observe"} description={t("environments.new.observe.description")} label={t("environments.new.observe")} onClick={() => chooseTemplate("observe")} /><TemplateChoice active={template === "claude"} description={t("environments.new.claude.description")} icon={<BrandIcon name="claude-code" />} label={t("environments.new.claude")} onClick={() => chooseTemplate("claude")} /><TemplateChoice active={template === "codex"} description={t("environments.new.codex.description")} icon={<BrandIcon name="codex" />} label={t("environments.new.codex")} onClick={() => chooseTemplate("codex")} /></div></fieldset>{template !== "observe" && <label><span>{t("environments.new.account")}</span><select onChange={(event) => setAccountID(event.target.value)} value={accountID}><option value="">{t("environmentDetail.account.client")}</option>{compatibleAccounts.map((account) => <option key={account.id} value={account.id}>{account.displayName}</option>)}</select><small className="field-help">{compatibleAccounts.length === 0 ? t("environments.new.account.none") : t("environments.new.account.help")}</small></label>}{errorKey !== undefined && <InlineProblem message={t(errorKey)} />}<footer><button onClick={onClose} type="button">{t("common.cancel")}</button><button className="primary-action" disabled={review.isPending || name.trim() === "" || canonicalID === ""} type="submit">{t("environmentDetail.review")}</button></footer></form>{impact !== undefined && <ImpactDialog impact={impact} onCancel={() => setImpact(undefined)} onPublish={() => publish.mutate()} publishing={publish.isPending} />}</section></div>;
 }
 
 function TemplateChoice({ active, description, icon, label, onClick }: { readonly active: boolean; readonly description: string; readonly icon?: ReactNode; readonly label: string; readonly onClick: () => void }) {
@@ -218,8 +233,16 @@ function ImpactDialog({ impact, onCancel, onPublish, publishing }: { readonly im
 
 function CompatibilityBadge({ value }: { readonly value: EnvironmentCompatibility }) { const { t } = useTranslation(); return <span className={`compatibility-badge compatibility-${value}`}>{t(`environmentImpact.${value}`)}</span>; }
 
-function newEnvironmentInput(name: string, template: EnvironmentTemplate): EnvironmentDraftInput {
-  return { expectedDraftRevision: 0, name, state: "active", clientEndpoints: template === "observe" ? [] : [endpointTemplate(template)], pluginBindings: [], budgetPolicy: { id: "", revision: 0 }, egressPolicy: { id: "", revision: 0, mode: "" } };
+function RouteAccountSelectors({ accounts, endpoints, onChange }: { readonly accounts: readonly ProviderAccountRecord[]; readonly endpoints: readonly EnvironmentClientEndpoint[]; readonly onChange: (value: readonly EnvironmentClientEndpoint[]) => void }) {
+  const { t } = useTranslation();
+  return <div className="route-account-selectors">{endpoints.flatMap((endpoint) => endpoint.protocolPlans.flatMap((plan) => plan.upstreamPlan.routes.map((route) => {
+    const compatible = compatibleAccountsForRealm(accounts, route.providerTarget.realmId);
+    return <label key={`${endpoint.id}:${plan.id}:${route.id}`}><span>{t("environmentDetail.account.route", { origin: route.providerTarget.origin })}</span><select onChange={(event) => onChange(setRouteAccount(endpoints, endpoint.id, plan.id, route.id, compatible.find((account) => account.id === event.target.value)))} value={route.accountPolicy.preferredAccountId}><option value="">{t("environmentDetail.account.client")}</option>{compatible.map((account) => <option disabled={account.state !== "active" || account.credentialState !== "ready"} key={account.id} value={account.id}>{account.displayName}</option>)}</select></label>;
+  })))}</div>;
+}
+
+function newEnvironmentInput(name: string, template: EnvironmentTemplate, account?: ProviderAccountRecord): EnvironmentDraftInput {
+  return { expectedDraftRevision: 0, name, state: "active", clientEndpoints: template === "observe" ? [] : [endpointTemplate(template, account)], pluginBindings: [], budgetPolicy: { id: "", revision: 0 }, egressPolicy: { id: "", revision: 0, mode: "" } };
 }
 
 function addEndpoint(current: readonly EnvironmentClientEndpoint[], template: Exclude<EnvironmentTemplate, "observe">): readonly EnvironmentClientEndpoint[] {
@@ -227,14 +250,31 @@ function addEndpoint(current: readonly EnvironmentClientEndpoint[], template: Ex
   return current.some((item) => item.clientOrigin === candidate.clientOrigin) ? current : [...current, candidate];
 }
 
-function endpointTemplate(template: Exclude<EnvironmentTemplate, "observe">): EnvironmentClientEndpoint {
+function endpointTemplate(template: Exclude<EnvironmentTemplate, "observe">, account?: ProviderAccountRecord): EnvironmentClientEndpoint {
   const codex = template === "codex";
   const token = codex ? "codex" : "claude";
   const origin = codex ? "https://chatgpt.com" : "https://api.anthropic.com";
   const protocol: ClientProtocol = codex ? "openai_responses" : "anthropic_messages";
   const realm = codex ? "openai.chatgpt" : "anthropic.official";
   const routeId = `route.${token}.official`;
-  return { id: `endpoint.${token}.official`, revision: 1, clientOrigin: origin, protocolPlans: [{ id: `plan.${token}.official`, revision: 1, clientProtocol: protocol, clientAdapterPolicy: { id: `adapter.${token}.official`, revision: 1 }, mode: "managed", upstreamPlan: { routes: [{ id: routeId, revision: 1, providerTarget: { id: `target.${token}.official`, revision: 1, origin, realmId: realm, capabilities: ["messages", "streaming", "tool_calls"] }, backendProtocol: protocol, accountPolicy: { revision: 1, mode: "client_passthrough", allowedRealmIds: [realm], preferredAccountId: "", candidateAccountIds: [], accountRevisions: {}, failoverPolicy: "off" }, modelPolicy: { revision: 1, mode: "passthrough", fixedModel: "" }, wireProfileRef: "follow-client", pluginBindings: [] }], defaultRouteId: routeId, routeSet: { id: `routes.${token}.official`, revision: 1, candidateRouteIds: [routeId] } }, pluginBindings: [] }] };
+  return { id: `endpoint.${token}.official`, revision: 1, clientOrigin: origin, protocolPlans: [{ id: `plan.${token}.official`, revision: 1, clientProtocol: protocol, clientAdapterPolicy: { id: `adapter.${token}.official`, revision: 1 }, mode: "managed", upstreamPlan: { routes: [{ id: routeId, revision: 1, providerTarget: { id: `target.${token}.official`, revision: 1, origin, realmId: realm, capabilities: ["messages", "streaming", "tool_calls"] }, backendProtocol: protocol, accountPolicy: accountPolicy(realm, account), modelPolicy: { revision: 1, mode: "passthrough", fixedModel: "" }, wireProfileRef: "follow-client", pluginBindings: [] }], defaultRouteId: routeId, routeSet: { id: `routes.${token}.official`, revision: 1, candidateRouteIds: [routeId] } }, pluginBindings: [] }] };
+}
+
+function accountPolicy(realm: string, account?: ProviderAccountRecord) {
+  return account === undefined ? { revision: 1, mode: "client_passthrough" as const, allowedRealmIds: [realm], preferredAccountId: "", candidateAccountIds: [], accountRevisions: {}, failoverPolicy: "off" as const } : { revision: 1, mode: "managed" as const, allowedRealmIds: [realm], preferredAccountId: account.id, candidateAccountIds: [account.id], accountRevisions: { [account.id]: account.revision }, failoverPolicy: "off" as const };
+}
+
+function compatibleProviderAccounts(accounts: readonly ProviderAccountRecord[], template: EnvironmentTemplate): readonly ProviderAccountRecord[] {
+  if (template === "observe") return [];
+  return compatibleAccountsForRealm(accounts, template === "claude" ? "anthropic.official" : "openai.chatgpt").filter((account) => account.state === "active" && account.credentialState === "ready");
+}
+
+function compatibleAccountsForRealm(accounts: readonly ProviderAccountRecord[], realm: string): readonly ProviderAccountRecord[] {
+  return accounts.filter((account) => account.realmId === realm);
+}
+
+function setRouteAccount(endpoints: readonly EnvironmentClientEndpoint[], endpointID: string, planID: string, routeID: string, account?: ProviderAccountRecord): readonly EnvironmentClientEndpoint[] {
+  return endpoints.map((endpoint) => endpoint.id !== endpointID ? endpoint : { ...endpoint, protocolPlans: endpoint.protocolPlans.map((plan) => plan.id !== planID ? plan : { ...plan, upstreamPlan: { ...plan.upstreamPlan, routes: plan.upstreamPlan.routes.map((route) => route.id !== routeID ? route : { ...route, revision: route.revision + 1, accountPolicy: { ...accountPolicy(route.providerTarget.realmId, account), revision: route.accountPolicy.revision + 1 } }) } }) });
 }
 
 function protocolLabel(protocol: ClientProtocol, t: (key: string) => string): string { return t(`environmentDetail.protocol.${protocol}`); }

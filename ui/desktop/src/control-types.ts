@@ -166,6 +166,40 @@ export interface EnvironmentPage {
   readonly items: readonly EnvironmentRecord[];
 }
 
+export type ProviderAccountKind = "anthropic_api_key" | "openai_api_key";
+export type ProviderAccountState = "active" | "disabled";
+export type ProviderCredentialState =
+  | "ready"
+  | "disabled"
+  | "credential_missing"
+  | "credential_unavailable";
+
+export interface ProviderAccountRecord {
+  readonly id: string;
+  readonly displayName: string;
+  readonly kind: ProviderAccountKind;
+  readonly realmId: string;
+  readonly state: ProviderAccountState;
+  readonly revision: number;
+  readonly credentialState: ProviderCredentialState;
+  readonly credentialEpoch: number;
+}
+
+export interface ProviderAccountPage {
+  readonly items: readonly ProviderAccountRecord[];
+}
+
+export interface ProviderAccountCreateInput {
+  readonly id: string;
+  readonly displayName: string;
+  readonly kind: ProviderAccountKind;
+  readonly secret: string;
+}
+
+export interface ProviderAccountCredentialInput {
+  readonly secret: string;
+}
+
 export interface EnvironmentDraft {
   readonly environmentId: string;
   readonly baseRevision: number;

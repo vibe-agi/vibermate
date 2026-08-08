@@ -639,6 +639,31 @@ ON manual_captures(
 WHERE state = 'active'
     AND lifetime = 'temporary';
 
+-- ProviderAccount persists only non-secret account configuration. The
+-- credential bytes belong exclusively to the host-selected SecretStore;
+-- secret_reference is an opaque typed locator, never a credential value.
+CREATE TABLE provider_accounts(
+  account_id TEXT PRIMARY KEY NOT NULL
+  CHECK(length(CAST(account_id AS BLOB)) BETWEEN 1 AND 128),
+  display_name TEXT NOT NULL
+  CHECK(length(CAST(display_name AS BLOB)) BETWEEN 1 AND 256),
+  realm_id TEXT NOT NULL
+  CHECK(length(CAST(realm_id AS BLOB)) BETWEEN 1 AND 128),
+  driver_ref TEXT NOT NULL
+  CHECK(length(CAST(driver_ref AS BLOB)) BETWEEN 1 AND 128),
+  secret_reference TEXT NOT NULL UNIQUE
+  CHECK(length(CAST(secret_reference AS BLOB)) BETWEEN 1 AND 1024),
+  state TEXT NOT NULL
+  CHECK(state IN('active', 'disabled')),
+  revision INTEGER NOT NULL
+  CHECK(revision BETWEEN 1 AND 9223372036854775807),
+  created_at_unix_ms INTEGER NOT NULL,
+  updated_at_unix_ms INTEGER NOT NULL,
+  CHECK(updated_at_unix_ms >= created_at_unix_ms)
+) STRICT;
+CREATE INDEX provider_accounts_realm_state
+ON provider_accounts(realm_id, state, account_id);
+
 -- Environment is the only user-selectable traffic configuration authority.
 CREATE TABLE environment_revision_counters(
   environment_id TEXT PRIMARY KEY NOT NULL

@@ -48,6 +48,29 @@ describe("the Environment-first browser preview host", () => {
     ).resolves.toEqual(current);
   });
 
+  it("creates and rotates a managed ProviderAccount without exposing its secret", async () => {
+    const client = await connectPreviewControl();
+    const created = await client.createProviderAccount({
+      id: "openai-personal",
+      displayName: "OpenAI Personal",
+      kind: "openai_api_key",
+      secret: "private-preview-secret",
+    });
+    expect(created).toMatchObject({
+      id: "openai-personal",
+      realmId: "openai.platform",
+      credentialState: "ready",
+      credentialEpoch: 1,
+    });
+    expect(JSON.stringify(created)).not.toContain("private-preview-secret");
+    const rotated = await client.replaceProviderAccountCredential(
+      created.id,
+      created.credentialEpoch,
+      { secret: "second-private-preview-secret" },
+    );
+    expect(rotated.credentialEpoch).toBe(2);
+  });
+
   it("keeps equal raw IDs distinct across Capture kinds and switches one assignment", async () => {
     const client = await connectPreviewControl();
     const created = await client.createManualCapture({

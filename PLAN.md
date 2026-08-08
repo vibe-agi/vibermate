@@ -1,6 +1,6 @@
 # Environment-first Production Vertical
 
-Status: implementation convergence in progress
+Status: local production vertical implemented; packaged evidence pending
 
 ## Goal
 
@@ -31,7 +31,8 @@ dual writes, compatibility readers, or legacy database migrations.
 5. Compatible assignment changes are hot; protocol-sensitive changes drain
    affected connections; authority expansion requires a new Capture launch.
 6. SQLite is the durable authority for Environment revisions, Capture
-   assignments, activities, approvals, and launch boundaries.
+   assignments, ProviderAccount configuration, activities, approvals, and
+   launch boundaries. Secret bytes remain exclusively in SecretStore.
 7. ProductRuntime, Desktop Control API, CLI, and React consume those same
    typed authorities. No UI projection invents missing values or reconstructs
    historical evidence from current configuration.
@@ -50,10 +51,11 @@ dual writes, compatibility readers, or legacy database migrations.
 
 ## Explicitly deferred
 
-- ProviderAccount credentialed provider traffic and automatic failover;
+- linked client-session account connectors, live credentialed-provider
+  acceptance, and automatic account failover;
 - plugin execution and the Language Bridge;
 - quality evaluation and long-term usage/cost analytics;
-- Server/LAN composition and manual application proxy credentials;
+- Server/LAN composition and remote enrollment;
 - system trust-store mutation and Keychain;
 - application-wide capture through Network Extension/TUN;
 - signed/notarized distribution and Preview/Release claims.

@@ -239,6 +239,7 @@ func newAuditFixture(
 			}},
 		},
 		Approvals:       runtime.ToolApprovals(),
+		Accounts:        runtime.ProviderAccounts(),
 		CaptureRuns:     captureReader,
 		ManualCaptures:  runtime.ManualCaptures(),
 		Offline:         runtime,

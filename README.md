@@ -43,9 +43,10 @@ Claude and Codex plans that share an upstream service without conflating their
 wire dialects.
 
 Provider accounts belong to an upstream authentication realm. Routes reference
-compatible accounts; they do not own or duplicate secret material. The current
-Core has typed client-passthrough and managed-account selection seams. Account
-management UI and production connector ingestion remain deferred.
+compatible accounts; they do not own or duplicate secret material. The Desktop
+App can connect Anthropic and OpenAI API keys to the private SecretStore and an
+Environment can select one compatible account. The client-login path remains
+the default and never copies a captured credential into account storage.
 
 ## Default behavior
 
@@ -149,7 +150,7 @@ The Desktop workspace exposes seven focused destinations:
 
 - Captures and frozen Requests;
 - Environments;
-- Accounts and Plugins as honest deferred resource surfaces;
+- managed Accounts and Plugins as an honest deferred resource surface;
 - Policy & approvals;
 - Quality as an honest deferred analysis surface;
 - Settings and receipt-backed CLI installation.
@@ -158,7 +159,7 @@ The preview implementation uses the same Environment/Capture DTOs as the real
 Control client. Playwright covers desktop and 390 px layouts, keyboard focus,
 both locales, Capture switching, transparent Manual Capture creation,
 Environment impact publication, frozen Request drill-down, policy decisions,
-and Offline Hold.
+managed-account connection/selection, and Offline Hold.
 
 ## Validation
 
@@ -180,7 +181,8 @@ explicit deterministic or credentialed expectation.
 ## Not implemented or not proven
 
 - Server Host, remote enrollment, and multi-user authorization;
-- production account connectors and account-management UI;
+- linked client-session/OAuth account connectors, live provider acceptance,
+  and automatic account failover;
 - plugin execution and marketplace UX;
 - QualityRun production APIs and dashboards;
 - Language Bridge translation and provenance tracking;

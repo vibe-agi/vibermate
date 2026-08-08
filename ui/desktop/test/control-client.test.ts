@@ -89,6 +89,74 @@ describe("Environment-first desktop control client", () => {
     });
   });
 
+  it("creates and reads managed ProviderAccounts without accepting secret material in responses", async () => {
+    const account = {
+      id: "anthropic-work",
+      displayName: "Anthropic Work",
+      kind: "anthropic_api_key",
+      realmId: "anthropic.official",
+      state: "active",
+      revision: 1,
+      credentialState: "ready",
+      credentialEpoch: 1,
+    } as const;
+    const calls: Array<{ url: URL; init: RequestInit }> = [];
+    const fetch = sessionAwareFetch((url, init) => {
+      calls.push({ url, init });
+      if (init.method === "POST") return jsonResponse(account, 201);
+      return jsonResponse({ items: [account] });
+    });
+    const client = await createControlClient(session(), fetch);
+
+    await expect(
+      client.createProviderAccount({
+        id: account.id,
+        displayName: account.displayName,
+        kind: account.kind,
+        secret: "sk-ant-control-only",
+      }),
+    ).resolves.toEqual(account);
+    await expect(client.providerAccounts()).resolves.toEqual({ items: [account] });
+    expect(calls.map(({ url }) => url.pathname)).toEqual([
+      "/api/v1/provider-accounts",
+      "/api/v1/provider-accounts",
+    ]);
+    expect(calls[0]?.init.body).toBe(
+      JSON.stringify({
+        id: account.id,
+        displayName: account.displayName,
+        kind: account.kind,
+        secret: "sk-ant-control-only",
+      }),
+    );
+    expect(new Headers(calls[0]?.init.headers).get("If-Match")).toBe("0");
+  });
+
+  it("rejects a ProviderAccount response that leaks a secret-shaped field", async () => {
+    const fetch = sessionAwareFetch(() =>
+      jsonResponse({
+        items: [
+          {
+            id: "anthropic-work",
+            displayName: "Anthropic Work",
+            kind: "anthropic_api_key",
+            realmId: "anthropic.official",
+            state: "active",
+            revision: 1,
+            credentialState: "ready",
+            credentialEpoch: 1,
+            secretReference: "secret://provider-account/anthropic-work",
+          },
+        ],
+      }),
+    );
+    const client = await createControlClient(session(), fetch);
+
+    await expect(client.providerAccounts()).rejects.toBeInstanceOf(
+      ControlContractError,
+    );
+  });
+
   it("accepts the canonical default-port origin emitted by the Go authority", async () => {
     const canonical = environment({
       clientEndpoints: [

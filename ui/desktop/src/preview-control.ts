@@ -29,6 +29,10 @@ import type {
   ManualCaptureRecord,
   ManualCaptureStateTag,
   OfflineHoldSnapshot,
+  ProviderAccountCreateInput,
+  ProviderAccountCredentialInput,
+  ProviderAccountPage,
+  ProviderAccountRecord,
   StatusResponse,
 } from "./control-types.ts";
 
@@ -252,6 +256,17 @@ const pendingApproval: ApprovalView = {
   expiresAt: "2026-08-08T08:10:00.000Z",
 };
 
+const previewAccount: ProviderAccountRecord = {
+  id: "anthropic-work",
+  displayName: "Anthropic Work",
+  kind: "anthropic_api_key",
+  realmId: "anthropic.official",
+  state: "active",
+  revision: 1,
+  credentialState: "ready",
+  credentialEpoch: 1,
+};
+
 function clone<T>(value: T): T {
   return structuredClone(value);
 }
@@ -268,6 +283,9 @@ class PreviewControlClient implements ControlClient {
     [`${workEnvironment.id}@${workEnvironment.revision}`, clone(workEnvironment)],
   ]);
   private readonly drafts = new Map<string, EnvironmentDraft>();
+  private readonly accountRecords = new Map<string, ProviderAccountRecord>([
+    [previewAccount.id, clone(previewAccount)],
+  ]);
   private readonly manualRecords = new Map<string, ManualCaptureRecord>([
     [baseManualCapture.id, clone(baseManualCapture)],
   ]);
@@ -351,6 +369,62 @@ class PreviewControlClient implements ControlClient {
   async environments(): Promise<EnvironmentPage> {
     this.requireOpen();
     return { items: [...this.environmentRecords.values()].sort((left, right) => left.id.localeCompare(right.id)).map(clone) };
+  }
+
+  async providerAccounts(): Promise<ProviderAccountPage> {
+    this.requireOpen();
+    return {
+      items: [...this.accountRecords.values()]
+        .sort((left, right) => left.id.localeCompare(right.id))
+        .map(clone),
+    };
+  }
+
+  async providerAccount(accountId: string): Promise<ProviderAccountRecord> {
+    this.requireOpen();
+    const account = this.accountRecords.get(accountId);
+    if (account === undefined) throw this.notFound();
+    return clone(account);
+  }
+
+  async createProviderAccount(
+    input: ProviderAccountCreateInput,
+  ): Promise<ProviderAccountRecord> {
+    this.requireOpen();
+    if (this.accountRecords.has(input.id)) throw this.conflict();
+    const account: ProviderAccountRecord = {
+      id: input.id,
+      displayName: input.displayName,
+      kind: input.kind,
+      realmId:
+        input.kind === "anthropic_api_key"
+          ? "anthropic.official"
+          : "openai.platform",
+      state: "active",
+      revision: 1,
+      credentialState: "ready",
+      credentialEpoch: 1,
+    };
+    this.accountRecords.set(account.id, account);
+    return clone(account);
+  }
+
+  async replaceProviderAccountCredential(
+    accountId: string,
+    expectedCredentialEpoch: number,
+    _input: ProviderAccountCredentialInput,
+  ): Promise<ProviderAccountRecord> {
+    this.requireOpen();
+    const account = this.accountRecords.get(accountId);
+    if (account === undefined) throw this.notFound();
+    this.requireRevision(account.credentialEpoch, expectedCredentialEpoch);
+    const updated = {
+      ...account,
+      credentialState: "ready" as const,
+      credentialEpoch: expectedCredentialEpoch + 1,
+    };
+    this.accountRecords.set(accountId, updated);
+    return clone(updated);
   }
 
   async environment(environmentId: string): Promise<EnvironmentRecord> {
