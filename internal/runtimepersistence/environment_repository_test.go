@@ -39,7 +39,7 @@ func TestEnvironmentRepositoryReopensIdenticalSnapshotAndPrivateDraft(t *testing
 	next.Revision = 2
 	next.Name = "Work renamed"
 	nextDraft, err := manager.SaveDraft(context.Background(), environment.DraftCommand{
-		ExpectedBaseRevision: 1, ExpectedDraftRevision: draft.Revision, Candidate: next,
+		ExpectedBaseRevision: 1, ExpectedDraftRevision: 0, Candidate: next,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -90,7 +90,7 @@ func TestEnvironmentRepositoryReopensIdenticalSnapshotAndPrivateDraft(t *testing
 	third.Revision = 3
 	third.Name = "Work third"
 	thirdDraft, err := recovered.SaveDraft(context.Background(), environment.DraftCommand{
-		ExpectedBaseRevision: 2, ExpectedDraftRevision: recoveredDraft.Revision, Candidate: third,
+		ExpectedBaseRevision: 2, ExpectedDraftRevision: 0, Candidate: third,
 	})
 	if err != nil || thirdDraft.Revision != 3 {
 		t.Fatalf("monotonic third draft = %+v, %v", thirdDraft, err)
@@ -163,7 +163,7 @@ func TestEnvironmentRetiredChildIdentitySurvivesReopen(t *testing.T) {
 	second.Revision = 2
 	second.ClientEndpoints = nil
 	secondDraft, err := manager.SaveDraft(context.Background(), environment.DraftCommand{
-		ExpectedBaseRevision: 1, ExpectedDraftRevision: firstDraft.Revision, Candidate: second,
+		ExpectedBaseRevision: 1, ExpectedDraftRevision: 0, Candidate: second,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -191,7 +191,7 @@ func TestEnvironmentRetiredChildIdentitySurvivesReopen(t *testing.T) {
 	}
 	third := environmentFixture(t, "work", 3)
 	if _, err := recovered.SaveDraft(context.Background(), environment.DraftCommand{
-		ExpectedBaseRevision: 2, ExpectedDraftRevision: secondDraft.Revision, Candidate: third,
+		ExpectedBaseRevision: 2, ExpectedDraftRevision: 0, Candidate: third,
 	}); !errors.Is(err, environment.ErrInvalidTransition) {
 		t.Fatalf("reused retired identity after reopen = %v", err)
 	}

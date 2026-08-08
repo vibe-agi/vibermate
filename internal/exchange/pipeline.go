@@ -2,6 +2,7 @@ package exchange
 
 import (
 	"bytes"
+	"compress/gzip"
 	"context"
 	"encoding/json"
 	"errors"
@@ -1035,6 +1036,7 @@ func (pipeline *Pipeline) executeOriginal(
 		contentPath,
 		decodedContent,
 		mode,
+		response.Header.Get("Content-Encoding"),
 	)
 	buffer := make([]byte, streamReadBufferBytes)
 	for {
@@ -1099,21 +1101,32 @@ func (pipeline *Pipeline) executeOriginal(
 }
 
 type originalContentDecoder struct {
-	path    *protocolpath.Path
-	request *protocolcore.Request
-	mode    ResponseMode
-	stream  protocolpath.Stream
-	body    bytes.Buffer
-	failed  bool
+	path       *protocolpath.Path
+	request    *protocolcore.Request
+	mode       ResponseMode
+	stream     protocolpath.Stream
+	body       bytes.Buffer
+	compressed bool
+	failed     bool
 }
 
 func newOriginalContentDecoder(
 	path *protocolpath.Path,
 	request *protocolcore.Request,
 	mode ResponseMode,
+	contentEncoding string,
 ) *originalContentDecoder {
 	decoder := &originalContentDecoder{path: path, request: request, mode: mode}
 	if path == nil || request == nil {
+		decoder.failed = true
+		return decoder
+	}
+	encoding := strings.TrimSpace(contentEncoding)
+	switch {
+	case encoding == "" || strings.EqualFold(encoding, "identity"):
+	case strings.EqualFold(encoding, "gzip"):
+		decoder.compressed = true
+	default:
 		decoder.failed = true
 		return decoder
 	}
@@ -1130,6 +1143,15 @@ func newOriginalContentDecoder(
 
 func (decoder *originalContentDecoder) Feed(ctx context.Context, fragment []byte) {
 	if decoder == nil || decoder.failed || len(fragment) == 0 {
+		return
+	}
+	if decoder.compressed {
+		if decoder.body.Len()+len(fragment) > maxCompleteResponseBytes {
+			decoder.failed = true
+			decoder.body.Reset()
+			return
+		}
+		_, _ = decoder.body.Write(fragment)
 		return
 	}
 	if decoder.mode == ResponseModeEventStream {
@@ -1149,6 +1171,25 @@ func (decoder *originalContentDecoder) Feed(ctx context.Context, fragment []byte
 func (decoder *originalContentDecoder) Finish(ctx context.Context) *protocolcore.Response {
 	if decoder == nil || decoder.failed || decoder.path == nil || decoder.request == nil {
 		return nil
+	}
+	if decoder.compressed {
+		reader, err := gzip.NewReader(bytes.NewReader(decoder.body.Bytes()))
+		if err != nil {
+			return nil
+		}
+		decoded, err := readBounded(reader, maxCompleteResponseBytes)
+		closeErr := reader.Close()
+		if err != nil || closeErr != nil {
+			return nil
+		}
+		if decoder.mode == ResponseModeEventStream {
+			if _, err := decoder.stream.Feed(ctx, decoded); err != nil {
+				return nil
+			}
+		} else {
+			decoder.body.Reset()
+			_, _ = decoder.body.Write(decoded)
+		}
 	}
 	if decoder.mode == ResponseModeEventStream {
 		terminal, err := decoder.stream.FinishDecoded(ctx)

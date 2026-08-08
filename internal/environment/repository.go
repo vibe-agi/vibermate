@@ -16,8 +16,11 @@ func (draft Draft) Clone() Draft {
 }
 
 type DraftMutation struct {
-	EnvironmentID         EnvironmentID
-	ExpectedBaseRevision  Revision
+	EnvironmentID        EnvironmentID
+	ExpectedBaseRevision Revision
+	// ExpectedDraftRevision compares against the current draft row. Zero means
+	// absent; the repository still allocates monotonically increasing private
+	// draft revisions across publish cycles.
 	ExpectedDraftRevision Revision
 	Candidate             Environment
 	CandidateDigest       CandidateDigest

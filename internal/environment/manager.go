@@ -79,7 +79,10 @@ func (preview ImpactPreview) Clone() ImpactPreview {
 }
 
 type DraftCommand struct {
-	ExpectedBaseRevision  Revision
+	ExpectedBaseRevision Revision
+	// ExpectedDraftRevision is the current private draft revision, or zero
+	// when GetDraft reports that no private draft exists. Published drafts are
+	// consumed; their historical allocation number is not a caller CAS token.
 	ExpectedDraftRevision Revision
 	Candidate             Environment
 }

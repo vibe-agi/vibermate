@@ -402,7 +402,7 @@ func TestDeletedStableChildIDCannotBeReused(t *testing.T) {
 	removed := cloneProtocolPlan(second.ClientEndpoints[0].ProtocolPlans[1])
 	second.ClientEndpoints[0].ProtocolPlans = second.ClientEndpoints[0].ProtocolPlans[:1]
 	secondDraft, err := manager.SaveDraft(context.Background(), DraftCommand{
-		ExpectedBaseRevision: 1, ExpectedDraftRevision: firstDraft.Revision, Candidate: second,
+		ExpectedBaseRevision: 1, ExpectedDraftRevision: 0, Candidate: second,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -424,7 +424,7 @@ func TestDeletedStableChildIDCannotBeReused(t *testing.T) {
 	third.ClientEndpoints[0].Revision = 3
 	third.ClientEndpoints[0].ProtocolPlans = append(third.ClientEndpoints[0].ProtocolPlans, removed)
 	if _, err := manager.SaveDraft(context.Background(), DraftCommand{
-		ExpectedBaseRevision: 2, ExpectedDraftRevision: secondDraft.Revision, Candidate: third,
+		ExpectedBaseRevision: 2, ExpectedDraftRevision: 0, Candidate: third,
 	}); !errors.Is(err, ErrInvalidTransition) {
 		t.Fatalf("reused retired child = %v", err)
 	}
@@ -568,7 +568,7 @@ func TestPublishRejectsAnActiveCASThatMovedAfterPreview(t *testing.T) {
 	second := first.Clone()
 	second.Revision = 2
 	second.Name = "Second"
-	draft, err = manager.SaveDraft(context.Background(), DraftCommand{ExpectedBaseRevision: 1, ExpectedDraftRevision: 1, Candidate: second})
+	draft, err = manager.SaveDraft(context.Background(), DraftCommand{ExpectedBaseRevision: 1, ExpectedDraftRevision: 0, Candidate: second})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -743,7 +743,7 @@ func TestControlReaderSeparatesCurrentDraftAndHistoricalRevisions(t *testing.T) 
 	second.Revision = 2
 	second.Name = "Work renamed"
 	privateDraft, err := manager.SaveDraft(context.Background(), DraftCommand{
-		ExpectedBaseRevision: 1, ExpectedDraftRevision: draft.Revision, Candidate: second,
+		ExpectedBaseRevision: 1, ExpectedDraftRevision: 0, Candidate: second,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -1093,10 +1093,15 @@ func (repository *memoryRepository) SaveDraft(_ context.Context, mutation DraftM
 	repository.mu.Lock()
 	defer repository.mu.Unlock()
 	active, exists := repository.active[mutation.EnvironmentID]
-	if (exists && active.Revision != mutation.ExpectedBaseRevision) || (!exists && mutation.ExpectedBaseRevision != 0) || repository.draftRevisions[mutation.EnvironmentID] != mutation.ExpectedDraftRevision {
+	currentDraft, draftExists := repository.drafts[mutation.EnvironmentID]
+	currentDraftRevision := Revision(0)
+	if draftExists {
+		currentDraftRevision = currentDraft.Revision
+	}
+	if (exists && active.Revision != mutation.ExpectedBaseRevision) || (!exists && mutation.ExpectedBaseRevision != 0) || currentDraftRevision != mutation.ExpectedDraftRevision {
 		return Draft{}, ErrRevisionConflict
 	}
-	revision := mutation.ExpectedDraftRevision + 1
+	revision := repository.draftRevisions[mutation.EnvironmentID] + 1
 	draft := Draft{EnvironmentID: mutation.EnvironmentID, BaseRevision: mutation.ExpectedBaseRevision, Revision: revision, Candidate: mutation.Candidate.Clone(), CandidateDigest: mutation.CandidateDigest}
 	repository.draftRevisions[mutation.EnvironmentID] = revision
 	repository.drafts[mutation.EnvironmentID] = draft

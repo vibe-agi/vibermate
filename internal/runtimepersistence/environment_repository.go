@@ -129,9 +129,18 @@ func (repository *environmentRepository) SaveDraft(ctx context.Context, mutation
 	result, err := transaction.ExecContext(permit.context,
 		`UPDATE environment_revision_counters
 		 SET draft_revision = draft_revision + 1
-		 WHERE environment_id = ? AND active_revision = ? AND draft_revision = ?
-		   AND draft_revision < 9223372036854775807`,
-		mutation.EnvironmentID.String(), int64(mutation.ExpectedBaseRevision), int64(mutation.ExpectedDraftRevision))
+		 WHERE environment_id = ? AND active_revision = ?
+		   AND draft_revision < 9223372036854775807
+		   AND ((? = 0 AND NOT EXISTS (
+		          SELECT 1 FROM environment_drafts WHERE environment_id = ?
+		        )) OR (? <> 0 AND draft_revision = ? AND EXISTS (
+		          SELECT 1 FROM environment_drafts
+		          WHERE environment_id = ? AND draft_revision = ?
+		        )))`,
+		mutation.EnvironmentID.String(), int64(mutation.ExpectedBaseRevision),
+		int64(mutation.ExpectedDraftRevision), mutation.EnvironmentID.String(),
+		int64(mutation.ExpectedDraftRevision), int64(mutation.ExpectedDraftRevision),
+		mutation.EnvironmentID.String(), int64(mutation.ExpectedDraftRevision))
 	if err != nil {
 		return environment.Draft{}, fmt.Errorf("advance Environment draft revision: %w", err)
 	}
@@ -139,7 +148,13 @@ func (repository *environmentRepository) SaveDraft(ctx context.Context, mutation
 	if err != nil || affected != 1 {
 		return environment.Draft{}, environment.ErrRevisionConflict
 	}
-	nextDraftRevision := mutation.ExpectedDraftRevision + 1
+	var allocatedDraftRevision int64
+	if err := transaction.QueryRowContext(permit.context,
+		`SELECT draft_revision FROM environment_revision_counters WHERE environment_id = ?`,
+		mutation.EnvironmentID.String()).Scan(&allocatedDraftRevision); err != nil {
+		return environment.Draft{}, fmt.Errorf("read allocated Environment draft revision: %w", err)
+	}
+	nextDraftRevision := environment.Revision(allocatedDraftRevision)
 	if _, err := transaction.ExecContext(permit.context,
 		`INSERT INTO environment_drafts(environment_id, base_revision, draft_revision, candidate_revision,
 		 format_version, payload_json, candidate_digest, updated_at_unix_ms)

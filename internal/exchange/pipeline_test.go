@@ -2,6 +2,7 @@ package exchange
 
 import (
 	"bytes"
+	"compress/gzip"
 	"context"
 	"encoding/json"
 	"errors"
@@ -302,6 +303,82 @@ func TestOriginalPassthroughPreservesClientEnvelopeAndResponse(t *testing.T) {
 		observation.Response == nil || observation.Response.Blocks[0].Text != "provider-compatible" ||
 		observation.Response.Usage.Output.Tokens != 2 {
 		t.Fatalf("original passthrough content = %+v", observation)
+	}
+}
+
+func TestOriginalPassthroughPreservesGzipStreamAndRecordsDecodedResponse(t *testing.T) {
+	plan := mustEnvironmentRequestPlan(t, testPlanOptions{
+		mode:           environment.PlanModeOriginalPassthrough,
+		providerOrigin: "https://api.anthropic.com",
+		backend:        protocolspec.DialectAnthropicMessages,
+		modelMode:      modelModePreserve,
+	})
+	wire := []byte(strings.Join([]string{
+		`event: message_start`,
+		`data: {"type":"message_start","message":{"id":"msg_gzip","type":"message","role":"assistant","model":"claude-client-alias","usage":{"input_tokens":4}}}`,
+		``,
+		`event: content_block_start`,
+		`data: {"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}`,
+		``,
+		`event: content_block_delta`,
+		`data: {"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"compressed evidence"}}`,
+		``,
+		`event: content_block_stop`,
+		`data: {"type":"content_block_stop","index":0}`,
+		``,
+		`event: message_delta`,
+		`data: {"type":"message_delta","delta":{"stop_reason":"end_turn","stop_sequence":null},"usage":{"output_tokens":2}}`,
+		``,
+		`event: message_stop`,
+		`data: {"type":"message_stop"}`,
+		``,
+	}, "\n") + "\n")
+	compressed := gzipFixture(t, wire)
+	provider := &providerDouble{results: []providerResult{{response: &http.Response{
+		StatusCode: http.StatusOK,
+		Header: http.Header{
+			"Content-Type":     []string{"text/event-stream"},
+			"Content-Encoding": []string{"gzip"},
+		},
+		Body: io.NopCloser(bytes.NewReader(compressed)),
+	}}}}
+	content := &contentObserverDouble{}
+	pipeline := newTestPipelineWithContentObserver(
+		t, nil, provider, approvedDecisions(), &attemptObserverDouble{}, content,
+	)
+	defer shutdownPipeline(t, pipeline)
+	downstream := &downstreamRecorder{}
+	request := mustClientRequestWithOptions(
+		t,
+		"exchange-original-gzip",
+		plan,
+		streamingClientRequest(),
+		WithOriginalHeaders(http.Header{
+			"Authorization":     []string{"Bearer client-owned"},
+			"Anthropic-Version": []string{"2023-06-01"},
+		}),
+	)
+	result, err := pipeline.Execute(
+		context.Background(),
+		request,
+		downstream,
+	)
+	if err != nil || result.Outcome != AttemptSucceeded {
+		t.Fatalf("Execute() = %+v, %v", result, err)
+	}
+	if !bytes.Equal(downstream.bytesSnapshot(), compressed) {
+		t.Fatal("original gzip response bytes changed before downstream delivery")
+	}
+	envelopes := downstream.envelopesSnapshot()
+	if len(envelopes) != 1 || envelopes[0].Headers().Get("Content-Encoding") != "gzip" {
+		t.Fatalf("downstream envelope = %+v", envelopes)
+	}
+	observation, ok := content.latest()
+	if !ok || observation.Response == nil || len(observation.Response.Blocks) != 1 ||
+		observation.Response.Blocks[0].Text != "compressed evidence" ||
+		!observation.Response.Usage.Output.Known ||
+		observation.Response.Usage.Output.Tokens != 2 {
+		t.Fatalf("gzip content observation = %+v", observation)
 	}
 }
 
@@ -1224,6 +1301,19 @@ func streamResponse(status int, body io.Reader) *http.Response {
 		Header:     http.Header{"Content-Type": []string{"text/event-stream"}},
 		Body:       io.NopCloser(body),
 	}
+}
+
+func gzipFixture(t *testing.T, body []byte) []byte {
+	t.Helper()
+	var encoded bytes.Buffer
+	writer := gzip.NewWriter(&encoded)
+	if _, err := writer.Write(body); err != nil {
+		t.Fatal(err)
+	}
+	if err := writer.Close(); err != nil {
+		t.Fatal(err)
+	}
+	return encoded.Bytes()
 }
 
 func completeProviderResponse(model string) []byte {

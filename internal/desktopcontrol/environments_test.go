@@ -63,6 +63,16 @@ func TestEnvironmentDraftPreviewPublishAndHistoricalRevisionRoutes(t *testing.T)
 	}
 	assertJSONString(t, publish.Body.Bytes(), "outcome", "committed")
 
+	missingDraft := environmentRequest(t, application, http.MethodGet, "/api/v1/environments/work/draft", 0, "", nil)
+	if missingDraft.Code != http.StatusNotFound {
+		t.Fatalf("published draft remained current: status=%d body=%s", missingDraft.Code, missingDraft.Body.Bytes())
+	}
+	secondDraft := environmentRequest(t, application, http.MethodPut, "/api/v1/environments/work/draft", 1, "environment-draft-0002", draftBody)
+	if secondDraft.Code != http.StatusOK {
+		t.Fatalf("edit published Environment status=%d body=%s", secondDraft.Code, secondDraft.Body.Bytes())
+	}
+	assertJSONNumber(t, secondDraft.Body.Bytes(), "draftRevision", 2)
+
 	for _, path := range []string{"/api/v1/environments/work", "/api/v1/environments/work/revisions/1"} {
 		response := environmentRequest(t, application, http.MethodGet, path, 0, "", nil)
 		if response.Code != http.StatusOK {

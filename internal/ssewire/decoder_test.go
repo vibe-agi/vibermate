@@ -35,6 +35,33 @@ func TestDecoderAcceptsFragmentedCRLFMultilineEvents(t *testing.T) {
 	}
 }
 
+func TestDecoderAcceptsBareCRLineEndingsAcrossEveryFragmentBoundary(t *testing.T) {
+	t.Parallel()
+
+	wire := []byte("event: message\rdata: {\"text\":\"ready\"}\r\r")
+	for split := 0; split <= len(wire); split++ {
+		decoder, err := NewDecoder(DefaultOptions())
+		if err != nil {
+			t.Fatalf("NewDecoder() error = %v", err)
+		}
+		var events []Event
+		for _, fragment := range [][]byte{wire[:split], wire[split:]} {
+			produced, feedErr := decoder.Feed(fragment)
+			if feedErr != nil {
+				t.Fatalf("split %d Feed() error = %v", split, feedErr)
+			}
+			events = append(events, produced...)
+		}
+		if err := decoder.Finish(); err != nil {
+			t.Fatalf("split %d Finish() error = %v", split, err)
+		}
+		if len(events) != 1 || events[0].Name != "message" ||
+			string(events[0].Data) != `{"text":"ready"}` {
+			t.Fatalf("split %d events = %#v", split, events)
+		}
+	}
+}
+
 func TestDecoderRejectsPartialEventAtEOF(t *testing.T) {
 	t.Parallel()
 

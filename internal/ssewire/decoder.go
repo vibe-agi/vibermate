@@ -68,6 +68,10 @@ type Decoder struct {
 
 	options Options
 	pending []byte
+	// A CR is itself an SSE line ending. When it arrives at the end of one
+	// fragment, consume it immediately and ignore one LF at the beginning of
+	// the next fragment so a fragmented CRLF remains one line ending.
+	swallowLeadingLF bool
 
 	eventName  string
 	dataLines  []string
@@ -97,6 +101,15 @@ func (decoder *Decoder) Feed(fragment []byte) ([]Event, error) {
 	if len(fragment) == 0 {
 		return nil, nil
 	}
+	if decoder.swallowLeadingLF {
+		if fragment[0] == '\n' {
+			fragment = fragment[1:]
+		}
+		decoder.swallowLeadingLF = false
+		if len(fragment) == 0 {
+			return nil, nil
+		}
+	}
 	if len(decoder.pending)+len(fragment) > decoder.options.MaxPendingBytes {
 		return nil, fmt.Errorf("%w: pending bytes", ErrLimitExceeded)
 	}
@@ -104,7 +117,7 @@ func (decoder *Decoder) Feed(fragment []byte) ([]Event, error) {
 
 	var events []Event
 	for {
-		newline := bytes.IndexByte(decoder.pending, '\n')
+		newline := bytes.IndexAny(decoder.pending, "\r\n")
 		if newline < 0 {
 			if len(decoder.pending) > decoder.options.MaxLineBytes {
 				return nil, fmt.Errorf("%w: line bytes", ErrLimitExceeded)
@@ -113,13 +126,15 @@ func (decoder *Decoder) Feed(fragment []byte) ([]Event, error) {
 		}
 
 		line := decoder.pending[:newline]
-		decoder.pending = decoder.pending[newline+1:]
-		if len(line) > 0 && line[len(line)-1] == '\r' {
-			line = line[:len(line)-1]
+		terminatorBytes := 1
+		if decoder.pending[newline] == '\r' {
+			if newline+1 < len(decoder.pending) && decoder.pending[newline+1] == '\n' {
+				terminatorBytes = 2
+			} else if newline+1 == len(decoder.pending) {
+				decoder.swallowLeadingLF = true
+			}
 		}
-		if bytes.IndexByte(line, '\r') >= 0 {
-			return nil, fmt.Errorf("%w: bare carriage return", ErrMalformed)
-		}
+		decoder.pending = decoder.pending[newline+terminatorBytes:]
 		if len(line) > decoder.options.MaxLineBytes {
 			return nil, fmt.Errorf("%w: line bytes", ErrLimitExceeded)
 		}

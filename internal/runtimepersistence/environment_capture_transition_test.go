@@ -91,7 +91,7 @@ func TestSQLiteEnvironmentPublishDrainsOnlyIncompatibleCaptureConnections(t *tes
 		ID: "adapter.replacement", Revision: 2,
 	}
 	draft, err = environments.SaveDraft(context.Background(), environment.DraftCommand{
-		ExpectedBaseRevision: 1, ExpectedDraftRevision: draft.Revision, Candidate: candidate,
+		ExpectedBaseRevision: 1, ExpectedDraftRevision: 0, Candidate: candidate,
 	})
 	if err != nil {
 		t.Fatal(err)
