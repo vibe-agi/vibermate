@@ -1,6 +1,6 @@
 # Environment-first Production Vertical
 
-Status: local production vertical implemented; packaged evidence pending
+Status: managed Anthropic first-use vertical frozen; deterministic packaged evidence passed
 
 ## Goal
 
@@ -36,6 +36,12 @@ dual writes, compatibility readers, or legacy database migrations.
 7. ProductRuntime, Desktop Control API, CLI, and React consume those same
    typed authorities. No UI projection invents missing values or reconstructs
    historical evidence from current configuration.
+8. A Desktop-managed Anthropic API-key account is selected explicitly by one
+   managed Route. Core removes ambient client authentication and injects only
+   the frozen account lease at the final provider boundary; failover remains
+   off. Request evidence exposes the frozen target, Route, account revision,
+   credential epoch, usage, Attempts, and terminal outcome without exposing
+   the credential.
 
 ## Freeze gates
 
@@ -51,8 +57,10 @@ dual writes, compatibility readers, or legacy database migrations.
 
 ## Explicitly deferred
 
-- linked client-session account connectors, live credentialed-provider
-  acceptance, and automatic account failover;
+- linked client-session account connectors, automatic account failover, and a
+  retained external credentialed-provider report (the explicit private
+  `0600` key-file acceptance contract is implemented but remains operator
+  opt-in);
 - plugin execution and the Language Bridge;
 - quality evaluation and long-term usage/cost analytics;
 - Server/LAN composition and remote enrollment;
