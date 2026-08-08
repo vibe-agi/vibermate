@@ -440,6 +440,7 @@ func (client *controlClient) publishInitialEnvironment(
 		PluginBindings:        candidate.PluginBindings,
 		BudgetPolicy:          candidate.BudgetPolicy,
 		EgressPolicy:          candidate.EgressPolicy,
+		ContentRecording:      candidate.ContentRecording,
 	}
 	path := "/api/v1/environments/" + url.PathEscape(config.environmentID) + "/draft"
 	var result environmentPublication

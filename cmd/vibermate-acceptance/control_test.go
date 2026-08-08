@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"encoding/base64"
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"strconv"
@@ -340,6 +341,9 @@ func TestAssemblyEnvironmentKeepsClientAndProviderIdentityExact(t *testing.T) {
 		if aggregate.ID.String() != configured.environmentID || aggregate.Revision != 1 || len(aggregate.ClientEndpoints) != 1 {
 			t.Fatalf("Environment = %+v", aggregate)
 		}
+		if aggregate.ContentRecording != environment.DefaultContentRecordingPolicy() {
+			t.Fatalf("content recording = %+v", aggregate.ContentRecording)
+		}
 		endpoint := aggregate.ClientEndpoints[0]
 		if endpoint.ClientOrigin.String() != client.ClientOrigin || len(endpoint.ProtocolPlans) != 1 || endpoint.ProtocolPlans[0].ClientProtocol != client.ClientProtocol {
 			t.Fatalf("client edge = %+v", endpoint)
@@ -349,6 +353,50 @@ func TestAssemblyEnvironmentKeepsClientAndProviderIdentityExact(t *testing.T) {
 		if plan.Mode != environment.PlanModeOriginalPassthrough || route.ProviderTarget.Origin.String() != client.ClientOrigin || route.AccountPolicy.Mode != environment.AccountModeClientPassthrough {
 			t.Fatalf("original passthrough route = %+v", route)
 		}
+	}
+}
+
+func TestPublishInitialEnvironmentSendsCompleteDraftPolicy(t *testing.T) {
+	t.Parallel()
+	configured := config{
+		clientID:      acceptanceClientClaudeCode,
+		environmentID: "assembly-001",
+	}
+	observed := false
+	client := testControlClient(t, func(writer http.ResponseWriter, request *http.Request) {
+		if request.Method != http.MethodPut ||
+			request.URL.Path != "/api/v1/environments/assembly-001/draft" {
+			t.Errorf("request = %s %s", request.Method, request.URL.Path)
+		}
+		var input desktopcontrol.EnvironmentDraftInput
+		if err := json.NewDecoder(request.Body).Decode(&input); err != nil {
+			t.Errorf("decode draft input: %v", err)
+		}
+		if input.ContentRecording != environment.DefaultContentRecordingPolicy() {
+			t.Errorf("content recording = %+v", input.ContentRecording)
+		}
+		observed = true
+		writer.Header().Set("Content-Type", "application/problem+json")
+		writer.WriteHeader(http.StatusUnprocessableEntity)
+		_, _ = writer.Write([]byte(
+			`{"type":"urn:vibermate:error:invalid-control-request",` +
+				`"title":"Unprocessable Entity","status":422,` +
+				`"code":"invalid_control_request"}`,
+		))
+	})
+
+	_, status, problem, err := client.publishInitialEnvironment(
+		context.Background(),
+		configured,
+		0,
+		nil,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !observed || status != http.StatusUnprocessableEntity ||
+		problem.ReasonCode != "invalid_control_request" {
+		t.Fatalf("observed=%t status=%d problem=%+v", observed, status, problem)
 	}
 }
 
