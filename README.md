@@ -50,17 +50,22 @@ the default and never copies a captured credential into account storage.
 
 ## Default behavior
 
-`system_transparent` is a Core-owned, immutable Environment. It is selected when
-the user does not choose another Environment:
+`vibermate run` resolves its initial Environment in one deterministic order:
+
+1. an explicit `--env` selection;
+2. the saved default for the exact machine and workspace;
+3. the Core-owned, immutable `system_transparent` fallback.
+
+Therefore a first run remains safe and useful without configuration:
 
 ```sh
 vibermate run -- claude
 ```
 
-It authenticates the Capture, observes body-free connection and egress facts,
-and blind-forwards traffic. It has no semantic endpoint, never terminates TLS,
-never rewrites credentials, never runs content plugins, and never delivers the
-local Root.
+The transparent fallback authenticates the Capture, observes body-free
+connection and egress facts, and blind-forwards traffic. It has no semantic
+endpoint, never terminates TLS, never rewrites credentials, never runs content
+plugins, and never delivers the local Root.
 
 To select a configured Environment at launch:
 
@@ -73,6 +78,18 @@ Capture later. Compatible changes apply to new requests, connection-shape
 changes drain and reconnect affected connections, and any change that widens
 the launch-time Root or credential-rewrite authority returns
 `restart_required` before mutation.
+
+From a managed Capture detail, the user may save its current Environment as the
+default for future runs in the same machine and workspace. That preference does
+not change the current Capture and is not route, account, model, plugin, or
+decryption authority. Clearing it restores the transparent fallback for future
+runs only.
+
+A user Environment may use an `original_passthrough` Route. This is still an
+exact semantic endpoint: ViberMate records a frozen Request and Attempt while
+preserving the client envelope, upstream target, response shape, model choice,
+and ambient client credential. It is the lowest-friction inspection path;
+`system_transparent` remains the separate no-MITM connection-only path.
 
 ## Environment publication
 

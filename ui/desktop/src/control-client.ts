@@ -33,6 +33,7 @@ import type {
   ProviderAccountPage,
   ProviderAccountRecord,
   StatusResponse,
+  WorkspaceEnvironmentDefault,
 } from "./control-types.ts";
 
 const capabilityBytes = 32;
@@ -160,6 +161,9 @@ export interface ControlClient {
   capture(captureKey: string, signal?: AbortSignal): Promise<CaptureRecord>;
   captureAssignment(captureKey: string, signal?: AbortSignal): Promise<CaptureAssignment>;
   switchCaptureEnvironment(captureKey: string, expectedRevision: number, environmentId: string, signal?: AbortSignal): Promise<CaptureAssignmentSwitchResult>;
+  workspaceEnvironmentDefault(machineId: string, workspaceId: string, signal?: AbortSignal): Promise<WorkspaceEnvironmentDefault | undefined>;
+  setWorkspaceEnvironmentDefault(machineId: string, workspaceId: string, expectedRevision: number, environmentId: string, signal?: AbortSignal): Promise<WorkspaceEnvironmentDefault>;
+  clearWorkspaceEnvironmentDefault(machineId: string, workspaceId: string, expectedRevision: number, signal?: AbortSignal): Promise<void>;
   activities(query?: ActivityQuery, signal?: AbortSignal): Promise<ActivityPage>;
   exchange(exchangeId: string, signal?: AbortSignal): Promise<ExchangeDetail>;
   approvals(signal?: AbortSignal): Promise<ApprovalPage>;
@@ -1160,6 +1164,52 @@ export async function createControlClient(
         expectedRevision,
         signal,
         (value) => requireCaptureAssignmentSwitch(value, captureKey, expectedRevision),
+      );
+    },
+    workspaceEnvironmentDefault: async (machineId, workspaceId, signal) => {
+      requireResourceId(machineId);
+      requireResourceId(workspaceId);
+      try {
+        return requireWorkspaceEnvironmentDefault(
+          await requestRead<unknown>(workspaceDefaultPath(machineId, workspaceId), signal),
+          machineId,
+          workspaceId,
+        );
+      } catch (error) {
+        if (error instanceof ControlProblem && error.reasonCode === "workspace_environment_default_not_found") {
+          return undefined;
+        }
+        throw error;
+      }
+    },
+    setWorkspaceEnvironmentDefault: async (machineId, workspaceId, expectedRevision, environmentId, signal) => {
+      requireResourceId(machineId);
+      requireResourceId(workspaceId);
+      requireResourceId(environmentId);
+      if (!nonNegativeInteger(expectedRevision)) throw new ControlContractError();
+      return requestMutation<WorkspaceEnvironmentDefault>(
+        "PUT",
+        workspaceDefaultPath(machineId, workspaceId),
+        { environmentId },
+        expectedRevision,
+        signal,
+        (value) => requireWorkspaceEnvironmentDefault(value, machineId, workspaceId, environmentId),
+      );
+    },
+    clearWorkspaceEnvironmentDefault: async (machineId, workspaceId, expectedRevision, signal) => {
+      requireResourceId(machineId);
+      requireResourceId(workspaceId);
+      if (!positiveInteger(expectedRevision)) throw new ControlContractError();
+      await requestMutation<void>(
+        "DELETE",
+        workspaceDefaultPath(machineId, workspaceId),
+        undefined,
+        expectedRevision,
+        signal,
+        (value) => {
+          if (value !== undefined) throw new ControlContractError();
+        },
+        204,
       );
     },
     activities: async (options, signal) => {
@@ -2596,6 +2646,32 @@ function requireCaptureAssignmentSwitch(
     (value.boundary !== "reconnect_required" && value.closedConnections.length !== 0)
   ) throw new ControlContractError();
   return value as unknown as CaptureAssignmentSwitchResult;
+}
+
+function workspaceDefaultPath(machineId: string, workspaceId: string): string {
+  return `/api/v1/machines/${encodeURIComponent(machineId)}/workspaces/${encodeURIComponent(workspaceId)}/environment-default`;
+}
+
+function requireWorkspaceEnvironmentDefault(
+  value: unknown,
+  machineId: string,
+  workspaceId: string,
+  environmentId?: string,
+): WorkspaceEnvironmentDefault {
+  if (
+    !isRecord(value) ||
+    !hasClosedFields(value, ["machineId", "workspaceId", "environmentId", "environmentName", "revision", "updatedAt"]) ||
+    value.machineId !== machineId ||
+    value.workspaceId !== workspaceId ||
+    (environmentId !== undefined && value.environmentId !== environmentId) ||
+    !validResourceId(value.environmentId) ||
+    !validDisplayLabel(value.environmentName, 256, false) ||
+    !positiveInteger(value.revision) ||
+    !validTimestamp(value.updatedAt)
+  ) {
+    throw new ControlContractError();
+  }
+  return value as unknown as WorkspaceEnvironmentDefault;
 }
 
 function validActivityQuery(value: unknown): value is ActivityQuery | undefined {

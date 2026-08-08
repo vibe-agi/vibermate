@@ -26,6 +26,7 @@ import (
 	"github.com/vibe-agi/vibermate/internal/productruntime"
 	"github.com/vibe-agi/vibermate/internal/provideraccount"
 	"github.com/vibe-agi/vibermate/internal/toolapproval"
+	"github.com/vibe-agi/vibermate/internal/workspacedefault"
 )
 
 const (
@@ -59,6 +60,8 @@ const (
 	ReasonProviderAccountNotFound    ReasonCode = "provider_account_not_found"
 	ReasonProviderAccountConflict    ReasonCode = "provider_account_conflict"
 	ReasonProviderAccountUnavailable ReasonCode = "provider_account_unavailable"
+	ReasonWorkspaceDefaultNotFound   ReasonCode = "workspace_environment_default_not_found"
+	ReasonWorkspaceDefaultInvalid    ReasonCode = "workspace_environment_default_invalid"
 )
 
 type StatusReader interface {
@@ -99,9 +102,10 @@ type Options struct {
 	ConnectionRules ConnectionRuleController
 	// CaptureRuns is the read side of what is captured. It is not a control
 	// path: it carries no capability in either direction.
-	CaptureRuns    capturerun.Reader
-	ManualCaptures manualcapture.Controller
-	Clock          Clock
+	CaptureRuns       capturerun.Reader
+	ManualCaptures    manualcapture.Controller
+	WorkspaceDefaults workspacedefault.Controller
+	Clock             Clock
 }
 
 type Handler struct {
@@ -116,10 +120,11 @@ type Handler struct {
 	accounts     provideraccount.Controller
 	offline      OfflineActions
 
-	connectionRules ConnectionRuleController
-	captureRuns     capturerun.Reader
-	manualCaptures  manualcapture.Controller
-	clock           Clock
+	connectionRules   ConnectionRuleController
+	captureRuns       capturerun.Reader
+	manualCaptures    manualcapture.Controller
+	workspaceDefaults workspacedefault.Controller
+	clock             Clock
 
 	idempotent *idempotencyCache
 	mux        *http.ServeMux
@@ -154,22 +159,23 @@ func New(options Options) (*Handler, error) {
 		return nil, errors.New("Desktop control dependencies are incomplete")
 	}
 	handler := &Handler{
-		readiness:       options.Readiness,
-		status:          options.Status,
-		environments:    options.Environments,
-		assignments:     options.Assignments,
-		activities:      options.Activities,
-		connections:     options.Connections,
-		egress:          options.Egress,
-		approvals:       options.Approvals,
-		accounts:        options.Accounts,
-		offline:         options.Offline,
-		connectionRules: options.ConnectionRules,
-		captureRuns:     options.CaptureRuns,
-		manualCaptures:  options.ManualCaptures,
-		clock:           options.Clock,
-		idempotent:      newIdempotencyCache(),
-		mux:             http.NewServeMux(),
+		readiness:         options.Readiness,
+		status:            options.Status,
+		environments:      options.Environments,
+		assignments:       options.Assignments,
+		activities:        options.Activities,
+		connections:       options.Connections,
+		egress:            options.Egress,
+		approvals:         options.Approvals,
+		accounts:          options.Accounts,
+		offline:           options.Offline,
+		connectionRules:   options.ConnectionRules,
+		captureRuns:       options.CaptureRuns,
+		manualCaptures:    options.ManualCaptures,
+		workspaceDefaults: options.WorkspaceDefaults,
+		clock:             options.Clock,
+		idempotent:        newIdempotencyCache(),
+		mux:               http.NewServeMux(),
 	}
 	handler.mux.HandleFunc("GET /api/v1/status", handler.getStatus)
 	handler.mux.HandleFunc("GET /api/v1/offline-hold", handler.getOfflineHold)
@@ -216,6 +222,9 @@ func New(options Options) (*Handler, error) {
 	)
 	handler.mux.HandleFunc("/api/v1/policies/connections", handler.invalidRoute)
 	handler.mux.HandleFunc("GET /api/v1/captures", handler.listCaptures)
+	handler.mux.HandleFunc("GET /api/v1/machines/{machineId}/workspaces/{workspaceId}/environment-default", handler.getWorkspaceDefault)
+	handler.mux.HandleFunc("PUT /api/v1/machines/{machineId}/workspaces/{workspaceId}/environment-default", handler.putWorkspaceDefault)
+	handler.mux.HandleFunc("DELETE /api/v1/machines/{machineId}/workspaces/{workspaceId}/environment-default", handler.deleteWorkspaceDefault)
 	handler.mux.HandleFunc("GET /api/v1/captures/{captureKey}", handler.getCapture)
 	handler.mux.HandleFunc("GET /api/v1/captures/{captureKey}/environment-assignment", handler.getCaptureEnvironmentAssignment)
 	handler.mux.HandleFunc("PATCH /api/v1/captures/{captureKey}/environment-assignment", handler.updateCaptureEnvironmentAssignment)

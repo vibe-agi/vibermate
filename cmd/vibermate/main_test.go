@@ -36,7 +36,7 @@ func TestExecuteRequiresOneExactRunSeparator(t *testing.T) {
 	}
 }
 
-func TestParseRunFreezesExplicitOrTransparentInitialEnvironment(t *testing.T) {
+func TestParseRunLeavesDefaultSelectionToCoreOrUsesExplicitEnvironment(t *testing.T) {
 	t.Parallel()
 
 	tests := []struct {
@@ -46,9 +46,9 @@ func TestParseRunFreezesExplicitOrTransparentInitialEnvironment(t *testing.T) {
 		command     []string
 	}{
 		{
-			name:        "transparent default",
+			name:        "Core-selected default",
 			arguments:   []string{"run", "--", "claude", "--print", "hello"},
-			environment: environment.SystemTransparentID,
+			environment: "",
 			command:     []string{"claude", "--print", "hello"},
 		},
 		{

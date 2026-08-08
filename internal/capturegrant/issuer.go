@@ -29,6 +29,7 @@ import (
 	"github.com/vibe-agi/vibermate/internal/localca"
 	"github.com/vibe-agi/vibermate/internal/manualcapture"
 	"github.com/vibe-agi/vibermate/internal/toolapproval"
+	"github.com/vibe-agi/vibermate/internal/workspacedefault"
 	"github.com/vibe-agi/vibermate/internal/workspaceidentity"
 )
 
@@ -71,6 +72,13 @@ type WorkspaceResolver interface {
 	) (workspaceidentity.Scope, error)
 }
 
+type WorkspaceDefaultResolver interface {
+	Resolve(
+		context.Context,
+		workspaceidentity.Scope,
+	) (workspacedefault.Record, bool, error)
+}
+
 type localWorkspaceResolver struct {
 	resolver workspaceidentity.LocalResolver
 }
@@ -106,6 +114,7 @@ type Options struct {
 	Root                localca.RootCertificate
 	RunLifetime         time.Duration
 	Workspaces          WorkspaceResolver
+	WorkspaceDefaults   WorkspaceDefaultResolver
 	ClientRootApprovals ClientRootApprovals
 }
 
@@ -123,6 +132,7 @@ type Issuer struct {
 	root        localca.RootCertificate
 	runLifetime time.Duration
 	workspaces  WorkspaceResolver
+	defaults    WorkspaceDefaultResolver
 	rootAsk     ClientRootApprovals
 }
 
@@ -132,7 +142,8 @@ func New(options Options) (*Issuer, error) {
 		options.Verifier == nil ||
 		options.Authorities == nil ||
 		options.RunLifetime <= 0 ||
-		options.Workspaces == nil {
+		options.Workspaces == nil ||
+		options.WorkspaceDefaults == nil {
 		return nil, errors.New("capture grant issuer dependencies are incomplete")
 	}
 	if err := validateProxyOrigin(options.ProxyOrigin); err != nil {
@@ -155,6 +166,7 @@ func New(options Options) (*Issuer, error) {
 		root:        options.Root,
 		runLifetime: options.RunLifetime,
 		workspaces:  options.Workspaces,
+		defaults:    options.WorkspaceDefaults,
 		rootAsk:     options.ClientRootApprovals,
 	}, nil
 }
@@ -263,7 +275,7 @@ func (issuer *Issuer) IssueManualCapture(
 		)
 	}
 	authority, err := issuer.authorities.AssignAndResolve(
-		ctx, capture, request.EnvironmentID,
+		ctx, capture, request.EnvironmentID, captureassignment.SourceManualCreate,
 	)
 	if err != nil {
 		return ManualCaptureGrant{}, issuer.revokeUnusedManualCapture(
@@ -589,6 +601,22 @@ func (issuer *Issuer) IssueCaptureRun(
 	if err != nil && !errors.Is(err, workspaceidentity.ErrInvalidIdentity) {
 		return CaptureRunGrant{}, ErrWorkspaceUnavailable
 	}
+	selectedEnvironment := request.EnvironmentID
+	assignmentSource := captureassignment.SourceLaunch
+	if selectedEnvironment == "" {
+		selectedEnvironment = environment.SystemTransparentID
+		assignmentSource = captureassignment.SourceSystemTransparent
+		if workspace.Validate() == nil {
+			preferred, exists, defaultErr := issuer.defaults.Resolve(ctx, workspace)
+			if defaultErr != nil {
+				return CaptureRunGrant{}, ErrProjectionUnavailable
+			}
+			if exists {
+				selectedEnvironment = preferred.EnvironmentID
+				assignmentSource = captureassignment.SourceWorkspaceDefault
+			}
+		}
+	}
 	grant, err := issuer.runs.Create(ctx, capturerun.CreateCommand{
 		CWD:                     request.CWD,
 		CanonicalExecutablePath: detection.CanonicalPath,
@@ -614,7 +642,7 @@ func (issuer *Issuer) IssueCaptureRun(
 		err = captureErr
 	} else {
 		authorities, err = issuer.authorities.AssignAndResolve(
-			ctx, capture, request.EnvironmentID,
+			ctx, capture, selectedEnvironment, assignmentSource,
 		)
 	}
 	if err != nil {
@@ -710,8 +738,10 @@ func (issuer *Issuer) askClientRoot(
 }
 
 func validateCaptureRunRequest(request CaptureRunRequest) error {
-	if _, err := environment.NewEnvironmentID(request.EnvironmentID.String()); err != nil {
-		return errors.New("CaptureRun Environment is invalid")
+	if request.EnvironmentID != "" {
+		if _, err := environment.NewEnvironmentID(request.EnvironmentID.String()); err != nil {
+			return errors.New("CaptureRun Environment is invalid")
+		}
 	}
 	if request.CWD == "" ||
 		!filepath.IsAbs(request.CWD) ||

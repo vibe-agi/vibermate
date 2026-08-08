@@ -31,6 +31,7 @@ import (
 	"github.com/vibe-agi/vibermate/internal/provideraccount"
 	"github.com/vibe-agi/vibermate/internal/proxyclient"
 	"github.com/vibe-agi/vibermate/internal/toolapproval"
+	"github.com/vibe-agi/vibermate/internal/workspacedefault"
 )
 
 const (
@@ -66,6 +67,7 @@ type RuntimeStore interface {
 	ToolApprovalRepository() toolapproval.Repository
 	ConnectionRuleRepository() connectionpolicy.Repository
 	ProviderAccountRepository() provideraccount.Repository
+	WorkspaceDefaultRepository() workspacedefault.Repository
 	Shutdown(context.Context) error
 }
 
@@ -84,6 +86,7 @@ type Store struct {
 	environments       *environmentRepository
 	captureAssignments *captureAssignmentRepository
 	providerAccounts   *providerAccountRepository
+	workspaceDefaults  *workspaceDefaultRepository
 	operations         *operationGate
 
 	closeMu   sync.Mutex
@@ -170,6 +173,12 @@ func Open(ctx context.Context, options Options) (*Store, error) {
 		options.CommitReconcileTimeout,
 		sqlTransactionCommitter{},
 	)
+	workspaceDefaults := newWorkspaceDefaultRepository(
+		database,
+		operations,
+		options.CommitReconcileTimeout,
+		sqlTransactionCommitter{},
+	)
 	schemaState, err := repository.ReadSchemaState(ctx)
 	if err != nil {
 		operations.closeAdmission()
@@ -199,6 +208,7 @@ func Open(ctx context.Context, options Options) (*Store, error) {
 		environments:       environments,
 		captureAssignments: captureAssignments,
 		providerAccounts:   providerAccounts,
+		workspaceDefaults:  workspaceDefaults,
 		operations:         operations,
 		closeDone:          make(chan struct{}),
 	}, nil
@@ -256,6 +266,12 @@ func (s *Store) CaptureAssignmentRepository() captureassignment.Repository {
 // Secret bytes remain owned by the host-selected SecretStore.
 func (s *Store) ProviderAccountRepository() provideraccount.Repository {
 	return s.providerAccounts
+}
+
+// WorkspaceDefaultRepository persists only the convenience choice used by
+// future managed runs. Capture assignment remains the launch authority.
+func (s *Store) WorkspaceDefaultRepository() workspacedefault.Repository {
+	return s.workspaceDefaults
 }
 
 // Settings reads the active SQLite connection policy through the same

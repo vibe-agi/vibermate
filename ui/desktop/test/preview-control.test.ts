@@ -96,6 +96,44 @@ describe("the Environment-first browser preview host", () => {
     expect((await client.capture(manualKey)).kind).toBe("manual_capture");
   });
 
+  it("keeps the future workspace default separate from the active Capture assignment", async () => {
+    const client = await connectPreviewControl();
+    const captureKey = "managed_run:run-preview";
+    const assignmentBefore = await client.captureAssignment(captureKey);
+
+    const initial = await client.workspaceEnvironmentDefault(
+      "machine-preview",
+      "workspace-preview",
+    );
+    expect(initial).toBeDefined();
+
+    const selected = await client.setWorkspaceEnvironmentDefault(
+      "machine-preview",
+      "workspace-preview",
+      initial?.revision ?? 0,
+      "work",
+    );
+    expect(selected.environmentId).toBe("work");
+    await expect(client.captureAssignment(captureKey)).resolves.toEqual(
+      assignmentBefore,
+    );
+
+    await client.clearWorkspaceEnvironmentDefault(
+      selected.machineId,
+      selected.workspaceId,
+      selected.revision,
+    );
+    await expect(
+      client.workspaceEnvironmentDefault(selected.machineId, selected.workspaceId),
+    ).resolves.toBeUndefined();
+    await client.setWorkspaceEnvironmentDefault(
+      selected.machineId,
+      selected.workspaceId,
+      0,
+      "work",
+    );
+  });
+
   it("filters frozen Activity by Environment and retains the Exchange revision", async () => {
     const client = await connectPreviewControl();
     const page = await client.activities({ environmentId: "work" });

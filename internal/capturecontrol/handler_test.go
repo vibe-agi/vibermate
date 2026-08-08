@@ -27,6 +27,7 @@ import (
 	"github.com/vibe-agi/vibermate/internal/localca"
 	"github.com/vibe-agi/vibermate/internal/manualcapture"
 	"github.com/vibe-agi/vibermate/internal/runtimepersistence"
+	"github.com/vibe-agi/vibermate/internal/workspacedefault"
 	"github.com/vibe-agi/vibermate/internal/workspaceidentity"
 )
 
@@ -201,33 +202,71 @@ func TestCaptureControlSeparatesControlAndPerRunCredentials(t *testing.T) {
 	}
 }
 
-func TestCaptureControlRejectsMissingOrInvalidEnvironment(t *testing.T) {
+func TestCaptureControlUsesTransparentFallbackAndRejectsInvalidEnvironment(t *testing.T) {
 	t.Parallel()
 
 	fixture := newFixture(t)
 	defer fixture.Close(t)
-	for _, environmentID := range []string{"", "Bad ID"} {
-		response := fixture.DoJSON(
-			t,
-			http.MethodPost,
-			"/api/v1/capture-runs",
-			fixture.controlCredential,
-			"",
-			capturecontrol.CreateRequest{
-				EnvironmentID:  environmentID,
-				CWD:            fixture.workspace,
-				Command:        []string{"claude"},
-				ExecutablePath: fixture.executable,
-			},
-		)
-		if response.Code != http.StatusUnprocessableEntity {
-			t.Fatalf(
-				"environmentId %q status=%d body=%s",
-				environmentID,
-				response.Code,
-				response.Body.Bytes(),
-			)
-		}
+	response := fixture.DoJSON(
+		t,
+		http.MethodPost,
+		"/api/v1/capture-runs",
+		fixture.controlCredential,
+		"",
+		capturecontrol.CreateRequest{
+			CWD: fixture.workspace, Command: []string{"claude"}, ExecutablePath: fixture.executable,
+		},
+	)
+	if response.Code != http.StatusCreated {
+		t.Fatalf("transparent fallback status=%d body=%s", response.Code, response.Body.Bytes())
+	}
+	var grant capturecontrol.LaunchGrant
+	decodeRecorder(t, response, &grant)
+	if grant.RootPEMPath != "" || len(grant.ProtectedAuthorities) != 0 ||
+		len(grant.ManagedCredentialAuthorities) != 0 {
+		t.Fatalf("transparent fallback leaked semantic authority: %+v", grant)
+	}
+
+	invalid := fixture.DoJSON(
+		t,
+		http.MethodPost,
+		"/api/v1/capture-runs",
+		fixture.controlCredential,
+		"",
+		capturecontrol.CreateRequest{
+			EnvironmentID: "Bad ID", CWD: fixture.workspace,
+			Command: []string{"claude"}, ExecutablePath: fixture.executable,
+		},
+	)
+	if invalid.Code != http.StatusUnprocessableEntity {
+		t.Fatalf("invalid environment status=%d body=%s", invalid.Code, invalid.Body.Bytes())
+	}
+}
+
+func TestCaptureControlUsesWorkspaceDefaultWhenEnvironmentIsOmitted(t *testing.T) {
+	t.Parallel()
+	fixture := newFixture(t, func(options *capturegrant.Options) {
+		options.WorkspaceDefaults = fixedWorkspaceDefault{environmentID: testEnvironmentID}
+	})
+	defer fixture.Close(t)
+	response := fixture.DoJSON(
+		t,
+		http.MethodPost,
+		"/api/v1/capture-runs",
+		fixture.controlCredential,
+		"",
+		capturecontrol.CreateRequest{
+			CWD: fixture.workspace, Command: []string{"claude"}, ExecutablePath: fixture.executable,
+		},
+	)
+	if response.Code != http.StatusCreated {
+		t.Fatalf("workspace default status=%d body=%s", response.Code, response.Body.Bytes())
+	}
+	var grant capturecontrol.LaunchGrant
+	decodeRecorder(t, response, &grant)
+	if grant.RootPEMPath == "" || len(grant.ProtectedAuthorities) != 1 ||
+		grant.ProtectedAuthorities[0] != "api.anthropic.com:443" {
+		t.Fatalf("workspace default did not select semantic authority: %+v", grant)
 	}
 }
 
@@ -814,10 +853,11 @@ func newFixture(t *testing.T, overrides ...fixtureOverride) *fixture {
 		Generation: base64.RawURLEncoding.EncodeToString(
 			bytes.Repeat([]byte{0x31}, 32),
 		),
-		RootIdentity: authority.Identity(),
-		Root:         authority.Certificate(),
-		RunLifetime:  2 * time.Minute,
-		Workspaces:   workspaceResolver,
+		RootIdentity:      authority.Identity(),
+		Root:              authority.Certificate(),
+		RunLifetime:       2 * time.Minute,
+		Workspaces:        workspaceResolver,
+		WorkspaceDefaults: noWorkspaceDefaults{},
 	}
 	for _, override := range overrides {
 		override(&issuerOptions)
@@ -932,6 +972,31 @@ func (clock *fakeClock) Now() time.Time {
 
 type fixedAuthorities []string
 
+type noWorkspaceDefaults struct{}
+
+func (noWorkspaceDefaults) Resolve(
+	context.Context,
+	workspaceidentity.Scope,
+) (workspacedefault.Record, bool, error) {
+	return workspacedefault.Record{}, false, nil
+}
+
+type fixedWorkspaceDefault struct{ environmentID environment.EnvironmentID }
+
+func (defaults fixedWorkspaceDefault) Resolve(
+	_ context.Context,
+	scope workspaceidentity.Scope,
+) (workspacedefault.Record, bool, error) {
+	return workspacedefault.Record{
+		Key: workspacedefault.Key{
+			MachineID: scope.MachineID(), WorkspaceID: scope.WorkspaceID(),
+		},
+		EnvironmentID: defaults.environmentID,
+		Revision:      1,
+		UpdatedAt:     time.Date(2026, 8, 8, 1, 2, 3, 0, time.UTC),
+	}, true, nil
+}
+
 func (authorities fixedAuthorities) Review(
 	_ context.Context,
 	environmentID environment.EnvironmentID,
@@ -948,11 +1013,8 @@ func (authorities fixedAuthorities) AssignAndResolve(
 	_ context.Context,
 	capture captureidentity.Reference,
 	environmentID environment.EnvironmentID,
+	source captureassignment.Source,
 ) (capturegrant.CaptureAuthoritySet, error) {
-	source := captureassignment.SourceLaunch
-	if capture.Kind == captureidentity.KindManualCapture {
-		source = captureassignment.SourceManualCreate
-	}
 	return authorities.authoritySet(capture, environmentID, source)
 }
 
@@ -998,6 +1060,7 @@ func (resolver inspectingFailingAuthorities) AssignAndResolve(
 	ctx context.Context,
 	_ captureidentity.Reference,
 	_ environment.EnvironmentID,
+	_ captureassignment.Source,
 ) (capturegrant.CaptureAuthoritySet, error) {
 	page, err := resolver.reader.ListRuns(
 		ctx,

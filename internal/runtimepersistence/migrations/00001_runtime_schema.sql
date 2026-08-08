@@ -747,6 +747,25 @@ ON capture_environment_assignments(
   capture_id
 );
 
+-- This optional preference selects the initial Environment for future managed
+-- runs in one installation-scoped workspace. It grants no network, Root, or
+-- credential authority; Capture assignment still freezes those at launch.
+CREATE TABLE workspace_environment_defaults(
+  machine_id TEXT NOT NULL
+  CHECK(length(CAST(machine_id AS BLOB)) BETWEEN 1 AND 128),
+  workspace_id TEXT NOT NULL
+  CHECK(length(CAST(workspace_id AS BLOB)) BETWEEN 1 AND 128),
+  environment_id TEXT NOT NULL
+  CHECK(length(CAST(environment_id AS BLOB)) BETWEEN 1 AND 128
+    AND environment_id <> 'system_transparent'),
+  revision INTEGER NOT NULL
+  CHECK(revision BETWEEN 1 AND 9223372036854775807),
+  updated_at_unix_ms INTEGER NOT NULL,
+  PRIMARY KEY(machine_id, workspace_id)
+) STRICT;
+CREATE INDEX workspace_environment_defaults_environment
+ON workspace_environment_defaults(environment_id, machine_id, workspace_id);
+
 INSERT INTO runtime_metadata (
   singleton,
   schema_identity,

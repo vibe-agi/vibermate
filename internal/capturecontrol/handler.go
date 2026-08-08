@@ -173,10 +173,14 @@ func (handler *Handler) create(
 		writeProblem(writer, http.StatusUnprocessableEntity, ReasonInvalidCaptureRun)
 		return
 	}
-	environmentID, err := environment.NewEnvironmentID(input.EnvironmentID)
-	if err != nil {
-		writeProblem(writer, http.StatusUnprocessableEntity, ReasonInvalidCaptureRun)
-		return
+	var environmentID environment.EnvironmentID
+	if input.EnvironmentID != "" {
+		var err error
+		environmentID, err = environment.NewEnvironmentID(input.EnvironmentID)
+		if err != nil {
+			writeProblem(writer, http.StatusUnprocessableEntity, ReasonInvalidCaptureRun)
+			return
+		}
 	}
 	grant, err := handler.issuer.IssueCaptureRun(
 		request.Context(),

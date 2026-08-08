@@ -74,9 +74,9 @@ type Launcher struct {
 	config Config
 }
 
-// LaunchRequest freezes the explicit initial Environment selection together
-// with the exact child invocation. The runtime may switch the Capture later;
-// the launcher never infers an Environment from a domain or workspace.
+// LaunchRequest carries an optional explicit initial Environment selection
+// together with the exact child invocation. When absent, Core resolves the
+// installation-scoped workspace default before freezing the assignment.
 type LaunchRequest struct {
 	EnvironmentID environment.EnvironmentID
 	Command       []string
@@ -137,8 +137,10 @@ func (launcher *Launcher) Run(
 	if launcher == nil || ctx == nil || len(command) == 0 || command[0] == "" {
 		return 1, errors.New("launcher requires a context and command")
 	}
-	if _, err := environment.NewEnvironmentID(request.EnvironmentID.String()); err != nil {
-		return 1, errors.New("launcher requires a valid initial Environment")
+	if request.EnvironmentID != "" {
+		if _, err := environment.NewEnvironmentID(request.EnvironmentID.String()); err != nil {
+			return 1, errors.New("launcher requires a valid initial Environment")
+		}
 	}
 	cwd, executable, err := launcher.resolveCommand(command)
 	if err != nil {

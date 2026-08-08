@@ -150,7 +150,7 @@ func parseRun(arguments []string) (runConfig, error) {
 		return runConfig{}, errors.New("run command is required")
 	}
 
-	environmentID := environment.SystemTransparentID
+	var environmentID environment.EnvironmentID
 	index := 1
 	if index < len(arguments) && arguments[index] == "--env" {
 		if index+1 >= len(arguments) {

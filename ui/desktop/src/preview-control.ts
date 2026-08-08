@@ -34,6 +34,7 @@ import type {
   ProviderAccountPage,
   ProviderAccountRecord,
   StatusResponse,
+  WorkspaceEnvironmentDefault,
 } from "./control-types.ts";
 
 const timestamp = "2026-08-08T08:00:00.000Z";
@@ -309,6 +310,16 @@ class PreviewControlClient implements ControlClient {
       updatedAt: timestamp,
     }],
   ]);
+  private readonly workspaceDefaults = new Map<string, WorkspaceEnvironmentDefault>([
+    ["machine-preview:workspace-preview", {
+      machineId: "machine-preview",
+      workspaceId: "workspace-preview",
+      environmentId: "work",
+      environmentName: "Work",
+      revision: 1,
+      updatedAt: timestamp,
+    }],
+  ]);
   private approval = clone(pendingApproval);
   private rules: ConnectionRuleSet = {
     revision: 1,
@@ -547,6 +558,50 @@ class PreviewControlClient implements ControlClient {
     };
     this.captureAssignments.set(captureKey, assignment);
     return { assignment: clone(assignment), boundary: "hot_switch", closedConnections: [], applied: true };
+  }
+
+  async workspaceEnvironmentDefault(
+    machineId: string,
+    workspaceId: string,
+  ): Promise<WorkspaceEnvironmentDefault | undefined> {
+    this.requireOpen();
+    return clone(this.workspaceDefaults.get(`${machineId}:${workspaceId}`));
+  }
+
+  async setWorkspaceEnvironmentDefault(
+    machineId: string,
+    workspaceId: string,
+    expectedRevision: number,
+    environmentId: string,
+  ): Promise<WorkspaceEnvironmentDefault> {
+    this.requireOpen();
+    const environment = this.requireEnvironment(environmentId);
+    const key = `${machineId}:${workspaceId}`;
+    const current = this.workspaceDefaults.get(key);
+    this.requireRevision(current?.revision ?? 0, expectedRevision);
+    const record: WorkspaceEnvironmentDefault = {
+      machineId,
+      workspaceId,
+      environmentId,
+      environmentName: environment.name,
+      revision: expectedRevision + 1,
+      updatedAt: laterTimestamp,
+    };
+    this.workspaceDefaults.set(key, record);
+    return clone(record);
+  }
+
+  async clearWorkspaceEnvironmentDefault(
+    machineId: string,
+    workspaceId: string,
+    expectedRevision: number,
+  ): Promise<void> {
+    this.requireOpen();
+    const key = `${machineId}:${workspaceId}`;
+    const current = this.workspaceDefaults.get(key);
+    if (current === undefined) throw this.notFound();
+    this.requireRevision(current.revision, expectedRevision);
+    this.workspaceDefaults.delete(key);
   }
 
   async activities(query?: ActivityQuery): Promise<ActivityPage> {

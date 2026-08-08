@@ -172,6 +172,18 @@ export function CaptureDetailRoutePage({ captureKey }: { readonly captureKey: st
     queryKey: dashboardQueryKeys.environments,
     queryFn: ({ signal }) => model.client.environments(signal),
   });
+  const machineId = capture.data?.managedRun?.machineId;
+  const workspaceId = capture.data?.managedRun?.workspaceId;
+  const workspaceDefault = useQuery({
+    queryKey: dashboardQueryKeys.workspaceDefault(machineId ?? "", workspaceId ?? ""),
+    queryFn: async ({ signal }) =>
+      (await model.client.workspaceEnvironmentDefault(
+        machineId ?? "",
+        workspaceId ?? "",
+        signal,
+      )) ?? null,
+    enabled: machineId !== undefined && workspaceId !== undefined,
+  });
   const activities = useQuery({
     queryKey: [...dashboardQueryKeys.capture(captureKey), "activities"],
     queryFn: ({ signal }) =>
@@ -210,6 +222,41 @@ export function CaptureDetailRoutePage({ captureKey }: { readonly captureKey: st
         result.assignment,
       );
       void queryClient.invalidateQueries({ queryKey: dashboardQueryKeys.captures });
+    },
+  });
+  const updateWorkspaceDefault = useMutation({
+    mutationFn: async () => {
+      if (machineId === undefined || workspaceId === undefined || assignment.data === undefined) {
+        throw new Error("Workspace identity is unavailable");
+      }
+      if (workspaceDefault.data?.environmentId === assignment.data.environmentId) {
+        await model.client.clearWorkspaceEnvironmentDefault(
+          machineId,
+          workspaceId,
+          workspaceDefault.data.revision,
+        );
+        return undefined;
+      }
+      return model.client.setWorkspaceEnvironmentDefault(
+        machineId,
+        workspaceId,
+        workspaceDefault.data?.revision ?? 0,
+        assignment.data.environmentId,
+      );
+    },
+    onError: (error) => setSwitchNotice(controlErrorKey(error)),
+    onSuccess: (record) => {
+      if (machineId !== undefined && workspaceId !== undefined) {
+        queryClient.setQueryData(
+          dashboardQueryKeys.workspaceDefault(machineId, workspaceId),
+          record ?? null,
+        );
+      }
+      setSwitchNotice(
+        record === undefined
+          ? "captureDetail.environment.defaultCleared"
+          : "captureDetail.environment.defaultSaved",
+      );
     },
   });
 
@@ -281,6 +328,31 @@ export function CaptureDetailRoutePage({ captureKey }: { readonly captureKey: st
               ? t("captureDetail.environment.transparent")
               : t("captureDetail.environment.semantic", { revision: assignment.data.revision })}
           </p>
+          {managed?.machineId !== undefined && managed.workspaceId !== undefined && (
+            currentEnvironment?.systemOwned ? (
+              <Link className="inline-action" search={{}} to={dashboardRoutePaths.environments}>
+                {t("captureDetail.environment.configureInspection")}
+              </Link>
+            ) : (
+              <div className="workspace-default-row">
+                <span>
+                  {workspaceDefault.data?.environmentId === assignment.data.environmentId
+                    ? t("captureDetail.environment.futureDefault")
+                    : t("captureDetail.environment.futureDifferent")}
+                </span>
+                <button
+                  className="quiet-button"
+                  disabled={updateWorkspaceDefault.isPending || workspaceDefault.isPending}
+                  onClick={() => updateWorkspaceDefault.mutate()}
+                  type="button"
+                >
+                  {workspaceDefault.data?.environmentId === assignment.data.environmentId
+                    ? t("captureDetail.environment.clearDefault")
+                    : t("captureDetail.environment.useForFuture")}
+                </button>
+              </div>
+            )
+          )}
           {switchNotice !== undefined && <p className="inline-notice" role="status">{t(switchNotice)}</p>}
         </section>
 
@@ -307,7 +379,7 @@ export function CaptureDetailRoutePage({ captureKey }: { readonly captureKey: st
         {activities.isPending && activities.data === undefined ? (
           <LoadingRows count={4} />
         ) : visibleActivities.length === 0 ? (
-          <EmptyState description={t("captureDetail.requests.empty.description")} title={t("captureDetail.requests.empty.title")} />
+          <EmptyState description={currentEnvironment?.systemOwned ? t("captureDetail.requests.empty.transparent") : t("captureDetail.requests.empty.description")} title={t("captureDetail.requests.empty.title")} />
         ) : (
           <RequestTable items={visibleActivities.slice(0, 20)} />
         )}

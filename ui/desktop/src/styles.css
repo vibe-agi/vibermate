@@ -168,6 +168,9 @@ button.danger-text { border-color: transparent; color: var(--deny); background: 
 .capture-summary-strip strong { display: block; margin-top: 2px; font-size: 17px; }
 .detail-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
 .identity-panel, .environment-assignment-panel { padding-bottom: 10px; }
+.workspace-default-row { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin: 10px 12px 0; padding-top: 9px; border-top: 1px solid var(--line); color: var(--muted); font-size: 12px; }
+.workspace-default-row .quiet-button { flex: none; padding: 5px 8px; color: var(--accent); }
+.inline-action { display: inline-flex; margin: 7px 12px 2px; font-size: 12px; font-weight: 650; }
 .facts-list { display: grid; grid-template-columns: minmax(100px, .45fr) minmax(0, 1fr); gap: 7px 12px; margin: 0; padding: 11px 12px; }
 .facts-list dd { min-width: 0; margin: 0; overflow-wrap: anywhere; }
 .routing-spine { display: grid; grid-template-columns: repeat(7, max-content); align-items: center; gap: 7px; margin: 9px 12px; overflow-x: auto; }

@@ -180,6 +180,7 @@ func (authority manualAuthorities) AssignAndResolve(
 	_ context.Context,
 	capture captureidentity.Reference,
 	environmentID environment.EnvironmentID,
+	_ captureassignment.Source,
 ) (CaptureAuthoritySet, error) {
 	assignment := authority.assignment
 	assignment.Capture = capture
@@ -422,6 +423,7 @@ func (authority *sequencedManualAuthorities) AssignAndResolve(
 	_ context.Context,
 	capture captureidentity.Reference,
 	environmentID environment.EnvironmentID,
+	_ captureassignment.Source,
 ) (CaptureAuthoritySet, error) {
 	assignment := authority.assigned
 	assignment.Capture = capture

@@ -44,6 +44,21 @@ test("switches a running Capture without changing its stable identity", async ({
   expect(errors).toEqual([]);
 });
 
+test("keeps the current Capture choice separate from the next-run workspace default", async ({ page }) => {
+  const errors = collectBrowserErrors(page);
+  await openPreview(page);
+  await page.getByRole("link", { name: /claude Managed run/u }).click();
+
+  await expect(page.getByLabel("Current Environment")).toHaveValue("work");
+  await expect(page.getByText("Used by future runs in this workspace")).toBeVisible();
+  await page.getByRole("button", { name: "Clear default" }).click();
+  await expect(page.getByLabel("Current Environment")).toHaveValue("work");
+  await expect(page.getByText("This changes only the current run")).toBeVisible();
+  await page.getByRole("button", { name: "Use for future runs" }).click();
+  await expect(page.getByText("Used by future runs in this workspace")).toBeVisible();
+  expect(errors).toEqual([]);
+});
+
 test("creates a transparent manual capture without delivering a Root", async ({ page }) => {
   const errors = collectBrowserErrors(page);
   await openPreview(page);
@@ -91,6 +106,25 @@ test("reviews impact before atomically publishing an Environment", async ({ page
   await expect(page.getByRole("heading", { name: "https://api.anthropic.com" })).toBeVisible();
   await expect(page.getByText("Anthropic Messages", { exact: true })).toBeVisible();
   await expect(page.getByText("Managed account", { exact: true })).toBeVisible();
+  expect(errors).toEqual([]);
+});
+
+test("creates a useful Claude inspection Environment without requiring another account", async ({ page }) => {
+  const errors = collectBrowserErrors(page);
+  await openPreview(page, "environments");
+  await page.getByRole("button", { name: "New" }).click();
+
+  const dialog = page.getByRole("dialog", { name: "Create Environment" });
+  await dialog.getByLabel("Name").fill("Claude inspection");
+  await dialog.getByLabel("Stable ID").fill("claude-inspection");
+  await expect(dialog.getByLabel("Authentication")).toHaveValue("");
+  await dialog.getByRole("button", { name: "Review changes" }).click();
+  await dialog.getByRole("button", { name: "Publish revision" }).click();
+
+  await expect(page.getByRole("heading", { name: "Claude inspection" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "https://api.anthropic.com" })).toBeVisible();
+  await expect(page.getByText("Observe, no changes", { exact: true })).toBeVisible();
+  await expect(page.getByText("Client login", { exact: true })).toBeVisible();
   expect(errors).toEqual([]);
 });
 

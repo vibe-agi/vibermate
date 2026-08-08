@@ -83,6 +83,7 @@ type CaptureAuthorityResolver interface {
 		context.Context,
 		captureidentity.Reference,
 		environment.EnvironmentID,
+		captureassignment.Source,
 	) (CaptureAuthoritySet, error)
 	Resolve(
 		context.Context,
@@ -170,6 +171,7 @@ func (resolver *environmentAuthorityResolver) AssignAndResolve(
 	ctx context.Context,
 	capture captureidentity.Reference,
 	environmentID environment.EnvironmentID,
+	source captureassignment.Source,
 ) (CaptureAuthoritySet, error) {
 	if resolver == nil || resolver.assignments == nil || ctx == nil ||
 		capture.Validate() != nil {
@@ -181,9 +183,10 @@ func (resolver *environmentAuthorityResolver) AssignAndResolve(
 	if err := ctx.Err(); err != nil {
 		return CaptureAuthoritySet{}, err
 	}
-	source := captureassignment.SourceLaunch
-	if capture.Kind == captureidentity.KindManualCapture {
-		source = captureassignment.SourceManualCreate
+	if (capture.Kind == captureidentity.KindManualCapture && source != captureassignment.SourceManualCreate) ||
+		(capture.Kind == captureidentity.KindManagedRun && source != captureassignment.SourceLaunch &&
+			source != captureassignment.SourceWorkspaceDefault && source != captureassignment.SourceSystemTransparent) {
+		return CaptureAuthoritySet{}, errors.New("CaptureRun Environment assignment source is invalid")
 	}
 	assignment, err := resolver.assignments.Create(ctx, captureassignment.CreateCommand{
 		Capture: capture, EnvironmentID: environmentID, Source: source,

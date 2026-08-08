@@ -27,6 +27,7 @@ import (
 	"github.com/vibe-agi/vibermate/internal/providertransport"
 	"github.com/vibe-agi/vibermate/internal/runtimepersistence"
 	"github.com/vibe-agi/vibermate/internal/toolapproval"
+	"github.com/vibe-agi/vibermate/internal/workspacedefault"
 	"github.com/vibe-agi/vibermate/internal/workspaceidentity"
 )
 
@@ -39,6 +40,7 @@ type Runtime struct {
 	environments      environmentRuntime
 	assignments       captureAssignmentRuntime
 	workspaceIdentity *workspaceidentity.Manager
+	workspaceDefaults *workspacedefault.Manager
 	activities        activityRuntime
 	connections       connectionEventRuntime
 	egress            egressaudit.Reader
@@ -266,6 +268,14 @@ func startWithBuilders(
 	environments := environmentResult.environments
 	assignments := environmentResult.assignments
 	pending.register("Capture assignment runtime", assignments.Shutdown)
+	workspaceDefaults, err := workspacedefault.New(
+		storageResult.store.WorkspaceDefaultRepository(),
+		environments,
+		options.Clock,
+	)
+	if err != nil {
+		return fail("Workspace Environment defaults", err)
+	}
 
 	activities, err := builders.activity.Build(activityBuildRequest{
 		repository: storageResult.store.ActivityRepository(),
@@ -556,6 +566,7 @@ func startWithBuilders(
 		environments:      environments,
 		assignments:       assignments,
 		workspaceIdentity: workspaceIdentity,
+		workspaceDefaults: workspaceDefaults,
 		activities:        activities,
 		connections:       connections,
 		egress:            runtimeEgress,
@@ -621,6 +632,13 @@ func (r *Runtime) ManualCaptures() manualcapture.Controller {
 // installation-scoped identities. It is not an authentication authority.
 func (r *Runtime) WorkspaceIdentity() workspaceidentity.LocalResolver {
 	return r.workspaceIdentity
+}
+
+// WorkspaceDefaults selects the initial Environment for future managed runs
+// in one installation-scoped workspace. It never replaces Capture assignment
+// or Environment request authority.
+func (r *Runtime) WorkspaceDefaults() workspacedefault.Controller {
+	return r.workspaceDefaults
 }
 
 // Activities returns the runtime-owned durable redacted timeline.

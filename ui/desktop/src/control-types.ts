@@ -320,6 +320,15 @@ export interface CaptureAssignmentSwitchResult {
   readonly reasonCode?: "capture_restart_required";
 }
 
+export interface WorkspaceEnvironmentDefault {
+	readonly machineId: string;
+	readonly workspaceId: string;
+	readonly environmentId: string;
+	readonly environmentName: string;
+	readonly revision: number;
+	readonly updatedAt: string;
+}
+
 export type ActivityStatus = "succeeded" | "failed" | "canceled";
 
 export interface FrozenEnvironmentRef {

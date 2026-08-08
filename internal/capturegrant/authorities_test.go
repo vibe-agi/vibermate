@@ -85,7 +85,9 @@ func TestEnvironmentAuthorityResolverCreatesTypedCaptureAssignment(t *testing.T)
 	if err != nil {
 		t.Fatal(err)
 	}
-	set, err := resolver.AssignAndResolve(context.Background(), capture, "work")
+	set, err := resolver.AssignAndResolve(
+		context.Background(), capture, "work", captureassignment.SourceManualCreate,
+	)
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -89,6 +89,48 @@ describe("Environment-first desktop control client", () => {
     });
   });
 
+  it("sets and clears the next-run Environment for one exact machine and workspace", async () => {
+    const machineId = capability(0x31);
+    const workspaceId = capability(0x32);
+    const record = {
+      machineId,
+      workspaceId,
+      environmentId: "work",
+      environmentName: "Work",
+      revision: 1,
+      updatedAt: "2026-08-08T09:30:00Z",
+    } as const;
+    const calls: Array<{ url: URL; init: RequestInit }> = [];
+    const fetch = sessionAwareFetch((url, init) => {
+      calls.push({ url, init });
+      if (init.method === "PUT") return jsonResponse(record);
+      if (init.method === "DELETE") return new Response(null, { status: 204 });
+      return jsonResponse(record);
+    });
+    const client = await createControlClient(session(), fetch);
+
+    await expect(
+      client.setWorkspaceEnvironmentDefault(machineId, workspaceId, 0, "work"),
+    ).resolves.toEqual(record);
+    await expect(
+      client.workspaceEnvironmentDefault(machineId, workspaceId),
+    ).resolves.toEqual(record);
+    await expect(
+      client.clearWorkspaceEnvironmentDefault(machineId, workspaceId, 1),
+    ).resolves.toBeUndefined();
+
+    const expectedPath = `/api/v1/machines/${machineId}/workspaces/${workspaceId}/environment-default`;
+    expect(calls.map(({ url }) => url.pathname)).toEqual([
+      expectedPath,
+      expectedPath,
+      expectedPath,
+    ]);
+    expect(new Headers(calls[0]?.init.headers).get("If-Match")).toBe("0");
+    expect(calls[0]?.init.body).toBe(JSON.stringify({ environmentId: "work" }));
+    expect(new Headers(calls[2]?.init.headers).get("If-Match")).toBe("1");
+    expect(calls[2]?.init.body).toBeUndefined();
+  });
+
   it("creates and reads managed ProviderAccounts without accepting secret material in responses", async () => {
     const account = {
       id: "anthropic-work",

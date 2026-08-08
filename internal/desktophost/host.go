@@ -274,16 +274,17 @@ func Start(ctx context.Context, options Options) (*Host, error) {
 		return fail("Capture Environment authority", err)
 	}
 	grantIssuer, err := capturegrant.New(capturegrant.Options{
-		Runs:           runtime.CaptureRuns(),
-		ManualCaptures: runtime.ManualCaptures(),
-		Verifier:       verifier,
-		Authorities:    captureAuthorities,
-		ProxyOrigin:    proxyOrigin,
-		Generation:     runtime.Status().InstanceID,
-		RootIdentity:   runtime.LocalRootIdentity(),
-		Root:           runtime.LocalRootCertificate(),
-		RunLifetime:    options.CaptureRunLifetime,
-		Workspaces:     workspaceResolver,
+		Runs:              runtime.CaptureRuns(),
+		ManualCaptures:    runtime.ManualCaptures(),
+		Verifier:          verifier,
+		Authorities:       captureAuthorities,
+		ProxyOrigin:       proxyOrigin,
+		Generation:        runtime.Status().InstanceID,
+		RootIdentity:      runtime.LocalRootIdentity(),
+		Root:              runtime.LocalRootCertificate(),
+		RunLifetime:       options.CaptureRunLifetime,
+		Workspaces:        workspaceResolver,
+		WorkspaceDefaults: runtime.WorkspaceDefaults(),
 		// The same authority that asks about a connection asks about handing
 		// a recognized client the Root, so both questions reach a person the
 		// same way and appear in the same place.
@@ -325,20 +326,21 @@ func Start(ctx context.Context, options Options) (*Host, error) {
 	}
 	ready := &readiness{runtime: runtime}
 	application, err := desktopcontrol.New(desktopcontrol.Options{
-		Readiness:       ready,
-		Status:          runtime,
-		Environments:    runtime.Environments(),
-		Assignments:     runtime.CaptureAssignments(),
-		Activities:      runtime.Activities(),
-		Connections:     runtime.ConnectionEvents(),
-		Egress:          runtime.EgressAttempts(),
-		Approvals:       runtime.ToolApprovals(),
-		Accounts:        runtime.ProviderAccounts(),
-		Offline:         runtime,
-		ConnectionRules: runtime.ConnectionRules(),
-		CaptureRuns:     runtime.CaptureRunReader(),
-		ManualCaptures:  runtime.ManualCaptures(),
-		Clock:           options.Runtime.Clock,
+		Readiness:         ready,
+		Status:            runtime,
+		Environments:      runtime.Environments(),
+		Assignments:       runtime.CaptureAssignments(),
+		Activities:        runtime.Activities(),
+		Connections:       runtime.ConnectionEvents(),
+		Egress:            runtime.EgressAttempts(),
+		Approvals:         runtime.ToolApprovals(),
+		Accounts:          runtime.ProviderAccounts(),
+		Offline:           runtime,
+		ConnectionRules:   runtime.ConnectionRules(),
+		CaptureRuns:       runtime.CaptureRunReader(),
+		ManualCaptures:    runtime.ManualCaptures(),
+		WorkspaceDefaults: runtime.WorkspaceDefaults(),
+		Clock:             options.Runtime.Clock,
 	})
 	if err != nil {
 		return fail("App control routes", err)
