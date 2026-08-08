@@ -83,7 +83,7 @@ func TestConnectionRulesAreReadableAndEditable(t *testing.T) {
 	}
 	var current desktopcontrol.ConnectionRuleSetResponse
 	decodeResponse(t, read, &current)
-	if current.Revision == 0 || current.Default.Decision != "ask" {
+	if current.Revision == 0 || current.Mode != "monitor" {
 		t.Fatalf("shipped set = %+v", current)
 	}
 
@@ -96,11 +96,7 @@ func TestConnectionRulesAreReadableAndEditable(t *testing.T) {
 			Host:     "api.example.com",
 			Port:     443,
 		}},
-		Default: desktopcontrol.ConnectionRuleInput{
-			ID:       "default.deny",
-			Decision: "deny",
-			Match:    "any",
-		},
+		Mode: "deny_unknown",
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -121,7 +117,8 @@ func TestConnectionRulesAreReadableAndEditable(t *testing.T) {
 	decodeResponse(t, written, &replaced)
 	if replaced.Revision != current.Revision+1 ||
 		len(replaced.Rules) != 1 ||
-		replaced.Rules[0].ID != "allow.one-host" {
+		replaced.Rules[0].ID != "allow.one-host" ||
+		replaced.Mode != "deny_unknown" {
 		t.Fatalf("replaced set = %+v", replaced)
 	}
 
@@ -140,14 +137,10 @@ func TestConnectionRulesAreReadableAndEditable(t *testing.T) {
 		t.Fatalf("stale replace status = %d", stale.Code)
 	}
 
-	// A set that would allow everything by default is refused, and the rules
+	// A set with an unknown global mode is refused, and the rules
 	// in force do not change.
-	wildcard, err := json.Marshal(desktopcontrol.ConnectionRuleSetInput{
-		Default: desktopcontrol.ConnectionRuleInput{
-			ID:       "default.allow-everything",
-			Decision: "allow",
-			Match:    "any",
-		},
+	invalid, err := json.Marshal(desktopcontrol.ConnectionRuleSetInput{
+		Mode: "allow_everything",
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -159,14 +152,14 @@ func TestConnectionRulesAreReadableAndEditable(t *testing.T) {
 		writeToken,
 		replaced.Revision,
 		"connection-rules-replace-0003",
-		wildcard,
+		invalid,
 	)
 	if refused.Code != http.StatusUnprocessableEntity {
-		t.Fatalf("wildcard status = %d body = %s", refused.Code, refused.Body)
+		t.Fatalf("invalid mode status = %d body = %s", refused.Code, refused.Body)
 	}
 	// The set in force is still the one the accepted change installed.
-	if runtime.ConnectionRules().Current().Default.Decision != "deny" {
-		t.Fatal("a refused set changed the default in force")
+	if runtime.ConnectionRules().Current().Mode != "deny_unknown" {
+		t.Fatal("a refused set changed the mode in force")
 	}
 }
 

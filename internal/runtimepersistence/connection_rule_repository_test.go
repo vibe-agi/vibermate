@@ -48,17 +48,13 @@ func TestSeedingHappensOnceAndSurvivesRestart(t *testing.T) {
 	}
 	edited := connectionpolicy.Snapshot{
 		Revision: 2,
+		Mode:     connectionpolicy.ModeDenyUnknown,
 		Rules: []connectionpolicy.Rule{{
 			ID:       "allow.one-host",
 			Priority: 100,
 			Decision: connectionpolicy.DecisionAllow,
 			Match:    connectionpolicy.MatchExactHost("api.example.com"),
 		}},
-		Default: connectionpolicy.Rule{
-			ID:       connectionpolicy.DefaultDenyRuleID,
-			Decision: connectionpolicy.DecisionDeny,
-			Match:    connectionpolicy.MatchAny(),
-		},
 	}
 	if _, err := rules.Replace(
 		context.Background(),
@@ -92,9 +88,8 @@ func TestSeedingHappensOnceAndSurvivesRestart(t *testing.T) {
 		loaded.Rules[0].Match != connectionpolicy.MatchExactHost("api.example.com") {
 		t.Fatalf("loaded rule = %+v", loaded.Rules[0])
 	}
-	if loaded.Default.ID != connectionpolicy.DefaultDenyRuleID ||
-		loaded.Default.Decision != connectionpolicy.DecisionDeny {
-		t.Fatalf("loaded default = %+v", loaded.Default)
+	if loaded.Mode != connectionpolicy.ModeDenyUnknown {
+		t.Fatalf("loaded mode = %q", loaded.Mode)
 	}
 }
 
@@ -164,27 +159,23 @@ func TestARuleSetThatWouldNotConstructIsNeverStored(t *testing.T) {
 	); err != nil {
 		t.Fatal(err)
 	}
-	wildcard := connectionpolicy.Snapshot{
+	invalid := connectionpolicy.Snapshot{
 		Revision: 2,
-		Default: connectionpolicy.Rule{
-			ID:       "default.allow-everything",
-			Decision: connectionpolicy.DecisionAllow,
-			Match:    connectionpolicy.MatchAny(),
-		},
+		Mode:     connectionpolicy.Mode("allow_everything"),
 	}
 	if _, err := rules.Replace(
 		context.Background(),
 		1,
-		wildcard,
+		invalid,
 		seedTime(),
 	); !errors.Is(err, connectionpolicy.ErrInvalidRuleSet) {
-		t.Fatalf("wildcard default error = %v", err)
+		t.Fatalf("invalid mode error = %v", err)
 	}
 	loaded, err := rules.Load(context.Background())
 	if err != nil {
 		t.Fatal(err)
 	}
-	if loaded.Default.Decision != connectionpolicy.DecisionAsk {
-		t.Fatalf("the stored default changed: %+v", loaded.Default)
+	if loaded.Mode != connectionpolicy.ModeMonitor {
+		t.Fatalf("the stored mode changed: %q", loaded.Mode)
 	}
 }

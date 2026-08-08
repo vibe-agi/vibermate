@@ -12,11 +12,7 @@ func ruleSet(t *testing.T, rules ...connectionpolicy.Rule) connectionpolicy.Rule
 	set, err := connectionpolicy.NewRuleSet(connectionpolicy.RuleSetOptions{
 		Revision: 1,
 		Rules:    rules,
-		Default: connectionpolicy.Rule{
-			ID:       "default",
-			Decision: connectionpolicy.DecisionDeny,
-			Match:    connectionpolicy.MatchAny(),
-		},
+		Mode:     connectionpolicy.ModeDenyUnknown,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -77,35 +73,28 @@ func TestEvaluationIsDeterministic(t *testing.T) {
 	}
 }
 
-// An unmatched connection falls to the declared default rather than to an
-// implicit answer.
-func TestUnmatchedConnectionFallsToTheDeclaredDefault(t *testing.T) {
+// An unmatched connection falls to the declared mode rather than to an
+// implicit answer or a hidden wildcard rule.
+func TestUnmatchedConnectionFallsToTheDeclaredMode(t *testing.T) {
 	t.Parallel()
 
 	set := ruleSet(t)
 	decision := set.Evaluate(request("unknown.example", 443))
 	if decision.Decision != connectionpolicy.DecisionDeny ||
-		decision.RuleID != "default" {
-		t.Fatalf("default decision = %+v", decision)
+		decision.RuleID != "mode.deny_unknown" {
+		t.Fatalf("mode decision = %+v", decision)
 	}
 }
 
-// Design 06 makes a wildcard allow default an invariant violation, because a
-// default that allows everything makes the firewall the one control that never
-// fires.
-func TestAWildcardAllowDefaultIsRefused(t *testing.T) {
+func TestAnUnknownModeIsRefused(t *testing.T) {
 	t.Parallel()
 
 	_, err := connectionpolicy.NewRuleSet(connectionpolicy.RuleSetOptions{
 		Revision: 1,
-		Default: connectionpolicy.Rule{
-			ID:       "default",
-			Decision: connectionpolicy.DecisionAllow,
-			Match:    connectionpolicy.MatchAny(),
-		},
+		Mode:     connectionpolicy.Mode("allow_everything"),
 	})
 	if err == nil {
-		t.Fatal("a wildcard allow default was accepted")
+		t.Fatal("an unknown policy mode was accepted")
 	}
 }
 
@@ -128,15 +117,15 @@ func TestAPortNarrowsARule(t *testing.T) {
 	}
 }
 
-// A rule set must declare a default; leaving it out would make the answer for
+// A rule set must declare a mode; leaving it out would make the answer for
 // an unmatched connection implicit.
-func TestARuleSetMustDeclareADefault(t *testing.T) {
+func TestARuleSetMustDeclareAMode(t *testing.T) {
 	t.Parallel()
 
 	if _, err := connectionpolicy.NewRuleSet(
 		connectionpolicy.RuleSetOptions{Revision: 1},
 	); err == nil {
-		t.Fatal("a rule set without a default was accepted")
+		t.Fatal("a rule set without a mode was accepted")
 	}
 }
 
@@ -148,15 +137,11 @@ func TestAnAskRuleIsAccepted(t *testing.T) {
 	set, err := connectionpolicy.NewRuleSet(connectionpolicy.RuleSetOptions{
 		Revision: 4,
 		Rules: []connectionpolicy.Rule{{
-			ID:       "ask.unknown-host",
+			ID:       "ask.one-host",
 			Decision: connectionpolicy.DecisionAsk,
-			Match:    connectionpolicy.MatchAny(),
+			Match:    connectionpolicy.MatchExactHost("api.example.com"),
 		}},
-		Default: connectionpolicy.Rule{
-			ID:       "default.deny",
-			Decision: connectionpolicy.DecisionDeny,
-			Match:    connectionpolicy.MatchAny(),
-		},
+		Mode: connectionpolicy.ModeDenyUnknown,
 	})
 	if err != nil {
 		t.Fatalf("ask rule rejected: %v", err)
@@ -168,33 +153,28 @@ func TestAnAskRuleIsAccepted(t *testing.T) {
 	if outcome.Decision != connectionpolicy.DecisionAsk {
 		t.Fatalf("decision = %q", outcome.Decision)
 	}
-	if outcome.RuleID != "ask.unknown-host" {
+	if outcome.RuleID != "ask.one-host" {
 		t.Fatalf("rule ID = %q", outcome.RuleID)
 	}
 }
 
-// Design 06 makes `ask` the shipped answer for a host nobody has decided on,
-// so it must be expressible as the default. Unlike allow, it does not admit
-// anything on its own.
-func TestAskIsAllowedAsTheDefault(t *testing.T) {
+func TestAskUnknownIsAnExplicitMode(t *testing.T) {
 	t.Parallel()
 
 	set, err := connectionpolicy.NewRuleSet(connectionpolicy.RuleSetOptions{
 		Revision: 5,
-		Default: connectionpolicy.Rule{
-			ID:       "default.ask",
-			Decision: connectionpolicy.DecisionAsk,
-			Match:    connectionpolicy.MatchAny(),
-		},
+		Mode:     connectionpolicy.ModeAskUnknown,
 	})
 	if err != nil {
-		t.Fatalf("ask default rejected: %v", err)
+		t.Fatalf("ask mode rejected: %v", err)
 	}
-	if set.Evaluate(connectionpolicy.Request{
+	outcome := set.Evaluate(connectionpolicy.Request{
 		Host: "unknown.example.com",
 		Port: 443,
-	}).Decision != connectionpolicy.DecisionAsk {
-		t.Fatal("default did not ask")
+	})
+	if outcome.Decision != connectionpolicy.DecisionAsk ||
+		outcome.RuleID != "mode.ask_unknown" {
+		t.Fatalf("ask mode outcome = %+v", outcome)
 	}
 }
 
@@ -207,23 +187,19 @@ func TestPrecedenceIsDeclaredNotPositional(t *testing.T) {
 		Revision: 6,
 		Rules: []connectionpolicy.Rule{
 			{
-				ID:       "broad.allow-any",
+				ID:       "broad.allow-host",
 				Priority: 10,
 				Decision: connectionpolicy.DecisionAllow,
-				Match:    connectionpolicy.MatchAny(),
-			},
-			{
-				ID:       "narrow.deny-one-host",
-				Priority: 100,
-				Decision: connectionpolicy.DecisionDeny,
 				Match:    connectionpolicy.MatchExactHost("blocked.example.com"),
 			},
+			{
+				ID:       "narrow.deny-host-port",
+				Priority: 100,
+				Decision: connectionpolicy.DecisionDeny,
+				Match:    connectionpolicy.MatchExactHostPort("blocked.example.com", 443),
+			},
 		},
-		Default: connectionpolicy.Rule{
-			ID:       "default.deny",
-			Decision: connectionpolicy.DecisionDeny,
-			Match:    connectionpolicy.MatchAny(),
-		},
+		Mode: connectionpolicy.ModeDenyUnknown,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -233,12 +209,12 @@ func TestPrecedenceIsDeclaredNotPositional(t *testing.T) {
 		Port: 443,
 	})
 	if blocked.Decision != connectionpolicy.DecisionDeny ||
-		blocked.RuleID != "narrow.deny-one-host" {
+		blocked.RuleID != "narrow.deny-host-port" {
 		t.Fatalf("higher precedence lost: %+v", blocked)
 	}
 	other := set.Evaluate(connectionpolicy.Request{
-		Host: "allowed.example.com",
-		Port: 443,
+		Host: "blocked.example.com",
+		Port: 8443,
 	})
 	if other.Decision != connectionpolicy.DecisionAllow {
 		t.Fatalf("lower precedence did not apply: %+v", other)
@@ -268,11 +244,7 @@ func TestEqualPrecedenceResolvesByIdentifier(t *testing.T) {
 	forward, err := connectionpolicy.NewRuleSet(connectionpolicy.RuleSetOptions{
 		Revision: 7,
 		Rules:    rules,
-		Default: connectionpolicy.Rule{
-			ID:       "default.deny",
-			Decision: connectionpolicy.DecisionDeny,
-			Match:    connectionpolicy.MatchAny(),
-		},
+		Mode:     connectionpolicy.ModeDenyUnknown,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -280,11 +252,7 @@ func TestEqualPrecedenceResolvesByIdentifier(t *testing.T) {
 	reversed, err := connectionpolicy.NewRuleSet(connectionpolicy.RuleSetOptions{
 		Revision: 7,
 		Rules:    []connectionpolicy.Rule{rules[1], rules[0]},
-		Default: connectionpolicy.Rule{
-			ID:       "default.deny",
-			Decision: connectionpolicy.DecisionDeny,
-			Match:    connectionpolicy.MatchAny(),
-		},
+		Mode:     connectionpolicy.ModeDenyUnknown,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -302,11 +270,7 @@ func TestEqualPrecedenceResolvesByIdentifier(t *testing.T) {
 	}
 }
 
-// The shipped answer for a host nobody has decided on is `ask`. Design 06
-// makes this the point of the outbound firewall: if the released default let
-// everything through, the last line before an unknown outbound connection
-// would be the one control that never fires.
-func TestTheShippedSetAsksAboutAnUnknownHost(t *testing.T) {
+func TestTheShippedSetStartsInMonitorMode(t *testing.T) {
 	t.Parallel()
 
 	set, err := connectionpolicy.ShippedSnapshot(1).Compile()
@@ -317,13 +281,12 @@ func TestTheShippedSetAsksAboutAnUnknownHost(t *testing.T) {
 		Host: "unknown.example.com",
 		Port: 443,
 	})
-	if outcome.Decision != connectionpolicy.DecisionAsk {
+	if outcome.Decision != connectionpolicy.DecisionAllow ||
+		outcome.RuleID != "mode.monitor" {
 		t.Fatalf("the shipped set answered %q", outcome.Decision)
 	}
-	for _, rule := range connectionpolicy.ShippedSnapshot(1).Rules {
-		if rule.Decision == connectionpolicy.DecisionAllow &&
-			rule.Match.Kind == connectionpolicy.MatchKindAny {
-			t.Fatalf("the shipped set allows everything through %q", rule.ID)
-		}
+	shipped := connectionpolicy.ShippedSnapshot(1)
+	if len(shipped.Rules) != 0 || shipped.Mode != connectionpolicy.ModeMonitor {
+		t.Fatalf("the shipped policy is not explicit and reversible: %+v", shipped)
 	}
 }

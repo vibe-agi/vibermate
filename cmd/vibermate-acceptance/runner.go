@@ -19,6 +19,7 @@ import (
 	"github.com/vibe-agi/vibermate/internal/captureidentity"
 	"github.com/vibe-agi/vibermate/internal/clientadapter"
 	"github.com/vibe-agi/vibermate/internal/connectionevent"
+	"github.com/vibe-agi/vibermate/internal/connectionpolicy"
 	"github.com/vibe-agi/vibermate/internal/desktopcontrol"
 	"github.com/vibe-agi/vibermate/internal/environment"
 	"github.com/vibe-agi/vibermate/internal/exchange"
@@ -473,7 +474,7 @@ func configureAcceptanceConnectionPolicy(
 	}
 	if replaced.Revision != current.Revision+1 ||
 		!slices.Equal(replaced.Rules, input.Rules) ||
-		replaced.Default != input.Default {
+		replaced.Mode != input.Mode {
 		return fmt.Errorf(
 			"connection rule replacement was not exact: %+v",
 			replaced,
@@ -488,10 +489,7 @@ func acceptanceConnectionRuleSet(
 ) (desktopcontrol.ConnectionRuleSetInput, error) {
 	if current.Revision == 0 ||
 		len(current.Rules) != 0 ||
-		current.Default.Decision != "ask" ||
-		current.Default.Match != "any" ||
-		current.Default.Host != "" ||
-		current.Default.Port != 0 {
+		current.Mode != string(connectionpolicy.ModeMonitor) {
 		return desktopcontrol.ConnectionRuleSetInput{}, fmt.Errorf(
 			"acceptance requires a fresh fail-closed connection rule set: %+v",
 			current,
@@ -514,7 +512,7 @@ func acceptanceConnectionRuleSet(
 			Host:     origin.Host(),
 			Port:     origin.Port(),
 		}},
-		Default: current.Default,
+		Mode: string(connectionpolicy.ModeAskUnknown),
 	}, nil
 }
 

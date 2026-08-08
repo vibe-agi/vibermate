@@ -114,10 +114,8 @@ func TestCapturedChildReachesANonModelHost(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// The released default asks about a host nobody has decided on, so an
-	// unattended run reaches nothing until somebody says what it may reach.
-	// That is the product's behaviour, not a detail of this test: what an
-	// agent is allowed to connect to is a decision about the installation.
+	// A scoped rule still overrides Monitor mode, and its exact target is
+	// recorded as the reason the connection was allowed.
 	probeHost, probePort := splitProbeAuthority(t, listener.Addr().String())
 	rules := host.Runtime().ConnectionRules()
 	if _, err := rules.Replace(
@@ -129,7 +127,7 @@ func TestCapturedChildReachesANonModelHost(t *testing.T) {
 			Decision: connectionpolicy.DecisionAllow,
 			Match:    connectionpolicy.MatchExactHostPort(probeHost, probePort),
 		}},
-		rules.Current().Default,
+		rules.Current().Mode,
 	); err != nil {
 		t.Fatal(err)
 	}

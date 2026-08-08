@@ -2982,25 +2982,27 @@ function validEgressDecision(value: unknown): boolean {
 function requireConnectionRuleSet(value: unknown, expectedRevision?: number): ConnectionRuleSet {
   if (
     !isRecord(value) ||
-    !hasClosedFields(value, ["revision", "rules", "default"]) ||
+    !hasClosedFields(value, ["revision", "rules", "mode"]) ||
     !positiveInteger(value.revision) ||
     (expectedRevision !== undefined && value.revision !== expectedRevision) ||
     !Array.isArray(value.rules) ||
     value.rules.length > maximumCollectionItems ||
-    !value.rules.every((rule) => validConnectionRule(rule, false)) ||
-    !validConnectionRule(value.default, true)
+    !value.rules.every(validConnectionRule) ||
+    !validConnectionPolicyMode(value.mode)
   ) throw new ControlContractError();
   return value as unknown as ConnectionRuleSet;
 }
 
 function validConnectionRuleSetInput(value: unknown): value is ConnectionRuleSetInput {
-  return isRecord(value) && hasClosedFields(value, ["rules", "default"]) && Array.isArray(value.rules) && value.rules.length <= maximumCollectionItems && value.rules.every((rule) => validConnectionRule(rule, false)) && validConnectionRule(value.default, true);
+  return isRecord(value) && hasClosedFields(value, ["rules", "mode"]) && Array.isArray(value.rules) && value.rules.length <= maximumCollectionItems && value.rules.every(validConnectionRule) && validConnectionPolicyMode(value.mode);
 }
 
-function validConnectionRule(value: unknown, fallback: boolean): boolean {
-  if (!isRecord(value) || !hasClosedFields(value, ["id", "priority", "decision", "match"], ["host", "port"]) || !validResourceId(value.id) || !nonNegativeInteger(value.priority) || value.priority > maximumUint32 || !new Set(["allow", "deny", "ask"]).has(String(value.decision)) || !new Set(["any", "exact_host", "exact_host_port"]).has(String(value.match))) return false;
-  if (fallback) return value.match === "any" && value.host === undefined && value.port === undefined;
-  if (value.match === "any") return false;
+function validConnectionPolicyMode(value: unknown): boolean {
+  return new Set(["monitor", "ask_unknown", "deny_unknown"]).has(String(value));
+}
+
+function validConnectionRule(value: unknown): boolean {
+  if (!isRecord(value) || !hasClosedFields(value, ["id", "priority", "decision", "match"], ["host", "port"]) || !validResourceId(value.id) || !nonNegativeInteger(value.priority) || value.priority > maximumUint32 || !new Set(["allow", "deny", "ask"]).has(String(value.decision)) || !new Set(["exact_host", "exact_host_port"]).has(String(value.match))) return false;
   if (!validHost(value.host)) return false;
   return value.match === "exact_host" ? value.port === undefined : validPort(value.port);
 }

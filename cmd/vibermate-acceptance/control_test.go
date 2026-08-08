@@ -375,17 +375,12 @@ func TestAcceptanceConnectionRuleSetAllowsOnlyTheFixedClientOrigin(t *testing.T)
 		t.Run(test.name, func(t *testing.T) {
 			t.Parallel()
 
-			fallback := desktopcontrol.ConnectionRuleInput{
-				ID:       "default.ask",
-				Decision: "ask",
-				Match:    "any",
-			}
 			input, err := acceptanceConnectionRuleSet(
 				config{clientID: test.id},
 				desktopcontrol.ConnectionRuleSetResponse{
 					Revision: 1,
 					Rules:    []desktopcontrol.ConnectionRuleInput{},
-					Default:  fallback,
+					Mode:     "monitor",
 				},
 			)
 			if err != nil {
@@ -403,8 +398,8 @@ func TestAcceptanceConnectionRuleSetAllowsOnlyTheFixedClientOrigin(t *testing.T)
 				rule.Port != 443 {
 				t.Fatalf("rule = %+v", rule)
 			}
-			if input.Default != fallback {
-				t.Fatalf("default changed: %+v", input.Default)
+			if input.Mode != "ask_unknown" {
+				t.Fatalf("mode = %q", input.Mode)
 			}
 		})
 	}
@@ -425,11 +420,7 @@ func TestAcceptanceConnectionRuleSetRefusesPreauthorizedInput(t *testing.T) {
 				Host:     "api.anthropic.com",
 				Port:     443,
 			}},
-			Default: desktopcontrol.ConnectionRuleInput{
-				ID:       "default.ask",
-				Decision: "ask",
-				Match:    "any",
-			},
+			Mode: "monitor",
 		},
 	)
 	if err == nil {

@@ -52,10 +52,13 @@ describe("Environment-first Desktop workspace", () => {
   it("switches the visible policy mode through the typed control client", async () => {
     const { model } = await renderDashboard("/policies/approvals");
     expect(await screen.findByRole("heading", { name: "Policy & approvals" })).toBeTruthy();
-    const open = screen.getByRole("radio", { name: "Open" });
-    await waitFor(() => expect((open as HTMLButtonElement).disabled).toBe(false));
-    fireEvent.click(open);
-    await waitFor(() => expect(open.getAttribute("aria-checked")).toBe("true"));
+    const ask = screen.getByRole("radio", { name: "Ask" });
+    const monitor = screen.getByRole("radio", { name: "Monitor" });
+    await waitFor(() => expect((ask as HTMLButtonElement).disabled).toBe(false));
+    fireEvent.click(ask);
+    await waitFor(() => expect(ask.getAttribute("aria-checked")).toBe("true"));
+    fireEvent.click(monitor);
+    await waitFor(() => expect(monitor.getAttribute("aria-checked")).toBe("true"));
     await model.dispose();
   });
 

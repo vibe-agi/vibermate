@@ -160,15 +160,17 @@ test("opens a request through its frozen Environment to the exact attempt", asyn
   expect(errors).toEqual([]);
 });
 
-test("makes open network policy explicit and resolves the approval inbox", async ({ page }) => {
+test("makes monitor policy explicit and resolves the approval inbox", async ({ page }) => {
   const errors = collectBrowserErrors(page);
   await openPreview(page, "policies/approvals");
 
   const policy = page.getByRole("radiogroup", { name: "Default network mode" });
+  await expect(policy.getByRole("radio", { name: "Monitor" })).toHaveAttribute("aria-checked", "true");
+  await policy.getByRole("radio", { name: "Ask" }).click();
   await expect(policy.getByRole("radio", { name: "Ask" })).toHaveAttribute("aria-checked", "true");
-  await policy.getByRole("radio", { name: "Open" }).click();
-  await expect(policy.getByRole("radio", { name: "Open" })).toHaveAttribute("aria-checked", "true");
-  await expect(page.getByText(/explicit visible operator rule/iu)).toBeVisible();
+  await policy.getByRole("radio", { name: "Monitor" }).click();
+  await expect(policy.getByRole("radio", { name: "Monitor" })).toHaveAttribute("aria-checked", "true");
+  await expect(page.getByText(/recording connection and egress evidence/iu)).toBeVisible();
 
   await expect(page.getByText("example.com:443", { exact: true })).toBeVisible();
   await page.getByRole("button", { name: "Allow this connection once" }).click();

@@ -14,14 +14,12 @@ import { BrandIcon } from "./brand-icons.tsx";
 import type {
   ApprovalChoice,
   ApprovalView,
-  ConnectionDecision,
   ConnectionRuleSet,
   ProviderAccountKind,
   ProviderAccountRecord,
 } from "./control-types.ts";
 
-type PolicyMode = "open" | "ask" | "block";
-const allowAllRuleID = "operator.allow-all";
+type PolicyMode = "monitor" | "ask" | "block";
 
 export function PolicyRoutePage({ selectedApprovalId }: { readonly selectedApprovalId?: string }) {
   const { t, i18n } = useTranslation();
@@ -67,7 +65,7 @@ export function PolicyRoutePage({ selectedApprovalId }: { readonly selectedAppro
       <section className="data-panel policy-mode-panel">
         <div><p className="eyebrow">{t("policy.mode.eyebrow")}</p><h2>{t("policy.mode.title")}</h2><p>{t(`policy.mode.description.${policyMode}`)}</p></div>
         <div aria-label={t("policy.mode.label")} className="segmented-control" role="radiogroup">
-          {(["open", "ask", "block"] as const).map((mode) => <button aria-checked={policyMode === mode} disabled={replace.isPending || rules.data === undefined} key={mode} onClick={() => replace.mutate(mode)} role="radio" type="button">{t(`policy.mode.${mode}`)}</button>)}
+          {(["monitor", "ask", "block"] as const).map((mode) => <button aria-checked={policyMode === mode} disabled={replace.isPending || rules.data === undefined} key={mode} onClick={() => replace.mutate(mode)} role="radio" type="button">{t(`policy.mode.${mode}`)}</button>)}
         </div>
       </section>
       {errorKey !== undefined && <InlineProblem message={t(errorKey)} />}
@@ -77,7 +75,7 @@ export function PolicyRoutePage({ selectedApprovalId }: { readonly selectedAppro
       </section>
       <section className="data-panel rules-panel">
         <SectionHeading title={t("policy.rules.title")} />
-        {rules.data === undefined ? <LoadingRows count={3} /> : rules.data.rules.length === 0 ? <EmptyState description={t("policy.rules.empty.description")} title={t("policy.rules.empty.title")} /> : <div className="table-scroll"><table className="data-table"><thead><tr><th>{t("policy.rules.column.decision")}</th><th>{t("policy.rules.column.target")}</th><th>{t("policy.rules.column.source")}</th></tr></thead><tbody>{rules.data.rules.filter((rule) => rule.id !== allowAllRuleID).map((rule) => <tr key={rule.id}><td><span className={`decision decision-${rule.decision}`}>{t(`policy.decision.${rule.decision}`)}</span></td><td>{rule.host === undefined ? t("policy.rules.all") : `${rule.host}${rule.port === undefined ? "" : `:${rule.port}`}`}</td><td><code>{rule.id}</code></td></tr>)}</tbody></table></div>}
+        {rules.data === undefined ? <LoadingRows count={3} /> : rules.data.rules.length === 0 ? <EmptyState description={t("policy.rules.empty.description")} title={t("policy.rules.empty.title")} /> : <div className="table-scroll"><table className="data-table"><thead><tr><th>{t("policy.rules.column.decision")}</th><th>{t("policy.rules.column.target")}</th><th>{t("policy.rules.column.source")}</th></tr></thead><tbody>{rules.data.rules.map((rule) => <tr key={rule.id}><td><span className={`decision decision-${rule.decision}`}>{t(`policy.decision.${rule.decision}`)}</span></td><td>{`${rule.host ?? ""}${rule.port === undefined ? "" : `:${rule.port}`}`}</td><td><code>{rule.id}</code></td></tr>)}</tbody></table></div>}
       </section>
     </div>
   );
@@ -171,13 +169,14 @@ function DeferredResourcePage({ kind }: { readonly kind: "extensions" | "quality
 }
 
 function modeOf(rules: ConnectionRuleSet | undefined): PolicyMode {
-  if (rules?.rules.some((rule) => rule.id === allowAllRuleID && rule.decision === "allow" && rule.match === "any")) return "open";
-  return rules?.default.decision === "deny" ? "block" : "ask";
+  if (rules?.mode === "deny_unknown") return "block";
+  if (rules?.mode === "ask_unknown") return "ask";
+  return "monitor";
 }
 
 function policyInput(current: ConnectionRuleSet, mode: PolicyMode) {
-  const rules = current.rules.filter((rule) => rule.id !== allowAllRuleID);
-  if (mode === "open") rules.push({ id: allowAllRuleID, priority: 4_294_967_295, decision: "allow", match: "any" });
-  const decision: ConnectionDecision = mode === "block" ? "deny" : "ask";
-  return { rules, default: { id: `default.${decision}`, priority: 0, decision, match: "any" } };
+  return {
+    rules: current.rules,
+    mode: mode === "monitor" ? "monitor" as const : mode === "ask" ? "ask_unknown" as const : "deny_unknown" as const,
+  };
 }

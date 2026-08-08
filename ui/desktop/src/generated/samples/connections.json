@@ -27,7 +27,7 @@
     "requestedHost": "unknown.example.com",
     "port": 443,
     "decision": "deny",
-    "ruleId": "default.ask",
+    "ruleId": "mode.deny_unknown",
     "decryption": "none",
     "phase": "decided",
     "bytesUp": 0,

@@ -148,16 +148,12 @@ func TestUnmatchedAuthorityIsTunnelledWithoutDecryption(t *testing.T) {
 	t.Fatal("no blind EgressAttempt reached a terminal")
 }
 
-func TestSystemTransparentEnvironmentBypassesConfiguredDefaultAsk(t *testing.T) {
+func TestSystemTransparentEnvironmentBypassesConfiguredAskMode(t *testing.T) {
 	t.Parallel()
 
 	fixture := newProxyFixtureWithPolicy(t, connectionpolicy.Snapshot{
 		Revision: 1,
-		Default: connectionpolicy.Rule{
-			ID:       "test-default-ask",
-			Decision: connectionpolicy.DecisionAsk,
-			Match:    connectionpolicy.MatchAny(),
-		},
+		Mode:     connectionpolicy.ModeAskUnknown,
 	})
 	defer fixture.Close(t)
 	result := fixture.switchEnvironment(t, environment.SystemTransparentID)

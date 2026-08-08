@@ -16,16 +16,7 @@ func askPolicy(t *testing.T) connectionpolicy.Snapshot {
 
 	set := connectionpolicy.Snapshot{
 		Revision: 1,
-		Rules: []connectionpolicy.Rule{{
-			ID:       "ask-unknown",
-			Decision: connectionpolicy.DecisionAsk,
-			Match:    connectionpolicy.MatchAny(),
-		}},
-		Default: connectionpolicy.Rule{
-			ID:       "default.deny",
-			Decision: connectionpolicy.DecisionDeny,
-			Match:    connectionpolicy.MatchAny(),
-		},
+		Mode:     connectionpolicy.ModeAskUnknown,
 	}
 	return set
 }
@@ -315,7 +306,8 @@ func TestARememberedAnswerDecidesTheNextConnection(t *testing.T) {
 	// The rule is exactly as wide as the question. Another port on the same
 	// host is a different connection and is still asked about.
 	remembered := fixture.rules.Current()
-	if len(remembered.Rules) != 2 {
+	if len(remembered.Rules) != 1 ||
+		remembered.Mode != connectionpolicy.ModeAskUnknown {
 		t.Fatalf("remembered rule set = %+v", remembered)
 	}
 	found := false

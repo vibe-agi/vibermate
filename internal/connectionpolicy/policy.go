@@ -32,13 +32,36 @@ func (decision Decision) valid() bool {
 	}
 }
 
+// Mode is the explicit answer for a connection no scoped rule matched. It is
+// separate from Rule so an installation cannot accidentally turn a global
+// policy mode into a hidden wildcard rule.
+type Mode string
+
+const (
+	ModeMonitor     Mode = "monitor"
+	ModeAskUnknown  Mode = "ask_unknown"
+	ModeDenyUnknown Mode = "deny_unknown"
+)
+
+func (mode Mode) fallback() (Decision, string, error) {
+	switch mode {
+	case ModeMonitor:
+		return DecisionAllow, "mode.monitor", nil
+	case ModeAskUnknown:
+		return DecisionAsk, "mode.ask_unknown", nil
+	case ModeDenyUnknown:
+		return DecisionDeny, "mode.deny_unknown", nil
+	default:
+		return "", "", fmt.Errorf("%w: policy mode is invalid", ErrInvalidRuleSet)
+	}
+}
+
 // MatchKind is closed. A rule cannot carry a pattern language, because a
 // wildcard or regular expression is how an allow list quietly becomes an allow
 // everything.
 type MatchKind string
 
 const (
-	MatchKindAny           MatchKind = "any"
 	MatchKindExactHost     MatchKind = "exact_host"
 	MatchKindExactHostPort MatchKind = "exact_host_port"
 )
@@ -47,10 +70,6 @@ type Match struct {
 	Kind MatchKind
 	Host string
 	Port uint16
-}
-
-func MatchAny() Match {
-	return Match{Kind: MatchKindAny}
 }
 
 func MatchExactHost(host string) Match {
@@ -63,11 +82,6 @@ func MatchExactHostPort(host string, port uint16) Match {
 
 func (match Match) validate() error {
 	switch match.Kind {
-	case MatchKindAny:
-		if match.Host != "" || match.Port != 0 {
-			return fmt.Errorf("%w: an any match carries a target", ErrInvalidRuleSet)
-		}
-		return nil
 	case MatchKindExactHost:
 		if match.Port != 0 {
 			return fmt.Errorf("%w: a host match carries a port", ErrInvalidRuleSet)
@@ -85,8 +99,6 @@ func (match Match) validate() error {
 
 func (match Match) matches(request Request) bool {
 	switch match.Kind {
-	case MatchKindAny:
-		return true
 	case MatchKindExactHost:
 		return match.Host == request.Host
 	case MatchKindExactHostPort:
@@ -135,17 +147,16 @@ type Outcome struct {
 type RuleSetOptions struct {
 	Revision uint64
 	Rules    []Rule
-	// Default answers a connection no rule matched. It is required, because
-	// leaving it out would make that answer implicit.
-	Default Rule
+	Mode     Mode
 }
 
 // RuleSet is immutable and ordered by precedence. The first matching rule
 // wins, which makes evaluation deterministic and explainable.
 type RuleSet struct {
-	revision    uint64
-	rules       []Rule
-	defaultRule Rule
+	revision         uint64
+	rules            []Rule
+	fallbackDecision Decision
+	fallbackRuleID   string
 }
 
 func NewRuleSet(options RuleSetOptions) (RuleSet, error) {
@@ -155,32 +166,12 @@ func NewRuleSet(options RuleSetOptions) (RuleSet, error) {
 	if len(options.Rules) > MaxRules {
 		return RuleSet{}, fmt.Errorf("%w: too many rules", ErrInvalidRuleSet)
 	}
-	if options.Default.ID == "" {
-		return RuleSet{}, fmt.Errorf(
-			"%w: a rule set must declare a default",
-			ErrInvalidRuleSet,
-		)
-	}
-	if err := options.Default.validate(); err != nil {
+	fallbackDecision, fallbackRuleID, err := options.Mode.fallback()
+	if err != nil {
 		return RuleSet{}, err
 	}
-	if options.Default.Match.Kind != MatchKindAny {
-		return RuleSet{}, fmt.Errorf(
-			"%w: the default must answer every connection",
-			ErrInvalidRuleSet,
-		)
-	}
-	// Design 06 makes this an invariant. A default that allows everything makes
-	// the firewall the one control that never fires, so an operator who wants
-	// that must write it as an explicit rule and see it in the list.
-	if options.Default.Decision == DecisionAllow {
-		return RuleSet{}, fmt.Errorf(
-			"%w: the shipped default cannot allow every connection",
-			ErrInvalidRuleSet,
-		)
-	}
 	identifiers := make(map[string]struct{}, len(options.Rules)+1)
-	identifiers[options.Default.ID] = struct{}{}
+	identifiers[fallbackRuleID] = struct{}{}
 	rules := make([]Rule, 0, len(options.Rules))
 	for _, rule := range options.Rules {
 		if err := rule.validate(); err != nil {
@@ -203,9 +194,10 @@ func NewRuleSet(options RuleSetOptions) (RuleSet, error) {
 		return rules[first].ID < rules[second].ID
 	})
 	return RuleSet{
-		revision:    options.Revision,
-		rules:       rules,
-		defaultRule: options.Default,
+		revision:         options.Revision,
+		rules:            rules,
+		fallbackDecision: fallbackDecision,
+		fallbackRuleID:   fallbackRuleID,
 	}, nil
 }
 
@@ -223,8 +215,8 @@ func (set RuleSet) Evaluate(request Request) Outcome {
 		}
 	}
 	return Outcome{
-		Decision: set.defaultRule.Decision,
-		RuleID:   set.defaultRule.ID,
+		Decision: set.fallbackDecision,
+		RuleID:   set.fallbackRuleID,
 		Revision: set.revision,
 	}
 }

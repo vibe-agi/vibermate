@@ -324,7 +324,7 @@ class PreviewControlClient implements ControlClient {
   private rules: ConnectionRuleSet = {
     revision: 1,
     rules: [],
-    default: { id: "default-ask", priority: 0, decision: "ask", match: "any" },
+    mode: "monitor",
   };
 
   close(): void {
@@ -807,7 +807,7 @@ class PreviewControlClient implements ControlClient {
   async replaceConnectionRules(expectedRevision: number, input: ConnectionRuleSetInput): Promise<ConnectionRuleSet> {
     this.requireOpen();
     this.requireRevision(this.rules.revision, expectedRevision);
-    this.rules = { revision: expectedRevision + 1, rules: clone(input.rules), default: clone(input.default) };
+    this.rules = { revision: expectedRevision + 1, rules: clone(input.rules), mode: input.mode };
     return clone(this.rules);
   }
 

@@ -1039,8 +1039,7 @@ func newGenericResponsesProxyFixture(t *testing.T) *proxyFixture {
 }
 
 // newProxyFixtureWithPolicy exercises a specific rule set. The default fixture
-// allows every connection so the existing suite keeps testing what it was
-// written to test; production ships a deny default.
+// uses the same Monitor mode a fresh production installation uses.
 func newProxyFixtureWithPolicy(
 	t *testing.T,
 	policy connectionpolicy.Snapshot,
@@ -1059,16 +1058,7 @@ func allowEverythingTestPolicy(t *testing.T) connectionpolicy.Snapshot {
 
 	set := connectionpolicy.Snapshot{
 		Revision: 1,
-		Rules: []connectionpolicy.Rule{{
-			ID:       "test-allow-all",
-			Decision: connectionpolicy.DecisionAllow,
-			Match:    connectionpolicy.MatchAny(),
-		}},
-		Default: connectionpolicy.Rule{
-			ID:       "test-default-deny",
-			Decision: connectionpolicy.DecisionDeny,
-			Match:    connectionpolicy.MatchAny(),
-		},
+		Mode:     connectionpolicy.ModeMonitor,
 	}
 	return set
 }

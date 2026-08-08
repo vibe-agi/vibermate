@@ -551,13 +551,15 @@ export interface ConnectionRule {
 export interface ConnectionRuleSet {
   readonly revision: number;
   readonly rules: readonly ConnectionRule[];
-  readonly default: ConnectionRule;
+  readonly mode: ConnectionPolicyMode;
 }
 
 export interface ConnectionRuleSetInput {
   readonly rules: readonly ConnectionRule[];
-  readonly default: ConnectionRule;
+  readonly mode: ConnectionPolicyMode;
 }
+
+export type ConnectionPolicyMode = "monitor" | "ask_unknown" | "deny_unknown";
 
 export type ManualCaptureClientClass = "cli" | "desktop_app" | "other";
 export type ManualCaptureLifetime = "temporary" | "until_revoked";
