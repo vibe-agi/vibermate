@@ -84,7 +84,7 @@ func (evidence Evidence) Valid() bool {
 }
 
 // Scope is immutable identity evidence attached to one CaptureRun. It is not
-// authentication and it grants no route outside the Access that later admits a
+// authentication and it grants no route outside the Environment that later admits a
 // request.
 type Scope struct {
 	machineID            MachineID

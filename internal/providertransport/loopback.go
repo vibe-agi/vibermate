@@ -7,7 +7,7 @@ import (
 	"net/http"
 	"net/netip"
 
-	"github.com/vibe-agi/vibermate/internal/access"
+	"github.com/vibe-agi/vibermate/internal/originidentity"
 	"github.com/vibe-agi/vibermate/internal/transportprofile"
 )
 
@@ -50,8 +50,8 @@ func (transport *loopbackTransport) RoundTrip(
 			"loopback provider transport is not initialized",
 		)
 	}
-	if dispatch.target.transportKind !=
-		access.ProviderTransportLoopbackCleartext {
+	if dispatch.target.TransportKind() !=
+		originidentity.ProviderTransportLoopbackCleartext {
 		return nil, transportprofile.Evidence{}, errors.New(
 			"loopback provider transport received a non-loopback target",
 		)
@@ -147,7 +147,7 @@ func validateLoopbackPeer(
 		return errors.New("loopback provider peer IP is invalid")
 	}
 	peer = peer.Unmap()
-	expected, err := netip.ParseAddr(target.networkHost)
+	expected, err := netip.ParseAddr(target.NetworkHost())
 	if err != nil {
 		return errors.New("loopback provider target IP is invalid")
 	}
@@ -155,7 +155,7 @@ func validateLoopbackPeer(
 	if !peer.IsLoopback() ||
 		peer != expected ||
 		tcp.Zone != "" ||
-		tcp.Port != int(target.port) {
+		tcp.Port != int(target.origin.Port()) {
 		return errors.New("loopback provider peer identity changed")
 	}
 	return nil

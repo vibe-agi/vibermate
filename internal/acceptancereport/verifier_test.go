@@ -22,8 +22,8 @@ func TestVerifyFileAcceptsKnownGoodFixedClientFixtures(t *testing.T) {
 		version string
 		checks  int
 	}{
-		{id: "claude-code", version: "2.1.220", checks: 18},
-		{id: "codex-cli", version: "0.145.0", checks: 19},
+		{id: "claude-code", version: "2.1.220", checks: 13},
+		{id: "codex-cli", version: "0.145.0", checks: 13},
 	} {
 		client := client
 		t.Run(client.id, func(t *testing.T) {
@@ -111,84 +111,27 @@ func TestVerifyFileRejectsBytesChangedAfterReportCreation(t *testing.T) {
 	})
 }
 
-func TestVerifyFileAcceptsHistoricalV5CheckContract(t *testing.T) {
-	t.Parallel()
-	for _, client := range []struct {
-		id      string
-		version string
-		checks  int
-	}{
-		{id: "claude-code", version: "2.1.220", checks: 17},
-		{id: "codex-cli", version: "0.145.0", checks: 18},
-	} {
-		client := client
-		t.Run(client.id, func(t *testing.T) {
-			t.Parallel()
-			report, expected := validFixture(t, client.id, client.version)
-			report.Schema = SchemaV5
-			report.Provenance.Build.ManifestSchema =
-				DesktopBuildManifestSchemaV1
-			delete(
-				report.Provenance.Build.ConfigurationSHA256,
-				"rust-toolchain.toml",
-			)
-			expected.Schema = SchemaV5
-			checks := make([]Check, 0, len(report.Checks)-1)
-			for _, check := range report.Checks {
-				if check.ID != "packaged-main-navigation-cold-restore" {
-					checks = append(checks, check)
-				}
-			}
-			report.Checks = checks
-			if len(report.Checks) != client.checks {
-				t.Fatalf("v5 fixture checks = %d, want %d", len(report.Checks), client.checks)
-			}
-
-			if err := VerifyFile(writeFixture(t, report), expected); err != nil {
-				t.Fatalf("VerifyFile(v5) error = %v", err)
-			}
-		})
-	}
-}
-
-func TestVerifyFileRejectsHistoricalV1BuildManifestInV6Report(t *testing.T) {
+func TestVerifyFileRejectsRetiredBuildManifest(t *testing.T) {
 	t.Parallel()
 
 	report, expected := validFixture(t, "claude-code", "2.1.220")
-	report.Provenance.Build.ManifestSchema = DesktopBuildManifestSchemaV1
+	report.Provenance.Build.ManifestSchema = "vibermate.desktop-build/v1"
 	delete(
 		report.Provenance.Build.ConfigurationSHA256,
 		"rust-toolchain.toml",
 	)
 	if err := VerifyFile(writeFixture(t, report), expected); err == nil {
-		t.Fatal("VerifyFile accepted a v6 report with a v1 build manifest")
+		t.Fatal("VerifyFile accepted a retired Desktop build manifest")
 	}
 }
 
-func TestVerifyFileRejectsV5ReportWithV6CheckSet(t *testing.T) {
+func TestVerifyFileRejectsRetiredReportSchema(t *testing.T) {
 	t.Parallel()
 	report, expected := validFixture(t, "claude-code", "2.1.220")
-	report.Schema = SchemaV5
-	expected.Schema = SchemaV5
-	if err := VerifyFile(writeFixture(t, report), expected); err == nil {
-		t.Fatal("VerifyFile(v5) accepted the v6 check set")
-	}
-}
-
-func TestVerifyFileRejectsSchemaDowngradeFromCurrentExpectation(t *testing.T) {
-	t.Parallel()
-	report, expected := validFixture(t, "claude-code", "2.1.220")
-	report.Schema = SchemaV5
-	checks := make([]Check, 0, len(report.Checks)-1)
-	for _, check := range report.Checks {
-		if check.ID != "packaged-main-navigation-cold-restore" {
-			checks = append(checks, check)
-		}
-	}
-	report.Checks = checks
+	report.Schema = "vibermate.m0-assembly-acceptance/v5"
 	err := VerifyFile(writeFixture(t, report), expected)
 	if err == nil || !strings.Contains(err.Error(), "schema differs") {
-		t.Fatalf("VerifyFile(v6 expectation) downgrade error = %v", err)
+		t.Fatalf("VerifyFile retired-schema error = %v", err)
 	}
 }
 
@@ -386,27 +329,9 @@ func TestVerifyFileRejectsTypedMutations(t *testing.T) {
 			},
 		},
 		{
-			name: "invalid access ID",
+			name: "invalid Environment ID",
 			mutate: func(report *Report, _ *Expectations) {
-				report.Provenance.Configuration.AccessID = " has spaces "
-			},
-		},
-		{
-			name: "invalid provider origin",
-			mutate: func(report *Report, _ *Expectations) {
-				report.Provenance.Configuration.ProviderOrigin = "file:///tmp/provider"
-			},
-		},
-		{
-			name: "remote cleartext provider origin",
-			mutate: func(report *Report, _ *Expectations) {
-				report.Provenance.Configuration.ProviderOrigin = "http://api.example.com/v1"
-			},
-		},
-		{
-			name: "blank provider model",
-			mutate: func(report *Report, _ *Expectations) {
-				report.Provenance.Configuration.ProviderModel = ""
+				report.Provenance.Configuration.EnvironmentID = " has spaces "
 			},
 		},
 		{
@@ -718,6 +643,17 @@ func TestVerifyFileRejectsUnknownDuplicateMalformedAndTrailingJSON(t *testing.T)
 			},
 		},
 		{
+			name: "retired access ID field",
+			mutate: func(input []byte) []byte {
+				return bytes.Replace(
+					input,
+					[]byte(`"environmentId":"assembly-001"`),
+					[]byte(`"accessId":"assembly-001"`),
+					1,
+				)
+			},
+		},
+		{
 			name: "duplicate JSON field",
 			mutate: func(input []byte) []byte {
 				return bytes.Replace(
@@ -873,6 +809,55 @@ func TestRequiredCheckIDsReturnsAnIsolatedCopy(t *testing.T) {
 	if !foundNavigationRestore {
 		t.Fatal("RequiredCheckIDs() omitted the current navigation restore proof")
 	}
+	seen := make(map[string]bool, len(second))
+	for _, id := range second {
+		seen[id] = true
+	}
+	for _, id := range []string{
+		"environment-publish",
+		"capture-environment-assignment",
+		"environment-recovery",
+		"capture-assignment-recovery",
+	} {
+		if !seen[id] {
+			t.Fatalf("RequiredCheckIDs() omitted %q", id)
+		}
+	}
+	for _, id := range []string{
+		"access-apply",
+		"credentialed-access-apply",
+		"provider-secret",
+	} {
+		if seen[id] {
+			t.Fatalf("RequiredCheckIDs() retained retired check %q", id)
+		}
+	}
+	credentialed, err := RequiredCheckIDs(
+		ModeCredentialed,
+		"claude-code",
+		"2.1.220",
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	credentialedSeen := make(map[string]bool, len(credentialed))
+	for _, id := range credentialed {
+		credentialedSeen[id] = true
+	}
+	for _, id := range []string{
+		"credentialed-environment-publish",
+		"credentialed-capture-environment-assignment",
+		"provider-account",
+	} {
+		if !credentialedSeen[id] {
+			t.Fatalf("credentialed RequiredCheckIDs() omitted %q", id)
+		}
+	}
+	for _, id := range []string{"credentialed-access-apply", "provider-secret"} {
+		if credentialedSeen[id] {
+			t.Fatalf("credentialed RequiredCheckIDs() retained retired check %q", id)
+		}
+	}
 }
 
 func TestVerifyFileRequiresAnExplicitMatchingCredentialedMode(t *testing.T) {
@@ -909,10 +894,10 @@ func TestVerifyFileRequiresAnExplicitMatchingCredentialedMode(t *testing.T) {
 	}
 
 	expected.Mode = ModeCredentialed
-	expected.Schema = SchemaV5
+	expected.Schema = "vibermate.m0-assembly-acceptance/v5"
 	expected.Artifacts = ArtifactCoordinates{}
 	if err := VerifyFile(writeFixture(t, report), expected); err == nil {
-		t.Fatal("VerifyFile() accepted credentialed evidence under historical v5")
+		t.Fatal("VerifyFile() accepted credentialed evidence under a retired schema")
 	}
 }
 
@@ -1085,9 +1070,7 @@ func validFixture(
 				DeterministicOnly: true,
 				ClientID:          clientID,
 				ClientVersion:     clientVersion,
-				AccessID:          "assembly-001",
-				ProviderOrigin:    "http://127.0.0.1:23333/v1",
-				ProviderModel:     "dashscope:glm-5",
+				EnvironmentID:     "assembly-001",
 				Timeout:           "8m0s",
 			},
 		},

@@ -8,7 +8,6 @@ import (
 	"strings"
 
 	"github.com/vibe-agi/vibermate/internal/offlinehold"
-	"github.com/vibe-agi/vibermate/internal/providertransport"
 )
 
 type runtimeResumeProber struct {
@@ -119,19 +118,15 @@ func (r *Runtime) ResumeOfflineHold(
 }
 
 func (r *Runtime) resumeProbeTargets() ([]offlinehold.ProbeTarget, error) {
-	if r == nil || r.offlineHold == nil || r.probeCatalog == nil {
+	if r == nil || r.offlineHold == nil {
 		return nil, errors.New("runtime resume target dependencies are incomplete")
 	}
 	targets := r.offlineHold.PendingProbeTargets()
-	providerTargets, err := r.probeCatalog.ActiveProviderProbeTargets()
-	if err != nil {
-		return nil, err
-	}
-	seen := make(map[string]struct{}, len(targets)+len(providerTargets))
+	seen := make(map[string]struct{}, len(targets))
 	normalized := make(
 		[]offlinehold.ProbeTarget,
 		0,
-		len(targets)+len(providerTargets),
+		len(targets),
 	)
 	appendUnique := func(target offlinehold.ProbeTarget) {
 		key := probeTargetIdentityKey(target)
@@ -143,22 +138,6 @@ func (r *Runtime) resumeProbeTargets() ([]offlinehold.ProbeTarget, error) {
 	}
 	for _, target := range targets {
 		appendUnique(target)
-	}
-	for _, candidate := range providerTargets {
-		target, targetErr := providertransport.NewTarget(candidate.Target())
-		if targetErr != nil {
-			return nil, targetErr
-		}
-		frozen, freezeErr := providertransport.NewProbeTarget(
-			candidate.Reference(),
-			candidate.AccessRevision(),
-			candidate.PlanHash(),
-			target,
-		)
-		if freezeErr != nil {
-			return nil, freezeErr
-		}
-		appendUnique(frozen)
 	}
 	slices.SortFunc(normalized, func(left, right offlinehold.ProbeTarget) int {
 		leftKey := probeTargetIdentityKey(left)
@@ -176,8 +155,8 @@ func probeTargetIdentityKey(target offlinehold.ProbeTarget) string {
 		target.NetworkOrigin,
 		target.HTTPAuthority,
 		target.TLSServerName,
-		fmt.Sprintf("%020d", target.AccessRevision),
-		target.PlanHash,
+		fmt.Sprintf("%020d", target.PlanRevision),
+		target.PlanDigest,
 	}, "\x00")
 }
 

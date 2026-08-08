@@ -313,7 +313,7 @@ func runtimeProviderAttempt(t *testing.T, id string) egressaudit.Attempt {
 		Decision: egressaudit.DecisionRef{
 			PolicyID:       "policy-before-restart",
 			PolicyRevision: 7,
-			Authority:      egressaudit.AuthorityAccess,
+			Authority:      egressaudit.AuthorityEnvironment,
 			RuleID:         "rule-before-restart",
 			ProxyID:        "direct",
 		},

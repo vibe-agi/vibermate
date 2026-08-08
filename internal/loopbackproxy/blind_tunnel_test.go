@@ -10,11 +10,12 @@ import (
 	"testing"
 	"time"
 
-	"github.com/vibe-agi/vibermate/internal/access"
+	"github.com/vibe-agi/vibermate/internal/captureassignment"
 	"github.com/vibe-agi/vibermate/internal/capturerun"
 	"github.com/vibe-agi/vibermate/internal/connectionevent"
 	"github.com/vibe-agi/vibermate/internal/connectionpolicy"
 	"github.com/vibe-agi/vibermate/internal/egressaudit"
+	"github.com/vibe-agi/vibermate/internal/environment"
 	"github.com/vibe-agi/vibermate/internal/toolapproval"
 )
 
@@ -46,7 +47,11 @@ func echoTarget(t *testing.T) (string, func()) {
 			}()
 		}
 	}()
-	return listener.Addr().String(), func() { _ = listener.Close() }
+	_, port, err := net.SplitHostPort(listener.Addr().String())
+	if err != nil {
+		t.Fatal(err)
+	}
+	return net.JoinHostPort("localhost", port), func() { _ = listener.Close() }
 }
 
 // The launcher exports HTTP_PROXY to the whole child process tree, so an Agent
@@ -143,7 +148,7 @@ func TestUnmatchedAuthorityIsTunnelledWithoutDecryption(t *testing.T) {
 	t.Fatal("no blind EgressAttempt reached a terminal")
 }
 
-func TestNoAccessIsTransparentEvenWhenConfiguredDefaultWouldAsk(t *testing.T) {
+func TestSystemTransparentEnvironmentBypassesConfiguredDefaultAsk(t *testing.T) {
 	t.Parallel()
 
 	fixture := newProxyFixtureWithPolicy(t, connectionpolicy.Snapshot{
@@ -155,17 +160,10 @@ func TestNoAccessIsTransparentEvenWhenConfiguredDefaultWouldAsk(t *testing.T) {
 		},
 	})
 	defer fixture.Close(t)
-	empty, err := access.NewSnapshotProjection(
-		fixture.authority.Identity().Revision(),
-		fixture.authority,
-	)
-	if err != nil {
-		t.Fatal(err)
+	result := fixture.switchEnvironment(t, environment.SystemTransparentID)
+	if result.Boundary != captureassignment.BoundaryHotSwitch {
+		t.Fatalf("system transparent switch boundary = %q", result.Boundary)
 	}
-	if err := empty.Restore(nil); err != nil {
-		t.Fatal(err)
-	}
-	fixture.ingress.delegate = empty
 
 	authority, stop := echoTarget(t)
 	defer stop()
@@ -197,7 +195,7 @@ func TestNoAccessIsTransparentEvenWhenConfiguredDefaultWouldAsk(t *testing.T) {
 		t.Fatal(err)
 	}
 	if len(page.Items) != 0 {
-		t.Fatalf("zero-Access capture created approvals: %+v", page.Items)
+		t.Fatalf("system transparent Capture created approvals: %+v", page.Items)
 	}
 }
 
@@ -244,12 +242,12 @@ func TestBlindTunnelRecordsAConnectionWithoutContent(t *testing.T) {
 		if record.RouteHost == "" {
 			t.Fatalf("blind connection has no destination: %+v", record)
 		}
-		if record.AccessID != "" ||
-			record.AccessName != "" ||
-			record.AccessRevision != 0 ||
-			record.AgentEndpointID != "" ||
-			record.AgentEndpointRevision != 0 {
-			t.Fatalf("blind connection acquired an Access relation: %+v", record)
+		if record.EnvironmentID != fixture.environment.ID ||
+			record.EnvironmentName == "" ||
+			record.EnvironmentRevision != fixture.environment.Revision ||
+			record.ClientEndpointID != "" ||
+			record.ClientEndpointRevision != 0 {
+			t.Fatalf("blind connection Environment relation = %+v", record)
 		}
 	}
 	if !found {

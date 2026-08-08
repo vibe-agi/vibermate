@@ -14,6 +14,7 @@ import (
 
 	"github.com/vibe-agi/vibermate/internal/capturecontrol"
 	"github.com/vibe-agi/vibermate/internal/capturecredential"
+	"github.com/vibe-agi/vibermate/internal/environment"
 	"github.com/vibe-agi/vibermate/internal/localdiscovery"
 	"github.com/vibe-agi/vibermate/internal/manualcapture"
 )
@@ -33,15 +34,18 @@ func TestClientUsesConfirmationTokenAndOpaqueETag(t *testing.T) {
 	}
 	now := time.Date(2026, 8, 4, 8, 0, 0, 0, time.UTC)
 	view := capturecontrol.ManualCaptureView{
-		ID:               "manual-one",
-		IngressProfileID: "manual-capture/manual-one",
-		DisplayName:      "Project terminal",
-		ClientClass:      manualcapture.ClientCLI,
-		Lifetime:         manualcapture.LifetimeTemporary,
-		State:            manualcapture.StateActive,
-		Observation:      manualcapture.ObservationWaiting,
-		CreatedAt:        now,
-		UpdatedAt:        now,
+		ID:          "manual-one",
+		DisplayName: "Project terminal",
+		ClientClass: manualcapture.ClientCLI,
+		Lifetime:    manualcapture.LifetimeTemporary,
+		State:       manualcapture.StateActive,
+		Observation: manualcapture.ObservationWaiting,
+		CreatedAt:   now,
+		UpdatedAt:   now,
+	}
+	root := &capturecontrol.RootPublicDelivery{
+		Kind: "local_path", DERSHA256: strings.Repeat("a", 64),
+		Fingerprint: "AA:AA", PEMPath: "/private/root.pem",
 	}
 	var calls atomic.Int32
 	server := httptest.NewServer(http.HandlerFunc(func(
@@ -56,15 +60,15 @@ func TestClientUsesConfirmationTokenAndOpaqueETag(t *testing.T) {
 		writer.Header().Set("Content-Type", "application/json")
 		switch request.Method + " " + request.URL.Path {
 		case "GET /api/v1/manual-captures/context":
+			if request.URL.Query().Get("environmentId") != "work" {
+				t.Errorf("environmentId=%q", request.URL.Query().Get("environmentId"))
+			}
 			_ = json.NewEncoder(writer).Encode(capturecontrol.ManualCaptureContext{
-				ConfirmationToken: confirmationToken,
-				ProxyAddress:      "http://127.0.0.1:32123",
-				Root: capturecontrol.RootPublicDelivery{
-					Kind:        "local_path",
-					DERSHA256:   strings.Repeat("a", 64),
-					Fingerprint: "AA:AA",
-					PEMPath:     "/private/root.pem",
-				},
+				ConfirmationToken: confirmationToken, ProxyAddress: "http://127.0.0.1:32123",
+				EnvironmentID: "work", EnvironmentRevision: 1,
+				EnvironmentDigest: strings.Repeat("b", 64), LaunchAuthorityDigest: strings.Repeat("c", 64),
+				ProtectedAuthorities: []string{"api.anthropic.com:443"}, ManagedAuthorities: []string{},
+				Root:                    root,
 				DefaultTemporarySeconds: 3600,
 				MaxTemporarySeconds:     7200,
 			})
@@ -76,6 +80,9 @@ func TestClientUsesConfirmationTokenAndOpaqueETag(t *testing.T) {
 			if input.ConfirmationToken != confirmationToken {
 				t.Errorf("confirmation token=%q", input.ConfirmationToken)
 			}
+			if input.EnvironmentID != "work" {
+				t.Errorf("environmentId=%q", input.EnvironmentID)
+			}
 			writer.Header().Set("ETag", stateTag)
 			writer.WriteHeader(http.StatusCreated)
 			_ = json.NewEncoder(writer).Encode(capturecontrol.ManualCaptureGrant{
@@ -83,12 +90,10 @@ func TestClientUsesConfirmationTokenAndOpaqueETag(t *testing.T) {
 				ProxyAddress:  "http://127.0.0.1:32123",
 				ProxyUsername: manualcapture.ProxyUsername,
 				ProxyPassword: proxyCredential.Value(),
-				Root: capturecontrol.RootPublicDelivery{
-					Kind:        "local_path",
-					DERSHA256:   strings.Repeat("a", 64),
-					Fingerprint: "AA:AA",
-					PEMPath:     "/private/root.pem",
-				},
+				EnvironmentID: "work", AssignmentRevision: 1,
+				LaunchAuthorityDigest: strings.Repeat("c", 64),
+				ProtectedAuthorities:  []string{"api.anthropic.com:443"}, ManagedAuthorities: []string{},
+				Root: root,
 			})
 		case "GET /api/v1/manual-captures/manual-one":
 			writer.Header().Set("ETag", stateTag)
@@ -111,12 +116,13 @@ func TestClientUsesConfirmationTokenAndOpaqueETag(t *testing.T) {
 	}
 	defer client.Close()
 	ctx := context.Background()
-	captureContext, err := client.Context(ctx)
+	captureContext, err := client.Context(ctx, environment.EnvironmentID("work"))
 	if err != nil || captureContext.ConfirmationToken != confirmationToken {
 		t.Fatalf("Context()=%+v err=%v", captureContext, err)
 	}
 	expires := int64(3600)
 	created, err := client.Create(ctx, capturecontrol.ManualCaptureCreateRequest{
+		EnvironmentID:     "work",
 		DisplayName:       view.DisplayName,
 		ClientClass:       view.ClientClass,
 		Lifetime:          view.Lifetime,

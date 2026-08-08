@@ -18,7 +18,6 @@
       "installShape": "native_single_binary",
       "launchRecipe": "node_env_proxy"
     },
-    "ingressProfileId": "capture-run/run-verified-sample",
     "canonicalExecutablePath": "/Users/example/.local/bin/claude",
     "state": "attached",
     "observation": "observed",
@@ -35,7 +34,6 @@
     "clientAdapterState": "generic",
     "clientRecognition": "unverified",
     "catalogRevision": 4,
-    "ingressProfileId": "capture-run/run-unverified-sample",
     "canonicalExecutablePath": "/Applications/Codex.app/Contents/MacOS/codex",
     "state": "created",
     "observation": "waiting_for_traffic",

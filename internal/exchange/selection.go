@@ -5,353 +5,330 @@ import (
 	"fmt"
 	"slices"
 
-	"github.com/vibe-agi/vibermate/internal/access"
+	"github.com/vibe-agi/vibermate/internal/environment"
+	"github.com/vibe-agi/vibermate/internal/originidentity"
+	"github.com/vibe-agi/vibermate/internal/protocolspec"
+	"github.com/vibe-agi/vibermate/internal/providerauth"
 	"github.com/vibe-agi/vibermate/internal/providertransport"
+	"github.com/vibe-agi/vibermate/internal/secretstore"
+	"github.com/vibe-agi/vibermate/internal/wireprofile"
+)
+
+const (
+	modelModePreserve    = "preserve"
+	modelModePassthrough = "passthrough"
+	modelModeFixed       = "fixed"
 )
 
 func validateClientOperation(
-	codecPlan access.CodecPlan,
+	plan environment.RequestPlan,
 	evidence ClientOperationEvidence,
 	replayClass ReplayClass,
 ) error {
-	var selected access.ClientOperationPlan
-	found := false
+	selected := plan.Operation()
+	codecPlan := plan.Route().CodecPlan()
+	found := 0
 	for _, operation := range codecPlan.ClientOperations() {
-		if operation.ID() != evidence.ID() {
-			continue
+		if operation.ID() == selected.ID() {
+			found++
 		}
-		if found {
-			return errors.New("client operation is duplicated in the Access plan")
-		}
-		selected = operation
-		found = true
 	}
-	if !found ||
+	if found != 1 ||
+		selected.ID() != evidence.ID() ||
 		selected.Revision() != evidence.Revision() ||
 		selected.ClientDialect() != codecPlan.ClientDialect() ||
-		selected.PathMatch() != access.ClientOperationPathExact ||
-		selected.Kind() != access.ClientOperationSemantic ||
-		selected.Transport() != access.ClientOperationTransportHTTP ||
+		selected.PathMatch() != protocolspec.ClientOperationPathExact ||
+		selected.Kind() != protocolspec.ClientOperationSemantic ||
+		selected.Transport() != protocolspec.ClientOperationTransportHTTP ||
 		!selected.EgressBearing() ||
 		selected.PathPattern() != evidence.Path() ||
 		!slices.Contains(selected.Methods(), evidence.Method()) ||
 		(evidence.RawQuery() != "" &&
-			!slices.Contains(
-				selected.AllowedQueries(),
-				evidence.RawQuery(),
-			)) {
+			!slices.Contains(selected.AllowedQueries(), evidence.RawQuery())) {
 		return errors.New(
-			"client operation evidence does not match the Access plan",
+			"client operation evidence does not match the frozen Environment plan",
 		)
 	}
 	expectedReplay, err := exchangeReplayClass(selected.ReplayClass())
 	if err != nil || replayClass != expectedReplay {
 		return errors.New(
-			"client operation replay class does not match the Access plan",
+			"client operation replay class does not match the frozen Environment plan",
 		)
 	}
 	return nil
 }
 
 func exchangeReplayClass(
-	class access.ClientReplayClass,
+	class protocolspec.ClientReplayClass,
 ) (ReplayClass, error) {
 	switch class {
-	case access.ClientReplaySafe:
+	case protocolspec.ClientReplaySafe:
 		return ReplaySafe, nil
-	case access.ClientReplayIdempotencyKeyed:
+	case protocolspec.ClientReplayIdempotencyKeyed:
 		return ReplayIdempotencyKeyed, nil
-	case access.ClientReplayGenerationCostOnly:
+	case protocolspec.ClientReplayGenerationCostOnly:
 		return ReplayGenerationCostOnly, nil
-	case access.ClientReplaySideEffectPossible:
+	case protocolspec.ClientReplaySideEffectPossible:
 		return ReplaySideEffectPossible, nil
-	case access.ClientReplayNonReplayable:
+	case protocolspec.ClientReplayNonReplayable:
 		return ReplayNonReplayable, nil
-	case access.ClientReplayUnknown:
+	case protocolspec.ClientReplayUnknown:
 		return ReplayUnknown, nil
 	default:
 		return "", errors.New("client operation replay class is invalid")
 	}
 }
 
+type credentialCandidate struct {
+	mode    providerauth.CredentialMode
+	account environment.CompiledAccountReference
+}
+
+type credentialMaterial struct {
+	mode    providerauth.CredentialMode
+	account providerauth.AccountRef
+	secret  secretstore.Reference
+	driver  providerauth.DriverRef
+	release func()
+}
+
+func (material credentialMaterial) Release() {
+	if material.release != nil {
+		material.release()
+	}
+}
+
 type frozenSelection struct {
-	accessID         access.AccessID
-	revision         access.Revision
-	planHash         access.PlanHash
-	kind             access.EndpointProfileKind
-	credentialSource access.CredentialSource
-	clientOrigin     access.ClientOrigin
-	effectiveModel   string
-	targetRef        string
-	target           providertransport.Target
-	accountID        access.AccountBindingID
-	secretRef        access.SecretRef
-	authDriverRef    access.AuthDriverRef
-	wireProfile      access.CompiledUpstreamWireProfile
-	codecPlan        access.CodecPlan
+	environmentID        environment.EnvironmentID
+	environmentRevision  environment.Revision
+	environmentDigest    environment.CandidateDigest
+	endpointID           environment.ClientEndpointID
+	endpointRevision     environment.Revision
+	protocolPlanID       environment.ClientProtocolPlanID
+	protocolPlanRevision environment.Revision
+	routeID              environment.UpstreamRouteID
+	routeRevision        environment.Revision
+	accountPolicy        environment.CompiledAccountPolicy
+	clientOrigin         originidentity.ClientOrigin
+	effectiveModel       string
+	original             bool
+	targetRef            string
+	targetRealm          string
+	target               providertransport.Target
+	provenance           providertransport.RequestProvenance
+	wireProfile          wireprofile.CompiledUpstreamWireProfile
+	codecPlan            protocolspec.CodecPlan
 }
 
-// errCandidatesExhausted reports that a further attempt was allowed and there
-// was nothing further to try.
-var errCandidatesExhausted = errors.New("RouteSet candidates are exhausted")
-
-// fallbackPlan reports the default RouteSet's attempt policy and how many
-// candidates the compiled plan holds.
-func fallbackPlan(
-	snapshot access.AccessPlanSnapshot,
-) (access.FallbackPolicy, int) {
-	binding := snapshot.Binding()
-	for _, candidate := range snapshot.RouteSets() {
-		if candidate.ID == binding.DefaultRouteSetID {
-			return candidate.FallbackMode(), snapshot.CandidateCount()
-		}
-	}
-	return access.FallbackDisabled, 0
+func validateFrozenRequestPlan(plan environment.RequestPlan) error {
+	_, err := selectFrozenPlan(plan)
+	return err
 }
 
-// orderedCandidateProfileIDs places a workspace-selected profile first while
-// preserving the configured RouteSet order for any later fallback attempt.
-// A zero primary selects the RouteSet's first candidate.
-func orderedCandidateProfileIDs(
-	snapshot access.AccessPlanSnapshot,
-	primary access.EndpointProfileID,
-) ([]access.EndpointProfileID, error) {
-	binding := snapshot.Binding()
-	var configured []access.EndpointProfileID
-	for _, routeSet := range snapshot.RouteSets() {
-		if routeSet.ID != binding.DefaultRouteSetID {
-			continue
-		}
-		if configured != nil {
-			return nil, errors.New("default RouteSet is duplicated")
-		}
-		configured = slices.Clone(routeSet.CandidateProfileIDs)
+func validateFrozenWireVariant(
+	plan environment.RequestPlan,
+	clientProtocol wireprofile.ApplicationProtocol,
+) error {
+	if !clientProtocol.Valid() {
+		return errors.New("client HTTP protocol is invalid")
 	}
-	if len(configured) == 0 {
-		return nil, errors.New("default RouteSet is unsupported")
+	expected, available := plan.Route().WireProfile().Variant(clientProtocol)
+	actual := plan.WireVariant()
+	if !available || !sameWireVariant(actual, expected) {
+		return errors.New("frozen wire variant does not match the client protocol")
 	}
-	if primary.String() == "" {
-		return configured, nil
-	}
-	if !slices.Contains(configured, primary) {
-		return nil, errors.New("workspace profile is outside the default RouteSet")
-	}
-	ordered := make([]access.EndpointProfileID, 0, len(configured))
-	ordered = append(ordered, primary)
-	for _, profileID := range configured {
-		if profileID != primary {
-			ordered = append(ordered, profileID)
-		}
-	}
-	return ordered, nil
+	return nil
 }
 
-// selectFrozenPlan freezes one named candidate of the default RouteSet.
-func selectFrozenPlan(
-	snapshot access.AccessPlanSnapshot,
-	profileID access.EndpointProfileID,
-) (frozenSelection, error) {
-	binding := snapshot.Binding()
-	if binding.Status != access.AccessStatusEnabled {
-		return frozenSelection{}, errors.New("Access plan is not enabled")
+func sameWireVariant(
+	left wireprofile.CompiledUpstreamWireVariant,
+	right wireprofile.CompiledUpstreamWireVariant,
+) bool {
+	if left.Protocol() != right.Protocol() ||
+		left.UserAgentPolicy() != right.UserAgentPolicy() ||
+		left.SemanticUserAgent() != right.SemanticUserAgent() ||
+		left.EvidenceDigest() != right.EvidenceDigest() {
+		return false
 	}
-	if binding.ID != snapshot.AccessID() ||
-		binding.Revision != snapshot.Revision() ||
-		snapshot.PlanHash().IsZero() {
-		return frozenSelection{}, errors.New("Access plan identity is inconsistent")
+	leftPlan := left.TransportFingerprintPlan()
+	rightPlan := right.TransportFingerprintPlan()
+	if !sameTransportTemplate(leftPlan.Requested(), rightPlan.Requested()) {
+		return false
 	}
+	leftFallbacks := leftPlan.Fallbacks()
+	rightFallbacks := rightPlan.Fallbacks()
+	if len(leftFallbacks) != len(rightFallbacks) {
+		return false
+	}
+	for index := range leftFallbacks {
+		if !sameTransportTemplate(leftFallbacks[index], rightFallbacks[index]) {
+			return false
+		}
+	}
+	return true
+}
 
-	endpoint := snapshot.AgentEndpoint()
-	if endpoint.ID != binding.AgentEndpointID ||
-		endpoint.AccessID != binding.ID {
-		return frozenSelection{}, errors.New("AgentEndpoint is unsupported")
-	}
-	if snapshot.EgressPolicy().Mode != access.EgressModeDirect {
-		return frozenSelection{}, errors.New("Access egress policy is unsupported")
-	}
-	pluginPlan := snapshot.PluginPlan()
-	if pluginPlan.Mode() != access.PluginPlanModePassThrough ||
-		len(pluginPlan.BindingIDs()) != 0 {
-		return frozenSelection{}, errors.New("Access plugin plan is unsupported")
-	}
+func sameTransportTemplate(
+	left wireprofile.TransportFingerprintTemplate,
+	right wireprofile.TransportFingerprintTemplate,
+) bool {
+	return left.Ref() == right.Ref() &&
+		left.Revision() == right.Revision() &&
+		left.Source() == right.Source() &&
+		left.Preset() == right.Preset() &&
+		left.HTTPTransport() == right.HTTPTransport() &&
+		slices.Equal(left.ALPN(), right.ALPN())
+}
 
-	routeSets := snapshot.RouteSets()
-	var routeSet access.RouteSet
-	foundRoute := false
-	for _, candidate := range routeSets {
-		if candidate.ID == binding.DefaultRouteSetID {
-			if foundRoute {
-				return frozenSelection{}, errors.New("default RouteSet is duplicated")
-			}
-			routeSet = candidate
-			foundRoute = true
-		}
+// selectFrozenPlan converts one already-resolved Environment request plan into
+// the provider-facing values used for every attempt. It performs no lookup and
+// therefore cannot observe a newer Environment revision mid-request.
+func selectFrozenPlan(plan environment.RequestPlan) (frozenSelection, error) {
+	environmentID, err := environment.NewEnvironmentID(plan.EnvironmentID().String())
+	if err != nil || environmentID != plan.EnvironmentID() ||
+		plan.EnvironmentRevision() == 0 ||
+		plan.EnvironmentRevision() > environment.MaxRevision {
+		return frozenSelection{}, errors.New("Environment request plan identity is invalid")
 	}
-	if !foundRoute ||
-		routeSet.AccessID != binding.ID ||
-		len(routeSet.CandidateProfileIDs) == 0 {
-		return frozenSelection{}, errors.New("default RouteSet is unsupported")
+	digest, err := environment.ParseCandidateDigest(plan.EnvironmentDigest().String())
+	if err != nil || digest != plan.EnvironmentDigest() ||
+		plan.EnvironmentDigest() == (environment.CandidateDigest{}) {
+		return frozenSelection{}, errors.New("Environment request plan digest is invalid")
 	}
-	if !slices.Contains(routeSet.CandidateProfileIDs, profileID) {
-		return frozenSelection{}, errCandidatesExhausted
+	endpoint := plan.Endpoint()
+	endpointID, err := environment.NewClientEndpointID(endpoint.ID().String())
+	if err != nil || endpointID != endpoint.ID() || endpoint.Revision() == 0 ||
+		endpoint.Revision() > environment.MaxRevision ||
+		endpoint.ClientOrigin().Validate() != nil {
+		return frozenSelection{}, errors.New("Environment endpoint plan is invalid")
 	}
-	foundCompiled := false
-	var compiledSelection access.CompiledCandidate
-	for candidateIndex := 0; candidateIndex < snapshot.CandidateCount(); candidateIndex++ {
-		candidate, ok := snapshot.Candidate(candidateIndex)
-		if !ok || candidate.ProfileID() != profileID {
-			continue
-		}
-		if foundCompiled {
-			return frozenSelection{}, errors.New("compiled candidate is duplicated")
-		}
-		foundCompiled = true
-		compiledSelection = candidate
+	protocolPlan := plan.ProtocolPlan()
+	protocolPlanID, err := environment.NewClientProtocolPlanID(protocolPlan.ID().String())
+	if err != nil || protocolPlanID != protocolPlan.ID() ||
+		protocolPlan.Revision() == 0 || protocolPlan.Revision() > environment.MaxRevision ||
+		!protocolPlan.ClientDialect().Valid() {
+		return frozenSelection{}, errors.New("Environment protocol plan is invalid")
 	}
-	if !foundCompiled {
-		return frozenSelection{}, errors.New("compiled candidate is missing")
+	route := plan.Route()
+	routeID, err := environment.NewUpstreamRouteID(route.ID().String())
+	if err != nil || routeID != route.ID() || route.Revision() == 0 ||
+		route.Revision() > environment.MaxRevision || !route.BackendProtocol().Valid() ||
+		!route.CodecPlan().Valid() {
+		return frozenSelection{}, errors.New("Environment route plan is invalid")
 	}
-	codecPlan := compiledSelection.CodecPlan()
-	wireProfile := compiledSelection.UpstreamWireProfile()
-	if endpoint.ClientDialect != codecPlan.ClientDialect() ||
-		wireProfile.Ref().String() == "" ||
-		wireProfile.Revision() == 0 ||
-		len(wireProfile.Variants()) == 0 {
-		return frozenSelection{}, errors.New(
-			"Access upstream wire profile is unsupported",
-		)
+	targetResource := route.ProviderTarget()
+	if err := validateIdentity("ProviderTarget ID", targetResource.ID); err != nil ||
+		targetResource.Revision == 0 || targetResource.Revision > environment.MaxRevision ||
+		targetResource.Origin.Validate() != nil ||
+		targetResource.RealmID == "" {
+		return frozenSelection{}, errors.New("Environment provider target is invalid")
 	}
-	profiles := snapshot.EndpointProfiles()
-	var profile access.EndpointProfile
-	foundProfile := false
-	for _, candidate := range profiles {
-		if candidate.ID == profileID {
-			if foundProfile {
-				return frozenSelection{}, errors.New("EndpointProfile is duplicated")
-			}
-			profile = candidate
-			foundProfile = true
-		}
-	}
-	if !foundProfile ||
-		profile.AccessID != binding.ID ||
-		profile.Kind != compiledSelection.Kind() ||
-		profile.BackendDialect != codecPlan.ProviderDialect() ||
-		profile.UpstreamWireProfileRef != wireProfile.Ref() {
-		return frozenSelection{}, errors.New("EndpointProfile is unsupported")
-	}
-
-	targets := snapshot.ProviderTargets()
-	var compiledTarget access.CompiledProviderTarget
-	foundTarget := false
-	for _, candidate := range targets {
-		resource := candidate.Target()
-		if resource.ID == profile.TargetID {
-			if foundTarget {
-				return frozenSelection{}, errors.New("ProviderTarget is duplicated")
-			}
-			compiledTarget = candidate
-			foundTarget = true
-		}
-	}
-	if !foundTarget {
-		return frozenSelection{}, errors.New("ProviderTarget is unresolved")
-	}
-	targetResource := compiledTarget.Target()
-	if targetResource.AccessID != binding.ID ||
-		targetResource.ProfileID != profile.ID ||
-		targetResource.Protocol != codecPlan.ProviderDialect() {
-		return frozenSelection{}, errors.New("ProviderTarget ownership is inconsistent")
-	}
-	target, err := providertransport.NewTarget(compiledTarget)
+	target, err := providertransport.NewTarget(targetResource.Origin)
 	if err != nil {
 		return frozenSelection{}, fmt.Errorf("compile provider transport target: %w", err)
 	}
-
+	provenance, err := providertransport.NewRequestProvenance(
+		plan.EnvironmentID(),
+		plan.EnvironmentRevision(),
+		plan.EnvironmentDigest(),
+		route.ID(),
+		route.Revision(),
+	)
+	if err != nil {
+		return frozenSelection{}, fmt.Errorf("compile provider request provenance: %w", err)
+	}
+	wireProfile := route.WireProfile()
+	if wireProfile.Ref().String() == "" || wireProfile.Revision() == 0 ||
+		len(wireProfile.Variants()) == 0 {
+		return frozenSelection{}, errors.New("Environment upstream wire profile is invalid")
+	}
+	modelPolicy := route.ModelPolicy()
 	selection := frozenSelection{
-		accessID:         binding.ID,
-		revision:         binding.Revision,
-		planHash:         snapshot.PlanHash(),
-		kind:             profile.Kind,
-		credentialSource: profile.CredentialSource,
-		clientOrigin:     endpoint.ClientOrigin,
-		targetRef: access.ProviderTargetReference(
-			binding.ID,
-			targetResource.ID,
-		),
-		target:      target,
-		wireProfile: wireProfile,
-		codecPlan:   codecPlan,
+		environmentID: plan.EnvironmentID(), environmentRevision: plan.EnvironmentRevision(),
+		environmentDigest: plan.EnvironmentDigest(), endpointID: endpoint.ID(),
+		endpointRevision: endpoint.Revision(), protocolPlanID: protocolPlan.ID(),
+		protocolPlanRevision: protocolPlan.Revision(), routeID: route.ID(),
+		routeRevision: route.Revision(), accountPolicy: route.AccountPolicy(),
+		clientOrigin: endpoint.ClientOrigin(), targetRef: targetResource.ID,
+		targetRealm: targetResource.RealmID,
+		target:      target, provenance: provenance, wireProfile: wireProfile,
+		codecPlan: route.CodecPlan(),
 	}
-
-	switch profile.Kind {
-	case access.EndpointProfileOriginalPassthrough:
-		if profile.ID != access.OriginalPassthroughProfileID() ||
-			profile.TargetID != access.OriginalPassthroughTargetID() ||
-			profile.CredentialSource != access.CredentialSourceClientPassthrough ||
-			profile.ProcessingMode != access.ProfileProcessingObserveOnly ||
-			profile.DefaultModelPolicy.Mode != access.ModelPolicyModePassthrough ||
-			profile.DefaultModelPolicy.FixedModel.String() != "" ||
-			len(profile.AccountBindingIDs) != 0 ||
-			profile.DefaultAccountBindingID.String() != "" ||
-			codecPlan.ClientDialect() != codecPlan.ProviderDialect() ||
-			targetResource.Origin.String() != endpoint.ClientOrigin.String() ||
-			targetResource.Origin.BasePath() != "" {
-			return frozenSelection{}, errors.New(
-				"original passthrough profile is unsupported",
-			)
+	switch modelPolicy.Mode {
+	case modelModePreserve:
+		selection.original = true
+		if route.AccountPolicy().Mode() != environment.AccountModeClientPassthrough ||
+			route.CodecPlan().ClientDialect() != route.CodecPlan().ProviderDialect() ||
+			targetResource.Origin.String() != endpoint.ClientOrigin().String() ||
+			targetResource.Origin.BasePath() != "" || modelPolicy.FixedModel != "" {
+			return frozenSelection{}, errors.New("original passthrough route is not identity-preserving")
 		}
-		for _, account := range snapshot.AccountBindings() {
-			if account.ProfileID == profile.ID {
-				return frozenSelection{}, errors.New(
-					"original passthrough profile owns an account",
-				)
-			}
+	case modelModePassthrough:
+		if modelPolicy.FixedModel != "" {
+			return frozenSelection{}, errors.New("passthrough model policy has a fixed model")
 		}
-	case access.EndpointProfileManaged:
-		if profile.CredentialSource != access.CredentialSourceManagedAccount ||
-			profile.ProcessingMode != access.ProfileProcessingManaged ||
-			profile.DefaultModelPolicy.Mode != access.ModelPolicyModeFixed ||
-			profile.DefaultModelPolicy.FixedModel.String() == "" ||
-			len(profile.AccountBindingIDs) != 1 {
-			return frozenSelection{}, errors.New("managed EndpointProfile is unsupported")
+	case modelModeFixed:
+		if modelPolicy.FixedModel == "" {
+			return frozenSelection{}, errors.New("fixed model policy has no model")
 		}
-		accountID := profile.DefaultAccountBindingID
-		if profile.AccountBindingIDs[0] != accountID {
-			return frozenSelection{}, errors.New(
-				"default account is not the sole profile account",
-			)
-		}
-		var account access.ProviderAccountBinding
-		foundAccount := false
-		for _, candidate := range snapshot.AccountBindings() {
-			if candidate.ID == accountID {
-				if foundAccount {
-					return frozenSelection{}, errors.New(
-						"account binding is duplicated",
-					)
-				}
-				account = candidate
-				foundAccount = true
-			}
-		}
-		if !foundAccount ||
-			!account.Enabled ||
-			account.AccessID != binding.ID ||
-			account.ProfileID != profile.ID ||
-			(account.AuthDriverRef != access.StaticHeaderAuthDriverRef() &&
-				account.AuthDriverRef != access.AnthropicAPIKeyAuthDriverRef()) {
-			return frozenSelection{}, errors.New(
-				"provider account binding is unsupported",
-			)
-		}
-		selection.effectiveModel = profile.DefaultModelPolicy.FixedModel.String()
-		selection.accountID = account.ID
-		selection.secretRef = account.SecretRef
-		selection.authDriverRef = account.AuthDriverRef
+		selection.effectiveModel = modelPolicy.FixedModel
 	default:
-		return frozenSelection{}, errors.New("EndpointProfile kind is unsupported")
+		return frozenSelection{}, errors.New("Environment model policy is unsupported")
 	}
-
 	return selection, nil
+}
+
+func (selection frozenSelection) credentialCandidates() ([]credentialCandidate, error) {
+	policy := selection.accountPolicy
+	switch policy.Mode() {
+	case environment.AccountModeClientPassthrough:
+		if len(policy.CandidateAccounts()) != 0 || policy.PreferredAccountID() != "" ||
+			policy.FailoverPolicy() != environment.FailoverOff {
+			return nil, errors.New("client passthrough route carries managed account authority")
+		}
+		return []credentialCandidate{{mode: providerauth.CredentialClientPassthrough}}, nil
+	case environment.AccountModeManaged:
+		configured := policy.CandidateAccounts()
+		if len(configured) == 0 || policy.PreferredAccountID() == "" {
+			return nil, errors.New("managed route has no account candidates")
+		}
+		ordered := make([]credentialCandidate, 0, len(configured))
+		seen := make(map[string]struct{}, len(configured))
+		appendCandidate := func(candidate environment.CompiledAccountReference) error {
+			if candidate.ID == "" || candidate.Revision == 0 || candidate.Revision > environment.MaxRevision ||
+				candidate.RealmID == "" || candidate.RealmID != selection.targetRealm {
+				return errors.New("managed account candidate is invalid")
+			}
+			if _, duplicate := seen[candidate.ID]; duplicate {
+				return errors.New("managed account candidate is duplicated")
+			}
+			seen[candidate.ID] = struct{}{}
+			ordered = append(ordered, credentialCandidate{mode: providerauth.CredentialManaged, account: candidate})
+			return nil
+		}
+		preferredFound := false
+		for _, candidate := range configured {
+			if candidate.ID == policy.PreferredAccountID() {
+				if err := appendCandidate(candidate); err != nil {
+					return nil, err
+				}
+				preferredFound = true
+				break
+			}
+		}
+		if !preferredFound {
+			return nil, errors.New("preferred account is outside the frozen candidate set")
+		}
+		for _, candidate := range configured {
+			if candidate.ID == policy.PreferredAccountID() {
+				continue
+			}
+			if err := appendCandidate(candidate); err != nil {
+				return nil, err
+			}
+		}
+		return ordered, nil
+	default:
+		return nil, errors.New("Environment account policy is unsupported")
+	}
 }

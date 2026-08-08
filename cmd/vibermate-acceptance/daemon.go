@@ -29,11 +29,12 @@ const (
 )
 
 type daemonGeneration struct {
-	command    *exec.Cmd
-	descriptor desktopbootstrap.Descriptor
-	control    *controlClient
-	done       chan error
-	stderr     *boundedBuffer
+	command        *exec.Cmd
+	descriptor     desktopbootstrap.Descriptor
+	control        *controlClient
+	done           chan error
+	stderr         *boundedBuffer
+	parentLifetime *os.File
 }
 
 func startDaemon(
@@ -50,18 +51,27 @@ func startDaemon(
 		return nil, fmt.Errorf("create daemon bootstrap pipe: %w", err)
 	}
 	defer reader.Close()
+	parentReader, parentWriter, err := os.Pipe()
+	if err != nil {
+		_ = writer.Close()
+		return nil, fmt.Errorf("create daemon parent-lifetime pipe: %w", err)
+	}
+	defer parentReader.Close()
 	command := exec.Command(
 		config.daemonPath,
 		daemonArguments(appCacheDirectory, dataDirectory)...,
 	)
+	command.Stdin = parentReader
 	command.ExtraFiles = []*os.File{writer}
 	stderr := newBoundedBuffer(64 << 10)
 	command.Stderr = stderr
 	command.Stdout = io.Discard
 	if err := command.Start(); err != nil {
 		_ = writer.Close()
+		_ = parentWriter.Close()
 		return nil, fmt.Errorf("start packaged daemon: %w", err)
 	}
+	_ = parentReader.Close()
 	_ = writer.Close()
 	done := make(chan error, 1)
 	go func() {
@@ -82,27 +92,32 @@ func startDaemon(
 	select {
 	case result := <-descriptorResult:
 		if result.err != nil {
+			_ = parentWriter.Close()
 			_ = command.Process.Kill()
 			<-done
 			return nil, result.err
 		}
 		descriptor = result.descriptor
 	case waitErr := <-done:
+		_ = parentWriter.Close()
 		return nil, fmt.Errorf(
 			"packaged daemon exited before bootstrap: %w",
 			normalizeWaitError(waitErr),
 		)
 	case <-ctx.Done():
+		_ = parentWriter.Close()
 		_ = command.Process.Kill()
 		<-done
 		return nil, ctx.Err()
 	case <-time.After(bootstrapDeadline):
+		_ = parentWriter.Close()
 		_ = command.Process.Kill()
 		<-done
 		return nil, errors.New("packaged daemon bootstrap deadline exceeded")
 	}
 	control, err := exchangeControlSession(ctx, descriptor)
 	if err != nil {
+		_ = parentWriter.Close()
 		_ = command.Process.Signal(syscall.SIGTERM)
 		select {
 		case <-done:
@@ -113,11 +128,12 @@ func startDaemon(
 		return nil, err
 	}
 	return &daemonGeneration{
-		command:    command,
-		descriptor: descriptor,
-		control:    control,
-		done:       done,
-		stderr:     stderr,
+		command:        command,
+		descriptor:     descriptor,
+		control:        control,
+		done:           done,
+		stderr:         stderr,
+		parentLifetime: parentWriter,
 	}, nil
 }
 
@@ -129,6 +145,7 @@ func daemonArguments(
 		"--app-cache-dir=" + appCacheDirectory,
 		"--data-dir=" + dataDirectory,
 		"--webview-origin=tauri://localhost",
+		"--parent-lifetime-fd=0",
 		"--bootstrap-fd=3",
 	}
 }
@@ -233,8 +250,10 @@ func (generation *daemonGeneration) stopGracefully(
 	}
 	select {
 	case err := <-generation.done:
+		_ = generation.parentLifetime.Close()
 		return normalizeWaitError(err)
 	case <-ctx.Done():
+		_ = generation.parentLifetime.Close()
 		_ = generation.command.Process.Kill()
 		<-generation.done
 		return ctx.Err()
@@ -245,6 +264,7 @@ func (generation *daemonGeneration) kill(ctx context.Context) error {
 	if generation == nil || generation.command == nil {
 		return nil
 	}
+	_ = generation.parentLifetime.Close()
 	if err := generation.command.Process.Kill(); err != nil {
 		return fmt.Errorf("kill packaged daemon: %w", err)
 	}
@@ -360,7 +380,8 @@ func privateDirectory(path string) error {
 func cleanTemporaryData(path string) {
 	if path == "" ||
 		!filepath.IsAbs(path) ||
-		!strings.HasPrefix(filepath.Base(path), "vibermate-assembly-") {
+		(!strings.HasPrefix(filepath.Base(path), "vibermate-assembly-") &&
+			!strings.HasPrefix(filepath.Base(path), "vibermate-credentialed-assembly-")) {
 		return
 	}
 	_ = os.RemoveAll(path)

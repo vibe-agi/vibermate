@@ -9,8 +9,9 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"github.com/vibe-agi/vibermate/internal/protocolcore"
 	"io"
+
+	"github.com/vibe-agi/vibermate/internal/protocolcore"
 )
 
 func decodeStrict(value []byte, destination any) error {

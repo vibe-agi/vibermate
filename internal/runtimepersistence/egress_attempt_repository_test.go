@@ -28,7 +28,7 @@ func providerAttempt(t *testing.T, id string) egressaudit.Attempt {
 		Decision: egressaudit.DecisionRef{
 			PolicyID:       "policy-1",
 			PolicyRevision: 1,
-			Authority:      egressaudit.AuthorityAccess,
+			Authority:      egressaudit.AuthorityEnvironment,
 			RuleID:         "rule-1",
 			ProxyID:        "direct",
 		},
@@ -132,7 +132,7 @@ func TestEgressAttemptIdentityIsUniqueAndReuseIsSeparate(t *testing.T) {
 		Decision: egressaudit.DecisionRef{
 			PolicyID:       "policy-1",
 			PolicyRevision: 1,
-			Authority:      egressaudit.AuthorityAccess,
+			Authority:      egressaudit.AuthorityEnvironment,
 			RuleID:         "rule-1",
 			ProxyID:        "direct",
 		},

@@ -10,21 +10,23 @@ import (
 	"unicode"
 	"unicode/utf8"
 
-	"github.com/vibe-agi/vibermate/internal/access"
 	"github.com/vibe-agi/vibermate/internal/offlinehold"
-	"github.com/vibe-agi/vibermate/internal/providertransport"
+	"github.com/vibe-agi/vibermate/internal/originidentity"
+	"github.com/vibe-agi/vibermate/internal/protocolspec"
 )
+
+const maxOriginalRequestBytes = 16 << 20
 
 type RequestOptions struct {
 	RequestID    string
 	Kind         offlinehold.EgressKind
-	Origin       access.ClientOrigin
+	Origin       originidentity.ClientOrigin
 	Method       string
 	Path         string
 	RawQuery     string
 	Headers      http.Header
 	Body         []byte
-	PayloadClass access.OperationPayloadClass
+	PayloadClass protocolspec.OperationPayloadClass
 	// ConnectionID and ParentID associate this outbound with the client
 	// connection and the original request that caused it. They travel as typed
 	// references so no identity encodes containment of another.
@@ -37,13 +39,13 @@ type RequestOptions struct {
 type Request struct {
 	requestID    string
 	kind         offlinehold.EgressKind
-	origin       access.ClientOrigin
+	origin       originidentity.ClientOrigin
 	method       string
 	path         string
 	rawQuery     string
 	headers      http.Header
 	body         []byte
-	payloadClass access.OperationPayloadClass
+	payloadClass protocolspec.OperationPayloadClass
 	connectionID string
 	parentID     string
 }
@@ -68,8 +70,8 @@ func NewRequest(options RequestOptions) (Request, error) {
 	// Goal replaces that narrow exception with an explicit allow/deny/ask
 	// decision.
 	switch options.PayloadClass {
-	case access.OperationPayloadNone, access.OperationPayloadControl:
-	case access.OperationPayloadUnknown:
+	case protocolspec.OperationPayloadNone, protocolspec.OperationPayloadControl:
+	case protocolspec.OperationPayloadUnknown:
 		if len(options.Body) > 0 {
 			return Request{}, errors.New(
 				"unclassified original-origin request cannot carry a body",
@@ -93,9 +95,7 @@ func NewRequest(options RequestOptions) (Request, error) {
 	); err != nil {
 		return Request{}, err
 	}
-	if options.Origin.String() == "" ||
-		options.Origin.HTTPAuthority() == "" ||
-		options.Origin.TLSServerName() == "" {
+	if err := options.Origin.Validate(); err != nil {
 		return Request{}, errors.New("original ClientOrigin is incomplete")
 	}
 	if options.Method == "" ||
@@ -104,7 +104,7 @@ func NewRequest(options RequestOptions) (Request, error) {
 		options.Path[0] != '/' ||
 		strings.ContainsAny(options.Path, "%?#\\\r\n") ||
 		strings.ContainsAny(options.RawQuery, "#\r\n") ||
-		len(options.Body) > providertransport.MaxProviderRequestBytes {
+		len(options.Body) > maxOriginalRequestBytes {
 		return Request{}, errors.New("original-origin request target is invalid")
 	}
 	return Request{
@@ -127,7 +127,7 @@ func (request Request) ParentID() string     { return request.parentID }
 
 // PayloadClass reports the frozen proof that this request carries no client
 // payload.
-func (request Request) PayloadClass() access.OperationPayloadClass {
+func (request Request) PayloadClass() protocolspec.OperationPayloadClass {
 	return request.payloadClass
 }
 
@@ -139,7 +139,7 @@ func (request Request) Kind() offlinehold.EgressKind {
 	return request.kind
 }
 
-func (request Request) Origin() access.ClientOrigin {
+func (request Request) Origin() originidentity.ClientOrigin {
 	return request.origin
 }
 
@@ -170,7 +170,7 @@ func (request Request) probeTarget() offlinehold.ProbeTarget {
 		TargetRef:     request.origin.String(),
 		NetworkOrigin: request.origin.String(),
 		HTTPAuthority: request.origin.HTTPAuthority(),
-		TLSServerName: request.origin.TLSServerName(),
+		TLSServerName: request.origin.Host(),
 	}
 }
 

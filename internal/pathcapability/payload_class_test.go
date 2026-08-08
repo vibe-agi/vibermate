@@ -4,9 +4,9 @@ import (
 	"net/http"
 	"testing"
 
-	"github.com/vibe-agi/vibermate/internal/access"
 	"github.com/vibe-agi/vibermate/internal/operationcatalog"
 	"github.com/vibe-agi/vibermate/internal/pathcapability"
+	"github.com/vibe-agi/vibermate/internal/protocolspec"
 )
 
 func payloadClassCatalog(t *testing.T) *pathcapability.Catalog {
@@ -29,31 +29,31 @@ func TestClassifyCarriesTheCataloguedPayloadClass(t *testing.T) {
 	catalog := payloadClassCatalog(t)
 	for _, testCase := range []struct {
 		name     string
-		dialect  access.Dialect
+		dialect  protocolspec.Dialect
 		method   string
 		path     string
-		expected access.OperationPayloadClass
+		expected protocolspec.OperationPayloadClass
 	}{
 		{
 			name:     "Anthropic messages create",
-			dialect:  access.DialectAnthropicMessages,
+			dialect:  protocolspec.DialectAnthropicMessages,
 			method:   http.MethodPost,
 			path:     "/v1/messages",
-			expected: access.OperationPayloadClientSemantic,
+			expected: protocolspec.OperationPayloadClientSemantic,
 		},
 		{
 			name:     "Anthropic count tokens",
-			dialect:  access.DialectAnthropicMessages,
+			dialect:  protocolspec.DialectAnthropicMessages,
 			method:   http.MethodPost,
 			path:     "/v1/messages/count_tokens",
-			expected: access.OperationPayloadClientSemantic,
+			expected: protocolspec.OperationPayloadClientSemantic,
 		},
 		{
 			name:     "OpenAI responses create",
-			dialect:  access.DialectOpenAIResponses,
+			dialect:  protocolspec.DialectOpenAIResponses,
 			method:   http.MethodPost,
 			path:     "/v1/responses",
-			expected: access.OperationPayloadClientSemantic,
+			expected: protocolspec.OperationPayloadClientSemantic,
 		},
 	} {
 		t.Run(testCase.name, func(t *testing.T) {
@@ -87,7 +87,7 @@ func TestClassifyReportsUnknownPayloadClassForUncataloguedPaths(t *testing.T) {
 		http.MethodPost,
 	} {
 		capability, err := catalog.Classify(
-			access.DialectAnthropicMessages,
+			protocolspec.DialectAnthropicMessages,
 			method,
 			"/api/claude_code/not_catalogued",
 			"",
@@ -100,7 +100,7 @@ func TestClassifyReportsUnknownPayloadClassForUncataloguedPaths(t *testing.T) {
 			t.Fatalf("uncatalogued kind = %q", capability.Kind())
 		}
 		if got := capability.PayloadClass(); got !=
-			access.OperationPayloadUnknown {
+			protocolspec.OperationPayloadUnknown {
 			t.Fatalf("uncatalogued payload class = %q", got)
 		}
 		if capability.PayloadClass().AllowsOriginalOrigin() {

@@ -79,7 +79,7 @@ func TestManualCaptureCreateRotateAuthorizeRevokeAndReopen(t *testing.T) {
 	if err != nil {
 		t.Fatalf("create ManualCapture: %v", err)
 	}
-	if first.Capture.IngressProfileID != "manual-capture/"+first.Capture.ID ||
+	if first.Capture.AdmissionRef != "manual-capture/"+first.Capture.ID ||
 		first.Capture.CredentialRevision != 1 ||
 		first.Capture.Observation != manualcapture.ObservationWaiting {
 		t.Fatalf("created ManualCapture = %+v", first.Capture)

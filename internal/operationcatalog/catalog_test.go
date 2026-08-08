@@ -3,8 +3,8 @@ package operationcatalog_test
 import (
 	"testing"
 
-	"github.com/vibe-agi/vibermate/internal/access"
 	"github.com/vibe-agi/vibermate/internal/operationcatalog"
+	"github.com/vibe-agi/vibermate/internal/protocolspec"
 )
 
 func TestBuiltInCatalogHasExactResponsesCreateOperations(t *testing.T) {
@@ -15,7 +15,7 @@ func TestBuiltInCatalogHasExactResponsesCreateOperations(t *testing.T) {
 		t.Fatal(err)
 	}
 	identifiers := catalog.SemanticOperationIDs(
-		access.DialectOpenAIResponses,
+		protocolspec.DialectOpenAIResponses,
 	)
 	// Two exact create operations: the API-key entrypoint and the observed
 	// ChatGPT-login entrypoint. Both are exact paths; neither is a prefix.
@@ -36,12 +36,12 @@ func TestBuiltInCatalogHasExactResponsesCreateOperations(t *testing.T) {
 				continue
 			}
 			if definition.PathPattern() != path ||
-				definition.PathMatch() != access.ClientOperationPathExact {
+				definition.PathMatch() != protocolspec.ClientOperationPathExact {
 				t.Fatalf("Responses operation = %+v", definition)
 			}
 		}
 	}
-	var matched access.ClientOperationDefinition
+	var matched protocolspec.ClientOperationDefinition
 	for _, definition := range catalog.Definitions() {
 		if definition.ID().String() ==
 			operationcatalog.OpenAIResponsesCreateID {
@@ -49,11 +49,11 @@ func TestBuiltInCatalogHasExactResponsesCreateOperations(t *testing.T) {
 		}
 	}
 	if matched.PathPattern() != "/v1/responses" ||
-		matched.PathMatch() != access.ClientOperationPathExact ||
-		matched.Kind() != access.ClientOperationSemantic ||
-		matched.Transport() != access.ClientOperationTransportHTTP ||
+		matched.PathMatch() != protocolspec.ClientOperationPathExact ||
+		matched.Kind() != protocolspec.ClientOperationSemantic ||
+		matched.Transport() != protocolspec.ClientOperationTransportHTTP ||
 		matched.CodecFeature() != "responses" ||
-		matched.ReplayClass() != access.ClientReplayGenerationCostOnly ||
+		matched.ReplayClass() != protocolspec.ClientReplayGenerationCostOnly ||
 		!matched.EgressBearing() {
 		t.Fatalf("Responses operation = %+v", matched)
 	}
@@ -70,7 +70,7 @@ func TestBuiltInCatalogDeclaresResponsesWebSocketAsUnsupported(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	var matched access.ClientOperationDefinition
+	var matched protocolspec.ClientOperationDefinition
 	for _, definition := range catalog.Definitions() {
 		if definition.ID().String() ==
 			operationcatalog.OpenAIResponsesWebSocketUnsupportedID {
@@ -80,10 +80,10 @@ func TestBuiltInCatalogDeclaresResponsesWebSocketAsUnsupported(t *testing.T) {
 	}
 	methods := matched.Methods()
 	if matched.PathPattern() != "/v1/responses" ||
-		matched.PathMatch() != access.ClientOperationPathExact ||
-		matched.Kind() != access.ClientOperationUnsupported ||
-		matched.Transport() != access.ClientOperationTransportWebSocket ||
-		matched.BodyKind() != access.ClientOperationBodyNone ||
+		matched.PathMatch() != protocolspec.ClientOperationPathExact ||
+		matched.Kind() != protocolspec.ClientOperationUnsupported ||
+		matched.Transport() != protocolspec.ClientOperationTransportWebSocket ||
+		matched.BodyKind() != protocolspec.ClientOperationBodyNone ||
 		matched.EgressBearing() ||
 		len(methods) != 1 ||
 		methods[0] != "GET" {
@@ -99,7 +99,7 @@ func TestBuiltInCatalogDefinitionsAreImmutableValues(t *testing.T) {
 		t.Fatal(err)
 	}
 	first := catalog.Definitions()
-	first[0] = access.ClientOperationDefinition{}
+	first[0] = protocolspec.ClientOperationDefinition{}
 	second := catalog.Definitions()
 	if len(second) == 0 || second[0].ID().String() == "" {
 		t.Fatal("Definitions() exposed catalog slice ownership")

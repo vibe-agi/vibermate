@@ -14,9 +14,11 @@ import (
 	"testing"
 	"time"
 
-	"github.com/vibe-agi/vibermate/internal/access"
 	"github.com/vibe-agi/vibermate/internal/offlinehold"
+	"github.com/vibe-agi/vibermate/internal/providerauth"
+	"github.com/vibe-agi/vibermate/internal/secretstore"
 	"github.com/vibe-agi/vibermate/internal/transportprofile"
+	"github.com/vibe-agi/vibermate/internal/wireprofile"
 )
 
 func TestStrictTransportPreservesHTTP2AcrossTheProviderBoundary(t *testing.T) {
@@ -56,7 +58,7 @@ func TestStrictTransportPreservesHTTP2AcrossTheProviderBoundary(t *testing.T) {
 	server.EnableHTTP2 = true
 	server.TLS = &tls.Config{
 		MinVersion: tls.VersionTLS12,
-		NextProtos: []string{string(access.ApplicationProtocolHTTP2)},
+		NextProtos: []string{string(wireprofile.ApplicationProtocolHTTP2)},
 	}
 	server.StartTLS()
 	defer server.Close()
@@ -90,13 +92,13 @@ func TestStrictTransportPreservesHTTP2AcrossTheProviderBoundary(t *testing.T) {
 
 	observation := captureHTTP2ClientHello(t)
 	observation, err = observation.WithDownstreamNegotiatedALPN(
-		string(access.ApplicationProtocolHTTP2),
+		string(wireprofile.ApplicationProtocolHTTP2),
 	)
 	if err != nil {
 		t.Fatal(err)
 	}
-	plan := testRequestAccessPlan(t)
-	secretRef, err := access.NewSecretRef("secret://provider/account")
+	plan := testRequestPlan(t)
+	secretRef, err := secretstore.ParseReference("secret://provider/account")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -110,26 +112,26 @@ func TestStrictTransportPreservesHTTP2AcrossTheProviderBoundary(t *testing.T) {
 	t.Cleanup(action.Release)
 	port := listenerPort(t, server.Listener.Addr())
 	request, err := NewRequest(RequestOptions{
-		RequestID:        "strict-h2",
-		ExchangeID:       "exchange-strict-h2",
-		ParentAttemptID:  "attempt-strict-h2",
-		EgressAttemptID:  "egress-strict-h2",
-		TargetRef:        "target-strict-h2",
-		Target:           testTarget("example.com", port),
-		AccessRevision:   plan.Revision(),
-		PlanHash:         plan.PlanHash(),
-		Action:           action,
-		Method:           http.MethodPost,
-		RelativePath:     "chat/completions",
-		Headers:          http.Header{},
-		Body:             []byte(`{"input":"hello"}`),
-		CredentialSource: access.CredentialSourceManagedAccount,
-		SecretRef:        secretRef,
-		AuthDriverRef:    access.StaticHeaderAuthDriverRef(),
-		WireProfile:      plan.UpstreamWireProfile(),
-		ClientProtocol:   access.ApplicationProtocolHTTP2,
-		ClientUserAgent:  "h2-client/1.0",
-		ClientHello:      observation,
+		RequestID:       "strict-h2",
+		ExchangeID:      "exchange-strict-h2",
+		ParentAttemptID: "attempt-strict-h2",
+		EgressAttemptID: "egress-strict-h2",
+		TargetRef:       "target-strict-h2",
+		Target:          testTarget("example.com", port),
+		Provenance:      plan.provenance,
+		Action:          action,
+		Method:          http.MethodPost,
+		RelativePath:    "chat/completions",
+		Headers:         http.Header{},
+		Body:            []byte(`{"input":"hello"}`),
+		CredentialMode:  providerauth.CredentialManaged,
+		AccountRef:      testAccountRef(),
+		SecretRef:       secretRef,
+		AuthDriverRef:   providerauth.StaticHeaderDriverRef(),
+		WireProfile:     plan.wireProfile,
+		ClientProtocol:  wireprofile.ApplicationProtocolHTTP2,
+		ClientUserAgent: "h2-client/1.0",
+		ClientHello:     observation,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -171,9 +173,9 @@ func TestStrictTransportPreservesHTTP2AcrossTheProviderBoundary(t *testing.T) {
 	case <-time.After(time.Second):
 		t.Fatal("provider did not observe the HTTP/2 request")
 	}
-	if evidence.Presentation.ClientProtocol != access.ApplicationProtocolHTTP2 ||
-		evidence.Presentation.UpstreamProtocol != access.ApplicationProtocolHTTP2 ||
-		evidence.Transport.HTTPTransport() != access.HTTPTransportHTTP2 ||
+	if evidence.Presentation.ClientProtocol != wireprofile.ApplicationProtocolHTTP2 ||
+		evidence.Presentation.UpstreamProtocol != wireprofile.ApplicationProtocolHTTP2 ||
+		evidence.Transport.HTTPTransport() != wireprofile.HTTPTransportHTTP2 ||
 		evidence.Transport.DownstreamNegotiatedALPN() != "h2" ||
 		!slices.Equal(
 			evidence.Transport.ClientOfferedALPN(),
@@ -197,8 +199,8 @@ func captureHTTP2ClientHello(t *testing.T) transportprofile.Observation {
 			MinVersion: tls.VersionTLS12,
 			ServerName: "client.example",
 			NextProtos: []string{
-				string(access.ApplicationProtocolHTTP2),
-				string(access.ApplicationProtocolHTTP1),
+				string(wireprofile.ApplicationProtocolHTTP2),
+				string(wireprofile.ApplicationProtocolHTTP1),
 			},
 		})
 		clientDone <- secured.Handshake()

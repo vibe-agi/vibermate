@@ -14,25 +14,18 @@ const NAVIGATION_STATE_SCHEMA: &str = "vibermate-navigation-state-v1";
 const NAVIGATION_STATE_FILE: &str = "navigation-state-v1.json";
 const MAXIMUM_LOCATOR_BYTES: usize = 2_048;
 const MAXIMUM_STATE_BYTES: usize = 4_096;
-const MAXIMUM_ACCESS_ID_BYTES: usize = 128;
 const MAXIMUM_ENTITY_ID_BYTES: usize = 512;
 
 const STATIC_LOCATORS: &[&str] = &[
-    "overview",
-    "dashboards",
-    "dashboards/system",
-    "access",
-    "activity",
+    "captures",
+    "captures/requests",
+    "environments",
+    "accounts",
+    "extensions",
+    "policies/approvals",
     "activity/requests",
     "quality",
-    "quality/sites",
-    "extensions",
-    "extensions/discover",
-    "extensions/installed",
-    "extensions/develop",
-    "policies/approvals",
     "settings",
-    "settings/recovery",
 ];
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Eq, Serialize)]
@@ -323,16 +316,25 @@ fn valid_navigation_path(path: &str) -> bool {
     }
     let segments: Vec<&str> = path.split('/').collect();
     match segments.as_slice() {
-        ["access", access_id, "routing"] => {
-            decode_safe_value(access_id, MAXIMUM_ACCESS_ID_BYTES).is_some()
+        ["captures", capture_key]
+        | ["activity", "requests", capture_key]
+        | ["environments", capture_key] => {
+            decode_safe_value(capture_key, MAXIMUM_ENTITY_ID_BYTES).is_some()
         }
-        ["activity", "requests", exchange_id]
-        | ["extensions", "detail", exchange_id]
-        | ["dashboards", "extensions", exchange_id] => {
-            decode_safe_value(exchange_id, MAXIMUM_ENTITY_ID_BYTES).is_some()
+        ["environments", environment_id, "revisions", revision] => {
+            decode_safe_value(environment_id, MAXIMUM_ENTITY_ID_BYTES).is_some()
+                && valid_positive_revision(revision)
         }
         _ => false,
     }
+}
+
+fn valid_positive_revision(value: &str) -> bool {
+    value
+        .as_bytes()
+        .first()
+        .is_some_and(|first| *first >= b'1' && *first <= b'9')
+        && value.as_bytes().iter().all(u8::is_ascii_digit)
 }
 
 fn decode_safe_value(raw: &str, maximum_bytes: usize) -> Option<String> {
@@ -454,35 +456,35 @@ mod tests {
     #[test]
     fn canonical_icm_and_top_level_locators_are_closed() {
         for locator in [
-            "overview",
-            "access",
-            "access/claude/routing",
+            "captures",
+            "captures/manual%3Aclaude",
+            "captures/requests",
             "activity/requests/ex204",
-            "extensions/discover",
-            "extensions/installed",
-            "extensions/detail/prompt-polish",
-            "quality/sites",
-            "dashboards/system",
-            "activity/requests",
+            "environments",
+            "environments/work",
+            "environments/work/revisions/3",
+            "accounts",
+            "extensions",
             "policies/approvals",
             "policies/approvals?selected=approval-network-sample",
-            "settings/recovery",
-            "extensions/develop",
-            "dashboards/extensions/agent-actions",
+            "quality",
+            "settings",
         ] {
             assert!(valid_navigation_locator(locator), "{locator}");
         }
         for locator in [
             "",
-            "/overview",
+            "/captures",
             "policy",
-            "access/%20unsafe%20/routing",
-            "access/%2F/routing",
-            "access/%E0%A4%A/routing",
-            "extensions/discover?selected=not-allowed",
+            "access/claude/routing",
+            "captures/%2F",
+            "captures/%E0%A4%A",
+            "environments/work/revisions/0",
+            "environments/work/revisions/latest",
+            "extensions?selected=not-allowed",
             "policies/approvals?selected=one&selected=two",
             "policies/approvals?selected=secret%3A%2F%2Fprovider%2Fwork",
-            "overview#nested",
+            "captures#nested",
         ] {
             assert!(!valid_navigation_locator(locator), "{locator}");
         }
@@ -536,7 +538,7 @@ mod tests {
         let directory = TestDirectory::new();
         let store = directory.store();
         store
-            .save(&navigation("overview"))
+            .save(&navigation("captures"))
             .expect("save initial state");
         let state_path = store.directory.join(NAVIGATION_STATE_FILE);
         let future_state =
@@ -547,7 +549,7 @@ mod tests {
             .expect("restore private test mode");
 
         assert_eq!(store.load().expect("ignore future state"), None);
-        assert!(store.save(&navigation("settings/recovery")).is_err());
+        assert!(store.save(&navigation("settings")).is_err());
         assert_eq!(
             fs::read(&state_path).expect("read preserved future state"),
             future_state,
@@ -563,11 +565,11 @@ mod tests {
             .expect("restore private test mode");
         assert_eq!(store.load().expect("ignore corrupt current state"), None);
         store
-            .save(&navigation("settings/recovery"))
+            .save(&navigation("settings"))
             .expect("repair corrupt current state");
         assert_eq!(
             store.load().expect("load repaired state"),
-            Some(navigation("settings/recovery")),
+            Some(navigation("settings")),
         );
     }
 
@@ -576,44 +578,41 @@ mod tests {
         let directory = TestDirectory::new();
         let store = directory.store();
         store
-            .save(&navigation("activity"))
+            .save(&navigation("captures"))
             .expect("save state before close");
 
-        assert_eq!(
-            store.close_with_fragment(Some("settings/recovery")),
-            Ok(true),
-        );
+        assert_eq!(store.close_with_fragment(Some("settings")), Ok(true));
         assert_eq!(
             store.load().expect("load close-flushed state"),
-            Some(navigation("settings/recovery")),
+            Some(navigation("settings")),
         );
         assert!(store.save(&navigation("activity/requests/ex204")).is_err());
         assert_eq!(
             store.load().expect("load state after refused late write"),
-            Some(navigation("settings/recovery")),
+            Some(navigation("settings")),
         );
-        assert_eq!(store.close_with_fragment(Some("overview")), Ok(false));
+        assert_eq!(store.close_with_fragment(Some("captures")), Ok(false));
     }
 
     #[test]
     fn unsafe_close_fragment_is_refused_without_replacing_safe_state() {
         for unsafe_fragment in [
             "not-a-real-route",
-            "overview?body=prompt-text",
+            "captures?body=prompt-text",
             "policies/approvals?selected=secret%3A%2F%2Fprovider%2Fwork",
             "activity/requests/ex204?session=capability",
         ] {
             let directory = TestDirectory::new();
             let store = directory.store();
             store
-                .save(&navigation("overview"))
+                .save(&navigation("captures"))
                 .expect("save safe state before close");
 
             assert_eq!(store.close_with_fragment(Some(unsafe_fragment)), Ok(false));
-            assert!(store.save(&navigation("activity")).is_err());
+            assert!(store.save(&navigation("environments")).is_err());
             assert_eq!(
                 store.load().expect("load preserved safe state"),
-                Some(navigation("overview")),
+                Some(navigation("captures")),
                 "{unsafe_fragment}",
             );
         }
@@ -627,7 +626,7 @@ mod tests {
         let directory = TestDirectory::new();
         let store = directory.store();
         store
-            .save(&navigation("overview"))
+            .save(&navigation("captures"))
             .expect("create private store");
         let state_path = store.directory.join(NAVIGATION_STATE_FILE);
         let outside = directory.0.join("outside.json");
@@ -636,23 +635,23 @@ mod tests {
         symlink(&outside, &state_path).expect("install test symlink");
 
         assert_eq!(store.load().expect("ignore symlink"), None);
-        assert!(store.save(&navigation("activity")).is_err());
+        assert!(store.save(&navigation("environments")).is_err());
         assert_eq!(
             fs::read_to_string(&outside).expect("read outside sentinel"),
             "do not replace",
         );
         fs::remove_file(&state_path).expect("remove test symlink");
         store
-            .save(&navigation("activity"))
+            .save(&navigation("environments"))
             .expect("save after removing symlink");
         assert_eq!(
             store.load().expect("load safe state"),
-            Some(navigation("activity")),
+            Some(navigation("environments")),
         );
 
         fs::set_permissions(&state_path, fs::Permissions::from_mode(0o644))
             .expect("make test state non-private");
         assert_eq!(store.load().expect("ignore non-private state"), None);
-        assert!(store.save(&navigation("overview")).is_err());
+        assert!(store.save(&navigation("captures")).is_err());
     }
 }

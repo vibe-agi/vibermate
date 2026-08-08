@@ -27,6 +27,13 @@ var (
 	jsxStaticUserAttributeRE = regexp.MustCompile(
 		`\b(?:alt|aria-label|placeholder|title)\s*=\s*["']([^"']+)["']`,
 	)
+	retiredProductAuthorityRE = regexp.MustCompile(
+		`\b(?:AccessID|ProfileID|AccessPlan|AccessBinding|EndpointProfile|` +
+			`AccessWriter|AccessCatalog|AccessDeletion)\b|` +
+			`internal/access(?:/|")|` +
+			`\b(?:accessId|profileId|access_id|profile_id|workspace_route)\b|` +
+			`/api/v1/accesses\b|workspace-route-bindings\b|\bAI Access\b`,
+	)
 )
 
 // Violation is one deterministic repository policy failure.
@@ -50,7 +57,8 @@ func Check(repositoryRoot string) error {
 	violations = append(violations, CheckProductionEnglish(repositoryRoot)...)
 	violations = append(violations, CheckProtocolSDKIsolation(repositoryRoot)...)
 	violations = append(violations, CheckExternalEgressGate(repositoryRoot)...)
-	violations = append(violations, CheckDataPlaneAccessBoundary(repositoryRoot)...)
+	violations = append(violations, CheckDataPlaneEnvironmentBoundary(repositoryRoot)...)
+	violations = append(violations, CheckRetiredProductAuthority(repositoryRoot)...)
 	violations = append(violations, CheckDesktopFrontendBoundary(repositoryRoot)...)
 	violations = append(violations, CheckSystemTrustBoundary(repositoryRoot)...)
 	violations = append(violations, CheckSignerIdentityBoundary(repositoryRoot)...)
@@ -82,6 +90,104 @@ func Check(repositoryRoot string) error {
 		joined = append(joined, errors.New(violation.String()))
 	}
 	return errors.Join(joined...)
+}
+
+// CheckRetiredProductAuthority prevents the deleted Access/Profile product
+// model from re-entering current production source, wire contracts, UI, or
+// authority documentation. Historical evidence and tests may still name the
+// retired model when explaining or attacking a migration; they are
+// intentionally outside this source-shape gate.
+func CheckRetiredProductAuthority(repositoryRoot string) []Violation {
+	const rule = "retired-product-authority"
+	currentFiles := map[string]struct{}{
+		"README.md":                {},
+		"PLAN.md":                  {},
+		"docs/m0-acceptance.md":    {},
+		"docs/module-map.md":       {},
+		"api/control.openapi.yaml": {},
+		"locales/en-US.json":       {},
+		"locales/zh-CN.json":       {},
+	}
+	productionRoots := []string{"cmd", "internal", "ui/desktop/src"}
+	var violations []Violation
+	scan := func(path, relative string) error {
+		if relative == "internal/repositorycheck/check.go" ||
+			strings.HasSuffix(relative, "_test.go") {
+			return nil
+		}
+		file, err := os.Open(path)
+		if err != nil {
+			return err
+		}
+		defer file.Close()
+		scanner := bufio.NewScanner(file)
+		scanner.Buffer(make([]byte, 64*1024), 2*1024*1024)
+		lineNumber := 0
+		for scanner.Scan() {
+			lineNumber++
+			match := retiredProductAuthorityRE.FindString(scanner.Text())
+			if match == "" {
+				continue
+			}
+			violations = append(violations, Violation{
+				Rule:    rule,
+				Path:    filepath.FromSlash(relative),
+				Line:    lineNumber,
+				Message: fmt.Sprintf("retired product authority %q entered a current surface", match),
+			})
+		}
+		return scanner.Err()
+	}
+	for relative := range currentFiles {
+		path := filepath.Join(repositoryRoot, filepath.FromSlash(relative))
+		if _, err := os.Stat(path); errors.Is(err, os.ErrNotExist) {
+			continue
+		}
+		if err := scan(path, relative); err != nil {
+			violations = append(violations, Violation{
+				Rule: rule, Path: filepath.FromSlash(relative), Message: err.Error(),
+			})
+		}
+	}
+	for _, relativeRoot := range productionRoots {
+		root := filepath.Join(repositoryRoot, filepath.FromSlash(relativeRoot))
+		if _, err := os.Stat(root); errors.Is(err, os.ErrNotExist) {
+			continue
+		}
+		walkErr := filepath.WalkDir(root, func(
+			path string,
+			entry fs.DirEntry,
+			err error,
+		) error {
+			if err != nil {
+				return err
+			}
+			if entry.IsDir() {
+				switch entry.Name() {
+				case "generated", "node_modules", "target", "testdata", "vendor":
+					return filepath.SkipDir
+				default:
+					return nil
+				}
+			}
+			extension := filepath.Ext(path)
+			if extension != ".go" && extension != ".ts" && extension != ".tsx" &&
+				extension != ".json" && extension != ".sql" {
+				return nil
+			}
+			relative, relativeErr := filepath.Rel(repositoryRoot, path)
+			if relativeErr != nil {
+				return relativeErr
+			}
+			return scan(path, filepath.ToSlash(relative))
+		})
+		if walkErr != nil {
+			violations = append(violations, Violation{
+				Rule: rule, Path: filepath.FromSlash(relativeRoot), Message: walkErr.Error(),
+			})
+		}
+	}
+	return violations
 }
 
 // CheckIdentityComposition rejects building one identity by joining another
@@ -644,23 +750,37 @@ func containsLetter(value string) bool {
 	return false
 }
 
-// CheckDataPlaneAccessBoundary keeps the Exchange hot path on the immutable
-// SnapshotResolver boundary. It rejects persistence access and Access mutation
-// contracts from the production package that now executes provider requests.
-func CheckDataPlaneAccessBoundary(repositoryRoot string) []Violation {
+// CheckDataPlaneEnvironmentBoundary keeps the Exchange hot path on immutable
+// request-plan contracts. Configuration mutation, projection ownership, and
+// persistence remain outside the package that executes provider requests.
+func CheckDataPlaneEnvironmentBoundary(repositoryRoot string) []Violation {
 	sourceRoot := filepath.Join(repositoryRoot, "internal", "exchange")
 	if _, err := os.Stat(sourceRoot); errors.Is(err, os.ErrNotExist) {
 		return nil
 	}
-	const accessImport = "github.com/vibe-agi/vibermate/internal/access"
+	const environmentImport = "github.com/vibe-agi/vibermate/internal/environment"
 	const persistenceImport = "github.com/vibe-agi/vibermate/internal/runtimepersistence"
-	blockedAccessSymbols := map[string]struct{}{
-		"Manager":            {},
-		"Repository":         {},
-		"SnapshotProjection": {},
-		"WriteCommand":       {},
-		"WriteResult":        {},
-		"Writer":             {},
+	allowedEnvironmentSymbols := map[string]struct{}{
+		"AccountModeClientPassthrough": {},
+		"AccountModeManaged":           {},
+		"CandidateDigest":              {},
+		"ClientEndpointID":             {},
+		"ClientProtocolPlanID":         {},
+		"CompiledAccountPolicy":        {},
+		"CompiledAccountReference":     {},
+		"EnvironmentID":                {},
+		"FailoverAccountScopedSafe":    {},
+		"FailoverOff":                  {},
+		"FailoverPolicy":               {},
+		"MaxRevision":                  {},
+		"NewClientEndpointID":          {},
+		"NewClientProtocolPlanID":      {},
+		"NewEnvironmentID":             {},
+		"NewUpstreamRouteID":           {},
+		"ParseCandidateDigest":         {},
+		"RequestPlan":                  {},
+		"Revision":                     {},
+		"UpstreamRouteID":              {},
 	}
 	var violations []Violation
 	walkErr := filepath.WalkDir(sourceRoot, func(
@@ -686,36 +806,36 @@ func CheckDataPlaneAccessBoundary(repositoryRoot string) []Violation {
 			return parseErr
 		}
 		relative := relativeDisplayPath(repositoryRoot, path)
-		accessNames := make(map[string]struct{})
+		environmentNames := make(map[string]struct{})
 		for _, imported := range parsed.Imports {
 			importPath := strings.Trim(imported.Path.Value, `"`)
 			if importPath == persistenceImport {
 				position := fileSet.Position(imported.Pos())
 				violations = append(violations, Violation{
-					Rule:    "data-plane-access-boundary",
+					Rule:    "data-plane-environment-boundary",
 					Path:    relative,
 					Line:    position.Line,
 					Message: "Exchange hot path cannot import runtime persistence",
 				})
 			}
-			if importPath != accessImport {
+			if importPath != environmentImport {
 				continue
 			}
-			name := "access"
+			name := "environment"
 			if imported.Name != nil {
 				if imported.Name.Name == "." || imported.Name.Name == "_" {
 					position := fileSet.Position(imported.Pos())
 					violations = append(violations, Violation{
-						Rule:    "data-plane-access-boundary",
+						Rule:    "data-plane-environment-boundary",
 						Path:    relative,
 						Line:    position.Line,
-						Message: "Access contracts must use a named import",
+						Message: "Environment contracts must use a named import",
 					})
 					continue
 				}
 				name = imported.Name.Name
 			}
-			accessNames[name] = struct{}{}
+			environmentNames[name] = struct{}{}
 		}
 		ast.Inspect(parsed, func(node ast.Node) bool {
 			selector, ok := node.(*ast.SelectorExpr)
@@ -726,19 +846,19 @@ func CheckDataPlaneAccessBoundary(repositoryRoot string) []Violation {
 			if !ok {
 				return true
 			}
-			if _, imported := accessNames[identifier.Name]; !imported {
+			if _, imported := environmentNames[identifier.Name]; !imported {
 				return true
 			}
-			if _, blocked := blockedAccessSymbols[selector.Sel.Name]; !blocked {
+			if _, allowed := allowedEnvironmentSymbols[selector.Sel.Name]; allowed {
 				return true
 			}
 			position := fileSet.Position(selector.Pos())
 			violations = append(violations, Violation{
-				Rule: "data-plane-access-boundary",
+				Rule: "data-plane-environment-boundary",
 				Path: relative,
 				Line: position.Line,
 				Message: fmt.Sprintf(
-					"Exchange hot path cannot use Access mutation symbol %s.%s",
+					"Exchange hot path cannot use Environment authority symbol %s.%s",
 					identifier.Name,
 					selector.Sel.Name,
 				),
@@ -749,7 +869,7 @@ func CheckDataPlaneAccessBoundary(repositoryRoot string) []Violation {
 	})
 	if walkErr != nil {
 		violations = append(violations, Violation{
-			Rule:    "data-plane-access-boundary",
+			Rule:    "data-plane-environment-boundary",
 			Path:    filepath.Join("internal", "exchange"),
 			Message: walkErr.Error(),
 		})

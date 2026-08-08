@@ -82,6 +82,9 @@ func TestDaemonInvocationPinsPackagedWebviewOrigin(t *testing.T) {
 	) {
 		t.Fatalf("daemon arguments enabled development origin = %v", arguments)
 	}
+	if !slices.Contains(arguments, "--parent-lifetime-fd=0") {
+		t.Fatalf("daemon arguments omit parent ownership = %v", arguments)
+	}
 }
 
 func TestDecodeDescriptorAcceptsOnlyClosedStartupFailure(t *testing.T) {

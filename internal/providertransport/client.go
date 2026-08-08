@@ -11,10 +11,11 @@ import (
 	"sync"
 	"time"
 
-	"github.com/vibe-agi/vibermate/internal/access"
 	"github.com/vibe-agi/vibermate/internal/egressaudit"
 	"github.com/vibe-agi/vibermate/internal/offlinehold"
+	"github.com/vibe-agi/vibermate/internal/providerauth"
 	"github.com/vibe-agi/vibermate/internal/transportprofile"
+	"github.com/vibe-agi/vibermate/internal/wireprofile"
 )
 
 var (
@@ -93,7 +94,7 @@ type Client struct {
 	mu sync.Mutex
 
 	coordinator    offlinehold.Coordinator
-	authenticators map[access.AuthDriverRef]Authenticator
+	authenticators map[providerauth.DriverRef]Authenticator
 	transport      Transport
 	audit          egressaudit.Writer
 	clock          func() time.Time
@@ -114,7 +115,7 @@ func NewClient(options ClientOptions) (*Client, error) {
 	if len(authenticators) == 0 {
 		return nil, errors.New("provider client has no authenticators")
 	}
-	byRef := make(map[access.AuthDriverRef]Authenticator, len(authenticators))
+	byRef := make(map[providerauth.DriverRef]Authenticator, len(authenticators))
 	for _, authenticator := range authenticators {
 		if authenticator == nil || authenticator.Ref().String() == "" {
 			return nil, errors.New("provider client authenticator is invalid")
@@ -185,7 +186,7 @@ func (client *Client) Do(
 		return nil, Evidence{}, err
 	}
 	var authenticator Authenticator
-	if frozen.credentialSource == access.CredentialSourceManagedAccount {
+	if frozen.credentialMode == providerauth.CredentialManaged {
 		var supported bool
 		authenticator, supported = client.authenticators[frozen.authDriverRef]
 		if !supported {
@@ -193,8 +194,8 @@ func (client *Client) Do(
 				"provider AuthDriver does not match the frozen plan",
 			)
 		}
-	} else if frozen.credentialSource !=
-		access.CredentialSourceClientPassthrough {
+	} else if frozen.credentialMode !=
+		providerauth.CredentialClientPassthrough {
 		return nil, Evidence{}, errors.New(
 			"provider credential source does not match the frozen plan",
 		)
@@ -236,12 +237,12 @@ func (client *Client) Do(
 	if err != nil {
 		return nil, Evidence{}, err
 	}
-	request.Host = frozen.target.httpAuthority
+	request.Host = frozen.target.HTTPAuthority()
 	request.Header = prepareProviderHeaders(
 		frozen.headers,
-		frozen.credentialSource,
+		frozen.credentialMode,
 	)
-	if frozen.credentialSource == access.CredentialSourceManagedAccount {
+	if frozen.credentialMode == providerauth.CredentialManaged {
 		request.Header.Set("Content-Type", "application/json")
 	}
 	request.ContentLength = int64(len(frozen.body))
@@ -254,7 +255,7 @@ func (client *Client) Do(
 	}
 
 	evidence := CredentialEvidence{
-		DriverRef:  string(frozen.credentialSource),
+		DriverRef:  string(frozen.credentialMode),
 		SecretRead: false,
 	}
 	if authenticator != nil {
@@ -423,7 +424,7 @@ func (client *Client) signalLocked() {
 
 func prepareProviderHeaders(
 	source http.Header,
-	credentialSource access.CredentialSource,
+	credentialMode providerauth.CredentialMode,
 ) http.Header {
 	headers := source.Clone()
 	if headers == nil {
@@ -451,10 +452,10 @@ func prepareProviderHeaders(
 	} {
 		headers.Del(name)
 	}
-	switch credentialSource {
-	case access.CredentialSourceManagedAccount:
+	switch credentialMode {
+	case providerauth.CredentialManaged:
 		stripProviderCredentialHeaders(headers)
-	case access.CredentialSourceClientPassthrough:
+	case providerauth.CredentialClientPassthrough:
 		// User-Agent is carried as a separately validated presentation field.
 		// Removing it here prevents the raw header bag from becoming a second
 		// authority while preserving the exact observed value below.
@@ -467,7 +468,7 @@ func prepareProviderHeaders(
 
 func applyUpstreamWireHeaders(
 	headers http.Header,
-	variant access.CompiledUpstreamWireVariant,
+	variant wireprofile.CompiledUpstreamWireVariant,
 	clientUserAgent string,
 ) error {
 	if headers == nil {
@@ -478,17 +479,17 @@ func applyUpstreamWireHeaders(
 		return errors.New("provider codec conflicts with the upstream User-Agent policy")
 	}
 	switch variant.UserAgentPolicy() {
-	case access.UserAgentPolicyOmit:
+	case wireprofile.UserAgentPolicyOmit:
 		// net/http otherwise synthesizes its own default value when the key is
 		// absent. A present nil slice is the explicit wire-level omission.
 		headers["User-Agent"] = nil
-	case access.UserAgentPolicyFollowClient:
+	case wireprofile.UserAgentPolicyFollowClient:
 		if clientUserAgent == "" {
 			headers["User-Agent"] = nil
 		} else {
 			headers["User-Agent"] = []string{clientUserAgent}
 		}
-	case access.UserAgentPolicyConstant:
+	case wireprofile.UserAgentPolicyConstant:
 		if variant.SemanticUserAgent() == "" {
 			return errors.New("upstream User-Agent profile is incomplete")
 		}
@@ -502,7 +503,7 @@ func applyUpstreamWireHeaders(
 
 func validateUpstreamWireHeaders(
 	headers http.Header,
-	variant access.CompiledUpstreamWireVariant,
+	variant wireprofile.CompiledUpstreamWireVariant,
 	clientUserAgent string,
 ) error {
 	values, keys := headerValuesFold(headers, "User-Agent")
@@ -510,11 +511,11 @@ func validateUpstreamWireHeaders(
 		return errors.New("AuthDriver changed the upstream User-Agent identity")
 	}
 	switch variant.UserAgentPolicy() {
-	case access.UserAgentPolicyOmit:
+	case wireprofile.UserAgentPolicyOmit:
 		if len(values) != 0 {
 			return errors.New("AuthDriver changed the upstream User-Agent identity")
 		}
-	case access.UserAgentPolicyFollowClient:
+	case wireprofile.UserAgentPolicyFollowClient:
 		if clientUserAgent == "" {
 			if len(values) != 0 {
 				return errors.New("AuthDriver changed the upstream User-Agent identity")
@@ -522,7 +523,7 @@ func validateUpstreamWireHeaders(
 		} else if len(values) != 1 || values[0] != clientUserAgent {
 			return errors.New("AuthDriver changed the upstream User-Agent identity")
 		}
-	case access.UserAgentPolicyConstant:
+	case wireprofile.UserAgentPolicyConstant:
 		if len(values) != 1 || values[0] != variant.SemanticUserAgent() {
 			return errors.New("AuthDriver changed the upstream User-Agent identity")
 		}
@@ -618,11 +619,9 @@ func (client *Client) beginAudit(
 			ExchangeID: frozen.exchangeID,
 		},
 		Caller:       egressaudit.CallerCore,
-		TargetOrigin: frozen.target.origin,
-		Decision: egressaudit.BuiltInDirectDecision(
-			egressaudit.AuthorityAccess,
-		),
-		StartedAt: client.clock(),
+		TargetOrigin: frozen.target.origin.String(),
+		Decision:     providerEgressDecision(),
+		StartedAt:    client.clock(),
 	})
 	if err != nil {
 		return egressaudit.Attempt{}, fmt.Errorf(
@@ -637,6 +636,14 @@ func (client *Client) beginAudit(
 		)
 	}
 	return attempt, nil
+}
+
+func providerEgressDecision() egressaudit.DecisionRef {
+	authority, err := egressaudit.AuthorityForPurpose(egressaudit.PurposeProviderAttempt)
+	if err != nil {
+		return egressaudit.DecisionRef{}
+	}
+	return egressaudit.BuiltInDirectDecision(authority)
 }
 
 func (client *Client) completeAudit(

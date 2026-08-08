@@ -14,8 +14,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/vibe-agi/vibermate/internal/access"
 	"github.com/vibe-agi/vibermate/internal/offlinehold"
+	"github.com/vibe-agi/vibermate/internal/originidentity"
 )
 
 func TestProbeEndpointAuthorityAddsDefaultTLSPort(t *testing.T) {
@@ -28,6 +28,30 @@ func TestProbeEndpointAuthorityAddsDefaultTLSPort(t *testing.T) {
 	}
 	if authority != "example.com:443" {
 		t.Fatalf("endpoint authority = %q", authority)
+	}
+}
+
+func TestProviderProbeRejectsIncompletePlanIdentity(t *testing.T) {
+	t.Parallel()
+
+	missingDigest := frozenProviderProbeTarget(
+		t,
+		"target-test",
+		testTarget("example.com", 443),
+	)
+	missingDigest.PlanDigest = ""
+	if _, err := targetFromProbe(missingDigest); err == nil {
+		t.Fatal("provider probe accepted a plan revision without its digest")
+	}
+
+	missingRevision := frozenProviderProbeTarget(
+		t,
+		"target-test",
+		testTarget("example.com", 443),
+	)
+	missingRevision.PlanRevision = 0
+	if _, err := targetFromProbe(missingRevision); err == nil {
+		t.Fatal("provider probe accepted a plan digest without its revision")
 	}
 }
 
@@ -142,7 +166,7 @@ func TestLoopbackProbeUsesExactFrozenPeerWithoutHTTP(t *testing.T) {
 	t.Parallel()
 
 	listener := newLoopbackProbeListener(t)
-	origin, err := access.NewProviderOrigin(
+	origin, err := originidentity.ParseProviderOrigin(
 		"http://" + listener.Addr().String() + "/v1",
 	)
 	if err != nil {
@@ -170,7 +194,7 @@ func TestLoopbackProbeRejectsChangedPeer(t *testing.T) {
 
 	expected := newLoopbackProbeListener(t)
 	actual := newLoopbackProbeListener(t)
-	origin, err := access.NewProviderOrigin(
+	origin, err := originidentity.ParseProviderOrigin(
 		"http://" + expected.Addr().String() + "/v1",
 	)
 	if err != nil {
@@ -248,8 +272,7 @@ func frozenProviderProbeTarget(
 	t.Helper()
 	frozen, err := NewProbeTarget(
 		reference,
-		1,
-		access.PlanHash{1},
+		testRequestProvenance(t),
 		target,
 	)
 	if err != nil {

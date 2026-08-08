@@ -1,4 +1,4 @@
-import { dashboardRoutePaths, dashboardTaskRoutePaths } from "./navigation.ts";
+import { dashboardRoutePaths } from "./navigation.ts";
 
 export const navigationStateSchema = "vibermate-navigation-state-v1";
 
@@ -13,47 +13,34 @@ export interface DashboardLocationSnapshot {
 }
 
 const maximumLocatorBytes = 2_048;
-const maximumAccessIdBytes = 128;
 const maximumEntityIdBytes = 512;
-const unsafeValue = /[\/\\\p{Cc}]/u;
+const unsafeValue = /[\\/\\\p{Cc}]/u;
 
-const staticPaths = new Set(
-  [
-    ...Object.values(dashboardRoutePaths),
-    ...Object.values(dashboardTaskRoutePaths),
-  ]
-    .filter((path) => !path.includes("$"))
-    .map((path) => path.slice(1)),
-);
+const staticPaths = new Set([
+  ...Object.values(dashboardRoutePaths).map((path) => path.slice(1)),
+  "captures/requests",
+]);
 
-const dynamicPaths = [
-  [dashboardTaskRoutePaths.accessRouting, maximumAccessIdBytes],
-  [dashboardTaskRoutePaths.activityRun, maximumEntityIdBytes],
-  [dashboardTaskRoutePaths.activityRequest, maximumEntityIdBytes],
-  [dashboardTaskRoutePaths.extensionDetail, maximumEntityIdBytes],
-  [dashboardTaskRoutePaths.dashboardExtension, maximumEntityIdBytes],
+const dynamicPatterns = [
+  ["captures", maximumEntityIdBytes],
+  ["activity/requests", maximumEntityIdBytes],
+  ["environments", maximumEntityIdBytes],
 ] as const;
 
-function decodeSafeValue(
-  raw: string,
-  maximumBytes: number,
-): string | undefined {
-  let decoded: string;
+function decodeSafeValue(raw: string, maximumBytes: number): boolean {
+  let value: string;
   try {
-    decoded = decodeURIComponent(raw);
+    value = decodeURIComponent(raw);
   } catch {
-    return undefined;
+    return false;
   }
-  if (
-    decoded.length === 0 ||
-    decoded.trim() !== decoded ||
-    decoded.toLocaleLowerCase("en-US").startsWith("secret:") ||
-    unsafeValue.test(decoded) ||
-    new TextEncoder().encode(decoded).length > maximumBytes
-  ) {
-    return undefined;
-  }
-  return decoded;
+  return (
+    value.length > 0 &&
+    value.trim() === value &&
+    !value.toLocaleLowerCase("en-US").startsWith("secret:") &&
+    !unsafeValue.test(value) &&
+    new TextEncoder().encode(value).length <= maximumBytes
+  );
 }
 
 function validPath(path: string): boolean {
@@ -61,22 +48,24 @@ function validPath(path: string): boolean {
     return true;
   }
   const segments = path.split("/");
-  return dynamicPaths.some(([pattern, maximumBytes]) => {
-    const patternSegments = pattern.slice(1).split("/");
-    if (segments.length !== patternSegments.length) {
+  if (
+    segments.length === 4 &&
+    segments[0] === "environments" &&
+    segments[2] === "revisions"
+  ) {
+    return (
+      decodeSafeValue(segments[1] ?? "", maximumEntityIdBytes) &&
+      /^[1-9][0-9]*$/u.test(segments[3] ?? "")
+    );
+  }
+  return dynamicPatterns.some(([prefix, maximumBytes]) => {
+    const prefixSegments = prefix.split("/");
+    if (segments.length !== prefixSegments.length + 1) {
       return false;
     }
-    let locator: string | undefined;
-    for (const [index, patternSegment] of patternSegments.entries()) {
-      if (patternSegment.startsWith("$")) {
-        locator = segments[index];
-      } else if (segments[index] !== patternSegment) {
-        return false;
-      }
-    }
     return (
-      locator !== undefined &&
-      decodeSafeValue(locator, maximumBytes) !== undefined
+      prefixSegments.every((part, index) => segments[index] === part) &&
+      decodeSafeValue(segments.at(-1) ?? "", maximumBytes)
     );
   });
 }
@@ -85,9 +74,9 @@ function validPolicySearch(search: string): boolean {
   if (!search.startsWith("selected=") || search.includes("&")) {
     return false;
   }
-  return (
-    decodeSafeValue(search.slice("selected=".length), maximumEntityIdBytes) !==
-    undefined
+  return decodeSafeValue(
+    search.slice("selected=".length),
+    maximumEntityIdBytes,
   );
 }
 

@@ -12,6 +12,7 @@ import (
 
 	"github.com/vibe-agi/vibermate/internal/capturegrant"
 	"github.com/vibe-agi/vibermate/internal/controlprincipal"
+	"github.com/vibe-agi/vibermate/internal/environment"
 	"github.com/vibe-agi/vibermate/internal/manualcapture"
 )
 
@@ -21,6 +22,7 @@ type ManualCaptureAuthority interface {
 	GetManualCaptureContext(
 		context.Context,
 		controlprincipal.Principal,
+		environment.EnvironmentID,
 	) (capturegrant.ManualCaptureContext, error)
 	IssueManualCapture(
 		context.Context,
@@ -58,6 +60,7 @@ type ManualHandler struct {
 }
 
 type ManualCaptureCreateRequest struct {
+	EnvironmentID     string                    `json:"environmentId"`
 	DisplayName       string                    `json:"displayName"`
 	ClientClass       manualcapture.ClientClass `json:"clientClass"`
 	Lifetime          manualcapture.Lifetime    `json:"lifetime"`
@@ -73,27 +76,32 @@ type RootPublicDelivery struct {
 }
 
 type ManualCaptureContext struct {
-	ConfirmationToken       string             `json:"confirmationToken"`
-	ProxyAddress            string             `json:"proxyAddress"`
-	Root                    RootPublicDelivery `json:"root"`
-	DefaultTemporarySeconds int64              `json:"defaultTemporarySeconds"`
-	MaxTemporarySeconds     int64              `json:"maxTemporarySeconds"`
+	ConfirmationToken       string              `json:"confirmationToken"`
+	ProxyAddress            string              `json:"proxyAddress"`
+	EnvironmentID           string              `json:"environmentId"`
+	EnvironmentRevision     uint64              `json:"environmentRevision"`
+	EnvironmentDigest       string              `json:"environmentDigest"`
+	LaunchAuthorityDigest   string              `json:"launchAuthorityDigest"`
+	ProtectedAuthorities    []string            `json:"protectedAuthorities"`
+	ManagedAuthorities      []string            `json:"managedCredentialAuthorities"`
+	Root                    *RootPublicDelivery `json:"root,omitempty"`
+	DefaultTemporarySeconds int64               `json:"defaultTemporarySeconds"`
+	MaxTemporarySeconds     int64               `json:"maxTemporarySeconds"`
 }
 
 // ManualCaptureView is the user-facing projection. The credential epoch is a
 // Core-only linearization detail and is deliberately not product vocabulary.
 type ManualCaptureView struct {
-	ID               string                    `json:"id"`
-	IngressProfileID string                    `json:"ingressProfileId"`
-	DisplayName      string                    `json:"displayName"`
-	ClientClass      manualcapture.ClientClass `json:"clientClass"`
-	Lifetime         manualcapture.Lifetime    `json:"lifetime"`
-	State            manualcapture.State       `json:"state"`
-	Observation      manualcapture.Observation `json:"observation"`
-	CreatedAt        time.Time                 `json:"createdAt"`
-	UpdatedAt        time.Time                 `json:"updatedAt"`
-	ExpiresAt        *time.Time                `json:"expiresAt,omitempty"`
-	LastObservedAt   *time.Time                `json:"lastObservedAt,omitempty"`
+	ID             string                    `json:"id"`
+	DisplayName    string                    `json:"displayName"`
+	ClientClass    manualcapture.ClientClass `json:"clientClass"`
+	Lifetime       manualcapture.Lifetime    `json:"lifetime"`
+	State          manualcapture.State       `json:"state"`
+	Observation    manualcapture.Observation `json:"observation"`
+	CreatedAt      time.Time                 `json:"createdAt"`
+	UpdatedAt      time.Time                 `json:"updatedAt"`
+	ExpiresAt      *time.Time                `json:"expiresAt,omitempty"`
+	LastObservedAt *time.Time                `json:"lastObservedAt,omitempty"`
 }
 
 type ManualCapturePage struct {
@@ -101,11 +109,16 @@ type ManualCapturePage struct {
 }
 
 type ManualCaptureGrant struct {
-	Capture       ManualCaptureView  `json:"capture"`
-	ProxyAddress  string             `json:"proxyAddress"`
-	ProxyUsername string             `json:"proxyUsername"`
-	ProxyPassword string             `json:"proxyPassword"`
-	Root          RootPublicDelivery `json:"root"`
+	Capture               ManualCaptureView   `json:"capture"`
+	ProxyAddress          string              `json:"proxyAddress"`
+	ProxyUsername         string              `json:"proxyUsername"`
+	ProxyPassword         string              `json:"proxyPassword"`
+	EnvironmentID         string              `json:"environmentId"`
+	AssignmentRevision    uint64              `json:"assignmentRevision"`
+	LaunchAuthorityDigest string              `json:"launchAuthorityDigest"`
+	ProtectedAuthorities  []string            `json:"protectedAuthorities"`
+	ManagedAuthorities    []string            `json:"managedCredentialAuthorities"`
+	Root                  *RootPublicDelivery `json:"root,omitempty"`
 }
 
 func NewManualHandler(authority ManualCaptureAuthority) (*ManualHandler, error) {
@@ -149,13 +162,25 @@ func (handler *ManualHandler) context(
 	writer http.ResponseWriter,
 	request *http.Request,
 ) {
-	if !emptyBody(request.Body) || request.URL.RawQuery != "" {
+	if !emptyBody(request.Body) {
+		writeProblem(writer, http.StatusUnprocessableEntity, ReasonInvalidManualCapture)
+		return
+	}
+	query := request.URL.Query()
+	values := query["environmentId"]
+	if len(query) != 1 || len(values) != 1 {
+		writeProblem(writer, http.StatusUnprocessableEntity, ReasonInvalidManualCapture)
+		return
+	}
+	environmentID, err := environment.NewEnvironmentID(values[0])
+	if err != nil {
 		writeProblem(writer, http.StatusUnprocessableEntity, ReasonInvalidManualCapture)
 		return
 	}
 	result, err := handler.authority.GetManualCaptureContext(
 		request.Context(),
 		manualPrincipal(request.Context()),
+		environmentID,
 	)
 	if err != nil {
 		handler.writeFailure(writer, err)
@@ -206,6 +231,7 @@ func (handler *ManualHandler) create(
 		request.Context(),
 		manualPrincipal(request.Context()),
 		capturegrant.ManualCaptureRequest{
+			EnvironmentID:     environment.EnvironmentID(input.EnvironmentID),
 			DisplayName:       input.DisplayName,
 			ClientClass:       input.ClientClass,
 			Lifetime:          input.Lifetime,
@@ -381,23 +407,42 @@ func manualMutationCoordinates(
 }
 
 func manualContextWire(context capturegrant.ManualCaptureContext) ManualCaptureContext {
-	return ManualCaptureContext{
+	wired := ManualCaptureContext{
 		ConfirmationToken:       context.ConfirmationToken,
 		ProxyAddress:            context.ProxyAddress,
-		Root:                    rootDeliveryWire(context),
+		EnvironmentID:           context.EnvironmentID.String(),
+		EnvironmentRevision:     uint64(context.EnvironmentRevision),
+		EnvironmentDigest:       context.EnvironmentDigest.String(),
+		LaunchAuthorityDigest:   context.LaunchAuthorityDigest.String(),
+		ProtectedAuthorities:    append([]string{}, context.ProtectedAuthorities...),
+		ManagedAuthorities:      append([]string{}, context.ManagedAuthorities...),
 		DefaultTemporarySeconds: int64(context.DefaultTemporaryLifetime / time.Second),
 		MaxTemporarySeconds:     int64(context.MaximumTemporaryLifetime / time.Second),
 	}
+	if context.DeliverRoot {
+		root := rootDeliveryWire(context)
+		wired.Root = &root
+	}
+	return wired
 }
 
 func manualGrantWire(grant capturegrant.ManualCaptureGrant) ManualCaptureGrant {
-	return ManualCaptureGrant{
-		Capture:       manualViewWire(grant.Capture.Capture),
-		ProxyAddress:  grant.Context.ProxyAddress,
-		ProxyUsername: manualcapture.ProxyUsername,
-		ProxyPassword: grant.Capture.Credential.Value(),
-		Root:          rootDeliveryWire(grant.Context),
+	wired := ManualCaptureGrant{
+		Capture:               manualViewWire(grant.Capture.Capture),
+		ProxyAddress:          grant.Context.ProxyAddress,
+		ProxyUsername:         manualcapture.ProxyUsername,
+		ProxyPassword:         grant.Capture.Credential.Value(),
+		EnvironmentID:         grant.Authority.EnvironmentID().String(),
+		AssignmentRevision:    uint64(grant.Authority.AssignmentRevision()),
+		LaunchAuthorityDigest: grant.Authority.AuthorityDigest().String(),
+		ProtectedAuthorities:  grant.Authority.ProtectedAuthorities(),
+		ManagedAuthorities:    grant.Authority.ManagedCredentialAuthorities(),
 	}
+	if grant.Context.DeliverRoot {
+		root := rootDeliveryWire(grant.Context)
+		wired.Root = &root
+	}
+	return wired
 }
 
 func rootDeliveryWire(context capturegrant.ManualCaptureContext) RootPublicDelivery {
@@ -419,17 +464,16 @@ func manualPageWire(page manualcapture.Page) ManualCapturePage {
 
 func manualViewWire(view manualcapture.View) ManualCaptureView {
 	return ManualCaptureView{
-		ID:               view.ID,
-		IngressProfileID: view.IngressProfileID,
-		DisplayName:      view.DisplayName,
-		ClientClass:      view.ClientClass,
-		Lifetime:         view.Lifetime,
-		State:            view.State,
-		Observation:      view.Observation,
-		CreatedAt:        view.CreatedAt,
-		UpdatedAt:        view.UpdatedAt,
-		ExpiresAt:        view.ExpiresAt,
-		LastObservedAt:   view.LastObservedAt,
+		ID:             view.ID,
+		DisplayName:    view.DisplayName,
+		ClientClass:    view.ClientClass,
+		Lifetime:       view.Lifetime,
+		State:          view.State,
+		Observation:    view.Observation,
+		CreatedAt:      view.CreatedAt,
+		UpdatedAt:      view.UpdatedAt,
+		ExpiresAt:      view.ExpiresAt,
+		LastObservedAt: view.LastObservedAt,
 	}
 }
 

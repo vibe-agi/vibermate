@@ -5,7 +5,7 @@ import (
 	"net/http"
 	"testing"
 
-	"github.com/vibe-agi/vibermate/internal/access"
+	"github.com/vibe-agi/vibermate/internal/providerauth"
 	"github.com/vibe-agi/vibermate/internal/secretstore"
 )
 
@@ -46,7 +46,7 @@ func TestAnthropicAPIKeyAuthenticatorUsesDedicatedHeader(t *testing.T) {
 		request.Header.Get("Cookie") != "" {
 		t.Fatalf("provider credential headers = %#v", request.Header)
 	}
-	if evidence.DriverRef != access.AnthropicAPIKeyAuthDriverRef().String() ||
+	if evidence.DriverRef != providerauth.AnthropicAPIKeyDriverRef().String() ||
 		evidence.HeaderName != "x-api-key" ||
 		!evidence.SecretRead {
 		t.Fatalf("credential evidence = %+v", evidence)

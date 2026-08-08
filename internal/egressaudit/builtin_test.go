@@ -14,7 +14,7 @@ func TestBuiltInDirectDecisionIsAValidDecision(t *testing.T) {
 
 	input := baseInput()
 	input.Decision = egressaudit.BuiltInDirectDecision(
-		egressaudit.AuthorityAccess,
+		egressaudit.AuthorityEnvironment,
 	)
 	attempt, err := egressaudit.New(input)
 	if err != nil {
@@ -34,7 +34,7 @@ func TestEveryPurposeMapsToAHoldKind(t *testing.T) {
 
 	expected := map[egressaudit.EgressPurpose]offlinehold.EgressKind{
 		egressaudit.PurposeProviderAttempt:     offlinehold.EgressProvider,
-		egressaudit.PurposeProfileOperation:    offlinehold.EgressAuxiliary,
+		egressaudit.PurposeRouteOperation:      offlinehold.EgressAuxiliary,
 		egressaudit.PurposeOriginalOrigin:      offlinehold.EgressOpaque,
 		egressaudit.PurposeAgentProbe:          offlinehold.EgressAuxiliary,
 		egressaudit.PurposeBlindTunnel:         offlinehold.EgressBlindTunnel,

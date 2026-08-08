@@ -22,6 +22,7 @@ import (
 	"time"
 
 	"github.com/vibe-agi/vibermate/internal/capturecontrol"
+	"github.com/vibe-agi/vibermate/internal/environment"
 	"github.com/vibe-agi/vibermate/internal/localdiscovery"
 	"github.com/vibe-agi/vibermate/internal/loopbackclient"
 	"github.com/vibe-agi/vibermate/internal/manualcapture"
@@ -84,12 +85,16 @@ func (client *Client) Close() {
 
 func (client *Client) Context(
 	ctx context.Context,
+	environmentID environment.EnvironmentID,
 ) (capturecontrol.ManualCaptureContext, error) {
+	if _, err := environment.NewEnvironmentID(environmentID.String()); err != nil {
+		return capturecontrol.ManualCaptureContext{}, errors.New("ManualCapture Environment is invalid")
+	}
 	var output capturecontrol.ManualCaptureContext
 	_, err := client.request(
 		ctx,
 		http.MethodGet,
-		"/api/v1/manual-captures/context",
+		"/api/v1/manual-captures/context?environmentId="+url.QueryEscape(environmentID.String()),
 		"",
 		nil,
 		http.StatusOK,
@@ -332,17 +337,26 @@ func exactContentType(response *http.Response, want string) bool {
 }
 
 func validateContext(context capturecontrol.ManualCaptureContext) error {
+	if _, err := environment.NewEnvironmentID(context.EnvironmentID); err != nil {
+		return errors.New("ManualCapture context Environment is invalid")
+	}
 	parsed, err := url.Parse(context.ProxyAddress)
 	if err != nil || parsed.Scheme != "http" || parsed.Hostname() != "127.0.0.1" ||
 		parsed.Port() == "" || parsed.User != nil || parsed.Path != "" ||
 		parsed.RawQuery != "" || parsed.Fragment != "" ||
-		!validConfirmationToken(context.ConfirmationToken) ||
-		context.Root.Kind != "local_path" || !validDERSHA256(context.Root.DERSHA256) ||
-		context.Root.Fingerprint == "" || !filepath.IsAbs(context.Root.PEMPath) ||
-		filepath.Clean(context.Root.PEMPath) != context.Root.PEMPath ||
+		!validConfirmationToken(context.ConfirmationToken) || context.EnvironmentRevision == 0 ||
+		!validDERSHA256(context.EnvironmentDigest) ||
+		!validDERSHA256(context.LaunchAuthorityDigest) ||
+		!validAuthorityScopes(context.ProtectedAuthorities, context.ManagedAuthorities) ||
 		context.DefaultTemporarySeconds < 60 ||
 		context.MaxTemporarySeconds < context.DefaultTemporarySeconds {
 		return errors.New("ManualCapture context is invalid")
+	}
+	if (len(context.ProtectedAuthorities) == 0) != (context.Root == nil) {
+		return errors.New("ManualCapture context Root delivery is invalid")
+	}
+	if context.Root != nil && validateRoot(*context.Root) != nil {
+		return errors.New("ManualCapture context Root delivery is invalid")
 	}
 	return nil
 }
@@ -351,33 +365,71 @@ func validateGrant(grant capturecontrol.ManualCaptureGrant) error {
 	if validateManualCaptureView(grant.Capture) != nil ||
 		grant.Capture.State != manualcapture.StateActive ||
 		grant.ProxyUsername != manualcapture.ProxyUsername ||
-		grant.ProxyPassword == "" {
+		grant.ProxyPassword == "" || grant.AssignmentRevision == 0 ||
+		!validDERSHA256(grant.LaunchAuthorityDigest) ||
+		!validAuthorityScopes(grant.ProtectedAuthorities, grant.ManagedAuthorities) {
 		return errors.New("ManualCapture grant is invalid")
+	}
+	if _, err := environment.NewEnvironmentID(grant.EnvironmentID); err != nil {
+		return errors.New("ManualCapture grant Environment is invalid")
 	}
 	if _, err := manualcapture.NewProxyCredential(grant.ProxyPassword); err != nil {
 		return errors.New("ManualCapture grant credential is invalid")
 	}
-	return validateDelivery(grant.ProxyAddress, grant.Root)
+	return validateDelivery(grant.ProxyAddress, grant.Root, len(grant.ProtectedAuthorities) != 0)
 }
 
 func validateDelivery(
 	proxyAddress string,
-	root capturecontrol.RootPublicDelivery,
+	root *capturecontrol.RootPublicDelivery,
+	wantRoot bool,
 ) error {
 	parsed, err := url.Parse(proxyAddress)
 	if err != nil || parsed.Scheme != "http" || parsed.Hostname() != "127.0.0.1" ||
 		parsed.Port() == "" || parsed.User != nil || parsed.Path != "" ||
-		parsed.RawQuery != "" || parsed.Fragment != "" ||
-		root.Kind != "local_path" || !validDERSHA256(root.DERSHA256) ||
-		root.Fingerprint == "" || !filepath.IsAbs(root.PEMPath) ||
-		filepath.Clean(root.PEMPath) != root.PEMPath {
+		parsed.RawQuery != "" || parsed.Fragment != "" || (root != nil) != wantRoot {
 		return errors.New("ManualCapture delivery is invalid")
+	}
+	if root != nil {
+		return validateRoot(*root)
 	}
 	return nil
 }
 
+func validateRoot(root capturecontrol.RootPublicDelivery) error {
+	if root.Kind != "local_path" || !validDERSHA256(root.DERSHA256) ||
+		root.Fingerprint == "" || !filepath.IsAbs(root.PEMPath) ||
+		filepath.Clean(root.PEMPath) != root.PEMPath {
+		return errors.New("ManualCapture Root delivery is invalid")
+	}
+	return nil
+}
+
+func validAuthorityScopes(protected, managed []string) bool {
+	protectedSet := make(map[string]struct{}, len(protected))
+	previous := ""
+	for _, authority := range protected {
+		if authority == "" || authority <= previous {
+			return false
+		}
+		previous = authority
+		protectedSet[authority] = struct{}{}
+	}
+	previous = ""
+	for _, authority := range managed {
+		if authority == "" || authority <= previous {
+			return false
+		}
+		if _, exists := protectedSet[authority]; !exists {
+			return false
+		}
+		previous = authority
+	}
+	return protected != nil && managed != nil
+}
+
 func validateManualCaptureView(view capturecontrol.ManualCaptureView) error {
-	if view.ID == "" || view.IngressProfileID == "" || view.DisplayName == "" ||
+	if view.ID == "" || view.DisplayName == "" ||
 		!view.ClientClass.Valid() || !view.Lifetime.Valid() || !view.State.Valid() ||
 		!view.Observation.Valid() || view.CreatedAt.IsZero() || view.UpdatedAt.IsZero() {
 		return errors.New("ManualCapture view is invalid")

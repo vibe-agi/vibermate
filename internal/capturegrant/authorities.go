@@ -3,170 +3,216 @@ package capturegrant
 import (
 	"context"
 	"errors"
-	"net"
-	"sort"
-	"strconv"
-	"strings"
 
-	"github.com/vibe-agi/vibermate/internal/access"
-	"github.com/vibe-agi/vibermate/internal/workspaceidentity"
-	"github.com/vibe-agi/vibermate/internal/workspaceroute"
+	"github.com/vibe-agi/vibermate/internal/captureassignment"
+	"github.com/vibe-agi/vibermate/internal/captureidentity"
+	"github.com/vibe-agi/vibermate/internal/environment"
 )
 
-// CaptureAuthoritySet freezes the two different launcher decisions made for
-// one workspace. Protected authorities may receive the local Root and be
-// removed from NO_PROXY. Only the managed subset may have client login inputs
-// replaced with a local placeholder.
+// CaptureAuthoritySet freezes the exact non-secret launch boundary attached
+// to a durable Capture assignment. Protected authorities may receive the
+// local Root and be removed from NO_PROXY. Only the managed subset may have
+// client login inputs replaced with a local placeholder.
 type CaptureAuthoritySet struct {
-	protected []string
-	managed   []string
+	capture            captureidentity.Reference
+	assignmentRevision captureassignment.Revision
+	environmentID      environment.EnvironmentID
+	launchAuthority    environment.LaunchAuthorityBoundary
 }
 
 func NewCaptureAuthoritySet(
-	protected []string,
-	managed []string,
+	assignment captureassignment.Assignment,
 ) (CaptureAuthoritySet, error) {
-	protectedCopy, protectedSet, err := canonicalAuthorities(protected)
-	if err != nil {
-		return CaptureAuthoritySet{}, err
-	}
-	managedCopy, _, err := canonicalAuthorities(managed)
-	if err != nil {
-		return CaptureAuthoritySet{}, err
-	}
-	for _, authority := range managedCopy {
-		if _, exists := protectedSet[authority]; !exists {
-			return CaptureAuthoritySet{}, errors.New(
-				"managed credential authority is not protected",
-			)
-		}
+	if assignment.Validate() != nil || assignment.LaunchAuthority.Validate() != nil {
+		return CaptureAuthoritySet{}, errors.New("CaptureRun launch authority is invalid")
 	}
 	return CaptureAuthoritySet{
-		protected: protectedCopy,
-		managed:   managedCopy,
+		capture: assignment.Capture, assignmentRevision: assignment.Revision,
+		environmentID:   assignment.EnvironmentID,
+		launchAuthority: assignment.LaunchAuthority,
 	}, nil
 }
 
+func (set CaptureAuthoritySet) Capture() captureidentity.Reference { return set.capture }
+
+func (set CaptureAuthoritySet) AssignmentRevision() captureassignment.Revision {
+	return set.assignmentRevision
+}
+
+func (set CaptureAuthoritySet) EnvironmentID() environment.EnvironmentID {
+	return set.environmentID
+}
+
+func (set CaptureAuthoritySet) InitialEnvironmentID() environment.EnvironmentID {
+	return set.launchAuthority.InitialEnvironmentID()
+}
+
+func (set CaptureAuthoritySet) InitialEnvironmentRevision() environment.Revision {
+	return set.launchAuthority.InitialEnvironmentRevision()
+}
+
+func (set CaptureAuthoritySet) InitialEnvironmentDigest() environment.CandidateDigest {
+	return set.launchAuthority.InitialEnvironmentDigest()
+}
+
+func (set CaptureAuthoritySet) AuthorityDigest() environment.LaunchAuthorityDigest {
+	return set.launchAuthority.Digest()
+}
+
 func (set CaptureAuthoritySet) ProtectedAuthorities() []string {
-	return append([]string(nil), set.protected...)
+	return set.launchAuthority.ProtectedAuthorities()
 }
 
 func (set CaptureAuthoritySet) ManagedCredentialAuthorities() []string {
-	return append([]string(nil), set.managed...)
+	return set.launchAuthority.ManagedCredentialAuthorities()
+}
+
+func (set CaptureAuthoritySet) Review() CaptureAuthorityReview {
+	return CaptureAuthorityReview{
+		environmentID:   set.environmentID,
+		launchAuthority: set.launchAuthority,
+	}
 }
 
 type CaptureAuthorityResolver interface {
-	ResolveCaptureAuthorities(
+	Review(
 		context.Context,
-		workspaceidentity.Scope,
+		environment.EnvironmentID,
+	) (CaptureAuthorityReview, error)
+	AssignAndResolve(
+		context.Context,
+		captureidentity.Reference,
+		environment.EnvironmentID,
+	) (CaptureAuthoritySet, error)
+	Resolve(
+		context.Context,
+		captureidentity.Reference,
 	) (CaptureAuthoritySet, error)
 }
 
-type routeAwareAuthorityResolver struct {
-	plans  access.ActivePlanCatalog
-	routes workspaceroute.Resolver
+type captureAssignmentAuthority interface {
+	Create(context.Context, captureassignment.CreateCommand) (captureassignment.Assignment, error)
+	Resolve(context.Context, captureidentity.Reference) (captureassignment.Assignment, error)
 }
 
-func NewRouteAwareAuthorityResolver(
-	plans access.ActivePlanCatalog,
-	routes workspaceroute.Resolver,
+type environmentAuthorityResolver struct {
+	assignments  captureAssignmentAuthority
+	environments environment.SnapshotResolver
+}
+
+func NewEnvironmentAuthorityResolver(
+	assignments captureAssignmentAuthority,
+	environments environment.SnapshotResolver,
 ) (CaptureAuthorityResolver, error) {
-	if plans == nil || routes == nil {
-		return nil, errors.New("CaptureRun route authority dependencies are incomplete")
+	if assignments == nil || environments == nil {
+		return nil, errors.New("CaptureRun Environment authority is unavailable")
 	}
-	return &routeAwareAuthorityResolver{plans: plans, routes: routes}, nil
+	return &environmentAuthorityResolver{
+		assignments: assignments, environments: environments,
+	}, nil
 }
 
-func (resolver *routeAwareAuthorityResolver) ResolveCaptureAuthorities(
+// CaptureAuthorityReview is a non-secret, immutable pre-create fact used to
+// bind ManualCapture confirmation to the exact Environment authority a person
+// reviewed.
+type CaptureAuthorityReview struct {
+	environmentID   environment.EnvironmentID
+	launchAuthority environment.LaunchAuthorityBoundary
+}
+
+func (review CaptureAuthorityReview) EnvironmentID() environment.EnvironmentID {
+	return review.environmentID
+}
+func (review CaptureAuthorityReview) EnvironmentRevision() environment.Revision {
+	return review.launchAuthority.InitialEnvironmentRevision()
+}
+func (review CaptureAuthorityReview) EnvironmentDigest() environment.CandidateDigest {
+	return review.launchAuthority.InitialEnvironmentDigest()
+}
+func (review CaptureAuthorityReview) AuthorityDigest() environment.LaunchAuthorityDigest {
+	return review.launchAuthority.Digest()
+}
+func (review CaptureAuthorityReview) ProtectedAuthorities() []string {
+	return review.launchAuthority.ProtectedAuthorities()
+}
+func (review CaptureAuthorityReview) ManagedCredentialAuthorities() []string {
+	return review.launchAuthority.ManagedCredentialAuthorities()
+}
+
+func (resolver *environmentAuthorityResolver) Review(
 	ctx context.Context,
-	scope workspaceidentity.Scope,
+	environmentID environment.EnvironmentID,
+) (CaptureAuthorityReview, error) {
+	if resolver == nil || resolver.environments == nil || ctx == nil {
+		return CaptureAuthorityReview{}, errors.New("Capture Environment review is unavailable")
+	}
+	if err := ctx.Err(); err != nil {
+		return CaptureAuthorityReview{}, err
+	}
+	snapshot, err := resolver.environments.Resolve(environmentID)
+	if err != nil {
+		return CaptureAuthorityReview{}, err
+	}
+	boundary, err := environment.NewLaunchAuthorityBoundary(snapshot)
+	if err != nil {
+		return CaptureAuthorityReview{}, err
+	}
+	return CaptureAuthorityReview{
+		environmentID: environmentID, launchAuthority: boundary,
+	}, nil
+}
+
+// AssignAndResolve creates revision one as the linearization point. The
+// assignment manager derives and persists LaunchAuthorityBoundary while it
+// holds the selected Environment's publish gate, so this package never
+// rebuilds authority from a second mutable read.
+func (resolver *environmentAuthorityResolver) AssignAndResolve(
+	ctx context.Context,
+	capture captureidentity.Reference,
+	environmentID environment.EnvironmentID,
 ) (CaptureAuthoritySet, error) {
-	if resolver == nil || resolver.plans == nil || resolver.routes == nil || ctx == nil {
-		return CaptureAuthoritySet{}, errors.New("CaptureRun route authority is unavailable")
+	if resolver == nil || resolver.assignments == nil || ctx == nil ||
+		capture.Validate() != nil {
+		return CaptureAuthoritySet{}, errors.New("CaptureRun Environment authority is unavailable")
+	}
+	if _, err := environment.NewEnvironmentID(environmentID.String()); err != nil {
+		return CaptureAuthoritySet{}, errors.New("CaptureRun Environment is invalid")
 	}
 	if err := ctx.Err(); err != nil {
 		return CaptureAuthoritySet{}, err
 	}
-	if scope != (workspaceidentity.Scope{}) && scope.Validate() != nil {
-		return CaptureAuthoritySet{}, errors.New("CaptureRun workspace scope is invalid")
+	source := captureassignment.SourceLaunch
+	if capture.Kind == captureidentity.KindManualCapture {
+		source = captureassignment.SourceManualCreate
 	}
-	plans, err := resolver.plans.ActiveAccessPlans()
+	assignment, err := resolver.assignments.Create(ctx, captureassignment.CreateCommand{
+		Capture: capture, EnvironmentID: environmentID, Source: source,
+	})
 	if err != nil {
 		return CaptureAuthoritySet{}, err
 	}
-	protected := make([]string, 0, len(plans))
-	managed := make([]string, 0, len(plans))
-	for _, plan := range plans {
-		profileID, profileKind, resolveErr := resolver.resolveProfile(
-			ctx,
-			plan,
-			scope,
-		)
-		if resolveErr != nil {
-			return CaptureAuthoritySet{}, resolveErr
-		}
-		if profileID.String() == "" {
-			return CaptureAuthoritySet{}, errors.New("CaptureRun route profile is unavailable")
-		}
-		authority := plan.AgentEndpoint().ClientOrigin.EndpointAuthority()
-		protected = append(protected, authority)
-		if profileKind == access.EndpointProfileManaged {
-			managed = append(managed, authority)
-		}
+	if assignment.Capture != capture || assignment.EnvironmentID != environmentID ||
+		assignment.Revision != 1 || assignment.Source != source ||
+		assignment.LaunchAuthority.InitialEnvironmentID() != environmentID {
+		return CaptureAuthoritySet{}, errors.New("CaptureRun Environment assignment is inconsistent")
 	}
-	return NewCaptureAuthoritySet(protected, managed)
+	return NewCaptureAuthoritySet(assignment)
 }
 
-func (resolver *routeAwareAuthorityResolver) resolveProfile(
+func (resolver *environmentAuthorityResolver) Resolve(
 	ctx context.Context,
-	plan access.AccessPlanSnapshot,
-	scope workspaceidentity.Scope,
-) (access.EndpointProfileID, access.EndpointProfileKind, error) {
-	if scope == (workspaceidentity.Scope{}) {
-		candidate, found := plan.Candidate(0)
-		if !found {
-			return access.EndpointProfileID{}, "", errors.New(
-				"CaptureRun default route has no candidate",
-			)
-		}
-		return candidate.ProfileID(), candidate.Kind(), nil
+	capture captureidentity.Reference,
+) (CaptureAuthoritySet, error) {
+	if resolver == nil || resolver.assignments == nil || ctx == nil ||
+		capture.Validate() != nil {
+		return CaptureAuthoritySet{}, errors.New("Capture Environment authority is unavailable")
 	}
-	resolution, err := resolver.routes.Resolve(ctx, plan, scope)
+	assignment, err := resolver.assignments.Resolve(ctx, capture)
 	if err != nil {
-		return access.EndpointProfileID{}, "", err
+		return CaptureAuthoritySet{}, err
 	}
-	defer resolution.Release()
-	for index := 0; index < plan.CandidateCount(); index++ {
-		candidate, found := plan.Candidate(index)
-		if found && candidate.ProfileID() == resolution.ProfileID {
-			return candidate.ProfileID(), candidate.Kind(), nil
-		}
+	if assignment.Capture != capture {
+		return CaptureAuthoritySet{}, errors.New("Capture Environment assignment is inconsistent")
 	}
-	return access.EndpointProfileID{}, "", errors.New(
-		"CaptureRun workspace route is outside the active plan",
-	)
-}
-
-func canonicalAuthorities(
-	values []string,
-) ([]string, map[string]struct{}, error) {
-	copyValues := append([]string(nil), values...)
-	seen := make(map[string]struct{}, len(copyValues))
-	for _, authority := range copyValues {
-		host, port, err := net.SplitHostPort(authority)
-		if err != nil || host == "" || strings.ToLower(host) != host ||
-			strings.TrimSpace(authority) != authority {
-			return nil, nil, errors.New("CaptureRun authority is invalid")
-		}
-		number, err := strconv.ParseUint(port, 10, 16)
-		if err != nil || number == 0 {
-			return nil, nil, errors.New("CaptureRun authority port is invalid")
-		}
-		if _, duplicate := seen[authority]; duplicate {
-			return nil, nil, errors.New("CaptureRun authority is duplicated")
-		}
-		seen[authority] = struct{}{}
-	}
-	sort.Strings(copyValues)
-	return copyValues, seen, nil
+	return NewCaptureAuthoritySet(assignment)
 }

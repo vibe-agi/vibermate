@@ -19,7 +19,7 @@ type ManagedRunEvidence struct {
 }
 
 func NewManagedRun(evidence ManagedRunEvidence) (Admission, error) {
-	ingressProfileID, err := capturerun.IngressProfileID(evidence.CaptureRunID)
+	admissionRef, err := capturerun.AdmissionRef(evidence.CaptureRunID)
 	if err != nil {
 		return Admission{}, errors.Join(ErrInvalidAdmission, err)
 	}
@@ -29,7 +29,7 @@ func NewManagedRun(evidence ManagedRunEvidence) (Admission, error) {
 	}
 	admission := Admission{
 		kind:               KindManagedRun,
-		ingressProfileID:   ingressProfileID,
+		admissionRef:       admissionRef,
 		captureRunID:       evidence.CaptureRunID,
 		credentialRevision: 1,
 		confidence:         confidence,

@@ -118,14 +118,14 @@ const (
 )
 
 type ProbeTarget struct {
-	Kind           EgressKind
-	Transport      ProbeTransportKind
-	TargetRef      string
-	NetworkOrigin  string
-	HTTPAuthority  string
-	TLSServerName  string
-	AccessRevision uint64
-	PlanHash       string
+	Kind          EgressKind
+	Transport     ProbeTransportKind
+	TargetRef     string
+	NetworkOrigin string
+	HTTPAuthority string
+	TLSServerName string
+	PlanRevision  uint64
+	PlanDigest    string
 }
 
 func (target ProbeTarget) Validate() error {

@@ -84,12 +84,12 @@ func (prober *ReachabilityProber) Probe(
 			)
 		}
 		// A blind target is frozen from a CONNECT authority and nothing else.
-		// An Access identity on it would mean something upstream had resolved
-		// a plan for a connection this product never interprets.
-		if target.AccessRevision != 0 || target.PlanHash != "" {
+		// A plan identity on it would mean something upstream had resolved a
+		// semantic plan for a connection this product never interprets.
+		if target.PlanRevision != 0 || target.PlanDigest != "" {
 			return offlinehold.NewProbeFailure(
 				offlinehold.ProbeReasonFailed,
-				errors.New("blind tunnel probe unexpectedly contains an Access plan identity"),
+				errors.New("blind tunnel probe unexpectedly contains a semantic plan identity"),
 			)
 		}
 		if target.NetworkOrigin != target.HTTPAuthority ||

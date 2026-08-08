@@ -25,6 +25,7 @@ func TestCaptureRunPOSTResponsesMatchTheClosedOpenAPIWire(t *testing.T) {
 		fixture.controlCredential,
 		"",
 		capturecontrol.CreateRequest{
+			EnvironmentID:  testEnvironmentID,
 			CWD:            fixture.workspace,
 			Command:        []string{"claude"},
 			ExecutablePath: fixture.executable,
@@ -146,6 +147,7 @@ func TestGenericCaptureRunGrantUsesTheContractedRecipeAndShape(t *testing.T) {
 		fixture.controlCredential,
 		"",
 		capturecontrol.CreateRequest{
+			EnvironmentID:  testEnvironmentID,
 			CWD:            fixture.workspace,
 			Command:        []string{"claude"},
 			ExecutablePath: fixture.executable,
@@ -200,6 +202,7 @@ func TestRecognizedCaptureRunGrantProjectsExactSignerEvidence(t *testing.T) {
 		fixture.controlCredential,
 		"",
 		capturecontrol.CreateRequest{
+			EnvironmentID:  testEnvironmentID,
 			CWD:            fixture.workspace,
 			Command:        []string{"claude"},
 			ExecutablePath: fixture.executable,

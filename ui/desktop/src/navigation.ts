@@ -1,64 +1,47 @@
 export type DashboardView =
-  | "overview"
-  | "dashboards"
-  | "access"
-  | "activity"
-  | "quality"
+  | "captures"
+  | "environments"
+  | "accounts"
   | "extensions"
   | "policy"
+  | "quality"
   | "settings";
 
 export const dashboardRoutePaths = {
-  overview: "/overview",
-  dashboards: "/dashboards",
-  access: "/access",
-  activity: "/activity",
-  quality: "/quality",
+  captures: "/captures",
+  environments: "/environments",
+  accounts: "/accounts",
   extensions: "/extensions",
   policy: "/policies/approvals",
+  quality: "/quality",
   settings: "/settings",
 } as const satisfies Record<DashboardView, `/${string}`>;
 
 export const dashboardTaskRoutePaths = {
-  accessRouting: "/access/$accessId/routing",
-  activityRun: "/activity/runs/$runId",
+  captureDetail: "/captures/$captureKey",
+  captureRequests: "/captures/requests",
   activityRequest: "/activity/requests/$exchangeId",
-  activityRequests: "/activity/requests",
-  dashboardExtension: "/dashboards/extensions/$dashboardId",
-  dashboardSystem: "/dashboards/system",
-  extensionDetail: "/extensions/detail/$extensionId",
-  extensionDevelop: "/extensions/develop",
-  extensionDiscover: "/extensions/discover",
-  extensionInstalled: "/extensions/installed",
+  environmentDetail: "/environments/$environmentId",
+  environmentRevision:
+    "/environments/$environmentId/revisions/$environmentRevision",
   policyApprovals: dashboardRoutePaths.policy,
-  qualitySites: "/quality/sites",
-  settingsRecovery: "/settings/recovery",
 } as const;
-
-export interface DashboardNavigation {
-  readonly openView: (
-    view: DashboardView,
-    options?: {
-      readonly selectedApprovalId?: string;
-      readonly replace?: boolean;
-    },
-  ) => void;
-}
 
 export function viewFromPathname(pathname: string): DashboardView {
   const firstSegment = pathname.split("/").filter(Boolean)[0];
   switch (firstSegment) {
-    case "overview":
-    case "dashboards":
-    case "access":
+    case "captures":
     case "activity":
-    case "quality":
+      return "captures";
+    case "environments":
+    case "accounts":
     case "extensions":
+    case "quality":
     case "settings":
       return firstSegment;
     case "policies":
       return "policy";
     default:
-      return "overview";
+      return "captures";
   }
 }

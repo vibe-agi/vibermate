@@ -66,3 +66,53 @@ func TestEventJSONOmitsTerminalTimeUntilConnectionEnds(t *testing.T) {
 		t.Fatalf("terminal endedAt = %#v", got)
 	}
 }
+
+func TestMITMEventJSONCarriesEnvironmentDecisionEvidence(t *testing.T) {
+	t.Parallel()
+	event := connectionevent.Event{
+		ConnectionID:           "connection-environment",
+		IngressID:              "capture-run/run-one",
+		SourceLabel:            "claude",
+		SourceConfidence:       connectionevent.SourceConfidenceConfigured,
+		EnvironmentID:          "work",
+		EnvironmentName:        "Work",
+		EnvironmentRevision:    3,
+		ClientEndpointID:       "anthropic-messages",
+		ClientEndpointRevision: 2,
+		RequestedHost:          "api.example.com",
+		RouteHost:              "gateway.example.com",
+		Port:                   443,
+		Decision:               connectionevent.DecisionAllow,
+		RuleID:                 "client_endpoint_exact",
+		EgressScope:            connectionevent.EgressScopeEnvironment,
+		EgressSource:           connectionevent.EgressSourceEnvironmentRule,
+		EgressPolicyRevision:   4,
+		Decryption:             connectionevent.DecryptionMITM,
+		Phase:                  connectionevent.PhaseDecided,
+		StartedAt:              time.Date(2026, 8, 5, 10, 0, 0, 0, time.UTC),
+	}
+	if err := event.Validate(); err != nil {
+		t.Fatal(err)
+	}
+	encoded, err := json.Marshal(event)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var document map[string]any
+	if err := json.Unmarshal(encoded, &document); err != nil {
+		t.Fatal(err)
+	}
+	for key, want := range map[string]any{
+		"environmentId":          "work",
+		"environmentName":        "Work",
+		"environmentRevision":    float64(3),
+		"clientEndpointId":       "anthropic-messages",
+		"clientEndpointRevision": float64(2),
+		"egressScope":            "environment",
+		"egressSource":           "environment_rule",
+	} {
+		if got := document[key]; got != want {
+			t.Fatalf("%s = %#v, want %#v: %s", key, got, want, encoded)
+		}
+	}
+}

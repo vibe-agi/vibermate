@@ -78,7 +78,7 @@ func parseConfig(arguments []string, stderr io.Writer) (config, error) {
 		&parsed.reportPath,
 		"report",
 		"",
-		"absolute private v5 or v6 report path",
+		"absolute private current report path",
 	)
 	flags.StringVar(
 		&parsed.expectedMode,
@@ -152,13 +152,12 @@ func parseConfig(arguments []string, stderr io.Writer) (config, error) {
 			"--report, --expected-mode, --expected-schema, --expected-revision, --expected-client-id, and --expected-client-version are required",
 		)
 	}
-	if parsed.expectedSchema == acceptancereport.SchemaV6 &&
-		(parsed.sourceRoot == "" ||
-			parsed.desktopApp == "" ||
-			parsed.acceptanceExecutable == "" ||
-			parsed.clientEntrypoint == "") {
+	if parsed.sourceRoot == "" ||
+		parsed.desktopApp == "" ||
+		parsed.acceptanceExecutable == "" ||
+		parsed.clientEntrypoint == "" {
 		return config{}, errors.New(
-			"current v6 verification requires --source-root, --desktop-app, --acceptance-executable, and --client-entrypoint",
+			"verification requires --source-root, --desktop-app, --acceptance-executable, and --client-entrypoint",
 		)
 	}
 	return parsed, nil

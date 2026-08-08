@@ -27,7 +27,7 @@ type EgressPurpose string
 
 const (
 	PurposeProviderAttempt     EgressPurpose = "provider_attempt"
-	PurposeProfileOperation    EgressPurpose = "profile_operation"
+	PurposeRouteOperation      EgressPurpose = "route_operation"
 	PurposeOriginalOrigin      EgressPurpose = "original_origin"
 	PurposeAgentProbe          EgressPurpose = "agent_probe"
 	PurposeBlindTunnel         EgressPurpose = "blind_tunnel"
@@ -44,7 +44,7 @@ const (
 func Purposes() []EgressPurpose {
 	return []EgressPurpose{
 		PurposeProviderAttempt,
-		PurposeProfileOperation,
+		PurposeRouteOperation,
 		PurposeOriginalOrigin,
 		PurposeAgentProbe,
 		PurposeBlindTunnel,
@@ -61,9 +61,9 @@ func Purposes() []EgressPurpose {
 type PolicyAuthorityKind string
 
 const (
-	AuthorityAccess  PolicyAuthorityKind = "access"
-	AuthorityNetwork PolicyAuthorityKind = "network"
-	AuthorityRuntime PolicyAuthorityKind = "runtime"
+	AuthorityEnvironment PolicyAuthorityKind = "environment"
+	AuthorityNetwork     PolicyAuthorityKind = "network"
+	AuthorityRuntime     PolicyAuthorityKind = "runtime"
 )
 
 // AuthorityForPurpose is the exhaustive typed mapping. An unknown purpose has
@@ -72,8 +72,8 @@ func AuthorityForPurpose(
 	purpose EgressPurpose,
 ) (PolicyAuthorityKind, error) {
 	switch purpose {
-	case PurposeProviderAttempt, PurposeProfileOperation:
-		return AuthorityAccess, nil
+	case PurposeProviderAttempt, PurposeRouteOperation:
+		return AuthorityEnvironment, nil
 	case PurposeOriginalOrigin, PurposeAgentProbe, PurposeBlindTunnel:
 		return AuthorityNetwork, nil
 	case PurposeAuxiliaryLLM, PurposeLanguageTransform,
@@ -343,7 +343,7 @@ func validatePayloadClass(
 	class PayloadClass,
 ) error {
 	switch purpose {
-	case PurposeProviderAttempt, PurposeProfileOperation:
+	case PurposeProviderAttempt, PurposeRouteOperation:
 		return nil
 	case PurposeOriginalOrigin, PurposeAgentProbe:
 		if class.carriesClientPayload() {
@@ -418,10 +418,10 @@ func validateParent(
 			return nil
 		}
 		return requireConnection()
-	case PurposeProfileOperation:
+	case PurposeRouteOperation:
 		if parent.Kind != ParentClientOperation || parent.ExchangeID != "" {
 			return errors.New(
-				"profile operation requires a client-operation parent with no Exchange",
+				"route operation requires a client-operation parent with no Exchange",
 			)
 		}
 		return requireConnection()

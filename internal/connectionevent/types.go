@@ -13,6 +13,8 @@ import (
 	"time"
 	"unicode"
 	"unicode/utf8"
+
+	"github.com/vibe-agi/vibermate/internal/environment"
 )
 
 const (
@@ -50,18 +52,18 @@ const (
 type EgressScope string
 
 const (
-	EgressScopeAccess  EgressScope = "access"
-	EgressScopeNetwork EgressScope = "network"
+	EgressScopeEnvironment EgressScope = "environment"
+	EgressScopeNetwork     EgressScope = "network"
 )
 
 type EgressSource string
 
 const (
-	EgressSourceAccessRule     EgressSource = "access_rule"
-	EgressSourceAccessPlugin   EgressSource = "access_plugin"
-	EgressSourceAccessDefault  EgressSource = "access_default"
-	EgressSourceNetworkRule    EgressSource = "network_rule"
-	EgressSourceNetworkDefault EgressSource = "network_default"
+	EgressSourceEnvironmentRule    EgressSource = "environment_rule"
+	EgressSourceEnvironmentPlugin  EgressSource = "environment_plugin"
+	EgressSourceEnvironmentDefault EgressSource = "environment_default"
+	EgressSourceNetworkRule        EgressSource = "network_rule"
+	EgressSourceNetworkDefault     EgressSource = "network_default"
 )
 
 type Decryption string
@@ -118,37 +120,37 @@ func (source Source) validate() error {
 // Event is one immutable phase snapshot for a connection. It contains no URL
 // path, header, body, raw credential, or TLS byte sequence.
 type Event struct {
-	ConnectionID          string           `json:"connectionId"`
-	IngressID             string           `json:"ingressId,omitempty"`
-	SourceLabel           string           `json:"sourceLabel,omitempty"`
-	SourceConfidence      SourceConfidence `json:"sourceConfidence"`
-	AccessID              string           `json:"accessId,omitempty"`
-	AccessName            string           `json:"accessName,omitempty"`
-	AccessRevision        uint64           `json:"accessRevision,omitempty"`
-	AgentEndpointID       string           `json:"agentEndpointId,omitempty"`
-	AgentEndpointRevision uint64           `json:"agentEndpointRevision,omitempty"`
-	RequestedHost         string           `json:"requestedHost"`
-	ObservedSNI           string           `json:"observedSni,omitempty"`
-	RouteHost             string           `json:"routeHost,omitempty"`
-	IP                    string           `json:"ip,omitempty"`
-	Port                  uint16           `json:"port"`
-	Decision              Decision         `json:"decision,omitempty"`
-	RuleID                string           `json:"ruleId,omitempty"`
-	CredentialBindingID   string           `json:"credentialBindingId,omitempty"`
-	EgressScope           EgressScope      `json:"egressScope,omitempty"`
-	EgressSource          EgressSource     `json:"egressSource,omitempty"`
-	EgressRuleID          string           `json:"egressRuleId,omitempty"`
-	EgressSelectorRunID   string           `json:"egressSelectorRunId,omitempty"`
-	EgressProxyID         string           `json:"egressProxyId,omitempty"`
-	EgressPolicyRevision  uint64           `json:"egressPolicyRevision,omitempty"`
-	Decryption            Decryption       `json:"decryption"`
-	Phase                 Phase            `json:"phase"`
-	BytesUp               uint64           `json:"bytesUp"`
-	BytesDown             uint64           `json:"bytesDown"`
-	StartedAt             time.Time        `json:"startedAt"`
-	EndedAt               time.Time        `json:"endedAt,omitempty"`
-	Outcome               Outcome          `json:"outcome,omitempty"`
-	ErrorClass            string           `json:"errorClass,omitempty"`
+	ConnectionID           string                       `json:"connectionId"`
+	IngressID              string                       `json:"ingressId,omitempty"`
+	SourceLabel            string                       `json:"sourceLabel,omitempty"`
+	SourceConfidence       SourceConfidence             `json:"sourceConfidence"`
+	EnvironmentID          environment.EnvironmentID    `json:"environmentId,omitempty"`
+	EnvironmentName        string                       `json:"environmentName,omitempty"`
+	EnvironmentRevision    environment.Revision         `json:"environmentRevision,omitempty"`
+	ClientEndpointID       environment.ClientEndpointID `json:"clientEndpointId,omitempty"`
+	ClientEndpointRevision environment.Revision         `json:"clientEndpointRevision,omitempty"`
+	RequestedHost          string                       `json:"requestedHost"`
+	ObservedSNI            string                       `json:"observedSni,omitempty"`
+	RouteHost              string                       `json:"routeHost,omitempty"`
+	IP                     string                       `json:"ip,omitempty"`
+	Port                   uint16                       `json:"port"`
+	Decision               Decision                     `json:"decision,omitempty"`
+	RuleID                 string                       `json:"ruleId,omitempty"`
+	CredentialBindingID    string                       `json:"credentialBindingId,omitempty"`
+	EgressScope            EgressScope                  `json:"egressScope,omitempty"`
+	EgressSource           EgressSource                 `json:"egressSource,omitempty"`
+	EgressRuleID           string                       `json:"egressRuleId,omitempty"`
+	EgressSelectorRunID    string                       `json:"egressSelectorRunId,omitempty"`
+	EgressProxyID          string                       `json:"egressProxyId,omitempty"`
+	EgressPolicyRevision   uint64                       `json:"egressPolicyRevision,omitempty"`
+	Decryption             Decryption                   `json:"decryption"`
+	Phase                  Phase                        `json:"phase"`
+	BytesUp                uint64                       `json:"bytesUp"`
+	BytesDown              uint64                       `json:"bytesDown"`
+	StartedAt              time.Time                    `json:"startedAt"`
+	EndedAt                time.Time                    `json:"endedAt,omitempty"`
+	Outcome                Outcome                      `json:"outcome,omitempty"`
+	ErrorClass             string                       `json:"errorClass,omitempty"`
 }
 
 // MarshalJSON omits EndedAt until a connection reaches a terminal phase.
@@ -186,25 +188,38 @@ func (event Event) Validate() error {
 	}).validate(); err != nil {
 		return err
 	}
-	accessEvidencePresent := event.AccessID != "" ||
-		event.AccessName != "" ||
-		event.AccessRevision != 0 ||
-		event.AgentEndpointID != "" ||
-		event.AgentEndpointRevision != 0
-	if accessEvidencePresent {
-		if validateIdentity("Access ID", event.AccessID, false) != nil ||
-			validateIdentity("Access name", event.AccessName, false) != nil ||
-			validateIdentity("AgentEndpoint ID", event.AgentEndpointID, false) != nil ||
-			event.AccessRevision == 0 ||
-			event.AgentEndpointRevision == 0 {
+	environmentEvidencePresent := event.EnvironmentID != "" ||
+		event.EnvironmentName != "" ||
+		event.EnvironmentRevision != 0
+	if environmentEvidencePresent {
+		_, environmentIDErr := environment.NewEnvironmentID(event.EnvironmentID.String())
+		if environmentIDErr != nil ||
+			validateIdentity("Environment name", event.EnvironmentName, false) != nil ||
+			event.EnvironmentRevision == 0 ||
+			event.EnvironmentRevision > environment.MaxRevision {
 			return fmt.Errorf(
-				"%w: Access relation evidence is incomplete",
+				"%w: Environment relation evidence is incomplete",
 				ErrInvalidEvent,
 			)
 		}
-		if event.Decryption != DecryptionMITM || event.Decision != DecisionAllow {
+	}
+	clientEndpointEvidencePresent := event.ClientEndpointID != "" ||
+		event.ClientEndpointRevision != 0
+	if clientEndpointEvidencePresent {
+		_, clientEndpointIDErr := environment.NewClientEndpointID(event.ClientEndpointID.String())
+		if clientEndpointIDErr != nil ||
+			event.ClientEndpointRevision == 0 ||
+			event.ClientEndpointRevision > environment.MaxRevision {
 			return fmt.Errorf(
-				"%w: Access relation exists without an allowed MITM decision",
+				"%w: ClientEndpoint relation evidence is incomplete",
+				ErrInvalidEvent,
+			)
+		}
+		if !environmentEvidencePresent ||
+			event.Decryption != DecryptionMITM ||
+			event.Decision != DecisionAllow {
+			return fmt.Errorf(
+				"%w: ClientEndpoint relation exists without an allowed MITM decision",
 				ErrInvalidEvent,
 			)
 		}
@@ -251,9 +266,9 @@ func (event Event) Validate() error {
 	}
 	if event.Decryption == DecryptionMITM &&
 		event.Decision == DecisionAllow &&
-		!accessEvidencePresent {
+		(!environmentEvidencePresent || !clientEndpointEvidencePresent) {
 		return fmt.Errorf(
-			"%w: allowed MITM has no Access relation",
+			"%w: allowed MITM has no Environment and ClientEndpoint relation",
 			ErrInvalidEvent,
 		)
 	}
@@ -308,13 +323,13 @@ func (event Event) validateEgress() error {
 		return nil
 	}
 	switch event.EgressScope {
-	case EgressScopeAccess:
+	case EgressScopeEnvironment:
 		switch event.EgressSource {
-		case EgressSourceAccessRule,
-			EgressSourceAccessPlugin,
-			EgressSourceAccessDefault:
+		case EgressSourceEnvironmentRule,
+			EgressSourceEnvironmentPlugin,
+			EgressSourceEnvironmentDefault:
 		default:
-			return fmt.Errorf("%w: Access egress source is invalid", ErrInvalidEvent)
+			return fmt.Errorf("%w: Environment egress source is invalid", ErrInvalidEvent)
 		}
 	case EgressScopeNetwork:
 		switch event.EgressSource {

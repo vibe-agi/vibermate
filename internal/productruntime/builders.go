@@ -8,16 +8,15 @@ import (
 	"net/http"
 	"time"
 
-	"github.com/vibe-agi/vibermate/internal/access"
-	"github.com/vibe-agi/vibermate/internal/accesscredential"
 	"github.com/vibe-agi/vibermate/internal/activity"
 	"github.com/vibe-agi/vibermate/internal/anthropicchat"
 	"github.com/vibe-agi/vibermate/internal/captureadmission"
+	"github.com/vibe-agi/vibermate/internal/captureassignment"
 	"github.com/vibe-agi/vibermate/internal/capturerun"
-	"github.com/vibe-agi/vibermate/internal/certidentity"
 	"github.com/vibe-agi/vibermate/internal/connectionevent"
 	"github.com/vibe-agi/vibermate/internal/connectionpolicy"
 	"github.com/vibe-agi/vibermate/internal/egressaudit"
+	"github.com/vibe-agi/vibermate/internal/environment"
 	"github.com/vibe-agi/vibermate/internal/exchange"
 	"github.com/vibe-agi/vibermate/internal/localca"
 	"github.com/vibe-agi/vibermate/internal/loopbackproxy"
@@ -25,15 +24,16 @@ import (
 	"github.com/vibe-agi/vibermate/internal/offlinehold"
 	"github.com/vibe-agi/vibermate/internal/operationcatalog"
 	"github.com/vibe-agi/vibermate/internal/originaltransport"
-	"github.com/vibe-agi/vibermate/internal/pathcapability"
 	"github.com/vibe-agi/vibermate/internal/protocolpath"
+	"github.com/vibe-agi/vibermate/internal/protocolspec"
+	"github.com/vibe-agi/vibermate/internal/providerauth"
 	"github.com/vibe-agi/vibermate/internal/providertransport"
 	"github.com/vibe-agi/vibermate/internal/responseschat"
 	"github.com/vibe-agi/vibermate/internal/runtimepersistence"
 	"github.com/vibe-agi/vibermate/internal/secretstore"
 	"github.com/vibe-agi/vibermate/internal/toolapproval"
 	"github.com/vibe-agi/vibermate/internal/transportprofile"
-	"github.com/vibe-agi/vibermate/internal/workspaceroute"
+	"github.com/vibe-agi/vibermate/internal/wireprofile"
 )
 
 type storageBuildRequest struct {
@@ -74,235 +74,183 @@ func (productionStorageBuilder) Build(
 	return storageBuildResult{store: store, state: state}, nil
 }
 
-type accessBuildRequest struct {
-	repository   access.Repository
-	rootRevision certidentity.RootRevision
-	leafCache    access.LeafCacheInvalidator
-	secrets      secretstore.Store
+type environmentBuildRequest struct {
+	repository           environment.Repository
+	assignmentRepository captureassignment.Repository
+	leafCache            captureassignment.LeafCacheInvalidator
+	clock                captureassignment.Clock
+	accounts             environment.AccountCatalog
 }
 
-type accessRuntime interface {
-	access.AggregateCatalog
-	access.Writer
-	access.SnapshotResolver
-	access.IngressResolver
-	access.DownstreamProtocolResolver
-	access.LeafIssuanceAdmitter
-	access.IngressCatalogReader
-	access.ActivePlanCatalog
-	access.ProviderProbeCatalog
-	access.ProjectionHealthReader
-	access.RequestUseAdmitter
-	access.Deleter
+type environmentRuntime interface{ environment.Controller }
+
+type captureAssignmentRuntime interface {
+	captureassignment.Controller
+	loopbackproxy.CaptureAssignmentAuthority
+	environment.CaptureInspector
+	environment.CaptureTransitionCoordinator
+	BeginShutdown()
+	Drain(context.Context) error
 	Shutdown(context.Context) error
 }
 
-type accessBuilder interface {
-	Build(context.Context, accessBuildRequest) (accessRuntime, error)
+type environmentBuildResult struct {
+	environments environmentRuntime
+	assignments  captureAssignmentRuntime
 }
 
-type productionAccessBuilder struct{}
+type environmentBuilder interface {
+	Build(context.Context, environmentBuildRequest) (environmentBuildResult, error)
+}
 
-func (productionAccessBuilder) Build(
+type productionEnvironmentBuilder struct{}
+
+func (productionEnvironmentBuilder) Build(
 	ctx context.Context,
-	request accessBuildRequest,
-) (accessRuntime, error) {
-	compiler, err := productionAccessPlanCompiler()
+	request environmentBuildRequest,
+) (environmentBuildResult, error) {
+	projection := environment.NewAtomicProjection()
+	assignments, err := captureassignment.NewManager(captureassignment.Options{
+		Repository: request.assignmentRepository, Environments: projection,
+		LeafCacheInvalidator: request.leafCache, Clock: request.clock,
+	})
 	if err != nil {
-		return nil, fmt.Errorf("build Access plan compiler: %w", err)
+		return environmentBuildResult{}, fmt.Errorf("build Capture assignment manager: %w", err)
 	}
-	projection, err := access.NewSnapshotProjection(
-		request.rootRevision,
-		request.leafCache,
+	compiler, err := productionEnvironmentCompiler(request.accounts)
+	if err != nil {
+		shutdownErr := assignments.Shutdown(context.WithoutCancel(ctx))
+		return environmentBuildResult{}, errors.Join(
+			fmt.Errorf("build Environment compiler: %w", err),
+			wrapOptionalError("close Capture assignment manager", shutdownErr),
+		)
+	}
+	environments, err := environment.NewManager(
+		ctx, request.repository, compiler, projection, assignments,
 	)
 	if err != nil {
-		return nil, fmt.Errorf("build Access projection: %w", err)
+		shutdownErr := assignments.Shutdown(context.WithoutCancel(ctx))
+		return environmentBuildResult{}, errors.Join(
+			fmt.Errorf("recover Environment projection: %w", err),
+			wrapOptionalError("close Capture assignment manager", shutdownErr),
+		)
 	}
-	return access.NewManager(
-		ctx,
-		request.repository,
-		compiler,
-		projection,
-		accessSecretRetirer{store: request.secrets},
-	)
+	return environmentBuildResult{environments: environments, assignments: assignments}, nil
 }
 
-type accessSecretRetirer struct {
-	store secretstore.Store
+// unavailableAccountAuthority is the honest boundary for the current slice:
+// client-passthrough routes need no managed lease, while a managed route may
+// not compile or execute until the ProviderAccount authority is composed.
+type unavailableAccountAuthority struct{}
+
+var (
+	_ environment.AccountCatalog     = unavailableAccountAuthority{}
+	_ exchange.AccountLeaseAuthority = unavailableAccountAuthority{}
+)
+
+func (unavailableAccountAuthority) LookupAccount(string) (environment.AccountDescriptor, bool) {
+	return environment.AccountDescriptor{}, false
 }
 
-func (retirer accessSecretRetirer) RetireSecret(
-	ctx context.Context,
-	reference access.SecretRef,
-) error {
-	if retirer.store == nil {
-		return secretstore.ErrUnavailable
-	}
-	physicalReference, err := secretstore.ParseReference(reference.String())
-	if err != nil {
-		return secretstore.ErrInvalidReference
-	}
-	err = retirer.store.Delete(ctx, physicalReference)
-	if errors.Is(err, secretstore.ErrNotFound) {
-		return nil
-	}
-	return err
+func (unavailableAccountAuthority) Acquire(
+	context.Context,
+	exchange.AccountLeaseRequest,
+) (providerauth.Lease, error) {
+	return nil, errors.New("managed ProviderAccount authority is unavailable")
 }
 
-type credentialBuildRequest struct {
-	resolver access.SnapshotResolver
-	secrets  secretstore.Store
-}
-
-type credentialRuntime interface {
-	accesscredential.Controller
-}
-
-type credentialBuilder interface {
-	Build(credentialBuildRequest) (credentialRuntime, error)
-}
-
-type productionCredentialBuilder struct{}
-
-func (productionCredentialBuilder) Build(
-	request credentialBuildRequest,
-) (credentialRuntime, error) {
-	return accesscredential.New(request.resolver, request.secrets)
-}
-
-func productionAccessPlanCompiler() (*access.Compiler, error) {
+func productionEnvironmentCompiler(accounts environment.AccountCatalog) (environment.Compiler, error) {
 	operations, err := operationcatalog.BuiltIn()
 	if err != nil {
-		return nil, fmt.Errorf("build client operation catalog: %w", err)
+		return environment.Compiler{}, fmt.Errorf("build client operation catalog: %w", err)
 	}
-	anthropicCodecPairID, err := access.NewCodecPairID(
-		anthropicchat.CodecPairID,
-	)
+	anthropicCodecPairID, err := protocolspec.NewCodecPairID(anthropicchat.CodecPairID)
 	if err != nil {
-		return nil, err
+		return environment.Compiler{}, err
 	}
-	responsesCodecPairID, err := access.NewCodecPairID(
-		responseschat.CodecPairID,
-	)
+	responsesCodecPairID, err := protocolspec.NewCodecPairID(responseschat.CodecPairID)
 	if err != nil {
-		return nil, err
+		return environment.Compiler{}, err
 	}
-	messagesCodecPairID, err := access.NewCodecPairID(
-		anthropicchat.MessagesCodecPairID,
-	)
+	messagesCodecPairID, err := protocolspec.NewCodecPairID(anthropicchat.MessagesCodecPairID)
 	if err != nil {
-		return nil, err
+		return environment.Compiler{}, err
 	}
-	responsesPassthroughCodecPairID, err := access.NewCodecPairID(
+	responsesPassthroughCodecPairID, err := protocolspec.NewCodecPairID(
 		"openai-responses-original-passthrough",
 	)
 	if err != nil {
-		return nil, err
+		return environment.Compiler{}, err
 	}
-	catalog, err := access.NewCatalog(access.CatalogOptions{
-		Capabilities: access.PlanCapabilities{
-			// A RouteSet may name a second upstream so a dropped attempt has
-			// somewhere to go. Whether one is used is the plan's fallback
-			// policy, not this limit.
-			MaxEndpointProfiles:          access.MaxEndpointProfiles,
-			MaxAccountBindings:           access.MaxEndpointProfiles,
-			MaxRouteSets:                 1,
-			AllowMultipleRouteCandidates: true,
-		},
-		ClientOperations: operations.Definitions(),
-		CodecPairs: []access.CodecPairDefinition{
+	protocols, err := protocolspec.NewCatalog(
+		operations.Definitions(),
+		[]protocolspec.CodecPairDefinition{
 			{
 				ID:              anthropicCodecPairID,
 				Revision:        anthropicchat.CodecRevision,
-				ClientDialect:   access.DialectAnthropicMessages,
-				ProviderDialect: access.DialectOpenAIChat,
+				ClientDialect:   protocolspec.DialectAnthropicMessages,
+				ProviderDialect: protocolspec.DialectOpenAIChat,
 				ClientOperationIDs: operations.SemanticOperationIDs(
-					access.DialectAnthropicMessages,
+					protocolspec.DialectAnthropicMessages,
 				),
-				RequiredCapabilities: []access.ProviderCapability{
-					access.ProviderCapabilityMessages,
-					access.ProviderCapabilityStreaming,
-					access.ProviderCapabilityToolCalls,
+				RequiredCapabilities: []protocolspec.ProviderCapability{
+					protocolspec.ProviderCapabilityMessages,
+					protocolspec.ProviderCapabilityStreaming,
+					protocolspec.ProviderCapabilityToolCalls,
 				},
 			},
 			{
 				ID:              messagesCodecPairID,
 				Revision:        anthropicchat.MessagesCodecRevision,
-				ClientDialect:   access.DialectAnthropicMessages,
-				ProviderDialect: access.DialectAnthropicMessages,
+				ClientDialect:   protocolspec.DialectAnthropicMessages,
+				ProviderDialect: protocolspec.DialectAnthropicMessages,
 				ClientOperationIDs: operations.SemanticOperationIDs(
-					access.DialectAnthropicMessages,
+					protocolspec.DialectAnthropicMessages,
 				),
-				RequiredCapabilities: []access.ProviderCapability{
-					access.ProviderCapabilityMessages,
-					access.ProviderCapabilityStreaming,
-					access.ProviderCapabilityToolCalls,
+				RequiredCapabilities: []protocolspec.ProviderCapability{
+					protocolspec.ProviderCapabilityMessages,
+					protocolspec.ProviderCapabilityStreaming,
+					protocolspec.ProviderCapabilityToolCalls,
 				},
 			},
 			{
 				ID:              responsesCodecPairID,
 				Revision:        responseschat.CodecRevision,
-				ClientDialect:   access.DialectOpenAIResponses,
-				ProviderDialect: access.DialectOpenAIChat,
+				ClientDialect:   protocolspec.DialectOpenAIResponses,
+				ProviderDialect: protocolspec.DialectOpenAIChat,
 				ClientOperationIDs: operations.SemanticOperationIDs(
-					access.DialectOpenAIResponses,
+					protocolspec.DialectOpenAIResponses,
 				),
-				RequiredCapabilities: []access.ProviderCapability{
-					access.ProviderCapabilityMessages,
-					access.ProviderCapabilityStreaming,
-					access.ProviderCapabilityToolCalls,
+				RequiredCapabilities: []protocolspec.ProviderCapability{
+					protocolspec.ProviderCapabilityMessages,
+					protocolspec.ProviderCapabilityStreaming,
+					protocolspec.ProviderCapabilityToolCalls,
 				},
 			},
 			{
 				ID:              responsesPassthroughCodecPairID,
 				Revision:        1,
-				ClientDialect:   access.DialectOpenAIResponses,
-				ProviderDialect: access.DialectOpenAIResponses,
+				ClientDialect:   protocolspec.DialectOpenAIResponses,
+				ProviderDialect: protocolspec.DialectOpenAIResponses,
 				ClientOperationIDs: operations.SemanticOperationIDs(
-					access.DialectOpenAIResponses,
+					protocolspec.DialectOpenAIResponses,
 				),
-				RequiredCapabilities: []access.ProviderCapability{
-					access.ProviderCapabilityMessages,
-					access.ProviderCapabilityStreaming,
-					access.ProviderCapabilityToolCalls,
+				RequiredCapabilities: []protocolspec.ProviderCapability{
+					protocolspec.ProviderCapabilityMessages,
+					protocolspec.ProviderCapabilityStreaming,
+					protocolspec.ProviderCapabilityToolCalls,
 				},
 			},
 		},
-		AuthDrivers: []access.AuthDriverDefinition{
-			{
-				Ref:      access.StaticHeaderAuthDriverRef(),
-				Revision: 1,
-			},
-			{
-				Ref:      access.AnthropicAPIKeyAuthDriverRef(),
-				Revision: 1,
-			},
-		},
-		EgressModes: []access.EgressModeDefinition{{
-			Mode:     access.EgressModeDirect,
-			Revision: 1,
-		}},
-		PluginPlanModes: []access.PluginPlanModeDefinition{{
-			Mode:     access.PluginPlanModePassThrough,
-			Revision: 1,
-		}},
-		ModelPolicyModes: []access.ModelPolicyModeDefinition{
-			{
-				Mode:     access.ModelPolicyModePassthrough,
-				Revision: 1,
-			},
-			{
-				Mode:     access.ModelPolicyModeFixed,
-				Revision: 1,
-			},
-		},
-		TransportProfiles:    access.BuiltInTransportFingerprintDefinitions(),
-		UpstreamWireProfiles: access.BuiltInUpstreamWireProfileDefinitions(),
-	})
+	)
 	if err != nil {
-		return nil, err
+		return environment.Compiler{}, err
 	}
-	return access.NewCompiler(catalog)
+	wires, err := wireprofile.BuiltInCatalog()
+	if err != nil {
+		return environment.Compiler{}, err
+	}
+	return environment.NewCompiler(accounts, protocols, wires)
 }
 
 type monitorBuildRequest struct {
@@ -469,14 +417,13 @@ func (productionProviderBuilder) Build(
 }
 
 type exchangeBuildRequest struct {
-	ownerContext    context.Context
-	actions         offlinehold.ActionAdmission
-	resolver        access.SnapshotResolver
-	workspaceRoutes workspaceroute.Resolver
-	provider        exchange.Provider
-	toolDecisions   exchange.ToolDecisionGate
-	activities      activity.Recorder
-	hold            exchange.HoldPolicy
+	ownerContext  context.Context
+	actions       offlinehold.ActionAdmission
+	accounts      exchange.AccountLeaseAuthority
+	provider      exchange.Provider
+	toolDecisions exchange.ToolDecisionGate
+	activities    activity.Recorder
+	hold          exchange.HoldPolicy
 }
 
 type exchangeRuntime interface {
@@ -518,13 +465,11 @@ func (observer activityAttemptObserver) Observe(
 	sourceRecognition := activity.SourceRecognitionUnknown
 	captureRunID := ""
 	manualCaptureID := ""
-	ingressProfileID := "system-proxy"
 	if observation.HasAdmission {
 		if err := observation.Admission.Validate(); err != nil {
 			return errors.New("Exchange capture admission is invalid")
 		}
 		sourceDisplayName = observation.Admission.SourceLabel()
-		ingressProfileID = observation.Admission.IngressProfileID()
 		switch observation.Admission.AttributionConfidence() {
 		case captureadmission.AttributionVerified:
 			sourceRecognition = activity.SourceRecognitionVerified
@@ -549,20 +494,28 @@ func (observer activityAttemptObserver) Observe(
 	// mapped to copy, matched by a rule, or told apart from a reason that
 	// happens to contain the same words.
 	_, err := observer.recorder.Record(ctx, activity.Event{
-		Kind:              activity.KindExchangeCompleted,
-		AccessID:          observation.AccessID,
-		AccessName:        observation.AccessName,
-		AccessRevision:    uint64(observation.AccessRevision),
-		SubjectID:         observation.ExchangeID,
-		Status:            status,
-		ReasonCode:        string(observation.ReasonCode),
-		SourceKind:        sourceKind,
-		SourceDisplayName: sourceDisplayName,
-		SourceRecognition: sourceRecognition,
-		CaptureRunID:      captureRunID,
-		ManualCaptureID:   manualCaptureID,
-		IngressProfileID:  ingressProfileID,
-		ConnectionID:      observation.ConnectionID,
+		Kind:                   activity.KindExchangeCompleted,
+		EnvironmentID:          observation.EnvironmentID,
+		EnvironmentRevision:    observation.EnvironmentRevision,
+		EnvironmentDigest:      observation.EnvironmentDigest,
+		ClientEndpointID:       observation.EndpointID,
+		ClientEndpointRevision: observation.EndpointRevision,
+		ProtocolPlanID:         observation.ProtocolPlanID,
+		ProtocolPlanRevision:   observation.ProtocolPlanRevision,
+		RouteID:                observation.RouteID,
+		RouteRevision:          observation.RouteRevision,
+		AccountID:              observation.AccountID,
+		AccountRevision:        observation.AccountRevision,
+		CredentialEpoch:        observation.CredentialEpoch,
+		SubjectID:              observation.ExchangeID,
+		Status:                 status,
+		ReasonCode:             string(observation.ReasonCode),
+		SourceKind:             sourceKind,
+		SourceDisplayName:      sourceDisplayName,
+		SourceRecognition:      sourceRecognition,
+		CaptureRunID:           captureRunID,
+		ManualCaptureID:        manualCaptureID,
+		ConnectionID:           observation.ConnectionID,
 		Diagnosis: activity.Diagnosis{
 			ProviderStatus: observation.ProviderStatus,
 			ProviderField:  string(observation.ProviderField),
@@ -665,14 +618,13 @@ func (productionExchangeBuilder) Build(
 		return nil, fmt.Errorf("build protocol path selector: %w", err)
 	}
 	return exchange.New(exchange.Options{
-		OwnerContext:    request.ownerContext,
-		Actions:         request.actions,
-		Resolver:        request.resolver,
-		WorkspaceRoutes: request.workspaceRoutes,
-		ProtocolPaths:   protocolPaths,
-		Provider:        request.provider,
-		ToolDecisions:   request.toolDecisions,
-		RetryWaiter:     exchange.TimerRetryWaiter{},
+		OwnerContext:  request.ownerContext,
+		Actions:       request.actions,
+		Accounts:      request.accounts,
+		ProtocolPaths: protocolPaths,
+		Provider:      request.provider,
+		ToolDecisions: request.toolDecisions,
+		RetryWaiter:   exchange.TimerRetryWaiter{},
 		Observer: activityAttemptObserver{
 			recorder: request.activities,
 		},
@@ -774,7 +726,7 @@ type localCABuildRequest struct {
 
 type localCARuntime interface {
 	loopbackproxy.CertificateAuthority
-	access.LeafCacheInvalidator
+	captureassignment.LeafCacheInvalidator
 	Certificate() localca.RootCertificate
 	Shutdown(context.Context) error
 }
@@ -796,19 +748,18 @@ func (productionLocalCABuilder) Build(
 }
 
 type proxyBuildRequest struct {
-	ownerContext   context.Context
-	admissions     captureadmission.Authorizer
-	ingress        loopbackproxy.IngressAuthority
-	accessRequests access.RequestUseAdmitter
-	exchanges      exchange.Executor
-	original       loopbackproxy.OriginalClient
-	certificates   loopbackproxy.CertificateAuthority
-	connections    connectionevent.Runtime
-	policy         connectionpolicy.Source
-	approvals      loopbackproxy.NetworkApprovals
-	blindTunnels   loopbackproxy.BlindTunnelDialer
-	egressAudit    egressaudit.Writer
-	random         io.Reader
+	ownerContext context.Context
+	admissions   captureadmission.Authorizer
+	assignments  loopbackproxy.CaptureAssignmentAuthority
+	exchanges    exchange.Executor
+	original     loopbackproxy.OriginalClient
+	certificates loopbackproxy.CertificateAuthority
+	connections  connectionevent.Runtime
+	policy       connectionpolicy.Source
+	approvals    loopbackproxy.NetworkApprovals
+	blindTunnels loopbackproxy.BlindTunnelDialer
+	egressAudit  egressaudit.Writer
+	random       io.Reader
 }
 
 type proxyRuntime interface {
@@ -827,28 +778,18 @@ type productionProxyBuilder struct{}
 func (productionProxyBuilder) Build(
 	request proxyBuildRequest,
 ) (proxyRuntime, error) {
-	operations, err := operationcatalog.BuiltIn()
-	if err != nil {
-		return nil, fmt.Errorf("build client operation catalog: %w", err)
-	}
-	paths, err := pathcapability.NewCatalog(operations.Definitions())
-	if err != nil {
-		return nil, fmt.Errorf("build PathCapability catalog: %w", err)
-	}
 	return loopbackproxy.New(loopbackproxy.Options{
-		OwnerContext:   request.ownerContext,
-		Admissions:     request.admissions,
-		Ingress:        request.ingress,
-		AccessRequests: request.accessRequests,
-		Paths:          paths,
-		Exchanges:      request.exchanges,
-		Original:       request.original,
-		Certificates:   request.certificates,
-		Connections:    request.connections,
-		Policy:         request.policy,
-		Approvals:      request.approvals,
-		BlindTunnels:   request.blindTunnels,
-		EgressAudit:    request.egressAudit,
+		OwnerContext: request.ownerContext,
+		Admissions:   request.admissions,
+		Assignments:  request.assignments,
+		Exchanges:    request.exchanges,
+		Original:     request.original,
+		Certificates: request.certificates,
+		Connections:  request.connections,
+		Policy:       request.policy,
+		Approvals:    request.approvals,
+		BlindTunnels: request.blindTunnels,
+		EgressAudit:  request.egressAudit,
 		ExchangeIDs: loopbackproxy.NewRandomExchangeIDSource(
 			request.random,
 		),
@@ -857,8 +798,7 @@ func (productionProxyBuilder) Build(
 
 type runtimeBuilders struct {
 	storage       storageBuilder
-	access        accessBuilder
-	credential    credentialBuilder
+	environment   environmentBuilder
 	activity      activityBuilder
 	connection    connectionEventBuilder
 	approval      approvalBuilder
@@ -875,8 +815,7 @@ type runtimeBuilders struct {
 func productionBuilders() runtimeBuilders {
 	return runtimeBuilders{
 		storage:       productionStorageBuilder{},
-		access:        productionAccessBuilder{},
-		credential:    productionCredentialBuilder{},
+		environment:   productionEnvironmentBuilder{},
 		activity:      productionActivityBuilder{},
 		connection:    productionConnectionEventBuilder{},
 		approval:      productionApprovalBuilder{},

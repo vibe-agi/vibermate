@@ -26,7 +26,7 @@ const (
 	desktopBundleID                  = "io.vibermate.desktop"
 	desktopNavigationSchema          = "vibermate-navigation-state-v1"
 	desktopNavigationStateFile       = "navigation-state-v1.json"
-	desktopNavigationSentinelLocator = "overview"
+	desktopNavigationSentinelLocator = "captures"
 	desktopNavigationStateLimit      = 4 << 10
 	// A Desktop that remains registered beyond this bound is user-visible as a
 	// hung application. Deeper daemon cleanup budgets must never leak into the
@@ -420,7 +420,7 @@ func newDesktopNavigationRestoreLocator() (string, error) {
 	if _, err := rand.Read(identity[:]); err != nil {
 		return "", err
 	}
-	return "access/" + hex.EncodeToString(identity[:]) + "/routing", nil
+	return "environments/" + hex.EncodeToString(identity[:]), nil
 }
 
 func publishDesktopNavigationFixture(

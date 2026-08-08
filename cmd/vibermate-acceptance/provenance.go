@@ -209,9 +209,7 @@ func newAcceptanceConfiguration(
 		DeterministicOnly: config.deterministicOnly,
 		ClientID:          string(client.ID),
 		ClientVersion:     client.Version,
-		AccessID:          config.accessID,
-		ProviderOrigin:    config.providerOrigin,
-		ProviderModel:     config.providerModel,
+		EnvironmentID:     config.environmentID,
 		Timeout:           config.timeout.String(),
 	}
 }

@@ -46,18 +46,18 @@ func TestConnectionEventTimelinePersistsAndPaginatesAcrossReopen(
 				Label:      "claude",
 				Confidence: connectionevent.SourceConfidenceConfigured,
 			},
-			Decision:              connectionevent.DecisionAllow,
-			RuleID:                "m0.agent_endpoint_exact",
-			RouteHost:             "api.anthropic.com",
-			AccessID:              "access-test",
-			AccessName:            "Test Access",
-			AccessRevision:        1,
-			AgentEndpointID:       "endpoint-test",
-			AgentEndpointRevision: 1,
-			EgressScope:           connectionevent.EgressScopeAccess,
-			EgressSource:          connectionevent.EgressSourceAccessDefault,
-			EgressPolicyRevision:  1,
-			Decryption:            connectionevent.DecryptionMITM,
+			Decision:               connectionevent.DecisionAllow,
+			RuleID:                 "client_endpoint_exact",
+			RouteHost:              "api.anthropic.com",
+			EnvironmentID:          "environment-test",
+			EnvironmentName:        "Test Environment",
+			EnvironmentRevision:    1,
+			ClientEndpointID:       "endpoint-test",
+			ClientEndpointRevision: 1,
+			EgressScope:            connectionevent.EgressScopeEnvironment,
+			EgressSource:           connectionevent.EgressSourceEnvironmentDefault,
+			EgressPolicyRevision:   1,
+			Decryption:             connectionevent.DecryptionMITM,
 		},
 	); err != nil {
 		t.Fatal(err)
@@ -137,7 +137,8 @@ func TestConnectionEventTimelinePersistsAndPaginatesAcrossReopen(
 	if err != nil || len(latest.Items) != 1 ||
 		latest.Items[0].ConnectionID != connectionID ||
 		latest.Items[0].Phase != connectionevent.PhaseClosed ||
-		latest.Items[0].AccessID != "access-test" {
+		latest.Items[0].EnvironmentID != "environment-test" ||
+		latest.Items[0].ClientEndpointID != "endpoint-test" {
 		t.Fatalf("latest-per-connection page = %+v, %v", latest, err)
 	}
 	timeline, err := manager.Timeline(context.Background(), connectionID)
@@ -173,6 +174,64 @@ func TestConnectionEventTimelinePersistsAndPaginatesAcrossReopen(
 		recovered.Events[3].Outcome != connectionevent.OutcomeCompleted ||
 		recovered.Events[3].RouteHost != "relay.example.test" {
 		t.Fatalf("recovered timeline = %+v", recovered)
+	}
+}
+
+func TestBlindConnectionPersistsEnvironmentWithoutClientEndpoint(t *testing.T) {
+	t.Parallel()
+
+	databasePath := filepath.Join(t.TempDir(), "data", "runtime.db")
+	store := openTestStore(t, databasePath)
+	startedAt := time.Date(2026, 8, 7, 2, 0, 0, 0, time.UTC)
+	event := connectionevent.Event{
+		ConnectionID:         "connection-blind-environment",
+		IngressID:            "run-transparent",
+		SourceLabel:          "claude",
+		SourceConfidence:     connectionevent.SourceConfidenceConfigured,
+		EnvironmentID:        "system-transparent",
+		EnvironmentName:      "Transparent",
+		EnvironmentRevision:  1,
+		RequestedHost:        "files.example.com",
+		RouteHost:            "files.example.com",
+		Port:                 443,
+		Decision:             connectionevent.DecisionAllow,
+		RuleID:               "network_default",
+		EgressScope:          connectionevent.EgressScopeNetwork,
+		EgressSource:         connectionevent.EgressSourceNetworkDefault,
+		EgressPolicyRevision: 1,
+		Decryption:           connectionevent.DecryptionBlind,
+		Phase:                connectionevent.PhaseClosed,
+		StartedAt:            startedAt,
+		EndedAt:              startedAt.Add(time.Second),
+		Outcome:              connectionevent.OutcomeCompleted,
+	}
+	if _, err := store.ConnectionEventRepository().Append(context.Background(), event); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.Shutdown(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+
+	reopened := openTestStore(t, databasePath)
+	defer func() {
+		if err := reopened.Shutdown(context.Background()); err != nil {
+			t.Errorf("close reopened store: %v", err)
+		}
+	}()
+	timeline, err := reopened.ConnectionEventRepository().Timeline(
+		context.Background(),
+		event.ConnectionID,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(timeline.Events) != 1 ||
+		timeline.Events[0].EnvironmentID != event.EnvironmentID ||
+		timeline.Events[0].EnvironmentName != event.EnvironmentName ||
+		timeline.Events[0].EnvironmentRevision != event.EnvironmentRevision ||
+		timeline.Events[0].ClientEndpointID != "" ||
+		timeline.Events[0].ClientEndpointRevision != 0 {
+		t.Fatalf("blind Environment evidence changed across reopen: %+v", timeline)
 	}
 }
 
@@ -217,18 +276,18 @@ func TestConnectionEventRecoveryTerminatesInterruptedConnectionOnce(
 				Label:      "claude",
 				Confidence: connectionevent.SourceConfidenceConfigured,
 			},
-			Decision:              connectionevent.DecisionAllow,
-			RuleID:                "m0.agent_endpoint_exact",
-			RouteHost:             "api.anthropic.com",
-			AccessID:              "access-test",
-			AccessName:            "Test Access",
-			AccessRevision:        1,
-			AgentEndpointID:       "endpoint-test",
-			AgentEndpointRevision: 1,
-			EgressScope:           connectionevent.EgressScopeAccess,
-			EgressSource:          connectionevent.EgressSourceAccessDefault,
-			EgressPolicyRevision:  1,
-			Decryption:            connectionevent.DecryptionMITM,
+			Decision:               connectionevent.DecisionAllow,
+			RuleID:                 "client_endpoint_exact",
+			RouteHost:              "api.anthropic.com",
+			EnvironmentID:          "environment-test",
+			EnvironmentName:        "Test Environment",
+			EnvironmentRevision:    1,
+			ClientEndpointID:       "endpoint-test",
+			ClientEndpointRevision: 1,
+			EgressScope:            connectionevent.EgressScopeEnvironment,
+			EgressSource:           connectionevent.EgressSourceEnvironmentDefault,
+			EgressPolicyRevision:   1,
+			Decryption:             connectionevent.DecryptionMITM,
 		},
 	); err != nil {
 		t.Fatal(err)

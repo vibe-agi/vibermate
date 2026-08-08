@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/vibe-agi/vibermate/internal/controlprincipal"
+	"github.com/vibe-agi/vibermate/internal/environment"
 	"github.com/vibe-agi/vibermate/internal/proxyclient"
 )
 
@@ -20,7 +21,7 @@ revision,
 state,
 display_name,
 allowed_ingress_scopes_json,
-allowed_profile_ids_json,
+allowed_environment_ids_json,
 quota_policy_id,
 allowed_grant_kinds,
 created_at_unix_ms,
@@ -44,7 +45,7 @@ binding.revision,
 binding.state,
 binding.display_name,
 binding.allowed_ingress_scopes_json,
-binding.allowed_profile_ids_json,
+binding.allowed_environment_ids_json,
 binding.quota_policy_id,
 binding.allowed_grant_kinds,
 binding.created_at_unix_ms,
@@ -100,7 +101,7 @@ func (repository *proxyClientRepository) CreateBinding(
 		record.State != proxyclient.BindingActive {
 		return errors.Join(proxyclient.ErrInvalidRecord, err)
 	}
-	ingress, profiles, grants, err := encodeBindingPolicy(record.Policy)
+	ingress, environments, grants, err := encodeBindingPolicy(record.Policy)
 	if err != nil {
 		return err
 	}
@@ -117,7 +118,7 @@ func (repository *proxyClientRepository) CreateBinding(
 		     state,
 		     display_name,
 		     allowed_ingress_scopes_json,
-		     allowed_profile_ids_json,
+		     allowed_environment_ids_json,
 		     quota_policy_id,
 		     allowed_grant_kinds,
 		     created_at_unix_ms,
@@ -129,7 +130,7 @@ func (repository *proxyClientRepository) CreateBinding(
 		string(record.State),
 		record.DisplayName,
 		ingress,
-		profiles,
+		environments,
 		record.Policy.QuotaPolicyID(),
 		grants,
 		toUnixMillis(record.CreatedAt),
@@ -719,16 +720,16 @@ func loadProxyClientBinding(
 
 func scanProxyClientBinding(row proxyClientRow) (proxyclient.BindingRecord, error) {
 	var (
-		bindingIDText string
-		revision      int64
-		state         string
-		displayName   string
-		ingressJSON   []byte
-		profilesJSON  []byte
-		quotaPolicyID string
-		grantBits     int64
-		createdAt     int64
-		updatedAt     int64
+		bindingIDText    string
+		revision         int64
+		state            string
+		displayName      string
+		ingressJSON      []byte
+		environmentsJSON []byte
+		quotaPolicyID    string
+		grantBits        int64
+		createdAt        int64
+		updatedAt        int64
 	)
 	if err := row.Scan(
 		&bindingIDText,
@@ -736,7 +737,7 @@ func scanProxyClientBinding(row proxyClientRow) (proxyclient.BindingRecord, erro
 		&state,
 		&displayName,
 		&ingressJSON,
-		&profilesJSON,
+		&environmentsJSON,
 		&quotaPolicyID,
 		&grantBits,
 		&createdAt,
@@ -744,12 +745,13 @@ func scanProxyClientBinding(row proxyClientRow) (proxyclient.BindingRecord, erro
 	); err != nil {
 		return proxyclient.BindingRecord{}, err
 	}
-	var ingressScopes, profileIDs []string
+	var ingressScopes []string
+	var environmentIDs []environment.EnvironmentID
 	if err := json.Unmarshal(ingressJSON, &ingressScopes); err != nil {
 		return proxyclient.BindingRecord{}, fmt.Errorf("decode binding ingress scopes: %w", err)
 	}
-	if err := json.Unmarshal(profilesJSON, &profileIDs); err != nil {
-		return proxyclient.BindingRecord{}, fmt.Errorf("decode binding profile IDs: %w", err)
+	if err := json.Unmarshal(environmentsJSON, &environmentIDs); err != nil {
+		return proxyclient.BindingRecord{}, fmt.Errorf("decode binding Environment IDs: %w", err)
 	}
 	grantKinds, err := decodeGrantKinds(grantBits)
 	if err != nil {
@@ -757,13 +759,13 @@ func scanProxyClientBinding(row proxyClientRow) (proxyclient.BindingRecord, erro
 	}
 	policy, err := proxyclient.NewBindingPolicy(
 		ingressScopes,
-		profileIDs,
+		environmentIDs,
 		quotaPolicyID,
 		grantKinds,
 	)
 	if err != nil ||
 		!slices.Equal(ingressScopes, policy.AllowedIngressScopes()) ||
-		!slices.Equal(profileIDs, policy.AllowedProfileIDs()) {
+		!slices.Equal(environmentIDs, policy.AllowedEnvironmentIDs()) {
 		return proxyclient.BindingRecord{}, errors.Join(proxyclient.ErrInvalidRecord, err)
 	}
 	bindingID, err := proxyclient.ParseBindingID(bindingIDText)
@@ -908,7 +910,7 @@ func scanProxyClientAuthentication(row proxyClientRow) (proxyclient.Authenticati
 		bindingState        string
 		bindingDisplayName  string
 		ingressJSON         []byte
-		profilesJSON        []byte
+		environmentsJSON    []byte
 		quotaPolicyID       string
 		bindingGrantBits    int64
 		bindingCreatedAt    int64
@@ -939,7 +941,7 @@ func scanProxyClientAuthentication(row proxyClientRow) (proxyclient.Authenticati
 		&bindingState,
 		&bindingDisplayName,
 		&ingressJSON,
-		&profilesJSON,
+		&environmentsJSON,
 		&quotaPolicyID,
 		&bindingGrantBits,
 		&bindingCreatedAt,
@@ -973,7 +975,7 @@ func scanProxyClientAuthentication(row proxyClientRow) (proxyclient.Authenticati
 			bindingState,
 			bindingDisplayName,
 			ingressJSON,
-			profilesJSON,
+			environmentsJSON,
 			quotaPolicyID,
 			bindingGrantBits,
 			bindingCreatedAt,
@@ -1081,12 +1083,12 @@ func encodeBindingPolicy(policy proxyclient.BindingPolicy) ([]byte, []byte, int6
 	if err != nil {
 		return nil, nil, 0, fmt.Errorf("encode binding ingress scopes: %w", err)
 	}
-	profiles, err := json.Marshal(policy.AllowedProfileIDs())
+	environments, err := json.Marshal(policy.AllowedEnvironmentIDs())
 	if err != nil {
-		return nil, nil, 0, fmt.Errorf("encode binding profile IDs: %w", err)
+		return nil, nil, 0, fmt.Errorf("encode binding Environment IDs: %w", err)
 	}
 	grants, err := encodeGrantKinds(policy.AllowedGrantKinds())
-	return ingress, profiles, grants, err
+	return ingress, environments, grants, err
 }
 
 func encodeGrantKinds(kinds []controlprincipal.GrantKind) (int64, error) {

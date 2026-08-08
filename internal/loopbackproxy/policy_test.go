@@ -57,8 +57,8 @@ func TestDeniedConnectionNeverReachesATransport(t *testing.T) {
 	}
 }
 
-// An AgentEndpoint is not exempt: policy decides every proxied connection.
-func TestPolicyDecidesAnAgentEndpointToo(t *testing.T) {
+// A ClientEndpoint is not exempt: policy decides every proxied connection.
+func TestPolicyDecidesAClientEndpointToo(t *testing.T) {
 	t.Parallel()
 
 	fixture := newProxyFixtureWithPolicy(t, denyEverythingPolicy(t))
@@ -72,10 +72,10 @@ func TestPolicyDecidesAnAgentEndpointToo(t *testing.T) {
 	_ = response.Body.Close()
 	_ = connection.Close()
 	if response.StatusCode != http.StatusForbidden {
-		t.Fatalf("denied AgentEndpoint status = %d", response.StatusCode)
+		t.Fatalf("denied ClientEndpoint status = %d", response.StatusCode)
 	}
 	if len(fixture.exchanges.Requests()) != 0 {
-		t.Fatal("a denied AgentEndpoint created an Exchange")
+		t.Fatal("a denied ClientEndpoint created an Exchange")
 	}
 }
 

@@ -12,11 +12,11 @@ import (
 	"time"
 
 	"github.com/vibe-agi/vibermate/internal/acceptancereport"
-	"github.com/vibe-agi/vibermate/internal/access"
 	"github.com/vibe-agi/vibermate/internal/activity"
 	"github.com/vibe-agi/vibermate/internal/connectionevent"
 	"github.com/vibe-agi/vibermate/internal/exchange"
 	"github.com/vibe-agi/vibermate/internal/offlinehold"
+	"github.com/vibe-agi/vibermate/internal/originidentity"
 	"github.com/vibe-agi/vibermate/internal/toolapproval"
 )
 
@@ -497,15 +497,15 @@ func TestExpectedExchangeFailureRequiresExactlyOneTerminal(t *testing.T) {
 	t.Parallel()
 
 	expected := exchangeAuditRecord{
-		Sequence:   10,
-		AccessID:   "Acc-001",
-		ExchangeID: "exchange-expected",
-		Status:     activity.StatusFailed,
-		ReasonCode: string(exchange.ReasonProviderCredentialUnavailable),
+		Sequence:      10,
+		EnvironmentID: "environment-001",
+		ExchangeID:    "exchange-expected",
+		Status:        activity.StatusFailed,
+		ReasonCode:    string(exchange.ReasonProviderCredentialUnavailable),
 	}
 	record, exists, err := singleExpectedExchangeFailure(
 		[]exchangeAuditRecord{expected},
-		"Acc-001",
+		"environment-001",
 		exchange.ReasonProviderCredentialUnavailable,
 	)
 	if err != nil || !exists || record != expected {
@@ -516,18 +516,18 @@ func TestExpectedExchangeFailureRequiresExactlyOneTerminal(t *testing.T) {
 		"extra success": {
 			expected,
 			{
-				Sequence:   11,
-				AccessID:   "Acc-001",
-				ExchangeID: "exchange-extra",
-				Status:     activity.StatusSucceeded,
+				Sequence:      11,
+				EnvironmentID: "environment-001",
+				ExchangeID:    "exchange-extra",
+				Status:        activity.StatusSucceeded,
 			},
 		},
 		"wrong terminal": {{
-			Sequence:   10,
-			AccessID:   "Acc-001",
-			ExchangeID: "exchange-wrong",
-			Status:     activity.StatusCanceled,
-			ReasonCode: "exchange_canceled",
+			Sequence:      10,
+			EnvironmentID: "environment-001",
+			ExchangeID:    "exchange-wrong",
+			Status:        activity.StatusCanceled,
+			ReasonCode:    "exchange_canceled",
 		}},
 	} {
 		records := records
@@ -535,7 +535,7 @@ func TestExpectedExchangeFailureRequiresExactlyOneTerminal(t *testing.T) {
 			t.Parallel()
 			if _, _, err := singleExpectedExchangeFailure(
 				records,
-				"Acc-001",
+				"environment-001",
 				exchange.ReasonProviderCredentialUnavailable,
 			); err == nil {
 				t.Fatal("non-unique or mismatched Exchange terminal was accepted")
@@ -551,106 +551,51 @@ func TestSuccessfulExchangeEvidenceCountsDistinctPostBaselineSubjects(
 
 	records := []exchangeAuditRecord{
 		{
-			Sequence:   9,
-			AccessID:   "Acc-001",
-			ExchangeID: "exchange-before",
-			Status:     activity.StatusSucceeded,
+			Sequence:      9,
+			EnvironmentID: "environment-001",
+			ExchangeID:    "exchange-before",
+			Status:        activity.StatusSucceeded,
 		},
 		{
-			Sequence:   10,
-			AccessID:   "Acc-001",
-			ExchangeID: "exchange-first",
-			Status:     activity.StatusSucceeded,
+			Sequence:      10,
+			EnvironmentID: "environment-001",
+			ExchangeID:    "exchange-first",
+			Status:        activity.StatusSucceeded,
 		},
 		{
-			Sequence:   11,
-			AccessID:   "Acc-001",
-			ExchangeID: "exchange-first",
-			Status:     activity.StatusSucceeded,
+			Sequence:      11,
+			EnvironmentID: "environment-001",
+			ExchangeID:    "exchange-first",
+			Status:        activity.StatusSucceeded,
 		},
 		{
-			Sequence:   12,
-			AccessID:   "Acc-002",
-			ExchangeID: "exchange-other",
-			Status:     activity.StatusSucceeded,
+			Sequence:      12,
+			EnvironmentID: "environment-002",
+			ExchangeID:    "exchange-other",
+			Status:        activity.StatusSucceeded,
 		},
 		{
-			Sequence:   13,
-			AccessID:   "Acc-001",
-			ExchangeID: "exchange-failed",
-			Status:     activity.StatusFailed,
+			Sequence:      13,
+			EnvironmentID: "environment-001",
+			ExchangeID:    "exchange-failed",
+			Status:        activity.StatusFailed,
 		},
 		{
-			Sequence:   14,
-			AccessID:   "Acc-001",
-			ExchangeID: "exchange-second",
-			Status:     activity.StatusSucceeded,
+			Sequence:      14,
+			EnvironmentID: "environment-001",
+			ExchangeID:    "exchange-second",
+			Status:        activity.StatusSucceeded,
 		},
 	}
 	subjects := successfulExchangeSubjectsAfter(
 		records,
-		"Acc-001",
+		"environment-001",
 		9,
 	)
 	if len(subjects) != 2 ||
 		subjects[0] != "exchange-first" ||
 		subjects[1] != "exchange-second" {
 		t.Fatalf("successful Exchange subjects = %v", subjects)
-	}
-}
-
-func TestAcceptancePhasesAlwaysIsolateConfiguredSecretReference(t *testing.T) {
-	t.Parallel()
-
-	input := config{
-		clientID:          acceptanceClientClaudeCode,
-		accessID:          "Acc-001",
-		deterministicOnly: false,
-		providerOrigin:    "https://provider.example.test/v1",
-		providerModel:     "fixed-model",
-		secretRef:         "secret://provider/configured-development-key",
-	}
-	first, err := splitAcceptancePhases(input)
-	if err != nil {
-		t.Fatal(err)
-	}
-	second, err := splitAcceptancePhases(input)
-	if err != nil {
-		t.Fatal(err)
-	}
-	const prefix = "secret://provider/m0-assembly-"
-	if !strings.HasPrefix(first.deterministic.secretRef, prefix) ||
-		!strings.HasPrefix(second.deterministic.secretRef, prefix) ||
-		first.deterministic.secretRef == input.secretRef ||
-		second.deterministic.secretRef == input.secretRef ||
-		first.deterministic.secretRef == second.deterministic.secretRef ||
-		first.credentialed != input ||
-		second.credentialed != input {
-		t.Fatalf(
-			"isolated references first=%q second=%q configured=%q",
-			first.deterministic.secretRef,
-			second.deterministic.secretRef,
-			input.secretRef,
-		)
-	}
-	for _, phases := range []acceptancePhases{first, second} {
-		deterministic, deterministicErr := assemblyAccess(phases.deterministic, 0)
-		if deterministicErr != nil {
-			t.Fatal(deterministicErr)
-		}
-		credentialed, credentialedErr := assemblyAccess(phases.credentialed, 1)
-		if credentialedErr != nil {
-			t.Fatal(credentialedErr)
-		}
-		if deterministic.AccountBindings[0].ID != "Acc-001-account" ||
-			credentialed.AccountBindings[0].ID != "Acc-001-account" ||
-			credentialed.AccountBindings[0].SecretRef != input.secretRef {
-			t.Fatalf(
-				"phase bindings deterministic=%+v credentialed=%+v",
-				deterministic.AccountBindings,
-				credentialed.AccountBindings,
-			)
-		}
 	}
 }
 
@@ -708,15 +653,17 @@ func TestToolApprovalSelectionIgnoresOtherKindsAndPreexistingRows(t *testing.T) 
 	t.Parallel()
 
 	current := toolapproval.View{
-		ID:            "approval-current",
-		Kind:          string(toolapproval.KindToolIntent),
-		State:         toolapproval.StatePending,
-		ExchangeID:    "exchange-current",
-		AccessID:      "Acc-001",
-		PlanRevision:  1,
-		PlanHash:      strings.Repeat("a", 64),
-		SubjectLabels: []string{"exec"},
-		CreatedAt:     time.Unix(3, 0),
+		ID:                  "approval-current",
+		Kind:                string(toolapproval.KindToolIntent),
+		State:               toolapproval.StatePending,
+		ExchangeID:          "exchange-current",
+		EnvironmentID:       "environment-001",
+		EnvironmentRevision: 1,
+		EnvironmentDigest:   strings.Repeat("a", 64),
+		RouteID:             "route-001",
+		RouteRevision:       1,
+		SubjectLabels:       []string{"exec"},
+		CreatedAt:           time.Unix(3, 0),
 	}
 	page := toolapproval.Page{Items: []toolapproval.View{
 		current,
@@ -728,21 +675,23 @@ func TestToolApprovalSelectionIgnoresOtherKindsAndPreexistingRows(t *testing.T) 
 			CreatedAt:     time.Unix(1, 0),
 		},
 		{
-			ID:            "approval-old-tool",
-			Kind:          string(toolapproval.KindToolIntent),
-			State:         toolapproval.StatePending,
-			ExchangeID:    "exchange-old",
-			AccessID:      "Acc-001",
-			PlanRevision:  1,
-			PlanHash:      strings.Repeat("b", 64),
-			SubjectLabels: []string{"exec"},
-			CreatedAt:     time.Unix(2, 0),
+			ID:                  "approval-old-tool",
+			Kind:                string(toolapproval.KindToolIntent),
+			State:               toolapproval.StatePending,
+			ExchangeID:          "exchange-old",
+			EnvironmentID:       "environment-001",
+			EnvironmentRevision: 1,
+			EnvironmentDigest:   strings.Repeat("b", 64),
+			RouteID:             "route-001",
+			RouteRevision:       1,
+			SubjectLabels:       []string{"exec"},
+			CreatedAt:           time.Unix(2, 0),
 		},
 	}}
 	selected, found, err := selectToolApproval(
 		page,
 		map[string]struct{}{"approval-old-tool": {}},
-		"Acc-001",
+		"environment-001",
 		"exec",
 	)
 	if err != nil || !found || selected.ID != current.ID {
@@ -754,7 +703,7 @@ func TestToolApprovalSelectionIgnoresOtherKindsAndPreexistingRows(t *testing.T) 
 	if _, _, err := selectToolApproval(
 		toolapproval.Page{Items: []toolapproval.View{wrong}},
 		nil,
-		"Acc-001",
+		"environment-001",
 		"exec",
 	); err == nil {
 		t.Fatal("a new tool approval for a different tool was ignored")
@@ -762,7 +711,7 @@ func TestToolApprovalSelectionIgnoresOtherKindsAndPreexistingRows(t *testing.T) 
 	if _, found, err := selectToolApproval(
 		toolapproval.Page{Items: page.Items[1:2]},
 		nil,
-		"Acc-001",
+		"environment-001",
 		"exec",
 	); err != nil || found {
 		t.Fatalf("network-only page found=%t err=%v", found, err)
@@ -820,7 +769,7 @@ func TestClientConnectionAuditRequiresCompleteImmutableTimeline(
 ) {
 	t.Parallel()
 
-	clientOrigin, err := access.NewClientOrigin("https://api.anthropic.com")
+	clientOrigin, err := originidentity.ParseClientOrigin("https://api.anthropic.com")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -907,7 +856,7 @@ func TestActiveClientConnectionAuditRequiresVerifiedClientSidePrefix(
 ) {
 	t.Parallel()
 
-	clientOrigin, err := access.NewClientOrigin("https://api.anthropic.com")
+	clientOrigin, err := originidentity.ParseClientOrigin("https://api.anthropic.com")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -967,7 +916,7 @@ func TestResponsesHTTPFallbackAuditRequiresBoundedNegotiationAndActiveHTTP(
 ) {
 	t.Parallel()
 
-	clientOrigin, err := access.NewClientOrigin("https://api.openai.com")
+	clientOrigin, err := originidentity.ParseClientOrigin("https://api.openai.com")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1136,15 +1085,15 @@ func responsesHTTPFallbackAuditRecords(
 		decided.RouteHost = "api.openai.com"
 		decided.Decision = connectionevent.DecisionAllow
 		decided.RuleID = "agent_endpoint_exact"
-		decided.EgressScope = connectionevent.EgressScopeAccess
-		decided.EgressSource = connectionevent.EgressSourceAccessDefault
+		decided.EgressScope = connectionevent.EgressScopeEnvironment
+		decided.EgressSource = connectionevent.EgressSourceEnvironmentDefault
 		decided.EgressPolicyRevision = 1
 		decided.Decryption = connectionevent.DecryptionMITM
-		decided.AccessID = "assembly-access"
-		decided.AccessName = "Assembly Access"
-		decided.AccessRevision = 1
-		decided.AgentEndpointID = "assembly-agent-endpoint"
-		decided.AgentEndpointRevision = 1
+		decided.EnvironmentID = "assembly-environment"
+		decided.EnvironmentName = "Assembly Environment"
+		decided.EnvironmentRevision = 1
+		decided.ClientEndpointID = "assembly-agent-endpoint"
+		decided.ClientEndpointRevision = 1
 		decided.Phase = connectionevent.PhaseDecided
 		connected := decided
 		connected.ObservedSNI = "api.openai.com"
@@ -1198,15 +1147,15 @@ func clientAuditTimeline(t *testing.T) connectionevent.Timeline {
 	decided.RouteHost = "api.anthropic.com"
 	decided.Decision = connectionevent.DecisionAllow
 	decided.RuleID = acceptanceConnectionRuleID
-	decided.EgressScope = connectionevent.EgressScopeAccess
-	decided.EgressSource = connectionevent.EgressSourceAccessDefault
+	decided.EgressScope = connectionevent.EgressScopeEnvironment
+	decided.EgressSource = connectionevent.EgressSourceEnvironmentDefault
 	decided.EgressPolicyRevision = 1
 	decided.Decryption = connectionevent.DecryptionMITM
-	decided.AccessID = "assembly-access"
-	decided.AccessName = "Assembly Access"
-	decided.AccessRevision = 1
-	decided.AgentEndpointID = "assembly-agent-endpoint"
-	decided.AgentEndpointRevision = 1
+	decided.EnvironmentID = "assembly-environment"
+	decided.EnvironmentName = "Assembly Environment"
+	decided.EnvironmentRevision = 1
+	decided.ClientEndpointID = "assembly-agent-endpoint"
+	decided.ClientEndpointRevision = 1
 	decided.Phase = connectionevent.PhaseDecided
 	clientConnected := decided
 	clientConnected.ObservedSNI = "api.anthropic.com"

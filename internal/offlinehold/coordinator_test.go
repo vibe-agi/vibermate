@@ -2,6 +2,8 @@ package offlinehold
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"sync"
 	"testing"
@@ -619,15 +621,16 @@ func acquireKindRequest(
 
 func providerTarget(target string) ProbeTarget {
 	host := target + ".example"
+	digest := sha256.Sum256([]byte("plan:" + target))
 	return ProbeTarget{
-		Kind:           EgressProvider,
-		Transport:      ProbeTransportStrictTLS,
-		TargetRef:      target,
-		NetworkOrigin:  "https://" + host + "/v1",
-		HTTPAuthority:  host,
-		TLSServerName:  host,
-		AccessRevision: 1,
-		PlanHash:       "plan-hash-" + target,
+		Kind:          EgressProvider,
+		Transport:     ProbeTransportStrictTLS,
+		TargetRef:     target,
+		NetworkOrigin: "https://" + host + "/v1",
+		HTTPAuthority: host,
+		TLSServerName: host,
+		PlanRevision:  1,
+		PlanDigest:    hex.EncodeToString(digest[:]),
 	}
 }
 

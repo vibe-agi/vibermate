@@ -398,12 +398,12 @@ describe("Managed terminal command bridge", () => {
 
 describe("Desktop navigation host", () => {
   it("lets an explicit launch locator override the saved location", async () => {
-    history.replaceState(null, "", "/#access/claude/routing");
+    history.replaceState(null, "", "/#environments/work");
 
     await expect(restoreDesktopNavigation()).resolves.toBe(false);
 
     expect(tauri.invoke).not.toHaveBeenCalled();
-    expect(location.hash).toBe("#access/claude/routing");
+    expect(location.hash).toBe("#environments/work");
   });
 
   it("restores a strict canonical locator without changing outer search", async () => {
@@ -424,7 +424,7 @@ describe("Desktop navigation host", () => {
   });
 
   it("writes through the restored locator once before deduplicating it", async () => {
-    const locator = "settings/recovery";
+    const locator = "settings";
     tauri.invoke
       .mockResolvedValueOnce({
         schema: "vibermate-navigation-state-v1",
@@ -455,7 +455,7 @@ describe("Desktop navigation host", () => {
       },
       {
         schema: "vibermate-navigation-state-v1",
-        locator: "overview",
+        locator: "captures",
         token: "must-not-pass",
       },
     ]) {
@@ -486,7 +486,7 @@ describe("Desktop navigation host", () => {
 
     resolveLoad?.({
       schema: "vibermate-navigation-state-v1",
-      locator: "settings/recovery",
+      locator: "settings",
     });
     await vi.runAllTimersAsync();
     expect(location.hash).toBe("");
@@ -496,23 +496,23 @@ describe("Desktop navigation host", () => {
     tauri.invoke.mockResolvedValue(undefined);
 
     await Promise.all([
-      persistDesktopNavigation("access/claude/routing"),
-      persistDesktopNavigation("access/claude/routing"),
+      persistDesktopNavigation("environments/work"),
+      persistDesktopNavigation("environments/work"),
     ]);
     await persistDesktopNavigation("policy");
-    await persistDesktopNavigation("settings/recovery");
+    await persistDesktopNavigation("settings");
 
     expect(tauri.invoke).toHaveBeenCalledTimes(2);
     expect(tauri.invoke).toHaveBeenNthCalledWith(1, "save_navigation_state", {
       navigationState: {
         schema: "vibermate-navigation-state-v1",
-        locator: "access/claude/routing",
+        locator: "environments/work",
       },
     });
     expect(tauri.invoke).toHaveBeenNthCalledWith(2, "save_navigation_state", {
       navigationState: {
         schema: "vibermate-navigation-state-v1",
-        locator: "settings/recovery",
+        locator: "settings",
       },
     });
   });
@@ -523,10 +523,10 @@ describe("Desktop navigation host", () => {
       .mockResolvedValueOnce(undefined);
 
     await expect(
-      persistDesktopNavigation("extensions/discover"),
+      persistDesktopNavigation("extensions"),
     ).rejects.toThrow("navigation store unavailable");
     await expect(
-      persistDesktopNavigation("extensions/discover"),
+      persistDesktopNavigation("extensions"),
     ).resolves.toBeUndefined();
 
     expect(tauri.invoke).toHaveBeenCalledTimes(2);
@@ -543,11 +543,11 @@ describe("Desktop navigation host", () => {
           }),
       )
       .mockResolvedValueOnce(undefined);
-    await persistDesktopNavigation("overview");
+    await persistDesktopNavigation("captures");
 
-    const pending = persistDesktopNavigation("activity");
+    const pending = persistDesktopNavigation("captures/requests");
     await vi.waitFor(() => expect(tauri.invoke).toHaveBeenCalledTimes(2));
-    const returned = persistDesktopNavigation("overview");
+    const returned = persistDesktopNavigation("captures");
     finishPending?.();
     await Promise.all([pending, returned]);
 
@@ -555,7 +555,7 @@ describe("Desktop navigation host", () => {
     expect(tauri.invoke).toHaveBeenLastCalledWith("save_navigation_state", {
       navigationState: {
         schema: "vibermate-navigation-state-v1",
-        locator: "overview",
+        locator: "captures",
       },
     });
   });

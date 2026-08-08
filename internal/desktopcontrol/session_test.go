@@ -348,12 +348,9 @@ func newSessionFixture(
 	application, err := desktopcontrol.New(desktopcontrol.Options{
 		Readiness:       readyState(true),
 		Status:          runtime,
-		Accesses:        runtime.AccessWriter(),
-		AccessDeletion:  runtime.AccessDeleter(),
+		Environments:    runtime.Environments(),
+		Assignments:     runtime.CaptureAssignments(),
 		Clock:           desktopcontrol.SystemClock{},
-		AccessCatalog:   runtime.AccessCatalog(),
-		Resolver:        runtime.SnapshotResolver(),
-		Credentials:     runtime.Credentials(),
 		Activities:      runtime.Activities(),
 		Connections:     runtime.ConnectionEvents(),
 		Egress:          runtime.EgressAttempts(),
@@ -361,6 +358,7 @@ func newSessionFixture(
 		Offline:         runtime,
 		ConnectionRules: runtime.ConnectionRules(),
 		CaptureRuns:     runtime.CaptureRunReader(),
+		ManualCaptures:  runtime.ManualCaptures(),
 	})
 	if err != nil {
 		t.Fatal(err)

@@ -8,10 +8,10 @@ import (
 	"io"
 	"net/http"
 
-	"github.com/vibe-agi/vibermate/internal/access"
 	"github.com/vibe-agi/vibermate/internal/operationcatalog"
 	"github.com/vibe-agi/vibermate/internal/protocolcore"
 	"github.com/vibe-agi/vibermate/internal/protocolpath"
+	"github.com/vibe-agi/vibermate/internal/protocolspec"
 )
 
 const (
@@ -29,8 +29,8 @@ type messagesClientCodec struct {
 	codec *Codec
 }
 
-func (messagesClientCodec) Dialect() access.Dialect {
-	return access.DialectAnthropicMessages
+func (messagesClientCodec) Dialect() protocolspec.Dialect {
+	return protocolspec.DialectAnthropicMessages
 }
 
 func (codec messagesClientCodec) DecodeRequest(
@@ -74,8 +74,8 @@ type messagesBackendCodec struct {
 	codec *Codec
 }
 
-func (messagesBackendCodec) Dialect() access.Dialect {
-	return access.DialectAnthropicMessages
+func (messagesBackendCodec) Dialect() protocolspec.Dialect {
+	return protocolspec.DialectAnthropicMessages
 }
 
 func (codec messagesBackendCodec) EncodeRequest(
@@ -171,11 +171,11 @@ func NewMessagesProtocolPath(options Options) (*protocolpath.Path, error) {
 	if err != nil {
 		return nil, err
 	}
-	identifier, err := access.NewCodecPairID(MessagesCodecPairID)
+	identifier, err := protocolspec.NewCodecPairID(MessagesCodecPairID)
 	if err != nil {
 		return nil, err
 	}
-	operationID, err := access.NewClientOperationID(
+	operationID, err := protocolspec.NewClientOperationID(
 		operationcatalog.AnthropicMessagesCreateID,
 	)
 	if err != nil {
@@ -183,8 +183,8 @@ func NewMessagesProtocolPath(options Options) (*protocolpath.Path, error) {
 	}
 	path, err := protocolpath.New(protocolpath.Options{
 		ID:                 identifier,
-		Revision:           access.Revision(MessagesCodecRevision),
-		ClientOperationIDs: []access.ClientOperationID{operationID},
+		Revision:           protocolspec.Revision(MessagesCodecRevision),
+		ClientOperationIDs: []protocolspec.ClientOperationID{operationID},
 		Client:             messagesClientCodec{codec: codec},
 		Backend:            messagesBackendCodec{codec: codec},
 		Streaming:          messagesStreamingBridge{codec: codec},

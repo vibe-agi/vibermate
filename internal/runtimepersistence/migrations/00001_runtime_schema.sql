@@ -9,43 +9,6 @@ CREATE TABLE runtime_metadata(
   CHECK(length(schema_source_sha256) = 64),
   initialized_at TEXT NOT NULL CHECK(length(initialized_at) > 0)
 ) STRICT;
-CREATE TABLE access_bindings(
-  access_id TEXT PRIMARY KEY NOT NULL
-  CHECK(length(CAST(access_id AS BLOB)) BETWEEN 1 AND 128),
-  revision INTEGER NOT NULL
-  CHECK(revision BETWEEN 1 AND 9223372036854775807),
-  name TEXT NOT NULL
-  CHECK(length(CAST(name AS BLOB)) BETWEEN 1 AND 256),
-  description TEXT NOT NULL
-  CHECK(length(CAST(description AS BLOB)) <= 4096)
-) STRICT;
-CREATE TABLE access_tombstones(
-  access_id TEXT PRIMARY KEY NOT NULL
-  CHECK(length(CAST(access_id AS BLOB)) BETWEEN 1 AND 128),
-  last_revision INTEGER NOT NULL
-  CHECK(last_revision BETWEEN 1 AND 9223372036854775807),
-  name TEXT NOT NULL
-  CHECK(length(CAST(name AS BLOB)) BETWEEN 1 AND 256),
-  deleted_at_unix_ms INTEGER NOT NULL
-) STRICT;
-CREATE TABLE access_client_origins(
-  access_id TEXT PRIMARY KEY NOT NULL
-  REFERENCES access_bindings(access_id) ON DELETE CASCADE,
-  client_origin TEXT NOT NULL
-  CHECK(length(CAST(client_origin AS BLOB)) BETWEEN 9 AND 2048),
-  endpoint_authority TEXT NOT NULL UNIQUE
-  CHECK(length(CAST(endpoint_authority AS BLOB)) BETWEEN 3 AND 2048),
-  agent_endpoint_id TEXT NOT NULL
-  CHECK(length(CAST(agent_endpoint_id AS BLOB)) BETWEEN 1 AND 128)
-) STRICT;
-CREATE TABLE access_plan_aggregates(
-  access_id TEXT PRIMARY KEY NOT NULL
-  REFERENCES access_bindings(access_id) ON DELETE CASCADE,
-  format_version INTEGER NOT NULL
-  CHECK(format_version = 1),
-  payload_json BLOB NOT NULL
-  CHECK(length(payload_json) BETWEEN 2 AND 1048576)
-) STRICT;
 CREATE TABLE runtime_connection_events(
   sequence INTEGER PRIMARY KEY AUTOINCREMENT,
   connection_id TEXT NOT NULL
@@ -56,16 +19,16 @@ CREATE TABLE runtime_connection_events(
   CHECK(length(CAST(source_label AS BLOB)) <= 512),
   source_confidence TEXT NOT NULL
   CHECK(source_confidence IN('verified', 'configured', 'unknown')),
-  access_id TEXT NOT NULL DEFAULT ''
-  CHECK(length(CAST(access_id AS BLOB)) <= 128),
-  access_name TEXT NOT NULL DEFAULT ''
-  CHECK(length(CAST(access_name AS BLOB)) <= 256),
-  access_revision INTEGER NOT NULL DEFAULT 0
-  CHECK(access_revision >= 0),
-  agent_endpoint_id TEXT NOT NULL DEFAULT ''
-  CHECK(length(CAST(agent_endpoint_id AS BLOB)) <= 128),
-  agent_endpoint_revision INTEGER NOT NULL DEFAULT 0
-  CHECK(agent_endpoint_revision >= 0),
+  environment_id TEXT NOT NULL DEFAULT ''
+  CHECK(length(CAST(environment_id AS BLOB)) <= 128),
+  environment_name TEXT NOT NULL DEFAULT ''
+  CHECK(length(CAST(environment_name AS BLOB)) <= 256),
+  environment_revision INTEGER NOT NULL DEFAULT 0
+  CHECK(environment_revision BETWEEN 0 AND 9223372036854775807),
+  client_endpoint_id TEXT NOT NULL DEFAULT ''
+  CHECK(length(CAST(client_endpoint_id AS BLOB)) <= 128),
+  client_endpoint_revision INTEGER NOT NULL DEFAULT 0
+  CHECK(client_endpoint_revision BETWEEN 0 AND 9223372036854775807),
   requested_host TEXT NOT NULL
   CHECK(length(CAST(requested_host AS BLOB)) BETWEEN 1 AND 1024),
   observed_sni TEXT NOT NULL DEFAULT ''
@@ -83,12 +46,12 @@ CREATE TABLE runtime_connection_events(
   credential_binding_id TEXT NOT NULL DEFAULT ''
   CHECK(length(CAST(credential_binding_id AS BLOB)) <= 512),
   egress_scope TEXT NOT NULL DEFAULT ''
-  CHECK(egress_scope IN('', 'access', 'network')),
+  CHECK(egress_scope IN('', 'environment', 'network')),
   egress_source TEXT NOT NULL DEFAULT ''
   CHECK(egress_source IN('',
-'access_rule',
-'access_plugin',
-'access_default',
+'environment_rule',
+'environment_plugin',
+'environment_default',
 'network_rule',
 'network_default')),
   egress_rule_id TEXT NOT NULL DEFAULT ''
@@ -134,22 +97,40 @@ CREATE TABLE runtime_activities(
   CHECK(length(CAST(activity_id AS BLOB)) BETWEEN 1 AND 512),
   occurred_at_unix_ms INTEGER NOT NULL,
   kind TEXT NOT NULL
-CHECK(kind IN('access.applied',
-'access.disabled',
-'access.enabled',
-'access.deleted',
+CHECK(kind IN('environment.applied',
+'environment.disabled',
+'environment.enabled',
+'environment.deleted',
 'credential.secret_replaced',
 'offline_hold.entered',
 'offline_hold.resumed',
 'approval.pending',
 'approval.resolved',
 'exchange.completed')),
-  access_id TEXT NOT NULL DEFAULT ''
-  CHECK(length(CAST(access_id AS BLOB)) <= 128),
-  access_name TEXT NOT NULL DEFAULT ''
-  CHECK(length(CAST(access_name AS BLOB)) <= 256),
-  access_revision INTEGER NOT NULL DEFAULT 0
-  CHECK(access_revision >= 0),
+  environment_id TEXT NOT NULL DEFAULT ''
+  CHECK(length(CAST(environment_id AS BLOB)) <= 128),
+  environment_revision INTEGER NOT NULL DEFAULT 0
+  CHECK(environment_revision BETWEEN 0 AND 9223372036854775807),
+  environment_digest TEXT NOT NULL DEFAULT ''
+  CHECK(length(CAST(environment_digest AS BLOB)) <= 64),
+  client_endpoint_id TEXT NOT NULL DEFAULT ''
+  CHECK(length(CAST(client_endpoint_id AS BLOB)) <= 128),
+  client_endpoint_revision INTEGER NOT NULL DEFAULT 0
+  CHECK(client_endpoint_revision BETWEEN 0 AND 9223372036854775807),
+  protocol_plan_id TEXT NOT NULL DEFAULT ''
+  CHECK(length(CAST(protocol_plan_id AS BLOB)) <= 128),
+  protocol_plan_revision INTEGER NOT NULL DEFAULT 0
+  CHECK(protocol_plan_revision BETWEEN 0 AND 9223372036854775807),
+  route_id TEXT NOT NULL DEFAULT ''
+  CHECK(length(CAST(route_id AS BLOB)) <= 128),
+  route_revision INTEGER NOT NULL DEFAULT 0
+  CHECK(route_revision BETWEEN 0 AND 9223372036854775807),
+  account_id TEXT NOT NULL DEFAULT ''
+  CHECK(length(CAST(account_id AS BLOB)) <= 128),
+  account_revision INTEGER NOT NULL DEFAULT 0
+  CHECK(account_revision BETWEEN 0 AND 9223372036854775807),
+  credential_epoch INTEGER NOT NULL DEFAULT 0
+  CHECK(credential_epoch BETWEEN 0 AND 9223372036854775807),
   subject_id TEXT NOT NULL
   CHECK(length(CAST(subject_id AS BLOB)) BETWEEN 1 AND 512),
   status TEXT NOT NULL
@@ -166,8 +147,6 @@ CHECK(kind IN('access.applied',
   CHECK(length(CAST(capture_run_id AS BLOB)) <= 128),
   manual_capture_id TEXT NOT NULL DEFAULT ''
   CHECK(length(CAST(manual_capture_id AS BLOB)) <= 128),
-  ingress_profile_id TEXT NOT NULL DEFAULT ''
-  CHECK(length(CAST(ingress_profile_id AS BLOB)) <= 128),
   connection_id TEXT NOT NULL DEFAULT ''
   CHECK(length(CAST(connection_id AS BLOB)) <= 128),
   transport_evidence_json BLOB
@@ -182,7 +161,24 @@ json_valid(CAST(transport_evidence_json AS TEXT))))
   client_field TEXT NOT NULL DEFAULT ''
   CHECK(length(CAST(client_field AS BLOB)) <= 128),
   client_path TEXT NOT NULL DEFAULT ''
-  CHECK(length(CAST(client_path AS BLOB)) <= 256)
+  CHECK(length(CAST(client_path AS BLOB)) <= 256),
+  CHECK((environment_id = '' AND environment_revision = 0 AND
+environment_digest = '') OR
+(environment_id <> '' AND environment_revision > 0 AND
+length(CAST(environment_digest AS BLOB)) = 64)),
+  CHECK((client_endpoint_id = '' AND client_endpoint_revision = 0 AND
+protocol_plan_id = '' AND protocol_plan_revision = 0 AND route_id = '' AND
+route_revision = 0) OR
+(environment_id <> '' AND client_endpoint_id <> '' AND
+client_endpoint_revision > 0 AND protocol_plan_id <> '' AND
+protocol_plan_revision > 0 AND route_id <> '' AND route_revision > 0)),
+  CHECK((account_id = '' AND account_revision = 0 AND credential_epoch = 0) OR
+(account_id <> '' AND account_revision > 0 AND credential_epoch > 0)),
+  CHECK(kind <> 'exchange.completed' OR client_endpoint_id <> ''),
+  CHECK(kind <> 'credential.secret_replaced' OR account_id <> ''),
+  CHECK(kind NOT IN('environment.applied', 'environment.disabled',
+'environment.enabled', 'environment.deleted') OR
+(environment_id <> '' AND client_endpoint_id = '' AND account_id = ''))
 ) STRICT;
 CREATE INDEX runtime_activities_latest
 ON runtime_activities(sequence DESC);
@@ -319,12 +315,16 @@ CREATE TABLE tool_approvals(
   CHECK(kind IN('tool_intent', 'network_ask', 'client_root_ask')),
   exchange_id TEXT NOT NULL DEFAULT ''
   CHECK(length(CAST(exchange_id AS BLOB)) <= 512),
-  access_id TEXT NOT NULL DEFAULT ''
-  CHECK(length(CAST(access_id AS BLOB)) <= 128),
-  plan_revision INTEGER NOT NULL DEFAULT 0
-  CHECK(plan_revision BETWEEN 0 AND 9223372036854775807),
-  plan_hash BLOB NOT NULL DEFAULT x''
-  CHECK(length(plan_hash) IN(0, 32)),
+  environment_id TEXT NOT NULL DEFAULT ''
+  CHECK(length(CAST(environment_id AS BLOB)) <= 128),
+  environment_revision INTEGER NOT NULL DEFAULT 0
+  CHECK(environment_revision BETWEEN 0 AND 9223372036854775807),
+  environment_digest BLOB NOT NULL DEFAULT x''
+  CHECK(length(environment_digest) IN(0, 32)),
+  route_id TEXT NOT NULL DEFAULT ''
+  CHECK(length(CAST(route_id AS BLOB)) <= 128),
+  route_revision INTEGER NOT NULL DEFAULT 0
+  CHECK(route_revision BETWEEN 0 AND 9223372036854775807),
   subject_refs_json BLOB NOT NULL
   CHECK(length(subject_refs_json) BETWEEN 3 AND 65536),
   subject_labels_json BLOB NOT NULL
@@ -354,11 +354,13 @@ CREATE TABLE tool_approvals(
   resolved_at_unix_ms INTEGER NOT NULL DEFAULT 0,
   CHECK(expires_at_unix_ms > created_at_unix_ms),
   CHECK(resolved_at_unix_ms = 0 OR resolved_at_unix_ms >= created_at_unix_ms),
-  CHECK((exchange_id = '' AND access_id = ''
-AND plan_revision = 0 AND length(plan_hash) = 0) OR(length(CAST(exchange_id AS BLOB)) BETWEEN 1 AND 512
-AND length(CAST(access_id AS BLOB)) BETWEEN 1 AND 128
-AND plan_revision >= 1 AND length(plan_hash) = 32)),
-  CHECK(kind <> 'tool_intent' OR plan_revision >= 1),
+  CHECK((exchange_id = '' AND environment_id = ''
+AND environment_revision = 0 AND length(environment_digest) = 0
+AND route_id = '' AND route_revision = 0) OR(length(CAST(exchange_id AS BLOB)) BETWEEN 1 AND 512
+AND length(CAST(environment_id AS BLOB)) BETWEEN 1 AND 128
+AND environment_revision >= 1 AND length(environment_digest) = 32
+AND length(CAST(route_id AS BLOB)) BETWEEN 1 AND 128 AND route_revision >= 1)),
+  CHECK(kind <> 'tool_intent' OR(environment_revision >= 1 AND route_revision >= 1)),
   -- A network ask is about one connection and says which; every other kind
   -- carries no connection it would never decide.
   CHECK((kind = 'network_ask' AND length(target_host) > 0 AND target_port > 0) OR(kind <> 'network_ask' AND target_host = '' AND target_port = 0)),
@@ -410,7 +412,7 @@ CREATE TABLE runtime_egress_attempts(
   CHECK(length(CAST(connection_id AS BLOB)) <= 512),
   purpose TEXT NOT NULL
   CHECK(purpose IN('provider_attempt',
-'profile_operation',
+'route_operation',
 'original_origin',
 'agent_probe',
 'blind_tunnel',
@@ -449,7 +451,7 @@ CREATE TABLE runtime_egress_attempts(
   policy_revision INTEGER NOT NULL
   CHECK(policy_revision > 0),
   policy_authority TEXT NOT NULL
-  CHECK(policy_authority IN('access', 'network', 'runtime')),
+  CHECK(policy_authority IN('environment', 'network', 'runtime')),
   rule_id TEXT NOT NULL
   CHECK(length(CAST(rule_id AS BLOB)) BETWEEN 1 AND 512),
   proxy_id TEXT NOT NULL
@@ -495,31 +497,6 @@ ON capture_runs(
   state,
   updated_at_unix_ms DESC
 );
-CREATE TABLE workspace_route_bindings(
-  binding_id TEXT PRIMARY KEY NOT NULL
-  CHECK(length(CAST(binding_id AS BLOB)) BETWEEN 1 AND 128),
-  access_id TEXT NOT NULL,
-  machine_id TEXT NOT NULL
-  CHECK(length(CAST(machine_id AS BLOB)) BETWEEN 1 AND 128),
-  workspace_id TEXT NOT NULL
-  CHECK(length(CAST(workspace_id AS BLOB)) BETWEEN 1 AND 128),
-  machine_registration_revision INTEGER NOT NULL
-  CHECK(machine_registration_revision BETWEEN 1 AND 9223372036854775807),
-  workspace_label TEXT NOT NULL
-  CHECK(length(CAST(workspace_label AS BLOB)) BETWEEN 1 AND 120),
-  workspace_evidence TEXT NOT NULL
-  CHECK(workspace_evidence IN('local_launcher', 'registered_companion')),
-  profile_id TEXT NOT NULL,
-  revision INTEGER NOT NULL
-  CHECK(revision BETWEEN 1 AND 9223372036854775807),
-  updated_at_unix_ms INTEGER NOT NULL,
-  UNIQUE(access_id, machine_id, workspace_id)
-) STRICT;
-CREATE INDEX workspace_route_bindings_updated
-ON workspace_route_bindings(
-  updated_at_unix_ms DESC,
-  binding_id ASC
-);
 CREATE TABLE proxy_client_bindings(
   binding_id TEXT PRIMARY KEY NOT NULL
   CHECK(length(CAST(binding_id AS BLOB)) BETWEEN 1 AND 128),
@@ -532,9 +509,9 @@ CREATE TABLE proxy_client_bindings(
   allowed_ingress_scopes_json BLOB NOT NULL
   CHECK(length(allowed_ingress_scopes_json) BETWEEN 3 AND 65536
     AND json_valid(CAST(allowed_ingress_scopes_json AS TEXT))),
-  allowed_profile_ids_json BLOB NOT NULL
-  CHECK(length(allowed_profile_ids_json) BETWEEN 3 AND 65536
-    AND json_valid(CAST(allowed_profile_ids_json AS TEXT))),
+  allowed_environment_ids_json BLOB NOT NULL
+  CHECK(length(allowed_environment_ids_json) BETWEEN 3 AND 65536
+    AND json_valid(CAST(allowed_environment_ids_json AS TEXT))),
   quota_policy_id TEXT NOT NULL
   CHECK(length(CAST(quota_policy_id AS BLOB)) BETWEEN 1 AND 128),
   allowed_grant_kinds INTEGER NOT NULL
@@ -661,6 +638,89 @@ ON manual_captures(
 )
 WHERE state = 'active'
     AND lifetime = 'temporary';
+
+-- Environment is the only user-selectable traffic configuration authority.
+CREATE TABLE environment_revision_counters(
+  environment_id TEXT PRIMARY KEY NOT NULL
+  CHECK(length(CAST(environment_id AS BLOB)) BETWEEN 1 AND 128),
+  active_revision INTEGER NOT NULL DEFAULT 0
+  CHECK(active_revision BETWEEN 0 AND 9223372036854775807),
+  draft_revision INTEGER NOT NULL DEFAULT 0
+  CHECK(draft_revision BETWEEN 0 AND 9223372036854775807)
+) STRICT;
+CREATE TABLE environment_revisions(
+  environment_id TEXT NOT NULL
+  REFERENCES environment_revision_counters(environment_id),
+  revision INTEGER NOT NULL
+  CHECK(revision BETWEEN 1 AND 9223372036854775807),
+  name TEXT NOT NULL
+  CHECK(length(CAST(name AS BLOB)) BETWEEN 1 AND 256),
+  state TEXT NOT NULL
+  CHECK(state IN('active', 'disabled')),
+  format_version INTEGER NOT NULL
+  CHECK(format_version = 1),
+  payload_json BLOB NOT NULL
+  CHECK(length(payload_json) BETWEEN 2 AND 1048576
+    AND json_valid(CAST(payload_json AS TEXT))),
+  candidate_digest BLOB NOT NULL
+  CHECK(length(candidate_digest) = 32),
+  published_at_unix_ms INTEGER NOT NULL,
+  PRIMARY KEY(environment_id, revision)
+) STRICT;
+CREATE TABLE environment_drafts(
+  environment_id TEXT PRIMARY KEY NOT NULL
+  REFERENCES environment_revision_counters(environment_id),
+  base_revision INTEGER NOT NULL
+  CHECK(base_revision BETWEEN 0 AND 9223372036854775807),
+  draft_revision INTEGER NOT NULL
+  CHECK(draft_revision BETWEEN 1 AND 9223372036854775807),
+  candidate_revision INTEGER NOT NULL
+  CHECK(candidate_revision BETWEEN 1 AND 9223372036854775807),
+  format_version INTEGER NOT NULL
+  CHECK(format_version = 1),
+  payload_json BLOB NOT NULL
+  CHECK(length(payload_json) BETWEEN 2 AND 1048576
+    AND json_valid(CAST(payload_json AS TEXT))),
+  candidate_digest BLOB NOT NULL
+  CHECK(length(candidate_digest) = 32),
+  updated_at_unix_ms INTEGER NOT NULL,
+  CHECK(candidate_revision = base_revision + 1)
+) STRICT;
+
+CREATE TABLE capture_environment_assignments(
+  capture_kind TEXT NOT NULL
+  CHECK(capture_kind IN('managed_run', 'manual_capture')),
+  capture_id TEXT NOT NULL
+  CHECK(length(CAST(capture_id AS BLOB)) BETWEEN 1 AND 128),
+  environment_id TEXT NOT NULL
+  CHECK(length(CAST(environment_id AS BLOB)) BETWEEN 1 AND 128),
+  assignment_revision INTEGER NOT NULL
+  CHECK(assignment_revision BETWEEN 1 AND 9223372036854775807),
+  source TEXT NOT NULL
+  CHECK(source IN('launch', 'manual_create', 'workspace_default', 'operator_switch', 'system_transparent')),
+  launch_environment_id TEXT NOT NULL
+  CHECK(length(CAST(launch_environment_id AS BLOB)) BETWEEN 1 AND 128),
+  launch_environment_revision INTEGER NOT NULL
+  CHECK(launch_environment_revision BETWEEN 1 AND 9223372036854775807),
+  launch_environment_digest BLOB NOT NULL
+  CHECK(length(launch_environment_digest) = 32),
+  protected_authorities_json TEXT NOT NULL
+  CHECK(json_valid(protected_authorities_json)
+    AND json_type(protected_authorities_json) = 'array'),
+  managed_authorities_json TEXT NOT NULL
+  CHECK(json_valid(managed_authorities_json)
+    AND json_type(managed_authorities_json) = 'array'),
+  launch_authority_digest BLOB NOT NULL
+  CHECK(length(launch_authority_digest) = 32),
+  updated_at_unix_ms INTEGER NOT NULL,
+  PRIMARY KEY(capture_kind, capture_id)
+) STRICT;
+CREATE INDEX capture_environment_assignments_environment
+ON capture_environment_assignments(
+  environment_id,
+  capture_kind,
+  capture_id
+);
 
 INSERT INTO runtime_metadata (
   singleton,

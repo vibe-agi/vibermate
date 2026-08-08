@@ -4,7 +4,7 @@ import (
 	"slices"
 	"testing"
 
-	"github.com/vibe-agi/vibermate/internal/access"
+	"github.com/vibe-agi/vibermate/internal/wireprofile"
 )
 
 func TestDownstreamNextProtosRequiresARealIntersection(t *testing.T) {
@@ -12,47 +12,47 @@ func TestDownstreamNextProtosRequiresARealIntersection(t *testing.T) {
 
 	tests := []struct {
 		name      string
-		protocols []access.ApplicationProtocol
+		protocols []wireprofile.ApplicationProtocol
 		offered   []string
 		want      []string
 		wantError bool
 	}{
 		{
-			name: "client and Access support HTTP2 and HTTP1",
-			protocols: []access.ApplicationProtocol{
-				access.ApplicationProtocolHTTP2,
-				access.ApplicationProtocolHTTP1,
+			name: "client and Environment support HTTP2 and HTTP1",
+			protocols: []wireprofile.ApplicationProtocol{
+				wireprofile.ApplicationProtocolHTTP2,
+				wireprofile.ApplicationProtocolHTTP1,
 			},
 			offered: []string{"h2", "http/1.1"},
 			want:    []string{"h2", "http/1.1"},
 		},
 		{
-			name:      "Access narrows an offered HTTP2 connection to HTTP1",
-			protocols: []access.ApplicationProtocol{access.ApplicationProtocolHTTP1},
+			name:      "Environment narrows an offered HTTP2 connection to HTTP1",
+			protocols: []wireprofile.ApplicationProtocol{wireprofile.ApplicationProtocolHTTP1},
 			offered:   []string{"h2", "http/1.1"},
 			want:      []string{"http/1.1"},
 		},
 		{
-			name:      "HTTP2-only client cannot use an HTTP1-only Access",
-			protocols: []access.ApplicationProtocol{access.ApplicationProtocolHTTP1},
+			name:      "HTTP2-only client cannot use an HTTP1-only Environment",
+			protocols: []wireprofile.ApplicationProtocol{wireprofile.ApplicationProtocolHTTP1},
 			offered:   []string{"h2"},
 			wantError: true,
 		},
 		{
 			name:      "missing ALPN means HTTP1",
-			protocols: []access.ApplicationProtocol{access.ApplicationProtocolHTTP1},
+			protocols: []wireprofile.ApplicationProtocol{wireprofile.ApplicationProtocolHTTP1},
 			want:      []string{"http/1.1"},
 		},
 		{
 			name:      "missing ALPN cannot satisfy HTTP2",
-			protocols: []access.ApplicationProtocol{access.ApplicationProtocolHTTP2},
+			protocols: []wireprofile.ApplicationProtocol{wireprofile.ApplicationProtocolHTTP2},
 			wantError: true,
 		},
 		{
 			name: "duplicate authority output is rejected",
-			protocols: []access.ApplicationProtocol{
-				access.ApplicationProtocolHTTP1,
-				access.ApplicationProtocolHTTP1,
+			protocols: []wireprofile.ApplicationProtocol{
+				wireprofile.ApplicationProtocolHTTP1,
+				wireprofile.ApplicationProtocolHTTP1,
 			},
 			offered:   []string{"http/1.1"},
 			wantError: true,

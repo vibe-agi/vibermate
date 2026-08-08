@@ -4,65 +4,50 @@ import {
   validNavigationLocator,
 } from "../src/navigation-state.ts";
 
-describe("persisted dashboard navigation", () => {
+describe("persisted Environment-first navigation", () => {
   it.each([
-    "overview",
-    "access",
-    "access/claude/routing",
-    "activity/requests/ex204",
-    "extensions/discover",
-    "extensions/installed",
-    "extensions/detail/prompt-polish",
-    "quality/sites",
-    "dashboards/system",
-    "activity/requests",
+    "captures",
+    "captures/requests",
+    "captures/managed_run%3Arun-1",
+    "activity/requests/ex-204",
+    "environments",
+    "environments/work",
+    "environments/work/revisions/3",
+    "accounts",
+    "extensions",
+    "quality",
     "policies/approvals",
     "policies/approvals?selected=approval-network-sample",
-    "settings/recovery",
-    "extensions/develop",
-    "dashboards/extensions/agent-actions",
-  ])("accepts the canonical locator %s", (locator) => {
-    expect(validNavigationLocator(locator)).toBe(true);
-  });
+    "settings",
+  ])("accepts %s", (locator) => expect(validNavigationLocator(locator)).toBe(true));
 
   it.each([
     "",
-    "/overview",
-    "policy",
-    "approvals",
-    "policies",
-    "access/%20unsafe%20/routing",
-    "access/%2F/routing",
-    "access/%E0%A4%A/routing",
-    "extensions/discover?selected=not-allowed",
+    "/captures",
+    "overview",
+    "access",
+    "profiles",
+    "captures/%2Fescape",
+    "environments/%00unsafe",
+    "environments/work/revisions/0",
+    "environments/work/revisions/latest",
     "policies/approvals?unknown=value",
-    "policies/approvals?selected=one&selected=two",
-    "policies/approvals?selected=%00value",
-    "policies/approvals?selected=secret%3A%2F%2Fprovider%2Fwork",
-    "overview#nested",
-    "not-a-real-route",
-  ])("rejects the unsafe or non-canonical locator %s", (locator) => {
-    expect(validNavigationLocator(locator)).toBe(false);
-  });
+    "policies/approvals?selected=secret%3Aprovider",
+    "captures#nested",
+  ])("rejects %s", (locator) => expect(validNavigationLocator(locator)).toBe(false));
 
-  it("serializes only a complete canonical Router location", () => {
-    expect(
-      navigationLocatorFromLocation({
-        pathname: "/policies/approvals",
-        searchStr: "?selected=approval-network-sample",
-      }),
-    ).toBe("policies/approvals?selected=approval-network-sample");
-    expect(
-      navigationLocatorFromLocation({
-        pathname: "/extensions/discover",
-        searchStr: "?selected=not-allowed",
-      }),
-    ).toBeUndefined();
-    expect(
-      navigationLocatorFromLocation({
-        pathname: "/__invalid-locator",
-        searchStr: "",
-      }),
-    ).toBeUndefined();
+  it("serializes only canonical Router state", () => {
+    expect(navigationLocatorFromLocation({
+      pathname: "/environments/work/revisions/3",
+      searchStr: "",
+    })).toBe("environments/work/revisions/3");
+    expect(navigationLocatorFromLocation({
+      pathname: "/policies/approvals",
+      searchStr: "?selected=approval-network-sample",
+    })).toBe("policies/approvals?selected=approval-network-sample");
+    expect(navigationLocatorFromLocation({
+      pathname: "/__invalid-locator",
+      searchStr: "",
+    })).toBeUndefined();
   });
 });

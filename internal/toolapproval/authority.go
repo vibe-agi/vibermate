@@ -14,6 +14,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/vibe-agi/vibermate/internal/environment"
 	"github.com/vibe-agi/vibermate/internal/exchange"
 )
 
@@ -175,9 +176,11 @@ func (authority *Authority) Decide(
 	defer finish()
 	intents := request.ToolIntents()
 	if request.ExchangeID() == "" ||
-		request.AccessID().String() == "" ||
-		request.PlanRevision() == 0 ||
-		request.PlanHash().IsZero() ||
+		request.EnvironmentID().String() == "" ||
+		request.EnvironmentRevision() == 0 ||
+		request.EnvironmentDigest() == (environment.CandidateDigest{}) ||
+		request.RouteID().String() == "" ||
+		request.RouteRevision() == 0 ||
 		len(intents) == 0 ||
 		len(intents) > MaxToolIntents {
 		return exchange.ToolDecision{}, ErrInvalidApproval
@@ -202,18 +205,20 @@ func (authority *Authority) Decide(
 		Kind:     KindToolIntent,
 		// One complete tool group in one Exchange is one question. A later
 		// kind that repeats across events merges on its own stable key.
-		AggregateKey:  toolIntentAggregateKey(request.ExchangeID(), callIDs),
-		SubjectRefs:   callIDs,
-		SubjectLabels: names,
-		RequestCount:  1,
-		WaiterCount:   1,
-		ExchangeID:    request.ExchangeID(),
-		AccessID:      request.AccessID(),
-		PlanRevision:  request.PlanRevision(),
-		PlanHash:      request.PlanHash(),
-		State:         StatePending,
-		CreatedAt:     now,
-		ExpiresAt:     now.Add(authority.config.DecisionTimeout),
+		AggregateKey:        toolIntentAggregateKey(request.ExchangeID(), callIDs),
+		SubjectRefs:         callIDs,
+		SubjectLabels:       names,
+		RequestCount:        1,
+		WaiterCount:         1,
+		ExchangeID:          request.ExchangeID(),
+		EnvironmentID:       request.EnvironmentID(),
+		EnvironmentRevision: request.EnvironmentRevision(),
+		EnvironmentDigest:   request.EnvironmentDigest(),
+		RouteID:             request.RouteID(),
+		RouteRevision:       request.RouteRevision(),
+		State:               StatePending,
+		CreatedAt:           now,
+		ExpiresAt:           now.Add(authority.config.DecisionTimeout),
 	}
 	if err := record.Validate(); err != nil {
 		return exchange.ToolDecision{}, err

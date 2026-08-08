@@ -25,8 +25,6 @@ jobs:
     env:
       DESKTOP_APP: ${{ github.workspace }}/ui/desktop/src-tauri/target/aarch64-apple-darwin/release/bundle/macos/ViberMate.app
       FIXED_CLAUDE_PATH: ${{ vars.VIBERMATE_CLAUDE_2_1_220_PATH }}
-      PROVIDER_MODEL: ${{ vars.VIBERMATE_ACCEPTANCE_PROVIDER_MODEL }}
-      PROVIDER_ORIGIN: ${{ vars.VIBERMATE_ACCEPTANCE_PROVIDER_ORIGIN }}
 
     steps:
       - name: Check out the selected candidate
@@ -77,8 +75,6 @@ jobs:
           test "${FIXED_CLAUDE_PATH}" != "${FIXED_CLAUDE_PATH#/}"
           test -f "${FIXED_CLAUDE_PATH}"
           test -x "${FIXED_CLAUDE_PATH}"
-          test -n "${PROVIDER_MODEL}"
-          test -n "${PROVIDER_ORIGIN}"
           test -z "$(git status --porcelain=v1 --untracked-files=all)"
           install -d -m 0700 "${ACCEPTANCE_ROOT}"
 
@@ -100,8 +96,6 @@ jobs:
           "${ACCEPTANCE_BIN}" \
             --desktop-app "${DESKTOP_APP}" \
             --claude "${FIXED_CLAUDE_PATH}" \
-            --provider-model "${PROVIDER_MODEL}" \
-            --provider-origin "${PROVIDER_ORIGIN}" \
             --deterministic-only \
             --report "${REPORT_PATH}" \
             --timeout 10m

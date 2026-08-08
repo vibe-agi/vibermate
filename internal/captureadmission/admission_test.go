@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	"github.com/vibe-agi/vibermate/internal/capturecredential"
+	"github.com/vibe-agi/vibermate/internal/captureidentity"
 	"github.com/vibe-agi/vibermate/internal/capturerun"
 	"github.com/vibe-agi/vibermate/internal/clientadapter"
 	"github.com/vibe-agi/vibermate/internal/manualcapture"
@@ -118,7 +119,7 @@ func TestManagedRunAuthorizationProducesRouteNeutralAdmission(t *testing.T) {
 		t.Fatal(err)
 	}
 	if admission.Kind() != KindManagedRun ||
-		admission.IngressProfileID() != "capture-run/run-one" ||
+		admission.AdmissionRef() != "capture-run/run-one" ||
 		admission.CredentialRevision() != 1 ||
 		admission.AttributionConfidence() != AttributionConfigured ||
 		admission.SourceLabel() != "claude" || runs.authorized != 1 ||
@@ -127,6 +128,10 @@ func TestManagedRunAuthorizationProducesRouteNeutralAdmission(t *testing.T) {
 	}
 	if runID, ok := admission.CaptureRunID(); !ok || runID != "run-one" {
 		t.Fatalf("CaptureRun identity = %q, %v", runID, ok)
+	}
+	if reference, referenceErr := admission.CaptureReference(); referenceErr != nil ||
+		reference.Kind != captureidentity.KindManagedRun || reference.ID != "run-one" {
+		t.Fatalf("Capture reference = %+v, %v", reference, referenceErr)
 	}
 	if _, ok := admission.ManualCaptureID(); ok {
 		t.Fatal("managed admission asserted ManualCapture identity")
@@ -173,7 +178,7 @@ func TestManualAdmissionCannotInventManagedEvidence(t *testing.T) {
 		t.Fatal(err)
 	}
 	if admission.Kind() != KindManual ||
-		admission.IngressProfileID() != "manual-capture/manual-one" ||
+		admission.AdmissionRef() != "manual-capture/manual-one" ||
 		admission.CredentialRevision() != 3 ||
 		admission.AttributionConfidence() != AttributionConfigured {
 		t.Fatalf("manual admission = %#v", admission)
@@ -269,7 +274,7 @@ func TestManualCredentialSelectsOnlyManualAuthority(t *testing.T) {
 		t.Fatal(err)
 	}
 	if admission.Kind() != KindManual ||
-		admission.IngressProfileID() != "manual-capture/manual-one" ||
+		admission.AdmissionRef() != "manual-capture/manual-one" ||
 		admission.CredentialRevision() != 4 ||
 		admission.SourceLabel() != "Desktop app" ||
 		manuals.authorized != 1 || runs.authorized != 0 {

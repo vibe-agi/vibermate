@@ -7,7 +7,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/vibe-agi/vibermate/internal/access"
+	"github.com/vibe-agi/vibermate/internal/environment"
 	"github.com/vibe-agi/vibermate/internal/toolapproval"
 )
 
@@ -45,21 +45,23 @@ func sampleViews(t *testing.T) []toolapproval.View {
 		t.Fatal(err)
 	}
 	intent := toolapproval.Record{
-		ID:            "approval-tool-sample",
-		Revision:      1,
-		Kind:          toolapproval.KindToolIntent,
-		AggregateKey:  "aggregate-tool-sample",
-		SubjectRefs:   []string{"call-1", "call-2"},
-		SubjectLabels: []string{"read_file", "list_directory"},
-		RequestCount:  1,
-		WaiterCount:   1,
-		ExchangeID:    "exchange-sample",
-		AccessID:      sampleAccessID(t),
-		PlanRevision:  4,
-		PlanHash:      samplePlanHash(t),
-		State:         toolapproval.StatePending,
-		CreatedAt:     created,
-		ExpiresAt:     created.Add(time.Minute),
+		ID:                  "approval-tool-sample",
+		Revision:            1,
+		Kind:                toolapproval.KindToolIntent,
+		AggregateKey:        "aggregate-tool-sample",
+		SubjectRefs:         []string{"call-1", "call-2"},
+		SubjectLabels:       []string{"read_file", "list_directory"},
+		RequestCount:        1,
+		WaiterCount:         1,
+		ExchangeID:          "exchange-sample",
+		EnvironmentID:       sampleEnvironmentID(t),
+		EnvironmentRevision: 4,
+		EnvironmentDigest:   sampleEnvironmentDigest(),
+		RouteID:             sampleRouteID(t),
+		RouteRevision:       2,
+		State:               toolapproval.StatePending,
+		CreatedAt:           created,
+		ExpiresAt:           created.Add(time.Minute),
 	}
 	if err := intent.Validate(); err != nil {
 		t.Fatal(err)
@@ -94,20 +96,28 @@ func sampleViews(t *testing.T) []toolapproval.View {
 	}
 }
 
-func sampleAccessID(t *testing.T) access.AccessID {
+func sampleEnvironmentID(t *testing.T) environment.EnvironmentID {
 	t.Helper()
 
-	identifier, err := access.NewAccessID("work")
+	identifier, err := environment.NewEnvironmentID("work")
 	if err != nil {
 		t.Fatal(err)
 	}
 	return identifier
 }
 
-func samplePlanHash(t *testing.T) access.PlanHash {
+func sampleRouteID(t *testing.T) environment.UpstreamRouteID {
 	t.Helper()
 
-	var digest access.PlanHash
+	identifier, err := environment.NewUpstreamRouteID("claude-official")
+	if err != nil {
+		t.Fatal(err)
+	}
+	return identifier
+}
+
+func sampleEnvironmentDigest() environment.CandidateDigest {
+	var digest environment.CandidateDigest
 	for index := range digest {
 		digest[index] = byte(index + 1)
 	}

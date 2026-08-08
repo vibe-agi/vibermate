@@ -266,12 +266,12 @@ func Start(ctx context.Context, options Options) (*Host, error) {
 	if err != nil {
 		return fail("CaptureRun workspace adapter", err)
 	}
-	captureAuthorities, err := capturegrant.NewRouteAwareAuthorityResolver(
-		runtime,
-		runtime.WorkspaceRoutes(),
+	captureAuthorities, err := capturegrant.NewEnvironmentAuthorityResolver(
+		runtime.CaptureAssignments(),
+		runtime.EnvironmentResolver(),
 	)
 	if err != nil {
-		return fail("CaptureRun route authority", err)
+		return fail("Capture Environment authority", err)
 	}
 	grantIssuer, err := capturegrant.New(capturegrant.Options{
 		Runs:           runtime.CaptureRuns(),
@@ -327,11 +327,8 @@ func Start(ctx context.Context, options Options) (*Host, error) {
 	application, err := desktopcontrol.New(desktopcontrol.Options{
 		Readiness:       ready,
 		Status:          runtime,
-		Accesses:        runtime.AccessWriter(),
-		AccessDeletion:  runtime.AccessDeleter(),
-		AccessCatalog:   runtime.AccessCatalog(),
-		Resolver:        runtime.SnapshotResolver(),
-		Credentials:     runtime.Credentials(),
+		Environments:    runtime.Environments(),
+		Assignments:     runtime.CaptureAssignments(),
 		Activities:      runtime.Activities(),
 		Connections:     runtime.ConnectionEvents(),
 		Egress:          runtime.EgressAttempts(),
@@ -339,7 +336,7 @@ func Start(ctx context.Context, options Options) (*Host, error) {
 		Offline:         runtime,
 		ConnectionRules: runtime.ConnectionRules(),
 		CaptureRuns:     runtime.CaptureRunReader(),
-		WorkspaceRoutes: runtime.WorkspaceRoutes(),
+		ManualCaptures:  runtime.ManualCaptures(),
 		Clock:           options.Runtime.Clock,
 	})
 	if err != nil {

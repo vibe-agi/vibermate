@@ -14,8 +14,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/vibe-agi/vibermate/internal/access"
 	"github.com/vibe-agi/vibermate/internal/offlinehold"
+	"github.com/vibe-agi/vibermate/internal/originidentity"
 )
 
 func TestOriginalTLSProbeUsesFrozenOriginWithoutHTTPOrCredential(t *testing.T) {
@@ -222,9 +222,9 @@ func frozenOriginalProbeTarget(
 	rawOrigin string,
 ) offlinehold.ProbeTarget {
 	t.Helper()
-	origin, err := access.NewClientOrigin(rawOrigin)
+	origin, err := originidentity.ParseClientOrigin(rawOrigin)
 	if err != nil {
-		t.Fatalf("NewClientOrigin() error = %v", err)
+		t.Fatalf("ParseClientOrigin() error = %v", err)
 	}
 	return offlinehold.ProbeTarget{
 		Kind:          kind,
@@ -232,7 +232,7 @@ func frozenOriginalProbeTarget(
 		TargetRef:     origin.String(),
 		NetworkOrigin: origin.String(),
 		HTTPAuthority: origin.HTTPAuthority(),
-		TLSServerName: origin.TLSServerName(),
+		TLSServerName: origin.Host(),
 	}
 }
 

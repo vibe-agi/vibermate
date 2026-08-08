@@ -20,16 +20,16 @@ import (
 	"time"
 
 	"github.com/pressly/goose/v3"
-	"github.com/vibe-agi/vibermate/internal/access"
 	"github.com/vibe-agi/vibermate/internal/activity"
+	"github.com/vibe-agi/vibermate/internal/captureassignment"
 	"github.com/vibe-agi/vibermate/internal/capturerun"
 	"github.com/vibe-agi/vibermate/internal/connectionevent"
 	"github.com/vibe-agi/vibermate/internal/connectionpolicy"
 	"github.com/vibe-agi/vibermate/internal/egressaudit"
+	"github.com/vibe-agi/vibermate/internal/environment"
 	"github.com/vibe-agi/vibermate/internal/manualcapture"
 	"github.com/vibe-agi/vibermate/internal/proxyclient"
 	"github.com/vibe-agi/vibermate/internal/toolapproval"
-	"github.com/vibe-agi/vibermate/internal/workspaceroute"
 )
 
 const (
@@ -54,7 +54,8 @@ type Options struct {
 // RuntimeStore is the storage ownership boundary consumed by ProductRuntime.
 type RuntimeStore interface {
 	SchemaStateReader() SchemaStateReader
-	AccessRepository() access.Repository
+	EnvironmentRepository() environment.Repository
+	CaptureAssignmentRepository() captureassignment.Repository
 	ActivityRepository() activity.Repository
 	CaptureRunRepository() capturerun.Repository
 	ManualCaptureRepository() manualcapture.Repository
@@ -63,25 +64,24 @@ type RuntimeStore interface {
 	EgressAttemptRepository() egressaudit.Repository
 	ToolApprovalRepository() toolapproval.Repository
 	ConnectionRuleRepository() connectionpolicy.Repository
-	WorkspaceRouteRepository() workspaceroute.Repository
 	Shutdown(context.Context) error
 }
 
 // Store owns a SQLite connection pool and its repositories.
 type Store struct {
-	database        *sql.DB
-	repo            *Repository
-	accessRepo      *accessRepository
-	activityRepo    *activityRepository
-	captureRepo     *captureRunRepository
-	manualCapture   *manualCaptureRepository
-	proxyClients    *proxyClientRepository
-	connectionRepo  *connectionEventRepository
-	egressAttempts  *egressAttemptRepository
-	approvalRepo    *toolApprovalRepository
-	connectionRule  *connectionRuleRepository
-	workspaceRoutes *workspaceRouteRepository
-	operations      *operationGate
+	database           *sql.DB
+	repo               *Repository
+	activityRepo       *activityRepository
+	captureRepo        *captureRunRepository
+	manualCapture      *manualCaptureRepository
+	proxyClients       *proxyClientRepository
+	connectionRepo     *connectionEventRepository
+	egressAttempts     *egressAttemptRepository
+	approvalRepo       *toolApprovalRepository
+	connectionRule     *connectionRuleRepository
+	environments       *environmentRepository
+	captureAssignments *captureAssignmentRepository
+	operations         *operationGate
 
 	closeMu   sync.Mutex
 	closing   bool
@@ -136,12 +136,6 @@ func Open(ctx context.Context, options Options) (*Store, error) {
 
 	operations := newOperationGate()
 	repository := newRepository(database, operations, schemaSourceSHA256)
-	accessRepo := newAccessRepository(
-		database,
-		operations,
-		options.CommitReconcileTimeout,
-		sqlTransactionCommitter{},
-	)
 	captureRepo := newCaptureRunRepository(database, operations)
 	manualCaptureRepo := newManualCaptureRepository(database, operations)
 	proxyClientRepo := newProxyClientRepository(
@@ -155,7 +149,18 @@ func Open(ctx context.Context, options Options) (*Store, error) {
 	egressRepo := newEgressAttemptRepository(database, operations)
 	approvalRepo := newToolApprovalRepository(database, operations)
 	connectionRules := newConnectionRuleRepository(database, operations)
-	workspaceRoutes := newWorkspaceRouteRepository(database, operations)
+	environments := newEnvironmentRepository(
+		database,
+		operations,
+		options.CommitReconcileTimeout,
+		sqlTransactionCommitter{},
+	)
+	captureAssignments := newCaptureAssignmentRepository(
+		database,
+		operations,
+		options.CommitReconcileTimeout,
+		sqlTransactionCommitter{},
+	)
 	schemaState, err := repository.ReadSchemaState(ctx)
 	if err != nil {
 		operations.closeAdmission()
@@ -172,29 +177,25 @@ func Open(ctx context.Context, options Options) (*Store, error) {
 	}
 
 	return &Store{
-		database:        database,
-		repo:            repository,
-		accessRepo:      accessRepo,
-		activityRepo:    activityRepo,
-		captureRepo:     captureRepo,
-		manualCapture:   manualCaptureRepo,
-		proxyClients:    proxyClientRepo,
-		connectionRepo:  connectionRepo,
-		egressAttempts:  egressRepo,
-		approvalRepo:    approvalRepo,
-		connectionRule:  connectionRules,
-		workspaceRoutes: workspaceRoutes,
-		operations:      operations,
-		closeDone:       make(chan struct{}),
+		database:           database,
+		repo:               repository,
+		activityRepo:       activityRepo,
+		captureRepo:        captureRepo,
+		manualCapture:      manualCaptureRepo,
+		proxyClients:       proxyClientRepo,
+		connectionRepo:     connectionRepo,
+		egressAttempts:     egressRepo,
+		approvalRepo:       approvalRepo,
+		connectionRule:     connectionRules,
+		environments:       environments,
+		captureAssignments: captureAssignments,
+		operations:         operations,
+		closeDone:          make(chan struct{}),
 	}, nil
 }
 
 func (s *Store) SchemaStateReader() SchemaStateReader {
 	return s.repo
-}
-
-func (s *Store) AccessRepository() access.Repository {
-	return s.accessRepo
 }
 
 func (s *Store) ActivityRepository() activity.Repository {
@@ -229,8 +230,16 @@ func (s *Store) ConnectionRuleRepository() connectionpolicy.Repository {
 	return s.connectionRule
 }
 
-func (s *Store) WorkspaceRouteRepository() workspaceroute.Repository {
-	return s.workspaceRoutes
+// EnvironmentRepository is the durable editable Environment authority used by
+// the production composition root.
+func (s *Store) EnvironmentRepository() environment.Repository {
+	return s.environments
+}
+
+// CaptureAssignmentRepository stores the current Environment choice for both
+// managed runs and manual captures.
+func (s *Store) CaptureAssignmentRepository() captureassignment.Repository {
+	return s.captureAssignments
 }
 
 // Settings reads the active SQLite connection policy through the same

@@ -19,10 +19,13 @@ import (
 	"strings"
 	"time"
 
+	"github.com/vibe-agi/vibermate/internal/captureassignment"
+	"github.com/vibe-agi/vibermate/internal/captureidentity"
 	"github.com/vibe-agi/vibermate/internal/capturerun"
 	"github.com/vibe-agi/vibermate/internal/certidentity"
 	"github.com/vibe-agi/vibermate/internal/clientadapter"
 	"github.com/vibe-agi/vibermate/internal/controlprincipal"
+	"github.com/vibe-agi/vibermate/internal/environment"
 	"github.com/vibe-agi/vibermate/internal/localca"
 	"github.com/vibe-agi/vibermate/internal/manualcapture"
 	"github.com/vibe-agi/vibermate/internal/toolapproval"
@@ -38,7 +41,7 @@ var (
 	ErrPrincipalUnauthorized    = errors.New("control principal is not authorized for the grant")
 	ErrInvalidCaptureRun        = errors.New("CaptureRun request is invalid")
 	ErrAdapterVerification      = errors.New("client adapter verification failed")
-	ErrProjectionUnavailable    = errors.New("Access projection is unavailable")
+	ErrProjectionUnavailable    = errors.New("Environment projection is unavailable")
 	ErrWorkspaceUnavailable     = errors.New("workspace identity is unavailable")
 	ErrCaptureRunCreate         = errors.New("CaptureRun creation failed")
 	ErrInvalidManualCapture     = errors.New("ManualCapture request is invalid")
@@ -157,6 +160,7 @@ func New(options Options) (*Issuer, error) {
 }
 
 type ManualCaptureRequest struct {
+	EnvironmentID     environment.EnvironmentID
 	DisplayName       string
 	ClientClass       manualcapture.ClientClass
 	Lifetime          manualcapture.Lifetime
@@ -167,6 +171,13 @@ type ManualCaptureRequest struct {
 type ManualCaptureContext struct {
 	ConfirmationToken        string
 	ProxyAddress             string
+	EnvironmentID            environment.EnvironmentID
+	EnvironmentRevision      environment.Revision
+	EnvironmentDigest        environment.CandidateDigest
+	LaunchAuthorityDigest    environment.LaunchAuthorityDigest
+	ProtectedAuthorities     []string
+	ManagedAuthorities       []string
+	DeliverRoot              bool
 	RootIdentity             localca.RootIdentity
 	RootCertificate          localca.RootCertificate
 	DefaultTemporaryLifetime time.Duration
@@ -174,8 +185,9 @@ type ManualCaptureContext struct {
 }
 
 type ManualCaptureGrant struct {
-	Capture manualcapture.Grant
-	Context ManualCaptureContext
+	Capture   manualcapture.Grant
+	Authority CaptureAuthoritySet
+	Context   ManualCaptureContext
 }
 
 type ManualCaptureRotateRequest struct {
@@ -191,12 +203,17 @@ type ManualCaptureRevokeRequest struct {
 func (issuer *Issuer) GetManualCaptureContext(
 	ctx context.Context,
 	principal controlprincipal.Principal,
+	environmentID environment.EnvironmentID,
 ) (ManualCaptureContext, error) {
 	owner, err := issuer.manualCaptureOwner(ctx, principal)
 	if err != nil {
 		return ManualCaptureContext{}, err
 	}
-	return issuer.manualCaptureContext(owner), nil
+	review, err := issuer.authorities.Review(ctx, environmentID)
+	if err != nil {
+		return ManualCaptureContext{}, ErrProjectionUnavailable
+	}
+	return issuer.manualCaptureContext(owner, review), nil
 }
 
 func (issuer *Issuer) IssueManualCapture(
@@ -213,9 +230,13 @@ func (issuer *Issuer) IssueManualCapture(
 		request.ConfirmationToken == "" {
 		return ManualCaptureGrant{}, ErrInvalidManualCapture
 	}
+	review, err := issuer.authorities.Review(ctx, request.EnvironmentID)
+	if err != nil {
+		return ManualCaptureGrant{}, ErrProjectionUnavailable
+	}
 	if !sameManualCaptureConfirmation(
 		request.ConfirmationToken,
-		issuer.manualCaptureConfirmation(owner),
+		issuer.manualCaptureConfirmation(owner, review),
 	) {
 		return ManualCaptureGrant{}, ErrManualCaptureConflict
 	}
@@ -232,9 +253,34 @@ func (issuer *Issuer) IssueManualCapture(
 			ErrManualCaptureCreate,
 		)
 	}
+	capture, err := captureidentity.New(
+		captureidentity.KindManualCapture,
+		grant.Capture.ID,
+	)
+	if err != nil {
+		return ManualCaptureGrant{}, issuer.revokeUnusedManualCapture(
+			ctx, owner, grant, ErrManualCaptureCreate,
+		)
+	}
+	authority, err := issuer.authorities.AssignAndResolve(
+		ctx, capture, request.EnvironmentID,
+	)
+	if err != nil {
+		return ManualCaptureGrant{}, issuer.revokeUnusedManualCapture(
+			ctx, owner, grant, errors.Join(ErrManualCaptureCreate, err),
+		)
+	}
+	if authority.AuthorityDigest() != review.AuthorityDigest() ||
+		authority.InitialEnvironmentID() != review.EnvironmentID() ||
+		authority.InitialEnvironmentRevision() != review.EnvironmentRevision() ||
+		authority.InitialEnvironmentDigest() != review.EnvironmentDigest() {
+		return ManualCaptureGrant{}, issuer.revokeUnusedManualCapture(
+			ctx, owner, grant, ErrManualCaptureConflict,
+		)
+	}
 	return ManualCaptureGrant{
-		Capture: grant,
-		Context: issuer.manualCaptureContext(owner),
+		Capture: grant, Authority: authority,
+		Context: issuer.manualCaptureContext(owner, authority.Review()),
 	}, nil
 }
 
@@ -306,9 +352,17 @@ func (issuer *Issuer) RotateManualCapture(
 			ErrManualCaptureUnavailable,
 		)
 	}
+	capture, err := captureidentity.New(captureidentity.KindManualCapture, grant.Capture.ID)
+	if err != nil {
+		return ManualCaptureGrant{}, ErrManualCaptureUnavailable
+	}
+	authority, err := issuer.authorities.Resolve(ctx, capture)
+	if err != nil {
+		return ManualCaptureGrant{}, ErrManualCaptureUnavailable
+	}
 	return ManualCaptureGrant{
-		Capture: grant,
-		Context: issuer.manualCaptureContext(owner),
+		Capture: grant, Authority: authority,
+		Context: issuer.manualCaptureContext(owner, authority.Review()),
 	}, nil
 }
 
@@ -371,15 +425,26 @@ func (issuer *Issuer) manualCaptureOwner(
 
 func (issuer *Issuer) manualCaptureContext(
 	owner manualcapture.OwnerScope,
+	review CaptureAuthorityReview,
 ) ManualCaptureContext {
-	return ManualCaptureContext{
-		ConfirmationToken:        issuer.manualCaptureConfirmation(owner),
+	context := ManualCaptureContext{
+		ConfirmationToken:        issuer.manualCaptureConfirmation(owner, review),
 		ProxyAddress:             issuer.proxyOrigin,
-		RootIdentity:             issuer.rootID,
-		RootCertificate:          issuer.root,
+		EnvironmentID:            review.EnvironmentID(),
+		EnvironmentRevision:      review.EnvironmentRevision(),
+		EnvironmentDigest:        review.EnvironmentDigest(),
+		LaunchAuthorityDigest:    review.AuthorityDigest(),
+		ProtectedAuthorities:     review.ProtectedAuthorities(),
+		ManagedAuthorities:       review.ManagedCredentialAuthorities(),
 		DefaultTemporaryLifetime: manualcapture.DefaultTemporaryLifetime,
 		MaximumTemporaryLifetime: manualcapture.MaximumTemporaryLifetime,
 	}
+	if len(context.ProtectedAuthorities) != 0 {
+		context.DeliverRoot = true
+		context.RootIdentity = issuer.rootID
+		context.RootCertificate = issuer.root
+	}
+	return context
 }
 
 // manualCaptureConfirmation is an opaque review token, not an authorization
@@ -388,15 +453,20 @@ func (issuer *Issuer) manualCaptureContext(
 // different from the one the caller reviewed.
 func (issuer *Issuer) manualCaptureConfirmation(
 	owner manualcapture.OwnerScope,
+	review CaptureAuthorityReview,
 ) string {
 	hash := sha256.New()
 	for _, value := range []string{
-		"vibermate:manual-capture-confirmation:v1",
+		"vibermate:manual-capture-confirmation",
 		issuer.generation,
 		issuer.proxyOrigin,
 		issuer.rootID.Digest().String(),
 		issuer.root.Path(),
 		string(owner.Kind()),
+		review.EnvironmentID().String(),
+		strconv.FormatUint(uint64(review.EnvironmentRevision()), 10),
+		review.EnvironmentDigest().String(),
+		review.AuthorityDigest().String(),
 		strconv.FormatInt(int64(manualcapture.DefaultTemporaryLifetime/time.Second), 10),
 		strconv.FormatInt(int64(manualcapture.MaximumTemporaryLifetime/time.Second), 10),
 	} {
@@ -407,6 +477,28 @@ func (issuer *Issuer) manualCaptureConfirmation(
 		_, _ = hash.Write([]byte(bindingID))
 	}
 	return "ctx_" + base64.RawURLEncoding.EncodeToString(hash.Sum(nil))
+}
+
+func (issuer *Issuer) revokeUnusedManualCapture(
+	ctx context.Context,
+	owner manualcapture.OwnerScope,
+	grant manualcapture.Grant,
+	cause error,
+) error {
+	id, err := manualcapture.ParseID(grant.Capture.ID)
+	if err != nil {
+		return errors.Join(cause, err)
+	}
+	cleanupContext, cancel := context.WithTimeout(context.WithoutCancel(ctx), 2*time.Second)
+	defer cancel()
+	_, revokeErr := issuer.manuals.Revoke(cleanupContext, manualcapture.RevokeCommand{
+		Owner: owner, ID: id,
+		ExpectedCredentialRevision: grant.Capture.CredentialRevision,
+	})
+	if revokeErr != nil {
+		return errors.Join(cause, fmt.Errorf("revoke unused ManualCapture: %w", revokeErr))
+	}
+	return cause
 }
 
 func sameManualCaptureConfirmation(left, right string) bool {
@@ -432,6 +524,7 @@ func classifyManualCaptureError(err error, fallback error) error {
 }
 
 type CaptureRunRequest struct {
+	EnvironmentID  environment.EnvironmentID
 	CWD            string
 	Command        []string
 	ExecutablePath string
@@ -448,6 +541,13 @@ type CaptureRunGrant struct {
 	ExecutablePath               string
 	ProxyAddress                 string
 	RootPEMPath                  string
+	Capture                      captureidentity.Reference
+	AssignmentRevision           captureassignment.Revision
+	EnvironmentID                environment.EnvironmentID
+	InitialEnvironmentID         environment.EnvironmentID
+	InitialEnvironmentRevision   environment.Revision
+	InitialEnvironmentDigest     environment.CandidateDigest
+	LaunchAuthorityDigest        environment.LaunchAuthorityDigest
 	ProtectedAuthorities         []string
 	ManagedCredentialAuthorities []string
 }
@@ -503,11 +603,20 @@ func (issuer *Issuer) IssueCaptureRun(
 	if err != nil {
 		return CaptureRunGrant{}, ErrCaptureRunCreate
 	}
-	// Persist the active run before resolving route-dependent launcher
-	// authority. Workspace-route CAS checks the same SQLite state inside its
-	// write transaction, so an auth-source change is ordered either entirely
-	// before this resolution or rejected until this run finishes.
-	authorities, err := issuer.authorities.ResolveCaptureAuthorities(ctx, workspace)
+	// Persist the active run before creating its Environment assignment. The
+	// assignment manager freezes launch authority while holding the selected
+	// Environment's publication fence. If assignment creation is uncertain or
+	// fails, finishing this run makes its proxy capability unusable; no launch
+	// grant escapes even if a conservative orphan assignment remains.
+	var authorities CaptureAuthoritySet
+	capture, captureErr := captureidentity.New(captureidentity.KindManagedRun, grant.Run.ID)
+	if captureErr != nil {
+		err = captureErr
+	} else {
+		authorities, err = issuer.authorities.AssignAndResolve(
+			ctx, capture, request.EnvironmentID,
+		)
+	}
 	if err != nil {
 		cleanupContext, cancelCleanup := context.WithTimeout(
 			context.WithoutCancel(ctx),
@@ -533,9 +642,9 @@ func (issuer *Issuer) IssueCaptureRun(
 	rootPath := ""
 	var launchAdapter *clientadapter.Evidence
 	var signer *clientadapter.SignerEvidence
-	// Root delivery exists only to decrypt an exact protected authority. An
-	// empty Access projection is transparent capture: keep the verified client
-	// identity on the durable run, but launch with an ordinary authenticated
+	// Root delivery exists only to decrypt an exact protected authority. A
+	// transparent Environment keeps the verified client identity on the durable
+	// run, but launches with an ordinary authenticated
 	// proxy and never ask for or deliver the Root.
 	if len(protectedAuthorities) != 0 {
 		if runAdapter != nil {
@@ -567,6 +676,13 @@ func (issuer *Issuer) IssueCaptureRun(
 		ExecutablePath:               detection.CanonicalPath,
 		ProxyAddress:                 issuer.proxyOrigin,
 		RootPEMPath:                  rootPath,
+		Capture:                      authorities.Capture(),
+		AssignmentRevision:           authorities.AssignmentRevision(),
+		EnvironmentID:                authorities.EnvironmentID(),
+		InitialEnvironmentID:         authorities.InitialEnvironmentID(),
+		InitialEnvironmentRevision:   authorities.InitialEnvironmentRevision(),
+		InitialEnvironmentDigest:     authorities.InitialEnvironmentDigest(),
+		LaunchAuthorityDigest:        authorities.AuthorityDigest(),
 		ProtectedAuthorities:         protectedAuthorities,
 		ManagedCredentialAuthorities: managedAuthorities,
 	}, nil
@@ -594,6 +710,9 @@ func (issuer *Issuer) askClientRoot(
 }
 
 func validateCaptureRunRequest(request CaptureRunRequest) error {
+	if _, err := environment.NewEnvironmentID(request.EnvironmentID.String()); err != nil {
+		return errors.New("CaptureRun Environment is invalid")
+	}
 	if request.CWD == "" ||
 		!filepath.IsAbs(request.CWD) ||
 		filepath.Clean(request.CWD) != request.CWD ||

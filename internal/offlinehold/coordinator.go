@@ -2,6 +2,7 @@ package offlinehold
 
 import (
 	"context"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"slices"
@@ -384,14 +385,14 @@ func (gate *Gate) PendingProbeTargets() []ProbeTarget {
 		}
 		seen[key] = struct{}{}
 		targets = append(targets, ProbeTarget{
-			Kind:           key.target.Kind,
-			Transport:      key.target.Transport,
-			TargetRef:      key.target.TargetRef,
-			NetworkOrigin:  key.target.NetworkOrigin,
-			HTTPAuthority:  key.target.HTTPAuthority,
-			TLSServerName:  key.target.TLSServerName,
-			AccessRevision: key.target.AccessRevision,
-			PlanHash:       key.target.PlanHash,
+			Kind:          key.target.Kind,
+			Transport:     key.target.Transport,
+			TargetRef:     key.target.TargetRef,
+			NetworkOrigin: key.target.NetworkOrigin,
+			HTTPAuthority: key.target.HTTPAuthority,
+			TLSServerName: key.target.TLSServerName,
+			PlanRevision:  key.target.PlanRevision,
+			PlanDigest:    key.target.PlanDigest,
 		})
 	}
 	slices.SortFunc(targets, func(left, right ProbeTarget) int {
@@ -773,11 +774,11 @@ func validateProbeTarget(target ProbeTarget) error {
 			return err
 		}
 	}
-	if (target.AccessRevision == 0) != (target.PlanHash == "") {
+	if (target.PlanRevision == 0) != (target.PlanDigest == "") {
 		return ErrInvalidRequest
 	}
-	if target.PlanHash != "" {
-		if err := validateOpaqueIdentity("probe PlanHash", target.PlanHash); err != nil {
+	if target.PlanDigest != "" {
+		if err := validatePlanDigest(target.PlanDigest); err != nil {
 			return err
 		}
 	}
@@ -792,9 +793,20 @@ func probeTargetSortKey(target ProbeTarget) string {
 		target.NetworkOrigin,
 		target.HTTPAuthority,
 		target.TLSServerName,
-		fmt.Sprintf("%020d", target.AccessRevision),
-		target.PlanHash,
+		fmt.Sprintf("%020d", target.PlanRevision),
+		target.PlanDigest,
 	}, "\x00")
+}
+
+func validatePlanDigest(value string) error {
+	if len(value) != 64 || strings.ToLower(value) != value {
+		return fmt.Errorf("%w: probe plan digest is invalid", ErrInvalidRequest)
+	}
+	decoded, err := hex.DecodeString(value)
+	if err != nil || len(decoded) != 32 {
+		return fmt.Errorf("%w: probe plan digest is invalid", ErrInvalidRequest)
+	}
+	return nil
 }
 
 func validEgressKind(kind EgressKind) bool {

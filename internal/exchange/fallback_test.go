@@ -5,7 +5,7 @@ import (
 	"errors"
 	"testing"
 
-	"github.com/vibe-agi/vibermate/internal/access"
+	"github.com/vibe-agi/vibermate/internal/environment"
 )
 
 func transportFailure() error {
@@ -28,7 +28,7 @@ func TestNothingIsRetriedAfterTheClientHasReceivedAnything(t *testing.T) {
 		t.Fatal(err)
 	}
 	if mayTryNextCandidate(
-		access.FallbackPreFirstByteIdempotentOnly,
+		environment.FailoverAccountScopedSafe,
 		2,
 		0,
 		ledger,
@@ -46,7 +46,7 @@ func TestFallbackHappensOnlyWhenThePolicyAllowsIt(t *testing.T) {
 	t.Parallel()
 
 	if mayTryNextCandidate(
-		access.FallbackDisabled,
+		environment.FailoverOff,
 		2,
 		0,
 		&CommitLedger{},
@@ -56,7 +56,7 @@ func TestFallbackHappensOnlyWhenThePolicyAllowsIt(t *testing.T) {
 		t.Fatal("a disabled policy fell back")
 	}
 	if !mayTryNextCandidate(
-		access.FallbackPreFirstByteIdempotentOnly,
+		environment.FailoverAccountScopedSafe,
 		2,
 		0,
 		&CommitLedger{},
@@ -78,7 +78,7 @@ func TestARequestThatMayHaveHadAnEffectIsNotRepeated(t *testing.T) {
 		ReplayUnknown,
 	} {
 		if mayTryNextCandidate(
-			access.FallbackPreFirstByteIdempotentOnly,
+			environment.FailoverAccountScopedSafe,
 			2,
 			0,
 			&CommitLedger{},
@@ -94,7 +94,7 @@ func TestARequestThatMayHaveHadAnEffectIsNotRepeated(t *testing.T) {
 		ReplayGenerationCostOnly,
 	} {
 		if !mayTryNextCandidate(
-			access.FallbackPreFirstByteIdempotentOnly,
+			environment.FailoverAccountScopedSafe,
 			2,
 			0,
 			&CommitLedger{},
@@ -114,13 +114,13 @@ func TestOnlyAFailureAnotherCandidateCouldAnswerIsRetried(t *testing.T) {
 	for _, reason := range []ReasonCode{
 		ReasonInvalidExchangeRequest,
 		ReasonUnsupportedClientInput,
-		ReasonUnsupportedAccessPlan,
+		ReasonEnvironmentPlanInvalid,
 		ReasonProviderRequestInvalid,
 		ReasonDownstreamDisconnected,
 		ReasonToolDecisionRejected,
 	} {
 		if mayTryNextCandidate(
-			access.FallbackPreFirstByteIdempotentOnly,
+			environment.FailoverAccountScopedSafe,
 			2,
 			0,
 			&CommitLedger{},
@@ -131,7 +131,7 @@ func TestOnlyAFailureAnotherCandidateCouldAnswerIsRetried(t *testing.T) {
 		}
 	}
 	if mayTryNextCandidate(
-		access.FallbackPreFirstByteIdempotentOnly,
+		environment.FailoverAccountScopedSafe,
 		2,
 		0,
 		&CommitLedger{},
@@ -148,7 +148,7 @@ func TestTheLastCandidateEndsTheAttempts(t *testing.T) {
 	t.Parallel()
 
 	if mayTryNextCandidate(
-		access.FallbackPreFirstByteIdempotentOnly,
+		environment.FailoverAccountScopedSafe,
 		2,
 		1,
 		&CommitLedger{},

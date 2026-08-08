@@ -41,7 +41,7 @@ type DatabaseSettings struct {
 }
 
 // SchemaStateReader reads migration state for runtime initialization. It is
-// intentionally distinct from the Access aggregate SnapshotResolver.
+// intentionally distinct from the Environment aggregate SnapshotResolver.
 type SchemaStateReader interface {
 	ReadSchemaState(context.Context) (SchemaState, error)
 }

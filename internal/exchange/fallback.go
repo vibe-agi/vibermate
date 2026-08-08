@@ -4,11 +4,11 @@ import (
 	"context"
 	"errors"
 
-	"github.com/vibe-agi/vibermate/internal/access"
+	"github.com/vibe-agi/vibermate/internal/environment"
 )
 
-// mayTryNextCandidate decides whether a failed attempt may be tried against
-// the next candidate in the RouteSet.
+// mayTryNextCandidate decides whether a failed attempt may be tried with the
+// next account in the frozen Route account policy.
 //
 // Design 02 §12 allows this only before a first byte has been committed
 // downstream, with no unresolved tool call, and only when the policy
@@ -17,14 +17,14 @@ import (
 // upstream did not process the request, so every one of these has to hold at
 // once — the transport's opinion is not enough on its own.
 func mayTryNextCandidate(
-	policy access.FallbackPolicy,
+	policy environment.FailoverPolicy,
 	candidates int,
 	attempted int,
 	ledger *CommitLedger,
 	replay ReplayClass,
 	cause error,
 ) bool {
-	if !policy.Allows() || attempted+1 >= candidates {
+	if policy != environment.FailoverAccountScopedSafe || attempted+1 >= candidates {
 		return false
 	}
 	if !replayableAcrossCandidates(replay) || !retryableFailure(cause) {

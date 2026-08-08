@@ -4,9 +4,9 @@ import (
 	"net/http"
 	"testing"
 
-	"github.com/vibe-agi/vibermate/internal/access"
 	"github.com/vibe-agi/vibermate/internal/operationcatalog"
 	"github.com/vibe-agi/vibermate/internal/pathcapability"
+	"github.com/vibe-agi/vibermate/internal/protocolspec"
 )
 
 // Real Claude Code traffic reaches non-model paths on the model origin. While
@@ -37,7 +37,7 @@ func TestObservedClaudeControlPlaneOperationsAreCatalogued(t *testing.T) {
 			t.Parallel()
 
 			capability, err := catalog.Classify(
-				access.DialectAnthropicMessages,
+				protocolspec.DialectAnthropicMessages,
 				testCase.method,
 				testCase.path,
 				"",
@@ -50,7 +50,7 @@ func TestObservedClaudeControlPlaneOperationsAreCatalogued(t *testing.T) {
 				t.Fatalf("kind = %q, want opaque", capability.Kind())
 			}
 			if got := capability.PayloadClass(); got !=
-				access.OperationPayloadNone {
+				protocolspec.OperationPayloadNone {
 				t.Fatalf("payload class = %q, want none", got)
 			}
 			if !capability.PayloadClass().AllowsOriginalOrigin() {
@@ -77,7 +77,7 @@ func TestControlPlanePathsDoNotAcceptBodyBearingMethods(t *testing.T) {
 		t.Fatal(err)
 	}
 	if _, err := catalog.Classify(
-		access.DialectAnthropicMessages,
+		protocolspec.DialectAnthropicMessages,
 		http.MethodPost,
 		"/api/claude_code/settings",
 		"",
@@ -104,7 +104,7 @@ func TestObservedCodexOperationsAreCatalogued(t *testing.T) {
 	}
 
 	model, err := catalog.Classify(
-		access.DialectOpenAIResponses,
+		protocolspec.DialectOpenAIResponses,
 		http.MethodPost,
 		"/backend-api/codex/responses",
 		"",
@@ -116,7 +116,7 @@ func TestObservedCodexOperationsAreCatalogued(t *testing.T) {
 	if model.Kind() != pathcapability.KindSemantic {
 		t.Fatalf("ChatGPT-login model path kind = %q", model.Kind())
 	}
-	if model.PayloadClass() != access.OperationPayloadClientSemantic {
+	if model.PayloadClass() != protocolspec.OperationPayloadClientSemantic {
 		t.Fatalf("ChatGPT-login model payload class = %q", model.PayloadClass())
 	}
 
@@ -128,7 +128,7 @@ func TestObservedCodexOperationsAreCatalogued(t *testing.T) {
 		"/backend-api/ps/plugins/suggested",
 	} {
 		probe, probeErr := catalog.Classify(
-			access.DialectOpenAIResponses,
+			protocolspec.DialectOpenAIResponses,
 			http.MethodGet,
 			path,
 			"",
@@ -138,7 +138,7 @@ func TestObservedCodexOperationsAreCatalogued(t *testing.T) {
 			t.Fatalf("%s: %v", path, probeErr)
 		}
 		if probe.Kind() != pathcapability.KindOpaque ||
-			probe.PayloadClass() != access.OperationPayloadNone {
+			probe.PayloadClass() != protocolspec.OperationPayloadNone {
 			t.Fatalf(
 				"%s kind=%q payload=%q",
 				path,
@@ -168,7 +168,7 @@ func TestObservedCodexBodyBearingControlPathsStayUnclassified(t *testing.T) {
 		"/backend-api/codex/analytics-events/events",
 	} {
 		capability, classifyErr := catalog.Classify(
-			access.DialectOpenAIResponses,
+			protocolspec.DialectOpenAIResponses,
 			http.MethodPost,
 			path,
 			"",
@@ -177,7 +177,7 @@ func TestObservedCodexBodyBearingControlPathsStayUnclassified(t *testing.T) {
 		if classifyErr != nil {
 			continue
 		}
-		if capability.PayloadClass() != access.OperationPayloadUnknown {
+		if capability.PayloadClass() != protocolspec.OperationPayloadUnknown {
 			t.Fatalf(
 				"%s was classified as %q without body verification",
 				path,

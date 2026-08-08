@@ -90,54 +90,29 @@ func TestRunVerifiesCredentialedReportOnlyWhenExplicitlyExpected(t *testing.T) {
 	}
 }
 
-func TestRunRequiresAnExplicitNonDowngradedSchema(t *testing.T) {
+func TestRunRejectsRetiredSchema(t *testing.T) {
 	t.Parallel()
 	report := validCLIReport(t)
 	revision := report.Provenance.Source.Revision
-	report.Schema = acceptancereport.SchemaV5
-	report.Provenance.Build.ManifestSchema =
-		acceptancereport.DesktopBuildManifestSchemaV1
-	delete(
-		report.Provenance.Build.ConfigurationSHA256,
-		"rust-toolchain.toml",
-	)
-	checks := make([]acceptancereport.Check, 0, len(report.Checks)-1)
-	for _, check := range report.Checks {
-		if check.ID != "packaged-main-navigation-cold-restore" {
-			checks = append(checks, check)
+	report.Schema = "vibermate.m0-assembly-acceptance/v5"
+	path := writeCLIReport(t, report)
+	arguments := cliArguments(path, revision, report)
+	for index := 0; index+1 < len(arguments); index++ {
+		if arguments[index] == "--expected-schema" {
+			arguments[index+1] = report.Schema
+			break
 		}
 	}
-	report.Checks = checks
-	path := writeCLIReport(t, report)
-
-	var currentStdout, currentStderr bytes.Buffer
+	var stdout, stderr bytes.Buffer
 	if exitCode := run(
-		cliArguments(path, revision, report),
-		&currentStdout,
-		&currentStderr,
-	); exitCode != 1 || !strings.Contains(currentStderr.String(), "schema") {
+		arguments,
+		&stdout,
+		&stderr,
+	); exitCode != 1 || !strings.Contains(stderr.String(), "schema") {
 		t.Fatalf(
-			"current run exit = %d, stderr = %q",
+			"retired-schema run exit = %d, stderr = %q",
 			exitCode,
-			currentStderr.String(),
-		)
-	}
-
-	var historicalStdout, historicalStderr bytes.Buffer
-	if exitCode := run(
-		cliArgumentsForSchema(
-			path,
-			revision,
-			acceptancereport.SchemaV5,
-			report,
-		),
-		&historicalStdout,
-		&historicalStderr,
-	); exitCode != 0 {
-		t.Fatalf(
-			"historical run exit = %d, stderr = %q",
-			exitCode,
-			historicalStderr.String(),
+			stderr.String(),
 		)
 	}
 }
@@ -217,36 +192,22 @@ func cliArguments(
 	path, revision string,
 	report acceptancereport.Report,
 ) []string {
-	return cliArgumentsForSchema(
-		path,
-		revision,
-		acceptancereport.SchemaV6,
-		report,
-	)
-}
-
-func cliArgumentsForSchema(
-	path, revision, schema string,
-	report acceptancereport.Report,
-) []string {
 	arguments := []string{
 		"--report", path,
 		"--expected-mode", string(acceptancereport.ModeDeterministic),
-		"--expected-schema", schema,
+		"--expected-schema", acceptancereport.SchemaV6,
 		"--expected-revision", revision,
 		"--expected-client-id", "claude-code",
 		"--expected-client-version", "2.1.220",
 	}
-	if schema == acceptancereport.SchemaV6 {
-		coordinates := cliArtifactCoordinates(report)
-		arguments = append(
-			arguments,
-			"--source-root", coordinates.SourceRoot,
-			"--desktop-app", coordinates.DesktopApp,
-			"--acceptance-executable", coordinates.AcceptanceExecutable,
-			"--client-entrypoint", coordinates.ClientEntrypoint,
-		)
-	}
+	coordinates := cliArtifactCoordinates(report)
+	arguments = append(
+		arguments,
+		"--source-root", coordinates.SourceRoot,
+		"--desktop-app", coordinates.DesktopApp,
+		"--acceptance-executable", coordinates.AcceptanceExecutable,
+		"--client-entrypoint", coordinates.ClientEntrypoint,
+	)
 	return arguments
 }
 
@@ -444,9 +405,7 @@ func validCLIReport(t *testing.T) acceptancereport.Report {
 				DeterministicOnly: true,
 				ClientID:          "claude-code",
 				ClientVersion:     "2.1.220",
-				AccessID:          "assembly-001",
-				ProviderOrigin:    "http://127.0.0.1:23333/v1",
-				ProviderModel:     "dashscope:glm-5",
+				EnvironmentID:     "assembly-001",
 				Timeout:           "8m0s",
 			},
 		},

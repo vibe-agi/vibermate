@@ -4,18 +4,25 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/vibe-agi/vibermate/internal/access"
 	"github.com/vibe-agi/vibermate/internal/captureadmission"
+	"github.com/vibe-agi/vibermate/internal/environment"
+	"github.com/vibe-agi/vibermate/internal/protocolspec"
+	"github.com/vibe-agi/vibermate/internal/wireprofile"
 )
 
-func mustCorrelationAccessID(t *testing.T) access.AccessID {
+func mustCorrelationPlan(t *testing.T) environment.RequestPlan {
 	t.Helper()
-
-	accessID, err := access.NewAccessID("access-correlation")
-	if err != nil {
-		t.Fatal(err)
-	}
-	return accessID
+	return mustEnvironmentRequestPlan(t, testPlanOptions{
+		mode:           environment.PlanModeManaged,
+		providerOrigin: "https://provider.example/v1",
+		backend:        protocolspec.DialectOpenAIChat,
+		modelMode:      modelModeFixed,
+		fixedModel:     "gpt-provider",
+		accounts: []testAccount{{
+			id: "account.correlation", revision: 1, epoch: 1,
+		}},
+		preferred: "account.correlation",
+	})
 }
 
 func correlatedRequest(
@@ -38,13 +45,25 @@ func correlatedRequest(
 		[]ClientRequestOption{WithIngressCorrelation(admission, connectionID)},
 		options...,
 	)
+	plan := mustCorrelationPlan(t)
+	operation := plan.Operation()
+	evidence, err := NewClientOperationEvidence(
+		operation.ID(),
+		operation.Revision(),
+		"POST",
+		"/v1/messages",
+		"",
+	)
+	if err != nil {
+		return ClientRequest{}, err
+	}
 	return NewClientRequest(
 		"exchange-correlation",
-		testIngressBinding(t, mustCorrelationAccessID(t)),
-		mustAnthropicOperationEvidence(t),
+		plan,
+		evidence,
 		[]byte(`{"model":"m","max_tokens":1,"messages":[]}`),
 		ReplayGenerationCostOnly,
-		access.ApplicationProtocolHTTP1,
+		wireprofile.ApplicationProtocolHTTP1,
 		all...,
 	)
 }
@@ -62,7 +81,7 @@ func TestClientRequestCarriesTypedCorrelationRefs(t *testing.T) {
 		t.Fatalf("ManualCapture reference = %q", got)
 	}
 	if request.CaptureRunRef() != "" ||
-		request.IngressProfileRef() != "manual-capture/capture-run-1" {
+		request.CaptureAdmissionRef() != "manual-capture/capture-run-1" {
 		t.Fatalf("route-neutral references are inconsistent")
 	}
 	if got := request.ConnectionRef(); got != "connection-1" {
@@ -96,19 +115,27 @@ func TestExchangeIDDoesNotEncodeAnotherIdentity(t *testing.T) {
 func TestCorrelationIsOptionalButValidatedWhenPresent(t *testing.T) {
 	t.Parallel()
 
+	plan := mustCorrelationPlan(t)
+	operation := plan.Operation()
+	evidence, err := NewClientOperationEvidence(
+		operation.ID(), operation.Revision(), "POST", "/v1/messages", "",
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
 	plain, err := NewClientRequest(
 		"exchange-uncorrelated",
-		testIngressBinding(t, mustCorrelationAccessID(t)),
-		mustAnthropicOperationEvidence(t),
+		plan,
+		evidence,
 		[]byte(`{"model":"m","max_tokens":1,"messages":[]}`),
 		ReplayGenerationCostOnly,
-		access.ApplicationProtocolHTTP1,
+		wireprofile.ApplicationProtocolHTTP1,
 	)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if plain.CaptureRunRef() != "" || plain.ManualCaptureRef() != "" ||
-		plain.IngressProfileRef() != "" || plain.ConnectionRef() != "" {
+		plain.CaptureAdmissionRef() != "" || plain.ConnectionRef() != "" {
 		t.Fatal("an uncorrelated request reported a reference")
 	}
 

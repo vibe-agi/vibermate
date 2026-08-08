@@ -30,7 +30,7 @@ func TestARequestedHostIsAHostAndNotAnAuthority(t *testing.T) {
 	}
 }
 
-func TestAllowedMITMRequiresOneCompleteDecisionTimeAccessRelation(t *testing.T) {
+func TestAllowedMITMRequiresEnvironmentAndClientEndpointRelations(t *testing.T) {
 	t.Parallel()
 
 	event := Event{
@@ -42,25 +42,30 @@ func TestAllowedMITMRequiresOneCompleteDecisionTimeAccessRelation(t *testing.T) 
 		RouteHost:            "gateway.example.com",
 		Port:                 443,
 		Decision:             DecisionAllow,
-		RuleID:               "agent_endpoint_exact",
-		EgressScope:          EgressScopeAccess,
-		EgressSource:         EgressSourceAccessDefault,
+		RuleID:               "client_endpoint_exact",
+		EgressScope:          EgressScopeEnvironment,
+		EgressSource:         EgressSourceEnvironmentDefault,
 		EgressPolicyRevision: 1,
 		Decryption:           DecryptionMITM,
 		Phase:                PhaseDecided,
 		StartedAt:            time.Date(2026, 8, 5, 10, 0, 0, 0, time.UTC),
 	}
 	if err := event.Validate(); err == nil {
-		t.Fatal("an allowed MITM decision without an Access relation was accepted")
+		t.Fatal("an allowed MITM decision without frozen relations was accepted")
 	}
-	event.AccessID = "access-one"
-	event.AccessName = "Work Claude"
-	event.AccessRevision = 3
-	event.AgentEndpointID = "endpoint-one"
-	event.AgentEndpointRevision = 2
+	event.EnvironmentID = "environment-one"
+	event.EnvironmentName = "Work Claude"
+	event.EnvironmentRevision = 3
+	event.ClientEndpointID = "endpoint-one"
+	event.ClientEndpointRevision = 2
 	if err := event.Validate(); err != nil {
-		t.Fatalf("a complete decision-time MITM Access relation was rejected: %v", err)
+		t.Fatalf("a complete decision-time MITM Environment relation was rejected: %v", err)
 	}
+	event.ClientEndpointRevision = 1 << 63
+	if err := event.Validate(); err == nil {
+		t.Fatal("a ClientEndpoint revision outside the SQLite-safe range was accepted")
+	}
+	event.ClientEndpointRevision = 2
 	event.Phase = PhaseConnected
 	event.ObservedSNI = "api.example.com"
 	if err := event.Validate(); err != nil {
@@ -68,6 +73,42 @@ func TestAllowedMITMRequiresOneCompleteDecisionTimeAccessRelation(t *testing.T) 
 	}
 	event.Decryption = DecryptionBlind
 	if err := event.Validate(); err == nil {
-		t.Fatal("a blind connection carrying an Access relation was accepted")
+		t.Fatal("a blind connection carrying a ClientEndpoint relation was accepted")
+	}
+}
+
+func TestBlindConnectionCanCarryEnvironmentWithoutClientEndpoint(t *testing.T) {
+	t.Parallel()
+
+	event := Event{
+		ConnectionID:         "connection-blind-environment",
+		IngressID:            "capture-run/run-one",
+		SourceLabel:          "claude",
+		SourceConfidence:     SourceConfidenceConfigured,
+		EnvironmentID:        "system-transparent",
+		EnvironmentName:      "Transparent",
+		EnvironmentRevision:  1,
+		RequestedHost:        "files.example.com",
+		RouteHost:            "files.example.com",
+		Port:                 443,
+		Decision:             DecisionAllow,
+		RuleID:               "network_default",
+		EgressScope:          EgressScopeNetwork,
+		EgressSource:         EgressSourceNetworkDefault,
+		EgressPolicyRevision: 1,
+		Decryption:           DecryptionBlind,
+		Phase:                PhaseDecided,
+		StartedAt:            time.Date(2026, 8, 5, 10, 0, 0, 0, time.UTC),
+	}
+	if err := event.Validate(); err != nil {
+		t.Fatalf("a blind connection lost its Environment assignment: %v", err)
+	}
+	event.ClientEndpointID = "unexpected-endpoint"
+	if err := event.Validate(); err == nil {
+		t.Fatal("partial ClientEndpoint evidence was accepted")
+	}
+	event.ClientEndpointRevision = 1
+	if err := event.Validate(); err == nil {
+		t.Fatal("a blind connection carrying complete ClientEndpoint evidence was accepted")
 	}
 }

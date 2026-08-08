@@ -19,6 +19,7 @@ import (
 
 	"github.com/vibe-agi/vibermate/internal/capturecontrol"
 	"github.com/vibe-agi/vibermate/internal/clientadapter"
+	"github.com/vibe-agi/vibermate/internal/environment"
 	"github.com/vibe-agi/vibermate/internal/localdiscovery"
 	"github.com/vibe-agi/vibermate/internal/runlauncher"
 )
@@ -67,9 +68,10 @@ exit 7
 			"first",
 			"two words",
 		},
-		userLabel:   "alice",
-		recipe:      clientadapter.LaunchNodeEnvProxy,
-		recognition: clientadapter.RecognitionVerified,
+		expectedEnvironment: "work",
+		userLabel:           "alice",
+		recipe:              clientadapter.LaunchNodeEnvProxy,
+		recognition:         clientadapter.RecognitionVerified,
 		adapter: &capturecontrol.ClientLaunchAdapterView{
 			ClientAdapterView: capturecontrol.ClientAdapterView{
 				ID:              "claude-code",
@@ -130,7 +132,10 @@ exit 7
 	}
 	code, err := launcher.Run(
 		context.Background(),
-		[]string{"agent", "first", "two words"},
+		runlauncher.LaunchRequest{
+			EnvironmentID: environment.EnvironmentID("work"),
+			Command:       []string{"agent", "first", "two words"},
+		},
 	)
 	if err != nil {
 		t.Fatalf("Run() error = %v", err)
@@ -196,7 +201,7 @@ func TestLauncherRejectsControlRedirectWithoutStartingChild(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := launcher.Run(context.Background(), []string{"echo"}); err == nil ||
+	if _, err := launcher.Run(context.Background(), transparentLaunch("echo")); err == nil ||
 		!strings.Contains(err.Error(), "redirect") {
 		t.Fatalf("Run() redirect error = %v", err)
 	}
@@ -242,7 +247,7 @@ func TestLauncherBoundsCaptureRunCreation(t *testing.T) {
 	go func() {
 		_, runErr := launcher.Run(
 			context.Background(),
-			[]string{"echo"},
+			transparentLaunch("echo"),
 		)
 		finished <- runErr
 	}()
@@ -292,7 +297,7 @@ func TestLauncherCancelsCaptureRunCreationFromCallerContext(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	finished := make(chan error, 1)
 	go func() {
-		_, runErr := launcher.Run(ctx, []string{"echo"})
+		_, runErr := launcher.Run(ctx, transparentLaunch("echo"))
 		finished <- runErr
 	}()
 	select {
@@ -321,19 +326,20 @@ func (discovery fixedDiscovery) Load() (localdiscovery.Session, error) {
 }
 
 type controlFixture struct {
-	t               *testing.T
-	executable      string
-	workspace       string
-	rootPath        string
-	credential      string
-	proxy           string
-	run             string
-	expectedCommand []string
-	userLabel       string
-	recipe          clientadapter.LaunchRecipe
-	recognition     clientadapter.Recognition
-	adapter         *capturecontrol.ClientLaunchAdapterView
-	authorities     []string
+	t                   *testing.T
+	executable          string
+	workspace           string
+	rootPath            string
+	credential          string
+	proxy               string
+	run                 string
+	expectedCommand     []string
+	expectedEnvironment string
+	userLabel           string
+	recipe              clientadapter.LaunchRecipe
+	recognition         clientadapter.Recognition
+	adapter             *capturecontrol.ClientLaunchAdapterView
+	authorities         []string
 
 	mu             sync.Mutex
 	createCalls    int
@@ -359,7 +365,12 @@ func (fixture *controlFixture) ServeHTTP(
 		}
 		var input capturecontrol.CreateRequest
 		decodeRequest(fixture.t, request, &input)
+		expectedEnvironment := fixture.expectedEnvironment
+		if expectedEnvironment == "" {
+			expectedEnvironment = environment.SystemTransparentID.String()
+		}
 		if input.CWD != fixture.workspace ||
+			input.EnvironmentID != expectedEnvironment ||
 			input.ExecutablePath != fixture.executable ||
 			input.LocalUserLabel != fixture.userLabel ||
 			!slices.Equal(input.Command, fixture.expectedCommand) {

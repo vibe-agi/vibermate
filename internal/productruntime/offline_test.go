@@ -2,14 +2,15 @@ package productruntime
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
+	"fmt"
 	"sync"
 	"testing"
 	"time"
 
-	"github.com/vibe-agi/vibermate/internal/access"
 	"github.com/vibe-agi/vibermate/internal/offlinehold"
-	"github.com/vibe-agi/vibermate/internal/providertransport"
 )
 
 func TestRuntimeResumeProberDispatchesOnlyTypedSupportedTargets(t *testing.T) {
@@ -29,58 +30,35 @@ func TestRuntimeResumeProberDispatchesOnlyTypedSupportedTargets(t *testing.T) {
 	if err := prober.Probe(context.Background(), request); err != nil {
 		t.Fatal(err)
 	}
-	if got := provider.Targets(); len(got) != 1 ||
-		got[0] != request.Targets[1] {
+	if got := provider.Targets(); len(got) != 1 || got[0] != request.Targets[1] {
 		t.Fatalf("provider targets = %+v", got)
 	}
-	if got := original.Targets(); len(got) != 2 ||
-		got[0] != request.Targets[0] ||
-		got[1] != request.Targets[2] {
+	if got := original.Targets(); len(got) != 2 || got[0] != request.Targets[0] || got[1] != request.Targets[2] {
 		t.Fatalf("original targets = %+v", got)
 	}
 
-	err = prober.Probe(
-		context.Background(),
-		offlinehold.ProbeRequest{Targets: []offlinehold.ProbeTarget{{
-			Kind:          offlinehold.EgressUpdate,
-			Transport:     offlinehold.ProbeTransportStrictTLS,
-			TargetRef:     "update-target",
-			NetworkOrigin: "https://update.example",
-			HTTPAuthority: "update.example",
-			TLSServerName: "update.example",
-		}}},
-	)
+	err = prober.Probe(context.Background(), offlinehold.ProbeRequest{Targets: []offlinehold.ProbeTarget{{
+		Kind: offlinehold.EgressUpdate, Transport: offlinehold.ProbeTransportStrictTLS,
+		TargetRef: "update-target", NetworkOrigin: "https://update.example",
+		HTTPAuthority: "update.example", TLSServerName: "update.example",
+	}}})
 	requireProbeFailureReason(t, err, offlinehold.ProbeReasonFailed)
 }
 
 func TestRuntimeResumeProberStopsAtFirstFailedTarget(t *testing.T) {
 	t.Parallel()
 
-	providerFailure := offlinehold.NewProbeFailure(
-		offlinehold.ProbeReasonTLSRejected,
-		errors.New("fixture rejection"),
-	)
+	providerFailure := offlinehold.NewProbeFailure(offlinehold.ProbeReasonTLSRejected, errors.New("fixture rejection"))
 	provider := &recordingProber{err: providerFailure}
 	original := &recordingProber{}
 	prober, err := newRuntimeResumeProber(provider, original, &recordingProber{})
 	if err != nil {
 		t.Fatal(err)
 	}
-	err = prober.Probe(
-		context.Background(),
-		offlinehold.ProbeRequest{Targets: []offlinehold.ProbeTarget{
-			testRuntimeProbeTarget(
-				offlinehold.EgressProvider,
-				"provider.example",
-				1,
-			),
-			testRuntimeProbeTarget(
-				offlinehold.EgressOpaque,
-				"client.example",
-				0,
-			),
-		}},
-	)
+	err = prober.Probe(context.Background(), offlinehold.ProbeRequest{Targets: []offlinehold.ProbeTarget{
+		testRuntimeProbeTarget(offlinehold.EgressProvider, "provider.example", 1),
+		testRuntimeProbeTarget(offlinehold.EgressOpaque, "client.example", 0),
+	}})
 	if !errors.Is(err, providerFailure) {
 		t.Fatalf("Probe() error = %v", err)
 	}
@@ -89,304 +67,128 @@ func TestRuntimeResumeProberStopsAtFirstFailedTarget(t *testing.T) {
 	}
 }
 
-func TestRuntimeResumeUsesFrozenQueueAndActiveRouteSetTargets(t *testing.T) {
+func TestRuntimeResumeUsesOnlyFrozenQueuedTargets(t *testing.T) {
 	t.Parallel()
 
-	gate, err := offlinehold.New(offlinehold.Config{
-		MaxHeldRequests:    4,
-		MaxHeldBytes:       1024,
-		MaxHoldDuration:    time.Second,
-		ReleaseConcurrency: 1,
-	})
+	gate := newEnteredOfflineGate(t, "resume-target-test")
+	action, err := gate.BeginAction(context.Background(), offlinehold.ActionRequest{ActionID: "opaque-request"})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := gate.Start(
-		context.Background(),
-		offlinehold.RuntimeBinding{InstanceID: "resume-target-test"},
-	); err != nil {
-		t.Fatal(err)
-	}
-	_, err = gate.Enter(context.Background(), gate.Snapshot().Revision)
-	if err != nil {
-		t.Fatal(err)
-	}
-	action, err := gate.BeginAction(
-		context.Background(),
-		offlinehold.ActionRequest{ActionID: "opaque-request"},
-	)
-	if err != nil {
-		t.Fatal(err)
-	}
-	opaqueTarget := testRuntimeProbeTarget(
-		offlinehold.EgressOpaque,
-		"client.example",
-		0,
-	)
-	acquired := make(chan struct {
-		lease offlinehold.Lease
-		err   error
-	}, 1)
-	go func() {
-		lease, acquireErr := gate.Acquire(
-			context.Background(),
-			offlinehold.AcquireRequest{
-				RequestID: "opaque-request",
-				Action:    action,
-				Target:    opaqueTarget,
-				SizeBytes: 7,
-			},
-		)
-		acquired <- struct {
-			lease offlinehold.Lease
-			err   error
-		}{lease: lease, err: acquireErr}
-	}()
+	target := testRuntimeProbeTarget(offlinehold.EgressOpaque, "client.example", 0)
+	acquired := acquireHeld(t, gate, action, "opaque-request", target)
 	waitForQueuedTargets(t, gate, 1)
-	accessID, err := access.NewAccessID("resume-provider-access")
-	if err != nil {
-		t.Fatal(err)
-	}
-	compiler, err := productionAccessPlanCompiler()
-	if err != nil {
-		t.Fatal(err)
-	}
-	plan, err := compiler.Compile(
-		runtimeAccessAggregate(t, accessID, 1, "Resume Provider Access"),
-	)
-	if err != nil {
-		t.Fatal(err)
-	}
-	projection := newTestSnapshotProjection(t)
-	if err := projection.Restore([]access.AccessPlanSnapshot{plan}); err != nil {
-		t.Fatal(err)
-	}
+
 	prober := &recordingProber{}
-	runtime := &Runtime{
-		offlineHold:  gate,
-		probeCatalog: projection,
-		resumeProber: prober,
+	runtime := &Runtime{offlineHold: gate, resumeProber: prober}
+	targets, err := runtime.resumeProbeTargets()
+	if err != nil || len(targets) != 1 || targets[0] != target {
+		t.Fatalf("resume targets = %+v, %v", targets, err)
 	}
-	expectedTargets, err := runtime.resumeProbeTargets()
+	resumed, err := runtime.ResumeOfflineHold(context.Background(), gate.Snapshot().Revision)
 	if err != nil {
 		t.Fatal(err)
 	}
-	resumed, err := runtime.ResumeOfflineHold(
-		context.Background(),
-		gate.Snapshot().Revision,
-	)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if resumed.State != offlinehold.StateReleasing ||
-		resumed.ActiveEgress != 1 {
+	if resumed.State != offlinehold.StateReleasing || resumed.ActiveEgress != 1 {
 		t.Fatalf("resumed snapshot = %+v", resumed)
 	}
-	if got := prober.Targets(); len(got) != 2 ||
-		got[0] != expectedTargets[0] ||
-		got[1] != expectedTargets[1] {
-		t.Fatalf("probe targets = %+v", got)
+	if got := prober.Targets(); len(got) != 1 || got[0] != target {
+		t.Fatalf("probed targets = %+v", got)
 	}
-	result := <-acquired
-	if result.err != nil || result.lease == nil {
-		t.Fatalf("Acquire() result = %+v", result)
-	}
-	result.lease.Release()
-	action.Release()
+	releaseAcquired(t, <-acquired, action)
 }
 
-func TestRuntimeResumeKeepsQueuedProviderTargetFrozenAcrossPlanChange(
-	t *testing.T,
-) {
+func TestRuntimeResumeKeepsDistinctFrozenPlanIdentities(t *testing.T) {
 	t.Parallel()
 
+	gate := newEnteredOfflineGate(t, "frozen-plan-target-test")
+	targetOne := testRuntimeProbeTarget(offlinehold.EgressProvider, "provider.example", 1)
+	targetTwo := testRuntimeProbeTarget(offlinehold.EgressProvider, "provider.example", 2)
+	actionOne, err := gate.BeginAction(context.Background(), offlinehold.ActionRequest{ActionID: "held-provider-one"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	actionTwo, err := gate.BeginAction(context.Background(), offlinehold.ActionRequest{ActionID: "held-provider-two"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	acquiredOne := acquireHeld(t, gate, actionOne, "held-provider-one", targetOne)
+	acquiredTwo := acquireHeld(t, gate, actionTwo, "held-provider-two", targetTwo)
+	waitForQueuedTargets(t, gate, 2)
+
+	prober := &recordingProber{}
+	runtime := &Runtime{offlineHold: gate, resumeProber: prober}
+	targets, err := runtime.resumeProbeTargets()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(targets) != 2 || targets[0].PlanRevision == targets[1].PlanRevision || targets[0].PlanDigest == targets[1].PlanDigest {
+		t.Fatalf("frozen plan identities were collapsed: %+v", targets)
+	}
+	if _, err := runtime.ResumeOfflineHold(context.Background(), gate.Snapshot().Revision); err != nil {
+		t.Fatal(err)
+	}
+	if got := prober.Targets(); len(got) != 2 {
+		t.Fatalf("probed targets = %+v", got)
+	}
+	releaseAcquired(t, <-acquiredOne, actionOne)
+	releaseAcquired(t, <-acquiredTwo, actionTwo)
+}
+
+func newEnteredOfflineGate(t *testing.T, instanceID string) *offlinehold.Gate {
+	t.Helper()
 	gate, err := offlinehold.New(offlinehold.Config{
-		MaxHeldRequests:    4,
-		MaxHeldBytes:       1024,
-		MaxHoldDuration:    time.Second,
-		ReleaseConcurrency: 1,
+		MaxHeldRequests: 4, MaxHeldBytes: 1024, MaxHoldDuration: time.Second,
+		ReleaseConcurrency: 2,
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := gate.Start(
-		context.Background(),
-		offlinehold.RuntimeBinding{InstanceID: "frozen-provider-target-test"},
-	); err != nil {
+	if err := gate.Start(context.Background(), offlinehold.RuntimeBinding{InstanceID: instanceID}); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := gate.Enter(
-		context.Background(),
-		gate.Snapshot().Revision,
-	); err != nil {
+	if _, err := gate.Enter(context.Background(), gate.Snapshot().Revision); err != nil {
 		t.Fatal(err)
 	}
+	return gate
+}
 
-	accessID, err := access.NewAccessID("frozen-provider-access")
-	if err != nil {
-		t.Fatal(err)
-	}
-	compiler, err := productionAccessPlanCompiler()
-	if err != nil {
-		t.Fatal(err)
-	}
-	revisionOne := compileRuntimePlanWithProviderOrigin(
-		t,
-		compiler,
-		accessID,
-		1,
-		"https://old-provider.example:443/v1",
-	)
-	revisionTwo := compileRuntimePlanWithProviderOrigin(
-		t,
-		compiler,
-		accessID,
-		2,
-		"https://new-provider.example:443/v1",
-	)
-	projection := newTestSnapshotProjection(t)
-	if err := projection.Restore([]access.AccessPlanSnapshot{revisionOne}); err != nil {
-		t.Fatal(err)
-	}
+type acquireResult struct {
+	lease offlinehold.Lease
+	err   error
+}
 
-	compiledOld := revisionOne.ProviderTargets()[0]
-	oldTarget, err := providertransport.NewTarget(compiledOld)
-	if err != nil {
-		t.Fatal(err)
-	}
-	targetReference := access.ProviderTargetReference(
-		accessID,
-		compiledOld.Target().ID,
-	)
-	frozenOld, err := providertransport.NewProbeTarget(
-		targetReference,
-		revisionOne.Revision(),
-		revisionOne.PlanHash(),
-		oldTarget,
-	)
-	if err != nil {
-		t.Fatal(err)
-	}
-	action, err := gate.BeginAction(
-		context.Background(),
-		offlinehold.ActionRequest{ActionID: "held-provider"},
-	)
-	if err != nil {
-		t.Fatal(err)
-	}
-	acquired := make(chan struct {
-		lease offlinehold.Lease
-		err   error
-	}, 1)
+func acquireHeld(t *testing.T, gate *offlinehold.Gate, action *offlinehold.ActionLease, requestID string, target offlinehold.ProbeTarget) <-chan acquireResult {
+	t.Helper()
+	result := make(chan acquireResult, 1)
 	go func() {
-		lease, acquireErr := gate.Acquire(
-			context.Background(),
-			offlinehold.AcquireRequest{
-				RequestID: "held-provider/attempt-1",
-				Action:    action,
-				Target:    frozenOld,
-				SizeBytes: 1,
-			},
-		)
-		acquired <- struct {
-			lease offlinehold.Lease
-			err   error
-		}{lease: lease, err: acquireErr}
+		lease, err := gate.Acquire(context.Background(), offlinehold.AcquireRequest{
+			RequestID: requestID, Action: action, Target: target, SizeBytes: 1,
+		})
+		result <- acquireResult{lease: lease, err: err}
 	}()
-	waitForQueuedTargets(t, gate, 1)
+	return result
+}
 
-	if err := projection.Publish(revisionTwo); err != nil {
-		t.Fatal(err)
-	}
-	prober := &recordingProber{}
-	runtime := &Runtime{
-		offlineHold:  gate,
-		probeCatalog: projection,
-		resumeProber: prober,
-	}
-	resumed, err := runtime.ResumeOfflineHold(
-		context.Background(),
-		gate.Snapshot().Revision,
-	)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if resumed.State != offlinehold.StateReleasing {
-		t.Fatalf("Resume() snapshot = %+v", resumed)
-	}
-	targets := prober.Targets()
-	if len(targets) != 2 {
-		t.Fatalf("probe targets = %+v, want old queued and current active targets", targets)
-	}
-	var sawOld, sawNew bool
-	for _, target := range targets {
-		if target.TargetRef != targetReference {
-			t.Fatalf("probe target reference = %q, want %q", target.TargetRef, targetReference)
-		}
-		switch {
-		case target.AccessRevision == 1 &&
-			target.PlanHash == revisionOne.PlanHash().String() &&
-			target.NetworkOrigin == "https://old-provider.example:443/v1":
-			sawOld = true
-		case target.AccessRevision == 2 &&
-			target.PlanHash == revisionTwo.PlanHash().String() &&
-			target.NetworkOrigin == "https://new-provider.example:443/v1":
-			sawNew = true
-		}
-	}
-	if !sawOld || !sawNew {
-		t.Fatalf("probe targets did not preserve both identities: %+v", targets)
-	}
-	result := <-acquired
+func releaseAcquired(t *testing.T, result acquireResult, action *offlinehold.ActionLease) {
+	t.Helper()
 	if result.err != nil || result.lease == nil {
-		t.Fatalf("Acquire() result = %+v", result)
+		t.Fatalf("Acquire() = %+v", result)
 	}
 	result.lease.Release()
 	action.Release()
 }
 
-func compileRuntimePlanWithProviderOrigin(
-	t *testing.T,
-	compiler *access.Compiler,
-	accessID access.AccessID,
-	revision access.Revision,
-	rawOrigin string,
-) access.AccessPlanSnapshot {
-	t.Helper()
-	aggregate := runtimeAccessAggregate(
-		t,
-		accessID,
-		revision,
-		"Frozen Provider Target",
-	)
-	origin, err := access.NewProviderOrigin(rawOrigin)
-	if err != nil {
-		t.Fatal(err)
-	}
-	aggregate.ProviderTargets[0].Origin = origin
-	plan, err := compiler.Compile(aggregate)
-	if err != nil {
-		t.Fatal(err)
-	}
-	return plan
-}
-
-func testRuntimeProbeTarget(
-	kind offlinehold.EgressKind,
-	host string,
-	revision uint64,
-) offlinehold.ProbeTarget {
+func testRuntimeProbeTarget(kind offlinehold.EgressKind, host string, revision uint64) offlinehold.ProbeTarget {
 	target := offlinehold.ProbeTarget{
-		Kind:          kind,
-		Transport:     offlinehold.ProbeTransportStrictTLS,
-		TargetRef:     string(kind) + "/" + host,
-		NetworkOrigin: "https://" + host,
-		HTTPAuthority: host,
-		TLSServerName: host,
+		Kind: kind, Transport: offlinehold.ProbeTransportStrictTLS,
+		TargetRef: string(kind) + "/" + host, NetworkOrigin: "https://" + host,
+		HTTPAuthority: host, TLSServerName: host,
 	}
 	if revision != 0 {
-		target.AccessRevision = revision
-		target.PlanHash = "plan-hash-" + host
+		digest := sha256.Sum256([]byte(fmt.Sprintf("%s/%d", host, revision)))
+		target.PlanRevision = revision
+		target.PlanDigest = hex.EncodeToString(digest[:])
 	}
 	return target
 }
@@ -397,27 +199,19 @@ type recordingProber struct {
 	err     error
 }
 
-func (prober *recordingProber) Probe(
-	_ context.Context,
-	request offlinehold.ProbeRequest,
-) error {
+func (prober *recordingProber) Probe(_ context.Context, request offlinehold.ProbeRequest) error {
 	prober.mu.Lock()
 	defer prober.mu.Unlock()
 	prober.targets = append(prober.targets, request.Targets...)
 	return prober.err
 }
-
 func (prober *recordingProber) Targets() []offlinehold.ProbeTarget {
 	prober.mu.Lock()
 	defer prober.mu.Unlock()
 	return append([]offlinehold.ProbeTarget(nil), prober.targets...)
 }
 
-func waitForQueuedTargets(
-	t *testing.T,
-	gate *offlinehold.Gate,
-	count int,
-) {
+func waitForQueuedTargets(t *testing.T, gate *offlinehold.Gate, count int) {
 	t.Helper()
 	deadline := time.Now().Add(time.Second)
 	for time.Now().Before(deadline) {
@@ -429,11 +223,7 @@ func waitForQueuedTargets(
 	t.Fatalf("queued requests = %d, want %d", gate.Snapshot().QueuedRequests, count)
 }
 
-func requireProbeFailureReason(
-	t *testing.T,
-	err error,
-	expected offlinehold.ProbeReason,
-) {
+func requireProbeFailureReason(t *testing.T, err error, expected offlinehold.ProbeReason) {
 	t.Helper()
 	var failure *offlinehold.ProbeFailure
 	if !errors.As(err, &failure) || failure.Reason != expected {

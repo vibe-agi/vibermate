@@ -1,6 +1,6 @@
 // Package captureadmission owns the immutable result of authenticating one
 // proxy credential. Admission records how traffic entered ViberMate; it does
-// not select an Access, Profile, route, account, model, or plugin plan.
+// not select an Environment, route, account, model, or plugin plan.
 package captureadmission
 
 import (
@@ -11,6 +11,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/vibe-agi/vibermate/internal/capturecredential"
+	"github.com/vibe-agi/vibermate/internal/captureidentity"
 	"github.com/vibe-agi/vibermate/internal/clientadapter"
 	"github.com/vibe-agi/vibermate/internal/workspaceidentity"
 )
@@ -20,9 +21,9 @@ const (
 	// or other business metadata; the random password is the capability.
 	ProxyUsername = "capture"
 
-	maxOpaqueIDBytes  = 128
-	maxIngressIDBytes = 256
-	maxSourceLabelLen = 256
+	maxOpaqueIDBytes     = 128
+	maxAdmissionRefBytes = 256
+	maxSourceLabelLen    = 256
 )
 
 var (
@@ -85,7 +86,7 @@ func (ProxyCredential) GoString() string {
 // accessors so a caller cannot confuse an absent identity with an empty one.
 type Admission struct {
 	kind               Kind
-	ingressProfileID   string
+	admissionRef       string
 	captureRunID       string
 	manualCaptureID    string
 	credentialRevision uint64
@@ -107,7 +108,7 @@ func NewManual(
 ) (Admission, error) {
 	admission := Admission{
 		kind:               KindManual,
-		ingressProfileID:   "manual-capture/" + manualCaptureID,
+		admissionRef:       "manual-capture/" + manualCaptureID,
 		manualCaptureID:    manualCaptureID,
 		credentialRevision: credentialRevision,
 		confidence:         AttributionConfigured,
@@ -121,7 +122,7 @@ func NewManual(
 
 func (admission Admission) Validate() error {
 	if !admission.kind.valid() ||
-		!validIngressProfileID(admission.ingressProfileID) ||
+		!validAdmissionRef(admission.admissionRef) ||
 		admission.credentialRevision == 0 ||
 		!admission.confidence.valid() ||
 		!validLabel(admission.sourceLabel) {
@@ -143,7 +144,7 @@ func (admission Admission) Validate() error {
 	switch admission.kind {
 	case KindManagedRun:
 		if !validOpaqueID(admission.captureRunID) ||
-			admission.ingressProfileID != "capture-run/"+admission.captureRunID ||
+			admission.admissionRef != "capture-run/"+admission.captureRunID ||
 			admission.manualCaptureID != "" ||
 			admission.credentialRevision != 1 {
 			return fmt.Errorf("%w: managed-run evidence is invalid", ErrInvalidAdmission)
@@ -161,7 +162,7 @@ func (admission Admission) Validate() error {
 		}
 	case KindManual:
 		if !validOpaqueID(admission.manualCaptureID) ||
-			admission.ingressProfileID != "manual-capture/"+admission.manualCaptureID ||
+			admission.admissionRef != "manual-capture/"+admission.manualCaptureID ||
 			admission.captureRunID != "" || admission.adapter != nil ||
 			hasWorkspace || admission.confidence != AttributionConfigured {
 			return fmt.Errorf("%w: manual-capture evidence is invalid", ErrInvalidAdmission)
@@ -174,8 +175,8 @@ func (admission Admission) Kind() Kind {
 	return admission.kind
 }
 
-func (admission Admission) IngressProfileID() string {
-	return admission.ingressProfileID
+func (admission Admission) AdmissionRef() string {
+	return admission.admissionRef
 }
 
 func (admission Admission) CaptureRunID() (string, bool) {
@@ -184,6 +185,17 @@ func (admission Admission) CaptureRunID() (string, bool) {
 
 func (admission Admission) ManualCaptureID() (string, bool) {
 	return admission.manualCaptureID, admission.manualCaptureID != ""
+}
+
+func (admission Admission) CaptureReference() (captureidentity.Reference, error) {
+	switch admission.kind {
+	case KindManagedRun:
+		return captureidentity.New(captureidentity.KindManagedRun, admission.captureRunID)
+	case KindManual:
+		return captureidentity.New(captureidentity.KindManualCapture, admission.manualCaptureID)
+	default:
+		return captureidentity.Reference{}, ErrInvalidAdmission
+	}
 }
 
 func (admission Admission) CredentialRevision() uint64 {
@@ -221,8 +233,8 @@ func validOpaqueID(value string) bool {
 	return validIdentity(value, maxOpaqueIDBytes, false)
 }
 
-func validIngressProfileID(value string) bool {
-	return validIdentity(value, maxIngressIDBytes, true)
+func validAdmissionRef(value string) bool {
+	return validIdentity(value, maxAdmissionRefBytes, true)
 }
 
 func validIdentity(value string, maxBytes int, allowSlash bool) bool {

@@ -9,15 +9,15 @@ import (
 	"net/http"
 	"sync"
 
-	"github.com/vibe-agi/vibermate/internal/access"
-	"github.com/vibe-agi/vibermate/internal/accesscredential"
 	"github.com/vibe-agi/vibermate/internal/activity"
 	"github.com/vibe-agi/vibermate/internal/blindtunnel"
 	"github.com/vibe-agi/vibermate/internal/captureadmission"
+	"github.com/vibe-agi/vibermate/internal/captureassignment"
 	"github.com/vibe-agi/vibermate/internal/capturerun"
 	"github.com/vibe-agi/vibermate/internal/connectionevent"
 	"github.com/vibe-agi/vibermate/internal/connectionpolicy"
 	"github.com/vibe-agi/vibermate/internal/egressaudit"
+	"github.com/vibe-agi/vibermate/internal/environment"
 	"github.com/vibe-agi/vibermate/internal/exchange"
 	"github.com/vibe-agi/vibermate/internal/localca"
 	"github.com/vibe-agi/vibermate/internal/manualcapture"
@@ -27,7 +27,6 @@ import (
 	"github.com/vibe-agi/vibermate/internal/runtimepersistence"
 	"github.com/vibe-agi/vibermate/internal/toolapproval"
 	"github.com/vibe-agi/vibermate/internal/workspaceidentity"
-	"github.com/vibe-agi/vibermate/internal/workspaceroute"
 )
 
 var ErrInvalidBuildResult = errors.New("invalid runtime build result")
@@ -36,11 +35,9 @@ var ErrInvalidBuildResult = errors.New("invalid runtime build result")
 type Runtime struct {
 	status            *statusTracker
 	schemaReader      runtimepersistence.SchemaStateReader
-	accesses          accessRuntime
-	probeCatalog      access.ProviderProbeCatalog
-	credentials       credentialRuntime
+	environments      environmentRuntime
+	assignments       captureAssignmentRuntime
 	workspaceIdentity *workspaceidentity.Manager
-	workspaceRoutes   *workspaceroute.Manager
 	activities        activityRuntime
 	connections       connectionEventRuntime
 	egress            egressaudit.Reader
@@ -86,8 +83,7 @@ func startWithBuilders(
 		return nil, fmt.Errorf("start ProductRuntime: %w", err)
 	}
 	if builders.storage == nil ||
-		builders.access == nil ||
-		builders.credential == nil ||
+		builders.environment == nil ||
 		builders.activity == nil ||
 		builders.connection == nil ||
 		builders.approval == nil ||
@@ -234,45 +230,29 @@ func startWithBuilders(
 	}
 	cleanups.register("local Root CA", certificateAuthority.Shutdown)
 
-	accesses, err := builders.access.Build(ctx, accessBuildRequest{
-		repository:   storageResult.store.AccessRepository(),
-		rootRevision: certificateAuthority.Identity().Revision(),
-		leafCache:    certificateAuthority,
-		secrets:      options.Secrets,
+	accounts := unavailableAccountAuthority{}
+	environmentResult, err := builders.environment.Build(ctx, environmentBuildRequest{
+		repository:           storageResult.store.EnvironmentRepository(),
+		assignmentRepository: storageResult.store.CaptureAssignmentRepository(),
+		leafCache:            certificateAuthority,
+		clock:                options.Clock,
+		accounts:             accounts,
 	})
 	if err != nil {
-		return fail("Access recovery", err)
+		return fail("Environment and Capture assignment recovery", err)
 	}
-	if accesses == nil {
+	if environmentResult.environments == nil || environmentResult.assignments == nil {
 		return fail(
-			"Access recovery",
-			fmt.Errorf("%w: Access component is nil", ErrInvalidBuildResult),
+			"Environment and Capture assignment recovery",
+			fmt.Errorf(
+				"%w: Environment or Capture assignment component is nil",
+				ErrInvalidBuildResult,
+			),
 		)
 	}
-	cleanups.register("Access runtime", accesses.Shutdown)
-	workspaceRoutes, err := workspaceroute.New(
-		storageResult.store.WorkspaceRouteRepository(),
-		accesses,
-		options.Clock,
-	)
-	if err != nil {
-		return fail("workspace route binding", err)
-	}
-
-	credentials, err := builders.credential.Build(credentialBuildRequest{
-		resolver: accesses,
-		secrets:  options.Secrets,
-	})
-	if err != nil || credentials == nil {
-		buildErr := err
-		if buildErr == nil {
-			buildErr = fmt.Errorf(
-				"%w: credential component is nil",
-				ErrInvalidBuildResult,
-			)
-		}
-		return fail("credential control", buildErr)
-	}
+	environments := environmentResult.environments
+	assignments := environmentResult.assignments
+	pending.register("Capture assignment runtime", assignments.Shutdown)
 
 	activities, err := builders.activity.Build(activityBuildRequest{
 		repository: storageResult.store.ActivityRepository(),
@@ -417,14 +397,13 @@ func startWithBuilders(
 	pending.register("original-origin transport", original.Shutdown)
 
 	exchanges, err := builders.exchange.Build(exchangeBuildRequest{
-		ownerContext:    ownerContext,
-		actions:         options.OfflineHold,
-		resolver:        accesses,
-		workspaceRoutes: workspaceRoutes,
-		provider:        provider,
-		toolDecisions:   approvals,
-		activities:      activities,
-		hold:            options.ExchangeHold,
+		ownerContext:  ownerContext,
+		actions:       options.OfflineHold,
+		accounts:      accounts,
+		provider:      provider,
+		toolDecisions: approvals,
+		activities:    activities,
+		hold:          options.ExchangeHold,
 	})
 	if err != nil || exchanges == nil {
 		buildErr := err
@@ -483,15 +462,14 @@ func startWithBuilders(
 		return fail("blind tunnel dialer", err)
 	}
 	proxy, err := builders.proxy.Build(proxyBuildRequest{
-		ownerContext:   ownerContext,
-		admissions:     captureAdmissions,
-		ingress:        accesses,
-		accessRequests: accesses,
-		exchanges:      exchanges,
-		original:       original,
-		certificates:   certificateAuthority,
-		connections:    connections,
-		policy:         connectionRules.Source(),
+		ownerContext: ownerContext,
+		admissions:   captureAdmissions,
+		assignments:  assignments,
+		exchanges:    exchanges,
+		original:     original,
+		certificates: certificateAuthority,
+		connections:  connections,
+		policy:       connectionRules.Source(),
 		// A rule that asks blocks the connection on the same ApprovalCenter a
 		// tool intent goes to, so a person answers both in one place.
 		approvals:    approvals,
@@ -522,6 +500,7 @@ func startWithBuilders(
 
 	cleanups.register("offline-hold drain", options.OfflineHold.Drain)
 	cleanups.register("Exchange drain", exchanges.Drain)
+	cleanups.register("Capture assignment drain", assignments.Drain)
 	cleanups.register("loopback proxy drain", proxy.Drain)
 	cleanups.register("provider transport", provider.Shutdown)
 	cleanups.register("original-origin transport", original.Shutdown)
@@ -543,6 +522,10 @@ func startWithBuilders(
 		manualCaptures.BeginShutdown()
 		return nil
 	})
+	cleanups.register("Capture assignment admission", func(context.Context) error {
+		assignments.BeginShutdown()
+		return nil
+	})
 	cleanups.register("loopback proxy admission", func(context.Context) error {
 		proxy.BeginShutdown()
 		return nil
@@ -557,11 +540,9 @@ func startWithBuilders(
 	return &Runtime{
 		status:            tracker,
 		schemaReader:      storageResult.store.SchemaStateReader(),
-		accesses:          accesses,
-		probeCatalog:      accesses,
-		credentials:       credentials,
+		environments:      environments,
+		assignments:       assignments,
 		workspaceIdentity: workspaceIdentity,
-		workspaceRoutes:   workspaceRoutes,
 		activities:        activities,
 		connections:       connections,
 		egress:            runtimeEgress,
@@ -588,9 +569,9 @@ func startWithBuilders(
 // Status returns an immutable copy of the current runtime state.
 func (r *Runtime) Status() RuntimeStatus {
 	status := r.status.snapshot()
-	status.AccessProjection = r.accesses.ProjectionHealth()
+	status.EnvironmentProjection = r.environments.Health()
 	status.OfflineHold = r.offlineHold.Snapshot()
-	if status.AccessProjection.State == access.ProjectionStateUnavailable &&
+	if status.EnvironmentProjection.State == environment.ProjectionStateUnavailable &&
 		status.State == RuntimeStateInitialized {
 		status.State = RuntimeStateDegraded
 	}
@@ -598,7 +579,7 @@ func (r *Runtime) Status() RuntimeStatus {
 }
 
 // ExchangeExecutor returns the runtime-owned data-plane core. It has no
-// listener and resolves one Access plan for each submitted Exchange.
+// listener and executes one immutable Environment request plan per Exchange.
 func (r *Runtime) ExchangeExecutor() exchange.Executor {
 	return r.exchanges
 }
@@ -626,12 +607,6 @@ func (r *Runtime) ManualCaptures() manualcapture.Controller {
 // installation-scoped identities. It is not an authentication authority.
 func (r *Runtime) WorkspaceIdentity() workspaceidentity.LocalResolver {
 	return r.workspaceIdentity
-}
-
-// WorkspaceRoutes is the single Core authority for machine-scoped default
-// profile selection inside an already-resolved Access.
-func (r *Runtime) WorkspaceRoutes() workspaceroute.Controller {
-	return r.workspaceRoutes
 }
 
 // Activities returns the runtime-owned durable redacted timeline.
@@ -688,56 +663,34 @@ func (r *Runtime) ProxyHandler() http.Handler {
 }
 
 // SchemaStateReader returns the SQLite-backed initialization-state reader.
-// It is distinct from the Access aggregate SnapshotResolver.
+// It is distinct from the Environment aggregate SnapshotResolver.
 func (r *Runtime) SchemaStateReader() runtimepersistence.SchemaStateReader {
 	return r.schemaReader
 }
 
-// AccessWriter returns the serialized Access aggregate mutation boundary.
-func (r *Runtime) AccessWriter() access.Writer {
-	return r.accesses
+// Environments is the single editable configuration authority. Publishing a
+// revision updates the immutable projection only after Capture transition
+// coordination has reached its declared boundary.
+func (r *Runtime) Environments() environment.Controller {
+	return r.environments
 }
 
-// AccessDeleter returns the preview-confirm-drain deletion boundary. It is
-// separate from Writer so a control surface cannot mistake an aggregate write
-// for authority to retire credentials and durable workspace references.
-func (r *Runtime) AccessDeleter() access.Deleter {
-	return r.accesses
+// EnvironmentResolver returns the process-local immutable Environment
+// projection consumed by Capture assignment and request planning.
+func (r *Runtime) EnvironmentResolver() environment.SnapshotResolver {
+	return r.environments
 }
 
-// AccessCatalog returns the durable editable Access aggregates. Unlike the
-// active SnapshotResolver, it also includes draft and disabled Accesses.
-func (r *Runtime) AccessCatalog() access.AggregateCatalog {
-	return r.accesses
+// CaptureAssignments owns the mutable Capture-to-Environment choice. It is
+// intentionally separate from Environment configuration and request routing.
+func (r *Runtime) CaptureAssignments() captureassignment.Controller {
+	return r.assignments
 }
 
-// Credentials returns the write-only credential control boundary bound to the
-// active Access plan and host SecretStore.
-func (r *Runtime) Credentials() accesscredential.Controller {
-	return r.credentials
-}
-
-// SnapshotResolver returns the current process-local Access projection.
-func (r *Runtime) SnapshotResolver() access.SnapshotResolver {
-	return r.accesses
-}
-
-// ActiveClientAuthorities returns the enabled exact AgentEndpoint authorities
-// used to remove dangerous NO_PROXY bypasses from captured child environments.
-func (r *Runtime) ActiveClientAuthorities() ([]string, error) {
-	return r.accesses.ActiveClientAuthorities()
-}
-
-// ActiveAccessPlans returns one atomically observed immutable active-plan set.
-// It is used by Host-owned CaptureRun grant composition, not by the UI.
-func (r *Runtime) ActiveAccessPlans() ([]access.AccessPlanSnapshot, error) {
-	return r.accesses.ActiveAccessPlans()
-}
-
-// AccessProjectionHealth reports whether process-local Access snapshots can be
-// trusted. It is an internal health signal, not product readiness.
-func (r *Runtime) AccessProjectionHealth() access.ProjectionHealth {
-	return r.accesses.ProjectionHealth()
+// EnvironmentProjectionHealth reports whether published Environment
+// snapshots can be trusted. It is an internal health signal, not readiness.
+func (r *Runtime) EnvironmentProjectionHealth() environment.ProjectionHealth {
+	return r.environments.Health()
 }
 
 // Shutdown starts one bounded LIFO shutdown and waits for either that result or

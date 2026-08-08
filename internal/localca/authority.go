@@ -26,8 +26,10 @@ import (
 	lru "github.com/hashicorp/golang-lru/v2"
 	"golang.org/x/sync/singleflight"
 
-	"github.com/vibe-agi/vibermate/internal/access"
+	"github.com/vibe-agi/vibermate/internal/captureassignment"
 	"github.com/vibe-agi/vibermate/internal/certidentity"
+	"github.com/vibe-agi/vibermate/internal/environment"
+	"github.com/vibe-agi/vibermate/internal/originidentity"
 )
 
 const (
@@ -169,34 +171,37 @@ type tlsCertificate struct {
 }
 
 type leafCacheKey struct {
-	rootRevision     RootRevision
-	accessID         access.AccessID
-	endpointID       access.AgentEndpointID
-	endpointRevision access.Revision
-	clientOrigin     access.ClientOrigin
-	sanKind          certidentity.SANKind
-	sanValue         string
-	algorithm        LeafKeyAlgorithm
+	rootRevision        RootRevision
+	environmentID       environment.EnvironmentID
+	environmentRevision environment.Revision
+	endpointID          environment.ClientEndpointID
+	endpointRevision    environment.Revision
+	clientOrigin        originidentity.ClientOrigin
+	sanKind             certidentity.SANKind
+	sanValue            string
+	algorithm           LeafKeyAlgorithm
 }
 
-func leafKey(request access.LeafIssuanceRequest) leafCacheKey {
+func leafKey(request captureassignment.LeafIssuanceRequest) leafCacheKey {
 	return leafCacheKey{
-		rootRevision:     request.RootRevision(),
-		accessID:         request.AccessID(),
-		endpointID:       request.AgentEndpointID(),
-		endpointRevision: request.AgentEndpointRevision(),
-		clientOrigin:     request.ClientOrigin(),
-		sanKind:          request.SAN().Kind(),
-		sanValue:         request.SAN().Value(),
-		algorithm:        request.Algorithm(),
+		rootRevision:        request.RootRevision(),
+		environmentID:       request.EnvironmentID(),
+		environmentRevision: request.EnvironmentRevision(),
+		endpointID:          request.ClientEndpointID(),
+		endpointRevision:    request.ClientEndpointRevision(),
+		clientOrigin:        request.ClientOrigin(),
+		sanKind:             request.SAN().Kind(),
+		sanValue:            request.SAN().Value(),
+		algorithm:           request.Algorithm(),
 	}
 }
 
 func (key leafCacheKey) flightKey() string {
 	return fmt.Sprintf(
-		"%d\x00%s\x00%s\x00%d\x00%s\x00%s\x00%s\x00%s",
+		"%d\x00%s\x00%d\x00%s\x00%d\x00%s\x00%s\x00%s\x00%s",
 		key.rootRevision,
-		key.accessID.String(),
+		key.environmentID.String(),
+		key.environmentRevision,
 		key.endpointID.String(),
 		key.endpointRevision,
 		key.clientOrigin.String(),
@@ -207,7 +212,7 @@ func (key leafCacheKey) flightKey() string {
 }
 
 type leafGenerator interface {
-	Generate(context.Context, access.LeafIssuanceRequest) (tlsCertificate, error)
+	Generate(context.Context, captureassignment.LeafIssuanceRequest) (tlsCertificate, error)
 }
 
 type cryptoLeafGenerator struct {
@@ -220,7 +225,7 @@ type cryptoLeafGenerator struct {
 
 func (generator *cryptoLeafGenerator) Generate(
 	ctx context.Context,
-	request access.LeafIssuanceRequest,
+	request captureassignment.LeafIssuanceRequest,
 ) (tlsCertificate, error) {
 	if ctx == nil || generator == nil || generator.clock == nil ||
 		generator.random == nil || generator.rootKey == nil ||
@@ -341,7 +346,7 @@ type Authority struct {
 	changed             chan struct{}
 }
 
-var _ access.LeafCacheInvalidator = (*Authority)(nil)
+var _ captureassignment.LeafCacheInvalidator = (*Authority)(nil)
 
 type rootManifestV1 struct {
 	Schema      string `json:"schema"`
@@ -432,7 +437,7 @@ func (authority *Authority) Certificate() RootCertificate {
 // owned certificate. A request value by itself is never accepted.
 func (authority *Authority) Issue(
 	ctx context.Context,
-	admission access.LeafIssuanceAdmission,
+	admission captureassignment.LeafIssuanceAdmission,
 ) (tls.Certificate, error) {
 	if ctx == nil {
 		return tls.Certificate{}, errors.New("leaf issuance context is nil")
@@ -511,11 +516,11 @@ func (authority *Authority) beginFlightWaiter() func() {
 }
 
 func (authority *Authority) validateRequest(
-	request access.LeafIssuanceRequest,
+	request captureassignment.LeafIssuanceRequest,
 ) error {
 	if authority == nil || request.RootRevision() != authority.identity.revision ||
 		request.SAN().Kind() != certidentity.SANKindDNS ||
-		request.SAN().Value() != request.ClientOrigin().TLSServerName() ||
+		request.SAN().Value() != request.ClientOrigin().Host() ||
 		request.Algorithm() != LeafKeyAlgorithmECDSAP256 {
 		return ErrLeafRequestInvalid
 	}
@@ -546,7 +551,7 @@ func (authority *Authority) cached(key leafCacheKey) (cachedLeaf, bool) {
 func (authority *Authority) cacheGenerated(
 	key leafCacheKey,
 	generated tlsCertificate,
-	admission access.LeafIssuanceAdmission,
+	admission captureassignment.LeafIssuanceAdmission,
 ) {
 	authority.cacheMu.Lock()
 	defer authority.cacheMu.Unlock()
@@ -560,10 +565,10 @@ func (authority *Authority) cacheGenerated(
 	})
 }
 
-// InvalidateLeafCache removes obsolete derived certificates. Active Access
-// projection state remains the sole authority for future admissions.
+// InvalidateLeafCache removes leaves derived from a committed obsolete
+// Environment revision. Failed or abandoned publishes never emit this event.
 func (authority *Authority) InvalidateLeafCache(
-	invalidation access.LeafCacheInvalidation,
+	invalidation captureassignment.LeafCacheInvalidation,
 ) {
 	if authority == nil {
 		return
@@ -574,10 +579,10 @@ func (authority *Authority) InvalidateLeafCache(
 		return
 	}
 	for _, key := range authority.cache.Keys() {
-		if key.accessID == invalidation.AccessID() &&
-			key.endpointID == invalidation.AgentEndpointID() &&
-			key.endpointRevision == invalidation.AgentEndpointRevision() &&
-			key.clientOrigin == invalidation.ClientOrigin() {
+		if key.environmentID == invalidation.EnvironmentID() &&
+			key.environmentRevision == invalidation.EnvironmentRevision() &&
+			key.endpointID == invalidation.ClientEndpointID() &&
+			key.endpointRevision == invalidation.ClientEndpointRevision() {
 			authority.cache.Remove(key)
 		}
 	}
@@ -652,7 +657,7 @@ func (authority *Authority) notifyStateChangedLocked() {
 func generateLeafSafely(
 	ctx context.Context,
 	generator leafGenerator,
-	request access.LeafIssuanceRequest,
+	request captureassignment.LeafIssuanceRequest,
 ) (certificate tlsCertificate, err error) {
 	defer func() {
 		if recovered := recover(); recovered != nil {

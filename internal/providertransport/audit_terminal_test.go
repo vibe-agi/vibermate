@@ -160,10 +160,8 @@ func providerTerminalAttempt(t *testing.T, startedAt time.Time) egressaudit.Atte
 		},
 		Caller:       egressaudit.CallerCore,
 		TargetOrigin: "https://provider.example:443",
-		Decision: egressaudit.BuiltInDirectDecision(
-			egressaudit.AuthorityAccess,
-		),
-		StartedAt: startedAt,
+		Decision:     providerEgressDecision(),
+		StartedAt:    startedAt,
 	})
 	if err != nil {
 		t.Fatal(err)

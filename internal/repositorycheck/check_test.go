@@ -102,6 +102,47 @@ func TestRepositoryCheckReportsStableSentinel(t *testing.T) {
 	}
 }
 
+func TestRetiredProductAuthorityRuleUsesPublicCheck(t *testing.T) {
+	t.Parallel()
+
+	repositoryRoot := t.TempDir()
+	for _, directory := range []string{"internal/example", "locales"} {
+		if err := os.MkdirAll(filepath.Join(repositoryRoot, directory), 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for path, contents := range map[string]string{
+		"internal/example/example.go": "package example\n\ntype EnvironmentID string\n",
+		"locales/en-US.json":          "{\"fixture\":\"Fixture\"}\n",
+		"locales/zh-CN.json":          "{\"fixture\":\"Localized fixture\"}\n",
+	} {
+		if err := os.WriteFile(
+			filepath.Join(repositoryRoot, path),
+			[]byte(contents),
+			0o600,
+		); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := Check(repositoryRoot); err != nil {
+		t.Fatalf("known-good repository fixture failed: %v", err)
+	}
+	if err := os.WriteFile(
+		filepath.Join(repositoryRoot, "internal/example/example.go"),
+		[]byte("package example\n\ntype Config struct { AccessID string }\n"),
+		0o600,
+	); err != nil {
+		t.Fatal(err)
+	}
+	err := Check(repositoryRoot)
+	if !errors.Is(err, ErrCheckFailed) {
+		t.Fatalf("expected ErrCheckFailed, got %v", err)
+	}
+	if !strings.Contains(err.Error(), "retired-product-authority") {
+		t.Fatalf("public Check did not report retired authority: %v", err)
+	}
+}
+
 func TestEnglishSourceRuleIsWiredThroughRepositoryCheck(t *testing.T) {
 	t.Parallel()
 
@@ -192,7 +233,7 @@ func TestExternalEgressGateRuleUsesPublicCheckWithGoodAndBadFixtures(t *testing.
 	}
 }
 
-func TestDataPlaneAccessBoundaryUsesPublicCheckWithGoodAndBadFixtures(
+func TestDataPlaneEnvironmentBoundaryUsesPublicCheckWithGoodAndBadFixtures(
 	t *testing.T,
 ) {
 	t.Parallel()
@@ -207,8 +248,8 @@ func TestDataPlaneAccessBoundaryUsesPublicCheckWithGoodAndBadFixtures(
 	if !errors.Is(err, ErrCheckFailed) {
 		t.Fatalf("expected ErrCheckFailed, got %v", err)
 	}
-	if !strings.Contains(err.Error(), "data-plane-access-boundary") {
-		t.Fatalf("public Check did not report data-plane-access-boundary: %v", err)
+	if !strings.Contains(err.Error(), "data-plane-environment-boundary") {
+		t.Fatalf("public Check did not report data-plane-environment-boundary: %v", err)
 	}
 }
 

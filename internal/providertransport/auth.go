@@ -5,7 +5,7 @@ import (
 	"errors"
 	"net/http"
 
-	"github.com/vibe-agi/vibermate/internal/access"
+	"github.com/vibe-agi/vibermate/internal/providerauth"
 	"github.com/vibe-agi/vibermate/internal/secretstore"
 )
 
@@ -16,7 +16,7 @@ type CredentialEvidence struct {
 }
 
 type Authenticator interface {
-	Ref() access.AuthDriverRef
+	Ref() providerauth.DriverRef
 	Apply(
 		context.Context,
 		*http.Request,
@@ -59,8 +59,8 @@ func NewAnthropicAPIKeyAuthenticator(
 	return &AnthropicAPIKeyAuthenticator{secrets: secrets}, nil
 }
 
-func (*AnthropicAPIKeyAuthenticator) Ref() access.AuthDriverRef {
-	return access.AnthropicAPIKeyAuthDriverRef()
+func (*AnthropicAPIKeyAuthenticator) Ref() providerauth.DriverRef {
+	return providerauth.AnthropicAPIKeyDriverRef()
 }
 
 func (authenticator *AnthropicAPIKeyAuthenticator) Apply(
@@ -95,8 +95,8 @@ func (authenticator *AnthropicAPIKeyAuthenticator) Apply(
 	}, nil
 }
 
-func (*StaticBearerAuthenticator) Ref() access.AuthDriverRef {
-	return access.StaticHeaderAuthDriverRef()
+func (*StaticBearerAuthenticator) Ref() providerauth.DriverRef {
+	return providerauth.StaticHeaderDriverRef()
 }
 
 func (authenticator *StaticBearerAuthenticator) Apply(

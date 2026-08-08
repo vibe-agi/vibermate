@@ -9,7 +9,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/vibe-agi/vibermate/internal/access"
+	"github.com/vibe-agi/vibermate/internal/protocolspec"
 )
 
 const (
@@ -67,7 +67,7 @@ func assertDialectRejection(t *testing.T, response *http.Response) []byte {
 		t.Fatalf("rejection status = %d body=%s", response.StatusCode, body)
 	}
 	if got := response.Header.Get("X-Vibermate-Reason"); got !=
-		"profile_operation_unsupported" {
+		"environment_operation_unsupported" {
 		t.Fatalf("rejection reason header = %q", got)
 	}
 	var envelope anthropicErrorEnvelope
@@ -163,10 +163,16 @@ func TestUncataloguedBodyBearingRequestIsRejectedLocally(t *testing.T) {
 	)
 	defer secured.Close()
 
-	assertDialectRejection(
-		t,
-		postCountTokens(t, secured, "/api/claude_code/unknown_write"),
-	)
+	response := postCountTokens(t, secured, "/api/claude_code/unknown_write")
+	body, err := io.ReadAll(response.Body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = response.Body.Close()
+	if response.StatusCode != http.StatusUnprocessableEntity ||
+		!bytes.Contains(body, []byte(`"reasonCode":"path_unsupported"`)) {
+		t.Fatalf("uncatalogued body status=%d body=%s", response.StatusCode, body)
+	}
 	assertNoClientPayloadEscaped(t, fixture)
 }
 
@@ -201,7 +207,7 @@ func TestCataloguedControlProbeReachesTheOriginalOrigin(t *testing.T) {
 		t.Fatalf("control-plane GET reached original transport %d times", got)
 	}
 	frozen := fixture.original.Request()
-	if got := frozen.PayloadClass(); got != access.OperationPayloadNone {
+	if got := frozen.PayloadClass(); got != protocolspec.OperationPayloadNone {
 		t.Fatalf("frozen original request payload class = %q", got)
 	}
 	if len(frozen.Body()) != 0 {
@@ -209,10 +215,9 @@ func TestCataloguedControlProbeReachesTheOriginalOrigin(t *testing.T) {
 	}
 }
 
-// An uncatalogued bodyless GET has no proven class. It keeps the
-// original-origin path only because an empty body establishes
-// payload-freedom on its own; connection policy replaces that exception.
-func TestUncataloguedBodylessGETStillReachesTheOriginalOrigin(t *testing.T) {
+// An uncatalogued bodyless GET still has no typed operation contract. Body
+// absence does not widen the exact Environment allowlist.
+func TestUncataloguedBodylessGETIsRejectedLocally(t *testing.T) {
 	t.Parallel()
 
 	fixture := newProxyFixture(t)
@@ -234,15 +239,12 @@ func TestUncataloguedBodylessGETStillReachesTheOriginalOrigin(t *testing.T) {
 	})
 	body, _ := io.ReadAll(response.Body)
 	_ = response.Body.Close()
-	if response.StatusCode != http.StatusAccepted || string(body) != "original" {
+	if response.StatusCode != http.StatusUnprocessableEntity ||
+		!bytes.Contains(body, []byte(`"reasonCode":"path_unsupported"`)) {
 		t.Fatalf("uncatalogued GET status=%d body=%q", response.StatusCode, body)
 	}
-	frozen := fixture.original.Request()
-	if got := frozen.PayloadClass(); got != access.OperationPayloadUnknown {
-		t.Fatalf("frozen original request payload class = %q", got)
-	}
-	if len(frozen.Body()) != 0 {
-		t.Fatal("unclassified original request carried a body")
+	if fixture.original.Count() != 0 {
+		t.Fatal("uncatalogued GET reached the original origin")
 	}
 }
 

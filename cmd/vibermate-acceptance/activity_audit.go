@@ -11,8 +11,8 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/vibe-agi/vibermate/internal/access"
 	"github.com/vibe-agi/vibermate/internal/activity"
+	"github.com/vibe-agi/vibermate/internal/environment"
 	_ "modernc.org/sqlite"
 )
 
@@ -25,11 +25,11 @@ const (
 // The acceptance command needs an ordering anchor and the exact terminal reason,
 // but no request content, diagnosis, transport evidence, or public raw endpoint.
 type exchangeAuditRecord struct {
-	Sequence   int64
-	ExchangeID string
-	AccessID   string
-	Status     activity.Status
-	ReasonCode string
+	Sequence      int64
+	ExchangeID    string
+	EnvironmentID string
+	Status        activity.Status
+	ReasonCode    string
 }
 
 func (record exchangeAuditRecord) validate() error {
@@ -37,8 +37,8 @@ func (record exchangeAuditRecord) validate() error {
 		!validControlIdentity(record.ExchangeID, activity.MaxIdentityBytes) {
 		return errors.New("committed Exchange audit identity is invalid")
 	}
-	if _, err := access.NewAccessID(record.AccessID); err != nil {
-		return errors.New("committed Exchange audit Access is invalid")
+	if _, err := environment.NewEnvironmentID(record.EnvironmentID); err != nil {
+		return errors.New("committed Exchange audit Environment is invalid")
 	}
 	switch record.Status {
 	case activity.StatusSucceeded, activity.StatusFailed, activity.StatusCanceled:
@@ -261,27 +261,27 @@ func (reader *exchangeAuditReader) latestSequence(
 
 func (reader *exchangeAuditReader) latestFailure(
 	ctx context.Context,
-	accessID string,
+	environmentID string,
 ) (exchangeAuditRecord, bool, error) {
 	return reader.queryOne(
 		ctx,
-		`SELECT sequence, subject_id, access_id, status, reason_code
+		`SELECT sequence, subject_id, environment_id, status, reason_code
 		 FROM runtime_activities
-		 WHERE kind = ? AND access_id = ? AND status = ?
+		 WHERE kind = ? AND environment_id = ? AND status = ?
 		 ORDER BY sequence DESC
 		 LIMIT 1`,
 		activity.KindExchangeCompleted,
-		accessID,
+		environmentID,
 		activity.StatusFailed,
 	)
 }
 
 func (reader *exchangeAuditReader) terminalsAfter(
 	ctx context.Context,
-	accessID string,
+	environmentID string,
 	after int64,
 ) ([]exchangeAuditRecord, error) {
-	if ctx == nil || accessID == "" || after < 0 {
+	if ctx == nil || environmentID == "" || after < 0 {
 		return nil, errors.New("terminal Exchange audit request is invalid")
 	}
 	if err := reader.validateIdentity(); err != nil {
@@ -289,13 +289,13 @@ func (reader *exchangeAuditReader) terminalsAfter(
 	}
 	rows, err := reader.connection.QueryContext(
 		ctx,
-		`SELECT sequence, subject_id, access_id, status, reason_code
+		`SELECT sequence, subject_id, environment_id, status, reason_code
 		 FROM runtime_activities
-		 WHERE kind = ? AND access_id = ? AND sequence > ?
+		 WHERE kind = ? AND environment_id = ? AND sequence > ?
 		 ORDER BY sequence ASC
 		 LIMIT ?`,
 		activity.KindExchangeCompleted,
-		accessID,
+		environmentID,
 		after,
 		exchangeAuditResultLimit+1,
 	)
@@ -329,7 +329,7 @@ func (reader *exchangeAuditReader) bySequence(
 	}
 	return reader.queryOne(
 		ctx,
-		`SELECT sequence, subject_id, access_id, status, reason_code
+		`SELECT sequence, subject_id, environment_id, status, reason_code
 		 FROM runtime_activities
 		 WHERE kind = ? AND sequence = ?
 		 LIMIT 1`,
@@ -372,7 +372,7 @@ func scanExchangeAuditRecord(
 	if err := scanner.Scan(
 		&record.Sequence,
 		&record.ExchangeID,
-		&record.AccessID,
+		&record.EnvironmentID,
 		&record.Status,
 		&record.ReasonCode,
 	); err != nil {

@@ -8,7 +8,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/vibe-agi/vibermate/internal/access"
+	"github.com/vibe-agi/vibermate/internal/protocolspec"
 )
 
 func TestMessagesProtocolPathPreservesCompatibleWireAndAppliesModel(t *testing.T) {
@@ -18,8 +18,8 @@ func TestMessagesProtocolPathPreservesCompatibleWireAndAppliesModel(t *testing.T
 	if err != nil {
 		t.Fatal(err)
 	}
-	if path.Client().Dialect() != access.DialectAnthropicMessages ||
-		path.Backend().Dialect() != access.DialectAnthropicMessages {
+	if path.Client().Dialect() != protocolspec.DialectAnthropicMessages ||
+		path.Backend().Dialect() != protocolspec.DialectAnthropicMessages {
 		t.Fatal("messages protocol path dialect edges are incomplete")
 	}
 	source := []byte(`{

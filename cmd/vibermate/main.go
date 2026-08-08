@@ -1,5 +1,6 @@
 // Command vibermate launches one command through an already-running Desktop
-// Host CaptureRun. It does not select or mutate Access configuration.
+// Host CaptureRun. It may select the run's initial Environment, but it never
+// infers or mutates an Environment from the child command or workspace.
 package main
 
 import (
@@ -11,6 +12,7 @@ import (
 	"os/signal"
 	"time"
 
+	"github.com/vibe-agi/vibermate/internal/environment"
 	"github.com/vibe-agi/vibermate/internal/localdiscovery"
 	"github.com/vibe-agi/vibermate/internal/runlauncher"
 	"github.com/vibe-agi/vibermate/internal/runtimepath"
@@ -97,10 +99,8 @@ func executeContext(
 	if len(arguments) > 0 && arguments[0] == "terminal-command" {
 		return executeTerminalCommand(arguments[1:], stdout)
 	}
-	if len(arguments) < 3 ||
-		arguments[0] != "run" ||
-		arguments[1] != "--" ||
-		arguments[2] == "" {
+	run, err := parseRun(arguments)
+	if err != nil {
 		return 2, keyUsage
 	}
 	layout, err := runtimepath.Default()
@@ -124,7 +124,10 @@ func executeContext(
 	if err != nil {
 		return 1, keyLaunchFailed
 	}
-	code, err := launcher.Run(ctx, arguments[2:])
+	code, err := launcher.Run(ctx, runlauncher.LaunchRequest{
+		EnvironmentID: run.environmentID,
+		Command:       run.command,
+	})
 	if err == nil {
 		return code, ""
 	}
@@ -135,6 +138,39 @@ func executeContext(
 		return code, keyRuntimeUnavailable
 	}
 	return code, keyLaunchFailed
+}
+
+type runConfig struct {
+	environmentID environment.EnvironmentID
+	command       []string
+}
+
+func parseRun(arguments []string) (runConfig, error) {
+	if len(arguments) == 0 || arguments[0] != "run" {
+		return runConfig{}, errors.New("run command is required")
+	}
+
+	environmentID := environment.SystemTransparentID
+	index := 1
+	if index < len(arguments) && arguments[index] == "--env" {
+		if index+1 >= len(arguments) {
+			return runConfig{}, errors.New("--env requires an Environment ID")
+		}
+		parsed, err := environment.NewEnvironmentID(arguments[index+1])
+		if err != nil {
+			return runConfig{}, err
+		}
+		environmentID = parsed
+		index += 2
+	}
+	if index >= len(arguments) || arguments[index] != "--" ||
+		index+1 >= len(arguments) || arguments[index+1] == "" {
+		return runConfig{}, errors.New("run requires -- followed by a command")
+	}
+	return runConfig{
+		environmentID: environmentID,
+		command:       append([]string(nil), arguments[index+1:]...),
+	}, nil
 }
 
 type commandClock struct{}

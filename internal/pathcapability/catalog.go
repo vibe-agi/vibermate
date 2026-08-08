@@ -11,8 +11,8 @@ import (
 	"strings"
 	"unicode/utf8"
 
-	"github.com/vibe-agi/vibermate/internal/access"
 	"github.com/vibe-agi/vibermate/internal/exchange"
+	"github.com/vibe-agi/vibermate/internal/protocolspec"
 	"github.com/vibe-agi/vibermate/internal/providertransport"
 )
 
@@ -74,10 +74,10 @@ const (
 )
 
 type Capability struct {
-	operationID    access.ClientOperationID
-	revision       access.Revision
+	operationID    protocolspec.ClientOperationID
+	revision       protocolspec.Revision
 	kind           Kind
-	transport      access.ClientOperationTransport
+	transport      protocolspec.ClientOperationTransport
 	method         string
 	path           string
 	bodyKind       BodyKind
@@ -85,15 +85,15 @@ type Capability struct {
 	replayClass    exchange.ReplayClass
 	featureFlags   []string
 	allowedQueries []string
-	payloadClass   access.OperationPayloadClass
+	payloadClass   protocolspec.OperationPayloadClass
 	egressBearing  bool
 }
 
-func (capability Capability) OperationID() access.ClientOperationID {
+func (capability Capability) OperationID() protocolspec.ClientOperationID {
 	return capability.operationID
 }
 
-func (capability Capability) Revision() access.Revision {
+func (capability Capability) Revision() protocolspec.Revision {
 	return capability.revision
 }
 
@@ -101,7 +101,7 @@ func (capability Capability) Kind() Kind {
 	return capability.kind
 }
 
-func (capability Capability) Transport() access.ClientOperationTransport {
+func (capability Capability) Transport() protocolspec.ClientOperationTransport {
 	return capability.transport
 }
 
@@ -131,8 +131,8 @@ func (capability Capability) FeatureFlags() []string {
 
 // PayloadClass reports the frozen catalog answer for what a request of this
 // operation carries. An uncatalogued request reports
-// access.OperationPayloadUnknown.
-func (capability Capability) PayloadClass() access.OperationPayloadClass {
+// protocolspec.OperationPayloadUnknown.
+func (capability Capability) PayloadClass() protocolspec.OperationPayloadClass {
 	return capability.payloadClass
 }
 
@@ -141,7 +141,7 @@ func (capability Capability) EgressBearing() bool {
 }
 
 type routeKey struct {
-	dialect access.Dialect
+	dialect protocolspec.Dialect
 	path    string
 }
 
@@ -152,18 +152,18 @@ type prefixRoute struct {
 
 type Catalog struct {
 	byPath   map[routeKey]map[string]Capability
-	prefixes map[access.Dialect][]prefixRoute
+	prefixes map[protocolspec.Dialect][]prefixRoute
 }
 
 func NewCatalog(
-	definitions []access.ClientOperationDefinition,
+	definitions []protocolspec.ClientOperationDefinition,
 ) (*Catalog, error) {
 	if len(definitions) == 0 {
 		return nil, errors.New("PathCapability definitions are empty")
 	}
 	catalog := &Catalog{
 		byPath:   make(map[routeKey]map[string]Capability),
-		prefixes: make(map[access.Dialect][]prefixRoute),
+		prefixes: make(map[protocolspec.Dialect][]prefixRoute),
 	}
 	for _, definition := range definitions {
 		if err := definition.Validate(); err != nil {
@@ -204,7 +204,7 @@ func NewCatalog(
 			}
 		}
 		switch definition.PathMatch() {
-		case access.ClientOperationPathExact:
+		case protocolspec.ClientOperationPathExact:
 			key := routeKey{
 				dialect: definition.ClientDialect(),
 				path:    definition.PathPattern(),
@@ -222,7 +222,7 @@ func NewCatalog(
 				}
 				existing[method] = capability
 			}
-		case access.ClientOperationPathPrefix:
+		case protocolspec.ClientOperationPathPrefix:
 			for _, existing := range catalog.prefixes[definition.ClientDialect()] {
 				if existing.path == definition.PathPattern() {
 					return nil, errors.New(
@@ -259,7 +259,7 @@ func NewCatalog(
 // up a dialect capability. Unknown canonical paths are opaque; known paths
 // with the wrong method or query fail closed.
 func (catalog *Catalog) Classify(
-	dialect access.Dialect,
+	dialect protocolspec.Dialect,
 	method string,
 	requestPath string,
 	rawPath string,
@@ -303,7 +303,7 @@ func (catalog *Catalog) Classify(
 	if !known {
 		return Capability{
 			kind:         KindOpaque,
-			transport:    access.ClientOperationTransportHTTP,
+			transport:    protocolspec.ClientOperationTransportHTTP,
 			method:       method,
 			path:         requestPath,
 			bodyKind:     BodyOpaque,
@@ -311,7 +311,7 @@ func (catalog *Catalog) Classify(
 			replayClass:  exchange.ReplayUnknown,
 			// No catalog entry claims this path, so nothing proves what the
 			// request carries.
-			payloadClass:  access.OperationPayloadUnknown,
+			payloadClass:  protocolspec.OperationPayloadUnknown,
 			egressBearing: true,
 		}, nil
 	}
@@ -331,15 +331,15 @@ func (catalog *Catalog) Classify(
 	return capability, nil
 }
 
-func pathKind(kind access.ClientOperationKind) (Kind, error) {
+func pathKind(kind protocolspec.ClientOperationKind) (Kind, error) {
 	switch kind {
-	case access.ClientOperationSemantic:
+	case protocolspec.ClientOperationSemantic:
 		return KindSemantic, nil
-	case access.ClientOperationAuxiliary:
+	case protocolspec.ClientOperationAuxiliary:
 		return KindAuxiliary, nil
-	case access.ClientOperationOpaque:
+	case protocolspec.ClientOperationOpaque:
 		return KindOpaque, nil
-	case access.ClientOperationUnsupported:
+	case protocolspec.ClientOperationUnsupported:
 		return KindUnsupported, nil
 	default:
 		return "", errors.New("PathCapability operation kind is invalid")
@@ -347,15 +347,15 @@ func pathKind(kind access.ClientOperationKind) (Kind, error) {
 }
 
 func pathBodyKind(
-	kind access.ClientOperationBodyKind,
+	kind protocolspec.ClientOperationBodyKind,
 ) (BodyKind, error) {
 	switch kind {
-	case access.ClientOperationBodyJSON:
+	case protocolspec.ClientOperationBodyJSON:
 		return BodyJSON, nil
-	case access.ClientOperationBodyNone,
-		access.ClientOperationBodyMultipart,
-		access.ClientOperationBodyBytes,
-		access.ClientOperationBodyStream:
+	case protocolspec.ClientOperationBodyNone,
+		protocolspec.ClientOperationBodyMultipart,
+		protocolspec.ClientOperationBodyBytes,
+		protocolspec.ClientOperationBodyStream:
 		return BodyOpaque, nil
 	default:
 		return "", errors.New("PathCapability body kind is invalid")
@@ -363,20 +363,20 @@ func pathBodyKind(
 }
 
 func pathReplayClass(
-	class access.ClientReplayClass,
+	class protocolspec.ClientReplayClass,
 ) (exchange.ReplayClass, error) {
 	switch class {
-	case access.ClientReplaySafe:
+	case protocolspec.ClientReplaySafe:
 		return exchange.ReplaySafe, nil
-	case access.ClientReplayIdempotencyKeyed:
+	case protocolspec.ClientReplayIdempotencyKeyed:
 		return exchange.ReplayIdempotencyKeyed, nil
-	case access.ClientReplayGenerationCostOnly:
+	case protocolspec.ClientReplayGenerationCostOnly:
 		return exchange.ReplayGenerationCostOnly, nil
-	case access.ClientReplaySideEffectPossible:
+	case protocolspec.ClientReplaySideEffectPossible:
 		return exchange.ReplaySideEffectPossible, nil
-	case access.ClientReplayNonReplayable:
+	case protocolspec.ClientReplayNonReplayable:
 		return exchange.ReplayNonReplayable, nil
-	case access.ClientReplayUnknown:
+	case protocolspec.ClientReplayUnknown:
 		return exchange.ReplayUnknown, nil
 	default:
 		return "", errors.New("PathCapability replay class is invalid")

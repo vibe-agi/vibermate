@@ -1,6 +1,6 @@
 // Package manualcapture owns durable, revocable proxy capabilities for
 // independently launched command-line and desktop applications. It records
-// ingress attribution only; it cannot select an Access, Profile, route,
+// ingress attribution only; it cannot select an Environment, route,
 // account, model, plugin, or provider credential.
 package manualcapture
 
@@ -171,7 +171,7 @@ func (digest CredentialDigest) Valid() bool {
 }
 
 // DurableRecord is the complete SQLite authority. It stores only a
-// domain-separated credential digest. IngressProfileID is deliberately absent
+// domain-separated credential digest. AdmissionRef is deliberately absent
 // because it is derived as manual-capture/<ID>.
 type DurableRecord struct {
 	ID                  ID
@@ -225,7 +225,7 @@ func (record DurableRecord) Validate() error {
 
 type View struct {
 	ID                 string             `json:"id"`
-	IngressProfileID   string             `json:"ingressProfileId"`
+	AdmissionRef       string             `json:"admissionRef"`
 	DisplayName        string             `json:"displayName"`
 	ClientClass        ClientClass        `json:"clientClass"`
 	Lifetime           Lifetime           `json:"lifetime"`
@@ -241,7 +241,7 @@ type View struct {
 func ViewOf(record DurableRecord) View {
 	view := View{
 		ID:                 record.ID.String(),
-		IngressProfileID:   "manual-capture/" + record.ID.String(),
+		AdmissionRef:       "manual-capture/" + record.ID.String(),
 		DisplayName:        record.DisplayName,
 		ClientClass:        record.ClientClass,
 		Lifetime:           record.Lifetime,

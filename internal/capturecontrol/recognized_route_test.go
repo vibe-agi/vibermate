@@ -216,6 +216,7 @@ func (fixture *fixture) createRun(t *testing.T) capturecontrol.LaunchGrant {
 		fixture.controlCredential,
 		"",
 		capturecontrol.CreateRequest{
+			EnvironmentID:  testEnvironmentID,
 			CWD:            fixture.workspace,
 			Command:        []string{"claude"},
 			ExecutablePath: fixture.executable,

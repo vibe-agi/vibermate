@@ -1,3 +1,5 @@
+import { parseHref } from "@tanstack/history";
+import { QueryClientProvider } from "@tanstack/react-query";
 import {
   Navigate,
   RouterProvider,
@@ -9,29 +11,29 @@ import {
   type RouterHistory,
   useRouterState,
 } from "@tanstack/react-router";
-import { QueryClientProvider } from "@tanstack/react-query";
-import { parseHref } from "@tanstack/history";
-import { useEffect } from "react";
-import type { DashboardQueryRuntime } from "./dashboard-runtime.ts";
+import { useEffect, useMemo } from "react";
+import { useTranslation } from "react-i18next";
+import { DashboardShell, InlineProblem } from "./App.tsx";
 import {
-  AccessRoutePage,
-  ActivityRequestsRoutePage,
-  ActivityRequestRoutePage,
-  ActivityRunRoutePage,
-  ActivityRoutePage,
-  DashboardShell,
-  DashboardsRoutePage,
+  CaptureDetailRoutePage,
+  CapturesRoutePage,
+  RequestsRoutePage,
+} from "./capture-pages.tsx";
+import {
+  EnvironmentDetailRoutePage,
+  EnvironmentsRoutePage,
+} from "./environment-pages.tsx";
+import {
+  AccountsRoutePage,
+  ExchangeRoutePage,
   ExtensionsRoutePage,
-  InvalidDashboardLocatorRoutePage,
-  InvalidPolicyLocatorRoutePage,
-  OverviewRoutePage,
   PolicyRoutePage,
   QualityRoutePage,
-  SettingsRoutePage,
-  UnavailableTaskRoutePage,
-} from "./App.tsx";
+} from "./governance-pages.tsx";
+import type { DashboardQueryRuntime } from "./dashboard-runtime.ts";
 import { dashboardRoutePaths, dashboardTaskRoutePaths } from "./navigation.ts";
 import { navigationLocatorFromLocation } from "./navigation-state.ts";
+import { SettingsRoutePage } from "./settings-page.tsx";
 
 interface DashboardRouterContext {
   readonly model: DashboardQueryRuntime;
@@ -39,156 +41,192 @@ interface DashboardRouterContext {
   readonly preview: boolean;
 }
 
-interface PolicySearch {
-  readonly invalid?: true;
-  readonly selected?: string;
+interface EmptySearch { readonly invalid?: true }
+interface PolicySearch { readonly invalid?: true; readonly selected?: string }
+
+const maximumEntityIDBytes = 512;
+const unsafeEntityID = /[\\/\p{Cc}]/u;
+
+function validEntityID(value: string): boolean {
+  return value.length > 0 &&
+    value.trim() === value &&
+    !unsafeEntityID.test(value) &&
+    new TextEncoder().encode(value).length <= maximumEntityIDBytes;
 }
 
-const maximumApprovalIdBytes = 512;
-const maximumAccessIdBytes = 128;
-const maximumRouteLocatorBytes = 512;
-const unsafeApprovalId = /\p{Cc}/u;
-const unsafeRouteLocator = /[\/\\\p{C}]/u;
-
-function validatePolicySearch(search: Record<string, unknown>): PolicySearch {
-  if (Object.keys(search).some((key) => key !== "selected")) {
-    return { invalid: true };
-  }
-  const selected = search.selected;
-  if (selected === undefined) {
-    return {};
-  }
-  if (
-    typeof selected !== "string" ||
-    selected.length === 0 ||
-    selected.trim() !== selected ||
-    unsafeApprovalId.test(selected) ||
-    new TextEncoder().encode(selected).length > maximumApprovalIdBytes
-  ) {
-    return { invalid: true };
-  }
-  return { selected };
-}
-
-function safeLegacyPolicySearch(search: Record<string, unknown>): PolicySearch {
-  const validated = validatePolicySearch(search);
-  return validated.invalid === true ? {} : validated;
-}
-
-interface EmptyTaskSearch {
-  readonly invalid?: true;
-}
-
-function validateEmptyTaskSearch(
-  search: Record<string, unknown>,
-): EmptyTaskSearch {
+function validateEmptySearch(search: Record<string, unknown>): EmptySearch {
   return Object.keys(search).length === 0 ? {} : { invalid: true };
 }
 
-function canonicalizeEmptySearch(
-  to:
-    | (typeof dashboardRoutePaths)[keyof typeof dashboardRoutePaths]
-    | typeof dashboardTaskRoutePaths.activityRequests,
-) {
-  return ({ search }: { readonly search: EmptyTaskSearch }) => {
-    if (search.invalid === true) {
-      throw redirect({ replace: true, search: {}, to });
-    }
+function validatePolicySearch(search: Record<string, unknown>): PolicySearch {
+  if (Object.keys(search).some((key) => key !== "selected")) return { invalid: true };
+  if (search.selected === undefined) return {};
+  return typeof search.selected === "string" && validEntityID(search.selected)
+    ? { selected: search.selected }
+    : { invalid: true };
+}
+
+function canonicalizeEmptySearch(to: string) {
+  return ({ search }: { readonly search: EmptySearch }) => {
+    if (search.invalid === true) throw redirect({ replace: true, search: {}, to });
   };
 }
 
-function validRouteLocator(value: string, maximumBytes: number): boolean {
-  return (
-    value.length > 0 &&
-    value.trim() === value &&
-    !unsafeRouteLocator.test(value) &&
-    new TextEncoder().encode(value).length <= maximumBytes
-  );
+function InvalidLocator() {
+  const { t } = useTranslation();
+  return <div className="page"><InlineProblem message={t("error.invalidLocator")} /></div>;
 }
 
 const rootRoute = createRootRouteWithContext<DashboardRouterContext>()({
   component: function RootRoute() {
     const { model, persistNavigation, preview } = rootRoute.useRouteContext();
-    const location = useRouterState({
-      select: (state) => state.location,
-    });
+    const location = useRouterState({ select: (state) => state.location });
     useEffect(() => {
-      if (persistNavigation === undefined) {
-        return;
-      }
       const locator = navigationLocatorFromLocation(location);
-      if (locator !== undefined) {
+      if (persistNavigation !== undefined && locator !== undefined) {
         void persistNavigation(locator).catch(() => undefined);
       }
     }, [location, persistNavigation]);
+    useEffect(() => {
+      let frame = 0;
+      let attempts = 0;
+      const focusHeading = () => {
+        const heading = document.querySelector<HTMLElement>("#main-content h1");
+        if (heading !== null) {
+          heading.focus({ preventScroll: true });
+          return;
+        }
+        attempts += 1;
+        if (attempts < 30) frame = requestAnimationFrame(focusHeading);
+      };
+      frame = requestAnimationFrame(focusHeading);
+      return () => cancelAnimationFrame(frame);
+    }, [location.pathname]);
     return <DashboardShell model={model} preview={preview} />;
   },
-  notFoundComponent: () => (
-    <Navigate replace search={{}} to={dashboardRoutePaths.overview} />
-  ),
+  notFoundComponent: () => <Navigate replace search={{}} to={dashboardRoutePaths.captures} />,
 });
 
 const indexRoute = createRoute({
+  beforeLoad: () => { throw redirect({ replace: true, search: {}, to: dashboardRoutePaths.captures }); },
   getParentRoute: () => rootRoute,
   path: "/",
-  beforeLoad: () => {
-    throw redirect({
-      replace: true,
-      search: {},
-      to: dashboardRoutePaths.overview,
-    });
-  },
 });
 
-const overviewRoute = createRoute({
-  beforeLoad: canonicalizeEmptySearch(dashboardRoutePaths.overview),
-  component: OverviewRoutePage,
+const capturesRoute = createRoute({
+  beforeLoad: canonicalizeEmptySearch(dashboardRoutePaths.captures),
+  component: CapturesRoutePage,
   getParentRoute: () => rootRoute,
-  path: dashboardRoutePaths.overview,
-  validateSearch: validateEmptyTaskSearch,
+  path: dashboardRoutePaths.captures,
+  validateSearch: validateEmptySearch,
 });
-const dashboardsRoute = createRoute({
-  beforeLoad: canonicalizeEmptySearch(dashboardRoutePaths.dashboards),
-  component: DashboardsRoutePage,
+
+const captureDetailRoute = createRoute({
+  component: function CaptureDetailRoute() {
+    const { captureKey } = captureDetailRoute.useParams();
+    const { invalid } = captureDetailRoute.useSearch();
+    return invalid === true || captureKey === null
+      ? <InvalidLocator />
+      : <CaptureDetailRoutePage captureKey={captureKey} />;
+  },
   getParentRoute: () => rootRoute,
-  path: dashboardRoutePaths.dashboards,
-  validateSearch: validateEmptyTaskSearch,
+  params: { parse: ({ captureKey }) => ({ captureKey: validEntityID(captureKey) ? captureKey : null }) },
+  path: dashboardTaskRoutePaths.captureDetail,
+  validateSearch: validateEmptySearch,
 });
-const accessRoute = createRoute({
-  beforeLoad: canonicalizeEmptySearch(dashboardRoutePaths.access),
-  component: AccessRoutePage,
+
+const captureRequestsRoute = createRoute({
+  beforeLoad: canonicalizeEmptySearch(dashboardTaskRoutePaths.captureRequests),
+  component: RequestsRoutePage,
   getParentRoute: () => rootRoute,
-  path: dashboardRoutePaths.access,
-  validateSearch: validateEmptyTaskSearch,
+  path: dashboardTaskRoutePaths.captureRequests,
+  validateSearch: validateEmptySearch,
 });
-const activityRoute = createRoute({
-  beforeLoad: canonicalizeEmptySearch(dashboardRoutePaths.activity),
-  component: ActivityRoutePage,
+
+const exchangeRoute = createRoute({
+  component: function ExchangeDetailRoute() {
+    const { exchangeId } = exchangeRoute.useParams();
+    const { invalid } = exchangeRoute.useSearch();
+    return invalid === true || exchangeId === null
+      ? <InvalidLocator />
+      : <ExchangeRoutePage exchangeId={exchangeId} />;
+  },
   getParentRoute: () => rootRoute,
-  path: dashboardRoutePaths.activity,
-  validateSearch: validateEmptyTaskSearch,
+  params: { parse: ({ exchangeId }) => ({ exchangeId: validEntityID(exchangeId) ? exchangeId : null }) },
+  path: dashboardTaskRoutePaths.activityRequest,
+  validateSearch: validateEmptySearch,
 });
-const qualityRoute = createRoute({
-  beforeLoad: canonicalizeEmptySearch(dashboardRoutePaths.quality),
-  component: QualityRoutePage,
+
+const environmentsRoute = createRoute({
+  beforeLoad: canonicalizeEmptySearch(dashboardRoutePaths.environments),
+  component: EnvironmentsRoutePage,
   getParentRoute: () => rootRoute,
-  path: dashboardRoutePaths.quality,
-  validateSearch: validateEmptyTaskSearch,
+  path: dashboardRoutePaths.environments,
+  validateSearch: validateEmptySearch,
+});
+
+const environmentDetailRoute = createRoute({
+  component: function EnvironmentDetailRoute() {
+    const { environmentId } = environmentDetailRoute.useParams();
+    const { invalid } = environmentDetailRoute.useSearch();
+    return invalid === true || environmentId === null
+      ? <InvalidLocator />
+      : <EnvironmentDetailRoutePage environmentId={environmentId} />;
+  },
+  getParentRoute: () => rootRoute,
+  params: { parse: ({ environmentId }) => ({ environmentId: validEntityID(environmentId) ? environmentId : null }) },
+  path: dashboardTaskRoutePaths.environmentDetail,
+  validateSearch: validateEmptySearch,
+});
+
+const environmentRevisionRoute = createRoute({
+  component: function EnvironmentRevisionRoute() {
+    const { environmentId, environmentRevision } = environmentRevisionRoute.useParams();
+    const { invalid } = environmentRevisionRoute.useSearch();
+    return invalid === true || environmentId === null || environmentRevision === null
+      ? <InvalidLocator />
+      : <EnvironmentDetailRoutePage environmentId={environmentId} revision={environmentRevision} />;
+  },
+  getParentRoute: () => rootRoute,
+  params: {
+    parse: ({ environmentId, environmentRevision }) => ({
+      environmentId: validEntityID(environmentId) ? environmentId : null,
+      environmentRevision: /^[1-9][0-9]*$/u.test(environmentRevision)
+        ? Number.parseInt(environmentRevision, 10)
+        : null,
+    }),
+  },
+  path: dashboardTaskRoutePaths.environmentRevision,
+  validateSearch: validateEmptySearch,
+});
+
+const accountsRoute = createRoute({
+  beforeLoad: canonicalizeEmptySearch(dashboardRoutePaths.accounts),
+  component: AccountsRoutePage,
+  getParentRoute: () => rootRoute,
+  path: dashboardRoutePaths.accounts,
+  validateSearch: validateEmptySearch,
 });
 const extensionsRoute = createRoute({
   beforeLoad: canonicalizeEmptySearch(dashboardRoutePaths.extensions),
   component: ExtensionsRoutePage,
   getParentRoute: () => rootRoute,
   path: dashboardRoutePaths.extensions,
-  validateSearch: validateEmptyTaskSearch,
+  validateSearch: validateEmptySearch,
+});
+const qualityRoute = createRoute({
+  beforeLoad: canonicalizeEmptySearch(dashboardRoutePaths.quality),
+  component: QualityRoutePage,
+  getParentRoute: () => rootRoute,
+  path: dashboardRoutePaths.quality,
+  validateSearch: validateEmptySearch,
 });
 const policyRoute = createRoute({
-  component: function PolicyRoute() {
-    const { invalid, selected } = policyRoute.useSearch();
-    if (invalid === true) {
-      return <InvalidPolicyLocatorRoutePage />;
-    }
-    return <PolicyRoutePage selectedApprovalId={selected} />;
+  component: function Policy() {
+    const search = policyRoute.useSearch();
+    return search.invalid === true
+      ? <InvalidLocator />
+      : <PolicyRoutePage selectedApprovalId={search.selected} />;
   },
   getParentRoute: () => rootRoute,
   path: dashboardRoutePaths.policy,
@@ -196,312 +234,33 @@ const policyRoute = createRoute({
 });
 const settingsRoute = createRoute({
   beforeLoad: canonicalizeEmptySearch(dashboardRoutePaths.settings),
-  component: SettingsRoutePage,
+  component: function Settings() {
+    return <SettingsRoutePage preview={settingsRoute.useRouteContext().preview} />;
+  },
   getParentRoute: () => rootRoute,
   path: dashboardRoutePaths.settings,
-  validateSearch: validateEmptyTaskSearch,
+  validateSearch: validateEmptySearch,
 });
 
-const invalidLocatorRoute = createRoute({
-  component: InvalidDashboardLocatorRoutePage,
-  getParentRoute: () => rootRoute,
-  path: "/__invalid-locator",
-});
-
-const accessRoutingRoute = createRoute({
-  component: function AccessRoutingRoute() {
-    const { accessId } = accessRoutingRoute.useParams();
-    const { invalid } = accessRoutingRoute.useSearch();
-    return (
-      <UnavailableTaskRoutePage
-        invalid={invalid === true || accessId === null}
-        task="accessRouting"
-      />
-    );
-  },
-  getParentRoute: () => rootRoute,
-  params: {
-    parse: ({ accessId }) => ({
-      accessId: validRouteLocator(accessId, maximumAccessIdBytes)
-        ? accessId
-        : null,
-    }),
-  },
-  path: dashboardTaskRoutePaths.accessRouting,
-  validateSearch: validateEmptyTaskSearch,
-});
-
-const activityRequestsRoute = createRoute({
-  beforeLoad: canonicalizeEmptySearch(
-    dashboardTaskRoutePaths.activityRequests,
-  ),
-  component: ActivityRequestsRoutePage,
-  getParentRoute: () => rootRoute,
-  path: dashboardTaskRoutePaths.activityRequests,
-  validateSearch: validateEmptyTaskSearch,
-});
-
-const activityRequestRoute = createRoute({
-  component: function ActivityRequestRoute() {
-    const { exchangeId } = activityRequestRoute.useParams();
-    const { invalid } = activityRequestRoute.useSearch();
-    return (
-      invalid === true || exchangeId === null ? (
-        <UnavailableTaskRoutePage invalid task="activityRequest" />
-      ) : (
-        <ActivityRequestRoutePage exchangeId={exchangeId} />
-      )
-    );
-  },
-  getParentRoute: () => rootRoute,
-  params: {
-    parse: ({ exchangeId }) => ({
-      exchangeId: validRouteLocator(exchangeId, maximumRouteLocatorBytes)
-        ? exchangeId
-        : null,
-    }),
-  },
-  path: dashboardTaskRoutePaths.activityRequest,
-  validateSearch: validateEmptyTaskSearch,
-});
-
-const activityRunRoute = createRoute({
-  beforeLoad: ({ search }) => {
-    if (search.invalid === true) {
-      throw redirect({
-        replace: true,
-        search: {},
-        to: dashboardRoutePaths.activity,
-      });
-    }
-  },
-  component: function ActivityRunRoute() {
-    const { runId } = activityRunRoute.useParams();
-    return <ActivityRunRoutePage runId={runId} />;
-  },
-  getParentRoute: () => rootRoute,
-  params: {
-    parse: ({ runId }) =>
-      validRouteLocator(runId, maximumRouteLocatorBytes) ? { runId } : false,
-  },
-  path: dashboardTaskRoutePaths.activityRun,
-  validateSearch: validateEmptyTaskSearch,
-});
-
-const extensionDiscoverRoute = createRoute({
-  component: function ExtensionDiscoverRoute() {
-    const { invalid } = extensionDiscoverRoute.useSearch();
-    return (
-      <UnavailableTaskRoutePage
-        invalid={invalid === true}
-        task="extensionDiscover"
-      />
-    );
-  },
-  getParentRoute: () => rootRoute,
-  path: dashboardTaskRoutePaths.extensionDiscover,
-  validateSearch: validateEmptyTaskSearch,
-});
-
-const extensionInstalledRoute = createRoute({
-  component: function ExtensionInstalledRoute() {
-    const { invalid } = extensionInstalledRoute.useSearch();
-    return (
-      <UnavailableTaskRoutePage
-        invalid={invalid === true}
-        task="extensionInstalled"
-      />
-    );
-  },
-  getParentRoute: () => rootRoute,
-  path: dashboardTaskRoutePaths.extensionInstalled,
-  validateSearch: validateEmptyTaskSearch,
-});
-
-const extensionDetailRoute = createRoute({
-  component: function ExtensionDetailRoute() {
-    const { extensionId } = extensionDetailRoute.useParams();
-    const { invalid } = extensionDetailRoute.useSearch();
-    return (
-      <UnavailableTaskRoutePage
-        invalid={invalid === true || extensionId === null}
-        task="extensionDetail"
-      />
-    );
-  },
-  getParentRoute: () => rootRoute,
-  params: {
-    parse: ({ extensionId }) => ({
-      extensionId: validRouteLocator(extensionId, maximumRouteLocatorBytes)
-        ? extensionId
-        : null,
-    }),
-  },
-  path: dashboardTaskRoutePaths.extensionDetail,
-  validateSearch: validateEmptyTaskSearch,
-});
-
-const extensionDevelopRoute = createRoute({
-  component: function ExtensionDevelopRoute() {
-    const { invalid } = extensionDevelopRoute.useSearch();
-    return (
-      <UnavailableTaskRoutePage
-        invalid={invalid === true}
-        task="extensionDevelop"
-      />
-    );
-  },
-  getParentRoute: () => rootRoute,
-  path: dashboardTaskRoutePaths.extensionDevelop,
-  validateSearch: validateEmptyTaskSearch,
-});
-
-const qualitySitesRoute = createRoute({
-  component: function QualitySitesRoute() {
-    const { invalid } = qualitySitesRoute.useSearch();
-    return (
-      <UnavailableTaskRoutePage
-        invalid={invalid === true}
-        task="qualitySites"
-      />
-    );
-  },
-  getParentRoute: () => rootRoute,
-  path: dashboardTaskRoutePaths.qualitySites,
-  validateSearch: validateEmptyTaskSearch,
-});
-
-const dashboardSystemRoute = createRoute({
-  component: function DashboardSystemRoute() {
-    const { invalid } = dashboardSystemRoute.useSearch();
-    return (
-      <UnavailableTaskRoutePage
-        invalid={invalid === true}
-        task="dashboardSystem"
-      />
-    );
-  },
-  getParentRoute: () => rootRoute,
-  path: dashboardTaskRoutePaths.dashboardSystem,
-  validateSearch: validateEmptyTaskSearch,
-});
-
-const dashboardExtensionRoute = createRoute({
-  component: function DashboardExtensionRoute() {
-    const { dashboardId } = dashboardExtensionRoute.useParams();
-    const { invalid } = dashboardExtensionRoute.useSearch();
-    return (
-      <UnavailableTaskRoutePage
-        invalid={invalid === true || dashboardId === null}
-        task="dashboardExtension"
-      />
-    );
-  },
-  getParentRoute: () => rootRoute,
-  params: {
-    parse: ({ dashboardId }) => ({
-      dashboardId: validRouteLocator(dashboardId, maximumRouteLocatorBytes)
-        ? dashboardId
-        : null,
-    }),
-  },
-  path: dashboardTaskRoutePaths.dashboardExtension,
-  validateSearch: validateEmptyTaskSearch,
-});
-
-const settingsRecoveryRoute = createRoute({
-  component: function SettingsRecoveryRoute() {
-    const { invalid } = settingsRecoveryRoute.useSearch();
-    return (
-      <UnavailableTaskRoutePage
-        invalid={invalid === true}
-        task="settingsRecovery"
-      />
-    );
-  },
-  getParentRoute: () => rootRoute,
-  path: dashboardTaskRoutePaths.settingsRecovery,
-  validateSearch: validateEmptyTaskSearch,
-});
-
-const approvalsRedirectRoute = createRoute({
-  getParentRoute: () => rootRoute,
-  path: "/approvals",
-  beforeLoad: ({ search }) => {
-    throw redirect({
-      replace: true,
-      search: safeLegacyPolicySearch(search),
-      to: dashboardRoutePaths.policy,
-    });
-  },
-});
-const policyRedirectRoute = createRoute({
-  getParentRoute: () => rootRoute,
-  path: "/policy",
-  beforeLoad: ({ search }) => {
-    throw redirect({
-      replace: true,
-      search: safeLegacyPolicySearch(search),
-      to: dashboardRoutePaths.policy,
-    });
-  },
-});
-const policiesRedirectRoute = createRoute({
-  getParentRoute: () => rootRoute,
-  path: "/policies",
-  beforeLoad: ({ search }) => {
-    throw redirect({
-      replace: true,
-      search: safeLegacyPolicySearch(search),
-      to: dashboardRoutePaths.policy,
-    });
-  },
-});
-const systemRedirectRoute = createRoute({
-  getParentRoute: () => rootRoute,
-  path: "/system",
-  beforeLoad: () => {
-    throw redirect({
-      replace: true,
-      search: {},
-      to: dashboardRoutePaths.settings,
-    });
-  },
-});
-
+const invalidLocatorRoute = createRoute({ component: InvalidLocator, getParentRoute: () => rootRoute, path: "/__invalid-locator" });
 const routeTree = rootRoute.addChildren([
   indexRoute,
-  overviewRoute,
-  dashboardsRoute,
-  accessRoute,
-  activityRoute,
-  qualityRoute,
+  capturesRoute,
+  captureDetailRoute,
+  captureRequestsRoute,
+  exchangeRoute,
+  environmentsRoute,
+  environmentDetailRoute,
+  environmentRevisionRoute,
+  accountsRoute,
   extensionsRoute,
   policyRoute,
+  qualityRoute,
   settingsRoute,
   invalidLocatorRoute,
-  accessRoutingRoute,
-  activityRequestsRoute,
-  activityRequestRoute,
-  activityRunRoute,
-  extensionDiscoverRoute,
-  extensionInstalledRoute,
-  extensionDetailRoute,
-  extensionDevelopRoute,
-  qualitySitesRoute,
-  dashboardSystemRoute,
-  dashboardExtensionRoute,
-  settingsRecoveryRoute,
-  approvalsRedirectRoute,
-  policyRedirectRoute,
-  policiesRedirectRoute,
-  systemRedirectRoute,
 ]);
 
-export function createDashboardRouter(
-  history: RouterHistory,
-  context: DashboardRouterContext,
-) {
+export function createDashboardRouter(history: RouterHistory, context: DashboardRouterContext) {
   return createRouter({
     context,
     defaultPreload: "intent",
@@ -513,93 +272,64 @@ export function createDashboardRouter(
   });
 }
 
-const unboundModel = undefined as unknown as DashboardQueryRuntime;
 function canonicalizeDashboardHash(): void {
   const currentHash = window.location.hash;
-  if (!currentHash.startsWith("#")) {
-    return;
-  }
+  if (!currentHash.startsWith("#")) return;
   const original = currentHash.slice(1);
   let external = original.startsWith("/") ? original.slice(1) : original;
   const nestedHashIndex = external.indexOf("#");
-  const primary =
-    nestedHashIndex === -1 ? external : external.slice(0, nestedHashIndex);
-  const nestedHash =
-    nestedHashIndex === -1 ? "" : external.slice(nestedHashIndex);
+  const primary = nestedHashIndex === -1 ? external : external.slice(0, nestedHashIndex);
+  const nestedHash = nestedHashIndex === -1 ? "" : external.slice(nestedHashIndex);
   const queryIndex = primary.indexOf("?");
   const path = queryIndex === -1 ? primary : primary.slice(0, queryIndex);
   const search = queryIndex === -1 ? "" : primary.slice(queryIndex);
   external = `${path.replace(/\/+$/u, "")}${search}${nestedHash}`;
-  if (external === original) {
-    return;
+  if (external !== original) {
+    window.history.replaceState(window.history.state, "", `${window.location.pathname}${window.location.search}${external.length === 0 ? "" : `#${external}`}`);
   }
-  window.history.replaceState(
-    window.history.state,
-    "",
-    `${window.location.pathname}${window.location.search}${
-      external.length === 0 ? "" : `#${external}`
-    }`,
-  );
 }
 
 export function createDesktopHashHistory(): RouterHistory {
   canonicalizeDashboardHash();
   return createBrowserHistory({
-    createHref: (href) => {
-      const externalHref = href.startsWith("/") ? href.slice(1) : href;
-      return `${window.location.pathname}${window.location.search}#${externalHref}`;
-    },
+    createHref: (href) => `${window.location.pathname}${window.location.search}#${href.startsWith("/") ? href.slice(1) : href}`,
     parseLocation: () => {
       canonicalizeDashboardHash();
       const hashParts = window.location.hash.split("#").slice(1);
       const externalRouteHref = hashParts[0] ?? "";
-      const routeHref =
-        externalRouteHref.length === 0
-          ? "/"
-          : externalRouteHref.startsWith("/")
-            ? externalRouteHref
-            : `/${externalRouteHref}`;
+      const routeHref = externalRouteHref.length === 0 ? "/" : externalRouteHref.startsWith("/") ? externalRouteHref : `/${externalRouteHref}`;
+      try { decodeURI(routeHref); } catch { return parseHref("/__invalid-locator", window.history.state); }
       const routeHash = hashParts.slice(1).join("#");
-      try {
-        decodeURI(routeHref);
-      } catch {
-        return parseHref("/__invalid-locator", window.history.state);
-      }
-      return parseHref(
-        `${routeHref}${routeHash.length === 0 ? "" : `#${routeHash}`}`,
-        window.history.state,
-      );
+      return parseHref(`${routeHref}${routeHash.length === 0 ? "" : `#${routeHash}`}`, window.history.state);
     },
   });
 }
 
-export const dashboardRouter = createDashboardRouter(
-  createDesktopHashHistory(),
-  {
-    model: unboundModel,
-    preview: false,
-  },
-);
-
+const unboundModel = undefined as unknown as DashboardQueryRuntime;
+export const dashboardRouter = createDashboardRouter(createDesktopHashHistory(), { model: unboundModel, preview: false });
 export type DashboardRouter = typeof dashboardRouter;
-
-declare module "@tanstack/react-router" {
-  interface Register {
-    router: DashboardRouter;
-  }
-}
 
 export function DashboardRouterProvider({
   model,
   persistNavigation,
   preview = false,
-  router = dashboardRouter,
+  router,
 }: {
   readonly model: DashboardQueryRuntime;
   readonly persistNavigation?: (locator: string) => Promise<void>;
   readonly preview?: boolean;
   readonly router?: DashboardRouter;
 }) {
+  const activeRouter = useMemo(
+    () =>
+      router ??
+      createDashboardRouter(createDesktopHashHistory(), {
+        model,
+        preview,
+        ...(persistNavigation === undefined ? {} : { persistNavigation }),
+      }),
+    [model, persistNavigation, preview, router],
+  );
   return (
     <QueryClientProvider client={model.queryClient} key={model.sessionKey}>
       <RouterProvider
@@ -608,7 +338,7 @@ export function DashboardRouterProvider({
           preview,
           ...(persistNavigation === undefined ? {} : { persistNavigation }),
         }}
-        router={router}
+        router={activeRouter}
       />
     </QueryClientProvider>
   );

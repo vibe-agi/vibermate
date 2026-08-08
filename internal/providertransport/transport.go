@@ -14,8 +14,9 @@ import (
 
 	"golang.org/x/net/http2"
 
-	"github.com/vibe-agi/vibermate/internal/access"
+	"github.com/vibe-agi/vibermate/internal/originidentity"
 	"github.com/vibe-agi/vibermate/internal/transportprofile"
+	"github.com/vibe-agi/vibermate/internal/wireprofile"
 )
 
 const (
@@ -31,7 +32,7 @@ var ErrProviderResponseIdle = errors.New(
 
 type TransportDispatch struct {
 	target      Target
-	plan        access.CompiledTransportFingerprintPlan
+	plan        wireprofile.CompiledTransportFingerprintPlan
 	clientHello transportprofile.Observation
 }
 
@@ -111,10 +112,10 @@ func (transport *productionTransport) RoundTrip(
 			"production provider transport is not initialized",
 		)
 	}
-	switch dispatch.target.transportKind {
-	case access.ProviderTransportStrictTLS:
+	switch dispatch.target.TransportKind() {
+	case originidentity.ProviderTransportStrictTLS:
 		return transport.strictTLS.RoundTrip(request, dispatch)
-	case access.ProviderTransportLoopbackCleartext:
+	case originidentity.ProviderTransportLoopbackCleartext:
 		return transport.loopback.RoundTrip(request, dispatch)
 	default:
 		return nil, transportprofile.Evidence{}, errors.New(
@@ -176,22 +177,22 @@ func (transport *profileTransport) RoundTrip(
 	if err := dispatch.target.validate(); err != nil {
 		return nil, transportprofile.Evidence{}, err
 	}
-	if dispatch.target.transportKind != access.ProviderTransportStrictTLS {
+	if dispatch.target.TransportKind() != originidentity.ProviderTransportStrictTLS {
 		return nil, transportprofile.Evidence{}, errors.New(
 			"strict TLS provider transport received a non-TLS target",
 		)
 	}
 	if request.URL.Scheme != "https" ||
-		request.URL.Host != dispatch.target.httpAuthority ||
-		request.Host != dispatch.target.httpAuthority {
+		request.URL.Host != dispatch.target.HTTPAuthority() ||
+		request.Host != dispatch.target.HTTPAuthority() {
 		return nil, transportprofile.Evidence{}, errors.New(
 			"provider HTTP and transport target identities disagree",
 		)
 	}
 	switch dispatch.plan.Requested().HTTPTransport() {
-	case access.HTTPTransportHTTP1:
+	case wireprofile.HTTPTransportHTTP1:
 		return transport.roundTripHTTP1(request, dispatch)
-	case access.HTTPTransportHTTP2:
+	case wireprofile.HTTPTransportHTTP2:
 		return transport.roundTripHTTP2(request, dispatch)
 	default:
 		return nil, transportprofile.Evidence{}, errors.New(
@@ -224,7 +225,7 @@ func (transport *profileTransport) roundTripHTTP1(
 				transportprofile.ConnectRequest{
 					Network:       network,
 					Address:       address,
-					TLSServerName: dispatch.target.tlsServerName,
+					TLSServerName: dispatch.target.TLSServerName(),
 					Plan:          dispatch.plan,
 					Observation:   dispatch.clientHello,
 				},
@@ -293,7 +294,7 @@ func (transport *profileTransport) roundTripHTTP2(
 			transportprofile.ConnectRequest{
 				Network:       network,
 				Address:       address,
-				TLSServerName: dispatch.target.tlsServerName,
+				TLSServerName: dispatch.target.TLSServerName(),
 				Plan:          dispatch.plan,
 				Observation:   dispatch.clientHello,
 			},

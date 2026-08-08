@@ -9,6 +9,8 @@ import (
 	"io"
 	"sync"
 	"time"
+
+	"github.com/vibe-agi/vibermate/internal/environment"
 )
 
 const connectionIDBytes = 20
@@ -44,24 +46,24 @@ type Attempt struct {
 }
 
 type DecisionEvidence struct {
-	Source                Source
-	Decision              Decision
-	RuleID                string
-	RouteHost             string
-	AccessID              string
-	AccessName            string
-	AccessRevision        uint64
-	AgentEndpointID       string
-	AgentEndpointRevision uint64
-	CredentialBindingID   string
-	EgressScope           EgressScope
-	EgressSource          EgressSource
-	EgressRuleID          string
-	EgressSelectorRunID   string
-	EgressProxyID         string
-	EgressPolicyRevision  uint64
-	Decryption            Decryption
-	ErrorClass            string
+	Source                 Source
+	Decision               Decision
+	RuleID                 string
+	RouteHost              string
+	EnvironmentID          environment.EnvironmentID
+	EnvironmentName        string
+	EnvironmentRevision    environment.Revision
+	ClientEndpointID       environment.ClientEndpointID
+	ClientEndpointRevision environment.Revision
+	CredentialBindingID    string
+	EgressScope            EgressScope
+	EgressSource           EgressSource
+	EgressRuleID           string
+	EgressSelectorRunID    string
+	EgressProxyID          string
+	EgressPolicyRevision   uint64
+	Decryption             Decryption
+	ErrorClass             string
 }
 
 type ConnectedEvidence struct {
@@ -303,11 +305,11 @@ func (connection *Connection) Decide(
 	candidate.Decision = evidence.Decision
 	candidate.RuleID = evidence.RuleID
 	candidate.RouteHost = evidence.RouteHost
-	candidate.AccessID = evidence.AccessID
-	candidate.AccessName = evidence.AccessName
-	candidate.AccessRevision = evidence.AccessRevision
-	candidate.AgentEndpointID = evidence.AgentEndpointID
-	candidate.AgentEndpointRevision = evidence.AgentEndpointRevision
+	candidate.EnvironmentID = evidence.EnvironmentID
+	candidate.EnvironmentName = evidence.EnvironmentName
+	candidate.EnvironmentRevision = evidence.EnvironmentRevision
+	candidate.ClientEndpointID = evidence.ClientEndpointID
+	candidate.ClientEndpointRevision = evidence.ClientEndpointRevision
 	candidate.CredentialBindingID = evidence.CredentialBindingID
 	candidate.EgressScope = evidence.EgressScope
 	candidate.EgressSource = evidence.EgressSource

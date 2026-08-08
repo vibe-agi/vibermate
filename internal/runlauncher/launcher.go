@@ -17,6 +17,7 @@ import (
 	"github.com/vibe-agi/vibermate/internal/capturecontrol"
 	"github.com/vibe-agi/vibermate/internal/capturerun"
 	"github.com/vibe-agi/vibermate/internal/clientadapter"
+	"github.com/vibe-agi/vibermate/internal/environment"
 	"github.com/vibe-agi/vibermate/internal/localdiscovery"
 )
 
@@ -73,6 +74,14 @@ type Launcher struct {
 	config Config
 }
 
+// LaunchRequest freezes the explicit initial Environment selection together
+// with the exact child invocation. The runtime may switch the Capture later;
+// the launcher never infers an Environment from a domain or workspace.
+type LaunchRequest struct {
+	EnvironmentID environment.EnvironmentID
+	Command       []string
+}
+
 func New(config Config) (*Launcher, error) {
 	if config.Discovery == nil {
 		return nil, errors.New("local control discovery is required")
@@ -122,10 +131,14 @@ func New(config Config) (*Launcher, error) {
 // status. A child non-zero exit is an outcome, not a launcher error.
 func (launcher *Launcher) Run(
 	ctx context.Context,
-	command []string,
+	request LaunchRequest,
 ) (int, error) {
+	command := append([]string(nil), request.Command...)
 	if launcher == nil || ctx == nil || len(command) == 0 || command[0] == "" {
 		return 1, errors.New("launcher requires a context and command")
+	}
+	if _, err := environment.NewEnvironmentID(request.EnvironmentID.String()); err != nil {
+		return 1, errors.New("launcher requires a valid initial Environment")
 	}
 	cwd, executable, err := launcher.resolveCommand(command)
 	if err != nil {
@@ -156,6 +169,7 @@ func (launcher *Launcher) Run(
 			grant, createErr = control.create(
 				call,
 				capturecontrol.CreateRequest{
+					EnvironmentID:  request.EnvironmentID.String(),
 					CWD:            cwd,
 					Command:        append([]string(nil), command...),
 					ExecutablePath: executable,

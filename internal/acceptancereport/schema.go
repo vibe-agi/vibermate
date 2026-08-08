@@ -10,9 +10,7 @@ import (
 )
 
 const (
-	SchemaV5                     = "vibermate.m0-assembly-acceptance/v5"
 	SchemaV6                     = "vibermate.m0-assembly-acceptance/v6"
-	DesktopBuildManifestSchemaV1 = "vibermate.desktop-build/v1"
 	DesktopBuildManifestSchemaV2 = "vibermate.desktop-build/v2"
 	DesktopBuildManifestSchema   = DesktopBuildManifestSchemaV2
 	ExpectedGoVersion            = "go1.25.12"
@@ -105,9 +103,7 @@ type Configuration struct {
 	DeterministicOnly bool   `json:"deterministicOnly"`
 	ClientID          string `json:"clientId"`
 	ClientVersion     string `json:"clientVersion"`
-	AccessID          string `json:"accessId"`
-	ProviderOrigin    string `json:"providerOrigin"`
-	ProviderModel     string `json:"providerModel"`
+	EnvironmentID     string `json:"environmentId"`
 	Timeout           string `json:"timeout"`
 }
 

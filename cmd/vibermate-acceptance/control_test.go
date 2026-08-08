@@ -3,22 +3,17 @@ package main
 import (
 	"context"
 	"encoding/base64"
-	"encoding/json"
-	"errors"
-	"io"
 	"net/http"
 	"net/http/httptest"
 	"strconv"
 	"strings"
-	"sync/atomic"
 	"testing"
 	"time"
 
-	"github.com/vibe-agi/vibermate/internal/access"
-	"github.com/vibe-agi/vibermate/internal/accessapply"
 	"github.com/vibe-agi/vibermate/internal/activity"
 	"github.com/vibe-agi/vibermate/internal/desktopbootstrap"
 	"github.com/vibe-agi/vibermate/internal/desktopcontrol"
+	"github.com/vibe-agi/vibermate/internal/environment"
 )
 
 func TestControlRequestAcceptsClosedProblemDocument(t *testing.T) {
@@ -52,449 +47,6 @@ func TestControlRequestAcceptsClosedProblemDocument(t *testing.T) {
 		problem.ReasonCode != "invalid_control_request" ||
 		problem.OperationID != "op-1" {
 		t.Fatalf("problem = %+v, status = %d", problem, status)
-	}
-}
-
-func TestValidateAccessApplyResponseRequiresClosedApplicationState(t *testing.T) {
-	activeHash := strings.Repeat("ab", 32)
-	tests := []struct {
-		name      string
-		response  desktopcontrol.AccessApplyResponse
-		wantError bool
-	}{
-		{
-			name: "active",
-			response: desktopcontrol.AccessApplyResponse{
-				Outcome:          access.WriteOutcomeCommitted,
-				Revision:         1,
-				ApplicationState: desktopcontrol.AccessApplicationStateActive,
-				PlanHash:         activeHash,
-			},
-		},
-		{
-			name: "unavailable",
-			response: desktopcontrol.AccessApplyResponse{
-				Outcome:          access.WriteOutcomeCommitted,
-				Revision:         1,
-				ApplicationState: desktopcontrol.AccessApplicationStateUnavailable,
-			},
-		},
-		{
-			name: "missing application state",
-			response: desktopcontrol.AccessApplyResponse{
-				Outcome:  access.WriteOutcomeCommitted,
-				Revision: 1,
-				PlanHash: activeHash,
-			},
-			wantError: true,
-		},
-		{
-			name: "active without hash",
-			response: desktopcontrol.AccessApplyResponse{
-				Outcome:          access.WriteOutcomeCommitted,
-				Revision:         1,
-				ApplicationState: desktopcontrol.AccessApplicationStateActive,
-			},
-			wantError: true,
-		},
-		{
-			name: "active with noncanonical hash",
-			response: desktopcontrol.AccessApplyResponse{
-				Outcome:          access.WriteOutcomeCommitted,
-				Revision:         1,
-				ApplicationState: desktopcontrol.AccessApplicationStateActive,
-				PlanHash:         strings.ToUpper(activeHash),
-			},
-			wantError: true,
-		},
-		{
-			name: "unavailable with hash",
-			response: desktopcontrol.AccessApplyResponse{
-				Outcome:          access.WriteOutcomeCommitted,
-				Revision:         1,
-				ApplicationState: desktopcontrol.AccessApplicationStateUnavailable,
-				PlanHash:         activeHash,
-			},
-			wantError: true,
-		},
-		{
-			name: "noncommitted",
-			response: desktopcontrol.AccessApplyResponse{
-				Outcome:          access.WriteOutcomeNotCommitted,
-				Revision:         1,
-				ApplicationState: desktopcontrol.AccessApplicationStateUnavailable,
-			},
-			wantError: true,
-		},
-	}
-	for _, test := range tests {
-		t.Run(test.name, func(t *testing.T) {
-			err := validateAccessApplyResponse(test.response)
-			if (err != nil) != test.wantError {
-				t.Fatalf("response=%+v error=%v", test.response, err)
-			}
-		})
-	}
-}
-
-func TestDecodeAccessApplyResponseRequiresConditionalExactFields(t *testing.T) {
-	activeHash := strings.Repeat("ab", 32)
-	tests := []struct {
-		name              string
-		payload           string
-		wantState         desktopcontrol.AccessApplicationState
-		wantPlanHash      string
-		wantDecodeFailure bool
-	}{
-		{
-			name: "active exact fields",
-			payload: `{"outcome":"committed","revision":1,` +
-				`"applicationState":"active","planHash":"` + activeHash + `"}`,
-			wantState:    desktopcontrol.AccessApplicationStateActive,
-			wantPlanHash: activeHash,
-		},
-		{
-			name: "unavailable exact fields",
-			payload: `{"outcome":"committed","revision":1,` +
-				`"applicationState":"unavailable"}`,
-			wantState: desktopcontrol.AccessApplicationStateUnavailable,
-		},
-		{
-			name: "unavailable explicit empty hash",
-			payload: `{"outcome":"committed","revision":1,` +
-				`"applicationState":"unavailable","planHash":""}`,
-			wantDecodeFailure: true,
-		},
-		{
-			name: "unavailable extra field",
-			payload: `{"outcome":"committed","revision":1,` +
-				`"applicationState":"unavailable","detail":"must-not-pass"}`,
-			wantDecodeFailure: true,
-		},
-		{
-			name: "active missing hash",
-			payload: `{"outcome":"committed","revision":1,` +
-				`"applicationState":"active"}`,
-			wantDecodeFailure: true,
-		},
-		{
-			name: "active extra field",
-			payload: `{"outcome":"committed","revision":1,` +
-				`"applicationState":"active","planHash":"` + activeHash +
-				`","detail":"must-not-pass"}`,
-			wantDecodeFailure: true,
-		},
-	}
-	for _, test := range tests {
-		t.Run(test.name, func(t *testing.T) {
-			result, err := decodeAccessApplyResponse([]byte(test.payload))
-			if (err != nil) != test.wantDecodeFailure {
-				t.Fatalf("payload=%s result=%+v error=%v", test.payload, result, err)
-			}
-			if err == nil &&
-				(result.ApplicationState != test.wantState ||
-					result.PlanHash != test.wantPlanHash) {
-				t.Fatalf("decoded response = %+v", result)
-			}
-		})
-	}
-}
-
-func TestAccessApplyReplaysAndRetainsExactAmbiguousCommand(t *testing.T) {
-	type observedCommand struct {
-		body []byte
-		key  string
-	}
-	commands := make([]observedCommand, 0, 4)
-	client := testControlClient(t, func(
-		writer http.ResponseWriter,
-		request *http.Request,
-	) {
-		body, err := io.ReadAll(request.Body)
-		if err != nil {
-			t.Errorf("read request body: %v", err)
-		}
-		commands = append(commands, observedCommand{
-			body: append([]byte(nil), body...),
-			key:  request.Header.Get("Idempotency-Key"),
-		})
-		writer.Header().Set("Content-Type", "application/json")
-		if len(commands) <= 2 {
-			_, _ = writer.Write([]byte(
-				`{"outcome":"committed","revision":1,` +
-					`"applicationState":"active","planHash":"` +
-					strings.Repeat("ab", 32) + `","extra":"not-closed"}`,
-			))
-			return
-		}
-		_, _ = writer.Write([]byte(
-			`{"outcome":"committed","revision":1,` +
-				`"applicationState":"active","planHash":"` +
-				strings.Repeat("ab", 32) + `"}`,
-		))
-	})
-	input := config{
-		clientID:       acceptanceClientClaudeCode,
-		accessID:       "work",
-		providerOrigin: "https://api.openai.com/v1",
-		providerModel:  "acceptance-model",
-		secretRef:      "secret://provider/acceptance",
-	}
-
-	if _, _, _, err := client.applyAccess(context.Background(), input, 0); err == nil {
-		t.Fatal("two invalid success receipts were accepted")
-	}
-	result, status, _, err := client.applyAccess(context.Background(), input, 0)
-	if err != nil || status != http.StatusOK || result.Revision != 1 {
-		t.Fatalf("replayed result=%+v status=%d error=%v", result, status, err)
-	}
-	if len(commands) != 3 {
-		t.Fatalf("command count = %d, want 3", len(commands))
-	}
-	for index, command := range commands {
-		if command.key == "" || command.key != commands[0].key {
-			t.Fatalf("command %d key = %q, first = %q", index, command.key, commands[0].key)
-		}
-		if string(command.body) != string(commands[0].body) {
-			t.Fatalf("command %d body differs from the retained command", index)
-		}
-	}
-
-	if _, _, _, err := client.applyAccess(context.Background(), input, 0); err != nil {
-		t.Fatal(err)
-	}
-	if len(commands) != 4 || commands[3].key == commands[0].key {
-		t.Fatalf("settled command keys = %#v", commands)
-	}
-}
-
-func TestAccessApplyPreCanceledContextDoesNotSendOrAllocate(t *testing.T) {
-	type observedCommand struct {
-		body string
-		key  string
-	}
-	commands := make(chan observedCommand, 1)
-	client := testControlClient(t, func(
-		writer http.ResponseWriter,
-		request *http.Request,
-	) {
-		body, err := io.ReadAll(request.Body)
-		if err != nil {
-			t.Errorf("read request body: %v", err)
-		}
-		commands <- observedCommand{
-			body: string(body),
-			key:  request.Header.Get("Idempotency-Key"),
-		}
-		writeAccessApplySuccess(t, writer, http.StatusOK)
-	})
-	input := acceptanceAccessConfig()
-	ctx, cancel := context.WithCancel(context.Background())
-	cancel()
-
-	if _, _, _, err := client.applyAccess(ctx, input, 0); !errors.Is(
-		err,
-		context.Canceled,
-	) {
-		t.Fatalf("pre-canceled apply error = %v", err)
-	}
-	select {
-	case command := <-commands:
-		t.Fatalf("pre-canceled apply sent command %+v", command)
-	default:
-	}
-	client.accessMu.Lock()
-	unresolved := len(client.unresolvedAccessMutations)
-	client.accessMu.Unlock()
-	if unresolved != 0 {
-		t.Fatalf(
-			"unresolved command count = %d, want 0",
-			unresolved,
-		)
-	}
-
-	result, status, _, err := client.applyAccess(context.Background(), input, 0)
-	if err != nil || status != http.StatusOK || result.Revision != 1 {
-		t.Fatalf("explicit retry result=%+v status=%d error=%v", result, status, err)
-	}
-	command := <-commands
-	if command.key == "" || command.body == "" {
-		t.Fatalf("fresh command = %+v", command)
-	}
-	client.accessMu.Lock()
-	unresolved = len(client.unresolvedAccessMutations)
-	client.accessMu.Unlock()
-	if unresolved != 0 {
-		t.Fatalf("settled unresolved command count = %d, want 0", unresolved)
-	}
-}
-
-func TestAccessApplyTreatsClosedProblemAsAuthoritative(t *testing.T) {
-	type observedCommand struct {
-		body string
-		key  string
-	}
-	commands := make(chan observedCommand, 2)
-	var attempts atomic.Int32
-	client := testControlClient(t, func(
-		writer http.ResponseWriter,
-		request *http.Request,
-	) {
-		body, err := io.ReadAll(request.Body)
-		if err != nil {
-			t.Errorf("read request body: %v", err)
-		}
-		commands <- observedCommand{
-			body: string(body),
-			key:  request.Header.Get("Idempotency-Key"),
-		}
-		if attempts.Add(1) == 1 {
-			writer.Header().Set("Content-Type", "application/problem+json")
-			writer.WriteHeader(http.StatusConflict)
-			_, _ = writer.Write([]byte(
-				`{"type":"urn:vibermate:error:revision-conflict",` +
-					`"title":"Conflict","status":409,` +
-					`"code":"revision_conflict"}`,
-			))
-			return
-		}
-		writeAccessApplySuccess(t, writer, http.StatusOK)
-	})
-	input := acceptanceAccessConfig()
-
-	_, status, problem, err := client.applyAccess(context.Background(), input, 0)
-	if err != nil || status != http.StatusConflict ||
-		problem.ReasonCode != "revision_conflict" {
-		t.Fatalf("authoritative response status=%d problem=%+v error=%v", status, problem, err)
-	}
-	if attempts.Load() != 1 {
-		t.Fatalf("authoritative Problem attempt count = %d, want 1", attempts.Load())
-	}
-	result, status, _, err := client.applyAccess(context.Background(), input, 0)
-	if err != nil || status != http.StatusOK || result.Revision != 1 {
-		t.Fatalf("next command result=%+v status=%d error=%v", result, status, err)
-	}
-	first, second := <-commands, <-commands
-	if first.key == "" || second.key == "" || first.key == second.key ||
-		first.body != second.body {
-		t.Fatalf("authoritative command keys/bodies = %#v, %#v", first, second)
-	}
-}
-
-func TestAccessApplyReplaysUnexpectedSuccessStatusWithSameKey(t *testing.T) {
-	type observedCommand struct {
-		body string
-		key  string
-	}
-	commands := make(chan observedCommand, 2)
-	var attempts atomic.Int32
-	client := testControlClient(t, func(
-		writer http.ResponseWriter,
-		request *http.Request,
-	) {
-		body, err := io.ReadAll(request.Body)
-		if err != nil {
-			t.Errorf("read request body: %v", err)
-		}
-		commands <- observedCommand{
-			body: string(body),
-			key:  request.Header.Get("Idempotency-Key"),
-		}
-		status := http.StatusOK
-		if attempts.Add(1) == 1 {
-			status = http.StatusCreated
-		}
-		writeAccessApplySuccess(t, writer, status)
-	})
-
-	result, status, _, err := client.applyAccess(
-		context.Background(),
-		acceptanceAccessConfig(),
-		0,
-	)
-	if err != nil || status != http.StatusOK || result.Revision != 1 {
-		t.Fatalf("replayed result=%+v status=%d error=%v", result, status, err)
-	}
-	first, second := <-commands, <-commands
-	if attempts.Load() != 2 || first.key == "" || first.key != second.key ||
-		first.body != second.body {
-		t.Fatalf("replayed commands = %#v, %#v", first, second)
-	}
-}
-
-func TestAccessApplyReplaysControlledDisconnectWithSameKey(t *testing.T) {
-	type observedCommand struct {
-		body string
-		key  string
-	}
-	commands := make(chan observedCommand, 2)
-	var attempts atomic.Int32
-	client := testControlClient(t, func(
-		writer http.ResponseWriter,
-		request *http.Request,
-	) {
-		body, err := io.ReadAll(request.Body)
-		if err != nil {
-			t.Errorf("read request body: %v", err)
-		}
-		commands <- observedCommand{
-			body: string(body),
-			key:  request.Header.Get("Idempotency-Key"),
-		}
-		if attempts.Add(1) == 1 {
-			hijacker, ok := writer.(http.Hijacker)
-			if !ok {
-				t.Error("test response writer cannot disconnect the transport")
-				return
-			}
-			connection, _, err := hijacker.Hijack()
-			if err != nil {
-				t.Errorf("hijack first Access response: %v", err)
-				return
-			}
-			if err := connection.Close(); err != nil {
-				t.Errorf("close first Access response: %v", err)
-			}
-			return
-		}
-		writeAccessApplySuccess(t, writer, http.StatusOK)
-	})
-
-	result, status, _, err := client.applyAccess(
-		context.Background(),
-		acceptanceAccessConfig(),
-		0,
-	)
-	if err != nil || status != http.StatusOK || result.Revision != 1 {
-		t.Fatalf("disconnect replay result=%+v status=%d error=%v", result, status, err)
-	}
-	first, second := <-commands, <-commands
-	if attempts.Load() != 2 || first.key == "" || first.key != second.key ||
-		first.body != second.body {
-		t.Fatalf("disconnect replay commands = %#v, %#v", first, second)
-	}
-}
-
-func acceptanceAccessConfig() config {
-	return config{
-		clientID:       acceptanceClientClaudeCode,
-		accessID:       "work",
-		providerOrigin: "https://api.openai.com/v1",
-		providerModel:  "acceptance-model",
-		secretRef:      "secret://provider/acceptance",
-	}
-}
-
-func writeAccessApplySuccess(t *testing.T, writer http.ResponseWriter, status int) {
-	t.Helper()
-	writer.Header().Set("Content-Type", "application/json")
-	writer.WriteHeader(status)
-	if _, err := writer.Write([]byte(
-		`{"outcome":"committed","revision":1,` +
-			`"applicationState":"active","planHash":"` +
-			strings.Repeat("ab", 32) + `"}`,
-	)); err != nil {
-		t.Errorf("write Access apply success: %v", err)
 	}
 }
 
@@ -646,17 +198,19 @@ func TestControlActivitiesUsesCanonicalCursorPage(t *testing.T) {
 			t.Errorf("Activity request URL = %q", request.URL.String())
 		}
 		writer.Header().Set("Content-Type", "application/json")
+		digest := strings.Repeat("a", 64)
 		_, _ = writer.Write([]byte(
 			`{"items":[{"id":"Exchange-1",` +
 				`"occurredAt":"2026-08-03T01:02:03Z",` +
 				`"kind":"exchange","title":"claude","status":"failed",` +
 				`"source":{"kind":"capture_run","displayName":"claude",` +
 				`"recognition":"configured"},` +
-				`"access":{"id":"Access-1","displayName":"Work",` +
-				`"applicationRevision":1},` +
+				`"environment":{"id":"environment-1","revision":1,` +
+				`"digest":"` + digest + `","clientEndpointId":"endpoint-1",` +
+				`"clientEndpointRevision":1,"protocolPlanId":"plan-1",` +
+				`"protocolPlanRevision":1,"routeId":"route-1","routeRevision":1},` +
 				`"parentRefs":{"captureRunId":"Run-1",` +
-				`"ingressProfileId":"capture-run/Run-1",` +
-				`"connectionId":"Connection-1","accessId":"Access-1",` +
+				`"connectionId":"Connection-1",` +
 				`"exchangeId":"Exchange-1"}}],` +
 				`"nextCursor":"` + cursor + `"}`,
 		))
@@ -675,16 +229,18 @@ func TestControlActivitiesUsesCanonicalCursorPage(t *testing.T) {
 }
 
 func TestControlActivitiesRejectsInvalidWireShape(t *testing.T) {
+	digest := strings.Repeat("a", 64)
 	validItem := `{"id":"Exchange-1",` +
 		`"occurredAt":"2026-08-03T01:02:03Z",` +
 		`"kind":"exchange","title":"claude","status":"failed",` +
 		`"source":{"kind":"capture_run","displayName":"claude",` +
 		`"recognition":"configured"},` +
-		`"access":{"id":"Access-1","displayName":"Work",` +
-		`"applicationRevision":1},` +
+		`"environment":{"id":"environment-1","revision":1,` +
+		`"digest":"` + digest + `","clientEndpointId":"endpoint-1",` +
+		`"clientEndpointRevision":1,"protocolPlanId":"plan-1",` +
+		`"protocolPlanRevision":1,"routeId":"route-1","routeRevision":1},` +
 		`"parentRefs":{"captureRunId":"Run-1",` +
-		`"ingressProfileId":"capture-run/Run-1",` +
-		`"connectionId":"Connection-1","accessId":"Access-1",` +
+		`"connectionId":"Connection-1",` +
 		`"exchangeId":"Exchange-1"}}`
 	for _, test := range []struct {
 		name    string
@@ -702,11 +258,11 @@ func TestControlActivitiesRejectsInvalidWireShape(t *testing.T) {
 				strings.TrimSuffix(validItem, "}") + `,"reasonCode":"secret"}]}`,
 		},
 		{
-			name: "invalid Access ID",
+			name: "invalid Environment ID",
 			payload: `{"items":[` + strings.Replace(
 				validItem,
-				`"Access-1"`,
-				`" Access-1"`,
+				`"environment-1"`,
+				`" environment-1"`,
 				1,
 			) + `]}`,
 		},
@@ -769,97 +325,30 @@ func testControlClient(
 	return client
 }
 
-func TestAssemblyAccessKeepsClientAndProviderIdentitySeparate(t *testing.T) {
+func TestAssemblyEnvironmentKeepsClientAndProviderIdentityExact(t *testing.T) {
 	t.Parallel()
-
-	for _, test := range []struct {
-		name    string
-		client  acceptanceClientID
-		origin  string
-		dialect access.Dialect
-	}{
-		{
-			name:    "Claude",
-			client:  acceptanceClientClaudeCode,
-			origin:  "https://api.anthropic.com",
-			dialect: access.DialectAnthropicMessages,
-		},
-		{
-			name:    "Codex",
-			client:  acceptanceClientCodexCLI,
-			origin:  "https://api.openai.com",
-			dialect: access.DialectOpenAIResponses,
-		},
-	} {
-		test := test
-		t.Run(test.name, func(t *testing.T) {
-			assertAssemblyAccessClientEdge(
-				t,
-				test.client,
-				test.origin,
-				test.dialect,
-			)
-		})
-	}
-}
-
-func assertAssemblyAccessClientEdge(
-	t *testing.T,
-	client acceptanceClientID,
-	clientOrigin string,
-	clientDialect access.Dialect,
-) {
-	t.Helper()
-
-	config := config{
-		clientID:       client,
-		accessID:       "Acc-001",
-		providerOrigin: "https://api.openai.com/v1",
-		providerModel:  "fixed-provider-model",
-		secretRef:      "secret://provider/acceptance",
-	}
-	input, err := assemblyAccess(config, 0)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if input.AgentEndpoint.ClientOrigin != clientOrigin ||
-		input.AgentEndpoint.ClientDialect != string(clientDialect) {
-		t.Fatalf("client origin = %q", input.AgentEndpoint.ClientOrigin)
-	}
-	if len(input.ProviderTargets) != 1 ||
-		input.ProviderTargets[0].Origin != config.providerOrigin ||
-		input.ProviderTargets[0].Origin == input.AgentEndpoint.ClientOrigin {
-		t.Fatalf(
-			"provider targets = %+v",
-			input.ProviderTargets,
-		)
-	}
-	if len(input.AccountBindings) != 1 ||
-		input.AccountBindings[0].SecretRef != config.secretRef {
-		t.Fatalf("account bindings = %+v", input.AccountBindings)
-	}
-	if input.Access.ID != config.accessID ||
-		input.AgentEndpoint.ID != "Acc-001-agent" ||
-		input.Profiles[0].ID != "Acc-001-openai" ||
-		input.AccountBindings[0].ID != "Acc-001-account" {
-		t.Fatalf("derived identifiers = %+v", input)
-	}
-	command, err := accessapply.BuildCommand(config.accessID, input)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if command.ExpectedRevision != 0 ||
-		command.Aggregate.Binding.Revision != 1 {
-		t.Fatalf("command = %+v", command)
-	}
-	payload, err := json.Marshal(input)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !strings.Contains(string(payload), config.secretRef) ||
-		strings.Contains(string(payload), `"secretValue"`) ||
-		strings.Contains(string(payload), `"credential"`) {
-		t.Fatal("Acceptance Access did not preserve the SecretRef-only boundary")
+	for _, clientID := range []acceptanceClientID{acceptanceClientClaudeCode, acceptanceClientCodexCLI} {
+		configured := config{clientID: clientID, environmentID: "assembly-001"}
+		aggregate, err := assemblyEnvironment(configured, 1)
+		if err != nil {
+			t.Fatal(err)
+		}
+		client, err := selectedAcceptanceClient(configured)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if aggregate.ID.String() != configured.environmentID || aggregate.Revision != 1 || len(aggregate.ClientEndpoints) != 1 {
+			t.Fatalf("Environment = %+v", aggregate)
+		}
+		endpoint := aggregate.ClientEndpoints[0]
+		if endpoint.ClientOrigin.String() != client.ClientOrigin || len(endpoint.ProtocolPlans) != 1 || endpoint.ProtocolPlans[0].ClientProtocol != client.ClientProtocol {
+			t.Fatalf("client edge = %+v", endpoint)
+		}
+		plan := endpoint.ProtocolPlans[0]
+		route := plan.UpstreamPlan.Routes[0]
+		if plan.Mode != environment.PlanModeOriginalPassthrough || route.ProviderTarget.Origin.String() != client.ClientOrigin || route.AccountPolicy.Mode != environment.AccountModeClientPassthrough {
+			t.Fatalf("original passthrough route = %+v", route)
+		}
 	}
 }
 

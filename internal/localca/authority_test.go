@@ -13,7 +13,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/vibe-agi/vibermate/internal/access"
+	"github.com/vibe-agi/vibermate/internal/captureassignment"
 	"github.com/vibe-agi/vibermate/internal/certidentity"
 )
 
@@ -47,8 +47,8 @@ func TestLocalCAReopensOneRootAndIssuesRevisionAuthorizedLeaf(t *testing.T) {
 		t.Fatalf("invalid Root certificate identity: %+v", rootCertificate)
 	}
 
-	fixture := newAccessFixture(t, "api", 1)
-	projection := newAccessProjection(t, authority, fixture)
+	fixture := newEnvironmentFixture(t, "api", 1)
+	projection := newEnvironmentProjection(t, authority, fixture)
 	leaf, err := authority.Issue(
 		context.Background(),
 		leafAdmission(t, projection, authority, fixture),
@@ -58,14 +58,14 @@ func TestLocalCAReopensOneRootAndIssuesRevisionAuthorizedLeaf(t *testing.T) {
 	}
 	if leaf.Leaf == nil ||
 		len(leaf.Leaf.DNSNames) != 1 ||
-		leaf.Leaf.DNSNames[0] != fixture.origin.TLSServerName() ||
+		leaf.Leaf.DNSNames[0] != fixture.origin.Host() ||
 		len(leaf.Leaf.IPAddresses) != 0 {
 		t.Fatalf("leaf SANs = dns:%v ip:%v", leaf.Leaf.DNSNames, leaf.Leaf.IPAddresses)
 	}
 	if err := verifyHandshake(
 		leaf,
 		delivery.CertificatePEM(),
-		fixture.origin.TLSServerName(),
+		fixture.origin.Host(),
 	); err != nil {
 		t.Fatalf("verify issued leaf: %v", err)
 	}
@@ -93,7 +93,7 @@ func TestLocalCAReopensOneRootAndIssuesRevisionAuthorizedLeaf(t *testing.T) {
 	if err := verifyHandshake(
 		fresh,
 		authority.Certificate().CertificatePEM(),
-		fixture.origin.TLSServerName(),
+		fixture.origin.Host(),
 	); err != nil {
 		t.Fatalf("caller mutation changed cached leaf: %v", err)
 	}
@@ -123,7 +123,7 @@ func TestLocalCARejectsForgedAdmissionAndIncompletePersistentState(t *testing.T)
 	authority := openAuthority(t, directory, nil)
 	if _, err := authority.Issue(
 		context.Background(),
-		access.LeafIssuanceAdmission{},
+		captureassignment.LeafIssuanceAdmission{},
 	); !errors.Is(err, ErrLeafRequestInvalid) {
 		t.Fatalf("forged admission error = %v", err)
 	}

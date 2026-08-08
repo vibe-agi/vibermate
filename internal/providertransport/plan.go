@@ -2,9 +2,10 @@ package providertransport
 
 import (
 	"bytes"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"fmt"
-	"net"
 	"net/http"
 	"net/url"
 	pathpkg "path"
@@ -12,10 +13,13 @@ import (
 	"unicode"
 	"unicode/utf8"
 
-	"github.com/vibe-agi/vibermate/internal/access"
+	"github.com/vibe-agi/vibermate/internal/environment"
 	"github.com/vibe-agi/vibermate/internal/offlinehold"
+	"github.com/vibe-agi/vibermate/internal/originidentity"
+	"github.com/vibe-agi/vibermate/internal/providerauth"
 	"github.com/vibe-agi/vibermate/internal/secretstore"
 	"github.com/vibe-agi/vibermate/internal/transportprofile"
+	"github.com/vibe-agi/vibermate/internal/wireprofile"
 )
 
 const (
@@ -24,93 +28,52 @@ const (
 )
 
 type Target struct {
-	origin        string
-	scheme        string
-	httpAuthority string
-	networkHost   string
-	tlsServerName string
-	basePath      string
-	port          uint16
-	transportKind access.ProviderTransportKind
+	origin originidentity.ProviderOrigin
 }
 
-func NewTarget(compiled access.CompiledProviderTarget) (Target, error) {
-	resource := compiled.Target()
-	origin := resource.Origin
-	parsed, err := url.Parse(origin.String())
-	if err != nil {
-		return Target{}, fmt.Errorf("parse compiled provider target: %w", err)
+func NewTarget(origin originidentity.ProviderOrigin) (Target, error) {
+	if err := origin.Validate(); err != nil {
+		return Target{}, errors.New("provider target origin is invalid")
 	}
-	if parsed.Scheme != origin.Scheme() ||
-		parsed.Host == "" ||
-		parsed.Hostname() != origin.NetworkHost() ||
-		origin.HTTPAuthority() != compiled.HTTPAuthority() ||
-		origin.NetworkHost() != compiled.NetworkHost() ||
-		origin.TLSServerName() != compiled.TLSServerName() ||
-		origin.BasePath() != compiled.BasePath() ||
-		origin.Port() != compiled.Port() ||
-		origin.TransportKind() != compiled.TransportKind() {
-		return Target{}, errors.New("compiled provider target network identities disagree")
-	}
-	return Target{
-		origin:        origin.String(),
-		scheme:        parsed.Scheme,
-		httpAuthority: compiled.HTTPAuthority(),
-		networkHost:   compiled.NetworkHost(),
-		tlsServerName: compiled.TLSServerName(),
-		basePath:      compiled.BasePath(),
-		port:          compiled.Port(),
-		transportKind: compiled.TransportKind(),
-	}, nil
+	return Target{origin: origin}, nil
 }
 
-func (target Target) Origin() string {
+func (target Target) Origin() originidentity.ProviderOrigin {
 	return target.origin
 }
 
 func (target Target) HTTPAuthority() string {
-	return target.httpAuthority
+	return target.origin.HTTPAuthority()
 }
 
 func (target Target) NetworkHost() string {
-	return target.networkHost
+	return target.origin.Host()
 }
 
 func (target Target) TLSServerName() string {
-	return target.tlsServerName
+	if target.origin.Transport() == originidentity.ProviderTransportStrictTLS {
+		return target.origin.Host()
+	}
+	return ""
 }
 
-func (target Target) TransportKind() access.ProviderTransportKind {
-	return target.transportKind
+func (target Target) TransportKind() originidentity.ProviderTransport {
+	return target.origin.Transport()
 }
 
 func (target Target) BasePath() string {
-	return target.basePath
+	return target.origin.BasePath()
 }
 
 func (target Target) endpointAuthority() (string, error) {
 	if err := target.validate(); err != nil {
 		return "", errors.New("provider target endpoint authority is invalid")
 	}
-	return net.JoinHostPort(
-		target.networkHost,
-		fmt.Sprintf("%d", target.port),
-	), nil
+	return target.origin.EndpointAuthority(), nil
 }
 
 func (target Target) validate() error {
-	if target.origin == "" {
-		return errors.New("provider target is empty")
-	}
-	origin, err := access.NewProviderOrigin(target.origin)
-	if err != nil ||
-		origin.Scheme() != target.scheme ||
-		origin.HTTPAuthority() != target.httpAuthority ||
-		origin.NetworkHost() != target.networkHost ||
-		origin.TLSServerName() != target.tlsServerName ||
-		origin.BasePath() != target.basePath ||
-		origin.Port() != target.port ||
-		origin.TransportKind() != target.transportKind {
+	if err := target.origin.Validate(); err != nil {
 		return errors.New("provider target is not canonical")
 	}
 	return nil
@@ -123,29 +86,98 @@ func (target Target) validateRequestIdentity(request *http.Request) error {
 	if err := target.validate(); err != nil {
 		return err
 	}
-	if request.URL.Scheme != target.scheme ||
-		request.URL.Host != target.httpAuthority ||
-		request.Host != target.httpAuthority {
+	if request.URL.Scheme != target.origin.Scheme() ||
+		request.URL.Host != target.origin.HTTPAuthority() ||
+		request.Host != target.origin.HTTPAuthority() {
 		return errors.New("provider request identity is not frozen")
 	}
 	return nil
 }
 
-// NewProbeTarget binds a logical provider target to the exact immutable Access
-// plan and network identities used by the corresponding provider request.
+// RequestProvenance binds one outbound to the immutable Environment and Route
+// that authorized it. It contains no mutable aggregate, account secret, or
+// client payload.
+type RequestProvenance struct {
+	environmentID       environment.EnvironmentID
+	environmentRevision environment.Revision
+	environmentDigest   environment.CandidateDigest
+	routeID             environment.UpstreamRouteID
+	routeRevision       environment.Revision
+}
+
+func NewRequestProvenance(
+	environmentID environment.EnvironmentID,
+	environmentRevision environment.Revision,
+	environmentDigest environment.CandidateDigest,
+	routeID environment.UpstreamRouteID,
+	routeRevision environment.Revision,
+) (RequestProvenance, error) {
+	provenance := RequestProvenance{
+		environmentID: environmentID, environmentRevision: environmentRevision,
+		environmentDigest: environmentDigest, routeID: routeID, routeRevision: routeRevision,
+	}
+	if err := provenance.validate(); err != nil {
+		return RequestProvenance{}, err
+	}
+	return provenance, nil
+}
+
+func (provenance RequestProvenance) EnvironmentID() environment.EnvironmentID {
+	return provenance.environmentID
+}
+func (provenance RequestProvenance) EnvironmentRevision() environment.Revision {
+	return provenance.environmentRevision
+}
+func (provenance RequestProvenance) EnvironmentDigest() environment.CandidateDigest {
+	return provenance.environmentDigest
+}
+func (provenance RequestProvenance) RouteID() environment.UpstreamRouteID {
+	return provenance.routeID
+}
+func (provenance RequestProvenance) RouteRevision() environment.Revision {
+	return provenance.routeRevision
+}
+
+func (provenance RequestProvenance) validate() error {
+	environmentID, environmentErr := environment.NewEnvironmentID(provenance.environmentID.String())
+	routeID, routeErr := environment.NewUpstreamRouteID(provenance.routeID.String())
+	digest, digestErr := environment.ParseCandidateDigest(provenance.environmentDigest.String())
+	if environmentErr != nil || environmentID != provenance.environmentID ||
+		routeErr != nil || routeID != provenance.routeID ||
+		digestErr != nil || digest != provenance.environmentDigest ||
+		provenance.environmentDigest == (environment.CandidateDigest{}) ||
+		provenance.environmentRevision == 0 || provenance.environmentRevision > environment.MaxRevision ||
+		provenance.routeRevision == 0 || provenance.routeRevision > environment.MaxRevision {
+		return errors.New("provider request provenance is invalid")
+	}
+	return nil
+}
+
+func (provenance RequestProvenance) probePlanDigest() string {
+	digest := sha256.Sum256([]byte(strings.Join([]string{
+		provenance.environmentID.String(),
+		fmt.Sprintf("%d", provenance.environmentRevision),
+		provenance.environmentDigest.String(),
+		provenance.routeID.String(),
+		fmt.Sprintf("%d", provenance.routeRevision),
+	}, "\x00")))
+	return hex.EncodeToString(digest[:])
+}
+
+// NewProbeTarget binds a provider network identity to one frozen Environment
+// and Route. TargetRef remains the caller's stable target reference while the
+// explicit plan revision and digest prevent distinct frozen plans from
+// coalescing in Offline Hold.
 func NewProbeTarget(
 	targetRef string,
-	revision access.Revision,
-	planHash access.PlanHash,
+	provenance RequestProvenance,
 	target Target,
 ) (offlinehold.ProbeTarget, error) {
 	if err := validateOpaqueIdentity("provider target reference", targetRef); err != nil {
 		return offlinehold.ProbeTarget{}, err
 	}
-	if revision == 0 || planHash.IsZero() {
-		return offlinehold.ProbeTarget{}, errors.New(
-			"provider probe target has no Access plan identity",
-		)
+	if err := provenance.validate(); err != nil {
+		return offlinehold.ProbeTarget{}, err
 	}
 	if err := target.validate(); err != nil {
 		return offlinehold.ProbeTarget{}, err
@@ -155,14 +187,14 @@ func NewProbeTarget(
 		return offlinehold.ProbeTarget{}, err
 	}
 	frozen := offlinehold.ProbeTarget{
-		Kind:           offlinehold.EgressProvider,
-		Transport:      probeTransport,
-		TargetRef:      targetRef,
-		NetworkOrigin:  target.origin,
-		HTTPAuthority:  target.httpAuthority,
-		TLSServerName:  target.tlsServerName,
-		AccessRevision: uint64(revision),
-		PlanHash:       planHash.String(),
+		Kind:          offlinehold.EgressProvider,
+		Transport:     probeTransport,
+		TargetRef:     targetRef,
+		NetworkOrigin: target.origin.String(),
+		HTTPAuthority: target.origin.HTTPAuthority(),
+		TLSServerName: target.TLSServerName(),
+		PlanRevision:  uint64(provenance.environmentRevision),
+		PlanDigest:    provenance.probePlanDigest(),
 	}
 	if err := frozen.Validate(); err != nil {
 		return offlinehold.ProbeTarget{}, err
@@ -174,10 +206,10 @@ func (target Target) probeTransportKind() (
 	offlinehold.ProbeTransportKind,
 	error,
 ) {
-	switch target.transportKind {
-	case access.ProviderTransportStrictTLS:
+	switch target.origin.Transport() {
+	case originidentity.ProviderTransportStrictTLS:
 		return offlinehold.ProbeTransportStrictTLS, nil
-	case access.ProviderTransportLoopbackCleartext:
+	case originidentity.ProviderTransportLoopbackCleartext:
 		return offlinehold.ProbeTransportLoopbackCleartext, nil
 	default:
 		return "", errors.New("provider target transport kind is unsupported")
@@ -185,25 +217,25 @@ func (target Target) probeTransportKind() (
 }
 
 type RequestOptions struct {
-	RequestID        string
-	TargetRef        string
-	Target           Target
-	AccessRevision   access.Revision
-	PlanHash         access.PlanHash
-	Action           *offlinehold.ActionLease
-	Method           string
-	RelativePath     string
-	Headers          http.Header
-	Body             []byte
-	RawQuery         string
-	CredentialSource access.CredentialSource
-	ClientOrigin     access.ClientOrigin
-	SecretRef        access.SecretRef
-	AuthDriverRef    access.AuthDriverRef
-	WireProfile      access.CompiledUpstreamWireProfile
-	ClientProtocol   access.ApplicationProtocol
-	ClientUserAgent  string
-	ClientHello      transportprofile.Observation
+	RequestID       string
+	TargetRef       string
+	Target          Target
+	Provenance      RequestProvenance
+	Action          *offlinehold.ActionLease
+	Method          string
+	RelativePath    string
+	Headers         http.Header
+	Body            []byte
+	RawQuery        string
+	CredentialMode  providerauth.CredentialMode
+	ClientOrigin    originidentity.ClientOrigin
+	AccountRef      providerauth.AccountRef
+	SecretRef       secretstore.Reference
+	AuthDriverRef   providerauth.DriverRef
+	WireProfile     wireprofile.CompiledUpstreamWireProfile
+	ClientProtocol  wireprofile.ApplicationProtocol
+	ClientUserAgent string
+	ClientHello     transportprofile.Observation
 	// ConnectionID, ExchangeID, and ParentAttemptID associate this outbound
 	// with the client connection, the Exchange, and the upstream attempt that
 	// caused it. They travel as typed references so no identity encodes
@@ -220,28 +252,30 @@ type RequestOptions struct {
 // Request is a frozen provider representation. Its URL, authority, body,
 // credential reference, and auth driver cannot be mutated after construction.
 type Request struct {
-	connectionID     string
-	exchangeID       string
-	parentAttemptID  string
-	egressAttemptID  string
-	requestID        string
-	targetRef        string
-	target           Target
-	probeTarget      offlinehold.ProbeTarget
-	action           *offlinehold.ActionLease
-	method           string
-	relativePath     string
-	headers          http.Header
-	body             []byte
-	rawQuery         string
-	credentialSource access.CredentialSource
-	secretReference  secretstore.Reference
-	authDriverRef    access.AuthDriverRef
-	wireProfile      access.CompiledUpstreamWireProfile
-	wireVariant      access.CompiledUpstreamWireVariant
-	clientProtocol   access.ApplicationProtocol
-	clientUserAgent  string
-	clientHello      transportprofile.Observation
+	connectionID    string
+	exchangeID      string
+	parentAttemptID string
+	egressAttemptID string
+	requestID       string
+	targetRef       string
+	provenance      RequestProvenance
+	target          Target
+	probeTarget     offlinehold.ProbeTarget
+	action          *offlinehold.ActionLease
+	method          string
+	relativePath    string
+	headers         http.Header
+	body            []byte
+	rawQuery        string
+	credentialMode  providerauth.CredentialMode
+	accountRef      providerauth.AccountRef
+	secretReference secretstore.Reference
+	authDriverRef   providerauth.DriverRef
+	wireProfile     wireprofile.CompiledUpstreamWireProfile
+	wireVariant     wireprofile.CompiledUpstreamWireVariant
+	clientProtocol  wireprofile.ApplicationProtocol
+	clientUserAgent string
+	clientHello     transportprofile.Observation
 }
 
 // WirePresentationEvidence is the redacted product-level presentation chosen
@@ -250,17 +284,17 @@ type Request struct {
 type WirePresentationEvidence struct {
 	RequestedRef     string
 	EffectiveRef     string
-	Revision         access.Revision
-	Mode             access.UpstreamWireMode
-	Product          access.UpstreamWireProduct
-	ClientProtocol   access.ApplicationProtocol
-	UpstreamProtocol access.ApplicationProtocol
+	Revision         wireprofile.Revision
+	Mode             wireprofile.UpstreamWireMode
+	Product          wireprofile.UpstreamWireProduct
+	ClientProtocol   wireprofile.ApplicationProtocol
+	UpstreamProtocol wireprofile.ApplicationProtocol
 	EvidenceDigest   string
 }
 
 func NewWirePresentationEvidence(
-	profile access.CompiledUpstreamWireProfile,
-	clientProtocol access.ApplicationProtocol,
+	profile wireprofile.CompiledUpstreamWireProfile,
+	clientProtocol wireprofile.ApplicationProtocol,
 ) WirePresentationEvidence {
 	evidence := WirePresentationEvidence{
 		RequestedRef:   profile.Ref().String(),
@@ -288,8 +322,7 @@ func NewRequest(options RequestOptions) (Request, error) {
 	}
 	probeTarget, err := NewProbeTarget(
 		options.TargetRef,
-		options.AccessRevision,
-		options.PlanHash,
+		options.Provenance,
 		options.Target,
 	)
 	if err != nil {
@@ -340,37 +373,43 @@ func NewRequest(options RequestOptions) (Request, error) {
 		return Request{}, err
 	}
 	var reference secretstore.Reference
-	switch options.CredentialSource {
-	case access.CredentialSourceManagedAccount:
+	switch options.CredentialMode {
+	case providerauth.CredentialManaged:
 		reference, err = secretstore.ParseReference(options.SecretRef.String())
 		if err != nil {
 			return Request{}, err
 		}
-		if options.AuthDriverRef.String() == "" {
+		if reference != options.SecretRef {
+			return Request{}, errors.New("provider secret reference is not canonical")
+		}
+		driver, driverErr := providerauth.NewDriverRef(options.AuthDriverRef.String())
+		if driverErr != nil || driver != options.AuthDriverRef {
 			return Request{}, errors.New("provider AuthDriver reference is empty")
+		}
+		if err := options.AccountRef.Validate(); err != nil {
+			return Request{}, errors.New("provider account reference is invalid")
 		}
 		if options.ClientOrigin.String() != "" {
 			return Request{}, errors.New(
 				"managed provider request carries a client origin authority",
 			)
 		}
-	case access.CredentialSourceClientPassthrough:
-		clientOrigin, originErr := access.NewClientOrigin(
-			options.ClientOrigin.String(),
-		)
+	case providerauth.CredentialClientPassthrough:
+		clientOrigin, originErr := originidentity.ParseClientOrigin(options.ClientOrigin.String())
 		if originErr != nil || clientOrigin != options.ClientOrigin {
 			return Request{}, errors.New(
 				"client passthrough origin is not canonical",
 			)
 		}
-		if options.Target.origin != options.ClientOrigin.String() ||
-			options.Target.basePath != "" {
+		if options.Target.origin.String() != options.ClientOrigin.String() ||
+			options.Target.origin.BasePath() != "" {
 			return Request{}, errors.New(
 				"client passthrough target differs from the exact client origin",
 			)
 		}
 		if options.SecretRef.String() != "" ||
-			options.AuthDriverRef.String() != "" {
+			options.AuthDriverRef.String() != "" ||
+			options.AccountRef != (providerauth.AccountRef{}) {
 			return Request{}, errors.New(
 				"client passthrough request carries managed credential authority",
 			)
@@ -384,8 +423,7 @@ func NewRequest(options RequestOptions) (Request, error) {
 			"provider upstream wire profile is incomplete",
 		)
 	}
-	if options.ClientProtocol != access.ApplicationProtocolHTTP1 &&
-		options.ClientProtocol != access.ApplicationProtocolHTTP2 {
+	if !options.ClientProtocol.Valid() {
 		return Request{}, errors.New("provider client HTTP protocol is invalid")
 	}
 	if options.ClientUserAgent != "" &&
@@ -399,12 +437,12 @@ func NewRequest(options RequestOptions) (Request, error) {
 		)
 	}
 	requestedTransport := wireVariant.TransportFingerprintPlan().Requested()
-	expectedTransport := access.HTTPTransportHTTP1
-	if options.ClientProtocol == access.ApplicationProtocolHTTP2 {
-		expectedTransport = access.HTTPTransportHTTP2
+	expectedTransport := wireprofile.HTTPTransportHTTP1
+	if options.ClientProtocol == wireprofile.ApplicationProtocolHTTP2 {
+		expectedTransport = wireprofile.HTTPTransportHTTP2
 	}
-	if options.Target.transportKind == access.ProviderTransportLoopbackCleartext &&
-		expectedTransport == access.HTTPTransportHTTP2 {
+	if options.Target.origin.Transport() == originidentity.ProviderTransportLoopbackCleartext &&
+		expectedTransport == wireprofile.HTTPTransportHTTP2 {
 		return Request{}, errors.New(
 			"loopback cleartext provider does not support HTTP/2 presentation",
 		)
@@ -418,28 +456,30 @@ func NewRequest(options RequestOptions) (Request, error) {
 		)
 	}
 	return Request{
-		connectionID:     options.ConnectionID,
-		exchangeID:       options.ExchangeID,
-		parentAttemptID:  options.ParentAttemptID,
-		egressAttemptID:  options.EgressAttemptID,
-		requestID:        options.RequestID,
-		targetRef:        options.TargetRef,
-		target:           options.Target,
-		probeTarget:      probeTarget,
-		action:           options.Action,
-		method:           options.Method,
-		relativePath:     relativePath,
-		headers:          options.Headers.Clone(),
-		body:             bytes.Clone(options.Body),
-		rawQuery:         options.RawQuery,
-		credentialSource: options.CredentialSource,
-		secretReference:  reference,
-		authDriverRef:    options.AuthDriverRef,
-		wireProfile:      options.WireProfile,
-		wireVariant:      wireVariant,
-		clientProtocol:   options.ClientProtocol,
-		clientUserAgent:  options.ClientUserAgent,
-		clientHello:      options.ClientHello,
+		connectionID:    options.ConnectionID,
+		exchangeID:      options.ExchangeID,
+		parentAttemptID: options.ParentAttemptID,
+		egressAttemptID: options.EgressAttemptID,
+		requestID:       options.RequestID,
+		targetRef:       options.TargetRef,
+		provenance:      options.Provenance,
+		target:          options.Target,
+		probeTarget:     probeTarget,
+		action:          options.Action,
+		method:          options.Method,
+		relativePath:    relativePath,
+		headers:         options.Headers.Clone(),
+		body:            bytes.Clone(options.Body),
+		rawQuery:        options.RawQuery,
+		credentialMode:  options.CredentialMode,
+		accountRef:      options.AccountRef,
+		secretReference: reference,
+		authDriverRef:   options.AuthDriverRef,
+		wireProfile:     options.WireProfile,
+		wireVariant:     wireVariant,
+		clientProtocol:  options.ClientProtocol,
+		clientUserAgent: options.ClientUserAgent,
+		clientHello:     options.ClientHello,
 	}, nil
 }
 
@@ -477,11 +517,17 @@ func (request Request) Body() []byte {
 	return bytes.Clone(request.body)
 }
 
-func (request Request) CredentialSource() access.CredentialSource {
-	return request.credentialSource
+func (request Request) Provenance() RequestProvenance { return request.provenance }
+
+func (request Request) CredentialMode() providerauth.CredentialMode {
+	return request.credentialMode
 }
 
-func (request Request) AuthDriverRef() access.AuthDriverRef {
+func (request Request) AccountRef() (providerauth.AccountRef, bool) {
+	return request.accountRef, request.credentialMode == providerauth.CredentialManaged
+}
+
+func (request Request) AuthDriverRef() providerauth.DriverRef {
 	return request.authDriverRef
 }
 
@@ -493,13 +539,13 @@ func (request Request) WirePresentationEvidence() WirePresentationEvidence {
 }
 
 func (request Request) buildURL() *url.URL {
-	path := pathpkg.Join(request.target.basePath, request.relativePath)
+	path := pathpkg.Join(request.target.origin.BasePath(), request.relativePath)
 	if !strings.HasPrefix(path, "/") {
 		path = "/" + path
 	}
 	return &url.URL{
-		Scheme:   request.target.scheme,
-		Host:     request.target.httpAuthority,
+		Scheme:   request.target.origin.Scheme(),
+		Host:     request.target.origin.HTTPAuthority(),
 		Path:     path,
 		RawQuery: request.rawQuery,
 	}

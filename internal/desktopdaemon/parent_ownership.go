@@ -13,7 +13,6 @@ type ParentOwnership struct {
 	context  context.Context
 	cancel   context.CancelFunc
 	lifetime io.ReadCloser
-	done     chan struct{}
 
 	closeOnce sync.Once
 	closeErr  error
@@ -31,7 +30,6 @@ func NewParentOwnership(
 		context:  ownedContext,
 		cancel:   cancel,
 		lifetime: lifetime,
-		done:     make(chan struct{}),
 	}
 	go ownership.observe()
 	return ownership, nil
@@ -53,13 +51,11 @@ func (ownership *ParentOwnership) Close() error {
 	ownership.closeOnce.Do(func() {
 		ownership.cancel()
 		ownership.closeErr = ownership.lifetime.Close()
-		<-ownership.done
 	})
 	return ownership.closeErr
 }
 
 func (ownership *ParentOwnership) observe() {
-	defer close(ownership.done)
 	var probe [1]byte
 	for {
 		read, err := ownership.lifetime.Read(probe[:])

@@ -14,7 +14,9 @@ import (
 
 	"github.com/vibe-agi/vibermate/internal/blindtunnel"
 	"github.com/vibe-agi/vibermate/internal/connectionevent"
+	"github.com/vibe-agi/vibermate/internal/connectionpolicy"
 	"github.com/vibe-agi/vibermate/internal/egressaudit"
+	"github.com/vibe-agi/vibermate/internal/environment"
 	"github.com/vibe-agi/vibermate/internal/offlinehold"
 )
 
@@ -71,10 +73,15 @@ func TestBlindTunnelDoesNotDialBeforeAuditAppend(t *testing.T) {
 			Label:      "fixture",
 			Confidence: connectionevent.SourceConfidenceConfigured,
 		},
-		"allow-target",
+		connectionpolicy.Outcome{
+			Decision: connectionpolicy.DecisionAllow,
+			RuleID:   "allow-target", Revision: 1,
+		},
 		"target.example:443",
 		"target.example",
 		443,
+		environment.SystemTransparentSnapshot(),
+		&deferredConnectionCloseHandle{},
 	)
 	if !terminal {
 		t.Fatal("blind path did not own its ConnectionEvent terminal")

@@ -68,7 +68,7 @@ func TestADefaultLaunchOutlastsAnAskThatTakesLongerThanAControlCall(t *testing.T
 	started := time.Now()
 	finished := make(chan error, 1)
 	go func() {
-		_, runErr := launcher.Run(context.Background(), []string{"echo"})
+		_, runErr := launcher.Run(context.Background(), transparentLaunch("echo"))
 		finished <- runErr
 	}()
 

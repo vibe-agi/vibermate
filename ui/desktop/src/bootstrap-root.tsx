@@ -83,7 +83,8 @@ export function BootstrapRoot({
   const [failureKey, setFailureKey] = useState<DesktopFailureMessageKey>();
   const [attempt, setAttempt] = useState(0);
   const clientRef = useRef<ControlClient | undefined>(undefined);
-  const clientLeases = useRef(new Map<ControlClient, number>());
+  const models = useRef(new Set<DashboardQueryRuntime>());
+  const modelRef = useRef<DashboardQueryRuntime | undefined>(undefined);
   const rootLeases = useRef(0);
   const lifecycleEpoch = useRef(0);
   const connectionAttempt = useRef<
@@ -94,23 +95,31 @@ export function BootstrapRoot({
       }
     | undefined
   >(undefined);
-  const model = useMemo(
-    () =>
-      client === undefined ? undefined : new DashboardQueryRuntime(client),
-    [client],
-  );
+  const model = useMemo(() => {
+    if (client === undefined) {
+      return undefined;
+    }
+    const created = new DashboardQueryRuntime(client);
+    models.current.add(created);
+    return created;
+  }, [client]);
+  modelRef.current = model;
 
   useEffect(() => {
     rootLeases.current += 1;
     return () => {
       rootLeases.current -= 1;
-      queueMicrotask(() => {
+      globalThis.setTimeout(() => {
         if (rootLeases.current === 0) {
           const owned = clientRef.current;
           clientRef.current = undefined;
           owned?.close();
+          for (const ownedModel of models.current) {
+            void ownedModel.dispose();
+          }
+          models.current.clear();
         }
-      });
+      }, 0);
     };
   }, []);
 
@@ -123,6 +132,11 @@ export function BootstrapRoot({
       connectionAttempt.current = undefined;
       clientRef.current?.close();
       clientRef.current = undefined;
+      const ownedModel = modelRef.current;
+      if (ownedModel !== undefined) {
+        models.current.delete(ownedModel);
+        void ownedModel.dispose();
+      }
       setClient(undefined);
       setFailureKey("app.runtime.failure.daemon_exited");
     });
@@ -180,44 +194,6 @@ export function BootstrapRoot({
       active = false;
     };
   }, [attempt, client, connect, failureKey]);
-
-  useEffect(
-    () => () => {
-      if (model !== undefined) {
-        void model.dispose();
-      }
-    },
-    [model],
-  );
-
-  useEffect(() => {
-    if (client === undefined) {
-      return;
-    }
-    const leases = clientLeases.current;
-    leases.set(client, (leases.get(client) ?? 0) + 1);
-    return () => {
-      const current = leases.get(client) ?? 0;
-      if (current <= 1) {
-        leases.delete(client);
-      } else {
-        leases.set(client, current - 1);
-      }
-      // React StrictMode immediately remounts an effect after its development
-      // cleanup. Let that remount reclaim the same client before deciding that
-      // the capability has genuinely lost its UI owner.
-      queueMicrotask(() => {
-        if (!leases.has(client)) {
-          if (clientRef.current === client) {
-            clientRef.current = undefined;
-            client.close();
-          } else if (clientRef.current !== undefined) {
-            client.close();
-          }
-        }
-      });
-    };
-  }, [client]);
 
   if (failureKey !== undefined) {
     const runtimeStopped =

@@ -17,6 +17,7 @@ import (
 	"github.com/vibe-agi/vibermate/internal/capturegrant"
 	"github.com/vibe-agi/vibermate/internal/capturerun"
 	"github.com/vibe-agi/vibermate/internal/controlprincipal"
+	"github.com/vibe-agi/vibermate/internal/environment"
 )
 
 const (
@@ -73,6 +74,7 @@ type Handler struct {
 }
 
 type CreateRequest struct {
+	EnvironmentID  string   `json:"environmentId"`
 	CWD            string   `json:"cwd"`
 	Command        []string `json:"command"`
 	ExecutablePath string   `json:"executablePath"`
@@ -171,10 +173,16 @@ func (handler *Handler) create(
 		writeProblem(writer, http.StatusUnprocessableEntity, ReasonInvalidCaptureRun)
 		return
 	}
+	environmentID, err := environment.NewEnvironmentID(input.EnvironmentID)
+	if err != nil {
+		writeProblem(writer, http.StatusUnprocessableEntity, ReasonInvalidCaptureRun)
+		return
+	}
 	grant, err := handler.issuer.IssueCaptureRun(
 		request.Context(),
 		principal,
 		capturegrant.CaptureRunRequest{
+			EnvironmentID:  environmentID,
 			CWD:            input.CWD,
 			Command:        append([]string(nil), input.Command...),
 			ExecutablePath: input.ExecutablePath,

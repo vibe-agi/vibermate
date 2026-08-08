@@ -13,7 +13,6 @@ import (
 // become launch authority when read back.
 type CaptureRunAuditView struct {
 	capturecontrol.CaptureRunView
-	IngressProfileID        string                    `json:"ingressProfileId"`
 	CanonicalExecutablePath string                    `json:"canonicalExecutablePath"`
 	State                   capturerun.State          `json:"state"`
 	Observation             capturerun.Observation    `json:"observation"`
@@ -42,7 +41,6 @@ func CaptureRunAuditPageOf(page capturerun.Page) CaptureRunAuditPage {
 }
 
 func CaptureRunAuditViewOf(view capturerun.View) CaptureRunAuditView {
-	ingressProfileID, _ := capturerun.IngressProfileID(view.ID)
 	var firstObservedAt *time.Time
 	if !view.FirstObservedAt.IsZero() {
 		observedAt := view.FirstObservedAt
@@ -50,7 +48,6 @@ func CaptureRunAuditViewOf(view capturerun.View) CaptureRunAuditView {
 	}
 	return CaptureRunAuditView{
 		CaptureRunView:          capturecontrol.CaptureRunViewOf(view),
-		IngressProfileID:        ingressProfileID,
 		CanonicalExecutablePath: view.CanonicalExecutablePath,
 		State:                   view.State,
 		Observation:             view.Observation,

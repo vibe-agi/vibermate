@@ -116,7 +116,7 @@ while :; do sleep 1; done
 	}
 	finished := make(chan launcherOutcome, 1)
 	go func() {
-		code, runErr := launcher.Run(context.Background(), []string{"codex"})
+		code, runErr := launcher.Run(context.Background(), transparentLaunch("codex"))
 		finished <- launcherOutcome{code: code, err: runErr}
 	}()
 	waitForChildReady(

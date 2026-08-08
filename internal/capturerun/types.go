@@ -424,9 +424,9 @@ type Evidence struct {
 	LocalUserLabel  string
 }
 
-// IngressProfileID returns the exact short-lived ingress identity owned by a
+// AdmissionRef returns the exact short-lived ingress identity owned by a
 // run. It is safe to expose as an audit join key and never carries a bearer.
-func IngressProfileID(runID string) (string, error) {
+func AdmissionRef(runID string) (string, error) {
 	if err := validateID(runID); err != nil {
 		return "", err
 	}

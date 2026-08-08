@@ -29,7 +29,7 @@ func TestExchangeDetailProjectsOrderedRedactedEvidence(t *testing.T) {
 			Decision: egressaudit.DecisionRef{
 				PolicyID:       "policy-detail",
 				PolicyRevision: 1,
-				Authority:      egressaudit.AuthorityAccess,
+				Authority:      egressaudit.AuthorityEnvironment,
 				RuleID:         "rule-detail",
 				ProxyID:        "company-proxy",
 			},
@@ -41,21 +41,26 @@ func TestExchangeDetailProjectsOrderedRedactedEvidence(t *testing.T) {
 		return attempt
 	}
 	record := activity.Record{
-		Sequence:          7,
-		ID:                "activity-detail",
-		OccurredAt:        time.Date(2026, 8, 3, 12, 0, 2, 0, time.UTC),
-		Kind:              activity.KindExchangeCompleted,
-		AccessID:          "access-detail",
-		AccessName:        "Detail Access",
-		AccessRevision:    4,
-		SubjectID:         "exchange-detail",
-		Status:            activity.StatusFailed,
-		ReasonCode:        "provider_transport_failed",
-		SourceKind:        activity.SourceSystemProxy,
-		SourceDisplayName: "ViberMate runtime",
-		SourceRecognition: activity.SourceRecognitionUnknown,
-		IngressProfileID:  "system-proxy",
-		ConnectionID:      "connection-detail",
+		Sequence:               7,
+		ID:                     "activity-detail",
+		OccurredAt:             time.Date(2026, 8, 3, 12, 0, 2, 0, time.UTC),
+		Kind:                   activity.KindExchangeCompleted,
+		EnvironmentID:          "environment-detail",
+		EnvironmentRevision:    4,
+		EnvironmentDigest:      "4141414141414141414141414141414141414141414141414141414141414141",
+		ClientEndpointID:       "endpoint-detail",
+		ClientEndpointRevision: 2,
+		ProtocolPlanID:         "protocol-detail",
+		ProtocolPlanRevision:   3,
+		RouteID:                "route-detail",
+		RouteRevision:          5,
+		SubjectID:              "exchange-detail",
+		Status:                 activity.StatusFailed,
+		ReasonCode:             "provider_transport_failed",
+		SourceKind:             activity.SourceSystemProxy,
+		SourceDisplayName:      "ViberMate runtime",
+		SourceRecognition:      activity.SourceRecognitionUnknown,
+		ConnectionID:           "connection-detail",
 	}
 	detail, err := exchangeDetailOf(record, egressaudit.Page{
 		Items: []egressaudit.Record{
@@ -68,7 +73,9 @@ func TestExchangeDetailProjectsOrderedRedactedEvidence(t *testing.T) {
 		t.Fatal(err)
 	}
 	if detail.ID != record.SubjectID ||
-		detail.AccessID != record.AccessID ||
+		detail.Environment.ID != record.EnvironmentID ||
+		detail.Environment.Revision != record.EnvironmentRevision ||
+		detail.Environment.RouteID != record.RouteID ||
 		detail.Status != string(record.Status) ||
 		detail.ProcessingTrace.Result != record.ReasonCode ||
 		detail.ProcessingTrace.EgressProxyID != "company-proxy" ||
@@ -133,13 +140,13 @@ func TestActivityListQueryIsClosedAndBounded(t *testing.T) {
 	}
 	parsed, err := parseActivityListQuery(
 		"limit=200&cursor=" + cursor +
-			"&kind=exchange&captureRunId=run-one&accessId=work",
+			"&kind=exchange&captureRunId=run-one&environmentId=work",
 	)
 	if err != nil ||
 		parsed.limit != 200 ||
 		parsed.beforeSequence != 91 ||
 		parsed.captureRunID != "run-one" ||
-		parsed.accessID != "work" {
+		parsed.environmentID != "work" {
 		t.Fatalf("parsed Activity query = %+v, %v", parsed, err)
 	}
 	for _, invalid := range []string{
@@ -155,8 +162,8 @@ func TestActivityListQueryIsClosedAndBounded(t *testing.T) {
 		"cursor=" + cursor + "&cursor=" + cursor,
 		"captureRunId=",
 		"captureRunId=run-one&captureRunId=run-two",
-		"accessId=",
-		"accessId=work&accessId=personal",
+		"environmentId=",
+		"environmentId=work&environmentId=personal",
 		"kind=connection",
 		"kind=exchange&kind=exchange",
 		"limit=10;cursor=" + cursor,

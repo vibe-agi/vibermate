@@ -14,7 +14,7 @@ import (
 	"time"
 )
 
-const testDesktopNavigationLocator = "settings/recovery"
+const testDesktopNavigationLocator = "settings"
 
 func TestPackagedDesktopInvocationUsesIsolatedHome(t *testing.T) {
 	t.Parallel()
@@ -122,7 +122,7 @@ func TestDesktopNavigationFixtureRejectsSymbolicLinkDestination(t *testing.T) {
 		t.Fatal(err)
 	}
 	target := filepath.Join(t.TempDir(), "target.json")
-	if err := os.WriteFile(target, canonicalDesktopNavigationState("overview"), 0o600); err != nil {
+	if err := os.WriteFile(target, canonicalDesktopNavigationState("captures"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	if err := os.Remove(path); err != nil {
@@ -146,14 +146,10 @@ func TestDesktopNavigationRestoreLocatorIsFreshAndBounded(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.HasPrefix(locator, "access/") ||
-		!strings.HasSuffix(locator, "/routing") {
+	if !strings.HasPrefix(locator, "environments/") {
 		t.Fatalf("navigation locator = %q", locator)
 	}
-	encodedIdentity := strings.TrimSuffix(
-		strings.TrimPrefix(locator, "access/"),
-		"/routing",
-	)
+	encodedIdentity := strings.TrimPrefix(locator, "environments/")
 	identity, err := hex.DecodeString(encodedIdentity)
 	if err != nil || len(identity) != 16 {
 		t.Fatalf("navigation locator identity = %q, error = %v", encodedIdentity, err)

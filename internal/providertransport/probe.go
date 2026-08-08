@@ -8,8 +8,8 @@ import (
 	"net"
 	"time"
 
-	"github.com/vibe-agi/vibermate/internal/access"
 	"github.com/vibe-agi/vibermate/internal/offlinehold"
+	"github.com/vibe-agi/vibermate/internal/originidentity"
 )
 
 // ProviderProber probes a frozen provider target without sending HTTP headers,
@@ -109,8 +109,8 @@ func (prober *ProviderProber) Probe(
 				err,
 			)
 		}
-		if target.transportKind ==
-			access.ProviderTransportLoopbackCleartext {
+		if target.TransportKind() ==
+			originidentity.ProviderTransportLoopbackCleartext {
 			peerErr := validateLoopbackPeer(raw.RemoteAddr(), target)
 			closeErr := raw.Close()
 			contextErr := targetContext.Err()
@@ -155,7 +155,7 @@ func (prober *ProviderProber) Probe(
 		tlsConnection := tls.Client(raw, &tls.Config{
 			MinVersion: tls.VersionTLS12,
 			RootCAs:    prober.roots,
-			ServerName: target.tlsServerName,
+			ServerName: target.TLSServerName(),
 		})
 		handshakeErr := tlsConnection.HandshakeContext(targetContext)
 		closeErr := raw.Close()
@@ -185,26 +185,24 @@ func (prober *ProviderProber) Probe(
 
 func targetFromProbe(reference offlinehold.ProbeTarget) (Target, error) {
 	if reference.Kind != offlinehold.EgressProvider ||
-		reference.AccessRevision == 0 ||
-		reference.PlanHash == "" {
+		reference.PlanRevision == 0 ||
+		reference.PlanDigest == "" {
 		return Target{}, errors.New("provider probe target identity is incomplete")
 	}
 	if err := reference.Validate(); err != nil {
 		return Target{}, err
 	}
-	origin, err := access.NewProviderOrigin(reference.NetworkOrigin)
+	origin, err := originidentity.ParseProviderOrigin(reference.NetworkOrigin)
 	if err != nil {
 		return Target{}, err
 	}
-	target := Target{
-		origin:        origin.String(),
-		scheme:        origin.Scheme(),
-		httpAuthority: reference.HTTPAuthority,
-		networkHost:   origin.NetworkHost(),
-		tlsServerName: reference.TLSServerName,
-		basePath:      origin.BasePath(),
-		port:          origin.Port(),
-		transportKind: origin.TransportKind(),
+	target, err := NewTarget(origin)
+	if err != nil {
+		return Target{}, err
+	}
+	if target.HTTPAuthority() != reference.HTTPAuthority ||
+		target.TLSServerName() != reference.TLSServerName {
+		return Target{}, errors.New("provider probe target identity changed")
 	}
 	if err := target.validate(); err != nil {
 		return Target{}, err

@@ -16,9 +16,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/vibe-agi/vibermate/internal/access"
-	"github.com/vibe-agi/vibermate/internal/accessapply"
-	"github.com/vibe-agi/vibermate/internal/operationcatalog"
+	"github.com/vibe-agi/vibermate/internal/wireprofile"
 )
 
 func TestConnectorWireServiceObservesOnlyTheAllowedMITMShapeChanges(
@@ -191,8 +189,8 @@ func TestConnectorWireServiceObservesOnlyTheAllowedMITMShapeChanges(
 		) {
 		t.Fatalf("MITM dynamic-field boundary was not preserved")
 	}
-	if evidence.Requested().Ref != access.TransportProfileObservedClientH1Value ||
-		evidence.Effective().Ref != access.TransportProfileObservedClientH1Value ||
+	if evidence.Requested().Ref != wireprofile.TransportProfileObservedClientH1Value ||
+		evidence.Effective().Ref != wireprofile.TransportProfileObservedClientH1Value ||
 		evidence.UsedFallback() ||
 		!slices.Equal(evidence.ClientOfferedALPN(), []string{"h2", "http/1.1"}) ||
 		!slices.Equal(evidence.UpstreamOfferedALPN(), []string{"http/1.1"}) ||
@@ -250,9 +248,9 @@ func TestConnectorReplaysObservedShapeWithFreshConnectionState(t *testing.T) {
 	for _, evidence := range []Evidence{firstEvidence, secondEvidence} {
 		chain := evidence.FallbackChain()
 		if evidence.Requested().Ref !=
-			access.TransportProfileObservedClientH1Value ||
+			wireprofile.TransportProfileObservedClientH1Value ||
 			evidence.Effective().Ref !=
-				access.TransportProfileObservedClientH1Value ||
+				wireprofile.TransportProfileObservedClientH1Value ||
 			len(chain) != 1 ||
 			chain[0] != evidence.Requested() ||
 			evidence.UsedFallback() ||
@@ -261,7 +259,7 @@ func TestConnectorReplaysObservedShapeWithFreshConnectionState(t *testing.T) {
 				[]string{"http/1.1"},
 			) ||
 			evidence.UpstreamNegotiatedALPN() != "http/1.1" ||
-			evidence.HTTPTransport() != access.HTTPTransportHTTP1 {
+			evidence.HTTPTransport() != wireprofile.HTTPTransportHTTP1 {
 			t.Fatalf("transport evidence = %+v", evidence)
 		}
 	}
@@ -373,7 +371,7 @@ func TestConnectorReplaysCapturedClaudeCodeH1ProfileWithFreshState(
 		TLSServerName: "example.com",
 		Plan: testTransportPlanWithWire(
 			t,
-			access.UpstreamWireProfileClaudeCodeValue,
+			wireprofile.UpstreamWireProfileClaudeCodeValue,
 		),
 	}
 
@@ -391,9 +389,9 @@ func TestConnectorReplaysCapturedClaudeCodeH1ProfileWithFreshState(
 	secondObservation := dialer.nextObservation(t)
 
 	for _, evidence := range []Evidence{firstEvidence, secondEvidence} {
-		if evidence.Requested().Ref != access.TransportProfileClaudeCodeH1Value ||
-			evidence.Effective().Ref != access.TransportProfileClaudeCodeH1Value ||
-			evidence.Requested().Source != access.TransportFingerprintCaptured ||
+		if evidence.Requested().Ref != wireprofile.TransportProfileClaudeCodeH1Value ||
+			evidence.Effective().Ref != wireprofile.TransportProfileClaudeCodeH1Value ||
+			evidence.Requested().Source != wireprofile.TransportFingerprintCaptured ||
 			evidence.UsedFallback() ||
 			!slices.Equal(evidence.UpstreamOfferedALPN(), []string{"http/1.1"}) ||
 			evidence.UpstreamNegotiatedALPN() != "http/1.1" {
@@ -659,178 +657,31 @@ func (dialer fixedAddressDialer) DialContext(
 	return (&net.Dialer{}).DialContext(ctx, network, dialer.address)
 }
 
-func testTransportPlan(t *testing.T) access.CompiledTransportFingerprintPlan {
+func testTransportPlan(t *testing.T) wireprofile.CompiledTransportFingerprintPlan {
 	return testTransportPlanWithWire(
 		t,
-		access.UpstreamWireProfileFollowClientValue,
+		wireprofile.UpstreamWireProfileFollowClientValue,
 	)
 }
 
 func testTransportPlanWithWire(
 	t *testing.T,
 	wireProfileRef string,
-) access.CompiledTransportFingerprintPlan {
+) wireprofile.CompiledTransportFingerprintPlan {
 	t.Helper()
-	providerDialect := access.DialectOpenAIChat
-	codecName := "anthropic-messages-to-openai-chat"
-	if wireProfileRef == access.UpstreamWireProfileClaudeCodeValue {
-		providerDialect = access.DialectAnthropicMessages
-		codecName = "anthropic-messages-to-anthropic-messages"
-	}
-	command, err := accessapply.BuildCommand("transport-test", accessapply.Input{
-		ExpectedRevision: 0,
-		Access: accessapply.AccessInput{
-			ID:                "transport-test",
-			Name:              "Transport test",
-			Status:            string(access.AccessStatusEnabled),
-			AgentEndpointID:   "agent",
-			DefaultRouteSetID: "route",
-			ProfileIDs:        []string{"profile"},
-			EgressPolicyID:    "egress",
-		},
-		AgentEndpoint: accessapply.AgentEndpointInput{
-			ID:            "agent",
-			ClientOrigin:  "https://agent.example:443",
-			ClientDialect: string(access.DialectAnthropicMessages),
-		},
-		Profiles: []accessapply.ProfileInput{{
-			ID:                     "profile",
-			Name:                   "Provider",
-			BackendDialect:         string(providerDialect),
-			TargetID:               "target",
-			UpstreamWireProfileRef: wireProfileRef,
-			DefaultModelPolicy: accessapply.ModelPolicyInput{
-				Mode:       string(access.ModelPolicyModeFixed),
-				FixedModel: "provider-model",
-			},
-			AccountBindingIDs:       []string{"account"},
-			DefaultAccountBindingID: "account",
-		}},
-		ProviderTargets: []accessapply.ProviderTargetInput{{
-			ID:        "target",
-			ProfileID: "profile",
-			Origin:    "https://example.com:443/v1",
-			Protocol:  string(providerDialect),
-			Capabilities: []string{
-				string(access.ProviderCapabilityMessages),
-				string(access.ProviderCapabilityStreaming),
-				string(access.ProviderCapabilityToolCalls),
-			},
-		}},
-		AccountBindings: []accessapply.AccountBindingInput{{
-			ID:            "account",
-			ProfileID:     "profile",
-			Label:         "Provider",
-			SecretRef:     "secret://provider/account",
-			AuthDriverRef: access.AuthDriverStaticHeaderValue,
-			Enabled:       true,
-		}},
-		RouteSets: []accessapply.RouteSetInput{{
-			ID:                  "route",
-			CandidateProfileIDs: []string{"profile"},
-		}},
-		EgressPolicy: accessapply.EgressPolicyInput{
-			ID:   "egress",
-			Mode: string(access.EgressModeDirect),
-		},
-		PluginPlan: accessapply.PluginPlanInput{
-			Mode: string(access.PluginPlanModePassThrough),
-		},
-	})
+	catalog, err := wireprofile.BuiltInCatalog()
 	if err != nil {
 		t.Fatal(err)
 	}
-	codecID, err := access.NewCodecPairID(
-		codecName,
-	)
+	ref, err := wireprofile.NewUpstreamWireProfileRef(wireProfileRef)
 	if err != nil {
 		t.Fatal(err)
 	}
-	operations, err := operationcatalog.BuiltIn()
+	profile, err := catalog.Resolve(ref)
 	if err != nil {
 		t.Fatal(err)
 	}
-	codecPairs := []access.CodecPairDefinition{{
-		ID:              codecID,
-		Revision:        1,
-		ClientDialect:   access.DialectAnthropicMessages,
-		ProviderDialect: providerDialect,
-		ClientOperationIDs: operations.SemanticOperationIDs(
-			access.DialectAnthropicMessages,
-		),
-		RequiredCapabilities: []access.ProviderCapability{
-			access.ProviderCapabilityMessages,
-			access.ProviderCapabilityStreaming,
-			access.ProviderCapabilityToolCalls,
-		},
-	}}
-	if providerDialect != access.DialectAnthropicMessages {
-		originalCodecID, originalErr := access.NewCodecPairID(
-			"anthropic-messages-original-passthrough",
-		)
-		if originalErr != nil {
-			t.Fatal(originalErr)
-		}
-		codecPairs = append(codecPairs, access.CodecPairDefinition{
-			ID:              originalCodecID,
-			Revision:        1,
-			ClientDialect:   access.DialectAnthropicMessages,
-			ProviderDialect: access.DialectAnthropicMessages,
-			ClientOperationIDs: operations.SemanticOperationIDs(
-				access.DialectAnthropicMessages,
-			),
-			RequiredCapabilities: []access.ProviderCapability{
-				access.ProviderCapabilityMessages,
-				access.ProviderCapabilityStreaming,
-				access.ProviderCapabilityToolCalls,
-			},
-		})
-	}
-	catalog, err := access.NewCatalog(access.CatalogOptions{
-		Capabilities: access.PlanCapabilities{
-			MaxEndpointProfiles:          2,
-			MaxAccountBindings:           1,
-			MaxRouteSets:                 1,
-			AllowMultipleRouteCandidates: true,
-		},
-		ClientOperations: operations.Definitions(),
-		CodecPairs:       codecPairs,
-		AuthDrivers: []access.AuthDriverDefinition{{
-			Ref:      access.StaticHeaderAuthDriverRef(),
-			Revision: 1,
-		}},
-		EgressModes: []access.EgressModeDefinition{{
-			Mode:     access.EgressModeDirect,
-			Revision: 1,
-		}},
-		PluginPlanModes: []access.PluginPlanModeDefinition{{
-			Mode:     access.PluginPlanModePassThrough,
-			Revision: 1,
-		}},
-		ModelPolicyModes: []access.ModelPolicyModeDefinition{{
-			Mode:     access.ModelPolicyModeFixed,
-			Revision: 1,
-		}, {
-			Mode:     access.ModelPolicyModePassthrough,
-			Revision: 1,
-		}},
-		TransportProfiles:    access.BuiltInTransportFingerprintDefinitions(),
-		UpstreamWireProfiles: access.BuiltInUpstreamWireProfileDefinitions(),
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	compiler, err := access.NewCompiler(catalog)
-	if err != nil {
-		t.Fatal(err)
-	}
-	snapshot, err := compiler.Compile(command.Aggregate)
-	if err != nil {
-		t.Fatal(err)
-	}
-	variant, available := snapshot.UpstreamWireProfile().Variant(
-		access.ApplicationProtocolHTTP1,
-	)
+	variant, available := profile.Variant(wireprofile.ApplicationProtocolHTTP1)
 	if !available {
 		t.Fatal("compiled wire profile has no HTTP/1.1 variant")
 	}

@@ -1,120 +1,62 @@
-# Initial macOS arm64 Packaged-App Acceptance (M0)
+# macOS arm64 Packaged-App Acceptance
 
-`cmd/vibermate-acceptance` is the opt-in macOS arm64 runner for the
-initial packaged Desktop milestone, whose internal milestone code is M0. It
-exercises production entrypoints and the real fixed Agent executable. It is not
-a fixture server, an installer test, or a replacement for deterministic
-repository gates.
+`cmd/vibermate-acceptance` is the opt-in packaged-product acceptance runner.
+It exercises the selected `ViberMate.app`, the `vibermated` and `vibermate`
+members of that same bundle, the production Desktop composition, and one
+fixed real Agent executable. It is not a unit-test fixture, an installer test,
+or evidence that every supported product capability is assembled.
 
-## Fixed boundary
+## Current boundary
 
-The runner requires:
+The runner accepts exactly one fixed client:
 
-- one packaged `ViberMate.app`;
-- the `vibermated` and `vibermate` executables that are direct members of that
-  same App bundle;
-- exactly one absolute fixed-client executable:
-  - Claude Code 2.1.220 with its fixed Darwin arm64 native-binary digest; or
-  - Codex CLI 0.145.0 with its fixed npm wrapper, package metadata, platform
-    package metadata, and Darwin arm64 native-child digests;
-- one provider origin, fixed model, Access ID, and logical `SecretRef`;
-- a private path for the JSON evidence report.
+- Claude Code 2.1.220 on Darwin arm64; or
+- Codex CLI 0.145.0 on Darwin arm64.
 
-The fixed Claude entrypoint SHA-256 is
-`8addc857f3fe64d5a0368af9ee50321b50afb4a6918ba3ef018ab84f5dbbe081`.
-The Codex identity is compound evidence rather than a version string or one
-wrapper hash. The built-in client catalog is the authority for every required
-artifact digest and the fixed `ssl_cert_file` launch recipe. Other executable
-versions remain valid generic proxy clients, but they cannot be used to
-produce this fixed-client acceptance evidence.
-The runner has no provider or model default. Every invocation must provide
-`--provider-origin` and `--provider-model`, so a local developer fixture cannot
-silently become somebody else's route.
+The built-in client catalog defines the required executable evidence. A
+different client build can still be launched by the product under its normal
+recognition rules, but it cannot produce this fixed-client acceptance report.
 
-Remote provider origins remain HTTPS-only with strict system-root validation.
-When explicitly selected, the narrower development exception accepts
-cleartext only for a literal loopback IP, forces it through Direct egress, does
-not use ambient proxies, and verifies the connected TCP peer before any
-authenticated HTTP byte is written. `localhost`, LAN, private-CIDR, and public
-HTTP origins are rejected.
+Every run also requires:
 
-The runner never accepts a secret value. It removes ambient Anthropic,
-alternate-provider, Claude, Codex, and OpenAI credential/base-URL variables,
-plus conflicting CA inputs, from the captured child environment. A non-secret
-client placeholder forces the selected Agent to enter the ViberMate proxy. A
-Codex run also receives a private run-owned `CODEX_HOME`, ignores user config
-and rules, and receives prompts only over standard input. The active provider
-value is resolved by the runtime's selected SecretStore only after the
-offline-egress lease is granted.
+- an absolute path to a packaged `ViberMate.app`;
+- a canonical Environment ID;
+- a private report path when evidence is to be retained; and
+- a clean, fully committed source checkout for independently verified
+  provenance.
 
-The fixed Codex acceptance uses two deliberately separate invocation
-profiles. One dedicated fallback process leaves the client's supported
-WebSocket negotiation enabled and proves the local bounded 426 selects an HTTP
-connection inside the same CaptureRun. Each independent semantic process uses
-the client's supported explicit Responses HTTP provider configuration, with
-WebSocket disabled, so session-local negotiation cannot race the actual
-semantic assertion. Both profiles still traverse the authenticated launcher,
-proxy, exact operation catalog, one Access snapshot, Exchange, and controlled
-egress. This is an acceptance invocation choice, not a production client
-branch, Access setting, provider bypass, or claim of successful WebSocket
-semantics.
+The runner has no provider-origin, model, account, credential, or secret-value
+argument. Deterministic assembly evidence must not acquire those authorities
+from ambient environment variables or developer state.
 
-The ordinary build for this initial milestone intentionally uses the
-development file SecretStore:
+## Artifact and report provenance
 
-```text
-<user config>/io.vibermate.desktop/development-secrets/store.json
-```
+The Desktop build embeds `vibermate-build-manifest.json`. The manifest binds:
 
-Its contents are plaintext-equivalent. Use only a development credential.
-Neither Keychain nor another native secret backend is built, selected, or
-tested in this milestone.
-Credential control exposes state and revision metadata but never reads a value
-to render status and never returns a `SecretRef` or secret value.
+- the full Git revision, commit time, and clean-tree state;
+- pinned Go, Node, Rust, Cargo, pnpm, and Tauri toolchains;
+- Desktop and sidecar build profiles and target triple;
+- configuration-input digests; and
+- the packaged daemon and launcher digests.
 
-## Frozen artifact provenance
+The runner rejects mixed source identities, dirty builds, substituted
+sidecars, malformed manifests, unknown manifest fields, and daemon or launcher
+paths that are not direct members of the selected App bundle.
 
-`prepare:desktop` generates an ignored
-`vibermate-build-manifest.json` and Tauri embeds it in the App resources. The
-manifest records:
+The current report contract is the only accepted contract. Reports are
+atomically written as regular files with mode `0600`; the verifier rejects
+links, oversized files, unknown fields, stale revisions, wrong modes, and any
+artifact or configuration digest mismatch. The verifier receives the trusted
+source root, App, acceptance executable, fixed client, expected mode, schema,
+and full revision independently. A report cannot choose the bytes used to
+verify itself.
 
-- Git revision, commit time, and dirty state;
-- Go, Node, Rust, Cargo, pnpm, and Tauri CLI versions used by the App build;
-- Desktop profile, sidecar profile, and target triple;
-- SHA-256 values for the Go, Node, Rust, Cargo, lock, and Tauri configuration
-  inputs;
-- SHA-256 values for both packaged Go sidecars.
-
-The acceptance runner rejects:
-
-- a dirty build;
-- mixed Git source identities among the runner, daemon, launcher, and App
-  manifest;
-- a daemon or launcher that is not the selected App's direct member;
-- a manifest sidecar digest that differs from the packaged member;
-- an unpinned build or acceptance-host toolchain;
-- a missing, malformed, oversized, or unknown-field manifest.
-
-The current v6 report records the selected client identity and typed compound
-adapter evidence, deterministic App-bundle manifest digest, individual artifact
-digests, build and host toolchains, build profiles, configuration digests, and
-redacted run configuration. It is atomically replaced with mode `0600`. It
-contains no prompt, response body, header, tool arguments, thread ID, or secret
-value. Historical v5 reports retain their frozen schema and check set, but they
-are accepted only when the verifier caller explicitly requests v5.
-
-Current v6 verification does not trust artifact paths or digests merely because
-they occur in the report. The caller independently supplies the source checkout,
-selected App, acceptance executable, and fixed-client entrypoint. The verifier
-requires a clean Git top-level checkout at the expected full revision and commit
-time, hashes the actual App and each executable, parses the actual v2 build
-manifest, and hashes every frozen configuration input from that checkout. A
-missing coordinate, substituted artifact, dirty checkout, v1 manifest, stale
-revision, or digest mismatch fails the gate.
+Reports contain no prompt, response body, headers, tool arguments, thread ID,
+credential reference, token, or secret value.
 
 Build from a clean frozen commit with the pinned toolchains:
 
-```text
+```sh
 RUSTUP_TOOLCHAIN=1.88.0 fnm exec --using=22.23.1 -- \
   pnpm --dir ui/desktop install --frozen-lockfile
 RUSTUP_TOOLCHAIN=1.88.0 fnm exec --using=22.23.1 -- \
@@ -128,187 +70,71 @@ go build -buildvcs=true -trimpath \
 ```
 
 The development bundle is not a release package. Signing, notarization,
-native secret protection, installation, and distribution remain outside this
-initial milestone.
-The final artifact must be built from a standalone clean checkout. Some linked
-Git worktrees omit Go `vcs.*` build settings even when the build requests VCS
-stamping; the runner rejects such an artifact instead of inventing provenance.
+distribution, system trust-store mutation, and native secret protection are
+separate gates.
 
 ## Deterministic sequence
 
-`--deterministic-only` replaces the configured logical secret reference with a
-cryptographically random, run-local missing reference. This prevents an
-existing development credential from turning the no-send checks into provider
-traffic.
+`--deterministic-only` proves the current assembly without provider
+credentials or provider traffic. The required checks are:
 
-The deterministic sequence verifies:
-
-1. the selected fixed-client compound executable identity;
-2. exclusive Desktop generation ownership;
-3. the packaged App starts with an isolated temporary user directory,
-   exchanges the native-shell bootstrap, publishes readiness, and gracefully
-   drains its packaged sidecar;
-4. the packaged daemon starts from an inherited bootstrap descriptor with
-   complete proxy and control routes;
-5. one executable Access commits as revision 1;
-6. an explicit exact-host-and-port connection rule is committed for the fixed
-   client origin while the default remains `ask`;
-7. the fixed client reaches the exact configured ingress while egress is held;
-   Claude queues approved original-origin control traffic, while fixed Codex
-   independently produces the bounded local 426-to-HTTP proxy audit before
-   queuing the frozen provider target with zero active egress, surfaces HTTP
-   426 for the rejected WebSocket request, and records
-   `provider_credential_unavailable` for that Exchange;
-8. Resume performs no-credential probes for every queued frozen target before
-   release; strict HTTPS targets complete TLS, while the literal-loopback
-   cleartext exception completes an exact TCP peer check;
-9. the semantic request reaches the intentionally missing development
-   credential boundary, records `provider_credential_unavailable`, and does not
-   send provider HTTP traffic;
-10. body-free ConnectionEvent evidence binds the verified Agent ingress,
-    observed SNI, MITM decision, and explicit connection-policy rule to the
-    client origin. Provider route and credential facts remain request-level
-    evidence and are deliberately absent from the connection timeline;
-11. daemon `SIGINT` drains the Host and removes owned discovery;
-12. a new incarnation reopens SQLite and rejects `expectedRevision=0`, proving
-    revision 1 recovery;
-13. another fixed-client request remains queued behind Hold when the daemon is
-    killed;
-14. daemon `SIGKILL` terminates that request without a completion marker,
-    releases kernel generation ownership, and leaves no resurrected in-memory
-    queue;
-15. the replacement generation recovers revision 1 and appends exactly one
-    `daemon_restarted` terminal to the interrupted ConnectionEvent;
-16. the final generation drains cleanly.
+1. bind the clean source, App bundle, packaged members, toolchains, fixed
+   client, and report to one provenance identity;
+2. acquire exclusive Desktop generation ownership;
+3. start the packaged native shell, restore its main navigation, and reach the
+   packaged daemon through the private bootstrap channel;
+4. create an Environment draft, compute its impact preview, and atomically
+   publish revision 1 with a canonical digest;
+5. invoke the packaged launcher as `vibermate run --env <environment> -- ...`
+   and persist one typed managed-Capture assignment to that exact Environment
+   revision and launch-authority boundary;
+6. drain the first daemon generation and remove its owned discovery record;
+7. start a new incarnation on the same private SQLite store;
+8. recover the exact Environment revision/digest and Capture assignment from
+   SQLite; and
+9. drain the recovered generation cleanly.
 
 Example:
 
-```text
+```sh
 /private/tmp/vibermate-acceptance \
   --desktop-app=/absolute/path/to/ViberMate.app \
   --claude=/absolute/path/to/the/fixed/claude \
-  --provider-origin=https://gateway.example/v1 \
-  --provider-model=example-model \
+  --environment-id=assembly-001 \
   --deterministic-only \
-  --report=/absolute/private/path/m0-deterministic.json
+  --report=/absolute/private/path/deterministic.json
 ```
 
-Use `--codex=/absolute/path/to/the/fixed/codex` instead of `--claude` to
-select the fixed Codex vertical. Supplying both or neither is rejected. Replace
-the example provider coordinates with a reachable target under the operator's
-control. The lexical invocation path must retain the catalogued executable
-label (`claude` or `codex`) even when it is a symlink to a versioned file; the
-runner verifies the resolved artifacts separately.
+Use `--codex=/absolute/path/to/the/fixed/codex` instead of `--claude` for the
+fixed Codex path. Supplying both or neither is rejected.
 
-## Credentialed continuation
+## Provider-account continuation
 
-Before the credentialed run, use the same development-profile App to apply the
-acceptance Access and save its provider key:
+Without `--deterministic-only`, the runner first completes the deterministic
+phase, then starts a second fresh private runtime and independently proves
+Environment publication and Capture assignment again. It currently records
+`provider-account` as `blocked`, drains without provider traffic, writes the
+truthful blocked report, and exits with status 3.
 
-1. set Access ID to `assembly-001`;
-2. set the provider origin to the same explicit value passed to the runner;
-3. set the fixed model to the same explicit value passed to the runner;
-4. apply the Access at the currently loaded revision;
-5. save the provider credential once and confirm a nonzero secret revision.
+This is deliberate. The current Environment-first runtime does not yet
+assemble the typed ProviderAccount authority needed for managed provider
+traffic. The runner must not recreate the retired Access/secret path or
+fabricate a credentialed success. A successful credentialed acceptance can be
+defined only after ProviderAccount selection, credential ownership, final
+header injection, attempt evidence, and commit-safe retry are part of the same
+production composition.
 
-The default logical reference is
-`secret://provider/assembly-001-account`. A different Access ID or logical
-reference may be supplied explicitly, but no secret value may be passed on the
-command line.
+## What this evidence does not prove
 
-Full mode first runs the complete deterministic sequence in a private runtime
-data directory with a fresh, run-local missing `SecretRef`. After revision 1
-recovery succeeds, that generation drains. A second private runtime data
-directory and daemon generation then create the credentialed Access from an
-empty database at revision 1 with the configured `SecretRef`. The runner never
-mutates an existing binding's `SecretRef`, never adds a caller-chosen
-`SecretRef` through ordinary Access edit, and never copies a secret value.
-This keeps every deterministic no-send claim independent of credentials
-already present on the host while preserving the scoped secret-action
-boundary.
+Even a passing deterministic report does not prove:
 
-The credentialed continuation additionally verifies:
+- a real provider response or credentialed account flow;
+- system Root installation or removal;
+- arbitrary Agent versions or application-wide capture;
+- Server/LAN operation;
+- plugin execution, Language Bridge, quality evaluation, or account failover;
+- signed/notarized packaging, install, upgrade, or uninstall; or
+- Preview or Release readiness.
 
-1. an isolated credentialed database creates revision 1 with the configured
-   credential binding without exposing its logical reference or value, while
-   an existing binding's `SecretRef` remains immutable through ordinary Access
-   apply;
-2. the fixed client completes an unheld provider reply with a trusted assistant
-   marker; Claude exposes at least one incremental content delta, while Codex
-   exposes a complete typed JSONL turn bound to a trusted thread identity;
-3. fixed Codex additionally completes two distinct successful Exchanges while
-   preserving that private thread identity across `exec resume`;
-4. a real client tool intent (`Write` for Claude or `exec` for Codex) becomes
-   durable pending approval without raw
-   arguments; neither the tool block, completion marker, nor bounded proof file
-   exists before `allow-once`, and the exact proof file exists afterward. Claude
-   completes the turn normally; Codex is deliberately interrupted immediately
-   after its one completed `exec` and exact proof, so this check does not depend
-   on a model choosing whether to issue another provider request;
-5. a new request queues while Hold is active, sends nothing before Resume, and
-   returns a trusted marker after the exact route probe; Claude also exposes at
-   least two content deltas;
-6. signaling the captured client during an active streamed Exchange terminates
-   the child within the bound while the shared runtime remains ready and all
-   hold ownership converges;
-7. the final packaged daemon drains cleanly.
-
-Example:
-
-```text
-/private/tmp/vibermate-acceptance \
-  --desktop-app=/absolute/path/to/ViberMate.app \
-  --codex=/absolute/path/to/the/fixed/codex \
-  --provider-origin=https://gateway.example/v1 \
-  --provider-model=example-model \
-  --report=/absolute/private/path/m0-credentialed.json
-```
-
-Exit status `0` means every selected check passed. Exit status `3` means the
-deterministic sequence passed but configured credential metadata was absent.
-Other nonzero statuses are failures.
-
-## Independent report verification
-
-The report does not choose its own authority. The independent verifier requires
-the caller to state whether deterministic or credentialed evidence is expected,
-along with the exact schema, clean source revision, fixed client, source
-checkout, App bundle, acceptance executable, and client entrypoint. A
-credentialed report cannot satisfy a deterministic expectation, a deterministic
-report cannot satisfy a credentialed expectation, and omitting the expected
-mode fails closed. Credentialed verification is supported only for the current
-v6 schema; historical v5 remains deterministic-only evidence.
-
-Example for a current credentialed Claude report:
-
-```text
-/private/tmp/vibermate-acceptance-verify \
-  --report=/absolute/private/path/m0-credentialed.json \
-  --expected-mode=credentialed \
-  --expected-schema=vibermate.m0-assembly-acceptance/v6 \
-  --expected-revision=<full-clean-git-revision> \
-  --expected-client-id=claude-code \
-  --expected-client-version=2.1.220 \
-  --source-root=/absolute/path/to/clean/source \
-  --desktop-app=/absolute/path/to/ViberMate.app \
-  --acceptance-executable=/private/tmp/vibermate-acceptance \
-  --client-entrypoint=/absolute/path/to/the/fixed/claude
-```
-
-Use `--expected-mode=deterministic` for `--deterministic-only` output. The
-manual packaged workflow uses that explicit deterministic expectation. The
-credentialed command is an operator-controlled gate because it depends on a
-real secret and provider; verification reads only the private report and the
-independently named local artifacts, never the secret value.
-
-## Evidence boundary
-
-A successful report proves only this fixed macOS arm64 Desktop slice, the
-selected fixed client release, configured provider target/model, and captured
-run. Fixed Codex evidence covers bounded WebSocket rejection and Responses HTTP
-fallback; it does not prove successful Responses WebSocket semantics or TUI
-interaction. The report also does not prove physical sleep or network removal,
-power-loss durability, arbitrary Agent or provider compatibility, reverse
-protocol translation, exact JA3/JA4 or HTTP/2 fingerprint parity, Root
-installation, signed/notarized distribution, Server, Windows/Linux, or
-Preview/Release readiness.
+Those statements remain blocked until their own production path and evidence
+exist.

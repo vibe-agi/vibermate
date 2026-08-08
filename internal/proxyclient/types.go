@@ -19,6 +19,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/vibe-agi/vibermate/internal/controlprincipal"
+	"github.com/vibe-agi/vibermate/internal/environment"
 )
 
 const (
@@ -158,23 +159,23 @@ func (state PrincipalState) Valid() bool {
 }
 
 type BindingPolicy struct {
-	allowedIngressScopes []string
-	allowedProfileIDs    []string
-	quotaPolicyID        string
-	allowedGrantKinds    []controlprincipal.GrantKind
+	allowedIngressScopes  []string
+	allowedEnvironmentIDs []environment.EnvironmentID
+	quotaPolicyID         string
+	allowedGrantKinds     []controlprincipal.GrantKind
 }
 
 func NewBindingPolicy(
 	ingressScopes []string,
-	profileIDs []string,
+	environmentIDs []environment.EnvironmentID,
 	quotaPolicyID string,
 	grantKinds []controlprincipal.GrantKind,
 ) (BindingPolicy, error) {
 	policy := BindingPolicy{
-		allowedIngressScopes: slices.Clone(ingressScopes),
-		allowedProfileIDs:    slices.Clone(profileIDs),
-		quotaPolicyID:        quotaPolicyID,
-		allowedGrantKinds:    slices.Clone(grantKinds),
+		allowedIngressScopes:  slices.Clone(ingressScopes),
+		allowedEnvironmentIDs: slices.Clone(environmentIDs),
+		quotaPolicyID:         quotaPolicyID,
+		allowedGrantKinds:     slices.Clone(grantKinds),
 	}
 	if err := policy.normalizeAndValidate(); err != nil {
 		return BindingPolicy{}, err
@@ -184,7 +185,7 @@ func NewBindingPolicy(
 
 func (policy *BindingPolicy) normalizeAndValidate() error {
 	if policy == nil || len(policy.allowedIngressScopes) == 0 ||
-		len(policy.allowedProfileIDs) == 0 ||
+		len(policy.allowedEnvironmentIDs) == 0 ||
 		!validIdentity(policy.quotaPolicyID, MaxPolicyIDBytes) ||
 		len(policy.allowedGrantKinds) == 0 {
 		return fmt.Errorf("%w: binding policy is incomplete", ErrInvalidCommand)
@@ -192,7 +193,7 @@ func (policy *BindingPolicy) normalizeAndValidate() error {
 	if err := normalizeIdentities(policy.allowedIngressScopes); err != nil {
 		return err
 	}
-	if err := normalizeIdentities(policy.allowedProfileIDs); err != nil {
+	if err := normalizeEnvironmentIDs(policy.allowedEnvironmentIDs); err != nil {
 		return err
 	}
 	sort.Slice(policy.allowedGrantKinds, func(left, right int) bool {
@@ -213,17 +214,17 @@ func (policy BindingPolicy) Valid() bool {
 
 func (policy BindingPolicy) Clone() BindingPolicy {
 	return BindingPolicy{
-		allowedIngressScopes: slices.Clone(policy.allowedIngressScopes),
-		allowedProfileIDs:    slices.Clone(policy.allowedProfileIDs),
-		quotaPolicyID:        policy.quotaPolicyID,
-		allowedGrantKinds:    slices.Clone(policy.allowedGrantKinds),
+		allowedIngressScopes:  slices.Clone(policy.allowedIngressScopes),
+		allowedEnvironmentIDs: slices.Clone(policy.allowedEnvironmentIDs),
+		quotaPolicyID:         policy.quotaPolicyID,
+		allowedGrantKinds:     slices.Clone(policy.allowedGrantKinds),
 	}
 }
 
 func (policy BindingPolicy) Equal(other BindingPolicy) bool {
 	return policy.quotaPolicyID == other.quotaPolicyID &&
 		slices.Equal(policy.allowedIngressScopes, other.allowedIngressScopes) &&
-		slices.Equal(policy.allowedProfileIDs, other.allowedProfileIDs) &&
+		slices.Equal(policy.allowedEnvironmentIDs, other.allowedEnvironmentIDs) &&
 		slices.Equal(policy.allowedGrantKinds, other.allowedGrantKinds)
 }
 
@@ -231,8 +232,8 @@ func (policy BindingPolicy) AllowedIngressScopes() []string {
 	return slices.Clone(policy.allowedIngressScopes)
 }
 
-func (policy BindingPolicy) AllowedProfileIDs() []string {
-	return slices.Clone(policy.allowedProfileIDs)
+func (policy BindingPolicy) AllowedEnvironmentIDs() []environment.EnvironmentID {
+	return slices.Clone(policy.allowedEnvironmentIDs)
 }
 
 func (policy BindingPolicy) QuotaPolicyID() string { return policy.quotaPolicyID }
@@ -583,6 +584,21 @@ func normalizeIdentities(values []string) error {
 	for index := 1; index < len(values); index++ {
 		if values[index-1] == values[index] {
 			return fmt.Errorf("%w: binding policy identity is duplicated", ErrInvalidCommand)
+		}
+	}
+	return nil
+}
+
+func normalizeEnvironmentIDs(values []environment.EnvironmentID) error {
+	for _, value := range values {
+		if _, err := environment.NewEnvironmentID(value.String()); err != nil {
+			return fmt.Errorf("%w: binding Environment ID is invalid", ErrInvalidCommand)
+		}
+	}
+	sort.Slice(values, func(left, right int) bool { return values[left] < values[right] })
+	for index := 1; index < len(values); index++ {
+		if values[index-1] == values[index] {
+			return fmt.Errorf("%w: binding Environment ID is duplicated", ErrInvalidCommand)
 		}
 	}
 	return nil

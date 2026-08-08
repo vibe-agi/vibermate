@@ -5,8 +5,8 @@ import (
 	"io"
 	"net/http"
 
-	"github.com/vibe-agi/vibermate/internal/access"
 	"github.com/vibe-agi/vibermate/internal/exchange"
+	"github.com/vibe-agi/vibermate/internal/protocolspec"
 )
 
 // ReasonHeader carries the stable vibermate reason code beside a dialect-shaped
@@ -18,7 +18,7 @@ const ReasonHeader = "X-Vibermate-Reason"
 // interpolates request content, so no client payload can travel back out
 // through an error body.
 var reasonMessages = map[ReasonCode]string{
-	ReasonProfileOperationUnsupported: "This API operation is not available " +
+	ReasonEnvironmentOperationUnsupported: "This API operation is not available " +
 		"through vibermate for the selected upstream plan.",
 	ReasonUnsupportedUpgrade: "vibermate cannot serve this protocol upgrade " +
 		"on this connection.",
@@ -37,7 +37,7 @@ func reasonMessage(reason ReasonCode) string {
 // rejection instead of failing on an unparseable body.
 func writeDialectReason(
 	writer http.ResponseWriter,
-	dialect access.Dialect,
+	dialect protocolspec.Dialect,
 	status int,
 	reason ReasonCode,
 ) {
@@ -50,10 +50,10 @@ func writeDialectReason(
 	)
 }
 
-func dialectErrorEnvelope(dialect access.Dialect, reason ReasonCode) any {
+func dialectErrorEnvelope(dialect protocolspec.Dialect, reason ReasonCode) any {
 	message := reasonMessage(reason)
 	switch dialect {
-	case access.DialectOpenAIResponses:
+	case protocolspec.DialectOpenAIResponses:
 		type openAIError struct {
 			Message string  `json:"message"`
 			Type    string  `json:"type"`
@@ -94,7 +94,7 @@ func dialectErrorEnvelope(dialect access.Dialect, reason ReasonCode) any {
 // how to render.
 func writeExchangeFailure(
 	writer http.ResponseWriter,
-	dialect access.Dialect,
+	dialect protocolspec.Dialect,
 	err error,
 ) {
 	reason := exchange.ReasonOf(err)
@@ -117,12 +117,12 @@ func writeExchangeFailure(
 }
 
 func exchangeErrorEnvelope(
-	dialect access.Dialect,
+	dialect protocolspec.Dialect,
 	reason exchange.ReasonCode,
 ) any {
 	message := exchangeReasonMessage(reason)
 	switch dialect {
-	case access.DialectOpenAIResponses:
+	case protocolspec.DialectOpenAIResponses:
 		type openAIError struct {
 			Message string  `json:"message"`
 			Type    string  `json:"type"`

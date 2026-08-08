@@ -2438,9 +2438,9 @@ mod tests {
         );
 
         for raw in [
-            "https://example.test/#overview".to_owned(),
+            "https://example.test/#captures".to_owned(),
             format!("{WEBVIEW_ORIGIN}/#not-a-real-route"),
-            format!("{WEBVIEW_ORIGIN}/#overview?body=prompt-text"),
+            format!("{WEBVIEW_ORIGIN}/#captures?body=prompt-text"),
             format!("{WEBVIEW_ORIGIN}/#policies/approvals?selected=secret%3A%2F%2Fprovider%2Fwork"),
         ] {
             let url = reqwest::Url::parse(&raw).expect("parse refused Webview URL");

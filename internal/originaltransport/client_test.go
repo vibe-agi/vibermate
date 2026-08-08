@@ -10,9 +10,10 @@ import (
 	"testing"
 	"time"
 
-	"github.com/vibe-agi/vibermate/internal/access"
 	"github.com/vibe-agi/vibermate/internal/offlinehold"
 	"github.com/vibe-agi/vibermate/internal/originaltransport"
+	"github.com/vibe-agi/vibermate/internal/originidentity"
+	"github.com/vibe-agi/vibermate/internal/protocolspec"
 )
 
 func TestOriginalTransportPinsClientOriginAndStripsProxyCredentials(
@@ -36,7 +37,7 @@ func TestOriginalTransportPinsClientOriginAndStripsProxyCredentials(
 		t.Fatal(err)
 	}
 	defer shutdownClient(t, client)
-	origin, err := access.NewClientOrigin("https://api.anthropic.com:443")
+	origin, err := originidentity.ParseClientOrigin("https://api.anthropic.com:443")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -56,7 +57,7 @@ func TestOriginalTransportPinsClientOriginAndStripsProxyCredentials(
 		RawQuery:     "page=1",
 		Headers:      headers,
 		Body:         body,
-		PayloadClass: access.OperationPayloadControl,
+		PayloadClass: protocolspec.OperationPayloadControl,
 		ConnectionID: "connection-test",
 		ParentID:     "original-request-test",
 	})
@@ -80,8 +81,8 @@ func TestOriginalTransportPinsClientOriginAndStripsProxyCredentials(
 		t.Fatalf("response body = %q", data)
 	}
 	sent := transport.Request()
-	if sent.URL.String() != "https://api.anthropic.com:443/v1/unknown?page=1" ||
-		sent.Host != "api.anthropic.com:443" {
+	if sent.URL.String() != origin.String()+"/v1/unknown?page=1" ||
+		sent.Host != origin.HTTPAuthority() {
 		t.Fatalf("outbound target URL=%q Host=%q", sent.URL, sent.Host)
 	}
 	if sent.Header.Get("Authorization") != "" {
@@ -103,7 +104,7 @@ func TestOriginalTransportPinsClientOriginAndStripsProxyCredentials(
 		acquire.Target.TargetRef != origin.String() ||
 		acquire.Target.NetworkOrigin != origin.String() ||
 		acquire.Target.HTTPAuthority != origin.HTTPAuthority() ||
-		acquire.Target.TLSServerName != origin.TLSServerName() ||
+		acquire.Target.TLSServerName != origin.Host() ||
 		acquire.SizeBytes != int64(len(`{"value":1}`)) {
 		t.Fatalf("egress acquire = %+v", acquire)
 	}
@@ -166,7 +167,7 @@ func originalRequest(
 	kind offlinehold.EgressKind,
 ) originaltransport.Request {
 	t.Helper()
-	origin, err := access.NewClientOrigin("https://api.anthropic.com:443")
+	origin, err := originidentity.ParseClientOrigin("https://api.anthropic.com:443")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -176,7 +177,7 @@ func originalRequest(
 		Origin:       origin,
 		Method:       http.MethodGet,
 		Path:         "/v1/status",
-		PayloadClass: access.OperationPayloadControl,
+		PayloadClass: protocolspec.OperationPayloadControl,
 		ConnectionID: "connection-test",
 		ParentID:     "original-request-test",
 	})

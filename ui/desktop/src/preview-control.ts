@@ -1,1188 +1,759 @@
-import {
-  compareResourceIds,
-  ControlProblem,
-  type ControlClient,
-} from "./control-client.ts";
-import { buildAccessApplyInput } from "./access-form.ts";
+import type { ControlClient } from "./control-client.ts";
+import { ControlProblem } from "./control-client.ts";
 import type {
-  AccessApplyInput,
-  AccessAddCandidateInput,
-  AccessAddCandidateResponse,
-  AccessApplyResponse,
-  AccessDeletionPreview,
-  AccessDeletionResponse,
-  AccessPlanSummary,
-  AccessStatus,
-  ActivityRecord,
-  ActivityStatus,
   ActivityPage,
+  ActivityQuery,
   ApprovalChoice,
+  ApprovalPage,
   ApprovalView,
-  CaptureRunRecord,
-  ConnectionRecord,
-  CredentialView,
-  EgressAttemptRecord,
+  CaptureAssignment,
+  CaptureAssignmentSwitchResult,
+  CapturePage,
+  CaptureRecord,
+  ConnectionPage,
+  ConnectionRuleSet,
+  ConnectionRuleSetInput,
+  EgressAttemptPage,
+  EnvironmentDraft,
+  EnvironmentDraftInput,
+  EnvironmentImpact,
+  EnvironmentPage,
+  EnvironmentPublishResult,
+  EnvironmentRecord,
   ExchangeDetail,
   ManualCaptureContext,
   ManualCaptureCreateInput,
+  ManualCaptureGrant,
   ManualCaptureGrantStateTag,
   ManualCapturePage,
   ManualCaptureRecord,
   ManualCaptureStateTag,
   OfflineHoldSnapshot,
   StatusResponse,
-  WorkspaceRouteBinding,
 } from "./control-types.ts";
-import approvalSamples from "./generated/samples/approvals.json" with { type: "json" };
-import captureRunSamples from "./generated/samples/capture-runs.json" with { type: "json" };
-import connectionSamples from "./generated/samples/connections.json" with { type: "json" };
-import egressSamples from "./generated/samples/egress-attempts.json" with { type: "json" };
 
-const previewStartedAt = "2026-08-02T08:42:00Z";
-const previewActivityCursor = "cHJldmlldy1wYWdlLTI";
+const timestamp = "2026-08-08T08:00:00.000Z";
+const laterTimestamp = "2026-08-08T08:01:00.000Z";
+const transparentDigest = "1".repeat(64);
+const workDigest = "2".repeat(64);
+const draftDigest = "3".repeat(64);
+const launchAuthorityDigest = "4".repeat(64);
 
-const previewManualCaptureContext: ManualCaptureContext = {
-  confirmationToken: `ctx_${"A".repeat(43)}`,
-  proxyAddress: "http://127.0.0.1:32123",
-  root: {
-    kind: "local_path",
-    derSha256: "a".repeat(64),
-    fingerprint: "AA:BB:CC:DD:EE:FF",
-    pemPath: "/Users/demo/Library/Application Support/ViberMate/root.pem",
-  },
-  defaultTemporarySeconds: 86_400,
-  maxTemporarySeconds: 604_800,
+const emptyOffline: OfflineHoldSnapshot = {
+  state: "online",
+  revision: 1,
+  since: timestamp,
+  activeActions: 0,
+  enteringActions: 0,
+  activeEgress: 0,
+  queuedRequests: 0,
+  heldBytes: 0,
+  safeToDisconnect: true,
+  activeByKind: {},
+  queuedByKind: {},
 };
 
-const previewWorkAccess = buildAccessApplyInput({
-  mode: "managed",
-  accessId: "work",
-  name: "Work Claude",
-  description: "Primary work connection",
-  expectedRevision: "3",
-  clientOrigin: "https://api.anthropic.com",
-  clientDialect: "anthropic-messages",
-  providerDialect: "openai-chat",
-  authDriverRef: "static_header",
-  providerOrigin: "https://gateway.example/v1",
-  fixedModel: "example-model",
-  routeName: "Demo route",
-  upstreamPresentation: "follow-client",
-});
+const transparentEnvironment: EnvironmentRecord = {
+  id: "system_transparent",
+  name: "Transparent",
+  state: "active",
+  revision: 1,
+  digest: transparentDigest,
+  systemOwned: true,
+  clientEndpoints: [],
+  pluginBindings: [],
+  budgetPolicy: { id: "", revision: 0 },
+  egressPolicy: { id: "", revision: 0, mode: "" },
+};
 
-function previewActivity(
-  id: string,
-  occurredAt: string,
-  accessId: "work" | "personal",
-  status: ActivityStatus,
-  runId = "run-one-access",
-): ActivityRecord {
-  const accessName = accessId === "work" ? "Work Claude" : "Personal Claude";
-  return {
-    id,
-    occurredAt,
-    kind: "exchange",
-    title: "claude",
-    status,
-    source: {
-      kind: "capture_run",
-      displayName: "claude",
-      recognition: "configured",
+const workEnvironment: EnvironmentRecord = {
+  id: "work",
+  name: "Work",
+  state: "active",
+  revision: 3,
+  digest: workDigest,
+  systemOwned: false,
+  clientEndpoints: [
+    {
+      id: "claude-endpoint",
+      revision: 2,
+      clientOrigin: "https://api.anthropic.com",
+      protocolPlans: [
+        {
+          id: "claude-messages",
+          revision: 2,
+          clientProtocol: "anthropic_messages",
+          clientAdapterPolicy: { id: "claude-adapter", revision: 1 },
+          mode: "original_passthrough",
+          upstreamPlan: {
+            routes: [
+              {
+                id: "claude-official",
+                revision: 2,
+                providerTarget: {
+                  id: "anthropic-official",
+                  revision: 1,
+                  origin: "https://api.anthropic.com",
+                  realmId: "anthropic",
+                  capabilities: ["messages"],
+                },
+                backendProtocol: "anthropic_messages",
+                accountPolicy: {
+                  revision: 1,
+                  mode: "client_passthrough",
+                  allowedRealmIds: ["anthropic"],
+                  preferredAccountId: "",
+                  candidateAccountIds: [],
+                  accountRevisions: {},
+                  failoverPolicy: "off",
+                },
+                modelPolicy: { revision: 1, mode: "preserve", fixedModel: "" },
+                wireProfileRef: "claude-default",
+                pluginBindings: [],
+              },
+            ],
+            defaultRouteId: "claude-official",
+            routeSet: {
+              id: "claude-routes",
+              revision: 1,
+              candidateRouteIds: ["claude-official"],
+            },
+          },
+          pluginBindings: [],
+        },
+      ],
     },
-    access: { id: accessId, displayName: accessName, applicationRevision: 4 },
-    parentRefs: {
-      captureRunId: runId,
-      ingressProfileId: `capture-run/${runId}`,
-      connectionId: `connection-${id}`,
-      accessId,
-      exchangeId: id,
+  ],
+  pluginBindings: [],
+  budgetPolicy: { id: "work-budget", revision: 1 },
+  egressPolicy: { id: "work-egress", revision: 1, mode: "direct" },
+};
+
+const managedCapture: CaptureRecord = {
+  key: "managed_run:run-preview",
+  id: "run-preview",
+  kind: "managed_run",
+  displayName: "claude",
+  state: "running",
+  observation: "observed",
+  createdAt: timestamp,
+  updatedAt: laterTimestamp,
+  managedRun: {
+    executableLabel: "claude",
+    cwd: "/Users/example/project",
+    canonicalExecutablePath: "/Users/example/.local/bin/claude",
+    localUserLabel: "example",
+    machineId: "machine-preview",
+    machineRegistrationRevision: 1,
+    workspaceId: "workspace-preview",
+    workspaceLabel: "project",
+    workspaceEvidence: "canonical_path",
+    workspaceDerivationRevision: 1,
+    processId: 42,
+    recognition: "recognized",
+    expiresAt: "2026-08-08T10:00:00.000Z",
+    firstObservedAt: laterTimestamp,
+  },
+};
+
+const baseManualCapture: ManualCaptureRecord = {
+  id: "manual-preview",
+  displayName: "Editor",
+  clientClass: "desktop_app",
+  lifetime: "until_revoked",
+  state: "active",
+  observation: "waiting_for_traffic",
+  createdAt: timestamp,
+  updatedAt: timestamp,
+};
+
+function manualCaptureRecord(record: ManualCaptureRecord): CaptureRecord {
+  return {
+    key: `manual_capture:${record.id}`,
+    id: record.id,
+    kind: "manual_capture",
+    displayName: record.displayName,
+    state: record.state,
+    observation: record.observation,
+    createdAt: record.createdAt,
+    updatedAt: record.updatedAt,
+    manualCapture: {
+      clientClass: record.clientClass,
+      lifetime: record.lifetime,
+      credentialRevision: 1,
+      ...(record.expiresAt === undefined ? {} : { expiresAt: record.expiresAt }),
+      ...(record.lastObservedAt === undefined
+        ? {}
+        : { lastObservedAt: record.lastObservedAt }),
     },
   };
 }
 
-const previewActivities: readonly ActivityRecord[] = [
-  previewActivity("exchange-preview-5", "2026-08-02T10:01:03Z", "work", "succeeded"),
-  previewActivity("exchange-preview-4", "2026-08-02T10:01:00Z", "work", "succeeded"),
-  previewActivity("exchange-preview-3", "2026-08-02T10:00:03Z", "work", "failed", "run-multi-access"),
-  previewActivity("exchange-preview-2", "2026-08-02T09:58:00Z", "personal", "succeeded", "run-multi-access"),
-  previewActivity("exchange-preview-1", "2026-08-02T09:55:00Z", "work", "canceled"),
-  ...Array.from(
-    { length: 35 },
-    (_, index): ActivityRecord => {
-      const accessId = index % 4 === 0 ? "personal" : "work";
-      return previewActivity(
-        `exchange-preview-history-${String(index + 1).padStart(2, "0")}`,
-        new Date(Date.parse("2026-08-02T09:54:00Z") - index * 47_000).toISOString(),
-        accessId,
-        index % 11 === 0 ? "failed" : index % 7 === 0 ? "canceled" : "succeeded",
-        accessId === "personal" ? "run-multi-access" : "run-one-access",
-      );
+const frozenEnvironment = {
+  id: "work",
+  revision: 3,
+  digest: workDigest,
+  clientEndpointId: "claude-endpoint",
+  clientEndpointRevision: 2,
+  protocolPlanId: "claude-messages",
+  protocolPlanRevision: 2,
+  routeId: "claude-official",
+  routeRevision: 2,
+} as const;
+
+const previewExchange: ExchangeDetail = {
+  id: "exchange-preview",
+  status: "succeeded",
+  environment: frozenEnvironment,
+  parentRefs: {
+    captureRunId: "run-preview",
+    connectionId: "connection-preview",
+    exchangeId: "exchange-preview",
+  },
+  processingTrace: {
+    pluginRunIds: [],
+    attemptIds: ["attempt-preview"],
+    result: "completed",
+  },
+};
+
+const pendingApproval: ApprovalView = {
+  id: "approval-preview",
+  revision: 1,
+  kind: "network_ask",
+  state: "pending",
+  risk: "network",
+  titleKey: "approval.networkAsk.title",
+  summaryKey: "approval.networkAsk.summary",
+  aggregateKey: "network:example.com:443",
+  environmentId: "work",
+  environmentRevision: 3,
+  environmentDigest: workDigest,
+  routeId: "claude-official",
+  routeRevision: 2,
+  target: { host: "example.com", port: 443 },
+  subjectRefs: ["connection-preview"],
+  subjectLabels: ["example.com:443"],
+  requestCount: 1,
+  waiterCount: 1,
+  choices: [
+    {
+      decision: "allow-once",
+      scope: "request",
+      labelKey: "approval.networkAsk.choice.allowOnce",
     },
-  ),
-];
+    {
+      decision: "deny",
+      scope: "request",
+      labelKey: "approval.networkAsk.choice.denyOnce",
+    },
+  ],
+  createdAt: timestamp,
+  expiresAt: "2026-08-08T08:10:00.000Z",
+};
 
-const previewWorkspaces = [
-  "payments-api",
-  "desktop-app",
-  "documentation",
-  "mobile-client",
-  "infra",
-  "research",
-  "release",
-  "support-tools",
-] as const;
-
-const previewCaptureRuns: readonly CaptureRunRecord[] = Array.from(
-  { length: 8 },
-  (_, index) => {
-    const samples = captureRunSamples as readonly CaptureRunRecord[];
-    const base = samples[index % samples.length]!;
-    const workspace = previewWorkspaces[index]!;
-    const id =
-      index === 0
-        ? "run-no-access"
-        : index === 1
-          ? "run-one-access"
-          : index === 2
-            ? "run-multi-access"
-            : `run-preview-${index + 1}`;
-    return {
-      ...base,
-      id,
-      ingressProfileId: `capture-run/${id}`,
-      executableLabel: index % 3 === 1 ? "codex" : "claude",
-      cwd: `/Users/example/${workspace}`,
-      workspaceLabel: workspace,
-      processId: 4_200 + index,
-      createdAt: new Date(
-        Date.parse("2026-08-02T10:08:00Z") - index * 71_000,
-      ).toISOString(),
-      updatedAt: new Date(
-        Date.parse("2026-08-02T10:10:00Z") - index * 63_000,
-      ).toISOString(),
-    };
-  },
-);
-
-const previewConnections: readonly ConnectionRecord[] = Array.from(
-  { length: 36 },
-  (_, index) => {
-    const samples = connectionSamples as readonly ConnectionRecord[];
-    const base = samples[0]!;
-    const source = previewCaptureRuns[index % previewCaptureRuns.length]!;
-    const requestedHost =
-      index % 3 === 0
-        ? "api.anthropic.com"
-        : index % 3 === 1
-          ? "api.openai.com"
-          : `service-${index + 1}.example.com`;
-    const access =
-      source.id === "run-no-access" || requestedHost.startsWith("service-")
-        ? undefined
-        : source.id === "run-multi-access" && requestedHost === "api.openai.com"
-          ? { id: "personal", name: "Personal Claude" }
-          : { id: "work", name: "Work Claude" };
-    return {
-      ...base,
-      sequence: index + 1,
-      connectionId: `connection-preview-${index + 1}`,
-      ingressId: source.ingressProfileId,
-      sourceLabel: `${source.executableLabel} · ${source.workspaceLabel}`,
-      requestedHost,
-      routeHost: requestedHost,
-      decryption: access === undefined ? "blind" as const : "mitm" as const,
-      ...(access === undefined
-        ? {}
-        : {
-            accessId: access.id,
-            accessName: access.name,
-            accessRevision: 4,
-            agentEndpointId: `${access.id}-endpoint`,
-            agentEndpointRevision: 2,
-          }),
-      startedAt: new Date(
-        Date.parse("2026-08-02T10:10:00Z") - index * 19_000,
-      ).toISOString(),
-    };
-  },
-);
-
-const previewEgressAttempts: readonly EgressAttemptRecord[] = Array.from(
-  { length: 36 },
-  (_, index) => {
-    const samples = egressSamples as readonly EgressAttemptRecord[];
-    const base = samples[index % samples.length]!;
-    const connection = previewConnections[index]!;
-    return {
-      ...base,
-      sequence: index + 1,
-      id: `egress-preview-${index + 1}`,
-      connectionId: connection.connectionId,
-      targetOrigin: `https://${connection.requestedHost}:${connection.port}`,
-      startedAt: connection.startedAt,
-    };
-  },
-);
-
-function initialOfflineHold(): OfflineHoldSnapshot {
-  return {
-    state: "online",
-    revision: 8,
-    since: "2026-08-02T08:42:00Z",
-    activeActions: 1,
-    enteringActions: 0,
-    activeEgress: 1,
-    queuedRequests: 0,
-    heldBytes: 0,
-    safeToDisconnect: false,
-    activeByKind: { exchange: 1 },
-    queuedByKind: {},
-  };
+function clone<T>(value: T): T {
+  return structuredClone(value);
 }
 
 class PreviewControlClient implements ControlClient {
-  #offline = initialOfflineHold();
-  #approvals: ApprovalView[] = (
-    approvalSamples as readonly ApprovalView[]
-  ).map((item) => ({
-      ...item,
-      subjectRefs: [...item.subjectRefs],
-      subjectLabels: [...item.subjectLabels],
-      choices: item.choices.map((choice) => ({ ...choice })),
-    }));
-  #accesses = new Map([
-    [
-      "work",
-      {
-        input: previewWorkAccess,
-        revision: 4,
-        status: "enabled" as AccessStatus,
-      },
-    ],
+  private closed = false;
+  private offline = clone(emptyOffline);
+  private readonly environmentRecords = new Map<string, EnvironmentRecord>([
+    [transparentEnvironment.id, clone(transparentEnvironment)],
+    [workEnvironment.id, clone(workEnvironment)],
   ]);
-  #deletionTokens = new Map<string, string>();
-  #retiredAccesses = new Set<string>();
-  #credentials = new Map<string, CredentialView>([
-    [
-      "work-openai\u0000work-account",
-      {
-        credentialId: "work-account",
-        profileId: "work-openai",
-        secretState: "configured",
-        secretRevision: 2,
-      },
-    ],
+  private readonly historicalEnvironments = new Map<string, EnvironmentRecord>([
+    [`${transparentEnvironment.id}@${transparentEnvironment.revision}`, clone(transparentEnvironment)],
+    [`${workEnvironment.id}@${workEnvironment.revision}`, clone(workEnvironment)],
   ]);
-  #manualCaptures = new Map<string, ManualCaptureRecord>();
-  #nextManualCapture = 1;
-  #workspaceRoutes: WorkspaceRouteBinding[] = [
-    {
-      id: "Z".repeat(43),
-      accessId: "work",
-      machineId: "M".repeat(43),
-      machineShortId: "M".repeat(10),
-      machineDisplayName: "Null's MacBook",
-      machineRegistrationRevision: 1,
-      workspaceId: "W".repeat(43),
-      workspaceLabel: "vibermate",
-      workspaceEvidence: "local_launcher",
-      profileId: "work-openai",
-      revision: 3,
-      state: "active",
-      activeRunCount: 3,
-      activeRuns: [
-        {
-          runId: "run-preview-alice-1",
-          clientLabel: "Claude Code",
-          localUserLabel: "alice",
-          state: "active",
-          startedAt: "2026-08-02T09:54:00Z",
-          lastActivityAt: "2026-08-02T10:01:03Z",
-        },
-        {
-          runId: "run-preview-alice-2",
-          clientLabel: "Claude Code",
-          localUserLabel: "alice",
-          state: "idle",
-          startedAt: "2026-08-02T09:57:00Z",
-          lastActivityAt: "2026-08-02T10:00:12Z",
-        },
-        {
-          runId: "run-preview-bob-1",
-          clientLabel: "Claude Code",
-          localUserLabel: "bob",
-          state: "active",
-          startedAt: "2026-08-02T09:59:00Z",
-          lastActivityAt: "2026-08-02T10:01:01Z",
-        },
-      ],
-      pinnedRequestCount: 1,
-      approvedProfiles: [
-        {
-          profileId: "work-openai",
-          kind: "managed",
-          label: "001 · Demo route",
-          modelPresentation: "example-model",
-          authPresentation: "vibermate_account",
-          authLabel: "001",
-          available: true,
-        },
-        {
-          profileId: "work-secondary",
-          kind: "managed",
-          label: "002 · Backup relay",
-          modelPresentation: "gpt-5.6-sol",
-          authPresentation: "vibermate_account",
-          authLabel: "002",
-          available: true,
-        },
-        {
-          profileId: "original-passthrough",
-          kind: "original_passthrough",
-          label: "Current client login",
-          modelPresentation: "passthrough",
-          authPresentation: "client_auth",
-          authLabel: "Claude Code login",
-          available: true,
-        },
-      ],
-      updatedAt: "2026-08-02T10:01:00Z",
-    },
-  ];
+  private readonly drafts = new Map<string, EnvironmentDraft>();
+  private readonly manualRecords = new Map<string, ManualCaptureRecord>([
+    [baseManualCapture.id, clone(baseManualCapture)],
+  ]);
+  private readonly captureAssignments = new Map<string, CaptureAssignment>([
+    [managedCapture.key, {
+      captureKey: managedCapture.key,
+      captureId: managedCapture.id,
+      captureKind: managedCapture.kind,
+      environmentId: "work",
+      revision: 1,
+      source: "launch",
+      updatedAt: timestamp,
+    }],
+    [`manual_capture:${baseManualCapture.id}`, {
+      captureKey: `manual_capture:${baseManualCapture.id}`,
+      captureId: baseManualCapture.id,
+      captureKind: "manual_capture",
+      environmentId: "system_transparent",
+      revision: 1,
+      source: "manual_create",
+      updatedAt: timestamp,
+    }],
+  ]);
+  private approval = clone(pendingApproval);
+  private rules: ConnectionRuleSet = {
+    revision: 1,
+    rules: [],
+    default: { id: "default-ask", priority: 0, decision: "ask", match: "any" },
+  };
 
   close(): void {
-    // Preview owns no capability or transport; closing remains idempotent.
+    this.closed = true;
   }
 
-  async status(_signal?: AbortSignal): Promise<StatusResponse> {
+  private requireOpen(): void {
+    if (this.closed) throw new DOMException("Preview control closed", "AbortError");
+  }
+
+  async status(): Promise<StatusResponse> {
+    this.requireOpen();
     return {
-      generation: "preview-runtime-8f2a",
+      generation: "preview-generation",
       ready: true,
       apiVersion: "v1",
-      statusKey: "runtime.state.initialized",
+      statusKey: "status.ready",
       runtime: {
         state: "initialized",
-        instanceId: "preview-runtime-8f2a",
+        instanceId: "preview-instance",
         host: "desktop",
-        schemaRevision: 26,
+        schemaRevision: 1,
         storage: "healthy",
-        accessProjection: {
+        environmentProjection: {
           state: "healthy",
-          unavailableAccessCount: 0,
+          unavailableEnvironments: null,
         },
-        offlineHold: this.#offline,
-        startedAt: previewStartedAt,
+        offlineHold: clone(this.offline),
+        startedAt: timestamp,
       },
     };
   }
 
-  async offlineHold(_signal?: AbortSignal): Promise<OfflineHoldSnapshot> {
-    return this.#offline;
+  async offlineHold(): Promise<OfflineHoldSnapshot> {
+    this.requireOpen();
+    return clone(this.offline);
   }
 
-  async enterOfflineHold(
-    expectedRevision: number,
-    _signal?: AbortSignal,
-  ): Promise<OfflineHoldSnapshot> {
-    this.#requireOfflineRevision(expectedRevision);
-    this.#offline = {
-      ...this.#offline,
-      state: "held",
-      revision: this.#offline.revision + 1,
-      since: new Date().toISOString(),
-      activeActions: 0,
-      activeEgress: 0,
-      queuedRequests: 2,
-      heldBytes: 8192,
-      safeToDisconnect: true,
-      activeByKind: {},
-      queuedByKind: { exchange: 2 },
-    };
-    return this.#offline;
+  async enterOfflineHold(expectedRevision: number): Promise<OfflineHoldSnapshot> {
+    this.requireOpen();
+    this.requireRevision(this.offline.revision, expectedRevision);
+    this.offline = { ...this.offline, state: "held", revision: expectedRevision + 1, since: laterTimestamp };
+    return clone(this.offline);
   }
 
-  async resumeOfflineHold(
-    expectedRevision: number,
-    _signal?: AbortSignal,
-  ): Promise<OfflineHoldSnapshot> {
-    this.#requireOfflineRevision(expectedRevision);
-    this.#offline = {
-      ...initialOfflineHold(),
-      revision: this.#offline.revision + 1,
-      since: new Date().toISOString(),
-    };
-    return this.#offline;
+  async resumeOfflineHold(expectedRevision: number): Promise<OfflineHoldSnapshot> {
+    this.requireOpen();
+    this.requireRevision(this.offline.revision, expectedRevision);
+    this.offline = { ...this.offline, state: "online", revision: expectedRevision + 1, since: laterTimestamp };
+    return clone(this.offline);
   }
 
-  async activities(cursor?: string, _signal?: AbortSignal) {
-    if (cursor === undefined) {
-      return {
-        items: previewActivities.slice(0, 20),
-        nextCursor: previewActivityCursor,
-      };
-    }
-    if (cursor === previewActivityCursor) {
-      return { items: previewActivities.slice(20) };
-    }
-    throw new Error("Preview Activity cursor is invalid");
+  async environments(): Promise<EnvironmentPage> {
+    this.requireOpen();
+    return { items: [...this.environmentRecords.values()].sort((left, right) => left.id.localeCompare(right.id)).map(clone) };
   }
 
-  async runActivities(
-    runId: string,
-    cursor?: string,
-    signal?: AbortSignal,
-  ): Promise<ActivityPage> {
-    const page = await this.activities(cursor, signal);
-    return {
-      ...page,
-      items: page.items.filter((item) => item.parentRefs.captureRunId === runId),
-    };
+  async environment(environmentId: string): Promise<EnvironmentRecord> {
+    this.requireOpen();
+    return clone(this.requireEnvironment(environmentId));
   }
 
-  async exchange(
-    exchangeId: string,
-    _signal?: AbortSignal,
-  ): Promise<ExchangeDetail> {
-    const record = previewActivities.find((item) => item.id === exchangeId);
-    if (record === undefined && exchangeId === "ex204") {
-      return {
-        id: exchangeId,
-        accessId: "work",
-        status: "failed",
-        processingTrace: {
-          egressProxyId: "direct",
-          pluginRunIds: [],
-          attemptIds: ["attempt-ex204-1"],
-          result: "provider_transport_failed",
-        },
-      };
-    }
-    if (record === undefined) {
-      throw new ControlProblem(
-        404,
-        "exchange_not_found",
-        "error.exchange_not_found",
-      );
-    }
-    return {
-      id: record.id,
-      accessId: record.access.id,
-      status: record.status,
-      processingTrace: {
-        egressProxyId: "direct",
-        pluginRunIds:
-          exchangeId === "exchange-preview-4"
-            ? ["plugin-run-preview-polish"]
-            : [],
-        attemptIds: [`attempt-${exchangeId}`],
-        result:
-          record.status === "failed"
-            ? "provider_transport_failed"
-            : record.status,
-      },
-    };
+  async environmentRevision(environmentId: string, revision: number): Promise<EnvironmentRecord> {
+    this.requireOpen();
+    const value = this.historicalEnvironments.get(`${environmentId}@${revision}`);
+    if (value === undefined) throw this.notFound();
+    return clone(value);
   }
 
-  async approvals(_signal?: AbortSignal) {
-    return { items: this.#approvals.filter((item) => item.state === "pending") };
-  }
-
-  async captureRuns(_signal?: AbortSignal) {
-    return {
-      items: previewCaptureRuns,
-    };
-  }
-
-  async captureRun(runId: string, _signal?: AbortSignal): Promise<CaptureRunRecord> {
-    const run = previewCaptureRuns.find((item) => item.id === runId);
-    if (run === undefined) {
-      throw new ControlProblem(404, "capture_run_not_found", "error.capture_run_not_found");
-    }
-    return run;
-  }
-
-  async workspaceRouteBindings(_signal?: AbortSignal) {
-    return {
-      items: this.#workspaceRoutes.map((binding) => ({
-        ...binding,
-        activeRuns: binding.activeRuns.map((run) => ({ ...run })),
-        approvedProfiles: binding.approvedProfiles.map((profile) => ({
-          ...profile,
-        })),
-      })),
-    };
-  }
-
-  async updateWorkspaceRouteBinding(
-    bindingId: string,
-    expectedRevision: number,
-    profileId: string,
-    _signal?: AbortSignal,
-  ): Promise<WorkspaceRouteBinding> {
-    const index = this.#workspaceRoutes.findIndex(
-      (binding) => binding.id === bindingId,
+  async environmentDraft(environmentId: string): Promise<EnvironmentDraft> {
+    this.requireOpen();
+    const existing = this.drafts.get(environmentId);
+    if (existing !== undefined) return clone(existing);
+    throw new ControlProblem(
+      404,
+      "environment_draft_not_found",
+      "error.environment_draft_not_found",
     );
-    const current = this.#workspaceRoutes[index];
-    if (
-      current === undefined ||
-      current.revision !== expectedRevision ||
-      !current.approvedProfiles.some(
-        (profile) => profile.profileId === profileId && profile.available,
-      )
-    ) {
-      throw new Error("Preview workspace route changed");
+  }
+
+  async saveEnvironmentDraft(
+    environmentId: string,
+    expectedBaseRevision: number,
+    input: EnvironmentDraftInput,
+  ): Promise<EnvironmentDraft> {
+    this.requireOpen();
+    const current = this.environmentRecords.get(environmentId);
+    if (current === undefined) {
+      this.requireRevision(0, expectedBaseRevision);
+    } else {
+      this.requireRevision(current.revision, expectedBaseRevision);
     }
-    const updated: WorkspaceRouteBinding = {
-      ...current,
-      profileId,
-      revision: current.revision + 1,
-      updatedAt: new Date().toISOString(),
+    const previous = this.drafts.get(environmentId);
+    this.requireRevision(previous?.draftRevision ?? 0, input.expectedDraftRevision);
+    const draft: EnvironmentDraft = {
+      environmentId,
+      baseRevision: current?.revision ?? 0,
+      draftRevision: input.expectedDraftRevision + 1,
+      candidateDigest: draftDigest,
+      candidate: {
+        id: environmentId,
+        name: input.name,
+        state: input.state,
+        revision: current?.revision ?? 0,
+        digest: draftDigest,
+        systemOwned: current?.systemOwned ?? false,
+        clientEndpoints: clone(input.clientEndpoints),
+        pluginBindings: clone(input.pluginBindings),
+        budgetPolicy: clone(input.budgetPolicy),
+        egressPolicy: clone(input.egressPolicy),
+      },
     };
-    this.#workspaceRoutes[index] = updated;
-    return updated;
+    this.drafts.set(environmentId, draft);
+    return clone(draft);
   }
 
-  async connections(_signal?: AbortSignal) {
-    return {
-      items: previewConnections,
-    };
+  async previewEnvironmentDraft(environmentId: string, draftRevision: number): Promise<EnvironmentImpact> {
+    this.requireOpen();
+    return clone(this.impact(environmentId, draftRevision));
   }
 
-  async runConnections(runId: string, _signal?: AbortSignal) {
-    const ingressId = `capture-run/${runId}`;
-    return {
-      items: previewConnections.filter((item) => item.ingressId === ingressId),
+  async publishEnvironmentDraft(environmentId: string, draftRevision: number): Promise<EnvironmentPublishResult> {
+    this.requireOpen();
+    const draft = this.requireDraft(environmentId, draftRevision);
+    const impact = this.impact(environmentId, draftRevision);
+    const committed: EnvironmentRecord = {
+      ...clone(draft.candidate),
+      revision: draft.baseRevision + 1,
+      digest: draft.candidateDigest,
     };
+    this.environmentRecords.set(environmentId, committed);
+    this.historicalEnvironments.set(`${environmentId}@${committed.revision}`, clone(committed));
+    this.drafts.delete(environmentId);
+    return { outcome: "committed", environment: clone(committed), impact };
   }
 
-  async egressAttempts(_signal?: AbortSignal) {
-    return {
-      items: previewEgressAttempts,
-    };
+  async captures(): Promise<CapturePage> {
+    this.requireOpen();
+    return { items: this.captureRecords().sort((left, right) => left.key.localeCompare(right.key)) };
   }
 
-  async decideApproval(
-    approval: ApprovalView,
-    choice: ApprovalChoice,
-    _signal?: AbortSignal,
-  ): Promise<ApprovalView> {
-    const index = this.#approvals.findIndex((item) => item.id === approval.id);
-    const current = this.#approvals[index];
-    if (
-      current === undefined ||
-      current.revision !== approval.revision ||
-      !current.choices.some(
-        (candidate) =>
-          candidate.decision === choice.decision &&
-          candidate.scope === choice.scope,
-      )
-    ) {
-      throw new Error("Preview approval changed before it was decided");
+  async capture(captureKey: string): Promise<CaptureRecord> {
+    this.requireOpen();
+    const record = this.captureRecords().find((candidate) => candidate.key === captureKey);
+    if (record === undefined) throw this.notFound();
+    return clone(record);
+  }
+
+  async captureAssignment(captureKey: string): Promise<CaptureAssignment> {
+    this.requireOpen();
+    const assignment = this.captureAssignments.get(captureKey);
+    if (assignment === undefined) throw this.notFound();
+    return clone(assignment);
+  }
+
+  async switchCaptureEnvironment(
+    captureKey: string,
+    expectedRevision: number,
+    environmentId: string,
+  ): Promise<CaptureAssignmentSwitchResult> {
+    this.requireOpen();
+    this.requireEnvironment(environmentId);
+    const current = this.captureAssignments.get(captureKey);
+    if (current === undefined) throw this.notFound();
+    this.requireRevision(current.revision, expectedRevision);
+    if (current.environmentId === environmentId) {
+      return { assignment: clone(current), boundary: "no_change", closedConnections: [], applied: true };
     }
-    const resolved: ApprovalView = {
+    const assignment: CaptureAssignment = {
       ...current,
-      revision: current.revision + 1,
+      environmentId,
+      revision: expectedRevision + 1,
+      source: "operator_switch",
+      updatedAt: laterTimestamp,
+    };
+    this.captureAssignments.set(captureKey, assignment);
+    return { assignment: clone(assignment), boundary: "hot_switch", closedConnections: [], applied: true };
+  }
+
+  async activities(query?: ActivityQuery): Promise<ActivityPage> {
+    this.requireOpen();
+    const item = {
+      id: previewExchange.id,
+      occurredAt: laterTimestamp,
+      kind: "exchange" as const,
+      title: "Claude request",
+      status: previewExchange.status,
+      source: { kind: "capture_run" as const, displayName: "claude", recognition: "verified" as const },
+      environment: frozenEnvironment,
+      parentRefs: previewExchange.parentRefs,
+    };
+    const included =
+      (query?.captureRunId === undefined || query.captureRunId === item.parentRefs.captureRunId) &&
+      (query?.environmentId === undefined || query.environmentId === item.environment.id);
+    return { items: included ? [clone(item)] : [] };
+  }
+
+  async exchange(exchangeId: string): Promise<ExchangeDetail> {
+    this.requireOpen();
+    if (exchangeId !== previewExchange.id) throw this.notFound();
+    return clone(previewExchange);
+  }
+
+  async approvals(): Promise<ApprovalPage> {
+    this.requireOpen();
+    return { items: this.approval.state === "pending" ? [clone(this.approval)] : [] };
+  }
+
+  async decideApproval(approval: ApprovalView, choice: ApprovalChoice): Promise<ApprovalView> {
+    this.requireOpen();
+    this.requireRevision(this.approval.revision, approval.revision);
+    this.approval = {
+      ...this.approval,
+      revision: approval.revision + 1,
       state: choice.decision === "deny" ? "denied" : "allowed",
+      waiterCount: 0,
       decision: choice.decision,
       decisionScope: choice.scope,
-      resolvedAt: new Date().toISOString(),
+      resolvedAt: laterTimestamp,
     };
-    this.#approvals[index] = resolved;
-    return resolved;
+    return clone(this.approval);
   }
 
-  async accesses(_signal?: AbortSignal) {
+  async manualCaptureContext(environmentId: string): Promise<ManualCaptureContext> {
+    this.requireOpen();
+    const environment = this.requireEnvironment(environmentId);
     return {
-      items: [...this.#accesses.entries()]
-        .sort(([left], [right]) => compareResourceIds(left, right))
-        .map(([accessId, entry]) => ({
-          accessId,
-          name: entry.input.access.name,
-          description: entry.input.access.description,
-          status: entry.status,
-          revision: entry.revision,
-          clientOrigin: entry.input.agentEndpoint.clientOrigin,
-          clientDialect: entry.input.agentEndpoint.clientDialect,
-        })),
-    };
-  }
-
-  async access(accessId: string, _signal?: AbortSignal) {
-    const entry = this.#accesses.get(accessId);
-    if (entry === undefined) {
-      throw new ControlProblem(
-        404,
-        "access_not_configured",
-        "error.access_not_configured",
-      );
-    }
-    const input = entry.input;
-    const originalProfileId = "original-passthrough";
-    const originalTargetId = "original-client-origin";
-    const defaultRouteSetId = "default-route";
-    const managedProfiles = input.profiles.map((profile) => ({
-      ...profile,
-      kind: "managed" as const,
-      credentialSource: "managed_account" as const,
-      processingMode: "managed" as const,
-    }));
-    const originalProfile = {
-      id: originalProfileId,
-      kind: "original_passthrough" as const,
-      credentialSource: "client_passthrough" as const,
-      processingMode: "observe_only" as const,
-      name: "Current client login",
-      description: "",
-      backendDialect: input.agentEndpoint.clientDialect,
-      targetId: originalTargetId,
-      upstreamWireProfileRef: "follow-client",
-      defaultModelPolicy: { mode: "passthrough" as const },
-      accountBindingIds: [] as string[],
-      defaultAccountBindingId: "",
-    };
-    const routeSets =
-      input.routeSets.length === 0
-        ? [
-            {
-              id: defaultRouteSetId,
-              candidateProfileIds: [originalProfileId],
-              fallback: "disabled" as const,
+      confirmationToken: `ctx_${"A".repeat(43)}`,
+      proxyAddress: "http://127.0.0.1:43180",
+      environmentId,
+      environmentRevision: environment.revision,
+      environmentDigest: environment.digest,
+      launchAuthorityDigest,
+      protectedAuthorities: environment.clientEndpoints.map((endpoint) => new URL(endpoint.clientOrigin).host),
+      managedCredentialAuthorities: [],
+      ...(environment.clientEndpoints.length === 0
+        ? {}
+        : {
+            root: {
+              kind: "local_path" as const,
+              derSha256: "5".repeat(64),
+              fingerprint: "55:55:55:55",
+              pemPath: "/Users/example/Library/Application Support/ViberMate/root.pem",
             },
-          ]
-        : input.routeSets.map((routeSet) => ({
-            ...routeSet,
-            candidateProfileIds: routeSet.candidateProfileIds.includes(
-              originalProfileId,
-            )
-              ? [...routeSet.candidateProfileIds]
-              : [...routeSet.candidateProfileIds, originalProfileId],
-            fallback: "disabled" as const,
-          }));
-    return {
-      revision: entry.revision,
-      access: {
-        ...input.access,
-        status: entry.status,
-        defaultRouteSetId:
-          input.access.defaultRouteSetId || defaultRouteSetId,
-        profileIds: [...input.access.profileIds, originalProfileId],
-      },
-      agentEndpoint: input.agentEndpoint,
-      profiles: [...managedProfiles, originalProfile],
-      providerTargets: [
-        ...input.providerTargets,
-        {
-          id: originalTargetId,
-          profileId: originalProfileId,
-          origin: input.agentEndpoint.clientOrigin,
-          protocol: input.agentEndpoint.clientDialect,
-          capabilities: ["messages", "streaming", "tool_calls"] as const,
-        },
-      ],
-      accountBindings: input.accountBindings.map(
-        ({ secretRef: _secretRef, ...binding }) => ({
-          ...binding,
-          secretHandling: "preserve_existing" as const,
-        }),
-      ),
-      routeSets,
-      egressPolicy: input.egressPolicy,
-      pluginPlan: input.pluginPlan,
+          }),
+      defaultTemporarySeconds: 3_600,
+      maxTemporarySeconds: 86_400,
     };
   }
 
-  async addAccessCandidate(
-    accessId: string,
-    expectedRevision: number,
-    candidate: AccessAddCandidateInput,
-    _signal?: AbortSignal,
-  ): Promise<AccessAddCandidateResponse> {
-    const entry = this.#accesses.get(accessId);
-    if (entry === undefined || entry.revision !== expectedRevision) {
-      throw new Error("Preview Access revision changed");
-    }
-    const sequence = expectedRevision + 1;
-    const profileId = `${accessId}-route-${sequence}`;
-    const targetId = `${profileId}-target`;
-    const credentialId = `${profileId}-account`;
-    const origin =
-      candidate.provider === "anthropic"
-        ? "https://api.anthropic.com"
-        : candidate.provider === "openai"
-          ? "https://api.openai.com/v1"
-          : candidate.baseUrl;
-    const backendDialect = candidate.provider.startsWith("anthropic")
-      ? "anthropic-messages"
-      : "openai-chat";
-    const input: AccessApplyInput = {
-      ...entry.input,
-      expectedRevision,
-      access: {
-        ...entry.input.access,
-        profileIds: [...entry.input.access.profileIds, profileId],
-      },
-      profiles: [
-        ...entry.input.profiles,
-        {
-          id: profileId,
-          name: candidate.name,
-          description: "",
-          backendDialect,
-          targetId,
-          upstreamWireProfileRef: "follow-client",
-          defaultModelPolicy: {
-            mode: "fixed",
-            fixedModel: candidate.model,
-          },
-          accountBindingIds: [credentialId],
-          defaultAccountBindingId: credentialId,
-        },
-      ],
-      providerTargets: [
-        ...entry.input.providerTargets,
-        {
-          id: targetId,
-          profileId,
-          origin,
-          protocol: backendDialect,
-          capabilities: ["messages", "streaming", "tool_calls"],
-        },
-      ],
-      accountBindings: [
-        ...entry.input.accountBindings,
-        {
-          id: credentialId,
-          profileId,
-          label: candidate.name,
-          secretRef: `secret://provider/${credentialId}`,
-          authDriverRef:
-            candidate.authDriverRef ??
-            (candidate.provider.startsWith("anthropic")
-              ? "anthropic_api_key"
-              : "static_header"),
-          enabled: true,
-        },
-      ],
-      // A new candidate stays outside the active route set until its secret is
-      // saved and the explicit select action succeeds.
-      routeSets: entry.input.routeSets,
-    };
-    this.#accesses.set(accessId, {
-      input,
-      revision: sequence,
-      status: entry.status,
-    });
-    this.#credentials.set(this.#credentialKey(profileId, credentialId), {
-      credentialId,
-      profileId,
-      secretState: "missing",
-      secretRevision: 0,
-    });
-    return {
-      outcome: "committed",
-      revision: sequence,
-      applicationState: "active",
-      planHash: "7f".repeat(32),
-      candidate: { credentialId, profileId },
-    };
+  async manualCaptures(): Promise<ManualCapturePage> {
+    this.requireOpen();
+    return { items: [...this.manualRecords.values()].map(clone) };
   }
 
-  async applyAccess(
-    accessId: string,
-    input: AccessApplyInput,
-    _signal?: AbortSignal,
-  ) {
-    if (this.#retiredAccesses.has(accessId)) {
-      throw new ControlProblem(409, "access_retired", "error.access_retired");
-    }
-    const currentRevision = this.#accesses.get(accessId)?.revision ?? 0;
-    if (
-      input.access.id !== accessId ||
-      input.expectedRevision !== currentRevision
-    ) {
-      throw new Error("Preview Access revision changed");
-    }
-    const revision = input.expectedRevision + 1;
-    this.#accesses.set(accessId, { input, revision, status: "enabled" });
-    const binding = input.accountBindings[0];
-    if (binding !== undefined) {
-      this.#credentials.set(this.#credentialKey(binding.profileId, binding.id), {
-        credentialId: binding.id,
-        profileId: binding.profileId,
-        secretState: "missing",
-        secretRevision: 0,
-      });
-    }
-    return {
-      outcome: "committed" as const,
-      revision,
-      applicationState: "active" as const,
-      planHash: "7f".repeat(32),
-    };
+  async manualCapture(manualCaptureId: string): Promise<ManualCaptureStateTag> {
+    this.requireOpen();
+    const capture = this.manualRecords.get(manualCaptureId);
+    if (capture === undefined) throw this.notFound();
+    return { capture: clone(capture), stateTag: this.stateTag(manualCaptureId) };
   }
 
-  async updateAccessStatus(
-    accessId: string,
-    expectedRevision: number,
-    status: Extract<AccessStatus, "enabled" | "disabled">,
-    _signal?: AbortSignal,
-  ): Promise<AccessApplyResponse> {
-    const entry = this.#accesses.get(accessId);
-    if (
-      entry === undefined ||
-      entry.revision !== expectedRevision ||
-      entry.status === status ||
-      (entry.status !== "enabled" && entry.status !== "disabled")
-    ) {
-      throw new Error("Preview Access status changed");
-    }
-    const revision = expectedRevision + 1;
-    this.#accesses.set(accessId, { ...entry, revision, status });
-    if (status === "disabled") {
-      return {
-        outcome: "committed",
-        revision,
-        applicationState: "inactive",
-      };
-    }
-    return {
-      outcome: "committed",
-      revision,
-      applicationState: "active",
-      planHash: "7f".repeat(32),
-    };
-  }
-
-  async previewAccessDeletion(
-    accessId: string,
-    expectedRevision: number,
-    _signal?: AbortSignal,
-  ): Promise<AccessDeletionPreview> {
-    const entry = this.#accesses.get(accessId);
-    if (entry === undefined || entry.revision !== expectedRevision) {
-      throw new Error("Preview Access deletion revision changed");
-    }
-    const routes = this.#workspaceRoutes.filter(
-      (binding) => binding.accessId === accessId,
-    );
-    const activeCaptureRunCount = routes.reduce(
-      (total, binding) => total + binding.activeRuns.length,
-      0,
-    );
-    const blockers = [
-      ...(entry.status === "disabled" ? [] : ["disable_access_first" as const]),
-      ...(activeCaptureRunCount === 0 ? [] : ["active_capture_runs" as const]),
-      ...(routes.length === 0
-        ? []
-        : ["confirm_workspace_retirement" as const]),
-    ];
-    const impactToken = `${"A".repeat(42)}${expectedRevision % 10}`;
-    this.#deletionTokens.set(accessId, impactToken);
-    return {
-      accessId,
-      name: entry.input.access.name,
-      revision: expectedRevision,
-      status: entry.status,
-      workspaceBindingCount: routes.length,
-      activeCaptureRunCount,
-      proxyClientBindingCount: 0,
-      exclusiveSecretCount: new Set(
-        entry.input.accountBindings.map(({ secretRef }) => secretRef),
-      ).size,
-      sharedSecretCount: 0,
-      impactToken,
-      blockers,
-    };
-  }
-
-  async deleteAccess(
-    accessId: string,
-    expectedRevision: number,
-    impactToken: string,
-    retireWorkspaceBindings: boolean,
-    _signal?: AbortSignal,
-  ): Promise<AccessDeletionResponse> {
-    const entry = this.#accesses.get(accessId);
-    const routes = this.#workspaceRoutes.filter(
-      (binding) => binding.accessId === accessId,
-    );
-    if (
-      entry === undefined ||
-      entry.revision !== expectedRevision ||
-      entry.status !== "disabled" ||
-      this.#deletionTokens.get(accessId) !== impactToken ||
-      routes.some((binding) => binding.activeRuns.length !== 0) ||
-      (routes.length !== 0 && !retireWorkspaceBindings)
-    ) {
-      throw new Error("Preview Access deletion changed or is blocked");
-    }
-    const credentialKeys = new Set(
-      entry.input.accountBindings.map(({ id, profileId }) =>
-        this.#credentialKey(profileId, id),
-      ),
-    );
-    for (const key of credentialKeys) {
-      this.#credentials.delete(key);
-    }
-    this.#workspaceRoutes = this.#workspaceRoutes.filter(
-      (binding) => binding.accessId !== accessId,
-    );
-    this.#accesses.delete(accessId);
-    this.#deletionTokens.delete(accessId);
-    this.#retiredAccesses.add(accessId);
-    return { outcome: "deleted", revision: expectedRevision };
-  }
-
-  async accessPlan(accessId: string, _signal?: AbortSignal): Promise<AccessPlanSummary> {
-    const entry = this.#accesses.get(accessId);
-    if (entry === undefined) {
-      throw new Error("Preview Access does not exist");
-    }
-    return {
-      accessId,
-      revision: entry.revision,
-      planHash: "7f".repeat(32),
-      profiles: [
-        "original-passthrough",
-        ...entry.input.profiles.map(({ id }) => id),
-      ],
-      accountBindings: entry.input.accountBindings.map(({ id, profileId }) => ({
-        id,
-        profileId,
-      })),
-    };
-  }
-
-  async credential(
-    _accessId: string,
-    profileId: string,
-    credentialId: string,
-    _signal?: AbortSignal,
-  ): Promise<CredentialView> {
-    return (
-      this.#credentials.get(this.#credentialKey(profileId, credentialId)) ?? {
-        credentialId,
-        profileId,
-        secretState: "missing",
-        secretRevision: 0,
-      }
-    );
-  }
-
-  async replaceCredentialSecret(
-    _accessId: string,
-    profileId: string,
-    credentialId: string,
-    expectedRevision: number,
-    _secret: string,
-    _signal?: AbortSignal,
-  ): Promise<CredentialView> {
-    const key = this.#credentialKey(profileId, credentialId);
-    const current = this.#credentials.get(key) ?? {
-      credentialId,
-      profileId,
-      secretState: "missing" as const,
-      secretRevision: 0,
-    };
-    if (expectedRevision !== current.secretRevision) {
-      throw new Error("Preview credential revision changed");
-    }
-    const credential: CredentialView = {
-      credentialId,
-      profileId,
-      secretState: "configured",
-      secretRevision: expectedRevision + 1,
-    };
-    this.#credentials.set(key, credential);
-    return credential;
-  }
-
-  async selectAccessCandidate(
-    accessId: string,
-    profileId: string,
-    expectedRevision: number,
-    _signal?: AbortSignal,
-  ): Promise<AccessApplyResponse> {
-    const entry = this.#accesses.get(accessId);
-    if (
-      entry === undefined ||
-      entry.revision !== expectedRevision ||
-      (profileId !== "original-passthrough" &&
-        !entry.input.profiles.some(({ id }) => id === profileId))
-    ) {
-      throw new Error("Preview Access candidate changed");
-    }
-    const revision = expectedRevision + 1;
-    const input: AccessApplyInput = {
-      ...entry.input,
-      expectedRevision,
-      routeSets: entry.input.routeSets.map((routeSet) => ({
-        ...routeSet,
-        candidateProfileIds:
-          profileId === "original-passthrough"
-            ? [profileId]
-            : [
-                profileId,
-                ...routeSet.candidateProfileIds.filter(
-                  (candidateId) =>
-                    candidateId !== profileId &&
-                    candidateId !== "original-passthrough",
-                ),
-              ],
-      })),
-    };
-    this.#accesses.set(accessId, {
-      input,
-      revision,
-      status: entry.status,
-    });
-    return {
-      outcome: "committed",
-      revision,
-      applicationState: "active",
-      planHash: "7f".repeat(32),
-    };
-  }
-
-  async manualCaptureContext(
-    _signal?: AbortSignal,
-  ): Promise<ManualCaptureContext> {
-    return structuredClone(previewManualCaptureContext);
-  }
-
-  async manualCaptures(_signal?: AbortSignal): Promise<ManualCapturePage> {
-    return {
-      items: [...this.#manualCaptures.values()]
-        .map((item) => structuredClone(item))
-        .sort((left, right) => right.createdAt.localeCompare(left.createdAt)),
-    };
-  }
-
-  async manualCapture(
-    manualCaptureId: string,
-    _signal?: AbortSignal,
-  ): Promise<ManualCaptureStateTag> {
-    const capture = this.#manualCaptures.get(manualCaptureId);
-    if (capture === undefined) {
-      throw new ControlProblem(
-        404,
-        "manual_capture_not_found",
-        "error.manual_capture_not_found",
-      );
-    }
-    return {
-      capture: structuredClone(capture),
-      stateTag: this.#manualCaptureStateTag(capture),
-    };
-  }
-
-  async createManualCapture(
-    input: ManualCaptureCreateInput,
-    _signal?: AbortSignal,
-  ): Promise<ManualCaptureGrantStateTag> {
-    const sequence = this.#nextManualCapture++;
-    const id = `preview-manual-${sequence}`;
-    const now = new Date(Date.parse(previewStartedAt) + sequence * 1_000);
+  async createManualCapture(input: ManualCaptureCreateInput): Promise<ManualCaptureGrantStateTag> {
+    this.requireOpen();
+    const environment = this.requireEnvironment(input.environmentId);
+    const id = `manual-${this.manualRecords.size + 1}`;
     const capture: ManualCaptureRecord = {
       id,
-      ingressProfileId: `manual-capture/${id}`,
       displayName: input.displayName,
       clientClass: input.clientClass,
       lifetime: input.lifetime,
       state: "active",
       observation: "waiting_for_traffic",
-      createdAt: now.toISOString(),
-      updatedAt: now.toISOString(),
-      ...(input.expiresInSeconds === undefined
+      createdAt: laterTimestamp,
+      updatedAt: laterTimestamp,
+      ...(input.lifetime === "temporary"
+        ? { expiresAt: "2026-08-08T09:00:00.000Z" }
+        : {}),
+    };
+    this.manualRecords.set(id, capture);
+    const key = `manual_capture:${id}`;
+    this.captureAssignments.set(key, {
+      captureKey: key,
+      captureId: id,
+      captureKind: "manual_capture",
+      environmentId: environment.id,
+      revision: 1,
+      source: "manual_create",
+      updatedAt: laterTimestamp,
+    });
+    return {
+      grant: this.grant(capture, environment),
+      stateTag: this.stateTag(id),
+    };
+  }
+
+  async rotateManualCapture(manualCaptureId: string): Promise<ManualCaptureGrantStateTag> {
+    this.requireOpen();
+    const capture = this.manualRecords.get(manualCaptureId);
+    if (capture === undefined) throw this.notFound();
+    const assignment = this.captureAssignments.get(`manual_capture:${manualCaptureId}`);
+    if (assignment === undefined) throw this.notFound();
+    return {
+      grant: this.grant(capture, this.requireEnvironment(assignment.environmentId)),
+      stateTag: this.stateTag(manualCaptureId),
+    };
+  }
+
+  async revokeManualCapture(manualCaptureId: string): Promise<void> {
+    this.requireOpen();
+    const capture = this.manualRecords.get(manualCaptureId);
+    if (capture === undefined) throw this.notFound();
+    this.manualRecords.set(manualCaptureId, { ...capture, state: "revoked", updatedAt: laterTimestamp });
+  }
+
+  async connections(): Promise<ConnectionPage> {
+    this.requireOpen();
+    return {
+      items: [{
+        sequence: 1,
+        connectionId: "connection-preview",
+        ingressId: "run-preview",
+        sourceLabel: "claude",
+        sourceConfidence: "verified",
+        environmentId: "work",
+        environmentName: "Work",
+        environmentRevision: 3,
+        clientEndpointId: "claude-endpoint",
+        clientEndpointRevision: 2,
+        requestedHost: "api.anthropic.com",
+        observedSni: "api.anthropic.com",
+        routeHost: "api.anthropic.com",
+        ip: "203.0.113.1",
+        port: 443,
+        decision: "allow",
+        ruleId: "work-default",
+        egressScope: "environment",
+        egressSource: "environment_default",
+        egressPolicyRevision: 1,
+        decryption: "mitm",
+        phase: "closed",
+        bytesUp: 512,
+        bytesDown: 1_024,
+        startedAt: timestamp,
+        endedAt: laterTimestamp,
+        outcome: "completed",
+      }],
+    };
+  }
+
+  async egressAttempts(): Promise<EgressAttemptPage> {
+    this.requireOpen();
+    return {
+      items: [{
+        sequence: 1,
+        id: "attempt-preview",
+        connectionId: "connection-preview",
+        purpose: "provider_attempt",
+        payloadClass: "client_semantic",
+        parent: { kind: "exchange", id: previewExchange.id, exchangeId: previewExchange.id },
+        caller: "core",
+        targetOrigin: "https://api.anthropic.com:443",
+        decision: { policyId: "work-egress", policyRevision: 1, authority: "environment" },
+        reusedTransport: false,
+        startedAt: timestamp,
+        terminal: true,
+        outcome: "completed",
+        bytesOut: 512,
+        bytesIn: 1_024,
+        completedAt: laterTimestamp,
+      }],
+    };
+  }
+
+  async connectionRules(): Promise<ConnectionRuleSet> {
+    this.requireOpen();
+    return clone(this.rules);
+  }
+
+  async replaceConnectionRules(expectedRevision: number, input: ConnectionRuleSetInput): Promise<ConnectionRuleSet> {
+    this.requireOpen();
+    this.requireRevision(this.rules.revision, expectedRevision);
+    this.rules = { revision: expectedRevision + 1, rules: clone(input.rules), default: clone(input.default) };
+    return clone(this.rules);
+  }
+
+  private captureRecords(): CaptureRecord[] {
+    return [clone(managedCapture), ...[...this.manualRecords.values()].map((record) => manualCaptureRecord(record))];
+  }
+
+  private impact(environmentId: string, draftRevision: number): EnvironmentImpact {
+    const draft = this.requireDraft(environmentId, draftRevision);
+    const affected = [...this.captureAssignments.values()]
+      .filter((assignment) => assignment.environmentId === environmentId)
+      .map((assignment) => ({ captureKind: assignment.captureKind, captureId: assignment.captureId, classification: "hot_switch" as const }));
+    return {
+      environmentId,
+      baseRevision: draft.baseRevision,
+      draftRevision,
+      candidateDigest: draft.candidateDigest,
+      classification: "hot_switch",
+      hotSwitchCount: affected.length,
+      reconnectRequiredCount: 0,
+      restartRequiredCount: 0,
+      affected,
+    };
+  }
+
+  private requireDraft(environmentId: string, revision: number): EnvironmentDraft {
+    const draft = this.drafts.get(environmentId);
+    if (draft === undefined || draft.draftRevision !== revision) throw this.conflict();
+    return draft;
+  }
+
+  private requireEnvironment(environmentId: string): EnvironmentRecord {
+    const environment = this.environmentRecords.get(environmentId);
+    if (environment === undefined) throw this.notFound();
+    return environment;
+  }
+
+  private grant(capture: ManualCaptureRecord, environment: EnvironmentRecord): ManualCaptureGrant {
+    return {
+      capture: clone(capture),
+      proxyAddress: "http://127.0.0.1:43180",
+      proxyUsername: `manual:${capture.id}`,
+      proxyPassword: "preview-secret",
+      environmentId: environment.id,
+      assignmentRevision: this.captureAssignments.get(`manual_capture:${capture.id}`)?.revision ?? 1,
+      launchAuthorityDigest,
+      protectedAuthorities: environment.clientEndpoints.map((endpoint) => new URL(endpoint.clientOrigin).host),
+      managedCredentialAuthorities: [],
+      ...(environment.clientEndpoints.length === 0
         ? {}
         : {
-            expiresAt: new Date(
-              now.getTime() + input.expiresInSeconds * 1_000,
-            ).toISOString(),
+            root: {
+              kind: "local_path" as const,
+              derSha256: "5".repeat(64),
+              fingerprint: "55:55:55:55",
+              pemPath: "/Users/example/Library/Application Support/ViberMate/root.pem",
+            },
           }),
     };
-    this.#manualCaptures.set(id, capture);
-    return this.#manualCaptureGrant(capture, sequence);
   }
 
-  async rotateManualCapture(
-    manualCaptureId: string,
-    stateTag: string,
-    _signal?: AbortSignal,
-  ): Promise<ManualCaptureGrantStateTag> {
-    const current = await this.manualCapture(manualCaptureId);
-    if (current.stateTag !== stateTag || current.capture.state !== "active") {
-      throw new ControlProblem(
-        409,
-        "manual_capture_conflict",
-        "error.manual_capture_conflict",
-      );
-    }
-    const sequence = this.#nextManualCapture++;
-    const updated: ManualCaptureRecord = {
-      ...current.capture,
-      updatedAt: new Date(
-        Date.parse(current.capture.updatedAt) + 1_000,
-      ).toISOString(),
-    };
-    this.#manualCaptures.set(manualCaptureId, updated);
-    return this.#manualCaptureGrant(updated, sequence);
+  private stateTag(id: string): string {
+    return `"mc_${id.padEnd(43, "A").slice(0, 43)}"`;
   }
 
-  async revokeManualCapture(
-    manualCaptureId: string,
-    stateTag: string,
-    _signal?: AbortSignal,
-  ): Promise<void> {
-    const current = await this.manualCapture(manualCaptureId);
-    if (current.stateTag !== stateTag || current.capture.state !== "active") {
-      throw new ControlProblem(
-        409,
-        "manual_capture_conflict",
-        "error.manual_capture_conflict",
-      );
-    }
-    this.#manualCaptures.set(manualCaptureId, {
-      ...current.capture,
-      state: "revoked",
-      updatedAt: new Date(
-        Date.parse(current.capture.updatedAt) + 1_000,
-      ).toISOString(),
-    });
+  private requireRevision(actual: number, expected: number): void {
+    if (actual !== expected) throw this.conflict();
   }
 
-  #credentialKey(profileId: string, credentialId: string): string {
-    return `${profileId}\u0000${credentialId}`;
+  private conflict(): ControlProblem {
+    return new ControlProblem(409, "revision_conflict", "error.revision_conflict");
   }
 
-  #manualCaptureGrant(
-    capture: ManualCaptureRecord,
-    sequence: number,
-  ): ManualCaptureGrantStateTag {
-    return {
-      grant: {
-        capture: structuredClone(capture),
-        proxyAddress: previewManualCaptureContext.proxyAddress,
-        proxyUsername: "capture",
-        proxyPassword: `manual_${String(sequence).padStart(43, "A")}`,
-        root: structuredClone(previewManualCaptureContext.root),
-      },
-      stateTag: this.#manualCaptureStateTag(capture),
-    };
-  }
-
-  #manualCaptureStateTag(capture: ManualCaptureRecord): string {
-    const encoded = btoa(`${capture.id}:${capture.updatedAt}:${capture.state}`)
-      .replaceAll("+", "-")
-      .replaceAll("/", "_")
-      .replace(/=+$/u, "");
-    return `"mc_${encoded.padEnd(43, "A").slice(0, 43)}"`;
-  }
-
-  #requireOfflineRevision(expectedRevision: number): void {
-    if (expectedRevision !== this.#offline.revision) {
-      throw new Error("Preview offline state changed");
-    }
+  private notFound(): ControlProblem {
+    return new ControlProblem(404, "not_found", "error.not_found");
   }
 }
 

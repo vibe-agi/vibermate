@@ -156,7 +156,7 @@ func TestCapturedChildReachesANonModelHost(t *testing.T) {
 		20*time.Second,
 	)
 	defer cancelRun()
-	exitCode, err := launcher.Run(runContext, []string{os.Args[0]})
+	exitCode, err := launcher.Run(runContext, transparentLaunch(os.Args[0]))
 	if err != nil || exitCode != 0 {
 		t.Fatalf(
 			"a captured child could not reach a non-model host: exit=%d err=%v",

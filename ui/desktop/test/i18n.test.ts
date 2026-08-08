@@ -11,19 +11,19 @@ describe("Desktop locales", () => {
   it("renders synchronized parameterized messages", async () => {
     const english = await createI18n("en-US");
     const chinese = await createI18n("zh-CN");
-    expect(english.t("access.apply.succeeded")).not.toBe("");
-    expect(chinese.t("access.apply.succeeded")).not.toBe("");
+    expect(english.t("captures.active.title", { count: 2 })).toBe("2 captures");
+    expect(chinese.t("captures.active.title", { count: 2 })).toContain("2");
   });
 
-  it("explains bounded Activity paging without claiming the server is exhausted", async () => {
+  it("keeps the semantic-observation boundary explicit in both locales", async () => {
     const english = await createI18n("en-US");
     const chinese = await createI18n("zh-CN");
 
-    expect(english.t("activity.pagingSafetyStopped.detail")).toMatch(
-      /may still exist.*Refreshing.*latest window/u,
+    expect(english.t("requests.empty.description")).toMatch(
+      /only when an exact semantic endpoint is used/u,
     );
-    expect(chinese.t("activity.pagingSafetyStopped.detail")).toMatch(
-      /可能仍有.*刷新.*最新窗口/u,
+    expect(chinese.t("requests.empty.description")).toMatch(
+      /精确语义端点/u,
     );
   });
 });

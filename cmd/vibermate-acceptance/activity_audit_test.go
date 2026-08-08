@@ -7,6 +7,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -38,38 +39,38 @@ func TestExchangeAuditReaderIsReadOnlyAndFiltersCommittedExchanges(
 	})
 	repository := store.ActivityRepository()
 	appendAuditActivity(t, repository, activity.Record{
-		ID:         "activity-access",
-		OccurredAt: time.Unix(1, 0).UTC(),
-		Kind:       activity.KindAccessApplied,
-		AccessID:   "Acc-001",
-		SubjectID:  "Acc-001",
-		Status:     activity.StatusSucceeded,
+		ID:            "activity-environment",
+		OccurredAt:    time.Unix(1, 0).UTC(),
+		Kind:          activity.KindEnvironmentApplied,
+		EnvironmentID: "environment-001",
+		SubjectID:     "environment-001",
+		Status:        activity.StatusSucceeded,
 	})
 	first := appendAuditActivity(t, repository, activity.Record{
-		ID:         "activity-failed",
-		OccurredAt: time.Unix(2, 0).UTC(),
-		Kind:       activity.KindExchangeCompleted,
-		AccessID:   "Acc-001",
-		SubjectID:  "exchange-failed",
-		Status:     activity.StatusFailed,
-		ReasonCode: "provider_credential_unavailable",
+		ID:            "activity-failed",
+		OccurredAt:    time.Unix(2, 0).UTC(),
+		Kind:          activity.KindExchangeCompleted,
+		EnvironmentID: "environment-001",
+		SubjectID:     "exchange-failed",
+		Status:        activity.StatusFailed,
+		ReasonCode:    "provider_credential_unavailable",
 	})
 	second := appendAuditActivity(t, repository, activity.Record{
-		ID:         "activity-succeeded",
-		OccurredAt: time.Unix(3, 0).UTC(),
-		Kind:       activity.KindExchangeCompleted,
-		AccessID:   "Acc-001",
-		SubjectID:  "exchange-succeeded",
-		Status:     activity.StatusSucceeded,
+		ID:            "activity-succeeded",
+		OccurredAt:    time.Unix(3, 0).UTC(),
+		Kind:          activity.KindExchangeCompleted,
+		EnvironmentID: "environment-001",
+		SubjectID:     "exchange-succeeded",
+		Status:        activity.StatusSucceeded,
 	})
-	otherAccess := appendAuditActivity(t, repository, activity.Record{
-		ID:         "activity-other-access",
-		OccurredAt: time.Unix(4, 0).UTC(),
-		Kind:       activity.KindExchangeCompleted,
-		AccessID:   "Acc-002",
-		SubjectID:  "exchange-other-access",
-		Status:     activity.StatusFailed,
-		ReasonCode: "provider_credential_unavailable",
+	otherEnvironment := appendAuditActivity(t, repository, activity.Record{
+		ID:            "activity-other-environment",
+		OccurredAt:    time.Unix(4, 0).UTC(),
+		Kind:          activity.KindExchangeCompleted,
+		EnvironmentID: "environment-002",
+		SubjectID:     "exchange-other-environment",
+		Status:        activity.StatusFailed,
+		ReasonCode:    "provider_credential_unavailable",
 	})
 
 	reader, err := openExchangeAuditReader(ctx, dataDirectory)
@@ -85,19 +86,19 @@ func TestExchangeAuditReaderIsReadOnlyAndFiltersCommittedExchanges(
 	if err != nil {
 		t.Fatal(err)
 	}
-	if latest != otherAccess.Sequence {
-		t.Fatalf("latest Exchange sequence=%d want=%d", latest, otherAccess.Sequence)
+	if latest != otherEnvironment.Sequence {
+		t.Fatalf("latest Exchange sequence=%d want=%d", latest, otherEnvironment.Sequence)
 	}
-	terminals, err := reader.terminalsAfter(ctx, "Acc-001", 0)
+	terminals, err := reader.terminalsAfter(ctx, "environment-001", 0)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if len(terminals) != 2 || terminals[0] != (exchangeAuditRecord{
-		Sequence:   first.Sequence,
-		ExchangeID: first.SubjectID,
-		AccessID:   first.AccessID,
-		Status:     first.Status,
-		ReasonCode: first.ReasonCode,
+		Sequence:      first.Sequence,
+		ExchangeID:    first.SubjectID,
+		EnvironmentID: first.EnvironmentID,
+		Status:        first.Status,
+		ReasonCode:    first.ReasonCode,
 	}) {
 		t.Fatalf("terminal Exchange records=%+v", terminals)
 	}
@@ -139,12 +140,12 @@ func TestExchangeAuditReaderSeesOnlyCommittedWALRecordsAndSurvivesReopen(
 	})
 	repository := store.ActivityRepository()
 	baseline := appendAuditActivity(t, repository, activity.Record{
-		ID:         "activity-baseline",
-		OccurredAt: time.Unix(10, 0).UTC(),
-		Kind:       activity.KindExchangeCompleted,
-		AccessID:   "Acc-001",
-		SubjectID:  "exchange-baseline",
-		Status:     activity.StatusSucceeded,
+		ID:            "activity-baseline",
+		OccurredAt:    time.Unix(10, 0).UTC(),
+		Kind:          activity.KindExchangeCompleted,
+		EnvironmentID: "environment-001",
+		SubjectID:     "exchange-baseline",
+		Status:        activity.StatusSucceeded,
 	})
 	reader, err := openExchangeAuditReader(ctx, dataDirectory)
 	if err != nil {
@@ -172,17 +173,30 @@ func TestExchangeAuditReaderSeesOnlyCommittedWALRecordsAndSurvivesReopen(
 	result, err := transaction.ExecContext(
 		ctx,
 		`INSERT INTO runtime_activities (
-		     activity_id, occurred_at_unix_ms, kind, access_id, subject_id,
-		     status, reason_code, provider_status, provider_field,
+		     activity_id, occurred_at_unix_ms, kind,
+		     environment_id, environment_revision, environment_digest,
+		     client_endpoint_id, client_endpoint_revision,
+		     protocol_plan_id, protocol_plan_revision, route_id, route_revision,
+		     subject_id, status, reason_code,
+		     source_kind, source_display_name, source_recognition, connection_id,
+		     provider_status, provider_field,
 		     client_field, client_path, transport_evidence_json
-		 ) VALUES (?, ?, ?, ?, ?, ?, ?, 0, '', '', '', NULL)`,
+		 ) VALUES (?, ?, ?, ?, 1, ?, ?, 1, ?, 1, ?, 1, ?, ?, ?, ?, ?, ?, ?, 0, '', '', '', NULL)`,
 		"activity-committed",
 		time.Unix(11, 0).UnixMilli(),
 		activity.KindExchangeCompleted,
-		"Acc-001",
+		"environment-001",
+		strings.Repeat("a", 64),
+		"endpoint-001",
+		"plan-001",
+		"route-001",
 		"exchange-committed",
 		activity.StatusFailed,
 		"provider_credential_unavailable",
+		activity.SourceSystemProxy,
+		"ViberMate runtime",
+		activity.SourceRecognitionUnknown,
+		"connection-exchange-committed",
 	)
 	if err != nil {
 		_ = transaction.Rollback()
@@ -201,11 +215,11 @@ func TestExchangeAuditReaderSeesOnlyCommittedWALRecordsAndSurvivesReopen(
 		t.Fatal(err)
 	}
 	expected := exchangeAuditRecord{
-		Sequence:   sequence,
-		ExchangeID: "exchange-committed",
-		AccessID:   "Acc-001",
-		Status:     activity.StatusFailed,
-		ReasonCode: "provider_credential_unavailable",
+		Sequence:      sequence,
+		ExchangeID:    "exchange-committed",
+		EnvironmentID: "environment-001",
+		Status:        activity.StatusFailed,
+		ReasonCode:    "provider_credential_unavailable",
 	}
 	if err := requireExchangeAuditRecord(ctx, reader, expected); err != nil {
 		t.Fatal(err)
@@ -259,12 +273,12 @@ func TestExchangeAuditReaderFailsClosedWhenDatabasePathChanges(t *testing.T) {
 		}
 	})
 	appendAuditActivity(t, store.ActivityRepository(), activity.Record{
-		ID:         "activity-original",
-		OccurredAt: time.Unix(20, 0).UTC(),
-		Kind:       activity.KindExchangeCompleted,
-		AccessID:   "Acc-001",
-		SubjectID:  "exchange-original",
-		Status:     activity.StatusSucceeded,
+		ID:            "activity-original",
+		OccurredAt:    time.Unix(20, 0).UTC(),
+		Kind:          activity.KindExchangeCompleted,
+		EnvironmentID: "environment-001",
+		SubjectID:     "exchange-original",
+		Status:        activity.StatusSucceeded,
 	})
 	shutdownContext, cancel := context.WithTimeout(ctx, 5*time.Second)
 	if err := store.Shutdown(shutdownContext); err != nil {
@@ -320,12 +334,12 @@ func TestExchangeAuditReaderDoesNotReconnectARejectedPhysicalConnection(
 		}
 	})
 	appendAuditActivity(t, store.ActivityRepository(), activity.Record{
-		ID:         "activity-connection",
-		OccurredAt: time.Unix(21, 0).UTC(),
-		Kind:       activity.KindExchangeCompleted,
-		AccessID:   "Acc-001",
-		SubjectID:  "exchange-connection",
-		Status:     activity.StatusSucceeded,
+		ID:            "activity-connection",
+		OccurredAt:    time.Unix(21, 0).UTC(),
+		Kind:          activity.KindExchangeCompleted,
+		EnvironmentID: "environment-001",
+		SubjectID:     "exchange-connection",
+		Status:        activity.StatusSucceeded,
 	})
 	reader, err := openExchangeAuditReader(ctx, dataDirectory)
 	if err != nil {
@@ -407,13 +421,20 @@ func appendAuditActivity(
 	record activity.Record,
 ) activity.Record {
 	t.Helper()
+	if record.EnvironmentID != "" {
+		record.EnvironmentRevision = 1
+		record.EnvironmentDigest = strings.Repeat("a", 64)
+	}
 	if record.Kind == activity.KindExchangeCompleted {
-		record.AccessName = "Acceptance Access"
-		record.AccessRevision = 1
+		record.ClientEndpointID = "endpoint-001"
+		record.ClientEndpointRevision = 1
+		record.ProtocolPlanID = "plan-001"
+		record.ProtocolPlanRevision = 1
+		record.RouteID = "route-001"
+		record.RouteRevision = 1
 		record.SourceKind = activity.SourceSystemProxy
 		record.SourceDisplayName = "ViberMate runtime"
 		record.SourceRecognition = activity.SourceRecognitionUnknown
-		record.IngressProfileID = "system-proxy"
 		record.ConnectionID = "connection-" + record.SubjectID
 	}
 	stored, err := repository.Append(context.Background(), record)

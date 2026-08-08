@@ -8,8 +8,8 @@ import (
 	"net"
 	"time"
 
-	"github.com/vibe-agi/vibermate/internal/access"
 	"github.com/vibe-agi/vibermate/internal/offlinehold"
+	"github.com/vibe-agi/vibermate/internal/originidentity"
 )
 
 type probeDialer interface {
@@ -84,13 +84,13 @@ func (prober *TLSProber) Probe(
 				err,
 			)
 		}
-		if reference.AccessRevision != 0 || reference.PlanHash != "" {
+		if reference.PlanRevision != 0 || reference.PlanDigest != "" {
 			return offlinehold.NewProbeFailure(
 				offlinehold.ProbeReasonFailed,
-				errors.New("original-origin probe unexpectedly contains an Access plan identity"),
+				errors.New("original-origin probe unexpectedly contains a routed plan identity"),
 			)
 		}
-		origin, err := access.NewClientOrigin(reference.NetworkOrigin)
+		origin, err := originidentity.ParseClientOrigin(reference.NetworkOrigin)
 		if err != nil {
 			return offlinehold.NewProbeFailure(
 				offlinehold.ProbeReasonFailed,
@@ -98,7 +98,7 @@ func (prober *TLSProber) Probe(
 			)
 		}
 		if origin.HTTPAuthority() != reference.HTTPAuthority ||
-			origin.TLSServerName() != reference.TLSServerName ||
+			origin.Host() != reference.TLSServerName ||
 			origin.String() != reference.TargetRef {
 			return offlinehold.NewProbeFailure(
 				offlinehold.ProbeReasonFailed,
@@ -138,7 +138,7 @@ func (prober *TLSProber) Probe(
 		connection := tls.Client(raw, &tls.Config{
 			MinVersion: tls.VersionTLS12,
 			RootCAs:    prober.roots,
-			ServerName: origin.TLSServerName(),
+			ServerName: origin.Host(),
 		})
 		handshakeErr := connection.HandshakeContext(targetContext)
 		closeErr := raw.Close()

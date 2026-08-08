@@ -5,7 +5,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/vibe-agi/vibermate/internal/access"
+	"github.com/vibe-agi/vibermate/internal/environment"
 )
 
 func TestAppBundlePathRequiresPackagedMembers(t *testing.T) {
@@ -140,30 +140,19 @@ func TestClientInvocationPathPreservesVerifiedWrapperLabel(t *testing.T) {
 	}
 }
 
-func TestAcceptanceRouteRequiresExplicitProviderIdentity(t *testing.T) {
+func TestAcceptanceEnvironmentIsExplicitAndOriginalPassthrough(t *testing.T) {
 	t.Parallel()
 
-	defaults := defaultConfig()
-	if defaults.providerOrigin != "" || defaults.providerModel != "" {
-		t.Fatalf(
-			"implicit route origin=%q model=%q",
-			defaults.providerOrigin,
-			defaults.providerModel,
-		)
-	}
-	explicit := defaults
-	explicit.providerOrigin = "https://gateway.example/v1"
-	explicit.providerModel = "example-model"
-	aggregate, err := assemblyAccess(explicit, 0)
+	explicit := defaultConfig()
+	explicit.claudePath = "/fixed/claude"
+	aggregate, err := assemblyEnvironment(explicit, 1)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(aggregate.ProviderTargets) != 1 ||
-		aggregate.ProviderTargets[0].Origin != explicit.providerOrigin ||
-		len(aggregate.Profiles) != 1 ||
-		aggregate.Profiles[0].DefaultModelPolicy.FixedModel !=
-			explicit.providerModel {
-		t.Fatalf("explicit executable route = %+v", aggregate)
+	if aggregate.ID.String() != explicit.environmentID || aggregate.Revision != 1 ||
+		len(aggregate.ClientEndpoints) != 1 ||
+		aggregate.ClientEndpoints[0].ProtocolPlans[0].Mode != environment.PlanModeOriginalPassthrough {
+		t.Fatalf("explicit Environment = %+v", aggregate)
 	}
 }
 
@@ -178,7 +167,7 @@ func TestAcceptanceClientSelectionKeepsUnknownUserVersionsOutOfFixedEvidence(
 		id          acceptanceClientID
 		version     string
 		origin      string
-		dialect     access.Dialect
+		protocol    environment.ClientProtocol
 		executable  string
 		adapterID   string
 		reportLabel string
@@ -192,7 +181,7 @@ func TestAcceptanceClientSelectionKeepsUnknownUserVersionsOutOfFixedEvidence(
 			id:          acceptanceClientClaudeCode,
 			version:     "2.1.220",
 			origin:      "https://api.anthropic.com",
-			dialect:     access.DialectAnthropicMessages,
+			protocol:    environment.ClientProtocolAnthropicMessages,
 			executable:  "/fixed/claude",
 			adapterID:   "claude-code",
 			reportLabel: "Claude Code",
@@ -206,7 +195,7 @@ func TestAcceptanceClientSelectionKeepsUnknownUserVersionsOutOfFixedEvidence(
 			id:          acceptanceClientCodexCLI,
 			version:     "0.145.0",
 			origin:      "https://api.openai.com",
-			dialect:     access.DialectOpenAIResponses,
+			protocol:    environment.ClientProtocolOpenAIResponses,
 			executable:  "/fixed/codex",
 			adapterID:   "codex-cli",
 			reportLabel: "Codex CLI",
@@ -221,7 +210,7 @@ func TestAcceptanceClientSelectionKeepsUnknownUserVersionsOutOfFixedEvidence(
 			if client.ID != test.id ||
 				client.Version != test.version ||
 				client.ClientOrigin != test.origin ||
-				client.ClientDialect != test.dialect ||
+				client.ClientProtocol != test.protocol ||
 				client.ExecutablePath != test.executable ||
 				client.Release.ID != test.adapterID ||
 				client.ReportLabel != test.reportLabel {

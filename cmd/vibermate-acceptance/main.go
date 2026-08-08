@@ -1,6 +1,7 @@
 // Command vibermate-acceptance runs the opt-in macOS arm64 packaged-app
 // acceptance against packaged runtime executables. It never receives a secret
-// value; provider credentials remain behind SecretRef and the selected Store.
+// value. Managed provider-account evidence remains blocked until the runtime
+// assembles that authority.
 package main
 
 import (

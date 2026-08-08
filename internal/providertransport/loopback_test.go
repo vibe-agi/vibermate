@@ -7,7 +7,7 @@ import (
 	"sync/atomic"
 	"testing"
 
-	"github.com/vibe-agi/vibermate/internal/access"
+	"github.com/vibe-agi/vibermate/internal/originidentity"
 )
 
 func TestLoopbackTransportRejectsChangedPeerBeforeHTTPWrite(t *testing.T) {
@@ -29,7 +29,7 @@ func TestLoopbackTransportRejectsChangedPeerBeforeHTTPWrite(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	origin, err := access.NewProviderOrigin(
+	origin, err := originidentity.ParseProviderOrigin(
 		"http://127.0.0.1:23333/v1",
 	)
 	if err != nil {

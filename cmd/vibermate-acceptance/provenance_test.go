@@ -148,17 +148,13 @@ func TestAcceptanceConfigurationBindsTheSelectedFixedClient(t *testing.T) {
 	}
 	configuration := newAcceptanceConfiguration(config{
 		deterministicOnly: true,
-		accessID:          "Acc-001",
-		providerOrigin:    "https://gateway.example/v1",
-		providerModel:     "example-model",
+		environmentID:     "environment-001",
 		timeout:           9,
 	}, client)
 	if configuration.ClientID != string(acceptanceClientCodexCLI) ||
 		configuration.ClientVersion != "0.145.0" ||
 		!configuration.DeterministicOnly ||
-		configuration.AccessID != "Acc-001" ||
-		configuration.ProviderOrigin != "https://gateway.example/v1" ||
-		configuration.ProviderModel != "example-model" ||
+		configuration.EnvironmentID != "environment-001" ||
 		configuration.Timeout != "9ns" {
 		t.Fatalf("acceptance configuration = %+v", configuration)
 	}
@@ -237,7 +233,7 @@ func TestDesktopBuildManifestBindsSourceSidecarsAndConfiguration(
 	); err == nil {
 		t.Fatal("v2 manifest without the Rust declaration digest was accepted")
 	}
-	manifest.Schema = acceptancereport.DesktopBuildManifestSchemaV1
+	manifest.Schema = "vibermate.desktop-build/v1"
 	if err := validateDesktopBuildManifest(
 		manifest,
 		source,

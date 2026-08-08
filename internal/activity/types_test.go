@@ -1,35 +1,21 @@
 package activity_test
 
 import (
+	"encoding/json"
+	"strings"
 	"testing"
+	"time"
 
-	"github.com/vibe-agi/vibermate/internal/access"
 	"github.com/vibe-agi/vibermate/internal/activity"
+	"github.com/vibe-agi/vibermate/internal/environment"
 )
 
-func TestExchangeActivityRequiresExactRunConnectionAndAccessRelations(
+func TestExchangeActivityRequiresFrozenExecutionAndSourceRelations(
 	t *testing.T,
 ) {
 	t.Parallel()
 
-	accessID, err := access.NewAccessID("activity-access")
-	if err != nil {
-		t.Fatal(err)
-	}
-	valid := activity.Event{
-		Kind:              activity.KindExchangeCompleted,
-		AccessID:          accessID,
-		AccessName:        "Work Claude",
-		AccessRevision:    3,
-		SubjectID:         "exchange-1",
-		Status:            activity.StatusSucceeded,
-		SourceKind:        activity.SourceCaptureRun,
-		SourceDisplayName: "claude",
-		SourceRecognition: activity.SourceRecognitionConfigured,
-		CaptureRunID:      "run-1",
-		IngressProfileID:  "capture-run/run-1",
-		ConnectionID:      "connection-1",
-	}
+	valid := validExchangeEvent(t)
 	if err := valid.Validate(); err != nil {
 		t.Fatalf("valid relationship rejected: %v", err)
 	}
@@ -45,9 +31,21 @@ func TestExchangeActivityRequiresExactRunConnectionAndAccessRelations(
 			},
 		},
 		{
-			name: "mismatched ingress identity",
+			name: "missing Route revision",
 			mutate: func(event *activity.Event) {
-				event.IngressProfileID = "capture-run/run-2"
+				event.RouteRevision = 0
+			},
+		},
+		{
+			name: "invalid Environment digest",
+			mutate: func(event *activity.Event) {
+				event.EnvironmentDigest = "not-a-digest"
+			},
+		},
+		{
+			name: "partial Account reference",
+			mutate: func(event *activity.Event) {
+				event.CredentialEpoch = 0
 			},
 		},
 		{
@@ -76,25 +74,127 @@ func TestExchangeActivityRequiresExactRunConnectionAndAccessRelations(
 	}
 }
 
-func TestExchangeRelationshipEvidenceCannotLeakOntoAnotherActivityKind(
+func TestExchangeExecutionEvidenceCannotLeakOntoAnotherActivityKind(
 	t *testing.T,
 ) {
 	t.Parallel()
 
-	accessID, err := access.NewAccessID("activity-access")
+	environmentID, err := environment.NewEnvironmentID("activity-environment")
 	if err != nil {
 		t.Fatal(err)
 	}
 	event := activity.Event{
-		Kind:              activity.KindAccessApplied,
-		AccessID:          accessID,
-		AccessName:        "Work Claude",
-		SubjectID:         "activity-access",
-		Status:            activity.StatusSucceeded,
-		SourceDisplayName: "claude",
+		Kind:                activity.KindEnvironmentApplied,
+		EnvironmentID:       environmentID,
+		EnvironmentRevision: 3,
+		EnvironmentDigest:   strings.Repeat("a", 64),
+		SubjectID:           "activity-environment",
+		Status:              activity.StatusSucceeded,
+		SourceDisplayName:   "claude",
 	}
 	if err := event.Validate(); err == nil {
-		t.Fatal("Exchange relationship evidence was accepted on an Access event")
+		t.Fatal("Exchange relationship evidence was accepted on an Environment event")
+	}
+}
+
+func TestActivityRecordJSONCarriesOnlyEnvironmentFirstFrozenReferences(
+	t *testing.T,
+) {
+	t.Parallel()
+
+	event := validExchangeEvent(t)
+	record := activity.Record{
+		Sequence:               1,
+		ID:                     "activity-json",
+		OccurredAt:             testTime,
+		Kind:                   event.Kind,
+		EnvironmentID:          event.EnvironmentID.String(),
+		EnvironmentRevision:    uint64(event.EnvironmentRevision),
+		EnvironmentDigest:      event.EnvironmentDigest,
+		ClientEndpointID:       event.ClientEndpointID.String(),
+		ClientEndpointRevision: uint64(event.ClientEndpointRevision),
+		ProtocolPlanID:         event.ProtocolPlanID.String(),
+		ProtocolPlanRevision:   uint64(event.ProtocolPlanRevision),
+		RouteID:                event.RouteID.String(),
+		RouteRevision:          uint64(event.RouteRevision),
+		AccountID:              event.AccountID,
+		AccountRevision:        event.AccountRevision,
+		CredentialEpoch:        event.CredentialEpoch,
+		SubjectID:              event.SubjectID,
+		Status:                 event.Status,
+		SourceKind:             event.SourceKind,
+		SourceDisplayName:      event.SourceDisplayName,
+		SourceRecognition:      event.SourceRecognition,
+		CaptureRunID:           event.CaptureRunID,
+		ConnectionID:           event.ConnectionID,
+	}
+	if err := record.Validate(); err != nil {
+		t.Fatal(err)
+	}
+	encoded, err := json.Marshal(record)
+	if err != nil {
+		t.Fatal(err)
+	}
+	text := string(encoded)
+	for _, required := range []string{
+		`"environmentId":"activity-environment"`,
+		`"clientEndpointId":"claude-messages"`,
+		`"protocolPlanId":"anthropic-plan"`,
+		`"routeId":"claude-official"`,
+		`"accountId":"anthropic-work"`,
+	} {
+		if !strings.Contains(text, required) {
+			t.Fatalf("Activity JSON %s does not contain %s", text, required)
+		}
+	}
+	for _, forbidden := range []string{"accessId", "profileId", "agentEndpointId"} {
+		if strings.Contains(text, forbidden) {
+			t.Fatalf("Activity JSON retained obsolete field %q: %s", forbidden, text)
+		}
+	}
+}
+
+var testTime = time.Date(2026, 8, 7, 12, 0, 0, 0, time.UTC)
+
+func validExchangeEvent(t *testing.T) activity.Event {
+	t.Helper()
+	environmentID, err := environment.NewEnvironmentID("activity-environment")
+	if err != nil {
+		t.Fatal(err)
+	}
+	endpointID, err := environment.NewClientEndpointID("claude-messages")
+	if err != nil {
+		t.Fatal(err)
+	}
+	protocolPlanID, err := environment.NewClientProtocolPlanID("anthropic-plan")
+	if err != nil {
+		t.Fatal(err)
+	}
+	routeID, err := environment.NewUpstreamRouteID("claude-official")
+	if err != nil {
+		t.Fatal(err)
+	}
+	return activity.Event{
+		Kind:                   activity.KindExchangeCompleted,
+		EnvironmentID:          environmentID,
+		EnvironmentRevision:    3,
+		EnvironmentDigest:      strings.Repeat("a", 64),
+		ClientEndpointID:       endpointID,
+		ClientEndpointRevision: 4,
+		ProtocolPlanID:         protocolPlanID,
+		ProtocolPlanRevision:   5,
+		RouteID:                routeID,
+		RouteRevision:          6,
+		AccountID:              "anthropic-work",
+		AccountRevision:        7,
+		CredentialEpoch:        8,
+		SubjectID:              "exchange-1",
+		Status:                 activity.StatusSucceeded,
+		SourceKind:             activity.SourceCaptureRun,
+		SourceDisplayName:      "claude",
+		SourceRecognition:      activity.SourceRecognitionConfigured,
+		CaptureRunID:           "run-1",
+		ConnectionID:           "connection-1",
 	}
 }
 
