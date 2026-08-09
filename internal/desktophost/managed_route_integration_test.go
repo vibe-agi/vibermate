@@ -128,6 +128,55 @@ func TestManagedAnthropicRouteUsesOnlyFrozenAccountAcrossRestart(t *testing.T) {
 	}
 }
 
+func TestManagedClaudeOAuthRouteUsesBearerCredential(t *testing.T) {
+	observed := make(chan managedProviderObservation, 1)
+	provider := httptest.NewServer(http.HandlerFunc(func(
+		writer http.ResponseWriter,
+		request *http.Request,
+	) {
+		body, _ := io.ReadAll(request.Body)
+		observed <- managedProviderObservation{
+			path: request.URL.Path, authorization: request.Header.Get("Authorization"),
+			xAPIKey: request.Header.Get("X-Api-Key"), apiKey: request.Header.Get("Api-Key"),
+			cookie: request.Header.Get("Cookie"), body: string(body),
+		}
+		writer.Header().Set("Content-Type", "application/json")
+		_, _ = io.WriteString(writer, `{
+			"id":"msg_oauth","type":"message","role":"assistant","model":"claude-test",
+			"content":[{"type":"text","text":"managed reached"}],
+			"stop_reason":"end_turn","stop_sequence":null,
+			"usage":{"input_tokens":4,"output_tokens":2}
+		}`)
+	}))
+	defer provider.Close()
+
+	root := t.TempDir()
+	paths := newHostPaths(t, filepath.Join(root, "cache"))
+	factory, err := hostsecret.NewDevelopmentFileFactory(
+		filepath.Join(root, "private", "provider-secrets.json"),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	host, _ := startManagedHost(
+		t, paths, filepath.Join(root, "data"), factory, fixedSelfTestCatalog(t),
+	)
+	defer shutdownHost(t, host)
+	accountID := createManagedAccountWithDriver(
+		t, host.Runtime().ProviderAccounts(), providerauth.StaticHeaderDriverRef(),
+	)
+	environmentID := publishManagedEnvironment(t, host, provider.URL, accountID)
+	runManagedChild(t, paths, environmentID, false)
+
+	got := <-observed
+	if got.path != "/v1/messages" || got.authorization != "Bearer "+managedSecret ||
+		got.xAPIKey != "" || got.apiKey != "" || got.cookie != "" ||
+		!strings.Contains(got.body, `"content":"managed route"`) {
+		t.Fatalf("managed Claude OAuth provider observation = %+v", got)
+	}
+	assertManagedEvidence(t, host, environmentID, accountID)
+}
+
 func startManagedHost(
 	t *testing.T,
 	paths desktophost.Paths,
@@ -179,6 +228,17 @@ func createManagedAccount(
 	accounts provideraccount.Controller,
 ) provideraccount.ID {
 	t.Helper()
+	return createManagedAccountWithDriver(
+		t, accounts, providerauth.AnthropicAPIKeyDriverRef(),
+	)
+}
+
+func createManagedAccountWithDriver(
+	t *testing.T,
+	accounts provideraccount.Controller,
+	driver providerauth.DriverRef,
+) provideraccount.ID {
+	t.Helper()
 	id, err := provideraccount.NewID(managedAccountID)
 	if err != nil {
 		t.Fatal(err)
@@ -190,7 +250,7 @@ func createManagedAccount(
 	defer secret.Destroy()
 	view, err := accounts.Create(context.Background(), provideraccount.CreateCommand{
 		ID: id, DisplayName: "Anthropic test", RealmID: "anthropic.official",
-		Driver: providerauth.AnthropicAPIKeyDriverRef(), Secret: secret,
+		Driver: driver, Secret: secret,
 	})
 	if err != nil || view.Account.Revision != 1 ||
 		view.Health.CredentialEpoch != 1 {

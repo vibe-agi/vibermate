@@ -174,7 +174,10 @@ export interface EnvironmentPage {
   readonly items: readonly EnvironmentRecord[];
 }
 
-export type ProviderAccountKind = "anthropic_api_key" | "openai_api_key";
+export type ProviderAccountKind =
+  | "anthropic_api_key"
+  | "claude_oauth_token"
+  | "openai_api_key";
 export type ProviderAccountState = "active" | "disabled";
 export type ProviderCredentialState =
   | "ready"

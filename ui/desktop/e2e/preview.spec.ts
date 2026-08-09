@@ -148,19 +148,21 @@ test("creates a useful Claude inspection Environment without requiring another a
   expect(errors).toEqual([]);
 });
 
-test("connects a managed account without ever rendering the credential", async ({ page }) => {
+test("connects a Claude OAuth account without ever rendering the credential", async ({ page }) => {
   const errors = collectBrowserErrors(page);
-  const secret = "sk-preview-secret-must-not-render";
+  const secret = "oauth-preview-secret-must-not-render";
   await openPreview(page, "accounts");
   await page.getByRole("button", { name: "Add account" }).click();
 
   const dialog = page.getByRole("dialog", { name: "Connect an account" });
-  await dialog.getByRole("button", { name: /OpenAI/u }).click();
-  await dialog.getByLabel("Name").fill("OpenAI Preview");
-  await dialog.getByLabel("API key").fill(secret);
+  await dialog.getByRole("button", { name: /Claude OAuth token/u }).click();
+  await dialog.getByLabel("Name").fill("Claude OAuth Preview");
+  await dialog.getByLabel("Claude OAuth token").fill(secret);
+  await expect(dialog).toContainText("does not refresh it automatically");
   await dialog.getByRole("button", { name: "Connect account" }).click();
 
-  await expect(page.getByRole("table")).toContainText("OpenAI Preview");
+  await expect(page.getByRole("table")).toContainText("Claude OAuth Preview");
+  await expect(page.getByRole("table")).toContainText("Claude OAuth token");
   await expect(page.getByRole("table")).toContainText("Ready");
   await expect(page.locator("body")).not.toContainText(secret);
   expect(errors).toEqual([]);

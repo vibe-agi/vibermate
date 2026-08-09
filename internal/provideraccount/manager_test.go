@@ -112,6 +112,36 @@ func TestManagerRecoversMissingCredentialFailClosed(t *testing.T) {
 	}
 }
 
+func TestBuiltInAnthropicRealmAcceptsStaticClaudeOAuthCredential(t *testing.T) {
+	t.Parallel()
+	repository := &memoryRepository{accounts: make(map[ID]Account)}
+	manager, err := NewManager(
+		context.Background(), repository, newMemorySecrets(), BuiltInRealms(),
+		fixedClock{now: time.Unix(1_786_200_000, 0).UTC()},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	value, err := secretstore.NewValue([]byte("oauth-access-token"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer value.Destroy()
+	view, err := manager.Create(context.Background(), CreateCommand{
+		ID: "claude-oauth", DisplayName: "Claude OAuth",
+		RealmID: "anthropic.official",
+		Driver:  providerauth.StaticHeaderDriverRef(), Secret: value,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if view.Account.RealmID != "anthropic.official" ||
+		view.Account.Driver != providerauth.StaticHeaderDriverRef() ||
+		view.Health.State != HealthReady {
+		t.Fatalf("Claude OAuth ProviderAccount = %+v", view)
+	}
+}
+
 type fixedClock struct{ now time.Time }
 
 func (clock fixedClock) Now() time.Time { return clock.now }

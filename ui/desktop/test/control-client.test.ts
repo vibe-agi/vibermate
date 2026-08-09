@@ -201,9 +201,9 @@ describe("Environment-first desktop control client", () => {
 
   it("creates and reads managed ProviderAccounts without accepting secret material in responses", async () => {
     const account = {
-      id: "anthropic-work",
-      displayName: "Anthropic Work",
-      kind: "anthropic_api_key",
+      id: "claude-oauth",
+      displayName: "Claude OAuth",
+      kind: "claude_oauth_token",
       realmId: "anthropic.official",
       state: "active",
       revision: 1,
@@ -223,7 +223,7 @@ describe("Environment-first desktop control client", () => {
         id: account.id,
         displayName: account.displayName,
         kind: account.kind,
-        secret: "sk-ant-control-only",
+        secret: "oauth-control-only",
       }),
     ).resolves.toEqual(account);
     await expect(client.providerAccounts()).resolves.toEqual({ items: [account] });
@@ -236,7 +236,7 @@ describe("Environment-first desktop control client", () => {
         id: account.id,
         displayName: account.displayName,
         kind: account.kind,
-        secret: "sk-ant-control-only",
+        secret: "oauth-control-only",
       }),
     );
     expect(new Headers(calls[0]?.init.headers).get("If-Match")).toBe("0");

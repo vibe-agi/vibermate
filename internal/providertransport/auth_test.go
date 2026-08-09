@@ -52,3 +52,47 @@ func TestAnthropicAPIKeyAuthenticatorUsesDedicatedHeader(t *testing.T) {
 		t.Fatalf("credential evidence = %+v", evidence)
 	}
 }
+
+func TestStaticBearerAuthenticatorUsesAuthorizationHeader(t *testing.T) {
+	t.Parallel()
+
+	secrets := &secretReaderStub{value: []byte("oauth-access-token")}
+	authenticator, err := NewStaticBearerAuthenticator(secrets)
+	if err != nil {
+		t.Fatal(err)
+	}
+	request, err := http.NewRequest(
+		http.MethodPost,
+		"https://api.anthropic.com/v1/messages",
+		nil,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	request.Host = "api.anthropic.com"
+	request.Header.Set("X-Api-Key", "client-api-key")
+	request.Header.Set("Cookie", "client-session")
+	reference, err := secretstore.ParseReference("secret://provider/claude-oauth")
+	if err != nil {
+		t.Fatal(err)
+	}
+	evidence, err := authenticator.Apply(
+		context.Background(),
+		request,
+		reference,
+		testTarget("api.anthropic.com", 443),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if request.Header.Get("Authorization") != "Bearer oauth-access-token" ||
+		request.Header.Get("X-Api-Key") != "" ||
+		request.Header.Get("Cookie") != "" {
+		t.Fatalf("provider credential headers = %#v", request.Header)
+	}
+	if evidence.DriverRef != providerauth.StaticHeaderDriverRef().String() ||
+		evidence.HeaderName != "authorization" ||
+		!evidence.SecretRead {
+		t.Fatalf("credential evidence = %+v", evidence)
+	}
+}

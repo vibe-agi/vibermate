@@ -137,6 +137,45 @@ func TestProviderAccountControlStoresCredentialWithoutReturningItAndCompilesMana
 	assertProviderAccountResponseSafe(t, published.Body.Bytes(), secret)
 }
 
+func TestProviderAccountControlKeepsClaudeOAuthDistinctFromAnthropicAPIKey(t *testing.T) {
+	t.Parallel()
+	runtime := startRuntime(t)
+	defer shutdownRuntime(t, runtime)
+	application, err := desktopcontrol.New(desktopcontrol.Options{
+		Readiness: readyState(true), Status: runtime,
+		Environments: runtime.Environments(), Assignments: runtime.CaptureAssignments(),
+		Activities: runtime.Activities(), Contents: runtime.ExchangeContents(), Connections: runtime.ConnectionEvents(),
+		Egress: runtime.EgressAttempts(), Approvals: runtime.ToolApprovals(),
+		Accounts: runtime.ProviderAccounts(), Offline: runtime,
+		ManualCaptures: runtime.ManualCaptures(), Clock: desktopcontrol.SystemClock{},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	const token = "oauth-control-sentinel"
+	created := environmentRequest(
+		t,
+		application,
+		http.MethodPost,
+		"/api/v1/provider-accounts",
+		0,
+		"provider-account-oauth-create-0001",
+		[]byte(`{
+  "id":"claude-oauth",
+  "displayName":"Claude OAuth",
+  "kind":"claude_oauth_token",
+  "secret":"`+token+`"
+}`),
+	)
+	if created.Code != http.StatusCreated {
+		t.Fatalf("create status=%d body=%s", created.Code, created.Body.Bytes())
+	}
+	assertProviderAccountResponseSafe(t, created.Body.Bytes(), token)
+	assertJSONString(t, created.Body.Bytes(), "kind", "claude_oauth_token")
+	assertJSONString(t, created.Body.Bytes(), "realmId", "anthropic.official")
+}
+
 func assertProviderAccountResponseSafe(t *testing.T, body []byte, secret string) {
 	t.Helper()
 	for _, forbidden := range [][]byte{

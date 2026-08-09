@@ -16,6 +16,7 @@ type ProviderAccountKind string
 
 const (
 	ProviderAccountKindAnthropicAPIKey ProviderAccountKind = "anthropic_api_key"
+	ProviderAccountKindClaudeOAuth     ProviderAccountKind = "claude_oauth_token"
 	ProviderAccountKindOpenAIAPIKey    ProviderAccountKind = "openai_api_key"
 )
 
@@ -193,6 +194,8 @@ func providerAccountKindAuthority(kind ProviderAccountKind) (string, provideraut
 	switch kind {
 	case ProviderAccountKindAnthropicAPIKey:
 		return "anthropic.official", providerauth.AnthropicAPIKeyDriverRef(), nil
+	case ProviderAccountKindClaudeOAuth:
+		return "anthropic.official", providerauth.StaticHeaderDriverRef(), nil
 	case ProviderAccountKindOpenAIAPIKey:
 		return "openai.platform", providerauth.StaticHeaderDriverRef(), nil
 	default:
@@ -204,6 +207,8 @@ func providerAccountKindOf(account provideraccount.Account) (ProviderAccountKind
 	switch {
 	case account.RealmID == "anthropic.official" && account.Driver == providerauth.AnthropicAPIKeyDriverRef():
 		return ProviderAccountKindAnthropicAPIKey, nil
+	case account.RealmID == "anthropic.official" && account.Driver == providerauth.StaticHeaderDriverRef():
+		return ProviderAccountKindClaudeOAuth, nil
 	case account.RealmID == "openai.platform" && account.Driver == providerauth.StaticHeaderDriverRef():
 		return ProviderAccountKindOpenAIAPIKey, nil
 	default:

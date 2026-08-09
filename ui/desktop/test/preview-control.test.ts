@@ -70,6 +70,19 @@ describe("the Environment-first browser preview host", () => {
       { secret: "second-private-preview-secret" },
     );
     expect(rotated.credentialEpoch).toBe(2);
+
+    const oauth = await client.createProviderAccount({
+      id: "claude-oauth",
+      displayName: "Claude OAuth",
+      kind: "claude_oauth_token",
+      secret: "oauth-preview-secret",
+    });
+    expect(oauth).toMatchObject({
+      kind: "claude_oauth_token",
+      realmId: "anthropic.official",
+      credentialState: "ready",
+    });
+    expect(JSON.stringify(oauth)).not.toContain("oauth-preview-secret");
   });
 
   it("keeps equal raw IDs distinct across Capture kinds and switches one assignment", async () => {

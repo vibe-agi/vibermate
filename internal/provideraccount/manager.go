@@ -49,6 +49,7 @@ func BuiltInRealms() []Realm {
 			},
 			Drivers: []providerauth.DriverRef{
 				providerauth.AnthropicAPIKeyDriverRef(),
+				providerauth.StaticHeaderDriverRef(),
 			},
 		},
 		{

@@ -482,7 +482,7 @@ class PreviewControlClient implements ControlClient {
       displayName: input.displayName,
       kind: input.kind,
       realmId:
-        input.kind === "anthropic_api_key"
+        input.kind === "anthropic_api_key" || input.kind === "claude_oauth_token"
           ? "anthropic.official"
           : "openai.platform",
       state: "active",

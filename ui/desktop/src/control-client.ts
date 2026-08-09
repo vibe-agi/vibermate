@@ -2090,7 +2090,11 @@ function compareEnvironmentDirectoryRecords(
   return compareResourceIds(left.id, right.id);
 }
 
-const providerAccountKinds = new Set(["anthropic_api_key", "openai_api_key"]);
+const providerAccountKinds = new Set([
+  "anthropic_api_key",
+  "claude_oauth_token",
+  "openai_api_key",
+]);
 const providerCredentialStates = new Set([
   "ready",
   "disabled",
