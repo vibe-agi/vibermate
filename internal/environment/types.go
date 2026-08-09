@@ -164,6 +164,36 @@ type ContentRecordingPolicy struct {
 	RetentionDays uint16               `json:"retentionDays"`
 }
 
+// ToolPolicyMode controls whether semantic tool intents are only observed,
+// held for a person, or rejected unless they match a Core-proven safe action.
+// The zero persisted representation is deliberately the default Observe
+// policy, so an Environment that does not opt in to enforcement cannot begin
+// interrupting an Agent after restart.
+type ToolPolicyMode string
+
+const (
+	ToolPolicyObserve ToolPolicyMode = "observe"
+	ToolPolicyReview  ToolPolicyMode = "review"
+	ToolPolicyStrict  ToolPolicyMode = "strict"
+)
+
+type PolicySet struct {
+	ToolMode ToolPolicyMode `json:"toolMode"`
+}
+
+func DefaultPolicySet() PolicySet {
+	return PolicySet{ToolMode: ToolPolicyObserve}
+}
+
+func (policy PolicySet) Validate() error {
+	switch policy.ToolMode {
+	case ToolPolicyObserve, ToolPolicyReview, ToolPolicyStrict:
+		return nil
+	default:
+		return fmt.Errorf("%w: tool policy mode is unsupported", ErrInvalidEnvironment)
+	}
+}
+
 func DefaultContentRecordingPolicy() ContentRecordingPolicy {
 	return ContentRecordingPolicy{
 		Mode:          ContentRecordingFull,
@@ -200,16 +230,26 @@ func (policy ContentRecordingPolicy) Validate() error {
 // Environment is the complete user-editable aggregate. Draft is lifecycle
 // metadata and is deliberately not a State value.
 type Environment struct {
-	ID                     EnvironmentID           `json:"id"`
-	Name                   string                  `json:"name"`
-	State                  State                   `json:"state"`
-	Revision               Revision                `json:"revision"`
-	ClientEndpoints        []ClientEndpoint        `json:"clientEndpoints"`
-	PluginBindings         []PluginBinding         `json:"pluginBindings"`
-	BudgetPolicy           BudgetPolicy            `json:"budgetPolicy"`
-	EgressPolicy           EnvironmentEgressPolicy `json:"egressPolicy"`
-	ContentRecording       ContentRecordingPolicy  `json:"contentRecording"`
-	RetiredChildIdentities []RetiredChildIdentity  `json:"retiredChildIdentities,omitempty"`
+	ID               EnvironmentID           `json:"id"`
+	Name             string                  `json:"name"`
+	State            State                   `json:"state"`
+	Revision         Revision                `json:"revision"`
+	ClientEndpoints  []ClientEndpoint        `json:"clientEndpoints"`
+	PluginBindings   []PluginBinding         `json:"pluginBindings"`
+	BudgetPolicy     BudgetPolicy            `json:"budgetPolicy"`
+	EgressPolicy     EnvironmentEgressPolicy `json:"egressPolicy"`
+	ContentRecording ContentRecordingPolicy  `json:"contentRecording"`
+	// PolicySet is nil only in canonical storage for the default Observe
+	// policy. EffectivePolicySet always returns the concrete authority.
+	PolicySet              *PolicySet             `json:"policySet,omitempty"`
+	RetiredChildIdentities []RetiredChildIdentity `json:"retiredChildIdentities,omitempty"`
+}
+
+func (environment Environment) EffectivePolicySet() PolicySet {
+	if environment.PolicySet == nil {
+		return DefaultPolicySet()
+	}
+	return *environment.PolicySet
 }
 
 // RetiredChildIdentity is Core-owned aggregate history. Control-plane input

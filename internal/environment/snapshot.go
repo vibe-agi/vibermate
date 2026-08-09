@@ -223,6 +223,7 @@ func (snapshot EnvironmentSnapshot) ResolveRequest(
 		environmentID: snapshot.ID(), environmentRevision: snapshot.Revision(),
 		environmentDigest: snapshot.Digest(),
 		contentRecording:  snapshot.aggregate.ContentRecording,
+		policySet:         snapshot.aggregate.EffectivePolicySet(),
 		endpoint:          endpoint,
 		protocol:          cloneCompiledProtocol(matches[0].protocol), operation: matches[0].operation,
 		route: route, wireVariant: variant,

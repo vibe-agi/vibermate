@@ -71,6 +71,7 @@ const transparentEnvironment: EnvironmentRecord = {
   budgetPolicy: { id: "", revision: 0 },
   egressPolicy: { id: "", revision: 0, mode: "" },
   contentRecording: { mode: "off", retentionDays: 0 },
+  policySet: { toolMode: "observe" },
 };
 
 const workEnvironment: EnvironmentRecord = {
@@ -135,6 +136,7 @@ const workEnvironment: EnvironmentRecord = {
   budgetPolicy: { id: "work-budget", revision: 1 },
   egressPolicy: { id: "work-egress", revision: 1, mode: "direct" },
   contentRecording: { mode: "full", retentionDays: 30 },
+  policySet: { toolMode: "observe" },
 };
 
 const managedCapture: CaptureRecord = {
@@ -684,6 +686,7 @@ class PreviewControlClient implements ControlClient {
         budgetPolicy: clone(input.budgetPolicy),
         egressPolicy: clone(input.egressPolicy),
         contentRecording: clone(input.contentRecording),
+        policySet: clone(input.policySet),
       },
     };
     this.drafts.set(environmentId, draft);

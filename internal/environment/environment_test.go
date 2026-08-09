@@ -276,6 +276,50 @@ func TestOriginalPassthroughCannotRetargetOrChangeSemantics(t *testing.T) {
 	}
 }
 
+func TestObservePolicyIsTheCanonicalDefaultAuthority(t *testing.T) {
+	t.Parallel()
+	implicit := fixture(t, "work", mustOrigin(t, "https://relay.example"))
+	explicit := implicit.Clone()
+	explicit.PolicySet = &PolicySet{ToolMode: ToolPolicyObserve}
+
+	implicitJSON, err := CanonicalJSON(implicit)
+	if err != nil {
+		t.Fatal(err)
+	}
+	explicitJSON, err := CanonicalJSON(explicit)
+	if err != nil {
+		t.Fatal(err)
+	}
+	implicitDigest, err := Digest(implicit)
+	if err != nil {
+		t.Fatal(err)
+	}
+	explicitDigest, err := Digest(explicit)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(implicitJSON) != string(explicitJSON) || implicitDigest != explicitDigest {
+		t.Fatalf("default Observe changed authority: implicit=%s explicit=%s", implicitJSON, explicitJSON)
+	}
+	decoded, err := DecodeCanonicalJSON(implicitJSON)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if decoded.PolicySet != nil || decoded.EffectivePolicySet() != DefaultPolicySet() {
+		t.Fatalf("canonical default policy = %+v effective=%+v", decoded.PolicySet, decoded.EffectivePolicySet())
+	}
+
+	review := implicit.Clone()
+	review.PolicySet = &PolicySet{ToolMode: ToolPolicyReview}
+	reviewDigest, err := Digest(review)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if reviewDigest == implicitDigest {
+		t.Fatal("Review policy did not change the Environment authority digest")
+	}
+}
+
 func TestGraphValidationRejectsUnsafeIdentityAndReferences(t *testing.T) {
 	t.Parallel()
 	base := fixture(t, "work", mustOrigin(t, "https://relay.example"))

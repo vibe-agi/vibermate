@@ -30,6 +30,10 @@ func ParseCandidateDigest(value string) (CandidateDigest, error) {
 
 func (environment Environment) Clone() Environment {
 	cloned := environment
+	if environment.PolicySet != nil {
+		policy := *environment.PolicySet
+		cloned.PolicySet = &policy
+	}
 	cloned.ClientEndpoints = make([]ClientEndpoint, len(environment.ClientEndpoints))
 	for endpointIndex, endpoint := range environment.ClientEndpoints {
 		cloned.ClientEndpoints[endpointIndex] = cloneEndpoint(endpoint)
@@ -134,6 +138,11 @@ func normalize(input Environment) (Environment, error) {
 	value := input.Clone()
 	if err := validateRoot(value); err != nil {
 		return Environment{}, err
+	}
+	// Observe is the canonical zero/default. Explicit Observe and an omitted
+	// policy are one authority and therefore one digest.
+	if value.EffectivePolicySet() == DefaultPolicySet() {
+		value.PolicySet = nil
 	}
 	sort.Slice(value.ClientEndpoints, func(left, right int) bool {
 		return value.ClientEndpoints[left].ID < value.ClientEndpoints[right].ID
@@ -270,6 +279,9 @@ func validateRoot(value Environment) error {
 		return fmt.Errorf("%w: state must be active or disabled", ErrInvalidEnvironment)
 	}
 	if err := value.ContentRecording.Validate(); err != nil {
+		return err
+	}
+	if err := value.EffectivePolicySet().Validate(); err != nil {
 		return err
 	}
 	return nil

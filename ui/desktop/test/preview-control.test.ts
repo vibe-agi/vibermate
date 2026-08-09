@@ -28,6 +28,7 @@ describe("the Environment-first browser preview host", () => {
         budgetPolicy: current.budgetPolicy,
         egressPolicy: current.egressPolicy,
         contentRecording: current.contentRecording,
+        policySet: current.policySet,
       },
     );
     await expect(client.environmentDraft("work")).resolves.toEqual(saved);

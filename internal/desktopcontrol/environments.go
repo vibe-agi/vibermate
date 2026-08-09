@@ -26,6 +26,7 @@ type EnvironmentResponse struct {
 	BudgetPolicy     environment.BudgetPolicy            `json:"budgetPolicy"`
 	EgressPolicy     environment.EnvironmentEgressPolicy `json:"egressPolicy"`
 	ContentRecording environment.ContentRecordingPolicy  `json:"contentRecording"`
+	PolicySet        environment.PolicySet               `json:"policySet"`
 }
 
 type EnvironmentDraftResponse struct {
@@ -45,6 +46,7 @@ type EnvironmentDraftInput struct {
 	BudgetPolicy          environment.BudgetPolicy            `json:"budgetPolicy"`
 	EgressPolicy          environment.EnvironmentEgressPolicy `json:"egressPolicy"`
 	ContentRecording      environment.ContentRecordingPolicy  `json:"contentRecording"`
+	PolicySet             *environment.PolicySet              `json:"policySet,omitempty"`
 }
 
 type EnvironmentImpactResponse struct {
@@ -87,6 +89,7 @@ func environmentResponseOfAggregate(aggregate environment.Environment, digest st
 		SystemOwned: systemOwned, ClientEndpoints: clientEndpoints,
 		PluginBindings: pluginBindings, BudgetPolicy: aggregate.BudgetPolicy,
 		EgressPolicy: aggregate.EgressPolicy, ContentRecording: aggregate.ContentRecording,
+		PolicySet: aggregate.EffectivePolicySet(),
 	}
 }
 
@@ -211,6 +214,7 @@ func (handler *Handler) putEnvironmentDraft(writer http.ResponseWriter, request 
 			Revision: environment.Revision(expectedBase + 1), ClientEndpoints: input.ClientEndpoints,
 			PluginBindings: input.PluginBindings, BudgetPolicy: input.BudgetPolicy,
 			EgressPolicy: input.EgressPolicy, ContentRecording: input.ContentRecording,
+			PolicySet: input.PolicySet,
 		}
 		draft, saveErr := handler.environments.SaveDraft(request.Context(), environment.DraftCommand{
 			ExpectedBaseRevision:  environment.Revision(expectedBase),

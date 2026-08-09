@@ -19,7 +19,7 @@ import (
 // repinned in place. Once a release cites a revision externally, later changes
 // must add a new revision rather than rewriting that public meaning.
 var knownCatalogDigests = map[uint64]string{
-	1: "KsH0Z-FHTrPqVR2p1kzrCEhqzM-u-kC0xEyLWXqwo9E",
+	1: "jPG2I_4dnWqdC8nsUi0Cy7EAUILmKc8BgH0gznBXuI0",
 }
 
 func TestTheCatalogCannotChangeWithoutItsRevision(t *testing.T) {

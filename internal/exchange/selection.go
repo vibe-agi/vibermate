@@ -118,6 +118,7 @@ type frozenSelection struct {
 	provenance           providertransport.RequestProvenance
 	wireProfile          wireprofile.CompiledUpstreamWireProfile
 	codecPlan            protocolspec.CodecPlan
+	policySet            environment.PolicySet
 }
 
 func validateFrozenRequestPlan(plan environment.RequestPlan) error {
@@ -195,6 +196,10 @@ func selectFrozenPlan(plan environment.RequestPlan) (frozenSelection, error) {
 		plan.EnvironmentDigest() == (environment.CandidateDigest{}) {
 		return frozenSelection{}, errors.New("Environment request plan digest is invalid")
 	}
+	policySet := plan.PolicySet()
+	if err := policySet.Validate(); err != nil {
+		return frozenSelection{}, errors.New("Environment policy set is invalid")
+	}
 	endpoint := plan.Endpoint()
 	endpointID, err := environment.NewClientEndpointID(endpoint.ID().String())
 	if err != nil || endpointID != endpoint.ID() || endpoint.Revision() == 0 ||
@@ -252,7 +257,7 @@ func selectFrozenPlan(plan environment.RequestPlan) (frozenSelection, error) {
 		clientOrigin: endpoint.ClientOrigin(), targetRef: targetResource.ID,
 		targetRealm: targetResource.RealmID,
 		target:      target, provenance: provenance, wireProfile: wireProfile,
-		codecPlan: route.CodecPlan(),
+		codecPlan: route.CodecPlan(), policySet: policySet,
 	}
 	switch modelPolicy.Mode {
 	case modelModePreserve:

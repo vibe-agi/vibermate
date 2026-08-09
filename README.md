@@ -167,7 +167,15 @@ JA4, HTTP/2 SETTINGS, header-order, or browser fingerprint parity.
   rest. It is not Release protection.
 - Offline Hold closes action and egress admission, drains pre-cut work, and
   reports safe-to-disconnect only from authoritative counts.
-- Tool and network approvals are typed, expiring, and revision-bound.
+- Tool policy is Environment-owned and defaults to Observe: tools continue
+  without waiting while Request evidence is still recorded. Review creates
+  typed, expiring, revision-bound approvals only for unproven actions; Strict
+  stops unproven actions without creating a question.
+- Verified structured file tools may continue automatically in Review/Strict
+  only when their resolved paths remain inside the frozen launch workspace.
+  Shell text, MCP tools, plugins and custom tools never acquire that authority
+  from a name or regular expression.
+- Network approvals remain typed, expiring, and revision-bound.
 - Network policy always has an explicit mode: Open, Ask, or Block.
 
 ## Desktop App

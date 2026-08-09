@@ -782,6 +782,7 @@ func CheckDataPlaneEnvironmentBoundary(repositoryRoot string) []Violation {
 		"NewEnvironmentID":             {},
 		"NewUpstreamRouteID":           {},
 		"ParseCandidateDigest":         {},
+		"PolicySet":                    {},
 		"RequestPlan":                  {},
 		"Revision":                     {},
 		"UpstreamRouteID":              {},

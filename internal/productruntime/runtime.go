@@ -28,6 +28,7 @@ import (
 	"github.com/vibe-agi/vibermate/internal/providertransport"
 	"github.com/vibe-agi/vibermate/internal/runtimepersistence"
 	"github.com/vibe-agi/vibermate/internal/toolapproval"
+	"github.com/vibe-agi/vibermate/internal/toolpolicy"
 	"github.com/vibe-agi/vibermate/internal/workspacedefault"
 	"github.com/vibe-agi/vibermate/internal/workspaceidentity"
 )
@@ -378,6 +379,10 @@ func startWithBuilders(
 		return fail("tool approval recovery", buildErr)
 	}
 	cleanups.register("tool approval component", approvals.Shutdown)
+	toolDecisions, err := toolpolicy.New(approvals)
+	if err != nil {
+		return fail("tool policy", err)
+	}
 
 	monitor, err := builders.monitor.Build(monitorBuildRequest{
 		ownerContext: ownerContext,
@@ -458,7 +463,7 @@ func startWithBuilders(
 		actions:       options.OfflineHold,
 		accounts:      accounts,
 		provider:      provider,
-		toolDecisions: approvals,
+		toolDecisions: toolDecisions,
 		activities:    activities,
 		contents:      contents,
 		clock:         options.Clock,

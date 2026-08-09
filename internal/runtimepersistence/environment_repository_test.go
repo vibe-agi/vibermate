@@ -38,6 +38,7 @@ func TestEnvironmentRepositoryReopensIdenticalSnapshotAndPrivateDraft(t *testing
 	next := candidate.Clone()
 	next.Revision = 2
 	next.Name = "Work renamed"
+	next.PolicySet = &environment.PolicySet{ToolMode: environment.ToolPolicyReview}
 	nextDraft, err := manager.SaveDraft(context.Background(), environment.DraftCommand{
 		ExpectedBaseRevision: 1, ExpectedDraftRevision: 0, Candidate: next,
 	})
@@ -83,7 +84,8 @@ func TestEnvironmentRepositoryReopensIdenticalSnapshotAndPrivateDraft(t *testing
 		t.Fatalf("historical revision = %+v, %v", historical, err)
 	}
 	current, err := recovered.GetRevision(context.Background(), candidate.ID, 2)
-	if err != nil || current.Revision() != 2 || current.Name() != "Work renamed" {
+	if err != nil || current.Revision() != 2 || current.Name() != "Work renamed" ||
+		current.Aggregate().EffectivePolicySet().ToolMode != environment.ToolPolicyReview {
 		t.Fatalf("current revision = %+v, %v", current, err)
 	}
 	third := next.Clone()

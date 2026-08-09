@@ -755,6 +755,12 @@ func validToolDecisionRequest(t *testing.T) exchange.ToolDecisionRequest {
 	if err != nil {
 		t.Fatal(err)
 	}
+	decisionContext, err := exchange.NewToolDecisionContext(
+		environment.DefaultPolicySet(), "", false, nil, nil,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
 	request, err := exchange.NewToolDecisionRequest(
 		"exchange-control-approval",
 		environmentID,
@@ -762,6 +768,7 @@ func validToolDecisionRequest(t *testing.T) exchange.ToolDecisionRequest {
 		environment.CandidateDigest{0x41},
 		"route-control-approval",
 		1,
+		decisionContext,
 		[]protocolcore.ToolIntent{{
 			ResponseID: "response-control-approval",
 			Ordinal:    0,

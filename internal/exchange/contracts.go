@@ -12,6 +12,7 @@ import (
 	"net/http"
 	"net/url"
 	pathpkg "path"
+	"path/filepath"
 	"slices"
 	"strings"
 	"time"
@@ -1082,7 +1083,102 @@ type ToolDecisionRequest struct {
 	environmentDigest   environment.CandidateDigest
 	routeID             environment.UpstreamRouteID
 	routeRevision       environment.Revision
+	decisionContext     ToolDecisionContext
 	intents             []protocolcore.ToolIntent
+}
+
+// ToolDecisionContext freezes the policy and the only evidence allowed to
+// classify structured workspace actions. A tool name on its own is never
+// authority: Core also requires exact adapter capability, the request's tool
+// schema, and the launcher's canonical workspace root.
+type ToolDecisionContext struct {
+	policySet                environment.PolicySet
+	workspaceRoot            string
+	structuredWorkspaceTools bool
+	tools                    []protocolcore.ToolDefinition
+	toolNamespaces           []protocolcore.ToolNamespace
+}
+
+func NewToolDecisionContext(
+	policySet environment.PolicySet,
+	workspaceRoot string,
+	structuredWorkspaceTools bool,
+	tools []protocolcore.ToolDefinition,
+	toolNamespaces []protocolcore.ToolNamespace,
+) (ToolDecisionContext, error) {
+	if err := policySet.Validate(); err != nil {
+		return ToolDecisionContext{}, err
+	}
+	if workspaceRoot != "" &&
+		(!filepath.IsAbs(workspaceRoot) || filepath.Clean(workspaceRoot) != workspaceRoot) {
+		return ToolDecisionContext{}, errors.New("tool decision workspace root is invalid")
+	}
+	if len(tools) > protocolcore.MaxToolCount ||
+		len(toolNamespaces) > protocolcore.MaxToolCount {
+		return ToolDecisionContext{}, errors.New("tool decision definitions exceed the limit")
+	}
+	toolNames := make(map[string]struct{}, len(tools))
+	clonedTools := make([]protocolcore.ToolDefinition, len(tools))
+	for index, tool := range tools {
+		if err := tool.Validate(); err != nil {
+			return ToolDecisionContext{}, err
+		}
+		if _, duplicate := toolNames[tool.Name]; duplicate {
+			return ToolDecisionContext{}, errors.New("tool decision definition is duplicated")
+		}
+		toolNames[tool.Name] = struct{}{}
+		clonedTools[index] = tool.Clone()
+	}
+	namespaceNames := make(map[string]struct{}, len(toolNamespaces))
+	totalTools := len(tools)
+	clonedNamespaces := make([]protocolcore.ToolNamespace, len(toolNamespaces))
+	for index, namespace := range toolNamespaces {
+		if err := namespace.Validate(); err != nil {
+			return ToolDecisionContext{}, err
+		}
+		if _, duplicate := namespaceNames[namespace.Name]; duplicate {
+			return ToolDecisionContext{}, errors.New("tool decision namespace is duplicated")
+		}
+		namespaceNames[namespace.Name] = struct{}{}
+		totalTools += len(namespace.Tools)
+		if totalTools > protocolcore.MaxToolCount {
+			return ToolDecisionContext{}, errors.New("tool decision definitions exceed the total limit")
+		}
+		clonedNamespaces[index] = namespace.Clone()
+	}
+	return ToolDecisionContext{
+		policySet: policySet, workspaceRoot: workspaceRoot,
+		structuredWorkspaceTools: structuredWorkspaceTools,
+		tools:                    clonedTools, toolNamespaces: clonedNamespaces,
+	}, nil
+}
+
+func (context ToolDecisionContext) PolicySet() environment.PolicySet {
+	return context.policySet
+}
+
+func (context ToolDecisionContext) WorkspaceRoot() (string, bool) {
+	return context.workspaceRoot, context.workspaceRoot != ""
+}
+
+func (context ToolDecisionContext) StructuredWorkspaceTools() bool {
+	return context.structuredWorkspaceTools
+}
+
+func (context ToolDecisionContext) Tools() []protocolcore.ToolDefinition {
+	cloned := make([]protocolcore.ToolDefinition, len(context.tools))
+	for index, tool := range context.tools {
+		cloned[index] = tool.Clone()
+	}
+	return cloned
+}
+
+func (context ToolDecisionContext) ToolNamespaces() []protocolcore.ToolNamespace {
+	cloned := make([]protocolcore.ToolNamespace, len(context.toolNamespaces))
+	for index, namespace := range context.toolNamespaces {
+		cloned[index] = namespace.Clone()
+	}
+	return cloned
 }
 
 func NewToolDecisionRequest(
@@ -1092,6 +1188,7 @@ func NewToolDecisionRequest(
 	environmentDigest environment.CandidateDigest,
 	routeID environment.UpstreamRouteID,
 	routeRevision environment.Revision,
+	decisionContext ToolDecisionContext,
 	intents []protocolcore.ToolIntent,
 ) (ToolDecisionRequest, error) {
 	parsedEnvironmentID, environmentErr := environment.NewEnvironmentID(environmentID.String())
@@ -1103,6 +1200,7 @@ func NewToolDecisionRequest(
 		digestErr != nil || parsedDigest != environmentDigest ||
 		environmentRevision == 0 || environmentRevision > environment.MaxRevision ||
 		routeRevision == 0 || routeRevision > environment.MaxRevision ||
+		decisionContext.policySet.Validate() != nil ||
 		len(intents) == 0 ||
 		len(intents) > protocolcore.MaxToolCount {
 		return ToolDecisionRequest{}, errors.New("tool decision request is invalid")
@@ -1116,7 +1214,8 @@ func NewToolDecisionRequest(
 		exchangeID: exchangeID, environmentID: environmentID,
 		environmentRevision: environmentRevision,
 		environmentDigest:   environmentDigest, routeID: routeID,
-		routeRevision: routeRevision, intents: cloneToolIntents(intents),
+		routeRevision: routeRevision, decisionContext: decisionContext,
+		intents: cloneToolIntents(intents),
 	}, nil
 }
 
@@ -1146,6 +1245,10 @@ func (request ToolDecisionRequest) RouteRevision() environment.Revision {
 
 func (request ToolDecisionRequest) ToolIntents() []protocolcore.ToolIntent {
 	return cloneToolIntents(request.intents)
+}
+
+func (request ToolDecisionRequest) Context() ToolDecisionContext {
+	return request.decisionContext
 }
 
 type ToolDecisionGate interface {

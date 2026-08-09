@@ -161,6 +161,7 @@ export interface EnvironmentRecord {
   readonly budgetPolicy: EnvironmentBudgetPolicy;
   readonly egressPolicy: EnvironmentEgressPolicy;
   readonly contentRecording: EnvironmentContentRecordingPolicy;
+  readonly policySet: EnvironmentPolicySet;
 }
 
 export type EnvironmentContentRecordingMode = "full" | "metadata_only" | "off";
@@ -168,6 +169,12 @@ export type EnvironmentContentRecordingMode = "full" | "metadata_only" | "off";
 export interface EnvironmentContentRecordingPolicy {
   readonly mode: EnvironmentContentRecordingMode;
   readonly retentionDays: number;
+}
+
+export type EnvironmentToolPolicyMode = "observe" | "review" | "strict";
+
+export interface EnvironmentPolicySet {
+  readonly toolMode: EnvironmentToolPolicyMode;
 }
 
 export interface EnvironmentPage {
@@ -242,6 +249,7 @@ export interface EnvironmentDraftInput {
   readonly budgetPolicy: EnvironmentBudgetPolicy;
   readonly egressPolicy: EnvironmentEgressPolicy;
   readonly contentRecording: EnvironmentContentRecordingPolicy;
+  readonly policySet: EnvironmentPolicySet;
 }
 
 export type EnvironmentCompatibility =

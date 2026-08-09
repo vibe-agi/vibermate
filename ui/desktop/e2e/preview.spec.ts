@@ -137,6 +137,14 @@ test("creates a useful Claude inspection Environment without requiring another a
   const dialog = page.getByRole("dialog", { name: "Create Environment" });
   await dialog.getByLabel("Name").fill("Claude inspection");
   await dialog.getByLabel("Stable ID").fill("claude-inspection");
+  await expect(dialog.getByLabel("Tool policy")).toHaveValue("observe");
+  await expect(dialog).toContainText(
+    "Default. Tools continue without interruption; request evidence still records what happened.",
+  );
+  await dialog.getByLabel("Tool policy").selectOption("review");
+  await expect(dialog).toContainText(
+    "Unproven actions wait for approval. Verified structured file actions inside this workspace continue automatically.",
+  );
   await expect(dialog.getByText("Authentication", { exact: true }).locator("..").getByRole("combobox")).toHaveValue("");
   await dialog.getByRole("button", { name: "Review changes" }).click();
   await dialog.getByRole("button", { name: "Publish revision" }).click();
@@ -145,6 +153,7 @@ test("creates a useful Claude inspection Environment without requiring another a
   await expect(page.getByRole("heading", { name: "https://api.anthropic.com" })).toBeVisible();
   await expect(page.getByText("Observe, no changes", { exact: true })).toBeVisible();
   await expect(page.getByText("Client login", { exact: true })).toBeVisible();
+  await expect(page.getByText("Review unproven actions", { exact: true })).toBeVisible();
   expect(errors).toEqual([]);
 });
 

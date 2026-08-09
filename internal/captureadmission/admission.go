@@ -6,6 +6,7 @@ package captureadmission
 import (
 	"errors"
 	"fmt"
+	"path/filepath"
 	"strings"
 	"unicode"
 	"unicode/utf8"
@@ -95,6 +96,7 @@ type Admission struct {
 	confidence         AttributionConfidence
 	sourceLabel        string
 	workspace          workspaceidentity.Scope
+	workspaceRoot      string
 	adapter            *clientadapter.Evidence
 }
 
@@ -140,6 +142,11 @@ func (admission Admission) Validate() error {
 		admission.workspace.WorkspaceID() != admission.workspaceID) {
 		return fmt.Errorf("%w: workspace evidence is invalid", ErrInvalidAdmission)
 	}
+	if admission.workspaceRoot != "" &&
+		(!filepath.IsAbs(admission.workspaceRoot) ||
+			filepath.Clean(admission.workspaceRoot) != admission.workspaceRoot) {
+		return fmt.Errorf("%w: workspace root is invalid", ErrInvalidAdmission)
+	}
 
 	switch admission.kind {
 	case KindManagedRun:
@@ -164,7 +171,8 @@ func (admission Admission) Validate() error {
 		if !validOpaqueID(admission.manualCaptureID) ||
 			admission.admissionRef != "manual-capture/"+admission.manualCaptureID ||
 			admission.captureRunID != "" || admission.adapter != nil ||
-			hasWorkspace || admission.confidence != AttributionConfigured {
+			hasWorkspace || admission.workspaceRoot != "" ||
+			admission.confidence != AttributionConfigured {
 			return fmt.Errorf("%w: manual-capture evidence is invalid", ErrInvalidAdmission)
 		}
 	}
@@ -220,6 +228,13 @@ func (admission Admission) SourceLabel() string {
 
 func (admission Admission) WorkspaceScope() (workspaceidentity.Scope, bool) {
 	return admission.workspace, admission.workspace != (workspaceidentity.Scope{})
+}
+
+// WorkspaceRoot is in-memory admission evidence from the local launcher. It
+// is used only to resolve structured tool paths and is never persisted as a
+// policy rule or emitted in approval evidence.
+func (admission Admission) WorkspaceRoot() (string, bool) {
+	return admission.workspaceRoot, admission.workspaceRoot != ""
 }
 
 // Supports reports only feature evidence carried by a digest-verified client

@@ -2290,6 +2290,7 @@ function validEnvironmentRecord(
       "budgetPolicy",
       "egressPolicy",
       "contentRecording",
+      "policySet",
     ]) &&
     validResourceId(value.id) &&
     value.systemOwned === (value.id === "system_transparent") &&
@@ -2302,7 +2303,8 @@ function validEnvironmentRecord(
     validPluginBindings(value.pluginBindings) &&
     validSimplePolicy(value.budgetPolicy, false) &&
     validSimplePolicy(value.egressPolicy, true) &&
-    validContentRecordingPolicy(value.contentRecording)
+    validContentRecordingPolicy(value.contentRecording) &&
+    validEnvironmentPolicySet(value.policySet)
   );
 }
 
@@ -2315,6 +2317,16 @@ function validContentRecordingPolicy(value: unknown): boolean {
     (value.mode === "off"
       ? value.retentionDays === 0
       : value.retentionDays >= 1 && value.retentionDays <= 3650)
+  );
+}
+
+function validEnvironmentPolicySet(value: unknown): boolean {
+  return (
+    isRecord(value) &&
+    hasClosedFields(value, ["toolMode"]) &&
+    (value.toolMode === "observe" ||
+      value.toolMode === "review" ||
+      value.toolMode === "strict")
   );
 }
 
@@ -2537,6 +2549,7 @@ function validEnvironmentDraftInput(value: unknown): value is EnvironmentDraftIn
       "budgetPolicy",
       "egressPolicy",
       "contentRecording",
+      "policySet",
     ]) &&
     nonNegativeInteger(value.expectedDraftRevision) &&
     validDisplayLabel(value.name, 256, false) &&
@@ -2545,7 +2558,8 @@ function validEnvironmentDraftInput(value: unknown): value is EnvironmentDraftIn
     validPluginBindings(value.pluginBindings) &&
     validSimplePolicy(value.budgetPolicy, false) &&
     validSimplePolicy(value.egressPolicy, true) &&
-    validContentRecordingPolicy(value.contentRecording)
+    validContentRecordingPolicy(value.contentRecording) &&
+    validEnvironmentPolicySet(value.policySet)
   );
 }
 

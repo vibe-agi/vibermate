@@ -16,6 +16,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/vibe-agi/vibermate/internal/clientadapter"
 	"github.com/vibe-agi/vibermate/internal/environment"
 	"github.com/vibe-agi/vibermate/internal/offlinehold"
 	"github.com/vibe-agi/vibermate/internal/protocolcore"
@@ -875,7 +876,7 @@ func (pipeline *Pipeline) executeComplete(
 		)
 	}
 	intents := responseToolIntents(providerResponse)
-	if err := pipeline.decideTools(ctx, request, selection, intents); err != nil {
+	if err := pipeline.decideTools(ctx, request, selection, decoded, intents); err != nil {
 		result.Outcome = AttemptAborted
 		return err
 	}
@@ -1434,6 +1435,7 @@ func (pipeline *Pipeline) executeStream(
 			ctx,
 			request,
 			selection,
+			decoded,
 			stream,
 			response.Body,
 			downstream,
@@ -1505,6 +1507,7 @@ func (pipeline *Pipeline) consumeProviderStream(
 	ctx context.Context,
 	request ClientRequest,
 	selection frozenSelection,
+	decoded protocolcore.Request,
 	stream protocolpath.Stream,
 	body io.ReadCloser,
 	downstream Downstream,
@@ -1609,6 +1612,7 @@ func (pipeline *Pipeline) consumeProviderStream(
 		ctx,
 		request,
 		selection,
+		decoded,
 		intents,
 		downstream,
 	); err != nil {
@@ -1698,10 +1702,34 @@ func (pipeline *Pipeline) decideTools(
 	ctx context.Context,
 	request ClientRequest,
 	selection frozenSelection,
+	decoded protocolcore.Request,
 	intents []protocolcore.ToolIntent,
 ) error {
 	if len(intents) == 0 {
 		return nil
+	}
+	workspaceRoot := ""
+	structuredWorkspaceTools := false
+	if admission, available := request.CaptureAdmission(); available {
+		workspaceRoot, _ = admission.WorkspaceRoot()
+		structuredWorkspaceTools = admission.Supports(
+			clientadapter.FeatureStructuredWorkspaceTools,
+		)
+	}
+	decisionContext, err := NewToolDecisionContext(
+		selection.policySet,
+		workspaceRoot,
+		structuredWorkspaceTools,
+		decoded.Tools,
+		decoded.ToolNamespaces,
+	)
+	if err != nil {
+		return newFailure(
+			ReasonToolDecisionUnavailable,
+			request.exchangeID,
+			0,
+			err,
+		)
 	}
 	decisionRequest, err := NewToolDecisionRequest(
 		request.exchangeID,
@@ -1710,6 +1738,7 @@ func (pipeline *Pipeline) decideTools(
 		selection.environmentDigest,
 		selection.routeID,
 		selection.routeRevision,
+		decisionContext,
 		intents,
 	)
 	if err != nil {
@@ -1763,6 +1792,7 @@ func (pipeline *Pipeline) decideStreamTools(
 	ctx context.Context,
 	request ClientRequest,
 	selection frozenSelection,
+	decoded protocolcore.Request,
 	intents []protocolcore.ToolIntent,
 	downstream Downstream,
 ) error {
@@ -1777,6 +1807,7 @@ func (pipeline *Pipeline) decideStreamTools(
 			decisionContext,
 			request,
 			selection,
+			decoded,
 			intents,
 		)
 	}()

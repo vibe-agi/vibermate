@@ -55,6 +55,7 @@ function environment(overrides: Partial<EnvironmentRecord> = {}): EnvironmentRec
     budgetPolicy: { id: "", revision: 0 },
     egressPolicy: { id: "", revision: 0, mode: "" },
     contentRecording: { mode: "full", retentionDays: 30 },
+    policySet: { toolMode: "observe" },
     ...overrides,
   };
 }

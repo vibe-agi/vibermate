@@ -113,10 +113,16 @@ const (
 	// ViberMate Exchange runtime. Without it, a failure after the Hold envelope
 	// is committed can become a second, independently billable client request.
 	FeatureCoreOwnedStreamingFallback
+	// FeatureStructuredWorkspaceTools proves that this exact client release's
+	// built-in Read/Glob/Grep/Write/Edit/NotebookEdit names and argument
+	// semantics match the Core workspace classifier. It does not cover shell,
+	// MCP, plugin, or arbitrary custom tools.
+	FeatureStructuredWorkspaceTools
 )
 
 const knownFeatures = FeatureResponsesWebSocketHTTPFallback |
-	FeatureCoreOwnedStreamingFallback
+	FeatureCoreOwnedStreamingFallback |
+	FeatureStructuredWorkspaceTools
 
 func (features Feature) valid() bool {
 	return features&^knownFeatures == 0
@@ -1020,7 +1026,8 @@ func ClaudeCode221220DarwinARM64() Release {
 			SHA256: "8addc857f3fe64d5a0368af9ee50321b50afb4a6918ba3ef018ab84f5dbbe081",
 		}},
 		LaunchRecipe: LaunchNodeEnvProxy,
-		Features:     FeatureCoreOwnedStreamingFallback,
+		Features: FeatureCoreOwnedStreamingFallback |
+			FeatureStructuredWorkspaceTools,
 	}
 }
 
