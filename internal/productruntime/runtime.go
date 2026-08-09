@@ -281,6 +281,9 @@ func startWithBuilders(
 	}
 	environments := environmentResult.environments
 	assignments := environmentResult.assignments
+	if err := accounts.BindDeletionGuard(environments); err != nil {
+		return fail("ProviderAccount deletion authority", err)
+	}
 	pending.register("Capture assignment runtime", assignments.Shutdown)
 	workspaceDefaults, err := workspacedefault.New(
 		storageResult.store.WorkspaceDefaultRepository(),

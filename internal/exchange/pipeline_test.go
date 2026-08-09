@@ -464,6 +464,40 @@ func TestStreamingStillPublishesIncrementalClientEvents(t *testing.T) {
 	}
 }
 
+func TestManagedCompatibleTextStreamCompletesAfterEmptyTerminalRelease(t *testing.T) {
+	plan := mustEnvironmentRequestPlan(t, testPlanOptions{
+		mode:           environment.PlanModeManaged,
+		providerOrigin: "https://api.anthropic.com",
+		backend:        protocolspec.DialectAnthropicMessages,
+		modelMode:      modelModeFixed,
+		fixedModel:     "claude-provider",
+		accounts:       []testAccount{{id: "account.primary", revision: 1, epoch: 1}},
+		preferred:      "account.primary",
+	})
+	authority := newAccountAuthority(t, testAccount{id: "account.primary", revision: 1, epoch: 1})
+	provider := &providerDouble{results: []providerResult{{response: streamResponse(
+		http.StatusOK,
+		anthropicTextProviderStream(),
+	)}}}
+	pipeline := newTestPipeline(t, authority, provider, approvedDecisions(), &attemptObserverDouble{})
+	defer shutdownPipeline(t, pipeline)
+
+	downstream := &downstreamRecorder{}
+	result, err := pipeline.Execute(
+		context.Background(),
+		mustClientRequest(t, "exchange-compatible-stream", plan, streamingClientRequest()),
+		downstream,
+	)
+	if err != nil || result.Outcome != AttemptSucceeded || !result.Ledger.DownstreamTerminal {
+		t.Fatalf("Execute() = %+v, %v", result, err)
+	}
+	wire := downstream.bytesSnapshot()
+	if !bytes.Contains(wire, []byte(`"text":"hello"`)) ||
+		!bytes.Contains(wire, []byte(`"type":"message_stop"`)) {
+		t.Fatalf("downstream stream = %s", wire)
+	}
+}
+
 func TestManagedResponsesRequestUsesTheSameFrozenEnvironmentAuthority(t *testing.T) {
 	plan := mustEnvironmentRequestPlan(t, testPlanOptions{
 		clientProtocol: environment.ClientProtocolOpenAIResponses,
@@ -1393,6 +1427,29 @@ func normalProviderStream(t *testing.T, model string) io.Reader {
 		`{"id":"chatcmpl-stream","object":"chat.completion.chunk","created":1,"model":"`+model+`","choices":[],"usage":{"prompt_tokens":4,"completion_tokens":1,"total_tokens":5}}`,
 		`[DONE]`,
 	))
+}
+
+func anthropicTextProviderStream() io.Reader {
+	return strings.NewReader(strings.Join([]string{
+		`event: message_start`,
+		`data: {"type":"message_start","message":{"id":"msg_text","type":"message","role":"assistant","model":"claude-provider","usage":{"input_tokens":3}}}`,
+		``,
+		`event: content_block_start`,
+		`data: {"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}`,
+		``,
+		`event: content_block_delta`,
+		`data: {"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"hello"}}`,
+		``,
+		`event: content_block_stop`,
+		`data: {"type":"content_block_stop","index":0}`,
+		``,
+		`event: message_delta`,
+		`data: {"type":"message_delta","delta":{"stop_reason":"end_turn","stop_sequence":null},"usage":{"output_tokens":1}}`,
+		``,
+		`event: message_stop`,
+		`data: {"type":"message_stop"}`,
+		``,
+	}, "\n") + "\n")
 }
 
 func joinProviderEvents(t *testing.T, payloads ...string) []byte {

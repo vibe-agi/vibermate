@@ -83,7 +83,10 @@ type environmentBuildRequest struct {
 	accounts             environment.AccountCatalog
 }
 
-type environmentRuntime interface{ environment.Controller }
+type environmentRuntime interface {
+	environment.Controller
+	environment.AccountDeletionGuard
+}
 
 type captureAssignmentRuntime interface {
 	captureassignment.Controller

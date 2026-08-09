@@ -165,6 +165,13 @@ test("connects a Claude OAuth account without ever rendering the credential", as
   await expect(page.getByRole("table")).toContainText("Claude OAuth token");
   await expect(page.getByRole("table")).toContainText("Ready");
   await expect(page.locator("body")).not.toContainText(secret);
+
+  const row = page.getByRole("row").filter({ hasText: "Claude OAuth Preview" });
+  await row.getByRole("button", { name: "Delete" }).click();
+  const deleteDialog = page.getByRole("dialog", { name: "Delete Claude OAuth Preview?" });
+  await expect(deleteDialog).toContainText("permanently removes the stored credential");
+  await deleteDialog.getByRole("button", { name: "Delete account" }).click();
+  await expect(page.getByRole("table")).not.toContainText("Claude OAuth Preview");
   expect(errors).toEqual([]);
 });
 

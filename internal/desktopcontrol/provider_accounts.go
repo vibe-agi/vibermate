@@ -46,6 +46,22 @@ type ProviderAccountCredentialInput struct {
 	Secret string `json:"secret"`
 }
 
+type ProviderAccountReferenceResponse struct {
+	EnvironmentID       string `json:"environmentId"`
+	EnvironmentName     string `json:"environmentName"`
+	EnvironmentRevision uint64 `json:"environmentRevision"`
+	RouteID             string `json:"routeId"`
+	RouteRevision       uint64 `json:"routeRevision"`
+}
+
+type ProviderAccountDeleteResponse struct {
+	Deleted        bool                               `json:"deleted"`
+	ReferenceCount uint64                             `json:"referenceCount"`
+	References     []ProviderAccountReferenceResponse `json:"references"`
+}
+
+const providerAccountReferenceLimit = 50
+
 func (handler *Handler) listProviderAccounts(writer http.ResponseWriter, request *http.Request) {
 	if request.URL.RawQuery != "" {
 		writeProblem(writer, http.StatusUnprocessableEntity, ReasonInvalidRequest)
@@ -177,6 +193,49 @@ func (handler *Handler) replaceProviderAccountCredential(writer http.ResponseWri
 	writeCached(writer, response)
 }
 
+func (handler *Handler) deleteProviderAccount(writer http.ResponseWriter, request *http.Request) {
+	expected, key, headerErr := mutationHeaders(request)
+	id, idErr := provideraccount.NewID(request.PathValue("accountId"))
+	if headerErr != nil || idErr != nil || !emptyBody(request.Body) {
+		writeProblem(writer, http.StatusUnprocessableEntity, ReasonInvalidRequest)
+		return
+	}
+	fingerprint := sha256.Sum256([]byte(
+		request.Method + "\x00" + request.URL.Path + "\x00" + strconv.FormatUint(expected, 10),
+	))
+	response, err := handler.idempotent.execute(request.Context(), key, fingerprint, func() cachedResponse {
+		result, deleteErr := handler.accounts.Delete(request.Context(), provideraccount.DeleteCommand{
+			ID: id, ExpectedCredentialEpoch: expected,
+		})
+		if deleteErr != nil {
+			return problemResponse(classifyProviderAccountError(deleteErr))
+		}
+		referenceCount := len(result.References)
+		visibleReferences := result.References
+		if len(visibleReferences) > providerAccountReferenceLimit {
+			visibleReferences = visibleReferences[:providerAccountReferenceLimit]
+		}
+		references := make([]ProviderAccountReferenceResponse, len(visibleReferences))
+		for index, reference := range visibleReferences {
+			references[index] = ProviderAccountReferenceResponse{
+				EnvironmentID:       reference.EnvironmentID.String(),
+				EnvironmentName:     reference.EnvironmentName,
+				EnvironmentRevision: uint64(reference.EnvironmentRevision),
+				RouteID:             reference.RouteID.String(),
+				RouteRevision:       uint64(reference.RouteRevision),
+			}
+		}
+		return jsonResponse(http.StatusOK, ProviderAccountDeleteResponse{
+			Deleted: result.Deleted, ReferenceCount: uint64(referenceCount), References: references,
+		})
+	})
+	if err != nil {
+		writeProblem(writer, http.StatusConflict, ReasonProviderAccountConflict)
+		return
+	}
+	writeCached(writer, response)
+}
+
 func providerAccountResponseOf(view provideraccount.View) (ProviderAccountResponse, error) {
 	kind, err := providerAccountKindOf(view.Account)
 	if err != nil || view.Account.Validate() != nil || view.Health.Validate() != nil {
@@ -222,6 +281,8 @@ func classifyProviderAccountError(err error) problemSpec {
 		return problemSpec{status: http.StatusNotFound, reason: ReasonProviderAccountNotFound}
 	case errors.Is(err, provideraccount.ErrRevisionConflict):
 		return problemSpec{status: http.StatusConflict, reason: ReasonProviderAccountConflict}
+	case errors.Is(err, provideraccount.ErrAccountInUse):
+		return problemSpec{status: http.StatusConflict, reason: ReasonProviderAccountInUse}
 	case errors.Is(err, provideraccount.ErrInvalidAccount):
 		return problemSpec{status: http.StatusUnprocessableEntity, reason: ReasonInvalidRequest}
 	default:

@@ -103,6 +103,28 @@ type Reader interface {
 	GetRevision(context.Context, EnvironmentID, Revision) (EnvironmentSnapshot, error)
 }
 
+// AccountReference is one current, published Route reference to a managed
+// ProviderAccount. It contains no credential material and is safe to return
+// to the control plane when an account cannot yet be removed.
+type AccountReference struct {
+	EnvironmentID       EnvironmentID
+	EnvironmentName     string
+	EnvironmentRevision Revision
+	RouteID             UpstreamRouteID
+	RouteRevision       Revision
+}
+
+// AccountDeletionGuard serializes account retirement with Environment draft
+// writes and publication. A caller may delete only inside the callback and
+// only when the returned reference set is empty.
+type AccountDeletionGuard interface {
+	GuardAccountDeletion(
+		context.Context,
+		string,
+		func() error,
+	) ([]AccountReference, error)
+}
+
 // Controller is the single Environment control-plane authority.
 type Controller interface {
 	Publisher
@@ -121,8 +143,9 @@ type Manager struct {
 }
 
 var (
-	_ Controller       = (*Manager)(nil)
-	_ SnapshotResolver = (*Manager)(nil)
+	_ Controller           = (*Manager)(nil)
+	_ SnapshotResolver     = (*Manager)(nil)
+	_ AccountDeletionGuard = (*Manager)(nil)
 )
 
 func NewManager(ctx context.Context, repository Repository, compiler Compiler, projection SnapshotProjection, inspector CaptureInspector) (*Manager, error) {
@@ -167,6 +190,53 @@ func (manager *Manager) ResolveClientOrigin(id EnvironmentID, origin originident
 }
 
 func (manager *Manager) Health() ProjectionHealth { return manager.projection.Health() }
+
+func (manager *Manager) GuardAccountDeletion(
+	ctx context.Context,
+	accountID string,
+	deleteAccount func() error,
+) ([]AccountReference, error) {
+	if ctx == nil || validateID("ProviderAccount ID", accountID) != nil || deleteAccount == nil {
+		return nil, ErrInvalidEnvironment
+	}
+	manager.writes.Lock()
+	defer manager.writes.Unlock()
+	aggregates, err := manager.repository.LoadAllActive(ctx)
+	if err != nil {
+		return nil, err
+	}
+	references := make([]AccountReference, 0)
+	for _, aggregate := range aggregates {
+		for _, endpoint := range aggregate.ClientEndpoints {
+			for _, plan := range endpoint.ProtocolPlans {
+				for _, route := range plan.UpstreamPlan.Routes {
+					if route.AccountPolicy.Mode != AccountModeManaged ||
+						!slices.Contains(route.AccountPolicy.CandidateAccountIDs, accountID) {
+						continue
+					}
+					references = append(references, AccountReference{
+						EnvironmentID: aggregate.ID, EnvironmentName: aggregate.Name,
+						EnvironmentRevision: aggregate.Revision,
+						RouteID:             route.ID, RouteRevision: route.Revision,
+					})
+				}
+			}
+		}
+	}
+	sort.Slice(references, func(left, right int) bool {
+		if references[left].EnvironmentID != references[right].EnvironmentID {
+			return references[left].EnvironmentID < references[right].EnvironmentID
+		}
+		return references[left].RouteID < references[right].RouteID
+	})
+	if len(references) != 0 {
+		return references, nil
+	}
+	if err := deleteAccount(); err != nil {
+		return nil, err
+	}
+	return []AccountReference{}, nil
+}
 
 func (manager *Manager) List(ctx context.Context) ([]EnvironmentSnapshot, error) {
 	if ctx == nil {

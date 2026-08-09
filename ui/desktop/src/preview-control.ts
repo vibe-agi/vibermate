@@ -31,6 +31,7 @@ import type {
   OfflineHoldSnapshot,
   ProviderAccountCreateInput,
   ProviderAccountCredentialInput,
+  ProviderAccountDeleteResult,
   ProviderAccountPage,
   ProviderAccountRecord,
   StatusResponse,
@@ -510,6 +511,36 @@ class PreviewControlClient implements ControlClient {
     };
     this.accountRecords.set(accountId, updated);
     return clone(updated);
+  }
+
+  async deleteProviderAccount(
+    accountId: string,
+    expectedCredentialEpoch: number,
+  ): Promise<ProviderAccountDeleteResult> {
+    this.requireOpen();
+    const account = this.accountRecords.get(accountId);
+    if (account === undefined) throw this.notFound();
+    this.requireRevision(account.credentialEpoch, expectedCredentialEpoch);
+    const references = [...this.environmentRecords.values()]
+      .flatMap((environment) =>
+        environment.clientEndpoints.flatMap((endpoint) =>
+          endpoint.protocolPlans.flatMap((plan) =>
+            plan.upstreamPlan.routes
+              .filter((route) => route.accountPolicy.candidateAccountIds.includes(accountId))
+              .map((route) => ({
+                environmentId: environment.id,
+                environmentName: environment.name,
+                environmentRevision: environment.revision,
+                routeId: route.id,
+                routeRevision: route.revision,
+              })),
+          ),
+        ),
+      )
+      .sort((left, right) => `${left.environmentId}\u0000${left.routeId}`.localeCompare(`${right.environmentId}\u0000${right.routeId}`));
+    if (references.length !== 0) return { deleted: false, referenceCount: references.length, references };
+    this.accountRecords.delete(accountId);
+    return { deleted: true, referenceCount: 0, references: [] };
   }
 
   async environment(environmentId: string): Promise<EnvironmentRecord> {

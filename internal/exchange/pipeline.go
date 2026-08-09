@@ -1612,24 +1612,31 @@ func (pipeline *Pipeline) consumeProviderStream(
 	if err != nil {
 		return err
 	}
-	committed, writeErr := writeDownstream(ctx, downstream, release)
-	if committed > 0 {
-		if err := ledger.RecordSemanticWrite(committed); err != nil {
-			return err
-		}
-		if len(intents) > 0 {
-			if err := ledger.RecordToolExposure(toolKeys(intents)); err != nil {
+	// A compatible text-only stream is released incrementally as each event
+	// becomes safe. Its terminal approval therefore has no buffered bytes to
+	// publish. Empty release is a successful terminal state, not a failed
+	// downstream write. Tool-bearing streams still enter this branch with the
+	// bytes held behind approval.
+	if len(release) > 0 {
+		committed, writeErr := writeDownstream(ctx, downstream, release)
+		if committed > 0 {
+			if err := ledger.RecordSemanticWrite(committed); err != nil {
 				return err
 			}
+			if len(intents) > 0 {
+				if err := ledger.RecordToolExposure(toolKeys(intents)); err != nil {
+					return err
+				}
+			}
 		}
-	}
-	if writeErr != nil {
-		return newFailure(
-			ReasonDownstreamCommitFailed,
-			request.exchangeID,
-			0,
-			writeErr,
-		)
+		if writeErr != nil {
+			return newFailure(
+				ReasonDownstreamCommitFailed,
+				request.exchangeID,
+				0,
+				writeErr,
+			)
+		}
 	}
 	if err := ledger.RecordTerminal(); err != nil {
 		return err

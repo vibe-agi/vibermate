@@ -342,6 +342,66 @@ func TestAccountCompatibilityAndMutableAliasesFailClosed(t *testing.T) {
 	}
 }
 
+func TestAccountDeletionGuardReturnsPublishedRouteReferencesBeforeDeleting(t *testing.T) {
+	t.Parallel()
+	repository := newMemoryRepository()
+	manager := mustManager(t, repository, nil)
+	candidate := fixture(t, "work", mustOrigin(t, "https://relay.example"))
+	for endpointIndex := range candidate.ClientEndpoints {
+		for planIndex := range candidate.ClientEndpoints[endpointIndex].ProtocolPlans {
+			route := &candidate.ClientEndpoints[endpointIndex].ProtocolPlans[planIndex].UpstreamPlan.Routes[0]
+			route.AccountPolicy = RouteAccountPolicy{
+				Revision: 1, Mode: AccountModeManaged,
+				AllowedRealmIDs:    []string{route.ProviderTarget.RealmID},
+				PreferredAccountID: "account.work", CandidateAccountIDs: []string{"account.work"},
+				AccountRevisions: map[string]Revision{"account.work": 1}, FailoverPolicy: FailoverOff,
+			}
+		}
+	}
+	repository.mu.Lock()
+	repository.active[candidate.ID] = candidate.Clone()
+	repository.mu.Unlock()
+
+	deleted := false
+	references, err := manager.GuardAccountDeletion(
+		context.Background(),
+		"account.work",
+		func() error { deleted = true; return nil },
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if deleted || len(references) != 2 ||
+		references[0].EnvironmentID != "work" ||
+		references[0].EnvironmentName != "Work" ||
+		references[0].EnvironmentRevision != 1 ||
+		references[0].RouteID != "route.anthropic" ||
+		references[1].RouteID != "route.responses" {
+		t.Fatalf("account deletion references = %+v deleted=%t", references, deleted)
+	}
+
+	for endpointIndex := range candidate.ClientEndpoints {
+		for planIndex := range candidate.ClientEndpoints[endpointIndex].ProtocolPlans {
+			route := &candidate.ClientEndpoints[endpointIndex].ProtocolPlans[planIndex].UpstreamPlan.Routes[0]
+			route.AccountPolicy = RouteAccountPolicy{
+				Revision: 1, Mode: AccountModeClientPassthrough,
+				AllowedRealmIDs: []string{route.ProviderTarget.RealmID}, FailoverPolicy: FailoverOff,
+			}
+		}
+	}
+	repository.mu.Lock()
+	repository.active[candidate.ID] = candidate.Clone()
+	repository.mu.Unlock()
+	references, err = manager.GuardAccountDeletion(
+		context.Background(),
+		"account.work",
+		func() error { deleted = true; return nil },
+	)
+	if err != nil || !deleted || len(references) != 0 {
+		t.Fatalf("unreferenced account deletion = %+v deleted=%t err=%v", references, deleted, err)
+	}
+}
+
 func TestStableChildrenCannotMoveAcrossParents(t *testing.T) {
 	t.Parallel()
 	previous := fixture(t, "work", mustOrigin(t, "https://relay.example"))

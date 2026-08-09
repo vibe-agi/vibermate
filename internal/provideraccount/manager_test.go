@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/vibe-agi/vibermate/internal/environment"
 	"github.com/vibe-agi/vibermate/internal/providerauth"
 	"github.com/vibe-agi/vibermate/internal/secretstore"
 )
@@ -142,6 +143,86 @@ func TestBuiltInAnthropicRealmAcceptsStaticClaudeOAuthCredential(t *testing.T) {
 	}
 }
 
+func TestManagerDeletesOnlyAnUnreferencedInactiveAccount(t *testing.T) {
+	t.Parallel()
+	repository := &memoryRepository{accounts: make(map[ID]Account)}
+	secrets := newMemorySecrets()
+	manager, err := NewManager(
+		context.Background(), repository, secrets, BuiltInRealms(),
+		fixedClock{now: time.Unix(1_786_200_000, 0).UTC()},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	guard := &deletionGuard{references: []environment.AccountReference{{
+		EnvironmentID: "work", EnvironmentName: "Work", EnvironmentRevision: 3,
+		RouteID: "route.anthropic", RouteRevision: 2,
+	}}}
+	if err := manager.BindDeletionGuard(guard); err != nil {
+		t.Fatal(err)
+	}
+	value, err := secretstore.NewValue([]byte("private-account-secret"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer value.Destroy()
+	view, err := manager.Create(context.Background(), CreateCommand{
+		ID: "anthropic-work", DisplayName: "Anthropic Work",
+		RealmID: "anthropic.official", Driver: providerauth.AnthropicAPIKeyDriverRef(), Secret: value,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	blocked, err := manager.Delete(context.Background(), DeleteCommand{
+		ID: view.Account.ID, ExpectedCredentialEpoch: view.Health.CredentialEpoch,
+	})
+	if err != nil || blocked.Deleted || len(blocked.References) != 1 || guard.callbacks != 0 {
+		t.Fatalf("referenced account deletion = %+v callbacks=%d err=%v", blocked, guard.callbacks, err)
+	}
+	if metadata, inspectErr := secrets.Inspect(context.Background(), view.Account.SecretRef); inspectErr != nil || metadata.State != secretstore.StateConfigured {
+		t.Fatalf("blocked account secret = %+v err=%v", metadata, inspectErr)
+	}
+
+	guard.references = nil
+	manager.active[view.Account.ID] = 1
+	if _, err := manager.Delete(context.Background(), DeleteCommand{
+		ID: view.Account.ID, ExpectedCredentialEpoch: view.Health.CredentialEpoch,
+	}); !errors.Is(err, ErrAccountInUse) {
+		t.Fatalf("active account deletion error = %v", err)
+	}
+	manager.active[view.Account.ID] = 0
+	deleted, err := manager.Delete(context.Background(), DeleteCommand{
+		ID: view.Account.ID, ExpectedCredentialEpoch: view.Health.CredentialEpoch,
+	})
+	if err != nil || !deleted.Deleted || len(deleted.References) != 0 || guard.callbacks != 2 {
+		t.Fatalf("unreferenced account deletion = %+v callbacks=%d err=%v", deleted, guard.callbacks, err)
+	}
+	if _, err := manager.Get(context.Background(), view.Account.ID); !errors.Is(err, ErrAccountNotFound) {
+		t.Fatalf("deleted account lookup error = %v", err)
+	}
+	if metadata, inspectErr := secrets.Inspect(context.Background(), view.Account.SecretRef); inspectErr != nil || metadata.State != secretstore.StateMissing {
+		t.Fatalf("deleted account secret = %+v err=%v", metadata, inspectErr)
+	}
+}
+
+type deletionGuard struct {
+	references []environment.AccountReference
+	callbacks  int
+}
+
+func (guard *deletionGuard) GuardAccountDeletion(
+	_ context.Context,
+	_ string,
+	deleteAccount func() error,
+) ([]environment.AccountReference, error) {
+	if len(guard.references) != 0 {
+		return append([]environment.AccountReference(nil), guard.references...), nil
+	}
+	guard.callbacks++
+	return nil, deleteAccount()
+}
+
 type fixedClock struct{ now time.Time }
 
 func (clock fixedClock) Now() time.Time { return clock.now }
@@ -181,6 +262,21 @@ func (repository *memoryRepository) Write(_ context.Context, expected uint64, ca
 	}
 	repository.accounts[candidate.ID] = candidate
 	return CommitResult{Outcome: CommitCommitted, Account: candidate, Actual: candidate.Revision}, nil
+}
+
+func (repository *memoryRepository) Delete(_ context.Context, id ID, expected uint64) (CommitResult, error) {
+	repository.mu.Lock()
+	defer repository.mu.Unlock()
+	current, exists := repository.accounts[id]
+	if !exists || current.Revision != expected {
+		actual := uint64(0)
+		if exists {
+			actual = current.Revision
+		}
+		return CommitResult{Outcome: CommitConflict, Account: current, Actual: actual}, nil
+	}
+	delete(repository.accounts, id)
+	return CommitResult{Outcome: CommitCommitted}, nil
 }
 
 type memorySecrets struct {

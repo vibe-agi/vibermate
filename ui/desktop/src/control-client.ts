@@ -30,6 +30,7 @@ import type {
   OfflineHoldSnapshot,
   ProviderAccountCreateInput,
   ProviderAccountCredentialInput,
+  ProviderAccountDeleteResult,
   ProviderAccountPage,
   ProviderAccountRecord,
   StatusResponse,
@@ -151,6 +152,7 @@ export interface ControlClient {
   providerAccount(accountId: string, signal?: AbortSignal): Promise<ProviderAccountRecord>;
   createProviderAccount(input: ProviderAccountCreateInput, signal?: AbortSignal): Promise<ProviderAccountRecord>;
   replaceProviderAccountCredential(accountId: string, expectedCredentialEpoch: number, input: ProviderAccountCredentialInput, signal?: AbortSignal): Promise<ProviderAccountRecord>;
+  deleteProviderAccount(accountId: string, expectedCredentialEpoch: number, signal?: AbortSignal): Promise<ProviderAccountDeleteResult>;
   environment(environmentId: string, signal?: AbortSignal): Promise<EnvironmentRecord>;
   environmentRevision(environmentId: string, revision: number, signal?: AbortSignal): Promise<EnvironmentRecord>;
   environmentDraft(environmentId: string, signal?: AbortSignal): Promise<EnvironmentDraft>;
@@ -1057,6 +1059,18 @@ export async function createControlClient(
         expectedCredentialEpoch,
         signal,
         (value) => requireProviderAccountRecord(value, accountId),
+      );
+    },
+    deleteProviderAccount: async (accountId, expectedCredentialEpoch, signal) => {
+      requireResourceId(accountId);
+      if (!nonNegativeInteger(expectedCredentialEpoch)) throw new ControlContractError();
+      return requestMutation<ProviderAccountDeleteResult>(
+        "DELETE",
+        `/api/v1/provider-accounts/${encodeURIComponent(accountId)}`,
+        undefined,
+        expectedCredentialEpoch,
+        signal,
+        requireProviderAccountDeleteResult,
       );
     },
     environment: async (environmentId, signal) => {
@@ -2191,6 +2205,47 @@ function validProviderAccountCredentialInput(
     hasClosedFields(value, ["secret"]) &&
     validSecretInput(value.secret)
   );
+}
+
+function requireProviderAccountDeleteResult(
+  value: unknown,
+): ProviderAccountDeleteResult {
+  if (
+    !isRecord(value) ||
+    !hasClosedFields(value, ["deleted", "referenceCount", "references"]) ||
+    typeof value.deleted !== "boolean" ||
+    !nonNegativeInteger(value.referenceCount) ||
+    !Array.isArray(value.references) ||
+    value.references.length > maximumDashboardPageItems ||
+    value.referenceCount < value.references.length ||
+    (value.deleted !== (value.referenceCount === 0))
+  ) {
+    throw new ControlContractError();
+  }
+  let previous = "";
+  for (const reference of value.references) {
+    if (
+      !isRecord(reference) ||
+      !hasClosedFields(reference, [
+        "environmentId",
+        "environmentName",
+        "environmentRevision",
+        "routeId",
+        "routeRevision",
+      ]) ||
+      !validResourceId(reference.environmentId) ||
+      !validDisplayLabel(reference.environmentName, 256, false) ||
+      !positiveInteger(reference.environmentRevision) ||
+      !validResourceId(reference.routeId) ||
+      !positiveInteger(reference.routeRevision)
+    ) {
+      throw new ControlContractError();
+    }
+    const key = `${reference.environmentId}\u0000${reference.routeId}`;
+    if (previous !== "" && previous >= key) throw new ControlContractError();
+    previous = key;
+  }
+  return value as unknown as ProviderAccountDeleteResult;
 }
 
 function validSecretInput(value: unknown): value is string {

@@ -22,13 +22,15 @@ const (
 )
 
 var (
-	ErrInvalidAccount    = errors.New("ProviderAccount is invalid")
-	ErrAccountNotFound   = errors.New("ProviderAccount was not found")
-	ErrRevisionConflict  = errors.New("ProviderAccount revision conflicts with the expected revision")
-	ErrAccountDisabled   = errors.New("ProviderAccount is disabled")
-	ErrRealmMismatch     = errors.New("ProviderAccount does not belong to the requested realm")
-	ErrCredentialMissing = errors.New("ProviderAccount credential is unavailable")
-	ErrManagerClosing    = errors.New("ProviderAccount manager is closing")
+	ErrInvalidAccount      = errors.New("ProviderAccount is invalid")
+	ErrAccountNotFound     = errors.New("ProviderAccount was not found")
+	ErrRevisionConflict    = errors.New("ProviderAccount revision conflicts with the expected revision")
+	ErrAccountDisabled     = errors.New("ProviderAccount is disabled")
+	ErrRealmMismatch       = errors.New("ProviderAccount does not belong to the requested realm")
+	ErrCredentialMissing   = errors.New("ProviderAccount credential is unavailable")
+	ErrAccountInUse        = errors.New("ProviderAccount is referenced by a published Environment")
+	ErrDeletionUnavailable = errors.New("ProviderAccount deletion authority is unavailable")
+	ErrManagerClosing      = errors.New("ProviderAccount manager is closing")
 )
 
 type ID string
@@ -187,6 +189,7 @@ type Repository interface {
 	LoadAll(context.Context) ([]Account, error)
 	Load(context.Context, ID) (Account, bool, error)
 	Write(context.Context, uint64, Account) (CommitResult, error)
+	Delete(context.Context, ID, uint64) (CommitResult, error)
 }
 
 type CreateCommand struct {
@@ -203,11 +206,22 @@ type ReplaceSecretCommand struct {
 	Secret                  *secretstore.Value
 }
 
+type DeleteCommand struct {
+	ID                      ID
+	ExpectedCredentialEpoch uint64
+}
+
+type DeleteResult struct {
+	Deleted    bool
+	References []environment.AccountReference
+}
+
 type Controller interface {
 	List(context.Context) ([]View, error)
 	Get(context.Context, ID) (View, error)
 	Create(context.Context, CreateCommand) (View, error)
 	ReplaceSecret(context.Context, ReplaceSecretCommand) (View, error)
+	Delete(context.Context, DeleteCommand) (DeleteResult, error)
 }
 
 func secretReference(id ID) (secretstore.Reference, error) {

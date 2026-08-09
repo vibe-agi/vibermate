@@ -2,6 +2,7 @@ package desktopcontrol_test
 
 import (
 	"bytes"
+	"encoding/json"
 	"net/http"
 	"testing"
 
@@ -135,6 +136,67 @@ func TestProviderAccountControlStoresCredentialWithoutReturningItAndCompilesMana
 		t.Fatalf("managed Environment publish status=%d body=%s", published.Code, published.Body.Bytes())
 	}
 	assertProviderAccountResponseSafe(t, published.Body.Bytes(), secret)
+
+	blocked := environmentRequest(
+		t,
+		application,
+		http.MethodDelete,
+		"/api/v1/provider-accounts/anthropic-work",
+		2,
+		"provider-account-delete-blocked-0001",
+		nil,
+	)
+	if blocked.Code != http.StatusOK {
+		t.Fatalf("blocked delete status=%d body=%s", blocked.Code, blocked.Body.Bytes())
+	}
+	var blockedResult desktopcontrol.ProviderAccountDeleteResponse
+	if err := json.Unmarshal(blocked.Body.Bytes(), &blockedResult); err != nil {
+		t.Fatal(err)
+	}
+	if blockedResult.Deleted || blockedResult.ReferenceCount != 1 || len(blockedResult.References) != 1 ||
+		blockedResult.References[0].EnvironmentID != "managed-work" ||
+		blockedResult.References[0].EnvironmentRevision != 1 ||
+		blockedResult.References[0].RouteID != "route.managed.anthropic" {
+		t.Fatalf("blocked account deletion = %+v", blockedResult)
+	}
+
+	const unusedSecret = "sk-openai-unused-control-sentinel"
+	unused := environmentRequest(
+		t,
+		application,
+		http.MethodPost,
+		"/api/v1/provider-accounts",
+		0,
+		"provider-account-create-unused-0001",
+		[]byte(`{"id":"openai-unused","displayName":"Unused","kind":"openai_api_key","secret":"`+unusedSecret+`"}`),
+	)
+	if unused.Code != http.StatusCreated {
+		t.Fatalf("create unused status=%d body=%s", unused.Code, unused.Body.Bytes())
+	}
+	deleted := environmentRequest(
+		t,
+		application,
+		http.MethodDelete,
+		"/api/v1/provider-accounts/openai-unused",
+		1,
+		"provider-account-delete-unused-0001",
+		nil,
+	)
+	if deleted.Code != http.StatusOK {
+		t.Fatalf("delete unused status=%d body=%s", deleted.Code, deleted.Body.Bytes())
+	}
+	var deletedResult desktopcontrol.ProviderAccountDeleteResponse
+	if err := json.Unmarshal(deleted.Body.Bytes(), &deletedResult); err != nil {
+		t.Fatal(err)
+	}
+	if !deletedResult.Deleted || deletedResult.ReferenceCount != 0 || len(deletedResult.References) != 0 {
+		t.Fatalf("deleted account result = %+v", deletedResult)
+	}
+	assertProviderAccountResponseSafe(t, deleted.Body.Bytes(), unusedSecret)
+	missing := environmentRequest(t, application, http.MethodGet, "/api/v1/provider-accounts/openai-unused", 0, "", nil)
+	if missing.Code != http.StatusNotFound {
+		t.Fatalf("deleted account GET status=%d body=%s", missing.Code, missing.Body.Bytes())
+	}
 }
 
 func TestProviderAccountControlKeepsClaudeOAuthDistinctFromAnthropicAPIKey(t *testing.T) {

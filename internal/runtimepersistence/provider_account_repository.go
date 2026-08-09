@@ -190,6 +190,77 @@ func (repository *providerAccountRepository) Write(
 	}, commitErr
 }
 
+func (repository *providerAccountRepository) Delete(
+	ctx context.Context,
+	id provideraccount.ID,
+	expected uint64,
+) (provideraccount.CommitResult, error) {
+	if _, err := provideraccount.NewID(id.String()); err != nil || expected == 0 ||
+		expected > provideraccount.MaxRevision {
+		return provideraccount.CommitResult{Outcome: provideraccount.CommitNotCommitted},
+			provideraccount.ErrInvalidAccount
+	}
+	permit, err := repository.operations.admit(ctx)
+	if err != nil {
+		return provideraccount.CommitResult{Outcome: provideraccount.CommitNotCommitted}, err
+	}
+	defer permit.finish()
+	transaction, err := repository.database.BeginTx(permit.context, nil)
+	if err != nil {
+		return provideraccount.CommitResult{Outcome: provideraccount.CommitNotCommitted}, err
+	}
+	defer func() { _ = transaction.Rollback() }()
+	result, err := transaction.ExecContext(
+		permit.context,
+		`DELETE FROM provider_accounts WHERE account_id = ? AND revision = ?`,
+		id.String(), int64(expected),
+	)
+	if err != nil {
+		return provideraccount.CommitResult{Outcome: provideraccount.CommitNotCommitted},
+			fmt.Errorf("delete ProviderAccount: %w", err)
+	}
+	affected, err := result.RowsAffected()
+	if err != nil {
+		return provideraccount.CommitResult{Outcome: provideraccount.CommitIndeterminate}, err
+	}
+	if affected != 1 {
+		current, exists, loadErr := loadProviderAccount(permit.context, transaction, id)
+		if loadErr != nil {
+			return provideraccount.CommitResult{Outcome: provideraccount.CommitIndeterminate}, loadErr
+		}
+		actual := uint64(0)
+		if exists {
+			actual = current.Revision
+		}
+		return provideraccount.CommitResult{
+			Outcome: provideraccount.CommitConflict, Account: current, Actual: actual,
+		}, nil
+	}
+	commitErr := repository.committer.Commit(transaction)
+	if commitErr == nil {
+		return provideraccount.CommitResult{Outcome: provideraccount.CommitCommitted}, nil
+	}
+	_ = transaction.Rollback()
+	reconcileContext, cancel := context.WithTimeout(permit.ownerContext, repository.reconcileTimeout)
+	defer cancel()
+	current, exists, reconcileErr := loadProviderAccount(reconcileContext, repository.database, id)
+	if reconcileErr != nil {
+		return provideraccount.CommitResult{Outcome: provideraccount.CommitIndeterminate},
+			errors.Join(commitErr, reconcileErr)
+	}
+	if !exists {
+		return provideraccount.CommitResult{Outcome: provideraccount.CommitCommitted}, nil
+	}
+	if current.Revision == expected {
+		return provideraccount.CommitResult{
+			Outcome: provideraccount.CommitNotCommitted, Account: current, Actual: current.Revision,
+		}, commitErr
+	}
+	return provideraccount.CommitResult{
+		Outcome: provideraccount.CommitIndeterminate, Account: current, Actual: current.Revision,
+	}, commitErr
+}
+
 type providerAccountRow interface{ Scan(...any) error }
 
 func loadProviderAccount(

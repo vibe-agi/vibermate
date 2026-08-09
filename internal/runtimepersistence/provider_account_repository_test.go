@@ -52,3 +52,39 @@ func TestProviderAccountRepositoryCASAndReopenWithoutSecretBytes(t *testing.T) {
 		t.Fatalf("invalid ProviderAccount ID error = %v", err)
 	}
 }
+
+func TestProviderAccountRepositoryDeleteCASPersistsAcrossReopen(t *testing.T) {
+	t.Parallel()
+	path := filepath.Join(t.TempDir(), "runtime.db")
+	store := openTestStore(t, path)
+	reference, err := secretstore.ParseReference("secret://provider-account/unused")
+	if err != nil {
+		t.Fatal(err)
+	}
+	now := time.Unix(1_786_200_000, 0).UTC()
+	account := provideraccount.Account{
+		ID: "unused", DisplayName: "Unused", RealmID: "anthropic.official",
+		Driver: providerauth.AnthropicAPIKeyDriverRef(), SecretRef: reference,
+		State: provideraccount.StateActive, Revision: 1, CreatedAt: now, UpdatedAt: now,
+	}
+	if result, writeErr := store.ProviderAccountRepository().Write(context.Background(), 0, account); writeErr != nil || result.Outcome != provideraccount.CommitCommitted {
+		t.Fatalf("create ProviderAccount = %+v err=%v", result, writeErr)
+	}
+	if result, deleteErr := store.ProviderAccountRepository().Delete(context.Background(), account.ID, 2); deleteErr != nil || result.Outcome != provideraccount.CommitConflict || result.Actual != 1 {
+		t.Fatalf("stale delete = %+v err=%v", result, deleteErr)
+	}
+	if result, deleteErr := store.ProviderAccountRepository().Delete(context.Background(), account.ID, 1); deleteErr != nil || result.Outcome != provideraccount.CommitCommitted {
+		t.Fatalf("delete ProviderAccount = %+v err=%v", result, deleteErr)
+	}
+	if _, exists, loadErr := store.ProviderAccountRepository().Load(context.Background(), account.ID); loadErr != nil || exists {
+		t.Fatalf("deleted ProviderAccount exists=%t err=%v", exists, loadErr)
+	}
+	if err := store.Shutdown(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	reopened := openTestStore(t, path)
+	defer func() { _ = reopened.Shutdown(context.Background()) }()
+	if _, exists, loadErr := reopened.ProviderAccountRepository().Load(context.Background(), account.ID); loadErr != nil || exists {
+		t.Fatalf("reopened deleted ProviderAccount exists=%t err=%v", exists, loadErr)
+	}
+}

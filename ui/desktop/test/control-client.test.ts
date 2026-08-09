@@ -242,6 +242,32 @@ describe("Environment-first desktop control client", () => {
     expect(new Headers(calls[0]?.init.headers).get("If-Match")).toBe("0");
   });
 
+  it("deletes an unreferenced ProviderAccount with a credential-epoch CAS", async () => {
+    const result = {
+      deleted: false,
+      referenceCount: 1,
+      references: [{
+        environmentId: "work",
+        environmentName: "Work",
+        environmentRevision: 3,
+        routeId: "claude-official",
+        routeRevision: 2,
+      }],
+    } as const;
+    const calls: Array<{ url: URL; init: RequestInit }> = [];
+    const fetch = sessionAwareFetch((url, init) => {
+      calls.push({ url, init });
+      return jsonResponse(result);
+    });
+    const client = await createControlClient(session(), fetch);
+
+    await expect(client.deleteProviderAccount("anthropic-work", 7)).resolves.toEqual(result);
+    expect(calls[0]?.url.pathname).toBe("/api/v1/provider-accounts/anthropic-work");
+    expect(calls[0]?.init.method).toBe("DELETE");
+    expect(calls[0]?.init.body).toBeUndefined();
+    expect(new Headers(calls[0]?.init.headers).get("If-Match")).toBe("7");
+  });
+
   it("rejects a ProviderAccount response that leaks a secret-shaped field", async () => {
     const fetch = sessionAwareFetch(() =>
       jsonResponse({

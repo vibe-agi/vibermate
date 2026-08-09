@@ -211,6 +211,20 @@ export interface ProviderAccountCredentialInput {
   readonly secret: string;
 }
 
+export interface ProviderAccountReference {
+  readonly environmentId: string;
+  readonly environmentName: string;
+  readonly environmentRevision: number;
+  readonly routeId: string;
+  readonly routeRevision: number;
+}
+
+export interface ProviderAccountDeleteResult {
+  readonly deleted: boolean;
+  readonly referenceCount: number;
+  readonly references: readonly ProviderAccountReference[];
+}
+
 export interface EnvironmentDraft {
   readonly environmentId: string;
   readonly baseRevision: number;

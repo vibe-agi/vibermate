@@ -31,6 +31,8 @@ type Manager struct {
 	realms     map[string]Realm
 	accounts   map[ID]Account
 	clock      Clock
+	deletion   environment.AccountDeletionGuard
+	active     map[ID]uint64
 	closing    bool
 }
 
@@ -110,7 +112,24 @@ func NewManager(
 	return &Manager{
 		repository: repository, secrets: secrets, realms: compiledRealms,
 		accounts: accounts, clock: clock,
+		active: make(map[ID]uint64),
 	}, nil
+}
+
+// BindDeletionGuard completes the one-time runtime composition cycle after
+// the Environment manager has been built with this Manager as its account
+// catalog. ProductRuntime calls it before exposing either authority.
+func (manager *Manager) BindDeletionGuard(guard environment.AccountDeletionGuard) error {
+	if manager == nil || guard == nil {
+		return ErrDeletionUnavailable
+	}
+	manager.mu.Lock()
+	defer manager.mu.Unlock()
+	if manager.closing || manager.deletion != nil {
+		return ErrDeletionUnavailable
+	}
+	manager.deletion = guard
+	return nil
 }
 
 func (manager *Manager) LookupAccount(value string) (environment.AccountDescriptor, bool) {
@@ -231,12 +250,11 @@ func (manager *Manager) ReplaceSecret(
 		return View{}, ErrInvalidAccount
 	}
 	manager.mu.RLock()
+	defer manager.mu.RUnlock()
 	if manager.closing {
-		manager.mu.RUnlock()
 		return View{}, ErrManagerClosing
 	}
 	account, exists := manager.accounts[command.ID]
-	manager.mu.RUnlock()
 	if !exists {
 		return View{}, ErrAccountNotFound
 	}
@@ -259,6 +277,102 @@ func (manager *Manager) ReplaceSecret(
 	}}, nil
 }
 
+func (manager *Manager) Delete(
+	ctx context.Context,
+	command DeleteCommand,
+) (DeleteResult, error) {
+	if ctx == nil || command.ExpectedCredentialEpoch > MaxRevision {
+		return DeleteResult{}, ErrInvalidAccount
+	}
+	id, err := NewID(command.ID.String())
+	if err != nil {
+		return DeleteResult{}, ErrInvalidAccount
+	}
+	command.ID = id
+	manager.mu.RLock()
+	if manager.closing {
+		manager.mu.RUnlock()
+		return DeleteResult{}, ErrManagerClosing
+	}
+	guard := manager.deletion
+	manager.mu.RUnlock()
+	if guard == nil {
+		return DeleteResult{}, ErrDeletionUnavailable
+	}
+	references, err := guard.GuardAccountDeletion(
+		ctx,
+		command.ID.String(),
+		func() error { return manager.deleteUnreferenced(ctx, command) },
+	)
+	if err != nil {
+		return DeleteResult{}, err
+	}
+	if len(references) != 0 {
+		return DeleteResult{References: references}, nil
+	}
+	return DeleteResult{Deleted: true, References: []environment.AccountReference{}}, nil
+}
+
+func (manager *Manager) deleteUnreferenced(
+	ctx context.Context,
+	command DeleteCommand,
+) error {
+	manager.mu.Lock()
+	defer manager.mu.Unlock()
+	if manager.closing {
+		return ErrManagerClosing
+	}
+	account, exists := manager.accounts[command.ID]
+	if !exists {
+		return ErrAccountNotFound
+	}
+	if manager.active[command.ID] != 0 {
+		return ErrAccountInUse
+	}
+	metadata, inspectErr := manager.secrets.Inspect(ctx, account.SecretRef)
+	if inspectErr != nil && !errors.Is(inspectErr, secretstore.ErrNotFound) {
+		return fmt.Errorf("inspect ProviderAccount credential before deletion: %w", inspectErr)
+	}
+	if inspectErr == nil {
+		if metadata.Validate() != nil {
+			return errors.New("SecretStore returned invalid ProviderAccount metadata")
+		}
+		switch metadata.State {
+		case secretstore.StateConfigured:
+			if uint64(metadata.Revision) != command.ExpectedCredentialEpoch {
+				return ErrRevisionConflict
+			}
+			if err := manager.secrets.Delete(ctx, account.SecretRef); err != nil &&
+				!errors.Is(err, secretstore.ErrNotFound) {
+				return fmt.Errorf("delete ProviderAccount credential: %w", err)
+			}
+		case secretstore.StateMissing:
+			// A previous attempt may have removed the secret before the
+			// durable metadata commit failed. The retry can safely finish
+			// removing the account record with the caller's last observed
+			// credential epoch.
+		case secretstore.StateUnavailable:
+			return secretstore.ErrUnavailable
+		}
+	}
+	result, err := manager.repository.Delete(ctx, account.ID, account.Revision)
+	if err != nil && result.Outcome != CommitCommitted {
+		if result.Outcome == CommitConflict {
+			return ErrRevisionConflict
+		}
+		return err
+	}
+	if result.Outcome != CommitCommitted {
+		if result.Outcome == CommitConflict {
+			return ErrRevisionConflict
+		}
+		return errors.New("ProviderAccount deletion did not commit")
+	}
+	delete(manager.accounts, account.ID)
+	delete(manager.active, account.ID)
+	return nil
+}
+
 func (manager *Manager) Acquire(
 	ctx context.Context,
 	request exchange.AccountLeaseRequest,
@@ -270,37 +384,54 @@ func (manager *Manager) Acquire(
 	if err != nil {
 		return nil, err
 	}
-	manager.mu.RLock()
+	manager.mu.Lock()
 	if manager.closing {
-		manager.mu.RUnlock()
+		manager.mu.Unlock()
 		return nil, ErrManagerClosing
 	}
 	account, exists := manager.accounts[id]
-	manager.mu.RUnlock()
 	if !exists {
+		manager.mu.Unlock()
 		return nil, ErrAccountNotFound
 	}
 	if account.State != StateActive {
+		manager.mu.Unlock()
 		return nil, ErrAccountDisabled
 	}
 	if account.RealmID != request.RealmID() || account.Revision != uint64(request.AccountRevision()) {
+		manager.mu.Unlock()
 		return nil, ErrRealmMismatch
 	}
 	metadata, err := manager.secrets.Inspect(ctx, account.SecretRef)
 	if err != nil {
+		manager.mu.Unlock()
 		return nil, fmt.Errorf("inspect ProviderAccount credential: %w", err)
 	}
 	if metadata.Validate() != nil || metadata.State != secretstore.StateConfigured || metadata.Revision == 0 {
+		manager.mu.Unlock()
 		return nil, ErrCredentialMissing
 	}
+	manager.active[id]++
+	manager.mu.Unlock()
 	return &lease{
 		account: providerauth.AccountRef{
 			ID: account.ID.String(), Revision: account.Revision,
 			CredentialEpoch: uint64(metadata.Revision), RealmID: account.RealmID,
 		},
-		driver: account.Driver,
-		secret: account.SecretRef,
+		driver:  account.Driver,
+		secret:  account.SecretRef,
+		release: func() { manager.release(id) },
 	}, nil
+}
+
+func (manager *Manager) release(id ID) {
+	manager.mu.Lock()
+	defer manager.mu.Unlock()
+	if manager.active[id] <= 1 {
+		delete(manager.active, id)
+		return
+	}
+	manager.active[id]--
 }
 
 // Shutdown closes account admission. It does not close the injected
@@ -379,6 +510,7 @@ type lease struct {
 	account providerauth.AccountRef
 	driver  providerauth.DriverRef
 	secret  secretstore.Reference
+	release func()
 	once    sync.Once
 }
 
@@ -386,4 +518,10 @@ func (*lease) Mode() providerauth.CredentialMode             { return providerau
 func (item *lease) Driver() providerauth.DriverRef           { return item.driver }
 func (item *lease) Secret() secretstore.Reference            { return item.secret }
 func (item *lease) Account() (providerauth.AccountRef, bool) { return item.account, true }
-func (item *lease) Release()                                 { item.once.Do(func() {}) }
+func (item *lease) Release() {
+	item.once.Do(func() {
+		if item.release != nil {
+			item.release()
+		}
+	})
+}

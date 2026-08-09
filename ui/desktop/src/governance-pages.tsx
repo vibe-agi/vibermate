@@ -192,7 +192,8 @@ function shortValue(value: string): string { return value.length <= 22 ? value :
 
 type AccountDialogState =
   | { readonly mode: "create" }
-  | { readonly mode: "replace"; readonly account: ProviderAccountRecord };
+  | { readonly mode: "replace"; readonly account: ProviderAccountRecord }
+  | { readonly mode: "delete"; readonly account: ProviderAccountRecord };
 
 export function AccountsRoutePage() {
   const { t } = useTranslation();
@@ -213,15 +214,15 @@ export function AccountsRoutePage() {
       />
       <section className="data-panel account-table-panel">
         <SectionHeading title={t("accounts.connected", { count: records.length })} />
-        {accounts.isPending && accounts.data === undefined ? <LoadingRows count={4} /> : accounts.isError && accounts.data === undefined ? <InlineProblem message={t(controlErrorKey(accounts.error))} /> : records.length === 0 ? <EmptyState action={<button onClick={() => setDialog({ mode: "create" })} type="button">{t("accounts.add")}</button>} description={t("accounts.empty.description")} title={t("accounts.empty.title")} /> : <div className="table-scroll"><table className="data-table responsive-table account-table"><thead><tr><th>{t("accounts.column.account")}</th><th>{t("accounts.column.provider")}</th><th>{t("accounts.column.credential")}</th><th>{t("accounts.column.revision")}</th><th className="align-right">{t("accounts.column.action")}</th></tr></thead><tbody>{records.map((account) => <tr key={account.id}><td data-label={t("accounts.column.account")}><div className="agent-cell"><BrandIcon name={account.kind === "openai_api_key" ? "openai" : "anthropic"} /><span><strong>{account.displayName}</strong><small>{account.id}</small></span></div></td><td data-label={t("accounts.column.provider")}>{t(`accounts.kind.${account.kind}`)}</td><td data-label={t("accounts.column.credential")}><span className={`state-pill account-health-${account.credentialState}`}>{t(`accounts.health.${account.credentialState}`)}</span></td><td data-label={t("accounts.column.revision")}>r{account.revision} · {t("accounts.credentialEpoch", { epoch: account.credentialEpoch })}</td><td className="align-right" data-label={t("accounts.column.action")}><button className="quiet-button" onClick={() => setDialog({ mode: "replace", account })} type="button">{t("accounts.updateKey")}</button></td></tr>)}</tbody></table></div>}
+        {accounts.isPending && accounts.data === undefined ? <LoadingRows count={4} /> : accounts.isError && accounts.data === undefined ? <InlineProblem message={t(controlErrorKey(accounts.error))} /> : records.length === 0 ? <EmptyState action={<button onClick={() => setDialog({ mode: "create" })} type="button">{t("accounts.add")}</button>} description={t("accounts.empty.description")} title={t("accounts.empty.title")} /> : <div className="table-scroll"><table className="data-table responsive-table account-table"><thead><tr><th>{t("accounts.column.account")}</th><th>{t("accounts.column.provider")}</th><th>{t("accounts.column.credential")}</th><th>{t("accounts.column.revision")}</th><th className="align-right">{t("accounts.column.action")}</th></tr></thead><tbody>{records.map((account) => <tr key={account.id}><td data-label={t("accounts.column.account")}><div className="agent-cell"><BrandIcon name={account.kind === "openai_api_key" ? "openai" : "anthropic"} /><span><strong>{account.displayName}</strong><small>{account.id}</small></span></div></td><td data-label={t("accounts.column.provider")}>{t(`accounts.kind.${account.kind}`)}</td><td data-label={t("accounts.column.credential")}><span className={`state-pill account-health-${account.credentialState}`}>{t(`accounts.health.${account.credentialState}`)}</span></td><td data-label={t("accounts.column.revision")}>r{account.revision} · {t("accounts.credentialEpoch", { epoch: account.credentialEpoch })}</td><td className="align-right" data-label={t("accounts.column.action")}><div className="account-actions"><button className="quiet-button" onClick={() => setDialog({ mode: "replace", account })} type="button">{t("accounts.updateKey")}</button><button className="danger-text" onClick={() => setDialog({ mode: "delete", account })} type="button">{t("accounts.delete")}</button></div></td></tr>)}</tbody></table></div>}
       </section>
       <p className="resource-boundary">{t("accounts.boundary")}</p>
-      {dialog !== undefined && <ProviderAccountDialog dialog={dialog} onClose={() => setDialog(undefined)} />}
+      {dialog !== undefined && (dialog.mode === "delete" ? <DeleteProviderAccountDialog account={dialog.account} onClose={() => setDialog(undefined)} /> : <ProviderAccountDialog dialog={dialog} onClose={() => setDialog(undefined)} />)}
     </div>
   );
 }
 
-function ProviderAccountDialog({ dialog, onClose }: { readonly dialog: AccountDialogState; readonly onClose: () => void }) {
+function ProviderAccountDialog({ dialog, onClose }: { readonly dialog: Exclude<AccountDialogState, { readonly mode: "delete" }>; readonly onClose: () => void }) {
   const { t } = useTranslation();
   const model = useDashboardModel();
   const queryClient = useQueryClient();
@@ -245,6 +246,29 @@ function ProviderAccountDialog({ dialog, onClose }: { readonly dialog: AccountDi
     if (secret.length > 0 && (dialog.mode === "replace" || displayName.trim().length > 0)) save.mutate();
   };
   return <div className="modal-backdrop"><section aria-labelledby="provider-account-title" aria-modal="true" className="modal account-modal" role="dialog"><header><div><p className="eyebrow">{t("accounts.dialog.eyebrow")}</p><h2 id="provider-account-title">{t(dialog.mode === "create" ? "accounts.dialog.create" : "accounts.dialog.replace", { name: dialog.mode === "replace" ? dialog.account.displayName : "" })}</h2></div><button aria-label={t("common.close")} className="icon-button" onClick={onClose} type="button">×</button></header><form onSubmit={submit}>{dialog.mode === "create" && <><fieldset><legend>{t("accounts.dialog.provider")}</legend><div className="provider-picker"><button aria-pressed={kind === "anthropic_api_key"} onClick={() => setKind("anthropic_api_key")} type="button"><BrandIcon name="anthropic" /><span><strong>{t("accounts.provider.anthropic")}</strong><small>{t("accounts.kind.anthropic_api_key")}</small></span></button><button aria-pressed={kind === "claude_oauth_token"} onClick={() => setKind("claude_oauth_token")} type="button"><BrandIcon name="anthropic" /><span><strong>{t("accounts.provider.claude")}</strong><small>{t("accounts.kind.claude_oauth_token")}</small></span></button><button aria-pressed={kind === "openai_api_key"} onClick={() => setKind("openai_api_key")} type="button"><BrandIcon name="openai" /><span><strong>{t("accounts.provider.openai")}</strong><small>{t("accounts.kind.openai_api_key")}</small></span></button></div></fieldset><label><span>{t("accounts.dialog.name")}</span><input autoFocus maxLength={256} onChange={(event) => setDisplayName(event.target.value)} placeholder={t("accounts.dialog.namePlaceholder")} value={displayName} /></label></>}<label><span>{t(kind === "claude_oauth_token" ? "accounts.dialog.oauthToken" : "accounts.dialog.apiKey")}</span><input autoComplete="off" autoFocus={dialog.mode === "replace"} onChange={(event) => setSecret(event.target.value)} spellCheck={false} type="password" value={secret} /></label><p className="credential-boundary">{t(kind === "claude_oauth_token" ? "accounts.dialog.oauthBoundary" : "accounts.dialog.secretBoundary")}</p>{errorKey !== undefined && <InlineProblem message={t(errorKey)} />}<footer><button onClick={onClose} type="button">{t("common.cancel")}</button><button className="primary-action" disabled={save.isPending || secret.length === 0 || (dialog.mode === "create" && displayName.trim().length === 0)} type="submit">{save.isPending ? t("accounts.dialog.saving") : t(dialog.mode === "create" ? "accounts.dialog.connect" : "accounts.dialog.update")}</button></footer></form></section></div>;
+}
+
+function DeleteProviderAccountDialog({ account, onClose }: { readonly account: ProviderAccountRecord; readonly onClose: () => void }) {
+  const { t } = useTranslation();
+  const model = useDashboardModel();
+  const queryClient = useQueryClient();
+  const [references, setReferences] = useState<readonly { readonly environmentId: string; readonly environmentName: string; readonly environmentRevision: number; readonly routeId: string; readonly routeRevision: number }[]>();
+  const [referenceCount, setReferenceCount] = useState(0);
+  const [errorKey, setErrorKey] = useState<string>();
+  const remove = useMutation({
+    mutationFn: () => model.client.deleteProviderAccount(account.id, account.credentialEpoch),
+    onError: (error) => setErrorKey(controlErrorKey(error)),
+    onSuccess: (result) => {
+      if (!result.deleted) {
+        setReferences(result.references);
+        setReferenceCount(result.referenceCount);
+        return;
+      }
+      void queryClient.invalidateQueries({ queryKey: dashboardQueryKeys.accounts });
+      onClose();
+    },
+  });
+  return <div className="modal-backdrop"><section aria-labelledby="delete-provider-account-title" aria-modal="true" className="modal account-modal" role="dialog"><header><div><p className="eyebrow">{t("accounts.delete.eyebrow")}</p><h2 id="delete-provider-account-title">{t("accounts.delete.title", { name: account.displayName })}</h2></div><button aria-label={t("common.close")} className="icon-button" onClick={onClose} type="button">×</button></header><div className="modal-body"><p>{t("accounts.delete.description")}</p>{references !== undefined && references.length > 0 && <div className="inline-problem"><strong>{t("accounts.delete.blocked")}</strong><ul>{references.map((reference) => <li key={`${reference.environmentId}\u0000${reference.routeId}`}>{t("accounts.delete.reference", { environment: reference.environmentName, revision: reference.environmentRevision, route: reference.routeId })}</li>)}</ul>{referenceCount > references.length && <p>{t("accounts.delete.more", { count: referenceCount - references.length })}</p>}</div>}{errorKey !== undefined && <InlineProblem message={t(errorKey)} />}</div><footer><button onClick={onClose} type="button">{t("common.cancel")}</button><button className="primary-action" disabled={remove.isPending || (references !== undefined && references.length > 0)} onClick={() => remove.mutate()} type="button">{remove.isPending ? t("accounts.delete.deleting") : t("accounts.delete.confirm")}</button></footer></section></div>;
 }
 
 function newProviderAccountID(kind: ProviderAccountKind): string {

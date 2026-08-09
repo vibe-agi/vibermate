@@ -60,6 +60,7 @@ const (
 	ReasonEnvironmentUnavailable     ReasonCode = "environment_unavailable"
 	ReasonProviderAccountNotFound    ReasonCode = "provider_account_not_found"
 	ReasonProviderAccountConflict    ReasonCode = "provider_account_conflict"
+	ReasonProviderAccountInUse       ReasonCode = "provider_account_in_use"
 	ReasonProviderAccountUnavailable ReasonCode = "provider_account_unavailable"
 	ReasonWorkspaceDefaultNotFound   ReasonCode = "workspace_environment_default_not_found"
 	ReasonWorkspaceDefaultInvalid    ReasonCode = "workspace_environment_default_invalid"
@@ -196,6 +197,7 @@ func New(options Options) (*Handler, error) {
 	handler.mux.HandleFunc("GET /api/v1/provider-accounts", handler.listProviderAccounts)
 	handler.mux.HandleFunc("POST /api/v1/provider-accounts", handler.createProviderAccount)
 	handler.mux.HandleFunc("GET /api/v1/provider-accounts/{accountId}", handler.getProviderAccount)
+	handler.mux.HandleFunc("DELETE /api/v1/provider-accounts/{accountId}", handler.deleteProviderAccount)
 	handler.mux.HandleFunc("PUT /api/v1/provider-accounts/{accountId}/credential", handler.replaceProviderAccountCredential)
 	handler.mux.HandleFunc("GET /api/v1/environments/{environmentId}", handler.getEnvironment)
 	handler.mux.HandleFunc("GET /api/v1/environments/{environmentId}/draft", handler.getEnvironmentDraft)

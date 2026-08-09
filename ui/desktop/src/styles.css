@@ -130,6 +130,7 @@ button.danger-text { border-color: transparent; color: var(--deny); background: 
 .page-heading { display: flex; min-height: 52px; align-items: flex-start; justify-content: space-between; gap: 24px; margin-bottom: 13px; }
 .page-heading p { margin-bottom: 0; color: var(--muted); }
 .page-actions { display: flex; gap: 7px; }
+.account-actions { display: flex; justify-content: flex-end; align-items: center; gap: 4px; }
 .eyebrow { margin-bottom: 2px; color: var(--signal); font-size: 10px; font-weight: 700; letter-spacing: .1em; text-transform: uppercase; }
 .data-panel { margin-bottom: 12px; border: 1px solid var(--border); border-radius: 7px; background: var(--panel); }
 .section-heading { display: flex; min-height: 38px; align-items: center; justify-content: space-between; padding: 8px 12px; border-bottom: 1px solid var(--border); }

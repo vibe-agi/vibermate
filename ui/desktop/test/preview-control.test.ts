@@ -83,6 +83,13 @@ describe("the Environment-first browser preview host", () => {
       credentialState: "ready",
     });
     expect(JSON.stringify(oauth)).not.toContain("oauth-preview-secret");
+
+    await expect(
+      client.deleteProviderAccount(oauth.id, oauth.credentialEpoch),
+    ).resolves.toEqual({ deleted: true, referenceCount: 0, references: [] });
+    await expect(client.providerAccount(oauth.id)).rejects.toMatchObject({
+      reasonCode: "not_found",
+    });
   });
 
   it("keeps equal raw IDs distinct across Capture kinds and switches one assignment", async () => {
