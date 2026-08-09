@@ -146,6 +146,113 @@ func TestMessagesProtocolPathPreservesThinkingHistoryForLaterTurns(t *testing.T)
 	}
 }
 
+// Current Claude Code records who originated a tool invocation in assistant
+// history. Older builds stripped this field whenever dynamic tool loading was
+// disabled, which is why a one-turn fixture did not expose the compatibility
+// break. A later turn replays the tool_use block with caller={type:direct}.
+// The same-dialect path must validate that official union and retain the exact
+// source block when it forwards the next request.
+func TestMessagesProtocolPathPreservesToolCallerHistoryForLaterTurns(t *testing.T) {
+	t.Parallel()
+
+	path, err := NewMessagesProtocolPath(DefaultOptions())
+	if err != nil {
+		t.Fatal(err)
+	}
+	source := []byte(`{
+		"model":"client-alias",
+		"max_tokens":64,
+		"messages":[
+			{"role":"assistant","content":[
+				{"type":"tool_use","id":"tool_1","name":"Bash","input":{"command":"pwd"},"caller":{"type":"direct"}}
+			]},
+			{"role":"user","content":[
+				{"type":"tool_result","tool_use_id":"tool_1","content":"/tmp","is_error":false},
+				{"type":"text","text":"continue"}
+			]}
+		],
+		"stream":true
+	}`)
+	request, report, err := path.Client().DecodeRequest(source)
+	if err != nil {
+		t.Fatalf("DecodeRequest() rejected official caller history: %v", err)
+	}
+	if !report.Empty() {
+		t.Fatalf("same-dialect decode reported a loss: %+v", report.Notices())
+	}
+	request, err = request.WithEffectiveModel("claude-provider-model")
+	if err != nil {
+		t.Fatal(err)
+	}
+	providerRequest, report, err := path.EncodeProviderRequest(request, source, nil)
+	if err != nil {
+		t.Fatalf("EncodeProviderRequest() error = %v", err)
+	}
+	if !report.Empty() {
+		t.Fatalf("same-dialect encode reported a loss: %+v", report.Notices())
+	}
+	if !bytes.Contains(providerRequest.Body(), []byte(`"caller":{"type":"direct"}`)) {
+		t.Fatalf("forwarded history lost tool caller: %s", providerRequest.Body())
+	}
+}
+
+func TestCrossDialectToolCallerLossIsExplicit(t *testing.T) {
+	t.Parallel()
+
+	codec, err := New(DefaultOptions())
+	if err != nil {
+		t.Fatal(err)
+	}
+	request, report, err := codec.DecodeClientRequest([]byte(`{
+		"model":"client-alias",
+		"max_tokens":64,
+		"messages":[
+			{"role":"assistant","content":[
+				{"type":"tool_use","id":"tool_1","name":"Bash","input":{"command":"pwd"},"caller":{"type":"direct"}}
+			]},
+			{"role":"user","content":[
+				{"type":"tool_result","tool_use_id":"tool_1","content":"/tmp"}
+			]}
+		],
+		"tools":[{"name":"Bash","description":"Run a command","input_schema":{"type":"object"}}]
+	}`))
+	if err != nil {
+		t.Fatalf("DecodeClientRequest() error = %v", err)
+	}
+	found := false
+	for _, notice := range report.Notices() {
+		if notice.Code == protocolcore.NoticeToolCallerNotForwarded &&
+			notice.Path == "$.messages[0].content[0].caller" {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("caller loss was not declared: %+v", report.Notices())
+	}
+	if _, _, err := codec.EncodeProviderRequest(request); err != nil {
+		t.Fatalf("cross-dialect caller history could not be translated: %v", err)
+	}
+}
+
+func TestMalformedToolCallerIsRejectedAtCallerPath(t *testing.T) {
+	t.Parallel()
+
+	codec, err := New(DefaultOptions())
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, _, err = codec.DecodeClientRequest([]byte(`{
+		"model":"client-alias",
+		"max_tokens":64,
+		"messages":[{"role":"assistant","content":[
+			{"type":"tool_use","id":"tool_1","name":"Bash","input":{},"caller":{"type":"direct","tool_id":"must-not-exist"}}
+		]}]
+	}`))
+	if err == nil || !strings.Contains(err.Error(), "$.messages[0].content[0].caller") {
+		t.Fatalf("malformed caller error = %v", err)
+	}
+}
+
 func TestCrossDialectPathRejectsAnthropicThinkingHistory(t *testing.T) {
 	t.Parallel()
 

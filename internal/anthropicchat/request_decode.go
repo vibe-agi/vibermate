@@ -45,7 +45,13 @@ type anthropicToolUseBlockWire struct {
 	ID           string          `json:"id"`
 	Name         string          `json:"name"`
 	Input        json.RawMessage `json:"input"`
+	Caller       json.RawMessage `json:"caller,omitempty"`
 	CacheControl json.RawMessage `json:"cache_control,omitempty"`
+}
+
+type anthropicToolCallerWire struct {
+	Type   string `json:"type"`
+	ToolID string `json:"tool_id,omitempty"`
 }
 
 type anthropicToolResultBlockWire struct {
@@ -773,6 +779,22 @@ func (codec *Codec) decodeMessage(
 					protocolcore.NewFailure(protocolcore.ReasonInvalidClientRequest, path, err)
 			}
 			blocks = append(blocks, block)
+			if rawPresent(blockWire.Caller) {
+				if err := validateAnthropicToolCaller(blockWire.Caller); err != nil {
+					return protocolcore.Message{}, report,
+						protocolcore.NewFailure(
+							protocolcore.ReasonInvalidClientRequest,
+							path+".caller",
+							err,
+						)
+				}
+				report = report.Merge(protocolcore.NewTranslationReport(
+					protocolcore.TranslationNotice{
+						Code: protocolcore.NoticeToolCallerNotForwarded,
+						Path: path + ".caller",
+					},
+				))
+			}
 			if rawPresent(blockWire.CacheControl) {
 				report = report.Merge(cacheNotice(path + ".cache_control"))
 			}
@@ -865,6 +887,26 @@ func (codec *Codec) decodeMessage(
 		)
 	}
 	return message.Clone(), report, nil
+}
+
+func validateAnthropicToolCaller(raw json.RawMessage) error {
+	var caller anthropicToolCallerWire
+	if err := decodeStrict(raw, &caller); err != nil {
+		return err
+	}
+	switch caller.Type {
+	case "direct":
+		if caller.ToolID != "" {
+			return errors.New("direct tool caller contains a tool ID")
+		}
+	case "code_execution_20250825", "code_execution_20260120":
+		if caller.ToolID == "" {
+			return errors.New("server tool caller is missing its tool ID")
+		}
+	default:
+		return errors.New("tool caller type is unsupported")
+	}
+	return nil
 }
 
 func (codec *Codec) decodeToolDefinition(

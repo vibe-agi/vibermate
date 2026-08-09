@@ -1307,6 +1307,7 @@ const (
 	NoticeReasoningSummaryNotForwarded        NoticeCode = "reasoning_summary_not_forwarded"
 	NoticeReasoningExecutionNotForwarded      NoticeCode = "reasoning_execution_not_forwarded"
 	NoticeToolItemIdentityNotForwarded        NoticeCode = "tool_item_identity_not_forwarded"
+	NoticeToolCallerNotForwarded              NoticeCode = "tool_caller_not_forwarded"
 	NoticeMessageItemIdentityNotForwarded     NoticeCode = "message_item_identity_not_forwarded"
 	NoticeHostedToolNotForwarded              NoticeCode = "hosted_tool_not_forwarded"
 	NoticeCustomToolKindEncoded               NoticeCode = "custom_tool_kind_encoded"
