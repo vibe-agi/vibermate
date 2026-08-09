@@ -121,6 +121,7 @@ button.danger-text { border-color: transparent; color: var(--deny); background: 
 .status-dot.ok, .risk-low { background: var(--allow); }
 .risk-high { background: var(--deny); }
 .pending-link { display: flex; min-height: 30px; align-items: center; gap: 7px; padding: 4px 9px; }
+.pending-link.pending-active { border-color: var(--ask); color: var(--text); background: var(--ask-soft); box-shadow: inset 3px 0 var(--ask); }
 .locale-switch { gap: 1px; padding: 2px; border: 1px solid var(--border); border-radius: 6px; }
 .locale-switch button { min-height: 24px; border: 0; padding: 2px 7px; background: transparent; }
 .locale-switch button[aria-pressed="true"] { color: var(--signal); background: var(--signal-soft); }

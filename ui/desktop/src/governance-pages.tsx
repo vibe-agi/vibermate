@@ -27,6 +27,7 @@ import type {
   ProviderAccountRecord,
 } from "./control-types.ts";
 import { dashboardTaskRoutePaths } from "./navigation.ts";
+import { requestReasonKey, requestResultKey } from "./request-result.ts";
 
 type PolicyMode = "monitor" | "ask" | "block";
 
@@ -118,6 +119,7 @@ export function ExchangeRoutePage({ exchangeId }: { readonly exchangeId: string 
     : detail.parentRefs.manualCaptureId !== undefined
       ? `manual_capture:${detail.parentRefs.manualCaptureId}`
       : undefined;
+  const resultReasonKey = requestReasonKey(detail.processingTrace.result);
   return (
     <div className="page exchange-page">
       <PageHeading
@@ -137,7 +139,12 @@ export function ExchangeRoutePage({ exchangeId }: { readonly exchangeId: string 
           <TraceStep label={t("exchange.trace.protocol")} value={`${detail.environment.protocolPlanId} · r${detail.environment.protocolPlanRevision}`} />
           <TraceStep label={t("exchange.trace.route")} value={`${detail.environment.routeId} · r${detail.environment.routeRevision}`} />
           <TraceStep label={t("exchange.trace.attempts")} value={String(attempts.length)} />
-          <TraceStep label={t("exchange.trace.result")} value={detail.processingTrace.result} />
+          <TraceStep
+            label={t("exchange.trace.result")}
+            value={resultReasonKey === undefined
+              ? detail.processingTrace.result
+              : t(resultReasonKey)}
+          />
         </aside>
         <div className="exchange-inspector-stack">
           <section className="data-panel exchange-inspector">
@@ -196,7 +203,7 @@ function RequestSequence({ currentId, items }: { readonly currentId: string; rea
               to={dashboardTaskRoutePaths.activityRequest}
             >
               <span>{index + 1}</span>
-              <strong>{t(`requests.state.${item.status}`)}</strong>
+              <strong>{t(requestResultKey(item.reasonCode, item.status))}</strong>
               <time dateTime={item.occurredAt}>{new Intl.DateTimeFormat(i18n.language, { hour: "2-digit", minute: "2-digit" }).format(Date.parse(item.occurredAt))}</time>
             </Link>
           </li>

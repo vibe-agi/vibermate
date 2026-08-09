@@ -256,7 +256,7 @@ func TestControlActivitiesRejectsInvalidWireShape(t *testing.T) {
 		{
 			name: "extra summary field",
 			payload: `{"items":[` +
-				strings.TrimSuffix(validItem, "}") + `,"reasonCode":"secret"}]}`,
+				strings.TrimSuffix(validItem, "}") + `,"raw":"secret"}]}`,
 		},
 		{
 			name: "invalid Environment ID",

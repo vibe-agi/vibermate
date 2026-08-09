@@ -304,6 +304,7 @@ const previewExchange: ExchangeDetail = {
 const earlierPreviewExchange: ExchangeDetail = {
   ...previewExchange,
   id: "exchange-preview-earlier",
+  status: "failed",
   parentRefs: {
     ...previewExchange.parentRefs,
     exchangeId: "exchange-preview-earlier",
@@ -315,7 +316,7 @@ const earlierPreviewExchange: ExchangeDetail = {
       id: "egress-preview-earlier",
       parent: { kind: "upstream_attempt", id: "attempt-preview-earlier", exchangeId: "exchange-preview-earlier" },
     }],
-    result: "completed",
+    result: "tool_decision_expired",
   },
   content: {
     ...previewExchange.content,
@@ -779,6 +780,7 @@ class PreviewControlClient implements ControlClient {
       kind: "exchange" as const,
       title: "Claude request",
       status: detail.status,
+      ...(detail.processingTrace.result === "completed" ? {} : { reasonCode: detail.processingTrace.result }),
       source: { kind: "capture_run" as const, displayName: "claude", recognition: "verified" as const },
       environment: detail.environment,
       parentRefs: detail.parentRefs,

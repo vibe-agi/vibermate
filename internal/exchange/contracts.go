@@ -48,6 +48,7 @@ const (
 	ReasonProviderResponseInvalid       ReasonCode = "provider_response_invalid"
 	ReasonTransportRetryExhausted       ReasonCode = "transport_retry_exhausted"
 	ReasonToolDecisionRejected          ReasonCode = "tool_decision_rejected"
+	ReasonToolDecisionExpired           ReasonCode = "tool_decision_expired"
 	ReasonToolDecisionUnavailable       ReasonCode = "tool_decision_unavailable"
 	ReasonDownstreamCommitFailed        ReasonCode = "downstream_commit_failed"
 	ReasonDownstreamDisconnected        ReasonCode = "downstream_disconnect"

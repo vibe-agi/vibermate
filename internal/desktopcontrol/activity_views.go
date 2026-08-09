@@ -40,6 +40,7 @@ type ActivitySummary struct {
 	Kind        string               `json:"kind"`
 	Title       string               `json:"title"`
 	Status      string               `json:"status"`
+	ReasonCode  string               `json:"reasonCode,omitempty"`
 	Source      ActivitySourceRef    `json:"source"`
 	Environment FrozenEnvironmentRef `json:"environment"`
 	ParentRefs  ActivityParentRefs   `json:"parentRefs"`
@@ -181,7 +182,7 @@ func activityPageOf(page activity.Page) (ActivityPage, error) {
 		}
 		summary := ActivitySummary{
 			ID: record.SubjectID, OccurredAt: record.OccurredAt, Kind: "exchange",
-			Title: record.SourceDisplayName, Status: string(record.Status),
+			Title: record.SourceDisplayName, Status: string(record.Status), ReasonCode: record.ReasonCode,
 			Source:      ActivitySourceRef{Kind: string(record.SourceKind), DisplayName: record.SourceDisplayName, Recognition: string(record.SourceRecognition)},
 			Environment: frozenEnvironmentRefOf(record), ParentRefs: parentRefsOf(record),
 		}

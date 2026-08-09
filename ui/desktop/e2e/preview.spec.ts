@@ -212,6 +212,7 @@ test("opens a request through its frozen Environment to the exact attempt", asyn
   await expect(page.getByText("120", { exact: true })).toBeVisible();
   await page.getByTitle("exchange-preview-earlier").click();
   await expect(page.getByText("Request 1 of 2", { exact: true })).toBeVisible();
+  await expect(page.getByText("Approval expired", { exact: true }).first()).toBeVisible();
   await expect(page.getByText("List the packages in this workspace.", { exact: true })).toBeVisible();
   await expect(page.locator("body")).not.toContainText("/Users/");
   expect(errors).toEqual([]);

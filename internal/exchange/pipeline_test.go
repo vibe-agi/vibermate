@@ -741,6 +741,36 @@ func TestToolDecisionRejectsBeforeAnyToolBytesReachClient(t *testing.T) {
 	}
 }
 
+func TestToolDecisionExpiryHasDistinctReasonAndNeverReleasesBytes(t *testing.T) {
+	plan := mustEnvironmentRequestPlan(t, testPlanOptions{
+		mode:           environment.PlanModeManaged,
+		providerOrigin: "https://provider.example/v1",
+		backend:        protocolspec.DialectOpenAIChat,
+		modelMode:      modelModeFixed,
+		fixedModel:     "gpt-provider",
+		accounts:       []testAccount{{id: "account.primary", revision: 1, epoch: 1}},
+		preferred:      "account.primary",
+	})
+	authority := newAccountAuthority(t, testAccount{id: "account.primary", revision: 1, epoch: 1})
+	provider := &providerDouble{results: []providerResult{{response: jsonResponse(
+		http.StatusOK,
+		completeToolProviderResponse("gpt-provider"),
+	)}}}
+	decisions := &decisionDouble{decision: ToolDecision{Outcome: ToolDecisionRejected, ReasonCode: "approval_expired"}}
+	pipeline := newTestPipeline(t, authority, provider, decisions, &attemptObserverDouble{})
+	defer shutdownPipeline(t, pipeline)
+	downstream := &downstreamRecorder{}
+	result, err := pipeline.Execute(
+		context.Background(),
+		mustClientRequest(t, "exchange-tool-expired", plan, toolClientRequest()),
+		downstream,
+	)
+	if ReasonOf(err) != ReasonToolDecisionExpired || result.Outcome != AttemptAborted ||
+		len(downstream.bytesSnapshot()) != 0 || decisions.callCount() != 1 {
+		t.Fatalf("result=%+v err=%v body=%s decisions=%d", result, err, downstream.bytesSnapshot(), decisions.callCount())
+	}
+}
+
 func TestStreamingToolDecisionKeepsTheClientAliveUntilApproval(t *testing.T) {
 	plan := mustEnvironmentRequestPlan(t, testPlanOptions{
 		mode:           environment.PlanModeManaged,

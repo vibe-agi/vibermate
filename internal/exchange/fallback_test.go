@@ -118,6 +118,7 @@ func TestOnlyAFailureAnotherCandidateCouldAnswerIsRetried(t *testing.T) {
 		ReasonProviderRequestInvalid,
 		ReasonDownstreamDisconnected,
 		ReasonToolDecisionRejected,
+		ReasonToolDecisionExpired,
 	} {
 		if mayTryNextCandidate(
 			environment.FailoverAccountScopedSafe,

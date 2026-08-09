@@ -13,6 +13,7 @@ import {
 import { BrandIcon } from "./brand-icons.tsx";
 import { controlErrorKey, dashboardQueryKeys } from "./dashboard-runtime.ts";
 import { dashboardRoutePaths, dashboardTaskRoutePaths } from "./navigation.ts";
+import { requestResultKey } from "./request-result.ts";
 import type {
   CaptureRecord,
   EnvironmentRecord,
@@ -430,7 +431,7 @@ function RequestTable({ items }: { readonly items: readonly import("./control-ty
         <thead><tr><th>{t("requests.column.status")}</th><th>{t("requests.column.request")}</th><th>{t("requests.column.environment")}</th><th>{t("requests.column.route")}</th><th className="align-right">{t("requests.column.occurred")}</th></tr></thead>
         <tbody>{items.map((item) => (
           <tr key={item.id}>
-            <td data-label={t("requests.column.status")}><StatePill label={t(`requests.state.${item.status}`)} state={item.status} /></td>
+            <td data-label={t("requests.column.status")}><StatePill label={t(requestResultKey(item.reasonCode, item.status))} state={item.status} /></td>
             <td data-label={t("requests.column.request")}><Link className="row-link request-link" params={{ exchangeId: item.id }} search={{}} to={dashboardTaskRoutePaths.activityRequest}><strong>{item.title}</strong><small>{item.id}</small></Link></td>
             <td data-label={t("requests.column.environment")}>{item.environment.id} <small>r{item.environment.revision}</small></td>
             <td data-label={t("requests.column.route")}>{item.environment.routeId}</td>

@@ -1272,6 +1272,7 @@ func knownExchangeReasons() []exchange.ReasonCode {
 		exchange.ReasonProviderResponseInvalid,
 		exchange.ReasonTransportRetryExhausted,
 		exchange.ReasonToolDecisionRejected,
+		exchange.ReasonToolDecisionExpired,
 		exchange.ReasonToolDecisionUnavailable,
 		exchange.ReasonDownstreamCommitFailed,
 		exchange.ReasonDownstreamDisconnected,

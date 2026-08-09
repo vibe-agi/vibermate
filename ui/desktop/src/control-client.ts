@@ -2793,12 +2793,13 @@ function requireActivityPage(value: unknown): ActivityPage {
 function validActivityRecord(value: unknown): boolean {
   return (
     isRecord(value) &&
-    hasClosedFields(value, ["id", "occurredAt", "kind", "title", "status", "source", "environment", "parentRefs"]) &&
+    hasClosedFields(value, ["id", "occurredAt", "kind", "title", "status", "source", "environment", "parentRefs"], ["reasonCode"]) &&
     validRouteIdentity(value.id) &&
     validTimestamp(value.occurredAt) &&
     value.kind === "exchange" &&
     validDisplayLabel(value.title, 512, false) &&
     validActivityStatus(value.status) &&
+    (value.reasonCode === undefined || validIdentity(value.reasonCode)) &&
     validActivitySource(value.source) &&
     validFrozenEnvironmentRef(value.environment) &&
     validActivityParentRefs(value.parentRefs, value.id)

@@ -385,6 +385,7 @@ export interface ActivityRecord {
   readonly kind: "exchange";
   readonly title: string;
   readonly status: ActivityStatus;
+  readonly reasonCode?: string;
   readonly source: {
     readonly kind: "capture_run" | "manual_proxy" | "system_proxy";
     readonly displayName: string;

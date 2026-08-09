@@ -285,6 +285,7 @@ func (pipeline *Pipeline) Execute(
 	if err != nil {
 		switch {
 		case ReasonOf(err) == ReasonToolDecisionRejected ||
+			ReasonOf(err) == ReasonToolDecisionExpired ||
 			ReasonOf(err) == ReasonToolDecisionUnavailable:
 			result.Outcome = AttemptAborted
 		case errors.Is(err, context.Canceled) ||
@@ -1737,8 +1738,12 @@ func (pipeline *Pipeline) decideTools(
 		)
 	}
 	if decision.Outcome == ToolDecisionRejected {
+		reason := ReasonToolDecisionRejected
+		if decision.ReasonCode == "approval_expired" {
+			reason = ReasonToolDecisionExpired
+		}
 		return newFailure(
-			ReasonToolDecisionRejected,
+			reason,
 			request.exchangeID,
 			0,
 			errors.Join(

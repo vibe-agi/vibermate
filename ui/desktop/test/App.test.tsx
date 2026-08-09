@@ -67,6 +67,16 @@ describe("Environment-first Desktop workspace", () => {
     expect(await screen.findByRole("heading", { name: "Requests" })).toBeTruthy();
     expect((await screen.findAllByText("work"))).toHaveLength(2);
     expect((await screen.findAllByText("claude-official"))).toHaveLength(2);
+    expect(await screen.findByText("Approval expired")).toBeTruthy();
+    await model.dispose();
+  });
+
+  it("raises an actionable window title while an approval is pending", async () => {
+    const { model } = await renderDashboard();
+    const pending = await screen.findByRole("link", { name: "Review 1 pending decision" });
+    expect(pending.classList.contains("pending-active")).toBe(true);
+    expect(pending.textContent).toContain("1");
+    expect(document.title).toBe("Review now · ViberMate");
     await model.dispose();
   });
 });

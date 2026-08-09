@@ -4,6 +4,7 @@ import {
   createContext,
   type ReactNode,
   useContext,
+  useEffect,
   useMemo,
   useState,
 } from "react";
@@ -135,6 +136,13 @@ export function DashboardShell({
   const pendingCount = approvals.data?.items.length ?? 0;
   const holdState = offline.data?.state;
 
+  useEffect(() => {
+    document.title = pendingCount > 0
+      ? `${t("workspace.pending.action")} · ${t("app.name")}`
+      : t("app.name");
+    return () => { document.title = t("app.name"); };
+  }, [pendingCount, t]);
+
   return (
     <DashboardModelContext.Provider value={model}>
       <div className="app-frame">
@@ -196,8 +204,16 @@ export function DashboardShell({
                   ? t("workspace.hold.resume")
                   : t("workspace.hold.enter")}
               </button>
-              <Link className="pending-link" search={{}} to={dashboardRoutePaths.policy}>
-                <span>{t("workspace.pending")}</span>
+              <Link
+                aria-label={pendingCount > 0
+                  ? t("workspace.pending.count", { count: pendingCount })
+                  : t("workspace.pending")}
+                aria-live={pendingCount > 0 ? "assertive" : "off"}
+                className={`pending-link${pendingCount > 0 ? " pending-active" : ""}`}
+                search={{}}
+                to={dashboardRoutePaths.policy}
+              >
+                <span>{t(pendingCount > 0 ? "workspace.pending.action" : "workspace.pending")}</span>
                 <strong>{pendingCount}</strong>
               </Link>
               <div className="locale-switch" aria-label={t("workspace.locale.label")}>
