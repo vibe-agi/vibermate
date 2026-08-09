@@ -158,7 +158,11 @@ describe("the Environment-first browser preview host", () => {
   it("filters frozen Activity by Environment and retains the Exchange revision", async () => {
     const client = await connectPreviewControl();
     const page = await client.activities({ environmentId: "work" });
-    expect(page.items).toHaveLength(1);
+    expect(page.items).toHaveLength(2);
+    expect(page.items.map((item) => item.parentRefs.captureRunId)).toEqual([
+      "run-preview",
+      "run-preview",
+    ]);
     expect(page.items[0]?.environment).toMatchObject({
       id: "work",
       revision: 3,

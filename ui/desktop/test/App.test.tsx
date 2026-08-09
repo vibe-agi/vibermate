@@ -65,8 +65,8 @@ describe("Environment-first Desktop workspace", () => {
   it("renders request evidence from frozen Environment and Route references", async () => {
     const { model } = await renderDashboard("/captures/requests");
     expect(await screen.findByRole("heading", { name: "Requests" })).toBeTruthy();
-    expect(await screen.findByText("work")).toBeTruthy();
-    expect(await screen.findByText("claude-official")).toBeTruthy();
+    expect((await screen.findAllByText("work"))).toHaveLength(2);
+    expect((await screen.findAllByText("claude-official"))).toHaveLength(2);
     await model.dispose();
   });
 });

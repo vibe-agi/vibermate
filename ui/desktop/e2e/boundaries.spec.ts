@@ -60,7 +60,7 @@ test("presents high-cardinality Capture and Request data without a desktop-width
 
   await page.getByRole("tab", { name: "Requests" }).click();
   await expect(page.locator(".request-table")).toHaveCSS("display", "block");
-  await expect(page.getByRole("link", { name: /Claude request/u })).toBeVisible();
+  await expect(page.getByRole("link", { name: /Claude request/u }).first()).toBeVisible();
   await expectNoHorizontalOverflow(page);
   expect(errors).toEqual([]);
 });
@@ -69,10 +69,11 @@ test("keeps the Request inspector readable on a narrow screen", async ({ page })
   const errors = collectBrowserErrors(page);
   await page.setViewportSize(mobile);
   await page.goto("/?preview=1#captures/requests");
-  await page.getByRole("link", { name: /Claude request/u }).click();
+  await page.getByRole("link", { name: /Claude request/u }).first().click();
 
   await expect(page.getByRole("heading", { name: "Request trace" })).toBeVisible();
   await expect(page.getByRole("heading", { name: "Request snapshot" })).toBeVisible();
+  await expect(page.getByText("Request 2 of 2", { exact: true })).toBeVisible();
   await expect(page.getByText("Inspect the current package and summarize the failing test.")).toBeVisible();
   await expect(page.getByText("Proposed by the model", { exact: true })).toBeVisible();
   await expectNoHorizontalOverflow(page);

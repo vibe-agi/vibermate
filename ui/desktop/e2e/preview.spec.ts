@@ -178,12 +178,14 @@ test("connects a Claude OAuth account without ever rendering the credential", as
 test("opens a request through its frozen Environment to the exact attempt", async ({ page }) => {
   const errors = collectBrowserErrors(page);
   await openPreview(page, "captures/requests");
-  await expect(page.getByText("Succeeded", { exact: true })).toBeVisible();
+  await expect(page.getByText("Succeeded", { exact: true }).first()).toBeVisible();
   await expect(page.locator(".request-link small").first()).toHaveCSS("display", "block");
   await expect(page.locator(".request-table")).not.toContainText("captures.state.succeeded");
-  await page.getByRole("link", { name: /Claude request/u }).click();
+  await page.getByRole("link", { name: /Claude request/u }).first().click();
 
   await expect(page.getByRole("heading", { name: "Request trace" })).toBeVisible();
+  await expect(page.getByRole("link", { name: "Back to capture" })).toBeVisible();
+  await expect(page.getByText("Request 2 of 2", { exact: true })).toBeVisible();
   await expect(page.getByText("work · r3", { exact: true })).toBeVisible();
   await expect(page.getByText("claude-endpoint · r2", { exact: true })).toBeVisible();
   await expect(page.getByText("claude-messages · r2", { exact: true })).toBeVisible();
@@ -197,9 +199,20 @@ test("opens a request through its frozen Environment to the exact attempt", asyn
   await expect(page.getByText(/Completed .* 384 out .* 192 in/u)).toBeVisible();
   await expect(page.getByRole("heading", { name: "Request snapshot" })).toBeVisible();
   await expect(page.getByText("Inspect the current package and summarize the failing test.")).toBeVisible();
+  await expect(page.getByText("System context marker", { exact: false })).toHaveCount(0);
+  await expect(page.getByRole("heading", { name: "Inspection plan" })).toBeVisible();
+  await expect(page.getByText("Read the package manifest", { exact: true })).toBeVisible();
+  await expect(page.getByText("pnpm test", { exact: true })).toBeVisible();
+  await expect(page.getByText("Image reference not loaded: Remote diagram", { exact: true })).toBeVisible();
+  await expect(page.locator(".markdown-evidence img")).toHaveCount(0);
+  await page.locator(".context-disclosure > summary").click();
+  await expect(page.getByText(/System context marker/iu)).toBeVisible();
   await expect(page.getByText("read_file", { exact: true })).toBeVisible();
   await expect(page.getByText("Proposed by the model", { exact: true })).toBeVisible();
   await expect(page.getByText("120", { exact: true })).toBeVisible();
+  await page.getByTitle("exchange-preview-earlier").click();
+  await expect(page.getByText("Request 1 of 2", { exact: true })).toBeVisible();
+  await expect(page.getByText("List the packages in this workspace.", { exact: true })).toBeVisible();
   await expect(page.locator("body")).not.toContainText("/Users/");
   expect(errors).toEqual([]);
 });

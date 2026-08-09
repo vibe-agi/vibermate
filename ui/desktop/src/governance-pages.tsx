@@ -1,6 +1,9 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { Link } from "@tanstack/react-router";
 import { type FormEvent, useState } from "react";
 import { useTranslation } from "react-i18next";
+import ReactMarkdown from "react-markdown";
+import remarkGfm from "remark-gfm";
 import {
   EmptyState,
   InlineProblem,
@@ -14,6 +17,7 @@ import { BrandIcon } from "./brand-icons.tsx";
 import type {
   ApprovalChoice,
   ApprovalView,
+  ActivityRecord,
   ConnectionRuleSet,
   ExchangeContentBlock,
   ExchangeContentDetail,
@@ -22,6 +26,7 @@ import type {
   ProviderAccountKind,
   ProviderAccountRecord,
 } from "./control-types.ts";
+import { dashboardTaskRoutePaths } from "./navigation.ts";
 
 type PolicyMode = "monitor" | "ask" | "block";
 
@@ -94,14 +99,36 @@ export function ExchangeRoutePage({ exchangeId }: { readonly exchangeId: string 
   const { t } = useTranslation();
   const model = useDashboardModel();
   const exchange = useQuery({ queryKey: dashboardQueryKeys.exchange(exchangeId), queryFn: ({ signal }) => model.client.exchange(exchangeId, signal) });
+  const captureRunId = exchange.data?.parentRefs.captureRunId;
+  const runRequests = useQuery({
+    enabled: captureRunId !== undefined,
+    queryKey: [...dashboardQueryKeys.activities, "capture-run", captureRunId ?? "unavailable"],
+    queryFn: ({ signal }) => captureRunId === undefined
+      ? Promise.resolve({ items: [] })
+      : model.client.activities({ captureRunId }, signal),
+    placeholderData: (previous) => previous,
+  });
   if (exchange.isPending) return <div className="page"><LoadingRows count={8} /></div>;
   if (exchange.data === undefined) return <div className="page"><InlineProblem message={t(controlErrorKey(exchange.error))} /></div>;
   const detail = exchange.data;
   const response = detail.content.response;
   const attempts = detail.processingTrace.attempts;
+  const captureKey = detail.parentRefs.captureRunId !== undefined
+    ? `managed_run:${detail.parentRefs.captureRunId}`
+    : detail.parentRefs.manualCaptureId !== undefined
+      ? `manual_capture:${detail.parentRefs.manualCaptureId}`
+      : undefined;
   return (
     <div className="page exchange-page">
-      <PageHeading description={detail.id} eyebrow={t("exchange.eyebrow")} title={t("exchange.title")} />
+      <PageHeading
+        actions={captureKey === undefined
+          ? <Link className="back-link" search={{}} to={dashboardTaskRoutePaths.captureRequests}>{t("exchange.back.requests")}</Link>
+          : <Link className="back-link" params={{ captureKey }} search={{}} to={dashboardTaskRoutePaths.captureDetail}>{t("exchange.back.capture")}</Link>}
+        description={detail.id}
+        eyebrow={t("exchange.eyebrow")}
+        title={t("exchange.title")}
+      />
+      {captureRunId !== undefined && <RequestSequence currentId={detail.id} items={runRequests.data?.items ?? []} />}
       <section className="trace-layout">
         <aside aria-label={t("exchange.trace.title")} className="trace-rail">
           <TraceStep label={t("exchange.trace.capture")} value={detail.parentRefs.captureRunId ?? detail.parentRefs.manualCaptureId ?? t("common.unavailable")} />
@@ -125,7 +152,7 @@ export function ExchangeRoutePage({ exchangeId }: { readonly exchangeId: string 
                     <span>{t("exchange.content.expires")}</span>
                     <time dateTime={detail.content.expiresAt}>{detail.content.expiresAt === undefined ? t("common.unavailable") : new Intl.DateTimeFormat(undefined, { dateStyle: "medium", timeStyle: "short" }).format(Date.parse(detail.content.expiresAt))}</time>
                   </div>
-                  {detail.content.request.messages.map((message, index) => <ExchangeMessage key={`${message.role}:${index}`} message={message} />)}
+                  <RequestConversation messages={detail.content.request.messages} />
                   {response !== undefined && <article className="exchange-message exchange-message-assistant"><header><span>{t("exchange.role.assistant")}</span><small>{response.reportedModel} · {t(`exchange.stop.${response.stopReason}`)}</small></header><ExchangeBlocks blocks={response.blocks} /><UsageSummary usage={response.usage} /></article>}
                 </div>}
           </section>
@@ -145,6 +172,38 @@ export function ExchangeRoutePage({ exchangeId }: { readonly exchangeId: string 
         </div>
       </section>
     </div>
+  );
+}
+
+function RequestSequence({ currentId, items }: { readonly currentId: string; readonly items: readonly ActivityRecord[] }) {
+  const { t, i18n } = useTranslation();
+  const ordered = [...items].sort((left, right) => Date.parse(left.occurredAt) - Date.parse(right.occurredAt));
+  const currentIndex = ordered.findIndex((item) => item.id === currentId);
+  return (
+    <nav aria-label={t("exchange.runRequests.label")} className="request-sequence">
+      <div className="request-sequence-heading">
+        <span>{t("exchange.runRequests.title")}</span>
+        <small>{t("exchange.runRequests.position", { current: currentIndex < 0 ? "–" : currentIndex + 1, total: ordered.length })}</small>
+      </div>
+      <ol>
+        {ordered.map((item, index) => (
+          <li key={item.id}>
+            <Link
+              aria-current={item.id === currentId ? "page" : undefined}
+              params={{ exchangeId: item.id }}
+              search={{}}
+              title={item.id}
+              to={dashboardTaskRoutePaths.activityRequest}
+            >
+              <span>{index + 1}</span>
+              <strong>{t(`requests.state.${item.status}`)}</strong>
+              <time dateTime={item.occurredAt}>{new Intl.DateTimeFormat(i18n.language, { hour: "2-digit", minute: "2-digit" }).format(Date.parse(item.occurredAt))}</time>
+            </Link>
+          </li>
+        ))}
+      </ol>
+      {ordered.length === 0 && <span className="request-sequence-empty">{t("exchange.runRequests.loading")}</span>}
+    </nav>
   );
 }
 
@@ -171,15 +230,65 @@ function ExchangeMessage({ message }: { readonly message: ExchangeContentMessage
   return <article className={`exchange-message exchange-message-${message.role}`}><header><span>{t(`exchange.role.${message.role}`)}</span></header><ExchangeBlocks blocks={message.blocks} /></article>;
 }
 
+function RequestConversation({ messages }: { readonly messages: readonly ExchangeContentMessage[] }) {
+  const { t } = useTranslation();
+  const context = messages.filter((message) => message.role === "system" || message.role === "developer");
+  const conversation = messages.filter((message) => message.role !== "system" && message.role !== "developer");
+  const visibleStart = Math.max(0, conversation.length - 6);
+  const earlier = conversation.slice(0, visibleStart);
+  const recent = conversation.slice(visibleStart);
+  return <>
+    {context.length > 0 && <DeferredMessages
+      className="context-disclosure"
+      messages={context}
+      summary={t("exchange.context.summary", { count: context.length })}
+    />}
+    {earlier.length > 0 && <DeferredMessages
+      className="history-disclosure"
+      messages={earlier}
+      summary={t("exchange.history.summary", { count: earlier.length })}
+    />}
+    {recent.map((message, index) => <ExchangeMessage key={`${message.role}:recent:${index}`} message={message} />)}
+  </>;
+}
+
+function DeferredMessages({ className, messages, summary }: { readonly className: string; readonly messages: readonly ExchangeContentMessage[]; readonly summary: string }) {
+  const [open, setOpen] = useState(false);
+  return <details className={`message-disclosure ${className}`} onToggle={(event) => setOpen(event.currentTarget.open)}>
+    <summary>{summary}<span>{open ? "−" : "+"}</span></summary>
+    {open && <div>{messages.map((message, index) => <ExchangeMessage key={`${message.role}:deferred:${index}`} message={message} />)}</div>}
+  </details>;
+}
+
 function ExchangeBlocks({ blocks }: { readonly blocks: readonly ExchangeContentBlock[] }) {
   const { t } = useTranslation();
   return <div className="exchange-blocks">{blocks.map((block, index) => {
     const key = `${block.kind}:${block.callId ?? index}`;
     if (block.availability === "omitted") return <div className="omitted-content" key={key}>{t("exchange.content.omitted", { bytes: block.originalSize })}</div>;
-    if (block.kind === "tool_call") return <div className="tool-evidence tool-call" key={key}><div><strong>{block.toolName}</strong><span>{t("exchange.tool.proposed")}</span></div>{block.arguments !== undefined && <pre>{JSON.stringify(block.arguments, null, 2)}</pre>}</div>;
-    if (block.kind === "tool_result") return <div className={`tool-evidence tool-result${block.toolError === true ? " failed" : ""}`} key={key}><div><strong>{t("exchange.tool.result")}</strong><span>{t("exchange.tool.reported")}</span></div><pre>{block.text}</pre></div>;
-    return <p className={block.kind === "refusal" ? "model-refusal" : undefined} key={key}>{block.text}</p>;
+    if (block.kind === "tool_call") return <details className="tool-evidence tool-call" key={key}><summary><strong>{block.toolName}</strong><span>{t("exchange.tool.proposed")}</span></summary>{block.arguments !== undefined && <pre>{JSON.stringify(block.arguments, null, 2)}</pre>}</details>;
+    if (block.kind === "tool_result") return <details className={`tool-evidence tool-result${block.toolError === true ? " failed" : ""}`} key={key}><summary><strong>{t("exchange.tool.result")}</strong><span>{block.toolError === true ? t("exchange.tool.failed") : t("exchange.tool.reported")}</span></summary><pre>{block.text}</pre></details>;
+    return block.kind === "refusal"
+      ? <MarkdownEvidence className="model-refusal" key={key} text={block.text ?? ""} />
+      : <MarkdownEvidence key={key} text={block.text ?? ""} />;
   })}</div>;
+}
+
+function MarkdownEvidence({ className, text }: { readonly className?: string; readonly text: string }) {
+  const { t } = useTranslation();
+  const [expanded, setExpanded] = useState(false);
+  const clipped = text.length > 12_000;
+  const rendered = clipped && !expanded ? `${text.slice(0, 12_000)}\n\n…` : text;
+  return <div className={`markdown-evidence${className === undefined ? "" : ` ${className}`}`}>
+    <ReactMarkdown
+      components={{
+        a: ({ children, ...properties }) => <a {...properties} rel="noreferrer" target="_blank">{children}</a>,
+        img: ({ alt }) => <span className="markdown-image-placeholder">{t("exchange.markdown.image", { alt: alt ?? "" })}</span>,
+      }}
+      remarkPlugins={[remarkGfm]}
+      skipHtml
+    >{rendered}</ReactMarkdown>
+    {clipped && <button className="markdown-expand" onClick={() => setExpanded((value) => !value)} type="button">{t(expanded ? "exchange.markdown.less" : "exchange.markdown.more")}</button>}
+  </div>;
 }
 
 function UsageSummary({ usage }: { readonly usage: NonNullable<ExchangeContentDetail["response"]>["usage"] }) {

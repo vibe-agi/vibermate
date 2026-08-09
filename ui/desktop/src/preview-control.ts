@@ -253,6 +253,14 @@ const previewExchange: ExchangeDetail = {
       maxOutputTokens: 4096,
       stream: true,
       messages: [{
+        role: "system",
+        blocks: [{
+          kind: "text",
+          availability: "recorded",
+          text: "System context marker: this long-running agent context is available for forensic inspection but should not dominate the initial view.",
+          originalSize: 127,
+        }],
+      }, {
         role: "user",
         blocks: [{
           kind: "text",
@@ -270,6 +278,11 @@ const previewExchange: ExchangeDetail = {
       reportedModel: "claude-sonnet",
       stopReason: "tool_use",
       blocks: [{
+        kind: "text",
+        availability: "recorded",
+        text: "## Inspection plan\n\n- Read the package manifest\n- Run the focused test\n\nUse `pnpm test` before changing code.\n\n![Remote diagram](https://example.invalid/diagram.png)",
+        originalSize: 164,
+      }, {
         kind: "tool_call",
         availability: "recorded",
         originalSize: 32,
@@ -284,6 +297,51 @@ const previewExchange: ExchangeDetail = {
         output: { known: true, tokens: 16, source: "provider" },
         reasoning: { known: false },
       },
+    },
+  },
+};
+
+const earlierPreviewExchange: ExchangeDetail = {
+  ...previewExchange,
+  id: "exchange-preview-earlier",
+  parentRefs: {
+    ...previewExchange.parentRefs,
+    exchangeId: "exchange-preview-earlier",
+  },
+  processingTrace: {
+    pluginRunIds: [],
+    attempts: [{
+      ...previewExchange.processingTrace.attempts[0]!,
+      id: "egress-preview-earlier",
+      parent: { kind: "upstream_attempt", id: "attempt-preview-earlier", exchangeId: "exchange-preview-earlier" },
+    }],
+    result: "completed",
+  },
+  content: {
+    ...previewExchange.content,
+    recordedAt: timestamp,
+    request: {
+      ...previewExchange.content.request!,
+      messages: [{
+        role: "user",
+        blocks: [{
+          kind: "text",
+          availability: "recorded",
+          text: "List the packages in this workspace.",
+          originalSize: 36,
+        }],
+      }],
+    },
+    response: {
+      ...previewExchange.content.response!,
+      id: "response-preview-earlier",
+      stopReason: "end_turn",
+      blocks: [{
+        kind: "text",
+        availability: "recorded",
+        text: "The workspace contains the desktop app and runtime packages.",
+        originalSize: 57,
+      }],
     },
   },
 };
@@ -712,26 +770,29 @@ class PreviewControlClient implements ControlClient {
 
   async activities(query?: ActivityQuery): Promise<ActivityPage> {
     this.requireOpen();
-    const item = {
-      id: previewExchange.id,
-      occurredAt: laterTimestamp,
+    const items = [
+      { detail: previewExchange, occurredAt: laterTimestamp },
+      { detail: earlierPreviewExchange, occurredAt: timestamp },
+    ].map(({ detail, occurredAt }) => ({
+      id: detail.id,
+      occurredAt,
       kind: "exchange" as const,
       title: "Claude request",
-      status: previewExchange.status,
+      status: detail.status,
       source: { kind: "capture_run" as const, displayName: "claude", recognition: "verified" as const },
-      environment: frozenEnvironment,
-      parentRefs: previewExchange.parentRefs,
-    };
-    const included =
+      environment: detail.environment,
+      parentRefs: detail.parentRefs,
+    })).filter((item) =>
       (query?.captureRunId === undefined || query.captureRunId === item.parentRefs.captureRunId) &&
-      (query?.environmentId === undefined || query.environmentId === item.environment.id);
-    return { items: included ? [clone(item)] : [] };
+      (query?.environmentId === undefined || query.environmentId === item.environment.id));
+    return { items: clone(items) };
   }
 
   async exchange(exchangeId: string): Promise<ExchangeDetail> {
     this.requireOpen();
-    if (exchangeId !== previewExchange.id) throw this.notFound();
-    return clone(previewExchange);
+    if (exchangeId === previewExchange.id) return clone(previewExchange);
+    if (exchangeId === earlierPreviewExchange.id) return clone(earlierPreviewExchange);
+    throw this.notFound();
   }
 
   async approvals(): Promise<ApprovalPage> {

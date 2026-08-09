@@ -741,6 +741,66 @@ func TestToolDecisionRejectsBeforeAnyToolBytesReachClient(t *testing.T) {
 	}
 }
 
+func TestStreamingToolDecisionKeepsTheClientAliveUntilApproval(t *testing.T) {
+	plan := mustEnvironmentRequestPlan(t, testPlanOptions{
+		mode:           environment.PlanModeManaged,
+		providerOrigin: "https://provider.example/v1",
+		backend:        protocolspec.DialectOpenAIChat,
+		modelMode:      modelModeFixed,
+		fixedModel:     "gpt-provider",
+		accounts:       []testAccount{{id: "account.primary", revision: 1, epoch: 1}},
+		preferred:      "account.primary",
+	})
+	authority := newAccountAuthority(t, testAccount{id: "account.primary", revision: 1, epoch: 1})
+	provider := &providerDouble{results: []providerResult{{response: streamResponse(
+		http.StatusOK,
+		streamingToolProviderResponse(t, "gpt-provider"),
+	)}}}
+	decisions := newBlockingDecisionDouble()
+	pipeline := newTestPipeline(t, authority, provider, decisions, &attemptObserverDouble{})
+	pipeline.streamBudgets = StreamBudgets{
+		KeepaliveInterval:       10 * time.Millisecond,
+		ProviderProgressTimeout: time.Second,
+	}
+	defer shutdownPipeline(t, pipeline)
+	downstream := &downstreamRecorder{}
+	completed := make(chan error, 1)
+	go func() {
+		_, err := pipeline.Execute(
+			context.Background(),
+			mustClientRequest(t, "exchange-stream-tool-approval", plan, streamingToolClientRequest()),
+			downstream,
+		)
+		completed <- err
+	}()
+	select {
+	case <-decisions.entered:
+	case err := <-completed:
+		t.Fatalf("stream completed before requesting tool approval: %v", err)
+	case <-time.After(time.Second):
+		t.Fatal("tool decision was not requested")
+	}
+	deadline := time.Now().Add(time.Second)
+	for downstream.keepaliveCount() < 2 && time.Now().Before(deadline) {
+		time.Sleep(time.Millisecond)
+	}
+	if got := downstream.keepaliveCount(); got < 2 {
+		t.Fatalf("keepalives while awaiting approval = %d, want at least 2", got)
+	}
+	close(decisions.approve)
+	select {
+	case err := <-completed:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("approved streaming tool response did not complete")
+	}
+	if !bytes.Contains(downstream.bytesSnapshot(), []byte("call-shell")) {
+		t.Fatalf("approved tool response was not released: %s", downstream.bytesSnapshot())
+	}
+}
+
 func TestOperationEvidenceMismatchFailsBeforeAccountOrProvider(t *testing.T) {
 	plan := mustEnvironmentRequestPlan(t, testPlanOptions{
 		mode: environment.PlanModeManaged, providerOrigin: "https://provider.example/v1",
@@ -1253,10 +1313,11 @@ func (provider *blockingProvider) Do(
 }
 
 type downstreamRecorder struct {
-	mu        sync.Mutex
-	envelopes []ResponseEnvelope
-	body      bytes.Buffer
-	aborts    []FailureNotice
+	mu         sync.Mutex
+	envelopes  []ResponseEnvelope
+	body       bytes.Buffer
+	aborts     []FailureNotice
+	keepalives int
 }
 
 func (downstream *downstreamRecorder) Begin(_ context.Context, envelope ResponseEnvelope) error {
@@ -1272,7 +1333,18 @@ func (downstream *downstreamRecorder) Write(_ context.Context, body []byte) (int
 	return downstream.body.Write(body)
 }
 
-func (downstream *downstreamRecorder) Keepalive(context.Context) error { return nil }
+func (downstream *downstreamRecorder) Keepalive(context.Context) error {
+	downstream.mu.Lock()
+	defer downstream.mu.Unlock()
+	downstream.keepalives++
+	return nil
+}
+
+func (downstream *downstreamRecorder) keepaliveCount() int {
+	downstream.mu.Lock()
+	defer downstream.mu.Unlock()
+	return downstream.keepalives
+}
 
 func (downstream *downstreamRecorder) Abort(_ context.Context, notice FailureNotice) error {
 	downstream.mu.Lock()
@@ -1298,6 +1370,32 @@ type decisionDouble struct {
 	decision ToolDecision
 	err      error
 	requests []ToolDecisionRequest
+}
+
+type blockingDecisionDouble struct {
+	entered chan struct{}
+	approve chan struct{}
+	once    sync.Once
+}
+
+func newBlockingDecisionDouble() *blockingDecisionDouble {
+	return &blockingDecisionDouble{
+		entered: make(chan struct{}),
+		approve: make(chan struct{}),
+	}
+}
+
+func (decisions *blockingDecisionDouble) Decide(
+	ctx context.Context,
+	_ ToolDecisionRequest,
+) (ToolDecision, error) {
+	decisions.once.Do(func() { close(decisions.entered) })
+	select {
+	case <-decisions.approve:
+		return ToolDecision{Outcome: ToolDecisionApproved}, nil
+	case <-ctx.Done():
+		return ToolDecision{}, context.Cause(ctx)
+	}
 }
 
 func approvedDecisions() *decisionDouble {
@@ -1429,6 +1527,18 @@ func normalProviderStream(t *testing.T, model string) io.Reader {
 	))
 }
 
+func streamingToolProviderResponse(t *testing.T, model string) io.Reader {
+	t.Helper()
+	return bytes.NewReader(joinProviderEvents(
+		t,
+		`{"id":"chatcmpl-stream-tool","object":"chat.completion.chunk","created":1,"model":"`+model+`","choices":[{"index":0,"delta":{"role":"assistant","tool_calls":[{"index":0,"id":"call-shell","type":"function","function":{"name":"shell","arguments":""}}]},"finish_reason":null}]}`,
+		`{"id":"chatcmpl-stream-tool","object":"chat.completion.chunk","created":1,"model":"`+model+`","choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"function":{"arguments":"{}"}}]},"finish_reason":null}]}`,
+		`{"id":"chatcmpl-stream-tool","object":"chat.completion.chunk","created":1,"model":"`+model+`","choices":[{"index":0,"delta":{},"finish_reason":"tool_calls"}]}`,
+		`{"id":"chatcmpl-stream-tool","object":"chat.completion.chunk","created":1,"model":"`+model+`","choices":[],"usage":{"prompt_tokens":4,"completion_tokens":2,"total_tokens":6}}`,
+		`[DONE]`,
+	))
+}
+
 func anthropicTextProviderStream() io.Reader {
 	return strings.NewReader(strings.Join([]string{
 		`event: message_start`,
@@ -1502,6 +1612,14 @@ func streamingClientRequest() []byte {
 func toolClientRequest() []byte {
 	return []byte(`{
 		"model":"claude-client-alias","max_tokens":32,
+		"messages":[{"role":"user","content":"hello"}],
+		"tools":[{"name":"shell","description":"Run a command.","input_schema":{"type":"object","properties":{}}}]
+	}`)
+}
+
+func streamingToolClientRequest() []byte {
+	return []byte(`{
+		"model":"claude-client-alias","max_tokens":32,"stream":true,
 		"messages":[{"role":"user","content":"hello"}],
 		"tools":[{"name":"shell","description":"Run a command.","input_schema":{"type":"object","properties":{}}}]
 	}`)

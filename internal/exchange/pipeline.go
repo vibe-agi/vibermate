@@ -1604,7 +1604,13 @@ func (pipeline *Pipeline) consumeProviderStream(
 		terminal.TranslationReport(),
 	)
 	intents := terminal.ToolIntents()
-	if err := pipeline.decideTools(ctx, request, selection, intents); err != nil {
+	if err := pipeline.decideStreamTools(
+		ctx,
+		request,
+		selection,
+		intents,
+		downstream,
+	); err != nil {
 		_ = terminal.Reject()
 		return err
 	}
@@ -1742,6 +1748,54 @@ func (pipeline *Pipeline) decideTools(
 		)
 	}
 	return nil
+}
+
+// decideStreamTools keeps the already-open client stream alive while a
+// complete tool-intent group is waiting for a human decision. The provider's
+// tool bytes remain held by the terminal release boundary; keepalives contain
+// no semantic payload and cannot expose a tool before approval.
+func (pipeline *Pipeline) decideStreamTools(
+	ctx context.Context,
+	request ClientRequest,
+	selection frozenSelection,
+	intents []protocolcore.ToolIntent,
+	downstream Downstream,
+) error {
+	if len(intents) == 0 {
+		return nil
+	}
+	decisionContext, cancelDecision := context.WithCancel(ctx)
+	defer cancelDecision()
+	result := make(chan error, 1)
+	go func() {
+		result <- pipeline.decideTools(
+			decisionContext,
+			request,
+			selection,
+			intents,
+		)
+	}()
+	keepalive := time.NewTimer(pipeline.streamBudgets.KeepaliveInterval)
+	defer keepalive.Stop()
+	for {
+		select {
+		case err := <-result:
+			return err
+		case <-ctx.Done():
+			return context.Cause(ctx)
+		case <-keepalive.C:
+			if err := downstream.Keepalive(ctx); err != nil {
+				cancelDecision()
+				return newFailure(
+					ReasonDownstreamDisconnected,
+					request.exchangeID,
+					0,
+					err,
+				)
+			}
+			resetTimer(keepalive, pipeline.streamBudgets.KeepaliveInterval)
+		}
+	}
 }
 
 func (pipeline *Pipeline) canRetryFailure(
