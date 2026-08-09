@@ -82,6 +82,10 @@ func (*blockedCreateRepository) Recover(context.Context, time.Time) (Recovery, e
 	return Recovery{}, nil
 }
 
+func (*blockedCreateRepository) Active(context.Context, ID, time.Time) (bool, error) {
+	return false, errors.New("unexpected Active")
+}
+
 func TestManagerShutdownCancelsAndDrainsOperationsWithoutRevokingCaptures(t *testing.T) {
 	repository := &blockedCreateRepository{started: make(chan struct{})}
 	manager, err := NewManager(context.Background(), Options{

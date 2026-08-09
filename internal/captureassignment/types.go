@@ -103,6 +103,15 @@ type Repository interface {
 	Write(context.Context, Revision, Assignment) (CommitResult, error)
 }
 
+// CaptureActivity is the lifecycle authority used only to decide whether a
+// persisted assignment still represents a live Capture. Assignments are
+// retained as immutable historical evidence after a Capture finishes, so
+// their mere presence must never make an Environment transition affect a
+// process that no longer exists.
+type CaptureActivity interface {
+	Active(context.Context, captureidentity.Reference) (bool, error)
+}
+
 type Boundary string
 
 const (

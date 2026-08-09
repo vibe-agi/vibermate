@@ -113,7 +113,7 @@ test("changes an existing passthrough Environment to a managed account", async (
   const errors = collectBrowserErrors(page);
   await openPreview(page, "environments/work");
 
-  await page.getByRole("button", { name: "Edit Environment" }).click();
+  await page.getByRole("button", { name: "Edit", exact: true }).click();
   await page
     .getByLabel("Authentication for https://api.anthropic.com")
     .selectOption("anthropic-work");

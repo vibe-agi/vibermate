@@ -401,6 +401,44 @@ func (repository *manualCaptureRepository) Get(
 	return record, nil
 }
 
+func (repository *manualCaptureRepository) Active(
+	ctx context.Context,
+	id manualcapture.ID,
+	now time.Time,
+) (bool, error) {
+	if !id.Valid() || now.IsZero() {
+		return false, manualcapture.ErrInvalidCommand
+	}
+	operation, finish, err := repository.operations.begin(ctx)
+	if err != nil {
+		return false, err
+	}
+	defer finish()
+	var state manualcapture.State
+	var expiresAtUnixMillis sql.NullInt64
+	err = repository.database.QueryRowContext(
+		operation,
+		`SELECT state, expires_at_unix_ms
+		 FROM manual_captures WHERE capture_id = ?`,
+		id.String(),
+	).Scan(&state, &expiresAtUnixMillis)
+	if errors.Is(err, sql.ErrNoRows) {
+		return false, manualcapture.ErrNotFound
+	}
+	if err != nil {
+		return false, fmt.Errorf("read ManualCapture activity: %w", err)
+	}
+	switch state {
+	case manualcapture.StateActive:
+		return !expiresAtUnixMillis.Valid ||
+			expiresAtUnixMillis.Int64 > toUnixMillis(now), nil
+	case manualcapture.StateRevoked, manualcapture.StateExpired:
+		return false, nil
+	default:
+		return false, manualcapture.ErrInvalidRecord
+	}
+}
+
 func (repository *manualCaptureRepository) List(
 	ctx context.Context,
 	request manualcapture.PageRequest,

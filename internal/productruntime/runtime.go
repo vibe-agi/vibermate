@@ -248,10 +248,21 @@ func startWithBuilders(
 		return fail("ProviderAccount recovery", err)
 	}
 	cleanups.register("ProviderAccount manager", accounts.Shutdown)
+	captureRunRepository := storageResult.store.CaptureRunRepository()
+	manualCaptureRepository := storageResult.store.ManualCaptureRepository()
+	captureActivity, err := newCaptureActivityResolver(
+		captureRunRepository,
+		manualCaptureRepository,
+		options.Clock,
+	)
+	if err != nil {
+		return fail("Capture activity projection", err)
+	}
 
 	environmentResult, err := builders.environment.Build(ctx, environmentBuildRequest{
 		repository:           storageResult.store.EnvironmentRepository(),
 		assignmentRepository: storageResult.store.CaptureAssignmentRepository(),
+		activity:             captureActivity,
 		leafCache:            certificateAuthority,
 		clock:                options.Clock,
 		accounts:             accounts,
@@ -463,7 +474,7 @@ func startWithBuilders(
 	pending.register("Exchange pipeline", exchanges.Shutdown)
 
 	captureRuns, err := builders.capture.Build(ctx, captureBuildRequest{
-		repository: storageResult.store.CaptureRunRepository(),
+		repository: captureRunRepository,
 		clock:      options.Clock,
 		random:     securityRandom,
 	})
@@ -478,7 +489,7 @@ func startWithBuilders(
 	}
 	pending.register("CaptureRun component", captureRuns.Shutdown)
 	manualCaptures, err := builders.manualCapture.Build(ctx, manualCaptureBuildRequest{
-		repository: storageResult.store.ManualCaptureRepository(),
+		repository: manualCaptureRepository,
 		clock:      options.Clock,
 		random:     securityRandom,
 	})

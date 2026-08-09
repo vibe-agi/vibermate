@@ -21,7 +21,7 @@ func TestSQLiteEnvironmentPublishDrainsOnlyIncompatibleCaptureConnections(t *tes
 	closer := &transitionConnectionCloser{}
 	assignments, err := captureassignment.NewManager(captureassignment.Options{
 		Repository: store.CaptureAssignmentRepository(), Environments: projection,
-		Clock: transitionClock{},
+		Activity: transitionCaptureActivity{}, Clock: transitionClock{},
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -144,6 +144,15 @@ func TestSQLiteEnvironmentPublishDrainsOnlyIncompatibleCaptureConnections(t *tes
 		t.Fatalf("new request revision = %d", newRequest.Plan().EnvironmentRevision())
 	}
 	newRequest.Release()
+}
+
+type transitionCaptureActivity struct{}
+
+func (transitionCaptureActivity) Active(
+	context.Context,
+	captureidentity.Reference,
+) (bool, error) {
+	return true, nil
 }
 
 type transitionClock struct{}

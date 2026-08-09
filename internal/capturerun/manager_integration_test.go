@@ -155,6 +155,12 @@ func TestCaptureRunCapabilitiesArePersistedAsHashesAndDriveLifecycle(
 		evidence.ProcessID != 0 {
 		t.Fatalf("proxy evidence = %+v", evidence)
 	}
+	active, err := store.CaptureRunRepository().Active(
+		context.Background(), grant.Run.ID, clock.Now(),
+	)
+	if err != nil || !active {
+		t.Fatalf("created CaptureRun activity = %v, %v", active, err)
+	}
 
 	attached, err := manager.Attach(
 		context.Background(),
@@ -192,6 +198,12 @@ func TestCaptureRunCapabilitiesArePersistedAsHashesAndDriveLifecycle(
 		grant.ControlCapability,
 	); err != nil {
 		t.Fatalf("idempotent finish CaptureRun: %v", err)
+	}
+	active, err = store.CaptureRunRepository().Active(
+		context.Background(), grant.Run.ID, clock.Now(),
+	)
+	if err != nil || active {
+		t.Fatalf("finished CaptureRun activity = %v, %v", active, err)
 	}
 	if _, err := manager.AuthorizeProxy(
 		context.Background(),

@@ -84,6 +84,16 @@ func TestManualCaptureCreateRotateAuthorizeRevokeAndReopen(t *testing.T) {
 		first.Capture.Observation != manualcapture.ObservationWaiting {
 		t.Fatalf("created ManualCapture = %+v", first.Capture)
 	}
+	firstID, err := manualcapture.ParseID(first.Capture.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	active, err := store.ManualCaptureRepository().Active(
+		context.Background(), firstID, clock.Now(),
+	)
+	if err != nil || !active {
+		t.Fatalf("created ManualCapture activity = %v, %v", active, err)
+	}
 	if strings.Contains(first.LogValue().String(), first.Credential.Value()) {
 		t.Fatal("ManualCapture structured log exposed its credential")
 	}
@@ -163,6 +173,12 @@ func TestManualCaptureCreateRotateAuthorizeRevokeAndReopen(t *testing.T) {
 	})
 	if err != nil || revoked.State != manualcapture.StateRevoked {
 		t.Fatalf("revoke ManualCapture view=%+v err=%v", revoked, err)
+	}
+	active, err = reopened.ManualCaptureRepository().Active(
+		context.Background(), firstID, clock.Now(),
+	)
+	if err != nil || active {
+		t.Fatalf("revoked ManualCapture activity = %v, %v", active, err)
 	}
 	if _, err := recovered.Revoke(context.Background(), manualcapture.RevokeCommand{
 		Owner:                      owner,

@@ -77,6 +77,7 @@ func (productionStorageBuilder) Build(
 type environmentBuildRequest struct {
 	repository           environment.Repository
 	assignmentRepository captureassignment.Repository
+	activity             captureassignment.CaptureActivity
 	leafCache            captureassignment.LeafCacheInvalidator
 	clock                captureassignment.Clock
 	accounts             environment.AccountCatalog
@@ -112,7 +113,8 @@ func (productionEnvironmentBuilder) Build(
 	projection := environment.NewAtomicProjection()
 	assignments, err := captureassignment.NewManager(captureassignment.Options{
 		Repository: request.assignmentRepository, Environments: projection,
-		LeafCacheInvalidator: request.leafCache, Clock: request.clock,
+		Activity: request.activity, LeafCacheInvalidator: request.leafCache,
+		Clock: request.clock,
 	})
 	if err != nil {
 		return environmentBuildResult{}, fmt.Errorf("build Capture assignment manager: %w", err)

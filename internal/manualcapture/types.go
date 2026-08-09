@@ -358,6 +358,7 @@ type Page struct {
 }
 
 type Repository interface {
+	ActivityReader
 	Create(context.Context, DurableRecord) error
 	Rotate(
 		context.Context,
@@ -378,6 +379,13 @@ type Repository interface {
 	Get(context.Context, OwnerScope, ID, time.Time) (DurableRecord, error)
 	List(context.Context, PageRequest, time.Time) ([]DurableRecord, error)
 	Recover(context.Context, time.Time) (Recovery, error)
+}
+
+// ActivityReader is the narrow internal lifecycle projection used when
+// Environment impact is computed. Owner-scoped control reads remain on the
+// Controller interface.
+type ActivityReader interface {
+	Active(context.Context, ID, time.Time) (bool, error)
 }
 
 type Controller interface {

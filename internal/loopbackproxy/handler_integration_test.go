@@ -1155,6 +1155,7 @@ func newProxyFixtureForDialectWithPolicy(
 	assignments, err := captureassignment.NewManager(captureassignment.Options{
 		Repository:           store.CaptureAssignmentRepository(),
 		Environments:         projection,
+		Activity:             proxyCaptureActivity{},
 		LeafCacheInvalidator: authority,
 		Clock:                captureassignment.SystemClock{},
 	})
@@ -1245,6 +1246,15 @@ func newProxyFixtureForDialectWithPolicy(
 		connections: connections, egress: store.EgressAttemptRepository(),
 		approvals: approvals, rules: rules,
 	}
+}
+
+type proxyCaptureActivity struct{}
+
+func (proxyCaptureActivity) Active(
+	context.Context,
+	captureidentity.Reference,
+) (bool, error) {
+	return true, nil
 }
 
 func fixedCodexAdapterEvidence() clientadapter.Evidence {

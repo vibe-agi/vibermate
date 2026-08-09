@@ -634,3 +634,39 @@ func (repository *captureRunRepository) Get(
 	}
 	return capturerun.ViewOf(record), nil
 }
+
+func (repository *captureRunRepository) Active(
+	ctx context.Context,
+	runID string,
+	now time.Time,
+) (bool, error) {
+	if runID == "" || now.IsZero() {
+		return false, capturerun.ErrInvalidRequest
+	}
+	operation, finish, err := repository.operations.begin(ctx)
+	if err != nil {
+		return false, err
+	}
+	defer finish()
+	var state capturerun.State
+	var expiresAtUnixMillis int64
+	err = repository.database.QueryRowContext(
+		operation,
+		`SELECT state, expires_at_unix_ms FROM capture_runs WHERE run_id = ?`,
+		runID,
+	).Scan(&state, &expiresAtUnixMillis)
+	if errors.Is(err, sql.ErrNoRows) {
+		return false, capturerun.ErrNotFound
+	}
+	if err != nil {
+		return false, fmt.Errorf("read CaptureRun activity: %w", err)
+	}
+	switch state {
+	case capturerun.StateCreated, capturerun.StateAttached:
+		return expiresAtUnixMillis > toUnixMillis(now), nil
+	case capturerun.StateFinished, capturerun.StateRevoked, capturerun.StateExpired:
+		return false, nil
+	default:
+		return false, capturerun.ErrInvalidRequest
+	}
+}

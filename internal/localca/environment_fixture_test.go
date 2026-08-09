@@ -55,7 +55,8 @@ func newEnvironmentProjection(
 	repository := newLocalAssignmentRepository()
 	manager, err := captureassignment.NewManager(captureassignment.Options{
 		Repository: repository, Environments: projection,
-		LeafCacheInvalidator: authority, Clock: authority.clock,
+		Activity: localCaptureActivity{}, LeafCacheInvalidator: authority,
+		Clock: authority.clock,
 	})
 	if err != nil {
 		t.Fatalf("construct Capture assignment manager: %v", err)
@@ -88,6 +89,15 @@ func newEnvironmentProjection(
 		t.Cleanup(connection.Close)
 	}
 	return harness
+}
+
+type localCaptureActivity struct{}
+
+func (localCaptureActivity) Active(
+	context.Context,
+	captureidentity.Reference,
+) (bool, error) {
+	return true, nil
 }
 
 func (harness *environmentProjection) Publish(t *testing.T, fixture environmentFixture) {

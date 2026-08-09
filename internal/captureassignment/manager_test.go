@@ -316,6 +316,44 @@ func TestAffectedCapturesKeepsAllActiveBindings(t *testing.T) {
 	}
 }
 
+func TestAffectedCapturesExcludesTerminalHistoricalAssignments(t *testing.T) {
+	t.Parallel()
+	repository := newMemoryRepository()
+	resolver := environmentResolver(t, environmentFixture(t, "work", "adapter.shared"))
+	activity := &fixedCaptureActivity{inactive: make(map[string]bool)}
+	manager, err := NewManager(Options{
+		Repository: repository, Environments: resolver, Activity: activity,
+		Clock: fixedClock{value: time.Date(2026, 8, 7, 12, 0, 0, 0, time.UTC)},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	active := testCapture()
+	terminal, err := captureidentity.New(captureidentity.KindManagedRun, "finished.run")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, capture := range []captureidentity.Reference{active, terminal} {
+		if _, err := manager.Create(context.Background(), CreateCommand{
+			Capture: capture, EnvironmentID: "work", Source: SourceLaunch,
+		}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	activity.inactive[terminal.Key()] = true
+	references, err := manager.AffectedCaptures(context.Background(), "work", 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(references) != 1 || references[0].Capture != active {
+		t.Fatalf("affected captures = %+v", references)
+	}
+	assignment, err := manager.Resolve(context.Background(), terminal)
+	if err != nil || assignment.Capture != terminal {
+		t.Fatalf("historical assignment was not retained: %+v, %v", assignment, err)
+	}
+}
+
 func TestEnvironmentTransitionDrainsOnlyIncompatibleConnectionsAndHoldsFence(t *testing.T) {
 	t.Parallel()
 	repository := newMemoryRepository()
@@ -599,12 +637,28 @@ func newTestManager(t *testing.T, repository Repository, resolver environment.Sn
 	t.Helper()
 	manager, err := NewManager(Options{
 		Repository: repository, Environments: resolver,
-		Clock: fixedClock{value: time.Date(2026, 8, 7, 12, 0, 0, 0, time.UTC)},
+		Activity: &fixedCaptureActivity{inactive: make(map[string]bool)},
+		Clock:    fixedClock{value: time.Date(2026, 8, 7, 12, 0, 0, 0, time.UTC)},
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
 	return manager
+}
+
+type fixedCaptureActivity struct {
+	inactive map[string]bool
+	err      error
+}
+
+func (activity *fixedCaptureActivity) Active(
+	_ context.Context,
+	reference captureidentity.Reference,
+) (bool, error) {
+	if activity.err != nil {
+		return false, activity.err
+	}
+	return !activity.inactive[reference.Key()], nil
 }
 
 type recordingCloser struct {

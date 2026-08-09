@@ -19,12 +19,20 @@ const environmentGateCapacity int64 = 1 << 30
 type Options struct {
 	Repository           Repository
 	Environments         environment.SnapshotResolver
+	Activity             CaptureActivity
 	LeafCacheInvalidator LeafCacheInvalidator
 	Clock                Clock
 }
 
-func DefaultOptions(repository Repository, environments environment.SnapshotResolver) Options {
-	return Options{Repository: repository, Environments: environments, Clock: SystemClock{}}
+func DefaultOptions(
+	repository Repository,
+	environments environment.SnapshotResolver,
+	activity CaptureActivity,
+) Options {
+	return Options{
+		Repository: repository, Environments: environments,
+		Activity: activity, Clock: SystemClock{},
+	}
 }
 
 type connectionRecord struct {
@@ -60,6 +68,7 @@ func newCaptureState(reference captureidentity.Reference) *captureState {
 type Manager struct {
 	repository   Repository
 	environments environment.SnapshotResolver
+	activity     CaptureActivity
 	clock        Clock
 	leafCache    LeafCacheInvalidator
 	lifecycle    *lifecycleGate
@@ -78,12 +87,13 @@ var (
 )
 
 func NewManager(options Options) (*Manager, error) {
-	if options.Repository == nil || options.Environments == nil || options.Clock == nil {
+	if options.Repository == nil || options.Environments == nil ||
+		options.Activity == nil || options.Clock == nil {
 		return nil, errors.New("Capture assignment dependencies are incomplete")
 	}
 	return &Manager{
 		repository: options.Repository, environments: options.Environments,
-		clock:     options.Clock,
+		activity: options.Activity, clock: options.Clock,
 		leafCache: options.LeafCacheInvalidator,
 		lifecycle: newLifecycleGate(), states: make(map[string]*captureState),
 		environmentGates: make(map[environment.EnvironmentID]*semaphore.Weighted),
@@ -633,6 +643,13 @@ func (manager *Manager) affectedCaptures(ctx context.Context, environmentID envi
 	for _, assignment := range assignments {
 		if assignment.Validate() != nil || assignment.EnvironmentID != environmentID {
 			return nil, ErrAssignmentUnavailable
+		}
+		active, err := manager.activity.Active(ctx, assignment.Capture)
+		if err != nil {
+			return nil, errors.Join(ErrAssignmentUnavailable, err)
+		}
+		if !active {
+			continue
 		}
 		state := manager.state(assignment.Capture)
 		state.mu.Lock()

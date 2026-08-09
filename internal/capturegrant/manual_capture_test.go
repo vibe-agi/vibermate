@@ -286,7 +286,11 @@ func TestManualCaptureUsesEnvironmentAssignmentAuthorityForTransparentAndSemanti
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			repository := &manualAssignmentRepository{}
-			assignments, err := captureassignment.NewManager(captureassignment.DefaultOptions(repository, resolver))
+			assignments, err := captureassignment.NewManager(captureassignment.DefaultOptions(
+				repository,
+				resolver,
+				manualCaptureActivity{},
+			))
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -335,6 +339,15 @@ func TestManualCaptureUsesEnvironmentAssignmentAuthorityForTransparentAndSemanti
 			}
 		})
 	}
+}
+
+type manualCaptureActivity struct{}
+
+func (manualCaptureActivity) Active(
+	context.Context,
+	captureidentity.Reference,
+) (bool, error) {
+	return true, nil
 }
 
 func TestManualCaptureReviewFailsClosedWhenEnvironmentChangesBeforeCreate(t *testing.T) {

@@ -493,6 +493,7 @@ type Recovery struct {
 }
 
 type Repository interface {
+	ActivityReader
 	Create(context.Context, DurableRecord) error
 	AuthorizeProxy(
 		ctx context.Context,
@@ -526,6 +527,13 @@ type Repository interface {
 	Get(context.Context, string) (View, error)
 	Recover(context.Context, time.Time) (Recovery, error)
 	RevokeActive(context.Context, time.Time) (int, error)
+}
+
+// ActivityReader is an internal lifecycle projection. It deliberately returns
+// only whether a Capture is still live; control-plane callers use Reader and
+// cannot obtain this unscoped storage read.
+type ActivityReader interface {
+	Active(context.Context, string, time.Time) (bool, error)
 }
 
 // PageRequest bounds a read of the run list.

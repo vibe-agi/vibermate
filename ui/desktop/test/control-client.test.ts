@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import {
   ControlContractError,
+  ControlProblem,
   createControlClient,
   type DesktopSession,
 } from "../src/control-client.ts";
@@ -75,6 +76,36 @@ function sessionAwareFetch(
 }
 
 describe("Environment-first desktop control client", () => {
+  it("preserves a missing Environment draft as a typed control Problem", async () => {
+    const fetch = sessionAwareFetch((url) => {
+      expect(url.pathname).toBe("/api/v1/environments/work/draft");
+      return new Response(
+        JSON.stringify({
+          type: "urn:vibermate:error:environment-draft-not-found",
+          title: "Not Found",
+          status: 404,
+          code: "environment_draft_not_found",
+        }) + "\n",
+        {
+          status: 404,
+          headers: {
+            "Cache-Control": "no-store",
+            "Content-Type": "application/problem+json",
+          },
+        },
+      );
+    });
+    const client = await createControlClient(session(), fetch);
+
+    const error = await client.environmentDraft("work").catch((reason: unknown) => reason);
+    expect(error).toBeInstanceOf(ControlProblem);
+    expect(error).toMatchObject({
+      status: 404,
+      reasonCode: "environment_draft_not_found",
+      messageKey: "error.environment_draft_not_found",
+    });
+  });
+
   it("uses the read capability and accepts only the new Environment directory", async () => {
     const fetch = sessionAwareFetch((url, init) => {
       expect(url.pathname).toBe("/api/v1/environments");
