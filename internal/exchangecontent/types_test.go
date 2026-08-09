@@ -87,6 +87,52 @@ func TestMetadataOnlyRetainsShapeUsageAndNoContent(t *testing.T) {
 	}
 }
 
+func TestProviderThinkingHistoryNeverEntersContentEvidence(t *testing.T) {
+	t.Parallel()
+
+	request, response := evidenceFixture(t)
+	extension, err := protocolcore.NewProviderExtension(
+		protocolcore.ProviderExtensionSourceAnthropicMessages,
+		protocolcore.ProviderExtensionThinking,
+		"$.messages[1].content[0]",
+		[][]byte{[]byte(`{"type":"thinking","thinking":"private-provider-reasoning","signature":"opaque-signature"}`)},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	block, err := protocolcore.NewProviderExtensionBlock(extension)
+	if err != nil {
+		t.Fatal(err)
+	}
+	request.Messages = append(request.Messages, protocolcore.Message{
+		Role: protocolcore.RoleAssistant, Blocks: []protocolcore.ContentBlock{block},
+	})
+	record, err := NewRecord(
+		"exchange-provider-history",
+		frozenFixture(),
+		environment.DefaultContentRecordingPolicy(),
+		time.Date(2026, 8, 9, 1, 2, 3, 0, time.UTC),
+		request,
+		&response,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	encoded, err := CanonicalJSON(record)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if bytes.Contains(encoded, []byte("private-provider-reasoning")) ||
+		bytes.Contains(encoded, []byte("opaque-signature")) {
+		t.Fatalf("content evidence retained provider-private history: %s", encoded)
+	}
+	projected := record.Request.Messages[1].Blocks[0]
+	if projected.Kind != string(protocolcore.BlockProviderExtension) ||
+		projected.Availability != AvailabilityOmitted || projected.OriginalSize == 0 {
+		t.Fatalf("provider extension projection = %+v", projected)
+	}
+}
+
 func TestDisabledRecordingCannotCreateAHiddenContentRecord(t *testing.T) {
 	t.Parallel()
 	request, response := evidenceFixture(t)

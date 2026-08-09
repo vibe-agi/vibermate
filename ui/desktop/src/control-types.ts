@@ -411,6 +411,12 @@ export interface ExchangeDetail {
   readonly status: ActivityStatus;
   readonly environment: FrozenEnvironmentRef;
   readonly parentRefs: ActivityParentRefs;
+  readonly diagnosis?: {
+    readonly providerStatus?: number;
+    readonly providerField?: string;
+    readonly clientField?: string;
+    readonly clientPath?: string;
+  };
   readonly processingTrace: {
     readonly egressProxyId?: string;
     readonly pluginRunIds: readonly string[];
@@ -421,7 +427,7 @@ export interface ExchangeDetail {
 }
 
 export interface ExchangeContentBlock {
-  readonly kind: "text" | "refusal" | "tool_call" | "tool_result";
+  readonly kind: "text" | "refusal" | "tool_call" | "tool_result" | "provider_extension";
   readonly availability: "recorded" | "omitted";
   readonly text?: string;
   readonly originalSize: number;

@@ -8,6 +8,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/vibe-agi/vibermate/internal/protocolcore"
 	"github.com/vibe-agi/vibermate/internal/protocolspec"
 )
 
@@ -85,6 +86,86 @@ func TestMessagesProtocolPathPreservesCompatibleWireAndAppliesModel(t *testing.T
 	}
 	if !bytes.Equal(clientBody, providerBody) {
 		t.Fatalf("compatible response was rewritten:\n%s", clientBody)
+	}
+}
+
+func TestMessagesProtocolPathPreservesThinkingHistoryForLaterTurns(t *testing.T) {
+	t.Parallel()
+
+	path, err := NewMessagesProtocolPath(DefaultOptions())
+	if err != nil {
+		t.Fatal(err)
+	}
+	source := []byte(`{
+		"model":"client-alias",
+		"max_tokens":64,
+		"messages":[
+			{"role":"assistant","content":[
+				{"type":"thinking","thinking":"private state","signature":"signed-state"},
+				{"type":"text","text":"first answer"}
+			]},
+			{"role":"user","content":[{"type":"text","text":"follow up"}]}
+		],
+		"stream":true
+	}`)
+	request, _, err := path.Client().DecodeRequest(source)
+	if err != nil {
+		t.Fatalf("DecodeRequest() error = %v", err)
+	}
+	if len(request.Messages) != 2 || len(request.Messages[0].Blocks) != 2 {
+		t.Fatalf("decoded messages = %+v", request.Messages)
+	}
+	extension := request.Messages[0].Blocks[0]
+	if extension.Kind != protocolcore.BlockProviderExtension ||
+		extension.ProviderExtension.Source() != protocolcore.ProviderExtensionSourceAnthropicMessages ||
+		extension.ProviderExtension.Kind() != protocolcore.ProviderExtensionThinking {
+		t.Fatalf("thinking extension = %+v", extension)
+	}
+
+	request, err = request.WithEffectiveModel("claude-provider-model")
+	if err != nil {
+		t.Fatal(err)
+	}
+	providerRequest, _, err := path.EncodeProviderRequest(request, source, nil)
+	if err != nil {
+		t.Fatalf("EncodeProviderRequest() error = %v", err)
+	}
+	var forwarded struct {
+		Model    string `json:"model"`
+		Messages []struct {
+			Content []json.RawMessage `json:"content"`
+		} `json:"messages"`
+	}
+	if err := json.Unmarshal(providerRequest.Body(), &forwarded); err != nil {
+		t.Fatal(err)
+	}
+	if forwarded.Model != "claude-provider-model" || len(forwarded.Messages) != 2 ||
+		len(forwarded.Messages[0].Content) != 2 ||
+		!bytes.Contains(forwarded.Messages[0].Content[0], []byte(`"signature":"signed-state"`)) {
+		t.Fatalf("forwarded thinking history = %s", providerRequest.Body())
+	}
+}
+
+func TestCrossDialectPathRejectsAnthropicThinkingHistory(t *testing.T) {
+	t.Parallel()
+
+	codec, err := New(DefaultOptions())
+	if err != nil {
+		t.Fatal(err)
+	}
+	request, _, err := codec.DecodeClientRequest([]byte(`{
+		"model":"client-alias",
+		"max_tokens":64,
+		"messages":[
+			{"role":"assistant","content":[{"type":"redacted_thinking","data":"opaque"}]},
+			{"role":"user","content":"follow up"}
+		]
+	}`))
+	if err != nil {
+		t.Fatalf("DecodeClientRequest() error = %v", err)
+	}
+	if _, _, err := codec.EncodeProviderRequest(request); err == nil {
+		t.Fatal("cross-dialect encoding accepted Anthropic provider history")
 	}
 }
 

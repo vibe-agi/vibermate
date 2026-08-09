@@ -2857,15 +2857,34 @@ function validActivityStatus(value: unknown): value is ActivityStatus {
 function requireExchangeDetail(value: unknown, expectedId: string): ExchangeDetail {
   if (
     !isRecord(value) ||
-    !hasClosedFields(value, ["id", "status", "environment", "parentRefs", "processingTrace", "content"]) ||
+    !hasClosedFields(value, ["id", "status", "environment", "parentRefs", "processingTrace", "content"], ["diagnosis"]) ||
     value.id !== expectedId ||
     !validActivityStatus(value.status) ||
     !validFrozenEnvironmentRef(value.environment) ||
     !validActivityParentRefs(value.parentRefs, expectedId) ||
+    (value.diagnosis !== undefined && !validExchangeDiagnosis(value.diagnosis)) ||
     !validExchangeTrace(value.processingTrace) ||
     !validExchangeContent(value.content)
   ) throw new ControlContractError();
   return value as unknown as ExchangeDetail;
+}
+
+function validExchangeDiagnosis(value: unknown): boolean {
+  if (!isRecord(value) || !hasClosedFields(
+    value,
+    [],
+    ["providerStatus", "providerField", "clientField", "clientPath"],
+  ) || Object.keys(value).length === 0) return false;
+  return (
+    (value.providerStatus === undefined ||
+      (typeof value.providerStatus === "number" && Number.isInteger(value.providerStatus) &&
+        value.providerStatus >= 100 && value.providerStatus <= 599)) &&
+    optionalIdentity(value.providerField) &&
+    optionalIdentity(value.clientField) &&
+    (value.clientPath === undefined ||
+      (typeof value.clientPath === "string" && value.clientPath.length > 0 && value.clientPath.length <= 256 &&
+        /^[A-Za-z0-9$._\-\[\]]+$/u.test(value.clientPath)))
+  );
 }
 
 function validExchangeContent(value: unknown): boolean {
@@ -2939,14 +2958,16 @@ function validExchangeContentBlock(value: unknown, mode: "full" | "metadata_only
     ["kind", "availability", "originalSize"],
     ["text", "callId", "toolName", "arguments", "toolError"],
   )) return false;
-  const expectedAvailability = mode === "full" ? "recorded" : "omitted";
-  if ((value.kind !== "text" && value.kind !== "refusal" && value.kind !== "tool_call" && value.kind !== "tool_result") ||
+  const expectedAvailability = mode === "full" && value.kind !== "provider_extension" ? "recorded" : "omitted";
+  if ((value.kind !== "text" && value.kind !== "refusal" && value.kind !== "tool_call" &&
+      value.kind !== "tool_result" && value.kind !== "provider_extension") ||
     value.availability !== expectedAvailability || !nonNegativeInteger(value.originalSize) ||
     (value.text !== undefined && typeof value.text !== "string") ||
     !optionalIdentity(value.callId) || !optionalIdentity(value.toolName) ||
     (value.arguments !== undefined && !isRecord(value.arguments)) ||
     (value.toolError !== undefined && typeof value.toolError !== "boolean")) return false;
-  if (mode === "metadata_only" && (value.text !== undefined || value.arguments !== undefined)) return false;
+  if ((mode === "metadata_only" || value.kind === "provider_extension") &&
+    (value.text !== undefined || value.arguments !== undefined)) return false;
   return true;
 }
 

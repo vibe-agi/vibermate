@@ -82,8 +82,19 @@ type ExchangeDetail struct {
 	Status          string                  `json:"status"`
 	Environment     FrozenEnvironmentRef    `json:"environment"`
 	ParentRefs      ActivityParentRefs      `json:"parentRefs"`
+	Diagnosis       *ExchangeDiagnosis      `json:"diagnosis,omitempty"`
 	ProcessingTrace ExchangeProcessingTrace `json:"processingTrace"`
 	Content         ExchangeContentDetail   `json:"content"`
+}
+
+// ExchangeDiagnosis is deliberately structural. It identifies the side and
+// shape that failed without carrying request values, provider text, or
+// credentials into the control plane.
+type ExchangeDiagnosis struct {
+	ProviderStatus int    `json:"providerStatus,omitempty"`
+	ProviderField  string `json:"providerField,omitempty"`
+	ClientField    string `json:"clientField,omitempty"`
+	ClientPath     string `json:"clientPath,omitempty"`
 }
 
 type ExchangeContentState string
@@ -96,8 +107,8 @@ const (
 type ExchangeContentDetail struct {
 	State      ExchangeContentState      `json:"state"`
 	Mode       string                    `json:"mode,omitempty"`
-	RecordedAt time.Time                 `json:"recordedAt,omitempty"`
-	ExpiresAt  time.Time                 `json:"expiresAt,omitempty"`
+	RecordedAt *time.Time                `json:"recordedAt,omitempty"`
+	ExpiresAt  *time.Time                `json:"expiresAt,omitempty"`
 	Request    *exchangecontent.Request  `json:"request,omitempty"`
 	Response   *exchangecontent.Response `json:"response,omitempty"`
 }
@@ -231,6 +242,14 @@ func exchangeDetailOf(
 		ProcessingTrace: ExchangeProcessingTrace{PluginRunIDs: []string{}, Attempts: ordered, Result: result},
 		Content:         ExchangeContentDetail{State: ExchangeContentNotRecorded},
 	}
+	if record.Diagnosis != nil && !record.Diagnosis.Empty() {
+		detail.Diagnosis = &ExchangeDiagnosis{
+			ProviderStatus: record.Diagnosis.ProviderStatus,
+			ProviderField:  record.Diagnosis.ProviderField,
+			ClientField:    record.Diagnosis.ClientField,
+			ClientPath:     record.Diagnosis.ClientPath,
+		}
+	}
 	if content != nil {
 		if content.Validate() != nil || content.ExchangeID != record.SubjectID ||
 			content.Frozen.EnvironmentID != record.EnvironmentID ||
@@ -245,9 +264,11 @@ func exchangeDetailOf(
 			return ExchangeDetail{}, errors.New("Exchange content does not match frozen Activity evidence")
 		}
 		requestView := content.Request
+		recordedAt := content.RecordedAt
+		expiresAt := content.ExpiresAt
 		detail.Content = ExchangeContentDetail{
 			State: ExchangeContentRecorded, Mode: string(content.Mode),
-			RecordedAt: content.RecordedAt, ExpiresAt: content.ExpiresAt,
+			RecordedAt: &recordedAt, ExpiresAt: &expiresAt,
 			Request: &requestView,
 		}
 		if content.Response != nil {

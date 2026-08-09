@@ -203,10 +203,14 @@ test("opens a request through its frozen Environment to the exact attempt", asyn
   await expect(page.getByRole("heading", { name: "Inspection plan" })).toBeVisible();
   await expect(page.getByText("Read the package manifest", { exact: true })).toBeVisible();
   await expect(page.getByText("pnpm test", { exact: true })).toBeVisible();
+  await expect(page.getByText("Provider reasoning state preserved, not displayed · 96 bytes", { exact: true })).toBeVisible();
   await expect(page.getByText("Image reference not loaded: Remote diagram", { exact: true })).toBeVisible();
   await expect(page.locator(".markdown-evidence img")).toHaveCount(0);
   await page.locator(".context-disclosure > summary").click();
   await expect(page.getByText(/System context marker/iu)).toBeVisible();
+  const wrappedEvidence = page.locator(".context-disclosure .markdown-evidence pre");
+  await expect(wrappedEvidence).toBeVisible();
+  expect(await wrappedEvidence.evaluate((element) => element.scrollWidth <= element.clientWidth + 1)).toBe(true);
   await expect(page.getByText("read_file", { exact: true })).toBeVisible();
   await expect(page.getByText("Proposed by the model", { exact: true })).toBeVisible();
   await expect(page.getByText("120", { exact: true })).toBeVisible();
@@ -215,6 +219,22 @@ test("opens a request through its frozen Environment to the exact attempt", asyn
   await expect(page.getByText("Approval expired", { exact: true }).first()).toBeVisible();
   await expect(page.getByText("List the packages in this workspace.", { exact: true })).toBeVisible();
   await expect(page.locator("body")).not.toContainText("/Users/");
+  expect(errors).toEqual([]);
+});
+
+test("keeps an early unsupported request diagnosable without retained content", async ({ page }) => {
+  const errors = collectBrowserErrors(page);
+  await openPreview(page, "captures/requests");
+  const row = page.getByRole("row").filter({ hasText: "Unsupported request content" });
+  await expect(row).toBeVisible();
+  await row.getByRole("link").click();
+
+  await expect(page.getByRole("heading", { name: "Request trace" })).toBeVisible();
+  await expect(page.getByText("Unsupported request content", { exact: true }).first()).toBeVisible();
+  await expect(page.getByText("ViberMate stopped before sending this request upstream.", { exact: true })).toBeVisible();
+  await expect(page.getByText("messages · $.messages[2].content[0].type", { exact: true })).toBeVisible();
+  await expect(page.getByText("The local runtime returned an incompatible response.", { exact: true })).toHaveCount(0);
+  await expect(page.getByText("Content was not recorded", { exact: true })).toHaveCount(0);
   expect(errors).toEqual([]);
 });
 

@@ -22,6 +22,7 @@ import type {
   ExchangeContentBlock,
   ExchangeContentDetail,
   ExchangeContentMessage,
+  ExchangeDetail,
   EgressAttemptRecord,
   ProviderAccountKind,
   ProviderAccountRecord,
@@ -152,7 +153,10 @@ export function ExchangeRoutePage({ exchangeId }: { readonly exchangeId: string 
               <SectionHeading title={t("exchange.inspector.title")} />
               {detail.content.state === "recorded" && <span className="recording-state">{t(`exchange.content.mode.${detail.content.mode ?? "full"}`)}</span>}
             </div>
-            {detail.content.state === "not_recorded" || detail.content.request === undefined
+            {detail.diagnosis !== undefined && <RequestDiagnosis diagnosis={detail.diagnosis} result={detail.processingTrace.result} />}
+            {detail.content.state === "not_recorded" && detail.diagnosis !== undefined
+              ? null
+              : detail.content.state === "not_recorded" || detail.content.request === undefined
               ? <EmptyState description={t("exchange.content.empty.description")} title={t("exchange.content.empty.title")} />
               : <div className="conversation-evidence">
                   <div className="content-retention">
@@ -178,6 +182,31 @@ export function ExchangeRoutePage({ exchangeId }: { readonly exchangeId: string 
           </section>
         </div>
       </section>
+    </div>
+  );
+}
+
+function RequestDiagnosis({ diagnosis, result }: {
+  readonly diagnosis: NonNullable<ExchangeDetail["diagnosis"]>;
+  readonly result: string;
+}) {
+  const { t } = useTranslation();
+  const reasonKey = requestReasonKey(result);
+  const clientLocation = [diagnosis.clientField, diagnosis.clientPath].filter((value) => value !== undefined).join(" · ");
+  const providerLocation = diagnosis.providerField;
+  return (
+    <div className="request-diagnosis" role="status">
+      <div>
+        <strong>{reasonKey === undefined ? result : t(reasonKey)}</strong>
+        <p>{diagnosis.clientField === undefined && diagnosis.clientPath === undefined
+          ? t("exchange.diagnosis.provider.description")
+          : t("exchange.diagnosis.client.description")}</p>
+      </div>
+      <dl>
+        {clientLocation === "" ? null : <><dt>{t("exchange.diagnosis.client.location")}</dt><dd><code>{clientLocation}</code></dd></>}
+        {diagnosis.providerStatus === undefined ? null : <><dt>{t("exchange.diagnosis.provider.status")}</dt><dd>{diagnosis.providerStatus}</dd></>}
+        {providerLocation === undefined ? null : <><dt>{t("exchange.diagnosis.provider.field")}</dt><dd><code>{providerLocation}</code></dd></>}
+      </dl>
     </div>
   );
 }
@@ -271,6 +300,7 @@ function ExchangeBlocks({ blocks }: { readonly blocks: readonly ExchangeContentB
   const { t } = useTranslation();
   return <div className="exchange-blocks">{blocks.map((block, index) => {
     const key = `${block.kind}:${block.callId ?? index}`;
+    if (block.kind === "provider_extension") return <div className="omitted-content provider-extension" key={key}>{t("exchange.content.providerExtension", { bytes: block.originalSize })}</div>;
     if (block.availability === "omitted") return <div className="omitted-content" key={key}>{t("exchange.content.omitted", { bytes: block.originalSize })}</div>;
     if (block.kind === "tool_call") return <details className="tool-evidence tool-call" key={key}><summary><strong>{block.toolName}</strong><span>{t("exchange.tool.proposed")}</span></summary>{block.arguments !== undefined && <pre>{JSON.stringify(block.arguments, null, 2)}</pre>}</details>;
     if (block.kind === "tool_result") return <details className={`tool-evidence tool-result${block.toolError === true ? " failed" : ""}`} key={key}><summary><strong>{t("exchange.tool.result")}</strong><span>{block.toolError === true ? t("exchange.tool.failed") : t("exchange.tool.reported")}</span></summary><pre>{block.text}</pre></details>;

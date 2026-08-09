@@ -43,10 +43,11 @@ const (
 type BlockKind string
 
 const (
-	BlockText       BlockKind = "text"
-	BlockRefusal    BlockKind = "refusal"
-	BlockToolCall   BlockKind = "tool_call"
-	BlockToolResult BlockKind = "tool_result"
+	BlockText              BlockKind = "text"
+	BlockRefusal           BlockKind = "refusal"
+	BlockToolCall          BlockKind = "tool_call"
+	BlockToolResult        BlockKind = "tool_result"
+	BlockProviderExtension BlockKind = "provider_extension"
 )
 
 type StopReason string
@@ -238,11 +239,12 @@ func (result ToolResult) Validate() error {
 }
 
 type ContentBlock struct {
-	Kind       BlockKind
-	Text       string
-	Refusal    string
-	ToolCall   ToolCall
-	ToolResult ToolResult
+	Kind              BlockKind
+	Text              string
+	Refusal           string
+	ToolCall          ToolCall
+	ToolResult        ToolResult
+	ProviderExtension ProviderExtension
 }
 
 func NewTextBlock(text string) (ContentBlock, error) {
@@ -273,6 +275,16 @@ func NewToolResultBlock(result ToolResult) (ContentBlock, error) {
 	return ContentBlock{Kind: BlockToolResult, ToolResult: result}, nil
 }
 
+func NewProviderExtensionBlock(extension ProviderExtension) (ContentBlock, error) {
+	if err := extension.Validate(); err != nil {
+		return ContentBlock{}, err
+	}
+	return ContentBlock{
+		Kind:              BlockProviderExtension,
+		ProviderExtension: extension.Clone(),
+	}, nil
+}
+
 func (block ContentBlock) Validate() error {
 	switch block.Kind {
 	case BlockText:
@@ -283,6 +295,8 @@ func (block ContentBlock) Validate() error {
 		return block.ToolCall.Validate()
 	case BlockToolResult:
 		return block.ToolResult.Validate()
+	case BlockProviderExtension:
+		return block.ProviderExtension.Validate()
 	default:
 		return errors.New("content block kind is unsupported")
 	}
@@ -291,6 +305,7 @@ func (block ContentBlock) Validate() error {
 func (block ContentBlock) Clone() ContentBlock {
 	cloned := block
 	cloned.ToolCall = block.ToolCall.Clone()
+	cloned.ProviderExtension = block.ProviderExtension.Clone()
 	return cloned
 }
 
@@ -324,7 +339,8 @@ func (message Message) Validate() error {
 		case RoleAssistant:
 			if block.Kind != BlockText &&
 				block.Kind != BlockRefusal &&
-				block.Kind != BlockToolCall {
+				block.Kind != BlockToolCall &&
+				block.Kind != BlockProviderExtension {
 				return errors.New("assistant message contains an unsupported block")
 			}
 		case RoleTool:
@@ -877,9 +893,22 @@ func (request Request) Validate() error {
 	if len(request.Messages) == 0 || len(request.Messages) > MaxMessageCount {
 		return errors.New("message count is invalid")
 	}
+	providerExtensionCount := 0
+	providerExtensionBytes := 0
 	for index, message := range request.Messages {
 		if err := message.Validate(); err != nil {
 			return fmt.Errorf("message %d: %w", index, err)
+		}
+		for _, block := range message.Blocks {
+			if block.Kind != BlockProviderExtension {
+				continue
+			}
+			providerExtensionCount++
+			providerExtensionBytes += block.ProviderExtension.byteSize()
+			if providerExtensionCount > MaxProviderExtensions ||
+				providerExtensionBytes > MaxProviderExtensionBytes {
+				return errors.New("provider extensions exceed the request limit")
+			}
 		}
 	}
 	if len(request.Tools) > MaxToolCount ||
@@ -1043,10 +1072,13 @@ type ProviderExtensionSource string
 type ProviderExtensionKind string
 
 const (
-	ProviderExtensionSourceOpenAIChat ProviderExtensionSource = "openai-chat"
+	ProviderExtensionSourceOpenAIChat        ProviderExtensionSource = "openai-chat"
+	ProviderExtensionSourceAnthropicMessages ProviderExtensionSource = "anthropic-messages"
 
 	ProviderExtensionReasoningContent ProviderExtensionKind = "reasoning_content"
 	ProviderExtensionReasoningUsage   ProviderExtensionKind = "reasoning_usage"
+	ProviderExtensionThinking         ProviderExtensionKind = "thinking"
+	ProviderExtensionRedactedThinking ProviderExtensionKind = "redacted_thinking"
 )
 
 // ProviderExtension preserves provider-specific JSON values without
@@ -1103,13 +1135,17 @@ func (extension ProviderExtension) Validate() error {
 	}
 	switch extension.source {
 	case ProviderExtensionSourceOpenAIChat:
+		if extension.kind != ProviderExtensionReasoningContent &&
+			extension.kind != ProviderExtensionReasoningUsage {
+			return errors.New("provider extension kind is unsupported for OpenAI Chat")
+		}
+	case ProviderExtensionSourceAnthropicMessages:
+		if extension.kind != ProviderExtensionThinking &&
+			extension.kind != ProviderExtensionRedactedThinking {
+			return errors.New("provider extension kind is unsupported for Anthropic Messages")
+		}
 	default:
 		return errors.New("provider extension source is unsupported")
-	}
-	switch extension.kind {
-	case ProviderExtensionReasoningContent, ProviderExtensionReasoningUsage:
-	default:
-		return errors.New("provider extension kind is unsupported")
 	}
 	if err := validateText("provider extension path", extension.path, 1024, false); err != nil {
 		return err

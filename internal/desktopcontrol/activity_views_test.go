@@ -2,6 +2,7 @@ package desktopcontrol
 
 import (
 	"encoding/base64"
+	"encoding/json"
 	"strings"
 	"testing"
 	"time"
@@ -65,6 +66,10 @@ func TestExchangeDetailProjectsOrderedRedactedEvidence(t *testing.T) {
 		SourceDisplayName:      "ViberMate runtime",
 		SourceRecognition:      activity.SourceRecognitionUnknown,
 		ConnectionID:           "connection-detail",
+		Diagnosis: &activity.Diagnosis{
+			ClientField: "messages",
+			ClientPath:  "$.messages[2].content[0].type",
+		},
 	}
 	detail, err := exchangeDetailOf(record, egressaudit.Page{
 		Items: []egressaudit.Record{
@@ -89,8 +94,19 @@ func TestExchangeDetailProjectsOrderedRedactedEvidence(t *testing.T) {
 		detail.ProcessingTrace.Attempts[0].Parent.ID != "attempt-1" ||
 		detail.ProcessingTrace.Attempts[1].ID != "egress-1" ||
 		detail.ProcessingTrace.Attempts[2].ID != "egress-2" ||
-		detail.ProcessingTrace.Attempts[2].TargetOrigin != "https://provider.example:443" {
+		detail.ProcessingTrace.Attempts[2].TargetOrigin != "https://provider.example:443" ||
+		detail.Diagnosis == nil || detail.Diagnosis.ClientField != "messages" ||
+		detail.Diagnosis.ClientPath != "$.messages[2].content[0].type" {
 		t.Fatalf("Exchange detail = %+v", detail)
+	}
+	wire, err := json.Marshal(detail)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(wire), `"recordedAt"`) ||
+		strings.Contains(string(wire), `"expiresAt"`) ||
+		!strings.Contains(string(wire), `"content":{"state":"not_recorded"}`) {
+		t.Fatalf("not-recorded wire = %s", wire)
 	}
 	if _, err := exchangeDetailOf(record, egressaudit.Page{
 		NextCursor: "more-evidence",
@@ -147,6 +163,7 @@ func TestExchangeDetailJoinsOnlyMatchingFrozenConversationEvidence(t *testing.T)
 	}
 	if detail.Content.State != ExchangeContentRecorded ||
 		detail.Content.Mode != string(environment.ContentRecordingFull) ||
+		detail.Content.RecordedAt == nil || detail.Content.ExpiresAt == nil ||
 		detail.Content.Request == nil ||
 		detail.Content.Request.Messages[0].Blocks[0].Text != "inspect this" ||
 		detail.Content.Response == nil ||

@@ -316,7 +316,8 @@ func (block Block) validate(mode environment.ContentRecordingMode) error {
 		return ErrInvalidEvidence
 	}
 	expected := AvailabilityOmitted
-	if mode == environment.ContentRecordingFull {
+	if mode == environment.ContentRecordingFull &&
+		protocolcore.BlockKind(block.Kind) != protocolcore.BlockProviderExtension {
 		expected = AvailabilityRecorded
 	}
 	if block.Availability != expected {
@@ -341,6 +342,11 @@ func (block Block) validate(mode environment.ContentRecordingMode) error {
 	case protocolcore.BlockToolResult:
 		if !validIdentity(block.CallID, 512) || block.ToolName != "" || len(block.Arguments) != 0 {
 			return fmt.Errorf("%w: tool result metadata is invalid", ErrInvalidEvidence)
+		}
+	case protocolcore.BlockProviderExtension:
+		if block.Availability != AvailabilityOmitted || block.CallID != "" ||
+			block.ToolName != "" || len(block.Arguments) != 0 || block.ToolError {
+			return fmt.Errorf("%w: provider extension retained wire content", ErrInvalidEvidence)
 		}
 	default:
 		return fmt.Errorf("%w: block kind is unsupported", ErrInvalidEvidence)
@@ -425,6 +431,13 @@ func blockViews(blocks []protocolcore.ContentBlock, full bool) []Block {
 			if full {
 				view.Availability = AvailabilityRecorded
 				view.Text = sanitizeText(block.ToolResult.Content)
+			}
+		case protocolcore.BlockProviderExtension:
+			// Provider-private reasoning history is required for compatible
+			// forwarding but never becomes inspectable conversation content.
+			// Retain only its bounded byte count in the evidence projection.
+			for _, fragment := range block.ProviderExtension.Fragments() {
+				view.OriginalSize += len(fragment)
 			}
 		}
 		result = append(result, view)

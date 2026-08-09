@@ -1,6 +1,7 @@
 import type { ActivityStatus } from "./control-types.ts";
 
 const reasonKeys = {
+  unsupported_client_input: "requests.reason.unsupported_client_input",
   tool_decision_expired: "requests.reason.tool_decision_expired",
   tool_decision_rejected: "requests.reason.tool_decision_rejected",
   tool_decision_unavailable: "requests.reason.tool_decision_unavailable",

@@ -257,8 +257,15 @@ const previewExchange: ExchangeDetail = {
         blocks: [{
           kind: "text",
           availability: "recorded",
-          text: "System context marker: this long-running agent context is available for forensic inspection but should not dominate the initial view.",
+          text: "System context marker: this long-running agent context is available for forensic inspection but should not dominate the initial view.\n\n```text\nIMPORTANT: this_context_identifier_is_deliberately_long_and_must_wrap_inside_the_evidence_panel_without_deforming_the_request_inspector_layout\n```",
           originalSize: 127,
+        }],
+      }, {
+        role: "assistant",
+        blocks: [{
+          kind: "provider_extension",
+          availability: "omitted",
+          originalSize: 96,
         }],
       }, {
         role: "user",
@@ -345,6 +352,27 @@ const earlierPreviewExchange: ExchangeDetail = {
       }],
     },
   },
+};
+
+const unsupportedPreviewExchange: ExchangeDetail = {
+  ...previewExchange,
+  id: "exchange-preview-unsupported",
+  status: "failed",
+  parentRefs: {
+    captureRunId: "run-unsupported",
+    connectionId: "connection-unsupported",
+    exchangeId: "exchange-preview-unsupported",
+  },
+  diagnosis: {
+    clientField: "messages",
+    clientPath: "$.messages[2].content[0].type",
+  },
+  processingTrace: {
+    pluginRunIds: [],
+    attempts: [],
+    result: "unsupported_client_input",
+  },
+  content: { state: "not_recorded" },
 };
 
 const pendingApproval: ApprovalView = {
@@ -774,6 +802,7 @@ class PreviewControlClient implements ControlClient {
     const items = [
       { detail: previewExchange, occurredAt: laterTimestamp },
       { detail: earlierPreviewExchange, occurredAt: timestamp },
+      { detail: unsupportedPreviewExchange, occurredAt: "2026-08-08T08:02:00.000Z" },
     ].map(({ detail, occurredAt }) => ({
       id: detail.id,
       occurredAt,
@@ -794,6 +823,7 @@ class PreviewControlClient implements ControlClient {
     this.requireOpen();
     if (exchangeId === previewExchange.id) return clone(previewExchange);
     if (exchangeId === earlierPreviewExchange.id) return clone(earlierPreviewExchange);
+    if (exchangeId === unsupportedPreviewExchange.id) return clone(unsupportedPreviewExchange);
     throw this.notFound();
   }
 

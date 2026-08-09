@@ -273,8 +273,8 @@ input, select { width: 100%; min-height: 32px; border: 1px solid var(--border-st
 .markdown-evidence blockquote { border-left: 3px solid var(--border-strong); padding-left: 10px; color: var(--muted); }
 .markdown-evidence a { color: var(--signal); text-decoration: underline; text-underline-offset: 2px; }
 .markdown-evidence code { border-radius: 3px; padding: .08em .28em; background: var(--canvas); }
-.markdown-evidence pre { max-width: 100%; overflow: auto; border: 1px solid var(--border); border-radius: 5px; padding: 9px; background: var(--canvas); font: 11px/1.55 var(--mono); }
-.markdown-evidence pre code { padding: 0; background: transparent; }
+.markdown-evidence pre { min-width: 0; max-width: 100%; overflow-x: hidden; border: 1px solid var(--border); border-radius: 5px; padding: 9px; background: var(--canvas); font: 11px/1.55 var(--mono); white-space: pre-wrap; overflow-wrap: anywhere; word-break: break-word; }
+.markdown-evidence pre code { padding: 0; background: transparent; white-space: inherit; overflow-wrap: inherit; word-break: inherit; }
 .markdown-evidence table { display: block; max-width: 100%; overflow-x: auto; border-collapse: collapse; }
 .markdown-evidence th, .markdown-evidence td { border: 1px solid var(--border); padding: 5px 7px; text-align: left; }
 .markdown-evidence th { background: var(--raised); }
@@ -288,6 +288,13 @@ input, select { width: 100%; min-height: 32px; border: 1px solid var(--border-st
 .tool-evidence span { color: var(--muted); font-size: 10px; }
 .tool-evidence pre { max-height: 260px; margin: 0; overflow: auto; border-top: 1px solid var(--border); padding: 8px; color: var(--text); background: var(--canvas); font: 11px/1.45 var(--mono); white-space: pre-wrap; overflow-wrap: anywhere; }
 .tool-evidence.failed { border-color: var(--deny); }
+.request-diagnosis { display: grid; grid-template-columns: minmax(0, 1fr) minmax(180px, auto); gap: 12px 24px; margin: 0 12px 12px; border-left: 3px solid var(--deny); padding: 10px 12px; background: var(--deny-soft); }
+.request-diagnosis strong { color: var(--deny); }
+.request-diagnosis p { margin: 3px 0 0; color: var(--muted); font-size: 12px; }
+.request-diagnosis dl { display: grid; grid-template-columns: max-content minmax(0, 1fr); align-content: start; gap: 3px 8px; margin: 0; font-size: 11px; }
+.request-diagnosis dt { color: var(--quiet); font-weight: 700; text-transform: uppercase; }
+.request-diagnosis dd { min-width: 0; margin: 0; overflow-wrap: anywhere; }
+@media (max-width: 720px) { .request-diagnosis { grid-template-columns: 1fr; } }
 .usage-strip { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); margin: 0; border-top: 1px solid var(--border); }
 .usage-strip > div { padding: 6px 8px; border-right: 1px solid var(--border); }
 .usage-strip > div:last-child { border-right: 0; }

@@ -76,6 +76,50 @@ function sessionAwareFetch(
 }
 
 describe("Environment-first desktop control client", () => {
+  it("accepts structural failure diagnosis without inventing content timestamps", async () => {
+    const detail = {
+      id: "exchange-failed",
+      status: "failed",
+      environment: {
+        id: "work",
+        revision: 3,
+        digest,
+        clientEndpointId: "endpoint.claude",
+        clientEndpointRevision: 2,
+        protocolPlanId: "plan.claude",
+        protocolPlanRevision: 2,
+        routeId: "route.claude",
+        routeRevision: 2,
+      },
+      parentRefs: { captureRunId: "run-failed", exchangeId: "exchange-failed" },
+      diagnosis: {
+        clientField: "messages",
+        clientPath: "$.messages[2].content[0].type",
+      },
+      processingTrace: {
+        pluginRunIds: [],
+        attempts: [],
+        result: "unsupported_client_input",
+      },
+      content: { state: "not_recorded" },
+    } as const;
+    const client = await createControlClient(
+      session(),
+      sessionAwareFetch(() => jsonResponse(detail)),
+    );
+
+    await expect(client.exchange(detail.id)).resolves.toEqual(detail);
+
+    const invalidClient = await createControlClient(
+      session(),
+      sessionAwareFetch(() => jsonResponse({
+        ...detail,
+        content: { state: "not_recorded", recordedAt: "0001-01-01T00:00:00Z" },
+      })),
+    );
+    await expect(invalidClient.exchange(detail.id)).rejects.toBeInstanceOf(ControlContractError);
+  });
+
   it("preserves a missing Environment draft as a typed control Problem", async () => {
     const fetch = sessionAwareFetch((url) => {
       expect(url.pathname).toBe("/api/v1/environments/work/draft");

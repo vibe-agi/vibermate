@@ -813,6 +813,41 @@ func (codec *Codec) decodeMessage(
 				report = report.Merge(cacheNotice(path + ".cache_control"))
 			}
 
+		case "thinking", "redacted_thinking":
+			if role != protocolcore.RoleAssistant {
+				return protocolcore.Message{}, report, protocolcore.NewFailure(
+					protocolcore.ReasonInvalidClientRequest,
+					path,
+					errors.New("provider thinking block is not in an assistant message"),
+				)
+			}
+			kind := protocolcore.ProviderExtensionThinking
+			if header.Type == "redacted_thinking" {
+				kind = protocolcore.ProviderExtensionRedactedThinking
+			}
+			extension, err := protocolcore.NewProviderExtension(
+				protocolcore.ProviderExtensionSourceAnthropicMessages,
+				kind,
+				path,
+				[][]byte{rawBlock},
+			)
+			if err != nil {
+				return protocolcore.Message{}, report, protocolcore.NewFailure(
+					protocolcore.ReasonInvalidClientRequest,
+					path,
+					err,
+				)
+			}
+			block, err := protocolcore.NewProviderExtensionBlock(extension)
+			if err != nil {
+				return protocolcore.Message{}, report, protocolcore.NewFailure(
+					protocolcore.ReasonInvalidClientRequest,
+					path,
+					err,
+				)
+			}
+			blocks = append(blocks, block)
+
 		default:
 			return protocolcore.Message{}, report, protocolcore.NewFailure(
 				protocolcore.ReasonUnsupportedClientInput,
