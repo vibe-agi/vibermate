@@ -115,7 +115,13 @@ func buildEnvironment(
 		preserved["NODE_EXTRA_CA_CERTS"] = grant.RootPEMPath
 		preserved["NODE_USE_ENV_PROXY"] = "1"
 		if managedClientCredential {
-			preserved["ANTHROPIC_API_KEY"] = clientCredentialPlaceholder
+			// Claude Code treats ANTHROPIC_API_KEY as an explicit user
+			// credential and enters its custom-key onboarding flow. A managed
+			// Environment must instead use the documented gateway-token input:
+			// the placeholder only makes the client emit an authenticated
+			// request, then Core removes it and applies the selected account at
+			// the final provider boundary.
+			preserved["ANTHROPIC_AUTH_TOKEN"] = clientCredentialPlaceholder
 		}
 	case clientadapter.LaunchSSLCertFile:
 		preserved["SSL_CERT_FILE"] = grant.RootPEMPath

@@ -45,7 +45,8 @@ func TestLauncherSupervisesExactChildAndCaptureRunLifecycle(t *testing.T) {
   printf 'root=%s\n' "$NODE_EXTRA_CA_CERTS"
   printf 'node_proxy=%s\n' "$NODE_USE_ENV_PROXY"
   printf 'client_key=%s\n' "$ANTHROPIC_API_KEY"
-  printf 'client_token=%s\n' "$CLAUDE_CODE_OAUTH_TOKEN"
+  printf 'client_token=%s\n' "$ANTHROPIC_AUTH_TOKEN"
+  printf 'client_oauth=%s\n' "$CLAUDE_CODE_OAUTH_TOKEN"
   printf 'client_origin=%s\n' "$ANTHROPIC_BASE_URL"
   printf 'fallback=%s\n' "$CLAUDE_CODE_DISABLE_NONSTREAMING_FALLBACK"
 } > "$LAUNCH_TEST_OUTPUT"
@@ -158,8 +159,9 @@ exit 7
 		lines["run"] != "capture-run-1" ||
 		lines["root"] != rootPath ||
 		lines["node_proxy"] != "1" ||
-		lines["client_key"] != "vibermate-local-proxy" ||
-		lines["client_token"] != "" ||
+		lines["client_key"] != "" ||
+		lines["client_token"] != "vibermate-local-proxy" ||
+		lines["client_oauth"] != "" ||
 		lines["client_origin"] != "" ||
 		lines["fallback"] != "1" {
 		t.Fatalf("captured child output = %+v", lines)

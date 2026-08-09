@@ -327,6 +327,7 @@ func runManagedChild(
 		"PATH=/usr/bin:/bin",
 		childManagedEnvironment + "=1",
 		"ANTHROPIC_API_KEY=client-ambient-secret",
+		"ANTHROPIC_AUTH_TOKEN=client-ambient-auth-token",
 		"CLAUDE_CODE_OAUTH_TOKEN=client-oauth-secret",
 	}
 	if expectFailure {

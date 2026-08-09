@@ -49,7 +49,8 @@ func TestMain(m *testing.M) {
 // selected ProviderAccount only at the final provider boundary.
 func runCapturedManagedRequest() int {
 	expectFailure := os.Getenv(childManagedFailure) != ""
-	if os.Getenv("ANTHROPIC_API_KEY") == "client-ambient-secret" ||
+	if os.Getenv("ANTHROPIC_API_KEY") != "" ||
+		os.Getenv("ANTHROPIC_AUTH_TOKEN") != "vibermate-local-proxy" ||
 		os.Getenv("CLAUDE_CODE_OAUTH_TOKEN") != "" {
 		fmt.Fprintln(os.Stderr, "child: ambient client credentials were retained")
 		return 1

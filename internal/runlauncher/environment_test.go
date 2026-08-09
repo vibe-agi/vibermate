@@ -86,7 +86,7 @@ func TestBuildEnvironmentPinsProxyAndRemovesProtectedBypasses(t *testing.T) {
 	}
 	if values["NODE_EXTRA_CA_CERTS"] != "/tmp/root.pem" ||
 		values["NODE_USE_ENV_PROXY"] != "1" ||
-		values["ANTHROPIC_API_KEY"] != "vibermate-local-proxy" ||
+		values["ANTHROPIC_AUTH_TOKEN"] != "vibermate-local-proxy" ||
 		values[claudeDisableNonStreamingFallback] != "1" ||
 		values["CLAUDE_CONFIG_DIR"] != "/tmp/client-state" ||
 		values["UNRELATED"] != "value" ||
@@ -94,7 +94,7 @@ func TestBuildEnvironmentPinsProxyAndRemovesProtectedBypasses(t *testing.T) {
 		t.Fatalf("managed environment = %+v", values)
 	}
 	for _, forbidden := range []string{
-		"ANTHROPIC_AUTH_TOKEN",
+		"ANTHROPIC_API_KEY",
 		"Anthropic_Auth_Token",
 		"CLAUDE_CODE_OAUTH_TOKEN",
 		"ANTHROPIC_BASE_URL",
@@ -259,7 +259,7 @@ func TestBuildEnvironmentBootstrapsDefaultManagedClientOrigins(t *testing.T) {
 			recipe:           clientadapter.LaunchNodeEnvProxy,
 			managedAuthority: "api.anthropic.com:443",
 			ambientKey:       "ANTHROPIC_API_KEY=client-api-key",
-			placeholderKey:   "ANTHROPIC_API_KEY",
+			placeholderKey:   "ANTHROPIC_AUTH_TOKEN",
 		},
 		{
 			name:             "Codex",
