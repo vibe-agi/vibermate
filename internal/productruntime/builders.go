@@ -483,6 +483,10 @@ func (observer exchangeContentObserver) ObserveContent(
 		observer.clock.Now(),
 		observation.Request,
 		observation.Response,
+		exchangecontent.WithParentRef(exchangecontent.ParentRef{
+			CaptureRunID:    observation.CaptureRunID,
+			ManualCaptureID: observation.ManualCaptureID,
+		}),
 	)
 	if err != nil {
 		return err

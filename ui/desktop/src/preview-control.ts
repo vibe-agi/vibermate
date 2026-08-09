@@ -21,6 +21,7 @@ import type {
   EnvironmentPublishResult,
   EnvironmentRecord,
   ExchangeDetail,
+  ExchangeReadOptions,
   ManualCaptureContext,
   ManualCaptureCreateInput,
   ManualCaptureGrant,
@@ -249,6 +250,13 @@ const previewExchange: ExchangeDetail = {
     mode: "full",
     recordedAt: "2026-08-08T02:00:00Z",
     expiresAt: "2026-09-07T02:00:00Z",
+    requestProjection: {
+      view: "full",
+      relationship: "incremental",
+      inheritedMessageCount: 2,
+      totalMessageCount: 3,
+      fullSnapshotAvailable: true,
+    },
     request: {
       requestedModel: "claude-sonnet",
       effectiveModel: "claude-sonnet",
@@ -330,6 +338,13 @@ const earlierPreviewExchange: ExchangeDetail = {
   content: {
     ...previewExchange.content,
     recordedAt: timestamp,
+    requestProjection: {
+      view: "full",
+      relationship: "checkpoint",
+      inheritedMessageCount: 0,
+      totalMessageCount: 1,
+      fullSnapshotAvailable: false,
+    },
     request: {
       ...previewExchange.content.request!,
       messages: [{
@@ -425,6 +440,27 @@ const previewAccount: ProviderAccountRecord = {
 
 function clone<T>(value: T): T {
   return structuredClone(value);
+}
+
+function projectPreviewExchange(
+  source: ExchangeDetail,
+  contentView: "incremental" | "full",
+): ExchangeDetail {
+  const detail = clone(source);
+  const projection = detail.content.requestProjection;
+  const request = detail.content.request;
+  if (detail.content.state !== "recorded" || projection === undefined || request === undefined) {
+    return detail;
+  }
+  const inherited = contentView === "full" ? 0 : projection.inheritedMessageCount;
+  return {
+    ...detail,
+    content: {
+      ...detail.content,
+      requestProjection: { ...projection, view: contentView },
+      request: { ...request, messages: request.messages.slice(inherited) },
+    },
+  };
 }
 
 class PreviewControlClient implements ControlClient {
@@ -822,10 +858,11 @@ class PreviewControlClient implements ControlClient {
     return { items: clone(items) };
   }
 
-  async exchange(exchangeId: string): Promise<ExchangeDetail> {
+  async exchange(exchangeId: string, options?: ExchangeReadOptions): Promise<ExchangeDetail> {
     this.requireOpen();
-    if (exchangeId === previewExchange.id) return clone(previewExchange);
-    if (exchangeId === earlierPreviewExchange.id) return clone(earlierPreviewExchange);
+    const contentView = options?.contentView ?? "incremental";
+    if (exchangeId === previewExchange.id) return projectPreviewExchange(previewExchange, contentView);
+    if (exchangeId === earlierPreviewExchange.id) return projectPreviewExchange(earlierPreviewExchange, contentView);
     if (exchangeId === unsupportedPreviewExchange.id) return clone(unsupportedPreviewExchange);
     throw this.notFound();
   }

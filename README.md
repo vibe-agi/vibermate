@@ -100,6 +100,16 @@ fields/authentication headers have no representation in the content record.
 Secrets typed into a message are content and may be retained. The transparent
 system Environment always keeps content recording off.
 
+Upstream semantics do not become incremental: every provider attempt still
+receives the complete client request. Locally, retained transcripts use
+content-addressed message and prefix nodes so repeated history is stored once.
+The Request inspector defaults to the new suffix only when an exact transcript
+previously delivered in the same managed Capture is a prefix; an exact retry is
+shown as a replay, while compaction or history rewriting starts a new complete
+checkpoint. The full frozen request remains available on demand. Manual
+captures share stored bytes but do not infer transcript continuity because one
+proxy credential may carry unrelated sessions.
+
 ## Environment publication
 
 Environment configuration has one write path:

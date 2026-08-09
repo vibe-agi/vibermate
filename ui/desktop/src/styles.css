@@ -243,9 +243,16 @@ input, select { width: 100%; min-height: 32px; border: 1px solid var(--border-st
 .exchange-inspector-stack { min-width: 0; }
 .exchange-inspector-heading { display: flex; align-items: center; justify-content: space-between; border-bottom: 1px solid var(--border); }
 .exchange-inspector-heading .section-heading { flex: 1; border-bottom: 0; }
-.recording-state { margin-right: 12px; border: 1px solid var(--border); border-radius: 999px; padding: 2px 7px; color: var(--muted); font-size: 10px; }
+.exchange-inspector-actions { display: flex; align-items: center; gap: 6px; margin-right: 10px; }
+.recording-state { border: 1px solid var(--border); border-radius: 999px; padding: 2px 7px; color: var(--muted); font-size: 10px; }
+.request-view-toggle { min-height: 26px; padding: 3px 7px; font-size: 10px; }
 .conversation-evidence { display: grid; gap: 8px; padding: 10px; }
 .content-retention { display: flex; justify-content: flex-end; gap: 6px; color: var(--quiet); font-size: 10px; }
+.request-projection { display: flex; min-height: 30px; align-items: center; gap: 8px; border: 1px solid var(--border); border-radius: 6px; padding: 5px 9px; color: var(--muted); background: var(--panel); font-size: 11px; }
+.request-projection-node { width: 7px; height: 7px; flex: none; border: 2px solid var(--panel); border-radius: 50%; box-shadow: 0 0 0 1px var(--signal); background: var(--signal); }
+.request-projection-checkpoint .request-projection-node { box-shadow: 0 0 0 1px var(--quiet); background: var(--quiet); }
+.request-projection-same_transcript .request-projection-node { box-shadow: 0 0 0 1px var(--ask); background: var(--ask); }
+.request-projection strong { font-weight: 650; }
 .exchange-message { max-width: min(88%, 760px); border: 1px solid var(--border); border-radius: 7px; background: var(--raised); }
 .exchange-message-user { margin-left: auto; border-color: color-mix(in srgb, var(--signal) 38%, var(--border)); background: var(--signal-soft); }
 .exchange-message-assistant { margin-right: auto; }

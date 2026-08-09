@@ -105,13 +105,29 @@ const (
 )
 
 type ExchangeContentDetail struct {
-	State      ExchangeContentState      `json:"state"`
-	Mode       string                    `json:"mode,omitempty"`
-	RecordedAt *time.Time                `json:"recordedAt,omitempty"`
-	ExpiresAt  *time.Time                `json:"expiresAt,omitempty"`
-	Request    *exchangecontent.Request  `json:"request,omitempty"`
-	Response   *exchangecontent.Response `json:"response,omitempty"`
+	State             ExchangeContentState       `json:"state"`
+	Mode              string                     `json:"mode,omitempty"`
+	RecordedAt        *time.Time                 `json:"recordedAt,omitempty"`
+	ExpiresAt         *time.Time                 `json:"expiresAt,omitempty"`
+	RequestProjection *ExchangeRequestProjection `json:"requestProjection,omitempty"`
+	Request           *exchangecontent.Request   `json:"request,omitempty"`
+	Response          *exchangecontent.Response  `json:"response,omitempty"`
 }
+
+type ExchangeRequestProjection struct {
+	View                  ExchangeContentView                     `json:"view"`
+	Relationship          exchangecontent.RequestPresentationMode `json:"relationship"`
+	InheritedMessageCount int                                     `json:"inheritedMessageCount"`
+	TotalMessageCount     int                                     `json:"totalMessageCount"`
+	FullSnapshotAvailable bool                                    `json:"fullSnapshotAvailable"`
+}
+
+type ExchangeContentView string
+
+const (
+	ExchangeContentViewIncremental ExchangeContentView = "incremental"
+	ExchangeContentViewFull        ExchangeContentView = "full"
+)
 
 type ExchangeProcessingTrace struct {
 	EgressProxyID string             `json:"egressProxyId,omitempty"`
@@ -216,8 +232,11 @@ func exchangeDetailOf(
 	record activity.Record,
 	egressPage egressaudit.Page,
 	content *exchangecontent.Record,
+	contentView ExchangeContentView,
 ) (ExchangeDetail, error) {
-	if record.Kind != activity.KindExchangeCompleted || record.Validate() != nil || egressPage.NextCursor != "" {
+	if record.Kind != activity.KindExchangeCompleted || record.Validate() != nil ||
+		egressPage.NextCursor != "" ||
+		(contentView != ExchangeContentViewIncremental && contentView != ExchangeContentViewFull) {
 		return ExchangeDetail{}, errors.New("Exchange detail projection is incomplete")
 	}
 	ordered := make([]egressaudit.View, 0, len(egressPage.Items))
@@ -252,6 +271,8 @@ func exchangeDetailOf(
 	}
 	if content != nil {
 		if content.Validate() != nil || content.ExchangeID != record.SubjectID ||
+			content.Parent.CaptureRunID != record.CaptureRunID ||
+			content.Parent.ManualCaptureID != record.ManualCaptureID ||
 			content.Frozen.EnvironmentID != record.EnvironmentID ||
 			content.Frozen.EnvironmentRevision != record.EnvironmentRevision ||
 			content.Frozen.EnvironmentDigest != record.EnvironmentDigest ||
@@ -260,15 +281,25 @@ func exchangeDetailOf(
 			content.Frozen.ProtocolPlanID != record.ProtocolPlanID ||
 			content.Frozen.ProtocolPlanRevision != record.ProtocolPlanRevision ||
 			content.Frozen.RouteID != record.RouteID ||
-			content.Frozen.RouteRevision != record.RouteRevision {
+			content.Frozen.RouteRevision != record.RouteRevision ||
+			!validRequestPresentation(content.Presentation, len(content.Request.Messages)) {
 			return ExchangeDetail{}, errors.New("Exchange content does not match frozen Activity evidence")
 		}
 		requestView := content.Request
+		if contentView == ExchangeContentViewIncremental {
+			requestView.Messages = content.IncrementalRequest()
+		}
 		recordedAt := content.RecordedAt
 		expiresAt := content.ExpiresAt
 		detail.Content = ExchangeContentDetail{
 			State: ExchangeContentRecorded, Mode: string(content.Mode),
 			RecordedAt: &recordedAt, ExpiresAt: &expiresAt,
+			RequestProjection: &ExchangeRequestProjection{
+				View: contentView, Relationship: content.Presentation.Mode,
+				InheritedMessageCount: content.Presentation.InheritedMessageCount,
+				TotalMessageCount:     len(content.Request.Messages),
+				FullSnapshotAvailable: content.Presentation.InheritedMessageCount > 0,
+			},
 			Request: &requestView,
 		}
 		if content.Response != nil {
@@ -282,6 +313,43 @@ func exchangeDetailOf(
 		}
 	}
 	return detail, nil
+}
+
+func validRequestPresentation(presentation exchangecontent.RequestPresentation, total int) bool {
+	if total < 1 || presentation.InheritedMessageCount < 0 ||
+		presentation.InheritedMessageCount > total {
+		return false
+	}
+	switch presentation.Mode {
+	case exchangecontent.RequestPresentationCheckpoint:
+		return presentation.InheritedMessageCount == 0
+	case exchangecontent.RequestPresentationIncremental:
+		return presentation.InheritedMessageCount > 0 &&
+			presentation.InheritedMessageCount < total
+	case exchangecontent.RequestPresentationSameTranscript:
+		return presentation.InheritedMessageCount == total
+	default:
+		return false
+	}
+}
+
+func parseExchangeContentView(rawQuery string) (ExchangeContentView, error) {
+	values, err := url.ParseQuery(rawQuery)
+	if err != nil {
+		return "", errInvalidActivityQuery
+	}
+	if len(values) == 0 {
+		return ExchangeContentViewIncremental, nil
+	}
+	entries, present := values["contentView"]
+	if !present || len(values) != 1 || len(entries) != 1 {
+		return "", errInvalidActivityQuery
+	}
+	view := ExchangeContentView(entries[0])
+	if view != ExchangeContentViewIncremental && view != ExchangeContentViewFull {
+		return "", errInvalidActivityQuery
+	}
+	return view, nil
 }
 
 func activityCursor(sequence int64) (string, error) {
@@ -316,7 +384,8 @@ func parseActivityCursor(value string) (int64, error) {
 }
 
 func (handler *Handler) getExchange(writer http.ResponseWriter, request *http.Request) {
-	if request.URL.RawQuery != "" {
+	contentView, err := parseExchangeContentView(request.URL.RawQuery)
+	if err != nil {
 		writeProblem(writer, http.StatusUnprocessableEntity, ReasonInvalidRequest)
 		return
 	}
@@ -348,7 +417,7 @@ func (handler *Handler) getExchange(writer http.ResponseWriter, request *http.Re
 		writeProblem(writer, http.StatusServiceUnavailable, ReasonRuntimeUnavailable)
 		return
 	}
-	detail, err := exchangeDetailOf(record, egressPage, content)
+	detail, err := exchangeDetailOf(record, egressPage, content, contentView)
 	if err != nil {
 		writeProblem(writer, http.StatusServiceUnavailable, ReasonRuntimeUnavailable)
 		return

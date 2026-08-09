@@ -56,6 +56,297 @@ func TestExchangeContentRepositoryReopensAndExpiresEvidence(t *testing.T) {
 	}
 }
 
+func TestExchangeContentRepositorySharesExactHistoryAndDerivesIncrementalViews(t *testing.T) {
+	t.Parallel()
+	store := openTestStore(t, filepath.Join(t.TempDir(), "runtime.db"))
+	defer func() {
+		if err := store.Shutdown(context.Background()); err != nil {
+			t.Error(err)
+		}
+	}()
+	repository := store.ExchangeContentRepository()
+	recordedAt := time.Date(2026, 8, 9, 2, 0, 0, 0, time.UTC)
+	managedParent := exchangecontent.ParentRef{CaptureRunID: "run-transcript"}
+
+	first := transcriptContentRecordFixture(
+		t,
+		"exchange-first",
+		recordedAt,
+		managedParent,
+		[]transcriptMessage{{role: protocolcore.RoleUser, text: "first question"}},
+		"first answer",
+	)
+	second := transcriptContentRecordFixture(
+		t,
+		"exchange-second",
+		recordedAt.Add(time.Minute),
+		managedParent,
+		[]transcriptMessage{
+			{role: protocolcore.RoleUser, text: "first question"},
+			{role: protocolcore.RoleAssistant, text: "first answer"},
+			{role: protocolcore.RoleUser, text: "second question"},
+		},
+		"second answer",
+	)
+	retry := transcriptContentRecordFixture(
+		t,
+		"exchange-retry",
+		recordedAt.Add(2*time.Minute),
+		managedParent,
+		[]transcriptMessage{
+			{role: protocolcore.RoleUser, text: "first question"},
+			{role: protocolcore.RoleAssistant, text: "first answer"},
+		},
+		"",
+	)
+	checkpoint := transcriptContentRecordFixture(
+		t,
+		"exchange-checkpoint",
+		recordedAt.Add(3*time.Minute),
+		managedParent,
+		[]transcriptMessage{{role: protocolcore.RoleUser, text: "compacted history"}},
+		"",
+	)
+	otherRun := transcriptContentRecordFixture(
+		t,
+		"exchange-other-run",
+		recordedAt.Add(4*time.Minute),
+		exchangecontent.ParentRef{CaptureRunID: "run-other"},
+		[]transcriptMessage{
+			{role: protocolcore.RoleUser, text: "first question"},
+			{role: protocolcore.RoleAssistant, text: "first answer"},
+			{role: protocolcore.RoleUser, text: "second question"},
+		},
+		"",
+	)
+	manual := transcriptContentRecordFixture(
+		t,
+		"exchange-manual",
+		recordedAt.Add(5*time.Minute),
+		exchangecontent.ParentRef{ManualCaptureID: "manual-shared-proxy"},
+		[]transcriptMessage{
+			{role: protocolcore.RoleUser, text: "first question"},
+			{role: protocolcore.RoleAssistant, text: "first answer"},
+			{role: protocolcore.RoleUser, text: "second question"},
+		},
+		"",
+	)
+	for _, record := range []exchangecontent.Record{first, second, retry, checkpoint, otherRun, manual} {
+		if err := repository.Put(context.Background(), record); err != nil {
+			t.Fatalf("Put(%s): %v", record.ExchangeID, err)
+		}
+	}
+
+	assertPresentation := func(
+		exchangeID string,
+		mode exchangecontent.RequestPresentationMode,
+		inherited int,
+		wantCount int,
+		wantLastText string,
+	) {
+		t.Helper()
+		got, err := repository.Get(context.Background(), exchangeID, recordedAt.Add(time.Hour))
+		if err != nil {
+			t.Fatalf("Get(%s): %v", exchangeID, err)
+		}
+		if got.Presentation.Mode != mode || got.Presentation.InheritedMessageCount != inherited {
+			t.Fatalf("Get(%s) presentation = %+v", exchangeID, got.Presentation)
+		}
+		incremental := got.IncrementalRequest()
+		if len(incremental) != wantCount {
+			t.Fatalf("Get(%s) incremental messages = %+v", exchangeID, incremental)
+		}
+		if wantLastText != "" && (len(incremental[wantCount-1].Blocks) != 1 ||
+			incremental[wantCount-1].Blocks[0].Text != wantLastText) {
+			t.Fatalf("Get(%s) incremental messages = %+v", exchangeID, incremental)
+		}
+	}
+	assertPresentation("exchange-first", exchangecontent.RequestPresentationCheckpoint, 0, 1, "first question")
+	assertPresentation("exchange-second", exchangecontent.RequestPresentationIncremental, 2, 1, "second question")
+	assertPresentation("exchange-retry", exchangecontent.RequestPresentationSameTranscript, 2, 0, "")
+	assertPresentation("exchange-checkpoint", exchangecontent.RequestPresentationCheckpoint, 0, 1, "compacted history")
+	assertPresentation("exchange-other-run", exchangecontent.RequestPresentationCheckpoint, 0, 3, "second question")
+	assertPresentation("exchange-manual", exchangecontent.RequestPresentationCheckpoint, 0, 3, "second question")
+
+	var messageCount, transcriptCount int
+	if err := store.database.QueryRow(
+		`SELECT count(*) FROM runtime_exchange_content_messages`,
+	).Scan(&messageCount); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.database.QueryRow(
+		`SELECT count(*) FROM runtime_exchange_content_transcripts`,
+	).Scan(&transcriptCount); err != nil {
+		t.Fatal(err)
+	}
+	// Six full request records contain thirteen message occurrences. The local
+	// store retains only five distinct message payloads and five transcript
+	// nodes; the upstream requests remain unchanged and complete.
+	if messageCount != 5 || transcriptCount != 5 {
+		t.Fatalf("content-addressed counts = messages %d, transcripts %d", messageCount, transcriptCount)
+	}
+}
+
+func TestExchangeContentRepositoryKeepsLiveDescendantsAfterParentExpiry(t *testing.T) {
+	t.Parallel()
+	databasePath := filepath.Join(t.TempDir(), "runtime.db")
+	store := openTestStore(t, databasePath)
+	repository := store.ExchangeContentRepository()
+	recordedAt := time.Date(2026, 8, 9, 3, 0, 0, 0, time.UTC)
+	parent := exchangecontent.ParentRef{CaptureRunID: "run-retention"}
+	first := transcriptContentRecordFixture(
+		t,
+		"exchange-expiring-parent",
+		recordedAt,
+		parent,
+		[]transcriptMessage{{role: protocolcore.RoleUser, text: "first question"}},
+		"first answer",
+	)
+	second := transcriptContentRecordFixture(
+		t,
+		"exchange-live-child",
+		recordedAt.Add(24*time.Hour),
+		parent,
+		[]transcriptMessage{
+			{role: protocolcore.RoleUser, text: "first question"},
+			{role: protocolcore.RoleAssistant, text: "first answer"},
+			{role: protocolcore.RoleUser, text: "second question"},
+		},
+		"second answer",
+	)
+	if err := repository.Put(context.Background(), first); err != nil {
+		t.Fatal(err)
+	}
+	if err := repository.Put(context.Background(), second); err != nil {
+		t.Fatal(err)
+	}
+	purged, err := repository.PurgeExpired(context.Background(), first.ExpiresAt)
+	if err != nil || purged != 1 {
+		t.Fatalf("PurgeExpired() = %d, %v", purged, err)
+	}
+	if err := store.Shutdown(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+
+	reopened := openTestStore(t, databasePath)
+	defer func() {
+		if err := reopened.Shutdown(context.Background()); err != nil {
+			t.Error(err)
+		}
+	}()
+	got, err := reopened.ExchangeContentRepository().Get(
+		context.Background(), second.ExchangeID, first.ExpiresAt.Add(time.Hour),
+	)
+	if err != nil || len(got.Request.Messages) != 3 || got.Response == nil ||
+		got.Response.Blocks[0].Text != "second answer" ||
+		got.Presentation.Mode != exchangecontent.RequestPresentationIncremental ||
+		got.Presentation.InheritedMessageCount != 2 {
+		t.Fatalf("reopened descendant = %+v, %v", got, err)
+	}
+}
+
+func TestExchangeContentRepositoryRejectsTamperedSharedMessagePayload(t *testing.T) {
+	t.Parallel()
+	store := openTestStore(t, filepath.Join(t.TempDir(), "runtime.db"))
+	defer func() {
+		if err := store.Shutdown(context.Background()); err != nil {
+			t.Error(err)
+		}
+	}()
+	recordedAt := time.Date(2026, 8, 9, 4, 0, 0, 0, time.UTC)
+	record := transcriptContentRecordFixture(
+		t,
+		"exchange-tampered-message",
+		recordedAt,
+		exchangecontent.ParentRef{CaptureRunID: "run-tamper"},
+		[]transcriptMessage{{role: protocolcore.RoleUser, text: "original"}},
+		"answer",
+	)
+	if err := store.ExchangeContentRepository().Put(context.Background(), record); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.database.Exec(
+		`UPDATE runtime_exchange_content_messages SET payload_json = ?
+		 WHERE digest = (
+		   SELECT message_digest FROM runtime_exchange_content_transcripts
+		   WHERE digest = (
+		     SELECT request_transcript_digest FROM runtime_exchange_contents
+		     WHERE exchange_id = ?
+		   )
+		 )`,
+		[]byte(`{"role":"user","blocks":[{"kind":"text","availability":"recorded","text":"tampered","originalSize":8}]}`),
+		record.ExchangeID,
+	); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.ExchangeContentRepository().Get(
+		context.Background(), record.ExchangeID, recordedAt.Add(time.Hour),
+	); !errors.Is(err, exchangecontent.ErrInvalidEvidence) {
+		t.Fatalf("tampered Get() error = %v", err)
+	}
+}
+
+type transcriptMessage struct {
+	role protocolcore.Role
+	text string
+}
+
+func transcriptContentRecordFixture(
+	t *testing.T,
+	exchangeID string,
+	recordedAt time.Time,
+	parent exchangecontent.ParentRef,
+	messages []transcriptMessage,
+	responseText string,
+) exchangecontent.Record {
+	t.Helper()
+	requestMessages := make([]protocolcore.Message, 0, len(messages))
+	for _, message := range messages {
+		block, err := protocolcore.NewTextBlock(message.text)
+		if err != nil {
+			t.Fatal(err)
+		}
+		requestMessages = append(requestMessages, protocolcore.Message{
+			Role: message.role, Blocks: []protocolcore.ContentBlock{block},
+		})
+	}
+	request := protocolcore.Request{
+		RequestedModel: "model", EffectiveModel: "model", MaxOutputTokens: 16,
+		Messages: requestMessages,
+	}
+	var response *protocolcore.Response
+	if responseText != "" {
+		block, err := protocolcore.NewTextBlock(responseText)
+		if err != nil {
+			t.Fatal(err)
+		}
+		response = &protocolcore.Response{
+			ID:             "response-" + exchangeID,
+			RequestedModel: "model", EffectiveModel: "model", ReportedModel: "model",
+			Blocks: []protocolcore.ContentBlock{block}, StopReason: protocolcore.StopReasonEndTurn,
+		}
+	}
+	record, err := exchangecontent.NewRecord(
+		exchangeID,
+		exchangecontent.FrozenRef{
+			EnvironmentID: "work", EnvironmentRevision: 1,
+			EnvironmentDigest: strings.Repeat("a", 64),
+			ClientEndpointID:  "endpoint", ClientEndpointRevision: 1,
+			ProtocolPlanID: "plan", ProtocolPlanRevision: 1,
+			RouteID: "route", RouteRevision: 1,
+		},
+		environment.DefaultContentRecordingPolicy(),
+		recordedAt,
+		request,
+		response,
+		exchangecontent.WithParentRef(parent),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return record
+}
+
 func contentRecordFixture(t *testing.T, exchangeID string, recordedAt time.Time) exchangecontent.Record {
 	t.Helper()
 	block, err := protocolcore.NewTextBlock("hello")

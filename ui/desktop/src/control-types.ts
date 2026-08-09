@@ -456,11 +456,26 @@ export interface ExchangeUsageValue {
   readonly source?: string;
 }
 
+export type ExchangeContentView = "incremental" | "full";
+export type ExchangeRequestRelationship = "checkpoint" | "incremental" | "same_transcript";
+
+export interface ExchangeReadOptions {
+  readonly contentView?: ExchangeContentView;
+  readonly signal?: AbortSignal;
+}
+
 export interface ExchangeContentDetail {
   readonly state: "recorded" | "not_recorded";
   readonly mode?: "full" | "metadata_only";
   readonly recordedAt?: string;
   readonly expiresAt?: string;
+  readonly requestProjection?: {
+    readonly view: ExchangeContentView;
+    readonly relationship: ExchangeRequestRelationship;
+    readonly inheritedMessageCount: number;
+    readonly totalMessageCount: number;
+    readonly fullSnapshotAvailable: boolean;
+  };
   readonly request?: {
     readonly requestedModel: string;
     readonly effectiveModel: string;

@@ -182,20 +182,67 @@ protocol_plan_revision > 0 AND route_id <> '' AND route_revision > 0)),
 ) STRICT;
 CREATE INDEX runtime_activities_latest
 ON runtime_activities(sequence DESC);
+CREATE TABLE runtime_exchange_content_messages(
+  digest TEXT PRIMARY KEY NOT NULL
+  CHECK(length(CAST(digest AS BLOB)) = 64 AND lower(digest) = digest),
+  payload_json BLOB NOT NULL
+  CHECK(length(payload_json) BETWEEN 2 AND 33554432 AND
+  json_valid(CAST(payload_json AS TEXT)))
+) STRICT;
+CREATE TABLE runtime_exchange_content_transcripts(
+  digest TEXT PRIMARY KEY NOT NULL
+  CHECK(length(CAST(digest AS BLOB)) = 64 AND lower(digest) = digest),
+  parent_digest TEXT
+  REFERENCES runtime_exchange_content_transcripts(digest),
+  message_digest TEXT NOT NULL
+  REFERENCES runtime_exchange_content_messages(digest),
+  depth INTEGER NOT NULL CHECK(depth BETWEEN 1 AND 100001)
+) STRICT;
+CREATE INDEX runtime_exchange_content_transcripts_parent
+ON runtime_exchange_content_transcripts(parent_digest);
 CREATE TABLE runtime_exchange_contents(
   exchange_id TEXT PRIMARY KEY NOT NULL
   CHECK(length(CAST(exchange_id AS BLOB)) BETWEEN 1 AND 512),
+  scope_kind TEXT NOT NULL DEFAULT ''
+  CHECK(scope_kind IN('', 'managed_run', 'manual_capture')),
+  scope_id TEXT NOT NULL DEFAULT ''
+  CHECK(length(CAST(scope_id AS BLOB)) <= 128),
   mode TEXT NOT NULL
   CHECK(mode IN('full', 'metadata_only')),
   recorded_at_unix_ms INTEGER NOT NULL,
   expires_at_unix_ms INTEGER NOT NULL
   CHECK(expires_at_unix_ms > recorded_at_unix_ms),
-  evidence_json BLOB NOT NULL
-  CHECK(length(evidence_json) BETWEEN 2 AND 33554432 AND
-  json_valid(CAST(evidence_json AS TEXT)))
+  request_transcript_digest TEXT NOT NULL
+  REFERENCES runtime_exchange_content_transcripts(digest),
+  expected_transcript_digest TEXT NOT NULL
+  REFERENCES runtime_exchange_content_transcripts(digest),
+  base_transcript_digest TEXT
+  REFERENCES runtime_exchange_content_transcripts(digest),
+  request_message_count INTEGER NOT NULL
+  CHECK(request_message_count BETWEEN 1 AND 100001),
+  expected_message_count INTEGER NOT NULL
+  CHECK(expected_message_count BETWEEN request_message_count AND 100001),
+  inherited_message_count INTEGER NOT NULL
+  CHECK(inherited_message_count BETWEEN 0 AND request_message_count),
+  response_message_digest TEXT
+  REFERENCES runtime_exchange_content_messages(digest),
+  manifest_json BLOB NOT NULL
+  CHECK(length(manifest_json) BETWEEN 2 AND 33554432 AND
+  json_valid(CAST(manifest_json AS TEXT))),
+  CHECK((scope_kind = '' AND scope_id = '') OR
+  (scope_kind <> '' AND scope_id <> '')),
+  CHECK((base_transcript_digest IS NULL AND inherited_message_count = 0) OR
+  (base_transcript_digest IS NOT NULL AND inherited_message_count > 0))
 ) STRICT;
 CREATE INDEX runtime_exchange_contents_expiry
 ON runtime_exchange_contents(expires_at_unix_ms);
+CREATE INDEX runtime_exchange_contents_scope_expected
+ON runtime_exchange_contents(
+  scope_kind,
+  scope_id,
+  expected_message_count DESC,
+  recorded_at_unix_ms DESC
+);
 CREATE TABLE capture_runs(
   run_id TEXT PRIMARY KEY NOT NULL
   CHECK(length(CAST(run_id AS BLOB)) BETWEEN 1 AND 128),

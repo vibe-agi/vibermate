@@ -22,6 +22,7 @@ import type {
   ExchangeContentBlock,
   ExchangeContentDetail,
   ExchangeContentMessage,
+  ExchangeContentView,
   ExchangeDetail,
   EgressAttemptRecord,
   ProviderAccountKind,
@@ -100,7 +101,12 @@ function ApprovalRow({ approval, busy, highlighted, locale, onDecide }: { readon
 export function ExchangeRoutePage({ exchangeId }: { readonly exchangeId: string }) {
   const { t } = useTranslation();
   const model = useDashboardModel();
-  const exchange = useQuery({ queryKey: dashboardQueryKeys.exchange(exchangeId), queryFn: ({ signal }) => model.client.exchange(exchangeId, signal) });
+  const [contentView, setContentView] = useState<ExchangeContentView>("incremental");
+  const exchange = useQuery({
+    queryKey: dashboardQueryKeys.exchange(exchangeId, contentView),
+    queryFn: ({ signal }) => model.client.exchange(exchangeId, { contentView, signal }),
+    placeholderData: (previous) => previous,
+  });
   const captureRunId = exchange.data?.parentRefs.captureRunId;
   const runRequests = useQuery({
     enabled: captureRunId !== undefined,
@@ -113,6 +119,8 @@ export function ExchangeRoutePage({ exchangeId }: { readonly exchangeId: string 
   if (exchange.isPending) return <div className="page"><LoadingRows count={8} /></div>;
   if (exchange.data === undefined) return <div className="page"><InlineProblem message={t(controlErrorKey(exchange.error))} /></div>;
   const detail = exchange.data;
+  const displayedContentView = detail.content.requestProjection?.view ?? contentView;
+  const viewTransitionPending = exchange.isFetching && displayedContentView !== contentView;
   const response = detail.content.response;
   const attempts = detail.processingTrace.attempts;
   const captureKey = detail.parentRefs.captureRunId !== undefined
@@ -151,7 +159,15 @@ export function ExchangeRoutePage({ exchangeId }: { readonly exchangeId: string 
           <section className="data-panel exchange-inspector">
             <div className="exchange-inspector-heading">
               <SectionHeading title={t("exchange.inspector.title")} />
-              {detail.content.state === "recorded" && <span className="recording-state">{t(`exchange.content.mode.${detail.content.mode ?? "full"}`)}</span>}
+              {detail.content.state === "recorded" && <div className="exchange-inspector-actions">
+                <span className="recording-state">{t(`exchange.content.mode.${detail.content.mode ?? "full"}`)}</span>
+                {detail.content.requestProjection?.fullSnapshotAvailable === true && <button
+                  className="quiet-button request-view-toggle"
+                  disabled={viewTransitionPending}
+                  onClick={() => setContentView(displayedContentView === "full" ? "incremental" : "full")}
+                  type="button"
+                >{t(displayedContentView === "full" ? "exchange.content.view.incremental" : "exchange.content.view.full")}</button>}
+              </div>}
             </div>
             {detail.diagnosis !== undefined && <RequestDiagnosis diagnosis={detail.diagnosis} result={detail.processingTrace.result} />}
             {detail.content.state === "not_recorded" && detail.diagnosis !== undefined
@@ -163,6 +179,7 @@ export function ExchangeRoutePage({ exchangeId }: { readonly exchangeId: string 
                     <span>{t("exchange.content.expires")}</span>
                     <time dateTime={detail.content.expiresAt}>{detail.content.expiresAt === undefined ? t("common.unavailable") : new Intl.DateTimeFormat(undefined, { dateStyle: "medium", timeStyle: "short" }).format(Date.parse(detail.content.expiresAt))}</time>
                   </div>
+                  {detail.content.requestProjection !== undefined && <RequestProjectionStrip projection={detail.content.requestProjection} visibleMessages={detail.content.request.messages.length} />}
                   <RequestConversation messages={detail.content.request.messages} />
                   {response !== undefined && <article className="exchange-message exchange-message-assistant"><header><span>{t("exchange.role.assistant")}</span><small>{response.reportedModel} · {t(`exchange.stop.${response.stopReason}`)}</small></header><ExchangeBlocks blocks={response.blocks} /><UsageSummary usage={response.usage} /></article>}
                 </div>}
@@ -184,6 +201,28 @@ export function ExchangeRoutePage({ exchangeId }: { readonly exchangeId: string 
       </section>
     </div>
   );
+}
+
+function RequestProjectionStrip({ projection, visibleMessages }: {
+  readonly projection: NonNullable<ExchangeContentDetail["requestProjection"]>;
+  readonly visibleMessages: number;
+}) {
+  const { t } = useTranslation();
+  const key = projection.view === "full"
+    ? "exchange.content.projection.full"
+    : projection.relationship === "incremental"
+      ? "exchange.content.projection.incremental"
+      : projection.relationship === "same_transcript"
+      ? "exchange.content.projection.replay"
+      : "exchange.content.projection.checkpoint";
+  return <div className={`request-projection request-projection-${projection.relationship}`}>
+    <span className="request-projection-node" />
+    <strong>{t(key, {
+      inherited: projection.inheritedMessageCount,
+      total: projection.totalMessageCount,
+      visible: visibleMessages,
+    })}</strong>
+  </div>;
 }
 
 function RequestDiagnosis({ diagnosis, result }: {

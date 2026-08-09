@@ -121,6 +121,58 @@ describe("Environment-first desktop control client", () => {
     await expect(invalidClient.exchange(detail.id)).rejects.toBeInstanceOf(ControlContractError);
   });
 
+  it("binds the requested local content view and rejects inconsistent projections", async () => {
+    const detail = {
+      id: "exchange-incremental",
+      status: "succeeded",
+      environment: {
+        id: "work", revision: 3, digest,
+        clientEndpointId: "endpoint.claude", clientEndpointRevision: 2,
+        protocolPlanId: "plan.claude", protocolPlanRevision: 2,
+        routeId: "route.claude", routeRevision: 2,
+      },
+      parentRefs: { captureRunId: "run-one", exchangeId: "exchange-incremental" },
+      processingTrace: { pluginRunIds: [], attempts: [], result: "succeeded" },
+      content: {
+        state: "recorded",
+        mode: "full",
+        recordedAt: "2026-08-09T01:00:00Z",
+        expiresAt: "2026-09-08T01:00:00Z",
+        requestProjection: {
+          view: "incremental",
+          relationship: "incremental",
+          inheritedMessageCount: 2,
+          totalMessageCount: 3,
+          fullSnapshotAvailable: true,
+        },
+        request: {
+          requestedModel: "claude", effectiveModel: "claude",
+          maxOutputTokens: 1024, stream: true,
+          messages: [{
+            role: "user",
+            blocks: [{ kind: "text", availability: "recorded", text: "new turn", originalSize: 8 }],
+          }],
+          tools: [],
+        },
+      },
+    } as const;
+    let requestedURL: URL | undefined;
+    const client = await createControlClient(
+      session(),
+      sessionAwareFetch((url) => {
+        requestedURL = url;
+        return jsonResponse(detail);
+      }),
+    );
+
+    await expect(client.exchange(detail.id)).resolves.toEqual(detail);
+    expect(requestedURL?.search).toBe("?contentView=incremental");
+    await expect(client.exchange(detail.id, { contentView: "full" })).rejects.toBeInstanceOf(
+      ControlContractError,
+    );
+    expect(requestedURL?.search).toBe("?contentView=full");
+  });
+
   it("preserves a missing Environment draft as a typed control Problem", async () => {
     const fetch = sessionAwareFetch((url) => {
       expect(url.pathname).toBe("/api/v1/environments/work/draft");

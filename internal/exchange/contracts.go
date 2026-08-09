@@ -1028,6 +1028,8 @@ type AttemptObserver interface {
 // consumers cannot accidentally gain access to messages or tool arguments.
 type ContentObservation struct {
 	ExchangeID           string
+	CaptureRunID         string
+	ManualCaptureID      string
 	EnvironmentID        environment.EnvironmentID
 	EnvironmentRevision  environment.Revision
 	EnvironmentDigest    string

@@ -23,8 +23,8 @@ export const dashboardQueryKeys = {
     ["vibermate", "desktop", "capture", captureKey, "assignment"] as const,
   workspaceDefault: (machineId: string, workspaceId: string) =>
     ["vibermate", "desktop", "workspace-default", machineId, workspaceId] as const,
-  exchange: (exchangeId: string) =>
-    ["vibermate", "desktop", "exchange", exchangeId] as const,
+  exchange: (exchangeId: string, contentView: "incremental" | "full") =>
+    ["vibermate", "desktop", "exchange", exchangeId, contentView] as const,
 };
 
 /**

@@ -58,6 +58,53 @@ type FrozenRef struct {
 	RouteRevision          uint64 `json:"routeRevision"`
 }
 
+// ParentRef identifies the capture boundary that produced this evidence. It
+// is deliberately narrower than a session claim: a CaptureRun is sufficient
+// to scope exact transcript-prefix reuse, while a ManualCapture may carry
+// several unrelated application sessions and therefore never authorizes an
+// incremental presentation by itself.
+type ParentRef struct {
+	CaptureRunID    string `json:"captureRunId,omitempty"`
+	ManualCaptureID string `json:"manualCaptureId,omitempty"`
+}
+
+func (ref ParentRef) Validate() error {
+	if ref.CaptureRunID != "" && ref.ManualCaptureID != "" {
+		return fmt.Errorf("%w: content parent is ambiguous", ErrInvalidEvidence)
+	}
+	for _, value := range []string{ref.CaptureRunID, ref.ManualCaptureID} {
+		if value != "" && !validIdentity(value, 128) {
+			return fmt.Errorf("%w: content parent is invalid", ErrInvalidEvidence)
+		}
+	}
+	return nil
+}
+
+type RequestPresentationMode string
+
+const (
+	// RequestPresentationCheckpoint means the full frozen request is the first
+	// trustworthy local view for this branch (including after compaction or a
+	// history rewrite).
+	RequestPresentationCheckpoint RequestPresentationMode = "checkpoint"
+	// RequestPresentationIncremental means an exact previously delivered
+	// transcript is a prefix and only the suffix is new in this Exchange.
+	RequestPresentationIncremental RequestPresentationMode = "incremental"
+	// RequestPresentationSameTranscript marks an exact replay with no new
+	// client transcript messages.
+	RequestPresentationSameTranscript RequestPresentationMode = "same_transcript"
+)
+
+// RequestPresentation is repository-derived local presentation metadata. It
+// is intentionally excluded from canonical evidence JSON: the immutable full
+// Record remains the authority, while a content-addressed repository may
+// derive a compact view without changing the provider request or evidence
+// digest.
+type RequestPresentation struct {
+	Mode                  RequestPresentationMode `json:"-"`
+	InheritedMessageCount int                     `json:"-"`
+}
+
 func (ref FrozenRef) Validate() error {
 	if ref.EnvironmentID == "" || ref.EnvironmentRevision == 0 ||
 		ref.EnvironmentDigest == "" || ref.ClientEndpointID == "" ||
@@ -138,13 +185,27 @@ type Response struct {
 // extensions, request headers, credential material, proxy credentials, and
 // raw wire bodies have no representation here.
 type Record struct {
-	ExchangeID string                           `json:"exchangeId"`
-	Frozen     FrozenRef                        `json:"frozen"`
-	Mode       environment.ContentRecordingMode `json:"mode"`
-	RecordedAt time.Time                        `json:"recordedAt"`
-	ExpiresAt  time.Time                        `json:"expiresAt"`
-	Request    Request                          `json:"request"`
-	Response   *Response                        `json:"response,omitempty"`
+	ExchangeID   string                           `json:"exchangeId"`
+	Parent       ParentRef                        `json:"parent"`
+	Frozen       FrozenRef                        `json:"frozen"`
+	Mode         environment.ContentRecordingMode `json:"mode"`
+	RecordedAt   time.Time                        `json:"recordedAt"`
+	ExpiresAt    time.Time                        `json:"expiresAt"`
+	Request      Request                          `json:"request"`
+	Response     *Response                        `json:"response,omitempty"`
+	Presentation RequestPresentation              `json:"-"`
+}
+
+type RecordOption func(*Record) error
+
+func WithParentRef(parent ParentRef) RecordOption {
+	return func(record *Record) error {
+		if err := parent.Validate(); err != nil {
+			return err
+		}
+		record.Parent = parent
+		return nil
+	}
 }
 
 func NewRecord(
@@ -154,6 +215,7 @@ func NewRecord(
 	recordedAt time.Time,
 	request protocolcore.Request,
 	response *protocolcore.Response,
+	options ...RecordOption,
 ) (Record, error) {
 	if policy.Mode == environment.ContentRecordingOff {
 		return Record{}, fmt.Errorf("%w: recording is disabled", ErrInvalidEvidence)
@@ -166,12 +228,21 @@ func NewRecord(
 	}
 	full := policy.Mode == environment.ContentRecordingFull
 	record := Record{
-		ExchangeID: exchangeID,
-		Frozen:     frozen,
-		Mode:       policy.Mode,
-		RecordedAt: recordedAt.UTC(),
-		ExpiresAt:  recordedAt.UTC().AddDate(0, 0, int(policy.RetentionDays)),
-		Request:    requestView(request, full),
+		ExchangeID:   exchangeID,
+		Frozen:       frozen,
+		Mode:         policy.Mode,
+		RecordedAt:   recordedAt.UTC(),
+		ExpiresAt:    recordedAt.UTC().AddDate(0, 0, int(policy.RetentionDays)),
+		Request:      requestView(request, full),
+		Presentation: RequestPresentation{Mode: RequestPresentationCheckpoint},
+	}
+	for _, option := range options {
+		if option == nil {
+			return Record{}, fmt.Errorf("%w: record option is nil", ErrInvalidEvidence)
+		}
+		if err := option(&record); err != nil {
+			return Record{}, err
+		}
 	}
 	if response != nil {
 		if err := response.Validate(); err != nil {
@@ -188,7 +259,7 @@ func NewRecord(
 
 func (record Record) Validate() error {
 	if !validIdentity(record.ExchangeID, MaxExchangeIDBytes) ||
-		record.Frozen.Validate() != nil || record.RecordedAt.IsZero() ||
+		record.Parent.Validate() != nil || record.Frozen.Validate() != nil || record.RecordedAt.IsZero() ||
 		record.ExpiresAt.IsZero() || !record.ExpiresAt.After(record.RecordedAt) ||
 		(record.Mode != environment.ContentRecordingFull &&
 			record.Mode != environment.ContentRecordingMetadataOnly) {
@@ -217,6 +288,18 @@ func (record Record) Clone() Record {
 		cloned.Response = &response
 	}
 	return cloned
+}
+
+func (record Record) IncrementalRequest() []Message {
+	inherited := record.Presentation.InheritedMessageCount
+	if inherited < 0 || inherited > len(record.Request.Messages) {
+		inherited = 0
+	}
+	result := make([]Message, len(record.Request.Messages)-inherited)
+	for index, message := range record.Request.Messages[inherited:] {
+		result[index] = Message{Role: message.Role, Blocks: cloneBlocks(message.Blocks)}
+	}
+	return result
 }
 
 func CanonicalJSON(record Record) ([]byte, error) {

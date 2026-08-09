@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/vibe-agi/vibermate/internal/anthropicchat"
+	"github.com/vibe-agi/vibermate/internal/captureadmission"
 	"github.com/vibe-agi/vibermate/internal/environment"
 	"github.com/vibe-agi/vibermate/internal/offlinehold"
 	"github.com/vibe-agi/vibermate/internal/operationcatalog"
@@ -157,6 +158,75 @@ func TestManagedRequestPublishesFrozenConversationEvidence(t *testing.T) {
 		!observation.Response.Usage.Output.Known ||
 		observation.Response.Usage.Output.Tokens != 2 {
 		t.Fatalf("captured response = %+v", observation.Response)
+	}
+}
+
+func TestLocalIncrementalEvidenceNeverTruncatesTheUpstreamRequest(t *testing.T) {
+	plan := mustEnvironmentRequestPlan(t, testPlanOptions{
+		mode:           environment.PlanModeManaged,
+		providerOrigin: "https://provider.example/v1",
+		backend:        protocolspec.DialectOpenAIChat,
+		modelMode:      modelModeFixed,
+		fixedModel:     "gpt-provider",
+		accounts:       []testAccount{{id: "account.primary", revision: 3, epoch: 7}},
+		preferred:      "account.primary",
+	})
+	provider := &providerDouble{results: []providerResult{{
+		response: jsonResponse(http.StatusOK, completeProviderResponse("gpt-provider")),
+	}}}
+	content := &contentObserverDouble{}
+	pipeline := newTestPipelineWithContentObserver(
+		t,
+		newAccountAuthority(t, testAccount{id: "account.primary", revision: 3, epoch: 7}),
+		provider,
+		approvedDecisions(),
+		&attemptObserverDouble{},
+		content,
+	)
+	defer shutdownPipeline(t, pipeline)
+
+	admission, err := captureadmission.NewManagedRun(captureadmission.ManagedRunEvidence{
+		CaptureRunID: "capture-full-context",
+		SourceLabel:  "claude",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	body := []byte(`{
+		"model":"claude-client-alias","max_tokens":32,
+		"messages":[
+			{"role":"user","content":"first"},
+			{"role":"assistant","content":"second"},
+			{"role":"user","content":"third"}
+		]
+	}`)
+	request := mustClientRequestWithOptions(
+		t,
+		"exchange-full-context",
+		plan,
+		body,
+		WithIngressCorrelation(admission, "connection-full-context"),
+	)
+	result, err := pipeline.Execute(context.Background(), request, &downstreamRecorder{})
+	if err != nil || result.Outcome != AttemptSucceeded {
+		t.Fatalf("Execute() = %+v, %v", result, err)
+	}
+
+	requests := provider.requestsSnapshot()
+	if len(requests) != 1 {
+		t.Fatalf("provider requests = %d", len(requests))
+	}
+	var upstream struct {
+		Messages []json.RawMessage `json:"messages"`
+	}
+	if err := json.Unmarshal(requests[0].Body(), &upstream); err != nil || len(upstream.Messages) != 3 {
+		t.Fatalf("upstream received a truncated request: body=%s err=%v", requests[0].Body(), err)
+	}
+	observation, ok := content.latest()
+	if !ok || observation.CaptureRunID != "capture-full-context" ||
+		observation.ManualCaptureID != "" || len(observation.Request.Messages) != 3 ||
+		observation.Request.Messages[2].Blocks[0].Text != "third" {
+		t.Fatalf("local full evidence = %+v", observation)
 	}
 }
 

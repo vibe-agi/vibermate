@@ -20,6 +20,7 @@ import type {
   EnvironmentPublishResult,
   EnvironmentRecord,
   ExchangeDetail,
+  ExchangeReadOptions,
   ManualCaptureContext,
   ManualCaptureCreateInput,
   ManualCaptureGrant,
@@ -167,7 +168,7 @@ export interface ControlClient {
   setWorkspaceEnvironmentDefault(machineId: string, workspaceId: string, expectedRevision: number, environmentId: string, signal?: AbortSignal): Promise<WorkspaceEnvironmentDefault>;
   clearWorkspaceEnvironmentDefault(machineId: string, workspaceId: string, expectedRevision: number, signal?: AbortSignal): Promise<void>;
   activities(query?: ActivityQuery, signal?: AbortSignal): Promise<ActivityPage>;
-  exchange(exchangeId: string, signal?: AbortSignal): Promise<ExchangeDetail>;
+  exchange(exchangeId: string, options?: ExchangeReadOptions): Promise<ExchangeDetail>;
   approvals(signal?: AbortSignal): Promise<ApprovalPage>;
   manualCaptureContext(environmentId: string, signal?: AbortSignal): Promise<ManualCaptureContext>;
   manualCaptures(signal?: AbortSignal): Promise<ManualCapturePage>;
@@ -1236,16 +1237,23 @@ export async function createControlClient(
         await requestRead<unknown>(`/api/v1/activities?${query.toString()}`, signal),
       );
     },
-    exchange: async (exchangeId, signal) => {
+    exchange: async (exchangeId, options) => {
       if (!validRouteIdentity(exchangeId)) {
         throw new ControlContractError();
       }
+      if (options !== undefined &&
+        (typeof options !== "object" ||
+          (options.contentView !== undefined && options.contentView !== "incremental" && options.contentView !== "full"))) {
+        throw new ControlContractError();
+      }
+      const contentView = options?.contentView ?? "incremental";
       return requireExchangeDetail(
         await requestRead<unknown>(
-          `/api/v1/exchanges/${encodeURIComponent(exchangeId)}`,
-          signal,
+          `/api/v1/exchanges/${encodeURIComponent(exchangeId)}?contentView=${contentView}`,
+          options?.signal,
         ),
         exchangeId,
+        contentView,
       );
     },
     approvals: async (signal) =>
@@ -2868,7 +2876,11 @@ function validActivityStatus(value: unknown): value is ActivityStatus {
   return value === "succeeded" || value === "failed" || value === "canceled";
 }
 
-function requireExchangeDetail(value: unknown, expectedId: string): ExchangeDetail {
+function requireExchangeDetail(
+  value: unknown,
+  expectedId: string,
+  expectedView: "incremental" | "full",
+): ExchangeDetail {
   if (
     !isRecord(value) ||
     !hasClosedFields(value, ["id", "status", "environment", "parentRefs", "processingTrace", "content"], ["diagnosis"]) ||
@@ -2878,7 +2890,7 @@ function requireExchangeDetail(value: unknown, expectedId: string): ExchangeDeta
     !validActivityParentRefs(value.parentRefs, expectedId) ||
     (value.diagnosis !== undefined && !validExchangeDiagnosis(value.diagnosis)) ||
     !validExchangeTrace(value.processingTrace) ||
-    !validExchangeContent(value.content)
+    !validExchangeContent(value.content, expectedView)
   ) throw new ControlContractError();
   return value as unknown as ExchangeDetail;
 }
@@ -2901,7 +2913,7 @@ function validExchangeDiagnosis(value: unknown): boolean {
   );
 }
 
-function validExchangeContent(value: unknown): boolean {
+function validExchangeContent(value: unknown, expectedView: "incremental" | "full"): boolean {
   if (!isRecord(value) || value.state === "not_recorded") {
     return isRecord(value) && hasClosedFields(value, ["state"]) && value.state === "not_recorded";
   }
@@ -2909,18 +2921,53 @@ function validExchangeContent(value: unknown): boolean {
     value.state === "recorded" &&
     hasClosedFields(
       value,
-      ["state", "mode", "recordedAt", "expiresAt", "request"],
+      ["state", "mode", "recordedAt", "expiresAt", "requestProjection", "request"],
       ["response"],
     ) &&
     (value.mode === "full" || value.mode === "metadata_only") &&
     validTimestamp(value.recordedAt) &&
     validTimestamp(value.expiresAt) &&
-    validExchangeContentRequest(value.request, value.mode) &&
+    validExchangeRequestProjection(value.requestProjection, expectedView) &&
+    validExchangeContentRequest(value.request, value.mode, value.requestProjection) &&
     (value.response === undefined || validExchangeContentResponse(value.response, value.mode))
   );
 }
 
-function validExchangeContentRequest(value: unknown, mode: "full" | "metadata_only"): boolean {
+function validExchangeRequestProjection(
+  value: unknown,
+  expectedView: "incremental" | "full",
+): boolean {
+  if (!isRecord(value) || !hasClosedFields(value, [
+    "view",
+    "relationship",
+    "inheritedMessageCount",
+    "totalMessageCount",
+    "fullSnapshotAvailable",
+  ]) || value.view !== expectedView ||
+    (value.relationship !== "checkpoint" && value.relationship !== "incremental" &&
+      value.relationship !== "same_transcript") ||
+    !nonNegativeInteger(value.inheritedMessageCount) ||
+    !nonNegativeInteger(value.totalMessageCount) || value.totalMessageCount < 1 ||
+    value.inheritedMessageCount > value.totalMessageCount ||
+    typeof value.fullSnapshotAvailable !== "boolean" ||
+    value.fullSnapshotAvailable !== (value.inheritedMessageCount > 0)) return false;
+  switch (value.relationship) {
+    case "checkpoint": return value.inheritedMessageCount === 0;
+    case "incremental": return value.inheritedMessageCount > 0 &&
+      value.inheritedMessageCount < value.totalMessageCount;
+    case "same_transcript": return value.inheritedMessageCount === value.totalMessageCount;
+  }
+}
+
+function validExchangeContentRequest(
+  value: unknown,
+  mode: "full" | "metadata_only",
+  projection: unknown,
+): boolean {
+  if (!isRecord(projection)) return false;
+  const displayedMessageCount = projection.view === "full"
+    ? projection.totalMessageCount
+    : Number(projection.totalMessageCount) - Number(projection.inheritedMessageCount);
   return (
     isRecord(value) &&
     hasClosedFields(value, ["requestedModel", "effectiveModel", "maxOutputTokens", "stream", "messages", "tools"]) &&
@@ -2929,7 +2976,7 @@ function validExchangeContentRequest(value: unknown, mode: "full" | "metadata_on
     nonNegativeInteger(value.maxOutputTokens) &&
     typeof value.stream === "boolean" &&
     Array.isArray(value.messages) &&
-    value.messages.length > 0 &&
+    value.messages.length === displayedMessageCount &&
     value.messages.length <= maximumCollectionItems &&
     value.messages.every((message) => validExchangeContentMessage(message, mode)) &&
     Array.isArray(value.tools) &&

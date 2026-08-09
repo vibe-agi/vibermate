@@ -77,7 +77,7 @@ func TestExchangeDetailProjectsOrderedRedactedEvidence(t *testing.T) {
 			{Sequence: 11, Attempt: newAttempt("egress-1", "attempt-1")},
 			{Sequence: 10, Attempt: newAttempt("egress-0", "attempt-1")},
 		},
-	}, nil)
+	}, nil, ExchangeContentViewIncremental)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -110,7 +110,7 @@ func TestExchangeDetailProjectsOrderedRedactedEvidence(t *testing.T) {
 	}
 	if _, err := exchangeDetailOf(record, egressaudit.Page{
 		NextCursor: "more-evidence",
-	}, nil); err == nil {
+	}, nil, ExchangeContentViewIncremental); err == nil {
 		t.Fatal("a truncated Exchange detail was accepted")
 	}
 }
@@ -157,7 +157,9 @@ func TestExchangeDetailJoinsOnlyMatchingFrozenConversationEvidence(t *testing.T)
 		SourceRecognition: activity.SourceRecognitionUnknown,
 	}
 	content := exchangeContentFixture(t, record)
-	detail, err := exchangeDetailOf(record, egressaudit.Page{}, &content)
+	detail, err := exchangeDetailOf(
+		record, egressaudit.Page{}, &content, ExchangeContentViewIncremental,
+	)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -165,6 +167,12 @@ func TestExchangeDetailJoinsOnlyMatchingFrozenConversationEvidence(t *testing.T)
 		detail.Content.Mode != string(environment.ContentRecordingFull) ||
 		detail.Content.RecordedAt == nil || detail.Content.ExpiresAt == nil ||
 		detail.Content.Request == nil ||
+		detail.Content.RequestProjection == nil ||
+		detail.Content.RequestProjection.View != ExchangeContentViewIncremental ||
+		detail.Content.RequestProjection.Relationship != exchangecontent.RequestPresentationCheckpoint ||
+		detail.Content.RequestProjection.TotalMessageCount != 1 ||
+		detail.Content.RequestProjection.InheritedMessageCount != 0 ||
+		detail.Content.RequestProjection.FullSnapshotAvailable ||
 		detail.Content.Request.Messages[0].Blocks[0].Text != "inspect this" ||
 		detail.Content.Response == nil ||
 		detail.Content.Response.Blocks[0].ToolName != "read_file" ||
@@ -174,8 +182,90 @@ func TestExchangeDetailJoinsOnlyMatchingFrozenConversationEvidence(t *testing.T)
 
 	tampered := content.Clone()
 	tampered.Frozen.RouteRevision++
-	if _, err := exchangeDetailOf(record, egressaudit.Page{}, &tampered); err == nil {
+	if _, err := exchangeDetailOf(
+		record, egressaudit.Page{}, &tampered, ExchangeContentViewIncremental,
+	); err == nil {
 		t.Fatal("content from a different frozen Route revision was joined")
+	}
+}
+
+func TestExchangeDetailDefaultsToIncrementalMessagesAndCanReturnFullSnapshot(t *testing.T) {
+	t.Parallel()
+	record := activity.Record{
+		Sequence: 8, ID: "activity-incremental",
+		OccurredAt:    time.Date(2026, 8, 9, 4, 0, 0, 0, time.UTC),
+		Kind:          activity.KindExchangeCompleted,
+		EnvironmentID: "work", EnvironmentRevision: 4,
+		EnvironmentDigest: strings.Repeat("a", 64),
+		ClientEndpointID:  "endpoint.claude", ClientEndpointRevision: 2,
+		ProtocolPlanID: "plan.claude", ProtocolPlanRevision: 3,
+		RouteID: "route.claude", RouteRevision: 5,
+		SubjectID: "exchange-incremental", Status: activity.StatusSucceeded,
+		SourceKind: activity.SourceCaptureRun, SourceDisplayName: "claude",
+		SourceRecognition: activity.SourceRecognitionVerified,
+		CaptureRunID:      "run-incremental", ConnectionID: "connection-incremental",
+	}
+	content := exchangeContentFixture(t, record)
+	inherited := content.Request.Messages[0]
+	content.Request.Messages = append(
+		[]exchangecontent.Message{inherited, inherited}, content.Request.Messages...,
+	)
+	content.Presentation = exchangecontent.RequestPresentation{
+		Mode:                  exchangecontent.RequestPresentationIncremental,
+		InheritedMessageCount: 2,
+	}
+
+	incremental, err := exchangeDetailOf(
+		record, egressaudit.Page{}, &content, ExchangeContentViewIncremental,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if incremental.Content.Request == nil ||
+		len(incremental.Content.Request.Messages) != 1 ||
+		incremental.Content.RequestProjection == nil ||
+		incremental.Content.RequestProjection.View != ExchangeContentViewIncremental ||
+		incremental.Content.RequestProjection.Relationship != exchangecontent.RequestPresentationIncremental ||
+		incremental.Content.RequestProjection.InheritedMessageCount != 2 ||
+		incremental.Content.RequestProjection.TotalMessageCount != 3 ||
+		!incremental.Content.RequestProjection.FullSnapshotAvailable {
+		t.Fatalf("incremental detail = %+v", incremental.Content)
+	}
+
+	full, err := exchangeDetailOf(
+		record, egressaudit.Page{}, &content, ExchangeContentViewFull,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if full.Content.Request == nil || len(full.Content.Request.Messages) != 3 ||
+		full.Content.RequestProjection == nil ||
+		full.Content.RequestProjection.View != ExchangeContentViewFull ||
+		full.Content.RequestProjection.InheritedMessageCount != 2 ||
+		full.Content.RequestProjection.TotalMessageCount != 3 {
+		t.Fatalf("full detail = %+v", full.Content)
+	}
+}
+
+func TestExchangeContentViewQueryIsClosed(t *testing.T) {
+	t.Parallel()
+	for rawQuery, want := range map[string]ExchangeContentView{
+		"":                        ExchangeContentViewIncremental,
+		"contentView=incremental": ExchangeContentViewIncremental,
+		"contentView=full":        ExchangeContentViewFull,
+	} {
+		got, err := parseExchangeContentView(rawQuery)
+		if err != nil || got != want {
+			t.Fatalf("parseExchangeContentView(%q) = %q, %v", rawQuery, got, err)
+		}
+	}
+	for _, rawQuery := range []string{
+		"contentView=", "contentView=delta", "contentView=full&contentView=full",
+		"contentView=full&extra=1", "extra=1", "contentView=%zz",
+	} {
+		if _, err := parseExchangeContentView(rawQuery); err == nil {
+			t.Fatalf("parseExchangeContentView(%q) unexpectedly succeeded", rawQuery)
+		}
 	}
 }
 
@@ -226,6 +316,10 @@ func exchangeContentFixture(t *testing.T, activityRecord activity.Record) exchan
 		activityRecord.OccurredAt,
 		request,
 		&response,
+		exchangecontent.WithParentRef(exchangecontent.ParentRef{
+			CaptureRunID:    activityRecord.CaptureRunID,
+			ManualCaptureID: activityRecord.ManualCaptureID,
+		}),
 	)
 	if err != nil {
 		t.Fatal(err)

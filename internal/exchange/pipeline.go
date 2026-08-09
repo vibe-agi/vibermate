@@ -607,8 +607,10 @@ func (pipeline *Pipeline) observeContent(
 	protocolPlan := plan.ProtocolPlan()
 	route := plan.Route()
 	observation := ContentObservation{
-		ExchangeID:    request.exchangeID,
-		EnvironmentID: plan.EnvironmentID(), EnvironmentRevision: plan.EnvironmentRevision(),
+		ExchangeID:      request.exchangeID,
+		CaptureRunID:    request.CaptureRunRef(),
+		ManualCaptureID: request.ManualCaptureRef(),
+		EnvironmentID:   plan.EnvironmentID(), EnvironmentRevision: plan.EnvironmentRevision(),
 		EnvironmentDigest: plan.EnvironmentDigest().String(),
 		EndpointID:        endpoint.ID(), EndpointRevision: endpoint.Revision(),
 		ProtocolPlanID: protocolPlan.ID(), ProtocolPlanRevision: protocolPlan.Revision(),

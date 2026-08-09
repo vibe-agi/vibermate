@@ -173,6 +173,17 @@ describe("the Environment-first browser preview host", () => {
     });
     const detail = await client.exchange("exchange-preview");
     expect(detail.environment).toEqual(page.items[0]?.environment);
+    expect(detail.content.requestProjection).toEqual({
+      view: "incremental",
+      relationship: "incremental",
+      inheritedMessageCount: 2,
+      totalMessageCount: 3,
+      fullSnapshotAvailable: true,
+    });
+    expect(detail.content.request?.messages).toHaveLength(1);
+    const full = await client.exchange("exchange-preview", { contentView: "full" });
+    expect(full.content.requestProjection?.view).toBe("full");
+    expect(full.content.request?.messages).toHaveLength(3);
     await expect(client.exchange("missing")).rejects.toBeInstanceOf(
       ControlProblem,
     );

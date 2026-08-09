@@ -149,7 +149,7 @@ const exchangeRoute = createRoute({
     const { invalid } = exchangeRoute.useSearch();
     return invalid === true || exchangeId === null
       ? <InvalidLocator />
-      : <ExchangeRoutePage exchangeId={exchangeId} />;
+      : <ExchangeRoutePage exchangeId={exchangeId} key={exchangeId} />;
   },
   getParentRoute: () => rootRoute,
   params: { parse: ({ exchangeId }) => ({ exchangeId: validEntityID(exchangeId) ? exchangeId : null }) },
