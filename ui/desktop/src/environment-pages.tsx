@@ -16,6 +16,7 @@ import {
 } from "./App.tsx";
 import { BrandIcon } from "./brand-icons.tsx";
 import { controlErrorKey, dashboardQueryKeys } from "./dashboard-runtime.ts";
+import { assignRouteAccount } from "./environment-editing.ts";
 import { dashboardTaskRoutePaths } from "./navigation.ts";
 import type {
   ClientProtocol,
@@ -244,7 +245,7 @@ function RouteAccountSelectors({ accounts, endpoints, onChange }: { readonly acc
   const { t } = useTranslation();
   return <div className="route-account-selectors">{endpoints.flatMap((endpoint) => endpoint.protocolPlans.flatMap((plan) => plan.upstreamPlan.routes.map((route) => {
     const compatible = compatibleAccountsForRealm(accounts, route.providerTarget.realmId);
-    return <label key={`${endpoint.id}:${plan.id}:${route.id}`}><span>{t("environmentDetail.account.route", { origin: route.providerTarget.origin })}</span><select onChange={(event) => onChange(setRouteAccount(endpoints, endpoint.id, plan.id, route.id, compatible.find((account) => account.id === event.target.value)))} value={route.accountPolicy.preferredAccountId}><option value="">{t("environmentDetail.account.client")}</option>{compatible.map((account) => <option disabled={account.state !== "active" || account.credentialState !== "ready"} key={account.id} value={account.id}>{account.displayName}</option>)}</select></label>;
+    return <label key={`${endpoint.id}:${plan.id}:${route.id}`}><span>{t("environmentDetail.account.route", { origin: route.providerTarget.origin })}</span><select onChange={(event) => onChange(assignRouteAccount(endpoints, endpoint.id, plan.id, route.id, compatible.find((account) => account.id === event.target.value)))} value={route.accountPolicy.preferredAccountId}><option value="">{t("environmentDetail.account.client")}</option>{compatible.map((account) => <option disabled={account.state !== "active" || account.credentialState !== "ready"} key={account.id} value={account.id}>{account.displayName}</option>)}</select></label>;
   })))}</div>;
 }
 
@@ -277,10 +278,6 @@ function compatibleProviderAccounts(accounts: readonly ProviderAccountRecord[], 
 
 function compatibleAccountsForRealm(accounts: readonly ProviderAccountRecord[], realm: string): readonly ProviderAccountRecord[] {
   return accounts.filter((account) => account.realmId === realm);
-}
-
-function setRouteAccount(endpoints: readonly EnvironmentClientEndpoint[], endpointID: string, planID: string, routeID: string, account?: ProviderAccountRecord): readonly EnvironmentClientEndpoint[] {
-  return endpoints.map((endpoint) => endpoint.id !== endpointID ? endpoint : { ...endpoint, protocolPlans: endpoint.protocolPlans.map((plan) => plan.id !== planID ? plan : { ...plan, upstreamPlan: { ...plan.upstreamPlan, routes: plan.upstreamPlan.routes.map((route) => route.id !== routeID ? route : { ...route, revision: route.revision + 1, accountPolicy: { ...accountPolicy(route.providerTarget.realmId, account), revision: route.accountPolicy.revision + 1 } }) } }) });
 }
 
 function protocolLabel(protocol: ClientProtocol, t: (key: string) => string): string { return t(`environmentDetail.protocol.${protocol}`); }

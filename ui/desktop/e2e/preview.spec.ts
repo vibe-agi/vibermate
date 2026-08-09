@@ -109,6 +109,26 @@ test("reviews impact before atomically publishing an Environment", async ({ page
   expect(errors).toEqual([]);
 });
 
+test("changes an existing passthrough Environment to a managed account", async ({ page }) => {
+  const errors = collectBrowserErrors(page);
+  await openPreview(page, "environments/work");
+
+  await page.getByRole("button", { name: "Edit Environment" }).click();
+  await page
+    .getByLabel("Authentication for https://api.anthropic.com")
+    .selectOption("anthropic-work");
+  await page.getByRole("button", { name: "Review changes" }).click();
+
+  const impact = page.getByRole("group", { name: "Impact preview" });
+  await expect(impact).toBeVisible();
+  await impact.getByRole("button", { name: "Publish revision" }).click();
+  await expect(page.getByText("Managed account", { exact: true })).toBeVisible();
+  await expect(page.locator("body")).not.toContainText(
+    "The local runtime returned an incompatible response.",
+  );
+  expect(errors).toEqual([]);
+});
+
 test("creates a useful Claude inspection Environment without requiring another account", async ({ page }) => {
   const errors = collectBrowserErrors(page);
   await openPreview(page, "environments");
