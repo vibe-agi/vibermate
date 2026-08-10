@@ -113,6 +113,7 @@ type frozenSelection struct {
 	effectiveModel       string
 	original             bool
 	targetRef            string
+	targetRevision       environment.Revision
 	targetRealm          string
 	target               providertransport.Target
 	provenance           providertransport.RequestProvenance
@@ -255,8 +256,9 @@ func selectFrozenPlan(plan environment.RequestPlan) (frozenSelection, error) {
 		protocolPlanRevision: protocolPlan.Revision(), routeID: route.ID(),
 		routeRevision: route.Revision(), accountPolicy: route.AccountPolicy(),
 		clientOrigin: endpoint.ClientOrigin(), targetRef: targetResource.ID,
-		targetRealm: targetResource.RealmID,
-		target:      target, provenance: provenance, wireProfile: wireProfile,
+		targetRevision: targetResource.Revision,
+		targetRealm:    targetResource.RealmID,
+		target:         target, provenance: provenance, wireProfile: wireProfile,
 		codecPlan: route.CodecPlan(), policySet: policySet,
 	}
 	switch modelPolicy.Mode {
@@ -301,6 +303,8 @@ func (selection frozenSelection) credentialCandidates() ([]credentialCandidate, 
 		seen := make(map[string]struct{}, len(configured))
 		appendCandidate := func(candidate environment.CompiledAccountReference) error {
 			if candidate.ID == "" || candidate.Revision == 0 || candidate.Revision > environment.MaxRevision ||
+				candidate.UpstreamEndpointID != selection.targetRef ||
+				candidate.UpstreamEndpointRevision != selection.targetRevision ||
 				candidate.RealmID == "" || candidate.RealmID != selection.targetRealm {
 				return errors.New("managed account candidate is invalid")
 			}

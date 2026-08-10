@@ -170,7 +170,7 @@ func newEnvironmentFixture(
 						BackendProtocol: string(protocolspec.DialectAnthropicMessages),
 						AccountPolicy: environment.RouteAccountPolicy{
 							Revision: revision, Mode: environment.AccountModeClientPassthrough,
-							AllowedRealmIDs: []string{"realm.localca"}, FailoverPolicy: environment.FailoverOff,
+							FailoverPolicy: environment.FailoverOff,
 						},
 						ModelPolicy:    environment.ModelPolicy{Revision: revision, Mode: "preserve"},
 						WireProfileRef: wireprofile.UpstreamWireProfileFollowClientValue,
@@ -213,7 +213,7 @@ func newEnvironmentCompiler(t *testing.T) environment.Compiler {
 	if err != nil {
 		t.Fatal(err)
 	}
-	compiler, err := environment.NewCompiler(nil, protocols, wires)
+	compiler, err := environment.NewCompiler(nil, nil, protocols, wires)
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -65,12 +65,13 @@ func withManagedRoute(value Environment, planIndex int) (Environment, accountCat
 	accountID := "account." + route.ProviderTarget.RealmID
 	route.AccountPolicy = RouteAccountPolicy{
 		Revision: 1, Mode: AccountModeManaged,
-		AllowedRealmIDs:    []string{route.ProviderTarget.RealmID},
 		PreferredAccountID: accountID, CandidateAccountIDs: []string{accountID},
 		AccountRevisions: map[string]Revision{accountID: 1}, FailoverPolicy: FailoverOff,
 	}
 	return value, accountCatalog{accountID: {
-		ID: accountID, Revision: 1, RealmID: route.ProviderTarget.RealmID, Active: true,
+		ID: accountID, Revision: 1,
+		UpstreamEndpointID: route.ProviderTarget.ID, UpstreamEndpointRevision: route.ProviderTarget.Revision,
+		RealmID: route.ProviderTarget.RealmID, Active: true,
 		BackendProtocols: []string{route.BackendProtocol},
 	}}
 }

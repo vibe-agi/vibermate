@@ -104,7 +104,7 @@ func unifiedCaptureApplication(t *testing.T, assignments captureassignment.Contr
 		Readiness: readyState(true), Status: runtime, Environments: runtime.Environments(),
 		Assignments: assignments, Activities: runtime.Activities(), Contents: runtime.ExchangeContents(), Connections: runtime.ConnectionEvents(),
 		Egress: runtime.EgressAttempts(), Approvals: runtime.ToolApprovals(),
-		Accounts: runtime.ProviderAccounts(), Offline: runtime,
+		Endpoints: runtime.UpstreamEndpoints(), Accounts: runtime.ProviderAccounts(), Offline: runtime,
 		CaptureRuns: captureReaderFixture{view: capturerun.View{
 			ID: "same-id", ExecutableLabel: "claude", CWD: "/workspace", State: capturerun.StateFinished,
 			Observation: capturerun.ObservationObserved, CreatedAt: now, UpdatedAt: now,

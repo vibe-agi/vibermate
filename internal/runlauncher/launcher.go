@@ -47,7 +47,11 @@ const (
 	defaultTerminationTimeout = 3 * time.Second
 )
 
-var ErrRuntimeUnavailable = errors.New("local ViberMate runtime is unavailable")
+var (
+	ErrRuntimeUnavailable     = errors.New("local ViberMate runtime is unavailable")
+	ErrEnvironmentNotFound    = errors.New("selected Environment is not configured")
+	ErrEnvironmentUnavailable = errors.New("selected Environment is unavailable")
+)
 
 type Discovery interface {
 	Load() (localdiscovery.Session, error)
@@ -182,7 +186,7 @@ func (launcher *Launcher) Run(
 		},
 	)
 	if err != nil {
-		return 1, err
+		return 1, classifyCreateFailure(err)
 	}
 	if err := validateGrant(grant); err != nil {
 		launcher.finishBestEffort(control, grant)
@@ -286,6 +290,21 @@ func (launcher *Launcher) Run(
 		return exitCode, fmt.Errorf("finish CaptureRun: %w", finishErr)
 	}
 	return exitCode, childErr
+}
+
+func classifyCreateFailure(err error) error {
+	var failure *ControlFailure
+	if !errors.As(err, &failure) {
+		return err
+	}
+	switch failure.ReasonCode {
+	case capturecontrol.ReasonEnvironmentNotFound:
+		return fmt.Errorf("%w: %w", ErrEnvironmentNotFound, failure)
+	case capturecontrol.ReasonEnvironmentUnavailable:
+		return fmt.Errorf("%w: %w", ErrEnvironmentUnavailable, failure)
+	default:
+		return err
+	}
 }
 
 // controlTransportTimeout is only a backstop around the pinned loopback HTTP

@@ -10,6 +10,7 @@ import (
 	"github.com/vibe-agi/vibermate/internal/provideraccount"
 	"github.com/vibe-agi/vibermate/internal/providerauth"
 	"github.com/vibe-agi/vibermate/internal/secretstore"
+	"github.com/vibe-agi/vibermate/internal/upstreamendpoint"
 )
 
 type providerAccountRepository struct {
@@ -43,7 +44,7 @@ func (repository *providerAccountRepository) LoadAll(
 	defer permit.finish()
 	rows, err := repository.database.QueryContext(
 		permit.context,
-		`SELECT account_id, display_name, realm_id, driver_ref,
+		`SELECT account_id, display_name, upstream_endpoint_id, realm_id, driver_ref,
 		        secret_reference, state, revision,
 		        created_at_unix_ms, updated_at_unix_ms
 		 FROM provider_accounts ORDER BY account_id`,
@@ -107,12 +108,12 @@ func (repository *providerAccountRepository) Write(
 		result, err = transaction.ExecContext(
 			permit.context,
 			`INSERT INTO provider_accounts(
-			   account_id, display_name, realm_id, driver_ref,
+			   account_id, display_name, upstream_endpoint_id, realm_id, driver_ref,
 			   secret_reference, state, revision,
 			   created_at_unix_ms, updated_at_unix_ms
-			 ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+			 ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 			 ON CONFLICT(account_id) DO NOTHING`,
-			candidate.ID.String(), candidate.DisplayName, candidate.RealmID,
+			candidate.ID.String(), candidate.DisplayName, candidate.UpstreamEndpointID.String(), candidate.RealmID,
 			candidate.Driver.String(), candidate.SecretRef.String(), string(candidate.State),
 			int64(candidate.Revision), candidate.CreatedAt.UnixMilli(), candidate.UpdatedAt.UnixMilli(),
 		)
@@ -120,10 +121,10 @@ func (repository *providerAccountRepository) Write(
 		result, err = transaction.ExecContext(
 			permit.context,
 			`UPDATE provider_accounts
-			 SET display_name = ?, realm_id = ?, driver_ref = ?, secret_reference = ?,
+			 SET display_name = ?, upstream_endpoint_id = ?, realm_id = ?, driver_ref = ?, secret_reference = ?,
 			     state = ?, revision = ?, updated_at_unix_ms = ?
 			 WHERE account_id = ? AND revision = ? AND created_at_unix_ms = ?`,
-			candidate.DisplayName, candidate.RealmID, candidate.Driver.String(),
+			candidate.DisplayName, candidate.UpstreamEndpointID.String(), candidate.RealmID, candidate.Driver.String(),
 			candidate.SecretRef.String(), string(candidate.State), int64(candidate.Revision),
 			candidate.UpdatedAt.UnixMilli(), candidate.ID.String(), int64(expected),
 			candidate.CreatedAt.UnixMilli(),
@@ -272,7 +273,7 @@ func loadProviderAccount(
 ) (provideraccount.Account, bool, error) {
 	account, err := scanProviderAccount(query.QueryRowContext(
 		ctx,
-		`SELECT account_id, display_name, realm_id, driver_ref,
+		`SELECT account_id, display_name, upstream_endpoint_id, realm_id, driver_ref,
 		        secret_reference, state, revision,
 		        created_at_unix_ms, updated_at_unix_ms
 		 FROM provider_accounts WHERE account_id = ?`,
@@ -288,23 +289,24 @@ func loadProviderAccount(
 }
 
 func scanProviderAccount(row providerAccountRow) (provideraccount.Account, error) {
-	var id, displayName, realmID, driverValue, secretValue, state string
+	var id, displayName, endpointID, realmID, driverValue, secretValue, state string
 	var revision, createdAt, updatedAt int64
 	if err := row.Scan(
-		&id, &displayName, &realmID, &driverValue,
+		&id, &displayName, &endpointID, &realmID, &driverValue,
 		&secretValue, &state, &revision, &createdAt, &updatedAt,
 	); err != nil {
 		return provideraccount.Account{}, err
 	}
 	parsedID, idErr := provideraccount.NewID(id)
+	parsedEndpointID, endpointErr := upstreamendpoint.NewID(endpointID)
 	driver, driverErr := providerauth.NewDriverRef(driverValue)
 	secret, secretErr := secretstore.ParseReference(secretValue)
-	if idErr != nil || driverErr != nil || secretErr != nil ||
+	if idErr != nil || endpointErr != nil || driverErr != nil || secretErr != nil ||
 		revision <= 0 || createdAt <= 0 || updatedAt < createdAt {
 		return provideraccount.Account{}, provideraccount.ErrInvalidAccount
 	}
 	account := provideraccount.Account{
-		ID: parsedID, DisplayName: displayName, RealmID: realmID,
+		ID: parsedID, DisplayName: displayName, UpstreamEndpointID: parsedEndpointID, RealmID: realmID,
 		Driver: driver, SecretRef: secret, State: provideraccount.State(state),
 		Revision: uint64(revision), CreatedAt: time.UnixMilli(createdAt).UTC(),
 		UpdatedAt: time.UnixMilli(updatedAt).UTC(),

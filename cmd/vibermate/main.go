@@ -24,6 +24,8 @@ const (
 	keyRuntimeUnavailable = "cli.error.runtimeUnavailable"
 	keyRuntimePath        = "cli.error.runtimePathUnavailable"
 	keyLaunchFailed       = "cli.error.launchFailed"
+	keyEnvironmentMissing = "cli.error.environmentNotFound"
+	keyEnvironmentDown    = "cli.error.environmentUnavailable"
 	reasonCatalogMissing  = "locale_catalog_unavailable"
 	reasonRenderFailed    = "locale_render_unavailable"
 )
@@ -134,10 +136,20 @@ func executeContext(
 	if errors.Is(err, context.Canceled) {
 		return 130, ""
 	}
+	return code, launchFailureKey(err)
+}
+
+func launchFailureKey(err error) string {
 	if errors.Is(err, runlauncher.ErrRuntimeUnavailable) {
-		return code, keyRuntimeUnavailable
+		return keyRuntimeUnavailable
 	}
-	return code, keyLaunchFailed
+	if errors.Is(err, runlauncher.ErrEnvironmentNotFound) {
+		return keyEnvironmentMissing
+	}
+	if errors.Is(err, runlauncher.ErrEnvironmentUnavailable) {
+		return keyEnvironmentDown
+	}
+	return keyLaunchFailed
 }
 
 type runConfig struct {

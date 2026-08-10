@@ -15,13 +15,14 @@ import (
 )
 
 type messagesStreamBlock struct {
-	kind         string
-	text         bytes.Buffer
-	id           string
-	name         string
-	initialInput json.RawMessage
-	partialInput bytes.Buffer
-	stopped      bool
+	kind               string
+	text               bytes.Buffer
+	id                 string
+	name               string
+	initialInput       json.RawMessage
+	partialInput       bytes.Buffer
+	extensionFragments [][]byte
+	stopped            bool
 }
 
 // AnthropicProviderStream validates and inventories an Anthropic-compatible
@@ -234,6 +235,29 @@ func (stream *AnthropicProviderStream) FinishDecoded(
 	if err != nil {
 		return nil, err
 	}
+	for _, index := range indices {
+		block := stream.blocks[index]
+		if block.kind != "thinking" && block.kind != "redacted_thinking" {
+			continue
+		}
+		kind := protocolcore.ProviderExtensionThinking
+		if block.kind == "redacted_thinking" {
+			kind = protocolcore.ProviderExtensionRedactedThinking
+		}
+		extension, extensionErr := protocolcore.NewProviderExtension(
+			protocolcore.ProviderExtensionSourceAnthropicMessages,
+			kind,
+			fmt.Sprintf("$.content[%d]", index),
+			block.extensionFragments,
+		)
+		if extensionErr != nil {
+			return nil, messagesProviderFailure(fmt.Sprintf("$.content[%d]", index), extensionErr)
+		}
+		response.ProviderExtensions = append(response.ProviderExtensions, extension)
+	}
+	if err := response.Validate(); err != nil {
+		return nil, messagesProviderFailure("$", err)
+	}
 	intents := make([]protocolcore.ToolIntent, 0)
 	for _, block := range response.Blocks {
 		if block.Kind != protocolcore.BlockToolCall {
@@ -370,7 +394,7 @@ func (stream *AnthropicProviderStream) consumeEvent(
 			block.initialInput = bytes.Clone(content.Input)
 			stream.barrier = true
 		case "thinking", "redacted_thinking":
-			// Preserved in the held source wire; it is not an executable tool.
+			block.extensionFragments = append(block.extensionFragments, bytes.Clone(payload.ContentBlock))
 		default:
 			return stream.stateFailure(index, "content block type is unsupported")
 		}
@@ -382,6 +406,8 @@ func (stream *AnthropicProviderStream) consumeEvent(
 				Type        string `json:"type"`
 				Text        string `json:"text"`
 				PartialJSON string `json:"partial_json"`
+				Thinking    string `json:"thinking,omitempty"`
+				Signature   string `json:"signature,omitempty"`
 			} `json:"delta"`
 		}
 		if err := json.Unmarshal(event.Data, &payload); err != nil {
@@ -414,6 +440,11 @@ func (stream *AnthropicProviderStream) consumeEvent(
 			if block.kind != "thinking" && block.kind != "redacted_thinking" {
 				return stream.stateFailure(index, "thinking delta targets a different block")
 			}
+			fragment, err := json.Marshal(payload.Delta)
+			if err != nil {
+				return stream.eventFailure(index, err)
+			}
+			block.extensionFragments = append(block.extensionFragments, fragment)
 		default:
 			return stream.stateFailure(index, "content delta type is unsupported")
 		}

@@ -946,14 +946,16 @@ type Provider interface {
 // provider attempt. It is derived only from the frozen Environment request
 // plan; an ingress caller cannot choose a different account or realm.
 type AccountLeaseRequest struct {
-	environmentID       environment.EnvironmentID
-	environmentRevision environment.Revision
-	environmentDigest   environment.CandidateDigest
-	routeID             environment.UpstreamRouteID
-	routeRevision       environment.Revision
-	accountID           string
-	accountRevision     environment.Revision
-	realmID             string
+	environmentID            environment.EnvironmentID
+	environmentRevision      environment.Revision
+	environmentDigest        environment.CandidateDigest
+	routeID                  environment.UpstreamRouteID
+	routeRevision            environment.Revision
+	upstreamEndpointID       string
+	upstreamEndpointRevision environment.Revision
+	accountID                string
+	accountRevision          environment.Revision
+	realmID                  string
 }
 
 func (request AccountLeaseRequest) EnvironmentID() environment.EnvironmentID {
@@ -974,6 +976,14 @@ func (request AccountLeaseRequest) RouteID() environment.UpstreamRouteID {
 
 func (request AccountLeaseRequest) RouteRevision() environment.Revision {
 	return request.routeRevision
+}
+
+func (request AccountLeaseRequest) UpstreamEndpointID() string {
+	return request.upstreamEndpointID
+}
+
+func (request AccountLeaseRequest) UpstreamEndpointRevision() environment.Revision {
+	return request.upstreamEndpointRevision
 }
 
 func (request AccountLeaseRequest) AccountID() string {
@@ -1019,8 +1029,25 @@ type AttemptObservation struct {
 	Transport            transportprofile.Evidence
 }
 
-type AttemptObserver interface {
-	Observe(context.Context, AttemptObservation) error
+type StartObservation struct {
+	ExchangeID           string
+	EnvironmentID        environment.EnvironmentID
+	EnvironmentRevision  environment.Revision
+	EnvironmentDigest    string
+	EndpointID           environment.ClientEndpointID
+	EndpointRevision     environment.Revision
+	ProtocolPlanID       environment.ClientProtocolPlanID
+	ProtocolPlanRevision environment.Revision
+	RouteID              environment.UpstreamRouteID
+	RouteRevision        environment.Revision
+	Admission            captureadmission.Admission
+	HasAdmission         bool
+	ConnectionID         string
+}
+
+type ExchangeObserver interface {
+	ObserveStart(context.Context, StartObservation) error
+	ObserveTerminal(context.Context, AttemptObservation) error
 }
 
 // ContentObservation is the explicit plaintext boundary for one semantic
@@ -1387,7 +1414,7 @@ type Options struct {
 	Provider           Provider
 	ToolDecisions      ToolDecisionGate
 	RetryWaiter        RetryWaiter
-	Observer           AttemptObserver
+	Observer           ExchangeObserver
 	ContentObserver    ContentObserver
 	ObservationTimeout time.Duration
 	Hold               HoldPolicy

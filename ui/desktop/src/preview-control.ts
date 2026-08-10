@@ -36,6 +36,9 @@ import type {
   ProviderAccountPage,
   ProviderAccountRecord,
   StatusResponse,
+  UpstreamEndpointCreateInput,
+  UpstreamEndpointPage,
+  UpstreamEndpointRecord,
   WorkspaceEnvironmentDefault,
 } from "./control-types.ts";
 
@@ -100,7 +103,7 @@ const workEnvironment: EnvironmentRecord = {
                 id: "claude-official",
                 revision: 2,
                 providerTarget: {
-                  id: "anthropic-official",
+				  id: "target.claude.official",
                   revision: 1,
                   origin: "https://api.anthropic.com",
                   realmId: "anthropic.official",
@@ -110,7 +113,6 @@ const workEnvironment: EnvironmentRecord = {
                 accountPolicy: {
                   revision: 1,
                   mode: "client_passthrough",
-                  allowedRealmIds: ["anthropic.official"],
                   preferredAccountId: "",
                   candidateAccountIds: [],
                   accountRevisions: {},
@@ -167,6 +169,65 @@ const managedCapture: CaptureRecord = {
   },
 };
 
+function previewManagedCapture({
+  displayName,
+  id,
+  minutes,
+  state,
+  workspace,
+}: {
+  readonly displayName: string;
+  readonly id: string;
+  readonly minutes: number;
+  readonly state: string;
+  readonly workspace: string;
+}): CaptureRecord {
+  const executableLabel = displayName.toLocaleLowerCase().includes("claude")
+    ? "claude"
+    : displayName.toLocaleLowerCase().includes("codex")
+      ? "codex"
+      : "agent";
+  const updatedAt = new Date(Date.parse(timestamp) + minutes * 60_000).toISOString();
+  return {
+    key: `managed_run:${id}`,
+    id,
+    kind: "managed_run",
+    displayName,
+    state,
+    observation: state === "created" ? "waiting_for_traffic" : "observed",
+    createdAt: timestamp,
+    updatedAt,
+    managedRun: {
+      executableLabel,
+      cwd: `/workspaces/${workspace}`,
+      canonicalExecutablePath: `/opt/vibermate/agents/${executableLabel}`,
+      localUserLabel: "operator",
+      machineId: `machine-${workspace}`,
+      machineRegistrationRevision: 1,
+      workspaceId: `workspace-${workspace}`,
+      workspaceLabel: workspace,
+      workspaceEvidence: "canonical_path",
+      workspaceDerivationRevision: 1,
+      processId: 100 + minutes,
+      recognition: "recognized",
+      expiresAt: "2026-08-08T10:00:00.000Z",
+      ...(state === "created" ? {} : { firstObservedAt: updatedAt }),
+    },
+  };
+}
+
+const managedPreviewCaptures: readonly CaptureRecord[] = [
+  managedCapture,
+  previewManagedCapture({ id: "run-api-refactor", displayName: "Codex · API refactor", workspace: "gateway", state: "running", minutes: 8 }),
+  previewManagedCapture({ id: "run-release", displayName: "Claude · Release notes", workspace: "release", state: "attached", minutes: 7 }),
+  previewManagedCapture({ id: "run-tests", displayName: "Codex · Test repair", workspace: "desktop", state: "running", minutes: 6 }),
+  previewManagedCapture({ id: "run-indexer", displayName: "Forge · Runtime index", workspace: "runtime", state: "running", minutes: 5 }),
+  previewManagedCapture({ id: "run-data-audit", displayName: "Claude · Data audit", workspace: "evals", state: "created", minutes: 4 }),
+  previewManagedCapture({ id: "run-plugins", displayName: "Codex · Plugin pass", workspace: "plugins", state: "running", minutes: 3 }),
+  previewManagedCapture({ id: "run-docs-history", displayName: "Claude · Docs migration", workspace: "docs", state: "finished", minutes: -30 }),
+  previewManagedCapture({ id: "run-quality-history", displayName: "Codex · Quality sweep", workspace: "quality", state: "finished", minutes: -60 }),
+];
+
 const baseManualCapture: ManualCaptureRecord = {
   id: "manual-preview",
   displayName: "Editor",
@@ -176,6 +237,18 @@ const baseManualCapture: ManualCaptureRecord = {
   observation: "waiting_for_traffic",
   createdAt: timestamp,
   updatedAt: timestamp,
+};
+
+const revokedManualCapture: ManualCaptureRecord = {
+  id: "manual-history",
+  displayName: "Research desktop",
+  clientClass: "desktop_app",
+  lifetime: "until_revoked",
+  state: "revoked",
+  observation: "observed",
+  createdAt: "2026-08-08T06:00:00.000Z",
+  updatedAt: "2026-08-08T07:00:00.000Z",
+  lastObservedAt: "2026-08-08T06:58:00.000Z",
 };
 
 function manualCaptureRecord(record: ManualCaptureRecord): CaptureRecord {
@@ -342,12 +415,12 @@ const earlierPreviewExchange: ExchangeDetail = {
       view: "full",
       relationship: "checkpoint",
       inheritedMessageCount: 0,
-      totalMessageCount: 1,
+      totalMessageCount: 4,
       fullSnapshotAvailable: false,
     },
     request: {
       ...previewExchange.content.request!,
-      messages: [{
+      messages: [...previewExchange.content.request!.messages, {
         role: "user",
         blocks: [{
           kind: "text",
@@ -370,6 +443,80 @@ const earlierPreviewExchange: ExchangeDetail = {
     },
   },
 };
+
+const pendingPreviewExchange: ExchangeDetail = {
+  ...previewExchange,
+  id: "exchange-preview-pending",
+  status: "pending",
+  parentRefs: {
+    ...previewExchange.parentRefs,
+    exchangeId: "exchange-preview-pending",
+  },
+  processingTrace: {
+    pluginRunIds: [],
+    attempts: [],
+    result: "pending",
+  },
+  content: {
+    state: "recorded",
+    mode: "full",
+    recordedAt: "2026-08-08T08:03:00.000Z",
+    expiresAt: "2026-09-07T08:03:00.000Z",
+    requestProjection: {
+      view: "incremental",
+      relationship: "incremental",
+      inheritedMessageCount: 3,
+      totalMessageCount: 4,
+      fullSnapshotAvailable: true,
+    },
+    request: {
+      requestedModel: "claude-sonnet",
+      effectiveModel: "claude-sonnet",
+      maxOutputTokens: 4096,
+      stream: true,
+      messages: [...previewExchange.content.request!.messages, {
+        role: "user",
+        blocks: [{
+          kind: "text",
+          availability: "recorded",
+          text: "Review the latest runtime change and summarize any remaining risk.",
+          originalSize: 66,
+        }],
+      }],
+      tools: [{ name: "read_file" }],
+    },
+  },
+};
+
+const historicalPreviewExchanges = Array.from({ length: 24 }, (_, index) => {
+  const id = `exchange-preview-history-${String(index + 1).padStart(2, "0")}`;
+  const occurredAt = new Date(Date.parse(timestamp) - (24 - index) * 60_000).toISOString();
+  const detail: ExchangeDetail = {
+    ...previewExchange,
+    id,
+    parentRefs: {
+      ...previewExchange.parentRefs,
+      exchangeId: id,
+    },
+    processingTrace: {
+      ...previewExchange.processingTrace,
+      attempts: previewExchange.processingTrace.attempts.map((attempt) => ({
+        ...attempt,
+        id: `${attempt.id}-${index + 1}`,
+        parent: {
+          ...attempt.parent,
+          exchangeId: id,
+          id: `${attempt.parent.id}-${index + 1}`,
+        },
+      })),
+    },
+    content: {
+      ...previewExchange.content,
+      recordedAt: occurredAt,
+    },
+  };
+  return { detail, occurredAt };
+});
 
 const unsupportedPreviewExchange: ExchangeDetail = {
   ...previewExchange,
@@ -430,6 +577,7 @@ const pendingApproval: ApprovalView = {
 const previewAccount: ProviderAccountRecord = {
   id: "anthropic-work",
   displayName: "Anthropic Work",
+  upstreamEndpointId: "target.claude.official",
   kind: "anthropic_api_key",
   realmId: "anthropic.official",
   state: "active",
@@ -437,6 +585,42 @@ const previewAccount: ProviderAccountRecord = {
   credentialState: "ready",
   credentialEpoch: 1,
 };
+
+const previewEndpoints: readonly UpstreamEndpointRecord[] = [
+  {
+    id: "target.claude.official",
+    displayName: "Anthropic API",
+    origin: "https://api.anthropic.com",
+    realmId: "anthropic.official",
+    backendProtocols: ["anthropic_messages"],
+    capabilities: ["messages", "streaming", "tool_calls"],
+    accountKinds: ["anthropic_api_key", "claude_oauth_token"],
+    state: "active",
+    revision: 1,
+  },
+  {
+    id: "target.codex.official",
+    displayName: "ChatGPT",
+    origin: "https://chatgpt.com",
+    realmId: "openai.chatgpt",
+    backendProtocols: ["openai_responses"],
+    capabilities: ["messages", "streaming", "tool_calls"],
+    accountKinds: ["openai_api_key"],
+    state: "active",
+    revision: 1,
+  },
+  {
+    id: "target.openai.official",
+    displayName: "OpenAI API",
+    origin: "https://api.openai.com",
+    realmId: "openai.platform",
+    backendProtocols: ["openai_chat", "openai_responses"],
+    capabilities: ["messages", "streaming", "tool_calls"],
+    accountKinds: ["openai_api_key"],
+    state: "active",
+    revision: 1,
+  },
+];
 
 function clone<T>(value: T): T {
   return structuredClone(value);
@@ -475,22 +659,30 @@ class PreviewControlClient implements ControlClient {
     [`${workEnvironment.id}@${workEnvironment.revision}`, clone(workEnvironment)],
   ]);
   private readonly drafts = new Map<string, EnvironmentDraft>();
+  private readonly endpointRecords = new Map<string, UpstreamEndpointRecord>(
+    previewEndpoints.map((endpoint) => [endpoint.id, clone(endpoint)]),
+  );
   private readonly accountRecords = new Map<string, ProviderAccountRecord>([
     [previewAccount.id, clone(previewAccount)],
   ]);
   private readonly manualRecords = new Map<string, ManualCaptureRecord>([
     [baseManualCapture.id, clone(baseManualCapture)],
+    [revokedManualCapture.id, clone(revokedManualCapture)],
+  ]);
+  private readonly manualStateVersions = new Map<string, number>([
+    [baseManualCapture.id, 1],
+    [revokedManualCapture.id, 1],
   ]);
   private readonly captureAssignments = new Map<string, CaptureAssignment>([
-    [managedCapture.key, {
-      captureKey: managedCapture.key,
-      captureId: managedCapture.id,
-      captureKind: managedCapture.kind,
+    ...managedPreviewCaptures.map((capture) => [capture.key, {
+      captureKey: capture.key,
+      captureId: capture.id,
+      captureKind: capture.kind,
       environmentId: "work",
       revision: 1,
       source: "launch",
-      updatedAt: timestamp,
-    }],
+      updatedAt: capture.updatedAt,
+    }] as const),
     [`manual_capture:${baseManualCapture.id}`, {
       captureKey: `manual_capture:${baseManualCapture.id}`,
       captureId: baseManualCapture.id,
@@ -499,6 +691,15 @@ class PreviewControlClient implements ControlClient {
       revision: 1,
       source: "manual_create",
       updatedAt: timestamp,
+    }],
+    [`manual_capture:${revokedManualCapture.id}`, {
+      captureKey: `manual_capture:${revokedManualCapture.id}`,
+      captureId: revokedManualCapture.id,
+      captureKind: "manual_capture",
+      environmentId: "work",
+      revision: 1,
+      source: "manual_create",
+      updatedAt: revokedManualCapture.updatedAt,
     }],
   ]);
   private readonly workspaceDefaults = new Map<string, WorkspaceEnvironmentDefault>([
@@ -582,6 +783,47 @@ class PreviewControlClient implements ControlClient {
     };
   }
 
+  async upstreamEndpoints(): Promise<UpstreamEndpointPage> {
+    this.requireOpen();
+    return {
+      items: [...this.endpointRecords.values()]
+        .sort((left, right) => left.id.localeCompare(right.id))
+        .map(clone),
+    };
+  }
+
+  async upstreamEndpoint(endpointId: string): Promise<UpstreamEndpointRecord> {
+    this.requireOpen();
+    const endpoint = this.endpointRecords.get(endpointId);
+    if (endpoint === undefined) throw this.notFound();
+    return clone(endpoint);
+  }
+
+  async createUpstreamEndpoint(
+    input: UpstreamEndpointCreateInput,
+  ): Promise<UpstreamEndpointRecord> {
+    this.requireOpen();
+    if (this.endpointRecords.has(input.id)) throw this.conflict();
+    const anthropic = input.kind === "anthropic";
+    const endpoint: UpstreamEndpointRecord = {
+      id: input.id,
+      displayName: input.displayName,
+      origin: input.origin,
+      realmId: anthropic ? "anthropic.official" : "openai.platform",
+      backendProtocols: anthropic
+        ? ["anthropic_messages"]
+        : ["openai_responses", "openai_chat"],
+      capabilities: ["messages", "streaming", "tool_calls"],
+      accountKinds: anthropic
+        ? ["anthropic_api_key", "claude_oauth_token"]
+        : ["openai_api_key"],
+      state: "active",
+      revision: 1,
+    };
+    this.endpointRecords.set(endpoint.id, endpoint);
+    return clone(endpoint);
+  }
+
   async providerAccounts(): Promise<ProviderAccountPage> {
     this.requireOpen();
     return {
@@ -603,14 +845,16 @@ class PreviewControlClient implements ControlClient {
   ): Promise<ProviderAccountRecord> {
     this.requireOpen();
     if (this.accountRecords.has(input.id)) throw this.conflict();
+    const upstreamEndpoint = this.endpointRecords.get(input.upstreamEndpointId);
+    if (upstreamEndpoint === undefined || !upstreamEndpoint.accountKinds.includes(input.kind)) {
+      throw this.notFound();
+    }
     const account: ProviderAccountRecord = {
       id: input.id,
       displayName: input.displayName,
+      upstreamEndpointId: input.upstreamEndpointId,
       kind: input.kind,
-      realmId:
-        input.kind === "anthropic_api_key" || input.kind === "claude_oauth_token"
-          ? "anthropic.official"
-          : "openai.platform",
+      realmId: upstreamEndpoint.realmId,
       state: "active",
       revision: 1,
       credentialState: "ready",
@@ -839,8 +1083,10 @@ class PreviewControlClient implements ControlClient {
   async activities(query?: ActivityQuery): Promise<ActivityPage> {
     this.requireOpen();
     const items = [
+      { detail: pendingPreviewExchange, occurredAt: "2026-08-08T08:03:00.000Z" },
       { detail: previewExchange, occurredAt: laterTimestamp },
       { detail: earlierPreviewExchange, occurredAt: timestamp },
+      ...(query?.captureRunId === "run-preview" ? historicalPreviewExchanges : []),
       { detail: unsupportedPreviewExchange, occurredAt: "2026-08-08T08:02:00.000Z" },
     ].map(({ detail, occurredAt }) => ({
       id: detail.id,
@@ -862,7 +1108,10 @@ class PreviewControlClient implements ControlClient {
     this.requireOpen();
     const contentView = options?.contentView ?? "incremental";
     if (exchangeId === previewExchange.id) return projectPreviewExchange(previewExchange, contentView);
+    if (exchangeId === pendingPreviewExchange.id) return projectPreviewExchange(pendingPreviewExchange, contentView);
     if (exchangeId === earlierPreviewExchange.id) return projectPreviewExchange(earlierPreviewExchange, contentView);
+    const historical = historicalPreviewExchanges.find(({ detail }) => detail.id === exchangeId);
+    if (historical !== undefined) return projectPreviewExchange(historical.detail, contentView);
     if (exchangeId === unsupportedPreviewExchange.id) return clone(unsupportedPreviewExchange);
     throw this.notFound();
   }
@@ -944,6 +1193,7 @@ class PreviewControlClient implements ControlClient {
         : {}),
     };
     this.manualRecords.set(id, capture);
+    this.manualStateVersions.set(id, 1);
     const key = `manual_capture:${id}`;
     this.captureAssignments.set(key, {
       captureKey: key,
@@ -960,23 +1210,27 @@ class PreviewControlClient implements ControlClient {
     };
   }
 
-  async rotateManualCapture(manualCaptureId: string): Promise<ManualCaptureGrantStateTag> {
+  async rotateManualCapture(manualCaptureId: string, stateTag: string): Promise<ManualCaptureGrantStateTag> {
     this.requireOpen();
     const capture = this.manualRecords.get(manualCaptureId);
     if (capture === undefined) throw this.notFound();
+    this.requireManualStateTag(manualCaptureId, stateTag);
     const assignment = this.captureAssignments.get(`manual_capture:${manualCaptureId}`);
     if (assignment === undefined) throw this.notFound();
+    this.bumpManualState(manualCaptureId);
     return {
       grant: this.grant(capture, this.requireEnvironment(assignment.environmentId)),
       stateTag: this.stateTag(manualCaptureId),
     };
   }
 
-  async revokeManualCapture(manualCaptureId: string): Promise<void> {
+  async revokeManualCapture(manualCaptureId: string, stateTag: string): Promise<void> {
     this.requireOpen();
     const capture = this.manualRecords.get(manualCaptureId);
     if (capture === undefined) throw this.notFound();
+    this.requireManualStateTag(manualCaptureId, stateTag);
     this.manualRecords.set(manualCaptureId, { ...capture, state: "revoked", updatedAt: laterTimestamp });
+    this.bumpManualState(manualCaptureId);
   }
 
   async connections(): Promise<ConnectionPage> {
@@ -1051,13 +1305,21 @@ class PreviewControlClient implements ControlClient {
   }
 
   private captureRecords(): CaptureRecord[] {
-    return [clone(managedCapture), ...[...this.manualRecords.values()].map((record) => manualCaptureRecord(record))];
+    return [
+      ...managedPreviewCaptures.map(clone),
+      ...[...this.manualRecords.values()].map((record) => manualCaptureRecord(record)),
+    ];
   }
 
   private impact(environmentId: string, draftRevision: number): EnvironmentImpact {
     const draft = this.requireDraft(environmentId, draftRevision);
+    const liveCaptureKeys = new Set(
+      this.captureRecords()
+        .filter((capture) => ["active", "attached", "created", "running"].includes(capture.state))
+        .map((capture) => capture.key),
+    );
     const affected = [...this.captureAssignments.values()]
-      .filter((assignment) => assignment.environmentId === environmentId)
+      .filter((assignment) => assignment.environmentId === environmentId && liveCaptureKeys.has(assignment.captureKey))
       .map((assignment) => ({ captureKind: assignment.captureKind, captureId: assignment.captureId, classification: "hot_switch" as const }));
     return {
       environmentId,
@@ -1109,7 +1371,18 @@ class PreviewControlClient implements ControlClient {
   }
 
   private stateTag(id: string): string {
-    return `"mc_${id.padEnd(43, "A").slice(0, 43)}"`;
+    const version = this.manualStateVersions.get(id) ?? 0;
+    return `"mc_${`${id}_${version}`.padEnd(43, "A").slice(0, 43)}"`;
+  }
+
+  private requireManualStateTag(id: string, stateTag: string): void {
+    if (stateTag !== this.stateTag(id)) {
+      throw new ControlProblem(412, "manual_capture_conflict", "error.manual_capture_conflict");
+    }
+  }
+
+  private bumpManualState(id: string): void {
+    this.manualStateVersions.set(id, (this.manualStateVersions.get(id) ?? 0) + 1);
   }
 
   private requireRevision(actual: number, expected: number): void {

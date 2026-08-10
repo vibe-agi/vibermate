@@ -35,6 +35,9 @@ import type {
   ProviderAccountPage,
   ProviderAccountRecord,
   StatusResponse,
+  UpstreamEndpointCreateInput,
+  UpstreamEndpointPage,
+  UpstreamEndpointRecord,
   WorkspaceEnvironmentDefault,
 } from "./control-types.ts";
 
@@ -149,6 +152,9 @@ export interface ControlClient {
     signal?: AbortSignal,
   ): Promise<OfflineHoldSnapshot>;
   environments(signal?: AbortSignal): Promise<EnvironmentPage>;
+  upstreamEndpoints(signal?: AbortSignal): Promise<UpstreamEndpointPage>;
+  upstreamEndpoint(endpointId: string, signal?: AbortSignal): Promise<UpstreamEndpointRecord>;
+  createUpstreamEndpoint(input: UpstreamEndpointCreateInput, signal?: AbortSignal): Promise<UpstreamEndpointRecord>;
   providerAccounts(signal?: AbortSignal): Promise<ProviderAccountPage>;
   providerAccount(accountId: string, signal?: AbortSignal): Promise<ProviderAccountRecord>;
   createProviderAccount(input: ProviderAccountCreateInput, signal?: AbortSignal): Promise<ProviderAccountRecord>;
@@ -1022,6 +1028,32 @@ export async function createControlClient(
       requireEnvironmentPage(
         await requestRead<unknown>("/api/v1/environments", signal),
       ),
+    upstreamEndpoints: async (signal) =>
+      requireUpstreamEndpointPage(
+        await requestRead<unknown>("/api/v1/upstream-endpoints", signal),
+      ),
+    upstreamEndpoint: async (endpointId, signal) => {
+      requireResourceId(endpointId);
+      return requireUpstreamEndpointRecord(
+        await requestRead<unknown>(
+          `/api/v1/upstream-endpoints/${encodeURIComponent(endpointId)}`,
+          signal,
+        ),
+        endpointId,
+      );
+    },
+    createUpstreamEndpoint: async (input, signal) => {
+      if (!validUpstreamEndpointCreateInput(input)) throw new ControlContractError();
+      return requestMutation<UpstreamEndpointRecord>(
+        "POST",
+        "/api/v1/upstream-endpoints",
+        input,
+        0,
+        signal,
+        requireUpstreamEndpointRecord,
+        201,
+      );
+    },
     providerAccounts: async (signal) =>
       requireProviderAccountPage(
         await requestRead<unknown>("/api/v1/provider-accounts", signal),
@@ -1229,7 +1261,7 @@ export async function createControlClient(
     },
     activities: async (options, signal) => {
       if (!validActivityQuery(options)) throw new ControlContractError();
-      const query = new URLSearchParams({ kind: "exchange", limit: "50" });
+      const query = new URLSearchParams({ kind: "exchange", limit: String(options?.limit ?? 50) });
       if (options?.cursor !== undefined) query.set("cursor", options.cursor);
       if (options?.captureRunId !== undefined) query.set("captureRunId", options.captureRunId);
       if (options?.environmentId !== undefined) query.set("environmentId", options.environmentId);
@@ -2124,6 +2156,88 @@ const providerCredentialStates = new Set([
   "credential_unavailable",
 ]);
 
+const upstreamEndpointKinds = new Set(["anthropic", "openai_compatible"]);
+
+function requireUpstreamEndpointPage(value: unknown): UpstreamEndpointPage {
+  if (
+    !isRecord(value) ||
+    !hasClosedFields(value, ["items"]) ||
+    !Array.isArray(value.items) ||
+    value.items.length > maximumDashboardPageItems
+  ) {
+    throw new ControlContractError();
+  }
+  let previous = "";
+  for (const item of value.items) {
+    if (
+      !validUpstreamEndpointRecord(item) ||
+      (previous !== "" && compareResourceIds(previous, item.id) >= 0)
+    ) {
+      throw new ControlContractError();
+    }
+    previous = item.id;
+  }
+  return value as unknown as UpstreamEndpointPage;
+}
+
+function requireUpstreamEndpointRecord(
+  value: unknown,
+  expectedId?: string,
+): UpstreamEndpointRecord {
+  if (
+    !validUpstreamEndpointRecord(value) ||
+    (expectedId !== undefined && value.id !== expectedId)
+  ) {
+    throw new ControlContractError();
+  }
+  return value as unknown as UpstreamEndpointRecord;
+}
+
+function validUpstreamEndpointRecord(
+  value: unknown,
+): value is Record<string, unknown> & { id: string } {
+  return (
+    isRecord(value) &&
+    hasClosedFields(value, [
+      "id",
+      "displayName",
+      "origin",
+      "realmId",
+      "backendProtocols",
+      "capabilities",
+      "accountKinds",
+      "state",
+      "revision",
+    ]) &&
+    validResourceId(value.id) &&
+    validDisplayLabel(value.displayName, 256, false) &&
+    validProviderOrigin(value.origin) &&
+    validIdentity(value.realmId) &&
+    validIdentityArray(value.backendProtocols, 16, false) &&
+    validIdentityArray(value.capabilities, 64, false) &&
+    Array.isArray(value.accountKinds) &&
+    value.accountKinds.length > 0 &&
+    value.accountKinds.length <= providerAccountKinds.size &&
+    new Set(value.accountKinds).size === value.accountKinds.length &&
+    value.accountKinds.every((kind) => providerAccountKinds.has(String(kind))) &&
+    (value.state === "active" || value.state === "disabled") &&
+    positiveInteger(value.revision)
+  );
+}
+
+function validUpstreamEndpointCreateInput(
+  value: UpstreamEndpointCreateInput,
+): boolean {
+  return (
+    isRecord(value) &&
+    hasClosedFields(value, ["id", "displayName", "origin", "kind"]) &&
+    validResourceId(value.id) &&
+    validDisplayLabel(value.displayName, 256, false) &&
+    validProviderOrigin(value.origin) &&
+    upstreamEndpointKinds.has(value.kind)
+  );
+}
+
 function requireProviderAccountPage(value: unknown): ProviderAccountPage {
   if (
     !isRecord(value) ||
@@ -2167,6 +2281,7 @@ function validProviderAccountRecord(
     !hasClosedFields(value, [
       "id",
       "displayName",
+      "upstreamEndpointId",
       "kind",
       "realmId",
       "state",
@@ -2176,6 +2291,7 @@ function validProviderAccountRecord(
     ]) ||
     !validResourceId(value.id) ||
     !validDisplayLabel(value.displayName, 256, false) ||
+    !validResourceId(value.upstreamEndpointId) ||
     !providerAccountKinds.has(String(value.kind)) ||
     !validResourceId(value.realmId) ||
     (value.state !== "active" && value.state !== "disabled") ||
@@ -2197,9 +2313,10 @@ function validProviderAccountCreateInput(
 ): boolean {
   return (
     isRecord(value) &&
-    hasClosedFields(value, ["id", "displayName", "kind", "secret"]) &&
+    hasClosedFields(value, ["id", "displayName", "upstreamEndpointId", "kind", "secret"]) &&
     validResourceId(value.id) &&
     validDisplayLabel(value.displayName, 256, false) &&
+    validResourceId(value.upstreamEndpointId) &&
     providerAccountKinds.has(value.kind) &&
     validSecretInput(value.secret)
   );
@@ -2460,7 +2577,6 @@ function validRouteAccountPolicy(value: unknown, planMode: string): boolean {
     !hasClosedFields(value, [
       "revision",
       "mode",
-      "allowedRealmIds",
       "preferredAccountId",
       "candidateAccountIds",
       "accountRevisions",
@@ -2468,7 +2584,6 @@ function validRouteAccountPolicy(value: unknown, planMode: string): boolean {
     ]) ||
     !positiveInteger(value.revision) ||
     !new Set(["client_passthrough", "managed"]).has(String(value.mode)) ||
-    !validIdentityArray(value.allowedRealmIds, 64, true) ||
     typeof value.preferredAccountId !== "string" ||
     !validUniqueResourceIds(value.candidateAccountIds, 64, true) ||
     !isRecord(value.accountRevisions) ||
@@ -2793,8 +2908,9 @@ function validActivityQuery(value: unknown): value is ActivityQuery | undefined 
   return (
     value === undefined ||
     (isRecord(value) &&
-      hasClosedFields(value, [], ["cursor", "captureRunId", "environmentId"]) &&
+      hasClosedFields(value, [], ["cursor", "limit", "captureRunId", "environmentId"]) &&
       (value.cursor === undefined || validOpaqueCursor(value.cursor)) &&
+      (value.limit === undefined || (positiveInteger(value.limit) && value.limit <= maximumActivityPageItems)) &&
       (value.captureRunId === undefined || validResourceId(value.captureRunId)) &&
       (value.environmentId === undefined || validResourceId(value.environmentId)))
   );
@@ -2873,7 +2989,7 @@ function validActivityParentRefs(value: unknown, exchangeId: unknown): boolean {
 }
 
 function validActivityStatus(value: unknown): value is ActivityStatus {
-  return value === "succeeded" || value === "failed" || value === "canceled";
+  return value === "pending" || value === "succeeded" || value === "failed" || value === "canceled";
 }
 
 function requireExchangeDetail(
@@ -3021,7 +3137,8 @@ function validExchangeContentBlock(value: unknown, mode: "full" | "metadata_only
   )) return false;
   const expectedAvailability = mode === "full" && value.kind !== "provider_extension" ? "recorded" : "omitted";
   if ((value.kind !== "text" && value.kind !== "refusal" && value.kind !== "tool_call" &&
-      value.kind !== "tool_result" && value.kind !== "provider_extension") ||
+      value.kind !== "tool_result" && value.kind !== "reasoning" &&
+      value.kind !== "provider_extension") ||
     value.availability !== expectedAvailability || !nonNegativeInteger(value.originalSize) ||
     (value.text !== undefined && typeof value.text !== "string") ||
     !optionalIdentity(value.callId) || !optionalIdentity(value.toolName) ||

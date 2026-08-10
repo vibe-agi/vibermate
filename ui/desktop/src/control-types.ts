@@ -108,7 +108,6 @@ export interface EnvironmentModelPolicy {
 export interface EnvironmentRouteAccountPolicy {
   readonly revision: number;
   readonly mode: EnvironmentAccountMode;
-  readonly allowedRealmIds: readonly string[];
   readonly preferredAccountId: string;
   readonly candidateAccountIds: readonly string[];
   readonly accountRevisions: Readonly<Record<string, number>>;
@@ -181,6 +180,32 @@ export interface EnvironmentPage {
   readonly items: readonly EnvironmentRecord[];
 }
 
+export type UpstreamEndpointKind = "anthropic" | "openai_compatible";
+export type UpstreamEndpointState = "active" | "disabled";
+
+export interface UpstreamEndpointRecord {
+  readonly id: string;
+  readonly displayName: string;
+  readonly origin: string;
+  readonly realmId: string;
+  readonly backendProtocols: readonly string[];
+  readonly capabilities: readonly string[];
+  readonly accountKinds: readonly ProviderAccountKind[];
+  readonly state: UpstreamEndpointState;
+  readonly revision: number;
+}
+
+export interface UpstreamEndpointPage {
+  readonly items: readonly UpstreamEndpointRecord[];
+}
+
+export interface UpstreamEndpointCreateInput {
+  readonly id: string;
+  readonly displayName: string;
+  readonly origin: string;
+  readonly kind: UpstreamEndpointKind;
+}
+
 export type ProviderAccountKind =
   | "anthropic_api_key"
   | "claude_oauth_token"
@@ -195,6 +220,7 @@ export type ProviderCredentialState =
 export interface ProviderAccountRecord {
   readonly id: string;
   readonly displayName: string;
+  readonly upstreamEndpointId: string;
   readonly kind: ProviderAccountKind;
   readonly realmId: string;
   readonly state: ProviderAccountState;
@@ -210,6 +236,7 @@ export interface ProviderAccountPage {
 export interface ProviderAccountCreateInput {
   readonly id: string;
   readonly displayName: string;
+  readonly upstreamEndpointId: string;
   readonly kind: ProviderAccountKind;
   readonly secret: string;
 }
@@ -363,7 +390,7 @@ export interface WorkspaceEnvironmentDefault {
 	readonly updatedAt: string;
 }
 
-export type ActivityStatus = "succeeded" | "failed" | "canceled";
+export type ActivityStatus = "pending" | "succeeded" | "failed" | "canceled";
 
 export interface FrozenEnvironmentRef {
   readonly id: string;
@@ -410,6 +437,7 @@ export interface ActivityPage {
 
 export interface ActivityQuery {
   readonly cursor?: string;
+  readonly limit?: number;
   readonly captureRunId?: string;
   readonly environmentId?: string;
 }
@@ -435,7 +463,7 @@ export interface ExchangeDetail {
 }
 
 export interface ExchangeContentBlock {
-  readonly kind: "text" | "refusal" | "tool_call" | "tool_result" | "provider_extension";
+  readonly kind: "text" | "refusal" | "tool_call" | "tool_result" | "reasoning" | "provider_extension";
   readonly availability: "recorded" | "omitted";
   readonly text?: string;
   readonly originalSize: number;

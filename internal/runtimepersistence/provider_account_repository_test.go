@@ -10,19 +10,22 @@ import (
 	"github.com/vibe-agi/vibermate/internal/provideraccount"
 	"github.com/vibe-agi/vibermate/internal/providerauth"
 	"github.com/vibe-agi/vibermate/internal/secretstore"
+	"github.com/vibe-agi/vibermate/internal/upstreamendpoint"
 )
 
 func TestProviderAccountRepositoryCASAndReopenWithoutSecretBytes(t *testing.T) {
 	t.Parallel()
 	path := filepath.Join(t.TempDir(), "runtime.db")
 	store := openTestStore(t, path)
+	writeAnthropicEndpoint(t, store)
 	reference, err := secretstore.ParseReference("secret://provider-account/anthropic-work")
 	if err != nil {
 		t.Fatal(err)
 	}
 	now := time.Unix(1_786_200_000, 0).UTC()
 	account := provideraccount.Account{
-		ID: "anthropic-work", DisplayName: "Anthropic Work", RealmID: "anthropic.official",
+		ID: "anthropic-work", DisplayName: "Anthropic Work",
+		UpstreamEndpointID: upstreamendpoint.AnthropicOfficialID, RealmID: "anthropic.official",
 		Driver: providerauth.AnthropicAPIKeyDriverRef(), SecretRef: reference,
 		State: provideraccount.StateActive, Revision: 1,
 		CreatedAt: now, UpdatedAt: now,
@@ -57,13 +60,15 @@ func TestProviderAccountRepositoryDeleteCASPersistsAcrossReopen(t *testing.T) {
 	t.Parallel()
 	path := filepath.Join(t.TempDir(), "runtime.db")
 	store := openTestStore(t, path)
+	writeAnthropicEndpoint(t, store)
 	reference, err := secretstore.ParseReference("secret://provider-account/unused")
 	if err != nil {
 		t.Fatal(err)
 	}
 	now := time.Unix(1_786_200_000, 0).UTC()
 	account := provideraccount.Account{
-		ID: "unused", DisplayName: "Unused", RealmID: "anthropic.official",
+		ID: "unused", DisplayName: "Unused",
+		UpstreamEndpointID: upstreamendpoint.AnthropicOfficialID, RealmID: "anthropic.official",
 		Driver: providerauth.AnthropicAPIKeyDriverRef(), SecretRef: reference,
 		State: provideraccount.StateActive, Revision: 1, CreatedAt: now, UpdatedAt: now,
 	}
@@ -86,5 +91,31 @@ func TestProviderAccountRepositoryDeleteCASPersistsAcrossReopen(t *testing.T) {
 	defer func() { _ = reopened.Shutdown(context.Background()) }()
 	if _, exists, loadErr := reopened.ProviderAccountRepository().Load(context.Background(), account.ID); loadErr != nil || exists {
 		t.Fatalf("reopened deleted ProviderAccount exists=%t err=%v", exists, loadErr)
+	}
+}
+
+func writeAnthropicEndpoint(t *testing.T, store *Store) {
+	t.Helper()
+	commands, err := upstreamendpoint.BuiltInCommands()
+	if err != nil {
+		t.Fatal(err)
+	}
+	var command upstreamendpoint.CreateCommand
+	for _, candidate := range commands {
+		if candidate.ID == upstreamendpoint.AnthropicOfficialID {
+			command = candidate
+			break
+		}
+	}
+	now := time.Unix(1_786_200_000, 0).UTC()
+	endpoint := upstreamendpoint.Endpoint{
+		ID: command.ID, DisplayName: command.DisplayName, Origin: command.Origin,
+		RealmID: command.RealmID, BackendProtocols: command.BackendProtocols,
+		Capabilities: command.Capabilities, Drivers: command.Drivers,
+		State: upstreamendpoint.StateActive, Revision: 1, CreatedAt: now, UpdatedAt: now,
+	}
+	result, err := store.UpstreamEndpointRepository().Write(context.Background(), 0, endpoint)
+	if err != nil || result.Outcome != upstreamendpoint.CommitCommitted {
+		t.Fatalf("create UpstreamEndpoint = %+v err=%v", result, err)
 	}
 }

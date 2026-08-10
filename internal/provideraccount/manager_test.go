@@ -10,6 +10,7 @@ import (
 	"github.com/vibe-agi/vibermate/internal/environment"
 	"github.com/vibe-agi/vibermate/internal/providerauth"
 	"github.com/vibe-agi/vibermate/internal/secretstore"
+	"github.com/vibe-agi/vibermate/internal/upstreamendpoint"
 )
 
 func TestManagerCreatesListsAndRotatesManagedSecretWithoutExposingIt(t *testing.T) {
@@ -17,7 +18,7 @@ func TestManagerCreatesListsAndRotatesManagedSecretWithoutExposingIt(t *testing.
 	repository := &memoryRepository{accounts: make(map[ID]Account)}
 	secrets := newMemorySecrets()
 	manager, err := NewManager(
-		context.Background(), repository, secrets, BuiltInRealms(),
+		context.Background(), repository, secrets, testEndpoints(t), BuiltInRealms(),
 		fixedClock{now: time.Unix(1_786_200_000, 0).UTC()},
 	)
 	if err != nil {
@@ -30,8 +31,8 @@ func TestManagerCreatesListsAndRotatesManagedSecretWithoutExposingIt(t *testing.
 	defer value.Destroy()
 	view, err := manager.Create(context.Background(), CreateCommand{
 		ID: "anthropic-work", DisplayName: "Anthropic Work",
-		RealmID: "anthropic.official",
-		Driver:  providerauth.AnthropicAPIKeyDriverRef(), Secret: value,
+		UpstreamEndpointID: upstreamendpoint.AnthropicOfficialID,
+		Driver:             providerauth.AnthropicAPIKeyDriverRef(), Secret: value,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -86,14 +87,15 @@ func TestManagerRecoversMissingCredentialFailClosed(t *testing.T) {
 	}
 	now := time.Unix(1_786_200_000, 0).UTC()
 	account := Account{
-		ID: "anthropic-work", DisplayName: "Anthropic Work", RealmID: "anthropic.official",
+		ID: "anthropic-work", DisplayName: "Anthropic Work",
+		UpstreamEndpointID: upstreamendpoint.AnthropicOfficialID, RealmID: "anthropic.official",
 		Driver: providerauth.AnthropicAPIKeyDriverRef(), SecretRef: reference,
 		State: StateActive, Revision: 1, CreatedAt: now, UpdatedAt: now,
 	}
 	manager, err := NewManager(
 		context.Background(),
 		&memoryRepository{accounts: map[ID]Account{account.ID: account}},
-		newMemorySecrets(), BuiltInRealms(), fixedClock{now: now},
+		newMemorySecrets(), testEndpoints(t), BuiltInRealms(), fixedClock{now: now},
 	)
 	if err != nil {
 		t.Fatal(err)
@@ -117,7 +119,7 @@ func TestBuiltInAnthropicRealmAcceptsStaticClaudeOAuthCredential(t *testing.T) {
 	t.Parallel()
 	repository := &memoryRepository{accounts: make(map[ID]Account)}
 	manager, err := NewManager(
-		context.Background(), repository, newMemorySecrets(), BuiltInRealms(),
+		context.Background(), repository, newMemorySecrets(), testEndpoints(t), BuiltInRealms(),
 		fixedClock{now: time.Unix(1_786_200_000, 0).UTC()},
 	)
 	if err != nil {
@@ -130,8 +132,8 @@ func TestBuiltInAnthropicRealmAcceptsStaticClaudeOAuthCredential(t *testing.T) {
 	defer value.Destroy()
 	view, err := manager.Create(context.Background(), CreateCommand{
 		ID: "claude-oauth", DisplayName: "Claude OAuth",
-		RealmID: "anthropic.official",
-		Driver:  providerauth.StaticHeaderDriverRef(), Secret: value,
+		UpstreamEndpointID: upstreamendpoint.AnthropicOfficialID,
+		Driver:             providerauth.StaticHeaderDriverRef(), Secret: value,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -148,7 +150,7 @@ func TestManagerDeletesOnlyAnUnreferencedInactiveAccount(t *testing.T) {
 	repository := &memoryRepository{accounts: make(map[ID]Account)}
 	secrets := newMemorySecrets()
 	manager, err := NewManager(
-		context.Background(), repository, secrets, BuiltInRealms(),
+		context.Background(), repository, secrets, testEndpoints(t), BuiltInRealms(),
 		fixedClock{now: time.Unix(1_786_200_000, 0).UTC()},
 	)
 	if err != nil {
@@ -168,7 +170,8 @@ func TestManagerDeletesOnlyAnUnreferencedInactiveAccount(t *testing.T) {
 	defer value.Destroy()
 	view, err := manager.Create(context.Background(), CreateCommand{
 		ID: "anthropic-work", DisplayName: "Anthropic Work",
-		RealmID: "anthropic.official", Driver: providerauth.AnthropicAPIKeyDriverRef(), Secret: value,
+		UpstreamEndpointID: upstreamendpoint.AnthropicOfficialID,
+		Driver:             providerauth.AnthropicAPIKeyDriverRef(), Secret: value,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -226,6 +229,36 @@ func (guard *deletionGuard) GuardAccountDeletion(
 type fixedClock struct{ now time.Time }
 
 func (clock fixedClock) Now() time.Time { return clock.now }
+
+type endpointCatalog map[upstreamendpoint.ID]upstreamendpoint.Endpoint
+
+func (catalog endpointCatalog) LookupEndpoint(rawID string) (upstreamendpoint.Endpoint, bool) {
+	id, err := upstreamendpoint.NewID(rawID)
+	if err != nil {
+		return upstreamendpoint.Endpoint{}, false
+	}
+	endpoint, exists := catalog[id]
+	return endpoint.Clone(), exists
+}
+
+func testEndpoints(t *testing.T) endpointCatalog {
+	t.Helper()
+	commands, err := upstreamendpoint.BuiltInCommands()
+	if err != nil {
+		t.Fatal(err)
+	}
+	now := time.Unix(1_786_200_000, 0).UTC()
+	result := make(endpointCatalog, len(commands))
+	for _, command := range commands {
+		result[command.ID] = upstreamendpoint.Endpoint{
+			ID: command.ID, DisplayName: command.DisplayName, Origin: command.Origin,
+			RealmID: command.RealmID, BackendProtocols: command.BackendProtocols,
+			Capabilities: command.Capabilities, Drivers: command.Drivers,
+			State: upstreamendpoint.StateActive, Revision: 1, CreatedAt: now, UpdatedAt: now,
+		}
+	}
+	return result
+}
 
 type memoryRepository struct {
 	mu       sync.Mutex

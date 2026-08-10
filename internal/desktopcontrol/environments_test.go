@@ -22,7 +22,7 @@ func TestEnvironmentDraftPreviewPublishAndHistoricalRevisionRoutes(t *testing.T)
 		Readiness: readyState(true), Status: runtime, Environments: runtime.Environments(),
 		Assignments: runtime.CaptureAssignments(), Activities: runtime.Activities(), Contents: runtime.ExchangeContents(),
 		Connections: runtime.ConnectionEvents(), Egress: runtime.EgressAttempts(),
-		Approvals: runtime.ToolApprovals(), Accounts: runtime.ProviderAccounts(),
+		Approvals: runtime.ToolApprovals(), Endpoints: runtime.UpstreamEndpoints(), Accounts: runtime.ProviderAccounts(),
 		Offline: runtime, Clock: desktopcontrol.SystemClock{},
 		ManualCaptures: runtime.ManualCaptures(),
 	})
@@ -103,7 +103,7 @@ func TestEnvironmentDraftAcceptsCanonicalOriginalCredentialRoute(t *testing.T) {
 		Readiness: readyState(true), Status: runtime, Environments: runtime.Environments(),
 		Assignments: runtime.CaptureAssignments(), Activities: runtime.Activities(), Contents: runtime.ExchangeContents(),
 		Connections: runtime.ConnectionEvents(), Egress: runtime.EgressAttempts(),
-		Approvals: runtime.ToolApprovals(), Accounts: runtime.ProviderAccounts(),
+		Approvals: runtime.ToolApprovals(), Endpoints: runtime.UpstreamEndpoints(), Accounts: runtime.ProviderAccounts(),
 		Offline: runtime, Clock: desktopcontrol.SystemClock{},
 		ManualCaptures: runtime.ManualCaptures(),
 	})
@@ -140,7 +140,6 @@ func TestEnvironmentDraftAcceptsCanonicalOriginalCredentialRoute(t *testing.T) {
           "accountPolicy": {
             "revision":1,
             "mode":"client_passthrough",
-            "allowedRealmIds":["anthropic.official"],
             "preferredAccountId":"",
             "candidateAccountIds":[],
             "accountRevisions":{},
@@ -228,7 +227,7 @@ func TestActivityRouteFiltersAndReturnsFrozenEnvironmentReferences(t *testing.T)
 		Readiness: readyState(true), Status: runtime, Environments: runtime.Environments(),
 		Assignments: runtime.CaptureAssignments(), Activities: runtime.Activities(), Contents: runtime.ExchangeContents(),
 		Connections: runtime.ConnectionEvents(), Egress: runtime.EgressAttempts(),
-		Approvals: runtime.ToolApprovals(), Accounts: runtime.ProviderAccounts(),
+		Approvals: runtime.ToolApprovals(), Endpoints: runtime.UpstreamEndpoints(), Accounts: runtime.ProviderAccounts(),
 		Offline: runtime, Clock: desktopcontrol.SystemClock{},
 		ManualCaptures: runtime.ManualCaptures(),
 	})

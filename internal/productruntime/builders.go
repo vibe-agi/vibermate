@@ -33,6 +33,7 @@ import (
 	"github.com/vibe-agi/vibermate/internal/secretstore"
 	"github.com/vibe-agi/vibermate/internal/toolapproval"
 	"github.com/vibe-agi/vibermate/internal/transportprofile"
+	"github.com/vibe-agi/vibermate/internal/upstreamendpoint"
 	"github.com/vibe-agi/vibermate/internal/wireprofile"
 )
 
@@ -81,6 +82,7 @@ type environmentBuildRequest struct {
 	leafCache            captureassignment.LeafCacheInvalidator
 	clock                captureassignment.Clock
 	accounts             environment.AccountCatalog
+	endpoints            upstreamendpoint.Catalog
 }
 
 type environmentRuntime interface {
@@ -122,7 +124,7 @@ func (productionEnvironmentBuilder) Build(
 	if err != nil {
 		return environmentBuildResult{}, fmt.Errorf("build Capture assignment manager: %w", err)
 	}
-	compiler, err := productionEnvironmentCompiler(request.accounts)
+	compiler, err := productionEnvironmentCompiler(request.accounts, request.endpoints)
 	if err != nil {
 		shutdownErr := assignments.Shutdown(context.WithoutCancel(ctx))
 		return environmentBuildResult{}, errors.Join(
@@ -143,7 +145,10 @@ func (productionEnvironmentBuilder) Build(
 	return environmentBuildResult{environments: environments, assignments: assignments}, nil
 }
 
-func productionEnvironmentCompiler(accounts environment.AccountCatalog) (environment.Compiler, error) {
+func productionEnvironmentCompiler(
+	accounts environment.AccountCatalog,
+	endpoints upstreamendpoint.Catalog,
+) (environment.Compiler, error) {
 	operations, err := operationcatalog.BuiltIn()
 	if err != nil {
 		return environment.Compiler{}, fmt.Errorf("build client operation catalog: %w", err)
@@ -234,7 +239,7 @@ func productionEnvironmentCompiler(accounts environment.AccountCatalog) (environ
 	if err != nil {
 		return environment.Compiler{}, err
 	}
-	return environment.NewCompiler(accounts, protocols, wires)
+	return environment.NewCompiler(accounts, endpoints, protocols, wires)
 }
 
 type monitorBuildRequest struct {
@@ -494,7 +499,44 @@ func (observer exchangeContentObserver) ObserveContent(
 	return observer.recorder.Record(ctx, record)
 }
 
-func (observer activityAttemptObserver) Observe(
+func (observer activityAttemptObserver) ObserveStart(
+	ctx context.Context,
+	observation exchange.StartObservation,
+) error {
+	if observer.recorder == nil {
+		return errors.New("Exchange Activity recorder is nil")
+	}
+	source, err := exchangeActivitySource(
+		observation.Admission,
+		observation.HasAdmission,
+	)
+	if err != nil {
+		return err
+	}
+	_, err = observer.recorder.Record(ctx, activity.Event{
+		Kind:                   activity.KindExchangeStarted,
+		EnvironmentID:          observation.EnvironmentID,
+		EnvironmentRevision:    observation.EnvironmentRevision,
+		EnvironmentDigest:      observation.EnvironmentDigest,
+		ClientEndpointID:       observation.EndpointID,
+		ClientEndpointRevision: observation.EndpointRevision,
+		ProtocolPlanID:         observation.ProtocolPlanID,
+		ProtocolPlanRevision:   observation.ProtocolPlanRevision,
+		RouteID:                observation.RouteID,
+		RouteRevision:          observation.RouteRevision,
+		SubjectID:              observation.ExchangeID,
+		Status:                 activity.StatusPending,
+		SourceKind:             source.kind,
+		SourceDisplayName:      source.displayName,
+		SourceRecognition:      source.recognition,
+		CaptureRunID:           source.captureRunID,
+		ManualCaptureID:        source.manualCaptureID,
+		ConnectionID:           observation.ConnectionID,
+	})
+	return err
+}
+
+func (observer activityAttemptObserver) ObserveTerminal(
 	ctx context.Context,
 	observation exchange.AttemptObservation,
 ) error {
@@ -511,40 +553,18 @@ func (observer activityAttemptObserver) Observe(
 	default:
 		return errors.New("Exchange observation outcome is invalid")
 	}
-	sourceKind := activity.SourceSystemProxy
-	sourceDisplayName := "ViberMate runtime"
-	sourceRecognition := activity.SourceRecognitionUnknown
-	captureRunID := ""
-	manualCaptureID := ""
-	if observation.HasAdmission {
-		if err := observation.Admission.Validate(); err != nil {
-			return errors.New("Exchange capture admission is invalid")
-		}
-		sourceDisplayName = observation.Admission.SourceLabel()
-		switch observation.Admission.AttributionConfidence() {
-		case captureadmission.AttributionVerified:
-			sourceRecognition = activity.SourceRecognitionVerified
-		case captureadmission.AttributionConfigured:
-			sourceRecognition = activity.SourceRecognitionConfigured
-		default:
-			return errors.New("Exchange source recognition is invalid")
-		}
-		switch observation.Admission.Kind() {
-		case captureadmission.KindManagedRun:
-			sourceKind = activity.SourceCaptureRun
-			captureRunID, _ = observation.Admission.CaptureRunID()
-		case captureadmission.KindManual:
-			sourceKind = activity.SourceManualProxy
-			manualCaptureID, _ = observation.Admission.ManualCaptureID()
-		default:
-			return errors.New("Exchange source kind is invalid")
-		}
+	source, err := exchangeActivitySource(
+		observation.Admission,
+		observation.HasAdmission,
+	)
+	if err != nil {
+		return err
 	}
 	// The reason stays one stable code. The evidence beside it travels as its
 	// own typed fields: a reason with facts glued onto its end cannot be
 	// mapped to copy, matched by a rule, or told apart from a reason that
 	// happens to contain the same words.
-	_, err := observer.recorder.Record(ctx, activity.Event{
+	_, err = observer.recorder.Record(ctx, activity.Event{
 		Kind:                   activity.KindExchangeCompleted,
 		EnvironmentID:          observation.EnvironmentID,
 		EnvironmentRevision:    observation.EnvironmentRevision,
@@ -561,11 +581,11 @@ func (observer activityAttemptObserver) Observe(
 		SubjectID:              observation.ExchangeID,
 		Status:                 status,
 		ReasonCode:             string(observation.ReasonCode),
-		SourceKind:             sourceKind,
-		SourceDisplayName:      sourceDisplayName,
-		SourceRecognition:      sourceRecognition,
-		CaptureRunID:           captureRunID,
-		ManualCaptureID:        manualCaptureID,
+		SourceKind:             source.kind,
+		SourceDisplayName:      source.displayName,
+		SourceRecognition:      source.recognition,
+		CaptureRunID:           source.captureRunID,
+		ManualCaptureID:        source.manualCaptureID,
 		ConnectionID:           observation.ConnectionID,
 		Diagnosis: activity.Diagnosis{
 			ProviderStatus: observation.ProviderStatus,
@@ -579,6 +599,57 @@ func (observer activityAttemptObserver) Observe(
 		),
 	})
 	return err
+}
+
+type exchangeActivitySourceEvidence struct {
+	kind            activity.SourceKind
+	displayName     string
+	recognition     activity.SourceRecognition
+	captureRunID    string
+	manualCaptureID string
+}
+
+func exchangeActivitySource(
+	admission captureadmission.Admission,
+	hasAdmission bool,
+) (exchangeActivitySourceEvidence, error) {
+	evidence := exchangeActivitySourceEvidence{
+		kind:        activity.SourceSystemProxy,
+		displayName: "ViberMate runtime",
+		recognition: activity.SourceRecognitionUnknown,
+	}
+	if !hasAdmission {
+		return evidence, nil
+	}
+	if err := admission.Validate(); err != nil {
+		return exchangeActivitySourceEvidence{}, errors.New(
+			"Exchange capture admission is invalid",
+		)
+	}
+	evidence.displayName = admission.SourceLabel()
+	switch admission.AttributionConfidence() {
+	case captureadmission.AttributionVerified:
+		evidence.recognition = activity.SourceRecognitionVerified
+	case captureadmission.AttributionConfigured:
+		evidence.recognition = activity.SourceRecognitionConfigured
+	default:
+		return exchangeActivitySourceEvidence{}, errors.New(
+			"Exchange source recognition is invalid",
+		)
+	}
+	switch admission.Kind() {
+	case captureadmission.KindManagedRun:
+		evidence.kind = activity.SourceCaptureRun
+		evidence.captureRunID, _ = admission.CaptureRunID()
+	case captureadmission.KindManual:
+		evidence.kind = activity.SourceManualProxy
+		evidence.manualCaptureID, _ = admission.ManualCaptureID()
+	default:
+		return exchangeActivitySourceEvidence{}, errors.New(
+			"Exchange source kind is invalid",
+		)
+	}
+	return evidence, nil
 }
 
 func activityTransportEvidence(

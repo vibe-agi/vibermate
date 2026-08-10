@@ -87,6 +87,46 @@ func TestMetadataOnlyRetainsShapeUsageAndNoContent(t *testing.T) {
 	}
 }
 
+func TestKnownZeroUsageRemainsDistinctFromUnknownOnTheWire(t *testing.T) {
+	t.Parallel()
+	request, response := evidenceFixture(t)
+	response.Usage.CacheRead = protocolcore.UsageValue{
+		Known: true, Tokens: 0, Source: "provider",
+	}
+	record, err := NewRecord(
+		"exchange-known-zero", frozenFixture(),
+		environment.DefaultContentRecordingPolicy(),
+		time.Date(2026, 8, 8, 1, 2, 3, 0, time.UTC), request, &response,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	encoded, err := CanonicalJSON(record)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Contains(encoded, []byte(`"cacheRead":{"known":true,"tokens":0,"source":"provider"}`)) ||
+		!bytes.Contains(encoded, []byte(`"reasoning":{"known":false}`)) {
+		t.Fatalf("usage truth was not preserved: %s", encoded)
+	}
+	decoded, err := DecodeCanonicalJSON(encoded)
+	if err != nil || decoded.Response == nil ||
+		!decoded.Response.Usage.CacheRead.Known ||
+		decoded.Response.Usage.CacheRead.Tokens != 0 {
+		t.Fatalf("DecodeCanonicalJSON() = %+v, %v", decoded.Response, err)
+	}
+
+	missingZero := bytes.Replace(
+		encoded,
+		[]byte(`"cacheRead":{"known":true,"tokens":0,"source":"provider"}`),
+		[]byte(`"cacheRead":{"known":true,"source":"provider"}`),
+		1,
+	)
+	if _, err := DecodeCanonicalJSON(missingZero); err == nil {
+		t.Fatal("known usage without an explicit zero token count was accepted")
+	}
+}
+
 func TestProviderThinkingHistoryNeverEntersContentEvidence(t *testing.T) {
 	t.Parallel()
 
@@ -130,6 +170,75 @@ func TestProviderThinkingHistoryNeverEntersContentEvidence(t *testing.T) {
 	if projected.Kind != string(protocolcore.BlockProviderExtension) ||
 		projected.Availability != AvailabilityOmitted || projected.OriginalSize == 0 {
 		t.Fatalf("provider extension projection = %+v", projected)
+	}
+}
+
+func TestProviderThinkingResponseRecordsReadableTextWithoutOpaqueState(t *testing.T) {
+	t.Parallel()
+
+	request, response := evidenceFixture(t)
+	thinking, err := protocolcore.NewProviderExtension(
+		protocolcore.ProviderExtensionSourceAnthropicMessages,
+		protocolcore.ProviderExtensionThinking,
+		"$.content[0]",
+		[][]byte{
+			[]byte(`{"type":"thinking","thinking":"","signature":"must-not-persist"}`),
+			[]byte(`{"type":"thinking_delta","thinking":"inspect the repository"}`),
+			[]byte(`{"type":"signature_delta","signature":"also-must-not-persist"}`),
+		},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	redacted, err := protocolcore.NewProviderExtension(
+		protocolcore.ProviderExtensionSourceAnthropicMessages,
+		protocolcore.ProviderExtensionRedactedThinking,
+		"$.content[1]",
+		[][]byte{[]byte(`{"type":"redacted_thinking","data":"opaque-redacted-state"}`)},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	response.ProviderExtensions = []protocolcore.ProviderExtension{thinking, redacted}
+	record, err := NewRecord(
+		"exchange-provider-response",
+		frozenFixture(),
+		environment.DefaultContentRecordingPolicy(),
+		time.Date(2026, 8, 10, 1, 2, 3, 0, time.UTC),
+		request,
+		&response,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if record.Response == nil || len(record.Response.Blocks) != 3 {
+		t.Fatalf("response projection = %+v", record.Response)
+	}
+	readable := record.Response.Blocks[1]
+	if readable.Kind != BlockKindReasoning || readable.Availability != AvailabilityRecorded ||
+		readable.Text != "inspect the repository" {
+		t.Fatalf("thinking projection = %+v", readable)
+	}
+	redactedView := record.Response.Blocks[2]
+	if redactedView.Kind != string(protocolcore.BlockProviderExtension) ||
+		redactedView.Availability != AvailabilityOmitted || redactedView.OriginalSize == 0 {
+		t.Fatalf("redacted thinking projection = %+v", redactedView)
+	}
+	encoded, err := CanonicalJSON(record)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Contains(encoded, []byte("inspect the repository")) {
+		t.Fatalf("readable thinking was not recorded: %s", encoded)
+	}
+	for _, forbidden := range [][]byte{
+		[]byte("must-not-persist"),
+		[]byte("also-must-not-persist"),
+		[]byte("opaque-redacted-state"),
+	} {
+		if bytes.Contains(encoded, forbidden) {
+			t.Fatalf("opaque provider state %q entered evidence: %s", forbidden, encoded)
+		}
 	}
 }
 

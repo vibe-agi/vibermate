@@ -39,6 +39,7 @@ const (
 	KindOfflineHoldResumed       Kind = "offline_hold.resumed"
 	KindApprovalPending          Kind = "approval.pending"
 	KindApprovalResolved         Kind = "approval.resolved"
+	KindExchangeStarted          Kind = "exchange.started"
 	KindExchangeCompleted        Kind = "exchange.completed"
 )
 
@@ -107,6 +108,7 @@ func (event Event) Validate() error {
 		KindOfflineHoldResumed,
 		KindApprovalPending,
 		KindApprovalResolved,
+		KindExchangeStarted,
 		KindExchangeCompleted:
 	default:
 		return fmt.Errorf("%w: kind is unsupported", ErrInvalidEvent)
@@ -162,7 +164,9 @@ func (event Event) Validate() error {
 			ErrInvalidEvent,
 		)
 	}
-	if event.Kind == KindExchangeCompleted {
+	isExchange := event.Kind == KindExchangeStarted ||
+		event.Kind == KindExchangeCompleted
+	if isExchange {
 		if !hasExecution ||
 			validateIdentity("source display name", event.SourceDisplayName, false) != nil ||
 			validateIdentity("connection ID", event.ConnectionID, true) != nil {
@@ -206,6 +210,21 @@ func (event Event) Validate() error {
 		event.ConnectionID != "" {
 		return fmt.Errorf(
 			"%w: Exchange relationship evidence belongs only to an Exchange",
+			ErrInvalidEvent,
+		)
+	}
+	if event.Kind == KindExchangeStarted {
+		if event.Status != StatusPending || hasAccount || event.ReasonCode != "" ||
+			!event.Diagnosis.Empty() || event.Transport != nil {
+			return fmt.Errorf(
+				"%w: started Exchange contains terminal evidence",
+				ErrInvalidEvent,
+			)
+		}
+	}
+	if event.Kind == KindExchangeCompleted && event.Status == StatusPending {
+		return fmt.Errorf(
+			"%w: completed Exchange is still pending",
 			ErrInvalidEvent,
 		)
 	}

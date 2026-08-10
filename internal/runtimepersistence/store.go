@@ -32,6 +32,7 @@ import (
 	"github.com/vibe-agi/vibermate/internal/provideraccount"
 	"github.com/vibe-agi/vibermate/internal/proxyclient"
 	"github.com/vibe-agi/vibermate/internal/toolapproval"
+	"github.com/vibe-agi/vibermate/internal/upstreamendpoint"
 	"github.com/vibe-agi/vibermate/internal/workspacedefault"
 )
 
@@ -68,6 +69,7 @@ type RuntimeStore interface {
 	EgressAttemptRepository() egressaudit.Repository
 	ToolApprovalRepository() toolapproval.Repository
 	ConnectionRuleRepository() connectionpolicy.Repository
+	UpstreamEndpointRepository() upstreamendpoint.Repository
 	ProviderAccountRepository() provideraccount.Repository
 	WorkspaceDefaultRepository() workspacedefault.Repository
 	Shutdown(context.Context) error
@@ -88,6 +90,7 @@ type Store struct {
 	connectionRule     *connectionRuleRepository
 	environments       *environmentRepository
 	captureAssignments *captureAssignmentRepository
+	upstreamEndpoints  *upstreamEndpointRepository
 	providerAccounts   *providerAccountRepository
 	workspaceDefaults  *workspaceDefaultRepository
 	operations         *operationGate
@@ -171,6 +174,12 @@ func Open(ctx context.Context, options Options) (*Store, error) {
 		options.CommitReconcileTimeout,
 		sqlTransactionCommitter{},
 	)
+	upstreamEndpoints := newUpstreamEndpointRepository(
+		database,
+		operations,
+		options.CommitReconcileTimeout,
+		sqlTransactionCommitter{},
+	)
 	providerAccounts := newProviderAccountRepository(
 		database,
 		operations,
@@ -212,6 +221,7 @@ func Open(ctx context.Context, options Options) (*Store, error) {
 		connectionRule:     connectionRules,
 		environments:       environments,
 		captureAssignments: captureAssignments,
+		upstreamEndpoints:  upstreamEndpoints,
 		providerAccounts:   providerAccounts,
 		workspaceDefaults:  workspaceDefaults,
 		operations:         operations,
@@ -269,6 +279,12 @@ func (s *Store) EnvironmentRepository() environment.Repository {
 // managed runs and manual captures.
 func (s *Store) CaptureAssignmentRepository() captureassignment.Repository {
 	return s.captureAssignments
+}
+
+// UpstreamEndpointRepository persists reusable upstream service identity.
+// ProviderAccount rows reference this authority with a non-null foreign key.
+func (s *Store) UpstreamEndpointRepository() upstreamendpoint.Repository {
+	return s.upstreamEndpoints
 }
 
 // ProviderAccountRepository persists only non-secret account configuration.

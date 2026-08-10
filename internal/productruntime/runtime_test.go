@@ -30,7 +30,7 @@ var errAcquireNotExpected = errors.New("egress acquisition is not expected in Pr
 func TestProductionEnvironmentCompilerFreezesExactResponsesOperation(t *testing.T) {
 	t.Parallel()
 
-	compiler, err := productionEnvironmentCompiler(nil)
+	compiler, err := productionEnvironmentCompiler(nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}

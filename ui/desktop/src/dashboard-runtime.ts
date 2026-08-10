@@ -8,11 +8,14 @@ export const dashboardQueryKeys = {
   status: ["vibermate", "desktop", "status"] as const,
   offline: ["vibermate", "desktop", "offline"] as const,
   environments: ["vibermate", "desktop", "environments"] as const,
+  endpoints: ["vibermate", "desktop", "upstream-endpoints"] as const,
   accounts: ["vibermate", "desktop", "provider-accounts"] as const,
   captures: ["vibermate", "desktop", "captures"] as const,
   activities: ["vibermate", "desktop", "activities"] as const,
   approvals: ["vibermate", "desktop", "approvals"] as const,
   manualCaptures: ["vibermate", "desktop", "manual-captures"] as const,
+  manualCapture: (manualCaptureId: string) =>
+    ["vibermate", "desktop", "manual-captures", manualCaptureId] as const,
   environment: (environmentId: string) =>
     ["vibermate", "desktop", "environment", environmentId] as const,
   environmentDraft: (environmentId: string) =>

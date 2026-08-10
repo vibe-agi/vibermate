@@ -29,11 +29,13 @@ import (
 	"github.com/vibe-agi/vibermate/internal/providerauth"
 	"github.com/vibe-agi/vibermate/internal/runlauncher"
 	"github.com/vibe-agi/vibermate/internal/secretstore"
+	"github.com/vibe-agi/vibermate/internal/upstreamendpoint"
 	"github.com/vibe-agi/vibermate/internal/wireprofile"
 )
 
 const (
 	managedEnvironmentID = "managed-anthropic"
+	managedEndpointID    = "target.managed.anthropic"
 	managedAccountID     = "anthropic-test"
 	managedSecret        = "managed-test-credential"
 )
@@ -86,8 +88,9 @@ func TestManagedAnthropicRouteUsesOnlyFrozenAccountAcrossRestart(t *testing.T) {
 	catalog := fixedSelfTestCatalog(t)
 
 	first, _ := startManagedHost(t, paths, dataDirectory, factory, catalog)
-	accountID := createManagedAccount(t, first.Runtime().ProviderAccounts())
-	environmentID := publishManagedEnvironment(t, first, provider.URL, accountID)
+	endpointID := createManagedEndpoint(t, first.Runtime().UpstreamEndpoints(), provider.URL)
+	accountID := createManagedAccount(t, first.Runtime().ProviderAccounts(), endpointID)
+	environmentID := publishManagedEnvironment(t, first, provider.URL, endpointID, accountID)
 	firstDigest := resolveEnvironmentDigest(t, first, environmentID)
 	runManagedChild(t, paths, environmentID, false)
 	assertManagedObservation(t, <-observed)
@@ -162,10 +165,11 @@ func TestManagedClaudeOAuthRouteUsesBearerCredential(t *testing.T) {
 		t, paths, filepath.Join(root, "data"), factory, fixedSelfTestCatalog(t),
 	)
 	defer shutdownHost(t, host)
+	endpointID := createManagedEndpoint(t, host.Runtime().UpstreamEndpoints(), provider.URL)
 	accountID := createManagedAccountWithDriver(
-		t, host.Runtime().ProviderAccounts(), providerauth.StaticHeaderDriverRef(),
+		t, host.Runtime().ProviderAccounts(), endpointID, providerauth.StaticHeaderDriverRef(),
 	)
-	environmentID := publishManagedEnvironment(t, host, provider.URL, accountID)
+	environmentID := publishManagedEnvironment(t, host, provider.URL, endpointID, accountID)
 	runManagedChild(t, paths, environmentID, false)
 
 	got := <-observed
@@ -226,16 +230,18 @@ func fixedSelfTestCatalog(t *testing.T) clientadapter.Catalog {
 func createManagedAccount(
 	t *testing.T,
 	accounts provideraccount.Controller,
+	endpointID upstreamendpoint.ID,
 ) provideraccount.ID {
 	t.Helper()
 	return createManagedAccountWithDriver(
-		t, accounts, providerauth.AnthropicAPIKeyDriverRef(),
+		t, accounts, endpointID, providerauth.AnthropicAPIKeyDriverRef(),
 	)
 }
 
 func createManagedAccountWithDriver(
 	t *testing.T,
 	accounts provideraccount.Controller,
+	endpointID upstreamendpoint.ID,
 	driver providerauth.DriverRef,
 ) provideraccount.ID {
 	t.Helper()
@@ -249,7 +255,7 @@ func createManagedAccountWithDriver(
 	}
 	defer secret.Destroy()
 	view, err := accounts.Create(context.Background(), provideraccount.CreateCommand{
-		ID: id, DisplayName: "Anthropic test", RealmID: "anthropic.official",
+		ID: id, DisplayName: "Anthropic test", UpstreamEndpointID: endpointID,
 		Driver: driver, Secret: secret,
 	})
 	if err != nil || view.Account.Revision != 1 ||
@@ -259,10 +265,43 @@ func createManagedAccountWithDriver(
 	return id
 }
 
+func createManagedEndpoint(
+	t *testing.T,
+	endpoints upstreamendpoint.Controller,
+	providerURL string,
+) upstreamendpoint.ID {
+	t.Helper()
+	id, err := upstreamendpoint.NewID(managedEndpointID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	origin, err := originidentity.ParseProviderOrigin(providerURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	view, err := endpoints.Create(context.Background(), upstreamendpoint.CreateCommand{
+		ID: id, DisplayName: "Anthropic test relay", Origin: origin,
+		RealmID: "anthropic.official", BackendProtocols: []string{"anthropic_messages"},
+		Capabilities: []protocolspec.ProviderCapability{
+			protocolspec.ProviderCapabilityMessages,
+			protocolspec.ProviderCapabilityStreaming,
+			protocolspec.ProviderCapabilityToolCalls,
+		},
+		Drivers: []providerauth.DriverRef{
+			providerauth.AnthropicAPIKeyDriverRef(), providerauth.StaticHeaderDriverRef(),
+		},
+	})
+	if err != nil || view.Revision != 1 {
+		t.Fatalf("create managed UpstreamEndpoint = %+v, %v", view, err)
+	}
+	return id
+}
+
 func publishManagedEnvironment(
 	t *testing.T,
 	host *desktophost.Host,
 	providerURL string,
+	upstreamEndpointID upstreamendpoint.ID,
 	accountID provideraccount.ID,
 ) environment.EnvironmentID {
 	t.Helper()
@@ -311,7 +350,7 @@ func publishManagedEnvironment(
 					Routes: []environment.UpstreamRoute{{
 						ID: routeID, Revision: 1,
 						ProviderTarget: environment.ProviderTarget{
-							ID: "target.anthropic", Revision: 1,
+							ID: upstreamEndpointID.String(), Revision: 1,
 							Origin: providerOrigin, RealmID: "anthropic.official",
 							Capabilities: []protocolspec.ProviderCapability{
 								protocolspec.ProviderCapabilityMessages,
@@ -322,7 +361,6 @@ func publishManagedEnvironment(
 						BackendProtocol: string(environment.ClientProtocolAnthropicMessages),
 						AccountPolicy: environment.RouteAccountPolicy{
 							Revision: 1, Mode: environment.AccountModeManaged,
-							AllowedRealmIDs:     []string{"anthropic.official"},
 							PreferredAccountID:  accountID.String(),
 							CandidateAccountIDs: []string{accountID.String()},
 							AccountRevisions:    map[string]environment.Revision{accountID.String(): 1},

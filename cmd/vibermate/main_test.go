@@ -2,10 +2,12 @@ package main
 
 import (
 	"bytes"
+	"errors"
 	"slices"
 	"testing"
 
 	"github.com/vibe-agi/vibermate/internal/environment"
+	"github.com/vibe-agi/vibermate/internal/runlauncher"
 )
 
 func TestExecuteRequiresOneExactRunSeparator(t *testing.T) {
@@ -32,6 +34,24 @@ func TestExecuteRequiresOneExactRunSeparator(t *testing.T) {
 		)
 		if code != 2 || key != keyUsage {
 			t.Fatalf("execute(%v) code=%d key=%q", arguments, code, key)
+		}
+	}
+}
+
+func TestLaunchFailureKeyDistinguishesEnvironmentSelection(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		err  error
+		want string
+	}{
+		{err: runlauncher.ErrEnvironmentNotFound, want: keyEnvironmentMissing},
+		{err: runlauncher.ErrEnvironmentUnavailable, want: keyEnvironmentDown},
+		{err: runlauncher.ErrRuntimeUnavailable, want: keyRuntimeUnavailable},
+		{err: errors.New("other launch failure"), want: keyLaunchFailed},
+	}
+	for _, test := range tests {
+		if got := launchFailureKey(test.err); got != test.want {
+			t.Fatalf("launchFailureKey(%v)=%q want %q", test.err, got, test.want)
 		}
 	}
 }

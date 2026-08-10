@@ -13,6 +13,7 @@ import (
 	"github.com/vibe-agi/vibermate/internal/environment"
 	"github.com/vibe-agi/vibermate/internal/providerauth"
 	"github.com/vibe-agi/vibermate/internal/secretstore"
+	"github.com/vibe-agi/vibermate/internal/upstreamendpoint"
 )
 
 const (
@@ -26,6 +27,7 @@ var (
 	ErrAccountNotFound     = errors.New("ProviderAccount was not found")
 	ErrRevisionConflict    = errors.New("ProviderAccount revision conflicts with the expected revision")
 	ErrAccountDisabled     = errors.New("ProviderAccount is disabled")
+	ErrEndpointMismatch    = errors.New("ProviderAccount does not belong to the requested UpstreamEndpoint")
 	ErrRealmMismatch       = errors.New("ProviderAccount does not belong to the requested realm")
 	ErrCredentialMissing   = errors.New("ProviderAccount credential is unavailable")
 	ErrAccountInUse        = errors.New("ProviderAccount is referenced by a published Environment")
@@ -89,20 +91,23 @@ func (realm Realm) Validate() error {
 }
 
 type Account struct {
-	ID          ID
-	DisplayName string
-	RealmID     string
-	Driver      providerauth.DriverRef
-	SecretRef   secretstore.Reference
-	State       State
-	Revision    uint64
-	CreatedAt   time.Time
-	UpdatedAt   time.Time
+	ID                 ID
+	DisplayName        string
+	UpstreamEndpointID upstreamendpoint.ID
+	RealmID            string
+	Driver             providerauth.DriverRef
+	SecretRef          secretstore.Reference
+	State              State
+	Revision           uint64
+	CreatedAt          time.Time
+	UpdatedAt          time.Time
 }
 
 func (account Account) Validate() error {
 	parsedID, err := NewID(account.ID.String())
+	parsedEndpointID, endpointErr := upstreamendpoint.NewID(account.UpstreamEndpointID.String())
 	if err != nil || parsedID != account.ID ||
+		endpointErr != nil || parsedEndpointID != account.UpstreamEndpointID ||
 		!validDisplayName(account.DisplayName) ||
 		!validIdentity(account.RealmID) ||
 		!account.State.Valid() ||
@@ -123,10 +128,15 @@ func (account Account) Validate() error {
 	return nil
 }
 
-func (account Account) Descriptor(realm Realm) environment.AccountDescriptor {
+func (account Account) Descriptor(
+	realm Realm,
+	endpoint upstreamendpoint.Endpoint,
+) environment.AccountDescriptor {
 	return environment.AccountDescriptor{
 		ID: account.ID.String(), Revision: environment.Revision(account.Revision),
-		RealmID: account.RealmID, Active: account.State == StateActive,
+		UpstreamEndpointID:       account.UpstreamEndpointID.String(),
+		UpstreamEndpointRevision: environment.Revision(endpoint.Revision),
+		RealmID:                  account.RealmID, Active: account.State == StateActive && endpoint.State == upstreamendpoint.StateActive,
 		BackendProtocols: append([]string(nil), realm.BackendProtocols...),
 	}
 }
@@ -193,11 +203,11 @@ type Repository interface {
 }
 
 type CreateCommand struct {
-	ID          ID
-	DisplayName string
-	RealmID     string
-	Driver      providerauth.DriverRef
-	Secret      *secretstore.Value
+	ID                 ID
+	DisplayName        string
+	UpstreamEndpointID upstreamendpoint.ID
+	Driver             providerauth.DriverRef
+	Secret             *secretstore.Value
 }
 
 type ReplaceSecretCommand struct {

@@ -73,6 +73,67 @@ func TestActivityRepositoryGetsExactlyOneExchangeTerminal(t *testing.T) {
 	}
 }
 
+func TestActivityRepositoryMaterializesPendingThenTerminalExchange(t *testing.T) {
+	t.Parallel()
+	store := openTestStore(t, filepath.Join(t.TempDir(), "runtime.db"))
+	defer func() {
+		if err := store.Shutdown(context.Background()); err != nil {
+			t.Error(err)
+		}
+	}()
+	repository := store.ActivityRepository()
+	appendExchange := func(id string, kind activity.Kind, status activity.Status) activity.Record {
+		t.Helper()
+		candidate := activity.Record{
+			ID:                id,
+			OccurredAt:        time.Date(2026, 8, 10, 2, 0, 0, 0, time.UTC),
+			Kind:              kind,
+			SubjectID:         "exchange-live",
+			Status:            status,
+			SourceKind:        activity.SourceCaptureRun,
+			SourceDisplayName: "claude",
+			SourceRecognition: activity.SourceRecognitionConfigured,
+			CaptureRunID:      "run-live",
+			ConnectionID:      "connection-live",
+		}
+		setFrozenExecutionEvidence(&candidate, "live")
+		if kind == activity.KindExchangeStarted {
+			candidate.AccountID = ""
+			candidate.AccountRevision = 0
+			candidate.CredentialEpoch = 0
+		}
+		record, err := repository.Append(context.Background(), candidate)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return record
+	}
+	started := appendExchange(
+		"activity-exchange-started", activity.KindExchangeStarted, activity.StatusPending,
+	)
+	page, err := repository.ListExchanges(
+		context.Background(), activity.PageRequest{Limit: 10, CaptureRunID: "run-live"},
+	)
+	if err != nil || len(page.Items) != 1 || page.Items[0].ID != started.ID ||
+		page.Items[0].Status != activity.StatusPending {
+		t.Fatalf("pending page = %+v, %v", page, err)
+	}
+	terminal := appendExchange(
+		"activity-exchange-completed", activity.KindExchangeCompleted, activity.StatusSucceeded,
+	)
+	page, err = repository.ListExchanges(
+		context.Background(), activity.PageRequest{Limit: 10, CaptureRunID: "run-live"},
+	)
+	if err != nil || len(page.Items) != 1 || page.Items[0].ID != terminal.ID ||
+		page.Items[0].Status != activity.StatusSucceeded {
+		t.Fatalf("terminal page = %+v, %v", page, err)
+	}
+	got, err := repository.GetExchange(context.Background(), "exchange-live")
+	if err != nil || got.ID != terminal.ID {
+		t.Fatalf("GetExchange() = %+v, %v", got, err)
+	}
+}
+
 func TestActivityRepositoryListsExchangePagesWithoutSkips(t *testing.T) {
 	t.Parallel()
 

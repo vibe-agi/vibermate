@@ -9,6 +9,7 @@ import (
 
 	"github.com/vibe-agi/vibermate/internal/originidentity"
 	"github.com/vibe-agi/vibermate/internal/protocolspec"
+	"github.com/vibe-agi/vibermate/internal/upstreamendpoint"
 	"github.com/vibe-agi/vibermate/internal/wireprofile"
 )
 
@@ -31,25 +32,31 @@ type WireProfileCatalog interface {
 
 type Compiler struct {
 	accounts     AccountCatalog
+	endpoints    upstreamendpoint.Catalog
 	protocols    ProtocolCatalog
 	wireProfiles WireProfileCatalog
 }
 
 func NewCompiler(
 	accounts AccountCatalog,
+	endpoints upstreamendpoint.Catalog,
 	protocols ProtocolCatalog,
 	wireProfiles WireProfileCatalog,
 ) (Compiler, error) {
 	if protocols == nil || wireProfiles == nil {
 		return Compiler{}, ErrCompilerUnavailable
 	}
-	return Compiler{accounts: accounts, protocols: protocols, wireProfiles: wireProfiles}, nil
+	return Compiler{
+		accounts: accounts, endpoints: endpoints, protocols: protocols, wireProfiles: wireProfiles,
+	}, nil
 }
 
 type CompiledAccountReference struct {
-	ID       string
-	Revision Revision
-	RealmID  string
+	ID                       string
+	Revision                 Revision
+	UpstreamEndpointID       string
+	UpstreamEndpointRevision Revision
+	RealmID                  string
 }
 
 type CompiledAccountPolicy struct {
@@ -330,6 +337,11 @@ func compileRoute(
 	if err != nil {
 		return CompiledRoutePlan{}, fmt.Errorf("compile route %q: %w", route.ID, err)
 	}
+	if plan.Mode == PlanModeManaged && compiler.endpoints != nil {
+		if err := validateUpstreamEndpointSnapshot(compiler.endpoints, route); err != nil {
+			return CompiledRoutePlan{}, err
+		}
+	}
 	codec, err := compiler.protocols.Resolve(client, backend)
 	if err != nil {
 		return CompiledRoutePlan{}, fmt.Errorf("compile route %q codec: %w", route.ID, err)
@@ -411,10 +423,51 @@ func compileAccountPolicy(catalog AccountCatalog, route UpstreamRoute) (Compiled
 			return CompiledAccountPolicy{}, fmt.Errorf("%w: managed account %q disappeared", ErrInvalidEnvironment, accountID)
 		}
 		compiled.candidates = append(compiled.candidates, CompiledAccountReference{
-			ID: account.ID, Revision: account.Revision, RealmID: account.RealmID,
+			ID: account.ID, Revision: account.Revision,
+			UpstreamEndpointID:       account.UpstreamEndpointID,
+			UpstreamEndpointRevision: account.UpstreamEndpointRevision,
+			RealmID:                  account.RealmID,
 		})
 	}
 	return compiled, nil
+}
+
+func validateUpstreamEndpointSnapshot(
+	catalog upstreamendpoint.Catalog,
+	route UpstreamRoute,
+) error {
+	if catalog == nil {
+		return fmt.Errorf("%w: managed route %q has no UpstreamEndpoint catalog", ErrInvalidEnvironment, route.ID)
+	}
+	endpoint, exists := catalog.LookupEndpoint(route.ProviderTarget.ID)
+	if !exists || endpoint.State != upstreamendpoint.StateActive ||
+		endpoint.Revision != uint64(route.ProviderTarget.Revision) ||
+		endpoint.Origin != route.ProviderTarget.Origin ||
+		endpoint.RealmID != route.ProviderTarget.RealmID ||
+		!sameCapabilities(endpoint.Capabilities, route.ProviderTarget.Capabilities) ||
+		!slices.Contains(endpoint.BackendProtocols, route.BackendProtocol) {
+		return fmt.Errorf(
+			"%w: route %q does not freeze its declared UpstreamEndpoint",
+			ErrInvalidEnvironment,
+			route.ID,
+		)
+	}
+	return nil
+}
+
+func sameCapabilities(
+	left []protocolspec.ProviderCapability,
+	right []protocolspec.ProviderCapability,
+) bool {
+	if len(left) != len(right) {
+		return false
+	}
+	for _, capability := range left {
+		if !slices.Contains(right, capability) {
+			return false
+		}
+	}
+	return true
 }
 
 func clientDialect(protocol ClientProtocol) (protocolspec.Dialect, error) {

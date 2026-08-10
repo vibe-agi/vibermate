@@ -29,6 +29,7 @@ import (
 	"github.com/vibe-agi/vibermate/internal/runtimepersistence"
 	"github.com/vibe-agi/vibermate/internal/toolapproval"
 	"github.com/vibe-agi/vibermate/internal/toolpolicy"
+	"github.com/vibe-agi/vibermate/internal/upstreamendpoint"
 	"github.com/vibe-agi/vibermate/internal/workspacedefault"
 	"github.com/vibe-agi/vibermate/internal/workspaceidentity"
 )
@@ -48,6 +49,7 @@ type Runtime struct {
 	connections       connectionEventRuntime
 	egress            egressaudit.Reader
 	egressCompletion  *runtimeEgressRepository
+	endpoints         *upstreamendpoint.Manager
 	accounts          *provideraccount.Manager
 	approvals         approvalRuntime
 	connectionRules   *connectionpolicy.Manager
@@ -238,10 +240,26 @@ func startWithBuilders(
 	}
 	cleanups.register("local Root CA", certificateAuthority.Shutdown)
 
+	builtInEndpoints, err := upstreamendpoint.BuiltInCommands()
+	if err != nil {
+		return fail("UpstreamEndpoint definitions", err)
+	}
+	endpoints, err := upstreamendpoint.NewManager(
+		ctx,
+		storageResult.store.UpstreamEndpointRepository(),
+		builtInEndpoints,
+		options.Clock,
+	)
+	if err != nil {
+		return fail("UpstreamEndpoint recovery", err)
+	}
+	cleanups.register("UpstreamEndpoint manager", endpoints.Shutdown)
+
 	accounts, err := provideraccount.NewManager(
 		ctx,
 		storageResult.store.ProviderAccountRepository(),
 		options.Secrets,
+		endpoints,
 		provideraccount.BuiltInRealms(),
 		options.Clock,
 	)
@@ -267,6 +285,7 @@ func startWithBuilders(
 		leafCache:            certificateAuthority,
 		clock:                options.Clock,
 		accounts:             accounts,
+		endpoints:            endpoints,
 	})
 	if err != nil {
 		return fail("Environment and Capture assignment recovery", err)
@@ -613,6 +632,7 @@ func startWithBuilders(
 		connections:       connections,
 		egress:            runtimeEgress,
 		egressCompletion:  runtimeEgress,
+		endpoints:         endpoints,
 		accounts:          accounts,
 		approvals:         approvals,
 		connectionRules:   connectionRules,
@@ -710,6 +730,12 @@ func (r *Runtime) EgressAttempts() egressaudit.Reader {
 // through this interface.
 func (r *Runtime) ProviderAccounts() provideraccount.Controller {
 	return r.accounts
+}
+
+// UpstreamEndpoints returns the reusable upstream authority. Every managed
+// ProviderAccount belongs to exactly one Endpoint exposed by this controller.
+func (r *Runtime) UpstreamEndpoints() upstreamendpoint.Controller {
+	return r.endpoints
 }
 
 // ToolApprovals returns the durable interactive tool decision authority used

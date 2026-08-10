@@ -23,7 +23,6 @@ export function assignRouteAccount(
         if (route.id !== routeID) return route;
 
         const desiredAccountPolicy = accountPolicy(
-          route.providerTarget.realmId,
           route.accountPolicy.revision,
           account,
         );
@@ -76,7 +75,6 @@ export function assignRouteAccount(
 }
 
 function accountPolicy(
-  realm: string,
   revision: number,
   account?: ProviderAccountRecord,
 ) {
@@ -84,7 +82,6 @@ function accountPolicy(
     ? {
         revision,
         mode: "client_passthrough" as const,
-        allowedRealmIds: [realm],
         preferredAccountId: "",
         candidateAccountIds: [],
         accountRevisions: {},
@@ -93,7 +90,6 @@ function accountPolicy(
     : {
         revision,
         mode: "managed" as const,
-        allowedRealmIds: [realm],
         preferredAccountId: account.id,
         candidateAccountIds: [account.id],
         accountRevisions: { [account.id]: account.revision },
@@ -109,7 +105,6 @@ function sameAccountPolicy(
     current.mode === desired.mode &&
     current.preferredAccountId === desired.preferredAccountId &&
     current.failoverPolicy === desired.failoverPolicy &&
-    sameStrings(current.allowedRealmIds, desired.allowedRealmIds) &&
     sameStrings(current.candidateAccountIds, desired.candidateAccountIds) &&
     sameRevisions(current.accountRevisions, desired.accountRevisions)
   );

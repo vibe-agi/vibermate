@@ -125,6 +125,7 @@ type Availability string
 const (
 	AvailabilityRecorded Availability = "recorded"
 	AvailabilityOmitted  Availability = "omitted"
+	BlockKindReasoning                = "reasoning"
 )
 
 type Block struct {
@@ -159,8 +160,62 @@ type Request struct {
 
 type UsageValue struct {
 	Known  bool   `json:"known"`
-	Tokens int64  `json:"tokens,omitempty"`
+	Tokens int64  `json:"-"`
 	Source string `json:"source,omitempty"`
+}
+
+// MarshalJSON preserves the distinction between an unknown usage value and a
+// provider-observed zero. A known zero must remain present on the wire; using
+// omitempty for Tokens would turn it into an internally contradictory
+// {"known":true,"source":...} value.
+func (value UsageValue) MarshalJSON() ([]byte, error) {
+	if !value.Known {
+		if value.Tokens != 0 || value.Source != "" {
+			return nil, fmt.Errorf("%w: unknown usage has evidence", ErrInvalidEvidence)
+		}
+		return json.Marshal(struct {
+			Known bool `json:"known"`
+		}{Known: false})
+	}
+	if value.Tokens < 0 || value.Source == "" {
+		return nil, fmt.Errorf("%w: known usage is incomplete", ErrInvalidEvidence)
+	}
+	return json.Marshal(struct {
+		Known  bool   `json:"known"`
+		Tokens int64  `json:"tokens"`
+		Source string `json:"source"`
+	}{Known: true, Tokens: value.Tokens, Source: value.Source})
+}
+
+func (value *UsageValue) UnmarshalJSON(encoded []byte) error {
+	var wire struct {
+		Known  *bool   `json:"known"`
+		Tokens *int64  `json:"tokens"`
+		Source *string `json:"source"`
+	}
+	decoder := json.NewDecoder(bytes.NewReader(encoded))
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&wire); err != nil {
+		return fmt.Errorf("%w: decode usage: %v", ErrInvalidEvidence, err)
+	}
+	if err := decoder.Decode(&struct{}{}); !errors.Is(err, io.EOF) {
+		return fmt.Errorf("%w: trailing usage JSON", ErrInvalidEvidence)
+	}
+	if wire.Known == nil {
+		return fmt.Errorf("%w: usage knowledge is missing", ErrInvalidEvidence)
+	}
+	if !*wire.Known {
+		if wire.Tokens != nil || wire.Source != nil {
+			return fmt.Errorf("%w: unknown usage has evidence", ErrInvalidEvidence)
+		}
+		*value = UsageValue{}
+		return nil
+	}
+	if wire.Tokens == nil || *wire.Tokens < 0 || wire.Source == nil || *wire.Source == "" {
+		return fmt.Errorf("%w: known usage is incomplete", ErrInvalidEvidence)
+	}
+	*value = UsageValue{Known: true, Tokens: *wire.Tokens, Source: *wire.Source}
+	return nil
 }
 
 type Usage struct {
@@ -431,6 +486,10 @@ func (block Block) validate(mode environment.ContentRecordingMode) error {
 			block.ToolName != "" || len(block.Arguments) != 0 || block.ToolError {
 			return fmt.Errorf("%w: provider extension retained wire content", ErrInvalidEvidence)
 		}
+	case protocolcore.BlockKind(BlockKindReasoning):
+		if block.CallID != "" || block.ToolName != "" || len(block.Arguments) != 0 || block.ToolError {
+			return fmt.Errorf("%w: reasoning block contains tool evidence", ErrInvalidEvidence)
+		}
 	default:
 		return fmt.Errorf("%w: block kind is unsupported", ErrInvalidEvidence)
 	}
@@ -466,12 +525,58 @@ func requestView(request protocolcore.Request, full bool) Request {
 }
 
 func responseView(response protocolcore.Response, full bool) Response {
+	blocks := blockViews(response.Blocks, full)
+	blocks = append(blocks, providerExtensionViews(response.ProviderExtensions, full)...)
 	return Response{
 		ID: response.ID, RequestedModel: response.RequestedModel,
 		EffectiveModel: response.EffectiveModel, ReportedModel: response.ReportedModel,
-		StopReason: string(response.StopReason), Blocks: blockViews(response.Blocks, full),
+		StopReason: string(response.StopReason), Blocks: blocks,
 		Usage: usageView(response.Usage),
 	}
+}
+
+func providerExtensionViews(extensions []protocolcore.ProviderExtension, full bool) []Block {
+	result := make([]Block, 0, len(extensions))
+	for _, extension := range extensions {
+		rawBytes := 0
+		for _, fragment := range extension.Fragments() {
+			rawBytes += len(fragment)
+		}
+		text := providerReasoningText(extension)
+		if full && text != "" {
+			result = append(result, Block{
+				Kind: BlockKindReasoning, Availability: AvailabilityRecorded,
+				Text: sanitizeText(text), OriginalSize: len(text),
+			})
+			continue
+		}
+		result = append(result, Block{
+			Kind:         string(protocolcore.BlockProviderExtension),
+			Availability: AvailabilityOmitted, OriginalSize: rawBytes,
+		})
+	}
+	return result
+}
+
+func providerReasoningText(extension protocolcore.ProviderExtension) string {
+	var result strings.Builder
+	for _, fragment := range extension.Fragments() {
+		switch extension.Kind() {
+		case protocolcore.ProviderExtensionThinking:
+			var value struct {
+				Thinking string `json:"thinking"`
+			}
+			if json.Unmarshal(fragment, &value) == nil {
+				result.WriteString(value.Thinking)
+			}
+		case protocolcore.ProviderExtensionReasoningContent:
+			var value string
+			if json.Unmarshal(fragment, &value) == nil {
+				result.WriteString(value)
+			}
+		}
+	}
+	return result.String()
 }
 
 func blockViews(blocks []protocolcore.ContentBlock, full bool) []Block {

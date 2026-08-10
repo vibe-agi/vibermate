@@ -204,7 +204,7 @@ func parentRefsOf(record activity.Record) ActivityParentRefs {
 func activityPageOf(page activity.Page) (ActivityPage, error) {
 	view := ActivityPage{Items: make([]ActivitySummary, 0, len(page.Items))}
 	for _, record := range page.Items {
-		if record.Kind != activity.KindExchangeCompleted || record.Validate() != nil {
+		if !isExchangeActivity(record.Kind) || record.Validate() != nil {
 			return ActivityPage{}, errors.New("Activity Exchange projection is invalid")
 		}
 		summary := ActivitySummary{
@@ -234,7 +234,7 @@ func exchangeDetailOf(
 	content *exchangecontent.Record,
 	contentView ExchangeContentView,
 ) (ExchangeDetail, error) {
-	if record.Kind != activity.KindExchangeCompleted || record.Validate() != nil ||
+	if !isExchangeActivity(record.Kind) || record.Validate() != nil ||
 		egressPage.NextCursor != "" ||
 		(contentView != ExchangeContentViewIncremental && contentView != ExchangeContentViewFull) {
 		return ExchangeDetail{}, errors.New("Exchange detail projection is incomplete")
@@ -313,6 +313,10 @@ func exchangeDetailOf(
 		}
 	}
 	return detail, nil
+}
+
+func isExchangeActivity(kind activity.Kind) bool {
+	return kind == activity.KindExchangeStarted || kind == activity.KindExchangeCompleted
 }
 
 func validRequestPresentation(presentation exchangecontent.RequestPresentation, total int) bool {

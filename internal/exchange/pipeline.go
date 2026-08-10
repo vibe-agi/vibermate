@@ -38,8 +38,9 @@ type operation struct {
 }
 
 type contentCapture struct {
-	request  *protocolcore.Request
-	response *protocolcore.Response
+	request         *protocolcore.Request
+	response        *protocolcore.Response
+	requestObserved bool
 }
 
 var errOfflineHoldAdmission = errors.New(
@@ -55,7 +56,7 @@ type Pipeline struct {
 	provider      Provider
 	toolDecisions ToolDecisionGate
 	retryWaiter   RetryWaiter
-	observer      AttemptObserver
+	observer      ExchangeObserver
 	content       ContentObserver
 	observeLimit  time.Duration
 	hold          HoldPolicy
@@ -210,6 +211,7 @@ func (pipeline *Pipeline) Execute(
 	}
 	defer pipeline.finish(active)
 	defer action.Release()
+	pipeline.observeStart(request)
 	candidates, err := selection.credentialCandidates()
 	if err != nil {
 		return result, newFailure(
@@ -354,6 +356,7 @@ func (pipeline *Pipeline) executeCandidate(
 					contentPath = candidatePath
 					decodedContent = &decoded
 					captured.request = &decoded
+					pipeline.observeRequest(request, captured)
 				}
 			}
 		}
@@ -396,6 +399,7 @@ func (pipeline *Pipeline) executeCandidate(
 	}
 	decodedForEvidence := decoded.Clone()
 	captured.request = &decodedForEvidence
+	pipeline.observeRequest(request, captured)
 	encodedProvider, backendRequestReport, err := protocolPath.EncodeProviderRequest(
 		decoded,
 		request.body,
@@ -515,14 +519,16 @@ func (pipeline *Pipeline) acquireCredential(
 		return credentialMaterial{}, errors.New("managed account authority is unavailable")
 	}
 	request := AccountLeaseRequest{
-		environmentID:       selection.environmentID,
-		environmentRevision: selection.environmentRevision,
-		environmentDigest:   selection.environmentDigest,
-		routeID:             selection.routeID,
-		routeRevision:       selection.routeRevision,
-		accountID:           candidate.account.ID,
-		accountRevision:     candidate.account.Revision,
-		realmID:             candidate.account.RealmID,
+		environmentID:            selection.environmentID,
+		environmentRevision:      selection.environmentRevision,
+		environmentDigest:        selection.environmentDigest,
+		routeID:                  selection.routeID,
+		routeRevision:            selection.routeRevision,
+		upstreamEndpointID:       candidate.account.UpstreamEndpointID,
+		upstreamEndpointRevision: candidate.account.UpstreamEndpointRevision,
+		accountID:                candidate.account.ID,
+		accountRevision:          candidate.account.Revision,
+		realmID:                  candidate.account.RealmID,
 	}
 	lease, err := pipeline.accounts.Acquire(ctx, request)
 	if err != nil {
@@ -590,7 +596,46 @@ func (pipeline *Pipeline) observeAttempt(
 		pipeline.observeLimit,
 	)
 	defer cancel()
-	_ = pipeline.observer.Observe(ctx, observation)
+	_ = pipeline.observer.ObserveTerminal(ctx, observation)
+}
+
+func (pipeline *Pipeline) observeStart(request ClientRequest) {
+	if pipeline == nil || pipeline.observer == nil {
+		return
+	}
+	admission, hasAdmission := request.CaptureAdmission()
+	plan := request.plan
+	endpoint := plan.Endpoint()
+	protocolPlan := plan.ProtocolPlan()
+	route := plan.Route()
+	observation := StartObservation{
+		ExchangeID:          request.exchangeID,
+		EnvironmentID:       plan.EnvironmentID(),
+		EnvironmentRevision: plan.EnvironmentRevision(),
+		EnvironmentDigest:   plan.EnvironmentDigest().String(),
+		EndpointID:          endpoint.ID(), EndpointRevision: endpoint.Revision(),
+		ProtocolPlanID: protocolPlan.ID(), ProtocolPlanRevision: protocolPlan.Revision(),
+		RouteID: route.ID(), RouteRevision: route.Revision(),
+		Admission: admission, HasAdmission: hasAdmission,
+		ConnectionID: request.connectionRef,
+	}
+	ctx, cancel := context.WithTimeout(
+		context.WithoutCancel(pipeline.ownerContext),
+		pipeline.observeLimit,
+	)
+	defer cancel()
+	_ = pipeline.observer.ObserveStart(ctx, observation)
+}
+
+func (pipeline *Pipeline) observeRequest(
+	request ClientRequest,
+	captured *contentCapture,
+) {
+	if captured == nil || captured.requestObserved || captured.request == nil {
+		return
+	}
+	captured.requestObserved = true
+	pipeline.observeContent(request, captured)
 }
 
 func (pipeline *Pipeline) observeContent(

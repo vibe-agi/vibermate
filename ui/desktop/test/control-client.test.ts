@@ -173,6 +173,64 @@ describe("Environment-first desktop control client", () => {
     expect(requestedURL?.search).toBe("?contentView=full");
   });
 
+  it("keeps a provider-observed zero token count distinct from unknown usage", async () => {
+    const detail = {
+      id: "exchange-known-zero",
+      status: "succeeded",
+      environment: {
+        id: "work", revision: 3, digest,
+        clientEndpointId: "endpoint.claude", clientEndpointRevision: 2,
+        protocolPlanId: "plan.claude", protocolPlanRevision: 2,
+        routeId: "route.claude", routeRevision: 2,
+      },
+      parentRefs: { captureRunId: "run-one", exchangeId: "exchange-known-zero" },
+      processingTrace: { pluginRunIds: [], attempts: [], result: "succeeded" },
+      content: {
+        state: "recorded",
+        mode: "full",
+        recordedAt: "2026-08-09T01:00:00Z",
+        expiresAt: "2026-09-08T01:00:00Z",
+        requestProjection: {
+          view: "incremental",
+          relationship: "checkpoint",
+          inheritedMessageCount: 0,
+          totalMessageCount: 1,
+          fullSnapshotAvailable: false,
+        },
+        request: {
+          requestedModel: "claude", effectiveModel: "claude",
+          maxOutputTokens: 1024, stream: true,
+          messages: [{
+            role: "user",
+            blocks: [{ kind: "text", availability: "recorded", text: "hello", originalSize: 5 }],
+          }],
+          tools: [],
+        },
+        response: {
+          id: "message-one",
+          requestedModel: "claude",
+          effectiveModel: "claude",
+          reportedModel: "claude",
+          stopReason: "end_turn",
+          blocks: [{ kind: "text", availability: "recorded", text: "hello", originalSize: 5 }],
+          usage: {
+            inputUncached: { known: true, tokens: 1, source: "anthropic-messages" },
+            cacheWrite: { known: true, tokens: 2, source: "anthropic-messages" },
+            cacheRead: { known: true, tokens: 0, source: "anthropic-messages" },
+            output: { known: true, tokens: 3, source: "anthropic-messages" },
+            reasoning: { known: false },
+          },
+        },
+      },
+    } as const;
+    const client = await createControlClient(
+      session(),
+      sessionAwareFetch(() => jsonResponse(detail)),
+    );
+
+    await expect(client.exchange(detail.id)).resolves.toEqual(detail);
+  });
+
   it("preserves a missing Environment draft as a typed control Problem", async () => {
     const fetch = sessionAwareFetch((url) => {
       expect(url.pathname).toBe("/api/v1/environments/work/draft");
@@ -300,6 +358,7 @@ describe("Environment-first desktop control client", () => {
     const account = {
       id: "claude-oauth",
       displayName: "Claude OAuth",
+      upstreamEndpointId: "target.claude.official",
       kind: "claude_oauth_token",
       realmId: "anthropic.official",
       state: "active",
@@ -319,6 +378,7 @@ describe("Environment-first desktop control client", () => {
       client.createProviderAccount({
         id: account.id,
         displayName: account.displayName,
+        upstreamEndpointId: account.upstreamEndpointId,
         kind: account.kind,
         secret: "oauth-control-only",
       }),
@@ -332,11 +392,45 @@ describe("Environment-first desktop control client", () => {
       JSON.stringify({
         id: account.id,
         displayName: account.displayName,
+        upstreamEndpointId: account.upstreamEndpointId,
         kind: account.kind,
         secret: "oauth-control-only",
       }),
     );
     expect(new Headers(calls[0]?.init.headers).get("If-Match")).toBe("0");
+  });
+
+  it("creates and reads reusable upstream Endpoints before accounts reference them", async () => {
+    const endpoint = {
+      id: "target.team.anthropic",
+      displayName: "Team relay",
+      origin: "https://relay.example.com",
+      realmId: "anthropic.official",
+      backendProtocols: ["anthropic_messages"],
+      capabilities: ["messages", "streaming", "tool_calls"],
+      accountKinds: ["anthropic_api_key", "claude_oauth_token"],
+      state: "active",
+      revision: 1,
+    } as const;
+    const calls: Array<{ url: URL; init: RequestInit }> = [];
+    const fetch = sessionAwareFetch((url, init) => {
+      calls.push({ url, init });
+      return init.method === "POST" ? jsonResponse(endpoint, 201) : jsonResponse({ items: [endpoint] });
+    });
+    const client = await createControlClient(session(), fetch);
+
+    await expect(client.upstreamEndpoints()).resolves.toEqual({ items: [endpoint] });
+    await expect(client.createUpstreamEndpoint({
+      id: endpoint.id,
+      displayName: endpoint.displayName,
+      origin: endpoint.origin,
+      kind: "anthropic",
+    })).resolves.toEqual(endpoint);
+    expect(calls.map(({ url }) => url.pathname)).toEqual([
+      "/api/v1/upstream-endpoints",
+      "/api/v1/upstream-endpoints",
+    ]);
+    expect(new Headers(calls[1]?.init.headers).get("If-Match")).toBe("0");
   });
 
   it("deletes an unreferenced ProviderAccount with a credential-epoch CAS", async () => {
@@ -420,7 +514,6 @@ describe("Environment-first desktop control client", () => {
                     accountPolicy: {
                       revision: 1,
                       mode: "client_passthrough",
-                      allowedRealmIds: ["anthropic.official"],
                       preferredAccountId: "",
                       candidateAccountIds: [],
                       accountRevisions: {},
@@ -582,6 +675,50 @@ describe("Environment-first desktop control client", () => {
     const context = await client.manualCaptureContext("work");
     expect(context.environmentId).toBe("work");
     expect(context.environmentRevision).toBe(3);
+  });
+
+  it("revokes a ManualCapture with the exact opaque state tag read from its ETag", async () => {
+    const manualCaptureId = "manual-preview";
+    const stateTag = `"mc_${"A".repeat(43)}"`;
+    const capture = {
+      id: manualCaptureId,
+      displayName: "Editor",
+      clientClass: "desktop_app",
+      lifetime: "until_revoked",
+      state: "active",
+      observation: "waiting_for_traffic",
+      createdAt: "2026-08-08T08:00:00Z",
+      updatedAt: "2026-08-08T08:00:00Z",
+    } as const;
+    const fetch = sessionAwareFetch((url, init) => {
+      if (url.pathname.endsWith("/actions/revoke")) {
+        expect(init.method).toBe("POST");
+        const headers = new Headers(init.headers);
+        expect(headers.get("If-Match")).toBe(stateTag);
+        expect(headers.get("Idempotency-Key")).toBeNull();
+        return new Response(null, {
+          status: 204,
+          headers: { "Cache-Control": "no-store" },
+        });
+      }
+      expect(url.pathname).toBe(`/api/v1/manual-captures/${manualCaptureId}`);
+      expect(init.method).toBe("GET");
+      return new Response(JSON.stringify(capture), {
+        status: 200,
+        headers: {
+          "Cache-Control": "no-store",
+          "Content-Type": "application/json",
+          ETag: stateTag,
+        },
+      });
+    });
+    const client = await createControlClient(session(), fetch);
+
+    const authority = await client.manualCapture(manualCaptureId);
+    expect(authority).toEqual({ capture, stateTag });
+    await expect(
+      client.revokeManualCapture(manualCaptureId, authority.stateTag),
+    ).resolves.toBeUndefined();
   });
 
   it("fails closed on legacy projection casing instead of accepting a split contract", async () => {

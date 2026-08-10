@@ -10,6 +10,7 @@ import (
 	"github.com/vibe-agi/vibermate/internal/provideraccount"
 	"github.com/vibe-agi/vibermate/internal/providerauth"
 	"github.com/vibe-agi/vibermate/internal/secretstore"
+	"github.com/vibe-agi/vibermate/internal/upstreamendpoint"
 )
 
 type ProviderAccountKind string
@@ -21,14 +22,15 @@ const (
 )
 
 type ProviderAccountResponse struct {
-	ID              string                      `json:"id"`
-	DisplayName     string                      `json:"displayName"`
-	Kind            ProviderAccountKind         `json:"kind"`
-	RealmID         string                      `json:"realmId"`
-	State           provideraccount.State       `json:"state"`
-	Revision        uint64                      `json:"revision"`
-	CredentialState provideraccount.HealthState `json:"credentialState"`
-	CredentialEpoch uint64                      `json:"credentialEpoch"`
+	ID                 string                      `json:"id"`
+	DisplayName        string                      `json:"displayName"`
+	UpstreamEndpointID string                      `json:"upstreamEndpointId"`
+	Kind               ProviderAccountKind         `json:"kind"`
+	RealmID            string                      `json:"realmId"`
+	State              provideraccount.State       `json:"state"`
+	Revision           uint64                      `json:"revision"`
+	CredentialState    provideraccount.HealthState `json:"credentialState"`
+	CredentialEpoch    uint64                      `json:"credentialEpoch"`
 }
 
 type ProviderAccountPage struct {
@@ -36,10 +38,11 @@ type ProviderAccountPage struct {
 }
 
 type ProviderAccountCreateInput struct {
-	ID          string              `json:"id"`
-	DisplayName string              `json:"displayName"`
-	Kind        ProviderAccountKind `json:"kind"`
-	Secret      string              `json:"secret"`
+	ID                 string              `json:"id"`
+	DisplayName        string              `json:"displayName"`
+	UpstreamEndpointID string              `json:"upstreamEndpointId"`
+	Kind               ProviderAccountKind `json:"kind"`
+	Secret             string              `json:"secret"`
 }
 
 type ProviderAccountCredentialInput struct {
@@ -117,10 +120,11 @@ func (handler *Handler) createProviderAccount(writer http.ResponseWriter, reques
 		return
 	}
 	id, idErr := provideraccount.NewID(input.ID)
-	realmID, driver, kindErr := providerAccountKindAuthority(input.Kind)
+	endpointID, endpointErr := upstreamendpoint.NewID(input.UpstreamEndpointID)
+	driver, kindErr := providerAccountKindAuthority(input.Kind)
 	secret, secretErr := secretstore.NewValue([]byte(input.Secret))
 	input.Secret = ""
-	if idErr != nil || kindErr != nil || secretErr != nil {
+	if idErr != nil || endpointErr != nil || kindErr != nil || secretErr != nil {
 		if secret != nil {
 			secret.Destroy()
 		}
@@ -133,7 +137,7 @@ func (handler *Handler) createProviderAccount(writer http.ResponseWriter, reques
 	}, []byte{0}))
 	response, err := handler.idempotent.execute(request.Context(), key, fingerprint, func() cachedResponse {
 		view, createErr := handler.accounts.Create(request.Context(), provideraccount.CreateCommand{
-			ID: id, DisplayName: input.DisplayName, RealmID: realmID,
+			ID: id, DisplayName: input.DisplayName, UpstreamEndpointID: endpointID,
 			Driver: driver, Secret: secret,
 		})
 		if createErr != nil {
@@ -243,22 +247,23 @@ func providerAccountResponseOf(view provideraccount.View) (ProviderAccountRespon
 	}
 	return ProviderAccountResponse{
 		ID: view.Account.ID.String(), DisplayName: view.Account.DisplayName,
-		Kind: kind, RealmID: view.Account.RealmID, State: view.Account.State,
+		UpstreamEndpointID: view.Account.UpstreamEndpointID.String(),
+		Kind:               kind, RealmID: view.Account.RealmID, State: view.Account.State,
 		Revision: view.Account.Revision, CredentialState: view.Health.State,
 		CredentialEpoch: view.Health.CredentialEpoch,
 	}, nil
 }
 
-func providerAccountKindAuthority(kind ProviderAccountKind) (string, providerauth.DriverRef, error) {
+func providerAccountKindAuthority(kind ProviderAccountKind) (providerauth.DriverRef, error) {
 	switch kind {
 	case ProviderAccountKindAnthropicAPIKey:
-		return "anthropic.official", providerauth.AnthropicAPIKeyDriverRef(), nil
+		return providerauth.AnthropicAPIKeyDriverRef(), nil
 	case ProviderAccountKindClaudeOAuth:
-		return "anthropic.official", providerauth.StaticHeaderDriverRef(), nil
+		return providerauth.StaticHeaderDriverRef(), nil
 	case ProviderAccountKindOpenAIAPIKey:
-		return "openai.platform", providerauth.StaticHeaderDriverRef(), nil
+		return providerauth.StaticHeaderDriverRef(), nil
 	default:
-		return "", providerauth.DriverRef{}, provideraccount.ErrInvalidAccount
+		return providerauth.DriverRef{}, provideraccount.ErrInvalidAccount
 	}
 }
 
@@ -268,7 +273,8 @@ func providerAccountKindOf(account provideraccount.Account) (ProviderAccountKind
 		return ProviderAccountKindAnthropicAPIKey, nil
 	case account.RealmID == "anthropic.official" && account.Driver == providerauth.StaticHeaderDriverRef():
 		return ProviderAccountKindClaudeOAuth, nil
-	case account.RealmID == "openai.platform" && account.Driver == providerauth.StaticHeaderDriverRef():
+	case (account.RealmID == "openai.platform" || account.RealmID == "openai.chatgpt") &&
+		account.Driver == providerauth.StaticHeaderDriverRef():
 		return ProviderAccountKindOpenAIAPIKey, nil
 	default:
 		return "", provideraccount.ErrInvalidAccount
@@ -285,6 +291,8 @@ func classifyProviderAccountError(err error) problemSpec {
 		return problemSpec{status: http.StatusConflict, reason: ReasonProviderAccountInUse}
 	case errors.Is(err, provideraccount.ErrInvalidAccount):
 		return problemSpec{status: http.StatusUnprocessableEntity, reason: ReasonInvalidRequest}
+	case errors.Is(err, upstreamendpoint.ErrEndpointNotFound):
+		return problemSpec{status: http.StatusNotFound, reason: ReasonUpstreamEndpointNotFound}
 	default:
 		return problemSpec{status: http.StatusServiceUnavailable, reason: ReasonProviderAccountUnavailable}
 	}

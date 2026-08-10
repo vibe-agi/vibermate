@@ -73,7 +73,7 @@ func newWorkspaceDefaultApplication(t *testing.T, runtime *productruntime.Runtim
 		Readiness: readyState(true), Status: runtime, Environments: runtime.Environments(),
 		Assignments: runtime.CaptureAssignments(), Activities: runtime.Activities(), Contents: runtime.ExchangeContents(),
 		Connections: runtime.ConnectionEvents(), Egress: runtime.EgressAttempts(),
-		Approvals: runtime.ToolApprovals(), Accounts: runtime.ProviderAccounts(),
+		Approvals: runtime.ToolApprovals(), Endpoints: runtime.UpstreamEndpoints(), Accounts: runtime.ProviderAccounts(),
 		Offline: runtime, ManualCaptures: runtime.ManualCaptures(),
 		WorkspaceDefaults: runtime.WorkspaceDefaults(), Clock: desktopcontrol.SystemClock{},
 	})

@@ -159,6 +159,13 @@ func TestManagedRequestPublishesFrozenConversationEvidence(t *testing.T) {
 		observation.Response.Usage.Output.Tokens != 2 {
 		t.Fatalf("captured response = %+v", observation.Response)
 	}
+	content.mu.Lock()
+	observations := append([]ContentObservation(nil), content.observations...)
+	content.mu.Unlock()
+	if len(observations) != 2 || observations[0].Response != nil ||
+		observations[1].Response == nil {
+		t.Fatalf("content lifecycle observations = %+v", observations)
+	}
 }
 
 func TestLocalIncrementalEvidenceNeverTruncatesTheUpstreamRequest(t *testing.T) {
@@ -1027,7 +1034,7 @@ func mustEnvironmentRequestPlan(t *testing.T, options testPlanOptions) environme
 		failover = environment.FailoverOff
 	}
 	accountPolicy := environment.RouteAccountPolicy{
-		Revision: 5, Mode: accountMode, AllowedRealmIDs: []string{realm}, FailoverPolicy: failover,
+		Revision: 5, Mode: accountMode, FailoverPolicy: failover,
 	}
 	catalog := make(testAccountCatalog, len(options.accounts))
 	for _, account := range options.accounts {
@@ -1037,7 +1044,9 @@ func mustEnvironmentRequestPlan(t *testing.T, options testPlanOptions) environme
 		}
 		accountPolicy.AccountRevisions[account.id] = account.revision
 		catalog[account.id] = environment.AccountDescriptor{
-			ID: account.id, Revision: account.revision, RealmID: realm, Active: true,
+			ID: account.id, Revision: account.revision,
+			UpstreamEndpointID: "target.primary", UpstreamEndpointRevision: 3,
+			RealmID: realm, Active: true,
 			BackendProtocols: []string{string(options.backend)},
 		}
 	}
@@ -1134,7 +1143,7 @@ func mustEnvironmentCompiler(t *testing.T, accounts environment.AccountCatalog) 
 	if err != nil {
 		t.Fatal(err)
 	}
-	compiler, err := environment.NewCompiler(accounts, protocols, wires)
+	compiler, err := environment.NewCompiler(accounts, nil, protocols, wires)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1218,7 +1227,7 @@ func newTestPipeline(
 	accounts AccountLeaseAuthority,
 	provider Provider,
 	decisions ToolDecisionGate,
-	observer AttemptObserver,
+	observer ExchangeObserver,
 ) *Pipeline {
 	return newTestPipelineWithContentObserver(
 		t,
@@ -1235,7 +1244,7 @@ func newTestPipelineWithContentObserver(
 	accounts AccountLeaseAuthority,
 	provider Provider,
 	decisions ToolDecisionGate,
-	observer AttemptObserver,
+	observer ExchangeObserver,
 	content ContentObserver,
 ) *Pipeline {
 	t.Helper()
@@ -1526,6 +1535,7 @@ func (decisions *decisionDouble) lastRequest() ToolDecisionRequest {
 
 type attemptObserverDouble struct {
 	mu           sync.Mutex
+	starts       []StartObservation
 	observations []AttemptObservation
 }
 
@@ -1554,7 +1564,17 @@ func (observer *contentObserverDouble) latest() (ContentObservation, bool) {
 	return observer.observations[len(observer.observations)-1], true
 }
 
-func (observer *attemptObserverDouble) Observe(_ context.Context, observation AttemptObservation) error {
+func (observer *attemptObserverDouble) ObserveStart(
+	_ context.Context,
+	observation StartObservation,
+) error {
+	observer.mu.Lock()
+	defer observer.mu.Unlock()
+	observer.starts = append(observer.starts, observation)
+	return nil
+}
+
+func (observer *attemptObserverDouble) ObserveTerminal(_ context.Context, observation AttemptObservation) error {
 	observer.mu.Lock()
 	defer observer.mu.Unlock()
 	observer.observations = append(observer.observations, observation)
@@ -1565,6 +1585,12 @@ func (observer *attemptObserverDouble) snapshot() []AttemptObservation {
 	observer.mu.Lock()
 	defer observer.mu.Unlock()
 	return slices.Clone(observer.observations)
+}
+
+func (observer *attemptObserverDouble) startSnapshot() []StartObservation {
+	observer.mu.Lock()
+	defer observer.mu.Unlock()
+	return slices.Clone(observer.starts)
 }
 
 type retryWaiterDouble struct{}

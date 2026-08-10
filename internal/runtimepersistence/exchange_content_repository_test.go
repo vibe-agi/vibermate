@@ -56,6 +56,42 @@ func TestExchangeContentRepositoryReopensAndExpiresEvidence(t *testing.T) {
 	}
 }
 
+func TestExchangeContentRepositoryCompletesARecordedRequestInPlace(t *testing.T) {
+	t.Parallel()
+	store := openTestStore(t, filepath.Join(t.TempDir(), "runtime.db"))
+	defer func() {
+		if err := store.Shutdown(context.Background()); err != nil {
+			t.Error(err)
+		}
+	}()
+	repository := store.ExchangeContentRepository()
+	recordedAt := time.Date(2026, 8, 10, 1, 2, 3, 0, time.UTC)
+	completed := contentRecordFixture(t, "exchange-live", recordedAt)
+	pending := completed.Clone()
+	pending.Response = nil
+	if err := repository.Put(context.Background(), pending); err != nil {
+		t.Fatal(err)
+	}
+	got, err := repository.Get(
+		context.Background(), pending.ExchangeID, recordedAt.Add(time.Minute),
+	)
+	if err != nil || got.Response != nil || got.RecordedAt != recordedAt {
+		t.Fatalf("pending Get() = %+v, %v", got, err)
+	}
+	completed.RecordedAt = recordedAt.Add(10 * time.Second)
+	completed.ExpiresAt = completed.RecordedAt.AddDate(0, 0, 7)
+	if err := repository.Put(context.Background(), completed); err != nil {
+		t.Fatal(err)
+	}
+	got, err = repository.Get(
+		context.Background(), completed.ExchangeID, recordedAt.Add(time.Minute),
+	)
+	if err != nil || got.Response == nil || got.RecordedAt != recordedAt ||
+		got.ExpiresAt != pending.ExpiresAt {
+		t.Fatalf("completed Get() = %+v, %v", got, err)
+	}
+}
+
 func TestExchangeContentRepositorySharesExactHistoryAndDerivesIncrementalViews(t *testing.T) {
 	t.Parallel()
 	store := openTestStore(t, filepath.Join(t.TempDir(), "runtime.db"))

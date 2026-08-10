@@ -335,6 +335,7 @@ func Start(ctx context.Context, options Options) (*Host, error) {
 		Connections:       runtime.ConnectionEvents(),
 		Egress:            runtime.EgressAttempts(),
 		Approvals:         runtime.ToolApprovals(),
+		Endpoints:         runtime.UpstreamEndpoints(),
 		Accounts:          runtime.ProviderAccounts(),
 		Offline:           runtime,
 		ConnectionRules:   runtime.ConnectionRules(),

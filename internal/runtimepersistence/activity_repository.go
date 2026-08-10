@@ -184,7 +184,8 @@ func (repository *activityRepository) ListExchanges(
 	return repository.list(
 		ctx,
 		request,
-		`SELECT
+		`WITH ranked AS (
+		   SELECT
 		     sequence,
 		     activity_id,
 		     occurred_at_unix_ms,
@@ -214,9 +215,29 @@ func (repository *activityRepository) ListExchanges(
 		     provider_field,
 		     client_field,
 		     client_path,
+		     transport_evidence_json,
+		     ROW_NUMBER() OVER (
+		       PARTITION BY subject_id
+		       ORDER BY CASE kind WHEN 'exchange.completed' THEN 0 ELSE 1 END,
+		                sequence DESC
+		     ) AS exchange_rank
+		   FROM runtime_activities
+		  WHERE kind IN ('exchange.started', 'exchange.completed')
+		 )
+		 SELECT
+		     sequence, activity_id, occurred_at_unix_ms, kind,
+		     environment_id, environment_revision, environment_digest,
+		     client_endpoint_id, client_endpoint_revision,
+		     protocol_plan_id, protocol_plan_revision,
+		     route_id, route_revision,
+		     account_id, account_revision, credential_epoch,
+		     subject_id, status, reason_code,
+		     source_kind, source_display_name, source_recognition,
+		     capture_run_id, manual_capture_id, connection_id,
+		     provider_status, provider_field, client_field, client_path,
 		     transport_evidence_json
-		 FROM runtime_activities
-		 WHERE kind = 'exchange.completed'
+		 FROM ranked
+		 WHERE exchange_rank = 1
 		   AND (? = '' OR capture_run_id = ?)
 		   AND (? = '' OR environment_id = ?)
 		   AND (? = 0 OR sequence < ?)
@@ -276,10 +297,11 @@ func (repository *activityRepository) GetExchange(
 		     client_path,
 		     transport_evidence_json
 		 FROM runtime_activities
-		 WHERE kind = 'exchange.completed'
+		 WHERE kind IN ('exchange.started', 'exchange.completed')
 		   AND subject_id = ?
-		 ORDER BY sequence DESC
-		 LIMIT 2`,
+		 ORDER BY CASE kind WHEN 'exchange.completed' THEN 0 ELSE 1 END,
+		          sequence DESC
+		 LIMIT 3`,
 		exchangeID,
 	)
 	if err != nil {
@@ -296,15 +318,47 @@ func (repository *activityRepository) GetExchange(
 	if err != nil {
 		return activity.Record{}, err
 	}
-	if rows.Next() {
-		return activity.Record{}, errors.New(
-			"Activity Exchange has more than one terminal record",
-		)
+	seen := map[activity.Kind]struct{}{record.Kind: {}}
+	for rows.Next() {
+		candidate, scanErr := scanActivityRecord(rows)
+		if scanErr != nil {
+			return activity.Record{}, scanErr
+		}
+		if _, duplicate := seen[candidate.Kind]; duplicate {
+			return activity.Record{}, errors.New(
+				"Activity Exchange has duplicate lifecycle records",
+			)
+		}
+		seen[candidate.Kind] = struct{}{}
+		if !sameExchangeIdentity(record, candidate) {
+			return activity.Record{}, errors.New(
+				"Activity Exchange lifecycle evidence changed identity",
+			)
+		}
 	}
 	if err := rows.Err(); err != nil {
 		return activity.Record{}, fmt.Errorf("read Activity Exchange: %w", err)
 	}
 	return record, nil
+}
+
+func sameExchangeIdentity(left, right activity.Record) bool {
+	return left.SubjectID == right.SubjectID &&
+		left.EnvironmentID == right.EnvironmentID &&
+		left.EnvironmentRevision == right.EnvironmentRevision &&
+		left.EnvironmentDigest == right.EnvironmentDigest &&
+		left.ClientEndpointID == right.ClientEndpointID &&
+		left.ClientEndpointRevision == right.ClientEndpointRevision &&
+		left.ProtocolPlanID == right.ProtocolPlanID &&
+		left.ProtocolPlanRevision == right.ProtocolPlanRevision &&
+		left.RouteID == right.RouteID &&
+		left.RouteRevision == right.RouteRevision &&
+		left.SourceKind == right.SourceKind &&
+		left.SourceDisplayName == right.SourceDisplayName &&
+		left.SourceRecognition == right.SourceRecognition &&
+		left.CaptureRunID == right.CaptureRunID &&
+		left.ManualCaptureID == right.ManualCaptureID &&
+		left.ConnectionID == right.ConnectionID
 }
 
 func (repository *activityRepository) list(

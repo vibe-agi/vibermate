@@ -62,13 +62,16 @@ describe("Environment-first Desktop workspace", () => {
     await model.dispose();
   });
 
-  it("renders request evidence from frozen Environment and Route references", async () => {
+  it("groups captured turns into one conversation entry", async () => {
     const { model } = await renderDashboard("/captures/requests");
-    expect(await screen.findByRole("heading", { name: "Requests" })).toBeTruthy();
-    expect((await screen.findAllByText("work"))).toHaveLength(3);
-    expect((await screen.findAllByText("claude-official"))).toHaveLength(3);
-    expect(await screen.findByText("Approval expired")).toBeTruthy();
+    expect(await screen.findByRole("heading", { name: "Conversations" })).toBeTruthy();
+    expect((await screen.findAllByText("work"))).toHaveLength(2);
+    expect(await screen.findByText("3 turns")).toBeTruthy();
+    expect(await screen.findByText("1 turn")).toBeTruthy();
+    expect(await screen.findByText("In progress")).toBeTruthy();
     expect(await screen.findByText("Unsupported request content")).toBeTruthy();
+    expect(screen.queryByText("Approval expired")).toBeNull();
+    expect(screen.getAllByRole("row")).toHaveLength(3);
     await model.dispose();
   });
 

@@ -8,6 +8,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -267,6 +268,45 @@ func TestCaptureControlUsesWorkspaceDefaultWhenEnvironmentIsOmitted(t *testing.T
 	if grant.RootPEMPath == "" || len(grant.ProtectedAuthorities) != 1 ||
 		grant.ProtectedAuthorities[0] != "api.anthropic.com:443" {
 		t.Fatalf("workspace default did not select semantic authority: %+v", grant)
+	}
+}
+
+func TestCaptureControlRejectsMissingEnvironmentBeforeCreatingRun(t *testing.T) {
+	t.Parallel()
+	assignCalled := false
+	fixture := newFixture(t, func(options *capturegrant.Options) {
+		options.Authorities = missingEnvironmentAuthorities{
+			assignCalled: &assignCalled,
+		}
+	})
+	defer fixture.Close(t)
+
+	response := fixture.DoJSON(
+		t,
+		http.MethodPost,
+		"/api/v1/capture-runs",
+		fixture.controlCredential,
+		"",
+		capturecontrol.CreateRequest{
+			EnvironmentID:  "missing",
+			CWD:            fixture.workspace,
+			Command:        []string{"claude"},
+			ExecutablePath: fixture.executable,
+		},
+	)
+	if response.Code != http.StatusNotFound ||
+		!bytes.Contains(response.Body.Bytes(), []byte(`"code":"environment_not_found"`)) {
+		t.Fatalf("missing Environment status=%d body=%s", response.Code, response.Body.Bytes())
+	}
+	if assignCalled {
+		t.Fatal("missing Environment reached assignment linearization")
+	}
+	page, err := fixture.runs.ListRuns(
+		context.Background(),
+		capturerun.PageRequest{Limit: 10},
+	)
+	if err != nil || len(page.Items) != 0 {
+		t.Fatalf("missing Environment created CaptureRun page=%+v err=%v", page, err)
 	}
 }
 
@@ -1081,10 +1121,10 @@ func (resolver inspectingFailingAuthorities) AssignAndResolve(
 }
 
 func (resolver inspectingFailingAuthorities) Review(
-	context.Context,
-	environment.EnvironmentID,
+	ctx context.Context,
+	environmentID environment.EnvironmentID,
 ) (capturegrant.CaptureAuthorityReview, error) {
-	return capturegrant.CaptureAuthorityReview{}, errors.New("injected authority review failure")
+	return (fixedAuthorities{"api.anthropic.com:443"}).Review(ctx, environmentID)
 }
 
 func (resolver inspectingFailingAuthorities) Resolve(
@@ -1092,6 +1132,37 @@ func (resolver inspectingFailingAuthorities) Resolve(
 	captureidentity.Reference,
 ) (capturegrant.CaptureAuthoritySet, error) {
 	return capturegrant.CaptureAuthoritySet{}, errors.New("injected authority resolution failure")
+}
+
+type missingEnvironmentAuthorities struct {
+	assignCalled *bool
+}
+
+func (resolver missingEnvironmentAuthorities) Review(
+	context.Context,
+	environment.EnvironmentID,
+) (capturegrant.CaptureAuthorityReview, error) {
+	return capturegrant.CaptureAuthorityReview{}, fmt.Errorf(
+		"%w: test Environment",
+		environment.ErrEnvironmentNotFound,
+	)
+}
+
+func (resolver missingEnvironmentAuthorities) AssignAndResolve(
+	context.Context,
+	captureidentity.Reference,
+	environment.EnvironmentID,
+	captureassignment.Source,
+) (capturegrant.CaptureAuthoritySet, error) {
+	*resolver.assignCalled = true
+	return capturegrant.CaptureAuthoritySet{}, errors.New("unexpected assignment")
+}
+
+func (resolver missingEnvironmentAuthorities) Resolve(
+	context.Context,
+	captureidentity.Reference,
+) (capturegrant.CaptureAuthoritySet, error) {
+	return capturegrant.CaptureAuthoritySet{}, errors.New("unexpected resolve")
 }
 
 func decodeRecorder(

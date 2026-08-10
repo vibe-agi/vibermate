@@ -140,6 +140,43 @@ func TestActivitySummaryPreservesTheStableFailureReason(t *testing.T) {
 	}
 }
 
+func TestPendingExchangeIsVisibleBeforeItsResponseArrives(t *testing.T) {
+	t.Parallel()
+	record := activity.Record{
+		Sequence: 1, ID: "activity-pending", OccurredAt: time.Date(2026, 8, 10, 9, 0, 0, 0, time.UTC),
+		Kind:          activity.KindExchangeStarted,
+		EnvironmentID: "work", EnvironmentRevision: 4,
+		EnvironmentDigest: strings.Repeat("a", 64),
+		ClientEndpointID:  "endpoint.claude", ClientEndpointRevision: 2,
+		ProtocolPlanID: "plan.claude", ProtocolPlanRevision: 3,
+		RouteID: "route.claude", RouteRevision: 5,
+		SubjectID: "exchange-pending", Status: activity.StatusPending,
+		SourceKind: activity.SourceCaptureRun, SourceDisplayName: "claude",
+		SourceRecognition: activity.SourceRecognitionVerified,
+		CaptureRunID:      "run-pending", ConnectionID: "connection-pending",
+	}
+	content := exchangeContentFixture(t, record)
+	content.Response = nil
+
+	page, err := activityPageOf(activity.Page{Items: []activity.Record{record}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(page.Items) != 1 || page.Items[0].Status != string(activity.StatusPending) {
+		t.Fatalf("pending Activity page = %+v", page)
+	}
+
+	detail, err := exchangeDetailOf(record, egressaudit.Page{}, &content, ExchangeContentViewIncremental)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if detail.Status != string(activity.StatusPending) ||
+		detail.ProcessingTrace.Result != string(activity.StatusPending) ||
+		detail.Content.Request == nil || detail.Content.Response != nil {
+		t.Fatalf("pending Exchange detail = %+v", detail)
+	}
+}
+
 func TestExchangeDetailJoinsOnlyMatchingFrozenConversationEvidence(t *testing.T) {
 	t.Parallel()
 

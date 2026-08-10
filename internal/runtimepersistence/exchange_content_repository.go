@@ -10,6 +10,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"reflect"
 	"time"
 
 	"github.com/vibe-agi/vibermate/internal/environment"
@@ -104,6 +105,24 @@ func (repository *exchangeContentRepository) Put(
 		return fmt.Errorf("begin Exchange content transaction: %w", err)
 	}
 	defer func() { _ = transaction.Rollback() }()
+	completed, err := completeStoredExchangeContent(
+		operation,
+		transaction,
+		manifest,
+		&encodedManifest,
+		transcript,
+		scopeKind,
+		scopeID,
+	)
+	if err != nil {
+		return err
+	}
+	if completed {
+		if err := transaction.Commit(); err != nil {
+			return fmt.Errorf("commit Exchange content completion: %w", err)
+		}
+		return nil
+	}
 	baseDigest, inherited, err := findStoredTranscriptBase(
 		operation,
 		transaction,
@@ -166,6 +185,115 @@ func (repository *exchangeContentRepository) Put(
 		return fmt.Errorf("commit Exchange content transaction: %w", err)
 	}
 	return nil
+}
+
+func completeStoredExchangeContent(
+	ctx context.Context,
+	transaction *sql.Tx,
+	manifest storedExchangeContentManifest,
+	encodedManifest *[]byte,
+	transcript storedTranscript,
+	scopeKind, scopeID string,
+) (bool, error) {
+	var storedScopeKind, storedScopeID, storedMode string
+	var recordedMillis, expiresMillis int64
+	var requestRoot, expectedRoot string
+	var baseRoot, responseDigest sql.NullString
+	var requestCount, expectedCount, inherited int
+	var storedEncodedManifest []byte
+	err := transaction.QueryRowContext(
+		ctx,
+		`SELECT scope_kind, scope_id, mode,
+		        recorded_at_unix_ms, expires_at_unix_ms,
+		        request_transcript_digest, expected_transcript_digest,
+		        base_transcript_digest, request_message_count,
+		        expected_message_count, inherited_message_count,
+		        response_message_digest, manifest_json
+		 FROM runtime_exchange_contents
+		 WHERE exchange_id = ?`,
+		manifest.ExchangeID,
+	).Scan(
+		&storedScopeKind,
+		&storedScopeID,
+		&storedMode,
+		&recordedMillis,
+		&expiresMillis,
+		&requestRoot,
+		&expectedRoot,
+		&baseRoot,
+		&requestCount,
+		&expectedCount,
+		&inherited,
+		&responseDigest,
+		&storedEncodedManifest,
+	)
+	if errors.Is(err, sql.ErrNoRows) {
+		return false, nil
+	}
+	if err != nil {
+		return false, fmt.Errorf("load pending Exchange content: %w", err)
+	}
+	storedManifest, err := decodeStoredContentManifest(storedEncodedManifest)
+	if err != nil || storedManifest.ExchangeID != manifest.ExchangeID ||
+		storedManifest.Response != nil || manifest.Response == nil ||
+		storedScopeKind != scopeKind || storedScopeID != scopeID ||
+		storedMode != string(manifest.Mode) ||
+		toUnixMillis(storedManifest.RecordedAt) != recordedMillis ||
+		toUnixMillis(storedManifest.ExpiresAt) != expiresMillis ||
+		!reflect.DeepEqual(storedManifest.Parent, manifest.Parent) ||
+		!reflect.DeepEqual(storedManifest.Frozen, manifest.Frozen) ||
+		!reflect.DeepEqual(storedManifest.Request, manifest.Request) ||
+		requestRoot != transcript.requestRoot || expectedRoot != requestRoot ||
+		requestCount != transcript.requestCount || expectedCount != requestCount ||
+		responseDigest.Valid || inherited < 0 || inherited > requestCount ||
+		transcript.responseDigest == "" ||
+		len(transcript.nodes) != transcript.expectedCount ||
+		transcript.expectedCount != requestCount+1 {
+		return false, exchangecontent.ErrInvalidEvidence
+	}
+	if inherited == 0 && baseRoot.Valid || inherited > 0 && !baseRoot.Valid {
+		return false, exchangecontent.ErrInvalidEvidence
+	}
+	manifest.RecordedAt = storedManifest.RecordedAt
+	manifest.ExpiresAt = storedManifest.ExpiresAt
+	encoded, err := json.Marshal(manifest)
+	if err != nil || len(encoded) > exchangecontent.MaxEncodedBytes {
+		return false, exchangecontent.ErrInvalidEvidence
+	}
+	*encodedManifest = encoded
+	responseNode := transcript.nodes[len(transcript.nodes)-1]
+	payload, ok := transcript.messages[responseNode.messageDigest]
+	if !ok || responseNode.digest != transcript.expectedRoot {
+		return false, exchangecontent.ErrInvalidEvidence
+	}
+	if err := putStoredMessage(ctx, transaction, responseNode.messageDigest, payload); err != nil {
+		return false, err
+	}
+	if err := putStoredTranscriptNode(ctx, transaction, responseNode); err != nil {
+		return false, err
+	}
+	result, err := transaction.ExecContext(
+		ctx,
+		`UPDATE runtime_exchange_contents
+		 SET expected_transcript_digest = ?,
+		     expected_message_count = ?,
+		     response_message_digest = ?,
+		     manifest_json = ?
+		 WHERE exchange_id = ? AND response_message_digest IS NULL`,
+		transcript.expectedRoot,
+		transcript.expectedCount,
+		transcript.responseDigest,
+		*encodedManifest,
+		manifest.ExchangeID,
+	)
+	if err != nil {
+		return false, fmt.Errorf("complete Exchange content manifest: %w", err)
+	}
+	changed, err := result.RowsAffected()
+	if err != nil || changed != 1 {
+		return false, exchangecontent.ErrInvalidEvidence
+	}
+	return true, nil
 }
 
 func (repository *exchangeContentRepository) Get(

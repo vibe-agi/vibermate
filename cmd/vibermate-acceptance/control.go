@@ -1045,7 +1045,6 @@ func assemblyEnvironment(
 		accountPolicy = environment.RouteAccountPolicy{
 			Revision:            revision,
 			Mode:                environment.AccountModeManaged,
-			AllowedRealmIDs:     []string{account.RealmID},
 			PreferredAccountID:  account.ID,
 			CandidateAccountIDs: []string{account.ID},
 			AccountRevisions: map[string]environment.Revision{

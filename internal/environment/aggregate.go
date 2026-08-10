@@ -75,7 +75,6 @@ func cloneRoute(route UpstreamRoute) UpstreamRoute {
 	cloned := route
 	cloned.PluginBindings = slices.Clone(route.PluginBindings)
 	cloned.ProviderTarget.Capabilities = slices.Clone(route.ProviderTarget.Capabilities)
-	cloned.AccountPolicy.AllowedRealmIDs = slices.Clone(route.AccountPolicy.AllowedRealmIDs)
 	cloned.AccountPolicy.CandidateAccountIDs = slices.Clone(route.AccountPolicy.CandidateAccountIDs)
 	cloned.AccountPolicy.AccountRevisions = cloneRevisionMap(route.AccountPolicy.AccountRevisions)
 	return cloned
@@ -343,13 +342,7 @@ func validateRoute(route *UpstreamRoute) error {
 		(policy.FailoverPolicy != FailoverOff && policy.FailoverPolicy != FailoverAccountScopedSafe) {
 		return fmt.Errorf("%w: route %q account policy is invalid", ErrInvalidEnvironment, route.ID)
 	}
-	sort.Strings(policy.AllowedRealmIDs)
-	for _, realmID := range policy.AllowedRealmIDs {
-		if err := validateID("allowed ProviderAuthRealm ID", realmID); err != nil {
-			return err
-		}
-	}
-	if hasDuplicateString(policy.AllowedRealmIDs) || hasDuplicateUnsortedString(policy.CandidateAccountIDs) {
+	if hasDuplicateUnsortedString(policy.CandidateAccountIDs) {
 		return fmt.Errorf("%w: route %q account policy contains duplicates", ErrInvalidEnvironment, route.ID)
 	}
 	if policy.Mode == AccountModeClientPassthrough &&
@@ -357,9 +350,8 @@ func validateRoute(route *UpstreamRoute) error {
 		return fmt.Errorf("%w: client passthrough route %q references managed accounts", ErrInvalidEnvironment, route.ID)
 	}
 	if policy.Mode == AccountModeManaged {
-		if len(policy.AllowedRealmIDs) == 0 || len(policy.CandidateAccountIDs) == 0 ||
-			!slices.Contains(policy.CandidateAccountIDs, policy.PreferredAccountID) ||
-			!slices.Contains(policy.AllowedRealmIDs, route.ProviderTarget.RealmID) {
+		if len(policy.CandidateAccountIDs) == 0 ||
+			!slices.Contains(policy.CandidateAccountIDs, policy.PreferredAccountID) {
 			return fmt.Errorf("%w: managed route %q has incomplete account references", ErrInvalidEnvironment, route.ID)
 		}
 		for _, id := range policy.CandidateAccountIDs {
@@ -526,7 +518,9 @@ func validateAccounts(aggregate Environment, catalog AccountCatalog) error {
 					account, exists := catalog.LookupAccount(accountID)
 					if !exists || !account.Active || account.ID != accountID ||
 						account.Revision != policy.AccountRevisions[accountID] ||
-						!slices.Contains(policy.AllowedRealmIDs, account.RealmID) ||
+						account.UpstreamEndpointID != route.ProviderTarget.ID ||
+						account.UpstreamEndpointRevision != route.ProviderTarget.Revision ||
+						account.RealmID != route.ProviderTarget.RealmID ||
 						!slices.Contains(account.BackendProtocols, route.BackendProtocol) {
 						return fmt.Errorf("%w: route %q account %q is incompatible", ErrInvalidEnvironment, route.ID, accountID)
 					}

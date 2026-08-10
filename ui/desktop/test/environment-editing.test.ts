@@ -8,6 +8,7 @@ import type {
 const anthropicWork: ProviderAccountRecord = {
   id: "anthropic-work",
   displayName: "Anthropic Work",
+  upstreamEndpointId: "target.claude.official",
   kind: "anthropic_api_key",
   realmId: "anthropic.official",
   state: "active",
@@ -51,7 +52,6 @@ function passthroughEndpoint(): EnvironmentClientEndpoint {
               accountPolicy: {
                 revision: 1,
                 mode: "client_passthrough",
-                allowedRealmIds: ["anthropic.official"],
                 preferredAccountId: "",
                 candidateAccountIds: [],
                 accountRevisions: {},
@@ -102,7 +102,6 @@ describe("Environment route account editing", () => {
     expect(route.accountPolicy).toEqual({
       revision: 2,
       mode: "managed",
-      allowedRealmIds: ["anthropic.official"],
       preferredAccountId: "anthropic-work",
       candidateAccountIds: ["anthropic-work"],
       accountRevisions: { "anthropic-work": 4 },
@@ -154,7 +153,6 @@ describe("Environment route account editing", () => {
     expect(route.accountPolicy).toEqual({
       revision: 3,
       mode: "client_passthrough",
-      allowedRealmIds: ["anthropic.official"],
       preferredAccountId: "",
       candidateAccountIds: [],
       accountRevisions: {},

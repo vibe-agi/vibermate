@@ -240,6 +240,7 @@ func newAuditFixture(
 			}},
 		},
 		Approvals:       runtime.ToolApprovals(),
+		Endpoints:       runtime.UpstreamEndpoints(),
 		Accounts:        runtime.ProviderAccounts(),
 		CaptureRuns:     captureReader,
 		ManualCaptures:  runtime.ManualCaptures(),

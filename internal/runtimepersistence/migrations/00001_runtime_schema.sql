@@ -106,6 +106,7 @@ CHECK(kind IN('environment.applied',
 'offline_hold.resumed',
 'approval.pending',
 'approval.resolved',
+'exchange.started',
 'exchange.completed')),
   environment_id TEXT NOT NULL DEFAULT ''
   CHECK(length(CAST(environment_id AS BLOB)) <= 128),
@@ -174,7 +175,8 @@ client_endpoint_revision > 0 AND protocol_plan_id <> '' AND
 protocol_plan_revision > 0 AND route_id <> '' AND route_revision > 0)),
   CHECK((account_id = '' AND account_revision = 0 AND credential_epoch = 0) OR
 (account_id <> '' AND account_revision > 0 AND credential_epoch > 0)),
-  CHECK(kind <> 'exchange.completed' OR client_endpoint_id <> ''),
+  CHECK(kind NOT IN('exchange.started', 'exchange.completed') OR
+  client_endpoint_id <> ''),
   CHECK(kind <> 'credential.secret_replaced' OR account_id <> ''),
   CHECK(kind NOT IN('environment.applied', 'environment.disabled',
 'environment.enabled', 'environment.deleted') OR
@@ -446,13 +448,13 @@ CREATE INDEX runtime_activities_exchange_latest
 ON runtime_activities(
   sequence DESC
 )
-WHERE kind = 'exchange.completed';
+WHERE kind IN('exchange.started', 'exchange.completed');
 CREATE INDEX runtime_activities_exchange_subject
 ON runtime_activities(
   subject_id,
   sequence DESC
 )
-WHERE kind = 'exchange.completed';
+WHERE kind IN('exchange.started', 'exchange.completed');
 CREATE TABLE runtime_egress_attempts(
   sequence INTEGER PRIMARY KEY AUTOINCREMENT,
   attempt_id TEXT NOT NULL UNIQUE
@@ -688,6 +690,41 @@ ON manual_captures(
 WHERE state = 'active'
     AND lifetime = 'temporary';
 
+-- UpstreamEndpoint is the reusable upstream service authority. Environment
+-- routes freeze one endpoint revision; ProviderAccounts cannot exist outside
+-- the exact Endpoint that issued or accepts their credential.
+CREATE TABLE upstream_endpoints(
+  endpoint_id TEXT PRIMARY KEY NOT NULL
+  CHECK(length(CAST(endpoint_id AS BLOB)) BETWEEN 1 AND 128),
+  display_name TEXT NOT NULL
+  CHECK(length(CAST(display_name AS BLOB)) BETWEEN 1 AND 256),
+  origin TEXT NOT NULL UNIQUE
+  CHECK(length(CAST(origin AS BLOB)) BETWEEN 1 AND 4096),
+  realm_id TEXT NOT NULL
+  CHECK(length(CAST(realm_id AS BLOB)) BETWEEN 1 AND 128),
+  backend_protocols_json BLOB NOT NULL
+  CHECK(length(backend_protocols_json) BETWEEN 3 AND 8192 AND
+    json_valid(CAST(backend_protocols_json AS TEXT)) AND
+    json_type(CAST(backend_protocols_json AS TEXT)) = 'array'),
+  capabilities_json BLOB NOT NULL
+  CHECK(length(capabilities_json) BETWEEN 3 AND 8192 AND
+    json_valid(CAST(capabilities_json AS TEXT)) AND
+    json_type(CAST(capabilities_json AS TEXT)) = 'array'),
+  drivers_json BLOB NOT NULL
+  CHECK(length(drivers_json) BETWEEN 3 AND 8192 AND
+    json_valid(CAST(drivers_json AS TEXT)) AND
+    json_type(CAST(drivers_json AS TEXT)) = 'array'),
+  state TEXT NOT NULL
+  CHECK(state IN('active', 'disabled')),
+  revision INTEGER NOT NULL
+  CHECK(revision BETWEEN 1 AND 9223372036854775807),
+  created_at_unix_ms INTEGER NOT NULL,
+  updated_at_unix_ms INTEGER NOT NULL,
+  CHECK(updated_at_unix_ms >= created_at_unix_ms)
+) STRICT;
+CREATE INDEX upstream_endpoints_state
+ON upstream_endpoints(state, endpoint_id);
+
 -- ProviderAccount persists only non-secret account configuration. The
 -- credential bytes belong exclusively to the host-selected SecretStore;
 -- secret_reference is an opaque typed locator, never a credential value.
@@ -696,6 +733,8 @@ CREATE TABLE provider_accounts(
   CHECK(length(CAST(account_id AS BLOB)) BETWEEN 1 AND 128),
   display_name TEXT NOT NULL
   CHECK(length(CAST(display_name AS BLOB)) BETWEEN 1 AND 256),
+  upstream_endpoint_id TEXT NOT NULL
+  REFERENCES upstream_endpoints(endpoint_id),
   realm_id TEXT NOT NULL
   CHECK(length(CAST(realm_id AS BLOB)) BETWEEN 1 AND 128),
   driver_ref TEXT NOT NULL
@@ -710,8 +749,8 @@ CREATE TABLE provider_accounts(
   updated_at_unix_ms INTEGER NOT NULL,
   CHECK(updated_at_unix_ms >= created_at_unix_ms)
 ) STRICT;
-CREATE INDEX provider_accounts_realm_state
-ON provider_accounts(realm_id, state, account_id);
+CREATE INDEX provider_accounts_endpoint_state
+ON provider_accounts(upstream_endpoint_id, state, account_id);
 
 -- Environment is the only user-selectable traffic configuration authority.
 CREATE TABLE environment_revision_counters(

@@ -151,7 +151,7 @@ func (inertWireProfiles) Resolve(wireprofile.UpstreamWireProfileRef) (wireprofil
 
 func compileEnvironment(t *testing.T, id string, state environment.State) environment.EnvironmentSnapshot {
 	t.Helper()
-	compiler, err := environment.NewCompiler(nil, inertProtocols{}, inertWireProfiles{})
+	compiler, err := environment.NewCompiler(nil, nil, inertProtocols{}, inertWireProfiles{})
 	if err != nil {
 		t.Fatal(err)
 	}

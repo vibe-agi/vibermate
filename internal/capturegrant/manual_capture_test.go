@@ -632,7 +632,7 @@ func semanticEnvironmentSnapshot(t *testing.T) environment.EnvironmentSnapshot {
 	if err != nil {
 		t.Fatal(err)
 	}
-	compiler, err := environment.NewCompiler(nil, protocols, wires)
+	compiler, err := environment.NewCompiler(nil, nil, protocols, wires)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -663,7 +663,7 @@ func semanticEnvironmentSnapshot(t *testing.T) environment.EnvironmentSnapshot {
 						BackendProtocol: "anthropic_messages",
 						AccountPolicy: environment.RouteAccountPolicy{
 							Revision: 1, Mode: environment.AccountModeClientPassthrough,
-							AllowedRealmIDs: []string{"realm.anthropic"}, FailoverPolicy: environment.FailoverOff,
+							FailoverPolicy: environment.FailoverOff,
 						},
 						ModelPolicy:    environment.ModelPolicy{Revision: 1, Mode: "passthrough"},
 						WireProfileRef: wireprofile.UpstreamWireProfileFollowClientValue,

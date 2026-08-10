@@ -36,7 +36,7 @@ describe("the Environment-first browser preview host", () => {
       "work",
       saved.draftRevision,
     );
-    expect(impact.hotSwitchCount).toBe(1);
+    expect(impact.hotSwitchCount).toBe(7);
     expect(impact.restartRequiredCount).toBe(0);
 
     const published = await client.publishEnvironmentDraft(
@@ -55,6 +55,7 @@ describe("the Environment-first browser preview host", () => {
     const created = await client.createProviderAccount({
       id: "openai-personal",
       displayName: "OpenAI Personal",
+      upstreamEndpointId: "target.openai.official",
       kind: "openai_api_key",
       secret: "private-preview-secret",
     });
@@ -75,6 +76,7 @@ describe("the Environment-first browser preview host", () => {
     const oauth = await client.createProviderAccount({
       id: "claude-oauth",
       displayName: "Claude OAuth",
+      upstreamEndpointId: "target.claude.official",
       kind: "claude_oauth_token",
       secret: "oauth-preview-secret",
     });
@@ -118,6 +120,22 @@ describe("the Environment-first browser preview host", () => {
     expect((await client.capture(manualKey)).kind).toBe("manual_capture");
   });
 
+  it("enforces ManualCapture CAS while preserving the revoked Capture projection", async () => {
+    const client = await connectPreviewControl();
+    const authority = await client.manualCapture("manual-preview");
+
+    await client.revokeManualCapture("manual-preview", authority.stateTag);
+    await expect(
+      client.revokeManualCapture("manual-preview", authority.stateTag),
+    ).rejects.toMatchObject({ reasonCode: "manual_capture_conflict" });
+    await expect(client.manualCapture("manual-preview")).resolves.toMatchObject({
+      capture: { state: "revoked" },
+    });
+    await expect(client.capture("manual_capture:manual-preview")).resolves.toMatchObject({
+      state: "revoked",
+    });
+  });
+
   it("keeps the future workspace default separate from the active Capture assignment", async () => {
     const client = await connectPreviewControl();
     const captureKey = "managed_run:run-preview";
@@ -159,8 +177,9 @@ describe("the Environment-first browser preview host", () => {
   it("filters frozen Activity by Environment and retains the Exchange revision", async () => {
     const client = await connectPreviewControl();
     const page = await client.activities({ environmentId: "work" });
-    expect(page.items).toHaveLength(3);
+    expect(page.items).toHaveLength(4);
     expect(page.items.map((item) => item.parentRefs.captureRunId)).toEqual([
+      "run-preview",
       "run-preview",
       "run-preview",
       "run-unsupported",

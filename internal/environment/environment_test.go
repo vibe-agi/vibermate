@@ -361,13 +361,26 @@ func TestAccountCompatibilityAndMutableAliasesFailClosed(t *testing.T) {
 	candidate := fixture(t, "work", mustOrigin(t, "https://relay.example"))
 	route := &candidate.ClientEndpoints[0].ProtocolPlans[0].UpstreamPlan.Routes[0]
 	route.AccountPolicy = RouteAccountPolicy{
-		Revision: 1, Mode: AccountModeManaged, AllowedRealmIDs: []string{"realm.anthropic"},
+		Revision: 1, Mode: AccountModeManaged,
 		PreferredAccountID: "account.work", CandidateAccountIDs: []string{"account.work"},
 		AccountRevisions: map[string]Revision{"account.work": 2}, FailoverPolicy: FailoverOff,
 	}
-	catalog := accountCatalog{"account.work": {ID: "account.work", Revision: 2, RealmID: "realm.other", Active: true, BackendProtocols: []string{"anthropic_messages"}}}
+	catalog := accountCatalog{"account.work": {
+		ID: "account.work", Revision: 2,
+		UpstreamEndpointID: route.ProviderTarget.ID, UpstreamEndpointRevision: route.ProviderTarget.Revision,
+		RealmID: "realm.other", Active: true, BackendProtocols: []string{"anthropic_messages"},
+	}}
 	if _, err := testCompiler(t, catalog).Compile(candidate); err == nil {
 		t.Fatal("incompatible realm was accepted")
+	}
+	catalog["account.work"] = AccountDescriptor{
+		ID: "account.work", Revision: 2,
+		UpstreamEndpointID: "target.other", UpstreamEndpointRevision: route.ProviderTarget.Revision,
+		RealmID: route.ProviderTarget.RealmID, Active: true,
+		BackendProtocols: []string{"anthropic_messages"},
+	}
+	if _, err := testCompiler(t, catalog).Compile(candidate); err == nil {
+		t.Fatal("account from another Endpoint in the same realm was accepted")
 	}
 
 	previous := fixture(t, "work", mustOrigin(t, "https://relay.example"))
@@ -396,7 +409,6 @@ func TestAccountDeletionGuardReturnsPublishedRouteReferencesBeforeDeleting(t *te
 			route := &candidate.ClientEndpoints[endpointIndex].ProtocolPlans[planIndex].UpstreamPlan.Routes[0]
 			route.AccountPolicy = RouteAccountPolicy{
 				Revision: 1, Mode: AccountModeManaged,
-				AllowedRealmIDs:    []string{route.ProviderTarget.RealmID},
 				PreferredAccountID: "account.work", CandidateAccountIDs: []string{"account.work"},
 				AccountRevisions: map[string]Revision{"account.work": 1}, FailoverPolicy: FailoverOff,
 			}
@@ -429,7 +441,7 @@ func TestAccountDeletionGuardReturnsPublishedRouteReferencesBeforeDeleting(t *te
 			route := &candidate.ClientEndpoints[endpointIndex].ProtocolPlans[planIndex].UpstreamPlan.Routes[0]
 			route.AccountPolicy = RouteAccountPolicy{
 				Revision: 1, Mode: AccountModeClientPassthrough,
-				AllowedRealmIDs: []string{route.ProviderTarget.RealmID}, FailoverPolicy: FailoverOff,
+				FailoverPolicy: FailoverOff,
 			}
 		}
 	}
@@ -538,13 +550,13 @@ func TestSnapshotsAndSystemTransparentResistAliases(t *testing.T) {
 	t.Parallel()
 	aggregate := fixture(t, "work", mustOrigin(t, "https://relay.example"))
 	snapshot := mustCompile(t, aggregate)
-	aggregate.ClientEndpoints[0].ProtocolPlans[0].UpstreamPlan.Routes[0].AccountPolicy.AllowedRealmIDs[0] = "mutated"
+	aggregate.ClientEndpoints[0].ProtocolPlans[0].UpstreamPlan.Routes[0].ProviderTarget.Capabilities[0] = protocolspec.ProviderCapability("mutated")
 	copyOne := snapshot.Aggregate()
 	copyOne.ClientEndpoints[0].ClientOrigin = mustOrigin(t, "https://mutated.example")
-	copyOne.ClientEndpoints[0].ProtocolPlans[0].UpstreamPlan.Routes[0].AccountPolicy.AllowedRealmIDs[0] = "mutated"
+	copyOne.ClientEndpoints[0].ProtocolPlans[0].UpstreamPlan.Routes[0].ProviderTarget.Capabilities[0] = protocolspec.ProviderCapability("mutated")
 	copyTwo := snapshot.Aggregate()
 	if copyTwo.ClientEndpoints[0].ClientOrigin.String() != "https://relay.example" ||
-		copyTwo.ClientEndpoints[0].ProtocolPlans[0].UpstreamPlan.Routes[0].AccountPolicy.AllowedRealmIDs[0] != "realm.anthropic" {
+		copyTwo.ClientEndpoints[0].ProtocolPlans[0].UpstreamPlan.Routes[0].ProviderTarget.Capabilities[0] != protocolspec.ProviderCapabilityMessages {
 		t.Fatalf("snapshot was aliased: %+v", copyTwo)
 	}
 	system := SystemTransparentSnapshot()
@@ -971,7 +983,7 @@ func fixture(t *testing.T, id string, origin originidentity.ClientOrigin) Enviro
 							protocolspec.ProviderCapabilityToolCalls,
 						},
 					},
-					BackendProtocol: string(protocol), AccountPolicy: RouteAccountPolicy{Revision: 1, Mode: AccountModeClientPassthrough, AllowedRealmIDs: []string{realm}, FailoverPolicy: FailoverOff},
+					BackendProtocol: string(protocol), AccountPolicy: RouteAccountPolicy{Revision: 1, Mode: AccountModeClientPassthrough, FailoverPolicy: FailoverOff},
 					ModelPolicy:    ModelPolicy{Revision: 1, Mode: "passthrough"},
 					WireProfileRef: wireprofile.UpstreamWireProfileFollowClientValue}},
 			},
@@ -1057,7 +1069,7 @@ func testCompiler(t *testing.T, accounts AccountCatalog) Compiler {
 	if err != nil {
 		t.Fatal(err)
 	}
-	compiler, err := NewCompiler(accounts, protocols, wires)
+	compiler, err := NewCompiler(accounts, nil, protocols, wires)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1116,7 +1128,7 @@ func ambiguousTestCompiler(t *testing.T) Compiler {
 	if err != nil {
 		t.Fatal(err)
 	}
-	compiler, err := NewCompiler(nil, protocols, wires)
+	compiler, err := NewCompiler(nil, nil, protocols, wires)
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -300,7 +300,6 @@ type UpstreamRoute struct {
 type RouteAccountPolicy struct {
 	Revision            Revision            `json:"revision"`
 	Mode                AccountMode         `json:"mode"`
-	AllowedRealmIDs     []string            `json:"allowedRealmIds"`
 	PreferredAccountID  string              `json:"preferredAccountId"`
 	CandidateAccountIDs []string            `json:"candidateAccountIds"`
 	AccountRevisions    map[string]Revision `json:"accountRevisions"`
@@ -354,11 +353,13 @@ type ModelPolicy struct {
 // AccountDescriptor is non-secret catalog evidence used only to reject route
 // references that cannot be interpreted by their declared realm/protocol.
 type AccountDescriptor struct {
-	ID               string
-	Revision         Revision
-	RealmID          string
-	Active           bool
-	BackendProtocols []string
+	ID                       string
+	Revision                 Revision
+	UpstreamEndpointID       string
+	UpstreamEndpointRevision Revision
+	RealmID                  string
+	Active                   bool
+	BackendProtocols         []string
 }
 
 type AccountCatalog interface {

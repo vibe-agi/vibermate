@@ -42,6 +42,8 @@ var (
 	ErrPrincipalUnauthorized    = errors.New("control principal is not authorized for the grant")
 	ErrInvalidCaptureRun        = errors.New("CaptureRun request is invalid")
 	ErrAdapterVerification      = errors.New("client adapter verification failed")
+	ErrEnvironmentNotFound      = errors.New("selected Environment is not configured")
+	ErrEnvironmentUnavailable   = errors.New("selected Environment is unavailable")
 	ErrProjectionUnavailable    = errors.New("Environment projection is unavailable")
 	ErrWorkspaceUnavailable     = errors.New("workspace identity is unavailable")
 	ErrCaptureRunCreate         = errors.New("CaptureRun creation failed")
@@ -617,6 +619,13 @@ func (issuer *Issuer) IssueCaptureRun(
 			}
 		}
 	}
+	// Reject a missing or disabled explicit/default Environment before creating
+	// a durable CaptureRun. This review is intentionally not authorization: the
+	// later AssignAndResolve call remains the sole linearization point and must
+	// re-check the same Environment while freezing the launch boundary.
+	if _, reviewErr := issuer.authorities.Review(ctx, selectedEnvironment); reviewErr != nil {
+		return CaptureRunGrant{}, classifyEnvironmentSelectionError(reviewErr)
+	}
 	grant, err := issuer.runs.Create(ctx, capturerun.CreateCommand{
 		CWD:                     request.CWD,
 		CanonicalExecutablePath: detection.CanonicalPath,
@@ -646,6 +655,7 @@ func (issuer *Issuer) IssueCaptureRun(
 		)
 	}
 	if err != nil {
+		selectionErr := classifyEnvironmentSelectionError(err)
 		cleanupContext, cancelCleanup := context.WithTimeout(
 			context.WithoutCancel(ctx),
 			2*time.Second,
@@ -658,11 +668,11 @@ func (issuer *Issuer) IssueCaptureRun(
 		cancelCleanup()
 		if cleanupErr != nil {
 			return CaptureRunGrant{}, errors.Join(
-				ErrProjectionUnavailable,
+				selectionErr,
 				fmt.Errorf("finish unused CaptureRun: %w", cleanupErr),
 			)
 		}
-		return CaptureRunGrant{}, ErrProjectionUnavailable
+		return CaptureRunGrant{}, selectionErr
 	}
 	protectedAuthorities := authorities.ProtectedAuthorities()
 	managedAuthorities := authorities.ManagedCredentialAuthorities()
@@ -714,6 +724,19 @@ func (issuer *Issuer) IssueCaptureRun(
 		ProtectedAuthorities:         protectedAuthorities,
 		ManagedCredentialAuthorities: managedAuthorities,
 	}, nil
+}
+
+func classifyEnvironmentSelectionError(err error) error {
+	switch {
+	case errors.Is(err, context.Canceled), errors.Is(err, context.DeadlineExceeded):
+		return err
+	case errors.Is(err, environment.ErrEnvironmentNotFound):
+		return fmt.Errorf("%w: %w", ErrEnvironmentNotFound, err)
+	case errors.Is(err, environment.ErrEnvironmentDisabled):
+		return fmt.Errorf("%w: %w", ErrEnvironmentUnavailable, err)
+	default:
+		return fmt.Errorf("%w: %w", ErrProjectionUnavailable, err)
+	}
 }
 
 func (issuer *Issuer) askClientRoot(

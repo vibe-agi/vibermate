@@ -1,6 +1,6 @@
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useInfiniteQuery, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Link } from "@tanstack/react-router";
-import { type FormEvent, useState } from "react";
+import { type FormEvent, useMemo, useState } from "react";
 import { useTranslation } from "react-i18next";
 import {
   EmptyState,
@@ -15,6 +15,7 @@ import { controlErrorKey, dashboardQueryKeys } from "./dashboard-runtime.ts";
 import { dashboardRoutePaths, dashboardTaskRoutePaths } from "./navigation.ts";
 import { requestResultKey } from "./request-result.ts";
 import type {
+  ActivityRecord,
   CaptureRecord,
   EnvironmentRecord,
   ManualCaptureContext,
@@ -37,42 +38,113 @@ export function CapturesRoutePage() {
     placeholderData: (previous) => previous,
   });
   const records = captures.data?.items ?? [];
+  const running = records.filter(isLiveCapture).sort(compareCaptureActivity);
+  const history = records.filter((capture) => !isLiveCapture(capture)).sort(compareCaptureActivity);
 
   return (
     <div className="page capture-page">
       <PageHeading
         actions={
-          <button className="primary-action" onClick={() => setCreating(true)} type="button">
-            {t("captures.add")}
-          </button>
+          <div className="page-actions">
+            <Link className="quiet-button" search={{}} to={dashboardTaskRoutePaths.captureRequests}>
+              {t("captures.conversations")}
+            </Link>
+            <button className="primary-action" onClick={() => setCreating(true)} type="button">
+              {t("captures.add")}
+            </button>
+          </div>
         }
         description={t("captures.description")}
         title={t("captures.title")}
       />
-      <div className="page-tabs" role="tablist" aria-label={t("captures.tabs.label")}>
-        <Link activeOptions={{ exact: true }} aria-selected="true" role="tab" search={{}} to={dashboardRoutePaths.captures}>
-          {t("captures.tabs.runs")}
-        </Link>
-        <Link activeOptions={{ exact: true }} aria-selected="false" role="tab" search={{}} to={dashboardTaskRoutePaths.captureRequests}>
-          {t("captures.tabs.requests")}
-        </Link>
-      </div>
-
-      <section className="data-panel capture-table-panel">
-        <SectionHeading
-          title={t("captures.active.title", { count: records.length })}
-        />
-        {captures.isPending && captures.data === undefined ? (
-          <LoadingRows />
-        ) : captures.isError && captures.data === undefined ? (
-          <InlineProblem message={t(controlErrorKey(captures.error))} />
-        ) : records.length === 0 ? (
+      {captures.isPending && captures.data === undefined ? (
+        <section className="data-panel"><LoadingRows /></section>
+      ) : captures.isError && captures.data === undefined ? (
+        <section className="data-panel"><InlineProblem message={t(controlErrorKey(captures.error))} /></section>
+      ) : records.length === 0 ? (
+        <section className="data-panel">
           <EmptyState
             action={<button onClick={() => setCreating(true)} type="button">{t("captures.add")}</button>}
             description={t("captures.empty.description")}
             title={t("captures.empty.title")}
           />
-        ) : (
+        </section>
+      ) : (
+        <>
+          <CaptureSection
+            emptyDescription={t("captures.running.empty")}
+            environments={environments.data?.items ?? []}
+            kind="running"
+            records={running}
+            title={t("captures.running.title", { count: running.length })}
+          />
+          <CaptureSection
+            environments={environments.data?.items ?? []}
+            kind="history"
+            records={history}
+            title={t("captures.history.title", { count: history.length })}
+          />
+        </>
+      )}
+
+      {creating && (
+        <ManualCaptureDialog
+          environments={environments.data?.items ?? []}
+          onClose={() => setCreating(false)}
+        />
+      )}
+    </div>
+  );
+}
+
+function CaptureSection({
+  emptyDescription,
+  environments,
+  kind,
+  records,
+  title,
+}: {
+  readonly emptyDescription?: string;
+  readonly environments: readonly EnvironmentRecord[];
+  readonly kind: "running" | "history";
+  readonly records: readonly CaptureRecord[];
+  readonly title: string;
+}) {
+  const { t } = useTranslation();
+  const [filter, setFilter] = useState("");
+  const [visibleLimit, setVisibleLimit] = useState(25);
+  const normalizedFilter = filter.trim().toLocaleLowerCase();
+  const matchedRecords = kind === "history" && normalizedFilter.length > 0
+    ? records.filter((capture) => captureMatches(capture, normalizedFilter))
+    : records;
+  const visibleRecords = kind === "history"
+    ? matchedRecords.slice(0, visibleLimit)
+    : matchedRecords;
+  const sectionAction = kind === "history" && records.length > 8
+    ? <label className="table-filter">
+        <SearchIcon />
+        <span className="visually-hidden">{t("captures.history.filter")}</span>
+        <input
+          aria-label={t("captures.history.filter")}
+          onChange={(event) => {
+            setFilter(event.target.value);
+            setVisibleLimit(25);
+          }}
+          placeholder={t("captures.history.filter")}
+          type="search"
+          value={filter}
+        />
+      </label>
+    : undefined;
+  return (
+    <section aria-label={title} className={`data-panel capture-table-panel capture-table-panel-${kind}`}>
+      <SectionHeading action={sectionAction} title={title} />
+      {records.length === 0 ? (
+        <p className="capture-section-empty">{emptyDescription ?? t("captures.history.empty")}</p>
+      ) : matchedRecords.length === 0 ? (
+        <p className="capture-section-empty">{t("captures.history.noMatch")}</p>
+      ) : (
+        <>
           <div className="table-scroll">
             <table className="data-table responsive-table capture-table">
               <thead>
@@ -87,26 +159,25 @@ export function CapturesRoutePage() {
                 </tr>
               </thead>
               <tbody>
-                {records.map((capture) => (
-                  <CaptureRow
-                    capture={capture}
-                    environments={environments.data?.items ?? []}
-                    key={capture.key}
-                  />
+                {visibleRecords.map((capture) => (
+                  <CaptureRow capture={capture} environments={environments} key={capture.key} />
                 ))}
               </tbody>
             </table>
           </div>
-        )}
-      </section>
-
-      {creating && (
-        <ManualCaptureDialog
-          environments={environments.data?.items ?? []}
-          onClose={() => setCreating(false)}
-        />
+          {kind === "history" && (records.length > 25 || filter.length > 0) && (
+            <footer className="table-pagination">
+              <span>{t("captures.history.showing", { visible: visibleRecords.length, total: matchedRecords.length })}</span>
+              {visibleRecords.length < matchedRecords.length && (
+                <button className="quiet-button" onClick={() => setVisibleLimit((value) => value + 25)} type="button">
+                  {t("captures.history.more")}
+                </button>
+              )}
+            </footer>
+          )}
+        </>
       )}
-    </div>
+    </section>
   );
 }
 
@@ -161,6 +232,11 @@ export function CaptureDetailRoutePage({ captureKey }: { readonly captureKey: st
   const model = useDashboardModel();
   const queryClient = useQueryClient();
   const [switchNotice, setSwitchNotice] = useState<string>();
+  const [confirmingRevoke, setConfirmingRevoke] = useState(false);
+  const [revokeNotice, setRevokeNotice] = useState<{
+    readonly kind: "error" | "status";
+    readonly key: string;
+  }>();
   const capture = useQuery({
     queryKey: dashboardQueryKeys.capture(captureKey),
     queryFn: ({ signal }) => model.client.capture(captureKey, signal),
@@ -172,6 +248,22 @@ export function CaptureDetailRoutePage({ captureKey }: { readonly captureKey: st
   const environments = useQuery({
     queryKey: dashboardQueryKeys.environments,
     queryFn: ({ signal }) => model.client.environments(signal),
+  });
+  const manualCaptureId = capture.data?.kind === "manual_capture"
+    ? capture.data.id
+    : undefined;
+  const manualAuthority = useQuery({
+    queryKey: dashboardQueryKeys.manualCapture(manualCaptureId ?? "unavailable"),
+    queryFn: ({ signal }) => {
+      if (manualCaptureId === undefined) {
+        throw new Error("Manual Capture identity is unavailable");
+      }
+      return model.client.manualCapture(manualCaptureId, signal);
+    },
+    enabled: manualCaptureId !== undefined,
+    refetchInterval: (query) => query.state.data?.capture.state === "active"
+      ? model.pollInterval
+      : false,
   });
   const machineId = capture.data?.managedRun?.machineId;
   const workspaceId = capture.data?.managedRun?.workspaceId;
@@ -260,6 +352,40 @@ export function CaptureDetailRoutePage({ captureKey }: { readonly captureKey: st
       );
     },
   });
+  const revokeManualCapture = useMutation({
+    mutationFn: async () => {
+      if (manualCaptureId === undefined || manualAuthority.data === undefined) {
+        throw new Error("Manual Capture authority is unavailable");
+      }
+      await model.client.revokeManualCapture(
+        manualCaptureId,
+        manualAuthority.data.stateTag,
+      );
+    },
+    onMutate: () => setRevokeNotice(undefined),
+    onError: async (error) => {
+      setConfirmingRevoke(false);
+      setRevokeNotice({ kind: "error", key: controlErrorKey(error) });
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: dashboardQueryKeys.captures }),
+        queryClient.invalidateQueries({ queryKey: dashboardQueryKeys.capture(captureKey) }),
+        ...(manualCaptureId === undefined
+          ? []
+          : [queryClient.invalidateQueries({ queryKey: dashboardQueryKeys.manualCapture(manualCaptureId) })]),
+      ]);
+    },
+    onSuccess: async () => {
+      setConfirmingRevoke(false);
+      setRevokeNotice({ kind: "status", key: "manualCapture.revoke.succeeded" });
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: dashboardQueryKeys.captures }),
+        queryClient.invalidateQueries({ queryKey: dashboardQueryKeys.capture(captureKey) }),
+        ...(manualCaptureId === undefined
+          ? []
+          : [queryClient.invalidateQueries({ queryKey: dashboardQueryKeys.manualCapture(manualCaptureId) })]),
+      ]);
+    },
+  });
 
   if (capture.isPending || assignment.isPending || environments.isPending) {
     return <div className="page"><LoadingRows count={7} /></div>;
@@ -279,6 +405,12 @@ export function CaptureDetailRoutePage({ captureKey }: { readonly captureKey: st
     (item) => item.id === assignment.data.environmentId,
   );
   const managed = capture.data.managedRun;
+  const manual = capture.data.manualCapture;
+  const authoritativeManual = manualAuthority.data?.capture;
+  const captureState = authoritativeManual?.state ?? capture.data.state;
+  const captureObservation = authoritativeManual?.observation ?? capture.data.observation;
+  const captureUpdatedAt = authoritativeManual?.updatedAt ?? capture.data.updatedAt;
+  const activeManualCapture = capture.data.kind === "manual_capture" && captureState === "active";
   const visibleActivities = (activities.data?.items ?? []).filter((item) =>
     capture.data.kind === "managed_run"
       ? item.parentRefs.captureRunId === capture.data.id
@@ -288,97 +420,135 @@ export function CaptureDetailRoutePage({ captureKey }: { readonly captureKey: st
   return (
     <div className="page capture-detail-page">
       <PageHeading
+        actions={
+          <Link className="quiet-button" search={{}} to={dashboardRoutePaths.captures}>
+            {t("captureDetail.back")}
+          </Link>
+        }
         eyebrow={t("captureDetail.eyebrow")}
         title={capture.data.displayName}
         {...(capture.data.kind === "managed_run"
           ? managed?.cwd === undefined ? {} : { description: managed.cwd }
           : { description: t("captures.kind.manual") })}
       />
-      <section className="capture-summary-strip">
-        <SummaryFact label={t("captureDetail.state")} value={t(`captures.state.${capture.data.state}`)} />
-        <SummaryFact label={t("captureDetail.workspace")} value={managed?.workspaceLabel ?? shortPath(managed?.cwd) ?? t("common.unavailable")} {...(managed?.cwd === undefined ? {} : { title: managed.cwd })} />
-        <SummaryFact label={t("captureDetail.machine")} value={managed?.machineId?.slice(0, 10) ?? t("captures.value.local")} {...(managed?.machineId === undefined ? {} : { title: managed.machineId })} />
-        <SummaryFact label={t("captureDetail.observation")} value={t(`captures.observation.${capture.data.observation}`)} />
-        <SummaryFact label={t("captureDetail.updated")} value={formatRelative(capture.data.updatedAt, i18n.language)} />
-      </section>
-
-      <div className="detail-grid">
-        <section className="data-panel environment-assignment-panel">
-          <SectionHeading title={t("captureDetail.environment.title")} />
-          <div className="routing-spine">
-            <SpineNode label={t("captureDetail.spine.capture")} value={capture.data.displayName} />
-            <span aria-hidden="true" />
-            <SpineNode
-              label={t("captureDetail.spine.environment")}
-              value={currentEnvironment?.name ?? assignment.data.environmentId}
-            />
-            <span aria-hidden="true" />
-            <SpineNode
-              label={t("captureDetail.spine.routes")}
-              value={t("captureDetail.spine.routeCount", {
-                count: countRoutes(currentEnvironment),
-              })}
-            />
+      <section className="data-panel capture-control-panel">
+        <div className="capture-runtime-bar">
+          <StatePill label={t(`captures.state.${captureState}`)} state={captureState} />
+          <span>{t(capture.data.kind === "managed_run" ? "captureDetail.source.managed.short" : "captureDetail.source.manual.short")}</span>
+          <span title={managed?.cwd}>{managed?.workspaceLabel ?? shortPath(managed?.cwd) ?? t("captures.value.manual")}</span>
+          <span title={managed?.machineId}>{managed?.machineId?.slice(0, 10) ?? t("captures.value.local")}</span>
+          <span>{t(`captures.observation.${captureObservation}`)}</span>
+          <time dateTime={captureUpdatedAt}>{formatRelative(captureUpdatedAt, i18n.language)}</time>
+        </div>
+        <div className="capture-environment-control">
+          <div>
+            <strong>{t("captureDetail.environment.title")}</strong>
+            <small>
+              {currentEnvironment?.systemOwned
+                ? t("captureDetail.environment.transparent")
+                : t("captureDetail.environment.semantic", { revision: assignment.data.revision })}
+            </small>
+            {managed?.machineId !== undefined && managed.workspaceId !== undefined && !currentEnvironment?.systemOwned && (
+              <small>
+                {workspaceDefault.data?.environmentId === assignment.data.environmentId
+                  ? t("captureDetail.environment.futureDefault")
+                  : t("captureDetail.environment.futureDifferent")}
+              </small>
+            )}
           </div>
-          <label className="field-row">
-            <span>{t("captureDetail.environment.current")}</span>
-            <select
-              disabled={switchEnvironment.isPending}
-              onChange={(event) => switchEnvironment.mutate(event.target.value)}
-              value={assignment.data.environmentId}
-            >
-              {environments.data.items
-                .filter((item) => item.state === "active")
-                .map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}
-            </select>
-          </label>
-          <p className="muted-copy">
-            {currentEnvironment?.systemOwned
-              ? t("captureDetail.environment.transparent")
-              : t("captureDetail.environment.semantic", { revision: assignment.data.revision })}
-          </p>
+          <select
+            aria-label={t("captureDetail.environment.current")}
+            disabled={!isLiveCapture({ ...capture.data, state: captureState }) || switchEnvironment.isPending}
+            onChange={(event) => switchEnvironment.mutate(event.target.value)}
+            value={assignment.data.environmentId}
+          >
+            {environments.data.items
+              .filter((item) => item.state === "active")
+              .map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}
+          </select>
           {managed?.machineId !== undefined && managed.workspaceId !== undefined && (
             currentEnvironment?.systemOwned ? (
-              <Link className="inline-action" search={{}} to={dashboardRoutePaths.environments}>
+              <Link className="quiet-button" search={{}} to={dashboardRoutePaths.environments}>
                 {t("captureDetail.environment.configureInspection")}
               </Link>
             ) : (
-              <div className="workspace-default-row">
-                <span>
-                  {workspaceDefault.data?.environmentId === assignment.data.environmentId
-                    ? t("captureDetail.environment.futureDefault")
-                    : t("captureDetail.environment.futureDifferent")}
-                </span>
-                <button
-                  className="quiet-button"
-                  disabled={updateWorkspaceDefault.isPending || workspaceDefault.isPending}
-                  onClick={() => updateWorkspaceDefault.mutate()}
-                  type="button"
-                >
-                  {workspaceDefault.data?.environmentId === assignment.data.environmentId
-                    ? t("captureDetail.environment.clearDefault")
-                    : t("captureDetail.environment.useForFuture")}
-                </button>
-              </div>
+              <button
+                className="quiet-button"
+                disabled={updateWorkspaceDefault.isPending || workspaceDefault.isPending}
+                onClick={() => updateWorkspaceDefault.mutate()}
+                type="button"
+              >
+                {workspaceDefault.data?.environmentId === assignment.data.environmentId
+                  ? t("captureDetail.environment.clearDefault")
+                  : t("captureDetail.environment.useForFuture")}
+              </button>
             )
           )}
-          {switchNotice !== undefined && <p className="inline-notice" role="status">{t(switchNotice)}</p>}
-        </section>
-
-        <section className="data-panel identity-panel">
-          <SectionHeading title={t("captureDetail.identity.title")} />
+        </div>
+        {switchNotice !== undefined && <p className="inline-notice" role="status">{t(switchNotice)}</p>}
+        <div className="capture-source-row">
+          <div className="capture-source-copy">
+            <CaptureSourceIcon kind={capture.data.kind} />
+            <div>
+              <strong>{t(capture.data.kind === "managed_run" ? "captureDetail.source.managed.title" : "captureDetail.source.manual.title")}</strong>
+              <small>{t(capture.data.kind === "managed_run" ? "captureDetail.source.managed.description" : "captureDetail.source.manual.description")}</small>
+            </div>
+          </div>
+          {activeManualCapture && manualAuthority.data !== undefined && !confirmingRevoke && (
+            <button className="danger-text" onClick={() => setConfirmingRevoke(true)} type="button">
+              {t("manualCapture.revoke.action")}
+            </button>
+          )}
+        </div>
+        {activeManualCapture && manualAuthority.isError && (
+          <div className="capture-authority-error">
+            <InlineProblem message={t(controlErrorKey(manualAuthority.error))} />
+            <button className="quiet-button" onClick={() => void manualAuthority.refetch()} type="button">{t("common.retry")}</button>
+          </div>
+        )}
+        {confirmingRevoke && (
+          <div aria-labelledby="revoke-capture-title" className="capture-revoke-confirm" role="group">
+            <div>
+              <strong id="revoke-capture-title">{t("manualCapture.revoke.confirmTitle", { name: capture.data.displayName })}</strong>
+              <p>{t("manualCapture.revoke.confirmDetail")}</p>
+            </div>
+            <div>
+              <button autoFocus disabled={revokeManualCapture.isPending} onClick={() => setConfirmingRevoke(false)} type="button">{t("common.cancel")}</button>
+              <button className="danger-action" disabled={revokeManualCapture.isPending} onClick={() => revokeManualCapture.mutate()} type="button">{t("manualCapture.revoke.confirmAction")}</button>
+            </div>
+          </div>
+        )}
+        {revokeNotice?.kind === "error" && <InlineProblem message={t(revokeNotice.key)} />}
+        {revokeNotice?.kind === "status" && <p className="inline-notice inline-success" role="status">{t(revokeNotice.key)}</p>}
+        <details className="capture-run-details">
+          <summary>{t(capture.data.kind === "managed_run" ? "captureDetail.identity.details" : "captureDetail.identity.manualDetails")}</summary>
           <dl className="facts-list">
-            <dt>{t("captureDetail.identity.executable")}</dt>
-            <dd title={managed?.canonicalExecutablePath}>{managed?.canonicalExecutablePath ?? t("common.notApplicable")}</dd>
-            <dt>{t("captureDetail.identity.recognition")}</dt>
-            <dd>{managed?.recognition ?? t("common.notApplicable")}</dd>
-            <dt>{t("captureDetail.identity.user")}</dt>
-            <dd>{managed?.localUserLabel ?? t("common.unavailable")}</dd>
-            <dt>{t("captureDetail.identity.process")}</dt>
-            <dd>{managed?.processId ?? t("common.notApplicable")}</dd>
+            {capture.data.kind === "managed_run" ? <>
+              <dt>{t("captureDetail.identity.executable")}</dt>
+              <dd title={managed?.canonicalExecutablePath}>{managed?.canonicalExecutablePath ?? t("common.notApplicable")}</dd>
+              <dt>{t("captureDetail.identity.recognition")}</dt>
+              <dd>{managed?.recognition ?? t("common.notApplicable")}</dd>
+              <dt>{t("captureDetail.identity.user")}</dt>
+              <dd>{managed?.localUserLabel ?? t("common.unavailable")}</dd>
+              <dt>{t("captureDetail.identity.process")}</dt>
+              <dd>{managed?.processId ?? t("common.notApplicable")}</dd>
+              <dt>{t("captureDetail.machine")}</dt>
+              <dd>{managed?.machineId ?? t("common.unavailable")}</dd>
+            </> : <>
+              <dt>{t("manualCapture.clientClass.label")}</dt>
+              <dd>{manual === undefined ? t("common.unavailable") : t(`manualCapture.clientClass.${manual.clientClass}`)}</dd>
+              <dt>{t("manualCapture.lifetime.label")}</dt>
+              <dd>{manual === undefined ? t("common.unavailable") : t(`manualCapture.lifetime.${manual.lifetime}`)}</dd>
+              <dt>{t("captureDetail.identity.credentialRevision")}</dt>
+              <dd>{manual?.credentialRevision ?? t("common.unavailable")}</dd>
+              <dt>{t("captureDetail.identity.lastObserved")}</dt>
+              <dd>{manual?.lastObservedAt === undefined ? t("common.notApplicable") : formatRelative(manual.lastObservedAt, i18n.language)}</dd>
+              <dt>{t("captureDetail.identity.captureId")}</dt>
+              <dd><code>{capture.data.id}</code></dd>
+            </>}
           </dl>
-        </section>
-      </div>
+        </details>
+      </section>
 
       <section className="data-panel request-list-panel">
         <SectionHeading
@@ -390,7 +560,7 @@ export function CaptureDetailRoutePage({ captureKey }: { readonly captureKey: st
         ) : visibleActivities.length === 0 ? (
           <EmptyState description={currentEnvironment?.systemOwned ? t("captureDetail.requests.empty.transparent") : t("captureDetail.requests.empty.description")} title={t("captureDetail.requests.empty.title")} />
         ) : (
-          <RequestTable items={visibleActivities.slice(0, 20)} />
+          <ConversationTable filterable={visibleActivities.length > 8} items={visibleActivities} />
         )}
       </section>
     </div>
@@ -400,47 +570,150 @@ export function CaptureDetailRoutePage({ captureKey }: { readonly captureKey: st
 export function RequestsRoutePage() {
   const { t } = useTranslation();
   const model = useDashboardModel();
-  const activities = useQuery({
-    queryKey: dashboardQueryKeys.activities,
-    queryFn: ({ signal }) => model.client.activities(undefined, signal),
+  const activities = useInfiniteQuery({
+    queryKey: [...dashboardQueryKeys.activities, "conversations"],
+    initialPageParam: "",
+    queryFn: ({ pageParam, signal }) => model.client.activities({
+      limit: 50,
+      ...(pageParam === "" ? {} : { cursor: pageParam }),
+    }, signal),
+    getNextPageParam: (page) => page.nextCursor,
     refetchInterval: model.pollInterval,
-    placeholderData: (previous) => previous,
   });
+  const activityItems = useMemo(() => {
+    const unique = new Map<string, ActivityRecord>();
+    for (const page of activities.data?.pages ?? []) {
+      for (const item of page.items) unique.set(item.id, item);
+    }
+    return [...unique.values()];
+  }, [activities.data?.pages]);
   return (
     <div className="page request-page">
-      <PageHeading description={t("requests.description")} title={t("requests.title")} />
-      <div className="page-tabs" role="tablist" aria-label={t("captures.tabs.label")}>
-        <Link activeOptions={{ exact: true }} aria-selected="false" role="tab" search={{}} to={dashboardRoutePaths.captures}>{t("captures.tabs.runs")}</Link>
-        <Link activeOptions={{ exact: true }} aria-selected="true" role="tab" search={{}} to={dashboardTaskRoutePaths.captureRequests}>{t("captures.tabs.requests")}</Link>
-      </div>
+      <PageHeading
+        actions={<Link className="quiet-button" search={{}} to={dashboardRoutePaths.captures}>{t("requests.back")}</Link>}
+        description={t("requests.description")}
+        title={t("requests.title")}
+      />
       <section className="data-panel">
         {activities.isPending && activities.data === undefined ? <LoadingRows /> :
-          activities.data?.items.length === 0 ? <EmptyState description={t("requests.empty.description")} title={t("requests.empty.title")} /> :
-            activities.data !== undefined ? <RequestTable items={activities.data.items} /> :
-              <InlineProblem message={t(controlErrorKey(activities.error))} />}
+          activities.isError && activities.data === undefined ? <InlineProblem message={t(controlErrorKey(activities.error))} /> :
+            activityItems.length === 0 ? <EmptyState description={t("requests.empty.description")} title={t("requests.empty.title")} /> : <>
+              <ConversationTable filterable items={activityItems} />
+              {activities.hasNextPage && (
+                <footer className="table-pagination">
+                  <span>{t("requests.loaded", { count: activityItems.length })}</span>
+                  <button className="quiet-button" disabled={activities.isFetchingNextPage} onClick={() => void activities.fetchNextPage()} type="button">
+                    {t(activities.isFetchingNextPage ? "requests.loadingMore" : "requests.loadMore")}
+                  </button>
+                </footer>
+              )}
+            </>}
       </section>
     </div>
   );
 }
 
-function RequestTable({ items }: { readonly items: readonly import("./control-types.ts").ActivityRecord[] }) {
-  const { t, i18n } = useTranslation();
-  return (
-    <div className="table-scroll">
-      <table className="data-table responsive-table request-table">
-        <thead><tr><th>{t("requests.column.status")}</th><th>{t("requests.column.request")}</th><th>{t("requests.column.environment")}</th><th>{t("requests.column.route")}</th><th className="align-right">{t("requests.column.occurred")}</th></tr></thead>
-        <tbody>{items.map((item) => (
-          <tr key={item.id}>
-            <td data-label={t("requests.column.status")}><StatePill label={t(requestResultKey(item.reasonCode, item.status))} state={item.status} /></td>
-            <td data-label={t("requests.column.request")}><Link className="row-link request-link" params={{ exchangeId: item.id }} search={{}} to={dashboardTaskRoutePaths.activityRequest}><strong>{item.title}</strong><small>{item.id}</small></Link></td>
-            <td data-label={t("requests.column.environment")}>{item.environment.id} <small>r{item.environment.revision}</small></td>
-            <td data-label={t("requests.column.route")}>{item.environment.routeId}</td>
-            <td className="align-right" data-label={t("requests.column.occurred")}><time dateTime={item.occurredAt}>{formatRelative(item.occurredAt, i18n.language)}</time></td>
-          </tr>
-        ))}</tbody>
-      </table>
-    </div>
+interface ConversationSummary {
+  readonly key: string;
+  readonly latest: ActivityRecord;
+  readonly turnCount: number;
+  readonly captureRunId?: string;
+}
+
+// A CaptureRun is the narrowest conversation boundary the runtime currently
+// proves. Manual/system proxy traffic stays exchange-scoped until an explicit
+// AgentSession authority exists; titles or nearby timestamps must never merge it.
+function summarizeConversations(items: readonly ActivityRecord[]): readonly ConversationSummary[] {
+  const grouped = new Map<string, ActivityRecord[]>();
+  for (const item of items) {
+    const key = item.parentRefs.captureRunId === undefined
+      ? `exchange:${item.id}`
+      : `capture-run:${item.parentRefs.captureRunId}`;
+    const current = grouped.get(key);
+    if (current === undefined) grouped.set(key, [item]);
+    else current.push(item);
+  }
+  return [...grouped.entries()].map(([key, turns]) => {
+    const ordered = [...turns].sort(
+      (left, right) => Date.parse(left.occurredAt) - Date.parse(right.occurredAt),
+    );
+    const latest = ordered.at(-1)!;
+    return {
+      key,
+      latest,
+      turnCount: ordered.length,
+      ...(latest.parentRefs.captureRunId === undefined
+        ? {}
+        : { captureRunId: latest.parentRefs.captureRunId }),
+    };
+  }).sort(
+    (left, right) => Date.parse(right.latest.occurredAt) - Date.parse(left.latest.occurredAt),
   );
+}
+
+function ConversationTable({
+  filterable = false,
+  items,
+}: {
+  readonly filterable?: boolean;
+  readonly items: readonly ActivityRecord[];
+}) {
+  const { t, i18n } = useTranslation();
+  const [filter, setFilter] = useState("");
+  const conversations = summarizeConversations(items);
+  const normalizedFilter = filter.trim().toLocaleLowerCase();
+  const filteredConversations = normalizedFilter.length === 0
+    ? conversations
+    : conversations.filter((conversation) => conversationMatches(conversation, normalizedFilter));
+  return (
+    <>
+      {filterable && conversations.length > 8 && (
+        <div className="table-toolbar">
+          <label className="table-filter">
+            <SearchIcon />
+            <span className="visually-hidden">{t("requests.filter")}</span>
+            <input aria-label={t("requests.filter")} onChange={(event) => setFilter(event.target.value)} placeholder={t("requests.filter")} type="search" value={filter} />
+          </label>
+          <span>{t("requests.showing", { visible: filteredConversations.length, total: conversations.length })}</span>
+        </div>
+      )}
+      {filteredConversations.length === 0 ? (
+        <p className="capture-section-empty">{t("requests.noMatch")}</p>
+      ) : (
+        <div className="table-scroll">
+          <table className="data-table responsive-table conversation-table">
+            <thead><tr><th>{t("requests.column.status")}</th><th>{t("requests.column.conversation")}</th><th>{t("requests.column.turns")}</th><th>{t("requests.column.environment")}</th><th className="align-right">{t("requests.column.updated")}</th></tr></thead>
+            <tbody>{filteredConversations.map((conversation) => {
+              const item = conversation.latest;
+              return <tr data-conversation-key={conversation.key} key={conversation.key}>
+                <td data-label={t("requests.column.status")}><StatePill label={t(requestResultKey(item.reasonCode, item.status))} state={item.status} /></td>
+                <td data-label={t("requests.column.conversation")}><Link className="row-link conversation-link" params={{ exchangeId: item.id }} search={{}} to={dashboardTaskRoutePaths.activityRequest}><strong>{item.source.displayName}</strong><small title={conversation.captureRunId}>{conversation.captureRunId ?? item.id}</small></Link></td>
+                <td data-label={t("requests.column.turns")}>{t("requests.turns", { count: conversation.turnCount })}</td>
+                <td data-label={t("requests.column.environment")}>{item.environment.id} <small>r{item.environment.revision}</small></td>
+                <td className="align-right" data-label={t("requests.column.updated")}><time dateTime={item.occurredAt}>{formatRelative(item.occurredAt, i18n.language)}</time></td>
+              </tr>
+            })}</tbody>
+          </table>
+        </div>
+      )}
+    </>
+  );
+}
+
+function conversationMatches(
+  conversation: ConversationSummary,
+  normalizedFilter: string,
+): boolean {
+  const item = conversation.latest;
+  return [
+    conversation.key,
+    conversation.captureRunId,
+    item.id,
+    item.source.displayName,
+    item.environment.id,
+    item.status,
+    item.reasonCode,
+  ].some((value) => value?.toLocaleLowerCase().includes(normalizedFilter) === true);
 }
 
 function ManualCaptureDialog({
@@ -492,7 +765,7 @@ function ManualCaptureDialog({
   return (
     <div className="modal-backdrop">
       <section aria-labelledby="manual-capture-title" aria-modal="true" className="modal" role="dialog">
-        <header><div><p className="eyebrow">{t("manualCapture.eyebrow")}</p><h2 id="manual-capture-title">{grant === undefined ? t("manualCapture.create.title") : t("manualCapture.delivery.title")}</h2></div><button aria-label={t("common.close")} className="icon-button" onClick={onClose} type="button">×</button></header>
+        <header><div><p className="eyebrow">{t("manualCapture.eyebrow")}</p><h2 id="manual-capture-title">{grant === undefined ? t("manualCapture.create.title") : t("manualCapture.delivery.title")}</h2></div><button aria-label={t("common.close")} className="icon-button" onClick={onClose} type="button"><CloseIcon /></button></header>
         {grant === undefined ? (
           <form onSubmit={submit}>
             <label><span>{t("manualCapture.name")}</span><input autoFocus maxLength={120} onChange={(event) => { setName(event.target.value); setContext(undefined); }} value={name} /></label>
@@ -523,16 +796,48 @@ function CredentialLine({ label, value }: { readonly label: string; readonly val
   return <div className="credential-line"><span>{label}</span><code>{value}</code><button onClick={() => void navigator.clipboard.writeText(value).then(() => setCopied(true))} type="button">{copied ? t("common.copied") : t("common.copy")}</button></div>;
 }
 
-function SummaryFact({ label, title, value }: { readonly label: string; readonly title?: string; readonly value: string | number }) {
-  return <div><span>{label}</span><strong title={title}>{value}</strong></div>;
-}
-
-function SpineNode({ label, value }: { readonly label: string; readonly value: string }) {
-  return <div><span>{label}</span><strong>{value}</strong></div>;
-}
-
 function StatePill({ label, state }: { readonly label: string; readonly state: string }) {
   return <span className={`state-pill state-${state}`}><i />{label}</span>;
+}
+
+function SearchIcon() {
+  return <svg aria-hidden="true" className="inline-icon" fill="none" viewBox="0 0 16 16"><circle cx="7" cy="7" r="4.25" /><path d="m10.25 10.25 3 3" /></svg>;
+}
+
+function CloseIcon() {
+  return <svg aria-hidden="true" className="inline-icon" fill="none" viewBox="0 0 16 16"><path d="m4 4 8 8M12 4l-8 8" /></svg>;
+}
+
+function CaptureSourceIcon({ kind }: { readonly kind: CaptureRecord["kind"] }) {
+  return kind === "managed_run"
+    ? <svg aria-hidden="true" className="capture-source-icon" fill="none" viewBox="0 0 20 20"><path d="M4 4.5h12v9H4zM7 16h6M10 13.5V16" /><path d="m7.5 8 1.75 1.75L12.75 7" /></svg>
+    : <svg aria-hidden="true" className="capture-source-icon" fill="none" viewBox="0 0 20 20"><path d="M6 5.5h8v9H6zM8 3v2.5M12 3v2.5M8 14.5V17M12 14.5V17M3.5 8H6M14 8h2.5M3.5 12H6M14 12h2.5" /></svg>;
+}
+
+function isLiveCapture(capture: CaptureRecord): boolean {
+  return capture.state === "active" ||
+    capture.state === "attached" ||
+    capture.state === "created" ||
+    capture.state === "running";
+}
+
+function compareCaptureActivity(left: CaptureRecord, right: CaptureRecord): number {
+  return Date.parse(right.updatedAt) - Date.parse(left.updatedAt) ||
+    left.displayName.localeCompare(right.displayName);
+}
+
+function captureMatches(capture: CaptureRecord, normalizedFilter: string): boolean {
+  return [
+    capture.displayName,
+    capture.id,
+    capture.kind,
+    capture.state,
+    capture.managedRun?.workspaceLabel,
+    capture.managedRun?.cwd,
+    capture.managedRun?.machineId,
+    capture.manualCapture?.clientClass,
+    capture.manualCapture?.lifetime,
+  ].some((value) => value?.toLocaleLowerCase().includes(normalizedFilter) === true);
 }
 
 function captureBrand(capture: CaptureRecord): "claude-code" | "codex" | undefined {
@@ -548,16 +853,6 @@ function shortPath(value: string | undefined): string | undefined {
   return parts.at(-1) ?? value;
 }
 
-function countRoutes(environment: EnvironmentRecord | undefined): number {
-  return environment?.clientEndpoints.reduce(
-    (total, endpoint) => total + endpoint.protocolPlans.reduce(
-      (plans, plan) => plans + plan.upstreamPlan.routes.length,
-      0,
-    ),
-    0,
-  ) ?? 0;
-}
-
 function formatRelative(value: string, locale: string): string {
   const milliseconds = Date.parse(value);
   if (!Number.isFinite(milliseconds)) return value;
@@ -567,5 +862,10 @@ function formatRelative(value: string, locale: string): string {
   if (Math.abs(minutes) < 60) return new Intl.RelativeTimeFormat(locale, { numeric: "auto" }).format(minutes, "minute");
   const hours = Math.round(minutes / 60);
   if (Math.abs(hours) < 24) return new Intl.RelativeTimeFormat(locale, { numeric: "auto" }).format(hours, "hour");
-  return new Intl.DateTimeFormat(locale, { dateStyle: "medium", timeStyle: "short" }).format(milliseconds);
+  const date = new Date(milliseconds);
+  const now = new Date();
+  return new Intl.DateTimeFormat(locale, date.getFullYear() === now.getFullYear()
+    ? { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" }
+    : { year: "numeric", month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" })
+    .format(milliseconds);
 }

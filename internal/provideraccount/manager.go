@@ -13,6 +13,7 @@ import (
 	"github.com/vibe-agi/vibermate/internal/exchange"
 	"github.com/vibe-agi/vibermate/internal/providerauth"
 	"github.com/vibe-agi/vibermate/internal/secretstore"
+	"github.com/vibe-agi/vibermate/internal/upstreamendpoint"
 )
 
 type Clock interface {
@@ -28,6 +29,7 @@ type Manager struct {
 
 	repository Repository
 	secrets    secretstore.Store
+	endpoints  upstreamendpoint.Catalog
 	realms     map[string]Realm
 	accounts   map[ID]Account
 	clock      Clock
@@ -64,6 +66,15 @@ func BuiltInRealms() []Realm {
 				providerauth.StaticHeaderDriverRef(),
 			},
 		},
+		{
+			ID: "openai.chatgpt",
+			BackendProtocols: []string{
+				string(environment.ClientProtocolOpenAIResponses),
+			},
+			Drivers: []providerauth.DriverRef{
+				providerauth.StaticHeaderDriverRef(),
+			},
+		},
 	}
 }
 
@@ -71,10 +82,11 @@ func NewManager(
 	ctx context.Context,
 	repository Repository,
 	secrets secretstore.Store,
+	endpoints upstreamendpoint.Catalog,
 	realms []Realm,
 	clock Clock,
 ) (*Manager, error) {
-	if ctx == nil || repository == nil || secrets == nil {
+	if ctx == nil || repository == nil || secrets == nil || endpoints == nil {
 		return nil, errors.New("ProviderAccount manager dependencies are incomplete")
 	}
 	if clock == nil {
@@ -101,7 +113,7 @@ func NewManager(
 	}
 	accounts := make(map[ID]Account, len(loaded))
 	for _, account := range loaded {
-		if err := validateForRealm(account, compiledRealms); err != nil {
+		if err := validateForEndpoint(account, endpoints, compiledRealms); err != nil {
 			return nil, fmt.Errorf("recover ProviderAccount %q: %w", account.ID, err)
 		}
 		if _, duplicate := accounts[account.ID]; duplicate {
@@ -110,7 +122,7 @@ func NewManager(
 		accounts[account.ID] = account
 	}
 	return &Manager{
-		repository: repository, secrets: secrets, realms: compiledRealms,
+		repository: repository, secrets: secrets, endpoints: endpoints, realms: compiledRealms,
 		accounts: accounts, clock: clock,
 		active: make(map[ID]uint64),
 	}, nil
@@ -153,7 +165,11 @@ func (manager *Manager) LookupAccount(value string) (environment.AccountDescript
 	if !exists {
 		return environment.AccountDescriptor{}, false
 	}
-	return account.Descriptor(realm), true
+	endpoint, exists := manager.endpoints.LookupEndpoint(account.UpstreamEndpointID.String())
+	if !exists {
+		return environment.AccountDescriptor{}, false
+	}
+	return account.Descriptor(realm, endpoint), true
 }
 
 func (manager *Manager) List(ctx context.Context) ([]View, error) {
@@ -209,12 +225,17 @@ func (manager *Manager) Create(ctx context.Context, command CreateCommand) (View
 		return View{}, err
 	}
 	now := manager.clock.Now().UTC()
+	endpoint, exists := manager.endpoints.LookupEndpoint(command.UpstreamEndpointID.String())
+	if !exists || endpoint.State != upstreamendpoint.StateActive {
+		return View{}, upstreamendpoint.ErrEndpointNotFound
+	}
 	account := Account{
-		ID: command.ID, DisplayName: command.DisplayName, RealmID: command.RealmID,
+		ID: command.ID, DisplayName: command.DisplayName,
+		UpstreamEndpointID: command.UpstreamEndpointID, RealmID: endpoint.RealmID,
 		Driver: command.Driver, SecretRef: reference, State: StateActive,
 		Revision: 1, CreatedAt: now, UpdatedAt: now,
 	}
-	if err := validateForRealm(account, manager.realms); err != nil {
+	if err := validateForEndpoint(account, manager.endpoints, manager.realms); err != nil {
 		return View{}, err
 	}
 	result, err := manager.repository.Write(ctx, 0, account)
@@ -377,7 +398,8 @@ func (manager *Manager) Acquire(
 	ctx context.Context,
 	request exchange.AccountLeaseRequest,
 ) (providerauth.Lease, error) {
-	if ctx == nil || request.AccountRevision() == 0 || request.RealmID() == "" {
+	if ctx == nil || request.AccountRevision() == 0 || request.RealmID() == "" ||
+		request.UpstreamEndpointID() == "" || request.UpstreamEndpointRevision() == 0 {
 		return nil, ErrInvalidAccount
 	}
 	id, err := NewID(request.AccountID())
@@ -397,6 +419,13 @@ func (manager *Manager) Acquire(
 	if account.State != StateActive {
 		manager.mu.Unlock()
 		return nil, ErrAccountDisabled
+	}
+	endpoint, endpointExists := manager.endpoints.LookupEndpoint(account.UpstreamEndpointID.String())
+	if !endpointExists || endpoint.State != upstreamendpoint.StateActive ||
+		account.UpstreamEndpointID.String() != request.UpstreamEndpointID() ||
+		endpoint.Revision != uint64(request.UpstreamEndpointRevision()) {
+		manager.mu.Unlock()
+		return nil, ErrEndpointMismatch
 	}
 	if account.RealmID != request.RealmID() || account.Revision != uint64(request.AccountRevision()) {
 		manager.mu.Unlock()
@@ -495,15 +524,37 @@ func (manager *Manager) view(ctx context.Context, account Account) (View, error)
 	}
 }
 
-func validateForRealm(account Account, realms map[string]Realm) error {
+func validateForEndpoint(
+	account Account,
+	endpoints upstreamendpoint.Catalog,
+	realms map[string]Realm,
+) error {
 	if err := account.Validate(); err != nil {
 		return err
 	}
+	endpoint, exists := endpoints.LookupEndpoint(account.UpstreamEndpointID.String())
+	if !exists || endpoint.State != upstreamendpoint.StateActive ||
+		endpoint.RealmID != account.RealmID || !slices.Contains(endpoint.Drivers, account.Driver) {
+		return ErrInvalidAccount
+	}
 	realm, exists := realms[account.RealmID]
-	if !exists || !slices.Contains(realm.Drivers, account.Driver) {
+	if !exists || !slices.Contains(realm.Drivers, account.Driver) ||
+		!sameStrings(realm.BackendProtocols, endpoint.BackendProtocols) {
 		return ErrInvalidAccount
 	}
 	return nil
+}
+
+func sameStrings(left, right []string) bool {
+	if len(left) != len(right) {
+		return false
+	}
+	for _, value := range left {
+		if !slices.Contains(right, value) {
+			return false
+		}
+	}
+	return true
 }
 
 type lease struct {

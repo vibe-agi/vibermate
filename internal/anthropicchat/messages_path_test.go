@@ -421,6 +421,91 @@ func TestMessagesProtocolPathStreamsTextWithoutWaitingForTerminalApproval(t *tes
 	}
 }
 
+func TestMessagesProtocolPathRetainsStreamingThinkingAsTypedEvidence(t *testing.T) {
+	t.Parallel()
+
+	path, err := NewMessagesProtocolPath(DefaultOptions())
+	if err != nil {
+		t.Fatal(err)
+	}
+	source := []byte(`{
+		"model":"client-alias",
+		"max_tokens":32,
+		"messages":[{"role":"user","content":"think carefully"}],
+		"stream":true
+	}`)
+	request, _, err := path.Client().DecodeRequest(source)
+	if err != nil {
+		t.Fatal(err)
+	}
+	request, err = request.WithEffectiveModel("claude-sonnet-provider")
+	if err != nil {
+		t.Fatal(err)
+	}
+	stream, err := path.Streaming().NewStream(request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	wire := strings.Join([]string{
+		`event: message_start`,
+		`data: {"type":"message_start","message":{"id":"msg_thinking","type":"message","role":"assistant","model":"claude-sonnet-provider","usage":{"input_tokens":3}}}`,
+		``,
+		`event: content_block_start`,
+		`data: {"type":"content_block_start","index":0,"content_block":{"type":"thinking","thinking":"","signature":""}}`,
+		``,
+		`event: content_block_delta`,
+		`data: {"type":"content_block_delta","index":0,"delta":{"type":"thinking_delta","thinking":"inspect the repository"}}`,
+		``,
+		`event: content_block_delta`,
+		`data: {"type":"content_block_delta","index":0,"delta":{"type":"signature_delta","signature":"opaque-signature"}}`,
+		``,
+		`event: content_block_stop`,
+		`data: {"type":"content_block_stop","index":0}`,
+		``,
+		`event: content_block_start`,
+		`data: {"type":"content_block_start","index":1,"content_block":{"type":"text","text":""}}`,
+		``,
+		`event: content_block_delta`,
+		`data: {"type":"content_block_delta","index":1,"delta":{"type":"text_delta","text":"done"}}`,
+		``,
+		`event: content_block_stop`,
+		`data: {"type":"content_block_stop","index":1}`,
+		``,
+		`event: message_delta`,
+		`data: {"type":"message_delta","delta":{"stop_reason":"end_turn","stop_sequence":null},"usage":{"output_tokens":2}}`,
+		``,
+		`event: message_stop`,
+		`data: {"type":"message_stop"}`,
+		``,
+	}, "\n") + "\n"
+	immediate, err := stream.Feed(context.Background(), []byte(wire))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(immediate) != wire {
+		t.Fatalf("compatible thinking stream changed:\n%s", immediate)
+	}
+	terminal, err := stream.FinishDecoded(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	response := terminal.DecodedResponse()
+	if len(response.ProviderExtensions) != 1 {
+		t.Fatalf("provider extensions = %#v", response.ProviderExtensions)
+	}
+	extension := response.ProviderExtensions[0]
+	if extension.Source() != protocolcore.ProviderExtensionSourceAnthropicMessages ||
+		extension.Kind() != protocolcore.ProviderExtensionThinking ||
+		extension.Path() != "$.content[0]" {
+		t.Fatalf("thinking extension = %#v", extension)
+	}
+	joined := bytes.Join(extension.Fragments(), nil)
+	if !bytes.Contains(joined, []byte("inspect the repository")) ||
+		!bytes.Contains(joined, []byte("opaque-signature")) {
+		t.Fatalf("thinking fragments = %s", joined)
+	}
+}
+
 func TestMessagesProtocolPathRejectsUndefinedProviderTool(t *testing.T) {
 	t.Parallel()
 

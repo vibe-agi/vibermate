@@ -27,6 +27,7 @@ import (
 	"github.com/vibe-agi/vibermate/internal/productruntime"
 	"github.com/vibe-agi/vibermate/internal/provideraccount"
 	"github.com/vibe-agi/vibermate/internal/toolapproval"
+	"github.com/vibe-agi/vibermate/internal/upstreamendpoint"
 	"github.com/vibe-agi/vibermate/internal/workspacedefault"
 )
 
@@ -39,31 +40,34 @@ const (
 type ReasonCode string
 
 const (
-	ReasonUnauthorized               ReasonCode = "control_unauthorized"
-	ReasonRouteNotFound              ReasonCode = "control_route_not_found"
-	ReasonInvalidRequest             ReasonCode = "invalid_control_request"
-	ReasonRevisionConflict           ReasonCode = "revision_conflict"
-	ReasonEnvironmentNotFound        ReasonCode = "environment_not_found"
-	ReasonEnvironmentDraftNotFound   ReasonCode = "environment_draft_not_found"
-	ReasonProjectionUnavailable      ReasonCode = "environment_projection_unavailable"
-	ReasonRuntimeUnavailable         ReasonCode = "runtime_unavailable"
-	ReasonApprovalNotFound           ReasonCode = "approval_not_found"
-	ReasonProbeFailed                ReasonCode = "offline_probe_failed"
-	ReasonConnectionNotFound         ReasonCode = "connection_not_found"
-	ReasonExchangeNotFound           ReasonCode = "exchange_not_found"
-	ReasonEnvironmentSystemOwned     ReasonCode = "environment_system_owned"
-	ReasonEnvironmentPreviewStale    ReasonCode = "environment_preview_stale"
-	ReasonCaptureNotFound            ReasonCode = "capture_not_found"
-	ReasonCaptureAssignmentNotFound  ReasonCode = "capture_assignment_not_found"
-	ReasonCaptureUnavailable         ReasonCode = "capture_unavailable"
-	ReasonCaptureRestartRequired     ReasonCode = "capture_restart_required"
-	ReasonEnvironmentUnavailable     ReasonCode = "environment_unavailable"
-	ReasonProviderAccountNotFound    ReasonCode = "provider_account_not_found"
-	ReasonProviderAccountConflict    ReasonCode = "provider_account_conflict"
-	ReasonProviderAccountInUse       ReasonCode = "provider_account_in_use"
-	ReasonProviderAccountUnavailable ReasonCode = "provider_account_unavailable"
-	ReasonWorkspaceDefaultNotFound   ReasonCode = "workspace_environment_default_not_found"
-	ReasonWorkspaceDefaultInvalid    ReasonCode = "workspace_environment_default_invalid"
+	ReasonUnauthorized                ReasonCode = "control_unauthorized"
+	ReasonRouteNotFound               ReasonCode = "control_route_not_found"
+	ReasonInvalidRequest              ReasonCode = "invalid_control_request"
+	ReasonRevisionConflict            ReasonCode = "revision_conflict"
+	ReasonEnvironmentNotFound         ReasonCode = "environment_not_found"
+	ReasonEnvironmentDraftNotFound    ReasonCode = "environment_draft_not_found"
+	ReasonProjectionUnavailable       ReasonCode = "environment_projection_unavailable"
+	ReasonRuntimeUnavailable          ReasonCode = "runtime_unavailable"
+	ReasonApprovalNotFound            ReasonCode = "approval_not_found"
+	ReasonProbeFailed                 ReasonCode = "offline_probe_failed"
+	ReasonConnectionNotFound          ReasonCode = "connection_not_found"
+	ReasonExchangeNotFound            ReasonCode = "exchange_not_found"
+	ReasonEnvironmentSystemOwned      ReasonCode = "environment_system_owned"
+	ReasonEnvironmentPreviewStale     ReasonCode = "environment_preview_stale"
+	ReasonCaptureNotFound             ReasonCode = "capture_not_found"
+	ReasonCaptureAssignmentNotFound   ReasonCode = "capture_assignment_not_found"
+	ReasonCaptureUnavailable          ReasonCode = "capture_unavailable"
+	ReasonCaptureRestartRequired      ReasonCode = "capture_restart_required"
+	ReasonEnvironmentUnavailable      ReasonCode = "environment_unavailable"
+	ReasonUpstreamEndpointNotFound    ReasonCode = "upstream_endpoint_not_found"
+	ReasonUpstreamEndpointConflict    ReasonCode = "upstream_endpoint_conflict"
+	ReasonUpstreamEndpointUnavailable ReasonCode = "upstream_endpoint_unavailable"
+	ReasonProviderAccountNotFound     ReasonCode = "provider_account_not_found"
+	ReasonProviderAccountConflict     ReasonCode = "provider_account_conflict"
+	ReasonProviderAccountInUse        ReasonCode = "provider_account_in_use"
+	ReasonProviderAccountUnavailable  ReasonCode = "provider_account_unavailable"
+	ReasonWorkspaceDefaultNotFound    ReasonCode = "workspace_environment_default_not_found"
+	ReasonWorkspaceDefaultInvalid     ReasonCode = "workspace_environment_default_invalid"
 )
 
 type StatusReader interface {
@@ -98,6 +102,7 @@ type Options struct {
 	Connections  connectionevent.Reader
 	Egress       egressaudit.Reader
 	Approvals    toolapproval.Controller
+	Endpoints    upstreamendpoint.Controller
 	Accounts     provideraccount.Controller
 	Offline      OfflineActions
 	// ConnectionRules is the outbound firewall a person edits. A runtime
@@ -121,6 +126,7 @@ type Handler struct {
 	connections  connectionevent.Reader
 	egress       egressaudit.Reader
 	approvals    toolapproval.Controller
+	endpoints    upstreamendpoint.Controller
 	accounts     provideraccount.Controller
 	offline      OfflineActions
 
@@ -158,6 +164,7 @@ func New(options Options) (*Handler, error) {
 		options.Connections == nil ||
 		options.Egress == nil ||
 		options.Approvals == nil ||
+		options.Endpoints == nil ||
 		options.Accounts == nil ||
 		options.Offline == nil ||
 		options.Clock == nil {
@@ -173,6 +180,7 @@ func New(options Options) (*Handler, error) {
 		connections:       options.Connections,
 		egress:            options.Egress,
 		approvals:         options.Approvals,
+		endpoints:         options.Endpoints,
 		accounts:          options.Accounts,
 		offline:           options.Offline,
 		connectionRules:   options.ConnectionRules,
@@ -194,6 +202,9 @@ func New(options Options) (*Handler, error) {
 		handler.resumeOfflineHold,
 	)
 	handler.mux.HandleFunc("GET /api/v1/environments", handler.listEnvironments)
+	handler.mux.HandleFunc("GET /api/v1/upstream-endpoints", handler.listUpstreamEndpoints)
+	handler.mux.HandleFunc("POST /api/v1/upstream-endpoints", handler.createUpstreamEndpoint)
+	handler.mux.HandleFunc("GET /api/v1/upstream-endpoints/{endpointId}", handler.getUpstreamEndpoint)
 	handler.mux.HandleFunc("GET /api/v1/provider-accounts", handler.listProviderAccounts)
 	handler.mux.HandleFunc("POST /api/v1/provider-accounts", handler.createProviderAccount)
 	handler.mux.HandleFunc("GET /api/v1/provider-accounts/{accountId}", handler.getProviderAccount)

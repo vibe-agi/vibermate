@@ -20,7 +20,7 @@ describe("Desktop locales", () => {
     const chinese = await createI18n("zh-CN");
 
     expect(english.t("requests.empty.description")).toMatch(
-      /only when an exact semantic endpoint is used/u,
+      /captured run reaches an exact semantic endpoint/u,
     );
     expect(chinese.t("requests.empty.description")).toMatch(
       /精确语义端点/u,
