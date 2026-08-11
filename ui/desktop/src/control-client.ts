@@ -1264,6 +1264,7 @@ export async function createControlClient(
       const query = new URLSearchParams({ kind: "exchange", limit: String(options?.limit ?? 50) });
       if (options?.cursor !== undefined) query.set("cursor", options.cursor);
       if (options?.captureRunId !== undefined) query.set("captureRunId", options.captureRunId);
+      if (options?.manualCaptureId !== undefined) query.set("manualCaptureId", options.manualCaptureId);
       if (options?.environmentId !== undefined) query.set("environmentId", options.environmentId);
       return requireActivityPage(
         await requestRead<unknown>(`/api/v1/activities?${query.toString()}`, signal),
@@ -2908,10 +2909,12 @@ function validActivityQuery(value: unknown): value is ActivityQuery | undefined 
   return (
     value === undefined ||
     (isRecord(value) &&
-      hasClosedFields(value, [], ["cursor", "limit", "captureRunId", "environmentId"]) &&
+      hasClosedFields(value, [], ["cursor", "limit", "captureRunId", "manualCaptureId", "environmentId"]) &&
       (value.cursor === undefined || validOpaqueCursor(value.cursor)) &&
       (value.limit === undefined || (positiveInteger(value.limit) && value.limit <= maximumActivityPageItems)) &&
       (value.captureRunId === undefined || validResourceId(value.captureRunId)) &&
+      (value.manualCaptureId === undefined || validResourceId(value.manualCaptureId)) &&
+      !(value.captureRunId !== undefined && value.manualCaptureId !== undefined) &&
       (value.environmentId === undefined || validResourceId(value.environmentId)))
   );
 }

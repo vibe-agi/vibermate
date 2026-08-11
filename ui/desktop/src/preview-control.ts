@@ -1100,6 +1100,7 @@ class PreviewControlClient implements ControlClient {
       parentRefs: detail.parentRefs,
     })).filter((item) =>
       (query?.captureRunId === undefined || query.captureRunId === item.parentRefs.captureRunId) &&
+      (query?.manualCaptureId === undefined || query.manualCaptureId === item.parentRefs.manualCaptureId) &&
       (query?.environmentId === undefined || query.environmentId === item.environment.id));
     return { items: clone(items) };
   }

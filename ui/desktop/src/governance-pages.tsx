@@ -194,14 +194,17 @@ function useFollowLatest(enabled: boolean): void {
     const threshold = () => Math.max(96, root.clientHeight * 0.12);
     const nearBottom = () => root.scrollHeight - root.scrollTop - root.clientHeight <= threshold();
     let following = nearBottom();
-    let frame = 0;
+    let observedScrollHeight = root.scrollHeight;
     const follow = () => {
-      if (!following) return;
-      if (frame !== 0) globalThis.cancelAnimationFrame(frame);
-      frame = globalThis.requestAnimationFrame(() => {
-        frame = 0;
-        if (following) root.scrollTo({ top: root.scrollHeight, behavior: "auto" });
-      });
+      // A browser may deliver the scroll event caused by the preceding
+      // scroll-to-bottom after new content has already changed scrollHeight.
+      // Judge that event against the last observed content height, otherwise
+      // growth itself can look like the reader deliberately moved away.
+      const wasNearBottom = observedScrollHeight - root.scrollTop - root.clientHeight <= threshold();
+      observedScrollHeight = root.scrollHeight;
+      if (!following && !wasNearBottom) return;
+      root.scrollTo({ top: root.scrollHeight, behavior: "auto" });
+      following = true;
     };
     const onScroll = () => {
       following = nearBottom();
@@ -213,7 +216,6 @@ function useFollowLatest(enabled: boolean): void {
     return () => {
       root.removeEventListener("scroll", onScroll);
       observer.disconnect();
-      if (frame !== 0) globalThis.cancelAnimationFrame(frame);
     };
   }, [enabled]);
 }

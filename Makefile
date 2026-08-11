@@ -1,4 +1,4 @@
-.PHONY: check check-format check-generated check-dependencies check-structural check-workflows check-release-build check-desktop check-desktop-ui check-desktop-rust test test-race vet vuln vuln-go vuln-rust vuln-ui
+.PHONY: check check-format check-generated check-dependencies check-structural check-workflows check-release-build check-desktop check-flutter check-flutter-macos build-flutter-app test test-race vet vuln vuln-go vuln-rust vuln-ui
 
 check: check-format check-generated check-dependencies check-structural check-workflows check-release-build check-desktop
 
@@ -37,19 +37,22 @@ check-release-build:
 	GOOS=windows GOARCH=amd64 go build -tags vibermate_native_secrets ./...
 	GOOS=linux GOARCH=amd64 go build -tags vibermate_native_secrets ./...
 
-check-desktop: check-desktop-ui check-desktop-rust
+check-desktop: check-flutter
 
-check-desktop-ui:
-	pnpm --dir ui/desktop install --frozen-lockfile
-	pnpm --dir ui/desktop check
-	pnpm --dir ui/desktop exec playwright install chromium
-	pnpm --dir ui/desktop check:browser
+check-flutter:
+	ui/flutter_app/tool/verify_flutter_sdk.sh
+	cd ui/flutter_app && flutter pub get
+	cd ui/flutter_app && flutter analyze
+	cd ui/flutter_app && flutter test
 
-check-desktop-rust:
-	pnpm --dir ui/desktop prepare:desktop
-	cargo fmt --manifest-path ui/desktop/src-tauri/Cargo.toml --check
-	cargo clippy --locked --all-targets --manifest-path ui/desktop/src-tauri/Cargo.toml -- -D warnings
-	cargo test --locked --manifest-path ui/desktop/src-tauri/Cargo.toml
+check-flutter-macos: check-flutter
+	cd ui/flutter_app && xcodebuild test -quiet -workspace macos/Runner.xcworkspace -scheme Runner -configuration Debug -destination 'platform=macOS' CODE_SIGNING_ALLOWED=NO
+	VIBERMATE_FLUTTER_CLEAN=1 ui/flutter_app/tool/build_macos_app.sh live
+	cd ui/flutter_app && VIBERMATE_LIVE_TEST_DAEMON="$(CURDIR)/dist/ViberMate.app/Contents/MacOS/vibermated" VIBERMATE_LIVE_TEST_COMMAND="$(CURDIR)/dist/ViberMate.app/Contents/MacOS/vibermate" flutter test test/live_runtime_test.dart
+	VIBERMATE_LIVE_TEST_APP="$(CURDIR)/dist/ViberMate.app" go test -count=1 -run '^TestPackagedFlutterDesktopShellLive$$' ./cmd/vibermate-acceptance
+
+build-flutter-app:
+	ui/flutter_app/tool/build_macos_app.sh live
 
 test:
 	go test ./...

@@ -439,6 +439,7 @@ export interface ActivityQuery {
   readonly cursor?: string;
   readonly limit?: number;
   readonly captureRunId?: string;
+  readonly manualCaptureId?: string;
   readonly environmentId?: string;
 }
 

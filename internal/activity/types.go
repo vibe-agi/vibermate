@@ -13,6 +13,7 @@ import (
 	"unicode"
 	"unicode/utf8"
 
+	"github.com/vibe-agi/vibermate/internal/captureidentity"
 	"github.com/vibe-agi/vibermate/internal/environment"
 )
 
@@ -797,18 +798,35 @@ func diagnosisValue(value *Diagnosis) Diagnosis {
 }
 
 type PageRequest struct {
-	BeforeSequence int64
-	Limit          int
-	CaptureRunID   string
-	EnvironmentID  string
+	BeforeSequence  int64
+	Limit           int
+	CaptureRunID    string
+	ManualCaptureID string
+	EnvironmentID   string
 }
 
 func (request PageRequest) Validate() error {
 	if request.BeforeSequence < 0 ||
 		request.Limit <= 0 ||
 		request.Limit > MaxPageSize ||
-		validateIdentity("CaptureRun filter", request.CaptureRunID, true) != nil {
+		(request.CaptureRunID != "" && request.ManualCaptureID != "") {
 		return ErrInvalidEvent
+	}
+	if request.CaptureRunID != "" {
+		if _, err := captureidentity.New(
+			captureidentity.KindManagedRun,
+			request.CaptureRunID,
+		); err != nil {
+			return ErrInvalidEvent
+		}
+	}
+	if request.ManualCaptureID != "" {
+		if _, err := captureidentity.New(
+			captureidentity.KindManualCapture,
+			request.ManualCaptureID,
+		); err != nil {
+			return ErrInvalidEvent
+		}
 	}
 	if request.EnvironmentID != "" {
 		if _, err := environment.NewEnvironmentID(request.EnvironmentID); err != nil {

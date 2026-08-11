@@ -18,16 +18,22 @@ import (
 	"sync"
 	"time"
 
+	"github.com/vibe-agi/vibermate/internal/environment"
 	"github.com/vibe-agi/vibermate/internal/localdiscovery"
 	"github.com/vibe-agi/vibermate/internal/runtimepath"
+	"github.com/vibe-agi/vibermate/internal/upstreamendpoint"
 )
 
 const (
-	desktopBundleID                  = "io.vibermate.desktop"
-	desktopNavigationSchema          = "vibermate-navigation-state-v1"
-	desktopNavigationStateFile       = "navigation-state-v1.json"
-	desktopNavigationSentinelLocator = "captures"
-	desktopNavigationStateLimit      = 4 << 10
+	desktopBundleID                    = runtimepath.ApplicationID
+	desktopPreferencesSchema           = "vibermate-workbench-preferences/v1"
+	desktopPreferencesStateFile        = "workbench-preferences-v1.json"
+	desktopPreferencesRestoreLanguage  = "zh-CN"
+	desktopPreferencesRestoreSection   = "settings"
+	desktopPreferencesSentinelLanguage = "en-US"
+	desktopPreferencesSentinelSection  = "captures"
+	desktopPreferencesStateLimit       = 4 << 10
+	desktopApplicationPathLimit        = 4 << 10
 	// A Desktop that remains registered beyond this bound is user-visible as a
 	// hung application. Deeper daemon cleanup budgets must never leak into the
 	// AppKit exit callback.
@@ -53,21 +59,34 @@ func exercisePackagedDesktopShell(
 		filepath.Clean(homeDirectory) != homeDirectory {
 		return errors.New("packaged Desktop home directory is invalid")
 	}
-	restoreLocator, err := newDesktopNavigationRestoreLocator()
+	staleEnvironmentID, err := newDesktopPreferencesStaleEnvironmentID()
 	if err != nil {
-		return fmt.Errorf("create packaged Desktop navigation locator: %w", err)
+		return fmt.Errorf("create packaged Desktop preference identity: %w", err)
 	}
-	statePath := desktopNavigationStatePath(homeDirectory)
-	seed, err := publishDesktopNavigationFixture(
+	statePath := desktopPreferencesStatePath(homeDirectory)
+	restoredEnvironmentID := string(environment.SystemTransparentID)
+	restoredEndpointID := upstreamendpoint.AnthropicOfficialID.String()
+	expected := canonicalDesktopPreferences(
+		desktopPreferencesRestoreLanguage,
+		desktopPreferencesRestoreSection,
+		&restoredEnvironmentID,
+		&restoredEndpointID,
+	)
+	seed, err := publishDesktopPreferencesFixture(
 		statePath,
-		nonCanonicalDesktopNavigationState(restoreLocator),
+		nonCanonicalDesktopPreferences(
+			desktopPreferencesRestoreLanguage,
+			desktopPreferencesRestoreSection,
+			&staleEnvironmentID,
+			nil,
+		),
 	)
 	if err != nil {
-		return fmt.Errorf("seed packaged Desktop navigation: %w", err)
+		return fmt.Errorf("seed packaged Desktop preferences: %w", err)
 	}
 
-	var firstMounted desktopNavigationFile
-	var sentinel desktopNavigationFile
+	var firstMounted desktopPreferencesFile
+	var sentinel desktopPreferencesFile
 	err = exercisePackagedDesktopLaunch(
 		ctx,
 		appPath,
@@ -75,22 +94,27 @@ func exercisePackagedDesktopShell(
 		homeDirectory,
 		func(observe context.Context, done <-chan error) error {
 			var observeErr error
-			firstMounted, observeErr = waitForDesktopNavigationRewrite(
+			firstMounted, observeErr = waitForDesktopPreferencesRewrite(
 				observe,
 				done,
 				statePath,
 				seed,
-				canonicalDesktopNavigationState(restoreLocator),
+				expected,
 			)
 			if observeErr != nil {
-				return fmt.Errorf("observe first packaged Router mount: %w", observeErr)
+				return fmt.Errorf("observe first packaged workbench restore: %w", observeErr)
 			}
-			sentinel, observeErr = publishDesktopNavigationFixture(
+			sentinel, observeErr = publishDesktopPreferencesFixture(
 				statePath,
-				canonicalDesktopNavigationState(desktopNavigationSentinelLocator),
+				canonicalDesktopPreferences(
+					desktopPreferencesSentinelLanguage,
+					desktopPreferencesSentinelSection,
+					nil,
+					nil,
+				),
 			)
 			if observeErr != nil {
-				return fmt.Errorf("publish packaged exit sentinel: %w", observeErr)
+				return fmt.Errorf("publish packaged preference exit sentinel: %w", observeErr)
 			}
 			return nil
 		},
@@ -98,35 +122,37 @@ func exercisePackagedDesktopShell(
 	if err != nil {
 		return err
 	}
-	firstExit, err := requireDesktopNavigationRewrite(
+	firstExit, err := requireDesktopPreferencesRewrite(
 		statePath,
 		sentinel,
-		canonicalDesktopNavigationState(restoreLocator),
+		expected,
 	)
 	if err != nil {
-		return fmt.Errorf("verify first packaged exit navigation flush: %w", err)
+		return fmt.Errorf("verify first packaged preference exit flush: %w", err)
 	}
 	if os.SameFile(seed.info, firstMounted.info) {
-		return errors.New("first packaged Router mount did not atomically rewrite navigation")
+		return errors.New("first packaged workbench restore did not atomically rewrite preferences")
 	}
 
-	var secondMounted desktopNavigationFile
+	var secondSentinel desktopPreferencesFile
 	err = exercisePackagedDesktopLaunch(
 		ctx,
 		appPath,
 		layout,
 		homeDirectory,
 		func(observe context.Context, done <-chan error) error {
-			var observeErr error
-			secondMounted, observeErr = waitForDesktopNavigationRewrite(
-				observe,
-				done,
+			var publishErr error
+			secondSentinel, publishErr = publishDesktopPreferencesFixture(
 				statePath,
-				firstExit,
-				canonicalDesktopNavigationState(restoreLocator),
+				canonicalDesktopPreferences(
+					desktopPreferencesSentinelLanguage,
+					desktopPreferencesSentinelSection,
+					nil,
+					nil,
+				),
 			)
-			if observeErr != nil {
-				return fmt.Errorf("observe second packaged Router mount: %w", observeErr)
+			if publishErr != nil {
+				return fmt.Errorf("publish second packaged preference exit sentinel: %w", publishErr)
 			}
 			return nil
 		},
@@ -134,12 +160,15 @@ func exercisePackagedDesktopShell(
 	if err != nil {
 		return err
 	}
-	if _, err := requireDesktopNavigationRewrite(
+	if os.SameFile(firstExit.info, secondSentinel.info) {
+		return errors.New("second packaged preference sentinel was not atomically published")
+	}
+	if _, err := requireDesktopPreferencesRewrite(
 		statePath,
-		secondMounted,
-		canonicalDesktopNavigationState(restoreLocator),
+		secondSentinel,
+		expected,
 	); err != nil {
-		return fmt.Errorf("verify second packaged exit navigation flush: %w", err)
+		return fmt.Errorf("verify second packaged preference exit flush: %w", err)
 	}
 	return nil
 }
@@ -330,12 +359,18 @@ func exercisePackagedDesktopLaunch(
 	}
 }
 
-type desktopNavigationState struct {
-	Schema  string `json:"schema"`
-	Locator string `json:"locator"`
+type desktopWorkbenchPreferences struct {
+	Schema                      string  `json:"schema"`
+	Language                    string  `json:"language"`
+	Section                     string  `json:"section"`
+	SelectedCaptureKey          *string `json:"selectedCaptureKey"`
+	SelectedConversationKey     *string `json:"selectedConversationKey"`
+	SelectedEnvironmentID       *string `json:"selectedEnvironmentId"`
+	SelectedEnvironmentRevision *int    `json:"selectedEnvironmentRevision"`
+	SelectedEndpointID          *string `json:"selectedEndpointId"`
 }
 
-type desktopNavigationFile struct {
+type desktopPreferencesFile struct {
 	encoded []byte
 	info    os.FileInfo
 }
@@ -388,75 +423,97 @@ type desktopApplicationGuardian struct {
 	output      *bufio.Reader
 }
 
-func desktopNavigationStatePath(homeDirectory string) string {
+func desktopPreferencesStatePath(homeDirectory string) string {
 	return filepath.Join(
 		homeDirectory,
 		"Library",
 		"Application Support",
 		desktopBundleID,
 		"ui-state",
-		desktopNavigationStateFile,
+		desktopPreferencesStateFile,
 	)
 }
 
-func canonicalDesktopNavigationState(locator string) []byte {
-	encoded, err := json.Marshal(desktopNavigationState{
-		Schema:  desktopNavigationSchema,
-		Locator: locator,
+func canonicalDesktopPreferences(
+	language string,
+	section string,
+	environmentID *string,
+	endpointID *string,
+) []byte {
+	encoded, err := json.Marshal(desktopWorkbenchPreferences{
+		Schema:                desktopPreferencesSchema,
+		Language:              language,
+		Section:               section,
+		SelectedEnvironmentID: environmentID,
+		SelectedEndpointID:    endpointID,
 	})
 	if err != nil {
-		panic("fixed Desktop navigation fixture could not be encoded")
+		panic("fixed Desktop preference fixture could not be encoded")
+	}
+	return encoded
+}
+
+func nonCanonicalDesktopPreferences(
+	language string,
+	section string,
+	environmentID *string,
+	endpointID *string,
+) []byte {
+	encoded, err := json.MarshalIndent(desktopWorkbenchPreferences{
+		Schema:                desktopPreferencesSchema,
+		Language:              language,
+		Section:               section,
+		SelectedEnvironmentID: environmentID,
+		SelectedEndpointID:    endpointID,
+	}, "", "  ")
+	if err != nil {
+		panic("fixed Desktop preference fixture could not be encoded")
 	}
 	return append(encoded, '\n')
 }
 
-func nonCanonicalDesktopNavigationState(locator string) []byte {
-	return []byte("{\n  \"locator\": \"" + locator +
-		"\",\n  \"schema\": \"" + desktopNavigationSchema + "\"\n}\n")
-}
-
-func newDesktopNavigationRestoreLocator() (string, error) {
+func newDesktopPreferencesStaleEnvironmentID() (string, error) {
 	var identity [16]byte
 	if _, err := rand.Read(identity[:]); err != nil {
 		return "", err
 	}
-	return "environments/" + hex.EncodeToString(identity[:]), nil
+	return "acceptance." + hex.EncodeToString(identity[:]), nil
 }
 
-func publishDesktopNavigationFixture(
+func publishDesktopPreferencesFixture(
 	path string,
 	encoded []byte,
-) (desktopNavigationFile, error) {
+) (desktopPreferencesFile, error) {
 	if path == "" || !filepath.IsAbs(path) || filepath.Clean(path) != path ||
-		len(encoded) == 0 || len(encoded) > desktopNavigationStateLimit {
-		return desktopNavigationFile{}, errors.New("Desktop navigation fixture is invalid")
+		len(encoded) == 0 || len(encoded) > desktopPreferencesStateLimit {
+		return desktopPreferencesFile{}, errors.New("Desktop preference fixture is invalid")
 	}
 	directory := filepath.Dir(path)
 	if err := os.MkdirAll(directory, 0o700); err != nil {
-		return desktopNavigationFile{}, err
+		return desktopPreferencesFile{}, err
 	}
 	if err := os.Chmod(directory, 0o700); err != nil {
-		return desktopNavigationFile{}, err
+		return desktopPreferencesFile{}, err
 	}
-	if err := requirePrivateDesktopNavigationDirectory(directory); err != nil {
-		return desktopNavigationFile{}, err
+	if err := requirePrivateDesktopPreferencesDirectory(directory); err != nil {
+		return desktopPreferencesFile{}, err
 	}
 	if _, err := os.Lstat(path); err == nil {
-		if _, readErr := readDesktopNavigationFile(path); readErr != nil {
-			return desktopNavigationFile{}, readErr
+		if _, readErr := readDesktopPreferencesFile(path); readErr != nil {
+			return desktopPreferencesFile{}, readErr
 		}
 	} else if !errors.Is(err, os.ErrNotExist) {
-		return desktopNavigationFile{}, err
+		return desktopPreferencesFile{}, err
 	}
-	temporary, err := os.CreateTemp(directory, ".acceptance-navigation-*")
+	temporary, err := os.CreateTemp(directory, ".acceptance-preferences-*")
 	if err != nil {
-		return desktopNavigationFile{}, err
+		return desktopPreferencesFile{}, err
 	}
 	temporaryPath := temporary.Name()
 	defer os.Remove(temporaryPath)
-	fail := func(root error) (desktopNavigationFile, error) {
+	fail := func(root error) (desktopPreferencesFile, error) {
 		_ = temporary.Close()
-		return desktopNavigationFile{}, root
+		return desktopPreferencesFile{}, root
 	}
 	if err := temporary.Chmod(0o600); err != nil {
 		return fail(err)
@@ -468,75 +525,78 @@ func publishDesktopNavigationFixture(
 		return fail(err)
 	}
 	if err := temporary.Close(); err != nil {
-		return desktopNavigationFile{}, err
+		return desktopPreferencesFile{}, err
 	}
 	if err := os.Rename(temporaryPath, path); err != nil {
-		return desktopNavigationFile{}, err
+		return desktopPreferencesFile{}, err
 	}
 	directoryFile, err := os.Open(directory)
 	if err != nil {
-		return desktopNavigationFile{}, err
+		return desktopPreferencesFile{}, err
 	}
 	if err := directoryFile.Sync(); err != nil {
 		_ = directoryFile.Close()
-		return desktopNavigationFile{}, err
+		return desktopPreferencesFile{}, err
 	}
 	if err := directoryFile.Close(); err != nil {
-		return desktopNavigationFile{}, err
+		return desktopPreferencesFile{}, err
 	}
-	return readDesktopNavigationFile(path)
+	return readDesktopPreferencesFile(path)
 }
 
-func waitForDesktopNavigationRewrite(
+func waitForDesktopPreferencesRewrite(
 	ctx context.Context,
 	done <-chan error,
 	path string,
-	previous desktopNavigationFile,
+	previous desktopPreferencesFile,
 	expected []byte,
-) (desktopNavigationFile, error) {
+) (desktopPreferencesFile, error) {
 	if ctx == nil || done == nil || previous.info == nil {
-		return desktopNavigationFile{}, errors.New("Desktop navigation observation is invalid")
+		return desktopPreferencesFile{}, errors.New("Desktop preference observation is invalid")
 	}
 	ticker := time.NewTicker(25 * time.Millisecond)
 	defer ticker.Stop()
+	var lastObserved []byte
 	for {
-		current, err := readDesktopNavigationFile(path)
+		current, err := readDesktopPreferencesFile(path)
 		if err != nil {
-			return desktopNavigationFile{}, err
+			return desktopPreferencesFile{}, err
 		}
+		lastObserved = bytes.Clone(current.encoded)
 		if bytes.Equal(current.encoded, expected) &&
 			!os.SameFile(previous.info, current.info) {
 			return current, nil
 		}
 		select {
 		case waitErr := <-done:
-			return desktopNavigationFile{}, prematureDesktopExit(
-				"before navigation restore",
+			return desktopPreferencesFile{}, prematureDesktopExit(
+				"before workbench preference restore",
 				waitErr,
 			)
 		case <-ticker.C:
 		case <-ctx.Done():
-			return desktopNavigationFile{}, errors.New(
-				"packaged Desktop navigation restore deadline exceeded",
+			return desktopPreferencesFile{}, fmt.Errorf(
+				"packaged Desktop preference restore deadline exceeded; observed=%q",
+				lastObserved,
 			)
 		}
 	}
 }
 
-func requireDesktopNavigationRewrite(
+func requireDesktopPreferencesRewrite(
 	path string,
-	previous desktopNavigationFile,
+	previous desktopPreferencesFile,
 	expected []byte,
-) (desktopNavigationFile, error) {
-	current, err := readDesktopNavigationFile(path)
+) (desktopPreferencesFile, error) {
+	current, err := readDesktopPreferencesFile(path)
 	if err != nil {
-		return desktopNavigationFile{}, err
+		return desktopPreferencesFile{}, err
 	}
 	if previous.info == nil ||
 		!bytes.Equal(current.encoded, expected) ||
 		os.SameFile(previous.info, current.info) {
-		return desktopNavigationFile{}, errors.New(
-			"packaged Desktop navigation was not atomically flushed",
+		return desktopPreferencesFile{}, errors.New(
+			"packaged Desktop preferences were not atomically flushed",
 		)
 	}
 	return current, nil
@@ -973,7 +1033,7 @@ func parseDesktopApplications(payload []byte) ([]desktopApplicationIdentity, err
 }
 
 func validDesktopApplicationPath(path string) bool {
-	return path != "" && len(path) <= desktopNavigationStateLimit &&
+	return path != "" && len(path) <= desktopApplicationPathLimit &&
 		filepath.IsAbs(path) && filepath.Clean(path) == path &&
 		!strings.ContainsRune(path, '\x00')
 }

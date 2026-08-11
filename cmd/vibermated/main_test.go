@@ -36,3 +36,23 @@ func TestParseArgumentsRequiresExplicitHostPathsAndPipe(t *testing.T) {
 		}
 	}
 }
+
+func TestParseArgumentsAcceptsFlutterDesktopOrigin(t *testing.T) {
+	t.Parallel()
+
+	config, resources, err := parseArguments([]string{
+		"--app-cache-dir=/tmp/cache",
+		"--data-dir=/tmp/data",
+		"--webview-origin=vibermate://desktop",
+		"--bootstrap-fd=1",
+		"--parent-lifetime-fd=0",
+	})
+	if err != nil {
+		t.Fatalf("parseArguments() error = %v", err)
+	}
+	defer resources.bootstrap.Close()
+	defer resources.parentLifetime.Close()
+	if config.webviewOrigin != "vibermate://desktop" {
+		t.Fatalf("webview origin = %q", config.webviewOrigin)
+	}
+}

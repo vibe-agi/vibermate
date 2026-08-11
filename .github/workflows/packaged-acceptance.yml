@@ -23,7 +23,7 @@ jobs:
     runs-on: [self-hosted, macOS, ARM64, vibermate-acceptance]
     timeout-minutes: 30
     env:
-      DESKTOP_APP: ${{ github.workspace }}/ui/desktop/src-tauri/target/aarch64-apple-darwin/release/bundle/macos/ViberMate.app
+      DESKTOP_APP: ${{ github.workspace }}/dist/ViberMate.app
       FIXED_CLAUDE_PATH: ${{ vars.VIBERMATE_CLAUDE_2_1_220_PATH }}
 
     steps:
@@ -52,19 +52,14 @@ jobs:
           check-latest: false
           cache: true
 
-      - uses: pnpm/action-setup@a15d269cd4658e1107c09f1fabf4cbd7bd1f308a # v4.4.0
-        with:
-          version: 10.33.2
-
-      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5.0.0
-        with:
-          node-version: 22.23.1
-          cache: pnpm
-          cache-dependency-path: ui/desktop/pnpm-lock.yaml
-
-      - uses: dtolnay/rust-toolchain@39b0b3842c7e8bbf6904c0bfc3d9006fdd4dc4e0 # 1.88.0
-        with:
-          components: rustfmt
+      - name: Install the pinned Flutter SDK
+        shell: bash
+        run: |
+          set -euo pipefail
+          flutter_root="${RUNNER_TEMP}/vibermate-flutter-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          ui/flutter_app/tool/install_ci_flutter.sh "${flutter_root}"
+          printf '%s/bin\n' "${flutter_root}" >> "${GITHUB_PATH}"
+          printf 'FLUTTER_ROOT=%s\n' "${flutter_root}" >> "${GITHUB_ENV}"
 
       - name: Prove the isolated runner inputs
         shell: bash
@@ -83,8 +78,8 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          pnpm --dir ui/desktop install --frozen-lockfile
-          pnpm --dir ui/desktop bundle:packaged-acceptance
+          VIBERMATE_FLUTTER_CLEAN=1 ui/flutter_app/tool/build_macos_app.sh live
+          ui/flutter_app/tool/verify_macos_app.sh "${DESKTOP_APP}" live
           go build -buildvcs=true -trimpath -o "${ACCEPTANCE_BIN}" ./cmd/vibermate-acceptance
           go build -buildvcs=true -trimpath -o "${VERIFY_BIN}" ./cmd/vibermate-acceptance-verify
 

@@ -449,6 +449,20 @@ ON runtime_activities(
   sequence DESC
 )
 WHERE kind IN('exchange.started', 'exchange.completed');
+CREATE INDEX runtime_activities_exchange_capture_run_latest
+ON runtime_activities(
+  capture_run_id,
+  sequence DESC
+)
+WHERE kind IN('exchange.started', 'exchange.completed')
+  AND capture_run_id <> '';
+CREATE INDEX runtime_activities_exchange_manual_capture_latest
+ON runtime_activities(
+  manual_capture_id,
+  sequence DESC
+)
+WHERE kind IN('exchange.started', 'exchange.completed')
+  AND manual_capture_id <> '';
 CREATE INDEX runtime_activities_exchange_subject
 ON runtime_activities(
   subject_id,

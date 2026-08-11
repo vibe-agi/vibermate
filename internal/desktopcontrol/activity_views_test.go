@@ -421,6 +421,13 @@ func TestActivityListQueryIsClosedAndBounded(t *testing.T) {
 		parsed.environmentID != "work" {
 		t.Fatalf("parsed Activity query = %+v, %v", parsed, err)
 	}
+	manual, err := parseActivityListQuery(
+		"kind=exchange&manualCaptureId=manual-one&environmentId=work",
+	)
+	if err != nil || manual.manualCaptureID != "manual-one" ||
+		manual.captureRunID != "" || manual.environmentID != "work" {
+		t.Fatalf("parsed ManualCapture Activity query = %+v, %v", manual, err)
+	}
 	for _, invalid := range []string{
 		"cursor=",
 		"cursor=not-a-cursor",
@@ -434,6 +441,11 @@ func TestActivityListQueryIsClosedAndBounded(t *testing.T) {
 		"cursor=" + cursor + "&cursor=" + cursor,
 		"captureRunId=",
 		"captureRunId=run-one&captureRunId=run-two",
+		"captureRunId=run%2Fone",
+		"manualCaptureId=",
+		"manualCaptureId=manual-one&manualCaptureId=manual-two",
+		"manualCaptureId=manual%2Fone",
+		"captureRunId=run-one&manualCaptureId=manual-one",
 		"environmentId=",
 		"environmentId=work&environmentId=personal",
 		"kind=connection",

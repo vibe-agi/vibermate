@@ -112,7 +112,8 @@ func parseArguments(arguments []string) (commandConfig, commandResources, error)
 	}
 	if config.appCacheDirectory == "" ||
 		config.dataDirectory == "" ||
-		(config.webviewOrigin != "tauri://localhost" &&
+		(config.webviewOrigin != "vibermate://desktop" &&
+			config.webviewOrigin != "tauri://localhost" &&
 			config.webviewOrigin != "http://127.0.0.1:1420") ||
 		config.bootstrapFD == 0 ||
 		!config.parentLifetimeSet {

@@ -341,6 +341,65 @@ func TestActivityRepositoryFiltersByFrozenEnvironmentReference(t *testing.T) {
 	}
 }
 
+func TestActivityRepositoryFiltersAndPaginatesByManualCapture(t *testing.T) {
+	t.Parallel()
+
+	store := openTestStore(t, filepath.Join(t.TempDir(), "data", "runtime.db"))
+	defer func() {
+		if err := store.Shutdown(context.Background()); err != nil {
+			t.Error(err)
+		}
+	}()
+	repository := store.ActivityRepository()
+	now := time.Date(2026, 8, 11, 8, 0, 0, 0, time.UTC)
+	appendManual := func(identifier, exchangeID, manualCaptureID string) activity.Record {
+		t.Helper()
+		record := activity.Record{
+			ID:                identifier,
+			OccurredAt:        now,
+			Kind:              activity.KindExchangeCompleted,
+			SubjectID:         exchangeID,
+			Status:            activity.StatusSucceeded,
+			SourceKind:        activity.SourceManualProxy,
+			SourceDisplayName: "Desktop proxy",
+			SourceRecognition: activity.SourceRecognitionConfigured,
+			ManualCaptureID:   manualCaptureID,
+			ConnectionID:      "connection-" + exchangeID,
+		}
+		setFrozenExecutionEvidence(&record, exchangeID)
+		stored, err := repository.Append(context.Background(), record)
+		if err != nil {
+			t.Fatal(err)
+		}
+		now = now.Add(time.Second)
+		return stored
+	}
+	oldest := appendManual("activity-manual-oldest", "exchange-oldest", "manual-one")
+	appendManual("activity-manual-other", "exchange-other", "manual-two")
+	newest := appendManual("activity-manual-newest", "exchange-newest", "manual-one")
+
+	first, err := repository.ListExchanges(
+		context.Background(),
+		activity.PageRequest{Limit: 1, ManualCaptureID: "manual-one"},
+	)
+	if err != nil || len(first.Items) != 1 || first.Items[0].ID != newest.ID ||
+		first.NextBeforeSequence != newest.Sequence {
+		t.Fatalf("first ManualCapture page = %+v, %v", first, err)
+	}
+	second, err := repository.ListExchanges(
+		context.Background(),
+		activity.PageRequest{
+			BeforeSequence:  first.NextBeforeSequence,
+			Limit:           1,
+			ManualCaptureID: "manual-one",
+		},
+	)
+	if err != nil || len(second.Items) != 1 || second.Items[0].ID != oldest.ID ||
+		second.NextBeforeSequence != 0 {
+		t.Fatalf("second ManualCapture page = %+v, %v", second, err)
+	}
+}
+
 func TestExchangeDetailIndexesAreInstalled(t *testing.T) {
 	t.Parallel()
 
@@ -355,6 +414,8 @@ func TestExchangeDetailIndexesAreInstalled(t *testing.T) {
 	}()
 	for _, name := range []string{
 		"runtime_activities_exchange_latest",
+		"runtime_activities_exchange_capture_run_latest",
+		"runtime_activities_exchange_manual_capture_latest",
 		"runtime_activities_exchange_subject",
 		"runtime_egress_attempts_by_exchange",
 	} {

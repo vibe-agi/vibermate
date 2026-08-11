@@ -49,7 +49,8 @@ func ProductionOptions(
 	if bootstrapWriter == nil {
 		return Options{}, errors.New("Desktop bootstrap descriptor is unavailable")
 	}
-	if webviewOrigin != "tauri://localhost" &&
+	if webviewOrigin != "vibermate://desktop" &&
+		webviewOrigin != "tauri://localhost" &&
 		webviewOrigin != "http://127.0.0.1:1420" {
 		return Options{}, errors.New("Desktop Webview origin is unsupported")
 	}

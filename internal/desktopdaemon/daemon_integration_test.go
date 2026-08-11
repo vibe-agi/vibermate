@@ -157,6 +157,26 @@ func TestProductionOptionsUsesExplicitSecretStoreFactory(t *testing.T) {
 	}
 }
 
+func TestProductionOptionsAcceptsFlutterDesktopOrigin(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	options, err := desktopdaemon.ProductionOptions(
+		context.Background(),
+		filepath.Join(root, "cache"),
+		filepath.Join(root, "data"),
+		"vibermate://desktop",
+		io.Discard,
+		&secretFactoryFixture{store: unavailableSecrets{}},
+	)
+	if err != nil {
+		t.Fatalf("ProductionOptions() error = %v", err)
+	}
+	if got := options.Host.AllowedOrigins; len(got) != 1 || got[0] != "vibermate://desktop" {
+		t.Fatalf("allowed origins = %v", got)
+	}
+}
+
 type secretFactoryFixture struct {
 	store secretstore.Store
 	opens int

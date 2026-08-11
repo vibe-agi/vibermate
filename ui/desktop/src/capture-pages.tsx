@@ -281,7 +281,11 @@ export function CaptureDetailRoutePage({ captureKey }: { readonly captureKey: st
     queryKey: [...dashboardQueryKeys.capture(captureKey), "activities"],
     queryFn: ({ signal }) =>
       model.client.activities(
-        capture.data?.kind === "managed_run" ? { captureRunId: capture.data.id } : undefined,
+        capture.data?.kind === "managed_run"
+          ? { captureRunId: capture.data.id }
+          : capture.data?.kind === "manual_capture"
+            ? { manualCaptureId: capture.data.id }
+            : undefined,
         signal,
       ),
     enabled: capture.data !== undefined,

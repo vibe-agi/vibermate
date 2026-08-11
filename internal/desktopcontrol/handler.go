@@ -421,10 +421,11 @@ func (handler *Handler) listActivities(
 	page, err := handler.activities.ListExchanges(
 		request.Context(),
 		activity.PageRequest{
-			BeforeSequence: query.beforeSequence,
-			Limit:          query.limit,
-			CaptureRunID:   query.captureRunID,
-			EnvironmentID:  query.environmentID,
+			BeforeSequence:  query.beforeSequence,
+			Limit:           query.limit,
+			CaptureRunID:    query.captureRunID,
+			ManualCaptureID: query.manualCaptureID,
+			EnvironmentID:   query.environmentID,
 		},
 	)
 	if err != nil {

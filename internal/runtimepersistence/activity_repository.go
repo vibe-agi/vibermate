@@ -239,6 +239,7 @@ func (repository *activityRepository) ListExchanges(
 		 FROM ranked
 		 WHERE exchange_rank = 1
 		   AND (? = '' OR capture_run_id = ?)
+		   AND (? = '' OR manual_capture_id = ?)
 		   AND (? = '' OR environment_id = ?)
 		   AND (? = 0 OR sequence < ?)
 		 ORDER BY sequence DESC
@@ -246,6 +247,8 @@ func (repository *activityRepository) ListExchanges(
 		true,
 		request.CaptureRunID,
 		request.CaptureRunID,
+		request.ManualCaptureID,
+		request.ManualCaptureID,
 		request.EnvironmentID,
 		request.EnvironmentID,
 		request.BeforeSequence,

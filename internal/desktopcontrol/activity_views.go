@@ -137,10 +137,11 @@ type ExchangeProcessingTrace struct {
 }
 
 type activityListQuery struct {
-	beforeSequence int64
-	limit          int
-	captureRunID   string
-	environmentID  string
+	beforeSequence  int64
+	limit           int
+	captureRunID    string
+	manualCaptureID string
+	environmentID   string
 }
 
 func parseActivityListQuery(rawQuery string) (activityListQuery, error) {
@@ -149,7 +150,7 @@ func parseActivityListQuery(rawQuery string) (activityListQuery, error) {
 		return activityListQuery{}, errInvalidActivityQuery
 	}
 	for name, entries := range values {
-		if (name != "cursor" && name != "limit" && name != "captureRunId" && name != "environmentId" && name != "kind") || len(entries) != 1 {
+		if (name != "cursor" && name != "limit" && name != "captureRunId" && name != "manualCaptureId" && name != "environmentId" && name != "kind") || len(entries) != 1 {
 			return activityListQuery{}, errInvalidActivityQuery
 		}
 	}
@@ -172,6 +173,15 @@ func parseActivityListQuery(rawQuery string) (activityListQuery, error) {
 			return activityListQuery{}, errInvalidActivityQuery
 		}
 	}
+	if entries, present := values["manualCaptureId"]; present {
+		query.manualCaptureID = entries[0]
+		if query.manualCaptureID == "" {
+			return activityListQuery{}, errInvalidActivityQuery
+		}
+	}
+	if query.captureRunID != "" && query.manualCaptureID != "" {
+		return activityListQuery{}, errInvalidActivityQuery
+	}
 	if entries, present := values["environmentId"]; present {
 		query.environmentID = entries[0]
 		if query.environmentID == "" {
@@ -179,6 +189,15 @@ func parseActivityListQuery(rawQuery string) (activityListQuery, error) {
 		}
 	}
 	if entries, present := values["kind"]; present && entries[0] != "exchange" {
+		return activityListQuery{}, errInvalidActivityQuery
+	}
+	if (activity.PageRequest{
+		BeforeSequence:  query.beforeSequence,
+		Limit:           query.limit,
+		CaptureRunID:    query.captureRunID,
+		ManualCaptureID: query.manualCaptureID,
+		EnvironmentID:   query.environmentID,
+	}).Validate() != nil {
 		return activityListQuery{}, errInvalidActivityQuery
 	}
 	return query, nil

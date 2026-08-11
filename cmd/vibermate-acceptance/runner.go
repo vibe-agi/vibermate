@@ -134,7 +134,7 @@ func runAcceptance(
 	report.add(
 		"packaged-main-navigation-cold-restore",
 		checkPassed,
-		"two fresh packaged main-window launches restored one non-default private locator, atomically persisted Router mount state, and flushed it on exit",
+		"two fresh packaged main-window launches restored one non-default closed workbench preference set, repaired a stale selection, and atomically flushed the last validated state on exit",
 	)
 
 	dataDirectory := config.dataDirectory

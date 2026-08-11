@@ -274,3 +274,31 @@ func TestTransportEvidenceRejectsPresentationAndTransportContradictions(
 		})
 	}
 }
+
+func TestExchangePageRequestHasOneTypedCaptureAuthority(t *testing.T) {
+	t.Parallel()
+
+	for _, valid := range []activity.PageRequest{
+		{Limit: 1},
+		{Limit: 200, CaptureRunID: "run-one"},
+		{Limit: 50, ManualCaptureID: "manual-one"},
+		{Limit: 50, ManualCaptureID: "manual-one", EnvironmentID: "work"},
+	} {
+		if err := valid.Validate(); err != nil {
+			t.Fatalf("valid PageRequest rejected: %+v: %v", valid, err)
+		}
+	}
+
+	for _, invalid := range []activity.PageRequest{
+		{},
+		{Limit: 201},
+		{Limit: 50, CaptureRunID: "run/one"},
+		{Limit: 50, ManualCaptureID: "manual/one"},
+		{Limit: 50, CaptureRunID: "run-one", ManualCaptureID: "manual-one"},
+		{Limit: 50, EnvironmentID: "not an Environment"},
+	} {
+		if err := invalid.Validate(); err == nil {
+			t.Fatalf("invalid PageRequest accepted: %+v", invalid)
+		}
+	}
+}
