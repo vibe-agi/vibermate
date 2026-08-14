@@ -579,7 +579,7 @@ func requireCurrentCheckContract(
 	report acceptanceReport,
 	mode acceptancereport.Mode,
 ) error {
-	if report.Schema != acceptancereport.SchemaV6 {
+	if report.Schema != acceptancereport.SchemaV7 {
 		return errors.New("acceptance report producer schema is not current")
 	}
 	required, err := acceptancereport.RequiredCheckIDs(

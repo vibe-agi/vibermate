@@ -19,15 +19,29 @@ func TestParseArgumentsRequiresExplicitHostPathsAndPipe(t *testing.T) {
 		{
 			"--app-cache-dir=/tmp/cache",
 			"--data-dir=/tmp/data",
-			"--webview-origin=tauri://localhost",
+			"--webview-origin=vibermate://desktop",
 			"--bootstrap-fd=1",
+		},
+		{
+			"--app-cache-dir=/tmp/cache",
+			"--data-dir=/tmp/data",
+			"--webview-origin=vibermate://desktop",
+			"--bootstrap-fd=1",
+			"--parent-lifetime-fd=2",
 		},
 		{
 			"--app-cache-dir=/tmp/cache",
 			"--data-dir=/tmp/data",
 			"--webview-origin=tauri://localhost",
 			"--bootstrap-fd=1",
-			"--parent-lifetime-fd=2",
+			"--parent-lifetime-fd=0",
+		},
+		{
+			"--app-cache-dir=/tmp/cache",
+			"--data-dir=/tmp/data",
+			"--webview-origin=http://127.0.0.1:1420",
+			"--bootstrap-fd=1",
+			"--parent-lifetime-fd=0",
 		},
 		{"--unknown=value"},
 	} {

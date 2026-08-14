@@ -27,6 +27,7 @@ enum TerminalCommandState {
 enum TerminalCommandOperation {
   install('install'),
   refresh('refresh'),
+  repair('repair'),
   remove('remove');
 
   const TerminalCommandOperation(this.wireName);
@@ -115,6 +116,8 @@ final class TerminalCommandStatus {
   bool get canInstall => state == TerminalCommandState.notInstalled;
 
   bool get canRefresh => state == TerminalCommandState.sourceUpdated;
+
+  bool get canRepair => state == TerminalCommandState.targetMissing;
 
   bool get canRemove => switch (state) {
     TerminalCommandState.current ||

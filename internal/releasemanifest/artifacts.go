@@ -696,13 +696,14 @@ func verifyUnsignedPayload(
 			"embedded Desktop build manifest entry does not bind the declared Desktop build manifest artifact",
 		)
 	}
-	for _, sidecar := range desktopSidecarNames {
-		entry := entries[sidecar]
-		if entry.SHA256 == nil || *entry.SHA256 != desktopBuild.SidecarSHA256[sidecar] {
+	for relativePath, nestedCodeName := range desktopNestedCodePayloadPaths {
+		entry := entries[relativePath]
+		if entry.SHA256 == nil ||
+			*entry.SHA256 != desktopBuild.NestedCodeSHA256[nestedCodeName] {
 			return artifactMismatch(
 				ledgerArtifact,
-				"sidecar %q entry does not bind desktop build sidecarSHA256",
-				sidecar,
+				"nested code %q entry does not bind desktop build nestedCodeSHA256",
+				nestedCodeName,
 			)
 		}
 	}
@@ -961,15 +962,15 @@ func (verifier *unsignedPayloadVerifier) verifyFile(
 	if digest != *entry.SHA256 {
 		return fmt.Errorf("file %q SHA-256 digest does not match", relativePath)
 	}
-	switch relativePath {
-	case "vibermate", "vibermated":
-		if digest != verifier.desktopBuild.SidecarSHA256[relativePath] {
+	if nestedCodeName, exists := desktopNestedCodePayloadPaths[relativePath]; exists {
+		if digest != verifier.desktopBuild.NestedCodeSHA256[nestedCodeName] {
 			return fmt.Errorf(
-				"sidecar %q SHA-256 digest does not match desktop build sidecarSHA256",
-				relativePath,
+				"nested code %q SHA-256 digest does not match desktop build nestedCodeSHA256",
+				nestedCodeName,
 			)
 		}
-	case "vibermate-build-manifest.json":
+	}
+	if relativePath == "vibermate-build-manifest.json" {
 		if digest != verifier.desktopBuildArtifact.SHA256 ||
 			!bytes.Equal(captured.Bytes(), verifier.desktopPayload) {
 			return fmt.Errorf(

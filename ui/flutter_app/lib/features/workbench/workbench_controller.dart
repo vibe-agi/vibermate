@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:collection';
 import 'dart:math';
 
 import 'package:flutter/foundation.dart';
@@ -9,7 +10,7 @@ import '../../core/bootstrap/terminal_command.dart';
 import '../../core/preferences/workbench_preferences.dart';
 
 export '../../core/preferences/workbench_preferences.dart'
-    show AppLanguage, WorkbenchSection;
+    show AppLanguage, WorkbenchSection, WorkbenchTheme;
 
 final class WorkbenchController extends ChangeNotifier {
   WorkbenchController({
@@ -22,14 +23,17 @@ final class WorkbenchController extends ChangeNotifier {
         const DiscardWorkbenchPreferencesStore(),
     bool preferencesWritable = true,
     WorkbenchPreferencesIssue? initialPreferencesIssue,
+    ValueChanged<WorkbenchTheme>? onThemeChanged,
   }) : _api = api,
        _terminalCommands = terminalCommands,
        _closeRuntime = closeRuntime,
        _preferencesStore = preferencesStore,
        _preferencesWritable = preferencesWritable,
+       _onThemeChanged = onThemeChanged,
        _desiredPreferences = initialPreferences,
        section = initialPreferences.section,
        language = initialPreferences.language,
+       theme = initialPreferences.theme,
        selectedCaptureKey = initialPreferences.selectedCaptureKey,
        selectedConversationKey = initialPreferences.selectedConversationKey,
        selectedEnvironmentId = initialPreferences.selectedEnvironmentId,
@@ -43,13 +47,15 @@ final class WorkbenchController extends ChangeNotifier {
   final Future<void> Function() _closeRuntime;
   final WorkbenchPreferencesStore _preferencesStore;
   final bool _preferencesWritable;
+  final ValueChanged<WorkbenchTheme>? _onThemeChanged;
   final bool previewMode;
 
   DashboardData? data;
   NetworkData? networkData;
   List<ApprovalRecord>? pendingApprovals;
-  ActivityPage? conversationIndex;
+  ConversationPage? conversationIndex;
   ActivityPage? selectedConversationPage;
+  ConversationPage? selectedCaptureConversations;
   ActivityPage? selectedCapturePage;
   EnvironmentDraft? reviewedEnvironmentDraft;
   EnvironmentImpact? reviewedEnvironmentImpact;
@@ -59,7 +65,9 @@ final class WorkbenchController extends ChangeNotifier {
   TerminalCommandStatus? terminalCommand;
   WorkbenchSection section;
   AppLanguage language;
+  WorkbenchTheme theme;
   String? selectedCaptureKey;
+  String? selectedCaptureConversationKey;
   String? selectedConversationKey;
   String? selectedEnvironmentId;
   int? selectedEnvironmentRevision;
@@ -69,6 +77,7 @@ final class WorkbenchController extends ChangeNotifier {
   String? operationNotice;
   String? networkError;
   String? conversationsError;
+  String? captureDirectoryError;
   String? networkNotice;
   String? inventoryError;
   String? inventoryNotice;
@@ -86,6 +95,7 @@ final class WorkbenchController extends ChangeNotifier {
   bool mutating = false;
   bool networkLoading = false;
   bool conversationsLoading = false;
+  bool captureDirectoryLoading = false;
   bool captureActivitiesLoading = false;
   bool networkMutating = false;
   bool inventoryMutating = false;
@@ -102,6 +112,10 @@ final class WorkbenchController extends ChangeNotifier {
   int _environmentRevisionGeneration = 0;
   final Map<String, ExchangeDetail> _exchangeDetails = {};
   final Set<String> _loadingExchanges = {};
+  final LinkedHashMap<String, RawEvidencePage> _rawEvidencePages =
+      LinkedHashMap<String, RawEvidencePage>();
+  final Set<String> _loadingRawEvidence = {};
+  final Map<String, String> _rawEvidenceErrors = {};
   Timer? _poller;
   bool _disposed = false;
   WorkbenchPreferences? _desiredPreferences;
@@ -154,10 +168,25 @@ final class WorkbenchController extends ChangeNotifier {
   int? get pendingApprovalCount => pendingApprovals?.length;
 
   List<ConversationSummary> get conversations =>
-      ConversationSummary.fromActivities(conversationIndex?.items ?? const []);
+      conversationIndex?.items
+          .map(ConversationSummary.fromRecord)
+          .toList(growable: false) ??
+      const [];
 
   List<ActivityRecord> get selectedActivities =>
       selectedCapturePage?.items ?? const [];
+
+  List<ConversationSummary> get captureConversations =>
+      selectedCaptureConversations?.items
+          .map(ConversationSummary.fromRecord)
+          .toList(growable: false) ??
+      const [];
+
+  ConversationSummary? get selectedCaptureConversation {
+    final key = selectedCaptureConversationKey;
+    if (key == null) return null;
+    return captureConversations.where((value) => value.key == key).firstOrNull;
+  }
 
   ConversationSummary? get selectedConversation {
     final key = selectedConversationKey;
@@ -174,6 +203,40 @@ final class WorkbenchController extends ChangeNotifier {
     String exchangeId, {
     String contentView = 'incremental',
   }) => _loadingExchanges.contains('$exchangeId:$contentView');
+
+  RawEvidencePage? rawEvidence(String exchangeId) =>
+      _rawEvidencePages[exchangeId];
+
+  bool rawEvidenceIsLoading(String exchangeId) =>
+      _loadingRawEvidence.contains(exchangeId);
+
+  String? rawEvidenceError(String exchangeId) => _rawEvidenceErrors[exchangeId];
+
+  String activityAccountLabel(ActivityRecord activity) {
+    final id = activity.accountId;
+    if (id == null) return '';
+    return data?.accounts
+            .where((account) => account.id == id)
+            .firstOrNull
+            ?.displayName ??
+        id;
+  }
+
+  String activityEndpointLabel(ActivityRecord activity) {
+    final environment = data?.environments
+        .where((value) => value.id == activity.environmentId)
+        .firstOrNull;
+    final route = environment?.routes
+        .where((value) => value.id == activity.routeId)
+        .firstOrNull;
+    final endpointId = route?.endpointId;
+    if (endpointId == null) return '';
+    return data?.endpoints
+            .where((endpoint) => endpoint.id == endpointId)
+            .firstOrNull
+            ?.displayName ??
+        endpointId;
+  }
 
   Future<void> initialize() async {
     await refresh();
@@ -244,6 +307,7 @@ final class WorkbenchController extends ChangeNotifier {
   Future<void> _poll() async {
     if (_disposed ||
         loading ||
+        captureDirectoryLoading ||
         mutating ||
         networkMutating ||
         environmentMutating ||
@@ -253,7 +317,7 @@ final class WorkbenchController extends ChangeNotifier {
     try {
       final updated = await _api.loadDashboard();
       if (_disposed) return;
-      data = updated;
+      data = _mergePolledDashboard(data, updated);
       notifyListeners();
       if (section != WorkbenchSection.network) {
         await refreshPendingApprovals(quiet: true);
@@ -272,6 +336,42 @@ final class WorkbenchController extends ChangeNotifier {
     } catch (_) {
       // A transient poll must not replace useful evidence with an error page.
       // Explicit refresh still surfaces the exact failure.
+    }
+  }
+
+  Future<void> loadMoreCaptures() async {
+    final current = data;
+    final cursor = current?.captureNextCursor;
+    if (_disposed ||
+        loading ||
+        current == null ||
+        cursor == null ||
+        captureDirectoryLoading) {
+      return;
+    }
+    captureDirectoryLoading = true;
+    captureDirectoryError = null;
+    notifyListeners();
+    try {
+      final page = await _api.captures(cursor: cursor);
+      if (_disposed) return;
+      final merged = <String, CaptureRecord>{
+        for (final capture in current.captures) capture.key: capture,
+        for (final capture in page.items) capture.key: capture,
+      };
+      data = _dashboardWith(
+        current,
+        captures: merged.values.toList(growable: false),
+        captureNextCursor: page.nextCursor,
+        replaceCaptureCursor: true,
+      );
+      captureDirectoryLoading = false;
+      notifyListeners();
+    } catch (error) {
+      if (_disposed) return;
+      captureDirectoryLoading = false;
+      captureDirectoryError = _describeError(error);
+      notifyListeners();
     }
   }
 
@@ -341,6 +441,7 @@ final class WorkbenchController extends ChangeNotifier {
         switch (operation) {
           TerminalCommandOperation.install => current.canInstall,
           TerminalCommandOperation.refresh => current.canRefresh,
+          TerminalCommandOperation.repair => current.canRepair,
           TerminalCommandOperation.remove => current.canRemove,
         };
     if (_disposed || terminalCommandMutating || !allowed) return false;
@@ -355,6 +456,7 @@ final class WorkbenchController extends ChangeNotifier {
       terminalCommandNotice = switch (operation) {
         TerminalCommandOperation.install => 'terminal.notice.installed',
         TerminalCommandOperation.refresh => 'terminal.notice.refreshed',
+        TerminalCommandOperation.repair => 'terminal.notice.repaired',
         TerminalCommandOperation.remove => 'terminal.notice.removed',
       };
       terminalCommandMutating = false;
@@ -458,15 +560,27 @@ final class WorkbenchController extends ChangeNotifier {
       notifyListeners();
     }
     try {
-      final updated = await _api.activities(limit: 50);
+      final updated = await _api.conversations(limit: 50);
       if (_disposed) return;
+      final previouslySelected = selectedConversation;
       conversationIndex = updated;
       final available = conversations;
       final selectionStillExists = available.any(
         (value) => value.key == selectedConversationKey,
       );
       if (!selectionStillExists) {
-        selectedConversationKey = available.firstOrNull?.key;
+        // A live Exchange is deliberately isolated until terminal protocol
+        // evidence can prove its final Conversation. Preserve the selection
+        // across that projection change by the immutable Exchange identity.
+        final migrated =
+            previouslySelected?.conversation.kind == 'pending_exchange'
+            ? available
+                  .where(
+                    (value) => value.latest.id == previouslySelected!.latest.id,
+                  )
+                  .firstOrNull
+            : null;
+        selectedConversationKey = migrated?.key ?? available.firstOrNull?.key;
         selectedConversationPage = null;
       }
       conversationsLoading = false;
@@ -491,13 +605,13 @@ final class WorkbenchController extends ChangeNotifier {
     conversationsError = null;
     notifyListeners();
     try {
-      final page = await _api.activities(cursor: cursor, limit: 50);
+      final page = await _api.conversations(cursor: cursor, limit: 50);
       if (_disposed) return;
-      final unique = <String, ActivityRecord>{
-        for (final item in current.items) item.id: item,
-        for (final item in page.items) item.id: item,
+      final unique = <String, ConversationRecord>{
+        for (final item in current.items) item.conversation.id: item,
+        for (final item in page.items) item.conversation.id: item,
       };
-      conversationIndex = ActivityPage(
+      conversationIndex = ConversationPage(
         items: unique.values.toList(growable: false),
         nextCursor: page.nextCursor,
       );
@@ -523,24 +637,42 @@ final class WorkbenchController extends ChangeNotifier {
     if (selected != null) await _loadConversation(selected);
   }
 
+  Future<void> openSelectedConversationCapture() async {
+    final activity = selectedConversation?.latest;
+    if (activity == null) return;
+    final key = switch ((activity.captureRunId, activity.manualCaptureId)) {
+      (final id?, _) => 'managed_run:$id',
+      (_, final id?) => 'manual_capture:$id',
+      _ => null,
+    };
+    if (key == null ||
+        data?.captures.any((capture) => capture.key == key) != true) {
+      return;
+    }
+    await selectCapture(key);
+    if (_disposed) return;
+    selectSection(WorkbenchSection.captures);
+  }
+
   Future<void> _loadConversation(ConversationSummary conversation) async {
     final generation = ++_conversationGeneration;
     conversationsLoading = true;
     conversationsError = null;
     notifyListeners();
     try {
-      final page = conversation.captureRunId == null
-          ? ActivityPage(items: [conversation.latest], nextCursor: null)
-          : await _api.activities(
-              limit: 200,
-              captureRunId: conversation.captureRunId,
-            );
+      final page = await _api.activities(
+        limit: 200,
+        conversationId: conversation.key,
+      );
       if (_disposed ||
           generation != _conversationGeneration ||
           selectedConversationKey != conversation.key) {
         return;
       }
-      selectedConversationPage = page;
+      selectedConversationPage =
+          page.items.isEmpty && conversation.latest.status == 'pending'
+          ? ActivityPage(items: [conversation.latest], nextCursor: null)
+          : page;
       conversationsLoading = false;
       notifyListeners();
     } catch (error) {
@@ -555,7 +687,7 @@ final class WorkbenchController extends ChangeNotifier {
     final selected = selectedConversation;
     final current = selectedConversationPage;
     final cursor = current?.nextCursor;
-    if (selected?.captureRunId == null ||
+    if (selected == null ||
         current == null ||
         cursor == null ||
         conversationsLoading) {
@@ -568,7 +700,7 @@ final class WorkbenchController extends ChangeNotifier {
       final page = await _api.activities(
         cursor: cursor,
         limit: 200,
-        captureRunId: selected!.captureRunId,
+        conversationId: selected.key,
       );
       if (_disposed) return;
       final unique = <String, ActivityRecord>{
@@ -611,6 +743,62 @@ final class WorkbenchController extends ChangeNotifier {
       if (_disposed) return null;
       _loadingExchanges.remove(key);
       conversationsError = _describeError(error);
+      notifyListeners();
+      return null;
+    }
+  }
+
+  Future<RawEvidencePage?> loadRawEvidence(
+    String exchangeId, {
+    bool refresh = false,
+  }) async {
+    if (!refresh) {
+      final cached = _rawEvidencePages.remove(exchangeId);
+      if (cached != null) {
+        _rawEvidencePages[exchangeId] = cached;
+        return cached;
+      }
+    }
+    if (_loadingRawEvidence.contains(exchangeId)) return null;
+    _loadingRawEvidence.add(exchangeId);
+    _rawEvidenceErrors.remove(exchangeId);
+    notifyListeners();
+    try {
+      final page = await _api.rawEvidence(exchangeId);
+      if (_disposed) return null;
+      _rawEvidencePages.remove(exchangeId);
+      _rawEvidencePages[exchangeId] = page;
+      while (_rawEvidencePages.length > 64) {
+        _rawEvidencePages.remove(_rawEvidencePages.keys.first);
+      }
+      _loadingRawEvidence.remove(exchangeId);
+      notifyListeners();
+      return page;
+    } catch (error) {
+      if (_disposed) return null;
+      _loadingRawEvidence.remove(exchangeId);
+      _rawEvidenceErrors[exchangeId] = _describeError(error);
+      notifyListeners();
+      return null;
+    }
+  }
+
+  Future<RevealedRawEvidence?> revealRawEvidence({
+    required String exchangeId,
+    required String envelopeId,
+  }) async {
+    _rawEvidenceErrors.remove(exchangeId);
+    notifyListeners();
+    try {
+      final revealed = await _api.revealRawEvidence(envelopeId: envelopeId);
+      if (_disposed) {
+        revealed.body.fillRange(0, revealed.body.length, 0);
+        return null;
+      }
+      return revealed;
+    } catch (error) {
+      if (_disposed) return null;
+      _rawEvidenceErrors[exchangeId] = _describeError(error);
       notifyListeners();
       return null;
     }
@@ -945,6 +1133,8 @@ final class WorkbenchController extends ChangeNotifier {
     selectedCaptureKey = captureKey;
     selectedAssignment = null;
     selectedWorkspaceDefault = null;
+    selectedCaptureConversations = null;
+    selectedCaptureConversationKey = null;
     selectedCapturePage = null;
     captureActivitiesLoading = false;
     workspaceDefaultLoading = false;
@@ -1206,8 +1396,16 @@ final class WorkbenchController extends ChangeNotifier {
     notifyListeners();
   }
 
+  void setTheme(WorkbenchTheme value) {
+    if (theme == value) return;
+    theme = value;
+    _onThemeChanged?.call(value);
+    notifyListeners();
+  }
+
   WorkbenchPreferences get currentPreferences => WorkbenchPreferences(
     language: language,
+    theme: theme,
     section: section,
     selectedCaptureKey: selectedCaptureKey,
     selectedConversationKey: selectedConversationKey,
@@ -1279,6 +1477,8 @@ final class WorkbenchController extends ChangeNotifier {
     if (quiet && captureActivitiesLoading) return;
     final generation = ++_selectionGeneration;
     final currentPage = selectedCapturePage;
+    final currentConversationKey = selectedCaptureConversationKey;
+    final previousConversation = selectedCaptureConversation;
     final currentWorkspaceDefault = selectedWorkspaceDefault;
     if (!quiet) {
       detailLoading = true;
@@ -1290,7 +1490,7 @@ final class WorkbenchController extends ChangeNotifier {
     try {
       final values = await Future.wait<Object?>([
         _api.captureAssignment(capture.key),
-        _captureActivityPage(capture, limit: 100),
+        _captureConversationPage(capture, limit: 200),
         _workspaceDefaultFor(capture),
       ]);
       if (_disposed ||
@@ -1299,9 +1499,41 @@ final class WorkbenchController extends ChangeNotifier {
         return;
       }
       selectedAssignment = values[0]! as CaptureAssignment;
-      final latest = values[1]! as ActivityPage;
+      final conversationPage = values[1]! as ConversationPage;
       final workspaceLoad = values[2]! as _WorkspaceDefaultLoad;
-      if (quiet && currentPage != null) {
+      selectedCaptureConversations = conversationPage;
+      final available = captureConversations;
+      if (!available.any(
+        (value) => value.key == selectedCaptureConversationKey,
+      )) {
+        final migrated =
+            previousConversation?.conversation.kind == 'pending_exchange'
+            ? available
+                  .where(
+                    (value) =>
+                        value.latest.id == previousConversation!.latest.id,
+                  )
+                  .firstOrNull
+            : null;
+        selectedCaptureConversationKey =
+            migrated?.key ?? _preferredCaptureConversation(available)?.key;
+      }
+      final selectedKey = selectedCaptureConversationKey;
+      final latest = selectedKey == null
+          ? const ActivityPage(items: [], nextCursor: null)
+          : await _captureActivityPage(
+              capture,
+              conversationId: selectedKey,
+              limit: 100,
+            );
+      if (_disposed ||
+          generation != _selectionGeneration ||
+          selectedCaptureKey != capture.key) {
+        return;
+      }
+      if (quiet &&
+          currentPage != null &&
+          currentConversationKey == selectedCaptureConversationKey) {
         final unique = <String, ActivityRecord>{
           for (final item in latest.items) item.id: item,
           for (final item in currentPage.items) item.id: item,
@@ -1323,10 +1555,12 @@ final class WorkbenchController extends ChangeNotifier {
         selectedWorkspaceDefault = currentWorkspaceDefault;
       }
       workspaceDefaultLoading = false;
+      captureActivitiesLoading = false;
       detailLoading = false;
       notifyListeners();
     } catch (error) {
       if (_disposed || generation != _selectionGeneration || quiet) return;
+      captureActivitiesLoading = false;
       detailLoading = false;
       workspaceDefaultLoading = false;
       errorMessage = _describeError(error);
@@ -1358,13 +1592,71 @@ final class WorkbenchController extends ChangeNotifier {
   Future<ActivityPage> _captureActivityPage(
     CaptureRecord capture, {
     String? cursor,
+    String? conversationId,
     required int limit,
   }) => _api.activities(
     cursor: cursor,
     limit: limit,
     captureRunId: capture.isManual ? null : capture.captureRunId,
     manualCaptureId: capture.isManual ? capture.id : null,
+    conversationId: conversationId,
   );
+
+  Future<ConversationPage> _captureConversationPage(
+    CaptureRecord capture, {
+    String? cursor,
+    required int limit,
+  }) => _api.conversations(
+    cursor: cursor,
+    limit: limit,
+    captureRunId: capture.isManual ? null : capture.captureRunId,
+    manualCaptureId: capture.isManual ? capture.id : null,
+  );
+
+  ConversationSummary? _preferredCaptureConversation(
+    List<ConversationSummary> values,
+  ) =>
+      values.where((value) => value.conversation.kind == 'main').firstOrNull ??
+      values.where((value) => value.conversation.kind == 'agent').firstOrNull ??
+      values.firstOrNull;
+
+  Future<void> selectCaptureConversation(String key) async {
+    final capture = selectedCapture;
+    if (capture == null ||
+        !captureConversations.any((value) => value.key == key) ||
+        (selectedCaptureConversationKey == key &&
+            selectedCapturePage != null)) {
+      return;
+    }
+    final generation = ++_selectionGeneration;
+    final captureKey = capture.key;
+    selectedCaptureConversationKey = key;
+    selectedCapturePage = null;
+    captureActivitiesLoading = true;
+    errorMessage = null;
+    notifyListeners();
+    try {
+      final page = await _captureActivityPage(
+        capture,
+        conversationId: key,
+        limit: 100,
+      );
+      if (_disposed ||
+          generation != _selectionGeneration ||
+          selectedCaptureKey != captureKey ||
+          selectedCaptureConversationKey != key) {
+        return;
+      }
+      selectedCapturePage = page;
+      captureActivitiesLoading = false;
+      notifyListeners();
+    } catch (error) {
+      if (_disposed || generation != _selectionGeneration) return;
+      captureActivitiesLoading = false;
+      errorMessage = _describeError(error);
+      notifyListeners();
+    }
+  }
 
   Future<void> loadMoreSelectedCapture() async {
     final capture = selectedCapture;
@@ -1384,6 +1676,7 @@ final class WorkbenchController extends ChangeNotifier {
       final page = await _captureActivityPage(
         capture,
         cursor: cursor,
+        conversationId: selectedCaptureConversationKey,
         limit: 100,
       );
       if (_disposed || selectedCaptureKey != captureKey) return;
@@ -1678,16 +1971,43 @@ final class WorkbenchController extends ChangeNotifier {
   static DashboardData _dashboardWith(
     DashboardData current, {
     RuntimeStatus? status,
+    List<CaptureRecord>? captures,
+    String? captureNextCursor,
+    bool replaceCaptureCursor = false,
     List<EnvironmentRecord>? environments,
     List<UpstreamEndpoint>? endpoints,
     List<ProviderAccount>? accounts,
   }) => DashboardData(
     status: status ?? current.status,
-    captures: current.captures,
+    captures: captures ?? current.captures,
+    captureNextCursor: replaceCaptureCursor
+        ? captureNextCursor
+        : current.captureNextCursor,
     environments: environments ?? current.environments,
     endpoints: endpoints ?? current.endpoints,
     accounts: accounts ?? current.accounts,
   );
+
+  static DashboardData _mergePolledDashboard(
+    DashboardData? current,
+    DashboardData updated,
+  ) {
+    if (current == null || current.captures.length <= updated.captures.length) {
+      return updated;
+    }
+    final captures = <String, CaptureRecord>{
+      for (final capture in current.captures) capture.key: capture,
+      for (final capture in updated.captures) capture.key: capture,
+    };
+    return DashboardData(
+      status: updated.status,
+      captures: captures.values.toList(growable: false),
+      captureNextCursor: current.captureNextCursor,
+      environments: updated.environments,
+      endpoints: updated.endpoints,
+      accounts: updated.accounts,
+    );
+  }
 
   static String _newUuid() {
     final random = Random.secure();
@@ -1733,50 +2053,33 @@ final class _WorkspaceDefaultLoad {
 final class ConversationSummary {
   const ConversationSummary({
     required this.key,
+    required this.conversation,
+    required this.firstObservedAt,
     required this.latest,
     required this.turnCount,
     required this.captureRunId,
   });
 
-  static List<ConversationSummary> fromActivities(
-    Iterable<ActivityRecord> activities,
-  ) {
-    final grouped = <String, List<ActivityRecord>>{};
-    for (final activity in activities) {
-      // CaptureRun is the only conversation boundary currently proven for a
-      // managed run. Manual/system proxy Exchanges stay independent until the
-      // runtime exposes an explicit AgentSession authority.
-      final key = activity.captureRunId == null
-          ? 'exchange:${activity.id}'
-          : 'capture_run:${activity.captureRunId}';
-      (grouped[key] ??= []).add(activity);
-    }
-    final summaries = grouped.entries
-        .map((entry) {
-          final turns = entry.value
-            ..sort(
-              (left, right) => left.occurredAt.compareTo(right.occurredAt),
-            );
-          final latest = turns.last;
-          return ConversationSummary(
-            key: entry.key,
-            latest: latest,
-            turnCount: turns.length,
-            captureRunId: latest.captureRunId,
-          );
-        })
-        .toList(growable: false);
-    summaries.sort(
-      (left, right) =>
-          right.latest.occurredAt.compareTo(left.latest.occurredAt),
-    );
-    return summaries;
-  }
+  factory ConversationSummary.fromRecord(ConversationRecord record) =>
+      ConversationSummary(
+        key: record.conversation.id,
+        conversation: record.conversation,
+        firstObservedAt: record.firstObservedAt,
+        latest: record.latest,
+        turnCount: record.turnCount,
+        captureRunId: record.latest.captureRunId,
+      );
 
   final String key;
+  final ActivityConversationRef conversation;
+  final DateTime firstObservedAt;
   final ActivityRecord latest;
   final int turnCount;
   final String? captureRunId;
 
-  bool get exchangeScoped => captureRunId == null;
+  bool get exchangeScoped => const {
+    'pending_exchange',
+    'isolated_subagent',
+    'isolated_exchange',
+  }.contains(conversation.kind);
 }

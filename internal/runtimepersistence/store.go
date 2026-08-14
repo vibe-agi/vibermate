@@ -31,6 +31,7 @@ import (
 	"github.com/vibe-agi/vibermate/internal/manualcapture"
 	"github.com/vibe-agi/vibermate/internal/provideraccount"
 	"github.com/vibe-agi/vibermate/internal/proxyclient"
+	"github.com/vibe-agi/vibermate/internal/rawevidence"
 	"github.com/vibe-agi/vibermate/internal/toolapproval"
 	"github.com/vibe-agi/vibermate/internal/upstreamendpoint"
 	"github.com/vibe-agi/vibermate/internal/workspacedefault"
@@ -61,6 +62,8 @@ type RuntimeStore interface {
 	EnvironmentRepository() environment.Repository
 	CaptureAssignmentRepository() captureassignment.Repository
 	ActivityRepository() activity.Repository
+	ConversationIdentityRepository() activity.ConversationIdentityRepository
+	ConversationProjectionWriter() activity.ConversationProjectionWriter
 	ExchangeContentRepository() exchangecontent.Repository
 	CaptureRunRepository() capturerun.Repository
 	ManualCaptureRepository() manualcapture.Repository
@@ -71,6 +74,7 @@ type RuntimeStore interface {
 	ConnectionRuleRepository() connectionpolicy.Repository
 	UpstreamEndpointRepository() upstreamendpoint.Repository
 	ProviderAccountRepository() provideraccount.Repository
+	RawEvidenceRepository() rawevidence.Repository
 	WorkspaceDefaultRepository() workspacedefault.Repository
 	Shutdown(context.Context) error
 }
@@ -92,6 +96,7 @@ type Store struct {
 	captureAssignments *captureAssignmentRepository
 	upstreamEndpoints  *upstreamEndpointRepository
 	providerAccounts   *providerAccountRepository
+	rawEvidence        *rawEvidenceRepository
 	workspaceDefaults  *workspaceDefaultRepository
 	operations         *operationGate
 
@@ -186,6 +191,7 @@ func Open(ctx context.Context, options Options) (*Store, error) {
 		options.CommitReconcileTimeout,
 		sqlTransactionCommitter{},
 	)
+	rawEvidence := newRawEvidenceRepository(database, operations)
 	workspaceDefaults := newWorkspaceDefaultRepository(
 		database,
 		operations,
@@ -223,6 +229,7 @@ func Open(ctx context.Context, options Options) (*Store, error) {
 		captureAssignments: captureAssignments,
 		upstreamEndpoints:  upstreamEndpoints,
 		providerAccounts:   providerAccounts,
+		rawEvidence:        rawEvidence,
 		workspaceDefaults:  workspaceDefaults,
 		operations:         operations,
 		closeDone:          make(chan struct{}),
@@ -234,6 +241,14 @@ func (s *Store) SchemaStateReader() SchemaStateReader {
 }
 
 func (s *Store) ActivityRepository() activity.Repository {
+	return s.activityRepo
+}
+
+func (s *Store) ConversationIdentityRepository() activity.ConversationIdentityRepository {
+	return s.activityRepo
+}
+
+func (s *Store) ConversationProjectionWriter() activity.ConversationProjectionWriter {
 	return s.activityRepo
 }
 
@@ -291,6 +306,12 @@ func (s *Store) UpstreamEndpointRepository() upstreamendpoint.Repository {
 // Secret bytes remain owned by the host-selected SecretStore.
 func (s *Store) ProviderAccountRepository() provideraccount.Repository {
 	return s.providerAccounts
+}
+
+// RawEvidenceRepository stores only safe searchable metadata and encrypted
+// payload blobs. High-frequency batching remains owned by rawevidence.Manager.
+func (s *Store) RawEvidenceRepository() rawevidence.Repository {
+	return s.rawEvidence
 }
 
 // WorkspaceDefaultRepository persists only the convenience choice used by
@@ -389,35 +410,61 @@ func applyMigrations(
 			embeddedRevision,
 		)
 	}
+	previousSchemaSource := strings.Repeat("0", sha256.Size*2)
+	if initialRevision > 0 {
+		var schemaIdentity string
+		if err := database.QueryRowContext(
+			ctx,
+			`SELECT schema_identity, schema_source_sha256
+			 FROM runtime_metadata
+			 WHERE singleton = 1`,
+		).Scan(&schemaIdentity, &previousSchemaSource); err != nil {
+			return 0, "", fmt.Errorf(
+				"%w: read pre-migration runtime metadata: %v",
+				ErrSchemaBaselineMismatch,
+				err,
+			)
+		}
+		decoded, decodeErr := hex.DecodeString(previousSchemaSource)
+		if schemaIdentity != currentSchemaIdentity || decodeErr != nil ||
+			len(decoded) != sha256.Size {
+			return 0, "", fmt.Errorf(
+				"%w: pre-migration runtime metadata is invalid",
+				ErrSchemaBaselineMismatch,
+			)
+		}
+	}
 	if _, err := provider.Up(ctx); err != nil {
 		return 0, "", fmt.Errorf("apply SQLite migrations: %w", err)
 	}
-	if initialRevision == 0 {
+	if initialRevision < embeddedRevision {
 		result, updateErr := database.ExecContext(
 			ctx,
 			`UPDATE runtime_metadata
 			 SET schema_source_sha256 = ?
 			 WHERE singleton = 1
+			   AND schema_identity = ?
 			   AND schema_source_sha256 = ?`,
 			schemaSourceSHA256,
-			strings.Repeat("0", sha256.Size*2),
+			currentSchemaIdentity,
+			previousSchemaSource,
 		)
 		if updateErr != nil {
 			return 0, "", fmt.Errorf(
-				"bind fresh SQLite schema source: %w",
+				"bind migrated SQLite schema source: %w",
 				updateErr,
 			)
 		}
 		affected, rowsErr := result.RowsAffected()
 		if rowsErr != nil {
 			return 0, "", fmt.Errorf(
-				"read fresh SQLite schema binding result: %w",
+				"read migrated SQLite schema binding result: %w",
 				rowsErr,
 			)
 		}
 		if affected != 1 {
 			return 0, "", fmt.Errorf(
-				"bind fresh SQLite schema source: affected=%d",
+				"bind migrated SQLite schema source: affected=%d",
 				affected,
 			)
 		}

@@ -5,9 +5,11 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
 import '../../core/api/control_models.dart';
+import '../../core/design/agent_identity.dart';
 import '../../core/design/viber_theme.dart';
 import '../../core/design/workbench_widgets.dart';
 import '../../core/i18n/app_copy.dart';
+import 'capture_conversation_tree.dart';
 import 'conversation_timeline.dart';
 import 'workbench_controller.dart';
 
@@ -22,9 +24,12 @@ final class CapturesView extends StatefulWidget {
 }
 
 final class _CapturesViewState extends State<CapturesView> {
+  final TextEditingController _filterController = TextEditingController();
   String _filter = '';
   bool _narrowDetail = false;
   bool _confirmRevoke = false;
+  bool _masterVisible = true;
+  double _masterWidth = ViberMetrics.masterPaneWidth;
 
   @override
   Widget build(BuildContext context) {
@@ -35,7 +40,12 @@ final class _CapturesViewState extends State<CapturesView> {
           controller: widget.controller,
           copy: widget.copy,
           filter: _filter,
+          filterController: _filterController,
           onFilter: (value) => setState(() => _filter = value),
+          onClearFilter: () => setState(() {
+            _filterController.clear();
+            _filter = '';
+          }),
           onCreateManual: () => _openCreateManualCapture(context),
           onSelect: (key) {
             unawaited(widget.controller.selectCapture(key));
@@ -53,6 +63,10 @@ final class _CapturesViewState extends State<CapturesView> {
           }),
           onConfirmRevoke: (value) => setState(() => _confirmRevoke = value),
           onRotateManual: () => _openRotateManualCapture(context),
+          masterVisible: _masterVisible,
+          onToggleMaster: narrow
+              ? null
+              : () => setState(() => _masterVisible = !_masterVisible),
         );
         if (narrow) {
           return AnimatedSwitcher(
@@ -68,15 +82,42 @@ final class _CapturesViewState extends State<CapturesView> {
                   ),
           );
         }
+        final maxWidth = math.min(
+          ViberMetrics.masterPaneMaxWidth,
+          constraints.maxWidth * 0.45,
+        );
+        final masterWidth = _masterWidth
+            .clamp(ViberMetrics.masterPaneMinWidth, maxWidth)
+            .toDouble();
         return Row(
           children: [
-            SizedBox(width: 316, child: master),
-            const VerticalDivider(width: 1),
+            if (_masterVisible) ...[
+              SizedBox(
+                key: const Key('capture-master-pane'),
+                width: masterWidth,
+                child: master,
+              ),
+              WorkbenchPaneDivider(
+                key: const Key('capture-master-divider'),
+                label: widget.copy('common.resize_directory'),
+                onDrag: (delta) => setState(() {
+                  _masterWidth = (_masterWidth + delta)
+                      .clamp(ViberMetrics.masterPaneMinWidth, maxWidth)
+                      .toDouble();
+                }),
+              ),
+            ],
             Expanded(child: detail),
           ],
         );
       },
     );
+  }
+
+  @override
+  void dispose() {
+    _filterController.dispose();
+    super.dispose();
   }
 
   void _openCreateManualCapture(BuildContext context) {
@@ -109,7 +150,9 @@ final class _CaptureMaster extends StatelessWidget {
     required this.controller,
     required this.copy,
     required this.filter,
+    required this.filterController,
     required this.onFilter,
+    required this.onClearFilter,
     required this.onCreateManual,
     required this.onSelect,
   });
@@ -117,7 +160,9 @@ final class _CaptureMaster extends StatelessWidget {
   final WorkbenchController controller;
   final AppCopy copy;
   final String filter;
+  final TextEditingController filterController;
   final ValueChanged<String> onFilter;
+  final VoidCallback onClearFilter;
   final VoidCallback onCreateManual;
   final ValueChanged<String> onSelect;
 
@@ -142,37 +187,28 @@ final class _CaptureMaster extends StatelessWidget {
         .where(matches)
         .toList(growable: false);
     return ColoredBox(
-      color: ViberColors.panel,
+      color: context.viberColors.panel,
       child: Column(
         children: [
           Padding(
-            padding: const EdgeInsets.fromLTRB(10, 10, 7, 7),
+            padding: const EdgeInsets.fromLTRB(8, 8, 6, 6),
             child: Row(
               children: [
                 Expanded(
                   child: Semantics(
                     textField: true,
                     label: copy('capture.search'),
-                    child: TextField(
+                    child: CompactSearchField(
+                      key: const Key('capture-filter'),
+                      controller: filterController,
+                      hintText: copy('capture.search'),
                       onChanged: onFilter,
-                      decoration: InputDecoration(
-                        hintText: copy('capture.search'),
-                        prefixIcon: const Icon(Icons.search, size: 15),
-                        prefixIconConstraints: const BoxConstraints.tightFor(
-                          width: 31,
-                        ),
-                        suffixIcon: filter.isEmpty
-                            ? null
-                            : IconButton(
-                                onPressed: () => onFilter(''),
-                                icon: const Icon(Icons.close, size: 14),
-                                tooltip: 'Clear filter',
-                              ),
-                      ),
+                      onClear: filter.isEmpty ? null : onClearFilter,
+                      clearLabel: copy('capture.search.clear'),
                     ),
                   ),
                 ),
-                const SizedBox(width: 5),
+                const SizedBox(width: 4),
                 IconButton(
                   key: const Key('manual-capture-create'),
                   onPressed:
@@ -189,7 +225,10 @@ final class _CaptureMaster extends StatelessWidget {
             ),
           ),
           Expanded(
-            child: running.isEmpty && history.isEmpty
+            child:
+                running.isEmpty &&
+                    history.isEmpty &&
+                    controller.data?.captureNextCursor == null
                 ? CenteredMessage(
                     icon: Icons.filter_alt_off,
                     title: copy('capture.empty'),
@@ -203,6 +242,8 @@ final class _CaptureMaster extends StatelessWidget {
                       for (final capture in running)
                         _CaptureRow(
                           capture: capture,
+                          copy: copy,
+                          activityAt: _activityAt(capture),
                           selected:
                               capture.key == controller.selectedCaptureKey,
                           onPressed: () => onSelect(capture.key),
@@ -214,9 +255,45 @@ final class _CaptureMaster extends StatelessWidget {
                       for (final capture in history)
                         _CaptureRow(
                           capture: capture,
+                          copy: copy,
+                          activityAt: _activityAt(capture),
                           selected:
                               capture.key == controller.selectedCaptureKey,
                           onPressed: () => onSelect(capture.key),
+                        ),
+                      if (running.isEmpty && history.isEmpty)
+                        SizedBox(
+                          height: 176,
+                          child: CenteredMessage(
+                            icon: Icons.filter_alt_off,
+                            title: copy('capture.search.no_match'),
+                            detail: copy('capture.search.load_hint'),
+                          ),
+                        ),
+                      if (controller.captureDirectoryError case final error?)
+                        Padding(
+                          padding: const EdgeInsets.fromLTRB(8, 8, 8, 0),
+                          child: InlineNotice(message: error, error: true),
+                        ),
+                      if (controller.data?.captureNextCursor != null)
+                        Padding(
+                          padding: const EdgeInsets.fromLTRB(8, 9, 8, 0),
+                          child: OutlinedButton.icon(
+                            key: const Key('captures-load-more'),
+                            onPressed: controller.captureDirectoryLoading
+                                ? null
+                                : () =>
+                                      unawaited(controller.loadMoreCaptures()),
+                            icon: controller.captureDirectoryLoading
+                                ? const SizedBox.square(
+                                    dimension: 12,
+                                    child: CircularProgressIndicator(
+                                      strokeWidth: 1.5,
+                                    ),
+                                  )
+                                : const Icon(Icons.history, size: 14),
+                            label: Text(copy('capture.load_more')),
+                          ),
                         ),
                       const SizedBox(height: 12),
                     ],
@@ -226,16 +303,43 @@ final class _CaptureMaster extends StatelessWidget {
       ),
     );
   }
+
+  DateTime _activityAt(CaptureRecord capture) {
+    final matching = controller.conversations.where((conversation) {
+      return capture.isManual
+          ? conversation.latest.manualCaptureId == capture.id
+          : conversation.captureRunId == capture.captureRunId;
+    });
+    final loaded = matching
+        .map((value) => value.latest.occurredAt)
+        .fold<DateTime?>(
+          null,
+          (latest, value) =>
+              latest == null || value.isAfter(latest) ? value : latest,
+        );
+    if (loaded != null) return loaded;
+    if (capture.key == controller.selectedCaptureKey &&
+        controller.selectedActivities.isNotEmpty) {
+      return controller.selectedActivities
+          .map((value) => value.occurredAt)
+          .reduce((left, right) => left.isAfter(right) ? left : right);
+    }
+    return capture.manualCapture?.lastObservedAt ?? capture.updatedAt;
+  }
 }
 
 final class _CaptureRow extends StatelessWidget {
   const _CaptureRow({
     required this.capture,
+    required this.copy,
+    required this.activityAt,
     required this.selected,
     required this.onPressed,
   });
 
   final CaptureRecord capture;
+  final AppCopy copy;
+  final DateTime activityAt;
   final bool selected;
   final VoidCallback onPressed;
 
@@ -247,30 +351,33 @@ final class _CaptureRow extends StatelessWidget {
         managed?.cwd ??
         capture.manualCapture?.clientClass ??
         capture.id;
-    final activity = _relativeTime(capture.updatedAt);
+    final activity = _relativeTime(activityAt, copy);
+    final state = _localizedCopy(copy, 'capture.state', capture.state);
     return Semantics(
       key: Key('capture-row-${capture.key}'),
       selected: selected,
       button: true,
-      label: '${capture.displayName}, $subtitle, ${capture.state}',
+      label: '${capture.displayName}, $subtitle, $state',
       child: Material(
-        color: selected ? ViberColors.selection : Colors.transparent,
+        color: selected ? context.viberColors.selection : Colors.transparent,
         child: InkWell(
           onTap: onPressed,
           canRequestFocus: true,
-          focusColor: ViberColors.focus.withValues(alpha: 0.15),
+          focusColor: context.viberColors.focus.withValues(alpha: 0.15),
           child: Container(
-            height: 52,
+            height: 48,
             decoration: BoxDecoration(
               border: Border(
                 left: BorderSide(
                   width: 2,
-                  color: selected ? ViberColors.route : Colors.transparent,
+                  color: selected
+                      ? context.viberColors.route
+                      : Colors.transparent,
                 ),
-                bottom: const BorderSide(color: ViberColors.dividerSoft),
+                bottom: BorderSide(color: context.viberColors.dividerSoft),
               ),
             ),
-            padding: const EdgeInsets.fromLTRB(9, 6, 8, 6),
+            padding: const EdgeInsets.fromLTRB(8, 4, 7, 4),
             child: Row(
               children: [
                 _CaptureGlyph(capture: capture),
@@ -306,17 +413,6 @@ final class _CaptureRow extends StatelessWidget {
                               style: Theme.of(context).textTheme.bodySmall,
                             ),
                           ),
-                          const SizedBox(width: 6),
-                          Container(
-                            width: 6,
-                            height: 6,
-                            decoration: BoxDecoration(
-                              shape: BoxShape.circle,
-                              color: capture.running
-                                  ? ViberColors.verified
-                                  : ViberColors.textFaint,
-                            ),
-                          ),
                         ],
                       ),
                     ],
@@ -332,26 +428,29 @@ final class _CaptureRow extends StatelessWidget {
 }
 
 final class _CaptureGlyph extends StatelessWidget {
-  const _CaptureGlyph({required this.capture});
+  const _CaptureGlyph({
+    required this.capture,
+    this.size = ViberMetrics.controlHeight,
+    this.glyphSize = 16,
+  });
 
   final CaptureRecord capture;
+  final double size;
+  final double glyphSize;
 
   @override
   Widget build(BuildContext context) {
-    final color = capture.isManual ? ViberColors.warning : ViberColors.route;
-    return Container(
-      width: 28,
-      height: 28,
-      decoration: BoxDecoration(
-        color: color.withValues(alpha: 0.1),
-        border: Border.all(color: color.withValues(alpha: 0.25)),
-        borderRadius: BorderRadius.circular(5),
-      ),
-      child: Icon(
-        capture.isManual ? Icons.link : Icons.terminal,
-        size: 15,
-        color: color,
-      ),
+    final color = capture.isManual
+        ? context.viberColors.warning
+        : context.viberColors.route;
+    return AgentIdentityMark(
+      candidates: [capture.displayName, capture.managedRun?.executableLabel],
+      fallbackLabel: capture.displayName,
+      fallbackIcon: capture.isManual ? Icons.link : Icons.terminal,
+      fallbackColor: color,
+      muted: !capture.running,
+      size: size,
+      glyphSize: glyphSize,
     );
   }
 }
@@ -365,6 +464,8 @@ final class _CaptureDetail extends StatelessWidget {
     required this.onBack,
     required this.onConfirmRevoke,
     required this.onRotateManual,
+    required this.masterVisible,
+    required this.onToggleMaster,
   });
 
   final WorkbenchController controller;
@@ -374,15 +475,14 @@ final class _CaptureDetail extends StatelessWidget {
   final VoidCallback onBack;
   final ValueChanged<bool> onConfirmRevoke;
   final VoidCallback onRotateManual;
+  final bool masterVisible;
+  final VoidCallback? onToggleMaster;
 
   @override
   Widget build(BuildContext context) {
     final capture = controller.selectedCapture;
     if (capture == null) {
-      return const CenteredMessage(
-        icon: Icons.adjust,
-        title: 'Select a Capture to inspect its evidence.',
-      );
+      return CenteredMessage(icon: Icons.adjust, title: copy('capture.select'));
     }
     final assignment = controller.selectedAssignment;
     final environment = controller.data?.environments
@@ -402,7 +502,7 @@ final class _CaptureDetail extends StatelessWidget {
         account == null || account.upstreamEndpointId == endpoint?.id;
     final notice = controller.operationNotice;
     return ColoredBox(
-      color: ViberColors.canvas,
+      color: context.viberColors.canvas,
       child: Column(
         children: [
           if (controller.errorMessage case final message?)
@@ -411,74 +511,37 @@ final class _CaptureDetail extends StatelessWidget {
             InlineNotice(
               message: copy('notice.$value'),
               onDismiss: controller.clearNotice,
-            ),
-          if (controller.workspaceDefaultError case final message?)
-            InlineNotice(
-              message: message,
-              error: true,
-              onDismiss: controller.clearWorkspaceDefaultNotice,
-            )
-          else if (controller.workspaceDefaultNotice case final value?)
-            InlineNotice(
-              message: copy('notice.$value'),
-              onDismiss: controller.clearWorkspaceDefaultNotice,
+              dismissLabel: copy('common.dismiss'),
             ),
           _CaptureContext(
             capture: capture,
             assignment: assignment,
             environments: controller.data?.environments ?? const [],
-            workspaceDefault: controller.selectedWorkspaceDefault,
+            conversations: controller.captureConversations,
+            hasEarlierConversations:
+                controller.selectedCaptureConversations?.nextCursor != null,
             copy: copy,
             showBack: showBack,
             confirmRevoke: confirmRevoke,
             mutating: controller.mutating,
-            workspaceDefaultLoading: controller.workspaceDefaultLoading,
-            workspaceDefaultMutating: controller.workspaceDefaultMutating,
             onBack: onBack,
             onEnvironment: (value) =>
                 unawaited(controller.switchEnvironment(value)),
-            onWorkspaceDefault: (value) =>
-                unawaited(controller.setSelectedWorkspaceDefault(value)),
             onConfirmRevoke: onConfirmRevoke,
             onRotate: onRotateManual,
+            routeDetail: [
+              if (endpoint != null) endpoint.displayName,
+              if (account != null)
+                account.displayName
+              else if (route != null)
+                copy('common.client_passthrough'),
+            ].join('  ·  '),
+            masterVisible: masterVisible,
+            onToggleMaster: onToggleMaster,
             onRevoke: () async {
               final success = await controller.revokeSelectedManualCapture();
               if (success) onConfirmRevoke(false);
             },
-          ),
-          Container(
-            decoration: const BoxDecoration(
-              color: ViberColors.panel,
-              border: Border(
-                top: BorderSide(color: ViberColors.dividerSoft),
-                bottom: BorderSide(color: ViberColors.divider),
-              ),
-            ),
-            child: FlowSpine(
-              nodes: [
-                FlowNode(
-                  kind: copy('flow.capture'),
-                  label: capture.displayName,
-                ),
-                FlowNode(
-                  kind: copy('flow.environment'),
-                  label: environment?.name ?? assignment?.environmentId ?? '—',
-                ),
-                if (endpoint != null)
-                  FlowNode(
-                    kind: copy('flow.endpoint'),
-                    label: endpoint.displayName,
-                  ),
-                if (account != null)
-                  FlowNode(
-                    kind: copy('flow.account'),
-                    label: account.displayName,
-                    tone: accountMatches
-                        ? ViberColors.verified
-                        : ViberColors.danger,
-                  ),
-              ],
-            ),
           ),
           if (!accountMatches)
             InlineNotice(
@@ -488,16 +551,9 @@ final class _CaptureDetail extends StatelessWidget {
           Expanded(
             child: controller.detailLoading
                 ? const Center(child: CircularProgressIndicator(strokeWidth: 2))
-                : EvidenceConversationTimeline(
+                : _CaptureConversationWorkspace(
                     controller: controller,
-                    activities: controller.selectedActivities,
                     copy: copy,
-                    canLoadEarlier:
-                        controller.selectedCapturePage?.nextCursor != null,
-                    loadingEarlier: controller.captureActivitiesLoading,
-                    exchangeScoped: capture.isManual,
-                    onLoadEarlier: () =>
-                        unawaited(controller.loadMoreSelectedCapture()),
                   ),
           ),
         ],
@@ -531,65 +587,672 @@ final class _CaptureDetail extends StatelessWidget {
   }
 }
 
+final class _CaptureConversationWorkspace extends StatefulWidget {
+  const _CaptureConversationWorkspace({
+    required this.controller,
+    required this.copy,
+  });
+
+  final WorkbenchController controller;
+  final AppCopy copy;
+
+  @override
+  State<_CaptureConversationWorkspace> createState() =>
+      _CaptureConversationWorkspaceState();
+}
+
+final class _CaptureConversationWorkspaceState
+    extends State<_CaptureConversationWorkspace> {
+  static const _minimumDirectoryWidth = 196.0;
+  static const _maximumDirectoryWidth = 420.0;
+
+  double _directoryWidth = 260;
+  final Set<String> _collapsed = <String>{};
+
+  @override
+  Widget build(BuildContext context) {
+    final controller = widget.controller;
+    final copy = widget.copy;
+    final conversations = controller.captureConversations;
+    final tree = _captureConversationTree(conversations);
+    final selected = controller.selectedCaptureConversation;
+    final timelineTitle = selected?.exchangeScoped == true
+        ? copy('conversation.exchanges_title')
+        : copy('capture.conversation');
+    final timeline = EvidenceConversationTimeline(
+      key: ValueKey(
+        'capture-timeline:${controller.selectedCaptureConversationKey ?? 'empty'}',
+      ),
+      controller: controller,
+      activities: controller.selectedActivities,
+      copy: copy,
+      title: timelineTitle,
+      canLoadEarlier: controller.selectedCapturePage?.nextCursor != null,
+      loadingEarlier: controller.captureActivitiesLoading,
+      exchangeScoped: selected?.exchangeScoped ?? false,
+      onLoadEarlier: () => unawaited(controller.loadMoreSelectedCapture()),
+    );
+    if (conversations.length <= 1) return timeline;
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        if (constraints.maxWidth < 1040) {
+          return Column(
+            children: [
+              _CaptureConversationSelector(
+                conversations: tree,
+                selectedKey: controller.selectedCaptureConversationKey,
+                copy: copy,
+                onSelected: (key) =>
+                    unawaited(controller.selectCaptureConversation(key)),
+              ),
+              Expanded(child: timeline),
+            ],
+          );
+        }
+        final maximumWidth = math.min(
+          _maximumDirectoryWidth,
+          constraints.maxWidth * 0.42,
+        );
+        final directoryWidth = _directoryWidth
+            .clamp(_minimumDirectoryWidth, maximumWidth)
+            .toDouble();
+        return Row(
+          children: [
+            SizedBox(
+              key: const Key('capture-conversation-pane'),
+              width: directoryWidth,
+              child: _CaptureConversationDirectory(
+                conversations: tree,
+                collapsed: _collapsed,
+                selectedKey: controller.selectedCaptureConversationKey,
+                copy: copy,
+                onSelected: (key) =>
+                    unawaited(controller.selectCaptureConversation(key)),
+                onToggleBranch: (key) => setState(() {
+                  if (!_collapsed.add(key)) _collapsed.remove(key);
+                }),
+              ),
+            ),
+            WorkbenchPaneDivider(
+              key: const Key('capture-conversation-divider'),
+              label: copy('common.resize_directory'),
+              onDrag: (delta) => setState(() {
+                _directoryWidth = (_directoryWidth + delta)
+                    .clamp(_minimumDirectoryWidth, maximumWidth)
+                    .toDouble();
+              }),
+            ),
+            Expanded(child: timeline),
+          ],
+        );
+      },
+    );
+  }
+}
+
+final class _CaptureConversationSelector extends StatelessWidget {
+  const _CaptureConversationSelector({
+    required this.conversations,
+    required this.selectedKey,
+    required this.copy,
+    required this.onSelected,
+  });
+
+  final List<CaptureConversationTreeEntry<ConversationSummary>> conversations;
+  final String? selectedKey;
+  final AppCopy copy;
+  final ValueChanged<String> onSelected;
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      key: const Key('capture-conversation-selector'),
+      height: 38,
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+      decoration: BoxDecoration(
+        color: context.viberColors.panel,
+        border: Border(bottom: BorderSide(color: context.viberColors.divider)),
+      ),
+      child: Row(
+        children: [
+          Text(
+            copy('capture.conversations'),
+            style: Theme.of(context).textTheme.labelMedium,
+          ),
+          const SizedBox(width: 8),
+          Expanded(
+            child: CompactSelectField<String>(
+              key: ValueKey('capture-conversation-select:$selectedKey'),
+              initialValue: selectedKey,
+              isExpanded: true,
+              items: [
+                for (final entry in conversations.indexed)
+                  DropdownMenuItem(
+                    value: entry.$2.value.key,
+                    child: Text(
+                      '${entry.$2.depth == 0 ? '' : '${'  ' * entry.$2.depth}\u21b3 '}'
+                      '${_captureConversationTitle(copy, entry.$2.value, entry.$1)}  ·  '
+                      '${copy.format('conversations.turn_count', {'count': entry.$2.value.turnCount})}',
+                    ),
+                  ),
+              ],
+              onChanged: (value) {
+                if (value != null) onSelected(value);
+              },
+              decoration: InputDecoration(
+                labelText: copy('capture.conversation_select'),
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+final class _CaptureConversationDirectory extends StatelessWidget {
+  const _CaptureConversationDirectory({
+    required this.conversations,
+    required this.collapsed,
+    required this.selectedKey,
+    required this.copy,
+    required this.onSelected,
+    required this.onToggleBranch,
+  });
+
+  final List<CaptureConversationTreeEntry<ConversationSummary>> conversations;
+  final Set<String> collapsed;
+  final String? selectedKey;
+  final AppCopy copy;
+  final ValueChanged<String> onSelected;
+  final ValueChanged<String> onToggleBranch;
+
+  @override
+  Widget build(BuildContext context) {
+    final byKey = <String, CaptureConversationTreeEntry<ConversationSummary>>{
+      for (final entry in conversations) entry.key: entry,
+    };
+    bool visible(CaptureConversationTreeEntry<ConversationSummary> entry) {
+      var parentKey = entry.parentKey;
+      while (parentKey != null) {
+        if (collapsed.contains(parentKey)) return false;
+        parentKey = byKey[parentKey]?.parentKey;
+      }
+      return true;
+    }
+
+    final visibleConversations = conversations.where(visible).toList();
+    return ColoredBox(
+      color: context.viberColors.panel,
+      child: Column(
+        children: [
+          SectionLabel(
+            label: copy('capture.conversations'),
+            count: conversations.length,
+          ),
+          Expanded(
+            child: ListView.builder(
+              itemCount: visibleConversations.length,
+              itemBuilder: (context, index) {
+                final treeEntry = visibleConversations[index];
+                final conversation = treeEntry.value;
+                final selected = conversation.key == selectedKey;
+                final title = _captureConversationTitle(
+                  copy,
+                  conversation,
+                  conversations.indexOf(treeEntry),
+                );
+                final subtitle = [
+                  copy.format('conversations.turn_count', {
+                    'count': conversation.turnCount,
+                  }),
+                  _relativeTime(conversation.latest.occurredAt, copy),
+                ].join('  ·  ');
+                final statusLabel = copy('activity.status.${treeEntry.status}');
+                return Tooltip(
+                  message: _captureConversationTooltip(
+                    copy,
+                    conversation,
+                    title,
+                    subtitle,
+                    statusLabel,
+                  ),
+                  waitDuration: const Duration(milliseconds: 450),
+                  child: Semantics(
+                    selected: selected,
+                    button: true,
+                    label: '$title, $subtitle, $statusLabel',
+                    child: Material(
+                      color: selected
+                          ? context.viberColors.selection
+                          : Colors.transparent,
+                      child: InkWell(
+                        key: Key('capture-conversation-${conversation.key}'),
+                        onTap: () => onSelected(conversation.key),
+                        child: Container(
+                          height: 46,
+                          padding: const EdgeInsets.fromLTRB(7, 5, 8, 5),
+                          decoration: BoxDecoration(
+                            border: Border(
+                              left: BorderSide(
+                                width: 2,
+                                color: selected
+                                    ? context.viberColors.route
+                                    : Colors.transparent,
+                              ),
+                              bottom: BorderSide(
+                                color: context.viberColors.dividerSoft,
+                              ),
+                            ),
+                          ),
+                          child: Row(
+                            children: [
+                              _ConversationTreeLeading(
+                                entry: treeEntry,
+                                conversation: conversation,
+                                collapsed: collapsed.contains(treeEntry.key),
+                                selected: selected,
+                                copy: copy,
+                                onToggle: () => onToggleBranch(treeEntry.key),
+                              ),
+                              const SizedBox(width: 7),
+                              Expanded(
+                                child: Column(
+                                  mainAxisAlignment: MainAxisAlignment.center,
+                                  crossAxisAlignment: CrossAxisAlignment.start,
+                                  children: [
+                                    Text(
+                                      title,
+                                      maxLines: 1,
+                                      overflow: TextOverflow.ellipsis,
+                                      style: Theme.of(
+                                        context,
+                                      ).textTheme.titleSmall,
+                                    ),
+                                    const SizedBox(height: 2),
+                                    Text(
+                                      subtitle,
+                                      maxLines: 1,
+                                      overflow: TextOverflow.ellipsis,
+                                      style: Theme.of(
+                                        context,
+                                      ).textTheme.bodySmall,
+                                    ),
+                                  ],
+                                ),
+                              ),
+                              const SizedBox(width: 5),
+                              _ConversationBranchStatus(
+                                status: treeEntry.status,
+                                label: statusLabel,
+                              ),
+                            ],
+                          ),
+                        ),
+                      ),
+                    ),
+                  ),
+                );
+              },
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+final class _ConversationBranchStatus extends StatelessWidget {
+  const _ConversationBranchStatus({required this.status, required this.label});
+
+  final String status;
+  final String label;
+
+  @override
+  Widget build(BuildContext context) {
+    final color = switch (status) {
+      'pending' => context.viberColors.warning,
+      'failed' => context.viberColors.danger,
+      'canceled' => context.viberColors.textFaint,
+      _ => context.viberColors.verified,
+    };
+    final icon = switch (status) {
+      'pending' => Icons.hourglass_top_rounded,
+      'failed' => Icons.error_outline_rounded,
+      'canceled' => Icons.cancel_outlined,
+      _ => Icons.check_circle_outline_rounded,
+    };
+    return Tooltip(
+      message: label,
+      child: Semantics(
+        label: label,
+        child: Icon(icon, size: 14, color: color),
+      ),
+    );
+  }
+}
+
+final class _ConversationTreeLeading extends StatelessWidget {
+  const _ConversationTreeLeading({
+    required this.entry,
+    required this.conversation,
+    required this.collapsed,
+    required this.selected,
+    required this.copy,
+    required this.onToggle,
+  });
+
+  final CaptureConversationTreeEntry<ConversationSummary> entry;
+  final ConversationSummary conversation;
+  final bool collapsed;
+  final bool selected;
+  final AppCopy copy;
+  final VoidCallback onToggle;
+
+  @override
+  Widget build(BuildContext context) {
+    const indent = 14.0;
+    const iconWidth = 18.0;
+    final depth = math.min(entry.depth, 8);
+    final color = selected
+        ? context.viberColors.route
+        : context.viberColors.textMuted;
+    final icon = entry.hasChildren
+        ? IconButton(
+            padding: EdgeInsets.zero,
+            constraints: const BoxConstraints.tightFor(
+              width: iconWidth,
+              height: 26,
+            ),
+            tooltip: collapsed
+                ? copy('capture.conversation_expand_branch')
+                : copy('capture.conversation_collapse_branch'),
+            onPressed: onToggle,
+            icon: Icon(
+              collapsed ? Icons.chevron_right : Icons.expand_more,
+              size: 16,
+            ),
+          )
+        : Icon(
+            entry.depth > 0
+                ? Icons.subdirectory_arrow_right
+                : _captureConversationIcon(conversation),
+            size: 15,
+            color: color,
+          );
+    return SizedBox(
+      key: Key('capture-conversation-tree-leading-${entry.key}'),
+      width: depth * indent + iconWidth,
+      height: 30,
+      child: Stack(
+        children: [
+          Positioned.fill(
+            child: CustomPaint(
+              painter: _ConversationTreeGuidePainter(
+                depth: depth,
+                ancestorHasNextSibling: entry.ancestorHasNextSibling,
+                isLastSibling: entry.isLastSibling,
+                color: context.viberColors.divider,
+              ),
+            ),
+          ),
+          Positioned(right: 0, top: 2, bottom: 2, child: icon),
+        ],
+      ),
+    );
+  }
+}
+
+final class _ConversationTreeGuidePainter extends CustomPainter {
+  const _ConversationTreeGuidePainter({
+    required this.depth,
+    required this.ancestorHasNextSibling,
+    required this.isLastSibling,
+    required this.color,
+  });
+
+  final int depth;
+  final List<bool> ancestorHasNextSibling;
+  final bool isLastSibling;
+  final Color color;
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    if (depth == 0) return;
+    const indent = 14.0;
+    const branchCenter = 7.0;
+    final paint = Paint()
+      ..color = color
+      ..strokeWidth = 1
+      ..style = PaintingStyle.stroke;
+    final middle = size.height / 2;
+    final ancestorCount = math.min(depth - 1, ancestorHasNextSibling.length);
+    for (var index = 0; index < ancestorCount; index += 1) {
+      if (!ancestorHasNextSibling[index]) continue;
+      final x = index * indent + branchCenter;
+      canvas.drawLine(Offset(x, 0), Offset(x, size.height), paint);
+    }
+    final x = (depth - 1) * indent + branchCenter;
+    canvas.drawLine(Offset(x, 0), Offset(x, middle), paint);
+    if (!isLastSibling) {
+      canvas.drawLine(Offset(x, middle), Offset(x, size.height), paint);
+    }
+    canvas.drawLine(Offset(x, middle), Offset(depth * indent, middle), paint);
+  }
+
+  @override
+  bool shouldRepaint(covariant _ConversationTreeGuidePainter oldDelegate) =>
+      depth != oldDelegate.depth ||
+      isLastSibling != oldDelegate.isLastSibling ||
+      color != oldDelegate.color ||
+      !_sameBoolList(
+        ancestorHasNextSibling,
+        oldDelegate.ancestorHasNextSibling,
+      );
+}
+
+bool _sameBoolList(List<bool> left, List<bool> right) {
+  if (identical(left, right)) return true;
+  if (left.length != right.length) return false;
+  for (var index = 0; index < left.length; index += 1) {
+    if (left[index] != right[index]) return false;
+  }
+  return true;
+}
+
+List<CaptureConversationTreeEntry<ConversationSummary>>
+_captureConversationTree(List<ConversationSummary> conversations) {
+  return buildCaptureConversationTree(
+    conversations.map((conversation) {
+      final identity = conversation.conversation.clientIdentity;
+      return CaptureConversationTreeSeed<ConversationSummary>(
+        value: conversation,
+        key: conversation.key,
+        client: identity?.client,
+        sessionId: identity?.sessionId,
+        actorId: identity?.actorId,
+        parentActorIds: _nativeParentActorIds(identity),
+        firstObservedAt: conversation.firstObservedAt,
+        status: conversation.latest.status,
+      );
+    }),
+  );
+}
+
+List<String> _nativeParentActorIds(AgentClientIdentity? identity) {
+  if (identity == null) return const [];
+  final names = switch (identity.client) {
+    'claude' => const {'claude.parent_agent_id'},
+    'codex' => const {'codex.parent_thread_id', 'codex.forked_from_thread_id'},
+    _ => const <String>{},
+  };
+  return [
+    for (final evidence in identity.protocolIds)
+      if (names.contains(evidence.name)) evidence.value,
+  ];
+}
+
+String _captureConversationTitle(
+  AppCopy copy,
+  ConversationSummary conversation,
+  int index,
+) {
+  final displayName = conversation.conversation.displayName?.trim();
+  final identity = conversation.conversation.clientIdentity;
+  final actorLabel = identity?.actorLabel?.trim();
+  final actorId = identity?.actorId?.trim();
+  return switch (conversation.conversation.kind) {
+    'main' => copy('capture.conversation_main'),
+    'agent' when actorLabel != null && actorLabel.isNotEmpty => actorLabel,
+    'agent'
+        when identity?.actorIsSubagent == true &&
+            actorId != null &&
+            actorId.isNotEmpty =>
+      'subagent · ${_compactNativeIdentity(actorId)}',
+    'agent'
+        when displayName != null &&
+            displayName.isNotEmpty &&
+            displayName != actorId =>
+      displayName,
+    'agent' when actorId != null && actorId.isNotEmpty =>
+      '${identity?.client ?? 'agent'} · ${_compactNativeIdentity(actorId)}',
+    'isolated_subagent' => copy.format('capture.conversation_subagent', {
+      'time': _clockTime(conversation.firstObservedAt),
+    }),
+    'pending_exchange' => copy.format('capture.conversation_pending', {
+      'time': _clockTime(conversation.firstObservedAt),
+    }),
+    'isolated_exchange' => copy.format('capture.conversation_exchange', {
+      'time': _clockTime(conversation.firstObservedAt),
+    }),
+    _ when displayName != null && displayName.isNotEmpty => displayName,
+    _ => copy.format('capture.conversation_numbered', {'number': index + 1}),
+  };
+}
+
+String _captureConversationTooltip(
+  AppCopy copy,
+  ConversationSummary conversation,
+  String title,
+  String subtitle,
+  String statusLabel,
+) {
+  final lines = <String>[title, subtitle, statusLabel];
+  final identity = conversation.conversation.clientIdentity;
+  if (identity == null) return lines.join('\n');
+  lines.add(
+    '${copy('exchange.client.field.session_id')}: ${identity.sessionId}',
+  );
+  if (identity.actorId case final actorId?) {
+    final label = copy(
+      identity.client == 'codex'
+          ? 'exchange.client.field.thread_id'
+          : 'exchange.client.field.agent_id',
+    );
+    lines.add('$label: $actorId');
+  }
+  final parentNames = switch (identity.client) {
+    'claude' => const {'claude.parent_agent_id'},
+    'codex' => const {'codex.parent_thread_id', 'codex.forked_from_thread_id'},
+    _ => const <String>{},
+  };
+  for (final evidence in identity.protocolIds) {
+    if (!parentNames.contains(evidence.name)) continue;
+    lines.add(
+      '${copy('exchange.client.field.parent_agent_id')}: ${evidence.value}',
+    );
+  }
+  return lines.join('\n');
+}
+
+String _compactNativeIdentity(String value) {
+  if (value.length <= 14) return value;
+  return '${value.substring(0, 8)}…${value.substring(value.length - 4)}';
+}
+
+IconData _captureConversationIcon(ConversationSummary conversation) =>
+    switch (conversation.conversation.kind) {
+      'main' => Icons.forum_outlined,
+      'agent' => Icons.account_tree_outlined,
+      'isolated_subagent' => Icons.subdirectory_arrow_right,
+      'pending_exchange' => Icons.pending_outlined,
+      _ => Icons.swap_horiz,
+    };
+
+String _clockTime(DateTime timestamp) {
+  final local = timestamp.toLocal();
+  String two(int value) => value.toString().padLeft(2, '0');
+  return '${two(local.hour)}:${two(local.minute)}:${two(local.second)}';
+}
+
 final class _CaptureContext extends StatelessWidget {
   const _CaptureContext({
     required this.capture,
     required this.assignment,
     required this.environments,
-    required this.workspaceDefault,
+    required this.conversations,
+    required this.hasEarlierConversations,
     required this.copy,
     required this.showBack,
     required this.confirmRevoke,
     required this.mutating,
-    required this.workspaceDefaultLoading,
-    required this.workspaceDefaultMutating,
     required this.onBack,
     required this.onEnvironment,
-    required this.onWorkspaceDefault,
     required this.onConfirmRevoke,
     required this.onRevoke,
     required this.onRotate,
+    required this.routeDetail,
+    required this.masterVisible,
+    required this.onToggleMaster,
   });
 
   final CaptureRecord capture;
   final CaptureAssignment? assignment;
   final List<EnvironmentRecord> environments;
-  final WorkspaceEnvironmentDefault? workspaceDefault;
+  final List<ConversationSummary> conversations;
+  final bool hasEarlierConversations;
   final AppCopy copy;
   final bool showBack;
   final bool confirmRevoke;
   final bool mutating;
-  final bool workspaceDefaultLoading;
-  final bool workspaceDefaultMutating;
   final VoidCallback onBack;
   final ValueChanged<String> onEnvironment;
-  final ValueChanged<String?> onWorkspaceDefault;
   final ValueChanged<bool> onConfirmRevoke;
   final VoidCallback onRevoke;
   final VoidCallback onRotate;
+  final String routeDetail;
+  final bool masterVisible;
+  final VoidCallback? onToggleMaster;
 
   @override
   Widget build(BuildContext context) {
     final source = capture.isManual
-        ? copy('capture.manual')
-        : copy('capture.managed');
+        ? copy('capture.source.manual.short')
+        : copy('capture.source.managed.short');
     final detail = capture.isManual
         ? copy('capture.source.manual')
         : copy('capture.source.managed');
+    final aggregate = _captureAggregate(
+      copy,
+      conversations,
+      exchangeScoped: capture.isManual,
+      hasEarlier: hasEarlierConversations,
+    );
     return Container(
-      color: ViberColors.panel,
-      padding: const EdgeInsets.fromLTRB(14, 10, 14, 10),
+      color: context.viberColors.panel,
+      padding: const EdgeInsets.fromLTRB(14, 8, 14, 7),
       child: LayoutBuilder(
         builder: (context, constraints) {
           final compact = constraints.maxWidth < 520;
           final canManage =
               capture.isManual && capture.running && !confirmRevoke;
           final revokeButton = OutlinedButton.icon(
+            key: const Key('manual-capture-revoke'),
             onPressed: mutating ? null : () => onConfirmRevoke(true),
             icon: const Icon(Icons.link_off, size: 14),
             label: Text(copy('capture.revoke')),
             style: OutlinedButton.styleFrom(
-              foregroundColor: ViberColors.warning,
+              foregroundColor: context.viberColors.warning,
             ),
           );
           final manualActions = Wrap(
@@ -610,6 +1273,24 @@ final class _CaptureContext extends StatelessWidget {
             children: [
               Row(
                 children: [
+                  if (onToggleMaster case final toggle?) ...[
+                    IconButton(
+                      key: const Key('capture-directory-toggle'),
+                      onPressed: toggle,
+                      tooltip: copy(
+                        masterVisible
+                            ? 'common.hide_directory'
+                            : 'common.show_directory',
+                      ),
+                      icon: Icon(Icons.view_sidebar_outlined, size: 15),
+                      constraints: const BoxConstraints.tightFor(
+                        width: 24,
+                        height: 24,
+                      ),
+                      padding: EdgeInsets.zero,
+                    ),
+                    const SizedBox(width: 4),
+                  ],
                   if (showBack) ...[
                     IconButton(
                       onPressed: onBack,
@@ -623,6 +1304,8 @@ final class _CaptureContext extends StatelessWidget {
                     ),
                     const SizedBox(width: 4),
                   ],
+                  _CaptureGlyph(capture: capture, size: 30, glyphSize: 18),
+                  const SizedBox(width: 8),
                   Expanded(
                     child: Column(
                       crossAxisAlignment: CrossAxisAlignment.start,
@@ -639,21 +1322,13 @@ final class _CaptureContext extends StatelessWidget {
                                 ).textTheme.headlineSmall,
                               ),
                             ),
-                            const SizedBox(width: 8),
-                            StatusPill(
-                              label: capture.state,
-                              color: capture.running
-                                  ? ViberColors.verified
-                                  : ViberColors.textFaint,
-                            ),
                           ],
                         ),
                         const SizedBox(height: 2),
-                        Text(
-                          '${capture.managedRun?.workspaceLabel ?? capture.id}  ·  $source',
-                          maxLines: 1,
-                          overflow: TextOverflow.ellipsis,
-                          style: Theme.of(context).textTheme.bodySmall,
+                        _CaptureSummaryLine(
+                          metadata: _captureMetadata(copy, capture, source),
+                          aggregate: aggregate,
+                          detail: detail,
                         ),
                       ],
                     ),
@@ -668,20 +1343,15 @@ final class _CaptureContext extends StatelessWidget {
                 const SizedBox(height: 7),
                 Align(alignment: Alignment.centerLeft, child: manualActions),
               ],
-              const SizedBox(height: 7),
-              Text(detail, style: Theme.of(context).textTheme.bodySmall),
-              const SizedBox(height: 9),
+              const SizedBox(height: 6),
               _EnvironmentScopeControls(
                 capture: capture,
                 assignment: assignment,
                 environments: environments,
-                workspaceDefault: workspaceDefault,
                 copy: copy,
                 captureMutating: mutating,
-                workspaceLoading: workspaceDefaultLoading,
-                workspaceMutating: workspaceDefaultMutating,
                 onCaptureEnvironment: onEnvironment,
-                onWorkspaceDefault: onWorkspaceDefault,
+                routeDetail: routeDetail,
               ),
               if (confirmRevoke) ...[
                 const SizedBox(height: 9),
@@ -689,11 +1359,13 @@ final class _CaptureContext extends StatelessWidget {
                   width: double.infinity,
                   padding: const EdgeInsets.all(9),
                   decoration: BoxDecoration(
-                    color: ViberColors.warning.withValues(alpha: 0.08),
+                    color: context.viberColors.warning.withValues(alpha: 0.08),
                     border: Border.all(
-                      color: ViberColors.warning.withValues(alpha: 0.32),
+                      color: context.viberColors.warning.withValues(
+                        alpha: 0.32,
+                      ),
                     ),
-                    borderRadius: BorderRadius.circular(5),
+                    borderRadius: ViberMetrics.surfaceRadius,
                   ),
                   child: compact
                       ? Column(
@@ -701,10 +1373,10 @@ final class _CaptureContext extends StatelessWidget {
                           children: [
                             Row(
                               children: [
-                                const Icon(
+                                Icon(
                                   Icons.info_outline,
                                   size: 16,
-                                  color: ViberColors.warning,
+                                  color: context.viberColors.warning,
                                 ),
                                 const SizedBox(width: 7),
                                 Expanded(
@@ -727,6 +1399,9 @@ final class _CaptureContext extends StatelessWidget {
                               mainAxisAlignment: MainAxisAlignment.end,
                               children: [
                                 TextButton(
+                                  key: const Key(
+                                    'manual-capture-revoke-cancel',
+                                  ),
                                   onPressed: mutating
                                       ? null
                                       : () => onConfirmRevoke(false),
@@ -734,9 +1409,12 @@ final class _CaptureContext extends StatelessWidget {
                                 ),
                                 const SizedBox(width: 4),
                                 FilledButton(
+                                  key: const Key(
+                                    'manual-capture-revoke-confirm',
+                                  ),
                                   onPressed: mutating ? null : onRevoke,
                                   style: FilledButton.styleFrom(
-                                    backgroundColor: ViberColors.danger,
+                                    backgroundColor: context.viberColors.danger,
                                   ),
                                   child: Text(copy('capture.revoke.action')),
                                 ),
@@ -746,10 +1424,10 @@ final class _CaptureContext extends StatelessWidget {
                         )
                       : Row(
                           children: [
-                            const Icon(
+                            Icon(
                               Icons.info_outline,
                               size: 16,
-                              color: ViberColors.warning,
+                              color: context.viberColors.warning,
                             ),
                             const SizedBox(width: 8),
                             Expanded(
@@ -772,6 +1450,7 @@ final class _CaptureContext extends StatelessWidget {
                               ),
                             ),
                             TextButton(
+                              key: const Key('manual-capture-revoke-cancel'),
                               onPressed: mutating
                                   ? null
                                   : () => onConfirmRevoke(false),
@@ -779,9 +1458,10 @@ final class _CaptureContext extends StatelessWidget {
                             ),
                             const SizedBox(width: 4),
                             FilledButton(
+                              key: const Key('manual-capture-revoke-confirm'),
                               onPressed: mutating ? null : onRevoke,
                               style: FilledButton.styleFrom(
-                                backgroundColor: ViberColors.danger,
+                                backgroundColor: context.viberColors.danger,
                               ),
                               child: Text(copy('capture.revoke.action')),
                             ),
@@ -797,30 +1477,75 @@ final class _CaptureContext extends StatelessWidget {
   }
 }
 
+final class _CaptureSummaryLine extends StatelessWidget {
+  const _CaptureSummaryLine({
+    required this.metadata,
+    required this.aggregate,
+    required this.detail,
+  });
+
+  final String metadata;
+  final String aggregate;
+  final String detail;
+
+  @override
+  Widget build(BuildContext context) {
+    return Tooltip(
+      message: '$aggregate. $metadata. $detail',
+      child: LayoutBuilder(
+        builder: (context, constraints) {
+          final stats = Text(
+            aggregate,
+            key: const Key('capture-aggregate-summary'),
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+            style: Theme.of(
+              context,
+            ).textTheme.labelMedium?.copyWith(color: context.viberColors.text),
+          );
+          final contextText = Text(
+            metadata,
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+            style: Theme.of(context).textTheme.bodySmall,
+          );
+          if (constraints.maxWidth < 520) {
+            return Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [stats, const SizedBox(height: 1), contextText],
+            );
+          }
+          return Row(
+            children: [
+              Flexible(flex: 3, child: stats),
+              const SizedBox(width: 10),
+              Expanded(flex: 2, child: contextText),
+            ],
+          );
+        },
+      ),
+    );
+  }
+}
+
 final class _EnvironmentScopeControls extends StatelessWidget {
   const _EnvironmentScopeControls({
     required this.capture,
     required this.assignment,
     required this.environments,
-    required this.workspaceDefault,
     required this.copy,
     required this.captureMutating,
-    required this.workspaceLoading,
-    required this.workspaceMutating,
     required this.onCaptureEnvironment,
-    required this.onWorkspaceDefault,
+    required this.routeDetail,
   });
 
   final CaptureRecord capture;
   final CaptureAssignment? assignment;
   final List<EnvironmentRecord> environments;
-  final WorkspaceEnvironmentDefault? workspaceDefault;
   final AppCopy copy;
   final bool captureMutating;
-  final bool workspaceLoading;
-  final bool workspaceMutating;
   final ValueChanged<String> onCaptureEnvironment;
-  final ValueChanged<String?> onWorkspaceDefault;
+  final String routeDetail;
 
   @override
   Widget build(BuildContext context) {
@@ -831,48 +1556,29 @@ final class _EnvironmentScopeControls extends StatelessWidget {
               environment.state == 'active' || environment.id == assigned,
         )
         .toList(growable: false);
-    final managed = capture.managedRun;
-    final hasWorkspace = managed?.hasWorkspaceIdentity == true;
-    final futureChoices = environments
-        .where(
-          (environment) =>
-              !environment.systemOwned &&
-              (environment.state == 'active' ||
-                  environment.id == workspaceDefault?.environmentId),
-        )
-        .map((environment) => (id: environment.id, name: environment.name))
-        .toList(growable: true);
-    if (workspaceDefault != null &&
-        !futureChoices.any(
-          (environment) => environment.id == workspaceDefault!.environmentId,
-        )) {
-      futureChoices.add((
-        id: workspaceDefault!.environmentId,
-        name: workspaceDefault!.environmentName,
-      ));
-    }
-
-    return Container(
-      decoration: const BoxDecoration(
-        border: Border.symmetric(
-          horizontal: BorderSide(color: ViberColors.dividerSoft),
-        ),
+    final assignedName = captureChoices
+        .where((environment) => environment.id == assigned)
+        .map((environment) => environment.name)
+        .firstOrNull;
+    return _EnvironmentScopeRow(
+      key: const Key('capture-environment-scope'),
+      icon: Icons.adjust,
+      tone: context.viberColors.route,
+      title: copy('capture.environment.current'),
+      visibleDetail: routeDetail.isEmpty ? null : routeDetail,
+      detail: copy(
+        capture.running
+            ? 'capture.environment.help'
+            : 'capture.environment.history',
       ),
-      child: Column(
-        children: [
-          _EnvironmentScopeRow(
-            key: const Key('capture-environment-scope'),
-            icon: Icons.adjust,
-            tone: ViberColors.route,
-            title: copy('capture.environment.current'),
-            detail: copy('capture.environment.help'),
-            control: DropdownButtonFormField<String>(
+      control: capture.running
+          ? CompactSelectField<String>(
               key: ValueKey(
                 'capture-environment:${capture.key}:${assignment?.revision ?? 0}',
               ),
               initialValue: assigned,
               isExpanded: true,
-              decoration: _scopeDecoration(),
+              decoration: const InputDecoration(),
               items: [
                 for (final environment in captureChoices)
                   DropdownMenuItem(
@@ -888,81 +1594,40 @@ final class _EnvironmentScopeControls extends StatelessWidget {
                   ? null
                   : (value) =>
                         value == null ? null : onCaptureEnvironment(value),
+            )
+          : _ReadOnlyEnvironmentValue(
+              key: const Key('capture-environment-readonly'),
+              name: assignedName ?? assigned ?? '—',
             ),
-          ),
-          if (!capture.isManual) ...[
-            const Divider(height: 1),
-            if (hasWorkspace)
-              _EnvironmentScopeRow(
-                key: const Key('workspace-default-scope'),
-                icon: Icons.schedule_outlined,
-                tone: ViberColors.warning,
-                title: copy('capture.workspace_default'),
-                detail:
-                    '${copy.format('capture.workspace_default.scope', {'workspace': managed?.workspaceLabel ?? managed?.cwd ?? '—'})}\n${copy('capture.workspace_default.help')}',
-                control: DropdownButtonFormField<String>(
-                  key: ValueKey(
-                    'workspace-default:${capture.key}:${workspaceDefault?.revision ?? 0}',
-                  ),
-                  initialValue: workspaceDefault?.environmentId ?? '',
-                  isExpanded: true,
-                  decoration: _scopeDecoration(
-                    loading: workspaceLoading || workspaceMutating,
-                  ),
-                  items: [
-                    DropdownMenuItem(
-                      value: '',
-                      child: Text(copy('capture.workspace_default.none')),
-                    ),
-                    for (final environment in futureChoices)
-                      DropdownMenuItem(
-                        value: environment.id,
-                        child: Text(
-                          environment.name,
-                          maxLines: 1,
-                          overflow: TextOverflow.ellipsis,
-                        ),
-                      ),
-                  ],
-                  onChanged: workspaceLoading || workspaceMutating
-                      ? null
-                      : (value) => onWorkspaceDefault(
-                          value == null || value.isEmpty ? null : value,
-                        ),
-                ),
-              )
-            else
-              _EnvironmentScopeRow(
-                key: const Key('workspace-default-unavailable'),
-                icon: Icons.schedule_outlined,
-                tone: ViberColors.textFaint,
-                title: copy('capture.workspace_default'),
-                detail: copy('capture.workspace_default.unavailable'),
-                control: const SizedBox.shrink(),
-              ),
-          ],
-        ],
+    );
+  }
+}
+
+final class _ReadOnlyEnvironmentValue extends StatelessWidget {
+  const _ReadOnlyEnvironmentValue({required this.name, super.key});
+
+  final String name;
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      height: ViberMetrics.controlHeight,
+      alignment: Alignment.centerLeft,
+      padding: const EdgeInsets.symmetric(horizontal: 8),
+      decoration: BoxDecoration(
+        color: context.viberColors.canvas,
+        borderRadius: ViberMetrics.controlRadius,
+      ),
+      child: Text(
+        name,
+        maxLines: 1,
+        overflow: TextOverflow.ellipsis,
+        style: Theme.of(
+          context,
+        ).textTheme.titleSmall?.copyWith(color: context.viberColors.textMuted),
       ),
     );
   }
-
-  static InputDecoration _scopeDecoration({bool loading = false}) =>
-      InputDecoration(
-        contentPadding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
-        suffixIcon: loading
-            ? const Padding(
-                padding: EdgeInsets.all(9),
-                child: SizedBox.square(
-                  dimension: 13,
-                  child: CircularProgressIndicator(strokeWidth: 1.5),
-                ),
-              )
-            : null,
-        suffixIconConstraints: const BoxConstraints.tightFor(
-          width: 32,
-          height: 32,
-        ),
-      );
 }
 
 final class _EnvironmentScopeRow extends StatelessWidget {
@@ -972,6 +1637,7 @@ final class _EnvironmentScopeRow extends StatelessWidget {
     required this.title,
     required this.detail,
     required this.control,
+    this.visibleDetail,
     super.key,
   });
 
@@ -980,58 +1646,84 @@ final class _EnvironmentScopeRow extends StatelessWidget {
   final String title;
   final String detail;
   final Widget control;
+  final String? visibleDetail;
 
   @override
   Widget build(BuildContext context) {
-    return Padding(
-      padding: const EdgeInsets.symmetric(vertical: 7),
-      child: LayoutBuilder(
-        builder: (context, constraints) {
-          final compact = constraints.maxWidth < 650;
-          final label = Row(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Container(
-                width: 2,
-                height: 31,
-                margin: const EdgeInsets.only(top: 1, right: 8),
-                color: tone,
-              ),
-              Icon(icon, size: 15, color: tone),
-              const SizedBox(width: 7),
-              Expanded(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text(title, style: Theme.of(context).textTheme.titleSmall),
-                    const SizedBox(height: 2),
-                    Text(detail, style: Theme.of(context).textTheme.bodySmall),
-                  ],
-                ),
-              ),
-            ],
-          );
-          if (compact) {
-            return Column(
-              crossAxisAlignment: CrossAxisAlignment.stretch,
-              children: [
-                label,
-                if (control is! SizedBox) ...[
-                  const SizedBox(height: 6),
-                  control,
+    return Semantics(
+      label: '$title. $detail',
+      container: true,
+      child: Tooltip(
+        message: detail,
+        child: Padding(
+          padding: const EdgeInsets.symmetric(vertical: 3),
+          child: LayoutBuilder(
+            builder: (context, constraints) {
+              final compact = constraints.maxWidth < 280;
+              final label = Row(
+                children: [
+                  Container(
+                    width: 22,
+                    height: 22,
+                    alignment: Alignment.center,
+                    decoration: BoxDecoration(
+                      color: tone.withValues(alpha: 0.08),
+                      borderRadius: ViberMetrics.controlRadius,
+                    ),
+                    child: Icon(icon, size: 13, color: tone),
+                  ),
+                  const SizedBox(width: 6),
+                  Expanded(
+                    child: Column(
+                      mainAxisSize: MainAxisSize.min,
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          title,
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: Theme.of(context).textTheme.titleSmall,
+                        ),
+                        if (visibleDetail case final value?)
+                          Text(
+                            value,
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                            style: Theme.of(context).textTheme.bodySmall,
+                          ),
+                      ],
+                    ),
+                  ),
+                  const SizedBox(width: 3),
+                  Icon(
+                    Icons.info_outline,
+                    size: 12,
+                    color: context.viberColors.textFaint,
+                  ),
                 ],
-              ],
-            );
-          }
-          return Row(
-            crossAxisAlignment: CrossAxisAlignment.center,
-            children: [
-              Expanded(child: label),
-              const SizedBox(width: 14),
-              SizedBox(width: 220, child: control),
-            ],
-          );
-        },
+              );
+              if (compact) {
+                return Column(
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  children: [
+                    label,
+                    if (control is! SizedBox) ...[
+                      const SizedBox(height: 4),
+                      control,
+                    ],
+                  ],
+                );
+              }
+              return Row(
+                children: [
+                  Expanded(child: label),
+                  const SizedBox(width: 8),
+                  SizedBox(width: 170, child: control),
+                ],
+              );
+            },
+          ),
+        ),
       ),
     );
   }
@@ -1131,13 +1823,14 @@ final class _ManualCaptureCreateDialogState
                   decoration: InputDecoration(
                     labelText: copy('capture.manual.name'),
                     hintText: copy('capture.manual.name.placeholder'),
+                    counterText: '',
                   ),
                   validator: (value) => value == null || value.trim().isEmpty
                       ? copy('routes.validation.required')
                       : null,
                 ),
                 const SizedBox(height: 7),
-                DropdownButtonFormField<String>(
+                CompactSelectField<String>(
                   key: const Key('manual-capture-environment'),
                   initialValue: _environmentId,
                   decoration: InputDecoration(
@@ -1163,7 +1856,7 @@ final class _ManualCaptureCreateDialogState
                         },
                 ),
                 const SizedBox(height: 9),
-                DropdownButtonFormField<String>(
+                CompactSelectField<String>(
                   initialValue: _clientClass,
                   decoration: InputDecoration(
                     labelText: copy('capture.manual.client_class'),
@@ -1180,7 +1873,7 @@ final class _ManualCaptureCreateDialogState
                       : (value) => setState(() => _clientClass = value!),
                 ),
                 const SizedBox(height: 9),
-                DropdownButtonFormField<String>(
+                CompactSelectField<String>(
                   initialValue: _lifetime,
                   decoration: InputDecoration(
                     labelText: copy('capture.manual.lifetime'),
@@ -1198,7 +1891,7 @@ final class _ManualCaptureCreateDialogState
                 ),
                 if (_lifetime == 'temporary' && _context != null) ...[
                   const SizedBox(height: 9),
-                  DropdownButtonFormField<int>(
+                  CompactSelectField<int>(
                     key: const Key('manual-capture-duration'),
                     initialValue: _temporarySeconds,
                     decoration: InputDecoration(
@@ -1417,14 +2110,19 @@ final class _ManualContextReview extends StatelessWidget {
       width: double.infinity,
       padding: const EdgeInsets.all(9),
       decoration: BoxDecoration(
-        color: (semantic ? ViberColors.warning : ViberColors.route).withValues(
-          alpha: 0.07,
-        ),
+        color:
+            (semantic
+                    ? buildContext.viberColors.warning
+                    : buildContext.viberColors.route)
+                .withValues(alpha: 0.07),
         border: Border.all(
-          color: (semantic ? ViberColors.warning : ViberColors.route)
-              .withValues(alpha: 0.28),
+          color:
+              (semantic
+                      ? buildContext.viberColors.warning
+                      : buildContext.viberColors.route)
+                  .withValues(alpha: 0.28),
         ),
-        borderRadius: BorderRadius.circular(4),
+        borderRadius: ViberMetrics.surfaceRadius,
       ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
@@ -1530,9 +2228,9 @@ final class _ManualGrantDeliveryState extends State<_ManualGrantDelivery> {
                 copy.format('capture.manual.delivery.copied', {
                   'field': copy('capture.manual.delivery.$copied'),
                 }),
-                style: Theme.of(
-                  context,
-                ).textTheme.bodySmall?.copyWith(color: ViberColors.verified),
+                style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                  color: context.viberColors.verified,
+                ),
               ),
             ],
           ],
@@ -1564,8 +2262,10 @@ final class _ManualValueRow extends StatelessWidget {
   Widget build(BuildContext context) {
     return Container(
       padding: const EdgeInsets.symmetric(vertical: 6),
-      decoration: const BoxDecoration(
-        border: Border(bottom: BorderSide(color: ViberColors.dividerSoft)),
+      decoration: BoxDecoration(
+        border: Border(
+          bottom: BorderSide(color: context.viberColors.dividerSoft),
+        ),
       ),
       child: Row(
         children: [
@@ -1577,7 +2277,7 @@ final class _ManualValueRow extends StatelessWidget {
             child: SelectableText(
               value,
               maxLines: 2,
-              style: monoStyle.copyWith(color: ViberColors.text),
+              style: monoStyle.copyWith(color: context.viberColors.text),
             ),
           ),
           IconButton(
@@ -1602,12 +2302,70 @@ String _durationLabel(int seconds, AppCopy copy) {
   });
 }
 
-String _relativeTime(DateTime timestamp) {
+String _captureMetadata(AppCopy copy, CaptureRecord capture, String source) {
+  final managed = capture.managedRun;
+  final parts = <String>[
+    if (_usefulLabel(managed?.workspaceLabel)) managed!.workspaceLabel!,
+    if (_usefulLabel(managed?.localUserLabel)) managed!.localUserLabel!,
+    if (capture.isManual && capture.manualCapture != null)
+      copy('capture.manual.client_class.${capture.manualCapture!.clientClass}'),
+    source,
+    _localizedCopy(copy, 'capture.state', capture.state),
+  ];
+  return parts.join('  ·  ');
+}
+
+String _captureAggregate(
+  AppCopy copy,
+  List<ConversationSummary> conversations, {
+  required bool exchangeScoped,
+  required bool hasEarlier,
+}) {
+  final turns = conversations.fold<int>(
+    0,
+    (total, conversation) => total + conversation.turnCount,
+  );
+  final count = '$turns${hasEarlier ? '+' : ''}';
+  final values = <String>[
+    copy.format(
+      exchangeScoped ? 'conversation.exchanges' : 'conversation.turns',
+      {'count': count},
+    ),
+  ];
+  if (!exchangeScoped && conversations.length > 1) {
+    values.add(
+      copy.format('capture.conversation_count', {
+        'count': '${conversations.length}${hasEarlier ? '+' : ''}',
+      }),
+    );
+  }
+  return values.join('  ·  ');
+}
+
+bool _usefulLabel(String? value) {
+  final normalized = value?.trim();
+  return normalized != null &&
+      normalized.isNotEmpty &&
+      normalized.toLowerCase() != 'null';
+}
+
+String _relativeTime(DateTime timestamp, AppCopy copy) {
   final now = DateTime.now().toUtc();
   final delta = now.difference(timestamp);
-  if (delta.isNegative) return 'now';
-  if (delta.inMinutes < 1) return 'now';
-  if (delta.inHours < 1) return '${delta.inMinutes}m';
-  if (delta.inDays < 1) return '${delta.inHours}h';
-  return '${delta.inDays}d';
+  if (delta.isNegative || delta.inMinutes < 1) {
+    return copy('common.time.now');
+  }
+  if (delta.inHours < 1) {
+    return copy.format('common.time.minutes', {'count': delta.inMinutes});
+  }
+  if (delta.inDays < 1) {
+    return copy.format('common.time.hours', {'count': delta.inHours});
+  }
+  return copy.format('common.time.days', {'count': delta.inDays});
+}
+
+String _localizedCopy(AppCopy copy, String family, String value) {
+  final key = '$family.$value';
+  final localized = copy(key);
+  return localized == key ? value : localized;
 }

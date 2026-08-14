@@ -35,6 +35,13 @@ final class PreviewTerminalCommandService implements TerminalCommandService {
           sourcePath: current.sourcePath,
           targetPath: current.targetPath,
         );
+      case TerminalCommandOperation.repair:
+        if (!current.canRepair) throw _failed();
+        _status = TerminalCommandStatus(
+          state: TerminalCommandState.current,
+          sourcePath: current.sourcePath,
+          targetPath: current.targetPath,
+        );
       case TerminalCommandOperation.remove:
         if (!current.canRemove) throw _failed();
         _status = TerminalCommandStatus(

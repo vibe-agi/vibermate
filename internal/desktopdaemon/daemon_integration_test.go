@@ -116,7 +116,7 @@ func TestProductionOptionsUsesExplicitSecretStoreFactory(t *testing.T) {
 		context.Background(),
 		filepath.Join(root, "cache"),
 		filepath.Join(root, "data"),
-		"tauri://localhost",
+		"vibermate://desktop",
 		io.Discard,
 		factory,
 	)
@@ -131,7 +131,7 @@ func TestProductionOptionsUsesExplicitSecretStoreFactory(t *testing.T) {
 		)
 	}
 	if got := options.Host.AllowedOrigins; len(got) != 1 ||
-		got[0] != "tauri://localhost" {
+		got[0] != "vibermate://desktop" {
 		t.Fatalf("allowed origins = %v", got)
 	}
 
@@ -139,7 +139,7 @@ func TestProductionOptionsUsesExplicitSecretStoreFactory(t *testing.T) {
 		context.Background(),
 		filepath.Join(root, "other-cache"),
 		filepath.Join(root, "other-data"),
-		"tauri://localhost",
+		"vibermate://desktop",
 		io.Discard,
 		&secretFactoryFixture{},
 	); err == nil {
@@ -157,23 +157,21 @@ func TestProductionOptionsUsesExplicitSecretStoreFactory(t *testing.T) {
 	}
 }
 
-func TestProductionOptionsAcceptsFlutterDesktopOrigin(t *testing.T) {
+func TestProductionOptionsRejectsRetiredDesktopOrigins(t *testing.T) {
 	t.Parallel()
 
 	root := t.TempDir()
-	options, err := desktopdaemon.ProductionOptions(
-		context.Background(),
-		filepath.Join(root, "cache"),
-		filepath.Join(root, "data"),
-		"vibermate://desktop",
-		io.Discard,
-		&secretFactoryFixture{store: unavailableSecrets{}},
-	)
-	if err != nil {
-		t.Fatalf("ProductionOptions() error = %v", err)
-	}
-	if got := options.Host.AllowedOrigins; len(got) != 1 || got[0] != "vibermate://desktop" {
-		t.Fatalf("allowed origins = %v", got)
+	for _, origin := range []string{"tauri://localhost", "http://127.0.0.1:1420"} {
+		if _, err := desktopdaemon.ProductionOptions(
+			context.Background(),
+			filepath.Join(root, "cache"),
+			filepath.Join(root, "data"),
+			origin,
+			io.Discard,
+			&secretFactoryFixture{store: unavailableSecrets{}},
+		); err == nil {
+			t.Fatalf("retired Desktop origin %q was accepted", origin)
+		}
 	}
 }
 

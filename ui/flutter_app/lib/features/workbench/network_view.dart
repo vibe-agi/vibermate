@@ -33,41 +33,16 @@ final class _NetworkViewState extends State<NetworkView> {
         PageHeading(
           title: copy('network.title'),
           subtitle: copy('network.subtitle'),
-          trailing: Row(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              if (data != null && data.approvals.isNotEmpty) ...[
-                StatusPill(
-                  label: copy.format('network.pending', {
-                    'count': data.approvals.length,
-                  }),
-                  color: ViberColors.warning,
-                  icon: Icons.hourglass_top,
-                ),
-                const SizedBox(width: 6),
-              ],
-              IconButton(
-                key: const Key('network-refresh'),
-                onPressed: controller.networkLoading
-                    ? null
-                    : () => unawaited(controller.refreshNetwork()),
-                tooltip: copy('network.refresh'),
-                icon: controller.networkLoading && data != null
-                    ? const SizedBox.square(
-                        dimension: 14,
-                        child: CircularProgressIndicator(strokeWidth: 1.5),
-                      )
-                    : const Icon(Icons.refresh, size: 16),
-              ),
-            ],
-          ),
         ),
         const Divider(height: 1),
         _NetworkTabs(
           selected: _panel,
           data: data,
           copy: copy,
-          onSelected: (panel) => setState(() => _panel = panel),
+          onSelected: (panel) {
+            controller.clearNetworkNotice();
+            setState(() => _panel = panel);
+          },
         ),
         const Divider(height: 1),
         if (controller.networkError case final message?)
@@ -76,6 +51,7 @@ final class _NetworkViewState extends State<NetworkView> {
           InlineNotice(
             message: copy('notice.$notice'),
             onDismiss: controller.clearNetworkNotice,
+            dismissLabel: copy('common.dismiss'),
           ),
         Expanded(child: _body(data)),
       ],
@@ -158,9 +134,9 @@ final class _NetworkTabs extends StatelessWidget {
       _NetworkPanel.rules: data?.rules.rules.length,
     };
     return ColoredBox(
-      color: ViberColors.panel,
+      color: context.viberColors.panel,
       child: SizedBox(
-        height: 37,
+        height: 32,
         child: ListView(
           scrollDirection: Axis.horizontal,
           children: [
@@ -201,33 +177,48 @@ final class _NetworkTabButton extends StatelessWidget {
       button: true,
       label: count == null ? label : '$label, $count',
       child: Material(
-        color: selected ? ViberColors.selection : Colors.transparent,
+        color: selected ? context.viberColors.selection : Colors.transparent,
         child: InkWell(
           key: Key('network-tab-${panel.name}'),
           onTap: onPressed,
           child: Container(
-            constraints: const BoxConstraints(minWidth: 98),
-            padding: const EdgeInsets.symmetric(horizontal: 12),
+            constraints: const BoxConstraints(minWidth: 82),
+            padding: const EdgeInsets.symmetric(horizontal: 10),
             decoration: BoxDecoration(
               border: Border(
                 bottom: BorderSide(
-                  color: selected ? ViberColors.route : Colors.transparent,
+                  color: selected
+                      ? context.viberColors.route
+                      : Colors.transparent,
                   width: 2,
                 ),
               ),
             ),
             child: Row(
               mainAxisAlignment: MainAxisAlignment.center,
+              crossAxisAlignment: CrossAxisAlignment.center,
               children: [
-                Text(label, style: Theme.of(context).textTheme.labelLarge),
+                Text(
+                  label,
+                  style: Theme.of(
+                    context,
+                  ).textTheme.labelMedium?.copyWith(height: 1),
+                ),
                 if (count case final value?) ...[
                   const SizedBox(width: 6),
                   Text(
                     '$value',
+                    strutStyle: const StrutStyle(
+                      fontSize: ViberType.utility,
+                      height: 1.2,
+                      forceStrutHeight: true,
+                    ),
                     style: monoStyle.copyWith(
                       color: panel == _NetworkPanel.approvals && value > 0
-                          ? ViberColors.warning
-                          : ViberColors.textFaint,
+                          ? context.viberColors.warning
+                          : context.viberColors.textFaint,
+                      height: 1,
+                      fontFeatures: const [FontFeature.tabularFigures()],
                     ),
                   ),
                 ],
@@ -303,6 +294,7 @@ final class _ApprovalRow extends StatefulWidget {
 
 final class _ApprovalRowState extends State<_ApprovalRow> {
   ApprovalChoice? _pendingChoice;
+  bool _technicalExpanded = false;
 
   @override
   Widget build(BuildContext context) {
@@ -313,7 +305,7 @@ final class _ApprovalRowState extends State<_ApprovalRow> {
         : '${approval.target!.host}:${approval.target!.port}';
     final pending = _pendingChoice;
     return ColoredBox(
-      color: ViberColors.canvas,
+      color: context.viberColors.canvas,
       child: Padding(
         padding: const EdgeInsets.fromLTRB(14, 11, 14, 10),
         child: Column(
@@ -325,10 +317,7 @@ final class _ApprovalRowState extends State<_ApprovalRow> {
                 Container(
                   width: 3,
                   height: 37,
-                  decoration: BoxDecoration(
-                    color: ViberColors.warning,
-                    borderRadius: BorderRadius.circular(2),
-                  ),
+                  color: context.viberColors.warning,
                 ),
                 const SizedBox(width: 9),
                 Expanded(
@@ -349,8 +338,12 @@ final class _ApprovalRowState extends State<_ApprovalRow> {
                 ),
                 const SizedBox(width: 8),
                 StatusPill(
-                  label: _humanize(approval.kind),
-                  color: ViberColors.warning,
+                  label: _localizedWire(
+                    copy,
+                    'network.approval.kind',
+                    approval.kind,
+                  ),
+                  color: context.viberColors.warning,
                 ),
               ],
             ),
@@ -418,27 +411,21 @@ final class _ApprovalRowState extends State<_ApprovalRow> {
                 runSpacing: 7,
                 children: [
                   for (final choice in approval.choices)
-                    choice.decision == 'deny'
-                        ? OutlinedButton.icon(
-                            key: Key(
-                              'approval-${approval.id}-${choice.decision}-${choice.scope}',
-                            ),
-                            onPressed: widget.controller.networkMutating
-                                ? null
-                                : () => setState(() => _pendingChoice = choice),
-                            icon: const Icon(Icons.block, size: 14),
-                            label: Text(copy(choice.labelKey)),
-                          )
-                        : FilledButton.icon(
-                            key: Key(
-                              'approval-${approval.id}-${choice.decision}-${choice.scope}',
-                            ),
-                            onPressed: widget.controller.networkMutating
-                                ? null
-                                : () => setState(() => _pendingChoice = choice),
-                            icon: const Icon(Icons.play_arrow, size: 14),
-                            label: Text(copy(choice.labelKey)),
-                          ),
+                    OutlinedButton.icon(
+                      key: Key(
+                        'approval-${approval.id}-${choice.decision}-${choice.scope}',
+                      ),
+                      onPressed: widget.controller.networkMutating
+                          ? null
+                          : () => setState(() => _pendingChoice = choice),
+                      icon: Icon(
+                        choice.decision == 'deny'
+                            ? Icons.block
+                            : Icons.play_arrow,
+                        size: 14,
+                      ),
+                      label: Text(copy(choice.labelKey)),
+                    ),
                 ],
               )
             else
@@ -451,11 +438,24 @@ final class _ApprovalRowState extends State<_ApprovalRow> {
                 onCancel: () => setState(() => _pendingChoice = null),
                 onConfirm: () => unawaited(_confirm(pending)),
               ),
-            const SizedBox(height: 7),
-            Text(
-              '${approval.id}  ·  r${approval.revision}',
-              style: monoStyle.copyWith(fontSize: 9.5),
+            const SizedBox(height: 3),
+            TextButton.icon(
+              key: Key('approval-technical-${approval.id}'),
+              onPressed: () =>
+                  setState(() => _technicalExpanded = !_technicalExpanded),
+              icon: Icon(
+                _technicalExpanded ? Icons.expand_less : Icons.expand_more,
+                size: 14,
+              ),
+              label: Text(copy('network.approval.technical')),
             ),
+            if (_technicalExpanded)
+              _EvidenceDetails(
+                facts: [
+                  (copy('network.approval.id'), approval.id),
+                  (copy('network.approval.revision'), '${approval.revision}'),
+                ],
+              ),
           ],
         ),
       ),
@@ -493,7 +493,10 @@ final class _ApprovalConfirmation extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final dangerous = choice.decision == 'deny';
+    final allowing = choice.decision != 'deny';
+    final tone = allowing
+        ? context.viberColors.warning
+        : context.viberColors.route;
     return Semantics(
       liveRegion: true,
       container: true,
@@ -502,11 +505,9 @@ final class _ApprovalConfirmation extends StatelessWidget {
         width: double.infinity,
         padding: const EdgeInsets.all(9),
         decoration: BoxDecoration(
-          color: ViberColors.warning.withValues(alpha: 0.08),
-          border: Border.all(
-            color: ViberColors.warning.withValues(alpha: 0.38),
-          ),
-          borderRadius: BorderRadius.circular(4),
+          color: tone.withValues(alpha: 0.08),
+          border: Border.all(color: tone.withValues(alpha: 0.38)),
+          borderRadius: ViberMetrics.surfaceRadius,
         ),
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
@@ -535,11 +536,7 @@ final class _ApprovalConfirmation extends StatelessWidget {
                 FilledButton(
                   key: const Key('approval-confirm-action'),
                   onPressed: busy ? null : onConfirm,
-                  style: dangerous
-                      ? FilledButton.styleFrom(
-                          backgroundColor: ViberColors.danger,
-                        )
-                      : null,
+                  style: FilledButton.styleFrom(backgroundColor: tone),
                   child: busy
                       ? const SizedBox.square(
                           dimension: 13,
@@ -572,20 +569,69 @@ final class _InlineEvidence extends StatelessWidget {
     return Row(
       mainAxisSize: MainAxisSize.min,
       children: [
-        Icon(icon, size: 12, color: ViberColors.textFaint),
+        Icon(icon, size: 12, color: context.viberColors.textFaint),
         const SizedBox(width: 4),
         Text(
           text,
           style: mono
               ? monoStyle
-              : Theme.of(context).textTheme.bodySmall?.copyWith(fontSize: 10.5),
+              : Theme.of(
+                  context,
+                ).textTheme.bodySmall?.copyWith(fontSize: ViberType.utility),
         ),
       ],
     );
   }
 }
 
-final class _ConnectionsPane extends StatelessWidget {
+final class _EvidenceFilterField extends StatelessWidget {
+  const _EvidenceFilterField({
+    required this.controller,
+    required this.label,
+    required this.clearLabel,
+    required this.onChanged,
+    required this.onClear,
+    this.moreHint,
+    super.key,
+  });
+
+  final TextEditingController controller;
+  final String label;
+  final String clearLabel;
+  final String? moreHint;
+  final ValueChanged<String> onChanged;
+  final VoidCallback onClear;
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      width: double.infinity,
+      color: context.viberColors.panel,
+      padding: const EdgeInsets.fromLTRB(9, 6, 9, 6),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          ConstrainedBox(
+            constraints: const BoxConstraints(maxWidth: 420),
+            child: CompactSearchField(
+              controller: controller,
+              hintText: label,
+              onChanged: onChanged,
+              onClear: controller.text.isEmpty ? null : onClear,
+              clearLabel: clearLabel,
+            ),
+          ),
+          if (moreHint case final hint?) ...[
+            const SizedBox(height: 4),
+            Text(hint, style: Theme.of(context).textTheme.bodySmall),
+          ],
+        ],
+      ),
+    );
+  }
+}
+
+final class _ConnectionsPane extends StatefulWidget {
   const _ConnectionsPane({
     required this.page,
     required this.controller,
@@ -597,7 +643,38 @@ final class _ConnectionsPane extends StatelessWidget {
   final AppCopy copy;
 
   @override
+  State<_ConnectionsPane> createState() => _ConnectionsPaneState();
+}
+
+final class _ConnectionsPaneState extends State<_ConnectionsPane> {
+  late final TextEditingController _filterController;
+  String _query = '';
+
+  @override
+  void initState() {
+    super.initState();
+    _filterController = TextEditingController();
+  }
+
+  @override
+  void dispose() {
+    _filterController.dispose();
+    super.dispose();
+  }
+
+  @override
   Widget build(BuildContext context) {
+    final page = widget.page;
+    final controller = widget.controller;
+    final copy = widget.copy;
+    final query = _query.trim().toLowerCase();
+    final visible = query.isEmpty
+        ? page.items
+        : page.items
+              .where(
+                (record) => _connectionSearchText(record, copy).contains(query),
+              )
+              .toList(growable: false);
     return LayoutBuilder(
       builder: (context, constraints) {
         final compact = constraints.maxWidth < 760;
@@ -605,21 +682,29 @@ final class _ConnectionsPane extends StatelessWidget {
           children: [
             SectionLabel(
               label: copy('network.connections.title'),
-              count: page.items.length,
-              trailing: StatusPill(
-                label: copy('network.connections.latest'),
-                color: ViberColors.route,
-                icon: Icons.filter_center_focus,
+              count: query.isEmpty ? page.items.length : visible.length,
+              trailing: Tooltip(
+                message: copy('network.connections.latest.detail'),
+                child: StatusPill(
+                  label: copy('network.connections.latest'),
+                  color: context.viberColors.route,
+                  icon: Icons.filter_center_focus,
+                ),
               ),
             ),
-            Container(
-              width: double.infinity,
-              color: ViberColors.panel,
-              padding: const EdgeInsets.fromLTRB(10, 6, 10, 7),
-              child: Text(
-                copy('network.connections.latest.detail'),
-                style: Theme.of(context).textTheme.bodySmall,
-              ),
+            _EvidenceFilterField(
+              key: const Key('connections-filter'),
+              controller: _filterController,
+              label: copy('network.filter.connections'),
+              clearLabel: copy('network.filter.clear'),
+              moreHint: query.isNotEmpty && page.nextCursor != null
+                  ? copy('network.filter.more_hint')
+                  : null,
+              onChanged: (value) => setState(() => _query = value),
+              onClear: () {
+                _filterController.clear();
+                setState(() => _query = '');
+              },
             ),
             if (!compact) _ConnectionHeader(copy: copy),
             const Divider(height: 1),
@@ -629,11 +714,30 @@ final class _ConnectionsPane extends StatelessWidget {
                       icon: Icons.lan_outlined,
                       title: copy('network.connections.empty'),
                     )
+                  : visible.isEmpty
+                  ? CenteredMessage(
+                      icon: Icons.filter_alt_off_outlined,
+                      title: copy('network.filter.no_match'),
+                      action: page.nextCursor == null
+                          ? null
+                          : OutlinedButton.icon(
+                              key: const Key('connections-load-more'),
+                              onPressed: controller.networkLoading
+                                  ? null
+                                  : () => unawaited(
+                                      controller.loadMoreConnections(),
+                                    ),
+                              icon: const Icon(Icons.expand_more, size: 14),
+                              label: Text(
+                                copy('network.connections.load_more'),
+                              ),
+                            ),
+                    )
                   : ListView.builder(
                       itemCount:
-                          page.items.length + (page.nextCursor == null ? 0 : 1),
+                          visible.length + (page.nextCursor == null ? 0 : 1),
                       itemBuilder: (context, index) {
-                        if (index == page.items.length) {
+                        if (index == visible.length) {
                           return _LoadMoreRow(
                             key: const Key('connections-load-more'),
                             label: copy('network.connections.load_more'),
@@ -643,8 +747,8 @@ final class _ConnectionsPane extends StatelessWidget {
                           );
                         }
                         return _ConnectionEvidenceRow(
-                          key: ValueKey(page.items[index].connectionId),
-                          record: page.items[index],
+                          key: ValueKey(visible[index].connectionId),
+                          record: visible[index],
                           compact: compact,
                           copy: copy,
                         );
@@ -667,8 +771,8 @@ final class _ConnectionHeader extends StatelessWidget {
   Widget build(BuildContext context) {
     final style = Theme.of(context).textTheme.labelMedium;
     return Container(
-      height: 27,
-      color: ViberColors.panel,
+      height: ViberMetrics.compactRowHeight,
+      color: context.viberColors.panel,
       padding: const EdgeInsets.symmetric(horizontal: 12),
       child: Row(
         children: [
@@ -731,7 +835,10 @@ final class _ConnectionEvidenceRowState extends State<_ConnectionEvidenceRow> {
     final environment =
         record.environmentName ??
         copy('network.connections.unknown_environment');
-    final decision = record.decision ?? copy('network.connections.undecided');
+    final decision = record.decision == null
+        ? copy('network.connections.undecided')
+        : _localizedWire(copy, 'network.value.decision', record.decision!);
+    final phase = _localizedWire(copy, 'network.value.phase', record.phase);
     return Column(
       children: [
         Semantics(
@@ -739,38 +846,82 @@ final class _ConnectionEvidenceRowState extends State<_ConnectionEvidenceRow> {
           expanded: _expanded,
           label: '$source, ${record.requestedHost}:${record.port}, $decision',
           child: Material(
-            color: _expanded ? ViberColors.panelRaised : Colors.transparent,
+            color: _expanded
+                ? context.viberColors.panelRaised
+                : Colors.transparent,
             child: InkWell(
               onTap: () => setState(() => _expanded = !_expanded),
               child: widget.compact
-                  ? _compactRow(source, environment, decision)
-                  : _wideRow(source, environment, decision),
+                  ? _compactRow(source, environment, decision, phase)
+                  : _wideRow(source, environment, decision, phase),
             ),
           ),
         ),
         if (_expanded)
           _EvidenceDetails(
+            key: Key('connection-evidence-table-${record.connectionId}'),
             facts: [
-              ('Connection ID', record.connectionId),
-              ('Sequence', '${record.sequence}'),
-              ('Source confidence', record.sourceConfidence),
-              ('Environment ID', record.environmentId ?? '—'),
-              ('Observed SNI', record.observedSni ?? '—'),
-              ('Route host', record.routeHost ?? '—'),
-              ('Resolved IP', record.ip ?? '—'),
-              ('Rule', record.ruleId ?? '—'),
-              ('Decryption', record.decryption),
-              ('Egress authority', record.egressScope ?? '—'),
-              ('Egress source', record.egressSource ?? '—'),
+              (copy('network.fact.connection_id'), record.connectionId),
+              (copy('network.fact.sequence'), '${record.sequence}'),
               (
-                'Bytes',
+                copy('network.fact.source_confidence'),
+                _localizedWire(
+                  copy,
+                  'network.value.confidence',
+                  record.sourceConfidence,
+                ),
+              ),
+              (copy('network.fact.environment_id'), record.environmentId ?? ''),
+              (copy('network.fact.observed_sni'), record.observedSni ?? ''),
+              (copy('network.fact.route_host'), record.routeHost ?? ''),
+              (copy('network.fact.resolved_ip'), record.ip ?? ''),
+              (copy('network.fact.rule'), record.ruleId ?? ''),
+              (
+                copy('network.fact.decryption'),
+                _localizedWire(
+                  copy,
+                  'network.value.decryption',
+                  record.decryption,
+                ),
+              ),
+              (
+                copy('network.fact.egress_authority'),
+                record.egressScope == null
+                    ? ''
+                    : _localizedWire(
+                        copy,
+                        'network.value.scope',
+                        record.egressScope!,
+                      ),
+              ),
+              (
+                copy('network.fact.egress_source'),
+                record.egressSource == null
+                    ? ''
+                    : _localizedWire(
+                        copy,
+                        'network.value.source',
+                        record.egressSource!,
+                      ),
+              ),
+              (
+                copy('network.fact.bytes'),
                 copy.format('network.connections.bytes', {
                   'up': _bytes(record.bytesUp),
                   'down': _bytes(record.bytesDown),
                 }),
               ),
-              ('Outcome', record.outcome ?? '—'),
-              ('Error', record.errorClass ?? '—'),
+              (
+                copy('network.fact.outcome'),
+                record.outcome == null
+                    ? ''
+                    : _localizedWire(
+                        copy,
+                        'network.value.outcome',
+                        record.outcome!,
+                      ),
+              ),
+              (copy('network.fact.error'), record.errorClass ?? ''),
             ],
           ),
         const Divider(height: 1),
@@ -778,10 +929,15 @@ final class _ConnectionEvidenceRowState extends State<_ConnectionEvidenceRow> {
     );
   }
 
-  Widget _wideRow(String source, String environment, String decision) {
+  Widget _wideRow(
+    String source,
+    String environment,
+    String decision,
+    String phase,
+  ) {
     final record = widget.record;
     return SizedBox(
-      height: 43,
+      height: 38,
       child: Padding(
         padding: const EdgeInsets.symmetric(horizontal: 12),
         child: Row(
@@ -796,7 +952,7 @@ final class _ConnectionEvidenceRowState extends State<_ConnectionEvidenceRow> {
                 '${record.requestedHost}:${record.port}',
                 maxLines: 1,
                 overflow: TextOverflow.ellipsis,
-                style: monoStyle.copyWith(color: ViberColors.text),
+                style: monoStyle.copyWith(color: context.viberColors.text),
               ),
             ),
             SizedBox(
@@ -810,14 +966,14 @@ final class _ConnectionEvidenceRowState extends State<_ConnectionEvidenceRow> {
             SizedBox(
               width: 82,
               child: Text(
-                _humanize(decision),
-                style: TextStyle(
-                  color: _decisionColor(record.decision),
-                  fontSize: 11.5,
+                decision,
+                style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                  color: _decisionColor(context, record.decision),
+                  fontSize: ViberType.supporting,
                 ),
               ),
             ),
-            SizedBox(width: 84, child: Text(_humanize(record.phase))),
+            SizedBox(width: 84, child: Text(phase)),
             SizedBox(
               width: 58,
               child: Text(_clock(record.startedAt), style: monoStyle),
@@ -827,7 +983,7 @@ final class _ConnectionEvidenceRowState extends State<_ConnectionEvidenceRow> {
               child: Icon(
                 _expanded ? Icons.expand_less : Icons.expand_more,
                 size: 16,
-                color: ViberColors.textFaint,
+                color: context.viberColors.textFaint,
               ),
             ),
           ],
@@ -836,7 +992,12 @@ final class _ConnectionEvidenceRowState extends State<_ConnectionEvidenceRow> {
     );
   }
 
-  Widget _compactRow(String source, String environment, String decision) {
+  Widget _compactRow(
+    String source,
+    String environment,
+    String decision,
+    String phase,
+  ) {
     final record = widget.record;
     return Padding(
       padding: const EdgeInsets.fromLTRB(11, 8, 9, 8),
@@ -858,10 +1019,10 @@ final class _ConnectionEvidenceRowState extends State<_ConnectionEvidenceRow> {
                       ),
                     ),
                     Text(
-                      _humanize(decision),
-                      style: TextStyle(
-                        color: _decisionColor(record.decision),
-                        fontSize: 10.5,
+                      decision,
+                      style: Theme.of(context).textTheme.labelMedium?.copyWith(
+                        color: _decisionColor(context, record.decision),
+                        fontSize: ViberType.utility,
                         fontWeight: FontWeight.w600,
                       ),
                     ),
@@ -872,10 +1033,10 @@ final class _ConnectionEvidenceRowState extends State<_ConnectionEvidenceRow> {
                   '${record.requestedHost}:${record.port}',
                   maxLines: 1,
                   overflow: TextOverflow.ellipsis,
-                  style: monoStyle.copyWith(color: ViberColors.text),
+                  style: monoStyle.copyWith(color: context.viberColors.text),
                 ),
                 Text(
-                  '$environment  ·  ${_humanize(record.phase)}  ·  ${_clock(record.startedAt)}',
+                  '$environment  ·  $phase  ·  ${_clock(record.startedAt)}',
                   maxLines: 1,
                   overflow: TextOverflow.ellipsis,
                   style: Theme.of(context).textTheme.bodySmall,
@@ -887,7 +1048,7 @@ final class _ConnectionEvidenceRowState extends State<_ConnectionEvidenceRow> {
           Icon(
             _expanded ? Icons.expand_less : Icons.expand_more,
             size: 16,
-            color: ViberColors.textFaint,
+            color: context.viberColors.textFaint,
           ),
         ],
       ),
@@ -895,7 +1056,7 @@ final class _ConnectionEvidenceRowState extends State<_ConnectionEvidenceRow> {
   }
 }
 
-final class _EgressPane extends StatelessWidget {
+final class _EgressPane extends StatefulWidget {
   const _EgressPane({
     required this.page,
     required this.controller,
@@ -907,7 +1068,38 @@ final class _EgressPane extends StatelessWidget {
   final AppCopy copy;
 
   @override
+  State<_EgressPane> createState() => _EgressPaneState();
+}
+
+final class _EgressPaneState extends State<_EgressPane> {
+  late final TextEditingController _filterController;
+  String _query = '';
+
+  @override
+  void initState() {
+    super.initState();
+    _filterController = TextEditingController();
+  }
+
+  @override
+  void dispose() {
+    _filterController.dispose();
+    super.dispose();
+  }
+
+  @override
   Widget build(BuildContext context) {
+    final page = widget.page;
+    final controller = widget.controller;
+    final copy = widget.copy;
+    final query = _query.trim().toLowerCase();
+    final visible = query.isEmpty
+        ? page.items
+        : page.items
+              .where(
+                (record) => _egressSearchText(record, copy).contains(query),
+              )
+              .toList(growable: false);
     return LayoutBuilder(
       builder: (context, constraints) {
         final compact = constraints.maxWidth < 760;
@@ -915,16 +1107,29 @@ final class _EgressPane extends StatelessWidget {
           children: [
             SectionLabel(
               label: copy('network.egress.title'),
-              count: page.items.length,
-            ),
-            Container(
-              width: double.infinity,
-              color: ViberColors.panel,
-              padding: const EdgeInsets.fromLTRB(10, 6, 10, 7),
-              child: Text(
-                copy('network.egress.detail'),
-                style: Theme.of(context).textTheme.bodySmall,
+              count: query.isEmpty ? page.items.length : visible.length,
+              trailing: Tooltip(
+                message: copy('network.egress.detail'),
+                child: Icon(
+                  Icons.info_outline,
+                  size: 14,
+                  color: context.viberColors.textFaint,
+                ),
               ),
+            ),
+            _EvidenceFilterField(
+              key: const Key('egress-filter'),
+              controller: _filterController,
+              label: copy('network.filter.egress'),
+              clearLabel: copy('network.filter.clear'),
+              moreHint: query.isNotEmpty && page.nextCursor != null
+                  ? copy('network.filter.more_hint')
+                  : null,
+              onChanged: (value) => setState(() => _query = value),
+              onClear: () {
+                _filterController.clear();
+                setState(() => _query = '');
+              },
             ),
             if (!compact) _EgressHeader(copy: copy),
             const Divider(height: 1),
@@ -934,11 +1139,28 @@ final class _EgressPane extends StatelessWidget {
                       icon: Icons.north_east,
                       title: copy('network.egress.empty'),
                     )
+                  : visible.isEmpty
+                  ? CenteredMessage(
+                      icon: Icons.filter_alt_off_outlined,
+                      title: copy('network.filter.no_match'),
+                      action: page.nextCursor == null
+                          ? null
+                          : OutlinedButton.icon(
+                              key: const Key('egress-load-more'),
+                              onPressed: controller.networkLoading
+                                  ? null
+                                  : () => unawaited(
+                                      controller.loadMoreEgressAttempts(),
+                                    ),
+                              icon: const Icon(Icons.expand_more, size: 14),
+                              label: Text(copy('network.egress.load_more')),
+                            ),
+                    )
                   : ListView.builder(
                       itemCount:
-                          page.items.length + (page.nextCursor == null ? 0 : 1),
+                          visible.length + (page.nextCursor == null ? 0 : 1),
                       itemBuilder: (context, index) {
-                        if (index == page.items.length) {
+                        if (index == visible.length) {
                           return _LoadMoreRow(
                             key: const Key('egress-load-more'),
                             label: copy('network.egress.load_more'),
@@ -948,8 +1170,8 @@ final class _EgressPane extends StatelessWidget {
                           );
                         }
                         return _EgressEvidenceRow(
-                          key: ValueKey(page.items[index].id),
-                          record: page.items[index],
+                          key: ValueKey(visible[index].id),
+                          record: visible[index],
                           compact: compact,
                           copy: copy,
                         );
@@ -972,8 +1194,8 @@ final class _EgressHeader extends StatelessWidget {
   Widget build(BuildContext context) {
     final style = Theme.of(context).textTheme.labelMedium;
     return Container(
-      height: 27,
-      color: ViberColors.panel,
+      height: ViberMetrics.compactRowHeight,
+      color: context.viberColors.panel,
       padding: const EdgeInsets.symmetric(horizontal: 12),
       child: Row(
         children: [
@@ -1030,45 +1252,84 @@ final class _EgressEvidenceRowState extends State<_EgressEvidenceRow> {
   @override
   Widget build(BuildContext context) {
     final record = widget.record;
-    final outcome = record.outcome ?? widget.copy('network.egress.running');
+    final copy = widget.copy;
+    final outcome = record.outcome == null
+        ? copy('network.egress.running')
+        : _localizedWire(copy, 'network.value.outcome', record.outcome!);
+    final caller = _localizedWire(copy, 'network.value.caller', record.caller);
+    final purpose = _localizedWire(
+      copy,
+      'network.value.purpose',
+      record.purpose,
+    );
+    final authority = _localizedWire(
+      copy,
+      'network.value.authority',
+      record.authority,
+    );
     return Column(
       children: [
         Semantics(
           button: true,
           expanded: _expanded,
-          label: '${record.caller}, ${record.targetOrigin}, $outcome',
+          label: '$caller, ${record.targetOrigin}, $outcome',
           child: Material(
-            color: _expanded ? ViberColors.panelRaised : Colors.transparent,
+            color: _expanded
+                ? context.viberColors.panelRaised
+                : Colors.transparent,
             child: InkWell(
               onTap: () => setState(() => _expanded = !_expanded),
-              child: widget.compact ? _compactRow(outcome) : _wideRow(outcome),
+              child: widget.compact
+                  ? _compactRow(outcome, caller, purpose, authority)
+                  : _wideRow(outcome, caller, purpose, authority),
             ),
           ),
         ),
         if (_expanded)
           _EvidenceDetails(
+            key: Key('egress-evidence-table-${record.id}'),
             facts: [
-              ('Attempt ID', record.id),
-              ('Sequence', '${record.sequence}'),
-              ('Connection ID', record.connectionId ?? '—'),
-              ('Parent', '${record.parentKind}:${record.parentId ?? '—'}'),
-              ('Exchange', record.exchangeId ?? '—'),
-              ('Caller ID', record.callerId ?? '—'),
-              ('Payload', record.payloadClass),
-              ('Policy', record.policyId ?? '—'),
-              ('Rule', record.ruleId ?? '—'),
-              ('Proxy', record.proxyId ?? '—'),
+              (copy('network.fact.attempt_id'), record.id),
+              (copy('network.fact.sequence'), '${record.sequence}'),
+              (copy('network.fact.connection_id'), record.connectionId ?? ''),
               (
-                'Transport',
+                copy('network.fact.parent'),
+                [
+                  _localizedWire(
+                    copy,
+                    'network.value.parent',
+                    record.parentKind,
+                  ),
+                  ?record.parentId,
+                ].join(' · '),
+              ),
+              (copy('network.fact.exchange'), record.exchangeId ?? ''),
+              (copy('network.fact.caller_id'), record.callerId ?? ''),
+              (
+                copy('network.fact.payload'),
+                _localizedWire(
+                  copy,
+                  'network.value.payload',
+                  record.payloadClass,
+                ),
+              ),
+              (copy('network.fact.policy'), record.policyId ?? ''),
+              (copy('network.fact.rule'), record.ruleId ?? ''),
+              (copy('network.fact.proxy'), record.proxyId ?? ''),
+              (
+                copy('network.fact.transport'),
                 record.reusedTransport
-                    ? widget.copy('network.egress.reused')
-                    : widget.copy('network.egress.fresh'),
+                    ? copy('network.egress.reused')
+                    : copy('network.egress.fresh'),
               ),
               (
-                'Bytes',
-                '${_bytes(record.bytesOut)} out · ${_bytes(record.bytesIn)} in',
+                copy('network.fact.bytes'),
+                copy.format('network.egress.bytes', {
+                  'out': _bytes(record.bytesOut),
+                  'in': _bytes(record.bytesIn),
+                }),
               ),
-              ('Error', record.errorClass ?? '—'),
+              (copy('network.fact.error'), record.errorClass ?? ''),
             ],
           ),
         const Divider(height: 1),
@@ -1076,39 +1337,41 @@ final class _EgressEvidenceRowState extends State<_EgressEvidenceRow> {
     );
   }
 
-  Widget _wideRow(String outcome) {
+  Widget _wideRow(
+    String outcome,
+    String caller,
+    String purpose,
+    String authority,
+  ) {
     final record = widget.record;
     return SizedBox(
-      height: 43,
+      height: 38,
       child: Padding(
         padding: const EdgeInsets.symmetric(horizontal: 12),
         child: Row(
           children: [
-            SizedBox(width: 110, child: Text(_humanize(record.caller))),
+            SizedBox(width: 110, child: Text(caller)),
             Expanded(
               flex: 2,
               child: Text(
                 record.targetOrigin,
                 maxLines: 1,
                 overflow: TextOverflow.ellipsis,
-                style: monoStyle.copyWith(color: ViberColors.text),
+                style: monoStyle.copyWith(color: context.viberColors.text),
               ),
             ),
             SizedBox(
               width: 130,
-              child: Text(
-                _humanize(record.purpose),
-                overflow: TextOverflow.ellipsis,
-              ),
+              child: Text(purpose, overflow: TextOverflow.ellipsis),
             ),
-            SizedBox(width: 95, child: Text(_humanize(record.authority))),
+            SizedBox(width: 95, child: Text(authority)),
             SizedBox(
               width: 90,
               child: Text(
-                _humanize(outcome),
-                style: TextStyle(
-                  color: _outcomeColor(record.outcome),
-                  fontSize: 11.5,
+                outcome,
+                style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                  color: _outcomeColor(context, record.outcome),
+                  fontSize: ViberType.supporting,
                 ),
               ),
             ),
@@ -1121,7 +1384,7 @@ final class _EgressEvidenceRowState extends State<_EgressEvidenceRow> {
               child: Icon(
                 _expanded ? Icons.expand_less : Icons.expand_more,
                 size: 16,
-                color: ViberColors.textFaint,
+                color: context.viberColors.textFaint,
               ),
             ),
           ],
@@ -1130,7 +1393,12 @@ final class _EgressEvidenceRowState extends State<_EgressEvidenceRow> {
     );
   }
 
-  Widget _compactRow(String outcome) {
+  Widget _compactRow(
+    String outcome,
+    String caller,
+    String purpose,
+    String authority,
+  ) {
     final record = widget.record;
     return Padding(
       padding: const EdgeInsets.fromLTRB(11, 8, 9, 8),
@@ -1145,16 +1413,16 @@ final class _EgressEvidenceRowState extends State<_EgressEvidenceRow> {
                   children: [
                     Expanded(
                       child: Text(
-                        _humanize(record.purpose),
+                        purpose,
                         style: Theme.of(context).textTheme.titleSmall,
                         overflow: TextOverflow.ellipsis,
                       ),
                     ),
                     Text(
-                      _humanize(outcome),
-                      style: TextStyle(
-                        color: _outcomeColor(record.outcome),
-                        fontSize: 10.5,
+                      outcome,
+                      style: Theme.of(context).textTheme.labelMedium?.copyWith(
+                        color: _outcomeColor(context, record.outcome),
+                        fontSize: ViberType.utility,
                         fontWeight: FontWeight.w600,
                       ),
                     ),
@@ -1165,10 +1433,10 @@ final class _EgressEvidenceRowState extends State<_EgressEvidenceRow> {
                   record.targetOrigin,
                   maxLines: 1,
                   overflow: TextOverflow.ellipsis,
-                  style: monoStyle.copyWith(color: ViberColors.text),
+                  style: monoStyle.copyWith(color: context.viberColors.text),
                 ),
                 Text(
-                  '${_humanize(record.caller)}  ·  ${_humanize(record.authority)}  ·  ${_clock(record.startedAt)}',
+                  '$caller  ·  $authority  ·  ${_clock(record.startedAt)}',
                   maxLines: 1,
                   overflow: TextOverflow.ellipsis,
                   style: Theme.of(context).textTheme.bodySmall,
@@ -1180,7 +1448,7 @@ final class _EgressEvidenceRowState extends State<_EgressEvidenceRow> {
           Icon(
             _expanded ? Icons.expand_less : Icons.expand_more,
             size: 16,
-            color: ViberColors.textFaint,
+            color: context.viberColors.textFaint,
           ),
         ],
       ),
@@ -1189,43 +1457,128 @@ final class _EgressEvidenceRowState extends State<_EgressEvidenceRow> {
 }
 
 final class _EvidenceDetails extends StatelessWidget {
-  const _EvidenceDetails({required this.facts});
+  const _EvidenceDetails({required this.facts, super.key});
 
   final List<(String, String)> facts;
 
   @override
   Widget build(BuildContext context) {
-    return Container(
-      width: double.infinity,
-      color: ViberColors.panel,
-      padding: const EdgeInsets.fromLTRB(14, 8, 14, 10),
-      child: Wrap(
-        spacing: 22,
-        runSpacing: 7,
-        children: [
-          for (final fact in facts)
-            ConstrainedBox(
-              constraints: const BoxConstraints(minWidth: 120, maxWidth: 280),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  Text(
-                    fact.$1.toUpperCase(),
-                    style: Theme.of(
-                      context,
-                    ).textTheme.labelMedium?.copyWith(fontSize: 8.5),
-                  ),
-                  Text(
-                    fact.$2,
-                    maxLines: 2,
-                    overflow: TextOverflow.ellipsis,
-                    style: monoStyle,
-                  ),
+    final visibleFacts = facts
+        .where((fact) => fact.$2.trim().isNotEmpty && fact.$2 != '—')
+        .toList(growable: false);
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        final groupsPerRow = constraints.maxWidth >= 1320
+            ? 3
+            : constraints.maxWidth >= 720
+            ? 2
+            : 1;
+        final rows = <TableRow>[];
+        for (
+          var start = 0;
+          start < visibleFacts.length;
+          start += groupsPerRow
+        ) {
+          final rowIndex = rows.length;
+          rows.add(
+            TableRow(
+              decoration: BoxDecoration(
+                color: rowIndex.isEven
+                    ? context.viberColors.panel
+                    : context.viberColors.panelRaised,
+              ),
+              children: [
+                for (var slot = 0; slot < groupsPerRow; slot++) ...[
+                  if (start + slot < visibleFacts.length) ...[
+                    _EvidenceLabelCell(label: visibleFacts[start + slot].$1),
+                    _EvidenceValueCell(
+                      label: visibleFacts[start + slot].$1,
+                      value: visibleFacts[start + slot].$2,
+                    ),
+                  ] else ...[
+                    const SizedBox.shrink(),
+                    const SizedBox.shrink(),
+                  ],
                 ],
+              ],
+            ),
+          );
+        }
+        return Container(
+          width: double.infinity,
+          decoration: BoxDecoration(
+            color: context.viberColors.panel,
+            border: Border(
+              top: BorderSide(color: context.viberColors.dividerSoft),
+            ),
+          ),
+          padding: const EdgeInsets.fromLTRB(12, 5, 12, 7),
+          child: Table(
+            key: Key('evidence-table-$groupsPerRow-groups'),
+            columnWidths: {
+              for (var slot = 0; slot < groupsPerRow; slot++) ...{
+                slot * 2: FixedColumnWidth(groupsPerRow == 1 ? 110 : 98),
+                slot * 2 + 1: const FlexColumnWidth(),
+              },
+            },
+            defaultVerticalAlignment: TableCellVerticalAlignment.middle,
+            border: TableBorder(
+              horizontalInside: BorderSide(
+                color: context.viberColors.dividerSoft,
               ),
             ),
-        ],
+            children: rows,
+          ),
+        );
+      },
+    );
+  }
+}
+
+final class _EvidenceLabelCell extends StatelessWidget {
+  const _EvidenceLabelCell({required this.label});
+
+  final String label;
+
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(8, 6, 6, 6),
+      child: Text(
+        label,
+        maxLines: 1,
+        overflow: TextOverflow.ellipsis,
+        style: Theme.of(context).textTheme.labelMedium?.copyWith(
+          color: context.viberColors.textFaint,
+          fontSize: ViberType.micro,
+          fontWeight: FontWeight.w600,
+        ),
+      ),
+    );
+  }
+}
+
+final class _EvidenceValueCell extends StatelessWidget {
+  const _EvidenceValueCell({required this.label, required this.value});
+
+  final String label;
+  final String value;
+
+  @override
+  Widget build(BuildContext context) {
+    return Semantics(
+      container: true,
+      label: '$label: $value',
+      child: Tooltip(
+        message: value,
+        child: Padding(
+          padding: const EdgeInsets.fromLTRB(4, 6, 10, 6),
+          child: SelectableText(
+            value,
+            textWidthBasis: TextWidthBasis.parent,
+            style: monoStyle.copyWith(color: context.viberColors.text),
+          ),
+        ),
       ),
     );
   }
@@ -1368,8 +1721,16 @@ final class _RulesPaneState extends State<_RulesPane> {
         Expanded(
           child: _draft.isEmpty
               ? CenteredMessage(
-                  icon: Icons.rule_folder_outlined,
+                  icon: Icons.rule_outlined,
                   title: copy('network.rules.empty'),
+                  action: OutlinedButton.icon(
+                    key: const Key('rules-empty-add'),
+                    onPressed: widget.controller.networkMutating
+                        ? null
+                        : () => unawaited(_editRule()),
+                    icon: const Icon(Icons.add, size: 14),
+                    label: Text(copy('network.rules.add')),
+                  ),
                 )
               : LayoutBuilder(
                   builder: (context, constraints) {
@@ -1492,7 +1853,7 @@ final class _RulesToolbar extends StatelessWidget {
   Widget build(BuildContext context) {
     return Container(
       width: double.infinity,
-      color: ViberColors.panel,
+      color: context.viberColors.panel,
       padding: const EdgeInsets.fromLTRB(12, 9, 10, 9),
       child: LayoutBuilder(
         builder: (context, constraints) {
@@ -1528,7 +1889,7 @@ final class _RulesToolbar extends StatelessWidget {
                     const SizedBox(width: 7),
                     StatusPill(
                       label: copy('network.rules.dirty'),
-                      color: ViberColors.warning,
+                      color: context.viberColors.warning,
                     ),
                   ],
                 ],
@@ -1592,7 +1953,7 @@ final class _ModeEditor extends StatelessWidget {
                   style: Theme.of(context).textTheme.labelMedium,
                 ),
                 const SizedBox(height: 6),
-                DropdownButtonFormField<String>(
+                CompactSelectField<String>(
                   key: const Key('rules-mode'),
                   initialValue: mode,
                   isExpanded: true,
@@ -1627,18 +1988,18 @@ final class _ModeEditor extends StatelessWidget {
                 ),
               ),
               const SizedBox(width: 14),
-              SegmentedButton<String>(
+              CompactSegmentedControl<String>(
+                key: const Key('rules-mode'),
+                minSegmentWidth: 56,
                 segments: [
                   for (final value in modes)
-                    ButtonSegment(
+                    CompactSegment(
                       value: value,
-                      label: Text(copy('network.rules.mode.$value')),
+                      label: copy('network.rules.mode.$value'),
                     ),
                 ],
-                selected: {mode},
-                onSelectionChanged: enabled
-                    ? (selection) => onChanged(selection.single)
-                    : null,
+                selected: mode,
+                onSelected: enabled ? onChanged : null,
               ),
             ],
           );
@@ -1667,12 +2028,12 @@ final class _RuleConflictBanner extends StatelessWidget {
   Widget build(BuildContext context) {
     return Container(
       width: double.infinity,
-      color: ViberColors.danger.withValues(alpha: 0.09),
+      color: context.viberColors.danger.withValues(alpha: 0.09),
       padding: const EdgeInsets.fromLTRB(12, 8, 10, 8),
       child: Row(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          const Icon(Icons.sync_problem, size: 15, color: ViberColors.danger),
+          Icon(Icons.sync_problem, size: 15, color: context.viberColors.danger),
           const SizedBox(width: 7),
           Expanded(
             child: Column(
@@ -1741,12 +2102,12 @@ final class _RuleSaveConfirmation extends StatelessWidget {
       child: Container(
         key: const Key('rules-save-confirmation'),
         width: double.infinity,
-        color: ViberColors.warning.withValues(alpha: 0.08),
+        color: context.viberColors.warning.withValues(alpha: 0.08),
         padding: const EdgeInsets.fromLTRB(12, 8, 10, 8),
         child: Row(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            const Icon(Icons.rule, size: 15, color: ViberColors.warning),
+            Icon(Icons.rule, size: 15, color: context.viberColors.warning),
             const SizedBox(width: 7),
             Expanded(
               child: Column(
@@ -1854,7 +2215,7 @@ final class _RuleRow extends StatelessWidget {
                     target,
                     maxLines: 1,
                     overflow: TextOverflow.ellipsis,
-                    style: monoStyle.copyWith(color: ViberColors.text),
+                    style: monoStyle.copyWith(color: context.viberColors.text),
                   ),
                   Text(
                     '${copy('network.rules.decision.${rule.decision}')}  ·  ${copy('network.rules.match.${rule.match}')}',
@@ -1869,7 +2230,7 @@ final class _RuleRow extends StatelessWidget {
       );
     }
     return SizedBox(
-      height: 47,
+      height: 42,
       child: Padding(
         padding: const EdgeInsets.only(left: 12, right: 5),
         child: Row(
@@ -1882,7 +2243,7 @@ final class _RuleRow extends StatelessWidget {
               child: Text(
                 target,
                 overflow: TextOverflow.ellipsis,
-                style: monoStyle.copyWith(color: ViberColors.text),
+                style: monoStyle.copyWith(color: context.viberColors.text),
               ),
             ),
             SizedBox(
@@ -1975,116 +2336,132 @@ final class _RuleEditorDialogState extends State<_RuleEditorDialog> {
   Widget build(BuildContext context) {
     final copy = widget.copy;
     return AlertDialog(
+      titlePadding: const EdgeInsets.fromLTRB(16, 14, 16, 8),
+      contentPadding: const EdgeInsets.fromLTRB(16, 0, 16, 8),
+      actionsPadding: const EdgeInsets.fromLTRB(12, 4, 12, 12),
       title: Text(
         widget.existing == null
             ? copy('network.rules.add')
             : copy('network.rules.edit'),
       ),
       content: SizedBox(
-        width: 430,
+        width: 360,
         child: Form(
           key: _formKey,
           child: SingleChildScrollView(
             child: Column(
               mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                TextFormField(
-                  key: const Key('rule-editor-id'),
-                  controller: _id,
-                  autofocus: true,
-                  decoration: InputDecoration(
-                    labelText: copy('network.rules.field.id'),
+                CompactLabeledControl(
+                  label: copy('network.rules.field.id'),
+                  child: TextFormField(
+                    key: const Key('rule-editor-id'),
+                    controller: _id,
+                    autofocus: true,
+                    textAlignVertical: TextAlignVertical.center,
+                    decoration: const InputDecoration(),
+                    validator: (value) {
+                      if (value == null ||
+                          !RegExp(
+                            r'^[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}$',
+                          ).hasMatch(value) ||
+                          const {
+                            'mode.monitor',
+                            'mode.ask_unknown',
+                            'mode.deny_unknown',
+                          }.contains(value)) {
+                        return copy('network.rules.validation.id');
+                      }
+                      if (widget.rules.any(
+                        (rule) =>
+                            rule.id == value && rule.id != widget.existing?.id,
+                      )) {
+                        return copy('network.rules.validation.duplicate');
+                      }
+                      return null;
+                    },
                   ),
-                  validator: (value) {
-                    if (value == null ||
-                        !RegExp(
-                          r'^[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}$',
-                        ).hasMatch(value) ||
-                        const {
-                          'mode.monitor',
-                          'mode.ask_unknown',
-                          'mode.deny_unknown',
-                        }.contains(value)) {
-                      return copy('network.rules.validation.id');
-                    }
-                    if (widget.rules.any(
-                      (rule) =>
-                          rule.id == value && rule.id != widget.existing?.id,
-                    )) {
-                      return copy('network.rules.validation.duplicate');
-                    }
-                    return null;
-                  },
                 ),
-                const SizedBox(height: 9),
-                TextFormField(
-                  controller: _priority,
-                  keyboardType: TextInputType.number,
-                  decoration: InputDecoration(
-                    labelText: copy('network.rules.field.priority'),
-                  ),
-                  validator: (value) {
-                    final parsed = int.tryParse(value ?? '');
-                    return parsed == null || parsed < 0 || parsed > 4294967295
-                        ? copy('network.rules.validation.priority')
-                        : null;
-                  },
-                ),
-                const SizedBox(height: 9),
-                DropdownButtonFormField<String>(
-                  initialValue: _decision,
-                  decoration: InputDecoration(
-                    labelText: copy('network.rules.field.decision'),
-                  ),
-                  items: [
-                    for (final value in const ['allow', 'deny', 'ask'])
-                      DropdownMenuItem(
-                        value: value,
-                        child: Text(copy('network.rules.decision.$value')),
-                      ),
-                  ],
-                  onChanged: (value) => setState(() => _decision = value!),
-                ),
-                const SizedBox(height: 9),
-                DropdownButtonFormField<String>(
-                  initialValue: _match,
-                  decoration: InputDecoration(
-                    labelText: copy('network.rules.field.match'),
-                  ),
-                  items: [
-                    for (final value in const ['exact_host', 'exact_host_port'])
-                      DropdownMenuItem(
-                        value: value,
-                        child: Text(copy('network.rules.match.$value')),
-                      ),
-                  ],
-                  onChanged: (value) => setState(() => _match = value!),
-                ),
-                const SizedBox(height: 9),
-                TextFormField(
-                  controller: _host,
-                  decoration: InputDecoration(
-                    labelText: copy('network.rules.field.host'),
-                    hintText: 'api.example.com',
-                  ),
-                  validator: (value) => _validCanonicalHost(value ?? '')
-                      ? null
-                      : copy('network.rules.validation.host'),
-                ),
-                if (_match == 'exact_host_port') ...[
-                  const SizedBox(height: 9),
-                  TextFormField(
-                    controller: _port,
+                const SizedBox(height: 8),
+                CompactLabeledControl(
+                  label: copy('network.rules.field.priority'),
+                  child: TextFormField(
+                    controller: _priority,
                     keyboardType: TextInputType.number,
-                    decoration: InputDecoration(
-                      labelText: copy('network.rules.field.port'),
-                    ),
+                    textAlignVertical: TextAlignVertical.center,
+                    decoration: const InputDecoration(),
                     validator: (value) {
                       final parsed = int.tryParse(value ?? '');
-                      return parsed == null || parsed < 1 || parsed > 65535
-                          ? copy('network.rules.validation.port')
+                      return parsed == null || parsed < 0 || parsed > 4294967295
+                          ? copy('network.rules.validation.priority')
                           : null;
                     },
+                  ),
+                ),
+                const SizedBox(height: 8),
+                CompactLabeledControl(
+                  label: copy('network.rules.field.decision'),
+                  child: CompactSelectField<String>(
+                    initialValue: _decision,
+                    items: [
+                      for (final value in const ['allow', 'deny', 'ask'])
+                        DropdownMenuItem(
+                          value: value,
+                          child: Text(copy('network.rules.decision.$value')),
+                        ),
+                    ],
+                    onChanged: (value) => setState(() => _decision = value!),
+                  ),
+                ),
+                const SizedBox(height: 8),
+                CompactLabeledControl(
+                  label: copy('network.rules.field.match'),
+                  child: CompactSelectField<String>(
+                    initialValue: _match,
+                    items: [
+                      for (final value in const [
+                        'exact_host',
+                        'exact_host_port',
+                      ])
+                        DropdownMenuItem(
+                          value: value,
+                          child: Text(copy('network.rules.match.$value')),
+                        ),
+                    ],
+                    onChanged: (value) => setState(() => _match = value!),
+                  ),
+                ),
+                const SizedBox(height: 8),
+                CompactLabeledControl(
+                  label: copy('network.rules.field.host'),
+                  child: TextFormField(
+                    controller: _host,
+                    textAlignVertical: TextAlignVertical.center,
+                    decoration: const InputDecoration(
+                      hintText: 'api.example.com',
+                    ),
+                    validator: (value) => _validCanonicalHost(value ?? '')
+                        ? null
+                        : copy('network.rules.validation.host'),
+                  ),
+                ),
+                if (_match == 'exact_host_port') ...[
+                  const SizedBox(height: 8),
+                  CompactLabeledControl(
+                    label: copy('network.rules.field.port'),
+                    child: TextFormField(
+                      controller: _port,
+                      keyboardType: TextInputType.number,
+                      textAlignVertical: TextAlignVertical.center,
+                      decoration: const InputDecoration(),
+                      validator: (value) {
+                        final parsed = int.tryParse(value ?? '');
+                        return parsed == null || parsed < 1 || parsed > 65535
+                            ? copy('network.rules.validation.port')
+                            : null;
+                      },
+                    ),
                   ),
                 ],
               ],
@@ -2157,6 +2534,53 @@ bool _validCanonicalHost(String value) =>
     !value.startsWith('.') &&
     !value.endsWith('.');
 
+String _connectionSearchText(ConnectionRecord record, AppCopy copy) =>
+    <String?>[
+      record.sourceLabel,
+      record.sourceConfidence,
+      record.environmentId,
+      record.environmentName,
+      record.requestedHost,
+      record.observedSni,
+      record.routeHost,
+      record.ip,
+      record.decision,
+      record.ruleId,
+      record.egressScope,
+      record.egressSource,
+      record.decryption,
+      record.phase,
+      record.outcome,
+      record.errorClass,
+      if (record.decision != null)
+        _localizedWire(copy, 'network.value.decision', record.decision!),
+      _localizedWire(copy, 'network.value.phase', record.phase),
+    ].whereType<String>().join(' ').toLowerCase();
+
+String _egressSearchText(EgressAttemptRecord record, AppCopy copy) => <String?>[
+  record.id,
+  record.connectionId,
+  record.purpose,
+  record.payloadClass,
+  record.parentKind,
+  record.parentId,
+  record.exchangeId,
+  record.caller,
+  record.callerId,
+  record.targetOrigin,
+  record.authority,
+  record.policyId,
+  record.ruleId,
+  record.proxyId,
+  record.outcome,
+  record.errorClass,
+  _localizedWire(copy, 'network.value.purpose', record.purpose),
+  _localizedWire(copy, 'network.value.caller', record.caller),
+  _localizedWire(copy, 'network.value.authority', record.authority),
+  if (record.outcome != null)
+    _localizedWire(copy, 'network.value.outcome', record.outcome!),
+].whereType<String>().join(' ').toLowerCase();
+
 String _clock(DateTime value) {
   final local = value.toLocal();
   return '${local.hour.toString().padLeft(2, '0')}:${local.minute.toString().padLeft(2, '0')}';
@@ -2174,16 +2598,23 @@ String _humanize(String value) {
   return '${words[0].toUpperCase()}${words.substring(1)}';
 }
 
-Color _decisionColor(String? decision) => switch (decision) {
-  'allow' => ViberColors.verified,
-  'deny' => ViberColors.danger,
-  'ask' => ViberColors.warning,
-  _ => ViberColors.textFaint,
-};
+String _localizedWire(AppCopy copy, String family, String value) {
+  final key = '$family.$value';
+  final localized = copy(key);
+  return localized == key ? _humanize(value) : localized;
+}
 
-Color _outcomeColor(String? outcome) => switch (outcome) {
-  'completed' => ViberColors.verified,
-  'failed' => ViberColors.danger,
-  'canceled' => ViberColors.warning,
-  _ => ViberColors.route,
+Color _decisionColor(BuildContext context, String? decision) =>
+    switch (decision) {
+      'allow' => context.viberColors.verified,
+      'deny' => context.viberColors.danger,
+      'ask' => context.viberColors.warning,
+      _ => context.viberColors.textFaint,
+    };
+
+Color _outcomeColor(BuildContext context, String? outcome) => switch (outcome) {
+  'completed' => context.viberColors.verified,
+  'failed' => context.viberColors.danger,
+  'canceled' => context.viberColors.warning,
+  _ => context.viberColors.route,
 };

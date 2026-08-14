@@ -31,6 +31,7 @@ final class OfflineHoldCommand extends StatelessWidget {
         ? copy('offline.resume')
         : _stateLabel(copy, snapshot);
     final icon = _stateIcon(snapshot);
+    final stateColor = _stateColor(context, snapshot);
     final message = controller.offlineError == null
         ? '${copy('offline.title')} · ${_stateLabel(copy, snapshot)}'
         : '${copy('offline.title')} · ${_offlineMessage(copy, controller.offlineError!)}';
@@ -54,8 +55,11 @@ final class OfflineHoldCommand extends StatelessWidget {
                     dimension: 14,
                     child: CircularProgressIndicator(strokeWidth: 1.5),
                   )
-                : Icon(icon, size: 16, color: _stateColor(snapshot)),
-            constraints: const BoxConstraints.tightFor(width: 31, height: 31),
+                : Icon(icon, size: 16, color: stateColor),
+            constraints: const BoxConstraints.tightFor(
+              width: ViberMetrics.controlHeight,
+              height: ViberMetrics.controlHeight,
+            ),
             padding: EdgeInsets.zero,
           ),
         ),
@@ -72,19 +76,23 @@ final class OfflineHoldCommand extends StatelessWidget {
                 dimension: 12,
                 child: CircularProgressIndicator(strokeWidth: 1.4),
               )
-            : Icon(icon, size: 14, color: _stateColor(snapshot)),
+            : Icon(icon, size: 14, color: stateColor),
         label: Text(label, maxLines: 1),
-        style: OutlinedButton.styleFrom(
-          foregroundColor: _stateColor(snapshot),
-          side: BorderSide(
-            color: _stateColor(snapshot).withValues(alpha: 0.46),
-          ),
-          padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 5),
-          textStyle: const TextStyle(
-            fontSize: 10.5,
-            fontWeight: FontWeight.w600,
-          ),
-        ),
+        style:
+            OutlinedButton.styleFrom(
+              foregroundColor: stateColor,
+              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 5),
+              textStyle: Theme.of(context).textTheme.labelMedium?.copyWith(
+                fontSize: ViberType.utility,
+                fontWeight: FontWeight.w600,
+              ),
+            ).copyWith(
+              side: WidgetStateProperty.resolveWith(
+                (states) => states.contains(WidgetState.focused)
+                    ? BorderSide(color: context.viberColors.focus, width: 1.5)
+                    : BorderSide(color: stateColor.withValues(alpha: 0.46)),
+              ),
+            ),
       ),
     );
   }
@@ -113,9 +121,9 @@ final class OfflineHoldSettingsPanel extends StatelessWidget {
     return Container(
       key: const Key('offline-settings-panel'),
       decoration: BoxDecoration(
-        color: ViberColors.panelRaised,
-        border: Border.all(color: ViberColors.divider),
-        borderRadius: BorderRadius.circular(6),
+        color: context.viberColors.panelRaised,
+        border: Border.all(color: context.viberColors.divider),
+        borderRadius: ViberMetrics.surfaceRadius,
       ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
@@ -143,7 +151,7 @@ final class OfflineHoldSettingsPanel extends StatelessWidget {
                 const SizedBox(width: 10),
                 StatusPill(
                   label: _stateLabel(copy, snapshot),
-                  color: _stateColor(snapshot),
+                  color: _stateColor(context, snapshot),
                   icon: _stateIcon(snapshot),
                 ),
               ],
@@ -156,6 +164,7 @@ final class OfflineHoldSettingsPanel extends StatelessWidget {
                   : copy('notice.$notice'),
               error: isError,
               onDismiss: controller.clearOfflineMessage,
+              dismissLabel: copy('common.dismiss'),
             ),
           Padding(
             padding: const EdgeInsets.fromLTRB(12, 10, 12, 12),
@@ -172,8 +181,8 @@ final class OfflineHoldSettingsPanel extends StatelessWidget {
                           ? copy('offline.safe.yes')
                           : copy('offline.safe.no'),
                       color: snapshot.safeToDisconnect
-                          ? ViberColors.verified
-                          : ViberColors.textMuted,
+                          ? context.viberColors.verified
+                          : context.viberColors.textMuted,
                     ),
                     _OfflineMetric(
                       label: copy('offline.active_actions'),
@@ -217,9 +226,9 @@ final class OfflineHoldSettingsPanel extends StatelessWidget {
                   const SizedBox(height: 9),
                   Text(
                     '${copy('offline.last_probe')}: ${_offlineMessage(copy, reason)}',
-                    style: Theme.of(
-                      context,
-                    ).textTheme.bodySmall?.copyWith(color: ViberColors.danger),
+                    style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                      color: context.viberColors.danger,
+                    ),
                   ),
                 ],
                 const SizedBox(height: 10),
@@ -353,15 +362,11 @@ Future<void> showOfflineHoldConfirmation(
 }
 
 final class _OfflineMetric extends StatelessWidget {
-  const _OfflineMetric({
-    required this.label,
-    required this.value,
-    this.color = ViberColors.text,
-  });
+  const _OfflineMetric({required this.label, required this.value, this.color});
 
   final String label;
   final String value;
-  final Color color;
+  final Color? color;
 
   @override
   Widget build(BuildContext context) {
@@ -369,9 +374,9 @@ final class _OfflineMetric extends StatelessWidget {
       constraints: const BoxConstraints(minWidth: 92),
       padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
       decoration: BoxDecoration(
-        color: ViberColors.canvas.withValues(alpha: 0.54),
-        border: Border.all(color: ViberColors.dividerSoft),
-        borderRadius: BorderRadius.circular(4),
+        color: context.viberColors.canvas.withValues(alpha: 0.54),
+        border: Border.all(color: context.viberColors.dividerSoft),
+        borderRadius: ViberMetrics.surfaceRadius,
       ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
@@ -382,8 +387,8 @@ final class _OfflineMetric extends StatelessWidget {
           Text(
             value,
             style: monoStyle.copyWith(
-              color: color,
-              fontSize: 11,
+              color: color ?? context.viberColors.text,
+              fontSize: ViberType.supporting,
               fontWeight: FontWeight.w600,
             ),
           ),
@@ -411,12 +416,12 @@ final class _KindChip extends StatelessWidget {
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 4),
       decoration: BoxDecoration(
-        border: Border.all(color: ViberColors.divider),
-        borderRadius: BorderRadius.circular(999),
+        border: Border.all(color: context.viberColors.divider),
+        borderRadius: ViberMetrics.pillRadius,
       ),
       child: Text(
         '$label · ${copy.format('offline.kind.counts', {'active': active, 'queued': queued})}',
-        style: monoStyle.copyWith(fontSize: 9.5),
+        style: monoStyle.copyWith(fontSize: ViberType.micro),
       ),
     );
   }
@@ -437,12 +442,16 @@ String _offlineMessage(AppCopy copy, String value) {
   return value;
 }
 
-Color _stateColor(OfflineHoldSnapshot snapshot) => switch (snapshot.state) {
-  'online' => ViberColors.verified,
-  'held' || 'entering' || 'probing' || 'releasing' => ViberColors.warning,
-  'stopping' => ViberColors.danger,
-  _ => ViberColors.textFaint,
-};
+Color _stateColor(BuildContext context, OfflineHoldSnapshot snapshot) =>
+    switch (snapshot.state) {
+      'online' => context.viberColors.verified,
+      'held' ||
+      'entering' ||
+      'probing' ||
+      'releasing' => context.viberColors.warning,
+      'stopping' => context.viberColors.danger,
+      _ => context.viberColors.textFaint,
+    };
 
 IconData _stateIcon(OfflineHoldSnapshot snapshot) => switch (snapshot.state) {
   'online' => Icons.cloud_done_outlined,

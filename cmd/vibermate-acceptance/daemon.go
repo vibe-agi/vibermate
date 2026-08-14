@@ -172,7 +172,7 @@ func daemonArguments(
 	return []string{
 		"--app-cache-dir=" + appCacheDirectory,
 		"--data-dir=" + dataDirectory,
-		"--webview-origin=tauri://localhost",
+		"--webview-origin=vibermate://desktop",
 		"--parent-lifetime-fd=0",
 		"--bootstrap-fd=3",
 	}

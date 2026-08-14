@@ -14,10 +14,12 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/vibe-agi/vibermate/internal/agentconversation"
 	"github.com/vibe-agi/vibermate/internal/capturecontrol"
 	"github.com/vibe-agi/vibermate/internal/capturegrant"
 	"github.com/vibe-agi/vibermate/internal/clientadapter"
 	"github.com/vibe-agi/vibermate/internal/controlprincipal"
+	"github.com/vibe-agi/vibermate/internal/conversationprojection"
 	"github.com/vibe-agi/vibermate/internal/desktopbootstrap"
 	"github.com/vibe-agi/vibermate/internal/desktopcontrol"
 	"github.com/vibe-agi/vibermate/internal/instanceguard"
@@ -325,24 +327,48 @@ func Start(ctx context.Context, options Options) (*Host, error) {
 		return fail("App capability authority", err)
 	}
 	ready := &readiness{runtime: runtime}
+	identityResolvers := map[string]agentconversation.ClientIdentityResolver{}
+	if claudeRoot, rootErr := agentconversation.DefaultClaudeProjectsRoot(); rootErr == nil {
+		if resolver, resolverErr := agentconversation.NewClaudeIdentityResolver(claudeRoot); resolverErr == nil {
+			identityResolvers["claude"] = resolver
+		}
+	}
+	if codexRoot, rootErr := agentconversation.DefaultCodexSessionsRoot(); rootErr == nil {
+		if resolver, resolverErr := agentconversation.NewCodexIdentityResolver(codexRoot); resolverErr == nil {
+			identityResolvers["codex"] = resolver
+		}
+	}
+	conversationIndexer, err := conversationprojection.New(conversationprojection.Options{
+		Activities:  runtime.Activities(),
+		Contents:    runtime.ExchangeContents(),
+		CaptureRuns: runtime.CaptureRunReader(),
+		Identities:  runtime.ConversationIdentities(),
+		Writer:      runtime.ConversationProjectionWriter(),
+		Resolvers:   identityResolvers,
+	})
+	if err != nil {
+		return fail("Agent Conversation projection", err)
+	}
 	application, err := desktopcontrol.New(desktopcontrol.Options{
-		Readiness:         ready,
-		Status:            runtime,
-		Environments:      runtime.Environments(),
-		Assignments:       runtime.CaptureAssignments(),
-		Activities:        runtime.Activities(),
-		Contents:          runtime.ExchangeContents(),
-		Connections:       runtime.ConnectionEvents(),
-		Egress:            runtime.EgressAttempts(),
-		Approvals:         runtime.ToolApprovals(),
-		Endpoints:         runtime.UpstreamEndpoints(),
-		Accounts:          runtime.ProviderAccounts(),
-		Offline:           runtime,
-		ConnectionRules:   runtime.ConnectionRules(),
-		CaptureRuns:       runtime.CaptureRunReader(),
-		ManualCaptures:    runtime.ManualCaptures(),
-		WorkspaceDefaults: runtime.WorkspaceDefaults(),
-		Clock:             options.Runtime.Clock,
+		Readiness:           ready,
+		Status:              runtime,
+		Environments:        runtime.Environments(),
+		Assignments:         runtime.CaptureAssignments(),
+		Activities:          runtime.Activities(),
+		ConversationIndexer: conversationIndexer,
+		Contents:            runtime.ExchangeContents(),
+		Connections:         runtime.ConnectionEvents(),
+		Egress:              runtime.EgressAttempts(),
+		Approvals:           runtime.ToolApprovals(),
+		Endpoints:           runtime.UpstreamEndpoints(),
+		Accounts:            runtime.ProviderAccounts(),
+		RawEvidence:         runtime.RawEvidence(),
+		Offline:             runtime,
+		ConnectionRules:     runtime.ConnectionRules(),
+		CaptureRuns:         runtime.CaptureRunReader(),
+		ManualCaptures:      runtime.ManualCaptures(),
+		WorkspaceDefaults:   runtime.WorkspaceDefaults(),
+		Clock:               options.Runtime.Clock,
 	})
 	if err != nil {
 		return fail("App control routes", err)

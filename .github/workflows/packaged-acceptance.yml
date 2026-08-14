@@ -23,6 +23,7 @@ jobs:
     runs-on: [self-hosted, macOS, ARM64, vibermate-acceptance]
     timeout-minutes: 30
     env:
+      DEVELOPER_DIR: /Applications/Xcode_16.2.app/Contents/Developer
       DESKTOP_APP: ${{ github.workspace }}/dist/ViberMate.app
       FIXED_CLAUDE_PATH: ${{ vars.VIBERMATE_CLAUDE_2_1_220_PATH }}
 
@@ -43,7 +44,7 @@ jobs:
             printf 'ACCEPTANCE_ROOT=%s\n' "${acceptance_root}"
             printf 'ACCEPTANCE_BIN=%s/vibermate-acceptance\n' "${acceptance_root}"
             printf 'VERIFY_BIN=%s/vibermate-acceptance-verify\n' "${acceptance_root}"
-            printf 'REPORT_PATH=%s/deterministic-v6.json\n' "${acceptance_root}"
+            printf 'REPORT_PATH=%s/deterministic-v7.json\n' "${acceptance_root}"
           } >> "${GITHUB_ENV}"
 
       - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6.5.0
@@ -51,6 +52,10 @@ jobs:
           go-version-file: go.mod
           check-latest: false
           cache: true
+
+      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5.0.0
+        with:
+          node-version: 22.23.1
 
       - name: Install the pinned Flutter SDK
         shell: bash
@@ -78,7 +83,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          VIBERMATE_FLUTTER_CLEAN=1 ui/flutter_app/tool/build_macos_app.sh live
+          ui/flutter_app/tool/build_macos_app.sh live
           ui/flutter_app/tool/verify_macos_app.sh "${DESKTOP_APP}" live
           go build -buildvcs=true -trimpath -o "${ACCEPTANCE_BIN}" ./cmd/vibermate-acceptance
           go build -buildvcs=true -trimpath -o "${VERIFY_BIN}" ./cmd/vibermate-acceptance-verify
@@ -103,7 +108,7 @@ jobs:
           "${VERIFY_BIN}" \
             --report "${REPORT_PATH}" \
             --expected-mode deterministic \
-            --expected-schema vibermate.m0-assembly-acceptance/v6 \
+            --expected-schema vibermate.m0-assembly-acceptance/v7 \
             --expected-revision "${GITHUB_SHA}" \
             --expected-client-id claude-code \
             --expected-client-version 2.1.220 \
@@ -116,7 +121,7 @@ jobs:
         if: ${{ always() && steps.build.outcome == 'success' }}
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
-          name: private-packaged-deterministic-v6-${{ github.sha }}
+          name: private-packaged-deterministic-v7-${{ github.sha }}
           path: ${{ env.REPORT_PATH }}
           if-no-files-found: error
           retention-days: 7

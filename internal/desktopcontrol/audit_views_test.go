@@ -13,6 +13,7 @@ import (
 	"github.com/vibe-agi/vibermate/internal/desktopcontrol"
 	"github.com/vibe-agi/vibermate/internal/egressaudit"
 	"github.com/vibe-agi/vibermate/internal/productruntime"
+	"github.com/vibe-agi/vibermate/internal/rawevidence"
 )
 
 // The endpoint that answers "what went out" must actually answer it. It used
@@ -199,6 +200,14 @@ func newAuditFixture(
 	t *testing.T,
 	captureReaders ...capturerun.Reader,
 ) *auditFixture {
+	return newAuditFixtureWithRawEvidence(t, nil, captureReaders...)
+}
+
+func newAuditFixtureWithRawEvidence(
+	t *testing.T,
+	rawEvidence rawevidence.Reader,
+	captureReaders ...capturerun.Reader,
+) *auditFixture {
 	t.Helper()
 
 	runtime := startRuntime(t)
@@ -221,6 +230,9 @@ func newAuditFixture(
 	if len(captureReaders) > 0 {
 		captureReader = captureReaders[0]
 	}
+	if rawEvidence == nil {
+		rawEvidence = runtime.RawEvidence()
+	}
 	application, err := desktopcontrol.New(desktopcontrol.Options{
 		Readiness:    readyState(true),
 		Status:       runtime,
@@ -242,6 +254,7 @@ func newAuditFixture(
 		Approvals:       runtime.ToolApprovals(),
 		Endpoints:       runtime.UpstreamEndpoints(),
 		Accounts:        runtime.ProviderAccounts(),
+		RawEvidence:     rawEvidence,
 		CaptureRuns:     captureReader,
 		ManualCaptures:  runtime.ManualCaptures(),
 		Offline:         runtime,
@@ -253,7 +266,7 @@ func newAuditFixture(
 	const authority = "127.0.0.1:43137"
 	router, err := desktopcontrol.NewRouter(desktopcontrol.RouterOptions{
 		Authority:      authority,
-		AllowedOrigins: []string{"tauri://localhost"},
+		AllowedOrigins: []string{"vibermate://desktop"},
 		Authenticator:  authenticator,
 		Application:    application,
 		Bootstrap:      emptyBootstrap(),

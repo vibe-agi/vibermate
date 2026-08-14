@@ -206,6 +206,9 @@ func TestControlActivitiesUsesCanonicalCursorPage(t *testing.T) {
 				`"kind":"exchange","title":"claude","status":"failed",` +
 				`"source":{"kind":"capture_run","displayName":"claude",` +
 				`"recognition":"configured"},` +
+				`"conversation":{"id":"capture_run:Run-1:main",` +
+				`"displayName":"claude","kind":"main",` +
+				`"evidence":"capture_run"},` +
 				`"environment":{"id":"environment-1","revision":1,` +
 				`"digest":"` + digest + `","clientEndpointId":"endpoint-1",` +
 				`"clientEndpointRevision":1,"protocolPlanId":"plan-1",` +
@@ -236,6 +239,9 @@ func TestControlActivitiesRejectsInvalidWireShape(t *testing.T) {
 		`"kind":"exchange","title":"claude","status":"failed",` +
 		`"source":{"kind":"capture_run","displayName":"claude",` +
 		`"recognition":"configured"},` +
+		`"conversation":{"id":"capture_run:Run-1:main",` +
+		`"displayName":"claude","kind":"main",` +
+		`"evidence":"capture_run"},` +
 		`"environment":{"id":"environment-1","revision":1,` +
 		`"digest":"` + digest + `","clientEndpointId":"endpoint-1",` +
 		`"clientEndpointRevision":1,"protocolPlanId":"plan-1",` +

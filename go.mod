@@ -5,6 +5,7 @@ go 1.25.12
 require (
 	github.com/anthropics/anthropic-sdk-go v1.61.0
 	github.com/hashicorp/golang-lru/v2 v2.0.7
+	github.com/klauspost/compress v1.19.1
 	github.com/openai/openai-go/v3 v3.46.0
 	github.com/pressly/goose/v3 v3.27.3
 	github.com/refraction-networking/utls v1.8.2
@@ -22,7 +23,6 @@ require (
 	github.com/dustin/go-humanize v1.0.1 // indirect
 	github.com/google/uuid v1.6.0 // indirect
 	github.com/invopop/jsonschema v0.14.0 // indirect
-	github.com/klauspost/compress v1.19.1 // indirect
 	github.com/mattn/go-isatty v0.0.23 // indirect
 	github.com/mfridman/interpolate v0.0.2 // indirect
 	github.com/ncruces/go-strftime v1.0.0 // indirect

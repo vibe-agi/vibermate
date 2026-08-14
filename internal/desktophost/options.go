@@ -47,7 +47,7 @@ func DefaultOptions(
 		Runtime:                runtimeOptions,
 		ProxyListenAddress:     "127.0.0.1:0",
 		ControlListenAddress:   "127.0.0.1:0",
-		AllowedOrigins:         []string{"tauri://localhost"},
+		AllowedOrigins:         []string{"vibermate://desktop"},
 		ClientCatalog:          clientadapter.BuiltInCatalog(),
 		CLIControlDiscoveryTTL: defaultCLIControlDiscoveryTTL,
 		BootstrapTTL:           defaultBootstrapTTL,

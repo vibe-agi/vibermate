@@ -7,9 +7,9 @@ that Capture.
 
 This repository is the production implementation. The current source contains
 an Environment-first Desktop vertical; it is not yet a Preview or Release
-build. No current evidence claims system trust installation, native secret
-protection, arbitrary-client compatibility, or a packaged candidate from this
-working tree.
+build. No current evidence claims system trust installation, arbitrary-client
+compatibility, Developer ID signing/notarization, or a release candidate from
+this working tree.
 
 ## Product model
 
@@ -19,8 +19,8 @@ Capture
        -> ClientEndpoint (exact scheme + DNS host + port)
             -> ProtocolPlan
                  -> UpstreamRoute
-                      -> ProviderTarget
-                      -> Account policy
+                      -> UpstreamEndpoint
+                           -> Account policy (only Accounts owned by that Endpoint)
                       -> Model and plugin bindings
 
 Request
@@ -42,11 +42,13 @@ One Environment may contain multiple exact endpoints and protocols, including
 Claude and Codex plans that share an upstream service without conflating their
 wire dialects.
 
-Provider accounts belong to an upstream authentication realm. Routes reference
-compatible accounts; they do not own or duplicate secret material. The Desktop
-App can connect Anthropic and OpenAI API keys to the private SecretStore and an
-Environment can select one compatible account. The client-login path remains
-the default and never copies a captured credential into account storage.
+Every Provider Account belongs to exactly one Upstream Endpoint. This is an
+invariant, not a default. An Environment may reference several Upstream
+Endpoints through its Routes, and each Route may select only Accounts owned by
+that exact Endpoint. Accounts do not own or duplicate secret material. The
+Desktop App can connect supported credentials to the private SecretStore; the
+client-login path remains available and never copies a captured credential
+into account storage.
 
 ## Default behavior
 
@@ -190,21 +192,18 @@ JA4, HTTP/2 SETTINGS, header-order, or browser fingerprint parity.
 
 ## Desktop App
 
-The Desktop workspace exposes seven focused destinations:
+The native Flutter workspace exposes Captures, Conversations, Environments,
+Endpoint-owned Accounts, Network governance, Offline Hold, Settings and
+receipt-backed CLI installation. Preview mode uses deterministic fixtures and
+is always visibly marked; live mode launches the bundled daemon and uses the
+same authenticated Control API as the CLI.
 
-- Captures and frozen Requests;
-- Environments;
-- managed Accounts, plus Plugins as an honest deferred resource surface;
-- Policy & approvals;
-- Quality as an honest deferred analysis surface;
-- Settings and receipt-backed CLI installation.
-
-The preview implementation uses the same Environment/Capture DTOs as the real
-Control client. Playwright covers desktop and 390 px layouts, keyboard focus,
-both locales, Capture switching, transparent Manual Capture creation,
-Environment impact publication, frozen Request drill-down, policy decisions,
-managed-account connection/selection, conversation/tool/usage inspection, and
-Offline Hold.
+Dart analyzer and unit/widget/API tests cover desktop and 390 px layouts,
+keyboard traversal and focus, both locales, Capture switching and pagination,
+real Manual Capture lifecycle, Environment publication, Endpoint/Account
+selection, frozen Request and Turn drill-down, approval decisions and Offline
+Hold. Native Swift and packaged-App tests cover preferences, bootstrap/session
+lifecycle, the exact bundled daemon/CLI, and repeated App launches.
 
 The current source composition includes one complete managed-account vertical:
 an Anthropic API key is stored behind the private SecretStore, selected by one
@@ -219,6 +218,7 @@ account.
 
 ```sh
 make check
+make check-flutter-macos
 go test -count=1 ./...
 go test -race -count=1 ./...
 go vet ./...
@@ -245,5 +245,5 @@ explicit deterministic or credentialed expectation.
 - Network Extension/TUN capture for apps without proxy configuration;
 - a fresh packaged acceptance report for the current source.
 
-Those boundaries are deliberate. Passing package and browser tests does not by
+Those boundaries are deliberate. Passing package and native UI tests does not by
 itself make this tree Preview-ready or Release-ready.

@@ -8,16 +8,22 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"sync"
+	"time"
 
 	"github.com/vibe-agi/vibermate/internal/activity"
+	"github.com/vibe-agi/vibermate/internal/agentconversation"
 )
 
 type activityRepository struct {
 	database   *sql.DB
 	operations *operationGate
+	identityMu sync.Mutex
 }
 
 var _ activity.Repository = (*activityRepository)(nil)
+var _ activity.ConversationIdentityRepository = (*activityRepository)(nil)
+var _ activity.ConversationProjectionWriter = (*activityRepository)(nil)
 
 func newActivityRepository(
 	database *sql.DB,
@@ -77,13 +83,18 @@ func (repository *activityRepository) Append(
 		     capture_run_id,
 		     manual_capture_id,
 		     connection_id,
+		     conversation_projection_id,
+		     conversation_display_name,
+		     conversation_kind,
+		     conversation_evidence,
+		     conversation_actor,
 		     provider_status,
 		     provider_field,
 		     client_field,
 		     client_path,
 		     transport_evidence_json
 		 )
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		record.ID,
 		toUnixMillis(record.OccurredAt),
 		string(record.Kind),
@@ -108,6 +119,11 @@ func (repository *activityRepository) Append(
 		record.CaptureRunID,
 		record.ManualCaptureID,
 		record.ConnectionID,
+		conversationProjectionID(record.Conversation),
+		conversationDisplayName(record.Conversation),
+		conversationKind(record.Conversation),
+		conversationEvidence(record.Conversation),
+		conversationActor(record.Conversation),
 		diagnosis.ProviderStatus,
 		diagnosis.ProviderField,
 		diagnosis.ClientField,
@@ -158,6 +174,11 @@ func (repository *activityRepository) List(
 		     capture_run_id,
 		     manual_capture_id,
 		     connection_id,
+		     conversation_projection_id,
+		     conversation_display_name,
+		     conversation_kind,
+		     conversation_evidence,
+		     conversation_actor,
 		     provider_status,
 		     provider_field,
 		     client_field,
@@ -211,6 +232,11 @@ func (repository *activityRepository) ListExchanges(
 		     capture_run_id,
 		     manual_capture_id,
 		     connection_id,
+		     conversation_projection_id,
+		     conversation_display_name,
+		     conversation_kind,
+		     conversation_evidence,
+		     conversation_actor,
 		     provider_status,
 		     provider_field,
 		     client_field,
@@ -234,6 +260,8 @@ func (repository *activityRepository) ListExchanges(
 		     subject_id, status, reason_code,
 		     source_kind, source_display_name, source_recognition,
 		     capture_run_id, manual_capture_id, connection_id,
+		     conversation_projection_id, conversation_display_name,
+		     conversation_kind, conversation_evidence, conversation_actor,
 		     provider_status, provider_field, client_field, client_path,
 		     transport_evidence_json
 		 FROM ranked
@@ -241,6 +269,7 @@ func (repository *activityRepository) ListExchanges(
 		   AND (? = '' OR capture_run_id = ?)
 		   AND (? = '' OR manual_capture_id = ?)
 		   AND (? = '' OR environment_id = ?)
+		   AND (? = '' OR conversation_projection_id = ?)
 		   AND (? = 0 OR sequence < ?)
 		 ORDER BY sequence DESC
 		 LIMIT ?`,
@@ -251,6 +280,8 @@ func (repository *activityRepository) ListExchanges(
 		request.ManualCaptureID,
 		request.EnvironmentID,
 		request.EnvironmentID,
+		request.ConversationProjectionID,
+		request.ConversationProjectionID,
 		request.BeforeSequence,
 		request.BeforeSequence,
 		request.Limit+1,
@@ -294,6 +325,11 @@ func (repository *activityRepository) GetExchange(
 		     capture_run_id,
 		     manual_capture_id,
 		     connection_id,
+		     conversation_projection_id,
+		     conversation_display_name,
+		     conversation_kind,
+		     conversation_evidence,
+		     conversation_actor,
 		     provider_status,
 		     provider_field,
 		     client_field,
@@ -343,6 +379,370 @@ func (repository *activityRepository) GetExchange(
 		return activity.Record{}, fmt.Errorf("read Activity Exchange: %w", err)
 	}
 	return record, nil
+}
+
+func (repository *activityRepository) PutConversationIdentity(
+	ctx context.Context,
+	exchangeID string,
+	identity agentconversation.ClientIdentity,
+) error {
+	identity = identity.Clone()
+	identity.ObservedAt = identity.ObservedAt.UTC().Truncate(time.Millisecond)
+	if identity.Validate() != nil || exchangeID == "" {
+		return activity.ErrInvalidEvent
+	}
+	repository.identityMu.Lock()
+	defer repository.identityMu.Unlock()
+	protocolIDs, err := json.Marshal(identity.ProtocolIDs)
+	if err != nil {
+		return fmt.Errorf("encode Exchange Agent protocol IDs: %w", err)
+	}
+	attributes, err := json.Marshal(identity.Attributes)
+	if err != nil {
+		return fmt.Errorf("encode Exchange Agent attributes: %w", err)
+	}
+	operation, finish, err := repository.operations.begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer finish()
+	result, err := repository.database.ExecContext(
+		operation,
+		`INSERT INTO runtime_exchange_agent_identities (
+		   exchange_id, client_kind, session_id, session_resumable,
+		   actor_id, actor_label, actor_type, actor_is_subagent,
+		   provider_response_id, provider_message_id,
+		   protocol_ids_json, attributes_json,
+		   evidence_source, confidence, observed_at_unix_ms
+		 ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		 ON CONFLICT(exchange_id) DO NOTHING`,
+		exchangeID,
+		identity.Client,
+		identity.SessionID,
+		identity.SessionResumable,
+		identity.ActorID,
+		identity.ActorLabel,
+		identity.ActorType,
+		identity.ActorIsSubagent,
+		identity.ProviderResponseID,
+		identity.ProviderMessageID,
+		string(protocolIDs),
+		string(attributes),
+		identity.Source,
+		identity.Confidence,
+		toUnixMillis(identity.ObservedAt),
+	)
+	if err != nil {
+		return fmt.Errorf("persist Exchange Agent identity: %w", err)
+	}
+	affected, err := result.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("read Exchange Agent identity result: %w", err)
+	}
+	if affected == 1 {
+		return nil
+	}
+	stored, err := repository.getConversationIdentity(operation, exchangeID)
+	if err != nil {
+		return err
+	}
+	merged, changed, mergeErr := agentconversation.MergeClientIdentity(stored, identity)
+	if mergeErr != nil {
+		return fmt.Errorf(
+			"%w: Exchange Agent identity changed: %v",
+			activity.ErrInvalidEvent,
+			mergeErr,
+		)
+	}
+	if !changed {
+		return nil
+	}
+	protocolIDs, err = json.Marshal(merged.ProtocolIDs)
+	if err != nil {
+		return fmt.Errorf("encode merged Exchange Agent protocol IDs: %w", err)
+	}
+	attributes, err = json.Marshal(merged.Attributes)
+	if err != nil {
+		return fmt.Errorf("encode merged Exchange Agent attributes: %w", err)
+	}
+	result, err = repository.database.ExecContext(
+		operation,
+		`UPDATE runtime_exchange_agent_identities
+		 SET client_kind = ?, session_id = ?, session_resumable = ?,
+		     actor_id = ?, actor_label = ?, actor_type = ?, actor_is_subagent = ?,
+		     provider_response_id = ?, provider_message_id = ?,
+		     protocol_ids_json = ?, attributes_json = ?,
+		     evidence_source = ?, confidence = ?, observed_at_unix_ms = ?
+		 WHERE exchange_id = ?`,
+		merged.Client,
+		merged.SessionID,
+		merged.SessionResumable,
+		merged.ActorID,
+		merged.ActorLabel,
+		merged.ActorType,
+		merged.ActorIsSubagent,
+		merged.ProviderResponseID,
+		merged.ProviderMessageID,
+		string(protocolIDs),
+		string(attributes),
+		merged.Source,
+		merged.Confidence,
+		toUnixMillis(merged.ObservedAt),
+		exchangeID,
+	)
+	if err != nil {
+		return fmt.Errorf("deepen Exchange Agent identity: %w", err)
+	}
+	affected, err = result.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("read deepened Exchange Agent identity result: %w", err)
+	}
+	if affected != 1 {
+		return fmt.Errorf(
+			"%w: deepened Exchange Agent identity affected=%d",
+			activity.ErrInvalidEvent,
+			affected,
+		)
+	}
+	return nil
+}
+
+func (repository *activityRepository) GetConversationIdentity(
+	ctx context.Context,
+	exchangeID string,
+) (agentconversation.ClientIdentity, error) {
+	operation, finish, err := repository.operations.begin(ctx)
+	if err != nil {
+		return agentconversation.ClientIdentity{}, err
+	}
+	defer finish()
+	return repository.getConversationIdentity(operation, exchangeID)
+}
+
+func (repository *activityRepository) getConversationIdentity(
+	ctx context.Context,
+	exchangeID string,
+) (agentconversation.ClientIdentity, error) {
+	var identity agentconversation.ClientIdentity
+	var observedAt int64
+	var protocolIDs, attributes string
+	err := repository.database.QueryRowContext(
+		ctx,
+		`SELECT client_kind, session_id, session_resumable,
+		        actor_id, actor_label, actor_type, actor_is_subagent,
+		        provider_response_id, provider_message_id,
+		        protocol_ids_json, attributes_json,
+		        evidence_source, confidence, observed_at_unix_ms
+		 FROM runtime_exchange_agent_identities
+		 WHERE exchange_id = ?`,
+		exchangeID,
+	).Scan(
+		&identity.Client,
+		&identity.SessionID,
+		&identity.SessionResumable,
+		&identity.ActorID,
+		&identity.ActorLabel,
+		&identity.ActorType,
+		&identity.ActorIsSubagent,
+		&identity.ProviderResponseID,
+		&identity.ProviderMessageID,
+		&protocolIDs,
+		&attributes,
+		&identity.Source,
+		&identity.Confidence,
+		&observedAt,
+	)
+	if errors.Is(err, sql.ErrNoRows) {
+		return agentconversation.ClientIdentity{}, activity.ErrExchangeNotFound
+	}
+	if err != nil {
+		return agentconversation.ClientIdentity{}, fmt.Errorf(
+			"read Exchange Agent identity: %w", err,
+		)
+	}
+	identity.ObservedAt = fromUnixMillis(observedAt)
+	if err := json.Unmarshal([]byte(protocolIDs), &identity.ProtocolIDs); err != nil {
+		return agentconversation.ClientIdentity{}, fmt.Errorf(
+			"decode Exchange Agent protocol IDs: %w", err,
+		)
+	}
+	if err := json.Unmarshal([]byte(attributes), &identity.Attributes); err != nil {
+		return agentconversation.ClientIdentity{}, fmt.Errorf(
+			"decode Exchange Agent attributes: %w", err,
+		)
+	}
+	if identity.Validate() != nil {
+		return agentconversation.ClientIdentity{}, fmt.Errorf(
+			"%w: stored Exchange Agent identity is invalid", activity.ErrInvalidEvent,
+		)
+	}
+	return identity.Clone(), nil
+}
+
+func (repository *activityRepository) ReprojectTerminalConversation(
+	ctx context.Context,
+	exchangeID string,
+	conversation agentconversation.Ref,
+) error {
+	if exchangeID == "" || conversation.Validate() != nil ||
+		conversation.Kind == agentconversation.KindPendingExchange {
+		return activity.ErrInvalidEvent
+	}
+	operation, finish, err := repository.operations.begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer finish()
+	result, err := repository.database.ExecContext(
+		operation,
+		`UPDATE runtime_activities
+		 SET conversation_projection_id = ?,
+		     conversation_display_name = ?,
+		     conversation_kind = ?,
+		     conversation_evidence = ?,
+		     conversation_actor = ?
+		 WHERE subject_id = ? AND kind = 'exchange.completed'`,
+		conversation.ProjectionID,
+		conversation.DisplayName,
+		conversation.Kind,
+		conversation.Evidence,
+		conversation.Actor,
+		exchangeID,
+	)
+	if err != nil {
+		return fmt.Errorf("reproject terminal Conversation: %w", err)
+	}
+	affected, err := result.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("read Conversation reproject result: %w", err)
+	}
+	if affected != 1 {
+		return activity.ErrExchangeNotFound
+	}
+	return nil
+}
+
+func (repository *activityRepository) ListConversations(
+	ctx context.Context,
+	request activity.ConversationIndexRequest,
+) (activity.ConversationPage, error) {
+	if err := request.Validate(); err != nil {
+		return activity.ConversationPage{}, err
+	}
+	operation, finish, err := repository.operations.begin(ctx)
+	if err != nil {
+		return activity.ConversationPage{}, err
+	}
+	defer finish()
+	rows, err := repository.database.QueryContext(
+		operation,
+		`WITH indexed_all AS (
+		   SELECT terminal.*
+		   FROM runtime_activities AS terminal
+		   WHERE terminal.kind = 'exchange.completed'
+		   UNION ALL
+		   SELECT started.*
+		   FROM runtime_activities AS started
+		   WHERE started.kind = 'exchange.started'
+		     AND NOT EXISTS (
+		       SELECT 1
+		       FROM runtime_activities AS terminal
+		       WHERE terminal.kind = 'exchange.completed'
+		         AND terminal.subject_id = started.subject_id
+		     )
+		 ), indexed AS (
+		   SELECT *
+		   FROM indexed_all
+		   WHERE (? = '' OR capture_run_id = ?)
+		     AND (? = '' OR manual_capture_id = ?)
+		 ), grouped AS (
+		   SELECT conversation_projection_id,
+		          MIN(sequence) AS first_sequence,
+		          MIN(occurred_at_unix_ms) AS first_occurred_at_unix_ms,
+		          COUNT(*) AS turn_count,
+		          MAX(sequence) AS latest_sequence
+		   FROM indexed
+		   GROUP BY conversation_projection_id
+		 ), selected AS (
+		   SELECT grouped.first_sequence,
+		          grouped.first_occurred_at_unix_ms,
+		          grouped.turn_count,
+		          indexed.*
+		   FROM grouped
+		   JOIN indexed ON indexed.sequence = grouped.latest_sequence
+		   WHERE (? = 0 OR grouped.first_sequence < ?)
+		   ORDER BY grouped.first_sequence DESC,
+		            lower(indexed.conversation_display_name) ASC,
+		            indexed.conversation_projection_id ASC
+		   LIMIT ?
+		 )
+		 SELECT first_sequence, first_occurred_at_unix_ms, turn_count,
+		        sequence, activity_id, occurred_at_unix_ms, kind,
+		        environment_id, environment_revision, environment_digest,
+		        client_endpoint_id, client_endpoint_revision,
+		        protocol_plan_id, protocol_plan_revision,
+		        route_id, route_revision,
+		        account_id, account_revision, credential_epoch,
+		        subject_id, status, reason_code,
+		        source_kind, source_display_name, source_recognition,
+		        capture_run_id, manual_capture_id, connection_id,
+		        conversation_projection_id, conversation_display_name,
+		        conversation_kind, conversation_evidence, conversation_actor,
+		        provider_status, provider_field, client_field, client_path,
+		        transport_evidence_json
+		 FROM selected
+		 ORDER BY first_sequence DESC,
+		          lower(conversation_display_name) ASC,
+		          conversation_projection_id ASC`,
+		request.CaptureRunID,
+		request.CaptureRunID,
+		request.ManualCaptureID,
+		request.ManualCaptureID,
+		request.BeforeFirstSequence,
+		request.BeforeFirstSequence,
+		request.Limit+1,
+	)
+	if err != nil {
+		return activity.ConversationPage{}, fmt.Errorf("list Conversations: %w", err)
+	}
+	defer rows.Close()
+	page := activity.ConversationPage{Items: make([]activity.ConversationRecord, 0)}
+	for rows.Next() {
+		var firstOccurredAt int64
+		var item activity.ConversationRecord
+		state := activityScanState{record: &item.Latest}
+		targets := []any{
+			&item.FirstSequence,
+			&firstOccurredAt,
+			&item.TurnCount,
+		}
+		targets = append(targets, state.targets()...)
+		if err := rows.Scan(targets...); err != nil {
+			return activity.ConversationPage{}, fmt.Errorf("scan Conversation: %w", err)
+		}
+		latest, err := state.finish()
+		if err != nil {
+			return activity.ConversationPage{}, err
+		}
+		item.Latest = latest
+		item.FirstOccurredAt = fromUnixMillis(firstOccurredAt)
+		if item.Latest.Conversation == nil {
+			return activity.ConversationPage{}, errors.New("Conversation has no reference")
+		}
+		item.Conversation = *item.Latest.Conversation
+		if err := item.Validate(); err != nil {
+			return activity.ConversationPage{}, fmt.Errorf("validate Conversation: %w", err)
+		}
+		page.Items = append(page.Items, item)
+	}
+	if err := rows.Err(); err != nil {
+		return activity.ConversationPage{}, fmt.Errorf("iterate Conversations: %w", err)
+	}
+	if len(page.Items) > request.Limit {
+		page.Items = page.Items[:request.Limit]
+		page.NextBeforeFirstSequence = page.Items[len(page.Items)-1].FirstSequence
+	}
+	return page, nil
 }
 
 func sameExchangeIdentity(left, right activity.Record) bool {
@@ -414,49 +814,54 @@ type activityScanner interface {
 
 func scanActivityRecord(scanner activityScanner) (activity.Record, error) {
 	var record activity.Record
-	var occurredAt int64
-	var diagnosis activity.Diagnosis
-	var transportEvidence []byte
-	if err := scanner.Scan(
-		&record.Sequence,
-		&record.ID,
-		&occurredAt,
-		&record.Kind,
-		&record.EnvironmentID,
-		&record.EnvironmentRevision,
-		&record.EnvironmentDigest,
-		&record.ClientEndpointID,
-		&record.ClientEndpointRevision,
-		&record.ProtocolPlanID,
-		&record.ProtocolPlanRevision,
-		&record.RouteID,
-		&record.RouteRevision,
-		&record.AccountID,
-		&record.AccountRevision,
-		&record.CredentialEpoch,
-		&record.SubjectID,
-		&record.Status,
-		&record.ReasonCode,
-		&record.SourceKind,
-		&record.SourceDisplayName,
-		&record.SourceRecognition,
-		&record.CaptureRunID,
-		&record.ManualCaptureID,
-		&record.ConnectionID,
-		&diagnosis.ProviderStatus,
-		&diagnosis.ProviderField,
-		&diagnosis.ClientField,
-		&diagnosis.ClientPath,
-		&transportEvidence,
-	); err != nil {
+	state := activityScanState{record: &record}
+	if err := scanner.Scan(state.targets()...); err != nil {
 		return activity.Record{}, fmt.Errorf("scan Activity: %w", err)
 	}
-	record.OccurredAt = fromUnixMillis(occurredAt)
-	if stored := diagnosis; !stored.Empty() {
+	return state.finish()
+}
+
+type activityScanState struct {
+	record            *activity.Record
+	occurredAt        int64
+	diagnosis         activity.Diagnosis
+	conversation      agentconversation.Ref
+	transportEvidence []byte
+}
+
+func (state *activityScanState) targets() []any {
+	record := state.record
+	return []any{
+		&record.Sequence, &record.ID, &state.occurredAt, &record.Kind,
+		&record.EnvironmentID, &record.EnvironmentRevision, &record.EnvironmentDigest,
+		&record.ClientEndpointID, &record.ClientEndpointRevision,
+		&record.ProtocolPlanID, &record.ProtocolPlanRevision,
+		&record.RouteID, &record.RouteRevision,
+		&record.AccountID, &record.AccountRevision, &record.CredentialEpoch,
+		&record.SubjectID, &record.Status, &record.ReasonCode,
+		&record.SourceKind, &record.SourceDisplayName, &record.SourceRecognition,
+		&record.CaptureRunID, &record.ManualCaptureID, &record.ConnectionID,
+		&state.conversation.ProjectionID, &state.conversation.DisplayName,
+		&state.conversation.Kind, &state.conversation.Evidence,
+		&state.conversation.Actor,
+		&state.diagnosis.ProviderStatus, &state.diagnosis.ProviderField,
+		&state.diagnosis.ClientField, &state.diagnosis.ClientPath,
+		&state.transportEvidence,
+	}
+}
+
+func (state *activityScanState) finish() (activity.Record, error) {
+	record := *state.record
+	record.OccurredAt = fromUnixMillis(state.occurredAt)
+	if state.conversation.ProjectionID != "" {
+		conversation := state.conversation
+		record.Conversation = &conversation
+	}
+	if stored := state.diagnosis; !stored.Empty() {
 		record.Diagnosis = &stored
 	}
 	var err error
-	record.Transport, err = decodeTransportEvidence(transportEvidence)
+	record.Transport, err = decodeTransportEvidence(state.transportEvidence)
 	if err != nil {
 		return activity.Record{}, fmt.Errorf(
 			"decode Activity transport evidence: %w",
@@ -467,6 +872,41 @@ func scanActivityRecord(scanner activityScanner) (activity.Record, error) {
 		return activity.Record{}, fmt.Errorf("validate stored Activity: %w", err)
 	}
 	return record, nil
+}
+
+func conversationProjectionID(ref *agentconversation.Ref) string {
+	if ref == nil {
+		return ""
+	}
+	return ref.ProjectionID
+}
+
+func conversationDisplayName(ref *agentconversation.Ref) string {
+	if ref == nil {
+		return ""
+	}
+	return ref.DisplayName
+}
+
+func conversationKind(ref *agentconversation.Ref) agentconversation.Kind {
+	if ref == nil {
+		return ""
+	}
+	return ref.Kind
+}
+
+func conversationEvidence(ref *agentconversation.Ref) agentconversation.Evidence {
+	if ref == nil {
+		return ""
+	}
+	return ref.Evidence
+}
+
+func conversationActor(ref *agentconversation.Ref) string {
+	if ref == nil {
+		return ""
+	}
+	return ref.Actor
 }
 
 func encodeTransportEvidence(

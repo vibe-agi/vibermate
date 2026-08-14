@@ -7,11 +7,13 @@ import (
 	"bufio"
 	"context"
 	"crypto/rand"
+	"crypto/sha256"
 	"crypto/tls"
 	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"hash"
 	"io"
 	"log"
 	"net"
@@ -41,6 +43,7 @@ import (
 	"github.com/vibe-agi/vibermate/internal/originidentity"
 	"github.com/vibe-agi/vibermate/internal/protocolcore"
 	"github.com/vibe-agi/vibermate/internal/protocolspec"
+	"github.com/vibe-agi/vibermate/internal/rawevidence"
 	"github.com/vibe-agi/vibermate/internal/ssewire"
 	"github.com/vibe-agi/vibermate/internal/transportprofile"
 	"github.com/vibe-agi/vibermate/internal/wireprofile"
@@ -79,6 +82,7 @@ const (
 	ReasonUnsupportedUpgrade              ReasonCode = "unsupported_upgrade"
 	ReasonConnectionDenied                ReasonCode = "connection_denied"
 	ReasonCaptureEnvironmentUnavailable   ReasonCode = "capture_environment_unavailable"
+	ReasonRawEvidenceUnavailable          ReasonCode = "raw_evidence_unavailable"
 )
 
 const systemTransparentRuleID = "system_transparent"
@@ -173,11 +177,14 @@ type Options struct {
 	Policy connectionpolicy.Source
 	// Approvals answers a policy `ask`. Without it an ask cannot block on a
 	// person, so it denies rather than degrading into an allow.
-	Approvals        NetworkApprovals
-	BlindTunnels     BlindTunnelDialer
-	EgressAudit      egressaudit.Writer
-	ExchangeIDs      ExchangeIDSource
-	HandshakeTimeout time.Duration
+	Approvals             NetworkApprovals
+	BlindTunnels          BlindTunnelDialer
+	EgressAudit           egressaudit.Writer
+	RawEvidence           rawevidence.RequestRecorder
+	RawObservationTimeout time.Duration
+	RawResponseBodyBytes  int
+	ExchangeIDs           ExchangeIDSource
+	HandshakeTimeout      time.Duration
 }
 
 // terminalFailureReporter is implemented by the production audit boundary.
@@ -185,6 +192,10 @@ type Options struct {
 // an invalid terminal must cross this explicit durability boundary.
 type terminalFailureReporter interface {
 	ReportTerminalFailure(error)
+}
+
+type rawEvidenceFailureReporter interface {
+	ReportRawEvidenceFailure(error)
 }
 
 type operation struct {
@@ -202,6 +213,9 @@ type Handler struct {
 	approvals    NetworkApprovals
 	blindTunnels BlindTunnelDialer
 	egressAudit  egressaudit.Writer
+	rawEvidence  rawevidence.RequestRecorder
+	rawTimeout   time.Duration
+	rawBodyBytes int
 	exchangeIDs  ExchangeIDSource
 	handshake    time.Duration
 	clock        func() time.Time
@@ -232,6 +246,20 @@ func New(options Options) (*Handler, error) {
 	if options.HandshakeTimeout < 0 {
 		return nil, errors.New("TLS handshake timeout must be positive")
 	}
+	rawTimeout := options.RawObservationTimeout
+	rawBodyBytes := options.RawResponseBodyBytes
+	if options.RawEvidence != nil {
+		if rawTimeout == 0 {
+			rawTimeout = rawevidence.DefaultObservationLimit
+		}
+		if rawBodyBytes == 0 {
+			rawBodyBytes = rawevidence.DefaultMaximumBodyBytes
+		}
+		if rawTimeout <= 0 || rawBodyBytes <= 0 ||
+			rawBodyBytes > rawevidence.DefaultMaximumBodyBytes {
+			return nil, errors.New("client raw evidence configuration is invalid")
+		}
+	}
 	handler := &Handler{
 		admissions:   options.Admissions,
 		assignments:  options.Assignments,
@@ -243,6 +271,9 @@ func New(options Options) (*Handler, error) {
 		approvals:    options.Approvals,
 		blindTunnels: options.BlindTunnels,
 		egressAudit:  options.EgressAudit,
+		rawEvidence:  options.RawEvidence,
+		rawTimeout:   rawTimeout,
+		rawBodyBytes: rawBodyBytes,
 		exchangeIDs:  options.ExchangeIDs,
 		handshake:    options.HandshakeTimeout,
 		clock:        time.Now,
@@ -764,6 +795,25 @@ func (handler *Handler) serveInner(
 	}
 	request.Header.Del("Proxy-Authorization")
 	request.Header.Del("Proxy-Connection")
+	if handler.rawEvidence != nil {
+		scopeKind, scopeID, err := rawEvidenceScope(capture)
+		if err != nil {
+			handler.reportRawEvidenceFailure(fmt.Errorf(
+				"resolve Raw evidence scope: %w", err,
+			))
+		} else {
+			scopeLease, beginErr := handler.rawEvidence.BeginScope(
+				request.Context(), scopeKind, scopeID,
+			)
+			if beginErr != nil {
+				handler.reportRawEvidenceFailure(fmt.Errorf(
+					"begin Raw evidence scope: %w", beginErr,
+				))
+			} else {
+				defer scopeLease.Release()
+			}
+		}
+	}
 	clientProtocol, err := downstreamProtocolOf(request)
 	if err != nil {
 		writeReason(writer, http.StatusBadRequest, ReasonRequestBodyInvalid, "")
@@ -898,6 +948,22 @@ func (handler *Handler) serveInner(
 	}
 }
 
+func rawEvidenceScope(
+	capture captureidentity.Reference,
+) (rawevidence.ScopeKind, string, error) {
+	if err := capture.Validate(); err != nil {
+		return "", "", err
+	}
+	switch capture.Kind {
+	case captureidentity.KindManagedRun:
+		return rawevidence.ScopeManagedRun, capture.ID, nil
+	case captureidentity.KindManualCapture:
+		return rawevidence.ScopeManualCapture, capture.ID, nil
+	default:
+		return "", "", captureidentity.ErrInvalidReference
+	}
+}
+
 func isWebSocketUpgrade(request *http.Request) bool {
 	if request == nil ||
 		!strings.EqualFold(
@@ -950,6 +1016,12 @@ func (handler *Handler) serveSemantic(
 		// typed references rather than as a delimiter-joined string.
 		exchange.WithIngressCorrelation(admission, audit.ID()),
 	}
+	if evidence := clientProtocolEvidenceFromHeaders(request.Header); len(evidence) != 0 {
+		requestOptions = append(
+			requestOptions,
+			exchange.WithClientProtocolEvidence(evidence),
+		)
+	}
 	if beta := strings.Join(request.Header.Values("Anthropic-Beta"), ","); beta != "" {
 		requestOptions = append(
 			requestOptions,
@@ -980,7 +1052,61 @@ func (handler *Handler) serveSemantic(
 		writeReason(writer, http.StatusBadRequest, ReasonRequestBodyInvalid, "")
 		return
 	}
-	downstream := newHTTPDownstream(writer)
+	rawContext, rawContextErr := clientRequest.RawEvidenceContext()
+	if rawContextErr != nil {
+		handler.reportRawEvidenceFailure(fmt.Errorf(
+			"construct client Raw evidence context: %w", rawContextErr,
+		))
+		rawContext = rawevidence.Context{Recording: rawevidence.RecordingOff}
+	}
+	rawEnabled := handler.rawEvidence != nil &&
+		rawContext.Recording != rawevidence.RecordingOff
+	if rawEnabled {
+		retained, complete, reason := retainedRawBody(
+			body,
+			rawContext.Recording,
+			handler.rawBodyBytes,
+			"request_payload_limit",
+		)
+		if _, err := handler.observeRaw(request.Context(), rawevidence.Observation{
+			Context:             rawContext,
+			Layer:               rawevidence.LayerClientIngress,
+			Method:              request.Method,
+			Scheme:              "https",
+			Authority:           request.Host,
+			Path:                request.URL.EscapedPath(),
+			RawQuery:            request.URL.RawQuery,
+			Headers:             request.Header.Clone(),
+			Body:                retained,
+			TotalBodyBytes:      int64(len(body)),
+			BodySHA256:          sha256.Sum256(body),
+			DigestAvailable:     true,
+			FullDigestAvailable: true,
+			Complete:            complete,
+			IncompleteReason:    reason,
+			Representation:      "http_message",
+			ContentType:         request.Header.Get("Content-Type"),
+			ContentEncoding:     request.Header.Get("Content-Encoding"),
+		}); err != nil {
+			handler.reportRawEvidenceFailure(fmt.Errorf(
+				"record client ingress Raw evidence: %w", err,
+			))
+			// Do not make a second best-effort write for this response when the
+			// ingress writer is already degraded. Semantic traffic and the core
+			// Activity/Egress audit remain authoritative and continue normally.
+			rawContext = rawevidence.Context{Recording: rawevidence.RecordingOff}
+		}
+	}
+	downstream := newHTTPDownstream(writer, httpDownstreamOptions{
+		Observer:         handler.rawEvidence,
+		ObservationLimit: handler.rawTimeout,
+		MaximumBodyBytes: handler.rawBodyBytes,
+		Context:          rawContext,
+		Scheme:           "https",
+		Authority:        request.Host,
+		Path:             request.URL.EscapedPath(),
+		RawQuery:         request.URL.RawQuery,
+	})
 	_, err = handler.exchanges.Execute(
 		request.Context(),
 		clientRequest,
@@ -991,7 +1117,92 @@ func (handler *Handler) serveSemantic(
 	// connection would leave only the last request's answer on a persistent
 	// connection carrying several.
 	if err != nil && !downstream.Begun() {
-		writeExchangeFailure(writer, plan.ProtocolPlan().ClientDialect(), err)
+		if writeErr := writeExchangeFailureDownstream(
+			request.Context(),
+			downstream,
+			plan.ProtocolPlan().ClientDialect(),
+			err,
+		); writeErr != nil {
+			if !downstream.Begun() {
+				writeExchangeFailure(writer, plan.ProtocolPlan().ClientDialect(), err)
+			}
+		}
+	}
+	if finalizeErr := downstream.Finalize(); finalizeErr != nil {
+		handler.reportRawEvidenceFailure(fmt.Errorf(
+			"record client downstream raw evidence: %w",
+			finalizeErr,
+		))
+	}
+}
+
+// clientProtocolEvidenceFromHeaders extracts only documented, non-secret
+// client-native identity headers. Duplicate or malformed optional values are
+// omitted instead of rejecting transparent forwarding; Raw HTTP still retains
+// the exact wire envelope for operator inspection.
+func clientProtocolEvidenceFromHeaders(
+	headers http.Header,
+) []protocolcore.ProtocolEvidenceValue {
+	specs := [...]struct {
+		header string
+		name   string
+	}{
+		{header: "X-Claude-Code-Agent-Id", name: "claude.agent_id"},
+		{header: "X-Claude-Code-Parent-Agent-Id", name: "claude.parent_agent_id"},
+		{header: "X-Claude-Code-Session-Id", name: "claude.session_id"},
+	}
+	values := make([]protocolcore.ProtocolEvidenceValue, 0, len(specs))
+	for _, spec := range specs {
+		raw := headers.Values(spec.header)
+		if len(raw) != 1 || raw[0] == "" || strings.TrimSpace(raw[0]) != raw[0] {
+			continue
+		}
+		value := protocolcore.ProtocolEvidenceValue{Name: spec.name, Value: raw[0]}
+		if value.Validate() != nil {
+			continue
+		}
+		values = append(values, value)
+	}
+	return values
+}
+
+func retainedRawBody(
+	body []byte,
+	mode rawevidence.RecordingMode,
+	maximum int,
+	reason string,
+) ([]byte, bool, string) {
+	if mode != rawevidence.RecordingFull {
+		if len(body) == 0 {
+			return nil, true, ""
+		}
+		return nil, false, "recording_metadata_only"
+	}
+	if len(body) <= maximum {
+		return body, true, ""
+	}
+	return body[:maximum], false, reason
+}
+
+func (handler *Handler) observeRaw(
+	ctx context.Context,
+	observation rawevidence.Observation,
+) (rawevidence.Watermark, error) {
+	operation, cancel := context.WithTimeout(
+		context.WithoutCancel(ctx),
+		handler.rawTimeout,
+	)
+	defer cancel()
+	return handler.rawEvidence.Observe(operation, observation)
+}
+
+func (handler *Handler) reportRawEvidenceFailure(err error) {
+	if err == nil {
+		return
+	}
+	reporter, ok := handler.egressAudit.(rawEvidenceFailureReporter)
+	if ok {
+		reporter.ReportRawEvidenceFailure(err)
 	}
 }
 
@@ -1607,6 +1818,16 @@ func exchangeStatus(err error) int {
 		return http.StatusBadRequest
 	case exchange.ReasonUnsupportedClientInput:
 		return http.StatusUnprocessableEntity
+	case exchange.ReasonProviderStatusRejected:
+		// Keep the provider's retry signal intact. In particular, Anthropic uses
+		// 529 for overload; rewriting it to 502 changes SDK retry behavior and
+		// falsely attributes the failure to ViberMate. The response body remains
+		// the fixed, non-echoing dialect envelope written by
+		// writeExchangeFailure.
+		if status := exchange.ProviderStatusOf(err); status >= 400 && status <= 599 {
+			return status
+		}
+		return http.StatusBadGateway
 	case exchange.ReasonProviderCredentialUnavailable:
 		// The client reached the selected managed route, but that route cannot
 		// authenticate its provider attempt. Reporting a generic gateway failure
@@ -1647,14 +1868,46 @@ func copyResponseHeaders(destination, source http.Header) {
 	}
 }
 
-type httpDownstream struct {
-	writer http.ResponseWriter
-	mode   exchange.ResponseMode
-	begun  bool
+type httpDownstreamOptions struct {
+	Observer         rawevidence.Observer
+	ObservationLimit time.Duration
+	MaximumBodyBytes int
+	Context          rawevidence.Context
+	Scheme           string
+	Authority        string
+	Path             string
+	RawQuery         string
 }
 
-func newHTTPDownstream(writer http.ResponseWriter) *httpDownstream {
-	return &httpDownstream{writer: writer}
+type httpDownstream struct {
+	writer  http.ResponseWriter
+	options httpDownstreamOptions
+	mode    exchange.ResponseMode
+	begun   bool
+	status  int
+	headers http.Header
+	hash    hash.Hash
+	body    []byte
+	total   int64
+	frames  []rawevidence.Frame
+	once    sync.Once
+	rawErr  error
+}
+
+func newHTTPDownstream(
+	writer http.ResponseWriter,
+	options httpDownstreamOptions,
+) *httpDownstream {
+	maximum := options.MaximumBodyBytes
+	if options.Context.Recording != rawevidence.RecordingFull {
+		maximum = 0
+	}
+	return &httpDownstream{
+		writer:  writer,
+		options: options,
+		hash:    sha256.New(),
+		body:    make([]byte, 0, min(maximum, 32<<10)),
+	}
 }
 
 func (downstream *httpDownstream) Begin(
@@ -1677,7 +1930,9 @@ func (downstream *httpDownstream) Begin(
 	}
 	downstream.mode = mode
 	downstream.begun = true
-	copyResponseHeaders(downstream.writer.Header(), envelope.Headers())
+	downstream.status = envelope.StatusCode()
+	downstream.headers = envelope.Headers()
+	copyResponseHeaders(downstream.writer.Header(), downstream.headers)
 	downstream.writer.WriteHeader(envelope.StatusCode())
 	if mode == exchange.ResponseModeEventStream {
 		if flusher, ok := downstream.writer.(http.Flusher); ok {
@@ -1691,6 +1946,14 @@ func (downstream *httpDownstream) Write(
 	ctx context.Context,
 	data []byte,
 ) (int, error) {
+	return downstream.write(ctx, data, rawevidence.FrameData)
+}
+
+func (downstream *httpDownstream) write(
+	ctx context.Context,
+	data []byte,
+	kind rawevidence.FrameKind,
+) (int, error) {
 	if err := ctx.Err(); err != nil {
 		return 0, err
 	}
@@ -1698,6 +1961,31 @@ func (downstream *httpDownstream) Write(
 		return 0, errors.New("downstream response did not begin")
 	}
 	count, err := downstream.writer.Write(data)
+	if count < 0 || count > len(data) {
+		return 0, fmt.Errorf(
+			"downstream response writer returned invalid byte count %d for %d bytes",
+			count,
+			len(data),
+		)
+	}
+	if count > 0 {
+		committed := data[:count]
+		_, _ = downstream.hash.Write(committed)
+		downstream.total += int64(count)
+		maximum := downstream.options.MaximumBodyBytes
+		if downstream.options.Context.Recording != rawevidence.RecordingFull {
+			maximum = 0
+		}
+		remaining := maximum - len(downstream.body)
+		if remaining > 0 {
+			retained := min(remaining, count)
+			offset := int64(len(downstream.body))
+			downstream.body = append(downstream.body, committed[:retained]...)
+			downstream.frames = append(downstream.frames, rawevidence.Frame{
+				Kind: kind, Offset: offset, Length: int64(retained),
+			})
+		}
+	}
 	if downstream.mode == exchange.ResponseModeEventStream {
 		if flusher, ok := downstream.writer.(http.Flusher); ok {
 			flusher.Flush()
@@ -1712,7 +2000,11 @@ func (downstream *httpDownstream) Keepalive(ctx context.Context) error {
 		return errors.New("only a begun event stream accepts a keepalive")
 	}
 	const wire = ": keepalive\n\n"
-	count, err := downstream.Write(ctx, []byte(wire))
+	count, err := downstream.write(
+		ctx,
+		[]byte(wire),
+		rawevidence.FrameKeepalive,
+	)
 	if err != nil {
 		return err
 	}
@@ -1757,12 +2049,62 @@ func (downstream *httpDownstream) Abort(
 	if err != nil {
 		return err
 	}
-	_, err = downstream.Write(ctx, encoded)
+	_, err = downstream.write(ctx, encoded, rawevidence.FrameAbort)
 	return err
 }
 
 func (downstream *httpDownstream) Begun() bool {
 	return downstream.begun
+}
+
+func (downstream *httpDownstream) Finalize() error {
+	downstream.once.Do(func() {
+		if downstream.options.Observer == nil ||
+			downstream.options.Context.Recording == rawevidence.RecordingOff ||
+			!downstream.begun {
+			return
+		}
+		var digest [sha256.Size]byte
+		copy(digest[:], downstream.hash.Sum(nil))
+		complete := downstream.total == int64(len(downstream.body))
+		reason := ""
+		if !complete {
+			reason = "response_payload_limit"
+			if downstream.options.Context.Recording == rawevidence.RecordingMetadataOnly {
+				reason = "recording_metadata_only"
+			}
+		}
+		operation, cancel := context.WithTimeout(
+			context.Background(),
+			downstream.options.ObservationLimit,
+		)
+		defer cancel()
+		_, downstream.rawErr = downstream.options.Observer.Observe(
+			operation,
+			rawevidence.Observation{
+				Context:             downstream.options.Context,
+				Layer:               rawevidence.LayerClientDownstream,
+				StatusCode:          downstream.status,
+				Scheme:              downstream.options.Scheme,
+				Authority:           downstream.options.Authority,
+				Path:                downstream.options.Path,
+				RawQuery:            downstream.options.RawQuery,
+				Headers:             downstream.headers.Clone(),
+				Body:                downstream.body,
+				TotalBodyBytes:      downstream.total,
+				BodySHA256:          digest,
+				DigestAvailable:     true,
+				FullDigestAvailable: true,
+				Frames:              downstream.frames,
+				Complete:            complete,
+				IncompleteReason:    reason,
+				Representation:      "http_message",
+				ContentType:         downstream.headers.Get("Content-Type"),
+				ContentEncoding:     downstream.headers.Get("Content-Encoding"),
+			},
+		)
+	})
+	return downstream.rawErr
 }
 
 // serveBlindTunnel forwards a connection the selected Environment does not

@@ -119,11 +119,10 @@ func TestToolchainValidationRequiresPinnedBuildAndHostVersions(t *testing.T) {
 	t.Parallel()
 
 	tools := toolchainProvenance{
-		Go:    "go version go1.25.12 darwin/arm64",
-		Node:  "v22.23.1",
-		Rustc: "rustc 1.88.0 (fixture)\nhost: aarch64-apple-darwin",
-		Cargo: "cargo 1.88.0 (fixture)",
-		PNPM:  "10.33.2",
+		Go:      "go version go1.25.12 darwin/arm64",
+		Flutter: normalizedFlutterVersion(),
+		Dart:    "Dart " + expectedDartVersion,
+		Xcode:   expectedXcodeVersion,
 	}
 	binaries := []goBinaryEvidence{
 		{role: "acceptance", goVersion: expectedGoVersion},
@@ -133,9 +132,9 @@ func TestToolchainValidationRequiresPinnedBuildAndHostVersions(t *testing.T) {
 	if err := validateToolchains(tools, binaries); err != nil {
 		t.Fatalf("pinned toolchains were rejected: %v", err)
 	}
-	tools.Node = "v25.8.1"
+	tools.Flutter = "Flutter 99.0.0 (" + expectedFlutterRevision + ")"
 	if err := validateToolchains(tools, binaries); err == nil {
-		t.Fatal("unpinned Node toolchain was accepted")
+		t.Fatal("unpinned Flutter toolchain was accepted")
 	}
 }
 
@@ -178,32 +177,38 @@ func TestDesktopBuildManifestBindsSourceSidecarsAndConfiguration(
 			Desktop:  "release",
 			Sidecars: "development",
 			Target:   "aarch64-apple-darwin",
+			Toolkit:  "flutter",
 		},
 		Toolchains: desktopBuildToolchains{
-			Go:    "go version go1.25.12 darwin/arm64",
-			Node:  expectedNodeVersion,
-			Rustc: "rustc 1.88.0 (fixture)\nhost: aarch64-apple-darwin",
-			Cargo: "cargo 1.88.0 (fixture)",
-			PNPM:  expectedPNPMVersion,
-			Tauri: expectedTauriVersion,
+			Go:      "go version go1.25.12 darwin/arm64",
+			Flutter: normalizedFlutterVersion(),
+			Dart:    "Dart " + expectedDartVersion,
+			Xcode:   expectedXcodeVersion,
 		},
 		ConfigurationSHA256: map[string]string{
-			"go.mod":                               hash,
-			"go.sum":                               hash,
-			"rust-toolchain.toml":                  hash,
-			"ui/desktop/package.json":              hash,
-			"ui/desktop/pnpm-lock.yaml":            hash,
-			"ui/desktop/src-tauri/Cargo.toml":      hash,
-			"ui/desktop/src-tauri/Cargo.lock":      hash,
-			"ui/desktop/src-tauri/tauri.conf.json": hash,
+			"go.mod":                              hash,
+			"go.sum":                              hash,
+			"ui/flutter_app/.metadata":            hash,
+			"ui/flutter_app/pubspec.yaml":         hash,
+			"ui/flutter_app/pubspec.lock":         hash,
+			"ui/flutter_app/tool/flutter-sdk.env": hash,
+			"ui/flutter_app/macos/Runner.xcodeproj/project.pbxproj": hash,
+			"ui/flutter_app/macos/Runner/Configs/AppInfo.xcconfig":  hash,
+			"ui/flutter_app/macos/Runner/Configs/Release.xcconfig":  hash,
+			"ui/flutter_app/macos/Runner/Info.plist":                hash,
+			"ui/flutter_app/macos/Runner/Release.entitlements":      hash,
 		},
-		SidecarSHA256: map[string]string{
-			"vibermated": strings.Repeat("b", 64),
-			"vibermate":  strings.Repeat("c", 64),
+		NestedCodeSHA256: map[string]string{
+			"app-framework":           strings.Repeat("d", 64),
+			"flutter-macos-framework": strings.Repeat("e", 64),
+			"vibermated":              strings.Repeat("b", 64),
+			"vibermate":               strings.Repeat("c", 64),
 		},
 	}
 	artifacts := []artifactProvenance{
+		{Role: "app-framework", SHA256: strings.Repeat("d", 64)},
 		{Role: "daemon", SHA256: strings.Repeat("b", 64)},
+		{Role: "flutter-macos-framework", SHA256: strings.Repeat("e", 64)},
 		{Role: "launcher", SHA256: strings.Repeat("c", 64)},
 	}
 	if err := validateDesktopBuildManifest(
@@ -214,7 +219,7 @@ func TestDesktopBuildManifestBindsSourceSidecarsAndConfiguration(
 	); err != nil {
 		t.Fatalf("valid manifest was rejected: %v", err)
 	}
-	manifest.SidecarSHA256["vibermated"] = hash
+	manifest.NestedCodeSHA256["vibermated"] = hash
 	if err := validateDesktopBuildManifest(
 		manifest,
 		source,
@@ -223,15 +228,15 @@ func TestDesktopBuildManifestBindsSourceSidecarsAndConfiguration(
 	); err == nil {
 		t.Fatal("manifest with a mismatched daemon digest was accepted")
 	}
-	manifest.SidecarSHA256["vibermated"] = strings.Repeat("b", 64)
-	delete(manifest.ConfigurationSHA256, "rust-toolchain.toml")
+	manifest.NestedCodeSHA256["vibermated"] = strings.Repeat("b", 64)
+	delete(manifest.ConfigurationSHA256, "ui/flutter_app/pubspec.lock")
 	if err := validateDesktopBuildManifest(
 		manifest,
 		source,
 		"development",
 		artifacts,
 	); err == nil {
-		t.Fatal("v2 manifest without the Rust declaration digest was accepted")
+		t.Fatal("v3 manifest without the Flutter lockfile digest was accepted")
 	}
 	manifest.Schema = "vibermate.desktop-build/v1"
 	if err := validateDesktopBuildManifest(
@@ -242,8 +247,8 @@ func TestDesktopBuildManifestBindsSourceSidecarsAndConfiguration(
 	); err == nil {
 		t.Fatal("current acceptance accepted a historical v1 manifest")
 	}
-	manifest.ConfigurationSHA256["rust-toolchain.toml"] = hash
-	manifest.Schema = desktopBuildManifestV2
+	manifest.ConfigurationSHA256["ui/flutter_app/pubspec.lock"] = hash
+	manifest.Schema = desktopBuildManifestV3
 	manifest.Source.Dirty = true
 	if err := validateDesktopBuildManifest(
 		manifest,

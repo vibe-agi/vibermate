@@ -16,6 +16,8 @@ import (
 	"sync"
 	"time"
 
+	"github.com/klauspost/compress/zstd"
+	"github.com/vibe-agi/vibermate/internal/agentconversation"
 	"github.com/vibe-agi/vibermate/internal/clientadapter"
 	"github.com/vibe-agi/vibermate/internal/environment"
 	"github.com/vibe-agi/vibermate/internal/offlinehold"
@@ -23,6 +25,7 @@ import (
 	"github.com/vibe-agi/vibermate/internal/protocolpath"
 	"github.com/vibe-agi/vibermate/internal/providerauth"
 	"github.com/vibe-agi/vibermate/internal/providertransport"
+	"github.com/vibe-agi/vibermate/internal/rawevidence"
 	"github.com/vibe-agi/vibermate/internal/secretstore"
 )
 
@@ -132,7 +135,7 @@ func (pipeline *Pipeline) Execute(
 		Outcome:    AttemptFailed,
 	}
 	defer func() {
-		pipeline.observeAttempt(request, result, resultErr)
+		pipeline.observeAttempt(request, result, resultErr, captured)
 	}()
 	defer func() {
 		pipeline.observeContent(request, captured)
@@ -347,15 +350,24 @@ func (pipeline *Pipeline) executeCandidate(
 		}
 		var contentPath *protocolpath.Path
 		var decodedContent *protocolcore.Request
-		if request.plan.ContentRecording().Mode != environment.ContentRecordingOff {
-			if candidatePath, selectErr := pipeline.protocolPaths.Select(
-				selection.codecPlan,
-				request.operation.id,
-			); selectErr == nil {
-				if decoded, _, decodeErr := candidatePath.Client().DecodeRequest(request.body); decodeErr == nil {
-					contentPath = candidatePath
-					decodedContent = &decoded
-					captured.request = &decoded
+		contentBody, contentErr := decodeOriginalRequestContent(
+			request.body,
+			headers.Get("Content-Encoding"),
+		)
+		if candidatePath, selectErr := pipeline.protocolPaths.Select(
+			selection.codecPlan,
+			request.operation.id,
+		); selectErr == nil && contentErr == nil {
+			if decoded, _, decodeErr := candidatePath.Client().DecodeRequest(contentBody); decodeErr == nil {
+				decoded = mergeClientProtocolEvidence(
+					decoded,
+					request.ClientProtocolEvidence(),
+				)
+				contentPath = candidatePath
+				decodedContent = &decoded
+				decodedForEvidence := decoded.Clone()
+				captured.request = &decodedForEvidence
+				if request.plan.ContentRecording().Mode != environment.ContentRecordingOff {
 					pipeline.observeRequest(request, captured)
 				}
 			}
@@ -397,6 +409,10 @@ func (pipeline *Pipeline) executeCandidate(
 			return newFailure(ReasonEnvironmentPlanInvalid, request.exchangeID, 0, err)
 		}
 	}
+	decoded = mergeClientProtocolEvidence(
+		decoded,
+		request.ClientProtocolEvidence(),
+	)
 	decodedForEvidence := decoded.Clone()
 	captured.request = &decodedForEvidence
 	pipeline.observeRequest(request, captured)
@@ -467,6 +483,40 @@ func (pipeline *Pipeline) executeCandidate(
 	)
 }
 
+// decodeOriginalRequestContent returns a bounded audit-only copy. The exact
+// compressed body continues upstream unchanged; decompression is never part of
+// the original-passthrough transport contract.
+func decodeOriginalRequestContent(body []byte, contentEncoding string) ([]byte, error) {
+	switch encoding := strings.ToLower(strings.TrimSpace(contentEncoding)); encoding {
+	case "", "identity":
+		return bytes.Clone(body), nil
+	case "gzip":
+		reader, err := gzip.NewReader(bytes.NewReader(body))
+		if err != nil {
+			return nil, err
+		}
+		decoded, readErr := readBounded(reader, maxCompleteResponseBytes)
+		closeErr := reader.Close()
+		if readErr != nil || closeErr != nil {
+			return nil, errors.Join(readErr, closeErr)
+		}
+		return decoded, nil
+	case "zstd":
+		reader, err := zstd.NewReader(
+			bytes.NewReader(body),
+			zstd.WithDecoderMaxMemory(maxCompleteResponseBytes),
+		)
+		if err != nil {
+			return nil, err
+		}
+		decoded, readErr := readBounded(reader, maxCompleteResponseBytes)
+		reader.Close()
+		return decoded, readErr
+	default:
+		return nil, fmt.Errorf("unsupported request content encoding %q", encoding)
+	}
+}
+
 func (pipeline *Pipeline) newProviderRequest(
 	request ClientRequest,
 	selection frozenSelection,
@@ -487,6 +537,16 @@ func (pipeline *Pipeline) newProviderRequest(
 		return providertransport.Request{}, err
 	}
 	clientHello, _ := request.ClientHelloObservation()
+	rawContext, rawContextErr := newProviderRawEvidenceContext(
+		request,
+		selection,
+		credential,
+		egressID,
+	)
+	var rawEvidence *rawevidence.Context
+	if rawContextErr == nil {
+		rawEvidence = &rawContext
+	}
 	options := providertransport.RequestOptions{
 		RequestID: attemptID, EgressAttemptID: egressID,
 		ConnectionID: request.connectionRef, ExchangeID: request.exchangeID,
@@ -496,6 +556,7 @@ func (pipeline *Pipeline) newProviderRequest(
 		Headers: headers, Body: body, CredentialMode: credential.mode,
 		WireProfile: selection.wireProfile, ClientProtocol: request.ClientHTTPProtocol(),
 		ClientUserAgent: request.ClientUserAgent(), ClientHello: clientHello,
+		RawEvidence: rawEvidence,
 	}
 	if credential.mode == providerauth.CredentialClientPassthrough {
 		options.ClientOrigin = selection.clientOrigin
@@ -505,6 +566,94 @@ func (pipeline *Pipeline) newProviderRequest(
 		options.AuthDriverRef = credential.driver
 	}
 	return providertransport.NewRequest(options)
+}
+
+func newProviderRawEvidenceContext(
+	request ClientRequest,
+	selection frozenSelection,
+	credential credentialMaterial,
+	attemptID string,
+) (rawevidence.Context, error) {
+	context, err := request.RawEvidenceContext()
+	if err != nil {
+		return rawevidence.Context{}, err
+	}
+	if context.RouteID != selection.routeID.String() ||
+		context.UpstreamEndpointID != selection.targetRef {
+		return rawevidence.Context{}, errors.New(
+			"provider raw evidence selection does not match the frozen request",
+		)
+	}
+	context.AttemptID = attemptID
+	if credential.mode == providerauth.CredentialManaged {
+		context.AccountID = credential.account.ID
+		context.AccountRevision = credential.account.Revision
+		context.CredentialEpoch = credential.account.CredentialEpoch
+	}
+	if err := context.Validate(); err != nil {
+		return rawevidence.Context{}, fmt.Errorf(
+			"freeze provider raw evidence context: %w",
+			err,
+		)
+	}
+	return context, nil
+}
+
+// RawEvidenceContext freezes the Exchange-level authority shared by the
+// client ingress and downstream envelopes. It deliberately omits Attempt and
+// Account: those belong to an actual provider attempt and are attached by the
+// provider transport. A retry can therefore never rewrite the client-facing
+// envelope as though it belonged to only one candidate account.
+func (request ClientRequest) RawEvidenceContext() (rawevidence.Context, error) {
+	selection, err := selectFrozenPlan(request.RequestPlan())
+	if err != nil {
+		return rawevidence.Context{}, fmt.Errorf(
+			"freeze client raw evidence selection: %w",
+			err,
+		)
+	}
+	recordingPolicy := request.RequestPlan().ContentRecording()
+	recording := rawevidence.RecordingMode(recordingPolicy.Mode)
+	if !recording.Valid() {
+		return rawevidence.Context{}, errors.New(
+			"client raw evidence recording mode is invalid",
+		)
+	}
+	scopeKind := rawevidence.ScopeRuntime
+	scopeID := ""
+	if captureRunID := request.CaptureRunRef(); captureRunID != "" {
+		scopeKind = rawevidence.ScopeManagedRun
+		scopeID = captureRunID
+	} else if manualCaptureID := request.ManualCaptureRef(); manualCaptureID != "" {
+		scopeKind = rawevidence.ScopeManualCapture
+		scopeID = manualCaptureID
+	}
+	context := rawevidence.Context{
+		ScopeKind:                scopeKind,
+		ScopeID:                  scopeID,
+		ExchangeID:               request.ExchangeID(),
+		ConnectionID:             request.ConnectionRef(),
+		EnvironmentID:            selection.environmentID.String(),
+		EnvironmentRevision:      uint64(selection.environmentRevision),
+		EnvironmentDigest:        selection.environmentDigest.String(),
+		ClientEndpointID:         selection.endpointID.String(),
+		ClientEndpointRevision:   uint64(selection.endpointRevision),
+		UpstreamEndpointID:       selection.targetRef,
+		UpstreamEndpointRevision: uint64(selection.targetRevision),
+		ProtocolPlanID:           selection.protocolPlanID.String(),
+		ProtocolPlanRevision:     uint64(selection.protocolPlanRevision),
+		RouteID:                  selection.routeID.String(),
+		RouteRevision:            uint64(selection.routeRevision),
+		Recording:                recording,
+		RetentionDays:            recordingPolicy.RetentionDays,
+	}
+	if err := context.Validate(); err != nil {
+		return rawevidence.Context{}, fmt.Errorf(
+			"freeze client raw evidence context: %w",
+			err,
+		)
+	}
+	return context, nil
 }
 
 func (pipeline *Pipeline) acquireCredential(
@@ -561,6 +710,7 @@ func (pipeline *Pipeline) observeAttempt(
 	request ClientRequest,
 	result Result,
 	resultErr error,
+	captured *contentCapture,
 ) {
 	if pipeline == nil || pipeline.observer == nil {
 		return
@@ -570,6 +720,7 @@ func (pipeline *Pipeline) observeAttempt(
 	endpoint := plan.Endpoint()
 	protocolPlan := plan.ProtocolPlan()
 	route := plan.Route()
+	conversation := terminalConversationRef(request, captured)
 	observation := AttemptObservation{
 		ExchangeID:          request.exchangeID,
 		EnvironmentID:       plan.EnvironmentID(),
@@ -583,6 +734,11 @@ func (pipeline *Pipeline) observeAttempt(
 		HasAdmission: hasAdmission, ConnectionID: request.connectionRef,
 		Outcome: result.Outcome, ReasonCode: ReasonOf(resultErr),
 		Presentation: result.Presentation, Transport: result.Transport.Clone(),
+		Conversation:           conversation,
+		ClientProtocolEvidence: request.ClientProtocolEvidence(),
+	}
+	if captured != nil && captured.response != nil {
+		observation.ProviderResponseID = captured.response.ID
 	}
 	var failure *Failure
 	if errors.As(resultErr, &failure) {
@@ -608,6 +764,29 @@ func (pipeline *Pipeline) observeStart(request ClientRequest) {
 	endpoint := plan.Endpoint()
 	protocolPlan := plan.ProtocolPlan()
 	route := plan.Route()
+	conversation := agentconversation.Ref{}
+	if evidence := request.ClientProtocolEvidence(); len(evidence) != 0 {
+		captureRunID := ""
+		sourceDisplayName := "ViberMate runtime"
+		if hasAdmission {
+			captureRunID, _ = admission.CaptureRunID()
+			sourceDisplayName = admission.SourceLabel()
+		}
+		semanticRequest := protocolcore.Request{ProtocolEvidence: evidence}
+		conversation, _ = agentconversation.Project(agentconversation.ProjectionInput{
+			CaptureRunID:      captureRunID,
+			ExchangeID:        request.exchangeID,
+			SourceDisplayName: sourceDisplayName,
+			Request:           &semanticRequest,
+		})
+	}
+	if conversation.ProjectionID == "" {
+		var err error
+		conversation, err = agentconversation.Pending(request.exchangeID)
+		if err != nil {
+			return
+		}
+	}
 	observation := StartObservation{
 		ExchangeID:          request.exchangeID,
 		EnvironmentID:       plan.EnvironmentID(),
@@ -617,7 +796,9 @@ func (pipeline *Pipeline) observeStart(request ClientRequest) {
 		ProtocolPlanID: protocolPlan.ID(), ProtocolPlanRevision: protocolPlan.Revision(),
 		RouteID: route.ID(), RouteRevision: route.Revision(),
 		Admission: admission, HasAdmission: hasAdmission,
-		ConnectionID: request.connectionRef,
+		ConnectionID:           request.connectionRef,
+		Conversation:           conversation,
+		ClientProtocolEvidence: request.ClientProtocolEvidence(),
 	}
 	ctx, cancel := context.WithTimeout(
 		context.WithoutCancel(pipeline.ownerContext),
@@ -625,6 +806,76 @@ func (pipeline *Pipeline) observeStart(request ClientRequest) {
 	)
 	defer cancel()
 	_ = pipeline.observer.ObserveStart(ctx, observation)
+}
+
+// mergeClientProtocolEvidence attaches exact, non-secret ingress identifiers
+// to the decoded semantic request. A protocol decoder remains authoritative
+// when it already supplied the same names; the ingress allowlist only fills
+// absent values and can therefore never rewrite decoded semantics.
+func mergeClientProtocolEvidence(
+	request protocolcore.Request,
+	incoming []protocolcore.ProtocolEvidenceValue,
+) protocolcore.Request {
+	if len(incoming) == 0 || protocolcore.ValidateProtocolEvidence(incoming) != nil {
+		return request
+	}
+	merged := request.Clone()
+	present := make(map[string]struct{}, len(merged.ProtocolEvidence))
+	for _, value := range merged.ProtocolEvidence {
+		present[value.Name] = struct{}{}
+	}
+	for _, value := range incoming {
+		if _, exists := present[value.Name]; exists {
+			continue
+		}
+		merged.ProtocolEvidence = append(merged.ProtocolEvidence, value)
+		present[value.Name] = struct{}{}
+	}
+	slices.SortFunc(
+		merged.ProtocolEvidence,
+		func(left, right protocolcore.ProtocolEvidenceValue) int {
+			return strings.Compare(left.Name, right.Name)
+		},
+	)
+	if protocolcore.ValidateProtocolEvidence(merged.ProtocolEvidence) != nil {
+		return request
+	}
+	return merged
+}
+
+func terminalConversationRef(
+	request ClientRequest,
+	captured *contentCapture,
+) agentconversation.Ref {
+	admission, admitted := request.CaptureAdmission()
+	captureRunID := ""
+	sourceDisplayName := "ViberMate runtime"
+	if admitted {
+		captureRunID, _ = admission.CaptureRunID()
+		sourceDisplayName = admission.SourceLabel()
+	}
+	var decodedRequest *protocolcore.Request
+	var decodedResponse *protocolcore.Response
+	if captured != nil {
+		decodedRequest = captured.request
+		decodedResponse = captured.response
+	}
+	ref, err := agentconversation.Project(agentconversation.ProjectionInput{
+		CaptureRunID:      captureRunID,
+		ExchangeID:        request.exchangeID,
+		SourceDisplayName: sourceDisplayName,
+		Request:           decodedRequest,
+		Response:          decodedResponse,
+	})
+	if err == nil {
+		return ref
+	}
+	// A structural projection failure must never erase the terminal Activity.
+	// Fall back to the narrowest provable boundary, which is this Exchange.
+	ref, _ = agentconversation.Project(agentconversation.ProjectionInput{
+		ExchangeID: request.exchangeID,
+	})
+	return ref
 }
 
 func (pipeline *Pipeline) observeRequest(
@@ -1046,10 +1297,13 @@ func (pipeline *Pipeline) executeOriginal(
 	defer response.Body.Close()
 	ledger.RecordUpstreamResponse()
 	mode := ResponseModeJSON
-	if contentTypeMatches(
-		response.Header.Get("Content-Type"),
-		"text/event-stream",
-	) {
+	responseContentType := response.Header.Get("Content-Type")
+	if contentTypeMatches(responseContentType, "text/event-stream") ||
+		(responseContentType == "" && decodedContent != nil && decodedContent.Stream) {
+		// The Codex ChatGPT transport currently omits Content-Type while returning
+		// a Responses event stream. Only use the already-validated semantic
+		// request as a fallback when the header is absent; an explicit response
+		// media type remains authoritative.
 		mode = ResponseModeEventStream
 	}
 	envelope, err := NewResponseEnvelope(
@@ -1120,6 +1374,22 @@ func (pipeline *Pipeline) executeOriginal(
 			break
 		}
 		if readErr != nil {
+			// Some authenticated CLI transports close their request context as soon
+			// as they have consumed a complete SSE terminal event. net/http can then
+			// report context.Canceled instead of the otherwise-immediate EOF. Treat
+			// that as complete only when the bounded semantic decoder can prove the
+			// provider terminal was already present in the exact bytes delivered.
+			if mode == ResponseModeEventStream && errors.Is(readErr, context.Canceled) {
+				if decodedResponse := contentDecoder.Finish(context.WithoutCancel(ctx)); decodedResponse != nil {
+					captured.response = decodedResponse
+					if terminalBody, ok := response.Body.(interface {
+						ConfirmSemanticTerminal()
+					}); ok {
+						terminalBody.ConfirmSemanticTerminal()
+					}
+					break
+				}
+			}
 			return newFailure(
 				ReasonProviderResponseInvalid,
 				request.exchangeID,
@@ -1157,6 +1427,14 @@ type originalContentDecoder struct {
 	body       bytes.Buffer
 	compressed bool
 	failed     bool
+	finished   bool
+	response   *protocolcore.Response
+}
+
+func reportDeepProtocolFailure(_ string, _ error) {
+	// Semantic inspection is deliberately best-effort on an original-wire
+	// passthrough. The exact request and response remain authoritative; callers
+	// already mark the projection unavailable when this decoder fails.
 }
 
 func newOriginalContentDecoder(
@@ -1205,6 +1483,7 @@ func (decoder *originalContentDecoder) Feed(ctx context.Context, fragment []byte
 	}
 	if decoder.mode == ResponseModeEventStream {
 		if _, err := decoder.stream.Feed(ctx, fragment); err != nil {
+			reportDeepProtocolFailure("stream_feed", err)
 			decoder.failed = true
 		}
 		return
@@ -1218,7 +1497,18 @@ func (decoder *originalContentDecoder) Feed(ctx context.Context, fragment []byte
 }
 
 func (decoder *originalContentDecoder) Finish(ctx context.Context) *protocolcore.Response {
-	if decoder == nil || decoder.failed || decoder.path == nil || decoder.request == nil {
+	if decoder == nil {
+		return nil
+	}
+	if decoder.finished {
+		if decoder.response == nil {
+			return nil
+		}
+		cloned := decoder.response.Clone()
+		return &cloned
+	}
+	decoder.finished = true
+	if decoder.failed || decoder.path == nil || decoder.request == nil {
 		return nil
 	}
 	if decoder.compressed {
@@ -1243,21 +1533,27 @@ func (decoder *originalContentDecoder) Finish(ctx context.Context) *protocolcore
 	if decoder.mode == ResponseModeEventStream {
 		terminal, err := decoder.stream.FinishDecoded(ctx)
 		if err != nil {
+			reportDeepProtocolFailure("stream_finish", err)
 			return nil
 		}
 		response := terminal.DecodedResponse().Clone()
 		_, _ = terminal.Approve()
-		return &response
+		decoder.response = &response
+		cloned := response.Clone()
+		return &cloned
 	}
 	response, _, err := decoder.path.Backend().DecodeResponse(
 		decoder.request.Clone(),
 		decoder.body.Bytes(),
 	)
 	if err != nil {
+		reportDeepProtocolFailure("complete_response", err)
 		return nil
 	}
 	cloned := response.Clone()
-	return &cloned
+	decoder.response = &cloned
+	result := cloned.Clone()
+	return &result
 }
 
 func (pipeline *Pipeline) executeStream(

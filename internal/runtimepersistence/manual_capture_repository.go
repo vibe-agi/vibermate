@@ -445,7 +445,8 @@ func (repository *manualCaptureRepository) List(
 	now time.Time,
 ) ([]manualcapture.DurableRecord, error) {
 	request = request.Normalized()
-	if !request.Owner.Valid() || now.IsZero() {
+	if !request.Owner.Valid() || now.IsZero() ||
+		(request.Cursor != nil && !request.Cursor.Valid()) {
 		return nil, manualcapture.ErrInvalidCommand
 	}
 	operation, finish, err := repository.operations.begin(ctx)
@@ -467,17 +468,45 @@ func (repository *manualCaptureRepository) List(
 	); err != nil {
 		return nil, err
 	}
-	rows, err := transaction.QueryContext(
-		operation,
-		`SELECT `+manualCaptureColumns+`
+	const runningRank = `CASE WHEN state = 'active' THEN 0 ELSE 1 END`
+	query := `SELECT ` + manualCaptureColumns + `
 		 FROM manual_captures
-		 WHERE owner_kind = ? AND owner_id = ?
-		 ORDER BY updated_at_unix_ms DESC, capture_id ASC
-		 LIMIT ?`,
+		 WHERE owner_kind = ? AND owner_id = ?`
+	arguments := []any{
 		string(request.Owner.Kind()),
 		ownerStorageID(request.Owner),
-		request.Limit,
-	)
+	}
+	if cursor := request.Cursor; cursor != nil {
+		cursorRank := 1
+		if cursor.Running {
+			cursorRank = 0
+		}
+		includeBoundary := 0
+		if cursor.IncludeAtUpdatedAt {
+			includeBoundary = 1
+		}
+		updatedAt := toUnixMillis(cursor.UpdatedAt)
+		query += `
+		   AND ((` + runningRank + ` > ?)
+		    OR (` + runningRank + ` = ? AND (
+		      updated_at_unix_ms < ?
+		      OR (? = 1 AND updated_at_unix_ms = ? AND capture_id > ?)
+		    )))`
+		arguments = append(
+			arguments,
+			cursorRank,
+			cursorRank,
+			updatedAt,
+			includeBoundary,
+			updatedAt,
+			cursor.AfterID,
+		)
+	}
+	query += `
+		 ORDER BY ` + runningRank + ` ASC, updated_at_unix_ms DESC, capture_id ASC
+		 LIMIT ?`
+	arguments = append(arguments, request.Limit)
+	rows, err := transaction.QueryContext(operation, query, arguments...)
 	if err != nil {
 		return nil, fmt.Errorf("list ManualCaptures: %w", err)
 	}

@@ -195,6 +195,149 @@ func TestManualCaptureCreateRotateAuthorizeRevokeAndReopen(t *testing.T) {
 	}
 }
 
+func TestManualCaptureRevokeDoesNotCommitWhenEvidenceBarrierFails(t *testing.T) {
+	t.Parallel()
+
+	store := openTestStore(t, filepath.Join(t.TempDir(), "runtime.db"))
+	defer shutdownTestStore(t, store)
+	clock := &manualCaptureClock{now: time.Date(2026, 8, 13, 1, 2, 3, 0, time.UTC)}
+	barrierErr := errors.New("raw evidence flush failed")
+	barrier := &manualCaptureBarrier{err: barrierErr}
+	options := manualcapture.DefaultOptions(store.ManualCaptureRepository())
+	options.Clock = clock
+	options.Random = &manualCaptureRandom{}
+	options.EvidenceBarrier = barrier
+	manager, err := manualcapture.NewManager(context.Background(), options)
+	if err != nil {
+		t.Fatal(err)
+	}
+	owner := manualcapture.NewLocalOwnerScope()
+	grant, err := manager.Create(context.Background(), manualcapture.CreateCommand{
+		Owner:       owner,
+		DisplayName: "Claude desktop",
+		ClientClass: manualcapture.ClientDesktopApp,
+		Lifetime:    manualcapture.LifetimeUntilRevoked,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	id, err := manualcapture.ParseID(grant.Capture.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := manager.Revoke(context.Background(), manualcapture.RevokeCommand{
+		Owner:                      owner,
+		ID:                         id,
+		ExpectedCredentialRevision: grant.Capture.CredentialRevision,
+	}); !errors.Is(err, barrierErr) {
+		t.Fatalf("Revoke error = %v", err)
+	}
+	view, err := manager.Get(context.Background(), owner, id)
+	if err != nil || view.State != manualcapture.StateActive ||
+		barrier.captureID != grant.Capture.ID {
+		t.Fatalf("view=%+v barrier=%q err=%v", view, barrier.captureID, err)
+	}
+}
+
+type manualCaptureBarrier struct {
+	captureID string
+	err       error
+}
+
+func (barrier *manualCaptureBarrier) PrepareManualCapture(
+	_ context.Context,
+	captureID string,
+) (manualcapture.TerminalEvidence, error) {
+	barrier.captureID = captureID
+	return manualCaptureTerminal{}, barrier.err
+}
+
+type manualCaptureTerminal struct{}
+
+func (manualCaptureTerminal) Commit() {}
+func (manualCaptureTerminal) Abort()  {}
+
+func TestManualCaptureCatalogPaginatesRunningFirstAtSharedTimestamp(t *testing.T) {
+	t.Parallel()
+
+	store := openTestStore(t, filepath.Join(t.TempDir(), "runtime.db"))
+	defer shutdownTestStore(t, store)
+	clock := &manualCaptureClock{
+		now: time.Date(2026, 8, 11, 4, 5, 6, 0, time.UTC),
+	}
+	manager := newManualCaptureManager(t, store, clock, &manualCaptureRandom{})
+	defer func() { _ = manager.Shutdown(context.Background()) }()
+	owner := manualcapture.NewLocalOwnerScope()
+	create := func(label string, revoke bool) {
+		t.Helper()
+		grant, err := manager.Create(context.Background(), manualcapture.CreateCommand{
+			Owner:       owner,
+			DisplayName: label,
+			ClientClass: manualcapture.ClientDesktopApp,
+			Lifetime:    manualcapture.LifetimeUntilRevoked,
+		})
+		if err != nil {
+			t.Fatalf("create ManualCapture %q: %v", label, err)
+		}
+		if revoke {
+			id, err := manualcapture.ParseID(grant.Capture.ID)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, err := manager.Revoke(context.Background(), manualcapture.RevokeCommand{
+				Owner:                      owner,
+				ID:                         id,
+				ExpectedCredentialRevision: grant.Capture.CredentialRevision,
+			}); err != nil {
+				t.Fatalf("revoke ManualCapture %q: %v", label, err)
+			}
+		}
+	}
+	create("running-a", false)
+	create("revoked-a", true)
+	create("running-b", false)
+	create("revoked-b", true)
+
+	seen := make(map[string]struct{}, 4)
+	var cursor *manualcapture.PageCursor
+	for index := range 4 {
+		page, err := manager.List(context.Background(), manualcapture.PageRequest{
+			Owner:  owner,
+			Limit:  1,
+			Cursor: cursor,
+		})
+		if err != nil {
+			t.Fatalf("list ManualCapture page %d: %v", index+1, err)
+		}
+		if len(page.Items) != 1 {
+			t.Fatalf("ManualCapture page %d = %+v", index+1, page.Items)
+		}
+		item := page.Items[0]
+		if _, duplicate := seen[item.ID]; duplicate {
+			t.Fatalf("ManualCapture %q appeared on multiple pages", item.ID)
+		}
+		seen[item.ID] = struct{}{}
+		running := item.State == manualcapture.StateActive
+		if wantRunning := index < 2; running != wantRunning {
+			t.Fatalf("ManualCapture page %d state = %q", index+1, item.State)
+		}
+		cursor = &manualcapture.PageCursor{
+			Running:            running,
+			UpdatedAt:          item.UpdatedAt,
+			AfterID:            item.ID,
+			IncludeAtUpdatedAt: true,
+		}
+	}
+	page, err := manager.List(context.Background(), manualcapture.PageRequest{
+		Owner:  owner,
+		Limit:  1,
+		Cursor: cursor,
+	})
+	if err != nil || len(page.Items) != 0 {
+		t.Fatalf("ManualCapture terminal page = %+v, %v", page.Items, err)
+	}
+}
+
 func TestManualCaptureRecoveryExpiresTemporaryAndKeepsOwnersIsolated(t *testing.T) {
 	t.Parallel()
 	databasePath := filepath.Join(t.TempDir(), "runtime.db")

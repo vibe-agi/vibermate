@@ -38,6 +38,23 @@ enum AppLanguage {
   }
 }
 
+enum WorkbenchTheme {
+  system('system'),
+  light('light'),
+  dark('dark');
+
+  const WorkbenchTheme(this.wireName);
+
+  final String wireName;
+
+  static WorkbenchTheme? fromWire(Object? value) {
+    for (final theme in values) {
+      if (theme.wireName == value) return theme;
+    }
+    return null;
+  }
+}
+
 enum WorkbenchPreferencesIssue {
   corrupt('preferences.warning.corrupt'),
   futureSchema('preferences.warning.future_schema'),
@@ -65,6 +82,7 @@ final class WorkbenchPreferencesFutureSchema implements Exception {
 final class WorkbenchPreferences {
   const WorkbenchPreferences({
     this.language = AppLanguage.english,
+    this.theme = WorkbenchTheme.system,
     this.section = WorkbenchSection.captures,
     this.selectedCaptureKey,
     this.selectedConversationKey,
@@ -113,6 +131,7 @@ final class WorkbenchPreferences {
       );
     }
     final language = AppLanguage.fromWire(value['language']);
+    final theme = WorkbenchTheme.fromWire(value['theme']);
     final section = WorkbenchSection.fromWire(value['section']);
     final captureKey = _optionalSelection(
       value['selectedCaptureKey'],
@@ -128,6 +147,7 @@ final class WorkbenchPreferences {
     );
     final endpointId = _optionalResourceId(value['selectedEndpointId']);
     if (language == null ||
+        theme == null ||
         section == null ||
         captureKey == _invalidSelection ||
         conversationKey == _invalidSelection ||
@@ -141,6 +161,7 @@ final class WorkbenchPreferences {
     }
     return WorkbenchPreferences(
       language: language,
+      theme: theme,
       section: section,
       selectedCaptureKey: captureKey,
       selectedConversationKey: conversationKey,
@@ -150,11 +171,12 @@ final class WorkbenchPreferences {
     );
   }
 
-  static const schema = 'vibermate-workbench-preferences/v1';
+  static const schema = 'vibermate-workbench-preferences/v2';
   static const maximumEncodedBytes = 4096;
   static const _fields = {
     'schema',
     'language',
+    'theme',
     'section',
     'selectedCaptureKey',
     'selectedConversationKey',
@@ -167,6 +189,7 @@ final class WorkbenchPreferences {
   static final _resourceId = RegExp(r'^[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}$');
 
   final AppLanguage language;
+  final WorkbenchTheme theme;
   final WorkbenchSection section;
   final String? selectedCaptureKey;
   final String? selectedConversationKey;
@@ -178,6 +201,7 @@ final class WorkbenchPreferences {
     final encoded = jsonEncode({
       'schema': schema,
       'language': language.wireName,
+      'theme': theme.wireName,
       'section': section.wireName,
       'selectedCaptureKey': selectedCaptureKey,
       'selectedConversationKey': selectedConversationKey,
@@ -226,6 +250,7 @@ final class WorkbenchPreferences {
   bool operator ==(Object other) =>
       other is WorkbenchPreferences &&
       other.language == language &&
+      other.theme == theme &&
       other.section == section &&
       other.selectedCaptureKey == selectedCaptureKey &&
       other.selectedConversationKey == selectedConversationKey &&
@@ -236,6 +261,7 @@ final class WorkbenchPreferences {
   @override
   int get hashCode => Object.hash(
     language,
+    theme,
     section,
     selectedCaptureKey,
     selectedConversationKey,
@@ -255,9 +281,7 @@ final class PlatformWorkbenchPreferencesStore
     implements WorkbenchPreferencesStore {
   const PlatformWorkbenchPreferencesStore();
 
-  static const _channel = MethodChannel(
-    'io.vibermate.desktop/preferences',
-  );
+  static const _channel = MethodChannel('io.vibermate.desktop/preferences');
 
   @override
   Future<String?> read() async {

@@ -15,6 +15,7 @@ import (
 
 	"github.com/vibe-agi/vibermate/internal/environment"
 	"github.com/vibe-agi/vibermate/internal/exchangecontent"
+	"github.com/vibe-agi/vibermate/internal/protocolcore"
 )
 
 const transcriptNodeDomain = "vibermate:exchange-transcript-node\x00"
@@ -36,20 +37,22 @@ type storedExchangeContentManifest struct {
 }
 
 type storedRequestManifest struct {
-	RequestedModel  string                           `json:"requestedModel"`
-	EffectiveModel  string                           `json:"effectiveModel"`
-	MaxOutputTokens int                              `json:"maxOutputTokens"`
-	Stream          bool                             `json:"stream"`
-	Tools           []exchangecontent.ToolDefinition `json:"tools"`
+	RequestedModel   string                               `json:"requestedModel"`
+	EffectiveModel   string                               `json:"effectiveModel"`
+	MaxOutputTokens  int                                  `json:"maxOutputTokens"`
+	Stream           bool                                 `json:"stream"`
+	Tools            []exchangecontent.ToolDefinition     `json:"tools"`
+	ProtocolEvidence []protocolcore.ProtocolEvidenceValue `json:"protocolEvidence,omitempty"`
 }
 
 type storedResponseManifest struct {
-	ID             string                `json:"id"`
-	RequestedModel string                `json:"requestedModel"`
-	EffectiveModel string                `json:"effectiveModel"`
-	ReportedModel  string                `json:"reportedModel"`
-	StopReason     string                `json:"stopReason"`
-	Usage          exchangecontent.Usage `json:"usage"`
+	ID               string                               `json:"id"`
+	RequestedModel   string                               `json:"requestedModel"`
+	EffectiveModel   string                               `json:"effectiveModel"`
+	ReportedModel    string                               `json:"reportedModel"`
+	StopReason       string                               `json:"stopReason"`
+	Usage            exchangecontent.Usage                `json:"usage"`
+	ProtocolEvidence []protocolcore.ProtocolEvidenceValue `json:"protocolEvidence,omitempty"`
 }
 
 type storedTranscript struct {
@@ -489,6 +492,10 @@ func encodeStoredContent(record exchangecontent.Record) (
 			MaxOutputTokens: record.Request.MaxOutputTokens,
 			Stream:          record.Request.Stream,
 			Tools:           append([]exchangecontent.ToolDefinition(nil), record.Request.Tools...),
+			ProtocolEvidence: append(
+				[]protocolcore.ProtocolEvidenceValue(nil),
+				record.Request.ProtocolEvidence...,
+			),
 		},
 	}
 	if record.Response != nil {
@@ -499,6 +506,10 @@ func encodeStoredContent(record exchangecontent.Record) (
 			ReportedModel:  record.Response.ReportedModel,
 			StopReason:     record.Response.StopReason,
 			Usage:          record.Response.Usage,
+			ProtocolEvidence: append(
+				[]protocolcore.ProtocolEvidenceValue(nil),
+				record.Response.ProtocolEvidence...,
+			),
 		}
 	}
 	encoded, err := json.Marshal(manifest)
@@ -551,6 +562,10 @@ func recordFromStoredManifest(
 			Stream:          manifest.Request.Stream,
 			Messages:        messages,
 			Tools:           append([]exchangecontent.ToolDefinition(nil), manifest.Request.Tools...),
+			ProtocolEvidence: append(
+				[]protocolcore.ProtocolEvidenceValue(nil),
+				manifest.Request.ProtocolEvidence...,
+			),
 		},
 	}
 	if manifest.Response != nil {
@@ -565,6 +580,10 @@ func recordFromStoredManifest(
 			StopReason:     manifest.Response.StopReason,
 			Blocks:         cloneStoredBlocks(responseMessage.Blocks),
 			Usage:          manifest.Response.Usage,
+			ProtocolEvidence: append(
+				[]protocolcore.ProtocolEvidenceValue(nil),
+				manifest.Response.ProtocolEvidence...,
+			),
 		}
 	} else if responseMessage != nil {
 		return exchangecontent.Record{}, exchangecontent.ErrInvalidEvidence
@@ -864,6 +883,10 @@ func cloneStoredBlocks(blocks []exchangecontent.Block) []exchangecontent.Block {
 	for index, block := range blocks {
 		result[index] = block
 		result[index].Arguments = append(json.RawMessage(nil), block.Arguments...)
+		if block.Agent != nil {
+			context := *block.Agent
+			result[index].Agent = &context
+		}
 	}
 	return result
 }

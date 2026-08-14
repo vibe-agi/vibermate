@@ -38,38 +38,71 @@ final class SettingsView extends StatelessWidget {
                 ),
                 const SizedBox(height: 10),
               ],
+              Wrap(
+                spacing: 28,
+                runSpacing: 12,
+                children: [
+                  _PreferenceControl(
+                    label: copy('settings.appearance'),
+                    child: CompactSegmentedControl<WorkbenchTheme>(
+                      key: const Key('settings-theme'),
+                      segments: [
+                        CompactSegment(
+                          value: WorkbenchTheme.system,
+                          label: copy('settings.auto'),
+                        ),
+                        CompactSegment(
+                          value: WorkbenchTheme.light,
+                          label: copy('settings.light'),
+                        ),
+                        CompactSegment(
+                          value: WorkbenchTheme.dark,
+                          label: copy('settings.dark'),
+                        ),
+                      ],
+                      minSegmentWidth: 42,
+                      selected: controller.theme,
+                      onSelected: controller.setTheme,
+                    ),
+                  ),
+                  _PreferenceControl(
+                    label: copy('settings.language'),
+                    child: CompactSegmentedControl<AppLanguage>(
+                      key: const Key('settings-language'),
+                      segments: [
+                        CompactSegment(
+                          value: AppLanguage.english,
+                          label: copy('settings.english'),
+                        ),
+                        CompactSegment(
+                          value: AppLanguage.simplifiedChinese,
+                          label: copy('settings.chinese'),
+                        ),
+                      ],
+                      selected: controller.language,
+                      onSelected: controller.setLanguage,
+                    ),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 14),
+              const Divider(height: 1),
+              const SizedBox(height: 14),
               OfflineHoldSettingsPanel(controller: controller, copy: copy),
               const SizedBox(height: 14),
               _TerminalCommandPanel(controller: controller, copy: copy),
               const SizedBox(height: 9),
               _ManagedRunGuide(copy: copy, status: controller.terminalCommand),
               const SizedBox(height: 18),
-              _SettingsLabel(copy('settings.language')),
-              const SizedBox(height: 7),
-              Align(
-                alignment: Alignment.centerLeft,
-                child: SegmentedButton<AppLanguage>(
-                  segments: [
-                    ButtonSegment(
-                      value: AppLanguage.english,
-                      label: Text(copy('settings.english')),
-                    ),
-                    ButtonSegment(
-                      value: AppLanguage.simplifiedChinese,
-                      label: Text(copy('settings.chinese')),
-                    ),
-                  ],
-                  selected: {controller.language},
-                  onSelectionChanged: (selection) =>
-                      controller.setLanguage(selection.single),
-                ),
-              ),
-              const SizedBox(height: 18),
               _SettingsLabel(copy('settings.runtime')),
               const SizedBox(height: 7),
               Row(
                 children: [
-                  const Icon(Icons.memory, size: 15, color: ViberColors.route),
+                  Icon(
+                    Icons.memory,
+                    size: 15,
+                    color: context.viberColors.route,
+                  ),
                   const SizedBox(width: 7),
                   Expanded(
                     child: Text(
@@ -114,18 +147,18 @@ final class _ManagedRunGuideState extends State<_ManagedRunGuide> {
       key: const Key('managed-run-guide'),
       padding: const EdgeInsets.fromLTRB(11, 9, 10, 10),
       decoration: BoxDecoration(
-        border: Border.all(color: ViberColors.dividerSoft),
-        borderRadius: BorderRadius.circular(6),
+        border: Border.all(color: context.viberColors.dividerSoft),
+        borderRadius: ViberMetrics.surfaceRadius,
       ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           Row(
             children: [
-              const Icon(
+              Icon(
                 Icons.play_arrow_outlined,
                 size: 15,
-                color: ViberColors.verified,
+                color: context.viberColors.verified,
               ),
               const SizedBox(width: 6),
               Expanded(
@@ -140,7 +173,7 @@ final class _ManagedRunGuideState extends State<_ManagedRunGuide> {
                   child: Text(
                     copy.format('terminal.run.copied', {'client': value}),
                     style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                      color: ViberColors.verified,
+                      color: context.viberColors.verified,
                     ),
                   ),
                 )
@@ -149,9 +182,9 @@ final class _ManagedRunGuideState extends State<_ManagedRunGuide> {
                   liveRegion: true,
                   child: Text(
                     copy('terminal.run.copy_failed'),
-                    style: Theme.of(
-                      context,
-                    ).textTheme.bodySmall?.copyWith(color: ViberColors.danger),
+                    style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                      color: context.viberColors.danger,
+                    ),
                   ),
                 ),
             ],
@@ -192,8 +225,8 @@ final class _ManagedRunGuideState extends State<_ManagedRunGuide> {
           Text(
             copy('terminal.run.environment'),
             style: monoStyle.copyWith(
-              fontSize: 9.5,
-              color: ViberColors.textFaint,
+              fontSize: ViberType.micro,
+              color: context.viberColors.textFaint,
             ),
           ),
         ],
@@ -237,22 +270,29 @@ final class _RunCommand extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return Container(
-      height: 29,
+      width: 220,
+      height: ViberMetrics.controlHeight,
       decoration: BoxDecoration(
-        color: ViberColors.rail,
-        border: Border.all(color: ViberColors.divider),
-        borderRadius: BorderRadius.circular(4),
+        color: context.viberColors.rail,
+        border: Border.all(color: context.viberColors.divider),
+        borderRadius: ViberMetrics.controlRadius,
       ),
       child: Row(
         mainAxisSize: MainAxisSize.min,
         children: [
-          Padding(
-            padding: const EdgeInsets.only(left: 8, right: 5),
-            child: Text(
-              command,
-              style: monoStyle.copyWith(
-                fontSize: 10,
-                color: enabled ? ViberColors.text : ViberColors.textFaint,
+          Expanded(
+            child: Padding(
+              padding: const EdgeInsets.only(left: 8, right: 5),
+              child: Text(
+                command,
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: monoStyle.copyWith(
+                  fontSize: ViberType.utility,
+                  color: enabled
+                      ? context.viberColors.text
+                      : context.viberColors.textFaint,
+                ),
               ),
             ),
           ),
@@ -261,7 +301,10 @@ final class _RunCommand extends StatelessWidget {
             onPressed: enabled ? onCopy : null,
             tooltip: copyLabel,
             icon: const Icon(Icons.copy, size: 12),
-            constraints: const BoxConstraints.tightFor(width: 28, height: 28),
+            constraints: const BoxConstraints.tightFor(
+              width: ViberMetrics.controlHeight,
+              height: ViberMetrics.controlHeight,
+            ),
             padding: EdgeInsets.zero,
           ),
         ],
@@ -280,6 +323,28 @@ final class _SettingsLabel extends StatelessWidget {
       Text(label, style: Theme.of(context).textTheme.titleMedium);
 }
 
+final class _PreferenceControl extends StatelessWidget {
+  const _PreferenceControl({required this.label, required this.child});
+
+  final String label;
+  final Widget child;
+
+  @override
+  Widget build(BuildContext context) {
+    return SizedBox(
+      width: 210,
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(label, style: Theme.of(context).textTheme.titleSmall),
+          const SizedBox(height: 5),
+          Align(alignment: Alignment.centerLeft, child: child),
+        ],
+      ),
+    );
+  }
+}
+
 final class _TerminalCommandPanel extends StatelessWidget {
   const _TerminalCommandPanel({required this.controller, required this.copy});
 
@@ -294,9 +359,9 @@ final class _TerminalCommandPanel extends StatelessWidget {
     return Container(
       key: const Key('terminal-command-panel'),
       decoration: BoxDecoration(
-        color: ViberColors.panel,
-        border: Border.all(color: ViberColors.divider),
-        borderRadius: BorderRadius.circular(7),
+        color: context.viberColors.panel,
+        border: Border.all(color: context.viberColors.divider),
+        borderRadius: ViberMetrics.surfaceRadius,
       ),
       clipBehavior: Clip.antiAlias,
       child: Column(
@@ -308,20 +373,20 @@ final class _TerminalCommandPanel extends StatelessWidget {
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 Container(
-                  width: 27,
-                  height: 27,
+                  width: ViberMetrics.controlHeight,
+                  height: ViberMetrics.controlHeight,
                   alignment: Alignment.center,
                   decoration: BoxDecoration(
-                    color: ViberColors.route.withValues(alpha: 0.09),
+                    color: context.viberColors.route.withValues(alpha: 0.09),
                     border: Border.all(
-                      color: ViberColors.route.withValues(alpha: 0.3),
+                      color: context.viberColors.route.withValues(alpha: 0.3),
                     ),
-                    borderRadius: BorderRadius.circular(5),
+                    borderRadius: ViberMetrics.controlRadius,
                   ),
-                  child: const Icon(
+                  child: Icon(
                     Icons.terminal,
                     size: 15,
-                    color: ViberColors.route,
+                    color: context.viberColors.route,
                   ),
                 ),
                 const SizedBox(width: 9),
@@ -357,8 +422,8 @@ final class _TerminalCommandPanel extends StatelessWidget {
                         )
                       : const Icon(Icons.refresh, size: 15),
                   constraints: const BoxConstraints.tightFor(
-                    width: 29,
-                    height: 29,
+                    width: ViberMetrics.controlHeight,
+                    height: ViberMetrics.controlHeight,
                   ),
                   padding: EdgeInsets.zero,
                 ),
@@ -395,11 +460,13 @@ final class _TerminalCommandPanel extends StatelessWidget {
               message: copy(error),
               error: true,
               onDismiss: controller.clearTerminalCommandMessage,
+              dismissLabel: copy('common.dismiss'),
             ),
           if (notice != null)
             InlineNotice(
               message: copy(notice),
               onDismiss: controller.clearTerminalCommandMessage,
+              dismissLabel: copy('common.dismiss'),
             ),
         ],
       ),
@@ -422,75 +489,168 @@ final class _TerminalCommandStatusView extends StatelessWidget {
   Widget build(BuildContext context) {
     return Padding(
       padding: const EdgeInsets.fromLTRB(11, 9, 11, 10),
-      child: LayoutBuilder(
-        builder: (context, constraints) {
-          final narrow = constraints.maxWidth < 560;
-          final summary = Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              StatusPill(
-                label: copy('terminal.state.${status.state.wireName}'),
-                color: _stateColor(status.state),
-                icon: _stateIcon(status.state),
-              ),
-              const SizedBox(height: 7),
-              Text(
-                copy('terminal.state_detail.${status.state.wireName}'),
-                style: Theme.of(context).textTheme.bodyMedium,
-              ),
-              const SizedBox(height: 7),
-              _CommandPath(
-                label: copy('terminal.target'),
-                value: status.targetPath,
-              ),
-              const SizedBox(height: 3),
-              _CommandPath(
-                label: copy('terminal.source'),
-                value: status.sourcePath,
-                muted: true,
-              ),
-              const SizedBox(height: 7),
-              Text(
-                copy('terminal.boundary'),
-                style: Theme.of(context).textTheme.bodySmall,
-              ),
-              if (status.state == TerminalCommandState.unownedTarget ||
-                  status.state == TerminalCommandState.conflict) ...[
-                const SizedBox(height: 7),
-                Text(
-                  copy('terminal.manual_resolution'),
-                  style: Theme.of(
-                    context,
-                  ).textTheme.bodySmall?.copyWith(color: ViberColors.warning),
-                ),
-                if (status.detail case final detail?) ...[
-                  const SizedBox(height: 3),
-                  Text(detail, style: monoStyle.copyWith(fontSize: 10)),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          LayoutBuilder(
+            builder: (context, constraints) {
+              final narrow = constraints.maxWidth < 560;
+              final summary = Row(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  StatusPill(
+                    label: copy('terminal.state.${status.state.wireName}'),
+                    color: _stateColor(context, status.state),
+                    icon: _stateIcon(status.state),
+                  ),
+                  const SizedBox(width: 9),
+                  Expanded(
+                    child: Padding(
+                      padding: const EdgeInsets.only(top: 1),
+                      child: Text(
+                        copy('terminal.state_detail.${status.state.wireName}'),
+                        style: Theme.of(context).textTheme.bodyMedium,
+                      ),
+                    ),
+                  ),
                 ],
-              ],
-            ],
-          );
-          final actions = _TerminalCommandActions(
-            controller: controller,
+              );
+              final actions = _TerminalCommandActions(
+                controller: controller,
+                copy: copy,
+                status: status,
+              );
+              if (narrow) {
+                return Column(
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  children: [summary, const SizedBox(height: 9), actions],
+                );
+              }
+              return Row(
+                crossAxisAlignment: CrossAxisAlignment.center,
+                children: [
+                  Expanded(child: summary),
+                  const SizedBox(width: 16),
+                  actions,
+                ],
+              );
+            },
+          ),
+          const SizedBox(height: 3),
+          _TerminalCommandDetails(
+            key: ValueKey('terminal-command-details-${status.state.wireName}'),
             copy: copy,
             status: status,
-          );
-          if (narrow) {
-            return Column(
-              crossAxisAlignment: CrossAxisAlignment.stretch,
-              children: [summary, const SizedBox(height: 9), actions],
-            );
-          }
-          return Row(
-            crossAxisAlignment: CrossAxisAlignment.end,
-            children: [
-              Expanded(child: summary),
-              const SizedBox(width: 16),
-              actions,
-            ],
-          );
-        },
+          ),
+        ],
       ),
+    );
+  }
+}
+
+final class _TerminalCommandDetails extends StatefulWidget {
+  const _TerminalCommandDetails({
+    required this.copy,
+    required this.status,
+    super.key,
+  });
+
+  final AppCopy copy;
+  final TerminalCommandStatus status;
+
+  @override
+  State<_TerminalCommandDetails> createState() =>
+      _TerminalCommandDetailsState();
+}
+
+final class _TerminalCommandDetailsState
+    extends State<_TerminalCommandDetails> {
+  bool _expanded = false;
+
+  @override
+  Widget build(BuildContext context) {
+    final copy = widget.copy;
+    final status = widget.status;
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        Semantics(
+          button: true,
+          expanded: _expanded,
+          child: InkWell(
+            key: const Key('terminal-command-details-toggle'),
+            borderRadius: ViberMetrics.controlRadius,
+            onTap: () => setState(() => _expanded = !_expanded),
+            child: SizedBox(
+              height: ViberMetrics.controlHeight,
+              child: Row(
+                children: [
+                  Icon(
+                    _expanded ? Icons.expand_more : Icons.chevron_right,
+                    size: 15,
+                    color: context.viberColors.textFaint,
+                  ),
+                  const SizedBox(width: 3),
+                  Text(
+                    copy('terminal.details'),
+                    style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                      color: context.viberColors.textMuted,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ),
+        ),
+        if (_expanded)
+          Container(
+            key: const Key('terminal-command-technical-details'),
+            padding: const EdgeInsets.fromLTRB(9, 8, 9, 9),
+            decoration: BoxDecoration(
+              color: context.viberColors.rail,
+              border: Border.all(color: context.viberColors.dividerSoft),
+              borderRadius: ViberMetrics.surfaceRadius,
+            ),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                _CommandPath(
+                  label: copy('terminal.target'),
+                  value: status.targetPath,
+                ),
+                const SizedBox(height: 4),
+                _CommandPath(
+                  label: copy('terminal.source'),
+                  value: status.sourcePath,
+                  muted: true,
+                ),
+                if (status.detail case final detail?) ...[
+                  const SizedBox(height: 4),
+                  _CommandPath(
+                    label: copy('terminal.diagnosis'),
+                    value: detail,
+                    muted: true,
+                  ),
+                ],
+                const SizedBox(height: 7),
+                Text(
+                  copy('terminal.boundary'),
+                  style: Theme.of(context).textTheme.bodySmall,
+                ),
+                if (status.state == TerminalCommandState.unownedTarget ||
+                    status.state == TerminalCommandState.conflict) ...[
+                  const SizedBox(height: 5),
+                  Text(
+                    copy('terminal.manual_resolution'),
+                    style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                      color: context.viberColors.warning,
+                    ),
+                  ),
+                ],
+              ],
+            ),
+          ),
+      ],
     );
   }
 }
@@ -516,8 +676,8 @@ final class _CommandPath extends StatelessWidget {
           child: Text(
             label,
             style: Theme.of(context).textTheme.bodySmall?.copyWith(
-              color: ViberColors.textFaint,
-              fontSize: 10,
+              color: context.viberColors.textFaint,
+              fontSize: ViberType.utility,
             ),
           ),
         ),
@@ -525,8 +685,10 @@ final class _CommandPath extends StatelessWidget {
           child: SelectableText(
             value,
             style: monoStyle.copyWith(
-              color: muted ? ViberColors.textMuted : ViberColors.text,
-              fontSize: 10,
+              color: muted
+                  ? context.viberColors.textMuted
+                  : context.viberColors.text,
+              fontSize: ViberType.utility,
             ),
           ),
         ),
@@ -584,7 +746,23 @@ final class _TerminalCommandActions extends StatelessWidget {
             icon: const Icon(Icons.sync, size: 14),
             label: Text(copy('terminal.action.refresh')),
           ),
-        if (status.canRemove)
+        if (status.canRepair)
+          FilledButton.icon(
+            key: const Key('terminal-command-repair'),
+            onPressed: busy
+                ? null
+                : () => _confirm(
+                    context,
+                    controller,
+                    copy,
+                    status,
+                    TerminalCommandOperation.repair,
+                  ),
+            icon: const Icon(Icons.build_outlined, size: 14),
+            label: Text(copy('terminal.action.repair')),
+          ),
+        if (status.canRemove &&
+            status.state != TerminalCommandState.targetMissing)
           OutlinedButton.icon(
             key: const Key('terminal-command-remove'),
             onPressed: busy
@@ -597,13 +775,7 @@ final class _TerminalCommandActions extends StatelessWidget {
                     TerminalCommandOperation.remove,
                   ),
             icon: const Icon(Icons.link_off, size: 14),
-            label: Text(
-              copy(
-                status.state == TerminalCommandState.targetMissing
-                    ? 'terminal.action.clean_record'
-                    : 'terminal.action.remove',
-              ),
-            ),
+            label: Text(copy('terminal.action.remove')),
           ),
       ],
     );
@@ -659,13 +831,14 @@ Future<void> _confirm(
   }
 }
 
-Color _stateColor(TerminalCommandState state) => switch (state) {
-  TerminalCommandState.current => ViberColors.verified,
-  TerminalCommandState.notInstalled => ViberColors.textFaint,
-  TerminalCommandState.sourceUpdated ||
-  TerminalCommandState.targetMissing => ViberColors.warning,
-  _ => ViberColors.danger,
-};
+Color _stateColor(BuildContext context, TerminalCommandState state) =>
+    switch (state) {
+      TerminalCommandState.current => context.viberColors.verified,
+      TerminalCommandState.notInstalled => context.viberColors.textFaint,
+      TerminalCommandState.sourceUpdated ||
+      TerminalCommandState.targetMissing => context.viberColors.warning,
+      _ => context.viberColors.danger,
+    };
 
 IconData _stateIcon(TerminalCommandState state) => switch (state) {
   TerminalCommandState.current => Icons.check_circle_outline,

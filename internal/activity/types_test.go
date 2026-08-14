@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/vibe-agi/vibermate/internal/activity"
+	"github.com/vibe-agi/vibermate/internal/agentconversation"
 	"github.com/vibe-agi/vibermate/internal/environment"
 )
 
@@ -127,6 +128,7 @@ func TestActivityRecordJSONCarriesOnlyEnvironmentFirstFrozenReferences(
 		SourceRecognition:      event.SourceRecognition,
 		CaptureRunID:           event.CaptureRunID,
 		ConnectionID:           event.ConnectionID,
+		Conversation:           conversationPtr(event.Conversation),
 	}
 	if err := record.Validate(); err != nil {
 		t.Fatal(err)
@@ -195,7 +197,17 @@ func validExchangeEvent(t *testing.T) activity.Event {
 		SourceRecognition:      activity.SourceRecognitionConfigured,
 		CaptureRunID:           "run-1",
 		ConnectionID:           "connection-1",
+		Conversation: agentconversation.Ref{
+			ProjectionID: "capture_run:run-1:main",
+			DisplayName:  "claude",
+			Kind:         agentconversation.KindMain,
+			Evidence:     agentconversation.EvidenceCaptureRun,
+		},
 	}
+}
+
+func conversationPtr(value agentconversation.Ref) *agentconversation.Ref {
+	return &value
 }
 
 func TestTransportEvidenceRejectsPresentationAndTransportContradictions(

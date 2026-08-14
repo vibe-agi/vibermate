@@ -571,8 +571,9 @@ func assertSQLiteTableAbsent(t *testing.T, databasePath string, tableName string
 
 func assertInitialSchemaState(t *testing.T, state SchemaState) {
 	t.Helper()
-	if state.Revision != 1 {
-		t.Fatalf("schema revision = %d, want 1", state.Revision)
+	wantRevision := embeddedSchemaRevisionForTest(t)
+	if state.Revision != wantRevision {
+		t.Fatalf("schema revision = %d, want %d", state.Revision, wantRevision)
 	}
 	if state.InitializedAt == "" {
 		t.Fatal("schema initialization timestamp is empty")

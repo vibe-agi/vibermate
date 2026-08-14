@@ -339,8 +339,30 @@ type Recovery struct {
 }
 
 type PageRequest struct {
-	Owner OwnerScope
-	Limit int
+	Owner  OwnerScope
+	Limit  int
+	Cursor *PageCursor
+}
+
+// PageCursor is the stable position of the last ManualCapture returned by a
+// running-first, most-recent-first catalog. It is owner-scoped by PageRequest;
+// no credential or bearer authority is encoded in it.
+type PageCursor struct {
+	Running            bool
+	UpdatedAt          time.Time
+	AfterID            string
+	IncludeAtUpdatedAt bool
+}
+
+func (cursor PageCursor) Valid() bool {
+	validID := cursor.AfterID == ""
+	if !validID {
+		_, err := ParseID(cursor.AfterID)
+		validID = err == nil
+	}
+	return !cursor.UpdatedAt.IsZero() &&
+		cursor.UpdatedAt.Equal(cursor.UpdatedAt.UTC().Truncate(time.Millisecond)) &&
+		validID && (cursor.IncludeAtUpdatedAt || cursor.AfterID == "")
 }
 
 func (request PageRequest) Normalized() PageRequest {

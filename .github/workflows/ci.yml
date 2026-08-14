@@ -31,7 +31,6 @@ jobs:
       - name: Verify generated files
         run: |
           go generate ./...
-          node ui/desktop/scripts/sync-generated.mjs --check
           git diff --exit-code
       - name: Verify module files
         run: go mod tidy -diff
@@ -51,6 +50,8 @@ jobs:
           go run github.com/rhysd/actionlint/cmd/actionlint@v1.7.7
           node --test .github/check-action-pins.test.mjs
           node .github/check-action-pins.mjs
+      - name: Verify Flutter distribution and macOS release tooling
+        run: node --test ui/flutter_app/tool/desktop_build_manifest.test.mjs tool/macos-release/*.test.mjs
 
   unit:
     needs: generated-structural
@@ -170,7 +171,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          VIBERMATE_FLUTTER_CLEAN=1 ui/flutter_app/tool/build_macos_app.sh live
+          ui/flutter_app/tool/build_macos_app.sh live
           ui/flutter_app/tool/verify_macos_app.sh \
             "${GITHUB_WORKSPACE}/dist/ViberMate.app" \
             live

@@ -150,6 +150,19 @@ CHECK(kind IN('environment.applied',
   CHECK(length(CAST(manual_capture_id AS BLOB)) <= 128),
   connection_id TEXT NOT NULL DEFAULT ''
   CHECK(length(CAST(connection_id AS BLOB)) <= 128),
+  conversation_projection_id TEXT NOT NULL DEFAULT ''
+  CHECK(length(CAST(conversation_projection_id AS BLOB)) <= 512),
+  conversation_display_name TEXT NOT NULL DEFAULT ''
+  CHECK(length(CAST(conversation_display_name AS BLOB)) <= 512),
+  conversation_kind TEXT NOT NULL DEFAULT ''
+  CHECK(conversation_kind IN('', 'pending_exchange', 'main', 'agent',
+  'isolated_subagent', 'isolated_exchange')),
+  conversation_evidence TEXT NOT NULL DEFAULT ''
+  CHECK(conversation_evidence IN('', 'pending', 'capture_run', 'explicit_actor',
+  'client_asserted_subagent', 'ambiguous_actor', 'undecoded_exchange',
+  'exchange_boundary')),
+  conversation_actor TEXT NOT NULL DEFAULT ''
+  CHECK(length(CAST(conversation_actor AS BLOB)) <= 512),
   transport_evidence_json BLOB
   CHECK(transport_evidence_json IS NULL OR(kind = 'exchange.completed' AND
 length(transport_evidence_json) BETWEEN 2 AND 65536 AND
@@ -177,6 +190,13 @@ protocol_plan_revision > 0 AND route_id <> '' AND route_revision > 0)),
 (account_id <> '' AND account_revision > 0 AND credential_epoch > 0)),
   CHECK(kind NOT IN('exchange.started', 'exchange.completed') OR
   client_endpoint_id <> ''),
+  CHECK((kind IN('exchange.started', 'exchange.completed') AND
+  conversation_projection_id <> '' AND conversation_kind <> '' AND
+  conversation_evidence <> '') OR
+  (kind NOT IN('exchange.started', 'exchange.completed') AND
+  conversation_projection_id = '' AND conversation_display_name = '' AND
+  conversation_kind = '' AND conversation_evidence = '' AND
+  conversation_actor = '')),
   CHECK(kind <> 'credential.secret_replaced' OR account_id <> ''),
   CHECK(kind NOT IN('environment.applied', 'environment.disabled',
 'environment.enabled', 'environment.deleted') OR
@@ -245,6 +265,149 @@ ON runtime_exchange_contents(
   expected_message_count DESC,
   recorded_at_unix_ms DESC
 );
+-- Raw HTTP evidence is searchable only through safe metadata. Header values,
+-- trailers, stream-frame boundaries, and body bytes live inside the
+-- authenticated ciphertext. net/http has already normalized header field
+-- spelling and cross-field order, so canonicalization records that boundary
+-- instead of claiming packet-capture fidelity.
+CREATE TABLE runtime_raw_evidence_envelopes(
+  envelope_id TEXT PRIMARY KEY NOT NULL
+  CHECK(length(CAST(envelope_id AS BLOB)) BETWEEN 1 AND 512),
+  writer_id TEXT NOT NULL
+  CHECK(length(CAST(writer_id AS BLOB)) BETWEEN 1 AND 512),
+  watermark INTEGER NOT NULL CHECK(watermark BETWEEN 1 AND 9223372036854775807),
+  layer TEXT NOT NULL CHECK(layer IN(
+    'client_ingress', 'provider_egress',
+    'provider_response', 'client_downstream'
+  )),
+  scope_kind TEXT NOT NULL
+  CHECK(scope_kind IN('runtime', 'managed_run', 'manual_capture')),
+  scope_id TEXT NOT NULL DEFAULT ''
+  CHECK(length(CAST(scope_id AS BLOB)) <= 512),
+  exchange_id TEXT NOT NULL
+  CHECK(length(CAST(exchange_id AS BLOB)) BETWEEN 1 AND 512),
+  connection_id TEXT NOT NULL DEFAULT ''
+  CHECK(length(CAST(connection_id AS BLOB)) <= 512),
+  attempt_id TEXT NOT NULL DEFAULT ''
+  CHECK(length(CAST(attempt_id AS BLOB)) <= 512),
+  environment_id TEXT NOT NULL DEFAULT ''
+  CHECK(length(CAST(environment_id AS BLOB)) <= 512),
+  environment_revision INTEGER NOT NULL DEFAULT 0
+  CHECK(environment_revision BETWEEN 0 AND 9223372036854775807),
+  environment_digest TEXT NOT NULL DEFAULT ''
+  CHECK(length(CAST(environment_digest AS BLOB)) <= 128),
+  client_endpoint_id TEXT NOT NULL DEFAULT ''
+  CHECK(length(CAST(client_endpoint_id AS BLOB)) <= 512),
+  client_endpoint_revision INTEGER NOT NULL DEFAULT 0
+  CHECK(client_endpoint_revision BETWEEN 0 AND 9223372036854775807),
+  upstream_endpoint_id TEXT NOT NULL DEFAULT ''
+  CHECK(length(CAST(upstream_endpoint_id AS BLOB)) <= 512),
+  upstream_endpoint_revision INTEGER NOT NULL DEFAULT 0
+  CHECK(upstream_endpoint_revision BETWEEN 0 AND 9223372036854775807),
+  protocol_plan_id TEXT NOT NULL DEFAULT ''
+  CHECK(length(CAST(protocol_plan_id AS BLOB)) <= 512),
+  protocol_plan_revision INTEGER NOT NULL DEFAULT 0
+  CHECK(protocol_plan_revision BETWEEN 0 AND 9223372036854775807),
+  route_id TEXT NOT NULL DEFAULT ''
+  CHECK(length(CAST(route_id AS BLOB)) <= 512),
+  route_revision INTEGER NOT NULL DEFAULT 0
+  CHECK(route_revision BETWEEN 0 AND 9223372036854775807),
+  account_id TEXT NOT NULL DEFAULT ''
+  CHECK(length(CAST(account_id AS BLOB)) <= 512),
+  account_revision INTEGER NOT NULL DEFAULT 0
+  CHECK(account_revision BETWEEN 0 AND 9223372036854775807),
+  credential_epoch INTEGER NOT NULL DEFAULT 0
+  CHECK(credential_epoch BETWEEN 0 AND 9223372036854775807),
+  observed_at_unix_ms INTEGER NOT NULL,
+  expires_at_unix_ms INTEGER NOT NULL
+  CHECK(expires_at_unix_ms > observed_at_unix_ms),
+  method TEXT NOT NULL DEFAULT ''
+  CHECK(length(CAST(method AS BLOB)) <= 32),
+  status_code INTEGER NOT NULL DEFAULT 0
+  CHECK(status_code = 0 OR status_code BETWEEN 100 AND 599),
+  scheme TEXT NOT NULL DEFAULT '' CHECK(length(CAST(scheme AS BLOB)) <= 16),
+  authority TEXT NOT NULL DEFAULT ''
+  CHECK(length(CAST(authority AS BLOB)) <= 4096),
+  path TEXT NOT NULL DEFAULT '' CHECK(length(CAST(path AS BLOB)) <= 4096),
+  raw_query TEXT NOT NULL DEFAULT ''
+  CHECK(length(CAST(raw_query AS BLOB)) <= 4096),
+  content_type TEXT NOT NULL DEFAULT ''
+  CHECK(length(CAST(content_type AS BLOB)) <= 4096),
+  content_encoding TEXT NOT NULL DEFAULT ''
+  CHECK(length(CAST(content_encoding AS BLOB)) <= 4096),
+  representation TEXT NOT NULL DEFAULT ''
+  CHECK(length(CAST(representation AS BLOB)) <= 4096),
+  canonicalization TEXT NOT NULL
+  CHECK(canonicalization = 'go_net_http_v1'),
+  header_count INTEGER NOT NULL CHECK(header_count >= 0),
+  trailer_count INTEGER NOT NULL CHECK(trailer_count >= 0),
+  body_bytes INTEGER NOT NULL CHECK(body_bytes >= 0),
+  body_sha256 BLOB NOT NULL CHECK(length(body_sha256) = 32),
+  digest_scope TEXT NOT NULL
+  CHECK(digest_scope IN('full_body', 'observed_prefix', 'unavailable')),
+  payload_state TEXT NOT NULL
+  CHECK(payload_state IN('captured', 'metadata_only', 'truncated', 'unavailable')),
+  payload_reason TEXT NOT NULL DEFAULT ''
+  CHECK(length(CAST(payload_reason AS BLOB)) <= 128),
+  contains_secret INTEGER NOT NULL CHECK(contains_secret IN(0, 1)),
+  encryption_key_revision INTEGER NOT NULL
+  CHECK(encryption_key_revision BETWEEN 0 AND 9223372036854775807),
+  cipher_nonce BLOB NOT NULL,
+  ciphertext BLOB NOT NULL,
+  UNIQUE(writer_id, watermark),
+  CHECK((scope_kind = 'runtime' AND scope_id = '') OR
+        (scope_kind <> 'runtime' AND scope_id <> '')),
+  CHECK((payload_state IN('captured', 'truncated') AND
+         encryption_key_revision > 0 AND
+         length(cipher_nonce) = 12 AND length(ciphertext) > 0) OR
+        (payload_state IN('metadata_only', 'unavailable') AND
+         encryption_key_revision = 0 AND
+         length(cipher_nonce) = 0 AND length(ciphertext) = 0))
+) STRICT;
+CREATE INDEX runtime_raw_evidence_exchange
+ON runtime_raw_evidence_envelopes(
+  exchange_id,
+  observed_at_unix_ms,
+  watermark
+);
+CREATE INDEX runtime_raw_evidence_scope
+ON runtime_raw_evidence_envelopes(
+  scope_kind,
+  scope_id,
+  observed_at_unix_ms DESC
+);
+CREATE INDEX runtime_raw_evidence_expiry
+ON runtime_raw_evidence_envelopes(expires_at_unix_ms);
+-- A writer session is a crash-recovery journal, not an assertion that every
+-- lost envelope can be counted. An open predecessor proves only that up to its
+-- configured batch window may not have reached SQLite.
+CREATE TABLE runtime_raw_evidence_writer_sessions(
+  writer_id TEXT PRIMARY KEY NOT NULL
+  CHECK(length(CAST(writer_id AS BLOB)) BETWEEN 1 AND 512),
+  started_at_unix_ms INTEGER NOT NULL,
+  maximum_unflushed_ms INTEGER NOT NULL CHECK(maximum_unflushed_ms > 0),
+  state TEXT NOT NULL CHECK(state IN('open', 'closed', 'recovered_unclean')),
+  ended_at_unix_ms INTEGER,
+  CHECK((state = 'open' AND ended_at_unix_ms IS NULL) OR
+        (state <> 'open' AND ended_at_unix_ms IS NOT NULL))
+) STRICT;
+CREATE INDEX runtime_raw_evidence_writer_state
+ON runtime_raw_evidence_writer_sessions(state, started_at_unix_ms);
+-- Reveal audit rows contain only identity, outcome, and time. Raw
+-- headers/body bytes never cross into an audit column.
+CREATE TABLE runtime_raw_evidence_reveal_audits(
+  audit_sequence INTEGER PRIMARY KEY AUTOINCREMENT,
+  envelope_id TEXT NOT NULL
+  REFERENCES runtime_raw_evidence_envelopes(envelope_id) ON DELETE CASCADE,
+  exchange_id TEXT NOT NULL
+  CHECK(length(CAST(exchange_id AS BLOB)) BETWEEN 1 AND 512),
+  actor_id TEXT NOT NULL
+  CHECK(length(CAST(actor_id AS BLOB)) BETWEEN 1 AND 512),
+  outcome TEXT NOT NULL CHECK(outcome IN('succeeded', 'unavailable')),
+  occurred_at_unix_ms INTEGER NOT NULL
+) STRICT;
+CREATE INDEX runtime_raw_evidence_reveal_exchange
+ON runtime_raw_evidence_reveal_audits(exchange_id, occurred_at_unix_ms DESC);
 CREATE TABLE capture_runs(
   run_id TEXT PRIMARY KEY NOT NULL
   CHECK(length(CAST(run_id AS BLOB)) BETWEEN 1 AND 128),
@@ -469,6 +632,13 @@ ON runtime_activities(
   sequence DESC
 )
 WHERE kind IN('exchange.started', 'exchange.completed');
+CREATE INDEX runtime_activities_exchange_conversation_latest
+ON runtime_activities(
+  conversation_projection_id,
+  sequence DESC
+)
+WHERE kind IN('exchange.started', 'exchange.completed')
+  AND conversation_projection_id <> '';
 CREATE TABLE runtime_egress_attempts(
   sequence INTEGER PRIMARY KEY AUTOINCREMENT,
   attempt_id TEXT NOT NULL UNIQUE

@@ -173,6 +173,78 @@ func TestProviderThinkingHistoryNeverEntersContentEvidence(t *testing.T) {
 	}
 }
 
+func TestProviderAgentOutputPersistsProvenanceAndHashesOpaqueContent(t *testing.T) {
+	t.Parallel()
+
+	request, _ := evidenceFixture(t)
+	callKey, err := protocolcore.NewCallKey("openai-responses-multi-agent-call", "call-agent-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	arguments, err := protocolcore.NewJSONObject([]byte(`{"task_name":"reviewer"}`), protocolcore.MaxToolJSONBytes)
+	if err != nil {
+		t.Fatal(err)
+	}
+	callBlock, err := protocolcore.NewToolCallBlock(protocolcore.ToolCall{
+		Kind: protocolcore.ToolKindFunction, Key: callKey,
+		Namespace: "multi_agent", Name: "spawn_agent", Arguments: arguments,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	callBlock.Agent = &protocolcore.AgentMessageContext{AgentName: "root"}
+	extension, err := protocolcore.NewProviderExtension(
+		protocolcore.ProviderExtensionSourceOpenAIResponses,
+		protocolcore.ProviderExtensionAgentMessageEncryptedContent,
+		"$.output[0].content[0]",
+		[][]byte{[]byte(`{"type":"encrypted_content","encrypted_content":"opaque-secret"}`)},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	opaqueBlock, err := protocolcore.NewProviderExtensionBlock(extension)
+	if err != nil {
+		t.Fatal(err)
+	}
+	opaqueBlock.Agent = &protocolcore.AgentMessageContext{
+		AgentName: "root", Author: "root", Recipient: "reviewer",
+	}
+	response := protocolcore.Response{
+		ID: "response-agent-1", RequestedModel: request.RequestedModel,
+		EffectiveModel: request.EffectiveModel, ReportedModel: request.EffectiveModel,
+		Blocks:     []protocolcore.ContentBlock{opaqueBlock, callBlock},
+		StopReason: protocolcore.StopReasonToolUse,
+	}
+	record, err := NewRecord(
+		"exchange-agent-output", frozenFixture(), environment.DefaultContentRecordingPolicy(),
+		time.Date(2026, time.August, 9, 1, 2, 3, 0, time.UTC),
+		request, &response,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if record.Response == nil || len(record.Response.Blocks) != 2 {
+		t.Fatalf("response projection = %#v", record.Response)
+	}
+	opaque := record.Response.Blocks[0]
+	if opaque.Agent == nil || opaque.Agent.Recipient != "reviewer" ||
+		opaque.Text != "" || !strings.HasPrefix(opaque.Fingerprint, "sha256:") {
+		t.Fatalf("opaque agent evidence = %#v", opaque)
+	}
+	call := record.Response.Blocks[1]
+	if call.Agent == nil || call.Agent.AgentName != "root" ||
+		call.ToolNamespace != "multi_agent" || call.ToolName != "spawn_agent" {
+		t.Fatalf("agent call evidence = %#v", call)
+	}
+	encoded, err := CanonicalJSON(record)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if bytes.Contains(encoded, []byte("opaque-secret")) {
+		t.Fatal("opaque agent content leaked into stored evidence")
+	}
+}
+
 func TestProviderThinkingResponseRecordsReadableTextWithoutOpaqueState(t *testing.T) {
 	t.Parallel()
 
@@ -211,7 +283,7 @@ func TestProviderThinkingResponseRecordsReadableTextWithoutOpaqueState(t *testin
 	if err != nil {
 		t.Fatal(err)
 	}
-	if record.Response == nil || len(record.Response.Blocks) != 3 {
+	if record.Response == nil || len(record.Response.Blocks) != 4 {
 		t.Fatalf("response projection = %+v", record.Response)
 	}
 	readable := record.Response.Blocks[1]
@@ -219,9 +291,18 @@ func TestProviderThinkingResponseRecordsReadableTextWithoutOpaqueState(t *testin
 		readable.Text != "inspect the repository" {
 		t.Fatalf("thinking projection = %+v", readable)
 	}
-	redactedView := record.Response.Blocks[2]
+	signatureView := record.Response.Blocks[2]
+	if signatureView.Kind != string(protocolcore.BlockProviderExtension) ||
+		signatureView.ProviderKind != string(protocolcore.ProviderExtensionThinking) ||
+		signatureView.ProviderSource != string(protocolcore.ProviderExtensionSourceAnthropicMessages) ||
+		!strings.HasPrefix(signatureView.Fingerprint, "sha256:") {
+		t.Fatalf("thinking signature projection = %+v", signatureView)
+	}
+	redactedView := record.Response.Blocks[3]
 	if redactedView.Kind != string(protocolcore.BlockProviderExtension) ||
-		redactedView.Availability != AvailabilityOmitted || redactedView.OriginalSize == 0 {
+		redactedView.Availability != AvailabilityOmitted || redactedView.OriginalSize == 0 ||
+		redactedView.ProviderKind != string(protocolcore.ProviderExtensionRedactedThinking) ||
+		!strings.HasPrefix(redactedView.Fingerprint, "sha256:") {
 		t.Fatalf("redacted thinking projection = %+v", redactedView)
 	}
 	encoded, err := CanonicalJSON(record)

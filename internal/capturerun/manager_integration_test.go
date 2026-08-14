@@ -229,6 +229,174 @@ func TestCaptureRunCapabilitiesArePersistedAsHashesAndDriveLifecycle(
 	}
 }
 
+func TestCaptureRunFinishDoesNotCommitWhenEvidenceBarrierFails(t *testing.T) {
+	t.Parallel()
+
+	store := openStore(t, filepath.Join(t.TempDir(), "runtime.db"))
+	defer shutdownStore(t, store)
+	clock := newClock(time.Date(2026, 8, 13, 1, 2, 3, 0, time.UTC))
+	barrierErr := errors.New("raw evidence flush failed")
+	barrier := &captureRunBarrier{err: barrierErr}
+	options := capturerun.DefaultOptions(store.CaptureRunRepository())
+	options.Clock = clock
+	options.EvidenceBarrier = barrier
+	manager, err := capturerun.NewManager(context.Background(), options)
+	if err != nil {
+		t.Fatal(err)
+	}
+	grant, err := manager.Create(context.Background(), capturerun.CreateCommand{
+		CWD:                     filepath.Join(t.TempDir(), "workspace"),
+		CanonicalExecutablePath: filepath.Join(t.TempDir(), "bin", "claude"),
+		ExecutableLabel:         "claude",
+		Lifetime:                time.Minute,
+		CatalogRevision:         1,
+		Workspace:               testWorkspaceScope(t),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := manager.Finish(
+		context.Background(),
+		grant.Run.ID,
+		grant.ControlCapability,
+	); !errors.Is(err, barrierErr) {
+		t.Fatalf("Finish error = %v", err)
+	}
+	view, err := manager.GetRun(context.Background(), grant.Run.ID)
+	if err != nil || view.State == capturerun.StateFinished ||
+		barrier.runID != grant.Run.ID {
+		t.Fatalf("view=%+v barrier=%q err=%v", view, barrier.runID, err)
+	}
+}
+
+type captureRunBarrier struct {
+	runID string
+	err   error
+}
+
+func (barrier *captureRunBarrier) PrepareManagedRun(
+	_ context.Context,
+	runID string,
+) (capturerun.TerminalEvidence, error) {
+	barrier.runID = runID
+	return captureRunTerminal{}, barrier.err
+}
+
+type captureRunTerminal struct{}
+
+func (captureRunTerminal) Commit() {}
+func (captureRunTerminal) Abort()  {}
+
+func TestCaptureRunCatalogPaginatesRunningFirstAtSharedTimestamp(t *testing.T) {
+	t.Parallel()
+
+	store := openStore(t, filepath.Join(t.TempDir(), "runtime.db"))
+	defer shutdownStore(t, store)
+	clock := newClock(time.Date(2026, 8, 11, 4, 5, 6, 0, time.UTC))
+	manager := newManager(t, store, clock)
+	workspace := testWorkspaceScope(t)
+	create := func(label string, finish bool) {
+		t.Helper()
+		grant, err := manager.Create(context.Background(), capturerun.CreateCommand{
+			CWD:                     filepath.Join(t.TempDir(), "workspace"),
+			CanonicalExecutablePath: filepath.Join(t.TempDir(), "bin", label),
+			ExecutableLabel:         label,
+			Lifetime:                2 * time.Minute,
+			CatalogRevision:         1,
+			Workspace:               workspace,
+		})
+		if err != nil {
+			t.Fatalf("create CaptureRun %q: %v", label, err)
+		}
+		if finish {
+			if err := manager.Finish(
+				context.Background(),
+				grant.Run.ID,
+				grant.ControlCapability,
+			); err != nil {
+				t.Fatalf("finish CaptureRun %q: %v", label, err)
+			}
+		}
+	}
+	create("running-a", false)
+	create("finished-a", true)
+	create("running-b", false)
+	create("finished-b", true)
+
+	seen := make(map[string]struct{}, 4)
+	var cursor *capturerun.PageCursor
+	for index := range 4 {
+		page, err := manager.ListRuns(context.Background(), capturerun.PageRequest{
+			Limit:  1,
+			Cursor: cursor,
+		})
+		if err != nil {
+			t.Fatalf("list CaptureRun page %d: %v", index+1, err)
+		}
+		if len(page.Items) != 1 {
+			t.Fatalf("CaptureRun page %d = %+v", index+1, page.Items)
+		}
+		item := page.Items[0]
+		if _, duplicate := seen[item.ID]; duplicate {
+			t.Fatalf("CaptureRun %q appeared on multiple pages", item.ID)
+		}
+		seen[item.ID] = struct{}{}
+		running := item.State == capturerun.StateCreated || item.State == capturerun.StateAttached
+		if wantRunning := index < 2; running != wantRunning {
+			t.Fatalf("CaptureRun page %d state = %q", index+1, item.State)
+		}
+		cursor = &capturerun.PageCursor{
+			Running:            running,
+			UpdatedAt:          item.UpdatedAt,
+			AfterID:            item.ID,
+			IncludeAtUpdatedAt: true,
+		}
+	}
+	page, err := manager.ListRuns(context.Background(), capturerun.PageRequest{
+		Limit:  1,
+		Cursor: cursor,
+	})
+	if err != nil || len(page.Items) != 0 {
+		t.Fatalf("CaptureRun terminal page = %+v, %v", page.Items, err)
+	}
+}
+
+func TestCaptureRunCatalogReconcilesExpiredLeaseBeforeListing(t *testing.T) {
+	t.Parallel()
+
+	store := openStore(t, filepath.Join(t.TempDir(), "runtime.db"))
+	defer shutdownStore(t, store)
+	clock := newClock(time.Date(2026, 8, 13, 4, 5, 6, 0, time.UTC))
+	manager := newManager(t, store, clock)
+	grant, err := manager.Create(context.Background(), capturerun.CreateCommand{
+		CWD:                     filepath.Join(t.TempDir(), "workspace"),
+		CanonicalExecutablePath: filepath.Join(t.TempDir(), "bin", "claude"),
+		ExecutableLabel:         "claude",
+		Lifetime:                time.Minute,
+		CatalogRevision:         1,
+		Workspace:               testWorkspaceScope(t),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if grant.Run.State != capturerun.StateCreated {
+		t.Fatalf("new CaptureRun state = %q", grant.Run.State)
+	}
+
+	clock.Advance(2 * time.Minute)
+	page, err := manager.ListRuns(
+		context.Background(),
+		capturerun.PageRequest{Limit: 10},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(page.Items) != 1 || page.Items[0].ID != grant.Run.ID ||
+		page.Items[0].State != capturerun.StateExpired {
+		t.Fatalf("reconciled CaptureRun page = %+v", page.Items)
+	}
+}
+
 func TestCaptureRunRestartRecoveryRetainsOnlyFreshCapabilityHashes(
 	t *testing.T,
 ) {

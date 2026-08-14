@@ -18,6 +18,7 @@ type cliBuildProfiles struct {
 	Desktop  string `json:"desktop"`
 	Sidecars string `json:"sidecars"`
 	Target   string `json:"target"`
+	Toolkit  string `json:"toolkit"`
 }
 
 type cliBuildManifest struct {
@@ -26,7 +27,7 @@ type cliBuildManifest struct {
 	Profiles            cliBuildProfiles                        `json:"profiles"`
 	Toolchains          acceptancereport.DesktopBuildToolchains `json:"toolchains"`
 	ConfigurationSHA256 map[string]string                       `json:"configurationSHA256"`
-	SidecarSHA256       map[string]string                       `json:"sidecarSHA256"`
+	NestedCodeSHA256    map[string]string                       `json:"nestedCodeSHA256"`
 }
 
 func TestRunVerifiesExactReportRevisionAndFixedClient(t *testing.T) {
@@ -39,7 +40,7 @@ func TestRunVerifiesExactReportRevisionAndFixedClient(t *testing.T) {
 	if exitCode != 0 {
 		t.Fatalf("run() exit = %d, stderr = %q", exitCode, stderr.String())
 	}
-	if !strings.Contains(stdout.String(), acceptancereport.SchemaV6) ||
+	if !strings.Contains(stdout.String(), acceptancereport.SchemaV7) ||
 		!strings.Contains(stdout.String(), revision) ||
 		!strings.Contains(stdout.String(), "claude-code@2.1.220") {
 		t.Fatalf("run() stdout = %q", stdout.String())
@@ -171,7 +172,7 @@ func TestRunRejectsIncompleteOrPositionalArguments(t *testing.T) {
 		{"--report", "/private/tmp/report.json"},
 		{
 			"--report", "/private/tmp/report.json",
-			"--expected-schema", acceptancereport.SchemaV6,
+			"--expected-schema", acceptancereport.SchemaV7,
 			"--expected-revision", revision,
 			"--expected-client-id", "claude-code",
 			"--expected-client-version", "2.1.220",
@@ -195,7 +196,7 @@ func cliArguments(
 	arguments := []string{
 		"--report", path,
 		"--expected-mode", string(acceptancereport.ModeDeterministic),
-		"--expected-schema", acceptancereport.SchemaV6,
+		"--expected-schema", acceptancereport.SchemaV7,
 		"--expected-revision", revision,
 		"--expected-client-id", "claude-code",
 		"--expected-client-version", "2.1.220",
@@ -236,11 +237,13 @@ func validCLIReport(t *testing.T) acceptancereport.Report {
 	}
 	roles := []string{
 		"acceptance",
+		"app-framework",
 		"client-entrypoint",
 		"daemon",
 		"desktop-app-bundle",
 		"desktop-app-executable",
 		"desktop-build-manifest",
+		"flutter-macos-framework",
 		"launcher",
 	}
 	root := t.TempDir()
@@ -258,13 +261,19 @@ func validCLIReport(t *testing.T) acceptancereport.Report {
 		t.Fatal(err)
 	}
 	artifactPaths := map[string]string{
-		"acceptance":             filepath.Join(root, "vibermate-acceptance"),
+		"acceptance": filepath.Join(root, "vibermate-acceptance"),
+		"app-framework": filepath.Join(
+			bundle, "Contents", "Frameworks", "App.framework", "Versions", "A", "App",
+		),
 		"client-entrypoint":      filepath.Join(root, "client"),
 		"daemon":                 filepath.Join(macOSDirectory, "vibermated"),
 		"desktop-app-bundle":     bundle,
 		"desktop-app-executable": filepath.Join(macOSDirectory, "vibermate-desktop"),
 		"desktop-build-manifest": filepath.Join(resourcesDirectory, "vibermate-build-manifest.json"),
-		"launcher":               filepath.Join(macOSDirectory, "vibermate"),
+		"flutter-macos-framework": filepath.Join(
+			bundle, "Contents", "Frameworks", "FlutterMacOS.framework", "Versions", "A", "FlutterMacOS",
+		),
+		"launcher": filepath.Join(macOSDirectory, "vibermate"),
 	}
 	for role, path := range artifactPaths {
 		if role == "desktop-app-bundle" || role == "desktop-build-manifest" {
@@ -282,12 +291,15 @@ func validCLIReport(t *testing.T) acceptancereport.Report {
 	configurationPaths := []string{
 		"go.mod",
 		"go.sum",
-		"rust-toolchain.toml",
-		"ui/desktop/package.json",
-		"ui/desktop/pnpm-lock.yaml",
-		"ui/desktop/src-tauri/Cargo.toml",
-		"ui/desktop/src-tauri/Cargo.lock",
-		"ui/desktop/src-tauri/tauri.conf.json",
+		"ui/flutter_app/.metadata",
+		"ui/flutter_app/pubspec.yaml",
+		"ui/flutter_app/pubspec.lock",
+		"ui/flutter_app/tool/flutter-sdk.env",
+		"ui/flutter_app/macos/Runner.xcodeproj/project.pbxproj",
+		"ui/flutter_app/macos/Runner/Configs/AppInfo.xcconfig",
+		"ui/flutter_app/macos/Runner/Configs/Release.xcconfig",
+		"ui/flutter_app/macos/Runner/Info.plist",
+		"ui/flutter_app/macos/Runner/Release.entitlements",
 	}
 	configurationDigests := make(map[string]string, len(configurationPaths))
 	for _, name := range configurationPaths {
@@ -304,20 +316,19 @@ func validCLIReport(t *testing.T) acceptancereport.Report {
 	}
 	revision, commitTime := initializeCLIGitFixture(t, sourceRoot)
 	tools := acceptancereport.ToolchainProvenance{
-		Go:    "go version go1.25.12 darwin/arm64",
-		Node:  acceptancereport.ExpectedNodeVersion,
-		Rustc: "rustc 1.88.0 (fixture 2026-01-01)\nhost: aarch64-apple-darwin",
-		Cargo: "cargo 1.88.0 (fixture 2026-01-01)",
-		PNPM:  acceptancereport.ExpectedPNPMVersion,
+		Go: "go version go1.25.12 darwin/arm64",
+		Flutter: "Flutter " + acceptancereport.ExpectedFlutterVersion + " (" +
+			acceptancereport.ExpectedFlutterRevision + ")",
+		Dart:  "Dart " + acceptancereport.ExpectedDartVersion,
+		Xcode: acceptancereport.ExpectedXcodeVersion,
 	}
 	source := acceptancereport.SourceProvenance{
 		VCS: "git", Revision: revision,
 		CommitTime: commitTime,
 	}
 	buildTools := acceptancereport.DesktopBuildToolchains{
-		Go: tools.Go, Node: tools.Node, Rustc: tools.Rustc,
-		Cargo: tools.Cargo, PNPM: tools.PNPM,
-		Tauri: acceptancereport.ExpectedTauriVersion,
+		Go: tools.Go, Flutter: tools.Flutter,
+		Dart: tools.Dart, Xcode: tools.Xcode,
 	}
 	daemon, err := acceptancereport.DigestArtifact(
 		"daemon",
@@ -333,18 +344,34 @@ func validCLIReport(t *testing.T) acceptancereport.Report {
 	if err != nil {
 		t.Fatal(err)
 	}
+	appFramework, err := acceptancereport.DigestArtifact(
+		"app-framework",
+		artifactPaths["app-framework"],
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	flutterFramework, err := acceptancereport.DigestArtifact(
+		"flutter-macos-framework",
+		artifactPaths["flutter-macos-framework"],
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
 	manifestPayload, err := json.MarshalIndent(cliBuildManifest{
-		Schema: acceptancereport.DesktopBuildManifestSchemaV2,
+		Schema: acceptancereport.DesktopBuildManifestSchemaV3,
 		Source: source,
 		Profiles: cliBuildProfiles{
 			Desktop: "release", Sidecars: "development",
-			Target: acceptancereport.ExpectedBuildTarget,
+			Target: acceptancereport.ExpectedBuildTarget, Toolkit: "flutter",
 		},
 		Toolchains:          buildTools,
 		ConfigurationSHA256: configurationDigests,
-		SidecarSHA256: map[string]string{
-			"vibermated": daemon.SHA256,
-			"vibermate":  launcher.SHA256,
+		NestedCodeSHA256: map[string]string{
+			"app-framework":           appFramework.SHA256,
+			"flutter-macos-framework": flutterFramework.SHA256,
+			"vibermated":              daemon.SHA256,
+			"vibermate":               launcher.SHA256,
 		},
 	}, "", "  ")
 	if err != nil {
@@ -373,7 +400,7 @@ func validCLIReport(t *testing.T) acceptancereport.Report {
 		artifacts[index] = artifact
 	}
 	return acceptancereport.Report{
-		Schema:       acceptancereport.SchemaV6,
+		Schema:       acceptancereport.SchemaV7,
 		StartedAt:    time.Date(2026, 8, 2, 10, 0, 0, 0, time.UTC),
 		FinishedAt:   time.Date(2026, 8, 2, 10, 1, 0, 0, time.UTC),
 		Platform:     acceptancereport.ExpectedPlatform,
@@ -390,6 +417,7 @@ func validCLIReport(t *testing.T) acceptancereport.Report {
 				DesktopProfile:      "release",
 				SidecarProfile:      "development",
 				Target:              acceptancereport.ExpectedBuildTarget,
+				Toolkit:             "flutter",
 				Toolchains:          buildTools,
 				ConfigurationSHA256: configurationDigests,
 				GoBuildVersions: map[string]string{

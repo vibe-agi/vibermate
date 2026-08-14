@@ -137,13 +137,13 @@ func TestVerifyArtifactsRejectsDesktopBuildSemanticDrift(t *testing.T) {
 			document["source"].(map[string]any)["dirty"] = true
 		},
 		"distribution profile": func(document map[string]any) {
-			document["profiles"].(map[string]any)["sidecars"] = "release"
+			document["profiles"].(map[string]any)["sidecars"] = "distribution"
 		},
 		"configuration key set": func(document map[string]any) {
-			delete(document["configurationSHA256"].(map[string]any), "rust-toolchain.toml")
+			delete(document["configurationSHA256"].(map[string]any), "ui/flutter_app/pubspec.yaml")
 		},
-		"sidecar digest": func(document map[string]any) {
-			document["sidecarSHA256"].(map[string]any)["vibermate"] = strings.Repeat("A", 64)
+		"nested code digest": func(document map[string]any) {
+			document["nestedCodeSHA256"].(map[string]any)["app-framework"] = strings.Repeat("A", 64)
 		},
 		"closed nested source": func(document map[string]any) {
 			document["source"].(map[string]any)["unexpected"] = true
@@ -394,11 +394,11 @@ func TestVerifyArtifactsRejectsUnsignedPayloadPrivilegedModeBits(t *testing.T) {
 	}
 }
 
-func TestVerifyArtifactsRejectsDesktopSidecarDigestNotBoundToPayload(t *testing.T) {
+func TestVerifyArtifactsRejectsDesktopNestedCodeDigestNotBoundToPayload(t *testing.T) {
 	root := artifactTempDir(t)
 	manifest := manifestWithFiles(t, root)
 	desktop := readArtifactObject(t, root, &manifest, ArtifactRoleDesktopBuildManifest)
-	desktop["sidecarSHA256"].(map[string]any)["vibermate"] = strings.Repeat("c", 64)
+	desktop["nestedCodeSHA256"].(map[string]any)["app-framework"] = strings.Repeat("c", 64)
 	rewriteDesktopArtifactAndLedger(t, root, &manifest, marshalArtifactJSON(t, desktop))
 	if err := VerifyArtifacts(root, manifest); !errors.Is(err, ErrArtifactMismatch) {
 		t.Fatalf("VerifyArtifacts() error = %v, want ErrArtifactMismatch", err)
@@ -599,19 +599,24 @@ func writeSemanticArtifacts(t *testing.T, root string, manifest *Manifest) {
 	t.Helper()
 	clean := false
 	configuration := make(map[string]string, len(desktopBuildConfigurationNames))
+	configurationDigits := "123456789ab"
 	for index, name := range desktopBuildConfigurationNames {
-		configuration[name] = strings.Repeat(string(rune('1'+index)), 64)
+		configuration[name] = strings.Repeat(string(configurationDigits[index]), 64)
 	}
 	sidecarPayloads := map[string][]byte{
 		"vibermate":  []byte("launcher\n"),
 		"vibermated": []byte("daemon!!\n"),
 	}
-	sidecars := map[string]string{
-		"vibermate":  payloadSHA256(sidecarPayloads["vibermate"]),
-		"vibermated": payloadSHA256(sidecarPayloads["vibermated"]),
+	appFrameworkPayload := []byte("universal App framework\n")
+	flutterFrameworkPayload := []byte("universal FlutterMacOS framework\n")
+	nestedCode := map[string]string{
+		"app-framework":           payloadSHA256(appFrameworkPayload),
+		"flutter-macos-framework": payloadSHA256(flutterFrameworkPayload),
+		"vibermate":               payloadSHA256(sidecarPayloads["vibermate"]),
+		"vibermated":              payloadSHA256(sidecarPayloads["vibermated"]),
 	}
 	desktopPayload := marshalArtifactJSON(t, desktopBuildDocument{
-		Schema: DesktopBuildSchemaV2,
+		Schema: DesktopBuildSchemaV3,
 		Source: desktopBuildSource{
 			VCS:        "git",
 			Revision:   manifest.Commit,
@@ -620,19 +625,18 @@ func writeSemanticArtifacts(t *testing.T, root string, manifest *Manifest) {
 		},
 		Profiles: desktopBuildProfiles{
 			Desktop:  "release",
-			Sidecars: "distribution",
+			Sidecars: "release",
 			Target:   "universal-apple-darwin",
+			Toolkit:  "flutter",
 		},
 		Toolchains: desktopBuildToolchains{
-			Go:    "go version go1.25.12 darwin/arm64",
-			Node:  "v22.23.1",
-			Rustc: "rustc 1.88.0",
-			Cargo: "cargo 1.88.0",
-			PNPM:  "10.33.2",
-			Tauri: "tauri-cli 2.11.4",
+			Go:      "go version go1.25.12 darwin/arm64",
+			Flutter: "Flutter 3.41.5 (2c9...)",
+			Dart:    "Dart 3.11.3",
+			Xcode:   "Xcode 16.2\nBuild version 16C5032a",
 		},
 		ConfigurationSHA256: configuration,
-		SidecarSHA256:       sidecars,
+		NestedCodeSHA256:    nestedCode,
 	})
 	writeDeclaredArtifact(
 		t,
@@ -660,6 +664,8 @@ func writeSemanticArtifacts(t *testing.T, root string, manifest *Manifest) {
 	writePayloadFixtureFile(t, root, "vibermate-desktop", mainPayload, 0o755)
 	writePayloadFixtureFile(t, root, "vibermate", sidecarPayloads["vibermate"], 0o755)
 	writePayloadFixtureFile(t, root, "vibermated", sidecarPayloads["vibermated"], 0o755)
+	writePayloadFixtureFile(t, root, "dist/App.framework/App", appFrameworkPayload, 0o755)
+	writePayloadFixtureFile(t, root, "dist/FlutterMacOS.framework/FlutterMacOS", flutterFrameworkPayload, 0o755)
 	writePayloadFixtureFile(t, root, "vibermate-build-manifest.json", desktopPayload, 0o644)
 	writePayloadFixtureFile(t, root, "LICENSE", licensePayload, 0o644)
 	writePayloadFixtureFile(t, root, "dist/index.html", distPayload, 0o644)
@@ -672,6 +678,10 @@ func writeSemanticArtifacts(t *testing.T, root string, manifest *Manifest) {
 			fixtureDirectoryLedgerEntry(".", 0o755),
 			fixtureFileLedgerEntry("LICENSE", licensePayload, 0o644),
 			fixtureDirectoryLedgerEntry("dist", 0o755),
+			fixtureDirectoryLedgerEntry("dist/App.framework", 0o755),
+			fixtureFileLedgerEntry("dist/App.framework/App", appFrameworkPayload, 0o755),
+			fixtureDirectoryLedgerEntry("dist/FlutterMacOS.framework", 0o755),
+			fixtureFileLedgerEntry("dist/FlutterMacOS.framework/FlutterMacOS", flutterFrameworkPayload, 0o755),
 			fixtureFileLedgerEntry("dist/index.html", distPayload, 0o644),
 			fixtureFileLedgerEntry("vibermate", sidecarPayloads["vibermate"], 0o755),
 			fixtureFileLedgerEntry("vibermate-build-manifest.json", desktopPayload, 0o644),

@@ -8,6 +8,136 @@ import 'package:vibermate_app/preview/preview_terminal_command.dart';
 
 void main() {
   test(
+    'Capture detail selects one proven conversation instead of mixing agents',
+    () async {
+      final api = PreviewControlApi();
+      final controller = WorkbenchController(
+        api: api,
+        terminalCommands: PreviewTerminalCommandService(),
+        previewMode: true,
+        closeRuntime: api.close,
+      );
+      addTearDown(controller.dispose);
+
+      await controller.initialize();
+      await controller.selectCapture('managed_run:run-1');
+
+      expect(controller.captureConversations.length, greaterThan(2));
+      expect(
+        controller.captureConversations
+            .map((item) => item.conversation.kind)
+            .toSet(),
+        containsAll(<String>['main', 'agent', 'isolated_subagent']),
+      );
+      expect(controller.selectedCaptureConversation?.conversation.kind, 'main');
+      expect(controller.selectedActivities, isNotEmpty);
+      expect(
+        controller.selectedActivities.every(
+          (activity) =>
+              activity.conversation.id ==
+              controller.selectedCaptureConversationKey,
+        ),
+        isTrue,
+      );
+
+      final subagent = controller.captureConversations.firstWhere(
+        (item) => item.conversation.kind == 'isolated_subagent',
+      );
+      await controller.selectCaptureConversation(subagent.key);
+
+      expect(controller.selectedCaptureConversationKey, subagent.key);
+      expect(controller.selectedActivities, hasLength(1));
+      expect(
+        controller.selectedActivities.single.conversation.id,
+        subagent.key,
+      );
+    },
+  );
+
+  test(
+    'Raw evidence loads on demand without retaining revealed bytes',
+    () async {
+      final api = PreviewControlApi();
+      final controller = WorkbenchController(
+        api: api,
+        terminalCommands: PreviewTerminalCommandService(),
+        previewMode: true,
+        closeRuntime: api.close,
+      );
+      addTearDown(controller.dispose);
+
+      await controller.initialize();
+      const exchangeId = 'run-1-exchange-222';
+      expect(controller.rawEvidence(exchangeId), isNull);
+
+      final page = await controller.loadRawEvidence(exchangeId);
+      expect(page?.items, hasLength(1));
+      expect(controller.rawEvidence(exchangeId), same(page));
+      expect(controller.rawEvidenceError(exchangeId), isNull);
+
+      final revealed = await controller.revealRawEvidence(
+        exchangeId: exchangeId,
+        envelopeId: page!.items.single.envelopeId,
+      );
+      expect(revealed?.body, isNotEmpty);
+      expect(
+        controller.rawEvidence(exchangeId)?.items.single.bodyBytes,
+        greaterThan(0),
+      );
+    },
+  );
+
+  test(
+    'Capture directory loads every stable page without duplicates',
+    () async {
+      final api = PreviewControlApi(dashboardCaptureLimit: 2);
+      final controller = WorkbenchController(
+        api: api,
+        terminalCommands: PreviewTerminalCommandService(),
+        previewMode: true,
+        closeRuntime: api.close,
+      );
+      addTearDown(controller.dispose);
+
+      await controller.initialize();
+      expect(controller.data!.captures, hasLength(2));
+      expect(controller.data!.captureNextCursor, isNotNull);
+      expect(controller.runningCaptures, hasLength(2));
+
+      await controller.loadMoreCaptures();
+
+      final captures = controller.data!.captures;
+      expect(captures, hasLength(9));
+      expect(captures.map((capture) => capture.key).toSet(), hasLength(9));
+      expect(controller.data!.captureNextCursor, isNull);
+      expect(controller.runningCaptures, hasLength(8));
+      expect(controller.historicalCaptures, hasLength(1));
+      expect(controller.captureDirectoryError, isNull);
+    },
+  );
+
+  test(
+    'Preview Capture cursor walks every bounded page in stable order',
+    () async {
+      final api = PreviewControlApi();
+      addTearDown(api.close);
+      final seen = <String>[];
+      String? cursor;
+
+      do {
+        final page = await api.captures(cursor: cursor, limit: 2);
+        seen.addAll(page.items.map((capture) => capture.key));
+        cursor = page.nextCursor;
+      } while (cursor != null);
+
+      expect(seen, hasLength(9));
+      expect(seen.toSet(), hasLength(9));
+      expect(seen.take(8).every((key) => key != 'managed_run:run-8'), isTrue);
+      expect(seen.last, 'managed_run:run-8');
+    },
+  );
+
+  test(
     'Terminal command changes only through an inspected closed operation',
     () async {
       final api = PreviewControlApi();
@@ -49,6 +179,36 @@ void main() {
         TerminalCommandState.notInstalled,
       );
       expect(controller.terminalCommandNotice, 'terminal.notice.removed');
+
+      final repairService = PreviewTerminalCommandService(
+        initial: const TerminalCommandStatus(
+          state: TerminalCommandState.targetMissing,
+          sourcePath: '/Applications/ViberMate.app/Contents/MacOS/vibermate',
+          targetPath: '/Users/preview/.local/bin/vibermate',
+        ),
+      );
+      final repairController = WorkbenchController(
+        api: api,
+        terminalCommands: repairService,
+        previewMode: true,
+        closeRuntime: api.close,
+      );
+      addTearDown(repairController.dispose);
+      await repairController.refreshTerminalCommand();
+      expect(
+        await repairController.changeTerminalCommand(
+          TerminalCommandOperation.repair,
+        ),
+        isTrue,
+      );
+      expect(
+        repairController.terminalCommand!.state,
+        TerminalCommandState.current,
+      );
+      expect(
+        repairController.terminalCommandNotice,
+        'terminal.notice.repaired',
+      );
     },
   );
 

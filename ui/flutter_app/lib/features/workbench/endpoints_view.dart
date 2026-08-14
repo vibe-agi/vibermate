@@ -50,6 +50,7 @@ final class _EndpointsViewState extends State<EndpointsView> {
           InlineNotice(
             message: copy('notice.inventory.$notice'),
             onDismiss: controller.clearInventoryNotice,
+            dismissLabel: copy('common.dismiss'),
           ),
         Expanded(
           child: LayoutBuilder(
@@ -163,7 +164,7 @@ final class _EndpointDirectory extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return ColoredBox(
-      color: ViberColors.panel,
+      color: context.viberColors.panel,
       child: ListView.builder(
         scrollDirection: horizontal ? Axis.horizontal : Axis.vertical,
         padding: EdgeInsets.symmetric(
@@ -180,9 +181,13 @@ final class _EndpointDirectory extends StatelessWidget {
           return Semantics(
             selected: selected,
             button: true,
-            label: '${endpoint.displayName}, $count accounts',
+            label:
+                '${endpoint.displayName}, '
+                '${copy.format('routes.accounts', {'count': '$count'})}',
             child: Material(
-              color: selected ? ViberColors.selection : Colors.transparent,
+              color: selected
+                  ? context.viberColors.selection
+                  : Colors.transparent,
               child: InkWell(
                 onTap: () => onSelected(endpoint.id),
                 child: Container(
@@ -199,11 +204,13 @@ final class _EndpointDirectory extends StatelessWidget {
                     border: Border(
                       left: BorderSide(
                         color: selected
-                            ? ViberColors.route
+                            ? context.viberColors.route
                             : Colors.transparent,
                         width: 2,
                       ),
-                      bottom: const BorderSide(color: ViberColors.dividerSoft),
+                      bottom: BorderSide(
+                        color: context.viberColors.dividerSoft,
+                      ),
                     ),
                   ),
                   child: Column(
@@ -219,16 +226,17 @@ final class _EndpointDirectory extends StatelessWidget {
                               style: Theme.of(context).textTheme.titleSmall,
                             ),
                           ),
-                          Container(
-                            width: 6,
-                            height: 6,
-                            decoration: BoxDecoration(
-                              color: endpoint.state == 'active'
-                                  ? ViberColors.verified
-                                  : ViberColors.textFaint,
-                              shape: BoxShape.circle,
+                          if (endpoint.state != 'active') ...[
+                            const SizedBox(width: 6),
+                            InlineStatus(
+                              label: _localizedCopy(
+                                copy,
+                                'environment.state',
+                                endpoint.state,
+                              ),
+                              color: context.viberColors.textFaint,
                             ),
-                          ),
+                          ],
                         ],
                       ),
                       const SizedBox(height: 3),
@@ -291,40 +299,68 @@ final class _EndpointDetail extends StatelessWidget {
       children: [
         Container(
           width: double.infinity,
-          color: ViberColors.panel,
+          color: context.viberColors.panel,
           padding: const EdgeInsets.fromLTRB(16, 11, 12, 10),
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
               Row(
+                crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
                   Expanded(
-                    child: Text(
-                      value.displayName,
-                      style: Theme.of(context).textTheme.headlineSmall,
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Row(
+                          children: [
+                            Flexible(
+                              child: Text(
+                                value.displayName,
+                                maxLines: 1,
+                                overflow: TextOverflow.ellipsis,
+                                style: Theme.of(
+                                  context,
+                                ).textTheme.headlineSmall,
+                              ),
+                            ),
+                            if (value.state != 'active') ...[
+                              const SizedBox(width: 8),
+                              InlineStatus(
+                                label: _localizedCopy(
+                                  copy,
+                                  'environment.state',
+                                  value.state,
+                                ),
+                                color: context.viberColors.textFaint,
+                              ),
+                            ],
+                          ],
+                        ),
+                        const SizedBox(height: 3),
+                        Text(
+                          value.origin.toString(),
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: monoStyle.copyWith(
+                            color: context.viberColors.text,
+                          ),
+                        ),
+                      ],
                     ),
                   ),
-                  StatusPill(
-                    label: value.state,
-                    color: value.state == 'active'
-                        ? ViberColors.verified
-                        : ViberColors.textFaint,
-                  ),
-                  const SizedBox(width: 7),
-                  OutlinedButton.icon(
-                    key: const Key('accounts-add'),
-                    onPressed: value.state == 'active' && !busy
-                        ? () => onAddAccount(value)
-                        : null,
-                    icon: const Icon(Icons.add, size: 14),
-                    label: Text(copy('routes.add_account')),
+                  const SizedBox(width: 12),
+                  Align(
+                    alignment: Alignment.topRight,
+                    child: OutlinedButton.icon(
+                      key: const Key('accounts-add'),
+                      onPressed: value.state == 'active' && !busy
+                          ? () => onAddAccount(value)
+                          : null,
+                      icon: const Icon(Icons.add, size: 13),
+                      label: Text(copy('routes.add_account')),
+                    ),
                   ),
                 ],
-              ),
-              const SizedBox(height: 3),
-              Text(
-                value.origin.toString(),
-                style: monoStyle.copyWith(color: ViberColors.text),
               ),
               const SizedBox(height: 7),
               Wrap(
@@ -333,11 +369,14 @@ final class _EndpointDetail extends StatelessWidget {
                 children: [
                   StatusPill(
                     label: value.realmId,
-                    color: ViberColors.route,
+                    color: context.viberColors.route,
                     icon: Icons.public,
                   ),
                   for (final protocol in value.backendProtocols)
-                    StatusPill(label: protocol, color: ViberColors.textMuted),
+                    StatusPill(
+                      label: _localizedCopy(copy, 'routes.protocol', protocol),
+                      color: context.viberColors.textMuted,
+                    ),
                 ],
               ),
             ],
@@ -351,7 +390,14 @@ final class _EndpointDetail extends StatelessWidget {
               ? CenteredMessage(
                   icon: Icons.key_off_outlined,
                   title: copy('routes.no_accounts'),
-                  detail: copy('routes.no_accounts.detail'),
+                  action: OutlinedButton.icon(
+                    key: const Key('accounts-empty-add'),
+                    onPressed: value.state == 'active' && !busy
+                        ? () => onAddAccount(value)
+                        : null,
+                    icon: const Icon(Icons.add, size: 14),
+                    label: Text(copy('routes.add_account')),
+                  ),
                 )
               : ListView.separated(
                   padding: const EdgeInsets.only(bottom: 16),
@@ -396,7 +442,8 @@ final class _AccountRow extends StatelessWidget {
     final credentialLabel = account.usable
         ? copy('routes.credentials.ready')
         : copy('routes.credentials.unavailable');
-    final actions = Row(
+    final kindLabel = _localizedCopy(copy, 'routes.account.kind', account.kind);
+    final compactActions = Row(
       mainAxisSize: MainAxisSize.min,
       children: [
         IconButton(
@@ -409,10 +456,10 @@ final class _AccountRow extends StatelessWidget {
           key: Key('account-delete-${account.id}'),
           onPressed: busy ? null : onDelete,
           tooltip: copy('routes.delete_account'),
-          icon: const Icon(
+          icon: Icon(
             Icons.delete_outline,
             size: 15,
-            color: ViberColors.danger,
+            color: context.viberColors.danger,
           ),
         ),
       ],
@@ -422,7 +469,7 @@ final class _AccountRow extends StatelessWidget {
         padding: const EdgeInsets.fromLTRB(13, 9, 5, 9),
         child: Row(
           children: [
-            const Icon(Icons.key, size: 14, color: ViberColors.verified),
+            Icon(Icons.key, size: 14, color: context.viberColors.verified),
             const SizedBox(width: 7),
             Expanded(
               child: Column(
@@ -436,76 +483,74 @@ final class _AccountRow extends StatelessWidget {
                           style: Theme.of(context).textTheme.titleSmall,
                         ),
                       ),
-                      StatusPill(
+                      InlineStatus(
                         label: credentialLabel,
                         color: account.usable
-                            ? ViberColors.verified
-                            : ViberColors.danger,
+                            ? context.viberColors.verified
+                            : context.viberColors.danger,
                       ),
                     ],
                   ),
                   const SizedBox(height: 4),
                   Text(
-                    '${account.kind}  ·  epoch ${account.credentialEpoch}',
-                    style: monoStyle,
-                  ),
-                  Text(
-                    account.id,
-                    overflow: TextOverflow.ellipsis,
+                    '$kindLabel  ·  ${copy.format('routes.credentials.epoch', {'epoch': account.credentialEpoch})}',
                     style: monoStyle,
                   ),
                 ],
               ),
             ),
-            actions,
+            compactActions,
           ],
         ),
       );
     }
     return SizedBox(
-      height: 51,
+      height: 44,
       child: Padding(
         padding: const EdgeInsets.only(left: 14, right: 5),
         child: Row(
           children: [
-            const Icon(Icons.key, size: 14, color: ViberColors.verified),
+            Icon(Icons.key, size: 14, color: context.viberColors.verified),
             const SizedBox(width: 8),
-            SizedBox(
-              width: 190,
-              child: Column(
-                mainAxisAlignment: MainAxisAlignment.center,
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text(
-                    account.displayName,
-                    overflow: TextOverflow.ellipsis,
-                    style: Theme.of(context).textTheme.titleSmall,
-                  ),
-                  Text(
-                    account.id,
-                    overflow: TextOverflow.ellipsis,
-                    style: monoStyle,
-                  ),
-                ],
+            Expanded(
+              child: Tooltip(
+                message: account.id,
+                child: Column(
+                  mainAxisAlignment: MainAxisAlignment.center,
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      account.displayName,
+                      overflow: TextOverflow.ellipsis,
+                      style: Theme.of(context).textTheme.titleSmall,
+                    ),
+                    Text(
+                      kindLabel,
+                      overflow: TextOverflow.ellipsis,
+                      style: Theme.of(context).textTheme.bodySmall,
+                    ),
+                  ],
+                ),
               ),
             ),
-            Expanded(
+            const SizedBox(width: 10),
+            SizedBox(
+              width: 76,
               child: Text(
-                account.kind,
-                overflow: TextOverflow.ellipsis,
+                copy.format('routes.credentials.epoch', {
+                  'epoch': '${account.credentialEpoch}',
+                }),
                 style: monoStyle,
               ),
             ),
-            SizedBox(
-              width: 76,
-              child: Text('epoch ${account.credentialEpoch}', style: monoStyle),
-            ),
-            StatusPill(
+            InlineStatus(
               label: credentialLabel,
-              color: account.usable ? ViberColors.verified : ViberColors.danger,
+              color: account.usable
+                  ? context.viberColors.verified
+                  : context.viberColors.danger,
             ),
             const SizedBox(width: 4),
-            actions,
+            compactActions,
           ],
         ),
       ),
@@ -541,9 +586,12 @@ final class _EndpointEditorDialogState extends State<_EndpointEditorDialog> {
   Widget build(BuildContext context) {
     final copy = widget.copy;
     return AlertDialog(
+      titlePadding: const EdgeInsets.fromLTRB(16, 14, 16, 8),
+      contentPadding: const EdgeInsets.fromLTRB(16, 0, 16, 8),
+      actionsPadding: const EdgeInsets.fromLTRB(12, 4, 12, 12),
       title: Text(copy('routes.endpoint.create.title')),
       content: SizedBox(
-        width: 430,
+        width: 344,
         child: Form(
           key: _formKey,
           child: SingleChildScrollView(
@@ -551,48 +599,56 @@ final class _EndpointEditorDialogState extends State<_EndpointEditorDialog> {
               mainAxisSize: MainAxisSize.min,
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                TextFormField(
-                  key: const Key('endpoint-editor-name'),
-                  controller: _name,
-                  autofocus: true,
-                  maxLength: 256,
-                  decoration: InputDecoration(
-                    labelText: copy('routes.endpoint.name'),
+                CompactLabeledControl(
+                  label: copy('routes.endpoint.name'),
+                  child: TextFormField(
+                    key: const Key('endpoint-editor-name'),
+                    controller: _name,
+                    autofocus: true,
+                    maxLength: 256,
+                    textAlignVertical: TextAlignVertical.center,
+                    decoration: const InputDecoration(counterText: ''),
+                    validator: (value) => value == null || value.trim().isEmpty
+                        ? copy('routes.validation.required')
+                        : null,
                   ),
-                  validator: (value) => value == null || value.trim().isEmpty
-                      ? copy('routes.validation.required')
-                      : null,
                 ),
-                const SizedBox(height: 7),
-                TextFormField(
-                  key: const Key('endpoint-editor-origin'),
-                  controller: _origin,
-                  autocorrect: false,
-                  enableSuggestions: false,
-                  decoration: InputDecoration(
-                    labelText: copy('routes.endpoint.origin'),
-                    hintText: 'https://relay.example.com',
+                const SizedBox(height: 8),
+                CompactLabeledControl(
+                  label: copy('routes.endpoint.origin'),
+                  child: TextFormField(
+                    key: const Key('endpoint-editor-origin'),
+                    controller: _origin,
+                    autocorrect: false,
+                    enableSuggestions: false,
+                    textAlignVertical: TextAlignVertical.center,
+                    decoration: const InputDecoration(
+                      hintText: 'https://relay.example.com',
+                    ),
+                    validator: (value) => _canonicalProviderOrigin(value ?? '')
+                        ? null
+                        : copy('routes.validation.origin'),
                   ),
-                  validator: (value) => _canonicalProviderOrigin(value ?? '')
-                      ? null
-                      : copy('routes.validation.origin'),
                 ),
-                const SizedBox(height: 9),
-                DropdownButtonFormField<String>(
-                  initialValue: _kind,
-                  decoration: InputDecoration(
-                    labelText: copy('routes.endpoint.protocol'),
+                const SizedBox(height: 8),
+                CompactLabeledControl(
+                  label: copy('routes.endpoint.protocol'),
+                  child: CompactSelectField<String>(
+                    initialValue: _kind,
+                    items: [
+                      for (final kind in const [
+                        'anthropic',
+                        'openai_compatible',
+                      ])
+                        DropdownMenuItem(
+                          value: kind,
+                          child: Text(copy('routes.endpoint.kind.$kind')),
+                        ),
+                    ],
+                    onChanged: (value) => setState(() => _kind = value!),
                   ),
-                  items: [
-                    for (final kind in const ['anthropic', 'openai_compatible'])
-                      DropdownMenuItem(
-                        value: kind,
-                        child: Text(copy('routes.endpoint.kind.$kind')),
-                      ),
-                  ],
-                  onChanged: (value) => setState(() => _kind = value!),
                 ),
-                const SizedBox(height: 10),
+                const SizedBox(height: 8),
                 Text(
                   copy('routes.endpoint.boundary'),
                   style: Theme.of(context).textTheme.bodySmall,
@@ -713,9 +769,9 @@ final class _AccountEditorDialogState extends State<_AccountEditorDialog> {
                   label: widget.endpoint.displayName,
                   detail: widget.endpoint.origin.toString(),
                 ),
-                const SizedBox(height: 10),
+                const SizedBox(height: 8),
                 if (!_replacing) ...[
-                  DropdownButtonFormField<String>(
+                  CompactSelectField<String>(
                     key: const Key('account-editor-kind'),
                     initialValue: _kind,
                     decoration: InputDecoration(
@@ -737,6 +793,7 @@ final class _AccountEditorDialogState extends State<_AccountEditorDialog> {
                     maxLength: 256,
                     decoration: InputDecoration(
                       labelText: copy('routes.account.name'),
+                      counterText: '',
                     ),
                     validator: (value) => value == null || value.trim().isEmpty
                         ? copy('routes.validation.required')
@@ -876,7 +933,7 @@ final class _DeleteAccountDialogState extends State<_DeleteAccountDialog> {
               ),
               const SizedBox(height: 8),
               Text(
-                '${widget.account.id}  ·  epoch ${widget.account.credentialEpoch}',
+                '${widget.account.id}  ·  ${copy.format('routes.credentials.epoch', {'epoch': widget.account.credentialEpoch})}',
                 style: monoStyle,
               ),
               if (blocked != null) ...[
@@ -885,11 +942,11 @@ final class _DeleteAccountDialogState extends State<_DeleteAccountDialog> {
                   width: double.infinity,
                   padding: const EdgeInsets.all(9),
                   decoration: BoxDecoration(
-                    color: ViberColors.danger.withValues(alpha: 0.08),
+                    color: context.viberColors.danger.withValues(alpha: 0.08),
                     border: Border.all(
-                      color: ViberColors.danger.withValues(alpha: 0.35),
+                      color: context.viberColors.danger.withValues(alpha: 0.35),
                     ),
-                    borderRadius: BorderRadius.circular(4),
+                    borderRadius: ViberMetrics.surfaceRadius,
                   ),
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
@@ -950,7 +1007,9 @@ final class _DeleteAccountDialogState extends State<_DeleteAccountDialog> {
           FilledButton(
             key: const Key('account-delete-confirm'),
             onPressed: widget.controller.inventoryMutating ? null : _delete,
-            style: FilledButton.styleFrom(backgroundColor: ViberColors.danger),
+            style: FilledButton.styleFrom(
+              backgroundColor: context.viberColors.danger,
+            ),
             child: widget.controller.inventoryMutating
                 ? const SizedBox.square(
                     dimension: 13,
@@ -994,22 +1053,27 @@ final class _AuthorityLine extends StatelessWidget {
   Widget build(BuildContext context) {
     return Container(
       width: double.infinity,
-      padding: const EdgeInsets.symmetric(horizontal: 9, vertical: 7),
-      decoration: BoxDecoration(
-        color: ViberColors.route.withValues(alpha: 0.07),
-        border: Border.all(color: ViberColors.route.withValues(alpha: 0.25)),
-        borderRadius: BorderRadius.circular(4),
-      ),
+      padding: const EdgeInsets.symmetric(vertical: 2),
       child: Row(
         children: [
-          Icon(icon, size: 15, color: ViberColors.route),
+          Icon(icon, size: 15, color: context.viberColors.route),
           const SizedBox(width: 7),
           Expanded(
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                Text(label, style: Theme.of(context).textTheme.titleSmall),
-                Text(detail, style: monoStyle),
+                Text(
+                  label,
+                  style: Theme.of(
+                    context,
+                  ).textTheme.bodyMedium?.copyWith(fontWeight: FontWeight.w500),
+                ),
+                Text(
+                  detail,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: monoStyle,
+                ),
               ],
             ),
           ),
@@ -1017,6 +1081,12 @@ final class _AuthorityLine extends StatelessWidget {
       ),
     );
   }
+}
+
+String _localizedCopy(AppCopy copy, String family, String value) {
+  final key = '$family.$value';
+  final localized = copy(key);
+  return localized == key ? value : localized;
 }
 
 bool _canonicalProviderOrigin(String value) {

@@ -3,10 +3,13 @@ package providertransport
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
 	"errors"
 	"fmt"
+	"hash"
 	"io"
 	"net/http"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -14,6 +17,7 @@ import (
 	"github.com/vibe-agi/vibermate/internal/egressaudit"
 	"github.com/vibe-agi/vibermate/internal/offlinehold"
 	"github.com/vibe-agi/vibermate/internal/providerauth"
+	"github.com/vibe-agi/vibermate/internal/rawevidence"
 	"github.com/vibe-agi/vibermate/internal/transportprofile"
 	"github.com/vibe-agi/vibermate/internal/wireprofile"
 )
@@ -21,6 +25,7 @@ import (
 var (
 	ErrClientClosing      = errors.New("provider client is closing")
 	ErrRedirectNotAllowed = errors.New("upstream redirect is not allowed")
+	errSemanticTerminal   = errors.New("provider semantic terminal confirmed")
 )
 
 const (
@@ -35,7 +40,10 @@ type ClientOptions struct {
 	Authenticators []Authenticator
 	Transport      Transport
 	// Audit records one immutable attempt per real outbound.
-	Audit egressaudit.Writer
+	Audit                 egressaudit.Writer
+	RawEvidence           rawevidence.Observer
+	RawObservationTimeout time.Duration
+	RawResponseBodyBytes  int
 }
 
 // terminalFailureReporter is implemented by the production audit boundary.
@@ -43,6 +51,13 @@ type ClientOptions struct {
 // off, so an invalid terminal must cross this explicit durability boundary.
 type terminalFailureReporter interface {
 	ReportTerminalFailure(error)
+}
+
+// rawEvidenceFailureReporter is deliberately separate from the core Egress
+// terminal boundary. Raw HTTP retention is best-effort: a failure must remain
+// observable, but it must never alter the provider response seen by the Agent.
+type rawEvidenceFailureReporter interface {
+	ReportRawEvidenceFailure(error)
 }
 
 type Evidence struct {
@@ -97,6 +112,9 @@ type Client struct {
 	authenticators map[providerauth.DriverRef]Authenticator
 	transport      Transport
 	audit          egressaudit.Writer
+	raw            rawevidence.Observer
+	rawTimeout     time.Duration
+	rawBodyBytes   int
 	clock          func() time.Time
 	operations     map[*clientOperation]struct{}
 	closing        bool
@@ -115,6 +133,20 @@ func NewClient(options ClientOptions) (*Client, error) {
 	if len(authenticators) == 0 {
 		return nil, errors.New("provider client has no authenticators")
 	}
+	rawTimeout := options.RawObservationTimeout
+	rawBodyBytes := options.RawResponseBodyBytes
+	if options.RawEvidence != nil {
+		if rawTimeout == 0 {
+			rawTimeout = rawevidence.DefaultObservationLimit
+		}
+		if rawBodyBytes == 0 {
+			rawBodyBytes = rawevidence.DefaultMaximumBodyBytes
+		}
+		if rawTimeout <= 0 || rawBodyBytes <= 0 ||
+			rawBodyBytes > rawevidence.DefaultMaximumBodyBytes {
+			return nil, errors.New("provider raw evidence configuration is invalid")
+		}
+	}
 	byRef := make(map[providerauth.DriverRef]Authenticator, len(authenticators))
 	for _, authenticator := range authenticators {
 		if authenticator == nil || authenticator.Ref().String() == "" {
@@ -130,6 +162,9 @@ func NewClient(options ClientOptions) (*Client, error) {
 		authenticators: byRef,
 		transport:      options.Transport,
 		audit:          options.Audit,
+		raw:            options.RawEvidence,
+		rawTimeout:     rawTimeout,
+		rawBodyBytes:   rawBodyBytes,
 		clock:          time.Now,
 		operations:     make(map[*clientOperation]struct{}),
 		changed:        make(chan struct{}),
@@ -159,6 +194,7 @@ func NewProductionClientWithAuthenticators(
 	authenticators []Authenticator,
 	timeouts TransportTimeouts,
 	audit egressaudit.Writer,
+	rawEvidence rawevidence.Observer,
 ) (*Client, error) {
 	transport, err := newProductionTransport(timeouts)
 	if err != nil {
@@ -169,6 +205,7 @@ func NewProductionClientWithAuthenticators(
 		Authenticators: authenticators,
 		Transport:      transport,
 		Audit:          audit,
+		RawEvidence:    rawEvidence,
 	})
 }
 
@@ -280,11 +317,46 @@ func (client *Client) Do(
 		stripProviderCredentialHeaders(request.Header)
 		return nil, Evidence{}, err
 	}
-	// The record is appended before the first outbound byte, so an outbound
-	// that fails or is cancelled still leaves evidence of where it was going.
+	rawContext, hasRawContext := frozen.RawEvidenceContext()
+	rawEnabled := false
+	if client.raw != nil {
+		if !hasRawContext {
+			client.reportRawEvidenceFailure(errors.New(
+				"provider request has no Raw evidence context",
+			))
+		} else {
+			rawEnabled = rawContext.Recording != rawevidence.RecordingOff
+		}
+	}
+	// The core attempt is durable before either optional Raw evidence or the
+	// first outbound byte. Raw persistence can degrade without weakening this
+	// auditable routing/credential/attempt boundary.
 	record, recordErr := client.beginAudit(operationContext, frozen)
 	if recordErr != nil {
+		stripProviderCredentialHeaders(request.Header)
 		return nil, Evidence{}, recordErr
+	}
+	if rawEnabled {
+		if _, err := client.observeRaw(operationContext, rawevidence.Observation{
+			Context:         rawContext,
+			Layer:           rawevidence.LayerProviderEgress,
+			Method:          request.Method,
+			Scheme:          request.URL.Scheme,
+			Authority:       request.Host,
+			Path:            request.URL.EscapedPath(),
+			RawQuery:        request.URL.RawQuery,
+			Headers:         request.Header.Clone(),
+			Body:            frozen.body,
+			Complete:        true,
+			Representation:  "http_message",
+			ContentType:     request.Header.Get("Content-Type"),
+			ContentEncoding: request.Header.Get("Content-Encoding"),
+		}); err != nil {
+			client.reportRawEvidenceFailure(fmt.Errorf(
+				"record provider egress Raw evidence: %w", err,
+			))
+			rawEnabled = false
+		}
 	}
 	response, transportEvidence, err := client.transport.RoundTrip(
 		request,
@@ -301,35 +373,71 @@ func (client *Client) Do(
 		Transport:    transportEvidence,
 	}
 	if err != nil {
+		var rawErr error
 		if response != nil && response.Body != nil {
-			_ = response.Body.Close()
+			if rawEnabled {
+				response.Body = client.rawResponseBody(
+					rawContext,
+					request,
+					response,
+				)
+			}
+			rawErr = response.Body.Close()
+		} else if rawEnabled {
+			_, rawErr = client.observeUnavailableResponse(
+				operationContext,
+				rawContext,
+				request,
+				"transport_failed",
+			)
 		}
 		client.completeAudit(
 			operationContext, record, egressaudit.OutcomeFailed,
 			"transport_failed", int64(len(frozen.body)), 0,
 		)
+		client.reportRawEvidenceFailure(rawErr)
 		return nil, attemptEvidence, fmt.Errorf("send provider request: %w", err)
 	}
 	if response == nil || response.Body == nil {
+		var rawErr error
+		if rawEnabled {
+			_, rawErr = client.observeUnavailableResponse(
+				operationContext,
+				rawContext,
+				request,
+				"incomplete_response",
+			)
+		}
 		client.completeAudit(
 			operationContext, record, egressaudit.OutcomeFailed,
 			"incomplete_response", int64(len(frozen.body)), 0,
 		)
-		return nil, attemptEvidence, errors.New("provider transport returned an incomplete response")
+		client.reportRawEvidenceFailure(rawErr)
+		return nil, attemptEvidence, errors.New(
+			"provider transport returned an incomplete response",
+		)
+	}
+	if rawEnabled {
+		response.Body = client.rawResponseBody(
+			rawContext,
+			request,
+			response,
+		)
 	}
 	if response.StatusCode >= 300 && response.StatusCode <= 399 {
-		_ = response.Body.Close()
+		closeErr := response.Body.Close()
 		client.completeAudit(
 			operationContext, record, egressaudit.OutcomeFailed,
 			"redirect_denied", int64(len(frozen.body)), 0,
 		)
-		return nil, attemptEvidence, ErrRedirectNotAllowed
+		return nil, attemptEvidence, errors.Join(ErrRedirectNotAllowed, closeErr)
 	}
 
-	counted := &countingReader{reader: response.Body}
+	responseBody := response.Body
+	counted := &countingReader{reader: responseBody}
 	body := &leaseBody{
 		reader: counted,
-		close:  response.Body,
+		close:  responseBody,
 		finish: func(terminalErr error) {
 			outcome, errorClass := responseAuditTerminal(
 				operationContext,
@@ -350,6 +458,222 @@ func (client *Client) Do(
 	response.Body = body
 	handoff = true
 	return response, attemptEvidence, nil
+}
+
+func (client *Client) rawResponseBody(
+	rawContext rawevidence.Context,
+	request *http.Request,
+	response *http.Response,
+) io.ReadCloser {
+	maximumBodyBytes := client.rawBodyBytes
+	if rawContext.Recording != rawevidence.RecordingFull {
+		maximumBodyBytes = 0
+	}
+	return newRawResponseBody(rawResponseBodyOptions{
+		Source:           response.Body,
+		Observer:         client.raw,
+		Timeout:          client.rawTimeout,
+		MaximumBodyBytes: maximumBodyBytes,
+		Context:          rawContext,
+		StatusCode:       response.StatusCode,
+		Scheme:           request.URL.Scheme,
+		Authority:        request.Host,
+		Path:             request.URL.EscapedPath(),
+		RawQuery:         request.URL.RawQuery,
+		Headers:          response.Header.Clone(),
+		Trailers:         func() http.Header { return response.Trailer.Clone() },
+		ReportFailure:    client.reportRawEvidenceFailure,
+	})
+}
+
+func (client *Client) observeUnavailableResponse(
+	ctx context.Context,
+	rawContext rawevidence.Context,
+	request *http.Request,
+	reason string,
+) (rawevidence.Watermark, error) {
+	return client.observeRaw(ctx, rawevidence.Observation{
+		Context:          rawContext,
+		Layer:            rawevidence.LayerProviderResponse,
+		Scheme:           request.URL.Scheme,
+		Authority:        request.Host,
+		Path:             request.URL.EscapedPath(),
+		RawQuery:         request.URL.RawQuery,
+		Unavailable:      true,
+		Complete:         false,
+		IncompleteReason: reason,
+		Representation:   "http_message",
+	})
+}
+
+func (client *Client) observeRaw(
+	ctx context.Context,
+	observation rawevidence.Observation,
+) (rawevidence.Watermark, error) {
+	operation, cancel := context.WithTimeout(
+		context.WithoutCancel(ctx),
+		client.rawTimeout,
+	)
+	defer cancel()
+	return client.raw.Observe(operation, observation)
+}
+
+func (client *Client) reportRawEvidenceFailure(err error) {
+	if err == nil {
+		return
+	}
+	reporter, ok := client.audit.(rawEvidenceFailureReporter)
+	if ok {
+		reporter.ReportRawEvidenceFailure(err)
+	}
+}
+
+type rawResponseBodyOptions struct {
+	Source           io.ReadCloser
+	Observer         rawevidence.Observer
+	Timeout          time.Duration
+	MaximumBodyBytes int
+	Context          rawevidence.Context
+	StatusCode       int
+	Scheme           string
+	Authority        string
+	Path             string
+	RawQuery         string
+	Headers          http.Header
+	Trailers         func() http.Header
+	ReportFailure    func(error)
+}
+
+type rawResponseBody struct {
+	options rawResponseBodyOptions
+	hash    hash.Hash
+
+	mu          sync.Mutex
+	condition   *sync.Cond
+	body        []byte
+	total       int64
+	activeReads int
+	closed      bool
+	reachedEOF  bool
+
+	once       sync.Once
+	observeErr error
+}
+
+func newRawResponseBody(options rawResponseBodyOptions) *rawResponseBody {
+	body := &rawResponseBody{
+		options: options,
+		hash:    sha256.New(),
+		body:    make([]byte, 0, min(options.MaximumBodyBytes, 32<<10)),
+	}
+	body.condition = sync.NewCond(&body.mu)
+	return body
+}
+
+func (body *rawResponseBody) Read(destination []byte) (int, error) {
+	body.mu.Lock()
+	body.activeReads++
+	body.mu.Unlock()
+	count, readErr := body.options.Source.Read(destination)
+	body.mu.Lock()
+	if count > 0 {
+		_, _ = body.hash.Write(destination[:count])
+		body.total += int64(count)
+		remaining := body.options.MaximumBodyBytes - len(body.body)
+		if remaining > 0 {
+			retained := min(remaining, count)
+			body.body = append(body.body, destination[:retained]...)
+		}
+	}
+	if errors.Is(readErr, io.EOF) {
+		body.reachedEOF = true
+	}
+	body.activeReads--
+	body.condition.Broadcast()
+	body.mu.Unlock()
+	if readErr != nil {
+		body.finalize(readErr)
+	}
+	return count, readErr
+}
+
+func (body *rawResponseBody) Close() error {
+	closeErr := body.options.Source.Close()
+	body.mu.Lock()
+	body.closed = true
+	for body.activeReads != 0 {
+		body.condition.Wait()
+	}
+	reachedEOF := body.reachedEOF
+	body.mu.Unlock()
+	terminalErr := closeErr
+	if terminalErr == nil && !reachedEOF {
+		terminalErr = io.ErrClosedPipe
+	}
+	body.finalize(terminalErr)
+	return closeErr
+}
+
+func (body *rawResponseBody) finalize(terminalErr error) error {
+	body.once.Do(func() {
+		body.mu.Lock()
+		retained := slices.Clone(body.body)
+		total := body.total
+		reachedEOF := body.reachedEOF
+		digestBytes := body.hash.Sum(nil)
+		body.mu.Unlock()
+		var digest [sha256.Size]byte
+		copy(digest[:], digestBytes)
+		complete := reachedEOF && total == int64(len(retained))
+		reason := ""
+		switch {
+		case reachedEOF && !complete:
+			reason = "response_payload_limit"
+		case errors.Is(terminalErr, io.ErrClosedPipe):
+			reason = "response_closed_before_eof"
+		case !reachedEOF:
+			reason = "response_read_failed"
+		}
+		trailers := make(http.Header)
+		if body.options.Trailers != nil {
+			trailers = body.options.Trailers()
+		}
+		operation, cancel := context.WithTimeout(
+			context.Background(),
+			body.options.Timeout,
+		)
+		defer cancel()
+		_, body.observeErr = body.options.Observer.Observe(
+			operation,
+			rawevidence.Observation{
+				Context:             body.options.Context,
+				Layer:               rawevidence.LayerProviderResponse,
+				StatusCode:          body.options.StatusCode,
+				Scheme:              body.options.Scheme,
+				Authority:           body.options.Authority,
+				Path:                body.options.Path,
+				RawQuery:            body.options.RawQuery,
+				Headers:             body.options.Headers.Clone(),
+				Trailers:            trailers,
+				Body:                retained,
+				TotalBodyBytes:      total,
+				BodySHA256:          digest,
+				DigestAvailable:     true,
+				FullDigestAvailable: reachedEOF,
+				Complete:            complete,
+				IncompleteReason:    reason,
+				Representation:      "http_message",
+				ContentType:         body.options.Headers.Get("Content-Type"),
+				ContentEncoding:     body.options.Headers.Get("Content-Encoding"),
+			},
+		)
+		if body.observeErr != nil && body.options.ReportFailure != nil {
+			body.options.ReportFailure(fmt.Errorf(
+				"record provider response Raw evidence: %w", body.observeErr,
+			))
+		}
+	})
+	return body.observeErr
 }
 
 func (client *Client) Shutdown(ctx context.Context) error {
@@ -558,10 +882,20 @@ type leaseBody struct {
 
 func (body *leaseBody) Read(destination []byte) (int, error) {
 	count, err := body.reader.Read(destination)
-	if err != nil {
+	// A streaming client can cancel its request context immediately after it has
+	// consumed the provider terminal event. Leave that cancellation pending until
+	// Close unless the protocol layer explicitly confirms the semantic terminal.
+	if err != nil && !errors.Is(err, context.Canceled) {
 		body.finalize(err)
 	}
 	return count, err
+}
+
+// ConfirmSemanticTerminal changes only the EgressAttempt terminal
+// classification after a bounded protocol decoder has proven the terminal
+// event. It never changes or reconstructs response bytes.
+func (body *leaseBody) ConfirmSemanticTerminal() {
+	body.finalize(errSemanticTerminal)
 }
 
 func (body *leaseBody) Close() error {
@@ -584,11 +918,19 @@ func responseAuditTerminal(
 ) (egressaudit.Outcome, string) {
 	cause := context.Cause(operationContext)
 	switch {
+	case errors.Is(terminalErr, errSemanticTerminal):
+		return egressaudit.OutcomeCompleted, ""
+	case errors.Is(terminalErr, io.EOF):
+		// EOF is transport-level proof that the complete response body was
+		// consumed. Some Agent clients cancel their request context immediately
+		// after receiving the terminal SSE event; that concurrent cancellation
+		// must not overwrite the stronger EOF evidence.
+		return egressaudit.OutcomeCompleted, ""
 	case errors.Is(cause, context.DeadlineExceeded):
 		return egressaudit.OutcomeFailed, responseTimeoutClass
 	case cause != nil:
 		return egressaudit.OutcomeCanceled, responseCanceledClass
-	case terminalErr == nil, errors.Is(terminalErr, io.EOF):
+	case terminalErr == nil:
 		return egressaudit.OutcomeCompleted, ""
 	case errors.Is(terminalErr, context.Canceled),
 		errors.Is(terminalErr, ErrClientClosing):

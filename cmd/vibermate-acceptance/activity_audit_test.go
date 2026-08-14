@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/vibe-agi/vibermate/internal/activity"
+	"github.com/vibe-agi/vibermate/internal/agentconversation"
 	"github.com/vibe-agi/vibermate/internal/runtimepersistence"
 )
 
@@ -179,9 +180,11 @@ func TestExchangeAuditReaderSeesOnlyCommittedWALRecordsAndSurvivesReopen(
 		     protocol_plan_id, protocol_plan_revision, route_id, route_revision,
 		     subject_id, status, reason_code,
 		     source_kind, source_display_name, source_recognition, connection_id,
+		     conversation_projection_id, conversation_display_name,
+		     conversation_kind, conversation_evidence, conversation_actor,
 		     provider_status, provider_field,
 		     client_field, client_path, transport_evidence_json
-		 ) VALUES (?, ?, ?, ?, 1, ?, ?, 1, ?, 1, ?, 1, ?, ?, ?, ?, ?, ?, ?, 0, '', '', '', NULL)`,
+		 ) VALUES (?, ?, ?, ?, 1, ?, ?, 1, ?, 1, ?, 1, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, '', 0, '', '', '', NULL)`,
 		"activity-committed",
 		time.Unix(11, 0).UnixMilli(),
 		activity.KindExchangeCompleted,
@@ -197,6 +200,10 @@ func TestExchangeAuditReaderSeesOnlyCommittedWALRecordsAndSurvivesReopen(
 		"ViberMate runtime",
 		activity.SourceRecognitionUnknown,
 		"connection-exchange-committed",
+		"exchange:exchange-committed",
+		"ViberMate runtime",
+		agentconversation.KindIsolatedExchange,
+		agentconversation.EvidenceExchangeBoundary,
 	)
 	if err != nil {
 		_ = transaction.Rollback()
@@ -436,6 +443,18 @@ func appendAuditActivity(
 		record.SourceDisplayName = "ViberMate runtime"
 		record.SourceRecognition = activity.SourceRecognitionUnknown
 		record.ConnectionID = "connection-" + record.SubjectID
+		if record.Conversation == nil {
+			conversation, err := agentconversation.Project(
+				agentconversation.ProjectionInput{
+					ExchangeID:        record.SubjectID,
+					SourceDisplayName: record.SourceDisplayName,
+				},
+			)
+			if err != nil {
+				t.Fatal(err)
+			}
+			record.Conversation = &conversation
+		}
 	}
 	stored, err := repository.Append(context.Background(), record)
 	if err != nil {

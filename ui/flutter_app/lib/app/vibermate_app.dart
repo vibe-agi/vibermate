@@ -6,13 +6,16 @@ import '../core/api/control_api.dart';
 import '../core/bootstrap/desktop_runtime.dart';
 import '../core/bootstrap/terminal_command.dart';
 import '../core/design/viber_theme.dart';
+import '../core/design/vibermate_mark.dart';
+import '../core/design/workbench_window_appearance.dart';
+import '../core/i18n/app_copy.dart';
 import '../core/preferences/workbench_preferences.dart';
 import '../features/workbench/workbench_controller.dart';
 import '../features/workbench/workbench_shell.dart';
 import '../preview/preview_control_api.dart';
 import '../preview/preview_terminal_command.dart';
 
-final class ViberMateApp extends StatelessWidget {
+final class ViberMateApp extends StatefulWidget {
   const ViberMateApp({
     required this.previewMode,
     required this.preferChinese,
@@ -25,17 +28,85 @@ final class ViberMateApp extends StatelessWidget {
   final WorkbenchPreferencesStore? preferencesStore;
 
   @override
+  State<ViberMateApp> createState() => _ViberMateAppState();
+}
+
+final class _ViberMateAppState extends State<ViberMateApp> {
+  static const _windowAppearance = PlatformWorkbenchWindowAppearance();
+
+  WorkbenchTheme _theme = WorkbenchTheme.system;
+  late final WorkbenchPreferencesStore _preferencesStore;
+  LoadedWorkbenchPreferences? _loadedPreferences;
+
+  @override
+  void initState() {
+    super.initState();
+    _preferencesStore =
+        widget.preferencesStore ??
+        (widget.previewMode
+            ? MemoryWorkbenchPreferencesStore()
+            : const PlatformWorkbenchPreferencesStore());
+    unawaited(_loadPreferences());
+  }
+
+  @override
   Widget build(BuildContext context) {
     return MaterialApp(
       title: 'ViberMate',
       debugShowCheckedModeBanner: false,
-      theme: ViberTheme.dark(),
+      themeAnimationDuration: Duration.zero,
+      theme: ViberTheme.light(),
       darkTheme: ViberTheme.dark(),
-      themeMode: ThemeMode.dark,
-      home: _RuntimeBootstrap(
-        previewMode: previewMode,
-        preferChinese: preferChinese,
-        preferencesStore: preferencesStore,
+      themeMode: switch (_theme) {
+        WorkbenchTheme.system => ThemeMode.system,
+        WorkbenchTheme.light => ThemeMode.light,
+        WorkbenchTheme.dark => ThemeMode.dark,
+      },
+      home: _loadedPreferences == null
+          ? const _PreferenceBootstrapView()
+          : _RuntimeBootstrap(
+              previewMode: widget.previewMode,
+              preferChinese: widget.preferChinese,
+              preferencesStore: _preferencesStore,
+              loadedPreferences: _loadedPreferences!,
+              onThemeChanged: _setTheme,
+            ),
+    );
+  }
+
+  void _setTheme(WorkbenchTheme value) {
+    if (_theme == value || !mounted) return;
+    setState(() => _theme = value);
+    unawaited(_windowAppearance.apply(value));
+  }
+
+  Future<void> _loadPreferences() async {
+    final loaded = await loadWorkbenchPreferences(
+      _preferencesStore,
+      fallbackLanguage: widget.preferChinese
+          ? AppLanguage.simplifiedChinese
+          : AppLanguage.english,
+    );
+    if (!mounted) return;
+    unawaited(_windowAppearance.apply(loaded.value.theme));
+    setState(() {
+      _theme = loaded.value.theme;
+      _loadedPreferences = loaded;
+    });
+  }
+}
+
+final class _PreferenceBootstrapView extends StatelessWidget {
+  const _PreferenceBootstrapView();
+
+  @override
+  Widget build(BuildContext context) {
+    return const Scaffold(
+      body: Center(
+        child: SizedBox(
+          width: 210,
+          child: LinearProgressIndicator(minHeight: 2),
+        ),
       ),
     );
   }
@@ -46,11 +117,15 @@ final class _RuntimeBootstrap extends StatefulWidget {
     required this.previewMode,
     required this.preferChinese,
     required this.preferencesStore,
+    required this.loadedPreferences,
+    required this.onThemeChanged,
   });
 
   final bool previewMode;
   final bool preferChinese;
-  final WorkbenchPreferencesStore? preferencesStore;
+  final WorkbenchPreferencesStore preferencesStore;
+  final LoadedWorkbenchPreferences loadedPreferences;
+  final ValueChanged<WorkbenchTheme> onThemeChanged;
 
   @override
   State<_RuntimeBootstrap> createState() => _RuntimeBootstrapState();
@@ -78,17 +153,8 @@ final class _RuntimeBootstrapState extends State<_RuntimeBootstrap> {
       final ControlApi api;
       final TerminalCommandService terminalCommands;
       final Future<void> Function() closeRuntime;
-      final WorkbenchPreferencesStore preferencesStore =
-          widget.preferencesStore ??
-          (widget.previewMode
-              ? MemoryWorkbenchPreferencesStore()
-              : const PlatformWorkbenchPreferencesStore());
-      final loadedPreferences = await loadWorkbenchPreferences(
-        preferencesStore,
-        fallbackLanguage: widget.preferChinese
-            ? AppLanguage.simplifiedChinese
-            : AppLanguage.english,
-      );
+      final preferencesStore = widget.preferencesStore;
+      final loadedPreferences = widget.loadedPreferences;
       DesktopRuntime? liveRuntime;
       if (widget.previewMode) {
         final preview = PreviewControlApi();
@@ -115,6 +181,7 @@ final class _RuntimeBootstrapState extends State<_RuntimeBootstrap> {
         preferencesStore: preferencesStore,
         preferencesWritable: loadedPreferences.writable,
         initialPreferencesIssue: loadedPreferences.issue,
+        onThemeChanged: widget.onThemeChanged,
       );
       setState(() {
         _controller = controller;
@@ -157,6 +224,11 @@ final class _RuntimeBootstrapState extends State<_RuntimeBootstrap> {
 
   @override
   Widget build(BuildContext context) {
+    final copy = AppCopy.forLanguage(
+      widget.preferChinese
+          ? AppLanguage.simplifiedChinese
+          : AppLanguage.english,
+    );
     final controller = _controller;
     if (controller != null) return WorkbenchShell(controller: controller);
     return Scaffold(
@@ -183,15 +255,15 @@ final class _RuntimeBootstrapState extends State<_RuntimeBootstrap> {
                   const SizedBox(height: 10),
                   Text(
                     widget.previewMode
-                        ? 'Preparing Preview evidence…'
-                        : 'Starting local traffic runtime…',
+                        ? copy('bootstrap.preview')
+                        : copy('bootstrap.live'),
                     style: Theme.of(context).textTheme.bodySmall,
                   ),
                 ] else ...[
-                  const Icon(
+                  Icon(
                     Icons.error_outline,
                     size: 23,
-                    color: ViberColors.danger,
+                    color: context.viberColors.danger,
                   ),
                   const SizedBox(height: 8),
                   Text(
@@ -203,7 +275,7 @@ final class _RuntimeBootstrapState extends State<_RuntimeBootstrap> {
                   OutlinedButton.icon(
                     onPressed: _start,
                     icon: const Icon(Icons.refresh, size: 15),
-                    label: const Text('Retry'),
+                    label: Text(copy('common.retry')),
                   ),
                 ],
               ],
@@ -220,15 +292,6 @@ final class _BootstrapMark extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return Container(
-      width: 42,
-      height: 42,
-      decoration: BoxDecoration(
-        color: ViberColors.route.withValues(alpha: 0.08),
-        border: Border.all(color: ViberColors.route.withValues(alpha: 0.35)),
-        borderRadius: BorderRadius.circular(9),
-      ),
-      child: const Icon(Icons.route, color: ViberColors.route, size: 23),
-    );
+    return const ViberMateMark(size: 42, framed: true);
   }
 }

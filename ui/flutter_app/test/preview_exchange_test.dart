@@ -23,16 +23,71 @@ void main() {
         isEmpty,
       );
 
-      final summaries = ConversationSummary.fromActivities(first.items);
+      final conversationPage = await api.conversations(limit: 50);
+      final summaries = conversationPage.items
+          .map(ConversationSummary.fromRecord)
+          .toList(growable: false);
       final managed = summaries.where((item) => item.captureRunId != null);
+      final main = summaries.where((item) => item.conversation.kind == 'main');
+      final namedAgents = summaries.where(
+        (item) => item.conversation.kind == 'agent',
+      );
+      final isolatedSubagents = summaries.where(
+        (item) => item.conversation.kind == 'isolated_subagent',
+      );
       final manual = summaries.where(
         (item) => item.latest.manualCaptureId != null,
       );
       expect(managed, isNotEmpty);
-      expect(managed.first.turnCount, greaterThan(1));
+      expect(main, isNotEmpty);
+      expect(main.every((item) => item.turnCount > 1), isTrue);
+      expect(namedAgents, isNotEmpty);
+      expect(namedAgents.every((item) => item.turnCount > 1), isTrue);
+      expect(isolatedSubagents, isNotEmpty);
+      expect(isolatedSubagents.every((item) => item.turnCount == 1), isTrue);
+      expect(
+        isolatedSubagents.map((item) => item.key).toSet(),
+        hasLength(isolatedSubagents.length),
+      );
       expect(manual, isNotEmpty);
       expect(manual.every((item) => item.turnCount == 1), isTrue);
       expect(manual.map((item) => item.key).toSet(), hasLength(manual.length));
+
+      final runOneConversations = await api.conversations(
+        limit: 50,
+        captureRunId: 'run-1',
+      );
+      expect(runOneConversations.items, isNotEmpty);
+      expect(
+        runOneConversations.items.every(
+          (item) => item.latest.captureRunId == 'run-1',
+        ),
+        isTrue,
+      );
+      expect(
+        runOneConversations.items.map((item) => item.conversation.kind).toSet(),
+        containsAll(<String>['main', 'agent', 'isolated_subagent']),
+      );
+      expect(
+        () => api.conversations(
+          captureRunId: 'run-1',
+          manualCaptureId: manual.first.latest.manualCaptureId!,
+        ),
+        throwsA(isA<ControlContractException>()),
+      );
+
+      final named = namedAgents.first;
+      final namedTurns = await api.activities(
+        limit: 200,
+        conversationId: named.key,
+      );
+      expect(namedTurns.items, hasLength(named.turnCount));
+      expect(
+        namedTurns.items.every(
+          (item) => item.conversation.id == named.conversation.id,
+        ),
+        isTrue,
+      );
 
       final manualCaptureId = manual.first.latest.manualCaptureId!;
       final manualFirst = await api.activities(

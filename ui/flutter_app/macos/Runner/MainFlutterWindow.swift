@@ -2,6 +2,40 @@ import Cocoa
 import Darwin
 import FlutterMacOS
 
+enum WorkbenchWindowTheme: String {
+  case system
+  case light
+  case dark
+
+  static func fromPreferences(_ encoded: String?) -> WorkbenchWindowTheme {
+    guard let encoded,
+          let data = encoded.data(using: .utf8),
+          let object = try? JSONSerialization.jsonObject(with: data),
+          let payload = object as? [String: Any],
+          let value = payload["theme"] as? String,
+          let theme = WorkbenchWindowTheme(rawValue: value) else {
+      return .system
+    }
+    return theme
+  }
+
+  var appearance: NSAppearance? {
+    switch self {
+    case .system:
+      return nil
+    case .light:
+      return NSAppearance(named: .aqua)
+    case .dark:
+      return NSAppearance(named: .darkAqua)
+    }
+  }
+
+  func apply(to window: NSWindow) {
+    window.appearance = appearance
+    window.backgroundColor = .windowBackgroundColor
+  }
+}
+
 class MainFlutterWindow: NSWindow {
   private static let preferencesChannelName = "io.vibermate.desktop/preferences"
   private static let frameAutosaveName = "ViberMateMainWindow"
@@ -16,6 +50,7 @@ class MainFlutterWindow: NSWindow {
     self.setFrame(windowFrame, display: true)
 
     self.title = "ViberMate"
+    self.titleVisibility = .hidden
     self.minSize = NSSize(width: 390, height: 620)
     if !self.setFrameUsingName(Self.frameAutosaveName) {
       self.setContentSize(NSSize(width: 1180, height: 760))
@@ -25,6 +60,9 @@ class MainFlutterWindow: NSWindow {
 
     RegisterGeneratedPlugins(registry: flutterViewController)
     preferencesBridge = try? WorkbenchPreferencesBridge()
+    applyWindowTheme(
+      WorkbenchWindowTheme.fromPreferences(try? preferencesBridge?.read())
+    )
     let channel = FlutterMethodChannel(
       name: Self.preferencesChannelName,
       binaryMessenger: flutterViewController.engine.binaryMessenger
@@ -39,6 +77,16 @@ class MainFlutterWindow: NSWindow {
   }
 
   private func handlePreferences(call: FlutterMethodCall, result: @escaping FlutterResult) {
+    if call.method == "setWorkbenchTheme" {
+      guard let value = call.arguments as? String,
+            let theme = WorkbenchWindowTheme(rawValue: value) else {
+        result(preferencesError("invalid_arguments", "Theme must be system, light, or dark"))
+        return
+      }
+      applyWindowTheme(theme)
+      result(nil)
+      return
+    }
     guard let preferencesBridge else {
       result(preferencesError("unavailable", "Preferences storage is unavailable"))
       return
@@ -50,13 +98,18 @@ class MainFlutterWindow: NSWindow {
         return
       }
       do {
-        result(try preferencesBridge.read())
+        let encoded = try preferencesBridge.read()
+        applyWindowTheme(WorkbenchWindowTheme.fromPreferences(encoded))
+        result(encoded)
       } catch {
         result(preferencesError("invalid_state", "Stored preferences are invalid"))
       }
     case "writeWorkbenchPreferences":
       do {
         try preferencesBridge.write(call.arguments)
+        applyWindowTheme(
+          WorkbenchWindowTheme.fromPreferences(call.arguments as? String)
+        )
         result(nil)
       } catch WorkbenchPreferencesBridge.Failure.invalidPayload {
         result(preferencesError("invalid_arguments", "Preferences payload is invalid"))
@@ -70,6 +123,10 @@ class MainFlutterWindow: NSWindow {
 
   private func preferencesError(_ code: String, _ message: String) -> FlutterError {
     FlutterError(code: code, message: message, details: nil)
+  }
+
+  private func applyWindowTheme(_ theme: WorkbenchWindowTheme) {
+    theme.apply(to: self)
   }
 
   func prepareForApplicationTermination() throws {
@@ -86,12 +143,13 @@ final class WorkbenchPreferencesBridge {
   }
 
   static let maximumBytes = 4_096
-  static let fileName = "workbench-preferences-v1.json"
+  static let fileName = "workbench-preferences-v2.json"
   private static let applicationID = "io.vibermate.desktop"
-  private static let schema = "vibermate-workbench-preferences/v1"
+  private static let schema = "vibermate-workbench-preferences/v2"
   private static let fields: Set<String> = [
     "schema",
     "language",
+    "theme",
     "section",
     "selectedCaptureKey",
     "selectedConversationKey",
@@ -291,6 +349,8 @@ final class WorkbenchPreferencesBridge {
           payload["schema"] as? String == schema,
           let language = payload["language"] as? String,
           ["en-US", "zh-CN"].contains(language),
+          let theme = payload["theme"] as? String,
+          ["system", "light", "dark"].contains(theme),
           let section = payload["section"] as? String,
           ["captures", "conversations", "environments", "routes", "network", "settings"]
             .contains(section),

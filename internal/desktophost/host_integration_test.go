@@ -85,7 +85,7 @@ func TestHostPublishesReadyGenerationAndRunsCapturedChildOverRealSockets(
 		http.MethodGet,
 		"/api/v1/status",
 		app.ReadToken,
-		"tauri://localhost",
+		"vibermate://desktop",
 	)
 	defer response.Body.Close()
 	if response.StatusCode != http.StatusOK {
@@ -154,7 +154,7 @@ func TestHostUsesOnlyTheExplicitWebviewOrigin(t *testing.T) {
 	root := t.TempDir()
 	paths := newHostPaths(t, filepath.Join(root, "cache"))
 	options := hostOptions(t, paths, filepath.Join(root, "data"))
-	options.AllowedOrigins = []string{"http://127.0.0.1:1420"}
+	options.AllowedOrigins = []string{"https://desktop.test"}
 	host := startHost(t, options)
 	defer shutdownHost(t, host)
 
@@ -164,7 +164,7 @@ func TestHostUsesOnlyTheExplicitWebviewOrigin(t *testing.T) {
 		http.MethodGet,
 		"/api/v1/status",
 		host.AppSession().ReadToken,
-		"http://127.0.0.1:1420",
+		"https://desktop.test",
 	)
 	_ = accepted.Body.Close()
 	if accepted.StatusCode != http.StatusOK {
@@ -176,7 +176,7 @@ func TestHostUsesOnlyTheExplicitWebviewOrigin(t *testing.T) {
 		http.MethodGet,
 		"/api/v1/status",
 		host.AppSession().ReadToken,
-		"tauri://localhost",
+		"vibermate://desktop",
 	)
 	_ = rejected.Body.Close()
 	if rejected.StatusCode != http.StatusForbidden {

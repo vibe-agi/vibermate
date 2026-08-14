@@ -38,6 +38,18 @@ type Options struct {
 	Clock                Clock
 	Random               io.Reader
 	MaxTemporaryLifetime time.Duration
+	EvidenceBarrier      EvidenceBarrier
+}
+
+// TerminalEvidence owns a prepared ManualCapture evidence boundary.
+type TerminalEvidence interface {
+	Commit()
+	Abort()
+}
+
+// EvidenceBarrier drains active requests before explicit revocation commits.
+type EvidenceBarrier interface {
+	PrepareManualCapture(context.Context, string) (TerminalEvidence, error)
 }
 
 func DefaultOptions(repository Repository) Options {
@@ -54,6 +66,7 @@ type Manager struct {
 	clock                Clock
 	random               io.Reader
 	maxTemporaryLifetime time.Duration
+	evidenceBarrier      EvidenceBarrier
 	lifecycle            *lifecycleGate
 	recovery             Recovery
 }
@@ -76,6 +89,7 @@ func NewManager(ctx context.Context, options Options) (*Manager, error) {
 		clock:                options.Clock,
 		random:               options.Random,
 		maxTemporaryLifetime: options.MaxTemporaryLifetime,
+		evidenceBarrier:      options.EvidenceBarrier,
 		lifecycle:            newLifecycleGate(),
 		recovery:             recovery,
 	}, nil
@@ -200,6 +214,16 @@ func (manager *Manager) Revoke(
 		return View{}, err
 	}
 	defer finish()
+	var terminal TerminalEvidence
+	if manager.evidenceBarrier != nil {
+		terminal, err = manager.evidenceBarrier.PrepareManualCapture(
+			operation,
+			command.ID.String(),
+		)
+		if err != nil {
+			return View{}, fmt.Errorf("prepare ManualCapture evidence: %w", err)
+		}
+	}
 	record, err := manager.repository.Revoke(
 		operation,
 		command.Owner,
@@ -208,7 +232,13 @@ func (manager *Manager) Revoke(
 		manager.now(),
 	)
 	if err != nil {
+		if terminal != nil {
+			terminal.Abort()
+		}
 		return View{}, err
+	}
+	if terminal != nil {
+		terminal.Commit()
 	}
 	return ViewOf(record), nil
 }
@@ -282,7 +312,8 @@ func (manager *Manager) List(
 		return Page{}, ErrRuntimeStopping
 	}
 	request = request.Normalized()
-	if !request.Owner.Valid() {
+	if !request.Owner.Valid() ||
+		(request.Cursor != nil && !request.Cursor.Valid()) {
 		return Page{}, ErrInvalidCommand
 	}
 	operation, finish, err := manager.lifecycle.begin(ctx)

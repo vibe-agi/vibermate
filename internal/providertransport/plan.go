@@ -17,6 +17,7 @@ import (
 	"github.com/vibe-agi/vibermate/internal/offlinehold"
 	"github.com/vibe-agi/vibermate/internal/originidentity"
 	"github.com/vibe-agi/vibermate/internal/providerauth"
+	"github.com/vibe-agi/vibermate/internal/rawevidence"
 	"github.com/vibe-agi/vibermate/internal/secretstore"
 	"github.com/vibe-agi/vibermate/internal/transportprofile"
 	"github.com/vibe-agi/vibermate/internal/wireprofile"
@@ -247,6 +248,10 @@ type RequestOptions struct {
 	// from ParentAttemptID, because an identity that repeats its parent
 	// encodes containment.
 	EgressAttemptID string
+	// RawEvidence is the frozen content-governance and authority context for
+	// this outbound. It contains no secret bytes and is optional only for
+	// callers that do not install a Raw observer (primarily focused tests).
+	RawEvidence *rawevidence.Context
 }
 
 // Request is a frozen provider representation. Its URL, authority, body,
@@ -276,6 +281,7 @@ type Request struct {
 	clientProtocol  wireprofile.ApplicationProtocol
 	clientUserAgent string
 	clientHello     transportprofile.Observation
+	rawEvidence     *rawevidence.Context
 }
 
 // WirePresentationEvidence is the redacted product-level presentation chosen
@@ -430,6 +436,29 @@ func NewRequest(options RequestOptions) (Request, error) {
 		!validPresentationUserAgent(options.ClientUserAgent) {
 		return Request{}, errors.New("provider client User-Agent is invalid")
 	}
+	var rawEvidence *rawevidence.Context
+	if options.RawEvidence != nil {
+		candidate := *options.RawEvidence
+		if err := candidate.Validate(); err != nil ||
+			candidate.ExchangeID != options.ExchangeID ||
+			candidate.ConnectionID != options.ConnectionID ||
+			candidate.AttemptID != options.EgressAttemptID ||
+			candidate.EnvironmentID != options.Provenance.EnvironmentID().String() ||
+			candidate.EnvironmentRevision != uint64(options.Provenance.EnvironmentRevision()) ||
+			candidate.EnvironmentDigest != options.Provenance.EnvironmentDigest().String() ||
+			candidate.RouteID != options.Provenance.RouteID().String() ||
+			candidate.RouteRevision != uint64(options.Provenance.RouteRevision()) ||
+			candidate.UpstreamEndpointID != options.TargetRef {
+			return Request{}, errors.New("provider raw evidence context is invalid")
+		}
+		if options.CredentialMode == providerauth.CredentialManaged &&
+			(candidate.AccountID != options.AccountRef.ID ||
+				candidate.AccountRevision != options.AccountRef.Revision ||
+				candidate.CredentialEpoch != options.AccountRef.CredentialEpoch) {
+			return Request{}, errors.New("provider raw evidence account is invalid")
+		}
+		rawEvidence = &candidate
+	}
 	wireVariant, available := options.WireProfile.Variant(options.ClientProtocol)
 	if !available {
 		return Request{}, errors.New(
@@ -480,6 +509,7 @@ func NewRequest(options RequestOptions) (Request, error) {
 		clientProtocol:  options.ClientProtocol,
 		clientUserAgent: options.ClientUserAgent,
 		clientHello:     options.ClientHello,
+		rawEvidence:     rawEvidence,
 	}, nil
 }
 
@@ -518,6 +548,13 @@ func (request Request) Body() []byte {
 }
 
 func (request Request) Provenance() RequestProvenance { return request.provenance }
+
+func (request Request) RawEvidenceContext() (rawevidence.Context, bool) {
+	if request.rawEvidence == nil {
+		return rawevidence.Context{}, false
+	}
+	return *request.rawEvidence, true
+}
 
 func (request Request) CredentialMode() providerauth.CredentialMode {
 	return request.credentialMode

@@ -13,6 +13,7 @@ import (
 	"unicode"
 	"unicode/utf8"
 
+	"github.com/vibe-agi/vibermate/internal/agentconversation"
 	"github.com/vibe-agi/vibermate/internal/captureidentity"
 	"github.com/vibe-agi/vibermate/internal/environment"
 )
@@ -94,6 +95,7 @@ type Event struct {
 	CaptureRunID           string
 	ManualCaptureID        string
 	ConnectionID           string
+	Conversation           agentconversation.Ref
 	Diagnosis              Diagnosis
 	Transport              *TransportEvidence
 }
@@ -202,13 +204,20 @@ func (event Event) Validate() error {
 		default:
 			return fmt.Errorf("%w: source kind is invalid", ErrInvalidEvent)
 		}
+		if err := event.Conversation.Validate(); err != nil {
+			return fmt.Errorf(
+				"%w: Agent Conversation evidence is invalid: %v",
+				ErrInvalidEvent,
+				err,
+			)
+		}
 	} else if hasExecution ||
 		event.SourceKind != "" ||
 		event.SourceDisplayName != "" ||
 		event.SourceRecognition != "" ||
 		event.CaptureRunID != "" ||
 		event.ManualCaptureID != "" ||
-		event.ConnectionID != "" {
+		event.ConnectionID != "" || event.Conversation != (agentconversation.Ref{}) {
 		return fmt.Errorf(
 			"%w: Exchange relationship evidence belongs only to an Exchange",
 			ErrInvalidEvent,
@@ -216,14 +225,17 @@ func (event Event) Validate() error {
 	}
 	if event.Kind == KindExchangeStarted {
 		if event.Status != StatusPending || hasAccount || event.ReasonCode != "" ||
-			!event.Diagnosis.Empty() || event.Transport != nil {
+			!event.Diagnosis.Empty() || event.Transport != nil ||
+			event.Conversation.Kind != agentconversation.KindPendingExchange {
 			return fmt.Errorf(
 				"%w: started Exchange contains terminal evidence",
 				ErrInvalidEvent,
 			)
 		}
 	}
-	if event.Kind == KindExchangeCompleted && event.Status == StatusPending {
+	if event.Kind == KindExchangeCompleted &&
+		(event.Status == StatusPending ||
+			event.Conversation.Kind == agentconversation.KindPendingExchange) {
 		return fmt.Errorf(
 			"%w: completed Exchange is still pending",
 			ErrInvalidEvent,
@@ -626,33 +638,34 @@ func (evidence TransportEvidence) Clone() TransportEvidence {
 
 // Record is the immutable durable projection returned by readers.
 type Record struct {
-	Sequence               int64              `json:"sequence"`
-	ID                     string             `json:"id"`
-	OccurredAt             time.Time          `json:"occurredAt"`
-	Kind                   Kind               `json:"kind"`
-	EnvironmentID          string             `json:"environmentId,omitempty"`
-	EnvironmentRevision    uint64             `json:"environmentRevision,omitempty"`
-	EnvironmentDigest      string             `json:"environmentDigest,omitempty"`
-	ClientEndpointID       string             `json:"clientEndpointId,omitempty"`
-	ClientEndpointRevision uint64             `json:"clientEndpointRevision,omitempty"`
-	ProtocolPlanID         string             `json:"protocolPlanId,omitempty"`
-	ProtocolPlanRevision   uint64             `json:"protocolPlanRevision,omitempty"`
-	RouteID                string             `json:"routeId,omitempty"`
-	RouteRevision          uint64             `json:"routeRevision,omitempty"`
-	AccountID              string             `json:"accountId,omitempty"`
-	AccountRevision        uint64             `json:"accountRevision,omitempty"`
-	CredentialEpoch        uint64             `json:"credentialEpoch,omitempty"`
-	SubjectID              string             `json:"subjectId"`
-	Status                 Status             `json:"status"`
-	ReasonCode             string             `json:"reasonCode,omitempty"`
-	SourceKind             SourceKind         `json:"sourceKind,omitempty"`
-	SourceDisplayName      string             `json:"sourceDisplayName,omitempty"`
-	SourceRecognition      SourceRecognition  `json:"sourceRecognition,omitempty"`
-	CaptureRunID           string             `json:"captureRunId,omitempty"`
-	ManualCaptureID        string             `json:"manualCaptureId,omitempty"`
-	ConnectionID           string             `json:"connectionId,omitempty"`
-	Diagnosis              *Diagnosis         `json:"diagnosis,omitempty"`
-	Transport              *TransportEvidence `json:"transport,omitempty"`
+	Sequence               int64                  `json:"sequence"`
+	ID                     string                 `json:"id"`
+	OccurredAt             time.Time              `json:"occurredAt"`
+	Kind                   Kind                   `json:"kind"`
+	EnvironmentID          string                 `json:"environmentId,omitempty"`
+	EnvironmentRevision    uint64                 `json:"environmentRevision,omitempty"`
+	EnvironmentDigest      string                 `json:"environmentDigest,omitempty"`
+	ClientEndpointID       string                 `json:"clientEndpointId,omitempty"`
+	ClientEndpointRevision uint64                 `json:"clientEndpointRevision,omitempty"`
+	ProtocolPlanID         string                 `json:"protocolPlanId,omitempty"`
+	ProtocolPlanRevision   uint64                 `json:"protocolPlanRevision,omitempty"`
+	RouteID                string                 `json:"routeId,omitempty"`
+	RouteRevision          uint64                 `json:"routeRevision,omitempty"`
+	AccountID              string                 `json:"accountId,omitempty"`
+	AccountRevision        uint64                 `json:"accountRevision,omitempty"`
+	CredentialEpoch        uint64                 `json:"credentialEpoch,omitempty"`
+	SubjectID              string                 `json:"subjectId"`
+	Status                 Status                 `json:"status"`
+	ReasonCode             string                 `json:"reasonCode,omitempty"`
+	SourceKind             SourceKind             `json:"sourceKind,omitempty"`
+	SourceDisplayName      string                 `json:"sourceDisplayName,omitempty"`
+	SourceRecognition      SourceRecognition      `json:"sourceRecognition,omitempty"`
+	CaptureRunID           string                 `json:"captureRunId,omitempty"`
+	ManualCaptureID        string                 `json:"manualCaptureId,omitempty"`
+	ConnectionID           string                 `json:"connectionId,omitempty"`
+	Conversation           *agentconversation.Ref `json:"conversation,omitempty"`
+	Diagnosis              *Diagnosis             `json:"diagnosis,omitempty"`
+	Transport              *TransportEvidence     `json:"transport,omitempty"`
 }
 
 // Diagnosis is what a failed request can say about itself without saying what
@@ -734,6 +747,13 @@ func (record Record) Validate() error {
 	if err != nil {
 		return err
 	}
+	conversation := agentconversation.Ref{}
+	if record.Conversation != nil {
+		conversation = *record.Conversation
+		if conversation == (agentconversation.Ref{}) {
+			return ErrInvalidEvent
+		}
+	}
 	return Event{
 		Kind:                   record.Kind,
 		EnvironmentID:          environmentID,
@@ -757,6 +777,7 @@ func (record Record) Validate() error {
 		CaptureRunID:           record.CaptureRunID,
 		ManualCaptureID:        record.ManualCaptureID,
 		ConnectionID:           record.ConnectionID,
+		Conversation:           conversation,
 		Diagnosis:              diagnosisValue(record.Diagnosis),
 		Transport:              record.Transport,
 	}.Validate()
@@ -798,11 +819,12 @@ func diagnosisValue(value *Diagnosis) Diagnosis {
 }
 
 type PageRequest struct {
-	BeforeSequence  int64
-	Limit           int
-	CaptureRunID    string
-	ManualCaptureID string
-	EnvironmentID   string
+	BeforeSequence           int64
+	Limit                    int
+	CaptureRunID             string
+	ManualCaptureID          string
+	EnvironmentID            string
+	ConversationProjectionID string
 }
 
 func (request PageRequest) Validate() error {
@@ -833,6 +855,13 @@ func (request PageRequest) Validate() error {
 			return ErrInvalidEvent
 		}
 	}
+	if request.ConversationProjectionID != "" {
+		if err := agentconversation.ValidateProjectionID(
+			request.ConversationProjectionID,
+		); err != nil {
+			return ErrInvalidEvent
+		}
+	}
 	return nil
 }
 
@@ -841,11 +870,84 @@ type Page struct {
 	NextBeforeSequence int64    `json:"nextBeforeSequence,omitempty"`
 }
 
+// ConversationIndexRequest pages flat Conversation projections newest-first by
+// the first sequence at which the runtime could prove each projection. Existing
+// Conversations therefore never jump when a new Turn arrives.
+type ConversationIndexRequest struct {
+	BeforeFirstSequence int64
+	Limit               int
+	CaptureRunID        string
+	ManualCaptureID     string
+}
+
+func (request ConversationIndexRequest) Validate() error {
+	if request.BeforeFirstSequence < 0 || request.Limit <= 0 ||
+		request.Limit > MaxPageSize ||
+		(request.CaptureRunID != "" && request.ManualCaptureID != "") {
+		return ErrInvalidEvent
+	}
+	if request.CaptureRunID != "" {
+		if _, err := captureidentity.New(
+			captureidentity.KindManagedRun,
+			request.CaptureRunID,
+		); err != nil {
+			return ErrInvalidEvent
+		}
+	}
+	if request.ManualCaptureID != "" {
+		if _, err := captureidentity.New(
+			captureidentity.KindManualCapture,
+			request.ManualCaptureID,
+		); err != nil {
+			return ErrInvalidEvent
+		}
+	}
+	return nil
+}
+
+type ConversationRecord struct {
+	Conversation    agentconversation.Ref
+	FirstSequence   int64
+	FirstOccurredAt time.Time
+	TurnCount       int
+	Latest          Record
+}
+
+func (record ConversationRecord) Validate() error {
+	if record.FirstSequence <= 0 || record.FirstOccurredAt.IsZero() ||
+		record.TurnCount <= 0 || record.Conversation.Validate() != nil ||
+		record.Latest.Validate() != nil || record.Latest.Conversation == nil ||
+		record.Latest.Conversation.ProjectionID != record.Conversation.ProjectionID {
+		return ErrInvalidEvent
+	}
+	return nil
+}
+
+type ConversationPage struct {
+	Items                   []ConversationRecord
+	NextBeforeFirstSequence int64
+}
+
 type Repository interface {
 	Append(context.Context, Record) (Record, error)
 	GetExchange(context.Context, string) (Record, error)
 	List(context.Context, PageRequest) (Page, error)
 	ListExchanges(context.Context, PageRequest) (Page, error)
+	ListConversations(context.Context, ConversationIndexRequest) (ConversationPage, error)
+}
+
+// ConversationIdentityRepository retains exact client session/actor/provider
+// identifiers independently from retention-bound semantic content.
+type ConversationIdentityRepository interface {
+	PutConversationIdentity(context.Context, string, agentconversation.ClientIdentity) error
+	GetConversationIdentity(context.Context, string) (agentconversation.ClientIdentity, error)
+}
+
+// ConversationProjectionWriter replaces only the completed Exchange's
+// rebuildable Conversation projection after exact client identity is found.
+// The pending start record remains immutable lifecycle evidence.
+type ConversationProjectionWriter interface {
+	ReprojectTerminalConversation(context.Context, string, agentconversation.Ref) error
 }
 
 type Recorder interface {
@@ -856,6 +958,7 @@ type Reader interface {
 	GetExchange(context.Context, string) (Record, error)
 	List(context.Context, PageRequest) (Page, error)
 	ListExchanges(context.Context, PageRequest) (Page, error)
+	ListConversations(context.Context, ConversationIndexRequest) (ConversationPage, error)
 }
 
 type Runtime interface {

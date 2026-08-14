@@ -41,7 +41,34 @@ final class RunnerTests: XCTestCase {
     XCTAssertThrowsError(try bridge.write(#"{"arbitrary":true}"#))
     XCTAssertThrowsError(try bridge.write(String(repeating: "x", count: 4_097)))
     XCTAssertThrowsError(try bridge.write(42))
+    var unsupportedTheme = validPreferencesPayload(section: "settings", language: "en-US")
+    unsupportedTheme["theme"] = "sepia"
+    XCTAssertThrowsError(try bridge.write(encode(unsupportedTheme)))
     XCTAssertNil(try bridge.read())
+  }
+
+  func testThemePreferenceAcceptsSystemAndMapsAllWindowAppearances() throws {
+    let bridge = try WorkbenchPreferencesBridge(directory: temporaryDirectory)
+    var payload = validPreferencesPayload(section: "settings", language: "en-US")
+    payload["theme"] = "system"
+    let system = encode(payload)
+
+    try bridge.write(system)
+    XCTAssertEqual(try bridge.read(), system)
+    XCTAssertEqual(WorkbenchWindowTheme.fromPreferences(system), .system)
+    XCTAssertNil(WorkbenchWindowTheme.system.appearance)
+    XCTAssertEqual(WorkbenchWindowTheme.light.appearance?.name, .aqua)
+    XCTAssertEqual(WorkbenchWindowTheme.dark.appearance?.name, .darkAqua)
+    XCTAssertEqual(WorkbenchWindowTheme.fromPreferences(nil), .system)
+    XCTAssertEqual(WorkbenchWindowTheme.fromPreferences("not json"), .system)
+
+    let window = NSWindow()
+    WorkbenchWindowTheme.dark.apply(to: window)
+    XCTAssertEqual(window.appearance?.name, .darkAqua)
+    WorkbenchWindowTheme.light.apply(to: window)
+    XCTAssertEqual(window.appearance?.name, .aqua)
+    WorkbenchWindowTheme.system.apply(to: window)
+    XCTAssertNil(window.appearance)
   }
 
   func testPreferencesBridgeRequiresAnEnvironmentForAHistoricalRevision() throws {
@@ -122,8 +149,9 @@ final class RunnerTests: XCTestCase {
 
   private func validPreferencesPayload(section: String, language: String) -> [String: Any] {
     [
-      "schema": "vibermate-workbench-preferences/v1",
+      "schema": "vibermate-workbench-preferences/v2",
       "language": language,
+      "theme": "light",
       "section": section,
       "selectedCaptureKey": NSNull(),
       "selectedConversationKey": NSNull(),

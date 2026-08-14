@@ -1,6 +1,7 @@
 package loopbackproxy
 
 import (
+	"context"
 	"encoding/json"
 	"io"
 	"net/http"
@@ -22,6 +23,8 @@ var reasonMessages = map[ReasonCode]string{
 		"through vibermate for the selected upstream plan.",
 	ReasonUnsupportedUpgrade: "vibermate cannot serve this protocol upgrade " +
 		"on this connection.",
+	ReasonRawEvidenceUnavailable: "vibermate could not preserve the configured " +
+		"request evidence, so no provider request was sent.",
 }
 
 func reasonMessage(reason ReasonCode) string {
@@ -114,6 +117,52 @@ func writeExchangeFailure(
 	_ = json.NewEncoder(writer).Encode(
 		exchangeErrorEnvelope(dialect, reason),
 	)
+}
+
+// writeExchangeFailureDownstream keeps locally generated Exchange failures on
+// the same client-downstream evidence boundary as provider-backed responses.
+func writeExchangeFailureDownstream(
+	ctx context.Context,
+	downstream exchange.Downstream,
+	dialect protocolspec.Dialect,
+	err error,
+) error {
+	reason := exchange.ReasonOf(err)
+	if reason == "" {
+		reason = exchange.ReasonProviderTransportFailed
+	}
+	headers := http.Header{
+		"Content-Type":  {"application/json"},
+		"Cache-Control": {"no-store"},
+		ReasonHeader:    {string(reason)},
+	}
+	if reason == exchange.ReasonProviderCredentialUnavailable {
+		headers.Set("X-Should-Retry", "false")
+	}
+	envelope, envelopeErr := exchange.NewResponseEnvelope(
+		exchange.ResponseModeJSON,
+		exchangeStatus(err),
+		headers,
+	)
+	if envelopeErr != nil {
+		return envelopeErr
+	}
+	body, marshalErr := json.Marshal(exchangeErrorEnvelope(dialect, reason))
+	if marshalErr != nil {
+		return marshalErr
+	}
+	body = append(body, '\n')
+	if beginErr := downstream.Begin(ctx, envelope); beginErr != nil {
+		return beginErr
+	}
+	written, writeErr := downstream.Write(ctx, body)
+	if writeErr != nil {
+		return writeErr
+	}
+	if written != len(body) {
+		return io.ErrShortWrite
+	}
+	return nil
 }
 
 func exchangeErrorEnvelope(

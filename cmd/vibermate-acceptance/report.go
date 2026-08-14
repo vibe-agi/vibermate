@@ -12,7 +12,7 @@ import (
 	"github.com/vibe-agi/vibermate/internal/clientadapter"
 )
 
-const reportSchema = acceptancereport.SchemaV6
+const reportSchema = acceptancereport.SchemaV7
 
 type checkStatus = acceptancereport.Status
 

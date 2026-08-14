@@ -107,20 +107,18 @@ jobs:
           cache: true
           cache-dependency-path: candidate/go.sum
 
-      - uses: pnpm/action-setup@a15d269cd4658e1107c09f1fabf4cbd7bd1f308a # v4.4.0
-        with:
-          version: 10.33.2
-
       - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5.0.0
         with:
           node-version: 22.23.1
-          cache: pnpm
-          cache-dependency-path: candidate/ui/desktop/pnpm-lock.yaml
 
-      - uses: dtolnay/rust-toolchain@39b0b3842c7e8bbf6904c0bfc3d9006fdd4dc4e0 # 1.88.0
-        with:
-          components: rustfmt
-          targets: aarch64-apple-darwin,x86_64-apple-darwin
+      - name: Install the candidate-pinned Flutter SDK
+        shell: bash
+        run: |
+          set -euo pipefail
+          flutter_root="${RUNNER_TEMP}/vibermate-flutter-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          candidate/ui/flutter_app/tool/install_ci_flutter.sh "${flutter_root}"
+          printf '%s/bin\n' "${flutter_root}" >> "${GITHUB_PATH}"
+          printf 'FLUTTER_ROOT=%s\n' "${flutter_root}" >> "${GITHUB_ENV}"
 
       - name: Execute candidate build code without Apple distribution credentials
         shell: bash
@@ -134,27 +132,26 @@ jobs:
                 ;;
             esac
           done < <(env)
-          pnpm --dir candidate/ui/desktop install --frozen-lockfile
-          pnpm --dir candidate/ui/desktop candidate:macos:build-unsigned
+          candidate/ui/flutter_app/tool/build_macos_distribution.sh
 
       - name: Convert the candidate App into the closed inert archive profile
         shell: bash
         run: |
           set -euo pipefail
-          source_directory="candidate/ui/desktop/src-tauri/target/universal-apple-darwin/release/bundle/macos"
+          source_directory="candidate/ui/flutter_app/build/distribution/universal-apple-darwin/release/bundle/macos"
           source_app="${source_directory}/ViberMate.app"
           test -d "${source_app}"
           test ! -L "${source_app}"
           test "$(find "${source_directory}" -mindepth 1 -maxdepth 1 -print | wc -l | tr -d ' ')" -eq 1
 
-          target_directory="trusted-tooling/ui/desktop/src-tauri/target/universal-apple-darwin/release/bundle/macos"
-          test ! -e "trusted-tooling/ui/desktop/src-tauri/target"
+          target_directory="trusted-tooling/ui/flutter_app/build/distribution/universal-apple-darwin/release/bundle/macos"
+          test ! -e "trusted-tooling/ui/flutter_app/build"
           /usr/bin/install -d -m 0700 "${target_directory}"
           COPYFILE_DISABLE=1 /usr/bin/ditto \
             --norsrc --noextattr --noacl --noqtn -X \
             "${source_app}" \
             "${target_directory}/ViberMate.app"
-          node trusted-tooling/ui/desktop/scripts/create-macos-unsigned-archive.mjs
+          node trusted-tooling/tool/macos-release/create-macos-unsigned-archive.mjs
 
       - name: Stage and close the exact source-traceability build-input transfer (R0)
         shell: bash
@@ -163,12 +160,13 @@ jobs:
           test ! -e "${VIBERMATE_R0_INPUT_ROOT}"
           /usr/bin/install -d -m 0755 "${VIBERMATE_R0_INPUT_ROOT}"
 
-          main_source="candidate/ui/desktop/src-tauri/target/universal-apple-darwin/release/vibermate-desktop"
-          launcher_source="candidate/ui/desktop/src-tauri/binaries/vibermate-universal-apple-darwin"
-          daemon_source="candidate/ui/desktop/src-tauri/binaries/vibermated-universal-apple-darwin"
-          build_manifest_source="candidate/ui/desktop/src-tauri/binaries/vibermate-build-manifest.json"
+          candidate_app="candidate/ui/flutter_app/build/distribution/universal-apple-darwin/release/bundle/macos/ViberMate.app"
+          main_source="${candidate_app}/Contents/MacOS/vibermate-desktop"
+          launcher_source="${candidate_app}/Contents/MacOS/vibermate"
+          daemon_source="${candidate_app}/Contents/MacOS/vibermated"
+          build_manifest_source="${candidate_app}/Contents/Resources/vibermate-build-manifest.json"
           license_source="candidate/LICENSE"
-          dist_source="candidate/ui/desktop/dist"
+          dist_source="candidate/ui/flutter_app/build/distribution/universal-apple-darwin/release/r0-dist"
           for source in \
             "${main_source}" \
             "${launcher_source}" \
@@ -193,7 +191,7 @@ jobs:
           /usr/bin/find "${VIBERMATE_R0_INPUT_ROOT}/dist" -type d -exec /bin/chmod 0755 {} +
           /usr/bin/find "${VIBERMATE_R0_INPUT_ROOT}/dist" -type f -exec /bin/chmod 0644 {} +
           test "$(/usr/bin/find "${VIBERMATE_R0_INPUT_ROOT}" -mindepth 1 -maxdepth 1 -print | /usr/bin/wc -l | /usr/bin/tr -d ' ')" -eq 6
-          node trusted-tooling/ui/desktop/scripts/create-r0-build-input-transfer.mjs
+          node trusted-tooling/tool/macos-release/create-r0-build-input-transfer.mjs
 
       - name: Upload only the closed source-traceability build-input and checksum (R0)
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
@@ -308,7 +306,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          restore_output="$(node trusted-tooling/ui/desktop/scripts/restore-r0-build-input-transfer.mjs)"
+          restore_output="$(node trusted-tooling/tool/macos-release/restore-r0-build-input-transfer.mjs)"
           test "$(printf '%s\n' "${restore_output}" | /usr/bin/wc -l | /usr/bin/tr -d ' ')" -eq 2
           archive_digest="${restore_output#archiveSHA256=}"
           archive_digest="${archive_digest%%$'\n'*}"
@@ -342,7 +340,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          node trusted-tooling/ui/desktop/scripts/prepare-r0-release-evidence.mjs \
+          node trusted-tooling/tool/macos-release/prepare-r0-release-evidence.mjs \
             --artifact-root="${VIBERMATE_R0_EVIDENCE_ROOT}" \
             --expected-revision="${VIBERMATE_CANDIDATE_REVISION}" \
             --input-root="${VIBERMATE_R0_RESTORED_INPUT_ROOT}" \
@@ -454,7 +452,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          restore_output="$(node ui/desktop/scripts/restore-macos-unsigned-archive.mjs)"
+          restore_output="$(node tool/macos-release/restore-macos-unsigned-archive.mjs)"
           test "$(printf '%s\n' "${restore_output}" | /usr/bin/wc -l | /usr/bin/tr -d ' ')" -eq 2
           archive_digest="${restore_output#archiveSHA256=}"
           archive_digest="${archive_digest%%$'\n'*}"
@@ -530,7 +528,7 @@ jobs:
           VIBERMATE_UNSIGNED_ARCHIVE_SHA256: ${{ steps.unsigned_archive.outputs.sha256 }}
         run: |
           set -euo pipefail
-          node ui/desktop/scripts/bundle-macos-distribution-candidate.mjs
+          node tool/macos-release/bundle-macos-distribution-candidate.mjs
 
       - name: Lock and delete the signing keychain before packaging
         if: ${{ always() }}
@@ -557,7 +555,7 @@ jobs:
           VIBERMATE_APPLE_TEAM_ID: ${{ vars.VIBERMATE_APPLE_TEAM_ID }}
         run: |
           set -euo pipefail
-          node ui/desktop/scripts/create-macos-signed-transfer.mjs
+          node tool/macos-release/create-macos-signed-transfer.mjs
 
       - name: Upload only the signed App archive, DMG, evidence, and checksum
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
@@ -638,7 +636,7 @@ jobs:
           VIBERMATE_APPLE_TEAM_ID: ${{ vars.VIBERMATE_APPLE_TEAM_ID }}
         run: |
           set -euo pipefail
-          node ui/desktop/scripts/restore-macos-signed-transfer.mjs
+          node tool/macos-release/restore-macos-signed-transfer.mjs
 
       - name: Prepare the private App Store Connect key
         timeout-minutes: 5
@@ -669,7 +667,7 @@ jobs:
           VIBERMATE_APPLE_TEAM_ID: ${{ vars.VIBERMATE_APPLE_TEAM_ID }}
         run: |
           set -euo pipefail
-          node ui/desktop/scripts/notarize-macos-distribution-candidate.mjs
+          node tool/macos-release/notarize-macos-distribution-candidate.mjs
 
       - name: Delete the App Store Connect key before every artifact action
         id: credential_cleanup
@@ -690,7 +688,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          release_directory="ui/desktop/src-tauri/target/universal-apple-darwin/release"
+          release_directory="ui/flutter_app/build/distribution/universal-apple-darwin/release"
           evidence_directory="${release_directory}/.vibermate-private/notarization"
           test "$(find "${evidence_directory}" -mindepth 1 -maxdepth 1 -type f -print | wc -l | tr -d ' ')" -eq 3
           test "$(find "${evidence_directory}" -mindepth 1 -maxdepth 1 -print | wc -l | tr -d ' ')" -eq 3
@@ -708,11 +706,11 @@ jobs:
         with:
           name: ${{ env.NOTARIZED_ARTIFACT_NAME }}
           path: |
-            ui/desktop/src-tauri/target/universal-apple-darwin/release/bundle/dmg/ViberMate_0.1.0_universal.dmg
-            ui/desktop/src-tauri/target/universal-apple-darwin/release/.vibermate-private/signing/signing-transformation.json
-            ui/desktop/src-tauri/target/universal-apple-darwin/release/.vibermate-private/notarization/apple-notary-submit.json
-            ui/desktop/src-tauri/target/universal-apple-darwin/release/.vibermate-private/notarization/apple-notary-log.json
-            ui/desktop/src-tauri/target/universal-apple-darwin/release/.vibermate-private/notarization/notarization-evidence.json
+            ui/flutter_app/build/distribution/universal-apple-darwin/release/bundle/dmg/ViberMate_0.1.0_universal.dmg
+            ui/flutter_app/build/distribution/universal-apple-darwin/release/.vibermate-private/signing/signing-transformation.json
+            ui/flutter_app/build/distribution/universal-apple-darwin/release/.vibermate-private/notarization/apple-notary-submit.json
+            ui/flutter_app/build/distribution/universal-apple-darwin/release/.vibermate-private/notarization/apple-notary-log.json
+            ui/flutter_app/build/distribution/universal-apple-darwin/release/.vibermate-private/notarization/notarization-evidence.json
           if-no-files-found: error
           include-hidden-files: true
           retention-days: 7
@@ -723,8 +721,8 @@ jobs:
         with:
           name: ${{ env.NOTARY_ATTEMPT_ARTIFACT_NAME }}
           path: |
-            ui/desktop/src-tauri/target/universal-apple-darwin/release/.vibermate-private/notarization/apple-notary-submit.json
-            ui/desktop/src-tauri/target/universal-apple-darwin/release/.vibermate-private/notarization/apple-notary-log.json
+            ui/flutter_app/build/distribution/universal-apple-darwin/release/.vibermate-private/notarization/apple-notary-submit.json
+            ui/flutter_app/build/distribution/universal-apple-darwin/release/.vibermate-private/notarization/apple-notary-log.json
           if-no-files-found: warn
           include-hidden-files: true
           retention-days: 7
@@ -839,7 +837,7 @@ jobs:
           VIBERMATE_APPLE_TEAM_ID: ${{ vars.VIBERMATE_APPLE_TEAM_ID }}
         run: |
           set -euo pipefail
-          node trusted-tooling/ui/desktop/scripts/create-macos-installed-candidate-evidence.mjs
+          node trusted-tooling/tool/macos-release/create-macos-installed-candidate-evidence.mjs
 
       - name: Independently verify the closed installation report
         shell: bash
@@ -847,7 +845,7 @@ jobs:
           VIBERMATE_APPLE_TEAM_ID: ${{ vars.VIBERMATE_APPLE_TEAM_ID }}
         run: |
           set -euo pipefail
-          node trusted-tooling/ui/desktop/scripts/verify-macos-installed-candidate-evidence.mjs
+          node trusted-tooling/tool/macos-release/verify-macos-installed-candidate-evidence.mjs
 
       - name: Prove exact installed-state cleanup and evidence inventory
         shell: bash

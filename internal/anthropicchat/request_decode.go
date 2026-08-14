@@ -5,6 +5,9 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strings"
+	"unicode"
+	"unicode/utf8"
 
 	"github.com/vibe-agi/vibermate/internal/protocolcore"
 )
@@ -61,6 +64,18 @@ type anthropicToolResultBlockWire struct {
 	IsError      bool            `json:"is_error,omitempty"`
 	CacheControl json.RawMessage `json:"cache_control,omitempty"`
 }
+
+type anthropicToolReferenceBlockWire struct {
+	Type     string `json:"type"`
+	ToolName string `json:"tool_name"`
+}
+
+type toolResultContentMode uint8
+
+const (
+	toolResultContentStrict toolResultContentMode = iota
+	toolResultContentCompatible
+)
 
 type anthropicToolDefinitionWire struct {
 	Name                string          `json:"name"`
@@ -121,6 +136,23 @@ type anthropicDiagnosticsWire struct {
 func (codec *Codec) DecodeClientRequest(
 	body []byte,
 ) (protocolcore.Request, protocolcore.TranslationReport, error) {
+	return codec.decodeClientRequest(body, toolResultContentStrict)
+}
+
+// DecodeCompatibleClientRequest produces the neutral inspection view for an
+// Anthropic-to-Anthropic path whose original wire remains authoritative. It
+// can therefore retain provider-native history as an explicit JSON summary
+// without claiming that a cross-dialect encoder can reproduce that history.
+func (codec *Codec) DecodeCompatibleClientRequest(
+	body []byte,
+) (protocolcore.Request, protocolcore.TranslationReport, error) {
+	return codec.decodeClientRequest(body, toolResultContentCompatible)
+}
+
+func (codec *Codec) decodeClientRequest(
+	body []byte,
+	toolResultMode toolResultContentMode,
+) (protocolcore.Request, protocolcore.TranslationReport, error) {
 	if len(body) == 0 || len(body) > codec.options.MaxRequestBytes {
 		return protocolcore.Request{}, protocolcore.TranslationReport{},
 			protocolcore.NewFailure(
@@ -146,7 +178,11 @@ func (codec *Codec) DecodeClientRequest(
 
 	messages := make([]protocolcore.Message, len(wire.Messages))
 	for index, message := range wire.Messages {
-		decoded, messageReport, decodeErr := codec.decodeMessage(index, message)
+		decoded, messageReport, decodeErr := codec.decodeMessage(
+			index,
+			message,
+			toolResultMode,
+		)
 		if decodeErr != nil {
 			return protocolcore.Request{}, report, decodeErr
 		}
@@ -656,6 +692,7 @@ func (codec *Codec) decodeInstructionMessage(
 func (codec *Codec) decodeMessage(
 	messageIndex int,
 	wire anthropicMessageWire,
+	toolResultMode toolResultContentMode,
 ) (protocolcore.Message, protocolcore.TranslationReport, error) {
 	role := protocolcore.Role(wire.Role)
 	switch role {
@@ -817,7 +854,11 @@ func (codec *Codec) decodeMessage(
 				return protocolcore.Message{}, report,
 					protocolcore.NewFailure(protocolcore.ReasonInvalidClientRequest, path+".tool_use_id", err)
 			}
-			content, err := decodeToolResultContent(blockWire.Content, path+".content")
+			content, err := decodeToolResultContent(
+				blockWire.Content,
+				path+".content",
+				toolResultMode,
+			)
 			if err != nil {
 				return protocolcore.Message{}, report, err
 			}
@@ -973,7 +1014,11 @@ func decodeToolChoice(
 	return choice, nil
 }
 
-func decodeToolResultContent(raw json.RawMessage, path string) (string, error) {
+func decodeToolResultContent(
+	raw json.RawMessage,
+	path string,
+	mode toolResultContentMode,
+) (string, error) {
 	if !rawPresent(raw) || bytes.Equal(bytes.TrimSpace(raw), []byte("null")) {
 		return "", nil
 	}
@@ -986,7 +1031,35 @@ func decodeToolResultContent(raw json.RawMessage, path string) (string, error) {
 		return "", protocolcore.NewFailure(protocolcore.ReasonInvalidClientRequest, path, err)
 	}
 	var combined bytes.Buffer
+	structured := false
 	for index, rawBlock := range blocks {
+		var header struct {
+			Type string `json:"type"`
+		}
+		if err := json.Unmarshal(rawBlock, &header); err != nil {
+			return "", protocolcore.NewFailure(
+				protocolcore.ReasonInvalidClientRequest,
+				fmt.Sprintf("%s[%d]", path, index),
+				err,
+			)
+		}
+		if header.Type == "tool_reference" && mode == toolResultContentCompatible {
+			var reference anthropicToolReferenceBlockWire
+			if err := decodeStrict(rawBlock, &reference); err != nil ||
+				reference.Type != "tool_reference" ||
+				!validToolReferenceName(reference.ToolName) {
+				if err == nil {
+					err = errors.New("tool reference is invalid")
+				}
+				return "", protocolcore.NewFailure(
+					protocolcore.ReasonInvalidClientRequest,
+					fmt.Sprintf("%s[%d]", path, index),
+					err,
+				)
+			}
+			structured = true
+			continue
+		}
 		var block anthropicTextBlockWire
 		if err := decodeStrict(rawBlock, &block); err != nil {
 			return "", protocolcore.NewFailure(
@@ -1004,7 +1077,31 @@ func decodeToolResultContent(raw json.RawMessage, path string) (string, error) {
 		}
 		combined.WriteString(block.Text)
 	}
+	if structured {
+		encoded, err := json.Marshal(blocks)
+		if err != nil || len(encoded) > protocolcore.MaxTextBytes {
+			return "", protocolcore.NewFailure(
+				protocolcore.ReasonInvalidClientRequest,
+				path,
+				errors.New("structured tool result exceeds the audit bound"),
+			)
+		}
+		return string(encoded), nil
+	}
 	return combined.String(), nil
+}
+
+func validToolReferenceName(value string) bool {
+	if value == "" || len(value) > protocolcore.MaxToolNameBytes ||
+		!utf8.ValidString(value) || strings.TrimSpace(value) != value {
+		return false
+	}
+	for _, character := range value {
+		if unicode.IsControl(character) {
+			return false
+		}
+	}
+	return true
 }
 
 func cacheNotice(path string) protocolcore.TranslationReport {

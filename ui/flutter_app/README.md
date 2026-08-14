@@ -1,7 +1,8 @@
 # ViberMate Flutter desktop
 
-This is the in-progress native macOS replacement for `ui/desktop`. The existing
-React/Tauri client remains in the repository until capability parity is proven.
+This is ViberMate's sole Desktop client. The retired React/Tauri shell was
+removed after the Flutter control, runtime, test, and release-tooling paths
+were migrated.
 
 The app has two explicit modes:
 
@@ -57,11 +58,11 @@ The live test uses temporary runtime directories, performs the real
 daemon/bootstrap/session/Control API handshake, and closes the child before it
 removes those temporary files.
 
-## Migration and removal ledger
+## Capability ledger
 
-`ui/desktop` is not removable merely because the Flutter shell renders. Each
-row below names the authority that must exist in the replacement and the
-remaining deletion boundary.
+Each row names the authority exercised by the native client. “Migrated” means
+the production path and local evidence exist; it is not a Preview or Release
+readiness claim.
 
 | Capability | Flutter state | Authority / evidence |
 | --- | --- | --- |
@@ -76,7 +77,7 @@ remaining deletion boundary.
 | Terminal command | migrated | exact packaged CLI, closed operations, bounded process output, ownership-safe install/refresh/remove confirmations |
 | Desktop runtime lifecycle | migrated | packaged daemon bootstrap/session renewal plus visible unexpected-exit retry boundary |
 | Navigation and preference restoration | migrated | closed non-secret workbench schema, private 0600 atomic file, exact historical revision restore, termination flush/fence, two-launch packaged App acceptance |
-| Release distribution | in progress | pinned Flutter build, CI, bundle verifier and deterministic packaged acceptance use Flutter; Developer ID signing/notarization workflow remains to migrate before old shell removal |
+| Release distribution | migrated; protected execution pending | pinned Flutter universal build, manifest, CI, bundle verifier, deterministic packaged acceptance, Developer ID and notarization tooling now target Flutter; no protected signing/notarization run is claimed from this working tree |
 
 The old Extensions and Quality pages are deferred placeholders without backend
 authority. Flutter does not reproduce them as fake capabilities. They should be

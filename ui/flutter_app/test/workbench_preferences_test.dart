@@ -2,11 +2,13 @@ import 'dart:convert';
 
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:vibermate_app/core/design/workbench_window_appearance.dart';
 import 'package:vibermate_app/core/preferences/workbench_preferences.dart';
 
 void main() {
   const complete = WorkbenchPreferences(
     language: AppLanguage.simplifiedChinese,
+    theme: WorkbenchTheme.dark,
     section: WorkbenchSection.conversations,
     selectedCaptureKey: 'managed_run:run-7',
     selectedConversationKey: 'capture_run:run-7',
@@ -21,6 +23,7 @@ void main() {
     expect(payload.keys.toSet(), {
       'schema',
       'language',
+      'theme',
       'section',
       'selectedCaptureKey',
       'selectedConversationKey',
@@ -53,6 +56,12 @@ void main() {
     );
     expect(
       () => WorkbenchPreferences.decode(
+        jsonEncode({...payload, 'theme': 'sepia'}),
+      ),
+      throwsA(isA<WorkbenchPreferencesException>()),
+    );
+    expect(
+      () => WorkbenchPreferences.decode(
         jsonEncode({
           ...payload,
           'selectedEnvironmentId': null,
@@ -69,13 +78,26 @@ void main() {
     );
   });
 
+  test('system theme is the default and remains explicit on the wire', () {
+    const preferences = WorkbenchPreferences();
+    expect(preferences.theme, WorkbenchTheme.system);
+    expect(
+      WorkbenchPreferences.decode(preferences.encode()).theme,
+      WorkbenchTheme.system,
+    );
+    expect(
+      (jsonDecode(preferences.encode()) as Map<String, Object?>)['theme'],
+      'system',
+    );
+  });
+
   test('future schema is distinguished so an older app preserves it', () {
     final payload = jsonDecode(complete.encode()) as Map<String, Object?>;
     expect(
       () => WorkbenchPreferences.decode(
         jsonEncode({
           ...payload,
-          'schema': 'vibermate-workbench-preferences/v2',
+          'schema': 'vibermate-workbench-preferences/v3',
         }),
       ),
       throwsA(isA<WorkbenchPreferencesFutureSchema>()),
@@ -96,7 +118,7 @@ void main() {
     final futureStore = MemoryWorkbenchPreferencesStore(
       encoded: jsonEncode({
         ...payload,
-        'schema': 'vibermate-workbench-preferences/v2',
+        'schema': 'vibermate-workbench-preferences/v3',
       }),
     );
     final future = await loadWorkbenchPreferences(
@@ -106,7 +128,7 @@ void main() {
     expect(future.value, const WorkbenchPreferences());
     expect(future.writable, isFalse);
     expect(future.issue, WorkbenchPreferencesIssue.futureSchema);
-    expect(futureStore.encoded, contains('vibermate-workbench-preferences/v2'));
+    expect(futureStore.encoded, contains('vibermate-workbench-preferences/v3'));
   });
 
   test('platform store accepts only the exact bounded contract', () async {
@@ -139,5 +161,27 @@ void main() {
       () => store.write('{"arbitrary":true}'),
       throwsA(isA<WorkbenchPreferencesException>()),
     );
+  });
+
+  test('window appearance channel sends the closed theme value', () async {
+    TestWidgetsFlutterBinding.ensureInitialized();
+    const channel = MethodChannel('io.vibermate.desktop/preferences');
+    final observed = <Object?>[];
+    TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+        .setMockMethodCallHandler(channel, (call) async {
+          expect(call.method, 'setWorkbenchTheme');
+          observed.add(call.arguments);
+          return null;
+        });
+    addTearDown(
+      () => TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+          .setMockMethodCallHandler(channel, null),
+    );
+
+    const appearance = PlatformWorkbenchWindowAppearance();
+    await appearance.apply(WorkbenchTheme.system);
+    await appearance.apply(WorkbenchTheme.light);
+    await appearance.apply(WorkbenchTheme.dark);
+    expect(observed, ['system', 'light', 'dark']);
   });
 }

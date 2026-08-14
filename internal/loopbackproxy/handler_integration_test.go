@@ -40,6 +40,7 @@ import (
 	"github.com/vibe-agi/vibermate/internal/originaltransport"
 	"github.com/vibe-agi/vibermate/internal/originidentity"
 	"github.com/vibe-agi/vibermate/internal/protocolspec"
+	"github.com/vibe-agi/vibermate/internal/rawevidence"
 	"github.com/vibe-agi/vibermate/internal/runtimepersistence"
 	"github.com/vibe-agi/vibermate/internal/toolapproval"
 	"github.com/vibe-agi/vibermate/internal/wireprofile"
@@ -1083,6 +1084,36 @@ func newProxyFixtureForDialectWithPolicy(
 	adapter *clientadapter.Evidence,
 	policy connectionpolicy.Snapshot,
 ) *proxyFixture {
+	return newProxyFixtureForDialectWithPolicyAndRawEvidence(
+		t,
+		clientDialect,
+		adapter,
+		policy,
+		nil,
+	)
+}
+
+func newProxyFixtureWithRawEvidence(
+	t *testing.T,
+	raw rawevidence.RequestRecorder,
+) *proxyFixture {
+	t.Helper()
+	return newProxyFixtureForDialectWithPolicyAndRawEvidence(
+		t,
+		protocolspec.DialectAnthropicMessages,
+		nil,
+		allowEverythingTestPolicy(t),
+		raw,
+	)
+}
+
+func newProxyFixtureForDialectWithPolicyAndRawEvidence(
+	t *testing.T,
+	clientDialect protocolspec.Dialect,
+	adapter *clientadapter.Evidence,
+	policy connectionpolicy.Snapshot,
+	raw rawevidence.RequestRecorder,
+) *proxyFixture {
 	t.Helper()
 	directory := t.TempDir()
 	store, err := runtimepersistence.Open(
@@ -1223,6 +1254,7 @@ func newProxyFixtureForDialectWithPolicy(
 		Approvals:        approvals,
 		BlindTunnels:     newTestBlindTunnels(t),
 		EgressAudit:      store.EgressAttemptRepository(),
+		RawEvidence:      raw,
 		ExchangeIDs:      loopbackproxy.NewCryptographicExchangeIDSource(),
 		HandshakeTimeout: time.Second,
 	})
@@ -1606,9 +1638,9 @@ func testEnvironmentForDialectRevision(
 						},
 						BackendProtocol: string(clientDialect),
 						AccountPolicy: environment.RouteAccountPolicy{
-							Revision:        revision,
-							Mode:            environment.AccountModeClientPassthrough,
-							FailoverPolicy:  environment.FailoverOff,
+							Revision:       revision,
+							Mode:           environment.AccountModeClientPassthrough,
+							FailoverPolicy: environment.FailoverOff,
 						},
 						ModelPolicy:    environment.ModelPolicy{Revision: revision, Mode: "passthrough"},
 						WireProfileRef: wireprofile.UpstreamWireProfileFollowClientValue,

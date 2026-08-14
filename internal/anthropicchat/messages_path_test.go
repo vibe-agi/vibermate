@@ -196,6 +196,94 @@ func TestMessagesProtocolPathPreservesToolCallerHistoryForLaterTurns(t *testing.
 	}
 }
 
+// Claude Code can return a provider-native tool_reference block from a
+// subagent tool result. The Anthropic-to-Anthropic path keeps the original
+// request body authoritative, so it must retain that history for audit and
+// forward the source block unchanged on the next turn.
+func TestMessagesProtocolPathPreservesSubagentToolReferenceHistory(t *testing.T) {
+	t.Parallel()
+
+	path, err := NewMessagesProtocolPath(DefaultOptions())
+	if err != nil {
+		t.Fatal(err)
+	}
+	source := []byte(`{
+		"model":"client-alias",
+		"max_tokens":64,
+		"messages":[
+			{"role":"assistant","content":[
+				{"type":"tool_use","id":"tool_1","name":"Agent","input":{"prompt":"inspect the workspace"}}
+			]},
+			{"role":"user","content":[
+				{"type":"tool_result","tool_use_id":"tool_1","content":[
+					{"type":"tool_reference","tool_name":"vibermate-reader"},
+					{"type":"text","text":"subagent finished"}
+				]}
+			]}
+		],
+		"stream":true
+	}`)
+	request, report, err := path.Client().DecodeRequest(source)
+	if err != nil {
+		t.Fatalf("DecodeRequest() rejected subagent tool reference: %v", err)
+	}
+	if !report.Empty() {
+		t.Fatalf("same-dialect decode reported a loss: %+v", report.Notices())
+	}
+	if len(request.Messages) != 2 || len(request.Messages[1].Blocks) != 1 {
+		t.Fatalf("decoded messages = %+v", request.Messages)
+	}
+	result := request.Messages[1].Blocks[0]
+	if result.Kind != protocolcore.BlockToolResult ||
+		!strings.Contains(result.ToolResult.Content, `"type":"tool_reference"`) ||
+		!strings.Contains(result.ToolResult.Content, `"tool_name":"vibermate-reader"`) {
+		t.Fatalf("decoded tool result = %+v", result)
+	}
+
+	request, err = request.WithEffectiveModel("claude-provider-model")
+	if err != nil {
+		t.Fatal(err)
+	}
+	providerRequest, report, err := path.EncodeProviderRequest(request, source, nil)
+	if err != nil {
+		t.Fatalf("EncodeProviderRequest() error = %v", err)
+	}
+	if !report.Empty() {
+		t.Fatalf("same-dialect encode reported a loss: %+v", report.Notices())
+	}
+	if !bytes.Contains(providerRequest.Body(), []byte(`"type":"tool_reference"`)) ||
+		!bytes.Contains(providerRequest.Body(), []byte(`"tool_name":"vibermate-reader"`)) {
+		t.Fatalf("forwarded history lost tool reference: %s", providerRequest.Body())
+	}
+}
+
+func TestCrossDialectPathRejectsSubagentToolReferenceHistory(t *testing.T) {
+	t.Parallel()
+
+	codec, err := New(DefaultOptions())
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, _, err = codec.DecodeClientRequest([]byte(`{
+		"model":"client-alias",
+		"max_tokens":64,
+		"messages":[
+			{"role":"assistant","content":[
+				{"type":"tool_use","id":"tool_1","name":"Agent","input":{}}
+			]},
+			{"role":"user","content":[
+				{"type":"tool_result","tool_use_id":"tool_1","content":[
+					{"type":"tool_reference","tool_name":"vibermate-reader"}
+				]}
+			]}
+		]
+	}`))
+	if err == nil || protocolcore.ReasonOf(err) != protocolcore.ReasonUnsupportedClientInput ||
+		!strings.Contains(err.Error(), "$.messages[1].content[0].content[0]") {
+		t.Fatalf("cross-dialect tool reference error = %v", err)
+	}
+}
+
 func TestCrossDialectToolCallerLossIsExplicit(t *testing.T) {
 	t.Parallel()
 

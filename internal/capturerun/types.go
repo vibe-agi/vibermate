@@ -538,7 +538,26 @@ type ActivityReader interface {
 
 // PageRequest bounds a read of the run list.
 type PageRequest struct {
-	Limit int
+	Limit  int
+	Cursor *PageCursor
+}
+
+// PageCursor is the stable position of the last CaptureRun returned by a
+// running-first, most-recent-first catalog. IncludeAtUpdatedAt lets a caller
+// merging multiple Capture kinds either include every item at the boundary
+// timestamp or continue after one exact run ID without using offsets.
+type PageCursor struct {
+	Running            bool
+	UpdatedAt          time.Time
+	AfterID            string
+	IncludeAtUpdatedAt bool
+}
+
+func (cursor PageCursor) Valid() bool {
+	return !cursor.UpdatedAt.IsZero() &&
+		cursor.UpdatedAt.Equal(cursor.UpdatedAt.UTC().Truncate(time.Millisecond)) &&
+		(cursor.AfterID == "" || validateID(cursor.AfterID) == nil) &&
+		(cursor.IncludeAtUpdatedAt || cursor.AfterID == "")
 }
 
 const (

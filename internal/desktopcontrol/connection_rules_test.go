@@ -54,7 +54,7 @@ func TestConnectionRulesAreReadableAndEditable(t *testing.T) {
 	const authority = "127.0.0.1:43131"
 	router, err := desktopcontrol.NewRouter(desktopcontrol.RouterOptions{
 		Authority:      authority,
-		AllowedOrigins: []string{"tauri://localhost"},
+		AllowedOrigins: []string{"vibermate://desktop"},
 		Authenticator:  authenticator,
 		Application:    application,
 		Bootstrap:      emptyBootstrap(),

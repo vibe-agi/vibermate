@@ -18,6 +18,7 @@ void main() {
     expect(status.state, TerminalCommandState.sourceUpdated);
     expect(status.canInstall, isFalse);
     expect(status.canRefresh, isTrue);
+    expect(status.canRepair, isFalse);
     expect(status.canRemove, isTrue);
 
     expect(
@@ -85,6 +86,18 @@ void main() {
       expect(
         (await updated.execute(TerminalCommandOperation.remove)).state,
         TerminalCommandState.notInstalled,
+      );
+
+      final missing = PreviewTerminalCommandService(
+        initial: const TerminalCommandStatus(
+          state: TerminalCommandState.targetMissing,
+          sourcePath: source,
+          targetPath: target,
+        ),
+      );
+      expect(
+        (await missing.execute(TerminalCommandOperation.repair)).state,
+        TerminalCommandState.current,
       );
     },
   );

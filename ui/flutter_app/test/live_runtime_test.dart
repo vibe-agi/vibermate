@@ -368,13 +368,7 @@ void main() {
         );
         final result = await Process.run(
           commandPath!,
-          const [
-            'run',
-            '--env',
-            'system_transparent',
-            '--',
-            '/usr/bin/true',
-          ],
+          const ['run', '--env', 'system_transparent', '--', '/usr/bin/true'],
           environment: {'HOME': home.path},
           includeParentEnvironment: true,
           runInShell: false,

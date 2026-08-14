@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/vibe-agi/vibermate/internal/activity"
+	"github.com/vibe-agi/vibermate/internal/agentconversation"
 	"github.com/vibe-agi/vibermate/internal/environment"
 	"github.com/vibe-agi/vibermate/internal/runtimepersistence"
 )
@@ -192,6 +193,7 @@ func TestActivityPersistsImmutableTransportSelectionEvidence(t *testing.T) {
 	event.SourceRecognition = activity.SourceRecognitionUnknown
 	event.CaptureRunID = ""
 	event.ConnectionID = "connection-transport"
+	event.Conversation = isolatedConversation("exchange-transport")
 	event.Transport = &evidence
 	recorded, err := manager.Record(context.Background(), event)
 	if err != nil {
@@ -265,6 +267,14 @@ func TestActivityPersistsImmutableTransportSelectionEvidence(t *testing.T) {
 		recovered.Items[0].Transport == nil ||
 		!reflect.DeepEqual(*recovered.Items[0].Transport, want) {
 		t.Fatalf("recovered transport evidence = %+v", recovered)
+	}
+}
+
+func isolatedConversation(exchangeID string) agentconversation.Ref {
+	return agentconversation.Ref{
+		ProjectionID: "exchange:" + exchangeID,
+		Kind:         agentconversation.KindIsolatedExchange,
+		Evidence:     agentconversation.EvidenceUndecodedExchange,
 	}
 }
 

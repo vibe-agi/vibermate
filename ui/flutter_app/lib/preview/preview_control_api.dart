@@ -1,10 +1,17 @@
 import 'dart:convert';
+import 'dart:typed_data';
+
+import 'package:crypto/crypto.dart' as crypto;
 
 import '../core/api/control_api.dart';
 import '../core/api/control_models.dart';
 
 final class PreviewControlApi implements ControlApi {
-  PreviewControlApi() {
+  PreviewControlApi({int dashboardCaptureLimit = 50})
+    : _dashboardCaptureLimit = dashboardCaptureLimit {
+    if (dashboardCaptureLimit < 1 || dashboardCaptureLimit > 199) {
+      throw ArgumentError.value(dashboardCaptureLimit, 'dashboardCaptureLimit');
+    }
     _environments = _initialEnvironments();
     for (final environment in _environments) {
       _environmentHistory[_environmentRevisionKey(
@@ -100,6 +107,8 @@ final class PreviewControlApi implements ControlApi {
     );
     _manualVersions[manualId] = manual.manualCapture!.credentialRevision;
   }
+
+  final int _dashboardCaptureLimit;
 
   static final _now = DateTime.utc(2026, 8, 10, 9, 42);
   static String _identity(int byte) =>
@@ -554,6 +563,7 @@ final class PreviewControlApi implements ControlApi {
   @override
   Future<DashboardData> loadDashboard() async {
     _requireOpen();
+    final capturePage = await captures(limit: _dashboardCaptureLimit);
     return DashboardData(
       status: RuntimeStatus(
         ready: true,
@@ -569,10 +579,48 @@ final class PreviewControlApi implements ControlApi {
         stoppedAt: null,
         stopReasonCode: null,
       ),
-      captures: _captures.values.toList(growable: false),
+      captures: capturePage.items,
+      captureNextCursor: capturePage.nextCursor,
       environments: List.unmodifiable(_environments),
       endpoints: List.unmodifiable(_endpoints),
       accounts: List.unmodifiable(_accounts),
+    );
+  }
+
+  @override
+  Future<CapturePage> captures({String? cursor, int limit = 50}) async {
+    _requireOpen();
+    if (limit < 1 || limit > 199) {
+      throw const ControlContractException('Capture page limit is invalid');
+    }
+    var offset = 0;
+    if (cursor != null) {
+      final match = RegExp(
+        r'^preview-captures-([1-9][0-9]*)$',
+      ).firstMatch(cursor);
+      if (match == null) {
+        throw const ControlContractException('Capture cursor is invalid');
+      }
+      offset = int.parse(match.group(1)!);
+    }
+    final values = _captures.values.toList(growable: false)
+      ..sort((left, right) {
+        if (left.running != right.running) return left.running ? -1 : 1;
+        final updated = right.updatedAt.compareTo(left.updatedAt);
+        if (updated != 0) return updated;
+        final leftKind = left.kind == 'managed_run' ? 0 : 1;
+        final rightKind = right.kind == 'managed_run' ? 0 : 1;
+        if (leftKind != rightKind) return leftKind.compareTo(rightKind);
+        return left.id.compareTo(right.id);
+      });
+    if (offset > values.length) {
+      throw const ControlContractException('Capture cursor is stale');
+    }
+    final requestedEnd = offset + limit;
+    final end = requestedEnd < values.length ? requestedEnd : values.length;
+    return CapturePage(
+      items: List.unmodifiable(values.sublist(offset, end)),
+      nextCursor: end < values.length ? 'preview-captures-$end' : null,
     );
   }
 
@@ -1145,6 +1193,7 @@ final class PreviewControlApi implements ControlApi {
     String? captureRunId,
     String? manualCaptureId,
     String? environmentId,
+    String? conversationId,
   }) async {
     _requireOpen();
     if (captureRunId != null && manualCaptureId != null) {
@@ -1160,13 +1209,72 @@ final class PreviewControlApi implements ControlApi {
               (manualCaptureId == null ||
                   activity.manualCaptureId == manualCaptureId) &&
               (environmentId == null ||
-                  activity.environmentId == environmentId),
+                  activity.environmentId == environmentId) &&
+              (conversationId == null ||
+                  activity.conversation.id == conversationId),
         )
         .toList(growable: false);
     final end = (offset + limit).clamp(0, values.length).toInt();
     return ActivityPage(
       items: values.sublist(offset, end),
       nextCursor: end < values.length ? 'activities-$end' : null,
+    );
+  }
+
+  @override
+  Future<ConversationPage> conversations({
+    String? cursor,
+    int limit = 50,
+    String? captureRunId,
+    String? manualCaptureId,
+  }) async {
+    _requireOpen();
+    if (captureRunId != null && manualCaptureId != null) {
+      throw const ControlContractException(
+        'Conversation query has more than one Capture authority',
+      );
+    }
+    final offset = _previewOffset(cursor, 'conversations');
+    final grouped = <String, List<ActivityRecord>>{};
+    for (final activity in _allPreviewActivities()) {
+      if (captureRunId != null && activity.captureRunId != captureRunId) {
+        continue;
+      }
+      if (manualCaptureId != null &&
+          activity.manualCaptureId != manualCaptureId) {
+        continue;
+      }
+      (grouped[activity.conversation.id] ??= []).add(activity);
+    }
+    final values =
+        grouped.values
+            .map((activities) {
+              activities.sort(
+                (left, right) => left.occurredAt.compareTo(right.occurredAt),
+              );
+              return ConversationRecord(
+                conversation: activities.first.conversation,
+                firstObservedAt: activities.first.occurredAt,
+                turnCount: activities.length,
+                latest: activities.last,
+              );
+            })
+            .toList(growable: false)
+          ..sort((left, right) {
+            final time = right.firstObservedAt.compareTo(left.firstObservedAt);
+            if (time != 0) return time;
+            final name = (left.conversation.displayName ?? '')
+                .toLowerCase()
+                .compareTo(
+                  (right.conversation.displayName ?? '').toLowerCase(),
+                );
+            if (name != 0) return name;
+            return left.conversation.id.compareTo(right.conversation.id);
+          });
+    final end = (offset + limit).clamp(0, values.length).toInt();
+    return ConversationPage(
+      items: values.sublist(offset, end),
+      nextCursor: end < values.length ? 'conversations-$end' : null,
     );
   }
 
@@ -1187,6 +1295,93 @@ final class PreviewControlApi implements ControlApi {
       );
     }
     return _previewExchange(activity, contentView);
+  }
+
+  @override
+  Future<RawEvidencePage> rawEvidence(String exchangeId) async {
+    _requireOpen();
+    if (!_allPreviewActivities().any((value) => value.id == exchangeId)) {
+      throw const ControlProblem(
+        status: 404,
+        reasonCode: 'exchange_not_found',
+        messageKey: 'error.exchange_not_found',
+      );
+    }
+    final observed = _now.subtract(const Duration(seconds: 4));
+    final body = utf8.encode('{"model":"claude-sonnet-4-5","stream":true}');
+    return RawEvidencePage(
+      items: [
+        RawEvidenceEnvelope(
+          envelopeId: 'raw-preview-$exchangeId',
+          layer: 'provider_egress',
+          scopeKind: 'managed_run',
+          scopeId: 'run-preview-$exchangeId',
+          exchangeId: exchangeId,
+          attemptId: 'attempt-preview-$exchangeId',
+          observedAt: observed,
+          expiresAt: observed.add(const Duration(days: 30)),
+          method: 'POST',
+          statusCode: null,
+          scheme: 'https',
+          authority: 'api.anthropic.com',
+          path: '/v1/messages',
+          rawQuery: null,
+          contentType: 'application/json',
+          contentEncoding: null,
+          headerCount: 2,
+          trailerCount: 0,
+          bodyBytes: body.length,
+          bodySha256: crypto.sha256.convert(body).toString(),
+          digestScope: 'full_body',
+          payloadState: 'captured',
+          payloadReason: null,
+          containsSecret: true,
+          revealAvailable: true,
+        ),
+      ],
+      recovery: const RawEvidenceRecovery(
+        recoveredUncleanWriters: 0,
+        purgedExpiredEnvelopes: 0,
+        maximumPossibleLossMs: 0,
+      ),
+      writer: const RawEvidenceWriter(
+        state: 'active',
+        admittedRecords: 1,
+        durableWatermark: 1,
+        queueRecords: 0,
+        queueBytes: 0,
+        lastFailure: null,
+        maximumUnflushedTimeMs: 250,
+      ),
+    );
+  }
+
+  @override
+  Future<RevealedRawEvidence> revealRawEvidence({
+    required String envelopeId,
+  }) async {
+    _requireOpen();
+    if (!envelopeId.startsWith('raw-preview-')) {
+      throw const ControlProblem(
+        status: 422,
+        reasonCode: 'invalid_control_request',
+        messageKey: 'error.invalid_control_request',
+      );
+    }
+    final exchangeId = envelopeId.substring('raw-preview-'.length);
+    final page = await rawEvidence(exchangeId);
+    return RevealedRawEvidence(
+      envelope: page.items.single,
+      headers: const [
+        RawHeaderField(name: 'Authorization', values: ['Bearer ••••••••']),
+        RawHeaderField(name: 'Content-Type', values: ['application/json']),
+      ],
+      trailers: const [],
+      body: Uint8List.fromList(
+        utf8.encode('{"model":"claude-sonnet-4-5","stream":true}'),
+      ),
+      frames: const [],
+    );
   }
 
   List<ActivityRecord> _allPreviewActivities() {
@@ -1214,6 +1409,7 @@ final class PreviewControlApi implements ControlApi {
     final count = capture.id == 'run-1' ? 224 : 24;
     final values = List.generate(count, (index) {
       final succeeded = index != 5 && index != count - 6;
+      final conversation = _previewConversation(capture, index);
       return ActivityRecord(
         id: '${capture.id}-exchange-${index + 1}',
         occurredAt: _now.subtract(Duration(minutes: (count - 1 - index) * 4)),
@@ -1229,6 +1425,7 @@ final class PreviewControlApi implements ControlApi {
           displayName: capture.displayName,
           recognition: capture.managedRun?.recognition ?? 'configured',
         ),
+        conversation: conversation,
         environment: FrozenEnvironmentRef(
           id: environment.id,
           revision: environment.revision,
@@ -1261,6 +1458,141 @@ final class PreviewControlApi implements ControlApi {
     });
     values.sort((left, right) => right.occurredAt.compareTo(left.occurredAt));
     return values;
+  }
+
+  ActivityConversationRef _previewConversation(
+    CaptureRecord capture,
+    int index,
+  ) {
+    final exchangeId = '${capture.id}-exchange-${index + 1}';
+    if (capture.isManual) {
+      return ActivityConversationRef(
+        id: 'exchange:$exchangeId',
+        displayName: null,
+        kind: 'isolated_exchange',
+        evidence: 'exchange_boundary',
+        actor: null,
+      );
+    }
+    if (capture.id == 'run-1' && index % 17 == 5) {
+      return ActivityConversationRef(
+        id: 'exchange:$exchangeId',
+        displayName: null,
+        kind: 'isolated_subagent',
+        evidence: 'client_asserted_subagent',
+        actor: null,
+      );
+    }
+    if (capture.id == 'run-1' && index % 13 == 3) {
+      return ActivityConversationRef(
+        id: 'capture_run:${capture.captureRunId}:agent:reviewer',
+        displayName: 'reviewer',
+        kind: 'agent',
+        evidence: 'explicit_actor',
+        actor: '/root/reviewer',
+        clientIdentity: _previewClientIdentity(
+          capture,
+          index,
+          actorId: '/root/reviewer',
+          actorLabel: 'reviewer',
+        ),
+      );
+    }
+    return ActivityConversationRef(
+      id: 'capture_run:${capture.captureRunId}:main',
+      displayName: capture.displayName,
+      kind: 'main',
+      evidence: 'capture_run',
+      actor: null,
+      clientIdentity: _previewClientIdentity(capture, index),
+    );
+  }
+
+  AgentClientIdentity _previewClientIdentity(
+    CaptureRecord capture,
+    int index, {
+    String? actorId,
+    String? actorLabel,
+  }) {
+    final client = capture.managedRun?.executableLabel == 'codex'
+        ? 'codex'
+        : 'claude';
+    final sessionId = '$client-session-${capture.id}';
+    final responseId = 'response-${capture.id}-exchange-${index + 1}';
+    final exchangeCount = capture.id == 'run-1' ? 224 : 24;
+    final observedAt = _now.subtract(
+      Duration(minutes: (exchangeCount - 1 - index) * 4),
+    );
+    if (client == 'codex') {
+      final threadId = actorId ?? 'codex-thread-${capture.id}';
+      return AgentClientIdentity(
+        client: client,
+        sessionId: sessionId,
+        sessionResumable: true,
+        actorId: actorId == null ? null : threadId,
+        actorLabel: actorLabel,
+        actorType: actorId == null ? null : 'reviewer',
+        actorIsSubagent: actorId != null,
+        providerResponseId: responseId,
+        providerMessageId: null,
+        source: 'client_local_state',
+        confidence: 'exact',
+        observedAt: observedAt,
+        protocolIds: [
+          AgentClientEvidenceValue(
+            name: 'codex.call_id',
+            value: 'call-${capture.id}-${index + 1}',
+          ),
+          AgentClientEvidenceValue(
+            name: 'codex.response_item_id',
+            value: 'item-${capture.id}-${index + 1}',
+          ),
+          AgentClientEvidenceValue(name: 'codex.session_id', value: sessionId),
+          AgentClientEvidenceValue(name: 'codex.thread_id', value: threadId),
+          AgentClientEvidenceValue(
+            name: 'codex.turn_id',
+            value: 'turn-${capture.id}-${index + 1}',
+          ),
+        ],
+        attributes: const [
+          AgentClientEvidenceValue(
+            name: 'codex.cli_version',
+            value: '0.101.0-preview',
+          ),
+          AgentClientEvidenceValue(
+            name: 'codex.originator',
+            value: 'codex_cli_rs',
+          ),
+        ],
+      );
+    }
+    return AgentClientIdentity(
+      client: client,
+      sessionId: sessionId,
+      sessionResumable: true,
+      actorId: actorId,
+      actorLabel: actorLabel,
+      actorType: actorId == null ? null : 'reviewer',
+      actorIsSubagent: actorId != null,
+      providerResponseId: responseId,
+      providerMessageId: responseId,
+      source: 'client_local_state',
+      confidence: 'exact',
+      observedAt: observedAt,
+      protocolIds: [
+        AgentClientEvidenceValue(
+          name: 'claude.event_uuid',
+          value: 'event-${capture.id}-${index + 1}',
+        ),
+        AgentClientEvidenceValue(
+          name: 'claude.request_id',
+          value: 'request-${capture.id}-${index + 1}',
+        ),
+      ],
+      attributes: const [
+        AgentClientEvidenceValue(name: 'claude.skill', value: 'code-review'),
+      ],
+    );
   }
 
   @override
@@ -1648,6 +1980,7 @@ final class PreviewControlApi implements ControlApi {
     final allMessages = <ExchangeContentMessage>[
       ExchangeContentMessage(
         role: 'system',
+        agent: null,
         blocks: [
           _previewTextBlock(
             'You are operating inside ${activity.environment.id}.',
@@ -1657,10 +1990,20 @@ final class PreviewControlApi implements ControlApi {
       if (!checkpoint)
         ExchangeContentMessage(
           role: 'user',
-          blocks: [_previewTextBlock('Inspect the current workspace.')],
+          agent: null,
+          blocks: [
+            _previewTextBlock(
+              'Inspect the current workspace.\n\n'
+              '```text\n'
+              'WRAPPING-CHECK: this intentionally long diagnostic line must wrap inside the message column instead of creating a horizontal scrollbar that hides the remaining evidence.\n'
+              '```\n\n'
+              'hello',
+            ),
+          ],
         ),
       ExchangeContentMessage(
         role: 'user',
+        agent: null,
         blocks: [
           _previewTextBlock(
             index % 4 == 0
@@ -1676,6 +2019,7 @@ final class PreviewControlApi implements ControlApi {
     final toolTurn = index % 4 == 0;
     final terminal = activity.status != 'pending';
     final failed = activity.status == 'failed';
+    final agentTurn = activity.source.displayName == 'Codex' && index >= 20;
     final attempt = EgressAttemptRecord(
       sequence: 1,
       id: 'egress-${activity.id}',
@@ -1716,19 +2060,50 @@ final class PreviewControlApi implements ControlApi {
             stopReason: toolTurn ? 'tool_use' : 'end_turn',
             blocks: [
               if (toolTurn)
-                const ExchangeContentBlock(
+                ExchangeContentBlock(
                   kind: 'tool_call',
                   availability: 'recorded',
                   text: null,
                   originalSize: 25,
                   callId: 'call-read-notes',
                   toolName: 'Read',
+                  toolNamespace: null,
                   arguments: {'path': 'README.md'},
                   toolError: false,
+                  providerSource: null,
+                  providerKind: null,
+                  fingerprint: null,
+                  agent: agentTurn
+                      ? const ExchangeAgentContext(
+                          agentName: 'root',
+                          author: null,
+                          recipient: null,
+                        )
+                      : null,
                 )
               else
                 _previewTextBlock(
-                  'The runtime evidence is consistent; continue with the next bounded change.',
+                  index == 219
+                      ? '### Long captured response\n\n'
+                            '- Preserve **frozen evidence**.\n'
+                            '- Verify `stateTag` before mutation.\n'
+                            '- Keep the exact client session ID.\n'
+                            '- Keep the exact Agent ID.\n'
+                            '- Keep the exact parent Agent ID.\n'
+                            '- Preserve request headers.\n'
+                            '- Preserve request bytes.\n'
+                            '- Preserve response headers.\n'
+                            '- Preserve response bytes.\n'
+                            '- Record provider attempts.\n'
+                            '- Record tool calls.\n'
+                            '- Record usage.\n'
+                            '- Record thinking summaries.\n'
+                            '- Record signature metadata.\n'
+                            '- Keep failures non-destructive.\n'
+                            '- Flush admitted evidence before shutdown.'
+                      : index == 221
+                      ? '### Verified result\n\nThe runtime evidence is consistent; continue with the next bounded change.\n\n- Preserve **frozen evidence**.\n- Verify `stateTag` before mutation.'
+                      : 'The runtime evidence is consistent; continue with the next bounded change.',
                 ),
             ],
             usage: const ExchangeUsage(
@@ -1773,6 +2148,7 @@ final class PreviewControlApi implements ControlApi {
               clientPath: null,
             )
           : null,
+      clientIdentity: activity.conversation.clientIdentity,
       processingTrace: ExchangeProcessingTrace(
         egressProxyId: null,
         pluginRunIds: const [],
@@ -1791,6 +2167,32 @@ final class PreviewControlApi implements ControlApi {
           totalMessageCount: allMessages.length,
           fullSnapshotAvailable: inherited > 0,
         ),
+        agentConversation: agentTurn
+            ? const AgentConversationProjection(
+                scope: 'capture_run',
+                agents: [
+                  AgentConversationAgent(name: 'root'),
+                  AgentConversationAgent(name: 'reviewer'),
+                ],
+                relationships: [
+                  AgentConversationRelationship(
+                    source: 'root',
+                    target: 'reviewer',
+                    kind: 'message',
+                  ),
+                ],
+                actions: [
+                  AgentConversationAction(
+                    callId: 'preview-agent-call',
+                    name: 'spawn_agent',
+                    status: 'completed',
+                    sourceAgent: 'root',
+                    resultAgent: 'reviewer',
+                    attributed: true,
+                  ),
+                ],
+              )
+            : null,
         request: ExchangeRequest(
           requestedModel: 'claude-sonnet-4-5',
           effectiveModel: 'claude-sonnet-4-5',
@@ -1814,8 +2216,13 @@ final class PreviewControlApi implements ControlApi {
         originalSize: text.length,
         callId: null,
         toolName: null,
+        toolNamespace: null,
         arguments: null,
         toolError: false,
+        providerSource: null,
+        providerKind: null,
+        fingerprint: null,
+        agent: null,
       );
 
   ManualCaptureGrant _manualGrant(

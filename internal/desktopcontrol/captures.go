@@ -3,6 +3,8 @@ package desktopcontrol
 import (
 	"bytes"
 	"crypto/sha256"
+	"encoding/base64"
+	"encoding/json"
 	"errors"
 	"net/http"
 	"sort"
@@ -17,7 +19,23 @@ import (
 )
 
 type CaptureListResponse struct {
-	Items []CaptureResponse `json:"items"`
+	Items      []CaptureResponse `json:"items"`
+	NextCursor string            `json:"nextCursor,omitempty"`
+}
+
+const (
+	captureListDefaultLimit = 50
+	captureListMaximumLimit = 199
+	captureCursorVersion    = 1
+	maximumCaptureCursor    = 512
+)
+
+type captureCursorDocument struct {
+	Version             int                  `json:"v"`
+	Running             bool                 `json:"running"`
+	UpdatedAtUnixMillis int64                `json:"updatedAtUnixMillis"`
+	Kind                captureidentity.Kind `json:"kind"`
+	ID                  string               `json:"id"`
 }
 
 type CaptureResponse struct {
@@ -133,22 +151,37 @@ func (handler *Handler) listCaptures(writer http.ResponseWriter, request *http.R
 		return
 	}
 	for name, entries := range request.URL.Query() {
-		if name != "limit" || len(entries) != 1 {
+		if (name != "limit" && name != "cursor") || len(entries) != 1 {
 			writeProblem(writer, http.StatusUnprocessableEntity, ReasonInvalidRequest)
 			return
 		}
 	}
-	limit, err := queryLimit(request, 50)
+	limit, err := captureListLimit(request)
 	if err != nil {
 		writeProblem(writer, http.StatusUnprocessableEntity, ReasonInvalidRequest)
 		return
 	}
-	managed, err := handler.captureRuns.ListRuns(request.Context(), capturerun.PageRequest{Limit: limit})
+	cursor, err := decodeCaptureCursor(request.URL.Query().Get("cursor"))
+	if err != nil {
+		writeProblem(writer, http.StatusUnprocessableEntity, ReasonInvalidRequest)
+		return
+	}
+	sourceLimit := limit + 1
+	managedRequest := capturerun.PageRequest{Limit: sourceLimit}
+	manualRequest := manualcapture.PageRequest{
+		Owner: manualcapture.NewLocalOwnerScope(),
+		Limit: sourceLimit,
+	}
+	if cursor != nil {
+		managedRequest.Cursor = captureRunCursor(*cursor)
+		manualRequest.Cursor = manualCaptureCursor(*cursor)
+	}
+	managed, err := handler.captureRuns.ListRuns(request.Context(), managedRequest)
 	if err != nil {
 		writeProblem(writer, http.StatusServiceUnavailable, ReasonCaptureUnavailable)
 		return
 	}
-	manual, err := handler.manualCaptures.List(request.Context(), manualcapture.PageRequest{Owner: manualcapture.NewLocalOwnerScope(), Limit: limit})
+	manual, err := handler.manualCaptures.List(request.Context(), manualRequest)
 	if err != nil {
 		writeProblem(writer, http.StatusServiceUnavailable, ReasonCaptureUnavailable)
 		return
@@ -160,11 +193,135 @@ func (handler *Handler) listCaptures(writer http.ResponseWriter, request *http.R
 	for _, view := range manual.Items {
 		items = append(items, manualCaptureResponseOf(view))
 	}
-	sort.Slice(items, func(left, right int) bool { return items[left].Key < items[right].Key })
+	sort.Slice(items, func(left, right int) bool {
+		return captureResponseLess(items[left], items[right])
+	})
+	response := CaptureListResponse{Items: items}
 	if len(items) > limit {
-		items = items[:limit]
+		response.Items = items[:limit]
+		response.NextCursor, err = encodeCaptureCursor(response.Items[limit-1])
+		if err != nil {
+			writeProblem(writer, http.StatusInternalServerError, ReasonRuntimeUnavailable)
+			return
+		}
 	}
-	writeJSON(writer, http.StatusOK, CaptureListResponse{Items: items})
+	writeJSON(writer, http.StatusOK, response)
+}
+
+func captureListLimit(request *http.Request) (int, error) {
+	raw := request.URL.Query().Get("limit")
+	if raw == "" {
+		return captureListDefaultLimit, nil
+	}
+	limit, err := strconv.Atoi(raw)
+	if err != nil || limit <= 0 || limit > captureListMaximumLimit {
+		return 0, errors.New("Capture page limit is invalid")
+	}
+	return limit, nil
+}
+
+func captureKindOrder(kind captureidentity.Kind) int {
+	if kind == captureidentity.KindManagedRun {
+		return 0
+	}
+	return 1
+}
+
+func captureResponseRunning(response CaptureResponse) bool {
+	if response.Kind == captureidentity.KindManagedRun {
+		return response.State == string(capturerun.StateCreated) ||
+			response.State == string(capturerun.StateAttached)
+	}
+	return response.State == string(manualcapture.StateActive)
+}
+
+func captureResponseLess(left, right CaptureResponse) bool {
+	leftRunning := captureResponseRunning(left)
+	rightRunning := captureResponseRunning(right)
+	if leftRunning != rightRunning {
+		return leftRunning
+	}
+	if !left.UpdatedAt.Equal(right.UpdatedAt) {
+		return left.UpdatedAt.After(right.UpdatedAt)
+	}
+	leftKind := captureKindOrder(left.Kind)
+	rightKind := captureKindOrder(right.Kind)
+	if leftKind != rightKind {
+		return leftKind < rightKind
+	}
+	return left.ID < right.ID
+}
+
+func encodeCaptureCursor(response CaptureResponse) (string, error) {
+	document := captureCursorDocument{
+		Version:             captureCursorVersion,
+		Running:             captureResponseRunning(response),
+		UpdatedAtUnixMillis: response.UpdatedAt.UnixMilli(),
+		Kind:                response.Kind,
+		ID:                  response.ID,
+	}
+	payload, err := json.Marshal(document)
+	if err != nil {
+		return "", err
+	}
+	return base64.RawURLEncoding.EncodeToString(payload), nil
+}
+
+func decodeCaptureCursor(raw string) (*captureCursorDocument, error) {
+	if raw == "" {
+		return nil, nil
+	}
+	if len(raw) > maximumCaptureCursor {
+		return nil, errors.New("Capture cursor is too large")
+	}
+	payload, err := base64.RawURLEncoding.DecodeString(raw)
+	if err != nil || base64.RawURLEncoding.EncodeToString(payload) != raw {
+		return nil, errors.New("Capture cursor encoding is invalid")
+	}
+	var document captureCursorDocument
+	if json.Unmarshal(payload, &document) != nil {
+		return nil, errors.New("Capture cursor document is invalid")
+	}
+	canonical, err := json.Marshal(document)
+	if err != nil || !bytes.Equal(canonical, payload) {
+		return nil, errors.New("Capture cursor shape is invalid")
+	}
+	reference, err := captureidentity.New(document.Kind, document.ID)
+	if err != nil || document.Version != captureCursorVersion ||
+		document.UpdatedAtUnixMillis <= 0 || reference.ID != document.ID {
+		return nil, errors.New("Capture cursor authority is invalid")
+	}
+	return &document, nil
+}
+
+func captureRunCursor(cursor captureCursorDocument) *capturerun.PageCursor {
+	includeAtUpdatedAt := captureKindOrder(captureidentity.KindManagedRun) >=
+		captureKindOrder(cursor.Kind)
+	afterID := ""
+	if cursor.Kind == captureidentity.KindManagedRun {
+		afterID = cursor.ID
+	}
+	return &capturerun.PageCursor{
+		Running:            cursor.Running,
+		UpdatedAt:          time.UnixMilli(cursor.UpdatedAtUnixMillis).UTC(),
+		AfterID:            afterID,
+		IncludeAtUpdatedAt: includeAtUpdatedAt,
+	}
+}
+
+func manualCaptureCursor(cursor captureCursorDocument) *manualcapture.PageCursor {
+	includeAtUpdatedAt := captureKindOrder(captureidentity.KindManualCapture) >=
+		captureKindOrder(cursor.Kind)
+	afterID := ""
+	if cursor.Kind == captureidentity.KindManualCapture {
+		afterID = cursor.ID
+	}
+	return &manualcapture.PageCursor{
+		Running:            cursor.Running,
+		UpdatedAt:          time.UnixMilli(cursor.UpdatedAtUnixMillis).UTC(),
+		AfterID:            afterID,
+		IncludeAtUpdatedAt: includeAtUpdatedAt,
+	}
 }
 
 func (handler *Handler) getCapture(writer http.ResponseWriter, request *http.Request) {

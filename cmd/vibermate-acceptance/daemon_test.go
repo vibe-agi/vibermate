@@ -99,15 +99,17 @@ func TestDaemonInvocationPinsPackagedWebviewOrigin(t *testing.T) {
 	arguments := daemonArguments("/private/tmp/cache", "/private/tmp/data")
 	if !slices.Contains(
 		arguments,
-		"--webview-origin=tauri://localhost",
+		"--webview-origin=vibermate://desktop",
 	) {
 		t.Fatalf("daemon arguments = %v", arguments)
 	}
-	if slices.Contains(
-		arguments,
+	for _, retired := range []string{
+		"--webview-origin=tauri://localhost",
 		"--webview-origin=http://127.0.0.1:1420",
-	) {
-		t.Fatalf("daemon arguments enabled development origin = %v", arguments)
+	} {
+		if slices.Contains(arguments, retired) {
+			t.Fatalf("daemon arguments enabled retired origin %q: %v", retired, arguments)
+		}
 	}
 	if !slices.Contains(arguments, "--parent-lifetime-fd=0") {
 		t.Fatalf("daemon arguments omit parent ownership = %v", arguments)

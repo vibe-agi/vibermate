@@ -28,6 +28,9 @@ const (
 	MaxOutputSchemaBytes          = 4 << 20
 	MaxStopSequenceCount          = 32
 	MaxStopSequenceBytes          = 1024
+	MaxProtocolEvidenceValues     = 8192
+	MaxProtocolEvidenceNameBytes  = 128
+	MaxProtocolEvidenceValueBytes = 512
 )
 
 type Role string
@@ -202,9 +205,11 @@ func (call ToolCall) Clone() ToolCall {
 }
 
 type ToolResult struct {
-	Key     CallKey
-	Content string
-	IsError bool
+	Key       CallKey
+	Namespace string
+	Name      string
+	Content   string
+	IsError   bool
 }
 
 // ToolIntent is created only after a complete provider tool call has been
@@ -235,6 +240,21 @@ func (result ToolResult) Validate() error {
 	if result.Key.IsZero() {
 		return errors.New("tool result key is empty")
 	}
+	if (result.Namespace == "") != (result.Name == "") {
+		return errors.New("tool result identity is incomplete")
+	}
+	if result.Namespace != "" {
+		if err := validateIdentifier(
+			"tool result namespace",
+			result.Namespace,
+			MaxToolNamespaceBytes,
+		); err != nil {
+			return err
+		}
+		if err := validateIdentifier("tool result name", result.Name, MaxToolNameBytes); err != nil {
+			return err
+		}
+	}
 	return validateText("tool result content", result.Content, MaxTextBytes, true)
 }
 
@@ -245,6 +265,10 @@ type ContentBlock struct {
 	ToolCall          ToolCall
 	ToolResult        ToolResult
 	ProviderExtension ProviderExtension
+	// Agent is block-scoped for provider output, where a single response may
+	// contain items produced by different agents. Request-side agent evidence
+	// remains message-scoped on Message.Agent.
+	Agent *AgentMessageContext
 }
 
 func NewTextBlock(text string) (ContentBlock, error) {
@@ -286,6 +310,11 @@ func NewProviderExtensionBlock(extension ProviderExtension) (ContentBlock, error
 }
 
 func (block ContentBlock) Validate() error {
+	if block.Agent != nil {
+		if err := block.Agent.Validate(); err != nil {
+			return err
+		}
+	}
 	switch block.Kind {
 	case BlockText:
 		return validateText("text block", block.Text, MaxTextBytes, true)
@@ -306,12 +335,49 @@ func (block ContentBlock) Clone() ContentBlock {
 	cloned := block
 	cloned.ToolCall = block.ToolCall.Clone()
 	cloned.ProviderExtension = block.ProviderExtension.Clone()
+	if block.Agent != nil {
+		context := *block.Agent
+		cloned.Agent = &context
+	}
 	return cloned
 }
 
 type Message struct {
 	Role   Role
 	Blocks []ContentBlock
+	// Agent identifies authoritative inter-agent provenance carried by the
+	// source protocol. It is intentionally message-scoped: an agent message,
+	// call, or call result still has ordinary content blocks, while this field
+	// preserves who produced it and (for agent messages) its directed edge.
+	Agent *AgentMessageContext
+}
+
+type AgentMessageContext struct {
+	AgentName string
+	Author    string
+	Recipient string
+}
+
+func (context AgentMessageContext) Validate() error {
+	if context.AgentName == "" && context.Author == "" && context.Recipient == "" {
+		return errors.New("agent message context is empty")
+	}
+	for label, value := range map[string]string{
+		"agent name":      context.AgentName,
+		"agent author":    context.Author,
+		"agent recipient": context.Recipient,
+	} {
+		if value == "" {
+			continue
+		}
+		if err := validateIdentifier(label, value, 512); err != nil {
+			return err
+		}
+	}
+	if (context.Author == "") != (context.Recipient == "") {
+		return errors.New("agent message direction is incomplete")
+	}
+	return nil
 }
 
 func (message Message) Validate() error {
@@ -322,6 +388,11 @@ func (message Message) Validate() error {
 	}
 	if len(message.Blocks) == 0 || len(message.Blocks) > MaxContentBlocks {
 		return errors.New("message content block count is invalid")
+	}
+	if message.Agent != nil {
+		if err := message.Agent.Validate(); err != nil {
+			return err
+		}
 	}
 	for index, block := range message.Blocks {
 		if err := block.Validate(); err != nil {
@@ -354,6 +425,10 @@ func (message Message) Validate() error {
 
 func (message Message) Clone() Message {
 	cloned := message
+	if message.Agent != nil {
+		context := *message.Agent
+		cloned.Agent = &context
+	}
 	cloned.Blocks = make([]ContentBlock, len(message.Blocks))
 	for index, block := range message.Blocks {
 		cloned.Blocks[index] = block.Clone()
@@ -867,6 +942,69 @@ type Request struct {
 	Temperature     *float64
 	TopP            *float64
 	StopSequences   []string
+	// ProtocolEvidence retains bounded, non-secret client protocol identifiers
+	// used for exact Conversation association. Names are explicitly namespaced
+	// (for example openai_responses.turn_id); raw wire remains authoritative.
+	ProtocolEvidence []ProtocolEvidenceValue
+}
+
+// ProtocolEvidenceValue preserves one client-protocol identifier without
+// forcing heterogeneous Agent clients into a false shared wire model.
+type ProtocolEvidenceValue struct {
+	Name  string `json:"name"`
+	Value string `json:"value"`
+}
+
+func (value ProtocolEvidenceValue) Validate() error {
+	if !validProtocolEvidenceName(value.Name) {
+		return errors.New("protocol evidence name is invalid")
+	}
+	if err := validateIdentifier(
+		"protocol evidence value",
+		value.Value,
+		MaxProtocolEvidenceValueBytes,
+	); err != nil {
+		return err
+	}
+	return nil
+}
+
+func ValidateProtocolEvidence(values []ProtocolEvidenceValue) error {
+	if len(values) > MaxProtocolEvidenceValues {
+		return errors.New("protocol evidence count is invalid")
+	}
+	seenNames := make(map[string]struct{}, len(values))
+	previous := ""
+	for index, value := range values {
+		if err := value.Validate(); err != nil {
+			return fmt.Errorf("protocol evidence %d: %w", index, err)
+		}
+		if index > 0 && value.Name <= previous {
+			return errors.New("protocol evidence is not canonically ordered")
+		}
+		if _, duplicate := seenNames[value.Name]; duplicate {
+			return errors.New("protocol evidence name is duplicated")
+		}
+		seenNames[value.Name] = struct{}{}
+		previous = value.Name
+	}
+	return nil
+}
+
+func validProtocolEvidenceName(value string) bool {
+	if value == "" || len(value) > MaxProtocolEvidenceNameBytes ||
+		strings.TrimSpace(value) != value || !utf8.ValidString(value) {
+		return false
+	}
+	for _, character := range value {
+		if (character >= 'a' && character <= 'z') ||
+			(character >= '0' && character <= '9') ||
+			character == '.' || character == '_' || character == '-' {
+			continue
+		}
+		return false
+	}
+	return true
 }
 
 func (request Request) Validate() error {
@@ -979,6 +1117,9 @@ func (request Request) Validate() error {
 			return err
 		}
 	}
+	if err := ValidateProtocolEvidence(request.ProtocolEvidence); err != nil {
+		return err
+	}
 	return nil
 }
 
@@ -998,6 +1139,7 @@ func (request Request) Clone() Request {
 		cloned.ToolNamespaces[index] = namespace.Clone()
 	}
 	cloned.StopSequences = slices.Clone(request.StopSequences)
+	cloned.ProtocolEvidence = slices.Clone(request.ProtocolEvidence)
 	cloned.Context = request.Context.Clone()
 	cloned.Output = request.Output.Clone()
 	if request.Temperature != nil {
@@ -1073,12 +1215,19 @@ type ProviderExtensionKind string
 
 const (
 	ProviderExtensionSourceOpenAIChat        ProviderExtensionSource = "openai-chat"
+	ProviderExtensionSourceOpenAIResponses   ProviderExtensionSource = "openai-responses"
 	ProviderExtensionSourceAnthropicMessages ProviderExtensionSource = "anthropic-messages"
 
-	ProviderExtensionReasoningContent ProviderExtensionKind = "reasoning_content"
-	ProviderExtensionReasoningUsage   ProviderExtensionKind = "reasoning_usage"
-	ProviderExtensionThinking         ProviderExtensionKind = "thinking"
-	ProviderExtensionRedactedThinking ProviderExtensionKind = "redacted_thinking"
+	ProviderExtensionReasoningContent             ProviderExtensionKind = "reasoning_content"
+	ProviderExtensionReasoningSummary             ProviderExtensionKind = "reasoning_summary"
+	ProviderExtensionReasoningEncryptedContent    ProviderExtensionKind = "reasoning_encrypted_content"
+	ProviderExtensionAgentMessageEncryptedContent ProviderExtensionKind = "agent_message_encrypted_content"
+	ProviderExtensionAgentMessageImage            ProviderExtensionKind = "agent_message_image"
+	ProviderExtensionAgentMessageFile             ProviderExtensionKind = "agent_message_file"
+	ProviderExtensionAgentMessageScreenshot       ProviderExtensionKind = "agent_message_screenshot"
+	ProviderExtensionReasoningUsage               ProviderExtensionKind = "reasoning_usage"
+	ProviderExtensionThinking                     ProviderExtensionKind = "thinking"
+	ProviderExtensionRedactedThinking             ProviderExtensionKind = "redacted_thinking"
 )
 
 // ProviderExtension preserves provider-specific JSON values without
@@ -1139,6 +1288,16 @@ func (extension ProviderExtension) Validate() error {
 			extension.kind != ProviderExtensionReasoningUsage {
 			return errors.New("provider extension kind is unsupported for OpenAI Chat")
 		}
+	case ProviderExtensionSourceOpenAIResponses:
+		if extension.kind != ProviderExtensionReasoningContent &&
+			extension.kind != ProviderExtensionReasoningSummary &&
+			extension.kind != ProviderExtensionReasoningEncryptedContent &&
+			extension.kind != ProviderExtensionAgentMessageEncryptedContent &&
+			extension.kind != ProviderExtensionAgentMessageImage &&
+			extension.kind != ProviderExtensionAgentMessageFile &&
+			extension.kind != ProviderExtensionAgentMessageScreenshot {
+			return errors.New("provider extension kind is unsupported for OpenAI Responses")
+		}
 	case ProviderExtensionSourceAnthropicMessages:
 		if extension.kind != ProviderExtensionThinking &&
 			extension.kind != ProviderExtensionRedactedThinking {
@@ -1189,9 +1348,14 @@ type Response struct {
 	ReportedModel      string
 	Blocks             []ContentBlock
 	ProviderExtensions []ProviderExtension
-	StopReason         StopReason
-	StopSequence       string
-	Usage              Usage
+	// ProtocolEvidence retains bounded, non-secret provider response
+	// identifiers used for exact Agent-session association. It is separate
+	// from Request.ProtocolEvidence because the two sides have different
+	// authorities and must remain distinguishable in durable evidence.
+	ProtocolEvidence []ProtocolEvidenceValue
+	StopReason       StopReason
+	StopSequence     string
+	Usage            Usage
 }
 
 func (response Response) Validate() error {
@@ -1214,11 +1378,16 @@ func (response Response) Validate() error {
 		return errors.New("response content block count is invalid")
 	}
 	toolKeys := make(map[CallKey]struct{})
+	resultKeys := make(map[CallKey]struct{})
 	hasToolCall := false
+	providerExtensionCount := len(response.ProviderExtensions)
+	providerExtensionBytes := 0
 	for index, block := range response.Blocks {
 		if block.Kind != BlockText &&
 			block.Kind != BlockRefusal &&
-			block.Kind != BlockToolCall {
+			block.Kind != BlockToolCall &&
+			block.Kind != BlockToolResult &&
+			block.Kind != BlockProviderExtension {
 			return fmt.Errorf("response content block %d has an unsupported kind", index)
 		}
 		if err := block.Validate(); err != nil {
@@ -1231,12 +1400,22 @@ func (response Response) Validate() error {
 			}
 			toolKeys[block.ToolCall.Key] = struct{}{}
 		}
+		if block.Kind == BlockToolResult {
+			if _, duplicate := resultKeys[block.ToolResult.Key]; duplicate {
+				return errors.New("response tool result identity is duplicated")
+			}
+			resultKeys[block.ToolResult.Key] = struct{}{}
+		}
+		if block.Kind == BlockProviderExtension {
+			providerExtensionCount++
+			providerExtensionBytes += block.ProviderExtension.byteSize()
+		}
 	}
-	if len(response.ProviderExtensions) > MaxProviderExtensions {
+	if providerExtensionCount > MaxProviderExtensions {
 		return errors.New("provider extension count is invalid")
 	}
 	extensionKeys := make(map[string]struct{}, len(response.ProviderExtensions))
-	extensionBytes := 0
+	extensionBytes := providerExtensionBytes
 	for index, extension := range response.ProviderExtensions {
 		if err := extension.Validate(); err != nil {
 			return fmt.Errorf("provider extension %d: %w", index, err)
@@ -1252,6 +1431,9 @@ func (response Response) Validate() error {
 			return errors.New("provider extension identity is duplicated")
 		}
 		extensionKeys[key] = struct{}{}
+	}
+	if err := ValidateProtocolEvidence(response.ProtocolEvidence); err != nil {
+		return fmt.Errorf("response protocol evidence: %w", err)
 	}
 	switch response.StopReason {
 	case StopReasonEndTurn, StopReasonMaxTokens, StopReasonToolUse, StopReasonStopSequence:
@@ -1271,6 +1453,7 @@ func (response Response) Clone() Response {
 	cloned := response
 	cloned.Blocks = cloneBlocks(response.Blocks)
 	cloned.ProviderExtensions = cloneProviderExtensions(response.ProviderExtensions)
+	cloned.ProtocolEvidence = slices.Clone(response.ProtocolEvidence)
 	return cloned
 }
 
@@ -1298,6 +1481,7 @@ const (
 	NoticeToolPlacementNormalized             NoticeCode = "tool_placement_normalized"
 	NoticePromptCacheKeyNotForwarded          NoticeCode = "prompt_cache_key_not_forwarded"
 	NoticeClientMetadataNotForwarded          NoticeCode = "client_metadata_not_forwarded"
+	NoticePreviousResponseIDNotForwarded      NoticeCode = "previous_response_id_not_forwarded"
 	NoticeInternalMessageMetadataNotForwarded NoticeCode = "internal_message_metadata_not_forwarded"
 	NoticeReasoningContextNotForwarded        NoticeCode = "reasoning_context_not_forwarded"
 	NoticeReasoningIncludeNotForwarded        NoticeCode = "reasoning_include_not_forwarded"
@@ -1309,6 +1493,8 @@ const (
 	NoticeToolItemIdentityNotForwarded        NoticeCode = "tool_item_identity_not_forwarded"
 	NoticeToolCallerNotForwarded              NoticeCode = "tool_caller_not_forwarded"
 	NoticeMessageItemIdentityNotForwarded     NoticeCode = "message_item_identity_not_forwarded"
+	NoticeMessagePhaseNotProjected            NoticeCode = "message_phase_not_projected"
+	NoticeAgentItemIdentityNotForwarded       NoticeCode = "agent_item_identity_not_forwarded"
 	NoticeHostedToolNotForwarded              NoticeCode = "hosted_tool_not_forwarded"
 	NoticeCustomToolKindEncoded               NoticeCode = "custom_tool_kind_encoded"
 	NoticeDeveloperRoleNormalized             NoticeCode = "developer_role_normalized"

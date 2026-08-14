@@ -159,7 +159,7 @@ func (client *controlClient) requestEncoded(
 	if err != nil {
 		return 0, controlProblem{}, err
 	}
-	request.Header.Set("Origin", "tauri://localhost")
+	request.Header.Set("Origin", "vibermate://desktop")
 	request.Header.Set("Sec-Fetch-Site", "cross-site")
 	request.Header.Set("Sec-Fetch-Mode", "cors")
 	request.Header.Set("Sec-Fetch-Dest", "empty")

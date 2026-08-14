@@ -577,19 +577,49 @@ func (repository *captureRunRepository) List(
 	request capturerun.PageRequest,
 ) (capturerun.Page, error) {
 	request = request.Normalized()
+	if request.Cursor != nil && !request.Cursor.Valid() {
+		return capturerun.Page{}, capturerun.ErrInvalidRequest
+	}
 	operation, finish, err := repository.operations.begin(ctx)
 	if err != nil {
 		return capturerun.Page{}, err
 	}
 	defer finish()
-	rows, err := repository.database.QueryContext(
-		operation,
-		`SELECT `+captureRunColumns+`
-		 FROM capture_runs
-		 ORDER BY created_at_unix_ms DESC, run_id DESC
-		 LIMIT ?`,
-		request.Limit,
-	)
+	const runningRank = `CASE WHEN state IN ('created', 'attached') THEN 0 ELSE 1 END`
+	query := `SELECT ` + captureRunColumns + `
+		 FROM capture_runs`
+	arguments := make([]any, 0, 7)
+	if cursor := request.Cursor; cursor != nil {
+		cursorRank := 1
+		if cursor.Running {
+			cursorRank = 0
+		}
+		includeBoundary := 0
+		if cursor.IncludeAtUpdatedAt {
+			includeBoundary = 1
+		}
+		updatedAt := toUnixMillis(cursor.UpdatedAt)
+		query += `
+		 WHERE (` + runningRank + ` > ?)
+		    OR (` + runningRank + ` = ? AND (
+		      updated_at_unix_ms < ?
+		      OR (? = 1 AND updated_at_unix_ms = ? AND run_id > ?)
+		    ))`
+		arguments = append(
+			arguments,
+			cursorRank,
+			cursorRank,
+			updatedAt,
+			includeBoundary,
+			updatedAt,
+			cursor.AfterID,
+		)
+	}
+	query += `
+		 ORDER BY ` + runningRank + ` ASC, updated_at_unix_ms DESC, run_id ASC
+		 LIMIT ?`
+	arguments = append(arguments, request.Limit)
+	rows, err := repository.database.QueryContext(operation, query, arguments...)
 	if err != nil {
 		return capturerun.Page{}, fmt.Errorf("list CaptureRuns: %w", err)
 	}

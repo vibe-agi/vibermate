@@ -11,6 +11,8 @@ import (
 	"time"
 
 	"github.com/vibe-agi/vibermate/internal/egressaudit"
+	"github.com/vibe-agi/vibermate/internal/providerauth"
+	"github.com/vibe-agi/vibermate/internal/secretstore"
 )
 
 func TestProviderAuditRecordsResponseReadFailure(t *testing.T) {
@@ -88,6 +90,72 @@ func TestProviderResponseAuditTerminalClassifiesCancellationAndTimeout(
 	outcome, class = responseAuditTerminal(context.Background(), io.EOF)
 	if outcome != egressaudit.OutcomeCompleted || class != "" {
 		t.Fatalf("EOF terminal = (%q, %q)", outcome, class)
+	}
+	outcome, class = responseAuditTerminal(canceled, errSemanticTerminal)
+	if outcome != egressaudit.OutcomeCompleted || class != "" {
+		t.Fatalf("proven semantic terminal = (%q, %q)", outcome, class)
+	}
+	outcome, class = responseAuditTerminal(canceled, io.EOF)
+	if outcome != egressaudit.OutcomeCompleted || class != "" {
+		t.Fatalf("EOF with concurrent client cancellation = (%q, %q)", outcome, class)
+	}
+}
+
+func TestProviderBodyCanConfirmTerminalAfterCanceledRead(t *testing.T) {
+	t.Parallel()
+
+	audit := &providerTerminalAuditDouble{}
+	gate := newStartedGate(t)
+	authenticator, err := NewStaticBearerAuthenticator(
+		&secretReaderStub{value: []byte("provider-token")},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	client, err := NewClient(ClientOptions{
+		Coordinator:   gate,
+		Authenticator: authenticator,
+		Audit:         audit,
+		Transport: &roundTripperStub{response: &http.Response{
+			StatusCode: http.StatusOK,
+			Header:     make(http.Header),
+			Body:       &failingProviderBody{err: context.Canceled},
+		}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer shutdownClient(t, client)
+	request := newTestRequest(
+		t,
+		gate,
+		"semantic-terminal-after-cancel",
+		testTarget("provider.example", 443),
+		nil,
+	)
+	request.credentialMode = providerauth.CredentialClientPassthrough
+	request.authDriverRef = providerauth.DriverRef{}
+	request.secretReference = secretstore.Reference{}
+	request.accountRef = providerauth.AccountRef{}
+	response, _, err := client.Do(context.Background(), request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := response.Body.Read(make([]byte, 1)); !errors.Is(err, context.Canceled) {
+		t.Fatalf("response Read() error = %v", err)
+	}
+	if _, calls, _ := audit.snapshot(); calls != 0 {
+		t.Fatalf("canceled read terminalized before semantic confirmation; calls=%d", calls)
+	}
+	terminalBody, ok := response.Body.(interface{ ConfirmSemanticTerminal() })
+	if !ok {
+		t.Fatal("provider body lacks semantic terminal confirmation")
+	}
+	terminalBody.ConfirmSemanticTerminal()
+	terminal, calls, failures := audit.snapshot()
+	if calls != 1 || len(failures) != 0 ||
+		terminal.Outcome() != egressaudit.OutcomeCompleted || terminal.ErrorClass() != "" {
+		t.Fatalf("terminal=%+v calls=%d failures=%v", terminal, calls, failures)
 	}
 }
 

@@ -7,9 +7,11 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strconv"
+	"strings"
 	"testing"
 
 	"github.com/vibe-agi/vibermate/internal/activity"
+	"github.com/vibe-agi/vibermate/internal/agentconversation"
 	"github.com/vibe-agi/vibermate/internal/desktopcontrol"
 	"github.com/vibe-agi/vibermate/internal/environment"
 )
@@ -219,6 +221,11 @@ func TestActivityRouteFiltersAndReturnsFrozenEnvironmentReferences(t *testing.T)
 		SubjectID: "exchange-activity", Status: activity.StatusSucceeded,
 		SourceKind: activity.SourceSystemProxy, SourceDisplayName: "System proxy",
 		SourceRecognition: activity.SourceRecognitionUnknown,
+		Conversation: agentconversation.Ref{
+			ProjectionID: "exchange:exchange-activity",
+			Kind:         agentconversation.KindIsolatedExchange,
+			Evidence:     agentconversation.EvidenceUndecodedExchange,
+		},
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -241,6 +248,88 @@ func TestActivityRouteFiltersAndReturnsFrozenEnvironmentReferences(t *testing.T)
 	legacy := environmentRequest(t, application, http.MethodGet, "/api/v1/activities?accessId=legacy", 0, "", nil)
 	if legacy.Code != http.StatusUnprocessableEntity {
 		t.Fatalf("legacy Activity filter status=%d body=%s", legacy.Code, legacy.Body.Bytes())
+	}
+}
+
+func TestConversationRouteReturnsFlatProjectionAndRejectsUnknownQuery(t *testing.T) {
+	t.Parallel()
+	runtime := startRuntime(t)
+	defer shutdownRuntime(t, runtime)
+	environmentID, err := environment.NewEnvironmentID("environment-conversation")
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = runtime.Activities().Record(context.Background(), activity.Event{
+		Kind: activity.KindExchangeCompleted, EnvironmentID: environmentID,
+		EnvironmentRevision: 1, EnvironmentDigest: strings.Repeat("a", 64),
+		ClientEndpointID: "endpoint-conversation", ClientEndpointRevision: 1,
+		ProtocolPlanID: "protocol-conversation", ProtocolPlanRevision: 1,
+		RouteID: "route-conversation", RouteRevision: 1,
+		SubjectID: "exchange-conversation", Status: activity.StatusSucceeded,
+		SourceKind: activity.SourceCaptureRun, SourceDisplayName: "Codex",
+		SourceRecognition: activity.SourceRecognitionVerified,
+		CaptureRunID:      "run-conversation", ConnectionID: "connection-conversation",
+		Conversation: agentconversation.Ref{
+			ProjectionID: "capture_run:run-conversation:agent:reviewer",
+			DisplayName:  "reviewer", Kind: agentconversation.KindAgent,
+			Evidence: agentconversation.EvidenceExplicitActor, Actor: "/root/reviewer",
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	application, err := desktopcontrol.New(desktopcontrol.Options{
+		Readiness: readyState(true), Status: runtime, Environments: runtime.Environments(),
+		Assignments: runtime.CaptureAssignments(), Activities: runtime.Activities(), Contents: runtime.ExchangeContents(),
+		Connections: runtime.ConnectionEvents(), Egress: runtime.EgressAttempts(),
+		Approvals: runtime.ToolApprovals(), Endpoints: runtime.UpstreamEndpoints(), Accounts: runtime.ProviderAccounts(),
+		Offline: runtime, Clock: desktopcontrol.SystemClock{}, ManualCaptures: runtime.ManualCaptures(),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	response := environmentRequest(t, application, http.MethodGet, "/api/v1/conversations?limit=1", 0, "", nil)
+	if response.Code != http.StatusOK ||
+		!bytes.Contains(response.Body.Bytes(), []byte(`"id":"capture_run:run-conversation:agent:reviewer"`)) ||
+		!bytes.Contains(response.Body.Bytes(), []byte(`"turnCount":1`)) {
+		t.Fatalf("Conversation status=%d body=%s", response.Code, response.Body.Bytes())
+	}
+	filtered := environmentRequest(
+		t,
+		application,
+		http.MethodGet,
+		"/api/v1/conversations?limit=1&captureRunId=run-conversation",
+		0,
+		"",
+		nil,
+	)
+	if filtered.Code != http.StatusOK ||
+		!bytes.Contains(filtered.Body.Bytes(), []byte(`"turnCount":1`)) {
+		t.Fatalf(
+			"filtered Conversation status=%d body=%s",
+			filtered.Code,
+			filtered.Body.Bytes(),
+		)
+	}
+	invalid := environmentRequest(t, application, http.MethodGet, "/api/v1/conversations?kind=exchange", 0, "", nil)
+	if invalid.Code != http.StatusUnprocessableEntity {
+		t.Fatalf("invalid Conversation query status=%d body=%s", invalid.Code, invalid.Body.Bytes())
+	}
+	conflicting := environmentRequest(
+		t,
+		application,
+		http.MethodGet,
+		"/api/v1/conversations?captureRunId=run-conversation&manualCaptureId=manual-one",
+		0,
+		"",
+		nil,
+	)
+	if conflicting.Code != http.StatusUnprocessableEntity {
+		t.Fatalf(
+			"conflicting Conversation query status=%d body=%s",
+			conflicting.Code,
+			conflicting.Body.Bytes(),
+		)
 	}
 }
 

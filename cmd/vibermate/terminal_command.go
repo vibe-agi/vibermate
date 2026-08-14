@@ -45,6 +45,10 @@ func executeTerminalCommand(arguments []string, stdout io.Writer) (int, string) 
 		if _, err := command.Refresh(); err != nil {
 			return 1, keyTerminalCommandFailed
 		}
+	case "repair":
+		if _, err := command.Repair(); err != nil {
+			return 1, keyTerminalCommandFailed
+		}
 	case "remove":
 		result, err := command.Remove()
 		if err != nil || result.State == cliinstall.RemoveConflict {

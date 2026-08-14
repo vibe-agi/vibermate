@@ -1,6 +1,8 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:vibermate_app/app/vibermate_app.dart';
+import 'package:vibermate_app/core/design/viber_theme.dart';
+import 'package:vibermate_app/core/design/workbench_widgets.dart';
 import 'package:vibermate_app/core/preferences/workbench_preferences.dart';
 import 'package:vibermate_app/features/workbench/workbench_controller.dart';
 import 'package:vibermate_app/preview/preview_control_api.dart';
@@ -12,6 +14,7 @@ void main() {
     () async {
       const restored = WorkbenchPreferences(
         language: AppLanguage.simplifiedChinese,
+        theme: WorkbenchTheme.dark,
         section: WorkbenchSection.environments,
         selectedCaptureKey: 'managed_run:run-3',
         selectedEnvironmentId: 'research',
@@ -30,6 +33,7 @@ void main() {
 
       await controller.initialize();
       expect(controller.language, AppLanguage.simplifiedChinese);
+      expect(controller.theme, WorkbenchTheme.dark);
       expect(controller.section, WorkbenchSection.environments);
       expect(controller.selectedCaptureKey, 'managed_run:run-3');
       expect(controller.selectedEnvironmentId, 'research');
@@ -37,10 +41,12 @@ void main() {
 
       controller.selectSection(WorkbenchSection.network);
       controller.setLanguage(AppLanguage.english);
+      controller.setTheme(WorkbenchTheme.light);
       await controller.flushPreferences();
       final persisted = WorkbenchPreferences.decode(store.encoded!);
       expect(persisted.section, WorkbenchSection.network);
       expect(persisted.language, AppLanguage.english);
+      expect(persisted.theme, WorkbenchTheme.light);
       expect(persisted.selectedCaptureKey, 'managed_run:run-3');
     },
   );
@@ -107,7 +113,7 @@ void main() {
 
   test('future preference schema remains read-only and visible', () async {
     final store = MemoryWorkbenchPreferencesStore(
-      encoded: const WorkbenchPreferences().encode().replaceFirst('/v1', '/v2'),
+      encoded: const WorkbenchPreferences().encode().replaceFirst('/v2', '/v3'),
     );
     final loaded = await loadWorkbenchPreferences(
       store,
@@ -127,7 +133,7 @@ void main() {
 
     controller.setLanguage(AppLanguage.simplifiedChinese);
     await controller.flushPreferences();
-    expect(store.encoded, contains('/v2'));
+    expect(store.encoded, contains('/v3'));
     expect(
       controller.preferenceWarning,
       WorkbenchPreferencesIssue.futureSchema.copyKey,
@@ -140,6 +146,7 @@ void main() {
       final store = MemoryWorkbenchPreferencesStore(
         encoded: const WorkbenchPreferences(
           language: AppLanguage.simplifiedChinese,
+          theme: WorkbenchTheme.dark,
           section: WorkbenchSection.settings,
         ).encode(),
       );
@@ -154,8 +161,117 @@ void main() {
 
       expect(find.text('本地运行时、终端入口与操作偏好'), findsOneWidget);
       expect(find.byKey(const Key('offline-settings-panel')), findsOneWidget);
+      expect(find.text('自动'), findsOneWidget);
+      final app = tester.widget<MaterialApp>(find.byType(MaterialApp));
+      expect(app.themeMode, ThemeMode.dark);
+      expect(app.darkTheme!.brightness, Brightness.dark);
+      final scaffoldBrightness = find
+          .byType(Scaffold)
+          .evaluate()
+          .map((element) => Theme.of(element).brightness)
+          .toList();
+      expect(scaffoldBrightness, [Brightness.dark]);
+
+      await tester.tap(find.text('亮色'));
+      await tester.pumpAndSettle();
+      final lightContext = tester.element(find.byType(Scaffold).first);
+      expect(Theme.of(lightContext).brightness, Brightness.light);
+      expect(
+        WorkbenchPreferences.decode(store.encoded!).theme,
+        WorkbenchTheme.light,
+      );
+
+      tester.binding.platformDispatcher.platformBrightnessTestValue =
+          Brightness.dark;
+      addTearDown(
+        tester.binding.platformDispatcher.clearPlatformBrightnessTestValue,
+      );
+      await tester.tap(find.text('自动'));
+      await tester.pumpAndSettle();
+      final systemContext = tester.element(find.byType(Scaffold).first);
+      expect(Theme.of(systemContext).brightness, Brightness.dark);
+      expect(
+        tester.widget<MaterialApp>(find.byType(MaterialApp)).themeMode,
+        ThemeMode.system,
+      );
+      expect(
+        WorkbenchPreferences.decode(store.encoded!).theme,
+        WorkbenchTheme.system,
+      );
+
+      await tester.pumpWidget(const SizedBox.shrink());
+      await tester.pump(const Duration(seconds: 1));
     },
   );
+
+  testWidgets('app defaults to system theme and follows platform brightness', (
+    tester,
+  ) async {
+    tester.binding.platformDispatcher.platformBrightnessTestValue =
+        Brightness.dark;
+    addTearDown(
+      tester.binding.platformDispatcher.clearPlatformBrightnessTestValue,
+    );
+    await tester.pumpWidget(
+      ViberMateApp(
+        previewMode: true,
+        preferChinese: false,
+        preferencesStore: MemoryWorkbenchPreferencesStore(),
+      ),
+    );
+    await _pumpUntil(tester, find.text('RUNNING NOW'));
+
+    final app = tester.widget<MaterialApp>(find.byType(MaterialApp));
+    expect(app.themeMode, ThemeMode.system);
+    final context = tester.element(find.byType(Scaffold).first);
+    expect(Theme.of(context).brightness, Brightness.dark);
+
+    await tester.pumpWidget(const SizedBox.shrink());
+    await tester.pump(const Duration(seconds: 1));
+  });
+
+  testWidgets('light endpoint editor and protocol menu use light surfaces', (
+    tester,
+  ) async {
+    await tester.binding.setSurfaceSize(const Size(1000, 760));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+    final store = MemoryWorkbenchPreferencesStore(
+      encoded: const WorkbenchPreferences(
+        section: WorkbenchSection.routes,
+      ).encode(),
+    );
+    await tester.pumpWidget(
+      ViberMateApp(
+        previewMode: true,
+        preferChinese: false,
+        preferencesStore: store,
+      ),
+    );
+    await _pumpUntil(tester, find.byKey(const Key('endpoints-add')));
+
+    await tester.tap(find.byKey(const Key('endpoints-add')));
+    await tester.pumpAndSettle();
+    final dialogContext = tester.element(find.byType(AlertDialog));
+    expect(Theme.of(dialogContext).brightness, Brightness.light);
+    expect(
+      Theme.of(dialogContext).dialogTheme.backgroundColor,
+      ViberColors.light.panel,
+    );
+
+    await tester.tap(find.byType(CompactSelectField<String>));
+    await tester.pumpAndSettle();
+    final menuContext = tester.element(find.text('OpenAI compatible'));
+    expect(Theme.of(menuContext).canvasColor, ViberColors.light.panel);
+    expect(
+      Theme.of(
+        menuContext,
+      ).dropdownMenuTheme.menuStyle?.backgroundColor?.resolve({}),
+      ViberColors.light.panel,
+    );
+
+    await tester.pumpWidget(const SizedBox.shrink());
+    await tester.pump(const Duration(seconds: 1));
+  });
 
   testWidgets('390px Chinese frozen Environment remains read-only and usable', (
     tester,
@@ -194,7 +310,7 @@ void main() {
     expect(tester.takeException(), isNull);
 
     await tester.pumpWidget(const SizedBox.shrink());
-    await tester.pump();
+    await tester.pump(const Duration(seconds: 1));
   });
 }
 

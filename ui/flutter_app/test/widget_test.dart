@@ -17,7 +17,11 @@ void main() {
 
     await tester.tap(find.text('Claude Code').first);
     await tester.pumpAndSettle();
-    expect(find.text('Conversation'), findsOneWidget);
+    expect(find.text('Capture conversation'), findsOneWidget);
+    expect(
+      find.byKey(const Key('capture-conversation-selector')),
+      findsOneWidget,
+    );
 
     await tester.tap(find.byIcon(Icons.tune).first);
     await tester.pumpAndSettle();

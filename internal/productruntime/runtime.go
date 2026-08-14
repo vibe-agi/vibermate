@@ -26,6 +26,7 @@ import (
 	"github.com/vibe-agi/vibermate/internal/originaltransport"
 	"github.com/vibe-agi/vibermate/internal/provideraccount"
 	"github.com/vibe-agi/vibermate/internal/providertransport"
+	"github.com/vibe-agi/vibermate/internal/rawevidence"
 	"github.com/vibe-agi/vibermate/internal/runtimepersistence"
 	"github.com/vibe-agi/vibermate/internal/toolapproval"
 	"github.com/vibe-agi/vibermate/internal/toolpolicy"
@@ -38,34 +39,37 @@ var ErrInvalidBuildResult = errors.New("invalid runtime build result")
 
 // Runtime owns every successfully constructed production component.
 type Runtime struct {
-	status            *statusTracker
-	schemaReader      runtimepersistence.SchemaStateReader
-	environments      environmentRuntime
-	assignments       captureAssignmentRuntime
-	workspaceIdentity *workspaceidentity.Manager
-	workspaceDefaults *workspacedefault.Manager
-	activities        activityRuntime
-	contents          exchangeContentRuntime
-	connections       connectionEventRuntime
-	egress            egressaudit.Reader
-	egressCompletion  *runtimeEgressRepository
-	endpoints         *upstreamendpoint.Manager
-	accounts          *provideraccount.Manager
-	approvals         approvalRuntime
-	connectionRules   *connectionpolicy.Manager
-	monitor           ownedComponent
-	provider          providerRuntime
-	original          originalRuntime
-	exchanges         exchangeRuntime
-	captureRuns       captureRuntime
-	manualCaptures    manualCaptureRuntime
-	localCA           localCARuntime
-	proxy             proxyRuntime
-	offlineHold       offlinehold.RuntimeCoordinator
-	resumeProber      offlinehold.Prober
-	cleanups          cleanupStack
-	clock             Clock
-	timeout           LifecycleOptions
+	status             *statusTracker
+	schemaReader       runtimepersistence.SchemaStateReader
+	environments       environmentRuntime
+	assignments        captureAssignmentRuntime
+	workspaceIdentity  *workspaceidentity.Manager
+	workspaceDefaults  *workspacedefault.Manager
+	activities         activityRuntime
+	conversationIDs    activity.ConversationIdentityRepository
+	conversationWriter activity.ConversationProjectionWriter
+	contents           exchangeContentRuntime
+	connections        connectionEventRuntime
+	egress             egressaudit.Reader
+	egressCompletion   *runtimeEgressRepository
+	endpoints          *upstreamendpoint.Manager
+	accounts           *provideraccount.Manager
+	approvals          approvalRuntime
+	connectionRules    *connectionpolicy.Manager
+	monitor            ownedComponent
+	rawEvidence        rawEvidenceRuntime
+	provider           providerRuntime
+	original           originalRuntime
+	exchanges          exchangeRuntime
+	captureRuns        captureRuntime
+	manualCaptures     manualCaptureRuntime
+	localCA            localCARuntime
+	proxy              proxyRuntime
+	offlineHold        offlinehold.RuntimeCoordinator
+	resumeProber       offlinehold.Prober
+	cleanups           cleanupStack
+	clock              Clock
+	timeout            LifecycleOptions
 
 	shutdownOnce sync.Once
 	shutdownDone chan struct{}
@@ -98,6 +102,7 @@ func startWithBuilders(
 		builders.connection == nil ||
 		builders.approval == nil ||
 		builders.monitor == nil ||
+		builders.rawEvidence == nil ||
 		builders.provider == nil ||
 		builders.original == nil ||
 		builders.exchange == nil ||
@@ -184,6 +189,25 @@ func startWithBuilders(
 		cancelOwner(errors.New("runtime owner context stopped"))
 		return nil
 	})
+	rawEvidence, err := builders.rawEvidence.Build(rawEvidenceBuildRequest{
+		ctx:        ownerContext,
+		repository: storageResult.store.RawEvidenceRepository(),
+		secrets:    options.Secrets,
+		random:     securityRandom,
+		clock:      options.Clock,
+		config:     rawevidence.DefaultConfig(),
+	})
+	if err != nil || rawEvidence == nil {
+		buildErr := err
+		if buildErr == nil {
+			buildErr = fmt.Errorf(
+				"%w: Raw evidence writer is nil",
+				ErrInvalidBuildResult,
+			)
+		}
+		return fail("Raw evidence writer", buildErr)
+	}
+	cleanups.register("Raw evidence writer", rawEvidence.Shutdown)
 	runtimeEgress := newRuntimeEgressRepository(
 		egressRepository,
 		tracker,
@@ -447,6 +471,7 @@ func startWithBuilders(
 		coordinator: options.OfflineHold,
 		secrets:     options.Secrets,
 		audit:       runtimeEgress,
+		rawEvidence: rawEvidence,
 	})
 	if err != nil {
 		return fail("provider transport", err)
@@ -484,6 +509,7 @@ func startWithBuilders(
 		provider:      provider,
 		toolDecisions: toolDecisions,
 		activities:    activities,
+		identities:    storageResult.store.ConversationIdentityRepository(),
 		contents:      contents,
 		clock:         options.Clock,
 		hold:          options.ExchangeHold,
@@ -504,6 +530,9 @@ func startWithBuilders(
 		repository: captureRunRepository,
 		clock:      options.Clock,
 		random:     securityRandom,
+		barrier: captureEvidenceBarrier{
+			raw: rawEvidence, reporter: runtimeEgress,
+		},
 	})
 	if err != nil {
 		return fail("CaptureRun recovery", err)
@@ -519,6 +548,9 @@ func startWithBuilders(
 		repository: manualCaptureRepository,
 		clock:      options.Clock,
 		random:     securityRandom,
+		barrier: captureEvidenceBarrier{
+			raw: rawEvidence, reporter: runtimeEgress,
+		},
 	})
 	if err != nil {
 		return fail("ManualCapture recovery", err)
@@ -558,6 +590,7 @@ func startWithBuilders(
 		approvals:    approvals,
 		blindTunnels: blindTunnels,
 		egressAudit:  runtimeEgress,
+		rawEvidence:  rawEvidence,
 		random:       securityRandom,
 	})
 	if err != nil {
@@ -621,35 +654,38 @@ func startWithBuilders(
 	}
 	tracker.commitInitialized(finalState.Revision)
 	return &Runtime{
-		status:            tracker,
-		schemaReader:      storageResult.store.SchemaStateReader(),
-		environments:      environments,
-		assignments:       assignments,
-		workspaceIdentity: workspaceIdentity,
-		workspaceDefaults: workspaceDefaults,
-		activities:        activities,
-		contents:          contents,
-		connections:       connections,
-		egress:            runtimeEgress,
-		egressCompletion:  runtimeEgress,
-		endpoints:         endpoints,
-		accounts:          accounts,
-		approvals:         approvals,
-		connectionRules:   connectionRules,
-		monitor:           monitor,
-		provider:          provider,
-		original:          original,
-		exchanges:         exchanges,
-		captureRuns:       captureRuns,
-		manualCaptures:    manualCaptures,
-		localCA:           certificateAuthority,
-		proxy:             proxy,
-		offlineHold:       options.OfflineHold,
-		resumeProber:      resumeProber,
-		cleanups:          cleanups,
-		clock:             options.Clock,
-		timeout:           options.Lifecycle,
-		shutdownDone:      make(chan struct{}),
+		status:             tracker,
+		schemaReader:       storageResult.store.SchemaStateReader(),
+		environments:       environments,
+		assignments:        assignments,
+		workspaceIdentity:  workspaceIdentity,
+		workspaceDefaults:  workspaceDefaults,
+		activities:         activities,
+		conversationIDs:    storageResult.store.ConversationIdentityRepository(),
+		conversationWriter: storageResult.store.ConversationProjectionWriter(),
+		contents:           contents,
+		connections:        connections,
+		egress:             runtimeEgress,
+		egressCompletion:   runtimeEgress,
+		endpoints:          endpoints,
+		accounts:           accounts,
+		approvals:          approvals,
+		connectionRules:    connectionRules,
+		monitor:            monitor,
+		rawEvidence:        rawEvidence,
+		provider:           provider,
+		original:           original,
+		exchanges:          exchanges,
+		captureRuns:        captureRuns,
+		manualCaptures:     manualCaptures,
+		localCA:            certificateAuthority,
+		proxy:              proxy,
+		offlineHold:        options.OfflineHold,
+		resumeProber:       resumeProber,
+		cleanups:           cleanups,
+		clock:              options.Clock,
+		timeout:            options.Lifecycle,
+		shutdownDone:       make(chan struct{}),
 	}, nil
 }
 
@@ -708,10 +744,37 @@ func (r *Runtime) Activities() activity.Runtime {
 	return r.activities
 }
 
+// ConversationIdentities retains exact, client-owned session and actor IDs
+// independently from retention-bound semantic content.
+func (r *Runtime) ConversationIdentities() activity.ConversationIdentityRepository {
+	return r.conversationIDs
+}
+
+// ConversationProjectionWriter updates only the rebuildable terminal index.
+func (r *Runtime) ConversationProjectionWriter() activity.ConversationProjectionWriter {
+	return r.conversationWriter
+}
+
 // ExchangeContents returns the separate, retention-bound semantic evidence
 // reader. Body-free Activity and egress journals never expose this content.
 func (r *Runtime) ExchangeContents() exchangecontent.Reader {
 	return r.contents
+}
+
+// RawEvidence returns the encrypted HTTP evidence read boundary. Ordinary
+// reads expose metadata only; payload reveal remains an explicit audited act.
+func (r *Runtime) RawEvidence() rawevidence.Reader {
+	return r.rawEvidence
+}
+
+// RawEvidenceStatistics exposes writer health without exposing encrypted
+// payload material. It is useful for diagnostics and for proving that an
+// apparently empty read is not an unflushed or degraded writer.
+func (r *Runtime) RawEvidenceStatistics() rawevidence.Statistics {
+	if r == nil || r.rawEvidence == nil {
+		return rawevidence.Statistics{}
+	}
+	return r.rawEvidence.Statistics()
 }
 
 // ConnectionEvents returns the durable body-free connection audit boundary.

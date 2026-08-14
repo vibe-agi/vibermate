@@ -20,13 +20,8 @@ import (
 )
 
 var (
-	ErrCheckFailed           = errors.New("repository check failed")
-	placeholderRE            = regexp.MustCompile(`\{\{\s*([A-Za-z_][A-Za-z0-9_]*)\s*\}\}`)
-	jsxTextRE                = regexp.MustCompile(`>\s*([\pL][^<>{}]*)\s*</`)
-	jsxExpressionLiteralRE   = regexp.MustCompile(">\\s*\\{\\s*[\"'`]([^\"'`]+)[\"'`]\\s*\\}\\s*</")
-	jsxStaticUserAttributeRE = regexp.MustCompile(
-		`\b(?:alt|aria-label|placeholder|title)\s*=\s*["']([^"']+)["']`,
-	)
+	ErrCheckFailed            = errors.New("repository check failed")
+	placeholderRE             = regexp.MustCompile(`\{\{\s*([A-Za-z_][A-Za-z0-9_]*)\s*\}\}`)
 	retiredProductAuthorityRE = regexp.MustCompile(
 		`\b(?:AccessID|ProfileID|AccessPlan|AccessBinding|EndpointProfile|` +
 			`AccessWriter|AccessCatalog|AccessDeletion)\b|` +
@@ -108,7 +103,7 @@ func CheckRetiredProductAuthority(repositoryRoot string) []Violation {
 		"locales/en-US.json":       {},
 		"locales/zh-CN.json":       {},
 	}
-	productionRoots := []string{"cmd", "internal", "ui/desktop/src"}
+	productionRoots := []string{"cmd", "internal", "ui/flutter_app/lib"}
 	var violations []Violation
 	scan := func(path, relative string) error {
 		if relative == "internal/repositorycheck/check.go" ||
@@ -171,7 +166,7 @@ func CheckRetiredProductAuthority(repositoryRoot string) []Violation {
 				}
 			}
 			extension := filepath.Ext(path)
-			if extension != ".go" && extension != ".ts" && extension != ".tsx" &&
+			if extension != ".dart" && extension != ".go" &&
 				extension != ".json" && extension != ".sql" {
 				return nil
 			}
@@ -623,9 +618,7 @@ func isSystemTrustUserSurface(relative string) bool {
 	for _, prefix := range []string{
 		"api/",
 		"openapi/",
-		"ui/desktop/src/",
-		"ui/desktop/src-tauri/src/",
-		"ui/desktop/src-tauri/capabilities/",
+		"ui/flutter_app/lib/",
 	} {
 		if strings.HasPrefix(relative, prefix) {
 			return true
@@ -636,27 +629,61 @@ func isSystemTrustUserSurface(relative string) bool {
 
 func isSystemTrustSurfaceSource(path string) bool {
 	switch strings.ToLower(filepath.Ext(path)) {
-	case ".js", ".json", ".mjs", ".rs", ".ts", ".tsx", ".yaml", ".yml":
+	case ".dart", ".js", ".json", ".mjs", ".rs", ".ts", ".tsx", ".yaml", ".yml":
 		return true
 	default:
 		return false
 	}
 }
 
-// CheckDesktopFrontendBoundary protects the production Desktop UI shape that
-// now exists: only the native Host adapter may import Tauri, Web Storage cannot
-// hold capabilities, and visible TSX copy must come from the locale catalogs.
+// CheckDesktopFrontendBoundary protects the production Flutter Desktop shape.
+// Direct IO, control-network, and process access stay in the small bootstrap
+// and API adapters; the UI cannot introduce FFI or authority-bearing local
+// stores; and the non-secret preference adapter cannot gain capabilities.
 func CheckDesktopFrontendBoundary(repositoryRoot string) []Violation {
-	sourceRoot := filepath.Join(repositoryRoot, "ui", "desktop", "src")
+	sourceRoot := filepath.Join(repositoryRoot, "ui", "flutter_app", "lib")
 	if _, err := os.Stat(sourceRoot); errors.Is(err, os.ErrNotExist) {
 		return nil
 	}
-	allowedTauriImport := filepath.Join(
-		"ui",
-		"desktop",
-		"src",
-		"desktop-host.ts",
-	)
+	allowedIO := map[string]struct{}{
+		"ui/flutter_app/lib/main.dart":                            {},
+		"ui/flutter_app/lib/core/api/control_api.dart":            {},
+		"ui/flutter_app/lib/core/bootstrap/desktop_runtime.dart":  {},
+		"ui/flutter_app/lib/core/bootstrap/terminal_command.dart": {},
+	}
+	allowedNetwork := map[string]struct{}{
+		"ui/flutter_app/lib/core/api/control_api.dart":           {},
+		"ui/flutter_app/lib/core/bootstrap/desktop_runtime.dart": {},
+	}
+	allowedProcess := map[string]struct{}{
+		"ui/flutter_app/lib/core/bootstrap/desktop_runtime.dart":  {},
+		"ui/flutter_app/lib/core/bootstrap/terminal_command.dart": {},
+	}
+	authorityStores := []string{
+		"package:flutter_secure_storage/",
+		"package:hive/",
+		"package:isar/",
+		"package:shared_preferences/",
+		"package:sqflite/",
+	}
+	networkCalls := []string{
+		"HttpClient(",
+		"RawSocket",
+		"SecureSocket",
+		"Socket.connect",
+	}
+	processCalls := []string{
+		"Process.run(",
+		"Process.runSync(",
+		"Process.start(",
+	}
+	capabilityNames := []string{
+		"bootstrapNonce",
+		"proxyPassword",
+		"readToken",
+		"stateTag",
+		"writeToken",
+	}
 	var violations []Violation
 	walkErr := filepath.WalkDir(sourceRoot, func(
 		path string,
@@ -667,16 +694,12 @@ func CheckDesktopFrontendBoundary(repositoryRoot string) []Violation {
 			return err
 		}
 		if entry.IsDir() {
-			if entry.Name() == "generated" {
-				return filepath.SkipDir
-			}
 			return nil
 		}
-		extension := filepath.Ext(path)
-		if extension != ".ts" && extension != ".tsx" {
+		if filepath.Ext(path) != ".dart" {
 			return nil
 		}
-		relative := relativeDisplayPath(repositoryRoot, path)
+		relative := filepath.ToSlash(relativeDisplayPath(repositoryRoot, path))
 		file, openErr := os.Open(path)
 		if openErr != nil {
 			return openErr
@@ -687,67 +710,88 @@ func CheckDesktopFrontendBoundary(repositoryRoot string) []Violation {
 		for scanner.Scan() {
 			lineNumber++
 			line := scanner.Text()
-			if strings.Contains(line, "@tauri-apps/") &&
-				filepath.Clean(relative) != allowedTauriImport {
+			if strings.Contains(line, "import 'dart:io'") {
+				if _, allowed := allowedIO[relative]; !allowed {
+					violations = append(violations, Violation{
+						Rule:    "desktop-io-boundary",
+						Path:    relative,
+						Line:    lineNumber,
+						Message: "direct dart:io access must stay in a bounded Desktop adapter",
+					})
+				}
+			}
+			if strings.Contains(line, "import 'dart:ffi'") {
 				violations = append(violations, Violation{
-					Rule:    "desktop-host-boundary",
+					Rule:    "desktop-ffi-boundary",
 					Path:    relative,
 					Line:    lineNumber,
-					Message: "only the Desktop Host adapter may import Tauri",
+					Message: "Flutter production UI cannot acquire direct FFI authority",
 				})
 			}
-			if strings.Contains(line, "localStorage") ||
-				strings.Contains(line, "sessionStorage") {
+			for _, packagePrefix := range authorityStores {
+				if !strings.Contains(line, packagePrefix) {
+					continue
+				}
 				violations = append(violations, Violation{
-					Rule:    "desktop-capability-storage",
+					Rule:    "desktop-authority-storage",
 					Path:    relative,
 					Line:    lineNumber,
-					Message: "Desktop capabilities cannot use Web Storage",
+					Message: "Flutter UI cannot introduce an authority-bearing local store",
 				})
 			}
-			if extension == ".tsx" && hasJSXUserCopy(line) {
-				violations = append(violations, Violation{
-					Rule:    "frontend-i18n",
-					Path:    relative,
-					Line:    lineNumber,
-					Message: "visible TSX copy must use a stable locale key",
-				})
+			if _, allowed := allowedNetwork[relative]; !allowed {
+				for _, call := range networkCalls {
+					if !strings.Contains(line, call) {
+						continue
+					}
+					violations = append(violations, Violation{
+						Rule:    "desktop-control-network-boundary",
+						Path:    relative,
+						Line:    lineNumber,
+						Message: "direct network access must stay in the control or bootstrap adapter",
+					})
+					break
+				}
+			}
+			if _, allowed := allowedProcess[relative]; !allowed {
+				for _, call := range processCalls {
+					if !strings.Contains(line, call) {
+						continue
+					}
+					violations = append(violations, Violation{
+						Rule:    "desktop-process-boundary",
+						Path:    relative,
+						Line:    lineNumber,
+						Message: "process execution must stay in a bounded Desktop adapter",
+					})
+					break
+				}
+			}
+			if strings.HasPrefix(relative, "ui/flutter_app/lib/core/preferences/") {
+				for _, capabilityName := range capabilityNames {
+					if !strings.Contains(line, capabilityName) {
+						continue
+					}
+					violations = append(violations, Violation{
+						Rule:    "desktop-capability-storage",
+						Path:    relative,
+						Line:    lineNumber,
+						Message: "Desktop preferences must remain non-secret and non-authoritative",
+					})
+					break
+				}
 			}
 		}
 		return scanner.Err()
 	})
 	if walkErr != nil {
 		violations = append(violations, Violation{
-			Rule:    "desktop-host-boundary",
-			Path:    filepath.Join("ui", "desktop", "src"),
+			Rule:    "desktop-io-boundary",
+			Path:    filepath.Join("ui", "flutter_app", "lib"),
 			Message: walkErr.Error(),
 		})
 	}
 	return violations
-}
-
-func hasJSXUserCopy(line string) bool {
-	for _, expression := range []*regexp.Regexp{
-		jsxTextRE,
-		jsxExpressionLiteralRE,
-		jsxStaticUserAttributeRE,
-	} {
-		for _, match := range expression.FindAllStringSubmatch(line, -1) {
-			if len(match) > 1 && containsLetter(match[1]) {
-				return true
-			}
-		}
-	}
-	return false
-}
-
-func containsLetter(value string) bool {
-	for _, character := range value {
-		if unicode.IsLetter(character) {
-			return true
-		}
-	}
-	return false
 }
 
 // CheckDataPlaneEnvironmentBoundary keeps the Exchange hot path on immutable

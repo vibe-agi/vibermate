@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/vibe-agi/vibermate/internal/activity"
+	"github.com/vibe-agi/vibermate/internal/agentconversation"
 	"github.com/vibe-agi/vibermate/internal/anthropicchat"
 	"github.com/vibe-agi/vibermate/internal/captureadmission"
 	"github.com/vibe-agi/vibermate/internal/captureassignment"
@@ -23,11 +24,14 @@ import (
 	"github.com/vibe-agi/vibermate/internal/loopbackproxy"
 	"github.com/vibe-agi/vibermate/internal/manualcapture"
 	"github.com/vibe-agi/vibermate/internal/offlinehold"
+	"github.com/vibe-agi/vibermate/internal/openairesponses"
 	"github.com/vibe-agi/vibermate/internal/operationcatalog"
 	"github.com/vibe-agi/vibermate/internal/originaltransport"
+	"github.com/vibe-agi/vibermate/internal/protocolcore"
 	"github.com/vibe-agi/vibermate/internal/protocolpath"
 	"github.com/vibe-agi/vibermate/internal/protocolspec"
 	"github.com/vibe-agi/vibermate/internal/providertransport"
+	"github.com/vibe-agi/vibermate/internal/rawevidence"
 	"github.com/vibe-agi/vibermate/internal/responseschat"
 	"github.com/vibe-agi/vibermate/internal/runtimepersistence"
 	"github.com/vibe-agi/vibermate/internal/secretstore"
@@ -166,7 +170,7 @@ func productionEnvironmentCompiler(
 		return environment.Compiler{}, err
 	}
 	responsesPassthroughCodecPairID, err := protocolspec.NewCodecPairID(
-		"openai-responses-original-passthrough",
+		responseschat.ResponsesPassthroughCodecPairID,
 	)
 	if err != nil {
 		return environment.Compiler{}, err
@@ -218,7 +222,7 @@ func productionEnvironmentCompiler(
 			},
 			{
 				ID:              responsesPassthroughCodecPairID,
-				Revision:        1,
+				Revision:        responseschat.ResponsesPassthroughCodecRevision,
 				ClientDialect:   protocolspec.DialectOpenAIResponses,
 				ProviderDialect: protocolspec.DialectOpenAIResponses,
 				ClientOperationIDs: operations.SemanticOperationIDs(
@@ -391,6 +395,7 @@ type providerBuildRequest struct {
 	coordinator offlinehold.Coordinator
 	secrets     secretstore.Reader
 	audit       egressaudit.Writer
+	rawEvidence rawevidence.Observer
 }
 
 type providerRuntime interface {
@@ -427,7 +432,85 @@ func (productionProviderBuilder) Build(
 		},
 		providertransport.DefaultTransportTimeouts(),
 		request.audit,
+		request.rawEvidence,
 	)
+}
+
+type rawEvidenceBuildRequest struct {
+	ctx        context.Context
+	repository rawevidence.Repository
+	secrets    secretstore.Store
+	random     io.Reader
+	clock      rawevidence.Clock
+	config     rawevidence.Config
+}
+
+type rawEvidenceRuntime interface {
+	rawevidence.RequestRecorder
+	rawevidence.Reader
+	Flush(context.Context, rawevidence.Watermark) error
+	FlushScope(context.Context, rawevidence.ScopeKind, string) error
+	Statistics() rawevidence.Statistics
+	Shutdown(context.Context) error
+}
+
+type captureEvidenceBarrier struct {
+	raw      rawEvidenceRuntime
+	reporter interface{ ReportRawEvidenceFailure(error) }
+}
+
+func (barrier captureEvidenceBarrier) PrepareManagedRun(
+	ctx context.Context,
+	id string,
+) (capturerun.TerminalEvidence, error) {
+	terminal, err := barrier.raw.PrepareTerminalScope(
+		ctx, rawevidence.ScopeManagedRun, id,
+	)
+	if err != nil {
+		if barrier.reporter != nil {
+			barrier.reporter.ReportRawEvidenceFailure(fmt.Errorf(
+				"flush managed run %q Raw evidence: %w", id, err,
+			))
+		}
+		return nil, nil
+	}
+	return terminal, nil
+}
+
+func (barrier captureEvidenceBarrier) PrepareManualCapture(
+	ctx context.Context,
+	id string,
+) (manualcapture.TerminalEvidence, error) {
+	terminal, err := barrier.raw.PrepareTerminalScope(
+		ctx, rawevidence.ScopeManualCapture, id,
+	)
+	if err != nil {
+		if barrier.reporter != nil {
+			barrier.reporter.ReportRawEvidenceFailure(fmt.Errorf(
+				"flush manual capture %q Raw evidence: %w", id, err,
+			))
+		}
+		return nil, nil
+	}
+	return terminal, nil
+}
+
+type rawEvidenceBuilder interface {
+	Build(rawEvidenceBuildRequest) (rawEvidenceRuntime, error)
+}
+
+type productionRawEvidenceBuilder struct{}
+
+func (productionRawEvidenceBuilder) Build(
+	request rawEvidenceBuildRequest,
+) (rawEvidenceRuntime, error) {
+	return rawevidence.Open(request.ctx, rawevidence.Options{
+		Repository: request.repository,
+		Secrets:    request.secrets,
+		Random:     request.random,
+		Clock:      request.clock,
+		Config:     request.config,
+	})
 }
 
 type exchangeBuildRequest struct {
@@ -437,6 +520,7 @@ type exchangeBuildRequest struct {
 	provider      exchange.Provider
 	toolDecisions exchange.ToolDecisionGate
 	activities    activity.Recorder
+	identities    activity.ConversationIdentityRepository
 	contents      exchangecontent.Recorder
 	clock         Clock
 	hold          exchange.HoldPolicy
@@ -456,7 +540,8 @@ type exchangeBuilder interface {
 type productionExchangeBuilder struct{}
 
 type activityAttemptObserver struct {
-	recorder activity.Recorder
+	recorder   activity.Recorder
+	identities activity.ConversationIdentityRepository
 }
 
 type exchangeContentObserver struct {
@@ -513,7 +598,7 @@ func (observer activityAttemptObserver) ObserveStart(
 	if err != nil {
 		return err
 	}
-	_, err = observer.recorder.Record(ctx, activity.Event{
+	record, err := observer.recorder.Record(ctx, activity.Event{
 		Kind:                   activity.KindExchangeStarted,
 		EnvironmentID:          observation.EnvironmentID,
 		EnvironmentRevision:    observation.EnvironmentRevision,
@@ -532,8 +617,18 @@ func (observer activityAttemptObserver) ObserveStart(
 		CaptureRunID:           source.captureRunID,
 		ManualCaptureID:        source.manualCaptureID,
 		ConnectionID:           observation.ConnectionID,
+		Conversation:           observation.Conversation,
 	})
-	return err
+	if err != nil {
+		return err
+	}
+	return observer.persistProtocolIdentity(
+		ctx,
+		observation.ExchangeID,
+		observation.ClientProtocolEvidence,
+		"",
+		record.OccurredAt,
+	)
 }
 
 func (observer activityAttemptObserver) ObserveTerminal(
@@ -564,7 +659,7 @@ func (observer activityAttemptObserver) ObserveTerminal(
 	// own typed fields: a reason with facts glued onto its end cannot be
 	// mapped to copy, matched by a rule, or told apart from a reason that
 	// happens to contain the same words.
-	_, err = observer.recorder.Record(ctx, activity.Event{
+	record, err := observer.recorder.Record(ctx, activity.Event{
 		Kind:                   activity.KindExchangeCompleted,
 		EnvironmentID:          observation.EnvironmentID,
 		EnvironmentRevision:    observation.EnvironmentRevision,
@@ -587,6 +682,7 @@ func (observer activityAttemptObserver) ObserveTerminal(
 		CaptureRunID:           source.captureRunID,
 		ManualCaptureID:        source.manualCaptureID,
 		ConnectionID:           observation.ConnectionID,
+		Conversation:           observation.Conversation,
 		Diagnosis: activity.Diagnosis{
 			ProviderStatus: observation.ProviderStatus,
 			ProviderField:  string(observation.ProviderField),
@@ -598,7 +694,40 @@ func (observer activityAttemptObserver) ObserveTerminal(
 			observation.Transport,
 		),
 	})
-	return err
+	if err != nil {
+		return err
+	}
+	return observer.persistProtocolIdentity(
+		ctx,
+		observation.ExchangeID,
+		observation.ClientProtocolEvidence,
+		observation.ProviderResponseID,
+		record.OccurredAt,
+	)
+}
+
+func (observer activityAttemptObserver) persistProtocolIdentity(
+	ctx context.Context,
+	exchangeID string,
+	evidence []protocolcore.ProtocolEvidenceValue,
+	providerResponseID string,
+	observedAt time.Time,
+) error {
+	if len(evidence) == 0 {
+		return nil
+	}
+	if observer.identities == nil {
+		return errors.New("Exchange Agent identity repository is nil")
+	}
+	identity, found := agentconversation.ClientIdentityFromProtocolEvidence(
+		evidence,
+		providerResponseID,
+		observedAt,
+	)
+	if !found {
+		return nil
+	}
+	return observer.identities.PutConversationIdentity(ctx, exchangeID, identity)
 }
 
 type exchangeActivitySourceEvidence struct {
@@ -710,7 +839,8 @@ func activityTransportEvidence(
 func (productionExchangeBuilder) Build(
 	request exchangeBuildRequest,
 ) (exchangeRuntime, error) {
-	if request.activities == nil || request.contents == nil || request.clock == nil {
+	if request.activities == nil || request.identities == nil ||
+		request.contents == nil || request.clock == nil {
 		return nil, errors.New("Exchange evidence dependencies are incomplete")
 	}
 	anthropicPath, err := anthropicchat.NewProtocolPath(
@@ -731,10 +861,17 @@ func (productionExchangeBuilder) Build(
 	if err != nil {
 		return nil, fmt.Errorf("build Anthropic Messages protocol path: %w", err)
 	}
+	responsesPassthroughPath, err := responseschat.NewResponsesPassthroughProtocolPath(
+		openairesponses.DefaultOptions(),
+	)
+	if err != nil {
+		return nil, fmt.Errorf("build Responses passthrough protocol path: %w", err)
+	}
 	protocolPaths, err := protocolpath.NewSelector(
 		anthropicPath,
 		responsesPath,
 		messagesPath,
+		responsesPassthroughPath,
 	)
 	if err != nil {
 		return nil, fmt.Errorf("build protocol path selector: %w", err)
@@ -748,7 +885,7 @@ func (productionExchangeBuilder) Build(
 		ToolDecisions: request.toolDecisions,
 		RetryWaiter:   exchange.TimerRetryWaiter{},
 		Observer: activityAttemptObserver{
-			recorder: request.activities,
+			recorder: request.activities, identities: request.identities,
 		},
 		ContentObserver: exchangeContentObserver{
 			recorder: request.contents,
@@ -786,6 +923,7 @@ type captureBuildRequest struct {
 	repository capturerun.Repository
 	clock      capturerun.Clock
 	random     io.Reader
+	barrier    capturerun.EvidenceBarrier
 }
 
 type captureRuntime interface {
@@ -810,6 +948,7 @@ func (productionCaptureBuilder) Build(
 	options := capturerun.DefaultOptions(request.repository)
 	options.Clock = request.clock
 	options.Random = request.random
+	options.EvidenceBarrier = request.barrier
 	return capturerun.NewManager(ctx, options)
 }
 
@@ -817,6 +956,7 @@ type manualCaptureBuildRequest struct {
 	repository manualcapture.Repository
 	clock      manualcapture.Clock
 	random     io.Reader
+	barrier    manualcapture.EvidenceBarrier
 }
 
 type manualCaptureRuntime interface {
@@ -840,6 +980,7 @@ func (productionManualCaptureBuilder) Build(
 	options := manualcapture.DefaultOptions(request.repository)
 	options.Clock = request.clock
 	options.Random = request.random
+	options.EvidenceBarrier = request.barrier
 	return manualcapture.NewManager(ctx, options)
 }
 
@@ -885,6 +1026,7 @@ type proxyBuildRequest struct {
 	approvals    loopbackproxy.NetworkApprovals
 	blindTunnels loopbackproxy.BlindTunnelDialer
 	egressAudit  egressaudit.Writer
+	rawEvidence  rawevidence.RequestRecorder
 	random       io.Reader
 }
 
@@ -916,6 +1058,7 @@ func (productionProxyBuilder) Build(
 		Approvals:    request.approvals,
 		BlindTunnels: request.blindTunnels,
 		EgressAudit:  request.egressAudit,
+		RawEvidence:  request.rawEvidence,
 		ExchangeIDs: loopbackproxy.NewRandomExchangeIDSource(
 			request.random,
 		),
@@ -930,6 +1073,7 @@ type runtimeBuilders struct {
 	connection    connectionEventBuilder
 	approval      approvalBuilder
 	monitor       monitorBuilder
+	rawEvidence   rawEvidenceBuilder
 	provider      providerBuilder
 	original      originalBuilder
 	exchange      exchangeBuilder
@@ -948,6 +1092,7 @@ func productionBuilders() runtimeBuilders {
 		connection:    productionConnectionEventBuilder{},
 		approval:      productionApprovalBuilder{},
 		monitor:       productionMonitorBuilder{},
+		rawEvidence:   productionRawEvidenceBuilder{},
 		provider:      productionProviderBuilder{},
 		original:      productionOriginalBuilder{},
 		exchange:      productionExchangeBuilder{},

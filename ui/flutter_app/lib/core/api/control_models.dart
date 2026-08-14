@@ -1,4 +1,7 @@
 import 'dart:convert';
+import 'dart:typed_data';
+
+import 'package:crypto/crypto.dart' as crypto;
 
 typedef JsonObject = Map<String, Object?>;
 
@@ -127,7 +130,26 @@ bool _isCanonicalHttpsOrigin(Uri value) =>
     value.toString() == value.origin;
 
 final _resourceIdPattern = RegExp(r'^[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}$');
+final _conversationProjectionPattern = RegExp(
+  r'^[A-Za-z0-9][A-Za-z0-9_.:-]{0,511}$',
+);
+final _clientEvidenceNamePattern = RegExp(r'^[a-z0-9._-]{1,128}$');
 final _digestPattern = RegExp(r'^[0-9a-f]{64}$');
+
+bool _validRawIdentity(String value) =>
+    value.isNotEmpty &&
+    utf8.encode(value).length <= 512 &&
+    !RegExp(r'[\u0000\r\n\t]').hasMatch(value);
+
+bool _validRawMetadata(String value, {int maximumBytes = 4096}) =>
+    utf8.encode(value).length <= maximumBytes &&
+    !RegExp(r'[\u0000\r\n]').hasMatch(value);
+
+bool _validClientIdentityText(String value, {bool allowEmpty = false}) =>
+    (allowEmpty || value.isNotEmpty) &&
+    value.trim() == value &&
+    utf8.encode(value).length <= 512 &&
+    !_containsControlCharacter(value);
 
 bool _validWorkspaceIdentity(String value) {
   if (!RegExp(r'^[A-Za-z0-9_-]{43}$').hasMatch(value)) return false;
@@ -2300,6 +2322,38 @@ final class CaptureRecord {
   String? get captureRunId => kind == 'managed_run' ? id : null;
 }
 
+final class CapturePage {
+  const CapturePage({required this.items, required this.nextCursor});
+
+  factory CapturePage.fromJson(Object? json, String path) {
+    final value = requireObject(json, path);
+    requireFields(
+      value,
+      path,
+      required: const {'items'},
+      optional: const {'nextCursor'},
+    );
+    final items = requireList(value['items'], '$path.items').indexed
+        .map(
+          (entry) =>
+              CaptureRecord.fromJson(entry.$2, '$path.items[${entry.$1}]'),
+        )
+        .toList(growable: false);
+    if (items.map((item) => item.key).toSet().length != items.length) {
+      throw ControlContractException('$path contains duplicate Capture keys');
+    }
+    final nextCursor = optionalString(value, 'nextCursor', path);
+    if (nextCursor != null &&
+        (nextCursor.length > 512 || RegExp(r'\s').hasMatch(nextCursor))) {
+      throw ControlContractException('$path.nextCursor is invalid');
+    }
+    return CapturePage(items: List.unmodifiable(items), nextCursor: nextCursor);
+  }
+
+  final List<CaptureRecord> items;
+  final String? nextCursor;
+}
+
 final class CaptureAssignment {
   const CaptureAssignment({
     required this.captureKey,
@@ -2653,6 +2707,7 @@ final class ActivityRecord {
     required this.status,
     required this.reasonCode,
     required this.source,
+    required this.conversation,
     required this.environment,
     required this.parentRefs,
   });
@@ -2669,6 +2724,7 @@ final class ActivityRecord {
         'title',
         'status',
         'source',
+        'conversation',
         'environment',
         'parentRefs',
       },
@@ -2697,6 +2753,10 @@ final class ActivityRecord {
       status: status,
       reasonCode: optionalString(value, 'reasonCode', path),
       source: ActivitySourceRef.fromJson(value['source'], '$path.source'),
+      conversation: ActivityConversationRef.fromJson(
+        value['conversation'],
+        '$path.conversation',
+      ),
       environment: FrozenEnvironmentRef.fromJson(
         value['environment'],
         '$path.environment',
@@ -2711,6 +2771,7 @@ final class ActivityRecord {
   final String status;
   final String? reasonCode;
   final ActivitySourceRef source;
+  final ActivityConversationRef conversation;
   final FrozenEnvironmentRef environment;
   final ActivityParentRefs parentRefs;
 
@@ -2720,6 +2781,272 @@ final class ActivityRecord {
   String? get accountId => environment.accountId;
   String? get captureRunId => parentRefs.captureRunId;
   String? get manualCaptureId => parentRefs.manualCaptureId;
+}
+
+final class ActivityConversationRef {
+  const ActivityConversationRef({
+    required this.id,
+    required this.displayName,
+    required this.kind,
+    required this.evidence,
+    required this.actor,
+    this.clientIdentity,
+  });
+
+  factory ActivityConversationRef.fromJson(Object? json, String path) {
+    final value = requireObject(json, path);
+    requireFields(
+      value,
+      path,
+      required: const {'id', 'kind', 'evidence'},
+      optional: const {'displayName', 'actor', 'clientIdentity'},
+    );
+    final id = requireString(value, 'id', path);
+    final kind = requireString(value, 'kind', path);
+    final evidence = requireString(value, 'evidence', path);
+    final displayName = optionalString(value, 'displayName', path);
+    final actor = optionalString(value, 'actor', path);
+    final clientIdentity = value['clientIdentity'] == null
+        ? null
+        : AgentClientIdentity.fromJson(
+            value['clientIdentity'],
+            '$path.clientIdentity',
+          );
+    if (!_conversationProjectionPattern.hasMatch(id) ||
+        !const {
+          'pending_exchange',
+          'main',
+          'agent',
+          'isolated_subagent',
+          'isolated_exchange',
+        }.contains(kind) ||
+        !const {
+          'pending',
+          'capture_run',
+          'explicit_actor',
+          'client_asserted_subagent',
+          'ambiguous_actor',
+          'undecoded_exchange',
+          'exchange_boundary',
+        }.contains(evidence) ||
+        (kind == 'agent' && (actor == null || actor.isEmpty)) ||
+        (kind != 'agent' && actor != null) ||
+        (clientIdentity != null &&
+            (actor ?? '') != (clientIdentity.actorId ?? ''))) {
+      throw ControlContractException('$path Conversation evidence is invalid');
+    }
+    return ActivityConversationRef(
+      id: id,
+      displayName: displayName,
+      kind: kind,
+      evidence: evidence,
+      actor: actor,
+      clientIdentity: clientIdentity,
+    );
+  }
+
+  final String id;
+  final String? displayName;
+  final String kind;
+  final String evidence;
+  final String? actor;
+  final AgentClientIdentity? clientIdentity;
+}
+
+/// One opaque, client-owned identity value. The name remains namespaced so
+/// Claude and Codex can retain their native identifiers without pretending
+/// their protocols share a wire schema.
+final class AgentClientEvidenceValue {
+  const AgentClientEvidenceValue({required this.name, required this.value});
+
+  factory AgentClientEvidenceValue.fromJson(Object? json, String path) {
+    final object = requireObject(json, path);
+    requireFields(object, path, required: const {'name', 'value'});
+    final name = requireString(object, 'name', path);
+    final value = requireString(object, 'value', path);
+    if (!_clientEvidenceNamePattern.hasMatch(name) ||
+        !_validClientIdentityText(value)) {
+      throw ControlContractException('$path client evidence is invalid');
+    }
+    return AgentClientEvidenceValue(name: name, value: value);
+  }
+
+  final String name;
+  final String value;
+}
+
+final class AgentClientIdentity {
+  const AgentClientIdentity({
+    required this.client,
+    required this.sessionId,
+    required this.sessionResumable,
+    required this.actorId,
+    required this.actorLabel,
+    required this.actorType,
+    required this.actorIsSubagent,
+    required this.providerResponseId,
+    required this.providerMessageId,
+    required this.source,
+    required this.confidence,
+    required this.observedAt,
+    required this.protocolIds,
+    required this.attributes,
+  });
+
+  factory AgentClientIdentity.fromJson(Object? json, String path) {
+    final value = requireObject(json, path);
+    requireFields(
+      value,
+      path,
+      required: const {
+        'client',
+        'sessionId',
+        'sessionResumable',
+        'actorIsSubagent',
+        'source',
+        'confidence',
+        'observedAt',
+      },
+      optional: const {
+        'actorId',
+        'actorLabel',
+        'actorType',
+        'providerResponseId',
+        'providerMessageId',
+        'protocolIds',
+        'attributes',
+      },
+    );
+    final client = requireString(value, 'client', path);
+    final sessionId = requireString(value, 'sessionId', path);
+    final actorId = optionalString(value, 'actorId', path);
+    final actorLabel = optionalString(value, 'actorLabel', path);
+    final actorType = optionalString(value, 'actorType', path);
+    final actorIsSubagent = requireBoolean(value, 'actorIsSubagent', path);
+    final providerResponseId = optionalString(
+      value,
+      'providerResponseId',
+      path,
+    );
+    final providerMessageId = optionalString(value, 'providerMessageId', path);
+    final source = requireString(value, 'source', path);
+    final confidence = requireString(value, 'confidence', path);
+    final protocolIds = _agentClientEvidenceValues(
+      value['protocolIds'],
+      '$path.protocolIds',
+      singleValueNames: false,
+    );
+    final attributes = _agentClientEvidenceValues(
+      value['attributes'],
+      '$path.attributes',
+      singleValueNames: true,
+    );
+    final identityValues = <String?>[
+      sessionId,
+      actorId,
+      actorLabel,
+      actorType,
+      providerResponseId,
+      providerMessageId,
+    ];
+    if (!const {'claude', 'codex'}.contains(client) ||
+        !identityValues.whereType<String>().every(_validClientIdentityText) ||
+        !const {
+          'client_local_state',
+          'client_protocol_evidence',
+        }.contains(source) ||
+        (source == 'client_local_state' && providerResponseId == null) ||
+        confidence != 'exact' ||
+        (actorId == null &&
+            (actorLabel != null || actorType != null || actorIsSubagent))) {
+      throw ControlContractException('$path Agent client identity is invalid');
+    }
+    return AgentClientIdentity(
+      client: client,
+      sessionId: sessionId,
+      sessionResumable: requireBoolean(value, 'sessionResumable', path),
+      actorId: actorId,
+      actorLabel: actorLabel,
+      actorType: actorType,
+      actorIsSubagent: actorIsSubagent,
+      providerResponseId: providerResponseId,
+      providerMessageId: providerMessageId,
+      source: source,
+      confidence: confidence,
+      observedAt: requireTimestamp(value, 'observedAt', path),
+      protocolIds: protocolIds,
+      attributes: attributes,
+    );
+  }
+
+  final String client;
+  final String sessionId;
+  final bool sessionResumable;
+  final String? actorId;
+  final String? actorLabel;
+  final String? actorType;
+  final bool actorIsSubagent;
+  final String? providerResponseId;
+  final String? providerMessageId;
+  final String source;
+  final String confidence;
+  final DateTime observedAt;
+  final List<AgentClientEvidenceValue> protocolIds;
+  final List<AgentClientEvidenceValue> attributes;
+
+  Iterable<String> get searchableValues sync* {
+    yield client;
+    yield sessionId;
+    if (actorId case final value?) yield value;
+    if (actorLabel case final value?) yield value;
+    if (actorType case final value?) yield value;
+    if (providerResponseId case final value?) yield value;
+    if (providerMessageId case final value?) yield value;
+    for (final evidence in protocolIds) {
+      yield evidence.name;
+      yield evidence.value;
+    }
+    for (final evidence in attributes) {
+      yield evidence.name;
+      yield evidence.value;
+    }
+  }
+}
+
+List<AgentClientEvidenceValue> _agentClientEvidenceValues(
+  Object? json,
+  String path, {
+  required bool singleValueNames,
+}) {
+  if (json == null) return const [];
+  final raw = requireList(json, path);
+  if (raw.length > 4096) {
+    throw ControlContractException('$path contains too many values');
+  }
+  final values = raw.indexed
+      .map(
+        (entry) =>
+            AgentClientEvidenceValue.fromJson(entry.$2, '$path[${entry.$1}]'),
+      )
+      .toList(growable: false);
+  final pairs = <String>{};
+  final names = <String>{};
+  AgentClientEvidenceValue? previous;
+  for (final value in values) {
+    final pair = '${value.name}\u0000${value.value}';
+    final ordered =
+        previous == null ||
+        value.name.compareTo(previous.name) > 0 ||
+        value.name == previous.name &&
+            value.value.compareTo(previous.value) >= 0;
+    if (!ordered ||
+        !pairs.add(pair) ||
+        (singleValueNames && !names.add(value.name))) {
+      throw ControlContractException('$path is not canonical');
+    }
+    previous = value;
+  }
+  return List.unmodifiable(values);
 }
 
 final class ActivityPage {
@@ -2753,6 +3080,713 @@ final class ActivityPage {
 
   final List<ActivityRecord> items;
   final String? nextCursor;
+}
+
+final class ConversationRecord {
+  const ConversationRecord({
+    required this.conversation,
+    required this.firstObservedAt,
+    required this.turnCount,
+    required this.latest,
+  });
+
+  factory ConversationRecord.fromJson(Object? json, String path) {
+    final value = requireObject(json, path);
+    requireFields(
+      value,
+      path,
+      required: const {
+        'conversation',
+        'firstObservedAt',
+        'turnCount',
+        'latest',
+      },
+      optional: const {},
+    );
+    final conversation = ActivityConversationRef.fromJson(
+      value['conversation'],
+      '$path.conversation',
+    );
+    final firstObservedAt = requireTimestamp(value, 'firstObservedAt', path);
+    final latest = ActivityRecord.fromJson(value['latest'], '$path.latest');
+    final turnCount = requireInteger(value, 'turnCount', path, minimum: 1);
+    if (latest.conversation.id != conversation.id ||
+        latest.occurredAt.isBefore(firstObservedAt)) {
+      throw ControlContractException(
+        '$path Conversation projection is inconsistent',
+      );
+    }
+    return ConversationRecord(
+      conversation: conversation,
+      firstObservedAt: firstObservedAt,
+      turnCount: turnCount,
+      latest: latest,
+    );
+  }
+
+  final ActivityConversationRef conversation;
+  final DateTime firstObservedAt;
+  final int turnCount;
+  final ActivityRecord latest;
+}
+
+final class ConversationPage {
+  const ConversationPage({required this.items, required this.nextCursor});
+
+  factory ConversationPage.fromJson(Object? json, String path) {
+    final value = requireObject(json, path);
+    requireFields(
+      value,
+      path,
+      required: const {'items'},
+      optional: const {'nextCursor'},
+    );
+    final rawItems = requireList(value['items'], '$path.items');
+    final nextCursor = optionalString(value, 'nextCursor', path);
+    if (rawItems.length > 200 ||
+        (nextCursor != null &&
+            (nextCursor.length > 512 || RegExp(r'\s').hasMatch(nextCursor)))) {
+      throw ControlContractException('$path page boundary is invalid');
+    }
+    return ConversationPage(
+      items: rawItems.indexed
+          .map(
+            (entry) => ConversationRecord.fromJson(
+              entry.$2,
+              '$path.items[${entry.$1}]',
+            ),
+          )
+          .toList(growable: false),
+      nextCursor: nextCursor,
+    );
+  }
+
+  final List<ConversationRecord> items;
+  final String? nextCursor;
+}
+
+final class RawEvidenceRecovery {
+  const RawEvidenceRecovery({
+    required this.recoveredUncleanWriters,
+    required this.purgedExpiredEnvelopes,
+    required this.maximumPossibleLossMs,
+  });
+
+  factory RawEvidenceRecovery.fromJson(Object? json, String path) {
+    final value = requireObject(json, path);
+    requireFields(
+      value,
+      path,
+      required: const {
+        'recoveredUncleanWriters',
+        'purgedExpiredEnvelopes',
+        'maximumPossibleLossMs',
+      },
+    );
+    final recovered = requireInteger(value, 'recoveredUncleanWriters', path);
+    final maximumLoss = requireInteger(value, 'maximumPossibleLossMs', path);
+    if (recovered == 0 && maximumLoss != 0) {
+      throw ControlContractException('$path recovery boundary is invalid');
+    }
+    return RawEvidenceRecovery(
+      recoveredUncleanWriters: recovered,
+      purgedExpiredEnvelopes: requireInteger(
+        value,
+        'purgedExpiredEnvelopes',
+        path,
+      ),
+      maximumPossibleLossMs: maximumLoss,
+    );
+  }
+
+  final int recoveredUncleanWriters;
+  final int purgedExpiredEnvelopes;
+  final int maximumPossibleLossMs;
+}
+
+final class RawEvidenceWriter {
+  const RawEvidenceWriter({
+    required this.state,
+    required this.admittedRecords,
+    required this.durableWatermark,
+    required this.queueRecords,
+    required this.queueBytes,
+    required this.lastFailure,
+    required this.maximumUnflushedTimeMs,
+  });
+
+  factory RawEvidenceWriter.fromJson(Object? json, String path) {
+    final value = requireObject(json, path);
+    requireFields(
+      value,
+      path,
+      required: const {
+        'state',
+        'admittedRecords',
+        'durableWatermark',
+        'queueRecords',
+        'queueBytes',
+        'maximumUnflushedTimeMs',
+      },
+      optional: const {'lastFailure'},
+    );
+    final state = requireString(value, 'state', path);
+    final admitted = requireInteger(value, 'admittedRecords', path);
+    final durable = requireInteger(value, 'durableWatermark', path);
+    final queued = requireInteger(value, 'queueRecords', path);
+    final queueBytes = requireInteger(value, 'queueBytes', path);
+    final maximumUnflushed = requireInteger(
+      value,
+      'maximumUnflushedTimeMs',
+      path,
+    );
+    final failure = optionalString(value, 'lastFailure', path);
+    if (!const {'active', 'degraded', 'unavailable'}.contains(state) ||
+        durable > admitted ||
+        queued < 0 ||
+        queueBytes < 0 ||
+        maximumUnflushed < 0 ||
+        (state == 'degraded') != (failure != null)) {
+      throw ControlContractException('$path writer boundary is invalid');
+    }
+    return RawEvidenceWriter(
+      state: state,
+      admittedRecords: admitted,
+      durableWatermark: durable,
+      queueRecords: queued,
+      queueBytes: queueBytes,
+      lastFailure: failure,
+      maximumUnflushedTimeMs: maximumUnflushed,
+    );
+  }
+
+  final String state;
+  final int admittedRecords;
+  final int durableWatermark;
+  final int queueRecords;
+  final int queueBytes;
+  final String? lastFailure;
+  final int maximumUnflushedTimeMs;
+
+  bool get degraded => state == 'degraded';
+}
+
+final class RawEvidenceEnvelope {
+  const RawEvidenceEnvelope({
+    required this.envelopeId,
+    required this.layer,
+    required this.scopeKind,
+    required this.exchangeId,
+    required this.observedAt,
+    required this.expiresAt,
+    required this.headerCount,
+    required this.trailerCount,
+    required this.bodyBytes,
+    required this.digestScope,
+    required this.payloadState,
+    required this.containsSecret,
+    required this.revealAvailable,
+    this.scopeId,
+    this.connectionId,
+    this.attemptId,
+    this.environmentId,
+    this.environmentRevision,
+    this.environmentDigest,
+    this.clientEndpointId,
+    this.clientEndpointRevision,
+    this.upstreamEndpointId,
+    this.upstreamEndpointRevision,
+    this.protocolPlanId,
+    this.protocolPlanRevision,
+    this.routeId,
+    this.routeRevision,
+    this.accountId,
+    this.accountRevision,
+    this.credentialEpoch,
+    this.method,
+    this.statusCode,
+    this.scheme,
+    this.authority,
+    this.path,
+    this.rawQuery,
+    this.contentType,
+    this.contentEncoding,
+    this.representation,
+    this.canonicalization,
+    this.bodySha256,
+    this.payloadReason,
+  });
+
+  factory RawEvidenceEnvelope.fromJson(Object? json, String path) {
+    final value = requireObject(json, path);
+    requireFields(
+      value,
+      path,
+      required: const {
+        'envelopeId',
+        'layer',
+        'scopeKind',
+        'exchangeId',
+        'observedAt',
+        'expiresAt',
+        'headerCount',
+        'trailerCount',
+        'bodyBytes',
+        'digestScope',
+        'payloadState',
+        'containsSecret',
+        'revealAvailable',
+      },
+      optional: const {
+        'scopeId',
+        'connectionId',
+        'attemptId',
+        'environmentId',
+        'environmentRevision',
+        'environmentDigest',
+        'clientEndpointId',
+        'clientEndpointRevision',
+        'upstreamEndpointId',
+        'upstreamEndpointRevision',
+        'protocolPlanId',
+        'protocolPlanRevision',
+        'routeId',
+        'routeRevision',
+        'accountId',
+        'accountRevision',
+        'credentialEpoch',
+        'method',
+        'statusCode',
+        'scheme',
+        'authority',
+        'path',
+        'rawQuery',
+        'contentType',
+        'contentEncoding',
+        'representation',
+        'canonicalization',
+        'bodySha256',
+        'payloadReason',
+      },
+    );
+    final envelopeId = requireString(value, 'envelopeId', path);
+    final layer = requireString(value, 'layer', path);
+    final scopeKind = requireString(value, 'scopeKind', path);
+    final exchangeId = requireString(value, 'exchangeId', path);
+    final scopeId = optionalString(value, 'scopeId', path);
+    final observedAt = requireTimestamp(value, 'observedAt', path);
+    final expiresAt = requireTimestamp(value, 'expiresAt', path);
+    final statusCode = optionalInteger(value, 'statusCode', path, minimum: 100);
+    final digestScope = requireString(value, 'digestScope', path);
+    final payloadState = requireString(value, 'payloadState', path);
+    final bodySha256 = optionalString(value, 'bodySha256', path);
+    final payloadReason = optionalString(value, 'payloadReason', path);
+    final revealAvailable = requireBoolean(value, 'revealAvailable', path);
+    final method = optionalString(value, 'method', path);
+    final canonicalization = optionalString(value, 'canonicalization', path);
+    final identities = <String?>[
+      envelopeId,
+      exchangeId,
+      scopeId,
+      optionalString(value, 'connectionId', path),
+      optionalString(value, 'attemptId', path),
+      optionalString(value, 'environmentId', path),
+      optionalString(value, 'clientEndpointId', path),
+      optionalString(value, 'upstreamEndpointId', path),
+      optionalString(value, 'protocolPlanId', path),
+      optionalString(value, 'routeId', path),
+      optionalString(value, 'accountId', path),
+    ];
+    final metadata = <String?>[
+      optionalString(value, 'environmentDigest', path),
+      optionalString(value, 'scheme', path),
+      optionalString(value, 'authority', path),
+      optionalString(value, 'path', path),
+      optionalString(value, 'rawQuery', path),
+      optionalString(value, 'contentType', path),
+      optionalString(value, 'contentEncoding', path),
+      optionalString(value, 'representation', path),
+      canonicalization,
+    ];
+    if (!identities.whereType<String>().every(_validRawIdentity) ||
+        !metadata.whereType<String>().every(_validRawMetadata) ||
+        !const {
+          'client_ingress',
+          'provider_egress',
+          'provider_response',
+          'client_downstream',
+        }.contains(layer) ||
+        !const {
+          'runtime',
+          'managed_run',
+          'manual_capture',
+        }.contains(scopeKind) ||
+        (scopeKind == 'runtime' ? scopeId != null : scopeId == null) ||
+        !expiresAt.isAfter(observedAt) ||
+        (statusCode != null && statusCode > 599) ||
+        (method != null && !RegExp(r'^[A-Z][A-Z-]*$').hasMatch(method)) ||
+        !const {
+          'full_body',
+          'observed_prefix',
+          'unavailable',
+        }.contains(digestScope) ||
+        !const {
+          'captured',
+          'metadata_only',
+          'truncated',
+          'unavailable',
+        }.contains(payloadState) ||
+        (digestScope == 'unavailable'
+            ? bodySha256 != null
+            : bodySha256 == null || !_digestPattern.hasMatch(bodySha256)) ||
+        (payloadState == 'captured'
+            ? payloadReason != null
+            : payloadReason == null ||
+                  !RegExp(
+                    r'^[a-z][a-z0-9_]{0,127}$',
+                  ).hasMatch(payloadReason)) ||
+        revealAvailable !=
+            const {'captured', 'truncated'}.contains(payloadState) ||
+        (canonicalization != null && canonicalization != 'go_net_http_v1')) {
+      throw ControlContractException('$path raw envelope is invalid');
+    }
+    return RawEvidenceEnvelope(
+      envelopeId: envelopeId,
+      layer: layer,
+      scopeKind: scopeKind,
+      scopeId: scopeId,
+      exchangeId: exchangeId,
+      connectionId: identities[3],
+      attemptId: identities[4],
+      environmentId: identities[5],
+      environmentRevision: optionalInteger(
+        value,
+        'environmentRevision',
+        path,
+        minimum: 1,
+      ),
+      environmentDigest: metadata[0],
+      clientEndpointId: identities[6],
+      clientEndpointRevision: optionalInteger(
+        value,
+        'clientEndpointRevision',
+        path,
+        minimum: 1,
+      ),
+      upstreamEndpointId: identities[7],
+      upstreamEndpointRevision: optionalInteger(
+        value,
+        'upstreamEndpointRevision',
+        path,
+        minimum: 1,
+      ),
+      protocolPlanId: identities[8],
+      protocolPlanRevision: optionalInteger(
+        value,
+        'protocolPlanRevision',
+        path,
+        minimum: 1,
+      ),
+      routeId: identities[9],
+      routeRevision: optionalInteger(value, 'routeRevision', path, minimum: 1),
+      accountId: identities[10],
+      accountRevision: optionalInteger(
+        value,
+        'accountRevision',
+        path,
+        minimum: 1,
+      ),
+      credentialEpoch: optionalInteger(
+        value,
+        'credentialEpoch',
+        path,
+        minimum: 1,
+      ),
+      observedAt: observedAt,
+      expiresAt: expiresAt,
+      method: method,
+      statusCode: statusCode,
+      scheme: metadata[1],
+      authority: metadata[2],
+      path: metadata[3],
+      rawQuery: metadata[4],
+      contentType: metadata[5],
+      contentEncoding: metadata[6],
+      representation: metadata[7],
+      canonicalization: canonicalization,
+      headerCount: requireInteger(value, 'headerCount', path),
+      trailerCount: requireInteger(value, 'trailerCount', path),
+      bodyBytes: requireInteger(value, 'bodyBytes', path),
+      bodySha256: bodySha256,
+      digestScope: digestScope,
+      payloadState: payloadState,
+      payloadReason: payloadReason,
+      containsSecret: requireBoolean(value, 'containsSecret', path),
+      revealAvailable: revealAvailable,
+    );
+  }
+
+  final String envelopeId;
+  final String layer;
+  final String scopeKind;
+  final String? scopeId;
+  final String exchangeId;
+  final String? connectionId;
+  final String? attemptId;
+  final String? environmentId;
+  final int? environmentRevision;
+  final String? environmentDigest;
+  final String? clientEndpointId;
+  final int? clientEndpointRevision;
+  final String? upstreamEndpointId;
+  final int? upstreamEndpointRevision;
+  final String? protocolPlanId;
+  final int? protocolPlanRevision;
+  final String? routeId;
+  final int? routeRevision;
+  final String? accountId;
+  final int? accountRevision;
+  final int? credentialEpoch;
+  final DateTime observedAt;
+  final DateTime expiresAt;
+  final String? method;
+  final int? statusCode;
+  final String? scheme;
+  final String? authority;
+  final String? path;
+  final String? rawQuery;
+  final String? contentType;
+  final String? contentEncoding;
+  final String? representation;
+  final String? canonicalization;
+  final int headerCount;
+  final int trailerCount;
+  final int bodyBytes;
+  final String? bodySha256;
+  final String digestScope;
+  final String payloadState;
+  final String? payloadReason;
+  final bool containsSecret;
+  final bool revealAvailable;
+}
+
+final class RawEvidencePage {
+  const RawEvidencePage({
+    required this.items,
+    required this.recovery,
+    required this.writer,
+  });
+
+  factory RawEvidencePage.fromJson(
+    Object? json,
+    String path, {
+    required String expectedExchangeId,
+  }) {
+    final value = requireObject(json, path);
+    requireFields(value, path, required: const {'items', 'recovery', 'writer'});
+    final rawItems = requireList(value['items'], '$path.items');
+    if (rawItems.length > 4096) {
+      throw ControlContractException('$path contains too many envelopes');
+    }
+    final items = rawItems.indexed
+        .map(
+          (entry) => RawEvidenceEnvelope.fromJson(
+            entry.$2,
+            '$path.items[${entry.$1}]',
+          ),
+        )
+        .toList(growable: false);
+    final identities = <String>{};
+    DateTime? previous;
+    for (final item in items) {
+      if (item.exchangeId != expectedExchangeId ||
+          !identities.add(item.envelopeId) ||
+          (previous != null && item.observedAt.isBefore(previous))) {
+        throw ControlContractException('$path envelope order is invalid');
+      }
+      previous = item.observedAt;
+    }
+    return RawEvidencePage(
+      items: items,
+      recovery: RawEvidenceRecovery.fromJson(
+        value['recovery'],
+        '$path.recovery',
+      ),
+      writer: RawEvidenceWriter.fromJson(value['writer'], '$path.writer'),
+    );
+  }
+
+  final List<RawEvidenceEnvelope> items;
+  final RawEvidenceRecovery recovery;
+  final RawEvidenceWriter writer;
+}
+
+final class RawHeaderField {
+  const RawHeaderField({required this.name, required this.values});
+
+  factory RawHeaderField.fromJson(Object? json, String path) {
+    final value = requireObject(json, path);
+    requireFields(value, path, required: const {'name', 'values'});
+    final name = requireString(value, 'name', path);
+    final rawValues = requireList(value['values'], '$path.values');
+    if (!RegExp(r"^[!#$%&'*+\-.^_`|~0-9A-Za-z]+$").hasMatch(name) ||
+        rawValues.length > 1024) {
+      throw ControlContractException('$path header field is invalid');
+    }
+    final values = rawValues.indexed
+        .map((entry) {
+          final item = entry.$2;
+          if (item is! String ||
+              utf8.encode(item).length > 64 * 1024 ||
+              RegExp(r'[\u0000\r\n]').hasMatch(item)) {
+            throw ControlContractException(
+              '$path.values[${entry.$1}] is invalid',
+            );
+          }
+          return item;
+        })
+        .toList(growable: false);
+    return RawHeaderField(name: name, values: values);
+  }
+
+  final String name;
+  final List<String> values;
+}
+
+final class RawFrame {
+  const RawFrame({
+    required this.kind,
+    required this.offset,
+    required this.length,
+  });
+
+  factory RawFrame.fromJson(
+    Object? json,
+    String path, {
+    required int bodyBytes,
+  }) {
+    final value = requireObject(json, path);
+    requireFields(value, path, required: const {'kind', 'offset', 'length'});
+    final kind = requireString(value, 'kind', path);
+    final offset = requireInteger(value, 'offset', path);
+    final length = requireInteger(value, 'length', path, minimum: 1);
+    if (!const {'data', 'keepalive', 'abort'}.contains(kind) ||
+        offset + length > bodyBytes) {
+      throw ControlContractException('$path frame range is invalid');
+    }
+    return RawFrame(kind: kind, offset: offset, length: length);
+  }
+
+  final String kind;
+  final int offset;
+  final int length;
+}
+
+final class RevealedRawEvidence {
+  const RevealedRawEvidence({
+    required this.envelope,
+    required this.headers,
+    required this.trailers,
+    required this.body,
+    required this.frames,
+  });
+
+  factory RevealedRawEvidence.fromJson(
+    Object? json,
+    String path, {
+    required String expectedEnvelopeId,
+  }) {
+    final value = requireObject(json, path);
+    requireFields(
+      value,
+      path,
+      required: const {
+        'envelope',
+        'headers',
+        'trailers',
+        'bodyBase64',
+        'frames',
+      },
+    );
+    final envelope = RawEvidenceEnvelope.fromJson(
+      value['envelope'],
+      '$path.envelope',
+    );
+    final encodedBody = requireStringValue(value, 'bodyBase64', path);
+    late final Uint8List body;
+    try {
+      body = Uint8List.fromList(base64.decode(encodedBody));
+    } on FormatException {
+      throw ControlContractException('$path.bodyBase64 is invalid');
+    }
+    if (base64.encode(body) != encodedBody ||
+        envelope.envelopeId != expectedEnvelopeId ||
+        !envelope.revealAvailable ||
+        (envelope.payloadState == 'captured' &&
+            envelope.bodyBytes != body.length) ||
+        body.length > envelope.bodyBytes) {
+      throw ControlContractException('$path revealed payload is inconsistent');
+    }
+    final digestCanBeRecomputed =
+        envelope.payloadState == 'captured' ||
+        envelope.digestScope == 'observed_prefix';
+    if (digestCanBeRecomputed &&
+        crypto.sha256.convert(body).toString() != envelope.bodySha256) {
+      throw ControlContractException('$path body digest does not match');
+    }
+    final headers = _rawHeaderFields(value['headers'], '$path.headers');
+    final trailers = _rawHeaderFields(value['trailers'], '$path.trailers');
+    if (headers.fold<int>(0, (sum, field) => sum + field.values.length) !=
+            envelope.headerCount ||
+        trailers.fold<int>(0, (sum, field) => sum + field.values.length) !=
+            envelope.trailerCount) {
+      throw ControlContractException('$path header counts are inconsistent');
+    }
+    final rawFrames = _rawEvidenceList(value['frames'], '$path.frames');
+    if (rawFrames.length > 65536) {
+      throw ControlContractException('$path contains too many frames');
+    }
+    final frames = rawFrames.indexed
+        .map(
+          (entry) => RawFrame.fromJson(
+            entry.$2,
+            '$path.frames[${entry.$1}]',
+            bodyBytes: body.length,
+          ),
+        )
+        .toList(growable: false);
+    return RevealedRawEvidence(
+      envelope: envelope,
+      headers: headers,
+      trailers: trailers,
+      body: body,
+      frames: frames,
+    );
+  }
+
+  final RawEvidenceEnvelope envelope;
+  final List<RawHeaderField> headers;
+  final List<RawHeaderField> trailers;
+  final Uint8List body;
+  final List<RawFrame> frames;
+}
+
+List<RawHeaderField> _rawHeaderFields(Object? json, String path) {
+  final values = _rawEvidenceList(json, path);
+  if (values.length > 4096) {
+    throw ControlContractException('$path contains too many fields');
+  }
+  return values.indexed
+      .map((entry) => RawHeaderField.fromJson(entry.$2, '$path[${entry.$1}]'))
+      .toList(growable: false);
+}
+
+List<Object?> _rawEvidenceList(Object? json, String path) {
+  // The service contract emits arrays. Treat a present null as the empty
+  // collection it represents so one malformed optional HTTP collection cannot
+  // hide the rest of an otherwise valid captured envelope.
+  if (json == null) return const <Object?>[];
+  return requireList(json, path);
 }
 
 final class ExchangeDiagnosis {
@@ -2810,8 +3844,13 @@ final class ExchangeContentBlock {
     required this.originalSize,
     required this.callId,
     required this.toolName,
+    required this.toolNamespace,
     required this.arguments,
     required this.toolError,
+    required this.providerSource,
+    required this.providerKind,
+    required this.fingerprint,
+    required this.agent,
   });
 
   factory ExchangeContentBlock.fromJson(Object? json, String path) {
@@ -2820,7 +3859,18 @@ final class ExchangeContentBlock {
       value,
       path,
       required: const {'kind', 'availability', 'originalSize'},
-      optional: const {'text', 'callId', 'toolName', 'arguments', 'toolError'},
+      optional: const {
+        'text',
+        'callId',
+        'toolName',
+        'toolNamespace',
+        'arguments',
+        'toolError',
+        'providerSource',
+        'providerKind',
+        'fingerprint',
+        'agent',
+      },
     );
     final kind = requireString(value, 'kind', path);
     final availability = requireString(value, 'availability', path);
@@ -2851,8 +3901,15 @@ final class ExchangeContentBlock {
       originalSize: requireInteger(value, 'originalSize', path),
       callId: optionalString(value, 'callId', path),
       toolName: optionalString(value, 'toolName', path),
+      toolNamespace: optionalString(value, 'toolNamespace', path),
       arguments: arguments,
       toolError: toolErrorValue == true,
+      providerSource: optionalString(value, 'providerSource', path),
+      providerKind: optionalString(value, 'providerKind', path),
+      fingerprint: optionalString(value, 'fingerprint', path),
+      agent: value['agent'] == null
+          ? null
+          : ExchangeAgentContext.fromJson(value['agent'], '$path.agent'),
     );
   }
 
@@ -2862,16 +3919,30 @@ final class ExchangeContentBlock {
   final int originalSize;
   final String? callId;
   final String? toolName;
+  final String? toolNamespace;
   final JsonObject? arguments;
   final bool toolError;
+  final String? providerSource;
+  final String? providerKind;
+  final String? fingerprint;
+  final ExchangeAgentContext? agent;
 }
 
 final class ExchangeContentMessage {
-  const ExchangeContentMessage({required this.role, required this.blocks});
+  const ExchangeContentMessage({
+    required this.role,
+    required this.blocks,
+    required this.agent,
+  });
 
   factory ExchangeContentMessage.fromJson(Object? json, String path) {
     final value = requireObject(json, path);
-    requireFields(value, path, required: const {'role', 'blocks'});
+    requireFields(
+      value,
+      path,
+      required: const {'role', 'blocks'},
+      optional: const {'agent'},
+    );
     final role = requireString(value, 'role', path);
     final rawBlocks = requireList(value['blocks'], '$path.blocks');
     if (!const {
@@ -2894,11 +3965,51 @@ final class ExchangeContentMessage {
             ),
           )
           .toList(growable: false),
+      agent: value['agent'] == null
+          ? null
+          : ExchangeAgentContext.fromJson(value['agent'], '$path.agent'),
     );
   }
 
   final String role;
   final List<ExchangeContentBlock> blocks;
+  final ExchangeAgentContext? agent;
+}
+
+final class ExchangeAgentContext {
+  const ExchangeAgentContext({
+    required this.agentName,
+    required this.author,
+    required this.recipient,
+  });
+
+  factory ExchangeAgentContext.fromJson(Object? json, String path) {
+    final value = requireObject(json, path);
+    requireFields(
+      value,
+      path,
+      required: const {},
+      optional: const {'agentName', 'author', 'recipient'},
+    );
+    final context = ExchangeAgentContext(
+      agentName: optionalString(value, 'agentName', path),
+      author: optionalString(value, 'author', path),
+      recipient: optionalString(value, 'recipient', path),
+    );
+    if (context.agentName == null &&
+        context.author == null &&
+        context.recipient == null) {
+      throw ControlContractException('$path agent context is empty');
+    }
+    if ((context.author == null) != (context.recipient == null)) {
+      throw ControlContractException('$path agent direction is incomplete');
+    }
+    return context;
+  }
+
+  final String? agentName;
+  final String? author;
+  final String? recipient;
 }
 
 final class ExchangeToolDefinition {
@@ -3177,6 +4288,156 @@ final class ExchangeRequestProjection {
   final bool fullSnapshotAvailable;
 }
 
+final class AgentConversationProjection {
+  const AgentConversationProjection({
+    required this.scope,
+    required this.agents,
+    required this.relationships,
+    required this.actions,
+  });
+
+  factory AgentConversationProjection.fromJson(Object? json, String path) {
+    final value = requireObject(json, path);
+    requireFields(
+      value,
+      path,
+      required: const {'scope', 'agents', 'relationships', 'actions'},
+    );
+    final scope = requireString(value, 'scope', path);
+    if (!const {'capture_run', 'exchange'}.contains(scope)) {
+      throw ControlContractException('$path scope is unsupported');
+    }
+    final agents = requireList(value['agents'], '$path.agents').indexed
+        .map(
+          (entry) => AgentConversationAgent.fromJson(
+            entry.$2,
+            '$path.agents[${entry.$1}]',
+          ),
+        )
+        .toList(growable: false);
+    final names = agents.map((agent) => agent.name).toSet();
+    if (names.length != agents.length) {
+      throw ControlContractException('$path agents are duplicated');
+    }
+    final relationships =
+        requireList(value['relationships'], '$path.relationships').indexed
+            .map((entry) {
+              final relationship = AgentConversationRelationship.fromJson(
+                entry.$2,
+                '$path.relationships[${entry.$1}]',
+              );
+              if (!names.contains(relationship.source) ||
+                  !names.contains(relationship.target)) {
+                throw ControlContractException(
+                  '$path relationship references an unknown agent',
+                );
+              }
+              return relationship;
+            })
+            .toList(growable: false);
+    final actions = requireList(value['actions'], '$path.actions').indexed
+        .map(
+          (entry) => AgentConversationAction.fromJson(
+            entry.$2,
+            '$path.actions[${entry.$1}]',
+          ),
+        )
+        .toList(growable: false);
+    if (agents.isEmpty && actions.isEmpty) {
+      throw ControlContractException('$path projection is empty');
+    }
+    return AgentConversationProjection(
+      scope: scope,
+      agents: agents,
+      relationships: relationships,
+      actions: actions,
+    );
+  }
+
+  final String scope;
+  final List<AgentConversationAgent> agents;
+  final List<AgentConversationRelationship> relationships;
+  final List<AgentConversationAction> actions;
+}
+
+final class AgentConversationAgent {
+  const AgentConversationAgent({required this.name});
+
+  factory AgentConversationAgent.fromJson(Object? json, String path) {
+    final value = requireObject(json, path);
+    requireFields(value, path, required: const {'name'});
+    return AgentConversationAgent(name: requireString(value, 'name', path));
+  }
+
+  final String name;
+}
+
+final class AgentConversationRelationship {
+  const AgentConversationRelationship({
+    required this.source,
+    required this.target,
+    required this.kind,
+  });
+
+  factory AgentConversationRelationship.fromJson(Object? json, String path) {
+    final value = requireObject(json, path);
+    requireFields(value, path, required: const {'source', 'target', 'kind'});
+    final kind = requireString(value, 'kind', path);
+    if (kind != 'message') {
+      throw ControlContractException('$path relationship kind is unsupported');
+    }
+    return AgentConversationRelationship(
+      source: requireString(value, 'source', path),
+      target: requireString(value, 'target', path),
+      kind: kind,
+    );
+  }
+
+  final String source;
+  final String target;
+  final String kind;
+}
+
+final class AgentConversationAction {
+  const AgentConversationAction({
+    required this.callId,
+    required this.name,
+    required this.status,
+    required this.sourceAgent,
+    required this.resultAgent,
+    required this.attributed,
+  });
+
+  factory AgentConversationAction.fromJson(Object? json, String path) {
+    final value = requireObject(json, path);
+    requireFields(
+      value,
+      path,
+      required: const {'callId', 'name', 'status', 'attributed'},
+      optional: const {'sourceAgent', 'resultAgent'},
+    );
+    final status = requireString(value, 'status', path);
+    if (!const {'requested', 'completed', 'failed'}.contains(status)) {
+      throw ControlContractException('$path action status is unsupported');
+    }
+    return AgentConversationAction(
+      callId: requireString(value, 'callId', path),
+      name: requireString(value, 'name', path),
+      status: status,
+      sourceAgent: optionalString(value, 'sourceAgent', path),
+      resultAgent: optionalString(value, 'resultAgent', path),
+      attributed: requireBoolean(value, 'attributed', path),
+    );
+  }
+
+  final String callId;
+  final String name;
+  final String status;
+  final String? sourceAgent;
+  final String? resultAgent;
+  final bool attributed;
+}
+
 final class ExchangeContentDetail {
   const ExchangeContentDetail({
     required this.state,
@@ -3184,6 +4445,7 @@ final class ExchangeContentDetail {
     required this.recordedAt,
     required this.expiresAt,
     required this.requestProjection,
+    required this.agentConversation,
     required this.request,
     required this.response,
   });
@@ -3199,6 +4461,7 @@ final class ExchangeContentDetail {
         recordedAt: null,
         expiresAt: null,
         requestProjection: null,
+        agentConversation: null,
         request: null,
         response: null,
       );
@@ -3217,7 +4480,7 @@ final class ExchangeContentDetail {
         'requestProjection',
         'request',
       },
-      optional: const {'response'},
+      optional: const {'agentConversation', 'response'},
     );
     final mode = requireString(value, 'mode', path);
     final recordedAt = requireTimestamp(value, 'recordedAt', path);
@@ -3241,6 +4504,12 @@ final class ExchangeContentDetail {
       recordedAt: recordedAt,
       expiresAt: expiresAt,
       requestProjection: projection,
+      agentConversation: value['agentConversation'] == null
+          ? null
+          : AgentConversationProjection.fromJson(
+              value['agentConversation'],
+              '$path.agentConversation',
+            ),
       request: request,
       response: value['response'] == null
           ? null
@@ -3253,6 +4522,7 @@ final class ExchangeContentDetail {
   final DateTime? recordedAt;
   final DateTime? expiresAt;
   final ExchangeRequestProjection? requestProjection;
+  final AgentConversationProjection? agentConversation;
   final ExchangeRequest? request;
   final ExchangeResponse? response;
 }
@@ -3304,6 +4574,7 @@ final class ExchangeDetail {
     required this.diagnosis,
     required this.processingTrace,
     required this.content,
+    this.clientIdentity,
   });
 
   factory ExchangeDetail.fromJson(Object? json, String path) {
@@ -3319,7 +4590,7 @@ final class ExchangeDetail {
         'processingTrace',
         'content',
       },
-      optional: const {'diagnosis'},
+      optional: const {'diagnosis', 'clientIdentity'},
     );
     final id = requireString(value, 'id', path);
     final status = requireString(value, 'status', path);
@@ -3357,6 +4628,12 @@ final class ExchangeDetail {
         value['content'],
         '$path.content',
       ),
+      clientIdentity: value['clientIdentity'] == null
+          ? null
+          : AgentClientIdentity.fromJson(
+              value['clientIdentity'],
+              '$path.clientIdentity',
+            ),
     );
   }
 
@@ -3367,6 +4644,7 @@ final class ExchangeDetail {
   final ExchangeDiagnosis? diagnosis;
   final ExchangeProcessingTrace processingTrace;
   final ExchangeContentDetail content;
+  final AgentClientIdentity? clientIdentity;
 }
 
 final class ApprovalChoice {
@@ -4414,6 +5692,7 @@ final class DashboardData {
   const DashboardData({
     required this.status,
     required this.captures,
+    required this.captureNextCursor,
     required this.environments,
     required this.endpoints,
     required this.accounts,
@@ -4421,6 +5700,7 @@ final class DashboardData {
 
   final RuntimeStatus status;
   final List<CaptureRecord> captures;
+  final String? captureNextCursor;
   final List<EnvironmentRecord> environments;
   final List<UpstreamEndpoint> endpoints;
   final List<ProviderAccount> accounts;

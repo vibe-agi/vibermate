@@ -37,10 +37,10 @@ environment variable, the report, SQLite, UI, or logs.
 The Desktop build embeds `vibermate-build-manifest.json`. The manifest binds:
 
 - the full Git revision, commit time, and clean-tree state;
-- pinned Go, Node, Rust, Cargo, pnpm, and Tauri toolchains;
-- Desktop and sidecar build profiles and target triple;
+- pinned Go, Flutter, Dart, and Xcode toolchains;
+- Flutter Desktop and Go sidecar build profiles and target triple;
 - configuration-input digests; and
-- the packaged daemon and launcher digests.
+- the packaged Flutter runtime, daemon, and launcher digests.
 
 The runner rejects mixed source identities, dirty builds, substituted
 sidecars, malformed manifests, unknown manifest fields, and daemon or launcher
@@ -60,10 +60,9 @@ credential reference, token, or secret value.
 Build from a clean frozen commit with the pinned toolchains:
 
 ```sh
-RUSTUP_TOOLCHAIN=1.88.0 fnm exec --using=22.23.1 -- \
-  pnpm --dir ui/desktop install --frozen-lockfile
-RUSTUP_TOOLCHAIN=1.88.0 fnm exec --using=22.23.1 -- \
-  pnpm --dir ui/desktop bundle:development
+ui/flutter_app/tool/verify_flutter_sdk.sh
+ui/flutter_app/tool/build_macos_app.sh live
+ui/flutter_app/tool/verify_macos_app.sh dist/ViberMate.app live
 go build -buildvcs=true -trimpath \
   -o /private/tmp/vibermate-acceptance \
   ./cmd/vibermate-acceptance
@@ -72,9 +71,9 @@ go build -buildvcs=true -trimpath \
   ./cmd/vibermate-acceptance-verify
 ```
 
-The development bundle is not a release package. Signing, notarization,
-distribution, system trust-store mutation, and native secret protection are
-separate gates.
+The local App is ad-hoc signed and is not a release package. Developer ID
+signing, notarization, distribution, system trust-store mutation, and an
+independently retained Keychain acceptance report are separate gates.
 
 ## Deterministic sequence
 

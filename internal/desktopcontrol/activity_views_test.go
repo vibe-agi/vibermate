@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/vibe-agi/vibermate/internal/activity"
+	"github.com/vibe-agi/vibermate/internal/agentconversation"
 	"github.com/vibe-agi/vibermate/internal/egressaudit"
 	"github.com/vibe-agi/vibermate/internal/environment"
 	"github.com/vibe-agi/vibermate/internal/exchangecontent"
@@ -71,6 +72,7 @@ func TestExchangeDetailProjectsOrderedRedactedEvidence(t *testing.T) {
 			ClientPath:  "$.messages[2].content[0].type",
 		},
 	}
+	setConversationRef(&record)
 	detail, err := exchangeDetailOf(record, egressaudit.Page{
 		Items: []egressaudit.Record{
 			{Sequence: 12, Attempt: newAttempt("egress-2", "attempt-2")},
@@ -131,6 +133,7 @@ func TestActivitySummaryPreservesTheStableFailureReason(t *testing.T) {
 		SourceRecognition: activity.SourceRecognitionVerified, CaptureRunID: "run-expired",
 		ConnectionID: "connection-expired",
 	}
+	setConversationRef(&record)
 	page, err := activityPageOf(activity.Page{Items: []activity.Record{record}})
 	if err != nil {
 		t.Fatal(err)
@@ -155,6 +158,7 @@ func TestPendingExchangeIsVisibleBeforeItsResponseArrives(t *testing.T) {
 		SourceRecognition: activity.SourceRecognitionVerified,
 		CaptureRunID:      "run-pending", ConnectionID: "connection-pending",
 	}
+	setConversationRef(&record)
 	content := exchangeContentFixture(t, record)
 	content.Response = nil
 
@@ -193,6 +197,7 @@ func TestExchangeDetailJoinsOnlyMatchingFrozenConversationEvidence(t *testing.T)
 		SourceKind: activity.SourceSystemProxy, SourceDisplayName: "system proxy",
 		SourceRecognition: activity.SourceRecognitionUnknown,
 	}
+	setConversationRef(&record)
 	content := exchangeContentFixture(t, record)
 	detail, err := exchangeDetailOf(
 		record, egressaudit.Page{}, &content, ExchangeContentViewIncremental,
@@ -242,6 +247,7 @@ func TestExchangeDetailDefaultsToIncrementalMessagesAndCanReturnFullSnapshot(t *
 		SourceRecognition: activity.SourceRecognitionVerified,
 		CaptureRunID:      "run-incremental", ConnectionID: "connection-incremental",
 	}
+	setConversationRef(&record)
 	content := exchangeContentFixture(t, record)
 	inherited := content.Request.Messages[0]
 	content.Request.Messages = append(
@@ -284,6 +290,91 @@ func TestExchangeDetailDefaultsToIncrementalMessagesAndCanReturnFullSnapshot(t *
 	}
 }
 
+func TestExchangeDetailProjectsOnlyProtocolProvenAgentRelationships(t *testing.T) {
+	t.Parallel()
+	record := activity.Record{
+		Sequence: 9, ID: "activity-agent-conversation",
+		OccurredAt:    time.Date(2026, 8, 12, 4, 0, 0, 0, time.UTC),
+		Kind:          activity.KindExchangeCompleted,
+		EnvironmentID: "work", EnvironmentRevision: 4,
+		EnvironmentDigest: strings.Repeat("a", 64),
+		ClientEndpointID:  "endpoint.codex", ClientEndpointRevision: 2,
+		ProtocolPlanID: "plan.codex", ProtocolPlanRevision: 3,
+		RouteID: "route.codex", RouteRevision: 5,
+		SubjectID: "exchange-agent-conversation", Status: activity.StatusSucceeded,
+		SourceKind: activity.SourceCaptureRun, SourceDisplayName: "codex",
+		SourceRecognition: activity.SourceRecognitionVerified,
+		CaptureRunID:      "run-agent-conversation", ConnectionID: "connection-agent-conversation",
+	}
+	setConversationRef(&record)
+	content := exchangeContentFixture(t, record)
+	content.Request.Messages = append(content.Request.Messages, exchangecontent.Message{
+		Role: "assistant",
+		Blocks: []exchangecontent.Block{
+			{
+				Kind: "tool_call", Availability: exchangecontent.AvailabilityRecorded,
+				OriginalSize: len(`{"description":"inspect tests"}`),
+				CallID:       "claude-agent-call", ToolName: "Agent",
+				Arguments: json.RawMessage(`{"description":"inspect tests"}`),
+			},
+		},
+	})
+	content.Response.Blocks = append(content.Response.Blocks,
+		exchangecontent.Block{
+			Kind: "text", Availability: exchangecontent.AvailabilityRecorded,
+			Text: "Review this boundary.", OriginalSize: len("Review this boundary."),
+			Agent: &exchangecontent.AgentContext{
+				AgentName: "root", Author: "root", Recipient: "reviewer",
+			},
+		},
+		exchangecontent.Block{
+			Kind: "tool_call", Availability: exchangecontent.AvailabilityRecorded,
+			OriginalSize: len(`{"task_name":"reviewer"}`),
+			CallID:       "agent-call-1", ToolNamespace: "multi_agent", ToolName: "spawn_agent",
+			Arguments: json.RawMessage(`{"task_name":"reviewer"}`),
+			Agent:     &exchangecontent.AgentContext{AgentName: "root"},
+		},
+		exchangecontent.Block{
+			Kind: "tool_result", Availability: exchangecontent.AvailabilityRecorded,
+			Text: "reviewer started", OriginalSize: len("reviewer started"),
+			CallID: "agent-call-1", ToolNamespace: "multi_agent", ToolName: "spawn_agent",
+			Agent: &exchangecontent.AgentContext{AgentName: "reviewer"},
+		},
+	)
+	if err := content.Validate(); err != nil {
+		t.Fatalf("agent content fixture is invalid: %v", err)
+	}
+
+	detail, err := exchangeDetailOf(record, egressaudit.Page{}, &content, ExchangeContentViewIncremental)
+	if err != nil {
+		t.Fatal(err)
+	}
+	projection := detail.Content.AgentConversation
+	if projection == nil || projection.Scope != "capture_run" || len(projection.Agents) != 2 ||
+		projection.Agents[0].Name != "root" || projection.Agents[1].Name != "reviewer" ||
+		len(projection.Relationships) != 1 ||
+		projection.Relationships[0].Source != "root" || projection.Relationships[0].Target != "reviewer" ||
+		len(projection.Actions) != 2 {
+		t.Fatalf("agent conversation projection = %+v", projection)
+	}
+	actionsByCallID := make(map[string]AgentConversationAction, len(projection.Actions))
+	for _, action := range projection.Actions {
+		actionsByCallID[action.CallID] = action
+	}
+	spawn := actionsByCallID["agent-call-1"]
+	if spawn.CallID != "agent-call-1" || spawn.Name != "spawn_agent" ||
+		spawn.Status != "completed" || spawn.SourceAgent != "root" ||
+		spawn.ResultAgent != "reviewer" || !spawn.Attributed {
+		t.Fatalf("spawn projection = %+v", spawn)
+	}
+	subtask := actionsByCallID["claude-agent-call"]
+	if subtask.CallID != "claude-agent-call" || subtask.Name != "subtask" ||
+		subtask.Status != "requested" || subtask.Attributed ||
+		subtask.SourceAgent != "" || subtask.ResultAgent != "" {
+		t.Fatalf("unattributed subtask projection = %+v", subtask)
+	}
+}
+
 func TestExchangeContentViewQueryIsClosed(t *testing.T) {
 	t.Parallel()
 	for rawQuery, want := range map[string]ExchangeContentView{
@@ -304,6 +395,34 @@ func TestExchangeContentViewQueryIsClosed(t *testing.T) {
 			t.Fatalf("parseExchangeContentView(%q) unexpectedly succeeded", rawQuery)
 		}
 	}
+}
+
+func setConversationRef(record *activity.Record) {
+	if record.Kind == activity.KindExchangeStarted {
+		ref := agentconversation.Ref{
+			ProjectionID: "exchange:" + record.SubjectID,
+			Kind:         agentconversation.KindPendingExchange,
+			Evidence:     agentconversation.EvidencePending,
+		}
+		record.Conversation = &ref
+		return
+	}
+	if record.CaptureRunID != "" {
+		ref := agentconversation.Ref{
+			ProjectionID: "capture_run:" + record.CaptureRunID + ":main",
+			DisplayName:  record.SourceDisplayName,
+			Kind:         agentconversation.KindMain,
+			Evidence:     agentconversation.EvidenceCaptureRun,
+		}
+		record.Conversation = &ref
+		return
+	}
+	ref := agentconversation.Ref{
+		ProjectionID: "exchange:" + record.SubjectID,
+		Kind:         agentconversation.KindIsolatedExchange,
+		Evidence:     agentconversation.EvidenceUndecodedExchange,
+	}
+	record.Conversation = &ref
 }
 
 func exchangeContentFixture(t *testing.T, activityRecord activity.Record) exchangecontent.Record {
@@ -412,13 +531,15 @@ func TestActivityListQueryIsClosedAndBounded(t *testing.T) {
 	}
 	parsed, err := parseActivityListQuery(
 		"limit=200&cursor=" + cursor +
-			"&kind=exchange&captureRunId=run-one&environmentId=work",
+			"&kind=exchange&captureRunId=run-one&environmentId=work" +
+			"&conversationId=capture_run%3Arun-one%3Amain",
 	)
 	if err != nil ||
 		parsed.limit != 200 ||
 		parsed.beforeSequence != 91 ||
 		parsed.captureRunID != "run-one" ||
-		parsed.environmentID != "work" {
+		parsed.environmentID != "work" ||
+		parsed.conversationID != "capture_run:run-one:main" {
 		t.Fatalf("parsed Activity query = %+v, %v", parsed, err)
 	}
 	manual, err := parseActivityListQuery(
@@ -448,6 +569,9 @@ func TestActivityListQueryIsClosedAndBounded(t *testing.T) {
 		"captureRunId=run-one&manualCaptureId=manual-one",
 		"environmentId=",
 		"environmentId=work&environmentId=personal",
+		"conversationId=",
+		"conversationId=bad%0Aid",
+		"conversationId=one&conversationId=two",
 		"kind=connection",
 		"kind=exchange&kind=exchange",
 		"limit=10;cursor=" + cursor,
@@ -456,5 +580,33 @@ func TestActivityListQueryIsClosedAndBounded(t *testing.T) {
 		if _, err := parseActivityListQuery(invalid); err == nil {
 			t.Fatalf("parseActivityListQuery(%q) unexpectedly succeeded", invalid)
 		}
+	}
+}
+
+func TestConversationPageKeepsFlatProjectionIdentity(t *testing.T) {
+	t.Parallel()
+	record := activity.Record{
+		Sequence: 3, ID: "activity-agent", OccurredAt: time.Date(2026, 8, 13, 10, 0, 0, 0, time.UTC),
+		Kind: activity.KindExchangeCompleted, EnvironmentID: "work", EnvironmentRevision: 1,
+		EnvironmentDigest: strings.Repeat("a", 64), ClientEndpointID: "endpoint", ClientEndpointRevision: 1,
+		ProtocolPlanID: "protocol", ProtocolPlanRevision: 1, RouteID: "route", RouteRevision: 1,
+		SubjectID: "exchange-agent", Status: activity.StatusSucceeded,
+		SourceKind: activity.SourceCaptureRun, SourceDisplayName: "codex",
+		SourceRecognition: activity.SourceRecognitionVerified, CaptureRunID: "run-agent", ConnectionID: "connection-agent",
+	}
+	ref := agentconversation.Ref{
+		ProjectionID: "capture_run:run-agent:agent:reviewer", DisplayName: "reviewer",
+		Kind: agentconversation.KindAgent, Evidence: agentconversation.EvidenceExplicitActor,
+		Actor: "/root/reviewer",
+	}
+	record.Conversation = &ref
+	page, err := conversationPageOf(activity.ConversationPage{Items: []activity.ConversationRecord{{
+		Conversation: ref, FirstSequence: 1,
+		FirstOccurredAt: time.Date(2026, 8, 13, 9, 0, 0, 0, time.UTC),
+		TurnCount:       3, Latest: record,
+	}}})
+	if err != nil || len(page.Items) != 1 || page.Items[0].Conversation.ID != ref.ProjectionID ||
+		page.Items[0].TurnCount != 3 || page.Items[0].Latest.ID != record.SubjectID {
+		t.Fatalf("Conversation page = %+v, %v", page, err)
 	}
 }

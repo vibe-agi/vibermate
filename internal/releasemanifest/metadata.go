@@ -15,7 +15,7 @@ import (
 )
 
 const (
-	DesktopBuildSchemaV2     = "vibermate.desktop-build/v2"
+	DesktopBuildSchemaV3     = "vibermate.desktop-build/v3"
 	KnownIssuesSchemaV1      = "vibermate.known-issues/v1"
 	AppTreeLedgerSchemaV1    = "vibermate.app-tree-ledger/v1"
 	CapabilityEvidenceSchema = "vibermate.capability-evidence/v1"
@@ -41,15 +41,30 @@ var (
 var desktopBuildConfigurationNames = []string{
 	"go.mod",
 	"go.sum",
-	"rust-toolchain.toml",
-	"ui/desktop/package.json",
-	"ui/desktop/pnpm-lock.yaml",
-	"ui/desktop/src-tauri/Cargo.toml",
-	"ui/desktop/src-tauri/Cargo.lock",
-	"ui/desktop/src-tauri/tauri.conf.json",
+	"ui/flutter_app/.metadata",
+	"ui/flutter_app/pubspec.yaml",
+	"ui/flutter_app/pubspec.lock",
+	"ui/flutter_app/tool/flutter-sdk.env",
+	"ui/flutter_app/macos/Runner.xcodeproj/project.pbxproj",
+	"ui/flutter_app/macos/Runner/Configs/AppInfo.xcconfig",
+	"ui/flutter_app/macos/Runner/Configs/Release.xcconfig",
+	"ui/flutter_app/macos/Runner/Info.plist",
+	"ui/flutter_app/macos/Runner/Release.entitlements",
 }
 
-var desktopSidecarNames = []string{"vibermate", "vibermated"}
+var desktopNestedCodeNames = []string{
+	"app-framework",
+	"flutter-macos-framework",
+	"vibermate",
+	"vibermated",
+}
+
+var desktopNestedCodePayloadPaths = map[string]string{
+	"dist/App.framework/App":                   "app-framework",
+	"dist/FlutterMacOS.framework/FlutterMacOS": "flutter-macos-framework",
+	"vibermate":  "vibermate",
+	"vibermated": "vibermated",
+}
 
 type desktopBuildDocument struct {
 	Schema              string                 `json:"schema"`
@@ -57,7 +72,7 @@ type desktopBuildDocument struct {
 	Profiles            desktopBuildProfiles   `json:"profiles"`
 	Toolchains          desktopBuildToolchains `json:"toolchains"`
 	ConfigurationSHA256 map[string]string      `json:"configurationSHA256"`
-	SidecarSHA256       map[string]string      `json:"sidecarSHA256"`
+	NestedCodeSHA256    map[string]string      `json:"nestedCodeSHA256"`
 }
 
 type desktopBuildSource struct {
@@ -71,15 +86,14 @@ type desktopBuildProfiles struct {
 	Desktop  string `json:"desktop"`
 	Sidecars string `json:"sidecars"`
 	Target   string `json:"target"`
+	Toolkit  string `json:"toolkit"`
 }
 
 type desktopBuildToolchains struct {
-	Go    string `json:"go"`
-	Node  string `json:"node"`
-	Rustc string `json:"rustc"`
-	Cargo string `json:"cargo"`
-	PNPM  string `json:"pnpm"`
-	Tauri string `json:"tauri"`
+	Go      string `json:"go"`
+	Flutter string `json:"flutter"`
+	Dart    string `json:"dart"`
+	Xcode   string `json:"xcode"`
 }
 
 type knownIssuesDocument struct {
@@ -231,8 +245,8 @@ func validateDesktopBuildDocument(payload []byte, manifest Manifest) error {
 	if err := decodeClosedArtifactJSON(payload, &document); err != nil {
 		return fmt.Errorf("desktop build manifest: %w", err)
 	}
-	if document.Schema != DesktopBuildSchemaV2 {
-		return fmt.Errorf("desktop build manifest schema must be %q", DesktopBuildSchemaV2)
+	if document.Schema != DesktopBuildSchemaV3 {
+		return fmt.Errorf("desktop build manifest schema must be %q", DesktopBuildSchemaV3)
 	}
 	if document.Source.VCS != "git" || document.Source.Revision != manifest.Commit {
 		return errors.New("desktop build manifest source does not bind the release commit")
@@ -244,17 +258,16 @@ func validateDesktopBuildDocument(payload []byte, manifest Manifest) error {
 		return err
 	}
 	if document.Profiles.Desktop != "release" ||
-		document.Profiles.Sidecars != "distribution" ||
-		document.Profiles.Target != "universal-apple-darwin" {
+		document.Profiles.Sidecars != "release" ||
+		document.Profiles.Target != "universal-apple-darwin" ||
+		document.Profiles.Toolkit != "flutter" {
 		return errors.New("desktop build manifest profiles are not the distribution profile")
 	}
 	toolchains := map[string]string{
-		"go":    document.Toolchains.Go,
-		"node":  document.Toolchains.Node,
-		"rustc": document.Toolchains.Rustc,
-		"cargo": document.Toolchains.Cargo,
-		"pnpm":  document.Toolchains.PNPM,
-		"tauri": document.Toolchains.Tauri,
+		"go":      document.Toolchains.Go,
+		"flutter": document.Toolchains.Flutter,
+		"dart":    document.Toolchains.Dart,
+		"xcode":   document.Toolchains.Xcode,
 	}
 	for name, value := range toolchains {
 		if err := validateMetadataText("desktop build manifest toolchain "+name, value, 4096, true); err != nil {
@@ -269,9 +282,9 @@ func validateDesktopBuildDocument(payload []byte, manifest Manifest) error {
 		return err
 	}
 	return validateExactDigestMap(
-		"desktop build manifest sidecarSHA256",
-		document.SidecarSHA256,
-		desktopSidecarNames,
+		"desktop build manifest nestedCodeSHA256",
+		document.NestedCodeSHA256,
+		desktopNestedCodeNames,
 	)
 }
 

@@ -25,9 +25,10 @@ case "${mode}" in
 esac
 
 cd "${flutter_directory}"
-if [[ "${VIBERMATE_FLUTTER_CLEAN:-0}" == "1" ]]; then
-  flutter clean
-fi
+# A bundle from the other mode can leave authority-bearing sidecars or preview
+# assets in Flutter's incremental product directory. Every packaged build must
+# therefore begin from a closed empty output, even for ordinary local use.
+flutter clean
 flutter pub get
 
 if [[ "${mode}" == "preview" ]]; then
@@ -70,7 +71,26 @@ else
   fi
   codesign --force --sign - "${cli_executable}"
   codesign --force --sign - "${daemon_executable}"
-  codesign --force --deep --sign - "${app_bundle}"
+  case "$(uname -m)" in
+    arm64)
+      desktop_target="aarch64-apple-darwin"
+      ;;
+    x86_64)
+      desktop_target="x86_64-apple-darwin"
+      ;;
+    *)
+      echo "unsupported macOS build architecture: $(uname -m)" >&2
+      exit 70
+      ;;
+  esac
+  node "${script_directory}/desktop_build_manifest.mjs" \
+    --app="${app_bundle}" \
+    --repository-root="${repository_root}" \
+    --target="${desktop_target}"
+  # Nested Flutter frameworks and Go sidecars already carry their own ad-hoc
+  # signatures. Sign only the outer bundle here so embedding the manifest does
+  # not silently rewrite the nested bytes that manifest records.
+  codesign --force --sign - "${app_bundle}"
 fi
 
 source_app="${flutter_directory}/build/macos/Build/Products/Release/ViberMate.app"

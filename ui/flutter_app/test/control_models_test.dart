@@ -154,6 +154,77 @@ void main() {
     expect(account.usable, isFalse);
   });
 
+  test(
+    'Agent client identity keeps common and native protocol identifiers',
+    () {
+      final identity = AgentClientIdentity.fromJson(
+        _codexClientIdentityJson(),
+        'clientIdentity',
+      );
+
+      expect(identity.client, 'codex');
+      expect(identity.sessionId, 'session-root-1');
+      expect(identity.actorId, 'thread-subagent-1');
+      expect(identity.actorLabel, 'reviewer');
+      expect(identity.actorIsSubagent, isTrue);
+      expect(
+        identity.protocolIds.map((value) => value.name),
+        containsAll(<String>[
+          'codex.response_item_id',
+          'codex.session_id',
+          'codex.thread_id',
+          'codex.turn_id',
+        ]),
+      );
+      expect(identity.searchableValues, contains('turn-7'));
+      expect(identity.searchableValues, contains('reviewer'));
+    },
+  );
+
+  test('Agent client identity rejects non-canonical or ambiguous evidence', () {
+    final unordered = _codexClientIdentityJson();
+    unordered['protocolIds'] = <Object?>[
+      {'name': 'codex.turn_id', 'value': 'turn-7'},
+      {'name': 'codex.session_id', 'value': 'session-root-1'},
+    ];
+    expect(
+      () => AgentClientIdentity.fromJson(unordered, 'clientIdentity'),
+      throwsA(isA<ControlContractException>()),
+    );
+
+    final actorless = _codexClientIdentityJson();
+    actorless.remove('actorId');
+    expect(
+      () => AgentClientIdentity.fromJson(actorless, 'clientIdentity'),
+      throwsA(isA<ControlContractException>()),
+    );
+  });
+
+  test('network Agent identity may precede the provider response', () {
+    final identity = AgentClientIdentity.fromJson({
+      'client': 'claude',
+      'sessionId': '64fe284e-4565-4065-961d-3db7351ff152',
+      'sessionResumable': true,
+      'actorId': 'a5ef98e49c0e228c9',
+      'actorIsSubagent': true,
+      'source': 'client_protocol_evidence',
+      'confidence': 'exact',
+      'observedAt': '2026-08-14T11:31:05.000Z',
+      'protocolIds': <Object?>[
+        {'name': 'claude.agent_id', 'value': 'a5ef98e49c0e228c9'},
+        {'name': 'claude.parent_agent_id', 'value': 'aaac343a3a31d4ccf'},
+        {
+          'name': 'claude.session_id',
+          'value': '64fe284e-4565-4065-961d-3db7351ff152',
+        },
+      ],
+    }, 'clientIdentity');
+
+    expect(identity.providerResponseId, isNull);
+    expect(identity.actorIsSubagent, isTrue);
+    expect(identity.searchableValues, contains('aaac343a3a31d4ccf'));
+  });
+
   test('Offline hold accepts only internally consistent safety evidence', () {
     final json = <String, Object?>{
       'state': 'held',
@@ -314,6 +385,12 @@ void main() {
         'kind': 'capture_run',
         'displayName': 'Claude Code',
         'recognition': 'verified',
+      },
+      'conversation': {
+        'id': 'capture_run:run-test:main',
+        'displayName': 'Claude Code',
+        'kind': 'main',
+        'evidence': 'capture_run',
       },
       'environment': {
         'id': 'work',
@@ -502,7 +579,135 @@ void main() {
       );
     },
   );
+
+  test('Raw reveal rejects tampered body digests and frame ranges', () {
+    final valid = _rawRevealJson();
+    final reveal = RevealedRawEvidence.fromJson(
+      valid,
+      'rawReveal',
+      expectedEnvelopeId: 'raw-test',
+    );
+    expect(utf8.decode(reveal.body), 'hello');
+    expect(reveal.headers.single.values, ['one', 'two']);
+    expect(reveal.frames.single.length, 5);
+
+    final wrongDigest = jsonDecode(jsonEncode(valid)) as Map<String, dynamic>;
+    (wrongDigest['envelope'] as Map<String, dynamic>)['bodySha256'] =
+        List.filled(64, '0').join();
+    expect(
+      () => RevealedRawEvidence.fromJson(
+        wrongDigest,
+        'rawReveal',
+        expectedEnvelopeId: 'raw-test',
+      ),
+      throwsA(isA<ControlContractException>()),
+    );
+
+    final invalidFrame = jsonDecode(jsonEncode(valid)) as Map<String, dynamic>;
+    final frame =
+        (invalidFrame['frames'] as List<dynamic>).single
+            as Map<String, dynamic>;
+    frame['offset'] = 4;
+    frame['length'] = 2;
+    expect(
+      () => RevealedRawEvidence.fromJson(
+        invalidFrame,
+        'rawReveal',
+        expectedEnvelopeId: 'raw-test',
+      ),
+      throwsA(isA<ControlContractException>()),
+    );
+
+    final nullableEmptyCollections = _rawRevealJson();
+    final envelope =
+        nullableEmptyCollections['envelope']! as Map<String, Object?>;
+    envelope['headerCount'] = 0;
+    envelope['trailerCount'] = 0;
+    nullableEmptyCollections['headers'] = null;
+    nullableEmptyCollections['trailers'] = null;
+    nullableEmptyCollections['frames'] = null;
+    final normalized = RevealedRawEvidence.fromJson(
+      nullableEmptyCollections,
+      'rawReveal',
+      expectedEnvelopeId: 'raw-test',
+    );
+    expect(normalized.headers, isEmpty);
+    expect(normalized.trailers, isEmpty);
+    expect(normalized.frames, isEmpty);
+
+    nullableEmptyCollections['trailers'] = 'not-an-array';
+    expect(
+      () => RevealedRawEvidence.fromJson(
+        nullableEmptyCollections,
+        'rawReveal',
+        expectedEnvelopeId: 'raw-test',
+      ),
+      throwsA(isA<ControlContractException>()),
+    );
+  });
 }
+
+Map<String, Object?> _rawRevealJson() => {
+  'envelope': {
+    'envelopeId': 'raw-test',
+    'layer': 'provider_response',
+    'scopeKind': 'managed_run',
+    'scopeId': 'run-test',
+    'exchangeId': 'exchange-test',
+    'observedAt': '2026-08-11T00:00:00.000Z',
+    'expiresAt': '2026-09-10T00:00:00.000Z',
+    'statusCode': 200,
+    'headerCount': 2,
+    'trailerCount': 1,
+    'bodyBytes': 5,
+    'bodySha256':
+        '2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824',
+    'digestScope': 'full_body',
+    'payloadState': 'captured',
+    'containsSecret': false,
+    'revealAvailable': true,
+  },
+  'headers': [
+    {
+      'name': 'X-Repeat',
+      'values': ['one', 'two'],
+    },
+  ],
+  'trailers': [
+    {
+      'name': 'X-Trailer',
+      'values': ['done'],
+    },
+  ],
+  'bodyBase64': 'aGVsbG8=',
+  'frames': [
+    {'kind': 'data', 'offset': 0, 'length': 5},
+  ],
+};
+
+Map<String, Object?> _codexClientIdentityJson() => {
+  'client': 'codex',
+  'sessionId': 'session-root-1',
+  'sessionResumable': true,
+  'actorId': 'thread-subagent-1',
+  'actorLabel': 'reviewer',
+  'actorType': 'worker',
+  'actorIsSubagent': true,
+  'providerResponseId': 'response-1',
+  'source': 'client_local_state',
+  'confidence': 'exact',
+  'observedAt': '2026-08-11T00:00:00.000Z',
+  'protocolIds': <Object?>[
+    {'name': 'codex.response_item_id', 'value': 'item-1'},
+    {'name': 'codex.session_id', 'value': 'session-root-1'},
+    {'name': 'codex.thread_id', 'value': 'thread-subagent-1'},
+    {'name': 'codex.turn_id', 'value': 'turn-7'},
+  ],
+  'attributes': <Object?>[
+    {'name': 'codex.agent_nickname', 'value': 'reviewer'},
+    {'name': 'codex.spawn_depth', 'value': '1'},
+  ],
+};
 
 Map<String, Object?> _networkApprovalJson() => {
   'id': 'approval-network-test',

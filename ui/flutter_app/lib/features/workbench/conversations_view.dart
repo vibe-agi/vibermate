@@ -1,7 +1,10 @@
 import 'dart:async';
+import 'dart:math' as math;
 
 import 'package:flutter/material.dart';
 
+import '../../core/api/control_models.dart';
+import '../../core/design/agent_identity.dart';
 import '../../core/design/viber_theme.dart';
 import '../../core/design/workbench_widgets.dart';
 import '../../core/i18n/app_copy.dart';
@@ -25,6 +28,8 @@ final class ConversationsView extends StatefulWidget {
 final class _ConversationsViewState extends State<ConversationsView> {
   String _filter = '';
   bool _narrowDetail = false;
+  bool _masterVisible = true;
+  double _masterWidth = ViberMetrics.masterPaneWidth;
 
   @override
   Widget build(BuildContext context) {
@@ -46,6 +51,10 @@ final class _ConversationsViewState extends State<ConversationsView> {
           copy: widget.copy,
           showBack: narrow,
           onBack: () => setState(() => _narrowDetail = false),
+          masterVisible: _masterVisible,
+          onToggleMaster: narrow
+              ? null
+              : () => setState(() => _masterVisible = !_masterVisible),
         );
         if (narrow) {
           return AnimatedSwitcher(
@@ -62,10 +71,31 @@ final class _ConversationsViewState extends State<ConversationsView> {
                   ),
           );
         }
+        final maxWidth = math.min(
+          ViberMetrics.masterPaneMaxWidth,
+          constraints.maxWidth * 0.45,
+        );
+        final masterWidth = _masterWidth
+            .clamp(ViberMetrics.masterPaneMinWidth, maxWidth)
+            .toDouble();
         return Row(
           children: [
-            SizedBox(width: 316, child: master),
-            const VerticalDivider(width: 1),
+            if (_masterVisible) ...[
+              SizedBox(
+                key: const Key('conversation-master-pane'),
+                width: masterWidth,
+                child: master,
+              ),
+              WorkbenchPaneDivider(
+                key: const Key('conversation-master-divider'),
+                label: widget.copy('common.resize_directory'),
+                onDrag: (delta) => setState(() {
+                  _masterWidth = (_masterWidth + delta)
+                      .clamp(ViberMetrics.masterPaneMinWidth, maxWidth)
+                      .toDouble();
+                }),
+              ),
+            ],
             Expanded(child: detail),
           ],
         );
@@ -101,6 +131,10 @@ final class _ConversationDirectory extends StatelessWidget {
             conversation.captureRunId ?? '',
             latest.id,
             latest.sourceName,
+            conversation.conversation.displayName ?? '',
+            conversation.conversation.actor ?? '',
+            ...?conversation.conversation.clientIdentity?.searchableValues,
+            conversation.conversation.kind,
             latest.environmentId,
             latest.status,
             latest.reasonCode ?? '',
@@ -108,23 +142,18 @@ final class _ConversationDirectory extends StatelessWidget {
         })
         .toList(growable: false);
     return ColoredBox(
-      color: ViberColors.panel,
+      color: context.viberColors.panel,
       child: Column(
         children: [
           Padding(
-            padding: const EdgeInsets.fromLTRB(10, 10, 10, 7),
+            padding: const EdgeInsets.fromLTRB(8, 8, 8, 6),
             child: Semantics(
               textField: true,
               label: copy('conversations.filter'),
-              child: TextField(
+              child: CompactSearchField(
+                key: const Key('conversation-filter'),
+                hintText: copy('conversations.filter'),
                 onChanged: onFilter,
-                decoration: InputDecoration(
-                  hintText: copy('conversations.filter'),
-                  prefixIcon: const Icon(Icons.search, size: 15),
-                  prefixIconConstraints: const BoxConstraints.tightFor(
-                    width: 31,
-                  ),
-                ),
               ),
             ),
           ),
@@ -205,50 +234,44 @@ final class _ConversationRow extends StatelessWidget {
     final failed = latest.status == 'failed';
     final pending = latest.status == 'pending';
     final tone = failed
-        ? ViberColors.danger
+        ? context.viberColors.danger
         : pending
-        ? ViberColors.warning
-        : ViberColors.verified;
+        ? context.viberColors.warning
+        : context.viberColors.verified;
+    final title = _conversationTitle(copy, conversation);
     return Semantics(
       selected: selected,
       button: true,
-      label:
-          '${latest.sourceName}, ${conversation.turnCount}, ${latest.status}',
+      label: '$title, ${conversation.turnCount}, ${latest.status}',
       child: Material(
-        color: selected ? ViberColors.selection : Colors.transparent,
+        color: selected ? context.viberColors.selection : Colors.transparent,
         child: InkWell(
           key: Key('conversation-row-${conversation.key}'),
           onTap: onPressed,
           canRequestFocus: true,
           child: Container(
-            height: 58,
-            padding: const EdgeInsets.fromLTRB(9, 6, 8, 6),
+            height: 52,
+            padding: const EdgeInsets.fromLTRB(8, 4, 7, 4),
             decoration: BoxDecoration(
               border: Border(
                 left: BorderSide(
                   width: 2,
-                  color: selected ? ViberColors.route : Colors.transparent,
+                  color: selected
+                      ? context.viberColors.route
+                      : Colors.transparent,
                 ),
-                bottom: const BorderSide(color: ViberColors.dividerSoft),
+                bottom: BorderSide(color: context.viberColors.dividerSoft),
               ),
             ),
             child: Row(
               children: [
-                Container(
-                  width: 28,
-                  height: 28,
-                  decoration: BoxDecoration(
-                    color: tone.withValues(alpha: 0.08),
-                    border: Border.all(color: tone.withValues(alpha: 0.25)),
-                    borderRadius: BorderRadius.circular(5),
-                  ),
-                  child: Icon(
-                    conversation.exchangeScoped
-                        ? Icons.swap_horiz
-                        : Icons.forum_outlined,
-                    size: 15,
-                    color: tone,
-                  ),
+                AgentIdentityMark(
+                  candidates: [latest.sourceName],
+                  fallbackLabel: title,
+                  fallbackIcon: conversation.exchangeScoped
+                      ? Icons.swap_horiz
+                      : Icons.forum_outlined,
+                  fallbackColor: tone,
                 ),
                 const SizedBox(width: 8),
                 Expanded(
@@ -260,14 +283,14 @@ final class _ConversationRow extends StatelessWidget {
                         children: [
                           Expanded(
                             child: Text(
-                              latest.sourceName,
+                              title,
                               maxLines: 1,
                               overflow: TextOverflow.ellipsis,
                               style: Theme.of(context).textTheme.titleSmall,
                             ),
                           ),
                           Text(
-                            _relativeTime(latest.occurredAt),
+                            _relativeTime(latest.occurredAt, copy),
                             style: monoStyle,
                           ),
                         ],
@@ -277,12 +300,7 @@ final class _ConversationRow extends StatelessWidget {
                         children: [
                           Expanded(
                             child: Text(
-                              conversation.exchangeScoped
-                                  ? copy('conversations.boundary.exchange')
-                                  : copy.format(
-                                      'conversations.boundary.capture_run',
-                                      {'count': conversation.turnCount},
-                                    ),
+                              _conversationScope(copy, conversation),
                               maxLines: 1,
                               overflow: TextOverflow.ellipsis,
                               style: Theme.of(context).textTheme.bodySmall,
@@ -309,12 +327,16 @@ final class _ConversationDetail extends StatelessWidget {
     required this.copy,
     required this.showBack,
     required this.onBack,
+    required this.masterVisible,
+    required this.onToggleMaster,
   });
 
   final WorkbenchController controller;
   final AppCopy copy;
   final bool showBack;
   final VoidCallback onBack;
+  final bool masterVisible;
+  final VoidCallback? onToggleMaster;
 
   @override
   Widget build(BuildContext context) {
@@ -326,16 +348,42 @@ final class _ConversationDetail extends StatelessWidget {
       );
     }
     final activities = controller.selectedConversationPage?.items ?? const [];
+    final capture = controller.data?.captures.where((candidate) {
+      return conversation.captureRunId != null
+          ? candidate.captureRunId == conversation.captureRunId
+          : candidate.isManual &&
+                candidate.id == conversation.latest.manualCaptureId;
+    }).firstOrNull;
+    final title = _conversationTitle(copy, conversation);
+    final scope = _conversationScope(copy, conversation);
     return ColoredBox(
-      color: ViberColors.canvas,
+      color: context.viberColors.canvas,
       child: Column(
         children: [
           Container(
             width: double.infinity,
             padding: const EdgeInsets.fromLTRB(14, 9, 14, 9),
-            color: ViberColors.panel,
+            color: context.viberColors.panel,
             child: Row(
               children: [
+                if (onToggleMaster case final toggle?) ...[
+                  IconButton(
+                    key: const Key('conversation-directory-toggle'),
+                    onPressed: toggle,
+                    tooltip: copy(
+                      masterVisible
+                          ? 'common.hide_directory'
+                          : 'common.show_directory',
+                    ),
+                    icon: Icon(Icons.view_sidebar_outlined, size: 15),
+                    constraints: const BoxConstraints.tightFor(
+                      width: 24,
+                      height: 24,
+                    ),
+                    padding: EdgeInsets.zero,
+                  ),
+                  const SizedBox(width: 4),
+                ],
                 if (showBack) ...[
                   IconButton(
                     onPressed: onBack,
@@ -349,37 +397,57 @@ final class _ConversationDetail extends StatelessWidget {
                   ),
                   const SizedBox(width: 4),
                 ],
+                AgentIdentityMark(
+                  candidates: [conversation.latest.sourceName],
+                  fallbackLabel: title,
+                  fallbackIcon: conversation.exchangeScoped
+                      ? Icons.swap_horiz
+                      : Icons.forum_outlined,
+                  size: 30,
+                  glyphSize: 18,
+                  muted: capture != null && !capture.running,
+                ),
+                const SizedBox(width: 8),
                 Expanded(
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
                       Text(
-                        conversation.latest.sourceName,
+                        title,
                         maxLines: 1,
                         overflow: TextOverflow.ellipsis,
                         style: Theme.of(context).textTheme.headlineSmall,
                       ),
                       const SizedBox(height: 2),
-                      Text(
-                        conversation.exchangeScoped
-                            ? copy('conversations.exchange_boundary.detail')
-                            : copy('conversations.capture_run_boundary.detail'),
-                        maxLines: 2,
-                        overflow: TextOverflow.ellipsis,
-                        style: Theme.of(context).textTheme.bodySmall,
+                      Tooltip(
+                        message: copy('conversations.derived'),
+                        child: Text(
+                          _conversationMetadata(copy, capture, scope),
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: Theme.of(context).textTheme.bodySmall,
+                        ),
                       ),
                     ],
                   ),
                 ),
                 const SizedBox(width: 8),
-                StatusPill(
-                  label: conversation.exchangeScoped
-                      ? copy('conversations.exchange_boundary')
-                      : copy('conversations.capture_run_boundary'),
-                  color: conversation.exchangeScoped
-                      ? ViberColors.warning
-                      : ViberColors.route,
-                ),
+                if (showBack)
+                  IconButton(
+                    key: const Key('conversation-capture-context'),
+                    onPressed: () =>
+                        unawaited(controller.openSelectedConversationCapture()),
+                    tooltip: copy('conversations.capture_context'),
+                    icon: const Icon(Icons.arrow_forward_rounded, size: 15),
+                  )
+                else
+                  TextButton.icon(
+                    key: const Key('conversation-capture-context'),
+                    onPressed: () =>
+                        unawaited(controller.openSelectedConversationCapture()),
+                    icon: const Icon(Icons.arrow_forward_rounded, size: 13),
+                    label: Text(copy('conversations.capture_context')),
+                  ),
               ],
             ),
           ),
@@ -395,6 +463,9 @@ final class _ConversationDetail extends StatelessWidget {
                     controller: controller,
                     activities: activities,
                     copy: copy,
+                    title: conversation.exchangeScoped
+                        ? null
+                        : copy('conversations.audit'),
                     canLoadEarlier:
                         controller.selectedConversationPage?.nextCursor != null,
                     loadingEarlier: controller.conversationsLoading,
@@ -409,10 +480,63 @@ final class _ConversationDetail extends StatelessWidget {
   }
 }
 
-String _relativeTime(DateTime timestamp) {
+String _conversationTitle(AppCopy copy, ConversationSummary conversation) {
+  final source = conversation.latest.sourceName;
+  final displayName = conversation.conversation.displayName?.trim();
+  return switch (conversation.conversation.kind) {
+    'agent' when displayName != null && displayName.isNotEmpty => displayName,
+    'isolated_subagent' => copy.format(
+      'conversations.name.anonymous_subagent',
+      {'agent': source},
+    ),
+    'pending_exchange' => copy.format('conversations.name.pending', {
+      'agent': source,
+    }),
+    _ => displayName == null || displayName.isEmpty ? source : displayName,
+  };
+}
+
+String _conversationScope(AppCopy copy, ConversationSummary conversation) {
+  final turns = copy.format('conversations.turn_count', {
+    'count': conversation.turnCount,
+  });
+  return switch (conversation.conversation.kind) {
+    'agent' => '$turns · ${copy('conversations.scope.named_agent')}',
+    'isolated_subagent' =>
+      '$turns · ${copy('conversations.scope.anonymous_agent')}',
+    'pending_exchange' => copy('conversations.scope.pending'),
+    'isolated_exchange' => '$turns · ${copy('conversations.scope.exchange')}',
+    _ => turns,
+  };
+}
+
+String _conversationMetadata(
+  AppCopy copy,
+  CaptureRecord? capture,
+  String fallback,
+) {
+  if (capture == null) return fallback;
+  final managed = capture.managedRun;
+  final parts = <String>[
+    ?managed?.workspaceLabel,
+    ?managed?.localUserLabel,
+    capture.isManual
+        ? copy('capture.source.manual.short')
+        : copy('capture.source.managed.short'),
+  ];
+  return parts.join('  ·  ');
+}
+
+String _relativeTime(DateTime timestamp, AppCopy copy) {
   final delta = DateTime.now().toUtc().difference(timestamp);
-  if (delta.isNegative || delta.inMinutes < 1) return 'now';
-  if (delta.inHours < 1) return '${delta.inMinutes}m';
-  if (delta.inDays < 1) return '${delta.inHours}h';
-  return '${delta.inDays}d';
+  if (delta.isNegative || delta.inMinutes < 1) {
+    return copy('common.time.now');
+  }
+  if (delta.inHours < 1) {
+    return copy.format('common.time.minutes', {'count': delta.inMinutes});
+  }
+  if (delta.inDays < 1) {
+    return copy.format('common.time.hours', {'count': delta.inHours});
+  }
+  return copy.format('common.time.days', {'count': delta.inDays});
 }

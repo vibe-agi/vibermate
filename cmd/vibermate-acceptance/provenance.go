@@ -22,14 +22,14 @@ import (
 )
 
 const (
-	expectedGoVersion    = acceptancereport.ExpectedGoVersion
-	expectedNodeVersion  = acceptancereport.ExpectedNodeVersion
-	expectedRustVersion  = acceptancereport.ExpectedRustVersion
-	expectedPNPMVersion  = acceptancereport.ExpectedPNPMVersion
-	expectedTauriVersion = acceptancereport.ExpectedTauriVersion
+	expectedGoVersion       = acceptancereport.ExpectedGoVersion
+	expectedFlutterVersion  = acceptancereport.ExpectedFlutterVersion
+	expectedFlutterRevision = acceptancereport.ExpectedFlutterRevision
+	expectedDartVersion     = acceptancereport.ExpectedDartVersion
+	expectedXcodeVersion    = acceptancereport.ExpectedXcodeVersion
 
 	desktopBuildManifestSchema = acceptancereport.DesktopBuildManifestSchema
-	desktopBuildManifestV2     = acceptancereport.DesktopBuildManifestSchemaV2
+	desktopBuildManifestV3     = acceptancereport.DesktopBuildManifestSchemaV3
 	desktopBuildManifestName   = "vibermate-build-manifest.json"
 	maxBuildManifestBytes      = 128 << 10
 )
@@ -43,6 +43,7 @@ type desktopBuildProfiles struct {
 	Desktop  string `json:"desktop"`
 	Sidecars string `json:"sidecars"`
 	Target   string `json:"target"`
+	Toolkit  string `json:"toolkit"`
 }
 
 type desktopBuildManifest struct {
@@ -51,7 +52,7 @@ type desktopBuildManifest struct {
 	Profiles            desktopBuildProfiles   `json:"profiles"`
 	Toolchains          desktopBuildToolchains `json:"toolchains"`
 	ConfigurationSHA256 map[string]string      `json:"configurationSHA256"`
-	SidecarSHA256       map[string]string      `json:"sidecarSHA256"`
+	NestedCodeSHA256    map[string]string      `json:"nestedCodeSHA256"`
 }
 
 type buildProvenance = acceptancereport.BuildProvenance
@@ -127,6 +128,20 @@ func collectAcceptanceProvenance(
 		path string
 	}{
 		{role: "desktop-app-executable", path: desktopPath},
+		{
+			role: "app-framework",
+			path: filepath.Join(
+				config.desktopAppPath,
+				"Contents", "Frameworks", "App.framework", "Versions", "A", "App",
+			),
+		},
+		{
+			role: "flutter-macos-framework",
+			path: filepath.Join(
+				config.desktopAppPath,
+				"Contents", "Frameworks", "FlutterMacOS.framework", "Versions", "A", "FlutterMacOS",
+			),
+		},
 		{role: "daemon", path: config.daemonPath},
 		{role: "launcher", path: config.launcherPath},
 		{role: "acceptance", path: acceptancePath},
@@ -185,6 +200,7 @@ func collectAcceptanceProvenance(
 	provenance.Build.DesktopProfile = manifest.Profiles.Desktop
 	provenance.Build.SidecarProfile = profile
 	provenance.Build.Target = manifest.Profiles.Target
+	provenance.Build.Toolkit = manifest.Profiles.Toolkit
 	provenance.Build.Toolchains = manifest.Toolchains
 	provenance.Build.ConfigurationSHA256 = mapsClone(
 		manifest.ConfigurationSHA256,
@@ -251,8 +267,8 @@ func validateDesktopBuildManifest(
 	sidecarProfile string,
 	artifacts []artifactProvenance,
 ) error {
-	if manifest.Schema != desktopBuildManifestV2 {
-		return errors.New("current acceptance requires Desktop build manifest v2")
+	if manifest.Schema != desktopBuildManifestV3 {
+		return errors.New("current acceptance requires Flutter Desktop build manifest v3")
 	}
 	if manifest.Source != source || manifest.Source.Dirty {
 		return errors.New(
@@ -261,7 +277,8 @@ func validateDesktopBuildManifest(
 	}
 	if manifest.Profiles.Desktop != "release" ||
 		manifest.Profiles.Sidecars != sidecarProfile ||
-		manifest.Profiles.Target != "aarch64-apple-darwin" {
+		manifest.Profiles.Target != "aarch64-apple-darwin" ||
+		manifest.Profiles.Toolkit != "flutter" {
 		return errors.New("Desktop build profiles are inconsistent")
 	}
 	if err := validateDesktopBuildToolchains(manifest.Toolchains); err != nil {
@@ -270,12 +287,15 @@ func validateDesktopBuildManifest(
 	requiredConfiguration := []string{
 		"go.mod",
 		"go.sum",
-		"rust-toolchain.toml",
-		"ui/desktop/package.json",
-		"ui/desktop/pnpm-lock.yaml",
-		"ui/desktop/src-tauri/Cargo.toml",
-		"ui/desktop/src-tauri/Cargo.lock",
-		"ui/desktop/src-tauri/tauri.conf.json",
+		"ui/flutter_app/.metadata",
+		"ui/flutter_app/pubspec.yaml",
+		"ui/flutter_app/pubspec.lock",
+		"ui/flutter_app/tool/flutter-sdk.env",
+		"ui/flutter_app/macos/Runner.xcodeproj/project.pbxproj",
+		"ui/flutter_app/macos/Runner/Configs/AppInfo.xcconfig",
+		"ui/flutter_app/macos/Runner/Configs/Release.xcconfig",
+		"ui/flutter_app/macos/Runner/Info.plist",
+		"ui/flutter_app/macos/Runner/Release.entitlements",
 	}
 	if len(manifest.ConfigurationSHA256) != len(requiredConfiguration) {
 		return errors.New("Desktop build configuration evidence is incomplete")
@@ -292,12 +312,21 @@ func validateDesktopBuildManifest(
 	for _, artifact := range artifacts {
 		artifactDigests[artifact.Role] = artifact.SHA256
 	}
-	if len(manifest.SidecarSHA256) != 2 ||
-		manifest.SidecarSHA256["vibermated"] != artifactDigests["daemon"] ||
-		manifest.SidecarSHA256["vibermate"] != artifactDigests["launcher"] {
-		return errors.New(
-			"Desktop build manifest does not identify the packaged sidecars",
-		)
+	wantedNestedCode := map[string]string{
+		"app-framework":           artifactDigests["app-framework"],
+		"flutter-macos-framework": artifactDigests["flutter-macos-framework"],
+		"vibermate":               artifactDigests["launcher"],
+		"vibermated":              artifactDigests["daemon"],
+	}
+	if len(manifest.NestedCodeSHA256) != len(wantedNestedCode) {
+		return errors.New("Desktop build manifest nested-code evidence is incomplete")
+	}
+	for name, digest := range wantedNestedCode {
+		if manifest.NestedCodeSHA256[name] != digest {
+			return errors.New(
+				"Desktop build manifest does not identify the packaged nested code",
+			)
+		}
 	}
 	return nil
 }
@@ -312,43 +341,28 @@ func validateDesktopBuildToolchains(
 			expectedGoVersion,
 		)
 	}
-	if tools.Node != expectedNodeVersion {
+	if tools.Flutter != normalizedFlutterVersion() {
 		return fmt.Errorf(
-			"Desktop build Node toolchain is not %s",
-			expectedNodeVersion,
+			"Desktop build Flutter toolchain is not %s",
+			expectedFlutterVersion,
 		)
 	}
-	if !strings.HasPrefix(
-		tools.Rustc,
-		"rustc "+expectedRustVersion+" ",
-	) {
+	if tools.Dart != "Dart "+expectedDartVersion {
 		return fmt.Errorf(
-			"Desktop build Rust toolchain is not %s",
-			expectedRustVersion,
+			"Desktop build Dart toolchain is not %s",
+			expectedDartVersion,
 		)
 	}
-	if !strings.HasPrefix(
-		tools.Cargo,
-		"cargo "+expectedRustVersion+" ",
-	) {
+	if tools.Xcode != expectedXcodeVersion {
 		return fmt.Errorf(
-			"Desktop build Cargo toolchain is not %s",
-			expectedRustVersion,
-		)
-	}
-	if tools.PNPM != expectedPNPMVersion {
-		return fmt.Errorf(
-			"Desktop build pnpm toolchain is not %s",
-			expectedPNPMVersion,
-		)
-	}
-	if tools.Tauri != expectedTauriVersion {
-		return fmt.Errorf(
-			"Desktop build Tauri CLI is not %s",
-			expectedTauriVersion,
+			"Desktop build Xcode toolchain is not admitted",
 		)
 	}
 	return nil
+}
+
+func normalizedFlutterVersion() string {
+	return "Flutter " + expectedFlutterVersion + " (" + expectedFlutterRevision + ")"
 }
 
 func validSHA256(value string) bool {
@@ -496,32 +510,61 @@ func hasBuildTag(tags, expected string) bool {
 }
 
 func collectToolchains(ctx context.Context) (toolchainProvenance, error) {
-	var tools toolchainProvenance
-	requests := []struct {
-		label       string
-		command     string
-		arguments   []string
-		destination *string
-	}{
-		{label: "Go", command: "go", arguments: []string{"version"}, destination: &tools.Go},
-		{label: "Node", command: "node", arguments: []string{"--version"}, destination: &tools.Node},
-		{label: "Rust", command: "rustc", arguments: []string{"--version", "--verbose"}, destination: &tools.Rustc},
-		{label: "Cargo", command: "cargo", arguments: []string{"--version"}, destination: &tools.Cargo},
-		{label: "pnpm", command: "pnpm", arguments: []string{"--version"}, destination: &tools.PNPM},
+	goVersion, err := toolVersion(ctx, "Go", "go", []string{"version"})
+	if err != nil {
+		return toolchainProvenance{}, err
 	}
-	for _, request := range requests {
-		version, err := toolVersion(
-			ctx,
-			request.label,
-			request.command,
-			request.arguments,
+	flutterSource, err := toolVersion(
+		ctx,
+		"Flutter",
+		"flutter",
+		[]string{"--version", "--machine"},
+	)
+	if err != nil {
+		return toolchainProvenance{}, err
+	}
+	var flutter struct {
+		Channel           string `json:"channel"`
+		DartSDKVersion    string `json:"dartSdkVersion"`
+		FrameworkRevision string `json:"frameworkRevision"`
+		FrameworkVersion  string `json:"frameworkVersion"`
+	}
+	decoder := json.NewDecoder(strings.NewReader(flutterSource))
+	if err := decoder.Decode(&flutter); err != nil {
+		return toolchainProvenance{}, errors.New(
+			"Flutter machine-readable toolchain evidence is malformed",
 		)
-		if err != nil {
-			return tools, err
-		}
-		*request.destination = version
 	}
-	return tools, nil
+	var trailing any
+	if err := decoder.Decode(&trailing); !errors.Is(err, io.EOF) {
+		return toolchainProvenance{}, errors.New(
+			"Flutter machine-readable toolchain evidence has trailing data",
+		)
+	}
+	if flutter.Channel != "stable" ||
+		flutter.FrameworkVersion == "" ||
+		flutter.FrameworkRevision == "" ||
+		flutter.DartSDKVersion == "" {
+		return toolchainProvenance{}, errors.New(
+			"Flutter machine-readable toolchain evidence is incomplete",
+		)
+	}
+	xcodeVersion, err := toolVersion(
+		ctx,
+		"Xcode",
+		"/usr/bin/xcodebuild",
+		[]string{"-version"},
+	)
+	if err != nil {
+		return toolchainProvenance{}, err
+	}
+	return toolchainProvenance{
+		Go: goVersion,
+		Flutter: "Flutter " + flutter.FrameworkVersion + " (" +
+			flutter.FrameworkRevision + ")",
+		Dart:  "Dart " + flutter.DartSDKVersion,
+		Xcode: xcodeVersion,
+	}, nil
 }
 
 func validateToolchains(
@@ -542,23 +585,14 @@ func validateToolchains(
 	if len(goFields) < 3 || goFields[2] != expectedGoVersion {
 		return fmt.Errorf("Go toolchain is not %s", expectedGoVersion)
 	}
-	if tools.Node != expectedNodeVersion {
-		return fmt.Errorf("Node toolchain is not %s", expectedNodeVersion)
+	if tools.Flutter != normalizedFlutterVersion() {
+		return fmt.Errorf("Flutter toolchain is not %s", expectedFlutterVersion)
 	}
-	if !strings.HasPrefix(
-		tools.Rustc,
-		"rustc "+expectedRustVersion+" ",
-	) {
-		return fmt.Errorf("Rust toolchain is not %s", expectedRustVersion)
+	if tools.Dart != "Dart "+expectedDartVersion {
+		return fmt.Errorf("Dart toolchain is not %s", expectedDartVersion)
 	}
-	if !strings.HasPrefix(
-		tools.Cargo,
-		"cargo "+expectedRustVersion+" ",
-	) {
-		return fmt.Errorf("Cargo toolchain is not %s", expectedRustVersion)
-	}
-	if tools.PNPM != expectedPNPMVersion {
-		return fmt.Errorf("pnpm toolchain is not %s", expectedPNPMVersion)
+	if tools.Xcode != expectedXcodeVersion {
+		return errors.New("Xcode toolchain is not the frozen release version")
 	}
 	return nil
 }

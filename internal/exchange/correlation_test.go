@@ -6,6 +6,7 @@ import (
 
 	"github.com/vibe-agi/vibermate/internal/captureadmission"
 	"github.com/vibe-agi/vibermate/internal/environment"
+	"github.com/vibe-agi/vibermate/internal/protocolcore"
 	"github.com/vibe-agi/vibermate/internal/protocolspec"
 	"github.com/vibe-agi/vibermate/internal/wireprofile"
 )
@@ -176,6 +177,41 @@ func TestCorrelationOptionCannotBeDuplicated(t *testing.T) {
 		),
 	); err == nil {
 		t.Fatal("duplicate ingress correlation was accepted")
+	}
+}
+
+func TestClientProtocolEvidenceIsValidatedAndCloned(t *testing.T) {
+	t.Parallel()
+
+	evidence := []protocolcore.ProtocolEvidenceValue{
+		{Name: "claude.agent_id", Value: "agent-1"},
+		{Name: "claude.session_id", Value: "session-1"},
+	}
+	request, err := correlatedRequest(
+		t,
+		"capture-run-1",
+		"connection-1",
+		WithClientProtocolEvidence(evidence),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	evidence[0].Value = "mutated"
+	got := request.ClientProtocolEvidence()
+	got[1].Value = "also-mutated"
+	if reread := request.ClientProtocolEvidence(); reread[0].Value != "agent-1" || reread[1].Value != "session-1" {
+		t.Fatalf("client protocol evidence aliases caller state: %#v", reread)
+	}
+	if _, err := correlatedRequest(
+		t,
+		"capture-run-2",
+		"connection-2",
+		WithClientProtocolEvidence([]protocolcore.ProtocolEvidenceValue{
+			{Name: "claude.session_id", Value: "session-1"},
+			{Name: "claude.agent_id", Value: "agent-1"},
+		}),
+	); err == nil {
+		t.Fatal("non-canonical client protocol evidence was accepted")
 	}
 }
 

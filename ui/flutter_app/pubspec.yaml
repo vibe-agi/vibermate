@@ -28,8 +28,12 @@ environment:
 # the latest version available on pub.dev. To see which dependencies have newer
 # versions available, run `flutter pub outdated`.
 dependencies:
+  crypto: ^3.0.6
   flutter:
     sdk: flutter
+  flutter_markdown_plus: ^1.0.12
+  flutter_svg: ^2.3.0
+  markdown: ^7.3.1
 
 dev_dependencies:
   flutter_test:
@@ -52,6 +56,9 @@ flutter:
   # included with your application, so that you can use the icons in
   # the material Icons class.
   uses-material-design: true
+
+  assets:
+    - assets/agent-icons/
 
   # To add assets to your application, add an assets section, like this:
   # assets:

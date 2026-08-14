@@ -384,6 +384,7 @@ func assertDesktopPreferencesValue(
 	}
 	if state.Schema != desktopPreferencesSchema ||
 		state.Language != language ||
+		state.Theme != desktopPreferencesTheme ||
 		state.Section != section ||
 		!equalOptionalString(state.SelectedEnvironmentID, environmentID) {
 		t.Fatalf("workbench preferences=%+v", state)

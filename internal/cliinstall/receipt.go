@@ -133,18 +133,22 @@ func (manager *LinkManager) Inspect(spec LinkSpec) (Observation, error) {
 	if receiptErr != nil {
 		return Observation{}, fmt.Errorf("read private installation record: %w", receiptErr)
 	}
+	// A missing target can be repaired across App-location changes when the
+	// private record still names this exact user-owned terminal entry. The
+	// record itself remains the CAS token for removal; a record for another
+	// target, owner, or installation method still fails closed as a conflict.
+	if targetMissing && receiptOwnsTarget(receipt, spec) {
+		return Observation{
+			State:   StateTargetMissing,
+			Receipt: cloneReceipt(receipt),
+			Detail:  "the terminal command recorded by the app is missing",
+		}, nil
+	}
 	if !receiptMatchesSpec(receipt, spec) {
 		return Observation{
 			State:   StateConflict,
 			Receipt: cloneReceipt(receipt),
 			Detail:  "the private installation record belongs to a different application location or terminal command",
-		}, nil
-	}
-	if targetMissing {
-		return Observation{
-			State:   StateTargetMissing,
-			Receipt: cloneReceipt(receipt),
-			Detail:  "the terminal command recorded by the app is missing",
 		}, nil
 	}
 	if target.metadata.kind != entrySymlink {
@@ -1221,7 +1225,11 @@ func randomEntryName(prefix string) (string, error) {
 
 func receiptMatchesSpec(receipt Receipt, spec LinkSpec) bool {
 	return receipt.SourcePath == spec.SourcePath &&
-		receipt.TargetPath == spec.TargetPath &&
+		receiptOwnsTarget(receipt, spec)
+}
+
+func receiptOwnsTarget(receipt Receipt, spec LinkSpec) bool {
+	return receipt.TargetPath == spec.TargetPath &&
 		receipt.Owner == OwnerDesktopApp &&
 		receipt.Method == MethodManagedSymlink
 }

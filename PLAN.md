@@ -33,7 +33,7 @@ dual writes, compatibility readers, or legacy database migrations.
 6. SQLite is the durable authority for Environment revisions, Capture
    assignments, ProviderAccount configuration, activities, approvals, and
    launch boundaries. Secret bytes remain exclusively in SecretStore.
-7. ProductRuntime, Desktop Control API, CLI, and React consume those same
+7. ProductRuntime, Desktop Control API, CLI, and Flutter consume those same
    typed authorities. No UI projection invents missing values or reconstructs
    historical evidence from current configuration.
 8. A Desktop-managed Anthropic API-key account is selected explicitly by one
@@ -47,8 +47,8 @@ dual writes, compatibility readers, or legacy database migrations.
 
 - all Go tests, race tests, vet, formatting, module integrity, and structural
   repository checks pass;
-- the compact React workbench passes strict TypeScript, component tests, and
-  desktop/mobile Playwright flows;
+- the compact Flutter workbench passes analyzer, unit/widget, native host, and
+  desktop/narrow packaged-App flows;
 - the development App starts the production composition and exits cleanly;
 - a clean committed candidate produces current deterministic packaged
   acceptance evidence bound to its exact App and sidecars; and

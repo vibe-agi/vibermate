@@ -36,7 +36,7 @@ func (messagesClientCodec) Dialect() protocolspec.Dialect {
 func (codec messagesClientCodec) DecodeRequest(
 	body []byte,
 ) (protocolcore.Request, protocolcore.TranslationReport, error) {
-	request, _, err := codec.codec.DecodeClientRequest(body)
+	request, _, err := codec.codec.DecodeCompatibleClientRequest(body)
 	// Same-dialect forwarding preserves compatible extensions in the source
 	// body, so the cross-dialect "not forwarded" notices do not apply here.
 	return request, protocolcore.TranslationReport{}, err

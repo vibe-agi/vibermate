@@ -269,9 +269,12 @@ func TestDesktopFrontendBoundaryUsesPublicCheckWithGoodAndBadFixtures(
 		t.Fatalf("expected ErrCheckFailed, got %v", err)
 	}
 	for _, rule := range []string{
-		"desktop-host-boundary",
+		"desktop-io-boundary",
+		"desktop-control-network-boundary",
+		"desktop-process-boundary",
+		"desktop-ffi-boundary",
+		"desktop-authority-storage",
 		"desktop-capability-storage",
-		"frontend-i18n",
 	} {
 		if !strings.Contains(err.Error(), rule) {
 			t.Fatalf("public Check did not report %s: %v", rule, err)
@@ -308,8 +311,8 @@ func TestSystemTrustBoundaryUsesPublicCheckWithGoodAndBadFixtures(
 	for _, path := range []string{
 		"api/openapi.yaml",
 		"internal/systemtrust/runner.go",
-		"ui/desktop/src-tauri/src/trust.rs",
-		"ui/desktop/src/trust.ts",
+		"ui/flutter_app/lib/core/trust.dart",
+		"ui/flutter_app/lib/features/trust.dart",
 	} {
 		if !strings.Contains(err.Error(), path) {
 			t.Fatalf("public Check did not inspect %s: %v", path, err)

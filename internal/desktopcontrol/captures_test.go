@@ -3,9 +3,12 @@ package desktopcontrol_test
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
+	"sort"
 	"sync"
 	"testing"
 	"time"
@@ -42,6 +45,103 @@ func TestUnifiedCaptureCatalogKeepsSameRawIDInBothKinds(t *testing.T) {
 	legacy := environmentRequest(t, application, http.MethodGet, "/api/v1/capture-runs", 0, "", nil)
 	if legacy.Code != http.StatusNotFound {
 		t.Fatalf("legacy route status=%d body=%s", legacy.Code, legacy.Body.Bytes())
+	}
+}
+
+func TestUnifiedCaptureCatalogPaginatesRunningBeforeCompleteHistory(t *testing.T) {
+	t.Parallel()
+	now := time.Date(2026, 8, 8, 10, 0, 0, 0, time.UTC)
+	managed := []capturerun.View{
+		{ID: "managed-running", ExecutableLabel: "codex", CWD: "/workspace/a", State: capturerun.StateAttached, Observation: capturerun.ObservationWaitingForTraffic, CreatedAt: now.Add(-time.Hour), UpdatedAt: now.Add(-time.Minute), ExpiresAt: now.Add(time.Hour), ProcessID: 42},
+		{ID: "managed-tie", ExecutableLabel: "claude", CWD: "/workspace/b", State: capturerun.StateFinished, Observation: capturerun.ObservationWaitingForTraffic, CreatedAt: now.Add(-time.Hour), UpdatedAt: now.Add(-2 * time.Minute), ExpiresAt: now.Add(time.Hour)},
+		{ID: "managed-old", ExecutableLabel: "claude", CWD: "/workspace/c", State: capturerun.StateFinished, Observation: capturerun.ObservationWaitingForTraffic, CreatedAt: now.Add(-time.Hour), UpdatedAt: now.Add(-3 * time.Minute), ExpiresAt: now.Add(time.Hour)},
+	}
+	manual := []manualcapture.View{
+		{ID: "manual-running", DisplayName: "IDE proxy", ClientClass: manualcapture.ClientDesktopApp, Lifetime: manualcapture.LifetimeUntilRevoked, State: manualcapture.StateActive, CredentialRevision: 1, Observation: manualcapture.ObservationWaiting, CreatedAt: now.Add(-time.Hour), UpdatedAt: now},
+		{ID: "manual-tie", DisplayName: "Old proxy", ClientClass: manualcapture.ClientOther, Lifetime: manualcapture.LifetimeUntilRevoked, State: manualcapture.StateRevoked, CredentialRevision: 1, Observation: manualcapture.ObservationWaiting, CreatedAt: now.Add(-time.Hour), UpdatedAt: now.Add(-2 * time.Minute)},
+	}
+	application := pagedCaptureApplication(t, managed, manual)
+
+	first := readCapturePage(t, application, "/api/v1/captures?limit=2")
+	assertCaptureKeys(t, first.Items,
+		"manual_capture:manual-running",
+		"managed_run:managed-running",
+	)
+	if first.NextCursor == "" {
+		t.Fatal("first Capture page did not expose a continuation cursor")
+	}
+	second := readCapturePage(
+		t,
+		application,
+		"/api/v1/captures?limit=2&cursor="+url.QueryEscape(first.NextCursor),
+	)
+	assertCaptureKeys(t, second.Items,
+		"managed_run:managed-tie",
+		"manual_capture:manual-tie",
+	)
+	if second.NextCursor == "" {
+		t.Fatal("second Capture page did not expose a continuation cursor")
+	}
+	third := readCapturePage(
+		t,
+		application,
+		"/api/v1/captures?limit=2&cursor="+url.QueryEscape(second.NextCursor),
+	)
+	assertCaptureKeys(t, third.Items, "managed_run:managed-old")
+	if third.NextCursor != "" {
+		t.Fatalf("terminal Capture page cursor=%q, want empty", third.NextCursor)
+	}
+
+	invalid := environmentRequest(
+		t,
+		application,
+		http.MethodGet,
+		"/api/v1/captures?limit=2&cursor=not-a-cursor",
+		0,
+		"",
+		nil,
+	)
+	if invalid.Code != http.StatusUnprocessableEntity {
+		t.Fatalf("invalid Capture cursor status=%d body=%s", invalid.Code, invalid.Body.Bytes())
+	}
+}
+
+func readCapturePage(
+	t *testing.T,
+	handler http.Handler,
+	path string,
+) desktopcontrol.CaptureListResponse {
+	t.Helper()
+	response := environmentRequest(t, handler, http.MethodGet, path, 0, "", nil)
+	if response.Code != http.StatusOK {
+		t.Fatalf("Capture page status=%d body=%s", response.Code, response.Body.Bytes())
+	}
+	var page desktopcontrol.CaptureListResponse
+	decoder := json.NewDecoder(response.Body)
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&page); err != nil {
+		t.Fatalf("decode Capture page: %v", err)
+	}
+	return page
+}
+
+func assertCaptureKeys(
+	t *testing.T,
+	items []desktopcontrol.CaptureResponse,
+	expected ...string,
+) {
+	t.Helper()
+	actual := make([]string, 0, len(items))
+	for _, item := range items {
+		actual = append(actual, item.Key)
+	}
+	if len(actual) != len(expected) {
+		t.Fatalf("Capture keys=%v, want %v", actual, expected)
+	}
+	for index := range expected {
+		if actual[index] != expected[index] {
+			t.Fatalf("Capture keys=%v, want %v", actual, expected)
+		}
 	}
 }
 
@@ -122,6 +222,158 @@ func unifiedCaptureApplication(t *testing.T, assignments captureassignment.Contr
 		t.Fatal(err)
 	}
 	return application
+}
+
+func pagedCaptureApplication(
+	t *testing.T,
+	managed []capturerun.View,
+	manual []manualcapture.View,
+) http.Handler {
+	t.Helper()
+	runtime := startRuntime(t)
+	t.Cleanup(func() { shutdownRuntime(t, runtime) })
+	application, err := desktopcontrol.New(desktopcontrol.Options{
+		Readiness: readyState(true), Status: runtime, Environments: runtime.Environments(),
+		Assignments: newAssignmentFixture(), Activities: runtime.Activities(), Contents: runtime.ExchangeContents(), Connections: runtime.ConnectionEvents(),
+		Egress: runtime.EgressAttempts(), Approvals: runtime.ToolApprovals(),
+		Endpoints: runtime.UpstreamEndpoints(), Accounts: runtime.ProviderAccounts(), Offline: runtime,
+		CaptureRuns:    capturePageReaderFixture{items: managed},
+		ManualCaptures: manualCapturePageFixture{items: manual},
+		Clock:          desktopcontrol.SystemClock{},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return application
+}
+
+type capturePageReaderFixture struct{ items []capturerun.View }
+
+func (fixture capturePageReaderFixture) ListRuns(
+	_ context.Context,
+	request capturerun.PageRequest,
+) (capturerun.Page, error) {
+	items := append([]capturerun.View(nil), fixture.items...)
+	sort.Slice(items, func(left, right int) bool {
+		leftRunning := items[left].State == capturerun.StateCreated || items[left].State == capturerun.StateAttached
+		rightRunning := items[right].State == capturerun.StateCreated || items[right].State == capturerun.StateAttached
+		if leftRunning != rightRunning {
+			return leftRunning
+		}
+		if !items[left].UpdatedAt.Equal(items[right].UpdatedAt) {
+			return items[left].UpdatedAt.After(items[right].UpdatedAt)
+		}
+		return items[left].ID < items[right].ID
+	})
+	items = filterCaptureRunFixture(items, request.Cursor)
+	limit := request.Normalized().Limit
+	if len(items) > limit {
+		items = items[:limit]
+	}
+	return capturerun.Page{Items: items}, nil
+}
+
+func (fixture capturePageReaderFixture) GetRun(
+	_ context.Context,
+	id string,
+) (capturerun.View, error) {
+	for _, item := range fixture.items {
+		if item.ID == id {
+			return item, nil
+		}
+	}
+	return capturerun.View{}, capturerun.ErrNotFound
+}
+
+func filterCaptureRunFixture(
+	items []capturerun.View,
+	cursor *capturerun.PageCursor,
+) []capturerun.View {
+	if cursor == nil {
+		return items
+	}
+	filtered := make([]capturerun.View, 0, len(items))
+	for _, item := range items {
+		running := item.State == capturerun.StateCreated || item.State == capturerun.StateAttached
+		if fixturePageAfter(running, item.UpdatedAt, item.ID, cursor.Running, cursor.UpdatedAt, cursor.AfterID, cursor.IncludeAtUpdatedAt) {
+			filtered = append(filtered, item)
+		}
+	}
+	return filtered
+}
+
+type manualCapturePageFixture struct{ items []manualcapture.View }
+
+func (fixture manualCapturePageFixture) Create(context.Context, manualcapture.CreateCommand) (manualcapture.Grant, error) {
+	return manualcapture.Grant{}, errors.New("not implemented")
+}
+func (fixture manualCapturePageFixture) Rotate(context.Context, manualcapture.RotateCommand) (manualcapture.Grant, error) {
+	return manualcapture.Grant{}, errors.New("not implemented")
+}
+func (fixture manualCapturePageFixture) Revoke(context.Context, manualcapture.RevokeCommand) (manualcapture.View, error) {
+	return manualcapture.View{}, errors.New("not implemented")
+}
+func (fixture manualCapturePageFixture) Get(_ context.Context, _ manualcapture.OwnerScope, id manualcapture.ID) (manualcapture.View, error) {
+	for _, item := range fixture.items {
+		if item.ID == id.String() {
+			return item, nil
+		}
+	}
+	return manualcapture.View{}, manualcapture.ErrNotFound
+}
+func (fixture manualCapturePageFixture) List(_ context.Context, request manualcapture.PageRequest) (manualcapture.Page, error) {
+	items := append([]manualcapture.View(nil), fixture.items...)
+	sort.Slice(items, func(left, right int) bool {
+		leftRunning := items[left].State == manualcapture.StateActive
+		rightRunning := items[right].State == manualcapture.StateActive
+		if leftRunning != rightRunning {
+			return leftRunning
+		}
+		if !items[left].UpdatedAt.Equal(items[right].UpdatedAt) {
+			return items[left].UpdatedAt.After(items[right].UpdatedAt)
+		}
+		return items[left].ID < items[right].ID
+	})
+	if cursor := request.Cursor; cursor != nil {
+		filtered := make([]manualcapture.View, 0, len(items))
+		for _, item := range items {
+			if fixturePageAfter(
+				item.State == manualcapture.StateActive,
+				item.UpdatedAt,
+				item.ID,
+				cursor.Running,
+				cursor.UpdatedAt,
+				cursor.AfterID,
+				cursor.IncludeAtUpdatedAt,
+			) {
+				filtered = append(filtered, item)
+			}
+		}
+		items = filtered
+	}
+	limit := request.Normalized().Limit
+	if len(items) > limit {
+		items = items[:limit]
+	}
+	return manualcapture.Page{Items: items}, nil
+}
+
+func fixturePageAfter(
+	running bool,
+	updatedAt time.Time,
+	id string,
+	cursorRunning bool,
+	cursorUpdatedAt time.Time,
+	afterID string,
+	includeAtUpdatedAt bool,
+) bool {
+	if running != cursorRunning {
+		return !running
+	}
+	if !updatedAt.Equal(cursorUpdatedAt) {
+		return updatedAt.Before(cursorUpdatedAt)
+	}
+	return includeAtUpdatedAt && id > afterID
 }
 
 type captureReaderFixture struct{ view capturerun.View }

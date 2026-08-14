@@ -4,11 +4,14 @@ import (
 	"context"
 	"errors"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/vibe-agi/vibermate/internal/activity"
+	"github.com/vibe-agi/vibermate/internal/agentconversation"
+	"github.com/vibe-agi/vibermate/internal/protocolcore"
 )
 
 func TestActivityRepositoryGetsExactlyOneExchangeTerminal(t *testing.T) {
@@ -73,6 +76,130 @@ func TestActivityRepositoryGetsExactlyOneExchangeTerminal(t *testing.T) {
 	}
 }
 
+func TestConversationIdentitySurvivesSQLiteReopenWithoutLosingNativeIDs(t *testing.T) {
+	t.Parallel()
+
+	databasePath := filepath.Join(t.TempDir(), "data", "runtime.db")
+	store := openTestStore(t, databasePath)
+	identity := agentconversation.ClientIdentity{
+		Client: "claude", SessionID: "session-resumable", SessionResumable: true,
+		ActorID: "agent-review", ActorLabel: "code-review",
+		ActorType: "general-purpose", ActorIsSubagent: true,
+		ProviderResponseID: "msg-provider", ProviderMessageID: "msg-provider",
+		Source: "client_local_state", Confidence: "exact",
+		ObservedAt: time.Date(2026, 8, 14, 2, 3, 4, 567000000, time.UTC),
+		ProtocolIDs: []agentconversation.ClientEvidenceValue{
+			{Name: "claude.agent_id", Value: "agent-review"},
+			{Name: "claude.parent_agent_id", Value: "agent-main"},
+			{Name: "claude.session_id", Value: "session-resumable"},
+			{Name: "claude.tool_use_id", Value: "tool-agent-spawn"},
+		},
+		Attributes: []agentconversation.ClientEvidenceValue{
+			{Name: "claude.description", Value: "code-review"},
+			{Name: "claude.spawn_depth", Value: "1"},
+		},
+	}
+	if err := store.ConversationIdentityRepository().PutConversationIdentity(
+		context.Background(), "exchange-native-identity", identity,
+	); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.Shutdown(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+
+	reopened := openTestStore(t, databasePath)
+	defer func() {
+		if err := reopened.Shutdown(context.Background()); err != nil {
+			t.Error(err)
+		}
+	}()
+	stored, err := reopened.ConversationIdentityRepository().GetConversationIdentity(
+		context.Background(), "exchange-native-identity",
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !stored.Equal(identity) {
+		t.Fatalf("reopened identity = %#v, want %#v", stored, identity)
+	}
+}
+
+func TestConversationIdentityPersistsWireEvidenceThenDeepensFromLocalState(t *testing.T) {
+	t.Parallel()
+
+	databasePath := filepath.Join(t.TempDir(), "data", "runtime.db")
+	store := openTestStore(t, databasePath)
+	repository := store.ConversationIdentityRepository()
+	observedAt := time.Date(2026, 8, 14, 11, 31, 5, 0, time.UTC)
+	wire, found := agentconversation.ClientIdentityFromProtocolEvidence(
+		[]protocolcore.ProtocolEvidenceValue{
+			{Name: "claude.agent_id", Value: "agent-review"},
+			{Name: "claude.parent_agent_id", Value: "agent-main"},
+			{Name: "claude.session_id", Value: "session-resumable"},
+		},
+		"",
+		observedAt,
+	)
+	if !found {
+		t.Fatal("wire identity was not derived")
+	}
+	if err := repository.PutConversationIdentity(
+		context.Background(), "exchange-wire", wire,
+	); err != nil {
+		t.Fatal(err)
+	}
+	local := wire.Clone()
+	local.ActorLabel = "Angle A line-by-line scan"
+	local.ActorType = "general-purpose"
+	local.ProviderResponseID = "msg-provider"
+	local.ProviderMessageID = "msg-provider"
+	local.Source = agentconversation.ClientIdentitySourceLocalState
+	local.ObservedAt = observedAt.Add(time.Second)
+	local.ProtocolIDs = append(local.ProtocolIDs,
+		agentconversation.ClientEvidenceValue{
+			Name: "claude.request_id", Value: "request-1",
+		},
+	)
+	slices.SortFunc(local.ProtocolIDs, func(left, right agentconversation.ClientEvidenceValue) int {
+		if byName := strings.Compare(left.Name, right.Name); byName != 0 {
+			return byName
+		}
+		return strings.Compare(left.Value, right.Value)
+	})
+	local.Attributes = []agentconversation.ClientEvidenceValue{
+		{Name: "claude.description", Value: "Angle A line-by-line scan"},
+	}
+	if err := repository.PutConversationIdentity(
+		context.Background(), "exchange-wire", local,
+	); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.Shutdown(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+
+	reopened := openTestStore(t, databasePath)
+	defer func() {
+		if err := reopened.Shutdown(context.Background()); err != nil {
+			t.Error(err)
+		}
+	}()
+	stored, err := reopened.ConversationIdentityRepository().GetConversationIdentity(
+		context.Background(), "exchange-wire",
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if stored.Source != agentconversation.ClientIdentitySourceLocalState ||
+		stored.ActorLabel != local.ActorLabel ||
+		stored.ProviderResponseID != "msg-provider" ||
+		!stored.ObservedAt.Equal(observedAt) ||
+		len(stored.ProtocolIDs) != 4 {
+		t.Fatalf("deepened identity = %#v", stored)
+	}
+}
+
 func TestActivityRepositoryMaterializesPendingThenTerminalExchange(t *testing.T) {
 	t.Parallel()
 	store := openTestStore(t, filepath.Join(t.TempDir(), "runtime.db"))
@@ -111,6 +238,14 @@ func TestActivityRepositoryMaterializesPendingThenTerminalExchange(t *testing.T)
 	started := appendExchange(
 		"activity-exchange-started", activity.KindExchangeStarted, activity.StatusPending,
 	)
+	conversations, err := repository.ListConversations(
+		context.Background(), activity.ConversationIndexRequest{Limit: 10},
+	)
+	if err != nil || len(conversations.Items) != 1 ||
+		conversations.Items[0].Conversation.Kind != agentconversation.KindPendingExchange ||
+		conversations.Items[0].Latest.ID != started.ID {
+		t.Fatalf("pending Conversation index = %+v, %v", conversations, err)
+	}
 	page, err := repository.ListExchanges(
 		context.Background(), activity.PageRequest{Limit: 10, CaptureRunID: "run-live"},
 	)
@@ -121,6 +256,14 @@ func TestActivityRepositoryMaterializesPendingThenTerminalExchange(t *testing.T)
 	terminal := appendExchange(
 		"activity-exchange-completed", activity.KindExchangeCompleted, activity.StatusSucceeded,
 	)
+	conversations, err = repository.ListConversations(
+		context.Background(), activity.ConversationIndexRequest{Limit: 10},
+	)
+	if err != nil || len(conversations.Items) != 1 ||
+		conversations.Items[0].Conversation.Kind != agentconversation.KindIsolatedExchange ||
+		conversations.Items[0].Latest.ID != terminal.ID {
+		t.Fatalf("terminal Conversation index = %+v, %v", conversations, err)
+	}
 	page, err = repository.ListExchanges(
 		context.Background(), activity.PageRequest{Limit: 10, CaptureRunID: "run-live"},
 	)
@@ -293,6 +436,21 @@ func setFrozenExecutionEvidence(record *activity.Record, prefix string) {
 	record.AccountID = prefix + "-account"
 	record.AccountRevision = 5
 	record.CredentialEpoch = 6
+	if record.Kind == activity.KindExchangeStarted {
+		ref := agentconversation.Ref{
+			ProjectionID: "exchange:" + record.SubjectID,
+			Kind:         agentconversation.KindPendingExchange,
+			Evidence:     agentconversation.EvidencePending,
+		}
+		record.Conversation = &ref
+	} else if record.Kind == activity.KindExchangeCompleted {
+		ref := agentconversation.Ref{
+			ProjectionID: "exchange:" + record.SubjectID,
+			Kind:         agentconversation.KindIsolatedExchange,
+			Evidence:     agentconversation.EvidenceUndecodedExchange,
+		}
+		record.Conversation = &ref
+	}
 }
 
 func TestActivityRepositoryFiltersByFrozenEnvironmentReference(t *testing.T) {
@@ -417,6 +575,7 @@ func TestExchangeDetailIndexesAreInstalled(t *testing.T) {
 		"runtime_activities_exchange_capture_run_latest",
 		"runtime_activities_exchange_manual_capture_latest",
 		"runtime_activities_exchange_subject",
+		"runtime_activities_exchange_conversation_latest",
 		"runtime_egress_attempts_by_exchange",
 	} {
 		var count int
@@ -433,5 +592,178 @@ func TestExchangeDetailIndexesAreInstalled(t *testing.T) {
 		if count != 1 {
 			t.Fatalf("index %q count = %d, want 1", name, count)
 		}
+	}
+}
+
+func TestActivityRepositoryNeverMixesFlatAgentConversations(t *testing.T) {
+	t.Parallel()
+	store := openTestStore(t, filepath.Join(t.TempDir(), "runtime.db"))
+	defer func() {
+		if err := store.Shutdown(context.Background()); err != nil {
+			t.Error(err)
+		}
+	}()
+	repository := store.ActivityRepository()
+	appendConversation := func(exchangeID, projectionID string) {
+		record := activity.Record{
+			ID:                "activity-" + exchangeID,
+			OccurredAt:        time.Date(2026, 8, 13, 8, 0, 0, 0, time.UTC),
+			Kind:              activity.KindExchangeCompleted,
+			SubjectID:         exchangeID,
+			Status:            activity.StatusSucceeded,
+			SourceKind:        activity.SourceCaptureRun,
+			SourceDisplayName: "claude",
+			SourceRecognition: activity.SourceRecognitionVerified,
+			CaptureRunID:      "run-agents",
+			ConnectionID:      "connection-" + exchangeID,
+		}
+		setFrozenExecutionEvidence(&record, "agents")
+		ref := agentconversation.Ref{
+			ProjectionID: projectionID,
+			Kind:         agentconversation.KindIsolatedSubagent,
+			Evidence:     agentconversation.EvidenceClientAssertedSubagent,
+		}
+		record.Conversation = &ref
+		if _, err := repository.Append(context.Background(), record); err != nil {
+			t.Fatal(err)
+		}
+	}
+	appendConversation("exchange-review", "exchange:exchange-review")
+	appendConversation("exchange-test", "exchange:exchange-test")
+
+	page, err := repository.ListExchanges(context.Background(), activity.PageRequest{
+		Limit: 10, CaptureRunID: "run-agents",
+		ConversationProjectionID: "exchange:exchange-review",
+	})
+	if err != nil || len(page.Items) != 1 ||
+		page.Items[0].SubjectID != "exchange-review" ||
+		page.Items[0].Conversation == nil ||
+		page.Items[0].Conversation.ProjectionID != "exchange:exchange-review" {
+		t.Fatalf("filtered Agent Conversation = %+v, %v", page, err)
+	}
+}
+
+func TestActivityRepositoryConversationIndexIsStableAndCounted(t *testing.T) {
+	t.Parallel()
+	store := openTestStore(t, filepath.Join(t.TempDir(), "runtime.db"))
+	defer func() {
+		if err := store.Shutdown(context.Background()); err != nil {
+			t.Error(err)
+		}
+	}()
+	repository := store.ActivityRepository()
+	sequence := 0
+	appendTurn := func(exchangeID, projectionID, displayName string) {
+		sequence++
+		record := activity.Record{
+			ID:         "activity-" + exchangeID,
+			OccurredAt: time.Date(2026, 8, 13, 9, sequence, 0, 0, time.UTC),
+			Kind:       activity.KindExchangeCompleted, SubjectID: exchangeID,
+			Status: activity.StatusSucceeded, SourceKind: activity.SourceCaptureRun,
+			SourceDisplayName: "codex", SourceRecognition: activity.SourceRecognitionVerified,
+			CaptureRunID: "run-index", ConnectionID: "connection-" + exchangeID,
+		}
+		setFrozenExecutionEvidence(&record, "index")
+		ref := agentconversation.Ref{
+			ProjectionID: projectionID, DisplayName: displayName,
+			Kind:     agentconversation.KindAgent,
+			Evidence: agentconversation.EvidenceExplicitActor,
+			Actor:    "/root/" + displayName,
+		}
+		record.Conversation = &ref
+		if _, err := repository.Append(context.Background(), record); err != nil {
+			t.Fatal(err)
+		}
+	}
+	appendTurn("one", "capture_run:run-index:agent:a", "alpha")
+	appendTurn("two", "capture_run:run-index:agent:b", "beta")
+	appendTurn("three", "capture_run:run-index:agent:a", "alpha")
+
+	first, err := repository.ListConversations(context.Background(), activity.ConversationIndexRequest{Limit: 1})
+	if err != nil || len(first.Items) != 1 || first.Items[0].TurnCount != 1 ||
+		first.Items[0].Latest.SubjectID != "two" || first.NextBeforeFirstSequence == 0 {
+		t.Fatalf("first Conversation page = %+v, %v", first, err)
+	}
+	second, err := repository.ListConversations(context.Background(), activity.ConversationIndexRequest{
+		BeforeFirstSequence: first.NextBeforeFirstSequence, Limit: 1,
+	})
+	if err != nil || len(second.Items) != 1 || second.Items[0].TurnCount != 2 ||
+		second.Items[0].Conversation.DisplayName != "alpha" || second.NextBeforeFirstSequence != 0 {
+		t.Fatalf("second Conversation page = %+v, %v", second, err)
+	}
+}
+
+func TestActivityRepositoryConversationIndexFiltersByCaptureAuthority(t *testing.T) {
+	t.Parallel()
+	store := openTestStore(t, filepath.Join(t.TempDir(), "runtime.db"))
+	defer func() {
+		if err := store.Shutdown(context.Background()); err != nil {
+			t.Error(err)
+		}
+	}()
+	repository := store.ActivityRepository()
+	appendConversation := func(
+		exchangeID string,
+		captureRunID string,
+		manualCaptureID string,
+		projectionID string,
+	) {
+		t.Helper()
+		record := activity.Record{
+			ID:                "activity-" + exchangeID,
+			OccurredAt:        time.Date(2026, 8, 13, 10, 0, 0, 0, time.UTC),
+			Kind:              activity.KindExchangeCompleted,
+			SubjectID:         exchangeID,
+			Status:            activity.StatusSucceeded,
+			SourceKind:        activity.SourceCaptureRun,
+			SourceDisplayName: "claude",
+			SourceRecognition: activity.SourceRecognitionVerified,
+			CaptureRunID:      captureRunID,
+			ManualCaptureID:   manualCaptureID,
+			ConnectionID:      "connection-" + exchangeID,
+		}
+		if manualCaptureID != "" {
+			record.SourceKind = activity.SourceManualProxy
+			record.CaptureRunID = ""
+		}
+		setFrozenExecutionEvidence(&record, "filter")
+		ref := agentconversation.Ref{
+			ProjectionID: projectionID,
+			Kind:         agentconversation.KindMain,
+			Evidence:     agentconversation.EvidenceCaptureRun,
+		}
+		if manualCaptureID != "" {
+			ref.Kind = agentconversation.KindIsolatedExchange
+			ref.Evidence = agentconversation.EvidenceUndecodedExchange
+		}
+		record.Conversation = &ref
+		if _, err := repository.Append(context.Background(), record); err != nil {
+			t.Fatal(err)
+		}
+	}
+	appendConversation("run-one-main", "run-one", "", "capture_run:run-one:main")
+	appendConversation("run-two-main", "run-two", "", "capture_run:run-two:main")
+	appendConversation(
+		"manual-one-exchange",
+		"",
+		"manual-one",
+		"exchange:manual-one-exchange",
+	)
+
+	managed, err := repository.ListConversations(
+		context.Background(),
+		activity.ConversationIndexRequest{Limit: 10, CaptureRunID: "run-one"},
+	)
+	if err != nil || len(managed.Items) != 1 ||
+		managed.Items[0].Latest.CaptureRunID != "run-one" {
+		t.Fatalf("managed Capture Conversation page = %+v, %v", managed, err)
+	}
+	manual, err := repository.ListConversations(
+		context.Background(),
+		activity.ConversationIndexRequest{Limit: 10, ManualCaptureID: "manual-one"},
+	)
+	if err != nil || len(manual.Items) != 1 ||
+		manual.Items[0].Latest.ManualCaptureID != "manual-one" {
+		t.Fatalf("manual Capture Conversation page = %+v, %v", manual, err)
 	}
 }

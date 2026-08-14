@@ -11,11 +11,13 @@ import (
 	"io"
 	"mime"
 	"net/http"
+	"net/url"
 	"strconv"
 	"strings"
 	"time"
 
 	"github.com/vibe-agi/vibermate/internal/activity"
+	"github.com/vibe-agi/vibermate/internal/agentconversation"
 	"github.com/vibe-agi/vibermate/internal/captureassignment"
 	"github.com/vibe-agi/vibermate/internal/capturerun"
 	"github.com/vibe-agi/vibermate/internal/connectionevent"
@@ -26,6 +28,7 @@ import (
 	"github.com/vibe-agi/vibermate/internal/offlinehold"
 	"github.com/vibe-agi/vibermate/internal/productruntime"
 	"github.com/vibe-agi/vibermate/internal/provideraccount"
+	"github.com/vibe-agi/vibermate/internal/rawevidence"
 	"github.com/vibe-agi/vibermate/internal/toolapproval"
 	"github.com/vibe-agi/vibermate/internal/upstreamendpoint"
 	"github.com/vibe-agi/vibermate/internal/workspacedefault"
@@ -68,6 +71,8 @@ const (
 	ReasonProviderAccountUnavailable  ReasonCode = "provider_account_unavailable"
 	ReasonWorkspaceDefaultNotFound    ReasonCode = "workspace_environment_default_not_found"
 	ReasonWorkspaceDefaultInvalid     ReasonCode = "workspace_environment_default_invalid"
+	ReasonRawEvidenceNotFound         ReasonCode = "raw_evidence_not_found"
+	ReasonRawEvidenceUnavailable      ReasonCode = "raw_evidence_unavailable"
 )
 
 type StatusReader interface {
@@ -92,19 +97,30 @@ type OfflineActions interface {
 	ResumeOfflineHold(context.Context, uint64) (offlinehold.Snapshot, error)
 }
 
+// ConversationIndexer adds exact client-owned session and actor evidence to
+// the rebuildable Conversation index. A resolver failure must not make the
+// underlying Activity journal unreadable, so callers treat Reindex as an
+// additive refresh and Identity as the durable read boundary.
+type ConversationIndexer interface {
+	Reindex(context.Context, activity.ConversationIndexRequest) error
+	Identity(context.Context, string) (agentconversation.ClientIdentity, error)
+}
+
 type Options struct {
-	Readiness    ReadinessReader
-	Status       StatusReader
-	Environments environment.Controller
-	Assignments  captureassignment.Controller
-	Activities   activity.Runtime
-	Contents     exchangecontent.Reader
-	Connections  connectionevent.Reader
-	Egress       egressaudit.Reader
-	Approvals    toolapproval.Controller
-	Endpoints    upstreamendpoint.Controller
-	Accounts     provideraccount.Controller
-	Offline      OfflineActions
+	Readiness           ReadinessReader
+	Status              StatusReader
+	Environments        environment.Controller
+	Assignments         captureassignment.Controller
+	Activities          activity.Runtime
+	ConversationIndexer ConversationIndexer
+	Contents            exchangecontent.Reader
+	Connections         connectionevent.Reader
+	Egress              egressaudit.Reader
+	Approvals           toolapproval.Controller
+	Endpoints           upstreamendpoint.Controller
+	Accounts            provideraccount.Controller
+	RawEvidence         rawevidence.Reader
+	Offline             OfflineActions
 	// ConnectionRules is the outbound firewall a person edits. A runtime
 	// built without one keeps evaluating the rules it started with.
 	ConnectionRules ConnectionRuleController
@@ -117,18 +133,20 @@ type Options struct {
 }
 
 type Handler struct {
-	readiness    ReadinessReader
-	status       StatusReader
-	environments environment.Controller
-	assignments  captureassignment.Controller
-	activities   activity.Runtime
-	contents     exchangecontent.Reader
-	connections  connectionevent.Reader
-	egress       egressaudit.Reader
-	approvals    toolapproval.Controller
-	endpoints    upstreamendpoint.Controller
-	accounts     provideraccount.Controller
-	offline      OfflineActions
+	readiness           ReadinessReader
+	status              StatusReader
+	environments        environment.Controller
+	assignments         captureassignment.Controller
+	activities          activity.Runtime
+	conversationIndexer ConversationIndexer
+	contents            exchangecontent.Reader
+	connections         connectionevent.Reader
+	egress              egressaudit.Reader
+	approvals           toolapproval.Controller
+	endpoints           upstreamendpoint.Controller
+	accounts            provideraccount.Controller
+	rawEvidence         rawevidence.Reader
+	offline             OfflineActions
 
 	connectionRules   ConnectionRuleController
 	captureRuns       capturerun.Reader
@@ -171,25 +189,27 @@ func New(options Options) (*Handler, error) {
 		return nil, errors.New("Desktop control dependencies are incomplete")
 	}
 	handler := &Handler{
-		readiness:         options.Readiness,
-		status:            options.Status,
-		environments:      options.Environments,
-		assignments:       options.Assignments,
-		activities:        options.Activities,
-		contents:          options.Contents,
-		connections:       options.Connections,
-		egress:            options.Egress,
-		approvals:         options.Approvals,
-		endpoints:         options.Endpoints,
-		accounts:          options.Accounts,
-		offline:           options.Offline,
-		connectionRules:   options.ConnectionRules,
-		captureRuns:       options.CaptureRuns,
-		manualCaptures:    options.ManualCaptures,
-		workspaceDefaults: options.WorkspaceDefaults,
-		clock:             options.Clock,
-		idempotent:        newIdempotencyCache(),
-		mux:               http.NewServeMux(),
+		readiness:           options.Readiness,
+		status:              options.Status,
+		environments:        options.Environments,
+		assignments:         options.Assignments,
+		activities:          options.Activities,
+		conversationIndexer: options.ConversationIndexer,
+		contents:            options.Contents,
+		connections:         options.Connections,
+		egress:              options.Egress,
+		approvals:           options.Approvals,
+		endpoints:           options.Endpoints,
+		accounts:            options.Accounts,
+		rawEvidence:         options.RawEvidence,
+		offline:             options.Offline,
+		connectionRules:     options.ConnectionRules,
+		captureRuns:         options.CaptureRuns,
+		manualCaptures:      options.ManualCaptures,
+		workspaceDefaults:   options.WorkspaceDefaults,
+		clock:               options.Clock,
+		idempotent:          newIdempotencyCache(),
+		mux:                 http.NewServeMux(),
 	}
 	handler.mux.HandleFunc("GET /api/v1/status", handler.getStatus)
 	handler.mux.HandleFunc("GET /api/v1/offline-hold", handler.getOfflineHold)
@@ -217,10 +237,21 @@ func New(options Options) (*Handler, error) {
 	handler.mux.HandleFunc("POST /api/v1/environments/{environmentId}/draft/actions/publish", handler.publishEnvironmentDraft)
 	handler.mux.HandleFunc("GET /api/v1/environments/{environmentId}/revisions/{environmentRevision}", handler.getEnvironmentRevision)
 	handler.mux.HandleFunc("GET /api/v1/activities", handler.listActivities)
+	handler.mux.HandleFunc("GET /api/v1/conversations", handler.listConversations)
 	handler.mux.HandleFunc(
 		"GET /api/v1/exchanges/{exchangeId}",
 		handler.getExchange,
 	)
+	if handler.rawEvidence != nil {
+		handler.mux.HandleFunc(
+			"GET /api/v1/exchanges/{exchangeId}/raw-evidence",
+			handler.listRawEvidence,
+		)
+		handler.mux.HandleFunc(
+			"POST /api/v1/raw-evidence/{envelopeId}/actions/reveal",
+			handler.revealRawEvidence,
+		)
+	}
 	handler.mux.HandleFunc("GET /api/v1/connections", handler.listConnections)
 	handler.mux.HandleFunc(
 		"GET /api/v1/egress-attempts",
@@ -264,6 +295,14 @@ func New(options Options) (*Handler, error) {
 	handler.mux.HandleFunc("/api/v1/activities", handler.invalidRoute)
 	handler.mux.HandleFunc(
 		"/api/v1/exchanges/{exchangeId}",
+		handler.invalidRoute,
+	)
+	handler.mux.HandleFunc(
+		"/api/v1/exchanges/{exchangeId}/raw-evidence",
+		handler.invalidRoute,
+	)
+	handler.mux.HandleFunc(
+		"/api/v1/raw-evidence/{envelopeId}/actions/{action}",
 		handler.invalidRoute,
 	)
 	handler.mux.HandleFunc("/api/v1/connections", handler.invalidRoute)
@@ -418,14 +457,20 @@ func (handler *Handler) listActivities(
 		writeProblem(writer, http.StatusUnprocessableEntity, ReasonInvalidRequest)
 		return
 	}
+	handler.refreshConversationIndex(request.Context(), activity.ConversationIndexRequest{
+		Limit:           1,
+		CaptureRunID:    query.captureRunID,
+		ManualCaptureID: query.manualCaptureID,
+	})
 	page, err := handler.activities.ListExchanges(
 		request.Context(),
 		activity.PageRequest{
-			BeforeSequence:  query.beforeSequence,
-			Limit:           query.limit,
-			CaptureRunID:    query.captureRunID,
-			ManualCaptureID: query.manualCaptureID,
-			EnvironmentID:   query.environmentID,
+			BeforeSequence:           query.beforeSequence,
+			Limit:                    query.limit,
+			CaptureRunID:             query.captureRunID,
+			ManualCaptureID:          query.manualCaptureID,
+			EnvironmentID:            query.environmentID,
+			ConversationProjectionID: query.conversationID,
 		},
 	)
 	if err != nil {
@@ -437,7 +482,155 @@ func (handler *Handler) listActivities(
 		writeProblem(writer, http.StatusServiceUnavailable, ReasonRuntimeUnavailable)
 		return
 	}
+	if err := handler.attachActivityIdentities(request.Context(), page, &view); err != nil {
+		writeProblem(writer, http.StatusServiceUnavailable, ReasonRuntimeUnavailable)
+		return
+	}
 	writeJSON(writer, http.StatusOK, view)
+}
+
+func (handler *Handler) listConversations(
+	writer http.ResponseWriter,
+	request *http.Request,
+) {
+	values := request.URL.Query()
+	limit := 50
+	var err error
+	if values.Has("limit") {
+		limit, err = strconv.Atoi(values.Get("limit"))
+	}
+	before := int64(0)
+	if values.Has("cursor") {
+		before, err = parseConversationCursor(values.Get("cursor"))
+	}
+	if err != nil || limit < 1 || limit > activity.MaxPageSize ||
+		!onlyQueryKeys(
+			values,
+			"limit",
+			"cursor",
+			"captureRunId",
+			"manualCaptureId",
+		) {
+		writeProblem(writer, http.StatusUnprocessableEntity, ReasonInvalidRequest)
+		return
+	}
+	indexRequest := activity.ConversationIndexRequest{
+		BeforeFirstSequence: before,
+		Limit:               limit,
+		CaptureRunID:        values.Get("captureRunId"),
+		ManualCaptureID:     values.Get("manualCaptureId"),
+	}
+	if indexRequest.Validate() != nil {
+		writeProblem(writer, http.StatusUnprocessableEntity, ReasonInvalidRequest)
+		return
+	}
+	handler.refreshConversationIndex(request.Context(), indexRequest)
+	page, err := handler.activities.ListConversations(
+		request.Context(),
+		indexRequest,
+	)
+	if err != nil {
+		writeProblem(writer, http.StatusServiceUnavailable, ReasonRuntimeUnavailable)
+		return
+	}
+	view, err := conversationPageOf(page)
+	if err != nil {
+		writeProblem(writer, http.StatusServiceUnavailable, ReasonRuntimeUnavailable)
+		return
+	}
+	if err := handler.attachConversationIdentities(request.Context(), page, &view); err != nil {
+		writeProblem(writer, http.StatusServiceUnavailable, ReasonRuntimeUnavailable)
+		return
+	}
+	writeJSON(writer, http.StatusOK, view)
+}
+
+func (handler *Handler) refreshConversationIndex(
+	ctx context.Context,
+	request activity.ConversationIndexRequest,
+) {
+	if handler.conversationIndexer == nil || request.Validate() != nil {
+		return
+	}
+	// Client-local state is enrichment rather than Activity authority. A file
+	// being appended, moved, or temporarily unavailable must never turn the
+	// audit journal into a 503 response; unresolved Exchanges remain isolated.
+	_ = handler.conversationIndexer.Reindex(ctx, request)
+}
+
+func (handler *Handler) attachActivityIdentities(
+	ctx context.Context,
+	page activity.Page,
+	view *ActivityPage,
+) error {
+	if handler.conversationIndexer == nil || view == nil {
+		return nil
+	}
+	if len(page.Items) != len(view.Items) {
+		return errors.New("Activity identity projection length does not match")
+	}
+	for index, record := range page.Items {
+		identity, err := handler.conversationIndexer.Identity(ctx, record.SubjectID)
+		switch {
+		case err == nil:
+			cloned := identity.Clone()
+			view.Items[index].Conversation.ClientIdentity = &cloned
+			if err := view.Items[index].Validate(); err != nil {
+				return err
+			}
+		case errors.Is(err, activity.ErrExchangeNotFound):
+			continue
+		default:
+			return err
+		}
+	}
+	return nil
+}
+
+func (handler *Handler) attachConversationIdentities(
+	ctx context.Context,
+	page activity.ConversationPage,
+	view *ConversationPage,
+) error {
+	if handler.conversationIndexer == nil || view == nil {
+		return nil
+	}
+	if len(page.Items) != len(view.Items) {
+		return errors.New("Conversation identity projection length does not match")
+	}
+	for index, item := range page.Items {
+		identity, err := handler.conversationIndexer.Identity(ctx, item.Latest.SubjectID)
+		switch {
+		case err == nil:
+			cloned := identity.Clone()
+			view.Items[index].Conversation.ClientIdentity = &cloned
+			view.Items[index].Latest.Conversation.ClientIdentity = &cloned
+			if err := view.Items[index].Conversation.Validate(); err != nil {
+				return err
+			}
+			if err := view.Items[index].Latest.Validate(); err != nil {
+				return err
+			}
+		case errors.Is(err, activity.ErrExchangeNotFound):
+			continue
+		default:
+			return err
+		}
+	}
+	return nil
+}
+
+func onlyQueryKeys(values url.Values, allowed ...string) bool {
+	set := make(map[string]struct{}, len(allowed))
+	for _, key := range allowed {
+		set[key] = struct{}{}
+	}
+	for key, entries := range values {
+		if _, found := set[key]; !found || len(entries) != 1 || entries[0] == "" {
+			return false
+		}
+	}
+	return true
 }
 
 func (handler *Handler) listConnections(

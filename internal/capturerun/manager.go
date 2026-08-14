@@ -39,6 +39,21 @@ type Options struct {
 	Random          io.Reader
 	DefaultLifetime time.Duration
 	MaxLifetime     time.Duration
+	EvidenceBarrier EvidenceBarrier
+}
+
+// TerminalEvidence owns the prepared CaptureRun evidence boundary. Commit is
+// called only after the CaptureRun terminal state is durable; Abort reopens
+// request admission when that mutation fails.
+type TerminalEvidence interface {
+	Commit()
+	Abort()
+}
+
+// EvidenceBarrier drains requests and makes a terminal CaptureRun state a
+// durability boundary for every observation admitted under that run.
+type EvidenceBarrier interface {
+	PrepareManagedRun(context.Context, string) (TerminalEvidence, error)
 }
 
 func DefaultOptions(repository Repository) Options {
@@ -57,6 +72,7 @@ type Manager struct {
 	random          io.Reader
 	defaultLifetime time.Duration
 	maxLifetime     time.Duration
+	evidenceBarrier EvidenceBarrier
 	lifecycle       *lifecycleGate
 	recovery        Recovery
 
@@ -88,6 +104,7 @@ func NewManager(ctx context.Context, options Options) (*Manager, error) {
 		random:          options.Random,
 		defaultLifetime: options.DefaultLifetime,
 		maxLifetime:     options.MaxLifetime,
+		evidenceBarrier: options.EvidenceBarrier,
 		lifecycle:       newLifecycleGate(),
 		recovery:        recovery,
 	}, nil
@@ -281,12 +298,29 @@ func (manager *Manager) Finish(
 		return err
 	}
 	defer finish()
-	return manager.repository.Finish(
+	var terminal TerminalEvidence
+	if manager.evidenceBarrier != nil {
+		terminal, err = manager.evidenceBarrier.PrepareManagedRun(operation, runID)
+		if err != nil {
+			return fmt.Errorf("prepare CaptureRun evidence: %w", err)
+		}
+	}
+	err = manager.repository.Finish(
 		operation,
 		runID,
 		capabilityDigest(controlDigestDomain, capability.value),
 		manager.clock.Now().UTC(),
 	)
+	if err != nil {
+		if terminal != nil {
+			terminal.Abort()
+		}
+		return err
+	}
+	if terminal != nil {
+		terminal.Commit()
+	}
+	return nil
 }
 
 func (manager *Manager) BeginShutdown() {
@@ -365,6 +399,17 @@ func (manager *Manager) ListRuns(
 ) (Page, error) {
 	if manager == nil {
 		return Page{}, errors.New("CaptureRun manager is nil")
+	}
+	if request.Cursor != nil && !request.Cursor.Valid() {
+		return Page{}, ErrInvalidRequest
+	}
+	// Heartbeats are the durable liveness authority. Recovery previously ran
+	// only when the daemon started, which allowed a launcher that disappeared
+	// between restarts to remain in the operator's Running list indefinitely.
+	// Reconcile expired leases immediately before the human-facing projection so
+	// every refresh converges without inventing process-liveness heuristics.
+	if _, err := manager.repository.Recover(ctx, manager.clock.Now().UTC()); err != nil {
+		return Page{}, fmt.Errorf("recover expired CaptureRuns before list: %w", err)
 	}
 	return manager.repository.List(ctx, request)
 }

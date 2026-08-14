@@ -11,11 +11,13 @@ import (
 	"time"
 
 	"github.com/vibe-agi/vibermate/internal/activity"
+	"github.com/vibe-agi/vibermate/internal/agentconversation"
 	"github.com/vibe-agi/vibermate/internal/egressaudit"
 	"github.com/vibe-agi/vibermate/internal/exchangecontent"
 )
 
 const activityCursorPrefix = "v1:activity-requests:"
+const conversationCursorPrefix = "v1:conversations:"
 
 var errInvalidActivityQuery = errors.New("Activity query is invalid")
 
@@ -35,15 +37,62 @@ type FrozenEnvironmentRef struct {
 }
 
 type ActivitySummary struct {
-	ID          string               `json:"id"`
-	OccurredAt  time.Time            `json:"occurredAt"`
-	Kind        string               `json:"kind"`
-	Title       string               `json:"title"`
-	Status      string               `json:"status"`
-	ReasonCode  string               `json:"reasonCode,omitempty"`
-	Source      ActivitySourceRef    `json:"source"`
-	Environment FrozenEnvironmentRef `json:"environment"`
-	ParentRefs  ActivityParentRefs   `json:"parentRefs"`
+	ID           string                  `json:"id"`
+	OccurredAt   time.Time               `json:"occurredAt"`
+	Kind         string                  `json:"kind"`
+	Title        string                  `json:"title"`
+	Status       string                  `json:"status"`
+	ReasonCode   string                  `json:"reasonCode,omitempty"`
+	Source       ActivitySourceRef       `json:"source"`
+	Conversation ActivityConversationRef `json:"conversation"`
+	Environment  FrozenEnvironmentRef    `json:"environment"`
+	ParentRefs   ActivityParentRefs      `json:"parentRefs"`
+}
+
+// ActivityConversationRef is a flat, structural projection boundary. It does
+// not claim a parent/child relationship between agents and it never contains
+// prompt or response content.
+type ActivityConversationRef struct {
+	ID             string                            `json:"id"`
+	DisplayName    string                            `json:"displayName,omitempty"`
+	Kind           string                            `json:"kind"`
+	Evidence       string                            `json:"evidence"`
+	Actor          string                            `json:"actor,omitempty"`
+	ClientIdentity *agentconversation.ClientIdentity `json:"clientIdentity,omitempty"`
+}
+
+func activityConversationRefOf(record activity.Record) ActivityConversationRef {
+	if record.Conversation == nil {
+		return ActivityConversationRef{}
+	}
+	return ActivityConversationRef{
+		ID:          record.Conversation.ProjectionID,
+		DisplayName: record.Conversation.DisplayName,
+		Kind:        string(record.Conversation.Kind),
+		Evidence:    string(record.Conversation.Evidence),
+		Actor:       record.Conversation.Actor,
+	}
+}
+
+func (ref ActivityConversationRef) Validate() error {
+	if err := (agentconversation.Ref{
+		ProjectionID: ref.ID,
+		DisplayName:  ref.DisplayName,
+		Kind:         agentconversation.Kind(ref.Kind),
+		Evidence:     agentconversation.Evidence(ref.Evidence),
+		Actor:        ref.Actor,
+	}).Validate(); err != nil {
+		return err
+	}
+	if ref.ClientIdentity != nil {
+		if err := ref.ClientIdentity.Validate(); err != nil {
+			return err
+		}
+		if ref.Actor != ref.ClientIdentity.ActorID {
+			return errors.New("Conversation client actor does not match projection")
+		}
+	}
+	return nil
 }
 
 type ActivitySourceRef struct {
@@ -66,7 +115,7 @@ func (summary ActivitySummary) Validate() error {
 		summary.Environment.Digest == "" || summary.Environment.ClientEndpointID == "" ||
 		summary.Environment.ClientEndpointRevision == 0 || summary.Environment.ProtocolPlanID == "" ||
 		summary.Environment.ProtocolPlanRevision == 0 || summary.Environment.RouteID == "" ||
-		summary.Environment.RouteRevision == 0 {
+		summary.Environment.RouteRevision == 0 || summary.Conversation.Validate() != nil {
 		return errors.New("Activity summary relationship is invalid")
 	}
 	return nil
@@ -77,14 +126,51 @@ type ActivityPage struct {
 	NextCursor string            `json:"nextCursor,omitempty"`
 }
 
+type ConversationSummary struct {
+	Conversation    ActivityConversationRef `json:"conversation"`
+	FirstObservedAt time.Time               `json:"firstObservedAt"`
+	TurnCount       int                     `json:"turnCount"`
+	Latest          ActivitySummary         `json:"latest"`
+}
+
+type ConversationPage struct {
+	Items      []ConversationSummary `json:"items"`
+	NextCursor string                `json:"nextCursor,omitempty"`
+}
+
+func conversationPageOf(page activity.ConversationPage) (ConversationPage, error) {
+	view := ConversationPage{Items: make([]ConversationSummary, 0, len(page.Items))}
+	for _, item := range page.Items {
+		activities, err := activityPageOf(activity.Page{Items: []activity.Record{item.Latest}})
+		if err != nil || len(activities.Items) != 1 || item.Validate() != nil {
+			return ConversationPage{}, errors.New("Conversation projection is invalid")
+		}
+		view.Items = append(view.Items, ConversationSummary{
+			Conversation:    activityConversationRefOf(item.Latest),
+			FirstObservedAt: item.FirstOccurredAt,
+			TurnCount:       item.TurnCount,
+			Latest:          activities.Items[0],
+		})
+	}
+	if page.NextBeforeFirstSequence != 0 {
+		cursor, err := sequenceCursor(conversationCursorPrefix, page.NextBeforeFirstSequence)
+		if err != nil {
+			return ConversationPage{}, err
+		}
+		view.NextCursor = cursor
+	}
+	return view, nil
+}
+
 type ExchangeDetail struct {
-	ID              string                  `json:"id"`
-	Status          string                  `json:"status"`
-	Environment     FrozenEnvironmentRef    `json:"environment"`
-	ParentRefs      ActivityParentRefs      `json:"parentRefs"`
-	Diagnosis       *ExchangeDiagnosis      `json:"diagnosis,omitempty"`
-	ProcessingTrace ExchangeProcessingTrace `json:"processingTrace"`
-	Content         ExchangeContentDetail   `json:"content"`
+	ID              string                            `json:"id"`
+	Status          string                            `json:"status"`
+	Environment     FrozenEnvironmentRef              `json:"environment"`
+	ParentRefs      ActivityParentRefs                `json:"parentRefs"`
+	Diagnosis       *ExchangeDiagnosis                `json:"diagnosis,omitempty"`
+	ProcessingTrace ExchangeProcessingTrace           `json:"processingTrace"`
+	Content         ExchangeContentDetail             `json:"content"`
+	ClientIdentity  *agentconversation.ClientIdentity `json:"clientIdentity,omitempty"`
 }
 
 // ExchangeDiagnosis is deliberately structural. It identifies the side and
@@ -105,13 +191,46 @@ const (
 )
 
 type ExchangeContentDetail struct {
-	State             ExchangeContentState       `json:"state"`
-	Mode              string                     `json:"mode,omitempty"`
-	RecordedAt        *time.Time                 `json:"recordedAt,omitempty"`
-	ExpiresAt         *time.Time                 `json:"expiresAt,omitempty"`
-	RequestProjection *ExchangeRequestProjection `json:"requestProjection,omitempty"`
-	Request           *exchangecontent.Request   `json:"request,omitempty"`
-	Response          *exchangecontent.Response  `json:"response,omitempty"`
+	State             ExchangeContentState         `json:"state"`
+	Mode              string                       `json:"mode,omitempty"`
+	RecordedAt        *time.Time                   `json:"recordedAt,omitempty"`
+	ExpiresAt         *time.Time                   `json:"expiresAt,omitempty"`
+	RequestProjection *ExchangeRequestProjection   `json:"requestProjection,omitempty"`
+	AgentConversation *AgentConversationProjection `json:"agentConversation,omitempty"`
+	Request           *exchangecontent.Request     `json:"request,omitempty"`
+	Response          *exchangecontent.Response    `json:"response,omitempty"`
+}
+
+// AgentConversationProjection is a rebuildable relationship view over the
+// immutable Exchange transcript. It never becomes a second conversation
+// authority: managed runs remain scoped by CaptureRun, while a manual capture
+// can only prove the current Exchange. Nodes and links are created only from
+// explicit agent provenance or multi-agent lifecycle items carried by the
+// source protocol.
+type AgentConversationProjection struct {
+	Scope         string                          `json:"scope"`
+	Agents        []AgentConversationAgent        `json:"agents"`
+	Relationships []AgentConversationRelationship `json:"relationships"`
+	Actions       []AgentConversationAction       `json:"actions"`
+}
+
+type AgentConversationAgent struct {
+	Name string `json:"name"`
+}
+
+type AgentConversationRelationship struct {
+	Source string `json:"source"`
+	Target string `json:"target"`
+	Kind   string `json:"kind"`
+}
+
+type AgentConversationAction struct {
+	CallID      string `json:"callId"`
+	Name        string `json:"name"`
+	Status      string `json:"status"`
+	SourceAgent string `json:"sourceAgent,omitempty"`
+	ResultAgent string `json:"resultAgent,omitempty"`
+	Attributed  bool   `json:"attributed"`
 }
 
 type ExchangeRequestProjection struct {
@@ -142,6 +261,7 @@ type activityListQuery struct {
 	captureRunID    string
 	manualCaptureID string
 	environmentID   string
+	conversationID  string
 }
 
 func parseActivityListQuery(rawQuery string) (activityListQuery, error) {
@@ -150,7 +270,7 @@ func parseActivityListQuery(rawQuery string) (activityListQuery, error) {
 		return activityListQuery{}, errInvalidActivityQuery
 	}
 	for name, entries := range values {
-		if (name != "cursor" && name != "limit" && name != "captureRunId" && name != "manualCaptureId" && name != "environmentId" && name != "kind") || len(entries) != 1 {
+		if (name != "cursor" && name != "limit" && name != "captureRunId" && name != "manualCaptureId" && name != "environmentId" && name != "conversationId" && name != "kind") || len(entries) != 1 {
 			return activityListQuery{}, errInvalidActivityQuery
 		}
 	}
@@ -188,15 +308,22 @@ func parseActivityListQuery(rawQuery string) (activityListQuery, error) {
 			return activityListQuery{}, errInvalidActivityQuery
 		}
 	}
+	if entries, present := values["conversationId"]; present {
+		query.conversationID = entries[0]
+		if query.conversationID == "" {
+			return activityListQuery{}, errInvalidActivityQuery
+		}
+	}
 	if entries, present := values["kind"]; present && entries[0] != "exchange" {
 		return activityListQuery{}, errInvalidActivityQuery
 	}
 	if (activity.PageRequest{
-		BeforeSequence:  query.beforeSequence,
-		Limit:           query.limit,
-		CaptureRunID:    query.captureRunID,
-		ManualCaptureID: query.manualCaptureID,
-		EnvironmentID:   query.environmentID,
+		BeforeSequence:           query.beforeSequence,
+		Limit:                    query.limit,
+		CaptureRunID:             query.captureRunID,
+		ManualCaptureID:          query.manualCaptureID,
+		EnvironmentID:            query.environmentID,
+		ConversationProjectionID: query.conversationID,
 	}).Validate() != nil {
 		return activityListQuery{}, errInvalidActivityQuery
 	}
@@ -229,8 +356,9 @@ func activityPageOf(page activity.Page) (ActivityPage, error) {
 		summary := ActivitySummary{
 			ID: record.SubjectID, OccurredAt: record.OccurredAt, Kind: "exchange",
 			Title: record.SourceDisplayName, Status: string(record.Status), ReasonCode: record.ReasonCode,
-			Source:      ActivitySourceRef{Kind: string(record.SourceKind), DisplayName: record.SourceDisplayName, Recognition: string(record.SourceRecognition)},
-			Environment: frozenEnvironmentRefOf(record), ParentRefs: parentRefsOf(record),
+			Source:       ActivitySourceRef{Kind: string(record.SourceKind), DisplayName: record.SourceDisplayName, Recognition: string(record.SourceRecognition)},
+			Conversation: activityConversationRefOf(record),
+			Environment:  frozenEnvironmentRefOf(record), ParentRefs: parentRefsOf(record),
 		}
 		if summary.Validate() != nil {
 			return ActivityPage{}, errors.New("Activity Exchange projection is invalid")
@@ -313,6 +441,7 @@ func exchangeDetailOf(
 		detail.Content = ExchangeContentDetail{
 			State: ExchangeContentRecorded, Mode: string(content.Mode),
 			RecordedAt: &recordedAt, ExpiresAt: &expiresAt,
+			AgentConversation: agentConversationProjection(*content),
 			RequestProjection: &ExchangeRequestProjection{
 				View: contentView, Relationship: content.Presentation.Mode,
 				InheritedMessageCount: content.Presentation.InheritedMessageCount,
@@ -332,6 +461,130 @@ func exchangeDetailOf(
 		}
 	}
 	return detail, nil
+}
+
+func agentConversationProjection(content exchangecontent.Record) *AgentConversationProjection {
+	agentOrder := make([]string, 0)
+	agentSet := make(map[string]struct{})
+	relationships := make([]AgentConversationRelationship, 0)
+	relationshipSet := make(map[string]struct{})
+	actions := make([]AgentConversationAction, 0)
+	actionIndexes := make(map[string]int)
+
+	addAgent := func(name string) {
+		if name == "" {
+			return
+		}
+		if _, found := agentSet[name]; found {
+			return
+		}
+		agentSet[name] = struct{}{}
+		agentOrder = append(agentOrder, name)
+	}
+	addContext := func(agent *exchangecontent.AgentContext) {
+		if agent == nil {
+			return
+		}
+		addAgent(agent.AgentName)
+		addAgent(agent.Author)
+		addAgent(agent.Recipient)
+		if agent.Author == "" || agent.Recipient == "" {
+			return
+		}
+		key := agent.Author + "\x00" + agent.Recipient
+		if _, found := relationshipSet[key]; found {
+			return
+		}
+		relationshipSet[key] = struct{}{}
+		relationships = append(relationships, AgentConversationRelationship{
+			Source: agent.Author,
+			Target: agent.Recipient,
+			Kind:   "message",
+		})
+	}
+	addAction := func(block exchangecontent.Block, agent *exchangecontent.AgentContext, allowUnattributedSubtask bool) {
+		isExplicitMultiAgent := block.ToolNamespace == "multi_agent"
+		isUnattributedSubtask := allowUnattributedSubtask && block.ToolNamespace == "" && strings.EqualFold(block.ToolName, "Agent")
+		if !isExplicitMultiAgent && !isUnattributedSubtask {
+			return
+		}
+		name := block.ToolName
+		if isUnattributedSubtask {
+			name = "subtask"
+		}
+		status := "requested"
+		if block.Kind == "tool_result" {
+			status = "completed"
+			if block.ToolError {
+				status = "failed"
+			}
+		}
+		index, found := actionIndexes[block.CallID]
+		if !found {
+			actionIndexes[block.CallID] = len(actions)
+			action := AgentConversationAction{
+				CallID:     block.CallID,
+				Name:       name,
+				Status:     status,
+				Attributed: isExplicitMultiAgent,
+			}
+			if agent != nil {
+				if block.Kind == "tool_result" {
+					action.ResultAgent = agent.AgentName
+				} else {
+					action.SourceAgent = agent.AgentName
+				}
+			}
+			actions = append(actions, action)
+			return
+		}
+		action := &actions[index]
+		if block.Kind == "tool_result" {
+			action.Status = status
+			if action.Name == "" {
+				action.Name = name
+			}
+			if agent != nil && agent.AgentName != "" {
+				action.ResultAgent = agent.AgentName
+			}
+		} else if agent != nil && agent.AgentName != "" {
+			action.SourceAgent = agent.AgentName
+		}
+	}
+	observeBlocks := func(blocks []exchangecontent.Block, fallback *exchangecontent.AgentContext, allowUnattributedSubtask bool) {
+		for _, block := range blocks {
+			agent := block.Agent
+			if agent == nil {
+				agent = fallback
+			}
+			addContext(agent)
+			addAction(block, agent, allowUnattributedSubtask)
+		}
+	}
+	for _, message := range content.Request.Messages {
+		addContext(message.Agent)
+		observeBlocks(message.Blocks, message.Agent, true)
+	}
+	if content.Response != nil {
+		observeBlocks(content.Response.Blocks, nil, false)
+	}
+	if len(agentOrder) == 0 && len(actions) == 0 {
+		return nil
+	}
+	agents := make([]AgentConversationAgent, 0, len(agentOrder))
+	for _, name := range agentOrder {
+		agents = append(agents, AgentConversationAgent{Name: name})
+	}
+	scope := "exchange"
+	if content.Parent.CaptureRunID != "" {
+		scope = "capture_run"
+	}
+	return &AgentConversationProjection{
+		Scope:         scope,
+		Agents:        agents,
+		Relationships: relationships,
+		Actions:       actions,
+	}
 }
 
 func isExchangeActivity(kind activity.Kind) bool {
@@ -376,14 +629,26 @@ func parseExchangeContentView(rawQuery string) (ExchangeContentView, error) {
 }
 
 func activityCursor(sequence int64) (string, error) {
+	return sequenceCursor(activityCursorPrefix, sequence)
+}
+
+func sequenceCursor(prefix string, sequence int64) (string, error) {
 	if sequence <= 0 {
 		return "", errInvalidActivityQuery
 	}
-	payload := activityCursorPrefix + strconv.FormatInt(sequence, 10)
+	payload := prefix + strconv.FormatInt(sequence, 10)
 	return base64.RawURLEncoding.EncodeToString([]byte(payload)), nil
 }
 
 func parseActivityCursor(value string) (int64, error) {
+	return parseSequenceCursor(value, activityCursorPrefix)
+}
+
+func parseConversationCursor(value string) (int64, error) {
+	return parseSequenceCursor(value, conversationCursorPrefix)
+}
+
+func parseSequenceCursor(value, prefix string) (int64, error) {
 	if value == "" || len(value) > 128 || strings.ContainsAny(value, " \t\r\n=") {
 		return 0, errInvalidActivityQuery
 	}
@@ -391,7 +656,7 @@ func parseActivityCursor(value string) (int64, error) {
 	if err != nil {
 		return 0, errInvalidActivityQuery
 	}
-	payload, found := strings.CutPrefix(string(decoded), activityCursorPrefix)
+	payload, found := strings.CutPrefix(string(decoded), prefix)
 	if !found {
 		return 0, errInvalidActivityQuery
 	}
@@ -399,7 +664,7 @@ func parseActivityCursor(value string) (int64, error) {
 	if err != nil || sequence <= 0 {
 		return 0, errInvalidActivityQuery
 	}
-	canonical, err := activityCursor(sequence)
+	canonical, err := sequenceCursor(prefix, sequence)
 	if err != nil || canonical != value {
 		return 0, errInvalidActivityQuery
 	}
@@ -444,6 +709,25 @@ func (handler *Handler) getExchange(writer http.ResponseWriter, request *http.Re
 	if err != nil {
 		writeProblem(writer, http.StatusServiceUnavailable, ReasonRuntimeUnavailable)
 		return
+	}
+	if handler.conversationIndexer != nil {
+		handler.refreshConversationIndex(request.Context(), activity.ConversationIndexRequest{
+			Limit:        1,
+			CaptureRunID: record.CaptureRunID,
+		})
+		identity, identityErr := handler.conversationIndexer.Identity(
+			request.Context(),
+			record.SubjectID,
+		)
+		switch {
+		case identityErr == nil:
+			cloned := identity.Clone()
+			detail.ClientIdentity = &cloned
+		case errors.Is(identityErr, activity.ErrExchangeNotFound):
+		default:
+			writeProblem(writer, http.StatusServiceUnavailable, ReasonRuntimeUnavailable)
+			return
+		}
 	}
 	writeJSON(writer, http.StatusOK, detail)
 }

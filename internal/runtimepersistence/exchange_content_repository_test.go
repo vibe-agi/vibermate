@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -40,7 +41,9 @@ func TestExchangeContentRepositoryReopensAndExpiresEvidence(t *testing.T) {
 		context.Background(), record.ExchangeID, recordedAt.Add(time.Hour),
 	)
 	if err != nil || got.ExchangeID != record.ExchangeID || got.Response == nil ||
-		got.Response.Usage.Output.Tokens != 2 {
+		got.Response.Usage.Output.Tokens != 2 ||
+		!slices.Equal(got.Request.ProtocolEvidence, record.Request.ProtocolEvidence) ||
+		!slices.Equal(got.Response.ProtocolEvidence, record.Response.ProtocolEvidence) {
 		t.Fatalf("Get() = %+v, %v", got, err)
 	}
 	if _, err := reopened.ExchangeContentRepository().Get(
@@ -392,11 +395,17 @@ func contentRecordFixture(t *testing.T, exchangeID string, recordedAt time.Time)
 	request := protocolcore.Request{
 		RequestedModel: "model", EffectiveModel: "model", MaxOutputTokens: 16,
 		Messages: []protocolcore.Message{{Role: protocolcore.RoleUser, Blocks: []protocolcore.ContentBlock{block}}},
+		ProtocolEvidence: []protocolcore.ProtocolEvidenceValue{{
+			Name: "client.session_id", Value: "session-1",
+		}},
 	}
 	response := protocolcore.Response{
 		ID: "response", RequestedModel: "model", EffectiveModel: "model", ReportedModel: "model",
 		Blocks: []protocolcore.ContentBlock{block}, StopReason: protocolcore.StopReasonEndTurn,
 		Usage: protocolcore.Usage{Output: protocolcore.UsageValue{Known: true, Tokens: 2, Source: "provider"}},
+		ProtocolEvidence: []protocolcore.ProtocolEvidenceValue{{
+			Name: "provider.output.0000.id", Value: "message-1",
+		}},
 	}
 	record, err := exchangecontent.NewRecord(
 		exchangeID,

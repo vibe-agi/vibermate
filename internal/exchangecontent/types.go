@@ -5,6 +5,7 @@ package exchangecontent
 
 import (
 	"bytes"
+	"crypto/sha256"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -129,19 +130,31 @@ const (
 )
 
 type Block struct {
-	Kind         string          `json:"kind"`
-	Availability Availability    `json:"availability"`
-	Text         string          `json:"text,omitempty"`
-	OriginalSize int             `json:"originalSize"`
-	CallID       string          `json:"callId,omitempty"`
-	ToolName     string          `json:"toolName,omitempty"`
-	Arguments    json.RawMessage `json:"arguments,omitempty"`
-	ToolError    bool            `json:"toolError,omitempty"`
+	Kind           string          `json:"kind"`
+	Availability   Availability    `json:"availability"`
+	Text           string          `json:"text,omitempty"`
+	OriginalSize   int             `json:"originalSize"`
+	CallID         string          `json:"callId,omitempty"`
+	ToolName       string          `json:"toolName,omitempty"`
+	ToolNamespace  string          `json:"toolNamespace,omitempty"`
+	Arguments      json.RawMessage `json:"arguments,omitempty"`
+	ToolError      bool            `json:"toolError,omitempty"`
+	ProviderSource string          `json:"providerSource,omitempty"`
+	ProviderKind   string          `json:"providerKind,omitempty"`
+	Fingerprint    string          `json:"fingerprint,omitempty"`
+	Agent          *AgentContext   `json:"agent,omitempty"`
 }
 
 type Message struct {
-	Role   string  `json:"role"`
-	Blocks []Block `json:"blocks"`
+	Role   string        `json:"role"`
+	Blocks []Block       `json:"blocks"`
+	Agent  *AgentContext `json:"agent,omitempty"`
+}
+
+type AgentContext struct {
+	AgentName string `json:"agentName,omitempty"`
+	Author    string `json:"author,omitempty"`
+	Recipient string `json:"recipient,omitempty"`
 }
 
 type ToolDefinition struct {
@@ -150,12 +163,13 @@ type ToolDefinition struct {
 }
 
 type Request struct {
-	RequestedModel  string           `json:"requestedModel"`
-	EffectiveModel  string           `json:"effectiveModel"`
-	MaxOutputTokens int              `json:"maxOutputTokens"`
-	Stream          bool             `json:"stream"`
-	Messages        []Message        `json:"messages"`
-	Tools           []ToolDefinition `json:"tools"`
+	RequestedModel   string                               `json:"requestedModel"`
+	EffectiveModel   string                               `json:"effectiveModel"`
+	MaxOutputTokens  int                                  `json:"maxOutputTokens"`
+	Stream           bool                                 `json:"stream"`
+	Messages         []Message                            `json:"messages"`
+	Tools            []ToolDefinition                     `json:"tools"`
+	ProtocolEvidence []protocolcore.ProtocolEvidenceValue `json:"protocolEvidence,omitempty"`
 }
 
 type UsageValue struct {
@@ -227,13 +241,14 @@ type Usage struct {
 }
 
 type Response struct {
-	ID             string  `json:"id"`
-	RequestedModel string  `json:"requestedModel"`
-	EffectiveModel string  `json:"effectiveModel"`
-	ReportedModel  string  `json:"reportedModel"`
-	StopReason     string  `json:"stopReason"`
-	Blocks         []Block `json:"blocks"`
-	Usage          Usage   `json:"usage"`
+	ID               string                               `json:"id"`
+	RequestedModel   string                               `json:"requestedModel"`
+	EffectiveModel   string                               `json:"effectiveModel"`
+	ReportedModel    string                               `json:"reportedModel"`
+	StopReason       string                               `json:"stopReason"`
+	Blocks           []Block                              `json:"blocks"`
+	Usage            Usage                                `json:"usage"`
+	ProtocolEvidence []protocolcore.ProtocolEvidenceValue `json:"protocolEvidence,omitempty"`
 }
 
 // Record contains only the neutral, redacted semantic view. Provider
@@ -352,7 +367,7 @@ func (record Record) IncrementalRequest() []Message {
 	}
 	result := make([]Message, len(record.Request.Messages)-inherited)
 	for index, message := range record.Request.Messages[inherited:] {
-		result[index] = Message{Role: message.Role, Blocks: cloneBlocks(message.Blocks)}
+		result[index] = Message{Role: message.Role, Blocks: cloneBlocks(message.Blocks), Agent: cloneAgentContext(message.Agent)}
 	}
 	return result
 }
@@ -405,6 +420,16 @@ func (request Request) validate(mode environment.ContentRecordingMode) error {
 		if len(message.Blocks) == 0 || len(message.Blocks) > protocolcore.MaxContentBlocks {
 			return fmt.Errorf("%w: message blocks are invalid", ErrInvalidEvidence)
 		}
+		if message.Agent != nil {
+			context := protocolcore.AgentMessageContext{
+				AgentName: message.Agent.AgentName,
+				Author:    message.Agent.Author,
+				Recipient: message.Agent.Recipient,
+			}
+			if err := context.Validate(); err != nil {
+				return fmt.Errorf("%w: agent message context: %v", ErrInvalidEvidence, err)
+			}
+		}
 		for _, block := range message.Blocks {
 			if err := block.validate(mode); err != nil {
 				return err
@@ -416,6 +441,9 @@ func (request Request) validate(mode environment.ContentRecordingMode) error {
 			(tool.Namespace != "" && !validIdentity(tool.Namespace, protocolcore.MaxToolNamespaceBytes)) {
 			return fmt.Errorf("%w: tool definition is invalid", ErrInvalidEvidence)
 		}
+	}
+	if err := protocolcore.ValidateProtocolEvidence(request.ProtocolEvidence); err != nil {
+		return fmt.Errorf("%w: %v", ErrInvalidEvidence, err)
 	}
 	return nil
 }
@@ -436,6 +464,9 @@ func (response Response) validate(mode environment.ContentRecordingMode) error {
 		if err := block.validate(mode); err != nil {
 			return err
 		}
+	}
+	if err := protocolcore.ValidateProtocolEvidence(response.ProtocolEvidence); err != nil {
+		return fmt.Errorf("%w: response protocol evidence: %v", ErrInvalidEvidence, err)
 	}
 	for _, value := range []UsageValue{
 		response.Usage.InputUncached, response.Usage.CacheWrite,
@@ -465,9 +496,19 @@ func (block Block) validate(mode environment.ContentRecordingMode) error {
 		(block.Text != "" || len(block.Arguments) != 0) {
 		return fmt.Errorf("%w: omitted block retains content", ErrInvalidEvidence)
 	}
+	if block.Agent != nil {
+		context := protocolcore.AgentMessageContext{
+			AgentName: block.Agent.AgentName,
+			Author:    block.Agent.Author,
+			Recipient: block.Agent.Recipient,
+		}
+		if err := context.Validate(); err != nil {
+			return fmt.Errorf("%w: block agent context: %v", ErrInvalidEvidence, err)
+		}
+	}
 	switch protocolcore.BlockKind(block.Kind) {
 	case protocolcore.BlockText, protocolcore.BlockRefusal:
-		if block.CallID != "" || block.ToolName != "" || len(block.Arguments) != 0 || block.ToolError {
+		if block.CallID != "" || block.ToolName != "" || block.ToolNamespace != "" || len(block.Arguments) != 0 || block.ToolError {
 			return fmt.Errorf("%w: text block contains tool evidence", ErrInvalidEvidence)
 		}
 	case protocolcore.BlockToolCall:
@@ -477,17 +518,26 @@ func (block Block) validate(mode environment.ContentRecordingMode) error {
 		if len(block.Arguments) != 0 && !json.Valid(block.Arguments) {
 			return fmt.Errorf("%w: tool arguments are invalid", ErrInvalidEvidence)
 		}
+		if block.ToolNamespace != "" && !validIdentity(block.ToolNamespace, protocolcore.MaxToolNamespaceBytes) {
+			return fmt.Errorf("%w: tool call namespace is invalid", ErrInvalidEvidence)
+		}
 	case protocolcore.BlockToolResult:
-		if !validIdentity(block.CallID, 512) || block.ToolName != "" || len(block.Arguments) != 0 {
+		if !validIdentity(block.CallID, 512) || len(block.Arguments) != 0 ||
+			(block.ToolNamespace == "") != (block.ToolName == "") ||
+			(block.ToolNamespace != "" && !validIdentity(block.ToolNamespace, protocolcore.MaxToolNamespaceBytes)) ||
+			(block.ToolName != "" && !validIdentity(block.ToolName, protocolcore.MaxToolNameBytes)) {
 			return fmt.Errorf("%w: tool result metadata is invalid", ErrInvalidEvidence)
 		}
 	case protocolcore.BlockProviderExtension:
 		if block.Availability != AvailabilityOmitted || block.CallID != "" ||
-			block.ToolName != "" || len(block.Arguments) != 0 || block.ToolError {
+			block.ToolName != "" || block.ToolNamespace != "" || len(block.Arguments) != 0 || block.ToolError ||
+			block.ProviderSource == "" || block.ProviderKind == "" ||
+			!validFingerprint(block.Fingerprint) {
 			return fmt.Errorf("%w: provider extension retained wire content", ErrInvalidEvidence)
 		}
 	case protocolcore.BlockKind(BlockKindReasoning):
-		if block.CallID != "" || block.ToolName != "" || len(block.Arguments) != 0 || block.ToolError {
+		if block.CallID != "" || block.ToolName != "" || block.ToolNamespace != "" || len(block.Arguments) != 0 || block.ToolError ||
+			block.ProviderSource == "" || block.ProviderKind == "" || block.Fingerprint != "" {
 			return fmt.Errorf("%w: reasoning block contains tool evidence", ErrInvalidEvidence)
 		}
 	default:
@@ -506,6 +556,7 @@ func requestView(request protocolcore.Request, full bool) Request {
 	for _, message := range request.Messages {
 		messages = append(messages, Message{
 			Role: string(message.Role), Blocks: blockViews(message.Blocks, full),
+			Agent: agentContextView(message.Agent),
 		})
 	}
 	tools := make([]ToolDefinition, 0, len(request.Tools))
@@ -521,17 +572,22 @@ func requestView(request protocolcore.Request, full bool) Request {
 		RequestedModel: request.RequestedModel, EffectiveModel: request.EffectiveModel,
 		MaxOutputTokens: request.MaxOutputTokens, Stream: request.Stream,
 		Messages: messages, Tools: tools,
+		ProtocolEvidence: append([]protocolcore.ProtocolEvidenceValue(nil), request.ProtocolEvidence...),
 	}
 }
 
 func responseView(response protocolcore.Response, full bool) Response {
-	blocks := blockViews(response.Blocks, full)
+	blocks := responseBlockViews(response.Blocks, full)
 	blocks = append(blocks, providerExtensionViews(response.ProviderExtensions, full)...)
 	return Response{
 		ID: response.ID, RequestedModel: response.RequestedModel,
 		EffectiveModel: response.EffectiveModel, ReportedModel: response.ReportedModel,
 		StopReason: string(response.StopReason), Blocks: blocks,
 		Usage: usageView(response.Usage),
+		ProtocolEvidence: append(
+			[]protocolcore.ProtocolEvidenceValue(nil),
+			response.ProtocolEvidence...,
+		),
 	}
 }
 
@@ -547,13 +603,15 @@ func providerExtensionViews(extensions []protocolcore.ProviderExtension, full bo
 			result = append(result, Block{
 				Kind: BlockKindReasoning, Availability: AvailabilityRecorded,
 				Text: sanitizeText(text), OriginalSize: len(text),
+				ProviderSource: string(extension.Source()),
+				ProviderKind:   string(extension.Kind()),
 			})
-			continue
 		}
-		result = append(result, Block{
-			Kind:         string(protocolcore.BlockProviderExtension),
-			Availability: AvailabilityOmitted, OriginalSize: rawBytes,
-		})
+		if opaque := providerOpaqueEvidence(extension); len(opaque) != 0 {
+			result = append(result, providerOpaqueBlock(extension, opaque))
+		} else if text == "" || !full {
+			result = append(result, providerOpaqueBlock(extension, bytes.Join(extension.Fragments(), nil)))
+		}
 	}
 	return result
 }
@@ -573,16 +631,92 @@ func providerReasoningText(extension protocolcore.ProviderExtension) string {
 			var value string
 			if json.Unmarshal(fragment, &value) == nil {
 				result.WriteString(value)
+				continue
+			}
+			var object struct {
+				Text string `json:"text"`
+			}
+			if json.Unmarshal(fragment, &object) == nil {
+				result.WriteString(object.Text)
+			}
+		case protocolcore.ProviderExtensionReasoningSummary:
+			var value struct {
+				Text string `json:"text"`
+			}
+			if json.Unmarshal(fragment, &value) == nil {
+				result.WriteString(value.Text)
 			}
 		}
 	}
 	return result.String()
 }
 
+func providerOpaqueEvidence(extension protocolcore.ProviderExtension) []byte {
+	var opaque bytes.Buffer
+	for _, fragment := range extension.Fragments() {
+		switch extension.Kind() {
+		case protocolcore.ProviderExtensionThinking:
+			var value struct {
+				Signature string `json:"signature"`
+			}
+			if json.Unmarshal(fragment, &value) == nil && value.Signature != "" {
+				opaque.WriteString(value.Signature)
+			}
+		case protocolcore.ProviderExtensionReasoningEncryptedContent,
+			protocolcore.ProviderExtensionAgentMessageEncryptedContent,
+			protocolcore.ProviderExtensionRedactedThinking,
+			protocolcore.ProviderExtensionAgentMessageImage,
+			protocolcore.ProviderExtensionAgentMessageFile,
+			protocolcore.ProviderExtensionAgentMessageScreenshot:
+			opaque.Write(fragment)
+		}
+	}
+	return opaque.Bytes()
+}
+
+func providerOpaqueBlock(extension protocolcore.ProviderExtension, opaque []byte) Block {
+	digest := sha256.Sum256(opaque)
+	return Block{
+		Kind:           string(protocolcore.BlockProviderExtension),
+		Availability:   AvailabilityOmitted,
+		OriginalSize:   len(opaque),
+		ProviderSource: string(extension.Source()),
+		ProviderKind:   string(extension.Kind()),
+		Fingerprint:    fmt.Sprintf("sha256:%x", digest[:]),
+	}
+}
+
+func validFingerprint(value string) bool {
+	if len(value) != len("sha256:")+sha256.Size*2 || !strings.HasPrefix(value, "sha256:") {
+		return false
+	}
+	for _, character := range value[len("sha256:"):] {
+		if (character < '0' || character > '9') && (character < 'a' || character > 'f') {
+			return false
+		}
+	}
+	return true
+}
+
 func blockViews(blocks []protocolcore.ContentBlock, full bool) []Block {
+	return blockViewsWithProviderReasoning(blocks, full, false)
+}
+
+func responseBlockViews(blocks []protocolcore.ContentBlock, full bool) []Block {
+	return blockViewsWithProviderReasoning(blocks, full, true)
+}
+
+func blockViewsWithProviderReasoning(
+	blocks []protocolcore.ContentBlock,
+	full bool,
+	readableProviderReasoning bool,
+) []Block {
 	result := make([]Block, 0, len(blocks))
 	for _, block := range blocks {
-		view := Block{Kind: string(block.Kind), Availability: AvailabilityOmitted}
+		view := Block{
+			Kind: string(block.Kind), Availability: AvailabilityOmitted,
+			Agent: agentContextView(block.Agent),
+		}
 		switch block.Kind {
 		case protocolcore.BlockText:
 			view.OriginalSize = len(block.Text)
@@ -599,6 +733,7 @@ func blockViews(blocks []protocolcore.ContentBlock, full bool) []Block {
 		case protocolcore.BlockToolCall:
 			view.CallID = block.ToolCall.Key.WireID()
 			view.ToolName = block.ToolCall.Name
+			view.ToolNamespace = block.ToolCall.Namespace
 			if block.ToolCall.EffectiveKind() == protocolcore.ToolKindFunction {
 				view.OriginalSize = len(block.ToolCall.Arguments.Bytes())
 				if full {
@@ -614,6 +749,8 @@ func blockViews(blocks []protocolcore.ContentBlock, full bool) []Block {
 			}
 		case protocolcore.BlockToolResult:
 			view.CallID = block.ToolResult.Key.WireID()
+			view.ToolNamespace = block.ToolResult.Namespace
+			view.ToolName = block.ToolResult.Name
 			view.ToolError = block.ToolResult.IsError
 			view.OriginalSize = len(block.ToolResult.Content)
 			if full {
@@ -621,11 +758,19 @@ func blockViews(blocks []protocolcore.ContentBlock, full bool) []Block {
 				view.Text = sanitizeText(block.ToolResult.Content)
 			}
 		case protocolcore.BlockProviderExtension:
-			// Provider-private reasoning history is required for compatible
-			// forwarding but never becomes inspectable conversation content.
-			// Retain only its bounded byte count in the evidence projection.
-			for _, fragment := range block.ProviderExtension.Fragments() {
-				view.OriginalSize += len(fragment)
+			if text := providerReasoningText(block.ProviderExtension); readableProviderReasoning && full && text != "" {
+				view.Kind = BlockKindReasoning
+				view.Availability = AvailabilityRecorded
+				view.Text = sanitizeText(text)
+				view.OriginalSize = len(text)
+				view.ProviderSource = string(block.ProviderExtension.Source())
+				view.ProviderKind = string(block.ProviderExtension.Kind())
+			} else {
+				view = providerOpaqueBlock(
+					block.ProviderExtension,
+					bytes.Join(block.ProviderExtension.Fragments(), nil),
+				)
+				view.Agent = agentContextView(block.Agent)
 			}
 		}
 		result = append(result, view)
@@ -712,15 +857,42 @@ func cloneRequest(value Request) Request {
 	cloned := value
 	cloned.Messages = make([]Message, len(value.Messages))
 	for index, message := range value.Messages {
-		cloned.Messages[index] = Message{Role: message.Role, Blocks: cloneBlocks(message.Blocks)}
+		cloned.Messages[index] = Message{
+			Role: message.Role, Blocks: cloneBlocks(message.Blocks),
+			Agent: cloneAgentContext(message.Agent),
+		}
 	}
 	cloned.Tools = append([]ToolDefinition(nil), value.Tools...)
+	cloned.ProtocolEvidence = append([]protocolcore.ProtocolEvidenceValue(nil), value.ProtocolEvidence...)
 	return cloned
+}
+
+func agentContextView(context *protocolcore.AgentMessageContext) *AgentContext {
+	if context == nil {
+		return nil
+	}
+	return &AgentContext{
+		AgentName: context.AgentName,
+		Author:    context.Author,
+		Recipient: context.Recipient,
+	}
+}
+
+func cloneAgentContext(context *AgentContext) *AgentContext {
+	if context == nil {
+		return nil
+	}
+	cloned := *context
+	return &cloned
 }
 
 func cloneResponse(value Response) Response {
 	cloned := value
 	cloned.Blocks = cloneBlocks(value.Blocks)
+	cloned.ProtocolEvidence = append(
+		[]protocolcore.ProtocolEvidenceValue(nil),
+		value.ProtocolEvidence...,
+	)
 	return cloned
 }
 
@@ -729,6 +901,7 @@ func cloneBlocks(value []Block) []Block {
 	for index, block := range value {
 		result[index] = block
 		result[index].Arguments = append(json.RawMessage(nil), block.Arguments...)
+		result[index].Agent = cloneAgentContext(block.Agent)
 	}
 	return result
 }

@@ -9,6 +9,8 @@ import 'control_models.dart';
 abstract interface class ControlApi {
   Future<DashboardData> loadDashboard();
 
+  Future<CapturePage> captures({String? cursor, int limit = 50});
+
   Future<OfflineHoldSnapshot> enterOfflineHold(OfflineHoldSnapshot current);
 
   Future<OfflineHoldSnapshot> resumeOfflineHold(OfflineHoldSnapshot current);
@@ -60,12 +62,24 @@ abstract interface class ControlApi {
     String? captureRunId,
     String? manualCaptureId,
     String? environmentId,
+    String? conversationId,
+  });
+
+  Future<ConversationPage> conversations({
+    String? cursor,
+    int limit = 50,
+    String? captureRunId,
+    String? manualCaptureId,
   });
 
   Future<ExchangeDetail> exchange(
     String exchangeId, {
     String contentView = 'incremental',
   });
+
+  Future<RawEvidencePage> rawEvidence(String exchangeId);
+
+  Future<RevealedRawEvidence> revealRawEvidence({required String envelopeId});
 
   Future<NetworkData> loadNetwork();
 
@@ -182,6 +196,10 @@ final class HttpControlApi implements ControlApi {
 
   static const _origin = 'vibermate://desktop';
   static const _maximumResponseBytes = 2 * 1024 * 1024;
+  // A deliberately revealed body may contain the configured 16 MiB retained
+  // prefix plus Base64 and JSON overhead. Ordinary control reads stay at the
+  // tighter 2 MiB boundary.
+  static const _maximumRawRevealResponseBytes = 32 * 1024 * 1024;
   static const _requestTimeout = Duration(seconds: 10);
 
   static Future<HttpControlApi> connect(
@@ -204,7 +222,7 @@ final class HttpControlApi implements ControlApi {
   Future<DashboardData> loadDashboard() async {
     final results = await Future.wait<Object?>([
       _read('/api/v1/status'),
-      _read('/api/v1/captures?limit=50'),
+      captures(),
       _read('/api/v1/environments'),
       _read('/api/v1/upstream-endpoints'),
       _read('/api/v1/provider-accounts'),
@@ -214,11 +232,8 @@ final class HttpControlApi implements ControlApi {
         results[0],
         expectedInstanceId: _session.instanceId,
       ),
-      captures: _page(
-        results[1],
-        'captures',
-        (item, path) => CaptureRecord.fromJson(item, path),
-      ),
+      captures: (results[1]! as CapturePage).items,
+      captureNextCursor: (results[1]! as CapturePage).nextCursor,
       environments: _page(
         results[2],
         'environments',
@@ -235,6 +250,20 @@ final class HttpControlApi implements ControlApi {
         (item, path) => ProviderAccount.fromJson(item, path),
       ),
     );
+  }
+
+  @override
+  Future<CapturePage> captures({String? cursor, int limit = 50}) async {
+    _validatePageRequest(cursor, limit);
+    if (limit > 199) {
+      throw const ControlContractException(
+        'Capture page limit exceeds the API maximum',
+      );
+    }
+    final query = <String, String>{'limit': '$limit'};
+    if (cursor != null) query['cursor'] = cursor;
+    final uri = Uri(path: '/api/v1/captures', queryParameters: query);
+    return CapturePage.fromJson(await _read(uri.toString()), 'captures');
   }
 
   @override
@@ -506,12 +535,14 @@ final class HttpControlApi implements ControlApi {
     String? captureRunId,
     String? manualCaptureId,
     String? environmentId,
+    String? conversationId,
   }) async {
     _validatePageRequest(cursor, limit);
     if ((captureRunId != null && !_validResourceId(captureRunId)) ||
         (manualCaptureId != null && !_validResourceId(manualCaptureId)) ||
         (captureRunId != null && manualCaptureId != null) ||
-        (environmentId != null && !_validResourceId(environmentId))) {
+        (environmentId != null && !_validResourceId(environmentId)) ||
+        (conversationId != null && !_validConversationId(conversationId))) {
       throw const ControlContractException('activity query is invalid');
     }
     final uri = Uri(
@@ -523,9 +554,38 @@ final class HttpControlApi implements ControlApi {
         'captureRunId': ?captureRunId,
         'manualCaptureId': ?manualCaptureId,
         'environmentId': ?environmentId,
+        'conversationId': ?conversationId,
       },
     );
     return ActivityPage.fromJson(await _read(uri.toString()), 'activities');
+  }
+
+  @override
+  Future<ConversationPage> conversations({
+    String? cursor,
+    int limit = 50,
+    String? captureRunId,
+    String? manualCaptureId,
+  }) async {
+    _validatePageRequest(cursor, limit);
+    if ((captureRunId != null && !_validResourceId(captureRunId)) ||
+        (manualCaptureId != null && !_validResourceId(manualCaptureId)) ||
+        (captureRunId != null && manualCaptureId != null)) {
+      throw const ControlContractException('Conversation query is invalid');
+    }
+    final uri = Uri(
+      path: '/api/v1/conversations',
+      queryParameters: {
+        'limit': '$limit',
+        'cursor': ?cursor,
+        'captureRunId': ?captureRunId,
+        'manualCaptureId': ?manualCaptureId,
+      },
+    );
+    return ConversationPage.fromJson(
+      await _read(uri.toString()),
+      'conversations',
+    );
   }
 
   @override
@@ -553,6 +613,57 @@ final class HttpControlApi implements ControlApi {
       );
     }
     return detail;
+  }
+
+  @override
+  Future<RawEvidencePage> rawEvidence(String exchangeId) async {
+    if (!_validRawEvidenceIdentity(exchangeId)) {
+      throw const ControlContractException('Raw evidence query is invalid');
+    }
+    await _ensureFreshSession();
+    final response = await _send(
+      'GET',
+      '/api/v1/exchanges/${Uri.encodeComponent(exchangeId)}/raw-evidence',
+      token: _session.readToken,
+      expectedStatus: 200,
+    );
+    if (response.headers.value(HttpHeaders.cacheControlHeader) != 'no-store') {
+      throw const ControlContractException(
+        'Raw evidence response can be cached',
+      );
+    }
+    return RawEvidencePage.fromJson(
+      response.payload,
+      'rawEvidence',
+      expectedExchangeId: exchangeId,
+    );
+  }
+
+  @override
+  Future<RevealedRawEvidence> revealRawEvidence({
+    required String envelopeId,
+  }) async {
+    if (!_validRawEvidenceIdentity(envelopeId)) {
+      throw const ControlContractException('Raw evidence reveal is invalid');
+    }
+    await _ensureFreshSession();
+    final response = await _send(
+      'POST',
+      '/api/v1/raw-evidence/${Uri.encodeComponent(envelopeId)}/actions/reveal',
+      token: _session.writeToken,
+      expectedStatus: 200,
+      maximumResponseBytes: _maximumRawRevealResponseBytes,
+    );
+    if (response.headers.value(HttpHeaders.cacheControlHeader) != 'no-store') {
+      throw const ControlContractException(
+        'Revealed raw evidence response can be cached',
+      );
+    }
+    return RevealedRawEvidence.fromJson(
+      response.payload,
+      'rawReveal',
+      expectedEnvelopeId: envelopeId,
+    );
   }
 
   @override
@@ -1160,6 +1271,7 @@ final class HttpControlApi implements ControlApi {
     Map<String, String> headers = const {},
     bool skipRenewal = false,
     Duration responseTimeout = _requestTimeout,
+    int maximumResponseBytes = _maximumResponseBytes,
   }) async {
     _requireOpen();
     if (!skipRenewal && path != '/api/v1/auth/sessions/current') {
@@ -1199,7 +1311,11 @@ final class HttpControlApi implements ControlApi {
       request.add(encoded);
     }
     final response = await request.close().timeout(responseTimeout);
-    final bytes = await _readBounded(response, responseTimeout);
+    final bytes = await _readBounded(
+      response,
+      responseTimeout,
+      maximumResponseBytes,
+    );
     final payload = bytes.isEmpty ? null : _decodeJson(bytes);
     if (response.statusCode != expectedStatus) {
       throw _problem(response.statusCode, payload);
@@ -1231,17 +1347,22 @@ final class HttpControlApi implements ControlApi {
   Future<Uint8List> _readBounded(
     HttpClientResponse response,
     Duration responseTimeout,
+    int maximumResponseBytes,
   ) async {
     final declared = response.contentLength;
-    if (declared > _maximumResponseBytes) {
-      throw const ControlContractException('control response exceeded 2 MiB');
+    if (declared > maximumResponseBytes) {
+      throw ControlContractException(
+        'control response exceeded ${maximumResponseBytes ~/ (1024 * 1024)} MiB',
+      );
     }
     final builder = BytesBuilder(copy: false);
     var length = 0;
     await for (final chunk in response.timeout(responseTimeout)) {
       length += chunk.length;
-      if (length > _maximumResponseBytes) {
-        throw const ControlContractException('control response exceeded 2 MiB');
+      if (length > maximumResponseBytes) {
+        throw ControlContractException(
+          'control response exceeded ${maximumResponseBytes ~/ (1024 * 1024)} MiB',
+        );
       }
       builder.add(chunk);
     }
@@ -1294,7 +1415,15 @@ final class HttpControlApi implements ControlApi {
   }
 
   static bool _validResourceId(String value) =>
-      RegExp(r'^[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}$').hasMatch(value);
+      RegExp(r'^[A-Za-z0-9_-][A-Za-z0-9_.:-]{0,127}$').hasMatch(value);
+
+  static bool _validConversationId(String value) =>
+      RegExp(r'^[A-Za-z0-9_-][A-Za-z0-9_.:-]{0,511}$').hasMatch(value);
+
+  static bool _validRawEvidenceIdentity(String value) =>
+      value.isNotEmpty &&
+      utf8.encode(value).length <= 512 &&
+      !RegExp(r'[\u0000\r\n\t]').hasMatch(value);
 
   static void _validateWorkspaceIdentity(String value, String label) {
     if (!RegExp(r'^[A-Za-z0-9_-]{43}$').hasMatch(value)) {

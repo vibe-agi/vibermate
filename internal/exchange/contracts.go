@@ -19,6 +19,7 @@ import (
 	"unicode"
 	"unicode/utf8"
 
+	"github.com/vibe-agi/vibermate/internal/agentconversation"
 	"github.com/vibe-agi/vibermate/internal/captureadmission"
 	"github.com/vibe-agi/vibermate/internal/environment"
 	"github.com/vibe-agi/vibermate/internal/offlinehold"
@@ -235,7 +236,7 @@ func newFailure(
 	if cause == nil {
 		cause = errors.New("Exchange operation failed")
 	}
-	return &Failure{
+	failure := &Failure{
 		Code:           code,
 		ExchangeID:     exchangeID,
 		ProviderStatus: providerStatus,
@@ -243,6 +244,7 @@ func newFailure(
 		ProtocolReason: protocolcore.ReasonOf(cause),
 		cause:          cause,
 	}
+	return failure
 }
 
 // structuralPath extracts the failure's location in the request's shape.
@@ -297,6 +299,18 @@ func ReasonOf(err error) ReasonCode {
 		return failure.Code
 	}
 	return ""
+}
+
+// ProviderStatusOf returns the upstream HTTP status recorded on a classified
+// Exchange failure. It exposes only the numeric status needed to preserve the
+// provider's retry semantics at the downstream HTTP boundary; response bodies
+// and private transport causes remain internal evidence.
+func ProviderStatusOf(err error) int {
+	var failure *Failure
+	if errors.As(err, &failure) {
+		return failure.ProviderStatus
+	}
+	return 0
 }
 
 type ReplayClass string
@@ -410,6 +424,8 @@ type ClientRequest struct {
 	hasCorrelation     bool
 	anthropicBeta      string
 	clientUserAgent    string
+	clientEvidence     []protocolcore.ProtocolEvidenceValue
+	hasClientEvidence  bool
 	originalHeaders    http.Header
 	hasOriginalHeaders bool
 }
@@ -417,11 +433,12 @@ type ClientRequest struct {
 type clientRequestOptionKind uint8
 
 const (
-	clientRequestOptionClientHello     clientRequestOptionKind = 1
-	clientRequestOptionCorrelation     clientRequestOptionKind = 2
-	clientRequestOptionAnthropicBeta   clientRequestOptionKind = 3
-	clientRequestOptionUserAgent       clientRequestOptionKind = 4
-	clientRequestOptionOriginalHeaders clientRequestOptionKind = 5
+	clientRequestOptionClientHello      clientRequestOptionKind = 1
+	clientRequestOptionCorrelation      clientRequestOptionKind = 2
+	clientRequestOptionAnthropicBeta    clientRequestOptionKind = 3
+	clientRequestOptionUserAgent        clientRequestOptionKind = 4
+	clientRequestOptionOriginalHeaders  clientRequestOptionKind = 5
+	clientRequestOptionProtocolEvidence clientRequestOptionKind = 6
 )
 
 // ClientRequestOption is a closed typed option. Its fields are private so an
@@ -433,6 +450,7 @@ type ClientRequestOption struct {
 	connectionRef   string
 	anthropicBeta   string
 	clientUserAgent string
+	clientEvidence  []protocolcore.ProtocolEvidenceValue
 	originalHeaders http.Header
 }
 
@@ -475,6 +493,19 @@ func WithClientUserAgent(value string) ClientRequestOption {
 	return ClientRequestOption{
 		kind:            clientRequestOptionUserAgent,
 		clientUserAgent: value,
+	}
+}
+
+// WithClientProtocolEvidence carries a bounded allowlist of non-secret,
+// client-native identifiers across the ingress boundary. Raw HTTP remains the
+// wire authority; these canonical values exist only so semantic projections
+// can associate Exchanges without guessing from time, titles, or content.
+func WithClientProtocolEvidence(
+	values []protocolcore.ProtocolEvidenceValue,
+) ClientRequestOption {
+	return ClientRequestOption{
+		kind:           clientRequestOptionProtocolEvidence,
+		clientEvidence: slices.Clone(values),
 	}
 }
 
@@ -576,6 +607,19 @@ func NewClientRequest(
 				)
 			}
 			request.clientUserAgent = option.clientUserAgent
+		case clientRequestOptionProtocolEvidence:
+			if request.hasClientEvidence || len(option.clientEvidence) == 0 {
+				return ClientRequest{}, errors.New(
+					"client protocol evidence option is invalid",
+				)
+			}
+			if err := protocolcore.ValidateProtocolEvidence(
+				option.clientEvidence,
+			); err != nil {
+				return ClientRequest{}, err
+			}
+			request.clientEvidence = slices.Clone(option.clientEvidence)
+			request.hasClientEvidence = true
 		case clientRequestOptionOriginalHeaders:
 			if request.hasOriginalHeaders {
 				return ClientRequest{}, errors.New(
@@ -631,6 +675,10 @@ func (request ClientRequest) protocolHeaders() http.Header {
 
 func (request ClientRequest) ClientUserAgent() string {
 	return request.clientUserAgent
+}
+
+func (request ClientRequest) ClientProtocolEvidence() []protocolcore.ProtocolEvidenceValue {
+	return slices.Clone(request.clientEvidence)
 }
 
 func (request ClientRequest) OriginalHeaders() (http.Header, bool) {
@@ -794,6 +842,14 @@ func (request ClientRequest) validate() error {
 	}
 	if request.hasOriginalHeaders {
 		if _, err := validateOriginalHeaders(request.originalHeaders); err != nil {
+			return err
+		}
+	}
+	if request.hasClientEvidence {
+		if len(request.clientEvidence) == 0 {
+			return errors.New("client protocol evidence is unavailable")
+		}
+		if err := protocolcore.ValidateProtocolEvidence(request.clientEvidence); err != nil {
 			return err
 		}
 	}
@@ -1003,46 +1059,51 @@ type AccountLeaseAuthority interface {
 }
 
 type AttemptObservation struct {
-	ExchangeID           string
-	EnvironmentID        environment.EnvironmentID
-	EnvironmentRevision  environment.Revision
-	EnvironmentDigest    string
-	EndpointID           environment.ClientEndpointID
-	EndpointRevision     environment.Revision
-	ProtocolPlanID       environment.ClientProtocolPlanID
-	ProtocolPlanRevision environment.Revision
-	RouteID              environment.UpstreamRouteID
-	RouteRevision        environment.Revision
-	AccountID            string
-	AccountRevision      uint64
-	CredentialEpoch      uint64
-	Admission            captureadmission.Admission
-	HasAdmission         bool
-	ConnectionID         string
-	Outcome              AttemptOutcome
-	ReasonCode           ReasonCode
-	ProviderStatus       int
-	ProviderField        ProviderField
-	ClientField          ClientField
-	ClientPath           string
-	Presentation         providertransport.WirePresentationEvidence
-	Transport            transportprofile.Evidence
+	ExchangeID             string
+	EnvironmentID          environment.EnvironmentID
+	EnvironmentRevision    environment.Revision
+	EnvironmentDigest      string
+	EndpointID             environment.ClientEndpointID
+	EndpointRevision       environment.Revision
+	ProtocolPlanID         environment.ClientProtocolPlanID
+	ProtocolPlanRevision   environment.Revision
+	RouteID                environment.UpstreamRouteID
+	RouteRevision          environment.Revision
+	AccountID              string
+	AccountRevision        uint64
+	CredentialEpoch        uint64
+	Admission              captureadmission.Admission
+	HasAdmission           bool
+	ConnectionID           string
+	Outcome                AttemptOutcome
+	ReasonCode             ReasonCode
+	ProviderStatus         int
+	ProviderField          ProviderField
+	ClientField            ClientField
+	ClientPath             string
+	Presentation           providertransport.WirePresentationEvidence
+	Transport              transportprofile.Evidence
+	Conversation           agentconversation.Ref
+	ClientProtocolEvidence []protocolcore.ProtocolEvidenceValue
+	ProviderResponseID     string
 }
 
 type StartObservation struct {
-	ExchangeID           string
-	EnvironmentID        environment.EnvironmentID
-	EnvironmentRevision  environment.Revision
-	EnvironmentDigest    string
-	EndpointID           environment.ClientEndpointID
-	EndpointRevision     environment.Revision
-	ProtocolPlanID       environment.ClientProtocolPlanID
-	ProtocolPlanRevision environment.Revision
-	RouteID              environment.UpstreamRouteID
-	RouteRevision        environment.Revision
-	Admission            captureadmission.Admission
-	HasAdmission         bool
-	ConnectionID         string
+	ExchangeID             string
+	EnvironmentID          environment.EnvironmentID
+	EnvironmentRevision    environment.Revision
+	EnvironmentDigest      string
+	EndpointID             environment.ClientEndpointID
+	EndpointRevision       environment.Revision
+	ProtocolPlanID         environment.ClientProtocolPlanID
+	ProtocolPlanRevision   environment.Revision
+	RouteID                environment.UpstreamRouteID
+	RouteRevision          environment.Revision
+	Admission              captureadmission.Admission
+	HasAdmission           bool
+	ConnectionID           string
+	Conversation           agentconversation.Ref
+	ClientProtocolEvidence []protocolcore.ProtocolEvidenceValue
 }
 
 type ExchangeObserver interface {

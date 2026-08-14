@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
 import '../../core/design/viber_theme.dart';
+import '../../core/design/vibermate_mark.dart';
 import '../../core/design/workbench_widgets.dart';
 import '../../core/i18n/app_copy.dart';
 import 'captures_view.dart';
@@ -143,9 +144,12 @@ final class _TitleBar extends StatelessWidget {
   Widget build(BuildContext context) {
     final status = controller.data?.status;
     return Container(
-      height: 43,
-      color: ViberColors.panel,
-      padding: const EdgeInsets.only(left: 13, right: 8),
+      height: ViberMetrics.toolbarHeight,
+      color: context.viberColors.panel,
+      padding: const EdgeInsets.only(
+        left: ViberSpacing.lg,
+        right: ViberSpacing.md,
+      ),
       child: LayoutBuilder(
         builder: (context, constraints) {
           // Keep the global controls usable at common half-screen desktop
@@ -155,20 +159,20 @@ final class _TitleBar extends StatelessWidget {
           final narrow = constraints.maxWidth < 520;
           final statusLabel = status?.healthy == true
               ? copy('status.ready')
-              : status?.state ?? 'Starting';
+              : _runtimeStateLabel(copy, status?.state ?? 'starting');
           final statusColor = status?.healthy == true
-              ? ViberColors.verified
-              : ViberColors.warning;
+              ? context.viberColors.verified
+              : context.viberColors.warning;
           return Row(
             children: [
               const _ViberMark(),
-              const SizedBox(width: 8),
+              const SizedBox(width: ViberSpacing.md),
               Text(
                 copy('app.name'),
                 style: Theme.of(context).textTheme.titleMedium,
               ),
               if (!compact) ...[
-                const SizedBox(width: 9),
+                const SizedBox(width: ViberSpacing.md),
                 Text(
                   copy('app.subtitle'),
                   style: Theme.of(context).textTheme.bodySmall,
@@ -179,59 +183,51 @@ final class _TitleBar extends StatelessWidget {
                 if (compact)
                   Tooltip(
                     message: copy('status.preview'),
-                    child: const Padding(
-                      padding: EdgeInsets.symmetric(horizontal: 6),
+                    child: Padding(
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: ViberSpacing.sm,
+                      ),
                       child: Icon(
                         Icons.science_outlined,
                         size: 16,
-                        color: ViberColors.warning,
+                        color: context.viberColors.warning,
                       ),
                     ),
                   )
                 else
                   StatusPill(
                     label: copy('status.preview'),
-                    color: ViberColors.warning,
+                    color: context.viberColors.warning,
                     icon: Icons.science_outlined,
                   ),
-                const SizedBox(width: 7),
+                const SizedBox(width: ViberSpacing.sm),
               ],
               OfflineHoldCommand(
                 controller: controller,
                 copy: copy,
-                compact: compact,
+                compact: true,
               ),
-              const SizedBox(width: 5),
+              const SizedBox(width: ViberSpacing.xs),
               _ApprovalAttention(
                 controller: controller,
                 copy: copy,
                 compact: compact,
               ),
-              const SizedBox(width: 5),
-              if (narrow)
-                Tooltip(
-                  message: statusLabel,
-                  child: Semantics(
-                    label: statusLabel,
-                    container: true,
-                    child: Container(
-                      width: 29,
-                      height: 29,
-                      alignment: Alignment.center,
-                      decoration: BoxDecoration(
-                        color: statusColor.withValues(alpha: 0.09),
-                        border: Border.all(
-                          color: statusColor.withValues(alpha: 0.4),
-                        ),
-                        borderRadius: BorderRadius.circular(999),
-                      ),
-                      child: Icon(Icons.circle, size: 7, color: statusColor),
+              const SizedBox(width: ViberSpacing.xs),
+              if (status?.healthy != true) ...[
+                if (narrow)
+                  Tooltip(
+                    message: statusLabel,
+                    child: Icon(
+                      Icons.error_outline,
+                      size: 16,
+                      color: statusColor,
                     ),
-                  ),
-                )
-              else
-                StatusPill(label: statusLabel, color: statusColor),
-              const SizedBox(width: 5),
+                  )
+                else
+                  InlineStatus(label: statusLabel, color: statusColor),
+                const SizedBox(width: ViberSpacing.xs),
+              ],
               IconButton(
                 onPressed: controller.loading
                     ? null
@@ -244,8 +240,8 @@ final class _TitleBar extends StatelessWidget {
                       )
                     : const Icon(Icons.refresh, size: 16),
                 constraints: const BoxConstraints.tightFor(
-                  width: 31,
-                  height: 31,
+                  width: ViberMetrics.controlHeight,
+                  height: ViberMetrics.controlHeight,
                 ),
                 padding: EdgeInsets.zero,
               ),
@@ -273,24 +269,40 @@ final class _ApprovalAttention extends StatelessWidget {
     final count = controller.pendingApprovalCount;
     final unavailable =
         count == null && controller.approvalAttentionError != null;
+    if (!unavailable && (count == null || count == 0)) {
+      return const SizedBox.shrink();
+    }
     final pending = count != null && count > 0;
     final label = unavailable
         ? copy('approval.attention.unavailable')
         : copy.format('approval.attention.count', {'count': count ?? 0});
     final color = unavailable
-        ? ViberColors.danger
+        ? context.viberColors.danger
         : pending
-        ? ViberColors.warning
-        : ViberColors.verified;
+        ? context.viberColors.warning
+        : context.viberColors.verified;
     final selected = controller.section == WorkbenchSection.network;
+    final normalSide = BorderSide(
+      color: pending
+          ? context.viberColors.warning.withValues(alpha: 0.45)
+          : context.viberColors.divider,
+    );
+    final focusSide = WidgetStateProperty.resolveWith<BorderSide?>((states) {
+      return states.contains(WidgetState.focused)
+          ? BorderSide(color: context.viberColors.focus, width: 1.5)
+          : normalSide;
+    });
     final icon = Badge(
       isLabelVisible: pending,
       label: Text(count == 50 ? '50+' : '${count ?? 0}'),
-      backgroundColor: ViberColors.warning,
-      textColor: ViberColors.rail,
-      textStyle: const TextStyle(fontSize: 8, fontWeight: FontWeight.w700),
+      backgroundColor: context.viberColors.warning,
+      textColor: context.viberColors.rail,
+      textStyle: Theme.of(context).textTheme.labelMedium?.copyWith(
+        fontSize: ViberType.micro,
+        fontWeight: FontWeight.w600,
+      ),
       smallSize: 7,
-      largeSize: 14,
+      largeSize: 16,
       child: Icon(
         unavailable ? Icons.error_outline : Icons.approval_outlined,
         size: 15,
@@ -310,16 +322,14 @@ final class _ApprovalAttention extends StatelessWidget {
               tooltip: label,
               style: IconButton.styleFrom(
                 backgroundColor: selected
-                    ? ViberColors.selection
+                    ? context.viberColors.selection
                     : Colors.transparent,
-                side: BorderSide(
-                  color: pending
-                      ? ViberColors.warning.withValues(alpha: 0.45)
-                      : ViberColors.divider,
-                ),
-              ),
+              ).copyWith(side: focusSide),
               icon: icon,
-              constraints: const BoxConstraints.tightFor(width: 34, height: 29),
+              constraints: const BoxConstraints.tightFor(
+                width: ViberMetrics.controlHeight,
+                height: ViberMetrics.controlHeight,
+              ),
               padding: EdgeInsets.zero,
             )
           : OutlinedButton.icon(
@@ -327,16 +337,11 @@ final class _ApprovalAttention extends StatelessWidget {
               onPressed: action,
               style: OutlinedButton.styleFrom(
                 backgroundColor: selected
-                    ? ViberColors.selection
+                    ? context.viberColors.selection
                     : Colors.transparent,
-                minimumSize: const Size(0, 29),
+                minimumSize: const Size(0, ViberMetrics.controlHeight),
                 padding: const EdgeInsets.symmetric(horizontal: 8),
-                side: BorderSide(
-                  color: pending
-                      ? ViberColors.warning.withValues(alpha: 0.45)
-                      : ViberColors.divider,
-                ),
-              ),
+              ).copyWith(side: focusSide),
               icon: icon,
               label: Text(
                 pending
@@ -355,46 +360,8 @@ final class _ViberMark extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return Semantics(
-      label: 'ViberMate',
-      image: true,
-      child: SizedBox.square(
-        dimension: 23,
-        child: CustomPaint(painter: _ViberMarkPainter()),
-      ),
-    );
+    return const ViberMateMark(size: 23, framed: true);
   }
-}
-
-final class _ViberMarkPainter extends CustomPainter {
-  @override
-  void paint(Canvas canvas, Size size) {
-    final route = Paint()
-      ..color = ViberColors.route
-      ..strokeWidth = 2
-      ..strokeCap = StrokeCap.round
-      ..style = PaintingStyle.stroke;
-    final verified = Paint()..color = ViberColors.verified;
-    final center = Offset(size.width * 0.48, size.height * 0.5);
-    canvas.drawLine(Offset(3, size.height * 0.25), center, route);
-    canvas.drawLine(center, Offset(size.width - 3, size.height * 0.25), route);
-    canvas.drawLine(center, Offset(size.width - 3, size.height * 0.75), route);
-    canvas.drawCircle(Offset(3, size.height * 0.25), 2.2, verified);
-    canvas.drawCircle(center, 2.4, verified);
-    canvas.drawCircle(
-      Offset(size.width - 3, size.height * 0.25),
-      2.2,
-      verified,
-    );
-    canvas.drawCircle(
-      Offset(size.width - 3, size.height * 0.75),
-      2.2,
-      verified,
-    );
-  }
-
-  @override
-  bool shouldRepaint(covariant CustomPainter oldDelegate) => false;
 }
 
 final class _NavigationRail extends StatelessWidget {
@@ -407,10 +374,10 @@ final class _NavigationRail extends StatelessWidget {
   Widget build(BuildContext context) {
     return Container(
       width: 52,
-      color: ViberColors.rail,
+      color: context.viberColors.rail,
       child: Column(
         children: [
-          const SizedBox(height: 6),
+          const SizedBox(height: ViberSpacing.xs),
           _RailButton(
             icon: Icons.adjust,
             label: '${copy('nav.captures')}  ⌘1',
@@ -452,7 +419,7 @@ final class _NavigationRail extends StatelessWidget {
             onPressed: () =>
                 controller.selectSection(WorkbenchSection.settings),
           ),
-          const SizedBox(height: 6),
+          const SizedBox(height: ViberSpacing.xs),
         ],
       ),
     );
@@ -482,17 +449,20 @@ final class _RailButton extends StatelessWidget {
         selected: selected,
         button: true,
         child: Material(
-          color: selected ? ViberColors.selection : Colors.transparent,
+          color: selected ? context.viberColors.selection : Colors.transparent,
           child: InkWell(
             onTap: onPressed,
             canRequestFocus: true,
+            focusColor: context.viberColors.focus.withValues(alpha: 0.18),
             child: Container(
               width: 52,
-              height: 43,
+              height: ViberMetrics.toolbarHeight,
               decoration: BoxDecoration(
                 border: Border(
                   left: BorderSide(
-                    color: selected ? ViberColors.route : Colors.transparent,
+                    color: selected
+                        ? context.viberColors.route
+                        : Colors.transparent,
                     width: 2,
                   ),
                 ),
@@ -500,7 +470,9 @@ final class _RailButton extends StatelessWidget {
               child: Icon(
                 icon,
                 size: 19,
-                color: selected ? ViberColors.text : ViberColors.textMuted,
+                color: selected
+                    ? context.viberColors.text
+                    : context.viberColors.textMuted,
               ),
             ),
           ),
@@ -520,23 +492,23 @@ final class _StatusBar extends StatelessWidget {
   Widget build(BuildContext context) {
     final data = controller.data;
     return Container(
-      height: 23,
-      color: ViberColors.rail,
-      padding: const EdgeInsets.symmetric(horizontal: 9),
+      height: 24,
+      color: context.viberColors.rail,
+      padding: const EdgeInsets.symmetric(horizontal: ViberSpacing.md),
       child: LayoutBuilder(
         builder: (context, constraints) {
           final compact = constraints.maxWidth < 520;
           final showInstance = constraints.maxWidth >= 720;
           return Row(
             children: [
-              const Icon(Icons.circle, size: 6, color: ViberColors.verified),
-              const SizedBox(width: 5),
+              Icon(Icons.circle, size: 6, color: context.viberColors.verified),
+              const SizedBox(width: ViberSpacing.xs),
               Expanded(
                 child: Text(
                   compact
                       ? controller.previewMode
-                            ? 'Preview'
-                            : 'Live'
+                            ? copy('status.preview.short')
+                            : copy('status.live.short')
                       : controller.previewMode
                       ? copy('settings.preview')
                       : copy('settings.live'),
@@ -544,24 +516,44 @@ final class _StatusBar extends StatelessWidget {
                   overflow: TextOverflow.ellipsis,
                   style: Theme.of(
                     context,
-                  ).textTheme.bodySmall?.copyWith(fontSize: 10),
+                  ).textTheme.bodySmall?.copyWith(fontSize: ViberType.utility),
                 ),
               ),
               if (data != null) ...[
                 const SizedBox(width: 8),
                 Text(
-                  '${controller.runningCaptures.length} running',
-                  style: monoStyle.copyWith(fontSize: 9.5),
+                  copy.format('status.running', {
+                    'count': controller.runningCaptures.length,
+                  }),
+                  style: monoStyle.copyWith(fontSize: ViberType.micro),
                 ),
                 if (showInstance) ...[
                   const SizedBox(width: 12),
-                  SizedBox(
-                    width: 180,
-                    child: Text(
-                      data.status.instanceId,
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
-                      style: monoStyle.copyWith(fontSize: 9.5),
+                  Tooltip(
+                    message: copy.format('status.runtime_instance', {
+                      'id': data.status.instanceId,
+                    }),
+                    child: Semantics(
+                      label: copy.format('status.runtime_instance', {
+                        'id': data.status.instanceId,
+                      }),
+                      child: Row(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          Icon(
+                            Icons.memory_outlined,
+                            size: 11,
+                            color: context.viberColors.textFaint,
+                          ),
+                          const SizedBox(width: 4),
+                          Text(
+                            _shortRuntimeId(data.status.instanceId),
+                            style: monoStyle.copyWith(
+                              fontSize: ViberType.micro,
+                            ),
+                          ),
+                        ],
+                      ),
                     ),
                   ),
                 ],
@@ -573,6 +565,16 @@ final class _StatusBar extends StatelessWidget {
     );
   }
 }
+
+String _runtimeStateLabel(AppCopy copy, String value) {
+  final key = 'status.state.$value';
+  final localized = copy(key);
+  if (localized != key) return localized;
+  return value.replaceAll('_', ' ');
+}
+
+String _shortRuntimeId(String value) =>
+    value.length <= 10 ? value : value.substring(0, 8);
 
 final class _LoadingView extends StatelessWidget {
   const _LoadingView({required this.copy});
@@ -621,10 +623,10 @@ final class _StartupFailure extends StatelessWidget {
           child: Column(
             mainAxisSize: MainAxisSize.min,
             children: [
-              const Icon(
+              Icon(
                 Icons.error_outline,
                 size: 28,
-                color: ViberColors.danger,
+                color: context.viberColors.danger,
               ),
               const SizedBox(height: 9),
               Text(

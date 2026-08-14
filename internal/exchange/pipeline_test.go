@@ -18,8 +18,10 @@ import (
 	"github.com/vibe-agi/vibermate/internal/captureadmission"
 	"github.com/vibe-agi/vibermate/internal/environment"
 	"github.com/vibe-agi/vibermate/internal/offlinehold"
+	"github.com/vibe-agi/vibermate/internal/openairesponses"
 	"github.com/vibe-agi/vibermate/internal/operationcatalog"
 	"github.com/vibe-agi/vibermate/internal/originidentity"
+	"github.com/vibe-agi/vibermate/internal/protocolcore"
 	"github.com/vibe-agi/vibermate/internal/protocolpath"
 	"github.com/vibe-agi/vibermate/internal/protocolspec"
 	"github.com/vibe-agi/vibermate/internal/providerauth"
@@ -456,6 +458,67 @@ func TestOriginalPassthroughPreservesGzipStreamAndRecordsDecodedResponse(t *test
 		!observation.Response.Usage.Output.Known ||
 		observation.Response.Usage.Output.Tokens != 2 {
 		t.Fatalf("gzip content observation = %+v", observation)
+	}
+}
+
+func TestOriginalResponsesAcceptsCanceledReadAfterProvenTerminal(t *testing.T) {
+	plan := mustEnvironmentRequestPlan(t, testPlanOptions{
+		clientProtocol: environment.ClientProtocolOpenAIResponses,
+		mode:           environment.PlanModeOriginalPassthrough,
+		providerOrigin: "https://api.openai.com",
+		backend:        protocolspec.DialectOpenAIResponses,
+		modelMode:      modelModePreserve,
+	})
+	item := json.RawMessage(`{
+		"id":"msg_original_responses",
+		"type":"message",
+		"status":"completed",
+		"role":"assistant",
+		"content":[{"type":"output_text","text":"provider-compatible"}]
+	}`)
+	wire := appendSSEFixture(t, "response.output_item.done", map[string]any{
+		"type": "response.output_item.done", "sequence_number": 1,
+		"output_index": 0, "item": item,
+	})
+	wire = append(wire, appendSSEFixture(t, "response.completed", map[string]any{
+		"type": "response.completed", "sequence_number": 2,
+		"response": json.RawMessage(`{
+			"id":"resp_original","created_at":1,"status":"completed",
+			"model":"codex-client-alias","output":[],
+			"usage":{"input_tokens":4,"input_tokens_details":{"cached_tokens":0},
+			"output_tokens":2,"output_tokens_details":{"reasoning_tokens":0}}
+		}`),
+	})...)
+	provider := &providerDouble{results: []providerResult{{response: &http.Response{
+		StatusCode: http.StatusOK,
+		Header:     http.Header{},
+		Body:       io.NopCloser(&terminalCanceledReader{body: wire}),
+	}}}}
+	content := &contentObserverDouble{}
+	pipeline := newTestPipelineWithContentObserver(
+		t, nil, provider, approvedDecisions(), &attemptObserverDouble{}, content,
+	)
+	defer shutdownPipeline(t, pipeline)
+	downstream := &downstreamRecorder{}
+	request := mustClientRequestWithOptions(
+		t,
+		"exchange-original-responses-canceled-eof",
+		plan,
+		streamingResponsesClientRequest(),
+		WithOriginalHeaders(http.Header{"Authorization": []string{"Bearer client-owned"}}),
+	)
+
+	result, err := pipeline.Execute(context.Background(), request, downstream)
+	if err != nil || result.Outcome != AttemptSucceeded || !result.Ledger.DownstreamTerminal {
+		t.Fatalf("Execute() = %+v, %v", result, err)
+	}
+	if !bytes.Equal(downstream.bytesSnapshot(), wire) {
+		t.Fatal("original Responses stream changed before downstream delivery")
+	}
+	observation, ok := content.latest()
+	if !ok || observation.Response == nil || len(observation.Response.Blocks) != 1 ||
+		observation.Response.Blocks[0].Text != "provider-compatible" {
+		t.Fatalf("Responses content observation = %+v", observation)
 	}
 }
 
@@ -1135,6 +1198,7 @@ func mustEnvironmentCompiler(t *testing.T, accounts environment.AccountCatalog) 
 		newPair(anthropicchat.CodecPairID, anthropicchat.CodecRevision, protocolspec.DialectAnthropicMessages, protocolspec.DialectOpenAIChat),
 		newPair(anthropicchat.MessagesCodecPairID, anthropicchat.MessagesCodecRevision, protocolspec.DialectAnthropicMessages, protocolspec.DialectAnthropicMessages),
 		newPair(responseschat.CodecPairID, responseschat.CodecRevision, protocolspec.DialectOpenAIResponses, protocolspec.DialectOpenAIChat),
+		newPair(responseschat.ResponsesPassthroughCodecPairID, responseschat.ResponsesPassthroughCodecRevision, protocolspec.DialectOpenAIResponses, protocolspec.DialectOpenAIResponses),
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -1215,7 +1279,13 @@ func mustProtocolPathSelector(t *testing.T) *protocolpath.Selector {
 	if err != nil {
 		t.Fatal(err)
 	}
-	selector, err := protocolpath.NewSelector(managed, compatible, responses)
+	responsesPassthrough, err := responseschat.NewResponsesPassthroughProtocolPath(
+		openairesponses.DefaultOptions(),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	selector, err := protocolpath.NewSelector(managed, compatible, responses, responsesPassthrough)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1626,6 +1696,37 @@ func gzipFixture(t *testing.T, body []byte) []byte {
 	return encoded.Bytes()
 }
 
+type terminalCanceledReader struct {
+	body []byte
+	done bool
+}
+
+func (reader *terminalCanceledReader) Read(destination []byte) (int, error) {
+	if len(reader.body) > 0 {
+		count := copy(destination, reader.body)
+		reader.body = reader.body[count:]
+		return count, nil
+	}
+	if !reader.done {
+		reader.done = true
+		return 0, context.Canceled
+	}
+	return 0, io.EOF
+}
+
+func appendSSEFixture(t *testing.T, name string, payload any) []byte {
+	t.Helper()
+	data, err := json.Marshal(payload)
+	if err != nil {
+		t.Fatal(err)
+	}
+	encoded, err := ssewire.Encode(ssewire.Event{Name: name, Data: data})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return encoded
+}
+
 func completeProviderResponse(model string) []byte {
 	return []byte(`{
 		"id":"chatcmpl-complete","object":"chat.completion","created":1,"model":"` + model + `",
@@ -1766,5 +1867,35 @@ func TestProviderRejectionClassifierReturnsOnlyKnownEmittedFields(t *testing.T) 
 		if got := classifyProviderRejection(strings.NewReader(test.body)); got != test.want {
 			t.Fatalf("classifyProviderRejection() = %q, want %q", got, test.want)
 		}
+	}
+}
+
+func TestMergeClientProtocolEvidenceFillsOnlyAbsentNames(t *testing.T) {
+	t.Parallel()
+
+	request := protocolcore.Request{ProtocolEvidence: []protocolcore.ProtocolEvidenceValue{
+		{Name: "claude.agent_id", Value: "decoder-agent"},
+		{Name: "openai_responses.turn_id", Value: "turn-1"},
+	}}
+	merged := mergeClientProtocolEvidence(
+		request,
+		[]protocolcore.ProtocolEvidenceValue{
+			{Name: "claude.agent_id", Value: "header-agent"},
+			{Name: "claude.parent_agent_id", Value: "parent-1"},
+			{Name: "claude.session_id", Value: "session-1"},
+		},
+	)
+	want := []protocolcore.ProtocolEvidenceValue{
+		{Name: "claude.agent_id", Value: "decoder-agent"},
+		{Name: "claude.parent_agent_id", Value: "parent-1"},
+		{Name: "claude.session_id", Value: "session-1"},
+		{Name: "openai_responses.turn_id", Value: "turn-1"},
+	}
+	if !slices.Equal(merged.ProtocolEvidence, want) {
+		t.Fatalf("merged protocol evidence = %#v", merged.ProtocolEvidence)
+	}
+	if request.ProtocolEvidence[0].Value != "decoder-agent" ||
+		len(request.ProtocolEvidence) != 2 {
+		t.Fatalf("merge mutated decoded request: %#v", request.ProtocolEvidence)
 	}
 }

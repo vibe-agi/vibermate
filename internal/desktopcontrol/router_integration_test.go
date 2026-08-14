@@ -143,7 +143,7 @@ func TestDesktopControlApprovalRouteResolvesDurableAuthority(
 	const authority = "127.0.0.1:43129"
 	router, err := desktopcontrol.NewRouter(desktopcontrol.RouterOptions{
 		Authority:      authority,
-		AllowedOrigins: []string{"tauri://localhost"},
+		AllowedOrigins: []string{"vibermate://desktop"},
 		Authenticator:  authenticator,
 		Application:    application,
 		Bootstrap:      emptyBootstrap(),
@@ -322,7 +322,7 @@ func TestDesktopControlRejectsCapabilityAndTransportBoundaryConfusion(t *testing
 	const authority = "127.0.0.1:43128"
 	router, err := desktopcontrol.NewRouter(desktopcontrol.RouterOptions{
 		Authority:        authority,
-		AllowedOrigins:   []string{"tauri://localhost"},
+		AllowedOrigins:   []string{"vibermate://desktop"},
 		Authenticator:    authenticator,
 		Application:      application,
 		Bootstrap:        emptyBootstrap(),
@@ -348,7 +348,7 @@ func TestDesktopControlRejectsCapabilityAndTransportBoundaryConfusion(t *testing
 			token:  writeToken,
 			host:   authority,
 			remote: "127.0.0.1:50000",
-			origin: "tauri://localhost",
+			origin: "vibermate://desktop",
 			want:   http.StatusUnauthorized,
 		},
 		{
@@ -356,7 +356,7 @@ func TestDesktopControlRejectsCapabilityAndTransportBoundaryConfusion(t *testing
 			token:  capability(0x33),
 			host:   authority,
 			remote: "127.0.0.1:50000",
-			origin: "tauri://localhost",
+			origin: "vibermate://desktop",
 			want:   http.StatusUnauthorized,
 		},
 		{
@@ -364,7 +364,7 @@ func TestDesktopControlRejectsCapabilityAndTransportBoundaryConfusion(t *testing
 			token:  readToken,
 			host:   authority,
 			remote: "192.0.2.2:50000",
-			origin: "tauri://localhost",
+			origin: "vibermate://desktop",
 			want:   http.StatusForbidden,
 		},
 		{
@@ -372,7 +372,7 @@ func TestDesktopControlRejectsCapabilityAndTransportBoundaryConfusion(t *testing
 			token:  readToken,
 			host:   "localhost:43128",
 			remote: "127.0.0.1:50000",
-			origin: "tauri://localhost",
+			origin: "vibermate://desktop",
 			want:   http.StatusForbidden,
 		},
 		{
@@ -388,7 +388,7 @@ func TestDesktopControlRejectsCapabilityAndTransportBoundaryConfusion(t *testing
 			token:     readToken,
 			host:      authority,
 			remote:    "127.0.0.1:50000",
-			origin:    "tauri://localhost",
+			origin:    "vibermate://desktop",
 			forwarded: "for=127.0.0.1",
 			want:      http.StatusForbidden,
 		},
@@ -397,7 +397,7 @@ func TestDesktopControlRejectsCapabilityAndTransportBoundaryConfusion(t *testing
 			token:     readToken,
 			host:      authority,
 			remote:    "127.0.0.1:50000",
-			origin:    "tauri://localhost",
+			origin:    "vibermate://desktop",
 			fetchSite: "same-origin",
 			want:      http.StatusForbidden,
 		},
@@ -543,7 +543,7 @@ func newRequest(
 	)
 	request.Host = authority
 	request.RemoteAddr = "127.0.0.1:50000"
-	request.Header.Set("Origin", "tauri://localhost")
+	request.Header.Set("Origin", "vibermate://desktop")
 	request.Header.Set("Sec-Fetch-Site", "cross-site")
 	request.Header.Set("Sec-Fetch-Mode", "cors")
 	request.Header.Set("Sec-Fetch-Dest", "empty")

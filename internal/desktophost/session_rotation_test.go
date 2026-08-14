@@ -24,7 +24,7 @@ func TestHostWiresRecoverableControlSessionRotation(t *testing.T) {
 		http.MethodGet,
 		desktopcontrol.SessionStatePath,
 		initial.ReadToken,
-		"tauri://localhost",
+		"vibermate://desktop",
 	)
 	defer stateResponse.Body.Close()
 	if stateResponse.StatusCode != http.StatusOK {
@@ -64,7 +64,7 @@ func TestHostWiresRecoverableControlSessionRotation(t *testing.T) {
 		http.MethodGet,
 		"/api/v1/status",
 		initial.ReadToken,
-		"tauri://localhost",
+		"vibermate://desktop",
 	)
 	defer retiredRead.Body.Close()
 	if retiredRead.StatusCode != http.StatusUnauthorized {
@@ -76,7 +76,7 @@ func TestHostWiresRecoverableControlSessionRotation(t *testing.T) {
 		http.MethodPost,
 		"/api/v1/offline-hold/actions/enter",
 		initial.WriteToken,
-		"tauri://localhost",
+		"vibermate://desktop",
 	)
 	defer retiredWrite.Body.Close()
 	if retiredWrite.StatusCode != http.StatusUnauthorized {
@@ -88,7 +88,7 @@ func TestHostWiresRecoverableControlSessionRotation(t *testing.T) {
 		http.MethodGet,
 		"/api/v1/status",
 		rotation.ReadToken,
-		"tauri://localhost",
+		"vibermate://desktop",
 	)
 	defer currentRead.Body.Close()
 	if currentRead.StatusCode != http.StatusOK {
@@ -131,7 +131,7 @@ func hostSessionRenewalRequest(
 	if err != nil {
 		t.Fatal(err)
 	}
-	request.Header.Set("Origin", "tauri://localhost")
+	request.Header.Set("Origin", "vibermate://desktop")
 	request.Header.Set("Sec-Fetch-Site", "cross-site")
 	request.Header.Set("Sec-Fetch-Mode", "cors")
 	request.Header.Set("Sec-Fetch-Dest", "empty")

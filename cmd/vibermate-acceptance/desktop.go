@@ -26,8 +26,9 @@ import (
 
 const (
 	desktopBundleID                    = runtimepath.ApplicationID
-	desktopPreferencesSchema           = "vibermate-workbench-preferences/v1"
-	desktopPreferencesStateFile        = "workbench-preferences-v1.json"
+	desktopPreferencesSchema           = "vibermate-workbench-preferences/v2"
+	desktopPreferencesStateFile        = "workbench-preferences-v2.json"
+	desktopPreferencesTheme            = "light"
 	desktopPreferencesRestoreLanguage  = "zh-CN"
 	desktopPreferencesRestoreSection   = "settings"
 	desktopPreferencesSentinelLanguage = "en-US"
@@ -362,6 +363,7 @@ func exercisePackagedDesktopLaunch(
 type desktopWorkbenchPreferences struct {
 	Schema                      string  `json:"schema"`
 	Language                    string  `json:"language"`
+	Theme                       string  `json:"theme"`
 	Section                     string  `json:"section"`
 	SelectedCaptureKey          *string `json:"selectedCaptureKey"`
 	SelectedConversationKey     *string `json:"selectedConversationKey"`
@@ -443,6 +445,7 @@ func canonicalDesktopPreferences(
 	encoded, err := json.Marshal(desktopWorkbenchPreferences{
 		Schema:                desktopPreferencesSchema,
 		Language:              language,
+		Theme:                 desktopPreferencesTheme,
 		Section:               section,
 		SelectedEnvironmentID: environmentID,
 		SelectedEndpointID:    endpointID,
@@ -462,6 +465,7 @@ func nonCanonicalDesktopPreferences(
 	encoded, err := json.MarshalIndent(desktopWorkbenchPreferences{
 		Schema:                desktopPreferencesSchema,
 		Language:              language,
+		Theme:                 desktopPreferencesTheme,
 		Section:               section,
 		SelectedEnvironmentID: environmentID,
 		SelectedEndpointID:    endpointID,
