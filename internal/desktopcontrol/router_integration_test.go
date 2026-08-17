@@ -659,6 +659,23 @@ func (store *credentialStoreFixture) Read(
 	return secretstore.NewValue(item.bytes)
 }
 
+func (store *credentialStoreFixture) ReadAtRevision(
+	_ context.Context,
+	reference secretstore.Reference,
+	expected secretstore.Revision,
+) (*secretstore.Value, error) {
+	store.mu.Lock()
+	defer store.mu.Unlock()
+	item, found := store.items[reference.String()]
+	if !found {
+		return nil, secretstore.ErrNotFound
+	}
+	if item.revision != expected {
+		return nil, secretstore.ErrRevisionConflict
+	}
+	return secretstore.NewValue(item.bytes)
+}
+
 func (store *credentialStoreFixture) Inspect(
 	_ context.Context,
 	reference secretstore.Reference,

@@ -287,6 +287,8 @@ func classifyProviderAccountError(err error) problemSpec {
 		return problemSpec{status: http.StatusNotFound, reason: ReasonProviderAccountNotFound}
 	case errors.Is(err, provideraccount.ErrRevisionConflict):
 		return problemSpec{status: http.StatusConflict, reason: ReasonProviderAccountConflict}
+	case errors.Is(err, provideraccount.ErrOperationInProgress):
+		return problemSpec{status: http.StatusConflict, reason: ReasonProviderAccountConflict}
 	case errors.Is(err, provideraccount.ErrAccountInUse):
 		return problemSpec{status: http.StatusConflict, reason: ReasonProviderAccountInUse}
 	case errors.Is(err, provideraccount.ErrInvalidAccount):

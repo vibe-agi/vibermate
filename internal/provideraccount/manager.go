@@ -35,8 +35,20 @@ type Manager struct {
 	clock      Clock
 	deletion   environment.AccountDeletionGuard
 	active     map[ID]uint64
+	operations map[ID]accountOperation
+	epochs     map[ID]secretstore.Revision
+	inFlight   uint64
+	drained    chan struct{}
 	closing    bool
 }
+
+type accountOperation uint8
+
+const (
+	accountOperationCreate accountOperation = iota + 1
+	accountOperationReplaceSecret
+	accountOperationDelete
+)
 
 var (
 	_ Controller                     = (*Manager)(nil)
@@ -124,7 +136,9 @@ func NewManager(
 	return &Manager{
 		repository: repository, secrets: secrets, endpoints: endpoints, realms: compiledRealms,
 		accounts: accounts, clock: clock,
-		active: make(map[ID]uint64),
+		active:     make(map[ID]uint64),
+		operations: make(map[ID]accountOperation),
+		epochs:     make(map[ID]secretstore.Revision),
 	}, nil
 }
 
@@ -212,14 +226,6 @@ func (manager *Manager) Create(ctx context.Context, command CreateCommand) (View
 	if ctx == nil || command.Secret == nil {
 		return View{}, ErrInvalidAccount
 	}
-	manager.mu.Lock()
-	defer manager.mu.Unlock()
-	if manager.closing {
-		return View{}, ErrManagerClosing
-	}
-	if _, exists := manager.accounts[command.ID]; exists {
-		return View{}, ErrRevisionConflict
-	}
 	reference, err := secretReference(command.ID)
 	if err != nil {
 		return View{}, err
@@ -238,8 +244,45 @@ func (manager *Manager) Create(ctx context.Context, command CreateCommand) (View
 	if err := validateForEndpoint(account, manager.endpoints, manager.realms); err != nil {
 		return View{}, err
 	}
+	manager.mu.Lock()
+	if manager.closing {
+		manager.mu.Unlock()
+		return View{}, ErrManagerClosing
+	}
+	if _, exists := manager.operations[command.ID]; exists {
+		manager.mu.Unlock()
+		return View{}, ErrOperationInProgress
+	}
+	if _, exists := manager.accounts[command.ID]; exists {
+		manager.mu.Unlock()
+		return View{}, ErrRevisionConflict
+	}
+	manager.operations[command.ID] = accountOperationCreate
+	manager.beginInFlightLocked()
+	manager.mu.Unlock()
+
+	repositoryCommitted := false
+	credentialEpoch := secretstore.Revision(0)
+	defer func() {
+		manager.mu.Lock()
+		if repositoryCommitted {
+			// The account row is the durable identity authority. If credential
+			// storage failed after that commit, publish the account as missing so
+			// the operator can repair it with ReplaceSecret.
+			manager.accounts[account.ID] = account
+			if credentialEpoch != 0 {
+				manager.epochs[account.ID] = credentialEpoch
+			}
+		}
+		if manager.operations[account.ID] == accountOperationCreate {
+			delete(manager.operations, account.ID)
+		}
+		manager.finishInFlightLocked()
+		manager.mu.Unlock()
+	}()
+
 	result, err := manager.repository.Write(ctx, 0, account)
-	if err != nil {
+	if err != nil && result.Outcome != CommitCommitted {
 		return View{}, err
 	}
 	if result.Outcome != CommitCommitted || result.Account != account {
@@ -248,7 +291,7 @@ func (manager *Manager) Create(ctx context.Context, command CreateCommand) (View
 		}
 		return View{}, errors.New("ProviderAccount create did not commit")
 	}
-	manager.accounts[account.ID] = account
+	repositoryCommitted = true
 	metadata, err := manager.secrets.Replace(ctx, secretstore.ReplaceCommand{
 		Reference: reference, ExpectedRevision: 0, Value: command.Secret,
 	})
@@ -258,6 +301,7 @@ func (manager *Manager) Create(ctx context.Context, command CreateCommand) (View
 	if metadata.Validate() != nil || metadata.State != secretstore.StateConfigured || metadata.Revision == 0 {
 		return View{}, errors.New("SecretStore returned invalid ProviderAccount metadata")
 	}
+	credentialEpoch = metadata.Revision
 	return View{Account: account, Health: Health{
 		State: HealthReady, CredentialEpoch: uint64(metadata.Revision),
 	}}, nil
@@ -270,15 +314,25 @@ func (manager *Manager) ReplaceSecret(
 	if ctx == nil || command.Secret == nil || command.ExpectedCredentialEpoch > MaxRevision {
 		return View{}, ErrInvalidAccount
 	}
-	manager.mu.RLock()
-	defer manager.mu.RUnlock()
+	manager.mu.Lock()
 	if manager.closing {
+		manager.mu.Unlock()
 		return View{}, ErrManagerClosing
+	}
+	if _, exists := manager.operations[command.ID]; exists {
+		manager.mu.Unlock()
+		return View{}, ErrOperationInProgress
 	}
 	account, exists := manager.accounts[command.ID]
 	if !exists {
+		manager.mu.Unlock()
 		return View{}, ErrAccountNotFound
 	}
+	manager.operations[command.ID] = accountOperationReplaceSecret
+	manager.beginInFlightLocked()
+	manager.mu.Unlock()
+	defer manager.finishOperation(command.ID, accountOperationReplaceSecret)
+
 	metadata, err := manager.secrets.Replace(ctx, secretstore.ReplaceCommand{
 		Reference:        account.SecretRef,
 		ExpectedRevision: secretstore.Revision(command.ExpectedCredentialEpoch),
@@ -293,6 +347,9 @@ func (manager *Manager) ReplaceSecret(
 	if metadata.Validate() != nil || metadata.State != secretstore.StateConfigured || metadata.Revision == 0 {
 		return View{}, errors.New("SecretStore returned invalid ProviderAccount metadata")
 	}
+	manager.mu.Lock()
+	manager.epochs[account.ID] = metadata.Revision
+	manager.mu.Unlock()
 	return View{Account: account, Health: Health{
 		State: HealthReady, CredentialEpoch: uint64(metadata.Revision),
 	}}, nil
@@ -339,17 +396,42 @@ func (manager *Manager) deleteUnreferenced(
 	command DeleteCommand,
 ) error {
 	manager.mu.Lock()
-	defer manager.mu.Unlock()
 	if manager.closing {
+		manager.mu.Unlock()
 		return ErrManagerClosing
+	}
+	if _, exists := manager.operations[command.ID]; exists {
+		manager.mu.Unlock()
+		return ErrOperationInProgress
 	}
 	account, exists := manager.accounts[command.ID]
 	if !exists {
+		manager.mu.Unlock()
 		return ErrAccountNotFound
 	}
 	if manager.active[command.ID] != 0 {
+		manager.mu.Unlock()
 		return ErrAccountInUse
 	}
+	manager.operations[command.ID] = accountOperationDelete
+	manager.beginInFlightLocked()
+	manager.mu.Unlock()
+
+	committed := false
+	defer func() {
+		manager.mu.Lock()
+		if committed {
+			delete(manager.accounts, account.ID)
+			delete(manager.active, account.ID)
+			delete(manager.epochs, account.ID)
+		}
+		if manager.operations[account.ID] == accountOperationDelete {
+			delete(manager.operations, account.ID)
+		}
+		manager.finishInFlightLocked()
+		manager.mu.Unlock()
+	}()
+
 	metadata, inspectErr := manager.secrets.Inspect(ctx, account.SecretRef)
 	if inspectErr != nil && !errors.Is(inspectErr, secretstore.ErrNotFound) {
 		return fmt.Errorf("inspect ProviderAccount credential before deletion: %w", inspectErr)
@@ -389,8 +471,7 @@ func (manager *Manager) deleteUnreferenced(
 		}
 		return errors.New("ProviderAccount deletion did not commit")
 	}
-	delete(manager.accounts, account.ID)
-	delete(manager.active, account.ID)
+	committed = true
 	return nil
 }
 
@@ -406,12 +487,37 @@ func (manager *Manager) Acquire(
 	if err != nil {
 		return nil, err
 	}
+	return manager.acquire(ctx, accountLeaseScope{
+		id:                       id,
+		accountRevision:          uint64(request.AccountRevision()),
+		realmID:                  request.RealmID(),
+		upstreamEndpointID:       request.UpstreamEndpointID(),
+		upstreamEndpointRevision: uint64(request.UpstreamEndpointRevision()),
+	})
+}
+
+type accountLeaseScope struct {
+	id                       ID
+	accountRevision          uint64
+	realmID                  string
+	upstreamEndpointID       string
+	upstreamEndpointRevision uint64
+}
+
+func (manager *Manager) acquire(
+	ctx context.Context,
+	scope accountLeaseScope,
+) (providerauth.Lease, error) {
 	manager.mu.Lock()
 	if manager.closing {
 		manager.mu.Unlock()
 		return nil, ErrManagerClosing
 	}
-	account, exists := manager.accounts[id]
+	if _, exists := manager.operations[scope.id]; exists {
+		manager.mu.Unlock()
+		return nil, ErrOperationInProgress
+	}
+	account, exists := manager.accounts[scope.id]
 	if !exists {
 		manager.mu.Unlock()
 		return nil, ErrAccountNotFound
@@ -420,37 +526,100 @@ func (manager *Manager) Acquire(
 		manager.mu.Unlock()
 		return nil, ErrAccountDisabled
 	}
-	endpoint, endpointExists := manager.endpoints.LookupEndpoint(account.UpstreamEndpointID.String())
-	if !endpointExists || endpoint.State != upstreamendpoint.StateActive ||
-		account.UpstreamEndpointID.String() != request.UpstreamEndpointID() ||
-		endpoint.Revision != uint64(request.UpstreamEndpointRevision()) {
+	if account.UpstreamEndpointID.String() != scope.upstreamEndpointID {
 		manager.mu.Unlock()
 		return nil, ErrEndpointMismatch
 	}
-	if account.RealmID != request.RealmID() || account.Revision != uint64(request.AccountRevision()) {
+	if account.RealmID != scope.realmID || account.Revision != scope.accountRevision {
 		manager.mu.Unlock()
 		return nil, ErrRealmMismatch
 	}
-	metadata, err := manager.secrets.Inspect(ctx, account.SecretRef)
-	if err != nil {
-		manager.mu.Unlock()
-		return nil, fmt.Errorf("inspect ProviderAccount credential: %w", err)
-	}
-	if metadata.Validate() != nil || metadata.State != secretstore.StateConfigured || metadata.Revision == 0 {
-		manager.mu.Unlock()
-		return nil, ErrCredentialMissing
-	}
-	manager.active[id]++
+	credentialEpoch := manager.epochs[scope.id]
+	manager.active[scope.id]++
+	manager.beginInFlightLocked()
 	manager.mu.Unlock()
+	releaseOnError := true
+	defer func() {
+		if releaseOnError {
+			manager.release(scope.id)
+		}
+		manager.finishInFlight()
+	}()
+
+	endpoint, endpointExists := manager.endpoints.LookupEndpoint(
+		account.UpstreamEndpointID.String(),
+	)
+	if !endpointExists || endpoint.State != upstreamendpoint.StateActive ||
+		endpoint.Revision != scope.upstreamEndpointRevision {
+		return nil, ErrEndpointMismatch
+	}
+	if credentialEpoch == 0 {
+		metadata, err := manager.secrets.Inspect(ctx, account.SecretRef)
+		if err != nil {
+			return nil, fmt.Errorf("inspect ProviderAccount credential: %w", err)
+		}
+		if metadata.Validate() != nil || metadata.State != secretstore.StateConfigured || metadata.Revision == 0 {
+			return nil, ErrCredentialMissing
+		}
+		credentialEpoch = metadata.Revision
+		manager.observeCredentialEpoch(account.ID, credentialEpoch)
+	}
+	releaseOnError = false
 	return &lease{
 		account: providerauth.AccountRef{
 			ID: account.ID.String(), Revision: account.Revision,
-			CredentialEpoch: uint64(metadata.Revision), RealmID: account.RealmID,
+			CredentialEpoch: uint64(credentialEpoch), RealmID: account.RealmID,
 		},
 		driver:  account.Driver,
 		secret:  account.SecretRef,
-		release: func() { manager.release(id) },
+		release: func() { manager.release(scope.id) },
 	}, nil
+}
+
+func (manager *Manager) finishOperation(id ID, operation accountOperation) {
+	manager.mu.Lock()
+	defer manager.mu.Unlock()
+	if manager.operations[id] == operation {
+		delete(manager.operations, id)
+	}
+	manager.finishInFlightLocked()
+}
+
+func (manager *Manager) observeCredentialEpoch(id ID, epoch secretstore.Revision) {
+	if epoch == 0 {
+		return
+	}
+	manager.mu.Lock()
+	defer manager.mu.Unlock()
+	if _, exists := manager.accounts[id]; !exists {
+		return
+	}
+	if current := manager.epochs[id]; current == 0 || epoch > current {
+		manager.epochs[id] = epoch
+	}
+}
+
+func (manager *Manager) beginInFlightLocked() {
+	if manager.inFlight == 0 {
+		manager.drained = make(chan struct{})
+	}
+	manager.inFlight++
+}
+
+func (manager *Manager) finishInFlight() {
+	manager.mu.Lock()
+	defer manager.mu.Unlock()
+	manager.finishInFlightLocked()
+}
+
+func (manager *Manager) finishInFlightLocked() {
+	if manager.inFlight == 0 {
+		return
+	}
+	manager.inFlight--
+	if manager.inFlight == 0 {
+		close(manager.drained)
+	}
 }
 
 func (manager *Manager) release(id ID) {
@@ -465,14 +634,27 @@ func (manager *Manager) release(id ID) {
 
 // Shutdown closes account admission. It does not close the injected
 // SecretStore because that physical store is owned by the Host.
-func (manager *Manager) Shutdown(_ context.Context) error {
+func (manager *Manager) Shutdown(ctx context.Context) error {
 	if manager == nil {
 		return nil
 	}
+	if ctx == nil {
+		return errors.New("ProviderAccount shutdown context is nil")
+	}
 	manager.mu.Lock()
 	manager.closing = true
+	if manager.inFlight == 0 {
+		manager.mu.Unlock()
+		return nil
+	}
+	drained := manager.drained
 	manager.mu.Unlock()
-	return nil
+	select {
+	case <-drained:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	}
 }
 
 func (manager *Manager) account(id ID) (Account, error) {
@@ -510,6 +692,7 @@ func (manager *Manager) view(ctx context.Context, account Account) (View, error)
 	}
 	switch metadata.State {
 	case secretstore.StateConfigured:
+		manager.observeCredentialEpoch(account.ID, metadata.Revision)
 		return View{Account: account, Health: Health{
 			State: HealthReady, CredentialEpoch: uint64(metadata.Revision),
 		}}, nil

@@ -202,6 +202,69 @@ func TestDevelopmentFileStoreSerializesConcurrentCAS(t *testing.T) {
 	}
 }
 
+func TestDevelopmentFileStoreReadsOnlyTheExpectedRevision(t *testing.T) {
+	t.Parallel()
+
+	store := openDevelopmentStore(t)
+	reference := mustDevelopmentReference(t, "secret://provider/pinned-account")
+	first := mustDevelopmentValue(t, "first-secret")
+	defer first.Destroy()
+	metadata, err := store.Replace(
+		t.Context(),
+		secretstore.ReplaceCommand{Reference: reference, Value: first},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	pinned, err := store.ReadAtRevision(
+		t.Context(),
+		reference,
+		metadata.Revision,
+	)
+	if err != nil {
+		t.Fatalf("read current revision: %v", err)
+	}
+	pinned.Destroy()
+
+	second := mustDevelopmentValue(t, "second-secret")
+	defer second.Destroy()
+	rotated, err := store.Replace(
+		t.Context(),
+		secretstore.ReplaceCommand{
+			Reference:        reference,
+			ExpectedRevision: metadata.Revision,
+			Value:            second,
+		},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.ReadAtRevision(
+		t.Context(),
+		reference,
+		metadata.Revision,
+	); !errors.Is(err, secretstore.ErrRevisionConflict) {
+		t.Fatalf("read stale revision error = %v", err)
+	}
+	current, err := store.ReadAtRevision(
+		t.Context(),
+		reference,
+		rotated.Revision,
+	)
+	if err != nil {
+		t.Fatalf("read rotated revision: %v", err)
+	}
+	defer current.Destroy()
+	got, err := current.CopyBytes()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer clear(got)
+	if !bytes.Equal(got, []byte("second-secret")) {
+		t.Fatalf("rotated value = %q", got)
+	}
+}
+
 func TestDevelopmentFileStoreDeleteIsDurableAndMissingIsExplicit(t *testing.T) {
 	t.Parallel()
 

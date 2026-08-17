@@ -107,6 +107,26 @@ func (store *developmentFileStore) Read(
 	ctx context.Context,
 	reference secretstore.Reference,
 ) (*secretstore.Value, error) {
+	return store.read(ctx, reference, 0, false)
+}
+
+func (store *developmentFileStore) ReadAtRevision(
+	ctx context.Context,
+	reference secretstore.Reference,
+	expected secretstore.Revision,
+) (*secretstore.Value, error) {
+	if expected == 0 || expected > secretstore.MaxRevision {
+		return nil, secretstore.ErrRevisionConflict
+	}
+	return store.read(ctx, reference, expected, true)
+}
+
+func (store *developmentFileStore) read(
+	ctx context.Context,
+	reference secretstore.Reference,
+	expected secretstore.Revision,
+	pinned bool,
+) (*secretstore.Value, error) {
 	key, err := validateDevelopmentOperation(ctx, reference)
 	if err != nil {
 		return nil, err
@@ -119,6 +139,9 @@ func (store *developmentFileStore) Read(
 	item, found := store.items[key]
 	if !found {
 		return nil, secretstore.ErrNotFound
+	}
+	if pinned && item.revision != expected {
+		return nil, secretstore.ErrRevisionConflict
 	}
 	value, err := secretstore.NewValue(item.value)
 	if err != nil {

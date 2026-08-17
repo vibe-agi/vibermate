@@ -2,6 +2,7 @@ package providertransport
 
 import (
 	"context"
+	"errors"
 	"net/http"
 	"testing"
 
@@ -36,6 +37,7 @@ func TestAnthropicAPIKeyAuthenticatorUsesDedicatedHeader(t *testing.T) {
 		context.Background(),
 		request,
 		reference,
+		secretstore.Revision(7),
 		testTarget("api.anthropic.com", 443),
 	)
 	if err != nil {
@@ -50,6 +52,9 @@ func TestAnthropicAPIKeyAuthenticatorUsesDedicatedHeader(t *testing.T) {
 		evidence.HeaderName != "x-api-key" ||
 		!evidence.SecretRead {
 		t.Fatalf("credential evidence = %+v", evidence)
+	}
+	if secrets.lastExpectedRevision() != 7 {
+		t.Fatalf("credential revision = %d, want 7", secrets.lastExpectedRevision())
 	}
 }
 
@@ -80,6 +85,7 @@ func TestStaticBearerAuthenticatorUsesAuthorizationHeader(t *testing.T) {
 		context.Background(),
 		request,
 		reference,
+		secretstore.Revision(11),
 		testTarget("api.anthropic.com", 443),
 	)
 	if err != nil {
@@ -94,5 +100,47 @@ func TestStaticBearerAuthenticatorUsesAuthorizationHeader(t *testing.T) {
 		evidence.HeaderName != "authorization" ||
 		!evidence.SecretRead {
 		t.Fatalf("credential evidence = %+v", evidence)
+	}
+	if secrets.lastExpectedRevision() != 11 {
+		t.Fatalf("credential revision = %d, want 11", secrets.lastExpectedRevision())
+	}
+}
+
+func TestAuthenticatorRefusesASecretFromAnotherCredentialRevision(t *testing.T) {
+	t.Parallel()
+
+	secrets := &secretReaderStub{
+		value:    []byte("rotated-secret"),
+		revision: 2,
+	}
+	authenticator, err := NewStaticBearerAuthenticator(secrets)
+	if err != nil {
+		t.Fatal(err)
+	}
+	request, err := http.NewRequest(
+		http.MethodPost,
+		"https://api.anthropic.com/v1/messages",
+		nil,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	request.Host = "api.anthropic.com"
+	reference, err := secretstore.ParseReference("secret://provider/rotated")
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = authenticator.Apply(
+		context.Background(),
+		request,
+		reference,
+		secretstore.Revision(1),
+		testTarget("api.anthropic.com", 443),
+	)
+	if !errors.Is(err, secretstore.ErrRevisionConflict) {
+		t.Fatalf("Apply() error = %v, want revision conflict", err)
+	}
+	if request.Header.Get("Authorization") != "" {
+		t.Fatal("revision-conflicted credential reached the provider request")
 	}
 }

@@ -18,6 +18,7 @@ import (
 	"github.com/vibe-agi/vibermate/internal/offlinehold"
 	"github.com/vibe-agi/vibermate/internal/providerauth"
 	"github.com/vibe-agi/vibermate/internal/rawevidence"
+	"github.com/vibe-agi/vibermate/internal/secretstore"
 	"github.com/vibe-agi/vibermate/internal/transportprofile"
 	"github.com/vibe-agi/vibermate/internal/wireprofile"
 )
@@ -300,6 +301,7 @@ func (client *Client) Do(
 			operationContext,
 			request,
 			frozen.secretReference,
+			secretstore.Revision(frozen.accountRef.CredentialEpoch),
 			frozen.target,
 		)
 		if err != nil {

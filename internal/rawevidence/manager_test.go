@@ -799,6 +799,23 @@ func (store *memorySecrets) Read(
 	return secretstore.NewValue(item.value)
 }
 
+func (store *memorySecrets) ReadAtRevision(
+	_ context.Context,
+	reference secretstore.Reference,
+	expected secretstore.Revision,
+) (*secretstore.Value, error) {
+	store.mu.Lock()
+	defer store.mu.Unlock()
+	item, ok := store.items[reference.String()]
+	if !ok {
+		return nil, secretstore.ErrNotFound
+	}
+	if item.revision != expected {
+		return nil, secretstore.ErrRevisionConflict
+	}
+	return secretstore.NewValue(item.value)
+}
+
 func (store *memorySecrets) Inspect(
 	_ context.Context,
 	reference secretstore.Reference,
@@ -856,6 +873,14 @@ type readOnlyMissingSecrets struct{}
 func (readOnlyMissingSecrets) Read(
 	context.Context,
 	secretstore.Reference,
+) (*secretstore.Value, error) {
+	return nil, secretstore.ErrNotFound
+}
+
+func (readOnlyMissingSecrets) ReadAtRevision(
+	context.Context,
+	secretstore.Reference,
+	secretstore.Revision,
 ) (*secretstore.Value, error) {
 	return nil, secretstore.ErrNotFound
 }

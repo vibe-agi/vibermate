@@ -31,6 +31,7 @@ var (
 	ErrRealmMismatch       = errors.New("ProviderAccount does not belong to the requested realm")
 	ErrCredentialMissing   = errors.New("ProviderAccount credential is unavailable")
 	ErrAccountInUse        = errors.New("ProviderAccount is referenced by a published Environment")
+	ErrOperationInProgress = errors.New("ProviderAccount has another operation in progress")
 	ErrDeletionUnavailable = errors.New("ProviderAccount deletion authority is unavailable")
 	ErrManagerClosing      = errors.New("ProviderAccount manager is closing")
 )

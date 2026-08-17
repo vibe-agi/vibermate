@@ -952,10 +952,12 @@ type doResult struct {
 }
 
 type secretReaderStub struct {
-	mu    sync.Mutex
-	value []byte
-	err   error
-	reads int
+	mu               sync.Mutex
+	value            []byte
+	err              error
+	revision         secretstore.Revision
+	expectedRevision secretstore.Revision
+	reads            int
 }
 
 type userAgentMutatingAuthenticator struct{}
@@ -968,6 +970,7 @@ func (userAgentMutatingAuthenticator) Apply(
 	_ context.Context,
 	request *http.Request,
 	_ secretstore.Reference,
+	_ secretstore.Revision,
 	_ Target,
 ) (CredentialEvidence, error) {
 	request.Header.Set("User-Agent", "auth-owned")
@@ -987,6 +990,30 @@ func (reader *secretReaderStub) Read(
 		return nil, reader.err
 	}
 	return secretstore.NewValue(reader.value)
+}
+
+func (reader *secretReaderStub) ReadAtRevision(
+	_ context.Context,
+	_ secretstore.Reference,
+	expected secretstore.Revision,
+) (*secretstore.Value, error) {
+	reader.mu.Lock()
+	defer reader.mu.Unlock()
+	reader.reads++
+	reader.expectedRevision = expected
+	if reader.err != nil {
+		return nil, reader.err
+	}
+	if reader.revision != 0 && reader.revision != expected {
+		return nil, secretstore.ErrRevisionConflict
+	}
+	return secretstore.NewValue(reader.value)
+}
+
+func (reader *secretReaderStub) lastExpectedRevision() secretstore.Revision {
+	reader.mu.Lock()
+	defer reader.mu.Unlock()
+	return reader.expectedRevision
 }
 
 func (reader *secretReaderStub) readCount() int {

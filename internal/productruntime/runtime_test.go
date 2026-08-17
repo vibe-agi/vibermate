@@ -581,6 +581,13 @@ type unavailableSecretStore struct{}
 func (unavailableSecretStore) Read(context.Context, secretstore.Reference) (*secretstore.Value, error) {
 	return nil, secretstore.ErrNotFound
 }
+func (unavailableSecretStore) ReadAtRevision(
+	context.Context,
+	secretstore.Reference,
+	secretstore.Revision,
+) (*secretstore.Value, error) {
+	return nil, secretstore.ErrNotFound
+}
 func (unavailableSecretStore) Inspect(context.Context, secretstore.Reference) (secretstore.Metadata, error) {
 	return secretstore.Metadata{State: secretstore.StateMissing}, nil
 }

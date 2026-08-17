@@ -196,6 +196,14 @@ func (unavailableSecrets) Read(
 	return nil, secretstore.ErrNotFound
 }
 
+func (unavailableSecrets) ReadAtRevision(
+	context.Context,
+	secretstore.Reference,
+	secretstore.Revision,
+) (*secretstore.Value, error) {
+	return nil, secretstore.ErrNotFound
+}
+
 func (unavailableSecrets) Inspect(
 	context.Context,
 	secretstore.Reference,

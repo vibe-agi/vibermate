@@ -21,6 +21,7 @@ type Authenticator interface {
 		context.Context,
 		*http.Request,
 		secretstore.Reference,
+		secretstore.Revision,
 		Target,
 	) (CredentialEvidence, error)
 }
@@ -67,6 +68,7 @@ func (authenticator *AnthropicAPIKeyAuthenticator) Apply(
 	ctx context.Context,
 	request *http.Request,
 	reference secretstore.Reference,
+	revision secretstore.Revision,
 	target Target,
 ) (CredentialEvidence, error) {
 	if ctx == nil || request == nil || request.URL == nil {
@@ -75,7 +77,7 @@ func (authenticator *AnthropicAPIKeyAuthenticator) Apply(
 	if err := target.validateRequestIdentity(request); err != nil {
 		return CredentialEvidence{}, err
 	}
-	value, err := authenticator.secrets.Read(ctx, reference)
+	value, err := authenticator.secrets.ReadAtRevision(ctx, reference, revision)
 	value, err = secretstore.ValidateReaderResult(value, err)
 	if err != nil {
 		return CredentialEvidence{}, err
@@ -103,6 +105,7 @@ func (authenticator *StaticBearerAuthenticator) Apply(
 	ctx context.Context,
 	request *http.Request,
 	reference secretstore.Reference,
+	revision secretstore.Revision,
 	target Target,
 ) (CredentialEvidence, error) {
 	if ctx == nil || request == nil || request.URL == nil {
@@ -111,7 +114,7 @@ func (authenticator *StaticBearerAuthenticator) Apply(
 	if err := target.validateRequestIdentity(request); err != nil {
 		return CredentialEvidence{}, err
 	}
-	value, err := authenticator.secrets.Read(ctx, reference)
+	value, err := authenticator.secrets.ReadAtRevision(ctx, reference, revision)
 	value, err = secretstore.ValidateReaderResult(value, err)
 	if err != nil {
 		return CredentialEvidence{}, err
