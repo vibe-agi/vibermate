@@ -51,14 +51,14 @@ func (revision AdapterRevision) Valid() bool {
 type LaunchRecipe string
 
 const (
-	LaunchGeneric      LaunchRecipe = "generic_http_proxy"
-	LaunchNodeEnvProxy LaunchRecipe = "node_env_proxy"
-	LaunchSSLCertFile  LaunchRecipe = "ssl_cert_file"
+	LaunchGeneric            LaunchRecipe = "generic_http_proxy"
+	LaunchNodeEnvProxy       LaunchRecipe = "node_env_proxy"
+	LaunchCodexResponsesHTTP LaunchRecipe = "codex_responses_http"
 )
 
 func (recipe LaunchRecipe) Valid() bool {
 	switch recipe {
-	case LaunchGeneric, LaunchNodeEnvProxy, LaunchSSLCertFile:
+	case LaunchGeneric, LaunchNodeEnvProxy, LaunchCodexResponsesHTTP:
 		return true
 	default:
 		return false
@@ -66,7 +66,7 @@ func (recipe LaunchRecipe) Valid() bool {
 }
 
 func (recipe LaunchRecipe) RequiresRoot() bool {
-	return recipe == LaunchNodeEnvProxy || recipe == LaunchSSLCertFile
+	return recipe == LaunchNodeEnvProxy || recipe == LaunchCodexResponsesHTTP
 }
 
 type InstallShape string
@@ -1067,7 +1067,7 @@ func CodexCLI01450DarwinARM64() Release {
 				SHA256:       "1da3f4e0e96028b8a771814293c3033dafd1971f943f6c7e79b0897fe705f590",
 			},
 		},
-		LaunchRecipe: LaunchSSLCertFile,
+		LaunchRecipe: LaunchCodexResponsesHTTP,
 		Features:     FeatureResponsesWebSocketHTTPFallback,
 	}
 }

@@ -149,6 +149,7 @@ bool _validClientIdentityText(String value, {bool allowEmpty = false}) =>
     (allowEmpty || value.isNotEmpty) &&
     value.trim() == value &&
     utf8.encode(value).length <= 512 &&
+    !value.contains('\uFEFF') &&
     !_containsControlCharacter(value);
 
 bool _validWorkspaceIdentity(String value) {
@@ -3017,10 +3018,17 @@ List<AgentClientEvidenceValue> _agentClientEvidenceValues(
   Object? json,
   String path, {
   required bool singleValueNames,
+  int maximumValues = 8192,
+  bool requiredValue = false,
 }) {
-  if (json == null) return const [];
+  if (json == null) {
+    if (requiredValue) {
+      throw ControlContractException('$path must be an array');
+    }
+    return const [];
+  }
   final raw = requireList(json, path);
-  if (raw.length > 4096) {
+  if (raw.length > maximumValues) {
     throw ControlContractException('$path contains too many values');
   }
   final values = raw.indexed
@@ -3284,7 +3292,7 @@ final class RawEvidenceEnvelope {
     required this.bodyBytes,
     required this.digestScope,
     required this.payloadState,
-    required this.containsSecret,
+    required this.redactedCredentialFields,
     required this.revealAvailable,
     this.scopeId,
     this.connectionId,
@@ -3334,7 +3342,7 @@ final class RawEvidenceEnvelope {
         'bodyBytes',
         'digestScope',
         'payloadState',
-        'containsSecret',
+        'redactedCredentialFields',
         'revealAvailable',
       },
       optional: const {
@@ -3521,7 +3529,10 @@ final class RawEvidenceEnvelope {
       digestScope: digestScope,
       payloadState: payloadState,
       payloadReason: payloadReason,
-      containsSecret: requireBoolean(value, 'containsSecret', path),
+      redactedCredentialFields: requireList(
+        value['redactedCredentialFields'],
+        '$path.redactedCredentialFields',
+      ).map((entry) => entry! as String).toList(growable: false),
       revealAvailable: revealAvailable,
     );
   }
@@ -3566,7 +3577,7 @@ final class RawEvidenceEnvelope {
   final String digestScope;
   final String payloadState;
   final String? payloadReason;
-  final bool containsSecret;
+  final List<String> redactedCredentialFields;
   final bool revealAvailable;
 }
 
@@ -3621,16 +3632,57 @@ final class RawEvidencePage {
   final RawEvidenceWriter writer;
 }
 
+/// RawRedactedValue is what remains of a credential header value: proof the
+/// field carried one, how long it was, and a database-local digest that answers
+/// whether it changed. The value itself was removed before storage.
+final class RawRedactedValue {
+  const RawRedactedValue({required this.digest, required this.bytes});
+
+  factory RawRedactedValue.fromJson(Object? json, String path) {
+    final value = requireObject(json, path);
+    requireFields(value, path, required: const {'digest', 'bytes'});
+    final digest = requireString(value, 'digest', path);
+    final bytes = requireInteger(value, 'bytes', path);
+    if (!RegExp(r'^[0-9a-f]{64}$').hasMatch(digest) || bytes < 0) {
+      throw ControlContractException('$path redacted value is invalid');
+    }
+    return RawRedactedValue(digest: digest, bytes: bytes);
+  }
+
+  final String digest;
+  final int bytes;
+}
+
+/// RawHeaderField keeps a header's name, order and multiplicity as wire
+/// evidence. A credential field carries [redacted] instead of [values]; a field
+/// carrying both would mean a credential reached storage, so the contract
+/// rejects it.
 final class RawHeaderField {
-  const RawHeaderField({required this.name, required this.values});
+  const RawHeaderField({
+    required this.name,
+    required this.values,
+    required this.redacted,
+  });
 
   factory RawHeaderField.fromJson(Object? json, String path) {
     final value = requireObject(json, path);
-    requireFields(value, path, required: const {'name', 'values'});
+    requireFields(
+      value,
+      path,
+      required: const {'name'},
+      optional: const {'values', 'redacted'},
+    );
     final name = requireString(value, 'name', path);
-    final rawValues = requireList(value['values'], '$path.values');
+    final rawValues = value['values'] == null
+        ? const <Object?>[]
+        : requireList(value['values'], '$path.values');
+    final rawRedacted = value['redacted'] == null
+        ? const <Object?>[]
+        : requireList(value['redacted'], '$path.redacted');
     if (!RegExp(r"^[!#$%&'*+\-.^_`|~0-9A-Za-z]+$").hasMatch(name) ||
-        rawValues.length > 1024) {
+        rawValues.length > 1024 ||
+        rawRedacted.length > 1024 ||
+        (rawValues.isNotEmpty && rawRedacted.isNotEmpty)) {
       throw ControlContractException('$path header field is invalid');
     }
     final values = rawValues.indexed
@@ -3646,11 +3698,20 @@ final class RawHeaderField {
           return item;
         })
         .toList(growable: false);
-    return RawHeaderField(name: name, values: values);
+    final redacted = rawRedacted.indexed
+        .map(
+          (entry) => RawRedactedValue.fromJson(
+            entry.$2,
+            '$path.redacted[${entry.$1}]',
+          ),
+        )
+        .toList(growable: false);
+    return RawHeaderField(name: name, values: values, redacted: redacted);
   }
 
   final String name;
   final List<String> values;
+  final List<RawRedactedValue> redacted;
 }
 
 final class RawFrame {
@@ -3736,10 +3797,16 @@ final class RevealedRawEvidence {
     }
     final headers = _rawHeaderFields(value['headers'], '$path.headers');
     final trailers = _rawHeaderFields(value['trailers'], '$path.trailers');
-    if (headers.fold<int>(0, (sum, field) => sum + field.values.length) !=
-            envelope.headerCount ||
-        trailers.fold<int>(0, (sum, field) => sum + field.values.length) !=
-            envelope.trailerCount) {
+    // headerCount is the number of values observed on the wire, counted before
+    // redaction. A redacted credential field therefore still contributes its
+    // values; counting only the surviving ones would make the reveal of every
+    // credential-bearing envelope fail its own reconciliation.
+    int observedValues(List<RawHeaderField> fields) => fields.fold<int>(
+      0,
+      (sum, field) => sum + field.values.length + field.redacted.length,
+    );
+    if (observedValues(headers) != envelope.headerCount ||
+        observedValues(trailers) != envelope.trailerCount) {
       throw ControlContractException('$path header counts are inconsistent');
     }
     final rawFrames = _rawEvidenceList(value['frames'], '$path.frames');
@@ -4039,8 +4106,10 @@ final class ExchangeRequest {
     required this.effectiveModel,
     required this.maxOutputTokens,
     required this.stream,
+    required this.system,
     required this.messages,
     required this.tools,
+    required this.protocolEvidence,
   });
 
   factory ExchangeRequest.fromJson(Object? json, String path) {
@@ -4053,10 +4122,13 @@ final class ExchangeRequest {
         'effectiveModel',
         'maxOutputTokens',
         'stream',
+        'system',
         'messages',
         'tools',
+        'protocolEvidence',
       },
     );
+    final rawSystem = requireList(value['system'], '$path.system');
     final rawMessages = requireList(value['messages'], '$path.messages');
     final rawTools = requireList(value['tools'], '$path.tools');
     return ExchangeRequest(
@@ -4064,6 +4136,14 @@ final class ExchangeRequest {
       effectiveModel: requireString(value, 'effectiveModel', path),
       maxOutputTokens: requireInteger(value, 'maxOutputTokens', path),
       stream: requireBoolean(value, 'stream', path),
+      system: rawSystem.indexed
+          .map(
+            (entry) => ExchangeContentBlock.fromJson(
+              entry.$2,
+              '$path.system[${entry.$1}]',
+            ),
+          )
+          .toList(growable: false),
       messages: rawMessages.indexed
           .map(
             (entry) => ExchangeContentMessage.fromJson(
@@ -4080,6 +4160,12 @@ final class ExchangeRequest {
             ),
           )
           .toList(growable: false),
+      protocolEvidence: _agentClientEvidenceValues(
+        value['protocolEvidence'],
+        '$path.protocolEvidence',
+        singleValueNames: true,
+        requiredValue: true,
+      ),
     );
   }
 
@@ -4087,8 +4173,15 @@ final class ExchangeRequest {
   final String effectiveModel;
   final int maxOutputTokens;
   final bool stream;
+
+  /// The dialect's top-level instruction parameter — Anthropic `system`, OpenAI
+  /// Responses `instructions` — presented as per-request configuration rather
+  /// than a turn. A dialect without one, such as OpenAI Chat Completions,
+  /// leaves this empty and keeps its instruction inside [messages].
+  final List<ExchangeContentBlock> system;
   final List<ExchangeContentMessage> messages;
   final List<ExchangeToolDefinition> tools;
+  final List<AgentClientEvidenceValue> protocolEvidence;
 }
 
 final class ExchangeUsageValue {
@@ -4179,6 +4272,7 @@ final class ExchangeResponse {
     required this.stopReason,
     required this.blocks,
     required this.usage,
+    required this.protocolEvidence,
   });
 
   factory ExchangeResponse.fromJson(Object? json, String path) {
@@ -4194,6 +4288,7 @@ final class ExchangeResponse {
         'stopReason',
         'blocks',
         'usage',
+        'protocolEvidence',
       },
     );
     final stopReason = requireString(value, 'stopReason', path);
@@ -4222,6 +4317,12 @@ final class ExchangeResponse {
           )
           .toList(growable: false),
       usage: ExchangeUsage.fromJson(value['usage'], '$path.usage'),
+      protocolEvidence: _agentClientEvidenceValues(
+        value['protocolEvidence'],
+        '$path.protocolEvidence',
+        singleValueNames: true,
+        requiredValue: true,
+      ),
     );
   }
 
@@ -4232,6 +4333,7 @@ final class ExchangeResponse {
   final String stopReason;
   final List<ExchangeContentBlock> blocks;
   final ExchangeUsage usage;
+  final List<AgentClientEvidenceValue> protocolEvidence;
 }
 
 final class ExchangeRequestProjection {

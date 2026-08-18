@@ -165,6 +165,7 @@ abstract final class ViberMetrics {
   static const double compactRowHeight = 26;
   static const double toolbarHeight = 42;
   static const double statusPillHeight = 20;
+  static const double compactProgressSize = 16;
   static const double masterPaneWidth = 268;
   static const double masterPaneMinWidth = 220;
   static const double masterPaneMaxWidth = 360;

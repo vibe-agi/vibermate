@@ -207,6 +207,41 @@ func TestExchangeContentRepositorySharesExactHistoryAndDerivesIncrementalViews(t
 	assertPresentation("exchange-other-run", exchangecontent.RequestPresentationCheckpoint, 0, 3, "second question")
 	assertPresentation("exchange-manual", exchangecontent.RequestPresentationCheckpoint, 0, 3, "second question")
 
+	assertProjection := func(
+		exchangeID string,
+		view exchangecontent.RequestView,
+		wantCount int,
+		wantTotal int,
+		wantRelationship exchangecontent.RequestPresentationMode,
+	) {
+		t.Helper()
+		projection, err := repository.GetProjection(
+			context.Background(), exchangeID, recordedAt.Add(time.Hour), view,
+		)
+		if err != nil || projection.Validate() != nil ||
+			projection.View != view || len(projection.Request.Messages) != wantCount ||
+			projection.TotalMessageCount != wantTotal ||
+			projection.Presentation.Mode != wantRelationship {
+			t.Fatalf("GetProjection(%s, %s) = %+v, %v", exchangeID, view, projection, err)
+		}
+	}
+	assertProjection(
+		"exchange-second", exchangecontent.RequestViewIncremental, 1, 3,
+		exchangecontent.RequestPresentationIncremental,
+	)
+	assertProjection(
+		"exchange-second", exchangecontent.RequestViewFull, 3, 3,
+		exchangecontent.RequestPresentationIncremental,
+	)
+	assertProjection(
+		"exchange-retry", exchangecontent.RequestViewIncremental, 0, 2,
+		exchangecontent.RequestPresentationSameTranscript,
+	)
+	assertProjection(
+		"exchange-checkpoint", exchangecontent.RequestViewIncremental, 1, 1,
+		exchangecontent.RequestPresentationCheckpoint,
+	)
+
 	var messageCount, transcriptCount int
 	if err := store.database.QueryRow(
 		`SELECT count(*) FROM runtime_exchange_content_messages`,
@@ -223,6 +258,82 @@ func TestExchangeContentRepositorySharesExactHistoryAndDerivesIncrementalViews(t
 	// nodes; the upstream requests remain unchanged and complete.
 	if messageCount != 5 || transcriptCount != 5 {
 		t.Fatalf("content-addressed counts = messages %d, transcripts %d", messageCount, transcriptCount)
+	}
+}
+
+func TestExchangeContentIncrementalProjectionReadsOnlyVerifiedSuffix(t *testing.T) {
+	t.Parallel()
+	store := openTestStore(t, filepath.Join(t.TempDir(), "runtime.db"))
+	defer func() {
+		if err := store.Shutdown(context.Background()); err != nil {
+			t.Error(err)
+		}
+	}()
+	repository := store.ExchangeContentRepository()
+	recordedAt := time.Date(2026, 8, 15, 2, 0, 0, 0, time.UTC)
+	parent := exchangecontent.ParentRef{CaptureRunID: "run-bounded-projection"}
+	first := transcriptContentRecordFixture(
+		t,
+		"exchange-prefix",
+		recordedAt,
+		parent,
+		[]transcriptMessage{{role: protocolcore.RoleUser, text: "old prefix"}},
+		"old answer",
+	)
+	second := transcriptContentRecordFixture(
+		t,
+		"exchange-suffix",
+		recordedAt.Add(time.Minute),
+		parent,
+		[]transcriptMessage{
+			{role: protocolcore.RoleUser, text: "old prefix"},
+			{role: protocolcore.RoleAssistant, text: "old answer"},
+			{role: protocolcore.RoleUser, text: "new suffix"},
+		},
+		"new answer",
+	)
+	for _, record := range []exchangecontent.Record{first, second} {
+		if err := repository.Put(context.Background(), record); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	// Damage a payload that belongs only to the inherited prefix. The bounded
+	// projection authenticates the stored base root and reads only the new
+	// suffix; an explicit full read still detects the historical corruption.
+	// Tampering now targets a content block, which is where a message's bytes
+	// live. The message digest is still SHA-256 of its canonical JSON, so
+	// rebuilding it from a rewritten block must fail that check.
+	if _, err := store.database.Exec(
+		`UPDATE runtime_exchange_content_blocks
+		 SET payload = ?, plain_bytes = length(CAST(? AS BLOB)),
+		     codec = 'identity'
+		 WHERE digest = (
+		   SELECT substr(block_manifest, 1, 64)
+		     FROM runtime_exchange_content_messages
+		    WHERE digest = (
+		      SELECT message_digest FROM runtime_exchange_content_transcripts
+		      WHERE depth = 1 LIMIT 1
+		    )
+		 )`,
+		[]byte(`{"kind":"text","availability":"recorded","text":"tampered","originalSize":8}`),
+		[]byte(`{"kind":"text","availability":"recorded","text":"tampered","originalSize":8}`),
+	); err != nil {
+		t.Fatal(err)
+	}
+	projection, err := repository.GetProjection(
+		context.Background(), second.ExchangeID, recordedAt.Add(time.Hour),
+		exchangecontent.RequestViewIncremental,
+	)
+	if err != nil || len(projection.Request.Messages) != 1 ||
+		projection.Request.Messages[0].Blocks[0].Text != "new suffix" ||
+		projection.TotalMessageCount != 3 {
+		t.Fatalf("incremental projection = %+v, %v", projection, err)
+	}
+	if _, err := repository.Get(
+		context.Background(), second.ExchangeID, recordedAt.Add(time.Hour),
+	); !errors.Is(err, exchangecontent.ErrInvalidEvidence) {
+		t.Fatalf("full Get() error = %v", err)
 	}
 }
 
@@ -305,15 +416,22 @@ func TestExchangeContentRepositoryRejectsTamperedSharedMessagePayload(t *testing
 		t.Fatal(err)
 	}
 	if _, err := store.database.Exec(
-		`UPDATE runtime_exchange_content_messages SET payload_json = ?
+		`UPDATE runtime_exchange_content_blocks
+		 SET payload = ?, plain_bytes = length(CAST(? AS BLOB)),
+		     codec = 'identity'
 		 WHERE digest = (
-		   SELECT message_digest FROM runtime_exchange_content_transcripts
-		   WHERE digest = (
-		     SELECT request_transcript_digest FROM runtime_exchange_contents
-		     WHERE exchange_id = ?
-		   )
+		   SELECT substr(block_manifest, 1, 64)
+		     FROM runtime_exchange_content_messages
+		    WHERE digest = (
+		      SELECT message_digest FROM runtime_exchange_content_transcripts
+		      WHERE digest = (
+		        SELECT request_transcript_digest FROM runtime_exchange_contents
+		        WHERE exchange_id = ?
+		      )
+		    )
 		 )`,
-		[]byte(`{"role":"user","blocks":[{"kind":"text","availability":"recorded","text":"tampered","originalSize":8}]}`),
+		[]byte(`{"kind":"text","availability":"recorded","text":"tampered","originalSize":8}`),
+		[]byte(`{"kind":"text","availability":"recorded","text":"tampered","originalSize":8}`),
 		record.ExchangeID,
 	); err != nil {
 		t.Fatal(err)

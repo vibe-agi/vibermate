@@ -10,16 +10,12 @@ import (
 	"sync"
 	"testing"
 	"time"
-
-	"github.com/vibe-agi/vibermate/internal/secretstore"
 )
 
-func TestManagerEncryptsBatchesAndFlushesWatermark(t *testing.T) {
+func TestManagerBatchesAndFlushesWatermark(t *testing.T) {
 	repository := &memoryRepository{}
-	secrets := newMemorySecrets()
 	manager, err := Open(context.Background(), Options{
 		Repository: repository,
-		Secrets:    secrets,
 		Random:     bytes.NewReader(bytes.Repeat([]byte{0x41}, 4096)),
 		Clock:      fixedClock{value: time.Unix(1_790_000_000, 0).UTC()},
 		Config: Config{
@@ -54,18 +50,21 @@ func TestManagerEncryptsBatchesAndFlushesWatermark(t *testing.T) {
 	if len(records) != 2 || repository.commits != 1 {
 		t.Fatalf("records=%d commits=%d", len(records), repository.commits)
 	}
-	if bytes.Contains(records[0].Ciphertext, []byte("Bearer private-token")) ||
-		bytes.Contains(records[0].Ciphertext, []byte(`{"secret":"private"}`)) {
-		t.Fatal("ciphertext contains plaintext evidence")
+	// The credential is absent because it was redacted, and the body is present
+	// because the payload is deliberately stored in the clear.
+	if bytes.Contains(records[0].PayloadMetadata, []byte("Bearer private-token")) {
+		t.Fatal("stored payload retained a credential value")
 	}
-	payload, err := manager.Decrypt(context.Background(), records[0])
+	payload, err := manager.ReadPayload(records[0])
 	if err != nil {
 		t.Fatal(err)
 	}
 	if string(payload.Body) != `{"secret":"private"}` ||
-		len(payload.Headers) != 2 || !records[0].ContainsSecret ||
-		records[0].EncryptionKeyRevision != 1 {
-		t.Fatalf("unexpected decrypted payload or metadata: %#v %#v", payload, records[0])
+		len(payload.Headers) != 2 ||
+		!slices.Equal(
+			records[0].RedactedCredentialFields, []string{"Authorization"},
+		) {
+		t.Fatalf("unexpected payload or metadata: %#v %#v", payload, records[0])
 	}
 	stats := manager.Statistics()
 	if stats.AdmittedRecords != 2 || stats.DurableWatermark != 2 ||
@@ -94,7 +93,6 @@ func TestManagerConcurrentAgentsStayBoundedAndCommitBatches(t *testing.T) {
 	repository := &memoryRepository{}
 	manager, err := Open(context.Background(), Options{
 		Repository: repository,
-		Secrets:    newMemorySecrets(),
 		Random:     bytes.NewReader(bytes.Repeat([]byte{0x56}, 64<<10)),
 		Clock:      fixedClock{value: time.Unix(1_790_000_000, 0).UTC()},
 		Config:     config,
@@ -183,11 +181,86 @@ func TestManagerConcurrentAgentsStayBoundedAndCommitBatches(t *testing.T) {
 	}
 }
 
+func TestManagerFlushWaitDoesNotBlockObservationAdmission(t *testing.T) {
+	repository := &blockingAppendRepository{
+		memoryRepository: &memoryRepository{},
+		appendStarted:    make(chan struct{}),
+		appendRelease:    make(chan struct{}),
+	}
+	manager, err := Open(context.Background(), Options{
+		Repository: repository,
+		Random:     bytes.NewReader(bytes.Repeat([]byte{0x58}, 4096)),
+		Clock:      fixedClock{value: time.Unix(1_790_000_000, 0).UTC()},
+		Config: Config{
+			MaximumQueueRecords: 4,
+			MaximumQueueBytes:   1 << 20,
+			MaximumBatchRecords: 1,
+			MaximumBatchBytes:   1 << 20,
+			FlushInterval:       time.Hour,
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	released := false
+	defer func() {
+		if !released {
+			close(repository.appendRelease)
+		}
+		shutdownContext, cancel := context.WithTimeout(context.Background(), time.Second)
+		defer cancel()
+		if shutdownErr := manager.Shutdown(shutdownContext); shutdownErr != nil {
+			t.Errorf("shutdown raw evidence manager: %v", shutdownErr)
+		}
+	}()
+
+	first, err := manager.Observe(context.Background(), testObservation())
+	if err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-repository.appendStarted:
+	case <-time.After(time.Second):
+		t.Fatal("raw evidence writer did not start its blocked commit")
+	}
+
+	flushContext, cancelFlush := context.WithTimeout(context.Background(), time.Second)
+	defer cancelFlush()
+	flushDone := make(chan error, 1)
+	go func() { flushDone <- manager.Flush(flushContext, first) }()
+	// Give Flush an opportunity to wait on the busy writer. Observation
+	// admission must remain context-aware while that wait is outstanding.
+	time.Sleep(20 * time.Millisecond)
+
+	second := testObservation()
+	second.ExchangeID = "exchange-raw-2"
+	observeContext, cancelObserve := context.WithTimeout(context.Background(), 100*time.Millisecond)
+	defer cancelObserve()
+	observeDone := make(chan error, 1)
+	go func() {
+		_, observeErr := manager.Observe(observeContext, second)
+		observeDone <- observeErr
+	}()
+	select {
+	case observeErr := <-observeDone:
+		if observeErr != nil {
+			t.Fatalf("admit observation while flush waits: %v", observeErr)
+		}
+	case <-time.After(300 * time.Millisecond):
+		t.Fatal("observation admission was blocked by an unrelated flush wait")
+	}
+
+	close(repository.appendRelease)
+	released = true
+	if err := <-flushDone; err != nil {
+		t.Fatalf("flush after repository release: %v", err)
+	}
+}
+
 func TestTerminalScopeDrainsRequestAndFlushesItsFinalEvidence(t *testing.T) {
 	repository := &memoryRepository{}
 	manager, err := Open(context.Background(), Options{
 		Repository: repository,
-		Secrets:    newMemorySecrets(),
 		Random:     bytes.NewReader(bytes.Repeat([]byte{0x51}, 4096)),
 		Clock:      fixedClock{value: time.Unix(1_790_000_000, 0).UTC()},
 		Config: Config{
@@ -290,7 +363,6 @@ func TestTerminalScopeDrainsRequestAndFlushesItsFinalEvidence(t *testing.T) {
 func TestTerminalScopeAbortReopensRequestAdmission(t *testing.T) {
 	manager, err := Open(context.Background(), Options{
 		Repository: &memoryRepository{},
-		Secrets:    newMemorySecrets(),
 		Random:     bytes.NewReader(bytes.Repeat([]byte{0x52}, 4096)),
 		Clock:      fixedClock{value: time.Unix(1_790_000_000, 0).UTC()},
 		Config:     DefaultConfig(),
@@ -321,7 +393,6 @@ func TestManagerRevealAuditsBeforeReturningPayload(t *testing.T) {
 	repository := &memoryRepository{}
 	manager, err := Open(context.Background(), Options{
 		Repository: repository,
-		Secrets:    newMemorySecrets(),
 		Random:     bytes.NewReader(bytes.Repeat([]byte{0x53}, 4096)),
 		Clock:      fixedClock{value: time.Unix(1_790_000_000, 0).UTC()},
 		Config:     DefaultConfig(),
@@ -369,7 +440,6 @@ func TestManagerListExchangeFlushesItsAdmittedWatermark(t *testing.T) {
 	repository := &memoryRepository{}
 	manager, err := Open(context.Background(), Options{
 		Repository: repository,
-		Secrets:    newMemorySecrets(),
 		Random:     bytes.NewReader(bytes.Repeat([]byte{0x57}, 4096)),
 		Clock:      fixedClock{value: time.Unix(1_790_000_000, 0).UTC()},
 		Config: Config{
@@ -419,7 +489,6 @@ func TestManagerRecoveryReportsUncleanPredecessor(t *testing.T) {
 	repository := &memoryRepository{}
 	first, err := Open(context.Background(), Options{
 		Repository: repository,
-		Secrets:    newMemorySecrets(),
 		Random:     bytes.NewReader(bytes.Repeat([]byte{0x54}, 4096)),
 		Clock:      fixedClock{value: time.Unix(1_790_000_000, 0).UTC()},
 		Config:     DefaultConfig(),
@@ -431,7 +500,6 @@ func TestManagerRecoveryReportsUncleanPredecessor(t *testing.T) {
 	// crash whose queue could lose at most its configured flush window.
 	second, err := Open(context.Background(), Options{
 		Repository: repository,
-		Secrets:    newMemorySecrets(),
 		Random:     bytes.NewReader(bytes.Repeat([]byte{0x55}, 4096)),
 		Clock:      fixedClock{value: time.Unix(1_790_000_001, 0).UTC()},
 		Config:     DefaultConfig(),
@@ -452,11 +520,10 @@ func TestManagerRecoveryReportsUncleanPredecessor(t *testing.T) {
 	}
 }
 
-func TestManagerMetadataOnlyStoresDigestWithoutCiphertext(t *testing.T) {
+func TestManagerMetadataOnlyStoresDigestWithoutPayload(t *testing.T) {
 	repository := &memoryRepository{}
 	manager, err := Open(context.Background(), Options{
 		Repository: repository,
-		Secrets:    newMemorySecrets(),
 		Random:     bytes.NewReader(bytes.Repeat([]byte{0x42}, 4096)),
 		Clock:      fixedClock{value: time.Unix(1_790_000_000, 0).UTC()},
 		Config:     DefaultConfig(),
@@ -475,42 +542,13 @@ func TestManagerMetadataOnlyStoresDigestWithoutCiphertext(t *testing.T) {
 	}
 	record := repository.snapshot()[0]
 	if record.PayloadState != PayloadMetadataOnly ||
-		len(record.Ciphertext) != 0 || record.BodyBytes == 0 ||
+		len(record.PayloadMetadata) != 0 || len(record.Body) != 0 ||
+		record.BodyBytes == 0 ||
 		record.DigestScope != DigestFull {
 		t.Fatalf("unexpected metadata-only record: %#v", record)
 	}
-	if _, err := manager.Decrypt(context.Background(), record); err == nil {
+	if _, err := manager.ReadPayload(record); err == nil {
 		t.Fatal("metadata-only evidence unexpectedly decrypted")
-	}
-	if err := manager.Shutdown(context.Background()); err != nil {
-		t.Fatal(err)
-	}
-}
-
-func TestManagerMetadataOnlyDoesNotRequireWritableSecretStore(t *testing.T) {
-	repository := &memoryRepository{}
-	manager, err := Open(context.Background(), Options{
-		Repository: repository,
-		Secrets:    readOnlyMissingSecrets{},
-		Random:     bytes.NewReader(bytes.Repeat([]byte{0x44}, 4096)),
-		Clock:      fixedClock{value: time.Unix(1_790_000_000, 0).UTC()},
-		Config:     DefaultConfig(),
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	observation := testObservation()
-	observation.Recording = RecordingMetadataOnly
-	watermark, err := manager.Observe(context.Background(), observation)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := manager.Flush(context.Background(), watermark); err != nil {
-		t.Fatal(err)
-	}
-	if got := repository.snapshot(); len(got) != 1 ||
-		got[0].PayloadState != PayloadMetadataOnly {
-		t.Fatalf("metadata-only records = %#v", got)
 	}
 	if err := manager.Shutdown(context.Background()); err != nil {
 		t.Fatal(err)
@@ -521,7 +559,6 @@ func TestManagerShutdownFlushesAdmittedRecords(t *testing.T) {
 	repository := &memoryRepository{}
 	manager, err := Open(context.Background(), Options{
 		Repository: repository,
-		Secrets:    newMemorySecrets(),
 		Random:     bytes.NewReader(bytes.Repeat([]byte{0x43}, 4096)),
 		Clock:      fixedClock{value: time.Unix(1_790_000_000, 0).UTC()},
 		Config: Config{
@@ -555,7 +592,6 @@ func TestManagerFlushScopeUsesTheScopesLatestAdmittedWatermark(t *testing.T) {
 	repository := &memoryRepository{}
 	manager, err := Open(context.Background(), Options{
 		Repository: repository,
-		Secrets:    newMemorySecrets(),
 		Random:     bytes.NewReader(bytes.Repeat([]byte{0x45}, 4096)),
 		Clock:      fixedClock{value: time.Unix(1_790_000_000, 0).UTC()},
 		Config: Config{
@@ -660,6 +696,45 @@ type memoryRepository struct {
 	sessions       map[string]WriterSession
 	closedSessions map[string]time.Time
 	audits         []RevealAudit
+	salt           []byte
+	saltErr        error
+}
+
+// RedactionSalt models the durable load-or-create the real repository performs:
+// one salt per database, stable for its lifetime.
+func (repository *memoryRepository) RedactionSalt(
+	_ context.Context,
+) ([]byte, error) {
+	repository.mu.Lock()
+	defer repository.mu.Unlock()
+	if repository.saltErr != nil {
+		return nil, repository.saltErr
+	}
+	if repository.salt == nil {
+		repository.salt = bytes.Repeat([]byte{0x5C}, RedactionSaltBytes)
+	}
+	return slices.Clone(repository.salt), nil
+}
+
+type blockingAppendRepository struct {
+	*memoryRepository
+	appendStarted chan struct{}
+	appendRelease chan struct{}
+	startOnce     sync.Once
+}
+
+func (repository *blockingAppendRepository) AppendBatch(
+	ctx context.Context,
+	records []StoredEnvelope,
+	now time.Time,
+) error {
+	repository.startOnce.Do(func() { close(repository.appendStarted) })
+	select {
+	case <-repository.appendRelease:
+		return repository.memoryRepository.AppendBatch(ctx, records, now)
+	case <-ctx.Done():
+		return ctx.Err()
+	}
 }
 
 func (repository *memoryRepository) AppendBatch(
@@ -673,8 +748,8 @@ func (repository *memoryRepository) AppendBatch(
 		if err := record.Validate(); err != nil {
 			return err
 		}
-		record.CipherNonce = slices.Clone(record.CipherNonce)
-		record.Ciphertext = slices.Clone(record.Ciphertext)
+		record.PayloadMetadata = slices.Clone(record.PayloadMetadata)
+		record.Body = slices.Clone(record.Body)
 		repository.records = append(repository.records, record)
 	}
 	repository.commits++
@@ -770,138 +845,4 @@ func (repository *memoryRepository) snapshot() []StoredEnvelope {
 	repository.mu.Lock()
 	defer repository.mu.Unlock()
 	return slices.Clone(repository.records)
-}
-
-type memorySecretItem struct {
-	value    []byte
-	revision secretstore.Revision
-}
-
-type memorySecrets struct {
-	mu    sync.Mutex
-	items map[string]memorySecretItem
-}
-
-func newMemorySecrets() *memorySecrets {
-	return &memorySecrets{items: make(map[string]memorySecretItem)}
-}
-
-func (store *memorySecrets) Read(
-	_ context.Context,
-	reference secretstore.Reference,
-) (*secretstore.Value, error) {
-	store.mu.Lock()
-	defer store.mu.Unlock()
-	item, ok := store.items[reference.String()]
-	if !ok {
-		return nil, secretstore.ErrNotFound
-	}
-	return secretstore.NewValue(item.value)
-}
-
-func (store *memorySecrets) ReadAtRevision(
-	_ context.Context,
-	reference secretstore.Reference,
-	expected secretstore.Revision,
-) (*secretstore.Value, error) {
-	store.mu.Lock()
-	defer store.mu.Unlock()
-	item, ok := store.items[reference.String()]
-	if !ok {
-		return nil, secretstore.ErrNotFound
-	}
-	if item.revision != expected {
-		return nil, secretstore.ErrRevisionConflict
-	}
-	return secretstore.NewValue(item.value)
-}
-
-func (store *memorySecrets) Inspect(
-	_ context.Context,
-	reference secretstore.Reference,
-) (secretstore.Metadata, error) {
-	store.mu.Lock()
-	defer store.mu.Unlock()
-	item, ok := store.items[reference.String()]
-	if !ok {
-		return secretstore.Metadata{State: secretstore.StateMissing}, nil
-	}
-	return secretstore.Metadata{
-		State: secretstore.StateConfigured, Revision: item.revision,
-	}, nil
-}
-
-func (store *memorySecrets) Replace(
-	_ context.Context,
-	command secretstore.ReplaceCommand,
-) (secretstore.Metadata, error) {
-	store.mu.Lock()
-	defer store.mu.Unlock()
-	item, exists := store.items[command.Reference.String()]
-	if (!exists && command.ExpectedRevision != 0) ||
-		(exists && item.revision != command.ExpectedRevision) {
-		return secretstore.Metadata{}, secretstore.ErrRevisionConflict
-	}
-	value, err := command.Value.CopyBytes()
-	if err != nil {
-		return secretstore.Metadata{}, err
-	}
-	item = memorySecretItem{value: value, revision: item.revision + 1}
-	store.items[command.Reference.String()] = item
-	return secretstore.Metadata{
-		State: secretstore.StateConfigured, Revision: item.revision,
-	}, nil
-}
-
-func (store *memorySecrets) Delete(
-	_ context.Context,
-	reference secretstore.Reference,
-) error {
-	store.mu.Lock()
-	defer store.mu.Unlock()
-	if _, ok := store.items[reference.String()]; !ok {
-		return secretstore.ErrNotFound
-	}
-	delete(store.items, reference.String())
-	return nil
-}
-
-var _ secretstore.Store = (*memorySecrets)(nil)
-
-type readOnlyMissingSecrets struct{}
-
-func (readOnlyMissingSecrets) Read(
-	context.Context,
-	secretstore.Reference,
-) (*secretstore.Value, error) {
-	return nil, secretstore.ErrNotFound
-}
-
-func (readOnlyMissingSecrets) ReadAtRevision(
-	context.Context,
-	secretstore.Reference,
-	secretstore.Revision,
-) (*secretstore.Value, error) {
-	return nil, secretstore.ErrNotFound
-}
-
-func (readOnlyMissingSecrets) Inspect(
-	context.Context,
-	secretstore.Reference,
-) (secretstore.Metadata, error) {
-	return secretstore.Metadata{State: secretstore.StateMissing}, nil
-}
-
-func (readOnlyMissingSecrets) Replace(
-	context.Context,
-	secretstore.ReplaceCommand,
-) (secretstore.Metadata, error) {
-	return secretstore.Metadata{}, secretstore.ErrReadOnly
-}
-
-func (readOnlyMissingSecrets) Delete(
-	context.Context,
-	secretstore.Reference,
-) error {
-	return secretstore.ErrNotFound
 }

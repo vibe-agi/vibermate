@@ -68,7 +68,7 @@ func TestSemanticRequestRecordsClientIngressAndDownstreamRawEvidence(
 		ingress.Authority != "api.anthropic.com:443" ||
 		ingress.Path != "/v1/messages" || ingress.RawQuery != "beta=true" ||
 		string(ingress.Body) != requestBody || !ingress.Complete ||
-		!ingress.ContainsSecret {
+		ingress.Headers.Get("Authorization") == "" {
 		t.Fatalf("client ingress observation = %+v", ingress)
 	}
 	if downstream.Layer != rawevidence.LayerClientDownstream ||
@@ -164,8 +164,6 @@ func (observer *rawObserver) Observe(
 	observation.Body = slices.Clone(observation.Body)
 	observation.Headers = observation.Headers.Clone()
 	observation.Frames = slices.Clone(observation.Frames)
-	observation.ContainsSecret = observation.ContainsSecret ||
-		rawevidence.HeaderContainsSecret(observation.Headers)
 	observer.observations = append(observer.observations, observation)
 	if observer.failure != nil {
 		return rawevidence.Watermark{}, observer.failure

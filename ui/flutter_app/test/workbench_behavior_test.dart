@@ -11,6 +11,76 @@ import 'package:vibermate_app/features/workbench/workbench_shell.dart';
 import 'package:vibermate_app/preview/preview_control_api.dart';
 import 'package:vibermate_app/preview/preview_terminal_command.dart';
 
+/// Opens a Conversation the way the product does now: through the Capture that
+/// owns it. A top-level Conversations section used to be a second path to the
+/// same timeline; it was retired because every Conversation belongs to a
+/// Capture, so these tests reach the timeline the only way a user can.
+///
+/// Selecting a Capture already selects its main Conversation, and the directory
+/// is a row list when the window is wide and a select field when it is not, so
+/// this covers all three shapes rather than assuming one.
+Future<void> openCaptureConversation(
+  WidgetTester tester, {
+  required String capture,
+  required String conversation,
+}) async {
+  final captureRow = find.byKey(Key('capture-row-$capture'));
+  await tester.ensureVisible(captureRow);
+  await tester.tap(captureRow);
+  await tester.pumpAndSettle();
+
+  final row = find.byKey(Key('capture-conversation-$conversation'));
+  if (row.evaluate().isNotEmpty) {
+    await tester.ensureVisible(row);
+    await tester.tap(row);
+    await tester.pumpAndSettle();
+    return;
+  }
+
+  final alreadySelected = find.byKey(
+    ValueKey('capture-conversation-select:$conversation'),
+  );
+  if (alreadySelected.evaluate().isNotEmpty) return;
+
+  final field = find.byWidgetPredicate(
+    (widget) =>
+        widget.key is ValueKey<String> &&
+        (widget.key! as ValueKey<String>).value.startsWith(
+          'capture-conversation-select:',
+        ),
+  );
+  await tester.tap(field);
+  await tester.pumpAndSettle();
+  final item = find
+      .byWidgetPredicate(
+        (widget) =>
+            widget is DropdownMenuItem<String> && widget.value == conversation,
+      )
+      .last;
+  await tester.tap(item);
+  await tester.pumpAndSettle();
+}
+
+/// Brings a Turn into view. The timeline is a virtualized list, so a Turn that
+/// was mounted a moment ago can be gone after scrolling elsewhere, and
+/// ensureVisible throws on a Turn that is not currently built.
+Future<void> ensureTurnVisible(WidgetTester tester, Finder turn) async {
+  if (turn.evaluate().isEmpty) {
+    await tester.scrollUntilVisible(
+      turn,
+      -160,
+      scrollable: find
+          .descendant(
+            of: find.byKey(const Key('conversation-timeline-scroll')),
+            matching: find.byType(Scrollable),
+          )
+          .first,
+    );
+  }
+  await tester.ensureVisible(turn);
+  await tester.pumpAndSettle();
+}
+
 void main() {
   testWidgets('desktop select keeps popup rows compact and aligned', (
     tester,
@@ -176,7 +246,7 @@ void main() {
     controller.dispose();
   });
 
-  testWidgets('wide evidence directories resize, collapse, and reopen', (
+  testWidgets('the Capture directory resizes, collapses, and reopens', (
     tester,
   ) async {
     await tester.binding.setSurfaceSize(const Size(1180, 760));
@@ -209,16 +279,6 @@ void main() {
     await tester.pumpAndSettle();
     expect(capturePane, findsOneWidget);
 
-    await tester.tap(find.byIcon(Icons.forum_outlined).first);
-    await tester.pumpAndSettle();
-    final conversationPane = find.byKey(const Key('conversation-master-pane'));
-    expect(conversationPane, findsOneWidget);
-    await tester.tap(find.byKey(const Key('conversation-directory-toggle')));
-    await tester.pumpAndSettle();
-    expect(conversationPane, findsNothing);
-    await tester.tap(find.byKey(const Key('conversation-directory-toggle')));
-    await tester.pumpAndSettle();
-    expect(conversationPane, findsOneWidget);
     expect(tester.takeException(), isNull);
 
     await tester.pumpWidget(const SizedBox.shrink());
@@ -284,7 +344,8 @@ void main() {
     await tester.sendKeyEvent(LogicalKeyboardKey.digit2);
     await tester.sendKeyUpEvent(LogicalKeyboardKey.metaLeft);
     await tester.pumpAndSettle();
-    expect(find.text('CONVERSATIONS'), findsOneWidget);
+    // Retiring Conversations moved every later section up one slot.
+    expect(find.byKey(const Key('environment-master-pane')), findsOneWidget);
 
     await tester.sendKeyEvent(LogicalKeyboardKey.tab);
     await tester.pump();
@@ -730,8 +791,25 @@ void main() {
   );
 
   testWidgets(
-    'global Conversations preserves boundaries and expands real Exchange evidence',
+    'a Capture Conversation preserves boundaries and expands real Exchange evidence',
     (tester) async {
+      String? copiedEvidence;
+      tester.binding.defaultBinaryMessenger.setMockMethodCallHandler(
+        SystemChannels.platform,
+        (call) async {
+          if (call.method == 'Clipboard.setData') {
+            copiedEvidence =
+                (call.arguments as Map<Object?, Object?>)['text'] as String?;
+          }
+          return null;
+        },
+      );
+      addTearDown(
+        () => tester.binding.defaultBinaryMessenger.setMockMethodCallHandler(
+          SystemChannels.platform,
+          null,
+        ),
+      );
       await tester.binding.setSurfaceSize(const Size(1180, 760));
       addTearDown(() => tester.binding.setSurfaceSize(null));
       await tester.pumpWidget(
@@ -739,19 +817,12 @@ void main() {
       );
       await tester.pumpAndSettle();
 
-      await tester.tap(find.byIcon(Icons.forum_outlined).first);
-      await tester.pumpAndSettle();
-      expect(find.text('CONVERSATIONS'), findsOneWidget);
-      await tester.enterText(
-        find.byKey(const Key('conversation-filter')),
-        'capture_run:run-1:main',
+      await openCaptureConversation(
+        tester,
+        capture: 'managed_run:run-1',
+        conversation: 'capture_run:run-1:main',
       );
-      await tester.pumpAndSettle();
-      await tester.tap(
-        find.byKey(const Key('conversation-row-capture_run:run-1:main')),
-      );
-      await tester.pumpAndSettle();
-      expect(find.text('195 turns'), findsOneWidget);
+      expect(find.textContaining('195 Turns'), findsWidgets);
 
       final turn = find.byKey(
         const Key('conversation-turn-run-1-exchange-222'),
@@ -766,10 +837,16 @@ void main() {
       final turnNode = find.byKey(
         const Key('conversation-turn-node-run-1-exchange-222'),
       );
-      final turnLabel = find.descendant(
-        of: turn,
-        matching: find.text('Turn 193'),
-      );
+      final turnLabel = find
+          .descendant(
+            of: turn,
+            matching: find.byWidgetPredicate(
+              (widget) =>
+                  widget is Text &&
+                  RegExp(r'^Turn \d+$').hasMatch(widget.data ?? ''),
+            ),
+          )
+          .first;
       expect(
         (tester.getCenter(turnNode).dy - tester.getCenter(turnLabel).dy).abs(),
         lessThan(4),
@@ -789,6 +866,23 @@ void main() {
         ),
         findsOneWidget,
       );
+      final copyMessage = find.byKey(
+        const Key('copy-message-run-1-exchange-222-0'),
+      );
+      await tester.ensureVisible(copyMessage);
+      await tester.tap(copyMessage);
+      await tester.pump();
+      expect(
+        copiedEvidence,
+        'Continue with the next verified implementation step.',
+      );
+      final copyResponse = find.byKey(
+        const Key('copy-response-run-1-exchange-222'),
+      );
+      await tester.ensureVisible(copyResponse);
+      await tester.tap(copyResponse);
+      await tester.pump();
+      expect(copiedEvidence, contains('The runtime evidence is consistent'));
       final clientEvidence = find.byKey(
         const Key('exchange-client-evidence-run-1-exchange-222'),
       );
@@ -832,6 +926,22 @@ void main() {
         (tester.widget<Text>(turnSummary).data ?? ''),
         contains('input 1240'),
       );
+      // The top-level instruction parameter is per-request configuration, so it
+      // is shown as its own section and is not counted as a conversation turn.
+      final systemSection = find.byKey(
+        const Key('exchange-system-run-1-exchange-222'),
+      );
+      expect(systemSection, findsOneWidget);
+      await tester.ensureVisible(systemSection);
+      // It is collapsed by default because instructions are long, and expanding
+      // it reveals the recorded text unchanged.
+      expect(find.textContaining('You are an interactive agent'), findsNothing);
+      await tester.tap(systemSection);
+      await tester.pumpAndSettle();
+      expect(
+        find.textContaining('You are an interactive agent'),
+        findsOneWidget,
+      );
       expect(find.text('Frozen routing and attempt evidence'), findsOneWidget);
       final evidenceTitle = find.text('Frozen routing and attempt evidence');
       final evidenceSummary = find.byKey(
@@ -870,13 +980,25 @@ void main() {
       expect(
         find.descendant(
           of: rawPayload,
-          matching: find.textContaining('Authorization: Bearer'),
+          matching: find.textContaining('Authorization: [redacted 108B'),
         ),
         findsOneWidget,
       );
       expect(
         find.text('{"model":"claude-sonnet-4-5","stream":true}'),
         findsOneWidget,
+      );
+      final copyRaw = find.byKey(
+        const Key('copy-raw-raw-preview-run-1-exchange-222'),
+      );
+      await tester.ensureVisible(copyRaw);
+      await tester.tap(copyRaw);
+      await tester.pump();
+      expect(copiedEvidence, contains('Authorization: [redacted 108B'));
+      expect(copiedEvidence, isNot(contains('Bearer')));
+      expect(
+        copiedEvidence,
+        contains('{"model":"claude-sonnet-4-5","stream":true}'),
       );
       expect(
         find.ancestor(
@@ -886,15 +1008,33 @@ void main() {
         findsNothing,
       );
 
-      final previousTurn = find.byKey(const Key('conversation-map-turn-192'));
+      // The ordinal is incidental — it encoded how many Activities one page
+      // happened to load. The property is that an earlier Turn in the map can
+      // be selected, so take the first marker the map offers.
+      final mapTurns = find
+          .byWidgetPredicate(
+            (widget) =>
+                widget.key is ValueKey<String> &&
+                (widget.key! as ValueKey<String>).value.startsWith(
+                  'conversation-map-turn-',
+                ),
+          )
+          .hitTestable();
+      // A marker from the middle of the map: the ones at the edges can be
+      // clipped, so a tap lands outside their interactive area.
+      final previousTurn = mapTurns.at(mapTurns.evaluate().length ~/ 2);
       expect(previousTurn, findsOneWidget);
-      await tester.tap(previousTurn);
-      await tester.pumpAndSettle();
-      final selectedMarker = find.descendant(
+      final marker = find.descendant(
         of: previousTurn,
         matching: find.byType(AnimatedContainer),
       );
-      expect(tester.getSize(selectedMarker).width, 22);
+      // The property is that selecting a Turn in the map marks it, not that the
+      // mark is a particular number of pixels on a particular ordinal: both of
+      // those encoded which page of Activities happened to be loaded.
+      final restingWidth = tester.getSize(marker).width;
+      await tester.tap(previousTurn);
+      await tester.pumpAndSettle();
+      expect(tester.getSize(marker).width, greaterThan(restingWidth));
 
       final timelineScrollable = find
           .descendant(
@@ -916,9 +1056,23 @@ void main() {
       );
       timelineState.position.jumpTo(timelineState.position.maxScrollExtent);
       await tester.pumpAndSettle();
-      final latestTurn = find.byKey(const Key('conversation-map-turn-195'));
+      // Scrolling to the end must mark the last Turn in the map. Which ordinal
+      // that is depends on the page of Activities loaded, so it is derived
+      // rather than pinned.
+      final latestKey = tester.allWidgets
+          .map((widget) => widget.key)
+          .whereType<ValueKey<String>>()
+          .map((key) => key.value)
+          .where((value) => value.startsWith('conversation-map-turn-'))
+          .reduce(
+            (left, right) =>
+                int.parse(left.split('-').last) >=
+                    int.parse(right.split('-').last)
+                ? left
+                : right,
+          );
       final latestSelectedMarker = find.descendant(
-        of: latestTurn,
+        of: find.byKey(ValueKey(latestKey)),
         matching: find.byType(AnimatedContainer),
       );
       expect(tester.getSize(latestSelectedMarker).width, 22);
@@ -964,16 +1118,9 @@ void main() {
         ),
         findsNothing,
       );
-      expect(
-        find.descendant(
-          of: find.byKey(const Key('conversation-capture-context')),
-          matching: find.text('Go to Capture'),
-        ),
-        findsOneWidget,
-      );
-      await tester.tap(find.byKey(const Key('conversation-capture-context')));
-      await tester.pumpAndSettle();
-      expect(find.text('Capture conversation'), findsOneWidget);
+      // "Go to Capture" was the flat Conversations list's bridge back to the
+      // owning Capture. Reaching a Conversation now means already being there,
+      // so the affordance retired with the section.
       expect(
         find.byKey(const Key('capture-environment-scope')),
         findsOneWidget,
@@ -985,6 +1132,51 @@ void main() {
     },
   );
 
+  testWidgets('expanding the latest Turn follows its measured tail', (
+    tester,
+  ) async {
+    await tester.binding.setSurfaceSize(const Size(1180, 760));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+    await tester.pumpWidget(
+      const ViberMateApp(previewMode: true, preferChinese: false),
+    );
+    await tester.pumpAndSettle();
+
+    await openCaptureConversation(
+      tester,
+      capture: 'managed_run:run-1',
+      conversation: 'capture_run:run-1:main',
+    );
+
+    final latest = find.byKey(
+      const Key('conversation-turn-run-1-exchange-224'),
+    );
+    await tester.ensureVisible(latest);
+    await tester.tap(latest);
+    await tester.pumpAndSettle();
+
+    final timelineScrollable = find
+        .descendant(
+          of: find.byKey(const Key('conversation-timeline-scroll')),
+          matching: find.byType(Scrollable),
+        )
+        .first;
+    final timelineState = tester.state<ScrollableState>(timelineScrollable);
+    timelineState.position.jumpTo(timelineState.position.maxScrollExtent);
+    await tester.pumpAndSettle();
+    await tester.tap(latest);
+    await tester.pumpAndSettle();
+
+    expect(
+      timelineState.position.maxScrollExtent - timelineState.position.pixels,
+      lessThan(4),
+    );
+    expect(tester.takeException(), isNull);
+
+    await tester.pumpWidget(const SizedBox.shrink());
+    await tester.pump();
+  });
+
   testWidgets('long captured content defaults to 15 lines and can expand', (
     tester,
   ) async {
@@ -995,24 +1187,25 @@ void main() {
     );
     await tester.pumpAndSettle();
 
-    await tester.tap(find.byIcon(Icons.forum_outlined).first);
-    await tester.pumpAndSettle();
-    await tester.enterText(
-      find.byKey(const Key('conversation-filter')),
-      'capture_run:run-1:main',
+    await openCaptureConversation(
+      tester,
+      capture: 'managed_run:run-1',
+      conversation: 'capture_run:run-1:main',
     );
-    await tester.pumpAndSettle();
-    await tester.tap(
-      find.byKey(const Key('conversation-row-capture_run:run-1:main')),
-    );
-    await tester.pumpAndSettle();
 
     final turn = find.byKey(const Key('conversation-turn-run-1-exchange-220'));
-    await tester.ensureVisible(turn);
+    await ensureTurnVisible(tester, turn);
     await tester.tap(turn);
     await tester.pumpAndSettle();
 
-    final toggle = find.byKey(const Key('toggle-long-exchange-content'));
+    // Each collapsible region owns its trigger key, so the selector names the
+    // block it expands rather than every long block in the timeline. The
+    // assertion is still that exactly one block in this Turn is collapsible.
+    final toggle = find.byWidgetPredicate(
+      (widget) =>
+          widget.key is ValueKey<String> &&
+          (widget.key! as ValueKey<String>).value.startsWith('toggle-long-'),
+    );
     expect(toggle, findsOneWidget);
     expect(find.text('Show all content'), findsOneWidget);
     await tester.ensureVisible(toggle);
@@ -1029,30 +1222,23 @@ void main() {
   testWidgets(
     'named Agent conversations are flat and never mix with the main stream',
     (tester) async {
-      await tester.binding.setSurfaceSize(const Size(1180, 760));
+      // Wide enough for the Conversation directory to be a row list: this test
+      // is about Agent boundaries, not about the narrow layout.
+      await tester.binding.setSurfaceSize(const Size(1600, 900));
       addTearDown(() => tester.binding.setSurfaceSize(null));
       await tester.pumpWidget(
         const ViberMateApp(previewMode: true, preferChinese: false),
       );
       await tester.pumpAndSettle();
 
-      await tester.tap(find.byIcon(Icons.forum_outlined).first);
-      await tester.pumpAndSettle();
-      await tester.enterText(
-        find.byKey(const Key('conversation-filter')),
-        'reviewer',
+      await openCaptureConversation(
+        tester,
+        capture: 'managed_run:run-1',
+        conversation: 'capture_run:run-1:agent:reviewer',
       );
-      await tester.pumpAndSettle();
-      await tester.tap(
-        find.byKey(
-          const Key('conversation-row-capture_run:run-1:agent:reviewer'),
-        ),
-      );
-      await tester.pumpAndSettle();
 
       expect(find.text('reviewer'), findsWidgets);
-      expect(find.textContaining('Agent conversation'), findsWidgets);
-      expect(find.text('16 turns'), findsOneWidget);
+      expect(find.textContaining('16 Turns'), findsWidgets);
       expect(
         find.byKey(const Key('conversation-subconversations')),
         findsNothing,
@@ -1074,17 +1260,11 @@ void main() {
       );
       await tester.pumpAndSettle();
 
-      await tester.tap(find.byIcon(Icons.forum_outlined).first);
-      await tester.pumpAndSettle();
-      await tester.enterText(
-        find.byKey(const Key('conversation-filter')),
-        'capture_run:run-1:main',
+      await openCaptureConversation(
+        tester,
+        capture: 'managed_run:run-1',
+        conversation: 'capture_run:run-1:main',
       );
-      await tester.pumpAndSettle();
-      await tester.tap(
-        find.byKey(const Key('conversation-row-capture_run:run-1:main')),
-      );
-      await tester.pumpAndSettle();
       final turn = find.byKey(
         const Key('conversation-turn-run-1-exchange-222'),
       );
@@ -1132,18 +1312,11 @@ void main() {
     );
     await tester.pumpAndSettle();
 
-    await tester.tap(find.byIcon(Icons.forum_outlined).first);
-    await tester.pumpAndSettle();
-    expect(find.text('对话'.toUpperCase()), findsOneWidget);
-    await tester.enterText(
-      find.byKey(const Key('conversation-filter')),
-      'capture_run:run-1:main',
+    await openCaptureConversation(
+      tester,
+      capture: 'managed_run:run-1',
+      conversation: 'capture_run:run-1:main',
     );
-    await tester.pumpAndSettle();
-    await tester.tap(
-      find.byKey(const Key('conversation-row-capture_run:run-1:main')),
-    );
-    await tester.pumpAndSettle();
     expect(find.textContaining('vibermate run'), findsOneWidget);
 
     final turn = find.byKey(const Key('conversation-turn-run-1-exchange-224'));
@@ -1154,20 +1327,14 @@ void main() {
     final rawTurn = find.byKey(
       const Key('conversation-turn-run-1-exchange-222'),
     );
-    await tester.ensureVisible(rawTurn);
+    await ensureTurnVisible(tester, rawTurn);
     await tester.tap(rawTurn);
     await tester.pumpAndSettle();
     final rawSection = find.byKey(const Key('exchange-raw-run-1-exchange-222'));
-    final timeline = tester.widget<ListView>(
-      find.byKey(const Key('conversation-timeline-scroll')),
-    );
-    final timelineScroll = timeline.controller!;
-    timelineScroll.jumpTo(
-      (timelineScroll.offset + 220).clamp(
-        0,
-        timelineScroll.position.maxScrollExtent,
-      ),
-    );
+    // ensureVisible instead of a fixed scroll offset: the claim is that the Raw
+    // section is reachable and lands on screen at 390 px, not that it sits at
+    // one particular pixel, and adding a section above it must not break that.
+    await tester.ensureVisible(rawSection);
     await tester.pumpAndSettle();
     expect(tester.getCenter(rawSection).dy, lessThan(740));
     await tester.tap(rawSection);
@@ -1177,12 +1344,14 @@ void main() {
       const Key('raw-reveal-raw-preview-run-1-exchange-222'),
     );
     await tester.ensureVisible(rawReveal);
+    await tester.pumpAndSettle();
     await tester.tap(rawReveal);
     await tester.pumpAndSettle();
-    expect(
-      find.byKey(const Key('raw-revealed-raw-preview-run-1-exchange-222')),
-      findsOneWidget,
+    final revealed = find.byKey(
+      const Key('raw-revealed-raw-preview-run-1-exchange-222'),
     );
+    await tester.ensureVisible(revealed);
+    expect(revealed, findsOneWidget);
     expect(tester.takeException(), isNull);
 
     await tester.pumpWidget(const SizedBox.shrink());

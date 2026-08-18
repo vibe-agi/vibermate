@@ -196,7 +196,7 @@ func TestBuildEnvironmentPreservesClientAuthOutsideManagedAuthority(t *testing.T
 		},
 		{
 			name:   "Codex",
-			recipe: clientadapter.LaunchSSLCertFile,
+			recipe: clientadapter.LaunchCodexResponsesHTTP,
 			base: []string{
 				"CODEX_API_KEY=client-api-key",
 				"OPENAI_BASE_URL=https://api.openai.com/v1",
@@ -263,7 +263,7 @@ func TestBuildEnvironmentBootstrapsDefaultManagedClientOrigins(t *testing.T) {
 		},
 		{
 			name:             "Codex",
-			recipe:           clientadapter.LaunchSSLCertFile,
+			recipe:           clientadapter.LaunchCodexResponsesHTTP,
 			managedAuthority: "api.openai.com:443",
 			ambientKey:       "CODEX_API_KEY=client-api-key",
 			placeholderKey:   "CODEX_API_KEY",
@@ -308,7 +308,7 @@ func TestBuildEnvironmentBootstrapsDefaultManagedClientOrigins(t *testing.T) {
 func TestBuildEnvironmentIsolatesFixedCodexInputs(t *testing.T) {
 	t.Parallel()
 
-	adapter := testAdapterEvidence(clientadapter.LaunchSSLCertFile)
+	adapter := testAdapterEvidence(clientadapter.LaunchCodexResponsesHTTP)
 	grant := capturecontrol.LaunchGrant{
 		Run: testCaptureRunView(
 			"run-codex",
@@ -316,7 +316,7 @@ func TestBuildEnvironmentIsolatesFixedCodexInputs(t *testing.T) {
 			adapter,
 		),
 		CatalogRevision: 7,
-		LaunchRecipe:    clientadapter.LaunchSSLCertFile,
+		LaunchRecipe:    clientadapter.LaunchCodexResponsesHTTP,
 		Recognition:     clientadapter.RecognitionVerified,
 		Adapter:         adapter,
 		ExecutablePath:  "/tmp/codex.js",
@@ -386,7 +386,7 @@ func TestBuildEnvironmentIsolatesFixedCodexInputs(t *testing.T) {
 func TestBuildEnvironmentRejectsUnboundAdapterRecipes(t *testing.T) {
 	t.Parallel()
 
-	adapter := testAdapterEvidence(clientadapter.LaunchSSLCertFile)
+	adapter := testAdapterEvidence(clientadapter.LaunchCodexResponsesHTTP)
 	base := capturecontrol.LaunchGrant{
 		Run: testCaptureRunView(
 			"run-invalid",
@@ -394,7 +394,7 @@ func TestBuildEnvironmentRejectsUnboundAdapterRecipes(t *testing.T) {
 			adapter,
 		),
 		CatalogRevision:              7,
-		LaunchRecipe:                 clientadapter.LaunchSSLCertFile,
+		LaunchRecipe:                 clientadapter.LaunchCodexResponsesHTTP,
 		Recognition:                  clientadapter.RecognitionVerified,
 		Adapter:                      adapter,
 		ExecutablePath:               "/tmp/codex.js",
@@ -464,7 +464,7 @@ func testAdapterEvidence(
 	id := "claude-code"
 	shape := clientadapter.InstallNativeSingleBinary
 	fallbackPolicy := clientadapter.StreamingFallbackCoreOwned
-	if recipe == clientadapter.LaunchSSLCertFile {
+	if recipe == clientadapter.LaunchCodexResponsesHTTP {
 		id = "codex-cli"
 		shape = clientadapter.InstallNPMWrapperNativeChild
 		fallbackPolicy = clientadapter.StreamingFallbackClientDefault

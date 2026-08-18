@@ -193,26 +193,32 @@ type ClientOperationOptions struct {
 	CodecFeature   CodecFeature
 	MaxBodyBytes   int64
 	AllowedQueries []string
-	PayloadClass   OperationPayloadClass
-	EgressBearing  bool
+	// AllowedQueryKeys admits canonical query strings containing only these
+	// keys while leaving their control-plane values dynamic. Exact
+	// AllowedQueries remain useful when the value itself is part of the wire
+	// contract (for example beta=true).
+	AllowedQueryKeys []string
+	PayloadClass     OperationPayloadClass
+	EgressBearing    bool
 }
 
 type ClientOperationDefinition struct {
-	id             ClientOperationID
-	revision       Revision
-	clientDialect  Dialect
-	methods        []string
-	pathPattern    string
-	pathMatch      ClientOperationPathMatch
-	kind           ClientOperationKind
-	transport      ClientOperationTransport
-	bodyKind       ClientOperationBodyKind
-	replayClass    ClientReplayClass
-	codecFeature   CodecFeature
-	maxBodyBytes   int64
-	allowedQueries []string
-	payloadClass   OperationPayloadClass
-	egressBearing  bool
+	id               ClientOperationID
+	revision         Revision
+	clientDialect    Dialect
+	methods          []string
+	pathPattern      string
+	pathMatch        ClientOperationPathMatch
+	kind             ClientOperationKind
+	transport        ClientOperationTransport
+	bodyKind         ClientOperationBodyKind
+	replayClass      ClientReplayClass
+	codecFeature     CodecFeature
+	maxBodyBytes     int64
+	allowedQueries   []string
+	allowedQueryKeys []string
+	payloadClass     OperationPayloadClass
+	egressBearing    bool
 }
 
 func NewClientOperationDefinition(options ClientOperationOptions) (ClientOperationDefinition, error) {
@@ -222,11 +228,14 @@ func NewClientOperationDefinition(options ClientOperationOptions) (ClientOperati
 		pathMatch: options.PathMatch, kind: options.Kind, transport: options.Transport,
 		bodyKind: options.BodyKind, replayClass: options.ReplayClass,
 		codecFeature: options.CodecFeature, maxBodyBytes: options.MaxBodyBytes,
-		allowedQueries: slices.Clone(options.AllowedQueries), payloadClass: options.PayloadClass,
-		egressBearing: options.EgressBearing,
+		allowedQueries:   slices.Clone(options.AllowedQueries),
+		allowedQueryKeys: slices.Clone(options.AllowedQueryKeys),
+		payloadClass:     options.PayloadClass,
+		egressBearing:    options.EgressBearing,
 	}
 	sort.Strings(definition.methods)
 	sort.Strings(definition.allowedQueries)
+	sort.Strings(definition.allowedQueryKeys)
 	if err := definition.Validate(); err != nil {
 		return ClientOperationDefinition{}, err
 	}
@@ -259,6 +268,16 @@ func (definition ClientOperationDefinition) CodecFeature() CodecFeature {
 func (definition ClientOperationDefinition) MaxBodyBytes() int64 { return definition.maxBodyBytes }
 func (definition ClientOperationDefinition) AllowedQueries() []string {
 	return slices.Clone(definition.allowedQueries)
+}
+func (definition ClientOperationDefinition) AllowedQueryKeys() []string {
+	return slices.Clone(definition.allowedQueryKeys)
+}
+func (definition ClientOperationDefinition) AllowsRawQuery(rawQuery string) bool {
+	return allowsRawQuery(
+		definition.allowedQueries,
+		definition.allowedQueryKeys,
+		rawQuery,
+	)
 }
 func (definition ClientOperationDefinition) PayloadClass() OperationPayloadClass {
 	return definition.payloadClass
@@ -344,11 +363,18 @@ func (definition ClientOperationDefinition) Validate() error {
 			return ErrInvalidSpecification
 		}
 	}
-	if len(definition.allowedQueries) > MaxOperationQueries {
+	if len(definition.allowedQueries) > MaxOperationQueries ||
+		len(definition.allowedQueryKeys) > MaxOperationQueries {
 		return ErrInvalidSpecification
 	}
 	for index, query := range definition.allowedQueries {
 		if !canonicalQuery(query) || index > 0 && query == definition.allowedQueries[index-1] {
+			return ErrInvalidSpecification
+		}
+	}
+	for index, key := range definition.allowedQueryKeys {
+		if !canonicalQueryKey(key) ||
+			index > 0 && key == definition.allowedQueryKeys[index-1] {
 			return ErrInvalidSpecification
 		}
 	}
@@ -362,6 +388,7 @@ func (definition ClientOperationDefinition) Clone() ClientOperationDefinition {
 	cloned := definition
 	cloned.methods = slices.Clone(definition.methods)
 	cloned.allowedQueries = slices.Clone(definition.allowedQueries)
+	cloned.allowedQueryKeys = slices.Clone(definition.allowedQueryKeys)
 	return cloned
 }
 
@@ -381,7 +408,7 @@ type RequestTarget struct {
 func (target RequestTarget) Validate() error {
 	if !validMethod(target.Method) || !canonicalPath(target.Path) || target.RawPath != "" ||
 		(target.Transport != ClientOperationTransportHTTP && target.Transport != ClientOperationTransportWebSocket) ||
-		(target.RawQuery != "" && !canonicalQuery(target.RawQuery)) {
+		(target.RawQuery != "" && !wellFormedRawQuery(target.RawQuery)) {
 		return ErrInvalidRequestTarget
 	}
 	return nil
@@ -411,6 +438,12 @@ func (plan ClientOperationPlan) ReplayClass() ClientReplayClass    { return plan
 func (plan ClientOperationPlan) CodecFeature() CodecFeature        { return plan.definition.CodecFeature() }
 func (plan ClientOperationPlan) MaxBodyBytes() int64               { return plan.definition.MaxBodyBytes() }
 func (plan ClientOperationPlan) AllowedQueries() []string          { return plan.definition.AllowedQueries() }
+func (plan ClientOperationPlan) AllowedQueryKeys() []string {
+	return plan.definition.AllowedQueryKeys()
+}
+func (plan ClientOperationPlan) AllowsRawQuery(rawQuery string) bool {
+	return plan.definition.AllowsRawQuery(rawQuery)
+}
 func (plan ClientOperationPlan) PayloadClass() OperationPayloadClass {
 	return plan.definition.PayloadClass()
 }
@@ -437,7 +470,7 @@ func (plan ClientOperationPlan) Match(target RequestTarget) (matched bool, pathK
 		!slices.Contains(plan.Methods(), target.Method) {
 		return false, pathKnown, nil
 	}
-	if target.RawQuery != "" && !slices.Contains(plan.AllowedQueries(), target.RawQuery) {
+	if !plan.AllowsRawQuery(target.RawQuery) {
 		return false, true, nil
 	}
 	return true, true, nil
@@ -592,4 +625,73 @@ func canonicalQuery(value string) bool {
 	}
 	parsed, err := url.ParseQuery(value)
 	return err == nil && parsed.Encode() == value
+}
+
+func canonicalQueryKey(value string) bool {
+	if value == "" || len(value) > 128 || !utf8.ValidString(value) {
+		return false
+	}
+	return url.QueryEscape(value) == value
+}
+
+func allowsRawQuery(exactQueries, allowedKeys []string, rawQuery string) bool {
+	if rawQuery == "" {
+		return true
+	}
+	if canonicalQuery(rawQuery) && slices.Contains(exactQueries, rawQuery) {
+		return true
+	}
+	if len(allowedKeys) == 0 {
+		return false
+	}
+	keys, valid := rawQueryKeys(rawQuery)
+	if !valid {
+		return false
+	}
+	for _, key := range keys {
+		if !slices.Contains(allowedKeys, key) {
+			return false
+		}
+	}
+	return len(keys) > 0
+}
+
+func wellFormedRawQuery(value string) bool {
+	_, valid := parseRawQueryKeys(value, false)
+	return valid
+}
+
+// rawQueryKeys validates each field's encoding while deliberately leaving
+// field order out of the contract. HTTP query ordering is not semantic, but
+// duplicate keys and alternate encodings are: rejecting both keeps admission
+// deterministic without forcing clients to sort independent parameters.
+func rawQueryKeys(value string) ([]string, bool) {
+	return parseRawQueryKeys(value, true)
+}
+
+func parseRawQueryKeys(value string, rejectDuplicates bool) ([]string, bool) {
+	if value == "" || len(value) > 2048 || !utf8.ValidString(value) {
+		return nil, false
+	}
+	keys := make([]string, 0, strings.Count(value, "&")+1)
+	seen := make(map[string]struct{})
+	for _, field := range strings.Split(value, "&") {
+		rawKey, rawValue, present := strings.Cut(field, "=")
+		if !present || rawKey == "" {
+			return nil, false
+		}
+		key, keyErr := url.QueryUnescape(rawKey)
+		decodedValue, valueErr := url.QueryUnescape(rawValue)
+		if keyErr != nil || valueErr != nil ||
+			url.QueryEscape(key) != rawKey ||
+			url.QueryEscape(decodedValue) != rawValue {
+			return nil, false
+		}
+		if _, duplicate := seen[key]; rejectDuplicates && duplicate {
+			return nil, false
+		}
+		seen[key] = struct{}{}
+		keys = append(keys, key)
+	}
+	return keys, true
 }

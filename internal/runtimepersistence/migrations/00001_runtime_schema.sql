@@ -204,12 +204,33 @@ protocol_plan_revision > 0 AND route_id <> '' AND route_revision > 0)),
 ) STRICT;
 CREATE INDEX runtime_activities_latest
 ON runtime_activities(sequence DESC);
+-- The protocol's structure is Exchange -> ordered messages -> ordered blocks.
+-- A block is the atom: it is what the codec produces, what `availability`
+-- applies to, and what the timeline renders. Addressing a message by the digest
+-- of its whole payload stored it again whenever one block changed, which cost
+-- 40.1% of the blocks in a measured corpus. Chunking below block granularity
+-- was measured and rejected: it costs more than it saves, because small chunks
+-- lose the compression context that makes zstd effective on a whole block.
+CREATE TABLE runtime_exchange_content_blocks(
+  digest TEXT PRIMARY KEY NOT NULL
+  CHECK(length(CAST(digest AS BLOB)) = 64 AND lower(digest) = digest),
+  plain_bytes INTEGER NOT NULL CHECK(plain_bytes BETWEEN 1 AND 33554432),
+  codec TEXT NOT NULL CHECK(codec IN('identity', 'zstd')),
+  payload BLOB NOT NULL CHECK(length(payload) > 0)
+) STRICT;
+-- digest remains SHA-256 of the message's canonical JSON. Only where its bytes
+-- live changes, so every transcript node and stored digest keeps its meaning.
 CREATE TABLE runtime_exchange_content_messages(
   digest TEXT PRIMARY KEY NOT NULL
   CHECK(length(CAST(digest AS BLOB)) = 64 AND lower(digest) = digest),
-  payload_json BLOB NOT NULL
-  CHECK(length(payload_json) BETWEEN 2 AND 33554432 AND
-  json_valid(CAST(payload_json AS TEXT)))
+  role TEXT NOT NULL
+  CHECK(role IN('system', 'developer', 'user', 'assistant', 'tool')),
+  agent_json BLOB
+  CHECK(agent_json IS NULL OR(length(agent_json) BETWEEN 2 AND 4096 AND
+  json_valid(CAST(agent_json AS TEXT)))),
+  block_manifest TEXT NOT NULL
+  CHECK(length(CAST(block_manifest AS BLOB)) % 64 = 0 AND
+  length(CAST(block_manifest AS BLOB)) BETWEEN 64 AND 1048576)
 ) STRICT;
 CREATE TABLE runtime_exchange_content_transcripts(
   digest TEXT PRIMARY KEY NOT NULL
@@ -248,6 +269,11 @@ CREATE TABLE runtime_exchange_contents(
   CHECK(inherited_message_count BETWEEN 0 AND request_message_count),
   response_message_digest TEXT
   REFERENCES runtime_exchange_content_messages(digest),
+  -- The dialect's top-level instruction parameter, content-addressed like any
+  -- message but deliberately outside the transcript chain: it is per-request
+  -- configuration, and real clients change it every turn.
+  system_message_digest TEXT
+  REFERENCES runtime_exchange_content_messages(digest),
   manifest_json BLOB NOT NULL
   CHECK(length(manifest_json) BETWEEN 2 AND 33554432 AND
   json_valid(CAST(manifest_json AS TEXT))),
@@ -265,11 +291,50 @@ ON runtime_exchange_contents(
   expected_message_count DESC,
   recorded_at_unix_ms DESC
 );
--- Raw HTTP evidence is searchable only through safe metadata. Header values,
--- trailers, stream-frame boundaries, and body bytes live inside the
--- authenticated ciphertext. net/http has already normalized header field
--- spelling and cross-field order, so canonicalization records that boundary
--- instead of claiming packet-capture fidelity.
+-- The redaction salt is not a secret and is not a SecretRef.
+-- INV-STORE-DISCLOSED already states this database is not protected at rest,
+-- so the salt cannot defend against an adversary holding it. Its only purpose
+-- is to keep a redacted credential digest from being matched against a corpus
+-- assembled outside this database, which matters for low-entropy values such
+-- as Proxy-Authorization: Basic.
+CREATE TABLE runtime_raw_evidence_redaction(
+  singleton INTEGER PRIMARY KEY NOT NULL CHECK(singleton = 1),
+  salt BLOB NOT NULL CHECK(length(salt) = 32)
+) STRICT;
+-- Observed bytes are stored once. A chunk is addressed by the digest of its
+-- plaintext, so the compression codec is never part of an identity and may be
+-- changed later without invalidating a stored digest. A body is an ordered list
+-- of chunk digests; two observations of the same bytes therefore share one body
+-- row as a consequence of addressing rather than a rule in the writer, and two
+-- observations that genuinely differ -- a cross-dialect route re-serializing a
+-- request -- are honestly stored as two.
+CREATE TABLE runtime_evidence_chunks(
+  digest BLOB PRIMARY KEY NOT NULL CHECK(length(digest) = 32),
+  -- Bounded because plain_bytes reaches an allocation as a capacity, and this
+  -- database is deliberately unprotected at rest.
+  plain_bytes INTEGER NOT NULL CHECK(plain_bytes BETWEEN 1 AND 65536),
+  codec TEXT NOT NULL CHECK(codec IN('identity', 'zstd')),
+  payload BLOB NOT NULL CHECK(length(payload) > 0)
+) STRICT;
+CREATE TABLE runtime_evidence_bodies(
+  digest BLOB PRIMARY KEY NOT NULL CHECK(length(digest) = 32),
+  plain_bytes INTEGER NOT NULL CHECK(plain_bytes BETWEEN 1 AND 16777216),
+  chunk_manifest BLOB NOT NULL
+  CHECK(length(chunk_manifest) % 32 = 0 AND
+        length(chunk_manifest) BETWEEN 32 AND 262144)
+) STRICT;
+-- Raw HTTP evidence is searchable through safe metadata columns; header values,
+-- trailers, stream-frame boundaries, and body bytes live inside the payload
+-- column. That payload is stored in the clear: INV-STORE-DISCLOSED forbids
+-- application-layer field encryption, and credential header values were removed
+-- at the observation boundary, so no column of this table holds a value this
+-- product recognized as a credential. Recognition is by header name alone: a key
+-- inside a body, a tool argument or raw_query is retained verbatim, because an
+-- archive that rewrites the bytes it observed stops being evidence.
+-- redacted_credential_fields names the fields that were removed. net/http has
+-- already normalized header field spelling and cross-field order, so
+-- canonicalization records that boundary instead of claiming packet-capture
+-- fidelity.
 CREATE TABLE runtime_raw_evidence_envelopes(
   envelope_id TEXT PRIMARY KEY NOT NULL
   CHECK(length(CAST(envelope_id AS BLOB)) BETWEEN 1 AND 512),
@@ -349,20 +414,21 @@ CREATE TABLE runtime_raw_evidence_envelopes(
   CHECK(payload_state IN('captured', 'metadata_only', 'truncated', 'unavailable')),
   payload_reason TEXT NOT NULL DEFAULT ''
   CHECK(length(CAST(payload_reason AS BLOB)) <= 128),
-  contains_secret INTEGER NOT NULL CHECK(contains_secret IN(0, 1)),
-  encryption_key_revision INTEGER NOT NULL
-  CHECK(encryption_key_revision BETWEEN 0 AND 9223372036854775807),
-  cipher_nonce BLOB NOT NULL,
-  ciphertext BLOB NOT NULL,
+  redacted_credential_fields TEXT NOT NULL DEFAULT '[]'
+  CHECK(json_valid(redacted_credential_fields) AND
+        json_type(redacted_credential_fields) = 'array' AND
+        length(CAST(redacted_credential_fields AS BLOB)) <= 4096),
+  payload_metadata BLOB NOT NULL,
+  stored_body_digest BLOB
+  REFERENCES runtime_evidence_bodies(digest)
+  CHECK(stored_body_digest IS NULL OR length(stored_body_digest) = 32),
   UNIQUE(writer_id, watermark),
   CHECK((scope_kind = 'runtime' AND scope_id = '') OR
         (scope_kind <> 'runtime' AND scope_id <> '')),
   CHECK((payload_state IN('captured', 'truncated') AND
-         encryption_key_revision > 0 AND
-         length(cipher_nonce) = 12 AND length(ciphertext) > 0) OR
+         length(payload_metadata) > 0) OR
         (payload_state IN('metadata_only', 'unavailable') AND
-         encryption_key_revision = 0 AND
-         length(cipher_nonce) = 0 AND length(ciphertext) = 0))
+         length(payload_metadata) = 0 AND stored_body_digest IS NULL))
 ) STRICT;
 CREATE INDEX runtime_raw_evidence_exchange
 ON runtime_raw_evidence_envelopes(
@@ -378,6 +444,10 @@ ON runtime_raw_evidence_envelopes(
 );
 CREATE INDEX runtime_raw_evidence_expiry
 ON runtime_raw_evidence_envelopes(expires_at_unix_ms);
+-- Reachability for body purge is a lookup, not a table scan.
+CREATE INDEX runtime_raw_evidence_stored_body
+ON runtime_raw_evidence_envelopes(stored_body_digest)
+WHERE stored_body_digest IS NOT NULL;
 -- A writer session is a crash-recovery journal, not an assertion that every
 -- lost envelope can be counted. An open predecessor proves only that up to its
 -- configured batch window may not have reached SQLite.

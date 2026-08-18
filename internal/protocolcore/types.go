@@ -1567,7 +1567,7 @@ func validateIdentifier(label, value string, maxBytes int) error {
 		return fmt.Errorf("%s has surrounding whitespace", label)
 	}
 	for _, character := range value {
-		if unicode.IsControl(character) {
+		if character == '\uFEFF' || unicode.IsControl(character) {
 			return fmt.Errorf("%s contains a control character", label)
 		}
 	}

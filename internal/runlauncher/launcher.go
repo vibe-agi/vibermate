@@ -206,13 +206,22 @@ func (launcher *Launcher) Run(
 		launcher.finishBestEffort(control, grant)
 		return 1, err
 	}
+	childArguments, err := buildChildArguments(
+		command,
+		launcher.config.BaseEnvironment,
+		grant.LaunchRecipe,
+	)
+	if err != nil {
+		launcher.finishBestEffort(control, grant)
+		return 1, err
+	}
 
 	childContext, cancelChild := context.WithCancelCause(context.WithoutCancel(ctx))
 	defer cancelChild(errors.New("launcher child supervision ended"))
 	child := exec.CommandContext(
 		childContext,
 		grant.ExecutablePath,
-		append([]string(nil), command[1:]...)...,
+		childArguments...,
 	)
 	child.Dir = cwd
 	child.Env = environment

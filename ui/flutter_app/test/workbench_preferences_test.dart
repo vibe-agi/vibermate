@@ -9,13 +9,51 @@ void main() {
   const complete = WorkbenchPreferences(
     language: AppLanguage.simplifiedChinese,
     theme: WorkbenchTheme.dark,
-    section: WorkbenchSection.conversations,
+    section: WorkbenchSection.captures,
     selectedCaptureKey: 'managed_run:run-7',
-    selectedConversationKey: 'capture_run:run-7',
     selectedEnvironmentId: 'environment.work',
     selectedEnvironmentRevision: 7,
     selectedEndpointId: 'target.custom.anthropic.primary',
   );
+
+  // Conversations was a top-level section and is not one any more: every
+  // Conversation is reachable through the Capture that owns it. Anyone whose
+  // last session ended there has `"section":"conversations"` on disk.
+  //
+  // An unknown section fails the contract and resets the whole file, so a
+  // straight enum deletion would answer a removed nav item by throwing away the
+  // user's theme, language and every selection, behind a warning that says
+  // their state was invalid. It was retired, not corrupted, and it has to load.
+  test('a workbench state saved on the retired Conversations section still loads', () {
+    final payload =
+        jsonDecode(
+              const WorkbenchPreferences(
+                language: AppLanguage.simplifiedChinese,
+                theme: WorkbenchTheme.dark,
+                section: WorkbenchSection.captures,
+                selectedCaptureKey: 'managed_run:run-7',
+                selectedEnvironmentId: 'environment.work',
+                selectedEnvironmentRevision: 7,
+              ).encode(),
+            )
+            as Map<String, Object?>;
+    payload['section'] = 'conversations';
+    payload['selectedConversationKey'] = 'capture_run:run-7';
+
+    final restored = WorkbenchPreferences.decode(jsonEncode(payload));
+
+    expect(restored.section, WorkbenchSection.captures);
+    expect(restored.theme, WorkbenchTheme.dark);
+    expect(restored.language, AppLanguage.simplifiedChinese);
+    expect(restored.selectedCaptureKey, 'managed_run:run-7');
+    expect(restored.selectedEnvironmentRevision, 7);
+    // The retired field is dropped rather than carried, so it disappears the
+    // next time the file is written.
+    expect(
+      (jsonDecode(restored.encode()) as Map<String, Object?>).keys,
+      isNot(contains('selectedConversationKey')),
+    );
+  });
 
   test('workbench preferences round-trip one closed nonsecret contract', () {
     expect(WorkbenchPreferences.decode(complete.encode()), complete);
@@ -26,7 +64,6 @@ void main() {
       'theme',
       'section',
       'selectedCaptureKey',
-      'selectedConversationKey',
       'selectedEnvironmentId',
       'selectedEnvironmentRevision',
       'selectedEndpointId',

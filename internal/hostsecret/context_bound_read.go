@@ -3,45 +3,134 @@ package hostsecret
 import (
 	"context"
 	"errors"
+	"sync"
+	"time"
 
 	"github.com/vibe-agi/vibermate/internal/secretstore"
 )
 
+const (
+	// A host call still inside the delegate after this long is treated as
+	// wedged. It is set far above any plausible user interaction because a
+	// Keychain read can legitimately block on a Touch ID prompt; a call that has
+	// not returned in half a minute is stuck or abandoned, not being answered.
+	defaultHostCallWedgeAfter = 30 * time.Second
+	// Stepping past a wedged call permanently costs the goroutine and the OS
+	// thread its cgo call pinned, so the budget is finite and never reclaimed.
+	// It exists because the alternative — refusing to step past — made the first
+	// stuck call disable every credential read for the life of the process.
+	defaultMaxWedgedHostCalls = 4
+)
+
+// ErrHostSecretsUnresponsive reports that the host secret API stopped returning
+// and the lane has spent its budget for abandoning stuck calls. It is the
+// `unavailable` secret state of design 06 §4.1 reaching a caller as an error,
+// rather than each caller discovering it as its own deadline.
+var ErrHostSecretsUnresponsive = errors.New(
+	"host SecretStore is not responding",
+)
+
+// hostCallLane admits one caller at a time into a delegate that may never
+// return, and can step past an occupant that has stopped responding a bounded
+// number of times.
+type hostCallLane struct {
+	permits    chan struct{}
+	wedgeAfter time.Duration
+
+	mu        sync.Mutex
+	minted    int
+	maxWedged int
+}
+
+func newHostCallLane(wedgeAfter time.Duration, maxWedged int) *hostCallLane {
+	lane := &hostCallLane{
+		permits:    make(chan struct{}, 1+maxWedged),
+		wedgeAfter: wedgeAfter,
+		maxWedged:  maxWedged,
+	}
+	lane.permits <- struct{}{}
+	return lane
+}
+
+// enter blocks until this caller may run the delegate, its context ends, or the
+// lane is judged unresponsive.
+func (lane *hostCallLane) enter(ctx context.Context) error {
+	select {
+	case <-lane.permits:
+		return nil
+	default:
+	}
+	timer := time.NewTimer(lane.wedgeAfter)
+	defer timer.Stop()
+	select {
+	case <-lane.permits:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-timer.C:
+	}
+	if !lane.mintReplacement() {
+		return ErrHostSecretsUnresponsive
+	}
+	select {
+	case <-lane.permits:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+}
+
+// leave returns the permit. A call that was already stepped past may still
+// return much later; the buffer has room for every permit the lane can mint, so
+// the hand-back never blocks and simply restores capacity.
+func (lane *hostCallLane) leave() {
+	select {
+	case lane.permits <- struct{}{}:
+	default:
+	}
+}
+
+func (lane *hostCallLane) mintReplacement() bool {
+	lane.mu.Lock()
+	defer lane.mu.Unlock()
+	if lane.minted >= lane.maxWedged {
+		return false
+	}
+	lane.minted++
+	lane.permits <- struct{}{}
+	return true
+}
+
 // contextBoundReadStore isolates host secret APIs that may ignore Go context
-// cancellation. Exactly one worker may enter each read-only delegate lane. A
-// blocked Security.framework call therefore cannot block its caller or create
-// an unbounded goroutine/OS-thread pile-up on later reads or inspections.
-// Read and Inspect use separate lanes so a blocked health check cannot prevent
-// a data-plane credential read, and vice versa.
+// cancellation. One caller at a time enters each read-only delegate lane, so a
+// blocked Security.framework call cannot block its caller and cannot create an
+// unbounded goroutine or OS-thread pile-up behind it. Read and Inspect use
+// separate lanes so a blocked health check cannot prevent a data-plane
+// credential read, and vice versa.
+//
+// Serializing alone was not enough. A cgo call that never returns holds its lane
+// forever, so the first stuck call disabled every later read for the life of the
+// process and each caller learned it only as its own deadline. A lane may
+// therefore step past an occupant that has stopped responding, a bounded number
+// of times; each step permanently costs the goroutine and OS thread that call
+// pinned, and once the budget is spent the lane reports
+// ErrHostSecretsUnresponsive so the control plane can show the `unavailable`
+// secret state instead of a timeout.
 //
 // Mutations remain direct calls on the embedded Store. Returning early from a
 // mutation would make its commit result ambiguous; only read operations can be
 // safely abandoned by the caller.
 type contextBoundReadStore struct {
 	secretstore.Store
-	reads       chan contextBoundReadRequest
-	inspections chan contextBoundInspectRequest
+	reads       *hostCallLane
+	inspections *hostCallLane
 }
 
 var _ secretstore.Store = (*contextBoundReadStore)(nil)
 
-type contextBoundReadRequest struct {
-	ctx              context.Context
-	reference        secretstore.Reference
-	expectedRevision secretstore.Revision
-	pinned           bool
-	result           chan contextBoundReadResult
-}
-
 type contextBoundReadResult struct {
 	value *secretstore.Value
 	err   error
-}
-
-type contextBoundInspectRequest struct {
-	ctx       context.Context
-	reference secretstore.Reference
-	result    chan contextBoundInspectResult
 }
 
 type contextBoundInspectResult struct {
@@ -50,14 +139,26 @@ type contextBoundInspectResult struct {
 }
 
 func newContextBoundReadStore(delegate secretstore.Store) secretstore.Store {
-	store := &contextBoundReadStore{
+	return newContextBoundReadStoreWithLimits(
+		delegate, defaultHostCallWedgeAfter, defaultMaxWedgedHostCalls,
+	)
+}
+
+// newContextBoundReadStoreWithLimits exists so a test can drive the wedge
+// behaviour without waiting out the production threshold. There are no
+// long-lived goroutines: an accepted call runs on a goroutine that exits when
+// the delegate returns, so opening a store costs nothing and needs no shutdown,
+// and only a call that never returns keeps one alive.
+func newContextBoundReadStoreWithLimits(
+	delegate secretstore.Store,
+	wedgeAfter time.Duration,
+	maxWedged int,
+) secretstore.Store {
+	return &contextBoundReadStore{
 		Store:       delegate,
-		reads:       make(chan contextBoundReadRequest),
-		inspections: make(chan contextBoundInspectRequest),
+		reads:       newHostCallLane(wedgeAfter, maxWedged),
+		inspections: newHostCallLane(wedgeAfter, maxWedged),
 	}
-	go store.runReads()
-	go store.runInspections()
-	return store
 }
 
 func (store *contextBoundReadStore) Read(
@@ -90,60 +191,45 @@ func (store *contextBoundReadStore) read(
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
-	request := contextBoundReadRequest{
-		ctx:              ctx,
-		reference:        reference,
-		expectedRevision: expected,
-		pinned:           pinned,
-		result:           make(chan contextBoundReadResult),
+	if err := store.reads.enter(ctx); err != nil {
+		return nil, err
 	}
-	select {
-	case store.reads <- request:
-	case <-ctx.Done():
-		return nil, ctx.Err()
-	}
-	select {
-	case result := <-request.result:
-		if err := ctx.Err(); err != nil {
-			if result.value != nil {
-				result.value.Destroy()
-			}
-			return nil, err
-		}
-		return result.value, result.err
-	case <-ctx.Done():
-		return nil, ctx.Err()
-	}
-}
-
-func (store *contextBoundReadStore) runReads() {
-	for request := range store.reads {
-		if request.ctx.Err() != nil {
-			continue
-		}
+	// Unbuffered on purpose: the hand-off must be a rendezvous so the goroutine
+	// learns that the caller gave up and can destroy a secret nothing will read.
+	result := make(chan contextBoundReadResult)
+	go func() {
+		defer store.reads.leave()
 		var value *secretstore.Value
 		var err error
-		if request.pinned {
-			value, err = store.Store.ReadAtRevision(
-				request.ctx,
-				request.reference,
-				request.expectedRevision,
-			)
+		if pinned {
+			value, err = store.Store.ReadAtRevision(ctx, reference, expected)
 		} else {
-			value, err = store.Store.Read(request.ctx, request.reference)
+			value, err = store.Store.Read(ctx, reference)
 		}
 		if err != nil && value != nil {
 			value.Destroy()
 			value = nil
 		}
-		result := contextBoundReadResult{value: value, err: err}
 		select {
-		case request.result <- result:
-		case <-request.ctx.Done():
+		case result <- contextBoundReadResult{value: value, err: err}:
+		case <-ctx.Done():
+			// The caller gave up. Nothing else can reach this value.
 			if value != nil {
 				value.Destroy()
 			}
 		}
+	}()
+	select {
+	case outcome := <-result:
+		if err := ctx.Err(); err != nil {
+			if outcome.value != nil {
+				outcome.value.Destroy()
+			}
+			return nil, err
+		}
+		return outcome.value, outcome.err
+	case <-ctx.Done():
+		return nil, ctx.Err()
 	}
 }
 
@@ -159,42 +245,25 @@ func (store *contextBoundReadStore) Inspect(
 	if err := ctx.Err(); err != nil {
 		return secretstore.Metadata{}, err
 	}
-	request := contextBoundInspectRequest{
-		ctx:       ctx,
-		reference: reference,
-		result:    make(chan contextBoundInspectResult),
+	if err := store.inspections.enter(ctx); err != nil {
+		return secretstore.Metadata{}, err
 	}
+	result := make(chan contextBoundInspectResult)
+	go func() {
+		defer store.inspections.leave()
+		metadata, err := store.Store.Inspect(ctx, reference)
+		select {
+		case result <- contextBoundInspectResult{metadata: metadata, err: err}:
+		case <-ctx.Done():
+		}
+	}()
 	select {
-	case store.inspections <- request:
-	case <-ctx.Done():
-		return secretstore.Metadata{}, ctx.Err()
-	}
-	select {
-	case result := <-request.result:
+	case outcome := <-result:
 		if err := ctx.Err(); err != nil {
 			return secretstore.Metadata{}, err
 		}
-		return result.metadata, result.err
+		return outcome.metadata, outcome.err
 	case <-ctx.Done():
 		return secretstore.Metadata{}, ctx.Err()
-	}
-}
-
-func (store *contextBoundReadStore) runInspections() {
-	for request := range store.inspections {
-		if request.ctx.Err() != nil {
-			continue
-		}
-		metadata, err := store.Store.Inspect(
-			request.ctx,
-			request.reference,
-		)
-		select {
-		case request.result <- contextBoundInspectResult{
-			metadata: metadata,
-			err:      err,
-		}:
-		case <-request.ctx.Done():
-		}
 	}
 }

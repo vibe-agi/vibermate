@@ -208,13 +208,15 @@ func MergeClientIdentity(
 	if existing.Client != incoming.Client ||
 		existing.SessionID != incoming.SessionID ||
 		existing.SessionResumable != incoming.SessionResumable ||
-		existing.ActorID != incoming.ActorID ||
-		existing.ActorIsSubagent != incoming.ActorIsSubagent {
+		existing.ActorID != incoming.ActorID {
 		return ClientIdentity{}, false, errors.New("client Agent identity association changed")
 	}
 
 	merged := existing.Clone()
 	var err error
+	if merged.ActorIsSubagent, err = mergeActorSubagent(existing, incoming); err != nil {
+		return ClientIdentity{}, false, err
+	}
 	if merged.ActorLabel, err = mergeOptionalIdentityValue(
 		"actor label", existing.ActorLabel, incoming.ActorLabel,
 	); err != nil {
@@ -267,6 +269,14 @@ func MergeClientIdentity(
 		)
 	}
 	return merged, !merged.Equal(existing), nil
+}
+
+// mergeActorSubagent treats the boolean as positive evidence only. A missing
+// parent identifier means unknown, not root, so any later exact observation may
+// deepen false to true and a sparse retry cannot erase that fact. Conflicting
+// concrete parent identifiers are rejected by mergeIdentityEvidence below.
+func mergeActorSubagent(existing, incoming ClientIdentity) (bool, error) {
+	return existing.ActorIsSubagent || incoming.ActorIsSubagent, nil
 }
 
 func mergeOptionalIdentityValue(name, existing, incoming string) (string, error) {
@@ -706,7 +716,7 @@ func validText(value string, allowEmpty bool) bool {
 		return false
 	}
 	for _, character := range value {
-		if unicode.IsControl(character) {
+		if character == '\uFEFF' || unicode.IsControl(character) {
 			return false
 		}
 	}

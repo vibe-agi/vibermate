@@ -655,6 +655,24 @@ func (repository *activityRepository) ListConversations(
 		   FROM indexed_all
 		   WHERE (? = '' OR capture_run_id = ?)
 		     AND (? = '' OR manual_capture_id = ?)
+		 ), named AS (
+		   SELECT conversation_projection_id,
+		          conversation_display_name,
+		          ROW_NUMBER() OVER (
+		            PARTITION BY conversation_projection_id
+		            ORDER BY CASE
+		              WHEN trim(conversation_display_name) <> ''
+		               AND conversation_display_name <> conversation_actor THEN 0
+		              ELSE 1
+		            END,
+		            sequence DESC
+		          ) AS display_name_rank
+		   FROM indexed
+		 ), preferred_names AS (
+		   SELECT conversation_projection_id,
+		          conversation_display_name
+		   FROM named
+		   WHERE display_name_rank = 1
 		 ), grouped AS (
 		   SELECT conversation_projection_id,
 		          MIN(sequence) AS first_sequence,
@@ -667,16 +685,19 @@ func (repository *activityRepository) ListConversations(
 		   SELECT grouped.first_sequence,
 		          grouped.first_occurred_at_unix_ms,
 		          grouped.turn_count,
+		          preferred_names.conversation_display_name AS preferred_display_name,
 		          indexed.*
 		   FROM grouped
 		   JOIN indexed ON indexed.sequence = grouped.latest_sequence
+		   JOIN preferred_names USING (conversation_projection_id)
 		   WHERE (? = 0 OR grouped.first_sequence < ?)
 		   ORDER BY grouped.first_sequence DESC,
-		            lower(indexed.conversation_display_name) ASC,
+		            lower(preferred_display_name) ASC,
 		            indexed.conversation_projection_id ASC
 		   LIMIT ?
 		 )
 		 SELECT first_sequence, first_occurred_at_unix_ms, turn_count,
+		        preferred_display_name,
 		        sequence, activity_id, occurred_at_unix_ms, kind,
 		        environment_id, environment_revision, environment_digest,
 		        client_endpoint_id, client_endpoint_revision,
@@ -692,7 +713,7 @@ func (repository *activityRepository) ListConversations(
 		        transport_evidence_json
 		 FROM selected
 		 ORDER BY first_sequence DESC,
-		          lower(conversation_display_name) ASC,
+		          lower(preferred_display_name) ASC,
 		          conversation_projection_id ASC`,
 		request.CaptureRunID,
 		request.CaptureRunID,
@@ -709,12 +730,14 @@ func (repository *activityRepository) ListConversations(
 	page := activity.ConversationPage{Items: make([]activity.ConversationRecord, 0)}
 	for rows.Next() {
 		var firstOccurredAt int64
+		var preferredDisplayName string
 		var item activity.ConversationRecord
 		state := activityScanState{record: &item.Latest}
 		targets := []any{
 			&item.FirstSequence,
 			&firstOccurredAt,
 			&item.TurnCount,
+			&preferredDisplayName,
 		}
 		targets = append(targets, state.targets()...)
 		if err := rows.Scan(targets...); err != nil {
@@ -730,6 +753,10 @@ func (repository *activityRepository) ListConversations(
 			return activity.ConversationPage{}, errors.New("Conversation has no reference")
 		}
 		item.Conversation = *item.Latest.Conversation
+		// Identity evidence can deepen after a Conversation has started. Preserve
+		// the latest Activity as immutable evidence while the derived directory
+		// projection keeps the best observed operator-facing label.
+		item.Conversation.DisplayName = preferredDisplayName
 		if err := item.Validate(); err != nil {
 			return activity.ConversationPage{}, fmt.Errorf("validate Conversation: %w", err)
 		}

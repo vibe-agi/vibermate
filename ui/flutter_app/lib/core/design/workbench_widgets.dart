@@ -2,6 +2,28 @@ import 'package:flutter/material.dart';
 
 import 'viber_theme.dart';
 
+/// A restrained desktop loading mark for bounded workbench regions.
+///
+/// Material's unconstrained circular indicator is sized as a primary mobile
+/// affordance. Evidence panels only need a quiet progress cue, so they share
+/// this smaller geometry instead of each choosing an arbitrary spinner size.
+final class CompactProgressIndicator extends StatelessWidget {
+  const CompactProgressIndicator({this.semanticsLabel, super.key});
+
+  final String? semanticsLabel;
+
+  @override
+  Widget build(BuildContext context) {
+    return SizedBox.square(
+      dimension: ViberMetrics.compactProgressSize,
+      child: CircularProgressIndicator(
+        strokeWidth: 1.4,
+        semanticsLabel: semanticsLabel,
+      ),
+    );
+  }
+}
+
 /// A narrow desktop split handle. The adjacent pane must also expose an
 /// ordinary button for collapsing it, so resizing is never the only path.
 final class WorkbenchPaneDivider extends StatelessWidget {

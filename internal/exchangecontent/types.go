@@ -106,6 +106,16 @@ type RequestPresentation struct {
 	InheritedMessageCount int                     `json:"-"`
 }
 
+// RequestView selects whether a read projection carries the complete frozen
+// request or only the exact suffix that was not present in its proven base.
+// It changes presentation only; Record remains the immutable authority.
+type RequestView string
+
+const (
+	RequestViewFull        RequestView = "full"
+	RequestViewIncremental RequestView = "incremental"
+)
+
 func (ref FrozenRef) Validate() error {
 	if ref.EnvironmentID == "" || ref.EnvironmentRevision == 0 ||
 		ref.EnvironmentDigest == "" || ref.ClientEndpointID == "" ||
@@ -163,13 +173,29 @@ type ToolDefinition struct {
 }
 
 type Request struct {
-	RequestedModel   string                               `json:"requestedModel"`
-	EffectiveModel   string                               `json:"effectiveModel"`
-	MaxOutputTokens  int                                  `json:"maxOutputTokens"`
-	Stream           bool                                 `json:"stream"`
+	RequestedModel  string `json:"requestedModel"`
+	EffectiveModel  string `json:"effectiveModel"`
+	MaxOutputTokens int    `json:"maxOutputTokens"`
+	Stream          bool   `json:"stream"`
+	// System is the dialect's top-level instruction parameter — Anthropic
+	// `system`, OpenAI Responses `instructions` — recorded where the wire puts
+	// it. It is per-request configuration, not conversation history, so it is
+	// never synthesized into Messages and never becomes a transcript node. A
+	// dialect without such a parameter, such as OpenAI Chat Completions, leaves
+	// it empty and keeps its instruction message inside Messages.
+	System           []Block                              `json:"system"`
 	Messages         []Message                            `json:"messages"`
 	Tools            []ToolDefinition                     `json:"tools"`
-	ProtocolEvidence []protocolcore.ProtocolEvidenceValue `json:"protocolEvidence,omitempty"`
+	ProtocolEvidence []protocolcore.ProtocolEvidenceValue `json:"protocolEvidence"`
+}
+
+// MarshalJSON keeps every repeated field an array at the exchange-content
+// authority boundary. Control-plane callers can expose Request directly
+// without copying its fields into a second DTO that would drift as the
+// protocol-neutral model evolves.
+func (request Request) MarshalJSON() ([]byte, error) {
+	type wire Request
+	return json.Marshal(wire(cloneRequest(request)))
 }
 
 type UsageValue struct {
@@ -248,7 +274,13 @@ type Response struct {
 	StopReason       string                               `json:"stopReason"`
 	Blocks           []Block                              `json:"blocks"`
 	Usage            Usage                                `json:"usage"`
-	ProtocolEvidence []protocolcore.ProtocolEvidenceValue `json:"protocolEvidence,omitempty"`
+	ProtocolEvidence []protocolcore.ProtocolEvidenceValue `json:"protocolEvidence"`
+}
+
+// MarshalJSON applies the same stable-array contract to response evidence.
+func (response Response) MarshalJSON() ([]byte, error) {
+	type wire Response
+	return json.Marshal(wire(cloneResponse(response)))
 }
 
 // Record contains only the neutral, redacted semantic view. Provider
@@ -264,6 +296,25 @@ type Record struct {
 	Request      Request                          `json:"request"`
 	Response     *Response                        `json:"response,omitempty"`
 	Presentation RequestPresentation              `json:"-"`
+}
+
+// Projection is a bounded read model derived from a retained Record. A full
+// projection contains every request message. An incremental projection may
+// contain only a verified suffix, including zero messages for an exact replay.
+// TotalMessageCount and Presentation preserve the relationship to the full
+// authority without making the partial value pretend to be a Record.
+type Projection struct {
+	ExchangeID        string                           `json:"exchangeId"`
+	Parent            ParentRef                        `json:"parent"`
+	Frozen            FrozenRef                        `json:"frozen"`
+	Mode              environment.ContentRecordingMode `json:"mode"`
+	RecordedAt        time.Time                        `json:"recordedAt"`
+	ExpiresAt         time.Time                        `json:"expiresAt"`
+	Request           Request                          `json:"request"`
+	Response          *Response                        `json:"response,omitempty"`
+	Presentation      RequestPresentation              `json:"-"`
+	View              RequestView                      `json:"-"`
+	TotalMessageCount int                              `json:"-"`
 }
 
 type RecordOption func(*Record) error
@@ -360,6 +411,98 @@ func (record Record) Clone() Record {
 	return cloned
 }
 
+// Project derives a read model from an already verified full Record.
+func Project(record Record, view RequestView) (Projection, error) {
+	if err := record.Validate(); err != nil {
+		return Projection{}, err
+	}
+	request := cloneRequest(record.Request)
+	if view == RequestViewIncremental {
+		request.Messages = record.IncrementalRequest()
+	}
+	projection := Projection{
+		ExchangeID: record.ExchangeID, Parent: record.Parent, Frozen: record.Frozen,
+		Mode: record.Mode, RecordedAt: record.RecordedAt, ExpiresAt: record.ExpiresAt,
+		Request: request, Presentation: record.Presentation, View: view,
+		TotalMessageCount: len(record.Request.Messages),
+	}
+	if record.Response != nil {
+		response := cloneResponse(*record.Response)
+		projection.Response = &response
+	}
+	if err := projection.Validate(); err != nil {
+		return Projection{}, err
+	}
+	return projection.Clone(), nil
+}
+
+func (projection Projection) Validate() error {
+	if !validIdentity(projection.ExchangeID, MaxExchangeIDBytes) ||
+		projection.Parent.Validate() != nil || projection.Frozen.Validate() != nil ||
+		projection.RecordedAt.IsZero() || projection.ExpiresAt.IsZero() ||
+		!projection.ExpiresAt.After(projection.RecordedAt) ||
+		(projection.Mode != environment.ContentRecordingFull &&
+			projection.Mode != environment.ContentRecordingMetadataOnly) ||
+		projection.TotalMessageCount < 1 ||
+		projection.TotalMessageCount > protocolcore.MaxMessageCount+1 {
+		return ErrInvalidEvidence
+	}
+	if err := projection.Request.validateProjection(projection.Mode); err != nil {
+		return err
+	}
+	inherited := projection.Presentation.InheritedMessageCount
+	if inherited < 0 || inherited > projection.TotalMessageCount {
+		return ErrInvalidEvidence
+	}
+	switch projection.Presentation.Mode {
+	case RequestPresentationCheckpoint:
+		if inherited != 0 {
+			return ErrInvalidEvidence
+		}
+	case RequestPresentationIncremental:
+		if inherited == 0 || inherited >= projection.TotalMessageCount {
+			return ErrInvalidEvidence
+		}
+	case RequestPresentationSameTranscript:
+		if inherited != projection.TotalMessageCount {
+			return ErrInvalidEvidence
+		}
+	default:
+		return ErrInvalidEvidence
+	}
+	wantMessages := projection.TotalMessageCount
+	switch projection.View {
+	case RequestViewFull:
+	case RequestViewIncremental:
+		wantMessages -= inherited
+	default:
+		return ErrInvalidEvidence
+	}
+	if len(projection.Request.Messages) != wantMessages {
+		return ErrInvalidEvidence
+	}
+	if projection.Response != nil {
+		if err := projection.Response.validate(projection.Mode); err != nil {
+			return err
+		}
+	}
+	encoded, err := json.Marshal(projection)
+	if err != nil || len(encoded) > MaxEncodedBytes {
+		return fmt.Errorf("%w: encoded projection exceeds its bound", ErrInvalidEvidence)
+	}
+	return nil
+}
+
+func (projection Projection) Clone() Projection {
+	cloned := projection
+	cloned.Request = cloneRequest(projection.Request)
+	if projection.Response != nil {
+		response := cloneResponse(*projection.Response)
+		cloned.Response = &response
+	}
+	return cloned
+}
+
 func (record Record) IncrementalRequest() []Message {
 	inherited := record.Presentation.InheritedMessageCount
 	if inherited < 0 || inherited > len(record.Request.Messages) {
@@ -404,11 +547,24 @@ func DecodeCanonicalJSON(encoded []byte) (Record, error) {
 }
 
 func (request Request) validate(mode environment.ContentRecordingMode) error {
+	if len(request.Messages) == 0 {
+		return fmt.Errorf("%w: request projection is incomplete", ErrInvalidEvidence)
+	}
+	return request.validateProjection(mode)
+}
+
+func (request Request) validateProjection(mode environment.ContentRecordingMode) error {
 	if request.RequestedModel == "" || request.EffectiveModel == "" ||
-		request.MaxOutputTokens < 0 || len(request.Messages) == 0 ||
+		request.MaxOutputTokens < 0 ||
+		len(request.System) > protocolcore.MaxContentBlocks ||
 		len(request.Messages) > protocolcore.MaxMessageCount+1 ||
 		len(request.Tools) > protocolcore.MaxToolCount {
 		return fmt.Errorf("%w: request projection is incomplete", ErrInvalidEvidence)
+	}
+	for _, block := range request.System {
+		if err := block.validate(mode); err != nil {
+			return err
+		}
 	}
 	for _, message := range request.Messages {
 		switch protocolcore.Role(message.Role) {
@@ -547,12 +703,7 @@ func (block Block) validate(mode environment.ContentRecordingMode) error {
 }
 
 func requestView(request protocolcore.Request, full bool) Request {
-	messages := make([]Message, 0, len(request.Messages)+1)
-	if len(request.System) > 0 {
-		messages = append(messages, Message{
-			Role: "system", Blocks: blockViews(request.System, full),
-		})
-	}
+	messages := make([]Message, 0, len(request.Messages))
 	for _, message := range request.Messages {
 		messages = append(messages, Message{
 			Role: string(message.Role), Blocks: blockViews(message.Blocks, full),
@@ -571,8 +722,9 @@ func requestView(request protocolcore.Request, full bool) Request {
 	return Request{
 		RequestedModel: request.RequestedModel, EffectiveModel: request.EffectiveModel,
 		MaxOutputTokens: request.MaxOutputTokens, Stream: request.Stream,
+		System:   blockViews(request.System, full),
 		Messages: messages, Tools: tools,
-		ProtocolEvidence: append([]protocolcore.ProtocolEvidenceValue(nil), request.ProtocolEvidence...),
+		ProtocolEvidence: append([]protocolcore.ProtocolEvidenceValue{}, request.ProtocolEvidence...),
 	}
 }
 
@@ -585,7 +737,7 @@ func responseView(response protocolcore.Response, full bool) Response {
 		StopReason: string(response.StopReason), Blocks: blocks,
 		Usage: usageView(response.Usage),
 		ProtocolEvidence: append(
-			[]protocolcore.ProtocolEvidenceValue(nil),
+			[]protocolcore.ProtocolEvidenceValue{},
 			response.ProtocolEvidence...,
 		),
 	}
@@ -855,6 +1007,7 @@ func secretKey(key string) bool {
 
 func cloneRequest(value Request) Request {
 	cloned := value
+	cloned.System = cloneBlocks(value.System)
 	cloned.Messages = make([]Message, len(value.Messages))
 	for index, message := range value.Messages {
 		cloned.Messages[index] = Message{
@@ -862,8 +1015,8 @@ func cloneRequest(value Request) Request {
 			Agent: cloneAgentContext(message.Agent),
 		}
 	}
-	cloned.Tools = append([]ToolDefinition(nil), value.Tools...)
-	cloned.ProtocolEvidence = append([]protocolcore.ProtocolEvidenceValue(nil), value.ProtocolEvidence...)
+	cloned.Tools = append([]ToolDefinition{}, value.Tools...)
+	cloned.ProtocolEvidence = append([]protocolcore.ProtocolEvidenceValue{}, value.ProtocolEvidence...)
 	return cloned
 }
 
@@ -890,7 +1043,7 @@ func cloneResponse(value Response) Response {
 	cloned := value
 	cloned.Blocks = cloneBlocks(value.Blocks)
 	cloned.ProtocolEvidence = append(
-		[]protocolcore.ProtocolEvidenceValue(nil),
+		[]protocolcore.ProtocolEvidenceValue{},
 		value.ProtocolEvidence...,
 	)
 	return cloned

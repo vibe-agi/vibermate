@@ -225,6 +225,171 @@ void main() {
     expect(identity.searchableValues, contains('aaac343a3a31d4ccf'));
   });
 
+  // The dialect's top-level instruction parameter is a per-request field, not a
+  // turn in the conversation. It has to arrive as its own field so the timeline
+  // can present it as configuration and the transcript can stay append-only.
+  test('Exchange request carries the system parameter as its own field', () {
+    final request = ExchangeRequest.fromJson({
+      'requestedModel': 'claude-opus-5',
+      'effectiveModel': 'claude-opus-5',
+      'maxOutputTokens': 64000,
+      'stream': true,
+      'system': [
+        {
+          'kind': 'text',
+          'availability': 'recorded',
+          'text': 'You are an interactive agent.',
+          'originalSize': 29,
+        },
+      ],
+      'messages': [
+        {
+          'role': 'user',
+          'blocks': [
+            {
+              'kind': 'text',
+              'availability': 'recorded',
+              'text': 'inspect this',
+              'originalSize': 12,
+            },
+          ],
+        },
+      ],
+      'tools': <Object?>[],
+      'protocolEvidence': <Object?>[],
+    }, 'exchange.content.request');
+
+    expect(request.system.single.text, 'You are an interactive agent.');
+    expect(request.messages.single.role, 'user');
+  });
+
+  test('Exchange request accepts a dialect with no system parameter', () {
+    final request = ExchangeRequest.fromJson({
+      'requestedModel': 'gpt-5.6-sol',
+      'effectiveModel': 'gpt-5.6-sol',
+      'maxOutputTokens': 64000,
+      'stream': false,
+      'system': <Object?>[],
+      'messages': [
+        {
+          'role': 'system',
+          'blocks': [
+            {
+              'kind': 'text',
+              'availability': 'recorded',
+              'text': 'inline instruction',
+              'originalSize': 18,
+            },
+          ],
+        },
+      ],
+      'tools': <Object?>[],
+      'protocolEvidence': <Object?>[],
+    }, 'exchange.content.request');
+
+    // OpenAI Chat Completions has no top-level parameter; its instruction is
+    // genuinely a message and must stay in place.
+    expect(request.system, isEmpty);
+    expect(request.messages.single.role, 'system');
+  });
+
+  test('Exchange content retains native request and response identifiers', () {
+    final request = ExchangeRequest.fromJson({
+      'requestedModel': 'claude-opus-5',
+      'effectiveModel': 'claude-opus-5',
+      'maxOutputTokens': 64000,
+      'stream': true,
+      'system': <Object?>[],
+      'messages': [
+        {
+          'role': 'user',
+          'blocks': [
+            {
+              'kind': 'text',
+              'availability': 'recorded',
+              'text': 'inspect this',
+              'originalSize': 12,
+            },
+          ],
+        },
+      ],
+      'tools': <Object?>[],
+      'protocolEvidence': [
+        {'name': 'claude.agent_id', 'value': 'agent-reviewer'},
+        {'name': 'claude.session_id', 'value': 'session-review'},
+      ],
+    }, 'exchange.content.request');
+    final response = ExchangeResponse.fromJson({
+      'id': 'msg-response',
+      'requestedModel': 'claude-opus-5',
+      'effectiveModel': 'claude-opus-5',
+      'reportedModel': 'claude-opus-5',
+      'stopReason': 'end_turn',
+      'blocks': [
+        {
+          'kind': 'text',
+          'availability': 'recorded',
+          'text': 'done',
+          'originalSize': 4,
+        },
+      ],
+      'usage': {
+        'inputUncached': {'known': false},
+        'cacheWrite': {'known': false},
+        'cacheRead': {'known': false},
+        'output': {'known': true, 'tokens': 1, 'source': 'anthropic'},
+        'reasoning': {'known': false},
+      },
+      'protocolEvidence': [
+        {'name': 'anthropic.response_id', 'value': 'msg-response'},
+      ],
+    }, 'exchange.content.response');
+
+    expect(request.protocolEvidence.map((value) => value.name), [
+      'claude.agent_id',
+      'claude.session_id',
+    ]);
+    expect(request.protocolEvidence.last.value, 'session-review');
+    expect(response.protocolEvidence.single.value, 'msg-response');
+    expect(
+      () => ExchangeRequest.fromJson({
+        'requestedModel': 'claude-opus-5',
+        'effectiveModel': 'claude-opus-5',
+        'maxOutputTokens': 64000,
+        'stream': true,
+        'messages': <Object?>[],
+        'tools': <Object?>[],
+      }, 'exchange.content.request'),
+      throwsA(isA<ControlContractException>()),
+    );
+    expect(
+      () => ExchangeRequest.fromJson({
+        'requestedModel': 'claude-opus-5',
+        'effectiveModel': 'claude-opus-5',
+        'maxOutputTokens': 64000,
+        'stream': true,
+        'messages': <Object?>[],
+        'tools': <Object?>[],
+        'protocolEvidence': null,
+      }, 'exchange.content.request'),
+      throwsA(isA<ControlContractException>()),
+    );
+    expect(
+      () => ExchangeRequest.fromJson({
+        'requestedModel': 'claude-opus-5',
+        'effectiveModel': 'claude-opus-5',
+        'maxOutputTokens': 64000,
+        'stream': true,
+        'messages': <Object?>[],
+        'tools': <Object?>[],
+        'protocolEvidence': [
+          {'name': 'claude.session_id', 'value': 'session\uFEFFreview'},
+        ],
+      }, 'exchange.content.request'),
+      throwsA(isA<ControlContractException>()),
+    );
+  });
+
   test('Offline hold accepts only internally consistent safety evidence', () {
     final json = <String, Object?>{
       'state': 'held',
@@ -580,6 +745,53 @@ void main() {
     },
   );
 
+  test('Raw reveal presents a redacted credential field without its value', () {
+    final json = _rawRevealJson();
+    (json['headers']! as List<Object?>).add({
+      'name': 'Authorization',
+      'redacted': [
+        {'digest': List.filled(64, 'a').join(), 'bytes': 41},
+      ],
+    });
+    // The envelope counts header values as observed, before redaction, so a
+    // redacted value still counts. Anything else would make the reveal of every
+    // credential-bearing envelope fail its own reconciliation.
+    (json['envelope']! as Map<String, Object?>)['headerCount'] = 3;
+
+    final reveal = RevealedRawEvidence.fromJson(
+      json,
+      'rawReveal',
+      expectedEnvelopeId: 'raw-test',
+    );
+
+    final authorization = reveal.headers.firstWhere(
+      (field) => field.name == 'Authorization',
+    );
+    expect(authorization.values, isEmpty);
+    expect(authorization.redacted.single.bytes, 41);
+    expect(authorization.redacted.single.digest, List.filled(64, 'a').join());
+  });
+
+  test('Raw reveal rejects a header field carrying both a value and a digest', () {
+    final json = _rawRevealJson();
+    (json['headers']! as List<Object?>).add({
+      'name': 'Authorization',
+      'values': ['Bearer leaked'],
+      'redacted': [
+        {'digest': List.filled(64, 'a').join(), 'bytes': 13},
+      ],
+    });
+
+    expect(
+      () => RevealedRawEvidence.fromJson(
+        json,
+        'rawReveal',
+        expectedEnvelopeId: 'raw-test',
+      ),
+      throwsA(isA<ControlContractException>()),
+    );
+  });
+
   test('Raw reveal rejects tampered body digests and frame ranges', () {
     final valid = _rawRevealJson();
     final reveal = RevealedRawEvidence.fromJson(
@@ -664,7 +876,7 @@ Map<String, Object?> _rawRevealJson() => {
         '2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824',
     'digestScope': 'full_body',
     'payloadState': 'captured',
-    'containsSecret': false,
+    'redactedCredentialFields': <String>[],
     'revealAvailable': true,
   },
   'headers': [

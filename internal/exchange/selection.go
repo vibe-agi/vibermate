@@ -43,8 +43,7 @@ func validateClientOperation(
 		!selected.EgressBearing() ||
 		selected.PathPattern() != evidence.Path() ||
 		!slices.Contains(selected.Methods(), evidence.Method()) ||
-		(evidence.RawQuery() != "" &&
-			!slices.Contains(selected.AllowedQueries(), evidence.RawQuery())) {
+		!selected.AllowsRawQuery(evidence.RawQuery()) {
 		return errors.New(
 			"client operation evidence does not match the frozen Environment plan",
 		)

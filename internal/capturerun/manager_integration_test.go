@@ -35,7 +35,7 @@ func TestCaptureRunPersistsVerifiedAdapterEvidenceWithProxyCapability(
 		CatalogRevision: 7,
 		InstallShape:    clientadapter.InstallNPMWrapperNativeChild,
 		ReleaseSHA256:   "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
-		LaunchRecipe:    clientadapter.LaunchSSLCertFile,
+		LaunchRecipe:    clientadapter.LaunchCodexResponsesHTTP,
 		Features:        clientadapter.FeatureResponsesWebSocketHTTPFallback,
 	}
 	grant, err := first.Create(

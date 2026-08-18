@@ -5,6 +5,20 @@ import (
 	"testing"
 )
 
+func TestIdentifierRejectsByteOrderMark(t *testing.T) {
+	t.Parallel()
+
+	for _, value := range []string{
+		"\uFEFFsession",
+		"session\uFEFFid",
+		"session\uFEFF",
+	} {
+		if err := validateIdentifier("session ID", value, 512); err == nil {
+			t.Fatalf("validateIdentifier(%q) succeeded, want byte-order-mark failure", value)
+		}
+	}
+}
+
 func TestJSONObjectOwnsInputAndRejectsDuplicateNames(t *testing.T) {
 	t.Parallel()
 

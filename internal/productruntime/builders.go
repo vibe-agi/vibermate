@@ -439,7 +439,6 @@ func (productionProviderBuilder) Build(
 type rawEvidenceBuildRequest struct {
 	ctx        context.Context
 	repository rawevidence.Repository
-	secrets    secretstore.Store
 	random     io.Reader
 	clock      rawevidence.Clock
 	config     rawevidence.Config
@@ -506,7 +505,6 @@ func (productionRawEvidenceBuilder) Build(
 ) (rawEvidenceRuntime, error) {
 	return rawevidence.Open(request.ctx, rawevidence.Options{
 		Repository: request.repository,
-		Secrets:    request.secrets,
 		Random:     request.random,
 		Clock:      request.clock,
 		Config:     request.config,

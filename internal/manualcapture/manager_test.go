@@ -1,6 +1,7 @@
 package manualcapture
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"reflect"
@@ -10,6 +11,19 @@ import (
 
 	"github.com/vibe-agi/vibermate/internal/capturecredential"
 )
+
+func TestGeneratedManualCaptureIDHasAControlResourcePrefix(t *testing.T) {
+	t.Parallel()
+
+	id, err := newManualCaptureID(bytes.NewReader(bytes.Repeat([]byte{0xfb}, manualCaptureIDBytes)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.HasPrefix(id.String(), manualCaptureIDPrefix) ||
+		id.String()[0] == '-' || id.String()[0] == '_' {
+		t.Fatalf("generated ManualCapture ID = %q", id.String())
+	}
+}
 
 type fixedClock struct {
 	now time.Time

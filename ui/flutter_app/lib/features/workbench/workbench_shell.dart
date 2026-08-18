@@ -8,7 +8,6 @@ import '../../core/design/vibermate_mark.dart';
 import '../../core/design/workbench_widgets.dart';
 import '../../core/i18n/app_copy.dart';
 import 'captures_view.dart';
-import 'conversations_view.dart';
 import 'endpoints_view.dart';
 import 'environments_view.dart';
 import 'network_view.dart';
@@ -34,12 +33,10 @@ final class WorkbenchShell extends StatelessWidget {
             SingleActivator(LogicalKeyboardKey.digit1, meta: true):
                 _SectionIntent(WorkbenchSection.captures),
             SingleActivator(LogicalKeyboardKey.digit2, meta: true):
-                _SectionIntent(WorkbenchSection.conversations),
-            SingleActivator(LogicalKeyboardKey.digit3, meta: true):
                 _SectionIntent(WorkbenchSection.environments),
-            SingleActivator(LogicalKeyboardKey.digit4, meta: true):
+            SingleActivator(LogicalKeyboardKey.digit3, meta: true):
                 _SectionIntent(WorkbenchSection.routes),
-            SingleActivator(LogicalKeyboardKey.digit5, meta: true):
+            SingleActivator(LogicalKeyboardKey.digit4, meta: true):
                 _SectionIntent(WorkbenchSection.network),
             SingleActivator(LogicalKeyboardKey.comma, meta: true):
                 _SectionIntent(WorkbenchSection.settings),
@@ -97,10 +94,6 @@ final class WorkbenchShell extends StatelessWidget {
     }
     return switch (controller.section) {
       WorkbenchSection.captures => CapturesView(
-        controller: controller,
-        copy: copy,
-      ),
-      WorkbenchSection.conversations => ConversationsView(
         controller: controller,
         copy: copy,
       ),
@@ -386,28 +379,21 @@ final class _NavigationRail extends StatelessWidget {
                 controller.selectSection(WorkbenchSection.captures),
           ),
           _RailButton(
-            icon: Icons.forum_outlined,
-            label: '${copy('nav.conversations')}  ⌘2',
-            selected: controller.section == WorkbenchSection.conversations,
-            onPressed: () =>
-                controller.selectSection(WorkbenchSection.conversations),
-          ),
-          _RailButton(
             icon: Icons.tune,
-            label: '${copy('nav.environments')}  ⌘3',
+            label: '${copy('nav.environments')}  ⌘2',
             selected: controller.section == WorkbenchSection.environments,
             onPressed: () =>
                 controller.selectSection(WorkbenchSection.environments),
           ),
           _RailButton(
             icon: Icons.hub_outlined,
-            label: '${copy('nav.routes')}  ⌘4',
+            label: '${copy('nav.routes')}  ⌘3',
             selected: controller.section == WorkbenchSection.routes,
             onPressed: () => controller.selectSection(WorkbenchSection.routes),
           ),
           _RailButton(
             icon: Icons.security_outlined,
-            label: '${copy('nav.network')}  ⌘5',
+            label: '${copy('nav.network')}  ⌘4',
             selected: controller.section == WorkbenchSection.network,
             onPressed: () => controller.selectSection(WorkbenchSection.network),
           ),
@@ -587,10 +573,7 @@ final class _LoadingView extends StatelessWidget {
       child: Column(
         mainAxisSize: MainAxisSize.min,
         children: [
-          const SizedBox.square(
-            dimension: 24,
-            child: CircularProgressIndicator(strokeWidth: 2),
-          ),
+          const CompactProgressIndicator(),
           const SizedBox(height: 12),
           Text(
             copy('common.loading'),

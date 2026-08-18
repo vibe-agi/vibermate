@@ -693,6 +693,61 @@ func TestActivityRepositoryConversationIndexIsStableAndCounted(t *testing.T) {
 	}
 }
 
+func TestActivityRepositoryConversationIndexKeepsDeepestObservedName(t *testing.T) {
+	t.Parallel()
+	store := openTestStore(t, filepath.Join(t.TempDir(), "runtime.db"))
+	defer shutdownTestStore(t, store)
+	repository := store.ActivityRepository()
+	const (
+		projectionID = "capture_run:run-names:agent:reviewer"
+		actorID      = "reviewer-opaque-id"
+		friendlyName = "Angle A line-by-line scan"
+	)
+	appendTurn := func(exchangeID, displayName string, minute int) {
+		t.Helper()
+		record := activity.Record{
+			ID:                "activity-" + exchangeID,
+			OccurredAt:        time.Date(2026, 8, 15, 10, minute, 0, 0, time.UTC),
+			Kind:              activity.KindExchangeCompleted,
+			SubjectID:         exchangeID,
+			Status:            activity.StatusSucceeded,
+			SourceKind:        activity.SourceCaptureRun,
+			SourceDisplayName: "claude",
+			SourceRecognition: activity.SourceRecognitionVerified,
+			CaptureRunID:      "run-names",
+			ConnectionID:      "connection-" + exchangeID,
+		}
+		setFrozenExecutionEvidence(&record, exchangeID)
+		record.Conversation = &agentconversation.Ref{
+			ProjectionID: projectionID,
+			DisplayName:  displayName,
+			Kind:         agentconversation.KindAgent,
+			Evidence:     agentconversation.EvidenceExplicitActor,
+			Actor:        actorID,
+		}
+		if _, err := repository.Append(context.Background(), record); err != nil {
+			t.Fatal(err)
+		}
+	}
+	appendTurn("named-first", friendlyName, 1)
+	appendTurn("opaque-later", actorID, 2)
+
+	page, err := repository.ListConversations(
+		context.Background(),
+		activity.ConversationIndexRequest{Limit: 10, CaptureRunID: "run-names"},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(page.Items) != 1 || page.Items[0].TurnCount != 2 ||
+		page.Items[0].Latest.SubjectID != "opaque-later" ||
+		page.Items[0].Conversation.DisplayName != friendlyName ||
+		page.Items[0].Latest.Conversation == nil ||
+		page.Items[0].Latest.Conversation.DisplayName != actorID {
+		t.Fatalf("Conversation name projection = %+v", page)
+	}
+}
+
 func TestActivityRepositoryConversationIndexFiltersByCaptureAuthority(t *testing.T) {
 	t.Parallel()
 	store := openTestStore(t, filepath.Join(t.TempDir(), "runtime.db"))

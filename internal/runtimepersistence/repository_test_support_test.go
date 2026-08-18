@@ -39,7 +39,7 @@ func (committer commitThenCloseAdmission) Commit(transaction *sql.Tx) error {
 	return errInjectedCommitResult
 }
 
-func shutdownTestStore(t *testing.T, store *Store) {
+func shutdownTestStore(t testing.TB, store *Store) {
 	t.Helper()
 	if err := store.Shutdown(context.Background()); err != nil {
 		t.Fatalf("shutdown store: %v", err)

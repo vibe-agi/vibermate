@@ -74,19 +74,19 @@ const (
 )
 
 type Capability struct {
-	operationID    protocolspec.ClientOperationID
-	revision       protocolspec.Revision
-	kind           Kind
-	transport      protocolspec.ClientOperationTransport
-	method         string
-	path           string
-	bodyKind       BodyKind
-	maxBodyBytes   int64
-	replayClass    exchange.ReplayClass
-	featureFlags   []string
-	allowedQueries []string
-	payloadClass   protocolspec.OperationPayloadClass
-	egressBearing  bool
+	operationID   protocolspec.ClientOperationID
+	revision      protocolspec.Revision
+	kind          Kind
+	transport     protocolspec.ClientOperationTransport
+	method        string
+	path          string
+	bodyKind      BodyKind
+	maxBodyBytes  int64
+	replayClass   exchange.ReplayClass
+	featureFlags  []string
+	operation     protocolspec.ClientOperationPlan
+	payloadClass  protocolspec.OperationPayloadClass
+	egressBearing bool
 }
 
 func (capability Capability) OperationID() protocolspec.ClientOperationID {
@@ -187,20 +187,24 @@ func NewCatalog(
 		}
 		methods := make(map[string]Capability, len(definition.Methods()))
 		for _, method := range definition.Methods() {
+			operation, err := protocolspec.CompileClientOperation(definition)
+			if err != nil {
+				return nil, err
+			}
 			methods[method] = Capability{
-				operationID:    definition.ID(),
-				revision:       definition.Revision(),
-				kind:           kind,
-				transport:      definition.Transport(),
-				method:         method,
-				path:           definition.PathPattern(),
-				bodyKind:       bodyKind,
-				maxBodyBytes:   definition.MaxBodyBytes(),
-				replayClass:    replayClass,
-				featureFlags:   slices.Clone(featureFlags),
-				allowedQueries: definition.AllowedQueries(),
-				payloadClass:   definition.PayloadClass(),
-				egressBearing:  definition.EgressBearing(),
+				operationID:   definition.ID(),
+				revision:      definition.Revision(),
+				kind:          kind,
+				transport:     definition.Transport(),
+				method:        method,
+				path:          definition.PathPattern(),
+				bodyKind:      bodyKind,
+				maxBodyBytes:  definition.MaxBodyBytes(),
+				replayClass:   replayClass,
+				featureFlags:  slices.Clone(featureFlags),
+				operation:     operation,
+				payloadClass:  definition.PayloadClass(),
+				egressBearing: definition.EgressBearing(),
 			}
 		}
 		switch definition.PathMatch() {
@@ -322,7 +326,7 @@ func (catalog *Catalog) Classify(
 			err:  errors.New("known path does not support this method"),
 		}
 	}
-	if rawQuery != "" && !slices.Contains(capability.allowedQueries, rawQuery) {
+	if !capability.operation.AllowsRawQuery(rawQuery) {
 		return Capability{}, &Failure{
 			Code: ReasonUnsupportedQuery,
 			err:  errors.New("known path does not accept a query"),

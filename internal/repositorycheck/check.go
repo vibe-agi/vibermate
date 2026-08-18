@@ -29,6 +29,84 @@ var (
 			`\b(?:accessId|profileId|access_id|profile_id|workspace_route)\b|` +
 			`/api/v1/accesses\b|workspace-route-bindings\b|\bAI Access\b`,
 	)
+	// atRestEncryptionRE names only constructs that can mean application-layer
+	// field encryption of the local archive. Provider-encrypted reasoning blocks
+	// and TLS blind tunnelling legitimately use the word "encrypted", so the word
+	// itself is deliberately not matched.
+	atRestEncryptionRE = regexp.MustCompile(
+		`\b(?:CipherNonce|cipherNonce|cipher_nonce|Ciphertext|ciphertext|` +
+			`EncryptionKeyRevision|encryptionKeyRevision|encryption_key_revision)\b|` +
+			`\bSQLCipher\b|raw-evidence-key`,
+	)
+	// Symbols were not the only way the removed encryption survived: comments
+	// claiming the archive is encrypted outlived it and read as current
+	// documentation. Inside the packages that own stored evidence, the word is
+	// allowed only in a sentence that states the absence.
+	storageEncryptionProseRE = regexp.MustCompile(`(?i)encrypt`)
+	// A user-facing surface may say "encrypted" about a provider's reasoning
+	// blocks or a TLS tunnel. What it may never say is that the archive itself is
+	// encrypted, or that a data key can be rotated - the two claims
+	// INV-STORE-DISCLOSED names outright.
+	// The Simplified Chinese alternatives are escaped for the same ASCII-only
+	// reason; they read "content", "storage", "database", "archive", "rotate"
+	// and "data key".
+	archiveEncryptionClaimRE = regexp.MustCompile(
+		`(?i)(?:encrypt\w*)[^\n]{0,40}` +
+			`(?:at rest|stored|storage|database|archive|on disk|\x{6b63}\x{6587}|\x{5b58}\x{50a8}|\x{6570}\x{636e}\x{5e93}|\x{5b58}\x{6863})|` +
+			`(?:at rest|stored|storage|database|archive|on disk|\x{6b63}\x{6587}|\x{5b58}\x{50a8}|\x{6570}\x{636e}\x{5e93}|\x{5b58}\x{6863})` +
+			`[^\n]{0,40}(?:encrypt\w*)|` +
+			`(?i)(?:rotate|\x{8f6e}\x{6362})[^\n]{0,24}(?:data key|\x{6570}\x{636e}\x{5bc6}\x{94a5})`,
+	)
+	flutterCopyKeyRE = regexp.MustCompile(`^\s+'([^']+)':`)
+	// A sentence, key or identifier that states the absence is exactly what the
+	// product must be able to say, on every surface. The Simplified Chinese
+	// alternatives are escaped because implementation source is ASCII-only; they
+	// read "not encrypted" and "does not encrypt".
+	storageEncryptionAbsenceRE = regexp.MustCompile(
+		`(?i)forbids|not[_ ]encrypted|never encrypt|no application-layer|` +
+			`without.{0,24}encrypt|rules out|disclose an absence|` +
+			`\x{672a}\x{52a0}\x{5bc6}|\x{4e0d}\x{52a0}\x{5bc6}`,
+	)
+	// A credential-absence claim is recognized by three independent signals
+	// rather than one combined pattern. Alternating unbounded runs across a
+	// sentence backtracks badly on real prose, and three linear scans are both
+	// faster and easier to reason about.
+	//
+	// The Simplified Chinese alternatives are escaped because implementation
+	// source is ASCII-only; they read "credential", "secret", "never", "does
+	// not", "none of them", "removed", "enter the database", "written to disk"
+	// and "storage".
+	credentialNounRE = regexp.MustCompile(
+		`(?i)credential|api[ -]?key|authorization|cookie|` +
+			`\x{51ed}\x{8bc1}|\x{5bc6}\x{94a5}`,
+	)
+	credentialAbsenceRE = regexp.MustCompile(
+		`(?i)\bnever\b|\bno\b|\bnone\b|\bnot\b|\bremoved\b|\bstrips?\b|` +
+			`\x{6c38}\x{4e0d}|\x{4e0d}\x{4f1a}|\x{90fd}\x{4e0d}|\x{79fb}\x{9664}`,
+	)
+	credentialStorageRE = regexp.MustCompile(
+		`(?i)stor\w*|reach\w*|writ\w*|column|database|archive|payload|` +
+			`\x{5165}\x{5e93}|\x{843d}\x{76d8}|\x{5b58}\x{50a8}`,
+	)
+	// What makes the claim honest is naming the domain it covers. Recognition is
+	// by header field name, so any of these turns an absolute statement into a
+	// bounded one. The Chinese alternatives read "credential header" and
+	// "field name".
+	credentialScopeRE = regexp.MustCompile(
+		`(?i)header|field name|by name|predicate|recognized|recognised|` +
+			`identified|known|NameIsCredential|` +
+			`\x{51ed}\x{8bc1}\x{5934}|\x{5b57}\x{6bb5}\x{540d}`,
+	)
+	// A sentence about the SecretStore boundary is a different claim, and it is
+	// absolute because it is true: ProviderAccount and proxy credentials belong
+	// to the host-selected SecretStore and genuinely never enter SQLite. Only
+	// the evidence archive keeps wire bytes it cannot vouch for. The Chinese
+	// alternative reads "secret store".
+	credentialControlPlaneRE = regexp.MustCompile(
+		`(?i)SecretStore|SecretRef|secret_reference|ProviderAccount|` +
+			`AuxiliaryLLM|CredentialBinding|` +
+			`\x{5bc6}\x{94a5}\x{5b58}\x{50a8}`,
+	)
 )
 
 // Violation is one deterministic repository policy failure.
@@ -60,6 +138,9 @@ func Check(repositoryRoot string) error {
 	violations = append(violations, CheckProductionCompositionBoundary(repositoryRoot)...)
 	violations = append(violations, CheckPayloadDispatchBoundary(repositoryRoot)...)
 	violations = append(violations, CheckIdentityComposition(repositoryRoot)...)
+	violations = append(violations, CheckAtRestEncryptionAbsence(repositoryRoot)...)
+	violations = append(violations, CheckCredentialClaimScope(repositoryRoot)...)
+	violations = append(violations, CheckFlutterCopyPair(repositoryRoot)...)
 	violations = append(
 		violations,
 		CheckCatalogPair(
@@ -1457,4 +1538,463 @@ func CheckSignerIdentityBoundary(repositoryRoot string) []Violation {
 		})
 	}
 	return violations
+}
+
+// CheckAtRestEncryptionAbsence keeps application-layer field encryption out of
+// the local archive and out of every surface that describes it.
+//
+// `INV-STORE-DISCLOSED` is a release gate in design 06 §8.1: the product must
+// disclose that the runtime database is not encrypted at rest, and must not
+// display "content is encrypted" or "rotate the data key". An implementation
+// that seals a payload with a key stored beside it buys nothing against the
+// threat model it appears to address, and it did real harm here — it made
+// retaining a live `Authorization` header feel acceptable, and it made the
+// stored bytes incompressible and undedupable. This rule is what stops that
+// construct from returning.
+func CheckAtRestEncryptionAbsence(repositoryRoot string) []Violation {
+	const rule = "at-rest-encryption"
+	surfaceFiles := map[string]struct{}{
+		"README.md":          {},
+		"PLAN.md":            {},
+		"locales/en-US.json": {},
+		"locales/zh-CN.json": {},
+	}
+	productionRoots := []string{"cmd", "internal", "ui/flutter_app/lib", "api"}
+	// Packages that own stored evidence. Elsewhere "encrypted" legitimately
+	// describes provider-encrypted reasoning blocks and TLS tunnelling.
+	storageRoots := []string{
+		"internal/rawevidence/", "internal/runtimepersistence/",
+	}
+	// Every other surface is checked for the narrower claim about the archive.
+	claimSuffixes := []string{".dart", ".json", ".md", ".yaml", ".yml"}
+	var violations []Violation
+	scan := func(path, relative string) error {
+		if relative == "internal/repositorycheck/check.go" ||
+			strings.HasSuffix(relative, "_test.go") {
+			return nil
+		}
+		storage := false
+		for _, root := range storageRoots {
+			if strings.HasPrefix(relative, root) {
+				storage = true
+			}
+		}
+		file, err := os.Open(path)
+		if err != nil {
+			return err
+		}
+		defer file.Close()
+		scanner := bufio.NewScanner(file)
+		scanner.Buffer(make([]byte, 64*1024), 2*1024*1024)
+		lineNumber := 0
+		sentence := ""
+		sentenceLine := 0
+		for scanner.Scan() {
+			lineNumber++
+			line := scanner.Text()
+			if match := atRestEncryptionRE.FindString(line); match != "" {
+				violations = append(violations, Violation{
+					Rule: rule,
+					Path: filepath.FromSlash(relative),
+					Line: lineNumber,
+					Message: fmt.Sprintf(
+						"at-rest archive encryption construct %q entered a current surface",
+						match,
+					),
+				})
+				continue
+			}
+			if !storage {
+				checked := false
+				for _, suffix := range claimSuffixes {
+					if strings.HasSuffix(relative, suffix) {
+						checked = true
+					}
+				}
+				if checked && archiveEncryptionClaimRE.MatchString(line) &&
+					!storageEncryptionAbsenceRE.MatchString(line) {
+					violations = append(violations, Violation{
+						Rule: rule,
+						Path: filepath.FromSlash(relative),
+						Line: lineNumber,
+						Message: "this surface tells the user the archive is " +
+							"encrypted or that a data key rotates; neither is true",
+					})
+				}
+				continue
+			}
+			// Prose wraps, so the claim is judged one sentence at a time: a line
+			// containing "encryption" is often the continuation of a sentence
+			// whose subject is the absence of it.
+			if sentence == "" {
+				sentenceLine = lineNumber
+			}
+			sentence += " " + line
+			trimmed := strings.TrimSpace(line)
+			if trimmed != "" && !strings.HasSuffix(trimmed, ".") {
+				continue
+			}
+			if storageEncryptionProseRE.MatchString(sentence) &&
+				!storageEncryptionAbsenceRE.MatchString(sentence) {
+				violations = append(violations, Violation{
+					Rule: rule,
+					Path: filepath.FromSlash(relative),
+					Line: sentenceLine,
+					Message: "stored evidence is not encrypted; " +
+						"this sentence still says it is",
+				})
+			}
+			sentence = ""
+		}
+		if err := scanner.Err(); err != nil {
+			return err
+		}
+		// A file whose last claim never reached a full stop must still be judged.
+		if storage && sentence != "" &&
+			storageEncryptionProseRE.MatchString(sentence) &&
+			!storageEncryptionAbsenceRE.MatchString(sentence) {
+			violations = append(violations, Violation{
+				Rule: rule,
+				Path: filepath.FromSlash(relative),
+				Line: sentenceLine,
+				Message: "stored evidence is not encrypted; " +
+					"this sentence still says it is",
+			})
+		}
+		return nil
+	}
+	for relative := range surfaceFiles {
+		path := filepath.Join(repositoryRoot, filepath.FromSlash(relative))
+		if _, err := os.Stat(path); errors.Is(err, os.ErrNotExist) {
+			continue
+		}
+		if err := scan(path, relative); err != nil {
+			violations = append(violations, Violation{
+				Rule: rule, Path: filepath.FromSlash(relative), Message: err.Error(),
+			})
+		}
+	}
+	for _, relativeRoot := range productionRoots {
+		root := filepath.Join(repositoryRoot, filepath.FromSlash(relativeRoot))
+		if _, err := os.Stat(root); errors.Is(err, os.ErrNotExist) {
+			continue
+		}
+		walkErr := filepath.WalkDir(root, func(
+			path string,
+			entry fs.DirEntry,
+			err error,
+		) error {
+			if err != nil {
+				return err
+			}
+			if entry.IsDir() {
+				switch entry.Name() {
+				case "generated", "node_modules", "target", "testdata", "vendor":
+					return filepath.SkipDir
+				default:
+					return nil
+				}
+			}
+			switch filepath.Ext(path) {
+			case ".dart", ".go", ".json", ".sql", ".yaml", ".yml":
+			default:
+				return nil
+			}
+			relative, relativeErr := filepath.Rel(repositoryRoot, path)
+			if relativeErr != nil {
+				return relativeErr
+			}
+			return scan(path, filepath.ToSlash(relative))
+		})
+		if walkErr != nil {
+			violations = append(violations, Violation{
+				Rule: rule, Path: filepath.FromSlash(relativeRoot), Message: walkErr.Error(),
+			})
+		}
+	}
+	return violations
+}
+
+// prose reports whether a trimmed source line carries human-readable text: a
+// comment in any of the languages this repository uses, or a single-quoted
+// string, which is the shape a Dart copy entry takes. Double quotes are left
+// out on purpose: in Go they open a map-literal key, not a sentence.
+func prose(trimmed string) bool {
+	switch {
+	case strings.HasPrefix(trimmed, "//"),
+		strings.HasPrefix(trimmed, "--"),
+		strings.HasPrefix(trimmed, "*"),
+		strings.HasPrefix(trimmed, "'"):
+		return true
+	default:
+		return false
+	}
+}
+
+// CheckCredentialClaimScope keeps every statement about credential absence
+// bounded to what the product actually does.
+//
+// The archive removes the values of headers whose names match the credential
+// predicate. It does not scan bodies, tool arguments or query strings, and it
+// must not, because rewriting observed bytes is how a forensic archive stops
+// being evidence. An unbounded sentence — "no credential value is stored" —
+// therefore tells a user something false in the one direction that costs them
+// something: it reads as permission to paste a key into a prompt.
+//
+// The scope was corrected by hand once, across four surfaces, and the sweep
+// missed several more. This rule is what makes the claim checkable instead of
+// remembered.
+func CheckCredentialClaimScope(repositoryRoot string) []Violation {
+	const rule = "credential-claim-scope"
+	// Packages that own stored evidence. Elsewhere a credential absence claim is
+	// about the control plane or a DTO, where it is both true and unrelated.
+	storageRoots := []string{
+		"internal/rawevidence/", "internal/runtimepersistence/",
+	}
+	// The shipping surfaces that describe the archive to a user.
+	surfaceFiles := []string{
+		"ui/flutter_app/lib/core/i18n/app_copy.dart",
+		"ui/flutter_app/lib/features/workbench/settings_view.dart",
+		"ui/flutter_app/lib/features/workbench/conversation_timeline.dart",
+		"ui/flutter_app/lib/preview/preview_control_api.dart",
+	}
+	var violations []Violation
+	judgeSentence := func(relative, sentence string, line int) {
+		if !credentialStorageRE.MatchString(sentence) ||
+			credentialScopeRE.MatchString(sentence) ||
+			credentialControlPlaneRE.MatchString(sentence) {
+			return
+		}
+		// The negation has to be about the credential, not merely nearby. In
+		// "a query-string API key lands in a plaintext column, and no dialect
+		// this product supports uses it", every signal is present and no claim
+		// about credential absence is made. Requiring the noun and the negation
+		// to share a clause is what tells the two apart.
+		claimed := false
+		for _, clause := range strings.FieldsFunc(sentence, func(r rune) bool {
+			return r == ',' || r == ';' || r == ':'
+		}) {
+			if credentialNounRE.MatchString(clause) &&
+				credentialAbsenceRE.MatchString(clause) {
+				claimed = true
+				break
+			}
+		}
+		if !claimed {
+			return
+		}
+		violations = append(violations, Violation{
+			Rule: rule,
+			Path: filepath.FromSlash(relative),
+			Line: line,
+			Message: "this sentence claims credential absence without naming " +
+				"its scope; only recognized credential header values are " +
+				"removed, and bodies, tool arguments and query strings are not",
+		})
+	}
+	// A flushed block is split on its own full stops before judging. A line
+	// often ends one sentence and starts another, and a later sentence that
+	// names the scope must not launder an earlier one that made the claim
+	// without it.
+	judge := func(relative, block string, line int) {
+		for _, sentence := range strings.SplitAfter(block, ". ") {
+			judgeSentence(relative, sentence, line)
+		}
+	}
+	scan := func(path, relative string) error {
+		if relative == "internal/repositorycheck/check.go" {
+			return nil
+		}
+		file, err := os.Open(path)
+		if err != nil {
+			return err
+		}
+		defer file.Close()
+		scanner := bufio.NewScanner(file)
+		scanner.Buffer(make([]byte, 64*1024), 2*1024*1024)
+		lineNumber := 0
+		block := ""
+		blockLine := 0
+		for scanner.Scan() {
+			lineNumber++
+			trimmed := strings.TrimSpace(scanner.Text())
+			// The rule judges prose, and code is not prose. Accumulating code
+			// lines lets a parameter named `credential`, an unrelated `never`
+			// and the word `database` combine across a whole function into a
+			// claim that no line actually makes.
+			if !prose(trimmed) {
+				if block != "" {
+					judge(relative, block, blockLine)
+					block = ""
+				}
+				continue
+			}
+			if block == "" {
+				blockLine = lineNumber
+			}
+			block += " " + trimmed
+			// Prose wraps, so a claim is judged one sentence at a time. A Dart
+			// copy entry ends on a comma rather than a full stop, so both close
+			// a block here.
+			if !strings.HasSuffix(trimmed, ".") &&
+				!strings.HasSuffix(trimmed, "',") {
+				continue
+			}
+			judge(relative, block, blockLine)
+			block = ""
+		}
+		if err := scanner.Err(); err != nil {
+			return err
+		}
+		// A file whose last claim never reached a full stop must still be judged.
+		if block != "" {
+			judge(relative, block, blockLine)
+		}
+		return nil
+	}
+	paths := make(map[string]struct{}, len(surfaceFiles))
+	for _, relative := range surfaceFiles {
+		paths[relative] = struct{}{}
+	}
+	for _, relativeRoot := range storageRoots {
+		root := filepath.Join(repositoryRoot, filepath.FromSlash(relativeRoot))
+		if _, err := os.Stat(root); errors.Is(err, os.ErrNotExist) {
+			continue
+		}
+		walkErr := filepath.WalkDir(root, func(
+			path string,
+			entry fs.DirEntry,
+			err error,
+		) error {
+			if err != nil {
+				return err
+			}
+			if entry.IsDir() {
+				switch entry.Name() {
+				case "generated", "node_modules", "target", "testdata", "vendor":
+					return filepath.SkipDir
+				default:
+					return nil
+				}
+			}
+			switch filepath.Ext(path) {
+			case ".go", ".sql":
+			default:
+				return nil
+			}
+			relative, relativeErr := filepath.Rel(repositoryRoot, path)
+			if relativeErr != nil {
+				return relativeErr
+			}
+			paths[filepath.ToSlash(relative)] = struct{}{}
+			return nil
+		})
+		if walkErr != nil {
+			violations = append(violations, Violation{
+				Rule: rule, Path: filepath.FromSlash(relativeRoot),
+				Message: walkErr.Error(),
+			})
+		}
+	}
+	ordered := make([]string, 0, len(paths))
+	for relative := range paths {
+		ordered = append(ordered, relative)
+	}
+	sort.Strings(ordered)
+	for _, relative := range ordered {
+		path := filepath.Join(repositoryRoot, filepath.FromSlash(relative))
+		if _, err := os.Stat(path); errors.Is(err, os.ErrNotExist) {
+			continue
+		}
+		if err := scan(path, relative); err != nil {
+			violations = append(violations, Violation{
+				Rule: rule, Path: filepath.FromSlash(relative), Message: err.Error(),
+			})
+		}
+	}
+	return violations
+}
+
+// CheckFlutterCopyPair keeps the Dart copy table's two language maps in step.
+//
+// AppCopy resolves a missing key to the key itself, so an untranslated string
+// reaches the user as `exchange.system_parameter` and no widget test notices. The
+// JSON locale catalogs already have a parity gate; this is the same gate for the
+// table the Flutter workbench actually reads.
+func CheckFlutterCopyPair(repositoryRoot string) []Violation {
+	const rule = "flutter-copy-parity"
+	relative := "ui/flutter_app/lib/core/i18n/app_copy.dart"
+	path := filepath.Join(repositoryRoot, filepath.FromSlash(relative))
+	contents, err := os.ReadFile(path)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return nil
+		}
+		return []Violation{{
+			Rule: rule, Path: filepath.FromSlash(relative), Message: err.Error(),
+		}}
+	}
+	english, englishErr := flutterCopyKeys(string(contents), "_en")
+	chinese, chineseErr := flutterCopyKeys(string(contents), "_zh")
+	for _, mapErr := range []error{englishErr, chineseErr} {
+		if mapErr != nil {
+			return []Violation{{
+				Rule: rule, Path: filepath.FromSlash(relative),
+				Message: mapErr.Error(),
+			}}
+		}
+	}
+	var violations []Violation
+	report := func(missingFrom string, keys map[string]int, other map[string]int) {
+		names := make([]string, 0)
+		for key := range keys {
+			if _, ok := other[key]; !ok {
+				names = append(names, key)
+			}
+		}
+		sort.Strings(names)
+		for _, key := range names {
+			violations = append(violations, Violation{
+				Rule: rule,
+				Path: filepath.FromSlash(relative),
+				Line: keys[key],
+				Message: fmt.Sprintf(
+					"copy key %q is missing from %s, so it would render as its own key",
+					key, missingFrom,
+				),
+			})
+		}
+	}
+	report("_zh", english, chinese)
+	report("_en", chinese, english)
+	return violations
+}
+
+// flutterCopyKeys returns each key in one `static const <name> = <String,
+// String>{ ... }` literal, mapped to the line it is declared on. A key is a
+// quoted string at the start of a line followed by a colon, which excludes the
+// wrapped continuation lines of a long value.
+func flutterCopyKeys(contents, name string) (map[string]int, error) {
+	opening := "static const " + name + " = <String, String>{"
+	start := strings.Index(contents, opening)
+	if start < 0 {
+		return nil, fmt.Errorf("copy table %s was not found", name)
+	}
+	line := 1 + strings.Count(contents[:start], "\n")
+	keys := make(map[string]int)
+	for _, text := range strings.Split(contents[start:], "\n")[1:] {
+		line++
+		if strings.TrimSpace(text) == "};" {
+			return keys, nil
+		}
+		match := flutterCopyKeyRE.FindStringSubmatch(text)
+		if match == nil {
+			continue
+		}
+		if _, duplicate := keys[match[1]]; duplicate {
+			return nil, fmt.Errorf("copy key %q is declared twice in %s", match[1], name)
+		}
+		keys[match[1]] = line
+	}
+	return nil, fmt.Errorf("copy table %s was not terminated", name)
 }

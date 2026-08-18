@@ -67,10 +67,7 @@ final class _NetworkViewState extends State<NetworkView> {
           child: Column(
             mainAxisSize: MainAxisSize.min,
             children: [
-              const SizedBox.square(
-                dimension: 22,
-                child: CircularProgressIndicator(strokeWidth: 1.7),
-              ),
+              const CompactProgressIndicator(),
               const SizedBox(height: 10),
               Text(
                 copy('common.loading'),

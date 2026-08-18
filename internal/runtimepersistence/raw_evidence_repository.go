@@ -25,8 +25,8 @@ const rawEvidenceColumns = `
   method, status_code, scheme, authority, path, raw_query,
   content_type, content_encoding, representation, canonicalization,
   header_count, trailer_count, body_bytes, body_sha256,
-  digest_scope, payload_state, payload_reason, contains_secret,
-  encryption_key_revision, cipher_nonce, ciphertext`
+  digest_scope, payload_state, payload_reason, redacted_credential_fields,
+  payload_metadata, stored_body_digest`
 
 type rawEvidenceRepository struct {
 	database   *sql.DB
@@ -79,17 +79,38 @@ func (repository *rawEvidenceRepository) AppendBatch(
 		return fmt.Errorf("prepare raw evidence append: %w", err)
 	}
 	defer statement.Close()
-	if _, err := transaction.ExecContext(
+	expired, err := transaction.ExecContext(
 		operation,
 		`DELETE FROM runtime_raw_evidence_envelopes
 		 WHERE expires_at_unix_ms <= ?`,
 		toUnixMillis(now.UTC()),
-	); err != nil {
+	)
+	if err != nil {
 		return fmt.Errorf("purge expired raw evidence: %w", err)
 	}
+	releasedEnvelopes, err := expired.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("read purged raw evidence count: %w", err)
+	}
 	for _, record := range records {
-		if _, err := statement.ExecContext(operation, rawEvidenceArguments(record)...); err != nil {
+		storedBodyDigest, bodyErr := storeEvidenceBody(
+			operation, transaction, record.Body,
+		)
+		if bodyErr != nil {
+			return bodyErr
+		}
+		if _, err := statement.ExecContext(
+			operation, rawEvidenceArguments(record, storedBodyDigest)...,
+		); err != nil {
 			return fmt.Errorf("append raw evidence envelope: %w", err)
+		}
+	}
+	// Reachability is only recomputed when an envelope actually went away.
+	// Running it on every batch would scan every body and every envelope for
+	// each commit, which is the shape of cost this store exists to avoid.
+	if releasedEnvelopes > 0 {
+		if err := purgeUnreferencedEvidenceBytes(operation, transaction); err != nil {
+			return err
 		}
 	}
 	if err := transaction.Commit(); err != nil {
@@ -111,16 +132,23 @@ func (repository *rawEvidenceRepository) GetEnvelope(
 		return rawevidence.StoredEnvelope{}, err
 	}
 	defer finish()
-	record, err := scanRawEvidence(repository.database.QueryRowContext(
-		operation,
-		`SELECT `+rawEvidenceColumns+`
-		 FROM runtime_raw_evidence_envelopes WHERE envelope_id = ?`,
-		envelopeID,
-	))
+	record, storedBodyDigest, err := scanRawEvidence(
+		repository.database.QueryRowContext(
+			operation,
+			`SELECT `+rawEvidenceColumns+`
+			 FROM runtime_raw_evidence_envelopes WHERE envelope_id = ?`,
+			envelopeID,
+		),
+	)
 	if errors.Is(err, sql.ErrNoRows) {
 		return rawevidence.StoredEnvelope{}, rawevidence.ErrEnvelopeNotFound
 	}
-	return record, err
+	if err != nil {
+		return rawevidence.StoredEnvelope{}, err
+	}
+	return attachEvidenceBody(
+		operation, repository.database, record, storedBodyDigest,
+	)
 }
 
 func (repository *rawEvidenceRepository) AppendRevealAudit(
@@ -203,6 +231,14 @@ func (repository *rawEvidenceRepository) BeginWriterSession(
 	if err != nil {
 		return rawevidence.Recovery{}, fmt.Errorf("read raw evidence purge result: %w", err)
 	}
+	// Recovery is the path that expires the most rows at once, and the sweep
+	// AppendBatch runs is conditional on its own deletion — so without this the
+	// bytes these envelopes were the sole reference to would never be reclaimed.
+	if purged > 0 {
+		if err := purgeUnreferencedEvidenceBytes(operation, transaction); err != nil {
+			return rawevidence.Recovery{}, err
+		}
+	}
 	if _, err := transaction.ExecContext(
 		operation,
 		`INSERT INTO runtime_raw_evidence_writer_sessions(
@@ -254,14 +290,17 @@ func (repository *rawEvidenceRepository) CloseWriterSession(
 	return nil
 }
 
-const rawEvidenceColumnCount = 46
+const rawEvidenceColumnCount = 45
 
 var rawEvidencePlaceholders = strings.TrimSuffix(
 	strings.Repeat("?,", rawEvidenceColumnCount),
 	",",
 )
 
-func rawEvidenceArguments(record rawevidence.StoredEnvelope) []any {
+func rawEvidenceArguments(
+	record rawevidence.StoredEnvelope,
+	storedBodyDigest []byte,
+) []any {
 	return []any{
 		record.EnvelopeID, record.WriterID, record.Watermark, string(record.Layer),
 		string(record.ScopeKind), record.ScopeID, record.ExchangeID,
@@ -279,10 +318,22 @@ func rawEvidenceArguments(record rawevidence.StoredEnvelope) []any {
 		record.HeaderCount, record.TrailerCount, record.BodyBytes,
 		record.BodySHA256[:], string(record.DigestScope),
 		string(record.PayloadState), record.PayloadReason,
-		boolToSQLite(record.ContainsSecret),
-		record.EncryptionKeyRevision,
-		record.CipherNonce, record.Ciphertext,
+		encodeRedactedCredentialFields(record.RedactedCredentialFields),
+		nonNullSQLiteBlob(record.PayloadMetadata),
+		storedBodyDigest,
 	}
+}
+
+// SQLite distinguishes a nil []byte (NULL) from an empty []byte (a zero-length
+// BLOB). The raw-evidence schema deliberately uses the latter for metadata-only
+// and unavailable payloads so every row has one stable binary shape while the
+// payload-state CHECK continues to enforce that a captured payload has metadata
+// and an uncaptured one has none.
+func nonNullSQLiteBlob(value []byte) []byte {
+	if value == nil {
+		return []byte{}
+	}
+	return value
 }
 
 func (repository *rawEvidenceRepository) ListExchange(
@@ -308,17 +359,38 @@ func (repository *rawEvidenceRepository) ListExchange(
 	if err != nil {
 		return nil, fmt.Errorf("list raw evidence envelopes: %w", err)
 	}
-	defer rows.Close()
-	records := make([]rawevidence.StoredEnvelope, 0)
+	type scanned struct {
+		record           rawevidence.StoredEnvelope
+		storedBodyDigest []byte
+	}
+	pending := make([]scanned, 0)
 	for rows.Next() {
-		record, err := scanRawEvidence(rows)
-		if err != nil {
-			return nil, err
+		record, storedBodyDigest, scanErr := scanRawEvidence(rows)
+		if scanErr != nil {
+			_ = rows.Close()
+			return nil, scanErr
 		}
-		records = append(records, record)
+		pending = append(pending, scanned{record, storedBodyDigest})
 	}
 	if err := rows.Err(); err != nil {
+		_ = rows.Close()
 		return nil, fmt.Errorf("iterate raw evidence envelopes: %w", err)
+	}
+	// The rows must be closed before any body is read: the store keeps one open
+	// connection, and resolving a body while these rows are open would wait for a
+	// connection this call is still holding.
+	if err := rows.Close(); err != nil {
+		return nil, fmt.Errorf("close raw evidence envelopes: %w", err)
+	}
+	records := make([]rawevidence.StoredEnvelope, 0, len(pending))
+	for _, item := range pending {
+		record, attachErr := attachEvidenceBody(
+			operation, repository.database, item.record, item.storedBodyDigest,
+		)
+		if attachErr != nil {
+			return nil, attachErr
+		}
+		records = append(records, record)
 	}
 	return records, nil
 }
@@ -327,14 +399,25 @@ type rawEvidenceRow interface {
 	Scan(...any) error
 }
 
-func scanRawEvidence(row rawEvidenceRow) (rawevidence.StoredEnvelope, error) {
+// scanRawEvidence reads one row and returns the digest of its stored body
+// without resolving it.
+//
+// Resolution is a separate step on purpose. The store runs with one open
+// connection, so issuing a query while an outer *sql.Rows is still open waits
+// forever for a connection that the same call holds. A caller iterating rows
+// must therefore finish and close them before attaching bodies.
+func scanRawEvidence(
+	row rawEvidenceRow,
+) (rawevidence.StoredEnvelope, []byte, error) {
 	var (
-		record                        rawevidence.StoredEnvelope
-		layer, scopeKind              string
-		observedAt, expiresAt         int64
-		digestScope, payloadState     string
-		containsSecret                int64
-		bodyDigest, nonce, ciphertext []byte
+		record                    rawevidence.StoredEnvelope
+		layer, scopeKind          string
+		observedAt, expiresAt     int64
+		digestScope, payloadState string
+		redactedFields            string
+		observedDigest            []byte
+		payloadMetadata           []byte
+		storedBodyDigest          []byte
 	)
 	if err := row.Scan(
 		&record.EnvelopeID, &record.WriterID, &record.Watermark, &layer,
@@ -350,26 +433,49 @@ func scanRawEvidence(row rawEvidenceRow) (rawevidence.StoredEnvelope, error) {
 		&record.Scheme, &record.Authority, &record.Path, &record.RawQuery,
 		&record.ContentType, &record.ContentEncoding, &record.Representation,
 		&record.Canonicalization, &record.HeaderCount, &record.TrailerCount,
-		&record.BodyBytes, &bodyDigest, &digestScope, &payloadState,
-		&record.PayloadReason, &containsSecret, &record.EncryptionKeyRevision,
-		&nonce, &ciphertext,
+		&record.BodyBytes, &observedDigest, &digestScope, &payloadState,
+		&record.PayloadReason, &redactedFields, &payloadMetadata,
+		&storedBodyDigest,
 	); err != nil {
-		return rawevidence.StoredEnvelope{}, fmt.Errorf("scan raw evidence envelope: %w", err)
+		return rawevidence.StoredEnvelope{}, nil, fmt.Errorf(
+			"scan raw evidence envelope: %w", err,
+		)
 	}
-	if len(bodyDigest) != len(record.BodySHA256) ||
-		(containsSecret != 0 && containsSecret != 1) {
-		return rawevidence.StoredEnvelope{}, errors.New("stored raw evidence shape is invalid")
+	if len(observedDigest) != len(record.BodySHA256) {
+		return rawevidence.StoredEnvelope{}, nil, errors.New(
+			"stored raw evidence shape is invalid",
+		)
 	}
-	copy(record.BodySHA256[:], bodyDigest)
+	decodedFields, err := decodeRedactedCredentialFields(redactedFields)
+	if err != nil {
+		return rawevidence.StoredEnvelope{}, nil, err
+	}
+	copy(record.BodySHA256[:], observedDigest)
 	record.Layer = rawevidence.Layer(layer)
 	record.ScopeKind = rawevidence.ScopeKind(scopeKind)
 	record.ObservedAt = time.UnixMilli(observedAt).UTC()
 	record.ExpiresAt = time.UnixMilli(expiresAt).UTC()
 	record.DigestScope = rawevidence.DigestScope(digestScope)
 	record.PayloadState = rawevidence.PayloadState(payloadState)
-	record.ContainsSecret = containsSecret == 1
-	record.CipherNonce = slices.Clone(nonce)
-	record.Ciphertext = slices.Clone(ciphertext)
+	record.RedactedCredentialFields = decodedFields
+	record.PayloadMetadata = slices.Clone(payloadMetadata)
+	return record, slices.Clone(storedBodyDigest), nil
+}
+
+// attachEvidenceBody rejoins a scanned record with its stored bytes and validates
+// the result, so a caller never sees a record whose body was not reassembled and
+// verified against its digest.
+func attachEvidenceBody(
+	ctx context.Context,
+	queryer evidenceQueryer,
+	record rawevidence.StoredEnvelope,
+	storedBodyDigest []byte,
+) (rawevidence.StoredEnvelope, error) {
+	body, err := loadEvidenceBody(ctx, queryer, storedBodyDigest)
+	if err != nil {
+		return rawevidence.StoredEnvelope{}, err
+	}
+	record.Body = body
 	if err := record.Validate(); err != nil {
 		return rawevidence.StoredEnvelope{}, err
 	}

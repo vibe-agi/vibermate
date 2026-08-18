@@ -304,20 +304,12 @@ final class _CaptureMaster extends StatelessWidget {
     );
   }
 
+  // The last-activity stamp used to prefer a global Conversation index, which
+  // only ever loaded while the retired Conversations section was on screen. A
+  // Capture row therefore showed a different time depending on where the user
+  // had browsed. The selected Capture's own Activities are exact, and the
+  // Capture's own timestamps are the answer for every other row.
   DateTime _activityAt(CaptureRecord capture) {
-    final matching = controller.conversations.where((conversation) {
-      return capture.isManual
-          ? conversation.latest.manualCaptureId == capture.id
-          : conversation.captureRunId == capture.captureRunId;
-    });
-    final loaded = matching
-        .map((value) => value.latest.occurredAt)
-        .fold<DateTime?>(
-          null,
-          (latest, value) =>
-              latest == null || value.isAfter(latest) ? value : latest,
-        );
-    if (loaded != null) return loaded;
     if (capture.key == controller.selectedCaptureKey &&
         controller.selectedActivities.isNotEmpty) {
       return controller.selectedActivities
@@ -550,7 +542,7 @@ final class _CaptureDetail extends StatelessWidget {
             ),
           Expanded(
             child: controller.detailLoading
-                ? const Center(child: CircularProgressIndicator(strokeWidth: 2))
+                ? const Center(child: CompactProgressIndicator())
                 : _CaptureConversationWorkspace(
                     controller: controller,
                     copy: copy,
@@ -619,19 +611,27 @@ final class _CaptureConversationWorkspaceState
     final timelineTitle = selected?.exchangeScoped == true
         ? copy('conversation.exchanges_title')
         : copy('capture.conversation');
-    final timeline = EvidenceConversationTimeline(
-      key: ValueKey(
-        'capture-timeline:${controller.selectedCaptureConversationKey ?? 'empty'}',
-      ),
-      controller: controller,
-      activities: controller.selectedActivities,
-      copy: copy,
-      title: timelineTitle,
-      canLoadEarlier: controller.selectedCapturePage?.nextCursor != null,
-      loadingEarlier: controller.captureActivitiesLoading,
-      exchangeScoped: selected?.exchangeScoped ?? false,
-      onLoadEarlier: () => unawaited(controller.loadMoreSelectedCapture()),
-    );
+    final Widget timeline =
+        controller.captureActivitiesLoading &&
+            controller.selectedCapturePage == null
+        ? CenteredMessage(
+            icon: Icons.sync_rounded,
+            title: copy('common.loading'),
+          )
+        : EvidenceConversationTimeline(
+            key: ValueKey(
+              'capture-timeline:${controller.selectedCaptureConversationKey ?? 'empty'}',
+            ),
+            controller: controller,
+            activities: controller.selectedActivities,
+            copy: copy,
+            title: timelineTitle,
+            canLoadEarlier: controller.selectedCapturePage?.nextCursor != null,
+            loadingEarlier: controller.captureActivitiesLoading,
+            exchangeScoped: selected?.exchangeScoped ?? false,
+            onLoadEarlier: () =>
+                unawaited(controller.loadMoreSelectedCapture()),
+          );
     if (conversations.length <= 1) return timeline;
     return LayoutBuilder(
       builder: (context, constraints) {
@@ -1105,15 +1105,15 @@ String _captureConversationTitle(
     'main' => copy('capture.conversation_main'),
     'agent' when actorLabel != null && actorLabel.isNotEmpty => actorLabel,
     'agent'
-        when identity?.actorIsSubagent == true &&
-            actorId != null &&
-            actorId.isNotEmpty =>
-      'subagent · ${_compactNativeIdentity(actorId)}',
-    'agent'
         when displayName != null &&
             displayName.isNotEmpty &&
             displayName != actorId =>
       displayName,
+    'agent'
+        when identity?.actorIsSubagent == true &&
+            actorId != null &&
+            actorId.isNotEmpty =>
+      'subagent · ${_compactNativeIdentity(actorId)}',
     'agent' when actorId != null && actorId.isNotEmpty =>
       '${identity?.client ?? 'agent'} · ${_compactNativeIdentity(actorId)}',
     'isolated_subagent' => copy.format('capture.conversation_subagent', {
@@ -1914,7 +1914,7 @@ final class _ManualCaptureCreateDialogState
                   const Center(
                     child: Padding(
                       padding: EdgeInsets.all(12),
-                      child: CircularProgressIndicator(strokeWidth: 1.6),
+                      child: CompactProgressIndicator(),
                     ),
                   )
                 else if (_context case final captureContext?)

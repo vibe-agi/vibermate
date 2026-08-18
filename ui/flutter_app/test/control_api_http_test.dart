@@ -232,6 +232,7 @@ void main() {
                   ],
                 },
                 'request': {
+                  'system': <Object?>[],
                   'requestedModel': 'gpt-5.6-sol',
                   'effectiveModel': 'gpt-5.6-sol',
                   'maxOutputTokens': 0,
@@ -255,6 +256,10 @@ void main() {
                     },
                   ],
                   'tools': <Object>[],
+                  'protocolEvidence': [
+                    {'name': 'codex.session_id', 'value': 'session-root-1'},
+                    {'name': 'codex.thread_id', 'value': 'thread-subagent-1'},
+                  ],
                 },
               },
             }),
@@ -290,6 +295,10 @@ void main() {
       expect(
         detail.content.request?.messages.single.blocks.single.agent?.recipient,
         'reviewer',
+      );
+      expect(
+        detail.content.request?.protocolEvidence.last.value,
+        'thread-subagent-1',
       );
       expect(requests.last.path, '/api/v1/exchanges/_exchange-agent');
       expect(requests.last.queryParameters, {'contentView': 'incremental'});
@@ -418,7 +427,7 @@ void main() {
 
     final page = await api.rawEvidence(exchangeId);
     expect(page.items.single.envelopeId, envelopeId);
-    expect(page.items.single.containsSecret, isTrue);
+    expect(page.items.single.redactedCredentialFields, ['Authorization']);
     expect(page.writer.state, 'active');
     expect(requests.last.method, 'GET');
     expect(requests.last.authorization, 'Bearer $readToken');
@@ -467,6 +476,6 @@ Map<String, Object?> _rawEnvelopeJson({
   'bodySha256': bodySha256,
   'digestScope': 'full_body',
   'payloadState': 'captured',
-  'containsSecret': true,
+  'redactedCredentialFields': ['Authorization'],
   'revealAvailable': true,
 };

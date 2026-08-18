@@ -127,6 +127,43 @@ func TestKnownZeroUsageRemainsDistinctFromUnknownOnTheWire(t *testing.T) {
 	}
 }
 
+func TestExchangeContentCollectionsAreAlwaysArraysOnTheWire(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		name   string
+		value  any
+		fields []string
+	}{
+		{
+			name: "request", value: Request{},
+			fields: []string{"messages", "tools", "protocolEvidence"},
+		},
+		{
+			name: "response", value: Response{},
+			fields: []string{"blocks", "protocolEvidence"},
+		},
+	}
+	for _, testCase := range cases {
+		t.Run(testCase.name, func(t *testing.T) {
+			encoded, err := json.Marshal(testCase.value)
+			if err != nil {
+				t.Fatal(err)
+			}
+			var object map[string]any
+			if err := json.Unmarshal(encoded, &object); err != nil {
+				t.Fatal(err)
+			}
+			for _, field := range testCase.fields {
+				values, ok := object[field].([]any)
+				if !ok || len(values) != 0 {
+					t.Fatalf("%s = %#v in %s", field, object[field], encoded)
+				}
+			}
+		})
+	}
+}
+
 func TestProviderThinkingHistoryNeverEntersContentEvidence(t *testing.T) {
 	t.Parallel()
 

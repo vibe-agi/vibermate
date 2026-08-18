@@ -58,6 +58,7 @@ final class _EvidenceConversationTimelineState
   int _current = 0;
   String? _expandedId;
   int? _navigationTarget;
+  int _tailFollowGeneration = 0;
 
   List<ActivityRecord> get _ordered {
     final values = [...widget.activities];
@@ -80,9 +81,8 @@ final class _EvidenceConversationTimelineState
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (!mounted) return;
       if (latest != null) {
-        unawaited(widget.controller.loadExchangeDetail(latest.id));
+        unawaited(_loadExpanded(latest, followTail: true));
       }
-      _revealInitialLatest();
     });
   }
 
@@ -98,9 +98,36 @@ final class _EvidenceConversationTimelineState
       _current = newOrdered.length - 1;
       WidgetsBinding.instance.addPostFrameCallback((_) {
         if (!mounted) return;
-        unawaited(widget.controller.loadExchangeDetail(newNewest.id));
-        _animateToLatest();
+        unawaited(_loadExpanded(newNewest, followTail: true));
       });
+    }
+    final expandedId = _expandedId;
+    if (expandedId != null) {
+      final oldExpanded = oldWidget.activities
+          .where((activity) => activity.id == expandedId)
+          .firstOrNull;
+      final newExpanded = widget.activities
+          .where((activity) => activity.id == expandedId)
+          .firstOrNull;
+      if (oldExpanded != null &&
+          newExpanded != null &&
+          oldExpanded.status != newExpanded.status) {
+        final followTail =
+            newOrdered.lastOrNull?.id == expandedId && _nearBottom;
+        WidgetsBinding.instance.addPostFrameCallback((_) {
+          if (!mounted || _expandedId != expandedId) return;
+          unawaited(
+            _loadExpanded(
+              newExpanded,
+              followTail: followTail,
+              refresh: true,
+              contentView: _fullSnapshots.contains(expandedId)
+                  ? 'full'
+                  : 'incremental',
+            ),
+          );
+        });
+      }
     }
     final oldFirst = oldOrdered.firstOrNull;
     final addedBefore = oldFirst == null
@@ -213,22 +240,60 @@ final class _EvidenceConversationTimelineState
     );
   }
 
-  void _revealInitialLatest() {
-    if (!_scroll.hasClients || _ordered.isEmpty) return;
-    _scroll.jumpTo(_scroll.position.maxScrollExtent);
-    WidgetsBinding.instance.addPostFrameCallback((_) {
-      if (!mounted || _ordered.isEmpty) return;
-      _goTo(_ordered.length - 1);
-    });
-  }
-
-  void _animateToLatest() {
+  Future<void> _animateToLatest() async {
     if (!_scroll.hasClients) return;
-    _scroll.animateTo(
+    await _scroll.animateTo(
       _scroll.position.maxScrollExtent,
       duration: const Duration(milliseconds: 180),
       curve: Curves.easeOut,
     );
+  }
+
+  void _cancelTailFollow() {
+    _tailFollowGeneration += 1;
+  }
+
+  bool _stillFollowingTail(int generation, String activityId) =>
+      mounted &&
+      generation == _tailFollowGeneration &&
+      _expandedId == activityId;
+
+  Future<void> _loadExpanded(
+    ActivityRecord activity, {
+    required bool followTail,
+    bool refresh = false,
+    String contentView = 'incremental',
+  }) async {
+    final generation = followTail ? ++_tailFollowGeneration : null;
+    final load = widget.controller.loadExchangeDetail(
+      activity.id,
+      refresh: refresh,
+      contentView: contentView,
+    );
+    await WidgetsBinding.instance.endOfFrame;
+    if (!mounted || _expandedId != activity.id) return;
+    if (generation == null) {
+      final index = _ordered.indexWhere((value) => value.id == activity.id);
+      if (index >= 0) _goTo(index);
+    } else if (_stillFollowingTail(generation, activity.id) &&
+        _scroll.hasClients) {
+      _scroll.jumpTo(_scroll.position.maxScrollExtent);
+    }
+    await load;
+    await WidgetsBinding.instance.endOfFrame;
+    if (generation == null ||
+        !_stillFollowingTail(generation, activity.id) ||
+        !_scroll.hasClients) {
+      return;
+    }
+    await _animateToLatest();
+    // Markdown, selectable text, and raw evidence can settle one frame after
+    // the detail Future completes. Finish at the measured tail instead of
+    // leaving the newest Turn a few hundred pixels above it.
+    await WidgetsBinding.instance.endOfFrame;
+    if (_stillFollowingTail(generation, activity.id) && _scroll.hasClients) {
+      _scroll.jumpTo(_scroll.position.maxScrollExtent);
+    }
   }
 
   void _openLatest() {
@@ -239,9 +304,15 @@ final class _EvidenceConversationTimelineState
         _expandedId = latest.id;
         _current = _ordered.length - 1;
       });
-      unawaited(widget.controller.loadExchangeDetail(latest.id));
+      unawaited(_loadExpanded(latest, followTail: true));
+      return;
     }
-    WidgetsBinding.instance.addPostFrameCallback((_) => _animateToLatest());
+    _cancelTailFollow();
+    final generation = ++_tailFollowGeneration;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!_stillFollowingTail(generation, latest.id)) return;
+      unawaited(_animateToLatest());
+    });
   }
 
   void _goTo(int index) {
@@ -289,16 +360,23 @@ final class _EvidenceConversationTimelineState
 
   void _toggle(ActivityRecord activity) {
     final expanding = _expandedId != activity.id;
+    final index = _ordered.indexWhere((value) => value.id == activity.id);
+    final followTail = expanding && index == _ordered.length - 1 && _nearBottom;
+    _cancelTailFollow();
     setState(() {
       _expandedId = expanding ? activity.id : null;
-      _current = _ordered.indexWhere((value) => value.id == activity.id);
+      _current = index;
     });
     if (expanding) {
-      unawaited(widget.controller.loadExchangeDetail(activity.id));
-      WidgetsBinding.instance.addPostFrameCallback((_) {
-        if (!mounted) return;
-        _goTo(_current);
-      });
+      unawaited(
+        _loadExpanded(
+          activity,
+          followTail: followTail,
+          contentView: _fullSnapshots.contains(activity.id)
+              ? 'full'
+              : 'incremental',
+        ),
+      );
     }
   }
 
@@ -312,7 +390,15 @@ final class _EvidenceConversationTimelineState
       contentView: 'full',
     );
     if (!mounted || loaded == null) return;
+    final followTail = _ordered.lastOrNull?.id == activity.id && _nearBottom;
     setState(() => _fullSnapshots.add(activity.id));
+    if (followTail) {
+      final generation = ++_tailFollowGeneration;
+      await WidgetsBinding.instance.endOfFrame;
+      if (_stillFollowingTail(generation, activity.id)) {
+        await _animateToLatest();
+      }
+    }
   }
 
   @override
@@ -429,30 +515,41 @@ final class _EvidenceConversationTimelineState
           child: Row(
             children: [
               Expanded(
-                child: Scrollbar(
-                  controller: _scroll,
-                  thumbVisibility: true,
-                  child: ListView.builder(
-                    key: const Key('conversation-timeline-scroll'),
+                child: NotificationListener<UserScrollNotification>(
+                  onNotification: (notification) {
+                    if (notification.direction != ScrollDirection.idle) {
+                      _cancelTailFollow();
+                    }
+                    return false;
+                  },
+                  child: Scrollbar(
                     controller: _scroll,
-                    padding: const EdgeInsets.fromLTRB(14, 8, 10, 14),
-                    itemCount: activities.length,
-                    itemBuilder: (context, index) {
-                      final activity = activities[index];
-                      final expanded = activity.id == _expandedId;
-                      return _TurnEvidenceItem(
-                        key: _itemKeys.putIfAbsent(activity.id, GlobalKey.new),
-                        activity: activity,
-                        number: index + 1,
-                        copy: widget.copy,
-                        expanded: expanded,
-                        showFull: _fullSnapshots.contains(activity.id),
-                        controller: widget.controller,
-                        exchangeScoped: widget.exchangeScoped,
-                        onToggle: () => _toggle(activity),
-                        onToggleFull: () => _toggleFull(activity),
-                      );
-                    },
+                    thumbVisibility: true,
+                    child: ListView.builder(
+                      key: const Key('conversation-timeline-scroll'),
+                      controller: _scroll,
+                      padding: const EdgeInsets.fromLTRB(14, 8, 10, 14),
+                      itemCount: activities.length,
+                      itemBuilder: (context, index) {
+                        final activity = activities[index];
+                        final expanded = activity.id == _expandedId;
+                        return _TurnEvidenceItem(
+                          key: _itemKeys.putIfAbsent(
+                            activity.id,
+                            GlobalKey.new,
+                          ),
+                          activity: activity,
+                          number: index + 1,
+                          copy: widget.copy,
+                          expanded: expanded,
+                          showFull: _fullSnapshots.contains(activity.id),
+                          controller: widget.controller,
+                          exchangeScoped: widget.exchangeScoped,
+                          onToggle: () => _toggle(activity),
+                          onToggleFull: () => _toggleFull(activity),
+                        );
+                      },
+                    ),
                   ),
                 ),
               ),
@@ -818,16 +915,24 @@ final class _ExchangeEvidencePanel extends StatelessWidget {
       contentView: showFull ? 'full' : 'incremental',
     );
     if (detail == null) {
-      if (controller.conversationsError case final error?) {
+      if (controller.exchangeError(
+            activity.id,
+            contentView: showFull ? 'full' : 'incremental',
+          )
+          case final error?) {
         return Padding(
           padding: const EdgeInsets.all(10),
           child: InlineNotice(message: error, error: true),
         );
       }
-      return const Center(child: CircularProgressIndicator(strokeWidth: 1.6));
+      return const Center(child: CompactProgressIndicator());
     }
     final content = detail.content;
     final projection = content.requestProjection;
+    final fullLoadError = controller.exchangeError(
+      activity.id,
+      contentView: 'full',
+    );
     return Padding(
       padding: const EdgeInsets.fromLTRB(10, 9, 10, 5),
       child: Column(
@@ -931,6 +1036,10 @@ final class _ExchangeEvidencePanel extends StatelessWidget {
                   ),
               ],
             ),
+            if (!showFull && fullLoadError != null) ...[
+              const SizedBox(height: 6),
+              InlineNotice(message: fullLoadError, error: true),
+            ],
             if (projection != null) ...[
               const SizedBox(height: 6),
               Container(
@@ -952,6 +1061,21 @@ final class _ExchangeEvidencePanel extends StatelessWidget {
               ),
             ],
             const SizedBox(height: 8),
+            // The dialect's top-level instruction parameter is per-request
+            // configuration, not a turn. It gets its own section and is absent
+            // from the numbered message sequence and its count.
+            if (content.request!.system.isNotEmpty)
+              _MessageCard(
+                key: Key('exchange-system-${activity.id}'),
+                id: 'system-${activity.id}',
+                message: ExchangeContentMessage(
+                  role: 'system',
+                  blocks: content.request!.system,
+                  agent: null,
+                ),
+                copy: copy,
+                label: copy('exchange.system_parameter'),
+              ),
             for (final (index, message) in content.request!.messages.indexed)
               _MessageCard(
                 id: '${activity.id}-$index',
@@ -959,7 +1083,7 @@ final class _ExchangeEvidencePanel extends StatelessWidget {
                 copy: copy,
               ),
             if (content.response case final response?)
-              _ResponseCard(response: response, copy: copy)
+              _ResponseCard(id: activity.id, response: response, copy: copy)
             else
               _PendingResponse(copy: copy),
           ],
@@ -1745,13 +1869,19 @@ final class _RawEnvelopeRow extends StatelessWidget {
                     ],
                   ),
                 ),
-                if (envelope.containsSecret)
+                // No recognized credential header value reached the
+                // archive, so this is not a warning. It reports which fields
+                // the client sent and which values were removed before
+                // anything was written.
+                if (envelope.redactedCredentialFields.isNotEmpty)
                   Tooltip(
-                    message: copy('exchange.raw.contains_secret'),
+                    message: copy.format('exchange.raw.redacted_credentials', {
+                      'fields': envelope.redactedCredentialFields.join(', '),
+                    }),
                     child: Icon(
-                      Icons.lock_outline,
+                      Icons.key_off_outlined,
                       size: 13,
-                      color: context.viberColors.warning,
+                      color: context.viberColors.textMuted,
                     ),
                   ),
                 const SizedBox(width: 4),
@@ -1795,9 +1925,24 @@ final class _RevealedRawPayload extends StatelessWidget {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          _RawFields(
-            title: copy('exchange.raw.headers'),
-            fields: value.headers,
+          Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Expanded(
+                child: _RawFields(
+                  title: copy('exchange.raw.headers'),
+                  fields: value.headers,
+                ),
+              ),
+              const SizedBox(width: 6),
+              _CopyValueButton(
+                key: Key('copy-raw-${value.envelope.envelopeId}'),
+                tooltip: copy.format('common.copy', {
+                  'field': copy('exchange.raw.value'),
+                }),
+                value: () => _rawEvidenceClipboardText(value, copy),
+              ),
+            ],
           ),
           if (value.trailers.isNotEmpty) ...[
             const SizedBox(height: 7),
@@ -1867,18 +2012,66 @@ final class _RawFields extends StatelessWidget {
     children: [
       Text(title, style: Theme.of(context).textTheme.labelMedium),
       const SizedBox(height: 2),
-      SelectableText(
-        fields
-            .expand(
-              (field) => field.values.isEmpty
-                  ? ['${field.name}:']
-                  : field.values.map((value) => '${field.name}: $value'),
-            )
-            .join('\n'),
-        style: monoStyle,
-      ),
+      SelectableText(_rawFieldsText(fields), style: monoStyle),
     ],
   );
+}
+
+String _rawFieldsText(List<RawHeaderField> fields) => fields
+    .expand(_rawFieldLines)
+    .join('\n');
+
+// A redacted credential field is rendered as what it is: the name the client
+// sent, the length of the value, and a database-local digest that says whether
+// the value changed. A masked placeholder would imply a value is stored.
+Iterable<String> _rawFieldLines(RawHeaderField field) {
+  if (field.redacted.isNotEmpty) {
+    return field.redacted.map(
+      (value) =>
+          '${field.name}: [redacted ${value.bytes}B '
+          '${value.digest.substring(0, 12)}]',
+    );
+  }
+  if (field.values.isEmpty) {
+    return ['${field.name}:'];
+  }
+  return field.values.map((value) => '${field.name}: $value');
+}
+
+String _rawEvidenceClipboardText(RevealedRawEvidence value, AppCopy copy) {
+  final body = _rawTextBody(value);
+  final buffer = StringBuffer()
+    ..writeln(copy('exchange.raw.headers'))
+    ..writeln(_rawFieldsText(value.headers));
+  if (value.trailers.isNotEmpty) {
+    buffer
+      ..writeln()
+      ..writeln(copy('exchange.raw.trailers'))
+      ..writeln(_rawFieldsText(value.trailers));
+  }
+  buffer
+    ..writeln()
+    ..writeln(
+      body.binary
+          ? copy('exchange.raw.body.base64')
+          : copy('exchange.raw.body'),
+    )
+    ..write(body.value);
+  if (value.frames.isNotEmpty) {
+    buffer
+      ..writeln()
+      ..writeln()
+      ..writeln(copy('exchange.raw.frames'))
+      ..write(
+        value.frames
+            .map(
+              (frame) =>
+                  '${frame.kind}  ${frame.offset}..${frame.offset + frame.length}',
+            )
+            .join('\n'),
+      );
+  }
+  return buffer.toString();
 }
 
 ({String value, bool binary}) _rawTextBody(RevealedRawEvidence value) {
@@ -1920,11 +2113,18 @@ final class _MessageCard extends StatefulWidget {
     required this.id,
     required this.message,
     required this.copy,
+    this.label,
+    super.key,
   });
 
   final String id;
   final ExchangeContentMessage message;
   final AppCopy copy;
+
+  /// Overrides the role heading. The dialect's top-level instruction parameter
+  /// uses it so it can never be read as a conversation turn that happened to
+  /// carry the system role.
+  final String? label;
 
   @override
   State<_MessageCard> createState() => _MessageCardState();
@@ -1991,7 +2191,7 @@ final class _MessageCardState extends State<_MessageCard> {
                     children: [
                       Expanded(
                         child: Text(
-                          copy('exchange.role.system'),
+                          widget.label ?? copy('exchange.role.system'),
                           style: Theme.of(context).textTheme.labelMedium
                               ?.copyWith(color: context.viberColors.textMuted),
                         ),
@@ -2005,6 +2205,15 @@ final class _MessageCardState extends State<_MessageCard> {
                         ),
                         const SizedBox(width: 6),
                       ],
+                      _CopyValueButton(
+                        key: Key('copy-message-${widget.id}'),
+                        tooltip: copy.format('common.copy', {
+                          'field': copy('exchange.content.value'),
+                        }),
+                        value: () =>
+                            _contentBlocksClipboardText(message.blocks),
+                      ),
+                      const SizedBox(width: 2),
                       Icon(
                         _expanded ? Icons.expand_less : Icons.expand_more,
                         size: 15,
@@ -2051,6 +2260,14 @@ final class _MessageCardState extends State<_MessageCard> {
                       ),
                     ),
                   ],
+                  const Spacer(),
+                  _CopyValueButton(
+                    key: Key('copy-message-${widget.id}'),
+                    tooltip: copy.format('common.copy', {
+                      'field': copy('exchange.content.value'),
+                    }),
+                    value: () => _contentBlocksClipboardText(message.blocks),
+                  ),
                 ],
               ),
             ),
@@ -2061,6 +2278,7 @@ final class _MessageCardState extends State<_MessageCard> {
               padding: const EdgeInsets.fromLTRB(9, 5, 9, 8),
               child: _ExpandableContentRegion(
                 key: ValueKey('message-content-${widget.id}'),
+                id: widget.id,
                 copy: copy,
                 estimatedLines: _estimatedContentLines(message.blocks),
                 child: Column(
@@ -2080,8 +2298,13 @@ final class _MessageCardState extends State<_MessageCard> {
 }
 
 final class _ResponseCard extends StatelessWidget {
-  const _ResponseCard({required this.response, required this.copy});
+  const _ResponseCard({
+    required this.id,
+    required this.response,
+    required this.copy,
+  });
 
+  final String id;
   final ExchangeResponse response;
   final AppCopy copy;
 
@@ -2139,10 +2362,26 @@ final class _ResponseCard extends StatelessWidget {
                     : TextAlign.end,
                 style: monoStyle,
               );
+              final copyButton = _CopyValueButton(
+                key: Key('copy-response-$id'),
+                tooltip: copy.format('common.copy', {
+                  'field': copy('exchange.content.value'),
+                }),
+                value: () => _contentBlocksClipboardText(response.blocks),
+              );
               if (constraints.maxWidth < 420) {
                 return Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [identity, const SizedBox(height: 3), model],
+                  children: [
+                    Row(
+                      children: [
+                        Expanded(child: identity),
+                        copyButton,
+                      ],
+                    ),
+                    const SizedBox(height: 3),
+                    model,
+                  ],
                 );
               }
               return Row(
@@ -2150,12 +2389,16 @@ final class _ResponseCard extends StatelessWidget {
                   Expanded(child: identity),
                   const SizedBox(width: 10),
                   Flexible(child: model),
+                  const SizedBox(width: 4),
+                  copyButton,
                 ],
               );
             },
           ),
           const SizedBox(height: 5),
           _ExpandableContentRegion(
+            key: ValueKey('response-content-$id'),
+            id: 'response-$id',
             copy: copy,
             estimatedLines: _estimatedContentLines(response.blocks),
             child: Column(
@@ -2195,6 +2438,71 @@ final class _ResponseCard extends StatelessWidget {
   }
 }
 
+String _contentBlocksClipboardText(Iterable<ExchangeContentBlock> blocks) =>
+    blocks
+        .map((block) {
+          if (block.text case final text? when text.isNotEmpty) return text;
+          if (block.kind == 'tool_call' && block.arguments != null) {
+            return const JsonEncoder.withIndent('  ').convert(block.arguments);
+          }
+          return '';
+        })
+        .where((value) => value.isNotEmpty)
+        .join('\n\n');
+
+final class _CopyValueButton extends StatefulWidget {
+  const _CopyValueButton({
+    required this.tooltip,
+    required this.value,
+    super.key,
+  });
+
+  final String tooltip;
+  final String Function() value;
+
+  @override
+  State<_CopyValueButton> createState() => _CopyValueButtonState();
+}
+
+final class _CopyValueButtonState extends State<_CopyValueButton> {
+  Timer? _reset;
+  bool _copied = false;
+
+  @override
+  void dispose() {
+    _reset?.cancel();
+    super.dispose();
+  }
+
+  Future<void> _copy() async {
+    await Clipboard.setData(ClipboardData(text: widget.value()));
+    if (!mounted) return;
+    _reset?.cancel();
+    setState(() => _copied = true);
+    _reset = Timer(const Duration(milliseconds: 1200), () {
+      if (mounted) setState(() => _copied = false);
+    });
+  }
+
+  @override
+  Widget build(BuildContext context) => IconButton(
+    tooltip: widget.tooltip,
+    onPressed: _copy,
+    style: IconButton.styleFrom(
+      minimumSize: const Size.square(24),
+      maximumSize: const Size.square(24),
+      padding: EdgeInsets.zero,
+    ),
+    icon: Icon(
+      _copied ? Icons.check : Icons.content_copy,
+      size: 12,
+      color: _copied
+          ? context.viberColors.verified
+          : context.viberColors.textMuted,
+    ),
+  );
+}
+
 const _defaultVisibleContentLines = 15;
 
 int _estimatedContentLines(Iterable<ExchangeContentBlock> blocks) {
@@ -2221,12 +2529,17 @@ int _estimatedContentLines(Iterable<ExchangeContentBlock> blocks) {
 
 final class _ExpandableContentRegion extends StatefulWidget {
   const _ExpandableContentRegion({
+    required this.id,
     required this.copy,
     required this.estimatedLines,
     required this.child,
     super.key,
   });
 
+  /// Identifies this region so its expand trigger has a selector of its own.
+  /// A single shared key would name every collapsible block in the timeline at
+  /// once, which is not a stable selector for any of them.
+  final String id;
   final AppCopy copy;
   final int estimatedLines;
   final Widget child;
@@ -2281,7 +2594,7 @@ final class _ExpandableContentRegionState
         Align(
           alignment: Alignment.centerLeft,
           child: TextButton.icon(
-            key: const Key('toggle-long-exchange-content'),
+            key: Key('toggle-long-${widget.id}'),
             onPressed: () => setState(() => _expanded = !_expanded),
             icon: Icon(
               _expanded ? Icons.unfold_less : Icons.unfold_more,

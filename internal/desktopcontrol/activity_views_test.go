@@ -161,6 +161,9 @@ func TestPendingExchangeIsVisibleBeforeItsResponseArrives(t *testing.T) {
 	setConversationRef(&record)
 	content := exchangeContentFixture(t, record)
 	content.Response = nil
+	projection := exchangeContentProjection(
+		t, content, ExchangeContentViewIncremental,
+	)
 
 	page, err := activityPageOf(activity.Page{Items: []activity.Record{record}})
 	if err != nil {
@@ -170,7 +173,9 @@ func TestPendingExchangeIsVisibleBeforeItsResponseArrives(t *testing.T) {
 		t.Fatalf("pending Activity page = %+v", page)
 	}
 
-	detail, err := exchangeDetailOf(record, egressaudit.Page{}, &content, ExchangeContentViewIncremental)
+	detail, err := exchangeDetailOf(
+		record, egressaudit.Page{}, &projection, ExchangeContentViewIncremental,
+	)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -199,8 +204,11 @@ func TestExchangeDetailJoinsOnlyMatchingFrozenConversationEvidence(t *testing.T)
 	}
 	setConversationRef(&record)
 	content := exchangeContentFixture(t, record)
+	projection := exchangeContentProjection(
+		t, content, ExchangeContentViewIncremental,
+	)
 	detail, err := exchangeDetailOf(
-		record, egressaudit.Page{}, &content, ExchangeContentViewIncremental,
+		record, egressaudit.Page{}, &projection, ExchangeContentViewIncremental,
 	)
 	if err != nil {
 		t.Fatal(err)
@@ -216,13 +224,20 @@ func TestExchangeDetailJoinsOnlyMatchingFrozenConversationEvidence(t *testing.T)
 		detail.Content.RequestProjection.InheritedMessageCount != 0 ||
 		detail.Content.RequestProjection.FullSnapshotAvailable ||
 		detail.Content.Request.Messages[0].Blocks[0].Text != "inspect this" ||
+		len(detail.Content.Request.ProtocolEvidence) != 2 ||
+		detail.Content.Request.ProtocolEvidence[1].Name != "claude.session_id" ||
 		detail.Content.Response == nil ||
 		detail.Content.Response.Blocks[0].ToolName != "read_file" ||
-		detail.Content.Response.Usage.Output.Tokens != 3 {
+		detail.Content.Response.Usage.Output.Tokens != 3 ||
+		len(detail.Content.Response.ProtocolEvidence) != 1 {
 		t.Fatalf("Exchange content detail = %+v", detail.Content)
 	}
+	encodedRequest, err := json.Marshal(detail.Content.Request)
+	if err != nil || !strings.Contains(string(encodedRequest), `"protocolEvidence":[`) {
+		t.Fatalf("request protocol evidence contract = %s, %v", encodedRequest, err)
+	}
 
-	tampered := content.Clone()
+	tampered := projection.Clone()
 	tampered.Frozen.RouteRevision++
 	if _, err := exchangeDetailOf(
 		record, egressaudit.Page{}, &tampered, ExchangeContentViewIncremental,
@@ -253,13 +268,22 @@ func TestExchangeDetailDefaultsToIncrementalMessagesAndCanReturnFullSnapshot(t *
 	content.Request.Messages = append(
 		[]exchangecontent.Message{inherited, inherited}, content.Request.Messages...,
 	)
+	content.Request.Messages[0].Agent = &exchangecontent.AgentContext{
+		AgentName: "root", Author: "root", Recipient: "reviewer",
+	}
+	content.Request.Messages[2].Agent = &exchangecontent.AgentContext{
+		AgentName: "reviewer", Author: "reviewer", Recipient: "root",
+	}
 	content.Presentation = exchangecontent.RequestPresentation{
 		Mode:                  exchangecontent.RequestPresentationIncremental,
 		InheritedMessageCount: 2,
 	}
+	incrementalProjection := exchangeContentProjection(
+		t, content, ExchangeContentViewIncremental,
+	)
 
 	incremental, err := exchangeDetailOf(
-		record, egressaudit.Page{}, &content, ExchangeContentViewIncremental,
+		record, egressaudit.Page{}, &incrementalProjection, ExchangeContentViewIncremental,
 	)
 	if err != nil {
 		t.Fatal(err)
@@ -271,12 +295,16 @@ func TestExchangeDetailDefaultsToIncrementalMessagesAndCanReturnFullSnapshot(t *
 		incremental.Content.RequestProjection.Relationship != exchangecontent.RequestPresentationIncremental ||
 		incremental.Content.RequestProjection.InheritedMessageCount != 2 ||
 		incremental.Content.RequestProjection.TotalMessageCount != 3 ||
-		!incremental.Content.RequestProjection.FullSnapshotAvailable {
+		!incremental.Content.RequestProjection.FullSnapshotAvailable ||
+		incremental.Content.AgentConversation != nil {
 		t.Fatalf("incremental detail = %+v", incremental.Content)
 	}
 
+	fullProjection := exchangeContentProjection(
+		t, content, ExchangeContentViewFull,
+	)
 	full, err := exchangeDetailOf(
-		record, egressaudit.Page{}, &content, ExchangeContentViewFull,
+		record, egressaudit.Page{}, &fullProjection, ExchangeContentViewFull,
 	)
 	if err != nil {
 		t.Fatal(err)
@@ -285,7 +313,9 @@ func TestExchangeDetailDefaultsToIncrementalMessagesAndCanReturnFullSnapshot(t *
 		full.Content.RequestProjection == nil ||
 		full.Content.RequestProjection.View != ExchangeContentViewFull ||
 		full.Content.RequestProjection.InheritedMessageCount != 2 ||
-		full.Content.RequestProjection.TotalMessageCount != 3 {
+		full.Content.RequestProjection.TotalMessageCount != 3 ||
+		full.Content.AgentConversation == nil ||
+		len(full.Content.AgentConversation.Relationships) != 2 {
 		t.Fatalf("full detail = %+v", full.Content)
 	}
 }
@@ -344,8 +374,13 @@ func TestExchangeDetailProjectsOnlyProtocolProvenAgentRelationships(t *testing.T
 	if err := content.Validate(); err != nil {
 		t.Fatalf("agent content fixture is invalid: %v", err)
 	}
+	contentProjection := exchangeContentProjection(
+		t, content, ExchangeContentViewIncremental,
+	)
 
-	detail, err := exchangeDetailOf(record, egressaudit.Page{}, &content, ExchangeContentViewIncremental)
+	detail, err := exchangeDetailOf(
+		record, egressaudit.Page{}, &contentProjection, ExchangeContentViewIncremental,
+	)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -425,6 +460,23 @@ func setConversationRef(record *activity.Record) {
 	record.Conversation = &ref
 }
 
+func exchangeContentProjection(
+	t *testing.T,
+	record exchangecontent.Record,
+	view ExchangeContentView,
+) exchangecontent.Projection {
+	t.Helper()
+	requestView, err := exchangeContentRequestView(view)
+	if err != nil {
+		t.Fatal(err)
+	}
+	projection, err := exchangecontent.Project(record, requestView)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return projection
+}
+
 func exchangeContentFixture(t *testing.T, activityRecord activity.Record) exchangecontent.Record {
 	t.Helper()
 	user, err := protocolcore.NewTextBlock("inspect this")
@@ -450,6 +502,10 @@ func exchangeContentFixture(t *testing.T, activityRecord activity.Record) exchan
 		Messages: []protocolcore.Message{{
 			Role: protocolcore.RoleUser, Blocks: []protocolcore.ContentBlock{user},
 		}},
+		ProtocolEvidence: []protocolcore.ProtocolEvidenceValue{
+			{Name: "claude.agent_id", Value: "agent-reviewer"},
+			{Name: "claude.session_id", Value: "session-review"},
+		},
 	}
 	response := protocolcore.Response{
 		ID: "response-content", RequestedModel: "claude", EffectiveModel: "claude",
@@ -457,6 +513,9 @@ func exchangeContentFixture(t *testing.T, activityRecord activity.Record) exchan
 		StopReason: protocolcore.StopReasonToolUse,
 		Usage: protocolcore.Usage{
 			Output: protocolcore.UsageValue{Known: true, Tokens: 3, Source: "provider"},
+		},
+		ProtocolEvidence: []protocolcore.ProtocolEvidenceValue{
+			{Name: "anthropic.response_id", Value: "response-content"},
 		},
 	}
 	content, err := exchangecontent.NewRecord(
@@ -594,18 +653,23 @@ func TestConversationPageKeepsFlatProjectionIdentity(t *testing.T) {
 		SourceKind: activity.SourceCaptureRun, SourceDisplayName: "codex",
 		SourceRecognition: activity.SourceRecognitionVerified, CaptureRunID: "run-agent", ConnectionID: "connection-agent",
 	}
-	ref := agentconversation.Ref{
-		ProjectionID: "capture_run:run-agent:agent:reviewer", DisplayName: "reviewer",
+	latestRef := agentconversation.Ref{
+		ProjectionID: "capture_run:run-agent:agent:reviewer", DisplayName: "subagent",
 		Kind: agentconversation.KindAgent, Evidence: agentconversation.EvidenceExplicitActor,
 		Actor: "/root/reviewer",
 	}
-	record.Conversation = &ref
+	conversationRef := latestRef
+	conversationRef.DisplayName = "Angle A line-by-line scan"
+	record.Conversation = &latestRef
 	page, err := conversationPageOf(activity.ConversationPage{Items: []activity.ConversationRecord{{
-		Conversation: ref, FirstSequence: 1,
+		Conversation: conversationRef, FirstSequence: 1,
 		FirstOccurredAt: time.Date(2026, 8, 13, 9, 0, 0, 0, time.UTC),
 		TurnCount:       3, Latest: record,
 	}}})
-	if err != nil || len(page.Items) != 1 || page.Items[0].Conversation.ID != ref.ProjectionID ||
+	if err != nil || len(page.Items) != 1 ||
+		page.Items[0].Conversation.ID != conversationRef.ProjectionID ||
+		page.Items[0].Conversation.DisplayName != conversationRef.DisplayName ||
+		page.Items[0].Latest.Conversation.DisplayName != latestRef.DisplayName ||
 		page.Items[0].TurnCount != 3 || page.Items[0].Latest.ID != record.SubjectID {
 		t.Fatalf("Conversation page = %+v, %v", page, err)
 	}

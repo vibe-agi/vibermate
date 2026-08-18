@@ -2,8 +2,6 @@ package rawevidence
 
 import (
 	"context"
-	"crypto/aes"
-	"crypto/cipher"
 	"crypto/sha256"
 	"encoding/base64"
 	"errors"
@@ -15,8 +13,6 @@ import (
 	"time"
 
 	"golang.org/x/sync/semaphore"
-
-	"github.com/vibe-agi/vibermate/internal/secretstore"
 )
 
 const (
@@ -25,13 +21,7 @@ const (
 	defaultMaximumBatchRecords = 64
 	defaultMaximumBatchBytes   = 4 << 20
 	defaultFlushInterval       = 100 * time.Millisecond
-	keyBytes                   = 32
-	nonceBytes                 = 12
 	writerIDBytes              = 20
-)
-
-var rawEvidenceKeyReference = mustSecretReference(
-	"secret://vibermate/raw-evidence-key.v1",
 )
 
 var ErrScopeTerminal = errors.New("raw evidence capture scope is terminal")
@@ -75,7 +65,6 @@ func (config Config) validate() error {
 
 type Options struct {
 	Repository Repository
-	Secrets    secretstore.Store
 	Random     io.Reader
 	Clock      Clock
 	Config     Config
@@ -104,15 +93,12 @@ type Statistics struct {
 }
 
 type Manager struct {
-	repository  Repository
-	secrets     secretstore.Store
-	clock       Clock
-	random      io.Reader
-	cryptoMu    sync.Mutex
-	aead        cipher.AEAD
-	keyRevision uint64
-	config      Config
-	writerID    string
+	repository Repository
+	clock      Clock
+	random     io.Reader
+	redactor   Redactor
+	config     Config
+	writerID   string
 
 	byteSlots   *semaphore.Weighted
 	recordSlots *semaphore.Weighted
@@ -177,11 +163,21 @@ type terminalScopeLease struct {
 var _ RequestRecorder = (*Manager)(nil)
 
 func Open(ctx context.Context, options Options) (*Manager, error) {
-	if ctx == nil || options.Repository == nil || options.Secrets == nil ||
+	if ctx == nil || options.Repository == nil ||
 		options.Random == nil || options.Clock == nil {
 		return nil, errors.New("raw evidence writer dependencies are incomplete")
 	}
 	if err := options.Config.validate(); err != nil {
+		return nil, err
+	}
+	// The salt is resolved before a writer session opens, so a database that
+	// cannot supply one leaves no session behind and admits no observation.
+	salt, err := options.Repository.RedactionSalt(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("load raw evidence redaction salt: %w", err)
+	}
+	redactor, err := NewRedactor(salt)
+	if err != nil {
 		return nil, err
 	}
 	writerID, err := randomIdentity(options.Random, writerIDBytes)
@@ -201,9 +197,9 @@ func Open(ctx context.Context, options Options) (*Manager, error) {
 	)
 	manager := &Manager{
 		repository:     options.Repository,
-		secrets:        options.Secrets,
 		clock:          options.Clock,
 		random:         options.Random,
+		redactor:       redactor,
 		config:         options.Config,
 		writerID:       writerID,
 		byteSlots:      semaphore.NewWeighted(options.Config.MaximumQueueBytes),
@@ -292,9 +288,9 @@ func (manager *Manager) Reveal(
 	if err != nil {
 		return RevealedEnvelope{}, err
 	}
-	payload, decryptErr := manager.Decrypt(ctx, record)
+	payload, readErr := manager.ReadPayload(record)
 	outcome := RevealSucceeded
-	if decryptErr != nil {
+	if readErr != nil {
 		outcome = RevealUnavailable
 	}
 	audit := RevealAudit{
@@ -309,8 +305,8 @@ func (manager *Manager) Reveal(
 		payload = Payload{}
 		return RevealedEnvelope{}, fmt.Errorf("audit raw evidence reveal: %w", err)
 	}
-	if decryptErr != nil {
-		return RevealedEnvelope{}, decryptErr
+	if readErr != nil {
+		return RevealedEnvelope{}, readErr
 	}
 	return RevealedEnvelope{Metadata: MetadataOf(record), Payload: payload}, nil
 }
@@ -515,8 +511,9 @@ func (manager *Manager) Observe(
 		observation.ObservedAt = observation.ObservedAt.UTC()
 	}
 
-	// Encryption happens before queue admission, so no plaintext body or
-	// credential-bearing header waits in the append queue.
+	// Credential header values are removed before queue admission, so no
+	// credential-bearing header waits in the append queue. Body bytes do wait
+	// there in the clear, bounded by the queue's configured byte ceiling.
 	draft, weight, err := manager.prepare(ctx, observation)
 	if err != nil {
 		return Watermark{}, err
@@ -645,19 +642,21 @@ func (manager *Manager) Flush(ctx context.Context, watermark Watermark) error {
 		}
 		target = watermark.Sequence
 	}
+	// The watermark snapshot is complete once target is known. Do not retain
+	// the admission lock while waiting for the single writer goroutine: a slow
+	// repository commit or another flush must not make new observations wait on
+	// a non-context-aware mutex. Later admissions have higher watermarks and do
+	// not change what this flush promises to make durable.
+	manager.admissionMu.Unlock()
 	if target == 0 || manager.durableWatermark() >= target {
-		manager.admissionMu.Unlock()
 		return nil
 	}
 	request := flushRequest{target: target, result: make(chan error, 1)}
 	select {
 	case manager.flushes <- request:
-		manager.admissionMu.Unlock()
 	case <-ctx.Done():
-		manager.admissionMu.Unlock()
 		return fmt.Errorf("request raw evidence flush: %w", ctx.Err())
 	case <-manager.workerContext.Done():
-		manager.admissionMu.Unlock()
 		return errors.New("raw evidence writer stopped")
 	}
 	select {
@@ -774,8 +773,8 @@ func (manager *Manager) prepare(
 	} else if observation.FullDigestAvailable {
 		digestScope = DigestFull
 	}
-	var nonce, ciphertext []byte
-	var encryptionKeyRevision uint64
+	var payloadMetadata []byte
+	var redactedFields []string
 	if state == PayloadUnavailable {
 		body = nil
 		frames = nil
@@ -785,19 +784,17 @@ func (manager *Manager) prepare(
 		body = nil
 		frames = nil
 	} else {
-		payload, err := payloadOf(observation, body, frames).Marshal()
+		built, redacted, err := payloadOf(
+			observation, frames, manager.redactor,
+		)
 		if err != nil {
 			return StoredEnvelope{}, 0, err
 		}
-		nonce, ciphertext, encryptionKeyRevision, err = manager.encrypt(ctx, payload)
-		clear(payload)
-		if err != nil {
+		if payloadMetadata, err = built.MarshalMetadata(); err != nil {
 			return StoredEnvelope{}, 0, err
 		}
+		redactedFields = redacted
 	}
-	containsSecret := observation.ContainsSecret ||
-		HeaderContainsSecret(observation.Headers) ||
-		HeaderContainsSecret(observation.Trailers)
 	record := StoredEnvelope{
 		Layer:                    observation.Layer,
 		ScopeKind:                observation.ScopeKind,
@@ -823,29 +820,28 @@ func (manager *Manager) prepare(
 		ExpiresAt: observation.ObservedAt.AddDate(
 			0, 0, int(observation.RetentionDays),
 		),
-		Method:                observation.Method,
-		StatusCode:            observation.StatusCode,
-		Scheme:                observation.Scheme,
-		Authority:             observation.Authority,
-		Path:                  observation.Path,
-		RawQuery:              observation.RawQuery,
-		ContentType:           observation.ContentType,
-		ContentEncoding:       observation.ContentEncoding,
-		Representation:        observation.Representation,
-		Canonicalization:      httpCanonicalization,
-		HeaderCount:           headerValueCount(observation.Headers),
-		TrailerCount:          headerValueCount(observation.Trailers),
-		BodyBytes:             totalBodyBytes,
-		BodySHA256:            digest,
-		DigestScope:           digestScope,
-		PayloadState:          state,
-		PayloadReason:         reason,
-		ContainsSecret:        containsSecret,
-		EncryptionKeyRevision: encryptionKeyRevision,
-		CipherNonce:           nonce,
-		Ciphertext:            ciphertext,
+		Method:                   observation.Method,
+		StatusCode:               observation.StatusCode,
+		Scheme:                   observation.Scheme,
+		Authority:                observation.Authority,
+		Path:                     observation.Path,
+		RawQuery:                 observation.RawQuery,
+		ContentType:              observation.ContentType,
+		ContentEncoding:          observation.ContentEncoding,
+		Representation:           observation.Representation,
+		Canonicalization:         httpCanonicalization,
+		HeaderCount:              headerValueCount(observation.Headers),
+		TrailerCount:             headerValueCount(observation.Trailers),
+		BodyBytes:                totalBodyBytes,
+		BodySHA256:               digest,
+		DigestScope:              digestScope,
+		PayloadState:             state,
+		PayloadReason:            reason,
+		RedactedCredentialFields: redactedFields,
+		PayloadMetadata:          payloadMetadata,
+		Body:                     body,
 	}
-	weight := int64(len(ciphertext) + len(nonce) + 1024)
+	weight := int64(len(payloadMetadata) + len(body) + 1024)
 	return record, weight, nil
 }
 
@@ -957,168 +953,25 @@ func (manager *Manager) durableWatermark() uint64 {
 	return manager.stats.DurableWatermark
 }
 
-func (manager *Manager) Decrypt(
-	ctx context.Context,
+// ReadPayload returns the stored payload. It needs no key: INV-STORE-DISCLOSED
+// forbids application-layer field encryption, and the credential header values
+// a payload once carried were removed at the observation boundary. What remains
+// is the exchange as it went over the wire, including any secret the client put
+// in a body or a query. That is why access is still audited: auditing who read
+// evidence was never the same thing as decrypting it.
+func (manager *Manager) ReadPayload(
 	record StoredEnvelope,
 ) (Payload, error) {
-	if manager == nil || ctx == nil {
+	if manager == nil {
 		return Payload{}, errors.New("raw evidence reader is unavailable")
 	}
 	if record.PayloadState != PayloadCaptured &&
 		record.PayloadState != PayloadTruncated {
-		return Payload{}, fmt.Errorf("%w: recording policy did not retain it", ErrPayloadUnavailable)
-	}
-	manager.cryptoMu.Lock()
-	defer manager.cryptoMu.Unlock()
-	if err := manager.ensureCipherLocked(ctx); err != nil {
-		return Payload{}, err
-	}
-	if record.EncryptionKeyRevision != manager.keyRevision {
-		return Payload{}, fmt.Errorf("%w: encryption key revision is unavailable", ErrPayloadUnavailable)
-	}
-	plain, err := manager.aead.Open(nil, record.CipherNonce, record.Ciphertext, nil)
-	if err != nil {
-		return Payload{}, errors.New("raw evidence payload authentication failed")
-	}
-	defer clear(plain)
-	return DecodePayload(plain)
-}
-
-func (manager *Manager) encrypt(
-	ctx context.Context,
-	payload []byte,
-) ([]byte, []byte, uint64, error) {
-	manager.cryptoMu.Lock()
-	defer manager.cryptoMu.Unlock()
-	if err := manager.ensureCipherLocked(ctx); err != nil {
-		return nil, nil, 0, err
-	}
-	nonce := make([]byte, nonceBytes)
-	if _, err := io.ReadFull(manager.random, nonce); err != nil {
-		return nil, nil, 0, fmt.Errorf("create raw evidence nonce: %w", err)
-	}
-	return nonce, manager.aead.Seal(nil, nonce, payload, nil), manager.keyRevision, nil
-}
-
-func (manager *Manager) ensureCipherLocked(ctx context.Context) error {
-	if manager.aead != nil {
-		return nil
-	}
-	key, keyRevision, err := openEncryptionKey(ctx, manager.secrets, manager.random)
-	if err != nil {
-		return err
-	}
-	defer clear(key)
-	block, err := aes.NewCipher(key)
-	if err != nil {
-		return fmt.Errorf("construct raw evidence cipher: %w", err)
-	}
-	aead, err := cipher.NewGCM(block)
-	if err != nil {
-		return fmt.Errorf("construct raw evidence AEAD: %w", err)
-	}
-	manager.aead = aead
-	manager.keyRevision = uint64(keyRevision)
-	return nil
-}
-
-func openEncryptionKey(
-	ctx context.Context,
-	store secretstore.Store,
-	randomSource io.Reader,
-) ([]byte, secretstore.Revision, error) {
-	metadata, err := store.Inspect(ctx, rawEvidenceKeyReference)
-	if err != nil {
-		return nil, 0, fmt.Errorf("inspect raw evidence encryption key: %w", err)
-	}
-	if err := metadata.Validate(); err != nil {
-		return nil, 0, fmt.Errorf("validate raw evidence encryption key metadata: %w", err)
-	}
-	if metadata.State == secretstore.StateConfigured {
-		return readEncryptionKey(ctx, store, metadata.Revision)
-	}
-	if metadata.State != secretstore.StateMissing {
-		return nil, 0, errors.New("raw evidence encryption key is unavailable")
-	}
-	key := make([]byte, keyBytes)
-	if _, err := io.ReadFull(randomSource, key); err != nil {
-		return nil, 0, fmt.Errorf("create raw evidence encryption key: %w", err)
-	}
-	encoded := []byte(base64.RawURLEncoding.EncodeToString(key))
-	value, err := secretstore.NewValue(encoded)
-	clear(encoded)
-	if err != nil {
-		clear(key)
-		return nil, 0, err
-	}
-	replaced, replaceErr := store.Replace(ctx, secretstore.ReplaceCommand{
-		Reference: rawEvidenceKeyReference,
-		Value:     value,
-	})
-	value.Destroy()
-	if replaceErr == nil {
-		if err := replaced.Validate(); err != nil ||
-			replaced.State != secretstore.StateConfigured {
-			clear(key)
-			return nil, 0, errors.New("raw evidence encryption key replacement returned invalid metadata")
-		}
-		return key, replaced.Revision, nil
-	}
-	clear(key)
-	if errors.Is(replaceErr, secretstore.ErrRevisionConflict) {
-		metadata, inspectErr := store.Inspect(ctx, rawEvidenceKeyReference)
-		if inspectErr != nil || metadata.Validate() != nil ||
-			metadata.State != secretstore.StateConfigured {
-			return nil, 0, errors.Join(
-				errors.New("raw evidence encryption key conflict could not be reconciled"),
-				inspectErr,
-			)
-		}
-		return readEncryptionKey(ctx, store, metadata.Revision)
-	}
-	return nil, 0, fmt.Errorf("store raw evidence encryption key: %w", replaceErr)
-}
-
-func readEncryptionKey(
-	ctx context.Context,
-	store secretstore.Store,
-	expectedRevision secretstore.Revision,
-) ([]byte, secretstore.Revision, error) {
-	value, err := store.Read(ctx, rawEvidenceKeyReference)
-	value, err = secretstore.ValidateReaderResult(value, err)
-	if err != nil {
-		return nil, 0, fmt.Errorf("read raw evidence encryption key: %w", err)
-	}
-	defer value.Destroy()
-	encoded, err := value.CopyBytes()
-	if err != nil {
-		return nil, 0, errors.New("copy raw evidence encryption key")
-	}
-	defer clear(encoded)
-	key, err := base64.RawURLEncoding.DecodeString(string(encoded))
-	if err != nil || len(key) != keyBytes {
-		clear(key)
-		return nil, 0, errors.New("raw evidence encryption key is invalid")
-	}
-	metadata, err := store.Inspect(ctx, rawEvidenceKeyReference)
-	if err != nil || metadata.Validate() != nil ||
-		metadata.State != secretstore.StateConfigured ||
-		metadata.Revision != expectedRevision {
-		clear(key)
-		return nil, 0, errors.Join(
-			errors.New("raw evidence encryption key changed while it was read"),
-			err,
+		return Payload{}, fmt.Errorf(
+			"%w: recording policy did not retain it", ErrPayloadUnavailable,
 		)
 	}
-	return key, metadata.Revision, nil
-}
-
-func mustSecretReference(value string) secretstore.Reference {
-	reference, err := secretstore.ParseReference(value)
-	if err != nil {
-		panic(err)
-	}
-	return reference
+	return DecodePayload(record.PayloadMetadata, record.Body)
 }
 
 func randomIdentity(source io.Reader, size int) (string, error) {

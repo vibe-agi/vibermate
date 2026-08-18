@@ -277,3 +277,92 @@ func (store *blockingInspectStore) inspectCount() int {
 	defer store.mu.Unlock()
 	return store.inspections
 }
+
+// One host call that never returns must not disable credential reads for the
+// rest of the process. Serializing the lane is the right protection against an
+// unbounded pile-up of pinned OS threads, but with no way past a wedged call it
+// also meant the first stuck Security.framework call was terminal: every later
+// read failed on its own deadline, forever, with nothing to distinguish that
+// from a slow disk.
+func TestContextBoundReadStoreStepsPastAWedgedHostCall(t *testing.T) {
+	t.Parallel()
+
+	reference, err := secretstore.ParseReference("secret://test/wedged")
+	if err != nil {
+		t.Fatal(err)
+	}
+	delegate := newBlockingReadStore()
+	store := newContextBoundReadStoreWithLimits(delegate, time.Millisecond, 2)
+
+	wedged, cancelWedged := context.WithCancel(context.Background())
+	go func() {
+		value, _ := store.Read(wedged, reference)
+		if value != nil {
+			value.Destroy()
+		}
+	}()
+	select {
+	case <-delegate.started:
+	case <-time.After(time.Second):
+		t.Fatal("delegate read did not start")
+	}
+	cancelWedged()
+
+	// The first call is still inside the delegate and may never leave. A later
+	// read must still reach the host.
+	// This fake never returns, so the later read still ends on its own deadline.
+	// What matters is that it reached the host at all: with no way past a wedged
+	// call it would have expired waiting for the lane, leaving readCount at one.
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	value, _ := store.Read(ctx, reference)
+	if value != nil {
+		value.Destroy()
+	}
+	if calls := delegate.readCount(); calls < 2 {
+		t.Fatalf(
+			"delegate read calls = %d; the lane never stepped past the wedge",
+			calls,
+		)
+	}
+
+	close(delegate.release)
+}
+
+// Stepping past a wedged call costs the goroutine and OS thread that call
+// pinned, so the budget is finite. Once it is spent the store must say it is
+// unavailable — the state the design already has a name for — instead of leaving
+// every caller to discover it as a timeout.
+func TestContextBoundReadStoreReportsUnavailableOnceTheWedgeBudgetIsSpent(
+	t *testing.T,
+) {
+	t.Parallel()
+
+	reference, err := secretstore.ParseReference("secret://test/exhausted")
+	if err != nil {
+		t.Fatal(err)
+	}
+	delegate := newBlockingReadStore()
+	store := newContextBoundReadStoreWithLimits(delegate, time.Millisecond, 1)
+
+	for attempt := 0; attempt < 2; attempt++ {
+		ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+		value, _ := store.Read(ctx, reference)
+		if value != nil {
+			value.Destroy()
+		}
+		cancel()
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	value, readErr := store.Read(ctx, reference)
+	if value != nil {
+		value.Destroy()
+	}
+	if !errors.Is(readErr, ErrHostSecretsUnresponsive) {
+		t.Fatalf("read error = %v, want the store reported unavailable", readErr)
+	}
+
+	close(delegate.release)
+}

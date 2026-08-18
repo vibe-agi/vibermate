@@ -1335,7 +1335,7 @@ final class PreviewControlApi implements ControlApi {
           digestScope: 'full_body',
           payloadState: 'captured',
           payloadReason: null,
-          containsSecret: true,
+          redactedCredentialFields: const ['Authorization'],
           revealAvailable: true,
         ),
       ],
@@ -1373,8 +1373,26 @@ final class PreviewControlApi implements ControlApi {
     return RevealedRawEvidence(
       envelope: page.items.single,
       headers: const [
-        RawHeaderField(name: 'Authorization', values: ['Bearer ••••••••']),
-        RawHeaderField(name: 'Content-Type', values: ['application/json']),
+        // The real product stores no recognized credential header value, so
+        // the fixture shows what a redacted field actually looks like rather
+        // than a masked one.
+        RawHeaderField(
+          name: 'Authorization',
+          values: [],
+          redacted: [
+            RawRedactedValue(
+              digest:
+                  'b3b3b3b3b3b3b3b3b3b3b3b3b3b3b3b3'
+                  'b3b3b3b3b3b3b3b3b3b3b3b3b3b3b3b3',
+              bytes: 108,
+            ),
+          ],
+        ),
+        RawHeaderField(
+          name: 'Content-Type',
+          values: ['application/json'],
+          redacted: [],
+        ),
       ],
       trailers: const [],
       body: Uint8List.fromList(
@@ -2133,6 +2151,7 @@ final class PreviewControlApi implements ControlApi {
                 source: null,
               ),
             ),
+            protocolEvidence: const [],
           )
         : null;
     return ExchangeDetail(
@@ -2198,10 +2217,21 @@ final class PreviewControlApi implements ControlApi {
           effectiveModel: 'claude-sonnet-4-5',
           maxOutputTokens: 4096,
           stream: true,
+          // Only one fixture Exchange carries a top-level instruction
+          // parameter. A fixture exists to exercise a surface, not to make every
+          // other fixture taller.
+          system: activity.id.endsWith('-exchange-222')
+              ? [
+                  _previewTextBlock(
+                    'You are an interactive agent. Stay precise.',
+                  ),
+                ]
+              : const [],
           messages: visibleMessages,
           tools: toolTurn
               ? const [ExchangeToolDefinition(name: 'Read', namespace: null)]
               : const [],
+          protocolEvidence: const [],
         ),
         response: response,
       ),

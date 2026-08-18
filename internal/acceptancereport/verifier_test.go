@@ -307,7 +307,7 @@ func TestVerifyFileRejectsTypedMutations(t *testing.T) {
 		{
 			name: "adapter launch recipe drift",
 			mutate: func(report *Report, _ *Expectations) {
-				report.Client.Adapter.LaunchRecipe = clientadapter.LaunchSSLCertFile
+				report.Client.Adapter.LaunchRecipe = clientadapter.LaunchCodexResponsesHTTP
 			},
 		},
 		{

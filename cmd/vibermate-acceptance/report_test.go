@@ -28,7 +28,7 @@ func TestWriteReportPublishesPrivateRedactedEvidence(t *testing.T) {
 		CatalogRevision: 1,
 		InstallShape:    clientadapter.InstallNPMWrapperNativeChild,
 		ReleaseSHA256:   "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
-		LaunchRecipe:    clientadapter.LaunchSSLCertFile,
+		LaunchRecipe:    clientadapter.LaunchCodexResponsesHTTP,
 		Features: clientadapter.
 			FeatureResponsesWebSocketHTTPFallback,
 	}); err != nil {

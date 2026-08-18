@@ -146,7 +146,13 @@ func conversationPageOf(page activity.ConversationPage) (ConversationPage, error
 			return ConversationPage{}, errors.New("Conversation projection is invalid")
 		}
 		view.Items = append(view.Items, ConversationSummary{
-			Conversation:    activityConversationRefOf(item.Latest),
+			Conversation: ActivityConversationRef{
+				ID:          item.Conversation.ProjectionID,
+				DisplayName: item.Conversation.DisplayName,
+				Kind:        string(item.Conversation.Kind),
+				Evidence:    string(item.Conversation.Evidence),
+				Actor:       item.Conversation.Actor,
+			},
 			FirstObservedAt: item.FirstOccurredAt,
 			TurnCount:       item.TurnCount,
 			Latest:          activities.Items[0],
@@ -378,12 +384,13 @@ func activityPageOf(page activity.Page) (ActivityPage, error) {
 func exchangeDetailOf(
 	record activity.Record,
 	egressPage egressaudit.Page,
-	content *exchangecontent.Record,
+	content *exchangecontent.Projection,
 	contentView ExchangeContentView,
 ) (ExchangeDetail, error) {
+	requestView, viewErr := exchangeContentRequestView(contentView)
 	if !isExchangeActivity(record.Kind) || record.Validate() != nil ||
 		egressPage.NextCursor != "" ||
-		(contentView != ExchangeContentViewIncremental && contentView != ExchangeContentViewFull) {
+		viewErr != nil {
 		return ExchangeDetail{}, errors.New("Exchange detail projection is incomplete")
 	}
 	ordered := make([]egressaudit.View, 0, len(egressPage.Items))
@@ -417,7 +424,8 @@ func exchangeDetailOf(
 		}
 	}
 	if content != nil {
-		if content.Validate() != nil || content.ExchangeID != record.SubjectID ||
+		if content.Validate() != nil || content.View != requestView ||
+			content.ExchangeID != record.SubjectID ||
 			content.Parent.CaptureRunID != record.CaptureRunID ||
 			content.Parent.ManualCaptureID != record.ManualCaptureID ||
 			content.Frozen.EnvironmentID != record.EnvironmentID ||
@@ -429,26 +437,32 @@ func exchangeDetailOf(
 			content.Frozen.ProtocolPlanRevision != record.ProtocolPlanRevision ||
 			content.Frozen.RouteID != record.RouteID ||
 			content.Frozen.RouteRevision != record.RouteRevision ||
-			!validRequestPresentation(content.Presentation, len(content.Request.Messages)) {
+			!validRequestPresentation(content.Presentation, content.TotalMessageCount) {
 			return ExchangeDetail{}, errors.New("Exchange content does not match frozen Activity evidence")
 		}
-		requestView := content.Request
-		if contentView == ExchangeContentViewIncremental {
-			requestView.Messages = content.IncrementalRequest()
-		}
+		requestDetail := content.Request
 		recordedAt := content.RecordedAt
 		expiresAt := content.ExpiresAt
+		var agentConversation *AgentConversationProjection
+		// A suffix-only request is sufficient for the Turn transcript, but it is
+		// not a complete authority for a capture-wide agent relationship graph.
+		// Only project relationships when the request view contains the whole
+		// frozen transcript.
+		if content.View == exchangecontent.RequestViewFull ||
+			content.Presentation.InheritedMessageCount == 0 {
+			agentConversation = agentConversationProjection(*content)
+		}
 		detail.Content = ExchangeContentDetail{
 			State: ExchangeContentRecorded, Mode: string(content.Mode),
 			RecordedAt: &recordedAt, ExpiresAt: &expiresAt,
-			AgentConversation: agentConversationProjection(*content),
+			AgentConversation: agentConversation,
 			RequestProjection: &ExchangeRequestProjection{
 				View: contentView, Relationship: content.Presentation.Mode,
 				InheritedMessageCount: content.Presentation.InheritedMessageCount,
-				TotalMessageCount:     len(content.Request.Messages),
+				TotalMessageCount:     content.TotalMessageCount,
 				FullSnapshotAvailable: content.Presentation.InheritedMessageCount > 0,
 			},
-			Request: &requestView,
+			Request: &requestDetail,
 		}
 		if content.Response != nil {
 			responseView := *content.Response
@@ -463,7 +477,7 @@ func exchangeDetailOf(
 	return detail, nil
 }
 
-func agentConversationProjection(content exchangecontent.Record) *AgentConversationProjection {
+func agentConversationProjection(content exchangecontent.Projection) *AgentConversationProjection {
 	agentOrder := make([]string, 0)
 	agentSet := make(map[string]struct{})
 	relationships := make([]AgentConversationRelationship, 0)
@@ -628,6 +642,19 @@ func parseExchangeContentView(rawQuery string) (ExchangeContentView, error) {
 	return view, nil
 }
 
+func exchangeContentRequestView(
+	view ExchangeContentView,
+) (exchangecontent.RequestView, error) {
+	switch view {
+	case ExchangeContentViewIncremental:
+		return exchangecontent.RequestViewIncremental, nil
+	case ExchangeContentViewFull:
+		return exchangecontent.RequestViewFull, nil
+	default:
+		return "", errInvalidActivityQuery
+	}
+}
+
 func activityCursor(sequence int64) (string, error) {
 	return sequenceCursor(activityCursorPrefix, sequence)
 }
@@ -695,11 +722,18 @@ func (handler *Handler) getExchange(writer http.ResponseWriter, request *http.Re
 		writeProblem(writer, http.StatusServiceUnavailable, ReasonRuntimeUnavailable)
 		return
 	}
-	var content *exchangecontent.Record
-	contentRecord, contentErr := handler.contents.Get(request.Context(), exchangeID)
+	requestView, err := exchangeContentRequestView(contentView)
+	if err != nil {
+		writeProblem(writer, http.StatusUnprocessableEntity, ReasonInvalidRequest)
+		return
+	}
+	var content *exchangecontent.Projection
+	contentProjection, contentErr := handler.contents.GetProjection(
+		request.Context(), exchangeID, requestView,
+	)
 	switch {
 	case contentErr == nil:
-		content = &contentRecord
+		content = &contentProjection
 	case errors.Is(contentErr, exchangecontent.ErrNotFound):
 	default:
 		writeProblem(writer, http.StatusServiceUnavailable, ReasonRuntimeUnavailable)

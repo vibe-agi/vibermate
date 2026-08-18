@@ -456,7 +456,7 @@ func TestSQLiteStoreProtectsPersistentArtifacts(t *testing.T) {
 	}
 }
 
-func openTestStore(t *testing.T, databasePath string) *Store {
+func openTestStore(t testing.TB, databasePath string) *Store {
 	t.Helper()
 	// The bound is a harness guard against a hung open, not a product startup
 	// contract. Applying every migration on a pure-Go SQLite driver under the

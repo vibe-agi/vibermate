@@ -14,6 +14,7 @@ import (
 )
 
 const (
+	manualCaptureIDPrefix  = "manual."
 	manualCaptureIDBytes   = 20
 	createCollisionRetries = 3
 	proxyDigestDomain      = "vibermate:manual-capture:proxy:v1:"
@@ -119,11 +120,10 @@ func (manager *Manager) Create(
 	defer finish()
 
 	for attempt := 0; attempt < createCollisionRetries; attempt++ {
-		idValue, randomErr := randomValue(manager.random, manualCaptureIDBytes)
+		id, randomErr := newManualCaptureID(manager.random)
 		if randomErr != nil {
 			return Grant{}, fmt.Errorf("generate ManualCapture ID: %w", randomErr)
 		}
-		id, _ := ParseID(idValue)
 		credentialValue, randomErr := randomProxyCredential(manager.random)
 		if randomErr != nil {
 			return Grant{}, fmt.Errorf("generate ManualCapture credential: %w", randomErr)
@@ -396,6 +396,14 @@ func randomValue(source io.Reader, size int) (string, error) {
 		return "", err
 	}
 	return base64.RawURLEncoding.EncodeToString(data), nil
+}
+
+func newManualCaptureID(source io.Reader) (ID, error) {
+	value, err := randomValue(source, manualCaptureIDBytes)
+	if err != nil {
+		return ID{}, err
+	}
+	return ParseID(manualCaptureIDPrefix + value)
 }
 
 func randomProxyCredential(source io.Reader) (string, error) {

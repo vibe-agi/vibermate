@@ -18,7 +18,8 @@ func TestOperationAndCodecPlanAreImmutable(t *testing.T) {
 		Transport: ClientOperationTransportHTTP, BodyKind: ClientOperationBodyJSON,
 		ReplayClass: ClientReplayGenerationCostOnly, CodecFeature: "messages",
 		MaxBodyBytes: 1024, AllowedQueries: []string{"beta=true"},
-		PayloadClass: OperationPayloadClientSemantic, EgressBearing: true,
+		AllowedQueryKeys: []string{"client_version", "scope"},
+		PayloadClass:     OperationPayloadClientSemantic, EgressBearing: true,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -38,10 +39,13 @@ func TestOperationAndCodecPlanAreImmutable(t *testing.T) {
 	methods[0] = "DELETE"
 	queries := plan.ClientOperations()[0].AllowedQueries()
 	queries[0] = "changed=true"
+	queryKeys := plan.ClientOperations()[0].AllowedQueryKeys()
+	queryKeys[0] = "changed"
 	capabilities := plan.RequiredCapabilities()
 	capabilities[0] = ProviderCapabilityToolCalls
 	operation := plan.ClientOperations()[0]
 	if operation.Methods()[0] != "POST" || operation.AllowedQueries()[0] != "beta=true" ||
+		operation.AllowedQueryKeys()[0] != "client_version" ||
 		plan.RequiredCapabilities()[0] != ProviderCapabilityMessages {
 		t.Fatal("caller mutated immutable protocol plan")
 	}
@@ -60,7 +64,8 @@ func TestOperationMatchSeparatesUnknownPathFromKnownContractMismatch(t *testing.
 		Transport: ClientOperationTransportHTTP, BodyKind: ClientOperationBodyJSON,
 		ReplayClass: ClientReplayGenerationCostOnly, CodecFeature: "messages",
 		MaxBodyBytes: 1024, AllowedQueries: []string{"beta=true"},
-		PayloadClass: OperationPayloadClientSemantic, EgressBearing: true,
+		AllowedQueryKeys: []string{"client_version", "scope"},
+		PayloadClass:     OperationPayloadClientSemantic, EgressBearing: true,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -77,6 +82,10 @@ func TestOperationMatchSeparatesUnknownPathFromKnownContractMismatch(t *testing.
 		wantErr   bool
 	}{
 		{"match", RequestTarget{Method: "POST", Path: "/v1/messages", RawQuery: "beta=true", Transport: ClientOperationTransportHTTP}, true, true, false},
+		{"dynamic control query", RequestTarget{Method: "POST", Path: "/v1/messages", RawQuery: "client_version=0.147.0", Transport: ClientOperationTransportHTTP}, true, true, false},
+		{"dynamic query key order is not semantic", RequestTarget{Method: "POST", Path: "/v1/messages", RawQuery: "scope=USER&client_version=0.147.0", Transport: ClientOperationTransportHTTP}, true, true, false},
+		{"dynamic query duplicate key", RequestTarget{Method: "POST", Path: "/v1/messages", RawQuery: "scope=USER&scope=GLOBAL", Transport: ClientOperationTransportHTTP}, false, true, false},
+		{"unknown query key", RequestTarget{Method: "POST", Path: "/v1/messages", RawQuery: "other=value", Transport: ClientOperationTransportHTTP}, false, true, false},
 		{"wrong method", RequestTarget{Method: "GET", Path: "/v1/messages", Transport: ClientOperationTransportHTTP}, false, true, false},
 		{"unknown path", RequestTarget{Method: "POST", Path: "/v1/other", Transport: ClientOperationTransportHTTP}, false, false, false},
 		{"noncanonical", RequestTarget{Method: "POST", Path: "/v1/../messages", Transport: ClientOperationTransportHTTP}, false, false, true},

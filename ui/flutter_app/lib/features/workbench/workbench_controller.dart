@@ -13,6 +13,9 @@ export '../../core/preferences/workbench_preferences.dart'
     show AppLanguage, WorkbenchSection, WorkbenchTheme;
 
 final class WorkbenchController extends ChangeNotifier {
+  static const _exchangeDetailCacheLimit = 64;
+  static const _fullExchangeDetailCacheLimit = 2;
+
   WorkbenchController({
     required ControlApi api,
     required TerminalCommandService terminalCommands,
@@ -35,7 +38,6 @@ final class WorkbenchController extends ChangeNotifier {
        language = initialPreferences.language,
        theme = initialPreferences.theme,
        selectedCaptureKey = initialPreferences.selectedCaptureKey,
-       selectedConversationKey = initialPreferences.selectedConversationKey,
        selectedEnvironmentId = initialPreferences.selectedEnvironmentId,
        selectedEnvironmentRevision =
            initialPreferences.selectedEnvironmentRevision,
@@ -53,8 +55,6 @@ final class WorkbenchController extends ChangeNotifier {
   DashboardData? data;
   NetworkData? networkData;
   List<ApprovalRecord>? pendingApprovals;
-  ConversationPage? conversationIndex;
-  ActivityPage? selectedConversationPage;
   ConversationPage? selectedCaptureConversations;
   ActivityPage? selectedCapturePage;
   EnvironmentDraft? reviewedEnvironmentDraft;
@@ -68,7 +68,6 @@ final class WorkbenchController extends ChangeNotifier {
   WorkbenchTheme theme;
   String? selectedCaptureKey;
   String? selectedCaptureConversationKey;
-  String? selectedConversationKey;
   String? selectedEnvironmentId;
   int? selectedEnvironmentRevision;
   String? selectedEndpointId;
@@ -76,7 +75,6 @@ final class WorkbenchController extends ChangeNotifier {
   String? errorMessage;
   String? operationNotice;
   String? networkError;
-  String? conversationsError;
   String? captureDirectoryError;
   String? networkNotice;
   String? inventoryError;
@@ -94,7 +92,6 @@ final class WorkbenchController extends ChangeNotifier {
   bool detailLoading = false;
   bool mutating = false;
   bool networkLoading = false;
-  bool conversationsLoading = false;
   bool captureDirectoryLoading = false;
   bool captureActivitiesLoading = false;
   bool networkMutating = false;
@@ -108,10 +105,13 @@ final class WorkbenchController extends ChangeNotifier {
   bool terminalCommandMutating = false;
   bool pendingApprovalsLoading = false;
   int _selectionGeneration = 0;
-  int _conversationGeneration = 0;
   int _environmentRevisionGeneration = 0;
-  final Map<String, ExchangeDetail> _exchangeDetails = {};
-  final Set<String> _loadingExchanges = {};
+  final LinkedHashMap<String, ExchangeDetail> _exchangeDetails =
+      LinkedHashMap<String, ExchangeDetail>();
+  final Map<String, Future<ExchangeDetail?>> _exchangeLoads = {};
+  final Map<String, int> _exchangeLoadGenerations = {};
+  final Map<String, String> _exchangeErrors = {};
+  int _exchangeLoadGeneration = 0;
   final LinkedHashMap<String, RawEvidencePage> _rawEvidencePages =
       LinkedHashMap<String, RawEvidencePage>();
   final Set<String> _loadingRawEvidence = {};
@@ -167,12 +167,6 @@ final class WorkbenchController extends ChangeNotifier {
 
   int? get pendingApprovalCount => pendingApprovals?.length;
 
-  List<ConversationSummary> get conversations =>
-      conversationIndex?.items
-          .map(ConversationSummary.fromRecord)
-          .toList(growable: false) ??
-      const [];
-
   List<ActivityRecord> get selectedActivities =>
       selectedCapturePage?.items ?? const [];
 
@@ -188,21 +182,25 @@ final class WorkbenchController extends ChangeNotifier {
     return captureConversations.where((value) => value.key == key).firstOrNull;
   }
 
-  ConversationSummary? get selectedConversation {
-    final key = selectedConversationKey;
-    if (key == null) return null;
-    return conversations.where((value) => value.key == key).firstOrNull;
-  }
-
   ExchangeDetail? exchangeDetail(
     String exchangeId, {
     String contentView = 'incremental',
-  }) => _exchangeDetails['$exchangeId:$contentView'];
+  }) {
+    final key = '$exchangeId:$contentView';
+    final cached = _exchangeDetails.remove(key);
+    if (cached != null) _exchangeDetails[key] = cached;
+    return cached;
+  }
 
   bool exchangeIsLoading(
     String exchangeId, {
     String contentView = 'incremental',
-  }) => _loadingExchanges.contains('$exchangeId:$contentView');
+  }) => _exchangeLoads.containsKey('$exchangeId:$contentView');
+
+  String? exchangeError(
+    String exchangeId, {
+    String contentView = 'incremental',
+  }) => _exchangeErrors['$exchangeId:$contentView'];
 
   RawEvidencePage? rawEvidence(String exchangeId) =>
       _rawEvidencePages[exchangeId];
@@ -290,9 +288,6 @@ final class WorkbenchController extends ChangeNotifier {
       } else {
         await refreshPendingApprovals();
       }
-      if (section == WorkbenchSection.conversations) {
-        await _refreshConversations();
-      }
       if (section == WorkbenchSection.settings) {
         await refreshTerminalCommand();
       }
@@ -326,9 +321,6 @@ final class WorkbenchController extends ChangeNotifier {
       if (capture != null) await _loadCaptureDetail(capture, quiet: true);
       if (section == WorkbenchSection.network) {
         await _refreshNetwork(quiet: true);
-      }
-      if (section == WorkbenchSection.conversations) {
-        await _refreshConversations(quiet: true);
       }
       if (section == WorkbenchSection.settings) {
         await refreshTerminalCommand(quiet: true);
@@ -382,9 +374,6 @@ final class WorkbenchController extends ChangeNotifier {
     notifyListeners();
     if (value == WorkbenchSection.network && networkData == null) {
       unawaited(_refreshNetwork());
-    }
-    if (value == WorkbenchSection.conversations && conversationIndex == null) {
-      unawaited(_refreshConversations());
     }
     if (value == WorkbenchSection.settings && terminalCommand == null) {
       unawaited(refreshTerminalCommand());
@@ -550,201 +539,74 @@ final class WorkbenchController extends ChangeNotifier {
     notifyListeners();
   }
 
-  Future<void> refreshConversations() => _refreshConversations();
-
-  Future<void> _refreshConversations({bool quiet = false}) async {
-    if (_disposed || conversationsLoading) return;
-    if (!quiet) {
-      conversationsLoading = true;
-      conversationsError = null;
-      notifyListeners();
-    }
-    try {
-      final updated = await _api.conversations(limit: 50);
-      if (_disposed) return;
-      final previouslySelected = selectedConversation;
-      conversationIndex = updated;
-      final available = conversations;
-      final selectionStillExists = available.any(
-        (value) => value.key == selectedConversationKey,
-      );
-      if (!selectionStillExists) {
-        // A live Exchange is deliberately isolated until terminal protocol
-        // evidence can prove its final Conversation. Preserve the selection
-        // across that projection change by the immutable Exchange identity.
-        final migrated =
-            previouslySelected?.conversation.kind == 'pending_exchange'
-            ? available
-                  .where(
-                    (value) => value.latest.id == previouslySelected!.latest.id,
-                  )
-                  .firstOrNull
-            : null;
-        selectedConversationKey = migrated?.key ?? available.firstOrNull?.key;
-        selectedConversationPage = null;
-      }
-      conversationsLoading = false;
-      notifyListeners();
-      if (!quiet && selectedConversationPage == null) {
-        final selected = selectedConversation;
-        if (selected != null) await _loadConversation(selected);
-      }
-    } catch (error) {
-      if (_disposed || quiet) return;
-      conversationsLoading = false;
-      conversationsError = _describeError(error);
-      notifyListeners();
-    }
-  }
-
-  Future<void> loadMoreConversations() async {
-    final current = conversationIndex;
-    final cursor = current?.nextCursor;
-    if (current == null || cursor == null || conversationsLoading) return;
-    conversationsLoading = true;
-    conversationsError = null;
-    notifyListeners();
-    try {
-      final page = await _api.conversations(cursor: cursor, limit: 50);
-      if (_disposed) return;
-      final unique = <String, ConversationRecord>{
-        for (final item in current.items) item.conversation.id: item,
-        for (final item in page.items) item.conversation.id: item,
-      };
-      conversationIndex = ConversationPage(
-        items: unique.values.toList(growable: false),
-        nextCursor: page.nextCursor,
-      );
-      conversationsLoading = false;
-      notifyListeners();
-    } catch (error) {
-      if (_disposed) return;
-      conversationsLoading = false;
-      conversationsError = _describeError(error);
-      notifyListeners();
-    }
-  }
-
-  Future<void> selectConversation(String key) async {
-    if (selectedConversationKey == key && selectedConversationPage != null) {
-      return;
-    }
-    selectedConversationKey = key;
-    selectedConversationPage = null;
-    conversationsError = null;
-    notifyListeners();
-    final selected = selectedConversation;
-    if (selected != null) await _loadConversation(selected);
-  }
-
-  Future<void> openSelectedConversationCapture() async {
-    final activity = selectedConversation?.latest;
-    if (activity == null) return;
-    final key = switch ((activity.captureRunId, activity.manualCaptureId)) {
-      (final id?, _) => 'managed_run:$id',
-      (_, final id?) => 'manual_capture:$id',
-      _ => null,
-    };
-    if (key == null ||
-        data?.captures.any((capture) => capture.key == key) != true) {
-      return;
-    }
-    await selectCapture(key);
-    if (_disposed) return;
-    selectSection(WorkbenchSection.captures);
-  }
-
-  Future<void> _loadConversation(ConversationSummary conversation) async {
-    final generation = ++_conversationGeneration;
-    conversationsLoading = true;
-    conversationsError = null;
-    notifyListeners();
-    try {
-      final page = await _api.activities(
-        limit: 200,
-        conversationId: conversation.key,
-      );
-      if (_disposed ||
-          generation != _conversationGeneration ||
-          selectedConversationKey != conversation.key) {
-        return;
-      }
-      selectedConversationPage =
-          page.items.isEmpty && conversation.latest.status == 'pending'
-          ? ActivityPage(items: [conversation.latest], nextCursor: null)
-          : page;
-      conversationsLoading = false;
-      notifyListeners();
-    } catch (error) {
-      if (_disposed || generation != _conversationGeneration) return;
-      conversationsLoading = false;
-      conversationsError = _describeError(error);
-      notifyListeners();
-    }
-  }
-
-  Future<void> loadMoreSelectedConversation() async {
-    final selected = selectedConversation;
-    final current = selectedConversationPage;
-    final cursor = current?.nextCursor;
-    if (selected == null ||
-        current == null ||
-        cursor == null ||
-        conversationsLoading) {
-      return;
-    }
-    conversationsLoading = true;
-    conversationsError = null;
-    notifyListeners();
-    try {
-      final page = await _api.activities(
-        cursor: cursor,
-        limit: 200,
-        conversationId: selected.key,
-      );
-      if (_disposed) return;
-      final unique = <String, ActivityRecord>{
-        for (final item in current.items) item.id: item,
-        for (final item in page.items) item.id: item,
-      };
-      selectedConversationPage = ActivityPage(
-        items: unique.values.toList(growable: false),
-        nextCursor: page.nextCursor,
-      );
-      conversationsLoading = false;
-      notifyListeners();
-    } catch (error) {
-      if (_disposed) return;
-      conversationsLoading = false;
-      conversationsError = _describeError(error);
-      notifyListeners();
-    }
-  }
-
   Future<ExchangeDetail?> loadExchangeDetail(
     String exchangeId, {
     String contentView = 'incremental',
-  }) async {
+    bool refresh = false,
+  }) {
     final key = '$exchangeId:$contentView';
-    final cached = _exchangeDetails[key];
-    if (cached != null) return cached;
-    if (_loadingExchanges.contains(key)) return null;
-    _loadingExchanges.add(key);
-    conversationsError = null;
+    if (!refresh) {
+      final cached = exchangeDetail(exchangeId, contentView: contentView);
+      if (cached != null) return Future<ExchangeDetail?>.value(cached);
+    }
+    if (!refresh) {
+      final active = _exchangeLoads[key];
+      if (active != null) return active;
+    }
+    final generation = ++_exchangeLoadGeneration;
+    _exchangeLoadGenerations[key] = generation;
+    _exchangeErrors.remove(key);
+    final load = _fetchExchangeDetail(
+      key,
+      exchangeId,
+      contentView: contentView,
+      generation: generation,
+    );
+    _exchangeLoads[key] = load;
     notifyListeners();
+    return load;
+  }
+
+  Future<ExchangeDetail?> _fetchExchangeDetail(
+    String key,
+    String exchangeId, {
+    required String contentView,
+    required int generation,
+  }) async {
     try {
       final detail = await _api.exchange(exchangeId, contentView: contentView);
-      if (_disposed) return null;
+      if (_disposed || _exchangeLoadGenerations[key] != generation) {
+        return detail;
+      }
+      _exchangeDetails.remove(key);
       _exchangeDetails[key] = detail;
-      _loadingExchanges.remove(key);
-      notifyListeners();
+      _trimExchangeDetailCache();
       return detail;
     } catch (error) {
-      if (_disposed) return null;
-      _loadingExchanges.remove(key);
-      conversationsError = _describeError(error);
-      notifyListeners();
+      if (_disposed || _exchangeLoadGenerations[key] != generation) {
+        return null;
+      }
+      _exchangeErrors[key] = _describeError(error);
       return null;
+    } finally {
+      if (_exchangeLoadGenerations[key] == generation) {
+        _exchangeLoadGenerations.remove(key);
+        _exchangeLoads.remove(key);
+        if (!_disposed) notifyListeners();
+      }
+    }
+  }
+
+  void _trimExchangeDetailCache() {
+    while (_exchangeDetails.keys.where((key) => key.endsWith(':full')).length >
+        _fullExchangeDetailCacheLimit) {
+      final oldestFull = _exchangeDetails.keys.firstWhere(
+        (key) => key.endsWith(':full'),
+      );
+      _exchangeDetails.remove(oldestFull);
+    }
+    while (_exchangeDetails.length > _exchangeDetailCacheLimit) {
+      _exchangeDetails.remove(_exchangeDetails.keys.first);
     }
   }
 
@@ -1408,7 +1270,6 @@ final class WorkbenchController extends ChangeNotifier {
     theme: theme,
     section: section,
     selectedCaptureKey: selectedCaptureKey,
-    selectedConversationKey: selectedConversationKey,
     selectedEnvironmentId: selectedEnvironmentId,
     selectedEnvironmentRevision: selectedEnvironmentRevision,
     selectedEndpointId: selectedEndpointId,

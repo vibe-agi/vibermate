@@ -281,16 +281,17 @@ func compileExecution(
 // stale transport alive.
 func compileConnectionCompatibilityDigest(endpoint CompiledEndpointPlan) (ConnectionCompatibilityDigest, error) {
 	type operationContract struct {
-		ID             string                                `json:"id"`
-		Revision       protocolspec.Revision                 `json:"revision"`
-		Methods        []string                              `json:"methods"`
-		PathPattern    string                                `json:"pathPattern"`
-		PathMatch      protocolspec.ClientOperationPathMatch `json:"pathMatch"`
-		Kind           protocolspec.ClientOperationKind      `json:"kind"`
-		Transport      protocolspec.ClientOperationTransport `json:"transport"`
-		BodyKind       protocolspec.ClientOperationBodyKind  `json:"bodyKind"`
-		MaxBodyBytes   int64                                 `json:"maxBodyBytes"`
-		AllowedQueries []string                              `json:"allowedQueries"`
+		ID               string                                `json:"id"`
+		Revision         protocolspec.Revision                 `json:"revision"`
+		Methods          []string                              `json:"methods"`
+		PathPattern      string                                `json:"pathPattern"`
+		PathMatch        protocolspec.ClientOperationPathMatch `json:"pathMatch"`
+		Kind             protocolspec.ClientOperationKind      `json:"kind"`
+		Transport        protocolspec.ClientOperationTransport `json:"transport"`
+		BodyKind         protocolspec.ClientOperationBodyKind  `json:"bodyKind"`
+		MaxBodyBytes     int64                                 `json:"maxBodyBytes"`
+		AllowedQueries   []string                              `json:"allowedQueries"`
+		AllowedQueryKeys []string                              `json:"allowedQueryKeys"`
 	}
 	type protocolContract struct {
 		Dialect         protocolspec.Dialect `json:"dialect"`
@@ -312,6 +313,7 @@ func compileConnectionCompatibilityDigest(endpoint CompiledEndpointPlan) (Connec
 				PathMatch: operation.PathMatch(), Kind: operation.Kind(),
 				Transport: operation.Transport(), BodyKind: operation.BodyKind(),
 				MaxBodyBytes: operation.MaxBodyBytes(), AllowedQueries: operation.AllowedQueries(),
+				AllowedQueryKeys: operation.AllowedQueryKeys(),
 			})
 		}
 		contracts = append(contracts, contract)

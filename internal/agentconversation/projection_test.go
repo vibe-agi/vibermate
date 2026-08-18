@@ -83,6 +83,23 @@ func TestClientIdentityFromProtocolEvidenceRetainsNativeHierarchy(t *testing.T) 
 	}
 }
 
+func TestClientIdentityRejectsByteOrderMark(t *testing.T) {
+	t.Parallel()
+
+	identity := agentconversation.ClientIdentity{
+		Client:             "claude",
+		SessionID:          "session\uFEFFid",
+		SessionResumable:   true,
+		Source:             agentconversation.ClientIdentitySourceProtocolEvidence,
+		Confidence:         "exact",
+		ObservedAt:         time.Date(2026, 8, 15, 1, 2, 3, 0, time.UTC),
+		ProviderResponseID: "response-1",
+	}
+	if err := identity.Validate(); err == nil {
+		t.Fatal("Validate() succeeded, want byte-order-mark failure")
+	}
+}
+
 func TestMergeClientIdentityDeepensWireEvidenceWithoutChangingAssociation(t *testing.T) {
 	t.Parallel()
 
@@ -130,6 +147,83 @@ func TestMergeClientIdentityDeepensWireEvidenceWithoutChangingAssociation(t *tes
 	again, changed, err := agentconversation.MergeClientIdentity(merged, wire)
 	if err != nil || changed || !again.Equal(merged) {
 		t.Fatalf("wire downgrade = %#v, %v, %v", again, changed, err)
+	}
+}
+
+func TestMergeClientIdentityDeepensUnknownWireParentFromLocalState(t *testing.T) {
+	t.Parallel()
+
+	observedAt := time.Date(2026, 8, 14, 11, 31, 5, 0, time.UTC)
+	wire, found := agentconversation.ClientIdentityFromProtocolEvidence(
+		[]protocolcore.ProtocolEvidenceValue{
+			{Name: "claude.agent_id", Value: "agent-review"},
+			{Name: "claude.session_id", Value: "session-resumable"},
+		},
+		"msg-provider",
+		observedAt,
+	)
+	if !found || wire.ActorIsSubagent {
+		t.Fatalf("wire identity = %#v, %v", wire, found)
+	}
+	local := wire.Clone()
+	local.ActorLabel = "Angle A line-by-line scan"
+	local.ActorType = "general-purpose"
+	local.ActorIsSubagent = true
+	local.Source = agentconversation.ClientIdentitySourceLocalState
+	local.Attributes = []agentconversation.ClientEvidenceValue{
+		{Name: "claude.description", Value: local.ActorLabel},
+	}
+
+	merged, changed, err := agentconversation.MergeClientIdentity(wire, local)
+	if err != nil || !changed || !merged.ActorIsSubagent ||
+		merged.ActorLabel != local.ActorLabel ||
+		merged.Source != agentconversation.ClientIdentitySourceLocalState {
+		t.Fatalf("MergeClientIdentity() = %#v, %v, %v", merged, changed, err)
+	}
+	// Reindexing may observe the same incomplete headers again. They cannot
+	// downgrade the client-local hierarchy that was already joined exactly.
+	again, changed, err := agentconversation.MergeClientIdentity(merged, wire)
+	if err != nil || changed || !again.Equal(merged) {
+		t.Fatalf("wire downgrade = %#v, %v, %v", again, changed, err)
+	}
+}
+
+func TestMergeClientIdentityDeepensUnknownWireParentFromLaterHeader(t *testing.T) {
+	t.Parallel()
+
+	observedAt := time.Date(2026, 8, 14, 11, 31, 5, 0, time.UTC)
+	identity := func(parent string, at time.Time) agentconversation.ClientIdentity {
+		evidence := []protocolcore.ProtocolEvidenceValue{
+			{Name: "claude.agent_id", Value: "agent-review"},
+		}
+		if parent != "" {
+			evidence = append(evidence, protocolcore.ProtocolEvidenceValue{
+				Name: "claude.parent_agent_id", Value: parent,
+			})
+		}
+		evidence = append(evidence, protocolcore.ProtocolEvidenceValue{
+			Name: "claude.session_id", Value: "session-resumable",
+		})
+		candidate, found := agentconversation.ClientIdentityFromProtocolEvidence(
+			evidence,
+			"msg-provider",
+			at,
+		)
+		if !found {
+			t.Fatal("wire identity was not derived")
+		}
+		return candidate
+	}
+
+	sparse := identity("", observedAt)
+	withParent := identity("agent-main", observedAt.Add(time.Second))
+	merged, changed, err := agentconversation.MergeClientIdentity(sparse, withParent)
+	if err != nil || !changed || !merged.ActorIsSubagent {
+		t.Fatalf("MergeClientIdentity() = %#v, %v, %v", merged, changed, err)
+	}
+	again, changed, err := agentconversation.MergeClientIdentity(merged, sparse)
+	if err != nil || changed || !again.Equal(merged) {
+		t.Fatalf("sparse wire downgrade = %#v, %v, %v", again, changed, err)
 	}
 }
 

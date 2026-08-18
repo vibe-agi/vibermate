@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter_test/flutter_test.dart';
 import 'package:vibermate_app/core/api/control_api.dart';
 import 'package:vibermate_app/core/api/control_models.dart';
@@ -86,6 +88,37 @@ void main() {
       );
     },
   );
+
+  test('Exchange refresh supersedes an older in-flight response', () async {
+    final fixtureApi = PreviewControlApi();
+    addTearDown(fixtureApi.close);
+    const exchangeId = 'run-1-exchange-222';
+    final stale = await fixtureApi.exchange(exchangeId);
+    final fresh = await fixtureApi.exchange(exchangeId, contentView: 'full');
+    final staleLoad = Completer<ExchangeDetail>();
+    final freshLoad = Completer<ExchangeDetail>();
+    final api = _SequencedExchangeApi([staleLoad.future, freshLoad.future]);
+    final controller = WorkbenchController(
+      api: api,
+      terminalCommands: PreviewTerminalCommandService(),
+      previewMode: true,
+      closeRuntime: () async {},
+    );
+    addTearDown(controller.dispose);
+
+    final first = controller.loadExchangeDetail(exchangeId);
+    final refresh = controller.loadExchangeDetail(exchangeId, refresh: true);
+    expect(api.exchangeCalls, 2);
+
+    freshLoad.complete(fresh);
+    expect(await refresh, same(fresh));
+    staleLoad.complete(stale);
+    expect(await first, same(stale));
+
+    expect(controller.exchangeDetail(exchangeId), same(fresh));
+    expect(controller.exchangeError(exchangeId), isNull);
+    expect(controller.exchangeIsLoading(exchangeId), isFalse);
+  });
 
   test(
     'Capture directory loads every stable page without duplicates',
@@ -692,4 +725,27 @@ void main() {
       expect(controller.selectedWorkspaceDefault!.environmentId, 'research');
     },
   );
+}
+
+final class _SequencedExchangeApi implements ControlApi {
+  _SequencedExchangeApi(this._responses);
+
+  final List<Future<ExchangeDetail>> _responses;
+  int exchangeCalls = 0;
+
+  @override
+  Future<ExchangeDetail> exchange(
+    String exchangeId, {
+    String contentView = 'incremental',
+  }) {
+    final index = exchangeCalls++;
+    if (index >= _responses.length) {
+      throw StateError('Unexpected exchange request $index');
+    }
+    return _responses[index];
+  }
+
+  @override
+  dynamic noSuchMethod(Invocation invocation) =>
+      throw UnsupportedError('${invocation.memberName}');
 }

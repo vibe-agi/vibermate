@@ -1,4 +1,4 @@
-// Package rawevidence owns encrypted, append-only HTTP envelope evidence.
+// Package rawevidence owns append-only HTTP envelope evidence.
 //
 // It intentionally models the HTTP message visible at ViberMate's Go
 // boundary. Body bytes and repeated header values are exact. Header field
@@ -158,8 +158,8 @@ func (frame Frame) validate(bodyBytes int) error {
 	return nil
 }
 
-// Context carries only frozen authority references. Secret values and raw
-// message content belong to Payload and are encrypted before queue admission.
+// Context carries only frozen authority references. Raw message content belongs
+// to Payload, and credential header values are removed before a Payload exists.
 type Context struct {
 	ScopeKind                ScopeKind
 	ScopeID                  string
@@ -267,7 +267,6 @@ type Observation struct {
 	Complete            bool
 	Unavailable         bool
 	IncompleteReason    string
-	ContainsSecret      bool
 	Representation      string
 	ContentType         string
 	ContentEncoding     string
@@ -332,30 +331,90 @@ func (value Observation) validate() error {
 	return nil
 }
 
+// HeaderField preserves a header's name, ordering and multiplicity as wire
+// evidence. A credential field carries Redacted instead of Values: the value
+// itself is replaced at the observation boundary and never reaches storage.
 type HeaderField struct {
-	Name   string   `json:"name"`
-	Values []string `json:"values"`
+	Name     string          `json:"name"`
+	Values   []string        `json:"values,omitempty"`
+	Redacted []RedactedValue `json:"redacted,omitempty"`
 }
 
+// Payload is the complete observed HTTP message, assembled for readers. The
+// store keeps its metadata and its body in separate columns: a []byte inside a
+// JSON document is base64-expanded, and body bytes are the bulk of every
+// observation.
 type Payload struct {
+	Version  uint8
+	Headers  []HeaderField
+	Trailers []HeaderField
+	Body     []byte
+	Frames   []Frame
+}
+
+// storedPayloadMetadata is a Payload without its body.
+type storedPayloadMetadata struct {
 	Version  uint8         `json:"version"`
 	Headers  []HeaderField `json:"headers"`
 	Trailers []HeaderField `json:"trailers,omitempty"`
-	Body     []byte        `json:"body"`
 	Frames   []Frame       `json:"frames,omitempty"`
 }
 
-func payloadOf(observation Observation, body []byte, frames []Frame) Payload {
+// payloadOf builds the metadata half of the stored payload and reports, in
+// canonical order, the credential header fields whose values it removed. The
+// names are
+// returned rather than recomputed by a second traversal so the stored list is a
+// projection of the redaction that happened, not a parallel claim about it —
+// and so an envelope that never built a payload cannot report one.
+//
+// It deliberately does not take the body. Bodies are content-addressed
+// separately and MarshalMetadata excludes them, so a body handed to this
+// function could only be copied and dropped — which is what it used to do, once
+// per observation, for messages the schema allows to reach 32 MiB.
+func payloadOf(
+	observation Observation,
+	frames []Frame,
+	redactor Redactor,
+) (Payload, []string, error) {
+	// A payload cannot be built without a bound redactor. Credential header
+	// removal is not a property of correct wiring; it fails closed here so a
+	// construction mistake cannot silently store a value.
+	if !redactor.bound() {
+		return Payload{}, nil, errors.New("raw evidence redactor is not bound")
+	}
+	headers := canonicalHeaders(observation.Headers, redactor)
+	trailers := canonicalHeaders(observation.Trailers, redactor)
 	return Payload{
 		Version:  1,
-		Headers:  canonicalHeaders(observation.Headers),
-		Trailers: canonicalHeaders(observation.Trailers),
-		Body:     bytes.Clone(body),
+		Headers:  headers,
+		Trailers: trailers,
 		Frames:   slices.Clone(frames),
-	}
+	}, redactedNamesOf(headers, trailers), nil
 }
 
-func canonicalHeaders(headers http.Header) []HeaderField {
+// redactedNamesOf lists, in canonical order, the fields the payload it was built
+// from actually lost values for.
+func redactedNamesOf(sets ...[]HeaderField) []string {
+	seen := make(map[string]struct{})
+	for _, fields := range sets {
+		for _, field := range fields {
+			if len(field.Redacted) > 0 {
+				seen[field.Name] = struct{}{}
+			}
+		}
+	}
+	if len(seen) == 0 {
+		return nil
+	}
+	names := make([]string, 0, len(seen))
+	for name := range seen {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	return names
+}
+
+func canonicalHeaders(headers http.Header, redactor Redactor) []HeaderField {
 	if len(headers) == 0 {
 		return nil
 	}
@@ -366,37 +425,47 @@ func canonicalHeaders(headers http.Header) []HeaderField {
 	sort.Strings(names)
 	fields := make([]HeaderField, 0, len(names))
 	for _, name := range names {
-		fields = append(fields, HeaderField{
-			Name:   name,
-			Values: slices.Clone(headers.Values(name)),
-		})
+		fields = append(fields, redactor.field(name, headers.Values(name)))
 	}
 	return fields
 }
 
-func (payload Payload) Marshal() ([]byte, error) {
+// MarshalMetadata renders everything about the message except its body.
+func (payload Payload) MarshalMetadata() ([]byte, error) {
 	if payload.Version != 1 {
 		return nil, errors.New("raw evidence payload version is invalid")
 	}
-	return json.Marshal(payload)
+	return json.Marshal(storedPayloadMetadata{
+		Version:  payload.Version,
+		Headers:  payload.Headers,
+		Trailers: payload.Trailers,
+		Frames:   payload.Frames,
+	})
 }
 
-func DecodePayload(encoded []byte) (Payload, error) {
-	decoder := json.NewDecoder(bytes.NewReader(encoded))
+// DecodePayload rejoins stored metadata with stored body bytes.
+func DecodePayload(encodedMetadata, body []byte) (Payload, error) {
+	decoder := json.NewDecoder(bytes.NewReader(encodedMetadata))
 	decoder.DisallowUnknownFields()
-	var payload Payload
-	if err := decoder.Decode(&payload); err != nil {
+	var metadata storedPayloadMetadata
+	if err := decoder.Decode(&metadata); err != nil {
 		return Payload{}, fmt.Errorf("decode raw evidence payload: %w", err)
 	}
-	if payload.Version != 1 {
+	if metadata.Version != 1 {
 		return Payload{}, errors.New("raw evidence payload version is unsupported")
 	}
-	return payload, nil
+	return Payload{
+		Version:  metadata.Version,
+		Headers:  metadata.Headers,
+		Trailers: metadata.Trailers,
+		Body:     body,
+		Frames:   metadata.Frames,
+	}, nil
 }
 
-// StoredEnvelope contains safe searchable metadata plus an encrypted payload.
-// Header values, trailers, frames, and bodies never appear in plaintext
-// columns.
+// StoredEnvelope contains safe searchable metadata plus the observed payload.
+// The payload is stored in the clear, and credential header values were removed
+// before it existed.
 type StoredEnvelope struct {
 	EnvelopeID               string
 	WriterID                 string
@@ -440,14 +509,19 @@ type StoredEnvelope struct {
 	DigestScope              DigestScope
 	PayloadState             PayloadState
 	PayloadReason            string
-	ContainsSecret           bool
-	EncryptionKeyRevision    uint64
-	CipherNonce              []byte
-	Ciphertext               []byte
+	RedactedCredentialFields []string
+	// PayloadMetadata is the marshalled headers, trailers and frames of a
+	// captured or truncated observation, and empty otherwise. Body carries the
+	// observed body bytes unchanged. Both are stored in the clear:
+	// INV-STORE-DISCLOSED forbids application-layer field encryption, and
+	// credential header values were removed before either existed. Body is the
+	// observation as sent, so a secret the client put inside it is retained.
+	PayloadMetadata []byte
+	Body            []byte
 }
 
 // EnvelopeMetadata is the only Raw envelope shape safe for ordinary control
-// reads. It cannot carry a nonce or ciphertext by construction.
+// reads. It cannot carry a payload by construction.
 type EnvelopeMetadata struct {
 	EnvelopeID               string
 	Layer                    Layer
@@ -489,8 +563,7 @@ type EnvelopeMetadata struct {
 	DigestScope              DigestScope
 	PayloadState             PayloadState
 	PayloadReason            string
-	ContainsSecret           bool
-	EncryptionKeyRevision    uint64
+	RedactedCredentialFields []string
 }
 
 func MetadataOf(value StoredEnvelope) EnvelopeMetadata {
@@ -520,8 +593,8 @@ func MetadataOf(value StoredEnvelope) EnvelopeMetadata {
 		HeaderCount:      value.HeaderCount, TrailerCount: value.TrailerCount,
 		BodyBytes: value.BodyBytes, BodySHA256: value.BodySHA256,
 		DigestScope: value.DigestScope, PayloadState: value.PayloadState,
-		PayloadReason: value.PayloadReason, ContainsSecret: value.ContainsSecret,
-		EncryptionKeyRevision: value.EncryptionKeyRevision,
+		PayloadReason:            value.PayloadReason,
+		RedactedCredentialFields: slices.Clone(value.RedactedCredentialFields),
 	}
 }
 
@@ -557,7 +630,6 @@ func (value StoredEnvelope) Validate() error {
 		value.EnvironmentRevision, value.ClientEndpointRevision,
 		value.UpstreamEndpointRevision, value.ProtocolPlanRevision,
 		value.RouteRevision, value.AccountRevision, value.CredentialEpoch,
-		value.EncryptionKeyRevision,
 	} {
 		if revision > maxSQLiteInteger {
 			return errors.New("stored raw evidence revision is invalid")
@@ -592,13 +664,37 @@ func (value StoredEnvelope) Validate() error {
 		return errors.New("stored raw evidence canonicalization is invalid")
 	}
 	if value.PayloadState == PayloadCaptured || value.PayloadState == PayloadTruncated {
-		if value.EncryptionKeyRevision == 0 ||
-			len(value.CipherNonce) != 12 || len(value.Ciphertext) == 0 {
-			return errors.New("captured raw evidence has no encrypted payload")
+		if len(value.PayloadMetadata) == 0 {
+			return errors.New("captured raw evidence has no payload metadata")
 		}
-	} else if value.EncryptionKeyRevision != 0 ||
-		len(value.CipherNonce) != 0 || len(value.Ciphertext) != 0 {
-		return errors.New("uncaptured raw evidence contains ciphertext")
+		// A captured observation retained the whole message, so every byte it
+		// counted must be a byte it stored. Without this an envelope can claim
+		// BodyBytes while storing nothing, and a read returns an empty body with
+		// a success outcome.
+		if int64(len(value.Body)) > value.BodyBytes {
+			return errors.New("raw evidence stores more bytes than it observed")
+		}
+		if value.PayloadState == PayloadCaptured {
+			if int64(len(value.Body)) != value.BodyBytes {
+				return errors.New(
+					"captured raw evidence stored fewer bytes than it counted",
+				)
+			}
+			// body_sha256 is observation evidence recorded independently of the
+			// stored bytes. Reassembly is verified against the body row's own key,
+			// which proves the chunks join; only this comparison proves they are
+			// the bytes the envelope says were observed. A truncated observation is
+			// excluded because its digest may cover a message it only kept a
+			// prefix of.
+			if value.DigestScope == DigestFull &&
+				sha256.Sum256(value.Body) != value.BodySHA256 {
+				return errors.New(
+					"captured raw evidence body does not match its recorded digest",
+				)
+			}
+		}
+	} else if len(value.PayloadMetadata) != 0 || len(value.Body) != 0 {
+		return errors.New("uncaptured raw evidence carries a payload")
 	}
 	if value.DigestScope == DigestUnavailable {
 		if value.BodySHA256 != [sha256.Size]byte{} {
@@ -689,6 +785,11 @@ type RevealedEnvelope struct {
 }
 
 type Repository interface {
+	// RedactionSalt returns the database's stable redaction salt, creating it
+	// on first use. It is not a secret and never leaves this database; its
+	// purpose is to keep a redacted digest from matching a corpus assembled
+	// elsewhere.
+	RedactionSalt(context.Context) ([]byte, error)
 	AppendBatch(context.Context, []StoredEnvelope, time.Time) error
 	ListExchange(context.Context, string) ([]StoredEnvelope, error)
 	GetEnvelope(context.Context, string) (StoredEnvelope, error)
@@ -776,18 +877,4 @@ func validMethod(value string) bool {
 		}
 	}
 	return true
-}
-
-func HeaderContainsSecret(headers http.Header) bool {
-	for name := range headers {
-		normalized := strings.ToLower(name)
-		if normalized == "authorization" || normalized == "proxy-authorization" ||
-			normalized == "cookie" || normalized == "set-cookie" ||
-			strings.Contains(normalized, "api-key") ||
-			strings.Contains(normalized, "token") ||
-			strings.Contains(normalized, "secret") {
-			return true
-		}
-	}
-	return false
 }

@@ -47,7 +47,7 @@ func TestAnUncataloguedBuildFromACataloguedPublisherIsRecognized(t *testing.T) {
 	if detection.Evidence != nil {
 		t.Fatal("a recognized detection must not carry release evidence")
 	}
-	if detection.Signer.LaunchRecipe != clientadapter.LaunchSSLCertFile {
+	if detection.Signer.LaunchRecipe != clientadapter.LaunchCodexResponsesHTTP {
 		t.Fatalf(
 			"recipe is %q, want the one Codex's runtime reads",
 			detection.Signer.LaunchRecipe,
@@ -267,7 +267,7 @@ func TestASignerCarriesNoVersionSpecificFeature(t *testing.T) {
 		Revision:        1,
 		CatalogRevision: 1,
 		InstallShape:    clientadapter.InstallNPMWrapperNativeChild,
-		LaunchRecipe:    clientadapter.LaunchSSLCertFile,
+		LaunchRecipe:    clientadapter.LaunchCodexResponsesHTTP,
 		SignedPath:      "/absolute/path",
 	}
 	if err := evidence.Validate(); err != nil {

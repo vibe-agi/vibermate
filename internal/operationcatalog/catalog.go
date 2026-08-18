@@ -38,12 +38,13 @@ const (
 
 	// Observed operations in the Codex ChatGPT-login shape. Classifying by
 	// host alone would send this control plane into the model pipeline.
-	OpenAICodexResponsesCreateID = "openai-codex-responses-create"
-	OpenAICodexModelsProbeID     = "openai-codex-models-probe"
-	OpenAIPluginsFeaturedProbeID = "openai-plugins-featured-probe"
-	OpenAIPluginsInstalledID     = "openai-ps-plugins-installed-probe"
-	OpenAIPluginsListID          = "openai-ps-plugins-list-probe"
-	OpenAIPluginsSuggestedID     = "openai-ps-plugins-suggested-probe"
+	OpenAICodexResponsesCreateID               = "openai-codex-responses-create"
+	OpenAICodexResponsesWebSocketUnsupportedID = "openai-codex-responses-websocket-unsupported"
+	OpenAICodexModelsProbeID                   = "openai-codex-models-probe"
+	OpenAIPluginsFeaturedProbeID               = "openai-plugins-featured-probe"
+	OpenAIPluginsInstalledID                   = "openai-ps-plugins-installed-probe"
+	OpenAIPluginsListID                        = "openai-ps-plugins-list-probe"
+	OpenAIPluginsSuggestedID                   = "openai-ps-plugins-suggested-probe"
 
 	MaxJSONBodyBytes   = 16 << 20
 	MaxOpaqueBodyBytes = 16 << 20
@@ -114,6 +115,7 @@ func BuiltIn() (Catalog, error) {
 		"token_count",
 		MaxJSONBodyBytes,
 		[]string{"beta=true"},
+		nil,
 		// The request body is the complete messages, system text, and tool
 		// schema, so it can never be forwarded to the original origin with the
 		// client's own credentials.
@@ -144,15 +146,46 @@ func BuiltIn() (Catalog, error) {
 	// absent: they carry a request body and nothing verifies it holds no
 	// prompt or tool data, so declaring them control would assert exactly
 	// that. They stay unclassified and fail closed.
+	//
+	// Each of these admits query values, so each is control rather than none:
+	// the class is written into EgressAttempt as durable evidence, and none
+	// would record that the outbound request carried nothing from the client.
 	for _, probe := range []struct {
-		id   string
-		path string
+		id               string
+		path             string
+		allowedQueryKeys []string
+		payloadClass     protocolspec.OperationPayloadClass
 	}{
-		{OpenAICodexModelsProbeID, "/backend-api/codex/models"},
-		{OpenAIPluginsFeaturedProbeID, "/backend-api/plugins/featured"},
-		{OpenAIPluginsInstalledID, "/backend-api/ps/plugins/installed"},
-		{OpenAIPluginsListID, "/backend-api/ps/plugins/list"},
-		{OpenAIPluginsSuggestedID, "/backend-api/ps/plugins/suggested"},
+		{
+			OpenAICodexModelsProbeID,
+			"/backend-api/codex/models",
+			[]string{"client_version"},
+			protocolspec.OperationPayloadControl,
+		},
+		{
+			OpenAIPluginsFeaturedProbeID,
+			"/backend-api/plugins/featured",
+			[]string{"platform"},
+			protocolspec.OperationPayloadControl,
+		},
+		{
+			OpenAIPluginsInstalledID,
+			"/backend-api/ps/plugins/installed",
+			[]string{"includeDownloadUrls", "scope"},
+			protocolspec.OperationPayloadControl,
+		},
+		{
+			OpenAIPluginsListID,
+			"/backend-api/ps/plugins/list",
+			[]string{"limit", "pageToken", "scope"},
+			protocolspec.OperationPayloadControl,
+		},
+		{
+			OpenAIPluginsSuggestedID,
+			"/backend-api/ps/plugins/suggested",
+			[]string{"scope"},
+			protocolspec.OperationPayloadControl,
+		},
 	} {
 		if err := addOperation(
 			add,
@@ -167,32 +200,39 @@ func BuiltIn() (Catalog, error) {
 			"",
 			0,
 			nil,
-			protocolspec.OperationPayloadNone,
+			probe.allowedQueryKeys,
+			probe.payloadClass,
 			true,
 		); err != nil {
 			return Catalog{}, err
 		}
 	}
-	webSocketID, err := protocolspec.NewClientOperationID(
-		OpenAIResponsesWebSocketUnsupportedID,
-	)
-	if err != nil {
-		return Catalog{}, err
-	}
-	if err := add(protocolspec.ClientOperationOptions{
-		ID:            webSocketID,
-		Revision:      1,
-		ClientDialect: protocolspec.DialectOpenAIResponses,
-		Methods:       []string{http.MethodGet},
-		PathPattern:   "/v1/responses",
-		PathMatch:     protocolspec.ClientOperationPathExact,
-		Kind:          protocolspec.ClientOperationUnsupported,
-		Transport:     protocolspec.ClientOperationTransportWebSocket,
-		BodyKind:      protocolspec.ClientOperationBodyNone,
-		ReplayClass:   protocolspec.ClientReplayNonReplayable,
-		PayloadClass:  protocolspec.OperationPayloadNone,
-	}); err != nil {
-		return Catalog{}, err
+	for _, unsupported := range []struct {
+		id   string
+		path string
+	}{
+		{OpenAIResponsesWebSocketUnsupportedID, "/v1/responses"},
+		{OpenAICodexResponsesWebSocketUnsupportedID, "/backend-api/codex/responses"},
+	} {
+		webSocketID, err := protocolspec.NewClientOperationID(unsupported.id)
+		if err != nil {
+			return Catalog{}, err
+		}
+		if err := add(protocolspec.ClientOperationOptions{
+			ID:            webSocketID,
+			Revision:      1,
+			ClientDialect: protocolspec.DialectOpenAIResponses,
+			Methods:       []string{http.MethodGet},
+			PathPattern:   unsupported.path,
+			PathMatch:     protocolspec.ClientOperationPathExact,
+			Kind:          protocolspec.ClientOperationUnsupported,
+			Transport:     protocolspec.ClientOperationTransportWebSocket,
+			BodyKind:      protocolspec.ClientOperationBodyNone,
+			ReplayClass:   protocolspec.ClientReplayNonReplayable,
+			PayloadClass:  protocolspec.OperationPayloadNone,
+		}); err != nil {
+			return Catalog{}, err
+		}
 	}
 
 	// These carry no request body at all, so they are proven no-payload probes
@@ -231,6 +271,7 @@ func BuiltIn() (Catalog, error) {
 			protocolspec.ClientReplaySafe,
 			"",
 			0,
+			nil,
 			nil,
 			protocolspec.OperationPayloadNone,
 			true,
@@ -307,6 +348,7 @@ func addOperation(
 	feature protocolspec.CodecFeature,
 	maxBodyBytes int64,
 	queries []string,
+	queryKeys []string,
 	payloadClass protocolspec.OperationPayloadClass,
 	egressBearing bool,
 ) error {
@@ -315,21 +357,22 @@ func addOperation(
 		return err
 	}
 	return add(protocolspec.ClientOperationOptions{
-		ID:             identifier,
-		Revision:       1,
-		ClientDialect:  dialect,
-		Methods:        methods,
-		PathPattern:    path,
-		PathMatch:      match,
-		Kind:           kind,
-		Transport:      protocolspec.ClientOperationTransportHTTP,
-		BodyKind:       bodyKind,
-		ReplayClass:    replay,
-		CodecFeature:   feature,
-		MaxBodyBytes:   maxBodyBytes,
-		AllowedQueries: queries,
-		PayloadClass:   payloadClass,
-		EgressBearing:  egressBearing,
+		ID:               identifier,
+		Revision:         1,
+		ClientDialect:    dialect,
+		Methods:          methods,
+		PathPattern:      path,
+		PathMatch:        match,
+		Kind:             kind,
+		Transport:        protocolspec.ClientOperationTransportHTTP,
+		BodyKind:         bodyKind,
+		ReplayClass:      replay,
+		CodecFeature:     feature,
+		MaxBodyBytes:     maxBodyBytes,
+		AllowedQueries:   queries,
+		AllowedQueryKeys: queryKeys,
+		PayloadClass:     payloadClass,
+		EgressBearing:    egressBearing,
 	})
 }
 
@@ -358,6 +401,7 @@ func addUnsupportedPrefix(
 		"",
 		MaxJSONBodyBytes,
 		nil,
+		nil,
 		payloadClass,
 		false,
 	)
@@ -381,6 +425,7 @@ func addUnsupportedExact(
 		protocolspec.ClientReplayNonReplayable,
 		"",
 		MaxJSONBodyBytes,
+		nil,
 		nil,
 		payloadClass,
 		false,

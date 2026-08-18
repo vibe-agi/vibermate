@@ -4,7 +4,6 @@ import 'package:flutter/services.dart';
 
 enum WorkbenchSection {
   captures('captures'),
-  conversations('conversations'),
   environments('environments'),
   routes('routes'),
   network('network'),
@@ -14,11 +13,23 @@ enum WorkbenchSection {
 
   final String wireName;
 
+  /// Sections that exist in saved state and no longer exist in the product.
+  ///
+  /// A retired name is migrated rather than rejected. An unknown section fails
+  /// the whole contract, so treating one as corruption would answer a removed
+  /// nav item by discarding the user's theme, language and every selection —
+  /// behind a warning telling them their state was invalid. It was not.
+  static const _retired = <String, WorkbenchSection>{
+    // Conversations stopped being a top-level section: every Conversation is
+    // reachable through the Capture that owns it.
+    'conversations': WorkbenchSection.captures,
+  };
+
   static WorkbenchSection? fromWire(Object? value) {
     for (final section in values) {
       if (section.wireName == value) return section;
     }
-    return null;
+    return value is String ? _retired[value] : null;
   }
 }
 
@@ -85,7 +96,6 @@ final class WorkbenchPreferences {
     this.theme = WorkbenchTheme.system,
     this.section = WorkbenchSection.captures,
     this.selectedCaptureKey,
-    this.selectedConversationKey,
     this.selectedEnvironmentId,
     this.selectedEnvironmentRevision,
     this.selectedEndpointId,
@@ -124,7 +134,11 @@ final class WorkbenchPreferences {
       throw const WorkbenchPreferencesFutureSchema();
     }
     if (observedSchema != schema ||
-        value.keys.toSet().difference(_fields).isNotEmpty ||
+        value.keys
+            .toSet()
+            .difference(_fields)
+            .difference(_retired)
+            .isNotEmpty ||
         !_fields.every(value.containsKey)) {
       throw const WorkbenchPreferencesException(
         'preference fields do not match the contract',
@@ -137,10 +151,6 @@ final class WorkbenchPreferences {
       value['selectedCaptureKey'],
       prefixes: const {'managed_run:', 'manual_capture:'},
     );
-    final conversationKey = _optionalSelection(
-      value['selectedConversationKey'],
-      prefixes: const {'capture_run:', 'exchange:'},
-    );
     final environmentId = _optionalResourceId(value['selectedEnvironmentId']);
     final environmentRevision = _optionalPositiveInteger(
       value['selectedEnvironmentRevision'],
@@ -150,7 +160,6 @@ final class WorkbenchPreferences {
         theme == null ||
         section == null ||
         captureKey == _invalidSelection ||
-        conversationKey == _invalidSelection ||
         environmentId == _invalidSelection ||
         environmentRevision == _invalidInteger ||
         environmentRevision != null && environmentId == null ||
@@ -164,7 +173,6 @@ final class WorkbenchPreferences {
       theme: theme,
       section: section,
       selectedCaptureKey: captureKey,
-      selectedConversationKey: conversationKey,
       selectedEnvironmentId: environmentId,
       selectedEnvironmentRevision: environmentRevision,
       selectedEndpointId: endpointId,
@@ -173,13 +181,21 @@ final class WorkbenchPreferences {
 
   static const schema = 'vibermate-workbench-preferences/v2';
   static const maximumEncodedBytes = 4096;
+
+  /// Fields that exist in saved state and no longer exist in the contract.
+  ///
+  /// They are tolerated on read and never written back, so a file written
+  /// before a surface was retired still loads. The contract is otherwise exact:
+  /// an unknown field is still a rejection, because that is how a corrupted or
+  /// foreign file is caught.
+  static const _retired = {'selectedConversationKey'};
+
   static const _fields = {
     'schema',
     'language',
     'theme',
     'section',
     'selectedCaptureKey',
-    'selectedConversationKey',
     'selectedEnvironmentId',
     'selectedEnvironmentRevision',
     'selectedEndpointId',
@@ -192,7 +208,6 @@ final class WorkbenchPreferences {
   final WorkbenchTheme theme;
   final WorkbenchSection section;
   final String? selectedCaptureKey;
-  final String? selectedConversationKey;
   final String? selectedEnvironmentId;
   final int? selectedEnvironmentRevision;
   final String? selectedEndpointId;
@@ -204,7 +219,6 @@ final class WorkbenchPreferences {
       'theme': theme.wireName,
       'section': section.wireName,
       'selectedCaptureKey': selectedCaptureKey,
-      'selectedConversationKey': selectedConversationKey,
       'selectedEnvironmentId': selectedEnvironmentId,
       'selectedEnvironmentRevision': selectedEnvironmentRevision,
       'selectedEndpointId': selectedEndpointId,
@@ -253,7 +267,6 @@ final class WorkbenchPreferences {
       other.theme == theme &&
       other.section == section &&
       other.selectedCaptureKey == selectedCaptureKey &&
-      other.selectedConversationKey == selectedConversationKey &&
       other.selectedEnvironmentId == selectedEnvironmentId &&
       other.selectedEnvironmentRevision == selectedEnvironmentRevision &&
       other.selectedEndpointId == selectedEndpointId;
@@ -264,7 +277,6 @@ final class WorkbenchPreferences {
     theme,
     section,
     selectedCaptureKey,
-    selectedConversationKey,
     selectedEnvironmentId,
     selectedEnvironmentRevision,
     selectedEndpointId,

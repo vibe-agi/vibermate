@@ -31,7 +31,6 @@ import (
 	"github.com/vibe-agi/vibermate/internal/captureassignment"
 	"github.com/vibe-agi/vibermate/internal/captureidentity"
 	"github.com/vibe-agi/vibermate/internal/certidentity"
-	"github.com/vibe-agi/vibermate/internal/clientadapter"
 	"github.com/vibe-agi/vibermate/internal/connectionevent"
 	"github.com/vibe-agi/vibermate/internal/connectionpolicy"
 	"github.com/vibe-agi/vibermate/internal/egressaudit"
@@ -834,19 +833,6 @@ func (handler *Handler) serveInner(
 		},
 	)
 	if err != nil {
-		if transport == protocolspec.ClientOperationTransportWebSocket &&
-			isWebSocketUpgrade(request) &&
-			admission.Supports(
-				clientadapter.FeatureResponsesWebSocketHTTPFallback,
-			) {
-			writeReason(
-				writer,
-				http.StatusUpgradeRequired,
-				ReasonResponsesWebSocketUnsupported,
-				"",
-			)
-			return
-		}
 		if errors.Is(err, captureassignment.ErrConnectionNotFound) ||
 			errors.Is(err, captureassignment.ErrOperationInProgress) ||
 			errors.Is(err, environment.ErrInvalidEnvironment) {
@@ -867,8 +853,12 @@ func (handler *Handler) serveInner(
 	operation := plan.Operation()
 	clientDialect := plan.ProtocolPlan().ClientDialect()
 	if operation.Kind() == protocolspec.ClientOperationUnsupported {
-		if operation.Transport() == protocolspec.ClientOperationTransportWebSocket &&
-			admission.Supports(clientadapter.FeatureResponsesWebSocketHTTPFallback) {
+		// Unsupported WebSocket operations are an operation-catalog fact, not a
+		// property of one frozen client build. Returning the bounded upgrade
+		// response only after the exact operation matched keeps unknown paths
+		// fail-closed while allowing signed, newer Codex releases to use their
+		// HTTPS transport without teaching the proxy every release digest.
+		if operation.Transport() == protocolspec.ClientOperationTransportWebSocket {
 			writeReason(writer, http.StatusUpgradeRequired, ReasonResponsesWebSocketUnsupported, "")
 			return
 		}

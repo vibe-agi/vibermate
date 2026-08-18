@@ -18,6 +18,7 @@ func (SystemClock) Now() time.Time { return time.Now().UTC() }
 type Repository interface {
 	Put(context.Context, Record) error
 	Get(context.Context, string, time.Time) (Record, error)
+	GetProjection(context.Context, string, time.Time, RequestView) (Projection, error)
 	PurgeExpired(context.Context, time.Time) (uint64, error)
 }
 
@@ -27,6 +28,7 @@ type Recorder interface {
 
 type Reader interface {
 	Get(context.Context, string) (Record, error)
+	GetProjection(context.Context, string, RequestView) (Projection, error)
 }
 
 type Runtime interface {
@@ -98,6 +100,32 @@ func (manager *Manager) Get(ctx context.Context, exchangeID string) (Record, err
 		return Record{}, err
 	}
 	return record.Clone(), nil
+}
+
+func (manager *Manager) GetProjection(
+	ctx context.Context,
+	exchangeID string,
+	view RequestView,
+) (Projection, error) {
+	if !validIdentity(exchangeID, MaxExchangeIDBytes) ||
+		(view != RequestViewFull && view != RequestViewIncremental) {
+		return Projection{}, ErrInvalidEvidence
+	}
+	operation, finish, err := manager.begin(ctx)
+	if err != nil {
+		return Projection{}, err
+	}
+	defer finish()
+	projection, err := manager.repository.GetProjection(
+		operation,
+		exchangeID,
+		manager.clock.Now().UTC(),
+		view,
+	)
+	if err != nil {
+		return Projection{}, err
+	}
+	return projection.Clone(), nil
 }
 
 func (manager *Manager) Shutdown(ctx context.Context) error {

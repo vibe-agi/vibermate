@@ -32,7 +32,7 @@ func TestRawEvidenceMetadataAndAuditedRevealContract(t *testing.T) {
 			StatusCode: 200, Authority: "api.anthropic.com", Path: "/v1/messages",
 			HeaderCount: 2, BodyBytes: int64(len(body)), BodySHA256: digest,
 			DigestScope: rawevidence.DigestFull, PayloadState: rawevidence.PayloadCaptured,
-			ContainsSecret: true,
+			RedactedCredentialFields: []string{"Authorization"},
 		}},
 		payload: rawevidence.Payload{
 			Version: 1,

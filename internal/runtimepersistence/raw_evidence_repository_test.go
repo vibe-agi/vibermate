@@ -13,20 +13,24 @@ import (
 	"github.com/vibe-agi/vibermate/internal/rawevidence"
 )
 
-func TestRawEvidenceRepositoryCommitsOneBatchAndKeepsSecretsOutOfPlaintext(t *testing.T) {
+// The claim is about credentials, not about content. Bodies are deliberately
+// stored in the clear now, so asserting that a body value is absent would assert
+// an artifact of compression rather than a property of the store.
+func TestRawEvidenceRepositoryCommitsOneBatchAndKeepsCredentialsOutOfEveryColumn(
+	t *testing.T,
+) {
 	databasePath := filepath.Join(t.TempDir(), "runtime.db")
 	store := openTestStore(t, databasePath)
 	repository := store.RawEvidenceRepository()
 	body := []byte(`{"private":"body-value-that-must-not-appear"}`)
-	digest := sha256.Sum256(body)
 	records := []rawevidence.StoredEnvelope{
 		rawEvidenceRecordForTest(
 			"writer-1.1", 1, rawevidence.LayerClientIngress,
-			digest, []byte("encrypted-authorization-and-body-one"),
+			body, []byte(`{"version":1,"headers":[]}`),
 		),
 		rawEvidenceRecordForTest(
 			"writer-1.2", 2, rawevidence.LayerClientDownstream,
-			digest, []byte("encrypted-authorization-and-body-two"),
+			body, []byte(`{"version":1,"headers":[]}`),
 		),
 	}
 	if err := repository.AppendBatch(
@@ -49,21 +53,27 @@ func TestRawEvidenceRepositoryCommitsOneBatchAndKeepsSecretsOutOfPlaintext(t *te
 	if err != nil {
 		t.Fatal(err)
 	}
+	// Credential header values never reach any column. Field names deliberately do:
+	// design 02 §9.6 retains header names and order while excluding their
+	// values, and design 06 §8.1 permits storing redaction state. The name is
+	// the evidence that the client sent a credential and that it was removed.
 	for _, forbidden := range []string{
-		"Bearer private-token", "body-value-that-must-not-appear",
-		"Authorization", "private-api-key",
+		"Bearer private-token", "private-api-key",
 	} {
 		if bytes.Contains(databaseBytes, []byte(forbidden)) {
 			t.Fatalf("database contains forbidden plaintext %q", forbidden)
 		}
 	}
+	if !bytes.Contains(databaseBytes, []byte("Authorization")) {
+		t.Fatal("database lost the evidence that a credential field was redacted")
+	}
 }
 
 func TestRawEvidenceRepositoryColumnAndArgumentCountsStayAligned(t *testing.T) {
-	digest := sha256.Sum256([]byte("body"))
+	body := []byte("body")
 	record := rawEvidenceRecordForTest(
 		"writer-1.1", 1, rawevidence.LayerClientIngress,
-		digest, []byte("ciphertext"),
+		body, []byte(`{"version":1,"headers":[]}`),
 	)
 	columns := strings.Split(rawEvidenceColumns, ",")
 	for index := range columns {
@@ -75,11 +85,116 @@ func TestRawEvidenceRepositoryColumnAndArgumentCountsStayAligned(t *testing.T) {
 	if got := len(columns); got != rawEvidenceColumnCount {
 		t.Fatalf("raw evidence SQL columns=%d declared columns=%d", got, rawEvidenceColumnCount)
 	}
-	if got := len(rawEvidenceArguments(record)); got != len(columns) {
+	if got := len(rawEvidenceArguments(record, nil)); got != len(columns) {
 		t.Fatalf("raw evidence arguments=%d SQL columns=%d", got, len(columns))
 	}
 	if got := strings.Count(rawEvidencePlaceholders, "?"); got != len(columns) {
 		t.Fatalf("raw evidence placeholders=%d SQL columns=%d", got, len(columns))
+	}
+}
+
+func TestRawEvidenceRepositoryStoresUnavailablePayloadAsAnEmptyBlob(t *testing.T) {
+	store := openTestStore(t, filepath.Join(t.TempDir(), "runtime.db"))
+	defer shutdownTestStore(t, store)
+	repository := store.RawEvidenceRepository()
+	record := rawEvidenceRecordForTest(
+		"writer-unavailable.1",
+		1,
+		rawevidence.LayerClientDownstream,
+		nil,
+		nil,
+	)
+	record.WriterID = "writer-unavailable"
+	record.BodyBytes = 0
+	record.BodySHA256 = [sha256.Size]byte{}
+	record.DigestScope = rawevidence.DigestUnavailable
+	record.PayloadState = rawevidence.PayloadUnavailable
+	record.PayloadReason = "response_stream_unavailable"
+	record.PayloadMetadata = nil
+
+	if err := repository.AppendBatch(
+		context.Background(),
+		[]rawevidence.StoredEnvelope{record},
+		time.Now().UTC(),
+	); err != nil {
+		t.Fatal(err)
+	}
+	loaded, err := repository.GetEnvelope(context.Background(), record.EnvelopeID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if loaded.PayloadState != rawevidence.PayloadUnavailable ||
+		len(loaded.PayloadMetadata) != 0 {
+		t.Fatalf("unexpected unavailable envelope: %+v", loaded)
+	}
+	var payloadType string
+	var payloadBytes int
+	if err := store.database.QueryRowContext(
+		context.Background(),
+		`SELECT typeof(payload_metadata), length(payload_metadata)
+		 FROM runtime_raw_evidence_envelopes
+		 WHERE envelope_id = ?`,
+		record.EnvelopeID,
+	).Scan(&payloadType, &payloadBytes); err != nil {
+		t.Fatal(err)
+	}
+	if payloadType != "blob" || payloadBytes != 0 {
+		t.Fatalf(
+			"unavailable payload storage = %s/%d", payloadType, payloadBytes,
+		)
+	}
+}
+
+func TestRawEvidenceRepositoryCommitsCapturedAndUnavailablePayloadsTogether(
+	t *testing.T,
+) {
+	store := openTestStore(t, filepath.Join(t.TempDir(), "runtime.db"))
+	defer shutdownTestStore(t, store)
+	repository := store.RawEvidenceRepository()
+	capturedBody := []byte("captured-response")
+	captured := rawEvidenceRecordForTest(
+		"writer-mixed.1",
+		1,
+		rawevidence.LayerClientIngress,
+		capturedBody,
+		[]byte("authenticated-captured-payload"),
+	)
+	captured.WriterID = "writer-mixed"
+	unavailable := rawEvidenceRecordForTest(
+		"writer-mixed.2",
+		2,
+		rawevidence.LayerProviderResponse,
+		nil,
+		nil,
+	)
+	unavailable.WriterID = captured.WriterID
+	unavailable.BodyBytes = 0
+	unavailable.BodySHA256 = [sha256.Size]byte{}
+	unavailable.DigestScope = rawevidence.DigestUnavailable
+	unavailable.PayloadState = rawevidence.PayloadUnavailable
+	unavailable.PayloadReason = "response_stream_unavailable"
+	unavailable.RedactedCredentialFields = nil
+	unavailable.PayloadMetadata = nil
+
+	if err := repository.AppendBatch(
+		context.Background(),
+		[]rawevidence.StoredEnvelope{captured, unavailable},
+		time.Now().UTC(),
+	); err != nil {
+		t.Fatal(err)
+	}
+	loaded, err := repository.ListExchange(context.Background(), captured.ExchangeID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(loaded) != 2 {
+		t.Fatalf("stored envelopes = %d, want 2", len(loaded))
+	}
+	if loaded[0].PayloadState != rawevidence.PayloadCaptured ||
+		!bytes.Equal(loaded[0].PayloadMetadata, captured.PayloadMetadata) ||
+		loaded[1].PayloadState != rawevidence.PayloadUnavailable ||
+		len(loaded[1].PayloadMetadata) != 0 {
+		t.Fatalf("unexpected mixed batch: %#v", loaded)
 	}
 }
 
@@ -100,10 +215,9 @@ func TestRawEvidenceWriterRecoveryReportsOnlyOpenPredecessorAndPurgesExpiry(
 	); err != nil || recovery != (rawevidence.Recovery{}) {
 		t.Fatalf("first recovery=%+v err=%v", recovery, err)
 	}
-	bodyDigest := sha256.Sum256([]byte("expired"))
 	expired := rawEvidenceRecordForTest(
 		"writer-open.1", 1, rawevidence.LayerClientIngress,
-		bodyDigest, []byte("ciphertext"),
+		[]byte("expired"), []byte(`{"version":1,"headers":[]}`),
 	)
 	expired.WriterID = first.WriterID
 	expired.ObservedAt = started.Add(-48 * time.Hour)
@@ -149,10 +263,10 @@ func TestRawEvidenceRevealAuditStoresNoPayload(t *testing.T) {
 	databasePath := filepath.Join(t.TempDir(), "runtime.db")
 	store := openTestStore(t, databasePath)
 	repository := store.RawEvidenceRepository()
-	digest := sha256.Sum256([]byte("body"))
+	body := []byte("body")
 	record := rawEvidenceRecordForTest(
 		"writer-audit.1", 1, rawevidence.LayerProviderResponse,
-		digest, []byte("authenticated-ciphertext"),
+		body, []byte(`{"version":1,"headers":[]}`),
 	)
 	record.WriterID = "writer-audit"
 	if err := repository.AppendBatch(
@@ -203,7 +317,7 @@ func TestRawEvidenceRevealAuditStoresNoPayload(t *testing.T) {
 			t.Fatal(err)
 		}
 		switch strings.ToLower(name) {
-		case "body", "headers", "trailers", "frames", "ciphertext", "cipher_nonce":
+		case "body", "headers", "trailers", "frames", "payload_metadata":
 			t.Fatalf("reveal audit schema carries payload column %q", name)
 		}
 	}
@@ -226,8 +340,8 @@ func rawEvidenceRecordForTest(
 	id string,
 	watermark uint64,
 	layer rawevidence.Layer,
-	digest [sha256.Size]byte,
-	ciphertext []byte,
+	body []byte,
+	payloadMetadata []byte,
 ) rawevidence.StoredEnvelope {
 	observedAt := time.Unix(1_790_000_000, int64(watermark)).UTC()
 	return rawevidence.StoredEnvelope{
@@ -257,13 +371,17 @@ func rawEvidenceRecordForTest(
 		Representation:         "http_message",
 		Canonicalization:       "go_net_http_v1",
 		HeaderCount:            2,
-		BodyBytes:              45,
-		BodySHA256:             digest,
-		DigestScope:            rawevidence.DigestFull,
-		PayloadState:           rawevidence.PayloadCaptured,
-		ContainsSecret:         true,
-		EncryptionKeyRevision:  1,
-		CipherNonce:            []byte(strings.Repeat("n", 12)),
-		Ciphertext:             ciphertext,
+		// No body by default. A test that wants one sets Body and BodyBytes
+		// together, because a captured envelope must store every byte it counts.
+		// Body, BodyBytes and BodySHA256 are derived together so this fixture
+		// cannot express an envelope whose counted, stored and hashed bytes
+		// disagree — the shape that let a read return an empty body as success.
+		Body:                     body,
+		BodyBytes:                int64(len(body)),
+		BodySHA256:               sha256.Sum256(body),
+		DigestScope:              rawevidence.DigestFull,
+		PayloadState:             rawevidence.PayloadCaptured,
+		RedactedCredentialFields: []string{"Authorization"},
+		PayloadMetadata:          payloadMetadata,
 	}
 }

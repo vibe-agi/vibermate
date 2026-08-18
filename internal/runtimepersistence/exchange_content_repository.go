@@ -61,8 +61,14 @@ type storedTranscript struct {
 	requestCount   int
 	expectedCount  int
 	responseDigest string
-	messages       map[string][]byte
-	nodes          []storedTranscriptNode
+	// systemDigest addresses the dialect's top-level instruction parameter. It
+	// is content-addressed like every message, so identical instructions are
+	// stored once, but it is deliberately not a chain node: it is per-request
+	// configuration and treating it as history forked the transcript on every
+	// turn.
+	systemDigest string
+	messages     map[string][]byte
+	nodes        []storedTranscriptNode
 }
 
 type storedTranscriptNode struct {
@@ -75,6 +81,18 @@ type storedTranscriptNode struct {
 type storedTranscriptCandidate struct {
 	Digest string `json:"digest"`
 	Depth  int    `json:"depth"`
+}
+
+type storedContentReference struct {
+	manifest       storedExchangeContentManifest
+	requestRoot    string
+	expectedRoot   string
+	baseRoot       sql.NullString
+	responseDigest sql.NullString
+	systemDigest   sql.NullString
+	requestCount   int
+	expectedCount  int
+	inherited      int
 }
 
 var _ exchangecontent.Repository = (*exchangeContentRepository)(nil)
@@ -137,6 +155,17 @@ func (repository *exchangeContentRepository) Put(
 	if err != nil {
 		return err
 	}
+	if transcript.systemDigest != "" {
+		payload, ok := transcript.messages[transcript.systemDigest]
+		if !ok {
+			return exchangecontent.ErrInvalidEvidence
+		}
+		if err := putStoredMessage(
+			operation, transaction, transcript.systemDigest, payload,
+		); err != nil {
+			return err
+		}
+	}
 	for index := inherited; index < len(transcript.nodes); index++ {
 		node := transcript.nodes[index]
 		payload, ok := transcript.messages[node.messageDigest]
@@ -164,8 +193,8 @@ func (repository *exchangeContentRepository) Put(
 		   request_transcript_digest, expected_transcript_digest,
 		   base_transcript_digest, request_message_count,
 		   expected_message_count, inherited_message_count,
-		   response_message_digest, manifest_json
-		 ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		   response_message_digest, system_message_digest, manifest_json
+		 ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		manifest.ExchangeID,
 		scopeKind,
 		scopeID,
@@ -179,6 +208,7 @@ func (repository *exchangeContentRepository) Put(
 		transcript.expectedCount,
 		inherited,
 		nullableDigest(transcript.responseDigest),
+		nullableDigest(transcript.systemDigest),
 		encodedManifest,
 	)
 	if err != nil {
@@ -201,7 +231,7 @@ func completeStoredExchangeContent(
 	var storedScopeKind, storedScopeID, storedMode string
 	var recordedMillis, expiresMillis int64
 	var requestRoot, expectedRoot string
-	var baseRoot, responseDigest sql.NullString
+	var baseRoot, responseDigest, systemDigest sql.NullString
 	var requestCount, expectedCount, inherited int
 	var storedEncodedManifest []byte
 	err := transaction.QueryRowContext(
@@ -211,7 +241,7 @@ func completeStoredExchangeContent(
 		        request_transcript_digest, expected_transcript_digest,
 		        base_transcript_digest, request_message_count,
 		        expected_message_count, inherited_message_count,
-		        response_message_digest, manifest_json
+		        response_message_digest, system_message_digest, manifest_json
 		 FROM runtime_exchange_contents
 		 WHERE exchange_id = ?`,
 		manifest.ExchangeID,
@@ -228,6 +258,7 @@ func completeStoredExchangeContent(
 		&expectedCount,
 		&inherited,
 		&responseDigest,
+		&systemDigest,
 		&storedEncodedManifest,
 	)
 	if errors.Is(err, sql.ErrNoRows) {
@@ -248,7 +279,9 @@ func completeStoredExchangeContent(
 		!reflect.DeepEqual(storedManifest.Request, manifest.Request) ||
 		requestRoot != transcript.requestRoot || expectedRoot != requestRoot ||
 		requestCount != transcript.requestCount || expectedCount != requestCount ||
-		responseDigest.Valid || inherited < 0 || inherited > requestCount ||
+		responseDigest.Valid ||
+		systemDigest.String != transcript.systemDigest ||
+		inherited < 0 || inherited > requestCount ||
 		transcript.responseDigest == "" ||
 		len(transcript.nodes) != transcript.expectedCount ||
 		transcript.expectedCount != requestCount+1 {
@@ -309,20 +342,99 @@ func (repository *exchangeContentRepository) Get(
 		return exchangecontent.Record{}, err
 	}
 	defer finish()
+	reference, err := loadStoredContentReference(
+		operation, repository.database, exchangeID, now,
+	)
+	if err != nil {
+		return exchangecontent.Record{}, err
+	}
+	return loadFullStoredContent(operation, repository.database, reference)
+}
+
+func (repository *exchangeContentRepository) GetProjection(
+	ctx context.Context,
+	exchangeID string,
+	now time.Time,
+	view exchangecontent.RequestView,
+) (exchangecontent.Projection, error) {
+	if view != exchangecontent.RequestViewFull &&
+		view != exchangecontent.RequestViewIncremental {
+		return exchangecontent.Projection{}, exchangecontent.ErrInvalidEvidence
+	}
+	operation, finish, err := repository.operations.begin(ctx)
+	if err != nil {
+		return exchangecontent.Projection{}, err
+	}
+	defer finish()
+	reference, err := loadStoredContentReference(
+		operation, repository.database, exchangeID, now,
+	)
+	if err != nil {
+		return exchangecontent.Projection{}, err
+	}
+	if view == exchangecontent.RequestViewFull {
+		record, loadErr := loadFullStoredContent(operation, repository.database, reference)
+		if loadErr != nil {
+			return exchangecontent.Projection{}, loadErr
+		}
+		return exchangecontent.Project(record, view)
+	}
+
+	messages, err := loadStoredTranscriptSuffix(
+		operation,
+		repository.database,
+		reference.requestRoot,
+		reference.baseRoot,
+		reference.inherited,
+		reference.requestCount,
+	)
+	if err != nil {
+		return exchangecontent.Projection{}, err
+	}
+	responseMessage, err := loadStoredResponseMessage(
+		operation, repository.database, reference.responseDigest,
+	)
+	if err != nil {
+		return exchangecontent.Projection{}, err
+	}
+	systemBlocks, err := loadStoredSystemBlocks(
+		operation, repository.database, reference.systemDigest,
+	)
+	if err != nil {
+		return exchangecontent.Projection{}, err
+	}
+	projection, err := projectionFromStoredManifest(
+		reference.manifest,
+		systemBlocks,
+		messages,
+		responseMessage,
+		reference.requestCount,
+		reference.inherited,
+	)
+	if err != nil {
+		return exchangecontent.Projection{}, err
+	}
+	return projection.Clone(), nil
+}
+
+func loadStoredContentReference(
+	ctx context.Context,
+	database *sql.DB,
+	exchangeID string,
+	now time.Time,
+) (storedContentReference, error) {
+	var reference storedContentReference
 	var scopeKind, scopeID, mode string
 	var recordedMillis, expiresMillis int64
-	var requestRoot, expectedRoot string
-	var baseRoot, responseDigest sql.NullString
-	var requestCount, expectedCount, inherited int
 	var encodedManifest []byte
-	err = repository.database.QueryRowContext(
-		operation,
+	err := database.QueryRowContext(
+		ctx,
 		`SELECT scope_kind, scope_id, mode,
 		        recorded_at_unix_ms, expires_at_unix_ms,
 		        request_transcript_digest, expected_transcript_digest,
 		        base_transcript_digest, request_message_count,
 		        expected_message_count, inherited_message_count,
-		        response_message_digest, manifest_json
+		        response_message_digest, system_message_digest, manifest_json
 		 FROM runtime_exchange_contents
 		 WHERE exchange_id = ? AND expires_at_unix_ms > ?`,
 		exchangeID,
@@ -333,79 +445,118 @@ func (repository *exchangeContentRepository) Get(
 		&mode,
 		&recordedMillis,
 		&expiresMillis,
-		&requestRoot,
-		&expectedRoot,
-		&baseRoot,
-		&requestCount,
-		&expectedCount,
-		&inherited,
-		&responseDigest,
+		&reference.requestRoot,
+		&reference.expectedRoot,
+		&reference.baseRoot,
+		&reference.requestCount,
+		&reference.expectedCount,
+		&reference.inherited,
+		&reference.responseDigest,
+		&reference.systemDigest,
 		&encodedManifest,
 	)
 	if errors.Is(err, sql.ErrNoRows) {
-		return exchangecontent.Record{}, exchangecontent.ErrNotFound
+		return storedContentReference{}, exchangecontent.ErrNotFound
 	}
 	if err != nil {
-		return exchangecontent.Record{}, fmt.Errorf("load Exchange content manifest: %w", err)
+		return storedContentReference{}, fmt.Errorf("load Exchange content manifest: %w", err)
 	}
 	manifest, err := decodeStoredContentManifest(encodedManifest)
 	if err != nil || manifest.ExchangeID != exchangeID || string(manifest.Mode) != mode ||
 		toUnixMillis(manifest.RecordedAt) != recordedMillis ||
 		toUnixMillis(manifest.ExpiresAt) != expiresMillis {
-		return exchangecontent.Record{}, exchangecontent.ErrInvalidEvidence
+		return storedContentReference{}, exchangecontent.ErrInvalidEvidence
 	}
 	wantScopeKind, wantScopeID := storedContentScope(manifest.Parent)
-	if scopeKind != wantScopeKind || scopeID != wantScopeID || requestCount < 1 ||
-		expectedCount < requestCount || inherited < 0 || inherited > requestCount {
-		return exchangecontent.Record{}, exchangecontent.ErrInvalidEvidence
+	if scopeKind != wantScopeKind || scopeID != wantScopeID ||
+		reference.requestCount < 1 || reference.inherited < 0 ||
+		reference.inherited > reference.requestCount ||
+		!validStoredDigest(reference.requestRoot) ||
+		!validStoredDigest(reference.expectedRoot) ||
+		(reference.inherited == 0 && reference.baseRoot.Valid) ||
+		(reference.inherited > 0 && (!reference.baseRoot.Valid ||
+			!validStoredDigest(reference.baseRoot.String))) {
+		return storedContentReference{}, exchangecontent.ErrInvalidEvidence
 	}
+	if manifest.Response == nil {
+		if reference.responseDigest.Valid ||
+			reference.expectedCount != reference.requestCount ||
+			reference.expectedRoot != reference.requestRoot {
+			return storedContentReference{}, exchangecontent.ErrInvalidEvidence
+		}
+	} else {
+		if !reference.responseDigest.Valid ||
+			!validStoredDigest(reference.responseDigest.String) ||
+			reference.expectedCount != reference.requestCount+1 ||
+			reference.expectedRoot != transcriptNodeDigest(
+				reference.requestRoot, reference.responseDigest.String,
+			) {
+			return storedContentReference{}, exchangecontent.ErrInvalidEvidence
+		}
+	}
+	reference.manifest = manifest
+	return reference, nil
+}
+
+func loadFullStoredContent(
+	ctx context.Context,
+	database *sql.DB,
+	reference storedContentReference,
+) (exchangecontent.Record, error) {
 	messages, err := loadStoredTranscript(
-		operation,
-		repository.database,
-		requestRoot,
-		requestCount,
+		ctx,
+		database,
+		reference.requestRoot,
+		reference.requestCount,
 	)
 	if err != nil {
 		return exchangecontent.Record{}, err
 	}
-	var responseMessage *exchangecontent.Message
-	if responseDigest.Valid {
-		message, loadErr := loadStoredMessage(operation, repository.database, responseDigest.String)
-		if loadErr != nil || message.Role != "assistant" {
-			return exchangecontent.Record{}, exchangecontent.ErrInvalidEvidence
-		}
-		responseMessage = &message
-	}
-	record, err := recordFromStoredManifest(manifest, messages, responseMessage)
+	responseMessage, err := loadStoredResponseMessage(ctx, database, reference.responseDigest)
 	if err != nil {
 		return exchangecontent.Record{}, err
 	}
+	systemBlocks, err := loadStoredSystemBlocks(
+		ctx, database, reference.systemDigest,
+	)
+	if err != nil {
+		return exchangecontent.Record{}, err
+	}
+	record, err := recordFromStoredManifest(
+		reference.manifest, systemBlocks, messages, responseMessage,
+	)
+	if err != nil {
+		return exchangecontent.Record{}, err
+	}
+	// systemDigest is compared for the same reason the roots are: without it, a
+	// row pointing at another Exchange's instruction parameter reads back as
+	// frozen evidence, because loadStoredSystemBlocks only proves the message
+	// hashes to the digest it was fetched by. The write side already makes this
+	// comparison in completeStoredExchangeContent.
 	rebuilt, err := buildStoredTranscript(record)
-	if err != nil || rebuilt.requestRoot != requestRoot ||
-		rebuilt.expectedRoot != expectedRoot ||
-		rebuilt.requestCount != requestCount ||
-		rebuilt.expectedCount != expectedCount ||
-		rebuilt.responseDigest != responseDigest.String {
+	if err != nil || rebuilt.requestRoot != reference.requestRoot ||
+		rebuilt.expectedRoot != reference.expectedRoot ||
+		rebuilt.requestCount != reference.requestCount ||
+		rebuilt.expectedCount != reference.expectedCount ||
+		rebuilt.responseDigest != reference.responseDigest.String ||
+		rebuilt.systemDigest != reference.systemDigest.String {
 		return exchangecontent.Record{}, exchangecontent.ErrInvalidEvidence
 	}
-	if inherited == 0 {
-		if baseRoot.Valid {
-			return exchangecontent.Record{}, exchangecontent.ErrInvalidEvidence
-		}
+	if reference.inherited == 0 {
 		record.Presentation = exchangecontent.RequestPresentation{
 			Mode: exchangecontent.RequestPresentationCheckpoint,
 		}
 	} else {
-		if !baseRoot.Valid || inherited > len(rebuilt.nodes) ||
-			rebuilt.nodes[inherited-1].digest != baseRoot.String {
+		if reference.inherited > len(rebuilt.nodes) ||
+			rebuilt.nodes[reference.inherited-1].digest != reference.baseRoot.String {
 			return exchangecontent.Record{}, exchangecontent.ErrInvalidEvidence
 		}
 		presentationMode := exchangecontent.RequestPresentationIncremental
-		if inherited == requestCount {
+		if reference.inherited == reference.requestCount {
 			presentationMode = exchangecontent.RequestPresentationSameTranscript
 		}
 		record.Presentation = exchangecontent.RequestPresentation{
-			Mode: presentationMode, InheritedMessageCount: inherited,
+			Mode: presentationMode, InheritedMessageCount: reference.inherited,
 		}
 	}
 	return record.Clone(), nil
@@ -437,6 +588,18 @@ func (repository *exchangeContentRepository) PurgeExpired(
 	if err != nil || count < 0 {
 		return 0, fmt.Errorf("read purged Exchange content evidence count: %w", err)
 	}
+	// Reachability is recomputed only when an expiry actually removed an
+	// Exchange. Record calls PurgeExpired on every stored Exchange, so an
+	// unconditional sweep would scan every node, message and block once per
+	// turn — the cost shape this goal exists to remove. Nothing becomes
+	// unreachable without a delete, and the delete shares this transaction, so
+	// there is no partial state for a skipped sweep to miss.
+	if count == 0 {
+		if err := transaction.Commit(); err != nil {
+			return 0, fmt.Errorf("commit Exchange content purge: %w", err)
+		}
+		return 0, nil
+	}
 	if _, err := transaction.ExecContext(
 		operation,
 		`WITH RECURSIVE reachable(digest) AS (
@@ -464,8 +627,17 @@ func (repository *exchangeContentRepository) PurgeExpired(
 		   UNION
 		   SELECT response_message_digest FROM runtime_exchange_contents
 		    WHERE response_message_digest IS NOT NULL
+		   UNION
+		   SELECT system_message_digest FROM runtime_exchange_contents
+		    WHERE system_message_digest IS NOT NULL
 		 )`); err != nil {
 		return 0, fmt.Errorf("purge unreferenced transcript messages: %w", err)
+	}
+	// Blocks are released last: one stays reachable while any retained message
+	// names it. Without this the store would keep unreachable content forever,
+	// and retention cost would stop tracking retained content.
+	if err := purgeUnreferencedContentBlocks(operation, transaction); err != nil {
+		return 0, err
 	}
 	if err := transaction.Commit(); err != nil {
 		return 0, fmt.Errorf("commit Exchange content purge: %w", err)
@@ -545,6 +717,7 @@ func decodeStoredContentManifest(encoded []byte) (storedExchangeContentManifest,
 
 func recordFromStoredManifest(
 	manifest storedExchangeContentManifest,
+	systemBlocks []exchangecontent.Block,
 	messages []exchangecontent.Message,
 	responseMessage *exchangecontent.Message,
 ) (exchangecontent.Record, error) {
@@ -560,6 +733,7 @@ func recordFromStoredManifest(
 			EffectiveModel:  manifest.Request.EffectiveModel,
 			MaxOutputTokens: manifest.Request.MaxOutputTokens,
 			Stream:          manifest.Request.Stream,
+			System:          systemBlocks,
 			Messages:        messages,
 			Tools:           append([]exchangecontent.ToolDefinition(nil), manifest.Request.Tools...),
 			ProtocolEvidence: append(
@@ -594,8 +768,87 @@ func recordFromStoredManifest(
 	return record, nil
 }
 
+func projectionFromStoredManifest(
+	manifest storedExchangeContentManifest,
+	systemBlocks []exchangecontent.Block,
+	messages []exchangecontent.Message,
+	responseMessage *exchangecontent.Message,
+	totalMessageCount int,
+	inherited int,
+) (exchangecontent.Projection, error) {
+	presentationMode := exchangecontent.RequestPresentationCheckpoint
+	if inherited > 0 {
+		presentationMode = exchangecontent.RequestPresentationIncremental
+		if inherited == totalMessageCount {
+			presentationMode = exchangecontent.RequestPresentationSameTranscript
+		}
+	}
+	projection := exchangecontent.Projection{
+		ExchangeID: manifest.ExchangeID,
+		Parent:     manifest.Parent,
+		Frozen:     manifest.Frozen,
+		Mode:       manifest.Mode,
+		RecordedAt: manifest.RecordedAt,
+		ExpiresAt:  manifest.ExpiresAt,
+		Request: exchangecontent.Request{
+			RequestedModel:  manifest.Request.RequestedModel,
+			EffectiveModel:  manifest.Request.EffectiveModel,
+			MaxOutputTokens: manifest.Request.MaxOutputTokens,
+			Stream:          manifest.Request.Stream,
+			System:          systemBlocks,
+			Messages:        messages,
+			Tools:           append([]exchangecontent.ToolDefinition(nil), manifest.Request.Tools...),
+			ProtocolEvidence: append(
+				[]protocolcore.ProtocolEvidenceValue(nil),
+				manifest.Request.ProtocolEvidence...,
+			),
+		},
+		Presentation: exchangecontent.RequestPresentation{
+			Mode:                  presentationMode,
+			InheritedMessageCount: inherited,
+		},
+		View:              exchangecontent.RequestViewIncremental,
+		TotalMessageCount: totalMessageCount,
+	}
+	if manifest.Response != nil {
+		if responseMessage == nil {
+			return exchangecontent.Projection{}, exchangecontent.ErrInvalidEvidence
+		}
+		projection.Response = &exchangecontent.Response{
+			ID:             manifest.Response.ID,
+			RequestedModel: manifest.Response.RequestedModel,
+			EffectiveModel: manifest.Response.EffectiveModel,
+			ReportedModel:  manifest.Response.ReportedModel,
+			StopReason:     manifest.Response.StopReason,
+			Blocks:         cloneStoredBlocks(responseMessage.Blocks),
+			Usage:          manifest.Response.Usage,
+			ProtocolEvidence: append(
+				[]protocolcore.ProtocolEvidenceValue(nil),
+				manifest.Response.ProtocolEvidence...,
+			),
+		}
+	} else if responseMessage != nil {
+		return exchangecontent.Projection{}, exchangecontent.ErrInvalidEvidence
+	}
+	if err := projection.Validate(); err != nil {
+		return exchangecontent.Projection{}, err
+	}
+	return projection, nil
+}
+
 func buildStoredTranscript(record exchangecontent.Record) (storedTranscript, error) {
 	result := storedTranscript{messages: make(map[string][]byte)}
+	if len(record.Request.System) > 0 {
+		message := exchangecontent.Message{
+			Role: "system", Blocks: cloneStoredBlocks(record.Request.System),
+		}
+		digest, encoded, err := encodeStoredMessage(message)
+		if err != nil {
+			return storedTranscript{}, err
+		}
+		result.messages[digest] = encoded
+		result.systemDigest = digest
+	}
 	parent := ""
 	for _, message := range record.Request.Messages {
 		digest, encoded, err := encodeStoredMessage(message)
@@ -627,12 +880,7 @@ func buildStoredTranscript(record exchangecontent.Record) (storedTranscript, err
 
 func (transcript *storedTranscript) appendNode(parent, messageDigest string) string {
 	depth := len(transcript.nodes) + 1
-	hash := sha256.New()
-	_, _ = hash.Write([]byte(transcriptNodeDomain))
-	_, _ = hash.Write([]byte(parent))
-	_, _ = hash.Write([]byte{0})
-	_, _ = hash.Write([]byte(messageDigest))
-	digest := hex.EncodeToString(hash.Sum(nil))
+	digest := transcriptNodeDigest(parent, messageDigest)
 	var parentPointer *string
 	if parent != "" {
 		value := parent
@@ -643,6 +891,15 @@ func (transcript *storedTranscript) appendNode(parent, messageDigest string) str
 		messageDigest: messageDigest, depth: depth,
 	})
 	return digest
+}
+
+func transcriptNodeDigest(parent, messageDigest string) string {
+	hash := sha256.New()
+	_, _ = hash.Write([]byte(transcriptNodeDomain))
+	_, _ = hash.Write([]byte(parent))
+	_, _ = hash.Write([]byte{0})
+	_, _ = hash.Write([]byte(messageDigest))
+	return hex.EncodeToString(hash.Sum(nil))
 }
 
 func encodeStoredMessage(message exchangecontent.Message) (string, []byte, error) {
@@ -677,22 +934,7 @@ func putStoredMessage(
 	digest string,
 	payload []byte,
 ) error {
-	result, err := transaction.ExecContext(
-		ctx,
-		`INSERT INTO runtime_exchange_content_messages(digest, payload_json)
-		 VALUES (?, ?) ON CONFLICT(digest) DO UPDATE SET digest = excluded.digest
-		 WHERE runtime_exchange_content_messages.payload_json = excluded.payload_json`,
-		digest,
-		payload,
-	)
-	if err != nil {
-		return fmt.Errorf("persist Exchange content message: %w", err)
-	}
-	changed, err := result.RowsAffected()
-	if err != nil || changed != 1 {
-		return exchangecontent.ErrInvalidEvidence
-	}
-	return nil
+	return putStoredMessageBlocks(ctx, transaction, digest, payload)
 }
 
 func putStoredTranscriptNode(
@@ -805,37 +1047,46 @@ func loadStoredTranscript(
 		     FROM runtime_exchange_content_transcripts AS nodes
 		     JOIN chain ON nodes.digest = chain.parent_digest
 		 )
-		 SELECT chain.depth, messages.digest, messages.payload_json
+		 SELECT chain.depth, chain.message_digest
 		   FROM chain
-		   JOIN runtime_exchange_content_messages AS messages
-		     ON messages.digest = chain.message_digest
 		  ORDER BY chain.depth ASC`,
 		root,
 	)
 	if err != nil {
 		return nil, fmt.Errorf("load Exchange transcript: %w", err)
 	}
-	defer func() { _ = rows.Close() }()
-	messages := make([]exchangecontent.Message, 0, wantCount)
+	digests := make([]string, 0, wantCount)
 	for rows.Next() {
 		var depth int
 		var digest string
-		var encoded []byte
-		if err := rows.Scan(&depth, &digest, &encoded); err != nil || depth != len(messages)+1 {
+		if err := rows.Scan(&depth, &digest); err != nil ||
+			depth != len(digests)+1 {
+			_ = rows.Close()
 			return nil, exchangecontent.ErrInvalidEvidence
 		}
-		message, err := decodeStoredMessage(encoded)
-		if err != nil {
-			return nil, err
-		}
-		calculated, _, err := encodeStoredMessage(message)
-		if err != nil || calculated != digest {
+		digests = append(digests, digest)
+	}
+	if err := rows.Err(); err != nil {
+		_ = rows.Close()
+		return nil, fmt.Errorf("iterate Exchange transcript: %w", err)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, fmt.Errorf("close Exchange transcript: %w", err)
+	}
+	// Resolved after the chain walk, and in two queries rather than one per
+	// message plus one per block: the store keeps a single connection, and a long
+	// transcript otherwise held it for thousands of sequential round trips.
+	resolved, err := loadStoredMessagesByDigest(ctx, database, digests)
+	if err != nil {
+		return nil, err
+	}
+	messages := make([]exchangecontent.Message, 0, wantCount)
+	for _, digest := range digests {
+		message, ok := resolved[digest]
+		if !ok {
 			return nil, exchangecontent.ErrInvalidEvidence
 		}
 		messages = append(messages, message)
-	}
-	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("iterate Exchange transcript: %w", err)
 	}
 	if len(messages) != wantCount {
 		return nil, exchangecontent.ErrInvalidEvidence
@@ -843,28 +1094,151 @@ func loadStoredTranscript(
 	return messages, nil
 }
 
+func loadStoredTranscriptSuffix(
+	ctx context.Context,
+	database *sql.DB,
+	root string,
+	baseRoot sql.NullString,
+	inherited int,
+	total int,
+) ([]exchangecontent.Message, error) {
+	if inherited < 0 || inherited > total || total < 1 || !validStoredDigest(root) {
+		return nil, exchangecontent.ErrInvalidEvidence
+	}
+	if inherited > 0 {
+		if !baseRoot.Valid || !validStoredDigest(baseRoot.String) {
+			return nil, exchangecontent.ErrInvalidEvidence
+		}
+		var depth int
+		if err := database.QueryRowContext(
+			ctx,
+			`SELECT depth FROM runtime_exchange_content_transcripts WHERE digest = ?`,
+			baseRoot.String,
+		).Scan(&depth); err != nil || depth != inherited {
+			return nil, exchangecontent.ErrInvalidEvidence
+		}
+	} else if baseRoot.Valid {
+		return nil, exchangecontent.ErrInvalidEvidence
+	}
+	if inherited == total {
+		if baseRoot.String != root {
+			return nil, exchangecontent.ErrInvalidEvidence
+		}
+		return []exchangecontent.Message{}, nil
+	}
+
+	rows, err := database.QueryContext(
+		ctx,
+		`WITH RECURSIVE chain(
+		   digest, parent_digest, message_digest, depth
+		 ) AS (
+		   SELECT digest, parent_digest, message_digest, depth
+		     FROM runtime_exchange_content_transcripts WHERE digest = ?
+		   UNION ALL
+		   SELECT nodes.digest, nodes.parent_digest, nodes.message_digest, nodes.depth
+		     FROM runtime_exchange_content_transcripts AS nodes
+		     JOIN chain ON nodes.digest = chain.parent_digest
+		    WHERE chain.depth > ?
+		 )
+		 SELECT chain.digest, chain.parent_digest, chain.message_digest,
+		        chain.depth
+		   FROM chain
+		  ORDER BY chain.depth ASC`,
+		root,
+		inherited+1,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("load Exchange transcript suffix: %w", err)
+	}
+	wantCount := total - inherited
+	messageDigests := make([]string, 0, wantCount)
+	previousDigest := baseRoot.String
+	for rows.Next() {
+		var digest, messageDigest string
+		var parentDigest sql.NullString
+		var depth int
+		if err := rows.Scan(
+			&digest, &parentDigest, &messageDigest, &depth,
+		); err != nil {
+			_ = rows.Close()
+			return nil, exchangecontent.ErrInvalidEvidence
+		}
+		wantDepth := inherited + len(messageDigests) + 1
+		if depth != wantDepth || parentDigest.String != previousDigest ||
+			(parentDigest.Valid != (previousDigest != "")) ||
+			!validStoredDigest(digest) || !validStoredDigest(messageDigest) ||
+			digest != transcriptNodeDigest(previousDigest, messageDigest) {
+			_ = rows.Close()
+			return nil, exchangecontent.ErrInvalidEvidence
+		}
+		messageDigests = append(messageDigests, messageDigest)
+		previousDigest = digest
+	}
+	if err := rows.Err(); err != nil {
+		_ = rows.Close()
+		return nil, fmt.Errorf("iterate Exchange transcript suffix: %w", err)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, fmt.Errorf("close Exchange transcript suffix: %w", err)
+	}
+	if len(messageDigests) != wantCount || previousDigest != root {
+		return nil, exchangecontent.ErrInvalidEvidence
+	}
+	resolved, err := loadStoredMessagesByDigest(ctx, database, messageDigests)
+	if err != nil {
+		return nil, err
+	}
+	messages := make([]exchangecontent.Message, 0, wantCount)
+	for _, messageDigest := range messageDigests {
+		message, ok := resolved[messageDigest]
+		if !ok {
+			return nil, exchangecontent.ErrInvalidEvidence
+		}
+		messages = append(messages, message)
+	}
+	return messages, nil
+}
+
+func loadStoredResponseMessage(
+	ctx context.Context,
+	database *sql.DB,
+	digest sql.NullString,
+) (*exchangecontent.Message, error) {
+	if !digest.Valid {
+		return nil, nil
+	}
+	message, err := loadStoredMessage(ctx, database, digest.String)
+	if err != nil || message.Role != "assistant" {
+		return nil, exchangecontent.ErrInvalidEvidence
+	}
+	return &message, nil
+}
+
+// loadStoredSystemBlocks reads the top-level instruction parameter. It is
+// stored as a content-addressed message so identical instructions cost one row,
+// but it returns blocks: the parameter is a per-request field of the Request,
+// never a message in its transcript.
+func loadStoredSystemBlocks(
+	ctx context.Context,
+	database *sql.DB,
+	digest sql.NullString,
+) ([]exchangecontent.Block, error) {
+	if !digest.Valid {
+		return nil, nil
+	}
+	message, err := loadStoredMessage(ctx, database, digest.String)
+	if err != nil || message.Role != "system" || len(message.Blocks) == 0 {
+		return nil, exchangecontent.ErrInvalidEvidence
+	}
+	return message.Blocks, nil
+}
+
 func loadStoredMessage(
 	ctx context.Context,
 	database *sql.DB,
 	digest string,
 ) (exchangecontent.Message, error) {
-	var encoded []byte
-	if err := database.QueryRowContext(
-		ctx,
-		`SELECT payload_json FROM runtime_exchange_content_messages WHERE digest = ?`,
-		digest,
-	).Scan(&encoded); err != nil {
-		return exchangecontent.Message{}, exchangecontent.ErrInvalidEvidence
-	}
-	message, err := decodeStoredMessage(encoded)
-	if err != nil {
-		return exchangecontent.Message{}, err
-	}
-	calculated, _, err := encodeStoredMessage(message)
-	if err != nil || calculated != digest {
-		return exchangecontent.Message{}, exchangecontent.ErrInvalidEvidence
-	}
-	return message, nil
+	return loadStoredMessageBlocks(ctx, database, digest)
 }
 
 func storedContentScope(parent exchangecontent.ParentRef) (string, string) {
@@ -896,4 +1270,12 @@ func nullableDigest(value string) any {
 		return nil
 	}
 	return value
+}
+
+func validStoredDigest(value string) bool {
+	if len(value) != sha256.Size*2 {
+		return false
+	}
+	decoded, err := hex.DecodeString(value)
+	return err == nil && len(decoded) == sha256.Size
 }

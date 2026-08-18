@@ -123,7 +123,7 @@ func buildEnvironment(
 			// the final provider boundary.
 			preserved["ANTHROPIC_AUTH_TOKEN"] = clientCredentialPlaceholder
 		}
-	case clientadapter.LaunchSSLCertFile:
+	case clientadapter.LaunchCodexResponsesHTTP:
 		preserved["SSL_CERT_FILE"] = grant.RootPEMPath
 		if managedClientCredential {
 			preserved["CODEX_API_KEY"] = clientCredentialPlaceholder
@@ -165,7 +165,7 @@ func environmentManaged(
 	if !managedClientCredential {
 		return false
 	}
-	if recipe == clientadapter.LaunchSSLCertFile {
+	if recipe == clientadapter.LaunchCodexResponsesHTTP {
 		_, managed := codexManagedEnvironment[normalizedKey]
 		return managed
 	}
@@ -202,28 +202,22 @@ func usesManagedClientCredential(
 }
 
 func clientTargetAuthority(base []string, clientID string) (string, bool) {
-	values := make(map[string]string)
-	for _, entry := range base {
-		key, value, ok := strings.Cut(entry, "=")
-		if ok && key != "" {
-			values[strings.ToUpper(key)] = value
-		}
-	}
 	rawOrigin := ""
 	switch clientID {
 	case "claude-code":
-		rawOrigin = values["ANTHROPIC_BASE_URL"]
+		rawOrigin = environmentValue(base, "ANTHROPIC_BASE_URL")
 		if rawOrigin == "" {
 			rawOrigin = "https://api.anthropic.com"
 		}
 	case "codex-cli":
-		rawOrigin = values["CODEX_BASE_URL"]
-		if rawOrigin == "" {
-			rawOrigin = values["OPENAI_BASE_URL"]
+		// The same answer the launch recipe writes into the child's provider
+		// configuration, so the managed-credential decision cannot be made for a
+		// host the child never contacts.
+		origin, err := codexOrigin(base)
+		if err != nil {
+			return "", false
 		}
-		if rawOrigin == "" {
-			rawOrigin = "https://api.openai.com"
-		}
+		rawOrigin = origin
 	default:
 		return "", false
 	}

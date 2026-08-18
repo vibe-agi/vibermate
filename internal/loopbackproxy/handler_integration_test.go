@@ -460,50 +460,63 @@ func TestLoopbackProxyReturnsBounded426ForResponsesWebSocketUpgrade(
 ) {
 	t.Parallel()
 
-	fixture := newResponsesProxyFixture(t)
-	defer fixture.Close(t)
-	secured := fixture.ConnectTLS(
-		t,
-		fixture.grant.ProxyCapability.Value(),
-		"api.openai.com:443",
-		"api.openai.com",
-	)
-	defer secured.Close()
-	response := writeInnerRequest(t, secured, &http.Request{
-		Method: http.MethodGet,
-		URL:    mustURL(t, "/v1/responses"),
-		Host:   "api.openai.com:443",
-		Header: http.Header{
-			"Connection":            []string{"keep-alive, Upgrade"},
-			"Upgrade":               []string{"websocket"},
-			"Sec-Websocket-Version": []string{"13"},
-		},
-	})
-	body, err := io.ReadAll(io.LimitReader(response.Body, 1025))
-	if err != nil {
-		t.Fatal(err)
-	}
-	_ = response.Body.Close()
-	if response.StatusCode != http.StatusUpgradeRequired ||
-		len(body) == 0 ||
-		len(body) > 1024 ||
-		!bytes.Contains(
-			body,
-			[]byte(`"reasonCode":"responses_websocket_unsupported"`),
-		) ||
-		len(fixture.exchanges.Requests()) != 0 ||
-		fixture.original.Count() != 0 {
-		t.Fatalf(
-			"WebSocket response status=%d body=%s Exchanges=%d original=%d",
-			response.StatusCode,
-			body,
-			len(fixture.exchanges.Requests()),
-			fixture.original.Count(),
-		)
+	for _, path := range []string{
+		"/v1/responses",
+		"/backend-api/codex/responses",
+	} {
+		path := path
+		t.Run(path, func(t *testing.T) {
+			t.Parallel()
+
+			// The operation catalog owns this response. It must not depend on
+			// exact release evidence because current publisher-signed Codex
+			// builds are intentionally admitted without frozen build features.
+			fixture := newGenericResponsesProxyFixture(t)
+			defer fixture.Close(t)
+			secured := fixture.ConnectTLS(
+				t,
+				fixture.grant.ProxyCapability.Value(),
+				"api.openai.com:443",
+				"api.openai.com",
+			)
+			defer secured.Close()
+			response := writeInnerRequest(t, secured, &http.Request{
+				Method: http.MethodGet,
+				URL:    mustURL(t, path),
+				Host:   "api.openai.com:443",
+				Header: http.Header{
+					"Connection":            []string{"keep-alive, Upgrade"},
+					"Upgrade":               []string{"websocket"},
+					"Sec-Websocket-Version": []string{"13"},
+				},
+			})
+			body, err := io.ReadAll(io.LimitReader(response.Body, 1025))
+			if err != nil {
+				t.Fatal(err)
+			}
+			_ = response.Body.Close()
+			if response.StatusCode != http.StatusUpgradeRequired ||
+				len(body) == 0 ||
+				len(body) > 1024 ||
+				!bytes.Contains(
+					body,
+					[]byte(`"reasonCode":"responses_websocket_unsupported"`),
+				) ||
+				len(fixture.exchanges.Requests()) != 0 ||
+				fixture.original.Count() != 0 {
+				t.Fatalf(
+					"WebSocket response status=%d body=%s Exchanges=%d original=%d",
+					response.StatusCode,
+					body,
+					len(fixture.exchanges.Requests()),
+					fixture.original.Count(),
+				)
+			}
+		})
 	}
 }
 
-func TestLoopbackProxyDoesNotApplyFixedFallbackToGenericClient(
+func TestLoopbackProxyKeepsUnknownWebSocketPathsFailClosed(
 	t *testing.T,
 ) {
 	t.Parallel()
@@ -519,7 +532,7 @@ func TestLoopbackProxyDoesNotApplyFixedFallbackToGenericClient(
 	defer secured.Close()
 	response := writeInnerRequest(t, secured, &http.Request{
 		Method: http.MethodGet,
-		URL:    mustURL(t, "/v1/responses"),
+		URL:    mustURL(t, "/backend-api/codex/not-responses"),
 		Host:   "api.openai.com:443",
 		Header: http.Header{
 			"Connection": []string{"Upgrade"},
@@ -1297,7 +1310,7 @@ func fixedCodexAdapterEvidence() clientadapter.Evidence {
 		CatalogRevision: 1,
 		InstallShape:    clientadapter.InstallNPMWrapperNativeChild,
 		ReleaseSHA256:   "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
-		LaunchRecipe:    clientadapter.LaunchSSLCertFile,
+		LaunchRecipe:    clientadapter.LaunchCodexResponsesHTTP,
 		Features:        clientadapter.FeatureResponsesWebSocketHTTPFallback,
 	}
 }

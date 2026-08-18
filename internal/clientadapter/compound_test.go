@@ -42,7 +42,7 @@ func TestVerifierRequiresCompleteCompoundReleaseAndFreezesCatalogEvidence(
 		detection.Evidence.CatalogRevision != 7 ||
 		detection.Evidence.InstallShape !=
 			clientadapter.InstallNPMWrapperNativeChild ||
-		detection.Evidence.LaunchRecipe != clientadapter.LaunchSSLCertFile ||
+		detection.Evidence.LaunchRecipe != clientadapter.LaunchCodexResponsesHTTP ||
 		detection.Evidence.ReleaseSHA256 == "" ||
 		!detection.Evidence.Supports(
 			clientadapter.FeatureResponsesWebSocketHTTPFallback,
@@ -501,7 +501,7 @@ func (fixture compoundFixture) release() clientadapter.Release {
 				SHA256:       digest(fixture.contents["native-child"]),
 			},
 		},
-		LaunchRecipe: clientadapter.LaunchSSLCertFile,
+		LaunchRecipe: clientadapter.LaunchCodexResponsesHTTP,
 		Features:     clientadapter.FeatureResponsesWebSocketHTTPFallback,
 	}
 }

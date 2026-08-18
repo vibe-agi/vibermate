@@ -15,6 +15,7 @@ import (
 )
 
 const (
+	runIDPrefix         = "run."
 	runIDRandomBytes    = 20
 	capabilityBytes     = 32
 	defaultRunLifetime  = 2 * time.Minute
@@ -134,7 +135,7 @@ func (manager *Manager) Create(
 	}
 	defer finish()
 
-	runID, err := randomValue(manager.random, runIDRandomBytes)
+	runID, err := newRunID(manager.random)
 	if err != nil {
 		return LaunchGrant{}, fmt.Errorf("generate CaptureRun ID: %w", err)
 	}
@@ -365,6 +366,18 @@ func randomValue(source io.Reader, size int) (string, error) {
 		return "", err
 	}
 	return base64.RawURLEncoding.EncodeToString(data), nil
+}
+
+func newRunID(source io.Reader) (string, error) {
+	value, err := randomValue(source, runIDRandomBytes)
+	if err != nil {
+		return "", err
+	}
+	value = runIDPrefix + value
+	if err := validateID(value); err != nil {
+		return "", err
+	}
+	return value, nil
 }
 
 func randomProxyCapability(source io.Reader) (string, error) {

@@ -193,6 +193,7 @@ func (store *KeychainStore) Delete(
 	}
 	query := store.query(reference)
 	defer C.CFRelease(C.CFTypeRef(query))
+	preventAuthenticationUI(query)
 	status := C.SecItemDelete(C.CFDictionaryRef(query))
 	if status == C.errSecItemNotFound {
 		return secretstore.ErrNotFound

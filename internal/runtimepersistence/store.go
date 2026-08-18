@@ -308,8 +308,9 @@ func (s *Store) ProviderAccountRepository() provideraccount.Repository {
 	return s.providerAccounts
 }
 
-// RawEvidenceRepository stores only safe searchable metadata and encrypted
-// payload blobs. High-frequency batching remains owned by rawevidence.Manager.
+// RawEvidenceRepository stores safe searchable metadata, the observed payload
+// metadata, and a content-addressed reference to the observed body bytes.
+// High-frequency batching remains owned by rawevidence.Manager.
 func (s *Store) RawEvidenceRepository() rawevidence.Repository {
 	return s.rawEvidence
 }

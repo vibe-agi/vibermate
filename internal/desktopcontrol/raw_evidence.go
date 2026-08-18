@@ -6,6 +6,7 @@ import (
 	"errors"
 	"io"
 	"net/http"
+	"slices"
 	"time"
 
 	"github.com/vibe-agi/vibermate/internal/rawevidence"
@@ -52,7 +53,7 @@ type rawEvidenceEnvelopeView struct {
 	DigestScope              rawevidence.DigestScope  `json:"digestScope"`
 	PayloadState             rawevidence.PayloadState `json:"payloadState"`
 	PayloadReason            string                   `json:"payloadReason,omitempty"`
-	ContainsSecret           bool                     `json:"containsSecret"`
+	RedactedCredentialFields []string                 `json:"redactedCredentialFields"`
 	RevealAvailable          bool                     `json:"revealAvailable"`
 }
 
@@ -229,8 +230,18 @@ func rawEvidenceViewOf(value rawevidence.EnvelopeMetadata) rawEvidenceEnvelopeVi
 		HeaderCount:      value.HeaderCount, TrailerCount: value.TrailerCount,
 		BodyBytes: value.BodyBytes, BodySHA256: digest,
 		DigestScope: value.DigestScope, PayloadState: value.PayloadState,
-		PayloadReason: value.PayloadReason, ContainsSecret: value.ContainsSecret,
+		PayloadReason:            value.PayloadReason,
+		RedactedCredentialFields: redactedFieldsView(value.RedactedCredentialFields),
 		RevealAvailable: value.PayloadState == rawevidence.PayloadCaptured ||
 			value.PayloadState == rawevidence.PayloadTruncated,
 	}
+}
+
+// redactedFieldsView keeps the control contract's array total: an Exchange that
+// carried no credential field reports an empty list, never null.
+func redactedFieldsView(names []string) []string {
+	if len(names) == 0 {
+		return []string{}
+	}
+	return slices.Clone(names)
 }

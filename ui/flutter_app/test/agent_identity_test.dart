@@ -103,7 +103,7 @@ void main() {
     expect(tester.takeException(), isNull);
   });
 
-  testWidgets('Capture and Conversation directories use client identities', (
+  testWidgets('the Capture directory uses client identities, filtered or not', (
     tester,
   ) async {
     await tester.binding.setSurfaceSize(const Size(1180, 760));
@@ -117,26 +117,18 @@ void main() {
     expect(find.byKey(const Key('agent-logo-codex')), findsWidgets);
     expect(find.byKey(const Key('agent-logo-figma')), findsWidgets);
 
-    await tester.tap(find.bySemanticsLabel(RegExp(r'^Conversations\s+⌘2$')));
-    await tester.pumpAndSettle();
-    await tester.enterText(
-      find.byKey(const Key('conversation-filter')),
-      'Claude Code',
-    );
-    await tester.pumpAndSettle();
-    expect(find.byKey(const Key('agent-logo-claude-code')), findsWidgets);
-    await tester.enterText(
-      find.byKey(const Key('conversation-filter')),
-      'Codex',
-    );
-    await tester.pumpAndSettle();
-    expect(find.byKey(const Key('agent-logo-codex')), findsWidgets);
-    await tester.enterText(
-      find.byKey(const Key('conversation-filter')),
-      'Figma Desktop',
-    );
-    await tester.pumpAndSettle();
-    expect(find.byKey(const Key('agent-logo-figma')), findsWidgets);
+    // The identity has to survive filtering, not just the unfiltered first
+    // paint. This ran against the retired Conversations list; the Capture
+    // directory is where a client identity is narrowed down now.
+    for (final (query, logo) in const [
+      ('Claude Code', 'agent-logo-claude-code'),
+      ('Codex', 'agent-logo-codex'),
+      ('Figma Desktop', 'agent-logo-figma'),
+    ]) {
+      await tester.enterText(find.byKey(const Key('capture-filter')), query);
+      await tester.pumpAndSettle();
+      expect(find.byKey(Key(logo)), findsWidgets, reason: query);
+    }
     expect(tester.takeException(), isNull);
   });
 }

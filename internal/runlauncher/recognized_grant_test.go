@@ -155,7 +155,7 @@ func TestSignerEvidenceMustAgreeWithItsGrant(t *testing.T) {
 	}, {
 		name: "a different recipe",
 		mutate: func(grant *capturecontrol.LaunchGrant) {
-			grant.Signer.LaunchRecipe = clientadapter.LaunchSSLCertFile
+			grant.Signer.LaunchRecipe = clientadapter.LaunchCodexResponsesHTTP
 		},
 	}, {
 		name: "a recognition tier that does not match the evidence",

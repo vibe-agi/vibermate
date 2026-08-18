@@ -37,7 +37,7 @@ func recognizedSigner() clientadapter.SignerEvidence {
 		Revision:        1,
 		CatalogRevision: 1,
 		InstallShape:    clientadapter.InstallNPMWrapperNativeChild,
-		LaunchRecipe:    clientadapter.LaunchSSLCertFile,
+		LaunchRecipe:    clientadapter.LaunchCodexResponsesHTTP,
 		SignedPath:      "/opt/example/bin/codex",
 	}
 }

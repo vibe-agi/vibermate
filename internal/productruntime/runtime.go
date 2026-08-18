@@ -192,7 +192,6 @@ func startWithBuilders(
 	rawEvidence, err := builders.rawEvidence.Build(rawEvidenceBuildRequest{
 		ctx:        ownerContext,
 		repository: storageResult.store.RawEvidenceRepository(),
-		secrets:    options.Secrets,
 		random:     securityRandom,
 		clock:      options.Clock,
 		config:     rawevidence.DefaultConfig(),

@@ -94,6 +94,8 @@ final class SettingsView extends StatelessWidget {
               const SizedBox(height: 9),
               _ManagedRunGuide(copy: copy, status: controller.terminalCommand),
               const SizedBox(height: 18),
+              _StorageDisclosure(copy: copy),
+              const SizedBox(height: 18),
               _SettingsLabel(copy('settings.runtime')),
               const SizedBox(height: 7),
               Row(
@@ -309,6 +311,41 @@ final class _RunCommand extends StatelessWidget {
           ),
         ],
       ),
+    );
+  }
+}
+
+/// _StorageDisclosure satisfies INV-STORE-DISCLOSED. It states where evidence
+/// is written, how long it is kept, that credential header values are removed
+/// before the write, and that the database is not encrypted at rest. The last
+/// one is the point: the product would rather disclose an absence than imply
+/// a protection it does not provide.
+final class _StorageDisclosure extends StatelessWidget {
+  const _StorageDisclosure({required this.copy});
+
+  final AppCopy copy;
+
+  @override
+  Widget build(BuildContext context) {
+    final body = Theme.of(context).textTheme.bodyMedium?.copyWith(
+      color: context.viberColors.textMuted,
+    );
+    return Column(
+      key: const Key('storage-disclosure-panel'),
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        _SettingsLabel(copy('settings.storage')),
+        const SizedBox(height: 7),
+        for (final line in const [
+          'settings.storage.not_encrypted',
+          'settings.storage.credentials',
+          'settings.storage.location',
+          'settings.storage.retention',
+        ]) ...[
+          Text(copy(line), style: body),
+          const SizedBox(height: 5),
+        ],
+      ],
     );
   }
 }

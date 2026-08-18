@@ -62,6 +62,7 @@ void main() {
                 hintText: 'Filter captures',
                 onChanged: (_) {},
               ),
+              const CompactProgressIndicator(key: Key('compact-progress')),
             ],
           ),
         ),
@@ -75,6 +76,21 @@ void main() {
     expect(
       tester.getSize(find.byKey(const Key('compact-search'))).height,
       ViberMetrics.searchHeight,
+    );
+    expect(
+      tester.getSize(find.byKey(const Key('compact-progress'))),
+      const Size.square(ViberMetrics.compactProgressSize),
+    );
+    expect(
+      tester
+          .widget<CircularProgressIndicator>(
+            find.descendant(
+              of: find.byKey(const Key('compact-progress')),
+              matching: find.byType(CircularProgressIndicator),
+            ),
+          )
+          .strokeWidth,
+      1.4,
     );
     final search = tester.widget<TextField>(
       find.descendant(

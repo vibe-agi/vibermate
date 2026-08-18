@@ -1,9 +1,23 @@
 package capturerun
 
 import (
+	"bytes"
+	"strings"
 	"testing"
 	"time"
 )
+
+func TestGeneratedRunIDHasAControlResourcePrefix(t *testing.T) {
+	t.Parallel()
+
+	id, err := newRunID(bytes.NewReader(bytes.Repeat([]byte{0xfb}, runIDRandomBytes)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.HasPrefix(id, runIDPrefix) || id[0] == '-' || id[0] == '_' {
+		t.Fatalf("generated CaptureRun ID = %q", id)
+	}
+}
 
 func observationRecord(t *testing.T) DurableRecord {
 	t.Helper()
