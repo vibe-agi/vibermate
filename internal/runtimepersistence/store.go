@@ -76,6 +76,12 @@ type RuntimeStore interface {
 	ProviderAccountRepository() provideraccount.Repository
 	RawEvidenceRepository() rawevidence.Repository
 	WorkspaceDefaultRepository() workspacedefault.Repository
+	// EvidenceArchive owns the two destructive operations. They are on the
+	// store rather than on a repository because each spans several of them and
+	// has to be one transaction: a half-deleted Capture is visible and
+	// unfinishable.
+	DeleteCapture(context.Context, string, string) (CaptureDeletion, error)
+	ClearEvidence(context.Context) (ArchiveClear, error)
 	Shutdown(context.Context) error
 }
 

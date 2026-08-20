@@ -21,6 +21,8 @@ const MaxOriginBytes = 2048
 
 var ErrInvalidOrigin = errors.New("origin identity is invalid")
 
+var carrierGradeNAT = netip.MustParsePrefix("100.64.0.0/10")
+
 // ClientOrigin is one exact canonical HTTPS origin eligible for semantic
 // interception. IP literals and wildcard names are deliberately excluded.
 type ClientOrigin struct {
@@ -122,10 +124,12 @@ type ProviderTransport string
 const (
 	ProviderTransportStrictTLS         ProviderTransport = "strict_tls"
 	ProviderTransportLoopbackCleartext ProviderTransport = "loopback_cleartext"
+	ProviderTransportPrivateCleartext  ProviderTransport = "private_cleartext"
 )
 
 // ProviderOrigin is an outbound authority plus one canonical base path.
-// Cleartext is representable only for a literal loopback address.
+// Cleartext is representable for a literal local/private address or a DNS
+// name whose peer is constrained to a local/private address by the transport.
 type ProviderOrigin struct {
 	canonical string
 	scheme    string
@@ -168,15 +172,34 @@ func ParseProviderOrigin(raw string) (ProviderOrigin, error) {
 			}
 		}
 	case "http":
-		address, parseErr := netip.ParseAddr(host)
-		if parseErr != nil || !address.IsLoopback() || address.Is4In6() {
-			return ProviderOrigin{}, invalid("cleartext ProviderOrigin requires a literal unmapped loopback address")
+		if address, parseErr := netip.ParseAddr(host); parseErr == nil {
+			if address.Is4In6() {
+				return ProviderOrigin{}, invalid("cleartext ProviderOrigin requires an unmapped local/private address")
+			}
+			address = address.Unmap()
+			if !IsPrivateCleartextAddress(address) {
+				return ProviderOrigin{}, invalid("cleartext ProviderOrigin requires a local/private address")
+			}
+			host = address.String()
+			if address.IsLoopback() {
+				transport = ProviderTransportLoopbackCleartext
+			} else {
+				transport = ProviderTransportPrivateCleartext
+			}
+		} else {
+			host, err = idna.Lookup.ToASCII(strings.ToLower(host))
+			if err != nil {
+				return ProviderOrigin{}, invalid("ProviderOrigin host cannot be converted to IDNA ASCII")
+			}
+			host = strings.ToLower(host)
+			if err := validateDNSName(host); err != nil {
+				return ProviderOrigin{}, invalid("ProviderOrigin host is not a DNS name")
+			}
+			transport = ProviderTransportPrivateCleartext
 		}
-		host = address.String()
 		defaultPort = 80
-		transport = ProviderTransportLoopbackCleartext
 	default:
-		return ProviderOrigin{}, invalid("ProviderOrigin scheme must be HTTPS or literal-loopback HTTP")
+		return ProviderOrigin{}, invalid("ProviderOrigin scheme must be HTTPS or local/private HTTP")
 	}
 	port := defaultPort
 	if portText := parsed.Port(); portText != "" {
@@ -205,6 +228,21 @@ func ParseProviderOrigin(raw string) (ProviderOrigin, error) {
 		canonical: scheme + "://" + authority + basePath,
 		scheme:    scheme, host: host, port: port, basePath: basePath, transport: transport,
 	}, nil
+}
+
+// IsPrivateCleartextAddress defines the only peer-address classes to which a
+// cleartext provider request may be written. CGNAT is included for local
+// overlay networks such as Tailscale; unspecified, multicast, and public
+// addresses remain excluded.
+func IsPrivateCleartextAddress(address netip.Addr) bool {
+	if !address.IsValid() || address.Is4In6() {
+		return false
+	}
+	address = address.Unmap()
+	if address.IsLoopback() || address.IsPrivate() || address.IsLinkLocalUnicast() {
+		return true
+	}
+	return address.Is4() && carrierGradeNAT.Contains(address)
 }
 
 func (origin ProviderOrigin) String() string               { return origin.canonical }

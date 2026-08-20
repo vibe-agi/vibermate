@@ -3,7 +3,9 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 
 import '../../core/api/control_models.dart';
+import '../../core/api/provider_origin.dart';
 import '../../core/design/viber_theme.dart';
+import 'deletion_dialog.dart';
 import '../../core/design/workbench_widgets.dart';
 import '../../core/i18n/app_copy.dart';
 import 'workbench_controller.dart';
@@ -74,6 +76,7 @@ final class _EndpointsViewState extends State<EndpointsView> {
                     _openAccountEditor(context, endpoint),
                 onReplaceCredential: (endpoint, account) =>
                     _openAccountEditor(context, endpoint, account: account),
+                onDeleteEndpoint: () => _confirmDeleteEndpoint(context),
                 onDeleteAccount: (account) =>
                     _openDeleteAccount(context, account),
               );
@@ -138,6 +141,35 @@ final class _EndpointsViewState extends State<EndpointsView> {
           controller: widget.controller,
           account: account,
           copy: widget.copy,
+        ),
+      ),
+    );
+  }
+
+  void _confirmDeleteEndpoint(BuildContext context) {
+    final endpoint = widget.controller.data?.endpoints
+        .where((value) => value.id == widget.controller.selectedEndpointId)
+        .firstOrNull;
+    if (endpoint == null) return;
+    unawaited(
+      showDialog<DeletionOutcome>(
+        context: context,
+        builder: (_) => DeletionConfirmation(
+          copy: widget.copy,
+          title: widget.copy('deletion.endpoint.title'),
+          subject: endpoint.displayName,
+          consequence: widget.copy('deletion.endpoint.consequence'),
+          onConfirm: () async {
+            final result = await widget.controller.deleteUpstreamEndpoint(
+              endpoint.id,
+            );
+            if (result == null) {
+              throw StateError(
+                widget.controller.inventoryError ?? 'endpoint delete failed',
+              );
+            }
+            return result;
+          },
         ),
       ),
     );
@@ -271,6 +303,7 @@ final class _EndpointDetail extends StatelessWidget {
     required this.onAddAccount,
     required this.onReplaceCredential,
     required this.onDeleteAccount,
+    required this.onDeleteEndpoint,
   });
 
   final UpstreamEndpoint? endpoint;
@@ -281,6 +314,7 @@ final class _EndpointDetail extends StatelessWidget {
   final ValueChanged<UpstreamEndpoint> onAddAccount;
   final void Function(UpstreamEndpoint, ProviderAccount) onReplaceCredential;
   final ValueChanged<ProviderAccount> onDeleteAccount;
+  final VoidCallback onDeleteEndpoint;
 
   @override
   Widget build(BuildContext context) {
@@ -322,6 +356,19 @@ final class _EndpointDetail extends StatelessWidget {
                                   context,
                                 ).textTheme.headlineSmall,
                               ),
+                            ),
+                            const SizedBox(width: 8),
+                            IconButton(
+                              key: const Key('endpoint-delete'),
+                              onPressed: busy ? null : onDeleteEndpoint,
+                              tooltip: copy('deletion.endpoint.title'),
+                              icon: const Icon(Icons.delete_outline, size: 15),
+                              color: context.viberColors.danger,
+                              constraints: const BoxConstraints.tightFor(
+                                width: 26,
+                                height: 26,
+                              ),
+                              padding: EdgeInsets.zero,
                             ),
                             if (value.state != 'active') ...[
                               const SizedBox(width: 8),
@@ -576,7 +623,18 @@ final class _EndpointEditorDialogState extends State<_EndpointEditorDialog> {
   bool _submitted = false;
 
   @override
+  void initState() {
+    super.initState();
+    _origin.addListener(_originChanged);
+  }
+
+  void _originChanged() {
+    if (mounted) setState(() {});
+  }
+
+  @override
   void dispose() {
+    _origin.removeListener(_originChanged);
     _name.dispose();
     _origin.dispose();
     super.dispose();
@@ -621,15 +679,39 @@ final class _EndpointEditorDialogState extends State<_EndpointEditorDialog> {
                     controller: _origin,
                     autocorrect: false,
                     enableSuggestions: false,
+                    keyboardType: TextInputType.url,
+                    smartDashesType: SmartDashesType.disabled,
+                    smartQuotesType: SmartQuotesType.disabled,
                     textAlignVertical: TextAlignVertical.center,
                     decoration: const InputDecoration(
                       hintText: 'https://relay.example.com',
                     ),
-                    validator: (value) => _canonicalProviderOrigin(value ?? '')
+                    validator: (value) => isCanonicalProviderOrigin(value ?? '')
                         ? null
                         : copy('routes.validation.origin'),
                   ),
                 ),
+                if (isCleartextProviderOrigin(_origin.text)) ...[
+                  const SizedBox(height: 6),
+                  Row(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Icon(
+                        Icons.warning_amber_rounded,
+                        size: 14,
+                        color: context.viberColors.warning,
+                      ),
+                      const SizedBox(width: 6),
+                      Expanded(
+                        child: Text(
+                          copy('routes.endpoint.cleartext_warning'),
+                          style: Theme.of(context).textTheme.bodySmall
+                              ?.copyWith(color: context.viberColors.warning),
+                        ),
+                      ),
+                    ],
+                  ),
+                ],
                 const SizedBox(height: 8),
                 CompactLabeledControl(
                   label: copy('routes.endpoint.protocol'),
@@ -1087,16 +1169,4 @@ String _localizedCopy(AppCopy copy, String family, String value) {
   final key = '$family.$value';
   final localized = copy(key);
   return localized == key ? value : localized;
-}
-
-bool _canonicalProviderOrigin(String value) {
-  final parsed = Uri.tryParse(value);
-  return parsed != null &&
-      parsed.scheme == 'https' &&
-      parsed.host.isNotEmpty &&
-      parsed.userInfo.isEmpty &&
-      !parsed.hasQuery &&
-      !parsed.hasFragment &&
-      (parsed.path.isEmpty || parsed.path == '/') &&
-      parsed.toString() == parsed.origin;
 }

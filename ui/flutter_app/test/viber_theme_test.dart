@@ -63,6 +63,10 @@ void main() {
                 onChanged: (_) {},
               ),
               const CompactProgressIndicator(key: Key('compact-progress')),
+              const CompactLoadingMessage(
+                key: Key('compact-loading-message'),
+                label: 'Loading',
+              ),
             ],
           ),
         ),
@@ -79,6 +83,15 @@ void main() {
     );
     expect(
       tester.getSize(find.byKey(const Key('compact-progress'))),
+      const Size.square(ViberMetrics.compactProgressSize),
+    );
+    expect(
+      tester.getSize(
+        find.descendant(
+          of: find.byKey(const Key('compact-loading-message')),
+          matching: find.byType(CircularProgressIndicator),
+        ),
+      ),
       const Size.square(ViberMetrics.compactProgressSize),
     );
     expect(

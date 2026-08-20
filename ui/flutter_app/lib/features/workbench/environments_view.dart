@@ -5,6 +5,7 @@ import 'package:flutter/material.dart';
 
 import '../../core/api/control_models.dart';
 import '../../core/design/viber_theme.dart';
+import 'deletion_dialog.dart';
 import '../../core/design/workbench_widgets.dart';
 import '../../core/i18n/app_copy.dart';
 import 'environment_editing.dart';
@@ -326,6 +327,25 @@ final class _EnvironmentDetail extends StatelessWidget {
                     runSpacing: 5,
                     crossAxisAlignment: WrapCrossAlignment.center,
                     children: [
+                      IconButton(
+                        key: const Key('environment-delete'),
+                        onPressed: controller.inventoryMutating
+                            ? null
+                            : () => _confirmDeleteEnvironment(
+                                context,
+                                controller,
+                                copy,
+                                value,
+                              ),
+                        tooltip: copy('deletion.environment.title'),
+                        icon: const Icon(Icons.delete_outline, size: 15),
+                        color: context.viberColors.danger,
+                        constraints: const BoxConstraints.tightFor(
+                          width: 26,
+                          height: 26,
+                        ),
+                        padding: EdgeInsets.zero,
+                      ),
                       Text(
                         value.name,
                         style: Theme.of(context).textTheme.headlineSmall,
@@ -492,6 +512,37 @@ final class _EnvironmentDetail extends StatelessWidget {
       ],
     );
   }
+}
+
+/// Environment deletion is offered from the detail header rather than the
+/// directory: the directory is where a user scans, and a destructive action
+/// next to a row they are only passing over is an accident waiting to happen.
+void _confirmDeleteEnvironment(
+  BuildContext context,
+  WorkbenchController controller,
+  AppCopy copy,
+  EnvironmentRecord environment,
+) {
+  unawaited(
+    showDialog<DeletionOutcome>(
+      context: context,
+      builder: (_) => DeletionConfirmation(
+        copy: copy,
+        title: copy('deletion.environment.title'),
+        subject: environment.name,
+        consequence: copy('deletion.environment.consequence'),
+        onConfirm: () async {
+          final result = await controller.deleteEnvironment(environment.id);
+          if (result == null) {
+            throw StateError(
+              controller.inventoryError ?? 'environment delete failed',
+            );
+          }
+          return result;
+        },
+      ),
+    ),
+  );
 }
 
 final class _ClientEndpointPlan extends StatelessWidget {
@@ -1765,6 +1816,7 @@ final class _EnvironmentEndpointAdder extends StatefulWidget {
 
 final class _EnvironmentEndpointAdderState
     extends State<_EnvironmentEndpointAdder> {
+  final _pendingFieldKey = GlobalKey<FormFieldState<String>>();
   String _endpointId = '';
   String _accountId = '';
 
@@ -1794,119 +1846,174 @@ final class _EnvironmentEndpointAdderState
         selected != null &&
         (_accountId == widget.clientCredentialValue ||
             owned.any((account) => account.id == _accountId));
-    return Container(
-      padding: const EdgeInsets.all(8),
-      decoration: BoxDecoration(
-        color: context.viberColors.panelRaised.withValues(alpha: 0.42),
-        border: Border.all(color: context.viberColors.dividerSoft),
-        borderRadius: ViberMetrics.surfaceRadius,
-      ),
-      child: LayoutBuilder(
-        builder: (context, constraints) {
-          final compact = constraints.maxWidth < 470;
-          final endpointField = CompactLabeledControl(
-            label: widget.copy('environment.endpoint.add'),
-            child: CompactSelectField<String>(
-              key: const Key('environment-endpoint-catalog'),
-              initialValue: available.any((value) => value.id == _endpointId)
-                  ? _endpointId
-                  : null,
-              isExpanded: true,
-              items: [
-                for (final endpoint in available)
-                  DropdownMenuItem(
-                    value: endpoint.id,
-                    child: Text(
-                      '${endpoint.displayName} · ${endpoint.origin}',
-                      overflow: TextOverflow.ellipsis,
-                    ),
-                  ),
-              ],
-              onChanged: !widget.enabled || available.isEmpty
-                  ? null
-                  : (value) {
-                      final endpoint = available.firstWhere(
-                        (candidate) => candidate.id == value,
-                      );
-                      final accounts = widget.accounts.where(
-                        (account) =>
-                            account.upstreamEndpointId == endpoint.id &&
-                            account.usable,
-                      );
-                      setState(() {
-                        _endpointId = endpoint.id;
-                        _accountId =
-                            upstreamEndpointCanUseClientCredential(endpoint)
-                            ? widget.clientCredentialValue
-                            : accounts.firstOrNull?.id ?? '';
-                      });
-                    },
-            ),
-          );
-          final accountField = CompactLabeledControl(
-            label: widget.copy('environment.account'),
-            detail: selected != null && !allowClient && owned.isEmpty
-                ? widget.copy('environment.endpoint.account_required')
-                : null,
-            child: CompactSelectField<String>(
-              key: Key(
-                'environment-endpoint-account-${selected?.id ?? 'none'}',
+    return FormField<String>(
+      key: _pendingFieldKey,
+      initialValue: '',
+      validator: (_) {
+        if (_endpointId.isEmpty) return null;
+        if (!canAdd) {
+          return widget.copy('environment.endpoint.account_required');
+        }
+        return widget.copy('environment.endpoint.pending');
+      },
+      builder: (field) => Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Container(
+            padding: const EdgeInsets.all(8),
+            decoration: BoxDecoration(
+              color: context.viberColors.panelRaised.withValues(alpha: 0.42),
+              border: Border.all(
+                color: field.hasError
+                    ? Theme.of(context).colorScheme.error
+                    : context.viberColors.dividerSoft,
               ),
-              initialValue: _accountId.isEmpty ? null : _accountId,
-              isExpanded: true,
-              items: [
-                if (allowClient)
-                  DropdownMenuItem(
-                    value: widget.clientCredentialValue,
-                    child: Text(widget.copy('environment.account.client')),
+              borderRadius: ViberMetrics.surfaceRadius,
+            ),
+            child: LayoutBuilder(
+              builder: (context, constraints) {
+                final compact = constraints.maxWidth < 470;
+                final endpointField = CompactLabeledControl(
+                  label: widget.copy('environment.endpoint.add'),
+                  child: CompactSelectField<String>(
+                    key: const Key('environment-endpoint-catalog'),
+                    initialValue:
+                        available.any((value) => value.id == _endpointId)
+                        ? _endpointId
+                        : null,
+                    isExpanded: true,
+                    items: [
+                      for (final endpoint in available)
+                        DropdownMenuItem(
+                          value: endpoint.id,
+                          child: Text(
+                            '${endpoint.displayName} · ${endpoint.origin}',
+                            overflow: TextOverflow.ellipsis,
+                          ),
+                        ),
+                    ],
+                    onChanged: !widget.enabled || available.isEmpty
+                        ? null
+                        : (value) {
+                            final endpoint = available.firstWhere(
+                              (candidate) => candidate.id == value,
+                            );
+                            final accounts = widget.accounts.where(
+                              (account) =>
+                                  account.upstreamEndpointId == endpoint.id &&
+                                  account.usable,
+                            );
+                            setState(() {
+                              _endpointId = endpoint.id;
+                              _accountId =
+                                  upstreamEndpointCanUseClientCredential(
+                                    endpoint,
+                                  )
+                                  ? widget.clientCredentialValue
+                                  : accounts.firstOrNull?.id ?? '';
+                            });
+                            field.didChange(endpoint.id);
+                          },
                   ),
-                for (final account in owned)
-                  DropdownMenuItem(
-                    value: account.id,
-                    child: Text(
-                      account.displayName,
-                      overflow: TextOverflow.ellipsis,
+                );
+                final accountField = CompactLabeledControl(
+                  label: widget.copy('environment.account'),
+                  detail: selected != null && !allowClient && owned.isEmpty
+                      ? widget.copy('environment.endpoint.account_required')
+                      : null,
+                  child: CompactSelectField<String>(
+                    key: Key(
+                      'environment-endpoint-account-${selected?.id ?? 'none'}',
+                    ),
+                    initialValue: _accountId.isEmpty ? null : _accountId,
+                    isExpanded: true,
+                    items: [
+                      if (allowClient)
+                        DropdownMenuItem(
+                          value: widget.clientCredentialValue,
+                          child: Text(
+                            widget.copy('environment.account.client'),
+                          ),
+                        ),
+                      for (final account in owned)
+                        DropdownMenuItem(
+                          value: account.id,
+                          child: Text(
+                            account.displayName,
+                            overflow: TextOverflow.ellipsis,
+                          ),
+                        ),
+                    ],
+                    onChanged: !widget.enabled || selected == null
+                        ? null
+                        : (value) {
+                            setState(() => _accountId = value ?? '');
+                            field.didChange(_endpointId);
+                          },
+                  ),
+                );
+                final add = OutlinedButton.icon(
+                  key: const Key('environment-add-endpoint'),
+                  onPressed: !widget.enabled || !canAdd ? null : _add,
+                  icon: const Icon(Icons.add, size: 13),
+                  label: Text(widget.copy('environment.endpoint.add_action')),
+                );
+                if (compact) {
+                  return Column(
+                    crossAxisAlignment: CrossAxisAlignment.stretch,
+                    children: [
+                      endpointField,
+                      if (selected != null) ...[
+                        const SizedBox(height: 7),
+                        accountField,
+                      ],
+                      const SizedBox(height: 7),
+                      Align(alignment: Alignment.centerRight, child: add),
+                    ],
+                  );
+                }
+                return Row(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Expanded(child: endpointField),
+                    if (selected != null) ...[
+                      const SizedBox(width: 8),
+                      Expanded(child: accountField),
+                    ],
+                    const SizedBox(width: 8),
+                    Padding(
+                      padding: const EdgeInsets.only(top: 18),
+                      child: add,
+                    ),
+                  ],
+                );
+              },
+            ),
+          ),
+          if (field.errorText != null) ...[
+            const SizedBox(height: 5),
+            Row(
+              key: const Key('environment-endpoint-pending-error'),
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Icon(
+                  Icons.error_outline,
+                  size: 13,
+                  color: Theme.of(context).colorScheme.error,
+                ),
+                const SizedBox(width: 5),
+                Expanded(
+                  child: Text(
+                    field.errorText!,
+                    style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                      color: Theme.of(context).colorScheme.error,
                     ),
                   ),
+                ),
               ],
-              onChanged: !widget.enabled || selected == null
-                  ? null
-                  : (value) => setState(() => _accountId = value ?? ''),
             ),
-          );
-          final add = OutlinedButton.icon(
-            key: const Key('environment-add-endpoint'),
-            onPressed: !widget.enabled || !canAdd ? null : _add,
-            icon: const Icon(Icons.add, size: 13),
-            label: Text(widget.copy('environment.endpoint.add_action')),
-          );
-          if (compact) {
-            return Column(
-              crossAxisAlignment: CrossAxisAlignment.stretch,
-              children: [
-                endpointField,
-                if (selected != null) ...[
-                  const SizedBox(height: 7),
-                  accountField,
-                ],
-                const SizedBox(height: 7),
-                Align(alignment: Alignment.centerRight, child: add),
-              ],
-            );
-          }
-          return Row(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Expanded(child: endpointField),
-              if (selected != null) ...[
-                const SizedBox(width: 8),
-                Expanded(child: accountField),
-              ],
-              const SizedBox(width: 8),
-              Padding(padding: const EdgeInsets.only(top: 18), child: add),
-            ],
-          );
-        },
+          ],
+        ],
       ),
     );
   }
@@ -1923,6 +2030,7 @@ final class _EnvironmentEndpointAdderState
       _endpointId = '';
       _accountId = '';
     });
+    _pendingFieldKey.currentState?.reset();
   }
 }
 

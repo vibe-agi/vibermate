@@ -851,6 +851,14 @@ void main() {
         (tester.getCenter(turnNode).dy - tester.getCenter(turnLabel).dy).abs(),
         lessThan(4),
       );
+      final requestPreview = find.byKey(
+        const Key('conversation-turn-preview-run-1-exchange-222'),
+      );
+      expect(requestPreview, findsOneWidget);
+      expect(
+        tester.widget<Text>(requestPreview).data,
+        'Continue with the next verified implementation step.',
+      );
       await tester.tap(turn);
       await tester.pumpAndSettle();
       final expandedDecoration =
@@ -858,7 +866,7 @@ void main() {
       expect(expandedDecoration.borderRadius, ViberMetrics.surfaceRadius);
       expect(
         find.text('Continue with the next verified implementation step.'),
-        findsOneWidget,
+        findsNWidgets(2),
       );
       expect(
         find.text(
@@ -2251,8 +2259,23 @@ void main() {
       await tester.pumpAndSettle();
       await tester.tap(find.text('Anthropic · Work').last);
       await tester.pumpAndSettle();
+
+      // A catalog choice is still pending until it is added to the draft.
+      // Reviewing must never silently publish an Environment without it.
+      await tester.tap(find.byKey(const Key('environment-review')));
+      await tester.pumpAndSettle();
+      expect(
+        find.byKey(const Key('environment-endpoint-pending-error')),
+        findsOneWidget,
+      );
+      expect(find.byKey(const Key('environment-impact-review')), findsNothing);
+
       await tester.tap(find.byKey(const Key('environment-add-endpoint')));
       await tester.pumpAndSettle();
+      expect(
+        find.byKey(const Key('environment-endpoint-pending-error')),
+        findsNothing,
+      );
       expect(find.text('Anthropic · Work'), findsWidgets);
 
       await tester.tap(find.byKey(const Key('environment-review')));
@@ -2264,6 +2287,10 @@ void main() {
       expect(find.text('2 upstream routes'), findsOneWidget);
       expect(find.text('Default'), findsOneWidget);
       expect(find.text('Candidate'), findsOneWidget);
+
+      await tester.tap(find.byKey(const Key('environment-edit')));
+      await tester.pumpAndSettle();
+      expect(find.text('Anthropic · Work'), findsWidgets);
       expect(tester.takeException(), isNull);
 
       await tester.pumpWidget(const SizedBox.shrink());
@@ -2360,7 +2387,14 @@ void main() {
       );
       await tester.enterText(
         find.byKey(const Key('endpoint-editor-origin')),
-        'https://relay.team.example',
+        'http://spark-2a59:8888',
+      );
+      await tester.pump();
+      expect(
+        find.text(
+          'HTTP is limited to local or private-network peers. Conversations and credentials are sent without transport encryption.',
+        ),
+        findsOneWidget,
       );
       await tester.tap(find.byKey(const Key('endpoint-editor-save')));
       await tester.pumpAndSettle();
@@ -2407,7 +2441,20 @@ void main() {
       );
       expect(find.textContaining('Credential version 2'), findsOneWidget);
 
-      await tester.tap(find.byIcon(Icons.delete_outline));
+      // Targeted by key, not by icon: the Endpoint itself now offers a delete
+      // with the same icon, and an icon is not an identity.
+      await tester.tap(
+        find
+            .byWidgetPredicate(
+              (widget) =>
+                  widget is IconButton &&
+                  widget.key is ValueKey<String> &&
+                  (widget.key! as ValueKey<String>).value.startsWith(
+                    'account-delete-',
+                  ),
+            )
+            .first,
+      );
       await tester.pumpAndSettle();
       expect(find.text('Delete Team Primary?'), findsOneWidget);
       await tester.tap(find.byKey(const Key('account-delete-confirm')));
@@ -2427,6 +2474,58 @@ void main() {
       await tester.pump();
     },
   );
+
+  testWidgets('390px private HTTP Endpoint editor remains usable', (
+    tester,
+  ) async {
+    await tester.binding.setSurfaceSize(const Size(390, 760));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+    await tester.pumpWidget(
+      const ViberMateApp(previewMode: true, preferChinese: true),
+    );
+    await tester.pumpAndSettle();
+    await tester.tap(find.byIcon(Icons.hub_outlined).first);
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.byKey(const Key('endpoints-add')));
+    await tester.pumpAndSettle();
+    await tester.enterText(
+      find.byKey(const Key('endpoint-editor-name')),
+      'spark',
+    );
+    await tester.enterText(
+      find.byKey(const Key('endpoint-editor-origin')),
+      'http://spark–2a59:8888',
+    );
+    await tester.pumpAndSettle();
+
+    // An en dash is visually close to the ASCII hostname hyphen. The editor
+    // must reject it locally instead of sending a request that the runtime
+    // later reports as a generic invalid Endpoint.
+    await tester.tap(find.byKey(const Key('endpoint-editor-save')));
+    await tester.pumpAndSettle();
+    expect(
+      find.text('请输入不含路径、查询、片段或显式默认端口的精确 HTTPS 地址，或受信任的本机/私网 HTTP 地址。'),
+      findsOneWidget,
+    );
+
+    await tester.enterText(
+      find.byKey(const Key('endpoint-editor-origin')),
+      'http://spark-2a59:8888',
+    );
+    await tester.pumpAndSettle();
+
+    expect(find.text('HTTP 仅允许连接本机或私网对端；对话与凭据将以明文传输。'), findsOneWidget);
+    final save = find.byKey(const Key('endpoint-editor-save'));
+    await tester.ensureVisible(save);
+    expect(tester.widget<FilledButton>(save).onPressed, isNotNull);
+    expect(tester.takeException(), isNull);
+
+    await tester.sendKeyEvent(LogicalKeyboardKey.escape);
+    await tester.pumpAndSettle();
+    await tester.pumpWidget(const SizedBox.shrink());
+    await tester.pump();
+  });
 
   testWidgets('referenced Account deletion shows exact blocking routes', (
     tester,

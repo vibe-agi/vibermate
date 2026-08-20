@@ -366,7 +366,7 @@ type desktopWorkbenchPreferences struct {
 	Theme                       string  `json:"theme"`
 	Section                     string  `json:"section"`
 	SelectedCaptureKey          *string `json:"selectedCaptureKey"`
-	SelectedConversationKey     *string `json:"selectedConversationKey"`
+	SelectedConversationKey     *string `json:"selectedConversationKey,omitempty"`
 	SelectedEnvironmentID       *string `json:"selectedEnvironmentId"`
 	SelectedEnvironmentRevision *int    `json:"selectedEnvironmentRevision"`
 	SelectedEndpointID          *string `json:"selectedEndpointId"`
@@ -462,13 +462,15 @@ func nonCanonicalDesktopPreferences(
 	environmentID *string,
 	endpointID *string,
 ) []byte {
+	retiredConversationKey := "capture_run:acceptance"
 	encoded, err := json.MarshalIndent(desktopWorkbenchPreferences{
-		Schema:                desktopPreferencesSchema,
-		Language:              language,
-		Theme:                 desktopPreferencesTheme,
-		Section:               section,
-		SelectedEnvironmentID: environmentID,
-		SelectedEndpointID:    endpointID,
+		Schema:                  desktopPreferencesSchema,
+		Language:                language,
+		Theme:                   desktopPreferencesTheme,
+		Section:                 section,
+		SelectedConversationKey: &retiredConversationKey,
+		SelectedEnvironmentID:   environmentID,
+		SelectedEndpointID:      endpointID,
 	}, "", "  ")
 	if err != nil {
 		panic("fixed Desktop preference fixture could not be encoded")

@@ -212,6 +212,8 @@ func (target Target) probeTransportKind() (
 		return offlinehold.ProbeTransportStrictTLS, nil
 	case originidentity.ProviderTransportLoopbackCleartext:
 		return offlinehold.ProbeTransportLoopbackCleartext, nil
+	case originidentity.ProviderTransportPrivateCleartext:
+		return offlinehold.ProbeTransportPrivateCleartext, nil
 	default:
 		return "", errors.New("provider target transport kind is unsupported")
 	}
@@ -470,10 +472,10 @@ func NewRequest(options RequestOptions) (Request, error) {
 	if options.ClientProtocol == wireprofile.ApplicationProtocolHTTP2 {
 		expectedTransport = wireprofile.HTTPTransportHTTP2
 	}
-	if options.Target.origin.Transport() == originidentity.ProviderTransportLoopbackCleartext &&
+	if options.Target.origin.Transport() != originidentity.ProviderTransportStrictTLS &&
 		expectedTransport == wireprofile.HTTPTransportHTTP2 {
 		return Request{}, errors.New(
-			"loopback cleartext provider does not support HTTP/2 presentation",
+			"cleartext provider does not support HTTP/2 presentation",
 		)
 	}
 	if requestedTransport.Ref().String() == "" ||

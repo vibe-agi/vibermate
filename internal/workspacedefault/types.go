@@ -87,6 +87,9 @@ type Repository interface {
 	Load(context.Context, Key) (Record, bool, error)
 	Write(context.Context, uint64, Record) (CommitResult, error)
 	Delete(context.Context, Key, uint64) (CommitResult, error)
+	// ListByEnvironment answers the reverse question: which workspaces would be
+	// left pointing at nothing if this Environment went away.
+	ListByEnvironment(context.Context, environment.EnvironmentID) ([]Record, error)
 }
 
 type Clock interface {
@@ -113,4 +116,5 @@ type Controller interface {
 	Resolve(context.Context, workspaceidentity.Scope) (Record, bool, error)
 	Set(context.Context, SetCommand) (Record, error)
 	Clear(context.Context, ClearCommand) error
+	ListByEnvironment(context.Context, environment.EnvironmentID) ([]Record, error)
 }

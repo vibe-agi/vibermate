@@ -11,6 +11,7 @@ import '../../core/design/workbench_widgets.dart';
 import '../../core/i18n/app_copy.dart';
 import 'capture_conversation_tree.dart';
 import 'conversation_timeline.dart';
+import 'deletion_dialog.dart';
 import 'workbench_controller.dart';
 
 final class CapturesView extends StatefulWidget {
@@ -63,6 +64,7 @@ final class _CapturesViewState extends State<CapturesView> {
           }),
           onConfirmRevoke: (value) => setState(() => _confirmRevoke = value),
           onRotateManual: () => _openRotateManualCapture(context),
+          onDeleteCapture: () => _confirmDeleteCapture(context),
           masterVisible: _masterVisible,
           onToggleMaster: narrow
               ? null
@@ -127,6 +129,31 @@ final class _CapturesViewState extends State<CapturesView> {
         builder: (context) => _ManualCaptureCreateDialog(
           controller: widget.controller,
           copy: widget.copy,
+        ),
+      ),
+    );
+  }
+
+  void _confirmDeleteCapture(BuildContext context) {
+    final capture = widget.controller.selectedCapture;
+    if (capture == null) return;
+    unawaited(
+      showDialog<DeletionOutcome>(
+        context: context,
+        builder: (_) => DeletionConfirmation(
+          copy: widget.copy,
+          title: widget.copy('deletion.capture.title'),
+          subject: capture.displayName,
+          consequence: widget.copy('deletion.capture.consequence'),
+          onConfirm: () async {
+            final result = await widget.controller.deleteCapture(capture.key);
+            if (result == null) {
+              throw StateError(
+                widget.controller.inventoryError ?? 'capture delete failed',
+              );
+            }
+            return result;
+          },
         ),
       ),
     );
@@ -456,6 +483,7 @@ final class _CaptureDetail extends StatelessWidget {
     required this.onBack,
     required this.onConfirmRevoke,
     required this.onRotateManual,
+    required this.onDeleteCapture,
     required this.masterVisible,
     required this.onToggleMaster,
   });
@@ -467,6 +495,7 @@ final class _CaptureDetail extends StatelessWidget {
   final VoidCallback onBack;
   final ValueChanged<bool> onConfirmRevoke;
   final VoidCallback onRotateManual;
+  final VoidCallback onDeleteCapture;
   final bool masterVisible;
   final VoidCallback? onToggleMaster;
 
@@ -521,6 +550,7 @@ final class _CaptureDetail extends StatelessWidget {
                 unawaited(controller.switchEnvironment(value)),
             onConfirmRevoke: onConfirmRevoke,
             onRotate: onRotateManual,
+            onDelete: onDeleteCapture,
             routeDetail: [
               if (endpoint != null) endpoint.displayName,
               if (account != null)
@@ -614,10 +644,7 @@ final class _CaptureConversationWorkspaceState
     final Widget timeline =
         controller.captureActivitiesLoading &&
             controller.selectedCapturePage == null
-        ? CenteredMessage(
-            icon: Icons.sync_rounded,
-            title: copy('common.loading'),
-          )
+        ? CompactLoadingMessage(label: copy('common.loading'))
         : EvidenceConversationTimeline(
             key: ValueKey(
               'capture-timeline:${controller.selectedCaptureConversationKey ?? 'empty'}',
@@ -1201,6 +1228,7 @@ final class _CaptureContext extends StatelessWidget {
     required this.onConfirmRevoke,
     required this.onRevoke,
     required this.onRotate,
+    required this.onDelete,
     required this.routeDetail,
     required this.masterVisible,
     required this.onToggleMaster,
@@ -1220,6 +1248,7 @@ final class _CaptureContext extends StatelessWidget {
   final ValueChanged<bool> onConfirmRevoke;
   final VoidCallback onRevoke;
   final VoidCallback onRotate;
+  final VoidCallback onDelete;
   final String routeDetail;
   final bool masterVisible;
   final VoidCallback? onToggleMaster;
@@ -1255,17 +1284,33 @@ final class _CaptureContext extends StatelessWidget {
               foregroundColor: context.viberColors.warning,
             ),
           );
-          final manualActions = Wrap(
+          // Deleting a Capture is the one action here that removes evidence,
+          // so it is offered only once the Capture has stopped: while it runs
+          // its own writer is still adding to what would be deleted.
+          final deleteButton = OutlinedButton.icon(
+            key: const Key('capture-delete'),
+            onPressed: mutating || capture.running ? null : () => onDelete(),
+            icon: const Icon(Icons.delete_outline, size: 14),
+            label: Text(copy('deletion.confirm')),
+            style: OutlinedButton.styleFrom(
+              foregroundColor: context.viberColors.danger,
+            ),
+          );
+          final hasHeaderActions = canManage || !capture.running;
+          final headerActions = Wrap(
             spacing: 6,
             runSpacing: 6,
             children: [
-              OutlinedButton.icon(
-                key: const Key('manual-capture-rotate'),
-                onPressed: mutating ? null : onRotate,
-                icon: const Icon(Icons.sync_lock, size: 14),
-                label: Text(copy('capture.manual.rotate')),
-              ),
-              revokeButton,
+              if (canManage) ...[
+                OutlinedButton.icon(
+                  key: const Key('manual-capture-rotate'),
+                  onPressed: mutating ? null : onRotate,
+                  icon: const Icon(Icons.sync_lock, size: 14),
+                  label: Text(copy('capture.manual.rotate')),
+                ),
+                revokeButton,
+              ],
+              if (!capture.running) deleteButton,
             ],
           );
           return Column(
@@ -1333,15 +1378,15 @@ final class _CaptureContext extends StatelessWidget {
                       ],
                     ),
                   ),
-                  if (canManage && !compact) ...[
+                  if (hasHeaderActions && !compact) ...[
                     const SizedBox(width: 8),
-                    manualActions,
+                    headerActions,
                   ],
                 ],
               ),
-              if (canManage && compact) ...[
+              if (hasHeaderActions && compact) ...[
                 const SizedBox(height: 7),
-                Align(alignment: Alignment.centerLeft, child: manualActions),
+                Align(alignment: Alignment.centerLeft, child: headerActions),
               ],
               const SizedBox(height: 6),
               _EnvironmentScopeControls(

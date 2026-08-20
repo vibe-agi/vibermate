@@ -1041,6 +1041,126 @@ final class PreviewControlApi implements ControlApi {
     return updated;
   }
 
+  // The fixture answers deletions the way the runtime does: a Capture that is
+  // running holds the archive, and everything else completes. It exists so the
+  // confirmation flow can be exercised without a daemon, including the refusal
+  // path, which is the half that is easy to leave untested.
+  @override
+  Future<DeletionOutcome> deleteEnvironment(String environmentId) async {
+    if (environmentId == 'work') {
+      return const DeletionOutcome(
+        deleted: false,
+        holderCount: 1,
+        holders: [
+          DeletionHolder(
+            kind: 'running_capture',
+            id: 'managed_run:run-1',
+            label: 'claude',
+            detail: 'attached',
+          ),
+        ],
+        released: null,
+      );
+    }
+    _environments.removeWhere((value) => value.id == environmentId);
+    return const DeletionOutcome(
+      deleted: true,
+      holderCount: 0,
+      holders: [],
+      released: null,
+    );
+  }
+
+  @override
+  Future<DeletionOutcome> deleteUpstreamEndpoint(String endpointId) async {
+    return const DeletionOutcome(
+      deleted: false,
+      holderCount: 1,
+      holders: [
+        DeletionHolder(
+          kind: 'environment_route',
+          id: 'work/route-anthropic',
+          label: 'Work',
+          detail: 'route-anthropic',
+        ),
+      ],
+      released: null,
+    );
+  }
+
+  @override
+  Future<DeletionOutcome> deleteCapture(String captureKey) async {
+    final capture = _captures[captureKey];
+    if (capture != null && capture.running) {
+      return DeletionOutcome(
+        deleted: false,
+        holderCount: 1,
+        holders: [
+          DeletionHolder(
+            kind: 'running_capture',
+            id: captureKey,
+            label: capture.displayName,
+            detail: capture.state,
+          ),
+        ],
+        released: null,
+      );
+    }
+    _captures.remove(captureKey);
+    return const DeletionOutcome(
+      deleted: true,
+      holderCount: 0,
+      holders: [],
+      released: DeletionReleased(
+        exchanges: 24,
+        envelopes: 96,
+        activities: 24,
+        connections: 8,
+        attempts: 24,
+        approvals: 3,
+        assignments: 1,
+        captures: 1,
+      ),
+    );
+  }
+
+  @override
+  Future<DeletionOutcome> clearEvidence() async {
+    final running = _captures.values.where((capture) => capture.running);
+    if (running.isNotEmpty) {
+      return DeletionOutcome(
+        deleted: false,
+        holderCount: running.length,
+        holders: running
+            .map(
+              (capture) => DeletionHolder(
+                kind: 'running_capture',
+                id: capture.key,
+                label: capture.displayName,
+                detail: capture.state,
+              ),
+            )
+            .toList(growable: false),
+        released: null,
+      );
+    }
+    return const DeletionOutcome(
+      deleted: true,
+      holderCount: 0,
+      holders: [],
+      released: DeletionReleased(
+        exchanges: 744,
+        envelopes: 3055,
+        activities: 795,
+        connections: 148,
+        attempts: 761,
+        approvals: 12,
+        assignments: 20,
+        captures: 20,
+      ),
+    );
+  }
+
   @override
   Future<ProviderAccountDeleteResult> deleteProviderAccount(
     ProviderAccount account,
@@ -1438,6 +1558,13 @@ final class PreviewControlApi implements ControlApi {
             ? 'succeeded'
             : 'failed',
         reasonCode: succeeded ? null : 'provider_timeout',
+        requestPreview: ActivityRequestPreview(
+          kind: index % 4 == 0 ? 'tool_call' : 'text',
+          text: index % 4 == 0
+              ? 'workspace.read'
+              : 'Continue with the next verified implementation step.',
+          truncated: false,
+        ),
         source: ActivitySourceRef(
           kind: capture.isManual ? 'manual_proxy' : 'capture_run',
           displayName: capture.displayName,

@@ -417,6 +417,114 @@ func (repository *exchangeContentRepository) GetProjection(
 	return projection.Clone(), nil
 }
 
+// RequestPreviews resolves the final request message for a bounded Activity
+// page in two set-oriented reads. It verifies the content-addressed terminal
+// node and the rebuilt message digest; full-chain verification remains the
+// responsibility of Get/GetProjection when an operator opens the evidence.
+func (repository *exchangeContentRepository) RequestPreviews(
+	ctx context.Context,
+	exchangeIDs []string,
+	now time.Time,
+) (map[string]exchangecontent.RequestPreview, error) {
+	if len(exchangeIDs) > exchangecontent.MaxRequestPreviewBatch {
+		return nil, exchangecontent.ErrInvalidEvidence
+	}
+	wantedIDs := uniqueStrings(exchangeIDs)
+	if len(wantedIDs) == 0 {
+		return map[string]exchangecontent.RequestPreview{}, nil
+	}
+	encodedWanted, err := json.Marshal(wantedIDs)
+	if err != nil {
+		return nil, exchangecontent.ErrInvalidEvidence
+	}
+	operation, finish, err := repository.operations.begin(ctx)
+	if err != nil {
+		return nil, err
+	}
+	defer finish()
+
+	type terminalMessage struct {
+		messageDigest string
+	}
+	terminals := make(map[string]terminalMessage, len(wantedIDs))
+	digests := make([]string, 0, len(wantedIDs))
+	rows, err := repository.database.QueryContext(
+		operation,
+		`SELECT contents.exchange_id,
+		        contents.request_transcript_digest,
+		        contents.request_message_count,
+		        nodes.parent_digest,
+		        nodes.message_digest,
+		        nodes.depth
+		   FROM runtime_exchange_contents AS contents
+		   JOIN json_each(?) AS wanted ON wanted.value = contents.exchange_id
+		   LEFT JOIN runtime_exchange_content_transcripts AS nodes
+		     ON nodes.digest = contents.request_transcript_digest
+		  WHERE contents.expires_at_unix_ms > ?`,
+		string(encodedWanted),
+		toUnixMillis(now.UTC()),
+	)
+	if err != nil {
+		return nil, fmt.Errorf("load Exchange request preview roots: %w", err)
+	}
+	for rows.Next() {
+		var exchangeID, root string
+		var count int
+		var parent, messageDigest sql.NullString
+		var depth sql.NullInt64
+		if err := rows.Scan(
+			&exchangeID, &root, &count, &parent, &messageDigest, &depth,
+		); err != nil {
+			_ = rows.Close()
+			return nil, exchangecontent.ErrInvalidEvidence
+		}
+		parentValue := ""
+		if parent.Valid {
+			parentValue = parent.String
+		}
+		if count < 1 || !validStoredDigest(root) ||
+			!messageDigest.Valid || !validStoredDigest(messageDigest.String) ||
+			!depth.Valid || depth.Int64 != int64(count) ||
+			(count == 1 && parent.Valid) ||
+			(count > 1 && (!parent.Valid || !validStoredDigest(parent.String))) ||
+			transcriptNodeDigest(parentValue, messageDigest.String) != root {
+			_ = rows.Close()
+			return nil, exchangecontent.ErrInvalidEvidence
+		}
+		if _, duplicate := terminals[exchangeID]; duplicate {
+			_ = rows.Close()
+			return nil, exchangecontent.ErrInvalidEvidence
+		}
+		terminals[exchangeID] = terminalMessage{
+			messageDigest: messageDigest.String,
+		}
+		digests = append(digests, messageDigest.String)
+	}
+	if err := rows.Err(); err != nil {
+		_ = rows.Close()
+		return nil, fmt.Errorf("iterate Exchange request preview roots: %w", err)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, fmt.Errorf("close Exchange request preview roots: %w", err)
+	}
+
+	messages, err := loadStoredMessagesByDigest(operation, repository.database, digests)
+	if err != nil {
+		return nil, err
+	}
+	previews := make(map[string]exchangecontent.RequestPreview, len(terminals))
+	for exchangeID, terminal := range terminals {
+		message, exists := messages[terminal.messageDigest]
+		if !exists {
+			return nil, exchangecontent.ErrInvalidEvidence
+		}
+		if preview, ok := exchangecontent.PreviewRequestMessage(message); ok {
+			previews[exchangeID] = preview
+		}
+	}
+	return previews, nil
+}
+
 func loadStoredContentReference(
 	ctx context.Context,
 	database *sql.DB,
@@ -600,8 +708,27 @@ func (repository *exchangeContentRepository) PurgeExpired(
 		}
 		return 0, nil
 	}
+	if err := purgeUnreachableContent(operation, transaction); err != nil {
+		return 0, err
+	}
+	if err := transaction.Commit(); err != nil {
+		return 0, fmt.Errorf("commit Exchange content purge: %w", err)
+	}
+	return uint64(count), nil
+}
+
+// purgeUnreachableContent releases every transcript node, message and block no
+// retained Exchange still names.
+//
+// It is shared by expiry and by Capture deletion because it is the same
+// question in both cases: content is addressed by digest, so what became
+// unreachable does not depend on why the Exchange left. Callers run it inside
+// their own transaction and only after a delete actually removed something —
+// nothing becomes unreachable otherwise, and an unconditional sweep would scan
+// the whole store on every write.
+func purgeUnreachableContent(ctx context.Context, transaction *sql.Tx) error {
 	if _, err := transaction.ExecContext(
-		operation,
+		ctx,
 		`WITH RECURSIVE reachable(digest) AS (
 		   SELECT request_transcript_digest FROM runtime_exchange_contents
 		   UNION
@@ -617,10 +744,10 @@ func (repository *exchangeContentRepository) PurgeExpired(
 		 )
 		 DELETE FROM runtime_exchange_content_transcripts
 		 WHERE digest NOT IN (SELECT digest FROM reachable)`); err != nil {
-		return 0, fmt.Errorf("purge unreferenced transcript nodes: %w", err)
+		return fmt.Errorf("purge unreferenced transcript nodes: %w", err)
 	}
 	if _, err := transaction.ExecContext(
-		operation,
+		ctx,
 		`DELETE FROM runtime_exchange_content_messages
 		 WHERE digest NOT IN (
 		   SELECT message_digest FROM runtime_exchange_content_transcripts
@@ -631,18 +758,15 @@ func (repository *exchangeContentRepository) PurgeExpired(
 		   SELECT system_message_digest FROM runtime_exchange_contents
 		    WHERE system_message_digest IS NOT NULL
 		 )`); err != nil {
-		return 0, fmt.Errorf("purge unreferenced transcript messages: %w", err)
+		return fmt.Errorf("purge unreferenced transcript messages: %w", err)
 	}
 	// Blocks are released last: one stays reachable while any retained message
 	// names it. Without this the store would keep unreachable content forever,
 	// and retention cost would stop tracking retained content.
-	if err := purgeUnreferencedContentBlocks(operation, transaction); err != nil {
-		return 0, err
+	if err := purgeUnreferencedContentBlocks(ctx, transaction); err != nil {
+		return err
 	}
-	if err := transaction.Commit(); err != nil {
-		return 0, fmt.Errorf("commit Exchange content purge: %w", err)
-	}
-	return uint64(count), nil
+	return nil
 }
 
 func encodeStoredContent(record exchangecontent.Record) (

@@ -8,6 +8,8 @@ import '../../core/design/viber_theme.dart';
 import '../../core/design/workbench_widgets.dart';
 import '../../core/i18n/app_copy.dart';
 import 'offline_hold_view.dart';
+import '../../core/api/control_models.dart';
+import 'deletion_dialog.dart';
 import 'workbench_controller.dart';
 
 final class SettingsView extends StatelessWidget {
@@ -94,7 +96,7 @@ final class SettingsView extends StatelessWidget {
               const SizedBox(height: 9),
               _ManagedRunGuide(copy: copy, status: controller.terminalCommand),
               const SizedBox(height: 18),
-              _StorageDisclosure(copy: copy),
+              _StorageDisclosure(copy: copy, controller: controller),
               const SizedBox(height: 18),
               _SettingsLabel(copy('settings.runtime')),
               const SizedBox(height: 7),
@@ -321,15 +323,16 @@ final class _RunCommand extends StatelessWidget {
 /// one is the point: the product would rather disclose an absence than imply
 /// a protection it does not provide.
 final class _StorageDisclosure extends StatelessWidget {
-  const _StorageDisclosure({required this.copy});
+  const _StorageDisclosure({required this.copy, required this.controller});
 
   final AppCopy copy;
+  final WorkbenchController controller;
 
   @override
   Widget build(BuildContext context) {
-    final body = Theme.of(context).textTheme.bodyMedium?.copyWith(
-      color: context.viberColors.textMuted,
-    );
+    final body = Theme.of(
+      context,
+    ).textTheme.bodyMedium?.copyWith(color: context.viberColors.textMuted);
     return Column(
       key: const Key('storage-disclosure-panel'),
       crossAxisAlignment: CrossAxisAlignment.start,
@@ -341,10 +344,41 @@ final class _StorageDisclosure extends StatelessWidget {
           'settings.storage.credentials',
           'settings.storage.location',
           'settings.storage.retention',
-        ]) ...[
-          Text(copy(line), style: body),
-          const SizedBox(height: 5),
-        ],
+        ]) ...[Text(copy(line), style: body), const SizedBox(height: 5)],
+        const SizedBox(height: 7),
+        // Design 06 section 8.2 makes clearing a distinct, deliberate and
+        // confirmable action rather than a side effect of stopping or
+        // uninstalling, which is why it lives here behind its own confirmation
+        // instead of anywhere a user could reach it by accident.
+        Align(
+          alignment: Alignment.centerLeft,
+          child: OutlinedButton.icon(
+            key: const Key('storage-clear-archive'),
+            onPressed: () async {
+              final outcome = await showDialog<DeletionOutcome>(
+                context: context,
+                builder: (_) => DeletionConfirmation(
+                  copy: copy,
+                  title: copy('deletion.archive.title'),
+                  subject: copy('settings.storage'),
+                  consequence: copy('deletion.archive.consequence'),
+                  onConfirm: () async {
+                    final result = await controller.clearEvidence();
+                    if (result == null) {
+                      throw StateError(
+                        controller.inventoryError ?? 'archive clear failed',
+                      );
+                    }
+                    return result;
+                  },
+                ),
+              );
+              if (outcome == null) return;
+            },
+            icon: const Icon(Icons.delete_sweep_outlined, size: 15),
+            label: Text(copy('deletion.archive.title')),
+          ),
+        ),
       ],
     );
   }

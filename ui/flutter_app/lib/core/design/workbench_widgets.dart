@@ -24,6 +24,43 @@ final class CompactProgressIndicator extends StatelessWidget {
   }
 }
 
+/// Quiet loading feedback for a bounded desktop pane.
+///
+/// A row keeps the indicator and label on one baseline, so loading does not
+/// read as a primary empty state or pull attention away from neighboring
+/// panes that are still usable.
+final class CompactLoadingMessage extends StatelessWidget {
+  const CompactLoadingMessage({required this.label, super.key});
+
+  final String label;
+
+  @override
+  Widget build(BuildContext context) {
+    return Center(
+      child: Semantics(
+        container: true,
+        liveRegion: true,
+        label: label,
+        child: ExcludeSemantics(
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              const CompactProgressIndicator(),
+              const SizedBox(width: ViberSpacing.sm),
+              Text(
+                label,
+                style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                  color: context.viberColors.textMuted,
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
 /// A narrow desktop split handle. The adjacent pane must also expose an
 /// ordinary button for collapsing it, so resizing is never the only path.
 final class WorkbenchPaneDivider extends StatelessWidget {

@@ -55,6 +55,16 @@ func TestManagerPurgesExpiredEvidenceAndRejectsWorkAfterShutdown(t *testing.T) {
 	if err != nil || againProjection.Request.Messages[0].Blocks[0].Text == "mutated" {
 		t.Fatal("Manager returned an aliased content projection")
 	}
+	previews, err := manager.RequestPreviews(context.Background(), []string{
+		record.ExchangeID, record.ExchangeID,
+	})
+	wantPreview, ok := PreviewRequestMessage(record.Request.Messages[len(record.Request.Messages)-1])
+	if !ok {
+		t.Fatal("fixture request did not produce a preview")
+	}
+	if err != nil || previews[record.ExchangeID] != wantPreview {
+		t.Fatalf("RequestPreviews() = %+v, %v", previews, err)
+	}
 	if err := manager.Shutdown(context.Background()); err != nil {
 		t.Fatal(err)
 	}
@@ -65,6 +75,11 @@ func TestManagerPurgesExpiredEvidenceAndRejectsWorkAfterShutdown(t *testing.T) {
 		context.Background(), record.ExchangeID, RequestViewIncremental,
 	); !errors.Is(err, ErrRuntimeStopping) {
 		t.Fatalf("GetProjection() after shutdown error = %v", err)
+	}
+	if _, err := manager.RequestPreviews(
+		context.Background(), []string{record.ExchangeID},
+	); !errors.Is(err, ErrRuntimeStopping) {
+		t.Fatalf("RequestPreviews() after shutdown error = %v", err)
 	}
 	if err := manager.Record(context.Background(), record); !errors.Is(err, ErrRuntimeStopping) {
 		t.Fatalf("Record() after shutdown error = %v", err)
@@ -115,6 +130,28 @@ func (repository *repositoryDouble) GetProjection(
 		return Projection{}, ErrNotFound
 	}
 	return Project(record, view)
+}
+
+func (repository *repositoryDouble) RequestPreviews(
+	_ context.Context,
+	exchangeIDs []string,
+	now time.Time,
+) (map[string]RequestPreview, error) {
+	repository.mu.Lock()
+	defer repository.mu.Unlock()
+	previews := make(map[string]RequestPreview, len(exchangeIDs))
+	for _, exchangeID := range exchangeIDs {
+		record, exists := repository.records[exchangeID]
+		if !exists || !record.ExpiresAt.After(now) || len(record.Request.Messages) == 0 {
+			continue
+		}
+		if preview, ok := PreviewRequestMessage(
+			record.Request.Messages[len(record.Request.Messages)-1],
+		); ok {
+			previews[exchangeID] = preview
+		}
+	}
+	return previews, nil
 }
 
 func (repository *repositoryDouble) PurgeExpired(_ context.Context, now time.Time) (uint64, error) {

@@ -50,6 +50,7 @@ final class _EvidenceConversationTimelineState
   static const _collapsedExtent = 54.0;
   static const _expandedExtentEstimate = 640.0;
   static const _mapItemExtent = 16.0;
+  static const _tailSettleFrameLimit = 12;
   final _scroll = ScrollController();
   final _mapScroll = ScrollController();
   final _itemKeys = <String, GlobalKey>{};
@@ -59,6 +60,7 @@ final class _EvidenceConversationTimelineState
   String? _expandedId;
   int? _navigationTarget;
   int _tailFollowGeneration = 0;
+  int _programmaticScrollDepth = 0;
 
   List<ActivityRecord> get _ordered {
     final values = [...widget.activities];
@@ -242,11 +244,26 @@ final class _EvidenceConversationTimelineState
 
   Future<void> _animateToLatest() async {
     if (!_scroll.hasClients) return;
-    await _scroll.animateTo(
-      _scroll.position.maxScrollExtent,
-      duration: const Duration(milliseconds: 180),
-      curve: Curves.easeOut,
-    );
+    _programmaticScrollDepth += 1;
+    try {
+      await _scroll.animateTo(
+        _scroll.position.maxScrollExtent,
+        duration: const Duration(milliseconds: 180),
+        curve: Curves.easeOut,
+      );
+    } finally {
+      _programmaticScrollDepth -= 1;
+    }
+  }
+
+  void _jumpToLatest() {
+    if (!_scroll.hasClients) return;
+    _programmaticScrollDepth += 1;
+    try {
+      _scroll.jumpTo(_scroll.position.maxScrollExtent);
+    } finally {
+      _programmaticScrollDepth -= 1;
+    }
   }
 
   void _cancelTailFollow() {
@@ -257,6 +274,31 @@ final class _EvidenceConversationTimelineState
       mounted &&
       generation == _tailFollowGeneration &&
       _expandedId == activityId;
+
+  Future<void> _settleAtLatest(int generation, String activityId) async {
+    if (!_stillFollowingTail(generation, activityId) || !_scroll.hasClients) {
+      return;
+    }
+    await _animateToLatest();
+    var previousExtent = -1.0;
+    var stableFrames = 0;
+    for (var frame = 0; frame < _tailSettleFrameLimit; frame += 1) {
+      await WidgetsBinding.instance.endOfFrame;
+      if (!_stillFollowingTail(generation, activityId) || !_scroll.hasClients) {
+        return;
+      }
+      final position = _scroll.position;
+      final extent = position.maxScrollExtent;
+      if ((extent - position.pixels).abs() > 0.5) _jumpToLatest();
+      if ((extent - previousExtent).abs() <= 0.5) {
+        stableFrames += 1;
+        if (stableFrames >= 2) return;
+      } else {
+        stableFrames = 0;
+      }
+      previousExtent = extent;
+    }
+  }
 
   Future<void> _loadExpanded(
     ActivityRecord activity, {
@@ -277,7 +319,7 @@ final class _EvidenceConversationTimelineState
       if (index >= 0) _goTo(index);
     } else if (_stillFollowingTail(generation, activity.id) &&
         _scroll.hasClients) {
-      _scroll.jumpTo(_scroll.position.maxScrollExtent);
+      _jumpToLatest();
     }
     await load;
     await WidgetsBinding.instance.endOfFrame;
@@ -286,14 +328,11 @@ final class _EvidenceConversationTimelineState
         !_scroll.hasClients) {
       return;
     }
-    await _animateToLatest();
-    // Markdown, selectable text, and raw evidence can settle one frame after
-    // the detail Future completes. Finish at the measured tail instead of
-    // leaving the newest Turn a few hundred pixels above it.
-    await WidgetsBinding.instance.endOfFrame;
-    if (_stillFollowingTail(generation, activity.id) && _scroll.hasClients) {
-      _scroll.jumpTo(_scroll.position.maxScrollExtent);
-    }
+    // Markdown, selectable text and raw evidence can change the measured
+    // extent across several frames. Follow that measured tail until it is
+    // stable, rather than guessing that two frames are enough for every real
+    // payload.
+    await _settleAtLatest(generation, activity.id);
   }
 
   void _openLatest() {
@@ -311,7 +350,7 @@ final class _EvidenceConversationTimelineState
     final generation = ++_tailFollowGeneration;
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (!_stillFollowingTail(generation, latest.id)) return;
-      unawaited(_animateToLatest());
+      unawaited(_settleAtLatest(generation, latest.id));
     });
   }
 
@@ -396,7 +435,7 @@ final class _EvidenceConversationTimelineState
       final generation = ++_tailFollowGeneration;
       await WidgetsBinding.instance.endOfFrame;
       if (_stillFollowingTail(generation, activity.id)) {
-        await _animateToLatest();
+        await _settleAtLatest(generation, activity.id);
       }
     }
   }
@@ -515,40 +554,51 @@ final class _EvidenceConversationTimelineState
           child: Row(
             children: [
               Expanded(
-                child: NotificationListener<UserScrollNotification>(
-                  onNotification: (notification) {
-                    if (notification.direction != ScrollDirection.idle) {
-                      _cancelTailFollow();
-                    }
-                    return false;
-                  },
-                  child: Scrollbar(
-                    controller: _scroll,
-                    thumbVisibility: true,
-                    child: ListView.builder(
-                      key: const Key('conversation-timeline-scroll'),
+                child: Listener(
+                  onPointerDown: (_) => _cancelTailFollow(),
+                  onPointerSignal: (_) => _cancelTailFollow(),
+                  child: NotificationListener<ScrollNotification>(
+                    onNotification: (notification) {
+                      final userDrag =
+                          notification is ScrollStartNotification &&
+                          notification.dragDetails != null;
+                      final unownedDirectionChange =
+                          notification is UserScrollNotification &&
+                          notification.direction != ScrollDirection.idle &&
+                          _programmaticScrollDepth == 0;
+                      if (userDrag || unownedDirectionChange) {
+                        _cancelTailFollow();
+                      }
+                      return false;
+                    },
+                    child: Scrollbar(
                       controller: _scroll,
-                      padding: const EdgeInsets.fromLTRB(14, 8, 10, 14),
-                      itemCount: activities.length,
-                      itemBuilder: (context, index) {
-                        final activity = activities[index];
-                        final expanded = activity.id == _expandedId;
-                        return _TurnEvidenceItem(
-                          key: _itemKeys.putIfAbsent(
-                            activity.id,
-                            GlobalKey.new,
-                          ),
-                          activity: activity,
-                          number: index + 1,
-                          copy: widget.copy,
-                          expanded: expanded,
-                          showFull: _fullSnapshots.contains(activity.id),
-                          controller: widget.controller,
-                          exchangeScoped: widget.exchangeScoped,
-                          onToggle: () => _toggle(activity),
-                          onToggleFull: () => _toggleFull(activity),
-                        );
-                      },
+                      thumbVisibility: true,
+                      child: ListView.builder(
+                        key: const Key('conversation-timeline-scroll'),
+                        controller: _scroll,
+                        padding: const EdgeInsets.fromLTRB(14, 8, 10, 14),
+                        itemCount: activities.length,
+                        itemBuilder: (context, index) {
+                          final activity = activities[index];
+                          final expanded = activity.id == _expandedId;
+                          return _TurnEvidenceItem(
+                            key: _itemKeys.putIfAbsent(
+                              activity.id,
+                              GlobalKey.new,
+                            ),
+                            activity: activity,
+                            number: index + 1,
+                            copy: widget.copy,
+                            expanded: expanded,
+                            showFull: _fullSnapshots.contains(activity.id),
+                            controller: widget.controller,
+                            exchangeScoped: widget.exchangeScoped,
+                            onToggle: () => _toggle(activity),
+                            onToggleFull: () => _toggleFull(activity),
+                          );
+                        },
+                      ),
                     ),
                   ),
                 ),
@@ -687,12 +737,20 @@ final class _TurnEvidenceItem extends StatelessWidget {
       '${copy('flow.route')}: ${activity.routeId}',
       '${copy('flow.account')}: ${activity.accountId ?? copy('common.client_passthrough')}',
     ].join('\n');
+    final requestPreview = activity.requestPreview;
+    final requestPreviewText = requestPreview == null
+        ? null
+        : '${requestPreview.text}${requestPreview.truncated ? '…' : ''}';
+    final secondaryText = requestPreviewText ?? displayPath;
+    final secondaryTooltip = requestPreviewText == null
+        ? exactPath
+        : '$requestPreviewText\n\n$exactPath';
     return Semantics(
       container: true,
       button: true,
       expanded: expanded,
       label:
-          '${exchangeScoped ? copy('conversation.exchange') : copy.format('conversation.turn', {'number': number})}, ${activity.title}, $statusLabel',
+          '${exchangeScoped ? copy('conversation.exchange') : copy.format('conversation.turn', {'number': number})}, ${activity.title}, $statusLabel${requestPreviewText == null ? '' : ', $requestPreviewText'}',
       child: Stack(
         children: [
           if (!exchangeScoped)
@@ -807,16 +865,30 @@ final class _TurnEvidenceItem extends StatelessWidget {
                                       ],
                                       Expanded(
                                         child: Tooltip(
-                                          message: exactPath,
+                                          message: secondaryTooltip,
                                           child: Text(
-                                            displayPath,
+                                            secondaryText,
+                                            key: Key(
+                                              'conversation-turn-preview-${activity.id}',
+                                            ),
                                             maxLines: 1,
                                             overflow: TextOverflow.ellipsis,
                                             style: Theme.of(context)
                                                 .textTheme
                                                 .bodySmall
                                                 ?.copyWith(
-                                                  fontWeight: FontWeight.w500,
+                                                  color:
+                                                      requestPreviewText == null
+                                                      ? context
+                                                            .viberColors
+                                                            .textMuted
+                                                      : context
+                                                            .viberColors
+                                                            .text,
+                                                  fontWeight:
+                                                      requestPreviewText == null
+                                                      ? FontWeight.w500
+                                                      : FontWeight.w400,
                                                 ),
                                           ),
                                         ),
@@ -2017,9 +2089,8 @@ final class _RawFields extends StatelessWidget {
   );
 }
 
-String _rawFieldsText(List<RawHeaderField> fields) => fields
-    .expand(_rawFieldLines)
-    .join('\n');
+String _rawFieldsText(List<RawHeaderField> fields) =>
+    fields.expand(_rawFieldLines).join('\n');
 
 // A redacted credential field is rendered as what it is: the name the client
 // sent, the length of the value, and a database-local digest that says whether

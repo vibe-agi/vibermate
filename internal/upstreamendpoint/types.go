@@ -6,6 +6,7 @@ package upstreamendpoint
 import (
 	"context"
 	"errors"
+	"github.com/vibe-agi/vibermate/internal/resourcedeletion"
 	"slices"
 	"strings"
 	"time"
@@ -172,6 +173,7 @@ type Controller interface {
 	List(context.Context) ([]Endpoint, error)
 	Get(context.Context, ID) (Endpoint, error)
 	Create(context.Context, CreateCommand) (Endpoint, error)
+	Delete(context.Context, ID, ...HolderLookup) (resourcedeletion.Result, error)
 }
 
 func validID(value string) bool {

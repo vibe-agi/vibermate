@@ -3,6 +3,8 @@ import 'dart:typed_data';
 
 import 'package:crypto/crypto.dart' as crypto;
 
+import 'provider_origin.dart';
+
 typedef JsonObject = Map<String, Object?>;
 
 final class ControlContractException implements Exception {
@@ -658,10 +660,11 @@ final class UpstreamEndpoint {
         'revision',
       },
     );
-    final origin = Uri.tryParse(requireString(value, 'origin', path));
-    if (origin == null || !_isCanonicalHttpsOrigin(origin)) {
+    final originText = requireString(value, 'origin', path);
+    final origin = Uri.tryParse(originText);
+    if (origin == null || !isCanonicalProviderOrigin(originText)) {
       throw ControlContractException(
-        '$path.origin must be a canonical HTTPS provider origin',
+        '$path.origin must be a canonical provider origin',
       );
     }
     return UpstreamEndpoint(
@@ -1040,10 +1043,11 @@ final class EnvironmentProviderTarget {
       path,
       required: const {'id', 'revision', 'origin', 'realmId', 'capabilities'},
     );
-    final origin = Uri.tryParse(requireString(value, 'origin', path));
+    final originText = requireString(value, 'origin', path);
+    final origin = Uri.tryParse(originText);
     final capabilities = requireStringList(value, 'capabilities', path);
     if (origin == null ||
-        !_isCanonicalHttpsOrigin(origin) ||
+        !isCanonicalProviderOrigin(originText) ||
         capabilities.isEmpty ||
         capabilities.toSet().length != capabilities.length) {
       throw ControlContractException('$path provider target is invalid');
@@ -2700,6 +2704,36 @@ final class ActivityParentRefs {
   final String? connectionId;
 }
 
+final class ActivityRequestPreview {
+  const ActivityRequestPreview({
+    required this.kind,
+    required this.text,
+    required this.truncated,
+  });
+
+  factory ActivityRequestPreview.fromJson(Object? json, String path) {
+    final value = requireObject(json, path);
+    requireFields(value, path, required: const {'kind', 'text', 'truncated'});
+    final kind = requireString(value, 'kind', path);
+    final text = requireString(value, 'text', path);
+    if (!const {'text', 'refusal', 'tool_call', 'tool_result'}.contains(kind) ||
+        text.trim() != text ||
+        text.runes.length > 180 ||
+        _containsControlCharacter(text)) {
+      throw ControlContractException('$path request preview is invalid');
+    }
+    return ActivityRequestPreview(
+      kind: kind,
+      text: text,
+      truncated: requireBoolean(value, 'truncated', path),
+    );
+  }
+
+  final String kind;
+  final String text;
+  final bool truncated;
+}
+
 final class ActivityRecord {
   const ActivityRecord({
     required this.id,
@@ -2711,6 +2745,7 @@ final class ActivityRecord {
     required this.conversation,
     required this.environment,
     required this.parentRefs,
+    this.requestPreview,
   });
 
   factory ActivityRecord.fromJson(Object? json, String path) {
@@ -2729,7 +2764,7 @@ final class ActivityRecord {
         'environment',
         'parentRefs',
       },
-      optional: const {'reasonCode'},
+      optional: const {'reasonCode', 'requestPreview'},
     );
     final id = requireString(value, 'id', path);
     final status = requireString(value, 'status', path);
@@ -2763,6 +2798,12 @@ final class ActivityRecord {
         '$path.environment',
       ),
       parentRefs: parents,
+      requestPreview: value['requestPreview'] == null
+          ? null
+          : ActivityRequestPreview.fromJson(
+              value['requestPreview'],
+              '$path.requestPreview',
+            ),
     );
   }
 
@@ -2775,6 +2816,7 @@ final class ActivityRecord {
   final ActivityConversationRef conversation;
   final FrozenEnvironmentRef environment;
   final ActivityParentRefs parentRefs;
+  final ActivityRequestPreview? requestPreview;
 
   String get sourceName => source.displayName;
   String get environmentId => environment.id;
@@ -5806,4 +5848,151 @@ final class DashboardData {
   final List<EnvironmentRecord> environments;
   final List<UpstreamEndpoint> endpoints;
   final List<ProviderAccount> accounts;
+}
+
+/// One reason a delete did not happen.
+///
+/// Every destructive operation answers with the same shape, so the workbench
+/// explains a refusal the same way wherever it happens. Both fields are
+/// required by the runtime: an id with no label is unreadable, and a label with
+/// no id is unactionable.
+final class DeletionHolder {
+  const DeletionHolder({
+    required this.kind,
+    required this.id,
+    required this.label,
+    required this.detail,
+  });
+
+  factory DeletionHolder.fromJson(Object? json, String path) {
+    final value = requireObject(json, path);
+    requireFields(
+      value,
+      path,
+      required: const {'kind', 'id', 'label'},
+      optional: const {'detail'},
+    );
+    return DeletionHolder(
+      kind: requireString(value, 'kind', path),
+      id: requireString(value, 'id', path),
+      label: requireString(value, 'label', path),
+      detail: optionalString(value, 'detail', path) ?? '',
+    );
+  }
+
+  final String kind;
+  final String id;
+  final String label;
+  final String detail;
+}
+
+/// What a completed delete released.
+final class DeletionReleased {
+  const DeletionReleased({
+    required this.exchanges,
+    required this.envelopes,
+    required this.activities,
+    required this.connections,
+    required this.attempts,
+    required this.approvals,
+    required this.assignments,
+    required this.captures,
+  });
+
+  factory DeletionReleased.fromJson(Object? json, String path) {
+    final value = requireObject(json, path);
+    requireFields(
+      value,
+      path,
+      required: const {
+        'exchanges',
+        'envelopes',
+        'activities',
+        'connections',
+        'attempts',
+        'approvals',
+        'assignments',
+        'captures',
+      },
+    );
+    return DeletionReleased(
+      exchanges: requireInteger(value, 'exchanges', path),
+      envelopes: requireInteger(value, 'envelopes', path),
+      activities: requireInteger(value, 'activities', path),
+      connections: requireInteger(value, 'connections', path),
+      attempts: requireInteger(value, 'attempts', path),
+      approvals: requireInteger(value, 'approvals', path),
+      assignments: requireInteger(value, 'assignments', path),
+      captures: requireInteger(value, 'captures', path),
+    );
+  }
+
+  final int exchanges;
+  final int envelopes;
+  final int activities;
+  final int connections;
+  final int attempts;
+  final int approvals;
+  final int assignments;
+  final int captures;
+}
+
+/// The single answer every destructive operation gives.
+final class DeletionOutcome {
+  const DeletionOutcome({
+    required this.deleted,
+    required this.holderCount,
+    required this.holders,
+    required this.released,
+  });
+
+  factory DeletionOutcome.fromJson(Object? json, String path) {
+    final value = requireObject(json, path);
+    requireFields(
+      value,
+      path,
+      required: const {'deleted', 'holderCount', 'holders'},
+      optional: const {'released'},
+    );
+    final deleted = requireBoolean(value, 'deleted', path);
+    final holderCount = requireInteger(value, 'holderCount', path);
+    final holders = requireList(value['holders'], '$path.holders')
+        .map((item) => DeletionHolder.fromJson(item, '$path.holders'))
+        .toList(growable: false);
+    // The two answers are mutually exclusive at the source, and a client that
+    // does not enforce that would render "deleted" over a list of reasons it
+    // was not.
+    if (deleted && holderCount != 0) {
+      throw ControlContractException(
+        '$path reported a completed delete with $holderCount holders',
+      );
+    }
+    if (!deleted && holderCount == 0) {
+      throw ControlContractException(
+        '$path refused a delete without naming a holder',
+      );
+    }
+    if (holders.length > holderCount) {
+      throw ControlContractException(
+        '$path listed more holders than it counted',
+      );
+    }
+    return DeletionOutcome(
+      deleted: deleted,
+      holderCount: holderCount,
+      holders: holders,
+      released: value['released'] == null
+          ? null
+          : DeletionReleased.fromJson(value['released'], '$path.released'),
+    );
+  }
+
+  final bool deleted;
+
+  /// The total, which can exceed [holders] when the runtime truncated the list.
+  final int holderCount;
+  final List<DeletionHolder> holders;
+  final DeletionReleased? released;
+
+  bool get truncated => holderCount > holders.length;
 }

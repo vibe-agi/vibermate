@@ -58,6 +58,67 @@ final class AgentIdentity {
   }
 }
 
+/// The filter an inactive mark is drawn with.
+///
+/// Two earlier answers were both wrong. Replacing every opaque pixel with one
+/// colour turned a brand mark into a solid block that no longer read as an
+/// icon. Plain greyscale kept the shape but not the contrast: Codex's mark ends
+/// in #3941FF, whose luma is 77, so on a dark panel it became the dark blob
+/// this filter exists to prevent.
+///
+/// So the mark is desaturated to luma and then compressed into a narrow band
+/// centred on the theme's own muted foreground. Detail survives, and contrast
+/// is whatever the palette already guarantees for muted text.
+ColorFilter _mutedMarkFilter(Color tone) {
+  final band = MutedMarkBand.forTone(tone);
+  return ColorFilter.matrix(<double>[
+    for (var channel = 0; channel < 3; channel++) ...[
+      MutedMarkBand.luma[0] * band.detail,
+      MutedMarkBand.luma[1] * band.detail,
+      MutedMarkBand.luma[2] * band.detail,
+      0,
+      band.offset, //
+    ],
+    0, 0, 0, 1, 0, //
+  ]);
+}
+
+/// The luma band an inactive mark is compressed into, and the arithmetic that
+/// places it. It is separate from the filter so the property that matters —
+/// that every source colour lands at a readable tone — can be asserted rather
+/// than eyeballed.
+@immutable
+final class MutedMarkBand {
+  const MutedMarkBand({required this.detail, required this.offset});
+
+  /// sRGB luma weights.
+  static const luma = [0.2126, 0.7152, 0.0722];
+
+  /// How much of the source range survives. Enough to keep a silhouette
+  /// readable, little enough that the darkest brand colour cannot reach the
+  /// panel behind it.
+  static const detailRatio = 0.34;
+
+  factory MutedMarkBand.forTone(Color tone) {
+    final centre =
+        255 * (luma[0] * tone.r + luma[1] * tone.g + luma[2] * tone.b);
+    return MutedMarkBand(
+      detail: detailRatio,
+      offset: centre - 255 * detailRatio / 2,
+    );
+  }
+
+  final double detail;
+  final double offset;
+
+  /// Where a source colour lands, in 0..255 luma.
+  double resolve(Color source) =>
+      255 *
+          (luma[0] * source.r + luma[1] * source.g + luma[2] * source.b) *
+          detail +
+      offset;
+}
+
 /// A quiet, size-stable identity mark for one known Agent/client.
 ///
 /// The adjacent text remains the accessible name. The mark is decorative so
@@ -97,8 +158,13 @@ final class AgentIdentityMark extends StatelessWidget {
         borderRadius: ViberMetrics.controlRadius,
       ),
       child: ColorFiltered(
+        // An inactive mark is desaturated, not flattened. srcIn replaced every
+        // opaque pixel with one colour, which turned a brand mark into a solid
+        // block: it stopped reading as an icon and, at this size, carried more
+        // visual weight than the running Captures above it. A saturation matrix
+        // keeps the silhouette and the internal detail while making it grey.
         colorFilter: muted
-            ? ColorFilter.mode(context.viberColors.textFaint, BlendMode.srcIn)
+            ? _mutedMarkFilter(context.viberColors.textFaint)
             : const ColorFilter.mode(Colors.transparent, BlendMode.dst),
         child: identity == null
             ? Icon(fallbackIcon, size: glyphSize, color: color)

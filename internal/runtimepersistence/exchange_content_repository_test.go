@@ -175,6 +175,16 @@ func TestExchangeContentRepositorySharesExactHistoryAndDerivesIncrementalViews(t
 			t.Fatalf("Put(%s): %v", record.ExchangeID, err)
 		}
 	}
+	previews, err := repository.RequestPreviews(
+		context.Background(),
+		[]string{"exchange-first", "exchange-second", "exchange-missing"},
+		recordedAt.Add(time.Hour),
+	)
+	if err != nil || len(previews) != 2 ||
+		previews["exchange-first"].Text != "first question" ||
+		previews["exchange-second"].Text != "second question" {
+		t.Fatalf("RequestPreviews() = %+v, %v", previews, err)
+	}
 
 	assertPresentation := func(
 		exchangeID string,

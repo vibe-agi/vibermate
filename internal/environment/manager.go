@@ -6,10 +6,12 @@ import (
 	"fmt"
 	"slices"
 	"sort"
+	"strings"
 	"sync"
 
 	"github.com/vibe-agi/vibermate/internal/captureidentity"
 	"github.com/vibe-agi/vibermate/internal/originidentity"
+	"github.com/vibe-agi/vibermate/internal/resourcedeletion"
 )
 
 type CaptureReference struct {
@@ -126,10 +128,17 @@ type AccountDeletionGuard interface {
 }
 
 // Controller is the single Environment control-plane authority.
+// Deleter retires an Environment once nothing holds it.
+type Deleter interface {
+	Delete(context.Context, EnvironmentID, ...HolderLookup) (resourcedeletion.Result, error)
+	HoldersForEndpoint(context.Context, string) ([]resourcedeletion.Holder, error)
+}
+
 type Controller interface {
 	Publisher
 	Reader
 	SnapshotResolver
+	Deleter
 	Health() ProjectionHealth
 }
 
@@ -236,6 +245,100 @@ func (manager *Manager) GuardAccountDeletion(
 		return nil, err
 	}
 	return []AccountReference{}, nil
+}
+
+// HolderLookup reports what would break if an Environment went away.
+//
+// The Manager owns one holder itself — a Capture that is still running, which
+// it can see through the inspector. Everything else that can hold an
+// Environment lives outside this package, so it arrives as a lookup rather than
+// as a dependency this package would otherwise have to know about.
+type HolderLookup func(
+	context.Context,
+	EnvironmentID,
+) ([]resourcedeletion.Holder, error)
+
+// Delete retires an Environment once nothing depends on it.
+//
+// A running Capture would lose the authority its admission decisions are frozen
+// against mid-flight. Callers add the holders they know about — a workspace
+// default is the other one today. Holders are reported, never resolved:
+// choosing which Capture to stop or which workspace to repoint is the user's
+// decision, not this manager's.
+//
+// Historical evidence is deliberately not a holder. Frozen Exchanges resolve
+// immutable revisions and Retire leaves those in place, so an Environment can
+// leave the product without leaving the record.
+func (manager *Manager) Delete(
+	ctx context.Context,
+	id EnvironmentID,
+	extra ...HolderLookup,
+) (resourcedeletion.Result, error) {
+	if ctx == nil || validateID("Environment ID", id.String()) != nil {
+		return resourcedeletion.Result{}, ErrInvalidEnvironment
+	}
+	manager.writes.Lock()
+	defer manager.writes.Unlock()
+	if manager.inspector == nil {
+		// Without an inspector the running-Capture holder cannot be consulted,
+		// and an unchecked delete is the one outcome this method prevents.
+		return resourcedeletion.Result{}, ErrInvalidEnvironment
+	}
+	captures, err := manager.inspector.AffectedCaptures(ctx, id, MaxCaptureImpact+1)
+	if err != nil {
+		return resourcedeletion.Result{}, err
+	}
+	holders := make([]resourcedeletion.Holder, 0, len(captures))
+	for _, capture := range captures {
+		holders = append(holders, resourcedeletion.Holder{
+			Kind:   resourcedeletion.KindRunningCapture,
+			ID:     capture.Capture.Key(),
+			Label:  captureHolderLabel(capture),
+			Detail: capture.MachineLabel,
+		})
+	}
+	for _, lookup := range extra {
+		if lookup == nil {
+			return resourcedeletion.Result{}, ErrInvalidEnvironment
+		}
+		found, lookupErr := lookup(ctx, id)
+		if lookupErr != nil {
+			return resourcedeletion.Result{}, lookupErr
+		}
+		holders = append(holders, found...)
+	}
+	if len(holders) != 0 {
+		return resourcedeletion.Refused(holders)
+	}
+	retired, err := manager.repository.Retire(ctx, id)
+	if err != nil {
+		return resourcedeletion.Result{}, err
+	}
+	if !retired {
+		return resourcedeletion.Result{}, ErrEnvironmentNotFound
+	}
+	if err := manager.projection.Retire(id); err != nil {
+		manager.projection.MarkUnavailable(id)
+		return resourcedeletion.Result{}, errors.Join(ErrProjectionUnavailable, err)
+	}
+	return resourcedeletion.Completed(), nil
+}
+
+// captureHolderLabel names a Capture the way its own directory does, so the
+// refusal points at a row the user can actually find.
+func captureHolderLabel(capture CaptureReference) string {
+	program := strings.TrimSpace(capture.Program)
+	workspace := strings.TrimSpace(capture.WorkspaceLabel)
+	switch {
+	case program != "" && workspace != "":
+		return program + " · " + workspace
+	case program != "":
+		return program
+	case workspace != "":
+		return workspace
+	default:
+		return capture.Capture.Key()
+	}
 }
 
 func (manager *Manager) List(ctx context.Context) ([]EnvironmentSnapshot, error) {
@@ -626,4 +729,43 @@ func sameImpactPreview(left, right ImpactPreview) bool {
 		}
 	}
 	return true
+}
+
+// HoldersForEndpoint reports the published routes that name an upstream
+// Endpoint.
+//
+// It reads the same aggregates GuardAccountDeletion does, for the same reason:
+// this package holds the only complete picture of what a published Environment
+// points at, so the question has to be answered here even though the resource
+// being deleted lives elsewhere.
+func (manager *Manager) HoldersForEndpoint(
+	ctx context.Context,
+	endpointID string,
+) ([]resourcedeletion.Holder, error) {
+	if ctx == nil || strings.TrimSpace(endpointID) == "" {
+		return nil, ErrInvalidEnvironment
+	}
+	aggregates, err := manager.repository.LoadAllActive(ctx)
+	if err != nil {
+		return nil, err
+	}
+	holders := make([]resourcedeletion.Holder, 0)
+	for _, aggregate := range aggregates {
+		for _, endpoint := range aggregate.ClientEndpoints {
+			for _, plan := range endpoint.ProtocolPlans {
+				for _, route := range plan.UpstreamPlan.Routes {
+					if route.ProviderTarget.ID != endpointID {
+						continue
+					}
+					holders = append(holders, resourcedeletion.Holder{
+						Kind:   resourcedeletion.KindEnvironmentRoute,
+						ID:     aggregate.ID.String() + "/" + string(route.ID),
+						Label:  aggregate.Name,
+						Detail: string(route.ID),
+					})
+				}
+			}
+		}
+	}
+	return holders, nil
 }

@@ -52,6 +52,21 @@ func TestUpstreamEndpointControlOwnsTheAccountBoundary(t *testing.T) {
 	assertJSONString(t, created.Body.Bytes(), "id", "target.team.anthropic")
 	assertJSONString(t, created.Body.Bytes(), "origin", "https://relay.example.com")
 
+	cleartext := environmentRequest(
+		t,
+		application,
+		http.MethodPost,
+		"/api/v1/upstream-endpoints",
+		0,
+		"upstream-endpoint-create-http-0001",
+		[]byte(`{"id":"target.spark.anthropic","displayName":"Spark","origin":"http://spark-2a59:8888","kind":"anthropic"}`),
+	)
+	if cleartext.Code != http.StatusCreated {
+		t.Fatalf("cleartext create status=%d body=%s", cleartext.Code, cleartext.Body.Bytes())
+	}
+	assertJSONString(t, cleartext.Body.Bytes(), "id", "target.spark.anthropic")
+	assertJSONString(t, cleartext.Body.Bytes(), "origin", "http://spark-2a59:8888")
+
 	account := environmentRequest(
 		t,
 		application,

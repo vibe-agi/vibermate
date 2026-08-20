@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"github.com/vibe-agi/vibermate/internal/resourcedeletion"
 	"sync"
 	"testing"
 
@@ -47,7 +48,7 @@ func TestClientOriginCanonicalizationAndRejection(t *testing.T) {
 	}
 }
 
-func TestProviderOriginKeepsCanonicalBasePathAndBoundsCleartext(t *testing.T) {
+func TestProviderOriginKeepsCanonicalBasePathAndConstrainsCleartext(t *testing.T) {
 	t.Parallel()
 	for _, test := range []struct {
 		input     string
@@ -58,6 +59,8 @@ func TestProviderOriginKeepsCanonicalBasePathAndBoundsCleartext(t *testing.T) {
 		{"https://RELAY.example:443/v1", "https://relay.example/v1", "/v1", originidentity.ProviderTransportStrictTLS},
 		{"https://b\u00fccher.example/anthropic", "https://xn--bcher-kva.example/anthropic", "/anthropic", originidentity.ProviderTransportStrictTLS},
 		{"http://127.0.0.1:8080/v1", "http://127.0.0.1:8080/v1", "/v1", originidentity.ProviderTransportLoopbackCleartext},
+		{"http://spark-2a59:8888", "http://spark-2a59:8888", "", originidentity.ProviderTransportPrivateCleartext},
+		{"http://192.168.50.12:8888/v1", "http://192.168.50.12:8888/v1", "/v1", originidentity.ProviderTransportPrivateCleartext},
 	} {
 		origin, err := originidentity.ParseProviderOrigin(test.input)
 		if err != nil || origin.String() != test.canonical || origin.BasePath() != test.basePath || origin.Transport() != test.transport {
@@ -65,7 +68,7 @@ func TestProviderOriginKeepsCanonicalBasePathAndBoundsCleartext(t *testing.T) {
 		}
 	}
 	for _, input := range []string{
-		"http://relay.example/v1", "http://localhost/v1", "http://[::ffff:127.0.0.1]/v1",
+		"http://203.0.113.7:8888/v1", "http://[::ffff:127.0.0.1]/v1",
 		"https://relay.example/v1/", "https://relay.example/a/../v1", "https://relay.example/%76%31",
 		"https://relay.example/v1?x=1", "https://relay.example/v1#fragment",
 	} {
@@ -1241,4 +1244,155 @@ func (repository *memoryRepository) PublishDraft(_ context.Context, mutation Pub
 	repository.revisions[mutation.EnvironmentID][mutation.Candidate.Revision] = mutation.Candidate.Clone()
 	delete(repository.drafts, mutation.EnvironmentID)
 	return CommitResult{Outcome: CommitOutcomeCommitted, Aggregate: mutation.Candidate.Clone(), ActualRevision: mutation.Candidate.Revision}, nil
+}
+
+// Retire mirrors the store: the active pointer and the draft go, the revisions
+// a frozen Exchange resolves stay.
+func (repository *memoryRepository) Retire(
+	_ context.Context,
+	id EnvironmentID,
+) (bool, error) {
+	repository.mu.Lock()
+	defer repository.mu.Unlock()
+	if _, live := repository.active[id]; !live {
+		return false, nil
+	}
+	delete(repository.active, id)
+	delete(repository.drafts, id)
+	delete(repository.draftRevisions, id)
+	return true, nil
+}
+
+func retiringManager(
+	t *testing.T,
+	repository *memoryRepository,
+	captures []CaptureReference,
+) *Manager {
+	t.Helper()
+	return mustManager(t, repository, fixedInspector{references: captures})
+}
+
+func seedActiveEnvironment(t *testing.T, repository *memoryRepository) Environment {
+	t.Helper()
+	candidate := fixture(t, "work", mustOrigin(t, "https://relay.example"))
+	repository.mu.Lock()
+	repository.active[candidate.ID] = candidate.Clone()
+	repository.mu.Unlock()
+	return candidate
+}
+
+func noWorkspaceDefaults(
+	_ context.Context,
+	_ EnvironmentID,
+) ([]resourcedeletion.Holder, error) {
+	return nil, nil
+}
+
+// A running Capture has already frozen its admission decisions against this
+// Environment. Removing it underneath would leave those decisions pointing at
+// an authority that no longer exists, so the delete is refused and the holder
+// is named.
+func TestDeletingAnEnvironmentIsRefusedWhileACaptureIsRunning(t *testing.T) {
+	t.Parallel()
+	repository := newMemoryRepository()
+	candidate := seedActiveEnvironment(t, repository)
+	running, err := captureidentity.New(captureidentity.KindManagedRun, "run.abc")
+	if err != nil {
+		t.Fatal(err)
+	}
+	manager := retiringManager(t, repository, []CaptureReference{{
+		Capture:        running,
+		Program:        "claude",
+		MachineLabel:   "laptop",
+		WorkspaceLabel: "agent-lab",
+	}})
+
+	result, err := manager.Delete(
+		context.Background(), candidate.ID, noWorkspaceDefaults,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Deleted || len(result.Holders) != 1 ||
+		result.Holders[0].Kind != resourcedeletion.KindRunningCapture {
+		t.Fatalf("result = %+v, want refused with one running Capture", result)
+	}
+	repository.mu.Lock()
+	_, live := repository.active[candidate.ID]
+	repository.mu.Unlock()
+	if !live {
+		t.Fatal("a refused delete still removed the Environment")
+	}
+}
+
+// A workspace default is a promise about the next run. Deleting the
+// Environment it names would break that run with no warning.
+func TestDeletingAnEnvironmentIsRefusedWhileAWorkspaceDefaultNamesIt(t *testing.T) {
+	t.Parallel()
+	repository := newMemoryRepository()
+	candidate := seedActiveEnvironment(t, repository)
+	manager := retiringManager(t, repository, nil)
+
+	result, err := manager.Delete(
+		context.Background(),
+		candidate.ID,
+		func(_ context.Context, _ EnvironmentID) ([]resourcedeletion.Holder, error) {
+			return []resourcedeletion.Holder{{
+				Kind:  resourcedeletion.KindWorkspaceDefault,
+				ID:    "machine-1/workspace-1",
+				Label: "agent-lab",
+			}}, nil
+		},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Deleted || len(result.Holders) != 1 ||
+		result.Holders[0].Kind != resourcedeletion.KindWorkspaceDefault {
+		t.Fatalf("result = %+v, want refused with one workspace default", result)
+	}
+}
+
+func TestDeletingAnUnreferencedEnvironmentRetiresIt(t *testing.T) {
+	t.Parallel()
+	repository := newMemoryRepository()
+	candidate := seedActiveEnvironment(t, repository)
+	manager := retiringManager(t, repository, nil)
+
+	result, err := manager.Delete(
+		context.Background(), candidate.ID, noWorkspaceDefaults,
+	)
+	if err != nil || !result.Deleted {
+		t.Fatalf("result = %+v, err = %v", result, err)
+	}
+	repository.mu.Lock()
+	_, live := repository.active[candidate.ID]
+	repository.mu.Unlock()
+	if live {
+		t.Fatal("the Environment is still active after a successful delete")
+	}
+	if _, err := manager.Resolve(candidate.ID); !errors.Is(err, ErrEnvironmentNotFound) {
+		t.Fatalf("Resolve() after delete = %v, want ErrEnvironmentNotFound", err)
+	}
+}
+
+// Without an inspector the running-Capture holder cannot be consulted. Deleting
+// anyway would be the unchecked delete this guard exists to prevent.
+func TestDeletingAnEnvironmentFailsClosedWithoutACaptureInspector(t *testing.T) {
+	t.Parallel()
+	repository := newMemoryRepository()
+	candidate := seedActiveEnvironment(t, repository)
+	manager := mustManager(t, repository, nil)
+
+	if _, err := manager.Delete(
+		context.Background(), candidate.ID, noWorkspaceDefaults,
+	); !errors.Is(err, ErrInvalidEnvironment) {
+		t.Fatalf("Delete() error = %v, want ErrInvalidEnvironment", err)
+	}
+	repository.mu.Lock()
+	_, live := repository.active[candidate.ID]
+	repository.mu.Unlock()
+	if !live {
+		t.Fatal("an unchecked delete removed the Environment")
+	}
 }

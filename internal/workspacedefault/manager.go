@@ -128,3 +128,16 @@ func finishWrite(candidate Record, result CommitResult, err error) (Record, erro
 	}
 	return Record{}, errors.Join(ErrWriteNotCommitted, err)
 }
+
+// ListByEnvironment reports the workspaces whose next run names an
+// Environment. It exists so an Environment deletion can name the bindings it
+// would break instead of breaking them.
+func (manager *Manager) ListByEnvironment(
+	ctx context.Context,
+	id environment.EnvironmentID,
+) ([]Record, error) {
+	if manager == nil || ctx == nil || id == "" {
+		return nil, ErrInvalidDefault
+	}
+	return manager.repository.ListByEnvironment(ctx, id)
+}

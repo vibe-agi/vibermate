@@ -19,6 +19,7 @@ type Repository interface {
 	Put(context.Context, Record) error
 	Get(context.Context, string, time.Time) (Record, error)
 	GetProjection(context.Context, string, time.Time, RequestView) (Projection, error)
+	RequestPreviews(context.Context, []string, time.Time) (map[string]RequestPreview, error)
 	PurgeExpired(context.Context, time.Time) (uint64, error)
 }
 
@@ -29,6 +30,7 @@ type Recorder interface {
 type Reader interface {
 	Get(context.Context, string) (Record, error)
 	GetProjection(context.Context, string, RequestView) (Projection, error)
+	RequestPreviews(context.Context, []string) (map[string]RequestPreview, error)
 }
 
 type Runtime interface {
@@ -126,6 +128,47 @@ func (manager *Manager) GetProjection(
 		return Projection{}, err
 	}
 	return projection.Clone(), nil
+}
+
+func (manager *Manager) RequestPreviews(
+	ctx context.Context,
+	exchangeIDs []string,
+) (map[string]RequestPreview, error) {
+	if len(exchangeIDs) > MaxRequestPreviewBatch {
+		return nil, ErrInvalidEvidence
+	}
+	wanted := make(map[string]struct{}, len(exchangeIDs))
+	unique := make([]string, 0, len(exchangeIDs))
+	for _, exchangeID := range exchangeIDs {
+		if !validIdentity(exchangeID, MaxExchangeIDBytes) {
+			return nil, ErrInvalidEvidence
+		}
+		if _, exists := wanted[exchangeID]; exists {
+			continue
+		}
+		wanted[exchangeID] = struct{}{}
+		unique = append(unique, exchangeID)
+	}
+	if len(unique) == 0 {
+		return map[string]RequestPreview{}, nil
+	}
+	operation, finish, err := manager.begin(ctx)
+	if err != nil {
+		return nil, err
+	}
+	defer finish()
+	previews, err := manager.repository.RequestPreviews(
+		operation, unique, manager.clock.Now().UTC(),
+	)
+	if err != nil {
+		return nil, err
+	}
+	for exchangeID, preview := range previews {
+		if _, requested := wanted[exchangeID]; !requested || preview.Validate() != nil {
+			return nil, ErrInvalidEvidence
+		}
+	}
+	return previews, nil
 }
 
 func (manager *Manager) Shutdown(ctx context.Context) error {

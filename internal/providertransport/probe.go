@@ -14,7 +14,8 @@ import (
 
 // ProviderProber probes a frozen provider target without sending HTTP headers,
 // credentials, or a request body. Remote targets complete strict TLS; the
-// explicit loopback-cleartext exception completes an exact TCP peer check.
+// explicit local/private cleartext exception completes a constrained TCP peer
+// check before any HTTP header, credential, or body can be written.
 type ProviderProber struct {
 	dialer  contextDialer
 	roots   *x509.CertPool
@@ -109,9 +110,8 @@ func (prober *ProviderProber) Probe(
 				err,
 			)
 		}
-		if target.TransportKind() ==
-			originidentity.ProviderTransportLoopbackCleartext {
-			peerErr := validateLoopbackPeer(raw.RemoteAddr(), target)
+		if isCleartextProviderTransport(target.TransportKind()) {
+			peerErr := validateCleartextPeer(raw.RemoteAddr(), target)
 			closeErr := raw.Close()
 			contextErr := targetContext.Err()
 			cancel()

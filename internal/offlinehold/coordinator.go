@@ -748,7 +748,7 @@ func validateProbeTarget(target ProbeTarget) error {
 		); err != nil {
 			return err
 		}
-	case ProbeTransportLoopbackCleartext:
+	case ProbeTransportLoopbackCleartext, ProbeTransportPrivateCleartext:
 		if target.Kind != EgressProvider || target.TLSServerName != "" {
 			return ErrInvalidRequest
 		}

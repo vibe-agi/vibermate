@@ -31,6 +31,7 @@ type SnapshotProjection interface {
 	SnapshotResolver
 	Restore([]EnvironmentSnapshot) error
 	Publish(EnvironmentSnapshot) error
+	Retire(EnvironmentID) error
 	MarkUnavailable(EnvironmentID)
 	Health() ProjectionHealth
 }
@@ -123,6 +124,36 @@ func (projection *AtomicProjection) Publish(snapshot EnvironmentSnapshot) error 
 	next := cloneProjection(current)
 	next.byID[snapshot.ID()] = snapshot.clone()
 	next.revisions[snapshot.ID()] = snapshot.Revision()
+	projection.state.Store(next)
+	return nil
+}
+
+// Retire removes an Environment from the live data-plane catalog while
+// preserving its last revision watermark. Immutable historical revisions are
+// resolved by the repository; keeping the watermark here prevents a retired
+// stable ID from silently restarting its revision sequence if it is reused.
+func (projection *AtomicProjection) Retire(id EnvironmentID) error {
+	if projection == nil {
+		return ErrProjectionUnavailable
+	}
+	if id == SystemTransparentID {
+		return ErrSystemEnvironment
+	}
+	if err := validateID("Environment ID", id.String()); err != nil {
+		return err
+	}
+	projection.writes.Lock()
+	defer projection.writes.Unlock()
+	current := projection.state.Load()
+	if !current.restored {
+		return ErrProjectionNotRestored
+	}
+	if _, exists := current.byID[id]; !exists {
+		return fmt.Errorf("%w: environmentId=%q", ErrEnvironmentNotFound, id)
+	}
+	next := cloneProjection(current)
+	delete(next.byID, id)
+	delete(next.poisoned, id)
 	projection.state.Store(next)
 	return nil
 }

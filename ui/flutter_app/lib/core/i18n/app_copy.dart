@@ -136,6 +136,31 @@ final class AppCopy {
         'New connections using this login will stop. Conversation and Activity evidence remain available.',
     'capture.revoke.action': 'Revoke login',
     'common.cancel': 'Cancel',
+    'deletion.confirm': 'Delete',
+    'deletion.blocked': 'Nothing was deleted. This is still in use by:',
+    'deletion.more_holders': 'and {count} more',
+    'deletion.holder.running_capture': 'Running Capture',
+    'deletion.holder.workspace_default': 'Workspace default',
+    'deletion.holder.environment_route': 'Environment route',
+    'deletion.holder.owned_account': 'Account it owns',
+    'deletion.environment.title': 'Delete this Environment?',
+    'deletion.environment.consequence':
+        'It stops being available for new runs. Evidence already recorded '
+        'against it keeps the exact revision each Turn ran under.',
+    'deletion.endpoint.title': 'Delete this upstream Endpoint?',
+    'deletion.endpoint.consequence':
+        'It stops being available for new routes. Past Exchanges keep naming '
+        'where they went.',
+    'deletion.capture.title': 'Delete this Capture?',
+    'deletion.capture.consequence':
+        'Every Exchange, Turn and Raw HTTP envelope recorded under it is '
+        'removed, and the bytes are released. This cannot be undone.',
+    'deletion.archive.title': 'Clear the evidence archive?',
+    'deletion.archive.consequence':
+        'Every Capture and all recorded evidence is removed. Environments, '
+        'Endpoints and Accounts are kept. Logical records go and queries stop '
+        'answering; this does not claim erasure from disk snapshots or '
+        'backups.',
     'common.back': 'Back',
     'common.loading': 'Loading runtime evidence…',
     'common.retry': 'Retry',
@@ -366,8 +391,10 @@ final class AppCopy {
     'environment.field.id': 'Stable Environment ID',
     'environment.validation.id':
         'Use 1–128 lowercase letters, digits, dots, underscores, or hyphens.',
-    'environment.endpoint.add': 'Add upstream Endpoint',
-    'environment.endpoint.add_action': 'Add Route',
+    'environment.endpoint.add': 'Choose upstream Endpoint',
+    'environment.endpoint.add_action': 'Add to Environment',
+    'environment.endpoint.pending':
+        'This Endpoint is selected but has not been added to the Environment.',
     'environment.endpoint.remove': 'Remove Endpoint from draft',
     'environment.endpoint.routes': '{count} routes',
     'environment.endpoint.account_required':
@@ -447,12 +474,14 @@ final class AppCopy {
     'routes.delete_account': 'Delete Account',
     'routes.endpoint.create.title': 'Add an upstream Endpoint',
     'routes.endpoint.name': 'Display name',
-    'routes.endpoint.origin': 'Canonical HTTPS origin',
+    'routes.endpoint.origin': 'Upstream URL',
     'routes.endpoint.protocol': 'Provider protocol family',
     'routes.endpoint.kind.anthropic': 'Anthropic Messages',
     'routes.endpoint.kind.openai_compatible': 'OpenAI compatible',
     'routes.endpoint.boundary':
         'Accounts created here belong only to this Endpoint. Endpoints are not interchangeable credential buckets.',
+    'routes.endpoint.cleartext_warning':
+        'HTTP is limited to local or private-network peers. Conversations and credentials are sent without transport encryption.',
     'routes.endpoint.create.action': 'Create Endpoint',
     'routes.account.create.title': 'Add an Account to this Endpoint',
     'routes.account.replace.title': 'Replace credential · {name}',
@@ -478,7 +507,7 @@ final class AppCopy {
     'routes.account.delete.more': '{count} more references were not returned.',
     'routes.validation.required': 'Enter a value.',
     'routes.validation.origin':
-        'Enter an exact HTTPS origin without a path, query, fragment, or default port.',
+        'Enter an exact HTTPS URL or trusted local/private HTTP URL without a path, query, fragment, or explicit default port.',
     'routes.validation.secret':
         'Enter a credential without line breaks or null characters.',
     'network.title': 'Network control',
@@ -956,6 +985,25 @@ final class AppCopy {
     'capture.revoke.detail': '使用该登录的新连接会停止；Conversation 与 Activity 证据会继续保留。',
     'capture.revoke.action': '撤销登录',
     'common.cancel': '取消',
+    'deletion.confirm': '删除',
+    'deletion.blocked': '没有删除任何内容。以下仍在使用它：',
+    'deletion.more_holders': '另有 {count} 项',
+    'deletion.holder.running_capture': '运行中的 Capture',
+    'deletion.holder.workspace_default': 'Workspace 默认环境',
+    'deletion.holder.environment_route': 'Environment 路由',
+    'deletion.holder.owned_account': '它拥有的 Account',
+    'deletion.environment.title': '删除这个 Environment？',
+    'deletion.environment.consequence':
+        '它将不再可用于新的 run。已记录的证据仍保留每个 Turn 当时运行的确切 revision。',
+    'deletion.endpoint.title': '删除这个上游 Endpoint？',
+    'deletion.endpoint.consequence': '它将不再可用于新的路由。历史 Exchange 仍能说明自己去过哪里。',
+    'deletion.capture.title': '删除这个 Capture？',
+    'deletion.capture.consequence':
+        '它名下的所有 Exchange、Turn 和 Raw HTTP 信封都会被移除，占用的字节会被释放。此操作不可撤销。',
+    'deletion.archive.title': '清空证据存档？',
+    'deletion.archive.consequence':
+        '所有 Capture 与已记录的证据都会被移除；Environment、Endpoint 和 Account 会保留。'
+        '逻辑记录会被删除、查询不再返回它们；但这不声称从磁盘快照或备份介质上抹除。',
     'common.back': '返回',
     'common.loading': '正在载入运行证据…',
     'common.retry': '重试',
@@ -1170,8 +1218,9 @@ final class AppCopy {
     'environment.create.observe_only': '仅观察 · 不配置语义 Route',
     'environment.field.id': '稳定 Environment ID',
     'environment.validation.id': '请输入 1–128 位小写字母、数字、点、下划线或连字符。',
-    'environment.endpoint.add': '添加上游 Endpoint',
-    'environment.endpoint.add_action': '添加 Route',
+    'environment.endpoint.add': '选择上游 Endpoint',
+    'environment.endpoint.add_action': '加入 Environment',
+    'environment.endpoint.pending': '此 Endpoint 尚未加入 Environment。',
     'environment.endpoint.remove': '从草稿移除 Endpoint',
     'environment.endpoint.routes': '{count} 条 Route',
     'environment.endpoint.account_required': '请先在此 Endpoint 下创建可用账号，再将流量路由到这里。',
@@ -1243,11 +1292,12 @@ final class AppCopy {
     'routes.delete_account': '删除账号',
     'routes.endpoint.create.title': '添加上游 Endpoint',
     'routes.endpoint.name': '显示名称',
-    'routes.endpoint.origin': '规范 HTTPS Origin',
+    'routes.endpoint.origin': '上游地址',
     'routes.endpoint.protocol': '提供商协议族',
     'routes.endpoint.kind.anthropic': 'Anthropic Messages',
     'routes.endpoint.kind.openai_compatible': 'OpenAI 兼容',
     'routes.endpoint.boundary': '在这里创建的账号只属于此 Endpoint；Endpoint 不是可互换的凭据容器。',
+    'routes.endpoint.cleartext_warning': 'HTTP 仅允许连接本机或私网对端；对话与凭据将以明文传输。',
     'routes.endpoint.create.action': '创建 Endpoint',
     'routes.account.create.title': '在此 Endpoint 下添加账号',
     'routes.account.replace.title': '替换凭据 · {name}',
@@ -1271,7 +1321,8 @@ final class AppCopy {
         '{environment} r{revision} · Route {route}',
     'routes.account.delete.more': '另有 {count} 条引用未返回。',
     'routes.validation.required': '请输入内容。',
-    'routes.validation.origin': '请输入不含路径、查询、片段或默认端口的精确 HTTPS Origin。',
+    'routes.validation.origin':
+        '请输入不含路径、查询、片段或显式默认端口的精确 HTTPS 地址，或受信任的本机/私网 HTTP 地址。',
     'routes.validation.secret': '请输入不含换行或空字符的凭据。',
     'network.title': '网络控制',
     'network.subtitle': '处理审批，并检查连接、出站与规则',

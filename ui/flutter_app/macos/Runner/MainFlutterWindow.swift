@@ -152,10 +152,12 @@ final class WorkbenchPreferencesBridge {
     "theme",
     "section",
     "selectedCaptureKey",
-    "selectedConversationKey",
     "selectedEnvironmentId",
     "selectedEnvironmentRevision",
     "selectedEndpointId",
+  ]
+  private static let retiredFields: Set<String> = [
+    "selectedConversationKey",
   ]
   private static let resourcePattern = #"^[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}$"#
 
@@ -197,7 +199,7 @@ final class WorkbenchPreferencesBridge {
     defer { lock.unlock() }
     guard !closing else { throw Failure.closed }
     let encoded = try readPayload()
-    if let encoded, Self.valid(encoded) {
+    if let encoded, Self.valid(encoded, allowingRetiredFields: true) {
       lastValidPayload = encoded
     }
     return encoded
@@ -339,32 +341,48 @@ final class WorkbenchPreferencesBridge {
       metadata.st_size <= maximumBytes
   }
 
-  private static func valid(_ encoded: String) -> Bool {
+  private static func valid(
+    _ encoded: String,
+    allowingRetiredFields: Bool = false
+  ) -> Bool {
     guard let data = encoded.data(using: .utf8),
           !data.isEmpty,
           data.count <= maximumBytes,
           let object = try? JSONSerialization.jsonObject(with: data),
-          let payload = object as? [String: Any],
-          Set(payload.keys) == fields,
+          let payload = object as? [String: Any] else {
+      return false
+    }
+    let observedFields = Set(payload.keys)
+    let permittedFields = allowingRetiredFields ? fields.union(retiredFields) : fields
+    let activeSections: Set<String> = [
+      "captures", "environments", "routes", "network", "settings",
+    ]
+    let permittedSections = allowingRetiredFields
+      ? activeSections.union(["conversations"])
+      : activeSections
+    guard fields.isSubset(of: observedFields),
+          observedFields.isSubset(of: permittedFields),
           payload["schema"] as? String == schema,
           let language = payload["language"] as? String,
           ["en-US", "zh-CN"].contains(language),
           let theme = payload["theme"] as? String,
           ["system", "light", "dark"].contains(theme),
           let section = payload["section"] as? String,
-          ["captures", "conversations", "environments", "routes", "network", "settings"]
-            .contains(section),
+          permittedSections.contains(section),
           validSelection(
             payload["selectedCaptureKey"],
             prefixes: ["managed_run:", "manual_capture:"]
           ),
-          validSelection(
-            payload["selectedConversationKey"],
-            prefixes: ["capture_run:", "exchange:"]
-          ),
           validResource(payload["selectedEnvironmentId"]),
           validPositiveInteger(payload["selectedEnvironmentRevision"]),
           validResource(payload["selectedEndpointId"]) else {
+      return false
+    }
+    if observedFields.contains("selectedConversationKey"),
+       !validSelection(
+         payload["selectedConversationKey"],
+         prefixes: ["capture_run:", "exchange:"]
+       ) {
       return false
     }
     if !(payload["selectedEnvironmentRevision"] is NSNull),

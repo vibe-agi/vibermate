@@ -17,15 +17,28 @@ func TestClientOriginCanonicalizesDNSAndRejectsIP(t *testing.T) {
 	}
 }
 
-func TestProviderOriginPermitsOnlyLoopbackCleartext(t *testing.T) {
+func TestProviderOriginClassifiesConstrainedCleartext(t *testing.T) {
 	t.Parallel()
 	loopback, err := ParseProviderOrigin("http://127.0.0.1:8080/v1")
 	if err != nil || loopback.Transport() != ProviderTransportLoopbackCleartext ||
 		loopback.BasePath() != "/v1" || loopback.HTTPAuthority() != "127.0.0.1:8080" {
 		t.Fatalf("loopback = %+v, %v", loopback, err)
 	}
-	if _, err := ParseProviderOrigin("http://relay.example/v1"); err == nil {
-		t.Fatal("remote cleartext ProviderOrigin was accepted")
+	privateDNS, err := ParseProviderOrigin("http://spark-2a59:8888")
+	if err != nil || privateDNS.Transport() != ProviderTransportPrivateCleartext ||
+		privateDNS.String() != "http://spark-2a59:8888" {
+		t.Fatalf("private DNS = %+v, %v", privateDNS, err)
+	}
+	privateIP, err := ParseProviderOrigin("http://192.168.50.12:8888/v1")
+	if err != nil || privateIP.Transport() != ProviderTransportPrivateCleartext {
+		t.Fatalf("private IP = %+v, %v", privateIP, err)
+	}
+	cgnat, err := ParseProviderOrigin("http://100.100.20.30:8888")
+	if err != nil || cgnat.Transport() != ProviderTransportPrivateCleartext {
+		t.Fatalf("CGNAT = %+v, %v", cgnat, err)
+	}
+	if _, err := ParseProviderOrigin("http://203.0.113.7:8888/v1"); err == nil {
+		t.Fatal("public literal cleartext ProviderOrigin was accepted")
 	}
 }
 

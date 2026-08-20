@@ -131,4 +131,59 @@ void main() {
     }
     expect(tester.takeException(), isNull);
   });
+
+  // Codex's mark ends in #3941FF, whose luma is 77 — darker than the dark
+  // theme's raised panel. Plain greyscale preserved that, which is how an
+  // inactive mark became the dark blob it was reported as. The band exists to
+  // make that impossible, so it is asserted rather than eyeballed.
+  double lumaOf(Color value) =>
+      255 *
+      (MutedMarkBand.luma[0] * value.r +
+          MutedMarkBand.luma[1] * value.g +
+          MutedMarkBand.luma[2] * value.b);
+
+  void expectReadable(String label, Color source, Color tone, Color panel) {
+    final marked = MutedMarkBand.forTone(tone).resolve(source);
+    final behind = lumaOf(panel);
+    expect(
+      (marked - behind).abs(),
+      greaterThan(40),
+      reason: '$label lands at luma $marked against a panel at $behind',
+    );
+  }
+
+  test('an inactive mark stays readable against the panel behind it', () {
+    for (final (name, source) in const [
+      ('codex deep', Color(0xFF3941FF)),
+      ('codex light', Color(0xFFB1A7FF)),
+      ('claude', Color(0xFFD97757)),
+      ('figma red', Color(0xFFFF3737)),
+      ('white', Color(0xFFFFFFFF)),
+      ('black', Color(0xFF000000)),
+    ]) {
+      expectReadable(
+        '$name (dark)',
+        source,
+        ViberColors.dark.textFaint,
+        ViberColors.dark.panelRaised,
+      );
+      expectReadable(
+        '$name (light)',
+        source,
+        ViberColors.light.textFaint,
+        ViberColors.light.panelRaised,
+      );
+    }
+  });
+
+  // Detail has to survive: a band that collapses to one tone is the solid
+  // block this replaced.
+  test('an inactive mark keeps its internal range', () {
+    final band = MutedMarkBand.forTone(ViberColors.dark.textFaint);
+    expect(
+      band.resolve(const Color(0xFFFFFFFF)) -
+          band.resolve(const Color(0xFF000000)),
+      greaterThan(60),
+    );
+  });
 }

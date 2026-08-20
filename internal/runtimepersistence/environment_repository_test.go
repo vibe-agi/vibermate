@@ -358,3 +358,69 @@ func runtimeProviderOrigin(t *testing.T, raw string) originidentity.ProviderOrig
 	}
 	return origin
 }
+
+// Deleting an Environment must not take the record with it. Every frozen
+// Exchange resolves the exact revision it ran under, and design 08 section 4
+// requires that history not drift with current configuration, so retirement
+// clears the active pointer and leaves the revisions addressable.
+func TestRetiredEnvironmentLeavesTheRevisionFrozenEvidencePointsAt(t *testing.T) {
+	t.Parallel()
+	databasePath := filepath.Join(t.TempDir(), "runtime.db")
+	store := openTestStore(t, databasePath)
+	manager := newEnvironmentManager(t, store)
+	candidate := environmentFixture(t, "work", 1)
+	draft, err := manager.SaveDraft(
+		context.Background(), environment.DraftCommand{Candidate: candidate},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	preview, err := manager.Preview(context.Background(), candidate.ID, draft.Revision)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := manager.Publish(context.Background(), preview); err != nil {
+		t.Fatal(err)
+	}
+	published, err := manager.Get(context.Background(), candidate.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	retired, err := store.EnvironmentRepository().Retire(
+		context.Background(), candidate.ID,
+	)
+	if err != nil || !retired {
+		t.Fatalf("Retire() = %v, %v", retired, err)
+	}
+
+	// Gone from every live listing.
+	active, err := store.EnvironmentRepository().LoadAllActive(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, value := range active {
+		if value.ID == candidate.ID {
+			t.Fatal("a retired Environment is still listed as active")
+		}
+	}
+
+	// Still resolvable at the exact revision a Turn froze.
+	frozen, found, err := store.EnvironmentRepository().LoadRevision(
+		context.Background(), candidate.ID, published.Revision(),
+	)
+	if err != nil || !found {
+		t.Fatalf("LoadRevision() = %v, %v; frozen evidence lost its authority", found, err)
+	}
+	if frozen.Revision != published.Revision() || frozen.ID != candidate.ID {
+		t.Fatalf("frozen revision drifted: %+v", frozen)
+	}
+
+	// Retiring twice is not an error the caller has to distinguish.
+	again, err := store.EnvironmentRepository().Retire(
+		context.Background(), candidate.ID,
+	)
+	if err != nil || again {
+		t.Fatalf("second Retire() = %v, %v, want false with no error", again, err)
+	}
+}

@@ -47,6 +47,10 @@ type ActivitySummary struct {
 	Conversation ActivityConversationRef `json:"conversation"`
 	Environment  FrozenEnvironmentRef    `json:"environment"`
 	ParentRefs   ActivityParentRefs      `json:"parentRefs"`
+	// RequestPreview is a bounded read projection from retained Exchange
+	// content. It is not copied into the body-free Activity journal and is
+	// absent when content recording did not retain a visible request block.
+	RequestPreview *exchangecontent.RequestPreview `json:"requestPreview,omitempty"`
 }
 
 // ActivityConversationRef is a flat, structural projection boundary. It does
@@ -115,7 +119,8 @@ func (summary ActivitySummary) Validate() error {
 		summary.Environment.Digest == "" || summary.Environment.ClientEndpointID == "" ||
 		summary.Environment.ClientEndpointRevision == 0 || summary.Environment.ProtocolPlanID == "" ||
 		summary.Environment.ProtocolPlanRevision == 0 || summary.Environment.RouteID == "" ||
-		summary.Environment.RouteRevision == 0 || summary.Conversation.Validate() != nil {
+		summary.Environment.RouteRevision == 0 || summary.Conversation.Validate() != nil ||
+		(summary.RequestPreview != nil && summary.RequestPreview.Validate() != nil) {
 		return errors.New("Activity summary relationship is invalid")
 	}
 	return nil

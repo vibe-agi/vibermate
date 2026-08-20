@@ -10,6 +10,7 @@ import (
 
 	"github.com/vibe-agi/vibermate/internal/protocolspec"
 	"github.com/vibe-agi/vibermate/internal/providerauth"
+	"github.com/vibe-agi/vibermate/internal/resourcedeletion"
 )
 
 type Clock interface{ Now() time.Time }
@@ -178,4 +179,64 @@ func (manager *Manager) Shutdown(_ context.Context) error {
 	manager.closing = true
 	manager.mu.Unlock()
 	return nil
+}
+
+// HolderLookup reports what would break if an Endpoint went away. The holders
+// live outside this package — published Environment routes and the Accounts
+// this Endpoint owns — so they arrive as lookups rather than as dependencies.
+type HolderLookup func(context.Context, ID) ([]resourcedeletion.Holder, error)
+
+// Delete retires an Endpoint once nothing depends on it.
+//
+// Retirement, not removal: evidence freezes an Endpoint by id and revision
+// rather than by reference, so a deleted row would leave every historical
+// Exchange unable to name where it went. Disabling keeps that answer and takes
+// the Endpoint out of every live listing, which is what deletion means here.
+func (manager *Manager) Delete(
+	ctx context.Context,
+	id ID,
+	holders ...HolderLookup,
+) (resourcedeletion.Result, error) {
+	if manager == nil || ctx == nil || !validID(id.String()) {
+		return resourcedeletion.Result{}, ErrInvalidEndpoint
+	}
+	if err := ctx.Err(); err != nil {
+		return resourcedeletion.Result{}, err
+	}
+	manager.mu.Lock()
+	defer manager.mu.Unlock()
+	if manager.closing {
+		return resourcedeletion.Result{}, ErrManagerClosing
+	}
+	current, present := manager.endpoints[id]
+	if !present {
+		return resourcedeletion.Result{}, ErrEndpointNotFound
+	}
+	found := make([]resourcedeletion.Holder, 0)
+	for _, lookup := range holders {
+		if lookup == nil {
+			return resourcedeletion.Result{}, ErrInvalidEndpoint
+		}
+		values, err := lookup(ctx, id)
+		if err != nil {
+			return resourcedeletion.Result{}, err
+		}
+		found = append(found, values...)
+	}
+	if len(found) != 0 {
+		return resourcedeletion.Refused(found)
+	}
+	retired := current.Clone()
+	retired.State = StateDisabled
+	retired.Revision = current.Revision + 1
+	retired.UpdatedAt = manager.clock.Now().UTC()
+	commit, err := manager.repository.Write(ctx, uint64(current.Revision), retired)
+	if err != nil {
+		return resourcedeletion.Result{}, err
+	}
+	if commit.Outcome != CommitCommitted {
+		return resourcedeletion.Result{}, ErrRevisionConflict
+	}
+	delete(manager.endpoints, id)
+	return resourcedeletion.Completed(), nil
 }

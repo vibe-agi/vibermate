@@ -56,4 +56,10 @@ type Repository interface {
 	LoadDraft(context.Context, EnvironmentID) (Draft, bool, error)
 	SaveDraft(context.Context, DraftMutation) (Draft, error)
 	PublishDraft(context.Context, PublishMutation) (CommitResult, error)
+	// Retire makes an Environment stop being active without touching the
+	// revisions frozen evidence points at. Deleting those would leave every
+	// historical Turn unable to open the exact authority it ran under, which
+	// design 08 section 4 forbids drifting; an Environment the user deleted is
+	// gone from the product, not from the record.
+	Retire(context.Context, EnvironmentID) (bool, error)
 }

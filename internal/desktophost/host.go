@@ -368,6 +368,7 @@ func Start(ctx context.Context, options Options) (*Host, error) {
 		CaptureRuns:         runtime.CaptureRunReader(),
 		ManualCaptures:      runtime.ManualCaptures(),
 		WorkspaceDefaults:   runtime.WorkspaceDefaults(),
+		Archive:             runtime.EvidenceArchive(),
 		Clock:               options.Runtime.Clock,
 	})
 	if err != nil {

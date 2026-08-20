@@ -27,6 +27,7 @@ import (
 	"github.com/vibe-agi/vibermate/internal/provideraccount"
 	"github.com/vibe-agi/vibermate/internal/providertransport"
 	"github.com/vibe-agi/vibermate/internal/rawevidence"
+	"github.com/vibe-agi/vibermate/internal/resourcedeletion"
 	"github.com/vibe-agi/vibermate/internal/runtimepersistence"
 	"github.com/vibe-agi/vibermate/internal/toolapproval"
 	"github.com/vibe-agi/vibermate/internal/toolpolicy"
@@ -58,6 +59,7 @@ type Runtime struct {
 	connectionRules    *connectionpolicy.Manager
 	monitor            ownedComponent
 	rawEvidence        rawEvidenceRuntime
+	evidenceArchive    resourcedeletion.Archive
 	provider           providerRuntime
 	original           originalRuntime
 	exchanges          exchangeRuntime
@@ -672,6 +674,7 @@ func startWithBuilders(
 		connectionRules:    connectionRules,
 		monitor:            monitor,
 		rawEvidence:        rawEvidence,
+		evidenceArchive:    storageResult.store,
 		provider:           provider,
 		original:           original,
 		exchanges:          exchanges,
@@ -760,20 +763,27 @@ func (r *Runtime) ExchangeContents() exchangecontent.Reader {
 	return r.contents
 }
 
-// RawEvidence returns the encrypted HTTP evidence read boundary. Ordinary
-// reads expose metadata only; payload reveal remains an explicit audited act.
+// RawEvidence returns retained HTTP evidence. Search and timeline reads expose
+// metadata; an explicit reveal returns the original retained payload.
 func (r *Runtime) RawEvidence() rawevidence.Reader {
 	return r.rawEvidence
 }
 
-// RawEvidenceStatistics exposes writer health without exposing encrypted
-// payload material. It is useful for diagnostics and for proving that an
+// RawEvidenceStatistics exposes writer health without reading payload bytes.
+// It is useful for diagnostics and for proving that an
 // apparently empty read is not an unflushed or degraded writer.
 func (r *Runtime) RawEvidenceStatistics() rawevidence.Statistics {
 	if r == nil || r.rawEvidence == nil {
 		return rawevidence.Statistics{}
 	}
 	return r.rawEvidence.Statistics()
+}
+
+// EvidenceArchive returns the one transactional boundary that can remove a
+// Capture evidence graph or clear all retained evidence. Hosts expose it only
+// behind an authenticated, confirmed control action.
+func (r *Runtime) EvidenceArchive() resourcedeletion.Archive {
+	return r.evidenceArchive
 }
 
 // ConnectionEvents returns the durable body-free connection audit boundary.

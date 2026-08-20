@@ -11,49 +11,48 @@ import (
 	"github.com/vibe-agi/vibermate/internal/transportprofile"
 )
 
-type loopbackTransport struct {
+type cleartextTransport struct {
 	dialer   contextDialer
 	timeouts TransportTimeouts
 }
 
-func newProductionLoopbackTransport(
+func newProductionCleartextTransport(
 	timeouts TransportTimeouts,
-) (*loopbackTransport, error) {
-	return newLoopbackTransport(
+) (*cleartextTransport, error) {
+	return newCleartextTransport(
 		&net.Dialer{Timeout: timeouts.Dial},
 		timeouts,
 	)
 }
 
-func newLoopbackTransport(
+func newCleartextTransport(
 	dialer contextDialer,
 	timeouts TransportTimeouts,
-) (*loopbackTransport, error) {
+) (*cleartextTransport, error) {
 	if dialer == nil {
-		return nil, errors.New("loopback provider dialer is nil")
+		return nil, errors.New("cleartext provider dialer is nil")
 	}
 	if err := timeouts.validate(); err != nil {
 		return nil, err
 	}
-	return &loopbackTransport{
+	return &cleartextTransport{
 		dialer:   dialer,
 		timeouts: timeouts,
 	}, nil
 }
 
-func (transport *loopbackTransport) RoundTrip(
+func (transport *cleartextTransport) RoundTrip(
 	request *http.Request,
 	dispatch TransportDispatch,
 ) (*http.Response, transportprofile.Evidence, error) {
 	if transport == nil || transport.dialer == nil {
 		return nil, transportprofile.Evidence{}, errors.New(
-			"loopback provider transport is not initialized",
+			"cleartext provider transport is not initialized",
 		)
 	}
-	if dispatch.target.TransportKind() !=
-		originidentity.ProviderTransportLoopbackCleartext {
+	if !isCleartextProviderTransport(dispatch.target.TransportKind()) {
 		return nil, transportprofile.Evidence{}, errors.New(
-			"loopback provider transport received a non-loopback target",
+			"cleartext provider transport received a TLS target",
 		)
 	}
 	if err := dispatch.target.validateRequestIdentity(request); err != nil {
@@ -80,12 +79,12 @@ func (transport *loopbackTransport) RoundTrip(
 				network != "tcp4" &&
 				network != "tcp6" {
 				return nil, errors.New(
-					"loopback provider transport network is unsupported",
+					"cleartext provider transport network is unsupported",
 				)
 			}
 			if address != endpointAuthority {
 				return nil, errors.New(
-					"loopback provider dial authority changed",
+					"cleartext provider dial authority changed",
 				)
 			}
 			connection, dialErr := transport.dialer.DialContext(
@@ -96,7 +95,7 @@ func (transport *loopbackTransport) RoundTrip(
 			if dialErr != nil {
 				return nil, dialErr
 			}
-			if peerErr := validateLoopbackPeer(
+			if peerErr := validateCleartextPeer(
 				connection.RemoteAddr(),
 				dispatch.target,
 			); peerErr != nil {
@@ -121,7 +120,7 @@ func (transport *loopbackTransport) RoundTrip(
 	if response == nil || response.Body == nil {
 		httpTransport.CloseIdleConnections()
 		return response, transportprofile.Evidence{}, errors.New(
-			"loopback provider HTTP transport returned an incomplete response",
+			"cleartext provider HTTP transport returned an incomplete response",
 		)
 	}
 	response.Body = &transportBody{
@@ -132,31 +131,33 @@ func (transport *loopbackTransport) RoundTrip(
 	return response, transportprofile.Evidence{}, nil
 }
 
-func (*loopbackTransport) CloseIdleConnections() {}
+func (*cleartextTransport) CloseIdleConnections() {}
 
-func validateLoopbackPeer(
+func isCleartextProviderTransport(kind originidentity.ProviderTransport) bool {
+	return kind == originidentity.ProviderTransportLoopbackCleartext ||
+		kind == originidentity.ProviderTransportPrivateCleartext
+}
+
+func validateCleartextPeer(
 	remote net.Addr,
 	target Target,
 ) error {
 	tcp, ok := remote.(*net.TCPAddr)
 	if !ok || tcp == nil {
-		return errors.New("loopback provider peer address is not TCP")
+		return errors.New("cleartext provider peer address is not TCP")
 	}
 	peer, available := netip.AddrFromSlice(tcp.IP)
 	if !available {
-		return errors.New("loopback provider peer IP is invalid")
+		return errors.New("cleartext provider peer IP is invalid")
 	}
 	peer = peer.Unmap()
-	expected, err := netip.ParseAddr(target.NetworkHost())
-	if err != nil {
-		return errors.New("loopback provider target IP is invalid")
-	}
-	expected = expected.Unmap()
-	if !peer.IsLoopback() ||
-		peer != expected ||
-		tcp.Zone != "" ||
+	if !originidentity.IsPrivateCleartextAddress(peer) || tcp.Zone != "" ||
 		tcp.Port != int(target.origin.Port()) {
-		return errors.New("loopback provider peer identity changed")
+		return errors.New("cleartext provider peer is not local/private")
+	}
+	if expected, err := netip.ParseAddr(target.NetworkHost()); err == nil &&
+		peer != expected.Unmap() {
+		return errors.New("cleartext provider literal peer identity changed")
 	}
 	return nil
 }

@@ -540,12 +540,17 @@ void main() {
   });
 
   test('Activity requires complete frozen Account and parent evidence', () {
-    final activity = ActivityRecord.fromJson({
+    final json = <String, Object?>{
       'id': 'exchange-test',
       'occurredAt': '2026-08-11T00:00:00.000Z',
       'kind': 'exchange',
       'title': 'Claude request',
       'status': 'succeeded',
+      'requestPreview': {
+        'kind': 'tool_call',
+        'text': 'workspace.read',
+        'truncated': false,
+      },
       'source': {
         'kind': 'capture_run',
         'displayName': 'Claude Code',
@@ -576,10 +581,24 @@ void main() {
         'connectionId': 'connection-test',
         'exchangeId': 'exchange-test',
       },
-    }, 'activity');
+    };
+    final activity = ActivityRecord.fromJson(json, 'activity');
 
     expect(activity.environment.accountRevision, 5);
     expect(activity.captureRunId, 'run-test');
+    expect(activity.requestPreview?.kind, 'tool_call');
+    expect(activity.requestPreview?.text, 'workspace.read');
+
+    final invalidPreview = jsonDecode(jsonEncode(json)) as Map<String, dynamic>;
+    invalidPreview['requestPreview'] = {
+      'kind': 'reasoning',
+      'text': 'private chain of thought',
+      'truncated': false,
+    };
+    expect(
+      () => ActivityRecord.fromJson(invalidPreview, 'activity'),
+      throwsA(isA<ControlContractException>()),
+    );
 
     expect(
       () => ActivityRecord.fromJson({
@@ -772,25 +791,28 @@ void main() {
     expect(authorization.redacted.single.digest, List.filled(64, 'a').join());
   });
 
-  test('Raw reveal rejects a header field carrying both a value and a digest', () {
-    final json = _rawRevealJson();
-    (json['headers']! as List<Object?>).add({
-      'name': 'Authorization',
-      'values': ['Bearer leaked'],
-      'redacted': [
-        {'digest': List.filled(64, 'a').join(), 'bytes': 13},
-      ],
-    });
+  test(
+    'Raw reveal rejects a header field carrying both a value and a digest',
+    () {
+      final json = _rawRevealJson();
+      (json['headers']! as List<Object?>).add({
+        'name': 'Authorization',
+        'values': ['Bearer leaked'],
+        'redacted': [
+          {'digest': List.filled(64, 'a').join(), 'bytes': 13},
+        ],
+      });
 
-    expect(
-      () => RevealedRawEvidence.fromJson(
-        json,
-        'rawReveal',
-        expectedEnvelopeId: 'raw-test',
-      ),
-      throwsA(isA<ControlContractException>()),
-    );
-  });
+      expect(
+        () => RevealedRawEvidence.fromJson(
+          json,
+          'rawReveal',
+          expectedEnvelopeId: 'raw-test',
+        ),
+        throwsA(isA<ControlContractException>()),
+      );
+    },
+  );
 
   test('Raw reveal rejects tampered body digests and frame ranges', () {
     final valid = _rawRevealJson();

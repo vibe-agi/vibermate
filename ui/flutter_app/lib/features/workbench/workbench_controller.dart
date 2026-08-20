@@ -15,6 +15,7 @@ export '../../core/preferences/workbench_preferences.dart'
 final class WorkbenchController extends ChangeNotifier {
   static const _exchangeDetailCacheLimit = 64;
   static const _fullExchangeDetailCacheLimit = 2;
+  static const _captureConversationPageCacheLimit = 24;
 
   WorkbenchController({
     required ControlApi api,
@@ -104,10 +105,13 @@ final class WorkbenchController extends ChangeNotifier {
   bool terminalCommandLoading = false;
   bool terminalCommandMutating = false;
   bool pendingApprovalsLoading = false;
+  int _dashboardGeneration = 0;
   int _selectionGeneration = 0;
   int _environmentRevisionGeneration = 0;
   final LinkedHashMap<String, ExchangeDetail> _exchangeDetails =
       LinkedHashMap<String, ExchangeDetail>();
+  final LinkedHashMap<String, ActivityPage> _captureConversationPages =
+      LinkedHashMap<String, ActivityPage>();
   final Map<String, Future<ExchangeDetail?>> _exchangeLoads = {};
   final Map<String, int> _exchangeLoadGenerations = {};
   final Map<String, String> _exchangeErrors = {};
@@ -116,6 +120,7 @@ final class WorkbenchController extends ChangeNotifier {
       LinkedHashMap<String, RawEvidencePage>();
   final Set<String> _loadingRawEvidence = {};
   final Map<String, String> _rawEvidenceErrors = {};
+  int _rawEvidenceGeneration = 0;
   Timer? _poller;
   bool _disposed = false;
   WorkbenchPreferences? _desiredPreferences;
@@ -256,30 +261,16 @@ final class WorkbenchController extends ChangeNotifier {
   }
 
   Future<void> refresh({bool selectDefaults = false}) async {
-    if (_disposed) return;
+    if (_disposed || inventoryMutating) return;
+    final generation = ++_dashboardGeneration;
     if (data == null) loading = true;
     errorMessage = null;
     notifyListeners();
     try {
       final updated = await _api.loadDashboard();
-      if (_disposed) return;
+      if (_disposed || generation != _dashboardGeneration) return;
       data = updated;
-      if (selectDefaults || selectedCapture == null) {
-        final initial =
-            runningCaptures.firstOrNull ?? historicalCaptures.firstOrNull;
-        selectedCaptureKey = initial?.key;
-      }
-      if (selectedEnvironmentRevision == null &&
-          !updated.environments.any(
-            (environment) => environment.id == selectedEnvironmentId,
-          )) {
-        selectedEnvironmentId = updated.environments.firstOrNull?.id;
-      }
-      if (!updated.endpoints.any(
-        (endpoint) => endpoint.id == selectedEndpointId,
-      )) {
-        selectedEndpointId = updated.endpoints.firstOrNull?.id;
-      }
+      _repairDashboardSelections(updated, forceCaptureDefault: selectDefaults);
       loading = false;
       notifyListeners();
       if (selectedCapture != null) await _loadCaptureDetail(selectedCapture!);
@@ -292,7 +283,7 @@ final class WorkbenchController extends ChangeNotifier {
         await refreshTerminalCommand();
       }
     } catch (error) {
-      if (_disposed) return;
+      if (_disposed || generation != _dashboardGeneration) return;
       loading = false;
       errorMessage = _describeError(error);
       notifyListeners();
@@ -305,14 +296,21 @@ final class WorkbenchController extends ChangeNotifier {
         captureDirectoryLoading ||
         mutating ||
         networkMutating ||
+        inventoryMutating ||
         environmentMutating ||
         workspaceDefaultMutating) {
       return;
     }
+    final generation = _dashboardGeneration;
     try {
       final updated = await _api.loadDashboard();
-      if (_disposed) return;
+      if (_disposed ||
+          generation != _dashboardGeneration ||
+          inventoryMutating) {
+        return;
+      }
       data = _mergePolledDashboard(data, updated);
+      _repairDashboardSelections(data!);
       notifyListeners();
       if (section != WorkbenchSection.network) {
         await refreshPendingApprovals(quiet: true);
@@ -336,6 +334,7 @@ final class WorkbenchController extends ChangeNotifier {
     final cursor = current?.captureNextCursor;
     if (_disposed ||
         loading ||
+        inventoryMutating ||
         current == null ||
         cursor == null ||
         captureDirectoryLoading) {
@@ -343,10 +342,19 @@ final class WorkbenchController extends ChangeNotifier {
     }
     captureDirectoryLoading = true;
     captureDirectoryError = null;
+    final generation = _dashboardGeneration;
     notifyListeners();
     try {
       final page = await _api.captures(cursor: cursor);
-      if (_disposed) return;
+      if (_disposed ||
+          generation != _dashboardGeneration ||
+          inventoryMutating) {
+        if (!_disposed) {
+          captureDirectoryLoading = false;
+          notifyListeners();
+        }
+        return;
+      }
       final merged = <String, CaptureRecord>{
         for (final capture in current.captures) capture.key: capture,
         for (final capture in page.items) capture.key: capture,
@@ -622,12 +630,13 @@ final class WorkbenchController extends ChangeNotifier {
       }
     }
     if (_loadingRawEvidence.contains(exchangeId)) return null;
+    final generation = _rawEvidenceGeneration;
     _loadingRawEvidence.add(exchangeId);
     _rawEvidenceErrors.remove(exchangeId);
     notifyListeners();
     try {
       final page = await _api.rawEvidence(exchangeId);
-      if (_disposed) return null;
+      if (_disposed || generation != _rawEvidenceGeneration) return page;
       _rawEvidencePages.remove(exchangeId);
       _rawEvidencePages[exchangeId] = page;
       while (_rawEvidencePages.length > 64) {
@@ -637,7 +646,7 @@ final class WorkbenchController extends ChangeNotifier {
       notifyListeners();
       return page;
     } catch (error) {
-      if (_disposed) return null;
+      if (_disposed || generation != _rawEvidenceGeneration) return null;
       _loadingRawEvidence.remove(exchangeId);
       _rawEvidenceErrors[exchangeId] = _describeError(error);
       notifyListeners();
@@ -980,6 +989,243 @@ final class WorkbenchController extends ChangeNotifier {
     }
   }
 
+  /// Retires an Environment. Returns the runtime's answer so the caller can
+  /// show the holders when it refused; a null means the call itself failed.
+  Future<DeletionOutcome?> deleteEnvironment(String environmentId) =>
+      _runDeletion(
+        () => _api.deleteEnvironment(environmentId),
+        onDeleted: (current) => _dashboardWith(
+          current,
+          environments: current.environments
+              .where((candidate) => candidate.id != environmentId)
+              .toList(growable: false),
+        ),
+        notice: 'environment_deleted',
+      );
+
+  Future<DeletionOutcome?> deleteUpstreamEndpoint(String endpointId) =>
+      _runDeletion(
+        () => _api.deleteUpstreamEndpoint(endpointId),
+        onDeleted: (current) => _dashboardWith(
+          current,
+          endpoints: current.endpoints
+              .where((candidate) => candidate.id != endpointId)
+              .toList(growable: false),
+        ),
+        notice: 'endpoint_deleted',
+      );
+
+  Future<DeletionOutcome?> deleteCapture(String captureKey) => _runDeletion(
+    () => _api.deleteCapture(captureKey),
+    onDeleted: (current) => _dashboardWith(
+      current,
+      captures: current.captures
+          .where((candidate) => candidate.key != captureKey)
+          .toList(growable: false),
+    ),
+    notice: 'capture_deleted',
+    afterDeleted: () {
+      _invalidateEvidenceCaches();
+      if (selectedCaptureKey == captureKey) {
+        selectedCaptureKey = null;
+        _resetCaptureDetail();
+      }
+    },
+    reloadCaptureDetail: true,
+  );
+
+  Future<DeletionOutcome?> clearEvidence() => _runDeletion(
+    _api.clearEvidence,
+    onDeleted: (current) => _dashboardWith(current, captures: const []),
+    notice: 'archive_cleared',
+    afterDeleted: () {
+      selectedCaptureKey = null;
+      _resetCaptureDetail();
+      _invalidateEvidenceCaches();
+    },
+  );
+
+  /// Every destructive action runs through here, so they share one mutation
+  /// gate, one error surface and one rule: local state changes only when the
+  /// runtime says the delete happened. A refusal leaves the workbench exactly
+  /// as it was, which is what makes it safe to show the holders and let the
+  /// user try again.
+  Future<DeletionOutcome?> _runDeletion(
+    Future<DeletionOutcome> Function() call, {
+    required DashboardData Function(DashboardData current) onDeleted,
+    required String notice,
+    void Function()? afterDeleted,
+    bool reloadCaptureDetail = false,
+  }) async {
+    final current = data;
+    if (current == null || inventoryMutating) return null;
+    final generation = ++_dashboardGeneration;
+    captureDirectoryLoading = false;
+    inventoryMutating = true;
+    inventoryError = null;
+    inventoryNotice = null;
+    notifyListeners();
+    try {
+      final outcome = await call();
+      if (_disposed || generation != _dashboardGeneration) return null;
+      if (outcome.deleted) {
+        data = onDeleted(current);
+        afterDeleted?.call();
+        _repairDashboardSelections(data!);
+        inventoryNotice = notice;
+        notifyListeners();
+        try {
+          final refreshed = await _api.loadDashboard();
+          if (_disposed || generation != _dashboardGeneration) return outcome;
+          data = refreshed;
+          _repairDashboardSelections(refreshed);
+        } catch (error) {
+          if (_disposed || generation != _dashboardGeneration) return outcome;
+          // The deletion is already authoritative. Keep the local projection
+          // honest and surface only the failed reconciliation.
+          inventoryError = _describeError(error);
+        }
+      }
+      inventoryMutating = false;
+      notifyListeners();
+      if (outcome.deleted && reloadCaptureDetail) {
+        final capture = selectedCapture;
+        if (capture != null) unawaited(_loadCaptureDetail(capture));
+      }
+      return outcome;
+    } catch (error) {
+      if (_disposed) return null;
+      inventoryMutating = false;
+      inventoryError = _describeError(error);
+      notifyListeners();
+      return null;
+    }
+  }
+
+  void _repairDashboardSelections(
+    DashboardData updated, {
+    bool forceCaptureDefault = false,
+  }) {
+    final previousCaptureKey = selectedCaptureKey;
+    final captureExists =
+        previousCaptureKey != null &&
+        updated.captures.any((capture) => capture.key == previousCaptureKey);
+    if (forceCaptureDefault || !captureExists) {
+      final running =
+          updated.captures
+              .where((capture) => capture.running)
+              .toList(growable: false)
+            ..sort((left, right) => right.updatedAt.compareTo(left.updatedAt));
+      final history =
+          updated.captures
+              .where((capture) => !capture.running)
+              .toList(growable: false)
+            ..sort((left, right) => right.updatedAt.compareTo(left.updatedAt));
+      selectedCaptureKey = running.firstOrNull?.key ?? history.firstOrNull?.key;
+    }
+    if (selectedCaptureKey != previousCaptureKey) {
+      _resetCaptureDetail();
+    }
+
+    final environmentExists =
+        selectedEnvironmentId != null &&
+        updated.environments.any(
+          (environment) => environment.id == selectedEnvironmentId,
+        );
+    if (selectedEnvironmentRevision == null && !environmentExists) {
+      _environmentRevisionGeneration += 1;
+      selectedEnvironmentId = updated.environments.firstOrNull?.id;
+      historicalEnvironment = null;
+      environmentRevisionLoading = false;
+      reviewedEnvironmentDraft = null;
+      reviewedEnvironmentImpact = null;
+      environmentError = null;
+      environmentNotice = null;
+    }
+
+    final endpointExists =
+        selectedEndpointId != null &&
+        updated.endpoints.any((endpoint) => endpoint.id == selectedEndpointId);
+    if (!endpointExists) {
+      selectedEndpointId = updated.endpoints.firstOrNull?.id;
+    }
+  }
+
+  void _resetCaptureDetail() {
+    _selectionGeneration += 1;
+    selectedAssignment = null;
+    selectedWorkspaceDefault = null;
+    selectedCaptureConversations = null;
+    selectedCaptureConversationKey = null;
+    selectedCapturePage = null;
+    detailLoading = false;
+    captureActivitiesLoading = false;
+    workspaceDefaultLoading = false;
+    workspaceDefaultError = null;
+    workspaceDefaultNotice = null;
+  }
+
+  void _invalidateEvidenceCaches() {
+    _exchangeLoadGeneration += 1;
+    _exchangeDetails.clear();
+    _exchangeLoads.clear();
+    _exchangeLoadGenerations.clear();
+    _exchangeErrors.clear();
+    _rawEvidenceGeneration += 1;
+    _rawEvidencePages.clear();
+    _loadingRawEvidence.clear();
+    _rawEvidenceErrors.clear();
+    _captureConversationPages.clear();
+  }
+
+  String _captureConversationPageKey(
+    String captureKey,
+    String conversationKey,
+  ) => '$captureKey\u0000$conversationKey';
+
+  ActivityPage? _cachedCaptureConversationPage(
+    String captureKey,
+    String conversationKey,
+  ) {
+    final key = _captureConversationPageKey(captureKey, conversationKey);
+    final cached = _captureConversationPages.remove(key);
+    if (cached != null) _captureConversationPages[key] = cached;
+    return cached;
+  }
+
+  void _cacheCaptureConversationPage(
+    String captureKey,
+    String conversationKey,
+    ActivityPage page,
+  ) {
+    final key = _captureConversationPageKey(captureKey, conversationKey);
+    _captureConversationPages.remove(key);
+    _captureConversationPages[key] = page;
+    while (_captureConversationPages.length >
+        _captureConversationPageCacheLimit) {
+      _captureConversationPages.remove(_captureConversationPages.keys.first);
+    }
+  }
+
+  ActivityPage _reconcileCaptureConversationPage(
+    ActivityPage? retained,
+    ActivityPage latest,
+  ) {
+    if (retained == null) return latest;
+    return ActivityPage(
+      items: mergePolledWindow(
+        retained.items,
+        latest.items,
+        identity: (item) => item.id,
+        recency: (item) => item.occurredAt,
+      ),
+      // A retained page may include older pages which the newest bounded
+      // window cannot describe. Keep its continuation boundary until an
+      // explicit load-more request advances it.
+      nextCursor: retained.nextCursor,
+    );
+  }
+
   void clearInventoryNotice() {
     inventoryNotice = null;
     notifyListeners();
@@ -993,15 +1239,7 @@ final class WorkbenchController extends ChangeNotifier {
   Future<void> selectCapture(String captureKey) async {
     if (selectedCaptureKey == captureKey && selectedAssignment != null) return;
     selectedCaptureKey = captureKey;
-    selectedAssignment = null;
-    selectedWorkspaceDefault = null;
-    selectedCaptureConversations = null;
-    selectedCaptureConversationKey = null;
-    selectedCapturePage = null;
-    captureActivitiesLoading = false;
-    workspaceDefaultLoading = false;
-    workspaceDefaultError = null;
-    workspaceDefaultNotice = null;
+    _resetCaptureDetail();
     operationNotice = null;
     notifyListeners();
     final capture = selectedCapture;
@@ -1380,6 +1618,9 @@ final class WorkbenchController extends ChangeNotifier {
             migrated?.key ?? _preferredCaptureConversation(available)?.key;
       }
       final selectedKey = selectedCaptureConversationKey;
+      final cached = selectedKey == null
+          ? null
+          : _cachedCaptureConversationPage(capture.key, selectedKey);
       final latest = selectedKey == null
           ? const ActivityPage(items: [], nextCursor: null)
           : await _captureActivityPage(
@@ -1392,19 +1633,19 @@ final class WorkbenchController extends ChangeNotifier {
           selectedCaptureKey != capture.key) {
         return;
       }
-      if (quiet &&
-          currentPage != null &&
-          currentConversationKey == selectedCaptureConversationKey) {
-        final unique = <String, ActivityRecord>{
-          for (final item in latest.items) item.id: item,
-          for (final item in currentPage.items) item.id: item,
-        };
-        selectedCapturePage = ActivityPage(
-          items: unique.values.toList(growable: false),
-          nextCursor: currentPage.nextCursor,
+      final retained =
+          quiet &&
+              currentPage != null &&
+              currentConversationKey == selectedCaptureConversationKey
+          ? currentPage
+          : cached;
+      selectedCapturePage = _reconcileCaptureConversationPage(retained, latest);
+      if (selectedKey != null) {
+        _cacheCaptureConversationPage(
+          capture.key,
+          selectedKey,
+          selectedCapturePage!,
         );
-      } else {
-        selectedCapturePage = latest;
       }
       if (workspaceLoad.error == null) {
         selectedWorkspaceDefault = workspaceLoad.value;
@@ -1492,7 +1733,8 @@ final class WorkbenchController extends ChangeNotifier {
     final generation = ++_selectionGeneration;
     final captureKey = capture.key;
     selectedCaptureConversationKey = key;
-    selectedCapturePage = null;
+    final cached = _cachedCaptureConversationPage(captureKey, key);
+    selectedCapturePage = cached;
     captureActivitiesLoading = true;
     errorMessage = null;
     notifyListeners();
@@ -1508,7 +1750,8 @@ final class WorkbenchController extends ChangeNotifier {
           selectedCaptureConversationKey != key) {
         return;
       }
-      selectedCapturePage = page;
+      selectedCapturePage = _reconcileCaptureConversationPage(cached, page);
+      _cacheCaptureConversationPage(captureKey, key, selectedCapturePage!);
       captureActivitiesLoading = false;
       notifyListeners();
     } catch (error) {
@@ -1530,6 +1773,8 @@ final class WorkbenchController extends ChangeNotifier {
       return;
     }
     final captureKey = capture.key;
+    final conversationKey = selectedCaptureConversationKey;
+    final generation = _selectionGeneration;
     captureActivitiesLoading = true;
     errorMessage = null;
     notifyListeners();
@@ -1540,7 +1785,12 @@ final class WorkbenchController extends ChangeNotifier {
         conversationId: selectedCaptureConversationKey,
         limit: 100,
       );
-      if (_disposed || selectedCaptureKey != captureKey) return;
+      if (_disposed ||
+          generation != _selectionGeneration ||
+          selectedCaptureKey != captureKey ||
+          selectedCaptureConversationKey != conversationKey) {
+        return;
+      }
       final unique = <String, ActivityRecord>{
         for (final item in current.items) item.id: item,
         for (final item in page.items) item.id: item,
@@ -1549,10 +1799,22 @@ final class WorkbenchController extends ChangeNotifier {
         items: unique.values.toList(growable: false),
         nextCursor: page.nextCursor,
       );
+      if (conversationKey != null) {
+        _cacheCaptureConversationPage(
+          captureKey,
+          conversationKey,
+          selectedCapturePage!,
+        );
+      }
       captureActivitiesLoading = false;
       notifyListeners();
     } catch (error) {
-      if (_disposed || selectedCaptureKey != captureKey) return;
+      if (_disposed ||
+          generation != _selectionGeneration ||
+          selectedCaptureKey != captureKey ||
+          selectedCaptureConversationKey != conversationKey) {
+        return;
+      }
       captureActivitiesLoading = false;
       errorMessage = _describeError(error);
       notifyListeners();
@@ -1943,4 +2205,42 @@ final class ConversationSummary {
     'isolated_subagent',
     'isolated_exchange',
   }.contains(conversation.kind);
+}
+
+/// The number of Activities a Capture keeps in memory while it is watched.
+///
+/// A poll used to union its newest window into everything already held and
+/// keep the result, so a Capture that kept producing Exchanges grew this list
+/// without limit. The whole workbench rebuilds on every controller change, so
+/// the cost of that list is paid on every notification: the UI degraded the
+/// longer a live Capture stayed open, until it stopped answering clicks.
+///
+/// Five pages is deep enough that ordinary scrolling never reaches the edge,
+/// and the tail is not lost — `loadMoreCaptureActivities` fetches it again.
+const retainedCaptureActivityLimit = 500;
+
+/// Merges a freshly polled window into what is already held.
+///
+/// Two rules the previous inline version got wrong. A record present in both
+/// takes its **newer** value, so a status that changed between polls lands
+/// instead of being overwritten by the copy already in hand. And the result is
+/// bounded, oldest first, because this list is rebuilt on every notification.
+List<T> mergePolledWindow<T>(
+  Iterable<T> current,
+  Iterable<T> latest, {
+  required String Function(T) identity,
+  required Comparable<Object> Function(T) recency,
+  int limit = retainedCaptureActivityLimit,
+}) {
+  final byIdentity = <String, T>{};
+  for (final item in current) {
+    byIdentity[identity(item)] = item;
+  }
+  for (final item in latest) {
+    byIdentity[identity(item)] = item;
+  }
+  final ordered = byIdentity.values.toList()
+    ..sort((left, right) => recency(right).compareTo(recency(left)));
+  if (ordered.length <= limit) return ordered;
+  return ordered.sublist(0, limit);
 }

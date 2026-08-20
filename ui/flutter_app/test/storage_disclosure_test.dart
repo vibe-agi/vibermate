@@ -10,7 +10,9 @@ void main() {
   testWidgets('Settings discloses that the archive is not encrypted at rest', (
     tester,
   ) async {
-    await tester.pumpWidget(const ViberMateApp(previewMode: true, preferChinese: false));
+    await tester.pumpWidget(
+      const ViberMateApp(previewMode: true, preferChinese: false),
+    );
     await tester.pumpAndSettle();
 
     await tester.tap(find.byIcon(Icons.settings_outlined).first);
@@ -35,29 +37,30 @@ void main() {
   // strings are retained verbatim, which is the point of a forensic archive.
   // A user who pastes an API key into a prompt has it kept, and the panel that
   // claims otherwise is the one they would have read before doing it.
-  testWidgets('Storage disclosure names what is retained, not just what is removed', (
-    tester,
-  ) async {
-    await tester.pumpWidget(
-      const ViberMateApp(previewMode: true, preferChinese: false),
-    );
-    await tester.pumpAndSettle();
+  testWidgets(
+    'Storage disclosure names what is retained, not just what is removed',
+    (tester) async {
+      await tester.pumpWidget(
+        const ViberMateApp(previewMode: true, preferChinese: false),
+      );
+      await tester.pumpAndSettle();
 
-    await tester.tap(find.byIcon(Icons.settings_outlined).first);
-    await tester.pumpAndSettle();
+      await tester.tap(find.byIcon(Icons.settings_outlined).first);
+      await tester.pumpAndSettle();
 
-    final panel = find.byKey(const Key('storage-disclosure-panel'));
-    await tester.scrollUntilVisible(
-      panel,
-      240,
-      scrollable: find.byType(Scrollable).last,
-    );
-    expect(
-      find.textContaining('stored as sent'),
-      findsOneWidget,
-      reason: 'the disclosure must state that bodies are retained verbatim',
-    );
-  });
+      final panel = find.byKey(const Key('storage-disclosure-panel'));
+      await tester.scrollUntilVisible(
+        panel,
+        240,
+        scrollable: find.byType(Scrollable).last,
+      );
+      expect(
+        find.textContaining('stored as sent'),
+        findsOneWidget,
+        reason: 'the disclosure must state that bodies are retained verbatim',
+      );
+    },
+  );
 
   testWidgets('Storage disclosure is present in Simplified Chinese', (
     tester,
@@ -87,30 +90,27 @@ void main() {
   // window range is the assertion.
   for (final size in const [Size(820, 620), Size(700, 560)]) {
     for (final chinese in const [false, true]) {
-      testWidgets(
-        'Storage disclosure lays out at ${size.width.toInt()}x'
-        '${size.height.toInt()} in ${chinese ? 'zh' : 'en'}',
-        (tester) async {
-          tester.view.physicalSize = size;
-          tester.view.devicePixelRatio = 1.0;
-          addTearDown(tester.view.reset);
+      testWidgets('Storage disclosure lays out at ${size.width.toInt()}x'
+          '${size.height.toInt()} in ${chinese ? 'zh' : 'en'}', (tester) async {
+        tester.view.physicalSize = size;
+        tester.view.devicePixelRatio = 1.0;
+        addTearDown(tester.view.reset);
 
-          await tester.pumpWidget(
-            ViberMateApp(previewMode: true, preferChinese: chinese),
-          );
-          await tester.pumpAndSettle();
-          await tester.tap(find.byIcon(Icons.settings_outlined).first);
-          await tester.pumpAndSettle();
+        await tester.pumpWidget(
+          ViberMateApp(previewMode: true, preferChinese: chinese),
+        );
+        await tester.pumpAndSettle();
+        await tester.tap(find.byIcon(Icons.settings_outlined).first);
+        await tester.pumpAndSettle();
 
-          final panel = find.byKey(const Key('storage-disclosure-panel'));
-          await tester.scrollUntilVisible(
-            panel,
-            240,
-            scrollable: find.byType(Scrollable).last,
-          );
-          expect(panel, findsOneWidget);
-        },
-      );
+        final panel = find.byKey(const Key('storage-disclosure-panel'));
+        await tester.scrollUntilVisible(
+          panel,
+          240,
+          scrollable: find.byType(Scrollable).last,
+        );
+        expect(panel, findsOneWidget);
+      });
     }
   }
 }

@@ -231,3 +231,55 @@ func loadWorkspaceDefault(
 	}
 	return record, true, nil
 }
+
+// ListByEnvironment answers which workspaces name an Environment, so a delete
+// can report the bindings it would break rather than breaking them.
+func (repository *workspaceDefaultRepository) ListByEnvironment(
+	ctx context.Context,
+	id environment.EnvironmentID,
+) ([]workspacedefault.Record, error) {
+	operation, finish, err := repository.operations.begin(ctx)
+	if err != nil {
+		return nil, err
+	}
+	defer finish()
+	rows, err := repository.database.QueryContext(
+		operation,
+		`SELECT machine_id, workspace_id, environment_id, revision,
+		        updated_at_unix_ms
+		   FROM workspace_environment_defaults
+		  WHERE environment_id = ?
+		  ORDER BY machine_id, workspace_id`,
+		id.String(),
+	)
+	if err != nil {
+		return nil, fmt.Errorf("list Workspace Environment defaults: %w", err)
+	}
+	defer func() { _ = rows.Close() }()
+	records := make([]workspacedefault.Record, 0)
+	for rows.Next() {
+		var (
+			machineID     string
+			workspaceID   string
+			environmentID string
+			revision      int64
+			updatedAt     int64
+		)
+		if err := rows.Scan(
+			&machineID, &workspaceID, &environmentID, &revision, &updatedAt,
+		); err != nil {
+			return nil, err
+		}
+		key, keyErr := workspacedefault.NewKey(machineID, workspaceID)
+		if keyErr != nil {
+			return nil, keyErr
+		}
+		records = append(records, workspacedefault.Record{
+			Key:           key,
+			EnvironmentID: environment.EnvironmentID(environmentID),
+			Revision:      uint64(revision),
+			UpdatedAt:     fromUnixMillis(updatedAt),
+		})
+	}
+	return records, rows.Err()
+}

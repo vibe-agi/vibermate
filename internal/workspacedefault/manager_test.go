@@ -176,3 +176,15 @@ func testKey(t *testing.T) Key {
 	}
 	return key
 }
+
+func (repository *memoryRepository) ListByEnvironment(
+	_ context.Context,
+	id environment.EnvironmentID,
+) ([]Record, error) {
+	repository.mu.Lock()
+	defer repository.mu.Unlock()
+	if !repository.exists || repository.record.EnvironmentID != id {
+		return nil, nil
+	}
+	return []Record{repository.record}, nil
+}

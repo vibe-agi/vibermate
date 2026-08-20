@@ -78,6 +78,86 @@ void main() {
     expect(requests, hasLength(requestCount));
   });
 
+  test('HTTP API creates a private HTTP upstream Endpoint', () async {
+    final requests = <({String method, Uri uri})>[];
+    final createBodies = <Map<String, Object?>>[];
+    final server = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);
+    addTearDown(() => server.close(force: true));
+    server.listen((request) async {
+      requests.add((method: request.method, uri: request.uri));
+      request.response.headers.contentType = ContentType.json;
+      if (request.uri.path == '/api/v1/auth/sessions/current') {
+        await request.drain<void>();
+        request.response.write(
+          jsonEncode({
+            'schema': 'vibermate-app-session-state-v1',
+            'revision': 1,
+            'expiresAt': DateTime.now()
+                .toUtc()
+                .add(const Duration(hours: 1))
+                .toIso8601String(),
+          }),
+        );
+      } else if (request.method == 'POST' &&
+          request.uri.path == '/api/v1/upstream-endpoints') {
+        final body = jsonDecode(await utf8.decoder.bind(request).join());
+        final input = Map<String, Object?>.from(body as Map);
+        createBodies.add(input);
+        request.response.statusCode = HttpStatus.created;
+        request.response.write(
+          jsonEncode({
+            'id': input['id'],
+            'displayName': input['displayName'],
+            'origin': input['origin'],
+            'realmId': 'anthropic.official',
+            'backendProtocols': ['anthropic_messages'],
+            'capabilities': ['messages', 'streaming', 'tool_calls'],
+            'accountKinds': ['anthropic_api_key', 'claude_oauth_token'],
+            'state': 'active',
+            'revision': 1,
+          }),
+        );
+      } else {
+        await request.drain<void>();
+        request.response.statusCode = HttpStatus.notFound;
+      }
+      await request.response.close();
+    });
+
+    final api = await HttpControlApi.connect(
+      DesktopSession(
+        baseUrl: Uri.parse('http://127.0.0.1:${server.port}'),
+        readToken: List.filled(43, 'R').join(),
+        writeToken: List.filled(43, 'W').join(),
+        instanceId: 'instance-test',
+        expiresAt: DateTime.now().toUtc().add(const Duration(hours: 1)),
+      ),
+    );
+    addTearDown(api.close);
+
+    final endpoint = await api.createUpstreamEndpoint(
+      id: 'target.custom.anthropic.http-test',
+      displayName: 'Spark',
+      origin: 'http://spark-2a59:8888',
+      kind: 'anthropic',
+    );
+    expect(endpoint.origin.toString(), 'http://spark-2a59:8888');
+    expect(createBodies.single['origin'], 'http://spark-2a59:8888');
+    expect(requests.where((request) => request.method == 'POST'), hasLength(1));
+
+    final requestCount = requests.length;
+    await expectLater(
+      api.createUpstreamEndpoint(
+        id: 'target.custom.anthropic.smart-dash',
+        displayName: 'Invalid dash',
+        origin: 'http://spark–2a59:8888',
+        kind: 'anthropic',
+      ),
+      throwsA(isA<ControlContractException>()),
+    );
+    expect(requests, hasLength(requestCount));
+  });
+
   test('HTTP API follows the opaque Capture continuation cursor', () async {
     final requests = <Uri>[];
     final server = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);

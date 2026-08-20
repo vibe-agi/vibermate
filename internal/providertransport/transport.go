@@ -81,7 +81,7 @@ type profileTransport struct {
 
 type productionTransport struct {
 	strictTLS Transport
-	loopback  Transport
+	cleartext Transport
 }
 
 func newProductionTransport(
@@ -91,13 +91,13 @@ func newProductionTransport(
 	if err != nil {
 		return nil, err
 	}
-	loopback, err := newProductionLoopbackTransport(timeouts)
+	cleartext, err := newProductionCleartextTransport(timeouts)
 	if err != nil {
 		return nil, err
 	}
 	return &productionTransport{
 		strictTLS: strictTLS,
-		loopback:  loopback,
+		cleartext: cleartext,
 	}, nil
 }
 
@@ -107,7 +107,7 @@ func (transport *productionTransport) RoundTrip(
 ) (*http.Response, transportprofile.Evidence, error) {
 	if transport == nil ||
 		transport.strictTLS == nil ||
-		transport.loopback == nil {
+		transport.cleartext == nil {
 		return nil, transportprofile.Evidence{}, errors.New(
 			"production provider transport is not initialized",
 		)
@@ -115,8 +115,9 @@ func (transport *productionTransport) RoundTrip(
 	switch dispatch.target.TransportKind() {
 	case originidentity.ProviderTransportStrictTLS:
 		return transport.strictTLS.RoundTrip(request, dispatch)
-	case originidentity.ProviderTransportLoopbackCleartext:
-		return transport.loopback.RoundTrip(request, dispatch)
+	case originidentity.ProviderTransportLoopbackCleartext,
+		originidentity.ProviderTransportPrivateCleartext:
+		return transport.cleartext.RoundTrip(request, dispatch)
 	default:
 		return nil, transportprofile.Evidence{}, errors.New(
 			"provider transport kind is unsupported",

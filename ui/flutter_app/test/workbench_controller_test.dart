@@ -57,6 +57,50 @@ void main() {
   );
 
   test(
+    'Conversation switching keeps its bounded view visible while refreshing',
+    () async {
+      final fixture = PreviewControlApi();
+      final api = _ControlledActivityApi(fixture);
+      final controller = WorkbenchController(
+        api: api,
+        terminalCommands: PreviewTerminalCommandService(),
+        previewMode: true,
+        closeRuntime: fixture.close,
+      );
+      addTearDown(controller.dispose);
+
+      controller.data = await fixture.loadDashboard();
+      await controller.selectCapture('managed_run:run-1');
+      final main = controller.selectedCaptureConversation!;
+      final mainActivityIds = controller.selectedActivities
+          .map((activity) => activity.id)
+          .toList(growable: false);
+      final subagent = controller.captureConversations.firstWhere(
+        (item) => item.conversation.kind == 'isolated_subagent',
+      );
+      await controller.selectCaptureConversation(subagent.key);
+
+      api.blockConversation(main.key);
+      final switchBack = controller.selectCaptureConversation(main.key);
+
+      expect(controller.selectedCaptureConversationKey, main.key);
+      expect(controller.captureActivitiesLoading, isTrue);
+      expect(
+        controller.selectedActivities.map((activity) => activity.id),
+        mainActivityIds,
+      );
+
+      api.releaseConversation();
+      await switchBack;
+      expect(controller.captureActivitiesLoading, isFalse);
+      expect(
+        controller.selectedActivities.map((activity) => activity.id),
+        mainActivityIds,
+      );
+    },
+  );
+
+  test(
     'Raw evidence loads on demand without retaining revealed bytes',
     () async {
       final api = PreviewControlApi();
@@ -146,6 +190,76 @@ void main() {
       expect(controller.runningCaptures, hasLength(8));
       expect(controller.historicalCaptures, hasLength(1));
       expect(controller.captureDirectoryError, isNull);
+    },
+  );
+
+  test(
+    'Capture deletion reconciles the dashboard and repairs a stale selection',
+    () async {
+      final fixture = PreviewControlApi();
+      final api = _DeletionTrackingApi(fixture);
+      final controller = WorkbenchController(
+        api: api,
+        terminalCommands: PreviewTerminalCommandService(),
+        previewMode: true,
+        closeRuntime: fixture.close,
+      );
+      addTearDown(controller.dispose);
+
+      controller.data = await fixture.loadDashboard();
+      final target = controller.data!.captures.firstWhere(
+        (capture) => !capture.running,
+      );
+      controller.selectedCaptureKey = target.key;
+
+      final outcome = await controller.deleteCapture(target.key);
+
+      expect(outcome?.deleted, isTrue);
+      expect(api.dashboardLoads, 1);
+      expect(
+        controller.data!.captures.any((capture) => capture.key == target.key),
+        isFalse,
+      );
+      expect(controller.selectedCaptureKey, isNot(target.key));
+      expect(
+        controller.data!.captures.any(
+          (capture) => capture.key == controller.selectedCaptureKey,
+        ),
+        isTrue,
+      );
+      expect(controller.inventoryNotice, 'capture_deleted');
+    },
+  );
+
+  test(
+    'Environment deletion reloads authority and cannot leave a retired selection',
+    () async {
+      final fixture = PreviewControlApi();
+      final api = _DeletionTrackingApi(fixture);
+      final controller = WorkbenchController(
+        api: api,
+        terminalCommands: PreviewTerminalCommandService(),
+        previewMode: true,
+        closeRuntime: fixture.close,
+      );
+      addTearDown(controller.dispose);
+
+      controller.data = await fixture.loadDashboard();
+      controller.selectedEnvironmentId = 'research';
+
+      final outcome = await controller.deleteEnvironment('research');
+
+      expect(outcome?.deleted, isTrue);
+      expect(api.dashboardLoads, 1);
+      expect(
+        controller.data!.environments.any(
+          (environment) => environment.id == 'research',
+        ),
+        isFalse,
+      );
+      expect(controller.selectedEnvironmentId, isNot('research'));
+      expect(controller.selectedEnvironment, isNotNull);
+      expect(controller.inventoryNotice, 'environment_deleted');
     },
   );
 
@@ -744,6 +858,144 @@ final class _SequencedExchangeApi implements ControlApi {
     }
     return _responses[index];
   }
+
+  @override
+  dynamic noSuchMethod(Invocation invocation) =>
+      throw UnsupportedError('${invocation.memberName}');
+}
+
+final class _ControlledActivityApi implements ControlApi {
+  _ControlledActivityApi(this.delegate);
+
+  final PreviewControlApi delegate;
+  String? _blockedConversation;
+  Completer<void>? _release;
+
+  void blockConversation(String key) {
+    _blockedConversation = key;
+    _release = Completer<void>();
+  }
+
+  void releaseConversation() {
+    _release?.complete();
+    _release = null;
+    _blockedConversation = null;
+  }
+
+  @override
+  Future<CaptureAssignment> captureAssignment(String captureKey) =>
+      delegate.captureAssignment(captureKey);
+
+  @override
+  Future<ConversationPage> conversations({
+    String? cursor,
+    int limit = 50,
+    String? captureRunId,
+    String? manualCaptureId,
+  }) => delegate.conversations(
+    cursor: cursor,
+    limit: limit,
+    captureRunId: captureRunId,
+    manualCaptureId: manualCaptureId,
+  );
+
+  @override
+  Future<ActivityPage> activities({
+    String? cursor,
+    int limit = 50,
+    String? captureRunId,
+    String? manualCaptureId,
+    String? environmentId,
+    String? conversationId,
+  }) async {
+    final release = conversationId == _blockedConversation ? _release : null;
+    if (release != null) await release.future;
+    return delegate.activities(
+      cursor: cursor,
+      limit: limit,
+      captureRunId: captureRunId,
+      manualCaptureId: manualCaptureId,
+      environmentId: environmentId,
+      conversationId: conversationId,
+    );
+  }
+
+  @override
+  Future<WorkspaceEnvironmentDefault?> workspaceEnvironmentDefault({
+    required String machineId,
+    required String workspaceId,
+  }) => delegate.workspaceEnvironmentDefault(
+    machineId: machineId,
+    workspaceId: workspaceId,
+  );
+
+  @override
+  dynamic noSuchMethod(Invocation invocation) =>
+      throw UnsupportedError('${invocation.memberName}');
+}
+
+final class _DeletionTrackingApi implements ControlApi {
+  _DeletionTrackingApi(this.delegate);
+
+  final PreviewControlApi delegate;
+  int dashboardLoads = 0;
+
+  @override
+  Future<DashboardData> loadDashboard() {
+    dashboardLoads += 1;
+    return delegate.loadDashboard();
+  }
+
+  @override
+  Future<DeletionOutcome> deleteCapture(String captureKey) =>
+      delegate.deleteCapture(captureKey);
+
+  @override
+  Future<DeletionOutcome> deleteEnvironment(String environmentId) =>
+      delegate.deleteEnvironment(environmentId);
+
+  @override
+  Future<CaptureAssignment> captureAssignment(String captureKey) =>
+      delegate.captureAssignment(captureKey);
+
+  @override
+  Future<ConversationPage> conversations({
+    String? cursor,
+    int limit = 50,
+    String? captureRunId,
+    String? manualCaptureId,
+  }) => delegate.conversations(
+    cursor: cursor,
+    limit: limit,
+    captureRunId: captureRunId,
+    manualCaptureId: manualCaptureId,
+  );
+
+  @override
+  Future<ActivityPage> activities({
+    String? cursor,
+    int limit = 50,
+    String? captureRunId,
+    String? manualCaptureId,
+    String? environmentId,
+    String? conversationId,
+  }) => delegate.activities(
+    cursor: cursor,
+    limit: limit,
+    captureRunId: captureRunId,
+    manualCaptureId: manualCaptureId,
+    environmentId: environmentId,
+    conversationId: conversationId,
+  );
+
+  @override
+  Future<WorkspaceEnvironmentDefault?> workspaceEnvironmentDefault({
+    required String machineId,
+    required String workspaceId,
+  }) => delegate.workspaceEnvironmentDefault(
+    machineId: machineId,
+    workspaceId: workspaceId,
+  );
 
   @override
   dynamic noSuchMethod(Invocation invocation) =>

@@ -415,3 +415,55 @@ func currentEnvironmentRevision(ctx context.Context, transaction *sql.Tx, id env
 	}
 	return environment.Revision(revision)
 }
+
+// Retire clears the active revision pointer and drops the working draft.
+//
+// It deliberately leaves environment_revisions alone. Those rows are what a
+// frozen Exchange resolves when a user opens the exact Environment a Turn ran
+// under, and environment_revisions carries a foreign key to the counter row, so
+// removing the counter would be rejected anyway. Retirement is therefore the
+// whole of deletion at this layer: LoadAllActive joins on the active revision,
+// so a retired Environment leaves every live listing at once.
+func (repository *environmentRepository) Retire(
+	ctx context.Context,
+	id environment.EnvironmentID,
+) (bool, error) {
+	permit, err := repository.operations.admit(ctx)
+	if err != nil {
+		return false, err
+	}
+	defer permit.finish()
+	transaction, err := repository.database.BeginTx(permit.context, nil)
+	if err != nil {
+		return false, fmt.Errorf("begin Environment retirement transaction: %w", err)
+	}
+	defer func() { _ = transaction.Rollback() }()
+	result, err := transaction.ExecContext(
+		permit.context,
+		`UPDATE environment_revision_counters
+		 SET active_revision = 0, draft_revision = 0
+		 WHERE environment_id = ? AND active_revision <> 0`,
+		id.String(),
+	)
+	if err != nil {
+		return false, fmt.Errorf("retire Environment: %w", err)
+	}
+	affected, err := result.RowsAffected()
+	if err != nil {
+		return false, err
+	}
+	if affected != 1 {
+		return false, nil
+	}
+	if _, err := transaction.ExecContext(
+		permit.context,
+		`DELETE FROM environment_drafts WHERE environment_id = ?`,
+		id.String(),
+	); err != nil {
+		return false, fmt.Errorf("drop retired Environment draft: %w", err)
+	}
+	if err := transaction.Commit(); err != nil {
+		return false, fmt.Errorf("commit Environment retirement: %w", err)
+	}
+	return true, nil
+}

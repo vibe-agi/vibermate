@@ -83,6 +83,31 @@ final class RunnerTests: XCTestCase {
     XCTAssertEqual(try bridge.read(), historical)
   }
 
+  func testPreferencesBridgeReadsRetiredConversationStateAndWritesCanonicalState() throws {
+    let bridge = try WorkbenchPreferencesBridge(directory: temporaryDirectory)
+    try FileManager.default.createDirectory(
+      at: temporaryDirectory,
+      withIntermediateDirectories: true,
+      attributes: [.posixPermissions: 0o700]
+    )
+    var retired = validPreferencesPayload(section: "captures", language: "en-US")
+    retired["section"] = "conversations"
+    retired["selectedConversationKey"] = "capture_run:run-7"
+    let retiredEncoded = encode(retired)
+    try Data(retiredEncoded.utf8).write(to: bridge.stateURL, options: .atomic)
+    try FileManager.default.setAttributes(
+      [.posixPermissions: 0o600],
+      ofItemAtPath: bridge.stateURL.path
+    )
+
+    XCTAssertEqual(try bridge.read(), retiredEncoded)
+
+    let canonical = validPreferences(section: "captures", language: "en-US")
+    try bridge.write(canonical)
+    XCTAssertEqual(try bridge.read(), canonical)
+    XCTAssertFalse(canonical.contains("selectedConversationKey"))
+  }
+
   func testPreferencesBridgeRefusesASymbolicLinkWithoutReplacingItsTarget() throws {
     try FileManager.default.createDirectory(
       at: temporaryDirectory,
@@ -154,7 +179,6 @@ final class RunnerTests: XCTestCase {
       "theme": "light",
       "section": section,
       "selectedCaptureKey": NSNull(),
-      "selectedConversationKey": NSNull(),
       "selectedEnvironmentId": NSNull(),
       "selectedEnvironmentRevision": NSNull(),
       "selectedEndpointId": NSNull(),

@@ -5,6 +5,7 @@ import 'dart:math';
 import 'dart:typed_data';
 
 import 'control_models.dart';
+import 'provider_origin.dart';
 
 abstract interface class ControlApi {
   Future<DashboardData> loadDashboard();
@@ -104,6 +105,22 @@ abstract interface class ControlApi {
     required ProviderAccount account,
     required String secret,
   });
+
+  /// Retires an Environment. Refused, with holders, while a Capture is running
+  /// or a workspace default names it.
+  Future<DeletionOutcome> deleteEnvironment(String environmentId);
+
+  /// Retires an upstream Endpoint. Refused while a published route names it or
+  /// it still owns an Account.
+  Future<DeletionOutcome> deleteUpstreamEndpoint(String endpointId);
+
+  /// Deletes a Capture and every piece of evidence scoped to it. Refused while
+  /// that Capture is still running.
+  Future<DeletionOutcome> deleteCapture(String captureKey);
+
+  /// Empties the evidence archive, keeping configuration. Refused while any
+  /// Capture is running.
+  Future<DeletionOutcome> clearEvidence();
 
   Future<ProviderAccountDeleteResult> deleteProviderAccount(
     ProviderAccount account,
@@ -718,7 +735,7 @@ final class HttpControlApi implements ControlApi {
   }) async {
     if (!_validResourceId(id) ||
         !_validDisplayLabel(displayName) ||
-        !_validProviderOrigin(origin) ||
+        !isCanonicalProviderOrigin(origin) ||
         !const {'anthropic', 'openai_compatible'}.contains(kind)) {
       throw const ControlContractException(
         'upstream Endpoint input is invalid',
@@ -834,6 +851,60 @@ final class HttpControlApi implements ControlApi {
     return ProviderAccountDeleteResult.fromJson(
       payload,
       'providerAccountDelete',
+    );
+  }
+
+  @override
+  Future<DeletionOutcome> deleteEnvironment(String environmentId) => _delete(
+    '/api/v1/environments/${Uri.encodeComponent(environmentId)}',
+    'environmentDelete',
+    valid: _validResourceId(environmentId),
+    subject: 'Environment ID',
+  );
+
+  @override
+  Future<DeletionOutcome> deleteUpstreamEndpoint(String endpointId) => _delete(
+    '/api/v1/upstream-endpoints/${Uri.encodeComponent(endpointId)}',
+    'upstreamEndpointDelete',
+    valid: _validResourceId(endpointId),
+    subject: 'Upstream Endpoint ID',
+  );
+
+  @override
+  Future<DeletionOutcome> deleteCapture(String captureKey) => _delete(
+    '/api/v1/captures/${Uri.encodeComponent(captureKey)}',
+    'captureDelete',
+    valid:
+        captureKey.startsWith('managed_run:') ||
+        captureKey.startsWith('manual_capture:'),
+    subject: 'Capture key',
+  );
+
+  @override
+  Future<DeletionOutcome> clearEvidence() async => DeletionOutcome.fromJson(
+    await _mutation(
+      'POST',
+      '/api/v1/evidence/actions/clear',
+      expectedRevision: 0,
+    ),
+    'evidenceClear',
+  );
+
+  /// Every destructive operation answers the same shape, so they share one
+  /// call. The expected revision is deliberately absent: a delete is guarded by
+  /// its holders, not by a revision the user would have to hold on to.
+  Future<DeletionOutcome> _delete(
+    String path,
+    String contractPath, {
+    required bool valid,
+    required String subject,
+  }) async {
+    if (!valid) {
+      throw ControlContractException('$subject is invalid');
+    }
+    return DeletionOutcome.fromJson(
+      await _mutation('DELETE', path, expectedRevision: 0),
+      contractPath,
     );
   }
 
@@ -1449,18 +1520,6 @@ final class HttpControlApi implements ControlApi {
       value.trim() == value &&
       utf8.encode(value).length <= 256 &&
       !RegExp(r'[\u0000-\u001f\u007f]').hasMatch(value);
-
-  static bool _validProviderOrigin(String value) {
-    final parsed = Uri.tryParse(value);
-    return parsed != null &&
-        parsed.scheme == 'https' &&
-        parsed.host.isNotEmpty &&
-        parsed.userInfo.isEmpty &&
-        !parsed.hasQuery &&
-        !parsed.hasFragment &&
-        (parsed.path.isEmpty || parsed.path == '/') &&
-        parsed.toString() == parsed.origin;
-  }
 
   static bool _validSecret(String value) =>
       value.isNotEmpty &&

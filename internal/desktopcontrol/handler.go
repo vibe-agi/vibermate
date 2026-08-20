@@ -29,6 +29,7 @@ import (
 	"github.com/vibe-agi/vibermate/internal/productruntime"
 	"github.com/vibe-agi/vibermate/internal/provideraccount"
 	"github.com/vibe-agi/vibermate/internal/rawevidence"
+	"github.com/vibe-agi/vibermate/internal/resourcedeletion"
 	"github.com/vibe-agi/vibermate/internal/toolapproval"
 	"github.com/vibe-agi/vibermate/internal/upstreamendpoint"
 	"github.com/vibe-agi/vibermate/internal/workspacedefault"
@@ -129,6 +130,7 @@ type Options struct {
 	CaptureRuns       capturerun.Reader
 	ManualCaptures    manualcapture.Controller
 	WorkspaceDefaults workspacedefault.Controller
+	Archive           resourcedeletion.Archive
 	Clock             Clock
 }
 
@@ -149,6 +151,7 @@ type Handler struct {
 	offline             OfflineActions
 
 	connectionRules   ConnectionRuleController
+	archive           resourcedeletion.Archive
 	captureRuns       capturerun.Reader
 	manualCaptures    manualcapture.Controller
 	workspaceDefaults workspacedefault.Controller
@@ -204,6 +207,7 @@ func New(options Options) (*Handler, error) {
 		rawEvidence:         options.RawEvidence,
 		offline:             options.Offline,
 		connectionRules:     options.ConnectionRules,
+		archive:             options.Archive,
 		captureRuns:         options.CaptureRuns,
 		manualCaptures:      options.ManualCaptures,
 		workspaceDefaults:   options.WorkspaceDefaults,
@@ -229,6 +233,10 @@ func New(options Options) (*Handler, error) {
 	handler.mux.HandleFunc("POST /api/v1/provider-accounts", handler.createProviderAccount)
 	handler.mux.HandleFunc("GET /api/v1/provider-accounts/{accountId}", handler.getProviderAccount)
 	handler.mux.HandleFunc("DELETE /api/v1/provider-accounts/{accountId}", handler.deleteProviderAccount)
+	handler.mux.HandleFunc("DELETE /api/v1/environments/{environmentId}", handler.deleteEnvironment)
+	handler.mux.HandleFunc("DELETE /api/v1/upstream-endpoints/{endpointId}", handler.deleteUpstreamEndpoint)
+	handler.mux.HandleFunc("DELETE /api/v1/captures/{captureKey}", handler.deleteCapture)
+	handler.mux.HandleFunc("POST /api/v1/evidence/actions/clear", handler.clearArchive)
 	handler.mux.HandleFunc("PUT /api/v1/provider-accounts/{accountId}/credential", handler.replaceProviderAccountCredential)
 	handler.mux.HandleFunc("GET /api/v1/environments/{environmentId}", handler.getEnvironment)
 	handler.mux.HandleFunc("GET /api/v1/environments/{environmentId}/draft", handler.getEnvironmentDraft)
@@ -486,6 +494,11 @@ func (handler *Handler) listActivities(
 		writeProblem(writer, http.StatusServiceUnavailable, ReasonRuntimeUnavailable)
 		return
 	}
+	// A request preview is additive list chrome, not Activity authority. One
+	// damaged or temporarily unreadable retained transcript must not hide the
+	// rest of a Capture. The Exchange detail endpoint still performs the full
+	// integrity check and reports the exact evidence failure when it is opened.
+	_ = handler.attachActivityRequestPreviews(request.Context(), &view)
 	writeJSON(writer, http.StatusOK, view)
 }
 
@@ -581,6 +594,34 @@ func (handler *Handler) attachActivityIdentities(
 		case errors.Is(err, activity.ErrExchangeNotFound):
 			continue
 		default:
+			return err
+		}
+	}
+	return nil
+}
+
+func (handler *Handler) attachActivityRequestPreviews(
+	ctx context.Context,
+	view *ActivityPage,
+) error {
+	if view == nil || len(view.Items) == 0 {
+		return nil
+	}
+	exchangeIDs := make([]string, len(view.Items))
+	for index := range view.Items {
+		exchangeIDs[index] = view.Items[index].ID
+	}
+	previews, err := handler.contents.RequestPreviews(ctx, exchangeIDs)
+	if err != nil {
+		return err
+	}
+	for index := range view.Items {
+		preview, exists := previews[view.Items[index].ID]
+		if !exists {
+			continue
+		}
+		view.Items[index].RequestPreview = &preview
+		if err := view.Items[index].Validate(); err != nil {
 			return err
 		}
 	}
