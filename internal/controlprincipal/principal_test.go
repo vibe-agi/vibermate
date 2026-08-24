@@ -2,6 +2,7 @@ package controlprincipal_test
 
 import (
 	"bytes"
+	"context"
 	"encoding/base64"
 	"testing"
 
@@ -69,7 +70,7 @@ func TestAuthorityRotatesByRevisionWithoutAuthenticationGapAndRevokes(
 	if err != nil {
 		t.Fatal(err)
 	}
-	if principal, ok := authority.Authenticate(first); !ok ||
+	if principal, ok := authority.Authenticate(context.Background(), first); !ok ||
 		principal.CredentialRevision() != 1 {
 		t.Fatal("initial control credential was rejected")
 	}
@@ -80,24 +81,24 @@ func TestAuthorityRotatesByRevisionWithoutAuthenticationGapAndRevokes(
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, ok := authority.Authenticate(first); !ok {
+	if _, ok := authority.Authenticate(context.Background(), first); !ok {
 		t.Fatal("prepared rotation rejected the current credential")
 	}
-	if principal, ok := authority.Authenticate(second); !ok ||
+	if principal, ok := authority.Authenticate(context.Background(), second); !ok ||
 		principal.CredentialRevision() != 2 {
 		t.Fatal("prepared rotation rejected the candidate credential")
 	}
 	if err := rotation.Commit(); err != nil {
 		t.Fatal(err)
 	}
-	if _, ok := authority.Authenticate(first); ok {
+	if _, ok := authority.Authenticate(context.Background(), first); ok {
 		t.Fatal("committed rotation retained the previous credential")
 	}
-	if _, ok := authority.Authenticate(second); !ok {
+	if _, ok := authority.Authenticate(context.Background(), second); !ok {
 		t.Fatal("committed rotation rejected the current credential")
 	}
 	authority.Revoke()
-	if _, ok := authority.Authenticate(second); ok {
+	if _, ok := authority.Authenticate(context.Background(), second); ok {
 		t.Fatal("revoked authority accepted a credential")
 	}
 }
@@ -133,6 +134,70 @@ func TestAuthorityRejectsCrossConnectionAndSkippedRevisionRotation(t *testing.T)
 		}); err == nil {
 			t.Fatalf("invalid rotation principal=%+v succeeded", principal)
 		}
+	}
+}
+
+func TestRemoteGuestAndEnrolledClientCarryDifferentAuthenticatedMachineScopes(t *testing.T) {
+	t.Parallel()
+
+	guest, err := controlprincipal.New(controlprincipal.Attributes{
+		ID:                 "guest:one",
+		Kind:               controlprincipal.KindRemoteGuest,
+		MachineID:          "machine-source-one",
+		CredentialRevision: 1,
+		AllowedGrantKinds:  []controlprincipal.GrantKind{controlprincipal.GrantCaptureRun},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if binding, ok := guest.ProxyClientBindingID(); ok || binding != "" {
+		t.Fatalf("guest received durable binding %q", binding)
+	}
+	if machine, ok := guest.MachineID(); !ok || machine != "machine-source-one" {
+		t.Fatalf("guest machine = %q, %v", machine, ok)
+	}
+
+	enrolled, err := controlprincipal.New(controlprincipal.Attributes{
+		ID:                    "principal:one",
+		Kind:                  controlprincipal.KindEnrolledClient,
+		ProxyClientBindingID:  "binding:one",
+		MachineRegistrationID: "registration:one",
+		MachineID:             "machine-source-one",
+		CredentialRevision:    1,
+		AllowedGrantKinds:     []controlprincipal.GrantKind{controlprincipal.GrantCaptureRun},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if binding, ok := enrolled.ProxyClientBindingID(); !ok || binding != "binding:one" {
+		t.Fatalf("enrolled binding = %q, %v", binding, ok)
+	}
+	if machine, ok := enrolled.MachineID(); !ok || machine != "machine-source-one" {
+		t.Fatalf("enrolled machine = %q, %v", machine, ok)
+	}
+}
+
+func TestRuntimeUserPrincipalFreezesAuthenticatedDeviceAttribution(t *testing.T) {
+	t.Parallel()
+
+	principal, err := controlprincipal.New(controlprincipal.Attributes{
+		ID:                 "runtime-user:login-one",
+		Kind:               controlprincipal.KindRuntimeUser,
+		MachineID:          "machine-source-one",
+		DeviceName:         "Linux workstation",
+		RuntimeUserID:      "user.source-one",
+		LoginSessionID:     "login.source-one",
+		CredentialRevision: 1,
+		AllowedGrantKinds:  []controlprincipal.GrantKind{controlprincipal.GrantCaptureRun},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if device, ok := principal.DeviceName(); !ok || device != "Linux workstation" {
+		t.Fatalf("Runtime User device = %q, %v", device, ok)
+	}
+	if !principal.Valid() {
+		t.Fatal("Runtime User principal became invalid after construction")
 	}
 }
 

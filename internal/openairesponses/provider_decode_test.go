@@ -140,15 +140,69 @@ func TestProviderStreamUsesCompletedItemsWhenTerminalOutputIsEmpty(t *testing.T)
 	}
 	response := pending.DecodedResponse()
 	if len(response.Blocks) != 1 || response.Blocks[0].Kind != protocolcore.BlockText ||
-		response.Blocks[0].Text != "ready" {
-		t.Fatalf("decoded response blocks = %#v", response.Blocks)
+		response.Blocks[0].Text != "ready" ||
+		response.RequestedModel != "gpt-5.6-sol" ||
+		response.EffectiveModel != "provider-model" ||
+		response.ReportedModel != "provider-model" {
+		t.Fatalf("decoded response = %#v", response)
+	}
+	released, err := pending.Approve()
+	if err != nil {
+		t.Fatalf("Approve() error = %v", err)
+	}
+	if !bytes.Contains(released, []byte(`"model":"gpt-5.6-sol"`)) ||
+		bytes.Contains(released, []byte(`"model":"provider-model"`)) {
+		t.Fatalf("approved stream model was not restored for the client: %s", released)
+	}
+}
+
+func TestProviderStreamPreservesExactWireWithoutModelMapping(t *testing.T) {
+	t.Parallel()
+
+	request := streamingRequestFixture(t)
+	var err error
+	request, err = request.WithEffectiveModel(request.RequestedModel)
+	if err != nil {
+		t.Fatal(err)
+	}
+	stream, err := newTestCodec(t).NewProviderStream(request)
+	if err != nil {
+		t.Fatalf("NewProviderStream() error = %v", err)
+	}
+	item := json.RawMessage(`{
+		"id":"msg_passthrough","type":"message","status":"completed",
+		"role":"assistant","content":[{"type":"output_text","text":"ready"}]
+	}`)
+	terminal := json.RawMessage(`{
+		"id":"resp_passthrough","created_at":1,"status":"completed",
+		"model":"provider-model","output":[],
+		"usage":{"input_tokens":4,"input_tokens_details":{"cached_tokens":0},
+		"output_tokens":2,"output_tokens_details":{"reasoning_tokens":0}}
+	}`)
+	encoded := appendResponseEvent(t, "response.output_item.done", map[string]any{
+		"type":            "response.output_item.done",
+		"sequence_number": 1,
+		"output_index":    0,
+		"item":            item,
+	})
+	encoded = append(encoded, appendResponseEvent(t, "response.completed", map[string]any{
+		"type":            "response.completed",
+		"sequence_number": 2,
+		"response":        terminal,
+	})...)
+	if _, err := stream.Feed(context.Background(), encoded); err != nil {
+		t.Fatalf("Feed() error = %v", err)
+	}
+	pending, err := stream.FinishDecoded(context.Background())
+	if err != nil {
+		t.Fatalf("FinishDecoded() error = %v", err)
 	}
 	released, err := pending.Approve()
 	if err != nil {
 		t.Fatalf("Approve() error = %v", err)
 	}
 	if !bytes.Equal(released, encoded) {
-		t.Fatal("approved stream does not preserve the exact provider wire")
+		t.Fatal("unmapped stream did not preserve the exact provider wire")
 	}
 }
 
@@ -222,6 +276,126 @@ func TestProviderStreamRecordsReasoningSummaryWithoutExposingEncryptedStateAsTex
 		response.ProtocolEvidence[3].Name != "openai_responses.output.0001.metadata.turn_id" ||
 		response.ProtocolEvidence[3].Value != "turn_1" {
 		t.Fatalf("response protocol evidence = %#v", response.ProtocolEvidence)
+	}
+}
+
+func TestProviderStreamReleasesOnlyPortableConversationHistory(t *testing.T) {
+	t.Parallel()
+
+	request := streamingRequestFixture(t)
+	var err error
+	request, err = request.WithEffectiveModel(request.RequestedModel)
+	if err != nil {
+		t.Fatal(err)
+	}
+	stream, err := newTestCodec(t).NewProviderStream(request)
+	if err != nil {
+		t.Fatalf("NewProviderStream() error = %v", err)
+	}
+	reasoning := json.RawMessage(`{
+		"id":"rs_private",
+		"type":"reasoning",
+		"summary":[{"type":"summary_text","text":"portable-looking provider summary"}],
+		"content":[{"type":"reasoning_text","text":"provider-private plaintext reasoning"}],
+		"encrypted_content":null,
+		"status":"completed"
+	}`)
+	message := json.RawMessage(`{
+		"id":"msg_portable",
+		"type":"message",
+		"status":"completed",
+		"role":"assistant",
+		"content":[{"type":"output_text","text":"portable answer"}]
+	}`)
+	terminal := map[string]any{
+		"id":         "resp_portable",
+		"created_at": 1,
+		"status":     "completed",
+		"model":      request.RequestedModel,
+		"output":     []json.RawMessage{reasoning, message},
+		"usage":      map[string]any{},
+	}
+	encoded := appendResponseEvent(t, "response.output_item.done", map[string]any{
+		"type": "response.output_item.done", "sequence_number": 1,
+		"output_index": 0, "item": reasoning,
+	})
+	encoded = append(encoded, appendResponseEvent(t, "response.reasoning_text.delta", map[string]any{
+		"type": "response.reasoning_text.delta", "sequence_number": 2,
+		"output_index": 0, "item_id": "rs_private", "content_index": 0,
+		"delta": "provider-private plaintext reasoning",
+	})...)
+	encoded = append(encoded, appendResponseEvent(t, "response.output_item.done", map[string]any{
+		"type": "response.output_item.done", "sequence_number": 3,
+		"output_index": 1, "item": message,
+	})...)
+	encoded = append(encoded, appendResponseEvent(t, "response.completed", map[string]any{
+		"type": "response.completed", "sequence_number": 4, "response": terminal,
+	})...)
+	if _, err := stream.Feed(context.Background(), encoded); err != nil {
+		t.Fatalf("Feed() error = %v", err)
+	}
+	pending, err := stream.FinishDecoded(context.Background())
+	if err != nil {
+		t.Fatalf("FinishDecoded() error = %v", err)
+	}
+	response := pending.DecodedResponse()
+	if len(response.ProviderExtensions) != 2 ||
+		response.ProviderExtensions[0].Kind() != protocolcore.ProviderExtensionReasoningSummary ||
+		response.ProviderExtensions[1].Kind() != protocolcore.ProviderExtensionReasoningContent {
+		t.Fatalf("provider reasoning evidence = %#v", response.ProviderExtensions)
+	}
+	released, err := pending.Approve()
+	if err != nil {
+		t.Fatalf("Approve() error = %v", err)
+	}
+	decoder, err := ssewire.NewDecoder(ssewire.DefaultOptions())
+	if err != nil {
+		t.Fatal(err)
+	}
+	events, err := decoder.Feed(released)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := decoder.Finish(); err != nil {
+		t.Fatal(err)
+	}
+	if len(events) != 2 {
+		t.Fatalf("portable client event count = %d; wire=%s", len(events), released)
+	}
+	var itemEvent struct {
+		Type        string          `json:"type"`
+		OutputIndex int             `json:"output_index"`
+		Item        json.RawMessage `json:"item"`
+	}
+	if err := json.Unmarshal(events[0].Data, &itemEvent); err != nil {
+		t.Fatal(err)
+	}
+	var item inputTypeWire
+	if err := json.Unmarshal(itemEvent.Item, &item); err != nil {
+		t.Fatal(err)
+	}
+	if itemEvent.Type != "response.output_item.done" ||
+		itemEvent.OutputIndex != 0 || item.Type != "message" {
+		t.Fatalf("portable output item = %#v / %s", itemEvent, itemEvent.Item)
+	}
+	var completed struct {
+		Type     string `json:"type"`
+		Response struct {
+			Output []json.RawMessage `json:"output"`
+		} `json:"response"`
+	}
+	if err := json.Unmarshal(events[1].Data, &completed); err != nil {
+		t.Fatal(err)
+	}
+	if completed.Type != "response.completed" || len(completed.Response.Output) != 1 {
+		t.Fatalf("portable terminal = %#v", completed)
+	}
+	if err := json.Unmarshal(completed.Response.Output[0], &item); err != nil {
+		t.Fatal(err)
+	}
+	if item.Type != "message" || bytes.Contains(released, []byte(`"type":"reasoning"`)) ||
+		bytes.Contains(released, []byte("provider-private plaintext reasoning")) {
+		t.Fatalf("released stream retained provider-private reasoning: %s", released)
 	}
 }
 

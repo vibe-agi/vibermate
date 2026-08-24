@@ -47,7 +47,7 @@ const (
 )
 
 type PrincipalAuthenticator interface {
-	Authenticate(string) (controlprincipal.Principal, bool)
+	Authenticate(context.Context, string) (controlprincipal.Principal, bool)
 }
 
 type CaptureRunIssuer interface {
@@ -76,11 +76,12 @@ type Handler struct {
 }
 
 type CreateRequest struct {
-	EnvironmentID  string   `json:"environmentId"`
-	CWD            string   `json:"cwd"`
-	Command        []string `json:"command"`
-	ExecutablePath string   `json:"executablePath"`
-	LocalUserLabel string   `json:"localUserLabel,omitempty"`
+	EnvironmentID  string                     `json:"environmentId"`
+	CWD            string                     `json:"cwd"`
+	Command        []string                   `json:"command"`
+	ExecutablePath string                     `json:"executablePath"`
+	LocalUserLabel string                     `json:"localUserLabel,omitempty"`
+	Companion      *CompanionAttestationInput `json:"companion,omitempty"`
 }
 
 type AttachRequest struct {
@@ -184,6 +185,11 @@ func (handler *Handler) create(
 			return
 		}
 	}
+	companion, err := input.Companion.domain()
+	if err != nil {
+		writeProblem(writer, http.StatusUnprocessableEntity, ReasonInvalidCaptureRun)
+		return
+	}
 	grant, err := handler.issuer.IssueCaptureRun(
 		request.Context(),
 		principal,
@@ -193,6 +199,7 @@ func (handler *Handler) create(
 			Command:        append([]string(nil), input.Command...),
 			ExecutablePath: input.ExecutablePath,
 			LocalUserLabel: input.LocalUserLabel,
+			Companion:      companion,
 		},
 	)
 	if err != nil {
@@ -209,9 +216,11 @@ func (handler *Handler) create(
 		Signer:               clientSignerViewOf(grant.Signer),
 		ExecutablePath:       grant.ExecutablePath,
 		ProxyAddress:         grant.ProxyAddress,
+		ProxyDelivery:        grant.ProxyDelivery,
 		ProxyToken:           grant.Run.ProxyCapability.Value(),
 		RunCapability:        grant.Run.ControlCapability.Value(),
 		RootPEMPath:          grant.RootPEMPath,
+		RootPEM:              grant.RootPEM,
 		ProtectedAuthorities: append([]string{}, grant.ProtectedAuthorities...),
 		ManagedCredentialAuthorities: append(
 			[]string{},
@@ -306,7 +315,7 @@ func (handler *Handler) authenticatePrincipal(
 		return controlprincipal.Principal{}, false
 	}
 	credential := strings.TrimPrefix(authorization[0], "Bearer ")
-	return handler.principals.Authenticate(credential)
+	return handler.principals.Authenticate(request.Context(), credential)
 }
 
 func consumeRunCapability(

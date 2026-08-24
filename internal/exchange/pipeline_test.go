@@ -14,6 +14,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/vibe-agi/vibermate/internal/agentconversation"
 	"github.com/vibe-agi/vibermate/internal/anthropicchat"
 	"github.com/vibe-agi/vibermate/internal/captureadmission"
 	"github.com/vibe-agi/vibermate/internal/environment"
@@ -33,18 +34,19 @@ import (
 )
 
 func TestManagedRequestUsesOnlyFrozenEnvironmentRouteAndAccount(t *testing.T) {
+	const exactUpstreamModel = "dashscope_deepseek-v4-flash-0731"
 	plan := mustEnvironmentRequestPlan(t, testPlanOptions{
-		mode:           environment.PlanModeManaged,
+		destination:    environment.DestinationKindUpstream,
 		providerOrigin: "https://provider.example/v1",
 		backend:        protocolspec.DialectOpenAIChat,
-		modelMode:      modelModeFixed,
-		fixedModel:     "gpt-provider",
+		modelMode:      environment.ModelModeMap,
+		mappedModel:    exactUpstreamModel,
 		accounts:       []testAccount{{id: "account.primary", revision: 3, epoch: 7}},
 		preferred:      "account.primary",
 	})
 	authority := newAccountAuthority(t, testAccount{id: "account.primary", revision: 3, epoch: 7})
 	provider := &providerDouble{results: []providerResult{{
-		response: jsonResponse(http.StatusOK, completeProviderResponse("gpt-provider")),
+		response: jsonResponse(http.StatusOK, completeProviderResponse(exactUpstreamModel)),
 	}}}
 	observer := &attemptObserverDouble{}
 	pipeline := newTestPipeline(t, authority, provider, approvedDecisions(), observer)
@@ -85,7 +87,7 @@ func TestManagedRequestUsesOnlyFrozenEnvironmentRouteAndAccount(t *testing.T) {
 	if err := json.Unmarshal(frozen.Body(), &providerBody); err != nil {
 		t.Fatal(err)
 	}
-	if providerBody["model"] != "gpt-provider" {
+	if providerBody["model"] != exactUpstreamModel {
 		t.Fatalf("provider model = %#v", providerBody["model"])
 	}
 	if got := authority.snapshot(); len(got) != 1 || got[0].AccountID() != "account.primary" ||
@@ -102,13 +104,128 @@ func TestManagedRequestUsesOnlyFrozenEnvironmentRouteAndAccount(t *testing.T) {
 	}
 }
 
-func TestManagedRequestPublishesFrozenConversationEvidence(t *testing.T) {
+func TestManagedMessagesSecondTurnPreservesCitedAssistantHistory(t *testing.T) {
+	const mappedModel = "dashscope:deepseek-v4-flash-0731"
 	plan := mustEnvironmentRequestPlan(t, testPlanOptions{
-		mode:           environment.PlanModeManaged,
+		destination:    environment.DestinationKindUpstream,
+		providerOrigin: "http://127.0.0.1:23333",
+		backend:        protocolspec.DialectAnthropicMessages,
+		modelMode:      environment.ModelModeMap,
+		mappedModel:    mappedModel,
+		accounts: []testAccount{{
+			id: "account.primary", revision: 3, epoch: 7,
+		}},
+		preferred: "account.primary",
+	})
+	provider := &providerDouble{results: []providerResult{{
+		response: jsonResponse(http.StatusOK, []byte(`{
+			"id":"msg_second_turn","type":"message","role":"assistant",
+			"model":"`+mappedModel+`",
+			"content":[{"type":"text","text":"second answer","citations":[]}],
+			"stop_reason":"end_turn","stop_sequence":null,
+			"usage":{"input_tokens":8,"output_tokens":3}
+		}`)),
+	}}}
+	content := &contentObserverDouble{}
+	pipeline := newTestPipelineWithContentObserver(
+		t,
+		newAccountAuthority(
+			t,
+			testAccount{id: "account.primary", revision: 3, epoch: 7},
+		),
+		provider,
+		approvedDecisions(),
+		&attemptObserverDouble{},
+		content,
+	)
+	defer shutdownPipeline(t, pipeline)
+
+	downstream := &downstreamRecorder{}
+	result, err := pipeline.Execute(
+		context.Background(),
+		mustClientRequest(
+			t,
+			"exchange-messages-second-turn",
+			plan,
+			secondTurnCitedClientRequest(),
+		),
+		downstream,
+	)
+	if err != nil || result.Outcome != AttemptSucceeded {
+		t.Fatalf("Execute() = %+v, %v", result, err)
+	}
+	requests := provider.requestsSnapshot()
+	if len(requests) != 1 ||
+		requests[0].RelativePath() != anthropicchat.MessagesProviderRelativePath ||
+		!bytes.Contains(requests[0].Body(), []byte(`"citations":[]`)) ||
+		!bytes.Contains(requests[0].Body(), []byte(`"model":"`+mappedModel+`"`)) {
+		t.Fatalf("provider request = %+v", requests)
+	}
+	var clientBody map[string]any
+	if err := json.Unmarshal(downstream.bytesSnapshot(), &clientBody); err != nil {
+		t.Fatal(err)
+	}
+	if clientBody["model"] != "claude-client-alias" {
+		t.Fatalf("client response model = %#v", clientBody["model"])
+	}
+	observation, ok := content.latest()
+	if !ok || observation.Response == nil ||
+		observation.Response.RequestedModel != "claude-client-alias" ||
+		observation.Response.EffectiveModel != mappedModel ||
+		observation.Response.ReportedModel != mappedModel {
+		t.Fatalf("content observation = %+v", observation)
+	}
+}
+
+func TestUnmappedClientModelIsPreservedExactly(t *testing.T) {
+	const unrelatedUpstreamModel = "relay:only-for-another-client-model"
+	plan := mustEnvironmentRequestPlan(t, testPlanOptions{
+		destination:    environment.DestinationKindUpstream,
 		providerOrigin: "https://provider.example/v1",
 		backend:        protocolspec.DialectOpenAIChat,
-		modelMode:      modelModeFixed,
-		fixedModel:     "gpt-provider",
+		modelMode:      environment.ModelModeMap,
+		modelMappings: []environment.ModelMapping{{
+			RequestedModel: "another-client-model",
+			UpstreamModel:  unrelatedUpstreamModel,
+		}},
+		accounts:  []testAccount{{id: "account.primary", revision: 3, epoch: 7}},
+		preferred: "account.primary",
+	})
+	provider := &providerDouble{results: []providerResult{{
+		response: jsonResponse(http.StatusOK, completeProviderResponse("claude-client-alias")),
+	}}}
+	pipeline := newTestPipeline(
+		t,
+		newAccountAuthority(t, testAccount{id: "account.primary", revision: 3, epoch: 7}),
+		provider,
+		approvedDecisions(),
+		&attemptObserverDouble{},
+	)
+	defer shutdownPipeline(t, pipeline)
+
+	if _, err := pipeline.Execute(
+		context.Background(),
+		mustClientRequest(t, "exchange-unmapped-model", plan, completeClientRequest()),
+		&downstreamRecorder{},
+	); err != nil {
+		t.Fatal(err)
+	}
+	var providerBody map[string]any
+	if err := json.Unmarshal(provider.requestsSnapshot()[0].Body(), &providerBody); err != nil {
+		t.Fatal(err)
+	}
+	if providerBody["model"] != "claude-client-alias" {
+		t.Fatalf("unmapped provider model = %#v", providerBody["model"])
+	}
+}
+
+func TestManagedRequestPublishesFrozenConversationEvidence(t *testing.T) {
+	plan := mustEnvironmentRequestPlan(t, testPlanOptions{
+		destination:    environment.DestinationKindUpstream,
+		providerOrigin: "https://provider.example/v1",
+		backend:        protocolspec.DialectOpenAIChat,
+		modelMode:      environment.ModelModeMap,
+		mappedModel:    "gpt-provider",
 		accounts:       []testAccount{{id: "account.primary", revision: 3, epoch: 7}},
 		preferred:      "account.primary",
 	})
@@ -172,11 +289,11 @@ func TestManagedRequestPublishesFrozenConversationEvidence(t *testing.T) {
 
 func TestLocalIncrementalEvidenceNeverTruncatesTheUpstreamRequest(t *testing.T) {
 	plan := mustEnvironmentRequestPlan(t, testPlanOptions{
-		mode:           environment.PlanModeManaged,
+		destination:    environment.DestinationKindUpstream,
 		providerOrigin: "https://provider.example/v1",
 		backend:        protocolspec.DialectOpenAIChat,
-		modelMode:      modelModeFixed,
-		fixedModel:     "gpt-provider",
+		modelMode:      environment.ModelModeMap,
+		mappedModel:    "gpt-provider",
 		accounts:       []testAccount{{id: "account.primary", revision: 3, epoch: 7}},
 		preferred:      "account.primary",
 	})
@@ -241,11 +358,11 @@ func TestLocalIncrementalEvidenceNeverTruncatesTheUpstreamRequest(t *testing.T) 
 
 func TestDisabledContentRecordingCreatesNoConversationEvidence(t *testing.T) {
 	plan := mustEnvironmentRequestPlan(t, testPlanOptions{
-		mode:           environment.PlanModeManaged,
+		destination:    environment.DestinationKindUpstream,
 		providerOrigin: "https://provider.example/v1",
 		backend:        protocolspec.DialectOpenAIChat,
-		modelMode:      modelModeFixed,
-		fixedModel:     "gpt-provider",
+		modelMode:      environment.ModelModeMap,
+		mappedModel:    "gpt-provider",
 		accounts:       []testAccount{{id: "account.primary", revision: 3, epoch: 7}},
 		preferred:      "account.primary",
 		recording: environment.ContentRecordingPolicy{
@@ -280,11 +397,11 @@ func TestDisabledContentRecordingCreatesNoConversationEvidence(t *testing.T) {
 
 func TestContentObserverFailureDoesNotChangeCommittedExchange(t *testing.T) {
 	plan := mustEnvironmentRequestPlan(t, testPlanOptions{
-		mode:           environment.PlanModeManaged,
+		destination:    environment.DestinationKindUpstream,
 		providerOrigin: "https://provider.example/v1",
 		backend:        protocolspec.DialectOpenAIChat,
-		modelMode:      modelModeFixed,
-		fixedModel:     "gpt-provider",
+		modelMode:      environment.ModelModeMap,
+		mappedModel:    "gpt-provider",
 		accounts:       []testAccount{{id: "account.primary", revision: 3, epoch: 7}},
 		preferred:      "account.primary",
 	})
@@ -316,12 +433,12 @@ func TestContentObserverFailureDoesNotChangeCommittedExchange(t *testing.T) {
 	}
 }
 
-func TestOriginalPassthroughPreservesClientEnvelopeAndResponse(t *testing.T) {
+func TestOriginalDestinationPreservesClientEnvelopeAndResponse(t *testing.T) {
 	plan := mustEnvironmentRequestPlan(t, testPlanOptions{
-		mode:           environment.PlanModeOriginalPassthrough,
+		destination:    environment.DestinationKindOriginal,
 		providerOrigin: "https://api.anthropic.com",
 		backend:        protocolspec.DialectAnthropicMessages,
-		modelMode:      modelModePreserve,
+		modelMode:      environment.ModelModePassthrough,
 	})
 	responseBody := []byte(`{
 		"id":"msg_original","type":"message","role":"assistant","model":"claude-client-alias",
@@ -385,12 +502,12 @@ func TestOriginalPassthroughPreservesClientEnvelopeAndResponse(t *testing.T) {
 	}
 }
 
-func TestOriginalPassthroughPreservesGzipStreamAndRecordsDecodedResponse(t *testing.T) {
+func TestOriginalDestinationPreservesGzipStreamAndRecordsDecodedResponse(t *testing.T) {
 	plan := mustEnvironmentRequestPlan(t, testPlanOptions{
-		mode:           environment.PlanModeOriginalPassthrough,
+		destination:    environment.DestinationKindOriginal,
 		providerOrigin: "https://api.anthropic.com",
 		backend:        protocolspec.DialectAnthropicMessages,
-		modelMode:      modelModePreserve,
+		modelMode:      environment.ModelModePassthrough,
 	})
 	wire := []byte(strings.Join([]string{
 		`event: message_start`,
@@ -464,10 +581,10 @@ func TestOriginalPassthroughPreservesGzipStreamAndRecordsDecodedResponse(t *test
 func TestOriginalResponsesAcceptsCanceledReadAfterProvenTerminal(t *testing.T) {
 	plan := mustEnvironmentRequestPlan(t, testPlanOptions{
 		clientProtocol: environment.ClientProtocolOpenAIResponses,
-		mode:           environment.PlanModeOriginalPassthrough,
+		destination:    environment.DestinationKindOriginal,
 		providerOrigin: "https://api.openai.com",
 		backend:        protocolspec.DialectOpenAIResponses,
-		modelMode:      modelModePreserve,
+		modelMode:      environment.ModelModePassthrough,
 	})
 	item := json.RawMessage(`{
 		"id":"msg_original_responses",
@@ -522,13 +639,9 @@ func TestOriginalResponsesAcceptsCanceledReadAfterProvenTerminal(t *testing.T) {
 	}
 }
 
-func TestManagedSameOriginClientCredentialPathRemainsSemantic(t *testing.T) {
+func TestOriginalDestinationClientCredentialPathRemainsSemantic(t *testing.T) {
 	plan := mustEnvironmentRequestPlan(t, testPlanOptions{
-		mode:           environment.PlanModeManaged,
-		providerOrigin: "https://api.anthropic.com",
-		backend:        protocolspec.DialectAnthropicMessages,
-		modelMode:      modelModePassthrough,
-		clientAccount:  true,
+		destination: environment.DestinationKindOriginal,
 	})
 	providerBody := []byte(`{
 		"id":"msg_provider","type":"message","role":"assistant","model":"claude-provider",
@@ -551,7 +664,6 @@ func TestManagedSameOriginClientCredentialPathRemainsSemantic(t *testing.T) {
 	}
 	requests := provider.requestsSnapshot()
 	if len(requests) != 1 || requests[0].Headers().Get("X-Api-Key") != "client-secret" ||
-		requests[0].Headers().Get("Anthropic-Version") == "" ||
 		requests[0].CredentialMode() != providerauth.CredentialClientPassthrough {
 		t.Fatalf("same-origin request = %+v", requests)
 	}
@@ -562,11 +674,11 @@ func TestManagedSameOriginClientCredentialPathRemainsSemantic(t *testing.T) {
 
 func TestStreamingStillPublishesIncrementalClientEvents(t *testing.T) {
 	plan := mustEnvironmentRequestPlan(t, testPlanOptions{
-		mode:           environment.PlanModeManaged,
+		destination:    environment.DestinationKindUpstream,
 		providerOrigin: "https://provider.example/v1",
 		backend:        protocolspec.DialectOpenAIChat,
-		modelMode:      modelModeFixed,
-		fixedModel:     "gpt-provider",
+		modelMode:      environment.ModelModeMap,
+		mappedModel:    "gpt-provider",
 		accounts:       []testAccount{{id: "account.primary", revision: 1, epoch: 1}},
 		preferred:      "account.primary",
 	})
@@ -606,11 +718,11 @@ func TestStreamingStillPublishesIncrementalClientEvents(t *testing.T) {
 
 func TestManagedCompatibleTextStreamCompletesAfterEmptyTerminalRelease(t *testing.T) {
 	plan := mustEnvironmentRequestPlan(t, testPlanOptions{
-		mode:           environment.PlanModeManaged,
+		destination:    environment.DestinationKindUpstream,
 		providerOrigin: "https://api.anthropic.com",
 		backend:        protocolspec.DialectAnthropicMessages,
-		modelMode:      modelModeFixed,
-		fixedModel:     "claude-provider",
+		modelMode:      environment.ModelModeMap,
+		mappedModel:    "claude-provider",
 		accounts:       []testAccount{{id: "account.primary", revision: 1, epoch: 1}},
 		preferred:      "account.primary",
 	})
@@ -633,7 +745,9 @@ func TestManagedCompatibleTextStreamCompletesAfterEmptyTerminalRelease(t *testin
 	}
 	wire := downstream.bytesSnapshot()
 	if !bytes.Contains(wire, []byte(`"text":"hello"`)) ||
-		!bytes.Contains(wire, []byte(`"type":"message_stop"`)) {
+		!bytes.Contains(wire, []byte(`"type":"message_stop"`)) ||
+		!bytes.Contains(wire, []byte(`"model":"claude-client-alias"`)) ||
+		bytes.Contains(wire, []byte(`"model":"claude-provider"`)) {
 		t.Fatalf("downstream stream = %s", wire)
 	}
 }
@@ -641,11 +755,11 @@ func TestManagedCompatibleTextStreamCompletesAfterEmptyTerminalRelease(t *testin
 func TestManagedResponsesRequestUsesTheSameFrozenEnvironmentAuthority(t *testing.T) {
 	plan := mustEnvironmentRequestPlan(t, testPlanOptions{
 		clientProtocol: environment.ClientProtocolOpenAIResponses,
-		mode:           environment.PlanModeManaged,
+		destination:    environment.DestinationKindUpstream,
 		providerOrigin: "https://provider.example/v1",
 		backend:        protocolspec.DialectOpenAIChat,
-		modelMode:      modelModeFixed,
-		fixedModel:     "gpt-provider",
+		modelMode:      environment.ModelModeMap,
+		mappedModel:    "gpt-provider",
 		accounts:       []testAccount{{id: "account.primary", revision: 3, epoch: 7}},
 		preferred:      "account.primary",
 	})
@@ -709,14 +823,165 @@ func TestManagedResponsesRequestUsesTheSameFrozenEnvironmentAuthority(t *testing
 	}
 }
 
+func TestManagedResponsesHTTP2ClientUsesLoopbackHTTP1Provider(t *testing.T) {
+	const mappedModel = "dashscope:deepseek-v4-flash-0731"
+	plan := mustEnvironmentRequestPlan(t, testPlanOptions{
+		clientProtocol:     environment.ClientProtocolOpenAIResponses,
+		downstreamProtocol: wireprofile.ApplicationProtocolHTTP2,
+		destination:        environment.DestinationKindUpstream,
+		providerOrigin:     "http://127.0.0.1:23333/v1",
+		backend:            protocolspec.DialectOpenAIResponses,
+		modelMode:          environment.ModelModeMap,
+		mappedModel:        mappedModel,
+		accounts: []testAccount{{
+			id: "account.primary", revision: 3, epoch: 7,
+		}},
+		preferred: "account.primary",
+	})
+	authority := newAccountAuthority(
+		t,
+		testAccount{id: "account.primary", revision: 3, epoch: 7},
+	)
+	provider := &providerDouble{results: []providerResult{{
+		response: jsonResponse(
+			http.StatusOK,
+			completeResponsesProviderResponse(mappedModel),
+		),
+	}}}
+	content := &contentObserverDouble{}
+	pipeline := newTestPipelineWithContentObserver(
+		t,
+		authority,
+		provider,
+		approvedDecisions(),
+		&attemptObserverDouble{},
+		content,
+	)
+	defer shutdownPipeline(t, pipeline)
+
+	downstream := &downstreamRecorder{}
+	result, err := pipeline.Execute(
+		context.Background(),
+		mustClientRequestWithHTTPProtocol(
+			t,
+			"exchange-responses-loopback-h2",
+			plan,
+			completeResponsesClientRequest(),
+			wireprofile.ApplicationProtocolHTTP2,
+		),
+		downstream,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	requests := provider.requestsSnapshot()
+	if result.Outcome != AttemptSucceeded || len(requests) != 1 ||
+		requests[0].RelativePath() != responseschat.ResponsesProviderRelativePath ||
+		result.Presentation.ClientProtocol != wireprofile.ApplicationProtocolHTTP2 ||
+		result.Presentation.UpstreamProtocol != wireprofile.ApplicationProtocolHTTP1 {
+		t.Fatalf("result = %+v, requests = %+v", result, requests)
+	}
+	var clientBody struct {
+		Model string `json:"model"`
+	}
+	if err := json.Unmarshal(downstream.bytesSnapshot(), &clientBody); err != nil {
+		t.Fatal(err)
+	}
+	if clientBody.Model != "codex-client-alias" {
+		t.Fatalf("client response model = %q", clientBody.Model)
+	}
+	observation, ok := content.latest()
+	if !ok || observation.Response == nil ||
+		observation.Response.RequestedModel != "codex-client-alias" ||
+		observation.Response.EffectiveModel != mappedModel ||
+		observation.Response.ReportedModel != mappedModel {
+		t.Fatalf("content observation = %+v", observation)
+	}
+}
+
+func TestManagedResponsesStartGroupsExactCodexSessionBeforeTerminal(t *testing.T) {
+	plan := mustEnvironmentRequestPlan(t, testPlanOptions{
+		clientProtocol: environment.ClientProtocolOpenAIResponses,
+		destination:    environment.DestinationKindUpstream,
+		providerOrigin: "https://provider.example/v1",
+		backend:        protocolspec.DialectOpenAIResponses,
+		modelMode:      environment.ModelModeMap,
+		mappedModel:    "provider-model",
+		accounts:       []testAccount{{id: "account.primary", revision: 1, epoch: 1}},
+		preferred:      "account.primary",
+	})
+	provider := &providerDouble{results: []providerResult{
+		{response: jsonResponse(http.StatusOK, completeResponsesProviderResponse("provider-model"))},
+		{response: jsonResponse(http.StatusOK, completeResponsesProviderResponse("provider-model"))},
+		{response: jsonResponse(http.StatusOK, completeResponsesProviderResponse("provider-model"))},
+	}}
+	observer := &attemptObserverDouble{}
+	pipeline := newTestPipeline(
+		t,
+		newAccountAuthority(t, testAccount{id: "account.primary", revision: 1, epoch: 1}),
+		provider,
+		approvedDecisions(),
+		observer,
+	)
+	defer shutdownPipeline(t, pipeline)
+	admission, err := captureadmission.NewManagedRun(
+		captureadmission.ManagedRunEvidence{
+			CaptureRunID: "capture-codex-session",
+			SourceLabel:  "codex",
+		},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	for _, test := range []struct {
+		exchangeID string
+		sessionID  string
+		threadID   string
+		turnID     string
+	}{
+		{exchangeID: "exchange-session-turn-1", sessionID: "session-1", threadID: "thread-1", turnID: "turn-1"},
+		{exchangeID: "exchange-session-turn-2", sessionID: "session-1", threadID: "thread-1", turnID: "turn-2"},
+		{exchangeID: "exchange-other-session", sessionID: "session-2", threadID: "thread-2", turnID: "turn-1"},
+	} {
+		result, err := pipeline.Execute(
+			context.Background(),
+			mustClientRequestWithOptions(
+				t,
+				test.exchangeID,
+				plan,
+				responsesClientRequestWithIdentity(
+					test.sessionID,
+					test.threadID,
+					test.turnID,
+				),
+				WithIngressCorrelation(admission, "connection-codex-session"),
+			),
+			&downstreamRecorder{},
+		)
+		if err != nil || result.Outcome != AttemptSucceeded {
+			t.Fatalf("Execute(%s) = %+v, %v", test.exchangeID, result, err)
+		}
+	}
+
+	starts := observer.startSnapshot()
+	if len(starts) != 3 ||
+		starts[0].Conversation.Kind != agentconversation.KindMain ||
+		starts[0].Conversation.Evidence != agentconversation.EvidenceExplicitSession ||
+		starts[0].Conversation.ProjectionID != starts[1].Conversation.ProjectionID ||
+		starts[0].Conversation.ProjectionID == starts[2].Conversation.ProjectionID {
+		t.Fatalf("start Conversations = %#v", starts)
+	}
+}
+
 func TestManagedResponsesStreamingKeepsIncrementalClientSemantics(t *testing.T) {
 	plan := mustEnvironmentRequestPlan(t, testPlanOptions{
 		clientProtocol: environment.ClientProtocolOpenAIResponses,
-		mode:           environment.PlanModeManaged,
+		destination:    environment.DestinationKindUpstream,
 		providerOrigin: "https://provider.example/v1",
 		backend:        protocolspec.DialectOpenAIChat,
-		modelMode:      modelModeFixed,
-		fixedModel:     "gpt-provider",
+		modelMode:      environment.ModelModeMap,
+		mappedModel:    "gpt-provider",
 		accounts:       []testAccount{{id: "account.primary", revision: 1, epoch: 1}},
 		preferred:      "account.primary",
 	})
@@ -751,11 +1016,11 @@ func TestAccountFailoverCannotEscapeFrozenRouteCandidateSet(t *testing.T) {
 		{id: "account.primary", revision: 2, epoch: 3},
 	}
 	plan := mustEnvironmentRequestPlan(t, testPlanOptions{
-		mode:           environment.PlanModeManaged,
+		destination:    environment.DestinationKindUpstream,
 		providerOrigin: "https://provider.example/v1",
 		backend:        protocolspec.DialectOpenAIChat,
-		modelMode:      modelModeFixed,
-		fixedModel:     "gpt-provider",
+		modelMode:      environment.ModelModeMap,
+		mappedModel:    "gpt-provider",
 		accounts:       accounts,
 		preferred:      "account.primary",
 		failover:       environment.FailoverAccountScopedSafe,
@@ -806,9 +1071,9 @@ func TestManagedAuthenticationRejectionIsTerminalWhenFailoverIsOff(t *testing.T)
 				{id: "account.backup", revision: 4, epoch: 5},
 			}
 			plan := mustEnvironmentRequestPlan(t, testPlanOptions{
-				mode: environment.PlanModeManaged, providerOrigin: "https://provider.example/v1",
-				backend: protocolspec.DialectOpenAIChat, modelMode: modelModeFixed,
-				fixedModel: "gpt-provider", accounts: accounts,
+				destination: environment.DestinationKindUpstream, providerOrigin: "https://provider.example/v1",
+				backend: protocolspec.DialectOpenAIChat, modelMode: environment.ModelModeMap,
+				mappedModel: "gpt-provider", accounts: accounts,
 				preferred: "account.primary", failover: environment.FailoverOff,
 			})
 			authority := newAccountAuthority(t, accounts...)
@@ -849,11 +1114,11 @@ func TestManagedAuthenticationRejectionIsTerminalWhenFailoverIsOff(t *testing.T)
 
 func TestToolDecisionRejectsBeforeAnyToolBytesReachClient(t *testing.T) {
 	plan := mustEnvironmentRequestPlan(t, testPlanOptions{
-		mode:           environment.PlanModeManaged,
+		destination:    environment.DestinationKindUpstream,
 		providerOrigin: "https://provider.example/v1",
 		backend:        protocolspec.DialectOpenAIChat,
-		modelMode:      modelModeFixed,
-		fixedModel:     "gpt-provider",
+		modelMode:      environment.ModelModeMap,
+		mappedModel:    "gpt-provider",
 		accounts:       []testAccount{{id: "account.primary", revision: 1, epoch: 1}},
 		preferred:      "account.primary",
 	})
@@ -883,11 +1148,11 @@ func TestToolDecisionRejectsBeforeAnyToolBytesReachClient(t *testing.T) {
 
 func TestToolDecisionExpiryHasDistinctReasonAndNeverReleasesBytes(t *testing.T) {
 	plan := mustEnvironmentRequestPlan(t, testPlanOptions{
-		mode:           environment.PlanModeManaged,
+		destination:    environment.DestinationKindUpstream,
 		providerOrigin: "https://provider.example/v1",
 		backend:        protocolspec.DialectOpenAIChat,
-		modelMode:      modelModeFixed,
-		fixedModel:     "gpt-provider",
+		modelMode:      environment.ModelModeMap,
+		mappedModel:    "gpt-provider",
 		accounts:       []testAccount{{id: "account.primary", revision: 1, epoch: 1}},
 		preferred:      "account.primary",
 	})
@@ -913,11 +1178,11 @@ func TestToolDecisionExpiryHasDistinctReasonAndNeverReleasesBytes(t *testing.T) 
 
 func TestStreamingToolDecisionKeepsTheClientAliveUntilApproval(t *testing.T) {
 	plan := mustEnvironmentRequestPlan(t, testPlanOptions{
-		mode:           environment.PlanModeManaged,
+		destination:    environment.DestinationKindUpstream,
 		providerOrigin: "https://provider.example/v1",
 		backend:        protocolspec.DialectOpenAIChat,
-		modelMode:      modelModeFixed,
-		fixedModel:     "gpt-provider",
+		modelMode:      environment.ModelModeMap,
+		mappedModel:    "gpt-provider",
 		accounts:       []testAccount{{id: "account.primary", revision: 1, epoch: 1}},
 		preferred:      "account.primary",
 	})
@@ -973,8 +1238,8 @@ func TestStreamingToolDecisionKeepsTheClientAliveUntilApproval(t *testing.T) {
 
 func TestOperationEvidenceMismatchFailsBeforeAccountOrProvider(t *testing.T) {
 	plan := mustEnvironmentRequestPlan(t, testPlanOptions{
-		mode: environment.PlanModeManaged, providerOrigin: "https://provider.example/v1",
-		backend: protocolspec.DialectOpenAIChat, modelMode: modelModeFixed, fixedModel: "gpt-provider",
+		destination: environment.DestinationKindUpstream, providerOrigin: "https://provider.example/v1",
+		backend: protocolspec.DialectOpenAIChat, modelMode: environment.ModelModeMap, mappedModel: "gpt-provider",
 		accounts: []testAccount{{id: "account.primary", revision: 1, epoch: 1}}, preferred: "account.primary",
 	})
 	wrongID, err := protocolspec.NewClientOperationID(operationcatalog.AnthropicMessagesCountTokensID)
@@ -1004,8 +1269,8 @@ func TestOperationEvidenceMismatchFailsBeforeAccountOrProvider(t *testing.T) {
 
 func TestShutdownCancelsAndDrainsActiveFrozenRequest(t *testing.T) {
 	plan := mustEnvironmentRequestPlan(t, testPlanOptions{
-		mode: environment.PlanModeManaged, providerOrigin: "https://provider.example/v1",
-		backend: protocolspec.DialectOpenAIChat, modelMode: modelModeFixed, fixedModel: "gpt-provider",
+		destination: environment.DestinationKindUpstream, providerOrigin: "https://provider.example/v1",
+		backend: protocolspec.DialectOpenAIChat, modelMode: environment.ModelModeMap, mappedModel: "gpt-provider",
 		accounts: []testAccount{{id: "account.primary", revision: 1, epoch: 1}}, preferred: "account.primary",
 	})
 	authority := newAccountAuthority(t, testAccount{id: "account.primary", revision: 1, epoch: 1})
@@ -1047,17 +1312,18 @@ func TestShutdownCancelsAndDrainsActiveFrozenRequest(t *testing.T) {
 }
 
 type testPlanOptions struct {
-	clientProtocol environment.ClientProtocol
-	mode           environment.PlanMode
-	providerOrigin string
-	backend        protocolspec.Dialect
-	modelMode      string
-	fixedModel     string
-	clientAccount  bool
-	accounts       []testAccount
-	preferred      string
-	failover       environment.FailoverPolicy
-	recording      environment.ContentRecordingPolicy
+	clientProtocol     environment.ClientProtocol
+	downstreamProtocol wireprofile.ApplicationProtocol
+	destination        environment.DestinationKind
+	providerOrigin     string
+	backend            protocolspec.Dialect
+	modelMode          environment.ModelMode
+	mappedModel        string
+	modelMappings      []environment.ModelMapping
+	accounts           []testAccount
+	preferred          string
+	failover           environment.FailoverPolicy
+	recording          environment.ContentRecordingPolicy
 }
 
 type testAccount struct {
@@ -1086,18 +1352,13 @@ func mustEnvironmentRequestPlan(t *testing.T, options testPlanOptions) environme
 		requestPath = "/v1/responses"
 	}
 	clientOrigin := mustClientOrigin(t, clientOriginValue)
-	providerOrigin := mustProviderOrigin(t, options.providerOrigin)
 	realm := "realm.provider"
-	accountMode := environment.AccountModeManaged
-	if options.clientAccount || options.mode == environment.PlanModeOriginalPassthrough {
-		accountMode = environment.AccountModeClientPassthrough
-	}
 	failover := options.failover
 	if failover == "" {
 		failover = environment.FailoverOff
 	}
 	accountPolicy := environment.RouteAccountPolicy{
-		Revision: 5, Mode: accountMode, FailoverPolicy: failover,
+		Revision: 5, FailoverPolicy: failover,
 	}
 	catalog := make(testAccountCatalog, len(options.accounts))
 	for _, account := range options.accounts {
@@ -1118,6 +1379,47 @@ func mustEnvironmentRequestPlan(t *testing.T, options testPlanOptions) environme
 	if recording.Mode == "" {
 		recording = environment.DefaultContentRecordingPolicy()
 	}
+	modelPolicy := environment.ModelPolicy{Revision: 4, Mode: options.modelMode}
+	if options.modelMode == environment.ModelModeMap {
+		if len(options.modelMappings) != 0 {
+			modelPolicy.Mappings = slices.Clone(options.modelMappings)
+		} else {
+			requestedModel := "claude-client-alias"
+			if clientProtocol == environment.ClientProtocolOpenAIResponses {
+				requestedModel = "codex-client-alias"
+			}
+			modelPolicy.Mappings = []environment.ModelMapping{{
+				RequestedModel: requestedModel,
+				UpstreamModel:  options.mappedModel,
+			}}
+		}
+	}
+	destination := environment.DestinationPlan{Kind: options.destination}
+	if options.destination == environment.DestinationKindUpstream {
+		providerOrigin := mustProviderOrigin(t, options.providerOrigin)
+		destination.Upstream = &environment.UpstreamPlan{
+			DefaultRouteID: "route.primary",
+			RouteSet: environment.RouteSet{
+				ID: "routes.primary", Revision: 4,
+				CandidateRouteIDs: []environment.UpstreamRouteID{"route.primary"},
+			},
+			Routes: []environment.UpstreamRoute{{
+				ID: "route.primary", Revision: 6,
+				ProviderTarget: environment.ProviderTarget{
+					ID: "target.primary", Revision: 3,
+					Origin: providerOrigin, RealmID: realm,
+					Capabilities: []protocolspec.ProviderCapability{
+						protocolspec.ProviderCapabilityMessages,
+						protocolspec.ProviderCapabilityStreaming,
+						protocolspec.ProviderCapabilityToolCalls,
+					},
+				},
+				BackendProtocol: string(options.backend), AccountPolicy: accountPolicy,
+				ModelPolicy:    modelPolicy,
+				WireProfileRef: wireprofile.UpstreamWireProfileFollowClientValue,
+			}},
+		}
+	}
 	aggregate := environment.Environment{
 		ID: "environment.test", Name: "Test", State: environment.StateActive, Revision: 9,
 		ContentRecording: recording,
@@ -1127,25 +1429,7 @@ func mustEnvironmentRequestPlan(t *testing.T, options testPlanOptions) environme
 				ID: "protocol.anthropic", Revision: 8,
 				ClientProtocol:      clientProtocol,
 				ClientAdapterPolicy: environment.ClientAdapterPolicy{ID: "adapter.anthropic", Revision: 2},
-				Mode:                options.mode,
-				UpstreamPlan: environment.UpstreamPlan{
-					DefaultRouteID: "route.primary",
-					RouteSet:       environment.RouteSet{ID: "routes.primary", Revision: 4, CandidateRouteIDs: []environment.UpstreamRouteID{"route.primary"}},
-					Routes: []environment.UpstreamRoute{{
-						ID: "route.primary", Revision: 6,
-						ProviderTarget: environment.ProviderTarget{
-							ID: "target.primary", Revision: 3, Origin: providerOrigin, RealmID: realm,
-							Capabilities: []protocolspec.ProviderCapability{
-								protocolspec.ProviderCapabilityMessages,
-								protocolspec.ProviderCapabilityStreaming,
-								protocolspec.ProviderCapabilityToolCalls,
-							},
-						},
-						BackendProtocol: string(options.backend), AccountPolicy: accountPolicy,
-						ModelPolicy:    environment.ModelPolicy{Revision: 4, Mode: options.modelMode, FixedModel: options.fixedModel},
-						WireProfileRef: wireprofile.UpstreamWireProfileFollowClientValue,
-					}},
-				},
+				Destination:         destination,
 			}},
 		}},
 	}
@@ -1154,12 +1438,16 @@ func mustEnvironmentRequestPlan(t *testing.T, options testPlanOptions) environme
 	if err != nil {
 		t.Fatalf("compile Environment: %v", err)
 	}
+	downstreamProtocol := options.downstreamProtocol
+	if downstreamProtocol == "" {
+		downstreamProtocol = wireprofile.ApplicationProtocolHTTP1
+	}
 	plan, err := snapshot.ResolveRequest(clientOrigin, environment.RequestFacts{
 		Target: protocolspec.RequestTarget{
 			Method: http.MethodPost, Path: requestPath,
 			Transport: protocolspec.ClientOperationTransportHTTP,
 		},
-		DownstreamProtocol: wireprofile.ApplicationProtocolHTTP1,
+		DownstreamProtocol: downstreamProtocol,
 	})
 	if err != nil {
 		t.Fatalf("resolve Environment request: %v", err)
@@ -1234,7 +1522,30 @@ func mustProviderOrigin(t *testing.T, value string) originidentity.ProviderOrigi
 
 func mustClientRequest(t *testing.T, exchangeID string, plan environment.RequestPlan, body []byte) ClientRequest {
 	t.Helper()
-	return mustClientRequestWithOptions(t, exchangeID, plan, body)
+	return mustClientRequestWithHTTPProtocol(
+		t,
+		exchangeID,
+		plan,
+		body,
+		wireprofile.ApplicationProtocolHTTP1,
+	)
+}
+
+func mustClientRequestWithHTTPProtocol(
+	t *testing.T,
+	exchangeID string,
+	plan environment.RequestPlan,
+	body []byte,
+	protocol wireprofile.ApplicationProtocol,
+) ClientRequest {
+	t.Helper()
+	return mustClientRequestWithOptionsAndHTTPProtocol(
+		t,
+		exchangeID,
+		plan,
+		body,
+		protocol,
+	)
 }
 
 func mustClientRequestWithOptions(
@@ -1242,6 +1553,24 @@ func mustClientRequestWithOptions(
 	exchangeID string,
 	plan environment.RequestPlan,
 	body []byte,
+	options ...ClientRequestOption,
+) ClientRequest {
+	return mustClientRequestWithOptionsAndHTTPProtocol(
+		t,
+		exchangeID,
+		plan,
+		body,
+		wireprofile.ApplicationProtocolHTTP1,
+		options...,
+	)
+}
+
+func mustClientRequestWithOptionsAndHTTPProtocol(
+	t *testing.T,
+	exchangeID string,
+	plan environment.RequestPlan,
+	body []byte,
+	protocol wireprofile.ApplicationProtocol,
 	options ...ClientRequestOption,
 ) ClientRequest {
 	t.Helper()
@@ -1257,7 +1586,7 @@ func mustClientRequestWithOptions(
 		t.Fatal(err)
 	}
 	request, err := NewClientRequest(
-		exchangeID, plan, evidence, body, replay, wireprofile.ApplicationProtocolHTTP1, options...,
+		exchangeID, plan, evidence, body, replay, protocol, options...,
 	)
 	if err != nil {
 		t.Fatal(err)
@@ -1806,6 +2135,21 @@ func completeClientRequest() []byte {
 	return []byte(`{"model":"claude-client-alias","max_tokens":32,"messages":[{"role":"user","content":"hello"}]}`)
 }
 
+func secondTurnCitedClientRequest() []byte {
+	return []byte(`{
+		"model":"claude-client-alias",
+		"max_tokens":64,
+		"messages":[
+			{"role":"assistant","content":[
+				{"type":"thinking","thinking":"private state","signature":"signed-state"},
+				{"type":"text","text":"first answer","citations":[]}
+			]},
+			{"role":"user","content":[{"type":"text","text":"follow up"}]}
+		],
+		"stream":false
+	}`)
+}
+
 func completeResponsesClientRequest() []byte {
 	return []byte(`{
 		"model":"codex-client-alias",
@@ -1816,6 +2160,43 @@ func completeResponsesClientRequest() []byte {
 		}],
 		"store":false,
 		"stream":false
+	}`)
+}
+
+func responsesClientRequestWithIdentity(
+	sessionID string,
+	threadID string,
+	turnID string,
+) []byte {
+	return []byte(`{
+		"model":"codex-client-alias",
+		"input":[{
+			"type":"message","role":"user",
+			"content":[{"type":"input_text","text":"hello"}]
+		}],
+		"store":false,"stream":false,
+		"client_metadata":{
+			"session_id":"` + sessionID + `",
+			"thread_id":"` + threadID + `",
+			"turn_id":"` + turnID + `"
+		}
+	}`)
+}
+
+func completeResponsesProviderResponse(model string) []byte {
+	return []byte(`{
+		"id":"resp_complete",
+		"created_at":1,
+		"status":"completed",
+		"model":"` + model + `",
+		"output":[{
+			"id":"msg_complete",
+			"type":"message",
+			"status":"completed",
+			"role":"assistant",
+			"content":[{"type":"output_text","text":"Done.","annotations":[]}]
+		}],
+		"usage":{}
 	}`)
 }
 

@@ -29,11 +29,26 @@ type FrozenEnvironmentRef struct {
 	ClientEndpointRevision uint64 `json:"clientEndpointRevision"`
 	ProtocolPlanID         string `json:"protocolPlanId"`
 	ProtocolPlanRevision   uint64 `json:"protocolPlanRevision"`
-	RouteID                string `json:"routeId"`
-	RouteRevision          uint64 `json:"routeRevision"`
+	RouteID                string `json:"routeId,omitempty"`
+	RouteRevision          uint64 `json:"routeRevision,omitempty"`
 	AccountID              string `json:"accountId,omitempty"`
 	AccountRevision        uint64 `json:"accountRevision,omitempty"`
 	CredentialEpoch        uint64 `json:"credentialEpoch,omitempty"`
+}
+
+func (ref FrozenEnvironmentRef) Validate() error {
+	hasRoute := ref.RouteID != "" || ref.RouteRevision != 0
+	hasAccount := ref.AccountID != "" || ref.AccountRevision != 0 ||
+		ref.CredentialEpoch != 0
+	if ref.ID == "" || ref.Revision == 0 || ref.Digest == "" ||
+		ref.ClientEndpointID == "" || ref.ClientEndpointRevision == 0 ||
+		ref.ProtocolPlanID == "" || ref.ProtocolPlanRevision == 0 ||
+		(hasRoute && (ref.RouteID == "" || ref.RouteRevision == 0)) ||
+		(hasAccount && (ref.AccountID == "" || ref.AccountRevision == 0 ||
+			ref.CredentialEpoch == 0 || !hasRoute)) {
+		return errors.New("frozen Environment relationship is invalid")
+	}
+	return nil
 }
 
 type ActivitySummary struct {
@@ -115,11 +130,7 @@ type ActivityParentRefs struct {
 func (summary ActivitySummary) Validate() error {
 	if summary.ID == "" || summary.OccurredAt.IsZero() || summary.Kind != "exchange" ||
 		summary.Title == "" || summary.ParentRefs.ExchangeID != summary.ID ||
-		summary.Environment.ID == "" || summary.Environment.Revision == 0 ||
-		summary.Environment.Digest == "" || summary.Environment.ClientEndpointID == "" ||
-		summary.Environment.ClientEndpointRevision == 0 || summary.Environment.ProtocolPlanID == "" ||
-		summary.Environment.ProtocolPlanRevision == 0 || summary.Environment.RouteID == "" ||
-		summary.Environment.RouteRevision == 0 || summary.Conversation.Validate() != nil ||
+		summary.Environment.Validate() != nil || summary.Conversation.Validate() != nil ||
 		(summary.RequestPreview != nil && summary.RequestPreview.Validate() != nil) {
 		return errors.New("Activity summary relationship is invalid")
 	}

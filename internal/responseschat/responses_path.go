@@ -6,6 +6,7 @@ import (
 	"errors"
 	"io"
 	"net/http"
+	"strconv"
 
 	"github.com/vibe-agi/vibermate/internal/openairesponses"
 	"github.com/vibe-agi/vibermate/internal/operationcatalog"
@@ -59,7 +60,48 @@ func (codec responsesClientCodec) EncodeSourceResponse(
 		return nil, protocolcore.TranslationReport{},
 			errors.New("Responses-compatible response body is invalid")
 	}
-	return bytes.Clone(sourceBody), protocolcore.TranslationReport{}, nil
+	var root map[string]json.RawMessage
+	if err := json.Unmarshal(sourceBody, &root); err != nil || root == nil {
+		return nil, protocolcore.TranslationReport{},
+			errors.New("Responses-compatible response body is invalid")
+	}
+	report := protocolcore.TranslationReport{}
+	modified := false
+	if output, present := root["output"]; present {
+		portable, notices, err := portableResponsesItems(output, "$.output")
+		if err != nil {
+			return nil, protocolcore.TranslationReport{}, err
+		}
+		if len(notices) > 0 {
+			root["output"] = portable
+			report = protocolcore.NewTranslationReport(notices...)
+			modified = true
+		}
+	}
+	if request.RequestedModel != request.EffectiveModel {
+		var reportedModel string
+		if err := json.Unmarshal(root["model"], &reportedModel); err != nil ||
+			reportedModel == "" {
+			return nil, protocolcore.TranslationReport{},
+				errors.New("Responses-compatible response model is invalid")
+		}
+		if reportedModel != request.RequestedModel {
+			model, err := json.Marshal(request.RequestedModel)
+			if err != nil {
+				return nil, protocolcore.TranslationReport{}, err
+			}
+			root["model"] = model
+			modified = true
+		}
+	}
+	if !modified {
+		return bytes.Clone(sourceBody), report, nil
+	}
+	encoded, err := json.Marshal(root)
+	if err != nil {
+		return nil, protocolcore.TranslationReport{}, err
+	}
+	return encoded, report, nil
 }
 
 type responsesBackendCodec struct {
@@ -95,6 +137,15 @@ func (codec responsesBackendCodec) EncodeSourceRequest(
 		return protocolpath.ProviderRequest{}, protocolcore.TranslationReport{},
 			errors.New("Responses-compatible request body has trailing data")
 	}
+	report := protocolcore.TranslationReport{}
+	if input, present := root["input"]; present {
+		portable, notices, err := portableResponsesItems(input, "$.input")
+		if err != nil {
+			return protocolpath.ProviderRequest{}, protocolcore.TranslationReport{}, err
+		}
+		root["input"] = portable
+		report = protocolcore.NewTranslationReport(notices...)
+	}
 	model, err := json.Marshal(request.EffectiveModel)
 	if err != nil {
 		return protocolpath.ProviderRequest{}, protocolcore.TranslationReport{}, err
@@ -116,7 +167,50 @@ func (codec responsesBackendCodec) EncodeSourceRequest(
 		headers,
 		body,
 	)
-	return encoded, protocolcore.TranslationReport{}, err
+	return encoded, report, err
+}
+
+func portableResponsesItems(
+	raw json.RawMessage,
+	path string,
+) (json.RawMessage, []protocolcore.TranslationNotice, error) {
+	trimmed := bytes.TrimSpace(raw)
+	if len(trimmed) == 0 {
+		return nil, nil, errors.New("Responses-compatible item collection is invalid")
+	}
+	if trimmed[0] != '[' {
+		return bytes.Clone(raw), nil, nil
+	}
+	var input []json.RawMessage
+	if err := json.Unmarshal(raw, &input); err != nil {
+		return nil, nil, errors.New("Responses-compatible item collection is invalid")
+	}
+	portable := make([]json.RawMessage, 0, len(input))
+	notices := make([]protocolcore.TranslationNotice, 0)
+	for index, item := range input {
+		var marker struct {
+			Type string `json:"type"`
+		}
+		if err := json.Unmarshal(item, &marker); err != nil || marker.Type == "" {
+			return nil, nil, errors.New("Responses-compatible item is invalid")
+		}
+		if marker.Type == "reasoning" {
+			notices = append(notices, protocolcore.TranslationNotice{
+				Code: protocolcore.NoticeReasoningExecutionNotForwarded,
+				Path: path + "[" + strconv.Itoa(index) + "]",
+			})
+			continue
+		}
+		portable = append(portable, item)
+	}
+	if len(notices) == 0 {
+		return bytes.Clone(raw), nil, nil
+	}
+	encoded, err := json.Marshal(portable)
+	if err != nil {
+		return nil, nil, err
+	}
+	return encoded, notices, nil
 }
 
 func (codec responsesBackendCodec) DecodeResponse(

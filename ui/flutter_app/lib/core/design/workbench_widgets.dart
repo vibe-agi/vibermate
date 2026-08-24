@@ -335,6 +335,9 @@ final class CompactSelectField<T> extends StatefulWidget {
     this.initialValue,
     this.decoration = const InputDecoration(),
     this.isExpanded = false,
+    this.menuItemHeight = ViberMetrics.controlHeight,
+    this.menuMaxLines = 1,
+    this.selectedItemBuilder,
     this.validator,
     super.key,
   });
@@ -344,6 +347,10 @@ final class CompactSelectField<T> extends StatefulWidget {
   final T? initialValue;
   final InputDecoration decoration;
   final bool isExpanded;
+  final double menuItemHeight;
+  final int menuMaxLines;
+  final Widget Function(BuildContext context, DropdownMenuItem<T> selectedItem)?
+  selectedItemBuilder;
   final FormFieldValidator<T>? validator;
 
   @override
@@ -384,10 +391,9 @@ final class _CompactSelectFieldState<T> extends State<CompactSelectField<T>> {
             final menuWidth = constraints.hasBoundedWidth
                 ? constraints.maxWidth
                 : null;
-            final menuHeight =
-                (widget.items.length * ViberMetrics.controlHeight + 4)
-                    .clamp(32.0, 240.0)
-                    .toDouble();
+            final menuHeight = (widget.items.length * widget.menuItemHeight + 4)
+                .clamp(32.0, 240.0)
+                .toDouble();
             return MenuAnchor(
               crossAxisUnconstrained: false,
               alignmentOffset: const Offset(0, ViberSpacing.xs),
@@ -402,6 +408,14 @@ final class _CompactSelectFieldState<T> extends State<CompactSelectField<T>> {
               menuChildren: [
                 for (final item in widget.items)
                   MenuItemButton(
+                    style: ButtonStyle(
+                      minimumSize: WidgetStatePropertyAll(
+                        Size(0, widget.menuItemHeight),
+                      ),
+                      maximumSize: WidgetStatePropertyAll(
+                        Size(double.infinity, widget.menuItemHeight),
+                      ),
+                    ),
                     onPressed: enabled && item.enabled
                         ? () {
                             item.onTap?.call();
@@ -427,7 +441,7 @@ final class _CompactSelectFieldState<T> extends State<CompactSelectField<T>> {
                             fontWeight: FontWeight.w400,
                           ) ??
                           const TextStyle(),
-                      maxLines: 1,
+                      maxLines: widget.menuMaxLines,
                       overflow: TextOverflow.ellipsis,
                       child: item.child,
                     ),
@@ -480,7 +494,13 @@ final class _CompactSelectFieldState<T> extends State<CompactSelectField<T>> {
                             const TextStyle(),
                         maxLines: 1,
                         overflow: TextOverflow.ellipsis,
-                        child: selected?.child ?? const SizedBox.shrink(),
+                        child: selected == null
+                            ? const SizedBox.shrink()
+                            : widget.selectedItemBuilder?.call(
+                                    context,
+                                    selected,
+                                  ) ??
+                                  selected.child,
                       ),
                     ),
                   ),

@@ -75,5 +75,22 @@ if [[ "${mode}" == "live" ]]; then
   fi
 fi
 
+web_root="${app}/Contents/Resources/vibermate-web"
+if [[ "${mode}" == "live" ]]; then
+  web_index="${web_root}/index.html"
+  if [[ ! -d "${web_root}" || -L "${web_root}" ||
+    ! -f "${web_index}" || -L "${web_index}" ]]; then
+    echo "Live bundle Web management UI is unavailable or symbolic" >&2
+    exit 70
+  fi
+  if [[ -n "$(find "${web_root}" -type l -print -quit)" ]]; then
+    echo "Live bundle Web management UI contains a symbolic link" >&2
+    exit 70
+  fi
+elif [[ -e "${web_root}" || -L "${web_root}" ]]; then
+  echo "Preview bundle unexpectedly contains the Web management UI" >&2
+  exit 70
+fi
+
 codesign --verify --deep --strict "${app}"
 echo "Verified ${mode} Flutter App: ${app}"

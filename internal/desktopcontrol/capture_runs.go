@@ -18,7 +18,10 @@ type CaptureRunAuditView struct {
 	Observation             capturerun.Observation    `json:"observation"`
 	Recognition             clientadapter.Recognition `json:"recognition"`
 	LocalUserLabel          string                    `json:"localUserLabel,omitempty"`
+	RuntimeUserID           string                    `json:"runtimeUserId,omitempty"`
+	LoginSessionID          string                    `json:"loginSessionId,omitempty"`
 	MachineID               string                    `json:"machineId,omitempty"`
+	DeviceName              string                    `json:"deviceName,omitempty"`
 	WorkspaceID             string                    `json:"workspaceId,omitempty"`
 	WorkspaceLabel          string                    `json:"workspaceLabel,omitempty"`
 	WorkspaceEvidence       string                    `json:"workspaceEvidence,omitempty"`
@@ -53,7 +56,10 @@ func CaptureRunAuditViewOf(view capturerun.View) CaptureRunAuditView {
 		Observation:             view.Observation,
 		Recognition:             capturerun.NormalizedRecognition(view.Recognition),
 		LocalUserLabel:          view.LocalUserLabel,
+		RuntimeUserID:           string(view.RuntimeUserID),
+		LoginSessionID:          string(view.LoginSessionID),
 		MachineID:               view.MachineID,
+		DeviceName:              view.DeviceName,
 		WorkspaceID:             view.WorkspaceID,
 		WorkspaceLabel:          view.WorkspaceLabel,
 		WorkspaceEvidence:       string(view.WorkspaceEvidence),

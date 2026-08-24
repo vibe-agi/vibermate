@@ -73,7 +73,6 @@ readiness claim.
 | Endpoints and Accounts | migrated | every Account has exactly one Endpoint; create/rotate/delete uses real authority and reference checks |
 | Network governance | migrated | global pending-approval attention, confirm-before-decision, connections, attempts and atomic rules |
 | Offline hold | migrated | exact runtime revisions, review, safe-to-disconnect evidence and resume probing |
-| Workspace default | migrated | real GET/PUT/DELETE CAS; independent from the current Capture assignment |
 | Terminal command | migrated | exact packaged CLI, closed operations, bounded process output, ownership-safe install/refresh/remove confirmations |
 | Desktop runtime lifecycle | migrated | packaged daemon bootstrap/session renewal plus visible unexpected-exit retry boundary |
 | Navigation and preference restoration | migrated | closed non-secret workbench schema, private 0600 atomic file, exact historical revision restore, termination flush/fence, two-launch packaged App acceptance |

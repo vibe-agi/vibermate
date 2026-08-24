@@ -62,8 +62,8 @@ func TestSemanticRequestRecordsClientIngressAndDownstreamRawEvidence(
 		ingress.ScopeID != fixture.grant.Run.ID ||
 		ingress.ExchangeID == "" || ingress.ConnectionID == "" ||
 		ingress.AttemptID != "" || ingress.AccountID != "" ||
-		ingress.RouteID != "route-proxy" ||
-		ingress.UpstreamEndpointID == "" ||
+		ingress.RouteID != "" ||
+		ingress.UpstreamEndpointID != "original_destination.endpoint-proxy" ||
 		ingress.Method != http.MethodPost || ingress.Scheme != "https" ||
 		ingress.Authority != "api.anthropic.com:443" ||
 		ingress.Path != "/v1/messages" || ingress.RawQuery != "beta=true" ||

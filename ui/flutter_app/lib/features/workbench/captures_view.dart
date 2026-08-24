@@ -203,6 +203,7 @@ final class _CaptureMaster extends StatelessWidget {
         capture.displayName,
         capture.id,
         managed?.workspaceLabel ?? '',
+        managed?.deviceName ?? '',
         managed?.cwd ?? '',
       ].any((value) => value.toLowerCase().contains(query));
     }
@@ -546,8 +547,6 @@ final class _CaptureDetail extends StatelessWidget {
             confirmRevoke: confirmRevoke,
             mutating: controller.mutating,
             onBack: onBack,
-            onEnvironment: (value) =>
-                unawaited(controller.switchEnvironment(value)),
             onConfirmRevoke: onConfirmRevoke,
             onRotate: onRotateManual,
             onDelete: onDeleteCapture,
@@ -599,10 +598,12 @@ final class _CaptureDetail extends StatelessWidget {
         if (desired.isNotEmpty && !plan.clientProtocol.contains(desired)) {
           continue;
         }
-        return plan.routes
-                .where((route) => route.id == plan.defaultRouteId)
+        final upstream = plan.destination.upstream;
+        if (upstream == null) continue;
+        return upstream.routes
+                .where((route) => route.id == upstream.defaultRouteId)
                 .firstOrNull ??
-            plan.routes.firstOrNull;
+            upstream.routes.firstOrNull;
       }
     }
     return environment.routes.firstOrNull;
@@ -630,14 +631,39 @@ final class _CaptureConversationWorkspaceState
 
   double _directoryWidth = 260;
   final Set<String> _collapsed = <String>{};
+  String? _captureKey;
+  String? _selectedSessionKey;
 
   @override
   Widget build(BuildContext context) {
     final controller = widget.controller;
     final copy = widget.copy;
     final conversations = controller.captureConversations;
-    final tree = _captureConversationTree(conversations);
+    final nextCaptureKey = controller.selectedCapture?.key;
+    if (_captureKey != nextCaptureKey) {
+      _captureKey = nextCaptureKey;
+      _selectedSessionKey = null;
+      _collapsed.clear();
+    }
+    final sessions = _captureSessionGroups(conversations);
     final selected = controller.selectedCaptureConversation;
+    final selectedConversationSession = sessions
+        .where(
+          (session) => session.conversations.any(
+            (conversation) => conversation.key == selected?.key,
+          ),
+        )
+        .firstOrNull;
+    if (!sessions.any((session) => session.key == _selectedSessionKey)) {
+      _selectedSessionKey =
+          selectedConversationSession?.key ?? sessions.firstOrNull?.key;
+    }
+    final selectedSession = sessions
+        .where((session) => session.key == _selectedSessionKey)
+        .firstOrNull;
+    final visibleConversations =
+        selectedSession?.conversations ?? conversations;
+    final tree = _captureConversationTree(visibleConversations);
     final timelineTitle = selected?.exchangeScoped == true
         ? copy('conversation.exchanges_title')
         : copy('capture.conversation');
@@ -659,19 +685,43 @@ final class _CaptureConversationWorkspaceState
             onLoadEarlier: () =>
                 unawaited(controller.loadMoreSelectedCapture()),
           );
-    if (conversations.length <= 1) return timeline;
+    final hasExactSession = sessions.any(
+      (session) => session.sessionId != null,
+    );
+    if (conversations.length <= 1 && !hasExactSession) return timeline;
+
+    void selectSession(String key) {
+      final session = sessions.where((value) => value.key == key).firstOrNull;
+      if (session == null) return;
+      setState(() {
+        _selectedSessionKey = key;
+        _collapsed.clear();
+      });
+      final preferred = _preferredSessionConversation(session.conversations);
+      if (preferred != null) {
+        unawaited(controller.selectCaptureConversation(preferred.key));
+      }
+    }
+
     return LayoutBuilder(
       builder: (context, constraints) {
         if (constraints.maxWidth < 1040) {
           return Column(
             children: [
-              _CaptureConversationSelector(
-                conversations: tree,
-                selectedKey: controller.selectedCaptureConversationKey,
+              _CaptureSessionSelector(
+                sessions: sessions,
+                selectedKey: _selectedSessionKey,
                 copy: copy,
-                onSelected: (key) =>
-                    unawaited(controller.selectCaptureConversation(key)),
+                onSelected: selectSession,
               ),
+              if (visibleConversations.length > 1)
+                _CaptureConversationSelector(
+                  conversations: tree,
+                  selectedKey: controller.selectedCaptureConversationKey,
+                  copy: copy,
+                  onSelected: (key) =>
+                      unawaited(controller.selectCaptureConversation(key)),
+                ),
               Expanded(child: timeline),
             ],
           );
@@ -690,11 +740,14 @@ final class _CaptureConversationWorkspaceState
               width: directoryWidth,
               child: _CaptureConversationDirectory(
                 conversations: tree,
+                sessions: sessions,
+                selectedSessionKey: _selectedSessionKey,
                 collapsed: _collapsed,
                 selectedKey: controller.selectedCaptureConversationKey,
                 copy: copy,
                 onSelected: (key) =>
                     unawaited(controller.selectCaptureConversation(key)),
+                onSessionSelected: selectSession,
                 onToggleBranch: (key) => setState(() {
                   if (!_collapsed.add(key)) _collapsed.remove(key);
                 }),
@@ -713,6 +766,155 @@ final class _CaptureConversationWorkspaceState
           ],
         );
       },
+    );
+  }
+}
+
+final class _CaptureSessionGroup {
+  const _CaptureSessionGroup({
+    required this.key,
+    required this.client,
+    required this.sessionId,
+    required this.conversations,
+  });
+
+  final String key;
+  final String? client;
+  final String? sessionId;
+  final List<ConversationSummary> conversations;
+}
+
+const _unresolvedCaptureSessionKey = 'unresolved';
+
+List<_CaptureSessionGroup> _captureSessionGroups(
+  List<ConversationSummary> conversations,
+) {
+  final grouped = <String, List<ConversationSummary>>{};
+  final identities = <String, ({String? client, String? sessionId})>{};
+  for (final conversation in conversations) {
+    final identity = conversation.conversation.clientIdentity;
+    final exact = identity != null && identity.sessionId.isNotEmpty;
+    final key = exact
+        ? '${identity.client}:${identity.sessionId}'
+        : _unresolvedCaptureSessionKey;
+    (grouped[key] ??= []).add(conversation);
+    identities[key] = (
+      client: exact ? identity.client : null,
+      sessionId: exact ? identity.sessionId : null,
+    );
+  }
+  final result = grouped.entries
+      .map((entry) {
+        final identity = identities[entry.key]!;
+        return _CaptureSessionGroup(
+          key: entry.key,
+          client: identity.client,
+          sessionId: identity.sessionId,
+          conversations: List.unmodifiable(entry.value),
+        );
+      })
+      .toList(growable: false);
+  result.sort((left, right) {
+    final leftTime = left.conversations
+        .map((value) => value.latest.occurredAt)
+        .reduce((a, b) => a.isAfter(b) ? a : b);
+    final rightTime = right.conversations
+        .map((value) => value.latest.occurredAt)
+        .reduce((a, b) => a.isAfter(b) ? a : b);
+    final byTime = rightTime.compareTo(leftTime);
+    return byTime != 0 ? byTime : left.key.compareTo(right.key);
+  });
+  return List.unmodifiable(result);
+}
+
+ConversationSummary? _preferredSessionConversation(
+  List<ConversationSummary> values,
+) =>
+    values.where((value) => value.conversation.kind == 'main').firstOrNull ??
+    values.where((value) => value.conversation.kind == 'agent').firstOrNull ??
+    values.firstOrNull;
+
+String _captureSessionTitle(AppCopy copy, _CaptureSessionGroup session) {
+  final sessionId = session.sessionId;
+  if (sessionId == null) return copy('capture.session_unavailable');
+  final client = switch (session.client) {
+    'codex' => 'Codex',
+    'claude' => 'Claude',
+    final value? => value,
+    null => 'Agent',
+  };
+  return '$client  ·  ${_compactOpaqueIdentity(sessionId)}';
+}
+
+String _compactOpaqueIdentity(String value) {
+  if (value.length <= 16) return value;
+  return '${value.substring(0, 6)}…${value.substring(value.length - 8)}';
+}
+
+final class _CaptureSessionSelector extends StatelessWidget {
+  const _CaptureSessionSelector({
+    required this.sessions,
+    required this.selectedKey,
+    required this.copy,
+    required this.onSelected,
+  });
+
+  final List<_CaptureSessionGroup> sessions;
+  final String? selectedKey;
+  final AppCopy copy;
+  final ValueChanged<String> onSelected;
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      key: const Key('capture-session-selector'),
+      padding: const EdgeInsets.fromLTRB(8, 6, 8, 7),
+      decoration: BoxDecoration(
+        color: context.viberColors.panel,
+        border: Border(bottom: BorderSide(color: context.viberColors.divider)),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(
+            copy('capture.session'),
+            style: Theme.of(context).textTheme.labelSmall?.copyWith(
+              color: context.viberColors.textMuted,
+            ),
+          ),
+          const SizedBox(height: 2),
+          Text(
+            copy('capture.session_scope'),
+            style: Theme.of(context).textTheme.bodySmall?.copyWith(
+              color: context.viberColors.textFaint,
+              height: 1.2,
+            ),
+          ),
+          const SizedBox(height: 4),
+          CompactSelectField<String>(
+            key: ValueKey('capture-session-select:$selectedKey'),
+            initialValue: selectedKey,
+            isExpanded: true,
+            items: [
+              for (final session in sessions)
+                DropdownMenuItem(
+                  key: Key('capture-session-option-${session.key}'),
+                  value: session.key,
+                  child: Text(
+                    _captureSessionTitle(copy, session),
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                  ),
+                ),
+            ],
+            onChanged: sessions.length < 2
+                ? null
+                : (value) {
+                    if (value != null) onSelected(value);
+                  },
+          ),
+        ],
+      ),
     );
   }
 }
@@ -780,18 +982,24 @@ final class _CaptureConversationSelector extends StatelessWidget {
 final class _CaptureConversationDirectory extends StatelessWidget {
   const _CaptureConversationDirectory({
     required this.conversations,
+    required this.sessions,
+    required this.selectedSessionKey,
     required this.collapsed,
     required this.selectedKey,
     required this.copy,
     required this.onSelected,
+    required this.onSessionSelected,
     required this.onToggleBranch,
   });
 
   final List<CaptureConversationTreeEntry<ConversationSummary>> conversations;
+  final List<_CaptureSessionGroup> sessions;
+  final String? selectedSessionKey;
   final Set<String> collapsed;
   final String? selectedKey;
   final AppCopy copy;
   final ValueChanged<String> onSelected;
+  final ValueChanged<String> onSessionSelected;
   final ValueChanged<String> onToggleBranch;
 
   @override
@@ -813,6 +1021,12 @@ final class _CaptureConversationDirectory extends StatelessWidget {
       color: context.viberColors.panel,
       child: Column(
         children: [
+          _CaptureSessionSelector(
+            sessions: sessions,
+            selectedKey: selectedSessionKey,
+            copy: copy,
+            onSelected: onSessionSelected,
+          ),
           SectionLabel(
             label: copy('capture.conversations'),
             count: conversations.length,
@@ -1224,7 +1438,6 @@ final class _CaptureContext extends StatelessWidget {
     required this.confirmRevoke,
     required this.mutating,
     required this.onBack,
-    required this.onEnvironment,
     required this.onConfirmRevoke,
     required this.onRevoke,
     required this.onRotate,
@@ -1244,7 +1457,6 @@ final class _CaptureContext extends StatelessWidget {
   final bool confirmRevoke;
   final bool mutating;
   final VoidCallback onBack;
-  final ValueChanged<String> onEnvironment;
   final ValueChanged<bool> onConfirmRevoke;
   final VoidCallback onRevoke;
   final VoidCallback onRotate;
@@ -1394,8 +1606,6 @@ final class _CaptureContext extends StatelessWidget {
                 assignment: assignment,
                 environments: environments,
                 copy: copy,
-                captureMutating: mutating,
-                onCaptureEnvironment: onEnvironment,
                 routeDetail: routeDetail,
               ),
               if (confirmRevoke) ...[
@@ -1579,8 +1789,6 @@ final class _EnvironmentScopeControls extends StatelessWidget {
     required this.assignment,
     required this.environments,
     required this.copy,
-    required this.captureMutating,
-    required this.onCaptureEnvironment,
     required this.routeDetail,
   });
 
@@ -1588,20 +1796,12 @@ final class _EnvironmentScopeControls extends StatelessWidget {
   final CaptureAssignment? assignment;
   final List<EnvironmentRecord> environments;
   final AppCopy copy;
-  final bool captureMutating;
-  final ValueChanged<String> onCaptureEnvironment;
   final String routeDetail;
 
   @override
   Widget build(BuildContext context) {
     final assigned = assignment?.environmentId;
-    final captureChoices = environments
-        .where(
-          (environment) =>
-              environment.state == 'active' || environment.id == assigned,
-        )
-        .toList(growable: false);
-    final assignedName = captureChoices
+    final assignedName = environments
         .where((environment) => environment.id == assigned)
         .map((environment) => environment.name)
         .firstOrNull;
@@ -1616,34 +1816,10 @@ final class _EnvironmentScopeControls extends StatelessWidget {
             ? 'capture.environment.help'
             : 'capture.environment.history',
       ),
-      control: capture.running
-          ? CompactSelectField<String>(
-              key: ValueKey(
-                'capture-environment:${capture.key}:${assignment?.revision ?? 0}',
-              ),
-              initialValue: assigned,
-              isExpanded: true,
-              decoration: const InputDecoration(),
-              items: [
-                for (final environment in captureChoices)
-                  DropdownMenuItem(
-                    value: environment.id,
-                    child: Text(
-                      environment.name,
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
-                    ),
-                  ),
-              ],
-              onChanged: captureMutating
-                  ? null
-                  : (value) =>
-                        value == null ? null : onCaptureEnvironment(value),
-            )
-          : _ReadOnlyEnvironmentValue(
-              key: const Key('capture-environment-readonly'),
-              name: assignedName ?? assigned ?? '—',
-            ),
+      control: _ReadOnlyEnvironmentValue(
+        key: const Key('capture-environment-readonly'),
+        name: assignedName ?? assigned ?? '—',
+      ),
     );
   }
 }
@@ -2180,7 +2356,7 @@ final class _ManualContextReview extends StatelessWidget {
           Text(
             semantic
                 ? copy('capture.manual.review.semantic')
-                : copy('capture.manual.review.transparent'),
+                : copy('capture.manual.review.connection_only'),
             style: Theme.of(buildContext).textTheme.bodySmall,
           ),
           const SizedBox(height: 6),
@@ -2351,6 +2527,7 @@ String _captureMetadata(AppCopy copy, CaptureRecord capture, String source) {
   final managed = capture.managedRun;
   final parts = <String>[
     if (_usefulLabel(managed?.workspaceLabel)) managed!.workspaceLabel!,
+    if (_usefulLabel(managed?.deviceName)) managed!.deviceName!,
     if (_usefulLabel(managed?.localUserLabel)) managed!.localUserLabel!,
     if (capture.isManual && capture.manualCapture != null)
       copy('capture.manual.client_class.${capture.manualCapture!.clientClass}'),

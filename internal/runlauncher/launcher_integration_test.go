@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -177,6 +178,90 @@ exit 7
 	}
 }
 
+func TestLauncherPreservesTheResolvedInvocationPathAfterCanonicalVerification(t *testing.T) {
+	t.Parallel()
+
+	directory := t.TempDir()
+	outputPath := filepath.Join(directory, "invoked-as")
+	canonical, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	canonical, err = filepath.EvalSymlinks(canonical)
+	if err != nil {
+		t.Fatal(err)
+	}
+	invocation := filepath.Join(directory, "agent")
+	if err := os.Symlink(canonical, invocation); err != nil {
+		t.Fatal(err)
+	}
+	command := []string{
+		"agent",
+		"-test.run=TestLaunchArgv0Helper",
+		"--",
+	}
+	control := &controlFixture{
+		t:               t,
+		executable:      invocation,
+		grantExecutable: canonical,
+		workspace:       directory,
+		credential:      capability(0x61),
+		proxy:           capability(0x62),
+		run:             capability(0x63),
+		expectedCommand: command,
+		recipe:          clientadapter.LaunchGeneric,
+		recognition:     clientadapter.RecognitionUnknown,
+	}
+	server := httptest.NewServer(control)
+	defer server.Close()
+	launcher, err := runlauncher.New(runlauncher.Config{
+		Discovery: fixedDiscovery{session: localdiscovery.Session{
+			Schema:            localdiscovery.Schema,
+			InstanceID:        base64.RawURLEncoding.EncodeToString(bytes.Repeat([]byte{0x64}, 20)),
+			ProcessID:         os.Getpid(),
+			BaseURL:           server.URL,
+			ControlCredential: control.credential,
+			ExpiresAt:         time.Now().UTC().Add(time.Minute),
+		}},
+		BaseEnvironment: []string{
+			"PATH=/usr/bin:/bin",
+			"RUNLAUNCHER_ARGV0_OUTPUT=" + outputPath,
+		},
+		Getwd:    func() (string, error) { return directory, nil },
+		LookPath: func(string) (string, error) { return invocation, nil },
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	code, err := launcher.Run(
+		context.Background(),
+		runlauncher.LaunchRequest{
+			EnvironmentID: environment.SystemTransparentID,
+			Command:       command,
+		},
+	)
+	if err != nil || code != 0 {
+		t.Fatalf("Run() exit=%d error=%v", code, err)
+	}
+	invokedAs, err := os.ReadFile(outputPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(invokedAs) != invocation {
+		t.Fatalf("child argv[0] = %q, want invocation path %q", invokedAs, invocation)
+	}
+}
+
+func TestLaunchArgv0Helper(t *testing.T) {
+	outputPath := os.Getenv("RUNLAUNCHER_ARGV0_OUTPUT")
+	if outputPath == "" {
+		return
+	}
+	if err := os.WriteFile(outputPath, []byte(os.Args[0]), 0o600); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestLauncherRejectsControlRedirectWithoutStartingChild(t *testing.T) {
 	t.Parallel()
 
@@ -213,6 +298,7 @@ func TestLauncherBoundsCaptureRunCreation(t *testing.T) {
 	t.Parallel()
 
 	releaseRequest := make(chan struct{})
+	var stderr bytes.Buffer
 	server := httptest.NewServer(http.HandlerFunc(func(
 		_ http.ResponseWriter,
 		_ *http.Request,
@@ -229,6 +315,7 @@ func TestLauncherBoundsCaptureRunCreation(t *testing.T) {
 			ControlCredential: capability(0x52),
 		}},
 		BaseEnvironment: []string{"PATH=/usr/bin:/bin"},
+		Stderr:          &stderr,
 		ControlTimeout:  50 * time.Millisecond,
 		// Create carries its own budget because it is the only control call
 		// that can contain signature verification and a question put to a
@@ -255,11 +342,54 @@ func TestLauncherBoundsCaptureRunCreation(t *testing.T) {
 	}()
 	select {
 	case runErr := <-finished:
-		if runErr == nil {
-			t.Fatal("unresponsive CaptureRun creation succeeded")
+		if !errors.Is(runErr, runlauncher.ErrCapturePreparationTimedOut) {
+			t.Fatalf("unresponsive CaptureRun creation error = %v", runErr)
+		}
+		if !strings.Contains(
+			stderr.String(),
+			"decide any client trust request in the App",
+		) {
+			t.Fatalf("stalled create had no actionable progress: %q", stderr.String())
 		}
 	case <-time.After(2 * time.Second):
 		t.Fatal("CaptureRun creation ignored the configured create timeout")
+	}
+}
+
+func TestLauncherClassifiesAStaleDiscoveryEndpointAsRuntimeUnavailable(
+	t *testing.T,
+) {
+	t.Parallel()
+
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	baseURL := "http://" + listener.Addr().String()
+	if err := listener.Close(); err != nil {
+		t.Fatal(err)
+	}
+	launcher, err := runlauncher.New(runlauncher.Config{
+		Discovery: fixedDiscovery{session: localdiscovery.Session{
+			BaseURL:           baseURL,
+			ControlCredential: capability(0x54),
+		}},
+		BaseEnvironment: []string{"PATH=/usr/bin:/bin"},
+		CreateTimeout:   time.Second,
+		Getwd: func() (string, error) {
+			return t.TempDir(), nil
+		},
+		LookPath: func(string) (string, error) {
+			return "/bin/echo", nil
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := launcher.Run(
+		context.Background(), transparentLaunch("echo"),
+	); !errors.Is(err, runlauncher.ErrRuntimeUnavailable) {
+		t.Fatalf("stale discovery launch error = %v", err)
 	}
 }
 
@@ -330,6 +460,7 @@ func (discovery fixedDiscovery) Load() (localdiscovery.Session, error) {
 type controlFixture struct {
 	t                   *testing.T
 	executable          string
+	grantExecutable     string
 	workspace           string
 	rootPath            string
 	credential          string
@@ -379,14 +510,19 @@ func (fixture *controlFixture) ServeHTTP(
 			fixture.t.Errorf("create request = %+v", input)
 		}
 		fixture.createCalls++
+		grantExecutable := fixture.grantExecutable
+		if grantExecutable == "" {
+			grantExecutable = fixture.executable
+		}
 		writeControlJSON(writer, http.StatusCreated, capturecontrol.LaunchGrant{
 			Run:             fixture.runView(0),
 			CatalogRevision: 7,
 			LaunchRecipe:    fixture.recipe,
 			Recognition:     fixture.recognition,
 			Adapter:         fixture.adapter,
-			ExecutablePath:  fixture.executable,
+			ExecutablePath:  grantExecutable,
 			ProxyAddress:    "http://" + request.Host,
+			ProxyDelivery:   capturecontrol.ProxyDeliveryLocalListener,
 			ProxyToken:      fixture.proxy,
 			RunCapability:   fixture.run,
 			RootPEMPath:     fixture.rootPath,

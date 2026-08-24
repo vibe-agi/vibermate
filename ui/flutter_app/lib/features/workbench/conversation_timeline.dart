@@ -727,14 +727,21 @@ final class _TurnEvidenceItem extends StatelessWidget {
     );
     final endpointLabel = controller.activityEndpointLabel(activity);
     final accountLabel = controller.activityAccountLabel(activity);
+    final originalDestination = activity.routeId == null;
+    final routeLabel = originalDestination
+        ? copy('activity.destination.original')
+        : activity.routeId!;
     final detail = controller.exchangeDetail(activity.id);
     final evidenceSummary = _turnEvidenceSummary(detail, copy);
     final displayPath = [
-      if (endpointLabel.isNotEmpty) endpointLabel,
+      if (originalDestination)
+        routeLabel
+      else if (endpointLabel.isNotEmpty)
+        endpointLabel,
       accountLabel.isEmpty ? copy('common.client_passthrough') : accountLabel,
     ].join('  ›  ');
     final exactPath = [
-      '${copy('flow.route')}: ${activity.routeId}',
+      '${copy('flow.route')}: $routeLabel',
       '${copy('flow.account')}: ${activity.accountId ?? copy('common.client_passthrough')}',
     ].join('\n');
     final requestPreview = activity.requestPreview;
@@ -2347,18 +2354,11 @@ final class _MessageCardState extends State<_MessageCard> {
               Divider(height: 1, color: context.viberColors.dividerSoft),
             Padding(
               padding: const EdgeInsets.fromLTRB(9, 5, 9, 8),
-              child: _ExpandableContentRegion(
+              child: _ContentBlocksView(
                 key: ValueKey('message-content-${widget.id}'),
-                id: widget.id,
+                id: 'message-${widget.id}',
+                blocks: message.blocks,
                 copy: copy,
-                estimatedLines: _estimatedContentLines(message.blocks),
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    for (final block in message.blocks)
-                      _ContentBlockView(block: block, copy: copy),
-                  ],
-                ),
               ),
             ),
           ],
@@ -2467,18 +2467,11 @@ final class _ResponseCard extends StatelessWidget {
             },
           ),
           const SizedBox(height: 5),
-          _ExpandableContentRegion(
+          _ContentBlocksView(
             key: ValueKey('response-content-$id'),
             id: 'response-$id',
+            blocks: response.blocks,
             copy: copy,
-            estimatedLines: _estimatedContentLines(response.blocks),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                for (final block in response.blocks)
-                  _ContentBlockView(block: block, copy: copy),
-              ],
-            ),
           ),
           const SizedBox(height: 6),
           Wrap(
@@ -2576,6 +2569,83 @@ final class _CopyValueButtonState extends State<_CopyValueButton> {
 
 const _defaultVisibleContentLines = 15;
 
+final class _ContentBlocksView extends StatelessWidget {
+  const _ContentBlocksView({
+    required this.id,
+    required this.blocks,
+    required this.copy,
+    super.key,
+  });
+
+  final String id;
+  final List<ExchangeContentBlock> blocks;
+  final AppCopy copy;
+
+  @override
+  Widget build(BuildContext context) {
+    final children = <Widget>[];
+    var ordinary = <MapEntry<int, ExchangeContentBlock>>[];
+    var reasoning = <MapEntry<int, ExchangeContentBlock>>[];
+    void flushOrdinary() {
+      if (ordinary.isEmpty) return;
+      final segment = ordinary;
+      ordinary = <MapEntry<int, ExchangeContentBlock>>[];
+      final segmentId = '$id-${segment.first.key}';
+      children.add(
+        _ExpandableContentRegion(
+          key: ValueKey('content-$segmentId'),
+          id: segmentId,
+          copy: copy,
+          estimatedLines: _estimatedContentLines(
+            segment.map((entry) => entry.value),
+          ),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              for (final entry in segment)
+                _ContentBlockView(
+                  id: '$id-${entry.key}',
+                  block: entry.value,
+                  copy: copy,
+                ),
+            ],
+          ),
+        ),
+      );
+    }
+
+    void flushReasoning() {
+      if (reasoning.isEmpty) return;
+      final segment = reasoning;
+      reasoning = <MapEntry<int, ExchangeContentBlock>>[];
+      children.add(
+        _ReasoningBlockView(
+          key: ValueKey('reasoning-$id-${segment.first.key}'),
+          id: '$id-${segment.first.key}',
+          blocks: segment.map((entry) => entry.value).toList(growable: false),
+          copy: copy,
+        ),
+      );
+    }
+
+    for (final (index, block) in blocks.indexed) {
+      if (block.kind == 'reasoning') {
+        flushOrdinary();
+        reasoning.add(MapEntry(index, block));
+        continue;
+      }
+      flushReasoning();
+      ordinary.add(MapEntry(index, block));
+    }
+    flushOrdinary();
+    flushReasoning();
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: children,
+    );
+  }
+}
+
 int _estimatedContentLines(Iterable<ExchangeContentBlock> blocks) {
   var lines = 0;
   for (final block in blocks) {
@@ -2640,17 +2710,7 @@ final class _ExpandableContentRegionState
   Widget build(BuildContext context) {
     final content = !_collapsible || _expanded
         ? widget.child
-        : SizedBox(
-            height: _collapsedHeight,
-            child: ClipRect(
-              child: OverflowBox(
-                alignment: Alignment.topLeft,
-                minHeight: 0,
-                maxHeight: double.infinity,
-                child: widget.child,
-              ),
-            ),
-          );
+        : _HeightLimitedClip(maxHeight: _collapsedHeight, child: widget.child);
     if (!_collapsible) return content;
 
     final label = widget.copy(
@@ -2679,9 +2739,83 @@ final class _ExpandableContentRegionState
   }
 }
 
-final class _ContentBlockView extends StatelessWidget {
-  const _ContentBlockView({required this.block, required this.copy});
+/// Lays out the complete evidence so Markdown keeps its native geometry, but
+/// reports at most [maxHeight]. Unlike a fixed-height viewport this shrinks to
+/// short content, so the disclosure control always follows the visible block.
+final class _HeightLimitedClip extends SingleChildRenderObjectWidget {
+  const _HeightLimitedClip({required this.maxHeight, required super.child});
 
+  final double maxHeight;
+
+  @override
+  RenderObject createRenderObject(BuildContext context) =>
+      _RenderHeightLimitedClip(maxHeight);
+
+  @override
+  void updateRenderObject(
+    BuildContext context,
+    covariant _RenderHeightLimitedClip renderObject,
+  ) {
+    renderObject.maxHeight = maxHeight;
+  }
+}
+
+final class _RenderHeightLimitedClip extends RenderProxyBox {
+  _RenderHeightLimitedClip(this._maxHeight);
+
+  double _maxHeight;
+
+  set maxHeight(double value) {
+    if (_maxHeight == value) return;
+    _maxHeight = value;
+    markNeedsLayout();
+  }
+
+  @override
+  void performLayout() {
+    final child = this.child;
+    if (child == null) {
+      size = constraints.smallest;
+      return;
+    }
+    child.layout(
+      constraints.copyWith(minHeight: 0, maxHeight: double.infinity),
+      parentUsesSize: true,
+    );
+    size = constraints.constrain(
+      Size(child.size.width, math.min(child.size.height, _maxHeight)),
+    );
+  }
+
+  @override
+  void paint(PaintingContext context, Offset offset) {
+    final child = this.child;
+    if (child == null) return;
+    if (child.size.height <= size.height) {
+      super.paint(context, offset);
+      return;
+    }
+    context.pushClipRect(
+      needsCompositing,
+      offset,
+      Offset.zero & size,
+      super.paint,
+    );
+  }
+
+  @override
+  Rect? describeApproximatePaintClip(RenderObject child) =>
+      child.paintBounds.height > size.height ? Offset.zero & size : null;
+}
+
+final class _ContentBlockView extends StatelessWidget {
+  const _ContentBlockView({
+    required this.id,
+    required this.block,
+    required this.copy,
+  });
+
+  final String id;
   final ExchangeContentBlock block;
   final AppCopy copy;
 
@@ -2768,19 +2902,7 @@ final class _ContentBlockView extends StatelessWidget {
       );
     }
     if (block.kind == 'reasoning') {
-      return ExpansionTile(
-        tilePadding: EdgeInsets.zero,
-        childrenPadding: const EdgeInsets.only(bottom: 6),
-        dense: true,
-        title: Text(
-          copy(
-            block.providerKind == 'reasoning_summary'
-                ? 'exchange.content.reasoning_summary'
-                : 'exchange.content.reasoning',
-          ),
-        ),
-        children: [SelectableText(block.text ?? '', style: monoStyle)],
-      );
+      return _ReasoningBlockView(id: id, blocks: [block], copy: copy);
     }
     if (block.kind == 'tool_result') {
       return Container(
@@ -2856,6 +2978,240 @@ final class _ContentBlockView extends StatelessWidget {
       ],
     );
   }
+}
+
+final class _ReasoningBlockView extends StatefulWidget {
+  const _ReasoningBlockView({
+    required this.id,
+    required this.blocks,
+    required this.copy,
+    super.key,
+  });
+
+  final String id;
+  final List<ExchangeContentBlock> blocks;
+  final AppCopy copy;
+
+  @override
+  State<_ReasoningBlockView> createState() => _ReasoningBlockViewState();
+}
+
+String _reasoningSignature(Iterable<ExchangeContentBlock> blocks) => blocks
+    .map(
+      (block) =>
+          '${block.providerSource}\u0000${block.providerKind}\u0000${block.text}\u0000${block.originalSize}',
+    )
+    .join('\u0001');
+
+final class _ReasoningBlockViewState extends State<_ReasoningBlockView> {
+  bool _expanded = false;
+  bool _collapsed = false;
+
+  @override
+  void didUpdateWidget(covariant _ReasoningBlockView oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.id != widget.id ||
+        _reasoningSignature(oldWidget.blocks) !=
+            _reasoningSignature(widget.blocks)) {
+      _expanded = false;
+      _collapsed = false;
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final blocks = <ExchangeContentBlock>[];
+    final seenText = <String?>{};
+    for (final block in widget.blocks) {
+      // This is a presentation-only collapse of byte-for-byte duplicate
+      // plaintext. The response model and Raw HTTP evidence remain untouched.
+      if (seenText.add(block.text)) blocks.add(block);
+    }
+    final copy = widget.copy;
+    final title = copy('exchange.content.reasoning_evidence');
+    final tone = context.viberColors.route;
+    final collapsible =
+        _estimatedContentLines(blocks) > _defaultVisibleContentLines;
+    final visibleSize = blocks.fold<int>(
+      0,
+      (total, block) => total + block.originalSize,
+    );
+    return Semantics(
+      container: true,
+      label: '$title, ${copy('exchange.content.plaintext_evidence')}',
+      child: Container(
+        key: Key('thinking-block-${widget.id}'),
+        width: double.infinity,
+        margin: const EdgeInsets.only(top: 8, bottom: 3),
+        clipBehavior: Clip.antiAlias,
+        decoration: BoxDecoration(
+          color: tone.withValues(alpha: 0.035),
+          border: Border.all(color: context.viberColors.dividerSoft),
+          borderRadius: ViberMetrics.controlRadius,
+        ),
+        child: Stack(
+          children: [
+            Positioned(
+              left: 0,
+              top: 0,
+              bottom: 0,
+              child: ColoredBox(color: tone, child: const SizedBox(width: 3)),
+            ),
+            Padding(
+              padding: const EdgeInsets.only(left: 3),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  Semantics(
+                    button: true,
+                    expanded: !_collapsed,
+                    child: InkWell(
+                      key: Key('toggle-thinking-block-${widget.id}'),
+                      onTap: () => setState(() {
+                        _collapsed = !_collapsed;
+                      }),
+                      child: Padding(
+                        padding: const EdgeInsets.fromLTRB(9, 7, 7, 6),
+                        child: Row(
+                          children: [
+                            Icon(
+                              Icons.psychology_alt_outlined,
+                              size: 15,
+                              color: tone,
+                            ),
+                            const SizedBox(width: 6),
+                            Expanded(
+                              child: Text(
+                                title,
+                                style: Theme.of(context).textTheme.labelMedium
+                                    ?.copyWith(
+                                      color: tone,
+                                      fontWeight: FontWeight.w700,
+                                    ),
+                              ),
+                            ),
+                            StatusPill(
+                              label: copy(
+                                'exchange.content.plaintext_evidence',
+                              ),
+                              color: tone,
+                              icon: Icons.visibility_outlined,
+                            ),
+                            const SizedBox(width: 7),
+                            Text(
+                              _bytes(visibleSize),
+                              style: monoStyle.copyWith(
+                                color: context.viberColors.textMuted,
+                              ),
+                            ),
+                            const SizedBox(width: 5),
+                            Icon(
+                              _collapsed
+                                  ? Icons.expand_more
+                                  : Icons.expand_less,
+                              size: 16,
+                              color: context.viberColors.textMuted,
+                            ),
+                          ],
+                        ),
+                      ),
+                    ),
+                  ),
+                  if (!_collapsed) ...[
+                    Divider(height: 1, color: context.viberColors.dividerSoft),
+                    Padding(
+                      padding: const EdgeInsets.fromLTRB(10, 9, 10, 10),
+                      child: collapsible && !_expanded
+                          ? _HeightLimitedClip(
+                              maxHeight: _ExpandableContentRegionState
+                                  ._collapsedHeight,
+                              child: _ReasoningEvidenceContents(
+                                blocks: blocks,
+                                copy: copy,
+                              ),
+                            )
+                          : _ReasoningEvidenceContents(
+                              blocks: blocks,
+                              copy: copy,
+                            ),
+                    ),
+                    if (collapsible)
+                      Align(
+                        alignment: Alignment.centerLeft,
+                        child: Padding(
+                          padding: const EdgeInsets.fromLTRB(3, 0, 3, 3),
+                          child: TextButton.icon(
+                            key: Key('toggle-thinking-${widget.id}'),
+                            onPressed: () => setState(() {
+                              _expanded = !_expanded;
+                            }),
+                            icon: Icon(
+                              _expanded ? Icons.unfold_less : Icons.unfold_more,
+                              size: 15,
+                            ),
+                            label: Text(
+                              copy(
+                                _expanded
+                                    ? 'exchange.content.show_15_thinking'
+                                    : 'exchange.content.show_all_thinking',
+                              ),
+                            ),
+                          ),
+                        ),
+                      ),
+                  ],
+                ],
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+final class _ReasoningEvidenceContents extends StatelessWidget {
+  const _ReasoningEvidenceContents({required this.blocks, required this.copy});
+
+  final List<ExchangeContentBlock> blocks;
+  final AppCopy copy;
+
+  @override
+  Widget build(BuildContext context) => Column(
+    crossAxisAlignment: CrossAxisAlignment.stretch,
+    children: [
+      for (final (index, block) in blocks.indexed) ...[
+        if (index > 0)
+          Padding(
+            padding: const EdgeInsets.symmetric(vertical: 8),
+            child: Divider(height: 1, color: context.viberColors.dividerSoft),
+          ),
+        if (blocks.length > 1) ...[
+          Text(
+            copy(
+              block.providerKind == 'reasoning_summary'
+                  ? 'exchange.content.reasoning_summary'
+                  : block.providerKind == 'thinking'
+                  ? 'exchange.content.thinking'
+                  : 'exchange.content.reasoning',
+            ),
+            style: Theme.of(context).textTheme.labelSmall?.copyWith(
+              color: context.viberColors.textMuted,
+              fontWeight: FontWeight.w700,
+            ),
+          ),
+          const SizedBox(height: 5),
+        ],
+        SelectableText(
+          block.text ?? '',
+          style: monoStyle.copyWith(
+            color: context.viberColors.text,
+            height: 1.45,
+          ),
+        ),
+      ],
+    ],
+  );
 }
 
 final class _WrappingCodeBlockBuilder extends MarkdownElementBuilder {
@@ -3002,11 +3358,14 @@ final class _FrozenEvidence extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final value = detail.environment;
+    final route = value.routeId == null
+        ? copy('activity.destination.original')
+        : '${value.routeId}@${value.routeRevision}';
     final entries = <(String, String)>[
       (copy('flow.environment'), '${value.id}@${value.revision}'),
       (copy('flow.endpoint'), value.clientEndpointId),
       (copy('flow.protocol'), value.protocolPlanId),
-      (copy('flow.route'), '${value.routeId}@${value.routeRevision}'),
+      (copy('flow.route'), route),
       (
         copy('flow.account'),
         value.accountId ?? copy('common.client_passthrough'),

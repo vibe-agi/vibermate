@@ -1,5 +1,3 @@
-//go:build !vibermate_native_secrets
-
 package hostsecret
 
 import (
@@ -20,6 +18,7 @@ import (
 
 const (
 	developmentFileSchema   = "vibermate.development-secret-store/v1"
+	serverFileSchema        = "vibermate.server-secret-store/v1"
 	maxDevelopmentFileBytes = 1 << 20
 )
 
@@ -71,7 +70,11 @@ func (factory DevelopmentFileFactory) Open(
 	if factory.path == "" {
 		return nil, errors.New("development SecretStore factory is invalid")
 	}
-	store, err := openDevelopmentFileStore(ctx, factory.path)
+	store, err := openDevelopmentFileStore(
+		ctx,
+		factory.path,
+		developmentFileSchema,
+	)
 	if err != nil {
 		return nil, err
 	}
@@ -79,9 +82,10 @@ func (factory DevelopmentFileFactory) Open(
 }
 
 type developmentFileStore struct {
-	mu    sync.Mutex
-	path  string
-	items map[string]developmentSecret
+	mu     sync.Mutex
+	path   string
+	schema string
+	items  map[string]developmentSecret
 }
 
 var _ secretstore.Store = (*developmentFileStore)(nil)
@@ -89,17 +93,22 @@ var _ secretstore.Store = (*developmentFileStore)(nil)
 func openDevelopmentFileStore(
 	ctx context.Context,
 	path string,
+	schema string,
 ) (*developmentFileStore, error) {
+	if schema != developmentFileSchema && schema != serverFileSchema {
+		return nil, errors.New("protected SecretStore schema is invalid")
+	}
 	if err := prepareDevelopmentDirectory(filepath.Dir(path)); err != nil {
 		return nil, err
 	}
-	items, err := loadDevelopmentFile(ctx, path)
+	items, err := loadDevelopmentFile(ctx, path, schema)
 	if err != nil {
 		return nil, err
 	}
 	return &developmentFileStore{
-		path:  path,
-		items: items,
+		path:   path,
+		schema: schema,
+		items:  items,
 	}, nil
 }
 
@@ -221,7 +230,7 @@ func (store *developmentFileStore) Replace(
 		value:    bytes.Clone(value),
 	}
 	defer destroyDevelopmentItems(candidate)
-	if err := persistDevelopmentFile(store.path, candidate); err != nil {
+	if err := persistDevelopmentFile(store.path, store.schema, candidate); err != nil {
 		return secretstore.Metadata{}, err
 	}
 
@@ -260,7 +269,7 @@ func (store *developmentFileStore) Delete(
 	clear(removed.value)
 	delete(candidate, key)
 	defer destroyDevelopmentItems(candidate)
-	if err := persistDevelopmentFile(store.path, candidate); err != nil {
+	if err := persistDevelopmentFile(store.path, store.schema, candidate); err != nil {
 		return err
 	}
 	clear(current.value)
@@ -296,6 +305,7 @@ func prepareDevelopmentDirectory(path string) error {
 func loadDevelopmentFile(
 	ctx context.Context,
 	path string,
+	expectedSchema string,
 ) (map[string]developmentSecret, error) {
 	info, err := os.Lstat(path)
 	if errors.Is(err, os.ErrNotExist) {
@@ -324,7 +334,7 @@ func loadDevelopmentFile(
 		return nil, invalidDevelopmentFile()
 	}
 	if err := decoder.Decode(&struct{}{}); !errors.Is(err, io.EOF) ||
-		document.Schema != developmentFileSchema ||
+		document.Schema != expectedSchema ||
 		document.Items == nil {
 		return nil, invalidDevelopmentFile()
 	}
@@ -377,10 +387,11 @@ func loadDevelopmentFile(
 
 func persistDevelopmentFile(
 	path string,
+	schema string,
 	items map[string]developmentSecret,
 ) error {
 	document := developmentFileDocument{
-		Schema: developmentFileSchema,
+		Schema: schema,
 		Items:  make(map[string]developmentFileItem, len(items)),
 	}
 	for reference, item := range items {
@@ -431,6 +442,79 @@ func persistDevelopmentFile(
 		return developmentWriteError()
 	}
 	committed = true
+	return nil
+}
+
+// ServerFileFactory is the explicitly selected headless Server credential
+// backend. Values are plaintext-equivalent at rest and protected by the
+// Server data directory's owner-only filesystem boundary. It is available in
+// native builds because a headless Linux Server cannot depend on a desktop
+// login keychain.
+type ServerFileFactory struct {
+	dataDirectory string
+	path          string
+}
+
+var _ secretstore.Factory = ServerFileFactory{}
+
+func NewServerFileFactory(dataDirectory string) (ServerFileFactory, error) {
+	if dataDirectory == "" ||
+		!filepath.IsAbs(dataDirectory) ||
+		filepath.Clean(dataDirectory) != dataDirectory ||
+		filepath.Base(dataDirectory) == "." ||
+		filepath.Base(dataDirectory) == string(filepath.Separator) {
+		return ServerFileFactory{}, errors.New("Server data directory is invalid")
+	}
+	return ServerFileFactory{
+		dataDirectory: dataDirectory,
+		path: filepath.Join(
+			dataDirectory,
+			"server-secrets",
+			"store.json",
+		),
+	}, nil
+}
+
+func (factory ServerFileFactory) Open(
+	ctx context.Context,
+) (secretstore.Store, error) {
+	if ctx == nil {
+		return nil, errors.New("Server SecretStore factory context is nil")
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	if factory.dataDirectory == "" || factory.path == "" {
+		return nil, errors.New("Server SecretStore factory is invalid")
+	}
+	if err := prepareServerDataDirectory(factory.dataDirectory); err != nil {
+		return nil, err
+	}
+	return openDevelopmentFileStore(ctx, factory.path, serverFileSchema)
+}
+
+func prepareServerDataDirectory(path string) error {
+	if err := os.MkdirAll(path, 0o700); err != nil {
+		return fmt.Errorf(
+			"%w: Server data directory could not be created",
+			secretstore.ErrUnavailable,
+		)
+	}
+	info, err := os.Lstat(path)
+	if err != nil || !info.IsDir() || info.Mode()&os.ModeSymlink != 0 {
+		return fmt.Errorf(
+			"%w: Server data directory is invalid",
+			secretstore.ErrUnavailable,
+		)
+	}
+	if runtime.GOOS != "windows" && info.Mode().Perm()&0o077 != 0 {
+		if err := os.Chmod(path, 0o700); err != nil {
+			return fmt.Errorf(
+				"%w: Server data directory permissions could not be applied",
+				secretstore.ErrUnavailable,
+			)
+		}
+	}
 	return nil
 }
 

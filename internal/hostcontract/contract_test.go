@@ -38,8 +38,8 @@ func TestHostContractConstructorsPreserveAuthenticationBoundaries(t *testing.T) 
 	if !server.SupportsWebSessions() || !server.SupportsProxyClients() {
 		t.Fatal("Server contract is missing Server-only capabilities")
 	}
-	if server.SupportsCaptureRuns() || server.SupportsCustomReports() {
-		t.Fatal("Server contract contains Desktop-only capabilities")
+	if !server.SupportsCaptureRuns() || server.SupportsCustomReports() {
+		t.Fatal("Server CaptureRun or Desktop-only capability contract is wrong")
 	}
 }
 

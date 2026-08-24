@@ -25,6 +25,7 @@ import (
 	"github.com/vibe-agi/vibermate/internal/productruntime"
 	"github.com/vibe-agi/vibermate/internal/runlauncher"
 	"github.com/vibe-agi/vibermate/internal/secretstore"
+	"github.com/vibe-agi/vibermate/internal/servercontrol"
 	"github.com/vibe-agi/vibermate/internal/toolapproval"
 )
 
@@ -146,6 +147,113 @@ func TestHostPublishesReadyGenerationAndRunsCapturedChildOverRealSockets(
 	if err := guard.Release(); err != nil {
 		t.Fatal(err)
 	}
+}
+
+func TestMacHostSharesOneRuntimeWithItsRemoteServerBoundary(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	paths := newHostPaths(t, filepath.Join(root, "cache"))
+	options := hostOptions(t, paths, filepath.Join(root, "data"))
+	options.RemoteServerEnabled = true
+	options.RemoteServerListenAddress = "127.0.0.1:0"
+	host := startHost(t, options)
+	remote := host.RemoteServerStatus()
+	if !remote.Ready || remote.InstanceID != host.Status().InstanceID ||
+		remote.ListenAddress == "" || remote.Scheme != "http" ||
+		remote.TLSFingerprint != "" {
+		t.Fatalf("remote Server status = %+v", remote)
+	}
+
+	response := controlRequest(
+		t,
+		host.AppSession().BaseURL,
+		http.MethodGet,
+		servercontrol.ServerAccessPath,
+		host.AppSession().ReadToken,
+		"vibermate://desktop",
+	)
+	defer response.Body.Close()
+	if response.StatusCode != http.StatusOK {
+		t.Fatalf("local Server access status = %d", response.StatusCode)
+	}
+	var access servercontrol.ServerAccess
+	if err := json.NewDecoder(response.Body).Decode(&access); err != nil {
+		t.Fatal(err)
+	}
+	if access.Schema != servercontrol.ServerAccessSchema ||
+		access.Transport != "http" ||
+		access.Authentication != servercontrol.RuntimeUserPasswordAuthentication {
+		t.Fatalf("local Server access = %+v", access)
+	}
+	createPayload, err := json.Marshal(servercontrol.RuntimeUserCreate{
+		Schema:   servercontrol.RuntimeUserCreateSchema,
+		Username: "mac-client", Password: "test-mac-client-password",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	createRequest, err := http.NewRequest(
+		http.MethodPost,
+		host.AppSession().BaseURL+servercontrol.RuntimeUsersPath,
+		strings.NewReader(string(createPayload)),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	createRequest.Header.Set("Origin", "vibermate://desktop")
+	createRequest.Header.Set("Sec-Fetch-Site", "cross-site")
+	createRequest.Header.Set("Sec-Fetch-Mode", "cors")
+	createRequest.Header.Set("Sec-Fetch-Dest", "empty")
+	createRequest.Header.Set("Content-Type", "application/json")
+	createRequest.Header.Set(
+		"Authorization",
+		"Bearer "+host.AppSession().WriteToken,
+	)
+	createResponse, err := (&http.Client{Timeout: 5 * time.Second}).Do(
+		createRequest,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer createResponse.Body.Close()
+	if createResponse.StatusCode != http.StatusCreated {
+		t.Fatalf("local Runtime User create status = %d", createResponse.StatusCode)
+	}
+
+	remoteTransport := &http.Transport{Proxy: nil}
+	defer remoteTransport.CloseIdleConnections()
+	loginPayload, err := json.Marshal(servercontrol.RuntimeUserLogin{
+		Schema:   servercontrol.RuntimeUserLoginSchema,
+		Username: "mac-client", Password: "test-mac-client-password",
+		MachineID:  "uRmbW_GvQ7LZ9poYHh0aC8W3vQoJ0lZB7iK2s6xQfEk",
+		DeviceName: "mac-remote-client",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	loginRequest, err := http.NewRequest(
+		http.MethodPost,
+		"http://"+remote.ListenAddress+servercontrol.RuntimeUserSessionPath,
+		strings.NewReader(string(loginPayload)),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	loginRequest.Header.Set("Content-Type", "application/json")
+	loginResponse, err := (&http.Client{
+		Transport: remoteTransport,
+		Timeout:   5 * time.Second,
+	}).Do(loginRequest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer loginResponse.Body.Close()
+	if loginResponse.StatusCode != http.StatusCreated {
+		t.Fatalf("remote Runtime User login status = %d", loginResponse.StatusCode)
+	}
+
+	shutdownHost(t, host)
 }
 
 func TestHostUsesOnlyTheExplicitWebviewOrigin(t *testing.T) {

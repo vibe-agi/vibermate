@@ -340,35 +340,37 @@ func publishManagedEnvironment(
 				ClientAdapterPolicy: environment.ClientAdapterPolicy{
 					ID: "adapter.claude", Revision: 1,
 				},
-				Mode: environment.PlanModeManaged,
-				UpstreamPlan: environment.UpstreamPlan{
-					DefaultRouteID: routeID,
-					RouteSet: environment.RouteSet{
-						ID: "routes.anthropic", Revision: 1,
-						CandidateRouteIDs: []environment.UpstreamRouteID{routeID},
-					},
-					Routes: []environment.UpstreamRoute{{
-						ID: routeID, Revision: 1,
-						ProviderTarget: environment.ProviderTarget{
-							ID: upstreamEndpointID.String(), Revision: 1,
-							Origin: providerOrigin, RealmID: "anthropic.official",
-							Capabilities: []protocolspec.ProviderCapability{
-								protocolspec.ProviderCapabilityMessages,
-								protocolspec.ProviderCapabilityStreaming,
-								protocolspec.ProviderCapabilityToolCalls,
+				Destination: environment.DestinationPlan{
+					Kind: environment.DestinationKindUpstream,
+					Upstream: &environment.UpstreamPlan{
+						DefaultRouteID: routeID,
+						RouteSet: environment.RouteSet{
+							ID: "routes.anthropic", Revision: 1,
+							CandidateRouteIDs: []environment.UpstreamRouteID{routeID},
+						},
+						Routes: []environment.UpstreamRoute{{
+							ID: routeID, Revision: 1,
+							ProviderTarget: environment.ProviderTarget{
+								ID: upstreamEndpointID.String(), Revision: 1,
+								Origin: providerOrigin, RealmID: "anthropic.official",
+								Capabilities: []protocolspec.ProviderCapability{
+									protocolspec.ProviderCapabilityMessages,
+									protocolspec.ProviderCapabilityStreaming,
+									protocolspec.ProviderCapabilityToolCalls,
+								},
 							},
-						},
-						BackendProtocol: string(environment.ClientProtocolAnthropicMessages),
-						AccountPolicy: environment.RouteAccountPolicy{
-							Revision: 1, Mode: environment.AccountModeManaged,
-							PreferredAccountID:  accountID.String(),
-							CandidateAccountIDs: []string{accountID.String()},
-							AccountRevisions:    map[string]environment.Revision{accountID.String(): 1},
-							FailoverPolicy:      environment.FailoverOff,
-						},
-						ModelPolicy:    environment.ModelPolicy{Revision: 1, Mode: "passthrough"},
-						WireProfileRef: wireprofile.UpstreamWireProfileFollowClientValue,
-					}},
+							BackendProtocol: string(environment.ClientProtocolAnthropicMessages),
+							AccountPolicy: environment.RouteAccountPolicy{
+								Revision:            1,
+								PreferredAccountID:  accountID.String(),
+								CandidateAccountIDs: []string{accountID.String()},
+								AccountRevisions:    map[string]environment.Revision{accountID.String(): 1},
+								FailoverPolicy:      environment.FailoverOff,
+							},
+							ModelPolicy:    environment.ModelPolicy{Revision: 1, Mode: "passthrough"},
+							WireProfileRef: wireprofile.UpstreamWireProfileFollowClientValue,
+						}},
+					},
 				},
 			}},
 		}},

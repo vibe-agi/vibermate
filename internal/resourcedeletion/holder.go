@@ -52,9 +52,6 @@ const (
 	// KindRunningCapture is a Capture still admitting traffic. Its admission
 	// decisions are frozen against the authority being deleted.
 	KindRunningCapture Kind = "running_capture"
-	// KindWorkspaceDefault is a workspace whose next run would be left pointing
-	// at something that no longer exists.
-	KindWorkspaceDefault Kind = "workspace_default"
 	// KindEnvironmentRoute is a published route that names the resource.
 	KindEnvironmentRoute Kind = "environment_route"
 	// KindOwnedAccount is a ProviderAccount the resource owns. Its credential
@@ -65,7 +62,7 @@ const (
 
 func (kind Kind) Valid() bool {
 	switch kind {
-	case KindRunningCapture, KindWorkspaceDefault, KindEnvironmentRoute,
+	case KindRunningCapture, KindEnvironmentRoute,
 		KindOwnedAccount:
 		return true
 	default:

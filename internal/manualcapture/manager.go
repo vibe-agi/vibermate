@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/vibe-agi/vibermate/internal/capturecredential"
+	"github.com/vibe-agi/vibermate/internal/evidencearchive"
 )
 
 const (
@@ -40,6 +41,7 @@ type Options struct {
 	Random               io.Reader
 	MaxTemporaryLifetime time.Duration
 	EvidenceBarrier      EvidenceBarrier
+	ArchiveBarrier       evidencearchive.CaptureCreationBarrier
 }
 
 // TerminalEvidence owns a prepared ManualCapture evidence boundary.
@@ -59,6 +61,7 @@ func DefaultOptions(repository Repository) Options {
 		Clock:                SystemClock{},
 		Random:               rand.Reader,
 		MaxTemporaryLifetime: MaximumTemporaryLifetime,
+		ArchiveBarrier:       evidencearchive.NewBarrier(),
 	}
 }
 
@@ -68,6 +71,7 @@ type Manager struct {
 	random               io.Reader
 	maxTemporaryLifetime time.Duration
 	evidenceBarrier      EvidenceBarrier
+	archiveBarrier       evidencearchive.CaptureCreationBarrier
 	lifecycle            *lifecycleGate
 	recovery             Recovery
 }
@@ -77,7 +81,8 @@ func NewManager(ctx context.Context, options Options) (*Manager, error) {
 		return nil, fmt.Errorf("%w: startup context is nil", ErrInvalidCommand)
 	}
 	if options.Repository == nil || options.Clock == nil || options.Random == nil ||
-		options.MaxTemporaryLifetime < MinimumTemporaryLifetime {
+		options.MaxTemporaryLifetime < MinimumTemporaryLifetime ||
+		options.ArchiveBarrier == nil {
 		return nil, fmt.Errorf("%w: Manager dependencies are incomplete", ErrInvalidCommand)
 	}
 	now := canonicalTime(options.Clock.Now())
@@ -91,6 +96,7 @@ func NewManager(ctx context.Context, options Options) (*Manager, error) {
 		random:               options.Random,
 		maxTemporaryLifetime: options.MaxTemporaryLifetime,
 		evidenceBarrier:      options.EvidenceBarrier,
+		archiveBarrier:       options.ArchiveBarrier,
 		lifecycle:            newLifecycleGate(),
 		recovery:             recovery,
 	}, nil
@@ -118,6 +124,11 @@ func (manager *Manager) Create(
 		return Grant{}, err
 	}
 	defer finish()
+	archiveRelease, err := manager.archiveBarrier.BeginCaptureCreation(operation)
+	if err != nil {
+		return Grant{}, fmt.Errorf("enter Capture creation archive barrier: %w", err)
+	}
+	defer archiveRelease()
 
 	for attempt := 0; attempt < createCollisionRetries; attempt++ {
 		id, randomErr := newManualCaptureID(manager.random)

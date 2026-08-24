@@ -40,7 +40,11 @@ func TestEnvironmentDraftPreviewPublishAndHistoricalRevisionRoutes(t *testing.T)
 	if err := json.Unmarshal(list.Body.Bytes(), &listed); err != nil ||
 		len(listed.Items) == 0 ||
 		listed.Items[0].ClientEndpoints == nil ||
-		listed.Items[0].PluginBindings == nil {
+		listed.Items[0].PluginBindings == nil ||
+		len(listed.Items[0].ClientEndpoints) == 0 ||
+		listed.Items[0].ClientEndpoints[0].ProtocolPlans == nil ||
+		len(listed.Items[0].ClientEndpoints[0].ProtocolPlans) == 0 ||
+		listed.Items[0].ClientEndpoints[0].ProtocolPlans[0].PluginBindings == nil {
 		t.Fatalf("Environment directory emitted nullable collections: body=%s err=%v", list.Body.Bytes(), err)
 	}
 
@@ -64,7 +68,10 @@ func TestEnvironmentDraftPreviewPublishAndHistoricalRevisionRoutes(t *testing.T)
 	if preview.Code != http.StatusOK {
 		t.Fatalf("preview status=%d body=%s", preview.Code, preview.Body.Bytes())
 	}
-	assertJSONString(t, preview.Body.Bytes(), "classification", "hot_switch")
+	if !bytes.Contains(preview.Body.Bytes(), []byte(`"continuingCaptures":[]`)) ||
+		bytes.Contains(preview.Body.Bytes(), []byte(`"classification"`)) {
+		t.Fatalf("preview kept legacy switching semantics: %s", preview.Body.Bytes())
+	}
 
 	publish := environmentRequest(t, application, http.MethodPost, "/api/v1/environments/work/draft/actions/publish", 1, "environment-publish-01", nil)
 	if publish.Code != http.StatusOK {
@@ -97,7 +104,7 @@ func TestEnvironmentDraftPreviewPublishAndHistoricalRevisionRoutes(t *testing.T)
 	}
 }
 
-func TestEnvironmentDraftAcceptsCanonicalOriginalCredentialRoute(t *testing.T) {
+func TestEnvironmentDraftSavesPreviewsAndPublishesOriginalDestination(t *testing.T) {
 	t.Parallel()
 	runtime := startRuntime(t)
 	defer shutdownRuntime(t, runtime)
@@ -126,34 +133,7 @@ func TestEnvironmentDraftAcceptsCanonicalOriginalCredentialRoute(t *testing.T) {
       "revision": 1,
       "clientProtocol": "anthropic_messages",
       "clientAdapterPolicy": {"id":"adapter.claude.official","revision":1},
-      "mode": "managed",
-      "upstreamPlan": {
-        "routes": [{
-          "id": "route.claude.official",
-          "revision": 1,
-          "providerTarget": {
-            "id":"target.claude.official",
-            "revision":1,
-            "origin":"https://api.anthropic.com",
-            "realmId":"anthropic.official",
-            "capabilities":["messages","streaming","tool_calls"]
-          },
-          "backendProtocol":"anthropic_messages",
-          "accountPolicy": {
-            "revision":1,
-            "mode":"client_passthrough",
-            "preferredAccountId":"",
-            "candidateAccountIds":[],
-            "accountRevisions":{},
-            "failoverPolicy":"off"
-          },
-          "modelPolicy":{"revision":1,"mode":"passthrough","fixedModel":""},
-          "wireProfileRef":"follow-client",
-          "pluginBindings":[]
-        }],
-        "defaultRouteId":"route.claude.official",
-        "routeSet":{"id":"routes.claude.official","revision":1,"candidateRouteIds":["route.claude.official"]}
-      },
+      "destination": {"kind":"original"},
       "pluginBindings":[]
     }]
   }],
@@ -202,6 +182,315 @@ func TestEnvironmentDraftAcceptsCanonicalOriginalCredentialRoute(t *testing.T) {
 		t.Fatalf("publish status=%d body=%s", publish.Code, publish.Body.Bytes())
 	}
 	assertJSONString(t, publish.Body.Bytes(), "outcome", "committed")
+}
+
+func TestEnvironmentDraftPublishesOneAccountAcrossExplicitEndpointProtocols(t *testing.T) {
+	t.Parallel()
+	runtime := startRuntime(t)
+	defer shutdownRuntime(t, runtime)
+	application, err := desktopcontrol.New(desktopcontrol.Options{
+		Readiness: readyState(true), Status: runtime,
+		Environments: runtime.Environments(), Assignments: runtime.CaptureAssignments(),
+		Activities: runtime.Activities(), Contents: runtime.ExchangeContents(), Connections: runtime.ConnectionEvents(),
+		Egress: runtime.EgressAttempts(), Approvals: runtime.ToolApprovals(),
+		Endpoints: runtime.UpstreamEndpoints(), Accounts: runtime.ProviderAccounts(), Offline: runtime,
+		ManualCaptures: runtime.ManualCaptures(), Clock: desktopcontrol.SystemClock{},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	relay := httptest.NewServer(http.NotFoundHandler())
+	t.Cleanup(relay.Close)
+	createdEndpoint := environmentRequest(
+		t,
+		application,
+		http.MethodPost,
+		"/api/v1/upstream-endpoints",
+		0,
+		"upstream-endpoint-cherry-create-0001",
+		[]byte(`{"id":"target.cherry.anthropic","displayName":"Cherry Anthropic","origin":"`+relay.URL+`","backendProtocols":["anthropic_messages","openai_responses"]}`),
+	)
+	if createdEndpoint.Code != http.StatusCreated {
+		t.Fatalf("create Endpoint status=%d body=%s", createdEndpoint.Code, createdEndpoint.Body.Bytes())
+	}
+	createdAccount := environmentRequest(
+		t,
+		application,
+		http.MethodPost,
+		"/api/v1/provider-accounts",
+		0,
+		"provider-account-cherry-create-0001",
+		[]byte(`{"id":"account.cherry.bearer","displayName":"Cherry","upstreamEndpointId":"target.cherry.anthropic","kind":"bearer_token","secret":"test-only-secret"}`),
+	)
+	if createdAccount.Code != http.StatusCreated {
+		t.Fatalf("create Account status=%d body=%s", createdAccount.Code, createdAccount.Body.Bytes())
+	}
+
+	draftBody := []byte(`{
+  "expectedDraftRevision": 0,
+  "name": "Cherry mapped",
+  "state": "active",
+  "clientEndpoints": [{
+    "id": "endpoint.client.anthropic",
+    "revision": 1,
+    "clientOrigin": "https://api.anthropic.com",
+    "protocolPlans": [{
+      "id": "plan.client.anthropic",
+      "revision": 1,
+      "clientProtocol": "anthropic_messages",
+      "clientAdapterPolicy": {"id":"adapter.client.anthropic","revision":1},
+      "destination": {
+        "kind": "upstream",
+        "upstream": {
+        "routes": [{
+          "id": "route.cherry.anthropic",
+          "revision": 1,
+          "providerTarget": {
+            "id":"target.cherry.anthropic",
+            "revision":1,
+            "origin":"` + relay.URL + `",
+            "realmId":"target.cherry.anthropic",
+            "capabilities":["messages","streaming","tool_calls"]
+          },
+          "backendProtocol":"anthropic_messages",
+          "accountPolicy": {
+            "revision":1,
+            "preferredAccountId":"account.cherry.bearer",
+            "candidateAccountIds":["account.cherry.bearer"],
+            "accountRevisions":{"account.cherry.bearer":1},
+            "failoverPolicy":"off"
+          },
+          "modelPolicy":{"revision":1,"mode":"map","mappings":[{"requestedModel":"claude-client-alias","upstreamModel":"dashscope:deepseek-v4-flash-0731"}]},
+          "wireProfileRef":"follow-client",
+          "pluginBindings":[]
+        }],
+        "defaultRouteId":"route.cherry.anthropic",
+        "routeSet":{"id":"routes.client.anthropic","revision":1,"candidateRouteIds":["route.cherry.anthropic"]}
+        }
+      },
+      "pluginBindings":[]
+    }]
+  }, {
+    "id": "endpoint.client.openai",
+    "revision": 1,
+    "clientOrigin": "https://api.openai.com",
+    "protocolPlans": [{
+      "id": "plan.client.openai",
+      "revision": 1,
+      "clientProtocol": "openai_responses",
+      "clientAdapterPolicy": {"id":"adapter.client.openai","revision":1},
+      "destination": {
+        "kind": "upstream",
+        "upstream": {
+        "routes": [{
+          "id": "route.cherry.openai",
+          "revision": 1,
+          "providerTarget": {
+            "id":"target.cherry.anthropic",
+            "revision":1,
+            "origin":"` + relay.URL + `",
+            "realmId":"target.cherry.anthropic",
+            "capabilities":["messages","streaming","tool_calls"]
+          },
+          "backendProtocol":"openai_responses",
+          "accountPolicy": {
+            "revision":1,
+            "preferredAccountId":"account.cherry.bearer",
+            "candidateAccountIds":["account.cherry.bearer"],
+            "accountRevisions":{"account.cherry.bearer":1},
+            "failoverPolicy":"off"
+          },
+          "modelPolicy":{"revision":1,"mode":"passthrough","mappings":[]},
+          "wireProfileRef":"follow-client",
+          "pluginBindings":[]
+        }],
+        "defaultRouteId":"route.cherry.openai",
+        "routeSet":{"id":"routes.client.openai","revision":1,"candidateRouteIds":["route.cherry.openai"]}
+        }
+      },
+      "pluginBindings":[]
+    }]
+  }],
+  "pluginBindings": [],
+  "budgetPolicy": {"id":"","revision":0},
+  "egressPolicy": {"id":"","revision":0,"mode":""},
+  "contentRecording": {"mode":"full","retentionDays":30}
+}`)
+	draft := environmentRequest(
+		t,
+		application,
+		http.MethodPut,
+		"/api/v1/environments/cherry-mapped/draft",
+		0,
+		"environment-cherry-draft-0001",
+		draftBody,
+	)
+	if draft.Code != http.StatusOK {
+		t.Fatalf("draft status=%d body=%s", draft.Code, draft.Body.Bytes())
+	}
+	if !bytes.Contains(draft.Body.Bytes(), []byte(`"requestedModel":"claude-client-alias","upstreamModel":"dashscope:deepseek-v4-flash-0731"`)) {
+		t.Fatalf("draft changed the provider-owned model ID: %s", draft.Body.Bytes())
+	}
+	preview := environmentRequest(
+		t,
+		application,
+		http.MethodPost,
+		"/api/v1/environments/cherry-mapped/draft/actions/preview",
+		1,
+		"environment-cherry-preview-0001",
+		nil,
+	)
+	if preview.Code != http.StatusOK {
+		t.Fatalf("preview status=%d body=%s", preview.Code, preview.Body.Bytes())
+	}
+	publish := environmentRequest(
+		t,
+		application,
+		http.MethodPost,
+		"/api/v1/environments/cherry-mapped/draft/actions/publish",
+		1,
+		"environment-cherry-publish-0001",
+		nil,
+	)
+	if publish.Code != http.StatusOK {
+		t.Fatalf("publish status=%d body=%s", publish.Code, publish.Body.Bytes())
+	}
+
+	reopened := environmentRequest(
+		t,
+		application,
+		http.MethodGet,
+		"/api/v1/environments/cherry-mapped",
+		0,
+		"",
+		nil,
+	)
+	if reopened.Code != http.StatusOK {
+		t.Fatalf("reopen status=%d body=%s", reopened.Code, reopened.Body.Bytes())
+	}
+	var published desktopcontrol.EnvironmentResponse
+	if err := json.Unmarshal(reopened.Body.Bytes(), &published); err != nil {
+		t.Fatal(err)
+	}
+	route := &published.ClientEndpoints[0].ProtocolPlans[0].Destination.Upstream.Routes[0]
+	if len(route.ModelPolicy.Mappings) != 1 ||
+		route.ModelPolicy.Mappings[0].RequestedModel != "claude-client-alias" ||
+		route.ModelPolicy.Mappings[0].UpstreamModel != "dashscope:deepseek-v4-flash-0731" {
+		t.Fatalf("published model mappings = %#v", route.ModelPolicy.Mappings)
+	}
+	openAIRoute := &published.ClientEndpoints[1].ProtocolPlans[0].Destination.Upstream.Routes[0]
+	if openAIRoute.BackendProtocol != "openai_responses" ||
+		openAIRoute.ProviderTarget.ID != "target.cherry.anthropic" ||
+		openAIRoute.AccountPolicy.PreferredAccountID != "account.cherry.bearer" {
+		t.Fatalf("published shared-account OpenAI route = %#v", openAIRoute)
+	}
+
+	baseEndpointRevision := published.ClientEndpoints[0].Revision
+	basePlanRevision := published.ClientEndpoints[0].ProtocolPlans[0].Revision
+	baseRouteRevision := route.Revision
+	baseModelPolicyRevision := route.ModelPolicy.Revision
+	route.ModelPolicy.Mappings = append(route.ModelPolicy.Mappings, environment.ModelMapping{
+		RequestedModel: "claude-second-alias",
+		UpstreamModel:  "relay/custom:model_2",
+	})
+	route.ModelPolicy.Revision = baseModelPolicyRevision + 1
+	route.Revision = baseRouteRevision + 2
+	published.ClientEndpoints[0].ProtocolPlans[0].Revision = basePlanRevision + 2
+	published.ClientEndpoints[0].Revision = baseEndpointRevision + 2
+	policySet := published.PolicySet
+	updateInput := desktopcontrol.EnvironmentDraftInput{
+		ExpectedDraftRevision: 0,
+		Name:                  published.Name,
+		State:                 published.State,
+		ClientEndpoints:       published.ClientEndpoints,
+		PluginBindings:        published.PluginBindings,
+		BudgetPolicy:          published.BudgetPolicy,
+		EgressPolicy:          published.EgressPolicy,
+		ContentRecording:      published.ContentRecording,
+		PolicySet:             &policySet,
+	}
+	cumulativeBody, err := json.Marshal(updateInput)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cumulative := environmentRequest(
+		t,
+		application,
+		http.MethodPut,
+		"/api/v1/environments/cherry-mapped/draft",
+		uint64(published.Revision),
+		"environment-cherry-cumulative-draft-0001",
+		cumulativeBody,
+	)
+	if cumulative.Code != http.StatusUnprocessableEntity {
+		t.Fatalf("cumulative draft status=%d body=%s", cumulative.Code, cumulative.Body.Bytes())
+	}
+	assertJSONString(t, cumulative.Body.Bytes(), "code", "invalid_control_request")
+
+	// One UI review is one atomic graph transition. Every changed authority in
+	// the exact request body must advance once even if several local gestures
+	// edited the same Route before review.
+	updateInput.ClientEndpoints[0].Revision = baseEndpointRevision + 1
+	updateInput.ClientEndpoints[0].ProtocolPlans[0].Revision = basePlanRevision + 1
+	updateInput.ClientEndpoints[0].ProtocolPlans[0].Destination.Upstream.Routes[0].Revision = baseRouteRevision + 1
+	canonicalBody, err := json.Marshal(updateInput)
+	if err != nil {
+		t.Fatal(err)
+	}
+	canonical := environmentRequest(
+		t,
+		application,
+		http.MethodPut,
+		"/api/v1/environments/cherry-mapped/draft",
+		uint64(published.Revision),
+		"environment-cherry-canonical-draft-0001",
+		canonicalBody,
+	)
+	if canonical.Code != http.StatusOK {
+		t.Fatalf("canonical draft status=%d body=%s", canonical.Code, canonical.Body.Bytes())
+	}
+	var saved desktopcontrol.EnvironmentDraftResponse
+	if err := json.Unmarshal(canonical.Body.Bytes(), &saved); err != nil {
+		t.Fatal(err)
+	}
+	canonicalPreview := environmentRequest(
+		t,
+		application,
+		http.MethodPost,
+		"/api/v1/environments/cherry-mapped/draft/actions/preview",
+		uint64(saved.DraftRevision),
+		"environment-cherry-canonical-preview-0001",
+		nil,
+	)
+	if canonicalPreview.Code != http.StatusOK {
+		t.Fatalf("canonical preview status=%d body=%s", canonicalPreview.Code, canonicalPreview.Body.Bytes())
+	}
+	canonicalPublish := environmentRequest(
+		t,
+		application,
+		http.MethodPost,
+		"/api/v1/environments/cherry-mapped/draft/actions/publish",
+		uint64(saved.DraftRevision),
+		"environment-cherry-canonical-publish-0001",
+		nil,
+	)
+	if canonicalPublish.Code != http.StatusOK {
+		t.Fatalf("canonical publish status=%d body=%s", canonicalPublish.Code, canonicalPublish.Body.Bytes())
+	}
+	finalView := environmentRequest(
+		t,
+		application,
+		http.MethodGet,
+		"/api/v1/environments/cherry-mapped",
+		0,
+		"",
+		nil,
+	)
+	if finalView.Code != http.StatusOK ||
+		!bytes.Contains(finalView.Body.Bytes(), []byte(`"requestedModel":"claude-second-alias","upstreamModel":"relay/custom:model_2"`)) {
+		t.Fatalf("reopened Environment lost model mapping: status=%d body=%s", finalView.Code, finalView.Body.Bytes())
+	}
 }
 
 func TestActivityRouteFiltersAndReturnsFrozenEnvironmentReferences(t *testing.T) {
@@ -330,6 +619,62 @@ func TestConversationRouteReturnsFlatProjectionAndRejectsUnknownQuery(t *testing
 			conflicting.Code,
 			conflicting.Body.Bytes(),
 		)
+	}
+}
+
+func TestOriginalDestinationConversationDoesNotRequireSyntheticUpstreamRoute(
+	t *testing.T,
+) {
+	t.Parallel()
+	runtime := startRuntime(t)
+	defer shutdownRuntime(t, runtime)
+	environmentID, err := environment.NewEnvironmentID("system_transparent")
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = runtime.Activities().Record(context.Background(), activity.Event{
+		Kind: activity.KindExchangeCompleted, EnvironmentID: environmentID,
+		EnvironmentRevision: 1, EnvironmentDigest: strings.Repeat("a", 64),
+		ClientEndpointID: "endpoint.system.chatgpt", ClientEndpointRevision: 1,
+		ProtocolPlanID: "plan.system.chatgpt.responses", ProtocolPlanRevision: 1,
+		SubjectID: "exchange-original-conversation", Status: activity.StatusSucceeded,
+		SourceKind: activity.SourceCaptureRun, SourceDisplayName: "codex",
+		SourceRecognition: activity.SourceRecognitionVerified,
+		CaptureRunID:      "run-original-conversation",
+		ConnectionID:      "connection-original-conversation",
+		Conversation: agentconversation.Ref{
+			ProjectionID: "capture_run:run-original-conversation:main",
+			DisplayName:  "codex",
+			Kind:         agentconversation.KindMain,
+			Evidence:     agentconversation.EvidenceCaptureRun,
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	application, err := desktopcontrol.New(desktopcontrol.Options{
+		Readiness: readyState(true), Status: runtime, Environments: runtime.Environments(),
+		Assignments: runtime.CaptureAssignments(), Activities: runtime.Activities(), Contents: runtime.ExchangeContents(),
+		Connections: runtime.ConnectionEvents(), Egress: runtime.EgressAttempts(),
+		Approvals: runtime.ToolApprovals(), Endpoints: runtime.UpstreamEndpoints(), Accounts: runtime.ProviderAccounts(),
+		Offline: runtime, Clock: desktopcontrol.SystemClock{}, ManualCaptures: runtime.ManualCaptures(),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	for _, path := range []string{
+		"/api/v1/activities?kind=exchange&captureRunId=run-original-conversation",
+		"/api/v1/conversations?captureRunId=run-original-conversation",
+	} {
+		response := environmentRequest(t, application, http.MethodGet, path, 0, "", nil)
+		if response.Code != http.StatusOK ||
+			!bytes.Contains(response.Body.Bytes(), []byte(`"id":"system_transparent"`)) ||
+			bytes.Contains(response.Body.Bytes(), []byte(`"routeId"`)) ||
+			bytes.Contains(response.Body.Bytes(), []byte(`"routeRevision"`)) ||
+			bytes.Contains(response.Body.Bytes(), []byte(`"accountId"`)) {
+			t.Fatalf("GET %s status=%d body=%s", path, response.Code, response.Body.Bytes())
+		}
 	}
 }
 

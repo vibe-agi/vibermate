@@ -233,6 +233,11 @@ type Controller interface {
 	Create(context.Context, CreateCommand) (View, error)
 	ReplaceSecret(context.Context, ReplaceSecretCommand) (View, error)
 	Delete(context.Context, DeleteCommand) (DeleteResult, error)
+	AcquireEndpointCredential(
+		context.Context,
+		ID,
+		upstreamendpoint.Endpoint,
+	) (providerauth.Lease, error)
 }
 
 func secretReference(id ID) (secretstore.Reference, error) {

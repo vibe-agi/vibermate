@@ -100,6 +100,28 @@ void main() {
     },
   );
 
+  test('native Client Session timeline crosses Capture boundaries', () async {
+    final fixture = PreviewControlApi();
+    final api = _ControlledActivityApi(fixture);
+    final controller = WorkbenchController(
+      api: api,
+      terminalCommands: PreviewTerminalCommandService(),
+      previewMode: true,
+      closeRuntime: fixture.close,
+    );
+    addTearDown(controller.dispose);
+
+    controller.data = await fixture.loadDashboard();
+    await controller.selectCapture('managed_run:run-2');
+
+    final selected = controller.selectedCaptureConversation;
+    expect(selected?.conversation.evidence, 'explicit_session');
+    final request = api.activityRequests.last;
+    expect(request.conversationId, selected?.key);
+    expect(request.captureRunId, isNull);
+    expect(request.manualCaptureId, isNull);
+  });
+
   test(
     'Raw evidence loads on demand without retaining revealed bytes',
     () async {
@@ -496,8 +518,7 @@ void main() {
 
     final impact = await controller.reviewSelectedEnvironment(candidate);
     expect(impact, isNotNull);
-    expect(impact!.classification, 'hot_switch');
-    expect(impact.hotSwitchCount, 6);
+    expect(impact!.continuingCaptures, hasLength(6));
     expect(controller.reviewedEnvironmentDraft!.baseRevision, 7);
     expect(controller.reviewedEnvironmentDraft!.draftRevision, 8);
     expect(controller.selectedEnvironment!.name, 'Work');
@@ -715,7 +736,7 @@ void main() {
       );
       expect(impact, isNotNull);
       expect(impact!.baseRevision, 0);
-      expect(impact.affected, isEmpty);
+      expect(impact.continuingCaptures, isEmpty);
       expect(
         controller.data!.environments.any(
           (value) => value.id == 'local-observe',
@@ -768,77 +789,6 @@ void main() {
       expect(second.draftRevision, first.draftRevision + 1);
     },
   );
-
-  test(
-    'Workspace default changes future runs without mutating the current Capture',
-    () async {
-      final api = PreviewControlApi();
-      final controller = WorkbenchController(
-        api: api,
-        terminalCommands: PreviewTerminalCommandService(),
-        previewMode: true,
-        closeRuntime: api.close,
-      );
-      addTearDown(controller.dispose);
-      await controller.initialize();
-
-      final capture = controller.selectedCapture!;
-      final assignment = controller.selectedAssignment!;
-      expect(capture.managedRun!.hasWorkspaceIdentity, isTrue);
-      expect(controller.selectedWorkspaceDefault!.environmentId, 'work');
-
-      expect(await controller.setSelectedWorkspaceDefault('research'), isTrue);
-      expect(controller.selectedWorkspaceDefault!.environmentId, 'research');
-      expect(controller.selectedWorkspaceDefault!.revision, 2);
-      expect(controller.workspaceDefaultNotice, 'workspace_default.saved');
-      expect(controller.selectedAssignment!.captureKey, assignment.captureKey);
-      expect(
-        controller.selectedAssignment!.environmentId,
-        assignment.environmentId,
-      );
-      expect(controller.selectedAssignment!.revision, assignment.revision);
-      final authoritativeAssignment = await api.captureAssignment(capture.key);
-      expect(authoritativeAssignment.environmentId, assignment.environmentId);
-      expect(authoritativeAssignment.revision, assignment.revision);
-
-      expect(await controller.setSelectedWorkspaceDefault(null), isTrue);
-      expect(controller.selectedWorkspaceDefault, isNull);
-      expect(controller.workspaceDefaultNotice, 'workspace_default.cleared');
-      expect(
-        (await api.captureAssignment(capture.key)).revision,
-        assignment.revision,
-      );
-    },
-  );
-
-  test(
-    'Workspace default stale CAS reconciles without hiding the conflict',
-    () async {
-      final api = PreviewControlApi();
-      final controller = WorkbenchController(
-        api: api,
-        terminalCommands: PreviewTerminalCommandService(),
-        previewMode: true,
-        closeRuntime: api.close,
-      );
-      addTearDown(controller.dispose);
-      await controller.initialize();
-
-      final managed = controller.selectedCapture!.managedRun!;
-      final initial = controller.selectedWorkspaceDefault!;
-      final external = await api.setWorkspaceEnvironmentDefault(
-        machineId: managed.machineId!,
-        workspaceId: managed.workspaceId!,
-        expectedRevision: initial.revision,
-        environmentId: 'research',
-      );
-
-      expect(await controller.setSelectedWorkspaceDefault('research'), isFalse);
-      expect(controller.workspaceDefaultError, 'revision_conflict (409)');
-      expect(controller.selectedWorkspaceDefault!.revision, external.revision);
-      expect(controller.selectedWorkspaceDefault!.environmentId, 'research');
-    },
-  );
 }
 
 final class _SequencedExchangeApi implements ControlApi {
@@ -870,6 +820,14 @@ final class _ControlledActivityApi implements ControlApi {
   final PreviewControlApi delegate;
   String? _blockedConversation;
   Completer<void>? _release;
+  final activityRequests =
+      <
+        ({
+          String? captureRunId,
+          String? manualCaptureId,
+          String? conversationId,
+        })
+      >[];
 
   void blockConversation(String key) {
     _blockedConversation = key;
@@ -908,6 +866,11 @@ final class _ControlledActivityApi implements ControlApi {
     String? environmentId,
     String? conversationId,
   }) async {
+    activityRequests.add((
+      captureRunId: captureRunId,
+      manualCaptureId: manualCaptureId,
+      conversationId: conversationId,
+    ));
     final release = conversationId == _blockedConversation ? _release : null;
     if (release != null) await release.future;
     return delegate.activities(
@@ -919,15 +882,6 @@ final class _ControlledActivityApi implements ControlApi {
       conversationId: conversationId,
     );
   }
-
-  @override
-  Future<WorkspaceEnvironmentDefault?> workspaceEnvironmentDefault({
-    required String machineId,
-    required String workspaceId,
-  }) => delegate.workspaceEnvironmentDefault(
-    machineId: machineId,
-    workspaceId: workspaceId,
-  );
 
   @override
   dynamic noSuchMethod(Invocation invocation) =>
@@ -986,15 +940,6 @@ final class _DeletionTrackingApi implements ControlApi {
     manualCaptureId: manualCaptureId,
     environmentId: environmentId,
     conversationId: conversationId,
-  );
-
-  @override
-  Future<WorkspaceEnvironmentDefault?> workspaceEnvironmentDefault({
-    required String machineId,
-    required String workspaceId,
-  }) => delegate.workspaceEnvironmentDefault(
-    machineId: machineId,
-    workspaceId: workspaceId,
   );
 
   @override

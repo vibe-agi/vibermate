@@ -543,6 +543,7 @@ func TestClientUsesExplicitLoopbackCleartextTransport(t *testing.T) {
 		host          string
 		authorization string
 		path          string
+		protocol      string
 	}, 1)
 	server := httptest.NewServer(http.HandlerFunc(func(
 		writer http.ResponseWriter,
@@ -552,10 +553,12 @@ func TestClientUsesExplicitLoopbackCleartextTransport(t *testing.T) {
 			host          string
 			authorization string
 			path          string
+			protocol      string
 		}{
 			host:          request.Host,
 			authorization: request.Header.Get("Authorization"),
 			path:          request.URL.Path,
+			protocol:      request.Proto,
 		}
 		writer.Header().Set("Content-Type", "application/json")
 		_, _ = io.WriteString(writer, `{"ok":true}`)
@@ -577,6 +580,7 @@ func TestClientUsesExplicitLoopbackCleartextTransport(t *testing.T) {
 		gate,
 		authenticator,
 		DefaultTransportTimeouts(),
+		&sequentialInstanceIDs{},
 		nil,
 	)
 	if err != nil {
@@ -584,12 +588,13 @@ func TestClientUsesExplicitLoopbackCleartextTransport(t *testing.T) {
 	}
 	defer shutdownClient(t, client)
 
-	request := newTestRequest(
+	request := newTestRequestWithClientProtocol(
 		t,
 		gate,
 		"loopback-cleartext-request",
 		target,
 		nil,
+		wireprofile.ApplicationProtocolHTTP2,
 	)
 	if request.ProbeTarget().Transport !=
 		offlinehold.ProbeTransportLoopbackCleartext ||
@@ -611,6 +616,10 @@ func TestClientUsesExplicitLoopbackCleartextTransport(t *testing.T) {
 	if string(body) != `{"ok":true}` {
 		t.Fatalf("response body = %q", body)
 	}
+	if evidence.Presentation.ClientProtocol != wireprofile.ApplicationProtocolHTTP2 ||
+		evidence.Presentation.UpstreamProtocol != wireprofile.ApplicationProtocolHTTP1 {
+		t.Fatalf("loopback presentation = %+v", evidence.Presentation)
+	}
 	if evidence.Transport.Requested().Ref != "" ||
 		evidence.Transport.Effective().Ref != "" {
 		t.Fatalf(
@@ -622,7 +631,8 @@ func TestClientUsesExplicitLoopbackCleartextTransport(t *testing.T) {
 	case capture := <-observed:
 		if capture.host != origin.HTTPAuthority() ||
 			capture.authorization != "Bearer loopback-token" ||
-			capture.path != "/v1/chat/completions" {
+			capture.path != "/v1/chat/completions" ||
+			capture.protocol != "HTTP/1.1" {
 			t.Fatalf("loopback request = %+v", capture)
 		}
 	case <-time.After(time.Second):
@@ -630,7 +640,7 @@ func TestClientUsesExplicitLoopbackCleartextTransport(t *testing.T) {
 	}
 }
 
-func TestNewRequestRejectsHTTP2LoopbackBeforeEgress(t *testing.T) {
+func TestNewRequestUsesHTTP1ForHTTP2ClientOnLoopback(t *testing.T) {
 	t.Parallel()
 
 	options := validRequestOptions(t)
@@ -641,9 +651,14 @@ func TestNewRequestRejectsHTTP2LoopbackBeforeEgress(t *testing.T) {
 	options.Target = targetFromProviderOrigin(origin)
 	options.ClientProtocol = wireprofile.ApplicationProtocolHTTP2
 
-	_, err = NewRequest(options)
-	if err == nil || !strings.Contains(err.Error(), "does not support HTTP/2") {
-		t.Fatalf("NewRequest() error = %v, want HTTP/2 loopback rejection", err)
+	request, err := NewRequest(options)
+	if err != nil {
+		t.Fatalf("NewRequest() error = %v", err)
+	}
+	evidence := request.WirePresentationEvidence()
+	if evidence.ClientProtocol != wireprofile.ApplicationProtocolHTTP2 ||
+		evidence.UpstreamProtocol != wireprofile.ApplicationProtocolHTTP1 {
+		t.Fatalf("loopback presentation = %+v", evidence)
 	}
 }
 
@@ -1143,6 +1158,26 @@ func newTestRequestWithBody(
 	)
 }
 
+func newTestRequestWithClientProtocol(
+	t *testing.T,
+	gate *offlinehold.Gate,
+	id string,
+	target Target,
+	headers http.Header,
+	protocol wireprofile.ApplicationProtocol,
+) Request {
+	return newTestRequestWithPlanAndClientProtocol(
+		t,
+		gate,
+		id,
+		target,
+		headers,
+		[]byte(`{"model":"gpt-provider-model"}`),
+		testRequestPlan(t),
+		protocol,
+	)
+}
+
 func newTestRequestWithPlan(
 	t *testing.T,
 	gate *offlinehold.Gate,
@@ -1151,6 +1186,28 @@ func newTestRequestWithPlan(
 	headers http.Header,
 	body []byte,
 	plan testProviderPlan,
+) Request {
+	return newTestRequestWithPlanAndClientProtocol(
+		t,
+		gate,
+		id,
+		target,
+		headers,
+		body,
+		plan,
+		wireprofile.ApplicationProtocolHTTP1,
+	)
+}
+
+func newTestRequestWithPlanAndClientProtocol(
+	t *testing.T,
+	gate *offlinehold.Gate,
+	id string,
+	target Target,
+	headers http.Header,
+	body []byte,
+	plan testProviderPlan,
+	protocol wireprofile.ApplicationProtocol,
 ) Request {
 	t.Helper()
 	secretRef, err := secretstore.ParseReference("secret://provider/account")
@@ -1183,7 +1240,7 @@ func newTestRequestWithPlan(
 		SecretRef:       secretRef,
 		AuthDriverRef:   providerauth.StaticHeaderDriverRef(),
 		WireProfile:     plan.wireProfile,
-		ClientProtocol:  wireprofile.ApplicationProtocolHTTP1,
+		ClientProtocol:  protocol,
 		ClientUserAgent: "test-client/1.0",
 	})
 	if err != nil {
@@ -1267,7 +1324,7 @@ func testRequestProvenance(t *testing.T) RequestProvenance {
 		t.Fatal(err)
 	}
 	digest := environment.CandidateDigest(sha256.Sum256([]byte("provider-transport-environment")))
-	provenance, err := NewRequestProvenance(environmentID, 3, digest, routeID, 7)
+	provenance, err := NewUpstreamRequestProvenance(environmentID, 3, digest, routeID, 7)
 	if err != nil {
 		t.Fatal(err)
 	}

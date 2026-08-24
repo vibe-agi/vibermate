@@ -96,10 +96,11 @@ func TestLoopbackProxyAuthenticatesMITMAndDispatchesByEnvironmentOperation(
 	}
 	originalHeaders, hasOriginalHeaders := requests[0].OriginalHeaders()
 	requestPlan := requests[0].RequestPlan()
+	_, hasRoute := requestPlan.UpstreamRoute()
 	if requestPlan.EnvironmentID() != fixture.environment.ID ||
 		requestPlan.EnvironmentRevision() != fixture.environment.Revision ||
 		requestPlan.Endpoint().ID() != fixture.environment.ClientEndpoints[0].ID ||
-		requestPlan.Route().ID() != "route-proxy" ||
+		hasRoute ||
 		requests[0].ReplayClass() != exchange.ReplayGenerationCostOnly ||
 		string(requests[0].Body()) != `{"model":"client"}` ||
 		requests[0].CaptureRunRef() != fixture.grant.Run.ID ||
@@ -250,6 +251,88 @@ func TestLoopbackProxyAuthenticatesMITMAndDispatchesByEnvironmentOperation(
 			record.RouteHost != "api.anthropic.com" {
 			t.Fatalf("connection record carries a provider route: %+v", record)
 		}
+	}
+}
+
+func TestSystemTransparentMITMsKnownCodexOriginWithoutRewritingRequest(t *testing.T) {
+	t.Parallel()
+
+	adapter := fixedCodexAdapterEvidence()
+	fixture := newProxyFixtureForDialectWithPolicyAndRawEvidence(
+		t,
+		protocolspec.DialectOpenAIResponses,
+		&adapter,
+		allowEverythingTestPolicy(t),
+		nil,
+		environment.SystemTransparentID,
+	)
+	defer fixture.Close(t)
+
+	secured := fixture.ConnectTLS(
+		t,
+		fixture.grant.ProxyCapability.Value(),
+		"chatgpt.com:443",
+		"chatgpt.com",
+	)
+	defer secured.Close()
+	const body = `{"model":"gpt-5.6-sol","input":"hello"}`
+	response := writeInnerRequest(t, secured, &http.Request{
+		Method: http.MethodPost,
+		URL:    mustURL(t, "/backend-api/codex/responses"),
+		Host:   "chatgpt.com:443",
+		Header: http.Header{
+			"Authorization": []string{"Bearer client-owned"},
+			"Content-Type":  []string{"application/json"},
+			"User-Agent":    []string{"codex-cli/0.149.0"},
+		},
+		Body:          io.NopCloser(strings.NewReader(body)),
+		ContentLength: int64(len(body)),
+	})
+	responseBody, err := io.ReadAll(response.Body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = response.Body.Close()
+	if response.StatusCode != http.StatusOK || string(responseBody) != `{"result":"proxied"}` {
+		t.Fatalf("response status=%d body=%q", response.StatusCode, responseBody)
+	}
+
+	requests := fixture.exchanges.Requests()
+	if len(requests) != 1 {
+		t.Fatalf("Exchange requests = %+v", requests)
+	}
+	request := requests[0]
+	plan := request.RequestPlan()
+	headers, hasHeaders := request.OriginalHeaders()
+	_, hasRoute := plan.UpstreamRoute()
+	if plan.EnvironmentID() != environment.SystemTransparentID ||
+		!plan.PreservesOriginalDestination() || hasRoute ||
+		plan.Endpoint().ClientOrigin().String() != "https://chatgpt.com" ||
+		plan.Operation().ID().String() != "openai-codex-responses-create" ||
+		plan.ContentRecording().Mode != environment.ContentRecordingFull ||
+		!hasHeaders || headers.Get("Authorization") != "Bearer client-owned" ||
+		headers.Get("Content-Type") != "application/json" ||
+		string(request.Body()) != body {
+		t.Fatalf("transparent request plan=%+v headers=%v body=%q", plan, headers, request.Body())
+	}
+
+	page, err := fixture.connections.List(
+		context.Background(),
+		connectionevent.PageRequest{Limit: 20},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	foundMITM := false
+	for _, record := range page.Items {
+		if record.EnvironmentID == environment.SystemTransparentID &&
+			record.RequestedHost == "chatgpt.com" &&
+			record.Decryption == connectionevent.DecryptionMITM {
+			foundMITM = true
+		}
+	}
+	if !foundMITM {
+		t.Fatalf("system transparent left no MITM connection evidence: %+v", page.Items)
 	}
 }
 
@@ -619,7 +702,7 @@ func TestLoopbackProxyDispatchesExactResponsesHTTPWithTypedEvidence(
 	}
 }
 
-func TestLoopbackProxyHotSwitchesCompatibleEnvironmentOnNextRequest(
+func TestLoopbackProxyKeepsLaunchRevisionAfterEnvironmentPublish(
 	t *testing.T,
 ) {
 	t.Parallel()
@@ -637,16 +720,11 @@ func TestLoopbackProxyHotSwitchesCompatibleEnvironmentOnNextRequest(
 	advanced := testEnvironmentForDialectRevision(
 		t,
 		protocolspec.DialectOpenAIResponses,
-		"environment-responses-two",
-		1,
+		fixture.environment.ID.String(),
+		2,
 		1,
 	)
 	fixture.publishEnvironment(t, advanced)
-	switchResult := fixture.switchEnvironment(t, advanced.ID)
-	if switchResult.Boundary != captureassignment.BoundaryHotSwitch ||
-		len(switchResult.ClosedConnections) != 0 {
-		t.Fatalf("compatible switch = %+v", switchResult)
-	}
 
 	const requestBody = `{"model":"client","input":"hello","stream":false}`
 	response := writeInnerRequest(t, secured, &http.Request{
@@ -663,14 +741,16 @@ func TestLoopbackProxyHotSwitchesCompatibleEnvironmentOnNextRequest(
 	}
 	_ = response.Body.Close()
 	requests := fixture.exchanges.Requests()
+	_, hasAdvancedRoute := requests[0].RequestPlan().UpstreamRoute()
 	if response.StatusCode != http.StatusOK ||
 		string(body) != `{"result":"proxied"}` ||
 		len(requests) != 1 ||
-		requests[0].RequestPlan().EnvironmentID() != advanced.ID ||
-		requests[0].RequestPlan().EnvironmentRevision() != advanced.Revision ||
-		requests[0].RequestPlan().Route().Revision() != advanced.Revision {
+		requests[0].RequestPlan().EnvironmentID() != fixture.environment.ID ||
+		requests[0].RequestPlan().EnvironmentRevision() != fixture.environment.Revision ||
+		hasAdvancedRoute ||
+		!requests[0].RequestPlan().PreservesOriginalDestination() {
 		t.Fatalf(
-			"Environment hot switch status=%d body=%s request=%+v current=%+v",
+			"frozen Environment status=%d body=%s request=%+v published=%+v",
 			response.StatusCode,
 			body,
 			requests,
@@ -763,7 +843,7 @@ func TestLoopbackProxyRejectsSNIMismatchAndDrainsHijackedConnections(
 	_ = open.Close()
 }
 
-func TestLoopbackProxyClosesConnectionWhenEnvironmentChangesBeforeClientHello(
+func TestLoopbackProxyKeepsPreClientHelloConnectionOnPublishedRevision(
 	t *testing.T,
 ) {
 	t.Parallel()
@@ -779,11 +859,14 @@ func TestLoopbackProxyClosesConnectionWhenEnvironmentChangesBeforeClientHello(
 		t.Fatalf("CONNECT status = %d", response.StatusCode)
 	}
 	_ = response.Body.Close()
-	result := fixture.switchEnvironment(t, environment.SystemTransparentID)
-	if result.Boundary != captureassignment.BoundaryReconnectRequired ||
-		len(result.ClosedConnections) != 1 {
-		t.Fatalf("pre-ClientHello Environment switch = %+v", result)
-	}
+	revisionTwo := testEnvironmentForDialectRevision(
+		t,
+		fixture.clientDialect,
+		fixture.environment.ID.String(),
+		2,
+		2,
+	)
+	fixture.publishEnvironment(t, revisionTwo)
 	pool := x509.NewCertPool()
 	if !pool.AppendCertsFromPEM(
 		fixture.authority.Certificate().CertificatePEM(),
@@ -795,8 +878,8 @@ func TestLoopbackProxyClosesConnectionWhenEnvironmentChangesBeforeClientHello(
 		ServerName: "api.anthropic.com",
 		MinVersion: tls.VersionTLS12,
 	})
-	if err := secured.Handshake(); err == nil {
-		t.Fatal("obsolete Environment connection completed a new TLS handshake")
+	if err := secured.Handshake(); err != nil {
+		t.Fatalf("frozen Capture connection handshake: %v", err)
 	}
 	_ = secured.Close()
 	if len(fixture.exchanges.Requests()) != 0 || fixture.original.Count() != 0 {
@@ -804,7 +887,7 @@ func TestLoopbackProxyClosesConnectionWhenEnvironmentChangesBeforeClientHello(
 	}
 }
 
-func TestLoopbackProxyReconnectsWhenEnvironmentProtocolCompatibilityChanges(
+func TestLoopbackProxyNewConnectionInRunningCaptureKeepsLaunchRevision(
 	t *testing.T,
 ) {
 	t.Parallel()
@@ -842,23 +925,11 @@ func TestLoopbackProxyReconnectsWhenEnvironmentProtocolCompatibilityChanges(
 			incompatible := testEnvironmentForDialectRevision(
 				t,
 				fixture.clientDialect,
-				"environment-incompatible",
-				1,
+				fixture.environment.ID.String(),
+				2,
 				2,
 			)
 			fixture.publishEnvironment(t, incompatible)
-			result := fixture.switchEnvironment(t, incompatible.ID)
-			if result.Boundary != captureassignment.BoundaryReconnectRequired ||
-				len(result.ClosedConnections) != 1 {
-				t.Fatalf("incompatible Environment switch = %+v", result)
-			}
-			_ = secured.SetReadDeadline(time.Now().Add(250 * time.Millisecond))
-			if _, err := secured.Write([]byte("obsolete")); err == nil {
-				buffer := make([]byte, 1)
-				if _, err := secured.Read(buffer); err == nil {
-					t.Fatal("obsolete Environment connection remained usable")
-				}
-			}
 			_ = secured.Close()
 
 			reconnected := fixture.ConnectTLS(
@@ -887,7 +958,8 @@ func TestLoopbackProxyReconnectsWhenEnvironmentProtocolCompatibilityChanges(
 			if response.StatusCode != http.StatusOK ||
 				string(body) != `{"result":"proxied"}` ||
 				len(requests) != 1 ||
-				requests[0].RequestPlan().EnvironmentID() != incompatible.ID {
+				requests[0].RequestPlan().EnvironmentID() != fixture.environment.ID ||
+				requests[0].RequestPlan().EnvironmentRevision() != fixture.environment.Revision {
 				t.Fatalf(
 					"reconnected response status=%d close=%v body=%s requests=%+v",
 					response.StatusCode,
@@ -949,16 +1021,11 @@ func TestLoopbackProxyPinsEnvironmentRequestPlanForTheWholeInnerRequest(t *testi
 	next := testEnvironmentForDialectRevision(
 		t,
 		protocolspec.DialectAnthropicMessages,
-		"environment-request-next",
-		1,
+		fixture.environment.ID.String(),
+		2,
 		1,
 	)
 	fixture.publishEnvironment(t, next)
-	switchResult := fixture.switchEnvironment(t, next.ID)
-	if switchResult.Boundary != captureassignment.BoundaryHotSwitch ||
-		len(switchResult.ClosedConnections) != 0 {
-		t.Fatalf("request-time hot switch = %+v", switchResult)
-	}
 	requests = fixture.exchanges.Requests()
 	if requests[0].RequestPlan().EnvironmentID() != fixture.environment.ID {
 		t.Fatalf("in-flight request plan changed after switch: %+v", requests[0].RequestPlan())
@@ -989,10 +1056,10 @@ func TestLoopbackProxyPinsEnvironmentRequestPlanForTheWholeInnerRequest(t *testi
 	if response.StatusCode != http.StatusOK ||
 		string(body) != `{"result":"proxied"}` ||
 		len(requests) != 2 ||
-		requests[1].RequestPlan().EnvironmentID() != next.ID ||
-		requests[1].RequestPlan().EnvironmentRevision() != next.Revision {
+		requests[1].RequestPlan().EnvironmentID() != fixture.environment.ID ||
+		requests[1].RequestPlan().EnvironmentRevision() != fixture.environment.Revision {
 		t.Fatalf(
-			"post-switch request status=%d close=%t body=%s requests=%+v",
+			"post-publish request status=%d close=%t body=%s requests=%+v",
 			response.StatusCode,
 			response.Close,
 			body,
@@ -1011,7 +1078,7 @@ type proxyFixture struct {
 	grant         capturerun.LaunchGrant
 	capture       captureidentity.Reference
 	authority     *localca.Authority
-	environments  *environment.AtomicProjection
+	environments  *proxyEnvironmentResolver
 	assignments   *captureassignment.Manager
 	compiler      environment.Compiler
 	clientDialect protocolspec.Dialect
@@ -1022,6 +1089,63 @@ type proxyFixture struct {
 	egress        egressaudit.Repository
 	approvals     *toolapproval.Authority
 	rules         *connectionpolicy.Manager
+}
+
+type proxyEnvironmentResolver struct {
+	*environment.AtomicProjection
+	mu      sync.Mutex
+	history map[environment.EnvironmentID]map[environment.Revision]environment.EnvironmentSnapshot
+}
+
+func newProxyEnvironmentResolver(
+	projection *environment.AtomicProjection,
+	snapshots ...environment.EnvironmentSnapshot,
+) *proxyEnvironmentResolver {
+	resolver := &proxyEnvironmentResolver{
+		AtomicProjection: projection,
+		history:          make(map[environment.EnvironmentID]map[environment.Revision]environment.EnvironmentSnapshot),
+	}
+	resolver.remember(snapshots...)
+	return resolver
+}
+
+func (resolver *proxyEnvironmentResolver) remember(snapshots ...environment.EnvironmentSnapshot) {
+	resolver.mu.Lock()
+	defer resolver.mu.Unlock()
+	for _, snapshot := range snapshots {
+		if resolver.history[snapshot.ID()] == nil {
+			resolver.history[snapshot.ID()] = make(map[environment.Revision]environment.EnvironmentSnapshot)
+		}
+		resolver.history[snapshot.ID()][snapshot.Revision()] = snapshot
+	}
+}
+
+func (resolver *proxyEnvironmentResolver) Publish(snapshot environment.EnvironmentSnapshot) error {
+	if err := resolver.AtomicProjection.Publish(snapshot); err != nil {
+		return err
+	}
+	resolver.remember(snapshot)
+	return nil
+}
+
+func (resolver *proxyEnvironmentResolver) ResolveRevision(
+	ctx context.Context,
+	id environment.EnvironmentID,
+	revision environment.Revision,
+) (environment.EnvironmentSnapshot, error) {
+	if ctx == nil {
+		return environment.EnvironmentSnapshot{}, environment.ErrInvalidEnvironment
+	}
+	if err := ctx.Err(); err != nil {
+		return environment.EnvironmentSnapshot{}, err
+	}
+	resolver.mu.Lock()
+	defer resolver.mu.Unlock()
+	snapshot, exists := resolver.history[id][revision]
+	if !exists {
+		return environment.EnvironmentSnapshot{}, environment.ErrEnvironmentNotFound
+	}
+	return snapshot, nil
 }
 
 func newProxyFixture(t *testing.T) *proxyFixture {
@@ -1103,6 +1227,7 @@ func newProxyFixtureForDialectWithPolicy(
 		adapter,
 		policy,
 		nil,
+		"",
 	)
 }
 
@@ -1117,6 +1242,7 @@ func newProxyFixtureWithRawEvidence(
 		nil,
 		allowEverythingTestPolicy(t),
 		raw,
+		"",
 	)
 }
 
@@ -1126,6 +1252,7 @@ func newProxyFixtureForDialectWithPolicyAndRawEvidence(
 	adapter *clientadapter.Evidence,
 	policy connectionpolicy.Snapshot,
 	raw rawevidence.RequestRecorder,
+	assignmentEnvironmentID environment.EnvironmentID,
 ) *proxyFixture {
 	t.Helper()
 	directory := t.TempDir()
@@ -1192,25 +1319,32 @@ func newProxyFixtureForDialectWithPolicyAndRawEvidence(
 	if err != nil {
 		t.Fatal(err)
 	}
-	projection := environment.NewAtomicProjection()
-	if err := projection.Restore([]environment.EnvironmentSnapshot{snapshot}); err != nil {
+	system, err := compiler.CompileSystemTransparent()
+	if err != nil {
 		t.Fatal(err)
 	}
+	projection := environment.NewAtomicProjection()
+	if err := projection.Restore(system, []environment.EnvironmentSnapshot{snapshot}); err != nil {
+		t.Fatal(err)
+	}
+	resolver := newProxyEnvironmentResolver(projection, system, snapshot)
 	assignments, err := captureassignment.NewManager(captureassignment.Options{
-		Repository:           store.CaptureAssignmentRepository(),
-		Environments:         projection,
-		Activity:             proxyCaptureActivity{},
-		LeafCacheInvalidator: authority,
-		Clock:                captureassignment.SystemClock{},
+		Repository:   store.CaptureAssignmentRepository(),
+		Environments: resolver,
+		Activity:     proxyCaptureActivity{},
+		Clock:        captureassignment.SystemClock{},
 	})
 	if err != nil {
 		t.Fatal(err)
+	}
+	if assignmentEnvironmentID == "" {
+		assignmentEnvironmentID = snapshot.ID()
 	}
 	if _, err := assignments.Create(
 		context.Background(),
 		captureassignment.CreateCommand{
 			Capture:       capture,
-			EnvironmentID: snapshot.ID(),
+			EnvironmentID: assignmentEnvironmentID,
 			Source:        captureassignment.SourceLaunch,
 		},
 	); err != nil {
@@ -1285,7 +1419,7 @@ func newProxyFixtureForDialectWithPolicyAndRawEvidence(
 	return &proxyFixture{
 		listener: listener, server: server, handler: handler, store: store,
 		runs: runs, manuals: manuals, grant: grant, capture: capture,
-		authority: authority, environments: projection, assignments: assignments,
+		authority: authority, environments: resolver, assignments: assignments,
 		compiler: compiler, clientDialect: clientDialect, environment: aggregate,
 		exchanges: exchanges, original: original,
 		connections: connections, egress: store.EgressAttemptRepository(),
@@ -1564,25 +1698,32 @@ func testEnvironmentCompiler(
 	if err != nil {
 		t.Fatal(err)
 	}
-	codecID, err := protocolspec.NewCodecPairID(
-		"test.loopback." + string(clientDialect),
-	)
-	if err != nil {
-		t.Fatal(err)
-	}
-	protocols, err := protocolspec.NewCatalog(
-		operations.Definitions(),
-		[]protocolspec.CodecPairDefinition{{
+	codecPairs := make([]protocolspec.CodecPairDefinition, 0, 2)
+	for _, dialect := range []protocolspec.Dialect{
+		protocolspec.DialectAnthropicMessages,
+		protocolspec.DialectOpenAIResponses,
+	} {
+		codecID, err := protocolspec.NewCodecPairID(
+			"test.loopback." + string(dialect),
+		)
+		if err != nil {
+			t.Fatal(err)
+		}
+		codecPairs = append(codecPairs, protocolspec.CodecPairDefinition{
 			ID: codecID, Revision: 1,
-			ClientDialect:      clientDialect,
-			ProviderDialect:    clientDialect,
-			ClientOperationIDs: operations.SemanticOperationIDs(clientDialect),
+			ClientDialect:      dialect,
+			ProviderDialect:    dialect,
+			ClientOperationIDs: operations.SemanticOperationIDs(dialect),
 			RequiredCapabilities: []protocolspec.ProviderCapability{
 				protocolspec.ProviderCapabilityMessages,
 				protocolspec.ProviderCapabilityStreaming,
 				protocolspec.ProviderCapabilityToolCalls,
 			},
-		}},
+		})
+	}
+	protocols, err := protocolspec.NewCatalog(
+		operations.Definitions(),
+		codecPairs,
 	)
 	if err != nil {
 		t.Fatal(err)
@@ -1616,10 +1757,6 @@ func testEnvironmentForDialectRevision(
 	if err != nil {
 		t.Fatal(err)
 	}
-	providerOrigin, err := originidentity.ParseProviderOrigin(clientOriginValue)
-	if err != nil {
-		t.Fatal(err)
-	}
 	return environment.Environment{
 		ID: environment.EnvironmentID(environmentID), Name: "Proxy Environment",
 		State: environment.StateActive, Revision: revision,
@@ -1631,34 +1768,7 @@ func testEnvironmentForDialectRevision(
 				ClientAdapterPolicy: environment.ClientAdapterPolicy{
 					ID: "adapter-proxy", Revision: adapterRevision,
 				},
-				Mode: environment.PlanModeManaged,
-				UpstreamPlan: environment.UpstreamPlan{
-					DefaultRouteID: "route-proxy",
-					RouteSet: environment.RouteSet{
-						ID: "routes-proxy", Revision: revision,
-						CandidateRouteIDs: []environment.UpstreamRouteID{"route-proxy"},
-					},
-					Routes: []environment.UpstreamRoute{{
-						ID: "route-proxy", Revision: revision,
-						ProviderTarget: environment.ProviderTarget{
-							ID: "target-proxy", Revision: revision,
-							Origin: providerOrigin, RealmID: "realm-proxy",
-							Capabilities: []protocolspec.ProviderCapability{
-								protocolspec.ProviderCapabilityMessages,
-								protocolspec.ProviderCapabilityStreaming,
-								protocolspec.ProviderCapabilityToolCalls,
-							},
-						},
-						BackendProtocol: string(clientDialect),
-						AccountPolicy: environment.RouteAccountPolicy{
-							Revision:       revision,
-							Mode:           environment.AccountModeClientPassthrough,
-							FailoverPolicy: environment.FailoverOff,
-						},
-						ModelPolicy:    environment.ModelPolicy{Revision: revision, Mode: "passthrough"},
-						WireProfileRef: wireprofile.UpstreamWireProfileFollowClientValue,
-					}},
-				},
+				Destination: environment.DestinationPlan{Kind: environment.DestinationKindOriginal},
 			}},
 		}},
 	}
@@ -1677,29 +1787,6 @@ func (fixture *proxyFixture) publishEnvironment(
 		t.Fatal(err)
 	}
 	return snapshot
-}
-
-func (fixture *proxyFixture) switchEnvironment(
-	t *testing.T,
-	target environment.EnvironmentID,
-) captureassignment.SwitchResult {
-	t.Helper()
-	current, err := fixture.assignments.Resolve(context.Background(), fixture.capture)
-	if err != nil {
-		t.Fatal(err)
-	}
-	result, err := fixture.assignments.Switch(
-		context.Background(),
-		captureassignment.SwitchCommand{
-			Capture: fixture.capture, ExpectedRevision: current.Revision,
-			TargetEnvironmentID: target,
-			Source:              captureassignment.SourceOperatorSwitch,
-		},
-	)
-	if err != nil {
-		t.Fatal(err)
-	}
-	return result
 }
 
 // blindTunnelFixture pairs a started coordinator with the production dialer so

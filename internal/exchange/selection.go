@@ -14,19 +14,13 @@ import (
 	"github.com/vibe-agi/vibermate/internal/wireprofile"
 )
 
-const (
-	modelModePreserve    = "preserve"
-	modelModePassthrough = "passthrough"
-	modelModeFixed       = "fixed"
-)
-
 func validateClientOperation(
 	plan environment.RequestPlan,
 	evidence ClientOperationEvidence,
 	replayClass ReplayClass,
 ) error {
 	selected := plan.Operation()
-	codecPlan := plan.Route().CodecPlan()
+	codecPlan := plan.CodecPlan()
 	found := 0
 	for _, operation := range codecPlan.ClientOperations() {
 		if operation.ID() == selected.ID() {
@@ -109,7 +103,7 @@ type frozenSelection struct {
 	routeRevision        environment.Revision
 	accountPolicy        environment.CompiledAccountPolicy
 	clientOrigin         originidentity.ClientOrigin
-	effectiveModel       string
+	resolveModelMapping  func(string) (string, bool)
 	original             bool
 	targetRef            string
 	targetRevision       environment.Revision
@@ -133,7 +127,7 @@ func validateFrozenWireVariant(
 	if !clientProtocol.Valid() {
 		return errors.New("client HTTP protocol is invalid")
 	}
-	expected, available := plan.Route().WireProfile().Variant(clientProtocol)
+	expected, available := plan.WireProfile().Variant(clientProtocol)
 	actual := plan.WireVariant()
 	if !available || !sameWireVariant(actual, expected) {
 		return errors.New("frozen wire variant does not match the client protocol")
@@ -214,129 +208,151 @@ func selectFrozenPlan(plan environment.RequestPlan) (frozenSelection, error) {
 		!protocolPlan.ClientDialect().Valid() {
 		return frozenSelection{}, errors.New("Environment protocol plan is invalid")
 	}
-	route := plan.Route()
-	routeID, err := environment.NewUpstreamRouteID(route.ID().String())
-	if err != nil || routeID != route.ID() || route.Revision() == 0 ||
-		route.Revision() > environment.MaxRevision || !route.BackendProtocol().Valid() ||
-		!route.CodecPlan().Valid() {
-		return frozenSelection{}, errors.New("Environment route plan is invalid")
+	codecPlan := plan.CodecPlan()
+	wireProfile := plan.WireProfile()
+	if !codecPlan.Valid() {
+		return frozenSelection{}, errors.New("Environment codec plan is invalid")
 	}
-	targetResource := route.ProviderTarget()
-	if err := validateIdentity("ProviderTarget ID", targetResource.ID); err != nil ||
-		targetResource.Revision == 0 || targetResource.Revision > environment.MaxRevision ||
-		targetResource.Origin.Validate() != nil ||
-		targetResource.RealmID == "" {
-		return frozenSelection{}, errors.New("Environment provider target is invalid")
-	}
-	target, err := providertransport.NewTarget(targetResource.Origin)
-	if err != nil {
-		return frozenSelection{}, fmt.Errorf("compile provider transport target: %w", err)
-	}
-	provenance, err := providertransport.NewRequestProvenance(
-		plan.EnvironmentID(),
-		plan.EnvironmentRevision(),
-		plan.EnvironmentDigest(),
-		route.ID(),
-		route.Revision(),
-	)
-	if err != nil {
-		return frozenSelection{}, fmt.Errorf("compile provider request provenance: %w", err)
-	}
-	wireProfile := route.WireProfile()
 	if wireProfile.Ref().String() == "" || wireProfile.Revision() == 0 ||
 		len(wireProfile.Variants()) == 0 {
-		return frozenSelection{}, errors.New("Environment upstream wire profile is invalid")
+		return frozenSelection{}, errors.New("Environment outbound wire profile is invalid")
 	}
-	modelPolicy := route.ModelPolicy()
 	selection := frozenSelection{
 		environmentID: plan.EnvironmentID(), environmentRevision: plan.EnvironmentRevision(),
 		environmentDigest: plan.EnvironmentDigest(), endpointID: endpoint.ID(),
 		endpointRevision: endpoint.Revision(), protocolPlanID: protocolPlan.ID(),
-		protocolPlanRevision: protocolPlan.Revision(), routeID: route.ID(),
-		routeRevision: route.Revision(), accountPolicy: route.AccountPolicy(),
-		clientOrigin: endpoint.ClientOrigin(), targetRef: targetResource.ID,
-		targetRevision: targetResource.Revision,
-		targetRealm:    targetResource.RealmID,
-		target:         target, provenance: provenance, wireProfile: wireProfile,
-		codecPlan: route.CodecPlan(), policySet: policySet,
+		protocolPlanRevision: protocolPlan.Revision(),
+		clientOrigin:         endpoint.ClientOrigin(), wireProfile: wireProfile,
+		codecPlan: codecPlan, policySet: policySet,
 	}
-	switch modelPolicy.Mode {
-	case modelModePreserve:
+	switch {
+	case plan.PreservesOriginalDestination():
+		if _, exists := plan.UpstreamRoute(); exists {
+			return frozenSelection{}, errors.New("Original Destination carries an Upstream Route")
+		}
+		originalOrigin, err := originidentity.ParseProviderOrigin(endpoint.ClientOrigin().String())
+		if err != nil || originalOrigin.BasePath() != "" {
+			return frozenSelection{}, errors.New("Original Destination origin is invalid")
+		}
+		target, err := providertransport.NewTarget(originalOrigin)
+		if err != nil {
+			return frozenSelection{}, fmt.Errorf("compile original transport target: %w", err)
+		}
+		provenance, err := providertransport.NewOriginalRequestProvenance(
+			plan.EnvironmentID(),
+			plan.EnvironmentRevision(),
+			plan.EnvironmentDigest(),
+		)
+		if err != nil {
+			return frozenSelection{}, fmt.Errorf("compile original request provenance: %w", err)
+		}
 		selection.original = true
-		if route.AccountPolicy().Mode() != environment.AccountModeClientPassthrough ||
-			route.CodecPlan().ClientDialect() != route.CodecPlan().ProviderDialect() ||
-			targetResource.Origin.String() != endpoint.ClientOrigin().String() ||
-			targetResource.Origin.BasePath() != "" || modelPolicy.FixedModel != "" {
-			return frozenSelection{}, errors.New("original passthrough route is not identity-preserving")
+		selection.targetRef = "original_destination." + endpoint.ID().String()
+		selection.targetRevision = endpoint.Revision()
+		selection.target = target
+		selection.provenance = provenance
+		if codecPlan.ClientDialect() != codecPlan.ProviderDialect() ||
+			wireProfile.Ref() != wireprofile.FollowClientUpstreamWireProfileRef() {
+			return frozenSelection{}, errors.New("Original Destination is not identity-preserving")
 		}
-	case modelModePassthrough:
-		if modelPolicy.FixedModel != "" {
-			return frozenSelection{}, errors.New("passthrough model policy has a fixed model")
+	case plan.UsesUpstreamDestination():
+		route, exists := plan.UpstreamRoute()
+		if !exists {
+			return frozenSelection{}, errors.New("Upstream Destination has no frozen Route")
 		}
-	case modelModeFixed:
-		if modelPolicy.FixedModel == "" {
-			return frozenSelection{}, errors.New("fixed model policy has no model")
+		routeID, err := environment.NewUpstreamRouteID(route.ID().String())
+		if err != nil || routeID != route.ID() || route.Revision() == 0 ||
+			route.Revision() > environment.MaxRevision || !route.BackendProtocol().Valid() ||
+			!route.CodecPlan().Valid() {
+			return frozenSelection{}, errors.New("Environment route plan is invalid")
 		}
-		selection.effectiveModel = modelPolicy.FixedModel
+		targetResource := route.ProviderTarget()
+		if err := validateIdentity("ProviderTarget ID", targetResource.ID); err != nil ||
+			targetResource.Revision == 0 || targetResource.Revision > environment.MaxRevision ||
+			targetResource.Origin.Validate() != nil || targetResource.RealmID == "" {
+			return frozenSelection{}, errors.New("Environment provider target is invalid")
+		}
+		target, err := providertransport.NewTarget(targetResource.Origin)
+		if err != nil {
+			return frozenSelection{}, fmt.Errorf("compile provider transport target: %w", err)
+		}
+		provenance, err := providertransport.NewUpstreamRequestProvenance(
+			plan.EnvironmentID(),
+			plan.EnvironmentRevision(),
+			plan.EnvironmentDigest(),
+			route.ID(),
+			route.Revision(),
+		)
+		if err != nil {
+			return frozenSelection{}, fmt.Errorf("compile provider request provenance: %w", err)
+		}
+		selection.routeID = route.ID()
+		selection.routeRevision = route.Revision()
+		selection.accountPolicy = route.AccountPolicy()
+		selection.resolveModelMapping = route.ResolveModelMapping
+		selection.targetRef = targetResource.ID
+		selection.targetRevision = targetResource.Revision
+		selection.targetRealm = targetResource.RealmID
+		selection.target = target
+		selection.provenance = provenance
 	default:
-		return frozenSelection{}, errors.New("Environment model policy is unsupported")
+		return frozenSelection{}, errors.New("Environment Destination is unsupported")
 	}
 	return selection, nil
 }
 
+func (selection frozenSelection) mappedModel(requested string) (string, bool) {
+	if selection.resolveModelMapping == nil {
+		return "", false
+	}
+	return selection.resolveModelMapping(requested)
+}
+
 func (selection frozenSelection) credentialCandidates() ([]credentialCandidate, error) {
-	policy := selection.accountPolicy
-	switch policy.Mode() {
-	case environment.AccountModeClientPassthrough:
-		if len(policy.CandidateAccounts()) != 0 || policy.PreferredAccountID() != "" ||
-			policy.FailoverPolicy() != environment.FailoverOff {
-			return nil, errors.New("client passthrough route carries managed account authority")
-		}
+	if selection.original {
 		return []credentialCandidate{{mode: providerauth.CredentialClientPassthrough}}, nil
-	case environment.AccountModeManaged:
-		configured := policy.CandidateAccounts()
-		if len(configured) == 0 || policy.PreferredAccountID() == "" {
-			return nil, errors.New("managed route has no account candidates")
+	}
+	policy := selection.accountPolicy
+	configured := policy.CandidateAccounts()
+	if len(configured) == 0 || policy.PreferredAccountID() == "" {
+		return nil, errors.New("upstream route has no account candidates")
+	}
+	ordered := make([]credentialCandidate, 0, len(configured))
+	seen := make(map[string]struct{}, len(configured))
+	appendCandidate := func(candidate environment.CompiledAccountReference) error {
+		if candidate.ID == "" || candidate.Revision == 0 || candidate.Revision > environment.MaxRevision ||
+			candidate.UpstreamEndpointID != selection.targetRef ||
+			candidate.UpstreamEndpointRevision != selection.targetRevision ||
+			candidate.RealmID == "" || candidate.RealmID != selection.targetRealm {
+			return errors.New("managed account candidate is invalid")
 		}
-		ordered := make([]credentialCandidate, 0, len(configured))
-		seen := make(map[string]struct{}, len(configured))
-		appendCandidate := func(candidate environment.CompiledAccountReference) error {
-			if candidate.ID == "" || candidate.Revision == 0 || candidate.Revision > environment.MaxRevision ||
-				candidate.UpstreamEndpointID != selection.targetRef ||
-				candidate.UpstreamEndpointRevision != selection.targetRevision ||
-				candidate.RealmID == "" || candidate.RealmID != selection.targetRealm {
-				return errors.New("managed account candidate is invalid")
-			}
-			if _, duplicate := seen[candidate.ID]; duplicate {
-				return errors.New("managed account candidate is duplicated")
-			}
-			seen[candidate.ID] = struct{}{}
-			ordered = append(ordered, credentialCandidate{mode: providerauth.CredentialManaged, account: candidate})
-			return nil
+		if _, duplicate := seen[candidate.ID]; duplicate {
+			return errors.New("managed account candidate is duplicated")
 		}
-		preferredFound := false
-		for _, candidate := range configured {
-			if candidate.ID == policy.PreferredAccountID() {
-				if err := appendCandidate(candidate); err != nil {
-					return nil, err
-				}
-				preferredFound = true
-				break
-			}
-		}
-		if !preferredFound {
-			return nil, errors.New("preferred account is outside the frozen candidate set")
-		}
-		for _, candidate := range configured {
-			if candidate.ID == policy.PreferredAccountID() {
-				continue
-			}
+		seen[candidate.ID] = struct{}{}
+		ordered = append(ordered, credentialCandidate{mode: providerauth.CredentialManaged, account: candidate})
+		return nil
+	}
+	preferredFound := false
+	for _, candidate := range configured {
+		if candidate.ID == policy.PreferredAccountID() {
 			if err := appendCandidate(candidate); err != nil {
 				return nil, err
 			}
+			preferredFound = true
+			break
 		}
-		return ordered, nil
-	default:
-		return nil, errors.New("Environment account policy is unsupported")
 	}
+	if !preferredFound {
+		return nil, errors.New("preferred account is outside the frozen candidate set")
+	}
+	for _, candidate := range configured {
+		if candidate.ID == policy.PreferredAccountID() {
+			continue
+		}
+		if err := appendCandidate(candidate); err != nil {
+			return nil, err
+		}
+	}
+	return ordered, nil
 }

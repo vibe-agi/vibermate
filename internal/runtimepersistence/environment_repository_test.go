@@ -277,26 +277,34 @@ func environmentFixture(t *testing.T, id string, revision environment.Revision) 
 			ID: "endpoint.shared", Revision: 1, ClientOrigin: origin,
 			ProtocolPlans: []environment.ClientProtocolPlan{{
 				ID: "plan.anthropic", Revision: 1, ClientProtocol: environment.ClientProtocolAnthropicMessages,
-				ClientAdapterPolicy: environment.ClientAdapterPolicy{ID: "adapter.anthropic", Revision: 1}, Mode: environment.PlanModeManaged,
-				UpstreamPlan: environment.UpstreamPlan{
-					DefaultRouteID: "route.anthropic", RouteSet: environment.RouteSet{
-						ID: "routes.anthropic", Revision: 1,
-						CandidateRouteIDs: []environment.UpstreamRouteID{"route.anthropic"},
-					},
-					Routes: []environment.UpstreamRoute{{
-						ID: "route.anthropic", Revision: 1,
-						ProviderTarget: environment.ProviderTarget{
-							ID: "target.anthropic", Revision: 1, Origin: providerOrigin, RealmID: "realm.anthropic",
-							Capabilities: []protocolspec.ProviderCapability{
-								protocolspec.ProviderCapabilityMessages,
-								protocolspec.ProviderCapabilityStreaming,
-								protocolspec.ProviderCapabilityToolCalls,
-							},
+				ClientAdapterPolicy: environment.ClientAdapterPolicy{ID: "adapter.anthropic", Revision: 1},
+				Destination: environment.DestinationPlan{
+					Kind: environment.DestinationKindUpstream,
+					Upstream: &environment.UpstreamPlan{
+						DefaultRouteID: "route.anthropic", RouteSet: environment.RouteSet{
+							ID: "routes.anthropic", Revision: 1,
+							CandidateRouteIDs: []environment.UpstreamRouteID{"route.anthropic"},
 						},
-						BackendProtocol: "anthropic_messages", AccountPolicy: environment.RouteAccountPolicy{Revision: 1, Mode: environment.AccountModeClientPassthrough, FailoverPolicy: environment.FailoverOff},
-						ModelPolicy:    environment.ModelPolicy{Revision: 1, Mode: "passthrough"},
-						WireProfileRef: wireprofile.UpstreamWireProfileFollowClientValue,
-					}},
+						Routes: []environment.UpstreamRoute{{
+							ID: "route.anthropic", Revision: 1,
+							ProviderTarget: environment.ProviderTarget{
+								ID: "target.anthropic", Revision: 1, Origin: providerOrigin, RealmID: "realm.anthropic",
+								Capabilities: []protocolspec.ProviderCapability{
+									protocolspec.ProviderCapabilityMessages,
+									protocolspec.ProviderCapabilityStreaming,
+									protocolspec.ProviderCapabilityToolCalls,
+								},
+							},
+							BackendProtocol: "anthropic_messages", AccountPolicy: environment.RouteAccountPolicy{
+								Revision: 1, PreferredAccountID: "account.runtime",
+								CandidateAccountIDs: []string{"account.runtime"},
+								AccountRevisions:    map[string]environment.Revision{"account.runtime": 1},
+								FailoverPolicy:      environment.FailoverOff,
+							},
+							ModelPolicy:    environment.ModelPolicy{Revision: 1, Mode: "passthrough"},
+							WireProfileRef: wireprofile.UpstreamWireProfileFollowClientValue,
+						}},
+					},
 				},
 			}},
 		}},
@@ -309,23 +317,30 @@ func runtimeEnvironmentCompiler(t *testing.T) environment.Compiler {
 	if err != nil {
 		t.Fatal(err)
 	}
-	pairID, err := protocolspec.NewCodecPairID("test.anthropic.passthrough")
-	if err != nil {
-		t.Fatal(err)
-	}
-	protocols, err := protocolspec.NewCatalog(
-		operations.Definitions(),
-		[]protocolspec.CodecPairDefinition{{
+	pairs := make([]protocolspec.CodecPairDefinition, 0, 2)
+	for _, dialect := range []protocolspec.Dialect{
+		protocolspec.DialectAnthropicMessages,
+		protocolspec.DialectOpenAIResponses,
+	} {
+		pairID, err := protocolspec.NewCodecPairID("test." + string(dialect) + ".passthrough")
+		if err != nil {
+			t.Fatal(err)
+		}
+		pairs = append(pairs, protocolspec.CodecPairDefinition{
 			ID: pairID, Revision: 1,
-			ClientDialect:      protocolspec.DialectAnthropicMessages,
-			ProviderDialect:    protocolspec.DialectAnthropicMessages,
-			ClientOperationIDs: operations.SemanticOperationIDs(protocolspec.DialectAnthropicMessages),
+			ClientDialect:      dialect,
+			ProviderDialect:    dialect,
+			ClientOperationIDs: operations.SemanticOperationIDs(dialect),
 			RequiredCapabilities: []protocolspec.ProviderCapability{
 				protocolspec.ProviderCapabilityMessages,
 				protocolspec.ProviderCapabilityStreaming,
 				protocolspec.ProviderCapabilityToolCalls,
 			},
-		}},
+		})
+	}
+	protocols, err := protocolspec.NewCatalog(
+		operations.Definitions(),
+		pairs,
 	)
 	if err != nil {
 		t.Fatal(err)
@@ -334,11 +349,25 @@ func runtimeEnvironmentCompiler(t *testing.T) environment.Compiler {
 	if err != nil {
 		t.Fatal(err)
 	}
-	compiler, err := environment.NewCompiler(nil, nil, protocols, wires)
+	compiler, err := environment.NewCompiler(runtimeAccountCatalog{}, nil, protocols, wires)
 	if err != nil {
 		t.Fatal(err)
 	}
 	return compiler
+}
+
+type runtimeAccountCatalog struct{}
+
+func (runtimeAccountCatalog) LookupAccount(id string) (environment.AccountDescriptor, bool) {
+	if id != "account.runtime" {
+		return environment.AccountDescriptor{}, false
+	}
+	return environment.AccountDescriptor{
+		ID: id, Revision: 1,
+		UpstreamEndpointID: "target.anthropic", UpstreamEndpointRevision: 1,
+		RealmID: "realm.anthropic", Active: true,
+		BackendProtocols: []string{"anthropic_messages"},
+	}, true
 }
 
 func runtimeEnvironmentOrigin(t *testing.T, raw string) originidentity.ClientOrigin {

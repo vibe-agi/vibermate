@@ -26,16 +26,18 @@ const RecoveryErrorClass = "daemon_restarted"
 type EgressPurpose string
 
 const (
-	PurposeProviderAttempt     EgressPurpose = "provider_attempt"
-	PurposeRouteOperation      EgressPurpose = "route_operation"
-	PurposeOriginalOrigin      EgressPurpose = "original_origin"
-	PurposeAgentProbe          EgressPurpose = "agent_probe"
-	PurposeBlindTunnel         EgressPurpose = "blind_tunnel"
-	PurposeAuxiliaryLLM        EgressPurpose = "auxiliary_llm"
-	PurposeLanguageTransform   EgressPurpose = "language_transform"
-	PurposePluginCatalogSync   EgressPurpose = "plugin_catalog_sync"
-	PurposePluginArtifactFetch EgressPurpose = "plugin_artifact_fetch"
-	PurposeUpdate              EgressPurpose = "update"
+	PurposeProviderAttempt        EgressPurpose = "provider_attempt"
+	PurposeUpstreamModelDiscovery EgressPurpose = "upstream_model_discovery"
+	PurposeModelMetadataDirectory EgressPurpose = "model_metadata_directory"
+	PurposeRouteOperation         EgressPurpose = "route_operation"
+	PurposeOriginalOrigin         EgressPurpose = "original_origin"
+	PurposeAgentProbe             EgressPurpose = "agent_probe"
+	PurposeBlindTunnel            EgressPurpose = "blind_tunnel"
+	PurposeAuxiliaryLLM           EgressPurpose = "auxiliary_llm"
+	PurposeLanguageTransform      EgressPurpose = "language_transform"
+	PurposePluginCatalogSync      EgressPurpose = "plugin_catalog_sync"
+	PurposePluginArtifactFetch    EgressPurpose = "plugin_artifact_fetch"
+	PurposeUpdate                 EgressPurpose = "update"
 )
 
 // Purposes returns the complete set of supported logical egress purposes.
@@ -44,6 +46,8 @@ const (
 func Purposes() []EgressPurpose {
 	return []EgressPurpose{
 		PurposeProviderAttempt,
+		PurposeUpstreamModelDiscovery,
+		PurposeModelMetadataDirectory,
 		PurposeRouteOperation,
 		PurposeOriginalOrigin,
 		PurposeAgentProbe,
@@ -76,7 +80,8 @@ func AuthorityForPurpose(
 		return AuthorityEnvironment, nil
 	case PurposeOriginalOrigin, PurposeAgentProbe, PurposeBlindTunnel:
 		return AuthorityNetwork, nil
-	case PurposeAuxiliaryLLM, PurposeLanguageTransform,
+	case PurposeUpstreamModelDiscovery, PurposeModelMetadataDirectory,
+		PurposeAuxiliaryLLM, PurposeLanguageTransform,
 		PurposePluginCatalogSync, PurposePluginArtifactFetch, PurposeUpdate:
 		return AuthorityRuntime, nil
 	default:
@@ -360,7 +365,8 @@ func validatePayloadClass(
 				class,
 			)
 		}
-	case PurposeAuxiliaryLLM, PurposeLanguageTransform,
+	case PurposeUpstreamModelDiscovery, PurposeModelMetadataDirectory,
+		PurposeAuxiliaryLLM, PurposeLanguageTransform,
 		PurposePluginCatalogSync, PurposePluginArtifactFetch, PurposeUpdate:
 		if class != PayloadRuntime {
 			return fmt.Errorf(
@@ -439,7 +445,8 @@ func validateParent(
 			)
 		}
 		return requireConnection()
-	case PurposeAuxiliaryLLM, PurposeLanguageTransform,
+	case PurposeUpstreamModelDiscovery, PurposeModelMetadataDirectory,
+		PurposeAuxiliaryLLM, PurposeLanguageTransform,
 		PurposePluginCatalogSync, PurposePluginArtifactFetch, PurposeUpdate:
 		if parent.Kind != ParentRuntimeAction || parent.ExchangeID != "" {
 			return errors.New(

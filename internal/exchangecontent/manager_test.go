@@ -86,6 +86,72 @@ func TestManagerPurgesExpiredEvidenceAndRejectsWorkAfterShutdown(t *testing.T) {
 	}
 }
 
+func TestManagerNormalizesDuplicateReasoningFromStoredProjection(t *testing.T) {
+	t.Parallel()
+
+	now := time.Date(2026, 8, 23, 16, 20, 0, 0, time.UTC)
+	request, response := evidenceFixture(t)
+	record, err := NewRecord(
+		"exchange-stored-duplicate-reasoning",
+		frozenFixture(),
+		environment.DefaultContentRecordingPolicy(),
+		now,
+		request,
+		&response,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	projection, err := Project(record, RequestViewIncremental)
+	if err != nil {
+		t.Fatal(err)
+	}
+	projection.Response.Blocks = append(
+		projection.Response.Blocks,
+		Block{
+			Kind: BlockKindReasoning, Availability: AvailabilityRecorded,
+			Text: "same reasoning", OriginalSize: len("same reasoning"),
+			ProviderSource: "openai-responses", ProviderKind: "reasoning_summary",
+		},
+		Block{
+			Kind: BlockKindReasoning, Availability: AvailabilityRecorded,
+			Text: "same reasoning", OriginalSize: len("same reasoning"),
+			ProviderSource: "openai-responses", ProviderKind: "reasoning_content",
+		},
+	)
+	if err := projection.Validate(); err != nil {
+		t.Fatal(err)
+	}
+	repository := &repositoryDouble{
+		records:    make(map[string]Record),
+		projection: &projection,
+	}
+	manager, err := New(context.Background(), Options{
+		Repository: repository,
+		Clock:      fixedClock{now: now},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, err := manager.GetProjection(
+		context.Background(),
+		record.ExchangeID,
+		RequestViewIncremental,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	reasoning := make([]Block, 0, 2)
+	for _, block := range got.Response.Blocks {
+		if block.Kind == BlockKindReasoning {
+			reasoning = append(reasoning, block)
+		}
+	}
+	if len(reasoning) != 1 || reasoning[0].ProviderKind != "reasoning_content" {
+		t.Fatalf("normalized stored reasoning = %+v", reasoning)
+	}
+}
+
 type fixedClock struct {
 	now time.Time
 }
@@ -93,8 +159,9 @@ type fixedClock struct {
 func (clock fixedClock) Now() time.Time { return clock.now }
 
 type repositoryDouble struct {
-	mu      sync.Mutex
-	records map[string]Record
+	mu         sync.Mutex
+	records    map[string]Record
+	projection *Projection
 }
 
 func (repository *repositoryDouble) Put(_ context.Context, record Record) error {
@@ -125,6 +192,9 @@ func (repository *repositoryDouble) GetProjection(
 ) (Projection, error) {
 	repository.mu.Lock()
 	defer repository.mu.Unlock()
+	if repository.projection != nil {
+		return repository.projection.Clone(), nil
+	}
 	record, exists := repository.records[exchangeID]
 	if !exists || !record.ExpiresAt.After(now) {
 		return Projection{}, ErrNotFound

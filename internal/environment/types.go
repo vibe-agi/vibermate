@@ -124,18 +124,11 @@ const (
 	ClientProtocolOpenAIChat        ClientProtocol = "openai_chat"
 )
 
-type PlanMode string
+type DestinationKind string
 
 const (
-	PlanModeOriginalPassthrough PlanMode = "original_passthrough"
-	PlanModeManaged             PlanMode = "managed"
-)
-
-type AccountMode string
-
-const (
-	AccountModeClientPassthrough AccountMode = "client_passthrough"
-	AccountModeManaged           AccountMode = "managed"
+	DestinationKindOriginal DestinationKind = "original"
+	DestinationKindUpstream DestinationKind = "upstream"
 )
 
 type FailoverPolicy string
@@ -275,9 +268,16 @@ type ClientProtocolPlan struct {
 	Revision            Revision             `json:"revision"`
 	ClientProtocol      ClientProtocol       `json:"clientProtocol"`
 	ClientAdapterPolicy ClientAdapterPolicy  `json:"clientAdapterPolicy"`
-	Mode                PlanMode             `json:"mode"`
-	UpstreamPlan        UpstreamPlan         `json:"upstreamPlan"`
+	Destination         DestinationPlan      `json:"destination"`
 	PluginBindings      []PluginBinding      `json:"pluginBindings"`
+}
+
+// DestinationPlan is a closed choice. Original intentionally has no payload:
+// the client-owned origin, authentication, and model remain authoritative.
+// Upstream is present only when Kind is DestinationKindUpstream.
+type DestinationPlan struct {
+	Kind     DestinationKind `json:"kind"`
+	Upstream *UpstreamPlan   `json:"upstream,omitempty"`
 }
 
 type UpstreamPlan struct {
@@ -299,7 +299,6 @@ type UpstreamRoute struct {
 
 type RouteAccountPolicy struct {
 	Revision            Revision            `json:"revision"`
-	Mode                AccountMode         `json:"mode"`
 	PreferredAccountID  string              `json:"preferredAccountId"`
 	CandidateAccountIDs []string            `json:"candidateAccountIds"`
 	AccountRevisions    map[string]Revision `json:"accountRevisions"`
@@ -344,10 +343,37 @@ type ProviderTarget struct {
 	Capabilities []protocolspec.ProviderCapability `json:"capabilities"`
 }
 
+type ModelMode string
+
+const (
+	ModelModePassthrough ModelMode = "passthrough"
+	ModelModeMap         ModelMode = "map"
+)
+
+// ModelMapping is an exact, route-scoped request-model rewrite. Both values
+// are opaque provider identifiers; ViberMate never infers a vendor from their
+// spelling.
+type ModelMapping struct {
+	RequestedModel string `json:"requestedModel"`
+	UpstreamModel  string `json:"upstreamModel"`
+}
+
 type ModelPolicy struct {
-	Revision   Revision `json:"revision"`
-	Mode       string   `json:"mode"`
-	FixedModel string   `json:"fixedModel"`
+	Revision Revision       `json:"revision"`
+	Mode     ModelMode      `json:"mode"`
+	Mappings []ModelMapping `json:"mappings"`
+}
+
+// ResolveMapping returns the exact upstream model configured for requested.
+// The identifier is deliberately opaque: matching is byte-for-byte and an
+// absent mapping means the client model must be preserved.
+func (policy ModelPolicy) ResolveMapping(requested string) (string, bool) {
+	for _, mapping := range policy.Mappings {
+		if mapping.RequestedModel == requested {
+			return mapping.UpstreamModel, true
+		}
+	}
+	return "", false
 }
 
 // AccountDescriptor is non-secret catalog evidence used only to reject route

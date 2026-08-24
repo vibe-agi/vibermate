@@ -39,6 +39,7 @@ final class DesktopRuntime {
     String? cacheDirectory,
     String? dataDirectory,
     String? homeDirectory,
+    String? remoteServerListenAddress,
   }) async {
     final executable = await _resolveDaemonPath(daemonPath);
     final paths = await _runtimePaths(
@@ -46,15 +47,18 @@ final class DesktopRuntime {
       dataDirectory: dataDirectory,
       homeDirectory: homeDirectory,
     );
+    final arguments = <String>[
+      '--app-cache-dir=${paths.cache}',
+      '--data-dir=${paths.data}',
+      '--webview-origin=$_flutterOrigin',
+      '--parent-lifetime-fd=0',
+      '--bootstrap-fd=1',
+      if (remoteServerListenAddress != null)
+        '--remote-server-listen=$remoteServerListenAddress',
+    ];
     final process = await Process.start(
       executable,
-      [
-        '--app-cache-dir=${paths.cache}',
-        '--data-dir=${paths.data}',
-        '--webview-origin=$_flutterOrigin',
-        '--parent-lifetime-fd=0',
-        '--bootstrap-fd=1',
-      ],
+      arguments,
       mode: ProcessStartMode.normal,
       runInShell: false,
     );

@@ -348,7 +348,7 @@ func TestOwnerCancellationClosesCachedAndColdIssuance(t *testing.T) {
 	shutdownAuthority(t, authority)
 }
 
-func TestRevocationCutAllowsAdmittedHandshakeWithoutCacheResurrection(
+func TestEnvironmentPublishDoesNotRevokeFrozenCaptureLeaf(
 	t *testing.T,
 ) {
 	t.Parallel()
@@ -371,36 +371,30 @@ func TestRevocationCutAllowsAdmittedHandshakeWithoutCacheResurrection(
 	waitControlledCalls(t, controlled, 1)
 
 	projection.Publish(t, revisionTwo)
-	if oldAdmission.Cacheable() {
-		t.Fatal("obsolete admitted request remained cacheable after Environment publish")
+	if !oldAdmission.Cacheable() {
+		t.Fatal("publishing a later revision revoked the running Capture")
 	}
 	close(release)
 	if err := <-oldResult; err != nil {
 		t.Fatalf("pre-cut admitted issuance error = %v", err)
 	}
-	if authority.cache.Len() != 0 {
-		t.Fatalf("revoked worker resurrected %d cache entries", authority.cache.Len())
+	if authority.cache.Len() != 1 {
+		t.Fatalf("frozen Capture cache length = %d", authority.cache.Len())
 	}
 
 	controlled.clearBarrier()
 	if _, err := authority.Issue(
 		context.Background(),
-		leafAdmission(t, projection, authority, revisionTwo),
+		leafAdmission(t, projection, authority, revisionOne),
 	); err != nil {
-		t.Fatalf("issue replacement endpoint leaf: %v", err)
+		t.Fatalf("reuse frozen Capture leaf: %v", err)
 	}
-	if _, err := authority.Issue(
-		context.Background(),
-		leafAdmission(t, projection, authority, revisionTwo),
-	); err != nil {
-		t.Fatalf("reuse replacement endpoint leaf: %v", err)
-	}
-	if controlled.callCount() != 2 {
-		t.Fatalf("post-revocation generation count = %d, want 2", controlled.callCount())
+	if controlled.callCount() != 1 {
+		t.Fatalf("generation count = %d, want 1", controlled.callCount())
 	}
 }
 
-func TestDisabledEnvironmentWithdrawalPurgesCacheAndFailsNewAdmission(t *testing.T) {
+func TestDisablingEnvironmentAffectsOnlyNewCaptures(t *testing.T) {
 	t.Parallel()
 
 	authority := openAuthority(t, filepath.Join(t.TempDir(), "ca"), nil)
@@ -420,20 +414,24 @@ func TestDisabledEnvironmentWithdrawalPurgesCacheAndFailsNewAdmission(t *testing
 	disabled := newEnvironmentFixture(t, "disabled", 2)
 	disabled.aggregate.State = environment.StateDisabled
 	projection.Publish(t, disabled)
-	if authority.cache.Len() != 0 {
-		t.Fatalf("disabled Environment cache length = %d", authority.cache.Len())
+	if authority.cache.Len() != 1 {
+		t.Fatalf("running Capture cache length = %d", authority.cache.Len())
 	}
-	if _, err := projection.connections[fixture.environmentID].AdmitLeaf(
+	postPublish, err := projection.connections[fixture.environmentID].AdmitLeaf(
 		context.Background(), authority.Identity().Revision(),
 		mustDNSName(t, fixture.origin.Host()), certidentity.LeafKeyAlgorithmECDSAP256,
-	); !errors.Is(err, environment.ErrEnvironmentDisabled) {
-		t.Fatalf("post-disable admission error = %v", err)
+	)
+	if err != nil {
+		t.Fatalf("running Capture admission after disable: %v", err)
 	}
 	if _, err := authority.Issue(context.Background(), preCut); err != nil {
-		t.Fatalf("pre-cut disabled admission could not finish: %v", err)
+		t.Fatalf("pre-publish admission could not finish: %v", err)
 	}
-	if authority.cache.Len() != 0 {
-		t.Fatalf("pre-cut disabled worker restored %d cache entries", authority.cache.Len())
+	if _, err := authority.Issue(context.Background(), postPublish); err != nil {
+		t.Fatalf("post-publish frozen admission could not finish: %v", err)
+	}
+	if authority.cache.Len() != 1 {
+		t.Fatalf("frozen Capture cache length = %d", authority.cache.Len())
 	}
 }
 

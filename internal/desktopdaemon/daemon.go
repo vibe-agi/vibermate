@@ -85,6 +85,9 @@ func ProductionOptions(
 	}
 	hostOptions := desktophost.DefaultOptions(hostPaths, runtimeOptions)
 	hostOptions.AllowedOrigins = []string{webviewOrigin}
+	// The native App is also a Runtime Server. Remote clients authenticate as
+	// Runtime Users and share the same evidence database as the local App.
+	hostOptions.RemoteServerEnabled = true
 	return Options{
 		Host:            hostOptions,
 		BootstrapWriter: bootstrapWriter,

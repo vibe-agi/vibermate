@@ -5,15 +5,10 @@ import (
 	"encoding/binary"
 	"encoding/hex"
 	"encoding/json"
-	"errors"
 	"net"
 	"sort"
 	"strconv"
 	"strings"
-)
-
-var ErrLaunchAuthorityRestartRequired = errors.New(
-	"Capture must restart before the Environment can expand its launch authority",
 )
 
 // LaunchAuthorityDigest identifies the immutable Root/origin and credential
@@ -165,27 +160,6 @@ func (boundary LaunchAuthorityBoundary) Validate() error {
 	return nil
 }
 
-// Covers reports whether a later Environment snapshot stays within both
-// launch-time boundaries. A new protected origin could receive the delivered
-// Root; a new managed origin could have a client credential stripped. Either
-// change therefore requires a new Capture grant rather than a hot switch.
-func (boundary LaunchAuthorityBoundary) Covers(snapshot EnvironmentSnapshot) error {
-	if boundary.Validate() != nil {
-		return ErrInvalidEnvironment
-	}
-	protected, managed, err := snapshotAuthorityScopes(snapshot)
-	if err != nil {
-		return err
-	}
-	permittedProtected := boundary.ProtectedAuthorities()
-	permittedManaged := boundary.ManagedCredentialAuthorities()
-	if !authoritySubset(protected, permittedProtected) ||
-		!sameCredentialRewriteForRetainedAuthorities(protected, managed, permittedManaged) {
-		return ErrLaunchAuthorityRestartRequired
-	}
-	return nil
-}
-
 func snapshotAuthorityScopes(snapshot EnvironmentSnapshot) ([]string, []string, error) {
 	if snapshot.ID() == "" || snapshot.Revision() == 0 ||
 		snapshot.Digest() == (CandidateDigest{}) ||
@@ -202,7 +176,7 @@ func snapshotAuthorityScopes(snapshot EnvironmentSnapshot) ([]string, []string, 
 		}
 		authority := origin.EndpointAuthority()
 		protected = append(protected, authority)
-		if endpointUsesOnlyManagedAccounts(endpoint) {
+		if endpointUsesOnlyUpstreamDestinations(endpoint) {
 			managed = append(managed, authority)
 		}
 	}
@@ -217,24 +191,20 @@ func snapshotAuthorityScopes(snapshot EnvironmentSnapshot) ([]string, []string, 
 	return protected, managed, nil
 }
 
-func endpointUsesOnlyManagedAccounts(endpoint ClientEndpointSnapshot) bool {
-	// Credential environment rewriting is authority-wide, while route auth is
-	// still injected by Core per attempt. A mixed endpoint deliberately keeps
-	// the client's ambient credential so passthrough remains usable; managed
-	// attempts cannot leak it because their typed AuthDriver overwrites client
-	// authentication at the final outbound step.
+func endpointUsesOnlyUpstreamDestinations(endpoint ClientEndpointSnapshot) bool {
+	// Credential environment rewriting is authority-wide, while every Upstream
+	// Route receives its Endpoint-owned Account at the final outbound step. If
+	// any protocol uses Original Destination, keep the client's ambient
+	// credential available for that protocol.
 	plans := endpoint.ProtocolPlans()
 	if len(plans) == 0 {
 		return false
 	}
 	for _, plan := range plans {
-		if len(plan.UpstreamPlan.Routes) == 0 {
+		if plan.Destination.Kind != DestinationKindUpstream ||
+			plan.Destination.Upstream == nil ||
+			len(plan.Destination.Upstream.Routes) == 0 {
 			return false
-		}
-		for _, route := range plan.UpstreamPlan.Routes {
-			if route.AccountPolicy.Mode != AccountModeManaged {
-				return false
-			}
 		}
 	}
 	return true
@@ -276,42 +246,6 @@ func decodeLaunchAuthorities(encoded string) ([]string, error) {
 		return nil, ErrInvalidEnvironment
 	}
 	return canonical, nil
-}
-
-func authoritySubset(candidate, permitted []string) bool {
-	allowed := make(map[string]struct{}, len(permitted))
-	for _, value := range permitted {
-		allowed[value] = struct{}{}
-	}
-	for _, value := range candidate {
-		if _, exists := allowed[value]; !exists {
-			return false
-		}
-	}
-	return true
-}
-
-func sameCredentialRewriteForRetainedAuthorities(
-	protected []string,
-	managed []string,
-	permittedManaged []string,
-) bool {
-	candidateManaged := make(map[string]struct{}, len(managed))
-	for _, value := range managed {
-		candidateManaged[value] = struct{}{}
-	}
-	launchManaged := make(map[string]struct{}, len(permittedManaged))
-	for _, value := range permittedManaged {
-		launchManaged[value] = struct{}{}
-	}
-	for _, authority := range protected {
-		_, candidateUsesRewrite := candidateManaged[authority]
-		_, launchUsesRewrite := launchManaged[authority]
-		if candidateUsesRewrite != launchUsesRewrite {
-			return false
-		}
-	}
-	return true
 }
 
 func launchAuthorityDigest(boundary LaunchAuthorityBoundary) LaunchAuthorityDigest {

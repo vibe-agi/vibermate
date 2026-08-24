@@ -41,6 +41,10 @@ if [[ -n "$(git -C "${repository_root}" status --porcelain=v1 --untracked-files=
 fi
 (
   cd "${flutter_directory}"
+  flutter build web \
+    --release \
+    --build-name=0.1.0 \
+    --build-number=1
   flutter build macos \
     --release \
     --build-name=0.1.0 \
@@ -129,6 +133,16 @@ for command_name in vibermate vibermated; do
     "${destination}"
   codesign --force --sign - "${destination}"
 done
+
+web_source="${flutter_directory}/build/web"
+web_destination="${app_bundle}/Contents/Resources/vibermate-web"
+if [[ ! -f "${web_source}/index.html" || -e "${web_destination}" ]]; then
+  echo "Flutter Web management output is unavailable or already bundled" >&2
+  exit 70
+fi
+ditto --norsrc --noextattr --noacl --noqtn -X \
+  "${web_source}" \
+  "${web_destination}"
 
 VIBERMATE_RELEASE_REQUIRE_CLEAN=1 \
   node "${script_directory}/desktop_build_manifest.mjs" \

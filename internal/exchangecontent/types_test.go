@@ -87,6 +87,29 @@ func TestMetadataOnlyRetainsShapeUsageAndNoContent(t *testing.T) {
 	}
 }
 
+func TestOriginalDestinationContentHasNoSyntheticRoute(t *testing.T) {
+	t.Parallel()
+
+	request, response := evidenceFixture(t)
+	frozen := frozenFixture()
+	frozen.RouteID = ""
+	frozen.RouteRevision = 0
+	record, err := NewRecord(
+		"exchange-original-destination",
+		frozen,
+		environment.DefaultContentRecordingPolicy(),
+		time.Date(2026, 8, 24, 18, 1, 0, 0, time.UTC),
+		request,
+		&response,
+	)
+	if err != nil {
+		t.Fatalf("Original Destination content was rejected: %v", err)
+	}
+	if record.Frozen.RouteID != "" || record.Frozen.RouteRevision != 0 {
+		t.Fatalf("Original Destination content gained a synthetic Route: %+v", record.Frozen)
+	}
+}
+
 func TestKnownZeroUsageRemainsDistinctFromUnknownOnTheWire(t *testing.T) {
 	t.Parallel()
 	request, response := evidenceFixture(t)
@@ -164,7 +187,7 @@ func TestExchangeContentCollectionsAreAlwaysArraysOnTheWire(t *testing.T) {
 	}
 }
 
-func TestProviderThinkingHistoryNeverEntersContentEvidence(t *testing.T) {
+func TestProviderThinkingHistoryRecordsTextAndHashesSignature(t *testing.T) {
 	t.Parallel()
 
 	request, response := evidenceFixture(t)
@@ -199,13 +222,17 @@ func TestProviderThinkingHistoryNeverEntersContentEvidence(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if bytes.Contains(encoded, []byte("private-provider-reasoning")) ||
+	if !bytes.Contains(encoded, []byte("private-provider-reasoning")) ||
 		bytes.Contains(encoded, []byte("opaque-signature")) {
-		t.Fatalf("content evidence retained provider-private history: %s", encoded)
+		t.Fatalf("content evidence did not separate thinking from signature: %s", encoded)
 	}
-	projected := record.Request.Messages[1].Blocks[0]
-	if projected.Kind != string(protocolcore.BlockProviderExtension) ||
-		projected.Availability != AvailabilityOmitted || projected.OriginalSize == 0 {
+	projected := record.Request.Messages[1].Blocks
+	if len(projected) != 2 || projected[0].Kind != BlockKindReasoning ||
+		projected[0].Availability != AvailabilityRecorded ||
+		projected[0].Text != "private-provider-reasoning" ||
+		projected[1].Kind != string(protocolcore.BlockProviderExtension) ||
+		projected[1].Availability != AvailabilityOmitted ||
+		!strings.HasPrefix(projected[1].Fingerprint, "sha256:") {
 		t.Fatalf("provider extension projection = %+v", projected)
 	}
 }
@@ -357,6 +384,105 @@ func TestProviderThinkingResponseRecordsReadableTextWithoutOpaqueState(t *testin
 		if bytes.Contains(encoded, forbidden) {
 			t.Fatalf("opaque provider state %q entered evidence: %s", forbidden, encoded)
 		}
+	}
+}
+
+func TestProviderThinkingWithEmptySignatureCreatesNoOpaqueBlock(t *testing.T) {
+	t.Parallel()
+
+	request, response := evidenceFixture(t)
+	thinking, err := protocolcore.NewProviderExtension(
+		protocolcore.ProviderExtensionSourceAnthropicMessages,
+		protocolcore.ProviderExtensionThinking,
+		"$.content[0]",
+		[][]byte{
+			[]byte(`{"type":"thinking","thinking":"","signature":""}`),
+			[]byte(`{"type":"thinking_delta","thinking":"inspect"}`),
+			[]byte(`{"type":"thinking_delta","thinking":" the repository"}`),
+		},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	response.ProviderExtensions = []protocolcore.ProviderExtension{thinking}
+	record, err := NewRecord(
+		"exchange-provider-empty-signature",
+		frozenFixture(),
+		environment.DefaultContentRecordingPolicy(),
+		time.Date(2026, 8, 10, 1, 2, 3, 0, time.UTC),
+		request,
+		&response,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if record.Response == nil || len(record.Response.Blocks) != 2 {
+		t.Fatalf("response blocks = %+v", record.Response)
+	}
+	thinkingView := record.Response.Blocks[1]
+	if thinkingView.Kind != BlockKindReasoning ||
+		thinkingView.Text != "inspect the repository" ||
+		thinkingView.Fingerprint != "" {
+		t.Fatalf("thinking projection = %+v", thinkingView)
+	}
+}
+
+func TestProjectionMergesDuplicateReadableReasoningWithoutDroppingStoredEvidence(
+	t *testing.T,
+) {
+	t.Parallel()
+
+	request, response := evidenceFixture(t)
+	summary, err := protocolcore.NewProviderExtension(
+		protocolcore.ProviderExtensionSourceOpenAIResponses,
+		protocolcore.ProviderExtensionReasoningSummary,
+		"$.output[0].summary[0]",
+		[][]byte{[]byte(`{"type":"summary_text","text":"inspect the repository"}`)},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	summaryBlock, err := protocolcore.NewProviderExtensionBlock(summary)
+	if err != nil {
+		t.Fatal(err)
+	}
+	reasoning, err := protocolcore.NewProviderExtension(
+		protocolcore.ProviderExtensionSourceOpenAIResponses,
+		protocolcore.ProviderExtensionReasoningContent,
+		"$.output[0].content[0]",
+		[][]byte{[]byte(`"inspect the repository"`)},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	response.Blocks = append(response.Blocks, summaryBlock)
+	response.ProviderExtensions = append(response.ProviderExtensions, reasoning)
+	record, err := NewRecord(
+		"exchange-duplicate-reasoning",
+		frozenFixture(),
+		environment.DefaultContentRecordingPolicy(),
+		time.Date(2026, 8, 23, 16, 1, 0, 0, time.UTC),
+		request,
+		&response,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if record.Response == nil || len(record.Response.Blocks) != 3 {
+		t.Fatalf("stored response dropped evidence = %+v", record.Response)
+	}
+	projection, err := Project(record, RequestViewIncremental)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if projection.Response == nil || len(projection.Response.Blocks) != 2 {
+		t.Fatalf("read projection retained duplicate reasoning = %+v", projection.Response)
+	}
+	visible := projection.Response.Blocks[1]
+	if visible.Kind != BlockKindReasoning ||
+		visible.Text != "inspect the repository" ||
+		visible.ProviderKind != string(protocolcore.ProviderExtensionReasoningContent) {
+		t.Fatalf("preferred readable reasoning = %+v", visible)
 	}
 }
 

@@ -490,7 +490,7 @@ func validateEnvironmentDraft(result desktopcontrol.EnvironmentDraftResponse, ca
 func validateEnvironmentImpact(result desktopcontrol.EnvironmentImpactResponse, draft desktopcontrol.EnvironmentDraftResponse) error {
 	if result.EnvironmentID != draft.EnvironmentID || result.BaseRevision != draft.BaseRevision ||
 		result.DraftRevision != draft.DraftRevision || result.CandidateDigest != draft.CandidateDigest ||
-		result.HotSwitchCount != 0 || result.ReconnectRequiredCount != 0 || len(result.Affected) != 0 {
+		len(result.ContinuingCaptures) != 0 {
 		return errors.New("Environment impact preview is inconsistent")
 	}
 	return nil
@@ -1013,19 +1013,13 @@ func assemblyEnvironment(
 	if err != nil {
 		return environment.Environment{}, err
 	}
-	providerOrigin, err := originidentity.ParseProviderOrigin(client.ClientOrigin)
-	if err != nil {
-		return environment.Environment{}, err
-	}
 	const (
 		endpointID = environment.ClientEndpointID("acceptance.endpoint")
 		planID     = environment.ClientProtocolPlanID("acceptance.protocol")
 		routeID    = environment.UpstreamRouteID("acceptance.route")
 	)
-	planMode := environment.PlanModeOriginalPassthrough
-	accountPolicy := environment.RouteAccountPolicy{
-		Revision: revision, Mode: environment.AccountModeClientPassthrough,
-		FailoverPolicy: environment.FailoverOff,
+	destination := environment.DestinationPlan{
+		Kind: environment.DestinationKindOriginal,
 	}
 	if account != nil {
 		if account.Kind != desktopcontrol.ProviderAccountKindAnthropicAPIKey ||
@@ -1041,16 +1035,45 @@ func assemblyEnvironment(
 		if _, accountErr := provideraccount.NewID(account.ID); accountErr != nil {
 			return environment.Environment{}, accountErr
 		}
-		planMode = environment.PlanModeManaged
-		accountPolicy = environment.RouteAccountPolicy{
+		providerOrigin, originErr := originidentity.ParseProviderOrigin(client.ClientOrigin)
+		if originErr != nil {
+			return environment.Environment{}, originErr
+		}
+		accountPolicy := environment.RouteAccountPolicy{
 			Revision:            revision,
-			Mode:                environment.AccountModeManaged,
 			PreferredAccountID:  account.ID,
 			CandidateAccountIDs: []string{account.ID},
 			AccountRevisions: map[string]environment.Revision{
 				account.ID: environment.Revision(account.Revision),
 			},
 			FailoverPolicy: environment.FailoverOff,
+		}
+		destination = environment.DestinationPlan{
+			Kind: environment.DestinationKindUpstream,
+			Upstream: &environment.UpstreamPlan{
+				DefaultRouteID: routeID,
+				RouteSet: environment.RouteSet{
+					ID: "acceptance.routes", Revision: revision,
+					CandidateRouteIDs: []environment.UpstreamRouteID{routeID},
+				},
+				Routes: []environment.UpstreamRoute{{
+					ID: routeID, Revision: revision,
+					ProviderTarget: environment.ProviderTarget{
+						ID: "acceptance.target", Revision: revision, Origin: providerOrigin,
+						RealmID: "acceptance.realm", Capabilities: []protocolspec.ProviderCapability{
+							protocolspec.ProviderCapabilityMessages,
+							protocolspec.ProviderCapabilityStreaming,
+							protocolspec.ProviderCapabilityToolCalls,
+						},
+					},
+					BackendProtocol: string(client.ClientProtocol),
+					AccountPolicy:   accountPolicy,
+					ModelPolicy: environment.ModelPolicy{
+						Revision: revision, Mode: environment.ModelModePassthrough,
+					},
+					WireProfileRef: wireprofile.UpstreamWireProfileFollowClientValue,
+				}},
+			},
 		}
 	}
 	return environment.Environment{
@@ -1062,26 +1085,7 @@ func assemblyEnvironment(
 			ProtocolPlans: []environment.ClientProtocolPlan{{
 				ID: planID, Revision: revision, ClientProtocol: client.ClientProtocol,
 				ClientAdapterPolicy: environment.ClientAdapterPolicy{ID: "acceptance.adapter", Revision: revision},
-				Mode:                planMode,
-				UpstreamPlan: environment.UpstreamPlan{
-					DefaultRouteID: routeID,
-					RouteSet:       environment.RouteSet{ID: "acceptance.routes", Revision: revision, CandidateRouteIDs: []environment.UpstreamRouteID{routeID}},
-					Routes: []environment.UpstreamRoute{{
-						ID: routeID, Revision: revision,
-						ProviderTarget: environment.ProviderTarget{
-							ID: "acceptance.target", Revision: revision, Origin: providerOrigin,
-							RealmID: "acceptance.realm", Capabilities: []protocolspec.ProviderCapability{
-								protocolspec.ProviderCapabilityMessages,
-								protocolspec.ProviderCapabilityStreaming,
-								protocolspec.ProviderCapabilityToolCalls,
-							},
-						},
-						BackendProtocol: string(client.ClientProtocol),
-						AccountPolicy:   accountPolicy,
-						ModelPolicy:     environment.ModelPolicy{Revision: revision, Mode: "preserve"},
-						WireProfileRef:  wireprofile.UpstreamWireProfileFollowClientValue,
-					}},
-				},
+				Destination:         destination,
 			}},
 		}},
 	}, nil

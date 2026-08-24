@@ -175,12 +175,12 @@ func (manager *Manager) LookupAccount(value string) (environment.AccountDescript
 	if !exists {
 		return environment.AccountDescriptor{}, false
 	}
-	realm, exists := manager.realms[account.RealmID]
+	endpoint, exists := manager.endpoints.LookupEndpoint(account.UpstreamEndpointID.String())
 	if !exists {
 		return environment.AccountDescriptor{}, false
 	}
-	endpoint, exists := manager.endpoints.LookupEndpoint(account.UpstreamEndpointID.String())
-	if !exists {
+	realm, exists := realmForEndpoint(endpoint, manager.realms)
+	if !exists || realm.ID != account.RealmID {
 		return environment.AccountDescriptor{}, false
 	}
 	return account.Descriptor(realm, endpoint), true
@@ -496,6 +496,45 @@ func (manager *Manager) Acquire(
 	})
 }
 
+// AcquireEndpointCredential leases one explicit ProviderAccount for an
+// Endpoint-owned runtime operation such as model discovery. It deliberately
+// does not accept an Exchange-shaped request: model discovery has no frozen
+// Turn authority, but it must still prove the same Account -> Endpoint
+// ownership and freeze the credential revision used for the request.
+func (manager *Manager) AcquireEndpointCredential(
+	ctx context.Context,
+	id ID,
+	endpoint upstreamendpoint.Endpoint,
+) (providerauth.Lease, error) {
+	if ctx == nil || manager == nil || endpoint.Validate() != nil ||
+		endpoint.State != upstreamendpoint.StateActive {
+		return nil, ErrInvalidAccount
+	}
+	if _, err := NewID(id.String()); err != nil {
+		return nil, err
+	}
+	manager.mu.RLock()
+	if manager.closing {
+		manager.mu.RUnlock()
+		return nil, ErrManagerClosing
+	}
+	account, exists := manager.accounts[id]
+	manager.mu.RUnlock()
+	if !exists {
+		return nil, ErrAccountNotFound
+	}
+	if account.UpstreamEndpointID != endpoint.ID {
+		return nil, ErrEndpointMismatch
+	}
+	return manager.acquire(ctx, accountLeaseScope{
+		id:                       account.ID,
+		accountRevision:          account.Revision,
+		realmID:                  account.RealmID,
+		upstreamEndpointID:       endpoint.ID.String(),
+		upstreamEndpointRevision: endpoint.Revision,
+	})
+}
+
 type accountLeaseScope struct {
 	id                       ID
 	accountRevision          uint64
@@ -720,12 +759,34 @@ func validateForEndpoint(
 		endpoint.RealmID != account.RealmID || !slices.Contains(endpoint.Drivers, account.Driver) {
 		return ErrInvalidAccount
 	}
-	realm, exists := realms[account.RealmID]
+	realm, exists := realmForEndpoint(endpoint, realms)
 	if !exists || !slices.Contains(realm.Drivers, account.Driver) ||
 		!sameStrings(realm.BackendProtocols, endpoint.BackendProtocols) {
 		return ErrInvalidAccount
 	}
 	return nil
+}
+
+// realmForEndpoint keeps official realms closed while allowing one explicitly
+// configured Endpoint to own its own authentication realm. The Endpoint ID is
+// the custom realm identity, so no host, protocol, model, or credential shape
+// is used to infer authority.
+func realmForEndpoint(endpoint upstreamendpoint.Endpoint, realms map[string]Realm) (Realm, bool) {
+	if realm, exists := realms[endpoint.RealmID]; exists {
+		return realm, true
+	}
+	if endpoint.RealmID != endpoint.ID.String() {
+		return Realm{}, false
+	}
+	realm := Realm{
+		ID:               endpoint.RealmID,
+		BackendProtocols: slices.Clone(endpoint.BackendProtocols),
+		Drivers:          slices.Clone(endpoint.Drivers),
+	}
+	if realm.Validate() != nil {
+		return Realm{}, false
+	}
+	return realm, true
 }
 
 func sameStrings(left, right []string) bool {

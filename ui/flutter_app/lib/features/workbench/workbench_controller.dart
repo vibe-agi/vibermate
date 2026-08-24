@@ -22,6 +22,9 @@ final class WorkbenchController extends ChangeNotifier {
     required TerminalCommandService terminalCommands,
     required this.previewMode,
     required Future<void> Function() closeRuntime,
+    this.serverManagement = false,
+    this.terminalManagement = true,
+    this.runtimeTarget = 'This Mac',
     WorkbenchPreferences initialPreferences = const WorkbenchPreferences(),
     WorkbenchPreferencesStore preferencesStore =
         const DiscardWorkbenchPreferencesStore(),
@@ -35,7 +38,11 @@ final class WorkbenchController extends ChangeNotifier {
        _preferencesWritable = preferencesWritable,
        _onThemeChanged = onThemeChanged,
        _desiredPreferences = initialPreferences,
-       section = initialPreferences.section,
+       section =
+           !serverManagement &&
+               initialPreferences.section == WorkbenchSection.usage
+           ? WorkbenchSection.captures
+           : initialPreferences.section,
        language = initialPreferences.language,
        theme = initialPreferences.theme,
        selectedCaptureKey = initialPreferences.selectedCaptureKey,
@@ -52,6 +59,9 @@ final class WorkbenchController extends ChangeNotifier {
   final bool _preferencesWritable;
   final ValueChanged<WorkbenchTheme>? _onThemeChanged;
   final bool previewMode;
+  final bool serverManagement;
+  final bool terminalManagement;
+  final String runtimeTarget;
 
   DashboardData? data;
   NetworkData? networkData;
@@ -62,8 +72,10 @@ final class WorkbenchController extends ChangeNotifier {
   EnvironmentImpact? reviewedEnvironmentImpact;
   EnvironmentRecord? historicalEnvironment;
   CaptureAssignment? selectedAssignment;
-  WorkspaceEnvironmentDefault? selectedWorkspaceDefault;
   TerminalCommandStatus? terminalCommand;
+  RuntimeServerAccess? serverAccess;
+  List<RuntimeUser>? runtimeUsers;
+  RuntimeUsageReport? runtimeUsage;
   WorkbenchSection section;
   AppLanguage language;
   WorkbenchTheme theme;
@@ -84,10 +96,9 @@ final class WorkbenchController extends ChangeNotifier {
   String? environmentNotice;
   String? offlineError;
   String? offlineNotice;
-  String? workspaceDefaultError;
-  String? workspaceDefaultNotice;
   String? terminalCommandError;
   String? terminalCommandNotice;
+  String? serverManagementError;
   String? approvalAttentionError;
   bool loading = true;
   bool detailLoading = false;
@@ -100,10 +111,10 @@ final class WorkbenchController extends ChangeNotifier {
   bool environmentMutating = false;
   bool environmentRevisionLoading = false;
   bool offlineMutating = false;
-  bool workspaceDefaultLoading = false;
-  bool workspaceDefaultMutating = false;
   bool terminalCommandLoading = false;
   bool terminalCommandMutating = false;
+  bool serverManagementLoading = false;
+  bool runtimeUserMutating = false;
   bool pendingApprovalsLoading = false;
   int _dashboardGeneration = 0;
   int _selectionGeneration = 0;
@@ -120,6 +131,8 @@ final class WorkbenchController extends ChangeNotifier {
       LinkedHashMap<String, RawEvidencePage>();
   final Set<String> _loadingRawEvidence = {};
   final Map<String, String> _rawEvidenceErrors = {};
+  final Map<String, UpstreamModelCatalog> _upstreamModelCatalogs = {};
+  final Map<String, ClientModelCatalog> _clientModelCatalogs = {};
   int _rawEvidenceGeneration = 0;
   Timer? _poller;
   bool _disposed = false;
@@ -166,6 +179,55 @@ final class WorkbenchController extends ChangeNotifier {
     final id = selectedEndpointId;
     if (id == null) return null;
     return data?.endpoints.where((endpoint) => endpoint.id == id).firstOrNull;
+  }
+
+  String _upstreamModelCatalogKey(String endpointId, String accountId) =>
+      '$endpointId\u0000$accountId';
+
+  UpstreamModelCatalog? upstreamModelCatalog(
+    String endpointId,
+    String accountId,
+  ) => _upstreamModelCatalogs[_upstreamModelCatalogKey(endpointId, accountId)];
+
+  Future<UpstreamModelCatalog> upstreamModels(
+    String endpointId, {
+    required String accountId,
+    bool refresh = false,
+  }) async {
+    final key = _upstreamModelCatalogKey(endpointId, accountId);
+    if (!refresh) {
+      final cached = _upstreamModelCatalogs[key];
+      if (cached != null) return cached;
+    }
+    final catalog = await _api.upstreamModels(
+      endpointId,
+      accountId: accountId,
+      refresh: refresh,
+    );
+    if (!_disposed) {
+      _upstreamModelCatalogs[key] = catalog;
+      notifyListeners();
+    }
+    return catalog;
+  }
+
+  ClientModelCatalog? clientModelCatalog(String protocol) =>
+      _clientModelCatalogs[protocol];
+
+  Future<ClientModelCatalog> clientModels(
+    String protocol, {
+    bool refresh = false,
+  }) async {
+    if (!refresh) {
+      final cached = _clientModelCatalogs[protocol];
+      if (cached != null) return cached;
+    }
+    final catalog = await _api.clientModels(protocol);
+    if (!_disposed) {
+      _clientModelCatalogs[protocol] = catalog;
+      notifyListeners();
+    }
+    return catalog;
   }
 
   OfflineHoldSnapshot? get offlineHold => data?.status.offlineHold;
@@ -279,8 +341,12 @@ final class WorkbenchController extends ChangeNotifier {
       } else {
         await refreshPendingApprovals();
       }
-      if (section == WorkbenchSection.settings) {
-        await refreshTerminalCommand();
+      if (section == WorkbenchSection.settings ||
+          section == WorkbenchSection.usage) {
+        if (serverManagement) await refreshServerManagement();
+        if (section == WorkbenchSection.settings && terminalManagement) {
+          await refreshTerminalCommand();
+        }
       }
     } catch (error) {
       if (_disposed || generation != _dashboardGeneration) return;
@@ -297,8 +363,7 @@ final class WorkbenchController extends ChangeNotifier {
         mutating ||
         networkMutating ||
         inventoryMutating ||
-        environmentMutating ||
-        workspaceDefaultMutating) {
+        environmentMutating) {
       return;
     }
     final generation = _dashboardGeneration;
@@ -320,8 +385,12 @@ final class WorkbenchController extends ChangeNotifier {
       if (section == WorkbenchSection.network) {
         await _refreshNetwork(quiet: true);
       }
-      if (section == WorkbenchSection.settings) {
-        await refreshTerminalCommand(quiet: true);
+      if (section == WorkbenchSection.settings ||
+          section == WorkbenchSection.usage) {
+        if (serverManagement) await refreshServerManagement(quiet: true);
+        if (section == WorkbenchSection.settings && terminalManagement) {
+          await refreshTerminalCommand(quiet: true);
+        }
       }
     } catch (_) {
       // A transient poll must not replace useful evidence with an error page.
@@ -376,6 +445,7 @@ final class WorkbenchController extends ChangeNotifier {
   }
 
   void selectSection(WorkbenchSection value) {
+    if (value == WorkbenchSection.usage && !serverManagement) return;
     if (section == value) return;
     section = value;
     operationNotice = null;
@@ -383,8 +453,107 @@ final class WorkbenchController extends ChangeNotifier {
     if (value == WorkbenchSection.network && networkData == null) {
       unawaited(_refreshNetwork());
     }
-    if (value == WorkbenchSection.settings && terminalCommand == null) {
-      unawaited(refreshTerminalCommand());
+    if (value == WorkbenchSection.settings || value == WorkbenchSection.usage) {
+      if (serverManagement &&
+          (serverAccess == null ||
+              runtimeUsers == null ||
+              runtimeUsage == null)) {
+        unawaited(refreshServerManagement());
+      }
+      if (terminalManagement && terminalCommand == null) {
+        unawaited(refreshTerminalCommand());
+      }
+    }
+  }
+
+  Future<void> refreshServerManagement({bool quiet = false}) async {
+    if (_disposed ||
+        !serverManagement ||
+        serverManagementLoading ||
+        runtimeUserMutating) {
+      return;
+    }
+    if (!quiet) {
+      serverManagementLoading = true;
+      serverManagementError = null;
+      notifyListeners();
+    }
+    try {
+      final updated = await Future.wait<Object>([
+        _api.serverAccess(),
+        _api.runtimeUsers(),
+        _api.runtimeUsage(),
+      ]);
+      if (_disposed) return;
+      serverAccess = updated[0] as RuntimeServerAccess;
+      runtimeUsers = List<RuntimeUser>.unmodifiable(
+        updated[1] as List<RuntimeUser>,
+      );
+      runtimeUsage = updated[2] as RuntimeUsageReport;
+      serverManagementLoading = false;
+      serverManagementError = null;
+      notifyListeners();
+    } catch (error) {
+      if (_disposed || quiet) return;
+      serverManagementLoading = false;
+      serverManagementError = _describeError(error);
+      notifyListeners();
+    }
+  }
+
+  Future<bool> createRuntimeUser({
+    required String username,
+    required String password,
+  }) async {
+    if (_disposed || !serverManagement || runtimeUserMutating) return false;
+    runtimeUserMutating = true;
+    serverManagementError = null;
+    notifyListeners();
+    try {
+      final created = await _api.createRuntimeUser(
+        username: username,
+        password: password,
+      );
+      if (_disposed) return false;
+      runtimeUsers = List<RuntimeUser>.unmodifiable(
+        [...?runtimeUsers, created]
+          ..sort((left, right) => left.username.compareTo(right.username)),
+      );
+      runtimeUserMutating = false;
+      notifyListeners();
+      unawaited(refreshServerManagement(quiet: true));
+      return true;
+    } catch (error) {
+      if (_disposed) return false;
+      serverManagementError = _describeError(error);
+      runtimeUserMutating = false;
+      notifyListeners();
+      return false;
+    }
+  }
+
+  Future<bool> disableRuntimeUser(String userId) async {
+    if (_disposed || !serverManagement || runtimeUserMutating) return false;
+    runtimeUserMutating = true;
+    serverManagementError = null;
+    notifyListeners();
+    try {
+      final disabled = await _api.disableRuntimeUser(userId);
+      if (_disposed) return false;
+      runtimeUsers = List<RuntimeUser>.unmodifiable([
+        for (final user in runtimeUsers ?? const <RuntimeUser>[])
+          if (user.id == userId) disabled else user,
+      ]);
+      runtimeUserMutating = false;
+      notifyListeners();
+      unawaited(refreshServerManagement(quiet: true));
+      return true;
+    } catch (error) {
+      if (_disposed) return false;
+      serverManagementError = _describeError(error);
+      runtimeUserMutating = false;
+      notifyListeners();
+      return false;
     }
   }
 
@@ -843,7 +1012,7 @@ final class WorkbenchController extends ChangeNotifier {
   Future<UpstreamEndpoint?> createUpstreamEndpoint({
     required String displayName,
     required String origin,
-    required String kind,
+    required List<String> backendProtocols,
   }) async {
     final current = data;
     if (current == null || inventoryMutating) return null;
@@ -852,12 +1021,11 @@ final class WorkbenchController extends ChangeNotifier {
     inventoryNotice = null;
     notifyListeners();
     try {
-      final provider = kind == 'anthropic' ? 'anthropic' : 'openai';
       final created = await _api.createUpstreamEndpoint(
-        id: 'target.custom.$provider.${_newUuid()}',
+        id: 'target.custom.${_newUuid()}',
         displayName: displayName.trim(),
         origin: origin.trim(),
-        kind: kind,
+        backendProtocols: backendProtocols,
       );
       if (_disposed) return null;
       final endpoints = [...current.endpoints, created]
@@ -895,9 +1063,9 @@ final class WorkbenchController extends ChangeNotifier {
     notifyListeners();
     try {
       final provider = switch (kind) {
-        'claude_oauth_token' => 'claude',
-        'openai_api_key' => 'openai',
-        _ => 'anthropic',
+        'anthropic_api_key' => 'anthropic',
+        'bearer_token' => 'bearer',
+        _ => 'account',
       };
       final created = await _api.createProviderAccount(
         id: 'account.$provider.${_newUuid()}',
@@ -1154,15 +1322,11 @@ final class WorkbenchController extends ChangeNotifier {
   void _resetCaptureDetail() {
     _selectionGeneration += 1;
     selectedAssignment = null;
-    selectedWorkspaceDefault = null;
     selectedCaptureConversations = null;
     selectedCaptureConversationKey = null;
     selectedCapturePage = null;
     detailLoading = false;
     captureActivitiesLoading = false;
-    workspaceDefaultLoading = false;
-    workspaceDefaultError = null;
-    workspaceDefaultNotice = null;
   }
 
   void _invalidateEvidenceCaches() {
@@ -1578,11 +1742,8 @@ final class WorkbenchController extends ChangeNotifier {
     final currentPage = selectedCapturePage;
     final currentConversationKey = selectedCaptureConversationKey;
     final previousConversation = selectedCaptureConversation;
-    final currentWorkspaceDefault = selectedWorkspaceDefault;
     if (!quiet) {
       detailLoading = true;
-      workspaceDefaultLoading =
-          capture.managedRun?.hasWorkspaceIdentity == true;
       errorMessage = null;
       notifyListeners();
     }
@@ -1590,7 +1751,6 @@ final class WorkbenchController extends ChangeNotifier {
       final values = await Future.wait<Object?>([
         _api.captureAssignment(capture.key),
         _captureConversationPage(capture, limit: 200),
-        _workspaceDefaultFor(capture),
       ]);
       if (_disposed ||
           generation != _selectionGeneration ||
@@ -1599,7 +1759,6 @@ final class WorkbenchController extends ChangeNotifier {
       }
       selectedAssignment = values[0]! as CaptureAssignment;
       final conversationPage = values[1]! as ConversationPage;
-      final workspaceLoad = values[2]! as _WorkspaceDefaultLoad;
       selectedCaptureConversations = conversationPage;
       final available = captureConversations;
       if (!available.any(
@@ -1647,16 +1806,6 @@ final class WorkbenchController extends ChangeNotifier {
           selectedCapturePage!,
         );
       }
-      if (workspaceLoad.error == null) {
-        selectedWorkspaceDefault = workspaceLoad.value;
-        workspaceDefaultError = null;
-      } else if (!quiet) {
-        selectedWorkspaceDefault = null;
-        workspaceDefaultError = _describeError(workspaceLoad.error!);
-      } else {
-        selectedWorkspaceDefault = currentWorkspaceDefault;
-      }
-      workspaceDefaultLoading = false;
       captureActivitiesLoading = false;
       detailLoading = false;
       notifyListeners();
@@ -1664,30 +1813,8 @@ final class WorkbenchController extends ChangeNotifier {
       if (_disposed || generation != _selectionGeneration || quiet) return;
       captureActivitiesLoading = false;
       detailLoading = false;
-      workspaceDefaultLoading = false;
       errorMessage = _describeError(error);
       notifyListeners();
-    }
-  }
-
-  Future<_WorkspaceDefaultLoad> _workspaceDefaultFor(
-    CaptureRecord capture,
-  ) async {
-    final managed = capture.managedRun;
-    final machineId = managed?.machineId;
-    final workspaceId = managed?.workspaceId;
-    if (machineId == null || workspaceId == null) {
-      return const _WorkspaceDefaultLoad(value: null);
-    }
-    try {
-      return _WorkspaceDefaultLoad(
-        value: await _api.workspaceEnvironmentDefault(
-          machineId: machineId,
-          workspaceId: workspaceId,
-        ),
-      );
-    } catch (error) {
-      return _WorkspaceDefaultLoad(value: null, error: error);
     }
   }
 
@@ -1696,13 +1823,27 @@ final class WorkbenchController extends ChangeNotifier {
     String? cursor,
     String? conversationId,
     required int limit,
-  }) => _api.activities(
-    cursor: cursor,
-    limit: limit,
-    captureRunId: capture.isManual ? null : capture.captureRunId,
-    manualCaptureId: capture.isManual ? capture.id : null,
-    conversationId: conversationId,
-  );
+  }) {
+    final nativeSession =
+        conversationId != null &&
+        captureConversations.any(
+          (value) =>
+              value.key == conversationId &&
+              value.conversation.evidence == 'explicit_session',
+        );
+    return _api.activities(
+      cursor: cursor,
+      limit: limit,
+      // A Capture is one launch boundary. A proven native Client Session may
+      // continue through a later launch, so its exact projection is the query
+      // authority and the current Capture must not truncate the timeline.
+      captureRunId: nativeSession || capture.isManual
+          ? null
+          : capture.captureRunId,
+      manualCaptureId: nativeSession || !capture.isManual ? null : capture.id,
+      conversationId: conversationId,
+    );
+  }
 
   Future<ConversationPage> _captureConversationPage(
     CaptureRecord capture, {
@@ -1819,131 +1960,6 @@ final class WorkbenchController extends ChangeNotifier {
       errorMessage = _describeError(error);
       notifyListeners();
     }
-  }
-
-  Future<CaptureAssignmentChange?> switchEnvironment(
-    String environmentId,
-  ) async {
-    final assignment = selectedAssignment;
-    if (assignment == null || mutating) return null;
-    mutating = true;
-    operationNotice = null;
-    errorMessage = null;
-    notifyListeners();
-    try {
-      final change = await _api.switchCaptureEnvironment(
-        assignment: assignment,
-        environmentId: environmentId,
-      );
-      if (_disposed) return null;
-      selectedAssignment = change.assignment;
-      operationNotice = change.applied
-          ? 'environment.${change.boundary}'
-          : 'environment.${change.reasonCode ?? change.boundary}';
-      mutating = false;
-      notifyListeners();
-      return change;
-    } catch (error) {
-      if (_disposed) return null;
-      errorMessage = _describeError(error);
-      mutating = false;
-      notifyListeners();
-      return null;
-    }
-  }
-
-  Future<bool> setSelectedWorkspaceDefault(String? environmentId) async {
-    final capture = selectedCapture;
-    final managed = capture?.managedRun;
-    final machineId = managed?.machineId;
-    final workspaceId = managed?.workspaceId;
-    final current = selectedWorkspaceDefault;
-    if (capture == null ||
-        machineId == null ||
-        workspaceId == null ||
-        workspaceDefaultMutating ||
-        workspaceDefaultLoading) {
-      return false;
-    }
-    if (environmentId == current?.environmentId ||
-        (environmentId == null && current == null)) {
-      return true;
-    }
-    if (environmentId != null) {
-      final candidate = data?.environments
-          .where(
-            (environment) =>
-                environment.id == environmentId &&
-                environment.state == 'active' &&
-                !environment.systemOwned,
-          )
-          .firstOrNull;
-      if (candidate == null) return false;
-    }
-    final captureKey = capture.key;
-    workspaceDefaultMutating = true;
-    workspaceDefaultError = null;
-    workspaceDefaultNotice = null;
-    notifyListeners();
-    try {
-      if (environmentId == null) {
-        await _api.clearWorkspaceEnvironmentDefault(current: current!);
-      } else {
-        final updated = await _api.setWorkspaceEnvironmentDefault(
-          machineId: machineId,
-          workspaceId: workspaceId,
-          expectedRevision: current?.revision ?? 0,
-          environmentId: environmentId,
-        );
-        if (_disposed || selectedCaptureKey != captureKey) return false;
-        selectedWorkspaceDefault = updated;
-      }
-      if (_disposed || selectedCaptureKey != captureKey) return false;
-      if (environmentId == null) selectedWorkspaceDefault = null;
-      workspaceDefaultMutating = false;
-      workspaceDefaultNotice = environmentId == null
-          ? 'workspace_default.cleared'
-          : 'workspace_default.saved';
-      notifyListeners();
-      return true;
-    } catch (error) {
-      if (_disposed || selectedCaptureKey != captureKey) return false;
-      workspaceDefaultError = _describeError(error);
-      await _reconcileWorkspaceDefault(
-        machineId: machineId,
-        workspaceId: workspaceId,
-        captureKey: captureKey,
-      );
-      if (_disposed || selectedCaptureKey != captureKey) return false;
-      workspaceDefaultMutating = false;
-      notifyListeners();
-      return false;
-    }
-  }
-
-  Future<void> _reconcileWorkspaceDefault({
-    required String machineId,
-    required String workspaceId,
-    required String captureKey,
-  }) async {
-    try {
-      final latest = await _api.workspaceEnvironmentDefault(
-        machineId: machineId,
-        workspaceId: workspaceId,
-      );
-      if (!_disposed && selectedCaptureKey == captureKey) {
-        selectedWorkspaceDefault = latest;
-      }
-    } catch (_) {
-      // Keep the original mutation failure. Reconciliation is best-effort and
-      // must not disguise the CAS error that explains why the write failed.
-    }
-  }
-
-  void clearWorkspaceDefaultNotice() {
-    workspaceDefaultError = null;
-    workspaceDefaultNotice = null;
-    notifyListeners();
   }
 
   Future<bool> revokeSelectedManualCapture() async {
@@ -2145,6 +2161,8 @@ final class WorkbenchController extends ChangeNotifier {
         '${hex.substring(20)}';
   }
 
+  String newEnvironmentChildIdentityNonce() => _newUuid();
+
   @override
   void dispose() {
     if (_disposed) return;
@@ -2164,13 +2182,6 @@ final class WorkbenchController extends ChangeNotifier {
       await _closeRuntime();
     }
   }
-}
-
-final class _WorkspaceDefaultLoad {
-  const _WorkspaceDefaultLoad({required this.value, this.error});
-
-  final WorkspaceEnvironmentDefault? value;
-  final Object? error;
 }
 
 final class ConversationSummary {

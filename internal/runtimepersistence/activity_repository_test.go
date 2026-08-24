@@ -76,6 +76,51 @@ func TestActivityRepositoryGetsExactlyOneExchangeTerminal(t *testing.T) {
 	}
 }
 
+func TestActivityRepositoryPersistsOriginalDestinationWithoutSyntheticRoute(
+	t *testing.T,
+) {
+	t.Parallel()
+
+	store := openTestStore(t, filepath.Join(t.TempDir(), "data", "runtime.db"))
+	defer func() {
+		if err := store.Shutdown(context.Background()); err != nil {
+			t.Error(err)
+		}
+	}()
+	repository := store.ActivityRepository()
+	record := activity.Record{
+		ID:                "activity-original-destination",
+		OccurredAt:        time.Date(2026, 8, 24, 17, 54, 0, 0, time.UTC),
+		Kind:              activity.KindExchangeCompleted,
+		SubjectID:         "exchange-original-destination",
+		Status:            activity.StatusSucceeded,
+		SourceKind:        activity.SourceCaptureRun,
+		SourceDisplayName: "codex",
+		SourceRecognition: activity.SourceRecognitionConfigured,
+		CaptureRunID:      "run-original-destination",
+		ConnectionID:      "connection-original-destination",
+	}
+	setFrozenExecutionEvidence(&record, "original-destination")
+	record.RouteID = ""
+	record.RouteRevision = 0
+	record.AccountID = ""
+	record.AccountRevision = 0
+	record.CredentialEpoch = 0
+
+	stored, err := repository.Append(context.Background(), record)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, err := repository.GetExchange(
+		context.Background(),
+		"exchange-original-destination",
+	)
+	if err != nil || got.ID != stored.ID || got.RouteID != "" ||
+		got.RouteRevision != 0 || got.AccountID != "" {
+		t.Fatalf("Original Destination Activity = %+v, %v", got, err)
+	}
+}
+
 func TestConversationIdentitySurvivesSQLiteReopenWithoutLosingNativeIDs(t *testing.T) {
 	t.Parallel()
 
@@ -820,5 +865,67 @@ func TestActivityRepositoryConversationIndexFiltersByCaptureAuthority(t *testing
 	if err != nil || len(manual.Items) != 1 ||
 		manual.Items[0].Latest.ManualCaptureID != "manual-one" {
 		t.Fatalf("manual Capture Conversation page = %+v, %v", manual, err)
+	}
+}
+
+func TestActivityRepositoryReprojectsPendingExchangeByExactSession(t *testing.T) {
+	t.Parallel()
+	store := openTestStore(t, filepath.Join(t.TempDir(), "runtime.db"))
+	defer func() {
+		if err := store.Shutdown(context.Background()); err != nil {
+			t.Error(err)
+		}
+	}()
+	repository := store.ActivityRepository()
+	projectionWriter := store.ConversationProjectionWriter()
+	pending, err := agentconversation.Pending("exchange-pending-session")
+	if err != nil {
+		t.Fatal(err)
+	}
+	record := activity.Record{
+		ID:                "activity-pending-session",
+		OccurredAt:        time.Date(2026, 8, 23, 15, 12, 38, 0, time.UTC),
+		Kind:              activity.KindExchangeStarted,
+		SubjectID:         "exchange-pending-session",
+		Status:            activity.StatusPending,
+		SourceKind:        activity.SourceCaptureRun,
+		SourceDisplayName: "codex",
+		SourceRecognition: activity.SourceRecognitionConfigured,
+		CaptureRunID:      "capture-codex-session",
+		ConnectionID:      "connection-codex-session",
+		Conversation:      &pending,
+	}
+	setFrozenExecutionEvidence(&record, "pending-session")
+	record.AccountID = ""
+	record.AccountRevision = 0
+	record.CredentialEpoch = 0
+	if _, err := repository.Append(context.Background(), record); err != nil {
+		t.Fatal(err)
+	}
+	session := agentconversation.Ref{
+		ProjectionID: "capture_run:capture-codex-session:session:opaque:main",
+		DisplayName:  "codex",
+		Kind:         agentconversation.KindMain,
+		Evidence:     agentconversation.EvidenceExplicitSession,
+	}
+	if err := projectionWriter.ReprojectConversation(
+		context.Background(),
+		"exchange-pending-session",
+		session,
+	); err != nil {
+		t.Fatalf("ReprojectConversation() error = %v", err)
+	}
+	page, err := repository.ListConversations(
+		context.Background(),
+		activity.ConversationIndexRequest{
+			Limit:        10,
+			CaptureRunID: "capture-codex-session",
+		},
+	)
+	if err != nil || len(page.Items) != 1 ||
+		page.Items[0].Conversation.ProjectionID != session.ProjectionID ||
+		page.Items[0].TurnCount != 1 ||
+		page.Items[0].Latest.Status != activity.StatusPending {
+		t.Fatalf("pending Session Conversation = %+v, %v", page, err)
 	}
 }

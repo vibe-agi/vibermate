@@ -4,13 +4,94 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net/http"
+	"net/http/httptest"
 	"testing"
 	"time"
 
 	"github.com/vibe-agi/vibermate/internal/captureidentity"
 	"github.com/vibe-agi/vibermate/internal/capturerun"
+	"github.com/vibe-agi/vibermate/internal/evidencearchive"
 	"github.com/vibe-agi/vibermate/internal/manualcapture"
+	"github.com/vibe-agi/vibermate/internal/resourcedeletion"
 )
+
+func TestArchiveClearHoldsTheExclusiveBarrierAcrossHolderCheckAndTransaction(
+	t *testing.T,
+) {
+	t.Parallel()
+
+	barrier := &recordingClearBarrier{}
+	archive := &barrierCheckingArchive{barrier: barrier}
+	handler := Handler{
+		archive:        archive,
+		archiveBarrier: barrier,
+		captureRuns:    &deletionRunReader{},
+		manualCaptures: &deletionManualCaptures{},
+		idempotent:     newIdempotencyCache(),
+	}
+	request := httptest.NewRequest(
+		http.MethodPost,
+		"/api/v1/evidence/actions/clear",
+		nil,
+	)
+	request.Header.Set("If-Match", "1")
+	request.Header.Set("Idempotency-Key", "clear-evidence-test-key")
+	response := httptest.NewRecorder()
+
+	handler.clearArchive(response, request)
+
+	if response.Code != http.StatusOK {
+		t.Fatalf("status = %d, body = %s", response.Code, response.Body.String())
+	}
+	if !archive.sawBarrier || barrier.calls != 1 || barrier.releases != 1 ||
+		barrier.active != 0 {
+		t.Fatalf(
+			"archive barrier saw=%t calls=%d releases=%d active=%d",
+			archive.sawBarrier,
+			barrier.calls,
+			barrier.releases,
+			barrier.active,
+		)
+	}
+}
+
+type recordingClearBarrier struct {
+	active   int
+	calls    int
+	releases int
+}
+
+func (barrier *recordingClearBarrier) BeginClear(
+	context.Context,
+) (evidencearchive.Release, error) {
+	barrier.calls++
+	barrier.active++
+	return func() {
+		barrier.releases++
+		barrier.active--
+	}, nil
+}
+
+type barrierCheckingArchive struct {
+	barrier    *recordingClearBarrier
+	sawBarrier bool
+}
+
+func (*barrierCheckingArchive) DeleteCapture(
+	context.Context,
+	string,
+	string,
+) (resourcedeletion.Released, error) {
+	return resourcedeletion.Released{}, errors.New("unexpected DeleteCapture")
+}
+
+func (archive *barrierCheckingArchive) ClearEvidence(
+	context.Context,
+) (resourcedeletion.Released, error) {
+	archive.sawBarrier = archive.barrier.active == 1
+	return resourcedeletion.Released{}, nil
+}
 
 type deletionRunReader struct {
 	pages    [][]capturerun.View

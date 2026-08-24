@@ -10,9 +10,9 @@ import (
 )
 
 const (
-	codexResponsesHTTPProvider = "vibermate_responses_http"
-	codexChatGPTBaseURL        = "https://chatgpt.com/backend-api/codex"
-	codexAPIBaseURL            = "https://api.openai.com/v1"
+	codexBuiltInProvider = "openai"
+	codexChatGPTBaseURL  = "https://chatgpt.com/backend-api/codex"
+	codexAPIBaseURL      = "https://api.openai.com/v1"
 )
 
 // buildChildArguments is the launch-invocation seam. CaptureRun creation keeps
@@ -36,17 +36,15 @@ func buildChildArguments(
 		return nil, err
 	}
 	settings := []string{
-		"model_provider=" + strconv.Quote(codexResponsesHTTPProvider),
-		"model_providers." + codexResponsesHTTPProvider +
-			".name=" + strconv.Quote("ViberMate Responses HTTP"),
-		"model_providers." + codexResponsesHTTPProvider +
-			".base_url=" + strconv.Quote(baseURL),
-		"model_providers." + codexResponsesHTTPProvider +
-			".wire_api=" + strconv.Quote("responses"),
-		"model_providers." + codexResponsesHTTPProvider +
-			".requires_openai_auth=true",
-		"model_providers." + codexResponsesHTTPProvider +
-			".supports_websockets=false",
+		// Persist Codex's built-in provider identity in new rollouts. A private
+		// launch-only provider made those sessions impossible to resume outside
+		// ViberMate because session_meta outlived its temporary definition.
+		"model_provider=" + strconv.Quote(codexBuiltInProvider),
+		"openai_base_url=" + strconv.Quote(baseURL),
+		// The semantic proxy owns Responses HTTP. Codex 0.145 exposed its
+		// WebSocket transport behind this feature; selecting the built-in provider
+		// must not silently re-enable a wire shape the launch recipe cannot decode.
+		"features.responses_websockets=false",
 		// Retry/attempt ownership belongs to the frozen Environment route. If
 		// Codex retries internally, those attempts cannot be selected, approved,
 		// or explained independently by ViberMate.

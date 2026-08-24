@@ -84,8 +84,17 @@ func TestMessagesProtocolPathPreservesCompatibleWireAndAppliesModel(t *testing.T
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !bytes.Equal(clientBody, providerBody) {
-		t.Fatalf("compatible response was rewritten:\n%s", clientBody)
+	var clientWire struct {
+		Model   string            `json:"model"`
+		Content []json.RawMessage `json:"content"`
+	}
+	if err := json.Unmarshal(clientBody, &clientWire); err != nil {
+		t.Fatal(err)
+	}
+	if clientWire.Model != "client-alias" || len(clientWire.Content) != 1 ||
+		!bytes.Contains(clientWire.Content[0], []byte(`"citations":[]`)) ||
+		!bytes.Contains(providerBody, []byte(`"model":"claude-sonnet-provider"`)) {
+		t.Fatalf("client response = %s; provider response = %s", clientBody, providerBody)
 	}
 }
 
@@ -143,6 +152,49 @@ func TestMessagesProtocolPathPreservesThinkingHistoryForLaterTurns(t *testing.T)
 		len(forwarded.Messages[0].Content) != 2 ||
 		!bytes.Contains(forwarded.Messages[0].Content[0], []byte(`"signature":"signed-state"`)) {
 		t.Fatalf("forwarded thinking history = %s", providerRequest.Body())
+	}
+}
+
+func TestMessagesProtocolPathPreservesCitedTextHistoryForLaterTurns(t *testing.T) {
+	t.Parallel()
+
+	path, err := NewMessagesProtocolPath(DefaultOptions())
+	if err != nil {
+		t.Fatal(err)
+	}
+	source := []byte(`{
+		"model":"client-alias",
+		"max_tokens":64,
+		"messages":[
+			{"role":"assistant","content":[
+				{"type":"thinking","thinking":"private state","signature":""},
+				{"type":"text","text":"first answer","citations":[]}
+			]},
+			{"role":"user","content":[{"type":"text","text":"follow up"}]}
+		],
+		"stream":true
+	}`)
+	request, report, err := path.Client().DecodeRequest(source)
+	if err != nil {
+		t.Fatalf("DecodeRequest() rejected cited assistant history: %v", err)
+	}
+	if !report.Empty() || len(request.Messages) != 2 ||
+		len(request.Messages[0].Blocks) != 2 ||
+		request.Messages[0].Blocks[1].Text != "first answer" {
+		t.Fatalf("decoded cited history = %+v, report=%+v", request.Messages, report.Notices())
+	}
+	request, err = request.WithEffectiveModel("claude-provider-model")
+	if err != nil {
+		t.Fatal(err)
+	}
+	providerRequest, report, err := path.EncodeProviderRequest(request, source, nil)
+	if err != nil {
+		t.Fatalf("EncodeProviderRequest() error = %v", err)
+	}
+	if !report.Empty() ||
+		!bytes.Contains(providerRequest.Body(), []byte(`"signature":""`)) ||
+		!bytes.Contains(providerRequest.Body(), []byte(`"citations":[]`)) {
+		t.Fatalf("forwarded cited history = %s, report=%+v", providerRequest.Body(), report.Notices())
 	}
 }
 
@@ -439,7 +491,10 @@ func TestMessagesProtocolPathHoldsStreamingToolCallUntilApproval(t *testing.T) {
 		t.Fatal(err)
 	}
 	combined := append(bytes.Clone(immediate.Bytes()), released...)
-	if string(combined) != wire {
+	if !bytes.Contains(combined, []byte(`"model":"client-alias"`)) ||
+		bytes.Contains(combined, []byte(`"model":"claude-sonnet-provider"`)) ||
+		!bytes.Contains(combined, []byte(`"id":"tool_1"`)) ||
+		!bytes.Contains(combined, []byte(`"type":"input_json_delta"`)) {
 		t.Fatalf("compatible stream changed across the approval barrier:\n%s", combined)
 	}
 }
@@ -493,7 +548,9 @@ func TestMessagesProtocolPathStreamsTextWithoutWaitingForTerminalApproval(t *tes
 	if err != nil {
 		t.Fatal(err)
 	}
-	if string(immediate) != wire || !bytes.Contains(immediate, []byte(`"text":"hello"`)) {
+	if !bytes.Contains(immediate, []byte(`"model":"client-alias"`)) ||
+		bytes.Contains(immediate, []byte(`"model":"claude-sonnet-provider"`)) ||
+		!bytes.Contains(immediate, []byte(`"text":"hello"`)) {
 		t.Fatalf("text stream was not released immediately:\n%s", immediate)
 	}
 	terminal, err := stream.FinishDecoded(context.Background())
@@ -570,7 +627,11 @@ func TestMessagesProtocolPathRetainsStreamingThinkingAsTypedEvidence(t *testing.
 	if err != nil {
 		t.Fatal(err)
 	}
-	if string(immediate) != wire {
+	if !bytes.Contains(immediate, []byte(`"model":"client-alias"`)) ||
+		bytes.Contains(immediate, []byte(`"model":"claude-sonnet-provider"`)) ||
+		!bytes.Contains(immediate, []byte(`"type":"thinking_delta"`)) ||
+		!bytes.Contains(immediate, []byte(`"type":"signature_delta"`)) ||
+		!bytes.Contains(immediate, []byte(`"text":"done"`)) {
 		t.Fatalf("compatible thinking stream changed:\n%s", immediate)
 	}
 	terminal, err := stream.FinishDecoded(context.Background())

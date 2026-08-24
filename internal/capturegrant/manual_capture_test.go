@@ -116,6 +116,7 @@ func TestIssueManualCaptureDerivesOwnerFromPrincipal(t *testing.T) {
 		Kind:                  controlprincipal.KindEnrolledClient,
 		ProxyClientBindingID:  "binding-one",
 		MachineRegistrationID: "machine-one",
+		MachineID:             "machine-source-one",
 		CredentialRevision:    1,
 		AllowedGrantKinds: []controlprincipal.GrantKind{
 			controlprincipal.GrantManualCapture,
@@ -245,13 +246,18 @@ func TestIssueManualCaptureRejectsUnauthorizedPrincipalBeforeDependencies(
 	}
 }
 
-func TestManualCaptureContextDoesNotDeliverRootForTransparentEnvironment(t *testing.T) {
+func TestManualCaptureContextDeliversRootForSystemTransparentAgentAPIs(t *testing.T) {
 	t.Parallel()
+	protected := []string{
+		"api.anthropic.com:443",
+		"api.openai.com:443",
+		"chatgpt.com:443",
+	}
 	issuer, authority := manualCaptureTestIssuer(
 		t,
 		&recordingManualCaptures{},
 		manualAuthorities{assignment: captureAuthorityAssignmentForEnvironment(
-			t, "system_transparent", nil, nil,
+			t, "system_transparent", protected, nil,
 		)},
 	)
 	context, err := issuer.GetManualCaptureContext(
@@ -260,9 +266,10 @@ func TestManualCaptureContextDoesNotDeliverRootForTransparentEnvironment(t *test
 	if err != nil {
 		t.Fatal(err)
 	}
-	if context.DeliverRoot || context.RootIdentity.Valid() || context.RootCertificate.Valid() ||
-		len(context.ProtectedAuthorities) != 0 || context.EnvironmentID != "system_transparent" {
-		t.Fatalf("transparent context exposed Root authority: %+v", context)
+	if !context.DeliverRoot || !context.RootIdentity.Valid() || !context.RootCertificate.Valid() ||
+		!slices.Equal(context.ProtectedAuthorities, protected) ||
+		context.EnvironmentID != "system_transparent" {
+		t.Fatalf("system transparent context omitted interception authority: %+v", context)
 	}
 	_ = authority
 }
@@ -270,8 +277,10 @@ func TestManualCaptureContextDoesNotDeliverRootForTransparentEnvironment(t *test
 func TestManualCaptureUsesEnvironmentAssignmentAuthorityForTransparentAndSemantic(t *testing.T) {
 	t.Parallel()
 
+	system := systemEnvironmentSnapshot(t)
 	semantic := semanticEnvironmentSnapshot(t)
 	resolver := &manualSnapshotResolver{snapshots: map[environment.EnvironmentID]environment.EnvironmentSnapshot{
+		system.ID():   system,
 		semantic.ID(): semantic,
 	}}
 	for _, test := range []struct {
@@ -281,7 +290,13 @@ func TestManualCaptureUsesEnvironmentAssignmentAuthorityForTransparentAndSemanti
 		wantRoot       bool
 		wantProtection []string
 	}{
-		{name: "system transparent", environmentID: environment.SystemTransparentID, manualID: "manual-transparent"},
+		{
+			name: "system transparent", environmentID: environment.SystemTransparentID,
+			manualID: "manual-transparent", wantRoot: true,
+			wantProtection: []string{
+				"api.anthropic.com:443", "api.openai.com:443", "chatgpt.com:443",
+			},
+		},
 		{name: "semantic", environmentID: semantic.ID(), manualID: "manual-semantic", wantRoot: true, wantProtection: []string{"api.example:443"}},
 	} {
 		t.Run(test.name, func(t *testing.T) {
@@ -517,11 +532,26 @@ type manualSnapshotResolver struct {
 func (resolver *manualSnapshotResolver) Resolve(
 	id environment.EnvironmentID,
 ) (environment.EnvironmentSnapshot, error) {
-	if id == environment.SystemTransparentID {
-		return environment.SystemTransparentSnapshot(), nil
-	}
 	snapshot, exists := resolver.snapshots[id]
 	if !exists {
+		return environment.EnvironmentSnapshot{}, environment.ErrEnvironmentNotFound
+	}
+	return snapshot, nil
+}
+
+func (resolver *manualSnapshotResolver) ResolveRevision(
+	ctx context.Context,
+	id environment.EnvironmentID,
+	revision environment.Revision,
+) (environment.EnvironmentSnapshot, error) {
+	if ctx == nil {
+		return environment.EnvironmentSnapshot{}, environment.ErrInvalidEnvironment
+	}
+	snapshot, err := resolver.Resolve(id)
+	if err != nil {
+		return environment.EnvironmentSnapshot{}, err
+	}
+	if snapshot.Revision() != revision {
 		return environment.EnvironmentSnapshot{}, environment.ErrEnvironmentNotFound
 	}
 	return snapshot, nil
@@ -593,37 +623,36 @@ func (repository *manualAssignmentRepository) Write(
 	}, nil
 }
 
-func semanticEnvironmentSnapshot(t *testing.T) environment.EnvironmentSnapshot {
+func manualEnvironmentCompiler(t *testing.T) environment.Compiler {
 	t.Helper()
-	clientOrigin, err := originidentity.ParseClientOrigin("https://api.example")
-	if err != nil {
-		t.Fatal(err)
-	}
-	providerOrigin, err := originidentity.ParseProviderOrigin(clientOrigin.String())
-	if err != nil {
-		t.Fatal(err)
-	}
 	operations, err := operationcatalog.BuiltIn()
 	if err != nil {
 		t.Fatal(err)
 	}
-	pairID, err := protocolspec.NewCodecPairID("test.manual.anthropic")
-	if err != nil {
-		t.Fatal(err)
-	}
-	protocols, err := protocolspec.NewCatalog(
-		operations.Definitions(),
-		[]protocolspec.CodecPairDefinition{{
+	pairs := make([]protocolspec.CodecPairDefinition, 0, 2)
+	for _, dialect := range []protocolspec.Dialect{
+		protocolspec.DialectAnthropicMessages,
+		protocolspec.DialectOpenAIResponses,
+	} {
+		pairID, err := protocolspec.NewCodecPairID("test.manual." + string(dialect))
+		if err != nil {
+			t.Fatal(err)
+		}
+		pairs = append(pairs, protocolspec.CodecPairDefinition{
 			ID: pairID, Revision: 1,
-			ClientDialect:      protocolspec.DialectAnthropicMessages,
-			ProviderDialect:    protocolspec.DialectAnthropicMessages,
-			ClientOperationIDs: operations.SemanticOperationIDs(protocolspec.DialectAnthropicMessages),
+			ClientDialect:      dialect,
+			ProviderDialect:    dialect,
+			ClientOperationIDs: operations.SemanticOperationIDs(dialect),
 			RequiredCapabilities: []protocolspec.ProviderCapability{
 				protocolspec.ProviderCapabilityMessages,
 				protocolspec.ProviderCapabilityStreaming,
 				protocolspec.ProviderCapabilityToolCalls,
 			},
-		}},
+		})
+	}
+	protocols, err := protocolspec.NewCatalog(
+		operations.Definitions(),
+		pairs,
 	)
 	if err != nil {
 		t.Fatal(err)
@@ -636,7 +665,25 @@ func semanticEnvironmentSnapshot(t *testing.T) environment.EnvironmentSnapshot {
 	if err != nil {
 		t.Fatal(err)
 	}
-	returnValue, err := compiler.Compile(environment.Environment{
+	return compiler
+}
+
+func systemEnvironmentSnapshot(t *testing.T) environment.EnvironmentSnapshot {
+	t.Helper()
+	snapshot, err := manualEnvironmentCompiler(t).CompileSystemTransparent()
+	if err != nil {
+		t.Fatal(err)
+	}
+	return snapshot
+}
+
+func semanticEnvironmentSnapshot(t *testing.T) environment.EnvironmentSnapshot {
+	t.Helper()
+	clientOrigin, err := originidentity.ParseClientOrigin("https://api.example")
+	if err != nil {
+		t.Fatal(err)
+	}
+	returnValue, err := manualEnvironmentCompiler(t).Compile(environment.Environment{
 		ID: "work", Name: "Work", State: environment.StateActive, Revision: 1,
 		ContentRecording: environment.DefaultContentRecordingPolicy(),
 		ClientEndpoints: []environment.ClientEndpoint{{
@@ -645,30 +692,7 @@ func semanticEnvironmentSnapshot(t *testing.T) environment.EnvironmentSnapshot {
 				ID: "plan.messages", Revision: 1,
 				ClientProtocol:      environment.ClientProtocolAnthropicMessages,
 				ClientAdapterPolicy: environment.ClientAdapterPolicy{ID: "adapter.claude", Revision: 1},
-				Mode:                environment.PlanModeManaged,
-				UpstreamPlan: environment.UpstreamPlan{
-					DefaultRouteID: "route.original",
-					RouteSet:       environment.RouteSet{ID: "routes.original", Revision: 1, CandidateRouteIDs: []environment.UpstreamRouteID{"route.original"}},
-					Routes: []environment.UpstreamRoute{{
-						ID: "route.original", Revision: 1,
-						ProviderTarget: environment.ProviderTarget{
-							ID: "target.original", Revision: 1, Origin: providerOrigin,
-							RealmID: "realm.anthropic",
-							Capabilities: []protocolspec.ProviderCapability{
-								protocolspec.ProviderCapabilityMessages,
-								protocolspec.ProviderCapabilityStreaming,
-								protocolspec.ProviderCapabilityToolCalls,
-							},
-						},
-						BackendProtocol: "anthropic_messages",
-						AccountPolicy: environment.RouteAccountPolicy{
-							Revision: 1, Mode: environment.AccountModeClientPassthrough,
-							FailoverPolicy: environment.FailoverOff,
-						},
-						ModelPolicy:    environment.ModelPolicy{Revision: 1, Mode: "passthrough"},
-						WireProfileRef: wireprofile.UpstreamWireProfileFollowClientValue,
-					}},
-				},
+				Destination:         environment.DestinationPlan{Kind: environment.DestinationKindOriginal},
 			}},
 		}},
 	})

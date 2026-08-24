@@ -4,13 +4,179 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"net/http"
+	"slices"
 	"testing"
 
 	"github.com/openai/openai-go/v3/responses"
 	"github.com/vibe-agi/vibermate/internal/anthropicchat"
+	"github.com/vibe-agi/vibermate/internal/openairesponses"
 	"github.com/vibe-agi/vibermate/internal/protocolcore"
 	"github.com/vibe-agi/vibermate/internal/ssewire"
 )
+
+func TestResponsesPassthroughForwardsOnlyPortableConversationHistory(t *testing.T) {
+	t.Parallel()
+
+	path, err := NewResponsesPassthroughProtocolPath(openairesponses.DefaultOptions())
+	if err != nil {
+		t.Fatal(err)
+	}
+	source := []byte(`{
+		"model":"gpt-5.6-sol",
+		"input":[
+			{"type":"message","role":"user","content":[{"type":"input_text","text":"first"}]},
+			{
+				"id":"rs_private",
+				"type":"reasoning",
+				"summary":[{"type":"summary_text","text":"private summary"}],
+				"content":[{"type":"reasoning_text","text":"private reasoning"}],
+				"encrypted_content":"opaque-provider-state"
+			},
+			{"type":"message","role":"assistant","content":[{"type":"output_text","text":"answer"}]},
+			{"type":"message","role":"user","content":[{"type":"input_text","text":"continue"}]}
+		],
+		"store":false,
+		"stream":true
+	}`)
+	request, _, err := path.Client().DecodeRequest(source)
+	if err != nil {
+		t.Fatalf("DecodeRequest() error = %v", err)
+	}
+	request, err = request.WithEffectiveModel("provider-model")
+	if err != nil {
+		t.Fatal(err)
+	}
+	provider, report, err := path.EncodeProviderRequest(request, source, make(http.Header))
+	if err != nil {
+		t.Fatalf("EncodeProviderRequest() error = %v", err)
+	}
+	var wire struct {
+		Model string            `json:"model"`
+		Input []json.RawMessage `json:"input"`
+	}
+	if err := json.Unmarshal(provider.Body(), &wire); err != nil {
+		t.Fatal(err)
+	}
+	if wire.Model != "provider-model" || len(wire.Input) != 3 {
+		t.Fatalf("provider wire = %s", provider.Body())
+	}
+	roles := make([]string, len(wire.Input))
+	for index, raw := range wire.Input {
+		var item struct {
+			Type string `json:"type"`
+			Role string `json:"role"`
+		}
+		if err := json.Unmarshal(raw, &item); err != nil {
+			t.Fatal(err)
+		}
+		if item.Type != "message" {
+			t.Fatalf("input[%d] type = %q", index, item.Type)
+		}
+		roles[index] = item.Role
+	}
+	if got, want := roles, []string{"user", "assistant", "user"}; !slices.Equal(got, want) {
+		t.Fatalf("portable roles = %v, want %v", got, want)
+	}
+	if bytes.Contains(provider.Body(), []byte("private reasoning")) ||
+		bytes.Contains(provider.Body(), []byte("opaque-provider-state")) {
+		t.Fatalf("provider request leaked private reasoning: %s", provider.Body())
+	}
+	notices := report.Notices()
+	if len(notices) != 1 ||
+		notices[0].Code != protocolcore.NoticeReasoningExecutionNotForwarded ||
+		notices[0].Path != "$.input[1]" {
+		t.Fatalf("translation notices = %#v", notices)
+	}
+}
+
+func TestResponsesPassthroughReleasesOnlyPortableConversationHistory(t *testing.T) {
+	t.Parallel()
+
+	path, err := NewResponsesPassthroughProtocolPath(openairesponses.DefaultOptions())
+	if err != nil {
+		t.Fatal(err)
+	}
+	sourceRequest := []byte(`{
+		"model":"gpt-5.6-sol",
+		"input":[
+			{"type":"message","role":"user","content":[{"type":"input_text","text":"continue"}]}
+		],
+		"store":false,
+		"stream":false
+	}`)
+	request, _, err := path.Client().DecodeRequest(sourceRequest)
+	if err != nil {
+		t.Fatalf("DecodeRequest() error = %v", err)
+	}
+	request, err = request.WithEffectiveModel("provider-model")
+	if err != nil {
+		t.Fatal(err)
+	}
+	reasoning := json.RawMessage(`{
+		"id":"rs_private",
+		"type":"reasoning",
+		"summary":[{"type":"summary_text","text":"private summary"}],
+		"content":[{"type":"reasoning_text","text":"private reasoning"}],
+		"encrypted_content":null,
+		"status":"completed"
+	}`)
+	message := json.RawMessage(`{
+		"id":"msg_portable",
+		"type":"message",
+		"status":"completed",
+		"role":"assistant",
+		"content":[{"type":"output_text","text":"portable answer"}]
+	}`)
+	sourceResponse, err := json.Marshal(map[string]any{
+		"id":         "resp_portable",
+		"created_at": 1,
+		"status":     "completed",
+		"model":      "provider-model",
+		"output":     []json.RawMessage{reasoning, message},
+		"usage":      map[string]any{},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	response, _, err := path.Backend().DecodeResponse(request, sourceResponse)
+	if err != nil {
+		t.Fatalf("DecodeResponse() error = %v", err)
+	}
+	if len(response.ProviderExtensions) != 2 {
+		t.Fatalf("provider reasoning evidence = %#v", response.ProviderExtensions)
+	}
+	released, report, err := path.EncodeClientResponse(request, response, sourceResponse)
+	if err != nil {
+		t.Fatalf("EncodeClientResponse() error = %v", err)
+	}
+	var wire struct {
+		Model  string            `json:"model"`
+		Output []json.RawMessage `json:"output"`
+	}
+	if err := json.Unmarshal(released, &wire); err != nil {
+		t.Fatal(err)
+	}
+	if wire.Model != request.RequestedModel || len(wire.Output) != 1 {
+		t.Fatalf("released response = %s", released)
+	}
+	var item struct {
+		Type string `json:"type"`
+	}
+	if err := json.Unmarshal(wire.Output[0], &item); err != nil {
+		t.Fatal(err)
+	}
+	if item.Type != "message" ||
+		bytes.Contains(released, []byte("private reasoning")) {
+		t.Fatalf("released response is not portable: %s", released)
+	}
+	notices := report.Notices()
+	if len(notices) != 1 ||
+		notices[0].Code != protocolcore.NoticeReasoningExecutionNotForwarded ||
+		notices[0].Path != "$.output[0]" {
+		t.Fatalf("translation notices = %#v", notices)
+	}
+}
 
 func TestPathComposesFixedResponsesRequestWithExistingChatBackend(
 	t *testing.T,

@@ -1492,6 +1492,7 @@ const (
 	NoticeReasoningExecutionNotForwarded      NoticeCode = "reasoning_execution_not_forwarded"
 	NoticeToolItemIdentityNotForwarded        NoticeCode = "tool_item_identity_not_forwarded"
 	NoticeToolCallerNotForwarded              NoticeCode = "tool_caller_not_forwarded"
+	NoticeCitationsNotForwarded               NoticeCode = "citations_not_forwarded"
 	NoticeMessageItemIdentityNotForwarded     NoticeCode = "message_item_identity_not_forwarded"
 	NoticeMessagePhaseNotProjected            NoticeCode = "message_phase_not_projected"
 	NoticeAgentItemIdentityNotForwarded       NoticeCode = "agent_item_identity_not_forwarded"

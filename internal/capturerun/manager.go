@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/vibe-agi/vibermate/internal/capturecredential"
+	"github.com/vibe-agi/vibermate/internal/evidencearchive"
 )
 
 const (
@@ -41,6 +42,7 @@ type Options struct {
 	DefaultLifetime time.Duration
 	MaxLifetime     time.Duration
 	EvidenceBarrier EvidenceBarrier
+	ArchiveBarrier  evidencearchive.CaptureCreationBarrier
 }
 
 // TerminalEvidence owns the prepared CaptureRun evidence boundary. Commit is
@@ -64,6 +66,7 @@ func DefaultOptions(repository Repository) Options {
 		Random:          rand.Reader,
 		DefaultLifetime: defaultRunLifetime,
 		MaxLifetime:     defaultMaxLifetime,
+		ArchiveBarrier:  evidencearchive.NewBarrier(),
 	}
 }
 
@@ -74,6 +77,7 @@ type Manager struct {
 	defaultLifetime time.Duration
 	maxLifetime     time.Duration
 	evidenceBarrier EvidenceBarrier
+	archiveBarrier  evidencearchive.CaptureCreationBarrier
 	lifecycle       *lifecycleGate
 	recovery        Recovery
 
@@ -91,7 +95,8 @@ func NewManager(ctx context.Context, options Options) (*Manager, error) {
 		options.Random == nil ||
 		options.DefaultLifetime <= 0 ||
 		options.MaxLifetime <= 0 ||
-		options.DefaultLifetime > options.MaxLifetime {
+		options.DefaultLifetime > options.MaxLifetime ||
+		options.ArchiveBarrier == nil {
 		return nil, fmt.Errorf("%w: Manager dependencies are incomplete", ErrInvalidRequest)
 	}
 	now := options.Clock.Now().UTC()
@@ -106,6 +111,7 @@ func NewManager(ctx context.Context, options Options) (*Manager, error) {
 		defaultLifetime: options.DefaultLifetime,
 		maxLifetime:     options.MaxLifetime,
 		evidenceBarrier: options.EvidenceBarrier,
+		archiveBarrier:  options.ArchiveBarrier,
 		lifecycle:       newLifecycleGate(),
 		recovery:        recovery,
 	}, nil
@@ -134,6 +140,11 @@ func (manager *Manager) Create(
 		return LaunchGrant{}, err
 	}
 	defer finish()
+	archiveRelease, err := manager.archiveBarrier.BeginCaptureCreation(operation)
+	if err != nil {
+		return LaunchGrant{}, fmt.Errorf("enter Capture creation archive barrier: %w", err)
+	}
+	defer archiveRelease()
 
 	runID, err := newRunID(manager.random)
 	if err != nil {
@@ -155,6 +166,9 @@ func (manager *Manager) Create(
 		CWD:                         command.CWD,
 		CanonicalExecutablePath:     command.CanonicalExecutablePath,
 		LocalUserLabel:              command.LocalUserLabel,
+		RuntimeUserID:               command.RuntimeUserID,
+		LoginSessionID:              command.LoginSessionID,
+		DeviceName:                  command.DeviceName,
 		ExecutableLabel:             command.ExecutableLabel,
 		CatalogRevision:             command.CatalogRevision,
 		Adapter:                     cloneAdapter(command.Adapter),

@@ -7,8 +7,11 @@ import '../core/api/control_api.dart';
 import '../core/api/control_models.dart';
 
 final class PreviewControlApi implements ControlApi {
-  PreviewControlApi({int dashboardCaptureLimit = 50})
-    : _dashboardCaptureLimit = dashboardCaptureLimit {
+  PreviewControlApi({
+    int dashboardCaptureLimit = 50,
+    ControlProblem? upstreamModelFailure,
+  }) : _dashboardCaptureLimit = dashboardCaptureLimit,
+       _upstreamModelFailure = upstreamModelFailure {
     if (dashboardCaptureLimit < 1 || dashboardCaptureLimit > 199) {
       throw ArgumentError.value(dashboardCaptureLimit, 'dashboardCaptureLimit');
     }
@@ -89,8 +92,8 @@ final class PreviewControlApi implements ControlApi {
       captureId: manual.id,
       captureKind: manual.kind,
       environmentId: 'work',
-      revision: 2,
-      source: 'operator_switch',
+      revision: 1,
+      source: 'manual_create',
       updatedAt: _now.subtract(const Duration(hours: 1)),
     );
     _manualRecords[manualId] = ManualCaptureRecord(
@@ -109,6 +112,7 @@ final class PreviewControlApi implements ControlApi {
   }
 
   final int _dashboardCaptureLimit;
+  final ControlProblem? _upstreamModelFailure;
 
   static final _now = DateTime.utc(2026, 8, 10, 9, 42);
   static String _identity(int byte) =>
@@ -121,16 +125,6 @@ final class PreviewControlApi implements ControlApi {
 
   final Map<String, CaptureRecord> _captures = {};
   final Map<String, CaptureAssignment> _assignments = {};
-  final Map<String, WorkspaceEnvironmentDefault> _workspaceDefaults = {
-    '$_previewMachineId:$_previewWorkspaceId': WorkspaceEnvironmentDefault(
-      machineId: _previewMachineId,
-      workspaceId: _previewWorkspaceId,
-      environmentId: 'work',
-      environmentName: 'Work',
-      revision: 1,
-      updatedAt: _now.subtract(const Duration(hours: 3)),
-    ),
-  };
   final Map<String, ManualCaptureRecord> _manualRecords = {};
   final Map<String, int> _manualVersions = {};
   ApprovalRecord _approval = _pendingApproval;
@@ -156,6 +150,20 @@ final class PreviewControlApi implements ControlApi {
     ],
     mode: 'ask_unknown',
   );
+  final RuntimeServerAccess _serverAccess = const RuntimeServerAccess(
+    transport: 'http',
+    authentication: 'runtime_user_password',
+    sessionPolicy: 'reusable_until_logout_disable_or_expiry',
+  );
+  final List<RuntimeUser> _runtimeUsers = [
+    RuntimeUser(
+      id: 'user.preview.alice',
+      username: 'alice',
+      state: 'active',
+      createdAt: DateTime.utc(2026, 8, 24, 9),
+      updatedAt: DateTime.utc(2026, 8, 24, 9),
+    ),
+  ];
   bool _closed = false;
   OfflineHoldSnapshot _offline = OfflineHoldSnapshot(
     state: 'online',
@@ -299,7 +307,7 @@ final class PreviewControlApi implements ControlApi {
       realmId: 'anthropic.official',
       backendProtocols: const ['anthropic_messages'],
       capabilities: const ['messages', 'streaming', 'tool_calls'],
-      accountKinds: const ['anthropic_api_key', 'claude_oauth_token'],
+      accountKinds: const ['anthropic_api_key', 'bearer_token'],
       state: 'active',
       revision: 1,
     ),
@@ -310,7 +318,7 @@ final class PreviewControlApi implements ControlApi {
       realmId: 'openai.platform',
       backendProtocols: const ['openai_responses', 'openai_chat'],
       capabilities: const ['messages', 'streaming', 'tool_calls'],
-      accountKinds: const ['openai_api_key'],
+      accountKinds: const ['bearer_token'],
       state: 'active',
       revision: 1,
     ),
@@ -321,7 +329,7 @@ final class PreviewControlApi implements ControlApi {
       realmId: 'relay.orbit.tokyo',
       backendProtocols: const ['anthropic_messages', 'openai_responses'],
       capabilities: const ['messages', 'streaming', 'tool_calls'],
-      accountKinds: const ['anthropic_api_key', 'openai_api_key'],
+      accountKinds: const ['anthropic_api_key', 'bearer_token'],
       state: 'active',
       revision: 4,
     ),
@@ -354,7 +362,7 @@ final class PreviewControlApi implements ControlApi {
       id: 'openai-work',
       displayName: 'OpenAI · Work',
       upstreamEndpointId: 'target.openai.official',
-      kind: 'openai_api_key',
+      kind: 'bearer_token',
       realmId: 'openai.platform',
       state: 'active',
       revision: 1,
@@ -382,11 +390,27 @@ final class PreviewControlApi implements ControlApi {
   List<EnvironmentRecord> _initialEnvironments() => [
     _environment(
       id: 'system_transparent',
-      name: 'Transparent',
+      name: 'System capture',
       revision: 1,
       digestCharacter: '1',
       systemOwned: true,
-      endpoints: const [],
+      endpoints: [
+        _originalClientEndpoint(
+          id: 'system-anthropic',
+          origin: 'https://api.anthropic.com',
+          protocol: 'anthropic_messages',
+        ),
+        _originalClientEndpoint(
+          id: 'system-openai',
+          origin: 'https://api.openai.com',
+          protocol: 'openai_responses',
+        ),
+        _originalClientEndpoint(
+          id: 'system-chatgpt',
+          origin: 'https://chatgpt.com',
+          protocol: 'openai_responses',
+        ),
+      ],
     ),
     _environment(
       id: 'work',
@@ -501,16 +525,42 @@ final class PreviewControlApi implements ControlApi {
           id: '$id-adapter',
           revision: 1,
         ),
-        mode: 'managed',
-        defaultRouteId: defaultRouteId,
-        routeSet: EnvironmentRouteSet(
-          id: '$id-routes',
-          revision: 1,
-          candidateRouteIds: routes
-              .map((route) => route.id)
-              .toList(growable: false),
+        destination: EnvironmentDestination.upstream(
+          EnvironmentUpstreamPlan(
+            defaultRouteId: defaultRouteId,
+            routeSet: EnvironmentRouteSet(
+              id: '$id-routes',
+              revision: 1,
+              candidateRouteIds: routes
+                  .map((route) => route.id)
+                  .toList(growable: false),
+            ),
+            routes: routes,
+          ),
         ),
-        routes: routes,
+        pluginBindings: const [],
+      ),
+    ],
+  );
+
+  static EnvironmentClientEndpoint _originalClientEndpoint({
+    required String id,
+    required String origin,
+    required String protocol,
+  }) => EnvironmentClientEndpoint(
+    id: id,
+    revision: 1,
+    clientOrigin: Uri.parse(origin),
+    protocolPlans: [
+      EnvironmentProtocolPlan(
+        id: '$id-plan',
+        revision: 1,
+        clientProtocol: protocol,
+        clientAdapterPolicy: EnvironmentClientAdapterPolicy(
+          id: '$id-adapter',
+          revision: 1,
+        ),
+        destination: const EnvironmentDestination.original(),
         pluginBindings: const [],
       ),
     ],
@@ -544,8 +594,7 @@ final class PreviewControlApi implements ControlApi {
       backendProtocol: protocol,
       accountPolicy: RouteAccountPolicy(
         revision: 1,
-        mode: accountIds.isEmpty ? 'client_passthrough' : 'managed',
-        preferredAccountId: accountIds.firstOrNull ?? '',
+        preferredAccountId: accountIds.first,
         candidateAccountIds: accountIds,
         accountRevisions: accountRevisions,
         failoverPolicy: accountIds.length > 1 ? 'account_scoped_safe' : 'off',
@@ -553,7 +602,7 @@ final class PreviewControlApi implements ControlApi {
       modelPolicy: const EnvironmentModelPolicy(
         revision: 1,
         mode: 'passthrough',
-        fixedModel: '',
+        mappings: [],
       ),
       wireProfileRef: 'follow-client',
       pluginBindings: const [],
@@ -852,22 +901,7 @@ final class PreviewControlApi implements ControlApi {
         messageKey: 'error.revision_conflict',
       );
     }
-    final current = _environments
-        .where((environment) => environment.id == environmentId)
-        .firstOrNull;
-    final classification = current == null
-        ? 'hot_switch'
-        : current.clientEndpoints.length !=
-                  draft.candidate.clientEndpoints.length ||
-              !_sameClientAuthorities(
-                current.clientEndpoints,
-                draft.candidate.clientEndpoints,
-              )
-        ? 'restart_required'
-        : current.state != draft.candidate.state
-        ? 'reconnect_required'
-        : 'hot_switch';
-    final affected = _captures.values
+    final continuing = _captures.values
         .where(
           (capture) =>
               capture.running &&
@@ -877,7 +911,6 @@ final class PreviewControlApi implements ControlApi {
           (capture) => EnvironmentImpactCapture(
             captureKind: capture.kind,
             captureId: capture.id,
-            classification: classification,
           ),
         )
         .toList(growable: false);
@@ -886,31 +919,8 @@ final class PreviewControlApi implements ControlApi {
       baseRevision: draft.baseRevision,
       draftRevision: draftRevision,
       candidateDigest: draft.candidateDigest,
-      classification: classification,
-      hotSwitchCount: classification == 'hot_switch' ? affected.length : 0,
-      reconnectRequiredCount: classification == 'reconnect_required'
-          ? affected.length
-          : 0,
-      restartRequiredCount: classification == 'restart_required'
-          ? affected.length
-          : 0,
-      affected: affected,
+      continuingCaptures: continuing,
     );
-  }
-
-  static bool _sameClientAuthorities(
-    List<EnvironmentClientEndpoint> left,
-    List<EnvironmentClientEndpoint> right,
-  ) {
-    String signature(EnvironmentClientEndpoint endpoint) =>
-        '${endpoint.id}:${endpoint.clientOrigin}:${endpoint.protocolPlans.map((plan) => '${plan.id}:${plan.clientProtocol}').join(',')}';
-    final leftValues = left.map(signature).toList(growable: false)..sort();
-    final rightValues = right.map(signature).toList(growable: false)..sort();
-    if (leftValues.length != rightValues.length) return false;
-    for (var index = 0; index < leftValues.length; index += 1) {
-      if (leftValues[index] != rightValues[index]) return false;
-    }
-    return true;
   }
 
   static String _environmentDigest(String value) {
@@ -927,11 +937,178 @@ final class PreviewControlApi implements ControlApi {
   }
 
   @override
+  Future<ClientModelCatalog> clientModels(String protocol) async {
+    _requireOpen();
+    final providerId = switch (protocol) {
+      'anthropic_messages' => 'anthropic',
+      'openai_responses' || 'openai_chat' => 'openai',
+      _ => throw const ControlProblem(
+        status: 422,
+        reasonCode: 'client_protocol_unsupported',
+        messageKey: 'error.client_protocol_unsupported',
+      ),
+    };
+    final models = providerId == 'anthropic'
+        ? const [
+            ClientModel(
+              id: 'claude-sonnet-4-5',
+              canonicalId: 'anthropic/claude-sonnet-4-5',
+              displayName: 'Claude Sonnet 4.5',
+              description: '',
+              family: 'claude-sonnet',
+              reasoning: true,
+              toolCalls: true,
+              structuredOutput: true,
+              attachments: true,
+              openWeights: false,
+              contextLimit: 200000,
+              outputLimit: 64000,
+              inputModalities: ['text', 'image'],
+              outputModalities: ['text'],
+              knowledgeCutoff: '',
+              releaseDate: '2025-09-29',
+            ),
+            ClientModel(
+              id: 'claude-haiku-4-5',
+              canonicalId: 'anthropic/claude-haiku-4-5',
+              displayName: 'Claude Haiku 4.5',
+              description: '',
+              family: 'claude-haiku',
+              reasoning: true,
+              toolCalls: true,
+              structuredOutput: true,
+              attachments: true,
+              openWeights: false,
+              contextLimit: 200000,
+              outputLimit: 64000,
+              inputModalities: ['text', 'image'],
+              outputModalities: ['text'],
+              knowledgeCutoff: '',
+              releaseDate: '2025-10-01',
+            ),
+          ]
+        : const [
+            ClientModel(
+              id: 'gpt-5.4',
+              canonicalId: 'openai/gpt-5.4',
+              displayName: 'GPT-5.4',
+              description: '',
+              family: 'gpt-5',
+              reasoning: true,
+              toolCalls: true,
+              structuredOutput: true,
+              attachments: true,
+              openWeights: false,
+              contextLimit: 400000,
+              outputLimit: 128000,
+              inputModalities: ['text', 'image'],
+              outputModalities: ['text'],
+              knowledgeCutoff: '',
+              releaseDate: '',
+            ),
+          ];
+    return ClientModelCatalog(
+      protocol: protocol,
+      providerId: providerId,
+      metadataSource: 'models.dev',
+      models: models,
+    );
+  }
+
+  @override
+  Future<UpstreamModelCatalog> upstreamModels(
+    String endpointId, {
+    required String accountId,
+    bool refresh = false,
+  }) async {
+    _requireOpen();
+    final failure = _upstreamModelFailure;
+    if (failure != null) throw failure;
+    final endpoint = _endpoints
+        .where((candidate) => candidate.id == endpointId)
+        .firstOrNull;
+    if (endpoint == null) {
+      throw const ControlProblem(
+        status: 404,
+        reasonCode: 'upstream_endpoint_not_found',
+        messageKey: 'error.upstream_endpoint_not_found',
+      );
+    }
+    final account = _accounts
+        .where((candidate) => candidate.id == accountId)
+        .firstOrNull;
+    if (account == null) {
+      throw const ControlProblem(
+        status: 404,
+        reasonCode: 'provider_account_not_found',
+        messageKey: 'error.provider_account_not_found',
+      );
+    }
+    if (!account.usable || account.upstreamEndpointId != endpoint.id) {
+      throw const ControlProblem(
+        status: 409,
+        reasonCode: 'provider_account_conflict',
+        messageKey: 'error.provider_account_conflict',
+      );
+    }
+    final models = switch (endpoint.id) {
+      'target.anthropic.official' => const [
+        UpstreamModel(
+          id: 'claude-sonnet-4-5-20250929',
+          displayName: 'Claude Sonnet 4.5',
+          ownedBy: 'anthropic',
+          verifiedAvailable: true,
+          contextLimit: 200000,
+          outputLimit: 64000,
+        ),
+        UpstreamModel(
+          id: 'claude-haiku-4-5-20251001',
+          displayName: 'Claude Haiku 4.5',
+          ownedBy: 'anthropic',
+          verifiedAvailable: true,
+          contextLimit: 200000,
+          outputLimit: 64000,
+        ),
+      ],
+      'target.openai.official' => const [
+        UpstreamModel(
+          id: 'gpt-5.4',
+          displayName: 'GPT-5.4',
+          ownedBy: 'openai',
+          verifiedAvailable: true,
+          contextLimit: 400000,
+          outputLimit: 128000,
+        ),
+      ],
+      _ => const [
+        UpstreamModel(
+          id: 'relay-default',
+          displayName: '',
+          ownedBy: '',
+          verifiedAvailable: true,
+          contextLimit: 0,
+          outputLimit: 0,
+        ),
+      ],
+    };
+    return UpstreamModelCatalog(
+      endpointId: endpoint.id,
+      endpointRevision: endpoint.revision,
+      accountId: account.id,
+      accountRevision: account.revision,
+      credentialEpoch: account.credentialEpoch,
+      observedAt: _now,
+      availabilitySource: 'endpoint',
+      models: models,
+    );
+  }
+
+  @override
   Future<UpstreamEndpoint> createUpstreamEndpoint({
     required String id,
     required String displayName,
     required String origin,
-    required String kind,
+    required List<String> backendProtocols,
   }) async {
     _requireOpen();
     if (_endpoints.any((endpoint) => endpoint.id == id)) {
@@ -941,19 +1118,25 @@ final class PreviewControlApi implements ControlApi {
         messageKey: 'error.revision_conflict',
       );
     }
-    final anthropic = kind == 'anthropic';
+    if (!validUpstreamBackendProtocols(backendProtocols)) {
+      throw const ControlContractException(
+        'upstream Endpoint input is invalid',
+      );
+    }
+    final protocols = upstreamBackendProtocols
+        .where(backendProtocols.contains)
+        .toList(growable: false);
+    final anthropic = protocols.contains('anthropic_messages');
     final endpoint = UpstreamEndpoint(
       id: id,
       displayName: displayName,
       origin: Uri.parse(origin),
-      realmId: anthropic ? 'anthropic.official' : 'openai.platform',
-      backendProtocols: anthropic
-          ? const ['anthropic_messages']
-          : const ['openai_responses', 'openai_chat'],
+      realmId: id,
+      backendProtocols: protocols,
       capabilities: const ['messages', 'streaming', 'tool_calls'],
       accountKinds: anthropic
-          ? const ['anthropic_api_key', 'claude_oauth_token']
-          : const ['openai_api_key'],
+          ? const ['anthropic_api_key', 'bearer_token']
+          : const ['bearer_token'],
       state: 'active',
       revision: 1,
     );
@@ -1227,83 +1410,6 @@ final class PreviewControlApi implements ControlApi {
       );
     }
     return value;
-  }
-
-  @override
-  Future<WorkspaceEnvironmentDefault?> workspaceEnvironmentDefault({
-    required String machineId,
-    required String workspaceId,
-  }) async {
-    _requireOpen();
-    return _workspaceDefaults['$machineId:$workspaceId'];
-  }
-
-  @override
-  Future<WorkspaceEnvironmentDefault> setWorkspaceEnvironmentDefault({
-    required String machineId,
-    required String workspaceId,
-    required int expectedRevision,
-    required String environmentId,
-  }) async {
-    _requireOpen();
-    final environment = _environments
-        .where(
-          (candidate) =>
-              candidate.id == environmentId &&
-              candidate.state == 'active' &&
-              !candidate.systemOwned,
-        )
-        .firstOrNull;
-    if (environment == null) {
-      throw const ControlProblem(
-        status: 422,
-        reasonCode: 'workspace_environment_default_invalid',
-        messageKey: 'error.workspace_environment_default_invalid',
-      );
-    }
-    final key = '$machineId:$workspaceId';
-    final current = _workspaceDefaults[key];
-    if ((current?.revision ?? 0) != expectedRevision) {
-      throw const ControlProblem(
-        status: 409,
-        reasonCode: 'revision_conflict',
-        messageKey: 'error.revision_conflict',
-      );
-    }
-    final updated = WorkspaceEnvironmentDefault(
-      machineId: machineId,
-      workspaceId: workspaceId,
-      environmentId: environment.id,
-      environmentName: environment.name,
-      revision: expectedRevision + 1,
-      updatedAt: _now,
-    );
-    _workspaceDefaults[key] = updated;
-    return updated;
-  }
-
-  @override
-  Future<void> clearWorkspaceEnvironmentDefault({
-    required WorkspaceEnvironmentDefault current,
-  }) async {
-    _requireOpen();
-    final key = '${current.machineId}:${current.workspaceId}';
-    final authoritative = _workspaceDefaults[key];
-    if (authoritative == null) {
-      throw const ControlProblem(
-        status: 404,
-        reasonCode: 'workspace_environment_default_not_found',
-        messageKey: 'error.workspace_environment_default_not_found',
-      );
-    }
-    if (authoritative.revision != current.revision) {
-      throw const ControlProblem(
-        status: 409,
-        reasonCode: 'revision_conflict',
-        messageKey: 'error.revision_conflict',
-      );
-    }
-    _workspaceDefaults.remove(key);
   }
 
   @override
@@ -1629,29 +1735,53 @@ final class PreviewControlApi implements ControlApi {
       );
     }
     if (capture.id == 'run-1' && index % 13 == 3) {
+      final identity = _previewClientIdentity(
+        capture,
+        index,
+        actorId: '/root/reviewer',
+        actorLabel: 'reviewer',
+      );
       return ActivityConversationRef(
-        id: 'capture_run:${capture.captureRunId}:agent:reviewer',
+        id: '${_previewClientSessionProjectionPrefix(identity)}:agent:${_previewConversationProjectionDigest('/root/reviewer')}',
         displayName: 'reviewer',
         kind: 'agent',
         evidence: 'explicit_actor',
         actor: '/root/reviewer',
-        clientIdentity: _previewClientIdentity(
-          capture,
-          index,
-          actorId: '/root/reviewer',
-          actorLabel: 'reviewer',
-        ),
+        clientIdentity: identity,
       );
     }
+    if (capture.id == 'run-2') {
+      final identity = _previewClientIdentity(capture, index);
+      final threadId = identity.protocolIds
+          .where((value) => value.name == 'codex.thread_id')
+          .first
+          .value;
+      return ActivityConversationRef(
+        id: '${_previewClientSessionProjectionPrefix(identity)}:thread:${_previewConversationProjectionDigest(threadId)}:main',
+        displayName: capture.displayName,
+        kind: 'main',
+        evidence: 'explicit_session',
+        actor: null,
+        clientIdentity: identity,
+      );
+    }
+    final identity = _previewClientIdentity(capture, index);
     return ActivityConversationRef(
-      id: 'capture_run:${capture.captureRunId}:main',
+      id: '${_previewClientSessionProjectionPrefix(identity)}:main',
       displayName: capture.displayName,
       kind: 'main',
-      evidence: 'capture_run',
+      evidence: 'explicit_session',
       actor: null,
-      clientIdentity: _previewClientIdentity(capture, index),
+      clientIdentity: identity,
     );
   }
+
+  String _previewClientSessionProjectionPrefix(AgentClientIdentity identity) =>
+      'client_session:${identity.client}:${_previewConversationProjectionDigest(identity.sessionId)}';
+
+  String _previewConversationProjectionDigest(String value) => base64Url
+      .encode(crypto.sha256.convert(utf8.encode(value)).bytes)
+      .replaceAll('=', '');
 
   AgentClientIdentity _previewClientIdentity(
     CaptureRecord capture,
@@ -1662,14 +1792,21 @@ final class PreviewControlApi implements ControlApi {
     final client = capture.managedRun?.executableLabel == 'codex'
         ? 'codex'
         : 'claude';
-    final sessionId = '$client-session-${capture.id}';
+    final sessionVariant = capture.id == 'run-2'
+        ? (index < 12 ? 'primary' : 'resumed')
+        : null;
+    final sessionId = sessionVariant == null
+        ? '$client-session-${capture.id}'
+        : '$client-session-${capture.id}-$sessionVariant';
     final responseId = 'response-${capture.id}-exchange-${index + 1}';
     final exchangeCount = capture.id == 'run-1' ? 224 : 24;
     final observedAt = _now.subtract(
       Duration(minutes: (exchangeCount - 1 - index) * 4),
     );
     if (client == 'codex') {
-      final threadId = actorId ?? 'codex-thread-${capture.id}';
+      final threadId =
+          actorId ??
+          'codex-thread-${capture.id}${sessionVariant == null ? '' : '-$sessionVariant'}';
       return AgentClientIdentity(
         client: client,
         sessionId: sessionId,
@@ -1755,6 +1892,301 @@ final class PreviewControlApi implements ControlApi {
       egressAttempts: await egressAttempts(limit: 10),
       rules: _rules,
     );
+  }
+
+  @override
+  Future<RuntimeServerAccess> serverAccess() async {
+    _requireOpen();
+    return _serverAccess;
+  }
+
+  @override
+  Future<List<RuntimeUser>> runtimeUsers() async {
+    _requireOpen();
+    return List.unmodifiable(_runtimeUsers);
+  }
+
+  @override
+  Future<RuntimeUsageReport> runtimeUsage() async {
+    _requireOpen();
+    const emptyTokens = RuntimeTokenUsage(
+      inputUncached: RuntimeTokenAggregate(
+        tokens: 0,
+        knownTurns: 0,
+        unknownTurns: 0,
+      ),
+      cacheWrite: RuntimeTokenAggregate(
+        tokens: 0,
+        knownTurns: 0,
+        unknownTurns: 0,
+      ),
+      cacheRead: RuntimeTokenAggregate(
+        tokens: 0,
+        knownTurns: 0,
+        unknownTurns: 0,
+      ),
+      output: RuntimeTokenAggregate(tokens: 0, knownTurns: 0, unknownTurns: 0),
+      reasoning: RuntimeTokenAggregate(
+        tokens: 0,
+        knownTurns: 0,
+        unknownTurns: 0,
+      ),
+    );
+    RuntimeTokenUsage observedTokens({
+      required int input,
+      required int output,
+      required int turns,
+    }) => RuntimeTokenUsage(
+      inputUncached: RuntimeTokenAggregate(
+        tokens: input,
+        knownTurns: turns,
+        unknownTurns: 0,
+      ),
+      cacheWrite: RuntimeTokenAggregate(
+        tokens: 0,
+        knownTurns: 0,
+        unknownTurns: turns,
+      ),
+      cacheRead: RuntimeTokenAggregate(
+        tokens: 0,
+        knownTurns: 0,
+        unknownTurns: turns,
+      ),
+      output: RuntimeTokenAggregate(
+        tokens: output,
+        knownTurns: turns,
+        unknownTurns: 0,
+      ),
+      reasoning: RuntimeTokenAggregate(
+        tokens: 0,
+        knownTurns: 0,
+        unknownTurns: turns,
+      ),
+    );
+    return RuntimeUsageReport(
+      generatedAt: _now,
+      truncated: false,
+      users: [
+        for (final user in _runtimeUsers)
+          if (user.username == 'alice')
+            RuntimeUserUsage(
+              userId: user.id,
+              username: user.username,
+              state: user.state,
+              captureRuns: 3,
+              activeRuns: 1,
+              turns: 18,
+              succeeded: 16,
+              failed: 2,
+              canceled: 0,
+              contentUnavailableTurns: 0,
+              modelUnavailableTurns: 0,
+              tokens: const RuntimeTokenUsage(
+                inputUncached: RuntimeTokenAggregate(
+                  tokens: 25864,
+                  knownTurns: 18,
+                  unknownTurns: 0,
+                ),
+                cacheWrite: RuntimeTokenAggregate(
+                  tokens: 0,
+                  knownTurns: 0,
+                  unknownTurns: 18,
+                ),
+                cacheRead: RuntimeTokenAggregate(
+                  tokens: 4200,
+                  knownTurns: 16,
+                  unknownTurns: 2,
+                ),
+                output: RuntimeTokenAggregate(
+                  tokens: 1318,
+                  knownTurns: 18,
+                  unknownTurns: 0,
+                ),
+                reasoning: RuntimeTokenAggregate(
+                  tokens: 0,
+                  knownTurns: 0,
+                  unknownTurns: 18,
+                ),
+              ),
+              latestContext: RuntimeUsageContextRef(
+                loginSessionId: 'login.preview.alice',
+                deviceName: 'MacBook Pro',
+                machineId: _previewMachineId,
+                workspaceId: 'workspace.preview.vibermate',
+                workspaceLabel: 'vibermate',
+                observedAt: _now,
+              ),
+              lastActivityAt: _now,
+              models: const [
+                RuntimeModelUsage(
+                  requestedModel: 'gpt-5.6-sol',
+                  upstreamModel: 'dashscope:deepseek-v4-flash-0731',
+                  turns: 18,
+                  succeeded: 16,
+                  failed: 2,
+                  canceled: 0,
+                  tokens: RuntimeTokenUsage(
+                    inputUncached: RuntimeTokenAggregate(
+                      tokens: 25864,
+                      knownTurns: 18,
+                      unknownTurns: 0,
+                    ),
+                    cacheWrite: RuntimeTokenAggregate(
+                      tokens: 0,
+                      knownTurns: 0,
+                      unknownTurns: 18,
+                    ),
+                    cacheRead: RuntimeTokenAggregate(
+                      tokens: 4200,
+                      knownTurns: 16,
+                      unknownTurns: 2,
+                    ),
+                    output: RuntimeTokenAggregate(
+                      tokens: 1318,
+                      knownTurns: 18,
+                      unknownTurns: 0,
+                    ),
+                    reasoning: RuntimeTokenAggregate(
+                      tokens: 0,
+                      knownTurns: 0,
+                      unknownTurns: 18,
+                    ),
+                  ),
+                ),
+              ],
+              contexts: [
+                RuntimeContextUsage(
+                  loginSessionId: 'login.preview.alice.mac',
+                  deviceName: 'MacBook Pro',
+                  machineId: _previewMachineId,
+                  workspaceId: 'workspace.preview.vibermate',
+                  workspaceLabel: 'vibermate',
+                  captureRuns: 1,
+                  activeRuns: 1,
+                  turns: 10,
+                  succeeded: 9,
+                  failed: 1,
+                  canceled: 0,
+                  tokens: observedTokens(input: 15000, output: 700, turns: 10),
+                  lastActivityAt: _now,
+                ),
+                RuntimeContextUsage(
+                  loginSessionId: 'login.preview.alice.linux',
+                  deviceName: 'Linux workstation',
+                  machineId: 'machine.preview.linux',
+                  workspaceId: 'workspace.preview.vibermate',
+                  workspaceLabel: 'vibermate',
+                  captureRuns: 1,
+                  activeRuns: 0,
+                  turns: 2,
+                  succeeded: 2,
+                  failed: 0,
+                  canceled: 0,
+                  tokens: observedTokens(input: 3000, output: 200, turns: 2),
+                  lastActivityAt: _now.subtract(const Duration(minutes: 12)),
+                ),
+                RuntimeContextUsage(
+                  loginSessionId: 'login.preview.alice.design',
+                  deviceName: 'MacBook Pro',
+                  machineId: _previewMachineId,
+                  workspaceId: 'workspace.preview.vibermate-design',
+                  workspaceLabel: 'vibermate-design',
+                  captureRuns: 1,
+                  activeRuns: 0,
+                  turns: 6,
+                  succeeded: 5,
+                  failed: 1,
+                  canceled: 0,
+                  tokens: observedTokens(input: 7864, output: 418, turns: 6),
+                  lastActivityAt: _now.subtract(const Duration(hours: 2)),
+                ),
+              ],
+              agentSessions: [
+                RuntimeAgentSessionUsage(
+                  client: 'codex',
+                  sessionId: '01a02deb-d420-79e2-b0bc-1a9cbdaa643f',
+                  captureRuns: 2,
+                  turns: 18,
+                  succeeded: 16,
+                  failed: 2,
+                  canceled: 0,
+                  tokens: emptyTokens,
+                  lastActivityAt: _now,
+                ),
+              ],
+            )
+          else
+            RuntimeUserUsage(
+              userId: user.id,
+              username: user.username,
+              state: user.state,
+              captureRuns: 0,
+              activeRuns: 0,
+              turns: 0,
+              succeeded: 0,
+              failed: 0,
+              canceled: 0,
+              contentUnavailableTurns: 0,
+              modelUnavailableTurns: 0,
+              tokens: emptyTokens,
+              latestContext: null,
+              lastActivityAt: null,
+              models: const [],
+              contexts: const [],
+              agentSessions: const [],
+            ),
+      ],
+    );
+  }
+
+  @override
+  Future<RuntimeUser> createRuntimeUser({
+    required String username,
+    required String password,
+  }) async {
+    _requireOpen();
+    if (username.isEmpty ||
+        password.length < 8 ||
+        _runtimeUsers.any((user) => user.username == username)) {
+      throw const ControlProblem(
+        status: 422,
+        reasonCode: 'invalid_runtime_user',
+        messageKey: 'error.invalid_runtime_user',
+      );
+    }
+    final now = DateTime.now().toUtc();
+    final created = RuntimeUser(
+      id: 'user.preview.${_runtimeUsers.length + 1}',
+      username: username,
+      state: 'active',
+      createdAt: now,
+      updatedAt: now,
+    );
+    _runtimeUsers.add(created);
+    return created;
+  }
+
+  @override
+  Future<RuntimeUser> disableRuntimeUser(String userId) async {
+    _requireOpen();
+    final index = _runtimeUsers.indexWhere((user) => user.id == userId);
+    if (index < 0) {
+      throw const ControlProblem(
+        status: 404,
+        reasonCode: 'runtime_user_not_found',
+        messageKey: 'error.runtime_user_not_found',
+      );
+    }
+    final current = _runtimeUsers[index];
+    final disabled = RuntimeUser(
+      id: current.id,
+      username: current.username,
+      state: 'disabled',
+      createdAt: current.createdAt,
+      updatedAt: DateTime.now().toUtc(),
+    );
+    _runtimeUsers[index] = disabled;
+    return disabled;
   }
 
   @override
@@ -1854,58 +2286,6 @@ final class PreviewControlApi implements ControlApi {
     );
     return _rules;
   }
-
-  @override
-  Future<CaptureAssignmentChange> switchCaptureEnvironment({
-    required CaptureAssignment assignment,
-    required String environmentId,
-  }) async {
-    _requireOpen();
-    if (!_environments.any((environment) => environment.id == environmentId)) {
-      throw const ControlProblem(
-        status: 404,
-        reasonCode: 'environment_not_found',
-        messageKey: 'error.environment_not_found',
-      );
-    }
-    final current = await captureAssignment(assignment.captureKey);
-    if (current.revision != assignment.revision) {
-      throw const ControlProblem(
-        status: 412,
-        reasonCode: 'revision_conflict',
-        messageKey: 'error.revision_conflict',
-      );
-    }
-    if (current.environmentId == environmentId) {
-      return CaptureAssignmentChange(
-        assignment: current,
-        boundary: 'no_change',
-        closedConnections: const [],
-        applied: true,
-      );
-    }
-    final updated = CaptureAssignment(
-      captureKey: current.captureKey,
-      captureId: current.captureId,
-      captureKind: current.captureKind,
-      environmentId: environmentId,
-      revision: current.revision + 1,
-      source: 'operator_switch',
-      updatedAt: _now,
-    );
-    _assignments[current.captureKey] = updated;
-    return CaptureAssignmentChange(
-      assignment: updated,
-      boundary: captureIsManual(current.captureKey)
-          ? 'reconnect_required'
-          : 'hot_switch',
-      closedConnections: const [],
-      applied: true,
-    );
-  }
-
-  bool captureIsManual(String captureKey) =>
-      captureKey.startsWith('manual_capture:');
 
   @override
   Future<ManualCaptureStateTag> manualCaptureState(
@@ -2118,6 +2498,60 @@ final class PreviewControlApi implements ControlApi {
   }
 
   ExchangeDetail _previewExchange(ActivityRecord activity, String view) {
+    const thinkingEvidence = '''Inspect the evidence boundary.
+Confirm the client Session identity.
+Keep the requested model distinct from the upstream model.
+Preserve the provider response model as evidence.
+Do not infer a vendor from the model ID.
+Read the selected Account transport.
+Keep credential values outside the evidence body.
+Verify the exact upstream request path.
+Observe the first protocol boundary.
+Retain the raw provider stream.
+Project plaintext Thinking separately.
+Keep opaque signatures out of plaintext.
+Associate the Turn with its Conversation.
+Associate the Conversation with its Session.
+Keep Subagent identity explicit.
+Do not group by timestamps.
+Do not group by display titles.
+Keep resume on the same Session.
+Check the frozen Environment revision.
+Record the terminal outcome.''';
+    const firstMultiBlockTail = '''
+Evidence line 01
+Evidence line 02
+Evidence line 03
+Evidence line 04
+Evidence line 05
+Evidence line 06
+Evidence line 07
+Evidence line 08
+Evidence line 09
+Evidence line 10
+Evidence line 11
+Evidence line 12
+Evidence line 13
+Evidence line 14
+Evidence line 15
+Evidence line 16''';
+    const secondMultiBlockEvidence = '''<environment_context>
+  <cwd>/Users/mira/Code/vibermate</cwd>
+  <shell>zsh</shell>
+  <current_date>2026-08-23</current_date>
+  <timezone>Asia/Singapore</timezone>
+  <line>06</line>
+  <line>07</line>
+  <line>08</line>
+  <line>09</line>
+  <line>10</line>
+  <line>11</line>
+  <line>12</line>
+  <line>13</line>
+  <line>14</line>
+  <line>15</line>
+  <line>16</line>
+</environment_context>''';
     final match = RegExp(r'-exchange-(\d+)$').firstMatch(activity.id);
     final index = (int.tryParse(match?.group(1) ?? '1') ?? 1) - 1;
     final checkpoint = index == 0;
@@ -2142,8 +2576,9 @@ final class PreviewControlApi implements ControlApi {
               '```text\n'
               'WRAPPING-CHECK: this intentionally long diagnostic line must wrap inside the message column instead of creating a horizontal scrollbar that hides the remaining evidence.\n'
               '```\n\n'
-              'hello',
+              'hello${index == 221 ? firstMultiBlockTail : ''}',
             ),
+            if (index == 221) _previewTextBlock(secondMultiBlockEvidence),
           ],
         ),
       ExchangeContentMessage(
@@ -2165,6 +2600,7 @@ final class PreviewControlApi implements ControlApi {
     final terminal = activity.status != 'pending';
     final failed = activity.status == 'failed';
     final agentTurn = activity.source.displayName == 'Codex' && index >= 20;
+    final routeId = activity.routeId ?? '';
     final attempt = EgressAttemptRecord(
       sequence: 1,
       id: 'egress-${activity.id}',
@@ -2176,9 +2612,9 @@ final class PreviewControlApi implements ControlApi {
       exchangeId: activity.id,
       caller: 'core',
       callerId: null,
-      targetOrigin: activity.routeId.contains('openai')
+      targetOrigin: routeId.contains('openai')
           ? 'https://api.openai.com'
-          : activity.routeId.contains('orbit')
+          : routeId.contains('orbit')
           ? 'https://tokyo.orbitrelay.example'
           : 'https://api.anthropic.com',
       authority: 'environment',
@@ -2204,6 +2640,38 @@ final class PreviewControlApi implements ControlApi {
             reportedModel: 'claude-sonnet-4-5-20250929',
             stopReason: toolTurn ? 'tool_use' : 'end_turn',
             blocks: [
+              if (index == 221)
+                ExchangeContentBlock(
+                  kind: 'reasoning',
+                  availability: 'recorded',
+                  text: thinkingEvidence,
+                  originalSize: thinkingEvidence.length,
+                  callId: null,
+                  toolName: null,
+                  toolNamespace: null,
+                  arguments: null,
+                  toolError: false,
+                  providerSource: 'anthropic-messages',
+                  providerKind: 'thinking',
+                  fingerprint: null,
+                  agent: null,
+                ),
+              if (index == 221)
+                ExchangeContentBlock(
+                  kind: 'reasoning',
+                  availability: 'recorded',
+                  text: thinkingEvidence,
+                  originalSize: thinkingEvidence.length,
+                  callId: null,
+                  toolName: null,
+                  toolNamespace: null,
+                  arguments: null,
+                  toolError: false,
+                  providerSource: 'openai-responses',
+                  providerKind: 'reasoning_summary',
+                  fingerprint: null,
+                  agent: null,
+                ),
               if (toolTurn)
                 ExchangeContentBlock(
                   kind: 'tool_call',
@@ -2407,7 +2875,10 @@ final class PreviewControlApi implements ControlApi {
   ManualCaptureContext _manualContextFor(EnvironmentRecord environment) {
     final protected =
         environment.clientEndpoints
-            .map((endpoint) => endpoint.clientOrigin.host)
+            .map(
+              (endpoint) =>
+                  '${endpoint.clientOrigin.host}:${endpoint.clientOrigin.hasPort ? endpoint.clientOrigin.port : 443}',
+            )
             .toSet()
             .toList(growable: false)
           ..sort();

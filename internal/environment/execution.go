@@ -61,14 +61,12 @@ type CompiledAccountReference struct {
 
 type CompiledAccountPolicy struct {
 	revision   Revision
-	mode       AccountMode
 	preferred  string
 	candidates []CompiledAccountReference
 	failover   FailoverPolicy
 }
 
 func (policy CompiledAccountPolicy) Revision() Revision             { return policy.revision }
-func (policy CompiledAccountPolicy) Mode() AccountMode              { return policy.mode }
 func (policy CompiledAccountPolicy) PreferredAccountID() string     { return policy.preferred }
 func (policy CompiledAccountPolicy) FailoverPolicy() FailoverPolicy { return policy.failover }
 func (policy CompiledAccountPolicy) CandidateAccounts() []CompiledAccountReference {
@@ -93,7 +91,13 @@ func (route CompiledRoutePlan) CodecPlan() protocolspec.CodecPlan     { return r
 func (route CompiledRoutePlan) AccountPolicy() CompiledAccountPolicy {
 	return cloneCompiledAccountPolicy(route.accountPolicy)
 }
-func (route CompiledRoutePlan) ModelPolicy() ModelPolicy { return route.modelPolicy }
+
+// ResolveModelMapping applies this compiled Route's exact requested-model
+// mapping without exposing the control-plane policy representation to the
+// Exchange hot path. An absent mapping preserves the requested identifier.
+func (route CompiledRoutePlan) ResolveModelMapping(requested string) (string, bool) {
+	return route.modelPolicy.ResolveMapping(requested)
+}
 func (route CompiledRoutePlan) WireProfile() wireprofile.CompiledUpstreamWireProfile {
 	return route.wireProfile
 }
@@ -130,12 +134,15 @@ func (set CompiledRouteSet) DefaultRoute() (CompiledRoutePlan, error) {
 }
 
 type CompiledProtocolPlan struct {
-	id            ClientProtocolPlanID
-	revision      Revision
-	dialect       protocolspec.Dialect
-	adapterPolicy ClientAdapterPolicy
-	operations    []protocolspec.ClientOperationPlan
-	routeSet      CompiledRouteSet
+	id                  ClientProtocolPlanID
+	revision            Revision
+	dialect             protocolspec.Dialect
+	adapterPolicy       ClientAdapterPolicy
+	operations          []protocolspec.ClientOperationPlan
+	destinationKind     DestinationKind
+	originalCodec       protocolspec.CodecPlan
+	originalWireProfile wireprofile.CompiledUpstreamWireProfile
+	upstreamRouteSet    *CompiledRouteSet
 }
 
 func (plan CompiledProtocolPlan) ID() ClientProtocolPlanID            { return plan.id }
@@ -147,8 +154,14 @@ func (plan CompiledProtocolPlan) ClientAdapterPolicy() ClientAdapterPolicy {
 func (plan CompiledProtocolPlan) Operations() []protocolspec.ClientOperationPlan {
 	return slices.Clone(plan.operations)
 }
-func (plan CompiledProtocolPlan) RouteSet() CompiledRouteSet {
-	return cloneCompiledRouteSet(plan.routeSet)
+func (plan CompiledProtocolPlan) DestinationKind() DestinationKind {
+	return plan.destinationKind
+}
+func (plan CompiledProtocolPlan) UpstreamRouteSet() (CompiledRouteSet, bool) {
+	if plan.upstreamRouteSet == nil {
+		return CompiledRouteSet{}, false
+	}
+	return cloneCompiledRouteSet(*plan.upstreamRouteSet), true
 }
 
 type CompiledEndpointPlan struct {
@@ -189,7 +202,10 @@ type RequestPlan struct {
 	endpoint            CompiledEndpointPlan
 	protocol            CompiledProtocolPlan
 	operation           protocolspec.ClientOperationPlan
-	route               CompiledRoutePlan
+	destinationKind     DestinationKind
+	codecPlan           protocolspec.CodecPlan
+	wireProfile         wireprofile.CompiledUpstreamWireProfile
+	upstreamRoute       *CompiledRoutePlan
 	wireVariant         wireprofile.CompiledUpstreamWireVariant
 }
 
@@ -205,7 +221,22 @@ func (plan RequestPlan) ProtocolPlan() CompiledProtocolPlan {
 	return cloneCompiledProtocol(plan.protocol)
 }
 func (plan RequestPlan) Operation() protocolspec.ClientOperationPlan { return plan.operation }
-func (plan RequestPlan) Route() CompiledRoutePlan                    { return cloneCompiledRoute(plan.route) }
+func (plan RequestPlan) PreservesOriginalDestination() bool {
+	return plan.destinationKind == DestinationKindOriginal
+}
+func (plan RequestPlan) UsesUpstreamDestination() bool {
+	return plan.destinationKind == DestinationKindUpstream
+}
+func (plan RequestPlan) CodecPlan() protocolspec.CodecPlan { return plan.codecPlan }
+func (plan RequestPlan) WireProfile() wireprofile.CompiledUpstreamWireProfile {
+	return plan.wireProfile
+}
+func (plan RequestPlan) UpstreamRoute() (CompiledRoutePlan, bool) {
+	if plan.upstreamRoute == nil {
+		return CompiledRoutePlan{}, false
+	}
+	return cloneCompiledRoute(*plan.upstreamRoute), true
+}
 func (plan RequestPlan) WireVariant() wireprofile.CompiledUpstreamWireVariant {
 	return plan.wireVariant
 }
@@ -241,25 +272,62 @@ func compileExecution(
 			}
 			compiledPlan := CompiledProtocolPlan{
 				id: plan.ID, revision: plan.Revision, dialect: clientDialect,
-				adapterPolicy: plan.ClientAdapterPolicy,
-				operations:    operations,
-				routeSet: CompiledRouteSet{
-					id:         plan.UpstreamPlan.RouteSet.ID,
-					revision:   plan.UpstreamPlan.RouteSet.Revision,
-					defaultID:  plan.UpstreamPlan.DefaultRouteID,
-					candidates: slices.Clone(plan.UpstreamPlan.RouteSet.CandidateRouteIDs),
-					routes:     make(map[UpstreamRouteID]CompiledRoutePlan, len(plan.UpstreamPlan.Routes)),
-				},
+				adapterPolicy:   plan.ClientAdapterPolicy,
+				operations:      operations,
+				destinationKind: plan.Destination.Kind,
 			}
-			for _, route := range plan.UpstreamPlan.Routes {
-				compiledRoute, err := compileRoute(compiler, endpoint, plan, route, clientDialect)
+			switch plan.Destination.Kind {
+			case DestinationKindOriginal:
+				compiledPlan.originalCodec, err = compiler.protocols.Resolve(
+					clientDialect,
+					clientDialect,
+				)
 				if err != nil {
+					return nil, nil, fmt.Errorf(
+						"compile original Destination %q codec: %w",
+						plan.ID,
+						err,
+					)
+				}
+				compiledPlan.originalWireProfile, err = compiler.wireProfiles.Resolve(
+					wireprofile.FollowClientUpstreamWireProfileRef(),
+				)
+				if err != nil {
+					return nil, nil, fmt.Errorf(
+						"compile original Destination %q wire profile: %w",
+						plan.ID,
+						err,
+					)
+				}
+			case DestinationKindUpstream:
+				upstream := plan.Destination.Upstream
+				if upstream == nil {
+					return nil, nil, ErrInvalidEnvironment
+				}
+				routeSet := CompiledRouteSet{
+					id:         upstream.RouteSet.ID,
+					revision:   upstream.RouteSet.Revision,
+					defaultID:  upstream.DefaultRouteID,
+					candidates: slices.Clone(upstream.RouteSet.CandidateRouteIDs),
+					routes:     make(map[UpstreamRouteID]CompiledRoutePlan, len(upstream.Routes)),
+				}
+				for _, route := range upstream.Routes {
+					compiledRoute, err := compileRoute(
+						compiler,
+						route,
+						clientDialect,
+					)
+					if err != nil {
+						return nil, nil, err
+					}
+					routeSet.routes[route.ID] = compiledRoute
+				}
+				if _, err := routeSet.DefaultRoute(); err != nil {
 					return nil, nil, err
 				}
-				compiledPlan.routeSet.routes[route.ID] = compiledRoute
-			}
-			if _, err := compiledPlan.routeSet.DefaultRoute(); err != nil {
-				return nil, nil, err
+				compiledPlan.upstreamRouteSet = &routeSet
+			default:
+				return nil, nil, ErrInvalidEnvironment
 			}
 			compiledEndpoint.plans = append(compiledEndpoint.plans, compiledPlan)
 		}
@@ -274,11 +342,10 @@ func compileExecution(
 	return compiled, byOrigin, nil
 }
 
-// compileConnectionCompatibilityDigest hashes only the downstream contract
-// that an already-established client connection depends on. Provider routes,
-// accounts, models, plugins, budgets, and egress are deliberately excluded:
-// they are frozen again for each request and may hot-switch without keeping a
-// stale transport alive.
+// compileConnectionCompatibilityDigest hashes the downstream contract frozen
+// into connection evidence. Provider routes, accounts, models, plugins,
+// budgets, and egress are excluded because the Capture assignment already
+// freezes the complete Environment revision that owns them.
 func compileConnectionCompatibilityDigest(endpoint CompiledEndpointPlan) (ConnectionCompatibilityDigest, error) {
 	type operationContract struct {
 		ID               string                                `json:"id"`
@@ -327,8 +394,6 @@ func compileConnectionCompatibilityDigest(endpoint CompiledEndpointPlan) (Connec
 
 func compileRoute(
 	compiler Compiler,
-	endpoint ClientEndpoint,
-	plan ClientProtocolPlan,
 	route UpstreamRoute,
 	client protocolspec.Dialect,
 ) (CompiledRoutePlan, error) {
@@ -339,7 +404,7 @@ func compileRoute(
 	if err != nil {
 		return CompiledRoutePlan{}, fmt.Errorf("compile route %q: %w", route.ID, err)
 	}
-	if plan.Mode == PlanModeManaged && compiler.endpoints != nil {
+	if compiler.endpoints != nil {
 		if err := validateUpstreamEndpointSnapshot(compiler.endpoints, route); err != nil {
 			return CompiledRoutePlan{}, err
 		}
@@ -361,9 +426,6 @@ func compileRoute(
 	if err != nil {
 		return CompiledRoutePlan{}, fmt.Errorf("compile route %q wire profile: %w", route.ID, err)
 	}
-	if err := validateRouteMode(endpoint, plan, route, client, backend, compiledWire); err != nil {
-		return CompiledRoutePlan{}, err
-	}
 	accountPolicy, err := compileAccountPolicy(compiler.accounts, route)
 	if err != nil {
 		return CompiledRoutePlan{}, err
@@ -371,53 +433,19 @@ func compileRoute(
 	return CompiledRoutePlan{
 		id: route.ID, revision: route.Revision,
 		target: cloneProviderTarget(route.ProviderTarget), backend: backend,
-		codec: codec, accountPolicy: accountPolicy, modelPolicy: route.ModelPolicy,
+		codec: codec, accountPolicy: accountPolicy, modelPolicy: cloneModelPolicy(route.ModelPolicy),
 		wireProfile: compiledWire,
 	}, nil
-}
-
-func validateRouteMode(
-	endpoint ClientEndpoint,
-	plan ClientProtocolPlan,
-	route UpstreamRoute,
-	client protocolspec.Dialect,
-	backend protocolspec.Dialect,
-	compiledWire wireprofile.CompiledUpstreamWireProfile,
-) error {
-	exactOriginal := route.ProviderTarget.Origin.String() == endpoint.ClientOrigin.String() &&
-		route.ProviderTarget.Origin.BasePath() == ""
-	switch plan.Mode {
-	case PlanModeOriginalPassthrough:
-		if len(plan.UpstreamPlan.Routes) != 1 || len(plan.UpstreamPlan.RouteSet.CandidateRouteIDs) != 1 ||
-			!exactOriginal || backend != client || route.AccountPolicy.Mode != AccountModeClientPassthrough ||
-			route.AccountPolicy.FailoverPolicy != FailoverOff || route.ModelPolicy.Mode != "preserve" ||
-			compiledWire.Ref() != wireprofile.FollowClientUpstreamWireProfileRef() {
-			return fmt.Errorf("%w: original passthrough plan %q is not identity-preserving", ErrInvalidEnvironment, plan.ID)
-		}
-	case PlanModeManaged:
-		if route.ModelPolicy.Mode == "preserve" {
-			return fmt.Errorf("%w: managed route %q cannot use preserve model policy", ErrInvalidEnvironment, route.ID)
-		}
-		if route.AccountPolicy.Mode == AccountModeClientPassthrough && (!exactOriginal || backend != client) {
-			return fmt.Errorf("%w: client credentials cannot be retargeted by route %q", ErrInvalidEnvironment, route.ID)
-		}
-	default:
-		return ErrInvalidEnvironment
-	}
-	return nil
 }
 
 func compileAccountPolicy(catalog AccountCatalog, route UpstreamRoute) (CompiledAccountPolicy, error) {
 	policy := route.AccountPolicy
 	compiled := CompiledAccountPolicy{
-		revision: policy.Revision, mode: policy.Mode, preferred: policy.PreferredAccountID,
+		revision: policy.Revision, preferred: policy.PreferredAccountID,
 		failover: policy.FailoverPolicy,
 	}
-	if policy.Mode != AccountModeManaged {
-		return compiled, nil
-	}
 	if catalog == nil {
-		return CompiledAccountPolicy{}, fmt.Errorf("%w: managed route %q has no account catalog", ErrInvalidEnvironment, route.ID)
+		return CompiledAccountPolicy{}, fmt.Errorf("%w: upstream route %q has no account catalog", ErrInvalidEnvironment, route.ID)
 	}
 	for _, accountID := range policy.CandidateAccountIDs {
 		account, exists := catalog.LookupAccount(accountID)
@@ -514,6 +542,7 @@ func cloneCompiledRoute(route CompiledRoutePlan) CompiledRoutePlan {
 	cloned := route
 	cloned.target = cloneProviderTarget(route.target)
 	cloned.accountPolicy = cloneCompiledAccountPolicy(route.accountPolicy)
+	cloned.modelPolicy = cloneModelPolicy(route.modelPolicy)
 	return cloned
 }
 
@@ -530,7 +559,10 @@ func cloneCompiledRouteSet(set CompiledRouteSet) CompiledRouteSet {
 func cloneCompiledProtocol(plan CompiledProtocolPlan) CompiledProtocolPlan {
 	cloned := plan
 	cloned.operations = slices.Clone(plan.operations)
-	cloned.routeSet = cloneCompiledRouteSet(plan.routeSet)
+	if plan.upstreamRouteSet != nil {
+		routeSet := cloneCompiledRouteSet(*plan.upstreamRouteSet)
+		cloned.upstreamRouteSet = &routeSet
+	}
 	return cloned
 }
 

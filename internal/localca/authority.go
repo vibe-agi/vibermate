@@ -346,8 +346,6 @@ type Authority struct {
 	changed             chan struct{}
 }
 
-var _ captureassignment.LeafCacheInvalidator = (*Authority)(nil)
-
 type rootManifestV1 struct {
 	Schema      string `json:"schema"`
 	Fingerprint string `json:"fingerprint"`
@@ -563,29 +561,6 @@ func (authority *Authority) cacheGenerated(
 		certificate: generated,
 		notAfter:    generated.leaf.NotAfter,
 	})
-}
-
-// InvalidateLeafCache removes leaves derived from a committed obsolete
-// Environment revision. Failed or abandoned publishes never emit this event.
-func (authority *Authority) InvalidateLeafCache(
-	invalidation captureassignment.LeafCacheInvalidation,
-) {
-	if authority == nil {
-		return
-	}
-	authority.cacheMu.Lock()
-	defer authority.cacheMu.Unlock()
-	if authority.cache == nil {
-		return
-	}
-	for _, key := range authority.cache.Keys() {
-		if key.environmentID == invalidation.EnvironmentID() &&
-			key.environmentRevision == invalidation.EnvironmentRevision() &&
-			key.endpointID == invalidation.ClientEndpointID() &&
-			key.endpointRevision == invalidation.ClientEndpointRevision() {
-			authority.cache.Remove(key)
-		}
-	}
 }
 
 func (authority *Authority) beginWaiter() (func(), error) {

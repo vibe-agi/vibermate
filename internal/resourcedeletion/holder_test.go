@@ -55,9 +55,9 @@ func TestAHolderMustBeBothRecognisableAndActionable(t *testing.T) {
 func TestHoldersReadInAStableOrder(t *testing.T) {
 	t.Parallel()
 	holders := []Holder{
-		{Kind: KindWorkspaceDefault, ID: "w2", Label: "second workspace"},
+		{Kind: KindEnvironmentRoute, ID: "w2", Label: "second route"},
 		{Kind: KindRunningCapture, ID: "r2", Label: "second run"},
-		{Kind: KindWorkspaceDefault, ID: "w1", Label: "first workspace"},
+		{Kind: KindEnvironmentRoute, ID: "w1", Label: "first route"},
 		{Kind: KindRunningCapture, ID: "r1", Label: "first run"},
 	}
 	first, err := Refused(holders)
@@ -73,7 +73,7 @@ func TestHoldersReadInAStableOrder(t *testing.T) {
 			t.Fatalf("order depends on input: %+v vs %+v", first, second)
 		}
 	}
-	if first.Holders[0].ID != "r1" || first.Holders[3].ID != "w2" {
+	if first.Holders[0].ID != "w1" || first.Holders[3].ID != "r2" {
 		t.Fatalf("unexpected order: %+v", first.Holders)
 	}
 	if first.Deleted {

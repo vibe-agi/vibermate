@@ -747,8 +747,378 @@ func (stream *ProviderStream) FinishDecoded(
 			errors.New("Responses stream has no terminal event"),
 		)
 	}
+	release := stream.wire.Bytes()
+	release, err := rewriteCompatibleStreamForClient(
+		release,
+		stream.request.RequestedModel,
+		stream.request.EffectiveModel,
+		stream.codec.options.MaxResponseBytes,
+	)
+	if err != nil {
+		stream.failed = true
+		return nil, err
+	}
 	stream.finished = true
-	return newProviderPendingTerminal(stream.wire.Bytes(), stream.terminal.Clone()), nil
+	return newProviderPendingTerminal(release, stream.terminal.Clone()), nil
+}
+
+func rewriteCompatibleStreamForClient(
+	wire []byte,
+	requestedModel string,
+	effectiveModel string,
+	maxBytes int,
+) ([]byte, error) {
+	options := ssewire.DefaultOptions()
+	options.MaxLineBytes = maxBytes
+	options.MaxEventBytes = maxBytes
+	options.MaxPendingBytes = maxBytes
+	decoder, err := ssewire.NewDecoder(options)
+	if err != nil {
+		return nil, err
+	}
+	events, err := decoder.Feed(wire)
+	if err != nil {
+		return nil, protocolcore.NewFailure(
+			protocolcore.ReasonMalformedEventStream,
+			"$",
+			err,
+		)
+	}
+	if err := decoder.Finish(); err != nil {
+		return nil, protocolcore.NewFailure(
+			protocolcore.ReasonTruncatedEventStream,
+			"$",
+			err,
+		)
+	}
+	privateIndexes, privateItemIDs, err := privateReasoningOutput(events)
+	if err != nil {
+		return nil, err
+	}
+	var rewritten bytes.Buffer
+	for _, event := range events {
+		clientEvent, keep, rewriteErr := rewriteCompatibleResponseEvent(
+			event,
+			requestedModel,
+			effectiveModel,
+			privateIndexes,
+			privateItemIDs,
+		)
+		if rewriteErr != nil {
+			return nil, rewriteErr
+		}
+		if !keep {
+			continue
+		}
+		encoded, encodeErr := ssewire.Encode(clientEvent)
+		if encodeErr != nil {
+			return nil, encodeErr
+		}
+		if rewritten.Len()+len(encoded) > maxBytes {
+			return nil, protocolcore.NewFailure(
+				protocolcore.ReasonStreamLimitExceeded,
+				"$",
+				errors.New("Responses client stream exceeds the configured byte limit"),
+			)
+		}
+		_, _ = rewritten.Write(encoded)
+	}
+	return bytes.Clone(rewritten.Bytes()), nil
+}
+
+func privateReasoningOutput(
+	events []ssewire.Event,
+) (map[int]struct{}, map[string]struct{}, error) {
+	indexes := make(map[int]struct{})
+	itemIDs := make(map[string]struct{})
+	for _, event := range events {
+		if bytes.Equal(bytes.TrimSpace(event.Data), []byte("[DONE]")) {
+			continue
+		}
+		var root map[string]json.RawMessage
+		if err := json.Unmarshal(event.Data, &root); err != nil || root == nil {
+			return nil, nil, protocolcore.NewFailure(
+				protocolcore.ReasonMalformedEventStream,
+				"$",
+				errors.New("Responses SSE event is invalid"),
+			)
+		}
+		var eventType string
+		if err := json.Unmarshal(root["type"], &eventType); err != nil || eventType == "" {
+			return nil, nil, protocolcore.NewFailure(
+				protocolcore.ReasonMalformedEventStream,
+				"$.type",
+				errors.New("Responses SSE event type is invalid"),
+			)
+		}
+		if strings.HasPrefix(eventType, "response.reasoning_") {
+			if index, ok, err := responseEventOutputIndex(root); err != nil {
+				return nil, nil, err
+			} else if ok {
+				indexes[index] = struct{}{}
+			}
+			if itemID, ok, err := responseEventItemID(root); err != nil {
+				return nil, nil, err
+			} else if ok {
+				itemIDs[itemID] = struct{}{}
+			}
+		}
+		if itemRaw, present := root["item"]; present && rawPresent(itemRaw) {
+			itemType, itemID, err := responseOutputItemIdentity(itemRaw)
+			if err != nil {
+				return nil, nil, err
+			}
+			if itemType == "reasoning" {
+				if index, ok, err := responseEventOutputIndex(root); err != nil {
+					return nil, nil, err
+				} else if ok {
+					indexes[index] = struct{}{}
+				}
+				if itemID != "" {
+					itemIDs[itemID] = struct{}{}
+				}
+			}
+		}
+		responseRaw, present := root["response"]
+		if !present || !rawPresent(responseRaw) {
+			continue
+		}
+		var response struct {
+			Output []json.RawMessage `json:"output"`
+		}
+		if err := json.Unmarshal(responseRaw, &response); err != nil {
+			return nil, nil, protocolcore.NewFailure(
+				protocolcore.ReasonMalformedEventStream,
+				"$.response",
+				errors.New("Responses SSE response is invalid"),
+			)
+		}
+		for index, itemRaw := range response.Output {
+			itemType, itemID, err := responseOutputItemIdentity(itemRaw)
+			if err != nil {
+				return nil, nil, err
+			}
+			if itemType != "reasoning" {
+				continue
+			}
+			indexes[index] = struct{}{}
+			if itemID != "" {
+				itemIDs[itemID] = struct{}{}
+			}
+		}
+	}
+	return indexes, itemIDs, nil
+}
+
+func rewriteCompatibleResponseEvent(
+	event ssewire.Event,
+	requestedModel string,
+	effectiveModel string,
+	privateIndexes map[int]struct{},
+	privateItemIDs map[string]struct{},
+) (ssewire.Event, bool, error) {
+	if bytes.Equal(bytes.TrimSpace(event.Data), []byte("[DONE]")) {
+		return event, true, nil
+	}
+	var root map[string]json.RawMessage
+	if err := json.Unmarshal(event.Data, &root); err != nil || root == nil {
+		return ssewire.Event{}, false, protocolcore.NewFailure(
+			protocolcore.ReasonMalformedEventStream,
+			"$",
+			errors.New("Responses SSE event is invalid"),
+		)
+	}
+	var eventType string
+	if err := json.Unmarshal(root["type"], &eventType); err != nil || eventType == "" {
+		return ssewire.Event{}, false, protocolcore.NewFailure(
+			protocolcore.ReasonMalformedEventStream,
+			"$.type",
+			errors.New("Responses SSE event type is invalid"),
+		)
+	}
+	if strings.HasPrefix(eventType, "response.reasoning_") {
+		return ssewire.Event{}, false, nil
+	}
+	if itemRaw, present := root["item"]; present && rawPresent(itemRaw) {
+		itemType, _, err := responseOutputItemIdentity(itemRaw)
+		if err != nil {
+			return ssewire.Event{}, false, err
+		}
+		if itemType == "reasoning" {
+			return ssewire.Event{}, false, nil
+		}
+	}
+	if itemID, present, err := responseEventItemID(root); err != nil {
+		return ssewire.Event{}, false, err
+	} else if present {
+		if _, private := privateItemIDs[itemID]; private {
+			return ssewire.Event{}, false, nil
+		}
+	}
+	modified := false
+	if outputIndex, present, err := responseEventOutputIndex(root); err != nil {
+		return ssewire.Event{}, false, err
+	} else if present {
+		if _, private := privateIndexes[outputIndex]; private {
+			return ssewire.Event{}, false, nil
+		}
+		portableIndex := compactOutputIndex(outputIndex, privateIndexes)
+		if portableIndex != outputIndex {
+			encoded, err := json.Marshal(portableIndex)
+			if err != nil {
+				return ssewire.Event{}, false, err
+			}
+			root["output_index"] = encoded
+			modified = true
+		}
+	}
+	responseRaw, present := root["response"]
+	if !present || !rawPresent(responseRaw) {
+		if !modified {
+			return event, true, nil
+		}
+		return marshalCompatibleResponseEvent(event, root)
+	}
+	var response map[string]json.RawMessage
+	if err := json.Unmarshal(responseRaw, &response); err != nil || response == nil {
+		return ssewire.Event{}, false, protocolcore.NewFailure(
+			protocolcore.ReasonMalformedEventStream,
+			"$.response",
+			errors.New("Responses SSE response is invalid"),
+		)
+	}
+	if outputRaw, present := response["output"]; present {
+		var output []json.RawMessage
+		if err := json.Unmarshal(outputRaw, &output); err != nil {
+			return ssewire.Event{}, false, protocolcore.NewFailure(
+				protocolcore.ReasonMalformedEventStream,
+				"$.response.output",
+				errors.New("Responses SSE response output is invalid"),
+			)
+		}
+		portable := make([]json.RawMessage, 0, len(output))
+		for _, itemRaw := range output {
+			itemType, _, err := responseOutputItemIdentity(itemRaw)
+			if err != nil {
+				return ssewire.Event{}, false, err
+			}
+			if itemType == "reasoning" {
+				modified = true
+				continue
+			}
+			portable = append(portable, itemRaw)
+		}
+		if len(portable) != len(output) {
+			encoded, err := json.Marshal(portable)
+			if err != nil {
+				return ssewire.Event{}, false, err
+			}
+			response["output"] = encoded
+		}
+	}
+	modelRaw, present := response["model"]
+	if present && requestedModel != effectiveModel {
+		var reportedModel string
+		if err := json.Unmarshal(modelRaw, &reportedModel); err != nil || reportedModel == "" {
+			return ssewire.Event{}, false, protocolcore.NewFailure(
+				protocolcore.ReasonMalformedEventStream,
+				"$.response.model",
+				errors.New("Responses SSE response model is invalid"),
+			)
+		}
+		if reportedModel != requestedModel {
+			model, err := json.Marshal(requestedModel)
+			if err != nil {
+				return ssewire.Event{}, false, err
+			}
+			response["model"] = model
+			modified = true
+		}
+	}
+	encodedResponse, err := json.Marshal(response)
+	if err != nil {
+		return ssewire.Event{}, false, err
+	}
+	root["response"] = encodedResponse
+	if !modified {
+		return event, true, nil
+	}
+	return marshalCompatibleResponseEvent(event, root)
+}
+
+func marshalCompatibleResponseEvent(
+	event ssewire.Event,
+	root map[string]json.RawMessage,
+) (ssewire.Event, bool, error) {
+	encodedEvent, err := json.Marshal(root)
+	if err != nil {
+		return ssewire.Event{}, false, err
+	}
+	rewritten := event.Clone()
+	rewritten.Data = encodedEvent
+	return rewritten, true, nil
+}
+
+func responseOutputItemIdentity(raw json.RawMessage) (string, string, error) {
+	var item struct {
+		Type string `json:"type"`
+		ID   string `json:"id"`
+	}
+	if err := json.Unmarshal(raw, &item); err != nil || item.Type == "" {
+		return "", "", protocolcore.NewFailure(
+			protocolcore.ReasonMalformedEventStream,
+			"$.item",
+			errors.New("Responses output item is invalid"),
+		)
+	}
+	return item.Type, item.ID, nil
+}
+
+func responseEventOutputIndex(
+	root map[string]json.RawMessage,
+) (int, bool, error) {
+	raw, present := root["output_index"]
+	if !present {
+		return 0, false, nil
+	}
+	var index int
+	if err := json.Unmarshal(raw, &index); err != nil || index < 0 ||
+		index >= protocolcore.MaxContentBlocks {
+		return 0, false, protocolcore.NewFailure(
+			protocolcore.ReasonMalformedEventStream,
+			"$.output_index",
+			errors.New("Responses output index is invalid"),
+		)
+	}
+	return index, true, nil
+}
+
+func responseEventItemID(
+	root map[string]json.RawMessage,
+) (string, bool, error) {
+	raw, present := root["item_id"]
+	if !present {
+		return "", false, nil
+	}
+	var itemID string
+	if err := json.Unmarshal(raw, &itemID); err != nil || itemID == "" {
+		return "", false, protocolcore.NewFailure(
+			protocolcore.ReasonMalformedEventStream,
+			"$.item_id",
+			errors.New("Responses item ID is invalid"),
+		)
+	}
+	return itemID, true, nil
+}
+
+func compactOutputIndex(index int, removed map[int]struct{}) int {
+	portable := index
+	for candidate := range removed {
+		if candidate < index {
+			portable--
+		}
+	}
+	return portable
 }
 
 type providerPendingTerminal struct {

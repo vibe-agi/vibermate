@@ -127,7 +127,16 @@ func (manager *Manager) GetProjection(
 	if err != nil {
 		return Projection{}, err
 	}
-	return projection.Clone(), nil
+	projection = projection.Clone()
+	if projection.Response != nil {
+		projection.Response.Blocks = mergeDuplicateReadableReasoning(
+			projection.Response.Blocks,
+		)
+	}
+	if err := projection.Validate(); err != nil {
+		return Projection{}, err
+	}
+	return projection, nil
 }
 
 func (manager *Manager) RequestPreviews(

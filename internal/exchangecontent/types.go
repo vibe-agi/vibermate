@@ -120,8 +120,8 @@ func (ref FrozenRef) Validate() error {
 	if ref.EnvironmentID == "" || ref.EnvironmentRevision == 0 ||
 		ref.EnvironmentDigest == "" || ref.ClientEndpointID == "" ||
 		ref.ClientEndpointRevision == 0 || ref.ProtocolPlanID == "" ||
-		ref.ProtocolPlanRevision == 0 || ref.RouteID == "" ||
-		ref.RouteRevision == 0 {
+		ref.ProtocolPlanRevision == 0 ||
+		((ref.RouteID == "") != (ref.RouteRevision == 0)) {
 		return fmt.Errorf("%w: frozen reference is incomplete", ErrInvalidEvidence)
 	}
 	digest, err := environment.ParseCandidateDigest(ref.EnvironmentDigest)
@@ -428,12 +428,73 @@ func Project(record Record, view RequestView) (Projection, error) {
 	}
 	if record.Response != nil {
 		response := cloneResponse(*record.Response)
+		response.Blocks = mergeDuplicateReadableReasoning(response.Blocks)
 		projection.Response = &response
 	}
 	if err := projection.Validate(); err != nil {
 		return Projection{}, err
 	}
 	return projection.Clone(), nil
+}
+
+// mergeDuplicateReadableReasoning is a presentation-only fold. Some relays
+// publish the same plaintext once as a Responses reasoning summary and again
+// as provider reasoning content. Record keeps both source facts; the read model
+// shows one block and prefers the more direct content kind over its summary.
+func mergeDuplicateReadableReasoning(blocks []Block) []Block {
+	result := make([]Block, 0, len(blocks))
+	seen := make(map[string]int)
+	for _, block := range blocks {
+		if block.Kind != BlockKindReasoning ||
+			block.Availability != AvailabilityRecorded || block.Text == "" {
+			result = append(result, block)
+			continue
+		}
+		key := readableReasoningKey(block)
+		if index, found := seen[key]; found &&
+			result[index].ProviderKind != block.ProviderKind {
+			if reasoningKindPriority(block.ProviderKind) >
+				reasoningKindPriority(result[index].ProviderKind) {
+				result[index] = block
+			}
+			continue
+		}
+		if _, found := seen[key]; !found {
+			seen[key] = len(result)
+		}
+		result = append(result, block)
+	}
+	return result
+}
+
+func readableReasoningKey(block Block) string {
+	agentName, author, recipient := "", "", ""
+	if block.Agent != nil {
+		agentName = block.Agent.AgentName
+		author = block.Agent.Author
+		recipient = block.Agent.Recipient
+	}
+	return fmt.Sprintf(
+		"%d\x00%s\x00%s\x00%s\x00%s",
+		block.OriginalSize,
+		block.Text,
+		agentName,
+		author,
+		recipient,
+	)
+}
+
+func reasoningKindPriority(kind string) int {
+	switch protocolcore.ProviderExtensionKind(kind) {
+	case protocolcore.ProviderExtensionThinking:
+		return 3
+	case protocolcore.ProviderExtensionReasoningContent:
+		return 2
+	case protocolcore.ProviderExtensionReasoningSummary:
+		return 1
+	default:
+		return 0
+	}
 }
 
 func (projection Projection) Validate() error {
@@ -851,7 +912,7 @@ func validFingerprint(value string) bool {
 }
 
 func blockViews(blocks []protocolcore.ContentBlock, full bool) []Block {
-	return blockViewsWithProviderReasoning(blocks, full, false)
+	return blockViewsWithProviderReasoning(blocks, full, true)
 }
 
 func responseBlockViews(blocks []protocolcore.ContentBlock, full bool) []Block {
@@ -910,20 +971,22 @@ func blockViewsWithProviderReasoning(
 				view.Text = sanitizeText(block.ToolResult.Content)
 			}
 		case protocolcore.BlockProviderExtension:
-			if text := providerReasoningText(block.ProviderExtension); readableProviderReasoning && full && text != "" {
-				view.Kind = BlockKindReasoning
-				view.Availability = AvailabilityRecorded
-				view.Text = sanitizeText(text)
-				view.OriginalSize = len(text)
-				view.ProviderSource = string(block.ProviderExtension.Source())
-				view.ProviderKind = string(block.ProviderExtension.Kind())
-			} else {
-				view = providerOpaqueBlock(
-					block.ProviderExtension,
-					bytes.Join(block.ProviderExtension.Fragments(), nil),
+			if readableProviderReasoning {
+				views := providerExtensionViews(
+					[]protocolcore.ProviderExtension{block.ProviderExtension},
+					full,
 				)
-				view.Agent = agentContextView(block.Agent)
+				for index := range views {
+					views[index].Agent = agentContextView(block.Agent)
+				}
+				result = append(result, views...)
+				continue
 			}
+			view = providerOpaqueBlock(
+				block.ProviderExtension,
+				bytes.Join(block.ProviderExtension.Fragments(), nil),
+			)
+			view.Agent = agentContextView(block.Agent)
 		}
 		result = append(result, view)
 	}

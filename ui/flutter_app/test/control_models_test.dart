@@ -5,7 +5,97 @@ import 'package:vibermate_app/core/api/control_api.dart';
 import 'package:vibermate_app/core/api/control_models.dart';
 import 'package:vibermate_app/preview/preview_control_api.dart';
 
+import 'runtime_usage_fixture.dart';
+
 void main() {
+  test(
+    'Runtime Server access states one reusable Runtime User login model',
+    () {
+      final access = RuntimeServerAccess.fromJson({
+        'schema': 'vibermate-server-access-v1',
+        'transport': 'http',
+        'authentication': 'runtime_user_password',
+        'sessionPolicy': 'reusable_until_logout_disable_or_expiry',
+      }, 'serverAccess');
+
+      expect(access.transport, 'http');
+      expect(access.encrypted, isFalse);
+      expect(access.requiresRuntimeUserLogin, isTrue);
+
+      for (final invalid in <Map<String, Object?>>[
+        {
+          'schema': 'vibermate-server-access-v1',
+          'transport': 'ftp',
+          'authentication': 'runtime_user_password',
+          'sessionPolicy': 'reusable_until_logout_disable_or_expiry',
+        },
+        {
+          'schema': 'vibermate-server-access-v1',
+          'transport': 'https',
+          'authentication': 'anonymous',
+          'sessionPolicy': 'reusable_until_logout_disable_or_expiry',
+        },
+        {
+          'schema': 'vibermate-server-access-v1',
+          'transport': 'https',
+          'authentication': 'runtime_user_password',
+          'sessionPolicy': 'per_run_approval',
+        },
+      ]) {
+        expect(
+          () => RuntimeServerAccess.fromJson(invalid, 'serverAccess'),
+          throwsA(isA<ControlContractException>()),
+        );
+      }
+    },
+  );
+
+  test(
+    'Runtime User projection excludes password material and validates state',
+    () {
+      final user = RuntimeUser.fromJson({
+        'id': 'user.test',
+        'username': 'alice',
+        'state': 'active',
+        'createdAt': '2026-08-24T12:00:00.000Z',
+        'updatedAt': '2026-08-24T12:00:00.000Z',
+      }, 'runtimeUser');
+      expect(user.username, 'alice');
+      expect(user.active, isTrue);
+      expect(
+        () => RuntimeUser.fromJson({
+          'id': 'user.test',
+          'username': 'alice',
+          'state': 'active',
+          'createdAt': '2026-08-24T12:00:00.000Z',
+          'updatedAt': '2026-08-24T12:00:00.000Z',
+          'password': 'must-not-exist',
+        }, 'runtimeUser'),
+        throwsA(isA<ControlContractException>()),
+      );
+    },
+  );
+
+  test(
+    'Runtime usage keeps exact A to B models and partial token knowledge',
+    () {
+      final report = RuntimeUsageReport.fromJson(
+        runtimeUsagePayload(),
+        'runtimeUsage',
+      );
+
+      final alice = report.users.single;
+      expect(report.truncated, isFalse);
+      expect(alice.latestContext?.workspaceLabel, 'vibermate');
+      expect(alice.models.single.requestedModel, 'gpt-5.6-sol');
+      expect(alice.models.single.upstreamModel, 'relay:model/custom');
+      expect(alice.tokens.inputUncached.tokens, 42);
+      expect(alice.tokens.inputUncached.knownTurns, 1);
+      expect(alice.tokens.inputUncached.unknownTurns, 1);
+      expect(alice.agentSessions.single.sessionId, 'native-session-one');
+    },
+  );
+
   const machineId = 'BwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwc';
   const workspaceId = 'CAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAg';
 
@@ -28,6 +118,142 @@ void main() {
     );
   });
 
+  test('upstream model catalog trusts only the selected Endpoint', () {
+    final catalog = UpstreamModelCatalog.fromJson({
+      'endpointId': 'target.spark.local',
+      'endpointRevision': 3,
+      'accountId': 'account.spark.models',
+      'accountRevision': 4,
+      'credentialEpoch': 7,
+      'observedAt': '2026-08-20T03:04:05.000Z',
+      'availabilitySource': 'endpoint',
+      'models': [
+        {
+          'id': 'dashscope:deepseek-v4-flash-0731',
+          'displayName': '',
+          'ownedBy': '',
+          'verifiedAvailable': true,
+          'contextLimit': 0,
+          'outputLimit': 0,
+        },
+      ],
+    }, 'upstreamModels');
+
+    expect(catalog.endpointId, 'target.spark.local');
+    expect(catalog.accountId, 'account.spark.models');
+    expect(catalog.credentialEpoch, 7);
+    expect(catalog.verifiedFromEndpoint, isTrue);
+    expect(catalog.models.single.id, 'dashscope:deepseek-v4-flash-0731');
+
+    expect(
+      () => UpstreamModelCatalog.fromJson({
+        'endpointId': 'target.spark.local',
+        'endpointRevision': 3,
+        'accountId': 'account.spark.models',
+        'accountRevision': 4,
+        'credentialEpoch': 7,
+        'observedAt': '2026-08-20T03:04:05.000Z',
+        'availabilitySource': 'directory',
+        'models': [
+          {
+            'id': 'deepseek-v4-flash',
+            'displayName': '',
+            'ownedBy': '',
+            'verifiedAvailable': true,
+            'contextLimit': 0,
+            'outputLimit': 0,
+          },
+        ],
+      }, 'upstreamModels'),
+      throwsA(isA<ControlContractException>()),
+    );
+  });
+
+  test('models.dev describes request-side model IDs only', () {
+    final catalog = ClientModelCatalog.fromJson({
+      'protocol': 'anthropic_messages',
+      'providerId': 'anthropic',
+      'metadataSource': 'models.dev',
+      'models': [
+        {
+          'id': 'claude-opus-4-1',
+          'canonicalId': 'anthropic/claude-opus-4-1',
+          'displayName': 'Claude Opus 4.1',
+          'description': 'Request-side metadata',
+          'family': 'claude-opus',
+          'reasoning': true,
+          'toolCalls': true,
+          'structuredOutput': true,
+          'attachments': true,
+          'openWeights': false,
+          'contextLimit': 200000,
+          'outputLimit': 32000,
+          'inputModalities': ['text', 'image'],
+          'outputModalities': ['text'],
+          'knowledgeCutoff': '2025-03',
+          'releaseDate': '2025-08-05',
+        },
+      ],
+    }, 'clientModels');
+
+    expect(catalog.protocol, 'anthropic_messages');
+    expect(catalog.models.single.id, 'claude-opus-4-1');
+    expect(catalog.models.single.canonicalId, 'anthropic/claude-opus-4-1');
+  });
+
+  test('opaque upstream IDs fit the Environment mapping contract', () {
+    final model = {
+      'id': 'm' * 257,
+      'displayName': '',
+      'ownedBy': '',
+      'verifiedAvailable': true,
+      'contextLimit': 0,
+      'outputLimit': 0,
+    };
+
+    expect(
+      () => UpstreamModel.fromJson(model, 'upstreamModel'),
+      throwsA(isA<ControlContractException>()),
+    );
+
+    final policy = EnvironmentModelPolicy.fromJson({
+      'revision': 2,
+      'mode': 'map',
+      'mappings': [
+        {
+          'requestedModel': 'claude-opus-4-1',
+          'upstreamModel': 'dashscope:deepseek-v4-flash-0731',
+        },
+      ],
+    }, 'modelPolicy');
+    expect(
+      policy.mappings.single.upstreamModel,
+      'dashscope:deepseek-v4-flash-0731',
+    );
+    expect(policy.toJson()['mappings'], isA<List<Object?>>());
+  });
+
+  test('opaque model IDs preserve printable edge whitespace', () {
+    final upstream = UpstreamModel.fromJson({
+      'id': ' relay custom:model ',
+      'displayName': '',
+      'ownedBy': '',
+      'verifiedAvailable': true,
+      'contextLimit': 0,
+      'outputLimit': 0,
+    }, 'upstreamModel');
+    final mapping = EnvironmentModelMapping.fromJson({
+      'requestedModel': ' client model ',
+      'upstreamModel': ' relay custom:model ',
+    }, 'mapping');
+
+    expect(upstream.id, ' relay custom:model ');
+    expect(mapping.toJson(), {
+      'requestedModel': ' client model ',
+      'upstreamModel': ' relay custom:model ',
+    });
+  });
+
   test(
     'managed run retains complete workspace identity and real active states',
     () {
@@ -45,11 +271,14 @@ void main() {
           'cwd': '/Users/mira/Code/vibermate',
           'canonicalExecutablePath': '/usr/local/bin/claude',
           'localUserLabel': 'mira',
+          'runtimeUserId': 'user.remote',
+          'loginSessionId': 'login.remote',
+          'deviceName': 'MacBook Pro',
           'machineId': machineId,
           'machineRegistrationRevision': 1,
           'workspaceId': workspaceId,
           'workspaceLabel': 'vibermate',
-          'workspaceEvidence': 'local_launcher',
+          'workspaceEvidence': 'registered_companion',
           'workspaceDerivationRevision': 1,
           'processId': 7300,
           'recognition': 'verified',
@@ -61,7 +290,9 @@ void main() {
       expect(record.running, isTrue);
       expect(record.managedRun!.machineId, machineId);
       expect(record.managedRun!.workspaceId, workspaceId);
-      expect(record.managedRun!.workspaceEvidence, 'local_launcher');
+      expect(record.managedRun!.workspaceEvidence, 'registered_companion');
+      expect(record.managedRun!.runtimeUserId, 'user.remote');
+      expect(record.managedRun!.deviceName, 'MacBook Pro');
       expect(
         record.managedRun!.canonicalExecutablePath,
         '/usr/local/bin/claude',
@@ -76,44 +307,6 @@ void main() {
           'recognition': 'verified',
           'expiresAt': '2026-08-10T10:00:00.000Z',
         }, 'managedRun'),
-        throwsA(isA<ControlContractException>()),
-      );
-    },
-  );
-
-  test(
-    'Workspace default accepts only exact workspace and Environment authority',
-    () {
-      final record = WorkspaceEnvironmentDefault.fromJson(
-        {
-          'machineId': machineId,
-          'workspaceId': workspaceId,
-          'environmentId': 'work',
-          'environmentName': 'Work',
-          'revision': 3,
-          'updatedAt': '2026-08-10T09:01:00.000Z',
-        },
-        'workspaceDefault',
-        expectedMachineId: machineId,
-        expectedWorkspaceId: workspaceId,
-      );
-      expect(record.environmentId, 'work');
-      expect(record.revision, 3);
-
-      expect(
-        () => WorkspaceEnvironmentDefault.fromJson(
-          {
-            'machineId': machineId,
-            'workspaceId': workspaceId,
-            'environmentId': 'system_transparent',
-            'environmentName': 'Transparent',
-            'revision': 1,
-            'updatedAt': '2026-08-10T09:01:00.000Z',
-          },
-          'workspaceDefault',
-          expectedMachineId: machineId,
-          expectedWorkspaceId: workspaceId,
-        ),
         throwsA(isA<ControlContractException>()),
       );
     },
@@ -142,7 +335,7 @@ void main() {
       'id': 'account.missing',
       'displayName': 'Missing',
       'upstreamEndpointId': 'target.test',
-      'kind': 'openai_api_key',
+      'kind': 'bearer_token',
       'realmId': 'openai.test',
       'state': 'active',
       'revision': 1,
@@ -471,6 +664,42 @@ void main() {
     expect(status.schemaRevision, 1);
   });
 
+  test('Runtime status accepts the public Runtime Server host kind', () {
+    final status = RuntimeStatus.fromJson({
+      'generation': 'instance-server',
+      'ready': true,
+      'apiVersion': 'v1',
+      'statusKey': 'runtime.state.initialized',
+      'runtime': {
+        'state': 'initialized',
+        'instanceId': 'instance-server',
+        'host': 'server',
+        'schemaRevision': 6,
+        'storage': 'healthy',
+        'environmentProjection': {
+          'state': 'healthy',
+          'unavailableEnvironments': null,
+        },
+        'offlineHold': {
+          'state': 'online',
+          'revision': 1,
+          'since': '2026-08-24T00:00:00.000Z',
+          'activeActions': 0,
+          'enteringActions': 0,
+          'activeEgress': 0,
+          'queuedRequests': 0,
+          'heldBytes': 0,
+          'safeToDisconnect': false,
+          'activeByKind': <String, Object?>{},
+          'queuedByKind': <String, Object?>{},
+        },
+        'startedAt': '2026-08-24T00:00:00.000Z',
+      },
+    }, expectedInstanceId: 'instance-server');
+
+    expect(status.host, 'server');
+  });
+
   test(
     'Manual Capture context accepts only literal loopback proxy authority',
     () {
@@ -634,6 +863,57 @@ void main() {
     );
   });
 
+  test('Original Destination Activity has no synthetic Route or Account', () {
+    final activity = ActivityRecord.fromJson({
+      'id': 'exchange-original',
+      'occurredAt': '2026-08-24T10:17:19.000Z',
+      'kind': 'exchange',
+      'title': 'codex',
+      'status': 'succeeded',
+      'source': {
+        'kind': 'capture_run',
+        'displayName': 'codex',
+        'recognition': 'verified',
+      },
+      'conversation': {
+        'id': 'capture_run:run-original:main',
+        'displayName': 'codex',
+        'kind': 'main',
+        'evidence': 'capture_run',
+      },
+      'environment': {
+        'id': 'system_transparent',
+        'revision': 1,
+        'digest': List.filled(64, 'a').join(),
+        'clientEndpointId': 'endpoint.system.chatgpt',
+        'clientEndpointRevision': 1,
+        'protocolPlanId': 'plan.system.chatgpt.responses',
+        'protocolPlanRevision': 1,
+      },
+      'parentRefs': {
+        'captureRunId': 'run-original',
+        'connectionId': 'connection-original',
+        'exchangeId': 'exchange-original',
+      },
+    }, 'activity');
+
+    expect(activity.environment.routeId, isNull);
+    expect(activity.environment.routeRevision, isNull);
+    expect(activity.environment.accountId, isNull);
+  });
+
+  test('native Client Session conversation evidence crosses Captures', () {
+    final conversation = ActivityConversationRef.fromJson({
+      'id': 'client_session:codex:opaque_digest:thread:opaque_thread:main',
+      'displayName': 'Codex',
+      'kind': 'main',
+      'evidence': 'explicit_session',
+    }, 'conversation');
+
+    expect(conversation.evidence, 'explicit_session');
+    expect(conversation.id, startsWith('client_session:codex:'));
+  });
+
   test('Approval retains the complete closed decision authority', () {
     final approval = ApprovalRecord.fromJson(_toolApprovalJson(), 'approval');
 
@@ -714,6 +994,18 @@ void main() {
         jsonDecode(jsonEncode(work.toJson())),
         'environment',
       );
+      final encoded = work.toJson();
+      final encodedEndpoint =
+          (encoded['clientEndpoints']! as List<Object?>).first! as JsonObject;
+      final encodedPlan =
+          (encodedEndpoint['protocolPlans']! as List<Object?>).first!
+              as JsonObject;
+      expect(encodedPlan, isNot(contains('mode')));
+      expect(encodedPlan, isNot(contains('upstreamPlan')));
+      expect(encodedPlan['destination'], {
+        'kind': 'upstream',
+        'upstream': isA<JsonObject>(),
+      });
 
       expect(decoded.id, work.id);
       expect(decoded.revision, work.revision);
@@ -743,7 +1035,8 @@ void main() {
       final clientEndpoint = (json['clientEndpoints'] as List).first as Map;
       final protocolPlan =
           (clientEndpoint['protocolPlans'] as List).first as Map;
-      final upstreamPlan = protocolPlan['upstreamPlan'] as Map;
+      final destination = protocolPlan['destination'] as Map;
+      final upstreamPlan = destination['upstream'] as Map;
       final route = (upstreamPlan['routes'] as List).first as Map;
       final accountPolicy = route['accountPolicy'] as Map;
       final revisions = accountPolicy['accountRevisions'] as Map;

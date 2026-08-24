@@ -20,108 +20,786 @@ final class SettingsView extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return Column(
+    final server = controller.serverManagement;
+    return DefaultTabController(
+      length: server ? 2 : 1,
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          PageHeading(
+            title: copy('settings.title'),
+            subtitle: copy(
+              server ? 'settings.subtitle.server' : 'settings.subtitle',
+            ),
+          ),
+          if (server)
+            Material(
+              color: context.viberColors.panel,
+              child: Align(
+                alignment: Alignment.centerLeft,
+                child: TabBar(
+                  isScrollable: true,
+                  tabAlignment: TabAlignment.start,
+                  dividerHeight: 0,
+                  tabs: [
+                    Tab(
+                      key: const Key('settings-tab-general'),
+                      text: copy('settings.tab.general'),
+                    ),
+                    Tab(
+                      key: const Key('settings-tab-users'),
+                      text: copy('settings.tab.users'),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+          const Divider(height: 1),
+          Expanded(
+            child: server
+                ? TabBarView(
+                    children: [
+                      _GeneralSettingsPane(controller: controller, copy: copy),
+                      _RuntimeUsersSettingsPane(
+                        controller: controller,
+                        copy: copy,
+                      ),
+                    ],
+                  )
+                : _GeneralSettingsPane(controller: controller, copy: copy),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+final class _GeneralSettingsPane extends StatelessWidget {
+  const _GeneralSettingsPane({required this.controller, required this.copy});
+
+  final WorkbenchController controller;
+  final AppCopy copy;
+
+  @override
+  Widget build(BuildContext context) => ListView(
+    key: const Key('settings-scroll'),
+    padding: const EdgeInsets.fromLTRB(14, 12, 14, 20),
+    children: [
+      if (controller.preferenceWarning case final warning?) ...[
+        InlineNotice(
+          key: const Key('preferences-warning'),
+          message: copy(warning),
+          error: true,
+        ),
+        const SizedBox(height: 10),
+      ],
+      Wrap(
+        spacing: 28,
+        runSpacing: 12,
+        children: [
+          _PreferenceControl(
+            label: copy('settings.appearance'),
+            child: CompactSegmentedControl<WorkbenchTheme>(
+              key: const Key('settings-theme'),
+              segments: [
+                CompactSegment(
+                  value: WorkbenchTheme.system,
+                  label: copy('settings.auto'),
+                ),
+                CompactSegment(
+                  value: WorkbenchTheme.light,
+                  label: copy('settings.light'),
+                ),
+                CompactSegment(
+                  value: WorkbenchTheme.dark,
+                  label: copy('settings.dark'),
+                ),
+              ],
+              minSegmentWidth: 42,
+              selected: controller.theme,
+              onSelected: controller.setTheme,
+            ),
+          ),
+          _PreferenceControl(
+            label: copy('settings.language'),
+            child: CompactSegmentedControl<AppLanguage>(
+              key: const Key('settings-language'),
+              segments: [
+                CompactSegment(
+                  value: AppLanguage.english,
+                  label: copy('settings.english'),
+                ),
+                CompactSegment(
+                  value: AppLanguage.simplifiedChinese,
+                  label: copy('settings.chinese'),
+                ),
+              ],
+              selected: controller.language,
+              onSelected: controller.setLanguage,
+            ),
+          ),
+        ],
+      ),
+      const SizedBox(height: 14),
+      const Divider(height: 1),
+      const SizedBox(height: 14),
+      OfflineHoldSettingsPanel(controller: controller, copy: copy),
+      if (controller.terminalManagement) ...[
+        const SizedBox(height: 14),
+        _TerminalCommandPanel(controller: controller, copy: copy),
+        const SizedBox(height: 9),
+        _ManagedRunGuide(copy: copy, status: controller.terminalCommand),
+      ],
+      const SizedBox(height: 18),
+      _StorageDisclosure(copy: copy, controller: controller),
+      const SizedBox(height: 18),
+      _SettingsLabel(copy('settings.runtime')),
+      const SizedBox(height: 7),
+      Row(
+        children: [
+          Icon(Icons.memory, size: 15, color: context.viberColors.route),
+          const SizedBox(width: 7),
+          Expanded(
+            child: Text(
+              controller.previewMode
+                  ? copy('settings.preview')
+                  : controller.serverManagement
+                  ? copy.format('settings.remote', {
+                      'target': controller.runtimeTarget,
+                    })
+                  : copy('settings.live'),
+              style: Theme.of(context).textTheme.bodyMedium,
+            ),
+          ),
+        ],
+      ),
+    ],
+  );
+}
+
+final class _RuntimeUsersSettingsPane extends StatelessWidget {
+  const _RuntimeUsersSettingsPane({
+    required this.controller,
+    required this.copy,
+  });
+
+  final WorkbenchController controller;
+  final AppCopy copy;
+
+  @override
+  Widget build(BuildContext context) => ListView(
+    key: const Key('runtime-users-settings-scroll'),
+    padding: const EdgeInsets.fromLTRB(14, 12, 14, 20),
+    children: [_ServerAccessPanel(controller: controller, copy: copy)],
+  );
+}
+
+final class _ServerAccessPanel extends StatefulWidget {
+  const _ServerAccessPanel({required this.controller, required this.copy});
+
+  final WorkbenchController controller;
+  final AppCopy copy;
+
+  @override
+  State<_ServerAccessPanel> createState() => _ServerAccessPanelState();
+}
+
+final class _ServerAccessPanelState extends State<_ServerAccessPanel> {
+  String? _copiedClient;
+  bool _copyFailed = false;
+
+  @override
+  Widget build(BuildContext context) {
+    final controller = widget.controller;
+    final copy = widget.copy;
+    final access = controller.serverAccess;
+    final users = controller.runtimeUsers;
+    return Container(
+      key: const Key('server-runtime-access'),
+      clipBehavior: Clip.antiAlias,
+      decoration: BoxDecoration(
+        color: context.viberColors.panelRaised,
+        border: Border.all(color: context.viberColors.dividerSoft),
+        borderRadius: ViberMetrics.surfaceRadius,
+      ),
+      child: IntrinsicHeight(
+        child: Row(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            Container(width: 4, color: context.viberColors.route),
+            Expanded(
+              child: Padding(
+                padding: const EdgeInsets.fromLTRB(12, 11, 12, 12),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Row(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Icon(
+                          Icons.dns_outlined,
+                          size: 17,
+                          color: context.viberColors.route,
+                        ),
+                        const SizedBox(width: 7),
+                        Expanded(
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Text(
+                                copy('server.access.title'),
+                                style: Theme.of(context).textTheme.titleSmall,
+                              ),
+                              const SizedBox(height: 2),
+                              Text(
+                                controller.runtimeTarget,
+                                maxLines: 2,
+                                overflow: TextOverflow.ellipsis,
+                                style: monoStyle.copyWith(
+                                  fontSize: ViberType.micro,
+                                  color: context.viberColors.textMuted,
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
+                        if (access != null) ...[
+                          const SizedBox(width: 8),
+                          _AccessTransportBadge(
+                            label: copy(
+                              access.encrypted
+                                  ? 'server.access.transport.https'
+                                  : 'server.access.transport.http',
+                            ),
+                            encrypted: access.encrypted,
+                          ),
+                        ],
+                      ],
+                    ),
+                    const SizedBox(height: 5),
+                    Text(
+                      copy('server.access.description'),
+                      style: Theme.of(context).textTheme.bodySmall,
+                    ),
+                    const SizedBox(height: 9),
+                    if (controller.serverManagementLoading && access == null)
+                      CompactLoadingMessage(
+                        label: copy('server.access.loading'),
+                      )
+                    else if (access != null) ...[
+                      if (!access.encrypted) ...[
+                        InlineNotice(
+                          message: copy('server.access.http_warning'),
+                          error: true,
+                        ),
+                        const SizedBox(height: 8),
+                      ],
+                      _ServerAccessFact(
+                        icon: Icons.login,
+                        title: copy('server.access.session.title'),
+                        detail: copy('server.access.session.detail'),
+                      ),
+                    ] else
+                      OutlinedButton.icon(
+                        onPressed: () =>
+                            unawaited(controller.refreshServerManagement()),
+                        icon: const Icon(Icons.refresh, size: 15),
+                        label: Text(copy('common.retry')),
+                      ),
+                    if (controller.serverManagementError case final error?) ...[
+                      const SizedBox(height: 8),
+                      InlineNotice(
+                        message: copy.format('server.access.error', {
+                          'detail': error,
+                        }),
+                        error: true,
+                      ),
+                    ],
+                    const SizedBox(height: 10),
+                    Divider(height: 1, color: context.viberColors.dividerSoft),
+                    const SizedBox(height: 9),
+                    Row(
+                      children: [
+                        Expanded(
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Text(
+                                copy('server.users.title'),
+                                style: Theme.of(context).textTheme.labelLarge,
+                              ),
+                              const SizedBox(height: 2),
+                              Text(
+                                copy('server.users.description'),
+                                style: Theme.of(context).textTheme.bodySmall
+                                    ?.copyWith(
+                                      color: context.viberColors.textMuted,
+                                    ),
+                              ),
+                            ],
+                          ),
+                        ),
+                        const SizedBox(width: 8),
+                        OutlinedButton.icon(
+                          key: const Key('runtime-user-add'),
+                          onPressed: controller.runtimeUserMutating
+                              ? null
+                              : _showCreateRuntimeUserDialog,
+                          icon: const Icon(Icons.person_add_alt_1, size: 15),
+                          label: Text(copy('server.users.add')),
+                        ),
+                      ],
+                    ),
+                    const SizedBox(height: 8),
+                    if (controller.serverManagementLoading && users == null)
+                      CompactLoadingMessage(label: copy('server.users.loading'))
+                    else if (users == null)
+                      OutlinedButton.icon(
+                        onPressed: () =>
+                            unawaited(controller.refreshServerManagement()),
+                        icon: const Icon(Icons.refresh, size: 15),
+                        label: Text(copy('common.retry')),
+                      )
+                    else if (users.isEmpty)
+                      Text(
+                        copy('server.users.empty'),
+                        style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                          color: context.viberColors.textMuted,
+                        ),
+                      )
+                    else
+                      Column(
+                        children: [
+                          for (final user in users) ...[
+                            _RuntimeUserRow(
+                              user: user,
+                              copy: copy,
+                              disabling: controller.runtimeUserMutating,
+                              onDisable: user.active
+                                  ? () => _confirmDisableRuntimeUser(user)
+                                  : null,
+                            ),
+                            if (user != users.last) const SizedBox(height: 6),
+                          ],
+                        ],
+                      ),
+                    const SizedBox(height: 10),
+                    Divider(height: 1, color: context.viberColors.dividerSoft),
+                    const SizedBox(height: 9),
+                    Text(
+                      copy('server.login.command.title'),
+                      style: Theme.of(context).textTheme.labelLarge,
+                    ),
+                    const SizedBox(height: 3),
+                    Text(
+                      copy('server.login.command.detail'),
+                      style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                        color: context.viberColors.textMuted,
+                      ),
+                    ),
+                    const SizedBox(height: 7),
+                    _RunCommand(
+                      client: copy('server.login.command.client'),
+                      command:
+                          'vibermate login --server ${controller.runtimeTarget}',
+                      copyLabel: copy('server.login.command.copy'),
+                      enabled: access != null,
+                      onCopy: () => _copyCommand(
+                        copy('server.login.command.client'),
+                        'vibermate login --server ${controller.runtimeTarget}',
+                      ),
+                    ),
+                    const SizedBox(height: 10),
+                    Text(
+                      copy('server.run.title'),
+                      style: Theme.of(context).textTheme.labelLarge,
+                    ),
+                    const SizedBox(height: 3),
+                    Text(
+                      copy('server.run.detail'),
+                      style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                        color: context.viberColors.textMuted,
+                      ),
+                    ),
+                    const SizedBox(height: 7),
+                    Wrap(
+                      spacing: 7,
+                      runSpacing: 7,
+                      children: [
+                        for (final client in const ['claude', 'codex'])
+                          _RunCommand(
+                            client: client == 'claude' ? 'Claude' : 'Codex',
+                            command:
+                                'vibermate run --server ${controller.runtimeTarget} -- $client',
+                            copyLabel: copy.format('terminal.run.copy', {
+                              'client': client == 'claude' ? 'Claude' : 'Codex',
+                            }),
+                            enabled: access != null,
+                            onCopy: () => _copyCommand(
+                              client == 'claude' ? 'Claude' : 'Codex',
+                              'vibermate run --server ${controller.runtimeTarget} -- $client',
+                            ),
+                          ),
+                      ],
+                    ),
+                    if (_copiedClient case final client?) ...[
+                      const SizedBox(height: 6),
+                      Text(
+                        copy.format('terminal.run.copied', {'client': client}),
+                        style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                          color: context.viberColors.verified,
+                        ),
+                      ),
+                    ] else if (_copyFailed) ...[
+                      const SizedBox(height: 6),
+                      Text(
+                        copy('terminal.run.copy_failed'),
+                        style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                          color: context.viberColors.danger,
+                        ),
+                      ),
+                    ],
+                  ],
+                ),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Future<void> _copyCommand(String client, String command) async {
+    try {
+      await Clipboard.setData(ClipboardData(text: command));
+      if (!mounted) return;
+      setState(() {
+        _copiedClient = client;
+        _copyFailed = false;
+      });
+    } on Object {
+      if (!mounted) return;
+      setState(() {
+        _copiedClient = null;
+        _copyFailed = true;
+      });
+    }
+  }
+
+  Future<void> _showCreateRuntimeUserDialog() async {
+    await showDialog<void>(
+      context: context,
+      builder: (_) => _CreateRuntimeUserDialog(
+        controller: widget.controller,
+        copy: widget.copy,
+      ),
+    );
+  }
+
+  Future<void> _confirmDisableRuntimeUser(RuntimeUser user) async {
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        title: Text(widget.copy('server.users.disable.title')),
+        content: Text(
+          widget.copy.format('server.users.disable.detail', {
+            'username': user.username,
+          }),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(dialogContext).pop(false),
+            child: Text(widget.copy('common.cancel')),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.of(dialogContext).pop(true),
+            child: Text(widget.copy('server.users.disable.action')),
+          ),
+        ],
+      ),
+    );
+    if (confirmed == true) {
+      await widget.controller.disableRuntimeUser(user.id);
+    }
+  }
+}
+
+final class _CreateRuntimeUserDialog extends StatefulWidget {
+  const _CreateRuntimeUserDialog({
+    required this.controller,
+    required this.copy,
+  });
+
+  final WorkbenchController controller;
+  final AppCopy copy;
+
+  @override
+  State<_CreateRuntimeUserDialog> createState() =>
+      _CreateRuntimeUserDialogState();
+}
+
+final class _CreateRuntimeUserDialogState
+    extends State<_CreateRuntimeUserDialog> {
+  final _username = TextEditingController();
+  final _password = TextEditingController();
+  bool _busy = false;
+  String? _error;
+
+  bool get _complete =>
+      _username.text.trim().isNotEmpty && _password.text.length >= 8;
+
+  @override
+  void dispose() {
+    _username.dispose();
+    _password.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return AlertDialog(
+      key: const Key('runtime-user-dialog'),
+      title: Text(widget.copy('server.users.dialog.title')),
+      content: ConstrainedBox(
+        constraints: const BoxConstraints(maxWidth: 420),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(widget.copy('server.users.dialog.detail')),
+            const SizedBox(height: 12),
+            TextField(
+              key: const Key('runtime-user-username'),
+              controller: _username,
+              enabled: !_busy,
+              autofocus: true,
+              autocorrect: false,
+              enableSuggestions: false,
+              textInputAction: TextInputAction.next,
+              decoration: InputDecoration(
+                labelText: widget.copy('server.users.dialog.username'),
+              ),
+              onChanged: (_) => setState(() => _error = null),
+            ),
+            const SizedBox(height: 10),
+            TextField(
+              key: const Key('runtime-user-password'),
+              controller: _password,
+              enabled: !_busy,
+              obscureText: true,
+              autocorrect: false,
+              enableSuggestions: false,
+              textInputAction: TextInputAction.done,
+              decoration: InputDecoration(
+                labelText: widget.copy('server.users.dialog.password'),
+                helperText: widget.copy('server.users.dialog.password_help'),
+              ),
+              onChanged: (_) => setState(() => _error = null),
+              onSubmitted: _complete && !_busy
+                  ? (_) => unawaited(_submit())
+                  : null,
+            ),
+            if (_error case final error?) ...[
+              const SizedBox(height: 10),
+              InlineNotice(message: error, error: true),
+            ],
+          ],
+        ),
+      ),
+      actions: [
+        TextButton(
+          onPressed: _busy ? null : () => Navigator.of(context).pop(),
+          child: Text(widget.copy('common.cancel')),
+        ),
+        FilledButton(
+          key: const Key('runtime-user-create'),
+          onPressed: !_complete || _busy ? null : () => unawaited(_submit()),
+          child: _busy
+              ? const CompactProgressIndicator()
+              : Text(widget.copy('server.users.dialog.create')),
+        ),
+      ],
+    );
+  }
+
+  Future<void> _submit() async {
+    if (!_complete || _busy) return;
+    setState(() {
+      _busy = true;
+      _error = null;
+    });
+    final created = await widget.controller.createRuntimeUser(
+      username: _username.text.trim(),
+      password: _password.text,
+    );
+    if (!mounted) return;
+    if (created) {
+      Navigator.of(context).pop();
+      return;
+    }
+    setState(() {
+      _busy = false;
+      _error = widget.copy.format('server.users.dialog.error', {
+        'detail':
+            widget.controller.serverManagementError ??
+            widget.copy('server.users.dialog.unknown'),
+      });
+    });
+  }
+}
+
+final class _AccessTransportBadge extends StatelessWidget {
+  const _AccessTransportBadge({required this.label, required this.encrypted});
+
+  final String label;
+  final bool encrypted;
+
+  @override
+  Widget build(BuildContext context) {
+    final color = encrypted
+        ? context.viberColors.verified
+        : context.viberColors.danger;
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 3),
+      decoration: BoxDecoration(
+        color: color.withValues(alpha: 0.08),
+        border: Border.all(color: color.withValues(alpha: 0.55)),
+        borderRadius: BorderRadius.circular(999),
+      ),
+      child: Text(
+        label,
+        style: Theme.of(context).textTheme.labelSmall?.copyWith(color: color),
+      ),
+    );
+  }
+}
+
+final class _ServerAccessFact extends StatelessWidget {
+  const _ServerAccessFact({
+    required this.icon,
+    required this.title,
+    required this.detail,
+  });
+
+  final IconData icon;
+  final String title;
+  final String detail;
+
+  @override
+  Widget build(BuildContext context) {
+    return Row(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        PageHeading(
-          title: copy('settings.title'),
-          subtitle: copy('settings.subtitle'),
-        ),
-        const Divider(height: 1),
+        Icon(icon, size: 16, color: context.viberColors.verified),
+        const SizedBox(width: 7),
         Expanded(
-          child: ListView(
-            padding: const EdgeInsets.fromLTRB(14, 12, 14, 20),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              if (controller.preferenceWarning case final warning?) ...[
-                InlineNotice(
-                  key: const Key('preferences-warning'),
-                  message: copy(warning),
-                  error: true,
+              Text(title, style: Theme.of(context).textTheme.labelLarge),
+              const SizedBox(height: 2),
+              Text(
+                detail,
+                style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                  color: context.viberColors.textMuted,
                 ),
-                const SizedBox(height: 10),
-              ],
-              Wrap(
-                spacing: 28,
-                runSpacing: 12,
-                children: [
-                  _PreferenceControl(
-                    label: copy('settings.appearance'),
-                    child: CompactSegmentedControl<WorkbenchTheme>(
-                      key: const Key('settings-theme'),
-                      segments: [
-                        CompactSegment(
-                          value: WorkbenchTheme.system,
-                          label: copy('settings.auto'),
-                        ),
-                        CompactSegment(
-                          value: WorkbenchTheme.light,
-                          label: copy('settings.light'),
-                        ),
-                        CompactSegment(
-                          value: WorkbenchTheme.dark,
-                          label: copy('settings.dark'),
-                        ),
-                      ],
-                      minSegmentWidth: 42,
-                      selected: controller.theme,
-                      onSelected: controller.setTheme,
-                    ),
-                  ),
-                  _PreferenceControl(
-                    label: copy('settings.language'),
-                    child: CompactSegmentedControl<AppLanguage>(
-                      key: const Key('settings-language'),
-                      segments: [
-                        CompactSegment(
-                          value: AppLanguage.english,
-                          label: copy('settings.english'),
-                        ),
-                        CompactSegment(
-                          value: AppLanguage.simplifiedChinese,
-                          label: copy('settings.chinese'),
-                        ),
-                      ],
-                      selected: controller.language,
-                      onSelected: controller.setLanguage,
-                    ),
-                  ),
-                ],
-              ),
-              const SizedBox(height: 14),
-              const Divider(height: 1),
-              const SizedBox(height: 14),
-              OfflineHoldSettingsPanel(controller: controller, copy: copy),
-              const SizedBox(height: 14),
-              _TerminalCommandPanel(controller: controller, copy: copy),
-              const SizedBox(height: 9),
-              _ManagedRunGuide(copy: copy, status: controller.terminalCommand),
-              const SizedBox(height: 18),
-              _StorageDisclosure(copy: copy, controller: controller),
-              const SizedBox(height: 18),
-              _SettingsLabel(copy('settings.runtime')),
-              const SizedBox(height: 7),
-              Row(
-                children: [
-                  Icon(
-                    Icons.memory,
-                    size: 15,
-                    color: context.viberColors.route,
-                  ),
-                  const SizedBox(width: 7),
-                  Expanded(
-                    child: Text(
-                      controller.previewMode
-                          ? copy('settings.preview')
-                          : copy('settings.live'),
-                      style: Theme.of(context).textTheme.bodyMedium,
-                    ),
-                  ),
-                ],
               ),
             ],
           ),
         ),
       ],
+    );
+  }
+}
+
+final class _RuntimeUserRow extends StatelessWidget {
+  const _RuntimeUserRow({
+    required this.user,
+    required this.copy,
+    required this.disabling,
+    required this.onDisable,
+  });
+
+  final RuntimeUser user;
+  final AppCopy copy;
+  final bool disabling;
+  final VoidCallback? onDisable;
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      key: Key('runtime-user-row-${user.id}'),
+      padding: const EdgeInsets.fromLTRB(9, 7, 7, 7),
+      decoration: BoxDecoration(
+        color: context.viberColors.rail,
+        border: Border.all(color: context.viberColors.dividerSoft),
+        borderRadius: ViberMetrics.controlRadius,
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              Icon(
+                user.active ? Icons.person_outline : Icons.person_off_outlined,
+                size: 16,
+                color: user.active
+                    ? context.viberColors.verified
+                    : context.viberColors.textFaint,
+              ),
+              const SizedBox(width: 7),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      user.username,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: Theme.of(context).textTheme.bodyMedium,
+                    ),
+                    const SizedBox(height: 2),
+                    Text(
+                      copy('server.users.authentication'),
+                      maxLines: 2,
+                      overflow: TextOverflow.ellipsis,
+                      style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                        color: context.viberColors.textMuted,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+              const SizedBox(width: 6),
+              Text(
+                copy(
+                  user.active
+                      ? 'server.users.state.active'
+                      : 'server.users.state.disabled',
+                ),
+                style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                  color: user.active
+                      ? context.viberColors.verified
+                      : context.viberColors.textFaint,
+                ),
+              ),
+              if (onDisable != null) ...[
+                const SizedBox(width: 6),
+                IconButton(
+                  onPressed: disabling ? null : onDisable,
+                  tooltip: copy('server.users.disable.action'),
+                  icon: const Icon(Icons.block, size: 15),
+                  constraints: const BoxConstraints.tightFor(
+                    width: ViberMetrics.controlHeight,
+                    height: ViberMetrics.controlHeight,
+                  ),
+                  padding: EdgeInsets.zero,
+                ),
+              ],
+            ],
+          ),
+        ],
+      ),
     );
   }
 }

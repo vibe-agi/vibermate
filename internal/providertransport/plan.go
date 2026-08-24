@@ -95,27 +95,62 @@ func (target Target) validateRequestIdentity(request *http.Request) error {
 	return nil
 }
 
-// RequestProvenance binds one outbound to the immutable Environment and Route
-// that authorized it. It contains no mutable aggregate, account secret, or
-// client payload.
+// RequestProvenance binds one outbound to its immutable Environment
+// Destination. Original has no Route authority; Upstream carries the exact
+// frozen Route that authorized the request.
 type RequestProvenance struct {
 	environmentID       environment.EnvironmentID
 	environmentRevision environment.Revision
 	environmentDigest   environment.CandidateDigest
+	destinationKind     environment.DestinationKind
 	routeID             environment.UpstreamRouteID
 	routeRevision       environment.Revision
 }
 
-func NewRequestProvenance(
+func NewOriginalRequestProvenance(
+	environmentID environment.EnvironmentID,
+	environmentRevision environment.Revision,
+	environmentDigest environment.CandidateDigest,
+) (RequestProvenance, error) {
+	return newRequestProvenance(
+		environmentID,
+		environmentRevision,
+		environmentDigest,
+		environment.DestinationKindOriginal,
+		"",
+		0,
+	)
+}
+
+func NewUpstreamRequestProvenance(
 	environmentID environment.EnvironmentID,
 	environmentRevision environment.Revision,
 	environmentDigest environment.CandidateDigest,
 	routeID environment.UpstreamRouteID,
 	routeRevision environment.Revision,
 ) (RequestProvenance, error) {
+	return newRequestProvenance(
+		environmentID,
+		environmentRevision,
+		environmentDigest,
+		environment.DestinationKindUpstream,
+		routeID,
+		routeRevision,
+	)
+}
+
+func newRequestProvenance(
+	environmentID environment.EnvironmentID,
+	environmentRevision environment.Revision,
+	environmentDigest environment.CandidateDigest,
+	destinationKind environment.DestinationKind,
+	routeID environment.UpstreamRouteID,
+	routeRevision environment.Revision,
+) (RequestProvenance, error) {
 	provenance := RequestProvenance{
 		environmentID: environmentID, environmentRevision: environmentRevision,
-		environmentDigest: environmentDigest, routeID: routeID, routeRevision: routeRevision,
+		environmentDigest: environmentDigest, destinationKind: destinationKind,
+		routeID: routeID, routeRevision: routeRevision,
 	}
 	if err := provenance.validate(); err != nil {
 		return RequestProvenance{}, err
@@ -132,6 +167,9 @@ func (provenance RequestProvenance) EnvironmentRevision() environment.Revision {
 func (provenance RequestProvenance) EnvironmentDigest() environment.CandidateDigest {
 	return provenance.environmentDigest
 }
+func (provenance RequestProvenance) DestinationKind() environment.DestinationKind {
+	return provenance.destinationKind
+}
 func (provenance RequestProvenance) RouteID() environment.UpstreamRouteID {
 	return provenance.routeID
 }
@@ -141,15 +179,27 @@ func (provenance RequestProvenance) RouteRevision() environment.Revision {
 
 func (provenance RequestProvenance) validate() error {
 	environmentID, environmentErr := environment.NewEnvironmentID(provenance.environmentID.String())
-	routeID, routeErr := environment.NewUpstreamRouteID(provenance.routeID.String())
 	digest, digestErr := environment.ParseCandidateDigest(provenance.environmentDigest.String())
 	if environmentErr != nil || environmentID != provenance.environmentID ||
-		routeErr != nil || routeID != provenance.routeID ||
 		digestErr != nil || digest != provenance.environmentDigest ||
 		provenance.environmentDigest == (environment.CandidateDigest{}) ||
-		provenance.environmentRevision == 0 || provenance.environmentRevision > environment.MaxRevision ||
-		provenance.routeRevision == 0 || provenance.routeRevision > environment.MaxRevision {
+		provenance.environmentRevision == 0 || provenance.environmentRevision > environment.MaxRevision {
 		return errors.New("provider request provenance is invalid")
+	}
+	switch provenance.destinationKind {
+	case environment.DestinationKindOriginal:
+		if provenance.routeID != "" || provenance.routeRevision != 0 {
+			return errors.New("original request provenance carries a Route")
+		}
+	case environment.DestinationKindUpstream:
+		routeID, routeErr := environment.NewUpstreamRouteID(provenance.routeID.String())
+		if routeErr != nil || routeID != provenance.routeID ||
+			provenance.routeRevision == 0 ||
+			provenance.routeRevision > environment.MaxRevision {
+			return errors.New("upstream request provenance is invalid")
+		}
+	default:
+		return errors.New("provider request Destination is invalid")
 	}
 	return nil
 }
@@ -159,14 +209,15 @@ func (provenance RequestProvenance) probePlanDigest() string {
 		provenance.environmentID.String(),
 		fmt.Sprintf("%d", provenance.environmentRevision),
 		provenance.environmentDigest.String(),
+		string(provenance.destinationKind),
 		provenance.routeID.String(),
 		fmt.Sprintf("%d", provenance.routeRevision),
 	}, "\x00")))
 	return hex.EncodeToString(digest[:])
 }
 
-// NewProbeTarget binds a provider network identity to one frozen Environment
-// and Route. TargetRef remains the caller's stable target reference while the
+// NewProbeTarget binds a network identity to one frozen Environment
+// Destination. TargetRef remains the caller's stable target reference while the
 // explicit plan revision and digest prevent distinct frozen plans from
 // coalescing in Offline Hold.
 func NewProbeTarget(
@@ -304,6 +355,15 @@ func NewWirePresentationEvidence(
 	profile wireprofile.CompiledUpstreamWireProfile,
 	clientProtocol wireprofile.ApplicationProtocol,
 ) WirePresentationEvidence {
+	variant, _ := profile.Variant(clientProtocol)
+	return newWirePresentationEvidence(profile, clientProtocol, variant)
+}
+
+func newWirePresentationEvidence(
+	profile wireprofile.CompiledUpstreamWireProfile,
+	clientProtocol wireprofile.ApplicationProtocol,
+	variant wireprofile.CompiledUpstreamWireVariant,
+) WirePresentationEvidence {
 	evidence := WirePresentationEvidence{
 		RequestedRef:   profile.Ref().String(),
 		Revision:       profile.Revision(),
@@ -311,8 +371,7 @@ func NewWirePresentationEvidence(
 		Product:        profile.Product(),
 		ClientProtocol: clientProtocol,
 	}
-	variant, available := profile.Variant(clientProtocol)
-	if !available {
+	if !variant.Protocol().Valid() {
 		return evidence
 	}
 	evidence.EffectiveRef = profile.Ref().String()
@@ -467,9 +526,22 @@ func NewRequest(options RequestOptions) (Request, error) {
 			"upstream presentation does not support the client HTTP protocol",
 		)
 	}
+	if options.Target.origin.Transport() != originidentity.ProviderTransportStrictTLS &&
+		options.ClientProtocol == wireprofile.ApplicationProtocolHTTP2 &&
+		options.WireProfile.Mode() == wireprofile.UpstreamWireModeFollowClient {
+		var fallbackAvailable bool
+		wireVariant, fallbackAvailable = options.WireProfile.Variant(
+			wireprofile.ApplicationProtocolHTTP1,
+		)
+		if !fallbackAvailable {
+			return Request{}, errors.New(
+				"cleartext provider has no HTTP/1 presentation",
+			)
+		}
+	}
 	requestedTransport := wireVariant.TransportFingerprintPlan().Requested()
 	expectedTransport := wireprofile.HTTPTransportHTTP1
-	if options.ClientProtocol == wireprofile.ApplicationProtocolHTTP2 {
+	if wireVariant.Protocol() == wireprofile.ApplicationProtocolHTTP2 {
 		expectedTransport = wireprofile.HTTPTransportHTTP2
 	}
 	if options.Target.origin.Transport() != originidentity.ProviderTransportStrictTLS &&
@@ -571,9 +643,10 @@ func (request Request) AuthDriverRef() providerauth.DriverRef {
 }
 
 func (request Request) WirePresentationEvidence() WirePresentationEvidence {
-	return NewWirePresentationEvidence(
+	return newWirePresentationEvidence(
 		request.wireProfile,
 		request.clientProtocol,
+		request.wireVariant,
 	)
 }
 

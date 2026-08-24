@@ -56,6 +56,8 @@ const (
 	blindTunnelFailureClass     = "tunnel_failed"
 )
 
+var ErrProxyStopping = errors.New("loopback proxy is stopping")
+
 type ReasonCode string
 
 const (
@@ -97,7 +99,6 @@ type CaptureAssignmentAuthority interface {
 		captureidentity.Reference,
 		string,
 		originidentity.ClientOrigin,
-		captureassignment.ConnectionCloseHandle,
 	) (*captureassignment.ConnectionLease, error)
 	BeginRequest(
 		context.Context,
@@ -493,9 +494,8 @@ func (handler *Handler) ServeHTTP(
 		writeReason(writer, http.StatusBadRequest, ReasonConnectAuthorityInvalid, "")
 		return
 	}
-	closeHandle := &deferredConnectionCloseHandle{}
 	connectionLease, err := handler.assignments.RegisterConnection(
-		request.Context(), capture, audit.ID(), origin, closeHandle,
+		request.Context(), capture, audit.ID(), origin,
 	)
 	if err != nil {
 		if handler.denyConnection(request.Context(), audit, source, ReasonCaptureEnvironmentUnavailable) != nil {
@@ -538,7 +538,6 @@ func (handler *Handler) ServeHTTP(
 			host,
 			port,
 			snapshot,
-			closeHandle,
 		)
 		return
 	}
@@ -592,11 +591,6 @@ func (handler *Handler) ServeHTTP(
 		terminalEvidence.Outcome = connectionevent.OutcomeCanceled
 		terminalEvidence.ErrorClass = string(ReasonProxyStopping)
 		_ = counted.Close()
-		return
-	}
-	if err := closeHandle.Bind(counted); err != nil {
-		terminalEvidence.Outcome = connectionevent.OutcomeCanceled
-		terminalEvidence.ErrorClass = string(ReasonEnvironmentChanged)
 		return
 	}
 	defer counted.Close()
@@ -2112,7 +2106,6 @@ func (handler *Handler) serveBlindTunnel(
 	host string,
 	port uint16,
 	snapshot environment.EnvironmentSnapshot,
-	closeHandle *deferredConnectionCloseHandle,
 ) bool {
 	if handler.blindTunnels == nil {
 		if handler.denyConnection(
@@ -2246,13 +2239,6 @@ func (handler *Handler) serveBlindTunnel(
 		return true
 	}
 	if !handler.attachConnection(active, client) {
-		egressOutcome, connectionTerminal.Outcome, egressErrorClass =
-			blindTunnelTerminal(context.Canceled)
-		connectionTerminal.ErrorClass = egressErrorClass
-		_ = client.Close()
-		return true
-	}
-	if closeHandle == nil || closeHandle.Bind(client) != nil {
 		egressOutcome, connectionTerminal.Outcome, egressErrorClass =
 			blindTunnelTerminal(context.Canceled)
 		connectionTerminal.ErrorClass = egressErrorClass

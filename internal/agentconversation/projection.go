@@ -124,25 +124,50 @@ func ClientIdentityFromProtocolEvidence(
 		!validText(providerResponseID, true) {
 		return ClientIdentity{}, false
 	}
-	fields := make(map[string]string, 3)
-	protocolIDs := make([]ClientEvidenceValue, 0, 3)
+	fields := make(map[string]string, 6)
+	protocolIDs := make([]ClientEvidenceValue, 0, 6)
+	client := ""
+	assignClient := func(value string) bool {
+		if client != "" && client != value {
+			return false
+		}
+		client = value
+		return true
+	}
 	for _, value := range values {
 		switch value.Name {
 		case "claude.agent_id", "claude.parent_agent_id", "claude.session_id":
-			fields[value.Name] = value.Value
-			protocolIDs = append(protocolIDs, ClientEvidenceValue{
-				Name: value.Name, Value: value.Value,
-			})
+			if !assignClient("claude") {
+				return ClientIdentity{}, false
+			}
+		case "openai_responses.session_id", "openai_responses.thread_id",
+			"openai_responses.turn_id", "openai_responses.previous_response_id":
+			if !assignClient("codex") {
+				return ClientIdentity{}, false
+			}
+		default:
+			continue
 		}
+		if previous, present := fields[value.Name]; present && previous != value.Value {
+			return ClientIdentity{}, false
+		}
+		fields[value.Name] = value.Value
+		protocolIDs = append(protocolIDs, ClientEvidenceValue{
+			Name: value.Name, Value: value.Value,
+		})
 	}
 	sessionID := fields["claude.session_id"]
+	if client == "codex" {
+		sessionID = fields["openai_responses.session_id"]
+	}
 	actorID := fields["claude.agent_id"]
 	parentID := fields["claude.parent_agent_id"]
-	if sessionID == "" || (parentID != "" && actorID == "") {
+	if client == "" || sessionID == "" ||
+		(client == "claude" && parentID != "" && actorID == "") {
 		return ClientIdentity{}, false
 	}
 	identity := ClientIdentity{
-		Client: "claude", SessionID: sessionID, SessionResumable: true,
+		Client: client, SessionID: sessionID, SessionResumable: true,
 		ActorID: actorID, ActorIsSubagent: parentID != "",
 		ProviderResponseID: providerResponseID,
 		Source:             ClientIdentitySourceProtocolEvidence,
@@ -150,7 +175,7 @@ func ClientIdentityFromProtocolEvidence(
 		ObservedAt:         observedAt.UTC().Truncate(time.Millisecond),
 		ProtocolIDs:        protocolIDs,
 	}
-	if providerResponseID != "" {
+	if client == "claude" && providerResponseID != "" {
 		identity.ProviderMessageID = providerResponseID
 	}
 	if identity.Validate() != nil {
@@ -403,6 +428,7 @@ type Evidence string
 const (
 	EvidencePending                Evidence = "pending"
 	EvidenceCaptureRun             Evidence = "capture_run"
+	EvidenceExplicitSession        Evidence = "explicit_session"
 	EvidenceExplicitActor          Evidence = "explicit_actor"
 	EvidenceClientAssertedSubagent Evidence = "client_asserted_subagent"
 	EvidenceAmbiguousActor         Evidence = "ambiguous_actor"
@@ -410,8 +436,8 @@ const (
 	EvidenceExchangeBoundary       Evidence = "exchange_boundary"
 )
 
-// Ref is structural metadata, not a second runtime authority. ProjectionID is
-// stable inside the enclosing Capture authority; Actor is retained only when
+// Ref is structural metadata, not a second runtime authority. A native Client
+// Session projection is stable across Captures; Actor is retained only when
 // the client protocol explicitly supplied it.
 type Ref struct {
 	ProjectionID string   `json:"projectionId"`
@@ -453,7 +479,8 @@ func (ref Ref) Validate() error {
 			return errors.New("pending Agent Conversation evidence is invalid")
 		}
 	case KindMain:
-		if ref.Evidence != EvidenceCaptureRun || ref.Actor != "" {
+		if (ref.Evidence != EvidenceCaptureRun &&
+			ref.Evidence != EvidenceExplicitSession) || ref.Actor != "" {
 			return errors.New("main Agent Conversation evidence is invalid")
 		}
 	case KindAgent:
@@ -518,17 +545,17 @@ func Project(input ProjectionInput) (Ref, error) {
 			return Ref{}, err
 		}
 		identity := *input.ClientIdentity
+		scope := identityProjectionScope(identity)
 		if identity.ActorID != "" {
-			digest := sha256.Sum256([]byte(identity.ActorID))
 			displayName := identity.ActorLabel
 			if displayName == "" {
 				displayName = actorLeaf(identity.ActorID)
 			}
 			return checked(Ref{
-				ProjectionID: fmt.Sprintf(
-					"capture_run:%s:agent:%s",
+				ProjectionID: actorProjectionID(
 					input.CaptureRunID,
-					base64.RawURLEncoding.EncodeToString(digest[:]),
+					scope,
+					identity.ActorID,
 				),
 				DisplayName: displayName,
 				Kind:        KindAgent,
@@ -536,11 +563,15 @@ func Project(input ProjectionInput) (Ref, error) {
 				Actor:       identity.ActorID,
 			})
 		}
+		projectionID, evidence := mainProjectionID(
+			input.CaptureRunID,
+			scope,
+		)
 		return checked(Ref{
-			ProjectionID: "capture_run:" + input.CaptureRunID + ":main",
+			ProjectionID: projectionID,
 			DisplayName:  input.SourceDisplayName,
 			Kind:         KindMain,
-			Evidence:     EvidenceCaptureRun,
+			Evidence:     evidence,
 		})
 	}
 	if input.Request == nil {
@@ -550,13 +581,13 @@ func Project(input ProjectionInput) (Ref, error) {
 			Evidence:     EvidenceUndecodedExchange,
 		})
 	}
+	scope, _ := protocolProjectionScope(input.Request.ProtocolEvidence)
 	if actor := protocolActor(input.Request.ProtocolEvidence); actor != "" {
-		digest := sha256.Sum256([]byte(actor))
 		return checked(Ref{
-			ProjectionID: fmt.Sprintf(
-				"capture_run:%s:agent:%s",
+			ProjectionID: actorProjectionID(
 				input.CaptureRunID,
-				base64.RawURLEncoding.EncodeToString(digest[:]),
+				scope,
+				actor,
 			),
 			DisplayName: actorLeaf(actor),
 			Kind:        KindAgent,
@@ -566,12 +597,11 @@ func Project(input ProjectionInput) (Ref, error) {
 	}
 	actor, ambiguous := explicitCurrentActor(*input.Request, input.Response)
 	if actor != "" && !ambiguous {
-		digest := sha256.Sum256([]byte(actor))
 		return checked(Ref{
-			ProjectionID: fmt.Sprintf(
-				"capture_run:%s:agent:%s",
+			ProjectionID: actorProjectionID(
 				input.CaptureRunID,
-				base64.RawURLEncoding.EncodeToString(digest[:]),
+				scope,
+				actor,
 			),
 			DisplayName: actorLeaf(actor),
 			Kind:        KindAgent,
@@ -593,12 +623,115 @@ func Project(input ProjectionInput) (Ref, error) {
 			Evidence:     EvidenceAmbiguousActor,
 		})
 	}
+	projectionID, evidence := mainProjectionID(input.CaptureRunID, scope)
 	return checked(Ref{
-		ProjectionID: "capture_run:" + input.CaptureRunID + ":main",
+		ProjectionID: projectionID,
 		DisplayName:  input.SourceDisplayName,
 		Kind:         KindMain,
-		Evidence:     EvidenceCaptureRun,
+		Evidence:     evidence,
 	})
+}
+
+type projectionScope struct {
+	client    string
+	sessionID string
+	threadID  string
+}
+
+func protocolProjectionScope(
+	values []protocolcore.ProtocolEvidenceValue,
+) (projectionScope, bool) {
+	if protocolcore.ValidateProtocolEvidence(values) != nil {
+		return projectionScope{}, false
+	}
+	var scope projectionScope
+	assign := func(target *string, value string) bool {
+		if *target != "" && *target != value {
+			return false
+		}
+		*target = value
+		return true
+	}
+	for _, value := range values {
+		valueClient := ""
+		switch value.Name {
+		case "claude.session_id":
+			valueClient = "claude"
+			if !assign(&scope.sessionID, value.Value) {
+				return projectionScope{}, false
+			}
+		case "openai_responses.session_id", "codex.session_id":
+			valueClient = "codex"
+			if !assign(&scope.sessionID, value.Value) {
+				return projectionScope{}, false
+			}
+		case "openai_responses.thread_id", "codex.thread_id":
+			valueClient = "codex"
+			if !assign(&scope.threadID, value.Value) {
+				return projectionScope{}, false
+			}
+		default:
+			continue
+		}
+		if scope.client != "" && scope.client != valueClient {
+			return projectionScope{}, false
+		}
+		scope.client = valueClient
+	}
+	if scope.sessionID == "" {
+		return projectionScope{}, false
+	}
+	return scope, true
+}
+
+func identityProjectionScope(identity ClientIdentity) projectionScope {
+	scope := projectionScope{client: identity.Client, sessionID: identity.SessionID}
+	for _, value := range identity.ProtocolIDs {
+		if identity.Client != "codex" ||
+			(value.Name != "openai_responses.thread_id" &&
+				value.Name != "codex.thread_id") {
+			continue
+		}
+		if scope.threadID == "" || scope.threadID == value.Value {
+			scope.threadID = value.Value
+		}
+	}
+	return scope
+}
+
+func mainProjectionID(
+	captureRunID string,
+	scope projectionScope,
+) (string, Evidence) {
+	if scope.sessionID == "" {
+		return "capture_run:" + captureRunID + ":main", EvidenceCaptureRun
+	}
+	projectionID := sessionProjectionPrefix(scope.client, scope.sessionID)
+	if scope.threadID != "" {
+		projectionID += ":thread:" + projectionDigest(scope.threadID)
+	}
+	return projectionID + ":main", EvidenceExplicitSession
+}
+
+func actorProjectionID(
+	captureRunID string,
+	scope projectionScope,
+	actorID string,
+) string {
+	prefix := "capture_run:" + captureRunID
+	if scope.sessionID != "" {
+		prefix = sessionProjectionPrefix(scope.client, scope.sessionID)
+	}
+	return prefix + ":agent:" + projectionDigest(actorID)
+}
+
+func sessionProjectionPrefix(client, sessionID string) string {
+	return "client_session:" + client + ":" + projectionDigest(sessionID)
+}
+
+func projectionDigest(value string) string {
+	digest := sha256.Sum256([]byte(value))
+	return base64.RawURLEncoding.EncodeToString(digest[:])
 }
 
 func protocolActor(values []protocolcore.ProtocolEvidenceValue) string {

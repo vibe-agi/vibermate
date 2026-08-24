@@ -58,16 +58,18 @@ func TestPurposeAndAuthorityMustAgree(t *testing.T) {
 	t.Parallel()
 
 	expected := map[egressaudit.EgressPurpose]egressaudit.PolicyAuthorityKind{
-		egressaudit.PurposeProviderAttempt:     egressaudit.AuthorityEnvironment,
-		egressaudit.PurposeRouteOperation:      egressaudit.AuthorityEnvironment,
-		egressaudit.PurposeOriginalOrigin:      egressaudit.AuthorityNetwork,
-		egressaudit.PurposeAgentProbe:          egressaudit.AuthorityNetwork,
-		egressaudit.PurposeBlindTunnel:         egressaudit.AuthorityNetwork,
-		egressaudit.PurposeAuxiliaryLLM:        egressaudit.AuthorityRuntime,
-		egressaudit.PurposeLanguageTransform:   egressaudit.AuthorityRuntime,
-		egressaudit.PurposePluginCatalogSync:   egressaudit.AuthorityRuntime,
-		egressaudit.PurposePluginArtifactFetch: egressaudit.AuthorityRuntime,
-		egressaudit.PurposeUpdate:              egressaudit.AuthorityRuntime,
+		egressaudit.PurposeProviderAttempt:        egressaudit.AuthorityEnvironment,
+		egressaudit.PurposeUpstreamModelDiscovery: egressaudit.AuthorityRuntime,
+		egressaudit.PurposeModelMetadataDirectory: egressaudit.AuthorityRuntime,
+		egressaudit.PurposeRouteOperation:         egressaudit.AuthorityEnvironment,
+		egressaudit.PurposeOriginalOrigin:         egressaudit.AuthorityNetwork,
+		egressaudit.PurposeAgentProbe:             egressaudit.AuthorityNetwork,
+		egressaudit.PurposeBlindTunnel:            egressaudit.AuthorityNetwork,
+		egressaudit.PurposeAuxiliaryLLM:           egressaudit.AuthorityRuntime,
+		egressaudit.PurposeLanguageTransform:      egressaudit.AuthorityRuntime,
+		egressaudit.PurposePluginCatalogSync:      egressaudit.AuthorityRuntime,
+		egressaudit.PurposePluginArtifactFetch:    egressaudit.AuthorityRuntime,
+		egressaudit.PurposeUpdate:                 egressaudit.AuthorityRuntime,
 	}
 	seen := make(map[egressaudit.EgressPurpose]struct{}, len(expected))
 	for _, purpose := range egressaudit.Purposes() {

@@ -40,6 +40,7 @@ type anthropicMessageWire struct {
 type anthropicTextBlockWire struct {
 	Type         string          `json:"type"`
 	Text         string          `json:"text"`
+	Citations    json.RawMessage `json:"citations,omitempty"`
 	CacheControl json.RawMessage `json:"cache_control,omitempty"`
 }
 
@@ -776,6 +777,22 @@ func (codec *Codec) decodeMessage(
 					protocolcore.NewFailure(protocolcore.ReasonInvalidClientRequest, path+".text", err)
 			}
 			blocks = append(blocks, block)
+			if rawPresent(blockWire.Citations) {
+				if err := validateAnthropicCitations(blockWire.Citations); err != nil {
+					return protocolcore.Message{}, report,
+						protocolcore.NewFailure(
+							protocolcore.ReasonInvalidClientRequest,
+							path+".citations",
+							err,
+						)
+				}
+				report = report.Merge(protocolcore.NewTranslationReport(
+					protocolcore.TranslationNotice{
+						Code: protocolcore.NoticeCitationsNotForwarded,
+						Path: path + ".citations",
+					},
+				))
+			}
 			if rawPresent(blockWire.CacheControl) {
 				report = report.Merge(cacheNotice(path + ".cache_control"))
 			}
@@ -928,6 +945,35 @@ func (codec *Codec) decodeMessage(
 		)
 	}
 	return message.Clone(), report, nil
+}
+
+func validateAnthropicCitations(raw json.RawMessage) error {
+	if bytes.Equal(bytes.TrimSpace(raw), []byte("null")) {
+		return nil
+	}
+	var citations []json.RawMessage
+	if err := json.Unmarshal(raw, &citations); err != nil || citations == nil ||
+		len(citations) > 1024 {
+		return errors.New("citations are invalid")
+	}
+	for _, rawCitation := range citations {
+		var citation map[string]json.RawMessage
+		if len(rawCitation) > protocolcore.MaxTextBytes ||
+			json.Unmarshal(rawCitation, &citation) != nil || citation == nil {
+			return errors.New("citation is invalid")
+		}
+		var kind string
+		if json.Unmarshal(citation["type"], &kind) != nil || kind == "" ||
+			len(kind) > 128 || !utf8.ValidString(kind) || strings.TrimSpace(kind) != kind {
+			return errors.New("citation type is invalid")
+		}
+		for _, character := range kind {
+			if unicode.IsControl(character) {
+				return errors.New("citation type is invalid")
+			}
+		}
+	}
+	return nil
 }
 
 func validateAnthropicToolCaller(raw json.RawMessage) error {

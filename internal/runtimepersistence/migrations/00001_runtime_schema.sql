@@ -158,7 +158,7 @@ CHECK(kind IN('environment.applied',
   CHECK(conversation_kind IN('', 'pending_exchange', 'main', 'agent',
   'isolated_subagent', 'isolated_exchange')),
   conversation_evidence TEXT NOT NULL DEFAULT ''
-  CHECK(conversation_evidence IN('', 'pending', 'capture_run', 'explicit_actor',
+  CHECK(conversation_evidence IN('', 'pending', 'capture_run', 'explicit_session', 'explicit_actor',
   'client_asserted_subagent', 'ambiguous_actor', 'undecoded_exchange',
   'exchange_boundary')),
   conversation_actor TEXT NOT NULL DEFAULT ''
@@ -185,9 +185,13 @@ protocol_plan_id = '' AND protocol_plan_revision = 0 AND route_id = '' AND
 route_revision = 0) OR
 (environment_id <> '' AND client_endpoint_id <> '' AND
 client_endpoint_revision > 0 AND protocol_plan_id <> '' AND
-protocol_plan_revision > 0 AND route_id <> '' AND route_revision > 0)),
+protocol_plan_revision > 0 AND
+((route_id = '' AND route_revision = 0) OR
+(route_id <> '' AND route_revision > 0)))),
   CHECK((account_id = '' AND account_revision = 0 AND credential_epoch = 0) OR
-(account_id <> '' AND account_revision > 0 AND credential_epoch > 0)),
+(account_id <> '' AND account_revision > 0 AND credential_epoch > 0 AND
+(kind = 'credential.secret_replaced' OR
+(kind = 'exchange.completed' AND route_id <> '' AND route_revision > 0)))),
   CHECK(kind NOT IN('exchange.started', 'exchange.completed') OR
   client_endpoint_id <> ''),
   CHECK((kind IN('exchange.started', 'exchange.completed') AND
@@ -717,6 +721,8 @@ CREATE TABLE runtime_egress_attempts(
   CHECK(length(CAST(connection_id AS BLOB)) <= 512),
   purpose TEXT NOT NULL
   CHECK(purpose IN('provider_attempt',
+'upstream_model_discovery',
+'model_metadata_directory',
 'route_operation',
 'original_origin',
 'agent_probe',
@@ -1062,9 +1068,9 @@ CREATE TABLE capture_environment_assignments(
   environment_id TEXT NOT NULL
   CHECK(length(CAST(environment_id AS BLOB)) BETWEEN 1 AND 128),
   assignment_revision INTEGER NOT NULL
-  CHECK(assignment_revision BETWEEN 1 AND 9223372036854775807),
+  CHECK(assignment_revision = 1),
   source TEXT NOT NULL
-  CHECK(source IN('launch', 'manual_create', 'workspace_default', 'operator_switch', 'system_transparent')),
+  CHECK(source IN('launch', 'manual_create', 'system_transparent')),
   launch_environment_id TEXT NOT NULL
   CHECK(length(CAST(launch_environment_id AS BLOB)) BETWEEN 1 AND 128),
   launch_environment_revision INTEGER NOT NULL
@@ -1088,25 +1094,6 @@ ON capture_environment_assignments(
   capture_kind,
   capture_id
 );
-
--- This optional preference selects the initial Environment for future managed
--- runs in one installation-scoped workspace. It grants no network, Root, or
--- credential authority; Capture assignment still freezes those at launch.
-CREATE TABLE workspace_environment_defaults(
-  machine_id TEXT NOT NULL
-  CHECK(length(CAST(machine_id AS BLOB)) BETWEEN 1 AND 128),
-  workspace_id TEXT NOT NULL
-  CHECK(length(CAST(workspace_id AS BLOB)) BETWEEN 1 AND 128),
-  environment_id TEXT NOT NULL
-  CHECK(length(CAST(environment_id AS BLOB)) BETWEEN 1 AND 128
-    AND environment_id <> 'system_transparent'),
-  revision INTEGER NOT NULL
-  CHECK(revision BETWEEN 1 AND 9223372036854775807),
-  updated_at_unix_ms INTEGER NOT NULL,
-  PRIMARY KEY(machine_id, workspace_id)
-) STRICT;
-CREATE INDEX workspace_environment_defaults_environment
-ON workspace_environment_defaults(environment_id, machine_id, workspace_id);
 
 INSERT INTO runtime_metadata (
   singleton,

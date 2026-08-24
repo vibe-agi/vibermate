@@ -7,6 +7,18 @@ import 'provider_origin.dart';
 
 typedef JsonObject = Map<String, Object?>;
 
+const upstreamBackendProtocols = <String>[
+  'anthropic_messages',
+  'openai_responses',
+  'openai_chat',
+];
+
+bool validUpstreamBackendProtocols(List<String> values) =>
+    values.isNotEmpty &&
+    values.length <= upstreamBackendProtocols.length &&
+    values.toSet().length == values.length &&
+    values.every(upstreamBackendProtocols.contains);
+
 final class ControlContractException implements Exception {
   const ControlContractException(this.message);
 
@@ -14,6 +26,553 @@ final class ControlContractException implements Exception {
 
   @override
   String toString() => 'Control contract error: $message';
+}
+
+/// The fixed remote-access contract of one Runtime Server.
+///
+/// There is no per-run approval mode: a Runtime User logs in once and reuses
+/// the revocable Login Session until logout, disablement, or expiry.
+final class RuntimeServerAccess {
+  const RuntimeServerAccess({
+    required this.transport,
+    required this.authentication,
+    required this.sessionPolicy,
+  });
+
+  factory RuntimeServerAccess.fromJson(Object? json, String path) {
+    final value = requireObject(json, path);
+    requireFields(
+      value,
+      path,
+      required: const {
+        'schema',
+        'transport',
+        'authentication',
+        'sessionPolicy',
+      },
+    );
+    if (requireString(value, 'schema', path) != 'vibermate-server-access-v1') {
+      throw ControlContractException('$path schema is unsupported');
+    }
+    final transport = requireString(value, 'transport', path);
+    final authentication = requireString(value, 'authentication', path);
+    final sessionPolicy = requireString(value, 'sessionPolicy', path);
+    if (!const {'http', 'https'}.contains(transport) ||
+        authentication != 'runtime_user_password' ||
+        sessionPolicy != 'reusable_until_logout_disable_or_expiry') {
+      throw ControlContractException('$path access contract is unsupported');
+    }
+    return RuntimeServerAccess(
+      transport: transport,
+      authentication: authentication,
+      sessionPolicy: sessionPolicy,
+    );
+  }
+
+  final String transport;
+  final String authentication;
+  final String sessionPolicy;
+
+  bool get encrypted => transport == 'https';
+
+  bool get requiresRuntimeUserLogin =>
+      authentication == 'runtime_user_password';
+}
+
+final class RuntimeUser {
+  const RuntimeUser({
+    required this.id,
+    required this.username,
+    required this.state,
+    required this.createdAt,
+    required this.updatedAt,
+  });
+
+  factory RuntimeUser.fromJson(Object? json, String path) {
+    final value = requireObject(json, path);
+    requireFields(
+      value,
+      path,
+      required: const {'id', 'username', 'state', 'createdAt', 'updatedAt'},
+    );
+    final state = requireString(value, 'state', path);
+    if (!const {'active', 'disabled'}.contains(state)) {
+      throw ControlContractException('$path.state is unsupported');
+    }
+    final createdAt = requireTimestamp(value, 'createdAt', path);
+    final updatedAt = requireTimestamp(value, 'updatedAt', path);
+    if (updatedAt.isBefore(createdAt)) {
+      throw ControlContractException('$path timestamps are inconsistent');
+    }
+    return RuntimeUser(
+      id: requireString(value, 'id', path),
+      username: requireString(value, 'username', path),
+      state: state,
+      createdAt: createdAt,
+      updatedAt: updatedAt,
+    );
+  }
+
+  final String id;
+  final String username;
+  final String state;
+  final DateTime createdAt;
+  final DateTime updatedAt;
+
+  bool get active => state == 'active';
+}
+
+final class RuntimeUsageReport {
+  const RuntimeUsageReport({
+    required this.generatedAt,
+    required this.truncated,
+    required this.users,
+  });
+
+  factory RuntimeUsageReport.fromJson(Object? json, String path) {
+    final value = requireObject(json, path);
+    requireFields(
+      value,
+      path,
+      required: const {'schema', 'generatedAt', 'truncated', 'users'},
+    );
+    if (requireString(value, 'schema', path) !=
+        'vibermate-runtime-usage-report-v1') {
+      throw ControlContractException('$path schema is unsupported');
+    }
+    final users = requireList(value['users'], '$path.users').indexed
+        .map(
+          (entry) =>
+              RuntimeUserUsage.fromJson(entry.$2, '$path.users[${entry.$1}]'),
+        )
+        .toList(growable: false);
+    if (users.length > 10000) {
+      throw ControlContractException('$path contains too many users');
+    }
+    return RuntimeUsageReport(
+      generatedAt: requireTimestamp(value, 'generatedAt', path),
+      truncated: requireBoolean(value, 'truncated', path),
+      users: users,
+    );
+  }
+
+  final DateTime generatedAt;
+  final bool truncated;
+  final List<RuntimeUserUsage> users;
+}
+
+final class RuntimeUserUsage {
+  const RuntimeUserUsage({
+    required this.userId,
+    required this.username,
+    required this.state,
+    required this.captureRuns,
+    required this.activeRuns,
+    required this.turns,
+    required this.succeeded,
+    required this.failed,
+    required this.canceled,
+    required this.contentUnavailableTurns,
+    required this.modelUnavailableTurns,
+    required this.tokens,
+    required this.latestContext,
+    required this.lastActivityAt,
+    required this.models,
+    required this.contexts,
+    required this.agentSessions,
+  });
+
+  factory RuntimeUserUsage.fromJson(Object? json, String path) {
+    final value = requireObject(json, path);
+    requireFields(
+      value,
+      path,
+      required: const {
+        'userId',
+        'username',
+        'state',
+        'captureRuns',
+        'activeRuns',
+        'turns',
+        'succeeded',
+        'failed',
+        'canceled',
+        'contentUnavailableTurns',
+        'modelUnavailableTurns',
+        'tokens',
+        'models',
+        'contexts',
+        'agentSessions',
+      },
+      optional: const {'latestContext', 'lastActivityAt'},
+    );
+    final state = requireString(value, 'state', path);
+    if (!const {'active', 'disabled'}.contains(state)) {
+      throw ControlContractException('$path.state is unsupported');
+    }
+    final turns = requireInteger(value, 'turns', path);
+    final succeeded = requireInteger(value, 'succeeded', path);
+    final failed = requireInteger(value, 'failed', path);
+    final canceled = requireInteger(value, 'canceled', path);
+    if (succeeded + failed + canceled > turns) {
+      throw ControlContractException('$path terminal counters exceed turns');
+    }
+    final latest = value['latestContext'];
+    return RuntimeUserUsage(
+      userId: requireString(value, 'userId', path),
+      username: requireString(value, 'username', path),
+      state: state,
+      captureRuns: requireInteger(value, 'captureRuns', path),
+      activeRuns: requireInteger(value, 'activeRuns', path),
+      turns: turns,
+      succeeded: succeeded,
+      failed: failed,
+      canceled: canceled,
+      contentUnavailableTurns: requireInteger(
+        value,
+        'contentUnavailableTurns',
+        path,
+      ),
+      modelUnavailableTurns: requireInteger(
+        value,
+        'modelUnavailableTurns',
+        path,
+      ),
+      tokens: RuntimeTokenUsage.fromJson(value['tokens'], '$path.tokens'),
+      latestContext: latest == null
+          ? null
+          : RuntimeUsageContextRef.fromJson(latest, '$path.latestContext'),
+      lastActivityAt: optionalTimestamp(value, 'lastActivityAt', path),
+      models: _runtimeUsageList(
+        value['models'],
+        '$path.models',
+        RuntimeModelUsage.fromJson,
+      ),
+      contexts: _runtimeUsageList(
+        value['contexts'],
+        '$path.contexts',
+        RuntimeContextUsage.fromJson,
+      ),
+      agentSessions: _runtimeUsageList(
+        value['agentSessions'],
+        '$path.agentSessions',
+        RuntimeAgentSessionUsage.fromJson,
+      ),
+    );
+  }
+
+  final String userId;
+  final String username;
+  final String state;
+  final int captureRuns;
+  final int activeRuns;
+  final int turns;
+  final int succeeded;
+  final int failed;
+  final int canceled;
+  final int contentUnavailableTurns;
+  final int modelUnavailableTurns;
+  final RuntimeTokenUsage tokens;
+  final RuntimeUsageContextRef? latestContext;
+  final DateTime? lastActivityAt;
+  final List<RuntimeModelUsage> models;
+  final List<RuntimeContextUsage> contexts;
+  final List<RuntimeAgentSessionUsage> agentSessions;
+
+  bool get active => state == 'active';
+  bool get partial => contentUnavailableTurns > 0 || modelUnavailableTurns > 0;
+}
+
+final class RuntimeUsageContextRef {
+  const RuntimeUsageContextRef({
+    required this.loginSessionId,
+    required this.deviceName,
+    required this.machineId,
+    required this.workspaceId,
+    required this.workspaceLabel,
+    required this.observedAt,
+  });
+
+  factory RuntimeUsageContextRef.fromJson(Object? json, String path) {
+    final value = requireObject(json, path);
+    requireFields(
+      value,
+      path,
+      required: const {
+        'loginSessionId',
+        'deviceName',
+        'machineId',
+        'observedAt',
+      },
+      optional: const {'workspaceId', 'workspaceLabel'},
+    );
+    return RuntimeUsageContextRef(
+      loginSessionId: requireString(value, 'loginSessionId', path),
+      deviceName: requireString(value, 'deviceName', path),
+      machineId: requireString(value, 'machineId', path),
+      workspaceId: optionalString(value, 'workspaceId', path),
+      workspaceLabel: optionalString(value, 'workspaceLabel', path),
+      observedAt: requireTimestamp(value, 'observedAt', path),
+    );
+  }
+
+  final String loginSessionId;
+  final String deviceName;
+  final String machineId;
+  final String? workspaceId;
+  final String? workspaceLabel;
+  final DateTime observedAt;
+}
+
+final class RuntimeContextUsage {
+  const RuntimeContextUsage({
+    required this.loginSessionId,
+    required this.deviceName,
+    required this.machineId,
+    required this.workspaceId,
+    required this.workspaceLabel,
+    required this.captureRuns,
+    required this.activeRuns,
+    required this.turns,
+    required this.succeeded,
+    required this.failed,
+    required this.canceled,
+    required this.tokens,
+    required this.lastActivityAt,
+  });
+
+  factory RuntimeContextUsage.fromJson(Object? json, String path) {
+    final value = requireObject(json, path);
+    requireFields(
+      value,
+      path,
+      required: const {
+        'loginSessionId',
+        'deviceName',
+        'machineId',
+        'captureRuns',
+        'activeRuns',
+        'turns',
+        'succeeded',
+        'failed',
+        'canceled',
+        'tokens',
+      },
+      optional: const {'workspaceId', 'workspaceLabel', 'lastActivityAt'},
+    );
+    return RuntimeContextUsage(
+      loginSessionId: requireString(value, 'loginSessionId', path),
+      deviceName: requireString(value, 'deviceName', path),
+      machineId: requireString(value, 'machineId', path),
+      workspaceId: optionalString(value, 'workspaceId', path),
+      workspaceLabel: optionalString(value, 'workspaceLabel', path),
+      captureRuns: requireInteger(value, 'captureRuns', path),
+      activeRuns: requireInteger(value, 'activeRuns', path),
+      turns: requireInteger(value, 'turns', path),
+      succeeded: requireInteger(value, 'succeeded', path),
+      failed: requireInteger(value, 'failed', path),
+      canceled: requireInteger(value, 'canceled', path),
+      tokens: RuntimeTokenUsage.fromJson(value['tokens'], '$path.tokens'),
+      lastActivityAt: optionalTimestamp(value, 'lastActivityAt', path),
+    );
+  }
+
+  final String loginSessionId;
+  final String deviceName;
+  final String machineId;
+  final String? workspaceId;
+  final String? workspaceLabel;
+  final int captureRuns;
+  final int activeRuns;
+  final int turns;
+  final int succeeded;
+  final int failed;
+  final int canceled;
+  final RuntimeTokenUsage tokens;
+  final DateTime? lastActivityAt;
+}
+
+final class RuntimeModelUsage {
+  const RuntimeModelUsage({
+    required this.requestedModel,
+    required this.upstreamModel,
+    required this.turns,
+    required this.succeeded,
+    required this.failed,
+    required this.canceled,
+    required this.tokens,
+  });
+
+  factory RuntimeModelUsage.fromJson(Object? json, String path) {
+    final value = requireObject(json, path);
+    requireFields(
+      value,
+      path,
+      required: const {
+        'requestedModel',
+        'upstreamModel',
+        'turns',
+        'succeeded',
+        'failed',
+        'canceled',
+        'tokens',
+      },
+    );
+    return RuntimeModelUsage(
+      requestedModel: requireString(value, 'requestedModel', path),
+      upstreamModel: requireString(value, 'upstreamModel', path),
+      turns: requireInteger(value, 'turns', path),
+      succeeded: requireInteger(value, 'succeeded', path),
+      failed: requireInteger(value, 'failed', path),
+      canceled: requireInteger(value, 'canceled', path),
+      tokens: RuntimeTokenUsage.fromJson(value['tokens'], '$path.tokens'),
+    );
+  }
+
+  final String requestedModel;
+  final String upstreamModel;
+  final int turns;
+  final int succeeded;
+  final int failed;
+  final int canceled;
+  final RuntimeTokenUsage tokens;
+}
+
+final class RuntimeAgentSessionUsage {
+  const RuntimeAgentSessionUsage({
+    required this.client,
+    required this.sessionId,
+    required this.captureRuns,
+    required this.turns,
+    required this.succeeded,
+    required this.failed,
+    required this.canceled,
+    required this.tokens,
+    required this.lastActivityAt,
+  });
+
+  factory RuntimeAgentSessionUsage.fromJson(Object? json, String path) {
+    final value = requireObject(json, path);
+    requireFields(
+      value,
+      path,
+      required: const {
+        'client',
+        'sessionId',
+        'captureRuns',
+        'turns',
+        'succeeded',
+        'failed',
+        'canceled',
+        'tokens',
+        'lastActivityAt',
+      },
+    );
+    return RuntimeAgentSessionUsage(
+      client: requireString(value, 'client', path),
+      sessionId: requireString(value, 'sessionId', path),
+      captureRuns: requireInteger(value, 'captureRuns', path),
+      turns: requireInteger(value, 'turns', path),
+      succeeded: requireInteger(value, 'succeeded', path),
+      failed: requireInteger(value, 'failed', path),
+      canceled: requireInteger(value, 'canceled', path),
+      tokens: RuntimeTokenUsage.fromJson(value['tokens'], '$path.tokens'),
+      lastActivityAt: requireTimestamp(value, 'lastActivityAt', path),
+    );
+  }
+
+  final String client;
+  final String sessionId;
+  final int captureRuns;
+  final int turns;
+  final int succeeded;
+  final int failed;
+  final int canceled;
+  final RuntimeTokenUsage tokens;
+  final DateTime lastActivityAt;
+}
+
+final class RuntimeTokenUsage {
+  const RuntimeTokenUsage({
+    required this.inputUncached,
+    required this.cacheWrite,
+    required this.cacheRead,
+    required this.output,
+    required this.reasoning,
+  });
+
+  factory RuntimeTokenUsage.fromJson(Object? json, String path) {
+    final value = requireObject(json, path);
+    requireFields(
+      value,
+      path,
+      required: const {
+        'inputUncached',
+        'cacheWrite',
+        'cacheRead',
+        'output',
+        'reasoning',
+      },
+    );
+    RuntimeTokenAggregate field(String key) =>
+        RuntimeTokenAggregate.fromJson(value[key], '$path.$key');
+    return RuntimeTokenUsage(
+      inputUncached: field('inputUncached'),
+      cacheWrite: field('cacheWrite'),
+      cacheRead: field('cacheRead'),
+      output: field('output'),
+      reasoning: field('reasoning'),
+    );
+  }
+
+  final RuntimeTokenAggregate inputUncached;
+  final RuntimeTokenAggregate cacheWrite;
+  final RuntimeTokenAggregate cacheRead;
+  final RuntimeTokenAggregate output;
+  final RuntimeTokenAggregate reasoning;
+}
+
+final class RuntimeTokenAggregate {
+  const RuntimeTokenAggregate({
+    required this.tokens,
+    required this.knownTurns,
+    required this.unknownTurns,
+  });
+
+  factory RuntimeTokenAggregate.fromJson(Object? json, String path) {
+    final value = requireObject(json, path);
+    requireFields(
+      value,
+      path,
+      required: const {'tokens', 'knownTurns', 'unknownTurns'},
+    );
+    return RuntimeTokenAggregate(
+      tokens: requireInteger(value, 'tokens', path),
+      knownTurns: requireInteger(value, 'knownTurns', path),
+      unknownTurns: requireInteger(value, 'unknownTurns', path),
+    );
+  }
+
+  final int tokens;
+  final int knownTurns;
+  final int unknownTurns;
+
+  bool get complete => unknownTurns == 0;
+  bool get observed => knownTurns > 0;
+}
+
+List<T> _runtimeUsageList<T>(
+  Object? json,
+  String path,
+  T Function(Object?, String) parse,
+) {
+  final items = requireList(json, path);
+  if (items.length > 100000) {
+    throw ControlContractException('$path is too large');
+  }
+  return items.indexed
+      .map((entry) => parse(entry.$2, '$path[${entry.$1}]'))
+      .toList(growable: false);
 }
 
 JsonObject requireObject(Object? value, String path) {
@@ -341,7 +900,10 @@ final class OfflineHoldSnapshot {
     final activeEgress = requireInteger(value, 'activeEgress', path);
     final queuedRequests = requireInteger(value, 'queuedRequests', path);
     final heldBytes = requireInteger(value, 'heldBytes', path);
-    if (heldBytes > 0x7fffffffffffffff || enteringActions > activeActions) {
+    // Keep the JSON number exact on both native Dart and JavaScript. Values
+    // above JS's safe-integer boundary cannot be displayed as trustworthy
+    // byte evidence even though the Go authority uses int64 internally.
+    if (heldBytes > 9007199254740991 || enteringActions > activeActions) {
       throw ControlContractException('$path counters are inconsistent');
     }
     final activeByKind = _countMap(value['activeByKind'], '$path.activeByKind');
@@ -511,7 +1073,7 @@ final class RuntimeStatus {
     }
     final host = requireString(runtime, 'host', 'status.runtime');
     final storage = requireString(runtime, 'storage', 'status.runtime');
-    if (host != 'desktop' ||
+    if (!const {'desktop', 'server'}.contains(host) ||
         !const {'healthy', 'unavailable'}.contains(storage)) {
       throw const ControlContractException('status runtime host is invalid');
     }
@@ -667,12 +1229,18 @@ final class UpstreamEndpoint {
         '$path.origin must be a canonical provider origin',
       );
     }
+    final backendProtocols = requireStringList(value, 'backendProtocols', path);
+    if (!validUpstreamBackendProtocols(backendProtocols)) {
+      throw ControlContractException(
+        '$path.backendProtocols must be a non-empty explicit protocol set',
+      );
+    }
     return UpstreamEndpoint(
       id: requireString(value, 'id', path),
       displayName: requireString(value, 'displayName', path),
       origin: origin,
       realmId: requireString(value, 'realmId', path),
-      backendProtocols: requireStringList(value, 'backendProtocols', path),
+      backendProtocols: List.unmodifiable(backendProtocols),
       capabilities: requireStringList(value, 'capabilities', path),
       accountKinds: requireStringList(value, 'accountKinds', path),
       state: requireString(value, 'state', path),
@@ -690,6 +1258,326 @@ final class UpstreamEndpoint {
   final String state;
   final int revision;
 }
+
+/// One opaque model ID advertised by a particular upstream Endpoint.
+///
+/// This is availability evidence, not a provider taxonomy. The ID is retained
+/// exactly as returned by `Endpoint + /v1/models`.
+final class UpstreamModel {
+  const UpstreamModel({
+    required this.id,
+    required this.displayName,
+    required this.ownedBy,
+    required this.verifiedAvailable,
+    required this.contextLimit,
+    required this.outputLimit,
+  });
+
+  factory UpstreamModel.fromJson(Object? json, String path) {
+    final value = requireObject(json, path);
+    requireFields(
+      value,
+      path,
+      required: const {
+        'id',
+        'displayName',
+        'ownedBy',
+        'verifiedAvailable',
+        'contextLimit',
+        'outputLimit',
+      },
+    );
+    final id = requireString(value, 'id', path);
+    final displayName = requireStringValue(value, 'displayName', path);
+    final ownedBy = requireStringValue(value, 'ownedBy', path);
+    if (!_validOpaqueModelId(id) ||
+        !_validOptionalCatalogText(displayName, maximumBytes: 512) ||
+        !_validOptionalCatalogText(ownedBy, maximumBytes: 512)) {
+      throw ControlContractException('$path Endpoint model is invalid');
+    }
+    return UpstreamModel(
+      id: id,
+      displayName: displayName,
+      ownedBy: ownedBy,
+      verifiedAvailable: requireBoolean(value, 'verifiedAvailable', path),
+      contextLimit: requireInteger(value, 'contextLimit', path, minimum: 0),
+      outputLimit: requireInteger(value, 'outputLimit', path, minimum: 0),
+    );
+  }
+
+  final String id;
+  final String displayName;
+  final String ownedBy;
+  final bool verifiedAvailable;
+  final int contextLimit;
+  final int outputLimit;
+}
+
+/// A point-in-time model catalog for exactly one upstream Endpoint.
+///
+/// Availability is proved live through one explicit Account belonging to the
+/// Endpoint. No metadata directory participates in this authority.
+final class UpstreamModelCatalog {
+  const UpstreamModelCatalog({
+    required this.endpointId,
+    required this.endpointRevision,
+    required this.accountId,
+    required this.accountRevision,
+    required this.credentialEpoch,
+    required this.observedAt,
+    required this.availabilitySource,
+    required this.models,
+  });
+
+  factory UpstreamModelCatalog.fromJson(Object? json, String path) {
+    final value = requireObject(json, path);
+    requireFields(
+      value,
+      path,
+      required: const {
+        'endpointId',
+        'endpointRevision',
+        'accountId',
+        'accountRevision',
+        'credentialEpoch',
+        'observedAt',
+        'availabilitySource',
+        'models',
+      },
+    );
+    final endpointId = _requireResourceId(value, 'endpointId', path);
+    final accountId = _requireResourceId(value, 'accountId', path);
+    final availabilitySource = requireString(value, 'availabilitySource', path);
+    final rawModels = requireList(value['models'], '$path.models');
+    if (availabilitySource != 'endpoint' || rawModels.length > 16384) {
+      throw ControlContractException('$path catalog authority is invalid');
+    }
+    final models = rawModels.indexed
+        .map(
+          (entry) =>
+              UpstreamModel.fromJson(entry.$2, '$path.models[${entry.$1}]'),
+        )
+        .toList(growable: false);
+    final verified = availabilitySource == 'endpoint';
+    if (models.map((model) => model.id).toSet().length != models.length ||
+        models.any((model) => model.verifiedAvailable != verified)) {
+      throw ControlContractException('$path model availability is invalid');
+    }
+    return UpstreamModelCatalog(
+      endpointId: endpointId,
+      endpointRevision: requireInteger(
+        value,
+        'endpointRevision',
+        path,
+        minimum: 1,
+      ),
+      accountId: accountId,
+      accountRevision: requireInteger(
+        value,
+        'accountRevision',
+        path,
+        minimum: 1,
+      ),
+      credentialEpoch: requireInteger(
+        value,
+        'credentialEpoch',
+        path,
+        minimum: 1,
+      ),
+      observedAt: requireTimestamp(value, 'observedAt', path),
+      availabilitySource: availabilitySource,
+      models: List.unmodifiable(models),
+    );
+  }
+
+  final String endpointId;
+  final int endpointRevision;
+  final String accountId;
+  final int accountRevision;
+  final int credentialEpoch;
+  final DateTime observedAt;
+  final String availabilitySource;
+  final List<UpstreamModel> models;
+
+  bool get verifiedFromEndpoint => availabilitySource == 'endpoint';
+}
+
+/// Descriptive metadata for a request-side model ID that an Agent may send.
+/// This never proves that an upstream Endpoint accepts the same identifier.
+final class ClientModel {
+  const ClientModel({
+    required this.id,
+    required this.canonicalId,
+    required this.displayName,
+    required this.description,
+    required this.family,
+    required this.reasoning,
+    required this.toolCalls,
+    required this.structuredOutput,
+    required this.attachments,
+    required this.openWeights,
+    required this.contextLimit,
+    required this.outputLimit,
+    required this.inputModalities,
+    required this.outputModalities,
+    required this.knowledgeCutoff,
+    required this.releaseDate,
+  });
+
+  factory ClientModel.fromJson(Object? json, String path) {
+    final value = requireObject(json, path);
+    requireFields(
+      value,
+      path,
+      required: const {
+        'id',
+        'canonicalId',
+        'displayName',
+        'description',
+        'family',
+        'reasoning',
+        'toolCalls',
+        'structuredOutput',
+        'attachments',
+        'openWeights',
+        'contextLimit',
+        'outputLimit',
+        'inputModalities',
+        'outputModalities',
+        'knowledgeCutoff',
+        'releaseDate',
+      },
+    );
+    final id = requireString(value, 'id', path);
+    final canonicalId = requireString(value, 'canonicalId', path);
+    final displayName = requireStringValue(value, 'displayName', path);
+    final description = requireStringValue(value, 'description', path);
+    final family = requireStringValue(value, 'family', path);
+    final knowledgeCutoff = requireStringValue(value, 'knowledgeCutoff', path);
+    final releaseDate = requireStringValue(value, 'releaseDate', path);
+    final inputs = requireStringList(value, 'inputModalities', path);
+    final outputs = requireStringList(value, 'outputModalities', path);
+    if (!_validCatalogText(id, maximumBytes: 256) ||
+        !_validCatalogText(canonicalId, maximumBytes: 512) ||
+        !_validOptionalCatalogText(displayName, maximumBytes: 512) ||
+        !_validOptionalCatalogText(description, maximumBytes: 8192) ||
+        !_validOptionalCatalogText(family, maximumBytes: 512) ||
+        !_validOptionalCatalogText(knowledgeCutoff, maximumBytes: 512) ||
+        !_validOptionalCatalogText(releaseDate, maximumBytes: 512) ||
+        inputs.toSet().length != inputs.length ||
+        outputs.toSet().length != outputs.length) {
+      throw ControlContractException('$path client model metadata is invalid');
+    }
+    return ClientModel(
+      id: id,
+      canonicalId: canonicalId,
+      displayName: displayName,
+      description: description,
+      family: family,
+      reasoning: requireBoolean(value, 'reasoning', path),
+      toolCalls: requireBoolean(value, 'toolCalls', path),
+      structuredOutput: requireBoolean(value, 'structuredOutput', path),
+      attachments: requireBoolean(value, 'attachments', path),
+      openWeights: requireBoolean(value, 'openWeights', path),
+      contextLimit: requireInteger(value, 'contextLimit', path, minimum: 0),
+      outputLimit: requireInteger(value, 'outputLimit', path, minimum: 0),
+      inputModalities: List.unmodifiable(inputs),
+      outputModalities: List.unmodifiable(outputs),
+      knowledgeCutoff: knowledgeCutoff,
+      releaseDate: releaseDate,
+    );
+  }
+
+  final String id;
+  final String canonicalId;
+  final String displayName;
+  final String description;
+  final String family;
+  final bool reasoning;
+  final bool toolCalls;
+  final bool structuredOutput;
+  final bool attachments;
+  final bool openWeights;
+  final int contextLimit;
+  final int outputLimit;
+  final List<String> inputModalities;
+  final List<String> outputModalities;
+  final String knowledgeCutoff;
+  final String releaseDate;
+}
+
+/// Request-side catalog supplied by models.dev for one client protocol.
+final class ClientModelCatalog {
+  const ClientModelCatalog({
+    required this.protocol,
+    required this.providerId,
+    required this.metadataSource,
+    required this.models,
+  });
+
+  factory ClientModelCatalog.fromJson(Object? json, String path) {
+    final value = requireObject(json, path);
+    requireFields(
+      value,
+      path,
+      required: const {'protocol', 'providerId', 'metadataSource', 'models'},
+    );
+    final protocol = requireString(value, 'protocol', path);
+    final providerId = requireString(value, 'providerId', path);
+    final metadataSource = requireString(value, 'metadataSource', path);
+    final expectedProvider = protocol == 'anthropic_messages'
+        ? 'anthropic'
+        : const {'openai_responses', 'openai_chat'}.contains(protocol)
+        ? 'openai'
+        : '';
+    final rawModels = requireList(value['models'], '$path.models');
+    if (expectedProvider.isEmpty ||
+        providerId != expectedProvider ||
+        metadataSource != 'models.dev' ||
+        rawModels.length > 16384) {
+      throw ControlContractException('$path client model catalog is invalid');
+    }
+    final models = rawModels.indexed
+        .map(
+          (entry) =>
+              ClientModel.fromJson(entry.$2, '$path.models[${entry.$1}]'),
+        )
+        .toList(growable: false);
+    if (models.map((model) => model.id).toSet().length != models.length ||
+        models.any((model) => model.canonicalId != '$providerId/${model.id}')) {
+      throw ControlContractException(
+        '$path client model identities are invalid',
+      );
+    }
+    return ClientModelCatalog(
+      protocol: protocol,
+      providerId: providerId,
+      metadataSource: metadataSource,
+      models: List.unmodifiable(models),
+    );
+  }
+
+  final String protocol;
+  final String providerId;
+  final String metadataSource;
+  final List<ClientModel> models;
+}
+
+bool _validCatalogText(String value, {required int maximumBytes}) =>
+    value.isNotEmpty &&
+    value.trim() == value &&
+    utf8.encode(value).length <= maximumBytes &&
+    !value.contains('\uFEFF') &&
+    !_containsControlCharacter(value);
+
+bool _validOpaqueModelId(String value) =>
+    value.isNotEmpty &&
+    utf8.encode(value).length <= 256 &&
+    !value.contains('\uFEFF') &&
+    !_containsControlCharacter(value);
+
+bool _validOptionalCatalogText(String value, {required int maximumBytes}) =>
+    value.isEmpty || _validCatalogText(value, maximumBytes: maximumBytes);
 
 final class ProviderAccount {
   const ProviderAccount({
@@ -1076,11 +1964,45 @@ final class EnvironmentProviderTarget {
   };
 }
 
+final class EnvironmentModelMapping {
+  const EnvironmentModelMapping({
+    required this.requestedModel,
+    required this.upstreamModel,
+  });
+
+  factory EnvironmentModelMapping.fromJson(Object? json, String path) {
+    final value = requireObject(json, path);
+    requireFields(
+      value,
+      path,
+      required: const {'requestedModel', 'upstreamModel'},
+    );
+    final requestedModel = requireString(value, 'requestedModel', path);
+    final upstreamModel = requireString(value, 'upstreamModel', path);
+    if (!_validOpaqueModelId(requestedModel) ||
+        !_validOpaqueModelId(upstreamModel)) {
+      throw ControlContractException('$path model mapping is invalid');
+    }
+    return EnvironmentModelMapping(
+      requestedModel: requestedModel,
+      upstreamModel: upstreamModel,
+    );
+  }
+
+  final String requestedModel;
+  final String upstreamModel;
+
+  JsonObject toJson() => {
+    'requestedModel': requestedModel,
+    'upstreamModel': upstreamModel,
+  };
+}
+
 final class EnvironmentModelPolicy {
   const EnvironmentModelPolicy({
     required this.revision,
     required this.mode,
-    required this.fixedModel,
+    required this.mappings,
   });
 
   factory EnvironmentModelPolicy.fromJson(Object? json, String path) {
@@ -1088,39 +2010,49 @@ final class EnvironmentModelPolicy {
     requireFields(
       value,
       path,
-      required: const {'revision', 'mode', 'fixedModel'},
+      required: const {'revision', 'mode', 'mappings'},
     );
     final mode = requireString(value, 'mode', path);
-    final fixedModel = requireStringValue(value, 'fixedModel', path);
-    if (!const {'preserve', 'passthrough', 'fixed'}.contains(mode) ||
-        (mode == 'fixed') != fixedModel.isNotEmpty ||
-        utf8.encode(fixedModel).length > 256 ||
-        fixedModel.trim() != fixedModel ||
-        _containsControlCharacter(fixedModel)) {
+    final rawMappings = requireList(value['mappings'], '$path.mappings');
+    final mappings = rawMappings.indexed
+        .map(
+          (entry) => EnvironmentModelMapping.fromJson(
+            entry.$2,
+            '$path.mappings[${entry.$1}]',
+          ),
+        )
+        .toList(growable: false);
+    final requestedModels = mappings
+        .map((item) => item.requestedModel)
+        .toList();
+    if (!const {'passthrough', 'map'}.contains(mode) ||
+        (mode == 'map') != mappings.isNotEmpty ||
+        requestedModels.toSet().length != requestedModels.length) {
       throw ControlContractException('$path model policy is invalid');
     }
     return EnvironmentModelPolicy(
       revision: requireInteger(value, 'revision', path, minimum: 1),
       mode: mode,
-      fixedModel: fixedModel,
+      mappings: List.unmodifiable(mappings),
     );
   }
 
   final int revision;
   final String mode;
-  final String fixedModel;
+  final List<EnvironmentModelMapping> mappings;
 
   JsonObject toJson() => {
     'revision': revision,
     'mode': mode,
-    'fixedModel': fixedModel,
+    'mappings': mappings
+        .map((mapping) => mapping.toJson())
+        .toList(growable: false),
   };
 }
 
 final class RouteAccountPolicy {
   const RouteAccountPolicy({
     required this.revision,
-    required this.mode,
     required this.preferredAccountId,
     required this.candidateAccountIds,
     required this.accountRevisions,
@@ -1134,14 +2066,12 @@ final class RouteAccountPolicy {
       path,
       required: const {
         'revision',
-        'mode',
         'preferredAccountId',
         'candidateAccountIds',
         'accountRevisions',
         'failoverPolicy',
       },
     );
-    final mode = requireString(value, 'mode', path);
     final preferred = requireStringValue(value, 'preferredAccountId', path);
     final candidates = requireStringList(value, 'candidateAccountIds', path);
     final revisions = _requireRevisionMap(
@@ -1150,27 +2080,18 @@ final class RouteAccountPolicy {
     );
     final failover = requireString(value, 'failoverPolicy', path);
     final candidateSet = candidates.toSet();
-    final passthrough = mode == 'client_passthrough';
-    if (!const {'client_passthrough', 'managed'}.contains(mode) ||
-        !const {'off', 'account_scoped_safe'}.contains(failover) ||
+    if (!const {'off', 'account_scoped_safe'}.contains(failover) ||
         candidateSet.length != candidates.length ||
         candidates.any((id) => !_resourceIdPattern.hasMatch(id)) ||
-        (passthrough &&
-            (preferred.isNotEmpty ||
-                candidates.isNotEmpty ||
-                revisions.isNotEmpty ||
-                failover != 'off')) ||
-        (!passthrough &&
-            (!_resourceIdPattern.hasMatch(preferred) ||
-                candidates.isEmpty ||
-                !candidateSet.contains(preferred) ||
-                revisions.keys.toSet().difference(candidateSet).isNotEmpty ||
-                candidateSet.difference(revisions.keys.toSet()).isNotEmpty))) {
+        !_resourceIdPattern.hasMatch(preferred) ||
+        candidates.isEmpty ||
+        !candidateSet.contains(preferred) ||
+        revisions.keys.toSet().difference(candidateSet).isNotEmpty ||
+        candidateSet.difference(revisions.keys.toSet()).isNotEmpty) {
       throw ControlContractException('$path Account authority is invalid');
     }
     return RouteAccountPolicy(
       revision: requireInteger(value, 'revision', path, minimum: 1),
-      mode: mode,
       preferredAccountId: preferred,
       candidateAccountIds: List.unmodifiable(candidates),
       accountRevisions: revisions,
@@ -1179,7 +2100,6 @@ final class RouteAccountPolicy {
   }
 
   final int revision;
-  final String mode;
   final String preferredAccountId;
   final List<String> candidateAccountIds;
   final Map<String, int> accountRevisions;
@@ -1187,14 +2107,12 @@ final class RouteAccountPolicy {
 
   RouteAccountPolicy copyWith({
     int? revision,
-    String? mode,
     String? preferredAccountId,
     List<String>? candidateAccountIds,
     Map<String, int>? accountRevisions,
     String? failoverPolicy,
   }) => RouteAccountPolicy(
     revision: revision ?? this.revision,
-    mode: mode ?? this.mode,
     preferredAccountId: preferredAccountId ?? this.preferredAccountId,
     candidateAccountIds: candidateAccountIds ?? this.candidateAccountIds,
     accountRevisions: accountRevisions ?? this.accountRevisions,
@@ -1203,7 +2121,6 @@ final class RouteAccountPolicy {
 
   JsonObject toJson() => {
     'revision': revision,
-    'mode': mode,
     'preferredAccountId': preferredAccountId,
     'candidateAccountIds': candidateAccountIds,
     'accountRevisions': accountRevisions,
@@ -1310,16 +2227,100 @@ final class EnvironmentRoute {
   };
 }
 
+final class EnvironmentUpstreamPlan {
+  const EnvironmentUpstreamPlan({
+    required this.defaultRouteId,
+    required this.routeSet,
+    required this.routes,
+  });
+
+  factory EnvironmentUpstreamPlan.fromJson(Object? json, String path) {
+    final value = requireObject(json, path);
+    requireFields(
+      value,
+      path,
+      required: const {'routes', 'defaultRouteId', 'routeSet'},
+    );
+    final routes = requireList(value['routes'], '$path.routes').indexed
+        .map(
+          (entry) =>
+              EnvironmentRoute.fromJson(entry.$2, '$path.routes[${entry.$1}]'),
+        )
+        .toList(growable: false);
+    final routeIds = routes.map((route) => route.id).toSet();
+    final defaultRouteId = _requireResourceId(value, 'defaultRouteId', path);
+    final routeSet = EnvironmentRouteSet.fromJson(
+      value['routeSet'],
+      '$path.routeSet',
+    );
+    if (routes.isEmpty ||
+        routeIds.length != routes.length ||
+        !routeIds.contains(defaultRouteId) ||
+        routeIds.difference(routeSet.candidateRouteIds.toSet()).isNotEmpty ||
+        routeSet.candidateRouteIds.toSet().difference(routeIds).isNotEmpty) {
+      throw ControlContractException('$path upstream plan is invalid');
+    }
+    return EnvironmentUpstreamPlan(
+      defaultRouteId: defaultRouteId,
+      routeSet: routeSet,
+      routes: List.unmodifiable(routes),
+    );
+  }
+
+  final String defaultRouteId;
+  final EnvironmentRouteSet routeSet;
+  final List<EnvironmentRoute> routes;
+
+  JsonObject toJson() => {
+    'routes': routes.map((route) => route.toJson()).toList(growable: false),
+    'defaultRouteId': defaultRouteId,
+    'routeSet': routeSet.toJson(),
+  };
+}
+
+final class EnvironmentDestination {
+  const EnvironmentDestination.original() : kind = 'original', upstream = null;
+
+  const EnvironmentDestination.upstream(EnvironmentUpstreamPlan value)
+    : kind = 'upstream',
+      upstream = value;
+
+  factory EnvironmentDestination.fromJson(Object? json, String path) {
+    final value = requireObject(json, path);
+    final kind = requireString(value, 'kind', path);
+    switch (kind) {
+      case 'original':
+        requireFields(value, path, required: const {'kind'});
+        return const EnvironmentDestination.original();
+      case 'upstream':
+        requireFields(value, path, required: const {'kind', 'upstream'});
+        return EnvironmentDestination.upstream(
+          EnvironmentUpstreamPlan.fromJson(value['upstream'], '$path.upstream'),
+        );
+      default:
+        throw ControlContractException('$path destination kind is invalid');
+    }
+  }
+
+  final String kind;
+  final EnvironmentUpstreamPlan? upstream;
+
+  bool get isOriginal => kind == 'original';
+  bool get isUpstream => kind == 'upstream';
+
+  JsonObject toJson() => {
+    'kind': kind,
+    if (upstream case final value?) 'upstream': value.toJson(),
+  };
+}
+
 final class EnvironmentProtocolPlan {
   const EnvironmentProtocolPlan({
     required this.id,
     required this.revision,
     required this.clientProtocol,
     required this.clientAdapterPolicy,
-    required this.mode,
-    required this.defaultRouteId,
-    required this.routeSet,
-    required this.routes,
+    required this.destination,
     required this.pluginBindings,
   });
 
@@ -1333,35 +2334,9 @@ final class EnvironmentProtocolPlan {
         'revision',
         'clientProtocol',
         'clientAdapterPolicy',
-        'mode',
-        'upstreamPlan',
+        'destination',
         'pluginBindings',
       },
-    );
-    final upstream = requireObject(value['upstreamPlan'], '$path.upstreamPlan');
-    requireFields(
-      upstream,
-      '$path.upstreamPlan',
-      required: const {'routes', 'defaultRouteId', 'routeSet'},
-    );
-    final routes = requireList(upstream['routes'], '$path.upstreamPlan.routes')
-        .indexed
-        .map(
-          (entry) => EnvironmentRoute.fromJson(
-            entry.$2,
-            '$path.upstreamPlan.routes[${entry.$1}]',
-          ),
-        )
-        .toList(growable: false);
-    final routeIds = routes.map((route) => route.id).toSet();
-    final defaultRouteId = _requireResourceId(
-      upstream,
-      'defaultRouteId',
-      '$path.upstreamPlan',
-    );
-    final routeSet = EnvironmentRouteSet.fromJson(
-      upstream['routeSet'],
-      '$path.upstreamPlan.routeSet',
     );
     final bindings =
         requireList(value['pluginBindings'], '$path.pluginBindings').indexed
@@ -1372,20 +2347,13 @@ final class EnvironmentProtocolPlan {
               ),
             )
             .toList(growable: false);
-    final mode = requireString(value, 'mode', path);
     final clientProtocol = _requireResourceId(value, 'clientProtocol', path);
-    if (routes.isEmpty ||
-        routeIds.length != routes.length ||
-        !routeIds.contains(defaultRouteId) ||
-        routeIds.difference(routeSet.candidateRouteIds.toSet()).isNotEmpty ||
-        routeSet.candidateRouteIds.toSet().difference(routeIds).isNotEmpty ||
-        bindings.map((item) => item.id).toSet().length != bindings.length ||
+    if (bindings.map((item) => item.id).toSet().length != bindings.length ||
         !const {
           'anthropic_messages',
           'openai_responses',
           'openai_chat',
-        }.contains(clientProtocol) ||
-        !const {'original_passthrough', 'managed'}.contains(mode)) {
+        }.contains(clientProtocol)) {
       throw ControlContractException('$path protocol plan is invalid');
     }
     return EnvironmentProtocolPlan(
@@ -1396,10 +2364,10 @@ final class EnvironmentProtocolPlan {
         value['clientAdapterPolicy'],
         '$path.clientAdapterPolicy',
       ),
-      mode: mode,
-      defaultRouteId: defaultRouteId,
-      routeSet: routeSet,
-      routes: List.unmodifiable(routes),
+      destination: EnvironmentDestination.fromJson(
+        value['destination'],
+        '$path.destination',
+      ),
       pluginBindings: List.unmodifiable(bindings),
     );
   }
@@ -1408,22 +2376,19 @@ final class EnvironmentProtocolPlan {
   final int revision;
   final String clientProtocol;
   final EnvironmentClientAdapterPolicy clientAdapterPolicy;
-  final String mode;
-  final String defaultRouteId;
-  final EnvironmentRouteSet routeSet;
-  final List<EnvironmentRoute> routes;
+  final EnvironmentDestination destination;
   final List<EnvironmentPluginBinding> pluginBindings;
 
-  EnvironmentProtocolPlan copyWith({List<EnvironmentRoute>? routes}) =>
+  List<EnvironmentRoute> get routes =>
+      destination.upstream?.routes ?? const <EnvironmentRoute>[];
+
+  EnvironmentProtocolPlan copyWith({EnvironmentDestination? destination}) =>
       EnvironmentProtocolPlan(
         id: id,
         revision: revision,
         clientProtocol: clientProtocol,
         clientAdapterPolicy: clientAdapterPolicy,
-        mode: mode,
-        defaultRouteId: defaultRouteId,
-        routeSet: routeSet,
-        routes: routes ?? this.routes,
+        destination: destination ?? this.destination,
         pluginBindings: pluginBindings,
       );
 
@@ -1432,12 +2397,7 @@ final class EnvironmentProtocolPlan {
     'revision': revision,
     'clientProtocol': clientProtocol,
     'clientAdapterPolicy': clientAdapterPolicy.toJson(),
-    'mode': mode,
-    'upstreamPlan': {
-      'routes': routes.map((route) => route.toJson()).toList(growable: false),
-      'defaultRouteId': defaultRouteId,
-      'routeSet': routeSet.toJson(),
-    },
+    'destination': destination.toJson(),
     'pluginBindings': pluginBindings
         .map((binding) => binding.toJson())
         .toList(growable: false),
@@ -1869,39 +2829,24 @@ final class EnvironmentImpactCapture {
   const EnvironmentImpactCapture({
     required this.captureKind,
     required this.captureId,
-    required this.classification,
   });
 
   factory EnvironmentImpactCapture.fromJson(Object? json, String path) {
     final value = requireObject(json, path);
-    requireFields(
-      value,
-      path,
-      required: const {'captureKind', 'captureId', 'classification'},
-    );
+    requireFields(value, path, required: const {'captureKind', 'captureId'});
     final kind = requireString(value, 'captureKind', path);
-    final classification = requireString(value, 'classification', path);
-    if (!const {'managed_run', 'manual_capture'}.contains(kind) ||
-        !_environmentCompatibility.contains(classification)) {
+    if (!const {'managed_run', 'manual_capture'}.contains(kind)) {
       throw ControlContractException('$path impact Capture is invalid');
     }
     return EnvironmentImpactCapture(
       captureKind: kind,
       captureId: _requireResourceId(value, 'captureId', path),
-      classification: classification,
     );
   }
 
   final String captureKind;
   final String captureId;
-  final String classification;
 }
-
-const _environmentCompatibility = {
-  'hot_switch',
-  'reconnect_required',
-  'restart_required',
-};
 
 final class EnvironmentImpact {
   const EnvironmentImpact({
@@ -1909,11 +2854,7 @@ final class EnvironmentImpact {
     required this.baseRevision,
     required this.draftRevision,
     required this.candidateDigest,
-    required this.classification,
-    required this.hotSwitchCount,
-    required this.reconnectRequiredCount,
-    required this.restartRequiredCount,
-    required this.affected,
+    required this.continuingCaptures,
   });
 
   factory EnvironmentImpact.fromJson(
@@ -1931,21 +2872,19 @@ final class EnvironmentImpact {
         'baseRevision',
         'draftRevision',
         'candidateDigest',
-        'classification',
-        'hotSwitchCount',
-        'reconnectRequiredCount',
-        'restartRequiredCount',
-        'affected',
+        'continuingCaptures',
       },
     );
-    final affected = requireList(value['affected'], '$path.affected').indexed
-        .map(
-          (entry) => EnvironmentImpactCapture.fromJson(
-            entry.$2,
-            '$path.affected[${entry.$1}]',
-          ),
-        )
-        .toList(growable: false);
+    final continuing =
+        requireList(value['continuingCaptures'], '$path.continuingCaptures')
+            .indexed
+            .map(
+              (entry) => EnvironmentImpactCapture.fromJson(
+                entry.$2,
+                '$path.continuingCaptures[${entry.$1}]',
+              ),
+            )
+            .toList(growable: false);
     final environmentId = _requireResourceId(value, 'environmentId', path);
     final draftRevision = requireInteger(
       value,
@@ -1953,24 +2892,8 @@ final class EnvironmentImpact {
       path,
       minimum: 1,
     );
-    final classification = requireString(value, 'classification', path);
-    final hot = requireInteger(value, 'hotSwitchCount', path);
-    final reconnect = requireInteger(value, 'reconnectRequiredCount', path);
-    final restart = requireInteger(value, 'restartRequiredCount', path);
     if (environmentId != expectedEnvironmentId ||
-        draftRevision != expectedDraftRevision ||
-        !_environmentCompatibility.contains(classification) ||
-        hot + reconnect + restart != affected.length ||
-        affected.where((item) => item.classification == 'hot_switch').length !=
-            hot ||
-        affected
-                .where((item) => item.classification == 'reconnect_required')
-                .length !=
-            reconnect ||
-        affected
-                .where((item) => item.classification == 'restart_required')
-                .length !=
-            restart) {
+        draftRevision != expectedDraftRevision) {
       throw ControlContractException('$path impact evidence is inconsistent');
     }
     return EnvironmentImpact(
@@ -1978,11 +2901,7 @@ final class EnvironmentImpact {
       baseRevision: requireInteger(value, 'baseRevision', path),
       draftRevision: draftRevision,
       candidateDigest: _requireDigest(value, 'candidateDigest', path),
-      classification: classification,
-      hotSwitchCount: hot,
-      reconnectRequiredCount: reconnect,
-      restartRequiredCount: restart,
-      affected: List.unmodifiable(affected),
+      continuingCaptures: List.unmodifiable(continuing),
     );
   }
 
@@ -1990,11 +2909,7 @@ final class EnvironmentImpact {
   final int baseRevision;
   final int draftRevision;
   final String candidateDigest;
-  final String classification;
-  final int hotSwitchCount;
-  final int reconnectRequiredCount;
-  final int restartRequiredCount;
-  final List<EnvironmentImpactCapture> affected;
+  final List<EnvironmentImpactCapture> continuingCaptures;
 }
 
 final class EnvironmentPublishResult {
@@ -2046,6 +2961,9 @@ final class ManagedRunSummary {
     required this.recognition,
     required this.expiresAt,
     this.localUserLabel,
+    this.runtimeUserId,
+    this.loginSessionId,
+    this.deviceName,
     this.machineId,
     this.machineRegistrationRevision,
     this.workspaceId,
@@ -2070,6 +2988,9 @@ final class ManagedRunSummary {
       },
       optional: const {
         'localUserLabel',
+        'runtimeUserId',
+        'loginSessionId',
+        'deviceName',
         'machineId',
         'machineRegistrationRevision',
         'workspaceId',
@@ -2089,6 +3010,9 @@ final class ManagedRunSummary {
     );
     final recognition = requireString(value, 'recognition', path);
     final localUserLabel = optionalString(value, 'localUserLabel', path);
+    final runtimeUserId = optionalString(value, 'runtimeUserId', path);
+    final loginSessionId = optionalString(value, 'loginSessionId', path);
+    final deviceName = optionalString(value, 'deviceName', path);
     final machineId = optionalString(value, 'machineId', path);
     final machineRegistrationRevision = optionalInteger(
       value,
@@ -2114,6 +3038,14 @@ final class ManagedRunSummary {
       workspaceDerivationRevision,
     ];
     final hasWorkspace = workspaceEvidenceValues.every((item) => item != null);
+    final runtimeAttribution = <Object?>[
+      runtimeUserId,
+      loginSessionId,
+      deviceName,
+    ];
+    final hasRuntimeAttribution = runtimeAttribution.every(
+      (item) => item != null,
+    );
     if (!_validDisplayLabel(executableLabel) ||
         !_validCleanAbsolutePath(cwd) ||
         !_validCleanAbsolutePath(canonicalExecutablePath) ||
@@ -2125,6 +3057,10 @@ final class ManagedRunSummary {
         }.contains(recognition) ||
         (localUserLabel != null &&
             !_validDisplayLabel(localUserLabel, maximumBytes: 128)) ||
+        (runtimeAttribution.any((item) => item != null) !=
+            hasRuntimeAttribution) ||
+        (deviceName != null &&
+            !_validDisplayLabel(deviceName, maximumBytes: 128)) ||
         (workspaceEvidenceValues.any((item) => item != null) != hasWorkspace) ||
         (hasWorkspace &&
             (!_validWorkspaceIdentity(machineId!) ||
@@ -2143,6 +3079,9 @@ final class ManagedRunSummary {
       recognition: recognition,
       expiresAt: requireTimestamp(value, 'expiresAt', path),
       localUserLabel: localUserLabel,
+      runtimeUserId: runtimeUserId,
+      loginSessionId: loginSessionId,
+      deviceName: deviceName,
       machineId: machineId,
       machineRegistrationRevision: machineRegistrationRevision,
       workspaceId: workspaceId,
@@ -2160,6 +3099,9 @@ final class ManagedRunSummary {
   final String recognition;
   final DateTime expiresAt;
   final String? localUserLabel;
+  final String? runtimeUserId;
+  final String? loginSessionId;
+  final String? deviceName;
   final String? machineId;
   final int? machineRegistrationRevision;
   final String? workspaceId;
@@ -2394,10 +3336,9 @@ final class CaptureAssignment {
         !const {
           'launch',
           'manual_create',
-          'workspace_default',
-          'operator_switch',
           'system_transparent',
-        }.contains(source)) {
+        }.contains(source) ||
+        requireInteger(value, 'revision', path, minimum: 1) != 1) {
       throw ControlContractException('$path assignment authority is invalid');
     }
     return CaptureAssignment(
@@ -2405,7 +3346,7 @@ final class CaptureAssignment {
       captureId: captureId,
       captureKind: captureKind,
       environmentId: _requireResourceId(value, 'environmentId', path),
-      revision: requireInteger(value, 'revision', path, minimum: 1),
+      revision: 1,
       source: source,
       updatedAt: requireTimestamp(value, 'updatedAt', path),
     );
@@ -2418,132 +3359,6 @@ final class CaptureAssignment {
   final int revision;
   final String source;
   final DateTime updatedAt;
-}
-
-final class WorkspaceEnvironmentDefault {
-  const WorkspaceEnvironmentDefault({
-    required this.machineId,
-    required this.workspaceId,
-    required this.environmentId,
-    required this.environmentName,
-    required this.revision,
-    required this.updatedAt,
-  });
-
-  factory WorkspaceEnvironmentDefault.fromJson(
-    Object? json,
-    String path, {
-    required String expectedMachineId,
-    required String expectedWorkspaceId,
-    String? expectedEnvironmentId,
-  }) {
-    final value = requireObject(json, path);
-    requireFields(
-      value,
-      path,
-      required: const {
-        'machineId',
-        'workspaceId',
-        'environmentId',
-        'environmentName',
-        'revision',
-        'updatedAt',
-      },
-    );
-    final machineId = requireString(value, 'machineId', path);
-    final workspaceId = requireString(value, 'workspaceId', path);
-    final environmentId = _requireResourceId(value, 'environmentId', path);
-    final environmentName = requireString(value, 'environmentName', path);
-    if (!_validWorkspaceIdentity(machineId) ||
-        !_validWorkspaceIdentity(workspaceId) ||
-        machineId != expectedMachineId ||
-        workspaceId != expectedWorkspaceId ||
-        environmentId == 'system_transparent' ||
-        (expectedEnvironmentId != null &&
-            environmentId != expectedEnvironmentId) ||
-        !_validDisplayLabel(environmentName)) {
-      throw ControlContractException('$path workspace default is invalid');
-    }
-    return WorkspaceEnvironmentDefault(
-      machineId: machineId,
-      workspaceId: workspaceId,
-      environmentId: environmentId,
-      environmentName: environmentName,
-      revision: requireInteger(value, 'revision', path, minimum: 1),
-      updatedAt: requireTimestamp(value, 'updatedAt', path),
-    );
-  }
-
-  final String machineId;
-  final String workspaceId;
-  final String environmentId;
-  final String environmentName;
-  final int revision;
-  final DateTime updatedAt;
-}
-
-final class CaptureAssignmentChange {
-  const CaptureAssignmentChange({
-    required this.assignment,
-    required this.boundary,
-    required this.closedConnections,
-    required this.applied,
-    this.reasonCode,
-  });
-
-  factory CaptureAssignmentChange.fromJson(Object? json, String path) {
-    final value = requireObject(json, path);
-    requireFields(
-      value,
-      path,
-      required: const {
-        'assignment',
-        'boundary',
-        'closedConnections',
-        'applied',
-      },
-      optional: const {'reasonCode'},
-    );
-    final boundary = requireString(value, 'boundary', path);
-    final closedConnections = requireStringList(
-      value,
-      'closedConnections',
-      path,
-    );
-    final applied = requireBoolean(value, 'applied', path);
-    final reasonCode = optionalString(value, 'reasonCode', path);
-    if (!const {
-          'no_change',
-          'hot_switch',
-          'reconnect_required',
-          'restart_required',
-        }.contains(boundary) ||
-        closedConnections.any((id) => !_resourceIdPattern.hasMatch(id)) ||
-        closedConnections.toSet().length != closedConnections.length ||
-        (boundary != 'reconnect_required' && closedConnections.isNotEmpty) ||
-        (boundary == 'restart_required') != !applied ||
-        (boundary == 'restart_required') !=
-            (reasonCode == 'capture_restart_required') ||
-        (reasonCode != null && reasonCode != 'capture_restart_required')) {
-      throw ControlContractException('$path switch result is inconsistent');
-    }
-    return CaptureAssignmentChange(
-      assignment: CaptureAssignment.fromJson(
-        value['assignment'],
-        '$path.assignment',
-      ),
-      boundary: boundary,
-      closedConnections: closedConnections,
-      applied: applied,
-      reasonCode: reasonCode,
-    );
-  }
-
-  final CaptureAssignment assignment;
-  final String boundary;
-  final List<String> closedConnections;
-  final bool applied;
-  final String? reasonCode;
 }
 
 final class FrozenEnvironmentRef {
@@ -2575,10 +3390,21 @@ final class FrozenEnvironmentRef {
         'clientEndpointRevision',
         'protocolPlanId',
         'protocolPlanRevision',
+      },
+      optional: const {
         'routeId',
         'routeRevision',
+        'accountId',
+        'accountRevision',
+        'credentialEpoch',
       },
-      optional: const {'accountId', 'accountRevision', 'credentialEpoch'},
+    );
+    final routeId = optionalString(value, 'routeId', path);
+    final routeRevision = optionalInteger(
+      value,
+      'routeRevision',
+      path,
+      minimum: 1,
     );
     final accountId = optionalString(value, 'accountId', path);
     final accountRevision = optionalInteger(
@@ -2593,8 +3419,12 @@ final class FrozenEnvironmentRef {
       path,
       minimum: 1,
     );
+    if ((routeId == null) != (routeRevision == null)) {
+      throw ControlContractException('$path Route evidence is incomplete');
+    }
     if ((accountId == null) != (accountRevision == null) ||
-        (accountId == null) != (credentialEpoch == null)) {
+        (accountId == null) != (credentialEpoch == null) ||
+        accountId != null && routeId == null) {
       throw ControlContractException('$path account evidence is incomplete');
     }
     return FrozenEnvironmentRef(
@@ -2615,8 +3445,8 @@ final class FrozenEnvironmentRef {
         path,
         minimum: 1,
       ),
-      routeId: requireString(value, 'routeId', path),
-      routeRevision: requireInteger(value, 'routeRevision', path, minimum: 1),
+      routeId: routeId,
+      routeRevision: routeRevision,
       accountId: accountId,
       accountRevision: accountRevision,
       credentialEpoch: credentialEpoch,
@@ -2630,8 +3460,8 @@ final class FrozenEnvironmentRef {
   final int clientEndpointRevision;
   final String protocolPlanId;
   final int protocolPlanRevision;
-  final String routeId;
-  final int routeRevision;
+  final String? routeId;
+  final int? routeRevision;
   final String? accountId;
   final int? accountRevision;
   final int? credentialEpoch;
@@ -2820,7 +3650,7 @@ final class ActivityRecord {
 
   String get sourceName => source.displayName;
   String get environmentId => environment.id;
-  String get routeId => environment.routeId;
+  String? get routeId => environment.routeId;
   String? get accountId => environment.accountId;
   String? get captureRunId => parentRefs.captureRunId;
   String? get manualCaptureId => parentRefs.manualCaptureId;
@@ -2866,6 +3696,7 @@ final class ActivityConversationRef {
         !const {
           'pending',
           'capture_run',
+          'explicit_session',
           'explicit_actor',
           'client_asserted_subagent',
           'ambiguous_actor',

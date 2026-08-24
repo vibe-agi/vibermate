@@ -32,11 +32,9 @@ import (
 	"github.com/vibe-agi/vibermate/internal/localdiscovery"
 	"github.com/vibe-agi/vibermate/internal/originidentity"
 	"github.com/vibe-agi/vibermate/internal/productruntime"
-	"github.com/vibe-agi/vibermate/internal/protocolspec"
 	"github.com/vibe-agi/vibermate/internal/rawevidence"
 	"github.com/vibe-agi/vibermate/internal/runlauncher"
 	"github.com/vibe-agi/vibermate/internal/toolapproval"
-	"github.com/vibe-agi/vibermate/internal/wireprofile"
 )
 
 const deepLiveAgentEnvironment = "VIBERMATE_LIVE_AGENT_DEEP"
@@ -325,19 +323,11 @@ func publishOriginalEnvironment(
 	if err != nil {
 		t.Fatal(err)
 	}
-	providerOrigin, err := originidentity.ParseProviderOrigin(scenario.origin)
-	if err != nil {
-		t.Fatal(err)
-	}
 	endpointID, err := environment.NewClientEndpointID("endpoint." + scenario.executable)
 	if err != nil {
 		t.Fatal(err)
 	}
 	planID, err := environment.NewClientProtocolPlanID("plan." + scenario.executable)
-	if err != nil {
-		t.Fatal(err)
-	}
-	routeID, err := environment.NewUpstreamRouteID("route." + scenario.executable)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -352,37 +342,7 @@ func publishOriginalEnvironment(
 				ClientAdapterPolicy: environment.ClientAdapterPolicy{
 					ID: "adapter." + scenario.executable, Revision: 1,
 				},
-				Mode: environment.PlanModeOriginalPassthrough,
-				UpstreamPlan: environment.UpstreamPlan{
-					DefaultRouteID: routeID,
-					RouteSet: environment.RouteSet{
-						ID: "routes." + scenario.executable, Revision: 1,
-						CandidateRouteIDs: []environment.UpstreamRouteID{routeID},
-					},
-					Routes: []environment.UpstreamRoute{{
-						ID: routeID, Revision: 1,
-						ProviderTarget: environment.ProviderTarget{
-							ID: "target." + scenario.executable, Revision: 1,
-							Origin:  providerOrigin,
-							RealmID: "client." + scenario.executable,
-							Capabilities: []protocolspec.ProviderCapability{
-								protocolspec.ProviderCapabilityMessages,
-								protocolspec.ProviderCapabilityStreaming,
-								protocolspec.ProviderCapabilityToolCalls,
-							},
-						},
-						BackendProtocol: string(scenario.protocol),
-						AccountPolicy: environment.RouteAccountPolicy{
-							Revision:       1,
-							Mode:           environment.AccountModeClientPassthrough,
-							FailoverPolicy: environment.FailoverOff,
-						},
-						ModelPolicy: environment.ModelPolicy{
-							Revision: 1, Mode: "preserve",
-						},
-						WireProfileRef: wireprofile.UpstreamWireProfileFollowClientValue,
-					}},
-				},
+				Destination: environment.DestinationPlan{Kind: environment.DestinationKindOriginal},
 			}},
 		}},
 	}

@@ -153,7 +153,8 @@ func TestAcceptanceEnvironmentIsExplicitAndOriginalPassthrough(t *testing.T) {
 	}
 	if aggregate.ID.String() != explicit.environmentID || aggregate.Revision != 1 ||
 		len(aggregate.ClientEndpoints) != 1 ||
-		aggregate.ClientEndpoints[0].ProtocolPlans[0].Mode != environment.PlanModeOriginalPassthrough {
+		aggregate.ClientEndpoints[0].ProtocolPlans[0].Destination.Kind != environment.DestinationKindOriginal ||
+		aggregate.ClientEndpoints[0].ProtocolPlans[0].Destination.Upstream != nil {
 		t.Fatalf("explicit Environment = %+v", aggregate)
 	}
 }
@@ -174,10 +175,11 @@ func TestAcceptanceManagedEnvironmentFreezesOneReadyAnthropicAccount(t *testing.
 		t.Fatal(err)
 	}
 	plan := aggregate.ClientEndpoints[0].ProtocolPlans[0]
-	route := plan.UpstreamPlan.Routes[0]
-	if plan.Mode != environment.PlanModeManaged ||
-		route.AccountPolicy.Mode != environment.AccountModeManaged ||
-		route.AccountPolicy.PreferredAccountID != account.ID ||
+	if plan.Destination.Kind != environment.DestinationKindUpstream || plan.Destination.Upstream == nil {
+		t.Fatalf("managed Environment Destination = %+v", plan.Destination)
+	}
+	route := plan.Destination.Upstream.Routes[0]
+	if route.AccountPolicy.PreferredAccountID != account.ID ||
 		len(route.AccountPolicy.CandidateAccountIDs) != 1 ||
 		route.AccountPolicy.CandidateAccountIDs[0] != account.ID ||
 		route.AccountPolicy.AccountRevisions[account.ID] != 1 ||

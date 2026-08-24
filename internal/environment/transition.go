@@ -39,7 +39,7 @@ func validatePreparedTransition(previous, candidate Environment) error {
 		oldEndpoints[endpoint.ID] = endpoint
 		for _, plan := range endpoint.ProtocolPlans {
 			oldPlans[plan.ID] = plan
-			for _, route := range plan.UpstreamPlan.Routes {
+			for _, route := range destinationRoutes(plan.Destination) {
 				oldRoutes[route.ID] = route
 			}
 		}
@@ -72,7 +72,7 @@ func validatePreparedTransition(previous, candidate Environment) error {
 					return err
 				}
 			}
-			for _, route := range plan.UpstreamPlan.Routes {
+			for _, route := range destinationRoutes(plan.Destination) {
 				oldRoute, exists := oldRoutes[route.ID]
 				if !exists {
 					if route.Revision != 1 {

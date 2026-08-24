@@ -63,10 +63,16 @@ func cloneEndpoint(endpoint ClientEndpoint) ClientEndpoint {
 func cloneProtocolPlan(plan ClientProtocolPlan) ClientProtocolPlan {
 	cloned := plan
 	cloned.PluginBindings = slices.Clone(plan.PluginBindings)
-	cloned.UpstreamPlan.RouteSet.CandidateRouteIDs = slices.Clone(plan.UpstreamPlan.RouteSet.CandidateRouteIDs)
-	cloned.UpstreamPlan.Routes = make([]UpstreamRoute, len(plan.UpstreamPlan.Routes))
-	for routeIndex, route := range plan.UpstreamPlan.Routes {
-		cloned.UpstreamPlan.Routes[routeIndex] = cloneRoute(route)
+	if plan.Destination.Upstream != nil {
+		upstream := *plan.Destination.Upstream
+		upstream.RouteSet.CandidateRouteIDs = slices.Clone(
+			plan.Destination.Upstream.RouteSet.CandidateRouteIDs,
+		)
+		upstream.Routes = make([]UpstreamRoute, len(plan.Destination.Upstream.Routes))
+		for routeIndex, route := range plan.Destination.Upstream.Routes {
+			upstream.Routes[routeIndex] = cloneRoute(route)
+		}
+		cloned.Destination.Upstream = &upstream
 	}
 	return cloned
 }
@@ -77,6 +83,13 @@ func cloneRoute(route UpstreamRoute) UpstreamRoute {
 	cloned.ProviderTarget.Capabilities = slices.Clone(route.ProviderTarget.Capabilities)
 	cloned.AccountPolicy.CandidateAccountIDs = slices.Clone(route.AccountPolicy.CandidateAccountIDs)
 	cloned.AccountPolicy.AccountRevisions = cloneRevisionMap(route.AccountPolicy.AccountRevisions)
+	cloned.ModelPolicy = cloneModelPolicy(route.ModelPolicy)
+	return cloned
+}
+
+func cloneModelPolicy(policy ModelPolicy) ModelPolicy {
+	cloned := policy
+	cloned.Mappings = slices.Clone(policy.Mappings)
 	return cloned
 }
 
@@ -94,7 +107,21 @@ func cloneRevisionMap(source map[string]Revision) map[string]Revision {
 // CanonicalJSON validates and deterministically orders the full graph before
 // encoding it. Persisted bytes and candidate digests share this one codec.
 func CanonicalJSON(environment Environment) ([]byte, error) {
-	normalized, err := normalize(environment)
+	return canonicalJSON(environment, false)
+}
+
+func canonicalSystemJSON(environment Environment) ([]byte, error) {
+	return canonicalJSON(environment, true)
+}
+
+func canonicalJSON(environment Environment, allowSystem bool) ([]byte, error) {
+	var normalized Environment
+	var err error
+	if allowSystem {
+		normalized, err = normalizeSystem(environment)
+	} else {
+		normalized, err = normalize(environment)
+	}
 	if err != nil {
 		return nil, err
 	}
@@ -134,8 +161,16 @@ func Digest(environment Environment) (CandidateDigest, error) {
 }
 
 func normalize(input Environment) (Environment, error) {
+	return normalizeRoot(input, false)
+}
+
+func normalizeSystem(input Environment) (Environment, error) {
+	return normalizeRoot(input, true)
+}
+
+func normalizeRoot(input Environment, allowSystem bool) (Environment, error) {
 	value := input.Clone()
-	if err := validateRoot(value); err != nil {
+	if err := validateRoot(value, allowSystem); err != nil {
 		return Environment{}, err
 	}
 	// Observe is the canonical zero/default. Explicit Observe and an omitted
@@ -191,8 +226,8 @@ func normalize(input Environment) (Environment, error) {
 				return Environment{}, duplicate("ClientProtocolPlan ID", plan.ID.String())
 			}
 			planIDs[plan.ID] = struct{}{}
-			if !validProtocol(plan.ClientProtocol) || !validPlanMode(plan.Mode) {
-				return Environment{}, fmt.Errorf("%w: protocol plan %q has an invalid protocol or mode", ErrInvalidEnvironment, plan.ID)
+			if !validProtocol(plan.ClientProtocol) {
+				return Environment{}, fmt.Errorf("%w: protocol plan %q has an invalid client protocol", ErrInvalidEnvironment, plan.ID)
 			}
 			if _, exists := protocols[plan.ClientProtocol]; exists {
 				return Environment{}, duplicate("ClientProtocol within ClientEndpoint", string(plan.ClientProtocol))
@@ -201,50 +236,36 @@ func normalize(input Environment) (Environment, error) {
 			if err := validateNamedRevision("ClientAdapterPolicy", plan.ClientAdapterPolicy.ID, plan.ClientAdapterPolicy.Revision, true); err != nil {
 				return Environment{}, err
 			}
-			if err := validateNamedRevision("RouteSet", plan.UpstreamPlan.RouteSet.ID, plan.UpstreamPlan.RouteSet.Revision, true); err != nil {
-				return Environment{}, err
-			}
-			if len(plan.UpstreamPlan.RouteSet.CandidateRouteIDs) == 0 {
-				return Environment{}, fmt.Errorf("%w: protocol plan %q has an empty RouteSet", ErrInvalidEnvironment, plan.ID)
-			}
 			sort.Slice(plan.PluginBindings, func(left, right int) bool { return plan.PluginBindings[left].ID < plan.PluginBindings[right].ID })
 			if err := validatePluginBindings(plan.PluginBindings); err != nil {
 				return Environment{}, err
 			}
-			sort.Slice(plan.UpstreamPlan.Routes, func(left, right int) bool {
-				return plan.UpstreamPlan.Routes[left].ID < plan.UpstreamPlan.Routes[right].ID
-			})
-			defaultFound := false
-			candidateIDs := make(map[UpstreamRouteID]struct{}, len(plan.UpstreamPlan.RouteSet.CandidateRouteIDs))
-			for _, routeID := range plan.UpstreamPlan.RouteSet.CandidateRouteIDs {
-				if err := validateID("RouteSet candidate route ID", routeID.String()); err != nil {
+			switch plan.Destination.Kind {
+			case DestinationKindOriginal:
+				if plan.Destination.Upstream != nil {
+					return Environment{}, fmt.Errorf(
+						"%w: original Destination %q contains upstream authority",
+						ErrInvalidEnvironment,
+						plan.ID,
+					)
+				}
+			case DestinationKindUpstream:
+				if plan.Destination.Upstream == nil {
+					return Environment{}, fmt.Errorf(
+						"%w: upstream Destination %q has no UpstreamPlan",
+						ErrInvalidEnvironment,
+						plan.ID,
+					)
+				}
+				if err := normalizeUpstreamPlan(plan, routeIDs); err != nil {
 					return Environment{}, err
 				}
-				if _, duplicate := candidateIDs[routeID]; duplicate {
-					return Environment{}, fmt.Errorf("%w: RouteSet candidate %q is duplicated", ErrInvalidEnvironment, routeID)
-				}
-				candidateIDs[routeID] = struct{}{}
-			}
-			for routeIndex := range plan.UpstreamPlan.Routes {
-				route := &plan.UpstreamPlan.Routes[routeIndex]
-				if err := validateChildID("UpstreamRoute", string(route.ID), route.Revision); err != nil {
-					return Environment{}, err
-				}
-				if _, exists := routeIDs[route.ID]; exists {
-					return Environment{}, duplicate("UpstreamRoute ID", route.ID.String())
-				}
-				routeIDs[route.ID] = struct{}{}
-				defaultFound = defaultFound || route.ID == plan.UpstreamPlan.DefaultRouteID
-				if _, candidate := candidateIDs[route.ID]; !candidate {
-					return Environment{}, fmt.Errorf("%w: route %q is outside its RouteSet", ErrInvalidEnvironment, route.ID)
-				}
-				if err := validateRoute(route); err != nil {
-					return Environment{}, err
-				}
-			}
-			if len(plan.UpstreamPlan.Routes) == 0 || len(candidateIDs) != len(plan.UpstreamPlan.Routes) ||
-				plan.UpstreamPlan.DefaultRouteID == "" || !defaultFound {
-				return Environment{}, fmt.Errorf("%w: protocol plan %q has a bad default route", ErrInvalidEnvironment, plan.ID)
+			default:
+				return Environment{}, fmt.Errorf(
+					"%w: protocol plan %q has an invalid Destination",
+					ErrInvalidEnvironment,
+					plan.ID,
+				)
 			}
 		}
 	}
@@ -257,11 +278,87 @@ func normalize(input Environment) (Environment, error) {
 	return value, nil
 }
 
-func validateRoot(value Environment) error {
+func normalizeUpstreamPlan(
+	plan *ClientProtocolPlan,
+	routeIDs map[UpstreamRouteID]struct{},
+) error {
+	upstream := plan.Destination.Upstream
+	if upstream == nil {
+		return ErrInvalidEnvironment
+	}
+	if err := validateNamedRevision(
+		"RouteSet",
+		upstream.RouteSet.ID,
+		upstream.RouteSet.Revision,
+		true,
+	); err != nil {
+		return err
+	}
+	if len(upstream.RouteSet.CandidateRouteIDs) == 0 {
+		return fmt.Errorf(
+			"%w: protocol plan %q has an empty RouteSet",
+			ErrInvalidEnvironment,
+			plan.ID,
+		)
+	}
+	sort.Slice(upstream.Routes, func(left, right int) bool {
+		return upstream.Routes[left].ID < upstream.Routes[right].ID
+	})
+	defaultFound := false
+	candidateIDs := make(
+		map[UpstreamRouteID]struct{},
+		len(upstream.RouteSet.CandidateRouteIDs),
+	)
+	for _, routeID := range upstream.RouteSet.CandidateRouteIDs {
+		if err := validateID("RouteSet candidate route ID", routeID.String()); err != nil {
+			return err
+		}
+		if _, duplicate := candidateIDs[routeID]; duplicate {
+			return fmt.Errorf(
+				"%w: RouteSet candidate %q is duplicated",
+				ErrInvalidEnvironment,
+				routeID,
+			)
+		}
+		candidateIDs[routeID] = struct{}{}
+	}
+	for routeIndex := range upstream.Routes {
+		route := &upstream.Routes[routeIndex]
+		if err := validateChildID("UpstreamRoute", string(route.ID), route.Revision); err != nil {
+			return err
+		}
+		if _, exists := routeIDs[route.ID]; exists {
+			return duplicate("UpstreamRoute ID", route.ID.String())
+		}
+		routeIDs[route.ID] = struct{}{}
+		defaultFound = defaultFound || route.ID == upstream.DefaultRouteID
+		if _, candidate := candidateIDs[route.ID]; !candidate {
+			return fmt.Errorf(
+				"%w: route %q is outside its RouteSet",
+				ErrInvalidEnvironment,
+				route.ID,
+			)
+		}
+		if err := validateRoute(route); err != nil {
+			return err
+		}
+	}
+	if len(upstream.Routes) == 0 || len(candidateIDs) != len(upstream.Routes) ||
+		upstream.DefaultRouteID == "" || !defaultFound {
+		return fmt.Errorf(
+			"%w: protocol plan %q has a bad default route",
+			ErrInvalidEnvironment,
+			plan.ID,
+		)
+	}
+	return nil
+}
+
+func validateRoot(value Environment, allowSystem bool) error {
 	if err := validateID("Environment ID", value.ID.String()); err != nil {
 		return err
 	}
-	if value.ID == SystemTransparentID {
+	if value.ID == SystemTransparentID && !allowSystem {
 		return ErrSystemEnvironment
 	}
 	if value.Revision == 0 || value.Revision > MaxRevision || value.Name == "" ||
@@ -338,40 +435,49 @@ func validateRoute(route *UpstreamRoute) error {
 	}
 	policy := &route.AccountPolicy
 	if policy.Revision == 0 || policy.Revision > MaxRevision ||
-		(policy.Mode != AccountModeClientPassthrough && policy.Mode != AccountModeManaged) ||
 		(policy.FailoverPolicy != FailoverOff && policy.FailoverPolicy != FailoverAccountScopedSafe) {
 		return fmt.Errorf("%w: route %q account policy is invalid", ErrInvalidEnvironment, route.ID)
 	}
 	if hasDuplicateUnsortedString(policy.CandidateAccountIDs) {
 		return fmt.Errorf("%w: route %q account policy contains duplicates", ErrInvalidEnvironment, route.ID)
 	}
-	if policy.Mode == AccountModeClientPassthrough &&
-		(len(policy.CandidateAccountIDs) != 0 || policy.PreferredAccountID != "" || len(policy.AccountRevisions) != 0) {
-		return fmt.Errorf("%w: client passthrough route %q references managed accounts", ErrInvalidEnvironment, route.ID)
+	if len(policy.CandidateAccountIDs) == 0 ||
+		!slices.Contains(policy.CandidateAccountIDs, policy.PreferredAccountID) {
+		return fmt.Errorf("%w: upstream route %q has incomplete account references", ErrInvalidEnvironment, route.ID)
 	}
-	if policy.Mode == AccountModeManaged {
-		if len(policy.CandidateAccountIDs) == 0 ||
-			!slices.Contains(policy.CandidateAccountIDs, policy.PreferredAccountID) {
-			return fmt.Errorf("%w: managed route %q has incomplete account references", ErrInvalidEnvironment, route.ID)
-		}
-		for _, id := range policy.CandidateAccountIDs {
-			if err := validateID("ProviderAccount ID", id); err != nil || policy.AccountRevisions[id] == 0 {
-				return fmt.Errorf("%w: managed route %q has an invalid account reference", ErrInvalidEnvironment, route.ID)
-			}
-		}
-		if len(policy.AccountRevisions) != len(policy.CandidateAccountIDs) {
-			return fmt.Errorf("%w: managed route %q has mutable account aliases", ErrInvalidEnvironment, route.ID)
+	for _, id := range policy.CandidateAccountIDs {
+		if err := validateID("ProviderAccount ID", id); err != nil || policy.AccountRevisions[id] == 0 {
+			return fmt.Errorf("%w: upstream route %q has an invalid account reference", ErrInvalidEnvironment, route.ID)
 		}
 	}
+	if len(policy.AccountRevisions) != len(policy.CandidateAccountIDs) {
+		return fmt.Errorf("%w: upstream route %q has mutable account aliases", ErrInvalidEnvironment, route.ID)
+	}
+	sort.Slice(route.ModelPolicy.Mappings, func(left, right int) bool {
+		if route.ModelPolicy.Mappings[left].RequestedModel != route.ModelPolicy.Mappings[right].RequestedModel {
+			return route.ModelPolicy.Mappings[left].RequestedModel < route.ModelPolicy.Mappings[right].RequestedModel
+		}
+		return route.ModelPolicy.Mappings[left].UpstreamModel < route.ModelPolicy.Mappings[right].UpstreamModel
+	})
 	switch route.ModelPolicy.Mode {
-	case "preserve", "passthrough":
-		if route.ModelPolicy.FixedModel != "" {
-			return fmt.Errorf("%w: route %q model policy has an unexpected fixed model", ErrInvalidEnvironment, route.ID)
+	case ModelModePassthrough:
+		if len(route.ModelPolicy.Mappings) != 0 {
+			return fmt.Errorf("%w: route %q model policy has unexpected mappings", ErrInvalidEnvironment, route.ID)
 		}
-	case "fixed":
-		if route.ModelPolicy.FixedModel == "" || len(route.ModelPolicy.FixedModel) > MaxNameBytes ||
-			strings.TrimSpace(route.ModelPolicy.FixedModel) != route.ModelPolicy.FixedModel {
-			return fmt.Errorf("%w: route %q fixed model is invalid", ErrInvalidEnvironment, route.ID)
+	case ModelModeMap:
+		if len(route.ModelPolicy.Mappings) == 0 {
+			return fmt.Errorf("%w: route %q model map is empty", ErrInvalidEnvironment, route.ID)
+		}
+		for index, mapping := range route.ModelPolicy.Mappings {
+			if err := validateModelIdentifier("requested model", mapping.RequestedModel); err != nil {
+				return fmt.Errorf("%w: route %q mapping %d has an invalid requested model", ErrInvalidEnvironment, route.ID, index)
+			}
+			if err := validateModelIdentifier("upstream model", mapping.UpstreamModel); err != nil {
+				return fmt.Errorf("%w: route %q mapping %d has an invalid upstream model", ErrInvalidEnvironment, route.ID, index)
+			}
+			if index > 0 && route.ModelPolicy.Mappings[index-1].RequestedModel == mapping.RequestedModel {
+				return fmt.Errorf("%w: route %q model map repeats requested model %q", ErrInvalidEnvironment, route.ID, mapping.RequestedModel)
+			}
 		}
 	default:
 		return fmt.Errorf("%w: route %q model policy is invalid", ErrInvalidEnvironment, route.ID)
@@ -381,6 +487,18 @@ func validateRoute(route *UpstreamRoute) error {
 	}
 	sort.Slice(route.PluginBindings, func(left, right int) bool { return route.PluginBindings[left].ID < route.PluginBindings[right].ID })
 	return validatePluginBindings(route.PluginBindings)
+}
+
+func validateModelIdentifier(label, value string) error {
+	if value == "" || len(value) > MaxNameBytes || !utf8.ValidString(value) {
+		return fmt.Errorf("%w: %s is not canonical", ErrInvalidEnvironment, label)
+	}
+	for _, character := range value {
+		if unicode.IsControl(character) || character == '\ufeff' {
+			return fmt.Errorf("%w: %s contains a control character", ErrInvalidEnvironment, label)
+		}
+	}
+	return nil
 }
 
 func validatePluginBindings(bindings []PluginBinding) error {
@@ -460,7 +578,7 @@ func currentChildIdentities(value Environment) map[string]RetiredChildIdentity {
 				Kind: ChildIdentityClientProtocolPlan, ID: plan.ID.String(), ParentID: endpoint.ID.String(),
 			}
 			identities[childIdentityKey(identity.Kind, identity.ID)] = identity
-			for _, route := range plan.UpstreamPlan.Routes {
+			for _, route := range destinationRoutes(plan.Destination) {
 				identity = RetiredChildIdentity{
 					Kind: ChildIdentityUpstreamRoute, ID: route.ID.String(), ParentID: plan.ID.String(),
 				}
@@ -477,10 +595,6 @@ func duplicate(label, value string) error {
 
 func validProtocol(value ClientProtocol) bool {
 	return value == ClientProtocolAnthropicMessages || value == ClientProtocolOpenAIResponses || value == ClientProtocolOpenAIChat
-}
-
-func validPlanMode(value PlanMode) bool {
-	return value == PlanModeOriginalPassthrough || value == PlanModeManaged
 }
 
 func hasDuplicateString(values []string) bool {
@@ -506,13 +620,10 @@ func hasDuplicateUnsortedString(values []string) bool {
 func validateAccounts(aggregate Environment, catalog AccountCatalog) error {
 	for _, endpoint := range aggregate.ClientEndpoints {
 		for _, plan := range endpoint.ProtocolPlans {
-			for _, route := range plan.UpstreamPlan.Routes {
+			for _, route := range destinationRoutes(plan.Destination) {
 				policy := route.AccountPolicy
-				if policy.Mode != AccountModeManaged {
-					continue
-				}
 				if catalog == nil {
-					return fmt.Errorf("%w: managed route %q has no account catalog", ErrInvalidEnvironment, route.ID)
+					return fmt.Errorf("%w: upstream route %q has no account catalog", ErrInvalidEnvironment, route.ID)
 				}
 				for _, accountID := range policy.CandidateAccountIDs {
 					account, exists := catalog.LookupAccount(accountID)
@@ -529,4 +640,11 @@ func validateAccounts(aggregate Environment, catalog AccountCatalog) error {
 		}
 	}
 	return nil
+}
+
+func destinationRoutes(destination DestinationPlan) []UpstreamRoute {
+	if destination.Kind != DestinationKindUpstream || destination.Upstream == nil {
+		return nil
+	}
+	return destination.Upstream.Routes
 }

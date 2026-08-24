@@ -1,6 +1,7 @@
 package environment
 
 import (
+	"context"
 	"fmt"
 	"sort"
 	"sync"
@@ -24,12 +25,13 @@ type ProjectionHealth struct {
 
 type SnapshotResolver interface {
 	Resolve(EnvironmentID) (EnvironmentSnapshot, error)
+	ResolveRevision(context.Context, EnvironmentID, Revision) (EnvironmentSnapshot, error)
 	ResolveClientOrigin(EnvironmentID, originidentity.ClientOrigin) (ClientEndpointSnapshot, error)
 }
 
 type SnapshotProjection interface {
 	SnapshotResolver
-	Restore([]EnvironmentSnapshot) error
+	Restore(EnvironmentSnapshot, []EnvironmentSnapshot) error
 	Publish(EnvironmentSnapshot) error
 	Retire(EnvironmentID) error
 	MarkUnavailable(EnvironmentID)
@@ -62,7 +64,10 @@ func NewAtomicProjection() *AtomicProjection {
 	return projection
 }
 
-func (projection *AtomicProjection) Restore(snapshots []EnvironmentSnapshot) error {
+func (projection *AtomicProjection) Restore(
+	system EnvironmentSnapshot,
+	snapshots []EnvironmentSnapshot,
+) error {
 	if projection == nil {
 		return ErrProjectionUnavailable
 	}
@@ -71,14 +76,17 @@ func (projection *AtomicProjection) Restore(snapshots []EnvironmentSnapshot) err
 	if projection.state.Load().restored {
 		return ErrProjectionRestored
 	}
+	if !system.SystemOwned() || system.ID() != SystemTransparentID ||
+		system.validate() != nil {
+		return ErrSystemEnvironment
+	}
 	next := &projectionData{
 		restored:  true,
 		byID:      make(map[EnvironmentID]EnvironmentSnapshot, len(snapshots)+1),
 		revisions: make(map[EnvironmentID]Revision, len(snapshots)+1),
 		poisoned:  make(map[EnvironmentID]struct{}),
 	}
-	system := SystemTransparentSnapshot()
-	next.byID[SystemTransparentID] = system
+	next.byID[SystemTransparentID] = system.clone()
 	next.revisions[SystemTransparentID] = system.Revision()
 	for _, snapshot := range snapshots {
 		if snapshot.ID() == SystemTransparentID || snapshot.SystemOwned() {
@@ -204,6 +212,36 @@ func (projection *AtomicProjection) ResolveClientOrigin(id EnvironmentID, origin
 		return ClientEndpointSnapshot{}, fmt.Errorf("%w: environmentId=%q clientOrigin=%q", ErrEnvironmentNotFound, id, origin.String())
 	}
 	return endpoint, nil
+}
+
+// ResolveRevision serves the exact revision currently held by this projection.
+// Historical resolution belongs to Manager, whose repository retains every
+// published revision. Keeping the method here makes a projection useful in
+// bounded tests without pretending it is a historical archive.
+func (projection *AtomicProjection) ResolveRevision(
+	ctx context.Context,
+	id EnvironmentID,
+	revision Revision,
+) (EnvironmentSnapshot, error) {
+	if ctx == nil || revision == 0 {
+		return EnvironmentSnapshot{}, ErrInvalidEnvironment
+	}
+	if err := ctx.Err(); err != nil {
+		return EnvironmentSnapshot{}, err
+	}
+	snapshot, err := projection.Resolve(id)
+	if err != nil {
+		return EnvironmentSnapshot{}, err
+	}
+	if snapshot.Revision() != revision {
+		return EnvironmentSnapshot{}, fmt.Errorf(
+			"%w: environmentId=%q revision=%d",
+			ErrEnvironmentNotFound,
+			id,
+			revision,
+		)
+	}
+	return snapshot, nil
 }
 
 func (projection *AtomicProjection) Health() ProjectionHealth {

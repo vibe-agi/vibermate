@@ -40,6 +40,11 @@ type ClientOptions struct {
 	Authenticator  Authenticator
 	Authenticators []Authenticator
 	Transport      Transport
+	// InstanceIDs mints independent runtime action, request, and attempt
+	// identities for runtime-owned traffic such as Endpoint model discovery.
+	// Agent provider requests already carry their frozen identities, so this is
+	// required only when a runtime fetch method is used.
+	InstanceIDs InstanceIDSource
 	// Audit records one immutable attempt per real outbound.
 	Audit                 egressaudit.Writer
 	RawEvidence           rawevidence.Observer
@@ -112,6 +117,8 @@ type Client struct {
 	coordinator    offlinehold.Coordinator
 	authenticators map[providerauth.DriverRef]Authenticator
 	transport      Transport
+	instanceIDs    InstanceIDSource
+	runtimePlan    wireprofile.CompiledTransportFingerprintPlan
 	audit          egressaudit.Writer
 	raw            rawevidence.Observer
 	rawTimeout     time.Duration
@@ -158,10 +165,16 @@ func NewClient(options ClientOptions) (*Client, error) {
 		}
 		byRef[authenticator.Ref()] = authenticator
 	}
+	runtimePlan, err := standardRuntimeTransportPlan()
+	if err != nil {
+		return nil, fmt.Errorf("compile runtime transport plan: %w", err)
+	}
 	return &Client{
 		coordinator:    options.Coordinator,
 		authenticators: byRef,
 		transport:      options.Transport,
+		instanceIDs:    options.InstanceIDs,
+		runtimePlan:    runtimePlan,
 		audit:          options.Audit,
 		raw:            options.RawEvidence,
 		rawTimeout:     rawTimeout,
@@ -176,6 +189,7 @@ func NewProductionClient(
 	coordinator offlinehold.Coordinator,
 	authenticator Authenticator,
 	timeouts TransportTimeouts,
+	instanceIDs InstanceIDSource,
 	audit egressaudit.Writer,
 ) (*Client, error) {
 	transport, err := newProductionTransport(timeouts)
@@ -186,6 +200,7 @@ func NewProductionClient(
 		Coordinator:   coordinator,
 		Authenticator: authenticator,
 		Transport:     transport,
+		InstanceIDs:   instanceIDs,
 		Audit:         audit,
 	})
 }
@@ -194,6 +209,7 @@ func NewProductionClientWithAuthenticators(
 	coordinator offlinehold.Coordinator,
 	authenticators []Authenticator,
 	timeouts TransportTimeouts,
+	instanceIDs InstanceIDSource,
 	audit egressaudit.Writer,
 	rawEvidence rawevidence.Observer,
 ) (*Client, error) {
@@ -205,6 +221,7 @@ func NewProductionClientWithAuthenticators(
 		Coordinator:    coordinator,
 		Authenticators: authenticators,
 		Transport:      transport,
+		InstanceIDs:    instanceIDs,
 		Audit:          audit,
 		RawEvidence:    rawEvidence,
 	})

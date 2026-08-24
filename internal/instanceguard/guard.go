@@ -1,5 +1,5 @@
 // Package instanceguard owns the operating-system lock that serializes one
-// Desktop daemon generation for a user-private runtime directory.
+// runtime Host generation for a private data directory.
 package instanceguard
 
 import (

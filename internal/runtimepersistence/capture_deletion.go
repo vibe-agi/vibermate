@@ -298,8 +298,8 @@ type ArchiveClear = resourcedeletion.Released
 //
 // The list is explicit rather than derived, because the interesting question is
 // what it leaves behind. Configuration stays: Environments, Endpoints,
-// Accounts, connection rules and workspace defaults are what the user set up,
-// not what the runtime observed. Three runtime tables stay too, and each for a
+// Accounts and connection rules are what the user set up, not what the runtime
+// observed. Three runtime tables stay too, and each for a
 // reason a reader would otherwise have to guess at:
 //
 //   - runtime_metadata carries the schema revision. Clearing it would make the

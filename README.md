@@ -55,8 +55,7 @@ into account storage.
 `vibermate run` resolves its initial Environment in one deterministic order:
 
 1. an explicit `--env` selection;
-2. the saved default for the exact machine and workspace;
-3. the Core-owned, immutable `system_transparent` fallback.
+2. the Core-owned, immutable `system_transparent` fallback.
 
 Therefore a first run remains safe and useful without configuration:
 
@@ -64,10 +63,11 @@ Therefore a first run remains safe and useful without configuration:
 vibermate run -- claude
 ```
 
-The transparent fallback authenticates the Capture, observes body-free
-connection and egress facts, and blind-forwards traffic. It has no semantic
-endpoint, never terminates TLS, never rewrites credentials, never runs content
-plugins, and never delivers the local Root.
+The transparent fallback authenticates the Capture and keeps each request's
+original destination, credentials, and model. For the built-in Claude and
+Codex Agent API origins it still terminates captured TLS, parses the protocol,
+and records the configured evidence; unrelated destinations remain body-free
+blind tunnels. It never invents an upstream Route or Account.
 
 To select a configured Environment at launch:
 
@@ -75,23 +75,59 @@ To select a configured Environment at launch:
 vibermate run --env work -- claude
 ```
 
-The launch choice is only the initial assignment. The Desktop App may switch a
-Capture later. Compatible changes apply to new requests, connection-shape
-changes drain and reconnect affected connections, and any change that widens
-the launch-time Root or credential-rewrite authority returns
-`restart_required` before mutation.
+## Remote Runtime Server
 
-From a managed Capture detail, the user may save its current Environment as the
-default for future runs in the same machine and workspace. That preference does
-not change the current Capture and is not route, account, model, plugin, or
-decryption authority. Clearing it restores the transparent fallback for future
-runs only.
+`vibermated` can own the Runtime on a headless Linux host, or the macOS App can
+expose the same Runtime it is already using. The Server operator creates
+Runtime Users; clients authenticate once and reuse a revocable login session.
+There is no per-run approval switch.
 
-A user Environment may use an `original_passthrough` Route. This is still an
-exact semantic endpoint: ViberMate records a frozen Request and Attempt while
-preserving the client envelope, upstream target, response shape, model choice,
-and ambient client credential. It is the lowest-friction inspection path;
-`system_transparent` remains the separate no-MITM connection-only path.
+Place the Flutter Web build in `vibermate-web/` beside the daemon, then start a
+headless HTTP Server:
+
+```sh
+vibermated server --listen 0.0.0.0:9666
+```
+
+The adjacent Web build is discovered automatically. `--web-root` remains an
+explicit override for container layouts that mount the assets elsewhere.
+
+The ready record names the local owner-only admin access-key file; it never
+prints the key. Open `http://<server-host>:9666/`, enter that access key, then
+create a Runtime User in Settings. The Web UI manages the already-running
+Runtime; it does not start a second daemon or database. The macOS App exposes
+the same management UI and Runtime User model.
+
+On each client machine, log in once with that Runtime User, then start a managed
+Agent run:
+
+```sh
+vibermate login --server 192.168.1.20:9666
+vibermate run --server 192.168.1.20:9666 -- codex
+vibermate run --server runtime.example.net:9666 --env work -- claude
+```
+
+Bare `host:port` intentionally selects HTTP so private networks work without a
+certificate. HTTP leaves login credentials and captured traffic unencrypted in
+transit. Use `--transport self_signed_tls` for pinned self-signed TLS, or
+`--transport tls_files --tls-cert <absolute-path> --tls-key <absolute-path>` for
+operator-managed certificates; clients select TLS explicitly with
+`--server https://<host:port>`. The Server remains the authority for Runtime
+Users, Environments, routing, provider credentials, and evidence.
+
+The launch choice is frozen for the lifetime of that Capture. The Desktop App
+does not switch a running Capture to another Environment, and there is no hidden
+workspace default. A later native `resume` is still a new Capture: omitting
+`--env` selects the captured Original Destination, while `--env NAME` selects
+that Environment explicitly.
+
+A Client Flow may choose the Original Destination. Original is not a Route: it
+has no synthetic Endpoint, Account, or Model Mapping. ViberMate records the
+Exchange while preserving the client origin, credential transport, requested
+model, and response protocol. `system_transparent` applies that same Original
+Destination behavior to the built-in Anthropic Messages and OpenAI Responses
+client entries. Those exact Agent API origins are MITM-inspected and recorded;
+unrelated destinations remain connection-only blind tunnels.
 
 Each user Environment explicitly chooses its Request evidence policy. New
 Environments default to redacted full-content evidence for 30 days; users may
@@ -99,8 +135,9 @@ choose metadata-only evidence or disable content recording. Conversation and
 tool evidence is kept in a separate retention-bound SQLite surface. Activity,
 ConnectionEvent, and EgressAttempt remain body-free, and captured credential
 fields/authentication headers have no representation in the content record.
-Secrets typed into a message are content and may be retained. The transparent
-system Environment always keeps content recording off.
+Secrets typed into a message are content and may be retained. The system
+Environment uses the same redacted full-content, 30-day default for supported
+Agent API exchanges.
 
 Upstream semantics do not become incremental: every provider attempt still
 receives the complete client request. Locally, retained transcripts use
@@ -119,13 +156,14 @@ Environment configuration has one write path:
 ```text
 save private draft
   -> compute bounded impact against current Capture assignments
-  -> review hot-switch / reconnect / restart counts
+  -> review which running Captures keep their frozen revision
   -> compare-and-swap durable publish
   -> atomically publish immutable process snapshot
 ```
 
-Drafts are never request authority. A Request resolves once and retains the
-same immutable Environment, endpoint, protocol, route, and account evidence for
+Drafts are never request authority. Publishing changes only future Captures;
+running Captures keep the revision selected at launch. A Request resolves once
+and retains the same immutable Environment, endpoint, protocol, route, and account evidence for
 its lifetime. Historical Activity refers to that frozen revision rather than
 re-reading current configuration.
 
@@ -171,7 +209,8 @@ JA4, HTTP/2 SETTINGS, header-order, or browser fingerprint parity.
 - SQLite is the only durable Environment and Capture-assignment authority.
 - The local Root private key stays inside `internal/localca`; system trust is
   not modified by the current product path.
-- `system_transparent` cannot receive Root material.
+- `system_transparent` receives Root material scoped to its built-in Agent API
+  authorities; it never grants credential mutation authority.
 - A semantic Capture receives only the exact launch authority frozen at its
   creation; later expansion requires restart.
 - Provider secrets do not enter Environment snapshots, Activity, logs, or UI.

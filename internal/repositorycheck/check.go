@@ -886,8 +886,6 @@ func CheckDataPlaneEnvironmentBoundary(repositoryRoot string) []Violation {
 	const environmentImport = "github.com/vibe-agi/vibermate/internal/environment"
 	const persistenceImport = "github.com/vibe-agi/vibermate/internal/runtimepersistence"
 	allowedEnvironmentSymbols := map[string]struct{}{
-		"AccountModeClientPassthrough": {},
-		"AccountModeManaged":           {},
 		"CandidateDigest":              {},
 		"ClientEndpointID":             {},
 		"ClientProtocolPlanID":         {},

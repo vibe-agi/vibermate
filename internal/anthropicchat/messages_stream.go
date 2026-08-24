@@ -129,7 +129,12 @@ func (stream *AnthropicProviderStream) Feed(
 		if stream.barrier {
 			destination = &stream.held
 		}
-		if err := appendCompatibleEvent(destination, event); err != nil {
+		clientEvent, err := stream.clientEvent(event)
+		if err != nil {
+			stream.failed = true
+			return nil, err
+		}
+		if err := appendCompatibleEvent(destination, clientEvent); err != nil {
 			stream.failed = true
 			return nil, err
 		}
@@ -138,6 +143,53 @@ func (stream *AnthropicProviderStream) Feed(
 	// introduces the first tool call, plus every event after it, remains behind
 	// the complete-tool approval barrier.
 	return bytes.Clone(safe.Bytes()), nil
+}
+
+func (stream *AnthropicProviderStream) clientEvent(
+	event ssewire.Event,
+) (ssewire.Event, error) {
+	if stream.request.RequestedModel == stream.request.EffectiveModel {
+		return event, nil
+	}
+	var envelope struct {
+		Type string `json:"type"`
+	}
+	if json.Unmarshal(event.Data, &envelope) != nil || envelope.Type != "message_start" {
+		return event, nil
+	}
+	var root map[string]json.RawMessage
+	if err := json.Unmarshal(event.Data, &root); err != nil || root == nil {
+		return ssewire.Event{}, errors.New("Anthropic message_start is invalid")
+	}
+	var message map[string]json.RawMessage
+	if err := json.Unmarshal(root["message"], &message); err != nil || message == nil {
+		return ssewire.Event{}, errors.New("Anthropic message_start message is invalid")
+	}
+	var reportedModel string
+	if err := json.Unmarshal(message["model"], &reportedModel); err != nil ||
+		reportedModel == "" {
+		return ssewire.Event{}, errors.New("Anthropic message_start model is invalid")
+	}
+	if reportedModel == stream.request.RequestedModel {
+		return event, nil
+	}
+	model, err := json.Marshal(stream.request.RequestedModel)
+	if err != nil {
+		return ssewire.Event{}, err
+	}
+	message["model"] = model
+	encodedMessage, err := json.Marshal(message)
+	if err != nil {
+		return ssewire.Event{}, err
+	}
+	root["message"] = encodedMessage
+	encodedEvent, err := json.Marshal(root)
+	if err != nil {
+		return ssewire.Event{}, err
+	}
+	rewritten := event
+	rewritten.Data = encodedEvent
+	return rewritten, nil
 }
 
 func (stream *AnthropicProviderStream) SemanticProgress() uint64 {

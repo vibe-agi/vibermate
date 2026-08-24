@@ -403,8 +403,8 @@ func (pipeline *Pipeline) executeCandidate(
 		failure.ClientField = classifyClientRequestField(request.body, err)
 		return failure
 	}
-	if selection.effectiveModel != "" {
-		decoded, err = decoded.WithEffectiveModel(selection.effectiveModel)
+	if mappedModel, mapped := selection.mappedModel(decoded.RequestedModel); mapped {
+		decoded, err = decoded.WithEffectiveModel(mappedModel)
 		if err != nil {
 			return newFailure(ReasonEnvironmentPlanInvalid, request.exchangeID, 0, err)
 		}
@@ -719,7 +719,7 @@ func (pipeline *Pipeline) observeAttempt(
 	plan := request.plan
 	endpoint := plan.Endpoint()
 	protocolPlan := plan.ProtocolPlan()
-	route := plan.Route()
+	routeID, routeRevision := requestPlanRouteRef(plan)
 	conversation := terminalConversationRef(request, captured)
 	observation := AttemptObservation{
 		ExchangeID:          request.exchangeID,
@@ -728,7 +728,7 @@ func (pipeline *Pipeline) observeAttempt(
 		EnvironmentDigest:   plan.EnvironmentDigest().String(),
 		EndpointID:          endpoint.ID(), EndpointRevision: endpoint.Revision(),
 		ProtocolPlanID: protocolPlan.ID(), ProtocolPlanRevision: protocolPlan.Revision(),
-		RouteID: route.ID(), RouteRevision: route.Revision(),
+		RouteID: routeID, RouteRevision: routeRevision,
 		AccountID: result.AccountID, AccountRevision: result.AccountRevision,
 		CredentialEpoch: result.CredentialEpoch, Admission: admission,
 		HasAdmission: hasAdmission, ConnectionID: request.connectionRef,
@@ -763,22 +763,49 @@ func (pipeline *Pipeline) observeStart(request ClientRequest) {
 	plan := request.plan
 	endpoint := plan.Endpoint()
 	protocolPlan := plan.ProtocolPlan()
-	route := plan.Route()
+	routeID, routeRevision := requestPlanRouteRef(plan)
 	conversation := agentconversation.Ref{}
-	if evidence := request.ClientProtocolEvidence(); len(evidence) != 0 {
+	evidence := request.ClientProtocolEvidence()
+	semanticRequest := protocolcore.Request{ProtocolEvidence: evidence}
+	body := request.body
+	if headers, available := request.OriginalHeaders(); available {
+		if decodedBody, decodeErr := decodeOriginalRequestContent(
+			request.body,
+			headers.Get("Content-Encoding"),
+		); decodeErr == nil {
+			body = decodedBody
+		}
+	}
+	if protocolPath, selectErr := pipeline.protocolPaths.Select(
+		plan.CodecPlan(),
+		request.operation.id,
+	); selectErr == nil {
+		if decoded, _, decodeErr := protocolPath.Client().DecodeRequest(body); decodeErr == nil {
+			semanticRequest = mergeClientProtocolEvidence(decoded, evidence)
+			evidence = append(
+				[]protocolcore.ProtocolEvidenceValue(nil),
+				semanticRequest.ProtocolEvidence...,
+			)
+		}
+	}
+	if len(evidence) != 0 {
 		captureRunID := ""
 		sourceDisplayName := "ViberMate runtime"
 		if hasAdmission {
 			captureRunID, _ = admission.CaptureRunID()
 			sourceDisplayName = admission.SourceLabel()
 		}
-		semanticRequest := protocolcore.Request{ProtocolEvidence: evidence}
-		conversation, _ = agentconversation.Project(agentconversation.ProjectionInput{
+		candidate, projectErr := agentconversation.Project(agentconversation.ProjectionInput{
 			CaptureRunID:      captureRunID,
 			ExchangeID:        request.exchangeID,
 			SourceDisplayName: sourceDisplayName,
 			Request:           &semanticRequest,
 		})
+		if projectErr == nil &&
+			(candidate.Evidence == agentconversation.EvidenceExplicitSession ||
+				candidate.Evidence == agentconversation.EvidenceExplicitActor) {
+			conversation = candidate
+		}
 	}
 	if conversation.ProjectionID == "" {
 		var err error
@@ -794,11 +821,11 @@ func (pipeline *Pipeline) observeStart(request ClientRequest) {
 		EnvironmentDigest:   plan.EnvironmentDigest().String(),
 		EndpointID:          endpoint.ID(), EndpointRevision: endpoint.Revision(),
 		ProtocolPlanID: protocolPlan.ID(), ProtocolPlanRevision: protocolPlan.Revision(),
-		RouteID: route.ID(), RouteRevision: route.Revision(),
+		RouteID: routeID, RouteRevision: routeRevision,
 		Admission: admission, HasAdmission: hasAdmission,
 		ConnectionID:           request.connectionRef,
 		Conversation:           conversation,
-		ClientProtocolEvidence: request.ClientProtocolEvidence(),
+		ClientProtocolEvidence: evidence,
 	}
 	ctx, cancel := context.WithTimeout(
 		context.WithoutCancel(pipeline.ownerContext),
@@ -901,7 +928,7 @@ func (pipeline *Pipeline) observeContent(
 	plan := request.plan
 	endpoint := plan.Endpoint()
 	protocolPlan := plan.ProtocolPlan()
-	route := plan.Route()
+	routeID, routeRevision := requestPlanRouteRef(plan)
 	observation := ContentObservation{
 		ExchangeID:      request.exchangeID,
 		CaptureRunID:    request.CaptureRunRef(),
@@ -910,7 +937,7 @@ func (pipeline *Pipeline) observeContent(
 		EnvironmentDigest: plan.EnvironmentDigest().String(),
 		EndpointID:        endpoint.ID(), EndpointRevision: endpoint.Revision(),
 		ProtocolPlanID: protocolPlan.ID(), ProtocolPlanRevision: protocolPlan.Revision(),
-		RouteID: route.ID(), RouteRevision: route.Revision(),
+		RouteID: routeID, RouteRevision: routeRevision,
 		Recording: plan.ContentRecording(), Request: captured.request.Clone(),
 	}
 	if captured.response != nil {
@@ -923,6 +950,16 @@ func (pipeline *Pipeline) observeContent(
 	)
 	defer cancel()
 	_ = pipeline.content.ObserveContent(ctx, observation)
+}
+
+func requestPlanRouteRef(
+	plan environment.RequestPlan,
+) (environment.UpstreamRouteID, environment.Revision) {
+	route, exists := plan.UpstreamRoute()
+	if !exists {
+		return "", 0
+	}
+	return route.ID(), route.Revision()
 }
 
 func classifyClientRequestField(body []byte, failure error) ClientField {

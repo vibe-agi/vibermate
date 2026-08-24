@@ -2,7 +2,6 @@ import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:vibermate_app/app/vibermate_app.dart';
 import 'package:vibermate_app/core/design/viber_theme.dart';
-import 'package:vibermate_app/core/design/workbench_widgets.dart';
 import 'package:vibermate_app/core/preferences/workbench_preferences.dart';
 import 'package:vibermate_app/features/workbench/workbench_controller.dart';
 import 'package:vibermate_app/preview/preview_control_api.dart';
@@ -230,7 +229,7 @@ void main() {
     await tester.pump(const Duration(seconds: 1));
   });
 
-  testWidgets('light endpoint editor and protocol menu use light surfaces', (
+  testWidgets('light endpoint editor protocol checklist uses light surfaces', (
     tester,
   ) async {
     await tester.binding.setSurfaceSize(const Size(1000, 760));
@@ -258,16 +257,18 @@ void main() {
       ViberColors.light.panel,
     );
 
-    await tester.tap(find.byType(CompactSelectField<String>));
-    await tester.pumpAndSettle();
-    final menuContext = tester.element(find.text('OpenAI compatible'));
-    expect(Theme.of(menuContext).canvasColor, ViberColors.light.panel);
-    expect(
-      Theme.of(
-        menuContext,
-      ).dropdownMenuTheme.menuStyle?.backgroundColor?.resolve({}),
-      ViberColors.light.panel,
+    final protocols = find.byKey(const Key('endpoint-editor-protocols'));
+    final decoration =
+        tester.widget<DecoratedBox>(protocols).decoration as BoxDecoration;
+    expect(decoration.color, ViberColors.light.input);
+    expect((decoration.border! as Border).top.color, ViberColors.light.divider);
+    final responses = find.byKey(
+      const Key('endpoint-editor-protocol-openai_responses'),
     );
+    expect(tester.widget<CheckboxListTile>(responses).value, isFalse);
+    await tester.tap(responses);
+    await tester.pumpAndSettle();
+    expect(tester.widget<CheckboxListTile>(responses).value, isTrue);
 
     await tester.pumpWidget(const SizedBox.shrink());
     await tester.pump(const Duration(seconds: 1));

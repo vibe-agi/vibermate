@@ -579,7 +579,7 @@ func (repository *activityRepository) getConversationIdentity(
 	return identity.Clone(), nil
 }
 
-func (repository *activityRepository) ReprojectTerminalConversation(
+func (repository *activityRepository) ReprojectConversation(
 	ctx context.Context,
 	exchangeID string,
 	conversation agentconversation.Ref,
@@ -601,7 +601,17 @@ func (repository *activityRepository) ReprojectTerminalConversation(
 		     conversation_kind = ?,
 		     conversation_evidence = ?,
 		     conversation_actor = ?
-		 WHERE subject_id = ? AND kind = 'exchange.completed'`,
+		 WHERE sequence = (
+		   SELECT sequence
+		   FROM runtime_activities
+		   WHERE subject_id = ?
+		     AND kind IN ('exchange.started', 'exchange.completed')
+		   ORDER BY CASE kind
+		     WHEN 'exchange.completed' THEN 0
+		     ELSE 1
+		   END
+		   LIMIT 1
+		 )`,
 		conversation.ProjectionID,
 		conversation.DisplayName,
 		conversation.Kind,
@@ -610,7 +620,7 @@ func (repository *activityRepository) ReprojectTerminalConversation(
 		exchangeID,
 	)
 	if err != nil {
-		return fmt.Errorf("reproject terminal Conversation: %w", err)
+		return fmt.Errorf("reproject Conversation: %w", err)
 	}
 	affected, err := result.RowsAffected()
 	if err != nil {

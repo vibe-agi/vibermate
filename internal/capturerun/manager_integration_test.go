@@ -15,9 +15,82 @@ import (
 	"github.com/vibe-agi/vibermate/internal/capturecredential"
 	"github.com/vibe-agi/vibermate/internal/capturerun"
 	"github.com/vibe-agi/vibermate/internal/clientadapter"
+	"github.com/vibe-agi/vibermate/internal/evidencearchive"
 	"github.com/vibe-agi/vibermate/internal/runtimepersistence"
 	"github.com/vibe-agi/vibermate/internal/workspaceidentity"
 )
+
+func TestCaptureRunCreateHoldsTheArchiveBarrierUntilPersistenceCompletes(
+	t *testing.T,
+) {
+	t.Parallel()
+
+	store := openStore(t, filepath.Join(t.TempDir(), "runtime.db"))
+	defer shutdownStore(t, store)
+	barrier := &recordingCaptureCreationBarrier{}
+	repository := &barrierCheckingCaptureRunRepository{
+		Repository: store.CaptureRunRepository(),
+		barrier:    barrier,
+	}
+	options := capturerun.DefaultOptions(repository)
+	options.ArchiveBarrier = barrier
+	manager, err := capturerun.NewManager(context.Background(), options)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = manager.Create(context.Background(), capturerun.CreateCommand{
+		CWD:                     filepath.Join(t.TempDir(), "workspace"),
+		CanonicalExecutablePath: filepath.Join(t.TempDir(), "bin", "codex"),
+		ExecutableLabel:         "codex",
+		Lifetime:                time.Minute,
+		CatalogRevision:         1,
+		Workspace:               testWorkspaceScope(t),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !repository.sawBarrier || barrier.calls != 1 || barrier.releases != 1 ||
+		barrier.active != 0 {
+		t.Fatalf(
+			"archive barrier saw=%t calls=%d releases=%d active=%d",
+			repository.sawBarrier,
+			barrier.calls,
+			barrier.releases,
+			barrier.active,
+		)
+	}
+}
+
+type recordingCaptureCreationBarrier struct {
+	active   int
+	calls    int
+	releases int
+}
+
+func (barrier *recordingCaptureCreationBarrier) BeginCaptureCreation(
+	context.Context,
+) (evidencearchive.Release, error) {
+	barrier.calls++
+	barrier.active++
+	return func() {
+		barrier.releases++
+		barrier.active--
+	}, nil
+}
+
+type barrierCheckingCaptureRunRepository struct {
+	capturerun.Repository
+	barrier    *recordingCaptureCreationBarrier
+	sawBarrier bool
+}
+
+func (repository *barrierCheckingCaptureRunRepository) Create(
+	ctx context.Context,
+	record capturerun.DurableRecord,
+) error {
+	repository.sawBarrier = repository.barrier.active == 1
+	return repository.Repository.Create(ctx, record)
+}
 
 func TestCaptureRunPersistsVerifiedAdapterEvidenceWithProxyCapability(
 	t *testing.T,

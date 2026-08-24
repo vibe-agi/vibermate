@@ -23,6 +23,7 @@ void main() {
           daemonPath: daemonPath,
           cacheDirectory: '${root.path}/cache',
           dataDirectory: '${root.path}/data',
+          remoteServerListenAddress: '127.0.0.1:0',
         );
         final dashboard = await runtime.api.loadDashboard();
         expect(dashboard.status.ready, isTrue);
@@ -82,7 +83,7 @@ void main() {
           environmentId,
           environmentDraft.draftRevision,
         );
-        expect(environmentImpact.affected, isEmpty);
+        expect(environmentImpact.continuingCaptures, isEmpty);
         final environmentPublish = await runtime.api.publishEnvironmentDraft(
           environmentId,
           environmentDraft.draftRevision,
@@ -101,50 +102,22 @@ void main() {
           1,
         );
 
-        const workspaceMachineId =
-            'BwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwc';
-        const workspaceId = 'CAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAg';
-        expect(
-          await runtime.api.workspaceEnvironmentDefault(
-            machineId: workspaceMachineId,
-            workspaceId: workspaceId,
-          ),
-          isNull,
-        );
-        final workspaceDefault = await runtime.api
-            .setWorkspaceEnvironmentDefault(
-              machineId: workspaceMachineId,
-              workspaceId: workspaceId,
-              expectedRevision: 0,
-              environmentId: environmentId,
-            );
-        expect(workspaceDefault.environmentId, environmentId);
-        expect(workspaceDefault.revision, 1);
-        expect(
-          (await runtime.api.workspaceEnvironmentDefault(
-            machineId: workspaceMachineId,
-            workspaceId: workspaceId,
-          ))?.revision,
-          workspaceDefault.revision,
-        );
-        await runtime.api.clearWorkspaceEnvironmentDefault(
-          current: workspaceDefault,
-        );
-        expect(
-          await runtime.api.workspaceEnvironmentDefault(
-            machineId: workspaceMachineId,
-            workspaceId: workspaceId,
-          ),
-          isNull,
-        );
-
         final endpoint = await runtime.api.createUpstreamEndpoint(
           id: 'target.flutter.live-$runSuffix',
           displayName: 'Flutter live relay',
           origin: 'https://flutter-live.example',
-          kind: 'anthropic',
+          backendProtocols: const [
+            'anthropic_messages',
+            'openai_responses',
+            'openai_chat',
+          ],
         );
         expect(endpoint.accountKinds, contains('anthropic_api_key'));
+        expect(endpoint.backendProtocols, [
+          'anthropic_messages',
+          'openai_responses',
+          'openai_chat',
+        ]);
         final account = await runtime.api.createProviderAccount(
           id: 'account.flutter.live-$runSuffix',
           displayName: 'Flutter live Account',
@@ -170,10 +143,19 @@ void main() {
           kind: 'anthropic_api_key',
           secret: 'flutter-live-route-secret',
         );
-        final routedEndpoints = appendEnvironmentUpstreamEndpoint(
+        final anthropicRoutedEndpoints = appendEnvironmentUpstreamEndpoint(
           endpoints: const [],
           upstreamEndpoint: endpoint,
           account: routeAccount,
+          clientProtocol: 'anthropic_messages',
+          identityNonce: '$runSuffix-anthropic',
+        );
+        final routedEndpoints = appendEnvironmentUpstreamEndpoint(
+          endpoints: anthropicRoutedEndpoints,
+          upstreamEndpoint: endpoint,
+          account: routeAccount,
+          clientProtocol: 'openai_responses',
+          identityNonce: '$runSuffix-responses',
         );
         final routedEnvironmentId = 'flutter-live-routed-$runSuffix';
         final routedDraft = await runtime.api.saveEnvironmentDraft(
@@ -202,24 +184,27 @@ void main() {
           routedEnvironmentId,
           routedDraft.draftRevision,
         );
-        expect(routedImpact.affected, isEmpty);
+        expect(routedImpact.continuingCaptures, isEmpty);
         final routedPublish = await runtime.api.publishEnvironmentDraft(
           routedEnvironmentId,
           routedDraft.draftRevision,
         );
-        final routed = routedPublish.environment.routes.single;
-        expect(routed.endpointId, endpoint.id);
-        expect(routed.accountPolicy.preferredAccountId, routeAccount.id);
-        expect(routed.accountPolicy.accountRevisions, {
-          routeAccount.id: routeAccount.revision,
-        });
+        expect(routedPublish.environment.routes, hasLength(2));
+        for (final routed in routedPublish.environment.routes) {
+          expect(routed.endpointId, endpoint.id);
+          expect(routed.accountPolicy.preferredAccountId, routeAccount.id);
+          expect(routed.accountPolicy.accountRevisions, {
+            routeAccount.id: routeAccount.revision,
+          });
+        }
         final blockedDelete = await runtime.api.deleteProviderAccount(
           routeAccount,
         );
         expect(blockedDelete.deleted, isFalse);
+        expect(blockedDelete.references, hasLength(2));
         expect(
-          blockedDelete.references.single.environmentId,
-          routedEnvironmentId,
+          blockedDelete.references.map((reference) => reference.environmentId),
+          everyElement(routedEnvironmentId),
         );
         final cleanupDraft = await runtime.api.saveEnvironmentDraft(
           environmentId: routedEnvironmentId,
@@ -256,6 +241,64 @@ void main() {
           cleanupDraft.draftRevision,
         );
         expect(cleanupPublish.environment.clientEndpoints, isEmpty);
+
+        final readdedEndpoints = appendEnvironmentUpstreamEndpoint(
+          endpoints: cleanupPublish.environment.clientEndpoints,
+          upstreamEndpoint: endpoint,
+          account: routeAccount,
+          identityNonce: 'readded-$runSuffix',
+        );
+        final readdedDraft = await runtime.api.saveEnvironmentDraft(
+          environmentId: routedEnvironmentId,
+          expectedBaseRevision: cleanupPublish.environment.revision,
+          input: EnvironmentDraftInput.fromEnvironment(
+            cleanupPublish.environment,
+            expectedDraftRevision: 0,
+            clientEndpoints: readdedEndpoints,
+          ),
+        );
+        await runtime.api.previewEnvironmentDraft(
+          routedEnvironmentId,
+          readdedDraft.draftRevision,
+        );
+        final readdedPublish = await runtime.api.publishEnvironmentDraft(
+          routedEnvironmentId,
+          readdedDraft.draftRevision,
+        );
+        expect(
+          readdedPublish.environment.routes.single.endpointId,
+          endpoint.id,
+        );
+        final originalAnthropicEndpoint = routedPublish
+            .environment
+            .clientEndpoints
+            .firstWhere(
+              (client) => client.protocolPlans.any(
+                (plan) => plan.clientProtocol == 'anthropic_messages',
+              ),
+            );
+        expect(
+          readdedPublish.environment.clientEndpoints.single.id,
+          isNot(originalAnthropicEndpoint.id),
+        );
+
+        final finalCleanupDraft = await runtime.api.saveEnvironmentDraft(
+          environmentId: routedEnvironmentId,
+          expectedBaseRevision: readdedPublish.environment.revision,
+          input: EnvironmentDraftInput.fromEnvironment(
+            readdedPublish.environment,
+            expectedDraftRevision: 0,
+            clientEndpoints: const [],
+          ),
+        );
+        await runtime.api.previewEnvironmentDraft(
+          routedEnvironmentId,
+          finalCleanupDraft.draftRevision,
+        );
+        await runtime.api.publishEnvironmentDraft(
+          routedEnvironmentId,
+          finalCleanupDraft.draftRevision,
+        );
         final cleanedDelete = await runtime.api.deleteProviderAccount(
           routeAccount,
         );
@@ -265,7 +308,16 @@ void main() {
           'system_transparent',
         );
         expect(manualContext.environmentId, 'system_transparent');
-        expect(manualContext.root, isNull);
+        expect(manualContext.root, isNotNull);
+        expect(
+          manualContext.protectedAuthorities,
+          orderedEquals([
+            'api.anthropic.com:443',
+            'api.openai.com:443',
+            'chatgpt.com:443',
+          ]),
+        );
+        expect(manualContext.managedCredentialAuthorities, isEmpty);
         final createdManual = await runtime.api.createManualCapture(
           context: manualContext,
           displayName: 'Flutter live client',
@@ -358,6 +410,7 @@ void main() {
         runtime = await DesktopRuntime.start(
           daemonPath: daemonPath,
           homeDirectory: home.path,
+          remoteServerListenAddress: '127.0.0.1:0',
         );
         final dashboard = await runtime.api.loadDashboard();
         expect(
@@ -409,6 +462,7 @@ void main() {
           daemonPath: daemonPath,
           cacheDirectory: '${root.path}/cache',
           dataDirectory: '${root.path}/data',
+          remoteServerListenAddress: '127.0.0.1:0',
         );
         expect(runtime.isClosed, isFalse);
         expect(

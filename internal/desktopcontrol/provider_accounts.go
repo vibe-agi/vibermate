@@ -17,8 +17,7 @@ type ProviderAccountKind string
 
 const (
 	ProviderAccountKindAnthropicAPIKey ProviderAccountKind = "anthropic_api_key"
-	ProviderAccountKindClaudeOAuth     ProviderAccountKind = "claude_oauth_token"
-	ProviderAccountKindOpenAIAPIKey    ProviderAccountKind = "openai_api_key"
+	ProviderAccountKindBearerToken     ProviderAccountKind = "bearer_token"
 )
 
 type ProviderAccountResponse struct {
@@ -258,9 +257,7 @@ func providerAccountKindAuthority(kind ProviderAccountKind) (providerauth.Driver
 	switch kind {
 	case ProviderAccountKindAnthropicAPIKey:
 		return providerauth.AnthropicAPIKeyDriverRef(), nil
-	case ProviderAccountKindClaudeOAuth:
-		return providerauth.StaticHeaderDriverRef(), nil
-	case ProviderAccountKindOpenAIAPIKey:
+	case ProviderAccountKindBearerToken:
 		return providerauth.StaticHeaderDriverRef(), nil
 	default:
 		return providerauth.DriverRef{}, provideraccount.ErrInvalidAccount
@@ -269,13 +266,10 @@ func providerAccountKindAuthority(kind ProviderAccountKind) (providerauth.Driver
 
 func providerAccountKindOf(account provideraccount.Account) (ProviderAccountKind, error) {
 	switch {
-	case account.RealmID == "anthropic.official" && account.Driver == providerauth.AnthropicAPIKeyDriverRef():
+	case account.Driver == providerauth.AnthropicAPIKeyDriverRef():
 		return ProviderAccountKindAnthropicAPIKey, nil
-	case account.RealmID == "anthropic.official" && account.Driver == providerauth.StaticHeaderDriverRef():
-		return ProviderAccountKindClaudeOAuth, nil
-	case (account.RealmID == "openai.platform" || account.RealmID == "openai.chatgpt") &&
-		account.Driver == providerauth.StaticHeaderDriverRef():
-		return ProviderAccountKindOpenAIAPIKey, nil
+	case account.Driver == providerauth.StaticHeaderDriverRef():
+		return ProviderAccountKindBearerToken, nil
 	default:
 		return "", provideraccount.ErrInvalidAccount
 	}

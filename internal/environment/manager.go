@@ -15,68 +15,26 @@ import (
 )
 
 type CaptureReference struct {
-	Capture         captureidentity.Reference
-	Program         string
-	MachineLabel    string
-	WorkspaceLabel  string
-	LaunchAuthority LaunchAuthorityBoundary
-	Bindings        []ConnectionBinding
+	Capture        captureidentity.Reference
+	Program        string
+	MachineLabel   string
+	WorkspaceLabel string
 }
 
 type CaptureInspector interface {
-	AffectedCaptures(context.Context, EnvironmentID, int) ([]CaptureReference, error)
-}
-
-// CaptureTransitionCoordinator owns the publish fence between immutable
-// Environment revisions. It must revalidate the preview against live Capture
-// assignments, stop admission only where required, drain and close incompatible
-// downstream connections, and hold that fence until Release.
-type CaptureTransitionCoordinator interface {
-	PrepareEnvironmentTransition(context.Context, EnvironmentTransition) (EnvironmentTransitionLease, error)
-}
-
-type EnvironmentTransition struct {
-	ActiveExists bool
-	Active       EnvironmentSnapshot
-	Candidate    EnvironmentSnapshot
-	Expected     ImpactPreview
-}
-
-type EnvironmentTransitionLease interface {
-	Commit()
-	Release()
-}
-
-type CompatibilityClassification string
-
-const (
-	CompatibilityHotSwitch         CompatibilityClassification = "hot_switch"
-	CompatibilityReconnectRequired CompatibilityClassification = "reconnect_required"
-	CompatibilityRestartRequired   CompatibilityClassification = "restart_required"
-)
-
-type ImpactReference struct {
-	Capture        CaptureReference
-	Classification CompatibilityClassification
+	ActiveCaptures(context.Context, EnvironmentID, int) ([]CaptureReference, error)
 }
 
 type ImpactPreview struct {
-	EnvironmentID          EnvironmentID
-	BaseRevision           Revision
-	DraftRevision          Revision
-	CandidateDigest        CandidateDigest
-	Classification         CompatibilityClassification
-	HotSwitchCount         int
-	ReconnectRequiredCount int
-	RestartRequiredCount   int
-	Affected               []ImpactReference
+	EnvironmentID      EnvironmentID
+	BaseRevision       Revision
+	DraftRevision      Revision
+	CandidateDigest    CandidateDigest
+	ContinuingCaptures []CaptureReference
 }
 
 func (preview ImpactPreview) Clone() ImpactPreview {
-	preview.Affected = slices.Clone(preview.Affected)
-	for index := range preview.Affected {
-		preview.Affected[index].Capture.Bindings = slices.Clone(preview.Affected[index].Capture.Bindings)
-	}
+	preview.ContinuingCaptures = slices.Clone(preview.ContinuingCaptures)
 	return preview
 }
 
@@ -130,7 +88,7 @@ type AccountDeletionGuard interface {
 // Controller is the single Environment control-plane authority.
 // Deleter retires an Environment once nothing holds it.
 type Deleter interface {
-	Delete(context.Context, EnvironmentID, ...HolderLookup) (resourcedeletion.Result, error)
+	Delete(context.Context, EnvironmentID) (resourcedeletion.Result, error)
 	HoldersForEndpoint(context.Context, string) ([]resourcedeletion.Holder, error)
 }
 
@@ -143,12 +101,12 @@ type Controller interface {
 }
 
 type Manager struct {
-	repository  Repository
-	compiler    Compiler
-	projection  SnapshotProjection
-	inspector   CaptureInspector
-	transitions CaptureTransitionCoordinator
-	writes      sync.Mutex
+	repository Repository
+	compiler   Compiler
+	projection SnapshotProjection
+	inspector  CaptureInspector
+	system     EnvironmentSnapshot
+	writes     sync.Mutex
 }
 
 var (
@@ -160,6 +118,10 @@ var (
 func NewManager(ctx context.Context, repository Repository, compiler Compiler, projection SnapshotProjection, inspector CaptureInspector) (*Manager, error) {
 	if ctx == nil || repository == nil || projection == nil {
 		return nil, errors.New("Environment manager dependencies are incomplete")
+	}
+	system, err := compiler.CompileSystemTransparent()
+	if err != nil {
+		return nil, fmt.Errorf("compile system_transparent: %w", err)
 	}
 	aggregates, err := repository.LoadAllActive(ctx)
 	if err != nil {
@@ -173,25 +135,25 @@ func NewManager(ctx context.Context, repository Repository, compiler Compiler, p
 		}
 		snapshots = append(snapshots, snapshot)
 	}
-	if err := projection.Restore(snapshots); err != nil {
+	if err := projection.Restore(system, snapshots); err != nil {
 		return nil, fmt.Errorf("restore Environment projection: %w", err)
-	}
-	var transitions CaptureTransitionCoordinator
-	if inspector != nil {
-		var ok bool
-		transitions, ok = inspector.(CaptureTransitionCoordinator)
-		if !ok {
-			return nil, errors.New("Environment Capture inspector cannot coordinate revision transitions")
-		}
 	}
 	return &Manager{
 		repository: repository, compiler: compiler, projection: projection,
-		inspector: inspector, transitions: transitions,
+		inspector: inspector, system: system,
 	}, nil
 }
 
 func (manager *Manager) Resolve(id EnvironmentID) (EnvironmentSnapshot, error) {
 	return manager.projection.Resolve(id)
+}
+
+func (manager *Manager) ResolveRevision(
+	ctx context.Context,
+	id EnvironmentID,
+	revision Revision,
+) (EnvironmentSnapshot, error) {
+	return manager.GetRevision(ctx, id, revision)
 }
 
 func (manager *Manager) ResolveClientOrigin(id EnvironmentID, origin originidentity.ClientOrigin) (ClientEndpointSnapshot, error) {
@@ -218,9 +180,8 @@ func (manager *Manager) GuardAccountDeletion(
 	for _, aggregate := range aggregates {
 		for _, endpoint := range aggregate.ClientEndpoints {
 			for _, plan := range endpoint.ProtocolPlans {
-				for _, route := range plan.UpstreamPlan.Routes {
-					if route.AccountPolicy.Mode != AccountModeManaged ||
-						!slices.Contains(route.AccountPolicy.CandidateAccountIDs, accountID) {
+				for _, route := range destinationRoutes(plan.Destination) {
+					if !slices.Contains(route.AccountPolicy.CandidateAccountIDs, accountID) {
 						continue
 					}
 					references = append(references, AccountReference{
@@ -247,24 +208,11 @@ func (manager *Manager) GuardAccountDeletion(
 	return []AccountReference{}, nil
 }
 
-// HolderLookup reports what would break if an Environment went away.
-//
-// The Manager owns one holder itself — a Capture that is still running, which
-// it can see through the inspector. Everything else that can hold an
-// Environment lives outside this package, so it arrives as a lookup rather than
-// as a dependency this package would otherwise have to know about.
-type HolderLookup func(
-	context.Context,
-	EnvironmentID,
-) ([]resourcedeletion.Holder, error)
-
 // Delete retires an Environment once nothing depends on it.
 //
 // A running Capture would lose the authority its admission decisions are frozen
-// against mid-flight. Callers add the holders they know about — a workspace
-// default is the other one today. Holders are reported, never resolved:
-// choosing which Capture to stop or which workspace to repoint is the user's
-// decision, not this manager's.
+// against mid-flight. Holders are reported, never resolved: choosing which
+// Capture to stop is the user's decision, not this manager's.
 //
 // Historical evidence is deliberately not a holder. Frozen Exchanges resolve
 // immutable revisions and Retire leaves those in place, so an Environment can
@@ -272,7 +220,6 @@ type HolderLookup func(
 func (manager *Manager) Delete(
 	ctx context.Context,
 	id EnvironmentID,
-	extra ...HolderLookup,
 ) (resourcedeletion.Result, error) {
 	if ctx == nil || validateID("Environment ID", id.String()) != nil {
 		return resourcedeletion.Result{}, ErrInvalidEnvironment
@@ -284,7 +231,7 @@ func (manager *Manager) Delete(
 		// and an unchecked delete is the one outcome this method prevents.
 		return resourcedeletion.Result{}, ErrInvalidEnvironment
 	}
-	captures, err := manager.inspector.AffectedCaptures(ctx, id, MaxCaptureImpact+1)
+	captures, err := manager.inspector.ActiveCaptures(ctx, id, MaxCaptureImpact+1)
 	if err != nil {
 		return resourcedeletion.Result{}, err
 	}
@@ -296,16 +243,6 @@ func (manager *Manager) Delete(
 			Label:  captureHolderLabel(capture),
 			Detail: capture.MachineLabel,
 		})
-	}
-	for _, lookup := range extra {
-		if lookup == nil {
-			return resourcedeletion.Result{}, ErrInvalidEnvironment
-		}
-		found, lookupErr := lookup(ctx, id)
-		if lookupErr != nil {
-			return resourcedeletion.Result{}, lookupErr
-		}
-		holders = append(holders, found...)
 	}
 	if len(holders) != 0 {
 		return resourcedeletion.Refused(holders)
@@ -350,7 +287,7 @@ func (manager *Manager) List(ctx context.Context) ([]EnvironmentSnapshot, error)
 		return nil, err
 	}
 	snapshots := make([]EnvironmentSnapshot, 0, len(aggregates)+1)
-	snapshots = append(snapshots, SystemTransparentSnapshot())
+	snapshots = append(snapshots, manager.system.clone())
 	for _, aggregate := range aggregates {
 		snapshot, compileErr := manager.compiler.Compile(aggregate)
 		if compileErr != nil {
@@ -372,7 +309,7 @@ func (manager *Manager) Get(ctx context.Context, id EnvironmentID) (EnvironmentS
 		return EnvironmentSnapshot{}, fmt.Errorf("%w: context is nil", ErrInvalidEnvironment)
 	}
 	if id == SystemTransparentID {
-		return SystemTransparentSnapshot(), nil
+		return manager.system.clone(), nil
 	}
 	aggregate, exists, err := manager.repository.LoadActive(ctx, id)
 	if err != nil {
@@ -403,7 +340,7 @@ func (manager *Manager) GetRevision(ctx context.Context, id EnvironmentID, revis
 		return EnvironmentSnapshot{}, ErrInvalidEnvironment
 	}
 	if id == SystemTransparentID {
-		snapshot := SystemTransparentSnapshot()
+		snapshot := manager.system.clone()
 		if revision != snapshot.Revision() {
 			return EnvironmentSnapshot{}, fmt.Errorf("%w: environmentId=%q revision=%d", ErrEnvironmentNotFound, id, revision)
 		}
@@ -480,7 +417,7 @@ func validateNewChildren(candidate Environment) error {
 			if plan.Revision != 1 {
 				return newChildRevision("ClientProtocolPlan", plan.ID.String())
 			}
-			for _, route := range plan.UpstreamPlan.Routes {
+			for _, route := range destinationRoutes(plan.Destination) {
 				if route.Revision != 1 {
 					return newChildRevision("UpstreamRoute", route.ID.String())
 				}
@@ -508,7 +445,6 @@ func (manager *Manager) Preview(ctx context.Context, id EnvironmentID, draftRevi
 	if err != nil || candidate.Digest() != draft.CandidateDigest {
 		return ImpactPreview{}, fmt.Errorf("%w: draft candidate changed", ErrInvalidRepositoryState)
 	}
-	var active EnvironmentSnapshot
 	activeAggregate, activeExists, err := manager.repository.LoadActive(ctx, id)
 	if err != nil {
 		return ImpactPreview{}, err
@@ -516,17 +452,11 @@ func (manager *Manager) Preview(ctx context.Context, id EnvironmentID, draftRevi
 	if (activeExists && activeAggregate.Revision != draft.BaseRevision) || (!activeExists && draft.BaseRevision != 0) {
 		return ImpactPreview{}, ErrRevisionConflict
 	}
-	if activeExists {
-		active, err = manager.compiler.Compile(activeAggregate)
-		if err != nil {
-			return ImpactPreview{}, err
-		}
-	}
 	refs := []CaptureReference(nil)
 	if manager.inspector != nil {
-		refs, err = manager.inspector.AffectedCaptures(ctx, id, MaxCaptureImpact+1)
+		refs, err = manager.inspector.ActiveCaptures(ctx, id, MaxCaptureImpact+1)
 		if err != nil {
-			return ImpactPreview{}, fmt.Errorf("inspect affected Captures: %w", err)
+			return ImpactPreview{}, fmt.Errorf("inspect active Captures: %w", err)
 		}
 		if len(refs) > MaxCaptureImpact {
 			return ImpactPreview{}, ErrImpactLimitExceeded
@@ -538,77 +468,18 @@ func (manager *Manager) Preview(ctx context.Context, id EnvironmentID, draftRevi
 			return refs[left].Capture.ID < refs[right].Capture.ID
 		})
 		for index, ref := range refs {
-			if ref.Capture.Validate() != nil || ref.LaunchAuthority.Validate() != nil {
-				return ImpactPreview{}, fmt.Errorf("%w: affected Capture reference is invalid", ErrInvalidEnvironment)
-			}
-			refs[index].Bindings = slices.Clone(ref.Bindings)
-			sortConnectionBindings(refs[index].Bindings)
-			for bindingIndex, binding := range refs[index].Bindings {
-				if validateConnectionBindingShape(binding) != nil {
-					return ImpactPreview{}, fmt.Errorf("%w: affected Capture binding is invalid", ErrInvalidEnvironment)
-				}
-				if bindingIndex > 0 && binding == refs[index].Bindings[bindingIndex-1] {
-					return ImpactPreview{}, fmt.Errorf("%w: affected Capture binding is duplicated", ErrInvalidEnvironment)
-				}
+			if ref.Capture.Validate() != nil {
+				return ImpactPreview{}, fmt.Errorf("%w: active Capture reference is invalid", ErrInvalidEnvironment)
 			}
 			if index > 0 && ref.Capture == refs[index-1].Capture {
-				return ImpactPreview{}, fmt.Errorf("%w: affected Capture reference is duplicated", ErrInvalidEnvironment)
+				return ImpactPreview{}, fmt.Errorf("%w: active Capture reference is duplicated", ErrInvalidEnvironment)
 			}
 		}
 	}
-	preview := ImpactPreview{
+	return ImpactPreview{
 		EnvironmentID: id, BaseRevision: draft.BaseRevision, DraftRevision: draft.Revision,
-		CandidateDigest: candidate.Digest(), Classification: CompatibilityHotSwitch,
-		Affected: make([]ImpactReference, 0, len(refs)),
-	}
-	for _, ref := range refs {
-		classification := classifyCapture(active, activeExists, candidate, ref)
-		switch classification {
-		case CompatibilityRestartRequired:
-			preview.Classification = CompatibilityRestartRequired
-			preview.RestartRequiredCount++
-		case CompatibilityReconnectRequired:
-			if preview.Classification != CompatibilityRestartRequired {
-				preview.Classification = CompatibilityReconnectRequired
-			}
-			preview.ReconnectRequiredCount++
-		default:
-			preview.HotSwitchCount++
-		}
-		preview.Affected = append(preview.Affected, ImpactReference{Capture: ref, Classification: classification})
-	}
-	return preview.Clone(), nil
-}
-
-func classifyCapture(active EnvironmentSnapshot, activeExists bool, candidate EnvironmentSnapshot, ref CaptureReference) CompatibilityClassification {
-	if err := ref.LaunchAuthority.Covers(candidate); err != nil {
-		return CompatibilityRestartRequired
-	}
-	if !activeExists || active.State() != StateActive || candidate.State() != StateActive {
-		return CompatibilityReconnectRequired
-	}
-	for _, binding := range ref.Bindings {
-		classification, err := ClassifyConnectionTransition(active, candidate, binding)
-		if err != nil || classification == CompatibilityReconnectRequired {
-			return CompatibilityReconnectRequired
-		}
-	}
-	return CompatibilityHotSwitch
-}
-
-func sortConnectionBindings(bindings []ConnectionBinding) {
-	sort.Slice(bindings, func(left, right int) bool {
-		if bindings[left].Mode != bindings[right].Mode {
-			return bindings[left].Mode < bindings[right].Mode
-		}
-		if bindings[left].ClientOrigin != bindings[right].ClientOrigin {
-			return bindings[left].ClientOrigin.String() < bindings[right].ClientOrigin.String()
-		}
-		if bindings[left].ClientEndpointID != bindings[right].ClientEndpointID {
-			return bindings[left].ClientEndpointID < bindings[right].ClientEndpointID
-		}
-		return bindings[left].CompatibilityDigest.String() < bindings[right].CompatibilityDigest.String()
-	})
+		CandidateDigest: candidate.Digest(), ContinuingCaptures: slices.Clone(refs),
+	}.Clone(), nil
 }
 
 func (manager *Manager) Publish(ctx context.Context, preview ImpactPreview) (CommitResult, error) {
@@ -646,36 +517,9 @@ func (manager *Manager) Publish(ctx context.Context, preview ImpactPreview) (Com
 	if err != nil || snapshot.Digest() != preview.CandidateDigest {
 		return CommitResult{Outcome: CommitOutcomeNotCommitted}, errors.Join(ErrPreviewStale, err)
 	}
-	var activeSnapshot EnvironmentSnapshot
-	if activeExists {
-		activeSnapshot, err = manager.compiler.Compile(active)
-		if err != nil {
-			return CommitResult{Outcome: CommitOutcomeNotCommitted}, err
-		}
-	}
 	freshPreview, err := manager.Preview(ctx, preview.EnvironmentID, preview.DraftRevision)
 	if err != nil || !sameImpactPreview(preview, freshPreview) {
 		return CommitResult{Outcome: CommitOutcomeNotCommitted}, errors.Join(ErrPreviewStale, err)
-	}
-	if freshPreview.RestartRequiredCount != 0 ||
-		freshPreview.Classification == CompatibilityRestartRequired {
-		return CommitResult{Outcome: CommitOutcomeNotCommitted},
-			ErrLaunchAuthorityRestartRequired
-	}
-	var transitionLease EnvironmentTransitionLease
-	if manager.transitions != nil {
-		transitionLease, err = manager.transitions.PrepareEnvironmentTransition(ctx, EnvironmentTransition{
-			ActiveExists: activeExists,
-			Active:       activeSnapshot,
-			Candidate:    snapshot,
-			Expected:     freshPreview,
-		})
-		if err != nil || transitionLease == nil {
-			return CommitResult{Outcome: CommitOutcomeNotCommitted}, errors.Join(ErrTransitionUnavailable, err)
-		}
-		defer transitionLease.Release()
-	} else if len(freshPreview.Affected) != 0 {
-		return CommitResult{Outcome: CommitOutcomeNotCommitted}, ErrTransitionUnavailable
 	}
 	result, commitErr := manager.repository.PublishDraft(ctx, PublishMutation{
 		EnvironmentID: preview.EnvironmentID, ExpectedBaseRevision: preview.BaseRevision,
@@ -694,9 +538,6 @@ func (manager *Manager) Publish(ctx context.Context, preview ImpactPreview) (Com
 			manager.projection.MarkUnavailable(preview.EnvironmentID)
 			return result, errors.Join(ErrProjectionUnavailable, err)
 		}
-		if transitionLease != nil {
-			transitionLease.Commit()
-		}
 		return result, nil
 	case CommitOutcomeConflict:
 		return result, errors.Join(ErrRevisionConflict, commitErr)
@@ -711,20 +552,11 @@ func (manager *Manager) Publish(ctx context.Context, preview ImpactPreview) (Com
 func sameImpactPreview(left, right ImpactPreview) bool {
 	if left.EnvironmentID != right.EnvironmentID || left.BaseRevision != right.BaseRevision ||
 		left.DraftRevision != right.DraftRevision || left.CandidateDigest != right.CandidateDigest ||
-		left.Classification != right.Classification || left.HotSwitchCount != right.HotSwitchCount ||
-		left.ReconnectRequiredCount != right.ReconnectRequiredCount ||
-		left.RestartRequiredCount != right.RestartRequiredCount || len(left.Affected) != len(right.Affected) {
+		len(left.ContinuingCaptures) != len(right.ContinuingCaptures) {
 		return false
 	}
-	for index := range left.Affected {
-		leftImpact, rightImpact := left.Affected[index], right.Affected[index]
-		if leftImpact.Classification != rightImpact.Classification ||
-			leftImpact.Capture.Capture != rightImpact.Capture.Capture ||
-			leftImpact.Capture.LaunchAuthority != rightImpact.Capture.LaunchAuthority ||
-			leftImpact.Capture.Program != rightImpact.Capture.Program ||
-			leftImpact.Capture.MachineLabel != rightImpact.Capture.MachineLabel ||
-			leftImpact.Capture.WorkspaceLabel != rightImpact.Capture.WorkspaceLabel ||
-			!slices.Equal(leftImpact.Capture.Bindings, rightImpact.Capture.Bindings) {
+	for index := range left.ContinuingCaptures {
+		if left.ContinuingCaptures[index] != right.ContinuingCaptures[index] {
 			return false
 		}
 	}
@@ -753,7 +585,7 @@ func (manager *Manager) HoldersForEndpoint(
 	for _, aggregate := range aggregates {
 		for _, endpoint := range aggregate.ClientEndpoints {
 			for _, plan := range endpoint.ProtocolPlans {
-				for _, route := range plan.UpstreamPlan.Routes {
+				for _, route := range destinationRoutes(plan.Destination) {
 					if route.ProviderTarget.ID != endpointID {
 						continue
 					}

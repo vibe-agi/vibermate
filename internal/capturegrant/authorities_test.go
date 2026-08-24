@@ -126,6 +126,14 @@ func (fixedSnapshotResolver) Resolve(environment.EnvironmentID) (environment.Env
 	return environment.EnvironmentSnapshot{}, errors.New("unexpected Environment resolve")
 }
 
+func (fixedSnapshotResolver) ResolveRevision(
+	context.Context,
+	environment.EnvironmentID,
+	environment.Revision,
+) (environment.EnvironmentSnapshot, error) {
+	return environment.EnvironmentSnapshot{}, errors.New("unexpected Environment revision resolve")
+}
+
 func (fixedSnapshotResolver) ResolveClientOrigin(
 	environment.EnvironmentID,
 	originidentity.ClientOrigin,

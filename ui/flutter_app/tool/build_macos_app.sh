@@ -43,6 +43,7 @@ else
       -o "${flutter_directory}/build/vibermated" \
       ./cmd/vibermated
   )
+  flutter build web --release
   flutter build macos --release
   app_bundle="${flutter_directory}/build/macos/Build/Products/Release/ViberMate.app"
   macos_directory="${app_bundle}/Contents/MacOS"
@@ -65,6 +66,15 @@ else
     "${flutter_directory}/build/vibermated" \
     "${daemon_executable}"
   chmod 755 "${cli_executable}" "${daemon_executable}"
+  web_source="${flutter_directory}/build/web"
+  web_destination="${app_bundle}/Contents/Resources/vibermate-web"
+  if [[ ! -f "${web_source}/index.html" || -e "${web_destination}" ]]; then
+    echo "Flutter Web management output is unavailable or already bundled" >&2
+    exit 70
+  fi
+  ditto --norsrc --noextattr --noacl --noqtn -X \
+    "${web_source}" \
+    "${web_destination}"
   if [[ "${app_executable}" -ef "${cli_executable}" ]]; then
     echo "App executable and packaged CLI resolve to the same file" >&2
     exit 70

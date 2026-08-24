@@ -14,6 +14,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"slices"
 	"testing"
 	"time"
 
@@ -28,7 +29,6 @@ import (
 	"github.com/vibe-agi/vibermate/internal/localca"
 	"github.com/vibe-agi/vibermate/internal/manualcapture"
 	"github.com/vibe-agi/vibermate/internal/runtimepersistence"
-	"github.com/vibe-agi/vibermate/internal/workspacedefault"
 	"github.com/vibe-agi/vibermate/internal/workspaceidentity"
 )
 
@@ -203,7 +203,7 @@ func TestCaptureControlSeparatesControlAndPerRunCredentials(t *testing.T) {
 	}
 }
 
-func TestCaptureControlUsesTransparentFallbackAndRejectsInvalidEnvironment(t *testing.T) {
+func TestCaptureControlUsesSystemCaptureDefaultAndRejectsInvalidEnvironment(t *testing.T) {
 	t.Parallel()
 
 	fixture := newFixture(t)
@@ -223,9 +223,11 @@ func TestCaptureControlUsesTransparentFallbackAndRejectsInvalidEnvironment(t *te
 	}
 	var grant capturecontrol.LaunchGrant
 	decodeRecorder(t, response, &grant)
-	if grant.RootPEMPath != "" || len(grant.ProtectedAuthorities) != 0 ||
+	if grant.RootPEMPath == "" || !slices.Equal(grant.ProtectedAuthorities, []string{
+		"api.anthropic.com:443", "api.openai.com:443", "chatgpt.com:443",
+	}) ||
 		len(grant.ManagedCredentialAuthorities) != 0 {
-		t.Fatalf("transparent fallback leaked semantic authority: %+v", grant)
+		t.Fatalf("system capture default authority = %+v", grant)
 	}
 
 	invalid := fixture.DoJSON(
@@ -244,11 +246,9 @@ func TestCaptureControlUsesTransparentFallbackAndRejectsInvalidEnvironment(t *te
 	}
 }
 
-func TestCaptureControlUsesWorkspaceDefaultWhenEnvironmentIsOmitted(t *testing.T) {
+func TestCaptureControlOmittedEnvironmentAlwaysCapturesOriginalDestination(t *testing.T) {
 	t.Parallel()
-	fixture := newFixture(t, func(options *capturegrant.Options) {
-		options.WorkspaceDefaults = fixedWorkspaceDefault{environmentID: testEnvironmentID}
-	})
+	fixture := newFixture(t)
 	defer fixture.Close(t)
 	response := fixture.DoJSON(
 		t,
@@ -261,13 +261,15 @@ func TestCaptureControlUsesWorkspaceDefaultWhenEnvironmentIsOmitted(t *testing.T
 		},
 	)
 	if response.Code != http.StatusCreated {
-		t.Fatalf("workspace default status=%d body=%s", response.Code, response.Body.Bytes())
+		t.Fatalf("original destination status=%d body=%s", response.Code, response.Body.Bytes())
 	}
 	var grant capturecontrol.LaunchGrant
 	decodeRecorder(t, response, &grant)
-	if grant.RootPEMPath == "" || len(grant.ProtectedAuthorities) != 1 ||
-		grant.ProtectedAuthorities[0] != "api.anthropic.com:443" {
-		t.Fatalf("workspace default did not select semantic authority: %+v", grant)
+	if grant.RootPEMPath == "" || !slices.Equal(grant.ProtectedAuthorities, []string{
+		"api.anthropic.com:443", "api.openai.com:443", "chatgpt.com:443",
+	}) ||
+		len(grant.ManagedCredentialAuthorities) != 0 {
+		t.Fatalf("omitted Environment did not preserve Original Destination: %+v", grant)
 	}
 }
 
@@ -544,7 +546,7 @@ func TestManualCaptureCreateRejectsStaleConfirmationWithoutMutation(t *testing.T
 	}
 }
 
-func TestManualCaptureSystemTransparentNeverReturnsRootMaterial(t *testing.T) {
+func TestManualCaptureSystemTransparentReturnsAgentInterceptionRoot(t *testing.T) {
 	t.Parallel()
 
 	fixture := newFixture(t)
@@ -558,13 +560,15 @@ func TestManualCaptureSystemTransparentNeverReturnsRootMaterial(t *testing.T) {
 		nil,
 	)
 	if contextResponse.Code != http.StatusOK ||
-		bytes.Contains(contextResponse.Body.Bytes(), []byte(`"root"`)) {
+		!bytes.Contains(contextResponse.Body.Bytes(), []byte(`"root"`)) {
 		t.Fatalf("transparent context status=%d body=%s", contextResponse.Code, contextResponse.Body.Bytes())
 	}
 	var captureContext capturecontrol.ManualCaptureContext
 	decodeRecorder(t, contextResponse, &captureContext)
-	if captureContext.EnvironmentID != "system_transparent" || captureContext.Root != nil ||
-		len(captureContext.ProtectedAuthorities) != 0 || len(captureContext.ManagedAuthorities) != 0 {
+	if captureContext.EnvironmentID != "system_transparent" || captureContext.Root == nil ||
+		!slices.Equal(captureContext.ProtectedAuthorities, []string{
+			"api.anthropic.com:443", "api.openai.com:443", "chatgpt.com:443",
+		}) || len(captureContext.ManagedAuthorities) != 0 {
 		t.Fatalf("transparent context=%+v", captureContext)
 	}
 	expiresIn := int64((24 * time.Hour) / time.Second)
@@ -581,13 +585,15 @@ func TestManualCaptureSystemTransparentNeverReturnsRootMaterial(t *testing.T) {
 		},
 	)
 	if createResponse.Code != http.StatusCreated ||
-		bytes.Contains(createResponse.Body.Bytes(), []byte(`"root"`)) {
+		!bytes.Contains(createResponse.Body.Bytes(), []byte(`"root"`)) {
 		t.Fatalf("transparent create status=%d body=%s", createResponse.Code, createResponse.Body.Bytes())
 	}
 	var grant capturecontrol.ManualCaptureGrant
 	decodeRecorder(t, createResponse, &grant)
 	if grant.EnvironmentID != "system_transparent" || grant.AssignmentRevision != 1 ||
-		grant.Root != nil || len(grant.ProtectedAuthorities) != 0 || len(grant.ManagedAuthorities) != 0 {
+		grant.Root == nil || !slices.Equal(grant.ProtectedAuthorities, []string{
+		"api.anthropic.com:443", "api.openai.com:443", "chatgpt.com:443",
+	}) || len(grant.ManagedAuthorities) != 0 {
 		t.Fatalf("transparent grant=%+v", grant)
 	}
 }
@@ -893,11 +899,11 @@ func newFixture(t *testing.T, overrides ...fixtureOverride) *fixture {
 		Generation: base64.RawURLEncoding.EncodeToString(
 			bytes.Repeat([]byte{0x31}, 32),
 		),
-		RootIdentity:      authority.Identity(),
-		Root:              authority.Certificate(),
-		RunLifetime:       2 * time.Minute,
-		Workspaces:        workspaceResolver,
-		WorkspaceDefaults: noWorkspaceDefaults{},
+		RootIdentity:  authority.Identity(),
+		Root:          authority.Certificate(),
+		RunLifetime:   2 * time.Minute,
+		Workspaces:    workspaceResolver,
+		ProxyDelivery: capturegrant.ProxyDeliveryLocalListener,
 	}
 	for _, override := range overrides {
 		override(&issuerOptions)
@@ -1012,31 +1018,6 @@ func (clock *fakeClock) Now() time.Time {
 
 type fixedAuthorities []string
 
-type noWorkspaceDefaults struct{}
-
-func (noWorkspaceDefaults) Resolve(
-	context.Context,
-	workspaceidentity.Scope,
-) (workspacedefault.Record, bool, error) {
-	return workspacedefault.Record{}, false, nil
-}
-
-type fixedWorkspaceDefault struct{ environmentID environment.EnvironmentID }
-
-func (defaults fixedWorkspaceDefault) Resolve(
-	_ context.Context,
-	scope workspaceidentity.Scope,
-) (workspacedefault.Record, bool, error) {
-	return workspacedefault.Record{
-		Key: workspacedefault.Key{
-			MachineID: scope.MachineID(), WorkspaceID: scope.WorkspaceID(),
-		},
-		EnvironmentID: defaults.environmentID,
-		Revision:      1,
-		UpdatedAt:     time.Date(2026, 8, 8, 1, 2, 3, 0, time.UTC),
-	}, true, nil
-}
-
 func (authorities fixedAuthorities) Review(
 	_ context.Context,
 	environmentID environment.EnvironmentID,
@@ -1073,7 +1054,11 @@ func (authorities fixedAuthorities) authoritySet(
 	protected := []string(authorities)
 	managed := []string(authorities)
 	if environmentID == environment.SystemTransparentID {
-		protected = nil
+		protected = []string{
+			"api.anthropic.com:443",
+			"api.openai.com:443",
+			"chatgpt.com:443",
+		}
 		managed = nil
 	}
 	var candidateDigest environment.CandidateDigest

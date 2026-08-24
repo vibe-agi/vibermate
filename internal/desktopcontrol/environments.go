@@ -50,21 +50,16 @@ type EnvironmentDraftInput struct {
 }
 
 type EnvironmentImpactResponse struct {
-	EnvironmentID          environment.EnvironmentID               `json:"environmentId"`
-	BaseRevision           environment.Revision                    `json:"baseRevision"`
-	DraftRevision          environment.Revision                    `json:"draftRevision"`
-	CandidateDigest        string                                  `json:"candidateDigest"`
-	Classification         environment.CompatibilityClassification `json:"classification"`
-	HotSwitchCount         int                                     `json:"hotSwitchCount"`
-	ReconnectRequiredCount int                                     `json:"reconnectRequiredCount"`
-	RestartRequiredCount   int                                     `json:"restartRequiredCount"`
-	Affected               []EnvironmentImpactCaptureResponse      `json:"affected"`
+	EnvironmentID      environment.EnvironmentID          `json:"environmentId"`
+	BaseRevision       environment.Revision               `json:"baseRevision"`
+	DraftRevision      environment.Revision               `json:"draftRevision"`
+	CandidateDigest    string                             `json:"candidateDigest"`
+	ContinuingCaptures []EnvironmentImpactCaptureResponse `json:"continuingCaptures"`
 }
 
 type EnvironmentImpactCaptureResponse struct {
-	CaptureKind    string                                  `json:"captureKind"`
-	CaptureID      string                                  `json:"captureId"`
-	Classification environment.CompatibilityClassification `json:"classification"`
+	CaptureKind string `json:"captureKind"`
+	CaptureID   string `json:"captureId"`
 }
 
 type EnvironmentPublishResponse struct {
@@ -79,18 +74,79 @@ func environmentResponseOf(snapshot environment.EnvironmentSnapshot) Environment
 }
 
 func environmentResponseOfAggregate(aggregate environment.Environment, digest string, systemOwned bool) EnvironmentResponse {
-	clientEndpoints := make([]environment.ClientEndpoint, len(aggregate.ClientEndpoints))
-	copy(clientEndpoints, aggregate.ClientEndpoints)
-	pluginBindings := make([]environment.PluginBinding, len(aggregate.PluginBindings))
-	copy(pluginBindings, aggregate.PluginBindings)
 	return EnvironmentResponse{
 		ID: aggregate.ID, Name: aggregate.Name, State: aggregate.State,
 		Revision: aggregate.Revision, Digest: digest,
-		SystemOwned: systemOwned, ClientEndpoints: clientEndpoints,
-		PluginBindings: pluginBindings, BudgetPolicy: aggregate.BudgetPolicy,
-		EgressPolicy: aggregate.EgressPolicy, ContentRecording: aggregate.ContentRecording,
+		SystemOwned:     systemOwned,
+		ClientEndpoints: environmentControlEndpoints(aggregate.ClientEndpoints),
+		PluginBindings:  controlCollection(aggregate.PluginBindings),
+		BudgetPolicy:    aggregate.BudgetPolicy,
+		EgressPolicy:    aggregate.EgressPolicy, ContentRecording: aggregate.ContentRecording,
 		PolicySet: aggregate.EffectivePolicySet(),
 	}
+}
+
+// Environment owns several nested collections whose in-process zero value is
+// nil. The Control API has a stricter wire contract: a collection is always an
+// array/object, including when empty. Build that boundary representation here
+// without changing the immutable aggregate or its candidate digest.
+func environmentControlEndpoints(
+	values []environment.ClientEndpoint,
+) []environment.ClientEndpoint {
+	endpoints := make([]environment.ClientEndpoint, len(values))
+	for endpointIndex, sourceEndpoint := range values {
+		endpoint := sourceEndpoint
+		endpoint.ProtocolPlans = make(
+			[]environment.ClientProtocolPlan,
+			len(sourceEndpoint.ProtocolPlans),
+		)
+		for planIndex, sourcePlan := range sourceEndpoint.ProtocolPlans {
+			plan := sourcePlan
+			plan.PluginBindings = controlCollection(sourcePlan.PluginBindings)
+			if sourcePlan.Destination.Upstream != nil {
+				sourceUpstream := sourcePlan.Destination.Upstream
+				upstream := *sourceUpstream
+				upstream.RouteSet.CandidateRouteIDs = controlCollection(
+					sourceUpstream.RouteSet.CandidateRouteIDs,
+				)
+				upstream.Routes = make(
+					[]environment.UpstreamRoute,
+					len(sourceUpstream.Routes),
+				)
+				for routeIndex, sourceRoute := range sourceUpstream.Routes {
+					route := sourceRoute
+					route.ProviderTarget.Capabilities = controlCollection(
+						sourceRoute.ProviderTarget.Capabilities,
+					)
+					route.AccountPolicy.CandidateAccountIDs = controlCollection(
+						sourceRoute.AccountPolicy.CandidateAccountIDs,
+					)
+					route.AccountPolicy.AccountRevisions = make(
+						map[string]environment.Revision,
+						len(sourceRoute.AccountPolicy.AccountRevisions),
+					)
+					for accountID, revision := range sourceRoute.AccountPolicy.AccountRevisions {
+						route.AccountPolicy.AccountRevisions[accountID] = revision
+					}
+					route.ModelPolicy.Mappings = controlCollection(
+						sourceRoute.ModelPolicy.Mappings,
+					)
+					route.PluginBindings = controlCollection(sourceRoute.PluginBindings)
+					upstream.Routes[routeIndex] = route
+				}
+				plan.Destination.Upstream = &upstream
+			}
+			endpoint.ProtocolPlans[planIndex] = plan
+		}
+		endpoints[endpointIndex] = endpoint
+	}
+	return endpoints
+}
+
+func controlCollection[T any](values []T) []T {
+	result := make([]T, len(values))
+	copy(result, values)
+	return result
 }
 
 func draftResponseOf(draft environment.Draft) EnvironmentDraftResponse {
@@ -102,19 +158,16 @@ func draftResponseOf(draft environment.Draft) EnvironmentDraftResponse {
 }
 
 func impactResponseOf(preview environment.ImpactPreview) EnvironmentImpactResponse {
-	affected := make([]EnvironmentImpactCaptureResponse, len(preview.Affected))
-	for index, item := range preview.Affected {
-		affected[index] = EnvironmentImpactCaptureResponse{
-			CaptureKind: string(item.Capture.Capture.Kind), CaptureID: item.Capture.Capture.ID,
-			Classification: item.Classification,
+	continuing := make([]EnvironmentImpactCaptureResponse, len(preview.ContinuingCaptures))
+	for index, item := range preview.ContinuingCaptures {
+		continuing[index] = EnvironmentImpactCaptureResponse{
+			CaptureKind: string(item.Capture.Kind), CaptureID: item.Capture.ID,
 		}
 	}
 	return EnvironmentImpactResponse{
 		EnvironmentID: preview.EnvironmentID, BaseRevision: preview.BaseRevision,
 		DraftRevision: preview.DraftRevision, CandidateDigest: preview.CandidateDigest.String(),
-		Classification: preview.Classification, HotSwitchCount: preview.HotSwitchCount,
-		ReconnectRequiredCount: preview.ReconnectRequiredCount,
-		RestartRequiredCount:   preview.RestartRequiredCount, Affected: affected,
+		ContinuingCaptures: continuing,
 	}
 }
 

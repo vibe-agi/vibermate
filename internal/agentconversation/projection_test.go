@@ -8,7 +8,7 @@ import (
 	"github.com/vibe-agi/vibermate/internal/protocolcore"
 )
 
-func TestProjectionGroupsExactClientActorAcrossExchanges(t *testing.T) {
+func TestProjectionGroupsExactClientActorAcrossCaptures(t *testing.T) {
 	t.Parallel()
 
 	identity := agentconversation.ClientIdentity{
@@ -29,7 +29,7 @@ func TestProjectionGroupsExactClientActorAcrossExchanges(t *testing.T) {
 	identity.ProviderResponseID = "msg-2"
 	identity.ProviderMessageID = "msg-2"
 	second, err := agentconversation.Project(agentconversation.ProjectionInput{
-		CaptureRunID: "run-1", ExchangeID: "exchange-2",
+		CaptureRunID: "run-2", ExchangeID: "exchange-2",
 		SourceDisplayName: "Claude", ClientIdentity: &identity,
 	})
 	if err != nil {
@@ -58,6 +58,97 @@ func TestProjectionGroupsExactClaudeHeaderActorAcrossExchanges(t *testing.T) {
 	}
 }
 
+func TestProjectionGroupsCodexTurnsByExactSessionAndThread(t *testing.T) {
+	t.Parallel()
+
+	request := func(sessionID, threadID, turnID string) protocolcore.Request {
+		return protocolcore.Request{ProtocolEvidence: []protocolcore.ProtocolEvidenceValue{
+			{Name: "openai_responses.session_id", Value: sessionID},
+			{Name: "openai_responses.thread_id", Value: threadID},
+			{Name: "openai_responses.turn_id", Value: turnID},
+		}}
+	}
+	first := projectExchange(
+		t,
+		"run-1",
+		"exchange-1",
+		request("session-1", "thread-1", "turn-1"),
+		nil,
+	)
+	resumed := projectExchange(
+		t,
+		"run-1",
+		"exchange-2",
+		request("session-1", "thread-1", "turn-2"),
+		nil,
+	)
+	otherSession := projectExchange(
+		t,
+		"run-1",
+		"exchange-3",
+		request("session-2", "thread-2", "turn-1"),
+		nil,
+	)
+	if first.Kind != agentconversation.KindMain ||
+		first.ProjectionID != resumed.ProjectionID ||
+		first.ProjectionID == otherSession.ProjectionID {
+		t.Fatalf(
+			"Codex Session projections = first=%#v resumed=%#v other=%#v",
+			first,
+			resumed,
+			otherSession,
+		)
+	}
+}
+
+func TestNativeResumeKeepsClientSessionConversationAcrossCaptures(t *testing.T) {
+	t.Parallel()
+
+	request := protocolcore.Request{ProtocolEvidence: []protocolcore.ProtocolEvidenceValue{
+		{Name: "openai_responses.session_id", Value: "01a02deb-d420-79e2-b0bc-1a9cbdaa643f"},
+		{Name: "openai_responses.thread_id", Value: "thread-main"},
+	}}
+	first := projectExchange(t, "run-before-exit", "exchange-1", request, nil)
+	resumed := projectExchange(t, "run-after-resume", "exchange-2", request, nil)
+
+	if first.ProjectionID != resumed.ProjectionID ||
+		first.Evidence != agentconversation.EvidenceExplicitSession ||
+		resumed.Evidence != agentconversation.EvidenceExplicitSession {
+		t.Fatalf(
+			"native resume projections = first=%#v resumed=%#v",
+			first,
+			resumed,
+		)
+	}
+}
+
+func TestClientSessionIdentityIncludesTheNativeClient(t *testing.T) {
+	t.Parallel()
+
+	codex := projectExchange(
+		t,
+		"run-codex",
+		"exchange-codex",
+		protocolcore.Request{ProtocolEvidence: []protocolcore.ProtocolEvidenceValue{
+			{Name: "openai_responses.session_id", Value: "same-opaque-session-id"},
+		}},
+		nil,
+	)
+	claude := projectExchange(
+		t,
+		"run-claude",
+		"exchange-claude",
+		protocolcore.Request{ProtocolEvidence: []protocolcore.ProtocolEvidenceValue{
+			{Name: "claude.session_id", Value: "same-opaque-session-id"},
+		}},
+		nil,
+	)
+
+	if codex.ProjectionID == claude.ProjectionID {
+		t.Fatalf("different native clients shared Client Session projection %q", codex.ProjectionID)
+	}
+}
+
 func TestClientIdentityFromProtocolEvidenceRetainsNativeHierarchy(t *testing.T) {
 	t.Parallel()
 
@@ -80,6 +171,31 @@ func TestClientIdentityFromProtocolEvidenceRetainsNativeHierarchy(t *testing.T) 
 		!identity.ActorIsSubagent || identity.ProviderResponseID != "" ||
 		!identity.ObservedAt.Equal(observedAt.Truncate(time.Millisecond)) {
 		t.Fatalf("protocol identity = %#v", identity)
+	}
+}
+
+func TestClientIdentityFromProtocolEvidenceRetainsCodexSession(t *testing.T) {
+	t.Parallel()
+
+	observedAt := time.Date(2026, 8, 23, 15, 12, 38, 0, time.UTC)
+	identity, found := agentconversation.ClientIdentityFromProtocolEvidence(
+		[]protocolcore.ProtocolEvidenceValue{
+			{Name: "openai_responses.session_id", Value: "session-1"},
+			{Name: "openai_responses.thread_id", Value: "thread-1"},
+			{Name: "openai_responses.turn_id", Value: "turn-2"},
+		},
+		"response-2",
+		observedAt,
+	)
+	if !found {
+		t.Fatal("exact Codex protocol identity was not derived")
+	}
+	if identity.Client != "codex" || identity.SessionID != "session-1" ||
+		identity.ActorID != "" || identity.ActorIsSubagent ||
+		identity.ProviderResponseID != "response-2" ||
+		identity.Source != agentconversation.ClientIdentitySourceProtocolEvidence ||
+		len(identity.ProtocolIDs) != 3 {
+		t.Fatalf("Codex protocol identity = %#v", identity)
 	}
 }
 

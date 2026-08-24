@@ -24,7 +24,9 @@ import (
 	"github.com/vibe-agi/vibermate/internal/desktopcontrol"
 	"github.com/vibe-agi/vibermate/internal/instanceguard"
 	"github.com/vibe-agi/vibermate/internal/localdiscovery"
+	"github.com/vibe-agi/vibermate/internal/modelcatalog"
 	"github.com/vibe-agi/vibermate/internal/productruntime"
+	"github.com/vibe-agi/vibermate/internal/serverhost"
 )
 
 const capabilityBytes = 32
@@ -93,6 +95,7 @@ type Host struct {
 	readiness            *readiness
 	controlServer        *http.Server
 	proxyServer          *http.Server
+	remoteServer         *serverhost.Host
 	control              *trackedListener
 	proxy                *trackedListener
 	appSession           AppSession
@@ -197,6 +200,26 @@ func Start(ctx context.Context, options Options) (*Host, error) {
 		return fail("ProductRuntime", err)
 	}
 	rollback.register("ProductRuntime", runtime.Shutdown)
+	var remoteServer *serverhost.Host
+	if options.RemoteServerEnabled {
+		remoteOptions := serverhost.DefaultAttachOptions(
+			runtime,
+			options.Runtime.Paths.DataDirectory(),
+			options.Runtime.Clock,
+			random,
+		)
+		remoteOptions.ListenAddress = options.RemoteServerListenAddress
+		remoteOptions.Transport = options.RemoteServerTransport
+		remoteOptions.ManagementUIRoot = options.RemoteServerManagementUIRoot
+		remoteOptions.CaptureRunLifetime = options.CaptureRunLifetime
+		remoteOptions.ShutdownTimeout = options.ShutdownTimeout
+		remoteOptions.ResolveLocalIdentities = true
+		remoteServer, err = serverhost.Attach(ctx, remoteOptions)
+		if err != nil {
+			return fail("remote Runtime Server", err)
+		}
+		rollback.register("remote Runtime Server", remoteServer.Shutdown)
+	}
 
 	proxyListener, err := listenLoopback(ctx, options.ProxyListenAddress)
 	if err != nil {
@@ -276,21 +299,21 @@ func Start(ctx context.Context, options Options) (*Host, error) {
 		return fail("Capture Environment authority", err)
 	}
 	grantIssuer, err := capturegrant.New(capturegrant.Options{
-		Runs:              runtime.CaptureRuns(),
-		ManualCaptures:    runtime.ManualCaptures(),
-		Verifier:          verifier,
-		Authorities:       captureAuthorities,
-		ProxyOrigin:       proxyOrigin,
-		Generation:        runtime.Status().InstanceID,
-		RootIdentity:      runtime.LocalRootIdentity(),
-		Root:              runtime.LocalRootCertificate(),
-		RunLifetime:       options.CaptureRunLifetime,
-		Workspaces:        workspaceResolver,
-		WorkspaceDefaults: runtime.WorkspaceDefaults(),
+		Runs:           runtime.CaptureRuns(),
+		ManualCaptures: runtime.ManualCaptures(),
+		Verifier:       verifier,
+		Authorities:    captureAuthorities,
+		ProxyOrigin:    proxyOrigin,
+		Generation:     runtime.Status().InstanceID,
+		RootIdentity:   runtime.LocalRootIdentity(),
+		Root:           runtime.LocalRootCertificate(),
+		RunLifetime:    options.CaptureRunLifetime,
+		Workspaces:     workspaceResolver,
 		// The same authority that asks about a connection asks about handing
 		// a recognized client the Root, so both questions reach a person the
 		// same way and appear in the same place.
 		ClientRootApprovals: runtime.ClientRootApprovals(),
+		ProxyDelivery:       capturegrant.ProxyDeliveryLocalListener,
 	})
 	if err != nil {
 		return fail("capture grant issuer", err)
@@ -349,6 +372,22 @@ func Start(ctx context.Context, options Options) (*Host, error) {
 	if err != nil {
 		return fail("Agent Conversation projection", err)
 	}
+	modelMetadata, err := modelcatalog.NewModelsDev(modelcatalog.ModelsDevOptions{
+		Transport: runtime,
+		Clock:     options.Runtime.Clock,
+	})
+	if err != nil {
+		return fail("models.dev metadata directory", err)
+	}
+	models, err := modelcatalog.New(modelcatalog.Options{
+		Endpoints:   runtime.UpstreamEndpoints(),
+		Credentials: runtime.ProviderAccounts(),
+		Transport:   runtime,
+		Clock:       options.Runtime.Clock,
+	})
+	if err != nil {
+		return fail("upstream model catalog", err)
+	}
 	application, err := desktopcontrol.New(desktopcontrol.Options{
 		Readiness:           ready,
 		Status:              runtime,
@@ -361,14 +400,16 @@ func Start(ctx context.Context, options Options) (*Host, error) {
 		Egress:              runtime.EgressAttempts(),
 		Approvals:           runtime.ToolApprovals(),
 		Endpoints:           runtime.UpstreamEndpoints(),
+		Models:              models,
+		ClientModels:        modelMetadata,
 		Accounts:            runtime.ProviderAccounts(),
 		RawEvidence:         runtime.RawEvidence(),
 		Offline:             runtime,
 		ConnectionRules:     runtime.ConnectionRules(),
 		CaptureRuns:         runtime.CaptureRunReader(),
 		ManualCaptures:      runtime.ManualCaptures(),
-		WorkspaceDefaults:   runtime.WorkspaceDefaults(),
 		Archive:             runtime.EvidenceArchive(),
+		ArchiveBarrier:      runtime.EvidenceArchiveBarrier(),
 		Clock:               options.Runtime.Clock,
 	})
 	if err != nil {
@@ -394,21 +435,28 @@ func Start(ctx context.Context, options Options) (*Host, error) {
 		CLIControl:       captureHandler,
 		ManualCaptures:   manualCaptureHandler,
 		DesktopPrincipal: desktopPrincipal,
+		ServerManagement: func() http.Handler {
+			if remoteServer == nil {
+				return nil
+			}
+			return remoteServer.ManagementHandler()
+		}(),
 	})
 	if err != nil {
 		return fail("control router", err)
 	}
 
 	host := &Host{
-		runtime:    runtime,
-		guard:      guard,
-		discovery:  discovery,
-		bootstrap:  bootstrapAuthority,
-		router:     router,
-		readiness:  ready,
-		control:    controlTracked,
-		proxy:      proxyTracked,
-		appSession: appSession,
+		runtime:      runtime,
+		remoteServer: remoteServer,
+		guard:        guard,
+		discovery:    discovery,
+		bootstrap:    bootstrapAuthority,
+		router:       router,
+		readiness:    ready,
+		control:      controlTracked,
+		proxy:        proxyTracked,
+		appSession:   appSession,
 		descriptor: desktopbootstrap.Descriptor{
 			Schema:         desktopbootstrap.DescriptorSchema,
 			InstanceID:     runtime.Status().InstanceID,
@@ -541,6 +589,13 @@ func (host *Host) Runtime() *productruntime.Runtime {
 	return host.runtime
 }
 
+func (host *Host) RemoteServerStatus() serverhost.Status {
+	if host == nil || host.remoteServer == nil {
+		return serverhost.Status{}
+	}
+	return host.remoteServer.Status()
+}
+
 func (host *Host) DiscoveryPath() string {
 	if host == nil || host.discovery == nil {
 		return ""
@@ -618,6 +673,14 @@ func (host *Host) executeShutdown() {
 	}
 	if err := stopControlServer(ctx, host.controlServer, host.control); err != nil {
 		shutdownErr = errors.Join(shutdownErr, fmt.Errorf("stop control server: %w", err))
+	}
+	if host.remoteServer != nil {
+		if err := host.remoteServer.Shutdown(ctx); err != nil {
+			shutdownErr = errors.Join(
+				shutdownErr,
+				fmt.Errorf("stop remote Runtime Server: %w", err),
+			)
+		}
 	}
 	if err := host.runtime.Shutdown(ctx); err != nil {
 		shutdownErr = errors.Join(shutdownErr, fmt.Errorf("stop ProductRuntime: %w", err))

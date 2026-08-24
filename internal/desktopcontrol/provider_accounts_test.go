@@ -97,20 +97,22 @@ func TestProviderAccountControlStoresCredentialWithoutReturningItAndCompilesMana
       "revision":1,
       "clientProtocol":"anthropic_messages",
       "clientAdapterPolicy":{"id":"adapter.managed.anthropic","revision":1},
-      "mode":"managed",
-      "upstreamPlan":{
+      "destination":{
+        "kind":"upstream",
+        "upstream":{
         "routes":[{
           "id":"route.managed.anthropic",
           "revision":1,
 		  "providerTarget":{"id":"target.claude.official","revision":1,"origin":"https://api.anthropic.com","realmId":"anthropic.official","capabilities":["messages","streaming","tool_calls"]},
           "backendProtocol":"anthropic_messages",
-		  "accountPolicy":{"revision":1,"mode":"managed","preferredAccountId":"anthropic-work","candidateAccountIds":["anthropic-work"],"accountRevisions":{"anthropic-work":1},"failoverPolicy":"off"},
-          "modelPolicy":{"revision":1,"mode":"passthrough","fixedModel":""},
+		  "accountPolicy":{"revision":1,"preferredAccountId":"anthropic-work","candidateAccountIds":["anthropic-work"],"accountRevisions":{"anthropic-work":1},"failoverPolicy":"off"},
+          "modelPolicy":{"revision":1,"mode":"passthrough","mappings":[]},
           "wireProfileRef":"follow-client",
           "pluginBindings":[]
         }],
         "defaultRouteId":"route.managed.anthropic",
         "routeSet":{"id":"routes.managed.anthropic","revision":1,"candidateRouteIds":["route.managed.anthropic"]}
+        }
       },
       "pluginBindings":[]
     }]
@@ -169,7 +171,7 @@ func TestProviderAccountControlStoresCredentialWithoutReturningItAndCompilesMana
 		"/api/v1/provider-accounts",
 		0,
 		"provider-account-create-unused-0001",
-		[]byte(`{"id":"openai-unused","displayName":"Unused","upstreamEndpointId":"target.openai.official","kind":"openai_api_key","secret":"`+unusedSecret+`"}`),
+		[]byte(`{"id":"openai-unused","displayName":"Unused","upstreamEndpointId":"target.openai.official","kind":"bearer_token","secret":"`+unusedSecret+`"}`),
 	)
 	if unused.Code != http.StatusCreated {
 		t.Fatalf("create unused status=%d body=%s", unused.Code, unused.Body.Bytes())
@@ -200,7 +202,7 @@ func TestProviderAccountControlStoresCredentialWithoutReturningItAndCompilesMana
 	}
 }
 
-func TestProviderAccountControlKeepsClaudeOAuthDistinctFromAnthropicAPIKey(t *testing.T) {
+func TestProviderAccountControlKeepsBearerTokenDistinctFromAnthropicAPIKey(t *testing.T) {
 	t.Parallel()
 	runtime := startRuntime(t)
 	defer shutdownRuntime(t, runtime)
@@ -216,19 +218,19 @@ func TestProviderAccountControlKeepsClaudeOAuthDistinctFromAnthropicAPIKey(t *te
 		t.Fatal(err)
 	}
 
-	const token = "oauth-control-sentinel"
+	const token = "bearer-control-sentinel"
 	created := environmentRequest(
 		t,
 		application,
 		http.MethodPost,
 		"/api/v1/provider-accounts",
 		0,
-		"provider-account-oauth-create-0001",
+		"provider-account-bearer-create-0001",
 		[]byte(`{
-  "id":"claude-oauth",
-  "displayName":"Claude OAuth",
+	"id":"relay-bearer",
+	"displayName":"Relay Bearer",
 	"upstreamEndpointId":"target.claude.official",
-  "kind":"claude_oauth_token",
+	"kind":"bearer_token",
   "secret":"`+token+`"
 }`),
 	)
@@ -236,7 +238,7 @@ func TestProviderAccountControlKeepsClaudeOAuthDistinctFromAnthropicAPIKey(t *te
 		t.Fatalf("create status=%d body=%s", created.Code, created.Body.Bytes())
 	}
 	assertProviderAccountResponseSafe(t, created.Body.Bytes(), token)
-	assertJSONString(t, created.Body.Bytes(), "kind", "claude_oauth_token")
+	assertJSONString(t, created.Body.Bytes(), "kind", "bearer_token")
 	assertJSONString(t, created.Body.Bytes(), "realmId", "anthropic.official")
 }
 

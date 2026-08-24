@@ -111,7 +111,7 @@ func TestProviderProbeIdentitySeparatesFrozenRouteRevisions(t *testing.T) {
 
 	target := testTarget("provider.example", 443)
 	first := testRequestProvenance(t)
-	second, err := NewRequestProvenance(
+	second, err := NewUpstreamRequestProvenance(
 		first.EnvironmentID(),
 		first.EnvironmentRevision(),
 		first.EnvironmentDigest(),

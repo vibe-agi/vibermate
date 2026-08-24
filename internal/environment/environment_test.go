@@ -86,7 +86,7 @@ func TestEnvironmentScopedLookupAllowsTheSameOrigin(t *testing.T) {
 	secondAggregate.ClientEndpoints[0].ID = "endpoint.personal"
 	second := mustCompile(t, secondAggregate)
 	projection := NewAtomicProjection()
-	if err := projection.Restore([]EnvironmentSnapshot{first, second}); err != nil {
+	if err := projection.Restore(mustSystemSnapshot(t), []EnvironmentSnapshot{first, second}); err != nil {
 		t.Fatal(err)
 	}
 	for _, id := range []EnvironmentID{"work", "personal"} {
@@ -94,42 +94,6 @@ func TestEnvironmentScopedLookupAllowsTheSameOrigin(t *testing.T) {
 		if err != nil || endpoint.ClientOrigin() != origin {
 			t.Fatalf("resolve %q = %+v, %v", id, endpoint, err)
 		}
-	}
-}
-
-func TestConnectionCompatibilityDistinguishesHotSwitchFromReconnect(t *testing.T) {
-	t.Parallel()
-	current := mustCompile(t, fixture(t, "work", mustOrigin(t, "https://shared.example")))
-	targetAggregate := current.Aggregate()
-	targetAggregate.ID = "personal"
-	targetAggregate.Name = "Personal"
-	target := mustCompile(t, targetAggregate)
-	semantic, err := current.BeginConnection(mustOrigin(t, "https://shared.example"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if classification, err := ClassifyConnectionTransition(current, target, semantic); err != nil || classification != CompatibilityHotSwitch {
-		t.Fatalf("semantic hot switch = %q, %v", classification, err)
-	}
-	changed := targetAggregate.Clone()
-	changed.ClientEndpoints[0].ProtocolPlans[0].ClientAdapterPolicy.ID = "adapter.replacement"
-	changedTarget := mustCompile(t, changed)
-	if classification, err := ClassifyConnectionTransition(current, changedTarget, semantic); err != nil || classification != CompatibilityReconnectRequired {
-		t.Fatalf("semantic incompatible switch = %q, %v", classification, err)
-	}
-	blindOrigin := mustOrigin(t, "https://blind.example")
-	blind := ConnectionBinding{Mode: ConnectionModeBlind, ClientOrigin: blindOrigin}
-	if classification, err := ClassifyConnectionTransition(current, target, blind); err != nil || classification != CompatibilityHotSwitch {
-		t.Fatalf("blind hot switch = %q, %v", classification, err)
-	}
-	interceptingTarget := targetAggregate.Clone()
-	interceptingTarget.ClientEndpoints[0].ClientOrigin = blindOrigin
-	for planIndex := range interceptingTarget.ClientEndpoints[0].ProtocolPlans {
-		interceptingTarget.ClientEndpoints[0].ProtocolPlans[planIndex].UpstreamPlan.Routes[0].ProviderTarget.Origin =
-			mustProviderOrigin(t, blindOrigin.String())
-	}
-	if classification, err := ClassifyConnectionTransition(current, mustCompile(t, interceptingTarget), blind); err != nil || classification != CompatibilityReconnectRequired {
-		t.Fatalf("blind-to-semantic switch = %q, %v", classification, err)
 	}
 }
 
@@ -169,8 +133,10 @@ func TestRequestResolutionSelectsOneProtocolAndFreezesDefaultRoute(t *testing.T)
 				DownstreamProtocol: wireprofile.ApplicationProtocolHTTP1,
 			},
 		)
+		route, hasRoute := plan.UpstreamRoute()
 		if err != nil || plan.ProtocolPlan().ID() != test.wantPlan ||
-			plan.Route().ID() != test.wantRoute || plan.Operation().ID().String() != test.wantOp ||
+			!hasRoute || route.ID() != test.wantRoute ||
+			plan.Operation().ID().String() != test.wantOp ||
 			plan.EnvironmentRevision() != 1 {
 			t.Fatalf("ResolveRequest(%q) = %+v, %v", test.path, plan, err)
 		}
@@ -192,7 +158,7 @@ func TestRequestResolutionSelectsOneProtocolAndFreezesDefaultRoute(t *testing.T)
 func TestRequestResolutionRejectsAmbiguousProtocolEvidence(t *testing.T) {
 	t.Parallel()
 	value := fixture(t, "work", mustOrigin(t, "https://relay.example"))
-	compiler := ambiguousTestCompiler(t)
+	compiler := ambiguousTestCompiler(t, accountCatalogFor(value))
 	snapshot, err := compiler.Compile(value)
 	if err != nil {
 		t.Fatal(err)
@@ -216,18 +182,22 @@ func TestRouteSetAndAccountCandidateOrderRemainFrozen(t *testing.T) {
 	t.Parallel()
 	value := fixture(t, "work", mustOrigin(t, "https://relay.example"))
 	plan := &value.ClientEndpoints[0].ProtocolPlans[0]
-	second := cloneRoute(plan.UpstreamPlan.Routes[0])
+	second := cloneRoute(plan.Destination.Upstream.Routes[0])
 	second.ID = "route.anthropic.backup"
 	second.Revision = 1
 	second.ProviderTarget.ID = "target.anthropic.backup"
-	plan.UpstreamPlan.Routes = append(plan.UpstreamPlan.Routes, second)
-	plan.UpstreamPlan.RouteSet.CandidateRouteIDs = []UpstreamRouteID{second.ID, plan.UpstreamPlan.DefaultRouteID}
+	setTestRouteAccount(&second, "account.anthropic.backup")
+	plan.Destination.Upstream.Routes = append(plan.Destination.Upstream.Routes, second)
+	plan.Destination.Upstream.RouteSet.CandidateRouteIDs = []UpstreamRouteID{second.ID, plan.Destination.Upstream.DefaultRouteID}
 	snapshot := mustCompile(t, value)
 	endpoint, ok := snapshot.LookupCompiledClientOrigin(mustOrigin(t, "https://relay.example"))
 	if !ok {
 		t.Fatal("compiled endpoint is missing")
 	}
-	routeSet := endpoint.ProtocolPlans()[0].RouteSet()
+	routeSet, exists := endpoint.ProtocolPlans()[0].UpstreamRouteSet()
+	if !exists {
+		t.Fatal("compiled upstream RouteSet is missing")
+	}
 	candidates := routeSet.CandidateRouteIDs()
 	if len(candidates) != 2 || candidates[0] != second.ID || candidates[1] != "route.anthropic" {
 		t.Fatalf("candidate order = %v", candidates)
@@ -245,7 +215,7 @@ func TestRouteSetAndAccountCandidateOrderRemainFrozen(t *testing.T) {
 func TestNamedWireProfileCannotSilentlyChangeApplicationProtocol(t *testing.T) {
 	t.Parallel()
 	value := fixture(t, "work", mustOrigin(t, "https://relay.example"))
-	value.ClientEndpoints[0].ProtocolPlans[0].UpstreamPlan.Routes[0].WireProfileRef =
+	value.ClientEndpoints[0].ProtocolPlans[0].Destination.Upstream.Routes[0].WireProfileRef =
 		wireprofile.UpstreamWireProfileClaudeCodeValue
 	snapshot := mustCompile(t, value)
 	_, err := snapshot.ResolveRequest(
@@ -263,19 +233,162 @@ func TestNamedWireProfileCannotSilentlyChangeApplicationProtocol(t *testing.T) {
 	}
 }
 
-func TestOriginalPassthroughCannotRetargetOrChangeSemantics(t *testing.T) {
+func TestOriginalDestinationHasNoSyntheticUpstreamAuthority(t *testing.T) {
 	t.Parallel()
 	value := fixture(t, "work", mustOrigin(t, "https://relay.example"))
-	plan := &value.ClientEndpoints[0].ProtocolPlans[0]
-	plan.Mode = PlanModeOriginalPassthrough
-	plan.UpstreamPlan.Routes[0].ModelPolicy = ModelPolicy{Revision: 1, Mode: "preserve"}
-	if _, err := testCompiler(t, nil).Compile(value); err != nil {
-		t.Fatalf("valid original passthrough = %v", err)
+	for index := range value.ClientEndpoints[0].ProtocolPlans {
+		value.ClientEndpoints[0].ProtocolPlans[index].Destination =
+			DestinationPlan{Kind: DestinationKindOriginal}
 	}
-	value.ClientEndpoints[0].ProtocolPlans[0].UpstreamPlan.Routes[0].ProviderTarget.Origin =
-		mustProviderOrigin(t, "https://other.example")
+	snapshot, err := testCompiler(t, nil).Compile(value)
+	if err != nil {
+		t.Fatalf("compile original destination = %v", err)
+	}
+	requestPlan, err := snapshot.ResolveRequest(
+		mustOrigin(t, "https://relay.example"),
+		RequestFacts{
+			Target: protocolspec.RequestTarget{
+				Method: "POST", Path: "/v1/messages",
+				Transport: protocolspec.ClientOperationTransportHTTP,
+			},
+			DownstreamProtocol: wireprofile.ApplicationProtocolHTTP1,
+		},
+	)
+	if err != nil || !requestPlan.PreservesOriginalDestination() ||
+		requestPlan.UsesUpstreamDestination() {
+		t.Fatalf("resolve original destination = %+v, %v", requestPlan, err)
+	}
+	if _, exists := requestPlan.UpstreamRoute(); exists {
+		t.Fatal("Original Destination resolved a synthetic Upstream Route")
+	}
+	persisted := snapshot.Aggregate().ClientEndpoints[0].ProtocolPlans[0].Destination
+	if persisted.Upstream != nil {
+		t.Fatalf("Original Destination retained upstream authority: %+v", persisted.Upstream)
+	}
+}
+
+func TestSystemTransparentInterceptsKnownAgentAPIsAndPreservesOriginalDestination(
+	t *testing.T,
+) {
+	t.Parallel()
+	snapshot, err := testCompiler(t, nil).CompileSystemTransparent()
+	if err != nil {
+		t.Fatalf("compile system_transparent = %v", err)
+	}
+	if !snapshot.SystemOwned() || snapshot.BlindOnly() ||
+		snapshot.ContentRecording() != DefaultContentRecordingPolicy() {
+		t.Fatalf("system_transparent is not an intercepting evidence Environment: %+v", snapshot)
+	}
+	for _, testCase := range []struct {
+		origin  string
+		path    string
+		dialect protocolspec.Dialect
+	}{
+		{
+			origin: "https://api.anthropic.com", path: "/v1/messages",
+			dialect: protocolspec.DialectAnthropicMessages,
+		},
+		{
+			origin: "https://api.openai.com", path: "/v1/responses",
+			dialect: protocolspec.DialectOpenAIResponses,
+		},
+		{
+			origin: "https://chatgpt.com", path: "/backend-api/codex/responses",
+			dialect: protocolspec.DialectOpenAIResponses,
+		},
+	} {
+		origin := mustOrigin(t, testCase.origin)
+		binding, bindErr := snapshot.BeginConnection(origin)
+		if bindErr != nil || binding.Mode != ConnectionModeSemantic {
+			t.Fatalf("BeginConnection(%q) = %+v, %v", testCase.origin, binding, bindErr)
+		}
+		plan, resolveErr := snapshot.ResolveRequest(origin, RequestFacts{
+			Target: protocolspec.RequestTarget{
+				Method: "POST", Path: testCase.path,
+				Transport: protocolspec.ClientOperationTransportHTTP,
+			},
+			DownstreamProtocol: wireprofile.ApplicationProtocolHTTP1,
+		})
+		if resolveErr != nil || !plan.PreservesOriginalDestination() ||
+			plan.ProtocolPlan().ClientDialect() != testCase.dialect {
+			t.Fatalf("ResolveRequest(%q) = %+v, %v", testCase.origin, plan, resolveErr)
+		}
+	}
+	unknown := mustOrigin(t, "https://unrelated.example")
+	binding, err := snapshot.BeginConnection(unknown)
+	if err != nil || binding.Mode != ConnectionModeBlind {
+		t.Fatalf("unrelated destination was not kept blind: %+v, %v", binding, err)
+	}
+}
+
+func TestModelMappingsAreCanonicalAndCompiledWithoutAliasing(t *testing.T) {
+	t.Parallel()
+	value := fixture(t, "work", mustOrigin(t, "https://relay.example"))
+	policy := &value.ClientEndpoints[0].ProtocolPlans[0].Destination.Upstream.Routes[0].ModelPolicy
+	policy.Mode = "map"
+	policy.Mappings = []ModelMapping{
+		{RequestedModel: "z-client", UpstreamModel: "relay:opaque-z"},
+		{RequestedModel: "a-client", UpstreamModel: "relay:opaque-a"},
+	}
+
+	snapshot := mustCompile(t, value)
+	compiled := snapshot.Aggregate().ClientEndpoints[0].ProtocolPlans[0].Destination.Upstream.Routes[0].ModelPolicy
+	if got := compiled.Mappings; len(got) != 2 ||
+		got[0].RequestedModel != "a-client" || got[0].UpstreamModel != "relay:opaque-a" ||
+		got[1].RequestedModel != "z-client" || got[1].UpstreamModel != "relay:opaque-z" {
+		t.Fatalf("canonical mappings = %+v", got)
+	}
+
+	endpoint, ok := snapshot.LookupCompiledClientOrigin(mustOrigin(t, "https://relay.example"))
+	if !ok {
+		t.Fatal("compiled endpoint is missing")
+	}
+	compiledRoute, exists := endpoint.ProtocolPlans()[0].UpstreamRouteSet()
+	if !exists {
+		t.Fatal("compiled upstream RouteSet is missing")
+	}
+	route, err := compiledRoute.DefaultRoute()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if upstream, mapped := route.ResolveModelMapping("a-client"); !mapped || upstream != "relay:opaque-a" {
+		t.Fatalf("compiled exact mapping = %q, %t", upstream, mapped)
+	}
+	if _, mapped := route.ResolveModelMapping("A-client"); mapped {
+		t.Fatal("compiled mapping performed a non-exact match")
+	}
+}
+
+func TestModelMappingsRejectDuplicateRequestedModels(t *testing.T) {
+	t.Parallel()
+	value := fixture(t, "work", mustOrigin(t, "https://relay.example"))
+	policy := &value.ClientEndpoints[0].ProtocolPlans[0].Destination.Upstream.Routes[0].ModelPolicy
+	policy.Mode = "map"
+	policy.Mappings = []ModelMapping{
+		{RequestedModel: "claude-client", UpstreamModel: "relay-one"},
+		{RequestedModel: "claude-client", UpstreamModel: "relay-two"},
+	}
 	if _, err := testCompiler(t, nil).Compile(value); !errors.Is(err, ErrInvalidEnvironment) {
-		t.Fatalf("retargeted original passthrough = %v", err)
+		t.Fatalf("duplicate requested model = %v", err)
+	}
+}
+
+func TestModelMappingsPreservePrintableEdgeWhitespace(t *testing.T) {
+	t.Parallel()
+	value := fixture(t, "work", mustOrigin(t, "https://relay.example"))
+	policy := &value.ClientEndpoints[0].ProtocolPlans[0].Destination.Upstream.Routes[0].ModelPolicy
+	policy.Mode = ModelModeMap
+	policy.Mappings = []ModelMapping{{
+		RequestedModel: " client model ",
+		UpstreamModel:  " relay/custom:model ",
+	}}
+
+	compiled := mustCompile(t, value).Aggregate().ClientEndpoints[0].ProtocolPlans[0].Destination.Upstream.Routes[0].ModelPolicy
+	if upstream, mapped := compiled.ResolveMapping(" client model "); !mapped || upstream != " relay/custom:model " {
+		t.Fatalf("exact opaque mapping = %q, %t", upstream, mapped)
+	}
+	if _, mapped := compiled.ResolveMapping("client model"); mapped {
+		t.Fatal("trimmed request must not match an exact opaque mapping")
 	}
 }
 
@@ -341,11 +454,11 @@ func TestGraphValidationRejectsUnsafeIdentityAndReferences(t *testing.T) {
 			value.ClientEndpoints[0].ProtocolPlans = append(value.ClientEndpoints[0].ProtocolPlans, duplicate)
 		}},
 		{"duplicate stable route ID", func(value *Environment) {
-			value.ClientEndpoints[0].ProtocolPlans[1].UpstreamPlan.Routes[0].ID = value.ClientEndpoints[0].ProtocolPlans[0].UpstreamPlan.Routes[0].ID
+			value.ClientEndpoints[0].ProtocolPlans[1].Destination.Upstream.Routes[0].ID = value.ClientEndpoints[0].ProtocolPlans[0].Destination.Upstream.Routes[0].ID
 		}},
 		{"zero child revision", func(value *Environment) { value.ClientEndpoints[0].Revision = 0 }},
 		{"bad default route", func(value *Environment) {
-			value.ClientEndpoints[0].ProtocolPlans[0].UpstreamPlan.DefaultRouteID = "route.missing"
+			value.ClientEndpoints[0].ProtocolPlans[0].Destination.Upstream.DefaultRouteID = "route.missing"
 		}},
 	}
 	for _, test := range cases {
@@ -362,9 +475,9 @@ func TestGraphValidationRejectsUnsafeIdentityAndReferences(t *testing.T) {
 func TestAccountCompatibilityAndMutableAliasesFailClosed(t *testing.T) {
 	t.Parallel()
 	candidate := fixture(t, "work", mustOrigin(t, "https://relay.example"))
-	route := &candidate.ClientEndpoints[0].ProtocolPlans[0].UpstreamPlan.Routes[0]
+	route := &candidate.ClientEndpoints[0].ProtocolPlans[0].Destination.Upstream.Routes[0]
 	route.AccountPolicy = RouteAccountPolicy{
-		Revision: 1, Mode: AccountModeManaged,
+		Revision:           1,
 		PreferredAccountID: "account.work", CandidateAccountIDs: []string{"account.work"},
 		AccountRevisions: map[string]Revision{"account.work": 2}, FailoverPolicy: FailoverOff,
 	}
@@ -396,9 +509,23 @@ func TestAccountCompatibilityAndMutableAliasesFailClosed(t *testing.T) {
 	}
 	next = previous.Clone()
 	next.Revision = 2
-	next.ClientEndpoints[0].ProtocolPlans[0].UpstreamPlan.Routes[0].WireProfileRef = "wire.changed"
+	next.ClientEndpoints[0].ProtocolPlans[0].Destination.Upstream.Routes[0].WireProfileRef = "wire.changed"
 	if err := ValidateTransition(previous, next); !errors.Is(err, ErrInvalidTransition) {
 		t.Fatalf("unchanged child revisions error = %v", err)
+	}
+}
+
+func TestUpstreamRouteRequiresAnEndpointAccount(t *testing.T) {
+	t.Parallel()
+	candidate := fixture(t, "work", mustOrigin(t, "https://relay.example"))
+	route := &candidate.ClientEndpoints[0].ProtocolPlans[0].Destination.Upstream.Routes[0]
+	route.AccountPolicy = RouteAccountPolicy{
+		Revision:       1,
+		FailoverPolicy: FailoverOff,
+	}
+
+	if _, err := testCompiler(t, nil).Compile(candidate); !errors.Is(err, ErrInvalidEnvironment) {
+		t.Fatalf("compile error = %v, want %v", err, ErrInvalidEnvironment)
 	}
 }
 
@@ -409,9 +536,9 @@ func TestAccountDeletionGuardReturnsPublishedRouteReferencesBeforeDeleting(t *te
 	candidate := fixture(t, "work", mustOrigin(t, "https://relay.example"))
 	for endpointIndex := range candidate.ClientEndpoints {
 		for planIndex := range candidate.ClientEndpoints[endpointIndex].ProtocolPlans {
-			route := &candidate.ClientEndpoints[endpointIndex].ProtocolPlans[planIndex].UpstreamPlan.Routes[0]
+			route := &candidate.ClientEndpoints[endpointIndex].ProtocolPlans[planIndex].Destination.Upstream.Routes[0]
 			route.AccountPolicy = RouteAccountPolicy{
-				Revision: 1, Mode: AccountModeManaged,
+				Revision:           1,
 				PreferredAccountID: "account.work", CandidateAccountIDs: []string{"account.work"},
 				AccountRevisions: map[string]Revision{"account.work": 1}, FailoverPolicy: FailoverOff,
 			}
@@ -441,11 +568,8 @@ func TestAccountDeletionGuardReturnsPublishedRouteReferencesBeforeDeleting(t *te
 
 	for endpointIndex := range candidate.ClientEndpoints {
 		for planIndex := range candidate.ClientEndpoints[endpointIndex].ProtocolPlans {
-			route := &candidate.ClientEndpoints[endpointIndex].ProtocolPlans[planIndex].UpstreamPlan.Routes[0]
-			route.AccountPolicy = RouteAccountPolicy{
-				Revision: 1, Mode: AccountModeClientPassthrough,
-				FailoverPolicy: FailoverOff,
-			}
+			candidate.ClientEndpoints[endpointIndex].ProtocolPlans[planIndex].Destination =
+				DestinationPlan{Kind: DestinationKindOriginal}
 		}
 	}
 	repository.mu.Lock()
@@ -486,13 +610,13 @@ func TestStableChildrenCannotMoveAcrossParents(t *testing.T) {
 	movedRoute.ClientEndpoints[0].ProtocolPlans[1].Revision = 2
 	firstPlan := &movedRoute.ClientEndpoints[0].ProtocolPlans[0]
 	secondPlan := &movedRoute.ClientEndpoints[0].ProtocolPlans[1]
-	route := firstPlan.UpstreamPlan.Routes[0]
-	firstPlan.UpstreamPlan.Routes = secondPlan.UpstreamPlan.Routes
-	firstPlan.UpstreamPlan.DefaultRouteID = firstPlan.UpstreamPlan.Routes[0].ID
-	firstPlan.UpstreamPlan.RouteSet.CandidateRouteIDs = []UpstreamRouteID{firstPlan.UpstreamPlan.Routes[0].ID}
-	secondPlan.UpstreamPlan.Routes = []UpstreamRoute{route}
-	secondPlan.UpstreamPlan.DefaultRouteID = route.ID
-	secondPlan.UpstreamPlan.RouteSet.CandidateRouteIDs = []UpstreamRouteID{route.ID}
+	route := firstPlan.Destination.Upstream.Routes[0]
+	firstPlan.Destination.Upstream.Routes = secondPlan.Destination.Upstream.Routes
+	firstPlan.Destination.Upstream.DefaultRouteID = firstPlan.Destination.Upstream.Routes[0].ID
+	firstPlan.Destination.Upstream.RouteSet.CandidateRouteIDs = []UpstreamRouteID{firstPlan.Destination.Upstream.Routes[0].ID}
+	secondPlan.Destination.Upstream.Routes = []UpstreamRoute{route}
+	secondPlan.Destination.Upstream.DefaultRouteID = route.ID
+	secondPlan.Destination.Upstream.RouteSet.CandidateRouteIDs = []UpstreamRouteID{route.ID}
 	if _, err := materializeIdentityHistory(&previous, movedRoute); !errors.Is(err, ErrInvalidTransition) {
 		t.Fatalf("moved route = %v", err)
 	}
@@ -553,21 +677,21 @@ func TestSnapshotsAndSystemTransparentResistAliases(t *testing.T) {
 	t.Parallel()
 	aggregate := fixture(t, "work", mustOrigin(t, "https://relay.example"))
 	snapshot := mustCompile(t, aggregate)
-	aggregate.ClientEndpoints[0].ProtocolPlans[0].UpstreamPlan.Routes[0].ProviderTarget.Capabilities[0] = protocolspec.ProviderCapability("mutated")
+	aggregate.ClientEndpoints[0].ProtocolPlans[0].Destination.Upstream.Routes[0].ProviderTarget.Capabilities[0] = protocolspec.ProviderCapability("mutated")
 	copyOne := snapshot.Aggregate()
 	copyOne.ClientEndpoints[0].ClientOrigin = mustOrigin(t, "https://mutated.example")
-	copyOne.ClientEndpoints[0].ProtocolPlans[0].UpstreamPlan.Routes[0].ProviderTarget.Capabilities[0] = protocolspec.ProviderCapability("mutated")
+	copyOne.ClientEndpoints[0].ProtocolPlans[0].Destination.Upstream.Routes[0].ProviderTarget.Capabilities[0] = protocolspec.ProviderCapability("mutated")
 	copyTwo := snapshot.Aggregate()
 	if copyTwo.ClientEndpoints[0].ClientOrigin.String() != "https://relay.example" ||
-		copyTwo.ClientEndpoints[0].ProtocolPlans[0].UpstreamPlan.Routes[0].ProviderTarget.Capabilities[0] != protocolspec.ProviderCapabilityMessages {
+		copyTwo.ClientEndpoints[0].ProtocolPlans[0].Destination.Upstream.Routes[0].ProviderTarget.Capabilities[0] != protocolspec.ProviderCapabilityMessages {
 		t.Fatalf("snapshot was aliased: %+v", copyTwo)
 	}
-	system := SystemTransparentSnapshot()
-	if !system.SystemOwned() || !system.BlindOnly() || len(system.ClientEndpoints()) != 0 {
+	system := mustSystemSnapshot(t)
+	if !system.SystemOwned() || system.BlindOnly() || len(system.ClientEndpoints()) != 3 {
 		t.Fatalf("system snapshot = %+v", system)
 	}
 	projection := NewAtomicProjection()
-	if err := projection.Restore(nil); err != nil {
+	if err := projection.Restore(system, nil); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := projection.Resolve(SystemTransparentID); err != nil {
@@ -583,10 +707,11 @@ func TestProjectionRestoreMonotonicPoisonAndImmutableReads(t *testing.T) {
 	first := fixture(t, "first", mustOrigin(t, "https://first.example"))
 	second := fixture(t, "second", mustOrigin(t, "https://second.example"))
 	projection := NewAtomicProjection()
-	if err := projection.Restore([]EnvironmentSnapshot{mustCompile(t, first), mustCompile(t, second)}); err != nil {
+	system := mustSystemSnapshot(t)
+	if err := projection.Restore(system, []EnvironmentSnapshot{mustCompile(t, first), mustCompile(t, second)}); err != nil {
 		t.Fatal(err)
 	}
-	if err := projection.Restore(nil); !errors.Is(err, ErrProjectionRestored) {
+	if err := projection.Restore(system, nil); !errors.Is(err, ErrProjectionRestored) {
 		t.Fatalf("second restore = %v", err)
 	}
 	if err := projection.Publish(mustCompile(t, first)); !errors.Is(err, ErrRevisionConflict) {
@@ -610,14 +735,12 @@ func TestProjectionRestoreMonotonicPoisonAndImmutableReads(t *testing.T) {
 	}
 }
 
-func TestDraftPreviewPublishRevalidatesEveryBinding(t *testing.T) {
+func TestDraftPreviewPublishRevalidatesTheFrozenCaptureList(t *testing.T) {
 	t.Parallel()
 	repository := newMemoryRepository()
 	candidate := fixture(t, "work", mustOrigin(t, "https://relay.example"))
 	inspector := fixedInspector{references: []CaptureReference{{
-		Capture:         captureidentity.Reference{Kind: captureidentity.KindManagedRun, ID: "run.one"},
-		LaunchAuthority: mustLaunchAuthority(t, candidate),
-		Bindings:        []ConnectionBinding{semanticCaptureBinding(t, candidate, "https://relay.example")},
+		Capture: captureidentity.Reference{Kind: captureidentity.KindManagedRun, ID: "run.one"},
 	}}}
 	manager := mustManager(t, repository, inspector)
 	draftOne, err := manager.SaveDraft(context.Background(), DraftCommand{Candidate: candidate})
@@ -634,7 +757,8 @@ func TestDraftPreviewPublishRevalidatesEveryBinding(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if previewOne.Classification != CompatibilityReconnectRequired || previewOne.ReconnectRequiredCount != 1 {
+	if len(previewOne.ContinuingCaptures) != 1 ||
+		previewOne.ContinuingCaptures[0].Capture.ID != "run.one" {
 		t.Fatalf("initial impact = %+v", previewOne)
 	}
 	candidate.Name = "Work replacement"
@@ -707,15 +831,13 @@ func TestPublishRejectsAnActiveCASThatMovedAfterPreview(t *testing.T) {
 	}
 }
 
-func TestImpactPreviewClassifiesIngressCompatibleEditAsHotSwitch(t *testing.T) {
+func TestImpactPreviewReportsThatRunningCapturesKeepTheirFrozenRevision(t *testing.T) {
 	t.Parallel()
 	repository := newMemoryRepository()
 	active := fixture(t, "work", mustOrigin(t, "https://relay.example"))
 	repository.active[active.ID] = active.Clone()
 	inspector := fixedInspector{references: []CaptureReference{{
-		Capture:         captureidentity.Reference{Kind: captureidentity.KindManagedRun, ID: "run.one"},
-		LaunchAuthority: mustLaunchAuthority(t, active),
-		Bindings:        []ConnectionBinding{semanticCaptureBinding(t, active, "https://relay.example")},
+		Capture: captureidentity.Reference{Kind: captureidentity.KindManagedRun, ID: "run.one"},
 	}}}
 	manager := mustManager(t, repository, inspector)
 	candidate := active.Clone()
@@ -729,20 +851,20 @@ func TestImpactPreviewClassifiesIngressCompatibleEditAsHotSwitch(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if preview.Classification != CompatibilityHotSwitch || preview.HotSwitchCount != 1 || preview.ReconnectRequiredCount != 0 {
+	if len(preview.ContinuingCaptures) != 1 ||
+		preview.ContinuingCaptures[0].Capture.ID != "run.one" {
 		t.Fatalf("impact = %+v", preview)
 	}
 }
 
-func TestPublishRejectsLaunchAuthorityExpansionBeforeMutation(t *testing.T) {
+func TestPublishAllowsLaunchAuthorityExpansionForFutureCaptures(t *testing.T) {
 	t.Parallel()
 
 	repository := newMemoryRepository()
 	active := fixture(t, "work", mustOrigin(t, "https://relay.example"))
 	repository.active[active.ID] = active.Clone()
 	inspector := fixedInspector{references: []CaptureReference{{
-		Capture:         captureidentity.Reference{Kind: captureidentity.KindManagedRun, ID: "run.one"},
-		LaunchAuthority: mustLaunchAuthority(t, active),
+		Capture: captureidentity.Reference{Kind: captureidentity.KindManagedRun, ID: "run.one"},
 	}}}
 	manager := mustManager(t, repository, inspector)
 	candidate := active.Clone()
@@ -754,13 +876,14 @@ func TestPublishRejectsLaunchAuthorityExpansionBeforeMutation(t *testing.T) {
 		plan := &added.ProtocolPlans[index]
 		plan.ID = ClientProtocolPlanID(fmt.Sprintf("plan.added.%d", index))
 		plan.ClientAdapterPolicy.ID = fmt.Sprintf("adapter.added.%d", index)
-		plan.UpstreamPlan.RouteSet.ID = fmt.Sprintf("routes.added.%d", index)
-		route := &plan.UpstreamPlan.Routes[0]
+		plan.Destination.Upstream.RouteSet.ID = fmt.Sprintf("routes.added.%d", index)
+		route := &plan.Destination.Upstream.Routes[0]
 		route.ID = UpstreamRouteID(fmt.Sprintf("route.added.%d", index))
-		plan.UpstreamPlan.DefaultRouteID = route.ID
-		plan.UpstreamPlan.RouteSet.CandidateRouteIDs = []UpstreamRouteID{route.ID}
+		plan.Destination.Upstream.DefaultRouteID = route.ID
+		plan.Destination.Upstream.RouteSet.CandidateRouteIDs = []UpstreamRouteID{route.ID}
 		route.ProviderTarget.ID = fmt.Sprintf("target.added.%d", index)
 		route.ProviderTarget.Origin = mustProviderOrigin(t, added.ClientOrigin.String())
+		setTestRouteAccount(route, fmt.Sprintf("account.added.%d", index))
 	}
 	candidate.ClientEndpoints = append(candidate.ClientEndpoints, added)
 	draft, err := manager.SaveDraft(context.Background(), DraftCommand{
@@ -773,20 +896,20 @@ func TestPublishRejectsLaunchAuthorityExpansionBeforeMutation(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if preview.Classification != CompatibilityRestartRequired || preview.RestartRequiredCount != 1 {
+	if len(preview.ContinuingCaptures) != 1 {
 		t.Fatalf("impact = %+v", preview)
 	}
 	result, err := manager.Publish(context.Background(), preview)
-	if !errors.Is(err, ErrLaunchAuthorityRestartRequired) || result.Outcome != CommitOutcomeNotCommitted {
+	if err != nil || result.Outcome != CommitOutcomeCommitted || result.Aggregate.Revision != 2 {
 		t.Fatalf("Publish = %+v, %v", result, err)
 	}
 	current, err := manager.Get(context.Background(), active.ID)
-	if err != nil || current.Revision() != 1 || len(current.ClientEndpoints()) != 1 {
-		t.Fatalf("active Environment mutated = %+v, %v", current.Aggregate(), err)
+	if err != nil || current.Revision() != 2 || len(current.ClientEndpoints()) != 2 {
+		t.Fatalf("published Environment = %+v, %v", current.Aggregate(), err)
 	}
 }
 
-func TestImpactPreviewChecksEveryActiveCaptureBinding(t *testing.T) {
+func TestImpactPreviewDoesNotApplyProtocolChangesToRunningCaptures(t *testing.T) {
 	t.Parallel()
 	repository := newMemoryRepository()
 	active := fixture(t, "work", mustOrigin(t, "https://relay.example"))
@@ -796,22 +919,21 @@ func TestImpactPreviewChecksEveryActiveCaptureBinding(t *testing.T) {
 	second.ClientOrigin = mustOrigin(t, "https://second.example")
 	second.ProtocolPlans[0].ID = "plan.second"
 	second.ProtocolPlans[0].ClientAdapterPolicy.ID = "adapter.second"
-	second.ProtocolPlans[0].UpstreamPlan.RouteSet.ID = "routes.second"
-	second.ProtocolPlans[0].UpstreamPlan.DefaultRouteID = "route.second"
-	second.ProtocolPlans[0].UpstreamPlan.Routes[0].ID = "route.second"
-	second.ProtocolPlans[0].UpstreamPlan.RouteSet.CandidateRouteIDs = []UpstreamRouteID{"route.second"}
-	second.ProtocolPlans[0].UpstreamPlan.Routes[0].ProviderTarget.ID = "target.second"
-	second.ProtocolPlans[0].UpstreamPlan.Routes[0].ProviderTarget.Origin =
+	second.ProtocolPlans[0].Destination.Upstream.RouteSet.ID = "routes.second"
+	second.ProtocolPlans[0].Destination.Upstream.DefaultRouteID = "route.second"
+	second.ProtocolPlans[0].Destination.Upstream.Routes[0].ID = "route.second"
+	second.ProtocolPlans[0].Destination.Upstream.RouteSet.CandidateRouteIDs = []UpstreamRouteID{"route.second"}
+	second.ProtocolPlans[0].Destination.Upstream.Routes[0].ProviderTarget.ID = "target.second"
+	second.ProtocolPlans[0].Destination.Upstream.Routes[0].ProviderTarget.Origin =
 		mustProviderOrigin(t, second.ClientOrigin.String())
+	setTestRouteAccount(
+		&second.ProtocolPlans[0].Destination.Upstream.Routes[0],
+		"account.second",
+	)
 	active.ClientEndpoints = append(active.ClientEndpoints, second)
 	repository.active[active.ID] = active.Clone()
 	inspector := fixedInspector{references: []CaptureReference{{
-		Capture:         captureidentity.Reference{Kind: captureidentity.KindManagedRun, ID: "run.one"},
-		LaunchAuthority: mustLaunchAuthority(t, active),
-		Bindings: []ConnectionBinding{
-			semanticCaptureBinding(t, active, "https://relay.example"),
-			semanticCaptureBinding(t, active, "https://second.example"),
-		},
+		Capture: captureidentity.Reference{Kind: captureidentity.KindManagedRun, ID: "run.one"},
 	}}}
 	manager := mustManager(t, repository, inspector)
 	candidate := active.Clone()
@@ -829,8 +951,9 @@ func TestImpactPreviewChecksEveryActiveCaptureBinding(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if preview.Classification != CompatibilityReconnectRequired || preview.ReconnectRequiredCount != 1 || preview.HotSwitchCount != 0 {
-		t.Fatalf("multi-binding impact = %+v", preview)
+	if len(preview.ContinuingCaptures) != 1 ||
+		preview.ContinuingCaptures[0].Capture.ID != "run.one" {
+		t.Fatalf("frozen-Capture impact = %+v", preview)
 	}
 }
 
@@ -930,7 +1053,7 @@ func TestFailedAndIndeterminateTransactionsNeverPublishCandidate(t *testing.T) {
 func TestProjectionConcurrentReadersAndWriters(t *testing.T) {
 	projection := NewAtomicProjection()
 	base := fixture(t, "work", mustOrigin(t, "https://relay.example"))
-	if err := projection.Restore([]EnvironmentSnapshot{mustCompile(t, base)}); err != nil {
+	if err := projection.Restore(mustSystemSnapshot(t), []EnvironmentSnapshot{mustCompile(t, base)}); err != nil {
 		t.Fatal(err)
 	}
 	var wait sync.WaitGroup
@@ -969,10 +1092,11 @@ func fixture(t *testing.T, id string, origin originidentity.ClientOrigin) Enviro
 	t.Helper()
 	providerOrigin := mustProviderOrigin(t, origin.String())
 	plan := func(planID string, protocol ClientProtocol, routeID string, realm string) ClientProtocolPlan {
+		accountID := "account." + planID
 		return ClientProtocolPlan{
 			ID: ClientProtocolPlanID(planID), Revision: 1, ClientProtocol: protocol,
-			ClientAdapterPolicy: ClientAdapterPolicy{ID: "adapter." + planID, Revision: 1}, Mode: PlanModeManaged,
-			UpstreamPlan: UpstreamPlan{
+			ClientAdapterPolicy: ClientAdapterPolicy{ID: "adapter." + planID, Revision: 1},
+			Destination: DestinationPlan{Kind: DestinationKindUpstream, Upstream: &UpstreamPlan{
 				DefaultRouteID: UpstreamRouteID(routeID), RouteSet: RouteSet{
 					ID: "routes." + planID, Revision: 1,
 					CandidateRouteIDs: []UpstreamRouteID{UpstreamRouteID(routeID)},
@@ -986,10 +1110,15 @@ func fixture(t *testing.T, id string, origin originidentity.ClientOrigin) Enviro
 							protocolspec.ProviderCapabilityToolCalls,
 						},
 					},
-					BackendProtocol: string(protocol), AccountPolicy: RouteAccountPolicy{Revision: 1, Mode: AccountModeClientPassthrough, FailoverPolicy: FailoverOff},
+					BackendProtocol: string(protocol), AccountPolicy: RouteAccountPolicy{
+						Revision: 1, PreferredAccountID: accountID,
+						CandidateAccountIDs: []string{accountID},
+						AccountRevisions:    map[string]Revision{accountID: 1},
+						FailoverPolicy:      FailoverOff,
+					},
 					ModelPolicy:    ModelPolicy{Revision: 1, Mode: "passthrough"},
 					WireProfileRef: wireprofile.UpstreamWireProfileFollowClientValue}},
-			},
+			}},
 		}
 	}
 	return Environment{ID: EnvironmentID(id), Name: "Work", State: StateActive, Revision: 1,
@@ -1025,7 +1154,16 @@ func mustProviderOrigin(t *testing.T, value string) originidentity.ProviderOrigi
 }
 func mustCompile(t *testing.T, value Environment) EnvironmentSnapshot {
 	t.Helper()
-	snapshot, err := testCompiler(t, nil).Compile(value)
+	snapshot, err := testCompiler(t, accountCatalogFor(value)).Compile(value)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return snapshot
+}
+
+func mustSystemSnapshot(t *testing.T) EnvironmentSnapshot {
+	t.Helper()
+	snapshot, err := testCompiler(t, nil).CompileSystemTransparent()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1033,11 +1171,59 @@ func mustCompile(t *testing.T, value Environment) EnvironmentSnapshot {
 }
 func mustManager(t *testing.T, repository *memoryRepository, inspector CaptureInspector) *Manager {
 	t.Helper()
-	manager, err := NewManager(context.Background(), repository, testCompiler(t, nil), NewAtomicProjection(), inspector)
+	accounts := accountCatalogFor(fixture(t, "catalog", mustOrigin(t, "https://relay.example")))
+	accounts["account.added.0"] = AccountDescriptor{
+		ID: "account.added.0", Revision: 1,
+		UpstreamEndpointID: "target.added.0", UpstreamEndpointRevision: 1,
+		RealmID: "realm.anthropic", Active: true,
+		BackendProtocols: []string{"anthropic_messages"},
+	}
+	accounts["account.added.1"] = AccountDescriptor{
+		ID: "account.added.1", Revision: 1,
+		UpstreamEndpointID: "target.added.1", UpstreamEndpointRevision: 1,
+		RealmID: "realm.openai", Active: true,
+		BackendProtocols: []string{"openai_responses"},
+	}
+	accounts["account.second"] = AccountDescriptor{
+		ID: "account.second", Revision: 1,
+		UpstreamEndpointID: "target.second", UpstreamEndpointRevision: 1,
+		RealmID: "realm.anthropic", Active: true,
+		BackendProtocols: []string{"anthropic_messages"},
+	}
+	manager, err := NewManager(context.Background(), repository, testCompiler(t, accounts), NewAtomicProjection(), inspector)
 	if err != nil {
 		t.Fatal(err)
 	}
 	return manager
+}
+
+func accountCatalogFor(value Environment) accountCatalog {
+	catalog := accountCatalog{}
+	for _, endpoint := range value.ClientEndpoints {
+		for _, plan := range endpoint.ProtocolPlans {
+			for _, route := range destinationRoutes(plan.Destination) {
+				for _, accountID := range route.AccountPolicy.CandidateAccountIDs {
+					catalog[accountID] = AccountDescriptor{
+						ID: accountID, Revision: route.AccountPolicy.AccountRevisions[accountID],
+						UpstreamEndpointID:       route.ProviderTarget.ID,
+						UpstreamEndpointRevision: route.ProviderTarget.Revision,
+						RealmID:                  route.ProviderTarget.RealmID, Active: true,
+						BackendProtocols: []string{route.BackendProtocol},
+					}
+				}
+			}
+		}
+	}
+	return catalog
+}
+
+func setTestRouteAccount(route *UpstreamRoute, accountID string) {
+	route.AccountPolicy = RouteAccountPolicy{
+		Revision: 1, PreferredAccountID: accountID,
+		CandidateAccountIDs: []string{accountID},
+		AccountRevisions:    map[string]Revision{accountID: 1},
+		FailoverPolicy:      FailoverOff,
+	}
 }
 
 func testCompiler(t *testing.T, accounts AccountCatalog) Compiler {
@@ -1079,7 +1265,7 @@ func testCompiler(t *testing.T, accounts AccountCatalog) Compiler {
 	return compiler
 }
 
-func ambiguousTestCompiler(t *testing.T) Compiler {
+func ambiguousTestCompiler(t *testing.T, accounts AccountCatalog) Compiler {
 	t.Helper()
 	definition := func(id string, dialect protocolspec.Dialect) protocolspec.ClientOperationDefinition {
 		operationID, err := protocolspec.NewClientOperationID(id)
@@ -1131,7 +1317,7 @@ func ambiguousTestCompiler(t *testing.T) Compiler {
 	if err != nil {
 		t.Fatal(err)
 	}
-	compiler, err := NewCompiler(nil, nil, protocols, wires)
+	compiler, err := NewCompiler(accounts, nil, protocols, wires)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1149,21 +1335,12 @@ func mustLaunchAuthority(t *testing.T, aggregate Environment) LaunchAuthorityBou
 	return boundary
 }
 
-func (inspector fixedInspector) AffectedCaptures(_ context.Context, _ EnvironmentID, limit int) ([]CaptureReference, error) {
+func (inspector fixedInspector) ActiveCaptures(_ context.Context, _ EnvironmentID, limit int) ([]CaptureReference, error) {
 	if len(inspector.references) > limit {
 		return nil, ErrImpactLimitExceeded
 	}
 	return append([]CaptureReference(nil), inspector.references...), nil
 }
-
-func (fixedInspector) PrepareEnvironmentTransition(_ context.Context, _ EnvironmentTransition) (EnvironmentTransitionLease, error) {
-	return noOpTransitionLease{}, nil
-}
-
-type noOpTransitionLease struct{}
-
-func (noOpTransitionLease) Commit()  {}
-func (noOpTransitionLease) Release() {}
 
 type memoryRepository struct {
 	mu             sync.Mutex
@@ -1281,13 +1458,6 @@ func seedActiveEnvironment(t *testing.T, repository *memoryRepository) Environme
 	return candidate
 }
 
-func noWorkspaceDefaults(
-	_ context.Context,
-	_ EnvironmentID,
-) ([]resourcedeletion.Holder, error) {
-	return nil, nil
-}
-
 // A running Capture has already frozen its admission decisions against this
 // Environment. Removing it underneath would leave those decisions pointing at
 // an authority that no longer exists, so the delete is refused and the holder
@@ -1307,9 +1477,7 @@ func TestDeletingAnEnvironmentIsRefusedWhileACaptureIsRunning(t *testing.T) {
 		WorkspaceLabel: "agent-lab",
 	}})
 
-	result, err := manager.Delete(
-		context.Background(), candidate.ID, noWorkspaceDefaults,
-	)
+	result, err := manager.Delete(context.Background(), candidate.ID)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1325,43 +1493,13 @@ func TestDeletingAnEnvironmentIsRefusedWhileACaptureIsRunning(t *testing.T) {
 	}
 }
 
-// A workspace default is a promise about the next run. Deleting the
-// Environment it names would break that run with no warning.
-func TestDeletingAnEnvironmentIsRefusedWhileAWorkspaceDefaultNamesIt(t *testing.T) {
-	t.Parallel()
-	repository := newMemoryRepository()
-	candidate := seedActiveEnvironment(t, repository)
-	manager := retiringManager(t, repository, nil)
-
-	result, err := manager.Delete(
-		context.Background(),
-		candidate.ID,
-		func(_ context.Context, _ EnvironmentID) ([]resourcedeletion.Holder, error) {
-			return []resourcedeletion.Holder{{
-				Kind:  resourcedeletion.KindWorkspaceDefault,
-				ID:    "machine-1/workspace-1",
-				Label: "agent-lab",
-			}}, nil
-		},
-	)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if result.Deleted || len(result.Holders) != 1 ||
-		result.Holders[0].Kind != resourcedeletion.KindWorkspaceDefault {
-		t.Fatalf("result = %+v, want refused with one workspace default", result)
-	}
-}
-
 func TestDeletingAnUnreferencedEnvironmentRetiresIt(t *testing.T) {
 	t.Parallel()
 	repository := newMemoryRepository()
 	candidate := seedActiveEnvironment(t, repository)
 	manager := retiringManager(t, repository, nil)
 
-	result, err := manager.Delete(
-		context.Background(), candidate.ID, noWorkspaceDefaults,
-	)
+	result, err := manager.Delete(context.Background(), candidate.ID)
 	if err != nil || !result.Deleted {
 		t.Fatalf("result = %+v, err = %v", result, err)
 	}
@@ -1385,7 +1523,7 @@ func TestDeletingAnEnvironmentFailsClosedWithoutACaptureInspector(t *testing.T) 
 	manager := mustManager(t, repository, nil)
 
 	if _, err := manager.Delete(
-		context.Background(), candidate.ID, noWorkspaceDefaults,
+		context.Background(), candidate.ID,
 	); !errors.Is(err, ErrInvalidEnvironment) {
 		t.Fatalf("Delete() error = %v, want ErrInvalidEnvironment", err)
 	}

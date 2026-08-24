@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:vibermate_app/app/vibermate_app.dart';
+import 'package:vibermate_app/core/api/control_api.dart';
 import 'package:vibermate_app/core/bootstrap/terminal_command.dart';
 import 'package:vibermate_app/core/design/viber_theme.dart';
 import 'package:vibermate_app/core/design/workbench_widgets.dart';
@@ -22,42 +23,35 @@ import 'package:vibermate_app/preview/preview_terminal_command.dart';
 Future<void> openCaptureConversation(
   WidgetTester tester, {
   required String capture,
-  required String conversation,
+  String? conversationLabel,
 }) async {
   final captureRow = find.byKey(Key('capture-row-$capture'));
   await tester.ensureVisible(captureRow);
   await tester.tap(captureRow);
   await tester.pumpAndSettle();
 
-  final row = find.byKey(Key('capture-conversation-$conversation'));
-  if (row.evaluate().isNotEmpty) {
-    await tester.ensureVisible(row);
-    await tester.tap(row);
-    await tester.pumpAndSettle();
-    return;
-  }
+  // A Capture selects the preferred main Conversation itself. Native client
+  // Session IDs deliberately define Conversation identity, so a behavior test
+  // must not reach back to the retired capture_run:<id>:main synthetic key.
+  if (conversationLabel == null) return;
 
-  final alreadySelected = find.byKey(
-    ValueKey('capture-conversation-select:$conversation'),
+  final pane = find.byKey(const Key('capture-conversation-pane'));
+  final label = find.descendant(
+    of: pane,
+    matching: find.text(conversationLabel),
   );
-  if (alreadySelected.evaluate().isNotEmpty) return;
-
-  final field = find.byWidgetPredicate(
-    (widget) =>
-        widget.key is ValueKey<String> &&
-        (widget.key! as ValueKey<String>).value.startsWith(
-          'capture-conversation-select:',
-        ),
+  final row = find.ancestor(
+    of: label.first,
+    matching: find.byWidgetPredicate(
+      (widget) =>
+          widget.key is ValueKey<String> &&
+          (widget.key! as ValueKey<String>).value.startsWith(
+            'capture-conversation-',
+          ),
+    ),
   );
-  await tester.tap(field);
-  await tester.pumpAndSettle();
-  final item = find
-      .byWidgetPredicate(
-        (widget) =>
-            widget is DropdownMenuItem<String> && widget.value == conversation,
-      )
-      .last;
-  await tester.tap(item);
+  await tester.ensureVisible(row.first);
+  await tester.tap(row.first);
   await tester.pumpAndSettle();
 }
 
@@ -639,6 +633,307 @@ void main() {
     },
   );
 
+  testWidgets('390px Settings gives Runtime User management its own tab', (
+    tester,
+  ) async {
+    await tester.binding.setSurfaceSize(const Size(390, 760));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+    final api = PreviewControlApi();
+    final controller = WorkbenchController(
+      api: api,
+      terminalCommands: PreviewTerminalCommandService(),
+      previewMode: false,
+      serverManagement: true,
+      terminalManagement: false,
+      runtimeTarget: 'server.local:9666',
+      closeRuntime: api.close,
+      initialPreferences: const WorkbenchPreferences(
+        section: WorkbenchSection.settings,
+      ),
+    );
+    addTearDown(controller.dispose);
+    await controller.initialize();
+    await tester.pumpWidget(
+      MaterialApp(
+        theme: ViberTheme.light(),
+        home: WorkbenchShell(controller: controller),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    expect(tester.takeException(), isNull);
+    expect(find.byKey(const Key('settings-tab-general')), findsOneWidget);
+    expect(find.byKey(const Key('settings-tab-users')), findsOneWidget);
+    expect(find.byKey(const Key('server-runtime-access')), findsNothing);
+    await tester.tap(find.byKey(const Key('settings-tab-users')));
+    await tester.pumpAndSettle();
+    expect(find.byKey(const Key('server-runtime-access')), findsOneWidget);
+    expect(find.text('Terminal command'), findsNothing);
+    expect(
+      find.textContaining('vibermate login --server server.local:9666'),
+      findsOneWidget,
+    );
+    expect(
+      find.textContaining('vibermate run --server server.local:9666 -- codex'),
+      findsOneWidget,
+    );
+    expect(controller.serverAccess?.requiresRuntimeUserLogin, isTrue);
+    expect(controller.runtimeUsers?.single.username, 'alice');
+    expect(controller.runtimeUsage?.users.single.turns, 18);
+    expect(
+      find.byKey(const Key('runtime-user-row-user.preview.alice')),
+      findsOneWidget,
+    );
+    expect(find.text('18 turns'), findsNothing);
+
+    final add = find.byKey(const Key('runtime-user-add'));
+    await tester.drag(
+      find.byKey(const Key('runtime-users-settings-scroll')),
+      const Offset(0, -220),
+    );
+    await tester.pumpAndSettle();
+    await tester.ensureVisible(add);
+    await tester.pumpAndSettle();
+    await tester.tap(add);
+    await tester.pumpAndSettle();
+    expect(find.byKey(const Key('runtime-user-dialog')), findsOneWidget);
+    await tester.enterText(
+      find.byKey(const Key('runtime-user-username')),
+      'bob',
+    );
+    await tester.enterText(
+      find.byKey(const Key('runtime-user-password')),
+      'test-password',
+    );
+    await tester.pump();
+    final create = find.byKey(const Key('runtime-user-create'));
+    expect(tester.widget<FilledButton>(create).onPressed, isNotNull);
+    await tester.tap(create);
+    await tester.pumpAndSettle();
+
+    expect(find.byKey(const Key('runtime-user-dialog')), findsNothing);
+    expect(
+      controller.runtimeUsers?.map((user) => user.username),
+      contains('bob'),
+    );
+    expect(find.text('bob'), findsOneWidget);
+    expect(tester.takeException(), isNull);
+
+    controller.dispose();
+    await tester.pumpWidget(const SizedBox.shrink());
+    await tester.pump();
+  });
+
+  testWidgets('390px usage ranks and searches 20 Runtime Users', (
+    tester,
+  ) async {
+    await tester.binding.setSurfaceSize(const Size(390, 760));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+    final api = PreviewControlApi();
+    for (var index = 2; index <= 20; index += 1) {
+      await api.createRuntimeUser(
+        username: 'user${index.toString().padLeft(2, '0')}',
+        password: 'test-password',
+      );
+    }
+    final controller = WorkbenchController(
+      api: api,
+      terminalCommands: PreviewTerminalCommandService(),
+      previewMode: false,
+      serverManagement: true,
+      terminalManagement: false,
+      runtimeTarget: 'server.local:9666',
+      closeRuntime: api.close,
+    );
+    addTearDown(controller.dispose);
+    await controller.initialize();
+    await tester.pumpWidget(
+      MaterialApp(
+        theme: ViberTheme.light(),
+        home: WorkbenchShell(controller: controller),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    final navigation = find.byKey(const Key('usage-dashboard-nav'));
+    expect(navigation, findsOneWidget);
+    await tester.tap(navigation);
+    await tester.pumpAndSettle();
+
+    expect(find.byKey(const Key('usage-dashboard')), findsOneWidget);
+    expect(find.text('Server'), findsOneWidget);
+    expect(find.byKey(const Key('usage-total-turns')), findsOneWidget);
+    expect(find.byKey(const Key('usage-active-runs')), findsOneWidget);
+    expect(find.byKey(const Key('usage-input-tokens')), findsOneWidget);
+    expect(find.byKey(const Key('usage-output-tokens')), findsOneWidget);
+    expect(find.byKey(const Key('usage-ranking')), findsOneWidget);
+    expect(find.byKey(const Key('usage-ranking-scroll')), findsOneWidget);
+    expect(find.byKey(const Key('usage-ranking-count')), findsOneWidget);
+    expect(
+      find.byKey(const Key('usage-user-user.preview.alice')),
+      findsOneWidget,
+    );
+    expect(find.byKey(const Key('usage-user-user.preview.20')), findsNothing);
+
+    await tester.enterText(
+      find.byKey(const Key('usage-user-search')),
+      'user20',
+    );
+    await tester.pump();
+    expect(find.byKey(const Key('usage-user-user.preview.20')), findsOneWidget);
+    expect(
+      find.byKey(const Key('usage-user-user.preview.alice')),
+      findsNothing,
+    );
+    await tester.enterText(find.byKey(const Key('usage-user-search')), '');
+    await tester.pump();
+    await tester.tap(find.byKey(const Key('usage-user-user.preview.alice')));
+    await tester.pumpAndSettle();
+    expect(
+      tester
+          .getTopLeft(
+            find.byKey(const Key('usage-user-evidence-user.preview.alice')),
+          )
+          .dy,
+      lessThan(300),
+    );
+    expect(tester.takeException(), isNull);
+
+    controller.dispose();
+    await tester.pumpWidget(const SizedBox.shrink());
+    await tester.pump();
+  });
+
+  testWidgets('usage groups the same Workspace across Capture Runs', (
+    tester,
+  ) async {
+    await tester.binding.setSurfaceSize(const Size(390, 760));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+    final api = PreviewControlApi();
+    final controller = WorkbenchController(
+      api: api,
+      terminalCommands: PreviewTerminalCommandService(),
+      previewMode: false,
+      serverManagement: true,
+      terminalManagement: false,
+      runtimeTarget: 'server.local:9666',
+      closeRuntime: api.close,
+    );
+    addTearDown(controller.dispose);
+    await controller.initialize();
+    await tester.pumpWidget(
+      MaterialApp(
+        theme: ViberTheme.light(),
+        home: WorkbenchShell(controller: controller),
+      ),
+    );
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const Key('usage-dashboard-nav')));
+    await tester.pumpAndSettle();
+
+    expect(
+      find.byKey(const Key('usage-dimension-content-workspaces')),
+      findsOneWidget,
+    );
+    final workspace = find.byKey(
+      const Key(
+        'usage-workspace-user.preview.alice-workspace.preview.vibermate',
+      ),
+    );
+    expect(workspace, findsOneWidget);
+    expect(
+      find.descendant(
+        of: workspace,
+        matching: find.textContaining('2 Captures · 12 turns'),
+      ),
+      findsOneWidget,
+    );
+    expect(tester.takeException(), isNull);
+
+    controller.dispose();
+    await tester.pumpWidget(const SizedBox.shrink());
+    await tester.pump();
+  });
+
+  testWidgets('usage drill-down shows one grouping dimension at a time', (
+    tester,
+  ) async {
+    await tester.binding.setSurfaceSize(const Size(390, 760));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+    final api = PreviewControlApi();
+    final controller = WorkbenchController(
+      api: api,
+      terminalCommands: PreviewTerminalCommandService(),
+      previewMode: false,
+      serverManagement: true,
+      terminalManagement: false,
+      runtimeTarget: 'server.local:9666',
+      closeRuntime: api.close,
+    );
+    addTearDown(controller.dispose);
+    await controller.initialize();
+    await tester.pumpWidget(
+      MaterialApp(
+        theme: ViberTheme.light(),
+        home: WorkbenchShell(controller: controller),
+      ),
+    );
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const Key('usage-dashboard-nav')));
+    await tester.pumpAndSettle();
+
+    expect(
+      find.byKey(const Key('usage-dimension-content-workspaces')),
+      findsOneWidget,
+    );
+    expect(
+      find.byKey(const Key('usage-model-user.preview.alice-0')),
+      findsNothing,
+    );
+    expect(
+      find.byKey(const Key('usage-session-user.preview.alice-0')),
+      findsNothing,
+    );
+
+    final models = find.byKey(const Key('usage-dimension-models'));
+    await tester.drag(
+      find.byKey(const Key('usage-dashboard-scroll')),
+      const Offset(0, -700),
+    );
+    await tester.pumpAndSettle();
+    await tester.tap(models);
+    await tester.pumpAndSettle();
+    expect(
+      find.byKey(const Key('usage-dimension-content-models')),
+      findsOneWidget,
+    );
+    expect(find.text('gpt-5.6-sol'), findsOneWidget);
+    expect(find.text('dashscope:deepseek-v4-flash-0731'), findsOneWidget);
+    expect(
+      find.byKey(const Key('usage-dimension-content-workspaces')),
+      findsNothing,
+    );
+
+    final sessions = find.byKey(const Key('usage-dimension-sessions'));
+    await tester.tap(sessions);
+    await tester.pumpAndSettle();
+    expect(
+      find.byKey(const Key('usage-dimension-content-sessions')),
+      findsOneWidget,
+    );
+    expect(find.textContaining('01a02deb'), findsOneWidget);
+    expect(find.text('gpt-5.6-sol'), findsNothing);
+    expect(
+      find.byKey(const Key('usage-dimension-content-workspaces')),
+      findsNothing,
+    );
+    expect(tester.takeException(), isNull);
+
+    controller.dispose();
+    await tester.pumpWidget(const SizedBox.shrink());
+    await tester.pump();
+  });
+
   testWidgets(
     'wide workbench exposes dense timeline and endpoint-owned accounts',
     (tester) async {
@@ -681,7 +976,7 @@ void main() {
   );
 
   testWidgets(
-    'Capture exposes one runtime Environment and keeps finished assignments read-only',
+    'Capture freezes its launch Environment for the whole managed run',
     (tester) async {
       await tester.binding.setSurfaceSize(const Size(1180, 760));
       addTearDown(() => tester.binding.setSurfaceSize(null));
@@ -692,29 +987,20 @@ void main() {
 
       final currentScope = find.byKey(const Key('capture-environment-scope'));
       expect(currentScope, findsOneWidget);
-      expect(find.byKey(const Key('workspace-default-scope')), findsNothing);
       expect(
         find.descendant(of: currentScope, matching: find.text('Work')),
         findsOneWidget,
       );
-
-      await tester.tap(
+      expect(
+        find.byKey(const Key('capture-environment-readonly')),
+        findsOneWidget,
+      );
+      expect(
         find.descendant(
           of: currentScope,
           matching: find.byType(CompactSelectField<String>),
         ),
-      );
-      await tester.pumpAndSettle();
-      await tester.tap(find.text('Research').last);
-      await tester.pumpAndSettle();
-
-      expect(
-        find.descendant(of: currentScope, matching: find.text('Research')),
-        findsOneWidget,
-      );
-      expect(
-        find.text('Environment changed · existing traffic can switch hot.'),
-        findsOneWidget,
+        findsNothing,
       );
 
       final finishedCapture = find.byKey(
@@ -735,7 +1021,6 @@ void main() {
         ),
         findsNothing,
       );
-      expect(find.byKey(const Key('workspace-default-scope')), findsNothing);
       expect(tester.takeException(), isNull);
     },
   );
@@ -754,12 +1039,15 @@ void main() {
 
     expect(find.text('Environment'), findsOneWidget);
     expect(find.byKey(const Key('capture-environment-scope')), findsOneWidget);
-    expect(find.byKey(const Key('workspace-default-scope')), findsNothing);
     expect(
       find.descendant(
         of: find.byKey(const Key('capture-environment-scope')),
         matching: find.byType(CompactSelectField<String>),
       ),
+      findsNothing,
+    );
+    expect(
+      find.byKey(const Key('capture-environment-readonly')),
       findsOneWidget,
     );
     expect(tester.takeException(), isNull);
@@ -817,17 +1105,13 @@ void main() {
       );
       await tester.pumpAndSettle();
 
-      await openCaptureConversation(
-        tester,
-        capture: 'managed_run:run-1',
-        conversation: 'capture_run:run-1:main',
-      );
+      await openCaptureConversation(tester, capture: 'managed_run:run-1');
       expect(find.textContaining('195 Turns'), findsWidgets);
 
       final turn = find.byKey(
         const Key('conversation-turn-run-1-exchange-222'),
       );
-      await tester.ensureVisible(turn);
+      await ensureTurnVisible(tester, turn);
       final turnCard = find.byKey(
         const Key('conversation-turn-card-run-1-exchange-222'),
       );
@@ -874,10 +1158,96 @@ void main() {
         ),
         findsOneWidget,
       );
+      final thinkingBlock = find.byKey(
+        const Key('thinking-block-response-run-1-exchange-222-0'),
+      );
+      expect(thinkingBlock, findsOneWidget);
+      expect(
+        find.byKey(const Key('thinking-block-response-run-1-exchange-222-1')),
+        findsNothing,
+      );
+      expect(
+        find.descendant(
+          of: thinkingBlock,
+          matching: find.text('Reasoning evidence'),
+        ),
+        findsOneWidget,
+      );
+      expect(find.text('Reasoning summary'), findsNothing);
+      expect(
+        find.descendant(
+          of: thinkingBlock,
+          matching: find.text('Plaintext evidence'),
+        ),
+        findsOneWidget,
+      );
+      expect(find.text('Opaque Thinking evidence'), findsNothing);
+      expect(
+        find.descendant(
+          of: thinkingBlock,
+          matching: find.textContaining('Inspect the evidence boundary.'),
+        ),
+        findsOneWidget,
+      );
+      expect(
+        find.descendant(
+          of: thinkingBlock,
+          matching: find.byType(ExpansionTile),
+        ),
+        findsNothing,
+      );
+      final thinkingDisclosure = find.byKey(
+        const Key('toggle-thinking-block-response-run-1-exchange-222-0'),
+      );
+      expect(thinkingDisclosure, findsOneWidget);
+      await tester.tap(thinkingDisclosure);
+      await tester.pumpAndSettle();
+      expect(
+        find.descendant(
+          of: thinkingBlock,
+          matching: find.textContaining('Inspect the evidence boundary.'),
+        ),
+        findsNothing,
+      );
+      await tester.tap(thinkingDisclosure);
+      await tester.pumpAndSettle();
+      expect(
+        find.descendant(
+          of: thinkingBlock,
+          matching: find.textContaining('Inspect the evidence boundary.'),
+        ),
+        findsOneWidget,
+      );
+      final thinkingToggle = find.byKey(
+        const Key('toggle-thinking-response-run-1-exchange-222-0'),
+      );
+      expect(thinkingToggle, findsOneWidget);
+      expect(
+        find.descendant(
+          of: thinkingBlock,
+          matching: find.text('Show full Thinking'),
+        ),
+        findsOneWidget,
+      );
+      await tester.ensureVisible(thinkingToggle);
+      await tester.pumpAndSettle();
+      await tester.tap(thinkingToggle);
+      await tester.pumpAndSettle();
+      expect(
+        find.descendant(
+          of: thinkingBlock,
+          matching: find.text('Show first 15 lines'),
+        ),
+        findsOneWidget,
+      );
       final copyMessage = find.byKey(
         const Key('copy-message-run-1-exchange-222-0'),
       );
-      await tester.ensureVisible(copyMessage);
+      await Scrollable.ensureVisible(
+        tester.element(copyMessage),
+        alignment: 0.2,
+      );
+      await tester.pumpAndSettle();
       await tester.tap(copyMessage);
       await tester.pump();
       expect(
@@ -971,14 +1341,19 @@ void main() {
       final rawEvidence = find.byKey(
         const Key('exchange-raw-run-1-exchange-222'),
       );
-      await tester.ensureVisible(rawEvidence);
+      await Scrollable.ensureVisible(
+        tester.element(rawEvidence),
+        alignment: 0.5,
+      );
+      await tester.pumpAndSettle();
       await tester.tap(rawEvidence);
       await tester.pumpAndSettle();
       expect(find.text('1 boundary messages'), findsOneWidget);
       final rawReveal = find.byKey(
         const Key('raw-reveal-raw-preview-run-1-exchange-222'),
       );
-      await tester.ensureVisible(rawReveal);
+      await Scrollable.ensureVisible(tester.element(rawReveal), alignment: 0.5);
+      await tester.pumpAndSettle();
       await tester.tap(rawReveal);
       await tester.pumpAndSettle();
       final rawPayload = find.byKey(
@@ -1103,7 +1478,7 @@ void main() {
       expect(find.textContaining('You are operating inside'), findsOneWidget);
       final wrappingCheck = find.textContaining('WRAPPING-CHECK');
       expect(wrappingCheck, findsOneWidget);
-      final followingParagraph = find.text('hello');
+      final followingParagraph = find.textContaining('hello');
       expect(followingParagraph, findsOneWidget);
       final codeBlock = find.byKey(const Key('markdown-code-block'));
       final precedingParagraph = find.text('Inspect the current workspace.');
@@ -1126,6 +1501,20 @@ void main() {
         ),
         findsNothing,
       );
+      final multiBlockMessage = find.byKey(
+        const ValueKey('message-content-run-1-exchange-222-1'),
+      );
+      final multiBlockToggles = find.descendant(
+        of: multiBlockMessage,
+        matching: find.byWidgetPredicate(
+          (widget) =>
+              widget.key is ValueKey<String> &&
+              (widget.key! as ValueKey<String>).value.startsWith(
+                'toggle-long-message-run-1-exchange-222-1',
+              ),
+        ),
+      );
+      expect(multiBlockToggles, findsOneWidget);
       // "Go to Capture" was the flat Conversations list's bridge back to the
       // owning Capture. Reaching a Conversation now means already being there,
       // so the affordance retired with the section.
@@ -1140,6 +1529,71 @@ void main() {
     },
   );
 
+  testWidgets(
+    'Codex resume keeps Turns in one Conversation and switches exact Sessions',
+    (tester) async {
+      await tester.binding.setSurfaceSize(const Size(1600, 900));
+      addTearDown(() => tester.binding.setSurfaceSize(null));
+      await tester.pumpWidget(
+        const ViberMateApp(previewMode: true, preferChinese: false),
+      );
+      await tester.pumpAndSettle();
+
+      final capture = find.byKey(const Key('capture-row-managed_run:run-2'));
+      await tester.ensureVisible(capture);
+      await tester.tap(capture);
+      await tester.pumpAndSettle();
+
+      expect(find.byKey(const Key('capture-session-selector')), findsOneWidget);
+      expect(find.text('View Session'), findsOneWidget);
+      expect(
+        find.text('Filters evidence only; does not switch the client session.'),
+        findsOneWidget,
+      );
+      expect(
+        find.byKey(const Key('capture-conversation-pane')),
+        findsOneWidget,
+      );
+      expect(find.textContaining('12 Turns'), findsWidgets);
+      final visibleConversations = find.byWidgetPredicate(
+        (widget) =>
+            widget.key is ValueKey<String> &&
+            (widget.key! as ValueKey<String>).value.startsWith(
+              'capture-conversation-client_session:codex:',
+            ),
+      );
+      expect(visibleConversations, findsOneWidget);
+
+      final sessionField = find.byWidgetPredicate(
+        (widget) =>
+            widget.key is ValueKey<String> &&
+            (widget.key! as ValueKey<String>).value.startsWith(
+              'capture-session-select:',
+            ),
+      );
+      expect(sessionField, findsOneWidget);
+      await tester.tap(sessionField);
+      await tester.pumpAndSettle();
+      final primarySession = find.textContaining('primary');
+      final resumedSession = find.textContaining('resumed');
+      expect(primarySession, findsOneWidget);
+      expect(resumedSession, findsWidgets);
+      await tester.tap(primarySession);
+      await tester.pumpAndSettle();
+      expect(
+        find.byKey(
+          const ValueKey(
+            'capture-session-select:codex:codex-session-run-2-primary',
+          ),
+        ),
+        findsOneWidget,
+      );
+      expect(visibleConversations, findsOneWidget);
+      expect(find.textContaining('12 Turns'), findsWidgets);
+      expect(tester.takeException(), isNull);
+    },
+  );
+
   testWidgets('expanding the latest Turn follows its measured tail', (
     tester,
   ) async {
@@ -1150,11 +1604,7 @@ void main() {
     );
     await tester.pumpAndSettle();
 
-    await openCaptureConversation(
-      tester,
-      capture: 'managed_run:run-1',
-      conversation: 'capture_run:run-1:main',
-    );
+    await openCaptureConversation(tester, capture: 'managed_run:run-1');
 
     final latest = find.byKey(
       const Key('conversation-turn-run-1-exchange-224'),
@@ -1195,11 +1645,7 @@ void main() {
     );
     await tester.pumpAndSettle();
 
-    await openCaptureConversation(
-      tester,
-      capture: 'managed_run:run-1',
-      conversation: 'capture_run:run-1:main',
-    );
+    await openCaptureConversation(tester, capture: 'managed_run:run-1');
 
     final turn = find.byKey(const Key('conversation-turn-run-1-exchange-220'));
     await ensureTurnVisible(tester, turn);
@@ -1242,7 +1688,7 @@ void main() {
       await openCaptureConversation(
         tester,
         capture: 'managed_run:run-1',
-        conversation: 'capture_run:run-1:agent:reviewer',
+        conversationLabel: 'reviewer',
       );
 
       expect(find.text('reviewer'), findsWidgets);
@@ -1268,15 +1714,11 @@ void main() {
       );
       await tester.pumpAndSettle();
 
-      await openCaptureConversation(
-        tester,
-        capture: 'managed_run:run-1',
-        conversation: 'capture_run:run-1:main',
-      );
+      await openCaptureConversation(tester, capture: 'managed_run:run-1');
       final turn = find.byKey(
         const Key('conversation-turn-run-1-exchange-222'),
       );
-      await tester.ensureVisible(turn);
+      await ensureTurnVisible(tester, turn);
       await tester.tap(turn);
       await tester.pumpAndSettle();
 
@@ -1320,11 +1762,7 @@ void main() {
     );
     await tester.pumpAndSettle();
 
-    await openCaptureConversation(
-      tester,
-      capture: 'managed_run:run-1',
-      conversation: 'capture_run:run-1:main',
-    );
+    await openCaptureConversation(tester, capture: 'managed_run:run-1');
     expect(find.textContaining('vibermate run'), findsOneWidget);
 
     final turn = find.byKey(const Key('conversation-turn-run-1-exchange-224'));
@@ -1338,6 +1776,25 @@ void main() {
     await ensureTurnVisible(tester, rawTurn);
     await tester.tap(rawTurn);
     await tester.pumpAndSettle();
+    final thinkingBlock = find.byKey(
+      const Key('thinking-block-response-run-1-exchange-222-0'),
+    );
+    expect(thinkingBlock, findsOneWidget);
+    expect(
+      find.descendant(of: thinkingBlock, matching: find.text('推理证据')),
+      findsOneWidget,
+    );
+    expect(find.text('推理摘要'), findsNothing);
+    expect(
+      find.descendant(of: thinkingBlock, matching: find.text('明文证据')),
+      findsOneWidget,
+    );
+    expect(
+      find.descendant(of: thinkingBlock, matching: find.text('展开完整 Thinking')),
+      findsOneWidget,
+    );
+    expect(tester.getTopLeft(thinkingBlock).dx, greaterThanOrEqualTo(0));
+    expect(tester.getBottomRight(thinkingBlock).dx, lessThanOrEqualTo(390));
     final rawSection = find.byKey(const Key('exchange-raw-run-1-exchange-222'));
     // ensureVisible instead of a fixed scroll offset: the claim is that the Raw
     // section is reachable and lands on screen at 390 px, not that it sits at
@@ -1423,7 +1880,7 @@ void main() {
       expect(find.text('Create a dedicated proxy login'), findsOneWidget);
       expect(
         find.text(
-          'This Environment observes a transparent proxy flow and does not deliver a Root.',
+          "ViberMate decrypts and records the listed Agent API origins. Original Destination keeps the client's URL, authentication, and model unchanged.",
         ),
         findsOneWidget,
       );
@@ -1434,11 +1891,14 @@ void main() {
       await tester.pumpAndSettle();
       expect(
         find.text(
-          'This Environment decrypts selected Agent endpoints. Install the delivered Root only in this client.',
+          "ViberMate decrypts and records the listed Agent API origins. Original Destination keeps the client's URL, authentication, and model unchanged.",
         ),
         findsOneWidget,
       );
-      expect(find.text('api.anthropic.com  ·  api.openai.com'), findsOneWidget);
+      expect(
+        find.text('api.anthropic.com:443  ·  api.openai.com:443'),
+        findsOneWidget,
+      );
 
       await tester.enterText(
         find.byKey(const Key('manual-capture-name')),
@@ -1528,7 +1988,10 @@ void main() {
     await tester.tap(find.byKey(const Key('manual-capture-create')));
     await tester.pumpAndSettle();
     expect(find.text('创建专属代理登录'), findsOneWidget);
-    expect(find.text('此 Environment 仅观察透明代理流量，不会交付 Root。'), findsOneWidget);
+    expect(
+      find.text('ViberMate 会解密并记录下列 Agent API 入口；“原始目的地”保持客户端 URL、鉴权和模型不变。'),
+      findsOneWidget,
+    );
     expect(tester.takeException(), isNull);
 
     await tester.enterText(
@@ -1539,7 +2002,7 @@ void main() {
     await tester.pumpAndSettle();
     expect(find.text('代理登录已创建'), findsOneWidget);
     expect(find.text('preview-password-1'), findsOneWidget);
-    expect(find.text('Root 路径'), findsNothing);
+    expect(find.text('Root 路径'), findsOneWidget);
     expect(tester.takeException(), isNull);
 
     await tester.tap(find.byKey(const Key('manual-capture-delivery-done')));
@@ -1947,12 +2410,97 @@ void main() {
         lessThanOrEqualTo(240),
       );
 
+      final modelField = find.byKey(
+        const Key('environment-route-model-anthropic-direct'),
+      );
+      expect(modelField, findsOneWidget);
+      await tester.ensureVisible(modelField);
+      await tester.pumpAndSettle();
+      await tester.tap(modelField);
+      await tester.pumpAndSettle();
+      expect(
+        find.byKey(const Key('environment-model-selector')),
+        findsOneWidget,
+      );
+      final modelDialog = find.byKey(const Key('environment-model-selector'));
+      expect(
+        find.descendant(
+          of: modelDialog,
+          matching: find.text('models.dev · anthropic_messages'),
+        ),
+        findsOneWidget,
+      );
+      expect(
+        find.descendant(
+          of: modelDialog,
+          matching: find.text('https://api.anthropic.com/v1/models'),
+        ),
+        findsOneWidget,
+      );
+      expect(
+        find.descendant(
+          of: modelDialog,
+          matching: find.text(
+            'Account: Anthropic · Work · Anthropic API key · X-Api-Key',
+          ),
+        ),
+        findsOneWidget,
+      );
+
       await tester.sendKeyEvent(LogicalKeyboardKey.escape);
       await tester.pumpAndSettle();
-      expect(find.byKey(const Key('environment-editor-form')), findsNothing);
-      await tester.tap(find.byKey(const Key('environment-edit')));
-      await tester.pumpAndSettle();
+      expect(find.byKey(const Key('environment-model-selector')), findsNothing);
       expect(find.byKey(const Key('environment-editor-form')), findsOneWidget);
+
+      await tester.ensureVisible(modelField);
+      await tester.pumpAndSettle();
+      await tester.tap(modelField);
+      await tester.pumpAndSettle();
+      await tester.enterText(
+        find.byKey(const Key('environment-model-requested-0')),
+        'claude-sonnet-4-5',
+      );
+      await tester.pumpAndSettle();
+      await tester.tap(
+        find.byKey(
+          const Key('environment-model-requested-0-option-claude-sonnet-4-5'),
+        ),
+      );
+      await tester.pumpAndSettle();
+      await tester.enterText(
+        find.byKey(const Key('environment-model-upstream-0')),
+        '20250929',
+      );
+      await tester.pumpAndSettle();
+      await tester.tap(
+        find.byKey(
+          const Key(
+            'environment-model-upstream-0-option-claude-sonnet-4-5-20250929',
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+      await tester.tap(find.byKey(const Key('environment-model-add')));
+      await tester.pumpAndSettle();
+      await tester.enterText(
+        find.byKey(const Key('environment-model-requested-1')),
+        'claude-haiku-4-5',
+      );
+      await tester.pumpAndSettle();
+      await tester.tap(
+        find.byKey(
+          const Key('environment-model-requested-1-option-claude-haiku-4-5'),
+        ),
+      );
+      await tester.pumpAndSettle();
+      await tester.enterText(
+        find.byKey(const Key('environment-model-upstream-1')),
+        ' dashscope:deepseek-v4-flash-0731 ',
+      );
+      await tester.pumpAndSettle();
+      await tester.tap(find.byKey(const Key('environment-model-save')));
+      await tester.pumpAndSettle();
+      expect(find.text('2 mappings'), findsOneWidget);
 
       await tester.enterText(
         find.byKey(const Key('environment-editor-name')),
@@ -1979,8 +2527,11 @@ void main() {
         find.byKey(const Key('environment-impact-review')),
         findsOneWidget,
       );
-      expect(find.text('Hot switch'), findsWidgets);
-      expect(find.text('6 RUNNING CAPTURES'), findsOneWidget);
+      expect(find.text('Future Captures only'), findsWidgets);
+      expect(
+        find.text('6 RUNNING CAPTURES KEEP THEIR CURRENT REVISION'),
+        findsOneWidget,
+      );
       expect(find.text('r7'), findsWidgets);
 
       await tester.tap(find.byKey(const Key('environment-publish')));
@@ -1994,6 +2545,48 @@ void main() {
         findsOneWidget,
       );
       expect(find.text('Anthropic · Lab'), findsOneWidget);
+
+      await tester.tap(find.byKey(const Key('environment-edit')));
+      await tester.pumpAndSettle();
+      expect(
+        find.descendant(of: modelField, matching: find.text('2 mappings')),
+        findsOneWidget,
+      );
+      await tester.ensureVisible(modelField);
+      await tester.pumpAndSettle();
+      await tester.tap(modelField);
+      await tester.pumpAndSettle();
+      expect(
+        tester
+            .widget<TextField>(
+              find.byKey(const Key('environment-model-upstream-0')),
+            )
+            .controller
+            ?.text,
+        ' dashscope:deepseek-v4-flash-0731 ',
+      );
+      expect(
+        tester
+            .widget<TextField>(
+              find.byKey(const Key('environment-model-requested-0')),
+            )
+            .controller
+            ?.text,
+        'claude-haiku-4-5',
+      );
+      expect(
+        tester
+            .widget<TextField>(
+              find.byKey(const Key('environment-model-upstream-1')),
+            )
+            .controller
+            ?.text,
+        'claude-sonnet-4-5-20250929',
+      );
+      await tester.sendKeyEvent(LogicalKeyboardKey.escape);
+      await tester.pumpAndSettle();
+      expect(find.byKey(const Key('environment-model-selector')), findsNothing);
+      expect(find.byKey(const Key('environment-editor-form')), findsOneWidget);
       expect(tester.takeException(), isNull);
 
       await tester.pumpWidget(const SizedBox.shrink());
@@ -2037,6 +2630,87 @@ void main() {
     },
   );
 
+  testWidgets(
+    'Endpoint discovery failure explains authentication and keeps manual mappings usable',
+    (tester) async {
+      await tester.binding.setSurfaceSize(const Size(1180, 760));
+      addTearDown(() => tester.binding.setSurfaceSize(null));
+      final api = PreviewControlApi(
+        upstreamModelFailure: const ControlProblem(
+          status: 502,
+          reasonCode: 'model_catalog_authentication_rejected',
+          messageKey: 'error.model_catalog_authentication_rejected',
+        ),
+      );
+      addTearDown(api.close);
+      final controller = WorkbenchController(
+        api: api,
+        terminalCommands: PreviewTerminalCommandService(),
+        previewMode: true,
+        closeRuntime: api.close,
+      );
+      addTearDown(controller.dispose);
+      await controller.initialize();
+      await tester.pumpWidget(
+        MaterialApp(
+          theme: ViberTheme.dark(),
+          home: WorkbenchShell(controller: controller),
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      await tester.tap(find.byIcon(Icons.tune).first);
+      await tester.pumpAndSettle();
+      await tester.tap(find.byKey(const Key('environment-row-work')));
+      await tester.pumpAndSettle();
+      await tester.tap(find.byKey(const Key('environment-edit')));
+      await tester.pumpAndSettle();
+      final modelField = find.byKey(
+        const Key('environment-route-model-anthropic-direct'),
+      );
+      await tester.ensureVisible(modelField);
+      await tester.pumpAndSettle();
+      await tester.tap(modelField);
+      await tester.pumpAndSettle();
+
+      expect(
+        find.textContaining('Endpoint model discovery unavailable.'),
+        findsOneWidget,
+      );
+      expect(
+        find.textContaining('Endpoint rejected this Account authentication'),
+        findsOneWidget,
+      );
+      expect(
+        find.textContaining('This Account sends X-Api-Key.'),
+        findsOneWidget,
+      );
+      expect(
+        find.textContaining('You can still enter exact model IDs manually.'),
+        findsOneWidget,
+      );
+
+      await tester.enterText(
+        find.byKey(const Key('environment-model-requested-0')),
+        'claude-manual-alias',
+      );
+      await tester.enterText(
+        find.byKey(const Key('environment-model-upstream-0')),
+        'relay/custom:manual-model',
+      );
+      await tester.pumpAndSettle();
+      await tester.tap(find.byKey(const Key('environment-model-save')));
+      await tester.pumpAndSettle();
+      expect(find.text('1 mappings'), findsOneWidget);
+      expect(find.byKey(const Key('environment-editor-form')), findsOneWidget);
+      expect(tester.takeException(), isNull);
+
+      await tester.pumpWidget(const SizedBox.shrink());
+      await tester.pump();
+      controller.dispose();
+    },
+  );
+
   testWidgets('390px Chinese Environment impact stays usable', (tester) async {
     await tester.binding.setSurfaceSize(const Size(390, 760));
     addTearDown(() => tester.binding.setSurfaceSize(null));
@@ -2051,7 +2725,38 @@ void main() {
     await tester.pumpAndSettle();
     await tester.tap(find.byKey(const Key('environment-edit')));
     await tester.pumpAndSettle();
-    expect(find.text('每条 Route 只能选择其 Endpoint 所属的账号。'), findsOneWidget);
+    expect(
+      find.text(
+        '每条客户端流量可直连原始目标，也可改发到一个或多个上游 Endpoint；每条 Route 只能使用其 Endpoint 所属的账号。',
+      ),
+      findsOneWidget,
+    );
+
+    final modelField = find.byKey(
+      const Key('environment-route-model-anthropic-direct'),
+    );
+    await tester.ensureVisible(modelField);
+    await tester.pumpAndSettle();
+    await tester.tap(modelField);
+    await tester.pumpAndSettle();
+    final modelDialog = find.byKey(const Key('environment-model-selector'));
+    expect(modelDialog, findsOneWidget);
+    expect(tester.getSize(modelDialog).width, lessThanOrEqualTo(342));
+    await tester.enterText(
+      find.byKey(const Key('environment-model-requested-0')),
+      'claude-mobile-alias',
+    );
+    await tester.pumpAndSettle();
+    await tester.enterText(
+      find.byKey(const Key('environment-model-upstream-0')),
+      'relay-model-custom',
+    );
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const Key('environment-model-save')));
+    await tester.pumpAndSettle();
+    expect(find.byKey(const Key('environment-model-selector')), findsNothing);
+    expect(find.text('1 条映射'), findsOneWidget);
+    expect(tester.takeException(), isNull);
 
     await tester.enterText(
       find.byKey(const Key('environment-editor-name')),
@@ -2059,8 +2764,8 @@ void main() {
     );
     await tester.tap(find.byKey(const Key('environment-review')));
     await tester.pumpAndSettle();
-    expect(find.text('发布前的运行影响'), findsOneWidget);
-    expect(find.text('6 个运行中 CAPTURE'), findsOneWidget);
+    expect(find.text('发布后会改变什么'), findsOneWidget);
+    expect(find.text('6 个运行中 CAPTURE 保持当前修订'), findsOneWidget);
     expect(find.byKey(const Key('environment-publish')), findsOneWidget);
     expect(tester.takeException(), isNull);
 
@@ -2074,7 +2779,7 @@ void main() {
     await tester.pump();
   });
 
-  testWidgets('new observation-only Environment is published at revision one', (
+  testWidgets('new Capture-only Environment is published at revision one', (
     tester,
   ) async {
     await tester.binding.setSurfaceSize(const Size(1180, 760));
@@ -2104,12 +2809,13 @@ void main() {
       expect(tester.getSize(field).height, ViberMetrics.controlHeight);
     }
     expect(
-      find.byKey(const Key('environment-endpoint-catalog')),
+      find.byKey(const Key('environment-destination-kind')),
       findsOneWidget,
     );
+    expect(find.byKey(const Key('environment-endpoint-catalog')), findsNothing);
     expect(
       find.text(
-        'Observation-only Environment. No semantic client Endpoint is configured.',
+        'Capture-only Environment. ViberMate records traffic and forwards it to each client’s original destination.',
       ),
       findsOneWidget,
     );
@@ -2122,7 +2828,10 @@ void main() {
     await tester.tap(find.byKey(const Key('environment-create-review')));
     await tester.pumpAndSettle();
     expect(find.byKey(const Key('environment-create-impact')), findsOneWidget);
-    expect(find.text('0 RUNNING CAPTURES'), findsOneWidget);
+    expect(
+      find.text('0 RUNNING CAPTURES KEEP THEIR CURRENT REVISION'),
+      findsOneWidget,
+    );
     await tester.tap(find.byKey(const Key('environment-create-publish')));
     await tester.pumpAndSettle();
 
@@ -2133,10 +2842,242 @@ void main() {
     expect(find.text('Revision 1'), findsOneWidget);
     expect(
       find.text(
-        'This Environment changes policy and evidence settings while leaving semantic routing transparent.',
+        "No Client Flow is configured. New Captures keep each request's Original Destination and record connection metadata.",
       ),
       findsOneWidget,
     );
+    expect(tester.takeException(), isNull);
+
+    await tester.pumpWidget(const SizedBox.shrink());
+    await tester.pump();
+  });
+
+  testWidgets('390px novice flow makes direct capture an explicit destination', (
+    tester,
+  ) async {
+    await tester.binding.setSurfaceSize(const Size(390, 760));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+    await tester.pumpWidget(
+      const ViberMateApp(previewMode: true, preferChinese: true),
+    );
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.byIcon(Icons.tune).first);
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const Key('environment-create')));
+    await tester.pumpAndSettle();
+    final clientFlow = find.byKey(const Key('environment-client-plan-target'));
+    await tester.ensureVisible(clientFlow);
+    await tester.tap(clientFlow);
+    await tester.pumpAndSettle();
+    expect(
+      find.byKey(
+        const Key(
+          'environment-client-plan-option-anthropic_messages-https://api.anthropic.com',
+        ),
+      ),
+      findsOneWidget,
+    );
+    expect(
+      find.byKey(
+        const Key(
+          'environment-client-plan-option-openai_responses-https://api.openai.com',
+        ),
+      ),
+      findsOneWidget,
+    );
+    expect(
+      find.byKey(
+        const Key(
+          'environment-client-plan-option-openai_responses-https://chatgpt.com',
+        ),
+      ),
+      findsOneWidget,
+    );
+    await tester.tap(
+      find.byKey(
+        const Key(
+          'environment-client-plan-option-anthropic_messages-https://api.anthropic.com',
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    final destination = find.byKey(const Key('environment-destination-kind'));
+    expect(destination, findsOneWidget);
+    expect(tester.getTopLeft(destination).dx, greaterThanOrEqualTo(0));
+    expect(tester.getBottomRight(destination).dx, lessThanOrEqualTo(390));
+    expect(find.text('直连原服务'), findsOneWidget);
+    expect(
+      find.descendant(
+        of: find.byKey(const Key('environment-create-form')),
+        matching: find.textContaining('ViberMate 仍会抓包'),
+      ),
+      findsOneWidget,
+    );
+    expect(find.byKey(const Key('environment-endpoint-catalog')), findsNothing);
+
+    await tester.tap(find.byKey(const Key('environment-use-original')));
+    await tester.pumpAndSettle();
+    expect(
+      find.byWidgetPredicate(
+        (widget) =>
+            widget.key is ValueKey<String> &&
+            (widget.key! as ValueKey<String>).value.startsWith(
+              'environment-original-destination-',
+            ),
+      ),
+      findsOneWidget,
+    );
+    expect(find.textContaining('必须选择该 Endpoint 的账号'), findsNothing);
+
+    await tester.enterText(
+      find.byKey(const Key('environment-create-name')),
+      '直接抓包',
+    );
+    await tester.enterText(
+      find.byKey(const Key('environment-create-id')),
+      'direct-capture',
+    );
+
+    final review = find.byKey(const Key('environment-create-review'));
+    await tester.ensureVisible(review);
+    await tester.tap(review);
+    await tester.pumpAndSettle();
+    expect(find.byKey(const Key('environment-create-impact')), findsOneWidget);
+    expect(tester.takeException(), isNull);
+
+    await tester.pumpWidget(const SizedBox.shrink());
+    await tester.pump();
+  });
+
+  testWidgets('one multi-protocol Endpoint can join independent client flows', (
+    tester,
+  ) async {
+    await tester.binding.setSurfaceSize(const Size(1180, 760));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+    await tester.pumpWidget(
+      const ViberMateApp(previewMode: true, preferChinese: false),
+    );
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.byIcon(Icons.tune).first);
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const Key('environment-create')));
+    await tester.pumpAndSettle();
+    await tester.enterText(
+      find.byKey(const Key('environment-create-name')),
+      'Multi protocol relay',
+    );
+
+    final clientFlow = find.byKey(const Key('environment-client-plan-target'));
+    final catalog = find.byKey(const Key('environment-endpoint-catalog'));
+
+    await tester.tap(clientFlow);
+    await tester.pumpAndSettle();
+    await tester.tap(
+      find.byKey(
+        const Key(
+          'environment-client-plan-option-anthropic_messages-https://api.anthropic.com',
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+    await tester.tap(
+      find.descendant(
+        of: find.byKey(const Key('environment-destination-kind')),
+        matching: find.text('Upstream Endpoint'),
+      ),
+    );
+    await tester.pumpAndSettle();
+    await tester.tap(catalog);
+    await tester.pumpAndSettle();
+    await tester.tap(
+      find.text('Orbit Relay · Tokyo · https://tokyo.orbitrelay.example').last,
+    );
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const Key('environment-add-endpoint')));
+    await tester.pumpAndSettle();
+
+    await tester.tap(clientFlow);
+    await tester.pumpAndSettle();
+    await tester.tap(
+      find.byKey(
+        const Key(
+          'environment-client-plan-option-openai_responses-https://api.openai.com',
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+    await tester.tap(
+      find.descendant(
+        of: find.byKey(const Key('environment-destination-kind')),
+        matching: find.text('Upstream Endpoint'),
+      ),
+    );
+    await tester.pumpAndSettle();
+    await tester.tap(catalog);
+    await tester.pumpAndSettle();
+    await tester.tap(
+      find.text('Orbit Relay · Tokyo · https://tokyo.orbitrelay.example').last,
+    );
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const Key('environment-add-endpoint')));
+    await tester.pumpAndSettle();
+
+    final clientFlows = find.byType(ExpansionTile);
+    expect(clientFlows, findsNWidgets(2));
+    Finder modelButtonWithin(Finder flow) => find.descendant(
+      of: flow,
+      matching: find.byWidgetPredicate(
+        (widget) =>
+            widget is OutlinedButton &&
+            widget.key is ValueKey<String> &&
+            (widget.key! as ValueKey<String>).value.startsWith(
+              'environment-route-model-',
+            ),
+      ),
+    );
+    final firstModel = modelButtonWithin(clientFlows.first);
+    expect(firstModel, findsOneWidget);
+    await tester.ensureVisible(firstModel);
+    await tester.tap(firstModel);
+    await tester.pumpAndSettle();
+    expect(find.text('models.dev · anthropic_messages'), findsOneWidget);
+    expect(
+      find.text('https://tokyo.orbitrelay.example/v1/models'),
+      findsOneWidget,
+    );
+    await tester.sendKeyEvent(LogicalKeyboardKey.escape);
+    await tester.pumpAndSettle();
+
+    await tester.ensureVisible(clientFlows.last);
+    await tester.tap(clientFlows.last);
+    await tester.pumpAndSettle();
+    final secondModel = modelButtonWithin(clientFlows.last);
+    expect(secondModel, findsOneWidget);
+    await tester.ensureVisible(secondModel);
+    await tester.tap(secondModel);
+    await tester.pumpAndSettle();
+    expect(find.text('models.dev · openai_responses'), findsOneWidget);
+    expect(
+      find.text('https://tokyo.orbitrelay.example/v1/models'),
+      findsOneWidget,
+    );
+    await tester.sendKeyEvent(LogicalKeyboardKey.escape);
+    await tester.pumpAndSettle();
+    final review = find.byKey(const Key('environment-create-review'));
+    await tester.ensureVisible(review);
+    await tester.tap(review);
+    await tester.pumpAndSettle();
+    expect(find.byKey(const Key('environment-create-impact')), findsOneWidget);
+    await tester.tap(find.byKey(const Key('environment-create-publish')));
+    await tester.pumpAndSettle();
+    expect(
+      find.byKey(const Key('environment-row-multi-protocol-relay')),
+      findsOneWidget,
+    );
+    expect(find.text('2 upstream routes'), findsOneWidget);
     expect(tester.takeException(), isNull);
 
     await tester.pumpWidget(const SizedBox.shrink());
@@ -2161,6 +3102,27 @@ void main() {
         find.byKey(const Key('environment-create-name')),
         'Multi upstream',
       );
+
+      final clientFlow = find.byKey(
+        const Key('environment-client-plan-target'),
+      );
+      await tester.tap(clientFlow);
+      await tester.pumpAndSettle();
+      await tester.tap(
+        find.byKey(
+          const Key(
+            'environment-client-plan-option-anthropic_messages-https://api.anthropic.com',
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+      await tester.tap(
+        find.descendant(
+          of: find.byKey(const Key('environment-destination-kind')),
+          matching: find.text('Upstream Endpoint'),
+        ),
+      );
+      await tester.pumpAndSettle();
 
       final catalog = find.byKey(const Key('environment-endpoint-catalog'));
       await tester.tap(catalog);
@@ -2280,7 +3242,7 @@ void main() {
 
       await tester.tap(find.byKey(const Key('environment-review')));
       await tester.pumpAndSettle();
-      expect(find.text('Hot switch'), findsWidgets);
+      expect(find.text('Future Captures only'), findsWidgets);
       await tester.tap(find.byKey(const Key('environment-publish')));
       await tester.pumpAndSettle();
       expect(find.text('Revision 4'), findsOneWidget);
@@ -2381,6 +3343,10 @@ void main() {
 
       await tester.tap(find.byKey(const Key('endpoints-add')));
       await tester.pumpAndSettle();
+      await tester.tap(
+        find.byKey(const Key('endpoint-editor-protocol-anthropic_messages')),
+      );
+      await tester.pumpAndSettle();
       await tester.enterText(
         find.byKey(const Key('endpoint-editor-name')),
         'Team Relay',
@@ -2409,6 +3375,30 @@ void main() {
       await tester.tap(find.byKey(const Key('accounts-add')));
       await tester.pumpAndSettle();
       expect(find.text('Team Relay'), findsWidgets);
+      expect(
+        tester
+            .widget<Text>(
+              find.byKey(const Key('account-editor-auth-transport')),
+            )
+            .data,
+        'X-Api-Key',
+      );
+      await tester.tap(find.byKey(const Key('account-editor-kind')));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('Bearer token').last);
+      await tester.pumpAndSettle();
+      expect(
+        tester
+            .widget<Text>(
+              find.byKey(const Key('account-editor-auth-transport')),
+            )
+            .data,
+        'Authorization: Bearer',
+      );
+      await tester.tap(find.byKey(const Key('account-editor-kind')));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('Anthropic API key').last);
+      await tester.pumpAndSettle();
       await tester.enterText(
         find.byKey(const Key('account-editor-name')),
         'Team Primary',
@@ -2424,6 +3414,10 @@ void main() {
         findsOneWidget,
       );
       expect(find.text('Team Primary'), findsOneWidget);
+      expect(
+        find.textContaining('Anthropic API key · X-Api-Key'),
+        findsOneWidget,
+      );
 
       await tester.tap(find.byIcon(Icons.key_outlined));
       await tester.pumpAndSettle();
@@ -2489,6 +3483,25 @@ void main() {
 
     await tester.tap(find.byKey(const Key('endpoints-add')));
     await tester.pumpAndSettle();
+    for (final protocol in const [
+      'anthropic_messages',
+      'openai_responses',
+      'openai_chat',
+    ]) {
+      final option = find.byKey(Key('endpoint-editor-protocol-$protocol'));
+      expect(option, findsOneWidget);
+      expect(tester.widget<CheckboxListTile>(option).value, isFalse);
+    }
+    await tester.tap(find.byKey(const Key('endpoint-editor-save')));
+    await tester.pumpAndSettle();
+    expect(find.text('请至少选择一种上游协议。'), findsOneWidget);
+    await tester.tap(
+      find.byKey(const Key('endpoint-editor-protocol-anthropic_messages')),
+    );
+    await tester.tap(
+      find.byKey(const Key('endpoint-editor-protocol-openai_responses')),
+    );
+    await tester.pumpAndSettle();
     await tester.enterText(
       find.byKey(const Key('endpoint-editor-name')),
       'spark',
@@ -2519,10 +3532,14 @@ void main() {
     final save = find.byKey(const Key('endpoint-editor-save'));
     await tester.ensureVisible(save);
     expect(tester.widget<FilledButton>(save).onPressed, isNotNull);
+    await tester.tap(save);
+    await tester.pumpAndSettle();
+    expect(find.byKey(const Key('endpoint-editor-name')), findsNothing);
+    expect(find.text('Anthropic Messages'), findsOneWidget);
+    expect(find.text('OpenAI Responses'), findsOneWidget);
+    expect(find.text('OpenAI Chat'), findsNothing);
     expect(tester.takeException(), isNull);
 
-    await tester.sendKeyEvent(LogicalKeyboardKey.escape);
-    await tester.pumpAndSettle();
     await tester.pumpWidget(const SizedBox.shrink());
     await tester.pump();
   });

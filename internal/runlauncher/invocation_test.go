@@ -17,7 +17,11 @@ func TestBuildChildArgumentsKeepsNonCodexInvocationsExact(t *testing.T) {
 		clientadapter.LaunchNodeEnvProxy,
 	} {
 		command := []string{"agent", "first", "two words"}
-		arguments, err := buildChildArguments(command, nil, recipe)
+		arguments, err := buildChildArguments(
+			command,
+			nil,
+			recipe,
+		)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -43,12 +47,9 @@ func TestBuildChildArgumentsPinsCodexToResponsesHTTP(t *testing.T) {
 		t.Fatal(err)
 	}
 	wantPrefix := []string{
-		"--config", `model_provider="vibermate_responses_http"`,
-		"--config", `model_providers.vibermate_responses_http.name="ViberMate Responses HTTP"`,
-		"--config", `model_providers.vibermate_responses_http.base_url="https://chatgpt.com/backend-api/codex"`,
-		"--config", `model_providers.vibermate_responses_http.wire_api="responses"`,
-		"--config", `model_providers.vibermate_responses_http.requires_openai_auth=true`,
-		"--config", `model_providers.vibermate_responses_http.supports_websockets=false`,
+		"--config", `model_provider="openai"`,
+		"--config", `openai_base_url="https://chatgpt.com/backend-api/codex"`,
+		"--config", `features.responses_websockets=false`,
 		"--config", `request_max_retries=0`,
 		"--config", `stream_max_retries=0`,
 		"--disable", "enable_request_compression",
@@ -57,6 +58,35 @@ func TestBuildChildArgumentsPinsCodexToResponsesHTTP(t *testing.T) {
 		!slices.Equal(arguments[:len(wantPrefix)], wantPrefix) ||
 		!slices.Equal(arguments[len(wantPrefix):], []string{"exec", "--json", "probe"}) {
 		t.Fatalf("Codex arguments = %v", arguments)
+	}
+}
+
+// A Codex rollout persists its provider ID in session_meta. New rollouts must
+// therefore persist Codex's built-in provider so a later plain `codex resume`
+// can load them without ViberMate's launch-time configuration.
+func TestBuildChildArgumentsMakesNewCodexSessionsPortable(t *testing.T) {
+	t.Parallel()
+
+	arguments, err := buildChildArguments(
+		[]string{"codex", "resume", "old-session-id"},
+		nil,
+		clientadapter.LaunchCodexResponsesHTTP,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	want := []string{
+		"--config", `model_provider="openai"`,
+		"--config", `openai_base_url="https://chatgpt.com/backend-api/codex"`,
+		"--config", `features.responses_websockets=false`,
+		"--config", `request_max_retries=0`,
+		"--config", `stream_max_retries=0`,
+		"--disable", "enable_request_compression",
+		"resume", "old-session-id",
+	}
+	if !slices.Equal(arguments, want) {
+		t.Fatalf("Codex resume arguments = %v", arguments)
 	}
 }
 

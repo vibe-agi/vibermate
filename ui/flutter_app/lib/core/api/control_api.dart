@@ -1,8 +1,9 @@
 import 'dart:async';
 import 'dart:convert';
-import 'dart:io';
 import 'dart:math';
 import 'dart:typed_data';
+
+import 'package:http/http.dart' as http;
 
 import 'control_models.dart';
 import 'provider_origin.dart';
@@ -41,22 +42,6 @@ abstract interface class ControlApi {
 
   Future<CaptureAssignment> captureAssignment(String captureKey);
 
-  Future<WorkspaceEnvironmentDefault?> workspaceEnvironmentDefault({
-    required String machineId,
-    required String workspaceId,
-  });
-
-  Future<WorkspaceEnvironmentDefault> setWorkspaceEnvironmentDefault({
-    required String machineId,
-    required String workspaceId,
-    required int expectedRevision,
-    required String environmentId,
-  });
-
-  Future<void> clearWorkspaceEnvironmentDefault({
-    required WorkspaceEnvironmentDefault current,
-  });
-
   Future<ActivityPage> activities({
     String? cursor,
     int limit = 50,
@@ -86,11 +71,36 @@ abstract interface class ControlApi {
 
   Future<List<ApprovalRecord>> pendingApprovals();
 
+  Future<RuntimeServerAccess> serverAccess();
+
+  Future<List<RuntimeUser>> runtimeUsers();
+
+  Future<RuntimeUsageReport> runtimeUsage();
+
+  Future<RuntimeUser> createRuntimeUser({
+    required String username,
+    required String password,
+  });
+
+  Future<RuntimeUser> disableRuntimeUser(String userId);
+
+  /// Discovers model IDs accepted by exactly one upstream Endpoint. A forced
+  /// refresh bypasses the daemon's short-lived Endpoint + Account cache.
+  Future<UpstreamModelCatalog> upstreamModels(
+    String endpointId, {
+    required String accountId,
+    bool refresh = false,
+  });
+
+  /// Lists request-side model IDs understood by one Agent protocol. This is
+  /// descriptive models.dev data and never proves upstream availability.
+  Future<ClientModelCatalog> clientModels(String protocol);
+
   Future<UpstreamEndpoint> createUpstreamEndpoint({
     required String id,
     required String displayName,
     required String origin,
-    required String kind,
+    required List<String> backendProtocols,
   });
 
   Future<ProviderAccount> createProviderAccount({
@@ -106,8 +116,7 @@ abstract interface class ControlApi {
     required String secret,
   });
 
-  /// Retires an Environment. Refused, with holders, while a Capture is running
-  /// or a workspace default names it.
+  /// Retires an Environment. Refused, with holders, while a Capture is running.
   Future<DeletionOutcome> deleteEnvironment(String environmentId);
 
   /// Retires an upstream Endpoint. Refused while a published route names it or
@@ -139,11 +148,6 @@ abstract interface class ControlApi {
     required ConnectionRuleSet current,
     required List<ConnectionRule> rules,
     required String mode,
-  });
-
-  Future<CaptureAssignmentChange> switchCaptureEnvironment({
-    required CaptureAssignment assignment,
-    required String environmentId,
   });
 
   Future<ManualCaptureContext> manualCaptureContext(String environmentId);
@@ -209,7 +213,13 @@ final class ControlProblem implements Exception {
 }
 
 final class HttpControlApi implements ControlApi {
-  HttpControlApi._(this._session, this._client);
+  HttpControlApi._(
+    this._session,
+    this._client, {
+    required bool browserManagedHeaders,
+    required bool renewable,
+  }) : _browserManagedHeaders = browserManagedHeaders,
+       _renewable = renewable;
 
   static const _origin = 'vibermate://desktop';
   static const _maximumResponseBytes = 2 * 1024 * 1024;
@@ -218,18 +228,32 @@ final class HttpControlApi implements ControlApi {
   // tighter 2 MiB boundary.
   static const _maximumRawRevealResponseBytes = 32 * 1024 * 1024;
   static const _requestTimeout = Duration(seconds: 10);
+  static const _modelDiscoveryTimeout = Duration(seconds: 30);
 
   static Future<HttpControlApi> connect(
     DesktopSession session, {
-    HttpClient? client,
+    http.Client? client,
+    bool browserManagedHeaders = false,
+    bool inspectSession = true,
   }) async {
-    final api = HttpControlApi._(session, client ?? HttpClient());
-    await api._inspectSession();
+    final api = HttpControlApi._(
+      session,
+      client ?? http.Client(),
+      browserManagedHeaders: browserManagedHeaders,
+      renewable: inspectSession,
+    );
+    if (inspectSession) {
+      await api._inspectSession();
+    } else {
+      api._renewAt = session.expiresAt;
+    }
     return api;
   }
 
   DesktopSession _session;
-  final HttpClient _client;
+  final http.Client _client;
+  final bool _browserManagedHeaders;
+  final bool _renewable;
   int _sessionRevision = 1;
   DateTime? _renewAt;
   Future<void>? _renewal;
@@ -463,89 +487,6 @@ final class HttpControlApi implements ControlApi {
   }
 
   @override
-  Future<WorkspaceEnvironmentDefault?> workspaceEnvironmentDefault({
-    required String machineId,
-    required String workspaceId,
-  }) async {
-    _validateWorkspaceIdentity(machineId, 'machine');
-    _validateWorkspaceIdentity(workspaceId, 'workspace');
-    try {
-      return WorkspaceEnvironmentDefault.fromJson(
-        await _read(_workspaceDefaultPath(machineId, workspaceId)),
-        'workspaceEnvironmentDefault',
-        expectedMachineId: machineId,
-        expectedWorkspaceId: workspaceId,
-      );
-    } on ControlProblem catch (problem) {
-      if (problem.status == 404 &&
-          problem.reasonCode == 'workspace_environment_default_not_found') {
-        return null;
-      }
-      rethrow;
-    }
-  }
-
-  @override
-  Future<WorkspaceEnvironmentDefault> setWorkspaceEnvironmentDefault({
-    required String machineId,
-    required String workspaceId,
-    required int expectedRevision,
-    required String environmentId,
-  }) async {
-    _validateWorkspaceIdentity(machineId, 'machine');
-    _validateWorkspaceIdentity(workspaceId, 'workspace');
-    if (expectedRevision < 0 ||
-        !_validResourceId(environmentId) ||
-        environmentId == 'system_transparent') {
-      throw const ControlContractException(
-        'Workspace Environment default authority is invalid',
-      );
-    }
-    final updated = WorkspaceEnvironmentDefault.fromJson(
-      await _mutation(
-        'PUT',
-        _workspaceDefaultPath(machineId, workspaceId),
-        expectedRevision: expectedRevision,
-        body: {'environmentId': environmentId},
-      ),
-      'workspaceEnvironmentDefault',
-      expectedMachineId: machineId,
-      expectedWorkspaceId: workspaceId,
-      expectedEnvironmentId: environmentId,
-    );
-    if (updated.revision != expectedRevision + 1) {
-      throw const ControlContractException(
-        'Workspace Environment default revision did not advance',
-      );
-    }
-    return updated;
-  }
-
-  @override
-  Future<void> clearWorkspaceEnvironmentDefault({
-    required WorkspaceEnvironmentDefault current,
-  }) async {
-    _validateWorkspaceIdentity(current.machineId, 'machine');
-    _validateWorkspaceIdentity(current.workspaceId, 'workspace');
-    if (current.revision < 1) {
-      throw const ControlContractException(
-        'Workspace Environment default revision is invalid',
-      );
-    }
-    final payload = await _mutation(
-      'DELETE',
-      _workspaceDefaultPath(current.machineId, current.workspaceId),
-      expectedRevision: current.revision,
-      expectedStatus: 204,
-    );
-    if (payload != null) {
-      throw const ControlContractException(
-        'Workspace Environment default clear response is invalid',
-      );
-    }
-  }
-
-  @override
   Future<ActivityPage> activities({
     String? cursor,
     int limit = 50,
@@ -644,7 +585,7 @@ final class HttpControlApi implements ControlApi {
       token: _session.readToken,
       expectedStatus: 200,
     );
-    if (response.headers.value(HttpHeaders.cacheControlHeader) != 'no-store') {
+    if (response.headers.value('cache-control') != 'no-store') {
       throw const ControlContractException(
         'Raw evidence response can be cached',
       );
@@ -671,7 +612,7 @@ final class HttpControlApi implements ControlApi {
       expectedStatus: 200,
       maximumResponseBytes: _maximumRawRevealResponseBytes,
     );
-    if (response.headers.value(HttpHeaders.cacheControlHeader) != 'no-store') {
+    if (response.headers.value('cache-control') != 'no-store') {
       throw const ControlContractException(
         'Revealed raw evidence response can be cached',
       );
@@ -727,16 +668,161 @@ final class HttpControlApi implements ControlApi {
   }
 
   @override
+  Future<RuntimeServerAccess> serverAccess() async =>
+      RuntimeServerAccess.fromJson(
+        await _read('/api/v1/server/access'),
+        'serverAccess',
+      );
+
+  @override
+  Future<List<RuntimeUser>> runtimeUsers() async {
+    final value = requireObject(
+      await _read('/api/v1/server/runtime-users'),
+      'runtimeUsers',
+    );
+    requireFields(value, 'runtimeUsers', required: const {'schema', 'items'});
+    if (requireString(value, 'schema', 'runtimeUsers') !=
+        'vibermate-runtime-user-list-v1') {
+      throw const ControlContractException(
+        'Runtime User list schema is unsupported',
+      );
+    }
+    final items = requireList(value['items'], 'runtimeUsers.items');
+    if (items.length > 10000) {
+      throw const ControlContractException('Runtime User list is too large');
+    }
+    return items.indexed
+        .map(
+          (entry) =>
+              RuntimeUser.fromJson(entry.$2, 'runtimeUsers.items[${entry.$1}]'),
+        )
+        .toList(growable: false);
+  }
+
+  @override
+  Future<RuntimeUsageReport> runtimeUsage() async =>
+      RuntimeUsageReport.fromJson(
+        await _read('/api/v1/server/runtime-users/usage'),
+        'runtimeUsage',
+      );
+
+  @override
+  Future<RuntimeUser> createRuntimeUser({
+    required String username,
+    required String password,
+  }) async {
+    if (username.isEmpty || password.isEmpty) {
+      throw const ControlContractException(
+        'Runtime User credentials are incomplete',
+      );
+    }
+    final created = RuntimeUser.fromJson(
+      await _command(
+        'POST',
+        '/api/v1/server/runtime-users',
+        expectedStatus: 201,
+        body: {
+          'schema': 'vibermate-runtime-user-create-v1',
+          'username': username,
+          'password': password,
+        },
+      ),
+      'runtimeUser',
+    );
+    if (created.username != username || !created.active) {
+      throw const ControlContractException(
+        'created Runtime User is inconsistent',
+      );
+    }
+    return created;
+  }
+
+  @override
+  Future<RuntimeUser> disableRuntimeUser(String userId) async {
+    if (userId.isEmpty) {
+      throw const ControlContractException('Runtime User ID is empty');
+    }
+    final updated = RuntimeUser.fromJson(
+      await _command(
+        'PATCH',
+        '/api/v1/server/runtime-users/${Uri.encodeComponent(userId)}',
+        body: {
+          'schema': 'vibermate-runtime-user-update-v1',
+          'state': 'disabled',
+        },
+      ),
+      'runtimeUser',
+    );
+    if (updated.id != userId || updated.active) {
+      throw const ControlContractException(
+        'disabled Runtime User is inconsistent',
+      );
+    }
+    return updated;
+  }
+
+  @override
+  Future<UpstreamModelCatalog> upstreamModels(
+    String endpointId, {
+    required String accountId,
+    bool refresh = false,
+  }) async {
+    if (!_validResourceId(endpointId) || !_validResourceId(accountId)) {
+      throw const ControlContractException(
+        'upstream Endpoint or Account ID is invalid',
+      );
+    }
+    final query = Uri(
+      queryParameters: {'accountId': accountId, if (refresh) 'refresh': '1'},
+    ).query;
+    final payload = await _read(
+      '/api/v1/upstream-endpoints/${Uri.encodeComponent(endpointId)}/models?$query',
+      responseTimeout: _modelDiscoveryTimeout,
+    );
+    final catalog = UpstreamModelCatalog.fromJson(payload, 'upstreamModels');
+    if (catalog.endpointId != endpointId || catalog.accountId != accountId) {
+      throw const ControlContractException(
+        'upstream model catalog names another Endpoint or Account',
+      );
+    }
+    return catalog;
+  }
+
+  @override
+  Future<ClientModelCatalog> clientModels(String protocol) async {
+    if (!const {
+      'anthropic_messages',
+      'openai_responses',
+      'openai_chat',
+    }.contains(protocol)) {
+      throw const ControlContractException('client protocol is invalid');
+    }
+    final query = Uri(queryParameters: {'protocol': protocol}).query;
+    final payload = await _read('/api/v1/client-models?$query');
+    final catalog = ClientModelCatalog.fromJson(payload, 'clientModels');
+    if (catalog.protocol != protocol) {
+      throw const ControlContractException(
+        'client model catalog names another protocol',
+      );
+    }
+    return catalog;
+  }
+
+  @override
   Future<UpstreamEndpoint> createUpstreamEndpoint({
     required String id,
     required String displayName,
     required String origin,
-    required String kind,
+    required List<String> backendProtocols,
   }) async {
+    final protocols = upstreamBackendProtocols
+        .where(backendProtocols.contains)
+        .toList(growable: false);
     if (!_validResourceId(id) ||
         !_validDisplayLabel(displayName) ||
         !isCanonicalProviderOrigin(origin) ||
-        !const {'anthropic', 'openai_compatible'}.contains(kind)) {
+        !validUpstreamBackendProtocols(backendProtocols) ||
+        protocols.length != backendProtocols.length) {
       throw const ControlContractException(
         'upstream Endpoint input is invalid',
       );
@@ -750,11 +836,14 @@ final class HttpControlApi implements ControlApi {
         'id': id,
         'displayName': displayName,
         'origin': origin,
-        'kind': kind,
+        'backendProtocols': protocols,
       },
     );
     final created = UpstreamEndpoint.fromJson(payload, 'upstreamEndpoint');
-    if (created.id != id || created.revision != 1) {
+    if (created.id != id ||
+        created.realmId != id ||
+        created.revision != 1 ||
+        created.backendProtocols.join('\u0000') != protocols.join('\u0000')) {
       throw const ControlContractException(
         'created upstream Endpoint response is inconsistent',
       );
@@ -773,11 +862,7 @@ final class HttpControlApi implements ControlApi {
     if (!_validResourceId(id) ||
         !_validDisplayLabel(displayName) ||
         !_validResourceId(upstreamEndpointId) ||
-        !const {
-          'anthropic_api_key',
-          'claude_oauth_token',
-          'openai_api_key',
-        }.contains(kind) ||
+        !const {'anthropic_api_key', 'bearer_token'}.contains(kind) ||
         !_validSecret(secret)) {
       throw const ControlContractException('Provider Account input is invalid');
     }
@@ -1020,41 +1105,6 @@ final class HttpControlApi implements ControlApi {
   }
 
   @override
-  Future<CaptureAssignmentChange> switchCaptureEnvironment({
-    required CaptureAssignment assignment,
-    required String environmentId,
-  }) async {
-    if (!_validResourceId(environmentId)) {
-      throw const ControlContractException('Environment ID is invalid');
-    }
-    final payload = await _mutation(
-      'PATCH',
-      '/api/v1/captures/${Uri.encodeComponent(assignment.captureKey)}/environment-assignment',
-      expectedRevision: assignment.revision,
-      body: {'environmentId': environmentId},
-    );
-    final change = CaptureAssignmentChange.fromJson(
-      payload,
-      'captureAssignmentSwitch',
-    );
-    final revisionAdvanced =
-        change.boundary == 'hot_switch' ||
-        change.boundary == 'reconnect_required';
-    if (change.assignment.captureKey != assignment.captureKey ||
-        change.assignment.captureId != assignment.captureId ||
-        change.assignment.captureKind != assignment.captureKind ||
-        change.assignment.environmentId !=
-            (revisionAdvanced ? environmentId : assignment.environmentId) ||
-        change.assignment.revision !=
-            assignment.revision + (revisionAdvanced ? 1 : 0)) {
-      throw const ControlContractException(
-        'Capture assignment switch authority is inconsistent',
-      );
-    }
-    return change;
-  }
-
-  @override
   Future<ManualCaptureContext> manualCaptureContext(
     String environmentId,
   ) async {
@@ -1150,7 +1200,7 @@ final class HttpControlApi implements ControlApi {
       '/api/v1/manual-captures/${Uri.encodeComponent(current.capture.id)}/actions/rotate-credential',
       token: _session.writeToken,
       expectedStatus: 200,
-      headers: {HttpHeaders.ifMatchHeader: current.stateTag},
+      headers: {'if-match': current.stateTag},
     );
     final stateTag = _manualStateTag(response, required: true)!;
     final grant = ManualCaptureGrant.fromJson(
@@ -1197,24 +1247,28 @@ final class HttpControlApi implements ControlApi {
       '/api/v1/manual-captures/${Uri.encodeComponent(manualCaptureId)}/actions/revoke',
       token: _session.writeToken,
       expectedStatus: 204,
-      headers: {HttpHeaders.ifMatchHeader: stateTag},
+      headers: {'if-match': stateTag},
     );
     if (response.payload != null ||
-        response.headers.value(HttpHeaders.cacheControlHeader) != 'no-store' ||
-        response.headers.value(HttpHeaders.etagHeader) != null) {
+        response.headers.value('cache-control') != 'no-store' ||
+        response.headers.value('etag') != null) {
       throw const ControlContractException(
         'manual capture revoke response is invalid',
       );
     }
   }
 
-  Future<Object?> _read(String path) async {
+  Future<Object?> _read(
+    String path, {
+    Duration responseTimeout = _requestTimeout,
+  }) async {
     await _ensureFreshSession();
     return (await _send(
       'GET',
       path,
       token: _session.readToken,
       expectedStatus: 200,
+      responseTimeout: responseTimeout,
     )).payload;
   }
 
@@ -1235,9 +1289,26 @@ final class HttpControlApi implements ControlApi {
       body: body,
       responseTimeout: responseTimeout,
       headers: {
-        HttpHeaders.ifMatchHeader: '$expectedRevision',
+        'if-match': '$expectedRevision',
         'Idempotency-Key': _newCapability(),
       },
+    )).payload;
+  }
+
+  Future<Object?> _command(
+    String method,
+    String path, {
+    Object? body,
+    int expectedStatus = 200,
+  }) async {
+    await _ensureFreshSession();
+    return (await _send(
+      method,
+      path,
+      token: _session.writeToken,
+      expectedStatus: expectedStatus,
+      body: body,
+      headers: {'Idempotency-Key': _newCapability()},
     )).payload;
   }
 
@@ -1277,6 +1348,13 @@ final class HttpControlApi implements ControlApi {
     _requireOpen();
     final renewAt = _renewAt;
     if (renewAt == null || DateTime.now().toUtc().isBefore(renewAt)) return;
+    if (!_renewable) {
+      throw const ControlProblem(
+        status: 401,
+        reasonCode: 'server_admin_session_expired',
+        messageKey: 'error.server_admin_session_expired',
+      );
+    }
     final existing = _renewal;
     if (existing != null) return existing;
     final renewal = _renewSession();
@@ -1296,7 +1374,7 @@ final class HttpControlApi implements ControlApi {
       token: previous.writeToken,
       expectedStatus: 200,
       headers: {
-        HttpHeaders.ifMatchHeader: '$_sessionRevision',
+        'if-match': '$_sessionRevision',
         'Idempotency-Key': _newCapability(),
       },
       skipRenewal: true,
@@ -1356,32 +1434,27 @@ final class HttpControlApi implements ControlApi {
       }
     }
     final destination = _resolve(path);
-    final request = await _client
-        .openUrl(method, destination)
-        .timeout(responseTimeout);
-    request.followRedirects = false;
-    request.headers
-      ..set(
-        HttpHeaders.acceptHeader,
-        'application/json, application/problem+json',
-      )
-      ..set(HttpHeaders.authorizationHeader, 'Bearer $token')
-      ..set('Origin', _origin)
-      ..set('Sec-Fetch-Site', 'cross-site')
-      ..set('Sec-Fetch-Mode', 'cors')
-      ..set('Sec-Fetch-Dest', 'empty');
-    for (final entry in headers.entries) {
-      request.headers.set(entry.key, entry.value);
+    final request = http.Request(method, destination)
+      ..followRedirects = false
+      ..headers['accept'] = 'application/json, application/problem+json'
+      ..headers['authorization'] = 'Bearer $token';
+    if (!_browserManagedHeaders) {
+      request.headers
+        ..['origin'] = _origin
+        ..['sec-fetch-site'] = 'cross-site'
+        ..['sec-fetch-mode'] = 'cors'
+        ..['sec-fetch-dest'] = 'empty';
     }
+    request.headers.addAll(headers);
     if (body != null) {
       final encoded = utf8.encode(jsonEncode(body));
       if (encoded.length > 1024 * 1024) {
         throw const ControlContractException('control request exceeded 1 MiB');
       }
-      request.headers.contentType = ContentType.json;
-      request.add(encoded);
+      request.headers['content-type'] = 'application/json';
+      request.bodyBytes = encoded;
     }
-    final response = await request.close().timeout(responseTimeout);
+    final response = await _client.send(request).timeout(responseTimeout);
     final bytes = await _readBounded(
       response,
       responseTimeout,
@@ -1394,7 +1467,7 @@ final class HttpControlApi implements ControlApi {
     if (expectedStatus == 204 && bytes.isNotEmpty) {
       throw const ControlContractException('204 response contained a body');
     }
-    return _WireResponse(response.headers, payload);
+    return _WireResponse(_WireHeaders(response.headers), payload);
   }
 
   Uri _resolve(String path) {
@@ -1416,19 +1489,19 @@ final class HttpControlApi implements ControlApi {
   }
 
   Future<Uint8List> _readBounded(
-    HttpClientResponse response,
+    http.StreamedResponse response,
     Duration responseTimeout,
     int maximumResponseBytes,
   ) async {
     final declared = response.contentLength;
-    if (declared > maximumResponseBytes) {
+    if (declared != null && declared > maximumResponseBytes) {
       throw ControlContractException(
         'control response exceeded ${maximumResponseBytes ~/ (1024 * 1024)} MiB',
       );
     }
     final builder = BytesBuilder(copy: false);
     var length = 0;
-    await for (final chunk in response.timeout(responseTimeout)) {
+    await for (final chunk in response.stream.timeout(responseTimeout)) {
       length += chunk.length;
       if (length > maximumResponseBytes) {
         throw ControlContractException(
@@ -1496,25 +1569,6 @@ final class HttpControlApi implements ControlApi {
       utf8.encode(value).length <= 512 &&
       !RegExp(r'[\u0000\r\n\t]').hasMatch(value);
 
-  static void _validateWorkspaceIdentity(String value, String label) {
-    if (!RegExp(r'^[A-Za-z0-9_-]{43}$').hasMatch(value)) {
-      throw ControlContractException('$label identity is invalid');
-    }
-    try {
-      final decoded = base64Url.decode('$value=');
-      if (decoded.length != 32 ||
-          base64Url.encode(decoded).replaceAll('=', '') != value) {
-        throw ControlContractException('$label identity is invalid');
-      }
-    } on FormatException {
-      throw ControlContractException('$label identity is invalid');
-    }
-  }
-
-  static String _workspaceDefaultPath(String machineId, String workspaceId) =>
-      '/api/v1/machines/${Uri.encodeComponent(machineId)}/workspaces/'
-      '${Uri.encodeComponent(workspaceId)}/environment-default';
-
   static bool _validDisplayLabel(String value) =>
       value.isNotEmpty &&
       value.trim() == value &&
@@ -1533,8 +1587,8 @@ final class HttpControlApi implements ControlApi {
     _WireResponse response, {
     required bool required,
   }) {
-    final stateTag = response.headers.value(HttpHeaders.etagHeader);
-    if (response.headers.value(HttpHeaders.cacheControlHeader) != 'no-store' ||
+    final stateTag = response.headers.value('etag');
+    if (response.headers.value('cache-control') != 'no-store' ||
         (required && (stateTag == null || !_validManualStateTag(stateTag))) ||
         (!required && stateTag != null)) {
       throw const ControlContractException(
@@ -1577,13 +1631,21 @@ final class HttpControlApi implements ControlApi {
       instanceId: _session.instanceId,
       expiresAt: DateTime.fromMillisecondsSinceEpoch(0, isUtc: true),
     );
-    _client.close(force: true);
+    _client.close();
   }
 }
 
 final class _WireResponse {
   const _WireResponse(this.headers, this.payload);
 
-  final HttpHeaders headers;
+  final _WireHeaders headers;
   final Object? payload;
+}
+
+final class _WireHeaders {
+  const _WireHeaders(this._values);
+
+  final Map<String, String> _values;
+
+  String? value(String name) => _values[name.toLowerCase()];
 }

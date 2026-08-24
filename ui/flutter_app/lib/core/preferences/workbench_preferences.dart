@@ -1,8 +1,9 @@
 import 'dart:convert';
 
-import 'package:flutter/services.dart';
+import 'platform_preferences.dart' as platform;
 
 enum WorkbenchSection {
+  usage('usage'),
   captures('captures'),
   environments('environments'),
   routes('routes'),
@@ -293,13 +294,9 @@ final class PlatformWorkbenchPreferencesStore
     implements WorkbenchPreferencesStore {
   const PlatformWorkbenchPreferencesStore();
 
-  static const _channel = MethodChannel('io.vibermate.desktop/preferences');
-
   @override
   Future<String?> read() async {
-    final value = await _channel.invokeMethod<Object?>(
-      'readWorkbenchPreferences',
-    );
+    final value = await platform.readWorkbenchPreferences();
     if (value == null || value is String) return value as String?;
     throw const WorkbenchPreferencesException(
       'platform preferences returned an invalid value',
@@ -311,7 +308,7 @@ final class PlatformWorkbenchPreferencesStore
     // Validate again at the platform boundary so this store can never become a
     // generic persistence channel for credentials or arbitrary application data.
     WorkbenchPreferences.decode(encoded);
-    await _channel.invokeMethod<void>('writeWorkbenchPreferences', encoded);
+    await platform.writeWorkbenchPreferences(encoded);
   }
 }
 

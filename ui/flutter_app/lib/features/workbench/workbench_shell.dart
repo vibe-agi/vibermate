@@ -13,6 +13,7 @@ import 'environments_view.dart';
 import 'network_view.dart';
 import 'offline_hold_view.dart';
 import 'settings_view.dart';
+import 'usage_dashboard_view.dart';
 import 'workbench_controller.dart';
 
 final class WorkbenchShell extends StatelessWidget {
@@ -93,6 +94,10 @@ final class WorkbenchShell extends StatelessWidget {
       );
     }
     return switch (controller.section) {
+      WorkbenchSection.usage => UsageDashboardView(
+        controller: controller,
+        copy: copy,
+      ),
       WorkbenchSection.captures => CapturesView(
         controller: controller,
         copy: copy,
@@ -371,6 +376,14 @@ final class _NavigationRail extends StatelessWidget {
       child: Column(
         children: [
           const SizedBox(height: ViberSpacing.xs),
+          if (controller.serverManagement)
+            _RailButton(
+              key: const Key('usage-dashboard-nav'),
+              icon: Icons.bar_chart_outlined,
+              label: copy('nav.usage'),
+              selected: controller.section == WorkbenchSection.usage,
+              onPressed: () => controller.selectSection(WorkbenchSection.usage),
+            ),
           _RailButton(
             icon: Icons.adjust,
             label: '${copy('nav.captures')}  ⌘1',
@@ -414,6 +427,7 @@ final class _NavigationRail extends StatelessWidget {
 
 final class _RailButton extends StatelessWidget {
   const _RailButton({
+    super.key,
     required this.icon,
     required this.label,
     required this.selected,
@@ -485,19 +499,26 @@ final class _StatusBar extends StatelessWidget {
         builder: (context, constraints) {
           final compact = constraints.maxWidth < 520;
           final showInstance = constraints.maxWidth >= 720;
+          final runtimeLabel = controller.previewMode
+              ? compact
+                    ? copy('status.preview.short')
+                    : copy('settings.preview')
+              : controller.serverManagement
+              ? compact
+                    ? copy('status.server.short')
+                    : copy.format('settings.remote', {
+                        'target': controller.runtimeTarget,
+                      })
+              : compact
+              ? copy('status.live.short')
+              : copy('settings.live');
           return Row(
             children: [
               Icon(Icons.circle, size: 6, color: context.viberColors.verified),
               const SizedBox(width: ViberSpacing.xs),
               Expanded(
                 child: Text(
-                  compact
-                      ? controller.previewMode
-                            ? copy('status.preview.short')
-                            : copy('status.live.short')
-                      : controller.previewMode
-                      ? copy('settings.preview')
-                      : copy('settings.live'),
+                  runtimeLabel,
                   maxLines: 1,
                   overflow: TextOverflow.ellipsis,
                   style: Theme.of(

@@ -33,7 +33,9 @@ dependencies:
     sdk: flutter
   flutter_markdown_plus: ^1.0.12
   flutter_svg: ^2.3.0
+  http: ^1.6.0
   markdown: ^7.3.1
+  web: ^1.1.1
 
 dev_dependencies:
   flutter_test:

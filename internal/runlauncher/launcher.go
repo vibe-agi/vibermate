@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -19,6 +20,7 @@ import (
 	"github.com/vibe-agi/vibermate/internal/clientadapter"
 	"github.com/vibe-agi/vibermate/internal/environment"
 	"github.com/vibe-agi/vibermate/internal/localdiscovery"
+	"github.com/vibe-agi/vibermate/internal/serverconnection"
 )
 
 const (
@@ -48,9 +50,11 @@ const (
 )
 
 var (
-	ErrRuntimeUnavailable     = errors.New("local ViberMate runtime is unavailable")
-	ErrEnvironmentNotFound    = errors.New("selected Environment is not configured")
-	ErrEnvironmentUnavailable = errors.New("selected Environment is unavailable")
+	ErrRuntimeUnavailable         = errors.New("local ViberMate runtime is unavailable")
+	ErrCapturePreparationTimedOut = errors.New("Capture preparation timed out")
+	ErrEnvironmentNotFound        = errors.New("selected Environment is not configured")
+	ErrEnvironmentUnavailable     = errors.New("selected Environment is unavailable")
+	ErrRemoteLoginRequired        = errors.New("remote Runtime Server login is required")
 )
 
 type Discovery interface {
@@ -59,6 +63,7 @@ type Discovery interface {
 
 type Config struct {
 	Discovery         Discovery
+	Remote            *RemoteConfig
 	BaseEnvironment   []string
 	Stdin             io.Reader
 	Stdout            io.Writer
@@ -79,16 +84,23 @@ type Launcher struct {
 }
 
 // LaunchRequest carries an optional explicit initial Environment selection
-// together with the exact child invocation. When absent, Core resolves the
-// installation-scoped workspace default before freezing the assignment.
+// together with the exact child invocation. When absent, the Capture records
+// traffic while each request continues to its original destination.
 type LaunchRequest struct {
 	EnvironmentID environment.EnvironmentID
 	Command       []string
 }
 
 func New(config Config) (*Launcher, error) {
-	if config.Discovery == nil {
-		return nil, errors.New("local control discovery is required")
+	if (config.Discovery == nil) == (config.Remote == nil) {
+		return nil, errors.New("exactly one local or remote Runtime control target is required")
+	}
+	if config.Remote != nil {
+		remote := *config.Remote
+		if err := remote.validate(); err != nil {
+			return nil, err
+		}
+		config.Remote = &remote
 	}
 	if config.HeartbeatInterval == 0 {
 		config.HeartbeatInterval = defaultHeartbeatInterval
@@ -150,22 +162,51 @@ func (launcher *Launcher) Run(
 	if err != nil {
 		return 1, err
 	}
-	session, err := launcher.config.Discovery.Load()
-	if err != nil {
-		if errors.Is(err, os.ErrNotExist) ||
-			errors.Is(err, localdiscovery.ErrExpired) {
-			return 1, fmt.Errorf("%w: %v", ErrRuntimeUnavailable, err)
-		}
-		return 1, fmt.Errorf("load local control discovery: %w", err)
+	createRequest := capturecontrol.CreateRequest{
+		EnvironmentID:  request.EnvironmentID.String(),
+		CWD:            cwd,
+		Command:        append([]string(nil), command...),
+		ExecutablePath: executable,
+		LocalUserLabel: localUserLabel(launcher.config.BaseEnvironment),
 	}
-	control, err := newControlClient(
-		session,
-		controlTransportTimeout(launcher.config),
-	)
-	if err != nil {
-		return 1, fmt.Errorf("construct local control client: %w", err)
+	var control *controlClient
+	var remote *remoteConnection
+	if launcher.config.Remote != nil {
+		var companion *capturecontrol.CompanionAttestationInput
+		remote, companion, err = connectRemote(
+			ctx,
+			*launcher.config.Remote,
+			controlTransportTimeout(launcher.config),
+			cwd,
+			command,
+			executable,
+		)
+		if err != nil {
+			return 1, fmt.Errorf("%w: %w", ErrRuntimeUnavailable, err)
+		}
+		defer remote.close()
+		control = remote.control
+		createRequest.Companion = companion
+		launcher.announceRemoteTrust(remote)
+	} else {
+		session, loadErr := launcher.config.Discovery.Load()
+		if loadErr != nil {
+			if errors.Is(loadErr, os.ErrNotExist) ||
+				errors.Is(loadErr, localdiscovery.ErrExpired) {
+				return 1, fmt.Errorf("%w: %v", ErrRuntimeUnavailable, loadErr)
+			}
+			return 1, fmt.Errorf("load local control discovery: %w", loadErr)
+		}
+		control, err = newControlClient(
+			session,
+			controlTransportTimeout(launcher.config),
+		)
+		if err != nil {
+			return 1, fmt.Errorf("construct local control client: %w", err)
+		}
 	}
 	defer control.close()
+	launcher.announceCapturePreparation()
 	var grant capturecontrol.LaunchGrant
 	err = launcher.callWithin(
 		ctx,
@@ -174,13 +215,7 @@ func (launcher *Launcher) Run(
 			var createErr error
 			grant, createErr = control.create(
 				call,
-				capturecontrol.CreateRequest{
-					EnvironmentID:  request.EnvironmentID.String(),
-					CWD:            cwd,
-					Command:        append([]string(nil), command...),
-					ExecutablePath: executable,
-					LocalUserLabel: localUserLabel(launcher.config.BaseEnvironment),
-				},
+				createRequest,
 			)
 			return createErr
 		},
@@ -188,7 +223,19 @@ func (launcher *Launcher) Run(
 	if err != nil {
 		return 1, classifyCreateFailure(err)
 	}
-	if err := validateGrant(grant); err != nil {
+	createdGrant := grant
+	cleanupRoot := func() {}
+	if remote != nil {
+		grant, cleanupRoot, err = remote.materialize(grant)
+	} else {
+		err = validateGrant(grant)
+	}
+	if err != nil {
+		launcher.finishBestEffort(control, createdGrant)
+		return 1, err
+	}
+	defer cleanupRoot()
+	if err := validateLaunchExecutable(executable, grant.ExecutablePath); err != nil {
 		launcher.finishBestEffort(control, grant)
 		return 1, err
 	}
@@ -223,6 +270,11 @@ func (launcher *Launcher) Run(
 		grant.ExecutablePath,
 		childArguments...,
 	)
+	// Execute the exact verified file from the grant, while preserving the
+	// invocation path as argv[0]. Symlink- and shim-based clients may use that
+	// value to select their entrypoint; the Server must never get to choose a
+	// different local executable.
+	child.Args[0] = executable
 	child.Dir = cwd
 	child.Env = environment
 	child.Stdin = launcher.config.Stdin
@@ -301,19 +353,94 @@ func (launcher *Launcher) Run(
 	return exitCode, childErr
 }
 
+func validateLaunchExecutable(invocationPath, grantedPath string) error {
+	invocation, err := os.Stat(invocationPath)
+	if err != nil {
+		return fmt.Errorf("inspect captured invocation executable: %w", err)
+	}
+	granted, err := os.Stat(grantedPath)
+	if err != nil {
+		return fmt.Errorf("inspect granted canonical executable: %w", err)
+	}
+	if !invocation.Mode().IsRegular() || !granted.Mode().IsRegular() ||
+		!os.SameFile(invocation, granted) {
+		return errors.New(
+			"CaptureRun launch grant does not match the resolved invocation executable",
+		)
+	}
+	return nil
+}
+
+// announceCapturePreparation makes the only human-gated launch phase visible
+// before the blocking create request begins. Until a recognized client's Root
+// question is answered, the child does not exist and no network connection can
+// appear in the App; silence here otherwise looks exactly like a dead daemon.
+func (launcher *Launcher) announceCapturePreparation() {
+	if launcher == nil || launcher.config.Stderr == nil {
+		return
+	}
+	if launcher.config.Remote != nil {
+		_, _ = fmt.Fprintln(
+			launcher.config.Stderr,
+			"vibermate: preparing Capture on Runtime Server "+
+				launcher.config.Remote.Target.Origin()+".",
+		)
+		return
+	}
+	_, _ = fmt.Fprintln(launcher.config.Stderr,
+		"vibermate: preparing Capture in the Desktop App; decide any client "+
+			"trust request in the App before network traffic can start.")
+}
+
+func (launcher *Launcher) announceRemoteTrust(connection *remoteConnection) {
+	if launcher == nil || launcher.config.Stderr == nil || connection == nil {
+		return
+	}
+	if connection.target.Transport() == serverconnection.TransportHTTP {
+		_, _ = fmt.Fprintln(
+			launcher.config.Stderr,
+			"vibermate: Runtime Server "+connection.target.Origin()+
+				" uses unencrypted HTTP.",
+		)
+		return
+	}
+	firstUse, fingerprint := connection.firstUse, connection.fingerprint
+	if connection.transport != nil {
+		firstUse, fingerprint = connection.transport.trust()
+	}
+	if !firstUse || fingerprint == "" {
+		return
+	}
+	_, _ = fmt.Fprintln(
+		launcher.config.Stderr,
+		"vibermate: trusted Runtime Server "+connection.target.Address().String()+
+			" for first use; TLS fingerprint "+fingerprint+".",
+	)
+}
+
 func classifyCreateFailure(err error) error {
+	if errors.Is(err, context.Canceled) {
+		return err
+	}
 	var failure *ControlFailure
-	if !errors.As(err, &failure) {
-		return err
+	if errors.As(err, &failure) {
+		switch failure.ReasonCode {
+		case capturecontrol.ReasonEnvironmentNotFound:
+			return fmt.Errorf("%w: %w", ErrEnvironmentNotFound, failure)
+		case capturecontrol.ReasonEnvironmentUnavailable:
+			return fmt.Errorf("%w: %w", ErrEnvironmentUnavailable, failure)
+		default:
+			return err
+		}
 	}
-	switch failure.ReasonCode {
-	case capturecontrol.ReasonEnvironmentNotFound:
-		return fmt.Errorf("%w: %w", ErrEnvironmentNotFound, failure)
-	case capturecontrol.ReasonEnvironmentUnavailable:
-		return fmt.Errorf("%w: %w", ErrEnvironmentUnavailable, failure)
-	default:
-		return err
+	if errors.Is(err, context.DeadlineExceeded) {
+		return fmt.Errorf("%w: %w", ErrCapturePreparationTimedOut, err)
 	}
+	var transportFailure *url.Error
+	if errors.As(err, &transportFailure) {
+		return fmt.Errorf("%w: %w", ErrRuntimeUnavailable, err)
+	}
+	return err
 }
 
 // controlTransportTimeout is only a backstop around the pinned loopback HTTP

@@ -14,11 +14,11 @@ import (
 func mustCorrelationPlan(t *testing.T) environment.RequestPlan {
 	t.Helper()
 	return mustEnvironmentRequestPlan(t, testPlanOptions{
-		mode:           environment.PlanModeManaged,
+		destination:    environment.DestinationKindUpstream,
 		providerOrigin: "https://provider.example/v1",
 		backend:        protocolspec.DialectOpenAIChat,
-		modelMode:      modelModeFixed,
-		fixedModel:     "gpt-provider",
+		modelMode:      environment.ModelModeMap,
+		mappedModel:    "gpt-provider",
 		accounts: []testAccount{{
 			id: "account.correlation", revision: 1, epoch: 1,
 		}},

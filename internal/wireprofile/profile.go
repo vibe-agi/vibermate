@@ -270,6 +270,28 @@ func (catalog Catalog) Resolve(ref UpstreamWireProfileRef) (CompiledUpstreamWire
 	return cloneProfile(profile), nil
 }
 
+// ResolveTransport compiles one catalog transport profile without inventing
+// an application-wire profile. Runtime-owned requests such as Endpoint model
+// discovery use this narrower boundary because they have no Agent presentation
+// identity to emulate.
+func (catalog Catalog) ResolveTransport(
+	ref TransportProfileRef,
+) (CompiledTransportFingerprintPlan, error) {
+	definition, exists := catalog.transports[ref]
+	if !exists {
+		return CompiledTransportFingerprintPlan{}, fmt.Errorf(
+			"%w: transport profile %q",
+			ErrInvalidProfile,
+			ref.String(),
+		)
+	}
+	plan, err := catalog.compileTransportPlan(definition)
+	if err != nil {
+		return CompiledTransportFingerprintPlan{}, err
+	}
+	return cloneTransportPlan(plan), nil
+}
+
 func (catalog Catalog) compileProfile(definition UpstreamWireProfileDefinition) (CompiledUpstreamWireProfile, error) {
 	if validateID("upstream wire profile reference", definition.Ref.value) != nil ||
 		definition.Revision == 0 || definition.Revision > MaxRevision || len(definition.Variants) == 0 {

@@ -414,11 +414,6 @@ final class _EndpointDetail extends StatelessWidget {
                 spacing: 6,
                 runSpacing: 5,
                 children: [
-                  StatusPill(
-                    label: value.realmId,
-                    color: context.viberColors.route,
-                    icon: Icons.public,
-                  ),
                   for (final protocol in value.backendProtocols)
                     StatusPill(
                       label: _localizedCopy(copy, 'routes.protocol', protocol),
@@ -490,6 +485,11 @@ final class _AccountRow extends StatelessWidget {
         ? copy('routes.credentials.ready')
         : copy('routes.credentials.unavailable');
     final kindLabel = _localizedCopy(copy, 'routes.account.kind', account.kind);
+    final transportLabel = _localizedCopy(
+      copy,
+      'routes.account.transport',
+      account.kind,
+    );
     final compactActions = Row(
       mainAxisSize: MainAxisSize.min,
       children: [
@@ -540,7 +540,7 @@ final class _AccountRow extends StatelessWidget {
                   ),
                   const SizedBox(height: 4),
                   Text(
-                    '$kindLabel  ·  ${copy.format('routes.credentials.epoch', {'epoch': account.credentialEpoch})}',
+                    '$kindLabel  ·  $transportLabel  ·  ${copy.format('routes.credentials.epoch', {'epoch': account.credentialEpoch})}',
                     style: monoStyle,
                   ),
                 ],
@@ -572,7 +572,7 @@ final class _AccountRow extends StatelessWidget {
                       style: Theme.of(context).textTheme.titleSmall,
                     ),
                     Text(
-                      kindLabel,
+                      '$kindLabel · $transportLabel',
                       overflow: TextOverflow.ellipsis,
                       style: Theme.of(context).textTheme.bodySmall,
                     ),
@@ -619,7 +619,7 @@ final class _EndpointEditorDialogState extends State<_EndpointEditorDialog> {
   final _formKey = GlobalKey<FormState>();
   final _name = TextEditingController();
   final _origin = TextEditingController();
-  String _kind = 'anthropic';
+  final Set<String> _backendProtocols = {};
   bool _submitted = false;
 
   @override
@@ -715,19 +715,90 @@ final class _EndpointEditorDialogState extends State<_EndpointEditorDialog> {
                 const SizedBox(height: 8),
                 CompactLabeledControl(
                   label: copy('routes.endpoint.protocol'),
-                  child: CompactSelectField<String>(
-                    initialValue: _kind,
-                    items: [
-                      for (final kind in const [
-                        'anthropic',
-                        'openai_compatible',
-                      ])
-                        DropdownMenuItem(
-                          value: kind,
-                          child: Text(copy('routes.endpoint.kind.$kind')),
+                  child: FormField<Set<String>>(
+                    initialValue: const {},
+                    validator: (value) => value == null || value.isEmpty
+                        ? copy('routes.validation.protocol')
+                        : null,
+                    builder: (field) => Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        DecoratedBox(
+                          key: const Key('endpoint-editor-protocols'),
+                          decoration: BoxDecoration(
+                            color: context.viberColors.input,
+                            border: Border.all(
+                              color: field.hasError
+                                  ? context.viberColors.danger
+                                  : context.viberColors.divider,
+                            ),
+                            borderRadius: ViberMetrics.controlRadius,
+                          ),
+                          child: Column(
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              for (final (index, protocol)
+                                  in upstreamBackendProtocols.indexed) ...[
+                                if (index > 0)
+                                  Divider(
+                                    height: 1,
+                                    color: context.viberColors.dividerSoft,
+                                  ),
+                                CheckboxListTile(
+                                  key: Key(
+                                    'endpoint-editor-protocol-$protocol',
+                                  ),
+                                  value: _backendProtocols.contains(protocol),
+                                  onChanged: widget.controller.inventoryMutating
+                                      ? null
+                                      : (selected) {
+                                          setState(() {
+                                            if (selected ?? false) {
+                                              _backendProtocols.add(protocol);
+                                            } else {
+                                              _backendProtocols.remove(
+                                                protocol,
+                                              );
+                                            }
+                                          });
+                                          field.didChange(
+                                            Set.unmodifiable(_backendProtocols),
+                                          );
+                                        },
+                                  controlAffinity:
+                                      ListTileControlAffinity.leading,
+                                  contentPadding: const EdgeInsets.symmetric(
+                                    horizontal: 8,
+                                  ),
+                                  visualDensity: const VisualDensity(
+                                    horizontal: -3,
+                                    vertical: -3,
+                                  ),
+                                  dense: true,
+                                  title: Text(
+                                    copy('routes.protocol.$protocol'),
+                                  ),
+                                  subtitle: Text(
+                                    copy(
+                                      'routes.endpoint.protocol.detail.$protocol',
+                                    ),
+                                    style: monoStyle,
+                                  ),
+                                ),
+                              ],
+                            ],
+                          ),
                         ),
-                    ],
-                    onChanged: (value) => setState(() => _kind = value!),
+                        if (field.errorText case final error?) ...[
+                          const SizedBox(height: 5),
+                          Text(
+                            error,
+                            style: Theme.of(context).textTheme.bodySmall
+                                ?.copyWith(color: context.viberColors.danger),
+                          ),
+                        ],
+                      ],
+                    ),
                   ),
                 ),
                 const SizedBox(height: 8),
@@ -774,7 +845,9 @@ final class _EndpointEditorDialogState extends State<_EndpointEditorDialog> {
     final created = await widget.controller.createUpstreamEndpoint(
       displayName: _name.text,
       origin: _origin.text,
-      kind: _kind,
+      backendProtocols: upstreamBackendProtocols
+          .where(_backendProtocols.contains)
+          .toList(growable: false),
     );
     if (!mounted) return;
     if (created != null) {
@@ -868,6 +941,14 @@ final class _AccountEditorDialogState extends State<_AccountEditorDialog> {
                     ],
                     onChanged: (value) => setState(() => _kind = value!),
                   ),
+                  const SizedBox(height: 4),
+                  Text(
+                    copy('routes.account.transport.$_kind'),
+                    key: const Key('account-editor-auth-transport'),
+                    style: monoStyle.copyWith(
+                      color: context.viberColors.textMuted,
+                    ),
+                  ),
                   const SizedBox(height: 9),
                   TextFormField(
                     key: const Key('account-editor-name'),
@@ -892,8 +973,8 @@ final class _AccountEditorDialogState extends State<_AccountEditorDialog> {
                   enableSuggestions: false,
                   decoration: InputDecoration(
                     labelText: copy(
-                      _kind == 'claude_oauth_token'
-                          ? 'routes.account.oauth_token'
+                      _kind == 'bearer_token'
+                          ? 'routes.account.bearer_token'
                           : 'routes.account.api_key',
                     ),
                   ),

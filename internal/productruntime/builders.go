@@ -18,6 +18,7 @@ import (
 	"github.com/vibe-agi/vibermate/internal/connectionpolicy"
 	"github.com/vibe-agi/vibermate/internal/egressaudit"
 	"github.com/vibe-agi/vibermate/internal/environment"
+	"github.com/vibe-agi/vibermate/internal/evidencearchive"
 	"github.com/vibe-agi/vibermate/internal/exchange"
 	"github.com/vibe-agi/vibermate/internal/exchangecontent"
 	"github.com/vibe-agi/vibermate/internal/localca"
@@ -30,6 +31,7 @@ import (
 	"github.com/vibe-agi/vibermate/internal/protocolcore"
 	"github.com/vibe-agi/vibermate/internal/protocolpath"
 	"github.com/vibe-agi/vibermate/internal/protocolspec"
+	"github.com/vibe-agi/vibermate/internal/providerauth"
 	"github.com/vibe-agi/vibermate/internal/providertransport"
 	"github.com/vibe-agi/vibermate/internal/rawevidence"
 	"github.com/vibe-agi/vibermate/internal/responseschat"
@@ -83,7 +85,6 @@ type environmentBuildRequest struct {
 	repository           environment.Repository
 	assignmentRepository captureassignment.Repository
 	activity             captureassignment.CaptureActivity
-	leafCache            captureassignment.LeafCacheInvalidator
 	clock                captureassignment.Clock
 	accounts             environment.AccountCatalog
 	endpoints            upstreamendpoint.Catalog
@@ -98,7 +99,6 @@ type captureAssignmentRuntime interface {
 	captureassignment.Controller
 	loopbackproxy.CaptureAssignmentAuthority
 	environment.CaptureInspector
-	environment.CaptureTransitionCoordinator
 	BeginShutdown()
 	Drain(context.Context) error
 	Shutdown(context.Context) error
@@ -115,26 +115,81 @@ type environmentBuilder interface {
 
 type productionEnvironmentBuilder struct{}
 
+// historicalEnvironmentResolver keeps active reads lock-free through the
+// projection while resolving a Capture's frozen revision from durable history.
+// A published Environment therefore changes only Captures launched afterward.
+type historicalEnvironmentResolver struct {
+	environment.SnapshotProjection
+	repository environment.Repository
+	compiler   environment.Compiler
+	system     environment.EnvironmentSnapshot
+}
+
+func (resolver historicalEnvironmentResolver) ResolveRevision(
+	ctx context.Context,
+	id environment.EnvironmentID,
+	revision environment.Revision,
+) (environment.EnvironmentSnapshot, error) {
+	if ctx == nil || revision == 0 {
+		return environment.EnvironmentSnapshot{}, environment.ErrInvalidEnvironment
+	}
+	if err := ctx.Err(); err != nil {
+		return environment.EnvironmentSnapshot{}, err
+	}
+	if id == environment.SystemTransparentID {
+		snapshot := resolver.system
+		if snapshot.Revision() != revision {
+			return environment.EnvironmentSnapshot{}, fmt.Errorf(
+				"%w: environmentId=%q revision=%d",
+				environment.ErrEnvironmentNotFound,
+				id,
+				revision,
+			)
+		}
+		return snapshot, nil
+	}
+	aggregate, exists, err := resolver.repository.LoadRevision(ctx, id, revision)
+	if err != nil {
+		return environment.EnvironmentSnapshot{}, err
+	}
+	if !exists {
+		return environment.EnvironmentSnapshot{}, fmt.Errorf(
+			"%w: environmentId=%q revision=%d",
+			environment.ErrEnvironmentNotFound,
+			id,
+			revision,
+		)
+	}
+	return resolver.compiler.Compile(aggregate)
+}
+
 func (productionEnvironmentBuilder) Build(
 	ctx context.Context,
 	request environmentBuildRequest,
 ) (environmentBuildResult, error) {
+	compiler, err := productionEnvironmentCompiler(request.accounts, request.endpoints)
+	if err != nil {
+		return environmentBuildResult{}, fmt.Errorf("build Environment compiler: %w", err)
+	}
+	system, err := compiler.CompileSystemTransparent()
+	if err != nil {
+		return environmentBuildResult{}, fmt.Errorf("build system_transparent: %w", err)
+	}
 	projection := environment.NewAtomicProjection()
+	resolver := historicalEnvironmentResolver{
+		SnapshotProjection: projection,
+		repository:         request.repository,
+		compiler:           compiler,
+		system:             system,
+	}
 	assignments, err := captureassignment.NewManager(captureassignment.Options{
-		Repository: request.assignmentRepository, Environments: projection,
-		Activity: request.activity, LeafCacheInvalidator: request.leafCache,
-		Clock: request.clock,
+		Repository:   request.assignmentRepository,
+		Environments: resolver,
+		Activity:     request.activity,
+		Clock:        request.clock,
 	})
 	if err != nil {
 		return environmentBuildResult{}, fmt.Errorf("build Capture assignment manager: %w", err)
-	}
-	compiler, err := productionEnvironmentCompiler(request.accounts, request.endpoints)
-	if err != nil {
-		shutdownErr := assignments.Shutdown(context.WithoutCancel(ctx))
-		return environmentBuildResult{}, errors.Join(
-			fmt.Errorf("build Environment compiler: %w", err),
-			wrapOptionalError("close Capture assignment manager", shutdownErr),
-		)
 	}
 	environments, err := environment.NewManager(
 		ctx, request.repository, compiler, projection, assignments,
@@ -394,12 +449,19 @@ func (productionMonitorBuilder) Build(request monitorBuildRequest) (ownedCompone
 type providerBuildRequest struct {
 	coordinator offlinehold.Coordinator
 	secrets     secretstore.Reader
+	instanceIDs InstanceIDSource
 	audit       egressaudit.Writer
 	rawEvidence rawevidence.Observer
 }
 
 type providerRuntime interface {
 	exchange.Provider
+	FetchEndpointModels(
+		context.Context,
+		upstreamendpoint.Endpoint,
+		providerauth.Lease,
+	) (*http.Response, error)
+	FetchModelsDev(context.Context) (*http.Response, error)
 	Shutdown(context.Context) error
 }
 
@@ -431,6 +493,7 @@ func (productionProviderBuilder) Build(
 			anthropicAuthenticator,
 		},
 		providertransport.DefaultTransportTimeouts(),
+		request.instanceIDs,
 		request.audit,
 		request.rawEvidence,
 	)
@@ -918,10 +981,11 @@ func (productionOriginalBuilder) Build(
 }
 
 type captureBuildRequest struct {
-	repository capturerun.Repository
-	clock      capturerun.Clock
-	random     io.Reader
-	barrier    capturerun.EvidenceBarrier
+	repository     capturerun.Repository
+	clock          capturerun.Clock
+	random         io.Reader
+	barrier        capturerun.EvidenceBarrier
+	archiveBarrier evidencearchive.CaptureCreationBarrier
 }
 
 type captureRuntime interface {
@@ -947,14 +1011,16 @@ func (productionCaptureBuilder) Build(
 	options.Clock = request.clock
 	options.Random = request.random
 	options.EvidenceBarrier = request.barrier
+	options.ArchiveBarrier = request.archiveBarrier
 	return capturerun.NewManager(ctx, options)
 }
 
 type manualCaptureBuildRequest struct {
-	repository manualcapture.Repository
-	clock      manualcapture.Clock
-	random     io.Reader
-	barrier    manualcapture.EvidenceBarrier
+	repository     manualcapture.Repository
+	clock          manualcapture.Clock
+	random         io.Reader
+	barrier        manualcapture.EvidenceBarrier
+	archiveBarrier evidencearchive.CaptureCreationBarrier
 }
 
 type manualCaptureRuntime interface {
@@ -979,6 +1045,7 @@ func (productionManualCaptureBuilder) Build(
 	options.Clock = request.clock
 	options.Random = request.random
 	options.EvidenceBarrier = request.barrier
+	options.ArchiveBarrier = request.archiveBarrier
 	return manualcapture.NewManager(ctx, options)
 }
 
@@ -991,7 +1058,6 @@ type localCABuildRequest struct {
 
 type localCARuntime interface {
 	loopbackproxy.CertificateAuthority
-	captureassignment.LeafCacheInvalidator
 	Certificate() localca.RootCertificate
 	Shutdown(context.Context) error
 }

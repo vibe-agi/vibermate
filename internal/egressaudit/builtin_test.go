@@ -33,16 +33,18 @@ func TestEveryPurposeMapsToAHoldKind(t *testing.T) {
 	t.Parallel()
 
 	expected := map[egressaudit.EgressPurpose]offlinehold.EgressKind{
-		egressaudit.PurposeProviderAttempt:     offlinehold.EgressProvider,
-		egressaudit.PurposeRouteOperation:      offlinehold.EgressAuxiliary,
-		egressaudit.PurposeOriginalOrigin:      offlinehold.EgressOpaque,
-		egressaudit.PurposeAgentProbe:          offlinehold.EgressAuxiliary,
-		egressaudit.PurposeBlindTunnel:         offlinehold.EgressBlindTunnel,
-		egressaudit.PurposeAuxiliaryLLM:        offlinehold.EgressAuxiliary,
-		egressaudit.PurposeLanguageTransform:   offlinehold.EgressAuxiliary,
-		egressaudit.PurposePluginCatalogSync:   offlinehold.EgressPlugin,
-		egressaudit.PurposePluginArtifactFetch: offlinehold.EgressPlugin,
-		egressaudit.PurposeUpdate:              offlinehold.EgressUpdate,
+		egressaudit.PurposeProviderAttempt:        offlinehold.EgressProvider,
+		egressaudit.PurposeUpstreamModelDiscovery: offlinehold.EgressProvider,
+		egressaudit.PurposeModelMetadataDirectory: offlinehold.EgressAuxiliary,
+		egressaudit.PurposeRouteOperation:         offlinehold.EgressAuxiliary,
+		egressaudit.PurposeOriginalOrigin:         offlinehold.EgressOpaque,
+		egressaudit.PurposeAgentProbe:             offlinehold.EgressAuxiliary,
+		egressaudit.PurposeBlindTunnel:            offlinehold.EgressBlindTunnel,
+		egressaudit.PurposeAuxiliaryLLM:           offlinehold.EgressAuxiliary,
+		egressaudit.PurposeLanguageTransform:      offlinehold.EgressAuxiliary,
+		egressaudit.PurposePluginCatalogSync:      offlinehold.EgressPlugin,
+		egressaudit.PurposePluginArtifactFetch:    offlinehold.EgressPlugin,
+		egressaudit.PurposeUpdate:                 offlinehold.EgressUpdate,
 	}
 	seen := make(map[egressaudit.EgressPurpose]struct{}, len(expected))
 	for _, purpose := range egressaudit.Purposes() {

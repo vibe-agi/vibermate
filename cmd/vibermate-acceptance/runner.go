@@ -1832,13 +1832,13 @@ func waitForManagedReplyEvidence(
 	if ctx == nil || audit == nil || control == nil || after < 0 ||
 		len(published.ClientEndpoints) != 1 ||
 		len(published.ClientEndpoints[0].ProtocolPlans) != 1 ||
-		len(published.ClientEndpoints[0].ProtocolPlans[0].UpstreamPlan.Routes) != 1 {
+		len(published.ClientEndpoints[0].ProtocolPlans[0].Destination.Upstream.Routes) != 1 {
 		return exchangeAuditRecord{}, errors.New(
 			"managed reply evidence dependencies are incomplete",
 		)
 	}
 	plan := published.ClientEndpoints[0].ProtocolPlans[0]
-	route := plan.UpstreamPlan.Routes[0]
+	route := plan.Destination.Upstream.Routes[0]
 	waitContext, cancel := context.WithTimeout(ctx, limit)
 	defer cancel()
 	ticker := time.NewTicker(50 * time.Millisecond)

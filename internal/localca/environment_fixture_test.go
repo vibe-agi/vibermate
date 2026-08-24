@@ -49,14 +49,18 @@ func newEnvironmentProjection(
 		}
 		snapshots = append(snapshots, snapshot)
 	}
-	if err := projection.Restore(snapshots); err != nil {
+	system, err := compiler.CompileSystemTransparent()
+	if err != nil {
+		t.Fatalf("compile system_transparent fixture: %v", err)
+	}
+	if err := projection.Restore(system, snapshots); err != nil {
 		t.Fatalf("restore Environment projection: %v", err)
 	}
 	repository := newLocalAssignmentRepository()
 	manager, err := captureassignment.NewManager(captureassignment.Options{
 		Repository: repository, Environments: projection,
-		Activity: localCaptureActivity{}, LeafCacheInvalidator: authority,
-		Clock: authority.clock,
+		Activity: localCaptureActivity{},
+		Clock:    authority.clock,
 	})
 	if err != nil {
 		t.Fatalf("construct Capture assignment manager: %v", err)
@@ -79,7 +83,7 @@ func newEnvironmentProjection(
 		}
 		connection, err := manager.RegisterConnection(
 			context.Background(), capture, "connection."+fixture.environmentID.String(),
-			fixture.origin, noOpConnectionCloseHandle{},
+			fixture.origin,
 		)
 		if err != nil {
 			t.Fatalf("register Capture connection %d: %v", index, err)
@@ -102,19 +106,12 @@ func (localCaptureActivity) Active(
 
 func (harness *environmentProjection) Publish(t *testing.T, fixture environmentFixture) {
 	t.Helper()
-	active, err := harness.projection.Resolve(fixture.environmentID)
-	if err != nil {
-		t.Fatal(err)
-	}
 	candidate, err := harness.compiler.Compile(fixture.aggregate)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if err := harness.projection.Publish(candidate); err != nil {
 		t.Fatalf("publish Environment replacement: %v", err)
-	}
-	for _, invalidation := range captureassignment.LeafCacheInvalidations(active) {
-		harness.authority.InvalidateLeafCache(invalidation)
 	}
 }
 
@@ -136,10 +133,6 @@ func newEnvironmentFixture(
 	if err != nil {
 		t.Fatal(err)
 	}
-	providerOrigin, err := originidentity.ParseProviderOrigin(origin.String())
-	if err != nil {
-		t.Fatal(err)
-	}
 	aggregate := environment.Environment{
 		ID: environmentID, Name: "Local CA test Environment", State: environment.StateActive, Revision: revision,
 		ContentRecording: environment.DefaultContentRecordingPolicy(),
@@ -149,33 +142,7 @@ func newEnvironmentFixture(
 				ID: "protocol-" + environment.ClientProtocolPlanID(suffix), Revision: revision,
 				ClientProtocol:      environment.ClientProtocolAnthropicMessages,
 				ClientAdapterPolicy: environment.ClientAdapterPolicy{ID: "adapter.localca", Revision: 1},
-				Mode:                environment.PlanModeOriginalPassthrough,
-				UpstreamPlan: environment.UpstreamPlan{
-					DefaultRouteID: "route-" + environment.UpstreamRouteID(suffix),
-					RouteSet: environment.RouteSet{
-						ID: "routes-" + suffix, Revision: revision,
-						CandidateRouteIDs: []environment.UpstreamRouteID{"route-" + environment.UpstreamRouteID(suffix)},
-					},
-					Routes: []environment.UpstreamRoute{{
-						ID: "route-" + environment.UpstreamRouteID(suffix), Revision: revision,
-						ProviderTarget: environment.ProviderTarget{
-							ID: "target-" + suffix, Revision: revision, Origin: providerOrigin,
-							RealmID: "realm.localca",
-							Capabilities: []protocolspec.ProviderCapability{
-								protocolspec.ProviderCapabilityMessages,
-								protocolspec.ProviderCapabilityStreaming,
-								protocolspec.ProviderCapabilityToolCalls,
-							},
-						},
-						BackendProtocol: string(protocolspec.DialectAnthropicMessages),
-						AccountPolicy: environment.RouteAccountPolicy{
-							Revision: revision, Mode: environment.AccountModeClientPassthrough,
-							FailoverPolicy: environment.FailoverOff,
-						},
-						ModelPolicy:    environment.ModelPolicy{Revision: revision, Mode: "preserve"},
-						WireProfileRef: wireprofile.UpstreamWireProfileFollowClientValue,
-					}},
-				},
+				Destination:         environment.DestinationPlan{Kind: environment.DestinationKindOriginal},
 			}},
 		}},
 	}
@@ -188,23 +155,30 @@ func newEnvironmentCompiler(t *testing.T) environment.Compiler {
 	if err != nil {
 		t.Fatal(err)
 	}
-	pairID, err := protocolspec.NewCodecPairID("localca.anthropic.passthrough")
-	if err != nil {
-		t.Fatal(err)
-	}
-	protocols, err := protocolspec.NewCatalog(
-		operations.Definitions(),
-		[]protocolspec.CodecPairDefinition{{
+	pairs := make([]protocolspec.CodecPairDefinition, 0, 2)
+	for _, dialect := range []protocolspec.Dialect{
+		protocolspec.DialectAnthropicMessages,
+		protocolspec.DialectOpenAIResponses,
+	} {
+		pairID, err := protocolspec.NewCodecPairID("localca." + string(dialect) + ".passthrough")
+		if err != nil {
+			t.Fatal(err)
+		}
+		pairs = append(pairs, protocolspec.CodecPairDefinition{
 			ID: pairID, Revision: 1,
-			ClientDialect:      protocolspec.DialectAnthropicMessages,
-			ProviderDialect:    protocolspec.DialectAnthropicMessages,
-			ClientOperationIDs: operations.SemanticOperationIDs(protocolspec.DialectAnthropicMessages),
+			ClientDialect:      dialect,
+			ProviderDialect:    dialect,
+			ClientOperationIDs: operations.SemanticOperationIDs(dialect),
 			RequiredCapabilities: []protocolspec.ProviderCapability{
 				protocolspec.ProviderCapabilityMessages,
 				protocolspec.ProviderCapabilityStreaming,
 				protocolspec.ProviderCapabilityToolCalls,
 			},
-		}},
+		})
+	}
+	protocols, err := protocolspec.NewCatalog(
+		operations.Definitions(),
+		pairs,
 	)
 	if err != nil {
 		t.Fatal(err)
@@ -253,10 +227,6 @@ func mustDNSName(t *testing.T, value string) certidentity.SubjectAlternativeName
 	}
 	return san
 }
-
-type noOpConnectionCloseHandle struct{}
-
-func (noOpConnectionCloseHandle) Close(context.Context) error { return nil }
 
 type localAssignmentRepository struct {
 	mu          sync.Mutex

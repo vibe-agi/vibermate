@@ -6,7 +6,6 @@ import (
 	"encoding/json"
 	"errors"
 	"net/http"
-	"net/http/httptest"
 	"net/url"
 	"sort"
 	"sync"
@@ -145,7 +144,7 @@ func assertCaptureKeys(
 	}
 }
 
-func TestCaptureAssignmentRoutesExposeCASAndEveryBoundary(t *testing.T) {
+func TestCaptureAssignmentRouteIsReadOnlyAfterLaunch(t *testing.T) {
 	t.Parallel()
 	assignments := newAssignmentFixture()
 	application := unifiedCaptureApplication(t, assignments)
@@ -156,43 +155,19 @@ func TestCaptureAssignmentRoutesExposeCASAndEveryBoundary(t *testing.T) {
 	}
 	assertBodyContains(t, get.Body.Bytes(), `"captureKey":"managed_run:same-id"`, `"revision":1`)
 
-	hot := assignmentMutation(t, application, "managed_run:same-id", 1, "environment-hot", "capture-switch-hot")
-	if hot.Code != http.StatusOK {
-		t.Fatalf("hot status=%d body=%s", hot.Code, hot.Body.Bytes())
+	mutation := environmentRequest(
+		t,
+		application,
+		http.MethodPatch,
+		"/api/v1/captures/managed_run:same-id/environment-assignment",
+		1,
+		"capture-assignment-is-read-only",
+		[]byte(`{"environmentId":"environment-other"}`),
+	)
+	if mutation.Code != http.StatusNotFound {
+		t.Fatalf("mutation status=%d body=%s", mutation.Code, mutation.Body.Bytes())
 	}
-	assertBodyContains(t, hot.Body.Bytes(), `"boundary":"hot_switch"`, `"applied":true`, `"closedConnections":[]`)
-	replayed := assignmentMutation(t, application, "managed_run:same-id", 1, "environment-hot", "capture-switch-hot")
-	if replayed.Code != hot.Code || replayed.Body.String() != hot.Body.String() || assignments.switchCount() != 1 {
-		t.Fatalf(
-			"idempotent replay status=%d body=%s switches=%d",
-			replayed.Code,
-			replayed.Body.Bytes(),
-			assignments.switchCount(),
-		)
-	}
-
-	stale := assignmentMutation(t, application, "managed_run:same-id", 1, "environment-other", "capture-switch-stale")
-	if stale.Code != http.StatusConflict {
-		t.Fatalf("stale status=%d body=%s", stale.Code, stale.Body.Bytes())
-	}
-
-	reconnect := assignmentMutation(t, application, "manual_capture:same-id", 1, "environment-reconnect", "capture-switch-reconnect")
-	if reconnect.Code != http.StatusOK {
-		t.Fatalf("reconnect status=%d body=%s", reconnect.Code, reconnect.Body.Bytes())
-	}
-	assertBodyContains(t, reconnect.Body.Bytes(), `"boundary":"reconnect_required"`, `"closedConnections":["connection-1"]`)
-
-	restart := assignmentMutation(t, application, "managed_run:same-id", 2, "environment-restart", "capture-switch-restart")
-	if restart.Code != http.StatusOK {
-		t.Fatalf("restart status=%d body=%s", restart.Code, restart.Body.Bytes())
-	}
-	assertBodyContains(t, restart.Body.Bytes(), `"boundary":"restart_required"`, `"applied":false`, `"reasonCode":"capture_restart_required"`)
-}
-
-func assignmentMutation(t *testing.T, handler http.Handler, key string, revision uint64, target, idempotencyKey string) *httptest.ResponseRecorder {
-	t.Helper()
-	body := []byte(`{"environmentId":"` + target + `"}`)
-	return environmentRequest(t, handler, http.MethodPatch, "/api/v1/captures/"+key+"/environment-assignment", revision, idempotencyKey, body)
+	assertBodyContains(t, mutation.Body.Bytes(), `"code":"control_route_not_found"`)
 }
 
 func unifiedCaptureApplication(t *testing.T, assignments captureassignment.Controller) http.Handler {
@@ -410,9 +385,8 @@ func (fixture manualCaptureFixture) List(context.Context, manualcapture.PageRequ
 }
 
 type assignmentFixture struct {
-	mu       sync.Mutex
-	items    map[string]captureassignment.Assignment
-	switches int
+	mu    sync.Mutex
+	items map[string]captureassignment.Assignment
 }
 
 func newAssignmentFixture() *assignmentFixture {
@@ -444,39 +418,6 @@ func (fixture *assignmentFixture) Resolve(_ context.Context, reference captureid
 	}
 	return assignment, nil
 }
-func (fixture *assignmentFixture) Switch(_ context.Context, command captureassignment.SwitchCommand) (captureassignment.SwitchResult, error) {
-	fixture.mu.Lock()
-	defer fixture.mu.Unlock()
-	fixture.switches++
-	current, exists := fixture.items[command.Capture.Key()]
-	if !exists {
-		return captureassignment.SwitchResult{}, captureassignment.ErrAssignmentNotFound
-	}
-	if current.Revision != command.ExpectedRevision {
-		return captureassignment.SwitchResult{Assignment: current}, captureassignment.ErrAssignmentConflict
-	}
-	if command.TargetEnvironmentID == "environment-restart" {
-		return captureassignment.SwitchResult{Assignment: current, Boundary: captureassignment.BoundaryRestartRequired}, captureassignment.ErrLaunchRestartRequired
-	}
-	current.EnvironmentID = command.TargetEnvironmentID
-	current.Revision++
-	current.Source = command.Source
-	fixture.items[command.Capture.Key()] = current
-	boundary := captureassignment.BoundaryHotSwitch
-	closed := []string(nil)
-	if command.TargetEnvironmentID == "environment-reconnect" {
-		boundary = captureassignment.BoundaryReconnectRequired
-		closed = []string{"connection-1"}
-	}
-	return captureassignment.SwitchResult{Assignment: current, Boundary: boundary, ClosedConnections: closed}, nil
-}
-
-func (fixture *assignmentFixture) switchCount() int {
-	fixture.mu.Lock()
-	defer fixture.mu.Unlock()
-	return fixture.switches
-}
-
 func assertBodyContains(t *testing.T, body []byte, values ...string) {
 	t.Helper()
 	for _, value := range values {

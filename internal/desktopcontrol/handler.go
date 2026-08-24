@@ -23,8 +23,10 @@ import (
 	"github.com/vibe-agi/vibermate/internal/connectionevent"
 	"github.com/vibe-agi/vibermate/internal/egressaudit"
 	"github.com/vibe-agi/vibermate/internal/environment"
+	"github.com/vibe-agi/vibermate/internal/evidencearchive"
 	"github.com/vibe-agi/vibermate/internal/exchangecontent"
 	"github.com/vibe-agi/vibermate/internal/manualcapture"
+	"github.com/vibe-agi/vibermate/internal/modelcatalog"
 	"github.com/vibe-agi/vibermate/internal/offlinehold"
 	"github.com/vibe-agi/vibermate/internal/productruntime"
 	"github.com/vibe-agi/vibermate/internal/provideraccount"
@@ -32,7 +34,6 @@ import (
 	"github.com/vibe-agi/vibermate/internal/resourcedeletion"
 	"github.com/vibe-agi/vibermate/internal/toolapproval"
 	"github.com/vibe-agi/vibermate/internal/upstreamendpoint"
-	"github.com/vibe-agi/vibermate/internal/workspacedefault"
 )
 
 const (
@@ -44,36 +45,36 @@ const (
 type ReasonCode string
 
 const (
-	ReasonUnauthorized                ReasonCode = "control_unauthorized"
-	ReasonRouteNotFound               ReasonCode = "control_route_not_found"
-	ReasonInvalidRequest              ReasonCode = "invalid_control_request"
-	ReasonRevisionConflict            ReasonCode = "revision_conflict"
-	ReasonEnvironmentNotFound         ReasonCode = "environment_not_found"
-	ReasonEnvironmentDraftNotFound    ReasonCode = "environment_draft_not_found"
-	ReasonProjectionUnavailable       ReasonCode = "environment_projection_unavailable"
-	ReasonRuntimeUnavailable          ReasonCode = "runtime_unavailable"
-	ReasonApprovalNotFound            ReasonCode = "approval_not_found"
-	ReasonProbeFailed                 ReasonCode = "offline_probe_failed"
-	ReasonConnectionNotFound          ReasonCode = "connection_not_found"
-	ReasonExchangeNotFound            ReasonCode = "exchange_not_found"
-	ReasonEnvironmentSystemOwned      ReasonCode = "environment_system_owned"
-	ReasonEnvironmentPreviewStale     ReasonCode = "environment_preview_stale"
-	ReasonCaptureNotFound             ReasonCode = "capture_not_found"
-	ReasonCaptureAssignmentNotFound   ReasonCode = "capture_assignment_not_found"
-	ReasonCaptureUnavailable          ReasonCode = "capture_unavailable"
-	ReasonCaptureRestartRequired      ReasonCode = "capture_restart_required"
-	ReasonEnvironmentUnavailable      ReasonCode = "environment_unavailable"
-	ReasonUpstreamEndpointNotFound    ReasonCode = "upstream_endpoint_not_found"
-	ReasonUpstreamEndpointConflict    ReasonCode = "upstream_endpoint_conflict"
-	ReasonUpstreamEndpointUnavailable ReasonCode = "upstream_endpoint_unavailable"
-	ReasonProviderAccountNotFound     ReasonCode = "provider_account_not_found"
-	ReasonProviderAccountConflict     ReasonCode = "provider_account_conflict"
-	ReasonProviderAccountInUse        ReasonCode = "provider_account_in_use"
-	ReasonProviderAccountUnavailable  ReasonCode = "provider_account_unavailable"
-	ReasonWorkspaceDefaultNotFound    ReasonCode = "workspace_environment_default_not_found"
-	ReasonWorkspaceDefaultInvalid     ReasonCode = "workspace_environment_default_invalid"
-	ReasonRawEvidenceNotFound         ReasonCode = "raw_evidence_not_found"
-	ReasonRawEvidenceUnavailable      ReasonCode = "raw_evidence_unavailable"
+	ReasonUnauthorized                       ReasonCode = "control_unauthorized"
+	ReasonRouteNotFound                      ReasonCode = "control_route_not_found"
+	ReasonInvalidRequest                     ReasonCode = "invalid_control_request"
+	ReasonRevisionConflict                   ReasonCode = "revision_conflict"
+	ReasonEnvironmentNotFound                ReasonCode = "environment_not_found"
+	ReasonEnvironmentDraftNotFound           ReasonCode = "environment_draft_not_found"
+	ReasonProjectionUnavailable              ReasonCode = "environment_projection_unavailable"
+	ReasonRuntimeUnavailable                 ReasonCode = "runtime_unavailable"
+	ReasonApprovalNotFound                   ReasonCode = "approval_not_found"
+	ReasonProbeFailed                        ReasonCode = "offline_probe_failed"
+	ReasonConnectionNotFound                 ReasonCode = "connection_not_found"
+	ReasonExchangeNotFound                   ReasonCode = "exchange_not_found"
+	ReasonEnvironmentSystemOwned             ReasonCode = "environment_system_owned"
+	ReasonEnvironmentPreviewStale            ReasonCode = "environment_preview_stale"
+	ReasonCaptureNotFound                    ReasonCode = "capture_not_found"
+	ReasonCaptureAssignmentNotFound          ReasonCode = "capture_assignment_not_found"
+	ReasonCaptureUnavailable                 ReasonCode = "capture_unavailable"
+	ReasonEnvironmentUnavailable             ReasonCode = "environment_unavailable"
+	ReasonUpstreamEndpointNotFound           ReasonCode = "upstream_endpoint_not_found"
+	ReasonUpstreamEndpointConflict           ReasonCode = "upstream_endpoint_conflict"
+	ReasonUpstreamEndpointUnavailable        ReasonCode = "upstream_endpoint_unavailable"
+	ReasonProviderAccountNotFound            ReasonCode = "provider_account_not_found"
+	ReasonProviderAccountConflict            ReasonCode = "provider_account_conflict"
+	ReasonProviderAccountInUse               ReasonCode = "provider_account_in_use"
+	ReasonProviderAccountUnavailable         ReasonCode = "provider_account_unavailable"
+	ReasonRawEvidenceNotFound                ReasonCode = "raw_evidence_not_found"
+	ReasonRawEvidenceUnavailable             ReasonCode = "raw_evidence_unavailable"
+	ReasonModelCatalogUnavailable            ReasonCode = "model_catalog_unavailable"
+	ReasonModelCatalogTimeout                ReasonCode = "model_catalog_timeout"
+	ReasonModelCatalogAuthenticationRejected ReasonCode = "model_catalog_authentication_rejected"
 )
 
 type StatusReader interface {
@@ -120,6 +121,8 @@ type Options struct {
 	Approvals           toolapproval.Controller
 	Endpoints           upstreamendpoint.Controller
 	Accounts            provideraccount.Controller
+	Models              modelcatalog.Reader
+	ClientModels        modelcatalog.ProviderMetadataReader
 	RawEvidence         rawevidence.Reader
 	Offline             OfflineActions
 	// ConnectionRules is the outbound firewall a person edits. A runtime
@@ -127,11 +130,11 @@ type Options struct {
 	ConnectionRules ConnectionRuleController
 	// CaptureRuns is the read side of what is captured. It is not a control
 	// path: it carries no capability in either direction.
-	CaptureRuns       capturerun.Reader
-	ManualCaptures    manualcapture.Controller
-	WorkspaceDefaults workspacedefault.Controller
-	Archive           resourcedeletion.Archive
-	Clock             Clock
+	CaptureRuns    capturerun.Reader
+	ManualCaptures manualcapture.Controller
+	Archive        resourcedeletion.Archive
+	ArchiveBarrier evidencearchive.ClearBarrier
+	Clock          Clock
 }
 
 type Handler struct {
@@ -147,15 +150,17 @@ type Handler struct {
 	approvals           toolapproval.Controller
 	endpoints           upstreamendpoint.Controller
 	accounts            provideraccount.Controller
+	models              modelcatalog.Reader
+	clientModels        modelcatalog.ProviderMetadataReader
 	rawEvidence         rawevidence.Reader
 	offline             OfflineActions
 
-	connectionRules   ConnectionRuleController
-	archive           resourcedeletion.Archive
-	captureRuns       capturerun.Reader
-	manualCaptures    manualcapture.Controller
-	workspaceDefaults workspacedefault.Controller
-	clock             Clock
+	connectionRules ConnectionRuleController
+	archive         resourcedeletion.Archive
+	archiveBarrier  evidencearchive.ClearBarrier
+	captureRuns     capturerun.Reader
+	manualCaptures  manualcapture.Controller
+	clock           Clock
 
 	idempotent *idempotencyCache
 	mux        *http.ServeMux
@@ -204,13 +209,15 @@ func New(options Options) (*Handler, error) {
 		approvals:           options.Approvals,
 		endpoints:           options.Endpoints,
 		accounts:            options.Accounts,
+		models:              options.Models,
+		clientModels:        options.ClientModels,
 		rawEvidence:         options.RawEvidence,
 		offline:             options.Offline,
 		connectionRules:     options.ConnectionRules,
 		archive:             options.Archive,
+		archiveBarrier:      options.ArchiveBarrier,
 		captureRuns:         options.CaptureRuns,
 		manualCaptures:      options.ManualCaptures,
-		workspaceDefaults:   options.WorkspaceDefaults,
 		clock:               options.Clock,
 		idempotent:          newIdempotencyCache(),
 		mux:                 http.NewServeMux(),
@@ -229,6 +236,15 @@ func New(options Options) (*Handler, error) {
 	handler.mux.HandleFunc("GET /api/v1/upstream-endpoints", handler.listUpstreamEndpoints)
 	handler.mux.HandleFunc("POST /api/v1/upstream-endpoints", handler.createUpstreamEndpoint)
 	handler.mux.HandleFunc("GET /api/v1/upstream-endpoints/{endpointId}", handler.getUpstreamEndpoint)
+	if handler.models != nil {
+		handler.mux.HandleFunc(
+			"GET /api/v1/upstream-endpoints/{endpointId}/models",
+			handler.getUpstreamEndpointModels,
+		)
+	}
+	if handler.clientModels != nil {
+		handler.mux.HandleFunc("GET /api/v1/client-models", handler.getClientModels)
+	}
 	handler.mux.HandleFunc("GET /api/v1/provider-accounts", handler.listProviderAccounts)
 	handler.mux.HandleFunc("POST /api/v1/provider-accounts", handler.createProviderAccount)
 	handler.mux.HandleFunc("GET /api/v1/provider-accounts/{accountId}", handler.getProviderAccount)
@@ -279,12 +295,8 @@ func New(options Options) (*Handler, error) {
 	)
 	handler.mux.HandleFunc("/api/v1/policies/connections", handler.invalidRoute)
 	handler.mux.HandleFunc("GET /api/v1/captures", handler.listCaptures)
-	handler.mux.HandleFunc("GET /api/v1/machines/{machineId}/workspaces/{workspaceId}/environment-default", handler.getWorkspaceDefault)
-	handler.mux.HandleFunc("PUT /api/v1/machines/{machineId}/workspaces/{workspaceId}/environment-default", handler.putWorkspaceDefault)
-	handler.mux.HandleFunc("DELETE /api/v1/machines/{machineId}/workspaces/{workspaceId}/environment-default", handler.deleteWorkspaceDefault)
 	handler.mux.HandleFunc("GET /api/v1/captures/{captureKey}", handler.getCapture)
 	handler.mux.HandleFunc("GET /api/v1/captures/{captureKey}/environment-assignment", handler.getCaptureEnvironmentAssignment)
-	handler.mux.HandleFunc("PATCH /api/v1/captures/{captureKey}/environment-assignment", handler.updateCaptureEnvironmentAssignment)
 	handler.mux.HandleFunc("GET /api/v1/approvals", handler.listApprovals)
 	handler.mux.HandleFunc(
 		"GET /api/v1/approvals/{approvalId}",

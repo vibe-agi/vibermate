@@ -28,8 +28,8 @@ import (
 	"github.com/vibe-agi/vibermate/internal/environment"
 	"github.com/vibe-agi/vibermate/internal/localca"
 	"github.com/vibe-agi/vibermate/internal/manualcapture"
+	"github.com/vibe-agi/vibermate/internal/runtimeuser"
 	"github.com/vibe-agi/vibermate/internal/toolapproval"
-	"github.com/vibe-agi/vibermate/internal/workspacedefault"
 	"github.com/vibe-agi/vibermate/internal/workspaceidentity"
 )
 
@@ -71,14 +71,8 @@ type WorkspaceResolver interface {
 		context.Context,
 		controlprincipal.Principal,
 		string,
-	) (workspaceidentity.Scope, error)
-}
-
-type WorkspaceDefaultResolver interface {
-	Resolve(
-		context.Context,
 		workspaceidentity.Scope,
-	) (workspacedefault.Record, bool, error)
+	) (workspaceidentity.Scope, error)
 }
 
 type localWorkspaceResolver struct {
@@ -98,11 +92,49 @@ func (resolver localWorkspaceResolver) ResolveCaptureRun(
 	ctx context.Context,
 	principal controlprincipal.Principal,
 	cwd string,
+	companion workspaceidentity.Scope,
 ) (workspaceidentity.Scope, error) {
-	if !principal.Valid() || principal.Kind() != controlprincipal.KindLocalCLI {
+	if !principal.Valid() || principal.Kind() != controlprincipal.KindLocalCLI ||
+		companion != (workspaceidentity.Scope{}) {
 		return workspaceidentity.Scope{}, ErrWorkspaceUnavailable
 	}
 	return resolver.resolver.ResolveLocal(ctx, cwd)
+}
+
+type companionWorkspaceResolver struct{}
+
+func NewCompanionWorkspaceResolver() WorkspaceResolver {
+	return companionWorkspaceResolver{}
+}
+
+func (companionWorkspaceResolver) ResolveCaptureRun(
+	ctx context.Context,
+	principal controlprincipal.Principal,
+	_ string,
+	scope workspaceidentity.Scope,
+) (workspaceidentity.Scope, error) {
+	if ctx == nil || !principal.Valid() ||
+		(principal.Kind() != controlprincipal.KindEnrolledClient &&
+			principal.Kind() != controlprincipal.KindRuntimeUser) ||
+		scope.Validate() != nil ||
+		scope.Evidence() != workspaceidentity.EvidenceRegisteredCompanion {
+		return workspaceidentity.Scope{}, ErrWorkspaceUnavailable
+	}
+	if err := ctx.Err(); err != nil {
+		return workspaceidentity.Scope{}, err
+	}
+	if principal.Kind() == controlprincipal.KindRuntimeUser {
+		machineID, ok := principal.MachineID()
+		if !ok || machineID != scope.MachineID().String() {
+			return workspaceidentity.Scope{}, ErrWorkspaceUnavailable
+		}
+	} else {
+		machineRegistrationID, ok := principal.MachineRegistrationID()
+		if !ok || machineRegistrationID != "machine."+scope.MachineID().String() {
+			return workspaceidentity.Scope{}, ErrWorkspaceUnavailable
+		}
+	}
+	return scope, nil
 }
 
 type Options struct {
@@ -116,8 +148,25 @@ type Options struct {
 	Root                localca.RootCertificate
 	RunLifetime         time.Duration
 	Workspaces          WorkspaceResolver
-	WorkspaceDefaults   WorkspaceDefaultResolver
 	ClientRootApprovals ClientRootApprovals
+	CompanionCatalog    clientadapter.Catalog
+	ProxyDelivery       ProxyDelivery
+}
+
+// ProxyDelivery says where the launcher obtains its process-local HTTP proxy.
+// A Desktop launch receives the already-listening loopback origin. A remote
+// companion creates its own loopback listener and relays that byte stream over
+// the authenticated TLS connection to the Server.
+type ProxyDelivery string
+
+const (
+	ProxyDeliveryLocalListener ProxyDelivery = "local_listener"
+	ProxyDeliveryClientRelay   ProxyDelivery = "client_tls_relay"
+)
+
+func (delivery ProxyDelivery) Valid() bool {
+	return delivery == ProxyDeliveryLocalListener ||
+		delivery == ProxyDeliveryClientRelay
 }
 
 // Issuer is the single Core owner of CaptureRun and ManualCapture grant
@@ -134,8 +183,9 @@ type Issuer struct {
 	root        localca.RootCertificate
 	runLifetime time.Duration
 	workspaces  WorkspaceResolver
-	defaults    WorkspaceDefaultResolver
 	rootAsk     ClientRootApprovals
+	companions  clientadapter.Catalog
+	proxy       ProxyDelivery
 }
 
 func New(options Options) (*Issuer, error) {
@@ -144,12 +194,21 @@ func New(options Options) (*Issuer, error) {
 		options.Verifier == nil ||
 		options.Authorities == nil ||
 		options.RunLifetime <= 0 ||
-		options.Workspaces == nil ||
-		options.WorkspaceDefaults == nil {
+		options.Workspaces == nil {
 		return nil, errors.New("capture grant issuer dependencies are incomplete")
 	}
-	if err := validateProxyOrigin(options.ProxyOrigin); err != nil {
-		return nil, err
+	if !options.ProxyDelivery.Valid() {
+		return nil, errors.New("capture grant proxy delivery is invalid")
+	}
+	switch options.ProxyDelivery {
+	case ProxyDeliveryLocalListener:
+		if err := validateProxyOrigin(options.ProxyOrigin); err != nil {
+			return nil, err
+		}
+	case ProxyDeliveryClientRelay:
+		if options.ProxyOrigin != "" {
+			return nil, errors.New("remote capture grant carries a Server-local proxy origin")
+		}
 	}
 	if !validGeneration(options.Generation) ||
 		!options.RootIdentity.Valid() ||
@@ -168,8 +227,9 @@ func New(options Options) (*Issuer, error) {
 		root:        options.Root,
 		runLifetime: options.RunLifetime,
 		workspaces:  options.Workspaces,
-		defaults:    options.WorkspaceDefaults,
 		rootAsk:     options.ClientRootApprovals,
+		companions:  options.CompanionCatalog,
+		proxy:       options.ProxyDelivery,
 	}, nil
 }
 
@@ -543,6 +603,16 @@ type CaptureRunRequest struct {
 	Command        []string
 	ExecutablePath string
 	LocalUserLabel string
+	Companion      *CompanionAttestation
+}
+
+// CompanionAttestation is verification and opaque workspace evidence produced
+// on the machine that will launch the client. The authenticated Server
+// principal and exact catalog validation are separate checks performed before
+// any grant is issued.
+type CompanionAttestation struct {
+	Detection clientadapter.Detection
+	Workspace workspaceidentity.Scope
 }
 
 type CaptureRunGrant struct {
@@ -554,7 +624,9 @@ type CaptureRunGrant struct {
 	LaunchRecipe                 clientadapter.LaunchRecipe
 	ExecutablePath               string
 	ProxyAddress                 string
+	ProxyDelivery                ProxyDelivery
 	RootPEMPath                  string
+	RootPEM                      string
 	Capture                      captureidentity.Reference
 	AssignmentRevision           captureassignment.Revision
 	EnvironmentID                environment.EnvironmentID
@@ -575,17 +647,20 @@ func (issuer *Issuer) IssueCaptureRun(
 		!principal.Allows(controlprincipal.GrantCaptureRun) {
 		return CaptureRunGrant{}, ErrPrincipalUnauthorized
 	}
+	if (issuer.proxy == ProxyDeliveryLocalListener &&
+		principal.Kind() != controlprincipal.KindLocalCLI) ||
+		(issuer.proxy == ProxyDeliveryClientRelay &&
+			principal.Kind() != controlprincipal.KindEnrolledClient &&
+			principal.Kind() != controlprincipal.KindRuntimeUser) {
+		return CaptureRunGrant{}, ErrPrincipalUnauthorized
+	}
 	if err := ctx.Err(); err != nil {
 		return CaptureRunGrant{}, err
 	}
 	if err := validateCaptureRunRequest(request); err != nil {
 		return CaptureRunGrant{}, fmt.Errorf("%w: %v", ErrInvalidCaptureRun, err)
 	}
-	detection, err := issuer.verifier.Verify(ctx, clientadapter.Request{
-		Command:        append([]string(nil), request.Command...),
-		CWD:            request.CWD,
-		ExecutablePath: request.ExecutablePath,
-	})
+	detection, err := issuer.resolveDetection(ctx, principal, request)
 	if err != nil || validateDetection(detection) != nil {
 		return CaptureRunGrant{}, ErrAdapterVerification
 	}
@@ -599,6 +674,7 @@ func (issuer *Issuer) IssueCaptureRun(
 		ctx,
 		principal,
 		request.CWD,
+		companionWorkspace(request.Companion),
 	)
 	if err != nil && !errors.Is(err, workspaceidentity.ErrInvalidIdentity) {
 		return CaptureRunGrant{}, ErrWorkspaceUnavailable
@@ -608,23 +684,28 @@ func (issuer *Issuer) IssueCaptureRun(
 	if selectedEnvironment == "" {
 		selectedEnvironment = environment.SystemTransparentID
 		assignmentSource = captureassignment.SourceSystemTransparent
-		if workspace.Validate() == nil {
-			preferred, exists, defaultErr := issuer.defaults.Resolve(ctx, workspace)
-			if defaultErr != nil {
-				return CaptureRunGrant{}, ErrProjectionUnavailable
-			}
-			if exists {
-				selectedEnvironment = preferred.EnvironmentID
-				assignmentSource = captureassignment.SourceWorkspaceDefault
-			}
-		}
 	}
-	// Reject a missing or disabled explicit/default Environment before creating
+	// Reject a missing or disabled explicit Environment before creating
 	// a durable CaptureRun. This review is intentionally not authorization: the
 	// later AssignAndResolve call remains the sole linearization point and must
 	// re-check the same Environment while freezing the launch boundary.
 	if _, reviewErr := issuer.authorities.Review(ctx, selectedEnvironment); reviewErr != nil {
 		return CaptureRunGrant{}, classifyEnvironmentSelectionError(reviewErr)
+	}
+	var runtimeUserID runtimeuser.UserID
+	var loginSessionID runtimeuser.LoginSessionID
+	var deviceName string
+	if principal.Kind() == controlprincipal.KindRuntimeUser {
+		userValue, userOK := principal.RuntimeUserID()
+		sessionValue, sessionOK := principal.LoginSessionID()
+		deviceValue, deviceOK := principal.DeviceName()
+		runtimeUserID = runtimeuser.UserID(userValue)
+		loginSessionID = runtimeuser.LoginSessionID(sessionValue)
+		deviceName = deviceValue
+		if !userOK || !sessionOK || !deviceOK || !runtimeUserID.Valid() ||
+			!loginSessionID.Valid() || !runtimeuser.ValidDeviceName(deviceName) {
+			return CaptureRunGrant{}, ErrPrincipalUnauthorized
+		}
 	}
 	grant, err := issuer.runs.Create(ctx, capturerun.CreateCommand{
 		CWD:                     request.CWD,
@@ -636,6 +717,9 @@ func (issuer *Issuer) IssueCaptureRun(
 		Recognition:             detection.Recognition,
 		Workspace:               workspace,
 		LocalUserLabel:          request.LocalUserLabel,
+		RuntimeUserID:           runtimeUserID,
+		LoginSessionID:          loginSessionID,
+		DeviceName:              deviceName,
 	})
 	if err != nil {
 		return CaptureRunGrant{}, ErrCaptureRunCreate
@@ -678,6 +762,7 @@ func (issuer *Issuer) IssueCaptureRun(
 	managedAuthorities := authorities.ManagedCredentialAuthorities()
 	recipe := clientadapter.LaunchGeneric
 	rootPath := ""
+	rootPEM := ""
 	var launchAdapter *clientadapter.Evidence
 	var signer *clientadapter.SignerEvidence
 	// Root delivery exists only to decrypt an exact protected authority. A
@@ -690,16 +775,21 @@ func (issuer *Issuer) IssueCaptureRun(
 			launchAdapter = &evidence
 			recipe = evidence.LaunchRecipe
 			if recipe.RequiresRoot() {
-				rootPath = issuer.root.Path()
+				rootPath, rootPEM = issuer.rootDelivery()
 			}
 		}
 		if detection.Recognition == clientadapter.RecognitionRecognized &&
 			detection.Signer != nil {
 			evidence := *detection.Signer
-			outcome, askErr := issuer.askClientRoot(ctx, evidence)
-			if askErr == nil && outcome {
+			allowed := principal.Kind() == controlprincipal.KindEnrolledClient ||
+				principal.Kind() == controlprincipal.KindRuntimeUser
+			var askErr error
+			if !allowed {
+				allowed, askErr = issuer.askClientRoot(ctx, evidence)
+			}
+			if askErr == nil && allowed {
 				recipe = evidence.LaunchRecipe
-				rootPath = issuer.root.Path()
+				rootPath, rootPEM = issuer.rootDelivery()
 				signer = &evidence
 			}
 		}
@@ -713,7 +803,9 @@ func (issuer *Issuer) IssueCaptureRun(
 		LaunchRecipe:                 recipe,
 		ExecutablePath:               detection.CanonicalPath,
 		ProxyAddress:                 issuer.proxyOrigin,
+		ProxyDelivery:                issuer.proxy,
 		RootPEMPath:                  rootPath,
+		RootPEM:                      rootPEM,
 		Capture:                      authorities.Capture(),
 		AssignmentRevision:           authorities.AssignmentRevision(),
 		EnvironmentID:                authorities.EnvironmentID(),
@@ -724,6 +816,49 @@ func (issuer *Issuer) IssueCaptureRun(
 		ProtectedAuthorities:         protectedAuthorities,
 		ManagedCredentialAuthorities: managedAuthorities,
 	}, nil
+}
+
+func (issuer *Issuer) rootDelivery() (path string, inline string) {
+	if issuer.proxy == ProxyDeliveryClientRelay {
+		return "", string(issuer.root.CertificatePEM())
+	}
+	return issuer.root.Path(), ""
+}
+
+func (issuer *Issuer) resolveDetection(
+	ctx context.Context,
+	principal controlprincipal.Principal,
+	request CaptureRunRequest,
+) (clientadapter.Detection, error) {
+	switch principal.Kind() {
+	case controlprincipal.KindLocalCLI:
+		if request.Companion != nil {
+			return clientadapter.Detection{}, ErrAdapterVerification
+		}
+		return issuer.verifier.Verify(ctx, clientadapter.Request{
+			Command:        append([]string(nil), request.Command...),
+			CWD:            request.CWD,
+			ExecutablePath: request.ExecutablePath,
+		})
+	case controlprincipal.KindEnrolledClient, controlprincipal.KindRuntimeUser:
+		if request.Companion == nil || !issuer.companions.Valid() {
+			return clientadapter.Detection{}, ErrAdapterVerification
+		}
+		return issuer.companions.ValidateCompanionAttestation(
+			request.Companion.Detection,
+		)
+	default:
+		return clientadapter.Detection{}, ErrAdapterVerification
+	}
+}
+
+func companionWorkspace(
+	attestation *CompanionAttestation,
+) workspaceidentity.Scope {
+	if attestation == nil {
+		return workspaceidentity.Scope{}
+	}
+	return attestation.Workspace
 }
 
 func classifyEnvironmentSelectionError(err error) error {

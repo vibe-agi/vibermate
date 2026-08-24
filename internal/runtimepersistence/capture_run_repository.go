@@ -10,6 +10,7 @@ import (
 
 	"github.com/vibe-agi/vibermate/internal/capturerun"
 	"github.com/vibe-agi/vibermate/internal/clientadapter"
+	"github.com/vibe-agi/vibermate/internal/runtimeuser"
 	"github.com/vibe-agi/vibermate/internal/workspaceidentity"
 )
 
@@ -20,6 +21,9 @@ const captureRunColumns = `
 	cwd,
 	canonical_executable_path,
 	local_user_label,
+	runtime_user_id,
+	login_session_id,
+	device_name,
 	machine_id,
 	machine_registration_revision,
 	workspace_id,
@@ -83,6 +87,9 @@ func (repository *captureRunRepository) Create(
 		     cwd,
 		     canonical_executable_path,
 		     local_user_label,
+		     runtime_user_id,
+		     login_session_id,
+		     device_name,
 		     machine_id,
 		     machine_registration_revision,
 		     workspace_id,
@@ -105,13 +112,16 @@ func (repository *captureRunRepository) Create(
 		     expires_at_unix_ms,
 		     updated_at_unix_ms
 		 )
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		record.ID,
 		record.ProxyCapabilityHash[:],
 		record.ControlCapabilityHash[:],
 		record.CWD,
 		record.CanonicalExecutablePath,
 		record.LocalUserLabel,
+		nullableText(string(record.RuntimeUserID)),
+		nullableText(string(record.LoginSessionID)),
+		nullableText(record.DeviceName),
 		record.MachineID.String(),
 		int64(record.MachineRegistrationRevision),
 		record.WorkspaceID.String(),
@@ -433,6 +443,8 @@ func scanCaptureRun(scanner captureRunScanner) (capturerun.DurableRecord, error)
 		machineID, workspaceID              string
 		workspaceLabel, workspaceEvidence   string
 		machineRevision, derivationRevision int64
+		runtimeUserID, loginSessionID       sql.NullString
+		deviceName                          sql.NullString
 	)
 	if err := scanner.Scan(
 		&record.ID,
@@ -441,6 +453,9 @@ func scanCaptureRun(scanner captureRunScanner) (capturerun.DurableRecord, error)
 		&record.CWD,
 		&record.CanonicalExecutablePath,
 		&record.LocalUserLabel,
+		&runtimeUserID,
+		&loginSessionID,
+		&deviceName,
 		&machineID,
 		&machineRevision,
 		&workspaceID,
@@ -475,6 +490,17 @@ func scanCaptureRun(scanner captureRunScanner) (capturerun.DurableRecord, error)
 	copy(record.ControlCapabilityHash[:], controlHash)
 	record.Observation = capturerun.Observation(observation)
 	record.Recognition = clientadapter.Recognition(recognition)
+	if runtimeUserID.Valid != loginSessionID.Valid ||
+		runtimeUserID.Valid != deviceName.Valid {
+		return capturerun.DurableRecord{}, errors.New(
+			"CaptureRun Runtime User attribution is incomplete",
+		)
+	}
+	if runtimeUserID.Valid {
+		record.RuntimeUserID = runtimeuser.UserID(runtimeUserID.String)
+		record.LoginSessionID = runtimeuser.LoginSessionID(loginSessionID.String)
+		record.DeviceName = deviceName.String
+	}
 	if machineRevision < 0 || derivationRevision < 0 {
 		return capturerun.DurableRecord{}, errors.New(
 			"CaptureRun workspace identity revision is invalid",
@@ -543,6 +569,13 @@ func scanCaptureRun(scanner captureRunScanner) (capturerun.DurableRecord, error)
 		return capturerun.DurableRecord{}, err
 	}
 	return record, nil
+}
+
+func nullableText(value string) any {
+	if value == "" {
+		return nil
+	}
+	return value
 }
 
 func captureRunAdapterColumns(

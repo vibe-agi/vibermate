@@ -75,6 +75,37 @@ func TestExchangeActivityRequiresFrozenExecutionAndSourceRelations(
 	}
 }
 
+func TestOriginalDestinationExchangeActivityHasNoSyntheticRouteOrAccount(
+	t *testing.T,
+) {
+	t.Parallel()
+
+	event := validExchangeEvent(t)
+	event.RouteID = ""
+	event.RouteRevision = 0
+	event.AccountID = ""
+	event.AccountRevision = 0
+	event.CredentialEpoch = 0
+
+	if err := event.Validate(); err != nil {
+		t.Fatalf("Original Destination Exchange was rejected: %v", err)
+	}
+}
+
+func TestExchangeActivityCannotAttachAnAccountWithoutAnUpstreamRoute(
+	t *testing.T,
+) {
+	t.Parallel()
+
+	event := validExchangeEvent(t)
+	event.RouteID = ""
+	event.RouteRevision = 0
+
+	if err := event.Validate(); err == nil {
+		t.Fatal("Account evidence without an Upstream Route was accepted")
+	}
+}
+
 func TestExchangeExecutionEvidenceCannotLeakOntoAnotherActivityKind(
 	t *testing.T,
 ) {

@@ -2,7 +2,6 @@ package desktopcontrol
 
 import (
 	"bytes"
-	"crypto/sha256"
 	"encoding/base64"
 	"encoding/json"
 	"errors"
@@ -84,18 +83,6 @@ type CaptureAssignmentResponse struct {
 	Revision      captureassignment.Revision `json:"revision"`
 	Source        captureassignment.Source   `json:"source"`
 	UpdatedAt     time.Time                  `json:"updatedAt"`
-}
-
-type CaptureAssignmentUpdate struct {
-	EnvironmentID environment.EnvironmentID `json:"environmentId"`
-}
-
-type CaptureAssignmentSwitchResponse struct {
-	Assignment        CaptureAssignmentResponse  `json:"assignment"`
-	Boundary          captureassignment.Boundary `json:"boundary"`
-	ClosedConnections []string                   `json:"closedConnections"`
-	Applied           bool                       `json:"applied"`
-	ReasonCode        ReasonCode                 `json:"reasonCode,omitempty"`
 }
 
 func captureRunResponseOf(view capturerun.View) CaptureResponse {
@@ -385,57 +372,6 @@ func (handler *Handler) getCaptureEnvironmentAssignment(writer http.ResponseWrit
 	writeJSON(writer, http.StatusOK, assignmentResponseOf(assignment))
 }
 
-func (handler *Handler) updateCaptureEnvironmentAssignment(writer http.ResponseWriter, request *http.Request) {
-	expected, key, err := mutationHeaders(request)
-	body, bodyErr := readJSONBody(request)
-	if err != nil || bodyErr != nil || expected == 0 || expected >= uint64(captureassignment.MaxRevision) {
-		writeProblem(writer, http.StatusUnprocessableEntity, ReasonInvalidRequest)
-		return
-	}
-	reference, referenceErr := captureidentity.ParseKey(request.PathValue("captureKey"))
-	var input CaptureAssignmentUpdate
-	if referenceErr != nil || decodeStrictJSON(body, &input) != nil {
-		writeProblem(writer, http.StatusUnprocessableEntity, ReasonInvalidRequest)
-		return
-	}
-	target, targetErr := environment.NewEnvironmentID(input.EnvironmentID.String())
-	if targetErr != nil {
-		writeProblem(writer, http.StatusUnprocessableEntity, ReasonInvalidRequest)
-		return
-	}
-	fingerprint := sha256.Sum256(bytes.Join([][]byte{
-		[]byte(request.Method), []byte(request.URL.Path), []byte(strconv.FormatUint(expected, 10)), body,
-	}, []byte{0}))
-	response, err := handler.idempotent.execute(request.Context(), key, fingerprint, func() cachedResponse {
-		result, switchErr := handler.assignments.Switch(request.Context(), captureassignment.SwitchCommand{
-			Capture: reference, ExpectedRevision: captureassignment.Revision(expected),
-			TargetEnvironmentID: target, Source: captureassignment.SourceOperatorSwitch,
-		})
-		if errors.Is(switchErr, captureassignment.ErrLaunchRestartRequired) {
-			return jsonResponse(http.StatusOK, CaptureAssignmentSwitchResponse{
-				Assignment: assignmentResponseOf(result.Assignment), Boundary: result.Boundary,
-				ClosedConnections: []string{}, Applied: false, ReasonCode: ReasonCaptureRestartRequired,
-			})
-		}
-		if switchErr != nil {
-			return problemResponse(classifyAssignmentError(switchErr))
-		}
-		closed := result.ClosedConnections
-		if closed == nil {
-			closed = []string{}
-		}
-		return jsonResponse(http.StatusOK, CaptureAssignmentSwitchResponse{
-			Assignment: assignmentResponseOf(result.Assignment), Boundary: result.Boundary,
-			ClosedConnections: closed, Applied: true,
-		})
-	})
-	if err != nil {
-		writeProblem(writer, http.StatusConflict, ReasonRevisionConflict)
-		return
-	}
-	writeCached(writer, response)
-}
-
 func writeCaptureReadError(writer http.ResponseWriter, err error) {
 	switch {
 	case errors.Is(err, capturerun.ErrNotFound), errors.Is(err, manualcapture.ErrNotFound):
@@ -455,8 +391,6 @@ func classifyAssignmentError(err error) problemSpec {
 		return problemSpec{status: http.StatusUnprocessableEntity, reason: ReasonInvalidRequest}
 	case errors.Is(err, captureassignment.ErrAssignmentConflict):
 		return problemSpec{status: http.StatusConflict, reason: ReasonRevisionConflict}
-	case errors.Is(err, captureassignment.ErrLaunchRestartRequired):
-		return problemSpec{status: http.StatusConflict, reason: ReasonCaptureRestartRequired}
 	case errors.Is(err, environment.ErrEnvironmentNotFound):
 		return problemSpec{status: http.StatusNotFound, reason: ReasonEnvironmentNotFound}
 	case errors.Is(err, environment.ErrEnvironmentDisabled):

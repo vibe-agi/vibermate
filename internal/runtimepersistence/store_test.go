@@ -75,6 +75,70 @@ func TestSQLiteStoreReopensWithContinuousSchemaRevision(t *testing.T) {
 	}
 }
 
+func TestSQLiteSharedOriginMigrationPreservesEndpointAccountBindings(t *testing.T) {
+	t.Parallel()
+	databasePath := filepath.Join(t.TempDir(), "runtime.db")
+	seedRuntimeSchemaBeforeSharedOrigins(t, databasePath)
+
+	store := openTestStore(t, databasePath)
+	defer func() {
+		if err := store.Shutdown(context.Background()); err != nil {
+			t.Errorf("close migrated store: %v", err)
+		}
+	}()
+
+	var endpointID string
+	if err := store.database.QueryRowContext(
+		context.Background(),
+		`SELECT upstream_endpoint_id
+		 FROM provider_accounts
+		 WHERE account_id = 'account.shared.openai'`,
+	).Scan(&endpointID); err != nil {
+		t.Fatalf("read migrated Account binding: %v", err)
+	}
+	if endpointID != "target.shared.openai" {
+		t.Fatalf("migrated Account endpoint = %q", endpointID)
+	}
+
+	if _, err := store.database.ExecContext(
+		context.Background(),
+		`INSERT INTO upstream_endpoints(
+		   endpoint_id, display_name, origin, realm_id,
+		   backend_protocols_json, capabilities_json, drivers_json,
+		   state, revision, created_at_unix_ms, updated_at_unix_ms
+		 ) VALUES (
+		   'target.shared.anthropic', 'Shared Anthropic',
+		   'http://127.0.0.1:23333', 'anthropic.official',
+		   CAST('["anthropic_messages"]' AS BLOB),
+		   CAST('["messages","streaming","tool_calls"]' AS BLOB),
+		   CAST('["anthropic_api_key","static_header"]' AS BLOB),
+		   'active', 1, 1787410329000, 1787410329000
+		 )`,
+	); err != nil {
+		t.Fatalf("insert second explicit protocol at shared origin: %v", err)
+	}
+
+	rows, err := store.database.QueryContext(context.Background(), `PRAGMA foreign_key_check`)
+	if err != nil {
+		t.Fatalf("check migrated foreign keys: %v", err)
+	}
+	defer func() { _ = rows.Close() }()
+	if rows.Next() {
+		var table, parent string
+		var rowID, foreignKeyID int64
+		if err := rows.Scan(&table, &rowID, &parent, &foreignKeyID); err != nil {
+			t.Fatalf("read foreign-key violation: %v", err)
+		}
+		t.Fatalf(
+			"foreign-key violation table=%s row=%d parent=%s key=%d",
+			table,
+			rowID,
+			parent,
+			foreignKeyID,
+		)
+	}
+}
+
 func TestSQLiteStoreRejectsFutureGooseHistoryBeforeMigrations(t *testing.T) {
 	t.Parallel()
 
@@ -473,6 +537,82 @@ func openTestStore(t testing.TB, databasePath string) *Store {
 		t.Fatalf("open store: %v", err)
 	}
 	return store
+}
+
+func seedRuntimeSchemaBeforeSharedOrigins(t *testing.T, databasePath string) {
+	t.Helper()
+	const previousRevision = 3
+	previous := fstest.MapFS{}
+	for _, name := range []string{
+		"00001_runtime_schema.sql",
+		"00002_exchange_agent_identity.sql",
+		"00003_protocol_agent_identity.sql",
+	} {
+		payload, err := migrationFiles.ReadFile("migrations/" + name)
+		if err != nil {
+			t.Fatalf("read previous migration %s: %v", name, err)
+		}
+		previous[name] = &fstest.MapFile{Data: payload}
+	}
+	digest, err := migrationSourceDigest(previous)
+	if err != nil {
+		t.Fatalf("digest previous migration set: %v", err)
+	}
+	database := sql.OpenDB(newSQLiteConnector(databasePath, DefaultBusyTimeout))
+	database.SetMaxOpenConns(1)
+	database.SetMaxIdleConns(1)
+	provider, err := goose.NewProvider(
+		goose.DialectSQLite3,
+		database,
+		previous,
+		goose.WithDisableGlobalRegistry(true),
+	)
+	if err != nil {
+		_ = database.Close()
+		t.Fatalf("construct previous migration provider: %v", err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+	if _, err := provider.Up(ctx); err != nil {
+		_ = database.Close()
+		t.Fatalf("apply previous migrations: %v", err)
+	}
+	version, err := provider.GetDBVersion(ctx)
+	if err != nil || version != previousRevision {
+		_ = database.Close()
+		t.Fatalf("previous schema revision = %d, err=%v", version, err)
+	}
+	if _, err := database.ExecContext(
+		ctx,
+		`UPDATE runtime_metadata SET schema_source_sha256 = ? WHERE singleton = 1;
+		 INSERT INTO upstream_endpoints(
+		   endpoint_id, display_name, origin, realm_id,
+		   backend_protocols_json, capabilities_json, drivers_json,
+		   state, revision, created_at_unix_ms, updated_at_unix_ms
+		 ) VALUES (
+		   'target.shared.openai', 'Shared OpenAI',
+		   'http://127.0.0.1:23333', 'openai.platform',
+		   CAST('["openai_responses","openai_chat"]' AS BLOB),
+		   CAST('["messages","streaming","tool_calls"]' AS BLOB),
+		   CAST('["static_header"]' AS BLOB),
+		   'active', 1, 1787410329000, 1787410329000
+		 );
+		 INSERT INTO provider_accounts(
+		   account_id, display_name, upstream_endpoint_id, realm_id, driver_ref,
+		   secret_reference, state, revision, created_at_unix_ms, updated_at_unix_ms
+		 ) VALUES (
+		   'account.shared.openai', 'Shared Account', 'target.shared.openai',
+		   'openai.platform', 'static_header', 'secret://migration/shared-account',
+		   'active', 1, 1787410329000, 1787410329000
+		 )`,
+		digest,
+	); err != nil {
+		_ = database.Close()
+		t.Fatalf("seed previous Endpoint and Account: %v", err)
+	}
+	if err := database.Close(); err != nil {
+		t.Fatalf("close previous migration fixture: %v", err)
+	}
 }
 
 func embeddedSchemaRevisionForTest(t *testing.T) int64 {

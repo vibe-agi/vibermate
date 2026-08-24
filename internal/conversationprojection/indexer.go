@@ -327,7 +327,7 @@ func (indexer *Indexer) project(
 	if record.Conversation != nil && *record.Conversation == ref {
 		return nil
 	}
-	return indexer.writer.ReprojectTerminalConversation(ctx, record.SubjectID, ref)
+	return indexer.writer.ReprojectConversation(ctx, record.SubjectID, ref)
 }
 
 func clientKind(run capturerun.View) string {

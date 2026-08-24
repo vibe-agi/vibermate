@@ -67,7 +67,33 @@ func (codec messagesClientCodec) EncodeSourceResponse(
 		return nil, protocolcore.TranslationReport{},
 			errors.New("Anthropic-compatible response body is invalid")
 	}
-	return bytes.Clone(sourceBody), protocolcore.TranslationReport{}, nil
+	if request.RequestedModel == request.EffectiveModel {
+		return bytes.Clone(sourceBody), protocolcore.TranslationReport{}, nil
+	}
+	var root map[string]json.RawMessage
+	if err := json.Unmarshal(sourceBody, &root); err != nil || root == nil {
+		return nil, protocolcore.TranslationReport{},
+			errors.New("Anthropic-compatible response body is invalid")
+	}
+	var reportedModel string
+	if err := json.Unmarshal(root["model"], &reportedModel); err != nil ||
+		reportedModel == "" {
+		return nil, protocolcore.TranslationReport{},
+			errors.New("Anthropic-compatible response model is invalid")
+	}
+	if reportedModel == request.RequestedModel {
+		return bytes.Clone(sourceBody), protocolcore.TranslationReport{}, nil
+	}
+	model, err := json.Marshal(request.RequestedModel)
+	if err != nil {
+		return nil, protocolcore.TranslationReport{}, err
+	}
+	root["model"] = model
+	encoded, err := json.Marshal(root)
+	if err != nil {
+		return nil, protocolcore.TranslationReport{}, err
+	}
+	return encoded, protocolcore.TranslationReport{}, nil
 }
 
 type messagesBackendCodec struct {

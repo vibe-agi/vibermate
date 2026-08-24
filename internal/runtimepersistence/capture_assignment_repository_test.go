@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"path/filepath"
-	"sync"
 	"testing"
 	"time"
 
@@ -34,11 +33,6 @@ func TestCaptureAssignmentRepositoryCASListAndReopen(t *testing.T) {
 	if err != nil || !exists || current != created {
 		t.Fatalf("load after conflict = %+v, exists=%t, err=%v", current, exists, err)
 	}
-	updated := captureAssignmentFixture(capture, "personal", 2, captureassignment.SourceOperatorSwitch)
-	result, err = repository.Write(context.Background(), 1, updated)
-	if err != nil || result.Outcome != captureassignment.CommitOutcomeCommitted || result.Assignment != updated {
-		t.Fatalf("update = %+v, %v", result, err)
-	}
 	manual := captureAssignmentFixture(
 		captureAssignmentReference(t, captureidentity.KindManualCapture, "manual.one"),
 		"personal", 1, captureassignment.SourceManualCreate,
@@ -46,9 +40,13 @@ func TestCaptureAssignmentRepositoryCASListAndReopen(t *testing.T) {
 	if result, err = repository.Write(context.Background(), 0, manual); err != nil || result.Outcome != captureassignment.CommitOutcomeCommitted {
 		t.Fatalf("manual create = %+v, %v", result, err)
 	}
-	listed, err := repository.ListByEnvironment(context.Background(), "personal", 10)
-	if err != nil || len(listed) != 2 || listed[0].Capture.Key() >= listed[1].Capture.Key() {
-		t.Fatalf("listed = %+v, %v", listed, err)
+	listed, err := repository.ListByEnvironment(context.Background(), "work", 10)
+	if err != nil || len(listed) != 1 || listed[0] != created {
+		t.Fatalf("work assignments = %+v, %v", listed, err)
+	}
+	listed, err = repository.ListByEnvironment(context.Background(), "personal", 10)
+	if err != nil || len(listed) != 1 || listed[0] != manual {
+		t.Fatalf("personal assignments = %+v, %v", listed, err)
 	}
 
 	if err := store.Shutdown(context.Background()); err != nil {
@@ -57,60 +55,8 @@ func TestCaptureAssignmentRepositoryCASListAndReopen(t *testing.T) {
 	reopened := openTestStore(t, databasePath)
 	defer shutdownTestStore(t, reopened)
 	recovered, exists, err := reopened.CaptureAssignmentRepository().Load(context.Background(), capture)
-	if err != nil || !exists || recovered != updated {
+	if err != nil || !exists || recovered != created {
 		t.Fatalf("recovered = %+v, exists=%t, err=%v", recovered, exists, err)
-	}
-}
-
-func TestCaptureAssignmentRepositoryConcurrentCASHasOneWinner(t *testing.T) {
-	t.Parallel()
-	store := openTestStore(t, filepath.Join(t.TempDir(), "runtime.db"))
-	defer shutdownTestStore(t, store)
-	repository := store.CaptureAssignmentRepository()
-	capture := captureAssignmentReference(t, captureidentity.KindManagedRun, "run.concurrent")
-	created := captureAssignmentFixture(capture, "work", 1, captureassignment.SourceLaunch)
-	if result, err := repository.Write(context.Background(), 0, created); err != nil || result.Outcome != captureassignment.CommitOutcomeCommitted {
-		t.Fatalf("create = %+v, %v", result, err)
-	}
-
-	start := make(chan struct{})
-	results := make(chan captureassignment.CommitResult, 2)
-	errorsFound := make(chan error, 2)
-	var group sync.WaitGroup
-	for _, environmentID := range []environment.EnvironmentID{"personal", "team"} {
-		candidate := captureAssignmentFixture(capture, environmentID, 2, captureassignment.SourceOperatorSwitch)
-		group.Add(1)
-		go func() {
-			defer group.Done()
-			<-start
-			result, err := repository.Write(context.Background(), 1, candidate)
-			results <- result
-			errorsFound <- err
-		}()
-	}
-	close(start)
-	group.Wait()
-	close(results)
-	close(errorsFound)
-	committed := 0
-	conflicted := 0
-	for result := range results {
-		switch result.Outcome {
-		case captureassignment.CommitOutcomeCommitted:
-			committed++
-		case captureassignment.CommitOutcomeConflict:
-			conflicted++
-		default:
-			t.Fatalf("unexpected CAS result: %+v", result)
-		}
-	}
-	for err := range errorsFound {
-		if err != nil {
-			t.Fatalf("CAS error = %v", err)
-		}
-	}
-	if committed != 1 || conflicted != 1 {
-		t.Fatalf("committed=%d conflicted=%d", committed, conflicted)
 	}
 }
 
@@ -185,14 +131,10 @@ func captureAssignmentFixture(
 	revision captureassignment.Revision,
 	source captureassignment.Source,
 ) captureassignment.Assignment {
-	initialEnvironmentID := environmentID
-	if revision > 1 {
-		initialEnvironmentID = "work"
-	}
 	var initialDigest environment.CandidateDigest
 	initialDigest[0] = 1
 	launchAuthority, err := environment.NewLaunchAuthorityBoundaryFromScopes(
-		initialEnvironmentID, 1, initialDigest,
+		environmentID, 1, initialDigest,
 		[]string{"api.example:443", "relay.example:8443"},
 		[]string{"relay.example:8443"},
 	)

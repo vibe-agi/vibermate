@@ -66,8 +66,8 @@ func TestProductionEnvironmentCompilerFreezesExactResponsesOperation(t *testing.
 			t.Fatalf("operation ID = %q, want %q", got, operationID)
 		}
 		if plan.Operation().PathMatch() != protocolspec.ClientOperationPathExact ||
-			plan.Route().CodecPlan().ClientDialect() != protocolspec.DialectOpenAIResponses ||
-			plan.Route().CodecPlan().ProviderDialect() != protocolspec.DialectOpenAIResponses {
+			plan.CodecPlan().ClientDialect() != protocolspec.DialectOpenAIResponses ||
+			plan.CodecPlan().ProviderDialect() != protocolspec.DialectOpenAIResponses {
 			t.Fatalf("compiled Responses plan = %+v", plan)
 		}
 	}
@@ -90,7 +90,8 @@ func TestProductRuntimeStartsWithSystemTransparentAndShutsDown(t *testing.T) {
 		t.Fatalf("offline-hold status = %+v", status.OfflineHold)
 	}
 	system, err := runtime.EnvironmentResolver().Resolve(environment.SystemTransparentID)
-	if err != nil || !system.SystemOwned() || !system.BlindOnly() {
+	if err != nil || !system.SystemOwned() || system.BlindOnly() ||
+		system.ContentRecording().Mode != environment.ContentRecordingFull {
 		t.Fatalf("system_transparent snapshot = %+v, %v", system, err)
 	}
 	if runtime.Environments() == nil || runtime.CaptureAssignments() == nil ||
@@ -431,15 +432,6 @@ func passthroughEnvironment(t *testing.T, id, rawOrigin string, protocol environ
 	if err != nil {
 		t.Fatal(err)
 	}
-	providerOrigin, err := originidentity.ParseProviderOrigin(rawOrigin)
-	if err != nil {
-		t.Fatal(err)
-	}
-	capabilities := []protocolspec.ProviderCapability{
-		protocolspec.ProviderCapabilityMessages,
-		protocolspec.ProviderCapabilityStreaming,
-		protocolspec.ProviderCapabilityToolCalls,
-	}
 	return environment.Environment{
 		ID: environment.EnvironmentID(id), Name: "Work", State: environment.StateActive, Revision: 1,
 		ContentRecording: environment.DefaultContentRecordingPolicy(),
@@ -448,22 +440,7 @@ func passthroughEnvironment(t *testing.T, id, rawOrigin string, protocol environ
 			ProtocolPlans: []environment.ClientProtocolPlan{{
 				ID: environment.ClientProtocolPlanID("plan." + id), Revision: 1, ClientProtocol: protocol,
 				ClientAdapterPolicy: environment.ClientAdapterPolicy{ID: "adapter." + id, Revision: 1},
-				Mode:                environment.PlanModeOriginalPassthrough,
-				UpstreamPlan: environment.UpstreamPlan{
-					DefaultRouteID: environment.UpstreamRouteID("route." + id),
-					RouteSet:       environment.RouteSet{ID: "routes." + id, Revision: 1, CandidateRouteIDs: []environment.UpstreamRouteID{"route." + environment.UpstreamRouteID(id)}},
-					Routes: []environment.UpstreamRoute{{
-						ID: "route." + environment.UpstreamRouteID(id), Revision: 1,
-						ProviderTarget: environment.ProviderTarget{
-							ID: "target." + id, Revision: 1, Origin: providerOrigin,
-							RealmID: "realm." + id, Capabilities: capabilities,
-						},
-						BackendProtocol: string(protocol),
-						AccountPolicy:   environment.RouteAccountPolicy{Revision: 1, Mode: environment.AccountModeClientPassthrough, FailoverPolicy: environment.FailoverOff},
-						ModelPolicy:     environment.ModelPolicy{Revision: 1, Mode: "preserve"},
-						WireProfileRef:  wireprofile.UpstreamWireProfileFollowClientValue,
-					}},
-				},
+				Destination:         environment.DestinationPlan{Kind: environment.DestinationKindOriginal},
 			}},
 		}},
 	}

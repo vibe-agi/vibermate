@@ -104,43 +104,12 @@ func (handler *Handler) deleteEnvironment(
 		return
 	}
 	handler.respondToDeletion(writer, request, key, expected, func() cachedResponse {
-		result, err := handler.environments.Delete(
-			request.Context(), id, handler.workspaceDefaultHolders,
-		)
+		result, err := handler.environments.Delete(request.Context(), id)
 		if err != nil {
 			return problemResponse(classifyEnvironmentError(err))
 		}
 		return jsonResponse(http.StatusOK, deletionResponseOf(result, nil))
 	})
-}
-
-// workspaceDefaultHolders names the workspaces whose next run would be left
-// pointing at an Environment that no longer exists.
-func (handler *Handler) workspaceDefaultHolders(
-	ctx context.Context,
-	id environment.EnvironmentID,
-) ([]resourcedeletion.Holder, error) {
-	if handler.workspaceDefaults == nil {
-		// The holder cannot be consulted, so the delete must not proceed as if
-		// there were none.
-		return nil, ErrHolderLookupUnavailable
-	}
-	bindings, err := handler.workspaceDefaults.ListByEnvironment(ctx, id)
-	if err != nil {
-		return nil, err
-	}
-	holders := make([]resourcedeletion.Holder, 0, len(bindings))
-	for _, binding := range bindings {
-		machine := binding.Key.MachineID.String()
-		workspace := binding.Key.WorkspaceID.String()
-		holders = append(holders, resourcedeletion.Holder{
-			Kind:   resourcedeletion.KindWorkspaceDefault,
-			ID:     machine + "/" + workspace,
-			Label:  workspace,
-			Detail: machine,
-		})
-	}
-	return holders, nil
 }
 
 func (handler *Handler) deleteUpstreamEndpoint(
@@ -232,7 +201,8 @@ func (handler *Handler) deleteCapture(
 	writer http.ResponseWriter,
 	request *http.Request,
 ) {
-	if handler.archive == nil || handler.captureRuns == nil || handler.manualCaptures == nil {
+	if handler.archive == nil || handler.archiveBarrier == nil ||
+		handler.captureRuns == nil || handler.manualCaptures == nil {
 		writeProblem(writer, http.StatusServiceUnavailable, ReasonRuntimeUnavailable)
 		return
 	}
@@ -291,6 +261,14 @@ func (handler *Handler) clearArchive(
 		return
 	}
 	handler.respondToDeletion(writer, request, key, expected, func() cachedResponse {
+		release, err := handler.archiveBarrier.BeginClear(request.Context())
+		if err != nil {
+			return problemResponse(problemSpec{
+				status: http.StatusServiceUnavailable, reason: ReasonRuntimeUnavailable,
+			})
+		}
+		defer release()
+
 		holders, err := handler.runningCaptureHolders(
 			request.Context(), captureidentity.Reference{},
 		)

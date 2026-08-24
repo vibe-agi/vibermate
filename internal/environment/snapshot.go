@@ -1,6 +1,7 @@
 package environment
 
 import (
+	"bytes"
 	"crypto/sha256"
 	"encoding/hex"
 	"errors"
@@ -48,7 +49,17 @@ type ConnectionBinding struct {
 }
 
 func (compiler Compiler) Compile(input Environment) (EnvironmentSnapshot, error) {
-	normalized, err := normalize(input)
+	return compiler.compile(input, false)
+}
+
+func (compiler Compiler) compile(input Environment, system bool) (EnvironmentSnapshot, error) {
+	var normalized Environment
+	var err error
+	if system {
+		normalized, err = normalizeSystem(input)
+	} else {
+		normalized, err = normalize(input)
+	}
 	if err != nil {
 		return EnvironmentSnapshot{}, err
 	}
@@ -59,7 +70,12 @@ func (compiler Compiler) Compile(input Environment) (EnvironmentSnapshot, error)
 	if err != nil {
 		return EnvironmentSnapshot{}, err
 	}
-	encoded, err := CanonicalJSON(normalized)
+	var encoded []byte
+	if system {
+		encoded, err = canonicalSystemJSON(normalized)
+	} else {
+		encoded, err = CanonicalJSON(normalized)
+	}
 	if err != nil {
 		return EnvironmentSnapshot{}, err
 	}
@@ -68,10 +84,70 @@ func (compiler Compiler) Compile(input Environment) (EnvironmentSnapshot, error)
 		byOrigin:        make(map[string]int, len(normalized.ClientEndpoints)),
 		compiledOrigins: compiledOrigins, compiled: compiled,
 	}
+	snapshot.system = system
 	for index, endpoint := range normalized.ClientEndpoints {
 		snapshot.byOrigin[endpoint.ClientOrigin.String()] = index
 	}
 	return snapshot, nil
+}
+
+// CompileSystemTransparent builds Core's capture-by-default Environment. It
+// intercepts only the explicit Agent API entries ViberMate can parse and sends
+// each request back to its original destination without changing the client's
+// authentication or model. Every unrelated destination remains a blind
+// tunnel.
+func (compiler Compiler) CompileSystemTransparent() (EnvironmentSnapshot, error) {
+	definition, err := systemTransparentDefinition()
+	if err != nil {
+		return EnvironmentSnapshot{}, err
+	}
+	return compiler.compile(definition, true)
+}
+
+func systemTransparentDefinition() (Environment, error) {
+	type entry struct {
+		endpointID string
+		planID     string
+		origin     string
+		protocol   ClientProtocol
+	}
+	entries := []entry{
+		{
+			endpointID: "endpoint.system.anthropic", planID: "plan.system.anthropic.messages",
+			origin: "https://api.anthropic.com", protocol: ClientProtocolAnthropicMessages,
+		},
+		{
+			endpointID: "endpoint.system.openai", planID: "plan.system.openai.responses",
+			origin: "https://api.openai.com", protocol: ClientProtocolOpenAIResponses,
+		},
+		{
+			endpointID: "endpoint.system.chatgpt", planID: "plan.system.chatgpt.responses",
+			origin: "https://chatgpt.com", protocol: ClientProtocolOpenAIResponses,
+		},
+	}
+	endpoints := make([]ClientEndpoint, 0, len(entries))
+	for _, entry := range entries {
+		origin, err := originidentity.ParseClientOrigin(entry.origin)
+		if err != nil {
+			return Environment{}, fmt.Errorf("%w: system client origin", err)
+		}
+		endpoints = append(endpoints, ClientEndpoint{
+			ID: ClientEndpointID(entry.endpointID), Revision: 1, ClientOrigin: origin,
+			ProtocolPlans: []ClientProtocolPlan{{
+				ID: ClientProtocolPlanID(entry.planID), Revision: 1,
+				ClientProtocol: entry.protocol,
+				ClientAdapterPolicy: ClientAdapterPolicy{
+					ID: "adapter." + entry.planID, Revision: 1,
+				},
+				Destination: DestinationPlan{Kind: DestinationKindOriginal},
+			}},
+		})
+	}
+	return Environment{
+		ID: SystemTransparentID, Name: "System Transparent", State: StateActive,
+		Revision: 1, ClientEndpoints: endpoints,
+		ContentRecording: DefaultContentRecordingPolicy(),
+	}, nil
 }
 
 func digestBytes(encoded []byte) CandidateDigest {
@@ -83,28 +159,15 @@ func sha256Sum(encoded []byte) [32]byte {
 	return sha256.Sum256(encoded)
 }
 
-func SystemTransparentSnapshot() EnvironmentSnapshot {
-	digest := sha256.Sum256([]byte("vibermate/environment/system_transparent/v1"))
-	return EnvironmentSnapshot{
-		aggregate: Environment{
-			ID:               SystemTransparentID,
-			Name:             "System Transparent",
-			State:            StateActive,
-			Revision:         1,
-			ContentRecording: ContentRecordingPolicy{Mode: ContentRecordingOff},
-		},
-		digest:   CandidateDigest(digest),
-		byOrigin: make(map[string]int), compiledOrigins: make(map[string]int),
-		system: true,
-	}
-}
-
 func (snapshot EnvironmentSnapshot) ID() EnvironmentID       { return snapshot.aggregate.ID }
 func (snapshot EnvironmentSnapshot) Name() string            { return snapshot.aggregate.Name }
 func (snapshot EnvironmentSnapshot) State() State            { return snapshot.aggregate.State }
 func (snapshot EnvironmentSnapshot) Revision() Revision      { return snapshot.aggregate.Revision }
 func (snapshot EnvironmentSnapshot) Digest() CandidateDigest { return snapshot.digest }
 func (snapshot EnvironmentSnapshot) SystemOwned() bool       { return snapshot.system }
+func (snapshot EnvironmentSnapshot) ContentRecording() ContentRecordingPolicy {
+	return snapshot.aggregate.ContentRecording
+}
 func (snapshot EnvironmentSnapshot) BlindOnly() bool {
 	return len(snapshot.aggregate.ClientEndpoints) == 0
 }
@@ -206,16 +269,35 @@ func (snapshot EnvironmentSnapshot) ResolveRequest(
 	if len(matches) != 1 {
 		return RequestPlan{}, ErrClientProtocolAmbiguous
 	}
-	route, err := matches[0].protocol.routeSet.DefaultRoute()
-	if err != nil {
-		return RequestPlan{}, err
+	protocol := matches[0].protocol
+	codec := protocol.originalCodec
+	wireProfile := protocol.originalWireProfile
+	var upstreamRoute *CompiledRoutePlan
+	if protocol.destinationKind == DestinationKindUpstream {
+		if protocol.upstreamRouteSet == nil {
+			return RequestPlan{}, ErrInvalidEnvironment
+		}
+		route, err := protocol.upstreamRouteSet.DefaultRoute()
+		if err != nil {
+			return RequestPlan{}, err
+		}
+		upstreamRoute = &route
+		codec = route.codec
+		wireProfile = route.wireProfile
 	}
-	variant, exists := route.wireProfile.Variant(facts.DownstreamProtocol)
+	if !codec.Valid() || wireProfile.Ref().String() == "" {
+		return RequestPlan{}, ErrInvalidEnvironment
+	}
+	variant, exists := wireProfile.Variant(facts.DownstreamProtocol)
 	if !exists {
+		routeID := UpstreamRouteID("")
+		if upstreamRoute != nil {
+			routeID = upstreamRoute.ID()
+		}
 		return RequestPlan{}, fmt.Errorf(
 			"%w: routeId=%q downstreamProtocol=%q",
 			wireprofile.ErrInvalidProfile,
-			route.ID(),
+			routeID,
 			facts.DownstreamProtocol,
 		)
 	}
@@ -225,8 +307,13 @@ func (snapshot EnvironmentSnapshot) ResolveRequest(
 		contentRecording:  snapshot.aggregate.ContentRecording,
 		policySet:         snapshot.aggregate.EffectivePolicySet(),
 		endpoint:          endpoint,
-		protocol:          cloneCompiledProtocol(matches[0].protocol), operation: matches[0].operation,
-		route: route, wireVariant: variant,
+		protocol:          cloneCompiledProtocol(protocol),
+		operation:         matches[0].operation,
+		destinationKind:   protocol.destinationKind,
+		codecPlan:         codec,
+		wireProfile:       wireProfile,
+		upstreamRoute:     upstreamRoute,
+		wireVariant:       variant,
 	}, nil
 }
 
@@ -259,37 +346,6 @@ func (endpoint ClientEndpointSnapshot) ProtocolPlans() []ClientProtocolPlan {
 		result[index] = cloneProtocolPlan(plan)
 	}
 	return result
-}
-
-// ClassifyConnectionTransition compares only downstream interception and
-// codec compatibility. Routes, accounts, plugins, budgets, and egress can hot
-// switch at the next request because each request freezes those values anew.
-func ClassifyConnectionTransition(current, target EnvironmentSnapshot, binding ConnectionBinding) (CompatibilityClassification, error) {
-	if err := ValidateConnectionBinding(current, binding); err != nil {
-		return CompatibilityReconnectRequired, err
-	}
-	if err := target.validate(); err != nil {
-		return CompatibilityReconnectRequired, err
-	}
-	if target.State() != StateActive {
-		return CompatibilityReconnectRequired, nil
-	}
-	switch binding.Mode {
-	case ConnectionModeBlind:
-		if _, intercepted := target.LookupClientOrigin(binding.ClientOrigin); intercepted {
-			return CompatibilityReconnectRequired, nil
-		}
-		return CompatibilityHotSwitch, nil
-	case ConnectionModeSemantic:
-		newEndpoint, newOK := target.LookupCompiledClientOrigin(binding.ClientOrigin)
-		if !newOK || newEndpoint.ID() != binding.ClientEndpointID ||
-			newEndpoint.CompatibilityDigest() != binding.CompatibilityDigest {
-			return CompatibilityReconnectRequired, nil
-		}
-		return CompatibilityHotSwitch, nil
-	default:
-		return CompatibilityReconnectRequired, ErrInvalidEnvironment
-	}
 }
 
 // ValidateConnectionBinding proves that a recorded downstream connection was
@@ -347,9 +403,14 @@ func validateConnectionBindingShape(binding ConnectionBinding) error {
 
 func (snapshot EnvironmentSnapshot) validate() error {
 	if snapshot.system {
-		expected := SystemTransparentSnapshot()
-		if snapshot.ID() != SystemTransparentID || !snapshot.BlindOnly() || snapshot.State() != StateActive ||
-			snapshot.Revision() != expected.Revision() || snapshot.Digest() != expected.Digest() {
+		expected, definitionErr := systemTransparentDefinition()
+		expected, normalizeErr := normalizeSystem(expected)
+		expectedJSON, expectedErr := canonicalSystemJSON(expected)
+		actualJSON, actualErr := canonicalSystemJSON(snapshot.aggregate)
+		if definitionErr != nil || normalizeErr != nil || expectedErr != nil || actualErr != nil ||
+			!bytes.Equal(actualJSON, expectedJSON) || digestBytes(expectedJSON) != snapshot.digest ||
+			len(snapshot.compiled) != len(snapshot.aggregate.ClientEndpoints) ||
+			len(snapshot.compiledOrigins) != len(snapshot.compiled) {
 			return fmt.Errorf("%w: invalid system_transparent snapshot", ErrInvalidEnvironment)
 		}
 		return nil

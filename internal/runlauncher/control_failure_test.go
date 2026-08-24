@@ -1,8 +1,11 @@
 package runlauncher
 
 import (
+	"context"
 	"errors"
 	"net/http"
+	"net/url"
+	"syscall"
 	"testing"
 
 	"github.com/vibe-agi/vibermate/internal/capturecontrol"
@@ -39,6 +42,33 @@ func TestClassifyCreateFailurePreservesTypedEnvironmentSelection(t *testing.T) {
 				t.Fatalf("classifyCreateFailure()=%v", got)
 			}
 		})
+	}
+}
+
+func TestClassifyCreateFailureSeparatesPreparationTimeoutFromDeadRuntime(
+	t *testing.T,
+) {
+	t.Parallel()
+
+	timedOut := classifyCreateFailure(context.DeadlineExceeded)
+	if !errors.Is(timedOut, ErrCapturePreparationTimedOut) ||
+		!errors.Is(timedOut, context.DeadlineExceeded) {
+		t.Fatalf("deadline classification = %v", timedOut)
+	}
+
+	refused := classifyCreateFailure(&url.Error{
+		Op:  http.MethodPost,
+		URL: "http://127.0.0.1:43123/api/v1/capture-runs",
+		Err: syscall.ECONNREFUSED,
+	})
+	if !errors.Is(refused, ErrRuntimeUnavailable) {
+		t.Fatalf("connection refusal classification = %v", refused)
+	}
+
+	canceled := classifyCreateFailure(context.Canceled)
+	if !errors.Is(canceled, context.Canceled) ||
+		errors.Is(canceled, ErrCapturePreparationTimedOut) {
+		t.Fatalf("caller cancellation classification = %v", canceled)
 	}
 }
 

@@ -8,6 +8,7 @@ import (
 	"net"
 	"net/http"
 	"sync"
+	"time"
 
 	"github.com/vibe-agi/vibermate/internal/activity"
 	"github.com/vibe-agi/vibermate/internal/blindtunnel"
@@ -18,6 +19,7 @@ import (
 	"github.com/vibe-agi/vibermate/internal/connectionpolicy"
 	"github.com/vibe-agi/vibermate/internal/egressaudit"
 	"github.com/vibe-agi/vibermate/internal/environment"
+	"github.com/vibe-agi/vibermate/internal/evidencearchive"
 	"github.com/vibe-agi/vibermate/internal/exchange"
 	"github.com/vibe-agi/vibermate/internal/exchangecontent"
 	"github.com/vibe-agi/vibermate/internal/localca"
@@ -25,14 +27,15 @@ import (
 	"github.com/vibe-agi/vibermate/internal/offlinehold"
 	"github.com/vibe-agi/vibermate/internal/originaltransport"
 	"github.com/vibe-agi/vibermate/internal/provideraccount"
+	"github.com/vibe-agi/vibermate/internal/providerauth"
 	"github.com/vibe-agi/vibermate/internal/providertransport"
 	"github.com/vibe-agi/vibermate/internal/rawevidence"
 	"github.com/vibe-agi/vibermate/internal/resourcedeletion"
 	"github.com/vibe-agi/vibermate/internal/runtimepersistence"
+	"github.com/vibe-agi/vibermate/internal/runtimeuser"
 	"github.com/vibe-agi/vibermate/internal/toolapproval"
 	"github.com/vibe-agi/vibermate/internal/toolpolicy"
 	"github.com/vibe-agi/vibermate/internal/upstreamendpoint"
-	"github.com/vibe-agi/vibermate/internal/workspacedefault"
 	"github.com/vibe-agi/vibermate/internal/workspaceidentity"
 )
 
@@ -45,7 +48,6 @@ type Runtime struct {
 	environments       environmentRuntime
 	assignments        captureAssignmentRuntime
 	workspaceIdentity  *workspaceidentity.Manager
-	workspaceDefaults  *workspacedefault.Manager
 	activities         activityRuntime
 	conversationIDs    activity.ConversationIdentityRepository
 	conversationWriter activity.ConversationProjectionWriter
@@ -55,11 +57,13 @@ type Runtime struct {
 	egressCompletion   *runtimeEgressRepository
 	endpoints          *upstreamendpoint.Manager
 	accounts           *provideraccount.Manager
+	runtimeUsers       *runtimeuser.Manager
 	approvals          approvalRuntime
 	connectionRules    *connectionpolicy.Manager
 	monitor            ownedComponent
 	rawEvidence        rawEvidenceRuntime
 	evidenceArchive    resourcedeletion.Archive
+	archiveBarrier     *evidencearchive.Barrier
 	provider           providerRuntime
 	original           originalRuntime
 	exchanges          exchangeRuntime
@@ -186,6 +190,15 @@ func startWithBuilders(
 	}
 
 	securityRandom := newSynchronizedReader(options.SecurityRandom)
+	runtimeUsers, err := runtimeuser.New(runtimeuser.Options{
+		Repository:      storageResult.store.RuntimeUserRepository(),
+		Clock:           options.Clock,
+		Random:          securityRandom,
+		SessionLifetime: 30 * 24 * time.Hour,
+	})
+	if err != nil {
+		return fail("Runtime User authority", err)
+	}
 	ownerContext, cancelOwner := context.WithCancelCause(context.WithoutCancel(ctx))
 	cleanups.register("runtime owner context", func(context.Context) error {
 		cancelOwner(errors.New("runtime owner context stopped"))
@@ -307,7 +320,6 @@ func startWithBuilders(
 		repository:           storageResult.store.EnvironmentRepository(),
 		assignmentRepository: storageResult.store.CaptureAssignmentRepository(),
 		activity:             captureActivity,
-		leafCache:            certificateAuthority,
 		clock:                options.Clock,
 		accounts:             accounts,
 		endpoints:            endpoints,
@@ -330,15 +342,6 @@ func startWithBuilders(
 		return fail("ProviderAccount deletion authority", err)
 	}
 	pending.register("Capture assignment runtime", assignments.Shutdown)
-	workspaceDefaults, err := workspacedefault.New(
-		storageResult.store.WorkspaceDefaultRepository(),
-		environments,
-		options.Clock,
-	)
-	if err != nil {
-		return fail("Workspace Environment defaults", err)
-	}
-
 	activities, err := builders.activity.Build(activityBuildRequest{
 		repository: storageResult.store.ActivityRepository(),
 		clock:      options.Clock,
@@ -471,6 +474,7 @@ func startWithBuilders(
 	provider, err := builders.provider.Build(providerBuildRequest{
 		coordinator: options.OfflineHold,
 		secrets:     options.Secrets,
+		instanceIDs: options.InstanceIDs,
 		audit:       runtimeEgress,
 		rawEvidence: rawEvidence,
 	})
@@ -527,10 +531,12 @@ func startWithBuilders(
 	}
 	pending.register("Exchange pipeline", exchanges.Shutdown)
 
+	archiveBarrier := evidencearchive.NewBarrier()
 	captureRuns, err := builders.capture.Build(ctx, captureBuildRequest{
-		repository: captureRunRepository,
-		clock:      options.Clock,
-		random:     securityRandom,
+		repository:     captureRunRepository,
+		clock:          options.Clock,
+		random:         securityRandom,
+		archiveBarrier: archiveBarrier,
 		barrier: captureEvidenceBarrier{
 			raw: rawEvidence, reporter: runtimeEgress,
 		},
@@ -546,9 +552,10 @@ func startWithBuilders(
 	}
 	pending.register("CaptureRun component", captureRuns.Shutdown)
 	manualCaptures, err := builders.manualCapture.Build(ctx, manualCaptureBuildRequest{
-		repository: manualCaptureRepository,
-		clock:      options.Clock,
-		random:     securityRandom,
+		repository:     manualCaptureRepository,
+		clock:          options.Clock,
+		random:         securityRandom,
+		archiveBarrier: archiveBarrier,
 		barrier: captureEvidenceBarrier{
 			raw: rawEvidence, reporter: runtimeEgress,
 		},
@@ -660,7 +667,6 @@ func startWithBuilders(
 		environments:       environments,
 		assignments:        assignments,
 		workspaceIdentity:  workspaceIdentity,
-		workspaceDefaults:  workspaceDefaults,
 		activities:         activities,
 		conversationIDs:    storageResult.store.ConversationIdentityRepository(),
 		conversationWriter: storageResult.store.ConversationProjectionWriter(),
@@ -670,11 +676,13 @@ func startWithBuilders(
 		egressCompletion:   runtimeEgress,
 		endpoints:          endpoints,
 		accounts:           accounts,
+		runtimeUsers:       runtimeUsers,
 		approvals:          approvals,
 		connectionRules:    connectionRules,
 		monitor:            monitor,
 		rawEvidence:        rawEvidence,
 		evidenceArchive:    storageResult.store,
+		archiveBarrier:     archiveBarrier,
 		provider:           provider,
 		original:           original,
 		exchanges:          exchanges,
@@ -734,13 +742,6 @@ func (r *Runtime) WorkspaceIdentity() workspaceidentity.LocalResolver {
 	return r.workspaceIdentity
 }
 
-// WorkspaceDefaults selects the initial Environment for future managed runs
-// in one installation-scoped workspace. It never replaces Capture assignment
-// or Environment request authority.
-func (r *Runtime) WorkspaceDefaults() workspacedefault.Controller {
-	return r.workspaceDefaults
-}
-
 // Activities returns the runtime-owned durable redacted timeline.
 func (r *Runtime) Activities() activity.Runtime {
 	return r.activities
@@ -786,6 +787,13 @@ func (r *Runtime) EvidenceArchive() resourcedeletion.Archive {
 	return r.evidenceArchive
 }
 
+// EvidenceArchiveBarrier is shared by both Capture creation authorities and
+// the whole-archive clear. A Host must expose the destructive action with this
+// exact runtime-owned instance so holder discovery cannot race a new Capture.
+func (r *Runtime) EvidenceArchiveBarrier() evidencearchive.ClearBarrier {
+	return r.archiveBarrier
+}
+
 // ConnectionEvents returns the durable body-free connection audit boundary.
 func (r *Runtime) ConnectionEvents() connectionevent.Runtime {
 	return r.connections
@@ -808,6 +816,27 @@ func (r *Runtime) ProviderAccounts() provideraccount.Controller {
 // ProviderAccount belongs to exactly one Endpoint exposed by this controller.
 func (r *Runtime) UpstreamEndpoints() upstreamendpoint.Controller {
 	return r.endpoints
+}
+
+// FetchEndpointModels discovers models through the same Hold, audit, and
+// transport authority as every other ProductRuntime egress.
+func (r *Runtime) FetchEndpointModels(
+	ctx context.Context,
+	endpoint upstreamendpoint.Endpoint,
+	credential providerauth.Lease,
+) (*http.Response, error) {
+	if r == nil || r.provider == nil {
+		return nil, errors.New("provider transport is unavailable")
+	}
+	return r.provider.FetchEndpointModels(ctx, endpoint, credential)
+}
+
+// FetchModelsDev reads the fixed metadata directory through ProductRuntime.
+func (r *Runtime) FetchModelsDev(ctx context.Context) (*http.Response, error) {
+	if r == nil || r.provider == nil {
+		return nil, errors.New("provider transport is unavailable")
+	}
+	return r.provider.FetchModelsDev(ctx)
 }
 
 // ToolApprovals returns the durable interactive tool decision authority used
@@ -858,6 +887,15 @@ func (r *Runtime) SchemaStateReader() runtimepersistence.SchemaStateReader {
 // coordination has reached its declared boundary.
 func (r *Runtime) Environments() environment.Controller {
 	return r.environments
+}
+
+// RuntimeUsers owns server-created human identities and their revocable Login
+// Sessions. It is deliberately separate from upstream Provider Accounts.
+func (r *Runtime) RuntimeUsers() *runtimeuser.Manager {
+	if r == nil {
+		return nil
+	}
+	return r.runtimeUsers
 }
 
 // EnvironmentResolver returns the process-local immutable Environment

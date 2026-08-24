@@ -355,9 +355,9 @@ func TestAssemblyEnvironmentKeepsClientAndProviderIdentityExact(t *testing.T) {
 			t.Fatalf("client edge = %+v", endpoint)
 		}
 		plan := endpoint.ProtocolPlans[0]
-		route := plan.UpstreamPlan.Routes[0]
-		if plan.Mode != environment.PlanModeOriginalPassthrough || route.ProviderTarget.Origin.String() != client.ClientOrigin || route.AccountPolicy.Mode != environment.AccountModeClientPassthrough {
-			t.Fatalf("original passthrough route = %+v", route)
+		if plan.Destination.Kind != environment.DestinationKindOriginal ||
+			plan.Destination.Upstream != nil {
+			t.Fatalf("original Destination = %+v", plan.Destination)
 		}
 	}
 }

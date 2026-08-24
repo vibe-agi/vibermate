@@ -15,8 +15,9 @@ design repository.
   atomic immutable snapshot publication.
 - Durable typed managed/manual Capture identities and Capture → Environment
   assignment with launch-authority freezing.
-- Hot switch, affected-connection reconnect, and fail-closed
-  `restart_required` when authority would widen.
+- Existing Captures keep the exact Environment revision frozen at launch;
+  impact review lists them as unchanged and publication affects only future
+  Captures.
 - Environment-first local CA admission, proxy, Exchange, provider transport,
   Activity, approvals, Offline Hold and SQLite recovery.
 - `vibermate run [--env ID] -- command` plus Environment-bound Manual Capture.

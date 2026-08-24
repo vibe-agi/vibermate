@@ -32,9 +32,9 @@ import (
 	"github.com/vibe-agi/vibermate/internal/provideraccount"
 	"github.com/vibe-agi/vibermate/internal/proxyclient"
 	"github.com/vibe-agi/vibermate/internal/rawevidence"
+	"github.com/vibe-agi/vibermate/internal/runtimeuser"
 	"github.com/vibe-agi/vibermate/internal/toolapproval"
 	"github.com/vibe-agi/vibermate/internal/upstreamendpoint"
-	"github.com/vibe-agi/vibermate/internal/workspacedefault"
 )
 
 const (
@@ -75,7 +75,7 @@ type RuntimeStore interface {
 	UpstreamEndpointRepository() upstreamendpoint.Repository
 	ProviderAccountRepository() provideraccount.Repository
 	RawEvidenceRepository() rawevidence.Repository
-	WorkspaceDefaultRepository() workspacedefault.Repository
+	RuntimeUserRepository() runtimeuser.Repository
 	// EvidenceArchive owns the two destructive operations. They are on the
 	// store rather than on a repository because each spans several of them and
 	// has to be one transaction: a half-deleted Capture is visible and
@@ -103,7 +103,7 @@ type Store struct {
 	upstreamEndpoints  *upstreamEndpointRepository
 	providerAccounts   *providerAccountRepository
 	rawEvidence        *rawEvidenceRepository
-	workspaceDefaults  *workspaceDefaultRepository
+	runtimeUsers       *runtimeUserRepository
 	operations         *operationGate
 
 	closeMu   sync.Mutex
@@ -198,12 +198,7 @@ func Open(ctx context.Context, options Options) (*Store, error) {
 		sqlTransactionCommitter{},
 	)
 	rawEvidence := newRawEvidenceRepository(database, operations)
-	workspaceDefaults := newWorkspaceDefaultRepository(
-		database,
-		operations,
-		options.CommitReconcileTimeout,
-		sqlTransactionCommitter{},
-	)
+	runtimeUsers := newRuntimeUserRepository(database, operations)
 	schemaState, err := repository.ReadSchemaState(ctx)
 	if err != nil {
 		operations.closeAdmission()
@@ -236,7 +231,7 @@ func Open(ctx context.Context, options Options) (*Store, error) {
 		upstreamEndpoints:  upstreamEndpoints,
 		providerAccounts:   providerAccounts,
 		rawEvidence:        rawEvidence,
-		workspaceDefaults:  workspaceDefaults,
+		runtimeUsers:       runtimeUsers,
 		operations:         operations,
 		closeDone:          make(chan struct{}),
 	}, nil
@@ -321,10 +316,8 @@ func (s *Store) RawEvidenceRepository() rawevidence.Repository {
 	return s.rawEvidence
 }
 
-// WorkspaceDefaultRepository persists only the convenience choice used by
-// future managed runs. Capture assignment remains the launch authority.
-func (s *Store) WorkspaceDefaultRepository() workspacedefault.Repository {
-	return s.workspaceDefaults
+func (s *Store) RuntimeUserRepository() runtimeuser.Repository {
+	return s.runtimeUsers
 }
 
 // Settings reads the active SQLite connection policy through the same

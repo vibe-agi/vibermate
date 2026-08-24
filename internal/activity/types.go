@@ -144,6 +144,14 @@ func (event Event) Validate() error {
 	if err != nil {
 		return err
 	}
+	if hasAccount &&
+		(event.Kind == KindExchangeStarted || event.Kind == KindExchangeCompleted) &&
+		event.RouteID.String() == "" {
+		return fmt.Errorf(
+			"%w: Account evidence requires an Upstream Route",
+			ErrInvalidEvent,
+		)
+	}
 	isEnvironmentLifecycle := event.Kind == KindEnvironmentApplied ||
 		event.Kind == KindEnvironmentDisabled ||
 		event.Kind == KindEnvironmentEnabled ||
@@ -224,9 +232,13 @@ func (event Event) Validate() error {
 		)
 	}
 	if event.Kind == KindExchangeStarted {
+		conversationKnown := event.Conversation.Kind == agentconversation.KindPendingExchange ||
+			(event.SourceKind == SourceCaptureRun &&
+				(event.Conversation.Kind == agentconversation.KindMain ||
+					event.Conversation.Kind == agentconversation.KindAgent))
 		if event.Status != StatusPending || hasAccount || event.ReasonCode != "" ||
 			!event.Diagnosis.Empty() || event.Transport != nil ||
-			event.Conversation.Kind != agentconversation.KindPendingExchange {
+			!conversationKnown {
 			return fmt.Errorf(
 				"%w: started Exchange contains terminal evidence",
 				ErrInvalidEvent,
@@ -282,13 +294,12 @@ func (event Event) validateEnvironmentEvidence() (bool, error) {
 }
 
 func (event Event) validateExecutionEvidence(hasEnvironment bool) (bool, error) {
-	hasAny := event.ClientEndpointID.String() != "" ||
+	hasExecution := event.ClientEndpointID.String() != "" ||
 		event.ClientEndpointRevision != 0 ||
 		event.ProtocolPlanID.String() != "" ||
-		event.ProtocolPlanRevision != 0 ||
-		event.RouteID.String() != "" ||
-		event.RouteRevision != 0
-	if !hasAny {
+		event.ProtocolPlanRevision != 0
+	hasRoute := event.RouteID.String() != "" || event.RouteRevision != 0
+	if !hasExecution && !hasRoute {
 		return false, nil
 	}
 	if !hasEnvironment ||
@@ -296,8 +307,8 @@ func (event Event) validateExecutionEvidence(hasEnvironment bool) (bool, error) 
 		!validRevision(event.ClientEndpointRevision) ||
 		event.ProtocolPlanID.String() == "" ||
 		!validRevision(event.ProtocolPlanRevision) ||
-		event.RouteID.String() == "" ||
-		!validRevision(event.RouteRevision) {
+		(hasRoute && (event.RouteID.String() == "" ||
+			!validRevision(event.RouteRevision))) {
 		return false, fmt.Errorf(
 			"%w: frozen execution chain is incomplete",
 			ErrInvalidEvent,
@@ -943,11 +954,11 @@ type ConversationIdentityRepository interface {
 	GetConversationIdentity(context.Context, string) (agentconversation.ClientIdentity, error)
 }
 
-// ConversationProjectionWriter replaces only the completed Exchange's
-// rebuildable Conversation projection after exact client identity is found.
-// The pending start record remains immutable lifecycle evidence.
+// ConversationProjectionWriter replaces only the rebuildable Conversation
+// fields on the current Exchange row after exact client identity is found.
+// Lifecycle kind, status, timestamps, and evidence remain immutable.
 type ConversationProjectionWriter interface {
-	ReprojectTerminalConversation(context.Context, string, agentconversation.Ref) error
+	ReprojectConversation(context.Context, string, agentconversation.Ref) error
 }
 
 type Recorder interface {

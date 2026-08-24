@@ -1,15 +1,26 @@
 package capturecontrol
 
 import (
+	"bytes"
+	"crypto/x509"
+	"encoding/pem"
 	"errors"
 	"path/filepath"
 	"time"
 
+	"github.com/vibe-agi/vibermate/internal/capturegrant"
 	"github.com/vibe-agi/vibermate/internal/capturerun"
 	"github.com/vibe-agi/vibermate/internal/clientadapter"
 )
 
 const ClientAdapterSourcePrelaunchDigestCatalog = "prelaunch_digest_catalog"
+
+type ProxyDelivery = capturegrant.ProxyDelivery
+
+const (
+	ProxyDeliveryLocalListener = capturegrant.ProxyDeliveryLocalListener
+	ProxyDeliveryClientRelay   = capturegrant.ProxyDeliveryClientRelay
+)
 
 // CaptureRunView is the exact additionalProperties:false representation used
 // by the contracted create, attach-process, and heartbeat responses. Lifecycle
@@ -72,9 +83,11 @@ type LaunchGrant struct {
 	LaunchRecipe    clientadapter.LaunchRecipe    `json:"launchRecipe"`
 	ExecutablePath  string                        `json:"executablePath"`
 	ProxyAddress    string                        `json:"proxyAddress"`
+	ProxyDelivery   capturegrant.ProxyDelivery    `json:"proxyDelivery"`
 	ProxyToken      string                        `json:"proxyToken"`
 	RunCapability   string                        `json:"runCapability"`
 	RootPEMPath     string                        `json:"rootPemPath,omitempty"`
+	RootPEM         string                        `json:"rootPem,omitempty"`
 	// ProtectedAuthorities is the exact MITM/NO_PROXY boundary. A member does
 	// not by itself authorize replacing the client's model-service credential.
 	ProtectedAuthorities []string `json:"protectedAuthorities"`
@@ -228,7 +241,7 @@ func (grant LaunchGrant) Validate() error {
 	if err := grant.Run.validate(); err != nil ||
 		!grant.CatalogRevision.Valid() || !grant.LaunchRecipe.Valid() ||
 		!grant.Recognition.Valid() || grant.ExecutablePath == "" ||
-		grant.ProxyAddress == "" || grant.ProxyToken == "" ||
+		!grant.ProxyDelivery.Valid() || grant.ProxyToken == "" ||
 		grant.RunCapability == "" ||
 		grant.ProxyToken == grant.RunCapability ||
 		grant.ProtectedAuthorities == nil ||
@@ -236,6 +249,17 @@ func (grant LaunchGrant) Validate() error {
 		grant.Run.CatalogRevision != grant.CatalogRevision ||
 		grant.Run.ClientRecognition != grant.Recognition {
 		return errors.New("CaptureRun launch grant is incomplete")
+	}
+	switch grant.ProxyDelivery {
+	case capturegrant.ProxyDeliveryLocalListener:
+		if grant.ProxyAddress == "" {
+			return errors.New("local CaptureRun launch grant is missing its proxy")
+		}
+	case capturegrant.ProxyDeliveryClientRelay:
+		// Empty is the Server wire state. The remote launcher replaces it with
+		// its freshly-bound literal-loopback relay before building child env.
+	default:
+		return errors.New("CaptureRun proxy delivery is invalid")
 	}
 	if grant.Adapter != nil && grant.Signer != nil {
 		return errors.New(
@@ -276,11 +300,14 @@ func (grant LaunchGrant) Validate() error {
 		}
 	}
 	if grant.LaunchRecipe.RequiresRoot() {
-		if grant.RootPEMPath == "" {
-			return errors.New("CaptureRun launch grant is missing the local Root")
+		if (grant.RootPEMPath == "") == (grant.RootPEM == "") {
+			return errors.New("CaptureRun launch grant must carry exactly one Root delivery")
 		}
-	} else if grant.RootPEMPath != "" {
-		return errors.New("generic CaptureRun launch grant carries a local Root")
+		if grant.RootPEM != "" && !validRootPEM(grant.RootPEM) {
+			return errors.New("CaptureRun launch grant carries an invalid inline Root")
+		}
+	} else if grant.RootPEMPath != "" || grant.RootPEM != "" {
+		return errors.New("generic CaptureRun launch grant carries a Root")
 	}
 	protected := make(map[string]struct{}, len(grant.ProtectedAuthorities))
 	for _, authority := range grant.ProtectedAuthorities {
@@ -305,4 +332,17 @@ func (grant LaunchGrant) Validate() error {
 		managed[authority] = struct{}{}
 	}
 	return nil
+}
+
+func validRootPEM(value string) bool {
+	if value == "" || len(value) > 64<<10 {
+		return false
+	}
+	block, rest := pem.Decode([]byte(value))
+	if block == nil || block.Type != "CERTIFICATE" ||
+		len(bytes.TrimSpace(rest)) != 0 {
+		return false
+	}
+	certificate, err := x509.ParseCertificate(block.Bytes)
+	return err == nil && certificate.IsCA
 }

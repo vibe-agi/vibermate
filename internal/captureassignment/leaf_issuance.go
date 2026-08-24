@@ -133,23 +133,23 @@ func (manager *Manager) admitLeaf(
 	if !rootRevision.Valid() || !san.Valid() || !algorithm.Valid() {
 		return LeafIssuanceAdmission{}, ErrLeafIssuanceInvalid
 	}
-	assignment, unlockEnvironment, err := manager.loadAssignmentUnderEnvironmentGate(ctx, capture)
-	if err != nil {
-		return LeafIssuanceAdmission{}, err
-	}
-	defer unlockEnvironment()
-	snapshot, err := manager.resolveActive(assignment.EnvironmentID)
-	if err != nil {
-		return LeafIssuanceAdmission{}, err
-	}
 	state := manager.state(capture)
 	state.mu.Lock()
 	defer state.mu.Unlock()
 	connection := state.connections[connectionID]
-	_, blocked := state.blocked[connectionID]
-	if connection == nil || state.shutdown || state.poisoned || blocked || connection.closing ||
-		connection.binding.Mode != environment.ConnectionModeSemantic ||
-		environment.ValidateConnectionBinding(snapshot, connection.binding) != nil {
+	if connection == nil || state.shutdown || state.poisoned ||
+		connection.binding.Mode != environment.ConnectionModeSemantic {
+		return LeafIssuanceAdmission{}, ErrLeafIssuanceUnauthorized
+	}
+	assignment := connection.assignment
+	snapshot := connection.snapshot
+	if assignment.Validate() != nil || assignment.Capture != capture ||
+		snapshot.ID() != assignment.EnvironmentID ||
+		snapshot.Revision() != assignment.LaunchAuthority.InitialEnvironmentRevision() ||
+		snapshot.Digest() != assignment.LaunchAuthority.InitialEnvironmentDigest() {
+		return LeafIssuanceAdmission{}, ErrLeafIssuanceUnauthorized
+	}
+	if environment.ValidateConnectionBinding(snapshot, connection.binding) != nil {
 		return LeafIssuanceAdmission{}, ErrLeafIssuanceUnauthorized
 	}
 	endpoint, exists := snapshot.LookupCompiledClientOrigin(connection.binding.ClientOrigin)
@@ -177,22 +177,12 @@ func (manager *Manager) leafRequestCurrent(admission *leafAdmissionState) bool {
 	if manager == nil || admission == nil || admission.captureState == nil || admission.connection == nil {
 		return false
 	}
-	snapshot, err := manager.environments.Resolve(admission.request.environmentID)
-	if err != nil || snapshot.Revision() != admission.request.environmentRevision {
-		return false
-	}
-	endpoint, exists := snapshot.LookupCompiledClientOrigin(admission.request.clientOrigin)
-	if !exists || endpoint.ID() != admission.request.endpointID ||
-		endpoint.Revision() != admission.request.endpointRevision {
-		return false
-	}
 	state := admission.captureState
 	state.mu.Lock()
 	defer state.mu.Unlock()
 	current := state.connections[admission.connectionID]
-	_, blocked := state.blocked[admission.connectionID]
-	return !state.shutdown && !state.poisoned && !blocked && current == admission.connection &&
-		!current.closing && current.binding.Mode == environment.ConnectionModeSemantic &&
+	return !state.shutdown && !state.poisoned && current == admission.connection &&
+		current.binding.Mode == environment.ConnectionModeSemantic &&
 		current.binding.ClientOrigin == admission.request.clientOrigin &&
 		current.binding.ClientEndpointID == admission.request.endpointID
 }

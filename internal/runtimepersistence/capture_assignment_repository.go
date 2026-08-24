@@ -77,7 +77,7 @@ func (repository *captureAssignmentRepository) ListByEnvironment(ctx context.Con
 }
 
 func (repository *captureAssignmentRepository) Write(ctx context.Context, expected captureassignment.Revision, candidate captureassignment.Assignment) (captureassignment.CommitResult, error) {
-	if candidate.Validate() != nil || expected >= captureassignment.MaxRevision || candidate.Revision != expected+1 {
+	if candidate.Validate() != nil || expected != 0 {
 		return captureassignment.CommitResult{Outcome: captureassignment.CommitOutcomeNotCommitted}, captureassignment.ErrInvalidAssignment
 	}
 	permit, err := repository.operations.admit(ctx)
@@ -92,34 +92,18 @@ func (repository *captureAssignmentRepository) Write(ctx context.Context, expect
 	defer func() { _ = transaction.Rollback() }()
 	launchEnvironmentID, launchRevision, launchEnvironmentDigest, protectedJSON, managedJSON, launchDigest :=
 		captureAssignmentAuthorityValues(candidate.LaunchAuthority)
-	var result sql.Result
-	if expected == 0 {
-		result, err = transaction.ExecContext(permit.context,
-			`INSERT INTO capture_environment_assignments(
-			   capture_kind, capture_id, environment_id, assignment_revision, source,
-			   launch_environment_id, launch_environment_revision, launch_environment_digest,
-			   protected_authorities_json, managed_authorities_json,
-			   launch_authority_digest, updated_at_unix_ms
-			 ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-			 ON CONFLICT(capture_kind, capture_id) DO NOTHING`,
-			string(candidate.Capture.Kind), candidate.Capture.ID, candidate.EnvironmentID.String(),
-			int64(candidate.Revision), string(candidate.Source), launchEnvironmentID, launchRevision,
-			launchEnvironmentDigest, protectedJSON, managedJSON, launchDigest,
-			candidate.UpdatedAt.UnixMilli())
-	} else {
-		result, err = transaction.ExecContext(permit.context,
-			`UPDATE capture_environment_assignments
-			 SET environment_id = ?, assignment_revision = ?, source = ?, updated_at_unix_ms = ?
-			 WHERE capture_kind = ? AND capture_id = ? AND assignment_revision = ?
-			   AND launch_environment_id = ? AND launch_environment_revision = ?
-			   AND launch_environment_digest = ?
-			   AND protected_authorities_json = ? AND managed_authorities_json = ?
-			   AND launch_authority_digest = ?`,
-			candidate.EnvironmentID.String(), int64(candidate.Revision), string(candidate.Source),
-			candidate.UpdatedAt.UnixMilli(), string(candidate.Capture.Kind), candidate.Capture.ID,
-			int64(expected), launchEnvironmentID, launchRevision, launchEnvironmentDigest, protectedJSON, managedJSON,
-			launchDigest)
-	}
+	result, err := transaction.ExecContext(permit.context,
+		`INSERT INTO capture_environment_assignments(
+		   capture_kind, capture_id, environment_id, assignment_revision, source,
+		   launch_environment_id, launch_environment_revision, launch_environment_digest,
+		   protected_authorities_json, managed_authorities_json,
+		   launch_authority_digest, updated_at_unix_ms
+		 ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		 ON CONFLICT(capture_kind, capture_id) DO NOTHING`,
+		string(candidate.Capture.Kind), candidate.Capture.ID, candidate.EnvironmentID.String(),
+		int64(candidate.Revision), string(candidate.Source), launchEnvironmentID, launchRevision,
+		launchEnvironmentDigest, protectedJSON, managedJSON, launchDigest,
+		candidate.UpdatedAt.UnixMilli())
 	if err != nil {
 		return captureassignment.CommitResult{Outcome: captureassignment.CommitOutcomeNotCommitted}, fmt.Errorf("write Capture Environment assignment: %w", err)
 	}
@@ -158,7 +142,7 @@ func (repository *captureAssignmentRepository) Write(ctx context.Context, expect
 			Outcome: captureassignment.CommitOutcomeCommitted, Assignment: current, Actual: current.Revision,
 		}, nil
 	}
-	if (!exists && expected == 0) || (exists && current.Revision == expected) {
+	if !exists {
 		return captureassignment.CommitResult{
 			Outcome: captureassignment.CommitOutcomeNotCommitted, Assignment: current, Actual: current.Revision,
 		}, commitErr

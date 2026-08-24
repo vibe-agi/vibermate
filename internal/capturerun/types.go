@@ -17,6 +17,7 @@ import (
 
 	"github.com/vibe-agi/vibermate/internal/capturecredential"
 	"github.com/vibe-agi/vibermate/internal/clientadapter"
+	"github.com/vibe-agi/vibermate/internal/runtimeuser"
 	"github.com/vibe-agi/vibermate/internal/workspaceidentity"
 )
 
@@ -88,6 +89,9 @@ type DurableRecord struct {
 	CWD                         string
 	CanonicalExecutablePath     string
 	LocalUserLabel              string
+	RuntimeUserID               runtimeuser.UserID
+	LoginSessionID              runtimeuser.LoginSessionID
+	DeviceName                  string
 	ExecutableLabel             string
 	CatalogRevision             clientadapter.CatalogRevision
 	Adapter                     *clientadapter.Evidence
@@ -151,6 +155,13 @@ func (record DurableRecord) Validate() error {
 	}
 	if !ValidLocalUserLabel(record.LocalUserLabel) {
 		return fmt.Errorf("%w: local user label is invalid", ErrInvalidRequest)
+	}
+	if (record.RuntimeUserID == "") != (record.LoginSessionID == "") ||
+		(record.RuntimeUserID == "") != (record.DeviceName == "") ||
+		(record.RuntimeUserID != "" &&
+			(!record.RuntimeUserID.Valid() || !record.LoginSessionID.Valid() ||
+				!runtimeuser.ValidDeviceName(record.DeviceName))) {
+		return fmt.Errorf("%w: Runtime User attribution is invalid", ErrInvalidRequest)
 	}
 	if err := validateText(
 		"executable label",
@@ -234,6 +245,9 @@ type View struct {
 	// Launcher and Server projections deliberately do not serialize it.
 	CanonicalExecutablePath     string                     `json:"-"`
 	LocalUserLabel              string                     `json:"localUserLabel,omitempty"`
+	RuntimeUserID               runtimeuser.UserID         `json:"runtimeUserId,omitempty"`
+	LoginSessionID              runtimeuser.LoginSessionID `json:"loginSessionId,omitempty"`
+	DeviceName                  string                     `json:"deviceName,omitempty"`
 	MachineID                   string                     `json:"machineId,omitempty"`
 	MachineRegistrationRevision uint64                     `json:"machineRegistrationRevision,omitempty"`
 	WorkspaceID                 string                     `json:"workspaceId,omitempty"`
@@ -275,6 +289,9 @@ func ViewOf(record DurableRecord) View {
 		CWD:                         record.CWD,
 		CanonicalExecutablePath:     record.CanonicalExecutablePath,
 		LocalUserLabel:              record.LocalUserLabel,
+		RuntimeUserID:               record.RuntimeUserID,
+		LoginSessionID:              record.LoginSessionID,
+		DeviceName:                  record.DeviceName,
 		MachineID:                   record.MachineID.String(),
 		MachineRegistrationRevision: record.MachineRegistrationRevision,
 		WorkspaceID:                 record.WorkspaceID.String(),
@@ -351,6 +368,9 @@ type CreateCommand struct {
 	Recognition     clientadapter.Recognition
 	Workspace       workspaceidentity.Scope
 	LocalUserLabel  string
+	RuntimeUserID   runtimeuser.UserID
+	LoginSessionID  runtimeuser.LoginSessionID
+	DeviceName      string
 }
 
 func (command CreateCommand) validate(maxLifetime time.Duration) error {
@@ -385,6 +405,13 @@ func (command CreateCommand) validate(maxLifetime time.Duration) error {
 	}
 	if !ValidLocalUserLabel(command.LocalUserLabel) {
 		return fmt.Errorf("%w: local user label is invalid", ErrInvalidRequest)
+	}
+	if (command.RuntimeUserID == "") != (command.LoginSessionID == "") ||
+		(command.RuntimeUserID == "") != (command.DeviceName == "") ||
+		(command.RuntimeUserID != "" &&
+			(!command.RuntimeUserID.Valid() || !command.LoginSessionID.Valid() ||
+				!runtimeuser.ValidDeviceName(command.DeviceName))) {
+		return fmt.Errorf("%w: Runtime User attribution is invalid", ErrInvalidRequest)
 	}
 	if command.Adapter != nil {
 		if err := command.Adapter.Validate(); err != nil ||
@@ -422,6 +449,9 @@ type Evidence struct {
 	ExpiresAt       time.Time
 	Workspace       workspaceidentity.Scope
 	LocalUserLabel  string
+	RuntimeUserID   runtimeuser.UserID
+	LoginSessionID  runtimeuser.LoginSessionID
+	DeviceName      string
 }
 
 // AdmissionRef returns the exact short-lived ingress identity owned by a
@@ -454,6 +484,9 @@ func evidenceOf(record DurableRecord) Evidence {
 		ExpiresAt:       record.ExpiresAt,
 		Workspace:       workspace,
 		LocalUserLabel:  record.LocalUserLabel,
+		RuntimeUserID:   record.RuntimeUserID,
+		LoginSessionID:  record.LoginSessionID,
+		DeviceName:      record.DeviceName,
 	}
 }
 
