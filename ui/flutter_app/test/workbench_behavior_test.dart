@@ -679,7 +679,7 @@ void main() {
     );
     expect(controller.serverAccess?.requiresRuntimeUserLogin, isTrue);
     expect(controller.runtimeUsers?.single.username, 'alice');
-    expect(controller.runtimeUsage?.users.single.turns, 18);
+    expect(controller.runtimeUsage, isNull);
     expect(
       find.byKey(const Key('runtime-user-row-user.preview.alice')),
       findsOneWidget,

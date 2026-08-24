@@ -6,10 +6,12 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -129,6 +131,152 @@ func TestRuntimeUserLoginSessionHTTPAuthorizesRepeatedCaptureControl(t *testing.
 		t.Fatalf("Authenticate() after HTTP logout error = %v", err)
 	}
 }
+
+func TestRuntimeUserLoginRateLimitsOneUnauthenticatedPeerBeforePasswordWork(t *testing.T) {
+	t.Parallel()
+	users := &rejectingRuntimeUserSessions{}
+	handler, err := servercontrol.NewRuntimeUserSessions(
+		servercontrol.RuntimeUserSessionsOptions{
+			InstanceID: "instance.test", Users: users,
+		},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	rateLimited := false
+	for attempt := 0; attempt < 20; attempt++ {
+		response := httptest.NewRecorder()
+		handler.ServeHTTP(response, runtimeUserLoginRequest("192.0.2.10:45000"))
+		if response.Code == http.StatusTooManyRequests {
+			rateLimited = true
+			if response.Header().Get("Retry-After") == "" {
+				t.Fatal("rate-limited login has no Retry-After")
+			}
+			break
+		}
+		if response.Code != http.StatusUnauthorized {
+			t.Fatalf("attempt %d status = %d", attempt, response.Code)
+		}
+	}
+	if !rateLimited {
+		t.Fatal("20 immediate login attempts were all admitted")
+	}
+	if calls := users.calls.Load(); calls <= 0 || calls >= 20 {
+		t.Fatalf("password verifier calls = %d", calls)
+	}
+}
+
+func TestRuntimeUserLoginBoundsConcurrentPasswordWork(t *testing.T) {
+	t.Parallel()
+	users := &blockingRuntimeUserSessions{
+		entered: make(chan struct{}, 8),
+		release: make(chan struct{}),
+	}
+	handler, err := servercontrol.NewRuntimeUserSessions(
+		servercontrol.RuntimeUserSessionsOptions{
+			InstanceID: "instance.test", Users: users,
+		},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	responses := make(chan int, 5)
+	for attempt := 0; attempt < 5; attempt++ {
+		go func(port int) {
+			response := httptest.NewRecorder()
+			handler.ServeHTTP(
+				response,
+				runtimeUserLoginRequest(fmt.Sprintf("198.51.100.%d:%d", port+1, 46000+port)),
+			)
+			responses <- response.Code
+		}(attempt)
+	}
+
+	deadline := time.NewTimer(2 * time.Second)
+	defer deadline.Stop()
+	for users.active.Load() < 4 {
+		select {
+		case <-users.entered:
+		case <-deadline.C:
+			close(users.release)
+			t.Fatalf("only %d password checks entered", users.active.Load())
+		}
+	}
+	select {
+	case status := <-responses:
+		if status != http.StatusTooManyRequests {
+			close(users.release)
+			t.Fatalf("fifth concurrent login status = %d", status)
+		}
+	case <-deadline.C:
+		close(users.release)
+		t.Fatal("fifth concurrent login blocked instead of being rejected")
+	}
+	close(users.release)
+	for completed := 1; completed < 5; completed++ {
+		<-responses
+	}
+	if maximum := users.maximum.Load(); maximum > 4 {
+		t.Fatalf("concurrent password checks = %d, want at most 4", maximum)
+	}
+}
+
+func runtimeUserLoginRequest(remoteAddress string) *http.Request {
+	machineID := base64.RawURLEncoding.EncodeToString(bytes.Repeat([]byte{0x35}, 32))
+	payload, _ := json.Marshal(map[string]any{
+		"schema": servercontrol.RuntimeUserLoginSchema, "username": "alice",
+		"password": "test-login-password", "machineId": machineID,
+		"deviceName": "test device",
+	})
+	request := httptest.NewRequest(
+		http.MethodPost,
+		servercontrol.RuntimeUserSessionPath,
+		bytes.NewReader(payload),
+	)
+	request.Header.Set("Content-Type", "application/json")
+	request.RemoteAddr = remoteAddress
+	return request
+}
+
+type rejectingRuntimeUserSessions struct{ calls atomic.Int32 }
+
+func (users *rejectingRuntimeUserSessions) Login(
+	context.Context,
+	runtimeuser.LoginCommand,
+) (runtimeuser.LoginSession, error) {
+	users.calls.Add(1)
+	return runtimeuser.LoginSession{}, runtimeuser.ErrInvalidCredentials
+}
+
+func (*rejectingRuntimeUserSessions) Logout(context.Context, string) error { return nil }
+
+type blockingRuntimeUserSessions struct {
+	active  atomic.Int32
+	maximum atomic.Int32
+	entered chan struct{}
+	release chan struct{}
+}
+
+func (users *blockingRuntimeUserSessions) Login(
+	context.Context,
+	runtimeuser.LoginCommand,
+) (runtimeuser.LoginSession, error) {
+	active := users.active.Add(1)
+	for {
+		maximum := users.maximum.Load()
+		if active <= maximum || users.maximum.CompareAndSwap(maximum, active) {
+			break
+		}
+	}
+	users.entered <- struct{}{}
+	<-users.release
+	users.active.Add(-1)
+	return runtimeuser.LoginSession{}, runtimeuser.ErrInvalidCredentials
+}
+
+func (*blockingRuntimeUserSessions) Logout(context.Context, string) error { return nil }
 
 type loginTestClock struct{ now time.Time }
 

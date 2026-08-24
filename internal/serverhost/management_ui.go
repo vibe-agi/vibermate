@@ -67,6 +67,8 @@ func newManagementUI(root string) (http.Handler, error) {
 			return
 		}
 		writer.Header().Set("X-Content-Type-Options", "nosniff")
+		writer.Header().Set("X-Frame-Options", "DENY")
+		writer.Header().Set("Content-Security-Policy", "frame-ancestors 'none'")
 		writer.Header().Set("Referrer-Policy", "no-referrer")
 		writer.Header().Set("Cross-Origin-Resource-Policy", "same-origin")
 		// Flutter's bootstrap, service worker, and main bundle keep stable names

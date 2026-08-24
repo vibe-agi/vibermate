@@ -3,6 +3,7 @@
 package workspaceidentity
 
 import (
+	"bytes"
 	"context"
 	"crypto/hmac"
 	"crypto/sha256"
@@ -18,6 +19,8 @@ import (
 	"sync"
 	"time"
 	"unicode/utf8"
+
+	"github.com/vibe-agi/vibermate/internal/filetransaction"
 )
 
 const (
@@ -302,60 +305,81 @@ func loadOrCreate(
 	random io.Reader,
 	now time.Time,
 ) (fileState, []byte, error) {
-	state, key, err := readIdentity(path)
-	if err == nil {
-		return state, key, nil
-	}
-	if !errors.Is(err, os.ErrNotExist) && !errors.Is(err, ErrInvalidIdentity) {
-		return fileState{}, nil, err
-	}
-	machineBytes := make([]byte, identityBytes)
-	namespaceKey := make([]byte, identityBytes)
-	defer clear(machineBytes)
-	if _, err := io.ReadFull(random, machineBytes); err != nil {
-		clear(namespaceKey)
-		return fileState{}, nil, fmt.Errorf("generate MachineID: %w", err)
-	}
-	if _, err := io.ReadFull(random, namespaceKey); err != nil {
-		clear(namespaceKey)
-		return fileState{}, nil, fmt.Errorf("generate workspace namespace: %w", err)
-	}
-	state = fileState{
-		Schema:                identitySchema,
-		ID:                    MachineID(base64.RawURLEncoding.EncodeToString(machineBytes)),
-		Revision:              1,
-		WorkspaceNamespaceKey: base64.RawURLEncoding.EncodeToString(namespaceKey),
-		CreatedAt:             now,
-	}
-	if err := writeIdentity(path, state); err != nil {
-		clear(namespaceKey)
+	var state fileState
+	var key []byte
+	err := filetransaction.Update(
+		filetransaction.Options{
+			Path: path, MaximumBytes: maxIdentityFileBytes, Mode: 0o600,
+			TemporaryPrefix: ".machine-identity-*",
+		},
+		func(snapshot filetransaction.Snapshot) (filetransaction.Mutation, error) {
+			if snapshot.Exists {
+				stored, storedKey, readErr := decodeIdentity(snapshot)
+				if readErr == nil {
+					state = stored
+					key = storedKey
+					return filetransaction.Mutation{}, nil
+				}
+				if !errors.Is(readErr, ErrInvalidIdentity) {
+					return filetransaction.Mutation{}, readErr
+				}
+			}
+
+			machineBytes := make([]byte, identityBytes)
+			namespaceKey := make([]byte, identityBytes)
+			defer clear(machineBytes)
+			if _, readErr := io.ReadFull(random, machineBytes); readErr != nil {
+				clear(namespaceKey)
+				return filetransaction.Mutation{}, fmt.Errorf(
+					"generate MachineID: %w", readErr,
+				)
+			}
+			if _, readErr := io.ReadFull(random, namespaceKey); readErr != nil {
+				clear(namespaceKey)
+				return filetransaction.Mutation{}, fmt.Errorf(
+					"generate workspace namespace: %w", readErr,
+				)
+			}
+			state = fileState{
+				Schema: identitySchema,
+				ID: MachineID(
+					base64.RawURLEncoding.EncodeToString(machineBytes),
+				),
+				Revision: 1,
+				WorkspaceNamespaceKey: base64.RawURLEncoding.EncodeToString(
+					namespaceKey,
+				),
+				CreatedAt: now,
+			}
+			payload, encodeErr := json.Marshal(state)
+			if encodeErr != nil {
+				clear(namespaceKey)
+				return filetransaction.Mutation{}, encodeErr
+			}
+			key = namespaceKey
+			return filetransaction.Mutation{Payload: payload, Write: true}, nil
+		},
+	)
+	if err != nil {
+		clear(key)
 		return fileState{}, nil, fmt.Errorf(
 			"%w: persist installation identity: %v",
 			ErrIdentityUnavailable,
 			err,
 		)
 	}
-	return state, namespaceKey, nil
+	return state, key, nil
 }
 
-func readIdentity(path string) (fileState, []byte, error) {
-	info, err := os.Stat(path)
-	if err != nil {
-		return fileState{}, nil, err
-	}
-	if !info.Mode().IsRegular() || info.Size() <= 0 ||
-		info.Size() > maxIdentityFileBytes {
+func decodeIdentity(
+	snapshot filetransaction.Snapshot,
+) (fileState, []byte, error) {
+	if !snapshot.Exists || len(snapshot.Payload) == 0 ||
+		len(snapshot.Payload) > maxIdentityFileBytes ||
+		(runtime.GOOS != "windows" && snapshot.Mode.Perm()&0o077 != 0) {
 		return fileState{}, nil, ErrInvalidIdentity
 	}
-	if runtime.GOOS != "windows" && info.Mode().Perm()&0o077 != 0 {
-		return fileState{}, nil, ErrInvalidIdentity
-	}
-	file, err := os.Open(path)
-	if err != nil {
-		return fileState{}, nil, err
-	}
-	defer file.Close()
-	decoder := json.NewDecoder(io.LimitReader(file, maxIdentityFileBytes+1))
+	decoder := json.NewDecoder(bytes.NewReader(snapshot.Payload))
 	decoder.DisallowUnknownFields()
 	var state fileState
 	if err := decoder.Decode(&state); err != nil {
@@ -367,43 +391,6 @@ func readIdentity(path string) (fileState, []byte, error) {
 	}
 	key, err := state.validate()
 	return state, key, err
-}
-
-func writeIdentity(path string, state fileState) error {
-	document, err := json.Marshal(state)
-	if err != nil {
-		return err
-	}
-	directory := filepath.Dir(path)
-	temporary, err := os.CreateTemp(directory, ".machine-identity-*")
-	if err != nil {
-		return err
-	}
-	temporaryPath := temporary.Name()
-	committed := false
-	defer func() {
-		_ = temporary.Close()
-		if !committed {
-			_ = os.Remove(temporaryPath)
-		}
-	}()
-	if err := temporary.Chmod(0o600); err != nil {
-		return err
-	}
-	if _, err := temporary.Write(document); err != nil {
-		return err
-	}
-	if err := temporary.Sync(); err != nil {
-		return err
-	}
-	if err := temporary.Close(); err != nil {
-		return err
-	}
-	if err := replaceIdentityFile(temporaryPath, path); err != nil {
-		return err
-	}
-	committed = true
-	return nil
 }
 
 func ensurePrivateDirectory(path string) error {

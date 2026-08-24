@@ -539,7 +539,7 @@ func cliManifest(t *testing.T, artifactRoot, revision string) releasemanifest.Ma
 			"toolkit":  "flutter",
 		},
 		"toolchains": map[string]string{
-			"go":      "go version go1.25.12 darwin/arm64",
+			"go":      "go version go1.25.13 darwin/arm64",
 			"flutter": "Flutter 3.41.5 (2c9...)",
 			"dart":    "Dart 3.11.3",
 			"xcode":   "Xcode 16.2\nBuild version 16C5032a",

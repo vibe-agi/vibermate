@@ -69,7 +69,7 @@ func newControlClient(
 func newRemoteControlClient(
 	origin string,
 	credential string,
-	client *http.Client,
+	client requestDoer,
 	closeHTTP func(),
 ) (*controlClient, error) {
 	parsed, err := url.Parse(origin)

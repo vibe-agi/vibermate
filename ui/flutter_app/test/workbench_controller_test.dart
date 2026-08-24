@@ -4,11 +4,68 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:vibermate_app/core/api/control_api.dart';
 import 'package:vibermate_app/core/api/control_models.dart';
 import 'package:vibermate_app/core/bootstrap/terminal_command.dart';
+import 'package:vibermate_app/core/preferences/workbench_preferences.dart';
 import 'package:vibermate_app/features/workbench/workbench_controller.dart';
 import 'package:vibermate_app/preview/preview_control_api.dart';
 import 'package:vibermate_app/preview/preview_terminal_command.dart';
 
 void main() {
+  testWidgets('usage loads on demand and is not rebuilt by polling', (
+    tester,
+  ) async {
+    final fixture = PreviewControlApi();
+    final api = _UsageTrackingApi(fixture);
+    final controller = WorkbenchController(
+      api: api,
+      terminalCommands: PreviewTerminalCommandService(),
+      previewMode: true,
+      closeRuntime: fixture.close,
+      serverManagement: true,
+      terminalManagement: false,
+      initialPreferences: const WorkbenchPreferences(
+        section: WorkbenchSection.settings,
+      ),
+    );
+    addTearDown(fixture.close);
+
+    await controller.initialize();
+    expect(api.usageCalls, 0);
+
+    controller.selectSection(WorkbenchSection.usage);
+    await tester.pump();
+    await tester.pump();
+    expect(api.usageCalls, 1);
+
+    await tester.pump(const Duration(seconds: 11));
+    await tester.pump();
+    expect(api.usageCalls, 1);
+    controller.dispose();
+  });
+
+  testWidgets('periodic dashboard polls never overlap', (tester) async {
+    final fixture = PreviewControlApi();
+    final api = _BlockingPollApi(fixture);
+    final controller = WorkbenchController(
+      api: api,
+      terminalCommands: PreviewTerminalCommandService(),
+      previewMode: true,
+      closeRuntime: fixture.close,
+    );
+    addTearDown(fixture.close);
+
+    await controller.initialize();
+    await tester.pump(const Duration(seconds: 5));
+    expect(api.pendingPolls, 1);
+
+    await tester.pump(const Duration(seconds: 10));
+    expect(api.pendingPolls, 1);
+    expect(api.maximumConcurrentPolls, 1);
+
+    api.completePolls();
+    await tester.pump();
+    controller.dispose();
+  });
+
   test(
     'Capture detail selects one proven conversation instead of mixing agents',
     () async {
@@ -789,6 +846,145 @@ void main() {
       expect(second.draftRevision, first.draftRevision + 1);
     },
   );
+}
+
+final class _UsageTrackingApi implements ControlApi {
+  _UsageTrackingApi(this.delegate);
+
+  final PreviewControlApi delegate;
+  int usageCalls = 0;
+
+  @override
+  Future<DashboardData> loadDashboard() => delegate.loadDashboard();
+
+  @override
+  Future<CaptureAssignment> captureAssignment(String captureKey) =>
+      delegate.captureAssignment(captureKey);
+
+  @override
+  Future<ConversationPage> conversations({
+    String? cursor,
+    int limit = 50,
+    String? captureRunId,
+    String? manualCaptureId,
+  }) => delegate.conversations(
+    cursor: cursor,
+    limit: limit,
+    captureRunId: captureRunId,
+    manualCaptureId: manualCaptureId,
+  );
+
+  @override
+  Future<ActivityPage> activities({
+    String? cursor,
+    int limit = 50,
+    String? captureRunId,
+    String? manualCaptureId,
+    String? environmentId,
+    String? conversationId,
+  }) => delegate.activities(
+    cursor: cursor,
+    limit: limit,
+    captureRunId: captureRunId,
+    manualCaptureId: manualCaptureId,
+    environmentId: environmentId,
+    conversationId: conversationId,
+  );
+
+  @override
+  Future<List<ApprovalRecord>> pendingApprovals() =>
+      delegate.pendingApprovals();
+
+  @override
+  Future<RuntimeServerAccess> serverAccess() => delegate.serverAccess();
+
+  @override
+  Future<List<RuntimeUser>> runtimeUsers() => delegate.runtimeUsers();
+
+  @override
+  Future<RuntimeUsageReport> runtimeUsage() {
+    usageCalls += 1;
+    return delegate.runtimeUsage();
+  }
+
+  @override
+  dynamic noSuchMethod(Invocation invocation) =>
+      throw UnsupportedError('${invocation.memberName}');
+}
+
+final class _BlockingPollApi implements ControlApi {
+  _BlockingPollApi(this.delegate);
+
+  final PreviewControlApi delegate;
+  int _dashboardCalls = 0;
+  int _concurrentPolls = 0;
+  int maximumConcurrentPolls = 0;
+  final List<Completer<DashboardData>> _polls = [];
+
+  int get pendingPolls => _polls.length;
+
+  @override
+  Future<DashboardData> loadDashboard() {
+    _dashboardCalls += 1;
+    if (_dashboardCalls == 1) return delegate.loadDashboard();
+    _concurrentPolls += 1;
+    if (_concurrentPolls > maximumConcurrentPolls) {
+      maximumConcurrentPolls = _concurrentPolls;
+    }
+    final result = Completer<DashboardData>();
+    _polls.add(result);
+    return result.future.whenComplete(() => _concurrentPolls -= 1);
+  }
+
+  void completePolls() {
+    final dashboard = delegate.loadDashboard();
+    for (final poll in List<Completer<DashboardData>>.from(_polls)) {
+      unawaited(dashboard.then(poll.complete));
+    }
+    _polls.clear();
+  }
+
+  @override
+  Future<CaptureAssignment> captureAssignment(String captureKey) =>
+      delegate.captureAssignment(captureKey);
+
+  @override
+  Future<ConversationPage> conversations({
+    String? cursor,
+    int limit = 50,
+    String? captureRunId,
+    String? manualCaptureId,
+  }) => delegate.conversations(
+    cursor: cursor,
+    limit: limit,
+    captureRunId: captureRunId,
+    manualCaptureId: manualCaptureId,
+  );
+
+  @override
+  Future<ActivityPage> activities({
+    String? cursor,
+    int limit = 50,
+    String? captureRunId,
+    String? manualCaptureId,
+    String? environmentId,
+    String? conversationId,
+  }) => delegate.activities(
+    cursor: cursor,
+    limit: limit,
+    captureRunId: captureRunId,
+    manualCaptureId: manualCaptureId,
+    environmentId: environmentId,
+    conversationId: conversationId,
+  );
+
+  @override
+  Future<List<ApprovalRecord>> pendingApprovals() =>
+      delegate.pendingApprovals();
+
+  @override
+  dynamic noSuchMethod(Invocation invocation) =>
+      throw UnsupportedError('${invocation.memberName}');
 }
 
 final class _SequencedExchangeApi implements ControlApi {

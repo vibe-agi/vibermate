@@ -66,6 +66,12 @@ func executeRemoteLogin(
 		stdout == nil || stderr == nil {
 		return 1, keyLoginFailed
 	}
+	if config.server.Transport() == serverconnection.TransportHTTP {
+		_, _ = fmt.Fprintln(
+			stderr,
+			"Warning: this Runtime Server uses unencrypted HTTP; your username and password will be sent in cleartext. Continue only on a trusted network.",
+		)
+	}
 	username, password, err := readLoginCredentials(stdin, stderr)
 	if err != nil {
 		clear(password)
@@ -85,12 +91,7 @@ func executeRemoteLogin(
 	if err != nil {
 		return 1, keyLoginFailed
 	}
-	if config.server.Transport() == serverconnection.TransportHTTP {
-		_, _ = fmt.Fprintln(
-			stderr,
-			"Warning: this Runtime Server uses unencrypted HTTP; use it only on a trusted network.",
-		)
-	} else if result.FirstUse {
+	if config.server.Transport() != serverconnection.TransportHTTP && result.FirstUse {
 		_, _ = fmt.Fprintf(
 			stderr,
 			"Trusted this Runtime Server certificate (SHA-256 %s).\n",

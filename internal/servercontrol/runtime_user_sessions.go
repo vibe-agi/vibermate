@@ -2,6 +2,7 @@ package servercontrol
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"errors"
 	"io"
@@ -24,12 +25,22 @@ const (
 
 type RuntimeUserSessionsOptions struct {
 	InstanceID string
-	Users      *runtimeuser.Manager
+	Users      RuntimeUserSessionAuthority
 }
 
 type RuntimeUserSessionsHandler struct {
 	instanceID string
-	users      *runtimeuser.Manager
+	users      RuntimeUserSessionAuthority
+	logins     *runtimeUserLoginAdmission
+}
+
+// RuntimeUserSessionAuthority is the narrow password/session boundary needed
+// by the unauthenticated Server login route. Keeping the HTTP admission policy
+// outside runtimeuser.Manager lets the network edge reject abusive work before
+// any Argon2 allocation begins.
+type RuntimeUserSessionAuthority interface {
+	Login(context.Context, runtimeuser.LoginCommand) (runtimeuser.LoginSession, error)
+	Logout(context.Context, string) error
 }
 
 type RuntimeUserLogin struct {
@@ -64,6 +75,7 @@ func NewRuntimeUserSessions(
 	return &RuntimeUserSessionsHandler{
 		instanceID: options.InstanceID,
 		users:      options.Users,
+		logins:     newRuntimeUserLoginAdmission(),
 	}, nil
 }
 
@@ -123,6 +135,14 @@ func (handler *RuntimeUserSessionsHandler) login(
 	}
 	password := []byte(input.Password)
 	input.Password = ""
+	release, retryAfter, admitted := handler.logins.acquire(request.RemoteAddr)
+	if !admitted {
+		clear(password)
+		writer.Header().Set("Retry-After", retryAfterHeader(retryAfter))
+		writeProblem(writer, http.StatusTooManyRequests, "runtime_user_login_rate_limited")
+		return
+	}
+	defer release()
 	session, err := handler.users.Login(request.Context(), runtimeuser.LoginCommand{
 		Username: input.Username, Password: password,
 		MachineID: machineID, DeviceName: input.DeviceName,

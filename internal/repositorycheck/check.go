@@ -727,18 +727,21 @@ func CheckDesktopFrontendBoundary(repositoryRoot string) []Violation {
 		return nil
 	}
 	allowedIO := map[string]struct{}{
-		"ui/flutter_app/lib/main.dart":                            {},
-		"ui/flutter_app/lib/core/api/control_api.dart":            {},
-		"ui/flutter_app/lib/core/bootstrap/desktop_runtime.dart":  {},
-		"ui/flutter_app/lib/core/bootstrap/terminal_command.dart": {},
+		"ui/flutter_app/lib/main.dart":                               {},
+		"ui/flutter_app/lib/core/api/control_api.dart":               {},
+		"ui/flutter_app/lib/core/bootstrap/desktop_runtime.dart":     {},
+		"ui/flutter_app/lib/core/bootstrap/platform_runtime_io.dart": {},
+		"ui/flutter_app/lib/core/bootstrap/terminal_command.dart":    {},
+		"ui/flutter_app/lib/core/bootstrap/terminal_command_io.dart": {},
 	}
 	allowedNetwork := map[string]struct{}{
 		"ui/flutter_app/lib/core/api/control_api.dart":           {},
 		"ui/flutter_app/lib/core/bootstrap/desktop_runtime.dart": {},
 	}
 	allowedProcess := map[string]struct{}{
-		"ui/flutter_app/lib/core/bootstrap/desktop_runtime.dart":  {},
-		"ui/flutter_app/lib/core/bootstrap/terminal_command.dart": {},
+		"ui/flutter_app/lib/core/bootstrap/desktop_runtime.dart":     {},
+		"ui/flutter_app/lib/core/bootstrap/terminal_command.dart":    {},
+		"ui/flutter_app/lib/core/bootstrap/terminal_command_io.dart": {},
 	}
 	authorityStores := []string{
 		"package:flutter_secure_storage/",
@@ -1016,6 +1019,10 @@ func CheckExternalEgressGate(repositoryRoot string) []Violation {
 		"internal/originaltransport/probe.go":     {},
 		"internal/loopbackclient/client.go":       {},
 		"internal/blindtunnel/dialer.go":          {},
+		// Runtime Server clients have one typed transport adapter. Callers may
+		// issue HTTP requests and open the proxy stream through its interface,
+		// but cannot construct another outbound client or dialer themselves.
+		"internal/servertransport/transport.go": {},
 		// The third egress kind's typed probe, alongside the two above it.
 		//
 		// A probe cannot reach its target through the gated dialer that sits

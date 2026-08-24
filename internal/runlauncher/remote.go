@@ -2,7 +2,6 @@ package runlauncher
 
 import (
 	"context"
-	"crypto/tls"
 	"errors"
 	"fmt"
 	"io"
@@ -15,6 +14,7 @@ import (
 	"github.com/vibe-agi/vibermate/internal/capturecontrol"
 	"github.com/vibe-agi/vibermate/internal/clientadapter"
 	"github.com/vibe-agi/vibermate/internal/serverconnection"
+	"github.com/vibe-agi/vibermate/internal/servertransport"
 	"github.com/vibe-agi/vibermate/internal/workspaceidentity"
 )
 
@@ -43,12 +43,11 @@ func (config RemoteConfig) validate() error {
 type remoteConnection struct {
 	control     *controlClient
 	workspace   *workspaceidentity.Manager
-	tlsConfig   *tls.Config
 	target      serverconnection.Target
 	firstUse    bool
 	fingerprint string
 	relay       *localServerRelay
-	transport   *remoteTransport
+	transport   *servertransport.Transport
 }
 
 func connectRemote(
@@ -90,14 +89,17 @@ func connectRemote(
 	if err != nil {
 		return fail(fmt.Errorf("verify remote companion executable: %w", err))
 	}
-	transport, err := openRemoteTransport(config, timeout)
+	transport, err := servertransport.Open(servertransport.Options{
+		Target: config.Target, TrustDirectory: filepath.Join(config.StateDirectory, "trust"),
+		Clock: config.Clock, Timeout: timeout,
+	})
 	if err != nil {
 		return fail(err)
 	}
 	cleanupTransport := true
 	defer func() {
 		if cleanupTransport {
-			transport.close()
+			transport.Close()
 		}
 	}()
 	loginStore, err := serverconnection.OpenLoginStore(
@@ -119,15 +121,15 @@ func connectRemote(
 	}
 	control, err := newRemoteControlClient(
 		config.Target.Origin(), login.SessionToken().Value(),
-		transport.httpClient, transport.close,
+		transport, transport.Close,
 	)
 	if err != nil {
 		return fail(err)
 	}
-	observedFirstUse, observedFingerprint := transport.trust()
+	observedFirstUse, observedFingerprint := transport.Trust()
 	cleanupTransport = false
 	return &remoteConnection{
-			control: control, workspace: workspace, tlsConfig: transport.tlsConfig,
+			control: control, workspace: workspace,
 			target: config.Target, firstUse: observedFirstUse, fingerprint: observedFingerprint,
 			transport: transport,
 		}, &capturecontrol.CompanionAttestationInput{
@@ -151,7 +153,7 @@ func (connection *remoteConnection) materialize(
 	if err := grant.Validate(); err != nil {
 		return capturecontrol.LaunchGrant{}, nil, err
 	}
-	relay, err := startLocalServerRelay(connection.target, connection.tlsConfig)
+	relay, err := startLocalServerRelay(connection.transport)
 	if err != nil {
 		return capturecontrol.LaunchGrant{}, nil, err
 	}
@@ -196,18 +198,21 @@ func (connection *remoteConnection) close() {
 
 type localServerRelay struct {
 	listener net.Listener
-	target   serverconnection.Target
-	config   *tls.Config
+	dialer   serverStreamDialer
 	done     chan struct{}
 	mu       sync.Mutex
 	active   map[net.Conn]struct{}
+	closed   bool
 	wg       sync.WaitGroup
 	once     sync.Once
 }
 
-func startLocalServerRelay(target serverconnection.Target, config *tls.Config) (*localServerRelay, error) {
-	if !target.Valid() ||
-		(target.Transport() == serverconnection.TransportHTTPS) != (config != nil) {
+type serverStreamDialer interface {
+	Dial(context.Context) (net.Conn, error)
+}
+
+func startLocalServerRelay(dialer serverStreamDialer) (*localServerRelay, error) {
+	if dialer == nil {
 		return nil, errors.New("remote proxy relay configuration is invalid")
 	}
 	listener, err := net.Listen("tcp4", "127.0.0.1:0")
@@ -215,11 +220,8 @@ func startLocalServerRelay(target serverconnection.Target, config *tls.Config) (
 		return nil, fmt.Errorf("listen for local remote-proxy relay: %w", err)
 	}
 	relay := &localServerRelay{
-		listener: listener, target: target,
+		listener: listener, dialer: dialer,
 		done: make(chan struct{}), active: make(map[net.Conn]struct{}),
-	}
-	if config != nil {
-		relay.config = config.Clone()
 	}
 	go relay.accept()
 	return relay, nil
@@ -239,34 +241,27 @@ func (relay *localServerRelay) accept() {
 		if err != nil {
 			return
 		}
-		relay.track(client, true)
-		relay.wg.Add(1)
+		if !relay.admitClient(client) {
+			_ = client.Close()
+			return
+		}
 		go relay.forward(client)
 	}
 }
 
 func (relay *localServerRelay) forward(client net.Conn) {
 	defer relay.wg.Done()
-	defer relay.track(client, false)
+	defer relay.remove(client)
 	defer client.Close()
-	netDialer := &net.Dialer{Timeout: 5 * time.Second, KeepAlive: 15 * time.Second}
-	var server net.Conn
-	var err error
-	if relay.target.Transport() == serverconnection.TransportHTTPS {
-		dialer := &tls.Dialer{NetDialer: netDialer, Config: relay.config.Clone()}
-		server, err = dialer.DialContext(
-			context.Background(), "tcp", relay.target.Address().String(),
-		)
-	} else {
-		server, err = netDialer.DialContext(
-			context.Background(), "tcp", relay.target.Address().String(),
-		)
-	}
+	server, err := relay.dialer.Dial(context.Background())
 	if err != nil {
 		return
 	}
-	relay.track(server, true)
-	defer relay.track(server, false)
+	if !relay.add(server) {
+		_ = server.Close()
+		return
+	}
+	defer relay.remove(server)
 	defer server.Close()
 	copyDone := make(chan struct{}, 1)
 	go func() {
@@ -277,17 +272,38 @@ func (relay *localServerRelay) forward(client net.Conn) {
 		copyDone <- struct{}{}
 	}()
 	_, _ = io.Copy(client, server)
+	// The Runtime Server is authoritative for stream lifetime. Once it ends its
+	// direction, close the local side so a client that kept its write half open
+	// cannot strand the reverse copier and the relay forever.
+	_ = client.Close()
 	<-copyDone
 }
 
-func (relay *localServerRelay) track(connection net.Conn, add bool) {
+func (relay *localServerRelay) admitClient(connection net.Conn) bool {
 	relay.mu.Lock()
 	defer relay.mu.Unlock()
-	if add {
-		relay.active[connection] = struct{}{}
-	} else {
-		delete(relay.active, connection)
+	if relay.closed {
+		return false
 	}
+	relay.active[connection] = struct{}{}
+	relay.wg.Add(1)
+	return true
+}
+
+func (relay *localServerRelay) add(connection net.Conn) bool {
+	relay.mu.Lock()
+	defer relay.mu.Unlock()
+	if relay.closed {
+		return false
+	}
+	relay.active[connection] = struct{}{}
+	return true
+}
+
+func (relay *localServerRelay) remove(connection net.Conn) {
+	relay.mu.Lock()
+	delete(relay.active, connection)
+	relay.mu.Unlock()
 }
 
 func (relay *localServerRelay) Close() {
@@ -295,13 +311,20 @@ func (relay *localServerRelay) Close() {
 		return
 	}
 	relay.once.Do(func() {
-		_ = relay.listener.Close()
 		relay.mu.Lock()
+		relay.closed = true
+		relay.mu.Unlock()
+		_ = relay.listener.Close()
+		<-relay.done
+		relay.mu.Lock()
+		active := make([]net.Conn, 0, len(relay.active))
 		for connection := range relay.active {
-			_ = connection.Close()
+			active = append(active, connection)
 		}
 		relay.mu.Unlock()
-		<-relay.done
+		for _, connection := range active {
+			_ = connection.Close()
+		}
 		relay.wg.Wait()
 	})
 }

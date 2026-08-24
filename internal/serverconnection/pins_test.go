@@ -51,3 +51,56 @@ func TestPinStoreTrustsFirstCertificateAndRejectsReplacement(t *testing.T) {
 		t.Fatalf("replacement error = %v", err)
 	}
 }
+
+func TestIndependentPinStoresMergeFirstUseForDifferentServers(t *testing.T) {
+	t.Parallel()
+	now := time.Date(2026, 8, 24, 9, 0, 0, 0, time.UTC)
+	firstIdentity, err := serveridentity.Open(
+		context.Background(), filepath.Join(t.TempDir(), "identity-one"), rand.Reader, now,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	secondIdentity, err := serveridentity.Open(
+		context.Background(), filepath.Join(t.TempDir(), "identity-two"), rand.Reader, now,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	firstCertificate, _ := firstIdentity.Certificate()
+	secondCertificate, _ := secondIdentity.Certificate()
+	firstAddress, _ := ParseAddress("first.server.test:9666")
+	secondAddress, _ := ParseAddress("second.server.test:9666")
+	directory := filepath.Join(t.TempDir(), "pins")
+	left, err := OpenPinStore(directory)
+	if err != nil {
+		t.Fatal(err)
+	}
+	right, err := OpenPinStore(directory)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := left.Verify(firstAddress, firstCertificate.Certificate, now); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := right.Verify(secondAddress, secondCertificate.Certificate, now); err != nil {
+		t.Fatal(err)
+	}
+	reopened, err := OpenPinStore(directory)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, check := range []struct {
+		address     Address
+		certificate [][]byte
+	}{
+		{firstAddress, firstCertificate.Certificate},
+		{secondAddress, secondCertificate.Certificate},
+	} {
+		result, verifyErr := reopened.Verify(check.address, check.certificate, now)
+		if verifyErr != nil || result.FirstUse {
+			t.Fatalf("reopened Verify(%s) = %+v, %v", check.address, result, verifyErr)
+		}
+	}
+}

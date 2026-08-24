@@ -975,7 +975,7 @@ func validFixture(
 	}
 	revision, commitTime := initializeGitFixture(t, sourceRoot)
 	runtimeToolchains := ToolchainProvenance{
-		Go:      "go version go1.25.12 darwin/arm64",
+		Go:      "go version go1.25.13 darwin/arm64",
 		Flutter: expectedFlutterToolchain(),
 		Dart:    "Dart " + ExpectedDartVersion,
 		Xcode:   ExpectedXcodeVersion,

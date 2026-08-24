@@ -13,6 +13,7 @@ import (
 
 	"github.com/vibe-agi/vibermate/internal/serverconnection"
 	"github.com/vibe-agi/vibermate/internal/servercontrol"
+	"github.com/vibe-agi/vibermate/internal/servertransport"
 	"github.com/vibe-agi/vibermate/internal/workspaceidentity"
 )
 
@@ -52,16 +53,19 @@ func LoginRemote(
 		return RemoteLoginResult{}, fmt.Errorf("open remote companion identity: %w", err)
 	}
 	defer func() { _ = workspace.Shutdown(context.Background()) }()
-	transport, err := openRemoteTransport(config, 15*time.Second)
+	transport, err := servertransport.Open(servertransport.Options{
+		Target: config.Target, TrustDirectory: filepath.Join(config.StateDirectory, "trust"),
+		Clock: config.Clock, Timeout: 15 * time.Second,
+	})
 	if err != nil {
 		return RemoteLoginResult{}, err
 	}
-	defer transport.close()
+	defer transport.Close()
 	password := append([]byte(nil), request.Password...)
 	defer clear(password)
 	session, err := requestRuntimeUserSession(
 		ctx,
-		transport.httpClient,
+		transport,
 		config.Target,
 		servercontrol.RuntimeUserLogin{
 			Schema: servercontrol.RuntimeUserLoginSchema, Username: request.Username,
@@ -91,7 +95,7 @@ func LoginRemote(
 	if err := store.Save(credential); err != nil {
 		return RemoteLoginResult{}, fmt.Errorf("save Runtime Server login: %w", err)
 	}
-	firstUse, fingerprint := transport.trust()
+	firstUse, fingerprint := transport.Trust()
 	return RemoteLoginResult{
 		Target: config.Target, UserID: session.User.ID, Username: session.User.Username,
 		ExpiresAt: session.ExpiresAt, FirstUse: firstUse, TLSFingerprint: fingerprint,
@@ -100,7 +104,7 @@ func LoginRemote(
 
 func requestRuntimeUserSession(
 	ctx context.Context,
-	client *http.Client,
+	client requestDoer,
 	target serverconnection.Target,
 	input servercontrol.RuntimeUserLogin,
 	now time.Time,

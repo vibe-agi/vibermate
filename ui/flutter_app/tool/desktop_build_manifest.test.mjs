@@ -28,7 +28,7 @@ function manifest(overrides = {}) {
     toolchains: {
       dart: "Dart 3.11.3",
       flutter: `Flutter 3.41.5 (${"c".repeat(40)})`,
-      go: "go version go1.25.12 darwin/arm64",
+      go: "go version go1.25.13 darwin/arm64",
       xcode: "Xcode 16.2\nBuild version 16C5032a",
     },
     configurationSHA256: Object.fromEntries(

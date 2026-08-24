@@ -90,9 +90,6 @@ jobs:
           cache: true
       - name: Run runtime, protocol, egress, host, and persistence contracts
         run: |
-          go test -count=1 ./internal/access
-          go test -count=1 ./internal/accessapply
-          go test -count=1 ./internal/accesscredential
           go test -count=1 ./internal/activity
           go test -count=1 ./internal/productruntime
           go test -count=1 ./internal/hostcontract

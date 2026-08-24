@@ -322,7 +322,7 @@ test("embedded build manifest is clean distribution provenance", () => {
       toolkit: "flutter",
     },
     toolchains: {
-      go: "go version go1.25.12 darwin/arm64",
+      go: "go version go1.25.13 darwin/arm64",
       flutter:
         "Flutter 3.41.5 (2c9eb20739dfec95e2c74bd3dfa4601b0a8a36aa)",
       dart: "Dart 3.11.3",

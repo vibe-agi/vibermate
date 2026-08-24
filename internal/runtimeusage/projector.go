@@ -5,6 +5,7 @@ package runtimeusage
 import (
 	"context"
 	"errors"
+	"math"
 	"sort"
 	"time"
 
@@ -19,6 +20,11 @@ const (
 	ReportSchema       = "vibermate-runtime-usage-report-v1"
 	maxCaptureRuns     = 10_000
 	maxExchangeRecords = 100_000
+	maxReportedUsers   = 200
+	maxUserModels      = 50
+	maxUserContexts    = 100
+	maxUserSessions    = 100
+	maxReportDetails   = 5_000
 )
 
 type Clock interface{ Now() time.Time }
@@ -216,7 +222,51 @@ func (projector *Projector) Report(ctx context.Context) (Report, error) {
 		accumulator.finish()
 		report.Users = append(report.Users, accumulator.view)
 	}
+	sort.Slice(report.Users, func(left, right int) bool {
+		return userUsageLess(report.Users[left], report.Users[right])
+	})
+	if len(report.Users) > maxReportedUsers {
+		report.Users = report.Users[:maxReportedUsers]
+		report.Truncated = true
+	}
+	detailBudget := maxReportDetails
+	for index := range report.Users {
+		user := &report.Users[index]
+		var trimmed bool
+		user.Models, trimmed = boundedDetails(user.Models, maxUserModels, &detailBudget)
+		report.Truncated = report.Truncated || trimmed
+		user.Contexts, trimmed = boundedDetails(user.Contexts, maxUserContexts, &detailBudget)
+		report.Truncated = report.Truncated || trimmed
+		user.AgentSessions, trimmed = boundedDetails(
+			user.AgentSessions, maxUserSessions, &detailBudget,
+		)
+		report.Truncated = report.Truncated || trimmed
+	}
 	return report, nil
+}
+
+func userUsageLess(left, right UserUsage) bool {
+	if left.Turns != right.Turns {
+		return left.Turns > right.Turns
+	}
+	if left.CaptureRuns != right.CaptureRuns {
+		return left.CaptureRuns > right.CaptureRuns
+	}
+	if left.LastActivityAt != nil && right.LastActivityAt != nil &&
+		!left.LastActivityAt.Equal(*right.LastActivityAt) {
+		return left.LastActivityAt.After(*right.LastActivityAt)
+	}
+	if (left.LastActivityAt != nil) != (right.LastActivityAt != nil) {
+		return left.LastActivityAt != nil
+	}
+	return left.Username < right.Username
+}
+
+func boundedDetails[T any](items []T, perUserLimit int, budget *int) ([]T, bool) {
+	limit := min(len(items), perUserLimit, max(*budget, 0))
+	trimmed := limit < len(items)
+	*budget -= limit
+	return items[:limit], trimmed
 }
 
 func (projector *Projector) listRuns(ctx context.Context) ([]capturerun.View, bool, error) {
@@ -242,7 +292,10 @@ func (projector *Projector) listRuns(ctx context.Context) ([]capturerun.View, bo
 			return result, false, nil
 		}
 		last := page.Items[len(page.Items)-1]
-		cursor = &capturerun.PageCursor{Running: active(last.State), UpdatedAt: last.UpdatedAt, AfterID: last.ID}
+		cursor = &capturerun.PageCursor{
+			Running: active(last.State), UpdatedAt: last.UpdatedAt,
+			AfterID: last.ID, IncludeAtUpdatedAt: true,
+		}
 	}
 	return result, true, nil
 }
@@ -429,6 +482,10 @@ func (usage *TokenUsage) add(value exchangecontent.Usage) {
 
 func (aggregate *TokenAggregate) add(value exchangecontent.UsageValue) {
 	if value.Known {
+		if value.Tokens < 0 || value.Tokens > math.MaxInt64-aggregate.Tokens {
+			aggregate.UnknownTurns++
+			return
+		}
 		aggregate.Tokens += value.Tokens
 		aggregate.KnownTurns++
 	} else {

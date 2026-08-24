@@ -223,6 +223,9 @@ final class HttpControlApi implements ControlApi {
 
   static const _origin = 'vibermate://desktop';
   static const _maximumResponseBytes = 2 * 1024 * 1024;
+  // The Server bounds usage to 200 ranked users and 5,000 detail rows. Keep
+  // this endpoint-specific wire budget aligned with that retained projection.
+  static const _maximumUsageResponseBytes = 16 * 1024 * 1024;
   // A deliberately revealed body may contain the configured 16 MiB retained
   // prefix plus Base64 and JSON overhead. Ordinary control reads stay at the
   // tighter 2 MiB boundary.
@@ -702,7 +705,10 @@ final class HttpControlApi implements ControlApi {
   @override
   Future<RuntimeUsageReport> runtimeUsage() async =>
       RuntimeUsageReport.fromJson(
-        await _read('/api/v1/server/runtime-users/usage'),
+        await _read(
+          '/api/v1/server/runtime-users/usage',
+          maximumResponseBytes: _maximumUsageResponseBytes,
+        ),
         'runtimeUsage',
       );
 
@@ -1261,6 +1267,7 @@ final class HttpControlApi implements ControlApi {
   Future<Object?> _read(
     String path, {
     Duration responseTimeout = _requestTimeout,
+    int maximumResponseBytes = _maximumResponseBytes,
   }) async {
     await _ensureFreshSession();
     return (await _send(
@@ -1269,6 +1276,7 @@ final class HttpControlApi implements ControlApi {
       token: _session.readToken,
       expectedStatus: 200,
       responseTimeout: responseTimeout,
+      maximumResponseBytes: maximumResponseBytes,
     )).payload;
   }
 

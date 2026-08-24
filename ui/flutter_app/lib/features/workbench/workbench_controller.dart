@@ -135,6 +135,7 @@ final class WorkbenchController extends ChangeNotifier {
   final Map<String, ClientModelCatalog> _clientModelCatalogs = {};
   int _rawEvidenceGeneration = 0;
   Timer? _poller;
+  bool _pollInFlight = false;
   bool _disposed = false;
   WorkbenchPreferences? _desiredPreferences;
   WorkbenchPreferences? _pendingPreferences;
@@ -358,6 +359,7 @@ final class WorkbenchController extends ChangeNotifier {
 
   Future<void> _poll() async {
     if (_disposed ||
+        _pollInFlight ||
         loading ||
         captureDirectoryLoading ||
         mutating ||
@@ -366,6 +368,7 @@ final class WorkbenchController extends ChangeNotifier {
         environmentMutating) {
       return;
     }
+    _pollInFlight = true;
     final generation = _dashboardGeneration;
     try {
       final updated = await _api.loadDashboard();
@@ -395,6 +398,8 @@ final class WorkbenchController extends ChangeNotifier {
     } catch (_) {
       // A transient poll must not replace useful evidence with an error page.
       // Explicit refresh still surfaces the exact failure.
+    } finally {
+      _pollInFlight = false;
     }
   }
 
@@ -457,7 +462,7 @@ final class WorkbenchController extends ChangeNotifier {
       if (serverManagement &&
           (serverAccess == null ||
               runtimeUsers == null ||
-              runtimeUsage == null)) {
+              value == WorkbenchSection.usage && runtimeUsage == null)) {
         unawaited(refreshServerManagement());
       }
       if (terminalManagement && terminalCommand == null) {
@@ -478,18 +483,22 @@ final class WorkbenchController extends ChangeNotifier {
       serverManagementError = null;
       notifyListeners();
     }
+    final includeUsage = !quiet && section == WorkbenchSection.usage;
     try {
-      final updated = await Future.wait<Object>([
+      final requests = <Future<Object>>[
         _api.serverAccess(),
         _api.runtimeUsers(),
-        _api.runtimeUsage(),
-      ]);
+      ];
+      if (includeUsage) requests.add(_api.runtimeUsage());
+      final updated = await Future.wait<Object>(requests);
       if (_disposed) return;
       serverAccess = updated[0] as RuntimeServerAccess;
       runtimeUsers = List<RuntimeUser>.unmodifiable(
         updated[1] as List<RuntimeUser>,
       );
-      runtimeUsage = updated[2] as RuntimeUsageReport;
+      if (includeUsage) {
+        runtimeUsage = updated[2] as RuntimeUsageReport;
+      }
       serverManagementLoading = false;
       serverManagementError = null;
       notifyListeners();

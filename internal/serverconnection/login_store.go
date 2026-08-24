@@ -10,10 +10,11 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
-	"sync"
 	"time"
 	"unicode"
 	"unicode/utf8"
+
+	"github.com/vibe-agi/vibermate/internal/filetransaction"
 )
 
 const (
@@ -101,10 +102,7 @@ type loginDocument struct {
 }
 
 type LoginStore struct {
-	mu        sync.Mutex
-	directory string
-	path      string
-	sessions  map[string]loginRecord
+	path string
 }
 
 func OpenLoginStore(directory string) (*LoginStore, error) {
@@ -118,17 +116,25 @@ func OpenLoginStore(directory string) (*LoginStore, error) {
 		return nil, err
 	}
 	store := &LoginStore{
-		directory: directory,
-		path:      filepath.Join(directory, loginStoreFileName),
-		sessions:  make(map[string]loginRecord),
+		path: filepath.Join(directory, loginStoreFileName),
 	}
-	payload, err := os.ReadFile(store.path)
-	switch {
-	case errors.Is(err, os.ErrNotExist):
-		return store, nil
-	case err != nil:
+	snapshot, err := filetransaction.Read(store.transactionOptions())
+	if err != nil {
 		return nil, fmt.Errorf("read Runtime Server Login store: %w", err)
 	}
+	if !snapshot.Exists {
+		return store, nil
+	}
+	if _, err := decodeLoginSessions(snapshot.Payload); err != nil {
+		return nil, err
+	}
+	if err := os.Chmod(store.path, 0o600); err != nil {
+		return nil, err
+	}
+	return store, nil
+}
+
+func decodeLoginSessions(payload []byte) (map[string]loginRecord, error) {
 	if len(payload) == 0 || len(payload) > maxLoginStoreBytes {
 		return nil, errors.New("Runtime Server Login store is invalid")
 	}
@@ -143,36 +149,37 @@ func OpenLoginStore(directory string) (*LoginStore, error) {
 	if err := decoder.Decode(&trailing); !errors.Is(err, io.EOF) {
 		return nil, errors.New("Runtime Server Login store has trailing data")
 	}
+	sessions := make(map[string]loginRecord, len(document.Sessions))
 	for origin, record := range document.Sessions {
 		credential, err := loginCredentialOf(record)
 		if err != nil || credential.Target().Origin() != origin || record.Target != origin {
 			return nil, errors.New("Runtime Server Login store contains an invalid session")
 		}
-		store.sessions[origin] = record
+		sessions[origin] = record
 	}
-	if err := os.Chmod(store.path, 0o600); err != nil {
-		return nil, err
-	}
-	return store, nil
+	return sessions, nil
 }
 
 func (store *LoginStore) Save(credential LoginCredential) error {
 	if store == nil || !credential.valid() {
 		return ErrInvalidLoginCredential
 	}
-	store.mu.Lock()
-	defer store.mu.Unlock()
-	candidate := make(map[string]loginRecord, len(store.sessions)+1)
-	for origin, record := range store.sessions {
-		candidate[origin] = record
-	}
 	record := loginRecordOf(credential)
-	candidate[credential.Target().Origin()] = record
-	if err := store.persist(candidate); err != nil {
-		return err
-	}
-	store.sessions = candidate
-	return nil
+	return filetransaction.Update(
+		store.transactionOptions(),
+		func(snapshot filetransaction.Snapshot) (filetransaction.Mutation, error) {
+			sessions := make(map[string]loginRecord)
+			if snapshot.Exists {
+				stored, err := decodeLoginSessions(snapshot.Payload)
+				if err != nil {
+					return filetransaction.Mutation{}, err
+				}
+				sessions = stored
+			}
+			sessions[credential.Target().Origin()] = record
+			return encodeLoginSessions(sessions)
+		},
+	)
 }
 
 func (store *LoginStore) Load(
@@ -182,14 +189,35 @@ func (store *LoginStore) Load(
 	if store == nil || !target.Valid() || now.IsZero() {
 		return LoginCredential{}, ErrLoginRequired
 	}
-	store.mu.Lock()
-	record, found := store.sessions[target.Origin()]
-	store.mu.Unlock()
+	snapshot, err := filetransaction.Read(store.transactionOptions())
+	if err != nil {
+		return LoginCredential{}, fmt.Errorf(
+			"read Runtime Server Login store: %w",
+			err,
+		)
+	}
+	if !snapshot.Exists {
+		return LoginCredential{}, ErrLoginRequired
+	}
+	sessions, err := decodeLoginSessions(snapshot.Payload)
+	if err != nil {
+		return LoginCredential{}, fmt.Errorf(
+			"decode Runtime Server Login store: %w",
+			err,
+		)
+	}
+	record, found := sessions[target.Origin()]
 	if !found {
 		return LoginCredential{}, ErrLoginRequired
 	}
 	credential, err := loginCredentialOf(record)
-	if err != nil || !now.UTC().Before(credential.ExpiresAt()) {
+	if err != nil {
+		return LoginCredential{}, fmt.Errorf(
+			"decode Runtime Server Login credential: %w",
+			err,
+		)
+	}
+	if !now.UTC().Before(credential.ExpiresAt()) {
 		return LoginCredential{}, ErrLoginRequired
 	}
 	return credential, nil
@@ -199,60 +227,42 @@ func (store *LoginStore) Remove(target Target) error {
 	if store == nil || !target.Valid() {
 		return ErrInvalidLoginCredential
 	}
-	store.mu.Lock()
-	defer store.mu.Unlock()
-	if _, found := store.sessions[target.Origin()]; !found {
-		return nil
-	}
-	candidate := make(map[string]loginRecord, len(store.sessions)-1)
-	for origin, record := range store.sessions {
-		if origin != target.Origin() {
-			candidate[origin] = record
-		}
-	}
-	if err := store.persist(candidate); err != nil {
-		return err
-	}
-	store.sessions = candidate
-	return nil
+	return filetransaction.Update(
+		store.transactionOptions(),
+		func(snapshot filetransaction.Snapshot) (filetransaction.Mutation, error) {
+			if !snapshot.Exists {
+				return filetransaction.Mutation{}, nil
+			}
+			sessions, err := decodeLoginSessions(snapshot.Payload)
+			if err != nil {
+				return filetransaction.Mutation{}, err
+			}
+			if _, found := sessions[target.Origin()]; !found {
+				return filetransaction.Mutation{}, nil
+			}
+			delete(sessions, target.Origin())
+			return encodeLoginSessions(sessions)
+		},
+	)
 }
 
-func (store *LoginStore) persist(sessions map[string]loginRecord) error {
+func encodeLoginSessions(
+	sessions map[string]loginRecord,
+) (filetransaction.Mutation, error) {
 	payload, err := json.Marshal(loginDocument{
 		Schema: loginStoreSchema, Sessions: sessions,
 	})
 	if err != nil {
-		return err
+		return filetransaction.Mutation{}, err
 	}
-	temporary, err := os.CreateTemp(store.directory, ".login-sessions-*")
-	if err != nil {
-		return err
+	return filetransaction.Mutation{Payload: payload, Write: true}, nil
+}
+
+func (store *LoginStore) transactionOptions() filetransaction.Options {
+	return filetransaction.Options{
+		Path: store.path, MaximumBytes: maxLoginStoreBytes, Mode: 0o600,
+		TemporaryPrefix: ".login-sessions-*",
 	}
-	temporaryPath := temporary.Name()
-	committed := false
-	defer func() {
-		_ = temporary.Close()
-		if !committed {
-			_ = os.Remove(temporaryPath)
-		}
-	}()
-	if err := temporary.Chmod(0o600); err != nil {
-		return err
-	}
-	if _, err := temporary.Write(payload); err != nil {
-		return err
-	}
-	if err := temporary.Sync(); err != nil {
-		return err
-	}
-	if err := temporary.Close(); err != nil {
-		return err
-	}
-	if err := os.Rename(temporaryPath, store.path); err != nil {
-		return err
-	}
-	committed = true
-	return nil
 }
 
 func loginRecordOf(credential LoginCredential) loginRecord {

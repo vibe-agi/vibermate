@@ -316,7 +316,7 @@ func validCLIReport(t *testing.T) acceptancereport.Report {
 	}
 	revision, commitTime := initializeCLIGitFixture(t, sourceRoot)
 	tools := acceptancereport.ToolchainProvenance{
-		Go: "go version go1.25.12 darwin/arm64",
+		Go: "go version go1.25.13 darwin/arm64",
 		Flutter: "Flutter " + acceptancereport.ExpectedFlutterVersion + " (" +
 			acceptancereport.ExpectedFlutterRevision + ")",
 		Dart:  "Dart " + acceptancereport.ExpectedDartVersion,

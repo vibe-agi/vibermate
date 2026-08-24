@@ -11,6 +11,7 @@ import (
 
 	"github.com/vibe-agi/vibermate/internal/serverconnection"
 	"github.com/vibe-agi/vibermate/internal/servercontrol"
+	"github.com/vibe-agi/vibermate/internal/servertransport"
 )
 
 type RemoteLogoutRequest struct {
@@ -37,11 +38,14 @@ func LogoutRemote(ctx context.Context, request RemoteLogoutRequest) error {
 	if err != nil {
 		return err
 	}
-	transport, err := openRemoteTransport(config, 15*time.Second)
+	transport, err := servertransport.Open(servertransport.Options{
+		Target: config.Target, TrustDirectory: filepath.Join(config.StateDirectory, "trust"),
+		Clock: config.Clock, Timeout: 15 * time.Second,
+	})
 	if err != nil {
 		return err
 	}
-	defer transport.close()
+	defer transport.Close()
 	requestContext, cancel := context.WithTimeout(ctx, 20*time.Second)
 	defer cancel()
 	httpRequest, err := http.NewRequestWithContext(
@@ -55,7 +59,7 @@ func LogoutRemote(ctx context.Context, request RemoteLogoutRequest) error {
 	}
 	httpRequest.Header.Set("Authorization", "Bearer "+credential.SessionToken().Value())
 	httpRequest.Header.Set("Accept", "application/problem+json")
-	response, err := transport.httpClient.Do(httpRequest)
+	response, err := transport.Do(httpRequest)
 	httpRequest.Header.Del("Authorization")
 	if err != nil {
 		return fmt.Errorf("connect to Runtime Server for logout: %w", err)

@@ -33,12 +33,14 @@ func TestManagementUIRevalidatesEveryPackagedMember(t *testing.T) {
 		response := httptest.NewRecorder()
 		handler.ServeHTTP(response, httptest.NewRequest(http.MethodGet, requestPath, nil))
 		if response.Code != http.StatusOK ||
-			response.Header().Get("Cache-Control") != "no-cache" {
+			response.Header().Get("Cache-Control") != "no-cache" ||
+			response.Header().Get("X-Frame-Options") != "DENY" ||
+			response.Header().Get("Content-Security-Policy") != "frame-ancestors 'none'" {
 			t.Fatalf(
-				"GET %s status=%d cache=%q",
+				"GET %s status=%d headers=%v",
 				requestPath,
 				response.Code,
-				response.Header().Get("Cache-Control"),
+				response.Header(),
 			)
 		}
 	}

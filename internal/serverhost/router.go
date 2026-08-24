@@ -5,10 +5,16 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
+	"time"
 
 	"github.com/vibe-agi/vibermate/internal/desktopcontrol"
 	"github.com/vibe-agi/vibermate/internal/serveradmin"
 	"github.com/vibe-agi/vibermate/internal/servercontrol"
+)
+
+const (
+	ordinaryRequestReadTimeout  = 15 * time.Second
+	ordinaryRequestWriteTimeout = 30 * time.Second
 )
 
 type router struct {
@@ -33,6 +39,8 @@ func (handler router) ServeHTTP(writer http.ResponseWriter, request *http.Reques
 		handler.proxy.ServeHTTP(writer, request)
 		return
 	}
+	releaseDeadlines := boundOrdinaryRequest(writer, time.Now())
+	defer releaseDeadlines()
 	switch {
 	case request.URL.Path == servercontrol.RuntimeUserSessionPath ||
 		request.URL.Path == servercontrol.RuntimeUserCurrentSessionPath:
@@ -76,6 +84,16 @@ func (handler router) ServeHTTP(writer http.ResponseWriter, request *http.Reques
 		handler.managementUI.ServeHTTP(writer, request)
 	default:
 		serverProblem(writer, http.StatusNotFound, "server_route_not_found")
+	}
+}
+
+func boundOrdinaryRequest(writer http.ResponseWriter, now time.Time) func() {
+	controller := http.NewResponseController(writer)
+	_ = controller.SetReadDeadline(now.Add(ordinaryRequestReadTimeout))
+	_ = controller.SetWriteDeadline(now.Add(ordinaryRequestWriteTimeout))
+	return func() {
+		_ = controller.SetReadDeadline(time.Time{})
+		_ = controller.SetWriteDeadline(time.Time{})
 	}
 }
 

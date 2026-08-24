@@ -150,6 +150,41 @@ void main() {
     expect(requests.last.token, 'Bearer ${List.filled(43, 'W').join()}');
   });
 
+  test('usage report has its own bounded response budget', () async {
+    final server = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);
+    addTearDown(() => server.close(force: true));
+    server.listen((request) async {
+      await request.drain<void>();
+      request.response.headers.contentType = ContentType.json;
+      if (request.uri.path != '/api/v1/server/runtime-users/usage') {
+        request.response.statusCode = HttpStatus.notFound;
+        await request.response.close();
+        return;
+      }
+      final padding = List.filled(1024 * 1024, ' ').join();
+      request.response.write(padding);
+      request.response.write(padding);
+      request.response.write(' ');
+      request.response.write(jsonEncode(runtimeUsagePayload()));
+      await request.response.close();
+    });
+
+    final api = await HttpControlApi.connect(
+      DesktopSession(
+        baseUrl: Uri.parse('http://127.0.0.1:${server.port}'),
+        readToken: List.filled(43, 'R').join(),
+        writeToken: List.filled(43, 'W').join(),
+        instanceId: 'instance-test',
+        expiresAt: DateTime.now().toUtc().add(const Duration(hours: 1)),
+      ),
+      inspectSession: false,
+    );
+    addTearDown(api.close);
+
+    final report = await api.runtimeUsage();
+    expect(report.users.single.username, 'alice');
+  });
+
   test('HTTP API reads one exact Environment revision authority', () async {
     final preview = PreviewControlApi();
     addTearDown(preview.close);

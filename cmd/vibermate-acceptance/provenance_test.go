@@ -119,7 +119,7 @@ func TestToolchainValidationRequiresPinnedBuildAndHostVersions(t *testing.T) {
 	t.Parallel()
 
 	tools := toolchainProvenance{
-		Go:      "go version go1.25.12 darwin/arm64",
+		Go:      "go version go1.25.13 darwin/arm64",
 		Flutter: normalizedFlutterVersion(),
 		Dart:    "Dart " + expectedDartVersion,
 		Xcode:   expectedXcodeVersion,
@@ -180,7 +180,7 @@ func TestDesktopBuildManifestBindsSourceSidecarsAndConfiguration(
 			Toolkit:  "flutter",
 		},
 		Toolchains: desktopBuildToolchains{
-			Go:      "go version go1.25.12 darwin/arm64",
+			Go:      "go version go1.25.13 darwin/arm64",
 			Flutter: normalizedFlutterVersion(),
 			Dart:    "Dart " + expectedDartVersion,
 			Xcode:   expectedXcodeVersion,

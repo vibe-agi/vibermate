@@ -11,8 +11,9 @@ import (
 	"io"
 	"os"
 	"path/filepath"
-	"sync"
 	"time"
+
+	"github.com/vibe-agi/vibermate/internal/filetransaction"
 )
 
 const (
@@ -40,10 +41,7 @@ type pinDocument struct {
 // address is pinned to the exact leaf certificate seen on its first encrypted
 // connection. A changed certificate is never accepted or silently replaced.
 type PinStore struct {
-	mu        sync.Mutex
-	directory string
-	path      string
-	pins      map[string]string
+	path string
 }
 
 func OpenPinStore(directory string) (*PinStore, error) {
@@ -57,17 +55,22 @@ func OpenPinStore(directory string) (*PinStore, error) {
 		return nil, err
 	}
 	store := &PinStore{
-		directory: directory,
-		path:      filepath.Join(directory, pinFileName),
-		pins:      make(map[string]string),
+		path: filepath.Join(directory, pinFileName),
 	}
-	payload, err := os.ReadFile(store.path)
-	switch {
-	case errors.Is(err, os.ErrNotExist):
-		return store, nil
-	case err != nil:
+	snapshot, err := filetransaction.Read(store.transactionOptions())
+	if err != nil {
 		return nil, err
 	}
+	if !snapshot.Exists {
+		return store, nil
+	}
+	if _, err := decodePins(snapshot.Payload); err != nil {
+		return nil, err
+	}
+	return store, nil
+}
+
+func decodePins(payload []byte) (map[string]string, error) {
 	if len(payload) == 0 || len(payload) > maxPinFileBytes {
 		return nil, errors.New("Server pin file is invalid")
 	}
@@ -81,6 +84,7 @@ func OpenPinStore(directory string) (*PinStore, error) {
 	if err := decoder.Decode(&trailing); !errors.Is(err, io.EOF) {
 		return nil, errors.New("Server pin file contains trailing data")
 	}
+	pins := make(map[string]string, len(document.Pins))
 	for rawAddress, fingerprint := range document.Pins {
 		address, err := ParseAddress(rawAddress)
 		decoded, decodeErr := hex.DecodeString(fingerprint)
@@ -88,9 +92,9 @@ func OpenPinStore(directory string) (*PinStore, error) {
 			len(decoded) != sha256.Size || hex.EncodeToString(decoded) != fingerprint {
 			return nil, errors.New("Server pin file contains an invalid entry")
 		}
-		store.pins[rawAddress] = fingerprint
+		pins[rawAddress] = fingerprint
 	}
-	return store, nil
+	return pins, nil
 }
 
 func (store *PinStore) Verify(
@@ -107,58 +111,42 @@ func (store *PinStore) Verify(
 	}
 	digest := sha256.Sum256(rawCertificates[0])
 	fingerprint := hex.EncodeToString(digest[:])
-	store.mu.Lock()
-	defer store.mu.Unlock()
-	if existing, found := store.pins[address.String()]; found {
-		if existing != fingerprint {
-			return PinResult{Fingerprint: fingerprint}, ErrServerIdentityChanged
-		}
-		return PinResult{Fingerprint: fingerprint}, nil
-	}
-	candidate := make(map[string]string, len(store.pins)+1)
-	for key, value := range store.pins {
-		candidate[key] = value
-	}
-	candidate[address.String()] = fingerprint
-	if err := store.persist(candidate); err != nil {
+	result := PinResult{Fingerprint: fingerprint}
+	err = filetransaction.Update(
+		store.transactionOptions(),
+		func(snapshot filetransaction.Snapshot) (filetransaction.Mutation, error) {
+			pins := make(map[string]string)
+			if snapshot.Exists {
+				stored, decodeErr := decodePins(snapshot.Payload)
+				if decodeErr != nil {
+					return filetransaction.Mutation{}, decodeErr
+				}
+				pins = stored
+			}
+			if existing, found := pins[address.String()]; found {
+				if existing != fingerprint {
+					return filetransaction.Mutation{}, ErrServerIdentityChanged
+				}
+				return filetransaction.Mutation{}, nil
+			}
+			pins[address.String()] = fingerprint
+			payload, encodeErr := json.Marshal(pinDocument{Schema: pinSchema, Pins: pins})
+			if encodeErr != nil {
+				return filetransaction.Mutation{}, encodeErr
+			}
+			result.FirstUse = true
+			return filetransaction.Mutation{Payload: payload, Write: true}, nil
+		},
+	)
+	if err != nil {
 		return PinResult{}, err
 	}
-	store.pins[address.String()] = fingerprint
-	return PinResult{Fingerprint: fingerprint, FirstUse: true}, nil
+	return result, nil
 }
 
-func (store *PinStore) persist(pins map[string]string) error {
-	payload, err := json.Marshal(pinDocument{Schema: pinSchema, Pins: pins})
-	if err != nil {
-		return err
+func (store *PinStore) transactionOptions() filetransaction.Options {
+	return filetransaction.Options{
+		Path: store.path, MaximumBytes: maxPinFileBytes, Mode: 0o600,
+		TemporaryPrefix: ".server-pins-*",
 	}
-	temporary, err := os.CreateTemp(store.directory, ".server-pins-*")
-	if err != nil {
-		return err
-	}
-	temporaryPath := temporary.Name()
-	committed := false
-	defer func() {
-		_ = temporary.Close()
-		if !committed {
-			_ = os.Remove(temporaryPath)
-		}
-	}()
-	if err := temporary.Chmod(0o600); err != nil {
-		return err
-	}
-	if _, err := temporary.Write(payload); err != nil {
-		return err
-	}
-	if err := temporary.Sync(); err != nil {
-		return err
-	}
-	if err := temporary.Close(); err != nil {
-		return err
-	}
-	if err := os.Rename(temporaryPath, store.path); err != nil {
-		return err
-	}
-	committed = true
-	return nil
 }

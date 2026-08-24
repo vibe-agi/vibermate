@@ -80,6 +80,13 @@ func (store *Store) DeleteCapture(
 	if err != nil {
 		return CaptureDeletion{}, fmt.Errorf("delete Capture connection evidence: %w", err)
 	}
+	if _, err := deleteCounted(
+		operation, transaction,
+		`DELETE FROM runtime_exchange_agent_identities
+		  WHERE exchange_id IN (SELECT id FROM capture_purge_exchange_ids)`,
+	); err != nil {
+		return CaptureDeletion{}, fmt.Errorf("delete Capture Agent identities: %w", err)
+	}
 	deletion.Exchanges, err = deleteCounted(
 		operation, transaction,
 		`DELETE FROM runtime_exchange_contents
@@ -312,6 +319,7 @@ type ArchiveClear = resourcedeletion.Released
 //     watermark would let a later envelope collide with one that is gone.
 var evidenceTables = []string{
 	"tool_approvals",
+	"runtime_exchange_agent_identities",
 	"runtime_activities",
 	"runtime_connection_events",
 	"runtime_egress_attempts",

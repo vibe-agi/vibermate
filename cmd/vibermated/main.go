@@ -24,11 +24,7 @@ func main() {
 		runServer(os.Args[2:])
 		return
 	}
-	runDesktop(os.Args[1:])
-}
-
-func runDesktop(arguments []string) {
-	config, resources, err := parseArguments(arguments)
+	config, resources, err := parseArguments(os.Args[1:])
 	if err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(2)

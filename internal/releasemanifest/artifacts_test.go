@@ -630,7 +630,7 @@ func writeSemanticArtifacts(t *testing.T, root string, manifest *Manifest) {
 			Toolkit:  "flutter",
 		},
 		Toolchains: desktopBuildToolchains{
-			Go:      "go version go1.25.12 darwin/arm64",
+			Go:      "go version go1.25.13 darwin/arm64",
 			Flutter: "Flutter 3.41.5 (2c9...)",
 			Dart:    "Dart 3.11.3",
 			Xcode:   "Xcode 16.2\nBuild version 16C5032a",

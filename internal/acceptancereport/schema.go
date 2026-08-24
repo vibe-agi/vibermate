@@ -13,7 +13,7 @@ const (
 	SchemaV7                     = "vibermate.m0-assembly-acceptance/v7"
 	DesktopBuildManifestSchemaV3 = "vibermate.desktop-build/v3"
 	DesktopBuildManifestSchema   = DesktopBuildManifestSchemaV3
-	ExpectedGoVersion            = "go1.25.12"
+	ExpectedGoVersion            = "go1.25.13"
 	ExpectedFlutterVersion       = "3.41.5"
 	ExpectedFlutterRevision      = "2c9eb20739dfec95e2c74bd3dfa4601b0a8a36aa"
 	ExpectedDartVersion          = "3.11.3"

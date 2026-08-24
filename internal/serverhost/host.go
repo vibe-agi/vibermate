@@ -68,11 +68,12 @@ type Host struct {
 	ownsRuntime    bool
 	managementHTTP http.Handler
 
-	done      chan struct{}
-	closeOnce sync.Once
-	closeErr  error
-	failureMu sync.Mutex
-	serveErr  error
+	done       chan struct{}
+	shutdownMu sync.Mutex
+	closed     bool
+	closeErr   error
+	failureMu  sync.Mutex
+	serveErr   error
 }
 
 func Start(ctx context.Context, options Options) (*Host, error) {
@@ -346,28 +347,51 @@ func (host *Host) Shutdown(ctx context.Context) error {
 	if host == nil {
 		return nil
 	}
-	host.closeOnce.Do(func() {
-		shutdownContext := ctx
-		var cancel context.CancelFunc
-		if _, hasDeadline := ctx.Deadline(); !hasDeadline {
-			shutdownContext, cancel = context.WithTimeout(ctx, host.shutdown)
-			defer cancel()
-		}
-		serverErr := host.server.Shutdown(shutdownContext)
+	if ctx == nil {
+		return errors.New("Runtime Server shutdown context is nil")
+	}
+	host.shutdownMu.Lock()
+	defer host.shutdownMu.Unlock()
+	if host.closed {
+		return host.closeErr
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+
+	shutdownContext := ctx
+	var cancel context.CancelFunc
+	if _, hasDeadline := ctx.Deadline(); !hasDeadline {
+		shutdownContext, cancel = context.WithTimeout(ctx, host.shutdown)
+		defer cancel()
+	}
+	serverErr := host.server.Shutdown(shutdownContext)
+	serverStopped := serverErr == nil
+	select {
+	case <-host.done:
+	default:
 		select {
 		case <-host.done:
 		case <-shutdownContext.Done():
+			serverStopped = false
 			serverErr = errors.Join(serverErr, fmt.Errorf(
 				"wait for Runtime Server listener: %w", shutdownContext.Err(),
 			))
 		}
-		var runtimeErr error
-		if host.ownsRuntime {
-			runtimeErr = host.runtime.Shutdown(shutdownContext)
-		}
-		host.closeErr = errors.Join(
-			serverErr, host.Failure(), runtimeErr, host.guard.Release(),
-		)
-	})
+	}
+	var runtimeErr error
+	runtimeStopped := !host.ownsRuntime
+	if host.ownsRuntime {
+		runtimeErr = host.runtime.Shutdown(shutdownContext)
+		runtimeStopped = runtimeErr == nil &&
+			host.runtime.Status().State == productruntime.RuntimeStateStopped
+	}
+	attemptErr := errors.Join(serverErr, host.Failure(), runtimeErr)
+	if !serverStopped || !runtimeStopped {
+		return attemptErr
+	}
+
+	host.closeErr = errors.Join(attemptErr, host.guard.Release())
+	host.closed = true
 	return host.closeErr
 }

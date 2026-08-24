@@ -2,6 +2,8 @@ package runtimeusage_test
 
 import (
 	"context"
+	"fmt"
+	"math"
 	"testing"
 	"time"
 
@@ -12,6 +14,159 @@ import (
 	"github.com/vibe-agi/vibermate/internal/runtimeusage"
 	"github.com/vibe-agi/vibermate/internal/runtimeuser"
 )
+
+func TestProjectorContinuesAfterAFullCaptureRunPage(t *testing.T) {
+	t.Parallel()
+	now := time.Date(2026, 8, 24, 1, 2, 3, 0, time.UTC)
+	user := runtimeuser.User{
+		ID:       runtimeuser.UserID("user.AAAAAAAAAAAAAAAAAAAAAAAAAAA"),
+		Username: "alice", State: runtimeuser.StateActive,
+		CreatedAt: now, UpdatedAt: now,
+	}
+	items := make([]capturerun.View, capturerun.MaxPageLimit+1)
+	for index := range items {
+		items[index] = capturerun.View{
+			ID: fmt.Sprintf("run-%03d", index), RuntimeUserID: user.ID,
+			LoginSessionID: runtimeuser.LoginSessionID("login.AAAAAAAAAAAAAAAAAAAAAAAAAAA"),
+			DeviceName:     "device", MachineID: "machine", State: capturerun.StateFinished,
+			UpdatedAt: now.Add(-time.Duration(index) * time.Millisecond),
+		}
+	}
+	runs := &validatingPagedRuns{items: items}
+	projector, err := runtimeusage.New(runtimeusage.Options{
+		Users: fakeUsers{items: []runtimeuser.User{user}}, Runs: runs,
+		Activities: fakeActivities{byRun: map[string][]activity.Record{}},
+		Contents:   fakeContents{items: map[string]exchangecontent.Record{}},
+		Identities: fakeIdentities{items: map[string]agentconversation.ClientIdentity{}},
+		Clock:      fixedClock{now: now},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	report, err := projector.Report(context.Background())
+	if err != nil {
+		t.Fatalf("Report() error = %v", err)
+	}
+	if report.Users[0].CaptureRuns != len(items) || len(runs.requests) != 2 {
+		t.Fatalf("report=%#v requests=%#v", report.Users[0], runs.requests)
+	}
+	if cursor := runs.requests[1].Cursor; cursor == nil || !cursor.Valid() {
+		t.Fatalf("second page cursor = %#v", cursor)
+	}
+}
+
+func TestProjectorKeepsAnOverflowingTokenTurnUnknown(t *testing.T) {
+	t.Parallel()
+	now := time.Date(2026, 8, 24, 1, 2, 3, 0, time.UTC)
+	user := runtimeuser.User{
+		ID:       runtimeuser.UserID("user.AAAAAAAAAAAAAAAAAAAAAAAAAAA"),
+		Username: "alice", State: runtimeuser.StateActive,
+		CreatedAt: now, UpdatedAt: now,
+	}
+	run := capturerun.View{
+		ID: "run-one", RuntimeUserID: user.ID,
+		LoginSessionID: runtimeuser.LoginSessionID("login.AAAAAAAAAAAAAAAAAAAAAAAAAAA"),
+		DeviceName:     "device", MachineID: "machine", State: capturerun.StateFinished,
+		UpdatedAt: now,
+	}
+	contents := fakeContents{items: map[string]exchangecontent.Record{
+		"exchange-one": usageContent("exchange-one", math.MaxInt64),
+		"exchange-two": usageContent("exchange-two", 1),
+	}}
+	projector, err := runtimeusage.New(runtimeusage.Options{
+		Users: fakeUsers{items: []runtimeuser.User{user}},
+		Runs:  fakeRuns{items: []capturerun.View{run}},
+		Activities: fakeActivities{byRun: map[string][]activity.Record{
+			"run-one": {
+				{SubjectID: "exchange-one", Status: activity.StatusSucceeded, OccurredAt: now},
+				{SubjectID: "exchange-two", Status: activity.StatusSucceeded, OccurredAt: now},
+			},
+		}},
+		Contents:   contents,
+		Identities: fakeIdentities{items: map[string]agentconversation.ClientIdentity{}},
+		Clock:      fixedClock{now: now},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	report, err := projector.Report(context.Background())
+	if err != nil {
+		t.Fatalf("Report() error = %v", err)
+	}
+	aggregate := report.Users[0].Tokens.Output
+	if aggregate.Tokens != math.MaxInt64 || aggregate.KnownTurns != 1 ||
+		aggregate.UnknownTurns != 1 {
+		t.Fatalf("overflow aggregate = %#v", aggregate)
+	}
+}
+
+func TestProjectorBoundsBreakdownsWithoutChangingUserTotals(t *testing.T) {
+	t.Parallel()
+	now := time.Date(2026, 8, 24, 1, 2, 3, 0, time.UTC)
+	user := runtimeuser.User{
+		ID:       runtimeuser.UserID("user.AAAAAAAAAAAAAAAAAAAAAAAAAAA"),
+		Username: "alice", State: runtimeuser.StateActive,
+		CreatedAt: now, UpdatedAt: now,
+	}
+	run := capturerun.View{
+		ID: "run-one", RuntimeUserID: user.ID,
+		LoginSessionID: runtimeuser.LoginSessionID("login.AAAAAAAAAAAAAAAAAAAAAAAAAAA"),
+		DeviceName:     "device", MachineID: "machine", State: capturerun.StateFinished,
+		UpdatedAt: now,
+	}
+	records := make([]activity.Record, 51)
+	contents := make(map[string]exchangecontent.Record, len(records))
+	for index := range records {
+		exchangeID := fmt.Sprintf("exchange-%02d", index)
+		records[index] = activity.Record{
+			SubjectID: exchangeID, Status: activity.StatusSucceeded,
+			OccurredAt: now.Add(time.Duration(index) * time.Second),
+		}
+		contents[exchangeID] = exchangecontent.Record{
+			ExchangeID: exchangeID,
+			Request: exchangecontent.Request{
+				RequestedModel: fmt.Sprintf("requested:%02d", index),
+				EffectiveModel: fmt.Sprintf("upstream:%02d", index),
+			},
+		}
+	}
+	projector, err := runtimeusage.New(runtimeusage.Options{
+		Users: fakeUsers{items: []runtimeuser.User{user}},
+		Runs:  fakeRuns{items: []capturerun.View{run}},
+		Activities: fakeActivities{byRun: map[string][]activity.Record{
+			"run-one": records,
+		}},
+		Contents:   fakeContents{items: contents},
+		Identities: fakeIdentities{items: map[string]agentconversation.ClientIdentity{}},
+		Clock:      fixedClock{now: now},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	report, err := projector.Report(context.Background())
+	if err != nil {
+		t.Fatalf("Report() error = %v", err)
+	}
+	if report.Users[0].Turns != 51 || len(report.Users[0].Models) != 50 ||
+		!report.Truncated {
+		t.Fatalf("bounded report = %#v", report)
+	}
+}
+
+func usageContent(exchangeID string, tokens int64) exchangecontent.Record {
+	return exchangecontent.Record{
+		ExchangeID: exchangeID,
+		Request: exchangecontent.Request{
+			RequestedModel: "requested", EffectiveModel: "upstream",
+		},
+		Response: &exchangecontent.Response{Usage: exchangecontent.Usage{
+			Output: exchangecontent.UsageValue{Known: true, Tokens: tokens, Source: "provider"},
+		}},
+	}
+}
 
 func TestProjectorAttributesExactModelsTokensAndResumedAgentSession(t *testing.T) {
 	t.Parallel()
@@ -121,6 +276,28 @@ func (runs fakeRuns) ListRuns(_ context.Context, request capturerun.PageRequest)
 		return capturerun.Page{}, nil
 	}
 	return capturerun.Page{Items: append([]capturerun.View(nil), runs.items...)}, nil
+}
+
+type validatingPagedRuns struct {
+	items    []capturerun.View
+	requests []capturerun.PageRequest
+}
+
+func (runs *validatingPagedRuns) ListRuns(
+	_ context.Context,
+	request capturerun.PageRequest,
+) (capturerun.Page, error) {
+	if request.Cursor != nil && !request.Cursor.Valid() {
+		return capturerun.Page{}, capturerun.ErrInvalidRequest
+	}
+	runs.requests = append(runs.requests, request)
+	start := len(runs.requests) - 1
+	start *= capturerun.MaxPageLimit
+	if start >= len(runs.items) {
+		return capturerun.Page{}, nil
+	}
+	end := min(start+capturerun.MaxPageLimit, len(runs.items))
+	return capturerun.Page{Items: append([]capturerun.View(nil), runs.items[start:end]...)}, nil
 }
 
 type fakeActivities struct{ byRun map[string][]activity.Record }

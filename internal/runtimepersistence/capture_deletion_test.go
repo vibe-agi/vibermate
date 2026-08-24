@@ -9,6 +9,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/vibe-agi/vibermate/internal/activity"
+	"github.com/vibe-agi/vibermate/internal/agentconversation"
 	"github.com/vibe-agi/vibermate/internal/rawevidence"
 	"github.com/vibe-agi/vibermate/internal/resourcedeletion"
 )
@@ -192,6 +194,25 @@ func seedCaptureGraph(
 	}
 
 	seedCaptureEvidence(t, store, scopeKind, scopeID, turns)
+	if err := store.ConversationIdentityRepository().PutConversationIdentity(
+		ctx,
+		exchangeID,
+		agentconversation.ClientIdentity{
+			Client:             "codex",
+			SessionID:          scopeID + "-session",
+			SessionResumable:   true,
+			ProviderResponseID: exchangeID,
+			Source:             agentconversation.ClientIdentitySourceProtocolEvidence,
+			Confidence:         "exact",
+			ObservedAt:         time.Date(2026, 8, 18, 9, 0, 0, 0, time.UTC),
+			ProtocolIDs: []agentconversation.ClientEvidenceValue{
+				{Name: "openai_responses.session_id", Value: scopeID + "-session"},
+			},
+			Attributes: []agentconversation.ClientEvidenceValue{},
+		},
+	); err != nil {
+		t.Fatal(err)
+	}
 }
 
 // Deleting a Capture has to release the bytes, not just the rows. Content is
@@ -272,6 +293,16 @@ func TestDeletingACaptureReleasesItsBytesAndLeavesOtherCapturesIntact(t *testing
 	}
 	if got := countRows(t, store, "capture_runs"); got != 1 {
 		t.Fatalf("the other Capture authority was deleted: %d rows", got)
+	}
+	if _, err := store.ConversationIdentityRepository().GetConversationIdentity(
+		context.Background(), "run-doomed-exchange-0",
+	); !errors.Is(err, activity.ErrExchangeNotFound) {
+		t.Fatalf("deleted Capture identity error = %v, want ErrExchangeNotFound", err)
+	}
+	if _, err := store.ConversationIdentityRepository().GetConversationIdentity(
+		context.Background(), "run-kept-exchange-0",
+	); err != nil {
+		t.Fatalf("kept Capture identity error = %v", err)
 	}
 }
 
@@ -357,6 +388,9 @@ func TestClearingTheArchiveEmptiesEvidenceAndKeepsTheDatabaseUsable(t *testing.T
 		if got := countRows(t, store, table); got != 0 {
 			t.Fatalf("%s kept %d rows after a clear", table, got)
 		}
+	}
+	if got := countRows(t, store, "runtime_exchange_agent_identities"); got != 0 {
+		t.Fatalf("Exchange identities kept %d rows after a clear", got)
 	}
 
 	// The schema revision has to survive, or a cleared database is an

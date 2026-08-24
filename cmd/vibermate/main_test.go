@@ -225,6 +225,45 @@ func TestRemoteLoginCommandRejectsMissingCredentialsBeforeNetwork(t *testing.T) 
 	}
 }
 
+func TestRemoteLoginWarnsBeforeReadingCredentialsOverHTTP(t *testing.T) {
+	t.Parallel()
+	target, err := serverconnection.ParseTarget("http://127.0.0.1:1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var stderr strings.Builder
+	input := &warningBeforeReadInput{
+		input:   strings.NewReader("\n"),
+		prompts: &stderr,
+	}
+	code, key := executeRemoteLogin(
+		context.Background(), loginConfig{server: target},
+		filepath.Join(t.TempDir(), "remote-client"), "test-device",
+		fixedCommandClock{now: time.Now().UTC()},
+		bytes.NewReader(bytes.Repeat([]byte{1}, 512)), input,
+		io.Discard, &stderr,
+	)
+	if code != 1 || key != keyLoginFailed {
+		t.Fatalf("code=%d key=%q", code, key)
+	}
+	if !input.warnedBeforeRead {
+		t.Fatalf("credentials were read before HTTP warning: %q", stderr.String())
+	}
+}
+
+type warningBeforeReadInput struct {
+	input            io.Reader
+	prompts          *strings.Builder
+	warnedBeforeRead bool
+}
+
+func (input *warningBeforeReadInput) Read(destination []byte) (int, error) {
+	input.warnedBeforeRead = strings.Contains(
+		input.prompts.String(), "unencrypted HTTP",
+	)
+	return input.input.Read(destination)
+}
+
 type fixedCommandClock struct{ now time.Time }
 
 func (clock fixedCommandClock) Now() time.Time { return clock.now }

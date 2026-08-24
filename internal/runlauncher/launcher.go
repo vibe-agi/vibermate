@@ -406,7 +406,7 @@ func (launcher *Launcher) announceRemoteTrust(connection *remoteConnection) {
 	}
 	firstUse, fingerprint := connection.firstUse, connection.fingerprint
 	if connection.transport != nil {
-		firstUse, fingerprint = connection.transport.trust()
+		firstUse, fingerprint = connection.transport.Trust()
 	}
 	if !firstUse || fingerprint == "" {
 		return

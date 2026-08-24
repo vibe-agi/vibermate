@@ -5,6 +5,7 @@ import 'dart:typed_data';
 
 import '../api/control_api.dart';
 import '../api/control_models.dart';
+import 'desktop_daemon_lifecycle.dart';
 
 final class DesktopRuntimeException implements Exception {
   const DesktopRuntimeException(this.message, {this.reason});
@@ -251,22 +252,28 @@ final class DesktopRuntime {
     if (_closed) return;
     _closed = true;
     await api.close();
-    try {
-      await _daemon.stdin.close();
-    } on Object {
-      // An unexpectedly exited child may have already closed the pipe.
-    }
-    try {
-      await _daemon.exitCode.timeout(const Duration(seconds: 2));
-    } on TimeoutException {
-      _daemon.kill(ProcessSignal.sigterm);
-      try {
-        await _daemon.exitCode.timeout(const Duration(milliseconds: 250));
-      } on TimeoutException {
-        _daemon.kill(ProcessSignal.sigkill);
-      }
-    }
+    await const DesktopDaemonLifecycle.production().close(
+      _IODesktopDaemonProcess(_daemon),
+    );
   }
+}
+
+final class _IODesktopDaemonProcess implements DesktopDaemonProcess {
+  const _IODesktopDaemonProcess(this.process);
+
+  final Process process;
+
+  @override
+  Future<int> get exitCode => process.exitCode;
+
+  @override
+  Future<void> closeInput() => process.stdin.close();
+
+  @override
+  bool terminate() => process.kill(ProcessSignal.sigterm);
+
+  @override
+  bool kill() => process.kill(ProcessSignal.sigkill);
 }
 
 final class _DaemonDescriptor {
