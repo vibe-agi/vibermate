@@ -20,19 +20,32 @@ func TestCaptureKeepsFrozenEnvironmentRevisionAfterPublish(t *testing.T) {
 	t.Parallel()
 	repository := newMemoryRepository()
 	revisionOne := environmentFixture(t, "work", "adapter.shared")
+	revisionOne.LaunchEnvironment = environment.LaunchEnvironmentPolicy{
+		SetEnv:    map[string]string{"TEAM_CONTEXT": "revision-one"},
+		DeleteEnv: []string{"REMOVE_CONTEXT"},
+	}
 	resolver := newRevisionResolver(t, revisionOne)
 	manager := newTestManager(t, repository, resolver)
 
 	firstCapture := testCapture()
-	firstAssignment, err := manager.Create(context.Background(), CreateCommand{
-		Capture: firstCapture, EnvironmentID: "work", Source: SourceLaunch,
-	})
+	firstAssignment, firstLaunchEnvironment, err := manager.CreateForLaunch(
+		context.Background(),
+		CreateCommand{
+			Capture: firstCapture, EnvironmentID: "work", Source: SourceLaunch,
+		},
+	)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if firstAssignment.LaunchAuthority.InitialEnvironmentRevision() != 1 {
 		t.Fatalf("first launch revision = %d", firstAssignment.LaunchAuthority.InitialEnvironmentRevision())
 	}
+	if firstLaunchEnvironment.SetEnv["TEAM_CONTEXT"] != "revision-one" ||
+		len(firstLaunchEnvironment.DeleteEnv) != 1 ||
+		firstLaunchEnvironment.DeleteEnv[0] != "REMOVE_CONTEXT" {
+		t.Fatalf("first launch environment = %+v", firstLaunchEnvironment)
+	}
+	firstLaunchEnvironment.SetEnv["TEAM_CONTEXT"] = "mutated"
 	firstConnection, err := manager.RegisterConnection(
 		context.Background(), firstCapture, "connection.first", semanticOrigin(t),
 	)
@@ -44,6 +57,7 @@ func TestCaptureKeepsFrozenEnvironmentRevisionAfterPublish(t *testing.T) {
 
 	revisionTwo := revisionOne.Clone()
 	revisionTwo.Revision = 2
+	revisionTwo.LaunchEnvironment.SetEnv["TEAM_CONTEXT"] = "revision-two"
 	revisionTwo.ClientEndpoints[0].Revision = 2
 	plan := &revisionTwo.ClientEndpoints[0].ProtocolPlans[0]
 	plan.Revision = 2
@@ -73,14 +87,20 @@ func TestCaptureKeepsFrozenEnvironmentRevisionAfterPublish(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	secondAssignment, err := manager.Create(context.Background(), CreateCommand{
-		Capture: secondCapture, EnvironmentID: "work", Source: SourceLaunch,
-	})
+	secondAssignment, secondLaunchEnvironment, err := manager.CreateForLaunch(
+		context.Background(),
+		CreateCommand{
+			Capture: secondCapture, EnvironmentID: "work", Source: SourceLaunch,
+		},
+	)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if secondAssignment.LaunchAuthority.InitialEnvironmentRevision() != 2 {
 		t.Fatalf("second launch revision = %d", secondAssignment.LaunchAuthority.InitialEnvironmentRevision())
+	}
+	if secondLaunchEnvironment.SetEnv["TEAM_CONTEXT"] != "revision-two" {
+		t.Fatalf("second launch environment = %+v", secondLaunchEnvironment)
 	}
 	secondConnection, err := manager.RegisterConnection(
 		context.Background(), secondCapture, "connection.second", semanticOrigin(t),

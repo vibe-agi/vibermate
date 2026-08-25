@@ -1523,6 +1523,7 @@ func (handler *Handler) forwardToOriginalOrigin(
 		Headers:      request.Header,
 		Body:         body,
 		PayloadClass: payloadClass,
+		EgressPolicy: plan.EgressPolicy(),
 	})
 	if err != nil {
 		writeReason(writer, http.StatusBadRequest, ReasonRequestBodyInvalid, "")

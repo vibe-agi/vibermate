@@ -7,6 +7,8 @@ import (
 	"fmt"
 	"slices"
 
+	"github.com/vibe-agi/vibermate/internal/egressnetwork"
+	"github.com/vibe-agi/vibermate/internal/messagetransform"
 	"github.com/vibe-agi/vibermate/internal/originidentity"
 	"github.com/vibe-agi/vibermate/internal/protocolspec"
 	"github.com/vibe-agi/vibermate/internal/upstreamendpoint"
@@ -140,6 +142,8 @@ type CompiledProtocolPlan struct {
 	adapterPolicy       ClientAdapterPolicy
 	operations          []protocolspec.ClientOperationPlan
 	destinationKind     DestinationKind
+	egressPolicy        egressnetwork.Policy
+	transformProgram    messagetransform.Program
 	originalCodec       protocolspec.CodecPlan
 	originalWireProfile wireprofile.CompiledUpstreamWireProfile
 	upstreamRouteSet    *CompiledRouteSet
@@ -156,6 +160,12 @@ func (plan CompiledProtocolPlan) Operations() []protocolspec.ClientOperationPlan
 }
 func (plan CompiledProtocolPlan) DestinationKind() DestinationKind {
 	return plan.destinationKind
+}
+func (plan CompiledProtocolPlan) EgressPolicy() egressnetwork.Policy {
+	return plan.egressPolicy
+}
+func (plan CompiledProtocolPlan) TransformProgram() messagetransform.Program {
+	return plan.transformProgram
 }
 func (plan CompiledProtocolPlan) UpstreamRouteSet() (CompiledRouteSet, bool) {
 	if plan.upstreamRouteSet == nil {
@@ -203,6 +213,8 @@ type RequestPlan struct {
 	protocol            CompiledProtocolPlan
 	operation           protocolspec.ClientOperationPlan
 	destinationKind     DestinationKind
+	egressPolicy        egressnetwork.Policy
+	transformProgram    messagetransform.Program
 	codecPlan           protocolspec.CodecPlan
 	wireProfile         wireprofile.CompiledUpstreamWireProfile
 	upstreamRoute       *CompiledRoutePlan
@@ -226,6 +238,10 @@ func (plan RequestPlan) PreservesOriginalDestination() bool {
 }
 func (plan RequestPlan) UsesUpstreamDestination() bool {
 	return plan.destinationKind == DestinationKindUpstream
+}
+func (plan RequestPlan) EgressPolicy() egressnetwork.Policy { return plan.egressPolicy }
+func (plan RequestPlan) TransformProgram() messagetransform.Program {
+	return plan.transformProgram
 }
 func (plan RequestPlan) CodecPlan() protocolspec.CodecPlan { return plan.codecPlan }
 func (plan RequestPlan) WireProfile() wireprofile.CompiledUpstreamWireProfile {
@@ -270,11 +286,24 @@ func compileExecution(
 			if err != nil {
 				return nil, nil, fmt.Errorf("compile protocol plan %q operations: %w", plan.ID, err)
 			}
+			transformProgram, err := messagetransform.Compile(
+				plan.TransformPolicy,
+				messagetransform.DefaultLimits(),
+			)
+			if err != nil {
+				return nil, nil, fmt.Errorf(
+					"compile protocol plan %q message transform: %w",
+					plan.ID,
+					err,
+				)
+			}
 			compiledPlan := CompiledProtocolPlan{
 				id: plan.ID, revision: plan.Revision, dialect: clientDialect,
-				adapterPolicy:   plan.ClientAdapterPolicy,
-				operations:      operations,
-				destinationKind: plan.Destination.Kind,
+				adapterPolicy:    plan.ClientAdapterPolicy,
+				operations:       operations,
+				destinationKind:  plan.Destination.Kind,
+				egressPolicy:     plan.EgressPolicy,
+				transformProgram: transformProgram,
 			}
 			switch plan.Destination.Kind {
 			case DestinationKindOriginal:

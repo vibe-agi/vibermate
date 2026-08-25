@@ -1009,7 +1009,7 @@ func CheckDataPlaneEnvironmentBoundary(repositoryRoot string) []Violation {
 }
 
 // CheckExternalEgressGate rejects new raw outbound-client construction outside
-// the gated provider and original-origin transports and their typed probes.
+// the small set of transport modules that own an external-network boundary.
 func CheckExternalEgressGate(repositoryRoot string) []Violation {
 	allowedFiles := map[string]struct{}{
 		"internal/providertransport/transport.go": {},
@@ -1019,6 +1019,12 @@ func CheckExternalEgressGate(repositoryRoot string) []Violation {
 		"internal/originaltransport/probe.go":     {},
 		"internal/loopbackclient/client.go":       {},
 		"internal/blindtunnel/dialer.go":          {},
+		// egressnetwork is the single typed compiler for a frozen per-flow
+		// direct/SOCKS/DoH policy. Only these implementation files may construct
+		// its base dialer and the private HTTP client used for DNS-over-HTTPS;
+		// callers receive ContextDialer and Resolver interfaces instead.
+		"internal/egressnetwork/dialer.go": {},
+		"internal/egressnetwork/doh.go":    {},
 		// Runtime Server clients have one typed transport adapter. Callers may
 		// issue HTTP requests and open the proxy stream through its interface,
 		// but cannot construct another outbound client or dialer themselves.

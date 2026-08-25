@@ -97,24 +97,35 @@ func (manager *Manager) state(reference captureidentity.Reference) *captureState
 }
 
 func (manager *Manager) Create(ctx context.Context, command CreateCommand) (Assignment, error) {
+	assignment, _, err := manager.CreateForLaunch(ctx, command)
+	return assignment, err
+}
+
+// CreateForLaunch returns the child-process environment overlay from the same
+// immutable EnvironmentSnapshot used to create the durable assignment. The
+// overlay is launch-only data and is not duplicated into assignment evidence.
+func (manager *Manager) CreateForLaunch(
+	ctx context.Context,
+	command CreateCommand,
+) (Assignment, environment.LaunchEnvironmentPolicy, error) {
 	finish, err := manager.lifecycle.begin(ctx)
 	if err != nil {
-		return Assignment{}, err
+		return Assignment{}, environment.LaunchEnvironmentPolicy{}, err
 	}
 	defer finish()
 	if command.Capture.Validate() != nil || !command.Source.valid() {
-		return Assignment{}, ErrInvalidAssignment
+		return Assignment{}, environment.LaunchEnvironmentPolicy{}, ErrInvalidAssignment
 	}
 	state := manager.state(command.Capture)
 	state.writer.Lock()
 	defer state.writer.Unlock()
 	snapshot, err := manager.resolveActive(command.EnvironmentID)
 	if err != nil {
-		return Assignment{}, err
+		return Assignment{}, environment.LaunchEnvironmentPolicy{}, err
 	}
 	launchAuthority, err := environment.NewLaunchAuthorityBoundary(snapshot)
 	if err != nil {
-		return Assignment{}, err
+		return Assignment{}, environment.LaunchEnvironmentPolicy{}, err
 	}
 	candidate := Assignment{
 		Capture: command.Capture, EnvironmentID: command.EnvironmentID, Revision: 1,
@@ -122,7 +133,11 @@ func (manager *Manager) Create(ctx context.Context, command CreateCommand) (Assi
 		UpdatedAt: canonicalTime(manager.clock.Now()),
 	}
 	result, writeErr := manager.repository.Write(ctx, 0, candidate)
-	return manager.finishWrite(state, candidate, result, writeErr)
+	assignment, err := manager.finishWrite(state, candidate, result, writeErr)
+	if err != nil {
+		return assignment, environment.LaunchEnvironmentPolicy{}, err
+	}
+	return assignment, snapshot.LaunchEnvironment(), nil
 }
 
 func (manager *Manager) Resolve(ctx context.Context, reference captureidentity.Reference) (Assignment, error) {

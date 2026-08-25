@@ -30,6 +30,8 @@ type ProviderAccountResponse struct {
 	Revision           uint64                      `json:"revision"`
 	CredentialState    provideraccount.HealthState `json:"credentialState"`
 	CredentialEpoch    uint64                      `json:"credentialEpoch"`
+	SetHeaderNames     []string                    `json:"setHeaderNames"`
+	DeleteHeaderNames  []string                    `json:"deleteHeaderNames"`
 }
 
 type ProviderAccountPage struct {
@@ -42,10 +44,14 @@ type ProviderAccountCreateInput struct {
 	UpstreamEndpointID string              `json:"upstreamEndpointId"`
 	Kind               ProviderAccountKind `json:"kind"`
 	Secret             string              `json:"secret"`
+	SetHeaders         map[string]string   `json:"setHeaders"`
+	DeleteHeaders      []string            `json:"deleteHeaders"`
 }
 
 type ProviderAccountCredentialInput struct {
-	Secret string `json:"secret"`
+	Secret        string            `json:"secret"`
+	SetHeaders    map[string]string `json:"setHeaders"`
+	DeleteHeaders []string          `json:"deleteHeaders"`
 }
 
 type ProviderAccountReferenceResponse struct {
@@ -113,6 +119,7 @@ func (handler *Handler) getProviderAccount(writer http.ResponseWriter, request *
 func (handler *Handler) createProviderAccount(writer http.ResponseWriter, request *http.Request) {
 	expected, key, headerErr := mutationHeaders(request)
 	body, bodyErr := readJSONBody(request)
+	defer clear(body)
 	var input ProviderAccountCreateInput
 	if headerErr != nil || bodyErr != nil || expected != 0 || decodeStrictJSON(body, &input) != nil {
 		writeProblem(writer, http.StatusUnprocessableEntity, ReasonInvalidRequest)
@@ -121,8 +128,15 @@ func (handler *Handler) createProviderAccount(writer http.ResponseWriter, reques
 	id, idErr := provideraccount.NewID(input.ID)
 	endpointID, endpointErr := upstreamendpoint.NewID(input.UpstreamEndpointID)
 	driver, kindErr := providerAccountKindAuthority(input.Kind)
-	secret, secretErr := secretstore.NewValue([]byte(input.Secret))
+	secret, secretErr := providerAccountCredentialValue(
+		input.Secret,
+		input.SetHeaders,
+		input.DeleteHeaders,
+	)
 	input.Secret = ""
+	clearHeaderValues(input.SetHeaders)
+	input.SetHeaders = nil
+	input.DeleteHeaders = nil
 	if idErr != nil || endpointErr != nil || kindErr != nil || secretErr != nil {
 		if secret != nil {
 			secret.Destroy()
@@ -158,6 +172,7 @@ func (handler *Handler) createProviderAccount(writer http.ResponseWriter, reques
 func (handler *Handler) replaceProviderAccountCredential(writer http.ResponseWriter, request *http.Request) {
 	expected, key, headerErr := mutationHeaders(request)
 	body, bodyErr := readJSONBody(request)
+	defer clear(body)
 	var input ProviderAccountCredentialInput
 	id, idErr := provideraccount.NewID(request.PathValue("accountId"))
 	if headerErr != nil || bodyErr != nil || idErr != nil ||
@@ -165,8 +180,15 @@ func (handler *Handler) replaceProviderAccountCredential(writer http.ResponseWri
 		writeProblem(writer, http.StatusUnprocessableEntity, ReasonInvalidRequest)
 		return
 	}
-	secret, secretErr := secretstore.NewValue([]byte(input.Secret))
+	secret, secretErr := providerAccountCredentialValue(
+		input.Secret,
+		input.SetHeaders,
+		input.DeleteHeaders,
+	)
 	input.Secret = ""
+	clearHeaderValues(input.SetHeaders)
+	input.SetHeaders = nil
+	input.DeleteHeaders = nil
 	if secretErr != nil {
 		writeProblem(writer, http.StatusUnprocessableEntity, ReasonInvalidRequest)
 		return
@@ -250,7 +272,36 @@ func providerAccountResponseOf(view provideraccount.View) (ProviderAccountRespon
 		Kind:               kind, RealmID: view.Account.RealmID, State: view.Account.State,
 		Revision: view.Account.Revision, CredentialState: view.Health.State,
 		CredentialEpoch: view.Health.CredentialEpoch,
+		SetHeaderNames:  append([]string{}, view.SetHeaderNames...),
+		DeleteHeaderNames: append(
+			[]string{},
+			view.DeleteHeaderNames...,
+		),
 	}, nil
+}
+
+func providerAccountCredentialValue(
+	credential string,
+	setHeaders map[string]string,
+	deleteHeaders []string,
+) (*secretstore.Value, error) {
+	material, err := providerauth.NewMaterial(credential, setHeaders, deleteHeaders)
+	if err != nil {
+		return nil, err
+	}
+	defer material.Destroy()
+	encoded, err := material.MarshalBinary()
+	if err != nil {
+		return nil, err
+	}
+	defer clear(encoded)
+	return secretstore.NewValue(encoded)
+}
+
+func clearHeaderValues(headers map[string]string) {
+	for name := range headers {
+		headers[name] = ""
+	}
 }
 
 func providerAccountKindAuthority(kind ProviderAccountKind) (providerauth.DriverRef, error) {

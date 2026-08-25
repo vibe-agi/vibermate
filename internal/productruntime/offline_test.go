@@ -10,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/vibe-agi/vibermate/internal/egressnetwork"
 	"github.com/vibe-agi/vibermate/internal/offlinehold"
 )
 
@@ -183,7 +184,7 @@ func testRuntimeProbeTarget(kind offlinehold.EgressKind, host string, revision u
 	target := offlinehold.ProbeTarget{
 		Kind: kind, Transport: offlinehold.ProbeTransportStrictTLS,
 		TargetRef: string(kind) + "/" + host, NetworkOrigin: "https://" + host,
-		HTTPAuthority: host, TLSServerName: host,
+		HTTPAuthority: host, TLSServerName: host, EgressPolicy: egressnetwork.DefaultPolicy(),
 	}
 	if revision != 0 {
 		digest := sha256.Sum256([]byte(fmt.Sprintf("%s/%d", host, revision)))

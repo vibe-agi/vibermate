@@ -489,10 +489,17 @@ func runAcceptance(
 			ctx,
 			account.ID,
 		)
-		if recoveryErr != nil || recoveredAccount != account {
+		if recoveryErr != nil {
+			return fail("credentialed-recovery", recoveryErr)
+		}
+		if !providerAccountResponsesEqual(recoveredAccount, account) {
 			return fail(
 				"credentialed-recovery",
-				fmt.Errorf("recovered account=%+v: %w", recoveredAccount, recoveryErr),
+				fmt.Errorf(
+					"recovered account differs: got=%+v want=%+v",
+					recoveredAccount,
+					account,
+				),
 			)
 		}
 		if recoveryErr = requireRecoveredEnvironment(

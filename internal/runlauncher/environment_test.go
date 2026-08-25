@@ -7,6 +7,7 @@ import (
 
 	"github.com/vibe-agi/vibermate/internal/capturecontrol"
 	"github.com/vibe-agi/vibermate/internal/clientadapter"
+	"github.com/vibe-agi/vibermate/internal/environment"
 )
 
 func TestBuildEnvironmentPinsProxyAndRemovesProtectedBypasses(t *testing.T) {
@@ -127,6 +128,58 @@ func TestBuildEnvironmentPinsProxyAndRemovesProtectedBypasses(t *testing.T) {
 	base[0] = "PATH=/mutated"
 	if environmentMap(environment)["PATH"] != "/usr/bin:/bin" {
 		t.Fatal("caller mutation changed the built environment")
+	}
+}
+
+func TestBuildEnvironmentAppliesTheFrozenLaunchEnvironmentPolicy(
+	t *testing.T,
+) {
+	t.Parallel()
+	grant := capturecontrol.LaunchGrant{
+		Run: testCaptureRunView(
+			"run-launch-environment",
+			clientadapter.RecognitionUnknown,
+			nil,
+		),
+		CatalogRevision:              7,
+		LaunchRecipe:                 clientadapter.LaunchGeneric,
+		Recognition:                  clientadapter.RecognitionUnknown,
+		ExecutablePath:               "/tmp/agent",
+		ProxyAddress:                 "http://127.0.0.1:43210",
+		ProxyDelivery:                capturecontrol.ProxyDeliveryLocalListener,
+		ProxyToken:                   "proxy-capability",
+		RunCapability:                "run-capability",
+		ProtectedAuthorities:         []string{},
+		ManagedCredentialAuthorities: []string{},
+		LaunchEnvironment: environment.LaunchEnvironmentPolicy{
+			SetEnv: map[string]string{
+				"EXISTING_SETTING": "environment-value",
+				"NEW_SETTING":      "new-value",
+			},
+			DeleteEnv: []string{"REMOVE_SETTING"},
+		},
+	}
+	base := []string{
+		"EXISTING_SETTING=ambient-value",
+		"REMOVE_SETTING=ambient-value",
+		"PRESERVE_SETTING=ambient-value",
+	}
+
+	built, err := buildEnvironment(base, grant)
+	if err != nil {
+		t.Fatal(err)
+	}
+	values := environmentMap(built)
+	if values["EXISTING_SETTING"] != "environment-value" ||
+		values["NEW_SETTING"] != "new-value" ||
+		values["PRESERVE_SETTING"] != "ambient-value" {
+		t.Fatalf("child launch environment = %+v", values)
+	}
+	if _, exists := values["REMOVE_SETTING"]; exists {
+		t.Fatalf("deleted child variable survived: %+v", values)
+	}
+	if base[0] != "EXISTING_SETTING=ambient-value" {
+		t.Fatal("building the child environment mutated the launcher environment")
 	}
 }
 

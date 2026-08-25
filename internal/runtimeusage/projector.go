@@ -17,7 +17,7 @@ import (
 )
 
 const (
-	ReportSchema       = "vibermate-runtime-usage-report-v1"
+	ReportSchema       = "vibermate-runtime-usage-report-v2"
 	maxCaptureRuns     = 10_000
 	maxExchangeRecords = 100_000
 	maxReportedUsers   = 200
@@ -66,7 +66,9 @@ func New(options Options) (*Projector, error) {
 type Report struct {
 	Schema      string      `json:"schema"`
 	GeneratedAt time.Time   `json:"generatedAt"`
+	Period      Period      `json:"period"`
 	Truncated   bool        `json:"truncated"`
+	Days        []DayUsage  `json:"days"`
 	Users       []UserUsage `json:"users"`
 }
 
@@ -85,6 +87,7 @@ type UserUsage struct {
 	Tokens                  TokenUsage          `json:"tokens"`
 	LatestContext           *ContextRef         `json:"latestContext,omitempty"`
 	LastActivityAt          *time.Time          `json:"lastActivityAt,omitempty"`
+	Days                    []DayUsage          `json:"days"`
 	Models                  []ModelUsage        `json:"models"`
 	Contexts                []ContextUsage      `json:"contexts"`
 	AgentSessions           []AgentSessionUsage `json:"agentSessions"`
@@ -151,8 +154,23 @@ type TokenUsage struct {
 	Reasoning     TokenAggregate `json:"reasoning"`
 }
 
+// DayUsage is one non-empty calendar day in the requested Period. The report
+// is sparse by design: absence means no retained terminal Turn on that day,
+// while the evidence counters distinguish a known zero from missing evidence.
+type DayUsage struct {
+	Date                    string     `json:"date"`
+	Turns                   int        `json:"turns"`
+	Succeeded               int        `json:"succeeded"`
+	Failed                  int        `json:"failed"`
+	Canceled                int        `json:"canceled"`
+	ContentUnavailableTurns int        `json:"contentUnavailableTurns"`
+	ModelUnavailableTurns   int        `json:"modelUnavailableTurns"`
+	Tokens                  TokenUsage `json:"tokens"`
+}
+
 type userAccumulator struct {
 	view      UserUsage
+	days      map[string]*DayUsage
 	contexts  map[string]*ContextUsage
 	models    map[string]*ModelUsage
 	sessions  map[string]*sessionAccumulator
@@ -164,8 +182,8 @@ type sessionAccumulator struct {
 	runs map[string]struct{}
 }
 
-func (projector *Projector) Report(ctx context.Context) (Report, error) {
-	if projector == nil || ctx == nil {
+func (projector *Projector) Report(ctx context.Context, query Query) (Report, error) {
+	if projector == nil || ctx == nil || !query.valid() {
 		return Report{}, errors.New("Runtime usage request is invalid")
 	}
 	users, err := projector.options.Users.List(ctx)
@@ -177,7 +195,8 @@ func (projector *Projector) Report(ctx context.Context) (Report, error) {
 	for _, user := range users {
 		accumulators[user.ID] = &userAccumulator{
 			view: UserUsage{UserID: user.ID, Username: user.Username, State: user.State,
-				Models: []ModelUsage{}, Contexts: []ContextUsage{}, AgentSessions: []AgentSessionUsage{}},
+				Days: []DayUsage{}, Models: []ModelUsage{}, Contexts: []ContextUsage{}, AgentSessions: []AgentSessionUsage{}},
+			days:     map[string]*DayUsage{},
 			contexts: map[string]*ContextUsage{}, models: map[string]*ModelUsage{},
 			sessions: map[string]*sessionAccumulator{},
 		}
@@ -186,42 +205,57 @@ func (projector *Projector) Report(ctx context.Context) (Report, error) {
 	if err != nil {
 		return Report{}, err
 	}
-	exchangeCount := 0
+	runsByID := make(map[string]capturerun.View, len(runs))
+	countedRuns := make(map[string]struct{}, len(runs))
 	for _, run := range runs {
+		runsByID[run.ID] = run
 		accumulator := accumulators[run.RuntimeUserID]
 		if accumulator == nil || run.LoginSessionID == "" {
 			continue
 		}
-		accumulator.addRun(run)
-		remaining := maxExchangeRecords - exchangeCount
-		if remaining <= 0 {
-			truncated = true
-			break
-		}
-		records, recordsTruncated, readErr := projector.listExchanges(ctx, run.ID, remaining)
-		if readErr != nil {
-			return Report{}, readErr
-		}
-		if recordsTruncated {
-			truncated = true
-		}
-		for _, record := range records {
-			exchangeCount++
-			if err := projector.addExchange(ctx, accumulator, run, record); err != nil {
-				return Report{}, err
-			}
-		}
-		if truncated && exchangeCount >= maxExchangeRecords {
-			break
+		if query.contains(run.UpdatedAt) {
+			accumulator.addRun(run)
+			countedRuns[run.ID] = struct{}{}
 		}
 	}
-	report := Report{Schema: ReportSchema, GeneratedAt: projector.options.Clock.Now().UTC(), Truncated: truncated,
+	records, recordsTruncated, err := projector.listExchanges(
+		ctx, query, maxExchangeRecords,
+	)
+	if err != nil {
+		return Report{}, err
+	}
+	truncated = truncated || recordsTruncated
+	for _, record := range records {
+		if !query.contains(record.OccurredAt) {
+			continue
+		}
+		run, ok := runsByID[record.CaptureRunID]
+		if !ok || run.LoginSessionID == "" {
+			continue
+		}
+		accumulator := accumulators[run.RuntimeUserID]
+		if accumulator == nil {
+			continue
+		}
+		if _, counted := countedRuns[run.ID]; !counted {
+			accumulator.addRun(run)
+			countedRuns[run.ID] = struct{}{}
+		}
+		if err := projector.addExchange(
+			ctx, accumulator, run, record, query.day(record.OccurredAt),
+		); err != nil {
+			return Report{}, err
+		}
+	}
+	report := Report{Schema: ReportSchema, GeneratedAt: projector.options.Clock.Now().UTC(),
+		Period: query.period, Truncated: truncated, Days: []DayUsage{},
 		Users: make([]UserUsage, 0, len(users))}
 	for _, user := range users {
 		accumulator := accumulators[user.ID]
 		accumulator.finish()
 		report.Users = append(report.Users, accumulator.view)
 	}
+	report.Days = aggregateDays(report.Users)
 	sort.Slice(report.Users, func(left, right int) bool {
 		return userUsageLess(report.Users[left], report.Users[right])
 	})
@@ -300,7 +334,11 @@ func (projector *Projector) listRuns(ctx context.Context) ([]capturerun.View, bo
 	return result, true, nil
 }
 
-func (projector *Projector) listExchanges(ctx context.Context, runID string, limit int) ([]activity.Record, bool, error) {
+func (projector *Projector) listExchanges(
+	ctx context.Context,
+	query Query,
+	limit int,
+) ([]activity.Record, bool, error) {
 	result := make([]activity.Record, 0)
 	var before int64
 	for len(result) < limit {
@@ -309,7 +347,10 @@ func (projector *Projector) listExchanges(ctx context.Context, runID string, lim
 			pageLimit = remaining
 		}
 		page, err := projector.options.Activities.ListExchanges(ctx, activity.PageRequest{
-			BeforeSequence: before, Limit: pageLimit, CaptureRunID: runID,
+			BeforeSequence:    before,
+			Limit:             pageLimit,
+			OccurredAtOrAfter: query.from,
+			OccurredBefore:    query.until,
 		})
 		if err != nil {
 			return nil, false, err
@@ -323,12 +364,21 @@ func (projector *Projector) listExchanges(ctx context.Context, runID string, lim
 	return result, true, nil
 }
 
-func (projector *Projector) addExchange(ctx context.Context, user *userAccumulator, run capturerun.View, record activity.Record) error {
+func (projector *Projector) addExchange(
+	ctx context.Context,
+	user *userAccumulator,
+	run capturerun.View,
+	record activity.Record,
+	date string,
+) error {
 	context := user.contexts[contextKey(run)]
+	day := user.day(date)
 	user.view.Turns++
 	context.Turns++
+	day.Turns++
 	addStatus(&user.view.Succeeded, &user.view.Failed, &user.view.Canceled, record.Status)
 	addStatus(&context.Succeeded, &context.Failed, &context.Canceled, record.Status)
+	addStatus(&day.Succeeded, &day.Failed, &day.Canceled, record.Status)
 	setLatest(&user.view.LastActivityAt, record.OccurredAt)
 	setLatest(&context.LastActivityAt, record.OccurredAt)
 
@@ -341,12 +391,15 @@ func (projector *Projector) addExchange(ctx context.Context, user *userAccumulat
 	if !contentKnown {
 		user.view.ContentUnavailableTurns++
 		user.view.ModelUnavailableTurns++
+		day.ContentUnavailableTurns++
+		day.ModelUnavailableTurns++
 	} else {
 		if content.Response != nil {
 			usage = content.Response.Usage
 		}
 		if content.Request.RequestedModel == "" || content.Request.EffectiveModel == "" {
 			user.view.ModelUnavailableTurns++
+			day.ModelUnavailableTurns++
 		} else {
 			model := user.model(content.Request.RequestedModel, content.Request.EffectiveModel)
 			model.Turns++
@@ -356,6 +409,7 @@ func (projector *Projector) addExchange(ctx context.Context, user *userAccumulat
 	}
 	user.view.Tokens.add(usage)
 	context.Tokens.add(usage)
+	day.Tokens.add(usage)
 
 	identity, identityErr := projector.options.Identities.GetConversationIdentity(ctx, record.SubjectID)
 	if errors.Is(identityErr, activity.ErrExchangeNotFound) && contentKnown {
@@ -430,7 +484,22 @@ func (user *userAccumulator) session(client, id string) *sessionAccumulator {
 	return value
 }
 
+func (user *userAccumulator) day(date string) *DayUsage {
+	value := user.days[date]
+	if value == nil {
+		value = &DayUsage{Date: date}
+		user.days[date] = value
+	}
+	return value
+}
+
 func (user *userAccumulator) finish() {
+	for _, value := range user.days {
+		user.view.Days = append(user.view.Days, *value)
+	}
+	sort.Slice(user.view.Days, func(i, j int) bool {
+		return user.view.Days[i].Date < user.view.Days[j].Date
+	})
 	for _, value := range user.models {
 		user.view.Models = append(user.view.Models, *value)
 	}
@@ -472,12 +541,50 @@ func (user *userAccumulator) finish() {
 	})
 }
 
+func aggregateDays(users []UserUsage) []DayUsage {
+	byDate := make(map[string]*DayUsage)
+	for _, user := range users {
+		for _, source := range user.Days {
+			target := byDate[source.Date]
+			if target == nil {
+				target = &DayUsage{Date: source.Date}
+				byDate[source.Date] = target
+			}
+			target.add(source)
+		}
+	}
+	result := make([]DayUsage, 0, len(byDate))
+	for _, value := range byDate {
+		result = append(result, *value)
+	}
+	sort.Slice(result, func(i, j int) bool { return result[i].Date < result[j].Date })
+	return result
+}
+
+func (usage *DayUsage) add(value DayUsage) {
+	usage.Turns += value.Turns
+	usage.Succeeded += value.Succeeded
+	usage.Failed += value.Failed
+	usage.Canceled += value.Canceled
+	usage.ContentUnavailableTurns += value.ContentUnavailableTurns
+	usage.ModelUnavailableTurns += value.ModelUnavailableTurns
+	usage.Tokens.addAggregate(value.Tokens)
+}
+
 func (usage *TokenUsage) add(value exchangecontent.Usage) {
 	usage.InputUncached.add(value.InputUncached)
 	usage.CacheWrite.add(value.CacheWrite)
 	usage.CacheRead.add(value.CacheRead)
 	usage.Output.add(value.Output)
 	usage.Reasoning.add(value.Reasoning)
+}
+
+func (usage *TokenUsage) addAggregate(value TokenUsage) {
+	usage.InputUncached.addAggregate(value.InputUncached)
+	usage.CacheWrite.addAggregate(value.CacheWrite)
+	usage.CacheRead.addAggregate(value.CacheRead)
+	usage.Output.addAggregate(value.Output)
+	usage.Reasoning.addAggregate(value.Reasoning)
 }
 
 func (aggregate *TokenAggregate) add(value exchangecontent.UsageValue) {
@@ -491,6 +598,16 @@ func (aggregate *TokenAggregate) add(value exchangecontent.UsageValue) {
 	} else {
 		aggregate.UnknownTurns++
 	}
+}
+
+func (aggregate *TokenAggregate) addAggregate(value TokenAggregate) {
+	if value.Tokens < 0 || value.Tokens > math.MaxInt64-aggregate.Tokens {
+		aggregate.UnknownTurns += value.KnownTurns + value.UnknownTurns
+		return
+	}
+	aggregate.Tokens += value.Tokens
+	aggregate.KnownTurns += value.KnownTurns
+	aggregate.UnknownTurns += value.UnknownTurns
 }
 
 func addStatus(succeeded, failed, canceled *int, status activity.Status) {

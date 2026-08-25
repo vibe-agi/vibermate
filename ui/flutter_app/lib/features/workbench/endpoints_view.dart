@@ -8,6 +8,7 @@ import '../../core/design/viber_theme.dart';
 import 'deletion_dialog.dart';
 import '../../core/design/workbench_widgets.dart';
 import '../../core/i18n/app_copy.dart';
+import 'account_header_policy_editor.dart';
 import 'workbench_controller.dart';
 
 final class EndpointsView extends StatefulWidget {
@@ -490,6 +491,10 @@ final class _AccountRow extends StatelessWidget {
       'routes.account.transport',
       account.kind,
     );
+    final headerSummary = copy.format('routes.account.headers.summary', {
+      'set': account.setHeaderNames.length,
+      'delete': account.deleteHeaderNames.length,
+    });
     final compactActions = Row(
       mainAxisSize: MainAxisSize.min,
       children: [
@@ -540,7 +545,7 @@ final class _AccountRow extends StatelessWidget {
                   ),
                   const SizedBox(height: 4),
                   Text(
-                    '$kindLabel  ·  $transportLabel  ·  ${copy.format('routes.credentials.epoch', {'epoch': account.credentialEpoch})}',
+                    '$kindLabel  ·  $transportLabel  ·  $headerSummary  ·  ${copy.format('routes.credentials.epoch', {'epoch': account.credentialEpoch})}',
                     style: monoStyle,
                   ),
                 ],
@@ -572,7 +577,7 @@ final class _AccountRow extends StatelessWidget {
                       style: Theme.of(context).textTheme.titleSmall,
                     ),
                     Text(
-                      '$kindLabel · $transportLabel',
+                      '$kindLabel · $transportLabel · $headerSummary',
                       overflow: TextOverflow.ellipsis,
                       style: Theme.of(context).textTheme.bodySmall,
                     ),
@@ -644,12 +649,14 @@ final class _EndpointEditorDialogState extends State<_EndpointEditorDialog> {
   Widget build(BuildContext context) {
     final copy = widget.copy;
     return AlertDialog(
-      titlePadding: const EdgeInsets.fromLTRB(16, 14, 16, 8),
-      contentPadding: const EdgeInsets.fromLTRB(16, 0, 16, 8),
-      actionsPadding: const EdgeInsets.fromLTRB(12, 4, 12, 12),
+      insetPadding: ViberDialogInsets.inset,
+      titlePadding: ViberDialogInsets.title,
+      contentPadding: ViberDialogInsets.content,
+      actionsPadding: ViberDialogInsets.actions,
       title: Text(copy('routes.endpoint.create.title')),
       content: SizedBox(
-        width: 344,
+        key: const Key('endpoint-editor-frame'),
+        width: ViberMetrics.dialogCompactWidth,
         child: Form(
           key: _formKey,
           child: SingleChildScrollView(
@@ -744,16 +751,20 @@ final class _EndpointEditorDialogState extends State<_EndpointEditorDialog> {
                                     height: 1,
                                     color: context.viberColors.dividerSoft,
                                   ),
-                                CheckboxListTile(
+                                CompactCheckboxOption(
                                   key: Key(
                                     'endpoint-editor-protocol-$protocol',
                                   ),
                                   value: _backendProtocols.contains(protocol),
+                                  label: copy('routes.protocol.$protocol'),
+                                  detail: copy(
+                                    'routes.endpoint.protocol.detail.$protocol',
+                                  ),
                                   onChanged: widget.controller.inventoryMutating
                                       ? null
                                       : (selected) {
                                           setState(() {
-                                            if (selected ?? false) {
+                                            if (selected) {
                                               _backendProtocols.add(protocol);
                                             } else {
                                               _backendProtocols.remove(
@@ -765,25 +776,6 @@ final class _EndpointEditorDialogState extends State<_EndpointEditorDialog> {
                                             Set.unmodifiable(_backendProtocols),
                                           );
                                         },
-                                  controlAffinity:
-                                      ListTileControlAffinity.leading,
-                                  contentPadding: const EdgeInsets.symmetric(
-                                    horizontal: 8,
-                                  ),
-                                  visualDensity: const VisualDensity(
-                                    horizontal: -3,
-                                    vertical: -3,
-                                  ),
-                                  dense: true,
-                                  title: Text(
-                                    copy('routes.protocol.$protocol'),
-                                  ),
-                                  subtitle: Text(
-                                    copy(
-                                      'routes.endpoint.protocol.detail.$protocol',
-                                    ),
-                                    style: monoStyle,
-                                  ),
                                 ),
                               ],
                             ],
@@ -880,7 +872,9 @@ final class _AccountEditorDialogState extends State<_AccountEditorDialog> {
   late final TextEditingController _name;
   final _secret = TextEditingController();
   late String _kind;
+  late final AccountHeaderPolicyDraft _headers;
   bool _submitted = false;
+  bool _headerInvalid = false;
 
   bool get _replacing => widget.account != null;
 
@@ -889,6 +883,10 @@ final class _AccountEditorDialogState extends State<_AccountEditorDialog> {
     super.initState();
     _name = TextEditingController(text: widget.account?.displayName ?? '');
     _kind = widget.account?.kind ?? widget.endpoint.accountKinds.first;
+    _headers = AccountHeaderPolicyDraft(
+      existingSetHeaderNames: widget.account?.setHeaderNames ?? const [],
+      initialDeleteHeaderNames: widget.account?.deleteHeaderNames ?? const [],
+    );
   }
 
   @override
@@ -896,6 +894,7 @@ final class _AccountEditorDialogState extends State<_AccountEditorDialog> {
     _secret.clear();
     _secret.dispose();
     _name.dispose();
+    _headers.clearSensitiveValues();
     super.dispose();
   }
 
@@ -903,6 +902,10 @@ final class _AccountEditorDialogState extends State<_AccountEditorDialog> {
   Widget build(BuildContext context) {
     final copy = widget.copy;
     return AlertDialog(
+      insetPadding: ViberDialogInsets.inset,
+      titlePadding: ViberDialogInsets.title,
+      contentPadding: ViberDialogInsets.content,
+      actionsPadding: ViberDialogInsets.actions,
       title: Text(
         _replacing
             ? copy.format('routes.account.replace.title', {
@@ -911,7 +914,8 @@ final class _AccountEditorDialogState extends State<_AccountEditorDialog> {
             : copy('routes.account.create.title'),
       ),
       content: SizedBox(
-        width: 430,
+        key: const Key('account-editor-frame'),
+        width: ViberMetrics.dialogStandardWidth,
         child: Form(
           key: _formKey,
           child: SingleChildScrollView(
@@ -926,20 +930,21 @@ final class _AccountEditorDialogState extends State<_AccountEditorDialog> {
                 ),
                 const SizedBox(height: 8),
                 if (!_replacing) ...[
-                  CompactSelectField<String>(
-                    key: const Key('account-editor-kind'),
-                    initialValue: _kind,
-                    decoration: InputDecoration(
-                      labelText: copy('routes.account.kind'),
+                  CompactLabeledControl(
+                    label: copy('routes.account.kind'),
+                    child: CompactSelectField<String>(
+                      key: const Key('account-editor-kind'),
+                      initialValue: _kind,
+                      isExpanded: true,
+                      items: [
+                        for (final kind in widget.endpoint.accountKinds)
+                          DropdownMenuItem(
+                            value: kind,
+                            child: Text(copy('routes.account.kind.$kind')),
+                          ),
+                      ],
+                      onChanged: (value) => setState(() => _kind = value!),
                     ),
-                    items: [
-                      for (final kind in widget.endpoint.accountKinds)
-                        DropdownMenuItem(
-                          value: kind,
-                          child: Text(copy('routes.account.kind.$kind')),
-                        ),
-                    ],
-                    onChanged: (value) => setState(() => _kind = value!),
                   ),
                   const SizedBox(height: 4),
                   Text(
@@ -949,47 +954,67 @@ final class _AccountEditorDialogState extends State<_AccountEditorDialog> {
                       color: context.viberColors.textMuted,
                     ),
                   ),
-                  const SizedBox(height: 9),
-                  TextFormField(
-                    key: const Key('account-editor-name'),
-                    controller: _name,
-                    maxLength: 256,
-                    decoration: InputDecoration(
-                      labelText: copy('routes.account.name'),
-                      counterText: '',
+                  const SizedBox(height: 8),
+                  CompactLabeledControl(
+                    label: copy('routes.account.name'),
+                    child: TextFormField(
+                      key: const Key('account-editor-name'),
+                      controller: _name,
+                      maxLength: 256,
+                      textAlignVertical: TextAlignVertical.center,
+                      decoration: const InputDecoration(counterText: ''),
+                      validator: (value) =>
+                          value == null || value.trim().isEmpty
+                          ? copy('routes.validation.required')
+                          : null,
                     ),
-                    validator: (value) => value == null || value.trim().isEmpty
-                        ? copy('routes.validation.required')
+                  ),
+                  const SizedBox(height: 8),
+                ],
+                CompactLabeledControl(
+                  label: copy(
+                    _kind == 'bearer_token'
+                        ? 'routes.account.bearer_token'
+                        : 'routes.account.api_key',
+                  ),
+                  child: TextFormField(
+                    key: const Key('account-editor-secret'),
+                    controller: _secret,
+                    autofocus: _replacing,
+                    obscureText: true,
+                    autocorrect: false,
+                    enableSuggestions: false,
+                    textAlignVertical: TextAlignVertical.center,
+                    decoration: const InputDecoration(),
+                    validator: (value) =>
+                        value == null ||
+                            value.isEmpty ||
+                            value.contains(RegExp(r'[\u0000\r\n]'))
+                        ? copy('routes.validation.secret')
                         : null,
                   ),
-                  const SizedBox(height: 7),
-                ],
-                TextFormField(
-                  key: const Key('account-editor-secret'),
-                  controller: _secret,
-                  autofocus: _replacing,
-                  obscureText: true,
-                  autocorrect: false,
-                  enableSuggestions: false,
-                  decoration: InputDecoration(
-                    labelText: copy(
-                      _kind == 'bearer_token'
-                          ? 'routes.account.bearer_token'
-                          : 'routes.account.api_key',
-                    ),
-                  ),
-                  validator: (value) =>
-                      value == null ||
-                          value.isEmpty ||
-                          value.contains(RegExp(r'[\u0000\r\n]'))
-                      ? copy('routes.validation.secret')
-                      : null,
                 ),
                 const SizedBox(height: 10),
                 Text(
                   copy('routes.account.secret_boundary'),
                   style: Theme.of(context).textTheme.bodySmall,
                 ),
+                const SizedBox(height: 10),
+                const Divider(height: 1),
+                const SizedBox(height: 9),
+                AccountHeaderPolicyEditor(
+                  accountKind: _kind,
+                  draft: _headers,
+                  copy: copy,
+                  enabled: !widget.controller.inventoryMutating,
+                ),
+                if (_headerInvalid) ...[
+                  const SizedBox(height: 9),
+                  InlineNotice(
+                    message: copy('routes.account.headers.validation'),
+                    error: true,
+                  ),
+                ],
                 if (_submitted && widget.controller.inventoryError != null) ...[
                   const SizedBox(height: 9),
                   InlineNotice(
@@ -1031,20 +1056,30 @@ final class _AccountEditorDialogState extends State<_AccountEditorDialog> {
 
   Future<void> _submit() async {
     if (!_formKey.currentState!.validate()) return;
+    late final ProviderAccountHeaderPolicy headerPolicy;
+    try {
+      headerPolicy = _headers.build(accountKind: _kind);
+    } on ControlContractException {
+      setState(() => _headerInvalid = true);
+      return;
+    }
     setState(() => _submitted = true);
     final secret = _secret.text;
     final result = _replacing
         ? await widget.controller.replaceProviderAccountCredential(
             account: widget.account!,
             secret: secret,
+            headerPolicy: headerPolicy,
           )
         : await widget.controller.createProviderAccount(
             endpoint: widget.endpoint,
             displayName: _name.text,
             kind: _kind,
             secret: secret,
+            headerPolicy: headerPolicy,
           );
     _secret.clear();
+    _headers.clearSensitiveValues();
     if (!mounted) return;
     if (result != null) {
       Navigator.pop(context);

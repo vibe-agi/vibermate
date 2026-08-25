@@ -350,6 +350,8 @@ EnvironmentProtocolPlan _originalProtocolPlan(
       revision: 1,
     ),
     destination: const EnvironmentDestination.original(),
+    egressPolicy: const TrafficEgressPolicy.direct(),
+    transformPolicy: const TrafficTransformPolicy.disabled(),
     pluginBindings: const [],
   );
 }
@@ -421,6 +423,8 @@ EnvironmentProtocolPlan _appendUpstreamRoute(
         routes: routes,
       ),
     ),
+    egressPolicy: plan.egressPolicy,
+    transformPolicy: plan.transformPolicy,
     pluginBindings: plan.pluginBindings,
   );
 }
@@ -465,6 +469,8 @@ EnvironmentProtocolPlan _protocolPlanFor(
         routes: [route],
       ),
     ),
+    egressPolicy: const TrafficEgressPolicy.direct(),
+    transformPolicy: const TrafficTransformPolicy.disabled(),
     pluginBindings: const [],
   );
 }
@@ -521,6 +527,148 @@ String _stableResourceToken(String value) {
   return '$label.${hash.toRadixString(16).padLeft(8, '0')}';
 }
 
+/// Replaces the network path of exactly one client protocol flow.
+///
+/// Egress belongs to the protocol plan because one Environment may route its
+/// Anthropic and OpenAI traffic through different networks. Destination and
+/// Route authority are intentionally untouched.
+List<EnvironmentClientEndpoint> assignEnvironmentProtocolEgressPolicy({
+  required List<EnvironmentClientEndpoint> endpoints,
+  required String clientEndpointId,
+  required String protocolPlanId,
+  required TrafficEgressPolicy policy,
+}) {
+  final validated = TrafficEgressPolicy.fromJson(
+    policy.toJson(),
+    'trafficEgressPolicy',
+  );
+  var found = false;
+  var changed = false;
+  final result = <EnvironmentClientEndpoint>[];
+  for (final endpoint in endpoints) {
+    if (endpoint.id != clientEndpointId) {
+      result.add(endpoint);
+      continue;
+    }
+    var endpointChanged = false;
+    final plans = <EnvironmentProtocolPlan>[];
+    for (final plan in endpoint.protocolPlans) {
+      if (plan.id != protocolPlanId) {
+        plans.add(plan);
+        continue;
+      }
+      found = true;
+      if (plan.egressPolicy == validated) {
+        plans.add(plan);
+        continue;
+      }
+      endpointChanged = true;
+      plans.add(
+        EnvironmentProtocolPlan(
+          id: plan.id,
+          revision: plan.revision + 1,
+          clientProtocol: plan.clientProtocol,
+          clientAdapterPolicy: plan.clientAdapterPolicy,
+          destination: plan.destination,
+          egressPolicy: validated,
+          transformPolicy: plan.transformPolicy,
+          pluginBindings: plan.pluginBindings,
+        ),
+      );
+    }
+    if (!endpointChanged) {
+      result.add(endpoint);
+      continue;
+    }
+    changed = true;
+    result.add(
+      EnvironmentClientEndpoint(
+        id: endpoint.id,
+        revision: endpoint.revision + 1,
+        clientOrigin: endpoint.clientOrigin,
+        protocolPlans: List.unmodifiable(plans),
+      ),
+    );
+  }
+  if (!found) {
+    throw StateError(
+      'Environment protocol plan $clientEndpointId/$protocolPlanId was not found',
+    );
+  }
+  return changed ? List.unmodifiable(result) : endpoints;
+}
+
+/// Replaces the request/response transform of exactly one client protocol flow.
+///
+/// The strict JSON round-trip keeps editor state on the same contract as a
+/// server draft. Destination, Route, Account, model, and egress authority are
+/// intentionally preserved.
+List<EnvironmentClientEndpoint> assignEnvironmentProtocolTransformPolicy({
+  required List<EnvironmentClientEndpoint> endpoints,
+  required String clientEndpointId,
+  required String protocolPlanId,
+  required TrafficTransformPolicy policy,
+}) {
+  final validated = TrafficTransformPolicy.fromJson(
+    policy.toJson(),
+    'trafficTransformPolicy',
+  );
+  var found = false;
+  var changed = false;
+  final result = <EnvironmentClientEndpoint>[];
+  for (final endpoint in endpoints) {
+    if (endpoint.id != clientEndpointId) {
+      result.add(endpoint);
+      continue;
+    }
+    var endpointChanged = false;
+    final plans = <EnvironmentProtocolPlan>[];
+    for (final plan in endpoint.protocolPlans) {
+      if (plan.id != protocolPlanId) {
+        plans.add(plan);
+        continue;
+      }
+      found = true;
+      if (plan.transformPolicy == validated) {
+        plans.add(plan);
+        continue;
+      }
+      endpointChanged = true;
+      plans.add(
+        EnvironmentProtocolPlan(
+          id: plan.id,
+          revision: plan.revision + 1,
+          clientProtocol: plan.clientProtocol,
+          clientAdapterPolicy: plan.clientAdapterPolicy,
+          destination: plan.destination,
+          egressPolicy: plan.egressPolicy,
+          transformPolicy: validated,
+          pluginBindings: plan.pluginBindings,
+        ),
+      );
+    }
+    if (!endpointChanged) {
+      result.add(endpoint);
+      continue;
+    }
+    changed = true;
+    result.add(
+      EnvironmentClientEndpoint(
+        id: endpoint.id,
+        revision: endpoint.revision + 1,
+        clientOrigin: endpoint.clientOrigin,
+        protocolPlans: List.unmodifiable(plans),
+      ),
+    );
+  }
+  if (!found) {
+    throw StateError(
+      'Environment protocol plan $clientEndpointId/$protocolPlanId was not found',
+    );
+  }
+  return changed ? List.unmodifiable(result) : endpoints;
+}
+
 /// Selects the client's original destination for one protocol flow.
 ///
 /// Original is a complete destination choice, not an Account option and not a
@@ -559,6 +707,8 @@ List<EnvironmentClientEndpoint> setEnvironmentProtocolOriginalDestination({
           clientProtocol: plan.clientProtocol,
           clientAdapterPolicy: plan.clientAdapterPolicy,
           destination: const EnvironmentDestination.original(),
+          egressPolicy: plan.egressPolicy,
+          transformPolicy: plan.transformPolicy,
           pluginBindings: plan.pluginBindings,
         ),
       );
@@ -655,6 +805,8 @@ List<EnvironmentClientEndpoint> assignEnvironmentRouteAccount({
                     routes: List.unmodifiable(nextRoutes),
                   ),
                 ),
+                egressPolicy: plan.egressPolicy,
+                transformPolicy: plan.transformPolicy,
                 pluginBindings: plan.pluginBindings,
               );
             })
@@ -770,6 +922,8 @@ List<EnvironmentClientEndpoint> assignEnvironmentRouteModelMappings({
                     routes: List.unmodifiable(nextRoutes),
                   ),
                 ),
+                egressPolicy: plan.egressPolicy,
+                transformPolicy: plan.transformPolicy,
                 pluginBindings: plan.pluginBindings,
               );
             })
@@ -914,6 +1068,8 @@ EnvironmentProtocolPlan _normalizeProtocolPlan(
       clientProtocol: edited.clientProtocol,
       clientAdapterPolicy: adapter,
       destination: destination,
+      egressPolicy: edited.egressPolicy,
+      transformPolicy: edited.transformPolicy,
       pluginBindings: bindings,
     );
   }
@@ -923,6 +1079,8 @@ EnvironmentProtocolPlan _normalizeProtocolPlan(
     clientProtocol: edited.clientProtocol,
     clientAdapterPolicy: adapter,
     destination: destination,
+    egressPolicy: edited.egressPolicy,
+    transformPolicy: edited.transformPolicy,
     pluginBindings: bindings,
   );
   return EnvironmentProtocolPlan(
@@ -932,6 +1090,8 @@ EnvironmentProtocolPlan _normalizeProtocolPlan(
     clientProtocol: candidate.clientProtocol,
     clientAdapterPolicy: candidate.clientAdapterPolicy,
     destination: candidate.destination,
+    egressPolicy: candidate.egressPolicy,
+    transformPolicy: candidate.transformPolicy,
     pluginBindings: candidate.pluginBindings,
   );
 }

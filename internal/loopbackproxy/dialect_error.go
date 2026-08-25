@@ -107,7 +107,7 @@ func writeExchangeFailure(
 	writer.Header().Set("Content-Type", "application/json")
 	writer.Header().Set("Cache-Control", "no-store")
 	writer.Header().Set(ReasonHeader, string(reason))
-	if reason == exchange.ReasonProviderCredentialUnavailable {
+	if exchangeFailureShouldNotRetry(reason) {
 		// The Anthropic SDK recognizes this as a terminal configuration failure.
 		// It must not turn a missing managed-route credential into a second model
 		// request merely because a generic 5xx looks transient.
@@ -136,7 +136,7 @@ func writeExchangeFailureDownstream(
 		"Cache-Control": {"no-store"},
 		ReasonHeader:    {string(reason)},
 	}
-	if reason == exchange.ReasonProviderCredentialUnavailable {
+	if exchangeFailureShouldNotRetry(reason) {
 		headers.Set("X-Should-Retry", "false")
 	}
 	envelope, envelopeErr := exchange.NewResponseEnvelope(
@@ -222,8 +222,21 @@ func exchangeReasonMessage(reason exchange.ReasonCode) string {
 	case exchange.ReasonProviderCredentialUnavailable:
 		return "ViberMate has no provider credential configured for the selected route (" +
 			string(reason) + ")."
+	case exchange.ReasonMessageTransformFailed:
+		return "ViberMate could not apply the configured message transform (" +
+			string(reason) + ")."
 	default:
 		return "ViberMate could not complete this request (" + string(reason) + ")."
+	}
+}
+
+func exchangeFailureShouldNotRetry(reason exchange.ReasonCode) bool {
+	switch reason {
+	case exchange.ReasonProviderCredentialUnavailable,
+		exchange.ReasonMessageTransformFailed:
+		return true
+	default:
+		return false
 	}
 }
 

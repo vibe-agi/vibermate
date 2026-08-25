@@ -188,6 +188,11 @@ func (gate *Gate) Acquire(
 	if ctx == nil {
 		return nil, ErrInvalidRequest
 	}
+	normalizedPolicy, err := request.Target.EgressPolicy.Normalize()
+	if err != nil {
+		return nil, ErrInvalidRequest
+	}
+	request.Target.EgressPolicy = normalizedPolicy
 	if err := validateAcquireRequest(request); err != nil {
 		return nil, err
 	}
@@ -393,6 +398,7 @@ func (gate *Gate) PendingProbeTargets() []ProbeTarget {
 			TLSServerName: key.target.TLSServerName,
 			PlanRevision:  key.target.PlanRevision,
 			PlanDigest:    key.target.PlanDigest,
+			EgressPolicy:  key.target.EgressPolicy,
 		})
 	}
 	slices.SortFunc(targets, func(left, right ProbeTarget) int {
@@ -707,7 +713,13 @@ func probeReasonOf(err error) ProbeReason {
 func normalizeProbeTargets(targets []ProbeTarget) ([]ProbeTarget, error) {
 	normalized := slices.Clone(targets)
 	seen := make(map[targetKey]struct{}, len(normalized))
-	for _, target := range normalized {
+	for index, target := range normalized {
+		policy, err := target.EgressPolicy.Normalize()
+		if err != nil {
+			return nil, ErrInvalidRequest
+		}
+		target.EgressPolicy = policy
+		normalized[index] = target
 		if err := validateProbeTarget(target); err != nil {
 			return nil, err
 		}
@@ -782,6 +794,9 @@ func validateProbeTarget(target ProbeTarget) error {
 			return err
 		}
 	}
+	if err := target.EgressPolicy.Validate(); err != nil {
+		return ErrInvalidRequest
+	}
 	return nil
 }
 
@@ -795,6 +810,11 @@ func probeTargetSortKey(target ProbeTarget) string {
 		target.TLSServerName,
 		fmt.Sprintf("%020d", target.PlanRevision),
 		target.PlanDigest,
+		string(target.EgressPolicy.Proxy.Kind),
+		target.EgressPolicy.Proxy.Endpoint,
+		string(target.EgressPolicy.Resolver.Kind),
+		target.EgressPolicy.Resolver.DoHURL,
+		string(target.EgressPolicy.Resolver.Transport),
 	}, "\x00")
 }
 

@@ -13,6 +13,7 @@ import (
 	"unicode"
 	"unicode/utf8"
 
+	"github.com/vibe-agi/vibermate/internal/egressnetwork"
 	"github.com/vibe-agi/vibermate/internal/environment"
 	"github.com/vibe-agi/vibermate/internal/offlinehold"
 	"github.com/vibe-agi/vibermate/internal/originidentity"
@@ -204,7 +205,9 @@ func (provenance RequestProvenance) validate() error {
 	return nil
 }
 
-func (provenance RequestProvenance) probePlanDigest() string {
+func (provenance RequestProvenance) probePlanDigest(
+	egressPolicy egressnetwork.Policy,
+) string {
 	digest := sha256.Sum256([]byte(strings.Join([]string{
 		provenance.environmentID.String(),
 		fmt.Sprintf("%d", provenance.environmentRevision),
@@ -212,6 +215,11 @@ func (provenance RequestProvenance) probePlanDigest() string {
 		string(provenance.destinationKind),
 		provenance.routeID.String(),
 		fmt.Sprintf("%d", provenance.routeRevision),
+		string(egressPolicy.Proxy.Kind),
+		egressPolicy.Proxy.Endpoint,
+		string(egressPolicy.Resolver.Kind),
+		egressPolicy.Resolver.DoHURL,
+		string(egressPolicy.Resolver.Transport),
 	}, "\x00")))
 	return hex.EncodeToString(digest[:])
 }
@@ -224,6 +232,7 @@ func NewProbeTarget(
 	targetRef string,
 	provenance RequestProvenance,
 	target Target,
+	egressPolicy egressnetwork.Policy,
 ) (offlinehold.ProbeTarget, error) {
 	if err := validateOpaqueIdentity("provider target reference", targetRef); err != nil {
 		return offlinehold.ProbeTarget{}, err
@@ -232,6 +241,10 @@ func NewProbeTarget(
 		return offlinehold.ProbeTarget{}, err
 	}
 	if err := target.validate(); err != nil {
+		return offlinehold.ProbeTarget{}, err
+	}
+	egressPolicy, err := egressPolicy.Normalize()
+	if err != nil {
 		return offlinehold.ProbeTarget{}, err
 	}
 	probeTransport, err := target.probeTransportKind()
@@ -246,7 +259,8 @@ func NewProbeTarget(
 		HTTPAuthority: target.origin.HTTPAuthority(),
 		TLSServerName: target.TLSServerName(),
 		PlanRevision:  uint64(provenance.environmentRevision),
-		PlanDigest:    provenance.probePlanDigest(),
+		PlanDigest:    provenance.probePlanDigest(egressPolicy),
+		EgressPolicy:  egressPolicy,
 	}
 	if err := frozen.Validate(); err != nil {
 		return offlinehold.ProbeTarget{}, err
@@ -290,6 +304,7 @@ type RequestOptions struct {
 	ClientProtocol  wireprofile.ApplicationProtocol
 	ClientUserAgent string
 	ClientHello     transportprofile.Observation
+	EgressPolicy    egressnetwork.Policy
 	// ConnectionID, ExchangeID, and ParentAttemptID associate this outbound
 	// with the client connection, the Exchange, and the upstream attempt that
 	// caused it. They travel as typed references so no identity encodes
@@ -334,6 +349,7 @@ type Request struct {
 	clientProtocol  wireprofile.ApplicationProtocol
 	clientUserAgent string
 	clientHello     transportprofile.Observation
+	egressPolicy    egressnetwork.Policy
 	rawEvidence     *rawevidence.Context
 }
 
@@ -387,10 +403,21 @@ func NewRequest(options RequestOptions) (Request, error) {
 	if err := validateOpaqueIdentity("provider target reference", options.TargetRef); err != nil {
 		return Request{}, err
 	}
+	egressPolicy, err := options.EgressPolicy.Normalize()
+	if err != nil {
+		return Request{}, err
+	}
+	if options.Target.TransportKind() != originidentity.ProviderTransportStrictTLS &&
+		egressPolicy.Proxy.Kind != egressnetwork.ProxyDirect {
+		return Request{}, errors.New(
+			"cleartext provider traffic cannot use a secondary proxy",
+		)
+	}
 	probeTarget, err := NewProbeTarget(
 		options.TargetRef,
 		options.Provenance,
 		options.Target,
+		egressPolicy,
 	)
 	if err != nil {
 		return Request{}, err
@@ -583,6 +610,7 @@ func NewRequest(options RequestOptions) (Request, error) {
 		clientProtocol:  options.ClientProtocol,
 		clientUserAgent: options.ClientUserAgent,
 		clientHello:     options.ClientHello,
+		egressPolicy:    egressPolicy,
 		rawEvidence:     rawEvidence,
 	}, nil
 }
@@ -601,6 +629,10 @@ func (request Request) Target() Target {
 
 func (request Request) ProbeTarget() offlinehold.ProbeTarget {
 	return request.probeTarget
+}
+
+func (request Request) EgressPolicy() egressnetwork.Policy {
+	return request.egressPolicy
 }
 
 func (request Request) Method() string {

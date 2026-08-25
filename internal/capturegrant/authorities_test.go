@@ -80,7 +80,12 @@ func TestEnvironmentAuthorityResolverCreatesTypedCaptureAssignment(t *testing.T)
 	assignment := captureAuthorityAssignment(t, nil, nil)
 	assignment.Capture = capture
 	assignment.Source = captureassignment.SourceManualCreate
-	assignments := &recordingCaptureAssignmentAuthority{assignment: assignment}
+	assignments := &recordingCaptureAssignmentAuthority{
+		assignment: assignment,
+		launchEnvironment: environment.LaunchEnvironmentPolicy{
+			SetEnv: map[string]string{"TEAM_CONTEXT": "team-a"},
+		},
+	}
 	resolver, err := NewEnvironmentAuthorityResolver(assignments, fixedSnapshotResolver{})
 	if err != nil {
 		t.Fatal(err)
@@ -94,23 +99,29 @@ func TestEnvironmentAuthorityResolverCreatesTypedCaptureAssignment(t *testing.T)
 	if assignments.create.Capture != capture ||
 		assignments.create.EnvironmentID != "work" ||
 		assignments.create.Source != captureassignment.SourceManualCreate ||
-		set.AuthorityDigest() != assignment.LaunchAuthority.Digest() {
+		set.AuthorityDigest() != assignment.LaunchAuthority.Digest() ||
+		set.LaunchEnvironment().SetEnv["TEAM_CONTEXT"] != "team-a" {
 		t.Fatalf("create=%+v set=%+v", assignments.create, set)
 	}
 }
 
 type recordingCaptureAssignmentAuthority struct {
-	create     captureassignment.CreateCommand
-	assignment captureassignment.Assignment
-	err        error
+	create            captureassignment.CreateCommand
+	assignment        captureassignment.Assignment
+	launchEnvironment environment.LaunchEnvironmentPolicy
+	err               error
 }
 
-func (authority *recordingCaptureAssignmentAuthority) Create(
+func (authority *recordingCaptureAssignmentAuthority) CreateForLaunch(
 	_ context.Context,
 	command captureassignment.CreateCommand,
-) (captureassignment.Assignment, error) {
+) (
+	captureassignment.Assignment,
+	environment.LaunchEnvironmentPolicy,
+	error,
+) {
 	authority.create = command
-	return authority.assignment, authority.err
+	return authority.assignment, authority.launchEnvironment.Clone(), authority.err
 }
 
 func (authority *recordingCaptureAssignmentAuthority) Resolve(

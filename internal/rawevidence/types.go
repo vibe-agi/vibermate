@@ -19,6 +19,8 @@ import (
 	"strings"
 	"time"
 	"unicode/utf8"
+
+	"golang.org/x/net/http/httpguts"
 )
 
 const (
@@ -250,7 +252,11 @@ type Observation struct {
 	RawQuery   string
 	Headers    http.Header
 	Trailers   http.Header
-	Body       []byte
+	// ProtectedHeaderNames extends the fail-closed credential-name predicate for
+	// exact Account-owned Header assignments. Values named here are redacted at
+	// observation admission even when their names do not look credential-like.
+	ProtectedHeaderNames []string
+	Body                 []byte
 	// TotalBodyBytes is the number of bytes observed for the complete message.
 	// Zero derives from len(Body). It may exceed len(Body) when Body is a
 	// retained prefix of a fully hashed streaming message.
@@ -297,6 +303,22 @@ func (value Observation) validate() error {
 		if !validOptionalMetadata(item, maxHTTPMetadataBytes) {
 			return errors.New("raw evidence HTTP metadata is invalid")
 		}
+	}
+	if len(value.ProtectedHeaderNames) > 64 {
+		return errors.New("raw evidence has too many protected Header names")
+	}
+	protected := make(map[string]struct{}, len(value.ProtectedHeaderNames))
+	for _, name := range value.ProtectedHeaderNames {
+		canonical := http.CanonicalHeaderKey(name)
+		key := strings.ToLower(canonical)
+		if canonical == "" || canonical != name || len(name) > 256 ||
+			!httpguts.ValidHeaderFieldName(name) {
+			return errors.New("raw evidence protected Header name is invalid")
+		}
+		if _, duplicate := protected[key]; duplicate {
+			return errors.New("raw evidence protected Header name is duplicated")
+		}
+		protected[key] = struct{}{}
 	}
 	if value.Complete && value.IncompleteReason != "" {
 		return errors.New("complete raw evidence has an incomplete reason")
@@ -382,8 +404,9 @@ func payloadOf(
 	if !redactor.bound() {
 		return Payload{}, nil, errors.New("raw evidence redactor is not bound")
 	}
-	headers := canonicalHeaders(observation.Headers, redactor)
-	trailers := canonicalHeaders(observation.Trailers, redactor)
+	protected := protectedHeaderSet(observation.ProtectedHeaderNames)
+	headers := canonicalHeadersWithProtected(observation.Headers, redactor, protected)
+	trailers := canonicalHeadersWithProtected(observation.Trailers, redactor, protected)
 	return Payload{
 		Version:  1,
 		Headers:  headers,
@@ -414,7 +437,29 @@ func redactedNamesOf(sets ...[]HeaderField) []string {
 	return names
 }
 
-func canonicalHeaders(headers http.Header, redactor Redactor) []HeaderField {
+func protectedHeaderSet(names []string) map[string]struct{} {
+	if len(names) == 0 {
+		return nil
+	}
+	result := make(map[string]struct{}, len(names))
+	for _, name := range names {
+		result[strings.ToLower(name)] = struct{}{}
+	}
+	return result
+}
+
+func canonicalHeaders(
+	headers http.Header,
+	redactor Redactor,
+) []HeaderField {
+	return canonicalHeadersWithProtected(headers, redactor, nil)
+}
+
+func canonicalHeadersWithProtected(
+	headers http.Header,
+	redactor Redactor,
+	protected map[string]struct{},
+) []HeaderField {
 	if len(headers) == 0 {
 		return nil
 	}
@@ -425,7 +470,8 @@ func canonicalHeaders(headers http.Header, redactor Redactor) []HeaderField {
 	sort.Strings(names)
 	fields := make([]HeaderField, 0, len(names))
 	for _, name := range names {
-		fields = append(fields, redactor.field(name, headers.Values(name)))
+		_, force := protected[strings.ToLower(name)]
+		fields = append(fields, redactor.protectedField(name, headers.Values(name), force))
 	}
 	return fields
 }

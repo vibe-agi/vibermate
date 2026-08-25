@@ -168,6 +168,9 @@ func (snapshot EnvironmentSnapshot) SystemOwned() bool       { return snapshot.s
 func (snapshot EnvironmentSnapshot) ContentRecording() ContentRecordingPolicy {
 	return snapshot.aggregate.ContentRecording
 }
+func (snapshot EnvironmentSnapshot) LaunchEnvironment() LaunchEnvironmentPolicy {
+	return snapshot.aggregate.LaunchEnvironment.Clone()
+}
 func (snapshot EnvironmentSnapshot) BlindOnly() bool {
 	return len(snapshot.aggregate.ClientEndpoints) == 0
 }
@@ -310,6 +313,8 @@ func (snapshot EnvironmentSnapshot) ResolveRequest(
 		protocol:          cloneCompiledProtocol(protocol),
 		operation:         matches[0].operation,
 		destinationKind:   protocol.destinationKind,
+		egressPolicy:      protocol.egressPolicy,
+		transformProgram:  protocol.transformProgram,
 		codecPlan:         codec,
 		wireProfile:       wireProfile,
 		upstreamRoute:     upstreamRoute,

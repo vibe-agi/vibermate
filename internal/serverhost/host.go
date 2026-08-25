@@ -263,8 +263,14 @@ func startAttached(
 	if err != nil {
 		return nil, err
 	}
+	connectTargets, err := discoverRuntimeConnectTargets(listener.Addr().String())
+	if err != nil {
+		return nil, err
+	}
 	serverAccess, err := servercontrol.NewServerAccess(
-		servercontrol.ServerAccessOptions{Transport: transport.scheme},
+		servercontrol.ServerAccessOptions{
+			Transport: transport.scheme, Targets: connectTargets,
+		},
 	)
 	if err != nil {
 		return nil, err

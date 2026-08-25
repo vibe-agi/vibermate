@@ -114,6 +114,7 @@ final class CompactSegmentedControl<T> extends StatelessWidget {
     required this.selected,
     required this.onSelected,
     this.minSegmentWidth = 58,
+    this.expanded = false,
     super.key,
   });
 
@@ -121,6 +122,7 @@ final class CompactSegmentedControl<T> extends StatelessWidget {
   final T selected;
   final ValueChanged<T>? onSelected;
   final double minSegmentWidth;
+  final bool expanded;
 
   @override
   Widget build(BuildContext context) {
@@ -140,16 +142,30 @@ final class CompactSegmentedControl<T> extends StatelessWidget {
               mainAxisSize: MainAxisSize.min,
               children: [
                 for (var index = 0; index < segments.length; index++)
-                  _CompactSegmentButton<T>(
-                    segment: segments[index],
-                    selected: segments[index].value == selected,
-                    enabled: onSelected != null,
-                    minWidth: minSegmentWidth,
-                    drawDivider: index > 0,
-                    onPressed: onSelected == null
-                        ? null
-                        : () => onSelected!(segments[index].value),
-                  ),
+                  if (expanded)
+                    Expanded(
+                      child: _CompactSegmentButton<T>(
+                        segment: segments[index],
+                        selected: segments[index].value == selected,
+                        enabled: onSelected != null,
+                        minWidth: minSegmentWidth,
+                        drawDivider: index > 0,
+                        onPressed: onSelected == null
+                            ? null
+                            : () => onSelected!(segments[index].value),
+                      ),
+                    )
+                  else
+                    _CompactSegmentButton<T>(
+                      segment: segments[index],
+                      selected: segments[index].value == selected,
+                      enabled: onSelected != null,
+                      minWidth: minSegmentWidth,
+                      drawDivider: index > 0,
+                      onPressed: onSelected == null
+                          ? null
+                          : () => onSelected!(segments[index].value),
+                    ),
               ],
             ),
           ),
@@ -212,13 +228,16 @@ final class _CompactSegmentButton<T> extends StatelessWidget {
                   Icon(icon, size: 12, color: foreground),
                   const SizedBox(width: ViberSpacing.xs),
                 ],
-                Text(
-                  segment.label,
-                  maxLines: 1,
-                  style: Theme.of(context).textTheme.labelLarge?.copyWith(
-                    color: foreground,
-                    height: 1,
-                    fontWeight: selected ? FontWeight.w600 : FontWeight.w500,
+                Flexible(
+                  child: Text(
+                    segment.label,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: Theme.of(context).textTheme.labelLarge?.copyWith(
+                      color: foreground,
+                      height: 1,
+                      fontWeight: selected ? FontWeight.w600 : FontWeight.w500,
+                    ),
                   ),
                 ),
               ],
@@ -325,6 +344,177 @@ final class CompactLabeledControl extends StatelessWidget {
   }
 }
 
+/// A consistent section boundary for dialog forms.
+///
+/// Supporting copy sits below the title rather than competing for horizontal
+/// space. This keeps translated text readable and prevents section headings
+/// from colliding with the first field on narrow windows.
+final class CompactFormSectionHeader extends StatelessWidget {
+  const CompactFormSectionHeader({
+    required this.title,
+    this.detail,
+    this.trailing,
+    this.uppercase = false,
+    super.key,
+  });
+
+  final String title;
+  final String? detail;
+  final Widget? trailing;
+  final bool uppercase;
+
+  @override
+  Widget build(BuildContext context) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Row(
+          children: [
+            Expanded(
+              child: Text(
+                uppercase ? title.toUpperCase() : title,
+                style: uppercase
+                    ? Theme.of(context).textTheme.labelMedium
+                    : Theme.of(context).textTheme.labelLarge,
+              ),
+            ),
+            ?trailing,
+          ],
+        ),
+        if (detail case final value?) ...[
+          const SizedBox(height: ViberSpacing.xxs),
+          Text(
+            value,
+            style: Theme.of(context).textTheme.bodySmall?.copyWith(
+              color: context.viberColors.textMuted,
+            ),
+          ),
+        ],
+      ],
+    );
+  }
+}
+
+/// Responsive field rows shared by desktop dialogs.
+///
+/// A dialog may use two or three columns when there is room, but every field
+/// falls back to one readable column before labels or values are truncated.
+final class ResponsiveFormGrid extends StatelessWidget {
+  const ResponsiveFormGrid({
+    required this.children,
+    this.maxColumns = 2,
+    super.key,
+  });
+
+  final List<Widget> children;
+  final int maxColumns;
+
+  @override
+  Widget build(BuildContext context) {
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        final columns = maxColumns >= 3 && constraints.maxWidth >= 600
+            ? 3
+            : maxColumns >= 2 && constraints.maxWidth >= 420
+            ? 2
+            : 1;
+        final width =
+            (constraints.maxWidth - (columns - 1) * ViberSpacing.md) / columns;
+        return Wrap(
+          spacing: ViberSpacing.md,
+          runSpacing: ViberSpacing.md,
+          children: [
+            for (final child in children) SizedBox(width: width, child: child),
+          ],
+        );
+      },
+    );
+  }
+}
+
+/// A single-line desktop checkbox row for bounded option groups.
+///
+/// The stock [CheckboxListTile] keeps mobile list-tile geometry even under a
+/// compact theme. This row presents the option and its protocol route as one
+/// scannable record while retaining a full-row pointer target and native
+/// checkbox keyboard semantics.
+final class CompactCheckboxOption extends StatelessWidget {
+  const CompactCheckboxOption({
+    required this.value,
+    required this.label,
+    required this.detail,
+    required this.onChanged,
+    super.key,
+  });
+
+  final bool value;
+  final String label;
+  final String detail;
+  final ValueChanged<bool>? onChanged;
+
+  @override
+  Widget build(BuildContext context) {
+    return MergeSemantics(
+      child: InkWell(
+        onTap: onChanged == null ? null : () => onChanged!(!value),
+        child: SizedBox(
+          height: ViberMetrics.optionRowHeight,
+          child: ColoredBox(
+            color: value ? context.viberColors.selection : Colors.transparent,
+            child: Padding(
+              padding: const EdgeInsets.symmetric(horizontal: ViberSpacing.md),
+              child: Row(
+                children: [
+                  SizedBox.square(
+                    dimension: ViberMetrics.controlHeight,
+                    child: Checkbox(
+                      value: value,
+                      onChanged: onChanged == null
+                          ? null
+                          : (selected) => onChanged!(selected ?? false),
+                      visualDensity: const VisualDensity(
+                        horizontal: -4,
+                        vertical: -4,
+                      ),
+                      materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                    ),
+                  ),
+                  const SizedBox(width: ViberSpacing.md),
+                  Expanded(
+                    flex: 5,
+                    child: Text(
+                      label,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: Theme.of(context).textTheme.bodyMedium,
+                    ),
+                  ),
+                  const SizedBox(width: ViberSpacing.md),
+                  Flexible(
+                    flex: 4,
+                    child: Align(
+                      alignment: Alignment.centerRight,
+                      child: Text(
+                        detail,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: monoStyle.copyWith(
+                          fontSize: ViberType.utility,
+                          color: context.viberColors.textMuted,
+                        ),
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
 /// Desktop select control with menu rows that follow the workbench's compact
 /// geometry. Flutter's [DropdownButton] hard-codes 48px popup rows, which is
 /// appropriate for touch surfaces but visually coarse in this desktop app.
@@ -408,6 +598,7 @@ final class _CompactSelectFieldState<T> extends State<CompactSelectField<T>> {
               menuChildren: [
                 for (final item in widget.items)
                   MenuItemButton(
+                    key: item.key,
                     style: ButtonStyle(
                       minimumSize: WidgetStatePropertyAll(
                         Size(0, widget.menuItemHeight),
@@ -470,6 +661,10 @@ final class _CompactSelectFieldState<T> extends State<CompactSelectField<T>> {
                       isEmpty: selected == null,
                       isFocused: active,
                       decoration: widget.decoration.copyWith(
+                        isDense: true,
+                        constraints: const BoxConstraints.tightFor(
+                          height: ViberMetrics.controlHeight,
+                        ),
                         enabled: enabled,
                         errorText:
                             widget.decoration.errorText ?? field.errorText,

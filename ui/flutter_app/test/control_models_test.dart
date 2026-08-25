@@ -12,34 +12,46 @@ void main() {
     'Runtime Server access states one reusable Runtime User login model',
     () {
       final access = RuntimeServerAccess.fromJson({
-        'schema': 'vibermate-server-access-v1',
+        'schema': 'vibermate-server-access-v2',
         'transport': 'http',
         'authentication': 'runtime_user_password',
         'sessionPolicy': 'reusable_until_logout_disable_or_expiry',
+        'targets': ['192.168.1.44:9666', '[fd00::8]:9666'],
       }, 'serverAccess');
 
       expect(access.transport, 'http');
       expect(access.encrypted, isFalse);
       expect(access.requiresRuntimeUserLogin, isTrue);
+      expect(access.preferredTarget, '192.168.1.44:9666');
 
       for (final invalid in <Map<String, Object?>>[
         {
-          'schema': 'vibermate-server-access-v1',
+          'schema': 'vibermate-server-access-v2',
           'transport': 'ftp',
           'authentication': 'runtime_user_password',
           'sessionPolicy': 'reusable_until_logout_disable_or_expiry',
+          'targets': ['192.168.1.44:9666'],
         },
         {
-          'schema': 'vibermate-server-access-v1',
+          'schema': 'vibermate-server-access-v2',
           'transport': 'https',
           'authentication': 'anonymous',
           'sessionPolicy': 'reusable_until_logout_disable_or_expiry',
+          'targets': ['192.168.1.44:9666'],
         },
         {
-          'schema': 'vibermate-server-access-v1',
+          'schema': 'vibermate-server-access-v2',
           'transport': 'https',
           'authentication': 'runtime_user_password',
           'sessionPolicy': 'per_run_approval',
+          'targets': ['192.168.1.44:9666'],
+        },
+        {
+          'schema': 'vibermate-server-access-v2',
+          'transport': 'https',
+          'authentication': 'runtime_user_password',
+          'sessionPolicy': 'reusable_until_logout_disable_or_expiry',
+          'targets': ['server.local:9666'],
         },
       ]) {
         expect(
@@ -86,6 +98,11 @@ void main() {
 
       final alice = report.users.single;
       expect(report.truncated, isFalse);
+      expect(report.period.from, '2026-07-27');
+      expect(report.period.until, '2026-08-26');
+      expect(report.period.timeZone, 'Asia/Singapore');
+      expect(report.days.single.date, '2026-08-24');
+      expect(alice.days.single.failed, 1);
       expect(alice.latestContext?.workspaceLabel, 'vibermate');
       expect(alice.models.single.requestedModel, 'gpt-5.6-sol');
       expect(alice.models.single.upstreamModel, 'relay:model/custom');
@@ -324,6 +341,8 @@ void main() {
         'revision': 1,
         'credentialState': 'ready',
         'credentialEpoch': 1,
+        'setHeaderNames': ['X-Team'],
+        'deleteHeaderNames': ['X-Legacy'],
         'secret': 'must-not-cross-response-boundary',
       }, 'providerAccount'),
       throwsA(isA<ControlContractException>()),
@@ -341,11 +360,72 @@ void main() {
       'revision': 1,
       'credentialState': 'credential_missing',
       'credentialEpoch': 0,
+      'setHeaderNames': ['X-Team'],
+      'deleteHeaderNames': ['X-Legacy'],
     }, 'providerAccount');
 
     expect(account.credentialEpoch, 0);
     expect(account.usable, isFalse);
+    expect(account.setHeaderNames, ['X-Team']);
+    expect(account.deleteHeaderNames, ['X-Legacy']);
   });
+
+  test(
+    'Provider Account Header summary is canonical and never returns values',
+    () {
+      final account = ProviderAccount.fromJson({
+        'id': 'account.headers',
+        'displayName': 'Headers',
+        'upstreamEndpointId': 'target.test',
+        'kind': 'bearer_token',
+        'realmId': 'relay.test',
+        'state': 'active',
+        'revision': 2,
+        'credentialState': 'ready',
+        'credentialEpoch': 3,
+        'setHeaderNames': ['X-Organization', 'X-Team'],
+        'deleteHeaderNames': ['X-Legacy'],
+      }, 'providerAccount');
+
+      expect(account.setHeaderNames, ['X-Organization', 'X-Team']);
+      expect(account.deleteHeaderNames, ['X-Legacy']);
+      expect(
+        () => ProviderAccount.fromJson({
+          'id': 'account.headers',
+          'displayName': 'Headers',
+          'upstreamEndpointId': 'target.test',
+          'kind': 'bearer_token',
+          'realmId': 'relay.test',
+          'state': 'active',
+          'revision': 2,
+          'credentialState': 'ready',
+          'credentialEpoch': 3,
+          'setHeaderNames': ['X-Team'],
+          'deleteHeaderNames': <String>[],
+          'setHeaders': {'X-Team': 'must-not-cross-response-boundary'},
+        }, 'providerAccount'),
+        throwsA(isA<ControlContractException>()),
+      );
+    },
+  );
+
+  test(
+    'Provider Account Header input enforces the HTTP field-value grammar',
+    () {
+      expect(
+        () => const ProviderAccountHeaderPolicy(
+          setHeaders: {'X-Team': 'bad\u0001value'},
+        ).validate(accountKind: 'bearer_token'),
+        throwsA(isA<ControlContractException>()),
+      );
+      expect(
+        () => const ProviderAccountHeaderPolicy(
+          setHeaders: {'X-Team': 'tab\tvalue'},
+        ).validate(accountKind: 'bearer_token'),
+        returnsNormally,
+      );
+    },
+  );
 
   test(
     'Agent client identity keeps common and native protocol identifiers',
@@ -990,16 +1070,25 @@ void main() {
         (value) => value.id == 'work',
       );
 
-      final decoded = EnvironmentRecord.fromJson(
-        jsonDecode(jsonEncode(work.toJson())),
-        'environment',
-      );
       final encoded = work.toJson();
+      expect(encoded, isNot(contains('egressPolicy')));
       final encodedEndpoint =
           (encoded['clientEndpoints']! as List<Object?>).first! as JsonObject;
       final encodedPlan =
           (encodedEndpoint['protocolPlans']! as List<Object?>).first!
               as JsonObject;
+      expect(encodedPlan['egressPolicy'], {
+        'proxy': {'kind': 'direct'},
+        'resolver': {'kind': 'system', 'transport': 'direct'},
+      });
+      expect(encodedPlan['transformPolicy'], {
+        'requestJavaScript': '',
+        'responseJavaScript': '',
+      });
+      final decoded = EnvironmentRecord.fromJson(
+        jsonDecode(jsonEncode(encoded)),
+        'environment',
+      );
       expect(encodedPlan, isNot(contains('mode')));
       expect(encodedPlan, isNot(contains('upstreamPlan')));
       expect(encodedPlan['destination'], {
@@ -1009,6 +1098,7 @@ void main() {
 
       expect(decoded.id, work.id);
       expect(decoded.revision, work.revision);
+      expect(decoded.launchEnvironment, const EnvironmentLaunchPolicy.empty());
       expect(decoded.clientEndpoints.length, work.clientEndpoints.length);
       expect(
         decoded.routes.map((route) => route.id),
@@ -1017,6 +1107,147 @@ void main() {
       expect(
         decoded.routes.first.accountPolicy.accountRevisions,
         work.routes.first.accountPolicy.accountRevisions,
+      );
+      expect(
+        decoded.clientEndpoints.first.protocolPlans.first.egressPolicy,
+        const TrafficEgressPolicy.direct(),
+      );
+      expect(
+        decoded.clientEndpoints.first.protocolPlans.first.transformPolicy,
+        const TrafficTransformPolicy.disabled(),
+      );
+    },
+  );
+
+  test('Environment launch overlay is exact, bounded, and round-trips', () {
+    final policy = EnvironmentLaunchPolicy.fromJson({
+      'setEnv': {'TEAM_CONTEXT': 'research', 'FEATURE_FLAG': '1'},
+      'deleteEnv': ['OLD_CONTEXT'],
+    }, 'launchEnvironment');
+
+    expect(policy.setEnv['TEAM_CONTEXT'], 'research');
+    expect(policy.deleteEnv, ['OLD_CONTEXT']);
+    expect(
+      EnvironmentLaunchPolicy.fromJson(
+        jsonDecode(jsonEncode(policy.toJson())),
+        'launchEnvironment',
+      ),
+      policy,
+    );
+    expect(
+      () => EnvironmentLaunchPolicy.fromJson({
+        'setEnv': {'OPENAI_API_KEY': 'forbidden'},
+      }, 'launchEnvironment'),
+      throwsA(isA<ControlContractException>()),
+    );
+    expect(
+      () => EnvironmentLaunchPolicy.fromJson({
+        'deleteEnv': ['VIBERMATE_INTERNAL'],
+      }, 'launchEnvironment'),
+      throwsA(isA<ControlContractException>()),
+    );
+  });
+
+  test(
+    'traffic egress contract keeps resolver and proxy semantics explicit',
+    () {
+      final socks5DoH = TrafficEgressPolicy.fromJson({
+        'proxy': {'kind': 'socks5', 'endpoint': '127.0.0.1:1080'},
+        'resolver': {
+          'kind': 'doh',
+          'dohUrl': 'https://resolver.example/',
+          'transport': 'proxy',
+        },
+      }, 'egress');
+      expect(socks5DoH.toJson(), {
+        'proxy': {'kind': 'socks5', 'endpoint': '127.0.0.1:1080'},
+        'resolver': {
+          'kind': 'doh',
+          'dohUrl': 'https://resolver.example/',
+          'transport': 'proxy',
+        },
+      });
+
+      final ipDoH = TrafficResolverPolicy.fromJson({
+        'kind': 'doh',
+        'dohUrl': 'https://8.8.8.8/dns-query',
+        'transport': 'direct',
+      }, 'egress.resolver');
+      expect(ipDoH.dohUrl, 'https://8.8.8.8/dns-query');
+
+      for (final invalid in <JsonObject>[
+        {
+          'proxy': {'kind': 'socks5h', 'endpoint': 'proxy.example:1080'},
+          'resolver': {'kind': 'proxy', 'transport': 'proxy'},
+        },
+        {
+          'proxy': {'kind': 'direct'},
+          'resolver': {'kind': 'proxy', 'transport': 'proxy'},
+        },
+        {
+          'proxy': {'kind': 'socks5h', 'endpoint': 'proxy.example:1080'},
+          'resolver': {'kind': 'system', 'transport': 'direct'},
+        },
+        {
+          'proxy': {'kind': 'socks5', 'endpoint': 'proxy.example:01080'},
+          'resolver': {'kind': 'system', 'transport': 'direct'},
+        },
+        {
+          'proxy': {'kind': 'direct'},
+          'resolver': {
+            'kind': 'doh',
+            'dohUrl': 'https://resolver.example/dns-query?token=secret',
+            'transport': 'direct',
+          },
+        },
+        {
+          'proxy': {'kind': 'direct'},
+          'resolver': {
+            'kind': 'doh',
+            'dohUrl': 'https://8.8.8.8',
+            'transport': 'direct',
+          },
+        },
+      ]) {
+        expect(
+          () => TrafficEgressPolicy.fromJson(invalid, 'egress'),
+          throwsA(isA<ControlContractException>()),
+        );
+      }
+    },
+  );
+
+  test(
+    'traffic transform contract is strict, bounded, and round-trips source',
+    () {
+      final policy = TrafficTransformPolicy.fromJson({
+        'requestJavaScript': 'request.body = request.body.trim();',
+        'responseJavaScript': 'response.headers["x-audit"] = "yes";',
+      }, 'transform');
+      expect(policy.enabled, isTrue);
+      expect(policy.toJson(), {
+        'requestJavaScript': 'request.body = request.body.trim();',
+        'responseJavaScript': 'response.headers["x-audit"] = "yes";',
+      });
+      expect(
+        TrafficTransformPolicy.fromJson({
+          'requestJavaScript': '',
+          'responseJavaScript': '',
+        }, 'transform'),
+        const TrafficTransformPolicy.disabled(),
+      );
+      expect(
+        () => TrafficTransformPolicy.fromJson({
+          'requestJavaScript': '',
+        }, 'transform'),
+        throwsA(isA<ControlContractException>()),
+      );
+      expect(
+        () => TrafficTransformPolicy.fromJson({
+          'requestJavaScript': 'request.body = "\u0000";',
+          'responseJavaScript': '',
+        }, 'transform'),
+        throwsA(isA<ControlContractException>()),
       );
     },
   );

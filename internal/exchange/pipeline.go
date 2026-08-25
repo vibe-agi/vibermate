@@ -20,6 +20,7 @@ import (
 	"github.com/vibe-agi/vibermate/internal/agentconversation"
 	"github.com/vibe-agi/vibermate/internal/clientadapter"
 	"github.com/vibe-agi/vibermate/internal/environment"
+	"github.com/vibe-agi/vibermate/internal/messagetransform"
 	"github.com/vibe-agi/vibermate/internal/offlinehold"
 	"github.com/vibe-agi/vibermate/internal/protocolcore"
 	"github.com/vibe-agi/vibermate/internal/protocolpath"
@@ -230,6 +231,7 @@ func (pipeline *Pipeline) Execute(
 	// ledger lives outside the loop because commits accumulate across the
 	// whole logical Exchange, while everything a candidate decides does not.
 	ledger := &CommitLedger{}
+	transformTurn := request.plan.TransformProgram().NewTurn()
 	// attemptErr is the outcome the client ends up with. The loop body has its
 	// own short-lived errors; this is the one that leaves.
 	var attemptErr error
@@ -268,6 +270,7 @@ func (pipeline *Pipeline) Execute(
 				ledger,
 				&result,
 				captured,
+				transformTurn,
 			)
 			material.Release()
 		}
@@ -315,6 +318,7 @@ func (pipeline *Pipeline) executeCandidate(
 	ledger *CommitLedger,
 	result *Result,
 	captured *contentCapture,
+	transformTurn *messagetransform.Turn,
 ) error {
 	if selection.original {
 		if credential.mode != providerauth.CredentialClientPassthrough {
@@ -334,6 +338,17 @@ func (pipeline *Pipeline) executeCandidate(
 				errors.New("original passthrough request envelope is unavailable"),
 			)
 		}
+		transformedHeaders, transformedBody, err := applyRequestMessageTransform(
+			ctx,
+			transformTurn,
+			request.operation.Method(),
+			request.operation.Path(),
+			headers,
+			request.body,
+		)
+		if err != nil {
+			return newFailure(ReasonMessageTransformFailed, request.exchangeID, 0, err)
+		}
 		frozenRequest, err := pipeline.newProviderRequest(
 			request,
 			selection,
@@ -342,15 +357,15 @@ func (pipeline *Pipeline) executeCandidate(
 			request.operation.Method(),
 			strings.TrimPrefix(request.operation.Path(), "/"),
 			request.operation.RawQuery(),
-			headers,
-			request.body,
+			transformedHeaders,
+			transformedBody,
 		)
 		if err != nil {
 			return newFailure(ReasonProviderRequestInvalid, request.exchangeID, 0, err)
 		}
 		var contentPath *protocolpath.Path
 		var decodedContent *protocolcore.Request
-		contentBody, contentErr := decodeOriginalRequestContent(
+		contentBody, contentErr := decodeBoundedContent(
 			request.body,
 			headers.Get("Content-Encoding"),
 		)
@@ -382,6 +397,7 @@ func (pipeline *Pipeline) executeCandidate(
 			contentPath,
 			decodedContent,
 			captured,
+			transformTurn,
 		)
 	}
 
@@ -441,6 +457,17 @@ func (pipeline *Pipeline) executeCandidate(
 		}
 		headers = original
 	}
+	transformedHeaders, transformedBody, err := applyRequestMessageTransform(
+		ctx,
+		transformTurn,
+		encodedProvider.Method(),
+		"/"+strings.TrimPrefix(encodedProvider.RelativePath(), "/"),
+		headers,
+		encodedProvider.Body(),
+	)
+	if err != nil {
+		return newFailure(ReasonMessageTransformFailed, request.exchangeID, 0, err)
+	}
 	frozenRequest, err := pipeline.newProviderRequest(
 		request,
 		selection,
@@ -449,8 +476,8 @@ func (pipeline *Pipeline) executeCandidate(
 		encodedProvider.Method(),
 		encodedProvider.RelativePath(),
 		"",
-		headers,
-		encodedProvider.Body(),
+		transformedHeaders,
+		transformedBody,
 	)
 	if err != nil {
 		return newFailure(ReasonProviderRequestInvalid, request.exchangeID, 0, err)
@@ -467,6 +494,7 @@ func (pipeline *Pipeline) executeCandidate(
 			ledger,
 			result,
 			captured,
+			transformTurn,
 		)
 	}
 	return pipeline.executeComplete(
@@ -480,13 +508,14 @@ func (pipeline *Pipeline) executeCandidate(
 		ledger,
 		result,
 		captured,
+		transformTurn,
 	)
 }
 
-// decodeOriginalRequestContent returns a bounded audit-only copy. The exact
-// compressed body continues upstream unchanged; decompression is never part of
-// the original-passthrough transport contract.
-func decodeOriginalRequestContent(body []byte, contentEncoding string) ([]byte, error) {
+// decodeBoundedContent exposes one bounded logical HTTP representation to
+// protocol evidence and message transforms. Callers decide whether the exact
+// compressed bytes continue over their transport boundary.
+func decodeBoundedContent(body []byte, contentEncoding string) ([]byte, error) {
 	switch encoding := strings.ToLower(strings.TrimSpace(contentEncoding)); encoding {
 	case "", "identity":
 		return bytes.Clone(body), nil
@@ -513,7 +542,7 @@ func decodeOriginalRequestContent(body []byte, contentEncoding string) ([]byte, 
 		reader.Close()
 		return decoded, readErr
 	default:
-		return nil, fmt.Errorf("unsupported request content encoding %q", encoding)
+		return nil, fmt.Errorf("unsupported Content-Encoding %q", encoding)
 	}
 }
 
@@ -556,7 +585,8 @@ func (pipeline *Pipeline) newProviderRequest(
 		Headers: headers, Body: body, CredentialMode: credential.mode,
 		WireProfile: selection.wireProfile, ClientProtocol: request.ClientHTTPProtocol(),
 		ClientUserAgent: request.ClientUserAgent(), ClientHello: clientHello,
-		RawEvidence: rawEvidence,
+		EgressPolicy: request.RequestPlan().EgressPolicy(),
+		RawEvidence:  rawEvidence,
 	}
 	if credential.mode == providerauth.CredentialClientPassthrough {
 		options.ClientOrigin = selection.clientOrigin
@@ -769,7 +799,7 @@ func (pipeline *Pipeline) observeStart(request ClientRequest) {
 	semanticRequest := protocolcore.Request{ProtocolEvidence: evidence}
 	body := request.body
 	if headers, available := request.OriginalHeaders(); available {
-		if decodedBody, decodeErr := decodeOriginalRequestContent(
+		if decodedBody, decodeErr := decodeBoundedContent(
 			request.body,
 			headers.Get("Content-Encoding"),
 		); decodeErr == nil {
@@ -1143,6 +1173,7 @@ func (pipeline *Pipeline) executeComplete(
 	ledger *CommitLedger,
 	result *Result,
 	captured *contentCapture,
+	transformTurn *messagetransform.Turn,
 ) error {
 	result.Presentation = frozenRequest.WirePresentationEvidence()
 	if err := ledger.RecordUpstreamSend(int64(len(frozenRequest.Body()))); err != nil {
@@ -1196,6 +1227,38 @@ func (pipeline *Pipeline) executeComplete(
 			err,
 		)
 	}
+	responseEnvelope := managedResponseEnvelope(ResponseModeJSON)
+	if transformTurn.HasResponse() {
+		transformed, beforeHeaders, _, transformErr := applyResponseMessageTransform(
+			ctx,
+			transformTurn,
+			response.StatusCode,
+			response.Header,
+			body,
+		)
+		if transformErr != nil {
+			return newFailure(
+				ReasonMessageTransformFailed,
+				request.exchangeID,
+				response.StatusCode,
+				transformErr,
+			)
+		}
+		responseEnvelope, transformErr = managedEnvelopeWithTransform(
+			ResponseModeJSON,
+			beforeHeaders,
+			transformed.Headers,
+		)
+		if transformErr != nil {
+			return newFailure(
+				ReasonMessageTransformFailed,
+				request.exchangeID,
+				response.StatusCode,
+				transformErr,
+			)
+		}
+		body = transformed.Body
+	}
 	providerResponse, backendResponseReport, err :=
 		protocolPath.Backend().DecodeResponse(
 			decoded,
@@ -1230,7 +1293,7 @@ func (pipeline *Pipeline) executeComplete(
 			err,
 		)
 	}
-	if err := downstream.Begin(ctx, managedResponseEnvelope(ResponseModeJSON)); err != nil {
+	if err := downstream.Begin(ctx, responseEnvelope); err != nil {
 		return newFailure(
 			ReasonDownstreamCommitFailed,
 			request.exchangeID,
@@ -1304,6 +1367,7 @@ func (pipeline *Pipeline) executeOriginal(
 	contentPath *protocolpath.Path,
 	decodedContent *protocolcore.Request,
 	captured *contentCapture,
+	transformTurn *messagetransform.Turn,
 ) error {
 	result.Presentation = frozenRequest.WirePresentationEvidence()
 	if err := ledger.RecordUpstreamSend(int64(len(frozenRequest.Body()))); err != nil {
@@ -1342,6 +1406,32 @@ func (pipeline *Pipeline) executeOriginal(
 		// request as a fallback when the header is absent; an explicit response
 		// media type remains authoritative.
 		mode = ResponseModeEventStream
+	}
+	if transformTurn.HasResponse() {
+		if mode == ResponseModeEventStream {
+			return pipeline.executeTransformedOriginalStream(
+				ctx,
+				request,
+				response,
+				downstream,
+				ledger,
+				contentPath,
+				decodedContent,
+				captured,
+				transformTurn,
+			)
+		}
+		return pipeline.executeTransformedOriginalComplete(
+			ctx,
+			request,
+			response,
+			downstream,
+			ledger,
+			contentPath,
+			decodedContent,
+			captured,
+			transformTurn,
+		)
 	}
 	envelope, err := NewResponseEnvelope(
 		mode,
@@ -1417,13 +1507,13 @@ func (pipeline *Pipeline) executeOriginal(
 			// that as complete only when the bounded semantic decoder can prove the
 			// provider terminal was already present in the exact bytes delivered.
 			if mode == ResponseModeEventStream && errors.Is(readErr, context.Canceled) {
-				if decodedResponse := contentDecoder.Finish(context.WithoutCancel(ctx)); decodedResponse != nil {
-					captured.response = decodedResponse
-					if terminalBody, ok := response.Body.(interface {
-						ConfirmSemanticTerminal()
-					}); ok {
-						terminalBody.ConfirmSemanticTerminal()
-					}
+				if finishCanceledOriginalStream(
+					ctx,
+					response.Body,
+					nil,
+					contentDecoder,
+					captured,
+				) {
 					break
 				}
 			}
@@ -1454,6 +1544,318 @@ func (pipeline *Pipeline) executeOriginal(
 		captured.response = decodedResponse
 	}
 	return nil
+}
+
+func (pipeline *Pipeline) executeTransformedOriginalComplete(
+	ctx context.Context,
+	request ClientRequest,
+	response *http.Response,
+	downstream Downstream,
+	ledger *CommitLedger,
+	contentPath *protocolpath.Path,
+	decodedContent *protocolcore.Request,
+	captured *contentCapture,
+	transformTurn *messagetransform.Turn,
+) error {
+	body, err := readBounded(response.Body, maxCompleteResponseBytes)
+	if err != nil {
+		return newFailure(
+			ReasonProviderResponseInvalid,
+			request.exchangeID,
+			response.StatusCode,
+			err,
+		)
+	}
+	transformed, _, protectedHeaders, err := applyResponseMessageTransform(
+		ctx,
+		transformTurn,
+		response.StatusCode,
+		response.Header,
+		body,
+	)
+	if err != nil {
+		return newFailure(
+			ReasonMessageTransformFailed,
+			request.exchangeID,
+			response.StatusCode,
+			err,
+		)
+	}
+	restoreCredentialHeaders(transformed.Headers, protectedHeaders)
+	envelope, err := NewResponseEnvelope(
+		ResponseModeJSON,
+		response.StatusCode,
+		transformed.Headers,
+	)
+	if err != nil {
+		return newFailure(
+			ReasonMessageTransformFailed,
+			request.exchangeID,
+			response.StatusCode,
+			err,
+		)
+	}
+	if err := downstream.Begin(ctx, envelope); err != nil {
+		return newFailure(
+			ReasonDownstreamCommitFailed,
+			request.exchangeID,
+			response.StatusCode,
+			err,
+		)
+	}
+	if err := ledger.RecordOrdinaryHeaders(); err != nil {
+		return newFailure(
+			ReasonDownstreamCommitFailed,
+			request.exchangeID,
+			response.StatusCode,
+			err,
+		)
+	}
+	contentDecoder := newOriginalContentDecoder(
+		contentPath,
+		decodedContent,
+		ResponseModeJSON,
+		transformed.Headers.Get("Content-Encoding"),
+	)
+	committed, writeErr := writeDownstream(ctx, downstream, transformed.Body)
+	if committed > 0 {
+		contentDecoder.Feed(ctx, transformed.Body[:committed])
+		if err := ledger.RecordSemanticWrite(committed); err != nil {
+			return newFailure(
+				ReasonDownstreamCommitFailed,
+				request.exchangeID,
+				response.StatusCode,
+				err,
+			)
+		}
+	}
+	if writeErr != nil {
+		return newFailure(
+			ReasonDownstreamCommitFailed,
+			request.exchangeID,
+			response.StatusCode,
+			writeErr,
+		)
+	}
+	if err := ledger.RecordTerminal(); err != nil {
+		return newFailure(
+			ReasonDownstreamCommitFailed,
+			request.exchangeID,
+			response.StatusCode,
+			err,
+		)
+	}
+	if response.StatusCode < 200 || response.StatusCode > 299 {
+		return newProviderStatusFailure(
+			request.exchangeID,
+			response.StatusCode,
+			ProviderFieldUnknown,
+		)
+	}
+	if decodedResponse := contentDecoder.Finish(ctx); decodedResponse != nil {
+		captured.response = decodedResponse
+	}
+	return nil
+}
+
+func (pipeline *Pipeline) executeTransformedOriginalStream(
+	ctx context.Context,
+	request ClientRequest,
+	response *http.Response,
+	downstream Downstream,
+	ledger *CommitLedger,
+	contentPath *protocolpath.Path,
+	decodedContent *protocolcore.Request,
+	captured *contentCapture,
+	transformTurn *messagetransform.Turn,
+) error {
+	logicalBody, err := newLogicalTransformStream(
+		response.Body,
+		response.Header.Get("Content-Encoding"),
+	)
+	if err != nil {
+		return newFailure(
+			ReasonMessageTransformFailed,
+			request.exchangeID,
+			response.StatusCode,
+			err,
+		)
+	}
+	defer logicalBody.Close()
+	transformer, err := newStreamMessageTransformer(
+		transformTurn,
+		response.StatusCode,
+		response.Header,
+	)
+	if err != nil {
+		return newFailure(
+			ReasonMessageTransformFailed,
+			request.exchangeID,
+			response.StatusCode,
+			err,
+		)
+	}
+	contentDecoder := newOriginalContentDecoder(
+		contentPath,
+		decodedContent,
+		ResponseModeEventStream,
+		"",
+	)
+	started := false
+	buffer := make([]byte, streamReadBufferBytes)
+	for {
+		count, readErr := logicalBody.Read(buffer)
+		if count > 0 {
+			transformed, headerReady, transformErr := transformer.Feed(
+				ctx,
+				buffer[:count],
+			)
+			if transformErr != nil {
+				return newFailure(
+					ReasonMessageTransformFailed,
+					request.exchangeID,
+					response.StatusCode,
+					transformErr,
+				)
+			}
+			if headerReady {
+				envelope, envelopeErr := transformer.OriginalEnvelope()
+				if envelopeErr != nil {
+					return newFailure(
+						ReasonMessageTransformFailed,
+						request.exchangeID,
+						response.StatusCode,
+						envelopeErr,
+					)
+				}
+				if beginErr := downstream.Begin(ctx, envelope); beginErr != nil {
+					return newFailure(
+						ReasonDownstreamCommitFailed,
+						request.exchangeID,
+						response.StatusCode,
+						beginErr,
+					)
+				}
+				if recordErr := ledger.RecordOrdinaryHeaders(); recordErr != nil {
+					return newFailure(
+						ReasonDownstreamCommitFailed,
+						request.exchangeID,
+						response.StatusCode,
+						recordErr,
+					)
+				}
+				started = true
+			}
+			if len(transformed) > 0 {
+				committed, writeErr := writeDownstream(ctx, downstream, transformed)
+				if committed > 0 {
+					contentDecoder.Feed(ctx, transformed[:committed])
+					if recordErr := ledger.RecordSemanticWrite(committed); recordErr != nil {
+						return newFailure(
+							ReasonDownstreamCommitFailed,
+							request.exchangeID,
+							response.StatusCode,
+							recordErr,
+						)
+					}
+				}
+				if writeErr != nil {
+					return newFailure(
+						ReasonDownstreamCommitFailed,
+						request.exchangeID,
+						response.StatusCode,
+						writeErr,
+					)
+				}
+			}
+		}
+		if errors.Is(readErr, io.EOF) {
+			break
+		}
+		if readErr != nil {
+			if errors.Is(readErr, context.Canceled) && finishCanceledOriginalStream(
+				ctx,
+				logicalBody,
+				transformer,
+				contentDecoder,
+				captured,
+			) {
+				break
+			}
+			return newFailure(
+				ReasonProviderResponseInvalid,
+				request.exchangeID,
+				response.StatusCode,
+				readErr,
+			)
+		}
+		if count == 0 {
+			return newFailure(
+				ReasonProviderResponseInvalid,
+				request.exchangeID,
+				response.StatusCode,
+				io.ErrNoProgress,
+			)
+		}
+	}
+	if err := transformer.Finish(); err != nil {
+		return newFailure(
+			ReasonMessageTransformFailed,
+			request.exchangeID,
+			response.StatusCode,
+			err,
+		)
+	}
+	if !started {
+		return newFailure(
+			ReasonMessageTransformFailed,
+			request.exchangeID,
+			response.StatusCode,
+			errors.New("streaming response contained no transformable event"),
+		)
+	}
+	if err := ledger.RecordTerminal(); err != nil {
+		return newFailure(
+			ReasonDownstreamCommitFailed,
+			request.exchangeID,
+			response.StatusCode,
+			err,
+		)
+	}
+	if response.StatusCode < 200 || response.StatusCode > 299 {
+		return newProviderStatusFailure(
+			request.exchangeID,
+			response.StatusCode,
+			ProviderFieldUnknown,
+		)
+	}
+	if decodedResponse := contentDecoder.Finish(ctx); decodedResponse != nil {
+		captured.response = decodedResponse
+	}
+	return nil
+}
+
+func finishCanceledOriginalStream(
+	ctx context.Context,
+	body io.Reader,
+	transformer *streamMessageTransformer,
+	contentDecoder *originalContentDecoder,
+	captured *contentCapture,
+) bool {
+	if transformer != nil && transformer.Finish() != nil {
+		return false
+	}
+	decodedResponse := contentDecoder.Finish(context.WithoutCancel(ctx))
+	if decodedResponse == nil {
+		return false
+	}
+	captured.response = decodedResponse
+	if terminalBody, ok := body.(interface {
+		ConfirmSemanticTerminal()
+	}); ok {
+		terminalBody.ConfirmSemanticTerminal()
+	}
+	return true
 }
 
 type originalContentDecoder struct {
@@ -1604,31 +2006,34 @@ func (pipeline *Pipeline) executeStream(
 	ledger *CommitLedger,
 	result *Result,
 	captured *contentCapture,
+	transformTurn *messagetransform.Turn,
 ) error {
-	if err := downstream.Begin(
-		ctx,
-		managedResponseEnvelope(ResponseModeEventStream),
-	); err != nil {
-		return newFailure(
-			ReasonDownstreamCommitFailed,
-			request.exchangeID,
-			0,
-			err,
-		)
-	}
-	if err := ledger.RecordHoldEnvelope(); err != nil {
-		return newFailure(
-			ReasonDownstreamCommitFailed,
-			request.exchangeID,
-			0,
-			err,
-		)
+	if !transformTurn.HasResponse() {
+		if err := downstream.Begin(
+			ctx,
+			managedResponseEnvelope(ResponseModeEventStream),
+		); err != nil {
+			return newFailure(
+				ReasonDownstreamCommitFailed,
+				request.exchangeID,
+				0,
+				err,
+			)
+		}
+		if err := ledger.RecordHoldEnvelope(); err != nil {
+			return newFailure(
+				ReasonDownstreamCommitFailed,
+				request.exchangeID,
+				0,
+				err,
+			)
+		}
 	}
 
 	var retryDeadline time.Time
 	for {
 		if err := ledger.RecordUpstreamSend(int64(len(frozenRequest.Body()))); err != nil {
-			return pipeline.abortStream(
+			return pipeline.failStream(
 				ctx,
 				request.exchangeID,
 				downstream,
@@ -1693,7 +2098,7 @@ func (pipeline *Pipeline) executeStream(
 					sendErr,
 				)
 			}
-			return pipeline.abortStream(
+			return pipeline.failStream(
 				ctx,
 				request.exchangeID,
 				downstream,
@@ -1708,7 +2113,7 @@ func (pipeline *Pipeline) executeStream(
 				0,
 				errors.New("provider returned an incomplete response"),
 			)
-			return pipeline.abortStream(
+			return pipeline.failStream(
 				ctx,
 				request.exchangeID,
 				downstream,
@@ -1767,7 +2172,7 @@ func (pipeline *Pipeline) executeStream(
 					errors.New("provider retry status exhausted the resend budget"),
 				)
 			}
-			return pipeline.abortStream(
+			return pipeline.failStream(
 				ctx,
 				request.exchangeID,
 				downstream,
@@ -1786,7 +2191,7 @@ func (pipeline *Pipeline) executeStream(
 				"text/event-stream",
 			)
 			_ = response.Body.Close()
-			return pipeline.abortStream(
+			return pipeline.failStream(
 				ctx,
 				request.exchangeID,
 				downstream,
@@ -1794,11 +2199,53 @@ func (pipeline *Pipeline) executeStream(
 				failure,
 			)
 		}
+		transformer, err := newStreamMessageTransformer(
+			transformTurn,
+			statusCode,
+			response.Header,
+		)
+		if err != nil {
+			_ = response.Body.Close()
+			return pipeline.failStream(
+				ctx,
+				request.exchangeID,
+				downstream,
+				ledger,
+				newFailure(
+					ReasonMessageTransformFailed,
+					request.exchangeID,
+					statusCode,
+					err,
+				),
+			)
+		}
+		streamBody := response.Body
+		if transformer != nil {
+			streamBody, err = newLogicalTransformStream(
+				response.Body,
+				response.Header.Get("Content-Encoding"),
+			)
+			if err != nil {
+				_ = response.Body.Close()
+				return pipeline.failStream(
+					ctx,
+					request.exchangeID,
+					downstream,
+					ledger,
+					newFailure(
+						ReasonMessageTransformFailed,
+						request.exchangeID,
+						statusCode,
+						err,
+					),
+				)
+			}
+		}
 
 		stream, err := protocolPath.Streaming().NewStream(decoded)
 		if err != nil {
-			_ = response.Body.Close()
-			return pipeline.abortStream(
+			_ = streamBody.Close()
+			return pipeline.failStream(
 				ctx,
 				request.exchangeID,
 				downstream,
@@ -1817,11 +2264,12 @@ func (pipeline *Pipeline) executeStream(
 			selection,
 			decoded,
 			stream,
-			response.Body,
+			streamBody,
 			downstream,
 			ledger,
 			result,
 			captured,
+			transformer,
 		)
 		if streamErr == nil {
 			return nil
@@ -1873,7 +2321,7 @@ func (pipeline *Pipeline) executeStream(
 				streamErr,
 			)
 		}
-		return pipeline.abortStream(
+		return pipeline.failStream(
 			ctx,
 			request.exchangeID,
 			downstream,
@@ -1894,6 +2342,7 @@ func (pipeline *Pipeline) consumeProviderStream(
 	ledger *CommitLedger,
 	result *Result,
 	captured *contentCapture,
+	transformer *streamMessageTransformer,
 ) error {
 	readContext, cancelRead := context.WithCancelCause(ctx)
 	readResults := make(chan providerReadResult)
@@ -1920,13 +2369,15 @@ func (pipeline *Pipeline) consumeProviderStream(
 		case <-providerIdle.C:
 			return ErrProviderSemanticIdle
 		case <-keepalive.C:
-			if err := downstream.Keepalive(ctx); err != nil {
-				return newFailure(
-					ReasonDownstreamDisconnected,
-					request.exchangeID,
-					0,
-					err,
-				)
+			if ledger.Snapshot().DownstreamHoldEnvelope {
+				if err := downstream.Keepalive(ctx); err != nil {
+					return newFailure(
+						ReasonDownstreamDisconnected,
+						request.exchangeID,
+						0,
+						err,
+					)
+				}
 			}
 			resetTimer(keepalive, pipeline.streamBudgets.KeepaliveInterval)
 		case result, open := <-readResults:
@@ -1934,9 +2385,49 @@ func (pipeline *Pipeline) consumeProviderStream(
 				streamComplete = true
 				continue
 			}
+			fragment := result.fragment
+			if len(fragment) > 0 && transformer != nil {
+				transformed, headerReady, transformErr := transformer.Feed(ctx, fragment)
+				if transformErr != nil {
+					return newFailure(
+						ReasonMessageTransformFailed,
+						request.exchangeID,
+						0,
+						transformErr,
+					)
+				}
+				fragment = transformed
+				if headerReady {
+					envelope, envelopeErr := transformer.Envelope()
+					if envelopeErr != nil {
+						return newFailure(
+							ReasonMessageTransformFailed,
+							request.exchangeID,
+							0,
+							envelopeErr,
+						)
+					}
+					if beginErr := downstream.Begin(ctx, envelope); beginErr != nil {
+						return newFailure(
+							ReasonDownstreamCommitFailed,
+							request.exchangeID,
+							0,
+							beginErr,
+						)
+					}
+					if recordErr := ledger.RecordHoldEnvelope(); recordErr != nil {
+						return newFailure(
+							ReasonDownstreamCommitFailed,
+							request.exchangeID,
+							0,
+							recordErr,
+						)
+					}
+				}
+			}
 			before := stream.SemanticProgress()
-			if len(result.fragment) > 0 {
-				safe, decodeErr := stream.Feed(ctx, result.fragment)
+			if len(fragment) > 0 {
+				safe, decodeErr := stream.Feed(ctx, fragment)
 				if stream.SemanticProgress() > before {
 					resetTimer(
 						providerIdle,
@@ -1977,6 +2468,16 @@ func (pipeline *Pipeline) consumeProviderStream(
 			if len(result.fragment) == 0 {
 				return io.ErrNoProgress
 			}
+		}
+	}
+	if transformer != nil {
+		if err := transformer.Finish(); err != nil {
+			return newFailure(
+				ReasonMessageTransformFailed,
+				request.exchangeID,
+				0,
+				err,
+			)
 		}
 	}
 
@@ -2324,6 +2825,19 @@ func (pipeline *Pipeline) abortStream(
 		)
 	}
 	return typed
+}
+
+func (pipeline *Pipeline) failStream(
+	ctx context.Context,
+	exchangeID string,
+	downstream Downstream,
+	ledger *CommitLedger,
+	failure error,
+) error {
+	if !ledger.Snapshot().DownstreamHoldEnvelope {
+		return failure
+	}
+	return pipeline.abortStream(ctx, exchangeID, downstream, ledger, failure)
 }
 
 func classifyProviderRejection(reader io.Reader) ProviderField {

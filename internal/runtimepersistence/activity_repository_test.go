@@ -468,6 +468,57 @@ func TestActivityRepositoryListsExchangePagesWithoutSkips(t *testing.T) {
 	}
 }
 
+func TestActivityRepositoryFiltersExchangePagesByHalfOpenOccurrenceWindow(
+	t *testing.T,
+) {
+	t.Parallel()
+	store := openTestStore(t, filepath.Join(t.TempDir(), "runtime.db"))
+	defer func() {
+		if err := store.Shutdown(context.Background()); err != nil {
+			t.Error(err)
+		}
+	}()
+	repository := store.ActivityRepository()
+	appendExchange := func(id string, occurredAt time.Time) {
+		t.Helper()
+		record := activity.Record{
+			ID: id, OccurredAt: occurredAt,
+			Kind: activity.KindExchangeCompleted, SubjectID: "exchange-" + id,
+			Status: activity.StatusSucceeded, SourceKind: activity.SourceSystemProxy,
+			SourceDisplayName: "ViberMate runtime",
+			SourceRecognition: activity.SourceRecognitionUnknown,
+			ConnectionID:      "connection-" + id,
+		}
+		setFrozenExecutionEvidence(&record, "usage-window")
+		if _, err := repository.Append(context.Background(), record); err != nil {
+			t.Fatal(err)
+		}
+	}
+	from := time.Date(2026, 8, 24, 0, 0, 0, 0, time.UTC)
+	until := time.Date(2026, 8, 25, 0, 0, 0, 0, time.UTC)
+	appendExchange("before", from.Add(-time.Millisecond))
+	appendExchange("from", from)
+	appendExchange("inside", until.Add(-time.Millisecond))
+	appendExchange("until", until)
+
+	page, err := repository.ListExchanges(
+		context.Background(),
+		activity.PageRequest{
+			Limit: 10, OccurredAtOrAfter: from, OccurredBefore: until,
+		},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := []string{}
+	for _, item := range page.Items {
+		got = append(got, item.ID)
+	}
+	if want := []string{"inside", "from"}; !slices.Equal(got, want) {
+		t.Fatalf("windowed Exchanges = %v, want %v", got, want)
+	}
+}
+
 func setFrozenExecutionEvidence(record *activity.Record, prefix string) {
 	record.EnvironmentID = prefix + "-environment"
 	record.EnvironmentRevision = 1

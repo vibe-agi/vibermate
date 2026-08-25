@@ -165,7 +165,7 @@ final class _GeneralSettingsPane extends StatelessWidget {
                   ? copy('settings.preview')
                   : controller.serverManagement
                   ? copy.format('settings.remote', {
-                      'target': controller.runtimeTarget,
+                      'target': controller.runtimeConnectTarget,
                     })
                   : copy('settings.live'),
               style: Theme.of(context).textTheme.bodyMedium,
@@ -251,10 +251,8 @@ final class _ServerAccessPanelState extends State<_ServerAccessPanel> {
                                 style: Theme.of(context).textTheme.titleSmall,
                               ),
                               const SizedBox(height: 2),
-                              Text(
-                                controller.runtimeTarget,
-                                maxLines: 2,
-                                overflow: TextOverflow.ellipsis,
+                              SelectableText(
+                                controller.runtimeConnectTarget,
                                 style: monoStyle.copyWith(
                                   fontSize: ViberType.micro,
                                   color: context.viberColors.textMuted,
@@ -401,12 +399,12 @@ final class _ServerAccessPanelState extends State<_ServerAccessPanel> {
                     _RunCommand(
                       client: copy('server.login.command.client'),
                       command:
-                          'vibermate login --server ${controller.runtimeTarget}',
+                          'vibermate login --server ${controller.runtimeConnectTarget}',
                       copyLabel: copy('server.login.command.copy'),
                       enabled: access != null,
                       onCopy: () => _copyCommand(
                         copy('server.login.command.client'),
-                        'vibermate login --server ${controller.runtimeTarget}',
+                        'vibermate login --server ${controller.runtimeConnectTarget}',
                       ),
                     ),
                     const SizedBox(height: 10),
@@ -422,24 +420,27 @@ final class _ServerAccessPanelState extends State<_ServerAccessPanel> {
                       ),
                     ),
                     const SizedBox(height: 7),
-                    Wrap(
-                      spacing: 7,
-                      runSpacing: 7,
+                    Column(
                       children: [
-                        for (final client in const ['claude', 'codex'])
+                        for (final (index, client) in const [
+                          'claude',
+                          'codex',
+                        ].indexed) ...[
                           _RunCommand(
                             client: client == 'claude' ? 'Claude' : 'Codex',
                             command:
-                                'vibermate run --server ${controller.runtimeTarget} -- $client',
+                                'vibermate run --server ${controller.runtimeConnectTarget} -- $client',
                             copyLabel: copy.format('terminal.run.copy', {
                               'client': client == 'claude' ? 'Claude' : 'Codex',
                             }),
                             enabled: access != null,
                             onCopy: () => _copyCommand(
                               client == 'claude' ? 'Claude' : 'Codex',
-                              'vibermate run --server ${controller.runtimeTarget} -- $client',
+                              'vibermate run --server ${controller.runtimeConnectTarget} -- $client',
                             ),
                           ),
+                          if (index == 0) const SizedBox(height: 7),
+                        ],
                       ],
                     ),
                     if (_copiedClient case final client?) ...[
@@ -952,8 +953,8 @@ final class _RunCommand extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return Container(
-      width: 220,
-      height: ViberMetrics.controlHeight,
+      width: double.infinity,
+      constraints: const BoxConstraints(minHeight: ViberMetrics.controlHeight),
       decoration: BoxDecoration(
         color: context.viberColors.rail,
         border: Border.all(color: context.viberColors.divider),
@@ -967,8 +968,7 @@ final class _RunCommand extends StatelessWidget {
               padding: const EdgeInsets.only(left: 8, right: 5),
               child: Text(
                 command,
-                maxLines: 1,
-                overflow: TextOverflow.ellipsis,
+                softWrap: true,
                 style: monoStyle.copyWith(
                   fontSize: ViberType.utility,
                   color: enabled

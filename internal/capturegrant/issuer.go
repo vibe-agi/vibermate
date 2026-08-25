@@ -636,6 +636,7 @@ type CaptureRunGrant struct {
 	LaunchAuthorityDigest        environment.LaunchAuthorityDigest
 	ProtectedAuthorities         []string
 	ManagedCredentialAuthorities []string
+	LaunchEnvironment            environment.LaunchEnvironmentPolicy
 }
 
 func (issuer *Issuer) IssueCaptureRun(
@@ -815,6 +816,7 @@ func (issuer *Issuer) IssueCaptureRun(
 		LaunchAuthorityDigest:        authorities.AuthorityDigest(),
 		ProtectedAuthorities:         protectedAuthorities,
 		ManagedCredentialAuthorities: managedAuthorities,
+		LaunchEnvironment:            authorities.LaunchEnvironment(),
 	}, nil
 }
 

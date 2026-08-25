@@ -214,7 +214,8 @@ func TestServerHostAuthenticatesServerCreatedRuntimeUserOverExplicitHTTP(t *test
 	}
 	usageRequest, err := http.NewRequest(
 		http.MethodGet,
-		"http://"+host.Status().ListenAddress+servercontrol.RuntimeUserUsagePath,
+		"http://"+host.Status().ListenAddress+servercontrol.RuntimeUserUsagePath+
+			"?from=2026-01-01&until=2027-01-01&timeZone=UTC",
 		nil,
 	)
 	if err != nil {
@@ -373,7 +374,8 @@ func TestServerAdminCreatesRuntimeUserWithoutExposingPasswordMaterial(t *testing
 	}
 	usageRequest, err := http.NewRequest(
 		http.MethodGet,
-		"https://"+status.ListenAddress+servercontrol.RuntimeUserUsagePath,
+		"https://"+status.ListenAddress+servercontrol.RuntimeUserUsagePath+
+			"?from=2026-01-01&until=2027-01-01&timeZone=UTC",
 		nil,
 	)
 	if err != nil {
@@ -491,7 +493,8 @@ func TestServerAdminReadsRuntimeUserAccessContractOverTLS(t *testing.T) {
 	}
 	if access.Transport != "https" ||
 		access.Authentication != servercontrol.RuntimeUserPasswordAuthentication ||
-		access.SessionPolicy != servercontrol.ReusableLoginSessionPolicy {
+		access.SessionPolicy != servercontrol.ReusableLoginSessionPolicy ||
+		len(access.Targets) != 1 || access.Targets[0] != status.ListenAddress {
 		t.Fatalf("Server access = %#v", access)
 	}
 }

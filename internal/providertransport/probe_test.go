@@ -14,6 +14,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/vibe-agi/vibermate/internal/egressnetwork"
 	"github.com/vibe-agi/vibermate/internal/offlinehold"
 	"github.com/vibe-agi/vibermate/internal/originidentity"
 )
@@ -274,6 +275,7 @@ func frozenProviderProbeTarget(
 		reference,
 		testRequestProvenance(t),
 		target,
+		egressnetwork.DefaultPolicy(),
 	)
 	if err != nil {
 		t.Fatalf("NewProbeTarget() error = %v", err)

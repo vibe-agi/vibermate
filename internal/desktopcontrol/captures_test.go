@@ -16,6 +16,7 @@ import (
 	"github.com/vibe-agi/vibermate/internal/captureidentity"
 	"github.com/vibe-agi/vibermate/internal/capturerun"
 	"github.com/vibe-agi/vibermate/internal/desktopcontrol"
+	"github.com/vibe-agi/vibermate/internal/environment"
 	"github.com/vibe-agi/vibermate/internal/manualcapture"
 )
 
@@ -408,6 +409,13 @@ func (fixture *assignmentFixture) Create(_ context.Context, command captureassig
 	assignment := captureassignment.Assignment{Capture: command.Capture, EnvironmentID: command.EnvironmentID, Revision: 1, Source: command.Source, UpdatedAt: time.Now().UTC().Truncate(time.Millisecond)}
 	fixture.items[command.Capture.Key()] = assignment
 	return assignment, nil
+}
+func (fixture *assignmentFixture) CreateForLaunch(
+	ctx context.Context,
+	command captureassignment.CreateCommand,
+) (captureassignment.Assignment, environment.LaunchEnvironmentPolicy, error) {
+	assignment, err := fixture.Create(ctx, command)
+	return assignment, environment.LaunchEnvironmentPolicy{}, err
 }
 func (fixture *assignmentFixture) Resolve(_ context.Context, reference captureidentity.Reference) (captureassignment.Assignment, error) {
 	fixture.mu.Lock()

@@ -22,7 +22,7 @@ func TestProviderAuditRecordsResponseReadFailure(t *testing.T) {
 	audit := &providerTerminalAuditDouble{}
 	gate := newStartedGate(t)
 	authenticator, err := NewStaticBearerAuthenticator(
-		&secretReaderStub{value: []byte("provider-token")},
+		testSecretReader(t, "provider-token"),
 	)
 	if err != nil {
 		t.Fatal(err)
@@ -107,7 +107,7 @@ func TestProviderBodyCanConfirmTerminalAfterCanceledRead(t *testing.T) {
 	audit := &providerTerminalAuditDouble{}
 	gate := newStartedGate(t)
 	authenticator, err := NewStaticBearerAuthenticator(
-		&secretReaderStub{value: []byte("provider-token")},
+		testSecretReader(t, "provider-token"),
 	)
 	if err != nil {
 		t.Fatal(err)

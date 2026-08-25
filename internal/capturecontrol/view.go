@@ -11,6 +11,7 @@ import (
 	"github.com/vibe-agi/vibermate/internal/capturegrant"
 	"github.com/vibe-agi/vibermate/internal/capturerun"
 	"github.com/vibe-agi/vibermate/internal/clientadapter"
+	"github.com/vibe-agi/vibermate/internal/environment"
 )
 
 const ClientAdapterSourcePrelaunchDigestCatalog = "prelaunch_digest_catalog"
@@ -94,6 +95,9 @@ type LaunchGrant struct {
 	// ManagedCredentialAuthorities is the subset for which this launch may replace
 	// ambient client authentication with a non-provider local placeholder.
 	ManagedCredentialAuthorities []string `json:"managedCredentialAuthorities"`
+	// LaunchEnvironment is the immutable Environment-revision overlay applied
+	// only to the child process created for this Capture.
+	LaunchEnvironment environment.LaunchEnvironmentPolicy `json:"launchEnvironment"`
 }
 
 // CaptureRunViewOf projects a trusted lifecycle view onto the contracted
@@ -246,6 +250,7 @@ func (grant LaunchGrant) Validate() error {
 		grant.ProxyToken == grant.RunCapability ||
 		grant.ProtectedAuthorities == nil ||
 		grant.ManagedCredentialAuthorities == nil ||
+		grant.LaunchEnvironment.Validate() != nil ||
 		grant.Run.CatalogRevision != grant.CatalogRevision ||
 		grant.Run.ClientRecognition != grant.Recognition {
 		return errors.New("CaptureRun launch grant is incomplete")

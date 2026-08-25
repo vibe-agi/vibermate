@@ -333,7 +333,7 @@ func (client *Client) Do(
 		frozen.wireVariant,
 		frozen.clientUserAgent,
 	); err != nil {
-		stripProviderCredentialHeaders(request.Header)
+		stripProtectedCredentialHeaders(request.Header, evidence.ProtectedHeaderNames)
 		return nil, Evidence{}, err
 	}
 	rawContext, hasRawContext := frozen.RawEvidenceContext()
@@ -352,24 +352,25 @@ func (client *Client) Do(
 	// auditable routing/credential/attempt boundary.
 	record, recordErr := client.beginAudit(operationContext, frozen)
 	if recordErr != nil {
-		stripProviderCredentialHeaders(request.Header)
+		stripProtectedCredentialHeaders(request.Header, evidence.ProtectedHeaderNames)
 		return nil, Evidence{}, recordErr
 	}
 	if rawEnabled {
 		if _, err := client.observeRaw(operationContext, rawevidence.Observation{
-			Context:         rawContext,
-			Layer:           rawevidence.LayerProviderEgress,
-			Method:          request.Method,
-			Scheme:          request.URL.Scheme,
-			Authority:       request.Host,
-			Path:            request.URL.EscapedPath(),
-			RawQuery:        request.URL.RawQuery,
-			Headers:         request.Header.Clone(),
-			Body:            frozen.body,
-			Complete:        true,
-			Representation:  "http_message",
-			ContentType:     request.Header.Get("Content-Type"),
-			ContentEncoding: request.Header.Get("Content-Encoding"),
+			Context:              rawContext,
+			Layer:                rawevidence.LayerProviderEgress,
+			Method:               request.Method,
+			Scheme:               request.URL.Scheme,
+			Authority:            request.Host,
+			Path:                 request.URL.EscapedPath(),
+			RawQuery:             request.URL.RawQuery,
+			Headers:              request.Header.Clone(),
+			ProtectedHeaderNames: append([]string(nil), evidence.ProtectedHeaderNames...),
+			Body:                 frozen.body,
+			Complete:             true,
+			Representation:       "http_message",
+			ContentType:          request.Header.Get("Content-Type"),
+			ContentEncoding:      request.Header.Get("Content-Encoding"),
 		}); err != nil {
 			client.reportRawEvidenceFailure(fmt.Errorf(
 				"record provider egress Raw evidence: %w", err,
@@ -380,12 +381,13 @@ func (client *Client) Do(
 	response, transportEvidence, err := client.transport.RoundTrip(
 		request,
 		TransportDispatch{
-			target:      frozen.target,
-			plan:        frozen.wireVariant.TransportFingerprintPlan(),
-			clientHello: frozen.clientHello,
+			target:       frozen.target,
+			plan:         frozen.wireVariant.TransportFingerprintPlan(),
+			clientHello:  frozen.clientHello,
+			egressPolicy: frozen.egressPolicy,
 		},
 	)
-	stripProviderCredentialHeaders(request.Header)
+	stripProtectedCredentialHeaders(request.Header, evidence.ProtectedHeaderNames)
 	attemptEvidence := Evidence{
 		Credential:   evidence,
 		Presentation: frozen.WirePresentationEvidence(),

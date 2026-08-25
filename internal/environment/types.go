@@ -9,6 +9,8 @@ import (
 	"unicode"
 	"unicode/utf8"
 
+	"github.com/vibe-agi/vibermate/internal/egressnetwork"
+	"github.com/vibe-agi/vibermate/internal/messagetransform"
 	"github.com/vibe-agi/vibermate/internal/originidentity"
 	"github.com/vibe-agi/vibermate/internal/protocolspec"
 )
@@ -20,6 +22,9 @@ const (
 	MaxRevision               = Revision(1<<63 - 1)
 	MaxCaptureImpact          = 1024
 	MaxRetiredChildIdentities = 4096
+	MaxLaunchEnvironmentRules = 128
+	MaxEnvironmentValueBytes  = 32 << 10
+	MaxLaunchEnvironmentBytes = 64 << 10
 )
 
 var (
@@ -223,19 +228,28 @@ func (policy ContentRecordingPolicy) Validate() error {
 // Environment is the complete user-editable aggregate. Draft is lifecycle
 // metadata and is deliberately not a State value.
 type Environment struct {
-	ID               EnvironmentID           `json:"id"`
-	Name             string                  `json:"name"`
-	State            State                   `json:"state"`
-	Revision         Revision                `json:"revision"`
-	ClientEndpoints  []ClientEndpoint        `json:"clientEndpoints"`
-	PluginBindings   []PluginBinding         `json:"pluginBindings"`
-	BudgetPolicy     BudgetPolicy            `json:"budgetPolicy"`
-	EgressPolicy     EnvironmentEgressPolicy `json:"egressPolicy"`
-	ContentRecording ContentRecordingPolicy  `json:"contentRecording"`
+	ID                EnvironmentID           `json:"id"`
+	Name              string                  `json:"name"`
+	State             State                   `json:"state"`
+	Revision          Revision                `json:"revision"`
+	ClientEndpoints   []ClientEndpoint        `json:"clientEndpoints"`
+	PluginBindings    []PluginBinding         `json:"pluginBindings"`
+	BudgetPolicy      BudgetPolicy            `json:"budgetPolicy"`
+	ContentRecording  ContentRecordingPolicy  `json:"contentRecording"`
+	LaunchEnvironment LaunchEnvironmentPolicy `json:"launchEnvironment"`
 	// PolicySet is nil only in canonical storage for the default Observe
 	// policy. EffectivePolicySet always returns the concrete authority.
 	PolicySet              *PolicySet             `json:"policySet,omitempty"`
 	RetiredChildIdentities []RetiredChildIdentity `json:"retiredChildIdentities,omitempty"`
+}
+
+// LaunchEnvironmentPolicy is the exact child-process environment overlay
+// frozen with one Environment revision. It never mutates the Runtime Server or
+// launcher process. DeleteEnv and SetEnv are disjoint; launcher-owned routing,
+// trust, and credential variables are not configurable through this policy.
+type LaunchEnvironmentPolicy struct {
+	SetEnv    map[string]string `json:"setEnv,omitempty"`
+	DeleteEnv []string          `json:"deleteEnv,omitempty"`
 }
 
 func (environment Environment) EffectivePolicySet() PolicySet {
@@ -264,12 +278,14 @@ type ClientEndpoint struct {
 }
 
 type ClientProtocolPlan struct {
-	ID                  ClientProtocolPlanID `json:"id"`
-	Revision            Revision             `json:"revision"`
-	ClientProtocol      ClientProtocol       `json:"clientProtocol"`
-	ClientAdapterPolicy ClientAdapterPolicy  `json:"clientAdapterPolicy"`
-	Destination         DestinationPlan      `json:"destination"`
-	PluginBindings      []PluginBinding      `json:"pluginBindings"`
+	ID                  ClientProtocolPlanID    `json:"id"`
+	Revision            Revision                `json:"revision"`
+	ClientProtocol      ClientProtocol          `json:"clientProtocol"`
+	ClientAdapterPolicy ClientAdapterPolicy     `json:"clientAdapterPolicy"`
+	Destination         DestinationPlan         `json:"destination"`
+	EgressPolicy        egressnetwork.Policy    `json:"egressPolicy"`
+	TransformPolicy     messagetransform.Policy `json:"transformPolicy"`
+	PluginBindings      []PluginBinding         `json:"pluginBindings"`
 }
 
 // DestinationPlan is a closed choice. Original intentionally has no payload:
@@ -316,12 +332,6 @@ type PluginBinding struct {
 type BudgetPolicy struct {
 	ID       string   `json:"id"`
 	Revision Revision `json:"revision"`
-}
-
-type EnvironmentEgressPolicy struct {
-	ID       string   `json:"id"`
-	Revision Revision `json:"revision"`
-	Mode     string   `json:"mode"`
 }
 
 type ClientAdapterPolicy struct {

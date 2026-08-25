@@ -10,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/vibe-agi/vibermate/internal/egressnetwork"
 	"github.com/vibe-agi/vibermate/internal/offlinehold"
 	"github.com/vibe-agi/vibermate/internal/originaltransport"
 	"github.com/vibe-agi/vibermate/internal/originidentity"
@@ -60,6 +61,13 @@ func TestOriginalTransportPinsClientOriginAndStripsProxyCredentials(
 		PayloadClass: protocolspec.OperationPayloadControl,
 		ConnectionID: "connection-test",
 		ParentID:     "original-request-test",
+		EgressPolicy: egressnetwork.Policy{
+			Proxy: egressnetwork.ProxyPolicy{
+				Kind:     egressnetwork.ProxySOCKS5,
+				Endpoint: "proxy.example:1080",
+			},
+			Resolver: egressnetwork.ResolverPolicy{Kind: egressnetwork.ResolverSystem},
+		},
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -99,12 +107,16 @@ func TestOriginalTransportPinsClientOriginAndStripsProxyCredentials(
 	if string(transport.Body()) != `{"value":1}` {
 		t.Fatalf("outbound body = %q", transport.Body())
 	}
+	if transport.Policy() != request.EgressPolicy() {
+		t.Fatalf("outbound EgressPolicy = %#v", transport.Policy())
+	}
 	acquire := coordinator.Request()
 	if acquire.Target.Kind != offlinehold.EgressOpaque ||
 		acquire.Target.TargetRef != origin.String() ||
 		acquire.Target.NetworkOrigin != origin.String() ||
 		acquire.Target.HTTPAuthority != origin.HTTPAuthority() ||
 		acquire.Target.TLSServerName != origin.Host() ||
+		acquire.Target.EgressPolicy != request.EgressPolicy() ||
 		acquire.SizeBytes != int64(len(`{"value":1}`)) {
 		t.Fatalf("egress acquire = %+v", acquire)
 	}
@@ -258,10 +270,12 @@ type roundTripper struct {
 	request  *http.Request
 	headers  http.Header
 	body     []byte
+	policy   egressnetwork.Policy
 }
 
 func (transport *roundTripper) RoundTrip(
 	request *http.Request,
+	policy egressnetwork.Policy,
 ) (*http.Response, error) {
 	data, err := io.ReadAll(request.Body)
 	if err != nil {
@@ -271,6 +285,7 @@ func (transport *roundTripper) RoundTrip(
 	transport.request = request
 	transport.headers = request.Header.Clone()
 	transport.body = bytes.Clone(data)
+	transport.policy = policy
 	transport.mu.Unlock()
 	return transport.response, nil
 }
@@ -291,6 +306,12 @@ func (transport *roundTripper) Body() []byte {
 	transport.mu.Lock()
 	defer transport.mu.Unlock()
 	return bytes.Clone(transport.body)
+}
+
+func (transport *roundTripper) Policy() egressnetwork.Policy {
+	transport.mu.Lock()
+	defer transport.mu.Unlock()
+	return transport.policy
 }
 
 type blockingBody struct {

@@ -226,6 +226,7 @@ func (handler *Handler) create(
 			[]string{},
 			grant.ManagedCredentialAuthorities...,
 		),
+		LaunchEnvironment: grant.LaunchEnvironment.Clone(),
 	})
 }
 

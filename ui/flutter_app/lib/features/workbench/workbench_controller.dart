@@ -31,9 +31,11 @@ final class WorkbenchController extends ChangeNotifier {
     bool preferencesWritable = true,
     WorkbenchPreferencesIssue? initialPreferencesIssue,
     ValueChanged<WorkbenchTheme>? onThemeChanged,
+    DateTime Function()? clock,
   }) : _api = api,
        _terminalCommands = terminalCommands,
        _closeRuntime = closeRuntime,
+       _clock = clock ?? DateTime.now,
        _preferencesStore = preferencesStore,
        _preferencesWritable = preferencesWritable,
        _onThemeChanged = onThemeChanged,
@@ -55,6 +57,7 @@ final class WorkbenchController extends ChangeNotifier {
   final ControlApi _api;
   final TerminalCommandService _terminalCommands;
   final Future<void> Function() _closeRuntime;
+  final DateTime Function() _clock;
   final WorkbenchPreferencesStore _preferencesStore;
   final bool _preferencesWritable;
   final ValueChanged<WorkbenchTheme>? _onThemeChanged;
@@ -62,6 +65,9 @@ final class WorkbenchController extends ChangeNotifier {
   final bool serverManagement;
   final bool terminalManagement;
   final String runtimeTarget;
+
+  String get runtimeConnectTarget =>
+      serverAccess?.preferredTarget ?? runtimeTarget;
 
   DashboardData? data;
   NetworkData? networkData;
@@ -76,6 +82,7 @@ final class WorkbenchController extends ChangeNotifier {
   RuntimeServerAccess? serverAccess;
   List<RuntimeUser>? runtimeUsers;
   RuntimeUsageReport? runtimeUsage;
+  int usageRangeDays = 30;
   WorkbenchSection section;
   AppLanguage language;
   WorkbenchTheme theme;
@@ -230,6 +237,12 @@ final class WorkbenchController extends ChangeNotifier {
     }
     return catalog;
   }
+
+  Future<MessageTransformTestResult> testMessageTransform({
+    required String clientProtocol,
+    required TrafficTransformPolicy policy,
+  }) =>
+      _api.testMessageTransform(clientProtocol: clientProtocol, policy: policy);
 
   OfflineHoldSnapshot? get offlineHold => data?.status.offlineHold;
 
@@ -489,7 +502,7 @@ final class WorkbenchController extends ChangeNotifier {
         _api.serverAccess(),
         _api.runtimeUsers(),
       ];
-      if (includeUsage) requests.add(_api.runtimeUsage());
+      if (includeUsage) requests.add(_api.runtimeUsage(_usageQuery()));
       final updated = await Future.wait<Object>(requests);
       if (_disposed) return;
       serverAccess = updated[0] as RuntimeServerAccess;
@@ -508,6 +521,54 @@ final class WorkbenchController extends ChangeNotifier {
       serverManagementError = _describeError(error);
       notifyListeners();
     }
+  }
+
+  Future<void> selectUsageRangeDays(int days) async {
+    if (_disposed ||
+        !serverManagement ||
+        serverManagementLoading ||
+        !const {30, 90, 365}.contains(days) ||
+        (usageRangeDays == days && runtimeUsage != null)) {
+      return;
+    }
+    final previousDays = usageRangeDays;
+    usageRangeDays = days;
+    serverManagementLoading = true;
+    serverManagementError = null;
+    notifyListeners();
+    try {
+      final report = await _api.runtimeUsage(_usageQuery());
+      if (_disposed) return;
+      runtimeUsage = report;
+      serverManagementLoading = false;
+      notifyListeners();
+    } catch (error) {
+      if (_disposed) return;
+      usageRangeDays = previousDays;
+      serverManagementLoading = false;
+      serverManagementError = _describeError(error);
+      notifyListeners();
+    }
+  }
+
+  RuntimeUsageQuery _usageQuery() {
+    final now = _clock().toUtc();
+    final until = DateTime.utc(
+      now.year,
+      now.month,
+      now.day,
+    ).add(const Duration(days: 1));
+    final from = until.subtract(Duration(days: usageRangeDays));
+    String civilDate(DateTime value) => [
+      value.year.toString().padLeft(4, '0'),
+      value.month.toString().padLeft(2, '0'),
+      value.day.toString().padLeft(2, '0'),
+    ].join('-');
+    return RuntimeUsageQuery(
+      from: civilDate(from),
+      until: civilDate(until),
+      timeZone: 'UTC',
+    );
   }
 
   Future<bool> createRuntimeUser({
@@ -1059,6 +1120,7 @@ final class WorkbenchController extends ChangeNotifier {
     required String displayName,
     required String kind,
     required String secret,
+    required ProviderAccountHeaderPolicy headerPolicy,
   }) async {
     final current = data;
     if (current == null ||
@@ -1082,6 +1144,7 @@ final class WorkbenchController extends ChangeNotifier {
         upstreamEndpointId: endpoint.id,
         kind: kind,
         secret: secret,
+        headerPolicy: headerPolicy,
       );
       if (_disposed) return null;
       final accounts = [...current.accounts, created]
@@ -1103,6 +1166,7 @@ final class WorkbenchController extends ChangeNotifier {
   Future<ProviderAccount?> replaceProviderAccountCredential({
     required ProviderAccount account,
     required String secret,
+    required ProviderAccountHeaderPolicy headerPolicy,
   }) async {
     final current = data;
     if (current == null || inventoryMutating) return null;
@@ -1114,6 +1178,7 @@ final class WorkbenchController extends ChangeNotifier {
       final updated = await _api.replaceProviderAccountCredential(
         account: account,
         secret: secret,
+        headerPolicy: headerPolicy,
       );
       if (_disposed) return null;
       final accounts = current.accounts

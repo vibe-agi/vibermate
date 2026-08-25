@@ -43,6 +43,7 @@ const (
 	ReasonEnvironmentPlanInvalid        ReasonCode = "environment_plan_invalid"
 	ReasonOfflineHoldUnavailable        ReasonCode = "offline_hold_unavailable"
 	ReasonProviderRequestInvalid        ReasonCode = "provider_request_invalid"
+	ReasonMessageTransformFailed        ReasonCode = "message_transform_failed"
 	ReasonProviderCredentialUnavailable ReasonCode = "provider_credential_unavailable"
 	ReasonProviderTransportFailed       ReasonCode = "provider_transport_failed"
 	ReasonProviderResponseIdle          ReasonCode = "provider_response_idle"

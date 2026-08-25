@@ -5,6 +5,8 @@ package offlinehold
 import (
 	"context"
 	"time"
+
+	"github.com/vibe-agi/vibermate/internal/egressnetwork"
 )
 
 // EgressKind identifies every approved class of external network activity.
@@ -127,6 +129,7 @@ type ProbeTarget struct {
 	TLSServerName string
 	PlanRevision  uint64
 	PlanDigest    string
+	EgressPolicy  egressnetwork.Policy
 }
 
 func (target ProbeTarget) Validate() error {

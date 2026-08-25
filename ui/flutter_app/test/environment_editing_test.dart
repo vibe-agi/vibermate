@@ -4,6 +4,84 @@ import 'package:vibermate_app/features/workbench/environment_editing.dart';
 import 'package:vibermate_app/preview/preview_control_api.dart';
 
 void main() {
+  test('traffic egress editing advances only its protocol path', () async {
+    final api = PreviewControlApi();
+    addTearDown(api.close);
+    final dashboard = await api.loadDashboard();
+    final work = dashboard.environments.firstWhere(
+      (value) => value.id == 'work',
+    );
+    final endpoint = work.clientEndpoints.first;
+    final plan = endpoint.protocolPlans.first;
+    const policy = TrafficEgressPolicy(
+      proxy: TrafficProxyPolicy(kind: 'socks5', endpoint: '127.0.0.1:1080'),
+      resolver: TrafficResolverPolicy(
+        kind: 'doh',
+        dohUrl: 'https://resolver.example/dns-query',
+        transport: 'proxy',
+      ),
+    );
+
+    final updated = assignEnvironmentProtocolEgressPolicy(
+      endpoints: work.clientEndpoints,
+      clientEndpointId: endpoint.id,
+      protocolPlanId: plan.id,
+      policy: policy,
+    );
+    final nextEndpoint = updated.first;
+    final nextPlan = nextEndpoint.protocolPlans.first;
+    expect(nextEndpoint.revision, endpoint.revision + 1);
+    expect(nextPlan.revision, plan.revision + 1);
+    expect(nextPlan.egressPolicy, policy);
+    expect(
+      assignEnvironmentProtocolEgressPolicy(
+        endpoints: updated,
+        clientEndpointId: endpoint.id,
+        protocolPlanId: plan.id,
+        policy: policy,
+      ),
+      same(updated),
+    );
+  });
+
+  test('traffic transform editing advances only its protocol path', () async {
+    final api = PreviewControlApi();
+    addTearDown(api.close);
+    final dashboard = await api.loadDashboard();
+    final work = dashboard.environments.firstWhere(
+      (value) => value.id == 'work',
+    );
+    final endpoint = work.clientEndpoints.first;
+    final plan = endpoint.protocolPlans.first;
+    const policy = TrafficTransformPolicy(
+      requestJavaScript: 'request.headers["x-request"] = "edited";',
+      responseJavaScript: 'response.body = response.body.trim();',
+    );
+
+    final updated = assignEnvironmentProtocolTransformPolicy(
+      endpoints: work.clientEndpoints,
+      clientEndpointId: endpoint.id,
+      protocolPlanId: plan.id,
+      policy: policy,
+    );
+    final nextEndpoint = updated.first;
+    final nextPlan = nextEndpoint.protocolPlans.first;
+    expect(nextEndpoint.revision, endpoint.revision + 1);
+    expect(nextPlan.revision, plan.revision + 1);
+    expect(nextPlan.transformPolicy, policy);
+    expect(nextPlan.egressPolicy, plan.egressPolicy);
+    expect(nextPlan.destination.toJson(), plan.destination.toJson());
+    expect(
+      assignEnvironmentProtocolTransformPolicy(
+        endpoints: updated,
+        clientEndpointId: endpoint.id,
+        protocolPlanId: plan.id,
+        policy: policy,
+      ),
+      same(updated),
+    );
+  });
+
   test(
     'Route Account rebinding advances every changed child revision',
     () async {

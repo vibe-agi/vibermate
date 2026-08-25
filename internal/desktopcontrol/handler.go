@@ -75,6 +75,7 @@ const (
 	ReasonModelCatalogUnavailable            ReasonCode = "model_catalog_unavailable"
 	ReasonModelCatalogTimeout                ReasonCode = "model_catalog_timeout"
 	ReasonModelCatalogAuthenticationRejected ReasonCode = "model_catalog_authentication_rejected"
+	ReasonMessageTransformTestFailed         ReasonCode = "message_transform_test_failed"
 )
 
 type StatusReader interface {
@@ -233,6 +234,10 @@ func New(options Options) (*Handler, error) {
 		handler.resumeOfflineHold,
 	)
 	handler.mux.HandleFunc("GET /api/v1/environments", handler.listEnvironments)
+	handler.mux.HandleFunc(
+		"POST /api/v1/message-transforms/actions/test",
+		handler.testMessageTransform,
+	)
 	handler.mux.HandleFunc("GET /api/v1/upstream-endpoints", handler.listUpstreamEndpoints)
 	handler.mux.HandleFunc("POST /api/v1/upstream-endpoints", handler.createUpstreamEndpoint)
 	handler.mux.HandleFunc("GET /api/v1/upstream-endpoints/{endpointId}", handler.getUpstreamEndpoint)
@@ -331,6 +336,7 @@ func New(options Options) (*Handler, error) {
 		handler.invalidRoute,
 	)
 	handler.mux.HandleFunc("/api/v1/approvals", handler.invalidRoute)
+	handler.mux.HandleFunc("/api/v1/message-transforms/", handler.invalidRoute)
 	handler.mux.HandleFunc("/api/v1/provider-accounts", handler.invalidRoute)
 	handler.mux.HandleFunc("/api/v1/provider-accounts/{accountId}", handler.invalidRoute)
 	handler.mux.HandleFunc("/api/v1/provider-accounts/{accountId}/{remainder}", handler.invalidRoute)

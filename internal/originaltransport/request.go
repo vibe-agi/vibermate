@@ -10,6 +10,7 @@ import (
 	"unicode"
 	"unicode/utf8"
 
+	"github.com/vibe-agi/vibermate/internal/egressnetwork"
 	"github.com/vibe-agi/vibermate/internal/offlinehold"
 	"github.com/vibe-agi/vibermate/internal/originidentity"
 	"github.com/vibe-agi/vibermate/internal/protocolspec"
@@ -32,6 +33,7 @@ type RequestOptions struct {
 	// references so no identity encodes containment of another.
 	ConnectionID string
 	ParentID     string
+	EgressPolicy egressnetwork.Policy
 }
 
 // Request freezes an original-origin auxiliary or opaque representation. It
@@ -48,6 +50,7 @@ type Request struct {
 	payloadClass protocolspec.OperationPayloadClass
 	connectionID string
 	parentID     string
+	egressPolicy egressnetwork.Policy
 }
 
 func NewRequest(options RequestOptions) (Request, error) {
@@ -98,6 +101,10 @@ func NewRequest(options RequestOptions) (Request, error) {
 	if err := options.Origin.Validate(); err != nil {
 		return Request{}, errors.New("original ClientOrigin is incomplete")
 	}
+	egressPolicy, err := options.EgressPolicy.Normalize()
+	if err != nil {
+		return Request{}, err
+	}
 	if options.Method == "" ||
 		strings.ToUpper(options.Method) != options.Method ||
 		options.Path == "" ||
@@ -119,11 +126,16 @@ func NewRequest(options RequestOptions) (Request, error) {
 		payloadClass: options.PayloadClass,
 		connectionID: options.ConnectionID,
 		parentID:     options.ParentID,
+		egressPolicy: egressPolicy,
 	}, nil
 }
 
 func (request Request) ConnectionID() string { return request.connectionID }
 func (request Request) ParentID() string     { return request.parentID }
+
+func (request Request) EgressPolicy() egressnetwork.Policy {
+	return request.egressPolicy
+}
 
 // PayloadClass reports the frozen proof that this request carries no client
 // payload.
@@ -171,6 +183,7 @@ func (request Request) probeTarget() offlinehold.ProbeTarget {
 		NetworkOrigin: request.origin.String(),
 		HTTPAuthority: request.origin.HTTPAuthority(),
 		TLSServerName: request.origin.Host(),
+		EgressPolicy:  request.egressPolicy,
 	}
 }
 

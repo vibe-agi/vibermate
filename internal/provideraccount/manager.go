@@ -226,6 +226,13 @@ func (manager *Manager) Create(ctx context.Context, command CreateCommand) (View
 	if ctx == nil || command.Secret == nil {
 		return View{}, ErrInvalidAccount
 	}
+	setHeaderNames, deleteHeaderNames, err := credentialPolicySummary(
+		command.Secret,
+		command.Driver,
+	)
+	if err != nil {
+		return View{}, ErrInvalidAccount
+	}
 	reference, err := secretReference(command.ID)
 	if err != nil {
 		return View{}, err
@@ -302,9 +309,14 @@ func (manager *Manager) Create(ctx context.Context, command CreateCommand) (View
 		return View{}, errors.New("SecretStore returned invalid ProviderAccount metadata")
 	}
 	credentialEpoch = metadata.Revision
-	return View{Account: account, Health: Health{
-		State: HealthReady, CredentialEpoch: uint64(metadata.Revision),
-	}}, nil
+	return View{
+		Account: account,
+		Health: Health{
+			State: HealthReady, CredentialEpoch: uint64(metadata.Revision),
+		},
+		SetHeaderNames:    setHeaderNames,
+		DeleteHeaderNames: deleteHeaderNames,
+	}, nil
 }
 
 func (manager *Manager) ReplaceSecret(
@@ -333,6 +345,14 @@ func (manager *Manager) ReplaceSecret(
 	manager.mu.Unlock()
 	defer manager.finishOperation(command.ID, accountOperationReplaceSecret)
 
+	setHeaderNames, deleteHeaderNames, err := credentialPolicySummary(
+		command.Secret,
+		account.Driver,
+	)
+	if err != nil {
+		return View{}, ErrInvalidAccount
+	}
+
 	metadata, err := manager.secrets.Replace(ctx, secretstore.ReplaceCommand{
 		Reference:        account.SecretRef,
 		ExpectedRevision: secretstore.Revision(command.ExpectedCredentialEpoch),
@@ -350,9 +370,14 @@ func (manager *Manager) ReplaceSecret(
 	manager.mu.Lock()
 	manager.epochs[account.ID] = metadata.Revision
 	manager.mu.Unlock()
-	return View{Account: account, Health: Health{
-		State: HealthReady, CredentialEpoch: uint64(metadata.Revision),
-	}}, nil
+	return View{
+		Account: account,
+		Health: Health{
+			State: HealthReady, CredentialEpoch: uint64(metadata.Revision),
+		},
+		SetHeaderNames:    setHeaderNames,
+		DeleteHeaderNames: deleteHeaderNames,
+	}, nil
 }
 
 func (manager *Manager) Delete(
@@ -732,9 +757,25 @@ func (manager *Manager) view(ctx context.Context, account Account) (View, error)
 	switch metadata.State {
 	case secretstore.StateConfigured:
 		manager.observeCredentialEpoch(account.ID, metadata.Revision)
-		return View{Account: account, Health: Health{
-			State: HealthReady, CredentialEpoch: uint64(metadata.Revision),
-		}}, nil
+		setHeaderNames, deleteHeaderNames, summaryErr := manager.readCredentialPolicySummary(
+			ctx,
+			account.SecretRef,
+			metadata.Revision,
+			account.Driver,
+		)
+		if summaryErr != nil {
+			return View{Account: account, Health: Health{
+				State: HealthUnavailable, CredentialEpoch: uint64(metadata.Revision),
+			}}, nil
+		}
+		return View{
+			Account: account,
+			Health: Health{
+				State: HealthReady, CredentialEpoch: uint64(metadata.Revision),
+			},
+			SetHeaderNames:    setHeaderNames,
+			DeleteHeaderNames: deleteHeaderNames,
+		}, nil
 	case secretstore.StateMissing:
 		return View{Account: account, Health: Health{State: HealthMissing}}, nil
 	case secretstore.StateUnavailable:
@@ -744,6 +785,47 @@ func (manager *Manager) view(ctx context.Context, account Account) (View, error)
 	default:
 		return View{}, errors.New("SecretStore returned unsupported ProviderAccount metadata")
 	}
+}
+
+func credentialPolicySummary(
+	value *secretstore.Value,
+	driver providerauth.DriverRef,
+) ([]string, []string, error) {
+	if value == nil {
+		return nil, nil, ErrInvalidAccount
+	}
+	encoded, err := value.CopyBytes()
+	if err != nil {
+		return nil, nil, err
+	}
+	defer clear(encoded)
+	material, err := providerauth.ParseMaterial(encoded)
+	if err != nil {
+		return nil, nil, err
+	}
+	defer material.Destroy()
+	policy := material.HeaderPolicy()
+	if err := policy.ValidateForDriver(driver); err != nil {
+		return nil, nil, err
+	}
+	setHeaderNames := policy.SensitiveHeaderNames()
+	deleteHeaderNames := slices.Clone(policy.Delete)
+	return setHeaderNames, deleteHeaderNames, nil
+}
+
+func (manager *Manager) readCredentialPolicySummary(
+	ctx context.Context,
+	reference secretstore.Reference,
+	revision secretstore.Revision,
+	driver providerauth.DriverRef,
+) ([]string, []string, error) {
+	value, err := manager.secrets.ReadAtRevision(ctx, reference, revision)
+	value, err = secretstore.ValidateReaderResult(value, err)
+	if err != nil {
+		return nil, nil, err
+	}
+	defer value.Destroy()
+	return credentialPolicySummary(value, driver)
 }
 
 func validateForEndpoint(

@@ -6,6 +6,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/vibe-agi/vibermate/internal/egressnetwork"
 	"github.com/vibe-agi/vibermate/internal/offlinehold"
 	"github.com/vibe-agi/vibermate/internal/providerauth"
 	"github.com/vibe-agi/vibermate/internal/secretstore"
@@ -78,6 +79,35 @@ func TestAProviderRequestCarriesItsOwnEgressIdentity(t *testing.T) {
 	}
 }
 
+func TestAProviderRequestFreezesItsTrafficEgressPolicy(t *testing.T) {
+	t.Parallel()
+
+	options := validRequestOptions(t)
+	options.EgressPolicy = egressnetwork.Policy{
+		Proxy: egressnetwork.ProxyPolicy{
+			Kind:     egressnetwork.ProxySOCKS5,
+			Endpoint: "PROXY.Example.:1080",
+		},
+		Resolver: egressnetwork.ResolverPolicy{Kind: egressnetwork.ResolverSystem},
+	}
+	frozen, err := NewRequest(options)
+	if err != nil {
+		t.Fatalf("NewRequest(): %v", err)
+	}
+	want, err := options.EgressPolicy.Normalize()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if frozen.EgressPolicy() != want || frozen.probeTarget.EgressPolicy != want {
+		t.Fatalf(
+			"frozen policy = %#v, probe policy = %#v, want %#v",
+			frozen.EgressPolicy(),
+			frozen.probeTarget.EgressPolicy,
+			want,
+		)
+	}
+}
+
 // An outbound that cannot be identified cannot be recorded, and an outbound
 // that is not recorded must not go out.
 func TestAProviderRequestWithoutAnEgressIdentityIsRefused(t *testing.T) {
@@ -121,11 +151,21 @@ func TestProviderProbeIdentitySeparatesFrozenRouteRevisions(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	firstProbe, err := NewProbeTarget("provider-target", first, target)
+	firstProbe, err := NewProbeTarget(
+		"provider-target",
+		first,
+		target,
+		egressnetwork.DefaultPolicy(),
+	)
 	if err != nil {
 		t.Fatal(err)
 	}
-	secondProbe, err := NewProbeTarget("provider-target", second, target)
+	secondProbe, err := NewProbeTarget(
+		"provider-target",
+		second,
+		target,
+		egressnetwork.DefaultPolicy(),
+	)
 	if err != nil {
 		t.Fatal(err)
 	}

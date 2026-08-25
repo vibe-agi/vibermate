@@ -154,6 +154,7 @@ final class PreviewControlApi implements ControlApi {
     transport: 'http',
     authentication: 'runtime_user_password',
     sessionPolicy: 'reusable_until_logout_disable_or_expiry',
+    targets: ['192.168.1.44:9666'],
   );
   final List<RuntimeUser> _runtimeUsers = [
     RuntimeUser(
@@ -346,6 +347,8 @@ final class PreviewControlApi implements ControlApi {
       revision: 2,
       credentialState: 'ready',
       credentialEpoch: 3,
+      setHeaderNames: const [],
+      deleteHeaderNames: const [],
     ),
     ProviderAccount(
       id: 'anthropic-lab',
@@ -357,6 +360,8 @@ final class PreviewControlApi implements ControlApi {
       revision: 1,
       credentialState: 'ready',
       credentialEpoch: 1,
+      setHeaderNames: const [],
+      deleteHeaderNames: const [],
     ),
     ProviderAccount(
       id: 'openai-work',
@@ -368,6 +373,8 @@ final class PreviewControlApi implements ControlApi {
       revision: 1,
       credentialState: 'ready',
       credentialEpoch: 2,
+      setHeaderNames: const [],
+      deleteHeaderNames: const [],
     ),
     ProviderAccount(
       id: 'orbit-team',
@@ -379,6 +386,8 @@ final class PreviewControlApi implements ControlApi {
       revision: 3,
       credentialState: 'ready',
       credentialEpoch: 5,
+      setHeaderNames: const ['X-Team'],
+      deleteHeaderNames: const ['X-Legacy'],
     ),
   ];
 
@@ -498,11 +507,11 @@ final class PreviewControlApi implements ControlApi {
     clientEndpoints: endpoints,
     pluginBindings: const [],
     budgetPolicy: const EnvironmentBudgetPolicy(id: '', revision: 0),
-    egressPolicy: const EnvironmentEgressPolicy(id: '', revision: 0, mode: ''),
     contentRecording: const EnvironmentContentRecordingPolicy(
       mode: 'full',
       retentionDays: 30,
     ),
+    launchEnvironment: const EnvironmentLaunchPolicy.empty(),
     policySet: const EnvironmentPolicySet(toolMode: 'observe'),
   );
 
@@ -538,6 +547,8 @@ final class PreviewControlApi implements ControlApi {
             routes: routes,
           ),
         ),
+        egressPolicy: const TrafficEgressPolicy.direct(),
+        transformPolicy: const TrafficTransformPolicy.disabled(),
         pluginBindings: const [],
       ),
     ],
@@ -561,6 +572,8 @@ final class PreviewControlApi implements ControlApi {
           revision: 1,
         ),
         destination: const EnvironmentDestination.original(),
+        egressPolicy: const TrafficEgressPolicy.direct(),
+        transformPolicy: const TrafficTransformPolicy.disabled(),
         pluginBindings: const [],
       ),
     ],
@@ -822,8 +835,8 @@ final class PreviewControlApi implements ControlApi {
       clientEndpoints: input.clientEndpoints,
       pluginBindings: input.pluginBindings,
       budgetPolicy: input.budgetPolicy,
-      egressPolicy: input.egressPolicy,
       contentRecording: input.contentRecording,
+      launchEnvironment: input.launchEnvironment,
       policySet: input.policySet,
     );
     final draft = EnvironmentDraft(
@@ -844,6 +857,19 @@ final class PreviewControlApi implements ControlApi {
   ) async {
     _requireOpen();
     return _environmentImpact(environmentId, draftRevision);
+  }
+
+  @override
+  Future<MessageTransformTestResult> testMessageTransform({
+    required String clientProtocol,
+    required TrafficTransformPolicy policy,
+  }) async {
+    _requireOpen();
+    throw const ControlProblem(
+      status: 501,
+      reasonCode: 'message_transform_test_unavailable',
+      messageKey: 'error.message_transform_test_unavailable',
+    );
   }
 
   @override
@@ -1151,8 +1177,10 @@ final class PreviewControlApi implements ControlApi {
     required String upstreamEndpointId,
     required String kind,
     required String secret,
+    required ProviderAccountHeaderPolicy headerPolicy,
   }) async {
     _requireOpen();
+    headerPolicy.validate(accountKind: kind);
     final endpoint = _endpoints
         .where((candidate) => candidate.id == upstreamEndpointId)
         .firstOrNull;
@@ -1180,6 +1208,9 @@ final class PreviewControlApi implements ControlApi {
       revision: 1,
       credentialState: 'ready',
       credentialEpoch: 1,
+      setHeaderNames: headerPolicy.setHeaders.keys.toList(growable: false)
+        ..sort(),
+      deleteHeaderNames: [...headerPolicy.deleteHeaders]..sort(),
     );
     _accounts.add(account);
     return account;
@@ -1189,8 +1220,10 @@ final class PreviewControlApi implements ControlApi {
   Future<ProviderAccount> replaceProviderAccountCredential({
     required ProviderAccount account,
     required String secret,
+    required ProviderAccountHeaderPolicy headerPolicy,
   }) async {
     _requireOpen();
+    headerPolicy.validate(accountKind: account.kind);
     final index = _accounts.indexWhere(
       (candidate) => candidate.id == account.id,
     );
@@ -1219,6 +1252,9 @@ final class PreviewControlApi implements ControlApi {
       revision: current.revision + 1,
       credentialState: 'ready',
       credentialEpoch: current.credentialEpoch + 1,
+      setHeaderNames: headerPolicy.setHeaders.keys.toList(growable: false)
+        ..sort(),
+      deleteHeaderNames: [...headerPolicy.deleteHeaders]..sort(),
     );
     _accounts[index] = updated;
     return updated;
@@ -1907,8 +1943,16 @@ final class PreviewControlApi implements ControlApi {
   }
 
   @override
-  Future<RuntimeUsageReport> runtimeUsage() async {
+  Future<RuntimeUsageReport> runtimeUsage(RuntimeUsageQuery query) async {
     _requireOpen();
+    query.toQueryParameters();
+    final until = DateTime.parse('${query.until}T00:00:00.000Z');
+    final activityDate = until.subtract(const Duration(days: 1));
+    final activityDay = [
+      activityDate.year.toString().padLeft(4, '0'),
+      activityDate.month.toString().padLeft(2, '0'),
+      activityDate.day.toString().padLeft(2, '0'),
+    ].join('-');
     const emptyTokens = RuntimeTokenUsage(
       inputUncached: RuntimeTokenAggregate(
         tokens: 0,
@@ -1930,6 +1974,33 @@ final class PreviewControlApi implements ControlApi {
         tokens: 0,
         knownTurns: 0,
         unknownTurns: 0,
+      ),
+    );
+    const aliceTokens = RuntimeTokenUsage(
+      inputUncached: RuntimeTokenAggregate(
+        tokens: 25864,
+        knownTurns: 18,
+        unknownTurns: 0,
+      ),
+      cacheWrite: RuntimeTokenAggregate(
+        tokens: 0,
+        knownTurns: 0,
+        unknownTurns: 18,
+      ),
+      cacheRead: RuntimeTokenAggregate(
+        tokens: 4200,
+        knownTurns: 16,
+        unknownTurns: 2,
+      ),
+      output: RuntimeTokenAggregate(
+        tokens: 1318,
+        knownTurns: 18,
+        unknownTurns: 0,
+      ),
+      reasoning: RuntimeTokenAggregate(
+        tokens: 0,
+        knownTurns: 0,
+        unknownTurns: 18,
       ),
     );
     RuntimeTokenUsage observedTokens({
@@ -1965,7 +2036,24 @@ final class PreviewControlApi implements ControlApi {
     );
     return RuntimeUsageReport(
       generatedAt: _now,
+      period: RuntimeUsagePeriod(
+        from: query.from,
+        until: query.until,
+        timeZone: query.timeZone,
+      ),
       truncated: false,
+      days: [
+        RuntimeDayUsage(
+          date: activityDay,
+          turns: 18,
+          succeeded: 16,
+          failed: 2,
+          canceled: 0,
+          contentUnavailableTurns: 0,
+          modelUnavailableTurns: 0,
+          tokens: aliceTokens,
+        ),
+      ],
       users: [
         for (final user in _runtimeUsers)
           if (user.username == 'alice')
@@ -1981,33 +2069,7 @@ final class PreviewControlApi implements ControlApi {
               canceled: 0,
               contentUnavailableTurns: 0,
               modelUnavailableTurns: 0,
-              tokens: const RuntimeTokenUsage(
-                inputUncached: RuntimeTokenAggregate(
-                  tokens: 25864,
-                  knownTurns: 18,
-                  unknownTurns: 0,
-                ),
-                cacheWrite: RuntimeTokenAggregate(
-                  tokens: 0,
-                  knownTurns: 0,
-                  unknownTurns: 18,
-                ),
-                cacheRead: RuntimeTokenAggregate(
-                  tokens: 4200,
-                  knownTurns: 16,
-                  unknownTurns: 2,
-                ),
-                output: RuntimeTokenAggregate(
-                  tokens: 1318,
-                  knownTurns: 18,
-                  unknownTurns: 0,
-                ),
-                reasoning: RuntimeTokenAggregate(
-                  tokens: 0,
-                  knownTurns: 0,
-                  unknownTurns: 18,
-                ),
-              ),
+              tokens: aliceTokens,
               latestContext: RuntimeUsageContextRef(
                 loginSessionId: 'login.preview.alice',
                 deviceName: 'MacBook Pro',
@@ -2017,6 +2079,18 @@ final class PreviewControlApi implements ControlApi {
                 observedAt: _now,
               ),
               lastActivityAt: _now,
+              days: [
+                RuntimeDayUsage(
+                  date: activityDay,
+                  turns: 18,
+                  succeeded: 16,
+                  failed: 2,
+                  canceled: 0,
+                  contentUnavailableTurns: 0,
+                  modelUnavailableTurns: 0,
+                  tokens: aliceTokens,
+                ),
+              ],
               models: const [
                 RuntimeModelUsage(
                   requestedModel: 'gpt-5.6-sol',
@@ -2131,6 +2205,7 @@ final class PreviewControlApi implements ControlApi {
               tokens: emptyTokens,
               latestContext: null,
               lastActivityAt: null,
+              days: const [],
               models: const [],
               contexts: const [],
               agentSessions: const [],

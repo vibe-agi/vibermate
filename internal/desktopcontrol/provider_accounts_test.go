@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"net/http"
+	"slices"
 	"testing"
 
 	"github.com/vibe-agi/vibermate/internal/desktopcontrol"
@@ -119,7 +120,6 @@ func TestProviderAccountControlStoresCredentialWithoutReturningItAndCompilesMana
   }],
   "pluginBindings":[],
   "budgetPolicy":{"id":"","revision":0},
-  "egressPolicy":{"id":"","revision":0,"mode":""},
   "contentRecording":{"mode":"full","retentionDays":30}
 }`),
 	)
@@ -240,6 +240,175 @@ func TestProviderAccountControlKeepsBearerTokenDistinctFromAnthropicAPIKey(t *te
 	assertProviderAccountResponseSafe(t, created.Body.Bytes(), token)
 	assertJSONString(t, created.Body.Bytes(), "kind", "bearer_token")
 	assertJSONString(t, created.Body.Bytes(), "realmId", "anthropic.official")
+}
+
+func TestProviderAccountControlReplacesCredentialAndHeaderPolicyAtomically(
+	t *testing.T,
+) {
+	t.Parallel()
+	runtime := startRuntime(t)
+	defer shutdownRuntime(t, runtime)
+	application, err := desktopcontrol.New(desktopcontrol.Options{
+		Readiness: readyState(true), Status: runtime,
+		Environments: runtime.Environments(), Assignments: runtime.CaptureAssignments(),
+		Activities: runtime.Activities(), Contents: runtime.ExchangeContents(), Connections: runtime.ConnectionEvents(),
+		Egress: runtime.EgressAttempts(), Approvals: runtime.ToolApprovals(),
+		Endpoints: runtime.UpstreamEndpoints(), Accounts: runtime.ProviderAccounts(), Offline: runtime,
+		ManualCaptures: runtime.ManualCaptures(), Clock: desktopcontrol.SystemClock{},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	const (
+		credential      = "relay-credential-private-sentinel"
+		privateHeader   = "private-team-a"
+		newCredential   = "relay-credential-replaced-sentinel"
+		newPrivateValue = "private-team-b"
+	)
+	created := environmentRequest(
+		t,
+		application,
+		http.MethodPost,
+		"/api/v1/provider-accounts",
+		0,
+		"provider-account-header-policy-create-0001",
+		[]byte(`{
+  "id":"relay-header-policy",
+  "displayName":"Relay Header Policy",
+  "upstreamEndpointId":"target.claude.official",
+  "kind":"bearer_token",
+  "secret":"`+credential+`",
+  "setHeaders":{"X-Relay-Tenant":"`+privateHeader+`"},
+  "deleteHeaders":["Accept"]
+}`),
+	)
+	if created.Code != http.StatusCreated {
+		t.Fatalf("create status=%d body=%s", created.Code, created.Body.Bytes())
+	}
+	assertProviderAccountPolicySummary(
+		t,
+		created.Body.Bytes(),
+		[]string{"X-Relay-Tenant"},
+		[]string{"Accept"},
+	)
+	assertProviderAccountResponseSafe(t, created.Body.Bytes(), credential)
+	assertProviderAccountResponseSafe(t, created.Body.Bytes(), privateHeader)
+
+	got := environmentRequest(
+		t,
+		application,
+		http.MethodGet,
+		"/api/v1/provider-accounts/relay-header-policy",
+		0,
+		"",
+		nil,
+	)
+	if got.Code != http.StatusOK {
+		t.Fatalf("get status=%d body=%s", got.Code, got.Body.Bytes())
+	}
+	assertProviderAccountPolicySummary(
+		t,
+		got.Body.Bytes(),
+		[]string{"X-Relay-Tenant"},
+		[]string{"Accept"},
+	)
+	assertProviderAccountResponseSafe(t, got.Body.Bytes(), privateHeader)
+
+	replaced := environmentRequest(
+		t,
+		application,
+		http.MethodPut,
+		"/api/v1/provider-accounts/relay-header-policy/credential",
+		1,
+		"provider-account-header-policy-replace-0001",
+		[]byte(`{
+  "secret":"`+newCredential+`",
+  "setHeaders":{"X-Relay-Project":"`+newPrivateValue+`"},
+  "deleteHeaders":["User-Agent"]
+}`),
+	)
+	if replaced.Code != http.StatusOK {
+		t.Fatalf("replace status=%d body=%s", replaced.Code, replaced.Body.Bytes())
+	}
+	assertJSONNumber(t, replaced.Body.Bytes(), "credentialEpoch", 2)
+	assertProviderAccountPolicySummary(
+		t,
+		replaced.Body.Bytes(),
+		[]string{"X-Relay-Project"},
+		[]string{"User-Agent"},
+	)
+	for _, secret := range []string{credential, privateHeader, newCredential, newPrivateValue} {
+		assertProviderAccountResponseSafe(t, replaced.Body.Bytes(), secret)
+	}
+}
+
+func TestProviderAccountControlRejectsHeaderRulesOwnedByAuthenticationDriver(
+	t *testing.T,
+) {
+	t.Parallel()
+	runtime := startRuntime(t)
+	defer shutdownRuntime(t, runtime)
+	application, err := desktopcontrol.New(desktopcontrol.Options{
+		Readiness: readyState(true), Status: runtime,
+		Environments: runtime.Environments(), Assignments: runtime.CaptureAssignments(),
+		Activities: runtime.Activities(), Contents: runtime.ExchangeContents(), Connections: runtime.ConnectionEvents(),
+		Egress: runtime.EgressAttempts(), Approvals: runtime.ToolApprovals(),
+		Endpoints: runtime.UpstreamEndpoints(), Accounts: runtime.ProviderAccounts(), Offline: runtime,
+		ManualCaptures: runtime.ManualCaptures(), Clock: desktopcontrol.SystemClock{},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	tests := []struct {
+		name string
+		kind string
+		rule string
+	}{
+		{name: "Bearer owns Authorization", kind: "bearer_token", rule: `"setHeaders":{"Authorization":"forged"}`},
+		{name: "Anthropic owns X-Api-Key", kind: "anthropic_api_key", rule: `"deleteHeaders":["X-Api-Key"]`},
+	}
+	for index, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			body := []byte(`{
+  "id":"driver-owned-header-` + string(rune('a'+index)) + `",
+  "displayName":"Driver owned Header",
+  "upstreamEndpointId":"target.claude.official",
+  "kind":"` + test.kind + `",
+  "secret":"test-credential",
+  ` + test.rule + `
+}`)
+			response := environmentRequest(
+				t, application, http.MethodPost, "/api/v1/provider-accounts", 0,
+				"driver-owned-header-create-000"+string(rune('1'+index)), body,
+			)
+			if response.Code != http.StatusUnprocessableEntity {
+				t.Fatalf("create status=%d body=%s", response.Code, response.Body.Bytes())
+			}
+		})
+	}
+}
+
+func assertProviderAccountPolicySummary(
+	t *testing.T,
+	body []byte,
+	wantSet []string,
+	wantDelete []string,
+) {
+	t.Helper()
+	var response desktopcontrol.ProviderAccountResponse
+	if err := json.Unmarshal(body, &response); err != nil {
+		t.Fatal(err)
+	}
+	if !slices.Equal(response.SetHeaderNames, wantSet) ||
+		!slices.Equal(response.DeleteHeaderNames, wantDelete) {
+		t.Fatalf(
+			"ProviderAccount HeaderPolicy summary = set %v delete %v",
+			response.SetHeaderNames,
+			response.DeleteHeaderNames,
+		)
+	}
 }
 
 func assertProviderAccountResponseSafe(t *testing.T, body []byte, secret string) {

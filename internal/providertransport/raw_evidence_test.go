@@ -24,7 +24,12 @@ func TestProviderRawEvidenceCapturesAuthenticatedEgressAndBoundedResponse(
 	observer := &rawObserverStub{}
 	gate := newStartedGate(t)
 	authenticator, err := NewStaticBearerAuthenticator(
-		&secretReaderStub{value: []byte("provider-token")},
+		testSecretReaderWithPolicy(
+			t,
+			"provider-token",
+			map[string]string{"X-Relay-Tenant": "private-team-a"},
+			nil,
+		),
 	)
 	if err != nil {
 		t.Fatal(err)
@@ -85,9 +90,16 @@ func TestProviderRawEvidenceCapturesAuthenticatedEgressAndBoundedResponse(
 	egress := observations[0]
 	if egress.Layer != rawevidence.LayerProviderEgress ||
 		egress.Headers.Get("Authorization") != "Bearer provider-token" ||
+		egress.Headers.Get("X-Relay-Tenant") != "private-team-a" ||
 		egress.Headers.Get("X-Client") != "kept" ||
 		!bytes.Equal(egress.Body, requestBody) || !egress.Complete {
 		t.Fatalf("provider egress observation = %+v", egress)
+	}
+	if !slices.Equal(
+		egress.ProtectedHeaderNames,
+		[]string{"Authorization", "X-Relay-Tenant"},
+	) {
+		t.Fatalf("protected Header names = %v", egress.ProtectedHeaderNames)
 	}
 	providerResponse := observations[1]
 	wantDigest := sha256.Sum256([]byte(responsePayload))
@@ -114,7 +126,7 @@ func TestProviderRawEvidenceRecordsUnavailableTransportResponse(t *testing.T) {
 	observer := &rawObserverStub{}
 	gate := newStartedGate(t)
 	authenticator, err := NewStaticBearerAuthenticator(
-		&secretReaderStub{value: []byte("provider-token")},
+		testSecretReader(t, "provider-token"),
 	)
 	if err != nil {
 		t.Fatal(err)
@@ -165,7 +177,7 @@ func TestProviderRawEvidenceRecordingOffWritesNothing(t *testing.T) {
 	observer := &rawObserverStub{}
 	gate := newStartedGate(t)
 	authenticator, err := NewStaticBearerAuthenticator(
-		&secretReaderStub{value: []byte("provider-token")},
+		testSecretReader(t, "provider-token"),
 	)
 	if err != nil {
 		t.Fatal(err)
@@ -230,7 +242,7 @@ func TestProviderRawEvidenceFailureNeverChangesProviderResponse(t *testing.T) {
 			}
 			gate := newStartedGate(t)
 			authenticator, err := NewStaticBearerAuthenticator(
-				&secretReaderStub{value: []byte("provider-token")},
+				testSecretReader(t, "provider-token"),
 			)
 			if err != nil {
 				t.Fatal(err)

@@ -10,6 +10,7 @@ import (
 	"testing"
 
 	"github.com/vibe-agi/vibermate/internal/egressaudit"
+	"github.com/vibe-agi/vibermate/internal/egressnetwork"
 	"github.com/vibe-agi/vibermate/internal/offlinehold"
 	"github.com/vibe-agi/vibermate/internal/originaltransport"
 	"github.com/vibe-agi/vibermate/internal/originidentity"
@@ -167,6 +168,7 @@ type failingRoundTripper struct{}
 
 func (transport *failingRoundTripper) RoundTrip(
 	request *http.Request,
+	_ egressnetwork.Policy,
 ) (*http.Response, error) {
 	if request.Body != nil {
 		_, _ = io.Copy(io.Discard, request.Body)

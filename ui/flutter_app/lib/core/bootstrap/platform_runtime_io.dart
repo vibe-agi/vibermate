@@ -1,5 +1,3 @@
-import 'dart:io';
-
 import 'desktop_runtime.dart';
 import 'runtime_connection.dart';
 import 'terminal_command.dart';
@@ -19,7 +17,10 @@ Future<RuntimeConnection> connectPlatformRuntime({String? accessKey}) async {
     isClosed: () => runtime.isClosed,
     serverManagement: true,
     terminalManagement: true,
-    targetLabel: '${Platform.localHostname}:9666',
+    // The authoritative connectable IP arrives from /api/v1/server/access.
+    // Until then, show a neutral local label instead of advertising a .local
+    // hostname that may not resolve from another machine.
+    targetLabel: platformRuntimeTargetLabel(),
     exitCode: runtime.exitCode,
   );
 }

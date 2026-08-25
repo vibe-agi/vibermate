@@ -1,7 +1,13 @@
 Map<String, Object?> runtimeUsagePayload() => {
-  'schema': 'vibermate-runtime-usage-report-v1',
+  'schema': 'vibermate-runtime-usage-report-v2',
   'generatedAt': '2026-08-24T14:00:00.000Z',
+  'period': {
+    'from': '2026-07-27',
+    'until': '2026-08-26',
+    'timeZone': 'Asia/Singapore',
+  },
   'truncated': false,
+  'days': [dayUsagePayload('2026-08-24')],
   'users': [
     {
       'userId': 'user.test',
@@ -25,6 +31,7 @@ Map<String, Object?> runtimeUsagePayload() => {
         'observedAt': '2026-08-24T13:59:00.000Z',
       },
       'lastActivityAt': '2026-08-24T13:58:00.000Z',
+      'days': [dayUsagePayload('2026-08-24')],
       'models': [
         {
           'requestedModel': 'gpt-5.6-sol',
@@ -68,6 +75,17 @@ Map<String, Object?> runtimeUsagePayload() => {
       ],
     },
   ],
+};
+
+Map<String, Object?> dayUsagePayload(String date) => {
+  'date': date,
+  'turns': 2,
+  'succeeded': 1,
+  'failed': 1,
+  'canceled': 0,
+  'contentUnavailableTurns': 0,
+  'modelUnavailableTurns': 0,
+  'tokens': tokenUsagePayload(),
 };
 
 Map<String, Object?> tokenUsagePayload() => {

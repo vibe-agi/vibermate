@@ -35,6 +35,11 @@ abstract interface class ControlApi {
     int draftRevision,
   );
 
+  Future<MessageTransformTestResult> testMessageTransform({
+    required String clientProtocol,
+    required TrafficTransformPolicy policy,
+  });
+
   Future<EnvironmentPublishResult> publishEnvironmentDraft(
     String environmentId,
     int draftRevision,
@@ -75,7 +80,7 @@ abstract interface class ControlApi {
 
   Future<List<RuntimeUser>> runtimeUsers();
 
-  Future<RuntimeUsageReport> runtimeUsage();
+  Future<RuntimeUsageReport> runtimeUsage(RuntimeUsageQuery query);
 
   Future<RuntimeUser> createRuntimeUser({
     required String username,
@@ -109,11 +114,13 @@ abstract interface class ControlApi {
     required String upstreamEndpointId,
     required String kind,
     required String secret,
+    required ProviderAccountHeaderPolicy headerPolicy,
   });
 
   Future<ProviderAccount> replaceProviderAccountCredential({
     required ProviderAccount account,
     required String secret,
+    required ProviderAccountHeaderPolicy headerPolicy,
   });
 
   /// Retires an Environment. Refused, with holders, while a Capture is running.
@@ -454,6 +461,26 @@ final class HttpControlApi implements ControlApi {
   }
 
   @override
+  Future<MessageTransformTestResult> testMessageTransform({
+    required String clientProtocol,
+    required TrafficTransformPolicy policy,
+  }) async {
+    if (!upstreamBackendProtocols.contains(clientProtocol)) {
+      throw const ControlContractException(
+        'Message transform client protocol is invalid',
+      );
+    }
+    return MessageTransformTestResult.fromJson(
+      await _command(
+        'POST',
+        '/api/v1/message-transforms/actions/test',
+        body: {'clientProtocol': clientProtocol, 'policy': policy.toJson()},
+      ),
+      'messageTransformTest',
+    );
+  }
+
+  @override
   Future<EnvironmentPublishResult> publishEnvironmentDraft(
     String environmentId,
     int draftRevision,
@@ -703,14 +730,19 @@ final class HttpControlApi implements ControlApi {
   }
 
   @override
-  Future<RuntimeUsageReport> runtimeUsage() async =>
-      RuntimeUsageReport.fromJson(
-        await _read(
-          '/api/v1/server/runtime-users/usage',
-          maximumResponseBytes: _maximumUsageResponseBytes,
-        ),
-        'runtimeUsage',
-      );
+  Future<RuntimeUsageReport> runtimeUsage(RuntimeUsageQuery query) async {
+    final uri = Uri(
+      path: '/api/v1/server/runtime-users/usage',
+      queryParameters: query.toQueryParameters(),
+    );
+    return RuntimeUsageReport.fromJson(
+      await _read(
+        uri.toString(),
+        maximumResponseBytes: _maximumUsageResponseBytes,
+      ),
+      'runtimeUsage',
+    );
+  }
 
   @override
   Future<RuntimeUser> createRuntimeUser({
@@ -864,7 +896,9 @@ final class HttpControlApi implements ControlApi {
     required String upstreamEndpointId,
     required String kind,
     required String secret,
+    required ProviderAccountHeaderPolicy headerPolicy,
   }) async {
+    headerPolicy.validate(accountKind: kind);
     if (!_validResourceId(id) ||
         !_validDisplayLabel(displayName) ||
         !_validResourceId(upstreamEndpointId) ||
@@ -883,6 +917,7 @@ final class HttpControlApi implements ControlApi {
         'upstreamEndpointId': upstreamEndpointId,
         'kind': kind,
         'secret': secret,
+        ...headerPolicy.toJson(),
       },
     );
     final created = ProviderAccount.fromJson(payload, 'providerAccount');
@@ -902,7 +937,9 @@ final class HttpControlApi implements ControlApi {
   Future<ProviderAccount> replaceProviderAccountCredential({
     required ProviderAccount account,
     required String secret,
+    required ProviderAccountHeaderPolicy headerPolicy,
   }) async {
+    headerPolicy.validate(accountKind: account.kind);
     if (!_validResourceId(account.id) || !_validSecret(secret)) {
       throw const ControlContractException(
         'Provider Account credential input is invalid',
@@ -912,7 +949,7 @@ final class HttpControlApi implements ControlApi {
       'PUT',
       '/api/v1/provider-accounts/${Uri.encodeComponent(account.id)}/credential',
       expectedRevision: account.credentialEpoch,
-      body: {'secret': secret},
+      body: {'secret': secret, ...headerPolicy.toJson()},
     );
     final updated = ProviderAccount.fromJson(payload, 'providerAccount');
     if (updated.id != account.id ||

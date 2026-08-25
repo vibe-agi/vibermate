@@ -74,6 +74,36 @@ func TestPayloadNeverRetainsACredentialHeaderValue(t *testing.T) {
 	}
 }
 
+func TestPayloadNeverRetainsAnAccountProtectedHeaderValue(t *testing.T) {
+	t.Parallel()
+
+	headers := http.Header{
+		"X-Relay-Tenant": []string{"private-team-a"},
+		"Content-Type":   []string{"application/json"},
+	}
+	payload, redacted, err := payloadOf(
+		Observation{
+			Headers:              headers,
+			ProtectedHeaderNames: []string{"X-Relay-Tenant"},
+		},
+		nil,
+		testRedactor(t),
+	)
+	if err != nil {
+		t.Fatalf("payloadOf() error = %v", err)
+	}
+	encoded, err := payload.MarshalMetadata()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if bytes.Contains(encoded, []byte("private-team-a")) {
+		t.Fatal("payload retained an Account-protected Header value")
+	}
+	if !slices.Equal(redacted, []string{"X-Relay-Tenant"}) {
+		t.Fatalf("payloadOf reported %v as redacted", redacted)
+	}
+}
+
 func TestStoredEnvelopeNamesTheCredentialFieldsItRedacted(t *testing.T) {
 	repository := &memoryRepository{}
 	manager, err := Open(context.Background(), Options{

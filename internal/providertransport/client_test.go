@@ -18,6 +18,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/vibe-agi/vibermate/internal/egressnetwork"
 	"github.com/vibe-agi/vibermate/internal/environment"
 	"github.com/vibe-agi/vibermate/internal/offlinehold"
 	"github.com/vibe-agi/vibermate/internal/originidentity"
@@ -34,7 +35,7 @@ func TestClientWaitsForHoldLeaseBeforeSecretAndTransport(t *testing.T) {
 	if _, err := gate.Enter(context.Background(), gate.Snapshot().Revision); err != nil {
 		t.Fatalf("Enter() error = %v", err)
 	}
-	secrets := &secretReaderStub{value: []byte("provider-token")}
+	secrets := testSecretReader(t, "provider-token")
 	authenticator, err := NewStaticBearerAuthenticator(secrets)
 	if err != nil {
 		t.Fatal(err)
@@ -143,7 +144,7 @@ func TestClientPassthroughPreservesClientCredentialsOnlyForExactOrigin(
 	t.Parallel()
 
 	gate := newStartedGate(t)
-	secrets := &secretReaderStub{value: []byte("must-not-be-read")}
+	secrets := testSecretReader(t, "must-not-be-read")
 	authenticator, err := NewStaticBearerAuthenticator(secrets)
 	if err != nil {
 		t.Fatal(err)
@@ -204,6 +205,15 @@ func TestClientPassthroughPreservesClientCredentialsOnlyForExactOrigin(
 		WireProfile:     plan.wireProfile,
 		ClientProtocol:  wireprofile.ApplicationProtocolHTTP1,
 		ClientUserAgent: "client-cli/1.0",
+		EgressPolicy: egressnetwork.Policy{
+			Proxy: egressnetwork.ProxyPolicy{
+				Kind:     egressnetwork.ProxySOCKS5,
+				Endpoint: "proxy.example:1080",
+			},
+			Resolver: egressnetwork.ResolverPolicy{
+				Kind: egressnetwork.ResolverSystem,
+			},
+		},
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -214,6 +224,7 @@ func TestClientPassthroughPreservesClientCredentialsOnlyForExactOrigin(
 	}
 	defer response.Body.Close()
 	request := transport.lastRequest()
+	dispatch := transport.lastDispatch()
 	if secrets.readCount() != 0 ||
 		request.URL.RawQuery != "beta=true" ||
 		request.Header.Get("Authorization") != "Bearer client-oauth" ||
@@ -226,6 +237,7 @@ func TestClientPassthroughPreservesClientCredentialsOnlyForExactOrigin(
 		evidence.Credential.DriverRef !=
 			string(providerauth.CredentialClientPassthrough) ||
 		evidence.Credential.SecretRead ||
+		dispatch.egressPolicy != frozen.EgressPolicy() ||
 		response.StatusCode != http.StatusOK {
 		t.Fatalf(
 			"passthrough request=%v evidence=%+v response=%d secretReads=%d",
@@ -244,7 +256,7 @@ func TestClientPassthroughRejectsRedirectWithoutReturningLocationOrResponse(
 
 	gate := newStartedGate(t)
 	authenticator, err := NewStaticBearerAuthenticator(
-		&secretReaderStub{value: []byte("must-not-be-read")},
+		testSecretReader(t, "must-not-be-read"),
 	)
 	if err != nil {
 		t.Fatal(err)
@@ -369,7 +381,7 @@ func TestClientStrictTLSUsesFrozenSNIAndAuthority(t *testing.T) {
 		t.Fatal(err)
 	}
 	gate := newStartedGate(t)
-	secrets := &secretReaderStub{value: []byte("tls-token")}
+	secrets := testSecretReader(t, "tls-token")
 	authenticator, err := NewStaticBearerAuthenticator(secrets)
 	if err != nil {
 		t.Fatal(err)
@@ -451,7 +463,7 @@ func TestClientStrictTLSAppliesCapturedUserAgentProfile(t *testing.T) {
 	}
 	gate := newStartedGate(t)
 	authenticator, err := NewStaticBearerAuthenticator(
-		&secretReaderStub{value: []byte("tls-token")},
+		testSecretReader(t, "tls-token"),
 	)
 	if err != nil {
 		t.Fatal(err)
@@ -571,7 +583,7 @@ func TestClientUsesExplicitLoopbackCleartextTransport(t *testing.T) {
 	}
 	target := targetFromProviderOrigin(origin)
 	gate := newStartedGate(t)
-	secrets := &secretReaderStub{value: []byte("loopback-token")}
+	secrets := testSecretReader(t, "loopback-token")
 	authenticator, err := NewStaticBearerAuthenticator(secrets)
 	if err != nil {
 		t.Fatal(err)
@@ -709,7 +721,7 @@ func TestTLSHostnameFailureSendsNoHTTPAuthorization(t *testing.T) {
 	}
 	gate := newStartedGate(t)
 	authenticator, err := NewStaticBearerAuthenticator(
-		&secretReaderStub{value: []byte("must-not-reach-server")},
+		testSecretReader(t, "must-not-reach-server"),
 	)
 	if err != nil {
 		t.Fatal(err)
@@ -751,7 +763,7 @@ func TestClientRejectsRedirectWithoutReturningLocationOrResponse(t *testing.T) {
 
 	gate := newStartedGate(t)
 	authenticator, err := NewStaticBearerAuthenticator(
-		&secretReaderStub{value: []byte("provider-token")},
+		testSecretReader(t, "provider-token"),
 	)
 	if err != nil {
 		t.Fatal(err)
@@ -802,7 +814,7 @@ func TestClientShutdownCancelsHeldRequestBeforeSecretRead(t *testing.T) {
 	if _, err := gate.Enter(context.Background(), gate.Snapshot().Revision); err != nil {
 		t.Fatal(err)
 	}
-	secrets := &secretReaderStub{value: []byte("provider-token")}
+	secrets := testSecretReader(t, "provider-token")
 	authenticator, err := NewStaticBearerAuthenticator(secrets)
 	if err != nil {
 		t.Fatal(err)
@@ -878,7 +890,7 @@ func TestClientRejectsCodecUserAgentBeforeSecretOrTransport(t *testing.T) {
 	t.Parallel()
 
 	gate := newStartedGate(t)
-	secrets := &secretReaderStub{value: []byte("provider-token")}
+	secrets := testSecretReader(t, "provider-token")
 	authenticator, err := NewStaticBearerAuthenticator(secrets)
 	if err != nil {
 		t.Fatal(err)
@@ -954,8 +966,8 @@ func TestStrictTransportDisablesAmbientProxyAndTLSBypass(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if transport.connector == nil {
-		t.Fatal("strict transport has no typed TLS profile connector")
+	if transport.dialers == nil {
+		t.Fatal("strict transport has no typed traffic egress dialer builder")
 	}
 	transport.CloseIdleConnections()
 }
@@ -973,6 +985,30 @@ type secretReaderStub struct {
 	revision         secretstore.Revision
 	expectedRevision secretstore.Revision
 	reads            int
+}
+
+func testSecretReader(t *testing.T, credential string) *secretReaderStub {
+	t.Helper()
+	return testSecretReaderWithPolicy(t, credential, nil, nil)
+}
+
+func testSecretReaderWithPolicy(
+	t *testing.T,
+	credential string,
+	setHeaders map[string]string,
+	deleteHeaders []string,
+) *secretReaderStub {
+	t.Helper()
+	material, err := providerauth.NewMaterial(credential, setHeaders, deleteHeaders)
+	if err != nil {
+		t.Fatal(err)
+	}
+	encoded, err := material.MarshalBinary()
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { clear(encoded) })
+	return &secretReaderStub{value: encoded}
 }
 
 type userAgentMutatingAuthenticator struct{}
@@ -1042,12 +1078,13 @@ type roundTripperStub struct {
 	response *http.Response
 	err      error
 	request  *http.Request
+	dispatch TransportDispatch
 	calls    int
 }
 
 func (transport *roundTripperStub) RoundTrip(
 	request *http.Request,
-	_ TransportDispatch,
+	dispatch TransportDispatch,
 ) (*http.Response, transportprofile.Evidence, error) {
 	transport.mu.Lock()
 	defer transport.mu.Unlock()
@@ -1056,6 +1093,7 @@ func (transport *roundTripperStub) RoundTrip(
 	cloned.Header = request.Header.Clone()
 	cloned.Host = request.Host
 	transport.request = cloned
+	transport.dispatch = dispatch
 	return transport.response, transportprofile.Evidence{}, transport.err
 }
 
@@ -1072,6 +1110,12 @@ func (transport *roundTripperStub) lastRequest() *http.Request {
 	cloned.Header = transport.request.Header.Clone()
 	cloned.Host = transport.request.Host
 	return cloned
+}
+
+func (transport *roundTripperStub) lastDispatch() TransportDispatch {
+	transport.mu.Lock()
+	defer transport.mu.Unlock()
+	return transport.dispatch
 }
 
 type mappingDialer struct {

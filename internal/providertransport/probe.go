@@ -8,6 +8,7 @@ import (
 	"net"
 	"time"
 
+	"github.com/vibe-agi/vibermate/internal/egressnetwork"
 	"github.com/vibe-agi/vibermate/internal/offlinehold"
 	"github.com/vibe-agi/vibermate/internal/originidentity"
 )
@@ -17,7 +18,7 @@ import (
 // explicit local/private cleartext exception completes a constrained TCP peer
 // check before any HTTP header, credential, or body can be written.
 type ProviderProber struct {
-	dialer  contextDialer
+	dialers egressDialerBuilder
 	roots   *x509.CertPool
 	timeout time.Duration
 }
@@ -52,8 +53,15 @@ func newProviderProberWithTimeout(
 	if dialer == nil || timeout <= 0 {
 		return nil, errors.New("provider probe dependencies are incomplete")
 	}
+	tlsConfig := &tls.Config{MinVersion: tls.VersionTLS12, RootCAs: roots}
+	dialers, err := egressnetwork.NewBuilder(egressnetwork.BuilderOptions{
+		BaseDialer: dialer, TLSClientConfig: tlsConfig,
+	})
+	if err != nil {
+		return nil, err
+	}
 	return &ProviderProber{
-		dialer:  dialer,
+		dialers: dialers,
 		roots:   roots,
 		timeout: timeout,
 	}, nil
@@ -63,7 +71,7 @@ func (prober *ProviderProber) Probe(
 	ctx context.Context,
 	request offlinehold.ProbeRequest,
 ) error {
-	if prober == nil || prober.dialer == nil ||
+	if prober == nil || prober.dialers == nil ||
 		ctx == nil || len(request.Targets) == 0 {
 		return offlinehold.NewProbeFailure(
 			offlinehold.ProbeReasonFailed,
@@ -90,6 +98,13 @@ func (prober *ProviderProber) Probe(
 				err,
 			)
 		}
+		egressPolicy, err := reference.EgressPolicy.Normalize()
+		if err != nil {
+			return offlinehold.NewProbeFailure(
+				offlinehold.ProbeReasonFailed,
+				err,
+			)
+		}
 		endpointAuthority, err := target.endpointAuthority()
 		if err != nil {
 			return offlinehold.NewProbeFailure(
@@ -97,8 +112,22 @@ func (prober *ProviderProber) Probe(
 				err,
 			)
 		}
+		if isCleartextProviderTransport(target.TransportKind()) &&
+			egressPolicy.Proxy.Kind != egressnetwork.ProxyDirect {
+			return offlinehold.NewProbeFailure(
+				offlinehold.ProbeReasonFailed,
+				errors.New("cleartext provider probe cannot use a secondary proxy"),
+			)
+		}
+		dialer, err := prober.dialers.Dialer(egressPolicy)
+		if err != nil {
+			return offlinehold.NewProbeFailure(
+				offlinehold.ProbeReasonFailed,
+				err,
+			)
+		}
 		targetContext, cancel := context.WithTimeout(ctx, prober.timeout)
-		raw, err := prober.dialer.DialContext(
+		raw, err := dialer.DialContext(
 			targetContext,
 			"tcp",
 			endpointAuthority,

@@ -65,15 +65,11 @@ void main() {
             clientEndpoints: [],
             pluginBindings: [],
             budgetPolicy: EnvironmentBudgetPolicy(id: '', revision: 0),
-            egressPolicy: EnvironmentEgressPolicy(
-              id: '',
-              revision: 0,
-              mode: '',
-            ),
             contentRecording: EnvironmentContentRecordingPolicy(
               mode: 'metadata_only',
               retentionDays: 7,
             ),
+            launchEnvironment: EnvironmentLaunchPolicy.empty(),
             policySet: EnvironmentPolicySet(toolMode: 'observe'),
           ),
         );
@@ -124,12 +120,14 @@ void main() {
           upstreamEndpointId: endpoint.id,
           kind: 'anthropic_api_key',
           secret: 'flutter-live-secret-one',
+          headerPolicy: const ProviderAccountHeaderPolicy(),
         );
         expect(account.upstreamEndpointId, endpoint.id);
         expect(account.credentialEpoch, 1);
         final rotated = await runtime.api.replaceProviderAccountCredential(
           account: account,
           secret: 'flutter-live-secret-two',
+          headerPolicy: const ProviderAccountHeaderPolicy(),
         );
         expect(rotated.credentialEpoch, 2);
         final deleted = await runtime.api.deleteProviderAccount(rotated);
@@ -142,6 +140,7 @@ void main() {
           upstreamEndpointId: endpoint.id,
           kind: 'anthropic_api_key',
           secret: 'flutter-live-route-secret',
+          headerPolicy: const ProviderAccountHeaderPolicy(),
         );
         final anthropicRoutedEndpoints = appendEnvironmentUpstreamEndpoint(
           endpoints: const [],
@@ -168,15 +167,11 @@ void main() {
             clientEndpoints: routedEndpoints,
             pluginBindings: const [],
             budgetPolicy: const EnvironmentBudgetPolicy(id: '', revision: 0),
-            egressPolicy: const EnvironmentEgressPolicy(
-              id: '',
-              revision: 0,
-              mode: '',
-            ),
             contentRecording: const EnvironmentContentRecordingPolicy(
               mode: 'full',
               retentionDays: 30,
             ),
+            launchEnvironment: const EnvironmentLaunchPolicy.empty(),
             policySet: const EnvironmentPolicySet(toolMode: 'observe'),
           ),
         );
@@ -216,15 +211,11 @@ void main() {
             clientEndpoints: [],
             pluginBindings: [],
             budgetPolicy: EnvironmentBudgetPolicy(id: '', revision: 0),
-            egressPolicy: EnvironmentEgressPolicy(
-              id: '',
-              revision: 0,
-              mode: '',
-            ),
             contentRecording: EnvironmentContentRecordingPolicy(
               mode: 'full',
               retentionDays: 30,
             ),
+            launchEnvironment: EnvironmentLaunchPolicy.empty(),
             policySet: EnvironmentPolicySet(toolMode: 'observe'),
           ),
         );

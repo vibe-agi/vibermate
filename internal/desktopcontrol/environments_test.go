@@ -13,8 +13,92 @@ import (
 	"github.com/vibe-agi/vibermate/internal/activity"
 	"github.com/vibe-agi/vibermate/internal/agentconversation"
 	"github.com/vibe-agi/vibermate/internal/desktopcontrol"
+	"github.com/vibe-agi/vibermate/internal/egressnetwork"
 	"github.com/vibe-agi/vibermate/internal/environment"
 )
+
+func TestMessageTransformSampleRunsOneBoundedTurn(t *testing.T) {
+	t.Parallel()
+	runtime := startRuntime(t)
+	defer shutdownRuntime(t, runtime)
+	application, err := desktopcontrol.New(desktopcontrol.Options{
+		Readiness: readyState(true), Status: runtime, Environments: runtime.Environments(),
+		Assignments: runtime.CaptureAssignments(), Activities: runtime.Activities(), Contents: runtime.ExchangeContents(),
+		Connections: runtime.ConnectionEvents(), Egress: runtime.EgressAttempts(),
+		Approvals: runtime.ToolApprovals(), Endpoints: runtime.UpstreamEndpoints(), Accounts: runtime.ProviderAccounts(),
+		Offline: runtime, Clock: desktopcontrol.SystemClock{},
+		ManualCaptures: runtime.ManualCaptures(),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	body := []byte(`{
+		"clientProtocol":"anthropic_messages",
+		"policy":{
+			"requestJavaScript":"context.requested = JSON.parse(request.body).model; request.headers['x-sample'] = 'request';",
+			"responseJavaScript":"const value = JSON.parse(response.body); value.model = context.requested; response.body = JSON.stringify(value); response.headers['x-context'] = context.requested;"
+		}
+	}`)
+	response := environmentRequest(
+		t,
+		application,
+		http.MethodPost,
+		"/api/v1/message-transforms/actions/test",
+		0,
+		"",
+		body,
+	)
+	if response.Code != http.StatusOK {
+		t.Fatalf("test transform status=%d body=%s", response.Code, response.Body.Bytes())
+	}
+	var result struct {
+		Request struct {
+			Method  string      `json:"method"`
+			Path    string      `json:"path"`
+			Headers http.Header `json:"headers"`
+			Body    string      `json:"body"`
+		} `json:"request"`
+		Response struct {
+			StatusCode int         `json:"statusCode"`
+			Headers    http.Header `json:"headers"`
+			Body       string      `json:"body"`
+		} `json:"response"`
+	}
+	if err := json.Unmarshal(response.Body.Bytes(), &result); err != nil {
+		t.Fatal(err)
+	}
+	if result.Request.Method != http.MethodPost || result.Request.Path != "/v1/messages" ||
+		result.Request.Headers.Get("X-Sample") != "request" ||
+		result.Response.StatusCode != http.StatusOK ||
+		result.Response.Headers.Get("X-Context") != "claude-sample" ||
+		!strings.Contains(result.Response.Body, `"model":"claude-sample"`) {
+		t.Fatalf("transform sample result = %+v", result)
+	}
+
+	const privateError = "PRIVATE-SAMPLE-BODY-MUST-NOT-ECHO"
+	failing := []byte(`{
+		"clientProtocol":"anthropic_messages",
+		"policy":{
+			"requestJavaScript":"throw new Error('` + privateError + `');",
+			"responseJavaScript":""
+		}
+	}`)
+	failure := environmentRequest(
+		t,
+		application,
+		http.MethodPost,
+		"/api/v1/message-transforms/actions/test",
+		0,
+		"",
+		failing,
+	)
+	if failure.Code != http.StatusUnprocessableEntity ||
+		!bytes.Contains(failure.Body.Bytes(), []byte(`"code":"message_transform_test_failed"`)) ||
+		bytes.Contains(failure.Body.Bytes(), []byte(privateError)) {
+		t.Fatalf("failed sample status=%d body=%s", failure.Code, failure.Body.Bytes())
+	}
+}
 
 func TestEnvironmentDraftPreviewPublishAndHistoricalRevisionRoutes(t *testing.T) {
 	t.Parallel()
@@ -48,7 +132,7 @@ func TestEnvironmentDraftPreviewPublishAndHistoricalRevisionRoutes(t *testing.T)
 		t.Fatalf("Environment directory emitted nullable collections: body=%s err=%v", list.Body.Bytes(), err)
 	}
 
-	draftBody := []byte(`{
+	legacyGlobalEgressBody := []byte(`{
   "expectedDraftRevision": 0,
   "name": "Work",
   "state": "active",
@@ -56,6 +140,32 @@ func TestEnvironmentDraftPreviewPublishAndHistoricalRevisionRoutes(t *testing.T)
   "pluginBindings": [],
   "budgetPolicy": {"id":"","revision":0},
   "egressPolicy": {"id":"","revision":0,"mode":""},
+  "contentRecording": {"mode":"full","retentionDays":30}
+}`)
+	legacyGlobalEgress := environmentRequest(
+		t,
+		application,
+		http.MethodPut,
+		"/api/v1/environments/work/draft",
+		0,
+		"environment-legacy-global-egress-draft-0001",
+		legacyGlobalEgressBody,
+	)
+	if legacyGlobalEgress.Code != http.StatusUnprocessableEntity {
+		t.Fatalf(
+			"legacy global egress policy status=%d body=%s",
+			legacyGlobalEgress.Code,
+			legacyGlobalEgress.Body.Bytes(),
+		)
+	}
+
+	draftBody := []byte(`{
+  "expectedDraftRevision": 0,
+  "name": "Work",
+  "state": "active",
+  "clientEndpoints": [],
+  "pluginBindings": [],
+  "budgetPolicy": {"id":"","revision":0},
   "contentRecording": {"mode":"full","retentionDays":30}
 }`)
 	draft := environmentRequest(t, application, http.MethodPut, "/api/v1/environments/work/draft", 0, "environment-draft-0001", draftBody)
@@ -134,12 +244,12 @@ func TestEnvironmentDraftSavesPreviewsAndPublishesOriginalDestination(t *testing
       "clientProtocol": "anthropic_messages",
       "clientAdapterPolicy": {"id":"adapter.claude.official","revision":1},
       "destination": {"kind":"original"},
+	  "egressPolicy":{"proxy":{"kind":"direct"},"resolver":{"kind":"system","transport":"direct"}},
       "pluginBindings":[]
     }]
   }],
   "pluginBindings": [],
   "budgetPolicy": {"id":"","revision":0},
-  "egressPolicy": {"id":"","revision":0,"mode":""},
   "contentRecording": {"mode":"full","retentionDays":30}
 }`)
 	draft := environmentRequest(
@@ -269,6 +379,8 @@ func TestEnvironmentDraftPublishesOneAccountAcrossExplicitEndpointProtocols(t *t
         "routeSet":{"id":"routes.client.anthropic","revision":1,"candidateRouteIds":["route.cherry.anthropic"]}
         }
       },
+	  "egressPolicy":{"proxy":{"kind":"socks5","endpoint":"127.0.0.1:1080"},"resolver":{"kind":"doh","dohUrl":"https://resolver.example/dns-query","transport":"proxy"}},
+	  "transformPolicy":{"requestJavaScript":"context.requested = JSON.parse(request.body).model;","responseJavaScript":"response.headers['x-requested-model'] = context.requested;"},
       "pluginBindings":[]
     }]
   }, {
@@ -309,12 +421,13 @@ func TestEnvironmentDraftPublishesOneAccountAcrossExplicitEndpointProtocols(t *t
         "routeSet":{"id":"routes.client.openai","revision":1,"candidateRouteIds":["route.cherry.openai"]}
         }
       },
+		  "egressPolicy":{"proxy":{"kind":"direct"},"resolver":{"kind":"doh","dohUrl":"https://8.8.8.8/dns-query","transport":"direct"}},
+	  "transformPolicy":{"requestJavaScript":"","responseJavaScript":""},
       "pluginBindings":[]
     }]
   }],
   "pluginBindings": [],
   "budgetPolicy": {"id":"","revision":0},
-  "egressPolicy": {"id":"","revision":0,"mode":""},
   "contentRecording": {"mode":"full","retentionDays":30}
 }`)
 	draft := environmentRequest(
@@ -385,6 +498,33 @@ func TestEnvironmentDraftPublishesOneAccountAcrossExplicitEndpointProtocols(t *t
 		openAIRoute.AccountPolicy.PreferredAccountID != "account.cherry.bearer" {
 		t.Fatalf("published shared-account OpenAI route = %#v", openAIRoute)
 	}
+	wantAnthropicEgress := egressnetwork.Policy{
+		Proxy: egressnetwork.ProxyPolicy{
+			Kind: egressnetwork.ProxySOCKS5, Endpoint: "127.0.0.1:1080",
+		},
+		Resolver: egressnetwork.ResolverPolicy{
+			Kind: egressnetwork.ResolverDoH, DoHURL: "https://resolver.example/dns-query",
+			Transport: egressnetwork.ResolverTransportProxy,
+		},
+	}
+	wantOpenAIEgress := egressnetwork.Policy{
+		Proxy: egressnetwork.ProxyPolicy{Kind: egressnetwork.ProxyDirect},
+		Resolver: egressnetwork.ResolverPolicy{
+			Kind: egressnetwork.ResolverDoH, DoHURL: "https://8.8.8.8/dns-query",
+			Transport: egressnetwork.ResolverTransportDirect,
+		},
+	}
+	if got := published.ClientEndpoints[0].ProtocolPlans[0].EgressPolicy; got != wantAnthropicEgress {
+		t.Fatalf("published Anthropic egress policy = %#v, want %#v", got, wantAnthropicEgress)
+	}
+	if got := published.ClientEndpoints[1].ProtocolPlans[0].EgressPolicy; got != wantOpenAIEgress {
+		t.Fatalf("published OpenAI egress policy = %#v, want %#v", got, wantOpenAIEgress)
+	}
+	transform := published.ClientEndpoints[0].ProtocolPlans[0].TransformPolicy
+	if transform.RequestJavaScript != "context.requested = JSON.parse(request.body).model;" ||
+		transform.ResponseJavaScript != "response.headers['x-requested-model'] = context.requested;" {
+		t.Fatalf("published message transform policy = %#v", transform)
+	}
 
 	baseEndpointRevision := published.ClientEndpoints[0].Revision
 	basePlanRevision := published.ClientEndpoints[0].ProtocolPlans[0].Revision
@@ -406,9 +546,12 @@ func TestEnvironmentDraftPublishesOneAccountAcrossExplicitEndpointProtocols(t *t
 		ClientEndpoints:       published.ClientEndpoints,
 		PluginBindings:        published.PluginBindings,
 		BudgetPolicy:          published.BudgetPolicy,
-		EgressPolicy:          published.EgressPolicy,
 		ContentRecording:      published.ContentRecording,
-		PolicySet:             &policySet,
+		LaunchEnvironment: environment.LaunchEnvironmentPolicy{
+			SetEnv:    map[string]string{"TEAM_CONTEXT": "team-a"},
+			DeleteEnv: []string{"REMOVE_CONTEXT"},
+		},
+		PolicySet: &policySet,
 	}
 	cumulativeBody, err := json.Marshal(updateInput)
 	if err != nil {
@@ -490,6 +633,24 @@ func TestEnvironmentDraftPublishesOneAccountAcrossExplicitEndpointProtocols(t *t
 	if finalView.Code != http.StatusOK ||
 		!bytes.Contains(finalView.Body.Bytes(), []byte(`"requestedModel":"claude-second-alias","upstreamModel":"relay/custom:model_2"`)) {
 		t.Fatalf("reopened Environment lost model mapping: status=%d body=%s", finalView.Code, finalView.Body.Bytes())
+	}
+	var finalEnvironment desktopcontrol.EnvironmentResponse
+	if err := json.Unmarshal(finalView.Body.Bytes(), &finalEnvironment); err != nil {
+		t.Fatal(err)
+	}
+	if finalEnvironment.LaunchEnvironment.SetEnv["TEAM_CONTEXT"] != "team-a" ||
+		len(finalEnvironment.LaunchEnvironment.DeleteEnv) != 1 ||
+		finalEnvironment.LaunchEnvironment.DeleteEnv[0] != "REMOVE_CONTEXT" {
+		t.Fatalf(
+			"reopened Environment lost LaunchEnvironmentPolicy: %+v",
+			finalEnvironment.LaunchEnvironment,
+		)
+	}
+	if got := finalEnvironment.ClientEndpoints[0].ProtocolPlans[0].EgressPolicy; got != wantAnthropicEgress {
+		t.Fatalf("reopened Anthropic egress policy = %#v, want %#v", got, wantAnthropicEgress)
+	}
+	if got := finalEnvironment.ClientEndpoints[1].ProtocolPlans[0].EgressPolicy; got != wantOpenAIEgress {
+		t.Fatalf("reopened OpenAI egress policy = %#v, want %#v", got, wantOpenAIEgress)
 	}
 }
 

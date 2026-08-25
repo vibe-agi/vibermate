@@ -507,7 +507,7 @@ final class _StatusBar extends StatelessWidget {
               ? compact
                     ? copy('status.server.short')
                     : copy.format('settings.remote', {
-                        'target': controller.runtimeTarget,
+                        'target': controller.runtimeConnectTarget,
                       })
               : compact
               ? copy('status.live.short')

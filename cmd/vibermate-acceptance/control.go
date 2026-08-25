@@ -15,6 +15,7 @@ import (
 	"net/http"
 	"net/url"
 	"regexp"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -405,6 +406,23 @@ func validateAnthropicAccount(
 	return nil
 }
 
+func providerAccountResponsesEqual(
+	left desktopcontrol.ProviderAccountResponse,
+	right desktopcontrol.ProviderAccountResponse,
+) bool {
+	return left.ID == right.ID &&
+		left.DisplayName == right.DisplayName &&
+		left.UpstreamEndpointID == right.UpstreamEndpointID &&
+		left.Kind == right.Kind &&
+		left.RealmID == right.RealmID &&
+		left.State == right.State &&
+		left.Revision == right.Revision &&
+		left.CredentialState == right.CredentialState &&
+		left.CredentialEpoch == right.CredentialEpoch &&
+		slices.Equal(left.SetHeaderNames, right.SetHeaderNames) &&
+		slices.Equal(left.DeleteHeaderNames, right.DeleteHeaderNames)
+}
+
 type environmentPublication struct {
 	Draft   desktopcontrol.EnvironmentDraftResponse
 	Preview desktopcontrol.EnvironmentImpactResponse
@@ -439,7 +457,6 @@ func (client *controlClient) publishInitialEnvironment(
 		ClientEndpoints:       candidate.ClientEndpoints,
 		PluginBindings:        candidate.PluginBindings,
 		BudgetPolicy:          candidate.BudgetPolicy,
-		EgressPolicy:          candidate.EgressPolicy,
 		ContentRecording:      candidate.ContentRecording,
 	}
 	path := "/api/v1/environments/" + url.PathEscape(config.environmentID) + "/draft"

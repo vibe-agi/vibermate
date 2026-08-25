@@ -8,6 +8,8 @@ import (
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/vibe-agi/vibermate/internal/egressnetwork"
 )
 
 func TestGateEntersDrainsProbesAndReleasesHeldRequest(t *testing.T) {
@@ -631,6 +633,7 @@ func providerTarget(target string) ProbeTarget {
 		TLSServerName: host,
 		PlanRevision:  1,
 		PlanDigest:    hex.EncodeToString(digest[:]),
+		EgressPolicy:  egressnetwork.DefaultPolicy(),
 	}
 }
 
@@ -643,6 +646,7 @@ func opaqueTarget(target string) ProbeTarget {
 		NetworkOrigin: "https://" + host,
 		HTTPAuthority: host,
 		TLSServerName: host,
+		EgressPolicy:  egressnetwork.DefaultPolicy(),
 	}
 }
 

@@ -42,7 +42,15 @@ func (redactor Redactor) bound() bool {
 // field returns the stored form of one observed header. A credential field
 // keeps its name, position and multiplicity and loses its values.
 func (redactor Redactor) field(name string, values []string) HeaderField {
-	if !NameIsCredential(name) {
+	return redactor.protectedField(name, values, false)
+}
+
+func (redactor Redactor) protectedField(
+	name string,
+	values []string,
+	force bool,
+) HeaderField {
+	if !force && !NameIsCredential(name) {
 		return HeaderField{Name: name, Values: slices.Clone(values)}
 	}
 	redacted := make([]RedactedValue, 0, len(values))

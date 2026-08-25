@@ -326,6 +326,11 @@ func TestExchangePageRequestHasOneTypedCaptureAuthority(t *testing.T) {
 		{Limit: 200, CaptureRunID: "run-one"},
 		{Limit: 50, ManualCaptureID: "manual-one"},
 		{Limit: 50, ManualCaptureID: "manual-one", EnvironmentID: "work"},
+		{
+			Limit:             50,
+			OccurredAtOrAfter: time.Date(2026, 8, 24, 0, 0, 0, 0, time.UTC),
+			OccurredBefore:    time.Date(2026, 8, 25, 0, 0, 0, 0, time.UTC),
+		},
 	} {
 		if err := valid.Validate(); err != nil {
 			t.Fatalf("valid PageRequest rejected: %+v: %v", valid, err)
@@ -339,6 +344,18 @@ func TestExchangePageRequestHasOneTypedCaptureAuthority(t *testing.T) {
 		{Limit: 50, ManualCaptureID: "manual/one"},
 		{Limit: 50, CaptureRunID: "run-one", ManualCaptureID: "manual-one"},
 		{Limit: 50, EnvironmentID: "not an Environment"},
+		{Limit: 50, OccurredAtOrAfter: time.Now().UTC()},
+		{Limit: 50, OccurredBefore: time.Now().UTC()},
+		{
+			Limit:             50,
+			OccurredAtOrAfter: time.Date(2026, 8, 25, 0, 0, 0, 0, time.UTC),
+			OccurredBefore:    time.Date(2026, 8, 24, 0, 0, 0, 0, time.UTC),
+		},
+		{
+			Limit:             50,
+			OccurredAtOrAfter: time.Date(2026, 8, 24, 0, 0, 0, 1, time.UTC),
+			OccurredBefore:    time.Date(2026, 8, 25, 0, 0, 0, 0, time.UTC),
+		},
 	} {
 		if err := invalid.Validate(); err == nil {
 			t.Fatalf("invalid PageRequest accepted: %+v", invalid)

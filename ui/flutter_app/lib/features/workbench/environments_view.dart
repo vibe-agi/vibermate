@@ -11,6 +11,8 @@ import 'deletion_dialog.dart';
 import '../../core/design/workbench_widgets.dart';
 import '../../core/i18n/app_copy.dart';
 import 'environment_editing.dart';
+import 'launch_environment_editor.dart';
+import 'message_transform_editor.dart';
 import 'workbench_controller.dart';
 
 final class EnvironmentsView extends StatefulWidget {
@@ -923,9 +925,12 @@ final class _NewEnvironmentDialogState extends State<_NewEnvironmentDialog> {
   List<EnvironmentClientEndpoint> _clientEndpoints = const [];
   String _recordingMode = 'full';
   String _toolMode = 'observe';
+  EnvironmentLaunchPolicy _launchEnvironment =
+      const EnvironmentLaunchPolicy.empty();
   String? _draftEnvironmentId;
   bool _idEdited = false;
   bool _submitted = false;
+  int _selectedTab = 0;
 
   @override
   void initState() {
@@ -953,18 +958,18 @@ final class _NewEnvironmentDialogState extends State<_NewEnvironmentDialog> {
             impact != null &&
             impact.environmentId == (_draftEnvironmentId ?? _id.text);
         return AlertDialog(
-          insetPadding: const EdgeInsets.symmetric(
-            horizontal: 16,
-            vertical: 20,
-          ),
-          titlePadding: const EdgeInsets.fromLTRB(18, 16, 18, 8),
-          contentPadding: const EdgeInsets.fromLTRB(18, 0, 18, 4),
-          actionsPadding: const EdgeInsets.fromLTRB(12, 6, 12, 12),
+          insetPadding: ViberDialogInsets.inset,
+          titlePadding: ViberDialogInsets.title,
+          contentPadding: ViberDialogInsets.content,
+          actionsPadding: ViberDialogInsets.actions,
           title: Text(copy('environment.create.title')),
           content: SizedBox(
-            width: 640,
+            key: const Key('environment-create-frame'),
+            width: ViberMetrics.dialogWideWidth,
             child: ConstrainedBox(
-              constraints: BoxConstraints(maxHeight: media.height * 0.74),
+              constraints: BoxConstraints(
+                maxHeight: media.height * ViberMetrics.dialogMaxHeightRatio,
+              ),
               child: reviewed
                   ? SingleChildScrollView(
                       key: const Key('environment-create-impact'),
@@ -990,7 +995,7 @@ final class _NewEnvironmentDialogState extends State<_NewEnvironmentDialog> {
                               label: copy('environment.edit.identity'),
                             ),
                             const SizedBox(height: 6),
-                            _EditorFieldGrid(
+                            ResponsiveFormGrid(
                               children: [
                                 CompactLabeledControl(
                                   label: copy('environment.field.name'),
@@ -1042,211 +1047,304 @@ final class _NewEnvironmentDialogState extends State<_NewEnvironmentDialog> {
                                 ),
                               ],
                             ),
-                            const SizedBox(height: 10),
-                            _EditorSectionLabel(
-                              label: copy('environment.edit.routes'),
-                              detail: copy('environment.edit.routes.detail'),
-                            ),
-                            const SizedBox(height: 6),
-                            _EnvironmentEndpointAdder(
-                              current: _clientEndpoints,
-                              endpoints:
-                                  widget.controller.data?.endpoints ?? const [],
-                              accounts:
-                                  widget.controller.data?.accounts ?? const [],
+                            const SizedBox(height: 12),
+                            _EnvironmentEditorTabs(
+                              selected: _selectedTab,
                               copy: copy,
-                              enabled: !widget.controller.environmentMutating,
-                              onOriginal:
-                                  (
-                                    clientEndpointId,
-                                    protocolPlanId,
-                                    clientOrigin,
-                                    clientProtocol,
-                                  ) => setState(() {
-                                    _clientEndpoints =
-                                        appendEnvironmentOriginalDestination(
-                                          endpoints: _clientEndpoints,
-                                          clientEndpointId: clientEndpointId,
-                                          protocolPlanId: protocolPlanId,
-                                          clientOrigin: clientOrigin,
-                                          clientProtocol: clientProtocol,
-                                          identityNonce: widget.controller
-                                              .newEnvironmentChildIdentityNonce(),
-                                        );
-                                  }),
-                              onAdd:
-                                  (
-                                    clientEndpointId,
-                                    protocolPlanId,
-                                    clientOrigin,
-                                    clientProtocol,
-                                    endpoint,
-                                    account,
-                                  ) => setState(() {
-                                    _clientEndpoints =
-                                        appendEnvironmentUpstreamEndpoint(
-                                          endpoints: _clientEndpoints,
-                                          clientEndpointId: clientEndpointId,
-                                          protocolPlanId: protocolPlanId,
-                                          clientOrigin: clientOrigin,
-                                          clientProtocol: clientProtocol,
-                                          upstreamEndpoint: endpoint,
-                                          account: account,
-                                          identityNonce: widget.controller
-                                              .newEnvironmentChildIdentityNonce(),
-                                        );
-                                  }),
+                              onSelected: (value) =>
+                                  setState(() => _selectedTab = value),
                             ),
-                            const SizedBox(height: 8),
-                            if (_clientEndpoints.isEmpty)
-                              _EditorEmptyState(
-                                text: copy('environment.edit.routes.empty'),
-                              )
-                            else
-                              for (final (index, endpoint)
-                                  in _clientEndpoints.indexed)
-                                _EnvironmentEndpointEditor(
-                                  controller: widget.controller,
-                                  endpoint: endpoint,
-                                  initiallyExpanded: index == 0,
-                                  endpoints:
-                                      widget.controller.data?.endpoints ??
-                                      const [],
-                                  accounts:
-                                      widget.controller.data?.accounts ??
-                                      const [],
-                                  copy: copy,
-                                  enabled:
-                                      !widget.controller.environmentMutating,
-                                  onRemove: () => setState(() {
-                                    _clientEndpoints = [
-                                      for (final value in _clientEndpoints)
-                                        if (value.id != endpoint.id) value,
-                                    ];
-                                  }),
-                                  onAccountChanged: (plan, route, account) =>
-                                      setState(() {
-                                        _clientEndpoints =
-                                            assignEnvironmentRouteAccount(
-                                              endpoints: _clientEndpoints,
-                                              clientEndpointId: endpoint.id,
-                                              protocolPlanId: plan.id,
-                                              routeId: route.id,
-                                              account: account,
-                                            );
-                                      }),
-                                  onModelChanged: (plan, route, mappings) =>
-                                      setState(() {
-                                        _clientEndpoints =
-                                            assignEnvironmentRouteModelMappings(
-                                              endpoints: _clientEndpoints,
-                                              clientEndpointId: endpoint.id,
-                                              protocolPlanId: plan.id,
-                                              routeId: route.id,
-                                              mappings: mappings,
-                                            );
-                                      }),
-                                ),
                             const SizedBox(height: 10),
-                            _EditorSectionLabel(
-                              label: copy('environment.edit.policy'),
-                              detail: copy('environment.edit.policy.detail'),
-                            ),
-                            const SizedBox(height: 6),
-                            _EditorFieldGrid(
-                              maxColumns: 3,
-                              children: [
-                                CompactLabeledControl(
-                                  label: copy('environment.policy.tool_mode'),
-                                  child: CompactSelectField<String>(
-                                    key: const Key(
-                                      'environment-create-tool-mode',
+                            Offstage(
+                              offstage: _selectedTab != 0,
+                              child: Column(
+                                crossAxisAlignment: CrossAxisAlignment.stretch,
+                                children: [
+                                  _EditorSectionLabel(
+                                    label: copy('environment.edit.routes'),
+                                    detail: copy(
+                                      'environment.edit.routes.detail',
                                     ),
-                                    initialValue: _toolMode,
-                                    isExpanded: true,
-                                    items: [
-                                      for (final value in const [
-                                        'observe',
-                                        'review',
-                                        'strict',
-                                      ])
-                                        DropdownMenuItem(
-                                          value: value,
-                                          child: Text(
-                                            copy('environment.policy.$value'),
-                                          ),
-                                        ),
-                                    ],
-                                    onChanged:
-                                        widget.controller.environmentMutating
-                                        ? null
-                                        : (value) => setState(
-                                            () => _toolMode = value!,
-                                          ),
                                   ),
-                                ),
-                                CompactLabeledControl(
-                                  label: copy('environment.recording.mode'),
-                                  child: CompactSelectField<String>(
-                                    key: const Key(
-                                      'environment-create-recording',
-                                    ),
-                                    initialValue: _recordingMode,
-                                    isExpanded: true,
-                                    items: [
-                                      for (final value in const [
-                                        'full',
-                                        'metadata_only',
-                                        'off',
-                                      ])
-                                        DropdownMenuItem(
-                                          value: value,
-                                          child: Text(
-                                            copy(
-                                              'environment.recording.$value',
-                                            ),
-                                          ),
-                                        ),
-                                    ],
-                                    onChanged:
-                                        widget.controller.environmentMutating
-                                        ? null
-                                        : (value) => setState(
-                                            () => _recordingMode = value!,
-                                          ),
+                                  const SizedBox(height: 6),
+                                  _EnvironmentEndpointAdder(
+                                    current: _clientEndpoints,
+                                    endpoints:
+                                        widget.controller.data?.endpoints ??
+                                        const [],
+                                    accounts:
+                                        widget.controller.data?.accounts ??
+                                        const [],
+                                    copy: copy,
+                                    enabled:
+                                        !widget.controller.environmentMutating,
+                                    onOriginal:
+                                        (
+                                          clientEndpointId,
+                                          protocolPlanId,
+                                          clientOrigin,
+                                          clientProtocol,
+                                        ) => setState(() {
+                                          _clientEndpoints =
+                                              appendEnvironmentOriginalDestination(
+                                                endpoints: _clientEndpoints,
+                                                clientEndpointId:
+                                                    clientEndpointId,
+                                                protocolPlanId: protocolPlanId,
+                                                clientOrigin: clientOrigin,
+                                                clientProtocol: clientProtocol,
+                                                identityNonce: widget.controller
+                                                    .newEnvironmentChildIdentityNonce(),
+                                              );
+                                        }),
+                                    onAdd:
+                                        (
+                                          clientEndpointId,
+                                          protocolPlanId,
+                                          clientOrigin,
+                                          clientProtocol,
+                                          endpoint,
+                                          account,
+                                        ) => setState(() {
+                                          _clientEndpoints =
+                                              appendEnvironmentUpstreamEndpoint(
+                                                endpoints: _clientEndpoints,
+                                                clientEndpointId:
+                                                    clientEndpointId,
+                                                protocolPlanId: protocolPlanId,
+                                                clientOrigin: clientOrigin,
+                                                clientProtocol: clientProtocol,
+                                                upstreamEndpoint: endpoint,
+                                                account: account,
+                                                identityNonce: widget.controller
+                                                    .newEnvironmentChildIdentityNonce(),
+                                              );
+                                        }),
                                   ),
-                                ),
-                                if (_recordingMode != 'off')
-                                  CompactLabeledControl(
-                                    label: copy(
-                                      'environment.recording.retention',
-                                    ),
-                                    child: TextFormField(
+                                  const SizedBox(height: 8),
+                                  if (_clientEndpoints.isEmpty)
+                                    _EditorEmptyState(
                                       key: const Key(
-                                        'environment-create-retention',
+                                        'environment-capture-only-state',
                                       ),
-                                      controller: _retention,
-                                      keyboardType: TextInputType.number,
-                                      textAlignVertical:
-                                          TextAlignVertical.center,
-                                      decoration: InputDecoration(
-                                        suffixText: copy(
-                                          'environment.recording.days',
-                                        ),
+                                      text: copy(
+                                        'environment.edit.routes.empty',
                                       ),
-                                      validator: (value) {
-                                        final days = int.tryParse(value ?? '');
-                                        return days == null ||
-                                                days < 1 ||
-                                                days > 3650
-                                            ? copy(
-                                                'environment.validation.retention',
-                                              )
-                                            : null;
-                                      },
+                                    )
+                                  else
+                                    for (final (index, endpoint)
+                                        in _clientEndpoints.indexed)
+                                      _EnvironmentEndpointEditor(
+                                        controller: widget.controller,
+                                        endpoint: endpoint,
+                                        initiallyExpanded: index == 0,
+                                        endpoints:
+                                            widget.controller.data?.endpoints ??
+                                            const [],
+                                        accounts:
+                                            widget.controller.data?.accounts ??
+                                            const [],
+                                        copy: copy,
+                                        enabled: !widget
+                                            .controller
+                                            .environmentMutating,
+                                        onRemove: () => setState(() {
+                                          _clientEndpoints = [
+                                            for (final value
+                                                in _clientEndpoints)
+                                              if (value.id != endpoint.id)
+                                                value,
+                                          ];
+                                        }),
+                                        onEgressChanged: (plan, policy) =>
+                                            setState(() {
+                                              _clientEndpoints =
+                                                  assignEnvironmentProtocolEgressPolicy(
+                                                    endpoints: _clientEndpoints,
+                                                    clientEndpointId:
+                                                        endpoint.id,
+                                                    protocolPlanId: plan.id,
+                                                    policy: policy,
+                                                  );
+                                            }),
+                                        onTransformChanged: (plan, policy) =>
+                                            setState(() {
+                                              _clientEndpoints =
+                                                  assignEnvironmentProtocolTransformPolicy(
+                                                    endpoints: _clientEndpoints,
+                                                    clientEndpointId:
+                                                        endpoint.id,
+                                                    protocolPlanId: plan.id,
+                                                    policy: policy,
+                                                  );
+                                            }),
+                                        onAccountChanged:
+                                            (
+                                              plan,
+                                              route,
+                                              account,
+                                            ) => setState(() {
+                                              _clientEndpoints =
+                                                  assignEnvironmentRouteAccount(
+                                                    endpoints: _clientEndpoints,
+                                                    clientEndpointId:
+                                                        endpoint.id,
+                                                    protocolPlanId: plan.id,
+                                                    routeId: route.id,
+                                                    account: account,
+                                                  );
+                                            }),
+                                        onModelChanged:
+                                            (
+                                              plan,
+                                              route,
+                                              mappings,
+                                            ) => setState(() {
+                                              _clientEndpoints =
+                                                  assignEnvironmentRouteModelMappings(
+                                                    endpoints: _clientEndpoints,
+                                                    clientEndpointId:
+                                                        endpoint.id,
+                                                    protocolPlanId: plan.id,
+                                                    routeId: route.id,
+                                                    mappings: mappings,
+                                                  );
+                                            }),
+                                      ),
+                                ],
+                              ),
+                            ),
+                            Offstage(
+                              offstage: _selectedTab != 1,
+                              child: Column(
+                                crossAxisAlignment: CrossAxisAlignment.stretch,
+                                children: [
+                                  _EditorSectionLabel(
+                                    label: copy('environment.edit.policy'),
+                                    detail: copy(
+                                      'environment.edit.policy.detail',
                                     ),
                                   ),
-                              ],
+                                  const SizedBox(height: 6),
+                                  ResponsiveFormGrid(
+                                    maxColumns: 3,
+                                    children: [
+                                      CompactLabeledControl(
+                                        label: copy(
+                                          'environment.policy.tool_mode',
+                                        ),
+                                        child: CompactSelectField<String>(
+                                          key: const Key(
+                                            'environment-create-tool-mode',
+                                          ),
+                                          initialValue: _toolMode,
+                                          isExpanded: true,
+                                          items: [
+                                            for (final value in const [
+                                              'observe',
+                                              'review',
+                                              'strict',
+                                            ])
+                                              DropdownMenuItem(
+                                                value: value,
+                                                child: Text(
+                                                  copy(
+                                                    'environment.policy.$value',
+                                                  ),
+                                                ),
+                                              ),
+                                          ],
+                                          onChanged:
+                                              widget
+                                                  .controller
+                                                  .environmentMutating
+                                              ? null
+                                              : (value) => setState(
+                                                  () => _toolMode = value!,
+                                                ),
+                                        ),
+                                      ),
+                                      CompactLabeledControl(
+                                        label: copy(
+                                          'environment.recording.mode',
+                                        ),
+                                        child: CompactSelectField<String>(
+                                          key: const Key(
+                                            'environment-create-recording',
+                                          ),
+                                          initialValue: _recordingMode,
+                                          isExpanded: true,
+                                          items: [
+                                            for (final value in const [
+                                              'full',
+                                              'metadata_only',
+                                              'off',
+                                            ])
+                                              DropdownMenuItem(
+                                                value: value,
+                                                child: Text(
+                                                  copy(
+                                                    'environment.recording.$value',
+                                                  ),
+                                                ),
+                                              ),
+                                          ],
+                                          onChanged:
+                                              widget
+                                                  .controller
+                                                  .environmentMutating
+                                              ? null
+                                              : (value) => setState(
+                                                  () => _recordingMode = value!,
+                                                ),
+                                        ),
+                                      ),
+                                      if (_recordingMode != 'off')
+                                        CompactLabeledControl(
+                                          label: copy(
+                                            'environment.recording.retention',
+                                          ),
+                                          child: TextFormField(
+                                            key: const Key(
+                                              'environment-create-retention',
+                                            ),
+                                            controller: _retention,
+                                            keyboardType: TextInputType.number,
+                                            textAlignVertical:
+                                                TextAlignVertical.center,
+                                            decoration: InputDecoration(
+                                              suffixText: copy(
+                                                'environment.recording.days',
+                                              ),
+                                            ),
+                                            validator: (value) {
+                                              final days = int.tryParse(
+                                                value ?? '',
+                                              );
+                                              return days == null ||
+                                                      days < 1 ||
+                                                      days > 3650
+                                                  ? copy(
+                                                      'environment.validation.retention',
+                                                    )
+                                                  : null;
+                                            },
+                                          ),
+                                        ),
+                                    ],
+                                  ),
+                                  const SizedBox(height: 8),
+                                  LaunchEnvironmentEditorButton(
+                                    policy: _launchEnvironment,
+                                    copy: copy,
+                                    enabled:
+                                        !widget.controller.environmentMutating,
+                                    onChanged: (policy) => setState(
+                                      () => _launchEnvironment = policy,
+                                    ),
+                                  ),
+                                ],
+                              ),
                             ),
                             if (_submitted &&
                                 widget.controller.environmentError != null) ...[
@@ -1321,15 +1419,11 @@ final class _NewEnvironmentDialogState extends State<_NewEnvironmentDialog> {
         clientEndpoints: normalizedEndpoints,
         pluginBindings: const [],
         budgetPolicy: const EnvironmentBudgetPolicy(id: '', revision: 0),
-        egressPolicy: const EnvironmentEgressPolicy(
-          id: '',
-          revision: 0,
-          mode: '',
-        ),
         contentRecording: EnvironmentContentRecordingPolicy(
           mode: _recordingMode,
           retentionDays: retentionDays,
         ),
+        launchEnvironment: _launchEnvironment,
         policySet: EnvironmentPolicySet(toolMode: _toolMode),
       ),
     );
@@ -1383,8 +1477,10 @@ final class _EnvironmentEditorDialogState
   late String _state;
   late String _recordingMode;
   late String _toolMode;
+  late EnvironmentLaunchPolicy _launchEnvironment;
   late List<EnvironmentClientEndpoint> _clientEndpoints;
   bool _submitted = false;
+  int _selectedTab = 0;
 
   @override
   void initState() {
@@ -1398,6 +1494,7 @@ final class _EnvironmentEditorDialogState
           '${environment.contentRecording.retentionDays == 0 ? 30 : environment.contentRecording.retentionDays}',
     );
     _toolMode = environment.policySet.toolMode;
+    _launchEnvironment = environment.launchEnvironment;
     _clientEndpoints = environment.clientEndpoints;
   }
 
@@ -1419,13 +1516,10 @@ final class _EnvironmentEditorDialogState
         final reviewed =
             impact != null && impact.environmentId == widget.environment.id;
         return AlertDialog(
-          insetPadding: const EdgeInsets.symmetric(
-            horizontal: 16,
-            vertical: 20,
-          ),
-          titlePadding: const EdgeInsets.fromLTRB(18, 16, 18, 8),
-          contentPadding: const EdgeInsets.fromLTRB(18, 0, 18, 4),
-          actionsPadding: const EdgeInsets.fromLTRB(12, 6, 12, 12),
+          insetPadding: ViberDialogInsets.inset,
+          titlePadding: ViberDialogInsets.title,
+          contentPadding: ViberDialogInsets.content,
+          actionsPadding: ViberDialogInsets.actions,
           title: Wrap(
             spacing: 9,
             runSpacing: 5,
@@ -1443,9 +1537,12 @@ final class _EnvironmentEditorDialogState
             ],
           ),
           content: SizedBox(
-            width: 640,
+            key: const Key('environment-editor-frame'),
+            width: ViberMetrics.dialogWideWidth,
             child: ConstrainedBox(
-              constraints: BoxConstraints(maxHeight: media.height * 0.74),
+              constraints: BoxConstraints(
+                maxHeight: media.height * ViberMetrics.dialogMaxHeightRatio,
+              ),
               child: reviewed
                   ? SingleChildScrollView(
                       key: const Key('environment-impact-review'),
@@ -1471,7 +1568,7 @@ final class _EnvironmentEditorDialogState
                               label: copy('environment.edit.identity'),
                             ),
                             const SizedBox(height: 6),
-                            _EditorFieldGrid(
+                            ResponsiveFormGrid(
                               children: [
                                 CompactLabeledControl(
                                   label: copy('environment.field.name'),
@@ -1519,212 +1616,305 @@ final class _EnvironmentEditorDialogState
                                 ),
                               ],
                             ),
-                            const SizedBox(height: 10),
-                            _EditorSectionLabel(
-                              label: copy('environment.edit.policy'),
-                              detail: copy('environment.edit.policy.detail'),
-                            ),
-                            const SizedBox(height: 6),
-                            _EditorFieldGrid(
-                              maxColumns: 3,
-                              children: [
-                                CompactLabeledControl(
-                                  label: copy('environment.policy.tool_mode'),
-                                  child: CompactSelectField<String>(
-                                    key: const Key(
-                                      'environment-editor-tool-mode',
-                                    ),
-                                    initialValue: _toolMode,
-                                    isExpanded: true,
-                                    items: [
-                                      for (final value in const [
-                                        'observe',
-                                        'review',
-                                        'strict',
-                                      ])
-                                        DropdownMenuItem(
-                                          value: value,
-                                          child: Text(
-                                            copy('environment.policy.$value'),
-                                          ),
-                                        ),
-                                    ],
-                                    onChanged:
-                                        widget.controller.environmentMutating
-                                        ? null
-                                        : (value) => setState(
-                                            () => _toolMode = value!,
-                                          ),
-                                  ),
-                                ),
-                                CompactLabeledControl(
-                                  label: copy('environment.recording.mode'),
-                                  child: CompactSelectField<String>(
-                                    key: const Key(
-                                      'environment-editor-recording',
-                                    ),
-                                    initialValue: _recordingMode,
-                                    isExpanded: true,
-                                    items: [
-                                      for (final value in const [
-                                        'full',
-                                        'metadata_only',
-                                        'off',
-                                      ])
-                                        DropdownMenuItem(
-                                          value: value,
-                                          child: Text(
-                                            copy(
-                                              'environment.recording.$value',
-                                            ),
-                                          ),
-                                        ),
-                                    ],
-                                    onChanged:
-                                        widget.controller.environmentMutating
-                                        ? null
-                                        : (value) => setState(
-                                            () => _recordingMode = value!,
-                                          ),
-                                  ),
-                                ),
-                                if (_recordingMode != 'off')
-                                  CompactLabeledControl(
-                                    label: copy(
-                                      'environment.recording.retention',
-                                    ),
-                                    child: TextFormField(
-                                      key: const Key(
-                                        'environment-editor-retention',
-                                      ),
-                                      controller: _retention,
-                                      keyboardType: TextInputType.number,
-                                      textAlignVertical:
-                                          TextAlignVertical.center,
-                                      decoration: InputDecoration(
-                                        suffixText: copy(
-                                          'environment.recording.days',
-                                        ),
-                                      ),
-                                      validator: (value) {
-                                        final days = int.tryParse(value ?? '');
-                                        return days == null ||
-                                                days < 1 ||
-                                                days > 3650
-                                            ? copy(
-                                                'environment.validation.retention',
-                                              )
-                                            : null;
-                                      },
-                                    ),
-                                  ),
-                              ],
-                            ),
-                            const SizedBox(height: 10),
-                            _EditorSectionLabel(
-                              label: copy('environment.edit.routes'),
-                              detail: copy('environment.edit.routes.detail'),
-                            ),
-                            const SizedBox(height: 6),
-                            _EnvironmentEndpointAdder(
-                              current: _clientEndpoints,
-                              endpoints:
-                                  widget.controller.data?.endpoints ?? const [],
-                              accounts:
-                                  widget.controller.data?.accounts ?? const [],
+                            const SizedBox(height: 12),
+                            _EnvironmentEditorTabs(
+                              selected: _selectedTab,
                               copy: copy,
-                              enabled: !widget.controller.environmentMutating,
-                              onOriginal:
-                                  (
-                                    clientEndpointId,
-                                    protocolPlanId,
-                                    clientOrigin,
-                                    clientProtocol,
-                                  ) => setState(() {
-                                    _clientEndpoints =
-                                        appendEnvironmentOriginalDestination(
-                                          endpoints: _clientEndpoints,
-                                          clientEndpointId: clientEndpointId,
-                                          protocolPlanId: protocolPlanId,
-                                          clientOrigin: clientOrigin,
-                                          clientProtocol: clientProtocol,
-                                          identityNonce: widget.controller
-                                              .newEnvironmentChildIdentityNonce(),
-                                        );
-                                  }),
-                              onAdd:
-                                  (
-                                    clientEndpointId,
-                                    protocolPlanId,
-                                    clientOrigin,
-                                    clientProtocol,
-                                    endpoint,
-                                    account,
-                                  ) => setState(() {
-                                    _clientEndpoints =
-                                        appendEnvironmentUpstreamEndpoint(
-                                          endpoints: _clientEndpoints,
-                                          clientEndpointId: clientEndpointId,
-                                          protocolPlanId: protocolPlanId,
-                                          clientOrigin: clientOrigin,
-                                          clientProtocol: clientProtocol,
-                                          upstreamEndpoint: endpoint,
-                                          account: account,
-                                          identityNonce: widget.controller
-                                              .newEnvironmentChildIdentityNonce(),
-                                        );
-                                  }),
+                              onSelected: (value) =>
+                                  setState(() => _selectedTab = value),
                             ),
-                            const SizedBox(height: 8),
-                            if (_clientEndpoints.isEmpty)
-                              _EditorEmptyState(
-                                text: copy('environment.edit.routes.empty'),
-                              )
-                            else
-                              for (final (index, endpoint)
-                                  in _clientEndpoints.indexed)
-                                _EnvironmentEndpointEditor(
-                                  controller: widget.controller,
-                                  endpoint: endpoint,
-                                  initiallyExpanded: index == 0,
-                                  endpoints:
-                                      widget.controller.data?.endpoints ??
-                                      const [],
-                                  accounts:
-                                      widget.controller.data?.accounts ??
-                                      const [],
-                                  copy: copy,
-                                  enabled:
-                                      !widget.controller.environmentMutating,
-                                  onRemove: () => setState(() {
-                                    _clientEndpoints = [
-                                      for (final value in _clientEndpoints)
-                                        if (value.id != endpoint.id) value,
-                                    ];
-                                  }),
-                                  onAccountChanged: (plan, route, account) =>
-                                      setState(() {
-                                        _clientEndpoints =
-                                            assignEnvironmentRouteAccount(
-                                              endpoints: _clientEndpoints,
-                                              clientEndpointId: endpoint.id,
-                                              protocolPlanId: plan.id,
-                                              routeId: route.id,
-                                              account: account,
-                                            );
-                                      }),
-                                  onModelChanged: (plan, route, mappings) =>
-                                      setState(() {
-                                        _clientEndpoints =
-                                            assignEnvironmentRouteModelMappings(
-                                              endpoints: _clientEndpoints,
-                                              clientEndpointId: endpoint.id,
-                                              protocolPlanId: plan.id,
-                                              routeId: route.id,
-                                              mappings: mappings,
-                                            );
-                                      }),
-                                ),
+                            const SizedBox(height: 10),
+                            Offstage(
+                              offstage: _selectedTab != 1,
+                              child: Column(
+                                crossAxisAlignment: CrossAxisAlignment.stretch,
+                                children: [
+                                  _EditorSectionLabel(
+                                    label: copy('environment.edit.policy'),
+                                    detail: copy(
+                                      'environment.edit.policy.detail',
+                                    ),
+                                  ),
+                                  const SizedBox(height: 6),
+                                  ResponsiveFormGrid(
+                                    maxColumns: 3,
+                                    children: [
+                                      CompactLabeledControl(
+                                        label: copy(
+                                          'environment.policy.tool_mode',
+                                        ),
+                                        child: CompactSelectField<String>(
+                                          key: const Key(
+                                            'environment-editor-tool-mode',
+                                          ),
+                                          initialValue: _toolMode,
+                                          isExpanded: true,
+                                          items: [
+                                            for (final value in const [
+                                              'observe',
+                                              'review',
+                                              'strict',
+                                            ])
+                                              DropdownMenuItem(
+                                                value: value,
+                                                child: Text(
+                                                  copy(
+                                                    'environment.policy.$value',
+                                                  ),
+                                                ),
+                                              ),
+                                          ],
+                                          onChanged:
+                                              widget
+                                                  .controller
+                                                  .environmentMutating
+                                              ? null
+                                              : (value) => setState(
+                                                  () => _toolMode = value!,
+                                                ),
+                                        ),
+                                      ),
+                                      CompactLabeledControl(
+                                        label: copy(
+                                          'environment.recording.mode',
+                                        ),
+                                        child: CompactSelectField<String>(
+                                          key: const Key(
+                                            'environment-editor-recording',
+                                          ),
+                                          initialValue: _recordingMode,
+                                          isExpanded: true,
+                                          items: [
+                                            for (final value in const [
+                                              'full',
+                                              'metadata_only',
+                                              'off',
+                                            ])
+                                              DropdownMenuItem(
+                                                value: value,
+                                                child: Text(
+                                                  copy(
+                                                    'environment.recording.$value',
+                                                  ),
+                                                ),
+                                              ),
+                                          ],
+                                          onChanged:
+                                              widget
+                                                  .controller
+                                                  .environmentMutating
+                                              ? null
+                                              : (value) => setState(
+                                                  () => _recordingMode = value!,
+                                                ),
+                                        ),
+                                      ),
+                                      if (_recordingMode != 'off')
+                                        CompactLabeledControl(
+                                          label: copy(
+                                            'environment.recording.retention',
+                                          ),
+                                          child: TextFormField(
+                                            key: const Key(
+                                              'environment-editor-retention',
+                                            ),
+                                            controller: _retention,
+                                            keyboardType: TextInputType.number,
+                                            textAlignVertical:
+                                                TextAlignVertical.center,
+                                            decoration: InputDecoration(
+                                              suffixText: copy(
+                                                'environment.recording.days',
+                                              ),
+                                            ),
+                                            validator: (value) {
+                                              final days = int.tryParse(
+                                                value ?? '',
+                                              );
+                                              return days == null ||
+                                                      days < 1 ||
+                                                      days > 3650
+                                                  ? copy(
+                                                      'environment.validation.retention',
+                                                    )
+                                                  : null;
+                                            },
+                                          ),
+                                        ),
+                                    ],
+                                  ),
+                                  const SizedBox(height: 8),
+                                  LaunchEnvironmentEditorButton(
+                                    policy: _launchEnvironment,
+                                    copy: copy,
+                                    enabled:
+                                        !widget.controller.environmentMutating,
+                                    onChanged: (policy) => setState(
+                                      () => _launchEnvironment = policy,
+                                    ),
+                                  ),
+                                ],
+                              ),
+                            ),
+                            Offstage(
+                              offstage: _selectedTab != 0,
+                              child: Column(
+                                crossAxisAlignment: CrossAxisAlignment.stretch,
+                                children: [
+                                  _EditorSectionLabel(
+                                    label: copy('environment.edit.routes'),
+                                    detail: copy(
+                                      'environment.edit.routes.detail',
+                                    ),
+                                  ),
+                                  const SizedBox(height: 6),
+                                  _EnvironmentEndpointAdder(
+                                    current: _clientEndpoints,
+                                    endpoints:
+                                        widget.controller.data?.endpoints ??
+                                        const [],
+                                    accounts:
+                                        widget.controller.data?.accounts ??
+                                        const [],
+                                    copy: copy,
+                                    enabled:
+                                        !widget.controller.environmentMutating,
+                                    onOriginal:
+                                        (
+                                          clientEndpointId,
+                                          protocolPlanId,
+                                          clientOrigin,
+                                          clientProtocol,
+                                        ) => setState(() {
+                                          _clientEndpoints =
+                                              appendEnvironmentOriginalDestination(
+                                                endpoints: _clientEndpoints,
+                                                clientEndpointId:
+                                                    clientEndpointId,
+                                                protocolPlanId: protocolPlanId,
+                                                clientOrigin: clientOrigin,
+                                                clientProtocol: clientProtocol,
+                                                identityNonce: widget.controller
+                                                    .newEnvironmentChildIdentityNonce(),
+                                              );
+                                        }),
+                                    onAdd:
+                                        (
+                                          clientEndpointId,
+                                          protocolPlanId,
+                                          clientOrigin,
+                                          clientProtocol,
+                                          endpoint,
+                                          account,
+                                        ) => setState(() {
+                                          _clientEndpoints =
+                                              appendEnvironmentUpstreamEndpoint(
+                                                endpoints: _clientEndpoints,
+                                                clientEndpointId:
+                                                    clientEndpointId,
+                                                protocolPlanId: protocolPlanId,
+                                                clientOrigin: clientOrigin,
+                                                clientProtocol: clientProtocol,
+                                                upstreamEndpoint: endpoint,
+                                                account: account,
+                                                identityNonce: widget.controller
+                                                    .newEnvironmentChildIdentityNonce(),
+                                              );
+                                        }),
+                                  ),
+                                  const SizedBox(height: 8),
+                                  if (_clientEndpoints.isEmpty)
+                                    _EditorEmptyState(
+                                      key: const Key(
+                                        'environment-capture-only-state',
+                                      ),
+                                      text: copy(
+                                        'environment.edit.routes.empty',
+                                      ),
+                                    )
+                                  else
+                                    for (final (index, endpoint)
+                                        in _clientEndpoints.indexed)
+                                      _EnvironmentEndpointEditor(
+                                        controller: widget.controller,
+                                        endpoint: endpoint,
+                                        initiallyExpanded: index == 0,
+                                        endpoints:
+                                            widget.controller.data?.endpoints ??
+                                            const [],
+                                        accounts:
+                                            widget.controller.data?.accounts ??
+                                            const [],
+                                        copy: copy,
+                                        enabled: !widget
+                                            .controller
+                                            .environmentMutating,
+                                        onRemove: () => setState(() {
+                                          _clientEndpoints = [
+                                            for (final value
+                                                in _clientEndpoints)
+                                              if (value.id != endpoint.id)
+                                                value,
+                                          ];
+                                        }),
+                                        onEgressChanged: (plan, policy) =>
+                                            setState(() {
+                                              _clientEndpoints =
+                                                  assignEnvironmentProtocolEgressPolicy(
+                                                    endpoints: _clientEndpoints,
+                                                    clientEndpointId:
+                                                        endpoint.id,
+                                                    protocolPlanId: plan.id,
+                                                    policy: policy,
+                                                  );
+                                            }),
+                                        onTransformChanged: (plan, policy) =>
+                                            setState(() {
+                                              _clientEndpoints =
+                                                  assignEnvironmentProtocolTransformPolicy(
+                                                    endpoints: _clientEndpoints,
+                                                    clientEndpointId:
+                                                        endpoint.id,
+                                                    protocolPlanId: plan.id,
+                                                    policy: policy,
+                                                  );
+                                            }),
+                                        onAccountChanged:
+                                            (
+                                              plan,
+                                              route,
+                                              account,
+                                            ) => setState(() {
+                                              _clientEndpoints =
+                                                  assignEnvironmentRouteAccount(
+                                                    endpoints: _clientEndpoints,
+                                                    clientEndpointId:
+                                                        endpoint.id,
+                                                    protocolPlanId: plan.id,
+                                                    routeId: route.id,
+                                                    account: account,
+                                                  );
+                                            }),
+                                        onModelChanged:
+                                            (
+                                              plan,
+                                              route,
+                                              mappings,
+                                            ) => setState(() {
+                                              _clientEndpoints =
+                                                  assignEnvironmentRouteModelMappings(
+                                                    endpoints: _clientEndpoints,
+                                                    clientEndpointId:
+                                                        endpoint.id,
+                                                    protocolPlanId: plan.id,
+                                                    routeId: route.id,
+                                                    mappings: mappings,
+                                                  );
+                                            }),
+                                      ),
+                                ],
+                              ),
+                            ),
                             if (_submitted &&
                                 widget.controller.environmentError != null) ...[
                               const SizedBox(height: 10),
@@ -1809,6 +1999,7 @@ final class _EnvironmentEditorDialogState
           mode: _recordingMode,
           retentionDays: retentionDays,
         ),
+        launchEnvironment: _launchEnvironment,
         policySet: EnvironmentPolicySet(toolMode: _toolMode),
       ),
     );
@@ -1835,58 +2026,121 @@ final class _EditorSectionLabel extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return Row(
-      crossAxisAlignment: CrossAxisAlignment.end,
-      children: [
-        Text(
-          label.toUpperCase(),
-          style: Theme.of(context).textTheme.labelMedium,
-        ),
-        if (detail case final value?) ...[
-          const SizedBox(width: 8),
-          Expanded(
-            child: Text(
-              value,
-              textAlign: TextAlign.right,
-              style: Theme.of(context).textTheme.bodySmall,
-            ),
-          ),
-        ],
-      ],
+    return CompactFormSectionHeader(
+      title: label,
+      detail: detail,
+      uppercase: true,
     );
   }
 }
 
-final class _EditorFieldGrid extends StatelessWidget {
-  const _EditorFieldGrid({required this.children, this.maxColumns = 2});
+final class _EnvironmentEditorTabs extends StatelessWidget {
+  const _EnvironmentEditorTabs({
+    required this.selected,
+    required this.copy,
+    required this.onSelected,
+  });
 
-  final List<Widget> children;
-  final int maxColumns;
+  final int selected;
+  final AppCopy copy;
+  final ValueChanged<int> onSelected;
 
   @override
   Widget build(BuildContext context) {
-    return LayoutBuilder(
-      builder: (context, constraints) {
-        final columns = maxColumns >= 3 && constraints.maxWidth >= 600
-            ? 3
-            : constraints.maxWidth >= 420
-            ? 2
-            : 1;
-        final width = (constraints.maxWidth - (columns - 1) * 8) / columns;
-        return Wrap(
-          spacing: 8,
-          runSpacing: 7,
-          children: [
-            for (final child in children) SizedBox(width: width, child: child),
-          ],
-        );
-      },
+    return Container(
+      decoration: BoxDecoration(
+        color: context.viberColors.panelRaised,
+        border: Border.all(color: context.viberColors.dividerSoft),
+        borderRadius: ViberMetrics.controlRadius,
+      ),
+      clipBehavior: Clip.antiAlias,
+      child: Row(
+        children: [
+          _tab(
+            context,
+            value: 0,
+            key: const Key('environment-tab-traffic'),
+            icon: Icons.alt_route_rounded,
+            label: copy('environment.tab.traffic'),
+          ),
+          Container(
+            width: 1,
+            height: ViberMetrics.controlHeight,
+            color: context.viberColors.dividerSoft,
+          ),
+          _tab(
+            context,
+            value: 1,
+            key: const Key('environment-tab-runtime'),
+            icon: Icons.policy_outlined,
+            label: copy('environment.tab.runtime'),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _tab(
+    BuildContext context, {
+    required int value,
+    required Key key,
+    required IconData icon,
+    required String label,
+  }) {
+    final active = selected == value;
+    final foreground = active
+        ? context.viberColors.route
+        : context.viberColors.textMuted;
+    return Expanded(
+      child: Semantics(
+        button: true,
+        selected: active,
+        child: InkWell(
+          key: key,
+          onTap: () => onSelected(value),
+          child: Container(
+            height: ViberMetrics.controlHeight + 6,
+            decoration: BoxDecoration(
+              color: active
+                  ? context.viberColors.selection.withValues(alpha: 0.8)
+                  : Colors.transparent,
+              border: Border(
+                bottom: BorderSide(
+                  color: active
+                      ? context.viberColors.route
+                      : Colors.transparent,
+                  width: 2,
+                ),
+              ),
+            ),
+            alignment: Alignment.center,
+            child: Row(
+              mainAxisAlignment: MainAxisAlignment.center,
+              children: [
+                Icon(icon, size: 13, color: foreground),
+                const SizedBox(width: 6),
+                Flexible(
+                  child: Text(
+                    label,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: Theme.of(context).textTheme.labelLarge?.copyWith(
+                      color: foreground,
+                      fontWeight: active ? FontWeight.w600 : FontWeight.w500,
+                    ),
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ),
+      ),
     );
   }
 }
 
 final class _EditorEmptyState extends StatelessWidget {
-  const _EditorEmptyState({required this.text});
+  const _EditorEmptyState({required this.text, super.key});
 
   final String text;
 
@@ -1894,11 +2148,10 @@ final class _EditorEmptyState extends StatelessWidget {
   Widget build(BuildContext context) {
     return Container(
       width: double.infinity,
-      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 9),
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
       decoration: BoxDecoration(
-        color: context.viberColors.panel,
-        border: Border.all(color: context.viberColors.divider),
-        borderRadius: ViberMetrics.surfaceRadius,
+        color: context.viberColors.panelRaised.withValues(alpha: 0.5),
+        borderRadius: ViberMetrics.controlRadius,
       ),
       child: Row(
         children: [
@@ -1926,6 +2179,12 @@ typedef _RouteModelChanged =
       EnvironmentRoute route,
       List<EnvironmentModelMapping> mappings,
     );
+
+typedef _ProtocolEgressChanged =
+    void Function(EnvironmentProtocolPlan plan, TrafficEgressPolicy policy);
+
+typedef _ProtocolTransformChanged =
+    void Function(EnvironmentProtocolPlan plan, TrafficTransformPolicy policy);
 
 typedef _EndpointAdded =
     void Function(
@@ -2108,7 +2367,8 @@ final class _EnvironmentEndpointAdderState
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           Container(
-            padding: const EdgeInsets.all(8),
+            key: const Key('environment-client-flow-composer'),
+            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
             decoration: BoxDecoration(
               color: context.viberColors.panelRaised.withValues(alpha: 0.42),
               border: Border.all(
@@ -2123,7 +2383,6 @@ final class _EnvironmentEndpointAdderState
                 final compact = constraints.maxWidth < 470;
                 final targetField = CompactLabeledControl(
                   label: widget.copy('environment.mapping.client'),
-                  detail: effectiveTarget?.clientOrigin.toString(),
                   child: CompactSelectField<String>(
                     key: const Key('environment-client-plan-target'),
                     initialValue: effectiveTarget?.key,
@@ -2201,52 +2460,44 @@ final class _EnvironmentEndpointAdderState
                 );
                 final destinationField = CompactLabeledControl(
                   label: widget.copy('environment.destination.label'),
-                  detail: originalDestination
-                      ? widget.copy('environment.destination.original.detail')
-                      : widget.copy('environment.destination.upstream.detail'),
-                  child: SizedBox(
-                    width: double.infinity,
-                    child: SegmentedButton<String>(
-                      key: const Key('environment-destination-kind'),
-                      segments: [
-                        ButtonSegment(
-                          value: 'original',
-                          icon: const Icon(Icons.language, size: 13),
-                          label: Text(
-                            widget.copy(
-                              'environment.destination.original.short',
-                            ),
-                            overflow: TextOverflow.ellipsis,
-                          ),
+                  child: CompactSegmentedControl<String>(
+                    key: const Key('environment-destination-kind'),
+                    expanded: true,
+                    segments: [
+                      CompactSegment(
+                        value: 'original',
+                        icon: Icons.language,
+                        label: widget.copy(
+                          'environment.destination.original.short',
                         ),
-                        ButtonSegment(
-                          value: 'upstream',
-                          icon: const Icon(Icons.alt_route, size: 13),
-                          label: Text(
-                            widget.copy(
-                              'environment.destination.upstream.short',
-                            ),
-                            overflow: TextOverflow.ellipsis,
-                          ),
+                      ),
+                      CompactSegment(
+                        value: 'upstream',
+                        icon: Icons.alt_route,
+                        label: widget.copy(
+                          'environment.destination.upstream.short',
                         ),
-                      ],
-                      selected: {destinationKind},
-                      showSelectedIcon: false,
-                      onSelectionChanged:
-                          !widget.enabled || effectiveTarget == null
-                          ? null
-                          : (selection) {
-                              setState(() {
-                                _destinationKind = selection.single;
-                                _endpointId = '';
-                                _accountId = '';
-                                _pending = true;
-                              });
-                              field.didChange(effectiveTarget.key);
-                            },
-                    ),
+                      ),
+                    ],
+                    selected: destinationKind,
+                    onSelected: !widget.enabled || effectiveTarget == null
+                        ? null
+                        : (selection) {
+                            setState(() {
+                              _destinationKind = selection;
+                              _endpointId = '';
+                              _accountId = '';
+                              _pending = true;
+                            });
+                            field.didChange(effectiveTarget.key);
+                          },
                   ),
                 );
+                final destinationDetail = effectiveTarget == null
+                    ? widget.copy('environment.destination.choose_first')
+                    : originalDestination
+                    ? widget.copy('environment.destination.original.detail')
+                    : widget.copy('environment.destination.upstream.detail');
                 final endpointField = CompactLabeledControl(
                   label: widget.copy('environment.endpoint.add'),
                   child: CompactSelectField<String>(
@@ -2326,12 +2577,18 @@ final class _EnvironmentEndpointAdderState
                   ),
                   onPressed: !widget.enabled || !canApply ? null : _apply,
                   icon: Icon(
-                    originalDestination ? Icons.language : Icons.add,
+                    effectiveTarget == null
+                        ? Icons.add
+                        : originalDestination
+                        ? Icons.language
+                        : Icons.add,
                     size: 13,
                   ),
                   label: Text(
                     widget.copy(
-                      originalDestination
+                      effectiveTarget == null
+                          ? 'environment.endpoint.add_client_flow'
+                          : originalDestination
                           ? 'environment.destination.original.action'
                           : 'environment.endpoint.add_action',
                     ),
@@ -2352,8 +2609,12 @@ final class _EnvironmentEndpointAdderState
                         const SizedBox(height: 7),
                         accountField,
                       ],
-                      const SizedBox(height: 7),
-                      Align(alignment: Alignment.centerRight, child: add),
+                      const SizedBox(height: 8),
+                      _ClientFlowCommitRow(
+                        detail: destinationDetail,
+                        action: add,
+                        stacked: true,
+                      ),
                     ],
                   );
                 }
@@ -2378,17 +2639,14 @@ final class _EnvironmentEndpointAdderState
                             const SizedBox(width: 8),
                             Expanded(flex: 3, child: accountField),
                           ],
-                          const SizedBox(width: 8),
-                          Padding(
-                            padding: const EdgeInsets.only(top: 18),
-                            child: add,
-                          ),
                         ],
                       ),
-                    ] else ...[
-                      const SizedBox(height: 7),
-                      Align(alignment: Alignment.centerRight, child: add),
                     ],
+                    const SizedBox(height: 8),
+                    _ClientFlowCommitRow(
+                      detail: destinationDetail,
+                      action: add,
+                    ),
                   ],
                 );
               },
@@ -2464,6 +2722,57 @@ final class _EnvironmentEndpointAdderState
   }
 }
 
+final class _ClientFlowCommitRow extends StatelessWidget {
+  const _ClientFlowCommitRow({
+    required this.detail,
+    required this.action,
+    this.stacked = false,
+  });
+
+  final String detail;
+  final Widget action;
+  final bool stacked;
+
+  @override
+  Widget build(BuildContext context) {
+    final guidance = Row(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Padding(
+          padding: const EdgeInsets.only(top: 1),
+          child: Icon(
+            Icons.info_outline,
+            size: 13,
+            color: context.viberColors.textMuted,
+          ),
+        ),
+        const SizedBox(width: 6),
+        Expanded(
+          child: Text(detail, style: Theme.of(context).textTheme.bodySmall),
+        ),
+      ],
+    );
+    if (stacked) {
+      return Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          guidance,
+          const SizedBox(height: 6),
+          Align(alignment: Alignment.centerRight, child: action),
+        ],
+      );
+    }
+    return Row(
+      crossAxisAlignment: CrossAxisAlignment.center,
+      children: [
+        Expanded(child: guidance),
+        const SizedBox(width: 12),
+        action,
+      ],
+    );
+  }
+}
+
 final class _EnvironmentEndpointEditor extends StatelessWidget {
   const _EnvironmentEndpointEditor({
     required this.controller,
@@ -2474,6 +2783,8 @@ final class _EnvironmentEndpointEditor extends StatelessWidget {
     required this.enabled,
     required this.initiallyExpanded,
     required this.onRemove,
+    required this.onEgressChanged,
+    required this.onTransformChanged,
     required this.onAccountChanged,
     required this.onModelChanged,
   });
@@ -2486,6 +2797,8 @@ final class _EnvironmentEndpointEditor extends StatelessWidget {
   final bool enabled;
   final bool initiallyExpanded;
   final VoidCallback onRemove;
+  final _ProtocolEgressChanged onEgressChanged;
+  final _ProtocolTransformChanged onTransformChanged;
   final _RouteAccountChanged onAccountChanged;
   final _RouteModelChanged onModelChanged;
 
@@ -2554,30 +2867,540 @@ final class _EnvironmentEndpointEditor extends StatelessWidget {
           children: [
             const Divider(height: 1),
             for (final plan in endpoint.protocolPlans)
-              if (plan.destination.isOriginal)
-                _OriginalDestinationEditorRow(plan: plan, copy: copy)
-              else
-                for (final route in plan.routes)
-                  _RouteAccountEditor(
-                    controller: controller,
+              Column(
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  _TrafficEgressEditorRow(
                     plan: plan,
-                    route: route,
-                    upstreamEndpoint: endpoints
-                        .where((candidate) => candidate.id == route.endpointId)
-                        .firstOrNull,
-                    accounts: accounts,
                     copy: copy,
                     enabled: enabled,
-                    onChanged: (account) =>
-                        onAccountChanged(plan, route, account),
-                    onModelChanged: (mappings) =>
-                        onModelChanged(plan, route, mappings),
+                    onChanged: (policy) => onEgressChanged(plan, policy),
                   ),
+                  MessageTransformEditorButton(
+                    plan: plan,
+                    copy: copy,
+                    enabled: enabled,
+                    testTransform: controller.testMessageTransform,
+                    onChanged: (policy) => onTransformChanged(plan, policy),
+                  ),
+                  if (plan.destination.isOriginal)
+                    _OriginalDestinationEditorRow(plan: plan, copy: copy)
+                  else
+                    for (final route in plan.routes)
+                      _RouteAccountEditor(
+                        controller: controller,
+                        plan: plan,
+                        route: route,
+                        upstreamEndpoint: endpoints
+                            .where(
+                              (candidate) => candidate.id == route.endpointId,
+                            )
+                            .firstOrNull,
+                        accounts: accounts,
+                        copy: copy,
+                        enabled: enabled,
+                        onChanged: (account) =>
+                            onAccountChanged(plan, route, account),
+                        onModelChanged: (mappings) =>
+                            onModelChanged(plan, route, mappings),
+                      ),
+                ],
+              ),
           ],
         ),
       ),
     );
   }
+}
+
+final class _TrafficEgressEditorRow extends StatelessWidget {
+  const _TrafficEgressEditorRow({
+    required this.plan,
+    required this.copy,
+    required this.enabled,
+    required this.onChanged,
+  });
+
+  final EnvironmentProtocolPlan plan;
+  final AppCopy copy;
+  final bool enabled;
+  final ValueChanged<TrafficEgressPolicy> onChanged;
+
+  @override
+  Widget build(BuildContext context) {
+    final summary = _trafficEgressSummary(copy, plan.egressPolicy);
+    return Container(
+      color: context.viberColors.panelRaised.withValues(alpha: 0.34),
+      padding: const EdgeInsets.fromLTRB(9, 8, 9, 9),
+      child: CompactLabeledControl(
+        label: copy('environment.egress.label'),
+        detail: copy('environment.egress.detail'),
+        child: SizedBox(
+          width: double.infinity,
+          height: ViberMetrics.controlHeight,
+          child: OutlinedButton.icon(
+            key: Key('environment-egress-${plan.id}'),
+            onPressed: enabled ? () => unawaited(_edit(context)) : null,
+            icon: const Icon(Icons.alt_route_rounded, size: 14),
+            label: Align(
+              alignment: Alignment.centerLeft,
+              child: Text(
+                summary,
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+              ),
+            ),
+            style: OutlinedButton.styleFrom(
+              alignment: Alignment.centerLeft,
+              padding: const EdgeInsets.symmetric(horizontal: 9),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+
+  Future<void> _edit(BuildContext context) async {
+    final selection = await showDialog<TrafficEgressPolicy>(
+      context: context,
+      barrierDismissible: true,
+      builder: (context) => _TrafficEgressDialog(
+        planId: plan.id,
+        initial: plan.egressPolicy,
+        copy: copy,
+      ),
+    );
+    if (selection != null) onChanged(selection);
+  }
+}
+
+String _trafficEgressSummary(AppCopy copy, TrafficEgressPolicy policy) {
+  final proxy = switch (policy.proxy.kind) {
+    'direct' => copy('environment.egress.proxy.direct'),
+    'socks5' => 'SOCKS5 · ${policy.proxy.endpoint}',
+    _ => policy.proxy.kind,
+  };
+  final resolver = switch (policy.resolver.kind) {
+    'system' => copy('environment.egress.resolver.system'),
+    'doh' =>
+      policy.resolver.transport == 'proxy'
+          ? 'DoH · ${copy('environment.egress.doh.transport.proxy')}'
+          : 'DoH · ${copy('environment.egress.doh.transport.direct')}',
+    _ => policy.resolver.kind,
+  };
+  return '$proxy · $resolver';
+}
+
+final class _TrafficEgressDialog extends StatefulWidget {
+  const _TrafficEgressDialog({
+    required this.planId,
+    required this.initial,
+    required this.copy,
+  });
+
+  final String planId;
+  final TrafficEgressPolicy initial;
+  final AppCopy copy;
+
+  @override
+  State<_TrafficEgressDialog> createState() => _TrafficEgressDialogState();
+}
+
+final class _DoHEndpointPreset {
+  const _DoHEndpointPreset({
+    required this.id,
+    required this.copyKey,
+    required this.url,
+  });
+
+  final String id;
+  final String copyKey;
+  final String url;
+}
+
+const _customDoHEndpointPresetId = 'custom';
+const _doHEndpointPresets = <_DoHEndpointPreset>[
+  _DoHEndpointPreset(
+    id: 'cloudflare',
+    copyKey: 'environment.egress.doh.preset.cloudflare',
+    url: 'https://1.1.1.1/dns-query',
+  ),
+  _DoHEndpointPreset(
+    id: 'google',
+    copyKey: 'environment.egress.doh.preset.google',
+    url: 'https://8.8.8.8/dns-query',
+  ),
+  _DoHEndpointPreset(
+    id: 'quad9',
+    copyKey: 'environment.egress.doh.preset.quad9',
+    url: 'https://9.9.9.9/dns-query',
+  ),
+];
+
+_DoHEndpointPreset? _doHEndpointPresetById(String id) {
+  for (final preset in _doHEndpointPresets) {
+    if (preset.id == id) return preset;
+  }
+  return null;
+}
+
+String _doHEndpointPresetIdForUrl(String url) {
+  for (final preset in _doHEndpointPresets) {
+    if (preset.url == url) return preset.id;
+  }
+  return _customDoHEndpointPresetId;
+}
+
+final class _TrafficEgressDialogState extends State<_TrafficEgressDialog> {
+  final _formKey = GlobalKey<FormState>();
+  late final TextEditingController _proxyEndpoint;
+  late final TextEditingController _dohUrl;
+  late String _proxyKind;
+  late String _resolverKind;
+  late String _resolverTransport;
+  late String _dohPresetId;
+  String? _error;
+
+  AppCopy get copy => widget.copy;
+
+  @override
+  void initState() {
+    super.initState();
+    _proxyKind = widget.initial.proxy.kind;
+    _proxyEndpoint = TextEditingController(
+      text: widget.initial.proxy.endpoint ?? '',
+    );
+    _resolverKind = widget.initial.resolver.kind;
+    _resolverTransport = widget.initial.resolver.transport;
+    _dohUrl = TextEditingController(text: widget.initial.resolver.dohUrl ?? '');
+    _dohPresetId = _doHEndpointPresetIdForUrl(_dohUrl.text);
+  }
+
+  @override
+  void dispose() {
+    _proxyEndpoint.dispose();
+    _dohUrl.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final maximumHeight = math.min(
+      600.0,
+      MediaQuery.sizeOf(context).height - 48,
+    );
+    return AlertDialog(
+      insetPadding: const EdgeInsets.all(24),
+      titlePadding: const EdgeInsets.fromLTRB(18, 16, 18, 8),
+      contentPadding: const EdgeInsets.fromLTRB(18, 0, 18, 4),
+      actionsPadding: const EdgeInsets.fromLTRB(12, 6, 12, 12),
+      title: Text(copy('environment.egress.dialog.title')),
+      content: SizedBox(
+        key: Key('environment-egress-dialog-${widget.planId}'),
+        width: 520,
+        child: ConstrainedBox(
+          constraints: BoxConstraints(maxHeight: maximumHeight),
+          child: Form(
+            key: _formKey,
+            child: SingleChildScrollView(
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  Text(
+                    copy('environment.egress.dialog.scope'),
+                    style: Theme.of(context).textTheme.bodySmall,
+                  ),
+                  const SizedBox(height: 12),
+                  CompactLabeledControl(
+                    label: copy('environment.egress.proxy.label'),
+                    child: CompactSelectField<String>(
+                      key: Key(
+                        'environment-egress-proxy-kind-${widget.planId}',
+                      ),
+                      initialValue: _proxyKind,
+                      isExpanded: true,
+                      items: [
+                        for (final kind in const ['direct', 'socks5'])
+                          DropdownMenuItem(
+                            key: Key('environment-egress-proxy-option-$kind'),
+                            value: kind,
+                            child: Text(
+                              copy('environment.egress.proxy.$kind'),
+                              overflow: TextOverflow.ellipsis,
+                            ),
+                          ),
+                      ],
+                      onChanged: (value) {
+                        if (value != null) _setProxyKind(value);
+                      },
+                    ),
+                  ),
+                  if (_proxyKind != 'direct') ...[
+                    const SizedBox(height: 9),
+                    CompactLabeledControl(
+                      label: copy('environment.egress.proxy.endpoint'),
+                      child: TextFormField(
+                        key: Key(
+                          'environment-egress-proxy-endpoint-${widget.planId}',
+                        ),
+                        controller: _proxyEndpoint,
+                        autocorrect: false,
+                        enableSuggestions: false,
+                        decoration: InputDecoration(
+                          hintText: copy(
+                            'environment.egress.proxy.endpoint_hint',
+                          ),
+                        ),
+                        validator: _validateProxyEndpoint,
+                      ),
+                    ),
+                  ],
+                  const SizedBox(height: 9),
+                  CompactLabeledControl(
+                    label: copy('environment.egress.resolver.label'),
+                    child: CompactSelectField<String>(
+                      key: Key(
+                        'environment-egress-resolver-kind-${widget.planId}',
+                      ),
+                      initialValue: _resolverKind,
+                      isExpanded: true,
+                      items: [
+                        for (final kind in const ['system', 'doh'])
+                          DropdownMenuItem(
+                            key: Key(
+                              'environment-egress-resolver-option-$kind',
+                            ),
+                            value: kind,
+                            child: Text(
+                              copy('environment.egress.resolver.$kind'),
+                              overflow: TextOverflow.ellipsis,
+                            ),
+                          ),
+                      ],
+                      onChanged: (value) {
+                        if (value != null) _setResolverKind(value);
+                      },
+                    ),
+                  ),
+                  if (_resolverKind == 'doh') ...[
+                    const SizedBox(height: 9),
+                    CompactLabeledControl(
+                      label: copy('environment.egress.doh.service'),
+                      child: CompactSelectField<String>(
+                        key: Key(
+                          'environment-egress-doh-preset-${widget.planId}',
+                        ),
+                        initialValue: _dohPresetId,
+                        isExpanded: true,
+                        items: [
+                          for (final preset in _doHEndpointPresets)
+                            DropdownMenuItem(
+                              key: Key(
+                                'environment-egress-doh-preset-${preset.id}',
+                              ),
+                              value: preset.id,
+                              child: Text(
+                                copy(preset.copyKey),
+                                overflow: TextOverflow.ellipsis,
+                              ),
+                            ),
+                          DropdownMenuItem(
+                            key: const Key(
+                              'environment-egress-doh-preset-custom',
+                            ),
+                            value: _customDoHEndpointPresetId,
+                            child: Text(
+                              copy('environment.egress.doh.preset.custom'),
+                              overflow: TextOverflow.ellipsis,
+                            ),
+                          ),
+                        ],
+                        onChanged: (value) {
+                          if (value != null) _setDoHPreset(value);
+                        },
+                      ),
+                    ),
+                    const SizedBox(height: 9),
+                    if (_dohPresetId == _customDoHEndpointPresetId)
+                      CompactLabeledControl(
+                        label: copy('environment.egress.doh.url'),
+                        detail: copy('environment.egress.doh.url_detail'),
+                        child: TextFormField(
+                          key: Key(
+                            'environment-egress-doh-url-${widget.planId}',
+                          ),
+                          controller: _dohUrl,
+                          keyboardType: TextInputType.url,
+                          autocorrect: false,
+                          enableSuggestions: false,
+                          decoration: InputDecoration(
+                            hintText: copy('environment.egress.doh.url_hint'),
+                          ),
+                          validator: _validateDoHURL,
+                        ),
+                      )
+                    else
+                      CompactLabeledControl(
+                        label: copy('environment.egress.doh.endpoint'),
+                        child: _ReadOnlyPolicyValue(text: _dohUrl.text),
+                      ),
+                    if (_proxyKind == 'socks5') ...[
+                      const SizedBox(height: 9),
+                      CompactLabeledControl(
+                        label: copy('environment.egress.doh.transport'),
+                        child: CompactSelectField<String>(
+                          key: Key(
+                            'environment-egress-doh-transport-${widget.planId}',
+                          ),
+                          initialValue: _resolverTransport,
+                          isExpanded: true,
+                          items: [
+                            for (final transport in const ['direct', 'proxy'])
+                              DropdownMenuItem(
+                                key: Key(
+                                  'environment-egress-doh-transport-option-$transport',
+                                ),
+                                value: transport,
+                                child: Text(
+                                  copy(
+                                    'environment.egress.doh.transport.$transport',
+                                  ),
+                                ),
+                              ),
+                          ],
+                          onChanged: (value) => setState(
+                            () => _resolverTransport = value ?? 'direct',
+                          ),
+                        ),
+                      ),
+                    ],
+                  ],
+                  if (_error case final error?) ...[
+                    const SizedBox(height: 10),
+                    InlineNotice(message: error, error: true),
+                  ],
+                ],
+              ),
+            ),
+          ),
+        ),
+      ),
+      actions: [
+        TextButton(
+          onPressed: () => Navigator.of(context).pop(),
+          child: Text(copy('common.cancel')),
+        ),
+        FilledButton(
+          key: Key('environment-egress-save-${widget.planId}'),
+          onPressed: _save,
+          child: Text(copy('common.save')),
+        ),
+      ],
+    );
+  }
+
+  void _setProxyKind(String value) {
+    setState(() {
+      _proxyKind = value;
+      _error = null;
+      if (value == 'direct') {
+        _resolverTransport = 'direct';
+      }
+    });
+  }
+
+  void _setResolverKind(String value) {
+    setState(() {
+      _resolverKind = value;
+      _error = null;
+      if (value == 'system' || _proxyKind == 'direct') {
+        _resolverTransport = 'direct';
+      }
+    });
+  }
+
+  void _setDoHPreset(String value) {
+    final preset = _doHEndpointPresetById(value);
+    setState(() {
+      _dohPresetId = value;
+      _error = null;
+      if (preset != null) _dohUrl.text = preset.url;
+    });
+  }
+
+  String? _validateProxyEndpoint(String? value) {
+    if (_proxyKind == 'direct') return null;
+    try {
+      TrafficProxyPolicy.fromJson({
+        'kind': _proxyKind,
+        'endpoint': value?.trim() ?? '',
+      }, 'proxy');
+      return null;
+    } on ControlContractException {
+      return copy('environment.egress.validation.proxy');
+    }
+  }
+
+  String? _validateDoHURL(String? value) {
+    if (_resolverKind != 'doh') return null;
+    try {
+      TrafficResolverPolicy.fromJson({
+        'kind': 'doh',
+        'dohUrl': value?.trim() ?? '',
+        'transport': _proxyKind == 'socks5' ? _resolverTransport : 'direct',
+      }, 'resolver');
+      return null;
+    } on ControlContractException {
+      return copy('environment.egress.validation.doh');
+    }
+  }
+
+  void _save() {
+    setState(() => _error = null);
+    if (!_formKey.currentState!.validate()) return;
+    try {
+      final proxy = <String, Object?>{'kind': _proxyKind};
+      if (_proxyKind != 'direct') {
+        proxy['endpoint'] = _proxyEndpoint.text.trim();
+      }
+      final resolver = <String, Object?>{
+        'kind': _resolverKind,
+        'transport': _resolverKind == 'doh' && _proxyKind == 'socks5'
+            ? _resolverTransport
+            : 'direct',
+      };
+      if (_resolverKind == 'doh') {
+        resolver['dohUrl'] = _dohUrl.text.trim();
+      }
+      final policy = TrafficEgressPolicy.fromJson({
+        'proxy': proxy,
+        'resolver': resolver,
+      }, 'trafficEgressPolicy');
+      Navigator.of(context).pop(policy);
+    } on ControlContractException {
+      setState(() => _error = copy('environment.egress.validation.policy'));
+    }
+  }
+}
+
+final class _ReadOnlyPolicyValue extends StatelessWidget {
+  const _ReadOnlyPolicyValue({required this.text});
+
+  final String text;
+
+  @override
+  Widget build(BuildContext context) => Container(
+    height: ViberMetrics.controlHeight,
+    alignment: Alignment.centerLeft,
+    padding: const EdgeInsets.symmetric(horizontal: 10),
+    decoration: BoxDecoration(
+      color: context.viberColors.panelRaised,
+      border: Border.all(color: context.viberColors.divider),
+      borderRadius: ViberMetrics.controlRadius,
+    ),
+    child: Text(text, maxLines: 1, overflow: TextOverflow.ellipsis),
+  );
 }
 
 final class _OriginalDestinationEditorRow extends StatelessWidget {

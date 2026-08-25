@@ -9,6 +9,8 @@ import '../../core/design/workbench_widgets.dart';
 import '../../core/i18n/app_copy.dart';
 import 'workbench_controller.dart';
 
+enum _ActivityMetric { turns, tokens }
+
 /// Operator-facing projection of retained Runtime User evidence.
 ///
 /// This view deliberately reports only protocol-declared usage. Unknown token
@@ -30,6 +32,7 @@ final class UsageDashboardView extends StatefulWidget {
 final class _UsageDashboardViewState extends State<UsageDashboardView> {
   String? _selectedUserId;
   String _userQuery = '';
+  _ActivityMetric _activityMetric = _ActivityMetric.turns;
   final GlobalKey _detailKey = GlobalKey();
 
   RuntimeUserUsage? _selectedUser(RuntimeUsageReport report) {
@@ -71,6 +74,13 @@ final class _UsageDashboardViewState extends State<UsageDashboardView> {
               copy: copy,
               refreshing: controller.serverManagementLoading,
               onRefresh: () => unawaited(controller.refreshServerManagement()),
+              rangeDays: controller.usageRangeDays,
+              onRangeChanged: (days) =>
+                  unawaited(controller.selectUsageRangeDays(days)),
+              activityMetric: _activityMetric,
+              onActivityMetricChanged: (value) => setState(() {
+                _activityMetric = value;
+              }),
               onSelectUser: _selectUser,
               detailKey: _detailKey,
               userQuery: _userQuery,
@@ -165,6 +175,10 @@ final class _UsageReportBody extends StatelessWidget {
     required this.copy,
     required this.refreshing,
     required this.onRefresh,
+    required this.rangeDays,
+    required this.onRangeChanged,
+    required this.activityMetric,
+    required this.onActivityMetricChanged,
     required this.onSelectUser,
     required this.detailKey,
     required this.userQuery,
@@ -176,6 +190,10 @@ final class _UsageReportBody extends StatelessWidget {
   final AppCopy copy;
   final bool refreshing;
   final VoidCallback onRefresh;
+  final int rangeDays;
+  final ValueChanged<int> onRangeChanged;
+  final _ActivityMetric activityMetric;
+  final ValueChanged<_ActivityMetric> onActivityMetricChanged;
   final ValueChanged<String> onSelectUser;
   final Key detailKey;
   final String userQuery;
@@ -193,6 +211,8 @@ final class _UsageReportBody extends StatelessWidget {
           copy: copy,
           refreshing: refreshing,
           onRefresh: onRefresh,
+          rangeDays: rangeDays,
+          onRangeChanged: onRangeChanged,
         ),
         if (report.truncated) ...[
           const SizedBox(height: ViberSpacing.md),
@@ -200,6 +220,13 @@ final class _UsageReportBody extends StatelessWidget {
         ],
         const SizedBox(height: ViberSpacing.lg),
         _UsageOverview(report: report, copy: copy),
+        const SizedBox(height: ViberSpacing.lg),
+        _TeamActivityPanel(
+          report: report,
+          metric: activityMetric,
+          copy: copy,
+          onMetricChanged: onActivityMetricChanged,
+        ),
         const SizedBox(height: ViberSpacing.xl),
         if (report.users.isEmpty)
           _EmptyUsage(copy: copy)
@@ -209,12 +236,20 @@ final class _UsageReportBody extends StatelessWidget {
             selectedUserId: selected?.userId,
             query: userQuery,
             copy: copy,
+            metric: activityMetric,
+            period: report.period,
             onQueryChanged: onUserQueryChanged,
             onSelectUser: onSelectUser,
           ),
           if (selected != null) ...[
             const SizedBox(height: ViberSpacing.xl),
-            _UserEvidence(key: detailKey, user: selected!, copy: copy),
+            _UserEvidence(
+              key: detailKey,
+              user: selected!,
+              period: report.period,
+              metric: activityMetric,
+              copy: copy,
+            ),
           ],
         ],
       ],
@@ -228,50 +263,178 @@ final class _ReportScope extends StatelessWidget {
     required this.copy,
     required this.refreshing,
     required this.onRefresh,
+    required this.rangeDays,
+    required this.onRangeChanged,
   });
 
   final RuntimeUsageReport report;
   final AppCopy copy;
   final bool refreshing;
   final VoidCallback onRefresh;
+  final int rangeDays;
+  final ValueChanged<int> onRangeChanged;
 
   @override
-  Widget build(BuildContext context) => Row(
-    children: [
-      Icon(
-        Icons.inventory_2_outlined,
-        size: 16,
-        color: context.viberColors.route,
-      ),
-      const SizedBox(width: ViberSpacing.sm),
-      Expanded(
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Text(
-              copy('usage.scope.retained'),
-              style: Theme.of(context).textTheme.labelLarge,
+  Widget build(BuildContext context) => LayoutBuilder(
+    builder: (context, constraints) {
+      final heading = Row(
+        children: [
+          Icon(
+            Icons.inventory_2_outlined,
+            size: 16,
+            color: context.viberColors.route,
+          ),
+          const SizedBox(width: ViberSpacing.sm),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  copy('usage.scope.retained'),
+                  style: Theme.of(context).textTheme.labelLarge,
+                ),
+                Text(
+                  '${_periodLabel(report.period)} · '
+                  '${copy.format('usage.generated', {'time': _timestamp(report.generatedAt)})}',
+                  maxLines: 2,
+                  overflow: TextOverflow.ellipsis,
+                  style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                    color: context.viberColors.textMuted,
+                  ),
+                ),
+              ],
             ),
-            Text(
-              copy.format('usage.generated', {
-                'time': _timestamp(report.generatedAt),
-              }),
-              style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                color: context.viberColors.textMuted,
+          ),
+          IconButton(
+            key: const Key('usage-refresh'),
+            onPressed: refreshing ? null : onRefresh,
+            tooltip: copy('status.refresh'),
+            icon: refreshing
+                ? const CompactProgressIndicator()
+                : const Icon(Icons.refresh, size: 16),
+          ),
+        ],
+      );
+      final selector = _UsageRangeSelector(
+        selectedDays: rangeDays,
+        enabled: !refreshing,
+        copy: copy,
+        onChanged: onRangeChanged,
+      );
+      if (constraints.maxWidth < 560) {
+        return Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            heading,
+            const SizedBox(height: ViberSpacing.sm),
+            Align(alignment: Alignment.centerRight, child: selector),
+          ],
+        );
+      }
+      return Row(
+        children: [
+          Expanded(child: heading),
+          const SizedBox(width: ViberSpacing.lg),
+          selector,
+        ],
+      );
+    },
+  );
+}
+
+final class _UsageRangeSelector extends StatelessWidget {
+  const _UsageRangeSelector({
+    required this.selectedDays,
+    required this.enabled,
+    required this.copy,
+    required this.onChanged,
+  });
+
+  final int selectedDays;
+  final bool enabled;
+  final AppCopy copy;
+  final ValueChanged<int> onChanged;
+
+  @override
+  Widget build(BuildContext context) => Container(
+    decoration: BoxDecoration(
+      color: context.viberColors.panelRaised,
+      border: Border.all(color: context.viberColors.dividerSoft),
+      borderRadius: ViberMetrics.controlRadius,
+    ),
+    clipBehavior: Clip.antiAlias,
+    child: Row(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        _UsageRangeButton(
+          key: const Key('usage-range-30'),
+          label: copy('usage.range.30'),
+          selected: selectedDays == 30,
+          onPressed: enabled ? () => onChanged(30) : null,
+        ),
+        _UsageRangeButton(
+          key: const Key('usage-range-90'),
+          label: copy('usage.range.90'),
+          selected: selectedDays == 90,
+          onPressed: enabled ? () => onChanged(90) : null,
+        ),
+        _UsageRangeButton(
+          key: const Key('usage-range-365'),
+          label: copy('usage.range.365'),
+          selected: selectedDays == 365,
+          onPressed: enabled ? () => onChanged(365) : null,
+        ),
+      ],
+    ),
+  );
+}
+
+final class _UsageRangeButton extends StatelessWidget {
+  const _UsageRangeButton({
+    required this.label,
+    required this.selected,
+    required this.onPressed,
+    super.key,
+  });
+
+  final String label;
+  final bool selected;
+  final VoidCallback? onPressed;
+
+  @override
+  Widget build(BuildContext context) => Semantics(
+    selected: selected,
+    button: true,
+    child: Material(
+      color: selected ? context.viberColors.selection : Colors.transparent,
+      child: InkWell(
+        onTap: onPressed,
+        child: Container(
+          constraints: const BoxConstraints(minWidth: 52, minHeight: 30),
+          alignment: Alignment.center,
+          padding: const EdgeInsets.symmetric(horizontal: ViberSpacing.sm),
+          decoration: BoxDecoration(
+            border: Border(
+              bottom: BorderSide(
+                width: 2,
+                color: selected
+                    ? context.viberColors.selectionStrong
+                    : Colors.transparent,
               ),
             ),
-          ],
+          ),
+          child: Text(
+            label,
+            style: Theme.of(context).textTheme.labelSmall?.copyWith(
+              color: selected
+                  ? context.viberColors.route
+                  : context.viberColors.textMuted,
+              fontWeight: selected ? FontWeight.w600 : FontWeight.w500,
+            ),
+          ),
         ),
       ),
-      IconButton(
-        key: const Key('usage-refresh'),
-        onPressed: refreshing ? null : onRefresh,
-        tooltip: copy('status.refresh'),
-        icon: refreshing
-            ? const CompactProgressIndicator()
-            : const Icon(Icons.refresh, size: 16),
-      ),
-    ],
+    ),
   );
 }
 
@@ -286,9 +449,9 @@ final class _UsageOverview extends StatelessWidget {
     final users = report.users;
     final activeUsers = users.where((user) => user.active).length;
     final activeRuns = users.fold<int>(0, (sum, user) => sum + user.activeRuns);
-    final turns = users.fold<int>(0, (sum, user) => sum + user.turns);
-    final input = _sumTokens(users, (tokens) => tokens.inputUncached);
-    final output = _sumTokens(users, (tokens) => tokens.output);
+    final turns = report.days.fold<int>(0, (sum, day) => sum + day.turns);
+    final input = _sumDayTokens(report.days, (tokens) => tokens.inputUncached);
+    final output = _sumDayTokens(report.days, (tokens) => tokens.output);
     return LayoutBuilder(
       builder: (context, constraints) {
         final columns = constraints.maxWidth >= 900
@@ -425,12 +588,466 @@ final class _OverviewCard extends StatelessWidget {
   }
 }
 
+final class _TeamActivityPanel extends StatelessWidget {
+  const _TeamActivityPanel({
+    required this.report,
+    required this.metric,
+    required this.copy,
+    required this.onMetricChanged,
+  });
+
+  final RuntimeUsageReport report;
+  final _ActivityMetric metric;
+  final AppCopy copy;
+  final ValueChanged<_ActivityMetric> onMetricChanged;
+
+  @override
+  Widget build(BuildContext context) => Container(
+    key: const Key('usage-team-heatmap'),
+    decoration: BoxDecoration(
+      color: context.viberColors.panel,
+      border: Border.all(color: context.viberColors.divider),
+      borderRadius: ViberMetrics.surfaceRadius,
+    ),
+    clipBehavior: Clip.antiAlias,
+    child: Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        Padding(
+          padding: const EdgeInsets.fromLTRB(12, 10, 12, 9),
+          child: LayoutBuilder(
+            builder: (context, constraints) {
+              final heading = _SectionHeading(
+                icon: Icons.calendar_view_month_outlined,
+                title: copy('usage.activity.team.title'),
+                detail: copy('usage.activity.team.detail'),
+              );
+              final selector = _ActivityMetricSelector(
+                selected: metric,
+                copy: copy,
+                onChanged: onMetricChanged,
+              );
+              if (constraints.maxWidth < 520) {
+                return Column(
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  children: [
+                    heading,
+                    const SizedBox(height: ViberSpacing.sm),
+                    Align(alignment: Alignment.centerRight, child: selector),
+                  ],
+                );
+              }
+              return Row(
+                children: [
+                  Expanded(child: heading),
+                  const SizedBox(width: ViberSpacing.lg),
+                  selector,
+                ],
+              );
+            },
+          ),
+        ),
+        Divider(height: 1, color: context.viberColors.dividerSoft),
+        Padding(
+          padding: const EdgeInsets.fromLTRB(12, 10, 12, 11),
+          child: _CalendarHeatmap(
+            period: report.period,
+            days: report.days,
+            metric: metric,
+            copy: copy,
+            keyPrefix: 'usage-team-day',
+          ),
+        ),
+      ],
+    ),
+  );
+}
+
+final class _ActivityMetricSelector extends StatelessWidget {
+  const _ActivityMetricSelector({
+    required this.selected,
+    required this.copy,
+    required this.onChanged,
+  });
+
+  final _ActivityMetric selected;
+  final AppCopy copy;
+  final ValueChanged<_ActivityMetric> onChanged;
+
+  @override
+  Widget build(BuildContext context) => Container(
+    decoration: BoxDecoration(
+      color: context.viberColors.panelRaised,
+      border: Border.all(color: context.viberColors.dividerSoft),
+      borderRadius: ViberMetrics.controlRadius,
+    ),
+    clipBehavior: Clip.antiAlias,
+    child: Row(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        _MetricButton(
+          key: const Key('usage-metric-turns'),
+          label: copy('usage.activity.metric.turns'),
+          selected: selected == _ActivityMetric.turns,
+          onPressed: () => onChanged(_ActivityMetric.turns),
+        ),
+        _MetricButton(
+          key: const Key('usage-metric-tokens'),
+          label: copy('usage.activity.metric.tokens'),
+          selected: selected == _ActivityMetric.tokens,
+          onPressed: () => onChanged(_ActivityMetric.tokens),
+        ),
+      ],
+    ),
+  );
+}
+
+final class _MetricButton extends StatelessWidget {
+  const _MetricButton({
+    required this.label,
+    required this.selected,
+    required this.onPressed,
+    super.key,
+  });
+
+  final String label;
+  final bool selected;
+  final VoidCallback onPressed;
+
+  @override
+  Widget build(BuildContext context) => Semantics(
+    selected: selected,
+    button: true,
+    child: Material(
+      color: selected ? context.viberColors.selection : Colors.transparent,
+      child: InkWell(
+        onTap: onPressed,
+        child: SizedBox(
+          width: ViberMetrics.compactSegmentWidth,
+          height: ViberMetrics.controlHeight,
+          child: Center(
+            child: Text(
+              label,
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+              style: Theme.of(context).textTheme.labelSmall?.copyWith(
+                color: selected
+                    ? context.viberColors.route
+                    : context.viberColors.textMuted,
+                fontWeight: selected ? FontWeight.w600 : FontWeight.w500,
+              ),
+            ),
+          ),
+        ),
+      ),
+    ),
+  );
+}
+
+final class _CalendarHeatmap extends StatelessWidget {
+  const _CalendarHeatmap({
+    required this.period,
+    required this.days,
+    required this.metric,
+    required this.copy,
+    required this.keyPrefix,
+  });
+
+  final RuntimeUsagePeriod period;
+  final List<RuntimeDayUsage> days;
+  final _ActivityMetric metric;
+  final AppCopy copy;
+  final String keyPrefix;
+
+  @override
+  Widget build(BuildContext context) {
+    final dates = _periodDates(period);
+    final cellSize = dates.length >= 300 ? 13.0 : 11.0;
+    const gap = 3.0;
+    final byDate = {for (final day in days) day.date: day};
+    final leading = dates.isEmpty ? 0 : dates.first.weekday - DateTime.monday;
+    final cells = leading + dates.length;
+    final weekCount = math.max(1, (cells + 6) ~/ 7);
+    final gridWidth = weekCount * cellSize + (weekCount - 1) * gap;
+    const monthAxisHeight = 14.0;
+    final monthMarkers = dates.indexed
+        .where((entry) => entry.$2.day == 1)
+        .map((entry) {
+          final date = entry.$2;
+          final week = (leading + entry.$1) ~/ 7;
+          return (
+            date: date,
+            left: week * (cellSize + gap),
+            label: date.month.toString().padLeft(2, '0'),
+          );
+        })
+        .toList(growable: false);
+    final maxValue = math.max(
+      1,
+      days.fold<int>(
+        0,
+        (value, day) => math.max(value, _dayValue(day, metric)),
+      ),
+    );
+    final dayGrid = Row(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        for (var week = 0; week < weekCount; week += 1) ...[
+          Column(
+            children: [
+              for (var weekday = 0; weekday < 7; weekday += 1) ...[
+                Builder(
+                  builder: (context) {
+                    final dateIndex = week * 7 + weekday - leading;
+                    if (dateIndex < 0 || dateIndex >= dates.length) {
+                      return SizedBox(width: cellSize, height: cellSize);
+                    }
+                    final date = dates[dateIndex];
+                    final label = _civilDate(date);
+                    return _HeatCell(
+                      key: Key('$keyPrefix-$label'),
+                      date: label,
+                      day: byDate[label],
+                      metric: metric,
+                      maximum: maxValue,
+                      copy: copy,
+                      size: cellSize,
+                    );
+                  },
+                ),
+                if (weekday != 6) const SizedBox(height: gap),
+              ],
+            ],
+          ),
+          if (week != weekCount - 1) const SizedBox(width: gap),
+        ],
+      ],
+    );
+    final grid = Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        SizedBox(
+          width: gridWidth,
+          height: monthAxisHeight,
+          child: Stack(
+            clipBehavior: Clip.none,
+            children: [
+              for (final marker in monthMarkers)
+                Positioned(
+                  key: Key(
+                    '$keyPrefix-month-${marker.date.year}-'
+                    '${marker.date.month.toString().padLeft(2, '0')}',
+                  ),
+                  left: marker.left,
+                  child: Semantics(
+                    label:
+                        '${marker.date.year}-'
+                        '${marker.date.month.toString().padLeft(2, '0')}',
+                    child: Text(
+                      marker.label,
+                      style: Theme.of(context).textTheme.labelSmall?.copyWith(
+                        fontSize: ViberType.micro,
+                        color: context.viberColors.textFaint,
+                      ),
+                    ),
+                  ),
+                ),
+            ],
+          ),
+        ),
+        const SizedBox(height: ViberSpacing.xxs),
+        dayGrid,
+      ],
+    );
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        Row(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            SizedBox(
+              width: 24,
+              child: Column(
+                children: [
+                  const SizedBox(height: monthAxisHeight + ViberSpacing.xxs),
+                  for (var weekday = 0; weekday < 7; weekday += 1) ...[
+                    SizedBox(
+                      height: cellSize,
+                      child: weekday == 0 || weekday == 2 || weekday == 4
+                          ? Text(
+                              copy('usage.activity.weekday.${weekday + 1}'),
+                              style: Theme.of(context).textTheme.labelSmall
+                                  ?.copyWith(
+                                    fontSize: ViberType.micro,
+                                    color: context.viberColors.textFaint,
+                                  ),
+                            )
+                          : null,
+                    ),
+                    if (weekday != 6) const SizedBox(height: gap),
+                  ],
+                ],
+              ),
+            ),
+            Expanded(
+              child: LayoutBuilder(
+                builder: (context, constraints) => SingleChildScrollView(
+                  key: Key('$keyPrefix-scroll'),
+                  scrollDirection: Axis.horizontal,
+                  // When the entire selected period fits, keep its beginning
+                  // next to the weekday axis. If it overflows, reveal the
+                  // most recent evidence first while preserving older days.
+                  reverse: gridWidth > constraints.maxWidth,
+                  child: grid,
+                ),
+              ),
+            ),
+          ],
+        ),
+        const SizedBox(height: ViberSpacing.sm),
+        _HeatmapLegend(metric: metric, copy: copy),
+      ],
+    );
+  }
+}
+
+final class _HeatCell extends StatelessWidget {
+  const _HeatCell({
+    required this.date,
+    required this.day,
+    required this.metric,
+    required this.maximum,
+    required this.copy,
+    required this.size,
+    super.key,
+  });
+
+  final String date;
+  final RuntimeDayUsage? day;
+  final _ActivityMetric metric;
+  final int maximum;
+  final AppCopy copy;
+  final double size;
+
+  @override
+  Widget build(BuildContext context) {
+    final value = day == null ? 0 : _dayValue(day!, metric);
+    final incomplete = day != null && !_dayMetricComplete(day!, metric);
+    final level = value == 0
+        ? 0
+        : math.max(1, math.min(4, (value * 4 / maximum).ceil()));
+    final label = _dayEvidenceLabel(
+      day: day,
+      date: date,
+      metric: metric,
+      copy: copy,
+    );
+    final color = level == 0
+        ? context.viberColors.panelRaised
+        : Color.alphaBlend(
+            context.viberColors.route.withValues(alpha: 0.16 + level * 0.16),
+            context.viberColors.panel,
+          );
+    final borderColor = day != null && day!.failed > 0
+        ? context.viberColors.danger
+        : incomplete
+        ? context.viberColors.warning
+        : context.viberColors.dividerSoft;
+    return Tooltip(
+      message: label,
+      child: Semantics(
+        label: label,
+        child: Container(
+          width: size,
+          height: size,
+          decoration: BoxDecoration(
+            color: color,
+            border: Border.all(color: borderColor, width: incomplete ? 1.2 : 1),
+            borderRadius: BorderRadius.circular(2),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+final class _HeatmapLegend extends StatelessWidget {
+  const _HeatmapLegend({required this.metric, required this.copy});
+
+  final _ActivityMetric metric;
+  final AppCopy copy;
+
+  @override
+  Widget build(BuildContext context) => Row(
+    mainAxisAlignment: MainAxisAlignment.end,
+    children: [
+      Text(
+        copy('usage.activity.legend.less'),
+        style: Theme.of(
+          context,
+        ).textTheme.labelSmall?.copyWith(color: context.viberColors.textFaint),
+      ),
+      const SizedBox(width: ViberSpacing.xs),
+      for (var level = 0; level <= 4; level += 1) ...[
+        Container(
+          width: 10,
+          height: 10,
+          decoration: BoxDecoration(
+            color: level == 0
+                ? context.viberColors.panelRaised
+                : Color.alphaBlend(
+                    context.viberColors.route.withValues(
+                      alpha: 0.16 + level * 0.16,
+                    ),
+                    context.viberColors.panel,
+                  ),
+            border: Border.all(color: context.viberColors.dividerSoft),
+            borderRadius: BorderRadius.circular(2),
+          ),
+        ),
+        if (level != 4) const SizedBox(width: 3),
+      ],
+      const SizedBox(width: ViberSpacing.xs),
+      Text(
+        copy('usage.activity.legend.more'),
+        style: Theme.of(
+          context,
+        ).textTheme.labelSmall?.copyWith(color: context.viberColors.textFaint),
+      ),
+      if (metric == _ActivityMetric.tokens) ...[
+        const SizedBox(width: ViberSpacing.md),
+        Container(
+          width: 10,
+          height: 10,
+          decoration: BoxDecoration(
+            border: Border.all(color: context.viberColors.warning, width: 1.2),
+            borderRadius: BorderRadius.circular(2),
+          ),
+        ),
+        const SizedBox(width: ViberSpacing.xs),
+        Flexible(
+          child: Text(
+            copy('usage.activity.legend.partial'),
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+            style: Theme.of(context).textTheme.labelSmall?.copyWith(
+              color: context.viberColors.textFaint,
+            ),
+          ),
+        ),
+      ],
+    ],
+  );
+}
+
 final class _UserLedger extends StatelessWidget {
   const _UserLedger({
     required this.users,
     required this.selectedUserId,
     required this.query,
     required this.copy,
+    required this.metric,
+    required this.period,
     required this.onQueryChanged,
     required this.onSelectUser,
   });
@@ -439,6 +1056,8 @@ final class _UserLedger extends StatelessWidget {
   final String? selectedUserId;
   final String query;
   final AppCopy copy;
+  final _ActivityMetric metric;
+  final RuntimeUsagePeriod period;
   final ValueChanged<String> onQueryChanged;
   final ValueChanged<String> onSelectUser;
 
@@ -523,6 +1142,8 @@ final class _UserLedger extends StatelessWidget {
               selectedUserId: selectedUserId,
               query: query,
               copy: copy,
+              metric: metric,
+              period: period,
               onSelectUser: onSelectUser,
             ),
         ],
@@ -537,6 +1158,8 @@ final class _RankingRows extends StatefulWidget {
     required this.selectedUserId,
     required this.query,
     required this.copy,
+    required this.metric,
+    required this.period,
     required this.onSelectUser,
   });
 
@@ -544,6 +1167,8 @@ final class _RankingRows extends StatefulWidget {
   final String? selectedUserId;
   final String query;
   final AppCopy copy;
+  final _ActivityMetric metric;
+  final RuntimeUsagePeriod period;
   final ValueChanged<String> onSelectUser;
 
   @override
@@ -551,7 +1176,7 @@ final class _RankingRows extends StatefulWidget {
 }
 
 final class _RankingRowsState extends State<_RankingRows> {
-  static const _rowExtent = 70.0;
+  static const _rowExtent = 76.0;
   static const _maximumHeight = 300.0;
   final ScrollController _controller = ScrollController();
 
@@ -592,6 +1217,8 @@ final class _RankingRowsState extends State<_RankingRows> {
               user: entry.$2,
               selected: entry.$2.userId == widget.selectedUserId,
               copy: widget.copy,
+              metric: widget.metric,
+              period: widget.period,
               onPressed: () => widget.onSelectUser(entry.$2.userId),
             );
           },
@@ -607,6 +1234,8 @@ final class _UserUsageRow extends StatelessWidget {
     required this.user,
     required this.selected,
     required this.copy,
+    required this.metric,
+    required this.period,
     required this.onPressed,
   });
 
@@ -614,142 +1243,222 @@ final class _UserUsageRow extends StatelessWidget {
   final RuntimeUserUsage user;
   final bool selected;
   final AppCopy copy;
+  final _ActivityMetric metric;
+  final RuntimeUsagePeriod period;
   final VoidCallback onPressed;
 
   @override
   Widget build(BuildContext context) {
     final latest = user.latestContext;
     final consumption = _userConsumptionLabel(user);
-    return Material(
-      key: Key('usage-user-${user.userId}'),
-      color: selected
-          ? context.viberColors.selection
-          : context.viberColors.panelRaised,
-      shape: RoundedRectangleBorder(
-        side: BorderSide(
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        final compact = constraints.maxWidth < 560;
+        final activity = _ActivityStrip(
+          key: Key('usage-user-activity-${user.userId}'),
+          period: period,
+          days: user.days,
+          metric: metric,
+          maximumCells: compact ? 14 : 28,
+          copy: copy,
+        );
+        return Material(
+          key: Key('usage-user-${user.userId}'),
           color: selected
-              ? context.viberColors.selectionStrong
-              : context.viberColors.dividerSoft,
-        ),
-      ),
-      clipBehavior: Clip.antiAlias,
-      child: InkWell(
-        onTap: onPressed,
-        child: Padding(
-          padding: const EdgeInsets.fromLTRB(10, 7, 8, 7),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Row(
-                children: [
-                  SizedBox(
-                    width: 28,
-                    child: Text(
-                      key: Key('usage-rank-${user.userId}'),
-                      '#$rank',
-                      style: monoStyle.copyWith(
-                        fontSize: ViberType.utility,
-                        color: rank <= 3
-                            ? context.viberColors.route
-                            : context.viberColors.textFaint,
-                        fontWeight: FontWeight.w600,
-                      ),
-                    ),
-                  ),
-                  Icon(
-                    user.activeRuns > 0
-                        ? Icons.radio_button_checked
-                        : Icons.radio_button_unchecked,
-                    size: 13,
-                    color: user.activeRuns > 0
-                        ? context.viberColors.verified
-                        : context.viberColors.textFaint,
-                  ),
-                  const SizedBox(width: ViberSpacing.sm),
-                  Expanded(
-                    child: Text(
-                      user.username,
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
-                      style: Theme.of(context).textTheme.titleSmall,
-                    ),
-                  ),
-                  Text(
-                    consumption,
-                    style: monoStyle.copyWith(
-                      fontSize: ViberType.supporting,
-                      fontWeight: FontWeight.w600,
-                    ),
-                  ),
-                  const SizedBox(width: ViberSpacing.sm),
-                  Text(
-                    user.activeRuns > 0
-                        ? copy.format('usage.ranking.running', {
-                            'count': '${user.activeRuns}',
-                          })
-                        : copy(
-                            user.active
-                                ? 'usage.ranking.idle'
-                                : 'server.users.state.disabled',
-                          ),
-                    style: Theme.of(context).textTheme.labelSmall?.copyWith(
-                      color: user.activeRuns > 0
-                          ? context.viberColors.verified
-                          : context.viberColors.textFaint,
-                    ),
-                  ),
-                  const SizedBox(width: ViberSpacing.xs),
-                  Icon(
-                    Icons.chevron_right,
-                    size: 15,
-                    color: context.viberColors.textFaint,
-                  ),
-                ],
-              ),
-              const SizedBox(height: ViberSpacing.xs),
-              Row(
-                children: [
-                  const SizedBox(width: 41),
-                  Expanded(
-                    child: Text(
-                      latest == null
-                          ? copy('server.usage.no_traffic')
-                          : [
-                              latest.workspaceLabel ??
-                                  copy('server.usage.workspace.unknown'),
-                              copy.format('usage.ranking.result', {
-                                'turns': '${user.turns}',
-                                'succeeded': '${user.succeeded}',
-                              }),
-                            ].join(' · '),
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
-                      style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                        color: context.viberColors.textMuted,
-                      ),
-                    ),
-                  ),
-                  const SizedBox(width: ViberSpacing.md),
-                  Text(
-                    copy.format('usage.user.tokens.short', {
-                      'input': _tokenLabel(user.tokens.inputUncached),
-                      'output': _tokenLabel(user.tokens.output),
-                    }),
-                    style: monoStyle.copyWith(
-                      fontSize: ViberType.micro,
-                      color: context.viberColors.textMuted,
-                    ),
-                  ),
-                ],
-              ),
-              const SizedBox(height: ViberSpacing.xs),
-              _OutcomeStripe(
-                succeeded: user.succeeded,
-                failed: user.failed,
-                canceled: user.canceled,
-              ),
-            ],
+              ? context.viberColors.selection
+              : context.viberColors.panelRaised,
+          shape: RoundedRectangleBorder(
+            side: BorderSide(
+              color: selected
+                  ? context.viberColors.selectionStrong
+                  : context.viberColors.dividerSoft,
+            ),
           ),
+          clipBehavior: Clip.antiAlias,
+          child: InkWell(
+            onTap: onPressed,
+            child: Padding(
+              padding: const EdgeInsets.fromLTRB(10, 7, 8, 6),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Row(
+                    children: [
+                      SizedBox(
+                        width: 28,
+                        child: Text(
+                          key: Key('usage-rank-${user.userId}'),
+                          '#$rank',
+                          style: monoStyle.copyWith(
+                            fontSize: ViberType.utility,
+                            color: rank <= 3
+                                ? context.viberColors.route
+                                : context.viberColors.textFaint,
+                            fontWeight: FontWeight.w600,
+                          ),
+                        ),
+                      ),
+                      Icon(
+                        user.activeRuns > 0
+                            ? Icons.radio_button_checked
+                            : Icons.radio_button_unchecked,
+                        size: 13,
+                        color: user.activeRuns > 0
+                            ? context.viberColors.verified
+                            : context.viberColors.textFaint,
+                      ),
+                      const SizedBox(width: ViberSpacing.sm),
+                      Expanded(
+                        child: Text(
+                          user.username,
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: Theme.of(context).textTheme.titleSmall,
+                        ),
+                      ),
+                      if (!compact) ...[
+                        SizedBox(width: 126, child: activity),
+                        const SizedBox(width: ViberSpacing.md),
+                      ],
+                      Text(
+                        consumption,
+                        style: monoStyle.copyWith(
+                          fontSize: ViberType.supporting,
+                          fontWeight: FontWeight.w600,
+                        ),
+                      ),
+                      if (!compact) ...[
+                        const SizedBox(width: ViberSpacing.sm),
+                        Text(
+                          user.activeRuns > 0
+                              ? copy.format('usage.ranking.running', {
+                                  'count': '${user.activeRuns}',
+                                })
+                              : copy(
+                                  user.active
+                                      ? 'usage.ranking.idle'
+                                      : 'server.users.state.disabled',
+                                ),
+                          style: Theme.of(context).textTheme.labelSmall
+                              ?.copyWith(
+                                color: user.activeRuns > 0
+                                    ? context.viberColors.verified
+                                    : context.viberColors.textFaint,
+                              ),
+                        ),
+                      ],
+                      const SizedBox(width: ViberSpacing.xs),
+                      Icon(
+                        Icons.chevron_right,
+                        size: 15,
+                        color: context.viberColors.textFaint,
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: ViberSpacing.xs),
+                  Row(
+                    children: [
+                      const SizedBox(width: 41),
+                      Expanded(
+                        child: Text(
+                          latest == null
+                              ? copy('server.usage.no_traffic')
+                              : [
+                                  latest.workspaceLabel ??
+                                      copy('server.usage.workspace.unknown'),
+                                  copy.format('usage.ranking.result', {
+                                    'turns': '${user.turns}',
+                                    'succeeded': '${user.succeeded}',
+                                  }),
+                                ].join(' · '),
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: Theme.of(context).textTheme.bodySmall
+                              ?.copyWith(color: context.viberColors.textMuted),
+                        ),
+                      ),
+                      const SizedBox(width: ViberSpacing.sm),
+                      if (compact)
+                        SizedBox(width: 82, child: activity)
+                      else
+                        Text(
+                          copy.format('usage.user.tokens.short', {
+                            'input': _tokenLabel(user.tokens.inputUncached),
+                            'output': _tokenLabel(user.tokens.output),
+                          }),
+                          style: monoStyle.copyWith(
+                            fontSize: ViberType.micro,
+                            color: context.viberColors.textMuted,
+                          ),
+                        ),
+                    ],
+                  ),
+                  const SizedBox(height: ViberSpacing.xs),
+                  _OutcomeStripe(
+                    succeeded: user.succeeded,
+                    failed: user.failed,
+                    canceled: user.canceled,
+                  ),
+                ],
+              ),
+            ),
+          ),
+        );
+      },
+    );
+  }
+}
+
+final class _ActivityStrip extends StatelessWidget {
+  const _ActivityStrip({
+    required this.period,
+    required this.days,
+    required this.metric,
+    required this.maximumCells,
+    required this.copy,
+    super.key,
+  });
+
+  final RuntimeUsagePeriod period;
+  final List<RuntimeDayUsage> days;
+  final _ActivityMetric metric;
+  final int maximumCells;
+  final AppCopy copy;
+
+  @override
+  Widget build(BuildContext context) {
+    final allDates = _periodDates(period);
+    final dates = allDates.length <= maximumCells
+        ? allDates
+        : allDates.sublist(allDates.length - maximumCells);
+    final byDate = {for (final day in days) day.date: day};
+    final maximum = math.max(
+      1,
+      days.fold<int>(
+        0,
+        (value, day) => math.max(value, _dayValue(day, metric)),
+      ),
+    );
+    return Semantics(
+      label: copy('usage.activity.user_strip'),
+      child: SizedBox(
+        height: 12,
+        child: Row(
+          children: [
+            for (final (index, date) in dates.indexed) ...[
+              Expanded(
+                child: _HeatCell(
+                  date: _civilDate(date),
+                  day: byDate[_civilDate(date)],
+                  metric: metric,
+                  maximum: maximum,
+                  copy: copy,
+                  size: 12,
+                ),
+              ),
+              if (index != dates.length - 1) const SizedBox(width: 2),
+            ],
+          ],
         ),
       ),
     );
@@ -813,9 +1522,17 @@ final class _OutcomeStripe extends StatelessWidget {
 enum _UsageDimension { workspaces, models, sessions }
 
 final class _UserEvidence extends StatefulWidget {
-  const _UserEvidence({required this.user, required this.copy, super.key});
+  const _UserEvidence({
+    required this.user,
+    required this.period,
+    required this.metric,
+    required this.copy,
+    super.key,
+  });
 
   final RuntimeUserUsage user;
+  final RuntimeUsagePeriod period;
+  final _ActivityMetric metric;
   final AppCopy copy;
 
   @override
@@ -882,6 +1599,29 @@ final class _UserEvidenceState extends State<_UserEvidence> {
                   style: Theme.of(context).textTheme.labelSmall?.copyWith(
                     color: context.viberColors.textMuted,
                   ),
+                ),
+              ],
+            ),
+          ),
+          Divider(height: 1, color: context.viberColors.dividerSoft),
+          Padding(
+            key: Key('usage-user-heatmap-${user.userId}'),
+            padding: const EdgeInsets.fromLTRB(12, 10, 12, 9),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                _SectionHeading(
+                  icon: Icons.calendar_view_week_outlined,
+                  title: copy('usage.activity.user.title'),
+                  detail: copy('usage.activity.user.detail'),
+                ),
+                const SizedBox(height: ViberSpacing.md),
+                _CalendarHeatmap(
+                  period: widget.period,
+                  days: user.days,
+                  metric: widget.metric,
+                  copy: copy,
+                  keyPrefix: 'usage-user-${user.userId}-day',
                 ),
               ],
             ),
@@ -1595,6 +2335,83 @@ final class _EmptyUsage extends StatelessWidget {
   );
 }
 
+String _periodLabel(RuntimeUsagePeriod period) {
+  final until = _parseCivilDate(period.until).subtract(const Duration(days: 1));
+  return '${period.from} – ${_civilDate(until)} · ${period.timeZone}';
+}
+
+List<DateTime> _periodDates(RuntimeUsagePeriod period) {
+  final from = _parseCivilDate(period.from);
+  final until = _parseCivilDate(period.until);
+  final result = <DateTime>[];
+  for (
+    var value = from;
+    value.isBefore(until);
+    value = value.add(const Duration(days: 1))
+  ) {
+    result.add(value);
+  }
+  return result;
+}
+
+DateTime _parseCivilDate(String value) => DateTime.utc(
+  int.parse(value.substring(0, 4)),
+  int.parse(value.substring(5, 7)),
+  int.parse(value.substring(8, 10)),
+);
+
+String _civilDate(DateTime value) => [
+  value.year.toString().padLeft(4, '0'),
+  value.month.toString().padLeft(2, '0'),
+  value.day.toString().padLeft(2, '0'),
+].join('-');
+
+int _dayValue(RuntimeDayUsage day, _ActivityMetric metric) => switch (metric) {
+  _ActivityMetric.turns => day.turns,
+  _ActivityMetric.tokens =>
+    day.tokens.inputUncached.tokens +
+        day.tokens.cacheWrite.tokens +
+        day.tokens.cacheRead.tokens +
+        day.tokens.output.tokens +
+        day.tokens.reasoning.tokens,
+};
+
+bool _dayMetricComplete(RuntimeDayUsage day, _ActivityMetric metric) {
+  if (metric == _ActivityMetric.turns) return true;
+  final values = [
+    day.tokens.inputUncached,
+    day.tokens.cacheWrite,
+    day.tokens.cacheRead,
+    day.tokens.output,
+    day.tokens.reasoning,
+  ];
+  return values.every((value) => value.complete);
+}
+
+String _dayEvidenceLabel({
+  required RuntimeDayUsage? day,
+  required String date,
+  required _ActivityMetric metric,
+  required AppCopy copy,
+}) {
+  if (day == null) {
+    return copy.format('usage.activity.cell.zero', {'date': date});
+  }
+  return copy.format('usage.activity.cell.value', {
+    'date': date,
+    'value': _integer(_dayValue(day, metric)),
+    'metric': copy(
+      metric == _ActivityMetric.turns
+          ? 'usage.activity.metric.turns'
+          : 'usage.activity.metric.tokens',
+    ),
+    'failed': '${day.failed}',
+    'evidence': _dayMetricComplete(day, metric)
+        ? copy('usage.activity.evidence.complete')
+        : copy('usage.activity.evidence.partial'),
+  });
+}
+
 final class _ObservedTotal {
   const _ObservedTotal({
     required this.tokens,
@@ -1612,15 +2429,15 @@ final class _ObservedTotal {
   }
 }
 
-_ObservedTotal _sumTokens(
-  List<RuntimeUserUsage> users,
+_ObservedTotal _sumDayTokens(
+  List<RuntimeDayUsage> days,
   RuntimeTokenAggregate Function(RuntimeTokenUsage) select,
 ) {
   var tokens = 0;
   var known = 0;
   var unknown = 0;
-  for (final user in users) {
-    final value = select(user.tokens);
+  for (final day in days) {
+    final value = select(day.tokens);
     tokens += value.tokens;
     known += value.knownTurns;
     unknown += value.unknownTurns;

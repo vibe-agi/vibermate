@@ -249,7 +249,17 @@ func createManagedAccountWithDriver(
 	if err != nil {
 		t.Fatal(err)
 	}
-	secret, err := secretstore.NewValue([]byte(managedSecret))
+	material, err := providerauth.NewMaterial(managedSecret, nil, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer material.Destroy()
+	encoded, err := material.MarshalBinary()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer clear(encoded)
+	secret, err := secretstore.NewValue(encoded)
 	if err != nil {
 		t.Fatal(err)
 	}

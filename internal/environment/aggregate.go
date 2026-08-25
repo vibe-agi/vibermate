@@ -30,6 +30,7 @@ func ParseCandidateDigest(value string) (CandidateDigest, error) {
 
 func (environment Environment) Clone() Environment {
 	cloned := environment
+	cloned.LaunchEnvironment = environment.LaunchEnvironment.Clone()
 	if environment.PolicySet != nil {
 		policy := *environment.PolicySet
 		cloned.PolicySet = &policy
@@ -173,6 +174,7 @@ func normalizeRoot(input Environment, allowSystem bool) (Environment, error) {
 	if err := validateRoot(value, allowSystem); err != nil {
 		return Environment{}, err
 	}
+	value.LaunchEnvironment, _ = normalizeLaunchEnvironment(value.LaunchEnvironment)
 	// Observe is the canonical zero/default. Explicit Observe and an omitted
 	// policy are one authority and therefore one digest.
 	if value.EffectivePolicySet() == DefaultPolicySet() {
@@ -235,6 +237,24 @@ func normalizeRoot(input Environment, allowSystem bool) (Environment, error) {
 			protocols[plan.ClientProtocol] = struct{}{}
 			if err := validateNamedRevision("ClientAdapterPolicy", plan.ClientAdapterPolicy.ID, plan.ClientAdapterPolicy.Revision, true); err != nil {
 				return Environment{}, err
+			}
+			egressPolicy, err := plan.EgressPolicy.Normalize()
+			if err != nil {
+				return Environment{}, fmt.Errorf(
+					"%w: protocol plan %q: %v",
+					ErrInvalidEnvironment,
+					plan.ID,
+					err,
+				)
+			}
+			plan.EgressPolicy = egressPolicy
+			if err := plan.TransformPolicy.Validate(); err != nil {
+				return Environment{}, fmt.Errorf(
+					"%w: protocol plan %q message transform: %v",
+					ErrInvalidEnvironment,
+					plan.ID,
+					err,
+				)
 			}
 			sort.Slice(plan.PluginBindings, func(left, right int) bool { return plan.PluginBindings[left].ID < plan.PluginBindings[right].ID })
 			if err := validatePluginBindings(plan.PluginBindings); err != nil {
@@ -378,6 +398,9 @@ func validateRoot(value Environment, allowSystem bool) error {
 		return err
 	}
 	if err := value.EffectivePolicySet().Validate(); err != nil {
+		return err
+	}
+	if err := value.LaunchEnvironment.Validate(); err != nil {
 		return err
 	}
 	return nil

@@ -18,6 +18,7 @@ import (
 	"github.com/vibe-agi/vibermate/internal/anthropicchat"
 	"github.com/vibe-agi/vibermate/internal/captureadmission"
 	"github.com/vibe-agi/vibermate/internal/environment"
+	"github.com/vibe-agi/vibermate/internal/messagetransform"
 	"github.com/vibe-agi/vibermate/internal/offlinehold"
 	"github.com/vibe-agi/vibermate/internal/openairesponses"
 	"github.com/vibe-agi/vibermate/internal/operationcatalog"
@@ -101,6 +102,132 @@ func TestManagedRequestUsesOnlyFrozenEnvironmentRouteAndAccount(t *testing.T) {
 	if len(observations) != 1 || observations[0].EnvironmentID.String() != "environment.test" ||
 		observations[0].RouteID.String() != "route.primary" || observations[0].AccountID != "account.primary" {
 		t.Fatalf("attempt observations = %+v", observations)
+	}
+}
+
+func TestManagedCompleteExchangeTransformsWireMessagesWithOneTurnContext(t *testing.T) {
+	const mappedModel = "opaque:upstream-model"
+	plan := mustEnvironmentRequestPlan(t, testPlanOptions{
+		destination:    environment.DestinationKindUpstream,
+		providerOrigin: "https://provider.example/v1",
+		backend:        protocolspec.DialectOpenAIChat,
+		modelMode:      environment.ModelModeMap,
+		mappedModel:    mappedModel,
+		accounts:       []testAccount{{id: "account.primary", revision: 3, epoch: 7}},
+		preferred:      "account.primary",
+		transform: messagetransform.Policy{
+			RequestJavaScript: `
+				const payload = JSON.parse(request.body);
+				context.originalModel = payload.model;
+				request.headers["x-transform-request"] = "yes";
+				payload.transform_marker = "request";
+				request.body = JSON.stringify(payload);
+			`,
+			ResponseJavaScript: `
+				const payload = JSON.parse(response.body);
+				response.headers["x-transform-response"] = context.originalModel;
+				payload.choices[0].message.content = "transformed:" + context.originalModel;
+				response.body = JSON.stringify(payload);
+			`,
+		},
+	})
+	provider := &providerDouble{results: []providerResult{{
+		response: jsonResponse(http.StatusOK, completeProviderResponse(mappedModel)),
+	}}}
+	pipeline := newTestPipeline(
+		t,
+		newAccountAuthority(t, testAccount{id: "account.primary", revision: 3, epoch: 7}),
+		provider,
+		approvedDecisions(),
+		&attemptObserverDouble{},
+	)
+	defer shutdownPipeline(t, pipeline)
+	downstream := &downstreamRecorder{}
+	_, err := pipeline.Execute(
+		context.Background(),
+		mustClientRequest(t, "exchange-transform", plan, completeClientRequest()),
+		downstream,
+	)
+	if err != nil {
+		t.Fatalf("Execute() error = %v", err)
+	}
+	requests := provider.requestsSnapshot()
+	if len(requests) != 1 || requests[0].Headers().Get("X-Transform-Request") != "yes" {
+		t.Fatalf("provider request Headers = %#v", requests)
+	}
+	if !bytes.Contains(requests[0].Body(), []byte(`"transform_marker":"request"`)) {
+		t.Fatalf("provider request Body = %s", requests[0].Body())
+	}
+	if !bytes.Contains(downstream.bytesSnapshot(), []byte("transformed:"+mappedModel)) {
+		t.Fatalf("downstream Body = %s", downstream.bytesSnapshot())
+	}
+	envelopes := downstream.envelopesSnapshot()
+	if len(envelopes) != 1 || envelopes[0].Headers().Get("X-Transform-Response") != mappedModel {
+		t.Fatalf("downstream response Headers = %#v", envelopes)
+	}
+}
+
+func TestManagedMessageTransformFailsClosedBeforeItsCommitBoundary(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name      string
+		transform messagetransform.Policy
+		wantCalls int
+	}{
+		{
+			name: "request",
+			transform: messagetransform.Policy{
+				RequestJavaScript: `throw new Error("request rejected");`,
+			},
+			wantCalls: 0,
+		},
+		{
+			name: "response",
+			transform: messagetransform.Policy{
+				ResponseJavaScript: `throw new Error("response rejected");`,
+			},
+			wantCalls: 1,
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			plan := mustEnvironmentRequestPlan(t, testPlanOptions{
+				destination:    environment.DestinationKindUpstream,
+				providerOrigin: "https://provider.example/v1",
+				backend:        protocolspec.DialectOpenAIChat,
+				modelMode:      environment.ModelModeMap,
+				mappedModel:    "opaque:upstream-model",
+				accounts:       []testAccount{{id: "account.primary", revision: 3, epoch: 7}},
+				preferred:      "account.primary",
+				transform:      test.transform,
+			})
+			provider := &providerDouble{results: []providerResult{{
+				response: jsonResponse(http.StatusOK, completeProviderResponse("opaque:upstream-model")),
+			}}}
+			pipeline := newTestPipeline(
+				t,
+				newAccountAuthority(t, testAccount{id: "account.primary", revision: 3, epoch: 7}),
+				provider,
+				approvedDecisions(),
+				&attemptObserverDouble{},
+			)
+			defer shutdownPipeline(t, pipeline)
+			downstream := &downstreamRecorder{}
+			_, err := pipeline.Execute(
+				context.Background(),
+				mustClientRequest(t, "exchange-transform-failure-"+test.name, plan, completeClientRequest()),
+				downstream,
+			)
+			if ReasonOf(err) != ReasonMessageTransformFailed {
+				t.Fatalf("Execute() error = %v, want %s", err, ReasonMessageTransformFailed)
+			}
+			if provider.callCount() != test.wantCalls {
+				t.Fatalf("provider calls = %d, want %d", provider.callCount(), test.wantCalls)
+			}
+			if len(downstream.envelopesSnapshot()) != 0 || len(downstream.bytesSnapshot()) != 0 {
+				t.Fatalf("failed transform committed downstream: envelopes=%d body=%q", len(downstream.envelopesSnapshot()), downstream.bytesSnapshot())
+			}
+		})
 	}
 }
 
@@ -502,6 +629,84 @@ func TestOriginalDestinationPreservesClientEnvelopeAndResponse(t *testing.T) {
 	}
 }
 
+func TestOriginalDestinationTransformsCompleteMessagesWithoutExposingCredentials(t *testing.T) {
+	plan := mustEnvironmentRequestPlan(t, testPlanOptions{
+		destination:    environment.DestinationKindOriginal,
+		providerOrigin: "https://api.anthropic.com",
+		backend:        protocolspec.DialectAnthropicMessages,
+		modelMode:      environment.ModelModePassthrough,
+		transform: messagetransform.Policy{
+			RequestJavaScript: `
+				if (request.headers.authorization !== undefined || request.headers["x-api-key"] !== undefined) {
+					throw new Error("credential exposed");
+				}
+				const payload = JSON.parse(request.body);
+				context.marker = payload.model;
+				payload.metadata = {transformed: true};
+				request.body = JSON.stringify(payload);
+			`,
+			ResponseJavaScript: `
+				const payload = JSON.parse(response.body);
+				payload.content[0].text = "transformed:" + context.marker;
+				response.headers["x-transform-response"] = "yes";
+				response.body = JSON.stringify(payload);
+			`,
+		},
+	})
+	responseBody := []byte(`{
+		"id":"msg_original","type":"message","role":"assistant","model":"claude-client-alias",
+		"content":[{"type":"text","text":"provider-compatible"}],"stop_reason":"end_turn",
+		"stop_sequence":null,"usage":{"input_tokens":4,"output_tokens":2}
+	}`)
+	provider := &providerDouble{results: []providerResult{{response: &http.Response{
+		StatusCode: http.StatusCreated,
+		Header: http.Header{
+			"Content-Type": {"application/json"},
+			"X-Upstream":   {"kept"},
+			"Set-Cookie":   {"provider-secret=hidden"},
+		},
+		Body: io.NopCloser(bytes.NewReader(responseBody)),
+	}}}}
+	pipeline := newTestPipeline(t, nil, provider, approvedDecisions(), &attemptObserverDouble{})
+	defer shutdownPipeline(t, pipeline)
+	downstream := &downstreamRecorder{}
+	_, err := pipeline.Execute(
+		context.Background(),
+		mustClientRequestWithOptions(
+			t,
+			"exchange-original-transform",
+			plan,
+			completeClientRequest(),
+			WithOriginalHeaders(http.Header{
+				"Authorization": {"Bearer client-owned"},
+				"X-Api-Key":     {"client-owned-key"},
+			}),
+		),
+		downstream,
+	)
+	if err != nil {
+		t.Fatalf("Execute() error = %v", err)
+	}
+	requests := provider.requestsSnapshot()
+	if len(requests) != 1 ||
+		requests[0].Headers().Get("Authorization") != "Bearer client-owned" ||
+		requests[0].Headers().Get("X-Api-Key") != "client-owned-key" ||
+		!bytes.Contains(requests[0].Body(), []byte(`"transformed":true`)) {
+		t.Fatalf("transformed original request = %#v", requests)
+	}
+	if !bytes.Contains(downstream.bytesSnapshot(), []byte("transformed:claude-client-alias")) {
+		t.Fatalf("transformed original response = %s", downstream.bytesSnapshot())
+	}
+	envelopes := downstream.envelopesSnapshot()
+	if len(envelopes) != 1 ||
+		envelopes[0].StatusCode() != http.StatusCreated ||
+		envelopes[0].Headers().Get("X-Upstream") != "kept" ||
+		envelopes[0].Headers().Get("X-Transform-Response") != "yes" ||
+		envelopes[0].Headers().Get("Set-Cookie") != "provider-secret=hidden" {
+		t.Fatalf("transformed original response envelope = %#v", envelopes)
+	}
+}
+
 func TestOriginalDestinationPreservesGzipStreamAndRecordsDecodedResponse(t *testing.T) {
 	plan := mustEnvironmentRequestPlan(t, testPlanOptions{
 		destination:    environment.DestinationKindOriginal,
@@ -578,6 +783,127 @@ func TestOriginalDestinationPreservesGzipStreamAndRecordsDecodedResponse(t *test
 	}
 }
 
+func TestOriginalDestinationTransformsSSEEventsAndPreservesStreaming(t *testing.T) {
+	plan := mustEnvironmentRequestPlan(t, testPlanOptions{
+		destination:    environment.DestinationKindOriginal,
+		providerOrigin: "https://api.anthropic.com",
+		backend:        protocolspec.DialectAnthropicMessages,
+		modelMode:      environment.ModelModePassthrough,
+		transform: messagetransform.Policy{ResponseJavaScript: `
+			response.headers["x-stream-transform"] = "yes";
+			const payload = JSON.parse(response.body);
+			if (payload.type === "content_block_delta") {
+				payload.delta.text = "rewritten";
+			}
+			response.body = JSON.stringify(payload);
+		`},
+	})
+	provider := &providerDouble{results: []providerResult{{response: streamResponse(
+		http.StatusOK,
+		&boundedChunkReader{reader: anthropicTextProviderStream(), maximum: 37},
+	)}}}
+	content := &contentObserverDouble{}
+	pipeline := newTestPipelineWithContentObserver(
+		t,
+		nil,
+		provider,
+		approvedDecisions(),
+		&attemptObserverDouble{},
+		content,
+	)
+	defer shutdownPipeline(t, pipeline)
+	downstream := &downstreamRecorder{}
+	result, err := pipeline.Execute(
+		context.Background(),
+		mustClientRequestWithOptions(
+			t,
+			"exchange-original-stream-transform",
+			plan,
+			streamingClientRequest(),
+			WithOriginalHeaders(http.Header{"X-Api-Key": {"client-owned"}}),
+		),
+		downstream,
+	)
+	if err != nil {
+		t.Fatalf("Execute() error = %v", err)
+	}
+	if !bytes.Contains(downstream.bytesSnapshot(), []byte("rewritten")) ||
+		bytes.Contains(downstream.bytesSnapshot(), []byte(`"text":"hello"`)) ||
+		result.Ledger.DownstreamSemanticWrites < 2 {
+		t.Fatalf("transformed original stream result=%+v wire=%s", result, downstream.bytesSnapshot())
+	}
+	envelopes := downstream.envelopesSnapshot()
+	if len(envelopes) != 1 || envelopes[0].Headers().Get("X-Stream-Transform") != "yes" {
+		t.Fatalf("transformed original stream envelope = %#v", envelopes)
+	}
+	observation, ok := content.latest()
+	if !ok || observation.Response == nil ||
+		len(observation.Response.Blocks) != 1 ||
+		observation.Response.Blocks[0].Text != "rewritten" {
+		t.Fatalf("transformed original stream observation = %+v", observation)
+	}
+}
+
+func TestOriginalDestinationTransformsCompressedSSEAsLogicalMessages(t *testing.T) {
+	plan := mustEnvironmentRequestPlan(t, testPlanOptions{
+		destination:    environment.DestinationKindOriginal,
+		providerOrigin: "https://api.anthropic.com",
+		backend:        protocolspec.DialectAnthropicMessages,
+		modelMode:      environment.ModelModePassthrough,
+		transform: messagetransform.Policy{ResponseJavaScript: `
+			response.headers["x-stream-transform"] = "gzip-decoded";
+			const payload = JSON.parse(response.body);
+			if (payload.type === "content_block_delta") {
+				payload.delta.text = "rewritten compressed";
+			}
+			response.body = JSON.stringify(payload);
+		`},
+	})
+	wire, err := io.ReadAll(anthropicTextProviderStream())
+	if err != nil {
+		t.Fatalf("read provider stream: %v", err)
+	}
+	compressed := gzipFixture(t, wire)
+	provider := &providerDouble{results: []providerResult{{response: &http.Response{
+		StatusCode: http.StatusOK,
+		Header: http.Header{
+			"Content-Type":     {"text/event-stream"},
+			"Content-Encoding": {"gzip"},
+		},
+		Body: io.NopCloser(&boundedChunkReader{
+			reader: bytes.NewReader(compressed), maximum: 19,
+		}),
+	}}}}
+	pipeline := newTestPipeline(
+		t, nil, provider, approvedDecisions(), &attemptObserverDouble{},
+	)
+	defer shutdownPipeline(t, pipeline)
+	downstream := &downstreamRecorder{}
+	result, err := pipeline.Execute(
+		context.Background(),
+		mustClientRequestWithOptions(
+			t,
+			"exchange-original-compressed-stream-transform",
+			plan,
+			streamingClientRequest(),
+			WithOriginalHeaders(http.Header{"X-Api-Key": {"client-owned"}}),
+		),
+		downstream,
+	)
+	if err != nil || result.Outcome != AttemptSucceeded {
+		t.Fatalf("Execute() = %+v, %v", result, err)
+	}
+	if !bytes.Contains(downstream.bytesSnapshot(), []byte("rewritten compressed")) {
+		t.Fatalf("transformed stream = %s", downstream.bytesSnapshot())
+	}
+	envelopes := downstream.envelopesSnapshot()
+	if len(envelopes) != 1 ||
+		envelopes[0].Headers().Get("Content-Encoding") != "" ||
+		envelopes[0].Headers().Get("X-Stream-Transform") != "gzip-decoded" {
+		t.Fatalf("transformed stream envelope = %#v", envelopes)
+	}
+}
+
 func TestOriginalResponsesAcceptsCanceledReadAfterProvenTerminal(t *testing.T) {
 	plan := mustEnvironmentRequestPlan(t, testPlanOptions{
 		clientProtocol: environment.ClientProtocolOpenAIResponses,
@@ -586,26 +912,7 @@ func TestOriginalResponsesAcceptsCanceledReadAfterProvenTerminal(t *testing.T) {
 		backend:        protocolspec.DialectOpenAIResponses,
 		modelMode:      environment.ModelModePassthrough,
 	})
-	item := json.RawMessage(`{
-		"id":"msg_original_responses",
-		"type":"message",
-		"status":"completed",
-		"role":"assistant",
-		"content":[{"type":"output_text","text":"provider-compatible"}]
-	}`)
-	wire := appendSSEFixture(t, "response.output_item.done", map[string]any{
-		"type": "response.output_item.done", "sequence_number": 1,
-		"output_index": 0, "item": item,
-	})
-	wire = append(wire, appendSSEFixture(t, "response.completed", map[string]any{
-		"type": "response.completed", "sequence_number": 2,
-		"response": json.RawMessage(`{
-			"id":"resp_original","created_at":1,"status":"completed",
-			"model":"codex-client-alias","output":[],
-			"usage":{"input_tokens":4,"input_tokens_details":{"cached_tokens":0},
-			"output_tokens":2,"output_tokens_details":{"reasoning_tokens":0}}
-		}`),
-	})...)
+	wire := originalResponsesTerminalWire(t)
 	provider := &providerDouble{results: []providerResult{{response: &http.Response{
 		StatusCode: http.StatusOK,
 		Header:     http.Header{},
@@ -631,6 +938,52 @@ func TestOriginalResponsesAcceptsCanceledReadAfterProvenTerminal(t *testing.T) {
 	}
 	if !bytes.Equal(downstream.bytesSnapshot(), wire) {
 		t.Fatal("original Responses stream changed before downstream delivery")
+	}
+	observation, ok := content.latest()
+	if !ok || observation.Response == nil || len(observation.Response.Blocks) != 1 ||
+		observation.Response.Blocks[0].Text != "provider-compatible" {
+		t.Fatalf("Responses content observation = %+v", observation)
+	}
+}
+
+func TestTransformedOriginalResponsesAcceptsCanceledReadAfterProvenTerminal(t *testing.T) {
+	plan := mustEnvironmentRequestPlan(t, testPlanOptions{
+		clientProtocol: environment.ClientProtocolOpenAIResponses,
+		destination:    environment.DestinationKindOriginal,
+		providerOrigin: "https://api.openai.com",
+		backend:        protocolspec.DialectOpenAIResponses,
+		modelMode:      environment.ModelModePassthrough,
+		transform: messagetransform.Policy{ResponseJavaScript: `
+			response.headers["x-transform"] = "applied";
+		`},
+	})
+	wire := originalResponsesTerminalWire(t)
+	provider := &providerDouble{results: []providerResult{{response: &http.Response{
+		StatusCode: http.StatusOK,
+		Header:     http.Header{},
+		Body:       io.NopCloser(&terminalCanceledReader{body: wire}),
+	}}}}
+	content := &contentObserverDouble{}
+	pipeline := newTestPipelineWithContentObserver(
+		t, nil, provider, approvedDecisions(), &attemptObserverDouble{}, content,
+	)
+	defer shutdownPipeline(t, pipeline)
+	downstream := &downstreamRecorder{}
+	request := mustClientRequestWithOptions(
+		t,
+		"exchange-transformed-original-responses-canceled-eof",
+		plan,
+		streamingResponsesClientRequest(),
+		WithOriginalHeaders(http.Header{"Authorization": []string{"Bearer client-owned"}}),
+	)
+
+	result, err := pipeline.Execute(context.Background(), request, downstream)
+	if err != nil || result.Outcome != AttemptSucceeded || !result.Ledger.DownstreamTerminal {
+		t.Fatalf("Execute() = %+v, %v", result, err)
+	}
+	if len(downstream.envelopesSnapshot()) != 1 ||
+		downstream.envelopesSnapshot()[0].Headers().Get("X-Transform") != "applied" {
+		t.Fatalf("transformed response envelope = %#v", downstream.envelopesSnapshot())
 	}
 	observation, ok := content.latest()
 	if !ok || observation.Response == nil || len(observation.Response.Blocks) != 1 ||
@@ -713,6 +1066,229 @@ func TestStreamingStillPublishesIncrementalClientEvents(t *testing.T) {
 		!observation.Response.Usage.Output.Known ||
 		observation.Response.Usage.Output.Tokens != 1 {
 		t.Fatalf("stream content observation = %+v", observation)
+	}
+}
+
+func TestStreamingResponseTransformRewritesEachSSEEventWithoutBufferingTheTurn(t *testing.T) {
+	plan := mustEnvironmentRequestPlan(t, testPlanOptions{
+		destination:    environment.DestinationKindUpstream,
+		providerOrigin: "https://provider.example/v1",
+		backend:        protocolspec.DialectOpenAIChat,
+		modelMode:      environment.ModelModeMap,
+		mappedModel:    "gpt-provider",
+		accounts:       []testAccount{{id: "account.primary", revision: 1, epoch: 1}},
+		preferred:      "account.primary",
+		transform: messagetransform.Policy{ResponseJavaScript: `
+			if (!response.streaming || response.eventName !== "message") {
+				throw new Error("stream metadata missing");
+			}
+			response.headers["x-stream-transform"] = "yes";
+			const payload = JSON.parse(response.body);
+			if (payload.choices?.[0]?.delta?.content === "Hello") {
+				payload.choices[0].delta.content = "Rewritten";
+			}
+			response.body = JSON.stringify(payload);
+		`},
+	})
+	provider := &providerDouble{results: []providerResult{{response: streamResponse(
+		http.StatusOK,
+		normalProviderStream(t, "gpt-provider"),
+	)}}}
+	content := &contentObserverDouble{}
+	pipeline := newTestPipelineWithContentObserver(
+		t,
+		newAccountAuthority(t, testAccount{id: "account.primary", revision: 1, epoch: 1}),
+		provider,
+		approvedDecisions(),
+		&attemptObserverDouble{},
+		content,
+	)
+	defer shutdownPipeline(t, pipeline)
+	downstream := &downstreamRecorder{}
+	result, err := pipeline.Execute(
+		context.Background(),
+		mustClientRequest(t, "exchange-stream-transform", plan, streamingClientRequest()),
+		downstream,
+	)
+	if err != nil {
+		t.Fatalf("Execute() error = %v", err)
+	}
+	wire := downstream.bytesSnapshot()
+	if !bytes.Contains(wire, []byte("Rewritten")) || bytes.Contains(wire, []byte(`"Hello"`)) ||
+		result.Ledger.DownstreamSemanticWrites < 2 {
+		t.Fatalf("transformed stream result=%+v wire=%s", result, wire)
+	}
+	envelopes := downstream.envelopesSnapshot()
+	if len(envelopes) != 1 || envelopes[0].Headers().Get("X-Stream-Transform") != "yes" {
+		t.Fatalf("transformed stream envelope = %#v", envelopes)
+	}
+	observation, ok := content.latest()
+	if !ok || observation.Response == nil ||
+		len(observation.Response.Blocks) != 1 ||
+		observation.Response.Blocks[0].Text != "Rewritten" {
+		t.Fatalf("transformed stream content observation = %+v", observation)
+	}
+}
+
+func TestManagedStreamingResponseTransformDecodesGzipBeforeEditing(t *testing.T) {
+	plan := mustEnvironmentRequestPlan(t, testPlanOptions{
+		destination:    environment.DestinationKindUpstream,
+		providerOrigin: "https://provider.example/v1",
+		backend:        protocolspec.DialectOpenAIChat,
+		modelMode:      environment.ModelModeMap,
+		mappedModel:    "gpt-provider",
+		accounts:       []testAccount{{id: "account.primary", revision: 1, epoch: 1}},
+		preferred:      "account.primary",
+		transform: messagetransform.Policy{ResponseJavaScript: `
+			response.headers["x-stream-transform"] = "gzip-decoded";
+			const payload = JSON.parse(response.body);
+			if (payload.choices?.[0]?.delta?.content === "Hello") {
+				payload.choices[0].delta.content = "Rewritten compressed";
+			}
+			response.body = JSON.stringify(payload);
+		`},
+	})
+	wire, err := io.ReadAll(normalProviderStream(t, "gpt-provider"))
+	if err != nil {
+		t.Fatalf("read provider stream: %v", err)
+	}
+	compressed := gzipFixture(t, wire)
+	provider := &providerDouble{results: []providerResult{{response: &http.Response{
+		StatusCode: http.StatusOK,
+		Header: http.Header{
+			"Content-Type":     {"text/event-stream"},
+			"Content-Encoding": {"gzip"},
+		},
+		Body: io.NopCloser(&boundedChunkReader{
+			reader: bytes.NewReader(compressed), maximum: 17,
+		}),
+	}}}}
+	pipeline := newTestPipeline(
+		t,
+		newAccountAuthority(t, testAccount{id: "account.primary", revision: 1, epoch: 1}),
+		provider,
+		approvedDecisions(),
+		&attemptObserverDouble{},
+	)
+	defer shutdownPipeline(t, pipeline)
+	downstream := &downstreamRecorder{}
+	result, err := pipeline.Execute(
+		context.Background(),
+		mustClientRequest(t, "exchange-compressed-stream-transform", plan, streamingClientRequest()),
+		downstream,
+	)
+	if err != nil || result.Outcome != AttemptSucceeded {
+		t.Fatalf("Execute() = %+v, %v", result, err)
+	}
+	if !bytes.Contains(downstream.bytesSnapshot(), []byte("Rewritten compressed")) {
+		t.Fatalf("transformed stream = %s", downstream.bytesSnapshot())
+	}
+	envelopes := downstream.envelopesSnapshot()
+	if len(envelopes) != 1 ||
+		envelopes[0].Headers().Get("Content-Encoding") != "" ||
+		envelopes[0].Headers().Get("X-Stream-Transform") != "gzip-decoded" {
+		t.Fatalf("transformed stream envelope = %#v", envelopes)
+	}
+}
+
+func TestStreamingResponseTransformFailureBeforeFirstEventCommitsNothing(t *testing.T) {
+	plan := mustEnvironmentRequestPlan(t, testPlanOptions{
+		destination:    environment.DestinationKindUpstream,
+		providerOrigin: "https://provider.example/v1",
+		backend:        protocolspec.DialectOpenAIChat,
+		modelMode:      environment.ModelModeMap,
+		mappedModel:    "gpt-provider",
+		accounts:       []testAccount{{id: "account.primary", revision: 1, epoch: 1}},
+		preferred:      "account.primary",
+		transform: messagetransform.Policy{
+			ResponseJavaScript: `throw new Error("must stay private");`,
+		},
+	})
+	provider := &providerDouble{results: []providerResult{{response: streamResponse(
+		http.StatusOK,
+		normalProviderStream(t, "gpt-provider"),
+	)}}}
+	pipeline := newTestPipeline(
+		t,
+		newAccountAuthority(t, testAccount{id: "account.primary", revision: 1, epoch: 1}),
+		provider,
+		approvedDecisions(),
+		&attemptObserverDouble{},
+	)
+	defer shutdownPipeline(t, pipeline)
+	downstream := &downstreamRecorder{}
+
+	_, err := pipeline.Execute(
+		context.Background(),
+		mustClientRequest(t, "exchange-stream-transform-before-commit", plan, streamingClientRequest()),
+		downstream,
+	)
+	if ReasonOf(err) != ReasonMessageTransformFailed {
+		t.Fatalf("Execute() error = %v, want %s", err, ReasonMessageTransformFailed)
+	}
+	if len(downstream.envelopesSnapshot()) != 0 || len(downstream.bytesSnapshot()) != 0 ||
+		len(downstream.abortsSnapshot()) != 0 {
+		t.Fatalf(
+			"pre-commit failure reached downstream: envelopes=%d body=%q aborts=%+v",
+			len(downstream.envelopesSnapshot()),
+			downstream.bytesSnapshot(),
+			downstream.abortsSnapshot(),
+		)
+	}
+}
+
+func TestStreamingResponseTransformFailureAfterFirstEventAbortsCommittedStream(t *testing.T) {
+	plan := mustEnvironmentRequestPlan(t, testPlanOptions{
+		destination:    environment.DestinationKindUpstream,
+		providerOrigin: "https://provider.example/v1",
+		backend:        protocolspec.DialectOpenAIChat,
+		modelMode:      environment.ModelModeMap,
+		mappedModel:    "gpt-provider",
+		accounts:       []testAccount{{id: "account.primary", revision: 1, epoch: 1}},
+		preferred:      "account.primary",
+		transform: messagetransform.Policy{ResponseJavaScript: `
+			context.events = (context.events ?? 0) + 1;
+			if (context.events === 2) throw new Error("must stay private");
+		`},
+	})
+	first := `{"id":"chatcmpl-stream","object":"chat.completion.chunk","created":1,"model":"gpt-provider","choices":[{"index":0,"delta":{"role":"assistant","content":"Hello"},"finish_reason":null}]}`
+	second := `{"id":"chatcmpl-stream","object":"chat.completion.chunk","created":1,"model":"gpt-provider","choices":[{"index":0,"delta":{},"finish_reason":"stop"}]}`
+	provider := &providerDouble{results: []providerResult{{response: streamResponse(
+		http.StatusOK,
+		&chunkSequenceReader{chunks: [][]byte{
+			joinProviderEvents(t, first),
+			joinProviderEvents(t, second),
+		}},
+	)}}}
+	pipeline := newTestPipeline(
+		t,
+		newAccountAuthority(t, testAccount{id: "account.primary", revision: 1, epoch: 1}),
+		provider,
+		approvedDecisions(),
+		&attemptObserverDouble{},
+	)
+	defer shutdownPipeline(t, pipeline)
+	downstream := &downstreamRecorder{}
+
+	_, err := pipeline.Execute(
+		context.Background(),
+		mustClientRequest(t, "exchange-stream-transform-after-commit", plan, streamingClientRequest()),
+		downstream,
+	)
+	if ReasonOf(err) != ReasonMessageTransformFailed {
+		t.Fatalf("Execute() error = %v, want %s", err, ReasonMessageTransformFailed)
+	}
+	if len(downstream.envelopesSnapshot()) != 1 ||
+		!bytes.Contains(downstream.bytesSnapshot(), []byte("Hello")) {
+		t.Fatalf(
+			"first transformed event was not committed: envelopes=%d body=%q",
+			len(downstream.envelopesSnapshot()),
+			downstream.bytesSnapshot(),
+		)
+	}
+	aborts := downstream.abortsSnapshot()
+	if len(aborts) != 1 || aborts[0].ReasonCode != ReasonMessageTransformFailed {
+		t.Fatalf("post-commit failure aborts = %+v", aborts)
 	}
 }
 
@@ -1324,6 +1900,7 @@ type testPlanOptions struct {
 	preferred          string
 	failover           environment.FailoverPolicy
 	recording          environment.ContentRecordingPolicy
+	transform          messagetransform.Policy
 }
 
 type testAccount struct {
@@ -1430,6 +2007,7 @@ func mustEnvironmentRequestPlan(t *testing.T, options testPlanOptions) environme
 				ClientProtocol:      clientProtocol,
 				ClientAdapterPolicy: environment.ClientAdapterPolicy{ID: "adapter.anthropic", Revision: 2},
 				Destination:         destination,
+				TransformPolicy:     options.transform,
 			}},
 		}},
 	}
@@ -1873,6 +2451,12 @@ func (downstream *downstreamRecorder) envelopesSnapshot() []ResponseEnvelope {
 	return slices.Clone(downstream.envelopes)
 }
 
+func (downstream *downstreamRecorder) abortsSnapshot() []FailureNotice {
+	downstream.mu.Lock()
+	defer downstream.mu.Unlock()
+	return slices.Clone(downstream.aborts)
+}
+
 type decisionDouble struct {
 	mu       sync.Mutex
 	decision ToolDecision
@@ -2030,6 +2614,36 @@ type terminalCanceledReader struct {
 	done bool
 }
 
+type boundedChunkReader struct {
+	reader  io.Reader
+	maximum int
+}
+
+type chunkSequenceReader struct {
+	chunks [][]byte
+}
+
+func (reader *chunkSequenceReader) Read(destination []byte) (int, error) {
+	if len(reader.chunks) == 0 {
+		return 0, io.EOF
+	}
+	chunk := reader.chunks[0]
+	count := copy(destination, chunk)
+	if count == len(chunk) {
+		reader.chunks = reader.chunks[1:]
+	} else {
+		reader.chunks[0] = chunk[count:]
+	}
+	return count, nil
+}
+
+func (reader *boundedChunkReader) Read(destination []byte) (int, error) {
+	if reader.maximum > 0 && len(destination) > reader.maximum {
+		destination = destination[:reader.maximum]
+	}
+	return reader.reader.Read(destination)
+}
+
 func (reader *terminalCanceledReader) Read(destination []byte) (int, error) {
 	if len(reader.body) > 0 {
 		count := copy(destination, reader.body)
@@ -2054,6 +2668,30 @@ func appendSSEFixture(t *testing.T, name string, payload any) []byte {
 		t.Fatal(err)
 	}
 	return encoded
+}
+
+func originalResponsesTerminalWire(t *testing.T) []byte {
+	t.Helper()
+	item := json.RawMessage(`{
+		"id":"msg_original_responses",
+		"type":"message",
+		"status":"completed",
+		"role":"assistant",
+		"content":[{"type":"output_text","text":"provider-compatible"}]
+	}`)
+	wire := appendSSEFixture(t, "response.output_item.done", map[string]any{
+		"type": "response.output_item.done", "sequence_number": 1,
+		"output_index": 0, "item": item,
+	})
+	return append(wire, appendSSEFixture(t, "response.completed", map[string]any{
+		"type": "response.completed", "sequence_number": 2,
+		"response": json.RawMessage(`{
+			"id":"resp_original","created_at":1,"status":"completed",
+			"model":"codex-client-alias","output":[],
+			"usage":{"input_tokens":4,"input_tokens_details":{"cached_tokens":0},
+			"output_tokens":2,"output_tokens_details":{"reasoning_tokens":0}}
+		}`),
+	})...)
 }
 
 func completeProviderResponse(model string) []byte {

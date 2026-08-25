@@ -7,22 +7,26 @@ import (
 	"net/http"
 	"net/netip"
 
+	"github.com/vibe-agi/vibermate/internal/egressnetwork"
 	"github.com/vibe-agi/vibermate/internal/originidentity"
 	"github.com/vibe-agi/vibermate/internal/transportprofile"
 )
 
 type cleartextTransport struct {
-	dialer   contextDialer
+	dialers  egressDialerBuilder
 	timeouts TransportTimeouts
 }
 
 func newProductionCleartextTransport(
 	timeouts TransportTimeouts,
 ) (*cleartextTransport, error) {
-	return newCleartextTransport(
-		&net.Dialer{Timeout: timeouts.Dial},
-		timeouts,
-	)
+	dialers, err := egressnetwork.NewBuilder(egressnetwork.BuilderOptions{
+		BaseDialer: &net.Dialer{Timeout: timeouts.Dial},
+	})
+	if err != nil {
+		return nil, err
+	}
+	return newCleartextTransportWithDialers(dialers, timeouts)
 }
 
 func newCleartextTransport(
@@ -35,8 +39,27 @@ func newCleartextTransport(
 	if err := timeouts.validate(); err != nil {
 		return nil, err
 	}
+	dialers, err := egressnetwork.NewBuilder(egressnetwork.BuilderOptions{
+		BaseDialer: dialer,
+	})
+	if err != nil {
+		return nil, err
+	}
+	return newCleartextTransportWithDialers(dialers, timeouts)
+}
+
+func newCleartextTransportWithDialers(
+	dialers egressDialerBuilder,
+	timeouts TransportTimeouts,
+) (*cleartextTransport, error) {
+	if dialers == nil {
+		return nil, errors.New("cleartext provider traffic egress dialer builder is nil")
+	}
+	if err := timeouts.validate(); err != nil {
+		return nil, err
+	}
 	return &cleartextTransport{
-		dialer:   dialer,
+		dialers:  dialers,
 		timeouts: timeouts,
 	}, nil
 }
@@ -45,7 +68,7 @@ func (transport *cleartextTransport) RoundTrip(
 	request *http.Request,
 	dispatch TransportDispatch,
 ) (*http.Response, transportprofile.Evidence, error) {
-	if transport == nil || transport.dialer == nil {
+	if transport == nil || transport.dialers == nil {
 		return nil, transportprofile.Evidence{}, errors.New(
 			"cleartext provider transport is not initialized",
 		)
@@ -56,6 +79,19 @@ func (transport *cleartextTransport) RoundTrip(
 		)
 	}
 	if err := dispatch.target.validateRequestIdentity(request); err != nil {
+		return nil, transportprofile.Evidence{}, err
+	}
+	policy, err := dispatch.egressPolicy.Normalize()
+	if err != nil {
+		return nil, transportprofile.Evidence{}, err
+	}
+	if policy.Proxy.Kind != egressnetwork.ProxyDirect {
+		return nil, transportprofile.Evidence{}, errors.New(
+			"cleartext provider traffic cannot use a secondary proxy",
+		)
+	}
+	dialer, err := transport.dialers.Dialer(policy)
+	if err != nil {
 		return nil, transportprofile.Evidence{}, err
 	}
 	endpointAuthority, err := dispatch.target.endpointAuthority()
@@ -87,7 +123,7 @@ func (transport *cleartextTransport) RoundTrip(
 					"cleartext provider dial authority changed",
 				)
 			}
-			connection, dialErr := transport.dialer.DialContext(
+			connection, dialErr := dialer.DialContext(
 				ctx,
 				network,
 				endpointAuthority,

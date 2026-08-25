@@ -119,6 +119,10 @@ type CreateCommand struct {
 // data-plane interfaces consumed by the proxy.
 type Controller interface {
 	Create(context.Context, CreateCommand) (Assignment, error)
+	CreateForLaunch(
+		context.Context,
+		CreateCommand,
+	) (Assignment, environment.LaunchEnvironmentPolicy, error)
 	Resolve(context.Context, captureidentity.Reference) (Assignment, error)
 }
 

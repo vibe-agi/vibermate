@@ -202,6 +202,13 @@ func (repository *activityRepository) ListExchanges(
 	if err := request.Validate(); err != nil {
 		return activity.Page{}, err
 	}
+	hasOccurrenceWindow := 0
+	var occurredAtOrAfterUnixMS, occurredBeforeUnixMS int64
+	if !request.OccurredAtOrAfter.IsZero() {
+		hasOccurrenceWindow = 1
+		occurredAtOrAfterUnixMS = request.OccurredAtOrAfter.UnixMilli()
+		occurredBeforeUnixMS = request.OccurredBefore.UnixMilli()
+	}
 	return repository.list(
 		ctx,
 		request,
@@ -270,6 +277,8 @@ func (repository *activityRepository) ListExchanges(
 		   AND (? = '' OR manual_capture_id = ?)
 		   AND (? = '' OR environment_id = ?)
 		   AND (? = '' OR conversation_projection_id = ?)
+		   AND (? = 0 OR occurred_at_unix_ms >= ?)
+		   AND (? = 0 OR occurred_at_unix_ms < ?)
 		   AND (? = 0 OR sequence < ?)
 		 ORDER BY sequence DESC
 		 LIMIT ?`,
@@ -282,6 +291,10 @@ func (repository *activityRepository) ListExchanges(
 		request.EnvironmentID,
 		request.ConversationProjectionID,
 		request.ConversationProjectionID,
+		hasOccurrenceWindow,
+		occurredAtOrAfterUnixMS,
+		hasOccurrenceWindow,
+		occurredBeforeUnixMS,
 		request.BeforeSequence,
 		request.BeforeSequence,
 		request.Limit+1,

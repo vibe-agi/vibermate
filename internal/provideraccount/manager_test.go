@@ -3,6 +3,7 @@ package provideraccount
 import (
 	"context"
 	"errors"
+	"reflect"
 	"sync"
 	"testing"
 	"time"
@@ -24,7 +25,7 @@ func TestManagerCreatesListsAndRotatesManagedSecretWithoutExposingIt(t *testing.
 	if err != nil {
 		t.Fatal(err)
 	}
-	value, err := secretstore.NewValue([]byte("secret-one"))
+	value, err := newTestCredentialValue(t, "secret-one")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -46,7 +47,7 @@ func TestManagerCreatesListsAndRotatesManagedSecretWithoutExposingIt(t *testing.
 		descriptor.Revision != 1 {
 		t.Fatalf("Environment account descriptor = %+v exists=%t", descriptor, exists)
 	}
-	rotated, err := secretstore.NewValue([]byte("secret-two"))
+	rotated, err := newTestCredentialValue(t, "secret-two")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -61,7 +62,7 @@ func TestManagerCreatesListsAndRotatesManagedSecretWithoutExposingIt(t *testing.
 		t.Fatalf("rotated ProviderAccount = %+v", view)
 	}
 	items, err := manager.List(context.Background())
-	if err != nil || len(items) != 1 || items[0] != view {
+	if err != nil || len(items) != 1 || !reflect.DeepEqual(items[0], view) {
 		t.Fatalf("ProviderAccount list = %+v err=%v", items, err)
 	}
 	stored, err := secrets.Read(context.Background(), view.Account.SecretRef)
@@ -69,14 +70,42 @@ func TestManagerCreatesListsAndRotatesManagedSecretWithoutExposingIt(t *testing.
 		t.Fatal(err)
 	}
 	defer stored.Destroy()
-	bytes, err := stored.CopyBytes()
-	if err != nil || string(bytes) != "secret-two" {
+	encoded, err := stored.CopyBytes()
+	if err != nil {
 		t.Fatalf("stored secret mismatch err=%v", err)
 	}
-	clear(bytes)
+	defer clear(encoded)
+	material, err := providerauth.ParseMaterial(encoded)
+	if err != nil {
+		t.Fatalf("parse stored credential material: %v", err)
+	}
+	defer material.Destroy()
+	credential := material.CredentialBytes()
+	defer clear(credential)
+	if string(credential) != "secret-two" {
+		t.Fatal("stored credential material did not contain the replacement")
+	}
 	if view.Account.SecretRef.String() == "secret-two" || view.Account.DisplayName == "secret-two" {
 		t.Fatal("ProviderAccount view reflected secret bytes")
 	}
+}
+
+func newTestCredentialValue(
+	t *testing.T,
+	credential string,
+) (*secretstore.Value, error) {
+	t.Helper()
+	material, err := providerauth.NewMaterial(credential, nil, nil)
+	if err != nil {
+		return nil, err
+	}
+	defer material.Destroy()
+	encoded, err := material.MarshalBinary()
+	if err != nil {
+		return nil, err
+	}
+	defer clear(encoded)
+	return secretstore.NewValue(encoded)
 }
 
 func TestManagerRecoversMissingCredentialFailClosed(t *testing.T) {
@@ -125,7 +154,7 @@ func TestBuiltInAnthropicRealmAcceptsStaticClaudeOAuthCredential(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	value, err := secretstore.NewValue([]byte("oauth-access-token"))
+	value, err := newTestCredentialValue(t, "oauth-access-token")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -163,7 +192,7 @@ func TestManagerDeletesOnlyAnUnreferencedInactiveAccount(t *testing.T) {
 	if err := manager.BindDeletionGuard(guard); err != nil {
 		t.Fatal(err)
 	}
-	value, err := secretstore.NewValue([]byte("private-account-secret"))
+	value, err := newTestCredentialValue(t, "private-account-secret")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -230,7 +259,7 @@ func TestManagerCreateDoesNotHoldTheAccountAuthorityLockDuringRepositoryWrite(
 	if err != nil {
 		t.Fatal(err)
 	}
-	value, err := secretstore.NewValue([]byte("private-account-secret"))
+	value, err := newTestCredentialValue(t, "private-account-secret")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -301,7 +330,7 @@ func TestManagerReplaceDoesNotHoldTheAccountAuthorityLockDuringSecretWrite(
 	if err != nil {
 		t.Fatal(err)
 	}
-	initial, err := secretstore.NewValue([]byte("secret-one"))
+	initial, err := newTestCredentialValue(t, "secret-one")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -316,7 +345,7 @@ func TestManagerReplaceDoesNotHoldTheAccountAuthorityLockDuringSecretWrite(
 	if err != nil {
 		t.Fatal(err)
 	}
-	rotated, err := secretstore.NewValue([]byte("secret-two"))
+	rotated, err := newTestCredentialValue(t, "secret-two")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -385,7 +414,7 @@ func TestManagerCredentialReplacementReservesTheAccountFromNewLeases(
 	if err != nil {
 		t.Fatal(err)
 	}
-	initial, err := secretstore.NewValue([]byte("secret-one"))
+	initial, err := newTestCredentialValue(t, "secret-one")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -400,7 +429,7 @@ func TestManagerCredentialReplacementReservesTheAccountFromNewLeases(
 	if err != nil {
 		t.Fatal(err)
 	}
-	rotated, err := secretstore.NewValue([]byte("secret-two"))
+	rotated, err := newTestCredentialValue(t, "secret-two")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -474,7 +503,7 @@ func TestManagerDeletionDoesNotHoldTheAccountAuthorityLockDuringSecretInspection
 	if err := manager.BindDeletionGuard(guard); err != nil {
 		t.Fatal(err)
 	}
-	value, err := secretstore.NewValue([]byte("private-account-secret"))
+	value, err := newTestCredentialValue(t, "private-account-secret")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -549,7 +578,7 @@ func TestManagerAcquireDoesNotHoldTheAccountAuthorityLockDuringSecretInspection(
 	if err != nil {
 		t.Fatal(err)
 	}
-	value, err := secretstore.NewValue([]byte("private-account-secret"))
+	value, err := newTestCredentialValue(t, "private-account-secret")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -651,7 +680,7 @@ func TestManagerLeasePinsCredentialEpochAcrossSecretRotation(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	initial, err := secretstore.NewValue([]byte("secret-one"))
+	initial, err := newTestCredentialValue(t, "secret-one")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -682,7 +711,7 @@ func TestManagerLeasePinsCredentialEpochAcrossSecretRotation(t *testing.T) {
 		t.Fatalf("leased account = %+v available=%t", account, available)
 	}
 
-	rotated, err := secretstore.NewValue([]byte("secret-two"))
+	rotated, err := newTestCredentialValue(t, "secret-two")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -728,7 +757,7 @@ func TestManagerAcquireUsesObservedCredentialEpochWithoutAnotherInspection(t *te
 	if err != nil {
 		t.Fatal(err)
 	}
-	value, err := secretstore.NewValue([]byte("private-account-secret"))
+	value, err := newTestCredentialValue(t, "private-account-secret")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -776,7 +805,7 @@ func TestManagerAcquireInspectsCredentialOnlyOnceAfterRecovery(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	value, err := secretstore.NewValue([]byte("private-account-secret"))
+	value, err := newTestCredentialValue(t, "private-account-secret")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -846,7 +875,7 @@ func TestManagerShutdownDrainsAdmittedCredentialInspection(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	value, err := secretstore.NewValue([]byte("private-account-secret"))
+	value, err := newTestCredentialValue(t, "private-account-secret")
 	if err != nil {
 		t.Fatal(err)
 	}

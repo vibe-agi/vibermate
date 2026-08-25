@@ -76,6 +76,62 @@ func TestProviderStatusRejectionPreservesAnthropicRetryStatus(t *testing.T) {
 	}
 }
 
+func TestMessageTransformFailureIsTerminalAndNonEchoing(t *testing.T) {
+	t.Parallel()
+
+	const privateCause = "PRIVATE-SCRIPT-OR-MESSAGE-MUST-NOT-CROSS"
+	fixture := newProxyFixture(t)
+	defer fixture.Close(t)
+	fixture.exchanges.FailWith(errors.Join(
+		&exchange.Failure{
+			Code:       exchange.ReasonMessageTransformFailed,
+			ExchangeID: "fixture-exchange",
+		},
+		errors.New(privateCause),
+	))
+	secured := fixture.ConnectTLS(
+		t,
+		fixture.grant.ProxyCapability.Value(),
+		"api.anthropic.com:443",
+		"api.anthropic.com",
+	)
+	defer secured.Close()
+
+	payload := `{"model":"client","messages":[]}`
+	response := writeInnerRequest(t, secured, &http.Request{
+		Method: http.MethodPost,
+		URL:    mustURL(t, "/v1/messages"),
+		Host:   "api.anthropic.com:443",
+		Header: http.Header{
+			"Content-Type": []string{"application/json"},
+		},
+		Body:          io.NopCloser(strings.NewReader(payload)),
+		ContentLength: int64(len(payload)),
+	})
+	body, err := io.ReadAll(response.Body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = response.Body.Close()
+
+	if response.StatusCode != http.StatusBadGateway ||
+		response.Header.Get("X-Vibermate-Reason") != string(exchange.ReasonMessageTransformFailed) ||
+		response.Header.Get("X-Should-Retry") != "false" ||
+		!bytes.Contains(body, []byte("configured message transform")) ||
+		!bytes.Contains(body, []byte(exchange.ReasonMessageTransformFailed)) {
+		t.Fatalf(
+			"message transform response status=%d headers=%v body=%s",
+			response.StatusCode,
+			response.Header,
+			body,
+		)
+	}
+	if bytes.Contains(body, []byte(privateCause)) ||
+		bytes.Contains(body, []byte("fixture-exchange")) {
+		t.Fatalf("message transform response exposed private evidence: %s", body)
+	}
+}
+
 func assertManagedCredentialFailure(
 	t *testing.T,
 	fixture *proxyFixture,

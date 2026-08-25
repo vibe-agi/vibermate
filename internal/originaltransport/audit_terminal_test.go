@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/vibe-agi/vibermate/internal/egressaudit"
+	"github.com/vibe-agi/vibermate/internal/egressnetwork"
 	"github.com/vibe-agi/vibermate/internal/offlinehold"
 	"github.com/vibe-agi/vibermate/internal/originidentity"
 	"github.com/vibe-agi/vibermate/internal/protocolspec"
@@ -268,6 +269,7 @@ type originalAuditRoundTripper struct {
 
 func (transport originalAuditRoundTripper) RoundTrip(
 	*http.Request,
+	egressnetwork.Policy,
 ) (*http.Response, error) {
 	return transport.response, nil
 }

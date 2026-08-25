@@ -2333,22 +2333,22 @@ final class _RuleEditorDialogState extends State<_RuleEditorDialog> {
   Widget build(BuildContext context) {
     final copy = widget.copy;
     return AlertDialog(
-      titlePadding: const EdgeInsets.fromLTRB(16, 14, 16, 8),
-      contentPadding: const EdgeInsets.fromLTRB(16, 0, 16, 8),
-      actionsPadding: const EdgeInsets.fromLTRB(12, 4, 12, 12),
+      insetPadding: ViberDialogInsets.inset,
+      titlePadding: ViberDialogInsets.title,
+      contentPadding: ViberDialogInsets.content,
+      actionsPadding: ViberDialogInsets.actions,
       title: Text(
         widget.existing == null
             ? copy('network.rules.add')
             : copy('network.rules.edit'),
       ),
       content: SizedBox(
-        width: 360,
+        key: const Key('rule-editor-frame'),
+        width: ViberMetrics.dialogStandardWidth,
         child: Form(
           key: _formKey,
           child: SingleChildScrollView(
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              crossAxisAlignment: CrossAxisAlignment.start,
+            child: ResponsiveFormGrid(
               children: [
                 CompactLabeledControl(
                   label: copy('network.rules.field.id'),
@@ -2380,10 +2380,10 @@ final class _RuleEditorDialogState extends State<_RuleEditorDialog> {
                     },
                   ),
                 ),
-                const SizedBox(height: 8),
                 CompactLabeledControl(
                   label: copy('network.rules.field.priority'),
                   child: TextFormField(
+                    key: const Key('rule-editor-priority'),
                     controller: _priority,
                     keyboardType: TextInputType.number,
                     textAlignVertical: TextAlignVertical.center,
@@ -2396,11 +2396,12 @@ final class _RuleEditorDialogState extends State<_RuleEditorDialog> {
                     },
                   ),
                 ),
-                const SizedBox(height: 8),
                 CompactLabeledControl(
                   label: copy('network.rules.field.decision'),
                   child: CompactSelectField<String>(
+                    key: const Key('rule-editor-decision'),
                     initialValue: _decision,
+                    isExpanded: true,
                     items: [
                       for (final value in const ['allow', 'deny', 'ask'])
                         DropdownMenuItem(
@@ -2411,11 +2412,12 @@ final class _RuleEditorDialogState extends State<_RuleEditorDialog> {
                     onChanged: (value) => setState(() => _decision = value!),
                   ),
                 ),
-                const SizedBox(height: 8),
                 CompactLabeledControl(
                   label: copy('network.rules.field.match'),
                   child: CompactSelectField<String>(
+                    key: const Key('rule-editor-match'),
                     initialValue: _match,
+                    isExpanded: true,
                     items: [
                       for (final value in const [
                         'exact_host',
@@ -2429,10 +2431,10 @@ final class _RuleEditorDialogState extends State<_RuleEditorDialog> {
                     onChanged: (value) => setState(() => _match = value!),
                   ),
                 ),
-                const SizedBox(height: 8),
                 CompactLabeledControl(
                   label: copy('network.rules.field.host'),
                   child: TextFormField(
+                    key: const Key('rule-editor-host'),
                     controller: _host,
                     textAlignVertical: TextAlignVertical.center,
                     decoration: const InputDecoration(
@@ -2443,11 +2445,11 @@ final class _RuleEditorDialogState extends State<_RuleEditorDialog> {
                         : copy('network.rules.validation.host'),
                   ),
                 ),
-                if (_match == 'exact_host_port') ...[
-                  const SizedBox(height: 8),
+                if (_match == 'exact_host_port')
                   CompactLabeledControl(
                     label: copy('network.rules.field.port'),
                     child: TextFormField(
+                      key: const Key('rule-editor-port'),
                       controller: _port,
                       keyboardType: TextInputType.number,
                       textAlignVertical: TextAlignVertical.center,
@@ -2460,7 +2462,6 @@ final class _RuleEditorDialogState extends State<_RuleEditorDialog> {
                       },
                     ),
                   ),
-                ],
               ],
             ),
           ),

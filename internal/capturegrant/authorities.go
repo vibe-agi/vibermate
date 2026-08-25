@@ -18,6 +18,7 @@ type CaptureAuthoritySet struct {
 	assignmentRevision captureassignment.Revision
 	environmentID      environment.EnvironmentID
 	launchAuthority    environment.LaunchAuthorityBoundary
+	launchEnvironment  environment.LaunchEnvironmentPolicy
 }
 
 func NewCaptureAuthoritySet(
@@ -67,6 +68,10 @@ func (set CaptureAuthoritySet) ManagedCredentialAuthorities() []string {
 	return set.launchAuthority.ManagedCredentialAuthorities()
 }
 
+func (set CaptureAuthoritySet) LaunchEnvironment() environment.LaunchEnvironmentPolicy {
+	return set.launchEnvironment.Clone()
+}
+
 func (set CaptureAuthoritySet) Review() CaptureAuthorityReview {
 	return CaptureAuthorityReview{
 		environmentID:   set.environmentID,
@@ -92,7 +97,14 @@ type CaptureAuthorityResolver interface {
 }
 
 type captureAssignmentAuthority interface {
-	Create(context.Context, captureassignment.CreateCommand) (captureassignment.Assignment, error)
+	CreateForLaunch(
+		context.Context,
+		captureassignment.CreateCommand,
+	) (
+		captureassignment.Assignment,
+		environment.LaunchEnvironmentPolicy,
+		error,
+	)
 	Resolve(context.Context, captureidentity.Reference) (captureassignment.Assignment, error)
 }
 
@@ -188,9 +200,12 @@ func (resolver *environmentAuthorityResolver) AssignAndResolve(
 			source != captureassignment.SourceSystemTransparent) {
 		return CaptureAuthoritySet{}, errors.New("CaptureRun Environment assignment source is invalid")
 	}
-	assignment, err := resolver.assignments.Create(ctx, captureassignment.CreateCommand{
-		Capture: capture, EnvironmentID: environmentID, Source: source,
-	})
+	assignment, launchEnvironment, err := resolver.assignments.CreateForLaunch(
+		ctx,
+		captureassignment.CreateCommand{
+			Capture: capture, EnvironmentID: environmentID, Source: source,
+		},
+	)
 	if err != nil {
 		return CaptureAuthoritySet{}, err
 	}
@@ -199,7 +214,12 @@ func (resolver *environmentAuthorityResolver) AssignAndResolve(
 		assignment.LaunchAuthority.InitialEnvironmentID() != environmentID {
 		return CaptureAuthoritySet{}, errors.New("CaptureRun Environment assignment is inconsistent")
 	}
-	return NewCaptureAuthoritySet(assignment)
+	set, err := NewCaptureAuthoritySet(assignment)
+	if err != nil {
+		return CaptureAuthoritySet{}, err
+	}
+	set.launchEnvironment = launchEnvironment.Clone()
+	return set, nil
 }
 
 func (resolver *environmentAuthorityResolver) Resolve(
@@ -217,5 +237,30 @@ func (resolver *environmentAuthorityResolver) Resolve(
 	if assignment.Capture != capture {
 		return CaptureAuthoritySet{}, errors.New("Capture Environment assignment is inconsistent")
 	}
-	return NewCaptureAuthoritySet(assignment)
+	set, err := NewCaptureAuthoritySet(assignment)
+	if err != nil {
+		return CaptureAuthoritySet{}, err
+	}
+	return resolver.attachLaunchEnvironment(ctx, set)
+}
+
+func (resolver *environmentAuthorityResolver) attachLaunchEnvironment(
+	ctx context.Context,
+	set CaptureAuthoritySet,
+) (CaptureAuthoritySet, error) {
+	snapshot, err := resolver.environments.ResolveRevision(
+		ctx,
+		set.InitialEnvironmentID(),
+		set.InitialEnvironmentRevision(),
+	)
+	if err != nil || snapshot.ID() != set.InitialEnvironmentID() ||
+		snapshot.Revision() != set.InitialEnvironmentRevision() ||
+		snapshot.Digest() != set.InitialEnvironmentDigest() ||
+		snapshot.State() != environment.StateActive {
+		return CaptureAuthoritySet{}, errors.New(
+			"CaptureRun launch Environment revision is unavailable",
+		)
+	}
+	set.launchEnvironment = snapshot.LaunchEnvironment()
+	return set, nil
 }

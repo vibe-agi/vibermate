@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"math"
+	"slices"
 	"testing"
 	"time"
 
@@ -44,7 +45,7 @@ func TestProjectorContinuesAfterAFullCaptureRunPage(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	report, err := projector.Report(context.Background())
+	report, err := projector.Report(context.Background(), queryAround(t, now))
 	if err != nil {
 		t.Fatalf("Report() error = %v", err)
 	}
@@ -91,7 +92,7 @@ func TestProjectorKeepsAnOverflowingTokenTurnUnknown(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	report, err := projector.Report(context.Background())
+	report, err := projector.Report(context.Background(), queryAround(t, now))
 	if err != nil {
 		t.Fatalf("Report() error = %v", err)
 	}
@@ -100,6 +101,149 @@ func TestProjectorKeepsAnOverflowingTokenTurnUnknown(t *testing.T) {
 		aggregate.UnknownTurns != 1 {
 		t.Fatalf("overflow aggregate = %#v", aggregate)
 	}
+}
+
+func TestProjectorReportsSparseDaysWithinAnExplicitCivilWindow(t *testing.T) {
+	t.Parallel()
+	now := time.Date(2026, 8, 27, 3, 4, 5, 0, time.UTC)
+	user := runtimeuser.User{
+		ID:       runtimeuser.UserID("user.AAAAAAAAAAAAAAAAAAAAAAAAAAA"),
+		Username: "alice", State: runtimeuser.StateActive,
+		CreatedAt: now, UpdatedAt: now,
+	}
+	run := capturerun.View{
+		ID: "run-one", RuntimeUserID: user.ID,
+		LoginSessionID: runtimeuser.LoginSessionID("login.AAAAAAAAAAAAAAAAAAAAAAAAAAA"),
+		DeviceName:     "device", MachineID: "machine", WorkspaceID: "workspace-one",
+		WorkspaceLabel: "repo", State: capturerun.StateFinished,
+		CreatedAt: time.Date(2026, 8, 20, 0, 0, 0, 0, time.UTC), UpdatedAt: now,
+	}
+	activities := fakeActivities{byRun: map[string][]activity.Record{
+		"run-one": {
+			{SubjectID: "before", Status: activity.StatusSucceeded, OccurredAt: time.Date(2026, 8, 23, 15, 59, 59, 0, time.UTC)},
+			{SubjectID: "day-one", Status: activity.StatusSucceeded, OccurredAt: time.Date(2026, 8, 23, 16, 0, 0, 0, time.UTC)},
+			{SubjectID: "day-two", Status: activity.StatusFailed, OccurredAt: time.Date(2026, 8, 24, 16, 0, 0, 0, time.UTC)},
+			{SubjectID: "until", Status: activity.StatusSucceeded, OccurredAt: time.Date(2026, 8, 26, 16, 0, 0, 0, time.UTC)},
+		},
+	}}
+	projector, err := runtimeusage.New(runtimeusage.Options{
+		Users: usersOf(user), Runs: fakeRuns{items: []capturerun.View{run}},
+		Activities: activities,
+		Contents: fakeContents{items: map[string]exchangecontent.Record{
+			"day-one": usageContent("day-one", 7),
+		}},
+		Identities: fakeIdentities{items: map[string]agentconversation.ClientIdentity{}},
+		Clock:      fixedClock{now: now},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	query, err := runtimeusage.NewQuery(
+		"2026-08-24", "2026-08-27", "Asia/Singapore",
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	report, err := projector.Report(context.Background(), query)
+	if err != nil {
+		t.Fatalf("Report() error = %v", err)
+	}
+	if report.Period.From != "2026-08-24" || report.Period.Until != "2026-08-27" ||
+		report.Period.TimeZone != "Asia/Singapore" {
+		t.Fatalf("period = %#v", report.Period)
+	}
+	if report.Users[0].Turns != 2 || report.Users[0].CaptureRuns != 1 ||
+		report.Users[0].Succeeded != 1 || report.Users[0].Failed != 1 {
+		t.Fatalf("windowed totals = %#v", report.Users[0])
+	}
+	wantDates := []string{"2026-08-24", "2026-08-25"}
+	if got := usageDates(report.Days); !slices.Equal(got, wantDates) {
+		t.Fatalf("team day dates = %v, want %v", got, wantDates)
+	}
+	if got := usageDates(report.Users[0].Days); !slices.Equal(got, wantDates) {
+		t.Fatalf("user day dates = %v, want %v", got, wantDates)
+	}
+	if report.Days[0].Turns != 1 || report.Days[0].Tokens.Output.Tokens != 7 ||
+		report.Days[0].Tokens.Output.KnownTurns != 1 ||
+		report.Days[1].Failed != 1 || report.Days[1].ContentUnavailableTurns != 1 ||
+		report.Days[1].Tokens.Output.UnknownTurns != 1 {
+		t.Fatalf("daily evidence = %#v", report.Days)
+	}
+}
+
+func TestProjectorReadsOneWindowedExchangeStreamForAllCaptureRuns(t *testing.T) {
+	t.Parallel()
+	now := time.Date(2026, 8, 25, 12, 0, 0, 0, time.UTC)
+	user := runtimeuser.User{
+		ID:       runtimeuser.UserID("user.AAAAAAAAAAAAAAAAAAAAAAAAAAA"),
+		Username: "alice", State: runtimeuser.StateActive,
+		CreatedAt: now, UpdatedAt: now,
+	}
+	runs := []capturerun.View{
+		{
+			ID: "run-one", RuntimeUserID: user.ID,
+			LoginSessionID: runtimeuser.LoginSessionID("login.AAAAAAAAAAAAAAAAAAAAAAAAAAA"),
+			DeviceName:     "one", MachineID: "machine-one",
+			State: capturerun.StateFinished, UpdatedAt: now,
+		},
+		{
+			ID: "run-two", RuntimeUserID: user.ID,
+			LoginSessionID: runtimeuser.LoginSessionID("login.AAAAAAAAAAAAAAAAAAAAAAAAAAA"),
+			DeviceName:     "two", MachineID: "machine-two",
+			State: capturerun.StateFinished, UpdatedAt: now,
+		},
+	}
+	activities := &recordingActivities{items: []activity.Record{
+		{
+			SubjectID: "exchange-one", CaptureRunID: "run-one",
+			Status: activity.StatusSucceeded, OccurredAt: now,
+		},
+		{
+			SubjectID: "exchange-two", CaptureRunID: "run-two",
+			Status: activity.StatusSucceeded, OccurredAt: now,
+		},
+	}}
+	projector, err := runtimeusage.New(runtimeusage.Options{
+		Users: usersOf(user), Runs: fakeRuns{items: runs}, Activities: activities,
+		Contents:   fakeContents{items: map[string]exchangecontent.Record{}},
+		Identities: fakeIdentities{items: map[string]agentconversation.ClientIdentity{}},
+		Clock:      fixedClock{now: now},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	query, err := runtimeusage.NewQuery("2026-08-24", "2026-08-26", "UTC")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	report, err := projector.Report(context.Background(), query)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(activities.requests) != 1 {
+		t.Fatalf("ListExchanges requests = %#v", activities.requests)
+	}
+	request := activities.requests[0]
+	if request.CaptureRunID != "" ||
+		request.OccurredAtOrAfter != time.Date(2026, 8, 24, 0, 0, 0, 0, time.UTC) ||
+		request.OccurredBefore != time.Date(2026, 8, 26, 0, 0, 0, 0, time.UTC) {
+		t.Fatalf("windowed request = %#v", request)
+	}
+	if report.Users[0].Turns != 2 || report.Users[0].CaptureRuns != 2 {
+		t.Fatalf("cross-run report = %#v", report.Users[0])
+	}
+}
+
+func usersOf(users ...runtimeuser.User) fakeUsers { return fakeUsers{items: users} }
+
+func usageDates(days []runtimeusage.DayUsage) []string {
+	dates := make([]string, len(days))
+	for index, day := range days {
+		dates[index] = day.Date
+	}
+	return dates
 }
 
 func TestProjectorBoundsBreakdownsWithoutChangingUserTotals(t *testing.T) {
@@ -146,7 +290,7 @@ func TestProjectorBoundsBreakdownsWithoutChangingUserTotals(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	report, err := projector.Report(context.Background())
+	report, err := projector.Report(context.Background(), queryAround(t, now))
 	if err != nil {
 		t.Fatalf("Report() error = %v", err)
 	}
@@ -208,7 +352,7 @@ func TestProjectorAttributesExactModelsTokensAndResumedAgentSession(t *testing.T
 		t.Fatal(err)
 	}
 
-	report, err := projector.Report(context.Background())
+	report, err := projector.Report(context.Background(), queryAround(t, now))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -306,7 +450,42 @@ func (activities fakeActivities) ListExchanges(_ context.Context, request activi
 	if request.BeforeSequence != 0 {
 		return activity.Page{}, nil
 	}
-	return activity.Page{Items: append([]activity.Record(nil), activities.byRun[request.CaptureRunID]...)}, nil
+	if request.CaptureRunID != "" {
+		return activity.Page{Items: append([]activity.Record(nil), activities.byRun[request.CaptureRunID]...)}, nil
+	}
+	items := []activity.Record{}
+	for runID, records := range activities.byRun {
+		for _, source := range records {
+			record := source
+			if record.CaptureRunID == "" {
+				record.CaptureRunID = runID
+			}
+			if (!request.OccurredAtOrAfter.IsZero() &&
+				record.OccurredAt.Before(request.OccurredAtOrAfter)) ||
+				(!request.OccurredBefore.IsZero() &&
+					!record.OccurredAt.Before(request.OccurredBefore)) {
+				continue
+			}
+			items = append(items, record)
+		}
+	}
+	return activity.Page{Items: items}, nil
+}
+
+type recordingActivities struct {
+	items    []activity.Record
+	requests []activity.PageRequest
+}
+
+func (activities *recordingActivities) ListExchanges(
+	_ context.Context,
+	request activity.PageRequest,
+) (activity.Page, error) {
+	activities.requests = append(activities.requests, request)
+	if request.BeforeSequence != 0 {
+		return activity.Page{}, nil
+	}
+	return activity.Page{Items: append([]activity.Record(nil), activities.items...)}, nil
 }
 
 type fakeContents struct {
@@ -336,3 +515,16 @@ func (identities fakeIdentities) GetConversationIdentity(_ context.Context, exch
 type fixedClock struct{ now time.Time }
 
 func (clock fixedClock) Now() time.Time { return clock.now }
+
+func queryAround(t *testing.T, now time.Time) runtimeusage.Query {
+	t.Helper()
+	query, err := runtimeusage.NewQuery(
+		now.AddDate(0, 0, -30).Format(time.DateOnly),
+		now.AddDate(0, 0, 1).Format(time.DateOnly),
+		"UTC",
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return query
+}

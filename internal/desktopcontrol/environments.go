@@ -15,18 +15,18 @@ type EnvironmentListResponse struct {
 }
 
 type EnvironmentResponse struct {
-	ID               environment.EnvironmentID           `json:"id"`
-	Name             string                              `json:"name"`
-	State            environment.State                   `json:"state"`
-	Revision         environment.Revision                `json:"revision"`
-	Digest           string                              `json:"digest"`
-	SystemOwned      bool                                `json:"systemOwned"`
-	ClientEndpoints  []environment.ClientEndpoint        `json:"clientEndpoints"`
-	PluginBindings   []environment.PluginBinding         `json:"pluginBindings"`
-	BudgetPolicy     environment.BudgetPolicy            `json:"budgetPolicy"`
-	EgressPolicy     environment.EnvironmentEgressPolicy `json:"egressPolicy"`
-	ContentRecording environment.ContentRecordingPolicy  `json:"contentRecording"`
-	PolicySet        environment.PolicySet               `json:"policySet"`
+	ID                environment.EnvironmentID           `json:"id"`
+	Name              string                              `json:"name"`
+	State             environment.State                   `json:"state"`
+	Revision          environment.Revision                `json:"revision"`
+	Digest            string                              `json:"digest"`
+	SystemOwned       bool                                `json:"systemOwned"`
+	ClientEndpoints   []environment.ClientEndpoint        `json:"clientEndpoints"`
+	PluginBindings    []environment.PluginBinding         `json:"pluginBindings"`
+	BudgetPolicy      environment.BudgetPolicy            `json:"budgetPolicy"`
+	ContentRecording  environment.ContentRecordingPolicy  `json:"contentRecording"`
+	LaunchEnvironment environment.LaunchEnvironmentPolicy `json:"launchEnvironment"`
+	PolicySet         environment.PolicySet               `json:"policySet"`
 }
 
 type EnvironmentDraftResponse struct {
@@ -44,8 +44,8 @@ type EnvironmentDraftInput struct {
 	ClientEndpoints       []environment.ClientEndpoint        `json:"clientEndpoints"`
 	PluginBindings        []environment.PluginBinding         `json:"pluginBindings"`
 	BudgetPolicy          environment.BudgetPolicy            `json:"budgetPolicy"`
-	EgressPolicy          environment.EnvironmentEgressPolicy `json:"egressPolicy"`
 	ContentRecording      environment.ContentRecordingPolicy  `json:"contentRecording"`
+	LaunchEnvironment     environment.LaunchEnvironmentPolicy `json:"launchEnvironment"`
 	PolicySet             *environment.PolicySet              `json:"policySet,omitempty"`
 }
 
@@ -77,12 +77,13 @@ func environmentResponseOfAggregate(aggregate environment.Environment, digest st
 	return EnvironmentResponse{
 		ID: aggregate.ID, Name: aggregate.Name, State: aggregate.State,
 		Revision: aggregate.Revision, Digest: digest,
-		SystemOwned:     systemOwned,
-		ClientEndpoints: environmentControlEndpoints(aggregate.ClientEndpoints),
-		PluginBindings:  controlCollection(aggregate.PluginBindings),
-		BudgetPolicy:    aggregate.BudgetPolicy,
-		EgressPolicy:    aggregate.EgressPolicy, ContentRecording: aggregate.ContentRecording,
-		PolicySet: aggregate.EffectivePolicySet(),
+		SystemOwned:       systemOwned,
+		ClientEndpoints:   environmentControlEndpoints(aggregate.ClientEndpoints),
+		PluginBindings:    controlCollection(aggregate.PluginBindings),
+		BudgetPolicy:      aggregate.BudgetPolicy,
+		ContentRecording:  aggregate.ContentRecording,
+		LaunchEnvironment: aggregate.LaunchEnvironment.Clone(),
+		PolicySet:         aggregate.EffectivePolicySet(),
 	}
 }
 
@@ -266,8 +267,9 @@ func (handler *Handler) putEnvironmentDraft(writer http.ResponseWriter, request 
 			ID: id, Name: input.Name, State: input.State,
 			Revision: environment.Revision(expectedBase + 1), ClientEndpoints: input.ClientEndpoints,
 			PluginBindings: input.PluginBindings, BudgetPolicy: input.BudgetPolicy,
-			EgressPolicy: input.EgressPolicy, ContentRecording: input.ContentRecording,
-			PolicySet: input.PolicySet,
+			ContentRecording:  input.ContentRecording,
+			LaunchEnvironment: input.LaunchEnvironment.Clone(),
+			PolicySet:         input.PolicySet,
 		}
 		draft, saveErr := handler.environments.SaveDraft(request.Context(), environment.DraftCommand{
 			ExpectedBaseRevision:  environment.Revision(expectedBase),

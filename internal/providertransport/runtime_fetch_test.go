@@ -113,6 +113,58 @@ func TestFetchEndpointModelsHonorsHoldAuditsAndReleasesItsAction(t *testing.T) {
 	}
 }
 
+func TestFetchEndpointModelsAppliesTheAccountHeaderPolicy(t *testing.T) {
+	t.Parallel()
+
+	material, err := providerauth.NewMaterial(
+		"catalog-test-token",
+		map[string]string{"X-Relay-Tenant": "team-a"},
+		[]string{"Accept"},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	encoded, err := material.MarshalBinary()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer clear(encoded)
+
+	gate := newStartedGate(t)
+	audit := &runtimeAuditRecorder{}
+	transport := &runtimeTransportStub{
+		audit: audit,
+		response: &http.Response{
+			StatusCode: http.StatusOK,
+			Header:     make(http.Header),
+			Body:       io.NopCloser(strings.NewReader(`{"data":[]}`)),
+		},
+	}
+	client := newRuntimeFetchClientWithSecret(t, gate, transport, audit, encoded)
+	endpoint := testDiscoveryEndpoint(t, "http://catalog.example:8888")
+
+	response, err := client.FetchEndpointModels(
+		context.Background(),
+		endpoint,
+		testRuntimeDiscoveryCredential(t, endpoint.RealmID),
+	)
+	if err != nil {
+		t.Fatalf("FetchEndpointModels() error = %v", err)
+	}
+	defer response.Body.Close()
+
+	request := transport.lastRequest()
+	if got := request.Header.Get("Authorization"); got != "Bearer catalog-test-token" {
+		t.Fatalf("Authorization = %q", got)
+	}
+	if got := request.Header.Get("X-Relay-Tenant"); got != "team-a" {
+		t.Fatalf("X-Relay-Tenant = %q", got)
+	}
+	if values, present := request.Header["Accept"]; present {
+		t.Fatalf("Accept survived deleteHeaders: %q", values)
+	}
+}
+
 func TestFetchModelsDevUsesTheFixedMetadataOriginAndRuntimePurpose(t *testing.T) {
 	t.Parallel()
 
@@ -267,8 +319,36 @@ func newRuntimeFetchClient(
 	audit egressaudit.Writer,
 ) *Client {
 	t.Helper()
+	material, err := providerauth.NewMaterial("catalog-test-token", nil, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	encoded, err := material.MarshalBinary()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer clear(encoded)
+	return newRuntimeFetchClientWithSecret(
+		t,
+		gate,
+		transport,
+		audit,
+		encoded,
+	)
+}
+
+func newRuntimeFetchClientWithSecret(
+	t *testing.T,
+	gate *offlinehold.Gate,
+	transport Transport,
+	audit egressaudit.Writer,
+	secret []byte,
+) *Client {
+	t.Helper()
+	storedSecret := append([]byte(nil), secret...)
+	t.Cleanup(func() { clear(storedSecret) })
 	authenticator, err := NewStaticBearerAuthenticator(
-		&secretReaderStub{value: []byte("catalog-test-token")},
+		&secretReaderStub{value: storedSecret},
 	)
 	if err != nil {
 		t.Fatal(err)

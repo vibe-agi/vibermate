@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/vibe-agi/vibermate/internal/egressaudit"
+	"github.com/vibe-agi/vibermate/internal/egressnetwork"
 	"github.com/vibe-agi/vibermate/internal/offlinehold"
 )
 
@@ -28,10 +29,14 @@ const (
 
 type Options struct {
 	Coordinator offlinehold.Coordinator
-	Transport   http.RoundTripper
+	Transport   Transport
 	// Audit records one immutable attempt per real outbound. It is optional
 	// only so existing callers can be migrated; a wired runtime supplies it.
 	Audit egressaudit.Writer
+}
+
+type Transport interface {
+	RoundTrip(*http.Request, egressnetwork.Policy) (*http.Response, error)
 }
 
 // terminalFailureReporter is implemented by the production audit boundary.
@@ -105,7 +110,7 @@ type Client struct {
 	mu sync.Mutex
 
 	coordinator offlinehold.Coordinator
-	transport   http.RoundTripper
+	transport   Transport
 	audit       egressaudit.Writer
 	clock       func() time.Time
 	operations  map[*operation]struct{}
@@ -131,9 +136,13 @@ func NewProduction(
 	coordinator offlinehold.Coordinator,
 	audit egressaudit.Writer,
 ) (*Client, error) {
+	transport, err := newProductionStrictTransport()
+	if err != nil {
+		return nil, err
+	}
 	return New(Options{
 		Coordinator: coordinator,
-		Transport:   newProductionStrictTransport(),
+		Transport:   transport,
 		Audit:       audit,
 	})
 }
@@ -195,7 +204,7 @@ func (client *Client) Do(
 	if recordErr != nil {
 		return nil, recordErr
 	}
-	response, err := client.transport.RoundTrip(request)
+	response, err := client.transport.RoundTrip(request, frozen.egressPolicy)
 	request.Header.Del("Authorization")
 	if err != nil {
 		if response != nil && response.Body != nil {

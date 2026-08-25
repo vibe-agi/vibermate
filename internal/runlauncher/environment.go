@@ -77,6 +77,13 @@ func buildEnvironment(
 	}
 	managedClientCredential := usesManagedClientCredential(base, grant)
 	preserved := make(map[string]string)
+	deletedByEnvironment := make(
+		map[string]struct{},
+		len(grant.LaunchEnvironment.DeleteEnv),
+	)
+	for _, key := range grant.LaunchEnvironment.DeleteEnv {
+		deletedByEnvironment[key] = struct{}{}
+	}
 	var noProxyValues []string
 	for _, entry := range base {
 		key, value, ok := strings.Cut(entry, "=")
@@ -87,6 +94,12 @@ func buildEnvironment(
 			noProxyValues = append(noProxyValues, value)
 			continue
 		}
+		if _, deleted := deletedByEnvironment[key]; deleted {
+			continue
+		}
+		if _, replaced := grant.LaunchEnvironment.SetEnv[key]; replaced {
+			continue
+		}
 		if environmentManaged(
 			key,
 			grant.LaunchRecipe,
@@ -94,6 +107,9 @@ func buildEnvironment(
 		) || launchPolicyManagesEnvironment(key, grant) {
 			continue
 		}
+		preserved[key] = value
+	}
+	for key, value := range grant.LaunchEnvironment.SetEnv {
 		preserved[key] = value
 	}
 	noProxy := safeNoProxy(noProxyValues, grant.ProtectedAuthorities)

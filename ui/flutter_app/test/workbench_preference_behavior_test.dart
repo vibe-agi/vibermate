@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:vibermate_app/app/vibermate_app.dart';
 import 'package:vibermate_app/core/design/viber_theme.dart';
+import 'package:vibermate_app/core/design/workbench_widgets.dart';
 import 'package:vibermate_app/core/preferences/workbench_preferences.dart';
 import 'package:vibermate_app/features/workbench/workbench_controller.dart';
 import 'package:vibermate_app/preview/preview_control_api.dart';
@@ -265,10 +266,10 @@ void main() {
     final responses = find.byKey(
       const Key('endpoint-editor-protocol-openai_responses'),
     );
-    expect(tester.widget<CheckboxListTile>(responses).value, isFalse);
+    expect(tester.widget<CompactCheckboxOption>(responses).value, isFalse);
     await tester.tap(responses);
     await tester.pumpAndSettle();
-    expect(tester.widget<CheckboxListTile>(responses).value, isTrue);
+    expect(tester.widget<CompactCheckboxOption>(responses).value, isTrue);
 
     await tester.pumpWidget(const SizedBox.shrink());
     await tester.pump(const Duration(seconds: 1));

@@ -39,6 +39,7 @@ func TestCaptureRunPOSTResponsesMatchTheClosedOpenAPIWire(t *testing.T) {
 		"adapter",
 		"catalogRevision",
 		"executablePath",
+		"launchEnvironment",
 		"launchRecipe",
 		"managedCredentialAuthorities",
 		"protectedAuthorities",
@@ -160,6 +161,7 @@ func TestGenericCaptureRunGrantUsesTheContractedRecipeAndShape(t *testing.T) {
 	grantObject := exactJSONObject(t, response.Body.Bytes(), []string{
 		"catalogRevision",
 		"executablePath",
+		"launchEnvironment",
 		"launchRecipe",
 		"managedCredentialAuthorities",
 		"protectedAuthorities",
@@ -216,6 +218,7 @@ func TestRecognizedCaptureRunGrantProjectsExactSignerEvidence(t *testing.T) {
 	grantObject := exactJSONObject(t, response.Body.Bytes(), []string{
 		"catalogRevision",
 		"executablePath",
+		"launchEnvironment",
 		"launchRecipe",
 		"managedCredentialAuthorities",
 		"protectedAuthorities",

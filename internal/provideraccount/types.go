@@ -177,8 +177,10 @@ func (health Health) Validate() error {
 }
 
 type View struct {
-	Account Account
-	Health  Health
+	Account           Account
+	Health            Health
+	SetHeaderNames    []string
+	DeleteHeaderNames []string
 }
 
 type CommitOutcome string

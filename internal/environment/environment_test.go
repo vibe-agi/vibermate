@@ -9,6 +9,8 @@ import (
 	"testing"
 
 	"github.com/vibe-agi/vibermate/internal/captureidentity"
+	"github.com/vibe-agi/vibermate/internal/egressnetwork"
+	"github.com/vibe-agi/vibermate/internal/messagetransform"
 	"github.com/vibe-agi/vibermate/internal/operationcatalog"
 	"github.com/vibe-agi/vibermate/internal/originidentity"
 	"github.com/vibe-agi/vibermate/internal/protocolspec"
@@ -45,6 +47,163 @@ func TestClientOriginCanonicalizationAndRejection(t *testing.T) {
 				t.Fatalf("ParseClientOrigin(%q) succeeded", input)
 			}
 		})
+	}
+}
+
+func TestLaunchEnvironmentPolicyIsFrozenAndRejectsLauncherAuthority(
+	t *testing.T,
+) {
+	t.Parallel()
+	aggregate := fixture(t, "launch-environment", mustOrigin(t, "https://relay.example"))
+	aggregate.LaunchEnvironment = LaunchEnvironmentPolicy{
+		SetEnv: map[string]string{
+			"TEAM_CONTEXT": "team-a",
+			"EMPTY_VALUE":  "",
+		},
+		DeleteEnv: []string{"REMOVE_SECOND", "REMOVE_FIRST"},
+	}
+	snapshot := mustCompile(t, aggregate)
+	aggregate.LaunchEnvironment.SetEnv["TEAM_CONTEXT"] = "mutated"
+	aggregate.LaunchEnvironment.DeleteEnv[0] = "MUTATED"
+	frozen := snapshot.LaunchEnvironment()
+	if frozen.SetEnv["TEAM_CONTEXT"] != "team-a" ||
+		len(frozen.DeleteEnv) != 2 ||
+		frozen.DeleteEnv[0] != "REMOVE_FIRST" ||
+		frozen.DeleteEnv[1] != "REMOVE_SECOND" {
+		t.Fatalf("frozen LaunchEnvironmentPolicy = %+v", frozen)
+	}
+	frozen.SetEnv["TEAM_CONTEXT"] = "changed"
+	if snapshot.LaunchEnvironment().SetEnv["TEAM_CONTEXT"] != "team-a" {
+		t.Fatal("LaunchEnvironment getter exposed mutable snapshot state")
+	}
+
+	for _, invalid := range []LaunchEnvironmentPolicy{
+		{SetEnv: map[string]string{"1INVALID": "value"}},
+		{SetEnv: map[string]string{"HTTP_PROXY": "http://bypass.invalid"}},
+		{DeleteEnv: []string{"VIBERMATE_TOKEN"}},
+		{SetEnv: map[string]string{"SAME": "value"}, DeleteEnv: []string{"SAME"}},
+		{DeleteEnv: []string{"DUPLICATE", "DUPLICATE"}},
+		{SetEnv: map[string]string{"VALUE": "contains\x00nul"}},
+	} {
+		if err := invalid.Validate(); err == nil {
+			t.Fatalf("invalid LaunchEnvironmentPolicy was accepted: %+v", invalid)
+		}
+	}
+}
+
+func TestRequestPlanFreezesTheSelectedTrafficEgressPolicy(t *testing.T) {
+	t.Parallel()
+	aggregate := fixture(t, "network-path", mustOrigin(t, "https://relay.example"))
+	aggregate.ClientEndpoints[0].ProtocolPlans[0].EgressPolicy = egressnetwork.Policy{
+		Proxy: egressnetwork.ProxyPolicy{
+			Kind:     egressnetwork.ProxySOCKS5,
+			Endpoint: "PROXY.Example.:1080",
+		},
+		Resolver: egressnetwork.ResolverPolicy{
+			Kind:      egressnetwork.ResolverDoH,
+			DoHURL:    "https://DNS.Example.:443/dns-query",
+			Transport: egressnetwork.ResolverTransportProxy,
+		},
+	}
+	snapshot := mustCompile(t, aggregate)
+	aggregate.ClientEndpoints[0].ProtocolPlans[0].EgressPolicy = egressnetwork.DefaultPolicy()
+
+	plan, err := snapshot.ResolveRequest(
+		mustOrigin(t, "https://relay.example"),
+		RequestFacts{
+			Target: protocolspec.RequestTarget{
+				Method: "POST", Path: "/v1/messages",
+				Transport: protocolspec.ClientOperationTransportHTTP,
+			},
+			DownstreamProtocol: wireprofile.ApplicationProtocolHTTP1,
+		},
+	)
+	if err != nil {
+		t.Fatalf("ResolveRequest(): %v", err)
+	}
+	want := egressnetwork.Policy{
+		Proxy: egressnetwork.ProxyPolicy{
+			Kind:     egressnetwork.ProxySOCKS5,
+			Endpoint: "proxy.example:1080",
+		},
+		Resolver: egressnetwork.ResolverPolicy{
+			Kind:      egressnetwork.ResolverDoH,
+			DoHURL:    "https://dns.example/dns-query",
+			Transport: egressnetwork.ResolverTransportProxy,
+		},
+	}
+	if got := plan.EgressPolicy(); got != want {
+		t.Fatalf("RequestPlan EgressPolicy = %#v, want %#v", got, want)
+	}
+	if got := plan.ProtocolPlan().EgressPolicy(); got != want {
+		t.Fatalf("CompiledProtocolPlan EgressPolicy = %#v, want %#v", got, want)
+	}
+
+	invalid := fixture(t, "invalid-network-path", mustOrigin(t, "https://invalid.example"))
+	invalid.ClientEndpoints[0].ProtocolPlans[0].EgressPolicy = egressnetwork.Policy{
+		Proxy: egressnetwork.ProxyPolicy{Kind: egressnetwork.ProxyDirect},
+		Resolver: egressnetwork.ResolverPolicy{
+			Kind:      egressnetwork.ResolverDoH,
+			DoHURL:    "https://dns.example/dns-query",
+			Transport: egressnetwork.ResolverTransportProxy,
+		},
+	}
+	if err := invalid.Validate(); err == nil {
+		t.Fatal("Environment accepted an unusable traffic egress policy")
+	}
+}
+
+func TestRequestPlanFreezesACompiledTrafficTransformPolicy(t *testing.T) {
+	t.Parallel()
+	aggregate := fixture(t, "message-transform", mustOrigin(t, "https://relay.example"))
+	aggregate.ClientEndpoints[0].ProtocolPlans[0].TransformPolicy = messagetransform.Policy{
+		RequestJavaScript:  `context.requested = JSON.parse(request.body).model; request.body = "{\"model\":\"upstream\"}";`,
+		ResponseJavaScript: `response.headers["x-requested-model"] = context.requested;`,
+	}
+	snapshot := mustCompile(t, aggregate)
+	aggregate.ClientEndpoints[0].ProtocolPlans[0].TransformPolicy = messagetransform.Policy{}
+
+	plan, err := snapshot.ResolveRequest(
+		mustOrigin(t, "https://relay.example"),
+		RequestFacts{
+			Target: protocolspec.RequestTarget{
+				Method: "POST", Path: "/v1/messages",
+				Transport: protocolspec.ClientOperationTransportHTTP,
+			},
+			DownstreamProtocol: wireprofile.ApplicationProtocolHTTP1,
+		},
+	)
+	if err != nil {
+		t.Fatalf("ResolveRequest(): %v", err)
+	}
+	turn := plan.TransformProgram().NewTurn()
+	request, err := turn.ApplyRequest(context.Background(), messagetransform.RequestMessage{
+		Method: "POST", Path: "/v1/messages",
+		Headers: make(map[string][]string),
+		Body:    []byte(`{"model":"client"}`),
+	})
+	if err != nil {
+		t.Fatalf("ApplyRequest(): %v", err)
+	}
+	if got := string(request.Body); got != `{"model":"upstream"}` {
+		t.Fatalf("transformed request Body = %s", got)
+	}
+	response, err := turn.ApplyResponse(context.Background(), messagetransform.ResponseMessage{
+		StatusCode: 200, Headers: make(map[string][]string), Body: []byte(`{}`),
+	})
+	if err != nil {
+		t.Fatalf("ApplyResponse(): %v", err)
+	}
+	if got := response.Headers.Get("X-Requested-Model"); got != "client" {
+		t.Fatalf("shared Turn Context = %q, want client", got)
+	}
+
+	invalid := fixture(t, "invalid-message-transform", mustOrigin(t, "https://invalid.example"))
+	invalid.ClientEndpoints[0].ProtocolPlans[0].TransformPolicy = messagetransform.Policy{
+		RequestJavaScript: `if (`,
+	}
+	if err := invalid.Validate(); err == nil {
+		t.Fatal("Environment accepted invalid JavaScript syntax")
 	}
 }
 

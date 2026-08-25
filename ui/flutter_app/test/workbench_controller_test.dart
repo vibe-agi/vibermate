@@ -25,6 +25,7 @@ void main() {
       initialPreferences: const WorkbenchPreferences(
         section: WorkbenchSection.settings,
       ),
+      clock: () => DateTime.utc(2026, 8, 25, 12),
     );
     addTearDown(fixture.close);
 
@@ -35,10 +36,24 @@ void main() {
     await tester.pump();
     await tester.pump();
     expect(api.usageCalls, 1);
+    expect(api.usageQueries.single.toQueryParameters(), {
+      'from': '2026-07-27',
+      'until': '2026-08-26',
+      'timeZone': 'UTC',
+    });
+
+    await controller.selectUsageRangeDays(90);
+    expect(api.usageCalls, 2);
+    expect(api.usageQueries.last.toQueryParameters(), {
+      'from': '2026-05-28',
+      'until': '2026-08-26',
+      'timeZone': 'UTC',
+    });
+    expect(controller.runtimeUsage?.period.from, '2026-05-28');
 
     await tester.pump(const Duration(seconds: 11));
     await tester.pump();
-    expect(api.usageCalls, 1);
+    expect(api.usageCalls, 2);
     controller.dispose();
   });
 
@@ -779,11 +794,11 @@ void main() {
         clientEndpoints: [],
         pluginBindings: [],
         budgetPolicy: EnvironmentBudgetPolicy(id: '', revision: 0),
-        egressPolicy: EnvironmentEgressPolicy(id: '', revision: 0, mode: ''),
         contentRecording: EnvironmentContentRecordingPolicy(
           mode: 'metadata_only',
           retentionDays: 30,
         ),
+        launchEnvironment: EnvironmentLaunchPolicy.empty(),
         policySet: EnvironmentPolicySet(toolMode: 'observe'),
       );
 
@@ -853,6 +868,7 @@ final class _UsageTrackingApi implements ControlApi {
 
   final PreviewControlApi delegate;
   int usageCalls = 0;
+  final List<RuntimeUsageQuery> usageQueries = [];
 
   @override
   Future<DashboardData> loadDashboard() => delegate.loadDashboard();
@@ -902,9 +918,10 @@ final class _UsageTrackingApi implements ControlApi {
   Future<List<RuntimeUser>> runtimeUsers() => delegate.runtimeUsers();
 
   @override
-  Future<RuntimeUsageReport> runtimeUsage() {
+  Future<RuntimeUsageReport> runtimeUsage(RuntimeUsageQuery query) {
     usageCalls += 1;
-    return delegate.runtimeUsage();
+    usageQueries.add(query);
+    return delegate.runtimeUsage(query);
   }
 
   @override

@@ -161,6 +161,8 @@ extension ViberThemeContext on BuildContext {
 /// Only interactive controls and bounded content surfaces receive a radius.
 abstract final class ViberMetrics {
   static const double controlHeight = 26;
+  static const double optionRowHeight = 32;
+  static const double compactSegmentWidth = 58;
   static const double searchHeight = 28;
   static const double compactRowHeight = 26;
   static const double toolbarHeight = 42;
@@ -170,6 +172,14 @@ abstract final class ViberMetrics {
   static const double masterPaneMinWidth = 220;
   static const double masterPaneMaxWidth = 360;
   static const double splitDividerWidth = 5;
+
+  // Dialogs use three intentional widths. Content may still contract to the
+  // viewport through AlertDialog constraints; these values are the desktop
+  // targets shared by every workbench editor.
+  static const double dialogCompactWidth = 420;
+  static const double dialogStandardWidth = 520;
+  static const double dialogWideWidth = 640;
+  static const double dialogMaxHeightRatio = 0.74;
 
   static const BorderRadius controlRadius = BorderRadius.all(
     Radius.circular(4),
@@ -209,6 +219,34 @@ abstract final class ViberSpacing {
   static const double lg = 12;
   static const double xl = 16;
   static const double xxl = 24;
+}
+
+/// Shared desktop dialog chrome. Keeping labels and controls on a common
+/// content baseline prevents otherwise-identical editors from drifting by a
+/// few pixels as they evolve independently.
+abstract final class ViberDialogInsets {
+  static const EdgeInsets inset = EdgeInsets.symmetric(
+    horizontal: ViberSpacing.xl,
+    vertical: 20,
+  );
+  static const EdgeInsets title = EdgeInsets.fromLTRB(
+    ViberSpacing.xl,
+    14,
+    ViberSpacing.xl,
+    ViberSpacing.md,
+  );
+  static const EdgeInsets content = EdgeInsets.fromLTRB(
+    ViberSpacing.xl,
+    0,
+    ViberSpacing.xl,
+    ViberSpacing.md,
+  );
+  static const EdgeInsets actions = EdgeInsets.fromLTRB(
+    ViberSpacing.lg,
+    ViberSpacing.xs,
+    ViberSpacing.lg,
+    ViberSpacing.lg,
+  );
 }
 
 abstract final class ViberTheme {
@@ -419,7 +457,14 @@ abstract final class ViberTheme {
           fontSize: ViberType.utility,
           height: 1.2,
         ),
-        contentPadding: const EdgeInsets.symmetric(horizontal: 7, vertical: 3),
+        // The input glyph is 11px high. Symmetric 7.5px padding makes the
+        // painted outline fill the same 26px surface as selects and segmented
+        // controls; a min-height constraint alone leaves a 17px outline with
+        // invisible space below it.
+        contentPadding: const EdgeInsets.symmetric(
+          horizontal: 7,
+          vertical: 7.5,
+        ),
         suffixStyle: TextStyle(
           color: colors.textMuted,
           fontFamilyFallback: viberFontFallback,
@@ -428,6 +473,17 @@ abstract final class ViberTheme {
         ),
         constraints: const BoxConstraints(
           minHeight: ViberMetrics.controlHeight,
+        ),
+        // Material reserves a 48px mobile tap target for prefix/suffix icons
+        // unless the decoration constrains the slot. In this desktop console
+        // that silently turns an otherwise-standard field into a 48px row.
+        prefixIconConstraints: const BoxConstraints.tightFor(
+          width: ViberMetrics.controlHeight,
+          height: ViberMetrics.controlHeight,
+        ),
+        suffixIconConstraints: const BoxConstraints.tightFor(
+          width: ViberMetrics.controlHeight,
+          height: ViberMetrics.controlHeight,
         ),
         border: OutlineInputBorder(
           borderRadius: ViberMetrics.controlRadius,
@@ -637,6 +693,11 @@ abstract final class ViberTheme {
           minimumSize: const WidgetStatePropertyAll(
             Size(0, ViberMetrics.controlHeight),
           ),
+          maximumSize: const WidgetStatePropertyAll(
+            Size(double.infinity, ViberMetrics.controlHeight),
+          ),
+          tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+          visualDensity: VisualDensity.compact,
           padding: const WidgetStatePropertyAll(
             EdgeInsets.symmetric(horizontal: 6),
           ),

@@ -49,12 +49,36 @@ A user-declared upstream origin and set of accepted protocols. Its name, domain,
 _Avoid_: Provider, Account, Route
 
 **Account**:
-One authentication authority and transport method belonging to exactly one Upstream Endpoint.
+One authentication and outbound Header authority belonging to exactly one Upstream Endpoint. Its secret-bearing values remain protected while its exact Header names and mutation rules are explicit.
 _Avoid_: Client Session, provider, credential string
+
+**Account Header Policy**:
+The exact Header deletions and assignments applied to every Endpoint request authenticated by one Account. Authentication presets are protected assignments within this policy, not provider inference.
+_Avoid_: Custom auth, request script, Endpoint headers
 
 **Upstream Route**:
 An explicit destination through one Upstream Endpoint, one backend protocol, and one Account owned by that Endpoint. A Route may contain exact Model Mappings.
 _Avoid_: Endpoint, Client Flow, inferred provider
+
+**Traffic Path**:
+One Client Flow resolved to either its Original Destination or one selected Upstream Route. Egress and Transform Policies attach to this exact path rather than to a provider name or Runtime Server.
+_Avoid_: Account, Endpoint, network connection
+
+**Launch Environment Policy**:
+The exact environment-variable deletions and assignments an Environment supplies when a Capture Run starts. It affects only the launched client process and is frozen by that Capture Run.
+_Avoid_: Server environment, Route environment, shell profile
+
+**Egress Policy**:
+The second-hop network and name-resolution authority used by one Traffic Path to reach its destination. It never changes the destination identity recorded by the Route or Original Destination.
+_Avoid_: Runtime Server, capture proxy, Endpoint
+
+**Transform Policy**:
+The fail-closed Header and Body mutations applied around an AI Endpoint exchange on one Traffic Path. It cannot select a destination, Account, model, HTTP method, URL, or response status.
+_Avoid_: Route selection, protocol inference, generic plugin
+
+**Turn Context**:
+Bounded ephemeral state shared by request and response transforms for one Turn. It survives internal attempts for that Turn and never crosses into another Turn or Client Session.
+_Avoid_: Session state, cache, persistent script storage
 
 **Model Mapping**:
 One exact requested-model to upstream-model rewrite scoped to an Upstream Route. An unmatched requested model preserves its original opaque identifier.

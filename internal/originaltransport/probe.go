@@ -8,6 +8,7 @@ import (
 	"net"
 	"time"
 
+	"github.com/vibe-agi/vibermate/internal/egressnetwork"
 	"github.com/vibe-agi/vibermate/internal/offlinehold"
 	"github.com/vibe-agi/vibermate/internal/originidentity"
 )
@@ -20,7 +21,7 @@ type probeDialer interface {
 // original-origin opaque and auxiliary requests while normal admission stays
 // closed. It sends no HTTP request and uses no credential.
 type TLSProber struct {
-	dialer  probeDialer
+	dialers egressDialerBuilder
 	roots   *x509.CertPool
 	timeout time.Duration
 }
@@ -52,8 +53,18 @@ func newTLSProberWithTimeout(
 	if dialer == nil || timeout <= 0 {
 		return nil, errors.New("original-origin TLS probe dialer is missing")
 	}
+	dialers, err := egressnetwork.NewBuilder(egressnetwork.BuilderOptions{
+		BaseDialer: dialer,
+		TLSClientConfig: &tls.Config{
+			MinVersion: tls.VersionTLS12,
+			RootCAs:    roots,
+		},
+	})
+	if err != nil {
+		return nil, err
+	}
 	return &TLSProber{
-		dialer:  dialer,
+		dialers: dialers,
 		roots:   roots,
 		timeout: timeout,
 	}, nil
@@ -63,7 +74,7 @@ func (prober *TLSProber) Probe(
 	ctx context.Context,
 	request offlinehold.ProbeRequest,
 ) error {
-	if prober == nil || ctx == nil || len(request.Targets) == 0 {
+	if prober == nil || prober.dialers == nil || ctx == nil || len(request.Targets) == 0 {
 		return offlinehold.NewProbeFailure(
 			offlinehold.ProbeReasonFailed,
 			errors.New("original-origin TLS probe request is invalid"),
@@ -105,8 +116,22 @@ func (prober *TLSProber) Probe(
 				errors.New("original-origin probe network identities disagree"),
 			)
 		}
+		egressPolicy, err := reference.EgressPolicy.Normalize()
+		if err != nil {
+			return offlinehold.NewProbeFailure(
+				offlinehold.ProbeReasonFailed,
+				err,
+			)
+		}
+		dialer, err := prober.dialers.Dialer(egressPolicy)
+		if err != nil {
+			return offlinehold.NewProbeFailure(
+				offlinehold.ProbeReasonFailed,
+				err,
+			)
+		}
 		targetContext, cancel := context.WithTimeout(ctx, prober.timeout)
-		raw, err := prober.dialer.DialContext(
+		raw, err := dialer.DialContext(
 			targetContext,
 			"tcp",
 			origin.EndpointAuthority(),

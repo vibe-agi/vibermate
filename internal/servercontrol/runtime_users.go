@@ -8,6 +8,7 @@ import (
 	"io"
 	"mime"
 	"net/http"
+	"net/url"
 	"strings"
 	"time"
 
@@ -25,7 +26,7 @@ const (
 )
 
 type RuntimeUsageReader interface {
-	Report(context.Context) (runtimeusage.Report, error)
+	Report(context.Context, runtimeusage.Query) (runtimeusage.Report, error)
 }
 
 type RuntimeUsersOptions struct {
@@ -73,7 +74,7 @@ func (handler *RuntimeUsersHandler) ServeHTTP(
 	writer http.ResponseWriter,
 	request *http.Request,
 ) {
-	if handler == nil || request == nil || request.URL.RawQuery != "" {
+	if handler == nil || request == nil {
 		writeProblem(writer, http.StatusNotFound, "server_route_not_found")
 		return
 	}
@@ -82,12 +83,21 @@ func (handler *RuntimeUsersHandler) ServeHTTP(
 			writeProblem(writer, http.StatusNotFound, "server_route_not_found")
 			return
 		}
-		report, err := handler.usage.Report(request.Context())
+		query, err := runtimeUsageQuery(request.URL.RawQuery)
+		if err != nil {
+			writeProblem(writer, http.StatusUnprocessableEntity, "invalid_runtime_usage_query")
+			return
+		}
+		report, err := handler.usage.Report(request.Context(), query)
 		if err != nil {
 			writeProblem(writer, http.StatusServiceUnavailable, "runtime_user_usage_unavailable")
 			return
 		}
 		writeServerJSON(writer, http.StatusOK, report)
+		return
+	}
+	if request.URL.RawQuery != "" {
+		writeProblem(writer, http.StatusNotFound, "server_route_not_found")
 		return
 	}
 	if strings.HasPrefix(request.URL.Path, RuntimeUsersPath+"/") {
@@ -110,6 +120,18 @@ func (handler *RuntimeUsersHandler) ServeHTTP(
 	default:
 		writeProblem(writer, http.StatusNotFound, "server_route_not_found")
 	}
+}
+
+func runtimeUsageQuery(rawQuery string) (runtimeusage.Query, error) {
+	values, err := url.ParseQuery(rawQuery)
+	if err != nil || len(values) != 3 ||
+		len(values["from"]) != 1 || len(values["until"]) != 1 ||
+		len(values["timeZone"]) != 1 {
+		return runtimeusage.Query{}, runtimeusage.ErrInvalidQuery
+	}
+	return runtimeusage.NewQuery(
+		values.Get("from"), values.Get("until"), values.Get("timeZone"),
+	)
 }
 
 func (handler *RuntimeUsersHandler) update(

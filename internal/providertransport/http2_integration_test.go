@@ -75,7 +75,7 @@ func TestStrictTransportPreservesHTTP2AcrossTheProviderBoundary(t *testing.T) {
 	}
 	gate := newStartedGate(t)
 	authenticator, err := NewStaticBearerAuthenticator(
-		&secretReaderStub{value: []byte("h2-token")},
+		testSecretReader(t, "h2-token"),
 	)
 	if err != nil {
 		t.Fatal(err)

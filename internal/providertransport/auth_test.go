@@ -13,7 +13,7 @@ import (
 func TestAnthropicAPIKeyAuthenticatorUsesDedicatedHeader(t *testing.T) {
 	t.Parallel()
 
-	secrets := &secretReaderStub{value: []byte("anthropic-secret")}
+	secrets := testSecretReader(t, "anthropic-secret")
 	authenticator, err := NewAnthropicAPIKeyAuthenticator(secrets)
 	if err != nil {
 		t.Fatal(err)
@@ -61,7 +61,7 @@ func TestAnthropicAPIKeyAuthenticatorUsesDedicatedHeader(t *testing.T) {
 func TestStaticBearerAuthenticatorUsesAuthorizationHeader(t *testing.T) {
 	t.Parallel()
 
-	secrets := &secretReaderStub{value: []byte("oauth-access-token")}
+	secrets := testSecretReader(t, "oauth-access-token")
 	authenticator, err := NewStaticBearerAuthenticator(secrets)
 	if err != nil {
 		t.Fatal(err)

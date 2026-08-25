@@ -12,8 +12,185 @@ import 'package:vibermate_app/preview/preview_control_api.dart';
 import 'runtime_usage_fixture.dart';
 
 void main() {
+  test(
+    'HTTP API sends Account Header policy atomically with credential',
+    () async {
+      final bodies = <Map<String, Object?>>[];
+      final server = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);
+      addTearDown(() => server.close(force: true));
+      server.listen((request) async {
+        request.response.headers.contentType = ContentType.json;
+        if (request.method == 'GET' &&
+            request.uri.path == '/api/v1/auth/sessions/current') {
+          await request.drain<void>();
+          request.response.write(
+            jsonEncode({
+              'schema': 'vibermate-app-session-state-v1',
+              'revision': 1,
+              'expiresAt': DateTime.now()
+                  .toUtc()
+                  .add(const Duration(hours: 1))
+                  .toIso8601String(),
+            }),
+          );
+        } else if ((request.method == 'POST' || request.method == 'PUT') &&
+            request.uri.path.startsWith('/api/v1/provider-accounts')) {
+          final body = Map<String, Object?>.from(
+            jsonDecode(await utf8.decoder.bind(request).join()) as Map,
+          );
+          bodies.add(body);
+          request.response.statusCode = request.method == 'POST' ? 201 : 200;
+          request.response.write(
+            jsonEncode({
+              'id': 'account.headers',
+              'displayName': 'Header Account',
+              'upstreamEndpointId': 'target.headers',
+              'kind': 'bearer_token',
+              'realmId': 'target.headers',
+              'state': 'active',
+              'revision': request.method == 'POST' ? 1 : 2,
+              'credentialState': 'ready',
+              'credentialEpoch': request.method == 'POST' ? 1 : 2,
+              'setHeaderNames': ['X-Organization'],
+              'deleteHeaderNames': ['X-Legacy'],
+            }),
+          );
+        } else {
+          request.response.statusCode = HttpStatus.notFound;
+        }
+        await request.response.close();
+      });
+
+      final api = await HttpControlApi.connect(
+        DesktopSession(
+          baseUrl: Uri.parse('http://127.0.0.1:${server.port}'),
+          readToken: List.filled(43, 'R').join(),
+          writeToken: List.filled(43, 'W').join(),
+          instanceId: 'instance-test',
+          expiresAt: DateTime.now().toUtc().add(const Duration(hours: 1)),
+        ),
+      );
+      addTearDown(api.close);
+      const policy = ProviderAccountHeaderPolicy(
+        setHeaders: {'X-Organization': 'team-a'},
+        deleteHeaders: ['X-Legacy'],
+      );
+
+      final created = await api.createProviderAccount(
+        id: 'account.headers',
+        displayName: 'Header Account',
+        upstreamEndpointId: 'target.headers',
+        kind: 'bearer_token',
+        secret: 'test-token-one',
+        headerPolicy: policy,
+      );
+      final replaced = await api.replaceProviderAccountCredential(
+        account: created,
+        secret: 'test-token-two',
+        headerPolicy: policy,
+      );
+
+      expect(bodies, hasLength(2));
+      expect(bodies.first['setHeaders'], {'X-Organization': 'team-a'});
+      expect(bodies.first['deleteHeaders'], ['X-Legacy']);
+      expect(bodies.last['setHeaders'], {'X-Organization': 'team-a'});
+      expect(replaced.setHeaderNames, ['X-Organization']);
+      expect(replaced.deleteHeaderNames, ['X-Legacy']);
+    },
+  );
+
+  test('HTTP API tests one complete message-transform Turn', () async {
+    Map<String, Object?>? received;
+    final server = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);
+    addTearDown(() => server.close(force: true));
+    server.listen((request) async {
+      request.response.headers.contentType = ContentType.json;
+      if (request.method == 'GET' &&
+          request.uri.path == '/api/v1/auth/sessions/current') {
+        await request.drain<void>();
+        request.response.write(
+          jsonEncode({
+            'schema': 'vibermate-app-session-state-v1',
+            'revision': 1,
+            'expiresAt': DateTime.now()
+                .toUtc()
+                .add(const Duration(hours: 1))
+                .toIso8601String(),
+          }),
+        );
+      } else if (request.method == 'POST' &&
+          request.uri.path == '/api/v1/message-transforms/actions/test') {
+        received =
+            jsonDecode(await utf8.decoder.bind(request).join())
+                as Map<String, Object?>;
+        request.response.write(
+          jsonEncode({
+            'clientProtocol': 'anthropic_messages',
+            'request': {
+              'method': 'POST',
+              'path': '/v1/messages',
+              'headers': {
+                'Content-Type': ['application/json'],
+                'X-Request': ['yes'],
+              },
+              'body': '{"model":"claude-sample"}',
+            },
+            'response': {
+              'statusCode': 200,
+              'headers': {
+                'Content-Type': ['application/json'],
+                'X-Response': ['yes'],
+              },
+              'body': '{"type":"message"}',
+            },
+          }),
+        );
+      } else {
+        request.response.statusCode = HttpStatus.notFound;
+      }
+      await request.response.close();
+    });
+
+    final api = await HttpControlApi.connect(
+      DesktopSession(
+        baseUrl: Uri.parse('http://127.0.0.1:${server.port}'),
+        readToken: List.filled(43, 'R').join(),
+        writeToken: List.filled(43, 'W').join(),
+        instanceId: 'instance-test',
+        expiresAt: DateTime.now().toUtc().add(const Duration(hours: 1)),
+      ),
+    );
+    addTearDown(api.close);
+    const policy = TrafficTransformPolicy(
+      requestJavaScript: 'request.headers["x-request"] = "yes";',
+      responseJavaScript: 'response.headers["x-response"] = "yes";',
+    );
+
+    final result = await api.testMessageTransform(
+      clientProtocol: 'anthropic_messages',
+      policy: policy,
+    );
+    expect(received, {
+      'clientProtocol': 'anthropic_messages',
+      'policy': policy.toJson(),
+    });
+    expect(result.clientProtocol, 'anthropic_messages');
+    expect(result.request.path, '/v1/messages');
+    expect(result.request.headers['x-request'], ['yes']);
+    expect(result.response.statusCode, 200);
+    expect(result.response.headers['x-response'], ['yes']);
+  });
+
   test('HTTP API reads Server access and manages Runtime Users', () async {
-    final requests = <({String method, String path, String token})>[];
+    final requests =
+        <
+          ({
+            String method,
+            String path,
+            Map<String, String> queryParameters,
+            String token,
+          })
+        >[];
     final bodies = <Map<String, Object?>>[];
     var state = 'active';
     final server = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);
@@ -22,6 +199,7 @@ void main() {
       requests.add((
         method: request.method,
         path: request.uri.path,
+        queryParameters: request.uri.queryParameters,
         token: request.headers.value(HttpHeaders.authorizationHeader) ?? '',
       ));
       request.response.headers.contentType = ContentType.json;
@@ -30,10 +208,11 @@ void main() {
         await request.drain<void>();
         request.response.write(
           jsonEncode({
-            'schema': 'vibermate-server-access-v1',
+            'schema': 'vibermate-server-access-v2',
             'transport': 'http',
             'authentication': 'runtime_user_password',
             'sessionPolicy': 'reusable_until_logout_disable_or_expiry',
+            'targets': ['192.168.1.44:9666'],
           }),
         );
       } else if (request.method == 'GET' &&
@@ -114,7 +293,13 @@ void main() {
     expect(access.transport, 'http');
     final users = await api.runtimeUsers();
     expect(users.single.username, 'alice');
-    final usage = await api.runtimeUsage();
+    final usage = await api.runtimeUsage(
+      const RuntimeUsageQuery(
+        from: '2026-07-27',
+        until: '2026-08-26',
+        timeZone: 'Asia/Singapore',
+      ),
+    );
     expect(usage.users.single.username, 'alice');
     expect(usage.users.single.turns, 2);
     expect(
@@ -143,6 +328,11 @@ void main() {
       '/api/v1/server/runtime-users',
       '/api/v1/server/runtime-users/user.test',
     ]);
+    expect(requests[2].queryParameters, {
+      'from': '2026-07-27',
+      'until': '2026-08-26',
+      'timeZone': 'Asia/Singapore',
+    });
     expect(requests.first.token, 'Bearer ${List.filled(43, 'R').join()}');
     expect(requests[1].token, 'Bearer ${List.filled(43, 'R').join()}');
     expect(requests[2].token, 'Bearer ${List.filled(43, 'R').join()}');
@@ -181,7 +371,13 @@ void main() {
     );
     addTearDown(api.close);
 
-    final report = await api.runtimeUsage();
+    final report = await api.runtimeUsage(
+      const RuntimeUsageQuery(
+        from: '2026-07-27',
+        until: '2026-08-26',
+        timeZone: 'Asia/Singapore',
+      ),
+    );
     expect(report.users.single.username, 'alice');
   });
 

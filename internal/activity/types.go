@@ -836,13 +836,26 @@ type PageRequest struct {
 	ManualCaptureID          string
 	EnvironmentID            string
 	ConversationProjectionID string
+	OccurredAtOrAfter        time.Time
+	OccurredBefore           time.Time
 }
 
 func (request PageRequest) Validate() error {
 	if request.BeforeSequence < 0 ||
 		request.Limit <= 0 ||
 		request.Limit > MaxPageSize ||
-		(request.CaptureRunID != "" && request.ManualCaptureID != "") {
+		(request.CaptureRunID != "" && request.ManualCaptureID != "") ||
+		request.OccurredAtOrAfter.IsZero() != request.OccurredBefore.IsZero() {
+		return ErrInvalidEvent
+	}
+	if !request.OccurredAtOrAfter.IsZero() &&
+		(!request.OccurredAtOrAfter.Equal(
+			request.OccurredAtOrAfter.UTC().Truncate(time.Millisecond),
+		) ||
+			!request.OccurredBefore.Equal(
+				request.OccurredBefore.UTC().Truncate(time.Millisecond),
+			) ||
+			!request.OccurredBefore.After(request.OccurredAtOrAfter)) {
 		return ErrInvalidEvent
 	}
 	if request.CaptureRunID != "" {
