@@ -8,6 +8,7 @@ import (
 
 	"github.com/vibe-agi/vibermate/internal/captureassignment"
 	"github.com/vibe-agi/vibermate/internal/captureidentity"
+	"github.com/vibe-agi/vibermate/internal/clienttarget"
 	"github.com/vibe-agi/vibermate/internal/environment"
 	"github.com/vibe-agi/vibermate/internal/originidentity"
 )
@@ -92,6 +93,7 @@ func TestEnvironmentAuthorityResolverCreatesTypedCaptureAssignment(t *testing.T)
 	}
 	set, err := resolver.AssignAndResolve(
 		context.Background(), capture, "work", captureassignment.SourceManualCreate,
+		clienttarget.Profile{},
 	)
 	if err != nil {
 		t.Fatal(err)

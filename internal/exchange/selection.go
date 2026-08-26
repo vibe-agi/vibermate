@@ -6,7 +6,6 @@ import (
 	"slices"
 
 	"github.com/vibe-agi/vibermate/internal/environment"
-	"github.com/vibe-agi/vibermate/internal/originidentity"
 	"github.com/vibe-agi/vibermate/internal/protocolspec"
 	"github.com/vibe-agi/vibermate/internal/providerauth"
 	"github.com/vibe-agi/vibermate/internal/providertransport"
@@ -102,7 +101,6 @@ type frozenSelection struct {
 	routeID              environment.UpstreamRouteID
 	routeRevision        environment.Revision
 	accountPolicy        environment.CompiledAccountPolicy
-	clientOrigin         originidentity.ClientOrigin
 	resolveModelMapping  func(string) (string, bool)
 	original             bool
 	targetRef            string
@@ -222,16 +220,16 @@ func selectFrozenPlan(plan environment.RequestPlan) (frozenSelection, error) {
 		environmentDigest: plan.EnvironmentDigest(), endpointID: endpoint.ID(),
 		endpointRevision: endpoint.Revision(), protocolPlanID: protocolPlan.ID(),
 		protocolPlanRevision: protocolPlan.Revision(),
-		clientOrigin:         endpoint.ClientOrigin(), wireProfile: wireProfile,
-		codecPlan: codecPlan, policySet: policySet,
+		wireProfile:          wireProfile,
+		codecPlan:            codecPlan, policySet: policySet,
 	}
 	switch {
 	case plan.PreservesOriginalDestination():
 		if _, exists := plan.UpstreamRoute(); exists {
 			return frozenSelection{}, errors.New("Original Destination carries an Upstream Route")
 		}
-		originalOrigin, err := originidentity.ParseProviderOrigin(endpoint.ClientOrigin().String())
-		if err != nil || originalOrigin.BasePath() != "" {
+		originalOrigin, exists := plan.OriginalOrigin()
+		if !exists || originalOrigin.Validate() != nil || originalOrigin.BasePath() != "" {
 			return frozenSelection{}, errors.New("Original Destination origin is invalid")
 		}
 		target, err := providertransport.NewTarget(originalOrigin)

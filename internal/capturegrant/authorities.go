@@ -6,6 +6,7 @@ import (
 
 	"github.com/vibe-agi/vibermate/internal/captureassignment"
 	"github.com/vibe-agi/vibermate/internal/captureidentity"
+	"github.com/vibe-agi/vibermate/internal/clienttarget"
 	"github.com/vibe-agi/vibermate/internal/environment"
 )
 
@@ -89,6 +90,7 @@ type CaptureAuthorityResolver interface {
 		captureidentity.Reference,
 		environment.EnvironmentID,
 		captureassignment.Source,
+		clienttarget.Profile,
 	) (CaptureAuthoritySet, error)
 	Resolve(
 		context.Context,
@@ -184,6 +186,7 @@ func (resolver *environmentAuthorityResolver) AssignAndResolve(
 	capture captureidentity.Reference,
 	environmentID environment.EnvironmentID,
 	source captureassignment.Source,
+	profile clienttarget.Profile,
 ) (CaptureAuthoritySet, error) {
 	if resolver == nil || resolver.assignments == nil || ctx == nil ||
 		capture.Validate() != nil {
@@ -204,6 +207,7 @@ func (resolver *environmentAuthorityResolver) AssignAndResolve(
 		ctx,
 		captureassignment.CreateCommand{
 			Capture: capture, EnvironmentID: environmentID, Source: source,
+			ClientProfile: profile,
 		},
 	)
 	if err != nil {

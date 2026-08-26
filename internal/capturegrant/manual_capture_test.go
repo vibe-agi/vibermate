@@ -13,6 +13,7 @@ import (
 	"github.com/vibe-agi/vibermate/internal/captureassignment"
 	"github.com/vibe-agi/vibermate/internal/capturecredential"
 	"github.com/vibe-agi/vibermate/internal/captureidentity"
+	"github.com/vibe-agi/vibermate/internal/clienttarget"
 	"github.com/vibe-agi/vibermate/internal/controlprincipal"
 	"github.com/vibe-agi/vibermate/internal/environment"
 	"github.com/vibe-agi/vibermate/internal/localca"
@@ -182,6 +183,7 @@ func (authority manualAuthorities) AssignAndResolve(
 	capture captureidentity.Reference,
 	environmentID environment.EnvironmentID,
 	_ captureassignment.Source,
+	_ clienttarget.Profile,
 ) (CaptureAuthoritySet, error) {
 	assignment := authority.assignment
 	assignment.Capture = capture
@@ -452,6 +454,7 @@ func (authority *sequencedManualAuthorities) AssignAndResolve(
 	capture captureidentity.Reference,
 	environmentID environment.EnvironmentID,
 	_ captureassignment.Source,
+	_ clienttarget.Profile,
 ) (CaptureAuthoritySet, error) {
 	assignment := authority.assigned
 	assignment.Capture = capture

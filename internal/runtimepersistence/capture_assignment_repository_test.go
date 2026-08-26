@@ -9,7 +9,9 @@ import (
 
 	"github.com/vibe-agi/vibermate/internal/captureassignment"
 	"github.com/vibe-agi/vibermate/internal/captureidentity"
+	"github.com/vibe-agi/vibermate/internal/clienttarget"
 	"github.com/vibe-agi/vibermate/internal/environment"
+	"github.com/vibe-agi/vibermate/internal/originidentity"
 )
 
 func TestCaptureAssignmentRepositoryCASListAndReopen(t *testing.T) {
@@ -141,9 +143,19 @@ func captureAssignmentFixture(
 	if err != nil {
 		panic(err)
 	}
-	return captureassignment.Assignment{
+	assignment := captureassignment.Assignment{
 		Capture: capture, EnvironmentID: environmentID, Revision: revision, Source: source,
 		LaunchAuthority: launchAuthority,
 		UpdatedAt:       time.Date(2026, 8, 7, 12, 0, int(revision), 0, time.UTC),
 	}
+	if capture.Kind == captureidentity.KindManagedRun {
+		actual, actualErr := originidentity.ParseProviderOrigin("http://127.0.0.1:23333")
+		canonical, canonicalErr := originidentity.ParseClientOrigin("https://api.anthropic.com")
+		target, targetErr := clienttarget.New(actual, canonical)
+		if actualErr != nil || canonicalErr != nil || targetErr != nil {
+			panic("construct Capture assignment client target fixture")
+		}
+		assignment.ClientTarget = target
+	}
+	return assignment
 }

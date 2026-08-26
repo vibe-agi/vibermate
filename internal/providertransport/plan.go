@@ -285,26 +285,26 @@ func (target Target) probeTransportKind() (
 }
 
 type RequestOptions struct {
-	RequestID       string
-	TargetRef       string
-	Target          Target
-	Provenance      RequestProvenance
-	Action          *offlinehold.ActionLease
-	Method          string
-	RelativePath    string
-	Headers         http.Header
-	Body            []byte
-	RawQuery        string
-	CredentialMode  providerauth.CredentialMode
-	ClientOrigin    originidentity.ClientOrigin
-	AccountRef      providerauth.AccountRef
-	SecretRef       secretstore.Reference
-	AuthDriverRef   providerauth.DriverRef
-	WireProfile     wireprofile.CompiledUpstreamWireProfile
-	ClientProtocol  wireprofile.ApplicationProtocol
-	ClientUserAgent string
-	ClientHello     transportprofile.Observation
-	EgressPolicy    egressnetwork.Policy
+	RequestID         string
+	TargetRef         string
+	Target            Target
+	Provenance        RequestProvenance
+	Action            *offlinehold.ActionLease
+	Method            string
+	RelativePath      string
+	Headers           http.Header
+	Body              []byte
+	RawQuery          string
+	CredentialMode    providerauth.CredentialMode
+	PassthroughOrigin originidentity.ProviderOrigin
+	AccountRef        providerauth.AccountRef
+	SecretRef         secretstore.Reference
+	AuthDriverRef     providerauth.DriverRef
+	WireProfile       wireprofile.CompiledUpstreamWireProfile
+	ClientProtocol    wireprofile.ApplicationProtocol
+	ClientUserAgent   string
+	ClientHello       transportprofile.Observation
+	EgressPolicy      egressnetwork.Policy
 	// ConnectionID, ExchangeID, and ParentAttemptID associate this outbound
 	// with the client connection, the Exchange, and the upstream attempt that
 	// caused it. They travel as typed references so no identity encodes
@@ -483,22 +483,22 @@ func NewRequest(options RequestOptions) (Request, error) {
 		if err := options.AccountRef.Validate(); err != nil {
 			return Request{}, errors.New("provider account reference is invalid")
 		}
-		if options.ClientOrigin.String() != "" {
+		if options.PassthroughOrigin.String() != "" {
 			return Request{}, errors.New(
-				"managed provider request carries a client origin authority",
+				"managed provider request carries a passthrough origin authority",
 			)
 		}
 	case providerauth.CredentialClientPassthrough:
-		clientOrigin, originErr := originidentity.ParseClientOrigin(options.ClientOrigin.String())
-		if originErr != nil || clientOrigin != options.ClientOrigin {
+		if options.PassthroughOrigin.Validate() != nil {
 			return Request{}, errors.New(
-				"client passthrough origin is not canonical",
+				"client passthrough origin is invalid",
 			)
 		}
-		if options.Target.origin.String() != options.ClientOrigin.String() ||
-			options.Target.origin.BasePath() != "" {
+		if options.Target.origin != options.PassthroughOrigin ||
+			options.Target.origin.BasePath() != "" ||
+			options.Provenance.DestinationKind() != environment.DestinationKindOriginal {
 			return Request{}, errors.New(
-				"client passthrough target differs from the exact client origin",
+				"client passthrough target differs from the frozen original destination",
 			)
 		}
 		if options.SecretRef.String() != "" ||

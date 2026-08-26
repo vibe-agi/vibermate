@@ -24,6 +24,7 @@ import (
 	"github.com/vibe-agi/vibermate/internal/capturerun"
 	"github.com/vibe-agi/vibermate/internal/certidentity"
 	"github.com/vibe-agi/vibermate/internal/clientadapter"
+	"github.com/vibe-agi/vibermate/internal/clienttarget"
 	"github.com/vibe-agi/vibermate/internal/controlprincipal"
 	"github.com/vibe-agi/vibermate/internal/environment"
 	"github.com/vibe-agi/vibermate/internal/localca"
@@ -338,6 +339,7 @@ func (issuer *Issuer) IssueManualCapture(
 	}
 	authority, err := issuer.authorities.AssignAndResolve(
 		ctx, capture, request.EnvironmentID, captureassignment.SourceManualCreate,
+		clienttarget.Profile{},
 	)
 	if err != nil {
 		return ManualCaptureGrant{}, issuer.revokeUnusedManualCapture(
@@ -598,12 +600,13 @@ func classifyManualCaptureError(err error, fallback error) error {
 }
 
 type CaptureRunRequest struct {
-	EnvironmentID  environment.EnvironmentID
-	CWD            string
-	Command        []string
-	ExecutablePath string
-	LocalUserLabel string
-	Companion      *CompanionAttestation
+	EnvironmentID     environment.EnvironmentID
+	CWD               string
+	Command           []string
+	ExecutablePath    string
+	LocalUserLabel    string
+	ClientEnvironment clienttarget.EnvironmentFacts
+	Companion         *CompanionAttestation
 }
 
 // CompanionAttestation is verification and opaque workspace evidence produced
@@ -671,6 +674,13 @@ func (issuer *Issuer) IssueCaptureRun(
 		evidence := *detection.Evidence
 		runAdapter = &evidence
 	}
+	profile, err := clienttarget.NewProfile(
+		detectedClientID(detection),
+		request.ClientEnvironment,
+	)
+	if err != nil {
+		return CaptureRunGrant{}, ErrInvalidCaptureRun
+	}
 	workspace, err := issuer.workspaces.ResolveCaptureRun(
 		ctx,
 		principal,
@@ -736,7 +746,7 @@ func (issuer *Issuer) IssueCaptureRun(
 		err = captureErr
 	} else {
 		authorities, err = issuer.authorities.AssignAndResolve(
-			ctx, capture, selectedEnvironment, assignmentSource,
+			ctx, capture, selectedEnvironment, assignmentSource, profile,
 		)
 	}
 	if err != nil {
@@ -863,6 +873,16 @@ func companionWorkspace(
 	return attestation.Workspace
 }
 
+func detectedClientID(detection clientadapter.Detection) string {
+	if detection.Evidence != nil {
+		return detection.Evidence.ID
+	}
+	if detection.Signer != nil {
+		return detection.Signer.ID
+	}
+	return ""
+}
+
 func classifyEnvironmentSelectionError(err error) error {
 	switch {
 	case errors.Is(err, context.Canceled), errors.Is(err, context.DeadlineExceeded):
@@ -912,6 +932,9 @@ func validateCaptureRunRequest(request CaptureRunRequest) error {
 		len(request.Command) > maxArguments ||
 		!capturerun.ValidLocalUserLabel(request.LocalUserLabel) {
 		return errors.New("CaptureRun fields are invalid")
+	}
+	if err := request.ClientEnvironment.Validate(); err != nil {
+		return errors.New("CaptureRun client environment is invalid")
 	}
 	total := 0
 	for _, argument := range request.Command {

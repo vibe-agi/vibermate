@@ -69,9 +69,10 @@ const (
 type Decryption string
 
 const (
-	DecryptionBlind Decryption = "blind"
-	DecryptionMITM  Decryption = "mitm"
-	DecryptionNone  Decryption = "none"
+	DecryptionBlind     Decryption = "blind"
+	DecryptionMITM      Decryption = "mitm"
+	DecryptionCleartext Decryption = "cleartext"
+	DecryptionNone      Decryption = "none"
 )
 
 type Phase string
@@ -216,10 +217,10 @@ func (event Event) Validate() error {
 			)
 		}
 		if !environmentEvidencePresent ||
-			event.Decryption != DecryptionMITM ||
+			(event.Decryption != DecryptionMITM && event.Decryption != DecryptionCleartext) ||
 			event.Decision != DecisionAllow {
 			return fmt.Errorf(
-				"%w: ClientEndpoint relation exists without an allowed MITM decision",
+				"%w: ClientEndpoint relation exists without an allowed inspection decision",
 				ErrInvalidEvent,
 			)
 		}
@@ -254,7 +255,7 @@ func (event Event) Validate() error {
 		return fmt.Errorf("%w: start time is empty", ErrInvalidEvent)
 	}
 	switch event.Decryption {
-	case DecryptionBlind, DecryptionMITM, DecryptionNone:
+	case DecryptionBlind, DecryptionMITM, DecryptionCleartext, DecryptionNone:
 	default:
 		return fmt.Errorf("%w: decryption state is invalid", ErrInvalidEvent)
 	}
@@ -264,11 +265,11 @@ func (event Event) Validate() error {
 	default:
 		return fmt.Errorf("%w: phase is invalid", ErrInvalidEvent)
 	}
-	if event.Decryption == DecryptionMITM &&
+	if (event.Decryption == DecryptionMITM || event.Decryption == DecryptionCleartext) &&
 		event.Decision == DecisionAllow &&
 		(!environmentEvidencePresent || !clientEndpointEvidencePresent) {
 		return fmt.Errorf(
-			"%w: allowed MITM has no Environment and ClientEndpoint relation",
+			"%w: allowed inspection has no Environment and ClientEndpoint relation",
 			ErrInvalidEvent,
 		)
 	}

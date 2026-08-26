@@ -219,6 +219,7 @@ type RequestPlan struct {
 	wireProfile         wireprofile.CompiledUpstreamWireProfile
 	upstreamRoute       *CompiledRoutePlan
 	wireVariant         wireprofile.CompiledUpstreamWireVariant
+	originalOrigin      originidentity.ProviderOrigin
 }
 
 func (plan RequestPlan) EnvironmentID() EnvironmentID       { return plan.environmentID }
@@ -255,6 +256,12 @@ func (plan RequestPlan) UpstreamRoute() (CompiledRoutePlan, bool) {
 }
 func (plan RequestPlan) WireVariant() wireprofile.CompiledUpstreamWireVariant {
 	return plan.wireVariant
+}
+func (plan RequestPlan) OriginalOrigin() (originidentity.ProviderOrigin, bool) {
+	if !plan.PreservesOriginalDestination() || plan.originalOrigin.Validate() != nil {
+		return originidentity.ProviderOrigin{}, false
+	}
+	return plan.originalOrigin, true
 }
 
 func compileExecution(

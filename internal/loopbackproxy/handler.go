@@ -18,6 +18,7 @@ import (
 	"log"
 	"net"
 	"net/http"
+	"net/url"
 	"strconv"
 	"strings"
 	"sync"
@@ -94,11 +95,11 @@ type CertificateAuthority interface {
 }
 
 type CaptureAssignmentAuthority interface {
-	RegisterConnection(
+	RegisterProviderConnection(
 		context.Context,
 		captureidentity.Reference,
 		string,
-		originidentity.ClientOrigin,
+		originidentity.ProviderOrigin,
 	) (*captureassignment.ConnectionLease, error)
 	BeginRequest(
 		context.Context,
@@ -447,9 +448,9 @@ func (handler *Handler) ServeHTTP(
 		return
 	}
 	// A cleartext forward-proxy request carries its target in an absolute
-	// request-target. It is authenticated exactly like a CONNECT, then
-	// forwarded to that origin; it never enters a model pipeline and never
-	// carries a provider credential.
+	// request-target. It enters the model pipeline only when the exact target
+	// was frozen from this verified Agent's client configuration; every other
+	// cleartext request remains an ordinary blind forward.
 	if cleartextForward {
 		policyHost, policyPort := policyTarget(request, true)
 		outcome, denialReason := handler.decideConnection(
@@ -464,14 +465,70 @@ func (handler *Handler) ServeHTTP(
 			writeReason(writer, http.StatusForbidden, ReasonConnectionDenied, outcome.RuleID)
 			return
 		}
-		terminal = handler.serveCleartextForward(
-			writer,
-			request,
-			active,
-			audit,
-			source,
-			outcome.RuleID,
+		providerOrigin, originErr := cleartextProviderOrigin(request.URL)
+		if originErr != nil {
+			writeReason(writer, http.StatusBadRequest, ReasonConnectAuthorityInvalid, "")
+			return
+		}
+		connectionLease, registerErr := handler.assignments.RegisterProviderConnection(
+			request.Context(), capture, audit.ID(), providerOrigin,
 		)
+		if registerErr != nil {
+			if handler.denyConnection(request.Context(), audit, source, ReasonCaptureEnvironmentUnavailable) != nil {
+				writeReason(writer, http.StatusServiceUnavailable, ReasonConnectionAuditUnavailable, "")
+				return
+			}
+			terminal = true
+			writeReason(writer, http.StatusServiceUnavailable, ReasonCaptureEnvironmentUnavailable, "")
+			return
+		}
+		defer connectionLease.Close()
+		binding := connectionLease.Binding()
+		if binding.Mode == environment.ConnectionModeBlind {
+			terminal = handler.serveCleartextForward(
+				writer,
+				request,
+				active,
+				audit,
+				source,
+				outcome.RuleID,
+			)
+			return
+		}
+		snapshot := connectionLease.Environment()
+		endpoint, exists := snapshot.LookupCompiledClientOrigin(binding.ClientOrigin)
+		if !exists || endpoint.ID() != binding.ClientEndpointID {
+			writeReason(writer, http.StatusMisdirectedRequest, ReasonEnvironmentChanged, "")
+			return
+		}
+		if err := audit.Decide(request.Context(), connectionevent.DecisionEvidence{
+			Source: source, Decision: connectionevent.DecisionAllow,
+			RuleID: outcome.RuleID, RouteHost: providerOrigin.Host(),
+			EnvironmentID: snapshot.ID(), EnvironmentName: snapshot.Name(),
+			EnvironmentRevision: snapshot.Revision(),
+			ClientEndpointID:    endpoint.ID(), ClientEndpointRevision: endpoint.Revision(),
+			EgressScope:          connectionevent.EgressScopeEnvironment,
+			EgressSource:         connectionevent.EgressSourceEnvironmentDefault,
+			EgressPolicyRevision: uint64(snapshot.Revision()),
+			Decryption:           connectionevent.DecryptionCleartext,
+		}); err != nil {
+			writeReason(writer, http.StatusServiceUnavailable, ReasonConnectionAuditUnavailable, "")
+			return
+		}
+		if err := audit.Connected(request.Context(), connectionevent.ConnectedEvidence{
+			RouteHost: providerOrigin.Host(),
+		}); err != nil {
+			writeReason(writer, http.StatusServiceUnavailable, ReasonConnectionAuditUnavailable, "")
+			return
+		}
+		handler.serveInner(
+			writer, request, admission, capture, connectionLease,
+			transportprofile.Observation{}, audit,
+		)
+		handler.finishConnectionAudit(audit, connectionevent.TerminalEvidence{
+			Outcome: connectionevent.OutcomeCompleted,
+		})
+		terminal = true
 		return
 	}
 	origin, host, err := connectOrigin(request.Host)
@@ -494,8 +551,13 @@ func (handler *Handler) ServeHTTP(
 		writeReason(writer, http.StatusBadRequest, ReasonConnectAuthorityInvalid, "")
 		return
 	}
-	connectionLease, err := handler.assignments.RegisterConnection(
-		request.Context(), capture, audit.ID(), origin,
+	providerOrigin, err := originidentity.ParseProviderOrigin(origin.String())
+	if err != nil {
+		writeReason(writer, http.StatusBadRequest, ReasonConnectAuthorityInvalid, "")
+		return
+	}
+	connectionLease, err := handler.assignments.RegisterProviderConnection(
+		request.Context(), capture, audit.ID(), providerOrigin,
 	)
 	if err != nil {
 		if handler.denyConnection(request.Context(), audit, source, ReasonCaptureEnvironmentUnavailable) != nil {
@@ -541,7 +603,7 @@ func (handler *Handler) ServeHTTP(
 		)
 		return
 	}
-	endpoint, exists := snapshot.LookupCompiledClientOrigin(origin)
+	endpoint, exists := snapshot.LookupCompiledClientOrigin(binding.ClientOrigin)
 	if !exists || endpoint.ID() != binding.ClientEndpointID {
 		if handler.denyConnection(request.Context(), audit, source, ReasonEnvironmentChanged) == nil {
 			terminal = true
@@ -704,7 +766,7 @@ func (handler *Handler) serveTLS(
 		parent,
 		connectionevent.ConnectedEvidence{
 			ObservedSNI: observedSNI,
-			RouteHost:   binding.ClientOrigin.Host(),
+			RouteHost:   binding.ProviderOrigin.Host(),
 		},
 	); err != nil {
 		return fmt.Errorf("record connected ConnectionEvent: %w", err)
@@ -773,11 +835,12 @@ func (handler *Handler) serveInner(
 		return
 	}
 	binding := connectionLease.Binding()
-	if request == nil ||
-		request.URL == nil ||
-		request.URL.IsAbs() ||
-		request.TLS == nil ||
-		!authorityMatches(request.Host, binding.ClientOrigin) {
+	secureRequest := request != nil && request.URL != nil &&
+		!request.URL.IsAbs() && request.TLS != nil
+	cleartextRequest := request != nil && request.URL != nil &&
+		request.URL.IsAbs() && request.TLS == nil && request.URL.Scheme == "http"
+	if (!secureRequest && !cleartextRequest) ||
+		!authorityMatches(request.Host, binding.ProviderOrigin) {
 		writeReason(
 			writer,
 			http.StatusMisdirectedRequest,
@@ -994,11 +1057,16 @@ func (handler *Handler) serveSemantic(
 		return
 	}
 	requestOptions := []exchange.ClientRequestOption{
-		exchange.WithClientHelloObservation(observation),
 		exchange.WithOriginalHeaders(request.Header),
 		// Every identity is generated independently; association travels as
 		// typed references rather than as a delimiter-joined string.
 		exchange.WithIngressCorrelation(admission, audit.ID()),
+	}
+	if observation.Available() {
+		requestOptions = append(
+			requestOptions,
+			exchange.WithClientHelloObservation(observation),
+		)
 	}
 	if evidence := clientProtocolEvidenceFromHeaders(request.Header); len(evidence) != 0 {
 		requestOptions = append(
@@ -1056,7 +1124,7 @@ func (handler *Handler) serveSemantic(
 			Context:             rawContext,
 			Layer:               rawevidence.LayerClientIngress,
 			Method:              request.Method,
-			Scheme:              "https",
+			Scheme:              requestScheme(request),
 			Authority:           request.Host,
 			Path:                request.URL.EscapedPath(),
 			RawQuery:            request.URL.RawQuery,
@@ -1086,7 +1154,7 @@ func (handler *Handler) serveSemantic(
 		ObservationLimit: handler.rawTimeout,
 		MaximumBodyBytes: handler.rawBodyBytes,
 		Context:          rawContext,
-		Scheme:           "https",
+		Scheme:           requestScheme(request),
 		Authority:        request.Host,
 		Path:             request.URL.EscapedPath(),
 		RawQuery:         request.URL.RawQuery,
@@ -1736,7 +1804,7 @@ func canonicalCONNECTHost(host string) string {
 	return host
 }
 
-func authorityMatches(authority string, origin originidentity.ClientOrigin) bool {
+func authorityMatches(authority string, origin originidentity.ProviderOrigin) bool {
 	host, port, err := splitAuthority(authority)
 	if err != nil {
 		// HTTP/1.1 Host may omit the default HTTPS port after MITM.
@@ -1744,6 +1812,13 @@ func authorityMatches(authority string, origin originidentity.ClientOrigin) bool
 		port = 443
 	}
 	return host == origin.Host() && port == origin.Port()
+}
+
+func requestScheme(request *http.Request) string {
+	if request != nil && request.TLS != nil {
+		return "https"
+	}
+	return "http"
 }
 
 // sniMatches compares canonically: RFC 6066 server names are case-insensitive
@@ -2520,6 +2595,24 @@ func cleartextAuthority(hostPort string) (string, uint16, error) {
 		return "", 0, errors.New("cleartext authority is invalid")
 	}
 	return host, 80, nil
+}
+
+func cleartextProviderOrigin(value *url.URL) (originidentity.ProviderOrigin, error) {
+	if value == nil || value.Scheme != "http" {
+		return originidentity.ProviderOrigin{}, errors.New("cleartext origin is invalid")
+	}
+	host, port, err := cleartextAuthority(value.Host)
+	if err != nil {
+		return originidentity.ProviderOrigin{}, err
+	}
+	authority := host
+	if strings.Contains(host, ":") {
+		authority = "[" + host + "]"
+	}
+	if port != 80 {
+		authority = net.JoinHostPort(host, strconv.Itoa(int(port)))
+	}
+	return originidentity.ParseProviderOrigin("http://" + authority)
 }
 
 // forwardableHeaders removes proxy and hop-by-hop headers so the origin sees

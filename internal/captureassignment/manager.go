@@ -123,21 +123,37 @@ func (manager *Manager) CreateForLaunch(
 	if err != nil {
 		return Assignment{}, environment.LaunchEnvironmentPolicy{}, err
 	}
+	launchEnvironment := snapshot.LaunchEnvironment()
+	clientTarget, targetAvailable, err := command.ClientProfile.Resolve(
+		launchEnvironment.SetEnv,
+		launchEnvironment.DeleteEnv,
+	)
+	if err != nil {
+		return Assignment{}, environment.LaunchEnvironmentPolicy{}, ErrInvalidAssignment
+	}
 	launchAuthority, err := environment.NewLaunchAuthorityBoundary(snapshot)
+	if targetAvailable {
+		launchAuthority, err = environment.NewLaunchAuthorityBoundaryForClientTarget(
+			snapshot,
+			clientTarget.CanonicalOrigin(),
+			clientTarget.ActualOrigin(),
+		)
+	}
 	if err != nil {
 		return Assignment{}, environment.LaunchEnvironmentPolicy{}, err
 	}
 	candidate := Assignment{
 		Capture: command.Capture, EnvironmentID: command.EnvironmentID, Revision: 1,
 		Source: command.Source, LaunchAuthority: launchAuthority,
-		UpdatedAt: canonicalTime(manager.clock.Now()),
+		ClientTarget: clientTarget,
+		UpdatedAt:    canonicalTime(manager.clock.Now()),
 	}
 	result, writeErr := manager.repository.Write(ctx, 0, candidate)
 	assignment, err := manager.finishWrite(state, candidate, result, writeErr)
 	if err != nil {
 		return assignment, environment.LaunchEnvironmentPolicy{}, err
 	}
-	return assignment, snapshot.LaunchEnvironment(), nil
+	return assignment, launchEnvironment, nil
 }
 
 func (manager *Manager) Resolve(ctx context.Context, reference captureidentity.Reference) (Assignment, error) {
@@ -267,6 +283,22 @@ func (manager *Manager) RegisterConnection(
 	id string,
 	origin originidentity.ClientOrigin,
 ) (*ConnectionLease, error) {
+	providerOrigin, err := originidentity.ParseProviderOrigin(origin.String())
+	if err != nil {
+		return nil, ErrInvalidAssignment
+	}
+	return manager.RegisterProviderConnection(ctx, capture, id, providerOrigin)
+}
+
+// RegisterProviderConnection freezes the actual proxy destination. A verified
+// Agent's explicit client target may alias that destination to a canonical
+// Client Flow; all other destinations use ordinary exact-origin resolution.
+func (manager *Manager) RegisterProviderConnection(
+	ctx context.Context,
+	capture captureidentity.Reference,
+	id string,
+	origin originidentity.ProviderOrigin,
+) (*ConnectionLease, error) {
 	finish, err := manager.lifecycle.begin(ctx)
 	if err != nil {
 		return nil, err
@@ -292,7 +324,16 @@ func (manager *Manager) RegisterConnection(
 	if err != nil {
 		return fail(err)
 	}
-	binding, err := snapshot.BeginConnection(origin)
+	var binding environment.ConnectionBinding
+	if assignment.ClientTarget.Available() &&
+		assignment.ClientTarget.MatchesTransport(origin) {
+		binding, err = snapshot.BeginClientTargetConnection(
+			origin,
+			assignment.ClientTarget.CanonicalOrigin(),
+		)
+	} else {
+		binding, err = snapshot.BeginProviderConnection(origin)
+	}
 	if err != nil {
 		return fail(err)
 	}
@@ -390,6 +431,10 @@ func (manager *Manager) BeginRequest(
 		state.mu.Unlock()
 		return fail(err)
 	}
+	if !connectionBindingAuthorized(assignment, connection.binding) {
+		state.mu.Unlock()
+		return fail(ErrAssignmentUnavailable)
+	}
 	if connection.binding.Mode != environment.ConnectionModeSemantic {
 		state.mu.Unlock()
 		return fail(environment.ErrClientProtocolNotMatched)
@@ -408,12 +453,35 @@ func (manager *Manager) BeginRequest(
 		state.mu.Unlock()
 		finish()
 	}
-	plan, err := snapshot.ResolveRequest(connection.binding.ClientOrigin, facts)
+	if assignment.ClientTarget.Available() &&
+		assignment.ClientTarget.MatchesTransport(connection.binding.ProviderOrigin) &&
+		assignment.ClientTarget.CanonicalOrigin() == connection.binding.ClientOrigin &&
+		!assignment.ClientTarget.ContainsPath(facts.Target.Path) {
+		release()
+		return nil, environment.ErrClientProtocolNotMatched
+	}
+	plan, err := snapshot.ResolveConnectionRequest(connection.binding, facts)
 	if err != nil {
 		release()
 		return nil, err
 	}
 	return &RequestLease{assignment: assignment, plan: plan, finish: release}, nil
+}
+
+func connectionBindingAuthorized(
+	assignment Assignment,
+	binding environment.ConnectionBinding,
+) bool {
+	if binding.Mode != environment.ConnectionModeSemantic {
+		return true
+	}
+	canonical, err := originidentity.ParseProviderOrigin(binding.ClientOrigin.String())
+	if err == nil && canonical == binding.ProviderOrigin {
+		return true
+	}
+	return assignment.ClientTarget.Available() &&
+		assignment.ClientTarget.MatchesTransport(binding.ProviderOrigin) &&
+		assignment.ClientTarget.CanonicalOrigin() == binding.ClientOrigin
 }
 
 func (lease *RequestLease) Release() {

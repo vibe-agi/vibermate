@@ -43,6 +43,7 @@ const (
 // Environment assignment or revision changes.
 type ConnectionBinding struct {
 	Mode                ConnectionMode
+	ProviderOrigin      originidentity.ProviderOrigin
 	ClientOrigin        originidentity.ClientOrigin
 	ClientEndpointID    ClientEndpointID
 	CompatibilityDigest ConnectionCompatibilityDigest
@@ -212,18 +213,74 @@ func (snapshot EnvironmentSnapshot) LookupCompiledClientOrigin(origin originiden
 // method/path/transport evidence needed to select one exists only after the
 // HTTP request arrives.
 func (snapshot EnvironmentSnapshot) BeginConnection(origin originidentity.ClientOrigin) (ConnectionBinding, error) {
+	providerOrigin, err := originidentity.ParseProviderOrigin(origin.String())
+	if err != nil {
+		return ConnectionBinding{}, ErrInvalidEnvironment
+	}
+	return snapshot.beginConnection(providerOrigin, origin)
+}
+
+// BeginProviderConnection resolves an ordinary proxy destination. Only an
+// exact HTTPS ClientOrigin already present in the Environment is semantic;
+// private cleartext and every other destination remain blind.
+func (snapshot EnvironmentSnapshot) BeginProviderConnection(
+	origin originidentity.ProviderOrigin,
+) (ConnectionBinding, error) {
 	if err := snapshot.validate(); err != nil {
 		return ConnectionBinding{}, err
 	}
-	if snapshot.State() != StateActive || origin.Validate() != nil {
+	if snapshot.State() != StateActive || origin.Validate() != nil ||
+		origin.BasePath() != "" {
 		return ConnectionBinding{}, ErrInvalidEnvironment
 	}
-	endpoint, intercepted := snapshot.LookupCompiledClientOrigin(origin)
-	if !intercepted {
-		return ConnectionBinding{Mode: ConnectionModeBlind, ClientOrigin: origin}, nil
+	if origin.Scheme() == "https" {
+		clientOrigin, err := originidentity.ParseClientOrigin(origin.String())
+		if err == nil {
+			return snapshot.beginConnection(origin, clientOrigin)
+		}
 	}
 	return ConnectionBinding{
-		Mode: ConnectionModeSemantic, ClientOrigin: origin,
+		Mode: ConnectionModeBlind, ProviderOrigin: origin,
+	}, nil
+}
+
+// BeginClientTargetConnection binds an explicit destination selected by a
+// verified Agent to an existing canonical Client Flow. The caller owns proof
+// that the pair came from the Capture's frozen client target.
+func (snapshot EnvironmentSnapshot) BeginClientTargetConnection(
+	origin originidentity.ProviderOrigin,
+	canonical originidentity.ClientOrigin,
+) (ConnectionBinding, error) {
+	if err := snapshot.validate(); err != nil {
+		return ConnectionBinding{}, err
+	}
+	if snapshot.State() != StateActive || origin.Validate() != nil ||
+		origin.BasePath() != "" || canonical.Validate() != nil {
+		return ConnectionBinding{}, ErrInvalidEnvironment
+	}
+	return snapshot.beginConnection(origin, canonical)
+}
+
+func (snapshot EnvironmentSnapshot) beginConnection(
+	providerOrigin originidentity.ProviderOrigin,
+	clientOrigin originidentity.ClientOrigin,
+) (ConnectionBinding, error) {
+	if err := snapshot.validate(); err != nil {
+		return ConnectionBinding{}, err
+	}
+	if snapshot.State() != StateActive || providerOrigin.Validate() != nil ||
+		providerOrigin.BasePath() != "" || clientOrigin.Validate() != nil {
+		return ConnectionBinding{}, ErrInvalidEnvironment
+	}
+	endpoint, intercepted := snapshot.LookupCompiledClientOrigin(clientOrigin)
+	if !intercepted {
+		return ConnectionBinding{
+			Mode: ConnectionModeBlind, ProviderOrigin: providerOrigin,
+		}, nil
+	}
+	return ConnectionBinding{
+		Mode: ConnectionModeSemantic, ProviderOrigin: providerOrigin,
+		ClientOrigin:     clientOrigin,
 		ClientEndpointID: endpoint.ID(), CompatibilityDigest: endpoint.CompatibilityDigest(),
 	}, nil
 }
@@ -319,7 +376,35 @@ func (snapshot EnvironmentSnapshot) ResolveRequest(
 		wireProfile:       wireProfile,
 		upstreamRoute:     upstreamRoute,
 		wireVariant:       variant,
+		originalOrigin:    providerOriginFromClient(origin),
 	}, nil
+}
+
+// ResolveConnectionRequest carries the actual client destination into the
+// frozen request plan while using the canonical Client Flow only for protocol
+// selection.
+func (snapshot EnvironmentSnapshot) ResolveConnectionRequest(
+	binding ConnectionBinding,
+	facts RequestFacts,
+) (RequestPlan, error) {
+	if err := ValidateConnectionBinding(snapshot, binding); err != nil ||
+		binding.Mode != ConnectionModeSemantic {
+		return RequestPlan{}, ErrClientProtocolNotMatched
+	}
+	plan, err := snapshot.ResolveRequest(binding.ClientOrigin, facts)
+	if err != nil {
+		return RequestPlan{}, err
+	}
+	plan.originalOrigin = binding.ProviderOrigin
+	return plan, nil
+}
+
+func providerOriginFromClient(origin originidentity.ClientOrigin) originidentity.ProviderOrigin {
+	providerOrigin, err := originidentity.ParseProviderOrigin(origin.String())
+	if err != nil {
+		panic("validated ClientOrigin did not form a ProviderOrigin")
+	}
+	return providerOrigin
 }
 
 func (snapshot EnvironmentSnapshot) clone() EnvironmentSnapshot {
@@ -364,11 +449,17 @@ func ValidateConnectionBinding(snapshot EnvironmentSnapshot, binding ConnectionB
 	}
 	switch binding.Mode {
 	case ConnectionModeBlind:
-		if binding.ClientEndpointID != "" || binding.CompatibilityDigest != (ConnectionCompatibilityDigest{}) {
+		if binding.ClientOrigin.String() != "" || binding.ClientEndpointID != "" ||
+			binding.CompatibilityDigest != (ConnectionCompatibilityDigest{}) {
 			return ErrInvalidEnvironment
 		}
-		if _, intercepted := snapshot.LookupClientOrigin(binding.ClientOrigin); intercepted {
-			return ErrInvalidEnvironment
+		if binding.ProviderOrigin.Scheme() == "https" {
+			clientOrigin, err := originidentity.ParseClientOrigin(binding.ProviderOrigin.String())
+			if err == nil {
+				if _, intercepted := snapshot.LookupClientOrigin(clientOrigin); intercepted {
+					return ErrInvalidEnvironment
+				}
+			}
 		}
 		return nil
 	case ConnectionModeSemantic:
@@ -387,16 +478,18 @@ func ValidateConnectionBinding(snapshot EnvironmentSnapshot, binding ConnectionB
 }
 
 func validateConnectionBindingShape(binding ConnectionBinding) error {
-	if binding.ClientOrigin.Validate() != nil {
+	if binding.ProviderOrigin.Validate() != nil || binding.ProviderOrigin.BasePath() != "" {
 		return ErrInvalidEnvironment
 	}
 	switch binding.Mode {
 	case ConnectionModeBlind:
-		if binding.ClientEndpointID != "" || binding.CompatibilityDigest != (ConnectionCompatibilityDigest{}) {
+		if binding.ClientOrigin.String() != "" || binding.ClientEndpointID != "" ||
+			binding.CompatibilityDigest != (ConnectionCompatibilityDigest{}) {
 			return ErrInvalidEnvironment
 		}
 	case ConnectionModeSemantic:
-		if validateID("ClientEndpoint ID", binding.ClientEndpointID.String()) != nil ||
+		if binding.ClientOrigin.Validate() != nil ||
+			validateID("ClientEndpoint ID", binding.ClientEndpointID.String()) != nil ||
 			binding.CompatibilityDigest == (ConnectionCompatibilityDigest{}) {
 			return ErrInvalidEnvironment
 		}

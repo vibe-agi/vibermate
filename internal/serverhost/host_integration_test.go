@@ -19,6 +19,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/vibe-agi/vibermate/internal/activity"
 	"github.com/vibe-agi/vibermate/internal/capturecontrol"
 	"github.com/vibe-agi/vibermate/internal/clientadapter"
 	"github.com/vibe-agi/vibermate/internal/connectionpolicy"
@@ -697,6 +698,217 @@ func TestRemoteLauncherRelaysChildHTTPThroughServerDataPlane(t *testing.T) {
 	cancel()
 	if err != nil || exitCode != 0 {
 		t.Fatalf("relayed child exit=%d error=%v", exitCode, err)
+	}
+}
+
+func TestRuntimeUserCustomClaudeHTTPOriginProducesExchangeAndUsage(t *testing.T) {
+	t.Parallel()
+
+	const model = "dashscope:deepseek-v4-flash-0731"
+	upstream := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		if request.Method != http.MethodPost || request.URL.Path != "/v1/messages" ||
+			request.Header.Get("Authorization") != "Bearer test-token" ||
+			request.Header.Get("Proxy-Authorization") != "" {
+			writer.WriteHeader(http.StatusBadRequest)
+			return
+		}
+		writer.Header().Set("Content-Type", "application/json")
+		_, _ = io.WriteString(writer, `{"id":"msg_test","type":"message","role":"assistant","model":"`+model+`","content":[{"type":"text","text":"captured"}],"stop_reason":"end_turn","stop_sequence":null,"usage":{"input_tokens":4,"output_tokens":2}}`)
+	}))
+	defer upstream.Close()
+
+	root := t.TempDir()
+	options := serverOptions(t, root)
+	options.Transport = serverhost.TransportOptions{Mode: serverhost.TransportHTTP}
+	host, err := serverhost.Start(context.Background(), options)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer shutdownServer(t, host)
+
+	parsedUpstream, err := url.Parse(upstream.URL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rules := host.Runtime().ConnectionRules()
+	current := rules.Current()
+	if _, err := rules.Replace(
+		context.Background(),
+		current.Revision,
+		[]connectionpolicy.Rule{{
+			ID: "test.custom-claude-http", Priority: 100,
+			Decision: connectionpolicy.DecisionAllow,
+			Match: connectionpolicy.MatchExactHostPort(
+				parsedUpstream.Hostname(),
+				mustPort(t, parsedUpstream.Port()),
+			),
+		}},
+		current.Mode,
+	); err != nil {
+		t.Fatal(err)
+	}
+
+	created, err := host.Runtime().RuntimeUsers().Create(
+		context.Background(),
+		runtimeuser.CreateCommand{
+			Username: "claude-user", Password: []byte("test-integration-password"),
+		},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	controlClient := &http.Client{Timeout: 10 * time.Second}
+	login := postJSON(
+		t,
+		controlClient,
+		"http://"+host.Status().ListenAddress+servercontrol.RuntimeUserSessionPath,
+		"",
+		servercontrol.RuntimeUserLogin{
+			Schema: servercontrol.RuntimeUserLoginSchema, Username: "claude-user",
+			Password:   "test-integration-password",
+			MachineID:  "uRmbW_GvQ7LZ9poYHh0aC8W3vQoJ0lZB7iK2s6xQfEk",
+			DeviceName: "integration workstation",
+		},
+	)
+	defer login.Body.Close()
+	if login.StatusCode != http.StatusCreated {
+		payload, _ := io.ReadAll(login.Body)
+		t.Fatalf("login status=%d body=%s", login.StatusCode, payload)
+	}
+	var session servercontrol.RuntimeUserSession
+	if err := json.NewDecoder(login.Body).Decode(&session); err != nil {
+		t.Fatal(err)
+	}
+
+	catalog := clientadapter.BuiltInCatalog()
+	signer := clientadapter.ClaudeCodeSignerDarwin()
+	create := postJSON(
+		t,
+		controlClient,
+		"http://"+host.Status().ListenAddress+"/api/v1/capture-runs",
+		session.SessionToken,
+		capturecontrol.CreateRequest{
+			EnvironmentID:  environment.SystemTransparentID.String(),
+			CWD:            "/workspace/project",
+			Command:        []string{"claude"},
+			ExecutablePath: "/opt/tools/claude",
+			ClientEnvironment: &capturecontrol.ClientEnvironmentInput{
+				AnthropicBaseURL: upstream.URL,
+			},
+			Companion: &capturecontrol.CompanionAttestationInput{
+				Detection: clientadapter.Detection{
+					Status: clientadapter.StatusGeneric, Recognition: clientadapter.RecognitionRecognized,
+					CatalogRevision: catalog.Revision(), CanonicalPath: "/opt/tools/claude",
+					ExecutableLabel: "claude",
+					Signer: &clientadapter.SignerEvidence{
+						ID: signer.ID, Revision: signer.Revision, CatalogRevision: catalog.Revision(),
+						InstallShape: signer.InstallShape, LaunchRecipe: signer.LaunchRecipe,
+						SignedPath: "/opt/tools/claude",
+					},
+				},
+				Workspace: capturecontrol.CompanionWorkspaceInput{
+					MachineID:      "uRmbW_GvQ7LZ9poYHh0aC8W3vQoJ0lZB7iK2s6xQfEk",
+					WorkspaceID:    "QfEkuRmbW_GvQ7LZ9poYHh0aC8W3vQoJ0lZB7iK2s6w",
+					WorkspaceLabel: "project", RegistrationRevision: 1, DerivationRevision: 1,
+				},
+			},
+		},
+	)
+	defer create.Body.Close()
+	if create.StatusCode != http.StatusCreated {
+		payload, _ := io.ReadAll(create.Body)
+		t.Fatalf("create Capture status=%d body=%s", create.StatusCode, payload)
+	}
+	var grant capturecontrol.LaunchGrant
+	if err := json.NewDecoder(create.Body).Decode(&grant); err != nil {
+		t.Fatal(err)
+	}
+
+	proxyURL, err := url.Parse("http://" + host.Status().ListenAddress)
+	if err != nil {
+		t.Fatal(err)
+	}
+	proxyURL.User = url.UserPassword("capture", grant.ProxyToken)
+	proxyTransport := &http.Transport{Proxy: http.ProxyURL(proxyURL)}
+	t.Cleanup(proxyTransport.CloseIdleConnections)
+	proxyClient := &http.Client{Transport: proxyTransport, Timeout: 10 * time.Second}
+	payload := []byte(`{"model":"` + model + `","max_tokens":16,"messages":[{"role":"user","content":"hello"}]}`)
+	request, err := http.NewRequest(http.MethodPost, upstream.URL+"/v1/messages", bytes.NewReader(payload))
+	if err != nil {
+		t.Fatal(err)
+	}
+	request.Header.Set("Authorization", "Bearer test-token")
+	request.Header.Set("Content-Type", "application/json")
+	response, err := proxyClient.Do(request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	responsePayload, readErr := io.ReadAll(response.Body)
+	response.Body.Close()
+	if readErr != nil || response.StatusCode != http.StatusOK ||
+		!bytes.Contains(responsePayload, []byte("captured")) {
+		t.Fatalf("proxied response status=%d bodyBytes=%d error=%v", response.StatusCode, len(responsePayload), readErr)
+	}
+
+	page, err := host.Runtime().Activities().ListExchanges(
+		context.Background(),
+		activity.PageRequest{CaptureRunID: grant.Run.ID, Limit: 10},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(page.Items) != 1 || page.Items[0].Status != activity.StatusSucceeded {
+		t.Fatalf("Capture activities = %#v", page.Items)
+	}
+
+	adminKey, err := os.ReadFile(host.Status().AdminAccessKeyPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	adminLogin := postJSON(
+		t,
+		controlClient,
+		"http://"+host.Status().ListenAddress+servercontrol.AdminSessionPath,
+		"",
+		servercontrol.AdminLogin{
+			Schema:    servercontrol.AdminLoginSchema,
+			AccessKey: strings.TrimSpace(string(adminKey)),
+		},
+	)
+	defer adminLogin.Body.Close()
+	var admin servercontrol.AdminSession
+	if adminLogin.StatusCode != http.StatusCreated || json.NewDecoder(adminLogin.Body).Decode(&admin) != nil {
+		t.Fatalf("admin login status=%d", adminLogin.StatusCode)
+	}
+	usageRequest, err := http.NewRequest(
+		http.MethodGet,
+		"http://"+host.Status().ListenAddress+servercontrol.RuntimeUserUsagePath+
+			"?from=2026-08-01&until=2026-09-01&timeZone=UTC",
+		nil,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	usageRequest.Header.Set("Authorization", "Bearer "+admin.ReadToken)
+	usageResponse, err := controlClient.Do(usageRequest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer usageResponse.Body.Close()
+	var usage runtimeusage.Report
+	if usageResponse.StatusCode != http.StatusOK || json.NewDecoder(usageResponse.Body).Decode(&usage) != nil {
+		t.Fatalf("usage status=%d", usageResponse.StatusCode)
+	}
+	if len(usage.Users) != 1 || usage.Users[0].UserID != created.ID ||
+		usage.Users[0].Turns != 1 || usage.Users[0].Succeeded != 1 ||
+		usage.Users[0].Tokens.InputUncached.Tokens != 4 ||
+		usage.Users[0].Tokens.InputUncached.KnownTurns != 1 ||
+		usage.Users[0].Tokens.Output.Tokens != 2 ||
+		usage.Users[0].Tokens.Output.KnownTurns != 1 ||
+		len(usage.Users[0].Models) != 1 ||
+		usage.Users[0].Models[0].RequestedModel != model ||
+		usage.Users[0].Models[0].UpstreamModel != model {
+		t.Fatalf("Runtime User usage = %#v", usage.Users)
 	}
 }
 

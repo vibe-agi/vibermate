@@ -18,6 +18,7 @@ import (
 	"github.com/vibe-agi/vibermate/internal/capturecontrol"
 	"github.com/vibe-agi/vibermate/internal/capturerun"
 	"github.com/vibe-agi/vibermate/internal/clientadapter"
+	"github.com/vibe-agi/vibermate/internal/clienttarget"
 	"github.com/vibe-agi/vibermate/internal/environment"
 	"github.com/vibe-agi/vibermate/internal/localdiscovery"
 	"github.com/vibe-agi/vibermate/internal/serverconnection"
@@ -168,6 +169,9 @@ func (launcher *Launcher) Run(
 		Command:        append([]string(nil), command...),
 		ExecutablePath: executable,
 		LocalUserLabel: localUserLabel(launcher.config.BaseEnvironment),
+		ClientEnvironment: clientEnvironmentInput(
+			clienttarget.FromEnvironment(launcher.config.BaseEnvironment),
+		),
 	}
 	var control *controlClient
 	var remote *remoteConnection
@@ -351,6 +355,18 @@ func (launcher *Launcher) Run(
 		return exitCode, fmt.Errorf("finish CaptureRun: %w", finishErr)
 	}
 	return exitCode, childErr
+}
+
+func clientEnvironmentInput(
+	facts clienttarget.EnvironmentFacts,
+) *capturecontrol.ClientEnvironmentInput {
+	return &capturecontrol.ClientEnvironmentInput{
+		AnthropicBaseURL:    facts.AnthropicBaseURL,
+		CodexBaseURL:        facts.CodexBaseURL,
+		OpenAIBaseURL:       facts.OpenAIBaseURL,
+		CodexAPIKeyPresent:  facts.CodexAPIKeyPresent,
+		OpenAIAPIKeyPresent: facts.OpenAIAPIKeyPresent,
+	}
 }
 
 func validateLaunchExecutable(invocationPath, grantedPath string) error {

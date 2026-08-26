@@ -10,6 +10,7 @@ import (
 
 	"github.com/vibe-agi/vibermate/internal/captureassignment"
 	"github.com/vibe-agi/vibermate/internal/captureidentity"
+	"github.com/vibe-agi/vibermate/internal/clienttarget"
 	"github.com/vibe-agi/vibermate/internal/environment"
 )
 
@@ -54,7 +55,8 @@ func (repository *captureAssignmentRepository) ListByEnvironment(ctx context.Con
 		`SELECT capture_kind, capture_id, environment_id, assignment_revision, source,
 		        launch_environment_id, launch_environment_revision, launch_environment_digest,
 		        protected_authorities_json, managed_authorities_json,
-		        launch_authority_digest, updated_at_unix_ms
+		        launch_authority_digest, client_target_origin,
+		        client_target_canonical_origin, updated_at_unix_ms
 		 FROM capture_environment_assignments
 		 WHERE environment_id = ?
 		 ORDER BY capture_kind, capture_id LIMIT ?`, environmentID.String(), limit)
@@ -97,12 +99,14 @@ func (repository *captureAssignmentRepository) Write(ctx context.Context, expect
 		   capture_kind, capture_id, environment_id, assignment_revision, source,
 		   launch_environment_id, launch_environment_revision, launch_environment_digest,
 		   protected_authorities_json, managed_authorities_json,
-		   launch_authority_digest, updated_at_unix_ms
-		 ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		   launch_authority_digest, client_target_origin,
+		   client_target_canonical_origin, updated_at_unix_ms
+		 ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		 ON CONFLICT(capture_kind, capture_id) DO NOTHING`,
 		string(candidate.Capture.Kind), candidate.Capture.ID, candidate.EnvironmentID.String(),
 		int64(candidate.Revision), string(candidate.Source), launchEnvironmentID, launchRevision,
 		launchEnvironmentDigest, protectedJSON, managedJSON, launchDigest,
+		clientTargetOrigin(candidate), clientTargetCanonicalOrigin(candidate),
 		candidate.UpdatedAt.UnixMilli())
 	if err != nil {
 		return captureassignment.CommitResult{Outcome: captureassignment.CommitOutcomeNotCommitted}, fmt.Errorf("write Capture Environment assignment: %w", err)
@@ -156,13 +160,15 @@ type captureAssignmentRow interface{ Scan(...any) error }
 
 func scanCaptureAssignment(row captureAssignmentRow) (captureassignment.Assignment, error) {
 	var kind, id, environmentID, source, launchEnvironmentID string
+	var targetOrigin, targetCanonicalOrigin string
 	var protectedJSON, managedJSON string
 	var revision, launchRevision, updatedAt int64
 	var launchEnvironmentDigestBytes, launchDigestBytes []byte
 	if err := row.Scan(
 		&kind, &id, &environmentID, &revision, &source,
 		&launchEnvironmentID, &launchRevision, &launchEnvironmentDigestBytes,
-		&protectedJSON, &managedJSON, &launchDigestBytes, &updatedAt,
+		&protectedJSON, &managedJSON, &launchDigestBytes,
+		&targetOrigin, &targetCanonicalOrigin, &updatedAt,
 	); err != nil {
 		return captureassignment.Assignment{}, err
 	}
@@ -198,10 +204,21 @@ func scanCaptureAssignment(row captureAssignmentRow) (captureassignment.Assignme
 	if err != nil {
 		return captureassignment.Assignment{}, captureassignment.ErrInvalidAssignment
 	}
+	var clientTarget clienttarget.Target
+	if targetOrigin != "" || targetCanonicalOrigin != "" {
+		if targetOrigin == "" || targetCanonicalOrigin == "" {
+			return captureassignment.Assignment{}, captureassignment.ErrInvalidAssignment
+		}
+		clientTarget, err = clienttarget.Restore(targetOrigin, targetCanonicalOrigin)
+		if err != nil {
+			return captureassignment.Assignment{}, captureassignment.ErrInvalidAssignment
+		}
+	}
 	assignment := captureassignment.Assignment{
 		Capture: reference, EnvironmentID: parsedEnvironmentID,
 		Revision: captureassignment.Revision(revision), Source: captureassignment.Source(source),
-		LaunchAuthority: launchAuthority, UpdatedAt: time.UnixMilli(updatedAt).UTC(),
+		LaunchAuthority: launchAuthority, ClientTarget: clientTarget,
+		UpdatedAt: time.UnixMilli(updatedAt).UTC(),
 	}
 	if err := assignment.Validate(); err != nil {
 		return captureassignment.Assignment{}, err
@@ -216,7 +233,8 @@ func loadCaptureAssignment(ctx context.Context, querier interface {
 		`SELECT capture_kind, capture_id, environment_id, assignment_revision, source,
 		        launch_environment_id, launch_environment_revision, launch_environment_digest,
 		        protected_authorities_json, managed_authorities_json,
-		        launch_authority_digest, updated_at_unix_ms
+		        launch_authority_digest, client_target_origin,
+		        client_target_canonical_origin, updated_at_unix_ms
 		 FROM capture_environment_assignments
 		 WHERE capture_kind = ? AND capture_id = ?`, string(reference.Kind), reference.ID))
 	if errors.Is(err, sql.ErrNoRows) {
@@ -226,6 +244,20 @@ func loadCaptureAssignment(ctx context.Context, querier interface {
 		return captureassignment.Assignment{}, false, fmt.Errorf("load Capture Environment assignment: %w", err)
 	}
 	return assignment, true, nil
+}
+
+func clientTargetOrigin(assignment captureassignment.Assignment) string {
+	if !assignment.ClientTarget.Available() {
+		return ""
+	}
+	return assignment.ClientTarget.ActualOrigin().String()
+}
+
+func clientTargetCanonicalOrigin(assignment captureassignment.Assignment) string {
+	if !assignment.ClientTarget.Available() {
+		return ""
+	}
+	return assignment.ClientTarget.CanonicalOrigin().String()
 }
 
 func captureAssignmentAuthorityValues(boundary environment.LaunchAuthorityBoundary) (

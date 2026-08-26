@@ -199,12 +199,12 @@ func TestClientPassthroughPreservesClientCredentialsOnlyForExactOrigin(
 			"X-Keep":        []string{"keep-me"},
 			"User-Agent":    []string{"raw-second-authority"},
 		},
-		Body:            []byte(`{"model":"client-model"}`),
-		CredentialMode:  providerauth.CredentialClientPassthrough,
-		ClientOrigin:    plan.clientOrigin,
-		WireProfile:     plan.wireProfile,
-		ClientProtocol:  wireprofile.ApplicationProtocolHTTP1,
-		ClientUserAgent: "client-cli/1.0",
+		Body:              []byte(`{"model":"client-model"}`),
+		CredentialMode:    providerauth.CredentialClientPassthrough,
+		PassthroughOrigin: plan.providerOrigin,
+		WireProfile:       plan.wireProfile,
+		ClientProtocol:    wireprofile.ApplicationProtocolHTTP1,
+		ClientUserAgent:   "client-cli/1.0",
 		EgressPolicy: egressnetwork.Policy{
 			Proxy: egressnetwork.ProxyPolicy{
 				Kind:     egressnetwork.ProxySOCKS5,
@@ -305,12 +305,12 @@ func TestClientPassthroughRejectsRedirectWithoutReturningLocationOrResponse(
 		Headers: http.Header{
 			"Authorization": []string{"Bearer client-oauth"},
 		},
-		Body:            []byte(`{"model":"client-model"}`),
-		CredentialMode:  providerauth.CredentialClientPassthrough,
-		ClientOrigin:    plan.clientOrigin,
-		WireProfile:     plan.wireProfile,
-		ClientProtocol:  wireprofile.ApplicationProtocolHTTP1,
-		ClientUserAgent: "client-cli/1.0",
+		Body:              []byte(`{"model":"client-model"}`),
+		CredentialMode:    providerauth.CredentialClientPassthrough,
+		PassthroughOrigin: plan.providerOrigin,
+		WireProfile:       plan.wireProfile,
+		ClientProtocol:    wireprofile.ApplicationProtocolHTTP1,
+		ClientUserAgent:   "client-cli/1.0",
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -1296,7 +1296,6 @@ func newTestRequestWithPlanAndClientProtocol(
 type testProviderPlan struct {
 	provenance     RequestProvenance
 	providerOrigin originidentity.ProviderOrigin
-	clientOrigin   originidentity.ClientOrigin
 	wireProfile    wireprofile.CompiledUpstreamWireProfile
 }
 
@@ -1325,10 +1324,6 @@ func testRequestPlanWithWireProfile(
 	wireProfileRef wireprofile.UpstreamWireProfileRef,
 ) testProviderPlan {
 	t.Helper()
-	clientOrigin, err := originidentity.ParseClientOrigin("https://agent.example:443")
-	if err != nil {
-		t.Fatal(err)
-	}
 	providerOrigin, err := originidentity.ParseProviderOrigin(rawProviderOrigin)
 	if err != nil {
 		t.Fatal(err)
@@ -1343,7 +1338,7 @@ func testRequestPlanWithWireProfile(
 	}
 	return testProviderPlan{
 		provenance: testRequestProvenance(t), providerOrigin: providerOrigin,
-		clientOrigin: clientOrigin, wireProfile: profile,
+		wireProfile: profile,
 	}
 }
 
@@ -1354,6 +1349,15 @@ func testOriginalRequestPlan(t *testing.T) testProviderPlan {
 		"https://agent.example:443",
 		wireprofile.FollowClientUpstreamWireProfileRef(),
 	)
+	environmentID, err := environment.NewEnvironmentID("provider-transport-test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	digest := environment.CandidateDigest(sha256.Sum256([]byte("provider-transport-environment")))
+	plan.provenance, err = NewOriginalRequestProvenance(environmentID, 3, digest)
+	if err != nil {
+		t.Fatal(err)
+	}
 	return plan
 }
 

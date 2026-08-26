@@ -9,6 +9,8 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+
+	"github.com/vibe-agi/vibermate/internal/originidentity"
 )
 
 // LaunchAuthorityDigest identifies the immutable Root/origin and credential
@@ -41,6 +43,44 @@ func NewLaunchAuthorityBoundary(snapshot EnvironmentSnapshot) (LaunchAuthorityBo
 	return newLaunchAuthorityBoundary(
 		snapshot.ID(), snapshot.Revision(), snapshot.Digest(), protected, managed,
 	)
+}
+
+// NewLaunchAuthorityBoundaryForClientTarget extends one Environment's launch
+// authority with the explicit origin selected by a verified client. The
+// canonical origin must already name a Client Flow in the frozen snapshot;
+// this function cannot create protocol authority for an arbitrary target.
+func NewLaunchAuthorityBoundaryForClientTarget(
+	snapshot EnvironmentSnapshot,
+	canonical originidentity.ClientOrigin,
+	actual originidentity.ProviderOrigin,
+) (LaunchAuthorityBoundary, error) {
+	if canonical.Validate() != nil || actual.Validate() != nil {
+		return LaunchAuthorityBoundary{}, ErrInvalidEnvironment
+	}
+	endpoint, exists := snapshot.LookupClientOrigin(canonical)
+	if !exists {
+		return LaunchAuthorityBoundary{}, ErrInvalidEnvironment
+	}
+	protected, managed, err := snapshotAuthorityScopes(snapshot)
+	if err != nil {
+		return LaunchAuthorityBoundary{}, err
+	}
+	protected = appendAuthority(protected, actual.EndpointAuthority())
+	if endpointUsesOnlyUpstreamDestinations(endpoint) {
+		managed = appendAuthority(managed, actual.EndpointAuthority())
+	}
+	return newLaunchAuthorityBoundary(
+		snapshot.ID(), snapshot.Revision(), snapshot.Digest(), protected, managed,
+	)
+}
+
+func appendAuthority(values []string, value string) []string {
+	for _, existing := range values {
+		if existing == value {
+			return values
+		}
+	}
+	return append(values, value)
 }
 
 // NewLaunchAuthorityBoundaryFromScopes reconstructs trusted authority evidence

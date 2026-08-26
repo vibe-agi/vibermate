@@ -152,9 +152,15 @@ func (manager *Manager) admitLeaf(
 	if environment.ValidateConnectionBinding(snapshot, connection.binding) != nil {
 		return LeafIssuanceAdmission{}, ErrLeafIssuanceUnauthorized
 	}
+	clientOrigin, err := originidentity.ParseClientOrigin(
+		connection.binding.ProviderOrigin.String(),
+	)
+	if err != nil {
+		return LeafIssuanceAdmission{}, ErrLeafIssuanceUnauthorized
+	}
 	endpoint, exists := snapshot.LookupCompiledClientOrigin(connection.binding.ClientOrigin)
 	if !exists || endpoint.ID() != connection.binding.ClientEndpointID ||
-		san.Kind() != certidentity.SANKindDNS || san.Value() != connection.binding.ClientOrigin.Host() {
+		san.Kind() != certidentity.SANKindDNS || san.Value() != clientOrigin.Host() {
 		return LeafIssuanceAdmission{}, ErrLeafIssuanceUnauthorized
 	}
 	request := LeafIssuanceRequest{
@@ -162,7 +168,7 @@ func (manager *Manager) admitLeaf(
 		assignmentRevision: assignment.Revision,
 		environmentID:      assignment.EnvironmentID, environmentRevision: snapshot.Revision(),
 		endpointID: endpoint.ID(), endpointRevision: endpoint.Revision(),
-		clientOrigin: connection.binding.ClientOrigin, san: san, algorithm: algorithm,
+		clientOrigin: clientOrigin, san: san, algorithm: algorithm,
 	}
 	if request.validate() != nil {
 		return LeafIssuanceAdmission{}, ErrLeafIssuanceInvalid
@@ -183,6 +189,6 @@ func (manager *Manager) leafRequestCurrent(admission *leafAdmissionState) bool {
 	current := state.connections[admission.connectionID]
 	return !state.shutdown && !state.poisoned && current == admission.connection &&
 		current.binding.Mode == environment.ConnectionModeSemantic &&
-		current.binding.ClientOrigin == admission.request.clientOrigin &&
+		current.binding.ProviderOrigin.String() == admission.request.clientOrigin.String() &&
 		current.binding.ClientEndpointID == admission.request.endpointID
 }

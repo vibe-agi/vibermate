@@ -589,7 +589,7 @@ func (pipeline *Pipeline) newProviderRequest(
 		RawEvidence:  rawEvidence,
 	}
 	if credential.mode == providerauth.CredentialClientPassthrough {
-		options.ClientOrigin = selection.clientOrigin
+		options.PassthroughOrigin = selection.target.Origin()
 	} else {
 		options.AccountRef = credential.account
 		options.SecretRef = credential.secret

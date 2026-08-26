@@ -12,6 +12,7 @@ import (
 	"github.com/vibe-agi/vibermate/internal/capturegrant"
 	"github.com/vibe-agi/vibermate/internal/captureidentity"
 	"github.com/vibe-agi/vibermate/internal/clientadapter"
+	"github.com/vibe-agi/vibermate/internal/clienttarget"
 	"github.com/vibe-agi/vibermate/internal/environment"
 	"github.com/vibe-agi/vibermate/internal/toolapproval"
 )
@@ -103,6 +104,7 @@ func (authorities *recordingEnvironmentAuthorities) AssignAndResolve(
 	capture captureidentity.Reference,
 	environmentID environment.EnvironmentID,
 	source captureassignment.Source,
+	profile clienttarget.Profile,
 ) (capturegrant.CaptureAuthoritySet, error) {
 	authorities.assigned = environmentID
 	return authorities.fixedAuthorities.AssignAndResolve(
@@ -110,6 +112,7 @@ func (authorities *recordingEnvironmentAuthorities) AssignAndResolve(
 		capture,
 		environmentID,
 		source,
+		profile,
 	)
 }
 

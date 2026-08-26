@@ -11,6 +11,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/vibe-agi/vibermate/internal/captureidentity"
+	"github.com/vibe-agi/vibermate/internal/clienttarget"
 	"github.com/vibe-agi/vibermate/internal/environment"
 )
 
@@ -58,6 +59,7 @@ type Assignment struct {
 	Revision        Revision
 	Source          Source
 	LaunchAuthority environment.LaunchAuthorityBoundary
+	ClientTarget    clienttarget.Target
 	UpdatedAt       time.Time
 }
 
@@ -74,6 +76,12 @@ func (assignment Assignment) Validate() error {
 	}
 	if assignment.EnvironmentID != assignment.LaunchAuthority.InitialEnvironmentID() {
 		return ErrInvalidAssignment
+	}
+	if assignment.ClientTarget.Available() {
+		if assignment.ClientTarget.Validate() != nil ||
+			assignment.Capture.Kind != captureidentity.KindManagedRun {
+			return ErrInvalidAssignment
+		}
 	}
 	return nil
 }
@@ -112,6 +120,7 @@ type CreateCommand struct {
 	Capture       captureidentity.Reference
 	EnvironmentID environment.EnvironmentID
 	Source        Source
+	ClientProfile clienttarget.Profile
 }
 
 // Controller is the control-plane authority for one Capture's current

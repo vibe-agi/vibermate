@@ -63,7 +63,7 @@ CREATE TABLE runtime_connection_events(
   egress_policy_revision INTEGER NOT NULL DEFAULT 0
   CHECK(egress_policy_revision >= 0),
   decryption TEXT NOT NULL
-  CHECK(decryption IN('blind', 'mitm', 'none')),
+  CHECK(decryption IN('blind', 'mitm', 'cleartext', 'none')),
   phase TEXT NOT NULL
   CHECK(phase IN('attempted', 'asked', 'decided', 'connected', 'closed', 'failed')),
   bytes_up INTEGER NOT NULL DEFAULT 0

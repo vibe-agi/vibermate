@@ -24,6 +24,7 @@ import (
 	"github.com/vibe-agi/vibermate/internal/captureidentity"
 	"github.com/vibe-agi/vibermate/internal/capturerun"
 	"github.com/vibe-agi/vibermate/internal/clientadapter"
+	"github.com/vibe-agi/vibermate/internal/clienttarget"
 	"github.com/vibe-agi/vibermate/internal/controlprincipal"
 	"github.com/vibe-agi/vibermate/internal/environment"
 	"github.com/vibe-agi/vibermate/internal/localca"
@@ -1035,6 +1036,7 @@ func (authorities fixedAuthorities) AssignAndResolve(
 	capture captureidentity.Reference,
 	environmentID environment.EnvironmentID,
 	source captureassignment.Source,
+	_ clienttarget.Profile,
 ) (capturegrant.CaptureAuthoritySet, error) {
 	return authorities.authoritySet(capture, environmentID, source)
 }
@@ -1086,6 +1088,7 @@ func (resolver inspectingFailingAuthorities) AssignAndResolve(
 	_ captureidentity.Reference,
 	_ environment.EnvironmentID,
 	_ captureassignment.Source,
+	_ clienttarget.Profile,
 ) (capturegrant.CaptureAuthoritySet, error) {
 	page, err := resolver.reader.ListRuns(
 		ctx,
@@ -1138,6 +1141,7 @@ func (resolver missingEnvironmentAuthorities) AssignAndResolve(
 	captureidentity.Reference,
 	environment.EnvironmentID,
 	captureassignment.Source,
+	clienttarget.Profile,
 ) (capturegrant.CaptureAuthoritySet, error) {
 	*resolver.assignCalled = true
 	return capturegrant.CaptureAuthoritySet{}, errors.New("unexpected assignment")

@@ -16,6 +16,7 @@ import (
 
 	"github.com/vibe-agi/vibermate/internal/capturegrant"
 	"github.com/vibe-agi/vibermate/internal/capturerun"
+	"github.com/vibe-agi/vibermate/internal/clienttarget"
 	"github.com/vibe-agi/vibermate/internal/controlprincipal"
 	"github.com/vibe-agi/vibermate/internal/environment"
 )
@@ -76,12 +77,38 @@ type Handler struct {
 }
 
 type CreateRequest struct {
-	EnvironmentID  string                     `json:"environmentId"`
-	CWD            string                     `json:"cwd"`
-	Command        []string                   `json:"command"`
-	ExecutablePath string                     `json:"executablePath"`
-	LocalUserLabel string                     `json:"localUserLabel,omitempty"`
-	Companion      *CompanionAttestationInput `json:"companion,omitempty"`
+	EnvironmentID     string                     `json:"environmentId"`
+	CWD               string                     `json:"cwd"`
+	Command           []string                   `json:"command"`
+	ExecutablePath    string                     `json:"executablePath"`
+	LocalUserLabel    string                     `json:"localUserLabel,omitempty"`
+	ClientEnvironment *ClientEnvironmentInput    `json:"clientEnvironment,omitempty"`
+	Companion         *CompanionAttestationInput `json:"companion,omitempty"`
+}
+
+// ClientEnvironmentInput is the non-secret allowlist needed to establish a
+// verified client's actual Original Destination. API key values never belong
+// to this control contract.
+type ClientEnvironmentInput struct {
+	AnthropicBaseURL    string `json:"anthropicBaseUrl,omitempty"`
+	CodexBaseURL        string `json:"codexBaseUrl,omitempty"`
+	OpenAIBaseURL       string `json:"openaiBaseUrl,omitempty"`
+	CodexAPIKeyPresent  bool   `json:"codexApiKeyPresent,omitempty"`
+	OpenAIAPIKeyPresent bool   `json:"openaiApiKeyPresent,omitempty"`
+}
+
+func (input *ClientEnvironmentInput) domain() (clienttarget.EnvironmentFacts, error) {
+	if input == nil {
+		return clienttarget.EnvironmentFacts{}, nil
+	}
+	facts := clienttarget.EnvironmentFacts{
+		AnthropicBaseURL:    input.AnthropicBaseURL,
+		CodexBaseURL:        input.CodexBaseURL,
+		OpenAIBaseURL:       input.OpenAIBaseURL,
+		CodexAPIKeyPresent:  input.CodexAPIKeyPresent,
+		OpenAIAPIKeyPresent: input.OpenAIAPIKeyPresent,
+	}
+	return facts, facts.Validate()
 }
 
 type AttachRequest struct {
@@ -190,16 +217,22 @@ func (handler *Handler) create(
 		writeProblem(writer, http.StatusUnprocessableEntity, ReasonInvalidCaptureRun)
 		return
 	}
+	clientEnvironment, err := input.ClientEnvironment.domain()
+	if err != nil {
+		writeProblem(writer, http.StatusUnprocessableEntity, ReasonInvalidCaptureRun)
+		return
+	}
 	grant, err := handler.issuer.IssueCaptureRun(
 		request.Context(),
 		principal,
 		capturegrant.CaptureRunRequest{
-			EnvironmentID:  environmentID,
-			CWD:            input.CWD,
-			Command:        append([]string(nil), input.Command...),
-			ExecutablePath: input.ExecutablePath,
-			LocalUserLabel: input.LocalUserLabel,
-			Companion:      companion,
+			EnvironmentID:     environmentID,
+			CWD:               input.CWD,
+			Command:           append([]string(nil), input.Command...),
+			ExecutablePath:    input.ExecutablePath,
+			LocalUserLabel:    input.LocalUserLabel,
+			ClientEnvironment: clientEnvironment,
+			Companion:         companion,
 		},
 	)
 	if err != nil {
