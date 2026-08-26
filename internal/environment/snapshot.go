@@ -304,7 +304,7 @@ func (snapshot EnvironmentSnapshot) ResolveRequest(
 	}
 	type match struct {
 		protocol  CompiledProtocolPlan
-		operation protocolspec.ClientOperationPlan
+		operation protocolspec.ClientOperationDefinition
 	}
 	var matches []match
 	var knownMismatch bool

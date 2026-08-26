@@ -101,7 +101,7 @@ func TestStartupFailureCarriesOnlyAClosedReason(t *testing.T) {
 	t.Parallel()
 
 	failure := desktopbootstrap.StartupFailure(
-		desktopbootstrap.FailureStorageSchemaNewer,
+		desktopbootstrap.FailureStorageUnavailable,
 	)
 	if err := failure.Validate(); err != nil {
 		t.Fatal(err)
@@ -111,7 +111,7 @@ func TestStartupFailureCarriesOnlyAClosedReason(t *testing.T) {
 		t.Fatal(err)
 	}
 	if string(payload) !=
-		`{"schema":"vibermate-daemon-failure-v1","reason":"storage_schema_newer"}` {
+		`{"schema":"vibermate-daemon-failure-v1","reason":"storage_unavailable"}` {
 		t.Fatalf("failure wire payload = %s", payload)
 	}
 	failure.Reason = "raw_database_error"

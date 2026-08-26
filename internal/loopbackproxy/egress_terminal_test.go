@@ -116,7 +116,7 @@ func (unusedProtocolCatalog) Resolve(
 
 func (unusedProtocolCatalog) OperationsForDialect(
 	protocolspec.Dialect,
-) ([]protocolspec.ClientOperationPlan, error) {
+) ([]protocolspec.ClientOperationDefinition, error) {
 	return nil, errors.New("unused protocol catalog")
 }
 

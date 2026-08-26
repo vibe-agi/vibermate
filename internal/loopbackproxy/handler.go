@@ -1476,7 +1476,7 @@ func (connection *countingConnection) Write(source []byte) (int, error) {
 // with the client's own credentials, so it requires a payload class that
 // proves no client payload travels.
 func admitsLocalDispatch(
-	operation protocolspec.ClientOperationPlan,
+	operation protocolspec.ClientOperationDefinition,
 	request *http.Request,
 ) bool {
 	if operation.Kind() == protocolspec.ClientOperationSemantic {

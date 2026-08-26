@@ -84,7 +84,7 @@ type Capability struct {
 	maxBodyBytes  int64
 	replayClass   exchange.ReplayClass
 	featureFlags  []string
-	operation     protocolspec.ClientOperationPlan
+	operation     protocolspec.ClientOperationDefinition
 	payloadClass  protocolspec.OperationPayloadClass
 	egressBearing bool
 }
@@ -187,10 +187,6 @@ func NewCatalog(
 		}
 		methods := make(map[string]Capability, len(definition.Methods()))
 		for _, method := range definition.Methods() {
-			operation, err := protocolspec.CompileClientOperation(definition)
-			if err != nil {
-				return nil, err
-			}
 			methods[method] = Capability{
 				operationID:   definition.ID(),
 				revision:      definition.Revision(),
@@ -202,7 +198,7 @@ func NewCatalog(
 				maxBodyBytes:  definition.MaxBodyBytes(),
 				replayClass:   replayClass,
 				featureFlags:  slices.Clone(featureFlags),
-				operation:     operation,
+				operation:     definition.Clone(),
 				payloadClass:  definition.PayloadClass(),
 				egressBearing: definition.EgressBearing(),
 			}

@@ -656,7 +656,6 @@ func TestProductionCompositionBoundaryUsesPublicCheckWithGoodAndBadFixtures(
 		"desktop-entry-does-not-run-the-daemon",
 		"daemon-does-not-start-the-host",
 		"host-does-not-start-the-runtime",
-		"runtime-does-not-select-production-builders",
 		"host-does-not-create-control-authority",
 		"host-does-not-create-capture-grant-issuer",
 		"host-does-not-create-manual-capture-handler",
@@ -682,7 +681,6 @@ func TestProductionCompositionBoundaryUsesPublicCheckWithGoodAndBadFixtures(
 		// A decoy call elsewhere in the package no longer satisfies the link.
 		"internal/desktopdaemon",
 		"internal/desktophost",
-		"internal/productruntime",
 		"internal/loopbackproxy/handler.go",
 		// An alias, and taking the function as a value.
 		"internal/sneakyhost/host.go",

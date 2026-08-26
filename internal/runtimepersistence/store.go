@@ -5,21 +5,15 @@ import (
 	"context"
 	"crypto/sha256"
 	"database/sql"
-	"embed"
+	_ "embed"
 	"encoding/hex"
 	"errors"
 	"fmt"
-	"io"
-	"io/fs"
-	"log/slog"
 	"os"
 	"path/filepath"
-	"sort"
-	"strings"
 	"sync"
 	"time"
 
-	"github.com/pressly/goose/v3"
 	"github.com/vibe-agi/vibermate/internal/activity"
 	"github.com/vibe-agi/vibermate/internal/captureassignment"
 	"github.com/vibe-agi/vibermate/internal/capturerun"
@@ -45,8 +39,8 @@ const (
 var (
 	ErrInvalidDatabasePath = errors.New("invalid database path")
 
-	//go:embed migrations/*.sql
-	migrationFiles embed.FS
+	//go:embed schema.sql
+	schemaSQL string
 )
 
 // Options contains the typed SQLite construction policy.
@@ -54,35 +48,6 @@ type Options struct {
 	DatabasePath           string
 	BusyTimeout            time.Duration
 	CommitReconcileTimeout time.Duration
-}
-
-// RuntimeStore is the storage ownership boundary consumed by ProductRuntime.
-type RuntimeStore interface {
-	SchemaStateReader() SchemaStateReader
-	EnvironmentRepository() environment.Repository
-	CaptureAssignmentRepository() captureassignment.Repository
-	ActivityRepository() activity.Repository
-	ConversationIdentityRepository() activity.ConversationIdentityRepository
-	ConversationProjectionWriter() activity.ConversationProjectionWriter
-	ExchangeContentRepository() exchangecontent.Repository
-	CaptureRunRepository() capturerun.Repository
-	ManualCaptureRepository() manualcapture.Repository
-	ProxyClientRepository() proxyclient.Repository
-	ConnectionEventRepository() connectionevent.Repository
-	EgressAttemptRepository() egressaudit.Repository
-	ToolApprovalRepository() toolapproval.Repository
-	ConnectionRuleRepository() connectionpolicy.Repository
-	UpstreamEndpointRepository() upstreamendpoint.Repository
-	ProviderAccountRepository() provideraccount.Repository
-	RawEvidenceRepository() rawevidence.Repository
-	RuntimeUserRepository() runtimeuser.Repository
-	// EvidenceArchive owns the two destructive operations. They are on the
-	// store rather than on a repository because each spans several of them and
-	// has to be one transaction: a half-deleted Capture is visible and
-	// unfinishable.
-	DeleteCapture(context.Context, string, string) (CaptureDeletion, error)
-	ClearEvidence(context.Context) (ArchiveClear, error)
-	Shutdown(context.Context) error
 }
 
 // Store owns a SQLite connection pool and its repositories.
@@ -113,10 +78,8 @@ type Store struct {
 	closeErr  error
 }
 
-var _ RuntimeStore = (*Store)(nil)
-
 // Open creates the data directory, opens SQLite through an explicit typed
-// connector, applies embedded migrations, and reads the initial schema state.
+// connector, initializes the current schema, and reads its durable state.
 func Open(ctx context.Context, options Options) (*Store, error) {
 	if ctx == nil {
 		return nil, fmt.Errorf("%w: context is nil", ErrInvalidDatabasePath)
@@ -149,7 +112,7 @@ func Open(ctx context.Context, options Options) (*Store, error) {
 	if err := database.PingContext(ctx); err != nil {
 		return fail(fmt.Errorf("open SQLite database: %w", err))
 	}
-	embeddedRevision, schemaSourceSHA256, err := applyMigrations(ctx, database)
+	schemaSourceSHA256, err := initializeSchema(ctx, database)
 	if err != nil {
 		return fail(err)
 	}
@@ -199,19 +162,10 @@ func Open(ctx context.Context, options Options) (*Store, error) {
 	)
 	rawEvidence := newRawEvidenceRepository(database, operations)
 	runtimeUsers := newRuntimeUserRepository(database, operations)
-	schemaState, err := repository.ReadSchemaState(ctx)
+	_, err = repository.ReadSchemaState(ctx)
 	if err != nil {
 		operations.closeAdmission()
 		return fail(fmt.Errorf("read initial schema state: %w", err))
-	}
-	if schemaState.Revision != embeddedRevision {
-		operations.closeAdmission()
-		return fail(fmt.Errorf(
-			"%w: runtime revision %d, embedded revision %d",
-			ErrSchemaRevisionMismatch,
-			schemaState.Revision,
-			embeddedRevision,
-		))
 	}
 
 	return &Store{
@@ -370,168 +324,60 @@ func (s *Store) Shutdown(ctx context.Context) error {
 	return closeErr
 }
 
-func applyMigrations(
-	ctx context.Context,
-	database *sql.DB,
-) (int64, string, error) {
-	migrations, err := fs.Sub(migrationFiles, "migrations")
-	if err != nil {
-		return 0, "", fmt.Errorf("open embedded migrations: %w", err)
-	}
-	schemaSourceSHA256, err := migrationSourceDigest(migrations)
-	if err != nil {
-		return 0, "", err
-	}
-	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
-	provider, err := goose.NewProvider(
-		goose.DialectSQLite3,
-		database,
-		migrations,
-		goose.WithSlog(logger),
-		goose.WithDisableGlobalRegistry(true),
-	)
-	if err != nil {
-		return 0, "", fmt.Errorf("construct migration provider: %w", err)
-	}
-	embeddedRevision, err := schemaRevisionOfSources(provider.ListSources())
-	if err != nil {
-		return 0, "", fmt.Errorf("inspect embedded migrations: %w", err)
-	}
-	databaseRevision, err := provider.GetDBVersion(ctx)
-	if err != nil {
-		return 0, "", fmt.Errorf("read SQLite migration revision before apply: %w", err)
-	}
-	initialRevision := databaseRevision
-	if databaseRevision > embeddedRevision {
-		return 0, "", fmt.Errorf(
-			"%w: database revision %d, embedded revision %d",
-			ErrSchemaNewerThanBinary,
-			databaseRevision,
-			embeddedRevision,
-		)
-	}
-	previousSchemaSource := strings.Repeat("0", sha256.Size*2)
-	if initialRevision > 0 {
-		var schemaIdentity string
-		if err := database.QueryRowContext(
-			ctx,
-			`SELECT schema_identity, schema_source_sha256
-			 FROM runtime_metadata
-			 WHERE singleton = 1`,
-		).Scan(&schemaIdentity, &previousSchemaSource); err != nil {
-			return 0, "", fmt.Errorf(
-				"%w: read pre-migration runtime metadata: %v",
-				ErrSchemaBaselineMismatch,
-				err,
-			)
-		}
-		decoded, decodeErr := hex.DecodeString(previousSchemaSource)
-		if schemaIdentity != currentSchemaIdentity || decodeErr != nil ||
-			len(decoded) != sha256.Size {
-			return 0, "", fmt.Errorf(
-				"%w: pre-migration runtime metadata is invalid",
-				ErrSchemaBaselineMismatch,
-			)
-		}
-	}
-	if _, err := provider.Up(ctx); err != nil {
-		return 0, "", fmt.Errorf("apply SQLite migrations: %w", err)
-	}
-	if initialRevision < embeddedRevision {
-		result, updateErr := database.ExecContext(
-			ctx,
-			`UPDATE runtime_metadata
-			 SET schema_source_sha256 = ?
-			 WHERE singleton = 1
-			   AND schema_identity = ?
-			   AND schema_source_sha256 = ?`,
-			schemaSourceSHA256,
-			currentSchemaIdentity,
-			previousSchemaSource,
-		)
-		if updateErr != nil {
-			return 0, "", fmt.Errorf(
-				"bind migrated SQLite schema source: %w",
-				updateErr,
-			)
-		}
-		affected, rowsErr := result.RowsAffected()
-		if rowsErr != nil {
-			return 0, "", fmt.Errorf(
-				"read migrated SQLite schema binding result: %w",
-				rowsErr,
-			)
-		}
-		if affected != 1 {
-			return 0, "", fmt.Errorf(
-				"bind migrated SQLite schema source: affected=%d",
-				affected,
-			)
-		}
-	}
-	databaseRevision, err = provider.GetDBVersion(ctx)
-	if err != nil {
-		return 0, "", fmt.Errorf("read SQLite migration revision after apply: %w", err)
-	}
-	if databaseRevision != embeddedRevision {
-		return 0, "", fmt.Errorf(
-			"%w: database revision %d, embedded revision %d",
-			ErrSchemaRevisionMismatch,
-			databaseRevision,
-			embeddedRevision,
-		)
-	}
-	return embeddedRevision, schemaSourceSHA256, nil
-}
+func initializeSchema(ctx context.Context, database *sql.DB) (string, error) {
+	sum := sha256.Sum256([]byte(schemaSQL))
+	digest := hex.EncodeToString(sum[:])
 
-func migrationSourceDigest(migrations fs.FS) (string, error) {
-	entries, err := fs.ReadDir(migrations, ".")
+	transaction, err := database.BeginTx(ctx, nil)
 	if err != nil {
-		return "", fmt.Errorf("list embedded migrations: %w", err)
+		return "", fmt.Errorf("begin SQLite schema initialization: %w", err)
 	}
-	names := make([]string, 0, len(entries))
-	for _, entry := range entries {
-		if entry.IsDir() || filepath.Ext(entry.Name()) != ".sql" {
-			continue
-		}
-		names = append(names, entry.Name())
-	}
-	if len(names) == 0 {
-		return "", errors.New("embedded migration set is empty")
-	}
-	sort.Strings(names)
-	hash := sha256.New()
-	for _, name := range names {
-		payload, readErr := fs.ReadFile(migrations, name)
-		if readErr != nil {
-			return "", fmt.Errorf("read embedded migration %q: %w", name, readErr)
-		}
-		_, _ = hash.Write([]byte(name))
-		_, _ = hash.Write([]byte{0})
-		_, _ = hash.Write(payload)
-		_, _ = hash.Write([]byte{0})
-	}
-	return hex.EncodeToString(hash.Sum(nil)), nil
-}
+	defer func() { _ = transaction.Rollback() }()
 
-func schemaRevisionOfSources(sources []*goose.Source) (int64, error) {
-	if len(sources) == 0 {
-		return 0, errors.New("embedded migration set is empty")
+	var initialized bool
+	if err := transaction.QueryRowContext(
+		ctx,
+		`SELECT EXISTS(
+		   SELECT 1 FROM sqlite_schema
+		   WHERE type = 'table' AND name = 'runtime_metadata'
+		 )`,
+	).Scan(&initialized); err != nil {
+		return "", fmt.Errorf("inspect SQLite schema: %w", err)
 	}
-	var revision int64
-	for index, source := range sources {
-		if source == nil || source.Version <= 0 {
-			return 0, fmt.Errorf("embedded migration source %d is invalid", index)
-		}
-		if source.Version <= revision {
-			return 0, fmt.Errorf(
-				"embedded migration sources are not strictly increasing at version %d",
-				source.Version,
-			)
-		}
-		revision = source.Version
+	if initialized {
+		return digest, nil
 	}
-	return revision, nil
+
+	var objects int
+	if err := transaction.QueryRowContext(
+		ctx,
+		`SELECT COUNT(*) FROM sqlite_schema WHERE name NOT LIKE 'sqlite_%'`,
+	).Scan(&objects); err != nil {
+		return "", fmt.Errorf("inspect empty SQLite schema: %w", err)
+	}
+	if objects != 0 {
+		return "", fmt.Errorf("%w: database contains %d schema objects", ErrSchemaBaselineMismatch, objects)
+	}
+	if _, err := transaction.ExecContext(ctx, schemaSQL); err != nil {
+		return "", fmt.Errorf("initialize SQLite schema: %w", err)
+	}
+	if _, err := transaction.ExecContext(
+		ctx,
+		`INSERT INTO runtime_metadata(
+		   singleton, schema_identity, schema_revision,
+		   schema_source_sha256, initialized_at
+		 ) VALUES (1, ?, ?, ?, ?)`,
+		currentSchemaIdentity,
+		currentSchemaRevision,
+		digest,
+		time.Now().UTC().Format(time.RFC3339Nano),
+	); err != nil {
+		return "", fmt.Errorf("record SQLite schema state: %w", err)
+	}
+	if err := transaction.Commit(); err != nil {
+		return "", fmt.Errorf("commit SQLite schema initialization: %w", err)
+	}
+	return digest, nil
 }
 
 func prepareDatabasePath(databasePath string) error {

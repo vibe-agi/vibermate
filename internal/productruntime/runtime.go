@@ -84,13 +84,27 @@ type Runtime struct {
 
 // Start validates all dependencies and executes the typed production builder.
 func Start(ctx context.Context, options Options) (*Runtime, error) {
-	return startWithBuilders(ctx, options, productionBuilders())
+	return startWithBuilders(ctx, options, runtimeBuildOverrides{})
+}
+
+type runtimeBuildOverrides struct {
+	environment   func(context.Context, environmentBuildRequest) (environmentBuildResult, error)
+	recoverEgress func(context.Context, egressaudit.Repository, time.Time) error
+}
+
+func recoverEgressAttempts(
+	ctx context.Context,
+	repository egressaudit.Repository,
+	at time.Time,
+) error {
+	_, err := repository.Recover(ctx, at)
+	return err
 }
 
 func startWithBuilders(
 	ctx context.Context,
 	options Options,
-	builders runtimeBuilders,
+	overrides runtimeBuildOverrides,
 ) (*Runtime, error) {
 	if ctx == nil {
 		return nil, fmt.Errorf("%w: startup context is nil", ErrInvalidOptions)
@@ -101,22 +115,13 @@ func startWithBuilders(
 	if err := ctx.Err(); err != nil {
 		return nil, fmt.Errorf("start ProductRuntime: %w", err)
 	}
-	if builders.storage == nil ||
-		builders.environment == nil ||
-		builders.activity == nil ||
-		builders.content == nil ||
-		builders.connection == nil ||
-		builders.approval == nil ||
-		builders.monitor == nil ||
-		builders.rawEvidence == nil ||
-		builders.provider == nil ||
-		builders.original == nil ||
-		builders.exchange == nil ||
-		builders.capture == nil ||
-		builders.manualCapture == nil ||
-		builders.localCA == nil ||
-		builders.proxy == nil {
-		return nil, fmt.Errorf("%w: component builder is missing", ErrInvalidBuildResult)
+	environmentBuilder := buildEnvironment
+	if overrides.environment != nil {
+		environmentBuilder = overrides.environment
+	}
+	recoverEgress := recoverEgressAttempts
+	if overrides.recoverEgress != nil {
+		recoverEgress = overrides.recoverEgress
 	}
 
 	instanceID, err := options.InstanceIDs.NewInstanceID(ctx)
@@ -149,7 +154,7 @@ func startWithBuilders(
 		return nil, startupErr
 	}
 
-	storageResult, err := builders.storage.Build(ctx, storageBuildRequest{
+	storageResult, err := buildStorage(ctx, storageBuildRequest{
 		databasePath: options.Paths.DatabasePath(),
 	})
 	if err != nil {
@@ -182,8 +187,9 @@ func startWithBuilders(
 			),
 		)
 	}
-	if _, err := egressRepository.Recover(
+	if err := recoverEgress(
 		ctx,
+		egressRepository,
 		options.Clock.Now().UTC(),
 	); err != nil {
 		return fail("EgressAttempt recovery", err)
@@ -204,7 +210,7 @@ func startWithBuilders(
 		cancelOwner(errors.New("runtime owner context stopped"))
 		return nil
 	})
-	rawEvidence, err := builders.rawEvidence.Build(rawEvidenceBuildRequest{
+	rawEvidence, err := buildRawEvidence(rawEvidenceBuildRequest{
 		ctx:        ownerContext,
 		repository: storageResult.store.RawEvidenceRepository(),
 		random:     securityRandom,
@@ -240,7 +246,7 @@ func startWithBuilders(
 	}
 	cleanups.register("machine and workspace identity", workspaceIdentity.Shutdown)
 
-	certificateAuthority, err := builders.localCA.Build(ctx, localCABuildRequest{
+	certificateAuthority, err := buildLocalCA(ctx, localCABuildRequest{
 		ownerContext: ownerContext,
 		directory:    options.Paths.LocalCADirectory(),
 		clock:        options.Clock,
@@ -316,7 +322,7 @@ func startWithBuilders(
 		return fail("Capture activity projection", err)
 	}
 
-	environmentResult, err := builders.environment.Build(ctx, environmentBuildRequest{
+	environmentResult, err := environmentBuilder(ctx, environmentBuildRequest{
 		repository:           storageResult.store.EnvironmentRepository(),
 		assignmentRepository: storageResult.store.CaptureAssignmentRepository(),
 		activity:             captureActivity,
@@ -342,7 +348,7 @@ func startWithBuilders(
 		return fail("ProviderAccount deletion authority", err)
 	}
 	pending.register("Capture assignment runtime", assignments.Shutdown)
-	activities, err := builders.activity.Build(activityBuildRequest{
+	activities, err := buildActivity(activityBuildRequest{
 		repository: storageResult.store.ActivityRepository(),
 		clock:      options.Clock,
 		random:     securityRandom,
@@ -359,7 +365,7 @@ func startWithBuilders(
 	}
 	cleanups.register("Activity component", activities.Shutdown)
 
-	contents, err := builders.content.Build(exchangeContentBuildRequest{
+	contents, err := buildExchangeContent(exchangeContentBuildRequest{
 		ctx:        ctx,
 		repository: storageResult.store.ExchangeContentRepository(),
 		clock:      options.Clock,
@@ -376,7 +382,7 @@ func startWithBuilders(
 	}
 	cleanups.register("Exchange content component", contents.Shutdown)
 
-	connections, err := builders.connection.Build(ctx, connectionEventBuildRequest{
+	connections, err := buildConnectionEvent(ctx, connectionEventBuildRequest{
 		repository: storageResult.store.ConnectionEventRepository(),
 		clock:      options.Clock,
 		random:     securityRandom,
@@ -407,7 +413,7 @@ func startWithBuilders(
 		return fail("connection policy", err)
 	}
 
-	approvals, err := builders.approval.Build(approvalBuildRequest{
+	approvals, err := buildApproval(approvalBuildRequest{
 		ctx:        ctx,
 		repository: storageResult.store.ToolApprovalRepository(),
 		clock:      options.Clock,
@@ -431,7 +437,7 @@ func startWithBuilders(
 		return fail("tool policy", err)
 	}
 
-	monitor, err := builders.monitor.Build(monitorBuildRequest{
+	monitor, err := buildMonitor(monitorBuildRequest{
 		ownerContext: ownerContext,
 		reader:       storageResult.store.SchemaStateReader(),
 		interval:     options.Lifecycle.HealthPollInterval,
@@ -471,7 +477,7 @@ func startWithBuilders(
 		return fail("offline-hold resume probe", err)
 	}
 
-	provider, err := builders.provider.Build(providerBuildRequest{
+	provider, err := buildProvider(providerBuildRequest{
 		coordinator: options.OfflineHold,
 		secrets:     options.Secrets,
 		instanceIDs: options.InstanceIDs,
@@ -489,7 +495,7 @@ func startWithBuilders(
 	}
 	pending.register("provider transport", provider.Shutdown)
 
-	original, err := builders.original.Build(originalBuildRequest{
+	original, err := buildOriginal(originalBuildRequest{
 		coordinator: options.OfflineHold,
 		audit:       runtimeEgress,
 	})
@@ -507,7 +513,7 @@ func startWithBuilders(
 	}
 	pending.register("original-origin transport", original.Shutdown)
 
-	exchanges, err := builders.exchange.Build(exchangeBuildRequest{
+	exchanges, err := buildExchange(exchangeBuildRequest{
 		ownerContext:  ownerContext,
 		actions:       options.OfflineHold,
 		accounts:      accounts,
@@ -532,7 +538,7 @@ func startWithBuilders(
 	pending.register("Exchange pipeline", exchanges.Shutdown)
 
 	archiveBarrier := evidencearchive.NewBarrier()
-	captureRuns, err := builders.capture.Build(ctx, captureBuildRequest{
+	captureRuns, err := buildCapture(ctx, captureBuildRequest{
 		repository:     captureRunRepository,
 		clock:          options.Clock,
 		random:         securityRandom,
@@ -551,7 +557,7 @@ func startWithBuilders(
 		)
 	}
 	pending.register("CaptureRun component", captureRuns.Shutdown)
-	manualCaptures, err := builders.manualCapture.Build(ctx, manualCaptureBuildRequest{
+	manualCaptures, err := buildManualCapture(ctx, manualCaptureBuildRequest{
 		repository:     manualCaptureRepository,
 		clock:          options.Clock,
 		random:         securityRandom,
@@ -584,7 +590,7 @@ func startWithBuilders(
 	if err != nil {
 		return fail("blind tunnel dialer", err)
 	}
-	proxy, err := builders.proxy.Build(proxyBuildRequest{
+	proxy, err := buildProxy(proxyBuildRequest{
 		ownerContext: ownerContext,
 		admissions:   captureAdmissions,
 		assignments:  assignments,

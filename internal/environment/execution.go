@@ -25,7 +25,7 @@ var (
 
 type ProtocolCatalog interface {
 	Resolve(protocolspec.Dialect, protocolspec.Dialect) (protocolspec.CodecPlan, error)
-	OperationsForDialect(protocolspec.Dialect) ([]protocolspec.ClientOperationPlan, error)
+	OperationsForDialect(protocolspec.Dialect) ([]protocolspec.ClientOperationDefinition, error)
 }
 
 type WireProfileCatalog interface {
@@ -140,7 +140,7 @@ type CompiledProtocolPlan struct {
 	revision            Revision
 	dialect             protocolspec.Dialect
 	adapterPolicy       ClientAdapterPolicy
-	operations          []protocolspec.ClientOperationPlan
+	operations          []protocolspec.ClientOperationDefinition
 	destinationKind     DestinationKind
 	egressPolicy        egressnetwork.Policy
 	transformProgram    messagetransform.Program
@@ -155,7 +155,7 @@ func (plan CompiledProtocolPlan) ClientDialect() protocolspec.Dialect { return p
 func (plan CompiledProtocolPlan) ClientAdapterPolicy() ClientAdapterPolicy {
 	return plan.adapterPolicy
 }
-func (plan CompiledProtocolPlan) Operations() []protocolspec.ClientOperationPlan {
+func (plan CompiledProtocolPlan) Operations() []protocolspec.ClientOperationDefinition {
 	return slices.Clone(plan.operations)
 }
 func (plan CompiledProtocolPlan) DestinationKind() DestinationKind {
@@ -211,7 +211,7 @@ type RequestPlan struct {
 	policySet           PolicySet
 	endpoint            CompiledEndpointPlan
 	protocol            CompiledProtocolPlan
-	operation           protocolspec.ClientOperationPlan
+	operation           protocolspec.ClientOperationDefinition
 	destinationKind     DestinationKind
 	egressPolicy        egressnetwork.Policy
 	transformProgram    messagetransform.Program
@@ -233,7 +233,7 @@ func (plan RequestPlan) Endpoint() CompiledEndpointPlan { return cloneCompiledEn
 func (plan RequestPlan) ProtocolPlan() CompiledProtocolPlan {
 	return cloneCompiledProtocol(plan.protocol)
 }
-func (plan RequestPlan) Operation() protocolspec.ClientOperationPlan { return plan.operation }
+func (plan RequestPlan) Operation() protocolspec.ClientOperationDefinition { return plan.operation }
 func (plan RequestPlan) PreservesOriginalDestination() bool {
 	return plan.destinationKind == DestinationKindOriginal
 }

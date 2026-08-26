@@ -75,7 +75,7 @@ func exercisePackagedDesktopShell(
 	)
 	seed, err := publishDesktopPreferencesFixture(
 		statePath,
-		nonCanonicalDesktopPreferences(
+		canonicalDesktopPreferences(
 			desktopPreferencesRestoreLanguage,
 			desktopPreferencesRestoreSection,
 			&staleEnvironmentID,
@@ -366,7 +366,6 @@ type desktopWorkbenchPreferences struct {
 	Theme                       string  `json:"theme"`
 	Section                     string  `json:"section"`
 	SelectedCaptureKey          *string `json:"selectedCaptureKey"`
-	SelectedConversationKey     *string `json:"selectedConversationKey,omitempty"`
 	SelectedEnvironmentID       *string `json:"selectedEnvironmentId"`
 	SelectedEnvironmentRevision *int    `json:"selectedEnvironmentRevision"`
 	SelectedEndpointID          *string `json:"selectedEndpointId"`
@@ -454,28 +453,6 @@ func canonicalDesktopPreferences(
 		panic("fixed Desktop preference fixture could not be encoded")
 	}
 	return encoded
-}
-
-func nonCanonicalDesktopPreferences(
-	language string,
-	section string,
-	environmentID *string,
-	endpointID *string,
-) []byte {
-	retiredConversationKey := "capture_run:acceptance"
-	encoded, err := json.MarshalIndent(desktopWorkbenchPreferences{
-		Schema:                  desktopPreferencesSchema,
-		Language:                language,
-		Theme:                   desktopPreferencesTheme,
-		Section:                 section,
-		SelectedConversationKey: &retiredConversationKey,
-		SelectedEnvironmentID:   environmentID,
-		SelectedEndpointID:      endpointID,
-	}, "", "  ")
-	if err != nil {
-		panic("fixed Desktop preference fixture could not be encoded")
-	}
-	return append(encoded, '\n')
 }
 
 func newDesktopPreferencesStaleEnvironmentID() (string, error) {

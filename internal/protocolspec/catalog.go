@@ -32,7 +32,7 @@ type codecPairKey struct {
 // Catalog is the immutable protocol authority compiled into an Environment.
 // It owns no codec implementation and cannot select a route.
 type Catalog struct {
-	operationsByDialect map[Dialect][]ClientOperationPlan
+	operationsByDialect map[Dialect][]ClientOperationDefinition
 	codecPairs          map[codecPairKey]CodecPlan
 }
 
@@ -44,7 +44,7 @@ func NewCatalog(
 		return Catalog{}, ErrInvalidSpecification
 	}
 	byID := make(map[ClientOperationID]ClientOperationDefinition, len(definitions))
-	operationsByDialect := make(map[Dialect][]ClientOperationPlan)
+	operationsByDialect := make(map[Dialect][]ClientOperationDefinition)
 	for _, definition := range definitions {
 		if err := definition.Validate(); err != nil {
 			return Catalog{}, err
@@ -52,14 +52,10 @@ func NewCatalog(
 		if _, duplicate := byID[definition.ID()]; duplicate {
 			return Catalog{}, fmt.Errorf("%w: duplicate operation %q", ErrInvalidSpecification, definition.ID().String())
 		}
-		compiled, err := CompileClientOperation(definition)
-		if err != nil {
-			return Catalog{}, err
-		}
 		byID[definition.ID()] = definition.Clone()
 		operationsByDialect[definition.ClientDialect()] = append(
 			operationsByDialect[definition.ClientDialect()],
-			compiled,
+			definition.Clone(),
 		)
 	}
 	for dialect := range operationsByDialect {
@@ -138,7 +134,7 @@ func (catalog Catalog) Resolve(client, provider Dialect) (CodecPlan, error) {
 	return cloneCodecPlan(plan), nil
 }
 
-func (catalog Catalog) OperationsForDialect(dialect Dialect) ([]ClientOperationPlan, error) {
+func (catalog Catalog) OperationsForDialect(dialect Dialect) ([]ClientOperationDefinition, error) {
 	if !dialect.Valid() {
 		return nil, ErrUnknownDialect
 	}
@@ -146,20 +142,20 @@ func (catalog Catalog) OperationsForDialect(dialect Dialect) ([]ClientOperationP
 	if len(operations) == 0 {
 		return nil, fmt.Errorf("%w: %q", ErrUnknownDialect, dialect)
 	}
-	return cloneOperationPlans(operations), nil
+	return cloneOperationDefinitions(operations), nil
 }
 
 func cloneCodecPlan(plan CodecPlan) CodecPlan {
 	cloned := plan
-	cloned.clientOperations = cloneOperationPlans(plan.clientOperations)
+	cloned.clientOperations = cloneOperationDefinitions(plan.clientOperations)
 	cloned.requiredCapabilities = slices.Clone(plan.requiredCapabilities)
 	return cloned
 }
 
-func cloneOperationPlans(source []ClientOperationPlan) []ClientOperationPlan {
-	result := make([]ClientOperationPlan, len(source))
+func cloneOperationDefinitions(source []ClientOperationDefinition) []ClientOperationDefinition {
+	result := make([]ClientOperationDefinition, len(source))
 	for index, operation := range source {
-		result[index] = ClientOperationPlan{definition: operation.definition.Clone()}
+		result[index] = operation.Clone()
 	}
 	return result
 }

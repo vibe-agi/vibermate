@@ -192,10 +192,13 @@ func TestProductRuntimeEnvironmentRecoveryFailureRollsBackSQLite(t *testing.T) {
 
 	startupCause := errors.New("Environment recovery failed")
 	options := testOptions(t, hostcontract.Desktop(), &coordinatorDouble{})
-	builders := productionBuilders()
-	builders.environment = failingEnvironmentBuilder{err: startupCause}
+	overrides := runtimeBuildOverrides{
+		environment: func(context.Context, environmentBuildRequest) (environmentBuildResult, error) {
+			return environmentBuildResult{}, startupCause
+		},
+	}
 
-	runtime, err := startWithBuilders(context.Background(), options, builders)
+	runtime, err := startWithBuilders(context.Background(), options, overrides)
 	if runtime != nil {
 		t.Fatal("failed Environment recovery returned a runtime")
 	}
@@ -219,9 +222,17 @@ func TestProductRuntimeStatusDegradesWithUnavailableEnvironmentProjection(t *tes
 	t.Parallel()
 
 	options := testOptions(t, hostcontract.Desktop(), &coordinatorDouble{})
-	builders := productionBuilders()
-	builders.environment = unhealthyEnvironmentBuilder{delegate: builders.environment}
-	runtime, err := startWithBuilders(context.Background(), options, builders)
+	overrides := runtimeBuildOverrides{
+		environment: func(ctx context.Context, request environmentBuildRequest) (environmentBuildResult, error) {
+			result, err := buildEnvironment(ctx, request)
+			if err != nil {
+				return environmentBuildResult{}, err
+			}
+			result.environments = unhealthyEnvironmentRuntime{environmentRuntime: result.environments}
+			return result, nil
+		},
+	}
+	runtime, err := startWithBuilders(context.Background(), options, overrides)
 	if err != nil {
 		t.Fatalf("start runtime: %v", err)
 	}
@@ -444,23 +455,6 @@ func passthroughEnvironment(t *testing.T, id, rawOrigin string, protocol environ
 			}},
 		}},
 	}
-}
-
-type failingEnvironmentBuilder struct{ err error }
-
-func (builder failingEnvironmentBuilder) Build(context.Context, environmentBuildRequest) (environmentBuildResult, error) {
-	return environmentBuildResult{}, builder.err
-}
-
-type unhealthyEnvironmentBuilder struct{ delegate environmentBuilder }
-
-func (builder unhealthyEnvironmentBuilder) Build(ctx context.Context, request environmentBuildRequest) (environmentBuildResult, error) {
-	result, err := builder.delegate.Build(ctx, request)
-	if err != nil {
-		return environmentBuildResult{}, err
-	}
-	result.environments = unhealthyEnvironmentRuntime{environmentRuntime: result.environments}
-	return result, nil
 }
 
 type unhealthyEnvironmentRuntime struct{ environmentRuntime }

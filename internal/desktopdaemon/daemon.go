@@ -171,12 +171,8 @@ func classifyStartupFailure(err error) desktopbootstrap.Failure {
 	switch {
 	case errors.Is(err, instanceguard.ErrAlreadyOwned):
 		reason = desktopbootstrap.FailureRuntimeAlreadyActive
-	case errors.Is(err, runtimepersistence.ErrSchemaNewerThanBinary):
-		reason = desktopbootstrap.FailureStorageSchemaNewer
 	case errors.Is(err, runtimepersistence.ErrInvalidDatabasePath),
-		errors.Is(err, runtimepersistence.ErrSchemaBaselineMismatch),
-		errors.Is(err, runtimepersistence.ErrSchemaNotInitialized),
-		errors.Is(err, runtimepersistence.ErrSchemaRevisionMismatch):
+		errors.Is(err, runtimepersistence.ErrSchemaBaselineMismatch):
 		reason = desktopbootstrap.FailureStorageUnavailable
 	case errors.Is(err, secretstore.ErrLocked),
 		errors.Is(err, secretstore.ErrDenied),

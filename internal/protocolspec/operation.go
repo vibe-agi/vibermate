@@ -392,11 +392,6 @@ func (definition ClientOperationDefinition) Clone() ClientOperationDefinition {
 	return cloned
 }
 
-// ClientOperationPlan is the immutable compiled form consumed at request
-// admission. Keeping it distinct from the catalog definition prevents a
-// mutable catalog from becoming runtime authority.
-type ClientOperationPlan struct{ definition ClientOperationDefinition }
-
 type RequestTarget struct {
 	Method    string
 	Path      string
@@ -414,63 +409,28 @@ func (target RequestTarget) Validate() error {
 	return nil
 }
 
-func CompileClientOperation(definition ClientOperationDefinition) (ClientOperationPlan, error) {
-	if err := definition.Validate(); err != nil {
-		return ClientOperationPlan{}, err
-	}
-	return ClientOperationPlan{definition: definition.Clone()}, nil
-}
-
-func (plan ClientOperationPlan) ID() ClientOperationID  { return plan.definition.ID() }
-func (plan ClientOperationPlan) Revision() Revision     { return plan.definition.Revision() }
-func (plan ClientOperationPlan) ClientDialect() Dialect { return plan.definition.ClientDialect() }
-func (plan ClientOperationPlan) Methods() []string      { return plan.definition.Methods() }
-func (plan ClientOperationPlan) PathPattern() string    { return plan.definition.PathPattern() }
-func (plan ClientOperationPlan) PathMatch() ClientOperationPathMatch {
-	return plan.definition.PathMatch()
-}
-func (plan ClientOperationPlan) Kind() ClientOperationKind { return plan.definition.Kind() }
-func (plan ClientOperationPlan) Transport() ClientOperationTransport {
-	return plan.definition.Transport()
-}
-func (plan ClientOperationPlan) BodyKind() ClientOperationBodyKind { return plan.definition.BodyKind() }
-func (plan ClientOperationPlan) ReplayClass() ClientReplayClass    { return plan.definition.ReplayClass() }
-func (plan ClientOperationPlan) CodecFeature() CodecFeature        { return plan.definition.CodecFeature() }
-func (plan ClientOperationPlan) MaxBodyBytes() int64               { return plan.definition.MaxBodyBytes() }
-func (plan ClientOperationPlan) AllowedQueries() []string          { return plan.definition.AllowedQueries() }
-func (plan ClientOperationPlan) AllowedQueryKeys() []string {
-	return plan.definition.AllowedQueryKeys()
-}
-func (plan ClientOperationPlan) AllowsRawQuery(rawQuery string) bool {
-	return plan.definition.AllowsRawQuery(rawQuery)
-}
-func (plan ClientOperationPlan) PayloadClass() OperationPayloadClass {
-	return plan.definition.PayloadClass()
-}
-func (plan ClientOperationPlan) EgressBearing() bool { return plan.definition.EgressBearing() }
-
 // Match reports both whether the complete operation contract matches and
 // whether the path alone is known. Callers use pathKnown to distinguish an
 // unknown operation from a known path with the wrong method, query, or
 // transport without guessing a fallback codec.
-func (plan ClientOperationPlan) Match(target RequestTarget) (matched bool, pathKnown bool, err error) {
+func (definition ClientOperationDefinition) Match(target RequestTarget) (matched bool, pathKnown bool, err error) {
 	if err := target.Validate(); err != nil {
 		return false, false, ErrInvalidRequestTarget
 	}
-	switch plan.PathMatch() {
+	switch definition.PathMatch() {
 	case ClientOperationPathExact:
-		pathKnown = target.Path == plan.PathPattern()
+		pathKnown = target.Path == definition.PathPattern()
 	case ClientOperationPathPrefix:
-		pathKnown = target.Path == plan.PathPattern() ||
-			strings.HasPrefix(target.Path, plan.PathPattern()+"/")
+		pathKnown = target.Path == definition.PathPattern() ||
+			strings.HasPrefix(target.Path, definition.PathPattern()+"/")
 	default:
 		return false, false, ErrInvalidSpecification
 	}
-	if !pathKnown || target.Transport != plan.Transport() ||
-		!slices.Contains(plan.Methods(), target.Method) {
+	if !pathKnown || target.Transport != definition.Transport() ||
+		!slices.Contains(definition.Methods(), target.Method) {
 		return false, pathKnown, nil
 	}
-	if !plan.AllowsRawQuery(target.RawQuery) {
+	if !definition.AllowsRawQuery(target.RawQuery) {
 		return false, true, nil
 	}
 	return true, true, nil
@@ -480,13 +440,13 @@ func (plan ClientOperationPlan) Match(target RequestTarget) (matched bool, pathK
 // an already-frozen operation slice. A known path with the wrong method,
 // query, or transport never falls through to a broader prefix operation.
 func SelectOperation(
-	operations []ClientOperationPlan,
+	operations []ClientOperationDefinition,
 	target RequestTarget,
-) (ClientOperationPlan, error) {
+) (ClientOperationDefinition, error) {
 	if err := target.Validate(); err != nil {
-		return ClientOperationPlan{}, err
+		return ClientOperationDefinition{}, err
 	}
-	var candidates []ClientOperationPlan
+	var candidates []ClientOperationDefinition
 	for _, operation := range operations {
 		if operation.PathMatch() == ClientOperationPathExact &&
 			operation.PathPattern() == target.Path {
@@ -512,13 +472,13 @@ func SelectOperation(
 		}
 	}
 	if len(candidates) == 0 {
-		return ClientOperationPlan{}, ErrOperationNotCatalogued
+		return ClientOperationDefinition{}, ErrOperationNotCatalogued
 	}
-	var matched []ClientOperationPlan
+	var matched []ClientOperationDefinition
 	for _, operation := range candidates {
 		complete, _, err := operation.Match(target)
 		if err != nil {
-			return ClientOperationPlan{}, err
+			return ClientOperationDefinition{}, err
 		}
 		if complete {
 			matched = append(matched, operation)
@@ -526,11 +486,11 @@ func SelectOperation(
 	}
 	switch len(matched) {
 	case 0:
-		return ClientOperationPlan{}, ErrOperationContractMismatch
+		return ClientOperationDefinition{}, ErrOperationContractMismatch
 	case 1:
-		return ClientOperationPlan{definition: matched[0].definition.Clone()}, nil
+		return matched[0].Clone(), nil
 	default:
-		return ClientOperationPlan{}, ErrAmbiguousOperation
+		return ClientOperationDefinition{}, ErrAmbiguousOperation
 	}
 }
 
@@ -539,7 +499,7 @@ type CodecPlan struct {
 	revision             Revision
 	clientDialect        Dialect
 	providerDialect      Dialect
-	clientOperations     []ClientOperationPlan
+	clientOperations     []ClientOperationDefinition
 	requiredCapabilities []ProviderCapability
 }
 
@@ -555,7 +515,7 @@ func NewCodecPlan(
 		revision > MaxRevision || !clientDialect.Valid() || !providerDialect.Valid() || len(definitions) == 0 {
 		return CodecPlan{}, ErrInvalidSpecification
 	}
-	operations := make([]ClientOperationPlan, 0, len(definitions))
+	operations := make([]ClientOperationDefinition, 0, len(definitions))
 	seen := make(map[ClientOperationID]struct{}, len(definitions))
 	for _, definition := range definitions {
 		if definition.ClientDialect() != clientDialect {
@@ -565,11 +525,10 @@ func NewCodecPlan(
 			return CodecPlan{}, ErrInvalidSpecification
 		}
 		seen[definition.ID()] = struct{}{}
-		operation, err := CompileClientOperation(definition)
-		if err != nil {
+		if err := definition.Validate(); err != nil {
 			return CodecPlan{}, err
 		}
-		operations = append(operations, operation)
+		operations = append(operations, definition.Clone())
 	}
 	return CodecPlan{
 		id: id, revision: revision, clientDialect: clientDialect,
@@ -582,8 +541,8 @@ func (plan CodecPlan) ID() CodecPairID          { return plan.id }
 func (plan CodecPlan) Revision() Revision       { return plan.revision }
 func (plan CodecPlan) ClientDialect() Dialect   { return plan.clientDialect }
 func (plan CodecPlan) ProviderDialect() Dialect { return plan.providerDialect }
-func (plan CodecPlan) ClientOperations() []ClientOperationPlan {
-	return slices.Clone(plan.clientOperations)
+func (plan CodecPlan) ClientOperations() []ClientOperationDefinition {
+	return cloneOperationDefinitions(plan.clientOperations)
 }
 func (plan CodecPlan) RequiredCapabilities() []ProviderCapability {
 	return slices.Clone(plan.requiredCapabilities)

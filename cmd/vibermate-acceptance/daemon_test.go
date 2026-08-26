@@ -124,7 +124,7 @@ func TestDecodeDescriptorAcceptsOnlyClosedStartupFailure(t *testing.T) {
 		t.Fatal(err)
 	}
 	failure, err := json.Marshal(desktopbootstrap.StartupFailure(
-		desktopbootstrap.FailureStorageSchemaNewer,
+		desktopbootstrap.FailureStorageUnavailable,
 	))
 	if err != nil {
 		t.Fatal(err)
@@ -133,7 +133,7 @@ func TestDecodeDescriptorAcceptsOnlyClosedStartupFailure(t *testing.T) {
 	_, err = decodeDescriptor(bytes.NewReader(payload))
 	if err == nil || !strings.Contains(
 		err.Error(),
-		"reason=storage_schema_newer",
+		"reason=storage_unavailable",
 	) {
 		t.Fatalf("typed startup failure error = %v", err)
 	}

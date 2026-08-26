@@ -36,7 +36,6 @@ const (
 	rootKeyFile                  = "root-key.pem"
 	rootCertFile                 = "root-certificate.pem"
 	rootManifestFile             = "root-manifest.json"
-	manifestSchemaV1             = "vibermate-local-root-v1"
 	manifestSchemaV2             = "vibermate-local-root-v2"
 	rootLifetime                 = 10 * 365 * 24 * time.Hour
 	leafLifetime                 = 24 * time.Hour
@@ -346,11 +345,6 @@ type Authority struct {
 	changed             chan struct{}
 }
 
-type rootManifestV1 struct {
-	Schema      string `json:"schema"`
-	Fingerprint string `json:"fingerprint"`
-}
-
 type rootManifestV2 struct {
 	Schema            string       `json:"schema"`
 	Revision          RootRevision `json:"revision"`
@@ -358,21 +352,12 @@ type rootManifestV2 struct {
 }
 
 func Open(ctx context.Context, options Options) (*Authority, error) {
-	return openWithFileOperations(ctx, options, systemAtomicFileOperations{})
-}
-
-func openWithFileOperations(
-	ctx context.Context,
-	options Options,
-	operations atomicFileOperations,
-) (*Authority, error) {
 	if ctx == nil || options.OwnerContext == nil ||
 		options.Directory == "" ||
 		!filepath.IsAbs(options.Directory) ||
 		filepath.Clean(options.Directory) != options.Directory ||
 		options.Clock == nil || options.Random == nil ||
-		options.LeafCacheCapacity <= 0 || options.GenerationTimeout <= 0 ||
-		operations == nil {
+		options.LeafCacheCapacity <= 0 || options.GenerationTimeout <= 0 {
 		return nil, ErrInvalidOptions
 	}
 	if err := ctx.Err(); err != nil {
@@ -387,7 +372,6 @@ func openWithFileOperations(
 	key, certificate, identity, delivery, err := loadOrCreateRoot(
 		ctx,
 		options,
-		operations,
 	)
 	if err != nil {
 		return nil, err
@@ -700,7 +684,6 @@ func (authority *Authority) Shutdown(ctx context.Context) error {
 func loadOrCreateRoot(
 	ctx context.Context,
 	options Options,
-	operations atomicFileOperations,
 ) (*ecdsa.PrivateKey, *x509.Certificate, RootIdentity, RootCertificate, error) {
 	keyPath := filepath.Join(options.Directory, rootKeyFile)
 	certPath := filepath.Join(options.Directory, rootCertFile)
@@ -738,7 +721,6 @@ func loadOrCreateRoot(
 			keyPath,
 			certPath,
 			manifestPath,
-			operations,
 		)
 	}
 	return createRoot(ctx, options, keyPath, certPath, manifestPath)
@@ -842,7 +824,6 @@ func createRoot(
 func loadRoot(
 	now time.Time,
 	keyPath, certPath, manifestPath string,
-	operations atomicFileOperations,
 ) (*ecdsa.PrivateKey, *x509.Certificate, RootIdentity, RootCertificate, error) {
 	for _, path := range []string{keyPath, certPath, manifestPath} {
 		if err := requirePrivateRegularFile(path); err != nil {
@@ -876,23 +857,11 @@ func loadRoot(
 	if err != nil {
 		return nil, nil, RootIdentity{}, RootCertificate{}, err
 	}
-	revision, migrate, err := decodeRootManifest(manifestBytes, digest)
+	revision, err := decodeRootManifest(manifestBytes, digest)
 	if err != nil {
 		return nil, nil, RootIdentity{}, RootCertificate{}, err
 	}
 	identity := rootIdentity(certificate, digest, revision)
-	if migrate {
-		manifest, encodeErr := encodeManifestV2(identity)
-		if encodeErr != nil {
-			return nil, nil, RootIdentity{}, RootCertificate{}, encodeErr
-		}
-		if err := replacePrivateAtomic(operations, manifestPath, manifest); err != nil {
-			return nil, nil, RootIdentity{}, RootCertificate{}, fmt.Errorf(
-				"migrate local Root manifest: %w",
-				err,
-			)
-		}
-	}
 	return key, certificate, identity, RootCertificate{
 		certificatePEM: bytes.Clone(certPEM),
 		path:           certPath,
@@ -931,45 +900,18 @@ func encodeManifestV2(identity RootIdentity) ([]byte, error) {
 func decodeRootManifest(
 	encoded []byte,
 	digest RootDigest,
-) (RootRevision, bool, error) {
-	var envelope struct {
-		Schema string `json:"schema"`
-	}
-	if err := json.Unmarshal(encoded, &envelope); err != nil {
-		return 0, false, fmt.Errorf(
-			"%w: decode manifest schema: %v",
-			ErrRootStateInvalid,
-			err,
-		)
-	}
-	switch envelope.Schema {
-	case manifestSchemaV1:
-		var manifest rootManifestV1
-		if err := decodeStrictJSON(encoded, &manifest); err != nil ||
-			manifest.Fingerprint != digest.String() {
-			return 0, false, fmt.Errorf(
-				"%w: v1 manifest does not match certificate",
-				ErrRootStateInvalid,
-			)
-		}
-		return certidentity.InitialRootRevision, true, nil
-	case manifestSchemaV2:
-		var manifest rootManifestV2
-		if err := decodeStrictJSON(encoded, &manifest); err != nil ||
-			!manifest.Revision.Valid() ||
-			manifest.CertificateSHA256 != digest.String() {
-			return 0, false, fmt.Errorf(
-				"%w: v2 manifest does not match certificate",
-				ErrRootStateInvalid,
-			)
-		}
-		return manifest.Revision, false, nil
-	default:
-		return 0, false, fmt.Errorf(
-			"%w: unsupported manifest schema",
+) (RootRevision, error) {
+	var manifest rootManifestV2
+	if err := decodeStrictJSON(encoded, &manifest); err != nil ||
+		manifest.Schema != manifestSchemaV2 ||
+		!manifest.Revision.Valid() ||
+		manifest.CertificateSHA256 != digest.String() {
+		return 0, fmt.Errorf(
+			"%w: manifest does not match certificate",
 			ErrRootStateInvalid,
 		)
 	}
+	return manifest.Revision, nil
 }
 
 func decodeStrictJSON(encoded []byte, destination any) error {

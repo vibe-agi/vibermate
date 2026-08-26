@@ -27,22 +27,19 @@ const (
 )
 
 const (
-	desktopMainFile         = "cmd/vibermated/main.go"
-	daemonPackageDir        = "internal/desktopdaemon"
-	hostPackageDir          = "internal/desktophost"
-	serverDaemonPackageDir  = "internal/serverdaemon"
-	serverHostPackageDir    = "internal/serverhost"
-	runtimePackageDir       = "internal/productruntime"
-	productionBuildersLocal = "productionBuilders"
+	desktopMainFile        = "cmd/vibermated/main.go"
+	daemonPackageDir       = "internal/desktopdaemon"
+	hostPackageDir         = "internal/desktophost"
+	serverDaemonPackageDir = "internal/serverdaemon"
+	serverHostPackageDir   = "internal/serverhost"
+	runtimePackageDir      = "internal/productruntime"
 )
 
 // CheckProductionCompositionBoundary keeps the Desktop and headless Server
 // entry chains explicit, and keeps them the only production composition paths.
 //
 //	main.main → desktopdaemon.Run → desktophost.Start → productruntime.Start
-//	→ productionBuilders()
 //	main.runServer → serverdaemon.Run → serverhost.Start → productruntime.Start
-//	→ productionBuilders()
 //
 // The first version asked whether a package contained a call anywhere, and
 // resolved selectors by receiver name. Both were bypassable and a review found
@@ -292,19 +289,6 @@ func CheckProductionCompositionBoundary(repositoryRoot string) []Violation {
 		violations = append(violations, link.check(files)...)
 	}
 
-	// The runtime's selection of production builders is a plain call in its
-	// own package, so it needs no import resolution — only the same insistence
-	// that it appear in the function that owes it.
-	if present["runtime"] {
-		violations = append(violations, checkLocalCallInFunction(
-			files,
-			runtimePackageDir,
-			"Start",
-			productionBuildersLocal,
-			"runtime-does-not-select-production-builders",
-		)...)
-	}
-
 	// A CaptureRun can be created only by the typed grant issuer. Tests may
 	// construct manager commands directly, but production transports and Hosts
 	// cannot regain a second create path by importing the command type.
@@ -432,44 +416,6 @@ func (link compositionLink) allows(relative string) bool {
 		}
 	}
 	return false
-}
-
-func checkLocalCallInFunction(
-	files []productionFile,
-	packageDir string,
-	function string,
-	callee string,
-	rule string,
-) []Violation {
-	for _, file := range files {
-		if !strings.HasPrefix(file.relative, packageDir+"/") {
-			continue
-		}
-		body := file.functionBody(function)
-		if body == nil {
-			continue
-		}
-		found := false
-		ast.Inspect(body, func(node ast.Node) bool {
-			call, ok := node.(*ast.CallExpr)
-			if !ok {
-				return true
-			}
-			if identifier, ok := call.Fun.(*ast.Ident); ok &&
-				identifier.Name == callee {
-				found = true
-			}
-			return true
-		})
-		if found {
-			return nil
-		}
-	}
-	return []Violation{{
-		Rule:    rule,
-		Path:    packageDir,
-		Message: "the selection must appear in the function that owes this step, not merely somewhere in its package",
-	}}
 }
 
 type productionFile struct {

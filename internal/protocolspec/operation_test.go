@@ -70,10 +70,7 @@ func TestOperationMatchSeparatesUnknownPathFromKnownContractMismatch(t *testing.
 	if err != nil {
 		t.Fatal(err)
 	}
-	plan, err := CompileClientOperation(definition)
-	if err != nil {
-		t.Fatal(err)
-	}
+	plan := definition
 	for _, test := range []struct {
 		name      string
 		target    RequestTarget
@@ -104,7 +101,7 @@ func TestSelectOperationUsesExactBeforePrefixAndFailsClosed(t *testing.T) {
 	exact := operationForSelection(t, "responses.create", ClientOperationPathExact, "POST", ClientOperationTransportHTTP)
 	prefix := operationForSelection(t, "responses.manage", ClientOperationPathPrefix, "DELETE", ClientOperationTransportHTTP)
 	websocket := operationForSelection(t, "responses.websocket", ClientOperationPathExact, "GET", ClientOperationTransportWebSocket)
-	operations := []ClientOperationPlan{prefix, websocket, exact}
+	operations := []ClientOperationDefinition{prefix, websocket, exact}
 	selected, err := SelectOperation(operations, RequestTarget{
 		Method: "POST", Path: "/v1/responses", Transport: ClientOperationTransportHTTP,
 	})
@@ -130,7 +127,7 @@ func operationForSelection(
 	pathMatch ClientOperationPathMatch,
 	method string,
 	transport ClientOperationTransport,
-) ClientOperationPlan {
+) ClientOperationDefinition {
 	t.Helper()
 	operationID, err := NewClientOperationID(id)
 	if err != nil {
@@ -162,11 +159,7 @@ func operationForSelection(
 	if err != nil {
 		t.Fatal(err)
 	}
-	plan, err := CompileClientOperation(definition)
-	if err != nil {
-		t.Fatal(err)
-	}
-	return plan
+	return definition
 }
 
 func TestOperationRejectsPayloadBearingOriginalOriginClaims(t *testing.T) {

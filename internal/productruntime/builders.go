@@ -48,17 +48,11 @@ type storageBuildRequest struct {
 }
 
 type storageBuildResult struct {
-	store runtimepersistence.RuntimeStore
+	store *runtimepersistence.Store
 	state runtimepersistence.SchemaState
 }
 
-type storageBuilder interface {
-	Build(context.Context, storageBuildRequest) (storageBuildResult, error)
-}
-
-type productionStorageBuilder struct{}
-
-func (productionStorageBuilder) Build(
+func buildStorage(
 	ctx context.Context,
 	request storageBuildRequest,
 ) (storageBuildResult, error) {
@@ -109,12 +103,6 @@ type environmentBuildResult struct {
 	assignments  captureAssignmentRuntime
 }
 
-type environmentBuilder interface {
-	Build(context.Context, environmentBuildRequest) (environmentBuildResult, error)
-}
-
-type productionEnvironmentBuilder struct{}
-
 // historicalEnvironmentResolver keeps active reads lock-free through the
 // projection while resolving a Capture's frozen revision from durable history.
 // A published Environment therefore changes only Captures launched afterward.
@@ -163,7 +151,7 @@ func (resolver historicalEnvironmentResolver) ResolveRevision(
 	return resolver.compiler.Compile(aggregate)
 }
 
-func (productionEnvironmentBuilder) Build(
+func buildEnvironment(
 	ctx context.Context,
 	request environmentBuildRequest,
 ) (environmentBuildResult, error) {
@@ -318,13 +306,7 @@ type activityRuntime interface {
 	activity.Runtime
 }
 
-type activityBuilder interface {
-	Build(activityBuildRequest) (activityRuntime, error)
-}
-
-type productionActivityBuilder struct{}
-
-func (productionActivityBuilder) Build(
+func buildActivity(
 	request activityBuildRequest,
 ) (activityRuntime, error) {
 	return activity.New(activity.Options{
@@ -344,13 +326,7 @@ type exchangeContentRuntime interface {
 	exchangecontent.Runtime
 }
 
-type exchangeContentBuilder interface {
-	Build(exchangeContentBuildRequest) (exchangeContentRuntime, error)
-}
-
-type productionExchangeContentBuilder struct{}
-
-func (productionExchangeContentBuilder) Build(
+func buildExchangeContent(
 	request exchangeContentBuildRequest,
 ) (exchangeContentRuntime, error) {
 	return exchangecontent.New(request.ctx, exchangecontent.Options{
@@ -369,13 +345,7 @@ type connectionEventRuntime interface {
 	connectionevent.Runtime
 }
 
-type connectionEventBuilder interface {
-	Build(context.Context, connectionEventBuildRequest) (connectionEventRuntime, error)
-}
-
-type productionConnectionEventBuilder struct{}
-
-func (productionConnectionEventBuilder) Build(
+func buildConnectionEvent(
 	ctx context.Context,
 	request connectionEventBuildRequest,
 ) (connectionEventRuntime, error) {
@@ -414,13 +384,7 @@ type ClientRootApprover interface {
 	) (toolapproval.ClientRootAskOutcome, error)
 }
 
-type approvalBuilder interface {
-	Build(approvalBuildRequest) (approvalRuntime, error)
-}
-
-type productionApprovalBuilder struct{}
-
-func (productionApprovalBuilder) Build(
+func buildApproval(
 	request approvalBuildRequest,
 ) (approvalRuntime, error) {
 	return toolapproval.New(request.ctx, toolapproval.Options{
@@ -436,13 +400,7 @@ type ownedComponent interface {
 	Shutdown(context.Context) error
 }
 
-type monitorBuilder interface {
-	Build(monitorBuildRequest) (ownedComponent, error)
-}
-
-type productionMonitorBuilder struct{}
-
-func (productionMonitorBuilder) Build(request monitorBuildRequest) (ownedComponent, error) {
+func buildMonitor(request monitorBuildRequest) (ownedComponent, error) {
 	return newStorageHealthMonitor(request)
 }
 
@@ -465,13 +423,7 @@ type providerRuntime interface {
 	Shutdown(context.Context) error
 }
 
-type providerBuilder interface {
-	Build(providerBuildRequest) (providerRuntime, error)
-}
-
-type productionProviderBuilder struct{}
-
-func (productionProviderBuilder) Build(
+func buildProvider(
 	request providerBuildRequest,
 ) (providerRuntime, error) {
 	bearerAuthenticator, err := providertransport.NewStaticBearerAuthenticator(
@@ -557,13 +509,7 @@ func (barrier captureEvidenceBarrier) PrepareManualCapture(
 	return terminal, nil
 }
 
-type rawEvidenceBuilder interface {
-	Build(rawEvidenceBuildRequest) (rawEvidenceRuntime, error)
-}
-
-type productionRawEvidenceBuilder struct{}
-
-func (productionRawEvidenceBuilder) Build(
+func buildRawEvidence(
 	request rawEvidenceBuildRequest,
 ) (rawEvidenceRuntime, error) {
 	return rawevidence.Open(request.ctx, rawevidence.Options{
@@ -593,12 +539,6 @@ type exchangeRuntime interface {
 	Drain(context.Context) error
 	Shutdown(context.Context) error
 }
-
-type exchangeBuilder interface {
-	Build(exchangeBuildRequest) (exchangeRuntime, error)
-}
-
-type productionExchangeBuilder struct{}
 
 type activityAttemptObserver struct {
 	recorder   activity.Recorder
@@ -897,7 +837,7 @@ func activityTransportEvidence(
 	return converted
 }
 
-func (productionExchangeBuilder) Build(
+func buildExchange(
 	request exchangeBuildRequest,
 ) (exchangeRuntime, error) {
 	if request.activities == nil || request.identities == nil ||
@@ -968,13 +908,7 @@ type originalRuntime interface {
 	Shutdown(context.Context) error
 }
 
-type originalBuilder interface {
-	Build(originalBuildRequest) (originalRuntime, error)
-}
-
-type productionOriginalBuilder struct{}
-
-func (productionOriginalBuilder) Build(
+func buildOriginal(
 	request originalBuildRequest,
 ) (originalRuntime, error) {
 	return originaltransport.NewProduction(request.coordinator, request.audit)
@@ -997,13 +931,7 @@ type captureRuntime interface {
 	Shutdown(context.Context) error
 }
 
-type captureBuilder interface {
-	Build(context.Context, captureBuildRequest) (captureRuntime, error)
-}
-
-type productionCaptureBuilder struct{}
-
-func (productionCaptureBuilder) Build(
+func buildCapture(
 	ctx context.Context,
 	request captureBuildRequest,
 ) (captureRuntime, error) {
@@ -1031,13 +959,7 @@ type manualCaptureRuntime interface {
 	Shutdown(context.Context) error
 }
 
-type manualCaptureBuilder interface {
-	Build(context.Context, manualCaptureBuildRequest) (manualCaptureRuntime, error)
-}
-
-type productionManualCaptureBuilder struct{}
-
-func (productionManualCaptureBuilder) Build(
+func buildManualCapture(
 	ctx context.Context,
 	request manualCaptureBuildRequest,
 ) (manualCaptureRuntime, error) {
@@ -1062,13 +984,7 @@ type localCARuntime interface {
 	Shutdown(context.Context) error
 }
 
-type localCABuilder interface {
-	Build(context.Context, localCABuildRequest) (localCARuntime, error)
-}
-
-type productionLocalCABuilder struct{}
-
-func (productionLocalCABuilder) Build(
+func buildLocalCA(
 	ctx context.Context,
 	request localCABuildRequest,
 ) (localCARuntime, error) {
@@ -1101,13 +1017,7 @@ type proxyRuntime interface {
 	Shutdown(context.Context) error
 }
 
-type proxyBuilder interface {
-	Build(proxyBuildRequest) (proxyRuntime, error)
-}
-
-type productionProxyBuilder struct{}
-
-func (productionProxyBuilder) Build(
+func buildProxy(
 	request proxyBuildRequest,
 ) (proxyRuntime, error) {
 	return loopbackproxy.New(loopbackproxy.Options{
@@ -1127,44 +1037,6 @@ func (productionProxyBuilder) Build(
 			request.random,
 		),
 	})
-}
-
-type runtimeBuilders struct {
-	storage       storageBuilder
-	environment   environmentBuilder
-	activity      activityBuilder
-	content       exchangeContentBuilder
-	connection    connectionEventBuilder
-	approval      approvalBuilder
-	monitor       monitorBuilder
-	rawEvidence   rawEvidenceBuilder
-	provider      providerBuilder
-	original      originalBuilder
-	exchange      exchangeBuilder
-	capture       captureBuilder
-	manualCapture manualCaptureBuilder
-	localCA       localCABuilder
-	proxy         proxyBuilder
-}
-
-func productionBuilders() runtimeBuilders {
-	return runtimeBuilders{
-		storage:       productionStorageBuilder{},
-		environment:   productionEnvironmentBuilder{},
-		activity:      productionActivityBuilder{},
-		content:       productionExchangeContentBuilder{},
-		connection:    productionConnectionEventBuilder{},
-		approval:      productionApprovalBuilder{},
-		monitor:       productionMonitorBuilder{},
-		rawEvidence:   productionRawEvidenceBuilder{},
-		provider:      productionProviderBuilder{},
-		original:      productionOriginalBuilder{},
-		exchange:      productionExchangeBuilder{},
-		capture:       productionCaptureBuilder{},
-		manualCapture: productionManualCaptureBuilder{},
-		localCA:       productionLocalCABuilder{},
-		proxy:         productionProxyBuilder{},
-	}
 }
 
 func wrapOptionalError(operation string, err error) error {

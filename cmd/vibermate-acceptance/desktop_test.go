@@ -44,12 +44,7 @@ func TestDesktopPreferencesFixtureProvesAtomicCanonicalRewrite(t *testing.T) {
 	path := desktopPreferencesStatePath(homeDirectory)
 	seed, err := publishDesktopPreferencesFixture(
 		path,
-		nonCanonicalDesktopPreferences(
-			desktopPreferencesRestoreLanguage,
-			desktopPreferencesRestoreSection,
-			nil,
-			nil,
-		),
+		staleDesktopPreferences(),
 	)
 	if err != nil {
 		t.Fatal(err)
@@ -63,12 +58,13 @@ func TestDesktopPreferencesFixtureProvesAtomicCanonicalRewrite(t *testing.T) {
 	if bytes.Equal(seed.encoded, expected) {
 		t.Fatal("preference seed was already canonical")
 	}
+	staleEnvironmentID := testDesktopPreferencesEnvironmentID
 	assertDesktopPreferencesValue(
 		t,
 		seed.encoded,
 		desktopPreferencesRestoreLanguage,
 		desktopPreferencesRestoreSection,
-		nil,
+		&staleEnvironmentID,
 	)
 
 	committed, err := publishDesktopPreferencesFixture(path, expected)
@@ -106,12 +102,7 @@ func TestDesktopPreferencesObservationFailsOnPrematureExit(t *testing.T) {
 	path := desktopPreferencesStatePath(filepath.Join(t.TempDir(), "home"))
 	seed, err := publishDesktopPreferencesFixture(
 		path,
-		nonCanonicalDesktopPreferences(
-			desktopPreferencesRestoreLanguage,
-			desktopPreferencesRestoreSection,
-			nil,
-			nil,
-		),
+		staleDesktopPreferences(),
 	)
 	if err != nil {
 		t.Fatal(err)
@@ -143,12 +134,7 @@ func TestDesktopPreferencesFixtureRejectsSymbolicLinkDestination(t *testing.T) {
 	path := desktopPreferencesStatePath(homeDirectory)
 	if _, err := publishDesktopPreferencesFixture(
 		path,
-		nonCanonicalDesktopPreferences(
-			desktopPreferencesRestoreLanguage,
-			desktopPreferencesRestoreSection,
-			nil,
-			nil,
-		),
+		staleDesktopPreferences(),
 	); err != nil {
 		t.Fatal(err)
 	}
@@ -173,6 +159,16 @@ func TestDesktopPreferencesFixtureRejectsSymbolicLinkDestination(t *testing.T) {
 	); err == nil {
 		t.Fatal("symbolic-link preference destination was accepted")
 	}
+}
+
+func staleDesktopPreferences() []byte {
+	environmentID := testDesktopPreferencesEnvironmentID
+	return canonicalDesktopPreferences(
+		desktopPreferencesRestoreLanguage,
+		desktopPreferencesRestoreSection,
+		&environmentID,
+		nil,
+	)
 }
 
 func TestDesktopPreferencesStaleEnvironmentIdentityIsFreshAndBounded(t *testing.T) {

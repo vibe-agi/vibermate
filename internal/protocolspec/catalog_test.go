@@ -30,7 +30,7 @@ func TestCatalogSeparatesRequestAdmissionFromCodecPairs(t *testing.T) {
 	if err != nil || len(plan.ClientOperations()) != 1 || plan.ClientOperations()[0].ID() != semantic.ID() {
 		t.Fatalf("plan = %+v, %v", plan, err)
 	}
-	operations[0].definition.methods[0] = "DELETE"
+	operations[0].methods[0] = "DELETE"
 	if catalogOperations, _ := catalog.OperationsForDialect(DialectAnthropicMessages); catalogOperations[0].Methods()[0] == "DELETE" {
 		t.Fatal("catalog operation was aliased")
 	}
