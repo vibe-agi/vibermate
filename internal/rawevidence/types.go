@@ -47,16 +47,18 @@ var (
 type Layer string
 
 const (
-	LayerClientIngress    Layer = "client_ingress"
-	LayerProviderEgress   Layer = "provider_egress"
-	LayerProviderResponse Layer = "provider_response"
-	LayerClientDownstream Layer = "client_downstream"
+	LayerClientIngress          Layer = "client_ingress"
+	LayerTransformRequestInput  Layer = "transform_request_input"
+	LayerProviderEgress         Layer = "provider_egress"
+	LayerProviderResponse       Layer = "provider_response"
+	LayerTransformResponseInput Layer = "transform_response_input"
+	LayerClientDownstream       Layer = "client_downstream"
 )
 
 func (layer Layer) Valid() bool {
 	switch layer {
-	case LayerClientIngress, LayerProviderEgress,
-		LayerProviderResponse, LayerClientDownstream:
+	case LayerClientIngress, LayerTransformRequestInput, LayerProviderEgress,
+		LayerProviderResponse, LayerTransformResponseInput, LayerClientDownstream:
 		return true
 	default:
 		return false

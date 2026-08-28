@@ -640,7 +640,9 @@ func TestLocalUserLabelDoesNotChangeMachineWorkspaceIdentity(t *testing.T) {
 				CWD:            fixture.workspace,
 				Command:        []string{"claude"},
 				ExecutablePath: fixture.executable,
-				LocalUserLabel: user,
+				RuntimeMetadata: capturecontrol.ClientRuntimeMetadataInput{
+					LocalUserName: user,
+				},
 			},
 		)
 		if response.Code != http.StatusCreated {
@@ -1073,6 +1075,7 @@ func (authorities fixedAuthorities) authoritySet(
 	}
 	return capturegrant.NewCaptureAuthoritySet(captureassignment.Assignment{
 		Capture: capture, EnvironmentID: environmentID, Revision: 1,
+		EnvironmentRevision: 1, EnvironmentDigest: candidateDigest,
 		Source: source, LaunchAuthority: boundary,
 		UpdatedAt: time.Date(2026, 8, 8, 1, 2, 3, 0, time.UTC),
 	})

@@ -35,6 +35,22 @@ func TestCaptureAssignmentRepositoryCASListAndReopen(t *testing.T) {
 	if err != nil || !exists || current != created {
 		t.Fatalf("load after conflict = %+v, exists=%t, err=%v", current, exists, err)
 	}
+	updated := created
+	updated.Revision = 2
+	updated.EnvironmentRevision = 2
+	updated.EnvironmentDigest[0] = 2
+	updated.UpdatedAt = updated.UpdatedAt.Add(time.Second)
+	result, err = repository.Write(context.Background(), created.Revision, updated)
+	if err != nil || result.Outcome != captureassignment.CommitOutcomeCommitted || result.Assignment != updated {
+		t.Fatalf("update = %+v, %v", result, err)
+	}
+	staleUpdate := updated
+	staleUpdate.EnvironmentRevision = 3
+	staleUpdate.EnvironmentDigest[0] = 3
+	conflict, err = repository.Write(context.Background(), created.Revision, staleUpdate)
+	if err != nil || conflict.Outcome != captureassignment.CommitOutcomeConflict || conflict.Actual != 2 {
+		t.Fatalf("stale update = %+v, %v", conflict, err)
+	}
 	manual := captureAssignmentFixture(
 		captureAssignmentReference(t, captureidentity.KindManualCapture, "manual.one"),
 		"personal", 1, captureassignment.SourceManualCreate,
@@ -43,7 +59,7 @@ func TestCaptureAssignmentRepositoryCASListAndReopen(t *testing.T) {
 		t.Fatalf("manual create = %+v, %v", result, err)
 	}
 	listed, err := repository.ListByEnvironment(context.Background(), "work", 10)
-	if err != nil || len(listed) != 1 || listed[0] != created {
+	if err != nil || len(listed) != 1 || listed[0] != updated {
 		t.Fatalf("work assignments = %+v, %v", listed, err)
 	}
 	listed, err = repository.ListByEnvironment(context.Background(), "personal", 10)
@@ -57,7 +73,7 @@ func TestCaptureAssignmentRepositoryCASListAndReopen(t *testing.T) {
 	reopened := openTestStore(t, databasePath)
 	defer shutdownTestStore(t, reopened)
 	recovered, exists, err := reopened.CaptureAssignmentRepository().Load(context.Background(), capture)
-	if err != nil || !exists || recovered != created {
+	if err != nil || !exists || recovered != updated {
 		t.Fatalf("recovered = %+v, exists=%t, err=%v", recovered, exists, err)
 	}
 }
@@ -144,7 +160,9 @@ func captureAssignmentFixture(
 		panic(err)
 	}
 	assignment := captureassignment.Assignment{
-		Capture: capture, EnvironmentID: environmentID, Revision: revision, Source: source,
+		Capture: capture, EnvironmentID: environmentID,
+		EnvironmentRevision: 1, EnvironmentDigest: initialDigest,
+		Revision: revision, Source: source,
 		LaunchAuthority: launchAuthority,
 		UpdatedAt:       time.Date(2026, 8, 7, 12, 0, int(revision), 0, time.UTC),
 	}

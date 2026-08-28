@@ -195,7 +195,7 @@ void main() {
   });
 
   test(
-    'Raw evidence loads on demand without retaining revealed bytes',
+    'Raw evidence copies one exact Transform attempt into Code Library',
     () async {
       final api = PreviewControlApi();
       final controller = WorkbenchController(
@@ -211,18 +211,30 @@ void main() {
       expect(controller.rawEvidence(exchangeId), isNull);
 
       final page = await controller.loadRawEvidence(exchangeId);
-      expect(page?.items, hasLength(1));
+      expect(page?.items, hasLength(3));
       expect(controller.rawEvidence(exchangeId), same(page));
       expect(controller.rawEvidenceError(exchangeId), isNull);
 
       final revealed = await controller.revealRawEvidence(
         exchangeId: exchangeId,
-        envelopeId: page!.items.single.envelopeId,
+        envelopeId: page!.items.first.envelopeId,
       );
       expect(revealed?.body, isNotEmpty);
       expect(
-        controller.rawEvidence(exchangeId)?.items.single.bodyBytes,
+        controller.rawEvidence(exchangeId)?.items.first.bodyBytes,
         greaterThan(0),
+      );
+
+      expect(await controller.copyMessageTransformSample(exchangeId), isTrue);
+      expect(controller.section, WorkbenchSection.codeLibrary);
+      expect(controller.capturedMessageTransformSample?.exchangeId, exchangeId);
+      expect(
+        controller.capturedMessageTransformSample?.wireProtocol,
+        'anthropic_messages',
+      );
+      expect(
+        controller.capturedMessageTransformSample?.sample.request.body,
+        contains('claude-sonnet-4-5'),
       );
     },
   );

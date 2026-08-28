@@ -66,6 +66,7 @@ func (authorizer *compositeAuthorizer) authorizeManaged(
 		WorkspaceRoot: evidence.CWD,
 		Workspace:     evidence.Workspace,
 		Adapter:       evidence.Adapter,
+		Runtime:       evidence.Runtime,
 	})
 }
 

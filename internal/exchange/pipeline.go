@@ -19,6 +19,7 @@ import (
 	"github.com/klauspost/compress/zstd"
 	"github.com/vibe-agi/vibermate/internal/agentconversation"
 	"github.com/vibe-agi/vibermate/internal/clientadapter"
+	"github.com/vibe-agi/vibermate/internal/clientannotation"
 	"github.com/vibe-agi/vibermate/internal/environment"
 	"github.com/vibe-agi/vibermate/internal/messagetransform"
 	"github.com/vibe-agi/vibermate/internal/offlinehold"
@@ -54,18 +55,22 @@ var errOfflineHoldAdmission = errors.New(
 // Pipeline owns all active Exchange contexts. It has no listener and cannot be
 // reached without an ingress component explicitly receiving its Executor.
 type Pipeline struct {
-	actions       offlinehold.ActionAdmission
-	accounts      AccountLeaseAuthority
-	protocolPaths *protocolpath.Selector
-	provider      Provider
-	toolDecisions ToolDecisionGate
-	retryWaiter   RetryWaiter
-	observer      ExchangeObserver
-	content       ContentObserver
-	observeLimit  time.Duration
-	hold          HoldPolicy
-	streamBudgets StreamBudgets
-	attemptIDs    AttemptIDSource
+	actions                  offlinehold.ActionAdmission
+	accounts                 AccountLeaseAuthority
+	protocolPaths            *protocolpath.Selector
+	provider                 Provider
+	toolDecisions            ToolDecisionGate
+	retryWaiter              RetryWaiter
+	observer                 ExchangeObserver
+	content                  ContentObserver
+	observeLimit             time.Duration
+	hold                     HoldPolicy
+	streamBudgets            StreamBudgets
+	attemptIDs               AttemptIDSource
+	annotations              *clientannotation.Signer
+	now                      func() time.Time
+	rawEvidence              rawevidence.Observer
+	reportRawEvidenceFailure func(error)
 
 	ownerContext context.Context
 	cancelOwner  context.CancelCauseFunc
@@ -91,6 +96,8 @@ func New(options Options) (*Pipeline, error) {
 		options.RetryWaiter == nil ||
 		options.Observer == nil ||
 		options.ContentObserver == nil ||
+		options.ClientAnnotations == nil ||
+		options.Now == nil ||
 		options.ObservationTimeout <= 0 {
 		return nil, errors.New("Exchange pipeline dependencies are incomplete")
 	}
@@ -106,22 +113,26 @@ func New(options Options) (*Pipeline, error) {
 	}
 	ownerContext, cancelOwner := context.WithCancelCause(options.OwnerContext)
 	return &Pipeline{
-		actions:       options.Actions,
-		accounts:      options.Accounts,
-		protocolPaths: options.ProtocolPaths,
-		provider:      options.Provider,
-		toolDecisions: options.ToolDecisions,
-		retryWaiter:   options.RetryWaiter,
-		observer:      options.Observer,
-		content:       options.ContentObserver,
-		observeLimit:  options.ObservationTimeout,
-		hold:          options.Hold,
-		streamBudgets: options.Stream,
-		attemptIDs:    attemptIDs,
-		ownerContext:  ownerContext,
-		cancelOwner:   cancelOwner,
-		operations:    make(map[*operation]struct{}),
-		changed:       make(chan struct{}),
+		actions:                  options.Actions,
+		accounts:                 options.Accounts,
+		protocolPaths:            options.ProtocolPaths,
+		provider:                 options.Provider,
+		toolDecisions:            options.ToolDecisions,
+		retryWaiter:              options.RetryWaiter,
+		observer:                 options.Observer,
+		content:                  options.ContentObserver,
+		observeLimit:             options.ObservationTimeout,
+		hold:                     options.Hold,
+		streamBudgets:            options.Stream,
+		attemptIDs:               attemptIDs,
+		annotations:              options.ClientAnnotations,
+		now:                      options.Now,
+		rawEvidence:              options.RawEvidence,
+		reportRawEvidenceFailure: options.ReportRawEvidenceFailure,
+		ownerContext:             ownerContext,
+		cancelOwner:              cancelOwner,
+		operations:               make(map[*operation]struct{}),
+		changed:                  make(chan struct{}),
 	}, nil
 }
 
@@ -231,7 +242,19 @@ func (pipeline *Pipeline) Execute(
 	// ledger lives outside the loop because commits accumulate across the
 	// whole logical Exchange, while everything a candidate decides does not.
 	ledger := &CommitLedger{}
-	transformTurn := request.plan.TransformProgram().NewTurn()
+	transformTurn, err := newMessageTransformTurn(
+		request,
+		pipeline.annotations,
+		pipeline.now().UTC(),
+	)
+	if err != nil {
+		return result, newFailure(
+			ReasonMessageTransformFailed,
+			request.exchangeID,
+			0,
+			err,
+		)
+	}
 	// attemptErr is the outcome the client ends up with. The loop body has its
 	// own short-lived errors; this is the one that leaves.
 	var attemptErr error
@@ -318,7 +341,7 @@ func (pipeline *Pipeline) executeCandidate(
 	ledger *CommitLedger,
 	result *Result,
 	captured *contentCapture,
-	transformTurn *messagetransform.Turn,
+	transformTurn *messagetransform.PipelineTurn,
 ) error {
 	if selection.original {
 		if credential.mode != providerauth.CredentialClientPassthrough {
@@ -338,7 +361,7 @@ func (pipeline *Pipeline) executeCandidate(
 				errors.New("original passthrough request envelope is unavailable"),
 			)
 		}
-		transformedHeaders, transformedBody, err := applyRequestMessageTransform(
+		transformedHeaders, transformedBody, transformInput, err := applyRequestMessageTransform(
 			ctx,
 			transformTurn,
 			request.operation.Method(),
@@ -363,6 +386,7 @@ func (pipeline *Pipeline) executeCandidate(
 		if err != nil {
 			return newFailure(ReasonProviderRequestInvalid, request.exchangeID, 0, err)
 		}
+		pipeline.observeMessageTransformRequest(ctx, frozenRequest, transformInput)
 		var contentPath *protocolpath.Path
 		var decodedContent *protocolcore.Request
 		contentBody, contentErr := decodeBoundedContent(
@@ -457,7 +481,7 @@ func (pipeline *Pipeline) executeCandidate(
 		}
 		headers = original
 	}
-	transformedHeaders, transformedBody, err := applyRequestMessageTransform(
+	transformedHeaders, transformedBody, transformInput, err := applyRequestMessageTransform(
 		ctx,
 		transformTurn,
 		encodedProvider.Method(),
@@ -482,6 +506,7 @@ func (pipeline *Pipeline) executeCandidate(
 	if err != nil {
 		return newFailure(ReasonProviderRequestInvalid, request.exchangeID, 0, err)
 	}
+	pipeline.observeMessageTransformRequest(ctx, frozenRequest, transformInput)
 	if decoded.Stream {
 		return pipeline.executeStream(
 			ctx,
@@ -627,6 +652,97 @@ func newProviderRawEvidenceContext(
 		)
 	}
 	return context, nil
+}
+
+func (pipeline *Pipeline) observeMessageTransformRequest(
+	ctx context.Context,
+	request providertransport.Request,
+	input messagetransform.RequestMessage,
+) {
+	if input.Method == "" {
+		return
+	}
+	pipeline.observeMessageTransform(ctx, request, rawevidence.Observation{
+		Layer:          rawevidence.LayerTransformRequestInput,
+		Method:         input.Method,
+		Path:           input.Path,
+		Headers:        input.Headers.Clone(),
+		Body:           bytes.Clone(input.Body),
+		Complete:       true,
+		Representation: "message_transform_input",
+		ContentType:    input.Headers.Get("Content-Type"),
+	})
+}
+
+func (pipeline *Pipeline) observeMessageTransformResponse(
+	ctx context.Context,
+	request providertransport.Request,
+	input messagetransform.ResponseMessage,
+) {
+	if input.StatusCode == 0 {
+		return
+	}
+	pipeline.observeMessageTransform(ctx, request, rawevidence.Observation{
+		Layer:          rawevidence.LayerTransformResponseInput,
+		StatusCode:     input.StatusCode,
+		Headers:        input.Headers.Clone(),
+		Body:           bytes.Clone(input.Body),
+		Complete:       true,
+		Representation: "message_transform_input",
+		ContentType:    input.Headers.Get("Content-Type"),
+	})
+}
+
+func (pipeline *Pipeline) observeMessageTransformStreamResponse(
+	ctx context.Context,
+	request providertransport.Request,
+	transformer *streamMessageTransformer,
+) {
+	input, total, complete := transformer.Input()
+	if input.StatusCode == 0 {
+		return
+	}
+	reason := ""
+	if !complete {
+		reason = "transform_input_limit"
+	}
+	pipeline.observeMessageTransform(ctx, request, rawevidence.Observation{
+		Layer:            rawevidence.LayerTransformResponseInput,
+		StatusCode:       input.StatusCode,
+		Headers:          input.Headers.Clone(),
+		Body:             bytes.Clone(input.Body),
+		TotalBodyBytes:   total,
+		Complete:         complete,
+		IncompleteReason: reason,
+		Representation:   "message_transform_stream_input",
+		ContentType:      input.Headers.Get("Content-Type"),
+	})
+}
+
+func (pipeline *Pipeline) observeMessageTransform(
+	ctx context.Context,
+	request providertransport.Request,
+	observation rawevidence.Observation,
+) {
+	if pipeline == nil || pipeline.rawEvidence == nil {
+		return
+	}
+	rawContext, ok := request.RawEvidenceContext()
+	if !ok || rawContext.Recording == rawevidence.RecordingOff {
+		return
+	}
+	observation.Context = rawContext
+	operation, cancel := context.WithTimeout(
+		context.WithoutCancel(ctx),
+		pipeline.observeLimit,
+	)
+	defer cancel()
+	if _, err := pipeline.rawEvidence.Observe(operation, observation); err != nil &&
+		pipeline.reportRawEvidenceFailure != nil {
+		pipeline.reportRawEvidenceFailure(fmt.Errorf(
+			"record message Transform input evidence: %w", err,
+		))
+	}
 }
 
 // RawEvidenceContext freezes the Exchange-level authority shared by the
@@ -1173,7 +1289,7 @@ func (pipeline *Pipeline) executeComplete(
 	ledger *CommitLedger,
 	result *Result,
 	captured *contentCapture,
-	transformTurn *messagetransform.Turn,
+	transformTurn *messagetransform.PipelineTurn,
 ) error {
 	result.Presentation = frozenRequest.WirePresentationEvidence()
 	if err := ledger.RecordUpstreamSend(int64(len(frozenRequest.Body()))); err != nil {
@@ -1229,7 +1345,7 @@ func (pipeline *Pipeline) executeComplete(
 	}
 	responseEnvelope := managedResponseEnvelope(ResponseModeJSON)
 	if transformTurn.HasResponse() {
-		transformed, beforeHeaders, _, transformErr := applyResponseMessageTransform(
+		transformed, transformInput, _, transformErr := applyResponseMessageTransform(
 			ctx,
 			transformTurn,
 			response.StatusCode,
@@ -1244,9 +1360,10 @@ func (pipeline *Pipeline) executeComplete(
 				transformErr,
 			)
 		}
+		pipeline.observeMessageTransformResponse(ctx, frozenRequest, transformInput)
 		responseEnvelope, transformErr = managedEnvelopeWithTransform(
 			ResponseModeJSON,
-			beforeHeaders,
+			transformInput.Headers,
 			transformed.Headers,
 		)
 		if transformErr != nil {
@@ -1367,7 +1484,7 @@ func (pipeline *Pipeline) executeOriginal(
 	contentPath *protocolpath.Path,
 	decodedContent *protocolcore.Request,
 	captured *contentCapture,
-	transformTurn *messagetransform.Turn,
+	transformTurn *messagetransform.PipelineTurn,
 ) error {
 	result.Presentation = frozenRequest.WirePresentationEvidence()
 	if err := ledger.RecordUpstreamSend(int64(len(frozenRequest.Body()))); err != nil {
@@ -1412,6 +1529,7 @@ func (pipeline *Pipeline) executeOriginal(
 			return pipeline.executeTransformedOriginalStream(
 				ctx,
 				request,
+				frozenRequest,
 				response,
 				downstream,
 				ledger,
@@ -1424,6 +1542,7 @@ func (pipeline *Pipeline) executeOriginal(
 		return pipeline.executeTransformedOriginalComplete(
 			ctx,
 			request,
+			frozenRequest,
 			response,
 			downstream,
 			ledger,
@@ -1549,13 +1668,14 @@ func (pipeline *Pipeline) executeOriginal(
 func (pipeline *Pipeline) executeTransformedOriginalComplete(
 	ctx context.Context,
 	request ClientRequest,
+	frozenRequest providertransport.Request,
 	response *http.Response,
 	downstream Downstream,
 	ledger *CommitLedger,
 	contentPath *protocolpath.Path,
 	decodedContent *protocolcore.Request,
 	captured *contentCapture,
-	transformTurn *messagetransform.Turn,
+	transformTurn *messagetransform.PipelineTurn,
 ) error {
 	body, err := readBounded(response.Body, maxCompleteResponseBytes)
 	if err != nil {
@@ -1566,7 +1686,7 @@ func (pipeline *Pipeline) executeTransformedOriginalComplete(
 			err,
 		)
 	}
-	transformed, _, protectedHeaders, err := applyResponseMessageTransform(
+	transformed, transformInput, protectedHeaders, err := applyResponseMessageTransform(
 		ctx,
 		transformTurn,
 		response.StatusCode,
@@ -1581,6 +1701,7 @@ func (pipeline *Pipeline) executeTransformedOriginalComplete(
 			err,
 		)
 	}
+	pipeline.observeMessageTransformResponse(ctx, frozenRequest, transformInput)
 	restoreCredentialHeaders(transformed.Headers, protectedHeaders)
 	envelope, err := NewResponseEnvelope(
 		ResponseModeJSON,
@@ -1661,13 +1782,14 @@ func (pipeline *Pipeline) executeTransformedOriginalComplete(
 func (pipeline *Pipeline) executeTransformedOriginalStream(
 	ctx context.Context,
 	request ClientRequest,
+	frozenRequest providertransport.Request,
 	response *http.Response,
 	downstream Downstream,
 	ledger *CommitLedger,
 	contentPath *protocolpath.Path,
 	decodedContent *protocolcore.Request,
 	captured *contentCapture,
-	transformTurn *messagetransform.Turn,
+	transformTurn *messagetransform.PipelineTurn,
 ) error {
 	logicalBody, err := newLogicalTransformStream(
 		response.Body,
@@ -1806,6 +1928,7 @@ func (pipeline *Pipeline) executeTransformedOriginalStream(
 			err,
 		)
 	}
+	pipeline.observeMessageTransformStreamResponse(ctx, frozenRequest, transformer)
 	if !started {
 		return newFailure(
 			ReasonMessageTransformFailed,
@@ -2006,7 +2129,7 @@ func (pipeline *Pipeline) executeStream(
 	ledger *CommitLedger,
 	result *Result,
 	captured *contentCapture,
-	transformTurn *messagetransform.Turn,
+	transformTurn *messagetransform.PipelineTurn,
 ) error {
 	if !transformTurn.HasResponse() {
 		if err := downstream.Begin(
@@ -2066,7 +2189,7 @@ func (pipeline *Pipeline) executeStream(
 				result.TransportResends,
 			) {
 				if retryDeadline.IsZero() {
-					retryDeadline = time.Now().Add(pipeline.hold.MaxDuration)
+					retryDeadline = pipeline.now().Add(pipeline.hold.MaxDuration)
 				}
 				if err := pipeline.waitForRetry(
 					ctx,
@@ -2140,7 +2263,7 @@ func (pipeline *Pipeline) executeStream(
 				result.TransportResends,
 			) {
 				if retryDeadline.IsZero() {
-					retryDeadline = time.Now().Add(pipeline.hold.MaxDuration)
+					retryDeadline = pipeline.now().Add(pipeline.hold.MaxDuration)
 				}
 				if err := pipeline.waitForRetry(
 					ctx,
@@ -2270,6 +2393,7 @@ func (pipeline *Pipeline) executeStream(
 			result,
 			captured,
 			transformer,
+			frozenRequest,
 		)
 		if streamErr == nil {
 			return nil
@@ -2282,7 +2406,7 @@ func (pipeline *Pipeline) executeStream(
 			result.TransportResends,
 		) {
 			if retryDeadline.IsZero() {
-				retryDeadline = time.Now().Add(pipeline.hold.MaxDuration)
+				retryDeadline = pipeline.now().Add(pipeline.hold.MaxDuration)
 			}
 			if err := pipeline.waitForRetry(
 				ctx,
@@ -2343,6 +2467,7 @@ func (pipeline *Pipeline) consumeProviderStream(
 	result *Result,
 	captured *contentCapture,
 	transformer *streamMessageTransformer,
+	frozenRequest providertransport.Request,
 ) error {
 	readContext, cancelRead := context.WithCancelCause(ctx)
 	readResults := make(chan providerReadResult)
@@ -2479,6 +2604,7 @@ func (pipeline *Pipeline) consumeProviderStream(
 				err,
 			)
 		}
+		pipeline.observeMessageTransformStreamResponse(ctx, frozenRequest, transformer)
 	}
 
 	terminal, err := stream.FinishDecoded(ctx)
@@ -2758,7 +2884,7 @@ func (pipeline *Pipeline) waitForRetry(
 	statusCode int,
 	deadline time.Time,
 ) error {
-	if !time.Now().Before(deadline) {
+	if !pipeline.now().Before(deadline) {
 		return context.DeadlineExceeded
 	}
 	waitContext, cancel := context.WithDeadline(ctx, deadline)

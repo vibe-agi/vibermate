@@ -168,7 +168,9 @@ func (launcher *Launcher) Run(
 		CWD:            cwd,
 		Command:        append([]string(nil), command...),
 		ExecutablePath: executable,
-		LocalUserLabel: localUserLabel(launcher.config.BaseEnvironment),
+		RuntimeMetadata: runtimeMetadata(
+			launcher.config.BaseEnvironment,
+		),
 		ClientEnvironment: clientEnvironmentInput(
 			clienttarget.FromEnvironment(launcher.config.BaseEnvironment),
 		),
@@ -489,6 +491,80 @@ func localUserLabel(environment []string) string {
 		}
 	}
 	return ""
+}
+
+func runtimeMetadata(environment []string) capturecontrol.ClientRuntimeMetadataInput {
+	metadata := capturecontrol.ClientRuntimeMetadataInput{
+		LocalUserName:          localUserLabel(environment),
+		HomeDirectory:          boundedEnvironmentValue(environment, homeEnvironmentKeys(), capturerun.MaxPathBytes),
+		OperatingSystem:        runtime.GOOS,
+		OperatingSystemVersion: operatingSystemVersion(),
+		Architecture:           runtime.GOARCH,
+		TimeZone:               localTimeZone(environment),
+	}
+	domain := capturerun.RuntimeMetadata{
+		LocalUserName:          metadata.LocalUserName,
+		HomeDirectory:          metadata.HomeDirectory,
+		OperatingSystem:        metadata.OperatingSystem,
+		OperatingSystemVersion: metadata.OperatingSystemVersion,
+		Architecture:           metadata.Architecture,
+		TimeZone:               metadata.TimeZone,
+	}
+	if domain.Validate() != nil {
+		return capturecontrol.ClientRuntimeMetadataInput{
+			OperatingSystem: runtime.GOOS,
+			Architecture:    runtime.GOARCH,
+		}
+	}
+	return metadata
+}
+
+func homeEnvironmentKeys() []string {
+	if runtime.GOOS == "windows" {
+		return []string{"USERPROFILE", "HOME"}
+	}
+	return []string{"HOME"}
+}
+
+func boundedEnvironmentValue(environment, keys []string, maximumBytes int) string {
+	for _, key := range keys {
+		prefix := key + "="
+		for index := len(environment) - 1; index >= 0; index-- {
+			if !strings.HasPrefix(environment[index], prefix) {
+				continue
+			}
+			value := strings.TrimPrefix(environment[index], prefix)
+			if value == "" || len(value) > maximumBytes || strings.TrimSpace(value) != value ||
+				strings.ContainsAny(value, "\x00\r\n") {
+				return ""
+			}
+			return value
+		}
+	}
+	return ""
+}
+
+func localTimeZone(environment []string) string {
+	if value := strings.TrimPrefix(boundedEnvironmentValue(environment, []string{"TZ"}, 128), ":"); validTimeZone(value) {
+		return value
+	}
+	if value := time.Now().Location().String(); value != "Local" && validTimeZone(value) {
+		return value
+	}
+	if target, err := os.Readlink("/etc/localtime"); err == nil {
+		if _, value, found := strings.Cut(filepath.ToSlash(target), "/zoneinfo/"); found && validTimeZone(value) {
+			return value
+		}
+	}
+	return ""
+}
+
+func validTimeZone(value string) bool {
+	if value == "" || value == "Local" || len(value) > 128 {
+		return false
+	}
+	_, err := time.LoadLocation(value)
+	return err == nil
 }
 
 func (launcher *Launcher) resolveCommand(

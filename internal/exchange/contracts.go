@@ -21,6 +21,7 @@ import (
 
 	"github.com/vibe-agi/vibermate/internal/agentconversation"
 	"github.com/vibe-agi/vibermate/internal/captureadmission"
+	"github.com/vibe-agi/vibermate/internal/clientannotation"
 	"github.com/vibe-agi/vibermate/internal/environment"
 	"github.com/vibe-agi/vibermate/internal/offlinehold"
 	"github.com/vibe-agi/vibermate/internal/protocolcore"
@@ -28,6 +29,7 @@ import (
 	"github.com/vibe-agi/vibermate/internal/protocolspec"
 	"github.com/vibe-agi/vibermate/internal/providerauth"
 	"github.com/vibe-agi/vibermate/internal/providertransport"
+	"github.com/vibe-agi/vibermate/internal/rawevidence"
 	"github.com/vibe-agi/vibermate/internal/transportprofile"
 	"github.com/vibe-agi/vibermate/internal/wireprofile"
 	"github.com/vibe-agi/vibermate/internal/workspaceidentity"
@@ -1470,19 +1472,23 @@ func (budgets StreamBudgets) Validate() error {
 }
 
 type Options struct {
-	OwnerContext       context.Context
-	Actions            offlinehold.ActionAdmission
-	Accounts           AccountLeaseAuthority
-	ProtocolPaths      *protocolpath.Selector
-	Provider           Provider
-	ToolDecisions      ToolDecisionGate
-	RetryWaiter        RetryWaiter
-	Observer           ExchangeObserver
-	ContentObserver    ContentObserver
-	ObservationTimeout time.Duration
-	Hold               HoldPolicy
-	Stream             StreamBudgets
-	AttemptIDs         AttemptIDSource
+	OwnerContext             context.Context
+	Actions                  offlinehold.ActionAdmission
+	Accounts                 AccountLeaseAuthority
+	ProtocolPaths            *protocolpath.Selector
+	Provider                 Provider
+	ToolDecisions            ToolDecisionGate
+	RetryWaiter              RetryWaiter
+	Observer                 ExchangeObserver
+	ContentObserver          ContentObserver
+	ObservationTimeout       time.Duration
+	Hold                     HoldPolicy
+	Stream                   StreamBudgets
+	AttemptIDs               AttemptIDSource
+	ClientAnnotations        *clientannotation.Signer
+	Now                      func() time.Time
+	RawEvidence              rawevidence.Observer
+	ReportRawEvidenceFailure func(error)
 }
 
 type AttemptOutcome string

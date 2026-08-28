@@ -171,6 +171,32 @@ func TestCaptureAssignmentRouteIsReadOnlyAfterLaunch(t *testing.T) {
 	assertBodyContains(t, mutation.Body.Bytes(), `"code":"control_route_not_found"`)
 }
 
+func TestCaptureAssignmentAppliesLatestPublishedEnvironmentAtAnExplicitAction(t *testing.T) {
+	t.Parallel()
+	assignments := newAssignmentFixture()
+	application := unifiedCaptureApplication(t, assignments)
+	response := environmentRequest(
+		t,
+		application,
+		http.MethodPost,
+		"/api/v1/captures/managed_run:same-id/environment-assignment/actions/apply-latest",
+		1,
+		"apply-latest-environment",
+		nil,
+	)
+	if response.Code != http.StatusOK {
+		t.Fatalf("apply status=%d body=%s", response.Code, response.Body.Bytes())
+	}
+	assertBodyContains(
+		t,
+		response.Body.Bytes(),
+		`"captureKey":"managed_run:same-id"`,
+		`"revision":2`,
+		`"environmentRevision":2`,
+		`"launchEnvironmentRevision":1`,
+	)
+}
+
 func unifiedCaptureApplication(t *testing.T, assignments captureassignment.Controller) http.Handler {
 	t.Helper()
 	runtime := startRuntime(t)
@@ -395,9 +421,16 @@ func newAssignmentFixture() *assignmentFixture {
 	items := make(map[string]captureassignment.Assignment)
 	for _, kind := range []captureidentity.Kind{captureidentity.KindManagedRun, captureidentity.KindManualCapture} {
 		reference, _ := captureidentity.New(kind, "same-id")
+		var digest environment.CandidateDigest
+		digest[0] = 1
+		authority, _ := environment.NewLaunchAuthorityBoundaryFromScopes(
+			"system_transparent", 1, digest, nil, nil,
+		)
 		items[reference.Key()] = captureassignment.Assignment{
-			Capture: reference, EnvironmentID: "system_transparent", Revision: 1,
-			Source: captureassignment.SourceSystemTransparent, UpdatedAt: now,
+			Capture: reference, EnvironmentID: "system_transparent",
+			EnvironmentRevision: 1, EnvironmentDigest: digest,
+			Revision: 1, Source: captureassignment.SourceSystemTransparent,
+			LaunchAuthority: authority, UpdatedAt: now,
 		}
 	}
 	return &assignmentFixture{items: items}
@@ -424,6 +457,27 @@ func (fixture *assignmentFixture) Resolve(_ context.Context, reference captureid
 	if !exists {
 		return captureassignment.Assignment{}, captureassignment.ErrAssignmentNotFound
 	}
+	return assignment, nil
+}
+func (fixture *assignmentFixture) ApplyLatest(
+	_ context.Context,
+	reference captureidentity.Reference,
+	expected captureassignment.Revision,
+) (captureassignment.Assignment, error) {
+	fixture.mu.Lock()
+	defer fixture.mu.Unlock()
+	assignment, exists := fixture.items[reference.Key()]
+	if !exists {
+		return captureassignment.Assignment{}, captureassignment.ErrAssignmentNotFound
+	}
+	if assignment.Revision != expected {
+		return assignment, captureassignment.ErrAssignmentConflict
+	}
+	assignment.Revision++
+	assignment.EnvironmentRevision++
+	assignment.EnvironmentDigest[0]++
+	assignment.UpdatedAt = assignment.UpdatedAt.Add(time.Second)
+	fixture.items[reference.Key()] = assignment
 	return assignment, nil
 }
 func assertBodyContains(t *testing.T, body []byte, values ...string) {

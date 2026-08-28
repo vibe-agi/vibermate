@@ -165,7 +165,7 @@ func (manager *Manager) Create(
 		ControlCapabilityHash:       capabilityDigest(controlDigestDomain, controlValue),
 		CWD:                         command.CWD,
 		CanonicalExecutablePath:     command.CanonicalExecutablePath,
-		LocalUserLabel:              command.LocalUserLabel,
+		Runtime:                     command.Runtime,
 		RuntimeUserID:               command.RuntimeUserID,
 		LoginSessionID:              command.LoginSessionID,
 		DeviceName:                  command.DeviceName,

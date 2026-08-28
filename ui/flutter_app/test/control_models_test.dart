@@ -1,5 +1,6 @@
 import 'dart:convert';
 
+import 'package:crypto/crypto.dart' as crypto;
 import 'package:flutter_test/flutter_test.dart';
 import 'package:vibermate_app/core/api/control_api.dart';
 import 'package:vibermate_app/core/api/control_models.dart';
@@ -8,6 +9,30 @@ import 'package:vibermate_app/preview/preview_control_api.dart';
 import 'runtime_usage_fixture.dart';
 
 void main() {
+  test(
+    'Capture assignment separates launch and applied Environment revisions',
+    () {
+      final assignment = CaptureAssignment.fromJson({
+        'captureKey': 'managed_run:run-one',
+        'captureId': 'run-one',
+        'captureKind': 'managed_run',
+        'environmentId': 'work',
+        'environmentRevision': 4,
+        'environmentDigest': List.filled(64, 'b').join(),
+        'launchEnvironmentRevision': 2,
+        'launchEnvironmentDigest': List.filled(64, 'a').join(),
+        'revision': 3,
+        'source': 'launch',
+        'updatedAt': '2026-08-28T01:02:03.000Z',
+      }, 'assignment');
+
+      expect(assignment.environmentRevision, 4);
+      expect(assignment.launchEnvironmentRevision, 2);
+      expect(assignment.revision, 3);
+      expect(assignment.environmentDigest, List.filled(64, 'b').join());
+    },
+  );
+
   test(
     'Runtime Server access states one reusable Runtime User login model',
     () {
@@ -1077,14 +1102,17 @@ void main() {
       final encodedPlan =
           (encodedEndpoint['protocolPlans']! as List<Object?>).first!
               as JsonObject;
-      expect(encodedPlan['egressPolicy'], {
-        'proxy': {'kind': 'direct'},
-        'resolver': {'kind': 'system', 'transport': 'direct'},
+      expect(encodedPlan['egressProfile'], {
+        'id': 'profile.direct',
+        'revision': 1,
+        'displayName': 'Direct · System DNS',
+        'policy': {
+          'proxy': {'kind': 'direct'},
+          'resolver': {'kind': 'system', 'transport': 'direct'},
+        },
+        'publishedAt': '1970-01-01T00:00:00.000Z',
       });
-      expect(encodedPlan['transformPolicy'], {
-        'requestJavaScript': '',
-        'responseJavaScript': '',
-      });
+      expect(encodedPlan['transforms'], isEmpty);
       final decoded = EnvironmentRecord.fromJson(
         jsonDecode(jsonEncode(encoded)),
         'environment',
@@ -1109,12 +1137,12 @@ void main() {
         work.routes.first.accountPolicy.accountRevisions,
       );
       expect(
-        decoded.clientEndpoints.first.protocolPlans.first.egressPolicy,
-        const TrafficEgressPolicy.direct(),
+        decoded.clientEndpoints.first.protocolPlans.first.egressProfile,
+        EgressProfileRevision.direct,
       );
       expect(
-        decoded.clientEndpoints.first.protocolPlans.first.transformPolicy,
-        const TrafficTransformPolicy.disabled(),
+        decoded.clientEndpoints.first.protocolPlans.first.transforms,
+        isEmpty,
       );
     },
   );
@@ -1217,6 +1245,27 @@ void main() {
     },
   );
 
+  test('egress profile contract freezes exact published network policy', () {
+    final profile = EgressProfileRevision.fromJson({
+      'id': 'profile.office',
+      'revision': 3,
+      'displayName': 'Office',
+      'policy': {
+        'proxy': {'kind': 'socks5', 'endpoint': '127.0.0.1:7890'},
+        'resolver': {'kind': 'system', 'transport': 'direct'},
+      },
+      'publishedAt': '2026-08-27T01:02:03.000Z',
+    }, 'profile');
+    expect(profile.id, 'profile.office');
+    expect(profile.policy.proxy.endpoint, '127.0.0.1:7890');
+    expect(
+      EgressProfileCatalog.fromJson({
+        'items': [profile.toJson()],
+      }, 'profiles').items.single,
+      profile,
+    );
+  });
+
   test(
     'traffic transform contract is strict, bounded, and round-trips source',
     () {
@@ -1251,6 +1300,41 @@ void main() {
       );
     },
   );
+
+  test('Code Library Transform revision round-trips immutable source', () {
+    final revision = CodeLibraryTransformRevision.fromJson({
+      'id': 'home-redaction',
+      'revision': 7,
+      'collectionId': 'privacy',
+      'displayName': 'Home redaction',
+      'policy': {
+        'requestJavaScript': 'request.body = request.body.trim();',
+        'responseJavaScript': '',
+      },
+      'publishedAt': '2026-08-27T10:11:12.123Z',
+    }, 'transform');
+
+    expect(revision.id, 'home-redaction');
+    expect(revision.revision, 7);
+    expect(revision.policy.requestJavaScript, contains('trim'));
+    expect(
+      CodeLibraryTransformRevision.fromJson(
+        jsonDecode(jsonEncode(revision.toJson())),
+        'transform',
+      ),
+      revision,
+    );
+    expect(
+      () => CodeLibraryTransformRevision.fromJson({
+        ...revision.toJson(),
+        'policy': {
+          'requestJavaScript': 'request.body = "\u0000";',
+          'responseJavaScript': '',
+        },
+      }, 'transform'),
+      throwsA(isA<ControlContractException>()),
+    );
+  });
 
   test(
     'Environment rejects mutable or cross-shaped Account authority',
@@ -1337,6 +1421,49 @@ void main() {
       );
     },
   );
+
+  test('Captured Transform inputs become one editable SSE test sample', () {
+    final request = RevealedRawEvidence.fromJson(
+      _transformInputRevealJson(
+        envelopeId: 'raw-transform-request',
+        layer: 'transform_request_input',
+        method: 'POST',
+        path: '/v1/responses',
+        contentType: 'application/json',
+        representation: 'message_transform_input',
+        body: '{"model":"captured","input":"private"}',
+      ),
+      'requestReveal',
+      expectedEnvelopeId: 'raw-transform-request',
+    );
+    final response = RevealedRawEvidence.fromJson(
+      _transformInputRevealJson(
+        envelopeId: 'raw-transform-response',
+        layer: 'transform_response_input',
+        statusCode: 200,
+        contentType: 'text/event-stream',
+        representation: 'message_transform_stream_input',
+        body:
+            'event: response.completed\n'
+            'data: {"status":"completed"}\n\n',
+      ),
+      'responseReveal',
+      expectedEnvelopeId: 'raw-transform-response',
+    );
+
+    final captured = CapturedMessageTransformSample.fromRawEvidence(
+      request: request,
+      response: response,
+    );
+
+    expect(captured.exchangeId, 'exchange-transform-sample');
+    expect(captured.wireProtocol, 'openai_responses');
+    expect(captured.sample.request.body, contains('private'));
+    expect(captured.sample.response.streaming, isTrue);
+    expect(captured.sample.response.headers['content-type'], [
+      'text/event-stream',
+    ]);
+  });
 
   test('Raw reveal rejects tampered body digests and frame ranges', () {
     final valid = _rawRevealJson();
@@ -1442,6 +1569,53 @@ Map<String, Object?> _rawRevealJson() => {
     {'kind': 'data', 'offset': 0, 'length': 5},
   ],
 };
+
+Map<String, Object?> _transformInputRevealJson({
+  required String envelopeId,
+  required String layer,
+  required String contentType,
+  required String representation,
+  required String body,
+  String? method,
+  String? path,
+  int? statusCode,
+}) {
+  final bodyBytes = utf8.encode(body);
+  return {
+    'envelope': {
+      'envelopeId': envelopeId,
+      'layer': layer,
+      'scopeKind': 'managed_run',
+      'scopeId': 'run-transform-sample',
+      'exchangeId': 'exchange-transform-sample',
+      'attemptId': 'attempt-transform-sample',
+      'observedAt': '2026-08-11T00:00:00.000Z',
+      'expiresAt': '2026-09-10T00:00:00.000Z',
+      'method': ?method,
+      'path': ?path,
+      'statusCode': ?statusCode,
+      'contentType': contentType,
+      'representation': representation,
+      'headerCount': 1,
+      'trailerCount': 0,
+      'bodyBytes': bodyBytes.length,
+      'bodySha256': crypto.sha256.convert(bodyBytes).toString(),
+      'digestScope': 'full_body',
+      'payloadState': 'captured',
+      'redactedCredentialFields': <String>[],
+      'revealAvailable': true,
+    },
+    'headers': [
+      {
+        'name': 'Content-Type',
+        'values': [contentType],
+      },
+    ],
+    'trailers': <Object?>[],
+    'bodyBase64': base64.encode(bodyBytes),
+    'frames': <Object?>[],
+  };
+}
 
 Map<String, Object?> _codexClientIdentityJson() => {
   'client': 'codex',

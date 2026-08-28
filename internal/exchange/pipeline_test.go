@@ -17,6 +17,9 @@ import (
 	"github.com/vibe-agi/vibermate/internal/agentconversation"
 	"github.com/vibe-agi/vibermate/internal/anthropicchat"
 	"github.com/vibe-agi/vibermate/internal/captureadmission"
+	"github.com/vibe-agi/vibermate/internal/clientannotation"
+	"github.com/vibe-agi/vibermate/internal/codelibrary"
+	"github.com/vibe-agi/vibermate/internal/egressprofile"
 	"github.com/vibe-agi/vibermate/internal/environment"
 	"github.com/vibe-agi/vibermate/internal/messagetransform"
 	"github.com/vibe-agi/vibermate/internal/offlinehold"
@@ -28,6 +31,7 @@ import (
 	"github.com/vibe-agi/vibermate/internal/protocolspec"
 	"github.com/vibe-agi/vibermate/internal/providerauth"
 	"github.com/vibe-agi/vibermate/internal/providertransport"
+	"github.com/vibe-agi/vibermate/internal/rawevidence"
 	"github.com/vibe-agi/vibermate/internal/responseschat"
 	"github.com/vibe-agi/vibermate/internal/secretstore"
 	"github.com/vibe-agi/vibermate/internal/ssewire"
@@ -141,6 +145,8 @@ func TestManagedCompleteExchangeTransformsWireMessagesWithOneTurnContext(t *test
 		approvedDecisions(),
 		&attemptObserverDouble{},
 	)
+	raw := &rawObserverDouble{}
+	pipeline.rawEvidence = raw
 	defer shutdownPipeline(t, pipeline)
 	downstream := &downstreamRecorder{}
 	_, err := pipeline.Execute(
@@ -164,6 +170,170 @@ func TestManagedCompleteExchangeTransformsWireMessagesWithOneTurnContext(t *test
 	envelopes := downstream.envelopesSnapshot()
 	if len(envelopes) != 1 || envelopes[0].Headers().Get("X-Transform-Response") != mappedModel {
 		t.Fatalf("downstream response Headers = %#v", envelopes)
+	}
+	rawMessages := raw.snapshot()
+	if len(rawMessages) != 2 ||
+		rawMessages[0].Layer != rawevidence.LayerTransformRequestInput ||
+		bytes.Contains(rawMessages[0].Body, []byte("transform_marker")) ||
+		rawMessages[0].Headers.Get("Authorization") != "" ||
+		rawMessages[1].Layer != rawevidence.LayerTransformResponseInput ||
+		bytes.Contains(rawMessages[1].Body, []byte("transformed:")) {
+		t.Fatalf("transform input evidence = %+v", rawMessages)
+	}
+}
+
+func TestResponseOnlyTransformRecordsAPairedRequestInput(t *testing.T) {
+	plan := mustEnvironmentRequestPlan(t, testPlanOptions{
+		destination:    environment.DestinationKindUpstream,
+		providerOrigin: "https://provider.example/v1",
+		backend:        protocolspec.DialectOpenAIChat,
+		modelMode:      environment.ModelModeMap,
+		mappedModel:    "opaque:upstream-model",
+		accounts:       []testAccount{{id: "account.primary", revision: 3, epoch: 7}},
+		preferred:      "account.primary",
+		transform: messagetransform.Policy{ResponseJavaScript: `
+			response.headers["x-transform-response"] = "yes";
+		`},
+	})
+	provider := &providerDouble{results: []providerResult{{
+		response: jsonResponse(http.StatusOK, completeProviderResponse("opaque:upstream-model")),
+	}}}
+	pipeline := newTestPipeline(
+		t,
+		newAccountAuthority(t, testAccount{id: "account.primary", revision: 3, epoch: 7}),
+		provider,
+		approvedDecisions(),
+		&attemptObserverDouble{},
+	)
+	raw := &rawObserverDouble{}
+	pipeline.rawEvidence = raw
+	defer shutdownPipeline(t, pipeline)
+
+	_, err := pipeline.Execute(
+		context.Background(),
+		mustClientRequest(t, "exchange-response-only-transform", plan, completeClientRequest()),
+		&downstreamRecorder{},
+	)
+	if err != nil {
+		t.Fatalf("Execute() error = %v", err)
+	}
+	evidence := raw.snapshot()
+	if len(evidence) != 2 ||
+		evidence[0].Layer != rawevidence.LayerTransformRequestInput ||
+		evidence[1].Layer != rawevidence.LayerTransformResponseInput {
+		t.Fatalf("paired Transform inputs = %+v", evidence)
+	}
+}
+
+func TestManagedMessageTransformReceivesLauncherRuntimeMetadata(t *testing.T) {
+	t.Parallel()
+	plan := mustEnvironmentRequestPlan(t, testPlanOptions{
+		destination:    environment.DestinationKindUpstream,
+		providerOrigin: "https://provider.example/v1",
+		backend:        protocolspec.DialectOpenAIChat,
+		modelMode:      environment.ModelModeMap,
+		mappedModel:    "opaque:upstream-model",
+		accounts:       []testAccount{{id: "account.primary", revision: 3, epoch: 7}},
+		preferred:      "account.primary",
+		transform: messagetransform.Policy{
+			RequestJavaScript: `
+				request.headers["x-runtime-user"] = [runtime.user.name];
+				context.home = runtime.user.homeDirectory;
+			`,
+			ResponseJavaScript: `
+				response.headers["x-runtime"] = [runtime.device.timeZone, runtime.workspace.root, context.home];
+			`,
+		},
+	})
+	provider := &providerDouble{results: []providerResult{{
+		response: jsonResponse(http.StatusOK, completeProviderResponse("opaque:upstream-model")),
+	}}}
+	pipeline := newTestPipeline(
+		t,
+		newAccountAuthority(t, testAccount{id: "account.primary", revision: 3, epoch: 7}),
+		provider,
+		approvedDecisions(),
+		&attemptObserverDouble{},
+	)
+	defer shutdownPipeline(t, pipeline)
+	admission, err := captureadmission.NewManagedRun(captureadmission.ManagedRunEvidence{
+		CaptureRunID:  "capture-runtime-metadata",
+		SourceLabel:   "codex",
+		WorkspaceRoot: "/Users/jack/Code/vibermate",
+		Runtime: captureadmission.ManagedRuntimeMetadata{
+			LocalUserName: "jack", HomeDirectory: "/Users/jack",
+			OperatingSystem: "darwin", OperatingSystemVersion: "15.6",
+			Architecture: "arm64", TimeZone: "Asia/Singapore",
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	downstream := &downstreamRecorder{}
+	_, err = pipeline.Execute(
+		context.Background(),
+		mustClientRequestWithOptions(
+			t, "exchange-runtime-metadata", plan, completeClientRequest(),
+			WithIngressCorrelation(admission, "connection-runtime-metadata"),
+		),
+		downstream,
+	)
+	if err != nil {
+		t.Fatalf("Execute() error = %v", err)
+	}
+	requests := provider.requestsSnapshot()
+	if len(requests) != 1 || requests[0].Headers().Get("X-Runtime-User") != "jack" {
+		t.Fatalf("provider runtime metadata = %#v", requests)
+	}
+	envelopes := downstream.envelopesSnapshot()
+	want := []string{"Asia/Singapore", "/Users/jack/Code/vibermate", "/Users/jack"}
+	if len(envelopes) != 1 || !slices.Equal(envelopes[0].Headers().Values("X-Runtime"), want) {
+		t.Fatalf("downstream runtime metadata = %#v, want %#v", envelopes, want)
+	}
+}
+
+func TestManagedMessageTransformReceivesFrozenTurnTimeAndAnnotationSigner(t *testing.T) {
+	fixed := time.Date(2026, 8, 27, 6, 5, 4, 0, time.UTC)
+	plan := mustEnvironmentRequestPlan(t, testPlanOptions{
+		destination:    environment.DestinationKindUpstream,
+		providerOrigin: "https://provider.example/v1",
+		backend:        protocolspec.DialectOpenAIChat,
+		modelMode:      environment.ModelModeMap,
+		mappedModel:    "opaque:upstream-model",
+		accounts:       []testAccount{{id: "account.primary", revision: 3, epoch: 7}},
+		preferred:      "account.primary",
+		transform: messagetransform.Policy{ResponseJavaScript: `
+			const payload = JSON.parse(response.body);
+			payload.choices[0].message.content = runtime.annotations.create(
+				"turn-time", runtime.turn.startedAt
+			);
+			response.body = JSON.stringify(payload);
+		`},
+	})
+	provider := &providerDouble{results: []providerResult{{
+		response: jsonResponse(http.StatusOK, completeProviderResponse("opaque:upstream-model")),
+	}}}
+	pipeline := newTestPipeline(
+		t,
+		newAccountAuthority(t, testAccount{id: "account.primary", revision: 3, epoch: 7}),
+		provider,
+		approvedDecisions(),
+		&attemptObserverDouble{},
+	)
+	pipeline.now = func() time.Time { return fixed }
+	defer shutdownPipeline(t, pipeline)
+	downstream := &downstreamRecorder{}
+	if _, err := pipeline.Execute(
+		context.Background(),
+		mustClientRequest(t, "exchange-turn-time", plan, completeClientRequest()),
+		downstream,
+	); err != nil {
+		t.Fatalf("Execute() error = %v", err)
+	}
+	body := string(downstream.bytesSnapshot())
+	if !strings.Contains(body, "vibermate:annotation:v1:turn-time:") ||
+		!strings.Contains(body, fixed.Format(time.RFC3339Nano)) {
+		t.Fatalf("downstream body = %s", body)
 	}
 }
 
@@ -811,6 +981,8 @@ func TestOriginalDestinationTransformsSSEEventsAndPreservesStreaming(t *testing.
 		&attemptObserverDouble{},
 		content,
 	)
+	raw := &rawObserverDouble{}
+	pipeline.rawEvidence = raw
 	defer shutdownPipeline(t, pipeline)
 	downstream := &downstreamRecorder{}
 	result, err := pipeline.Execute(
@@ -841,6 +1013,15 @@ func TestOriginalDestinationTransformsSSEEventsAndPreservesStreaming(t *testing.
 		len(observation.Response.Blocks) != 1 ||
 		observation.Response.Blocks[0].Text != "rewritten" {
 		t.Fatalf("transformed original stream observation = %+v", observation)
+	}
+	rawMessages := raw.snapshot()
+	if len(rawMessages) != 2 ||
+		rawMessages[0].Layer != rawevidence.LayerTransformRequestInput ||
+		rawMessages[1].Layer != rawevidence.LayerTransformResponseInput ||
+		!bytes.Contains(rawMessages[1].Body, []byte(`"text":"hello"`)) ||
+		bytes.Contains(rawMessages[1].Body, []byte("rewritten")) ||
+		rawMessages[1].Headers.Get("Content-Encoding") != "" {
+		t.Fatalf("stream Transform input evidence = %+v", rawMessages)
 	}
 }
 
@@ -1997,6 +2178,14 @@ func mustEnvironmentRequestPlan(t *testing.T, options testPlanOptions) environme
 			}},
 		}
 	}
+	var transforms []codelibrary.TransformRevision
+	if options.transform.Enabled() {
+		transforms = []codelibrary.TransformRevision{{
+			ID: "transform.test", Revision: 1, CollectionID: "tests",
+			DisplayName: "Test Transform", Policy: options.transform,
+			PublishedAt: time.Date(2026, time.August, 27, 0, 0, 0, 0, time.UTC),
+		}}
+	}
 	aggregate := environment.Environment{
 		ID: "environment.test", Name: "Test", State: environment.StateActive, Revision: 9,
 		ContentRecording: recording,
@@ -2007,7 +2196,8 @@ func mustEnvironmentRequestPlan(t *testing.T, options testPlanOptions) environme
 				ClientProtocol:      clientProtocol,
 				ClientAdapterPolicy: environment.ClientAdapterPolicy{ID: "adapter.anthropic", Revision: 2},
 				Destination:         destination,
-				TransformPolicy:     options.transform,
+				EgressProfile:       egressprofile.Direct(),
+				Transforms:          transforms,
 			}},
 		}},
 	}
@@ -2225,6 +2415,11 @@ func newTestPipelineWithContentObserver(
 	content ContentObserver,
 ) *Pipeline {
 	t.Helper()
+	annotations, err := clientannotation.NewSigner(bytes.Repeat([]byte{0x5a}, 32))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(annotations.Destroy)
 	pipeline, err := New(Options{
 		OwnerContext: context.Background(), Actions: newTestActionGate(t), Accounts: accounts,
 		ProtocolPaths: mustProtocolPathSelector(t), Provider: provider, ToolDecisions: decisions,
@@ -2232,6 +2427,8 @@ func newTestPipelineWithContentObserver(
 		ObservationTimeout: time.Second,
 		Hold:               HoldPolicy{MaxTransportResends: 0, RetryDelay: 0, MaxDuration: time.Second},
 		Stream:             DefaultStreamBudgets(),
+		ClientAnnotations:  annotations,
+		Now:                time.Now,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -2520,6 +2717,31 @@ type attemptObserverDouble struct {
 	mu           sync.Mutex
 	starts       []StartObservation
 	observations []AttemptObservation
+}
+
+type rawObserverDouble struct {
+	mu           sync.Mutex
+	observations []rawevidence.Observation
+}
+
+func (observer *rawObserverDouble) Observe(
+	_ context.Context,
+	observation rawevidence.Observation,
+) (rawevidence.Watermark, error) {
+	observer.mu.Lock()
+	defer observer.mu.Unlock()
+	observation.Headers = observation.Headers.Clone()
+	observation.Body = bytes.Clone(observation.Body)
+	observer.observations = append(observer.observations, observation)
+	return rawevidence.Watermark{
+		WriterID: "transform-test", Sequence: uint64(len(observer.observations)),
+	}, nil
+}
+
+func (observer *rawObserverDouble) snapshot() []rawevidence.Observation {
+	observer.mu.Lock()
+	defer observer.mu.Unlock()
+	return slices.Clone(observer.observations)
 }
 
 type contentObserverDouble struct {

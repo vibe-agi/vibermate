@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/vibe-agi/vibermate/internal/captureidentity"
+	"github.com/vibe-agi/vibermate/internal/egressprofile"
 	"github.com/vibe-agi/vibermate/internal/environment"
 	"github.com/vibe-agi/vibermate/internal/operationcatalog"
 	"github.com/vibe-agi/vibermate/internal/originidentity"
@@ -112,6 +113,138 @@ func TestCaptureKeepsFrozenEnvironmentRevisionAfterPublish(t *testing.T) {
 	assertRequestRoute(t, manager, secondCapture, "connection.second", 2, "route.revision-two")
 }
 
+func TestApplyLatestChangesOnlyRequestsBegunAfterApply(t *testing.T) {
+	t.Parallel()
+	repository := newMemoryRepository()
+	revisionOne := environmentFixture(t, "work", "adapter.shared")
+	resolver := newRevisionResolver(t, revisionOne)
+	manager := newTestManager(t, repository, resolver)
+	capture := testCapture()
+	created, err := manager.Create(context.Background(), CreateCommand{
+		Capture: capture, EnvironmentID: "work", Source: SourceLaunch,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	connection, err := manager.RegisterConnection(
+		context.Background(), capture, "connection.semantic", semanticOrigin(t),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer connection.Close()
+	inFlight, err := manager.BeginRequest(
+		context.Background(), capture, "connection.semantic", semanticRequestFacts(),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer inFlight.Release()
+
+	revisionTwo := revisionOne.Clone()
+	revisionTwo.Revision = 2
+	revisionTwo.ClientEndpoints[0].Revision = 2
+	plan := &revisionTwo.ClientEndpoints[0].ProtocolPlans[0]
+	plan.Revision = 2
+	plan.Destination.Upstream.DefaultRouteID = "route.revision-two"
+	plan.Destination.Upstream.RouteSet.Revision = 2
+	plan.Destination.Upstream.RouteSet.CandidateRouteIDs = []environment.UpstreamRouteID{"route.revision-two"}
+	plan.Destination.Upstream.Routes[0].ID = "route.revision-two"
+	resolver.Publish(t, revisionTwo)
+
+	applied, err := manager.ApplyLatest(context.Background(), capture, created.Revision)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if applied.Revision != 2 || applied.EnvironmentRevision != 2 ||
+		applied.LaunchAuthority != created.LaunchAuthority ||
+		applied.LaunchAuthority.InitialEnvironmentRevision() != 1 {
+		t.Fatalf("applied assignment = %+v", applied)
+	}
+	oldRoute, oldRouteExists := inFlight.Plan().UpstreamRoute()
+	if inFlight.Plan().EnvironmentRevision() != 1 || !oldRouteExists || oldRoute.ID() != "route.default" {
+		t.Fatalf("in-flight request changed = revision %d route %q", inFlight.Plan().EnvironmentRevision(), oldRoute.ID())
+	}
+	assertRequestRoute(t, manager, capture, "connection.semantic", 2, "route.revision-two")
+}
+
+func TestApplyLatestRejectsAnEnvironmentThatCannotServeAnOpenConnection(t *testing.T) {
+	t.Parallel()
+	repository := newMemoryRepository()
+	revisionOne := environmentFixture(t, "work", "adapter.shared")
+	resolver := newRevisionResolver(t, revisionOne)
+	manager := newTestManager(t, repository, resolver)
+	capture := testCapture()
+	created, err := manager.Create(context.Background(), CreateCommand{
+		Capture: capture, EnvironmentID: "work", Source: SourceLaunch,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	connection, err := manager.RegisterConnection(
+		context.Background(), capture, "connection.semantic", semanticOrigin(t),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer connection.Close()
+
+	revisionTwo := revisionOne.Clone()
+	revisionTwo.Revision = 2
+	revisionTwo.ClientEndpoints = nil
+	resolver.Publish(t, revisionTwo)
+
+	if _, err := manager.ApplyLatest(
+		context.Background(), capture, created.Revision,
+	); !errors.Is(err, ErrAssignmentIncompatible) {
+		t.Fatalf("incompatible apply = %v", err)
+	}
+	resolved, err := manager.Resolve(context.Background(), capture)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resolved != created {
+		t.Fatalf("rejected apply changed assignment = %+v", resolved)
+	}
+	assertRequestRoute(t, manager, capture, "connection.semantic", 1, "route.default")
+}
+
+func TestApplyLatestDoesNotOverflowTheAssignmentRevision(t *testing.T) {
+	t.Parallel()
+	repository := newMemoryRepository()
+	revisionOne := environmentFixture(t, "work", "adapter.shared")
+	resolver := newRevisionResolver(t, revisionOne)
+	manager := newTestManager(t, repository, resolver)
+	capture := testCapture()
+	created, err := manager.Create(context.Background(), CreateCommand{
+		Capture: capture, EnvironmentID: "work", Source: SourceLaunch,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	saturated := created
+	saturated.Revision = MaxRevision
+	repository.assignments[capture] = saturated
+	revisionTwo := revisionOne.Clone()
+	revisionTwo.Revision = 2
+	revisionTwo.ClientEndpoints[0].Revision = 2
+	revisionTwo.ClientEndpoints[0].ProtocolPlans[0].Revision = 2
+	resolver.Publish(t, revisionTwo)
+
+	if _, err := manager.ApplyLatest(
+		context.Background(), capture, MaxRevision,
+	); !errors.Is(err, ErrAssignmentUnavailable) {
+		t.Fatalf("apply at maximum assignment revision = %v", err)
+	}
+	resolved, err := manager.Resolve(context.Background(), capture)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resolved != saturated {
+		t.Fatalf("overflow attempt changed assignment = %+v", resolved)
+	}
+}
+
 func TestRegisterConnectionFailsWhenFrozenRevisionIsUnavailable(t *testing.T) {
 	t.Parallel()
 	repository := newMemoryRepository()
@@ -186,6 +319,11 @@ func TestIndeterminateCreatePoisonsOnlyItsCapture(t *testing.T) {
 	}
 	if _, err := manager.Resolve(context.Background(), first); !errors.Is(err, ErrAssignmentUnavailable) {
 		t.Fatalf("poisoned resolve = %v", err)
+	}
+	if _, err := manager.ApplyLatest(
+		context.Background(), first, 1,
+	); !errors.Is(err, ErrAssignmentUnavailable) {
+		t.Fatalf("poisoned apply = %v", err)
 	}
 	second, _ := captureidentity.New(captureidentity.KindManualCapture, "manual.two")
 	if _, err := manager.Create(context.Background(), CreateCommand{
@@ -314,6 +452,7 @@ func environmentFixture(t *testing.T, id string, adapterID string) environment.E
 				ID: "plan.messages", Revision: 1,
 				ClientProtocol:      environment.ClientProtocolAnthropicMessages,
 				ClientAdapterPolicy: environment.ClientAdapterPolicy{ID: adapterID, Revision: 1},
+				EgressProfile:       egressprofile.Direct(),
 				Destination: environment.DestinationPlan{
 					Kind: environment.DestinationKindUpstream,
 					Upstream: &environment.UpstreamPlan{
@@ -603,7 +742,7 @@ func (repository *memoryRepository) Write(
 		}, errors.New("injected write outcome")
 	}
 	current, exists := repository.assignments[candidate.Capture]
-	if expected != 0 || exists {
+	if expected == 0 && exists || expected != 0 && (!exists || current.Revision != expected) {
 		actual := Revision(0)
 		if exists {
 			actual = current.Revision
@@ -613,6 +752,9 @@ func (repository *memoryRepository) Write(
 			Assignment: current,
 			Actual:     actual,
 		}, nil
+	}
+	if expected != 0 && candidate.Revision != expected+1 {
+		return CommitResult{Outcome: CommitOutcomeNotCommitted}, ErrInvalidAssignment
 	}
 	repository.assignments[candidate.Capture] = candidate
 	return CommitResult{

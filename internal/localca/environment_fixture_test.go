@@ -10,6 +10,7 @@ import (
 	"github.com/vibe-agi/vibermate/internal/captureassignment"
 	"github.com/vibe-agi/vibermate/internal/captureidentity"
 	"github.com/vibe-agi/vibermate/internal/certidentity"
+	"github.com/vibe-agi/vibermate/internal/egressprofile"
 	"github.com/vibe-agi/vibermate/internal/environment"
 	"github.com/vibe-agi/vibermate/internal/operationcatalog"
 	"github.com/vibe-agi/vibermate/internal/originidentity"
@@ -143,6 +144,7 @@ func newEnvironmentFixture(
 				ClientProtocol:      environment.ClientProtocolAnthropicMessages,
 				ClientAdapterPolicy: environment.ClientAdapterPolicy{ID: "adapter.localca", Revision: 1},
 				Destination:         environment.DestinationPlan{Kind: environment.DestinationKindOriginal},
+				EgressProfile:       egressprofile.Direct(),
 			}},
 		}},
 	}

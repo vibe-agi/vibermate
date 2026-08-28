@@ -63,6 +63,7 @@ func cloneEndpoint(endpoint ClientEndpoint) ClientEndpoint {
 
 func cloneProtocolPlan(plan ClientProtocolPlan) ClientProtocolPlan {
 	cloned := plan
+	cloned.Transforms = slices.Clone(plan.Transforms)
 	cloned.PluginBindings = slices.Clone(plan.PluginBindings)
 	if plan.Destination.Upstream != nil {
 		upstream := *plan.Destination.Upstream
@@ -238,23 +239,23 @@ func normalizeRoot(input Environment, allowSystem bool) (Environment, error) {
 			if err := validateNamedRevision("ClientAdapterPolicy", plan.ClientAdapterPolicy.ID, plan.ClientAdapterPolicy.Revision, true); err != nil {
 				return Environment{}, err
 			}
-			egressPolicy, err := plan.EgressPolicy.Normalize()
-			if err != nil {
+			if err := plan.EgressProfile.Validate(); err != nil {
 				return Environment{}, fmt.Errorf(
-					"%w: protocol plan %q: %v",
+					"%w: protocol plan %q egress profile: %v",
 					ErrInvalidEnvironment,
 					plan.ID,
 					err,
 				)
 			}
-			plan.EgressPolicy = egressPolicy
-			if err := plan.TransformPolicy.Validate(); err != nil {
-				return Environment{}, fmt.Errorf(
-					"%w: protocol plan %q message transform: %v",
-					ErrInvalidEnvironment,
-					plan.ID,
-					err,
-				)
+			for _, transform := range plan.Transforms {
+				if err := transform.Validate(); err != nil {
+					return Environment{}, fmt.Errorf(
+						"%w: protocol plan %q message transform: %v",
+						ErrInvalidEnvironment,
+						plan.ID,
+						err,
+					)
+				}
 			}
 			sort.Slice(plan.PluginBindings, func(left, right int) bool { return plan.PluginBindings[left].ID < plan.PluginBindings[right].ID })
 			if err := validatePluginBindings(plan.PluginBindings); err != nil {

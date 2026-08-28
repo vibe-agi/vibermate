@@ -59,11 +59,18 @@ final class PreviewControlApi implements ControlApi {
         ),
       );
       _captures[capture.key] = capture;
+      final assignedEnvironment = _environments.firstWhere(
+        (value) => value.id == (index < 5 ? 'work' : 'research'),
+      );
       _assignments[capture.key] = CaptureAssignment(
         captureKey: capture.key,
         captureId: capture.id,
         captureKind: capture.kind,
-        environmentId: index < 5 ? 'work' : 'research',
+        environmentId: assignedEnvironment.id,
+        environmentRevision: assignedEnvironment.revision,
+        environmentDigest: assignedEnvironment.digest,
+        launchEnvironmentRevision: assignedEnvironment.revision,
+        launchEnvironmentDigest: assignedEnvironment.digest,
         revision: 1,
         source: 'launch',
         updatedAt: capture.createdAt,
@@ -87,11 +94,18 @@ final class PreviewControlApi implements ControlApi {
       ),
     );
     _captures[manual.key] = manual;
+    final manualEnvironment = _environments.firstWhere(
+      (value) => value.id == 'work',
+    );
     _assignments[manual.key] = CaptureAssignment(
       captureKey: manual.key,
       captureId: manual.id,
       captureKind: manual.kind,
       environmentId: 'work',
+      environmentRevision: manualEnvironment.revision,
+      environmentDigest: manualEnvironment.digest,
+      launchEnvironmentRevision: manualEnvironment.revision,
+      launchEnvironmentDigest: manualEnvironment.digest,
       revision: 1,
       source: 'manual_create',
       updatedAt: _now.subtract(const Duration(hours: 1)),
@@ -127,6 +141,12 @@ final class PreviewControlApi implements ControlApi {
   final Map<String, CaptureAssignment> _assignments = {};
   final Map<String, ManualCaptureRecord> _manualRecords = {};
   final Map<String, int> _manualVersions = {};
+  final List<CodeLibraryCollection> _codeLibraryCollections = [];
+  final Map<String, List<CodeLibraryTransformRevision>> _codeLibraryRevisions =
+      {};
+  final Map<String, List<EgressProfileRevision>> _egressProfileRevisions = {
+    EgressProfileRevision.direct.id: [EgressProfileRevision.direct],
+  };
   ApprovalRecord _approval = _pendingApproval;
   ConnectionRuleSet _rules = const ConnectionRuleSet(
     revision: 3,
@@ -547,8 +567,8 @@ final class PreviewControlApi implements ControlApi {
             routes: routes,
           ),
         ),
-        egressPolicy: const TrafficEgressPolicy.direct(),
-        transformPolicy: const TrafficTransformPolicy.disabled(),
+        egressProfile: EgressProfileRevision.direct,
+        transforms: const [],
         pluginBindings: const [],
       ),
     ],
@@ -572,8 +592,8 @@ final class PreviewControlApi implements ControlApi {
           revision: 1,
         ),
         destination: const EnvironmentDestination.original(),
-        egressPolicy: const TrafficEgressPolicy.direct(),
-        transformPolicy: const TrafficTransformPolicy.disabled(),
+        egressProfile: EgressProfileRevision.direct,
+        transforms: const [],
         pluginBindings: const [],
       ),
     ],
@@ -861,8 +881,9 @@ final class PreviewControlApi implements ControlApi {
 
   @override
   Future<MessageTransformTestResult> testMessageTransform({
-    required String clientProtocol,
+    required String wireProtocol,
     required TrafficTransformPolicy policy,
+    MessageTransformTestSample? sample,
   }) async {
     _requireOpen();
     throw const ControlProblem(
@@ -870,6 +891,156 @@ final class PreviewControlApi implements ControlApi {
       reasonCode: 'message_transform_test_unavailable',
       messageKey: 'error.message_transform_test_unavailable',
     );
+  }
+
+  @override
+  Future<CodeLibraryCatalog> codeLibrary() async {
+    _requireOpen();
+    return CodeLibraryCatalog(
+      collections: List.unmodifiable(_codeLibraryCollections),
+      transforms: List.unmodifiable(
+        _codeLibraryRevisions.values
+            .where((revisions) => revisions.isNotEmpty)
+            .map((revisions) => revisions.last),
+      ),
+    );
+  }
+
+  @override
+  Future<CodeLibraryCollection> createCodeLibraryCollection({
+    required String id,
+    required String displayName,
+  }) async {
+    _requireOpen();
+    final collection = CodeLibraryCollection.fromJson({
+      'id': id,
+      'displayName': displayName,
+    }, 'codeLibraryCollection');
+    if (_codeLibraryCollections.any((item) => item.id == collection.id)) {
+      throw const ControlProblem(
+        status: 409,
+        reasonCode: 'code_library_conflict',
+        messageKey: 'error.code_library_conflict',
+      );
+    }
+    _codeLibraryCollections.add(collection);
+    return collection;
+  }
+
+  @override
+  Future<CodeLibraryTransformRevision> publishCodeLibraryTransform({
+    required String id,
+    required int expectedRevision,
+    required String collectionId,
+    required String displayName,
+    required TrafficTransformPolicy policy,
+  }) async {
+    _requireOpen();
+    final revisions =
+        _codeLibraryRevisions[id] ?? const <CodeLibraryTransformRevision>[];
+    final currentRevision = revisions.lastOrNull?.revision ?? 0;
+    if (currentRevision != expectedRevision ||
+        !_codeLibraryCollections.any((item) => item.id == collectionId)) {
+      throw const ControlProblem(
+        status: 409,
+        reasonCode: 'code_library_conflict',
+        messageKey: 'error.code_library_conflict',
+      );
+    }
+    final revision = CodeLibraryTransformRevision.fromJson({
+      'id': id,
+      'revision': currentRevision + 1,
+      'collectionId': collectionId,
+      'displayName': displayName,
+      'policy': policy.toJson(),
+      'publishedAt': _now
+          .add(Duration(seconds: currentRevision + 1))
+          .toIso8601String(),
+    }, 'codeLibraryTransform');
+    _codeLibraryRevisions[id] = [...revisions, revision];
+    return revision;
+  }
+
+  @override
+  Future<CodeLibraryTransformRevision> codeLibraryTransformRevision(
+    String id,
+    int revision,
+  ) async {
+    _requireOpen();
+    final match = _codeLibraryRevisions[id]
+        ?.where((item) => item.revision == revision)
+        .firstOrNull;
+    if (match == null) {
+      throw const ControlProblem(
+        status: 404,
+        reasonCode: 'code_library_not_found',
+        messageKey: 'error.code_library_not_found',
+      );
+    }
+    return match;
+  }
+
+  @override
+  Future<EgressProfileCatalog> egressProfiles() async {
+    _requireOpen();
+    return EgressProfileCatalog(
+      items: List.unmodifiable(
+        _egressProfileRevisions.values
+            .where((revisions) => revisions.isNotEmpty)
+            .map((revisions) => revisions.last),
+      ),
+    );
+  }
+
+  @override
+  Future<EgressProfileRevision> publishEgressProfile({
+    required String id,
+    required int expectedRevision,
+    required String displayName,
+    required TrafficEgressPolicy policy,
+  }) async {
+    _requireOpen();
+    final revisions =
+        _egressProfileRevisions[id] ?? const <EgressProfileRevision>[];
+    final currentRevision = revisions.lastOrNull?.revision ?? 0;
+    if (id == EgressProfileRevision.direct.id ||
+        currentRevision != expectedRevision) {
+      throw const ControlProblem(
+        status: 409,
+        reasonCode: 'egress_profile_conflict',
+        messageKey: 'error.egress_profile_conflict',
+      );
+    }
+    final revision = EgressProfileRevision.fromJson({
+      'id': id,
+      'revision': currentRevision + 1,
+      'displayName': displayName,
+      'policy': policy.toJson(),
+      'publishedAt': _now
+          .add(Duration(seconds: currentRevision + 1))
+          .toIso8601String(),
+    }, 'egressProfile');
+    _egressProfileRevisions[id] = [...revisions, revision];
+    return revision;
+  }
+
+  @override
+  Future<EgressProfileRevision> egressProfileRevision(
+    String id,
+    int revision,
+  ) async {
+    _requireOpen();
+    final match = _egressProfileRevisions[id]
+        ?.where((item) => item.revision == revision)
+        .firstOrNull;
+    if (match == null) {
+      throw const ControlProblem(
+        status: 404,
+        reasonCode: 'egress_profile_not_found',
+        messageKey: 'error.egress_profile_not_found',
+      );
+    }
+    return match;
   }
 
   @override
@@ -1449,6 +1620,50 @@ final class PreviewControlApi implements ControlApi {
   }
 
   @override
+  Future<CaptureAssignment> applyLatestCaptureEnvironment(
+    CaptureAssignment current,
+  ) async {
+    _requireOpen();
+    final stored = _assignments[current.captureKey];
+    if (stored == null) {
+      throw const ControlProblem(
+        status: 404,
+        reasonCode: 'capture_assignment_not_found',
+        messageKey: 'error.capture_assignment_not_found',
+      );
+    }
+    if (stored.revision != current.revision) {
+      throw const ControlProblem(
+        status: 409,
+        reasonCode: 'revision_conflict',
+        messageKey: 'error.revision_conflict',
+      );
+    }
+    final latest = _environments.firstWhere(
+      (value) => value.id == stored.environmentId,
+    );
+    if (latest.revision == stored.environmentRevision &&
+        latest.digest == stored.environmentDigest) {
+      return stored;
+    }
+    final updated = CaptureAssignment(
+      captureKey: stored.captureKey,
+      captureId: stored.captureId,
+      captureKind: stored.captureKind,
+      environmentId: stored.environmentId,
+      environmentRevision: latest.revision,
+      environmentDigest: latest.digest,
+      launchEnvironmentRevision: stored.launchEnvironmentRevision,
+      launchEnvironmentDigest: stored.launchEnvironmentDigest,
+      revision: stored.revision + 1,
+      source: stored.source,
+      updatedAt: _now,
+    );
+    _assignments[current.captureKey] = updated;
+    return updated;
+  }
+
+  @override
   Future<ActivityPage> activities({
     String? cursor,
     int limit = 50,
@@ -1570,7 +1785,12 @@ final class PreviewControlApi implements ControlApi {
       );
     }
     final observed = _now.subtract(const Duration(seconds: 4));
-    final body = utf8.encode('{"model":"claude-sonnet-4-5","stream":true}');
+    final requestBody = utf8.encode(
+      '{"model":"claude-sonnet-4-5","stream":true}',
+    );
+    final responseBody = utf8.encode(
+      '{"type":"message","content":[{"type":"text","text":"sample"}]}',
+    );
     return RawEvidencePage(
       items: [
         RawEvidenceEnvelope(
@@ -1592,12 +1812,55 @@ final class PreviewControlApi implements ControlApi {
           contentEncoding: null,
           headerCount: 2,
           trailerCount: 0,
-          bodyBytes: body.length,
-          bodySha256: crypto.sha256.convert(body).toString(),
+          bodyBytes: requestBody.length,
+          bodySha256: crypto.sha256.convert(requestBody).toString(),
           digestScope: 'full_body',
           payloadState: 'captured',
           payloadReason: null,
           redactedCredentialFields: const ['Authorization'],
+          revealAvailable: true,
+        ),
+        RawEvidenceEnvelope(
+          envelopeId: 'raw-preview-transform-request-$exchangeId',
+          layer: 'transform_request_input',
+          scopeKind: 'managed_run',
+          scopeId: 'run-preview-$exchangeId',
+          exchangeId: exchangeId,
+          attemptId: 'attempt-preview-$exchangeId',
+          observedAt: observed.add(const Duration(milliseconds: 1)),
+          expiresAt: observed.add(const Duration(days: 30)),
+          method: 'POST',
+          path: '/v1/messages',
+          contentType: 'application/json',
+          representation: 'message_transform_input',
+          headerCount: 1,
+          trailerCount: 0,
+          bodyBytes: requestBody.length,
+          bodySha256: crypto.sha256.convert(requestBody).toString(),
+          digestScope: 'full_body',
+          payloadState: 'captured',
+          redactedCredentialFields: const [],
+          revealAvailable: true,
+        ),
+        RawEvidenceEnvelope(
+          envelopeId: 'raw-preview-transform-response-$exchangeId',
+          layer: 'transform_response_input',
+          scopeKind: 'managed_run',
+          scopeId: 'run-preview-$exchangeId',
+          exchangeId: exchangeId,
+          attemptId: 'attempt-preview-$exchangeId',
+          observedAt: observed.add(const Duration(milliseconds: 2)),
+          expiresAt: observed.add(const Duration(days: 30)),
+          statusCode: 200,
+          contentType: 'application/json',
+          representation: 'message_transform_input',
+          headerCount: 1,
+          trailerCount: 0,
+          bodyBytes: responseBody.length,
+          bodySha256: crypto.sha256.convert(responseBody).toString(),
+          digestScope: 'full_body',
+          payloadState: 'captured',
+          redactedCredentialFields: const [],
           revealAvailable: true,
         ),
       ],
@@ -1608,8 +1871,8 @@ final class PreviewControlApi implements ControlApi {
       ),
       writer: const RawEvidenceWriter(
         state: 'active',
-        admittedRecords: 1,
-        durableWatermark: 1,
+        admittedRecords: 3,
+        durableWatermark: 3,
         queueRecords: 0,
         queueBytes: 0,
         lastFailure: null,
@@ -1623,42 +1886,65 @@ final class PreviewControlApi implements ControlApi {
     required String envelopeId,
   }) async {
     _requireOpen();
-    if (!envelopeId.startsWith('raw-preview-')) {
+    const requestPrefix = 'raw-preview-transform-request-';
+    const responsePrefix = 'raw-preview-transform-response-';
+    const rawPrefix = 'raw-preview-';
+    if (!envelopeId.startsWith(rawPrefix)) {
       throw const ControlProblem(
         status: 422,
         reasonCode: 'invalid_control_request',
         messageKey: 'error.invalid_control_request',
       );
     }
-    final exchangeId = envelopeId.substring('raw-preview-'.length);
+    final exchangeId = envelopeId.startsWith(requestPrefix)
+        ? envelopeId.substring(requestPrefix.length)
+        : envelopeId.startsWith(responsePrefix)
+        ? envelopeId.substring(responsePrefix.length)
+        : envelopeId.substring(rawPrefix.length);
     final page = await rawEvidence(exchangeId);
+    final envelope = page.items.firstWhere(
+      (candidate) => candidate.envelopeId == envelopeId,
+    );
+    final transformInput = envelope.layer.startsWith('transform_');
+    final responseInput = envelope.layer == 'transform_response_input';
     return RevealedRawEvidence(
-      envelope: page.items.single,
-      headers: const [
-        // The real product stores no recognized credential header value, so
-        // the fixture shows what a redacted field actually looks like rather
-        // than a masked one.
-        RawHeaderField(
-          name: 'Authorization',
-          values: [],
-          redacted: [
-            RawRedactedValue(
-              digest:
-                  'b3b3b3b3b3b3b3b3b3b3b3b3b3b3b3b3'
-                  'b3b3b3b3b3b3b3b3b3b3b3b3b3b3b3b3',
-              bytes: 108,
-            ),
-          ],
-        ),
-        RawHeaderField(
-          name: 'Content-Type',
-          values: ['application/json'],
-          redacted: [],
-        ),
-      ],
+      envelope: envelope,
+      headers: transformInput
+          ? const [
+              RawHeaderField(
+                name: 'Content-Type',
+                values: ['application/json'],
+                redacted: [],
+              ),
+            ]
+          : const [
+              // The real product stores no recognized credential header
+              // value, so the fixture shows the retained digest evidence.
+              RawHeaderField(
+                name: 'Authorization',
+                values: [],
+                redacted: [
+                  RawRedactedValue(
+                    digest:
+                        'b3b3b3b3b3b3b3b3b3b3b3b3b3b3b3b3'
+                        'b3b3b3b3b3b3b3b3b3b3b3b3b3b3b3b3',
+                    bytes: 108,
+                  ),
+                ],
+              ),
+              RawHeaderField(
+                name: 'Content-Type',
+                values: ['application/json'],
+                redacted: [],
+              ),
+            ],
       trailers: const [],
       body: Uint8List.fromList(
-        utf8.encode('{"model":"claude-sonnet-4-5","stream":true}'),
+        utf8.encode(
+          responseInput
+              ? '{"type":"message","content":[{"type":"text","text":"sample"}]}'
+              : '{"model":"claude-sonnet-4-5","stream":true}',
+        ),
       ),
       frames: const [],
     );
@@ -2464,6 +2750,10 @@ final class PreviewControlApi implements ControlApi {
       captureId: id,
       captureKind: 'manual_capture',
       environmentId: context.environmentId,
+      environmentRevision: context.environmentRevision,
+      environmentDigest: context.environmentDigest,
+      launchEnvironmentRevision: context.environmentRevision,
+      launchEnvironmentDigest: context.environmentDigest,
       revision: 1,
       source: 'manual_create',
       updatedAt: _now,

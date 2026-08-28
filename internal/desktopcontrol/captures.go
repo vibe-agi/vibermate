@@ -2,6 +2,7 @@ package desktopcontrol
 
 import (
 	"bytes"
+	"crypto/sha256"
 	"encoding/base64"
 	"encoding/json"
 	"errors"
@@ -76,13 +77,17 @@ type ManualCaptureResponse struct {
 }
 
 type CaptureAssignmentResponse struct {
-	CaptureKey    string                     `json:"captureKey"`
-	CaptureID     string                     `json:"captureId"`
-	CaptureKind   captureidentity.Kind       `json:"captureKind"`
-	EnvironmentID environment.EnvironmentID  `json:"environmentId"`
-	Revision      captureassignment.Revision `json:"revision"`
-	Source        captureassignment.Source   `json:"source"`
-	UpdatedAt     time.Time                  `json:"updatedAt"`
+	CaptureKey                string                     `json:"captureKey"`
+	CaptureID                 string                     `json:"captureId"`
+	CaptureKind               captureidentity.Kind       `json:"captureKind"`
+	EnvironmentID             environment.EnvironmentID  `json:"environmentId"`
+	EnvironmentRevision       environment.Revision       `json:"environmentRevision"`
+	EnvironmentDigest         string                     `json:"environmentDigest"`
+	LaunchEnvironmentRevision environment.Revision       `json:"launchEnvironmentRevision"`
+	LaunchEnvironmentDigest   string                     `json:"launchEnvironmentDigest"`
+	Revision                  captureassignment.Revision `json:"revision"`
+	Source                    captureassignment.Source   `json:"source"`
+	UpdatedAt                 time.Time                  `json:"updatedAt"`
 }
 
 func captureRunResponseOf(view capturerun.View) CaptureResponse {
@@ -128,7 +133,11 @@ func assignmentResponseOf(assignment captureassignment.Assignment) CaptureAssign
 	return CaptureAssignmentResponse{
 		CaptureKey: assignment.Capture.Key(), CaptureID: assignment.Capture.ID,
 		CaptureKind: assignment.Capture.Kind, EnvironmentID: assignment.EnvironmentID,
-		Revision: assignment.Revision, Source: assignment.Source, UpdatedAt: assignment.UpdatedAt,
+		EnvironmentRevision:       assignment.EnvironmentRevision,
+		EnvironmentDigest:         assignment.EnvironmentDigest.String(),
+		LaunchEnvironmentRevision: assignment.LaunchAuthority.InitialEnvironmentRevision(),
+		LaunchEnvironmentDigest:   assignment.LaunchAuthority.InitialEnvironmentDigest().String(),
+		Revision:                  assignment.Revision, Source: assignment.Source, UpdatedAt: assignment.UpdatedAt,
 	}
 }
 
@@ -372,6 +381,33 @@ func (handler *Handler) getCaptureEnvironmentAssignment(writer http.ResponseWrit
 	writeJSON(writer, http.StatusOK, assignmentResponseOf(assignment))
 }
 
+func (handler *Handler) applyLatestCaptureEnvironment(writer http.ResponseWriter, request *http.Request) {
+	expected, key, headerErr := mutationHeaders(request)
+	reference, referenceErr := captureidentity.ParseKey(request.PathValue("captureKey"))
+	if headerErr != nil || referenceErr != nil || expected == 0 ||
+		expected >= uint64(captureassignment.MaxRevision) || request.URL.RawQuery != "" {
+		writeProblem(writer, http.StatusUnprocessableEntity, ReasonInvalidRequest)
+		return
+	}
+	fingerprint := sha256.Sum256(bytes.Join([][]byte{
+		[]byte(request.Method), []byte(request.URL.Path), []byte(strconv.FormatUint(expected, 10)),
+	}, []byte{0}))
+	response, err := handler.idempotent.execute(request.Context(), key, fingerprint, func() cachedResponse {
+		assignment, applyErr := handler.assignments.ApplyLatest(
+			request.Context(), reference, captureassignment.Revision(expected),
+		)
+		if applyErr != nil {
+			return problemResponse(classifyAssignmentError(applyErr))
+		}
+		return jsonResponse(http.StatusOK, assignmentResponseOf(assignment))
+	})
+	if err != nil {
+		writeProblem(writer, http.StatusConflict, ReasonRevisionConflict)
+		return
+	}
+	writeCached(writer, response)
+}
+
 func writeCaptureReadError(writer http.ResponseWriter, err error) {
 	switch {
 	case errors.Is(err, capturerun.ErrNotFound), errors.Is(err, manualcapture.ErrNotFound):
@@ -391,6 +427,8 @@ func classifyAssignmentError(err error) problemSpec {
 		return problemSpec{status: http.StatusUnprocessableEntity, reason: ReasonInvalidRequest}
 	case errors.Is(err, captureassignment.ErrAssignmentConflict):
 		return problemSpec{status: http.StatusConflict, reason: ReasonRevisionConflict}
+	case errors.Is(err, captureassignment.ErrAssignmentIncompatible):
+		return problemSpec{status: http.StatusConflict, reason: ReasonEnvironmentUnavailable}
 	case errors.Is(err, environment.ErrEnvironmentNotFound):
 		return problemSpec{status: http.StatusNotFound, reason: ReasonEnvironmentNotFound}
 	case errors.Is(err, environment.ErrEnvironmentDisabled):

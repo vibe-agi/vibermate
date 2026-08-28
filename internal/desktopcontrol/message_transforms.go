@@ -1,11 +1,16 @@
 package desktopcontrol
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"net/http"
+	"slices"
+	"time"
 
+	"github.com/vibe-agi/vibermate/internal/clientannotation"
 	"github.com/vibe-agi/vibermate/internal/messagetransform"
+	"github.com/vibe-agi/vibermate/internal/ssewire"
 )
 
 const (
@@ -15,8 +20,9 @@ const (
 )
 
 type MessageTransformTestInput struct {
-	ClientProtocol string                  `json:"clientProtocol"`
-	Policy         messagetransform.Policy `json:"policy"`
+	WireProtocol string                      `json:"wireProtocol"`
+	Policy       messagetransform.Policy     `json:"policy"`
+	Sample       *MessageTransformTestSample `json:"sample,omitempty"`
 }
 
 type MessageTransformTestRequest struct {
@@ -28,14 +34,22 @@ type MessageTransformTestRequest struct {
 
 type MessageTransformTestResponse struct {
 	StatusCode int         `json:"statusCode"`
+	Streaming  bool        `json:"streaming"`
 	Headers    http.Header `json:"headers"`
 	Body       string      `json:"body"`
 }
 
+type MessageTransformTestSample struct {
+	Request  MessageTransformTestRequest  `json:"request"`
+	Response MessageTransformTestResponse `json:"response"`
+}
+
 type MessageTransformTestResult struct {
-	ClientProtocol string                       `json:"clientProtocol"`
-	Request        MessageTransformTestRequest  `json:"request"`
-	Response       MessageTransformTestResponse `json:"response"`
+	WireProtocol   string                       `json:"wireProtocol"`
+	RequestBefore  MessageTransformTestRequest  `json:"requestBefore"`
+	RequestAfter   MessageTransformTestRequest  `json:"requestAfter"`
+	ResponseBefore MessageTransformTestResponse `json:"responseBefore"`
+	ResponseAfter  MessageTransformTestResponse `json:"responseAfter"`
 }
 
 func (handler *Handler) testMessageTransform(
@@ -64,47 +78,174 @@ func runMessageTransformSample(
 	ctx context.Context,
 	input MessageTransformTestInput,
 ) (MessageTransformTestResult, error) {
-	request, response, err := messageTransformSample(input.ClientProtocol)
+	request, response, err := resolveMessageTransformSample(input)
 	if err != nil {
 		return MessageTransformTestResult{}, err
 	}
-	program, err := messagetransform.Compile(
-		input.Policy,
+	pipeline, err := messagetransform.CompilePipeline(
+		[]messagetransform.Policy{input.Policy},
 		messagetransform.DefaultLimits(),
 	)
 	if err != nil {
 		return MessageTransformTestResult{}, err
 	}
-	turn := program.NewTurn()
+	annotations, err := clientannotation.NewSigner(bytes.Repeat([]byte{0x5a}, 32))
+	if err != nil {
+		return MessageTransformTestResult{}, err
+	}
+	defer annotations.Destroy()
+	turn, err := pipeline.NewTurnWithOptions(messagetransform.TurnOptions{
+		Metadata: messagetransform.RuntimeMetadata{
+			LocalUserName: "example-user", HomeDirectory: "/Users/example-user",
+			OperatingSystem: "darwin", OperatingSystemVersion: "15.0",
+			Architecture: "arm64", TimeZone: "Etc/UTC",
+			WorkspaceRoot: "/Users/example-user/Code/example", WorkspaceLabel: "example",
+			TurnStartedAt: time.Date(2026, 1, 2, 3, 4, 5, 0, time.UTC),
+		},
+		Annotations: annotations,
+	})
+	if err != nil {
+		return MessageTransformTestResult{}, err
+	}
 	requestOutput, err := turn.ApplyRequest(ctx, request)
 	if err != nil {
 		return MessageTransformTestResult{}, err
 	}
-	responseOutput, err := turn.ApplyResponse(ctx, response)
+	responseOutput, err := applyMessageTransformTestResponse(ctx, turn, response)
 	if err != nil {
 		return MessageTransformTestResult{}, err
 	}
 	return MessageTransformTestResult{
-		ClientProtocol: input.ClientProtocol,
-		Request: MessageTransformTestRequest{
-			Method:  requestOutput.Method,
-			Path:    requestOutput.Path,
-			Headers: requestOutput.Headers,
-			Body:    string(requestOutput.Body),
-		},
-		Response: MessageTransformTestResponse{
-			StatusCode: responseOutput.StatusCode,
-			Headers:    responseOutput.Headers,
-			Body:       string(responseOutput.Body),
-		},
+		WireProtocol:   input.WireProtocol,
+		RequestBefore:  messageTransformTestRequest(request),
+		RequestAfter:   messageTransformTestRequest(requestOutput),
+		ResponseBefore: messageTransformTestResponse(response),
+		ResponseAfter:  messageTransformTestResponse(responseOutput),
 	}, nil
 }
 
+func resolveMessageTransformSample(
+	input MessageTransformTestInput,
+) (messagetransform.RequestMessage, messagetransform.ResponseMessage, error) {
+	if input.Sample == nil {
+		return messageTransformSample(input.WireProtocol)
+	}
+	expectedPath, ok := transformProtocolPath(input.WireProtocol)
+	if !ok || input.Sample.Request.Method != http.MethodPost ||
+		input.Sample.Request.Path != expectedPath ||
+		input.Sample.Response.StatusCode < 100 || input.Sample.Response.StatusCode > 599 {
+		return messagetransform.RequestMessage{}, messagetransform.ResponseMessage{},
+			errors.New("wire protocol sample is invalid")
+	}
+	return messagetransform.RequestMessage{
+			Method: input.Sample.Request.Method, Path: input.Sample.Request.Path,
+			Headers: input.Sample.Request.Headers.Clone(), Body: []byte(input.Sample.Request.Body),
+		}, messagetransform.ResponseMessage{
+			StatusCode: input.Sample.Response.StatusCode,
+			Streaming:  input.Sample.Response.Streaming,
+			Headers:    input.Sample.Response.Headers.Clone(),
+			Body:       []byte(input.Sample.Response.Body),
+		}, nil
+}
+
+func transformProtocolPath(protocol string) (string, bool) {
+	switch protocol {
+	case transformProtocolAnthropicMessages:
+		return "/v1/messages", true
+	case transformProtocolOpenAIResponses:
+		return "/v1/responses", true
+	case transformProtocolOpenAIChat:
+		return "/v1/chat/completions", true
+	default:
+		return "", false
+	}
+}
+
+func messageTransformTestRequest(input messagetransform.RequestMessage) MessageTransformTestRequest {
+	return MessageTransformTestRequest{
+		Method: input.Method, Path: input.Path, Headers: input.Headers, Body: string(input.Body),
+	}
+}
+
+func messageTransformTestResponse(input messagetransform.ResponseMessage) MessageTransformTestResponse {
+	return MessageTransformTestResponse{
+		StatusCode: input.StatusCode, Streaming: input.Streaming,
+		Headers: input.Headers, Body: string(input.Body),
+	}
+}
+
+func applyMessageTransformTestResponse(
+	ctx context.Context,
+	turn *messagetransform.PipelineTurn,
+	input messagetransform.ResponseMessage,
+) (messagetransform.ResponseMessage, error) {
+	if !input.Streaming {
+		return turn.ApplyResponse(ctx, input)
+	}
+	decoder, err := ssewire.NewDecoder(ssewire.DefaultOptions())
+	if err != nil {
+		return messagetransform.ResponseMessage{}, err
+	}
+	events, err := decoder.Feed(input.Body)
+	if err != nil {
+		return messagetransform.ResponseMessage{}, err
+	}
+	if err := decoder.Finish(); err != nil {
+		return messagetransform.ResponseMessage{}, err
+	}
+	if len(events) == 0 {
+		return messagetransform.ResponseMessage{}, errors.New("streaming sample contains no SSE event")
+	}
+	var body bytes.Buffer
+	var headers http.Header
+	for _, event := range events {
+		transformed := messagetransform.ResponseMessage{
+			StatusCode: input.StatusCode, Streaming: true, EventName: event.Name,
+			Headers: input.Headers.Clone(), Body: bytes.Clone(event.Data),
+		}
+		if !bytes.Equal(bytes.TrimSpace(event.Data), []byte("[DONE]")) {
+			transformed, err = turn.ApplyResponse(ctx, transformed)
+			if err != nil {
+				return messagetransform.ResponseMessage{}, err
+			}
+		}
+		if headers == nil {
+			headers = transformed.Headers.Clone()
+		} else if !messageTransformTestHeadersEqual(headers, transformed.Headers) {
+			return messagetransform.ResponseMessage{}, errors.New(
+				"streaming response transform changed Headers after the first event",
+			)
+		}
+		event.Data = transformed.Body
+		encoded, encodeErr := ssewire.Encode(event)
+		if encodeErr != nil {
+			return messagetransform.ResponseMessage{}, encodeErr
+		}
+		_, _ = body.Write(encoded)
+	}
+	return messagetransform.ResponseMessage{
+		StatusCode: input.StatusCode, Streaming: true,
+		Headers: headers, Body: body.Bytes(),
+	}, nil
+}
+
+func messageTransformTestHeadersEqual(left, right http.Header) bool {
+	if len(left) != len(right) {
+		return false
+	}
+	for name, values := range left {
+		if !slices.Equal(values, right.Values(name)) {
+			return false
+		}
+	}
+	return true
+}
+
 func messageTransformSample(
-	clientProtocol string,
+	wireProtocol string,
 ) (messagetransform.RequestMessage, messagetransform.ResponseMessage, error) {
 	headers := http.Header{"Content-Type": {"application/json"}}
-	switch clientProtocol {
+	switch wireProtocol {
 	case transformProtocolAnthropicMessages:
 		requestHeaders := headers.Clone()
 		requestHeaders.Set("Anthropic-Version", "2023-06-01")
@@ -142,6 +283,6 @@ func messageTransformSample(
 			}, nil
 	default:
 		return messagetransform.RequestMessage{}, messagetransform.ResponseMessage{},
-			errors.New("client protocol has no transform sample")
+			errors.New("wire protocol has no transform sample")
 	}
 }

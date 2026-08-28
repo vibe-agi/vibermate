@@ -115,6 +115,8 @@ func TestProviderAccountControlStoresCredentialWithoutReturningItAndCompilesMana
         "routeSet":{"id":"routes.managed.anthropic","revision":1,"candidateRouteIds":["route.managed.anthropic"]}
         }
       },
+      "egressProfile":{"id":"profile.direct","revision":1,"displayName":"Direct · System DNS","policy":{"proxy":{"kind":"direct"},"resolver":{"kind":"system","transport":"direct"}},"publishedAt":"1970-01-01T00:00:00Z"},
+      "transforms":[],
       "pluginBindings":[]
     }]
   }],

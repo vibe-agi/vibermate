@@ -82,6 +82,7 @@ final class WorkbenchController extends ChangeNotifier {
   RuntimeServerAccess? serverAccess;
   List<RuntimeUser>? runtimeUsers;
   RuntimeUsageReport? runtimeUsage;
+  CapturedMessageTransformSample? capturedMessageTransformSample;
   int usageRangeDays = 30;
   WorkbenchSection section;
   AppLanguage language;
@@ -239,10 +240,73 @@ final class WorkbenchController extends ChangeNotifier {
   }
 
   Future<MessageTransformTestResult> testMessageTransform({
-    required String clientProtocol,
+    required String wireProtocol,
     required TrafficTransformPolicy policy,
-  }) =>
-      _api.testMessageTransform(clientProtocol: clientProtocol, policy: policy);
+    MessageTransformTestSample? sample,
+  }) => _api.testMessageTransform(
+    wireProtocol: wireProtocol,
+    policy: policy,
+    sample: sample,
+  );
+
+  Future<CodeLibraryCatalog> codeLibrary() => _api.codeLibrary();
+
+  Future<CodeLibraryCollection> createCodeLibraryCollection({
+    required String displayName,
+  }) => _api.createCodeLibraryCollection(
+    id: 'collection.custom.${_newUuid()}',
+    displayName: displayName,
+  );
+
+  Future<CodeLibraryTransformRevision> createCodeLibraryTransform({
+    required String collectionId,
+    required String displayName,
+    required TrafficTransformPolicy policy,
+  }) => _api.publishCodeLibraryTransform(
+    id: 'transform.custom.${_newUuid()}',
+    expectedRevision: 0,
+    collectionId: collectionId,
+    displayName: displayName,
+    policy: policy,
+  );
+
+  Future<CodeLibraryTransformRevision> publishCodeLibraryTransform({
+    required String id,
+    required int expectedRevision,
+    required String collectionId,
+    required String displayName,
+    required TrafficTransformPolicy policy,
+  }) => _api.publishCodeLibraryTransform(
+    id: id,
+    expectedRevision: expectedRevision,
+    collectionId: collectionId,
+    displayName: displayName,
+    policy: policy,
+  );
+
+  Future<EgressProfileCatalog> egressProfiles() => _api.egressProfiles();
+
+  Future<EgressProfileRevision> createEgressProfile({
+    required String displayName,
+    required TrafficEgressPolicy policy,
+  }) => _api.publishEgressProfile(
+    id: 'profile.custom.${_newUuid()}',
+    expectedRevision: 0,
+    displayName: displayName,
+    policy: policy,
+  );
+
+  Future<EgressProfileRevision> publishEgressProfile({
+    required String id,
+    required int expectedRevision,
+    required String displayName,
+    required TrafficEgressPolicy policy,
+  }) => _api.publishEgressProfile(
+    id: id,
+    expectedRevision: expectedRevision,
+    displayName: displayName,
+    policy: policy,
+  );
 
   OfflineHoldSnapshot? get offlineHold => data?.status.offlineHold;
 
@@ -914,6 +978,52 @@ final class WorkbenchController extends ChangeNotifier {
     }
   }
 
+  Future<bool> copyMessageTransformSample(String exchangeId) async {
+    final page = await loadRawEvidence(exchangeId);
+    if (page == null) return false;
+    final pair = _messageTransformSamplePair(page);
+    if (pair == null) {
+      _rawEvidenceErrors[exchangeId] = 'message_transform_sample_unavailable';
+      notifyListeners();
+      return false;
+    }
+    RevealedRawEvidence? requestReveal;
+    RevealedRawEvidence? responseReveal;
+    try {
+      final revealed = await Future.wait([
+        _api.revealRawEvidence(envelopeId: pair.request.envelopeId),
+        _api.revealRawEvidence(envelopeId: pair.response.envelopeId),
+      ]);
+      requestReveal = revealed[0];
+      responseReveal = revealed[1];
+      capturedMessageTransformSample =
+          CapturedMessageTransformSample.fromRawEvidence(
+            request: requestReveal,
+            response: responseReveal,
+          );
+      _rawEvidenceErrors.remove(exchangeId);
+      section = WorkbenchSection.codeLibrary;
+      notifyListeners();
+      return true;
+    } on Object catch (error) {
+      _rawEvidenceErrors[exchangeId] = _describeError(error);
+      notifyListeners();
+      return false;
+    } finally {
+      requestReveal?.body.fillRange(0, requestReveal.body.length, 0);
+      responseReveal?.body.fillRange(0, responseReveal.body.length, 0);
+    }
+  }
+
+  bool canCopyMessageTransformSample(String exchangeId) =>
+      _messageTransformSamplePair(rawEvidence(exchangeId)) != null;
+
+  void clearMessageTransformSample() {
+    if (capturedMessageTransformSample == null) return;
+    capturedMessageTransformSample = null;
+    notifyListeners();
+  }
+
   Future<void> refreshNetwork() => _refreshNetwork();
 
   Future<void> _refreshNetwork({bool quiet = false}) async {
@@ -1275,6 +1385,46 @@ final class WorkbenchController extends ChangeNotifier {
     },
     reloadCaptureDetail: true,
   );
+
+  Future<bool> applyLatestSelectedCaptureEnvironment() async {
+    final capture = selectedCapture;
+    final current = selectedAssignment;
+    final latest = data?.environments
+        .where((environment) => environment.id == current?.environmentId)
+        .firstOrNull;
+    if (capture == null ||
+        !capture.running ||
+        current == null ||
+        latest == null ||
+        latest.revision <= current.environmentRevision ||
+        mutating) {
+      return false;
+    }
+    final captureKey = capture.key;
+    mutating = true;
+    errorMessage = null;
+    operationNotice = null;
+    notifyListeners();
+    try {
+      final updated = await _api.applyLatestCaptureEnvironment(current);
+      if (_disposed) return false;
+      if (selectedCaptureKey == captureKey) {
+        selectedAssignment = updated;
+        operationNotice = 'capture_environment_applied';
+      }
+      mutating = false;
+      notifyListeners();
+      return true;
+    } catch (error) {
+      if (_disposed) return false;
+      if (selectedCaptureKey == captureKey) {
+        errorMessage = _describeError(error);
+      }
+      mutating = false;
+      notifyListeners();
+      return false;
+    }
+  }
 
   Future<DeletionOutcome?> clearEvidence() => _runDeletion(
     _api.clearEvidence,
@@ -2256,6 +2406,46 @@ final class WorkbenchController extends ChangeNotifier {
       await _closeRuntime();
     }
   }
+}
+
+({RawEvidenceEnvelope request, RawEvidenceEnvelope response})?
+_messageTransformSamplePair(RawEvidencePage? page) {
+  if (page == null) return null;
+  for (final response in page.items.reversed) {
+    if (response.layer != 'transform_response_input' ||
+        response.payloadState != 'captured' ||
+        !response.revealAvailable ||
+        response.attemptId == null ||
+        response.statusCode == null ||
+        response.trailerCount != 0 ||
+        response.redactedCredentialFields.isNotEmpty ||
+        !const {
+          'message_transform_input',
+          'message_transform_stream_input',
+        }.contains(response.representation)) {
+      continue;
+    }
+    for (final request in page.items.reversed) {
+      if (request.layer == 'transform_request_input' &&
+          request.payloadState == 'captured' &&
+          request.revealAvailable &&
+          request.attemptId == response.attemptId &&
+          request.scopeKind == response.scopeKind &&
+          request.scopeId == response.scopeId &&
+          request.method == 'POST' &&
+          const {
+            '/v1/messages',
+            '/v1/responses',
+            '/v1/chat/completions',
+          }.contains(request.path) &&
+          request.representation == 'message_transform_input' &&
+          request.trailerCount == 0 &&
+          request.redactedCredentialFields.isEmpty) {
+        return (request: request, response: response);
+      }
+    }
+  }
+  return null;
 }
 
 final class ConversationSummary {

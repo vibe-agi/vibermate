@@ -17,9 +17,11 @@ import (
 	"github.com/vibe-agi/vibermate/internal/activity"
 	"github.com/vibe-agi/vibermate/internal/captureassignment"
 	"github.com/vibe-agi/vibermate/internal/capturerun"
+	"github.com/vibe-agi/vibermate/internal/codelibrary"
 	"github.com/vibe-agi/vibermate/internal/connectionevent"
 	"github.com/vibe-agi/vibermate/internal/connectionpolicy"
 	"github.com/vibe-agi/vibermate/internal/egressaudit"
+	"github.com/vibe-agi/vibermate/internal/egressprofile"
 	"github.com/vibe-agi/vibermate/internal/environment"
 	"github.com/vibe-agi/vibermate/internal/exchangecontent"
 	"github.com/vibe-agi/vibermate/internal/manualcapture"
@@ -57,6 +59,8 @@ type Store struct {
 	activityRepo       *activityRepository
 	exchangeContents   *exchangeContentRepository
 	captureRepo        *captureRunRepository
+	codeLibrary        *codeLibraryRepository
+	egressProfiles     *egressProfileRepository
 	manualCapture      *manualCaptureRepository
 	proxyClients       *proxyClientRepository
 	connectionRepo     *connectionEventRepository
@@ -123,6 +127,18 @@ func Open(ctx context.Context, options Options) (*Store, error) {
 	operations := newOperationGate()
 	repository := newRepository(database, operations, schemaSourceSHA256)
 	captureRepo := newCaptureRunRepository(database, operations)
+	codeLibrary := newCodeLibraryRepository(
+		database,
+		operations,
+		options.CommitReconcileTimeout,
+		sqlTransactionCommitter{},
+	)
+	egressProfiles := newEgressProfileRepository(
+		database,
+		operations,
+		options.CommitReconcileTimeout,
+		sqlTransactionCommitter{},
+	)
 	manualCaptureRepo := newManualCaptureRepository(database, operations)
 	proxyClientRepo := newProxyClientRepository(
 		database,
@@ -174,6 +190,8 @@ func Open(ctx context.Context, options Options) (*Store, error) {
 		activityRepo:       activityRepo,
 		exchangeContents:   exchangeContents,
 		captureRepo:        captureRepo,
+		codeLibrary:        codeLibrary,
+		egressProfiles:     egressProfiles,
 		manualCapture:      manualCaptureRepo,
 		proxyClients:       proxyClientRepo,
 		connectionRepo:     connectionRepo,
@@ -213,6 +231,14 @@ func (s *Store) ExchangeContentRepository() exchangecontent.Repository {
 
 func (s *Store) CaptureRunRepository() capturerun.Repository {
 	return s.captureRepo
+}
+
+func (s *Store) CodeLibraryRepository() codelibrary.Repository {
+	return s.codeLibrary
+}
+
+func (s *Store) EgressProfileRepository() egressprofile.Repository {
+	return s.egressProfiles
 }
 
 func (s *Store) ManualCaptureRepository() manualcapture.Repository {

@@ -92,12 +92,13 @@ func seedCaptureGraph(
 	}
 	if _, err := store.database.ExecContext(ctx, `
 		INSERT INTO capture_environment_assignments(
-		  capture_kind, capture_id, environment_id, assignment_revision,
+		  capture_kind, capture_id, environment_id, environment_revision,
+		  environment_digest, assignment_revision,
 		  source, launch_environment_id, launch_environment_revision,
 		  launch_environment_digest, protected_authorities_json,
 		  managed_authorities_json, launch_authority_digest,
 		  updated_at_unix_ms
-		) VALUES(?, ?, 'environment.fixture', 1, 'launch',
+		) VALUES(?, ?, 'environment.fixture', 1, randomblob(32), 1, 'launch',
 		  'environment.fixture', 1, randomblob(32), '[]', '[]',
 		  randomblob(32), 1)
 	`, scopeKind, scopeID); err != nil {

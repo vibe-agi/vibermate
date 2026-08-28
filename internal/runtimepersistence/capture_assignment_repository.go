@@ -52,7 +52,8 @@ func (repository *captureAssignmentRepository) ListByEnvironment(ctx context.Con
 	}
 	defer permit.finish()
 	rows, err := repository.database.QueryContext(permit.context,
-		`SELECT capture_kind, capture_id, environment_id, assignment_revision, source,
+		`SELECT capture_kind, capture_id, environment_id, environment_revision,
+		        environment_digest, assignment_revision, source,
 		        launch_environment_id, launch_environment_revision, launch_environment_digest,
 		        protected_authorities_json, managed_authorities_json,
 		        launch_authority_digest, client_target_origin,
@@ -79,7 +80,8 @@ func (repository *captureAssignmentRepository) ListByEnvironment(ctx context.Con
 }
 
 func (repository *captureAssignmentRepository) Write(ctx context.Context, expected captureassignment.Revision, candidate captureassignment.Assignment) (captureassignment.CommitResult, error) {
-	if candidate.Validate() != nil || expected != 0 {
+	if candidate.Validate() != nil || expected >= captureassignment.MaxRevision ||
+		candidate.Revision != expected+1 {
 		return captureassignment.CommitResult{Outcome: captureassignment.CommitOutcomeNotCommitted}, captureassignment.ErrInvalidAssignment
 	}
 	permit, err := repository.operations.admit(ctx)
@@ -94,20 +96,51 @@ func (repository *captureAssignmentRepository) Write(ctx context.Context, expect
 	defer func() { _ = transaction.Rollback() }()
 	launchEnvironmentID, launchRevision, launchEnvironmentDigest, protectedJSON, managedJSON, launchDigest :=
 		captureAssignmentAuthorityValues(candidate.LaunchAuthority)
-	result, err := transaction.ExecContext(permit.context,
-		`INSERT INTO capture_environment_assignments(
-		   capture_kind, capture_id, environment_id, assignment_revision, source,
-		   launch_environment_id, launch_environment_revision, launch_environment_digest,
-		   protected_authorities_json, managed_authorities_json,
-		   launch_authority_digest, client_target_origin,
-		   client_target_canonical_origin, updated_at_unix_ms
-		 ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-		 ON CONFLICT(capture_kind, capture_id) DO NOTHING`,
-		string(candidate.Capture.Kind), candidate.Capture.ID, candidate.EnvironmentID.String(),
-		int64(candidate.Revision), string(candidate.Source), launchEnvironmentID, launchRevision,
-		launchEnvironmentDigest, protectedJSON, managedJSON, launchDigest,
-		clientTargetOrigin(candidate), clientTargetCanonicalOrigin(candidate),
-		candidate.UpdatedAt.UnixMilli())
+	environmentDigest := candidate.EnvironmentDigest
+	var result sql.Result
+	if expected == 0 {
+		result, err = transaction.ExecContext(permit.context,
+			`INSERT INTO capture_environment_assignments(
+			   capture_kind, capture_id, environment_id, environment_revision,
+			   environment_digest, assignment_revision, source,
+			   launch_environment_id, launch_environment_revision, launch_environment_digest,
+			   protected_authorities_json, managed_authorities_json,
+			   launch_authority_digest, client_target_origin,
+			   client_target_canonical_origin, updated_at_unix_ms
+			 ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+			 ON CONFLICT(capture_kind, capture_id) DO NOTHING`,
+			string(candidate.Capture.Kind), candidate.Capture.ID, candidate.EnvironmentID.String(),
+			int64(candidate.EnvironmentRevision), environmentDigest[:], int64(candidate.Revision),
+			string(candidate.Source), launchEnvironmentID, launchRevision, launchEnvironmentDigest,
+			protectedJSON, managedJSON, launchDigest, clientTargetOrigin(candidate),
+			clientTargetCanonicalOrigin(candidate), candidate.UpdatedAt.UnixMilli())
+	} else {
+		current, exists, loadErr := loadCaptureAssignment(permit.context, transaction, candidate.Capture)
+		if loadErr != nil {
+			return captureassignment.CommitResult{Outcome: captureassignment.CommitOutcomeIndeterminate}, loadErr
+		}
+		if !exists || current.Revision != expected {
+			actual := captureassignment.Revision(0)
+			if exists {
+				actual = current.Revision
+			}
+			return captureassignment.CommitResult{
+				Outcome: captureassignment.CommitOutcomeConflict, Assignment: current, Actual: actual,
+			}, nil
+		}
+		if !sameCaptureAssignmentIdentity(current, candidate) {
+			return captureassignment.CommitResult{Outcome: captureassignment.CommitOutcomeNotCommitted},
+				captureassignment.ErrInvalidAssignment
+		}
+		result, err = transaction.ExecContext(permit.context,
+			`UPDATE capture_environment_assignments
+			 SET environment_revision = ?, environment_digest = ?, assignment_revision = ?,
+			     updated_at_unix_ms = ?
+			 WHERE capture_kind = ? AND capture_id = ? AND assignment_revision = ?`,
+			int64(candidate.EnvironmentRevision), environmentDigest[:], int64(candidate.Revision),
+			candidate.UpdatedAt.UnixMilli(), string(candidate.Capture.Kind), candidate.Capture.ID,
+			int64(expected))
+	}
 	if err != nil {
 		return captureassignment.CommitResult{Outcome: captureassignment.CommitOutcomeNotCommitted}, fmt.Errorf("write Capture Environment assignment: %w", err)
 	}
@@ -162,10 +195,11 @@ func scanCaptureAssignment(row captureAssignmentRow) (captureassignment.Assignme
 	var kind, id, environmentID, source, launchEnvironmentID string
 	var targetOrigin, targetCanonicalOrigin string
 	var protectedJSON, managedJSON string
-	var revision, launchRevision, updatedAt int64
-	var launchEnvironmentDigestBytes, launchDigestBytes []byte
+	var revision, environmentRevision, launchRevision, updatedAt int64
+	var environmentDigestBytes, launchEnvironmentDigestBytes, launchDigestBytes []byte
 	if err := row.Scan(
-		&kind, &id, &environmentID, &revision, &source,
+		&kind, &id, &environmentID, &environmentRevision, &environmentDigestBytes,
+		&revision, &source,
 		&launchEnvironmentID, &launchRevision, &launchEnvironmentDigestBytes,
 		&protectedJSON, &managedJSON, &launchDigestBytes,
 		&targetOrigin, &targetCanonicalOrigin, &updatedAt,
@@ -185,12 +219,15 @@ func scanCaptureAssignment(row captureAssignmentRow) (captureassignment.Assignme
 		return captureassignment.Assignment{}, captureassignment.ErrInvalidAssignment
 	}
 	managed, err := decodeCanonicalAuthorityJSON(managedJSON)
-	if err != nil || launchRevision <= 0 ||
-		len(launchEnvironmentDigestBytes) != 32 || len(launchDigestBytes) != 32 {
+	if err != nil || environmentRevision <= 0 || launchRevision <= 0 ||
+		len(environmentDigestBytes) != 32 || len(launchEnvironmentDigestBytes) != 32 ||
+		len(launchDigestBytes) != 32 {
 		return captureassignment.Assignment{}, captureassignment.ErrInvalidAssignment
 	}
 	var launchEnvironmentDigest environment.CandidateDigest
 	copy(launchEnvironmentDigest[:], launchEnvironmentDigestBytes)
+	var environmentDigest environment.CandidateDigest
+	copy(environmentDigest[:], environmentDigestBytes)
 	var launchDigest environment.LaunchAuthorityDigest
 	copy(launchDigest[:], launchDigestBytes)
 	parsedLaunchEnvironmentID, err := environment.NewEnvironmentID(launchEnvironmentID)
@@ -216,7 +253,9 @@ func scanCaptureAssignment(row captureAssignmentRow) (captureassignment.Assignme
 	}
 	assignment := captureassignment.Assignment{
 		Capture: reference, EnvironmentID: parsedEnvironmentID,
-		Revision: captureassignment.Revision(revision), Source: captureassignment.Source(source),
+		EnvironmentRevision: environment.Revision(environmentRevision),
+		EnvironmentDigest:   environmentDigest,
+		Revision:            captureassignment.Revision(revision), Source: captureassignment.Source(source),
 		LaunchAuthority: launchAuthority, ClientTarget: clientTarget,
 		UpdatedAt: time.UnixMilli(updatedAt).UTC(),
 	}
@@ -230,7 +269,8 @@ func loadCaptureAssignment(ctx context.Context, querier interface {
 	QueryRowContext(context.Context, string, ...any) *sql.Row
 }, reference captureidentity.Reference) (captureassignment.Assignment, bool, error) {
 	assignment, err := scanCaptureAssignment(querier.QueryRowContext(ctx,
-		`SELECT capture_kind, capture_id, environment_id, assignment_revision, source,
+		`SELECT capture_kind, capture_id, environment_id, environment_revision,
+		        environment_digest, assignment_revision, source,
 		        launch_environment_id, launch_environment_revision, launch_environment_digest,
 		        protected_authorities_json, managed_authorities_json,
 		        launch_authority_digest, client_target_origin,
@@ -244,6 +284,14 @@ func loadCaptureAssignment(ctx context.Context, querier interface {
 		return captureassignment.Assignment{}, false, fmt.Errorf("load Capture Environment assignment: %w", err)
 	}
 	return assignment, true, nil
+}
+
+func sameCaptureAssignmentIdentity(current, candidate captureassignment.Assignment) bool {
+	candidate.Revision = current.Revision
+	candidate.EnvironmentRevision = current.EnvironmentRevision
+	candidate.EnvironmentDigest = current.EnvironmentDigest
+	candidate.UpdatedAt = current.UpdatedAt
+	return candidate == current
 }
 
 func clientTargetOrigin(assignment captureassignment.Assignment) string {

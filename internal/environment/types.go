@@ -9,8 +9,8 @@ import (
 	"unicode"
 	"unicode/utf8"
 
-	"github.com/vibe-agi/vibermate/internal/egressnetwork"
-	"github.com/vibe-agi/vibermate/internal/messagetransform"
+	"github.com/vibe-agi/vibermate/internal/codelibrary"
+	"github.com/vibe-agi/vibermate/internal/egressprofile"
 	"github.com/vibe-agi/vibermate/internal/originidentity"
 	"github.com/vibe-agi/vibermate/internal/protocolspec"
 )
@@ -278,14 +278,14 @@ type ClientEndpoint struct {
 }
 
 type ClientProtocolPlan struct {
-	ID                  ClientProtocolPlanID    `json:"id"`
-	Revision            Revision                `json:"revision"`
-	ClientProtocol      ClientProtocol          `json:"clientProtocol"`
-	ClientAdapterPolicy ClientAdapterPolicy     `json:"clientAdapterPolicy"`
-	Destination         DestinationPlan         `json:"destination"`
-	EgressPolicy        egressnetwork.Policy    `json:"egressPolicy"`
-	TransformPolicy     messagetransform.Policy `json:"transformPolicy"`
-	PluginBindings      []PluginBinding         `json:"pluginBindings"`
+	ID                  ClientProtocolPlanID            `json:"id"`
+	Revision            Revision                        `json:"revision"`
+	ClientProtocol      ClientProtocol                  `json:"clientProtocol"`
+	ClientAdapterPolicy ClientAdapterPolicy             `json:"clientAdapterPolicy"`
+	Destination         DestinationPlan                 `json:"destination"`
+	EgressProfile       egressprofile.ProfileRevision   `json:"egressProfile"`
+	Transforms          []codelibrary.TransformRevision `json:"transforms"`
+	PluginBindings      []PluginBinding                 `json:"pluginBindings"`
 }
 
 // DestinationPlan is a closed choice. Original intentionally has no payload:

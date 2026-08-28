@@ -11,90 +11,159 @@ import (
 	"slices"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/klauspost/compress/zstd"
+	"github.com/vibe-agi/vibermate/internal/clientannotation"
 	"github.com/vibe-agi/vibermate/internal/messagetransform"
 	"github.com/vibe-agi/vibermate/internal/rawevidence"
 	"github.com/vibe-agi/vibermate/internal/ssewire"
 )
 
+func newMessageTransformTurn(
+	request ClientRequest,
+	annotations *clientannotation.Signer,
+	startedAt time.Time,
+) (*messagetransform.PipelineTurn, error) {
+	metadata := messagetransform.RuntimeMetadata{TurnStartedAt: startedAt}
+	if admission, ok := request.CaptureAdmission(); ok {
+		if runtimeMetadata, managed := admission.RuntimeMetadata(); managed {
+			metadata.LocalUserName = runtimeMetadata.LocalUserName
+			metadata.HomeDirectory = runtimeMetadata.HomeDirectory
+			metadata.OperatingSystem = runtimeMetadata.OperatingSystem
+			metadata.OperatingSystemVersion = runtimeMetadata.OperatingSystemVersion
+			metadata.Architecture = runtimeMetadata.Architecture
+			metadata.TimeZone = runtimeMetadata.TimeZone
+		}
+		metadata.WorkspaceRoot, _ = admission.WorkspaceRoot()
+		if workspace, available := admission.WorkspaceScope(); available {
+			metadata.WorkspaceLabel = workspace.WorkspaceLabel()
+		}
+	}
+	return request.plan.TransformPipeline().NewTurnWithOptions(messagetransform.TurnOptions{
+		Metadata: metadata, Annotations: annotations,
+	})
+}
+
 func applyRequestMessageTransform(
 	ctx context.Context,
-	turn *messagetransform.Turn,
+	turn *messagetransform.PipelineTurn,
 	method string,
 	path string,
 	headers http.Header,
 	body []byte,
-) (http.Header, []byte, error) {
-	if turn == nil || !turn.HasRequest() {
-		return headers.Clone(), bytes.Clone(body), nil
+) (http.Header, []byte, messagetransform.RequestMessage, error) {
+	if turn == nil {
+		return headers.Clone(), bytes.Clone(body), messagetransform.RequestMessage{}, nil
+	}
+	if !turn.HasRequest() {
+		if turn.HasResponse() {
+			logicalHeaders, logicalBody, err := logicalTransformInput(headers, body)
+			if err != nil {
+				return nil, nil, messagetransform.RequestMessage{}, err
+			}
+			visible, _ := hideCredentialHeaders(logicalHeaders)
+			cleaned, changed, err := turn.StripRequestAnnotations(logicalBody)
+			if err != nil {
+				return nil, nil, messagetransform.RequestMessage{}, err
+			}
+			input := messagetransform.RequestMessage{
+				Method: method, Path: path, Headers: visible, Body: cleaned,
+			}
+			if !changed {
+				return headers.Clone(), bytes.Clone(body), input, nil
+			}
+			return logicalHeaders, cleaned, input, nil
+		}
+		cleaned, changed, err := turn.StripRequestAnnotations(body)
+		if err != nil {
+			return nil, nil, messagetransform.RequestMessage{}, err
+		}
+		if !changed {
+			return headers.Clone(), bytes.Clone(body), messagetransform.RequestMessage{}, nil
+		}
+		logicalHeaders, _, err := logicalTransformInput(headers, body)
+		if err != nil {
+			return nil, nil, messagetransform.RequestMessage{}, err
+		}
+		return logicalHeaders, cleaned, messagetransform.RequestMessage{}, nil
 	}
 	logicalHeaders, logicalBody, err := logicalTransformInput(headers, body)
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, messagetransform.RequestMessage{}, err
 	}
 	visible, protected := hideCredentialHeaders(logicalHeaders)
-	transformed, err := turn.ApplyRequest(ctx, messagetransform.RequestMessage{
+	cleaned, _, err := turn.StripRequestAnnotations(logicalBody)
+	if err != nil {
+		return nil, nil, messagetransform.RequestMessage{}, err
+	}
+	input := messagetransform.RequestMessage{
 		Method:  method,
 		Path:    path,
 		Headers: visible,
-		Body:    logicalBody,
-	})
+		Body:    cleaned,
+	}
+	transformed, err := turn.ApplyRequest(ctx, input)
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, messagetransform.RequestMessage{}, err
 	}
 	restoreCredentialHeaders(transformed.Headers, protected)
-	return transformed.Headers, transformed.Body, nil
+	return transformed.Headers, transformed.Body, input, nil
 }
 
 func applyResponseMessageTransform(
 	ctx context.Context,
-	turn *messagetransform.Turn,
+	turn *messagetransform.PipelineTurn,
 	statusCode int,
 	headers http.Header,
 	body []byte,
-) (messagetransform.ResponseMessage, http.Header, http.Header, error) {
+) (messagetransform.ResponseMessage, messagetransform.ResponseMessage, http.Header, error) {
 	if turn == nil || !turn.HasResponse() {
-		return messagetransform.ResponseMessage{
+		unchanged := messagetransform.ResponseMessage{
 			StatusCode: statusCode, Headers: headers.Clone(), Body: bytes.Clone(body),
-		}, headers.Clone(), nil, nil
+		}
+		return unchanged, unchanged, nil, nil
 	}
 	logicalHeaders, logicalBody, err := logicalTransformInput(headers, body)
 	if err != nil {
-		return messagetransform.ResponseMessage{}, nil, nil, err
+		return messagetransform.ResponseMessage{}, messagetransform.ResponseMessage{}, nil, err
 	}
 	visible, protected := hideCredentialHeaders(logicalHeaders)
-	transformed, err := turn.ApplyResponse(ctx, messagetransform.ResponseMessage{
+	input := messagetransform.ResponseMessage{
 		StatusCode: statusCode,
 		Headers:    visible,
 		Body:       logicalBody,
-	})
+	}
+	transformed, err := turn.ApplyResponse(ctx, input)
 	if err != nil {
-		return messagetransform.ResponseMessage{}, nil, nil, err
+		return messagetransform.ResponseMessage{}, messagetransform.ResponseMessage{}, nil, err
 	}
 	if transformed.Headers.Get("Content-Encoding") != "" {
-		return messagetransform.ResponseMessage{}, nil, nil,
+		return messagetransform.ResponseMessage{}, messagetransform.ResponseMessage{}, nil,
 			errors.New("message transform cannot assign Content-Encoding")
 	}
-	return transformed, visible, protected, nil
+	return transformed, input, protected, nil
 }
 
 type streamMessageTransformer struct {
-	turn       *messagetransform.Turn
+	turn       *messagetransform.PipelineTurn
 	statusCode int
 	headers    http.Header
 	decoder    *ssewire.Decoder
 
-	beforeHeaders http.Header
-	afterHeaders  http.Header
-	protected     http.Header
-	headerReady   bool
-	finished      bool
-	finishErr     error
+	beforeHeaders  http.Header
+	afterHeaders   http.Header
+	protected      http.Header
+	headerReady    bool
+	finished       bool
+	finishErr      error
+	input          bytes.Buffer
+	inputBytes     int64
+	inputTruncated bool
 }
 
 func newStreamMessageTransformer(
-	turn *messagetransform.Turn,
+	turn *messagetransform.PipelineTurn,
 	statusCode int,
 	headers http.Header,
 ) (*streamMessageTransformer, error) {
@@ -205,6 +274,14 @@ func (transformer *streamMessageTransformer) Feed(
 	if transformer == nil {
 		return bytes.Clone(fragment), false, nil
 	}
+	transformer.inputBytes += int64(len(fragment))
+	remaining := maxCompleteResponseBytes - transformer.input.Len()
+	if remaining > 0 {
+		_, _ = transformer.input.Write(fragment[:min(remaining, len(fragment))])
+	}
+	if len(fragment) > remaining {
+		transformer.inputTruncated = true
+	}
 	events, err := transformer.decoder.Feed(fragment)
 	if err != nil {
 		return nil, false, err
@@ -251,6 +328,22 @@ func (transformer *streamMessageTransformer) Feed(
 		_, _ = encoded.Write(wire)
 	}
 	return encoded.Bytes(), becameReady, nil
+}
+
+func (transformer *streamMessageTransformer) Input() (
+	messagetransform.ResponseMessage,
+	int64,
+	bool,
+) {
+	if transformer == nil {
+		return messagetransform.ResponseMessage{}, 0, false
+	}
+	return messagetransform.ResponseMessage{
+		StatusCode: transformer.statusCode,
+		Streaming:  true,
+		Headers:    transformer.headers.Clone(),
+		Body:       bytes.Clone(transformer.input.Bytes()),
+	}, transformer.inputBytes, !transformer.inputTruncated
 }
 
 func (transformer *streamMessageTransformer) Finish() error {

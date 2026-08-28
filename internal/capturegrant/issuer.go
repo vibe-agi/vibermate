@@ -604,7 +604,7 @@ type CaptureRunRequest struct {
 	CWD               string
 	Command           []string
 	ExecutablePath    string
-	LocalUserLabel    string
+	RuntimeMetadata   capturerun.RuntimeMetadata
 	ClientEnvironment clienttarget.EnvironmentFacts
 	Companion         *CompanionAttestation
 }
@@ -727,7 +727,7 @@ func (issuer *Issuer) IssueCaptureRun(
 		Adapter:                 runAdapter,
 		Recognition:             detection.Recognition,
 		Workspace:               workspace,
-		LocalUserLabel:          request.LocalUserLabel,
+		Runtime:                 request.RuntimeMetadata,
 		RuntimeUserID:           runtimeUserID,
 		LoginSessionID:          loginSessionID,
 		DeviceName:              deviceName,
@@ -930,7 +930,7 @@ func validateCaptureRunRequest(request CaptureRunRequest) error {
 		!filepath.IsAbs(request.ExecutablePath) ||
 		len(request.Command) == 0 ||
 		len(request.Command) > maxArguments ||
-		!capturerun.ValidLocalUserLabel(request.LocalUserLabel) {
+		request.RuntimeMetadata.Validate() != nil {
 		return errors.New("CaptureRun fields are invalid")
 	}
 	if err := request.ClientEnvironment.Validate(); err != nil {

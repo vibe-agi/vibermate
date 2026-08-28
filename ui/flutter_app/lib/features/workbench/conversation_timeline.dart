@@ -1670,6 +1670,7 @@ final class _RawEvidenceDisclosure extends StatefulWidget {
 final class _RawEvidenceDisclosureState extends State<_RawEvidenceDisclosure> {
   bool _expanded = false;
   bool _revealing = false;
+  bool _copyingSample = false;
   RevealedRawEvidence? _revealed;
 
   @override
@@ -1679,6 +1680,7 @@ final class _RawEvidenceDisclosureState extends State<_RawEvidenceDisclosure> {
       _clearRevealed();
       _expanded = false;
       _revealing = false;
+      _copyingSample = false;
     }
   }
 
@@ -1719,6 +1721,12 @@ final class _RawEvidenceDisclosureState extends State<_RawEvidenceDisclosure> {
       _revealed = revealed;
       _revealing = false;
     });
+  }
+
+  Future<void> _copySample() async {
+    setState(() => _copyingSample = true);
+    await widget.controller.copyMessageTransformSample(widget.exchangeId);
+    if (mounted) setState(() => _copyingSample = false);
   }
 
   @override
@@ -1843,6 +1851,19 @@ final class _RawEvidenceDisclosureState extends State<_RawEvidenceDisclosure> {
               message: copy.format('exchange.raw.recovery', {
                 'ms': recovery.maximumPossibleLossMs,
               }),
+            ),
+            const SizedBox(height: 6),
+          ],
+          if (widget.controller.canCopyMessageTransformSample(
+            widget.exchangeId,
+          )) ...[
+            OutlinedButton.icon(
+              key: Key('copy-transform-sample-${widget.exchangeId}'),
+              onPressed: _copyingSample ? null : () => unawaited(_copySample()),
+              icon: _copyingSample
+                  ? const CompactProgressIndicator()
+                  : const Icon(Icons.science_outlined, size: 15),
+              label: Text(copy('exchange.raw.copy_transform_sample')),
             ),
             const SizedBox(height: 6),
           ],
@@ -2180,8 +2201,10 @@ String _rawTarget(RawEvidenceEnvelope envelope) {
 
 IconData _rawLayerIcon(String layer) => switch (layer) {
   'client_ingress' => Icons.login,
+  'transform_request_input' => Icons.data_object_rounded,
   'provider_egress' => Icons.north_east,
   'provider_response' => Icons.south_west,
+  'transform_response_input' => Icons.data_object_rounded,
   'client_downstream' => Icons.logout,
   _ => Icons.data_object,
 };

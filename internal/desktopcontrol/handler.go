@@ -20,8 +20,10 @@ import (
 	"github.com/vibe-agi/vibermate/internal/agentconversation"
 	"github.com/vibe-agi/vibermate/internal/captureassignment"
 	"github.com/vibe-agi/vibermate/internal/capturerun"
+	"github.com/vibe-agi/vibermate/internal/codelibrary"
 	"github.com/vibe-agi/vibermate/internal/connectionevent"
 	"github.com/vibe-agi/vibermate/internal/egressaudit"
+	"github.com/vibe-agi/vibermate/internal/egressprofile"
 	"github.com/vibe-agi/vibermate/internal/environment"
 	"github.com/vibe-agi/vibermate/internal/evidencearchive"
 	"github.com/vibe-agi/vibermate/internal/exchangecontent"
@@ -76,6 +78,12 @@ const (
 	ReasonModelCatalogTimeout                ReasonCode = "model_catalog_timeout"
 	ReasonModelCatalogAuthenticationRejected ReasonCode = "model_catalog_authentication_rejected"
 	ReasonMessageTransformTestFailed         ReasonCode = "message_transform_test_failed"
+	ReasonCodeLibraryNotFound                ReasonCode = "code_library_not_found"
+	ReasonCodeLibraryConflict                ReasonCode = "code_library_conflict"
+	ReasonCodeLibraryUnavailable             ReasonCode = "code_library_unavailable"
+	ReasonEgressProfileNotFound              ReasonCode = "egress_profile_not_found"
+	ReasonEgressProfileConflict              ReasonCode = "egress_profile_conflict"
+	ReasonEgressProfileUnavailable           ReasonCode = "egress_profile_unavailable"
 )
 
 type StatusReader interface {
@@ -122,6 +130,8 @@ type Options struct {
 	Approvals           toolapproval.Controller
 	Endpoints           upstreamendpoint.Controller
 	Accounts            provideraccount.Controller
+	CodeLibrary         codelibrary.Controller
+	EgressProfiles      egressprofile.Controller
 	Models              modelcatalog.Reader
 	ClientModels        modelcatalog.ProviderMetadataReader
 	RawEvidence         rawevidence.Reader
@@ -151,6 +161,8 @@ type Handler struct {
 	approvals           toolapproval.Controller
 	endpoints           upstreamendpoint.Controller
 	accounts            provideraccount.Controller
+	codeLibrary         codelibrary.Controller
+	egressProfiles      egressprofile.Controller
 	models              modelcatalog.Reader
 	clientModels        modelcatalog.ProviderMetadataReader
 	rawEvidence         rawevidence.Reader
@@ -210,6 +222,8 @@ func New(options Options) (*Handler, error) {
 		approvals:           options.Approvals,
 		endpoints:           options.Endpoints,
 		accounts:            options.Accounts,
+		codeLibrary:         options.CodeLibrary,
+		egressProfiles:      options.EgressProfiles,
 		models:              options.Models,
 		clientModels:        options.ClientModels,
 		rawEvidence:         options.RawEvidence,
@@ -238,6 +252,23 @@ func New(options Options) (*Handler, error) {
 		"POST /api/v1/message-transforms/actions/test",
 		handler.testMessageTransform,
 	)
+	if handler.codeLibrary != nil {
+		handler.mux.HandleFunc("GET /api/v1/code-library", handler.listCodeLibrary)
+		handler.mux.HandleFunc("POST /api/v1/code-library/collections", handler.createCodeLibraryCollection)
+		handler.mux.HandleFunc("PUT /api/v1/code-library/transforms/{transformId}", handler.publishCodeLibraryTransform)
+		handler.mux.HandleFunc(
+			"GET /api/v1/code-library/transforms/{transformId}/revisions/{transformRevision}",
+			handler.getCodeLibraryTransformRevision,
+		)
+	}
+	if handler.egressProfiles != nil {
+		handler.mux.HandleFunc("GET /api/v1/egress-profiles", handler.listEgressProfiles)
+		handler.mux.HandleFunc("PUT /api/v1/egress-profiles/{egressId}", handler.publishEgressProfile)
+		handler.mux.HandleFunc(
+			"GET /api/v1/egress-profiles/{egressId}/revisions/{egressRevision}",
+			handler.getEgressProfileRevision,
+		)
+	}
 	handler.mux.HandleFunc("GET /api/v1/upstream-endpoints", handler.listUpstreamEndpoints)
 	handler.mux.HandleFunc("POST /api/v1/upstream-endpoints", handler.createUpstreamEndpoint)
 	handler.mux.HandleFunc("GET /api/v1/upstream-endpoints/{endpointId}", handler.getUpstreamEndpoint)
@@ -302,6 +333,10 @@ func New(options Options) (*Handler, error) {
 	handler.mux.HandleFunc("GET /api/v1/captures", handler.listCaptures)
 	handler.mux.HandleFunc("GET /api/v1/captures/{captureKey}", handler.getCapture)
 	handler.mux.HandleFunc("GET /api/v1/captures/{captureKey}/environment-assignment", handler.getCaptureEnvironmentAssignment)
+	handler.mux.HandleFunc(
+		"POST /api/v1/captures/{captureKey}/environment-assignment/actions/apply-latest",
+		handler.applyLatestCaptureEnvironment,
+	)
 	handler.mux.HandleFunc("GET /api/v1/approvals", handler.listApprovals)
 	handler.mux.HandleFunc(
 		"GET /api/v1/approvals/{approvalId}",
@@ -337,6 +372,8 @@ func New(options Options) (*Handler, error) {
 	)
 	handler.mux.HandleFunc("/api/v1/approvals", handler.invalidRoute)
 	handler.mux.HandleFunc("/api/v1/message-transforms/", handler.invalidRoute)
+	handler.mux.HandleFunc("/api/v1/code-library", handler.invalidRoute)
+	handler.mux.HandleFunc("/api/v1/code-library/", handler.invalidRoute)
 	handler.mux.HandleFunc("/api/v1/provider-accounts", handler.invalidRoute)
 	handler.mux.HandleFunc("/api/v1/provider-accounts/{accountId}", handler.invalidRoute)
 	handler.mux.HandleFunc("/api/v1/provider-accounts/{accountId}/{remainder}", handler.invalidRoute)

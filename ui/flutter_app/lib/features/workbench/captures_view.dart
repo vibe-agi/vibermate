@@ -550,6 +550,8 @@ final class _CaptureDetail extends StatelessWidget {
             onConfirmRevoke: onConfirmRevoke,
             onRotate: onRotateManual,
             onDelete: onDeleteCapture,
+            onApplyLatestEnvironment: () =>
+                unawaited(controller.applyLatestSelectedCaptureEnvironment()),
             routeDetail: [
               if (endpoint != null) endpoint.displayName,
               if (account != null)
@@ -1442,6 +1444,7 @@ final class _CaptureContext extends StatelessWidget {
     required this.onRevoke,
     required this.onRotate,
     required this.onDelete,
+    required this.onApplyLatestEnvironment,
     required this.routeDetail,
     required this.masterVisible,
     required this.onToggleMaster,
@@ -1461,6 +1464,7 @@ final class _CaptureContext extends StatelessWidget {
   final VoidCallback onRevoke;
   final VoidCallback onRotate;
   final VoidCallback onDelete;
+  final VoidCallback onApplyLatestEnvironment;
   final String routeDetail;
   final bool masterVisible;
   final VoidCallback? onToggleMaster;
@@ -1607,6 +1611,8 @@ final class _CaptureContext extends StatelessWidget {
                 environments: environments,
                 copy: copy,
                 routeDetail: routeDetail,
+                mutating: mutating,
+                onApplyLatest: onApplyLatestEnvironment,
               ),
               if (confirmRevoke) ...[
                 const SizedBox(height: 9),
@@ -1790,6 +1796,8 @@ final class _EnvironmentScopeControls extends StatelessWidget {
     required this.environments,
     required this.copy,
     required this.routeDetail,
+    required this.mutating,
+    required this.onApplyLatest,
   });
 
   final CaptureRecord capture;
@@ -1797,6 +1805,8 @@ final class _EnvironmentScopeControls extends StatelessWidget {
   final List<EnvironmentRecord> environments;
   final AppCopy copy;
   final String routeDetail;
+  final bool mutating;
+  final VoidCallback onApplyLatest;
 
   @override
   Widget build(BuildContext context) {
@@ -1805,21 +1815,64 @@ final class _EnvironmentScopeControls extends StatelessWidget {
         .where((environment) => environment.id == assigned)
         .map((environment) => environment.name)
         .firstOrNull;
-    return _EnvironmentScopeRow(
-      key: const Key('capture-environment-scope'),
-      icon: Icons.adjust,
-      tone: context.viberColors.route,
-      title: copy('capture.environment.current'),
-      visibleDetail: routeDetail.isEmpty ? null : routeDetail,
-      detail: copy(
-        capture.running
-            ? 'capture.environment.help'
-            : 'capture.environment.history',
-      ),
-      control: _ReadOnlyEnvironmentValue(
-        key: const Key('capture-environment-readonly'),
-        name: assignedName ?? assigned ?? '—',
-      ),
+    final latest = environments
+        .where((environment) => environment.id == assigned)
+        .firstOrNull;
+    final updateAvailable =
+        capture.running &&
+        assignment != null &&
+        latest != null &&
+        latest.state == 'active' &&
+        latest.revision > assignment!.environmentRevision;
+    final revisions = assignment == null
+        ? null
+        : copy.format(
+            updateAvailable
+                ? 'capture.environment.revisions_update'
+                : 'capture.environment.revisions',
+            {
+              'launch': assignment!.launchEnvironmentRevision,
+              'current': assignment!.environmentRevision,
+              if (latest != null) 'latest': latest.revision,
+            },
+          );
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        _EnvironmentScopeRow(
+          key: const Key('capture-environment-scope'),
+          icon: Icons.adjust,
+          tone: context.viberColors.route,
+          title: copy('capture.environment.current'),
+          visibleDetail:
+              revisions ?? (routeDetail.isEmpty ? null : routeDetail),
+          detail: [
+            if (routeDetail.isNotEmpty) routeDetail,
+            copy(
+              capture.running
+                  ? 'capture.environment.help'
+                  : 'capture.environment.history',
+            ),
+          ].join('. '),
+          control: _ReadOnlyEnvironmentValue(
+            key: const Key('capture-environment-readonly'),
+            name: assignedName ?? assigned ?? '—',
+          ),
+        ),
+        if (updateAvailable)
+          Padding(
+            padding: const EdgeInsets.only(left: 28, top: 2),
+            child: Align(
+              alignment: Alignment.centerLeft,
+              child: OutlinedButton.icon(
+                key: const Key('capture-environment-apply-latest'),
+                onPressed: mutating ? null : onApplyLatest,
+                icon: const Icon(Icons.update, size: 14),
+                label: Text(copy('capture.environment.apply_latest')),
+              ),
+            ),
+          ),
+      ],
     );
   }
 }

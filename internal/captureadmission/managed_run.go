@@ -17,7 +17,10 @@ type ManagedRunEvidence struct {
 	WorkspaceRoot string
 	Workspace     workspaceidentity.Scope
 	Adapter       *clientadapter.Evidence
+	Runtime       capturerun.RuntimeMetadata
 }
+
+type ManagedRuntimeMetadata = capturerun.RuntimeMetadata
 
 func NewManagedRun(evidence ManagedRunEvidence) (Admission, error) {
 	admissionRef, err := capturerun.AdmissionRef(evidence.CaptureRunID)
@@ -37,6 +40,7 @@ func NewManagedRun(evidence ManagedRunEvidence) (Admission, error) {
 		sourceLabel:        evidence.SourceLabel,
 		workspaceRoot:      evidence.WorkspaceRoot,
 		adapter:            cloneAdapter(evidence.Adapter),
+		runtime:            evidence.Runtime,
 	}
 	if evidence.Workspace != (admission.workspace) {
 		if err := evidence.Workspace.Validate(); err != nil {

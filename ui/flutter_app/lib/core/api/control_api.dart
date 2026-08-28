@@ -36,9 +36,41 @@ abstract interface class ControlApi {
   );
 
   Future<MessageTransformTestResult> testMessageTransform({
-    required String clientProtocol,
+    required String wireProtocol,
+    required TrafficTransformPolicy policy,
+    MessageTransformTestSample? sample,
+  });
+
+  Future<CodeLibraryCatalog> codeLibrary();
+
+  Future<CodeLibraryCollection> createCodeLibraryCollection({
+    required String id,
+    required String displayName,
+  });
+
+  Future<CodeLibraryTransformRevision> publishCodeLibraryTransform({
+    required String id,
+    required int expectedRevision,
+    required String collectionId,
+    required String displayName,
     required TrafficTransformPolicy policy,
   });
+
+  Future<CodeLibraryTransformRevision> codeLibraryTransformRevision(
+    String id,
+    int revision,
+  );
+
+  Future<EgressProfileCatalog> egressProfiles();
+
+  Future<EgressProfileRevision> publishEgressProfile({
+    required String id,
+    required int expectedRevision,
+    required String displayName,
+    required TrafficEgressPolicy policy,
+  });
+
+  Future<EgressProfileRevision> egressProfileRevision(String id, int revision);
 
   Future<EnvironmentPublishResult> publishEnvironmentDraft(
     String environmentId,
@@ -46,6 +78,10 @@ abstract interface class ControlApi {
   );
 
   Future<CaptureAssignment> captureAssignment(String captureKey);
+
+  Future<CaptureAssignment> applyLatestCaptureEnvironment(
+    CaptureAssignment current,
+  );
 
   Future<ActivityPage> activities({
     String? cursor,
@@ -462,21 +498,139 @@ final class HttpControlApi implements ControlApi {
 
   @override
   Future<MessageTransformTestResult> testMessageTransform({
-    required String clientProtocol,
+    required String wireProtocol,
     required TrafficTransformPolicy policy,
+    MessageTransformTestSample? sample,
   }) async {
-    if (!upstreamBackendProtocols.contains(clientProtocol)) {
+    if (!upstreamBackendProtocols.contains(wireProtocol)) {
       throw const ControlContractException(
-        'Message transform client protocol is invalid',
+        'Message transform wire protocol is invalid',
       );
     }
     return MessageTransformTestResult.fromJson(
       await _command(
         'POST',
         '/api/v1/message-transforms/actions/test',
-        body: {'clientProtocol': clientProtocol, 'policy': policy.toJson()},
+        body: {
+          'wireProtocol': wireProtocol,
+          'policy': policy.toJson(),
+          if (sample != null) 'sample': sample.toJson(),
+        },
       ),
       'messageTransformTest',
+    );
+  }
+
+  @override
+  Future<CodeLibraryCatalog> codeLibrary() async => CodeLibraryCatalog.fromJson(
+    await _read('/api/v1/code-library'),
+    'codeLibrary',
+  );
+
+  @override
+  Future<CodeLibraryCollection> createCodeLibraryCollection({
+    required String id,
+    required String displayName,
+  }) async => CodeLibraryCollection.fromJson(
+    await _mutation(
+      'POST',
+      '/api/v1/code-library/collections',
+      expectedRevision: 0,
+      expectedStatus: 201,
+      body: {'id': id, 'displayName': displayName},
+    ),
+    'codeLibraryCollection',
+  );
+
+  @override
+  Future<CodeLibraryTransformRevision> publishCodeLibraryTransform({
+    required String id,
+    required int expectedRevision,
+    required String collectionId,
+    required String displayName,
+    required TrafficTransformPolicy policy,
+  }) async {
+    if (expectedRevision < 0) {
+      throw const ControlContractException(
+        'Code Library expected revision is invalid',
+      );
+    }
+    return CodeLibraryTransformRevision.fromJson(
+      await _mutation(
+        'PUT',
+        '/api/v1/code-library/transforms/${Uri.encodeComponent(id)}',
+        expectedRevision: expectedRevision,
+        body: {
+          'collectionId': collectionId,
+          'displayName': displayName,
+          'policy': policy.toJson(),
+        },
+      ),
+      'codeLibraryTransform',
+    );
+  }
+
+  @override
+  Future<CodeLibraryTransformRevision> codeLibraryTransformRevision(
+    String id,
+    int revision,
+  ) async {
+    if (revision < 1) {
+      throw const ControlContractException('Code Library revision is invalid');
+    }
+    return CodeLibraryTransformRevision.fromJson(
+      await _read(
+        '/api/v1/code-library/transforms/${Uri.encodeComponent(id)}/revisions/$revision',
+      ),
+      'codeLibraryTransformRevision',
+    );
+  }
+
+  @override
+  Future<EgressProfileCatalog> egressProfiles() async =>
+      EgressProfileCatalog.fromJson(
+        await _read('/api/v1/egress-profiles'),
+        'egressProfiles',
+      );
+
+  @override
+  Future<EgressProfileRevision> publishEgressProfile({
+    required String id,
+    required int expectedRevision,
+    required String displayName,
+    required TrafficEgressPolicy policy,
+  }) async {
+    if (!_validResourceId(id) || expectedRevision < 0) {
+      throw const ControlContractException(
+        'Egress profile publish authority is invalid',
+      );
+    }
+    return EgressProfileRevision.fromJson(
+      await _mutation(
+        'PUT',
+        '/api/v1/egress-profiles/${Uri.encodeComponent(id)}',
+        expectedRevision: expectedRevision,
+        body: {'displayName': displayName, 'policy': policy.toJson()},
+      ),
+      'egressProfile',
+    );
+  }
+
+  @override
+  Future<EgressProfileRevision> egressProfileRevision(
+    String id,
+    int revision,
+  ) async {
+    if (!_validResourceId(id) || revision < 1) {
+      throw const ControlContractException(
+        'Egress profile revision authority is invalid',
+      );
+    }
+    return EgressProfileRevision.fromJson(
+      await _read(
+        '/api/v1/egress-profiles/${Uri.encodeComponent(id)}/revisions/$revision',
+      ),
+      'egressProfileRevision',
     );
   }
 
@@ -511,6 +665,25 @@ final class HttpControlApi implements ControlApi {
     if (assignment.captureKey != captureKey) {
       throw const ControlContractException(
         'Capture assignment identity is inconsistent',
+      );
+    }
+    return assignment;
+  }
+
+  @override
+  Future<CaptureAssignment> applyLatestCaptureEnvironment(
+    CaptureAssignment current,
+  ) async {
+    final payload = await _mutation(
+      'POST',
+      '/api/v1/captures/${Uri.encodeComponent(current.captureKey)}/environment-assignment/actions/apply-latest',
+      expectedRevision: current.revision,
+    );
+    final assignment = CaptureAssignment.fromJson(payload, 'captureAssignment');
+    if (assignment.captureKey != current.captureKey ||
+        assignment.revision < current.revision) {
+      throw const ControlContractException(
+        'Capture assignment update is inconsistent',
       );
     }
     return assignment;

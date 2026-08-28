@@ -122,6 +122,11 @@ func TestCaptureRunPersistsVerifiedAdapterEvidenceWithProxyCapability(
 			Adapter:                 &adapter,
 			Recognition:             clientadapter.RecognitionVerified,
 			Workspace:               testWorkspaceScope(t),
+			Runtime: capturerun.RuntimeMetadata{
+				LocalUserName: "jack", HomeDirectory: "/Users/jack",
+				OperatingSystem: "darwin", OperatingSystemVersion: "15.6",
+				Architecture: "arm64", TimeZone: "Asia/Singapore",
+			},
 		},
 	)
 	if err != nil {
@@ -575,6 +580,12 @@ func assertCodexEvidence(
 	t.Helper()
 
 	if evidence.CatalogRevision != 7 ||
+		evidence.Runtime.LocalUserName != "jack" ||
+		evidence.Runtime.HomeDirectory != "/Users/jack" ||
+		evidence.Runtime.OperatingSystem != "darwin" ||
+		evidence.Runtime.OperatingSystemVersion != "15.6" ||
+		evidence.Runtime.Architecture != "arm64" ||
+		evidence.Runtime.TimeZone != "Asia/Singapore" ||
 		evidence.Adapter == nil ||
 		evidence.Adapter.ID != "codex-cli" ||
 		evidence.Adapter.Version != "0.145.0" ||

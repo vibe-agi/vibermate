@@ -13,6 +13,74 @@ import 'runtime_usage_fixture.dart';
 
 void main() {
   test(
+    'HTTP API explicitly applies the latest Environment to a Capture',
+    () async {
+      String? ifMatch;
+      String? idempotencyKey;
+      final server = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);
+      addTearDown(() => server.close(force: true));
+      server.listen((request) async {
+        request.response.headers.contentType = ContentType.json;
+        if (request.method == 'GET' &&
+            request.uri.path == '/api/v1/auth/sessions/current') {
+          await request.drain<void>();
+          request.response.write(
+            jsonEncode({
+              'schema': 'vibermate-app-session-state-v1',
+              'revision': 1,
+              'expiresAt': DateTime.now()
+                  .toUtc()
+                  .add(const Duration(hours: 1))
+                  .toIso8601String(),
+            }),
+          );
+        } else if (request.method == 'POST' &&
+            request.uri.pathSegments.length == 7 &&
+            request.uri.pathSegments[0] == 'api' &&
+            request.uri.pathSegments[1] == 'v1' &&
+            request.uri.pathSegments[2] == 'captures' &&
+            request.uri.pathSegments[3] == 'managed_run:run-one' &&
+            request.uri.pathSegments[4] == 'environment-assignment' &&
+            request.uri.pathSegments[5] == 'actions' &&
+            request.uri.pathSegments[6] == 'apply-latest') {
+          ifMatch = request.headers.value('if-match');
+          idempotencyKey = request.headers.value('idempotency-key');
+          await request.drain<void>();
+          request.response.write(
+            jsonEncode(_captureAssignmentJson(revision: 2)),
+          );
+        } else {
+          request.response.statusCode = HttpStatus.notFound;
+        }
+        await request.response.close();
+      });
+
+      final api = await HttpControlApi.connect(
+        DesktopSession(
+          baseUrl: Uri.parse('http://127.0.0.1:${server.port}'),
+          readToken: List.filled(43, 'R').join(),
+          writeToken: List.filled(43, 'W').join(),
+          instanceId: 'instance-test',
+          expiresAt: DateTime.now().toUtc().add(const Duration(hours: 1)),
+        ),
+      );
+      addTearDown(api.close);
+
+      final updated = await api.applyLatestCaptureEnvironment(
+        CaptureAssignment.fromJson(
+          _captureAssignmentJson(revision: 1),
+          'assignment',
+        ),
+      );
+
+      expect(ifMatch, '1');
+      expect(idempotencyKey, isNotEmpty);
+      expect(updated.revision, 2);
+      expect(updated.environmentRevision, 4);
+    },
+  );
+
+  test(
     'HTTP API sends Account Header policy atomically with credential',
     () async {
       final bodies = <Map<String, Object?>>[];
@@ -125,18 +193,35 @@ void main() {
                 as Map<String, Object?>;
         request.response.write(
           jsonEncode({
-            'clientProtocol': 'anthropic_messages',
-            'request': {
+            'wireProtocol': 'anthropic_messages',
+            'requestBefore': {
+              'method': 'POST',
+              'path': '/v1/messages',
+              'headers': {
+                'Content-Type': ['application/json'],
+              },
+              'body': '{"model":"claude-sample"}',
+            },
+            'requestAfter': {
               'method': 'POST',
               'path': '/v1/messages',
               'headers': {
                 'Content-Type': ['application/json'],
                 'X-Request': ['yes'],
               },
-              'body': '{"model":"claude-sample"}',
+              'body': '{"model":"claude-edited"}',
             },
-            'response': {
+            'responseBefore': {
               'statusCode': 200,
+              'streaming': true,
+              'headers': {
+                'Content-Type': ['application/json'],
+              },
+              'body': '{"type":"message"}',
+            },
+            'responseAfter': {
+              'statusCode': 200,
+              'streaming': true,
               'headers': {
                 'Content-Type': ['application/json'],
                 'X-Response': ['yes'],
@@ -166,19 +251,251 @@ void main() {
       responseJavaScript: 'response.headers["x-response"] = "yes";',
     );
 
+    const sample = MessageTransformTestSample(
+      request: MessageTransformTestRequest(
+        method: 'POST',
+        path: '/v1/messages',
+        headers: {
+          'content-type': ['application/json'],
+        },
+        body: '{"model":"captured"}',
+      ),
+      response: MessageTransformTestResponse(
+        statusCode: 200,
+        streaming: true,
+        headers: {
+          'content-type': ['application/json'],
+        },
+        body: '{"type":"message"}',
+      ),
+    );
     final result = await api.testMessageTransform(
-      clientProtocol: 'anthropic_messages',
+      wireProtocol: 'anthropic_messages',
       policy: policy,
+      sample: sample,
     );
     expect(received, {
-      'clientProtocol': 'anthropic_messages',
+      'wireProtocol': 'anthropic_messages',
+      'policy': policy.toJson(),
+      'sample': sample.toJson(),
+    });
+    expect(result.wireProtocol, 'anthropic_messages');
+    expect(result.requestBefore.path, '/v1/messages');
+    expect(result.requestBefore.headers.containsKey('x-request'), isFalse);
+    expect(result.requestAfter.headers['x-request'], ['yes']);
+    expect(result.requestAfter.body, contains('claude-edited'));
+    expect(result.responseBefore.statusCode, 200);
+    expect(result.responseBefore.streaming, isTrue);
+    expect(result.responseBefore.headers.containsKey('x-response'), isFalse);
+    expect(result.responseAfter.headers['x-response'], ['yes']);
+  });
+
+  test('HTTP API manages immutable Code Library revisions', () async {
+    final requests =
+        <({String method, String path, String? match, Object? body})>[];
+    final server = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);
+    addTearDown(() => server.close(force: true));
+    server.listen((request) async {
+      request.response.headers.contentType = ContentType.json;
+      if (request.uri.path == '/api/v1/auth/sessions/current') {
+        await request.drain<void>();
+        request.response.write(
+          jsonEncode({
+            'schema': 'vibermate-app-session-state-v1',
+            'revision': 1,
+            'expiresAt': DateTime.now()
+                .toUtc()
+                .add(const Duration(hours: 1))
+                .toIso8601String(),
+          }),
+        );
+      } else {
+        final text = await utf8.decoder.bind(request).join();
+        requests.add((
+          method: request.method,
+          path: request.uri.path,
+          match: request.headers.value('if-match'),
+          body: text.isEmpty ? null : jsonDecode(text),
+        ));
+        if (request.method == 'GET' &&
+            request.uri.path == '/api/v1/code-library') {
+          request.response.write(
+            jsonEncode({
+              'collections': [
+                {'id': 'privacy', 'displayName': 'Privacy'},
+              ],
+              'transforms': [_transformRevisionJson(2)],
+            }),
+          );
+        } else if (request.method == 'POST' &&
+            request.uri.path == '/api/v1/code-library/collections') {
+          request.response.statusCode = HttpStatus.created;
+          request.response.write(
+            jsonEncode({'id': 'privacy', 'displayName': 'Privacy'}),
+          );
+        } else if (request.method == 'PUT' &&
+            request.uri.path ==
+                '/api/v1/code-library/transforms/home-redaction') {
+          request.response.write(jsonEncode(_transformRevisionJson(2)));
+        } else if (request.method == 'GET' &&
+            request.uri.path ==
+                '/api/v1/code-library/transforms/home-redaction/revisions/1') {
+          request.response.write(jsonEncode(_transformRevisionJson(1)));
+        } else {
+          request.response.statusCode = HttpStatus.notFound;
+        }
+      }
+      await request.response.close();
+    });
+
+    final api = await HttpControlApi.connect(
+      DesktopSession(
+        baseUrl: Uri.parse('http://127.0.0.1:${server.port}'),
+        readToken: List.filled(43, 'R').join(),
+        writeToken: List.filled(43, 'W').join(),
+        instanceId: 'instance-test',
+        expiresAt: DateTime.now().toUtc().add(const Duration(hours: 1)),
+      ),
+    );
+    addTearDown(api.close);
+
+    final catalog = await api.codeLibrary();
+    final collection = await api.createCodeLibraryCollection(
+      id: 'privacy',
+      displayName: 'Privacy',
+    );
+    final published = await api.publishCodeLibraryTransform(
+      id: 'home-redaction',
+      expectedRevision: 1,
+      collectionId: 'privacy',
+      displayName: 'Home redaction',
+      policy: const TrafficTransformPolicy(
+        requestJavaScript: 'request.body = request.body;',
+        responseJavaScript: '',
+      ),
+    );
+    final historical = await api.codeLibraryTransformRevision(
+      'home-redaction',
+      1,
+    );
+
+    expect(catalog.collections.single.id, 'privacy');
+    expect(catalog.transforms.single.revision, 2);
+    expect(collection.displayName, 'Privacy');
+    expect(published.revision, 2);
+    expect(historical.revision, 1);
+    expect(requests, hasLength(4));
+    expect(requests.map((request) => '${request.method} ${request.path}'), [
+      'GET /api/v1/code-library',
+      'POST /api/v1/code-library/collections',
+      'PUT /api/v1/code-library/transforms/home-redaction',
+      'GET /api/v1/code-library/transforms/home-redaction/revisions/1',
+    ]);
+    expect(requests[1].match, '0');
+    expect(requests[1].body, {'id': 'privacy', 'displayName': 'Privacy'});
+    expect(requests[2].match, '1');
+    expect(requests[2].body, {
+      'collectionId': 'privacy',
+      'displayName': 'Home redaction',
+      'policy': {
+        'requestJavaScript': 'request.body = request.body;',
+        'responseJavaScript': '',
+      },
+    });
+  });
+
+  test('HTTP API manages immutable egress profile revisions', () async {
+    final requests =
+        <({String method, String path, String? match, Object? body})>[];
+    final server = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);
+    addTearDown(() => server.close(force: true));
+    server.listen((request) async {
+      request.response.headers.contentType = ContentType.json;
+      if (request.uri.path == '/api/v1/auth/sessions/current') {
+        await request.drain<void>();
+        request.response.write(
+          jsonEncode({
+            'schema': 'vibermate-app-session-state-v1',
+            'revision': 1,
+            'expiresAt': DateTime.now()
+                .toUtc()
+                .add(const Duration(hours: 1))
+                .toIso8601String(),
+          }),
+        );
+      } else {
+        final text = await utf8.decoder.bind(request).join();
+        requests.add((
+          method: request.method,
+          path: request.uri.path,
+          match: request.headers.value('if-match'),
+          body: text.isEmpty ? null : jsonDecode(text),
+        ));
+        if (request.method == 'GET' &&
+            request.uri.path == '/api/v1/egress-profiles') {
+          request.response.write(
+            jsonEncode({
+              'items': [
+                EgressProfileRevision.direct.toJson(),
+                _egressProfileRevisionJson(2),
+              ],
+            }),
+          );
+        } else if (request.method == 'PUT' &&
+            request.uri.path == '/api/v1/egress-profiles/team-proxy') {
+          request.response.write(jsonEncode(_egressProfileRevisionJson(2)));
+        } else if (request.method == 'GET' &&
+            request.uri.path ==
+                '/api/v1/egress-profiles/team-proxy/revisions/1') {
+          request.response.write(jsonEncode(_egressProfileRevisionJson(1)));
+        } else {
+          request.response.statusCode = HttpStatus.notFound;
+        }
+      }
+      await request.response.close();
+    });
+
+    final api = await HttpControlApi.connect(
+      DesktopSession(
+        baseUrl: Uri.parse('http://127.0.0.1:${server.port}'),
+        readToken: List.filled(43, 'R').join(),
+        writeToken: List.filled(43, 'W').join(),
+        instanceId: 'instance-test',
+        expiresAt: DateTime.now().toUtc().add(const Duration(hours: 1)),
+      ),
+    );
+    addTearDown(api.close);
+    const policy = TrafficEgressPolicy(
+      proxy: TrafficProxyPolicy(kind: 'socks5', endpoint: '127.0.0.1:7890'),
+      resolver: TrafficResolverPolicy(
+        kind: 'doh',
+        transport: 'proxy',
+        dohUrl: 'https://1.1.1.1/dns-query',
+      ),
+    );
+
+    final catalog = await api.egressProfiles();
+    final published = await api.publishEgressProfile(
+      id: 'team-proxy',
+      expectedRevision: 1,
+      displayName: 'Team proxy',
+      policy: policy,
+    );
+    final historical = await api.egressProfileRevision('team-proxy', 1);
+
+    expect(catalog.items, hasLength(2));
+    expect(published.revision, 2);
+    expect(historical.revision, 1);
+    expect(requests.map((request) => '${request.method} ${request.path}'), [
+      'GET /api/v1/egress-profiles',
+      'PUT /api/v1/egress-profiles/team-proxy',
+      'GET /api/v1/egress-profiles/team-proxy/revisions/1',
+    ]);
+    expect(requests[1].match, '1');
+    expect(requests[1].body, {
+      'displayName': 'Team proxy',
       'policy': policy.toJson(),
     });
-    expect(result.clientProtocol, 'anthropic_messages');
-    expect(result.request.path, '/v1/messages');
-    expect(result.request.headers['x-request'], ['yes']);
-    expect(result.response.statusCode, 200);
-    expect(result.response.headers['x-response'], ['yes']);
   });
 
   test('HTTP API reads Server access and manages Runtime Users', () async {
@@ -1257,6 +1574,47 @@ void main() {
     expect(requests, hasLength(requestCount));
   });
 }
+
+Map<String, Object?> _captureAssignmentJson({required int revision}) => {
+  'captureKey': 'managed_run:run-one',
+  'captureId': 'run-one',
+  'captureKind': 'managed_run',
+  'environmentId': 'work',
+  'environmentRevision': revision == 1 ? 3 : 4,
+  'environmentDigest': List.filled(64, revision == 1 ? 'b' : 'c').join(),
+  'launchEnvironmentRevision': 2,
+  'launchEnvironmentDigest': List.filled(64, 'a').join(),
+  'revision': revision,
+  'source': 'launch',
+  'updatedAt': '2026-08-28T01:02:03.000Z',
+};
+
+Map<String, Object?> _transformRevisionJson(int revision) => {
+  'id': 'home-redaction',
+  'revision': revision,
+  'collectionId': 'privacy',
+  'displayName': 'Home redaction',
+  'policy': {
+    'requestJavaScript': 'request.body = request.body;',
+    'responseJavaScript': '',
+  },
+  'publishedAt': '2026-08-27T01:02:03Z',
+};
+
+Map<String, Object?> _egressProfileRevisionJson(int revision) => {
+  'id': 'team-proxy',
+  'revision': revision,
+  'displayName': 'Team proxy',
+  'policy': {
+    'proxy': {'kind': 'socks5', 'endpoint': '127.0.0.1:7890'},
+    'resolver': {
+      'kind': 'doh',
+      'dohUrl': 'https://1.1.1.1/dns-query',
+      'transport': 'proxy',
+    },
+  },
+  'publishedAt': '2026-08-27T01:02:03Z',
+};
 
 Map<String, Object?> _rawEnvelopeJson({
   required String envelopeId,

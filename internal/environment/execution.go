@@ -8,6 +8,7 @@ import (
 	"slices"
 
 	"github.com/vibe-agi/vibermate/internal/egressnetwork"
+	"github.com/vibe-agi/vibermate/internal/egressprofile"
 	"github.com/vibe-agi/vibermate/internal/messagetransform"
 	"github.com/vibe-agi/vibermate/internal/originidentity"
 	"github.com/vibe-agi/vibermate/internal/protocolspec"
@@ -142,8 +143,8 @@ type CompiledProtocolPlan struct {
 	adapterPolicy       ClientAdapterPolicy
 	operations          []protocolspec.ClientOperationDefinition
 	destinationKind     DestinationKind
-	egressPolicy        egressnetwork.Policy
-	transformProgram    messagetransform.Program
+	egressProfile       egressprofile.ProfileRevision
+	transformPipeline   messagetransform.Pipeline
 	originalCodec       protocolspec.CodecPlan
 	originalWireProfile wireprofile.CompiledUpstreamWireProfile
 	upstreamRouteSet    *CompiledRouteSet
@@ -162,10 +163,13 @@ func (plan CompiledProtocolPlan) DestinationKind() DestinationKind {
 	return plan.destinationKind
 }
 func (plan CompiledProtocolPlan) EgressPolicy() egressnetwork.Policy {
-	return plan.egressPolicy
+	return plan.egressProfile.Policy
 }
-func (plan CompiledProtocolPlan) TransformProgram() messagetransform.Program {
-	return plan.transformProgram
+func (plan CompiledProtocolPlan) EgressProfile() egressprofile.ProfileRevision {
+	return plan.egressProfile
+}
+func (plan CompiledProtocolPlan) TransformPipeline() messagetransform.Pipeline {
+	return plan.transformPipeline
 }
 func (plan CompiledProtocolPlan) UpstreamRouteSet() (CompiledRouteSet, bool) {
 	if plan.upstreamRouteSet == nil {
@@ -213,8 +217,8 @@ type RequestPlan struct {
 	protocol            CompiledProtocolPlan
 	operation           protocolspec.ClientOperationDefinition
 	destinationKind     DestinationKind
-	egressPolicy        egressnetwork.Policy
-	transformProgram    messagetransform.Program
+	egressProfile       egressprofile.ProfileRevision
+	transformPipeline   messagetransform.Pipeline
 	codecPlan           protocolspec.CodecPlan
 	wireProfile         wireprofile.CompiledUpstreamWireProfile
 	upstreamRoute       *CompiledRoutePlan
@@ -240,9 +244,12 @@ func (plan RequestPlan) PreservesOriginalDestination() bool {
 func (plan RequestPlan) UsesUpstreamDestination() bool {
 	return plan.destinationKind == DestinationKindUpstream
 }
-func (plan RequestPlan) EgressPolicy() egressnetwork.Policy { return plan.egressPolicy }
-func (plan RequestPlan) TransformProgram() messagetransform.Program {
-	return plan.transformProgram
+func (plan RequestPlan) EgressPolicy() egressnetwork.Policy { return plan.egressProfile.Policy }
+func (plan RequestPlan) EgressProfile() egressprofile.ProfileRevision {
+	return plan.egressProfile
+}
+func (plan RequestPlan) TransformPipeline() messagetransform.Pipeline {
+	return plan.transformPipeline
 }
 func (plan RequestPlan) CodecPlan() protocolspec.CodecPlan { return plan.codecPlan }
 func (plan RequestPlan) WireProfile() wireprofile.CompiledUpstreamWireProfile {
@@ -293,9 +300,12 @@ func compileExecution(
 			if err != nil {
 				return nil, nil, fmt.Errorf("compile protocol plan %q operations: %w", plan.ID, err)
 			}
-			transformProgram, err := messagetransform.Compile(
-				plan.TransformPolicy,
-				messagetransform.DefaultLimits(),
+			transformPolicies := make([]messagetransform.Policy, len(plan.Transforms))
+			for index, transform := range plan.Transforms {
+				transformPolicies[index] = transform.Policy
+			}
+			transformPipeline, err := messagetransform.CompilePipeline(
+				transformPolicies, messagetransform.DefaultLimits(),
 			)
 			if err != nil {
 				return nil, nil, fmt.Errorf(
@@ -306,11 +316,11 @@ func compileExecution(
 			}
 			compiledPlan := CompiledProtocolPlan{
 				id: plan.ID, revision: plan.Revision, dialect: clientDialect,
-				adapterPolicy:    plan.ClientAdapterPolicy,
-				operations:       operations,
-				destinationKind:  plan.Destination.Kind,
-				egressPolicy:     plan.EgressPolicy,
-				transformProgram: transformProgram,
+				adapterPolicy:     plan.ClientAdapterPolicy,
+				operations:        operations,
+				destinationKind:   plan.Destination.Kind,
+				egressProfile:     plan.EgressProfile,
+				transformPipeline: transformPipeline,
 			}
 			switch plan.Destination.Kind {
 			case DestinationKindOriginal:

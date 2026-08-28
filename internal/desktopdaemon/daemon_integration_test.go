@@ -57,7 +57,7 @@ func TestDaemonPublishesBootstrapThenParentEOFReleasesGeneration(t *testing.T) {
 				Paths:          runtimePaths,
 				Host:           hostcontract.Desktop(),
 				OfflineHold:    gate,
-				Secrets:        unavailableSecrets{},
+				Secrets:        seededSecrets{},
 				Approvals:      toolapproval.DefaultConfig(),
 				ExchangeHold:   exchange.DefaultHoldPolicy(),
 				Clock:          productruntime.SystemClock{},
@@ -110,7 +110,7 @@ func TestProductionOptionsUsesExplicitSecretStoreFactory(t *testing.T) {
 	t.Parallel()
 
 	root := t.TempDir()
-	store := unavailableSecrets{}
+	store := seededSecrets{}
 	factory := &secretFactoryFixture{store: store}
 	options, err := desktopdaemon.ProductionOptions(
 		context.Background(),
@@ -168,7 +168,7 @@ func TestProductionOptionsRejectsRetiredDesktopOrigins(t *testing.T) {
 			filepath.Join(root, "data"),
 			origin,
 			io.Discard,
-			&secretFactoryFixture{store: unavailableSecrets{}},
+			&secretFactoryFixture{store: seededSecrets{}},
 		); err == nil {
 			t.Fatalf("retired Desktop origin %q was accepted", origin)
 		}
@@ -187,40 +187,52 @@ func (factory *secretFactoryFixture) Open(
 	return factory.store, nil
 }
 
-type unavailableSecrets struct{}
+type seededSecrets struct{}
 
-func (unavailableSecrets) Read(
-	context.Context,
-	secretstore.Reference,
+func (seededSecrets) Read(
+	_ context.Context,
+	reference secretstore.Reference,
 ) (*secretstore.Value, error) {
+	if reference.String() == "secret://runtime/client-annotation-signing-v1" {
+		return secretstore.NewValue([]byte("AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"))
+	}
 	return nil, secretstore.ErrNotFound
 }
 
-func (unavailableSecrets) ReadAtRevision(
-	context.Context,
-	secretstore.Reference,
-	secretstore.Revision,
+func (seededSecrets) ReadAtRevision(
+	ctx context.Context,
+	reference secretstore.Reference,
+	revision secretstore.Revision,
 ) (*secretstore.Value, error) {
-	return nil, secretstore.ErrNotFound
+	if reference.String() == "secret://runtime/client-annotation-signing-v1" && revision != 1 {
+		return nil, secretstore.ErrRevisionConflict
+	}
+	return seededSecrets{}.Read(ctx, reference)
 }
 
-func (unavailableSecrets) Inspect(
-	context.Context,
-	secretstore.Reference,
+func (seededSecrets) Inspect(
+	_ context.Context,
+	reference secretstore.Reference,
 ) (secretstore.Metadata, error) {
+	if reference.String() == "secret://runtime/client-annotation-signing-v1" {
+		return secretstore.Metadata{State: secretstore.StateConfigured, Revision: 1}, nil
+	}
 	return secretstore.Metadata{State: secretstore.StateMissing}, nil
 }
 
-func (unavailableSecrets) Replace(
+func (seededSecrets) Replace(
 	context.Context,
 	secretstore.ReplaceCommand,
 ) (secretstore.Metadata, error) {
 	return secretstore.Metadata{}, secretstore.ErrReadOnly
 }
 
-func (unavailableSecrets) Delete(
-	context.Context,
-	secretstore.Reference,
+func (seededSecrets) Delete(
+	_ context.Context,
+	reference secretstore.Reference,
 ) error {
+	if reference.String() == "secret://runtime/client-annotation-signing-v1" {
+		return secretstore.ErrReadOnly
+	}
 	return secretstore.ErrNotFound
 }

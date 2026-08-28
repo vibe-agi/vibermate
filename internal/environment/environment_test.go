@@ -4,16 +4,19 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"github.com/vibe-agi/vibermate/internal/resourcedeletion"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/vibe-agi/vibermate/internal/captureidentity"
+	"github.com/vibe-agi/vibermate/internal/codelibrary"
 	"github.com/vibe-agi/vibermate/internal/egressnetwork"
+	"github.com/vibe-agi/vibermate/internal/egressprofile"
 	"github.com/vibe-agi/vibermate/internal/messagetransform"
 	"github.com/vibe-agi/vibermate/internal/operationcatalog"
 	"github.com/vibe-agi/vibermate/internal/originidentity"
 	"github.com/vibe-agi/vibermate/internal/protocolspec"
+	"github.com/vibe-agi/vibermate/internal/resourcedeletion"
 	"github.com/vibe-agi/vibermate/internal/wireprofile"
 )
 
@@ -91,22 +94,25 @@ func TestLaunchEnvironmentPolicyIsFrozenAndRejectsLauncherAuthority(
 	}
 }
 
-func TestRequestPlanFreezesTheSelectedTrafficEgressPolicy(t *testing.T) {
+func TestRequestPlanFreezesTheSelectedEgressProfileRevision(t *testing.T) {
 	t.Parallel()
 	aggregate := fixture(t, "network-path", mustOrigin(t, "https://relay.example"))
-	aggregate.ClientEndpoints[0].ProtocolPlans[0].EgressPolicy = egressnetwork.Policy{
-		Proxy: egressnetwork.ProxyPolicy{
-			Kind:     egressnetwork.ProxySOCKS5,
-			Endpoint: "PROXY.Example.:1080",
+	want := egressprofile.ProfileRevision{
+		ID: "profile.office", Revision: 3, DisplayName: "Office",
+		Policy: egressnetwork.Policy{
+			Proxy: egressnetwork.ProxyPolicy{
+				Kind: egressnetwork.ProxySOCKS5, Endpoint: "proxy.example:1080",
+			},
+			Resolver: egressnetwork.ResolverPolicy{
+				Kind: egressnetwork.ResolverDoH, DoHURL: "https://dns.example/dns-query",
+				Transport: egressnetwork.ResolverTransportProxy,
+			},
 		},
-		Resolver: egressnetwork.ResolverPolicy{
-			Kind:      egressnetwork.ResolverDoH,
-			DoHURL:    "https://DNS.Example.:443/dns-query",
-			Transport: egressnetwork.ResolverTransportProxy,
-		},
+		PublishedAt: time.Date(2026, time.August, 27, 1, 2, 3, 0, time.UTC),
 	}
+	aggregate.ClientEndpoints[0].ProtocolPlans[0].EgressProfile = want
 	snapshot := mustCompile(t, aggregate)
-	aggregate.ClientEndpoints[0].ProtocolPlans[0].EgressPolicy = egressnetwork.DefaultPolicy()
+	aggregate.ClientEndpoints[0].ProtocolPlans[0].EgressProfile = egressprofile.Direct()
 
 	plan, err := snapshot.ResolveRequest(
 		mustOrigin(t, "https://relay.example"),
@@ -121,47 +127,57 @@ func TestRequestPlanFreezesTheSelectedTrafficEgressPolicy(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ResolveRequest(): %v", err)
 	}
-	want := egressnetwork.Policy{
-		Proxy: egressnetwork.ProxyPolicy{
-			Kind:     egressnetwork.ProxySOCKS5,
-			Endpoint: "proxy.example:1080",
-		},
-		Resolver: egressnetwork.ResolverPolicy{
-			Kind:      egressnetwork.ResolverDoH,
-			DoHURL:    "https://dns.example/dns-query",
-			Transport: egressnetwork.ResolverTransportProxy,
-		},
+	if got := plan.EgressProfile(); !got.Equal(want) {
+		t.Fatalf("RequestPlan EgressProfile = %#v, want %#v", got, want)
 	}
-	if got := plan.EgressPolicy(); got != want {
-		t.Fatalf("RequestPlan EgressPolicy = %#v, want %#v", got, want)
+	if got := plan.ProtocolPlan().EgressProfile(); !got.Equal(want) {
+		t.Fatalf("CompiledProtocolPlan EgressProfile = %#v, want %#v", got, want)
 	}
-	if got := plan.ProtocolPlan().EgressPolicy(); got != want {
-		t.Fatalf("CompiledProtocolPlan EgressPolicy = %#v, want %#v", got, want)
+	if got := plan.EgressPolicy(); got != want.Policy {
+		t.Fatalf("RequestPlan EgressPolicy = %#v, want %#v", got, want.Policy)
 	}
 
 	invalid := fixture(t, "invalid-network-path", mustOrigin(t, "https://invalid.example"))
-	invalid.ClientEndpoints[0].ProtocolPlans[0].EgressPolicy = egressnetwork.Policy{
-		Proxy: egressnetwork.ProxyPolicy{Kind: egressnetwork.ProxyDirect},
-		Resolver: egressnetwork.ResolverPolicy{
-			Kind:      egressnetwork.ResolverDoH,
-			DoHURL:    "https://dns.example/dns-query",
-			Transport: egressnetwork.ResolverTransportProxy,
+	invalid.ClientEndpoints[0].ProtocolPlans[0].EgressProfile = egressprofile.ProfileRevision{
+		ID: "profile.invalid", Revision: 1, DisplayName: "Invalid",
+		Policy: egressnetwork.Policy{
+			Proxy: egressnetwork.ProxyPolicy{Kind: egressnetwork.ProxyDirect},
+			Resolver: egressnetwork.ResolverPolicy{
+				Kind: egressnetwork.ResolverDoH, DoHURL: "https://dns.example/dns-query",
+				Transport: egressnetwork.ResolverTransportProxy,
+			},
 		},
+		PublishedAt: time.Now(),
 	}
 	if err := invalid.Validate(); err == nil {
-		t.Fatal("Environment accepted an unusable traffic egress policy")
+		t.Fatal("Environment accepted an unusable egress profile")
 	}
 }
 
-func TestRequestPlanFreezesACompiledTrafficTransformPolicy(t *testing.T) {
+func TestRequestPlanFreezesOrderedPublishedTransformRevisions(t *testing.T) {
 	t.Parallel()
 	aggregate := fixture(t, "message-transform", mustOrigin(t, "https://relay.example"))
-	aggregate.ClientEndpoints[0].ProtocolPlans[0].TransformPolicy = messagetransform.Policy{
-		RequestJavaScript:  `context.requested = JSON.parse(request.body).model; request.body = "{\"model\":\"upstream\"}";`,
-		ResponseJavaScript: `response.headers["x-requested-model"] = context.requested;`,
+	publishedAt := time.Date(2026, time.August, 27, 10, 0, 0, 0, time.UTC)
+	aggregate.ClientEndpoints[0].ProtocolPlans[0].Transforms = []codelibrary.TransformRevision{
+		{
+			ID: "remember-client", Revision: 3, CollectionID: "privacy",
+			DisplayName: "Remember client model", PublishedAt: publishedAt,
+			Policy: messagetransform.Policy{
+				RequestJavaScript:  `context.requested = JSON.parse(request.body).model; request.headers["x-request-order"] = "one";`,
+				ResponseJavaScript: `response.headers["x-requested-model"] = context.requested; response.headers["x-response-order"] = (response.headers["x-response-order"] || "") + ",one";`,
+			},
+		},
+		{
+			ID: "rewrite-model", Revision: 8, CollectionID: "routing",
+			DisplayName: "Rewrite model", PublishedAt: publishedAt,
+			Policy: messagetransform.Policy{
+				RequestJavaScript:  `request.headers["x-request-order"] += ",two"; request.body = "{\"model\":\"upstream\"}";`,
+				ResponseJavaScript: `response.headers["x-response-order"] = "two";`,
+			},
+		},
 	}
 	snapshot := mustCompile(t, aggregate)
-	aggregate.ClientEndpoints[0].ProtocolPlans[0].TransformPolicy = messagetransform.Policy{}
+	aggregate.ClientEndpoints[0].ProtocolPlans[0].Transforms[0].Policy = messagetransform.Policy{}
 
 	plan, err := snapshot.ResolveRequest(
 		mustOrigin(t, "https://relay.example"),
@@ -176,7 +192,7 @@ func TestRequestPlanFreezesACompiledTrafficTransformPolicy(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ResolveRequest(): %v", err)
 	}
-	turn := plan.TransformProgram().NewTurn()
+	turn := plan.TransformPipeline().NewTurn()
 	request, err := turn.ApplyRequest(context.Background(), messagetransform.RequestMessage{
 		Method: "POST", Path: "/v1/messages",
 		Headers: make(map[string][]string),
@@ -188,6 +204,9 @@ func TestRequestPlanFreezesACompiledTrafficTransformPolicy(t *testing.T) {
 	if got := string(request.Body); got != `{"model":"upstream"}` {
 		t.Fatalf("transformed request Body = %s", got)
 	}
+	if got := request.Headers.Get("X-Request-Order"); got != "one,two" {
+		t.Fatalf("request Transform order = %q, want one,two", got)
+	}
 	response, err := turn.ApplyResponse(context.Background(), messagetransform.ResponseMessage{
 		StatusCode: 200, Headers: make(map[string][]string), Body: []byte(`{}`),
 	})
@@ -197,11 +216,15 @@ func TestRequestPlanFreezesACompiledTrafficTransformPolicy(t *testing.T) {
 	if got := response.Headers.Get("X-Requested-Model"); got != "client" {
 		t.Fatalf("shared Turn Context = %q, want client", got)
 	}
+	if got := response.Headers.Get("X-Response-Order"); got != "two,one" {
+		t.Fatalf("response Transform order = %q, want two,one", got)
+	}
 
 	invalid := fixture(t, "invalid-message-transform", mustOrigin(t, "https://invalid.example"))
-	invalid.ClientEndpoints[0].ProtocolPlans[0].TransformPolicy = messagetransform.Policy{
-		RequestJavaScript: `if (`,
-	}
+	invalid.ClientEndpoints[0].ProtocolPlans[0].Transforms = []codelibrary.TransformRevision{{
+		ID: "invalid", Revision: 1, CollectionID: "examples", DisplayName: "Invalid",
+		PublishedAt: publishedAt, Policy: messagetransform.Policy{RequestJavaScript: `if (`},
+	}}
 	if err := invalid.Validate(); err == nil {
 		t.Fatal("Environment accepted invalid JavaScript syntax")
 	}
@@ -1255,6 +1278,7 @@ func fixture(t *testing.T, id string, origin originidentity.ClientOrigin) Enviro
 		return ClientProtocolPlan{
 			ID: ClientProtocolPlanID(planID), Revision: 1, ClientProtocol: protocol,
 			ClientAdapterPolicy: ClientAdapterPolicy{ID: "adapter." + planID, Revision: 1},
+			EgressProfile:       egressprofile.Direct(),
 			Destination: DestinationPlan{Kind: DestinationKindUpstream, Upstream: &UpstreamPlan{
 				DefaultRouteID: UpstreamRouteID(routeID), RouteSet: RouteSet{
 					ID: "routes." + planID, Revision: 1,

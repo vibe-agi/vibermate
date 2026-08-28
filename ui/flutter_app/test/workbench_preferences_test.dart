@@ -89,6 +89,13 @@ void main() {
     );
   });
 
+  test('Code Library is a persistent workbench destination', () {
+    expect(
+      WorkbenchSection.fromWire('code_library'),
+      WorkbenchSection.codeLibrary,
+    );
+  });
+
   test('future schema is distinguished so an older app preserves it', () {
     final payload = jsonDecode(complete.encode()) as Map<String, Object?>;
     expect(

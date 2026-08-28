@@ -88,7 +88,7 @@ type DurableRecord struct {
 	ControlCapabilityHash       CapabilityDigest
 	CWD                         string
 	CanonicalExecutablePath     string
-	LocalUserLabel              string
+	Runtime                     RuntimeMetadata
 	RuntimeUserID               runtimeuser.UserID
 	LoginSessionID              runtimeuser.LoginSessionID
 	DeviceName                  string
@@ -153,8 +153,8 @@ func (record DurableRecord) Validate() error {
 	); err != nil {
 		return err
 	}
-	if !ValidLocalUserLabel(record.LocalUserLabel) {
-		return fmt.Errorf("%w: local user label is invalid", ErrInvalidRequest)
+	if err := record.Runtime.Validate(); err != nil {
+		return err
 	}
 	if (record.RuntimeUserID == "") != (record.LoginSessionID == "") ||
 		(record.RuntimeUserID == "") != (record.DeviceName == "") ||
@@ -288,7 +288,7 @@ func ViewOf(record DurableRecord) View {
 		ExecutableLabel:             record.ExecutableLabel,
 		CWD:                         record.CWD,
 		CanonicalExecutablePath:     record.CanonicalExecutablePath,
-		LocalUserLabel:              record.LocalUserLabel,
+		LocalUserLabel:              record.Runtime.LocalUserName,
 		RuntimeUserID:               record.RuntimeUserID,
 		LoginSessionID:              record.LoginSessionID,
 		DeviceName:                  record.DeviceName,
@@ -367,7 +367,7 @@ type CreateCommand struct {
 	Adapter         *clientadapter.Evidence
 	Recognition     clientadapter.Recognition
 	Workspace       workspaceidentity.Scope
-	LocalUserLabel  string
+	Runtime         RuntimeMetadata
 	RuntimeUserID   runtimeuser.UserID
 	LoginSessionID  runtimeuser.LoginSessionID
 	DeviceName      string
@@ -403,8 +403,8 @@ func (command CreateCommand) validate(maxLifetime time.Duration) error {
 		command.Workspace.Validate() != nil {
 		return fmt.Errorf("%w: workspace scope is invalid", ErrInvalidRequest)
 	}
-	if !ValidLocalUserLabel(command.LocalUserLabel) {
-		return fmt.Errorf("%w: local user label is invalid", ErrInvalidRequest)
+	if err := command.Runtime.Validate(); err != nil {
+		return err
 	}
 	if (command.RuntimeUserID == "") != (command.LoginSessionID == "") ||
 		(command.RuntimeUserID == "") != (command.DeviceName == "") ||
@@ -448,7 +448,7 @@ type Evidence struct {
 	ProcessID       int
 	ExpiresAt       time.Time
 	Workspace       workspaceidentity.Scope
-	LocalUserLabel  string
+	Runtime         RuntimeMetadata
 	RuntimeUserID   runtimeuser.UserID
 	LoginSessionID  runtimeuser.LoginSessionID
 	DeviceName      string
@@ -483,22 +483,55 @@ func evidenceOf(record DurableRecord) Evidence {
 		ProcessID:       record.ProcessID,
 		ExpiresAt:       record.ExpiresAt,
 		Workspace:       workspace,
-		LocalUserLabel:  record.LocalUserLabel,
+		Runtime:         record.Runtime,
 		RuntimeUserID:   record.RuntimeUserID,
 		LoginSessionID:  record.LoginSessionID,
 		DeviceName:      record.DeviceName,
 	}
 }
 
-// ValidLocalUserLabel validates display-only launcher metadata. The value is
-// never authentication evidence and an empty value means unavailable.
-func ValidLocalUserLabel(value string) bool {
-	if value == "" {
-		return true
+// RuntimeMetadata is display-only launcher evidence. It never grants capture,
+// filesystem, process, routing, or credential authority.
+type RuntimeMetadata struct {
+	LocalUserName          string
+	HomeDirectory          string
+	OperatingSystem        string
+	OperatingSystemVersion string
+	Architecture           string
+	TimeZone               string
+}
+
+func (metadata RuntimeMetadata) Validate() error {
+	for _, item := range []struct {
+		name  string
+		value string
+		limit int
+	}{
+		{"local user name", metadata.LocalUserName, MaxLocalUserLabelBytes},
+		{"home directory", metadata.HomeDirectory, MaxPathBytes},
+		{"operating system", metadata.OperatingSystem, 64},
+		{"operating system version", metadata.OperatingSystemVersion, 256},
+		{"architecture", metadata.Architecture, 64},
+		{"time zone", metadata.TimeZone, 128},
+	} {
+		if len(item.value) > item.limit || !utf8.ValidString(item.value) ||
+			strings.TrimSpace(item.value) != item.value ||
+			strings.ContainsAny(item.value, "\x00\r\n") {
+			return fmt.Errorf("%w: %s is invalid", ErrInvalidRequest, item.name)
+		}
+		for _, character := range item.value {
+			if unicode.IsControl(character) {
+				return fmt.Errorf("%w: %s is invalid", ErrInvalidRequest, item.name)
+			}
+		}
 	}
-	return len(value) <= MaxLocalUserLabelBytes && utf8.ValidString(value) &&
-		strings.TrimSpace(value) == value &&
-		!strings.ContainsAny(value, "\x00\r\n")
+	return nil
+}
+
+// ValidLocalUserLabel is retained as the narrow validator used while reading
+// a launcher environment before the complete RuntimeMetadata value exists.
+func ValidLocalUserLabel(value string) bool {
+	return (RuntimeMetadata{LocalUserName: value}).Validate() == nil
 }
 
 func (record DurableRecord) workspaceScopeEmpty() bool {

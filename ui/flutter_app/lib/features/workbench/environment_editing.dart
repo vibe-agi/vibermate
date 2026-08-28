@@ -350,8 +350,8 @@ EnvironmentProtocolPlan _originalProtocolPlan(
       revision: 1,
     ),
     destination: const EnvironmentDestination.original(),
-    egressPolicy: const TrafficEgressPolicy.direct(),
-    transformPolicy: const TrafficTransformPolicy.disabled(),
+    egressProfile: EgressProfileRevision.direct,
+    transforms: const [],
     pluginBindings: const [],
   );
 }
@@ -423,8 +423,8 @@ EnvironmentProtocolPlan _appendUpstreamRoute(
         routes: routes,
       ),
     ),
-    egressPolicy: plan.egressPolicy,
-    transformPolicy: plan.transformPolicy,
+    egressProfile: plan.egressProfile,
+    transforms: plan.transforms,
     pluginBindings: plan.pluginBindings,
   );
 }
@@ -469,8 +469,8 @@ EnvironmentProtocolPlan _protocolPlanFor(
         routes: [route],
       ),
     ),
-    egressPolicy: const TrafficEgressPolicy.direct(),
-    transformPolicy: const TrafficTransformPolicy.disabled(),
+    egressProfile: EgressProfileRevision.direct,
+    transforms: const [],
     pluginBindings: const [],
   );
 }
@@ -532,15 +532,15 @@ String _stableResourceToken(String value) {
 /// Egress belongs to the protocol plan because one Environment may route its
 /// Anthropic and OpenAI traffic through different networks. Destination and
 /// Route authority are intentionally untouched.
-List<EnvironmentClientEndpoint> assignEnvironmentProtocolEgressPolicy({
+List<EnvironmentClientEndpoint> assignEnvironmentProtocolEgressProfile({
   required List<EnvironmentClientEndpoint> endpoints,
   required String clientEndpointId,
   required String protocolPlanId,
-  required TrafficEgressPolicy policy,
+  required EgressProfileRevision profile,
 }) {
-  final validated = TrafficEgressPolicy.fromJson(
-    policy.toJson(),
-    'trafficEgressPolicy',
+  final validated = EgressProfileRevision.fromJson(
+    profile.toJson(),
+    'egressProfile',
   );
   var found = false;
   var changed = false;
@@ -558,7 +558,7 @@ List<EnvironmentClientEndpoint> assignEnvironmentProtocolEgressPolicy({
         continue;
       }
       found = true;
-      if (plan.egressPolicy == validated) {
+      if (plan.egressProfile == validated) {
         plans.add(plan);
         continue;
       }
@@ -570,8 +570,8 @@ List<EnvironmentClientEndpoint> assignEnvironmentProtocolEgressPolicy({
           clientProtocol: plan.clientProtocol,
           clientAdapterPolicy: plan.clientAdapterPolicy,
           destination: plan.destination,
-          egressPolicy: validated,
-          transformPolicy: plan.transformPolicy,
+          egressProfile: validated,
+          transforms: plan.transforms,
           pluginBindings: plan.pluginBindings,
         ),
       );
@@ -598,20 +598,24 @@ List<EnvironmentClientEndpoint> assignEnvironmentProtocolEgressPolicy({
   return changed ? List.unmodifiable(result) : endpoints;
 }
 
-/// Replaces the request/response transform of exactly one client protocol flow.
+/// Replaces the ordered, published transforms of one client protocol flow.
 ///
 /// The strict JSON round-trip keeps editor state on the same contract as a
 /// server draft. Destination, Route, Account, model, and egress authority are
 /// intentionally preserved.
-List<EnvironmentClientEndpoint> assignEnvironmentProtocolTransformPolicy({
+List<EnvironmentClientEndpoint> assignEnvironmentProtocolTransforms({
   required List<EnvironmentClientEndpoint> endpoints,
   required String clientEndpointId,
   required String protocolPlanId,
-  required TrafficTransformPolicy policy,
+  required List<CodeLibraryTransformRevision> transforms,
 }) {
-  final validated = TrafficTransformPolicy.fromJson(
-    policy.toJson(),
-    'trafficTransformPolicy',
+  final validated = List<CodeLibraryTransformRevision>.unmodifiable(
+    transforms.indexed.map(
+      (entry) => CodeLibraryTransformRevision.fromJson(
+        entry.$2.toJson(),
+        'transforms[${entry.$1}]',
+      ),
+    ),
   );
   var found = false;
   var changed = false;
@@ -629,7 +633,7 @@ List<EnvironmentClientEndpoint> assignEnvironmentProtocolTransformPolicy({
         continue;
       }
       found = true;
-      if (plan.transformPolicy == validated) {
+      if (_sameTransformRevisions(plan.transforms, validated)) {
         plans.add(plan);
         continue;
       }
@@ -641,8 +645,8 @@ List<EnvironmentClientEndpoint> assignEnvironmentProtocolTransformPolicy({
           clientProtocol: plan.clientProtocol,
           clientAdapterPolicy: plan.clientAdapterPolicy,
           destination: plan.destination,
-          egressPolicy: plan.egressPolicy,
-          transformPolicy: validated,
+          egressProfile: plan.egressProfile,
+          transforms: validated,
           pluginBindings: plan.pluginBindings,
         ),
       );
@@ -707,8 +711,8 @@ List<EnvironmentClientEndpoint> setEnvironmentProtocolOriginalDestination({
           clientProtocol: plan.clientProtocol,
           clientAdapterPolicy: plan.clientAdapterPolicy,
           destination: const EnvironmentDestination.original(),
-          egressPolicy: plan.egressPolicy,
-          transformPolicy: plan.transformPolicy,
+          egressProfile: plan.egressProfile,
+          transforms: plan.transforms,
           pluginBindings: plan.pluginBindings,
         ),
       );
@@ -805,8 +809,8 @@ List<EnvironmentClientEndpoint> assignEnvironmentRouteAccount({
                     routes: List.unmodifiable(nextRoutes),
                   ),
                 ),
-                egressPolicy: plan.egressPolicy,
-                transformPolicy: plan.transformPolicy,
+                egressProfile: plan.egressProfile,
+                transforms: plan.transforms,
                 pluginBindings: plan.pluginBindings,
               );
             })
@@ -922,8 +926,8 @@ List<EnvironmentClientEndpoint> assignEnvironmentRouteModelMappings({
                     routes: List.unmodifiable(nextRoutes),
                   ),
                 ),
-                egressPolicy: plan.egressPolicy,
-                transformPolicy: plan.transformPolicy,
+                egressProfile: plan.egressProfile,
+                transforms: plan.transforms,
                 pluginBindings: plan.pluginBindings,
               );
             })
@@ -1068,8 +1072,8 @@ EnvironmentProtocolPlan _normalizeProtocolPlan(
       clientProtocol: edited.clientProtocol,
       clientAdapterPolicy: adapter,
       destination: destination,
-      egressPolicy: edited.egressPolicy,
-      transformPolicy: edited.transformPolicy,
+      egressProfile: edited.egressProfile,
+      transforms: edited.transforms,
       pluginBindings: bindings,
     );
   }
@@ -1079,8 +1083,8 @@ EnvironmentProtocolPlan _normalizeProtocolPlan(
     clientProtocol: edited.clientProtocol,
     clientAdapterPolicy: adapter,
     destination: destination,
-    egressPolicy: edited.egressPolicy,
-    transformPolicy: edited.transformPolicy,
+    egressProfile: edited.egressProfile,
+    transforms: edited.transforms,
     pluginBindings: bindings,
   );
   return EnvironmentProtocolPlan(
@@ -1090,8 +1094,8 @@ EnvironmentProtocolPlan _normalizeProtocolPlan(
     clientProtocol: candidate.clientProtocol,
     clientAdapterPolicy: candidate.clientAdapterPolicy,
     destination: candidate.destination,
-    egressPolicy: candidate.egressPolicy,
-    transformPolicy: candidate.transformPolicy,
+    egressProfile: candidate.egressProfile,
+    transforms: candidate.transforms,
     pluginBindings: candidate.pluginBindings,
   );
 }
@@ -1234,6 +1238,13 @@ bool _sameAccountPolicy(RouteAccountPolicy left, RouteAccountPolicy right) =>
     _sameRevisions(left.accountRevisions, right.accountRevisions);
 
 bool _sameStrings(List<String> left, List<String> right) =>
+    left.length == right.length &&
+    left.indexed.every((entry) => entry.$2 == right[entry.$1]);
+
+bool _sameTransformRevisions(
+  List<CodeLibraryTransformRevision> left,
+  List<CodeLibraryTransformRevision> right,
+) =>
     left.length == right.length &&
     left.indexed.every((entry) => entry.$2 == right[entry.$1]);
 

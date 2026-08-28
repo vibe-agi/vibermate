@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 
+	"github.com/vibe-agi/vibermate/internal/egressprofile"
 	"github.com/vibe-agi/vibermate/internal/originidentity"
 	"github.com/vibe-agi/vibermate/internal/protocolspec"
 	"github.com/vibe-agi/vibermate/internal/wireprofile"
@@ -140,7 +141,8 @@ func systemTransparentDefinition() (Environment, error) {
 				ClientAdapterPolicy: ClientAdapterPolicy{
 					ID: "adapter." + entry.planID, Revision: 1,
 				},
-				Destination: DestinationPlan{Kind: DestinationKindOriginal},
+				Destination:   DestinationPlan{Kind: DestinationKindOriginal},
+				EgressProfile: egressprofile.Direct(),
 			}},
 		})
 	}
@@ -370,8 +372,8 @@ func (snapshot EnvironmentSnapshot) ResolveRequest(
 		protocol:          cloneCompiledProtocol(protocol),
 		operation:         matches[0].operation,
 		destinationKind:   protocol.destinationKind,
-		egressPolicy:      protocol.egressPolicy,
-		transformProgram:  protocol.transformProgram,
+		egressProfile:     protocol.egressProfile,
+		transformPipeline: protocol.transformPipeline,
 		codecPlan:         codec,
 		wireProfile:       wireProfile,
 		upstreamRoute:     upstreamRoute,

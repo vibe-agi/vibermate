@@ -8,6 +8,7 @@ enum WorkbenchSection {
   environments('environments'),
   routes('routes'),
   network('network'),
+  codeLibrary('code_library'),
   settings('settings');
 
   const WorkbenchSection(this.wireName);

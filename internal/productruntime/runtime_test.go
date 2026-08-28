@@ -13,9 +13,11 @@ import (
 
 	"github.com/vibe-agi/vibermate/internal/captureassignment"
 	"github.com/vibe-agi/vibermate/internal/captureidentity"
+	"github.com/vibe-agi/vibermate/internal/egressprofile"
 	"github.com/vibe-agi/vibermate/internal/environment"
 	"github.com/vibe-agi/vibermate/internal/exchange"
 	"github.com/vibe-agi/vibermate/internal/hostcontract"
+	"github.com/vibe-agi/vibermate/internal/hostsecret"
 	"github.com/vibe-agi/vibermate/internal/offlinehold"
 	"github.com/vibe-agi/vibermate/internal/originidentity"
 	"github.com/vibe-agi/vibermate/internal/protocolspec"
@@ -123,6 +125,19 @@ func TestProductRuntimeStartsWithSystemTransparentAndShutsDown(t *testing.T) {
 	if stopped.State != RuntimeStateStopped || stopped.StoppedAt == nil ||
 		stopped.StopReasonCode != "" {
 		t.Fatalf("stopped status = %+v", stopped)
+	}
+}
+
+func TestProductRuntimeRequiresPersistentClientAnnotationSigning(t *testing.T) {
+	options := testOptions(t, hostcontract.Desktop(), &coordinatorDouble{})
+	options.Secrets = unavailableSecretStore{}
+	runtime, err := Start(context.Background(), options)
+	if err == nil {
+		shutdownRuntime(t, runtime)
+		t.Fatal("Start() error = nil, want unavailable client annotation signer")
+	}
+	if !errors.Is(err, secretstore.ErrReadOnly) {
+		t.Fatalf("Start() error = %v, want %v", err, secretstore.ErrReadOnly)
 	}
 }
 
@@ -405,9 +420,17 @@ func testOptions(t *testing.T, host hostcontract.Contract, coordinator offlineho
 
 func testOptionsWithPaths(t *testing.T, paths RuntimePaths, host hostcontract.Contract, coordinator offlinehold.RuntimeCoordinator) Options {
 	t.Helper()
+	factory, err := hostsecret.NewServerFileFactory(paths.DataDirectory())
+	if err != nil {
+		t.Fatal(err)
+	}
+	secrets, err := factory.Open(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
 	return Options{
 		Paths: paths, Host: host, OfflineHold: coordinator,
-		Secrets: unavailableSecretStore{}, Approvals: toolapproval.DefaultConfig(),
+		Secrets: secrets, Approvals: toolapproval.DefaultConfig(),
 		ExchangeHold: exchange.DefaultHoldPolicy(), Clock: SystemClock{},
 		InstanceIDs: NewCryptographicInstanceIDSource(), SecurityRandom: rand.Reader,
 		Lifecycle: LifecycleOptions{
@@ -452,6 +475,7 @@ func passthroughEnvironment(t *testing.T, id, rawOrigin string, protocol environ
 				ID: environment.ClientProtocolPlanID("plan." + id), Revision: 1, ClientProtocol: protocol,
 				ClientAdapterPolicy: environment.ClientAdapterPolicy{ID: "adapter." + id, Revision: 1},
 				Destination:         environment.DestinationPlan{Kind: environment.DestinationKindOriginal},
+				EgressProfile:       egressprofile.Direct(),
 			}},
 		}},
 	}

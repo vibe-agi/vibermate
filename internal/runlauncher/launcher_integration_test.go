@@ -12,6 +12,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"runtime"
 	"slices"
 	"strings"
 	"sync"
@@ -72,8 +73,15 @@ exit 7
 		},
 		expectedEnvironment: "work",
 		userLabel:           "alice",
-		recipe:              clientadapter.LaunchNodeEnvProxy,
-		recognition:         clientadapter.RecognitionVerified,
+		runtimeMetadata: &capturecontrol.ClientRuntimeMetadataInput{
+			LocalUserName:   "alice",
+			HomeDirectory:   "/Users/alice",
+			OperatingSystem: runtime.GOOS,
+			Architecture:    runtime.GOARCH,
+			TimeZone:        "Asia/Singapore",
+		},
+		recipe:      clientadapter.LaunchNodeEnvProxy,
+		recognition: clientadapter.RecognitionVerified,
 		adapter: &capturecontrol.ClientLaunchAdapterView{
 			ClientAdapterView: capturecontrol.ClientAdapterView{
 				ID:              "claude-code",
@@ -111,6 +119,8 @@ exit 7
 		BaseEnvironment: []string{
 			"PATH=/usr/bin:/bin",
 			"USER=  alice  ",
+			"HOME=/Users/alice",
+			"TZ=Asia/Singapore",
 			"LAUNCH_TEST_OUTPUT=" + outputPath,
 			"ANTHROPIC_API_KEY=ambient-api-key",
 			"CLAUDE_CODE_OAUTH_TOKEN=ambient-oauth-token",
@@ -469,6 +479,7 @@ type controlFixture struct {
 	expectedCommand     []string
 	expectedEnvironment string
 	userLabel           string
+	runtimeMetadata     *capturecontrol.ClientRuntimeMetadataInput
 	recipe              clientadapter.LaunchRecipe
 	recognition         clientadapter.Recognition
 	adapter             *capturecontrol.ClientLaunchAdapterView
@@ -505,9 +516,17 @@ func (fixture *controlFixture) ServeHTTP(
 		if input.CWD != fixture.workspace ||
 			input.EnvironmentID != expectedEnvironment ||
 			input.ExecutablePath != fixture.executable ||
-			input.LocalUserLabel != fixture.userLabel ||
+			input.RuntimeMetadata.LocalUserName != fixture.userLabel ||
 			!slices.Equal(input.Command, fixture.expectedCommand) {
 			fixture.t.Errorf("create request = %+v", input)
+		}
+		if fixture.runtimeMetadata != nil {
+			got, want := input.RuntimeMetadata, *fixture.runtimeMetadata
+			if got.LocalUserName != want.LocalUserName || got.HomeDirectory != want.HomeDirectory ||
+				got.OperatingSystem != want.OperatingSystem || got.OperatingSystemVersion == "" ||
+				got.Architecture != want.Architecture || got.TimeZone != want.TimeZone {
+				fixture.t.Errorf("runtime metadata = %+v, want %+v with an OS version", got, want)
+			}
 		}
 		fixture.createCalls++
 		grantExecutable := fixture.grantExecutable

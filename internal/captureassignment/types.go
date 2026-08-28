@@ -22,16 +22,17 @@ const (
 )
 
 var (
-	ErrInvalidAssignment     = errors.New("Capture Environment assignment is invalid")
-	ErrAssignmentNotFound    = errors.New("Capture Environment assignment is not configured")
-	ErrAssignmentConflict    = errors.New("Capture Environment assignment revision conflict")
-	ErrAssignmentUnavailable = errors.New("Capture Environment assignment is unavailable")
-	ErrRuntimeStopping       = errors.New("Capture Environment assignment runtime is stopping")
-	ErrOperationInProgress   = errors.New("Capture Environment assignment operation is in progress")
-	ErrConnectionNotFound    = errors.New("Capture connection is not registered")
-	ErrReconnectUnavailable  = errors.New("Capture connection cannot be closed safely")
-	ErrWriteNotCommitted     = errors.New("Capture Environment assignment write was not committed")
-	ErrCommitOutcomeUnknown  = errors.New("Capture Environment assignment commit outcome is unknown")
+	ErrInvalidAssignment      = errors.New("Capture Environment assignment is invalid")
+	ErrAssignmentNotFound     = errors.New("Capture Environment assignment is not configured")
+	ErrAssignmentConflict     = errors.New("Capture Environment assignment revision conflict")
+	ErrAssignmentIncompatible = errors.New("Capture Environment assignment is incompatible with an open connection")
+	ErrAssignmentUnavailable  = errors.New("Capture Environment assignment is unavailable")
+	ErrRuntimeStopping        = errors.New("Capture Environment assignment runtime is stopping")
+	ErrOperationInProgress    = errors.New("Capture Environment assignment operation is in progress")
+	ErrConnectionNotFound     = errors.New("Capture connection is not registered")
+	ErrReconnectUnavailable   = errors.New("Capture connection cannot be closed safely")
+	ErrWriteNotCommitted      = errors.New("Capture Environment assignment write was not committed")
+	ErrCommitOutcomeUnknown   = errors.New("Capture Environment assignment commit outcome is unknown")
 )
 
 type Revision uint64
@@ -54,18 +55,23 @@ func (source Source) valid() bool {
 }
 
 type Assignment struct {
-	Capture         captureidentity.Reference
-	EnvironmentID   environment.EnvironmentID
-	Revision        Revision
-	Source          Source
-	LaunchAuthority environment.LaunchAuthorityBoundary
-	ClientTarget    clienttarget.Target
-	UpdatedAt       time.Time
+	Capture             captureidentity.Reference
+	EnvironmentID       environment.EnvironmentID
+	EnvironmentRevision environment.Revision
+	EnvironmentDigest   environment.CandidateDigest
+	Revision            Revision
+	Source              Source
+	LaunchAuthority     environment.LaunchAuthorityBoundary
+	ClientTarget        clienttarget.Target
+	UpdatedAt           time.Time
 }
 
 func (assignment Assignment) Validate() error {
 	if assignment.Capture.Validate() != nil || assignment.EnvironmentID == "" ||
-		assignment.Revision != 1 ||
+		assignment.EnvironmentRevision == 0 ||
+		assignment.EnvironmentRevision > environment.MaxRevision ||
+		assignment.EnvironmentDigest == (environment.CandidateDigest{}) ||
+		assignment.Revision == 0 || assignment.Revision > MaxRevision ||
 		!assignment.Source.valid() || assignment.LaunchAuthority.Validate() != nil ||
 		assignment.UpdatedAt.IsZero() ||
 		!assignment.UpdatedAt.Equal(assignment.UpdatedAt.UTC().Truncate(time.Millisecond)) {
@@ -74,7 +80,10 @@ func (assignment Assignment) Validate() error {
 	if _, err := environment.NewEnvironmentID(assignment.EnvironmentID.String()); err != nil {
 		return ErrInvalidAssignment
 	}
-	if assignment.EnvironmentID != assignment.LaunchAuthority.InitialEnvironmentID() {
+	if assignment.EnvironmentID != assignment.LaunchAuthority.InitialEnvironmentID() ||
+		assignment.EnvironmentRevision < assignment.LaunchAuthority.InitialEnvironmentRevision() ||
+		(assignment.EnvironmentRevision == assignment.LaunchAuthority.InitialEnvironmentRevision() &&
+			assignment.EnvironmentDigest != assignment.LaunchAuthority.InitialEnvironmentDigest()) {
 		return ErrInvalidAssignment
 	}
 	if assignment.ClientTarget.Available() {
@@ -133,6 +142,7 @@ type Controller interface {
 		CreateCommand,
 	) (Assignment, environment.LaunchEnvironmentPolicy, error)
 	Resolve(context.Context, captureidentity.Reference) (Assignment, error)
+	ApplyLatest(context.Context, captureidentity.Reference, Revision) (Assignment, error)
 }
 
 type Clock interface{ Now() time.Time }

@@ -15,9 +15,12 @@ import (
 	"github.com/vibe-agi/vibermate/internal/captureadmission"
 	"github.com/vibe-agi/vibermate/internal/captureassignment"
 	"github.com/vibe-agi/vibermate/internal/capturerun"
+	"github.com/vibe-agi/vibermate/internal/clientannotation"
+	"github.com/vibe-agi/vibermate/internal/codelibrary"
 	"github.com/vibe-agi/vibermate/internal/connectionevent"
 	"github.com/vibe-agi/vibermate/internal/connectionpolicy"
 	"github.com/vibe-agi/vibermate/internal/egressaudit"
+	"github.com/vibe-agi/vibermate/internal/egressprofile"
 	"github.com/vibe-agi/vibermate/internal/environment"
 	"github.com/vibe-agi/vibermate/internal/evidencearchive"
 	"github.com/vibe-agi/vibermate/internal/exchange"
@@ -57,6 +60,8 @@ type Runtime struct {
 	egressCompletion   *runtimeEgressRepository
 	endpoints          *upstreamendpoint.Manager
 	accounts           *provideraccount.Manager
+	codeLibrary        *codelibrary.Manager
+	egressProfiles     *egressprofile.Manager
 	runtimeUsers       *runtimeuser.Manager
 	approvals          approvalRuntime
 	connectionRules    *connectionpolicy.Manager
@@ -196,6 +201,28 @@ func startWithBuilders(
 	}
 
 	securityRandom := newSynchronizedReader(options.SecurityRandom)
+	clientAnnotations, err := clientannotation.Open(ctx, options.Secrets, securityRandom)
+	if err != nil {
+		return fail("client annotation signing", err)
+	}
+	cleanups.register("client annotation signer", func(context.Context) error {
+		clientAnnotations.Destroy()
+		return nil
+	})
+	codeLibrary, err := codelibrary.NewManager(
+		storageResult.store.CodeLibraryRepository(),
+		options.Clock,
+	)
+	if err != nil {
+		return fail("Code Library", err)
+	}
+	egressProfiles, err := egressprofile.NewManager(
+		storageResult.store.EgressProfileRepository(),
+		options.Clock,
+	)
+	if err != nil {
+		return fail("egress profiles", err)
+	}
 	runtimeUsers, err := runtimeuser.New(runtimeuser.Options{
 		Repository:      storageResult.store.RuntimeUserRepository(),
 		Clock:           options.Clock,
@@ -514,16 +541,19 @@ func startWithBuilders(
 	pending.register("original-origin transport", original.Shutdown)
 
 	exchanges, err := buildExchange(exchangeBuildRequest{
-		ownerContext:  ownerContext,
-		actions:       options.OfflineHold,
-		accounts:      accounts,
-		provider:      provider,
-		toolDecisions: toolDecisions,
-		activities:    activities,
-		identities:    storageResult.store.ConversationIdentityRepository(),
-		contents:      contents,
-		clock:         options.Clock,
-		hold:          options.ExchangeHold,
+		ownerContext:             ownerContext,
+		actions:                  options.OfflineHold,
+		accounts:                 accounts,
+		provider:                 provider,
+		toolDecisions:            toolDecisions,
+		activities:               activities,
+		identities:               storageResult.store.ConversationIdentityRepository(),
+		contents:                 contents,
+		clock:                    options.Clock,
+		hold:                     options.ExchangeHold,
+		annotations:              clientAnnotations,
+		rawEvidence:              rawEvidence,
+		reportRawEvidenceFailure: runtimeEgress.ReportRawEvidenceFailure,
 	})
 	if err != nil || exchanges == nil {
 		buildErr := err
@@ -682,6 +712,8 @@ func startWithBuilders(
 		egressCompletion:   runtimeEgress,
 		endpoints:          endpoints,
 		accounts:           accounts,
+		codeLibrary:        codeLibrary,
+		egressProfiles:     egressProfiles,
 		runtimeUsers:       runtimeUsers,
 		approvals:          approvals,
 		connectionRules:    connectionRules,
@@ -816,6 +848,16 @@ func (r *Runtime) EgressAttempts() egressaudit.Reader {
 // through this interface.
 func (r *Runtime) ProviderAccounts() provideraccount.Controller {
 	return r.accounts
+}
+
+// CodeLibrary returns the published immutable Transform revision authority.
+func (r *Runtime) CodeLibrary() codelibrary.Controller {
+	return r.codeLibrary
+}
+
+// EgressProfiles returns the reusable immutable network-exit authority.
+func (r *Runtime) EgressProfiles() egressprofile.Controller {
+	return r.egressProfiles
 }
 
 // UpstreamEndpoints returns the reusable upstream authority. Every managed

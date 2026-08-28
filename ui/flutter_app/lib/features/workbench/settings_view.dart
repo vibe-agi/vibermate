@@ -10,6 +10,7 @@ import '../../core/i18n/app_copy.dart';
 import 'offline_hold_view.dart';
 import '../../core/api/control_models.dart';
 import 'deletion_dialog.dart';
+import 'egress_profile_editor.dart';
 import 'workbench_controller.dart';
 
 final class SettingsView extends StatelessWidget {
@@ -22,7 +23,7 @@ final class SettingsView extends StatelessWidget {
   Widget build(BuildContext context) {
     final server = controller.serverManagement;
     return DefaultTabController(
-      length: server ? 2 : 1,
+      length: server ? 3 : 2,
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
@@ -32,45 +33,242 @@ final class SettingsView extends StatelessWidget {
               server ? 'settings.subtitle.server' : 'settings.subtitle',
             ),
           ),
-          if (server)
-            Material(
-              color: context.viberColors.panel,
-              child: Align(
-                alignment: Alignment.centerLeft,
-                child: TabBar(
-                  isScrollable: true,
-                  tabAlignment: TabAlignment.start,
-                  dividerHeight: 0,
-                  tabs: [
-                    Tab(
-                      key: const Key('settings-tab-general'),
-                      text: copy('settings.tab.general'),
-                    ),
+          Material(
+            color: context.viberColors.panel,
+            child: Align(
+              alignment: Alignment.centerLeft,
+              child: TabBar(
+                isScrollable: true,
+                tabAlignment: TabAlignment.start,
+                dividerHeight: 0,
+                tabs: [
+                  Tab(
+                    key: const Key('settings-tab-general'),
+                    text: copy('settings.tab.general'),
+                  ),
+                  if (server)
                     Tab(
                       key: const Key('settings-tab-users'),
                       text: copy('settings.tab.users'),
                     ),
-                  ],
-                ),
+                  Tab(
+                    key: const Key('settings-tab-proxy'),
+                    text: copy('settings.tab.proxy'),
+                  ),
+                ],
               ),
             ),
+          ),
           const Divider(height: 1),
           Expanded(
-            child: server
-                ? TabBarView(
-                    children: [
-                      _GeneralSettingsPane(controller: controller, copy: copy),
-                      _RuntimeUsersSettingsPane(
-                        controller: controller,
-                        copy: copy,
-                      ),
-                    ],
-                  )
-                : _GeneralSettingsPane(controller: controller, copy: copy),
+            child: TabBarView(
+              children: [
+                _GeneralSettingsPane(controller: controller, copy: copy),
+                if (server)
+                  _RuntimeUsersSettingsPane(controller: controller, copy: copy),
+                _EgressProfilesSettingsPane(controller: controller, copy: copy),
+              ],
+            ),
           ),
         ],
       ),
     );
+  }
+}
+
+final class _EgressProfilesSettingsPane extends StatefulWidget {
+  const _EgressProfilesSettingsPane({
+    required this.controller,
+    required this.copy,
+  });
+
+  final WorkbenchController controller;
+  final AppCopy copy;
+
+  @override
+  State<_EgressProfilesSettingsPane> createState() =>
+      _EgressProfilesSettingsPaneState();
+}
+
+final class _EgressProfilesSettingsPaneState
+    extends State<_EgressProfilesSettingsPane> {
+  List<EgressProfileRevision> _profiles = const [];
+  bool _loading = true;
+  bool _saving = false;
+  bool _failed = false;
+
+  AppCopy get copy => widget.copy;
+
+  @override
+  void initState() {
+    super.initState();
+    unawaited(_load());
+  }
+
+  Future<void> _load() async {
+    setState(() {
+      _loading = true;
+      _failed = false;
+    });
+    try {
+      final catalog = await widget.controller.egressProfiles();
+      if (!mounted) return;
+      final profiles = [...catalog.items]
+        ..sort((left, right) => left.displayName.compareTo(right.displayName));
+      setState(() {
+        _profiles = profiles;
+        _loading = false;
+      });
+    } on Object {
+      if (!mounted) return;
+      setState(() {
+        _loading = false;
+        _failed = true;
+      });
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) => ListView(
+    key: const Key('egress-profiles-settings-scroll'),
+    padding: const EdgeInsets.fromLTRB(14, 12, 14, 20),
+    children: [
+      Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  copy('settings.egress.title'),
+                  style: Theme.of(context).textTheme.titleMedium,
+                ),
+                const SizedBox(height: 2),
+                Text(
+                  copy('settings.egress.detail'),
+                  style: Theme.of(context).textTheme.bodySmall,
+                ),
+              ],
+            ),
+          ),
+          const SizedBox(width: 10),
+          FilledButton.icon(
+            key: const Key('egress-profile-add'),
+            onPressed: _saving ? null : () => unawaited(_edit()),
+            icon: const Icon(Icons.add, size: 15),
+            label: Text(copy('settings.egress.add')),
+          ),
+        ],
+      ),
+      const SizedBox(height: 12),
+      if (_loading)
+        const Center(
+          child: Padding(
+            padding: EdgeInsets.all(28),
+            child: CircularProgressIndicator(),
+          ),
+        )
+      else if (_failed)
+        Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            InlineNotice(
+              message: copy('settings.egress.load_failed'),
+              error: true,
+            ),
+            const SizedBox(height: 8),
+            OutlinedButton.icon(
+              onPressed: _load,
+              icon: const Icon(Icons.refresh, size: 15),
+              label: Text(copy('common.retry')),
+            ),
+          ],
+        )
+      else
+        Container(
+          clipBehavior: Clip.antiAlias,
+          decoration: BoxDecoration(
+            border: Border.all(color: context.viberColors.divider),
+            borderRadius: ViberMetrics.surfaceRadius,
+          ),
+          child: Column(
+            children: [
+              for (var index = 0; index < _profiles.length; index++) ...[
+                if (index > 0) const Divider(height: 1),
+                _profileRow(_profiles[index]),
+              ],
+            ],
+          ),
+        ),
+    ],
+  );
+
+  Widget _profileRow(EgressProfileRevision profile) {
+    final builtIn = profile.id == EgressProfileRevision.direct.id;
+    return ListTile(
+      key: Key('egress-profile-row-${profile.id}'),
+      dense: true,
+      leading: Icon(
+        builtIn ? Icons.language_rounded : Icons.alt_route_rounded,
+        size: 17,
+        color: context.viberColors.route,
+      ),
+      title: Text(
+        egressProfileSummary(copy, profile),
+        maxLines: 1,
+        overflow: TextOverflow.ellipsis,
+      ),
+      subtitle: builtIn
+          ? Text(copy('settings.egress.builtin'))
+          : Text(
+              egressPolicySummary(copy, profile.policy),
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+            ),
+      trailing: builtIn
+          ? null
+          : IconButton(
+              key: Key('egress-profile-edit-${profile.id}'),
+              onPressed: _saving ? null : () => unawaited(_edit(profile)),
+              tooltip: copy('common.edit'),
+              icon: const Icon(Icons.edit_outlined, size: 17),
+            ),
+    );
+  }
+
+  Future<void> _edit([EgressProfileRevision? profile]) async {
+    final draft = await showEgressProfileEditor(
+      context: context,
+      copy: copy,
+      initial: profile,
+    );
+    if (draft == null || !mounted) return;
+    setState(() => _saving = true);
+    try {
+      if (profile == null) {
+        await widget.controller.createEgressProfile(
+          displayName: draft.displayName,
+          policy: draft.policy,
+        );
+      } else {
+        await widget.controller.publishEgressProfile(
+          id: profile.id,
+          expectedRevision: profile.revision,
+          displayName: draft.displayName,
+          policy: draft.policy,
+        );
+      }
+      if (!mounted) return;
+      setState(() => _saving = false);
+      await _load();
+    } on Object {
+      if (!mounted) return;
+      setState(() {
+        _saving = false;
+        _failed = true;
+      });
+    }
   }
 }
 

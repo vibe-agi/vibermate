@@ -14,6 +14,7 @@ import (
 	"github.com/vibe-agi/vibermate/internal/captureadmission"
 	"github.com/vibe-agi/vibermate/internal/captureassignment"
 	"github.com/vibe-agi/vibermate/internal/capturerun"
+	"github.com/vibe-agi/vibermate/internal/clientannotation"
 	"github.com/vibe-agi/vibermate/internal/connectionevent"
 	"github.com/vibe-agi/vibermate/internal/connectionpolicy"
 	"github.com/vibe-agi/vibermate/internal/egressaudit"
@@ -521,16 +522,19 @@ func buildRawEvidence(
 }
 
 type exchangeBuildRequest struct {
-	ownerContext  context.Context
-	actions       offlinehold.ActionAdmission
-	accounts      exchange.AccountLeaseAuthority
-	provider      exchange.Provider
-	toolDecisions exchange.ToolDecisionGate
-	activities    activity.Recorder
-	identities    activity.ConversationIdentityRepository
-	contents      exchangecontent.Recorder
-	clock         Clock
-	hold          exchange.HoldPolicy
+	ownerContext             context.Context
+	actions                  offlinehold.ActionAdmission
+	accounts                 exchange.AccountLeaseAuthority
+	provider                 exchange.Provider
+	toolDecisions            exchange.ToolDecisionGate
+	activities               activity.Recorder
+	identities               activity.ConversationIdentityRepository
+	contents                 exchangecontent.Recorder
+	clock                    Clock
+	hold                     exchange.HoldPolicy
+	annotations              *clientannotation.Signer
+	rawEvidence              rawevidence.Observer
+	reportRawEvidenceFailure func(error)
 }
 
 type exchangeRuntime interface {
@@ -841,7 +845,7 @@ func buildExchange(
 	request exchangeBuildRequest,
 ) (exchangeRuntime, error) {
 	if request.activities == nil || request.identities == nil ||
-		request.contents == nil || request.clock == nil {
+		request.contents == nil || request.clock == nil || request.annotations == nil {
 		return nil, errors.New("Exchange evidence dependencies are incomplete")
 	}
 	anthropicPath, err := anthropicchat.NewProtocolPath(
@@ -892,9 +896,13 @@ func buildExchange(
 			recorder: request.contents,
 			clock:    request.clock,
 		},
-		ObservationTimeout: 2 * time.Second,
-		Hold:               request.hold,
-		Stream:             exchange.DefaultStreamBudgets(),
+		ObservationTimeout:       2 * time.Second,
+		Hold:                     request.hold,
+		Stream:                   exchange.DefaultStreamBudgets(),
+		ClientAnnotations:        request.annotations,
+		Now:                      request.clock.Now,
+		RawEvidence:              request.rawEvidence,
+		ReportRawEvidenceFailure: request.reportRawEvidenceFailure,
 	})
 }
 

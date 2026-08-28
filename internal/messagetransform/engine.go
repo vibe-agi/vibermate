@@ -20,16 +20,14 @@ import (
 	"unicode/utf8"
 
 	"github.com/dop251/goja"
+	"github.com/vibe-agi/vibermate/internal/clientannotation"
 )
 
 var (
 	ErrInvalidPolicy   = errors.New("message transform policy is invalid")
 	ErrExecutionFailed = errors.New("message transform execution failed")
-	ErrExecutionLimit  = errors.New("message transform execution limit exceeded")
 	ErrInvalidOutput   = errors.New("message transform output is invalid")
 )
-
-var errExecutionDeadline = errors.New("JavaScript execution deadline exceeded")
 
 // Policy is deliberately source-only. Compiled programs are rebuilt with an
 // immutable Environment revision and are never part of its persisted form.
@@ -57,7 +55,6 @@ type Limits struct {
 	MaximumContextDepth     int
 	MaximumContextValues    int
 	MaximumCallStackDepth   int
-	ExecutionTimeout        time.Duration
 }
 
 func DefaultLimits() Limits {
@@ -71,7 +68,6 @@ func DefaultLimits() Limits {
 		MaximumContextDepth:     16,
 		MaximumContextValues:    1024,
 		MaximumCallStackDepth:   256,
-		ExecutionTimeout:        50 * time.Millisecond,
 	}
 }
 
@@ -84,8 +80,7 @@ func (limits Limits) validate() error {
 		limits.MaximumContextBytes <= 0 ||
 		limits.MaximumContextDepth <= 0 ||
 		limits.MaximumContextValues <= 0 ||
-		limits.MaximumCallStackDepth <= 0 ||
-		limits.ExecutionTimeout <= 0 {
+		limits.MaximumCallStackDepth <= 0 {
 		return fmt.Errorf("%w: limits must be positive", ErrInvalidPolicy)
 	}
 	return nil
@@ -115,6 +110,140 @@ func Compile(policy Policy, limits Limits) (Program, error) {
 	return Program{request: request, response: response, limits: limits}, nil
 }
 
+// Pipeline composes independent transforms. Requests run in declaration order;
+// responses unwind in reverse order so each transform sees the response to the
+// request representation it produced.
+type Pipeline struct {
+	programs []Program
+}
+
+func CompilePipeline(policies []Policy, limits Limits) (Pipeline, error) {
+	programs := make([]Program, len(policies))
+	for index, policy := range policies {
+		program, err := Compile(policy, limits)
+		if err != nil {
+			return Pipeline{}, fmt.Errorf("transform %d: %w", index+1, err)
+		}
+		programs[index] = program
+	}
+	return Pipeline{programs: programs}, nil
+}
+
+type PipelineTurn struct {
+	turns       []*Turn
+	annotations *clientannotation.Signer
+}
+
+func (pipeline Pipeline) NewTurn() *PipelineTurn {
+	return pipeline.newTurn(runtimeMetadataJSON{}, nil)
+}
+
+func (pipeline Pipeline) NewTurnWithMetadata(metadata RuntimeMetadata) (*PipelineTurn, error) {
+	return pipeline.NewTurnWithOptions(TurnOptions{Metadata: metadata})
+}
+
+type TurnOptions struct {
+	Metadata    RuntimeMetadata
+	Annotations *clientannotation.Signer
+}
+
+func (pipeline Pipeline) NewTurnWithOptions(options TurnOptions) (*PipelineTurn, error) {
+	encoded, err := options.Metadata.encode()
+	if err != nil {
+		return nil, err
+	}
+	return pipeline.newTurn(encoded, options.Annotations), nil
+}
+
+func (pipeline Pipeline) newTurn(
+	metadata runtimeMetadataJSON,
+	annotations *clientannotation.Signer,
+) *PipelineTurn {
+	turns := make([]*Turn, len(pipeline.programs))
+	for index, program := range pipeline.programs {
+		turns[index] = program.newTurn(metadata, annotations)
+	}
+	return &PipelineTurn{turns: turns, annotations: annotations}
+}
+
+func (turn *PipelineTurn) HasRequest() bool {
+	if turn == nil {
+		return false
+	}
+	for _, item := range turn.turns {
+		if item.HasRequest() {
+			return true
+		}
+	}
+	return false
+}
+
+func (turn *PipelineTurn) HasResponse() bool {
+	if turn == nil {
+		return false
+	}
+	for _, item := range turn.turns {
+		if item.HasResponse() {
+			return true
+		}
+	}
+	return false
+}
+
+func (turn *PipelineTurn) ApplyRequest(
+	ctx context.Context,
+	input RequestMessage,
+) (RequestMessage, error) {
+	if turn == nil {
+		return RequestMessage{}, fmt.Errorf("%w: Pipeline Turn is nil", ErrExecutionFailed)
+	}
+	output := cloneRequest(input)
+	if turn.annotations != nil {
+		cleaned, _, err := turn.StripRequestAnnotations(output.Body)
+		if err != nil {
+			return RequestMessage{}, err
+		}
+		output.Body = cleaned
+	}
+	var err error
+	for _, item := range turn.turns {
+		output, err = item.ApplyRequest(ctx, output)
+		if err != nil {
+			return RequestMessage{}, err
+		}
+	}
+	return output, nil
+}
+
+func (turn *PipelineTurn) StripRequestAnnotations(body []byte) ([]byte, bool, error) {
+	if turn == nil || turn.annotations == nil {
+		return bytes.Clone(body), false, nil
+	}
+	cleaned, changed, err := turn.annotations.StripJSON(body)
+	if err != nil {
+		return nil, false, fmt.Errorf("%w: clean client annotations", ErrExecutionFailed)
+	}
+	return cleaned, changed, nil
+}
+
+func (turn *PipelineTurn) ApplyResponse(
+	ctx context.Context,
+	input ResponseMessage,
+) (ResponseMessage, error) {
+	if turn == nil {
+		return ResponseMessage{}, fmt.Errorf("%w: Pipeline Turn is nil", ErrExecutionFailed)
+	}
+	output := cloneResponse(input)
+	var err error
+	for index := len(turn.turns) - 1; index >= 0; index-- {
+		output, err = turn.turns[index].ApplyResponse(ctx, output)
+		if err != nil {
+			return ResponseMessage{}, err
+		}
+	}
+	return output, nil
+}
+
 func compileStage(stage, parameter, source string, limits Limits) (*goja.Program, error) {
 	if source == "" {
 		return nil, nil
@@ -122,7 +251,7 @@ func compileStage(stage, parameter, source string, limits Limits) (*goja.Program
 	if len(source) > limits.MaximumScriptBytes || !utf8.ValidString(source) || hasForbiddenSourceControl(source) {
 		return nil, fmt.Errorf("%w: %s JavaScript source is not bounded UTF-8", ErrInvalidPolicy, stage)
 	}
-	wrapper := "(function(" + parameter + ", context) {\n\"use strict\";\n" + source + "\n})"
+	wrapper := "(function(" + parameter + ", context, runtime) {\n\"use strict\";\n" + source + "\n})"
 	program, err := goja.Compile("vibermate-"+stage+"-transform.js", wrapper, true)
 	if err != nil {
 		return nil, fmt.Errorf("%w: compile %s JavaScript: %v", ErrInvalidPolicy, stage, err)
@@ -155,6 +284,91 @@ type ResponseMessage struct {
 	Body       []byte
 }
 
+// RuntimeMetadata is launcher-observed context exposed to JavaScript as a
+// fresh snapshot for each stage. It carries no filesystem, process, network,
+// clock, credential, or other ambient authority.
+type RuntimeMetadata struct {
+	LocalUserName          string
+	HomeDirectory          string
+	OperatingSystem        string
+	OperatingSystemVersion string
+	Architecture           string
+	TimeZone               string
+	WorkspaceRoot          string
+	WorkspaceLabel         string
+	TurnStartedAt          time.Time
+}
+
+type runtimeMetadataJSON struct {
+	User struct {
+		Name          string `json:"name"`
+		HomeDirectory string `json:"homeDirectory"`
+	} `json:"user"`
+	Device struct {
+		OperatingSystem        string `json:"operatingSystem"`
+		OperatingSystemVersion string `json:"operatingSystemVersion"`
+		Architecture           string `json:"architecture"`
+		TimeZone               string `json:"timeZone"`
+	} `json:"device"`
+	Workspace struct {
+		Root  string `json:"root"`
+		Label string `json:"label"`
+	} `json:"workspace"`
+	Turn struct {
+		StartedAt string `json:"startedAt"`
+	} `json:"turn"`
+}
+
+func (metadata RuntimeMetadata) encode() (runtimeMetadataJSON, error) {
+	values := []struct {
+		name  string
+		value string
+		limit int
+	}{
+		{"local user name", metadata.LocalUserName, 128},
+		{"home directory", metadata.HomeDirectory, 4096},
+		{"operating system", metadata.OperatingSystem, 64},
+		{"operating system version", metadata.OperatingSystemVersion, 256},
+		{"architecture", metadata.Architecture, 64},
+		{"time zone", metadata.TimeZone, 128},
+		{"workspace root", metadata.WorkspaceRoot, 4096},
+		{"workspace label", metadata.WorkspaceLabel, 256},
+	}
+	for _, item := range values {
+		if !validMetadataText(item.value, item.limit) {
+			return runtimeMetadataJSON{}, fmt.Errorf("%w: %s is invalid", ErrExecutionFailed, item.name)
+		}
+	}
+	var encoded runtimeMetadataJSON
+	encoded.User.Name = metadata.LocalUserName
+	encoded.User.HomeDirectory = metadata.HomeDirectory
+	encoded.Device.OperatingSystem = metadata.OperatingSystem
+	encoded.Device.OperatingSystemVersion = metadata.OperatingSystemVersion
+	encoded.Device.Architecture = metadata.Architecture
+	encoded.Device.TimeZone = metadata.TimeZone
+	encoded.Workspace.Root = metadata.WorkspaceRoot
+	encoded.Workspace.Label = metadata.WorkspaceLabel
+	if !metadata.TurnStartedAt.IsZero() {
+		if metadata.TurnStartedAt.Year() < 1 || metadata.TurnStartedAt.Year() > 9999 {
+			return runtimeMetadataJSON{}, fmt.Errorf("%w: Turn start time is invalid", ErrExecutionFailed)
+		}
+		encoded.Turn.StartedAt = metadata.TurnStartedAt.UTC().Format(time.RFC3339Nano)
+	}
+	return encoded, nil
+}
+
+func validMetadataText(value string, maximumBytes int) bool {
+	if len(value) > maximumBytes || !utf8.ValidString(value) || strings.TrimSpace(value) != value {
+		return false
+	}
+	for _, character := range value {
+		if unicode.IsControl(character) {
+			return false
+		}
+	}
+	return true
+}
+
 type ContextSnapshot struct {
 	encoded []byte
 }
@@ -167,7 +381,9 @@ func (snapshot ContextSnapshot) clone() []byte {
 }
 
 type Turn struct {
-	program Program
+	program     Program
+	metadata    []byte
+	annotations *clientannotation.Signer
 
 	mu      sync.Mutex
 	context []byte
@@ -186,11 +402,24 @@ func (turn *Turn) HasResponse() bool {
 }
 
 func (program Program) NewTurn() *Turn {
-	return &Turn{program: program, context: []byte("{}")}
+	return program.newTurn(runtimeMetadataJSON{}, nil)
+}
+
+func (program Program) newTurn(
+	metadata runtimeMetadataJSON,
+	annotations *clientannotation.Signer,
+) *Turn {
+	encoded, _ := json.Marshal(metadata)
+	return &Turn{
+		program: program, context: []byte("{}"), metadata: encoded,
+		annotations: annotations,
+	}
 }
 
 func (program Program) NewTurnWithContext(snapshot ContextSnapshot) *Turn {
-	return &Turn{program: program, context: snapshot.clone()}
+	turn := program.newTurn(runtimeMetadataJSON{}, nil)
+	turn.context = snapshot.clone()
+	return turn
 }
 
 func (turn *Turn) ContextSnapshot() ContextSnapshot {
@@ -329,6 +558,13 @@ func (turn *Turn) apply(
 	if err != nil {
 		return scriptMessage{}, fmt.Errorf("%w: restore Turn Context", ErrExecutionFailed)
 	}
+	runtimeValue, err := parseJSON(runtime, turn.metadata)
+	if err != nil {
+		return scriptMessage{}, fmt.Errorf("%w: restore Runtime Metadata", ErrExecutionFailed)
+	}
+	if err := installRuntimeCapabilities(runtime, runtimeValue, turn.annotations); err != nil {
+		return scriptMessage{}, fmt.Errorf("%w: install Runtime capabilities", ErrExecutionFailed)
+	}
 
 	functionValue, err := runtime.RunProgram(program)
 	if err != nil {
@@ -341,11 +577,7 @@ func (turn *Turn) apply(
 	stopContext := context.AfterFunc(ctx, func() {
 		runtime.Interrupt(ctx.Err())
 	})
-	timer := time.AfterFunc(turn.program.limits.ExecutionTimeout, func() {
-		runtime.Interrupt(errExecutionDeadline)
-	})
-	_, callErr := function(goja.Undefined(), messageValue, contextValue)
-	timer.Stop()
+	_, callErr := function(goja.Undefined(), messageValue, contextValue, runtimeValue)
 	stopContext()
 	if callErr != nil {
 		return scriptMessage{}, classifyRuntimeError(stage, callErr)
@@ -366,6 +598,30 @@ func (turn *Turn) apply(
 		turn.requestOutput = cloneScriptMessage(output)
 	}
 	return output, nil
+}
+
+func installRuntimeCapabilities(
+	runtime *goja.Runtime,
+	runtimeValue goja.Value,
+	annotations *clientannotation.Signer,
+) error {
+	object := runtimeValue.ToObject(runtime)
+	annotationObject := runtime.NewObject()
+	if annotations != nil {
+		if err := annotationObject.Set(
+			"create",
+			func(kind, text string) (string, error) {
+				annotation, err := annotations.Issue(kind, text)
+				if err != nil {
+					return "", errors.New("client annotation is invalid")
+				}
+				return annotation, nil
+			},
+		); err != nil {
+			return err
+		}
+	}
+	return object.Set("annotations", annotationObject)
 }
 
 func removeAmbientCapabilities(runtime *goja.Runtime) {
@@ -393,9 +649,6 @@ func classifyRuntimeError(stage string, err error) error {
 	var interrupted *goja.InterruptedError
 	if errors.As(err, &interrupted) {
 		if cause, ok := interrupted.Value().(error); ok {
-			if errors.Is(cause, errExecutionDeadline) {
-				return fmt.Errorf("%w: %s JavaScript timed out", ErrExecutionLimit, stage)
-			}
 			return fmt.Errorf("%w: %s JavaScript interrupted: %v", ErrExecutionFailed, stage, cause)
 		}
 	}

@@ -15,6 +15,7 @@ import (
 	"github.com/vibe-agi/vibermate/internal/captureidentity"
 	"github.com/vibe-agi/vibermate/internal/clienttarget"
 	"github.com/vibe-agi/vibermate/internal/controlprincipal"
+	"github.com/vibe-agi/vibermate/internal/egressprofile"
 	"github.com/vibe-agi/vibermate/internal/environment"
 	"github.com/vibe-agi/vibermate/internal/localca"
 	"github.com/vibe-agi/vibermate/internal/manualcapture"
@@ -189,6 +190,20 @@ func (authority manualAuthorities) AssignAndResolve(
 	assignment.Capture = capture
 	assignment.EnvironmentID = environmentID
 	assignment.Source = captureassignment.SourceManualCreate
+	digest := assignment.LaunchAuthority.InitialEnvironmentDigest()
+	boundary, err := environment.NewLaunchAuthorityBoundaryFromScopes(
+		environmentID,
+		assignment.LaunchAuthority.InitialEnvironmentRevision(),
+		digest,
+		assignment.LaunchAuthority.ProtectedAuthorities(),
+		assignment.LaunchAuthority.ManagedCredentialAuthorities(),
+	)
+	if err != nil {
+		return CaptureAuthoritySet{}, err
+	}
+	assignment.EnvironmentRevision = boundary.InitialEnvironmentRevision()
+	assignment.EnvironmentDigest = digest
+	assignment.LaunchAuthority = boundary
 	return NewCaptureAuthoritySet(assignment)
 }
 
@@ -220,6 +235,8 @@ func captureAuthorityAssignmentForEnvironment(
 		t.Fatal(err)
 	}
 	assignment.EnvironmentID = environmentID
+	assignment.EnvironmentRevision = 1
+	assignment.EnvironmentDigest = digest
 	assignment.LaunchAuthority = boundary
 	return assignment
 }
@@ -486,6 +503,8 @@ func assignmentWithBoundaryRevision(
 		t.Fatal(err)
 	}
 	assignment.LaunchAuthority = boundary
+	assignment.EnvironmentRevision = revision
+	assignment.EnvironmentDigest = digest
 	return assignment
 }
 
@@ -696,6 +715,7 @@ func semanticEnvironmentSnapshot(t *testing.T) environment.EnvironmentSnapshot {
 				ClientProtocol:      environment.ClientProtocolAnthropicMessages,
 				ClientAdapterPolicy: environment.ClientAdapterPolicy{ID: "adapter.claude", Revision: 1},
 				Destination:         environment.DestinationPlan{Kind: environment.DestinationKindOriginal},
+				EgressProfile:       egressprofile.Direct(),
 			}},
 		}},
 	})

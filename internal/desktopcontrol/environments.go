@@ -2,11 +2,14 @@ package desktopcontrol
 
 import (
 	"bytes"
+	"context"
 	"crypto/sha256"
 	"net/http"
 	"strconv"
 
 	"github.com/vibe-agi/vibermate/internal/activity"
+	"github.com/vibe-agi/vibermate/internal/codelibrary"
+	"github.com/vibe-agi/vibermate/internal/egressprofile"
 	"github.com/vibe-agi/vibermate/internal/environment"
 )
 
@@ -103,6 +106,7 @@ func environmentControlEndpoints(
 		)
 		for planIndex, sourcePlan := range sourceEndpoint.ProtocolPlans {
 			plan := sourcePlan
+			plan.Transforms = controlCollection(sourcePlan.Transforms)
 			plan.PluginBindings = controlCollection(sourcePlan.PluginBindings)
 			if sourcePlan.Destination.Upstream != nil {
 				sourceUpstream := sourcePlan.Destination.Upstream
@@ -263,6 +267,12 @@ func (handler *Handler) putEnvironmentDraft(writer http.ResponseWriter, request 
 	}
 	fingerprint := sha256.Sum256(bytes.Join([][]byte{[]byte(request.Method), []byte(request.URL.Path), []byte(strconv.FormatUint(expectedBase, 10)), body}, []byte{0}))
 	response, err := handler.idempotent.execute(request.Context(), key, fingerprint, func() cachedResponse {
+		if resolveErr := handler.resolvePublishedEgressProfiles(request.Context(), input.ClientEndpoints); resolveErr != nil {
+			return problemResponse(classifyEgressProfileError(resolveErr))
+		}
+		if resolveErr := handler.resolvePublishedTransforms(request.Context(), input.ClientEndpoints); resolveErr != nil {
+			return problemResponse(classifyCodeLibraryError(resolveErr))
+		}
 		candidate := environment.Environment{
 			ID: id, Name: input.Name, State: input.State,
 			Revision: environment.Revision(expectedBase + 1), ClientEndpoints: input.ClientEndpoints,
@@ -285,6 +295,63 @@ func (handler *Handler) putEnvironmentDraft(writer http.ResponseWriter, request 
 		return
 	}
 	writeCached(writer, response)
+}
+
+func (handler *Handler) resolvePublishedEgressProfiles(
+	ctx context.Context,
+	endpoints []environment.ClientEndpoint,
+) error {
+	direct := egressprofile.Direct()
+	for endpointIndex := range endpoints {
+		for planIndex := range endpoints[endpointIndex].ProtocolPlans {
+			profile := &endpoints[endpointIndex].ProtocolPlans[planIndex].EgressProfile
+			if profile.Equal(direct) {
+				*profile = direct
+				continue
+			}
+			if handler.egressProfiles == nil {
+				return egressprofile.ErrInvalidProfile
+			}
+			published, err := handler.egressProfiles.GetRevision(
+				ctx, profile.ID, profile.Revision,
+			)
+			if err != nil {
+				return err
+			}
+			if !published.Equal(*profile) {
+				return egressprofile.ErrInvalidProfile
+			}
+			*profile = published
+		}
+	}
+	return nil
+}
+
+func (handler *Handler) resolvePublishedTransforms(
+	ctx context.Context,
+	endpoints []environment.ClientEndpoint,
+) error {
+	for endpointIndex := range endpoints {
+		for planIndex := range endpoints[endpointIndex].ProtocolPlans {
+			transforms := endpoints[endpointIndex].ProtocolPlans[planIndex].Transforms
+			if len(transforms) != 0 && handler.codeLibrary == nil {
+				return codelibrary.ErrInvalidLibrary
+			}
+			for transformIndex, submitted := range transforms {
+				published, err := handler.codeLibrary.GetTransformRevision(
+					ctx, submitted.ID, submitted.Revision,
+				)
+				if err != nil {
+					return err
+				}
+				if !published.Equal(submitted) {
+					return codelibrary.ErrInvalidLibrary
+				}
+				transforms[transformIndex] = published
+			}
+		}
+	}
+	return nil
 }
 
 func (handler *Handler) previewEnvironmentDraft(writer http.ResponseWriter, request *http.Request) {

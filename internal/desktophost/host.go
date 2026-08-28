@@ -403,6 +403,8 @@ func Start(ctx context.Context, options Options) (*Host, error) {
 		Models:              models,
 		ClientModels:        modelMetadata,
 		Accounts:            runtime.ProviderAccounts(),
+		CodeLibrary:         runtime.CodeLibrary(),
+		EgressProfiles:      runtime.EgressProfiles(),
 		RawEvidence:         runtime.RawEvidence(),
 		Offline:             runtime,
 		ConnectionRules:     runtime.ConnectionRules(),

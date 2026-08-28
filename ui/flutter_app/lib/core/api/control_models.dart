@@ -2316,6 +2316,100 @@ final class TrafficEgressPolicy {
   int get hashCode => Object.hash(proxy, resolver);
 }
 
+final class EgressProfileRevision {
+  const EgressProfileRevision({
+    required this.id,
+    required this.revision,
+    required this.displayName,
+    required this.policy,
+    required this.publishedAt,
+  });
+
+  static final direct = EgressProfileRevision(
+    id: 'profile.direct',
+    revision: 1,
+    displayName: 'Direct · System DNS',
+    policy: const TrafficEgressPolicy.direct(),
+    publishedAt: DateTime.fromMillisecondsSinceEpoch(0, isUtc: true),
+  );
+
+  factory EgressProfileRevision.fromJson(Object? json, String path) {
+    final value = requireObject(json, path);
+    requireFields(
+      value,
+      path,
+      required: const {
+        'id',
+        'revision',
+        'displayName',
+        'policy',
+        'publishedAt',
+      },
+    );
+    final displayName = requireString(value, 'displayName', path);
+    if (!_validDisplayLabel(displayName)) {
+      throw ControlContractException('$path display name is invalid');
+    }
+    return EgressProfileRevision(
+      id: _requireResourceId(value, 'id', path),
+      revision: requireInteger(value, 'revision', path, minimum: 1),
+      displayName: displayName,
+      policy: TrafficEgressPolicy.fromJson(value['policy'], '$path.policy'),
+      publishedAt: requireTimestamp(value, 'publishedAt', path),
+    );
+  }
+
+  final String id;
+  final int revision;
+  final String displayName;
+  final TrafficEgressPolicy policy;
+  final DateTime publishedAt;
+
+  JsonObject toJson() => {
+    'id': id,
+    'revision': revision,
+    'displayName': displayName,
+    'policy': policy.toJson(),
+    'publishedAt': publishedAt.toUtc().toIso8601String(),
+  };
+
+  @override
+  bool operator ==(Object other) =>
+      other is EgressProfileRevision &&
+      other.id == id &&
+      other.revision == revision &&
+      other.displayName == displayName &&
+      other.policy == policy &&
+      other.publishedAt == publishedAt;
+
+  @override
+  int get hashCode =>
+      Object.hash(id, revision, displayName, policy, publishedAt);
+}
+
+final class EgressProfileCatalog {
+  const EgressProfileCatalog({required this.items});
+
+  factory EgressProfileCatalog.fromJson(Object? json, String path) {
+    final value = requireObject(json, path);
+    requireFields(value, path, required: const {'items'});
+    final items = requireList(value['items'], '$path.items').indexed
+        .map(
+          (entry) => EgressProfileRevision.fromJson(
+            entry.$2,
+            '$path.items[${entry.$1}]',
+          ),
+        )
+        .toList(growable: false);
+    if (items.map((item) => item.id).toSet().length != items.length) {
+      throw ControlContractException('$path contains duplicate profiles');
+    }
+    return EgressProfileCatalog(items: List.unmodifiable(items));
+  }
+
+  final List<EgressProfileRevision> items;
+}
+
 final class TrafficTransformPolicy {
   const TrafficTransformPolicy({
     required this.requestJavaScript,
@@ -2374,6 +2468,140 @@ final class TrafficTransformPolicy {
   int get hashCode => Object.hash(requestJavaScript, responseJavaScript);
 }
 
+final class CodeLibraryCollection {
+  const CodeLibraryCollection({required this.id, required this.displayName});
+
+  factory CodeLibraryCollection.fromJson(Object? json, String path) {
+    final value = requireObject(json, path);
+    requireFields(value, path, required: const {'id', 'displayName'});
+    final displayName = requireString(value, 'displayName', path);
+    if (!_validDisplayLabel(displayName)) {
+      throw ControlContractException('$path display name is invalid');
+    }
+    return CodeLibraryCollection(
+      id: _requireResourceId(value, 'id', path),
+      displayName: displayName,
+    );
+  }
+
+  final String id;
+  final String displayName;
+
+  JsonObject toJson() => {'id': id, 'displayName': displayName};
+}
+
+final class CodeLibraryTransformRevision {
+  const CodeLibraryTransformRevision({
+    required this.id,
+    required this.revision,
+    required this.collectionId,
+    required this.displayName,
+    required this.policy,
+    required this.publishedAt,
+  });
+
+  factory CodeLibraryTransformRevision.fromJson(Object? json, String path) {
+    final value = requireObject(json, path);
+    requireFields(
+      value,
+      path,
+      required: const {
+        'id',
+        'revision',
+        'collectionId',
+        'displayName',
+        'policy',
+        'publishedAt',
+      },
+    );
+    final displayName = requireString(value, 'displayName', path);
+    if (!_validDisplayLabel(displayName)) {
+      throw ControlContractException('$path display name is invalid');
+    }
+    return CodeLibraryTransformRevision(
+      id: _requireResourceId(value, 'id', path),
+      revision: requireInteger(value, 'revision', path, minimum: 1),
+      collectionId: _requireResourceId(value, 'collectionId', path),
+      displayName: displayName,
+      policy: TrafficTransformPolicy.fromJson(value['policy'], '$path.policy'),
+      publishedAt: requireTimestamp(value, 'publishedAt', path),
+    );
+  }
+
+  final String id;
+  final int revision;
+  final String collectionId;
+  final String displayName;
+  final TrafficTransformPolicy policy;
+  final DateTime publishedAt;
+
+  JsonObject toJson() => {
+    'id': id,
+    'revision': revision,
+    'collectionId': collectionId,
+    'displayName': displayName,
+    'policy': policy.toJson(),
+    'publishedAt': publishedAt.toUtc().toIso8601String(),
+  };
+
+  @override
+  bool operator ==(Object other) =>
+      other is CodeLibraryTransformRevision &&
+      other.id == id &&
+      other.revision == revision &&
+      other.collectionId == collectionId &&
+      other.displayName == displayName &&
+      other.policy == policy &&
+      other.publishedAt == publishedAt;
+
+  @override
+  int get hashCode =>
+      Object.hash(id, revision, collectionId, displayName, policy, publishedAt);
+}
+
+final class CodeLibraryCatalog {
+  const CodeLibraryCatalog({
+    required this.collections,
+    required this.transforms,
+  });
+
+  factory CodeLibraryCatalog.fromJson(Object? json, String path) {
+    final value = requireObject(json, path);
+    requireFields(value, path, required: const {'collections', 'transforms'});
+    final collections = requireList(value['collections'], '$path.collections')
+        .indexed
+        .map(
+          (entry) => CodeLibraryCollection.fromJson(
+            entry.$2,
+            '$path.collections[${entry.$1}]',
+          ),
+        )
+        .toList(growable: false);
+    final transforms = requireList(value['transforms'], '$path.transforms')
+        .indexed
+        .map(
+          (entry) => CodeLibraryTransformRevision.fromJson(
+            entry.$2,
+            '$path.transforms[${entry.$1}]',
+          ),
+        )
+        .toList(growable: false);
+    final collectionIds = collections.map((item) => item.id).toSet();
+    if (collectionIds.length != collections.length ||
+        transforms.map((item) => item.id).toSet().length != transforms.length ||
+        transforms.any((item) => !collectionIds.contains(item.collectionId))) {
+      throw ControlContractException('$path catalog is inconsistent');
+    }
+    return CodeLibraryCatalog(
+      collections: List.unmodifiable(collections),
+      transforms: List.unmodifiable(transforms),
+    );
+  }
+
+  final List<CodeLibraryCollection> collections;
+  final List<CodeLibraryTransformRevision> transforms;
+}
+
 final class MessageTransformTestRequest {
   const MessageTransformTestRequest({
     required this.method,
@@ -2406,11 +2634,19 @@ final class MessageTransformTestRequest {
   final String path;
   final Map<String, List<String>> headers;
   final String body;
+
+  JsonObject toJson() => {
+    'method': method,
+    'path': path,
+    'headers': headers,
+    'body': body,
+  };
 }
 
 final class MessageTransformTestResponse {
   const MessageTransformTestResponse({
     required this.statusCode,
+    required this.streaming,
     required this.headers,
     required this.body,
   });
@@ -2420,25 +2656,137 @@ final class MessageTransformTestResponse {
     requireFields(
       value,
       path,
-      required: const {'statusCode', 'headers', 'body'},
+      required: const {'statusCode', 'streaming', 'headers', 'body'},
     );
     return MessageTransformTestResponse(
       statusCode: requireInteger(value, 'statusCode', path, minimum: 100),
+      streaming: requireBoolean(value, 'streaming', path),
       headers: _requireTransformHeaders(value['headers'], '$path.headers'),
       body: _requireTransformBody(value, 'body', path),
     );
   }
 
   final int statusCode;
+  final bool streaming;
   final Map<String, List<String>> headers;
   final String body;
+
+  JsonObject toJson() => {
+    'statusCode': statusCode,
+    'streaming': streaming,
+    'headers': headers,
+    'body': body,
+  };
 }
+
+final class MessageTransformTestSample {
+  const MessageTransformTestSample({
+    required this.request,
+    required this.response,
+  });
+
+  final MessageTransformTestRequest request;
+  final MessageTransformTestResponse response;
+
+  JsonObject toJson() => {
+    'request': request.toJson(),
+    'response': response.toJson(),
+  };
+}
+
+final class CapturedMessageTransformSample {
+  const CapturedMessageTransformSample({
+    required this.exchangeId,
+    required this.wireProtocol,
+    required this.sample,
+  });
+
+  factory CapturedMessageTransformSample.fromRawEvidence({
+    required RevealedRawEvidence request,
+    required RevealedRawEvidence response,
+  }) {
+    final requestEnvelope = request.envelope;
+    final responseEnvelope = response.envelope;
+    final wireProtocol = switch (requestEnvelope.path) {
+      '/v1/messages' => 'anthropic_messages',
+      '/v1/responses' => 'openai_responses',
+      '/v1/chat/completions' => 'openai_chat',
+      _ => null,
+    };
+    final responseStreaming =
+        responseEnvelope.representation == 'message_transform_stream_input';
+    if (requestEnvelope.layer != 'transform_request_input' ||
+        responseEnvelope.layer != 'transform_response_input' ||
+        requestEnvelope.payloadState != 'captured' ||
+        responseEnvelope.payloadState != 'captured' ||
+        requestEnvelope.exchangeId != responseEnvelope.exchangeId ||
+        requestEnvelope.attemptId == null ||
+        requestEnvelope.attemptId != responseEnvelope.attemptId ||
+        requestEnvelope.scopeKind != responseEnvelope.scopeKind ||
+        requestEnvelope.scopeId != responseEnvelope.scopeId ||
+        requestEnvelope.method != 'POST' ||
+        wireProtocol == null ||
+        responseEnvelope.statusCode == null ||
+        requestEnvelope.representation != 'message_transform_input' ||
+        !const {
+          'message_transform_input',
+          'message_transform_stream_input',
+        }.contains(responseEnvelope.representation) ||
+        request.trailers.isNotEmpty ||
+        response.trailers.isNotEmpty ||
+        request.headers.any((field) => field.redacted.isNotEmpty) ||
+        response.headers.any((field) => field.redacted.isNotEmpty)) {
+      throw const ControlContractException(
+        'Captured Transform sample evidence is incomplete',
+      );
+    }
+    late final String requestBody;
+    late final String responseBody;
+    try {
+      requestBody = utf8.decode(request.body, allowMalformed: false);
+      responseBody = utf8.decode(response.body, allowMalformed: false);
+    } on FormatException {
+      throw const ControlContractException(
+        'Captured Transform sample Body is not UTF-8',
+      );
+    }
+    final sample = MessageTransformTestSample(
+      request: MessageTransformTestRequest.fromJson({
+        'method': requestEnvelope.method,
+        'path': requestEnvelope.path,
+        'headers': _transformSampleHeaders(request.headers),
+        'body': requestBody,
+      }, r'$.sample.request'),
+      response: MessageTransformTestResponse.fromJson({
+        'statusCode': responseEnvelope.statusCode,
+        'streaming': responseStreaming,
+        'headers': _transformSampleHeaders(response.headers),
+        'body': responseBody,
+      }, r'$.sample.response'),
+    );
+    return CapturedMessageTransformSample(
+      exchangeId: requestEnvelope.exchangeId,
+      wireProtocol: wireProtocol,
+      sample: sample,
+    );
+  }
+
+  final String exchangeId;
+  final String wireProtocol;
+  final MessageTransformTestSample sample;
+}
+
+JsonObject _transformSampleHeaders(List<RawHeaderField> fields) => {
+  for (final field in fields) field.name: field.values,
+};
 
 final class MessageTransformTestResult {
   const MessageTransformTestResult({
-    required this.clientProtocol,
-    required this.request,
-    required this.response,
+    required this.wireProtocol,
+    required this.requestBefore,
+    required this.requestAfter,
+    required this.responseBefore,
+    required this.responseAfter,
   });
 
   factory MessageTransformTestResult.fromJson(Object? json, String path) {
@@ -2446,36 +2794,59 @@ final class MessageTransformTestResult {
     requireFields(
       value,
       path,
-      required: const {'clientProtocol', 'request', 'response'},
+      required: const {
+        'wireProtocol',
+        'requestBefore',
+        'requestAfter',
+        'responseBefore',
+        'responseAfter',
+      },
     );
-    final clientProtocol = requireString(value, 'clientProtocol', path);
-    final request = MessageTransformTestRequest.fromJson(
-      value['request'],
-      '$path.request',
+    final wireProtocol = requireString(value, 'wireProtocol', path);
+    final requestBefore = MessageTransformTestRequest.fromJson(
+      value['requestBefore'],
+      '$path.requestBefore',
     );
-    final response = MessageTransformTestResponse.fromJson(
-      value['response'],
-      '$path.response',
+    final requestAfter = MessageTransformTestRequest.fromJson(
+      value['requestAfter'],
+      '$path.requestAfter',
     );
-    final expectedPath = switch (clientProtocol) {
+    final responseBefore = MessageTransformTestResponse.fromJson(
+      value['responseBefore'],
+      '$path.responseBefore',
+    );
+    final responseAfter = MessageTransformTestResponse.fromJson(
+      value['responseAfter'],
+      '$path.responseAfter',
+    );
+    final expectedPath = switch (wireProtocol) {
       'anthropic_messages' => '/v1/messages',
       'openai_responses' => '/v1/responses',
       'openai_chat' => '/v1/chat/completions',
       _ => null,
     };
-    if (expectedPath == null || request.path != expectedPath) {
-      throw ControlContractException('$path client protocol is inconsistent');
+    if (expectedPath == null ||
+        requestBefore.path != expectedPath ||
+        requestAfter.path != expectedPath ||
+        requestBefore.method != requestAfter.method ||
+        responseBefore.statusCode != responseAfter.statusCode ||
+        responseBefore.streaming != responseAfter.streaming) {
+      throw ControlContractException('$path wire protocol is inconsistent');
     }
     return MessageTransformTestResult(
-      clientProtocol: clientProtocol,
-      request: request,
-      response: response,
+      wireProtocol: wireProtocol,
+      requestBefore: requestBefore,
+      requestAfter: requestAfter,
+      responseBefore: responseBefore,
+      responseAfter: responseAfter,
     );
   }
 
-  final String clientProtocol;
-  final MessageTransformTestRequest request;
-  final MessageTransformTestResponse response;
+  final String wireProtocol;
+  final MessageTransformTestRequest requestBefore;
+  final MessageTransformTestRequest requestAfter;
+  final MessageTransformTestResponse responseBefore;
+  final MessageTransformTestResponse responseAfter;
 }
 
 final _httpHeaderNamePattern = RegExp(r"^[!#$%&'*+\-.^_`|~0-9A-Za-z]+$");
@@ -3113,8 +3484,8 @@ final class EnvironmentProtocolPlan {
     required this.clientProtocol,
     required this.clientAdapterPolicy,
     required this.destination,
-    required this.egressPolicy,
-    required this.transformPolicy,
+    required this.egressProfile,
+    required this.transforms,
     required this.pluginBindings,
   });
 
@@ -3129,8 +3500,8 @@ final class EnvironmentProtocolPlan {
         'clientProtocol',
         'clientAdapterPolicy',
         'destination',
-        'egressPolicy',
-        'transformPolicy',
+        'egressProfile',
+        'transforms',
         'pluginBindings',
       },
     );
@@ -3143,6 +3514,15 @@ final class EnvironmentProtocolPlan {
               ),
             )
             .toList(growable: false);
+    final transforms = requireList(value['transforms'], '$path.transforms')
+        .indexed
+        .map(
+          (entry) => CodeLibraryTransformRevision.fromJson(
+            entry.$2,
+            '$path.transforms[${entry.$1}]',
+          ),
+        )
+        .toList(growable: false);
     final clientProtocol = _requireResourceId(value, 'clientProtocol', path);
     if (bindings.map((item) => item.id).toSet().length != bindings.length ||
         !const {
@@ -3164,14 +3544,11 @@ final class EnvironmentProtocolPlan {
         value['destination'],
         '$path.destination',
       ),
-      egressPolicy: TrafficEgressPolicy.fromJson(
-        value['egressPolicy'],
-        '$path.egressPolicy',
+      egressProfile: EgressProfileRevision.fromJson(
+        value['egressProfile'],
+        '$path.egressProfile',
       ),
-      transformPolicy: TrafficTransformPolicy.fromJson(
-        value['transformPolicy'],
-        '$path.transformPolicy',
-      ),
+      transforms: List.unmodifiable(transforms),
       pluginBindings: List.unmodifiable(bindings),
     );
   }
@@ -3181,8 +3558,8 @@ final class EnvironmentProtocolPlan {
   final String clientProtocol;
   final EnvironmentClientAdapterPolicy clientAdapterPolicy;
   final EnvironmentDestination destination;
-  final TrafficEgressPolicy egressPolicy;
-  final TrafficTransformPolicy transformPolicy;
+  final EgressProfileRevision egressProfile;
+  final List<CodeLibraryTransformRevision> transforms;
   final List<EnvironmentPluginBinding> pluginBindings;
 
   List<EnvironmentRoute> get routes =>
@@ -3190,16 +3567,16 @@ final class EnvironmentProtocolPlan {
 
   EnvironmentProtocolPlan copyWith({
     EnvironmentDestination? destination,
-    TrafficEgressPolicy? egressPolicy,
-    TrafficTransformPolicy? transformPolicy,
+    EgressProfileRevision? egressProfile,
+    List<CodeLibraryTransformRevision>? transforms,
   }) => EnvironmentProtocolPlan(
     id: id,
     revision: revision,
     clientProtocol: clientProtocol,
     clientAdapterPolicy: clientAdapterPolicy,
     destination: destination ?? this.destination,
-    egressPolicy: egressPolicy ?? this.egressPolicy,
-    transformPolicy: transformPolicy ?? this.transformPolicy,
+    egressProfile: egressProfile ?? this.egressProfile,
+    transforms: transforms ?? this.transforms,
     pluginBindings: pluginBindings,
   );
 
@@ -3209,8 +3586,10 @@ final class EnvironmentProtocolPlan {
     'clientProtocol': clientProtocol,
     'clientAdapterPolicy': clientAdapterPolicy.toJson(),
     'destination': destination.toJson(),
-    'egressPolicy': egressPolicy.toJson(),
-    'transformPolicy': transformPolicy.toJson(),
+    'egressProfile': egressProfile.toJson(),
+    'transforms': transforms
+        .map((transform) => transform.toJson())
+        .toList(growable: false),
     'pluginBindings': pluginBindings
         .map((binding) => binding.toJson())
         .toList(growable: false),
@@ -4274,6 +4653,10 @@ final class CaptureAssignment {
     required this.captureId,
     required this.captureKind,
     required this.environmentId,
+    required this.environmentRevision,
+    required this.environmentDigest,
+    required this.launchEnvironmentRevision,
+    required this.launchEnvironmentDigest,
     required this.revision,
     required this.source,
     required this.updatedAt,
@@ -4289,6 +4672,10 @@ final class CaptureAssignment {
         'captureId',
         'captureKind',
         'environmentId',
+        'environmentRevision',
+        'environmentDigest',
+        'launchEnvironmentRevision',
+        'launchEnvironmentDigest',
         'revision',
         'source',
         'updatedAt',
@@ -4298,6 +4685,25 @@ final class CaptureAssignment {
     final captureKind = requireString(value, 'captureKind', path);
     final captureKey = requireString(value, 'captureKey', path);
     final source = requireString(value, 'source', path);
+    final environmentRevision = requireInteger(
+      value,
+      'environmentRevision',
+      path,
+      minimum: 1,
+    );
+    final environmentDigest = _requireDigest(value, 'environmentDigest', path);
+    final launchEnvironmentRevision = requireInteger(
+      value,
+      'launchEnvironmentRevision',
+      path,
+      minimum: 1,
+    );
+    final launchEnvironmentDigest = _requireDigest(
+      value,
+      'launchEnvironmentDigest',
+      path,
+    );
+    final revision = requireInteger(value, 'revision', path, minimum: 1);
     if (!const {'managed_run', 'manual_capture'}.contains(captureKind) ||
         captureKey != '$captureKind:$captureId' ||
         !const {
@@ -4305,7 +4711,9 @@ final class CaptureAssignment {
           'manual_create',
           'system_transparent',
         }.contains(source) ||
-        requireInteger(value, 'revision', path, minimum: 1) != 1) {
+        environmentRevision < launchEnvironmentRevision ||
+        (environmentRevision == launchEnvironmentRevision &&
+            environmentDigest != launchEnvironmentDigest)) {
       throw ControlContractException('$path assignment authority is invalid');
     }
     return CaptureAssignment(
@@ -4313,7 +4721,11 @@ final class CaptureAssignment {
       captureId: captureId,
       captureKind: captureKind,
       environmentId: _requireResourceId(value, 'environmentId', path),
-      revision: 1,
+      environmentRevision: environmentRevision,
+      environmentDigest: environmentDigest,
+      launchEnvironmentRevision: launchEnvironmentRevision,
+      launchEnvironmentDigest: launchEnvironmentDigest,
+      revision: revision,
       source: source,
       updatedAt: requireTimestamp(value, 'updatedAt', path),
     );
@@ -4323,6 +4735,10 @@ final class CaptureAssignment {
   final String captureId;
   final String captureKind;
   final String environmentId;
+  final int environmentRevision;
+  final String environmentDigest;
+  final int launchEnvironmentRevision;
+  final String launchEnvironmentDigest;
   final int revision;
   final String source;
   final DateTime updatedAt;
@@ -5260,8 +5676,10 @@ final class RawEvidenceEnvelope {
         !metadata.whereType<String>().every(_validRawMetadata) ||
         !const {
           'client_ingress',
+          'transform_request_input',
           'provider_egress',
           'provider_response',
+          'transform_response_input',
           'client_downstream',
         }.contains(layer) ||
         !const {

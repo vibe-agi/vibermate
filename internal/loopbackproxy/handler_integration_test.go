@@ -30,6 +30,7 @@ import (
 	"github.com/vibe-agi/vibermate/internal/connectionevent"
 	"github.com/vibe-agi/vibermate/internal/connectionpolicy"
 	"github.com/vibe-agi/vibermate/internal/egressaudit"
+	"github.com/vibe-agi/vibermate/internal/egressprofile"
 	"github.com/vibe-agi/vibermate/internal/environment"
 	"github.com/vibe-agi/vibermate/internal/exchange"
 	"github.com/vibe-agi/vibermate/internal/localca"
@@ -1768,7 +1769,8 @@ func testEnvironmentForDialectRevision(
 				ClientAdapterPolicy: environment.ClientAdapterPolicy{
 					ID: "adapter-proxy", Revision: adapterRevision,
 				},
-				Destination: environment.DestinationPlan{Kind: environment.DestinationKindOriginal},
+				Destination:   environment.DestinationPlan{Kind: environment.DestinationKindOriginal},
+				EgressProfile: egressprofile.Direct(),
 			}},
 		}},
 	}

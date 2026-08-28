@@ -5,8 +5,12 @@ import (
 	"errors"
 	"path/filepath"
 	"testing"
+	"time"
 
+	"github.com/vibe-agi/vibermate/internal/codelibrary"
+	"github.com/vibe-agi/vibermate/internal/egressprofile"
 	"github.com/vibe-agi/vibermate/internal/environment"
+	"github.com/vibe-agi/vibermate/internal/messagetransform"
 	"github.com/vibe-agi/vibermate/internal/operationcatalog"
 	"github.com/vibe-agi/vibermate/internal/originidentity"
 	"github.com/vibe-agi/vibermate/internal/protocolspec"
@@ -19,6 +23,11 @@ func TestEnvironmentRepositoryReopensIdenticalSnapshotAndPrivateDraft(t *testing
 	store := openTestStore(t, databasePath)
 	manager := newEnvironmentManager(t, store)
 	candidate := environmentFixture(t, "work", 1)
+	candidate.ClientEndpoints[0].ProtocolPlans[0].Transforms = []codelibrary.TransformRevision{{
+		ID: "transform.frozen", Revision: 4, CollectionID: "privacy",
+		DisplayName: "Frozen Transform", PublishedAt: time.Date(2026, time.August, 27, 0, 0, 0, 0, time.UTC),
+		Policy: messagetransform.Policy{RequestJavaScript: `request.headers["x-frozen"] = "revision-4";`},
+	}}
 	draft, err := manager.SaveDraft(context.Background(), environment.DraftCommand{Candidate: candidate})
 	if err != nil {
 		t.Fatal(err)
@@ -80,7 +89,10 @@ func TestEnvironmentRepositoryReopensIdenticalSnapshotAndPrivateDraft(t *testing
 		t.Fatalf("recovered publish = %+v, %v", published, err)
 	}
 	historical, err := recovered.GetRevision(context.Background(), candidate.ID, 1)
-	if err != nil || historical.Revision() != 1 || historical.Name() != "Work" {
+	if err != nil || historical.Revision() != 1 || historical.Name() != "Work" ||
+		len(historical.Aggregate().ClientEndpoints[0].ProtocolPlans[0].Transforms) != 1 ||
+		historical.Aggregate().ClientEndpoints[0].ProtocolPlans[0].Transforms[0].Policy.RequestJavaScript !=
+			`request.headers["x-frozen"] = "revision-4";` {
 		t.Fatalf("historical revision = %+v, %v", historical, err)
 	}
 	current, err := recovered.GetRevision(context.Background(), candidate.ID, 2)
@@ -278,6 +290,7 @@ func environmentFixture(t *testing.T, id string, revision environment.Revision) 
 			ProtocolPlans: []environment.ClientProtocolPlan{{
 				ID: "plan.anthropic", Revision: 1, ClientProtocol: environment.ClientProtocolAnthropicMessages,
 				ClientAdapterPolicy: environment.ClientAdapterPolicy{ID: "adapter.anthropic", Revision: 1},
+				EgressProfile:       egressprofile.Direct(),
 				Destination: environment.DestinationPlan{
 					Kind: environment.DestinationKindUpstream,
 					Upstream: &environment.UpstreamPlan{

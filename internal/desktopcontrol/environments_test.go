@@ -34,7 +34,7 @@ func TestMessageTransformSampleRunsOneBoundedTurn(t *testing.T) {
 	}
 
 	body := []byte(`{
-		"clientProtocol":"anthropic_messages",
+		"wireProtocol":"anthropic_messages",
 		"policy":{
 			"requestJavaScript":"context.requested = JSON.parse(request.body).model; request.headers['x-sample'] = 'request';",
 			"responseJavaScript":"const value = JSON.parse(response.body); value.model = context.requested; response.body = JSON.stringify(value); response.headers['x-context'] = context.requested;"
@@ -52,33 +52,21 @@ func TestMessageTransformSampleRunsOneBoundedTurn(t *testing.T) {
 	if response.Code != http.StatusOK {
 		t.Fatalf("test transform status=%d body=%s", response.Code, response.Body.Bytes())
 	}
-	var result struct {
-		Request struct {
-			Method  string      `json:"method"`
-			Path    string      `json:"path"`
-			Headers http.Header `json:"headers"`
-			Body    string      `json:"body"`
-		} `json:"request"`
-		Response struct {
-			StatusCode int         `json:"statusCode"`
-			Headers    http.Header `json:"headers"`
-			Body       string      `json:"body"`
-		} `json:"response"`
-	}
+	var result desktopcontrol.MessageTransformTestResult
 	if err := json.Unmarshal(response.Body.Bytes(), &result); err != nil {
 		t.Fatal(err)
 	}
-	if result.Request.Method != http.MethodPost || result.Request.Path != "/v1/messages" ||
-		result.Request.Headers.Get("X-Sample") != "request" ||
-		result.Response.StatusCode != http.StatusOK ||
-		result.Response.Headers.Get("X-Context") != "claude-sample" ||
-		!strings.Contains(result.Response.Body, `"model":"claude-sample"`) {
+	if result.RequestAfter.Method != http.MethodPost || result.RequestAfter.Path != "/v1/messages" ||
+		result.RequestAfter.Headers.Get("X-Sample") != "request" ||
+		result.ResponseAfter.StatusCode != http.StatusOK ||
+		result.ResponseAfter.Headers.Get("X-Context") != "claude-sample" ||
+		!strings.Contains(result.ResponseAfter.Body, `"model":"claude-sample"`) {
 		t.Fatalf("transform sample result = %+v", result)
 	}
 
 	const privateError = "PRIVATE-SAMPLE-BODY-MUST-NOT-ECHO"
 	failing := []byte(`{
-		"clientProtocol":"anthropic_messages",
+		"wireProtocol":"anthropic_messages",
 		"policy":{
 			"requestJavaScript":"throw new Error('` + privateError + `');",
 			"responseJavaScript":""
@@ -139,7 +127,7 @@ func TestEnvironmentDraftPreviewPublishAndHistoricalRevisionRoutes(t *testing.T)
   "clientEndpoints": [],
   "pluginBindings": [],
   "budgetPolicy": {"id":"","revision":0},
-  "egressPolicy": {"id":"","revision":0,"mode":""},
+  "egressProfile": {"id":"","revision":0,"displayName":"","policy":{},"publishedAt":""},
   "contentRecording": {"mode":"full","retentionDays":30}
 }`)
 	legacyGlobalEgress := environmentRequest(
@@ -244,7 +232,7 @@ func TestEnvironmentDraftSavesPreviewsAndPublishesOriginalDestination(t *testing
       "clientProtocol": "anthropic_messages",
       "clientAdapterPolicy": {"id":"adapter.claude.official","revision":1},
       "destination": {"kind":"original"},
-	  "egressPolicy":{"proxy":{"kind":"direct"},"resolver":{"kind":"system","transport":"direct"}},
+	  "egressProfile":{"id":"profile.direct","revision":1,"displayName":"Direct · System DNS","policy":{"proxy":{"kind":"direct"},"resolver":{"kind":"system","transport":"direct"}},"publishedAt":"1970-01-01T00:00:00Z"},
       "pluginBindings":[]
     }]
   }],
@@ -303,7 +291,8 @@ func TestEnvironmentDraftPublishesOneAccountAcrossExplicitEndpointProtocols(t *t
 		Environments: runtime.Environments(), Assignments: runtime.CaptureAssignments(),
 		Activities: runtime.Activities(), Contents: runtime.ExchangeContents(), Connections: runtime.ConnectionEvents(),
 		Egress: runtime.EgressAttempts(), Approvals: runtime.ToolApprovals(),
-		Endpoints: runtime.UpstreamEndpoints(), Accounts: runtime.ProviderAccounts(), Offline: runtime,
+		Endpoints: runtime.UpstreamEndpoints(), Accounts: runtime.ProviderAccounts(), CodeLibrary: runtime.CodeLibrary(),
+		EgressProfiles: runtime.EgressProfiles(), Offline: runtime,
 		ManualCaptures: runtime.ManualCaptures(), Clock: desktopcontrol.SystemClock{},
 	})
 	if err != nil {
@@ -335,6 +324,43 @@ func TestEnvironmentDraftPublishesOneAccountAcrossExplicitEndpointProtocols(t *t
 	)
 	if createdAccount.Code != http.StatusCreated {
 		t.Fatalf("create Account status=%d body=%s", createdAccount.Code, createdAccount.Body.Bytes())
+	}
+	publishEgressProfile := func(id, key, body string) []byte {
+		t.Helper()
+		response := environmentRequest(t, application, http.MethodPut,
+			"/api/v1/egress-profiles/"+id, 0, key, []byte(body))
+		if response.Code != http.StatusOK {
+			t.Fatalf("publish egress profile status=%d body=%s", response.Code, response.Body.Bytes())
+		}
+		return response.Body.Bytes()
+	}
+	anthropicEgressJSON := publishEgressProfile(
+		"profile.anthropic", "environment-egress-publish-0001",
+		`{"displayName":"Anthropic proxy","policy":{"proxy":{"kind":"socks5","endpoint":"127.0.0.1:1080"},"resolver":{"kind":"doh","dohUrl":"https://resolver.example/dns-query","transport":"proxy"}}}`,
+	)
+	openAIEgressJSON := publishEgressProfile(
+		"profile.openai", "environment-egress-publish-0002",
+		`{"displayName":"OpenAI DoH","policy":{"proxy":{"kind":"direct"},"resolver":{"kind":"doh","dohUrl":"https://8.8.8.8/dns-query","transport":"direct"}}}`,
+	)
+	collection := environmentRequest(t, application, http.MethodPost,
+		"/api/v1/code-library/collections", 0, "environment-transform-collection-0001",
+		[]byte(`{"id":"privacy","displayName":"Privacy"}`))
+	if collection.Code != http.StatusCreated {
+		t.Fatalf("create Transform collection status=%d body=%s", collection.Code, collection.Body.Bytes())
+	}
+	publishedTransform := environmentRequest(t, application, http.MethodPut,
+		"/api/v1/code-library/transforms/client-model-context", 0, "environment-transform-publish-0001",
+		[]byte(`{"collectionId":"privacy","displayName":"Client model context","policy":{"requestJavaScript":"context.requested = JSON.parse(request.body).model;","responseJavaScript":"response.headers['x-requested-model'] = context.requested;"}}`))
+	if publishedTransform.Code != http.StatusOK {
+		t.Fatalf("publish Transform status=%d body=%s", publishedTransform.Code, publishedTransform.Body.Bytes())
+	}
+	var frozenTransform desktopcontrol.CodeLibraryTransformResponse
+	if err := json.Unmarshal(publishedTransform.Body.Bytes(), &frozenTransform); err != nil {
+		t.Fatal(err)
+	}
+	frozenTransformJSON, err := json.Marshal(frozenTransform)
+	if err != nil {
+		t.Fatal(err)
 	}
 
 	draftBody := []byte(`{
@@ -379,8 +405,8 @@ func TestEnvironmentDraftPublishesOneAccountAcrossExplicitEndpointProtocols(t *t
         "routeSet":{"id":"routes.client.anthropic","revision":1,"candidateRouteIds":["route.cherry.anthropic"]}
         }
       },
-	  "egressPolicy":{"proxy":{"kind":"socks5","endpoint":"127.0.0.1:1080"},"resolver":{"kind":"doh","dohUrl":"https://resolver.example/dns-query","transport":"proxy"}},
-	  "transformPolicy":{"requestJavaScript":"context.requested = JSON.parse(request.body).model;","responseJavaScript":"response.headers['x-requested-model'] = context.requested;"},
+	  "egressProfile":` + string(anthropicEgressJSON) + `,
+	  "transforms":[` + string(frozenTransformJSON) + `],
       "pluginBindings":[]
     }]
   }, {
@@ -421,15 +447,49 @@ func TestEnvironmentDraftPublishesOneAccountAcrossExplicitEndpointProtocols(t *t
         "routeSet":{"id":"routes.client.openai","revision":1,"candidateRouteIds":["route.cherry.openai"]}
         }
       },
-		  "egressPolicy":{"proxy":{"kind":"direct"},"resolver":{"kind":"doh","dohUrl":"https://8.8.8.8/dns-query","transport":"direct"}},
-	  "transformPolicy":{"requestJavaScript":"","responseJavaScript":""},
+		  "egressProfile":` + string(openAIEgressJSON) + `,
+	  "transforms":[],
       "pluginBindings":[]
     }]
   }],
   "pluginBindings": [],
   "budgetPolicy": {"id":"","revision":0},
-  "contentRecording": {"mode":"full","retentionDays":30}
+	  "contentRecording": {"mode":"full","retentionDays":30}
 }`)
+	tamperedBody := bytes.Replace(
+		draftBody,
+		[]byte("context.requested = JSON.parse(request.body).model;"),
+		[]byte("request.headers['x-unpublished-code'] = 'true';"),
+		1,
+	)
+	if bytes.Equal(tamperedBody, draftBody) {
+		t.Fatal("test did not alter the frozen Transform revision")
+	}
+	tampered := environmentRequest(
+		t, application, http.MethodPut,
+		"/api/v1/environments/cherry-mapped/draft", 0,
+		"environment-cherry-tampered-draft-0001", tamperedBody,
+	)
+	if tampered.Code != http.StatusUnprocessableEntity {
+		t.Fatalf("tampered Transform status=%d body=%s", tampered.Code, tampered.Body.Bytes())
+	}
+	tamperedEgressBody := bytes.Replace(
+		draftBody,
+		[]byte(`"endpoint":"127.0.0.1:1080"`),
+		[]byte(`"endpoint":"127.0.0.1:1081"`),
+		1,
+	)
+	if bytes.Equal(tamperedEgressBody, draftBody) {
+		t.Fatal("test did not alter the frozen egress Profile revision")
+	}
+	tamperedEgress := environmentRequest(
+		t, application, http.MethodPut,
+		"/api/v1/environments/cherry-mapped/draft", 0,
+		"environment-cherry-egress-tampered-0001", tamperedEgressBody,
+	)
+	if tamperedEgress.Code != http.StatusUnprocessableEntity {
+		t.Fatalf("tampered egress Profile status=%d body=%s", tamperedEgress.Code, tamperedEgress.Body.Bytes())
+	}
 	draft := environmentRequest(
 		t,
 		application,
@@ -468,6 +528,12 @@ func TestEnvironmentDraftPublishesOneAccountAcrossExplicitEndpointProtocols(t *t
 	)
 	if publish.Code != http.StatusOK {
 		t.Fatalf("publish status=%d body=%s", publish.Code, publish.Body.Bytes())
+	}
+	updatedTransform := environmentRequest(t, application, http.MethodPut,
+		"/api/v1/code-library/transforms/client-model-context", 1, "environment-transform-publish-0002",
+		[]byte(`{"collectionId":"privacy","displayName":"Client model context","policy":{"requestJavaScript":"request.headers['x-library-revision'] = 'two';","responseJavaScript":""}}`))
+	if updatedTransform.Code != http.StatusOK {
+		t.Fatalf("publish newer Transform status=%d body=%s", updatedTransform.Code, updatedTransform.Body.Bytes())
 	}
 
 	reopened := environmentRequest(
@@ -514,16 +580,17 @@ func TestEnvironmentDraftPublishesOneAccountAcrossExplicitEndpointProtocols(t *t
 			Transport: egressnetwork.ResolverTransportDirect,
 		},
 	}
-	if got := published.ClientEndpoints[0].ProtocolPlans[0].EgressPolicy; got != wantAnthropicEgress {
+	if got := published.ClientEndpoints[0].ProtocolPlans[0].EgressProfile.Policy; got != wantAnthropicEgress {
 		t.Fatalf("published Anthropic egress policy = %#v, want %#v", got, wantAnthropicEgress)
 	}
-	if got := published.ClientEndpoints[1].ProtocolPlans[0].EgressPolicy; got != wantOpenAIEgress {
+	if got := published.ClientEndpoints[1].ProtocolPlans[0].EgressProfile.Policy; got != wantOpenAIEgress {
 		t.Fatalf("published OpenAI egress policy = %#v, want %#v", got, wantOpenAIEgress)
 	}
-	transform := published.ClientEndpoints[0].ProtocolPlans[0].TransformPolicy
-	if transform.RequestJavaScript != "context.requested = JSON.parse(request.body).model;" ||
-		transform.ResponseJavaScript != "response.headers['x-requested-model'] = context.requested;" {
-		t.Fatalf("published message transform policy = %#v", transform)
+	transforms := published.ClientEndpoints[0].ProtocolPlans[0].Transforms
+	if len(transforms) != 1 || transforms[0].Revision != 1 ||
+		transforms[0].Policy.RequestJavaScript != "context.requested = JSON.parse(request.body).model;" ||
+		transforms[0].Policy.ResponseJavaScript != "response.headers['x-requested-model'] = context.requested;" {
+		t.Fatalf("published message Transform revisions = %#v", transforms)
 	}
 
 	baseEndpointRevision := published.ClientEndpoints[0].Revision
@@ -646,10 +713,10 @@ func TestEnvironmentDraftPublishesOneAccountAcrossExplicitEndpointProtocols(t *t
 			finalEnvironment.LaunchEnvironment,
 		)
 	}
-	if got := finalEnvironment.ClientEndpoints[0].ProtocolPlans[0].EgressPolicy; got != wantAnthropicEgress {
+	if got := finalEnvironment.ClientEndpoints[0].ProtocolPlans[0].EgressProfile.Policy; got != wantAnthropicEgress {
 		t.Fatalf("reopened Anthropic egress policy = %#v, want %#v", got, wantAnthropicEgress)
 	}
-	if got := finalEnvironment.ClientEndpoints[1].ProtocolPlans[0].EgressPolicy; got != wantOpenAIEgress {
+	if got := finalEnvironment.ClientEndpoints[1].ProtocolPlans[0].EgressProfile.Policy; got != wantOpenAIEgress {
 		t.Fatalf("reopened OpenAI egress policy = %#v, want %#v", got, wantOpenAIEgress)
 	}
 }

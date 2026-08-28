@@ -26,6 +26,7 @@ import (
 	"github.com/vibe-agi/vibermate/internal/desktopcontrol"
 	"github.com/vibe-agi/vibermate/internal/desktophost"
 	"github.com/vibe-agi/vibermate/internal/egressaudit"
+	"github.com/vibe-agi/vibermate/internal/egressprofile"
 	"github.com/vibe-agi/vibermate/internal/environment"
 	"github.com/vibe-agi/vibermate/internal/exchangecontent"
 	"github.com/vibe-agi/vibermate/internal/hostsecret"
@@ -342,7 +343,8 @@ func publishOriginalEnvironment(
 				ClientAdapterPolicy: environment.ClientAdapterPolicy{
 					ID: "adapter." + scenario.executable, Revision: 1,
 				},
-				Destination: environment.DestinationPlan{Kind: environment.DestinationKindOriginal},
+				Destination:   environment.DestinationPlan{Kind: environment.DestinationKindOriginal},
+				EgressProfile: egressprofile.Direct(),
 			}},
 		}},
 	}

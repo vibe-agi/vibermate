@@ -144,6 +144,7 @@ func (manager *Manager) CreateForLaunch(
 	}
 	candidate := Assignment{
 		Capture: command.Capture, EnvironmentID: command.EnvironmentID, Revision: 1,
+		EnvironmentRevision: snapshot.Revision(), EnvironmentDigest: snapshot.Digest(),
 		Source: command.Source, LaunchAuthority: launchAuthority,
 		ClientTarget: clientTarget,
 		UpdatedAt:    canonicalTime(manager.clock.Now()),
@@ -154,6 +155,95 @@ func (manager *Manager) CreateForLaunch(
 		return assignment, environment.LaunchEnvironmentPolicy{}, err
 	}
 	return assignment, launchEnvironment, nil
+}
+
+// ApplyLatest changes only the policy snapshot used by requests admitted after
+// this call. Launch authority, client target, and already-issued RequestLeases
+// remain immutable evidence of the Capture's original execution.
+func (manager *Manager) ApplyLatest(
+	ctx context.Context,
+	reference captureidentity.Reference,
+	expected Revision,
+) (Assignment, error) {
+	finish, err := manager.lifecycle.begin(ctx)
+	if err != nil {
+		return Assignment{}, err
+	}
+	defer finish()
+	if reference.Validate() != nil || expected == 0 || expected > MaxRevision {
+		return Assignment{}, ErrInvalidAssignment
+	}
+	state := manager.state(reference)
+	state.writer.Lock()
+	defer state.writer.Unlock()
+	state.mu.Lock()
+	shutdown, poisoned := state.shutdown, state.poisoned
+	state.mu.Unlock()
+	if shutdown {
+		return Assignment{}, ErrRuntimeStopping
+	}
+	if poisoned {
+		return Assignment{}, ErrAssignmentUnavailable
+	}
+	current, exists, err := manager.repository.Load(ctx, reference)
+	if err != nil {
+		return Assignment{}, err
+	}
+	if !exists {
+		return Assignment{}, ErrAssignmentNotFound
+	}
+	if current.Validate() != nil || current.Capture != reference {
+		return Assignment{}, ErrAssignmentUnavailable
+	}
+	if current.Revision != expected {
+		return current, ErrAssignmentConflict
+	}
+	latest, err := manager.resolveActive(current.EnvironmentID)
+	if err != nil {
+		return Assignment{}, err
+	}
+	if latest.Revision() == current.EnvironmentRevision && latest.Digest() == current.EnvironmentDigest {
+		return current, nil
+	}
+	if latest.Revision() <= current.EnvironmentRevision {
+		return Assignment{}, ErrAssignmentUnavailable
+	}
+	if current.Revision == MaxRevision {
+		return current, ErrAssignmentUnavailable
+	}
+
+	state.mu.Lock()
+	bindings := make(map[string]environment.ConnectionBinding, len(state.connections))
+	for id, connection := range state.connections {
+		binding, bindErr := bindConnection(latest, current, connection.binding.ProviderOrigin)
+		if bindErr != nil || binding.Mode != connection.binding.Mode {
+			state.mu.Unlock()
+			return Assignment{}, errors.Join(ErrAssignmentIncompatible, bindErr)
+		}
+		bindings[id] = binding
+	}
+	state.mu.Unlock()
+
+	candidate := current
+	candidate.Revision++
+	candidate.EnvironmentRevision = latest.Revision()
+	candidate.EnvironmentDigest = latest.Digest()
+	candidate.UpdatedAt = canonicalTime(manager.clock.Now())
+	result, writeErr := manager.repository.Write(ctx, expected, candidate)
+	applied, err := manager.finishWrite(state, candidate, result, writeErr)
+	if err != nil {
+		return applied, err
+	}
+	state.mu.Lock()
+	for id, binding := range bindings {
+		if connection := state.connections[id]; connection != nil {
+			connection.assignment = applied
+			connection.snapshot = latest
+			connection.binding = binding
+		}
+	}
+	state.mu.Unlock()
+	return applied, nil
 }
 
 func (manager *Manager) Resolve(ctx context.Context, reference captureidentity.Reference) (Assignment, error) {
@@ -226,7 +316,7 @@ func (manager *Manager) resolveAssigned(
 	if assignment.Validate() != nil {
 		return environment.EnvironmentSnapshot{}, ErrAssignmentUnavailable
 	}
-	revision := assignment.LaunchAuthority.InitialEnvironmentRevision()
+	revision := assignment.EnvironmentRevision
 	snapshot, err := manager.environments.ResolveRevision(
 		ctx,
 		assignment.EnvironmentID,
@@ -237,11 +327,22 @@ func (manager *Manager) resolveAssigned(
 	}
 	if snapshot.ID() != assignment.EnvironmentID ||
 		snapshot.Revision() != revision ||
-		snapshot.Digest() != assignment.LaunchAuthority.InitialEnvironmentDigest() ||
+		snapshot.Digest() != assignment.EnvironmentDigest ||
 		snapshot.State() != environment.StateActive {
 		return environment.EnvironmentSnapshot{}, ErrAssignmentUnavailable
 	}
 	return snapshot, nil
+}
+
+func bindConnection(
+	snapshot environment.EnvironmentSnapshot,
+	assignment Assignment,
+	origin originidentity.ProviderOrigin,
+) (environment.ConnectionBinding, error) {
+	if assignment.ClientTarget.Available() && assignment.ClientTarget.MatchesTransport(origin) {
+		return snapshot.BeginClientTargetConnection(origin, assignment.ClientTarget.CanonicalOrigin())
+	}
+	return snapshot.BeginProviderConnection(origin)
 }
 
 type ConnectionLease struct {
@@ -262,7 +363,8 @@ func (lease *ConnectionLease) Assignment() Assignment {
 }
 
 // Environment returns the immutable Environment revision frozen when this
-// Capture was launched. Publishing a later revision affects only new Captures.
+// connection was registered. A later ApplyLatest affects new requests through
+// the manager, not this historical lease value.
 func (lease *ConnectionLease) Environment() environment.EnvironmentSnapshot {
 	if lease == nil {
 		return environment.EnvironmentSnapshot{}
@@ -324,16 +426,7 @@ func (manager *Manager) RegisterProviderConnection(
 	if err != nil {
 		return fail(err)
 	}
-	var binding environment.ConnectionBinding
-	if assignment.ClientTarget.Available() &&
-		assignment.ClientTarget.MatchesTransport(origin) {
-		binding, err = snapshot.BeginClientTargetConnection(
-			origin,
-			assignment.ClientTarget.CanonicalOrigin(),
-		)
-	} else {
-		binding, err = snapshot.BeginProviderConnection(origin)
-	}
+	binding, err := bindConnection(snapshot, assignment, origin)
 	if err != nil {
 		return fail(err)
 	}
@@ -422,8 +515,8 @@ func (manager *Manager) BeginRequest(
 	snapshot := connection.snapshot
 	if assignment.Validate() != nil || assignment.Capture != capture ||
 		snapshot.ID() != assignment.EnvironmentID ||
-		snapshot.Revision() != assignment.LaunchAuthority.InitialEnvironmentRevision() ||
-		snapshot.Digest() != assignment.LaunchAuthority.InitialEnvironmentDigest() {
+		snapshot.Revision() != assignment.EnvironmentRevision ||
+		snapshot.Digest() != assignment.EnvironmentDigest {
 		state.mu.Unlock()
 		return fail(ErrAssignmentUnavailable)
 	}

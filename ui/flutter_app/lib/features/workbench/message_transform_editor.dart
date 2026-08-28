@@ -11,20 +11,20 @@ import '../../core/i18n/app_copy.dart';
 
 typedef MessageTransformTestCallback =
     Future<MessageTransformTestResult> Function({
-      required String clientProtocol,
+      required String wireProtocol,
       required TrafficTransformPolicy policy,
+      MessageTransformTestSample? sample,
     });
 
-/// Edits the message transform owned by exactly one client protocol path.
-///
-/// The caller owns Environment revision changes. This widget owns only the
-/// bounded authoring interaction and one static request/response test Turn.
-final class MessageTransformEditorButton extends StatelessWidget {
-  const MessageTransformEditorButton({
+typedef CodeLibraryLoader = Future<CodeLibraryCatalog> Function();
+
+/// Selects the ordered, immutable Transform revisions frozen by one protocol.
+final class MessageTransformPipelineButton extends StatelessWidget {
+  const MessageTransformPipelineButton({
     required this.plan,
     required this.copy,
     required this.enabled,
-    required this.testTransform,
+    required this.loadLibrary,
     required this.onChanged,
     super.key,
   });
@@ -32,8 +32,8 @@ final class MessageTransformEditorButton extends StatelessWidget {
   final EnvironmentProtocolPlan plan;
   final AppCopy copy;
   final bool enabled;
-  final MessageTransformTestCallback testTransform;
-  final ValueChanged<TrafficTransformPolicy> onChanged;
+  final CodeLibraryLoader loadLibrary;
+  final ValueChanged<List<CodeLibraryTransformRevision>> onChanged;
 
   @override
   Widget build(BuildContext context) {
@@ -53,7 +53,7 @@ final class MessageTransformEditorButton extends StatelessWidget {
             label: Align(
               alignment: Alignment.centerLeft,
               child: Text(
-                _summary(copy, plan.transformPolicy),
+                _summary(copy, plan.transforms),
                 maxLines: 1,
                 overflow: TextOverflow.ellipsis,
               ),
@@ -69,46 +69,372 @@ final class MessageTransformEditorButton extends StatelessWidget {
   }
 
   Future<void> _edit(BuildContext context) async {
-    final selection = await showDialog<TrafficTransformPolicy>(
+    final selection = await showDialog<List<CodeLibraryTransformRevision>>(
       context: context,
       barrierDismissible: true,
-      builder: (context) => MessageTransformEditorDialog(
+      builder: (context) => MessageTransformPipelineDialog(
         planId: plan.id,
-        clientProtocol: plan.clientProtocol,
-        initial: plan.transformPolicy,
+        initial: plan.transforms,
         copy: copy,
-        testTransform: testTransform,
+        loadLibrary: loadLibrary,
       ),
     );
     if (selection != null) onChanged(selection);
   }
 
-  static String _summary(AppCopy copy, TrafficTransformPolicy policy) {
-    final request = policy.requestJavaScript.isNotEmpty;
-    final response = policy.responseJavaScript.isNotEmpty;
-    if (request && response) return copy('environment.transform.summary.both');
-    if (request) return copy('environment.transform.summary.request');
-    if (response) return copy('environment.transform.summary.response');
-    return copy('environment.transform.summary.off');
+  static String _summary(
+    AppCopy copy,
+    List<CodeLibraryTransformRevision> transforms,
+  ) {
+    if (transforms.isEmpty) return copy('environment.transform.summary.off');
+    if (transforms.length == 1) {
+      final transform = transforms.single;
+      return copy.format('environment.transform.pipeline.item', {
+        'name': transform.displayName,
+        'revision': transform.revision,
+      });
+    }
+    return copy.format('environment.transform.pipeline.count', {
+      'count': transforms.length,
+    });
   }
+}
+
+final class MessageTransformPipelineDialog extends StatefulWidget {
+  const MessageTransformPipelineDialog({
+    required this.planId,
+    required this.initial,
+    required this.copy,
+    required this.loadLibrary,
+    super.key,
+  });
+
+  final String planId;
+  final List<CodeLibraryTransformRevision> initial;
+  final AppCopy copy;
+  final CodeLibraryLoader loadLibrary;
+
+  @override
+  State<MessageTransformPipelineDialog> createState() =>
+      _MessageTransformPipelineDialogState();
+}
+
+final class _MessageTransformPipelineDialogState
+    extends State<MessageTransformPipelineDialog> {
+  late final List<CodeLibraryTransformRevision> _selected;
+  CodeLibraryCatalog? _catalog;
+  bool _loading = true;
+  bool _failed = false;
+
+  AppCopy get copy => widget.copy;
+
+  @override
+  void initState() {
+    super.initState();
+    _selected = List.of(widget.initial);
+    unawaited(_load());
+  }
+
+  Future<void> _load() async {
+    setState(() {
+      _loading = true;
+      _failed = false;
+    });
+    try {
+      final catalog = await widget.loadLibrary();
+      if (!mounted) return;
+      setState(() {
+        _catalog = catalog;
+        _loading = false;
+      });
+    } on Object {
+      if (!mounted) return;
+      setState(() {
+        _loading = false;
+        _failed = true;
+      });
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final viewport = MediaQuery.sizeOf(context);
+    final width = math.max(280.0, math.min(640.0, viewport.width - 48));
+    final height = math.max(420.0, math.min(580.0, viewport.height - 48));
+    return Dialog(
+      insetPadding: const EdgeInsets.all(24),
+      clipBehavior: Clip.antiAlias,
+      child: SizedBox(
+        key: Key('environment-transform-pipeline-dialog-${widget.planId}'),
+        width: width,
+        height: height,
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            Padding(
+              padding: const EdgeInsets.fromLTRB(16, 12, 8, 10),
+              child: Row(
+                children: [
+                  Icon(
+                    Icons.account_tree_outlined,
+                    size: 19,
+                    color: context.viberColors.route,
+                  ),
+                  const SizedBox(width: 8),
+                  Expanded(
+                    child: Text(
+                      copy('environment.transform.pipeline.title'),
+                      style: Theme.of(context).textTheme.titleLarge,
+                    ),
+                  ),
+                  IconButton(
+                    tooltip: copy('common.close'),
+                    onPressed: () => Navigator.of(context).pop(),
+                    icon: const Icon(Icons.close, size: 18),
+                  ),
+                ],
+              ),
+            ),
+            const Divider(height: 1),
+            Expanded(child: _content(context)),
+            const Divider(height: 1),
+            Padding(
+              padding: const EdgeInsets.fromLTRB(12, 8, 12, 10),
+              child: Row(
+                mainAxisAlignment: MainAxisAlignment.end,
+                children: [
+                  TextButton(
+                    onPressed: () => Navigator.of(context).pop(),
+                    child: Text(copy('common.cancel')),
+                  ),
+                  const SizedBox(width: 8),
+                  FilledButton(
+                    key: Key(
+                      'environment-transform-pipeline-save-${widget.planId}',
+                    ),
+                    onPressed: () => Navigator.of(context).pop(
+                      List<CodeLibraryTransformRevision>.unmodifiable(
+                        _selected,
+                      ),
+                    ),
+                    child: Text(copy('common.save')),
+                  ),
+                ],
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _content(BuildContext context) {
+    if (_loading) return const Center(child: CompactProgressIndicator());
+    if (_failed) {
+      return Center(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Text(copy('environment.transform.pipeline.load_failed')),
+            const SizedBox(height: 8),
+            OutlinedButton(
+              onPressed: () => unawaited(_load()),
+              child: Text(copy('common.retry')),
+            ),
+          ],
+        ),
+      );
+    }
+    final available = _catalog!.transforms
+        .where((candidate) => !_selected.contains(candidate))
+        .toList(growable: false);
+    return ListView(
+      padding: const EdgeInsets.all(12),
+      children: [
+        Text(
+          copy('environment.transform.pipeline.selected'),
+          style: Theme.of(context).textTheme.titleSmall,
+        ),
+        const SizedBox(height: 6),
+        if (_selected.isEmpty)
+          _empty(context, copy('environment.transform.pipeline.empty'))
+        else
+          for (final (index, transform) in _selected.indexed)
+            _selectedRow(context, index, transform),
+        const SizedBox(height: 16),
+        Text(
+          copy('environment.transform.pipeline.available'),
+          style: Theme.of(context).textTheme.titleSmall,
+        ),
+        const SizedBox(height: 6),
+        if (available.isEmpty)
+          _empty(context, copy('environment.transform.pipeline.none_available'))
+        else
+          for (final transform in available) _availableRow(context, transform),
+      ],
+    );
+  }
+
+  Widget _selectedRow(
+    BuildContext context,
+    int index,
+    CodeLibraryTransformRevision transform,
+  ) => Container(
+    key: Key(
+      'environment-transform-pipeline-selected-${transform.id}-${transform.revision}',
+    ),
+    margin: const EdgeInsets.only(bottom: 5),
+    decoration: BoxDecoration(
+      border: Border.all(color: context.viberColors.divider),
+      borderRadius: ViberMetrics.controlRadius,
+    ),
+    child: Row(
+      children: [
+        SizedBox(
+          width: 30,
+          child: Center(
+            child: Text(
+              '${index + 1}',
+              style: Theme.of(context).textTheme.labelMedium?.copyWith(
+                color: context.viberColors.route,
+              ),
+            ),
+          ),
+        ),
+        Expanded(child: _transformLabel(context, transform)),
+        _iconButton(
+          key: Key(
+            'environment-transform-pipeline-up-${transform.id}-${transform.revision}',
+          ),
+          tooltip: copy('environment.transform.pipeline.move_up'),
+          icon: Icons.arrow_upward_rounded,
+          onPressed: index == 0
+              ? null
+              : () => setState(() {
+                  final item = _selected.removeAt(index);
+                  _selected.insert(index - 1, item);
+                }),
+        ),
+        _iconButton(
+          key: Key(
+            'environment-transform-pipeline-down-${transform.id}-${transform.revision}',
+          ),
+          tooltip: copy('environment.transform.pipeline.move_down'),
+          icon: Icons.arrow_downward_rounded,
+          onPressed: index == _selected.length - 1
+              ? null
+              : () => setState(() {
+                  final item = _selected.removeAt(index);
+                  _selected.insert(index + 1, item);
+                }),
+        ),
+        _iconButton(
+          key: Key(
+            'environment-transform-pipeline-remove-${transform.id}-${transform.revision}',
+          ),
+          tooltip: copy('common.remove'),
+          icon: Icons.close_rounded,
+          onPressed: () => setState(() => _selected.removeAt(index)),
+        ),
+      ],
+    ),
+  );
+
+  Widget _availableRow(
+    BuildContext context,
+    CodeLibraryTransformRevision transform,
+  ) => Container(
+    margin: const EdgeInsets.only(bottom: 5),
+    decoration: BoxDecoration(
+      color: context.viberColors.panelRaised.withValues(alpha: 0.34),
+      borderRadius: ViberMetrics.controlRadius,
+    ),
+    child: Row(
+      children: [
+        const SizedBox(width: 9),
+        Expanded(child: _transformLabel(context, transform)),
+        _iconButton(
+          key: Key(
+            'environment-transform-pipeline-add-${transform.id}-${transform.revision}',
+          ),
+          tooltip: copy('common.add'),
+          icon: Icons.add_rounded,
+          onPressed: () => setState(() => _selected.add(transform)),
+        ),
+      ],
+    ),
+  );
+
+  Widget _transformLabel(
+    BuildContext context,
+    CodeLibraryTransformRevision transform,
+  ) => Padding(
+    padding: const EdgeInsets.symmetric(vertical: 7),
+    child: Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Text(transform.displayName, overflow: TextOverflow.ellipsis),
+        Text(
+          '${transform.collectionId} · r${transform.revision}',
+          overflow: TextOverflow.ellipsis,
+          style: Theme.of(
+            context,
+          ).textTheme.bodySmall?.copyWith(color: context.viberColors.textMuted),
+        ),
+      ],
+    ),
+  );
+
+  Widget _empty(BuildContext context, String text) => Container(
+    padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 9),
+    color: context.viberColors.panelRaised.withValues(alpha: 0.34),
+    child: Text(
+      text,
+      style: Theme.of(
+        context,
+      ).textTheme.bodySmall?.copyWith(color: context.viberColors.textMuted),
+    ),
+  );
+
+  Widget _iconButton({
+    required Key key,
+    required String tooltip,
+    required IconData icon,
+    required VoidCallback? onPressed,
+  }) => SizedBox(
+    width: 32,
+    height: 32,
+    child: IconButton(
+      key: key,
+      tooltip: tooltip,
+      onPressed: onPressed,
+      padding: EdgeInsets.zero,
+      iconSize: 16,
+      icon: Icon(icon),
+    ),
+  );
 }
 
 /// One bounded editor for the request and response halves of a single Turn.
 final class MessageTransformEditorDialog extends StatefulWidget {
   const MessageTransformEditorDialog({
     required this.planId,
-    required this.clientProtocol,
+    required this.wireProtocol,
     required this.initial,
     required this.copy,
     required this.testTransform,
+    this.initialSample,
+    this.onTestWireProtocolChanged,
     super.key,
   });
 
   final String planId;
-  final String clientProtocol;
+  final String wireProtocol;
   final TrafficTransformPolicy initial;
   final AppCopy copy;
   final MessageTransformTestCallback testTransform;
+  final MessageTransformTestSample? initialSample;
+  final ValueChanged<String>? onTestWireProtocolChanged;
 
   @override
   State<MessageTransformEditorDialog> createState() =>
@@ -121,6 +447,9 @@ final class _MessageTransformEditorDialogState
   late final TabController _tabs;
   late final _JavaScriptEditingController _request;
   late final _JavaScriptEditingController _response;
+  late String _wireProtocol;
+  late MessageTransformTestSample? _sample;
+  final Map<String, MessageTransformTestSample?> _samplesByProtocol = {};
   MessageTransformTestResult? _result;
   bool _testing = false;
   String? _errorKey;
@@ -137,6 +466,9 @@ final class _MessageTransformEditorDialogState
     _response = _JavaScriptEditingController(
       text: widget.initial.responseJavaScript,
     );
+    _wireProtocol = widget.wireProtocol;
+    _sample = widget.initialSample;
+    _samplesByProtocol[_wireProtocol] = _sample;
   }
 
   @override
@@ -196,6 +528,9 @@ final class _MessageTransformEditorDialogState
                       'request.body',
                       'request.headers["x-name"]',
                       'context.value',
+                      'runtime.user.homeDirectory',
+                      'runtime.user.name',
+                      'runtime.workspace.root',
                       'JSON.parse(request.body)',
                     ],
                   ),
@@ -208,6 +543,9 @@ final class _MessageTransformEditorDialogState
                       'response.body',
                       'response.headers["x-name"]',
                       'context.value',
+                      'runtime.turn.startedAt',
+                      'runtime.device.timeZone',
+                      'runtime.annotations.create("kind", "text")',
                       'JSON.parse(response.body)',
                     ],
                   ),
@@ -258,12 +596,13 @@ final class _MessageTransformEditorDialogState
                   copy('environment.transform.dialog.title'),
                   style: Theme.of(context).textTheme.titleLarge,
                 ),
-                Text(
-                  _protocolLabel(copy, widget.clientProtocol),
-                  style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                    color: context.viberColors.textMuted,
+                if (widget.onTestWireProtocolChanged == null)
+                  Text(
+                    _protocolLabel(copy, _wireProtocol),
+                    style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                      color: context.viberColors.textMuted,
+                    ),
                   ),
-                ),
               ],
             ),
           ),
@@ -309,9 +648,39 @@ final class _MessageTransformEditorDialogState
               ),
             ],
           ),
+          if (_sample != null)
+            OutlinedButton.icon(
+              key: Key('environment-transform-sample-${widget.planId}'),
+              onPressed: _testing ? null : () => unawaited(_editSample()),
+              icon: const Icon(Icons.science_outlined, size: 14),
+              label: Text(copy('environment.transform.sample.edit')),
+              style: OutlinedButton.styleFrom(
+                visualDensity: VisualDensity.compact,
+              ),
+            ),
         ],
       ),
     );
+  }
+
+  Future<void> _editSample() async {
+    final current = _sample;
+    if (current == null) return;
+    final edited = await showDialog<MessageTransformTestSample>(
+      context: context,
+      builder: (context) => _MessageTransformSampleDialog(
+        planId: widget.planId,
+        initial: current,
+        copy: copy,
+      ),
+    );
+    if (edited != null && mounted) {
+      setState(() {
+        _sample = edited;
+        _result = null;
+        _errorKey = null;
+      });
+    }
   }
 
   Widget _actions(BuildContext context) {
@@ -327,6 +696,14 @@ final class _MessageTransformEditorDialogState
             onPressed: _testing ? null : () => Navigator.of(context).pop(),
             child: Text(copy('common.cancel')),
           ),
+          if (widget.onTestWireProtocolChanged != null)
+            _TestProtocolMenu(
+              planId: widget.planId,
+              value: _wireProtocol,
+              copy: copy,
+              enabled: !_testing,
+              onChanged: _selectTestWireProtocol,
+            ),
           OutlinedButton.icon(
             key: Key('environment-transform-test-${widget.planId}'),
             onPressed: _testing ? null : () => unawaited(_runTest()),
@@ -343,6 +720,18 @@ final class _MessageTransformEditorDialogState
         ],
       ),
     );
+  }
+
+  void _selectTestWireProtocol(String value) {
+    if (value == _wireProtocol) return;
+    setState(() {
+      _samplesByProtocol[_wireProtocol] = _sample;
+      _wireProtocol = value;
+      _sample = _samplesByProtocol[value];
+      _result = null;
+      _errorKey = null;
+    });
+    widget.onTestWireProtocolChanged?.call(value);
   }
 
   TrafficTransformPolicy? _policy() {
@@ -370,8 +759,9 @@ final class _MessageTransformEditorDialogState
     });
     try {
       final result = await widget.testTransform(
-        clientProtocol: widget.clientProtocol,
+        wireProtocol: _wireProtocol,
         policy: policy,
+        sample: _sample,
       );
       if (!mounted) return;
       setState(() => _result = result);
@@ -386,6 +776,336 @@ final class _MessageTransformEditorDialogState
   void _save() {
     final policy = _policy();
     if (policy != null) Navigator.of(context).pop(policy);
+  }
+}
+
+final class _TestProtocolMenu extends StatelessWidget {
+  const _TestProtocolMenu({
+    required this.planId,
+    required this.value,
+    required this.copy,
+    required this.enabled,
+    required this.onChanged,
+  });
+
+  final String planId;
+  final String value;
+  final AppCopy copy;
+  final bool enabled;
+  final ValueChanged<String> onChanged;
+
+  @override
+  Widget build(BuildContext context) => SizedBox(
+    key: Key('environment-transform-test-format-$planId'),
+    height: ViberMetrics.controlHeight,
+    child: PopupMenuButton<String>(
+      initialValue: value,
+      enabled: enabled,
+      tooltip: copy('code_library.test_protocol.detail'),
+      onSelected: onChanged,
+      itemBuilder: (context) => const [
+        PopupMenuItem(
+          value: 'anthropic_messages',
+          child: Text('Anthropic Messages'),
+        ),
+        PopupMenuItem(
+          value: 'openai_responses',
+          child: Text('OpenAI Responses'),
+        ),
+        PopupMenuItem(value: 'openai_chat', child: Text('OpenAI Chat')),
+      ],
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 9),
+        decoration: BoxDecoration(
+          color: context.viberColors.input,
+          border: Border.all(color: context.viberColors.divider),
+          borderRadius: ViberMetrics.controlRadius,
+        ),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Icon(
+              Icons.science_outlined,
+              size: 14,
+              color: context.viberColors.textMuted,
+            ),
+            const SizedBox(width: 6),
+            Flexible(
+              child: Text(
+                '${copy('code_library.test_protocol')} · ${_protocolLabel(copy, value)}',
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: Theme.of(context).textTheme.labelLarge,
+              ),
+            ),
+            const SizedBox(width: 6),
+            const Icon(Icons.arrow_drop_down_rounded, size: 17),
+          ],
+        ),
+      ),
+    ),
+  );
+}
+
+final class _MessageTransformSampleDialog extends StatefulWidget {
+  const _MessageTransformSampleDialog({
+    required this.planId,
+    required this.initial,
+    required this.copy,
+  });
+
+  final String planId;
+  final MessageTransformTestSample initial;
+  final AppCopy copy;
+
+  @override
+  State<_MessageTransformSampleDialog> createState() =>
+      _MessageTransformSampleDialogState();
+}
+
+final class _MessageTransformSampleDialogState
+    extends State<_MessageTransformSampleDialog> {
+  late final TextEditingController _requestHeaders;
+  late final TextEditingController _requestBody;
+  late final TextEditingController _responseHeaders;
+  late final TextEditingController _responseBody;
+  late final TextEditingController _status;
+  late bool _streaming;
+  bool _invalid = false;
+
+  AppCopy get copy => widget.copy;
+
+  @override
+  void initState() {
+    super.initState();
+    const encoder = JsonEncoder.withIndent('  ');
+    _requestHeaders = TextEditingController(
+      text: encoder.convert(widget.initial.request.headers),
+    );
+    _requestBody = TextEditingController(text: widget.initial.request.body);
+    _responseHeaders = TextEditingController(
+      text: encoder.convert(widget.initial.response.headers),
+    );
+    _responseBody = TextEditingController(text: widget.initial.response.body);
+    _status = TextEditingController(
+      text: widget.initial.response.statusCode.toString(),
+    );
+    _streaming = widget.initial.response.streaming;
+  }
+
+  @override
+  void dispose() {
+    _requestHeaders.dispose();
+    _requestBody.dispose();
+    _responseHeaders.dispose();
+    _responseBody.dispose();
+    _status.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final viewport = MediaQuery.sizeOf(context);
+    return Dialog(
+      insetPadding: const EdgeInsets.all(24),
+      clipBehavior: Clip.antiAlias,
+      child: SizedBox(
+        key: Key('environment-transform-sample-dialog-${widget.planId}'),
+        width: math.max(280, math.min(720, viewport.width - 48)),
+        height: math.max(420, math.min(620, viewport.height - 48)),
+        child: DefaultTabController(
+          length: 2,
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              Padding(
+                padding: const EdgeInsets.fromLTRB(16, 14, 8, 10),
+                child: Row(
+                  children: [
+                    const Icon(Icons.science_outlined, size: 18),
+                    const SizedBox(width: 8),
+                    Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text(
+                            copy('environment.transform.sample.title'),
+                            style: Theme.of(context).textTheme.titleLarge,
+                          ),
+                          Text(
+                            copy('environment.transform.sample.local_detail'),
+                            style: Theme.of(context).textTheme.bodySmall
+                                ?.copyWith(
+                                  color: context.viberColors.textMuted,
+                                ),
+                          ),
+                        ],
+                      ),
+                    ),
+                    IconButton(
+                      tooltip: copy('common.close'),
+                      onPressed: () => Navigator.of(context).pop(),
+                      icon: const Icon(Icons.close, size: 18),
+                    ),
+                  ],
+                ),
+              ),
+              const Divider(height: 1),
+              TabBar(
+                tabs: [
+                  Tab(
+                    key: const Key('environment-transform-sample-tab-request'),
+                    text: copy('environment.transform.request'),
+                  ),
+                  Tab(
+                    key: const Key('environment-transform-sample-tab-response'),
+                    text: copy('environment.transform.response'),
+                  ),
+                ],
+              ),
+              Expanded(
+                child: TabBarView(
+                  children: [_requestPane(context), _responsePane(context)],
+                ),
+              ),
+              if (_invalid)
+                Padding(
+                  padding: const EdgeInsets.symmetric(horizontal: 14),
+                  child: Text(
+                    copy('environment.transform.sample.invalid'),
+                    style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                      color: context.viberColors.danger,
+                    ),
+                  ),
+                ),
+              Padding(
+                padding: const EdgeInsets.fromLTRB(12, 8, 12, 10),
+                child: Row(
+                  mainAxisAlignment: MainAxisAlignment.end,
+                  children: [
+                    TextButton(
+                      onPressed: () => Navigator.of(context).pop(),
+                      child: Text(copy('common.cancel')),
+                    ),
+                    const SizedBox(width: 8),
+                    FilledButton(
+                      key: const Key('environment-transform-sample-save'),
+                      onPressed: _save,
+                      child: Text(copy('environment.transform.sample.save')),
+                    ),
+                  ],
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _requestPane(BuildContext context) => ListView(
+    padding: const EdgeInsets.all(14),
+    children: [
+      SelectableText(
+        '${widget.initial.request.method} ${widget.initial.request.path}',
+        style: monoStyle.copyWith(color: context.viberColors.textMuted),
+      ),
+      const SizedBox(height: 10),
+      _sampleTextField(
+        key: const Key('environment-transform-sample-request-headers'),
+        controller: _requestHeaders,
+        label: copy('environment.transform.sample.headers'),
+        lines: 6,
+      ),
+      const SizedBox(height: 10),
+      _sampleTextField(
+        key: const Key('environment-transform-sample-request-body'),
+        controller: _requestBody,
+        label: copy('environment.transform.sample.body'),
+        lines: 10,
+      ),
+    ],
+  );
+
+  Widget _responsePane(BuildContext context) => ListView(
+    padding: const EdgeInsets.all(14),
+    children: [
+      Row(
+        children: [
+          Expanded(
+            child: TextField(
+              key: const Key('environment-transform-sample-response-status'),
+              controller: _status,
+              keyboardType: TextInputType.number,
+              decoration: InputDecoration(
+                labelText: copy('environment.transform.sample.status'),
+              ),
+            ),
+          ),
+          const SizedBox(width: 12),
+          Expanded(
+            child: CheckboxListTile(
+              key: const Key('environment-transform-sample-response-streaming'),
+              value: _streaming,
+              contentPadding: EdgeInsets.zero,
+              dense: true,
+              title: Text(copy('environment.transform.sample.streaming')),
+              onChanged: (value) => setState(() => _streaming = value == true),
+            ),
+          ),
+        ],
+      ),
+      const SizedBox(height: 10),
+      _sampleTextField(
+        key: const Key('environment-transform-sample-response-headers'),
+        controller: _responseHeaders,
+        label: copy('environment.transform.sample.headers'),
+        lines: 6,
+      ),
+      const SizedBox(height: 10),
+      _sampleTextField(
+        key: const Key('environment-transform-sample-response-body'),
+        controller: _responseBody,
+        label: copy('environment.transform.sample.body'),
+        lines: 10,
+      ),
+    ],
+  );
+
+  Widget _sampleTextField({
+    required Key key,
+    required TextEditingController controller,
+    required String label,
+    required int lines,
+  }) => TextField(
+    key: key,
+    controller: controller,
+    minLines: lines,
+    maxLines: lines,
+    style: monoStyle,
+    decoration: InputDecoration(labelText: label, alignLabelWithHint: true),
+  );
+
+  void _save() {
+    try {
+      final sample = MessageTransformTestSample(
+        request: MessageTransformTestRequest.fromJson({
+          'method': widget.initial.request.method,
+          'path': widget.initial.request.path,
+          'headers': jsonDecode(_requestHeaders.text),
+          'body': _requestBody.text,
+        }, r'$.sample.request'),
+        response: MessageTransformTestResponse.fromJson({
+          'statusCode': int.tryParse(_status.text),
+          'streaming': _streaming,
+          'headers': jsonDecode(_responseHeaders.text),
+          'body': _responseBody.text,
+        }, r'$.sample.response'),
+      );
+      Navigator.of(context).pop(sample);
+    } on Object {
+      setState(() => _invalid = true);
+    }
   }
 }
 
@@ -535,87 +1255,97 @@ final class _ResultPanel extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return Container(
-      key: const Key('environment-transform-test-result'),
-      constraints: const BoxConstraints(maxHeight: 154),
-      decoration: BoxDecoration(
-        color: context.viberColors.verified.withValues(alpha: 0.07),
-        border: Border(top: BorderSide(color: context.viberColors.divider)),
-      ),
-      child: SingleChildScrollView(
-        padding: const EdgeInsets.fromLTRB(12, 8, 12, 10),
-        child: LayoutBuilder(
-          builder: (context, constraints) {
-            final request = _ResultMessage(
-              title: '${result.request.method} ${result.request.path}',
-              headers: result.request.headers,
-              body: result.request.body,
-            );
-            final response = _ResultMessage(
-              title: '${result.response.statusCode}',
-              headers: result.response.headers,
-              body: result.response.body,
-            );
-            return Column(
-              crossAxisAlignment: CrossAxisAlignment.stretch,
-              children: [
-                Row(
-                  children: [
-                    Icon(
-                      Icons.check_circle_outline,
-                      size: 14,
-                      color: context.viberColors.verified,
-                    ),
-                    const SizedBox(width: 5),
-                    Text(
-                      copy('environment.transform.test.passed'),
-                      style: Theme.of(context).textTheme.labelMedium?.copyWith(
-                        color: context.viberColors.verified,
-                        fontWeight: FontWeight.w600,
-                      ),
-                    ),
-                  ],
-                ),
-                const SizedBox(height: 6),
-                if (constraints.maxWidth >= 560)
+    return LayoutBuilder(
+      builder: (context, panelConstraints) => Container(
+        key: const Key('environment-transform-test-result'),
+        constraints: BoxConstraints(
+          maxHeight: panelConstraints.maxWidth < 560 ? 160 : 240,
+        ),
+        decoration: BoxDecoration(
+          color: context.viberColors.verified.withValues(alpha: 0.07),
+          border: Border(top: BorderSide(color: context.viberColors.divider)),
+        ),
+        child: SingleChildScrollView(
+          padding: const EdgeInsets.fromLTRB(12, 8, 12, 10),
+          child: LayoutBuilder(
+            builder: (context, constraints) {
+              final request = _ResultDiff(
+                key: const Key('environment-transform-request-diff'),
+                title: copy('environment.transform.diff.request'),
+                before: _requestSnapshot(result.requestBefore),
+                after: _requestSnapshot(result.requestAfter),
+                unchangedLabel: copy('environment.transform.diff.unchanged'),
+              );
+              final response = _ResultDiff(
+                key: const Key('environment-transform-response-diff'),
+                title: copy('environment.transform.diff.response'),
+                before: _responseSnapshot(result.responseBefore),
+                after: _responseSnapshot(result.responseAfter),
+                unchangedLabel: copy('environment.transform.diff.unchanged'),
+              );
+              return Column(
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
                   Row(
-                    crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
-                      Expanded(child: request),
-                      const SizedBox(width: 8),
-                      Expanded(child: response),
+                      Icon(
+                        Icons.check_circle_outline,
+                        size: 14,
+                        color: context.viberColors.verified,
+                      ),
+                      const SizedBox(width: 5),
+                      Text(
+                        copy('environment.transform.test.passed'),
+                        style: Theme.of(context).textTheme.labelMedium
+                            ?.copyWith(
+                              color: context.viberColors.verified,
+                              fontWeight: FontWeight.w600,
+                            ),
+                      ),
                     ],
-                  )
-                else ...[
-                  request,
+                  ),
                   const SizedBox(height: 6),
-                  response,
+                  if (constraints.maxWidth >= 560)
+                    Row(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Expanded(child: request),
+                        const SizedBox(width: 8),
+                        Expanded(child: response),
+                      ],
+                    )
+                  else ...[
+                    request,
+                    const SizedBox(height: 6),
+                    response,
+                  ],
                 ],
-              ],
-            );
-          },
+              );
+            },
+          ),
         ),
       ),
     );
   }
 }
 
-final class _ResultMessage extends StatelessWidget {
-  const _ResultMessage({
+final class _ResultDiff extends StatelessWidget {
+  const _ResultDiff({
     required this.title,
-    required this.headers,
-    required this.body,
+    required this.before,
+    required this.after,
+    required this.unchangedLabel,
+    super.key,
   });
 
   final String title;
-  final Map<String, List<String>> headers;
-  final String body;
+  final List<String> before;
+  final List<String> after;
+  final String unchangedLabel;
 
   @override
   Widget build(BuildContext context) {
-    final headerText = headers.entries
-        .map((entry) => '${entry.key}: ${entry.value.join(', ')}')
-        .join('\n');
+    final lines = _diffLines(before, after);
     return DecoratedBox(
       decoration: BoxDecoration(
         color: context.viberColors.panel,
@@ -623,20 +1353,126 @@ final class _ResultMessage extends StatelessWidget {
         borderRadius: ViberMetrics.controlRadius,
       ),
       child: Padding(
-        padding: const EdgeInsets.all(7),
-        child: SelectionArea(
-          child: Text(
-            '$title\n$headerText\n$body',
-            style: const TextStyle(
-              fontFamily: 'Menlo',
-              fontSize: 10.5,
-              height: 1.35,
+        padding: const EdgeInsets.fromLTRB(7, 6, 7, 7),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            Text(
+              title,
+              style: Theme.of(context).textTheme.labelSmall?.copyWith(
+                color: context.viberColors.textMuted,
+                fontWeight: FontWeight.w600,
+              ),
             ),
-          ),
+            const SizedBox(height: 4),
+            SingleChildScrollView(
+              scrollDirection: Axis.horizontal,
+              child: SelectionArea(
+                child: Text.rich(
+                  TextSpan(
+                    children: lines.isEmpty
+                        ? [TextSpan(text: '  $unchangedLabel')]
+                        : [
+                            for (final line in lines)
+                              TextSpan(
+                                text: '${line.marker} ${line.text}\n',
+                                style: TextStyle(
+                                  color: switch (line.marker) {
+                                    '-' => context.viberColors.danger,
+                                    '+' => context.viberColors.verified,
+                                    _ => context.viberColors.textMuted,
+                                  },
+                                  backgroundColor: switch (line.marker) {
+                                    '-' =>
+                                      context.viberColors.danger.withValues(
+                                        alpha: 0.08,
+                                      ),
+                                    '+' =>
+                                      context.viberColors.verified.withValues(
+                                        alpha: 0.08,
+                                      ),
+                                    _ => null,
+                                  },
+                                ),
+                              ),
+                          ],
+                  ),
+                  style: const TextStyle(
+                    fontFamily: 'Menlo',
+                    fontSize: 10.5,
+                    height: 1.35,
+                  ),
+                ),
+              ),
+            ),
+          ],
         ),
       ),
     );
   }
+}
+
+List<String> _requestSnapshot(MessageTransformTestRequest request) => [
+  '${request.method} ${request.path}',
+  ..._headerLines(request.headers),
+  '',
+  ..._bodyLines(request.body),
+];
+
+List<String> _responseSnapshot(MessageTransformTestResponse response) => [
+  'HTTP ${response.statusCode}',
+  ..._headerLines(response.headers),
+  '',
+  ..._bodyLines(response.body),
+];
+
+List<String> _headerLines(Map<String, List<String>> headers) {
+  final names = headers.keys.toList()..sort();
+  return [for (final name in names) '$name: ${headers[name]!.join(', ')}'];
+}
+
+List<String> _bodyLines(String body) {
+  try {
+    return const JsonEncoder.withIndent(
+      '  ',
+    ).convert(jsonDecode(body)).split('\n');
+  } on FormatException {
+    return body.split('\n');
+  }
+}
+
+List<({String marker, String text})> _diffLines(
+  List<String> before,
+  List<String> after,
+) {
+  if (before.length == after.length &&
+      Iterable<int>.generate(
+        before.length,
+      ).every((index) => before[index] == after[index])) {
+    return const [];
+  }
+  var prefix = 0;
+  while (prefix < before.length &&
+      prefix < after.length &&
+      before[prefix] == after[prefix]) {
+    prefix++;
+  }
+  var suffix = 0;
+  while (suffix < before.length - prefix &&
+      suffix < after.length - prefix &&
+      before[before.length - suffix - 1] == after[after.length - suffix - 1]) {
+    suffix++;
+  }
+  return [
+    for (final line in before.take(prefix)) (marker: ' ', text: line),
+    for (final line
+        in before.skip(prefix).take(before.length - prefix - suffix))
+      (marker: '-', text: line),
+    for (final line in after.skip(prefix).take(after.length - prefix - suffix))
+      (marker: '+', text: line),
+    for (final line in before.skip(before.length - suffix))
+      (marker: ' ', text: line),
+  ];
 }
 
 String _protocolLabel(AppCopy copy, String protocol) => switch (protocol) {
@@ -650,7 +1486,7 @@ final class _JavaScriptEditingController extends TextEditingController {
   _JavaScriptEditingController({super.text});
 
   static final _tokens = RegExp(
-    r'''//[^\n]*|/\*[\s\S]*?\*/|"(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'|`(?:\\.|[^`\\])*`|\b(?:const|let|var|if|else|for|while|return|throw|new|delete|true|false|null|undefined)\b|\b(?:request|response|context|JSON)\b''',
+    r'''//[^\n]*|/\*[\s\S]*?\*/|"(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'|`(?:\\.|[^`\\])*`|\b(?:const|let|var|if|else|for|while|return|throw|new|delete|true|false|null|undefined)\b|\b(?:request|response|context|runtime|JSON)\b''',
     multiLine: true,
   );
 
@@ -698,7 +1534,13 @@ final class _JavaScriptEditingController extends TextEditingController {
                 token.startsWith("'") ||
                 token.startsWith('`')
           ? TextStyle(color: palette.verified)
-          : const {'request', 'response', 'context', 'JSON'}.contains(token)
+          : const {
+              'request',
+              'response',
+              'context',
+              'runtime',
+              'JSON',
+            }.contains(token)
           ? TextStyle(color: palette.route, fontWeight: FontWeight.w600)
           : TextStyle(color: palette.warning, fontWeight: FontWeight.w600);
       spans.add(TextSpan(text: token, style: tokenStyle));

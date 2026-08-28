@@ -11,6 +11,7 @@ import 'deletion_dialog.dart';
 import '../../core/design/workbench_widgets.dart';
 import '../../core/i18n/app_copy.dart';
 import 'environment_editing.dart';
+import 'egress_profile_editor.dart';
 import 'launch_environment_editor.dart';
 import 'message_transform_editor.dart';
 import 'workbench_controller.dart';
@@ -1156,26 +1157,26 @@ final class _NewEnvironmentDialogState extends State<_NewEnvironmentDialog> {
                                                 value,
                                           ];
                                         }),
-                                        onEgressChanged: (plan, policy) =>
+                                        onEgressChanged: (plan, profile) =>
                                             setState(() {
                                               _clientEndpoints =
-                                                  assignEnvironmentProtocolEgressPolicy(
+                                                  assignEnvironmentProtocolEgressProfile(
                                                     endpoints: _clientEndpoints,
                                                     clientEndpointId:
                                                         endpoint.id,
                                                     protocolPlanId: plan.id,
-                                                    policy: policy,
+                                                    profile: profile,
                                                   );
                                             }),
-                                        onTransformChanged: (plan, policy) =>
-                                            setState(() {
+                                        onTransformChanged:
+                                            (plan, transforms) => setState(() {
                                               _clientEndpoints =
-                                                  assignEnvironmentProtocolTransformPolicy(
+                                                  assignEnvironmentProtocolTransforms(
                                                     endpoints: _clientEndpoints,
                                                     clientEndpointId:
                                                         endpoint.id,
                                                     protocolPlanId: plan.id,
-                                                    policy: policy,
+                                                    transforms: transforms,
                                                   );
                                             }),
                                         onAccountChanged:
@@ -1857,26 +1858,26 @@ final class _EnvironmentEditorDialogState
                                                 value,
                                           ];
                                         }),
-                                        onEgressChanged: (plan, policy) =>
+                                        onEgressChanged: (plan, profile) =>
                                             setState(() {
                                               _clientEndpoints =
-                                                  assignEnvironmentProtocolEgressPolicy(
+                                                  assignEnvironmentProtocolEgressProfile(
                                                     endpoints: _clientEndpoints,
                                                     clientEndpointId:
                                                         endpoint.id,
                                                     protocolPlanId: plan.id,
-                                                    policy: policy,
+                                                    profile: profile,
                                                   );
                                             }),
-                                        onTransformChanged: (plan, policy) =>
-                                            setState(() {
+                                        onTransformChanged:
+                                            (plan, transforms) => setState(() {
                                               _clientEndpoints =
-                                                  assignEnvironmentProtocolTransformPolicy(
+                                                  assignEnvironmentProtocolTransforms(
                                                     endpoints: _clientEndpoints,
                                                     clientEndpointId:
                                                         endpoint.id,
                                                     protocolPlanId: plan.id,
-                                                    policy: policy,
+                                                    transforms: transforms,
                                                   );
                                             }),
                                         onAccountChanged:
@@ -2181,10 +2182,13 @@ typedef _RouteModelChanged =
     );
 
 typedef _ProtocolEgressChanged =
-    void Function(EnvironmentProtocolPlan plan, TrafficEgressPolicy policy);
+    void Function(EnvironmentProtocolPlan plan, EgressProfileRevision profile);
 
 typedef _ProtocolTransformChanged =
-    void Function(EnvironmentProtocolPlan plan, TrafficTransformPolicy policy);
+    void Function(
+      EnvironmentProtocolPlan plan,
+      List<CodeLibraryTransformRevision> transforms,
+    );
 
 typedef _EndpointAdded =
     void Function(
@@ -2870,18 +2874,20 @@ final class _EnvironmentEndpointEditor extends StatelessWidget {
               Column(
                 crossAxisAlignment: CrossAxisAlignment.stretch,
                 children: [
-                  _TrafficEgressEditorRow(
+                  EgressProfileButton(
                     plan: plan,
                     copy: copy,
                     enabled: enabled,
-                    onChanged: (policy) => onEgressChanged(plan, policy),
+                    loadProfiles: controller.egressProfiles,
+                    onChanged: (profile) => onEgressChanged(plan, profile),
                   ),
-                  MessageTransformEditorButton(
+                  MessageTransformPipelineButton(
                     plan: plan,
                     copy: copy,
                     enabled: enabled,
-                    testTransform: controller.testMessageTransform,
-                    onChanged: (policy) => onTransformChanged(plan, policy),
+                    loadLibrary: controller.codeLibrary,
+                    onChanged: (transforms) =>
+                        onTransformChanged(plan, transforms),
                   ),
                   if (plan.destination.isOriginal)
                     _OriginalDestinationEditorRow(plan: plan, copy: copy)
@@ -2911,496 +2917,6 @@ final class _EnvironmentEndpointEditor extends StatelessWidget {
       ),
     );
   }
-}
-
-final class _TrafficEgressEditorRow extends StatelessWidget {
-  const _TrafficEgressEditorRow({
-    required this.plan,
-    required this.copy,
-    required this.enabled,
-    required this.onChanged,
-  });
-
-  final EnvironmentProtocolPlan plan;
-  final AppCopy copy;
-  final bool enabled;
-  final ValueChanged<TrafficEgressPolicy> onChanged;
-
-  @override
-  Widget build(BuildContext context) {
-    final summary = _trafficEgressSummary(copy, plan.egressPolicy);
-    return Container(
-      color: context.viberColors.panelRaised.withValues(alpha: 0.34),
-      padding: const EdgeInsets.fromLTRB(9, 8, 9, 9),
-      child: CompactLabeledControl(
-        label: copy('environment.egress.label'),
-        detail: copy('environment.egress.detail'),
-        child: SizedBox(
-          width: double.infinity,
-          height: ViberMetrics.controlHeight,
-          child: OutlinedButton.icon(
-            key: Key('environment-egress-${plan.id}'),
-            onPressed: enabled ? () => unawaited(_edit(context)) : null,
-            icon: const Icon(Icons.alt_route_rounded, size: 14),
-            label: Align(
-              alignment: Alignment.centerLeft,
-              child: Text(
-                summary,
-                maxLines: 1,
-                overflow: TextOverflow.ellipsis,
-              ),
-            ),
-            style: OutlinedButton.styleFrom(
-              alignment: Alignment.centerLeft,
-              padding: const EdgeInsets.symmetric(horizontal: 9),
-            ),
-          ),
-        ),
-      ),
-    );
-  }
-
-  Future<void> _edit(BuildContext context) async {
-    final selection = await showDialog<TrafficEgressPolicy>(
-      context: context,
-      barrierDismissible: true,
-      builder: (context) => _TrafficEgressDialog(
-        planId: plan.id,
-        initial: plan.egressPolicy,
-        copy: copy,
-      ),
-    );
-    if (selection != null) onChanged(selection);
-  }
-}
-
-String _trafficEgressSummary(AppCopy copy, TrafficEgressPolicy policy) {
-  final proxy = switch (policy.proxy.kind) {
-    'direct' => copy('environment.egress.proxy.direct'),
-    'socks5' => 'SOCKS5 · ${policy.proxy.endpoint}',
-    _ => policy.proxy.kind,
-  };
-  final resolver = switch (policy.resolver.kind) {
-    'system' => copy('environment.egress.resolver.system'),
-    'doh' =>
-      policy.resolver.transport == 'proxy'
-          ? 'DoH · ${copy('environment.egress.doh.transport.proxy')}'
-          : 'DoH · ${copy('environment.egress.doh.transport.direct')}',
-    _ => policy.resolver.kind,
-  };
-  return '$proxy · $resolver';
-}
-
-final class _TrafficEgressDialog extends StatefulWidget {
-  const _TrafficEgressDialog({
-    required this.planId,
-    required this.initial,
-    required this.copy,
-  });
-
-  final String planId;
-  final TrafficEgressPolicy initial;
-  final AppCopy copy;
-
-  @override
-  State<_TrafficEgressDialog> createState() => _TrafficEgressDialogState();
-}
-
-final class _DoHEndpointPreset {
-  const _DoHEndpointPreset({
-    required this.id,
-    required this.copyKey,
-    required this.url,
-  });
-
-  final String id;
-  final String copyKey;
-  final String url;
-}
-
-const _customDoHEndpointPresetId = 'custom';
-const _doHEndpointPresets = <_DoHEndpointPreset>[
-  _DoHEndpointPreset(
-    id: 'cloudflare',
-    copyKey: 'environment.egress.doh.preset.cloudflare',
-    url: 'https://1.1.1.1/dns-query',
-  ),
-  _DoHEndpointPreset(
-    id: 'google',
-    copyKey: 'environment.egress.doh.preset.google',
-    url: 'https://8.8.8.8/dns-query',
-  ),
-  _DoHEndpointPreset(
-    id: 'quad9',
-    copyKey: 'environment.egress.doh.preset.quad9',
-    url: 'https://9.9.9.9/dns-query',
-  ),
-];
-
-_DoHEndpointPreset? _doHEndpointPresetById(String id) {
-  for (final preset in _doHEndpointPresets) {
-    if (preset.id == id) return preset;
-  }
-  return null;
-}
-
-String _doHEndpointPresetIdForUrl(String url) {
-  for (final preset in _doHEndpointPresets) {
-    if (preset.url == url) return preset.id;
-  }
-  return _customDoHEndpointPresetId;
-}
-
-final class _TrafficEgressDialogState extends State<_TrafficEgressDialog> {
-  final _formKey = GlobalKey<FormState>();
-  late final TextEditingController _proxyEndpoint;
-  late final TextEditingController _dohUrl;
-  late String _proxyKind;
-  late String _resolverKind;
-  late String _resolverTransport;
-  late String _dohPresetId;
-  String? _error;
-
-  AppCopy get copy => widget.copy;
-
-  @override
-  void initState() {
-    super.initState();
-    _proxyKind = widget.initial.proxy.kind;
-    _proxyEndpoint = TextEditingController(
-      text: widget.initial.proxy.endpoint ?? '',
-    );
-    _resolverKind = widget.initial.resolver.kind;
-    _resolverTransport = widget.initial.resolver.transport;
-    _dohUrl = TextEditingController(text: widget.initial.resolver.dohUrl ?? '');
-    _dohPresetId = _doHEndpointPresetIdForUrl(_dohUrl.text);
-  }
-
-  @override
-  void dispose() {
-    _proxyEndpoint.dispose();
-    _dohUrl.dispose();
-    super.dispose();
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    final maximumHeight = math.min(
-      600.0,
-      MediaQuery.sizeOf(context).height - 48,
-    );
-    return AlertDialog(
-      insetPadding: const EdgeInsets.all(24),
-      titlePadding: const EdgeInsets.fromLTRB(18, 16, 18, 8),
-      contentPadding: const EdgeInsets.fromLTRB(18, 0, 18, 4),
-      actionsPadding: const EdgeInsets.fromLTRB(12, 6, 12, 12),
-      title: Text(copy('environment.egress.dialog.title')),
-      content: SizedBox(
-        key: Key('environment-egress-dialog-${widget.planId}'),
-        width: 520,
-        child: ConstrainedBox(
-          constraints: BoxConstraints(maxHeight: maximumHeight),
-          child: Form(
-            key: _formKey,
-            child: SingleChildScrollView(
-              child: Column(
-                mainAxisSize: MainAxisSize.min,
-                crossAxisAlignment: CrossAxisAlignment.stretch,
-                children: [
-                  Text(
-                    copy('environment.egress.dialog.scope'),
-                    style: Theme.of(context).textTheme.bodySmall,
-                  ),
-                  const SizedBox(height: 12),
-                  CompactLabeledControl(
-                    label: copy('environment.egress.proxy.label'),
-                    child: CompactSelectField<String>(
-                      key: Key(
-                        'environment-egress-proxy-kind-${widget.planId}',
-                      ),
-                      initialValue: _proxyKind,
-                      isExpanded: true,
-                      items: [
-                        for (final kind in const ['direct', 'socks5'])
-                          DropdownMenuItem(
-                            key: Key('environment-egress-proxy-option-$kind'),
-                            value: kind,
-                            child: Text(
-                              copy('environment.egress.proxy.$kind'),
-                              overflow: TextOverflow.ellipsis,
-                            ),
-                          ),
-                      ],
-                      onChanged: (value) {
-                        if (value != null) _setProxyKind(value);
-                      },
-                    ),
-                  ),
-                  if (_proxyKind != 'direct') ...[
-                    const SizedBox(height: 9),
-                    CompactLabeledControl(
-                      label: copy('environment.egress.proxy.endpoint'),
-                      child: TextFormField(
-                        key: Key(
-                          'environment-egress-proxy-endpoint-${widget.planId}',
-                        ),
-                        controller: _proxyEndpoint,
-                        autocorrect: false,
-                        enableSuggestions: false,
-                        decoration: InputDecoration(
-                          hintText: copy(
-                            'environment.egress.proxy.endpoint_hint',
-                          ),
-                        ),
-                        validator: _validateProxyEndpoint,
-                      ),
-                    ),
-                  ],
-                  const SizedBox(height: 9),
-                  CompactLabeledControl(
-                    label: copy('environment.egress.resolver.label'),
-                    child: CompactSelectField<String>(
-                      key: Key(
-                        'environment-egress-resolver-kind-${widget.planId}',
-                      ),
-                      initialValue: _resolverKind,
-                      isExpanded: true,
-                      items: [
-                        for (final kind in const ['system', 'doh'])
-                          DropdownMenuItem(
-                            key: Key(
-                              'environment-egress-resolver-option-$kind',
-                            ),
-                            value: kind,
-                            child: Text(
-                              copy('environment.egress.resolver.$kind'),
-                              overflow: TextOverflow.ellipsis,
-                            ),
-                          ),
-                      ],
-                      onChanged: (value) {
-                        if (value != null) _setResolverKind(value);
-                      },
-                    ),
-                  ),
-                  if (_resolverKind == 'doh') ...[
-                    const SizedBox(height: 9),
-                    CompactLabeledControl(
-                      label: copy('environment.egress.doh.service'),
-                      child: CompactSelectField<String>(
-                        key: Key(
-                          'environment-egress-doh-preset-${widget.planId}',
-                        ),
-                        initialValue: _dohPresetId,
-                        isExpanded: true,
-                        items: [
-                          for (final preset in _doHEndpointPresets)
-                            DropdownMenuItem(
-                              key: Key(
-                                'environment-egress-doh-preset-${preset.id}',
-                              ),
-                              value: preset.id,
-                              child: Text(
-                                copy(preset.copyKey),
-                                overflow: TextOverflow.ellipsis,
-                              ),
-                            ),
-                          DropdownMenuItem(
-                            key: const Key(
-                              'environment-egress-doh-preset-custom',
-                            ),
-                            value: _customDoHEndpointPresetId,
-                            child: Text(
-                              copy('environment.egress.doh.preset.custom'),
-                              overflow: TextOverflow.ellipsis,
-                            ),
-                          ),
-                        ],
-                        onChanged: (value) {
-                          if (value != null) _setDoHPreset(value);
-                        },
-                      ),
-                    ),
-                    const SizedBox(height: 9),
-                    if (_dohPresetId == _customDoHEndpointPresetId)
-                      CompactLabeledControl(
-                        label: copy('environment.egress.doh.url'),
-                        detail: copy('environment.egress.doh.url_detail'),
-                        child: TextFormField(
-                          key: Key(
-                            'environment-egress-doh-url-${widget.planId}',
-                          ),
-                          controller: _dohUrl,
-                          keyboardType: TextInputType.url,
-                          autocorrect: false,
-                          enableSuggestions: false,
-                          decoration: InputDecoration(
-                            hintText: copy('environment.egress.doh.url_hint'),
-                          ),
-                          validator: _validateDoHURL,
-                        ),
-                      )
-                    else
-                      CompactLabeledControl(
-                        label: copy('environment.egress.doh.endpoint'),
-                        child: _ReadOnlyPolicyValue(text: _dohUrl.text),
-                      ),
-                    if (_proxyKind == 'socks5') ...[
-                      const SizedBox(height: 9),
-                      CompactLabeledControl(
-                        label: copy('environment.egress.doh.transport'),
-                        child: CompactSelectField<String>(
-                          key: Key(
-                            'environment-egress-doh-transport-${widget.planId}',
-                          ),
-                          initialValue: _resolverTransport,
-                          isExpanded: true,
-                          items: [
-                            for (final transport in const ['direct', 'proxy'])
-                              DropdownMenuItem(
-                                key: Key(
-                                  'environment-egress-doh-transport-option-$transport',
-                                ),
-                                value: transport,
-                                child: Text(
-                                  copy(
-                                    'environment.egress.doh.transport.$transport',
-                                  ),
-                                ),
-                              ),
-                          ],
-                          onChanged: (value) => setState(
-                            () => _resolverTransport = value ?? 'direct',
-                          ),
-                        ),
-                      ),
-                    ],
-                  ],
-                  if (_error case final error?) ...[
-                    const SizedBox(height: 10),
-                    InlineNotice(message: error, error: true),
-                  ],
-                ],
-              ),
-            ),
-          ),
-        ),
-      ),
-      actions: [
-        TextButton(
-          onPressed: () => Navigator.of(context).pop(),
-          child: Text(copy('common.cancel')),
-        ),
-        FilledButton(
-          key: Key('environment-egress-save-${widget.planId}'),
-          onPressed: _save,
-          child: Text(copy('common.save')),
-        ),
-      ],
-    );
-  }
-
-  void _setProxyKind(String value) {
-    setState(() {
-      _proxyKind = value;
-      _error = null;
-      if (value == 'direct') {
-        _resolverTransport = 'direct';
-      }
-    });
-  }
-
-  void _setResolverKind(String value) {
-    setState(() {
-      _resolverKind = value;
-      _error = null;
-      if (value == 'system' || _proxyKind == 'direct') {
-        _resolverTransport = 'direct';
-      }
-    });
-  }
-
-  void _setDoHPreset(String value) {
-    final preset = _doHEndpointPresetById(value);
-    setState(() {
-      _dohPresetId = value;
-      _error = null;
-      if (preset != null) _dohUrl.text = preset.url;
-    });
-  }
-
-  String? _validateProxyEndpoint(String? value) {
-    if (_proxyKind == 'direct') return null;
-    try {
-      TrafficProxyPolicy.fromJson({
-        'kind': _proxyKind,
-        'endpoint': value?.trim() ?? '',
-      }, 'proxy');
-      return null;
-    } on ControlContractException {
-      return copy('environment.egress.validation.proxy');
-    }
-  }
-
-  String? _validateDoHURL(String? value) {
-    if (_resolverKind != 'doh') return null;
-    try {
-      TrafficResolverPolicy.fromJson({
-        'kind': 'doh',
-        'dohUrl': value?.trim() ?? '',
-        'transport': _proxyKind == 'socks5' ? _resolverTransport : 'direct',
-      }, 'resolver');
-      return null;
-    } on ControlContractException {
-      return copy('environment.egress.validation.doh');
-    }
-  }
-
-  void _save() {
-    setState(() => _error = null);
-    if (!_formKey.currentState!.validate()) return;
-    try {
-      final proxy = <String, Object?>{'kind': _proxyKind};
-      if (_proxyKind != 'direct') {
-        proxy['endpoint'] = _proxyEndpoint.text.trim();
-      }
-      final resolver = <String, Object?>{
-        'kind': _resolverKind,
-        'transport': _resolverKind == 'doh' && _proxyKind == 'socks5'
-            ? _resolverTransport
-            : 'direct',
-      };
-      if (_resolverKind == 'doh') {
-        resolver['dohUrl'] = _dohUrl.text.trim();
-      }
-      final policy = TrafficEgressPolicy.fromJson({
-        'proxy': proxy,
-        'resolver': resolver,
-      }, 'trafficEgressPolicy');
-      Navigator.of(context).pop(policy);
-    } on ControlContractException {
-      setState(() => _error = copy('environment.egress.validation.policy'));
-    }
-  }
-}
-
-final class _ReadOnlyPolicyValue extends StatelessWidget {
-  const _ReadOnlyPolicyValue({required this.text});
-
-  final String text;
-
-  @override
-  Widget build(BuildContext context) => Container(
-    height: ViberMetrics.controlHeight,
-    alignment: Alignment.centerLeft,
-    padding: const EdgeInsets.symmetric(horizontal: 10),
-    decoration: BoxDecoration(
-      color: context.viberColors.panelRaised,
-      border: Border.all(color: context.viberColors.divider),
-      borderRadius: ViberMetrics.controlRadius,
-    ),
-    child: Text(text, maxLines: 1, overflow: TextOverflow.ellipsis),
-  );
 }
 
 final class _OriginalDestinationEditorRow extends StatelessWidget {

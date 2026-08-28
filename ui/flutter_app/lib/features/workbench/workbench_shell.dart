@@ -8,6 +8,7 @@ import '../../core/design/vibermate_mark.dart';
 import '../../core/design/workbench_widgets.dart';
 import '../../core/i18n/app_copy.dart';
 import 'captures_view.dart';
+import 'code_library_view.dart';
 import 'endpoints_view.dart';
 import 'environments_view.dart';
 import 'network_view.dart';
@@ -39,6 +40,8 @@ final class WorkbenchShell extends StatelessWidget {
                 _SectionIntent(WorkbenchSection.routes),
             SingleActivator(LogicalKeyboardKey.digit4, meta: true):
                 _SectionIntent(WorkbenchSection.network),
+            SingleActivator(LogicalKeyboardKey.digit5, meta: true):
+                _SectionIntent(WorkbenchSection.codeLibrary),
             SingleActivator(LogicalKeyboardKey.comma, meta: true):
                 _SectionIntent(WorkbenchSection.settings),
           },
@@ -111,6 +114,10 @@ final class WorkbenchShell extends StatelessWidget {
         copy: copy,
       ),
       WorkbenchSection.network => NetworkView(
+        controller: controller,
+        copy: copy,
+      ),
+      WorkbenchSection.codeLibrary => CodeLibraryView(
         controller: controller,
         copy: copy,
       ),
@@ -409,6 +416,14 @@ final class _NavigationRail extends StatelessWidget {
             label: '${copy('nav.network')}  ⌘4',
             selected: controller.section == WorkbenchSection.network,
             onPressed: () => controller.selectSection(WorkbenchSection.network),
+          ),
+          _RailButton(
+            key: const Key('code-library-nav'),
+            icon: Icons.data_object_rounded,
+            label: '${copy('nav.code_library')}  ⌘5',
+            selected: controller.section == WorkbenchSection.codeLibrary,
+            onPressed: () =>
+                controller.selectSection(WorkbenchSection.codeLibrary),
           ),
           const Spacer(),
           _RailButton(

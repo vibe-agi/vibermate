@@ -27,6 +27,7 @@ import (
 	"github.com/vibe-agi/vibermate/internal/connectionevent"
 	"github.com/vibe-agi/vibermate/internal/desktopbootstrap"
 	"github.com/vibe-agi/vibermate/internal/desktopcontrol"
+	"github.com/vibe-agi/vibermate/internal/egressprofile"
 	"github.com/vibe-agi/vibermate/internal/environment"
 	"github.com/vibe-agi/vibermate/internal/loopbackclient"
 	"github.com/vibe-agi/vibermate/internal/offlinehold"
@@ -1103,6 +1104,7 @@ func assemblyEnvironment(
 				ID: planID, Revision: revision, ClientProtocol: client.ClientProtocol,
 				ClientAdapterPolicy: environment.ClientAdapterPolicy{ID: "acceptance.adapter", Revision: revision},
 				Destination:         destination,
+				EgressProfile:       egressprofile.Direct(),
 			}},
 		}},
 	}, nil

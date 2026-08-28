@@ -81,9 +81,30 @@ type CreateRequest struct {
 	CWD               string                     `json:"cwd"`
 	Command           []string                   `json:"command"`
 	ExecutablePath    string                     `json:"executablePath"`
-	LocalUserLabel    string                     `json:"localUserLabel,omitempty"`
+	RuntimeMetadata   ClientRuntimeMetadataInput `json:"runtimeMetadata"`
 	ClientEnvironment *ClientEnvironmentInput    `json:"clientEnvironment,omitempty"`
 	Companion         *CompanionAttestationInput `json:"companion,omitempty"`
+}
+
+type ClientRuntimeMetadataInput struct {
+	LocalUserName          string `json:"localUserName,omitempty"`
+	HomeDirectory          string `json:"homeDirectory,omitempty"`
+	OperatingSystem        string `json:"operatingSystem,omitempty"`
+	OperatingSystemVersion string `json:"operatingSystemVersion,omitempty"`
+	Architecture           string `json:"architecture,omitempty"`
+	TimeZone               string `json:"timeZone,omitempty"`
+}
+
+func (input ClientRuntimeMetadataInput) domain() (capturerun.RuntimeMetadata, error) {
+	metadata := capturerun.RuntimeMetadata{
+		LocalUserName:          input.LocalUserName,
+		HomeDirectory:          input.HomeDirectory,
+		OperatingSystem:        input.OperatingSystem,
+		OperatingSystemVersion: input.OperatingSystemVersion,
+		Architecture:           input.Architecture,
+		TimeZone:               input.TimeZone,
+	}
+	return metadata, metadata.Validate()
 }
 
 // ClientEnvironmentInput is the non-secret allowlist needed to establish a
@@ -222,6 +243,11 @@ func (handler *Handler) create(
 		writeProblem(writer, http.StatusUnprocessableEntity, ReasonInvalidCaptureRun)
 		return
 	}
+	runtimeMetadata, err := input.RuntimeMetadata.domain()
+	if err != nil {
+		writeProblem(writer, http.StatusUnprocessableEntity, ReasonInvalidCaptureRun)
+		return
+	}
 	grant, err := handler.issuer.IssueCaptureRun(
 		request.Context(),
 		principal,
@@ -230,7 +256,7 @@ func (handler *Handler) create(
 			CWD:               input.CWD,
 			Command:           append([]string(nil), input.Command...),
 			ExecutablePath:    input.ExecutablePath,
-			LocalUserLabel:    input.LocalUserLabel,
+			RuntimeMetadata:   runtimeMetadata,
 			ClientEnvironment: clientEnvironment,
 			Companion:         companion,
 		},

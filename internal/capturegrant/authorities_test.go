@@ -174,6 +174,7 @@ func captureAuthorityAssignment(
 	}
 	return captureassignment.Assignment{
 		Capture: capture, EnvironmentID: "work", Revision: 1,
+		EnvironmentRevision: 1, EnvironmentDigest: environmentDigest,
 		Source: captureassignment.SourceLaunch, LaunchAuthority: boundary,
 		UpdatedAt: time.Date(2026, 8, 8, 1, 2, 3, 0, time.UTC),
 	}

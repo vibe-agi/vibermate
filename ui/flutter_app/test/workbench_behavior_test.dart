@@ -3,6 +3,7 @@ import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:vibermate_app/app/vibermate_app.dart';
 import 'package:vibermate_app/core/api/control_api.dart';
+import 'package:vibermate_app/core/api/control_models.dart';
 import 'package:vibermate_app/core/bootstrap/terminal_command.dart';
 import 'package:vibermate_app/core/design/viber_theme.dart';
 import 'package:vibermate_app/core/design/workbench_widgets.dart';
@@ -521,19 +522,45 @@ void main() {
       );
       await tester.pumpAndSettle();
       expect(
+        find.byKey(const Key('terminal-command-confirmation')),
+        findsNothing,
+      );
+      expect(
         find.descendant(of: panel, matching: find.text('Ready')),
         findsOneWidget,
       );
       expect(find.text('Terminal command installed.'), findsOneWidget);
       final copyClaude = find.byKey(const Key('managed-run-copy-claude'));
-      await tester.ensureVisible(copyClaude);
+      await tester.scrollUntilVisible(
+        copyClaude,
+        -120,
+        scrollable: find
+            .descendant(
+              of: find.byKey(const Key('settings-scroll')),
+              matching: find.byType(Scrollable),
+            )
+            .first,
+      );
       await tester.tap(copyClaude);
       await tester.pumpAndSettle();
       expect(copiedCommand, 'vibermate run -- claude');
       expect(find.text('Claude command copied'), findsOneWidget);
 
       final remove = find.byKey(const Key('terminal-command-remove'));
-      await tester.ensureVisible(remove);
+      await tester.tap(find.byKey(const Key('settings-tab-proxy')));
+      await tester.pumpAndSettle();
+      await tester.tap(find.byKey(const Key('settings-tab-general')));
+      await tester.pumpAndSettle();
+      await tester.scrollUntilVisible(
+        remove,
+        -120,
+        scrollable: find
+            .descendant(
+              of: find.byKey(const Key('settings-scroll')),
+              matching: find.byType(Scrollable),
+            )
+            .first,
+      );
       await tester.tap(remove);
       await tester.pumpAndSettle();
       expect(find.text('Remove the Terminal command?'), findsOneWidget);
@@ -750,6 +777,110 @@ void main() {
       contains('bob'),
     );
     expect(find.text('bob'), findsOneWidget);
+    expect(tester.takeException(), isNull);
+
+    controller.dispose();
+    await tester.pumpWidget(const SizedBox.shrink());
+    await tester.pump();
+  });
+
+  testWidgets('390px Settings publishes reusable network Profile revisions', (
+    tester,
+  ) async {
+    await tester.binding.setSurfaceSize(const Size(390, 760));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+    final api = PreviewControlApi();
+    final controller = WorkbenchController(
+      api: api,
+      terminalCommands: PreviewTerminalCommandService(),
+      previewMode: true,
+      terminalManagement: false,
+      closeRuntime: api.close,
+      initialPreferences: const WorkbenchPreferences(
+        section: WorkbenchSection.settings,
+        language: AppLanguage.simplifiedChinese,
+      ),
+    );
+    await controller.initialize();
+    await tester.pumpWidget(
+      MaterialApp(
+        theme: ViberTheme.light(),
+        home: WorkbenchShell(controller: controller),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    expect(find.byKey(const Key('settings-tab-general')), findsOneWidget);
+    expect(find.byKey(const Key('settings-tab-proxy')), findsOneWidget);
+    await tester.tap(find.byKey(const Key('settings-tab-proxy')));
+    await tester.pumpAndSettle();
+    expect(
+      find.byKey(const Key('egress-profile-row-profile.direct')),
+      findsOneWidget,
+    );
+    expect(
+      find.byKey(const Key('egress-profile-edit-profile.direct')),
+      findsNothing,
+    );
+
+    await tester.tap(find.byKey(const Key('egress-profile-add')));
+    await tester.pumpAndSettle();
+    expect(
+      find.byKey(const Key('settings-egress-profile-dialog')),
+      findsOneWidget,
+    );
+    await tester.enterText(
+      find.byKey(const Key('egress-profile-display-name')),
+      '团队代理',
+    );
+    await tester.tap(find.byKey(const Key('egress-profile-proxy-kind')));
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const Key('egress-profile-proxy-socks5')));
+    await tester.pumpAndSettle();
+    await tester.enterText(
+      find.byKey(const Key('egress-profile-proxy-endpoint')),
+      '127.0.0.1:1080',
+    );
+    await tester.tap(find.byKey(const Key('egress-profile-resolver-kind')));
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const Key('egress-profile-resolver-doh')));
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const Key('egress-profile-doh-preset')));
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const Key('egress-profile-doh-cloudflare')));
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const Key('egress-profile-doh-transport')));
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const Key('egress-profile-doh-via-proxy')));
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const Key('egress-profile-publish')));
+    await tester.pumpAndSettle();
+
+    var catalog = await api.egressProfiles();
+    final created = catalog.items.singleWhere(
+      (profile) => profile.id != EgressProfileRevision.direct.id,
+    );
+    expect(created.revision, 1);
+    expect(created.policy.proxy.endpoint, '127.0.0.1:1080');
+    expect(created.policy.resolver.dohUrl, 'https://1.1.1.1/dns-query');
+    expect(created.policy.resolver.transport, 'proxy');
+    expect(find.textContaining('团队代理 · r1'), findsOneWidget);
+
+    await tester.tap(find.byKey(Key('egress-profile-edit-${created.id}')));
+    await tester.pumpAndSettle();
+    await tester.enterText(
+      find.byKey(const Key('egress-profile-display-name')),
+      '团队代理 2',
+    );
+    await tester.tap(find.byKey(const Key('egress-profile-publish')));
+    await tester.pumpAndSettle();
+    catalog = await api.egressProfiles();
+    final updated = catalog.items.singleWhere(
+      (profile) => profile.id == created.id,
+    );
+    expect(updated.revision, 2);
+    expect(await api.egressProfileRevision(created.id, 1), created);
+    expect(find.textContaining('团队代理 2 · r2'), findsOneWidget);
     expect(tester.takeException(), isNull);
 
     controller.dispose();
@@ -1073,53 +1204,102 @@ void main() {
     },
   );
 
+  testWidgets('Capture keeps its Environment identity read-only after launch', (
+    tester,
+  ) async {
+    await tester.binding.setSurfaceSize(const Size(1180, 760));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+    await tester.pumpWidget(
+      const ViberMateApp(previewMode: true, preferChinese: false),
+    );
+    await tester.pumpAndSettle();
+
+    final currentScope = find.byKey(const Key('capture-environment-scope'));
+    expect(currentScope, findsOneWidget);
+    expect(
+      find.descendant(of: currentScope, matching: find.text('Work')),
+      findsOneWidget,
+    );
+    expect(
+      find.byKey(const Key('capture-environment-readonly')),
+      findsOneWidget,
+    );
+    expect(
+      find.descendant(
+        of: currentScope,
+        matching: find.byType(CompactSelectField<String>),
+      ),
+      findsNothing,
+    );
+
+    final finishedCapture = find.byKey(
+      const Key('capture-row-managed_run:run-8'),
+    );
+    await tester.ensureVisible(finishedCapture);
+    await tester.tap(finishedCapture);
+    await tester.pumpAndSettle();
+
+    expect(
+      find.byKey(const Key('capture-environment-readonly')),
+      findsOneWidget,
+    );
+    expect(
+      find.descendant(
+        of: find.byKey(const Key('capture-environment-scope')),
+        matching: find.byType(CompactSelectField<String>),
+      ),
+      findsNothing,
+    );
+    expect(tester.takeException(), isNull);
+  });
+
   testWidgets(
-    'Capture freezes its launch Environment for the whole managed run',
+    'running Capture offers the latest published Environment for its next Turn',
     (tester) async {
       await tester.binding.setSurfaceSize(const Size(1180, 760));
       addTearDown(() => tester.binding.setSurfaceSize(null));
+      final api = PreviewControlApi();
+      final current = await api.environmentRevision('work', 7);
+      final draft = await api.saveEnvironmentDraft(
+        environmentId: current.id,
+        expectedBaseRevision: current.revision,
+        input: EnvironmentDraftInput.fromEnvironment(
+          current,
+          expectedDraftRevision: 0,
+          name: current.name,
+        ),
+      );
+      await api.publishEnvironmentDraft('work', draft.draftRevision);
+      final controller = WorkbenchController(
+        api: api,
+        terminalCommands: PreviewTerminalCommandService(),
+        previewMode: true,
+        closeRuntime: api.close,
+      );
+      await controller.initialize();
       await tester.pumpWidget(
-        const ViberMateApp(previewMode: true, preferChinese: false),
+        MaterialApp(
+          theme: ViberTheme.light(),
+          home: WorkbenchShell(controller: controller),
+        ),
       );
       await tester.pumpAndSettle();
 
-      final currentScope = find.byKey(const Key('capture-environment-scope'));
-      expect(currentScope, findsOneWidget);
-      expect(
-        find.descendant(of: currentScope, matching: find.text('Work')),
-        findsOneWidget,
-      );
-      expect(
-        find.byKey(const Key('capture-environment-readonly')),
-        findsOneWidget,
-      );
-      expect(
-        find.descendant(
-          of: currentScope,
-          matching: find.byType(CompactSelectField<String>),
-        ),
-        findsNothing,
-      );
+      final action = find.byKey(const Key('capture-environment-apply-latest'));
+      expect(action, findsOneWidget);
+      expect(find.text('Started r7 · using r7 · published r8'), findsOneWidget);
 
-      final finishedCapture = find.byKey(
-        const Key('capture-row-managed_run:run-8'),
-      );
-      await tester.ensureVisible(finishedCapture);
-      await tester.tap(finishedCapture);
+      await tester.tap(action);
       await tester.pumpAndSettle();
 
-      expect(
-        find.byKey(const Key('capture-environment-readonly')),
-        findsOneWidget,
-      );
-      expect(
-        find.descendant(
-          of: find.byKey(const Key('capture-environment-scope')),
-          matching: find.byType(CompactSelectField<String>),
-        ),
-        findsNothing,
-      );
+      expect(action, findsNothing);
+      expect(controller.selectedAssignment?.launchEnvironmentRevision, 7);
+      expect(controller.selectedAssignment?.environmentRevision, 8);
+      expect(find.text('Started r7 · using r8'), findsOneWidget);
       expect(tester.takeException(), isNull);
+      await tester.pumpWidget(const SizedBox.shrink());
+      controller.dispose();
+      await api.close();
     },
   );
 
@@ -1446,7 +1626,7 @@ void main() {
       await tester.pumpAndSettle();
       await tester.tap(rawEvidence);
       await tester.pumpAndSettle();
-      expect(find.text('1 boundary messages'), findsOneWidget);
+      expect(find.text('3 boundary messages'), findsOneWidget);
       final rawReveal = find.byKey(
         const Key('raw-reveal-raw-preview-run-1-exchange-222'),
       );
@@ -1624,6 +1804,46 @@ void main() {
 
       await tester.pumpWidget(const SizedBox.shrink());
       await tester.pump();
+    },
+  );
+
+  testWidgets(
+    'Raw Transform evidence copies one complete attempt to Code Library',
+    (tester) async {
+      await tester.binding.setSurfaceSize(const Size(1180, 760));
+      addTearDown(() => tester.binding.setSurfaceSize(null));
+      await tester.pumpWidget(
+        const ViberMateApp(previewMode: true, preferChinese: false),
+      );
+      await tester.pumpAndSettle();
+
+      await openCaptureConversation(tester, capture: 'managed_run:run-1');
+      final turn = find.byKey(
+        const Key('conversation-turn-run-1-exchange-222'),
+      );
+      await ensureTurnVisible(tester, turn);
+      await tester.tap(turn);
+      await tester.pumpAndSettle();
+      final raw = find.byKey(const Key('exchange-raw-run-1-exchange-222'));
+      await Scrollable.ensureVisible(tester.element(raw), alignment: 0.5);
+      await tester.pumpAndSettle();
+      await tester.tap(raw);
+      await tester.pumpAndSettle();
+
+      final copySample = find.byKey(
+        const Key('copy-transform-sample-run-1-exchange-222'),
+      );
+      await tester.ensureVisible(copySample);
+      await tester.tap(copySample);
+      await tester.pumpAndSettle();
+
+      expect(find.text('Code Library'), findsWidgets);
+      expect(
+        find.byKey(const Key('code-library-captured-sample')),
+        findsOneWidget,
+      );
+      expect(find.textContaining('run-1-exchange-222'), findsOneWidget);
+      expect(tester.takeException(), isNull);
     },
   );
 
@@ -1902,7 +2122,7 @@ void main() {
     expect(tester.getCenter(rawSection).dy, lessThan(740));
     await tester.tap(rawSection);
     await tester.pumpAndSettle();
-    expect(find.text('1 条边界消息'), findsOneWidget);
+    expect(find.text('3 条边界消息'), findsOneWidget);
     final rawReveal = find.byKey(
       const Key('raw-reveal-raw-preview-run-1-exchange-222'),
     );
@@ -2906,17 +3126,44 @@ void main() {
   });
 
   testWidgets(
-    '390px network path belongs to one client flow and survives publish',
+    '390px Environment freezes one published network profile revision',
     (tester) async {
       await tester.binding.setSurfaceSize(const Size(390, 760));
       addTearDown(() => tester.binding.setSurfaceSize(null));
+      final api = PreviewControlApi();
+      final profile = await api.publishEgressProfile(
+        id: 'profile.team',
+        expectedRevision: 0,
+        displayName: 'Team proxy',
+        policy: const TrafficEgressPolicy(
+          proxy: TrafficProxyPolicy(kind: 'socks5', endpoint: '127.0.0.1:1080'),
+          resolver: TrafficResolverPolicy(
+            kind: 'doh',
+            transport: 'proxy',
+            dohUrl: 'https://1.1.1.1/dns-query',
+          ),
+        ),
+      );
+      final controller = WorkbenchController(
+        api: api,
+        terminalCommands: PreviewTerminalCommandService(),
+        previewMode: true,
+        closeRuntime: api.close,
+        initialPreferences: const WorkbenchPreferences(
+          section: WorkbenchSection.environments,
+          language: AppLanguage.simplifiedChinese,
+        ),
+      );
+      addTearDown(controller.dispose);
+      await controller.initialize();
       await tester.pumpWidget(
-        const ViberMateApp(previewMode: true, preferChinese: true),
+        MaterialApp(
+          theme: ViberTheme.light(),
+          home: WorkbenchShell(controller: controller),
+        ),
       );
       await tester.pumpAndSettle();
 
-      await tester.tap(find.byIcon(Icons.tune).first);
-      await tester.pumpAndSettle();
       await tester.tap(find.byKey(const Key('environment-row-work')));
       await tester.pumpAndSettle();
       await tester.tap(find.byKey(const Key('environment-edit')));
@@ -2935,150 +3182,34 @@ void main() {
       await tester.pumpAndSettle();
 
       final dialog = find.byKey(
-        const Key('environment-egress-dialog-claude-client-plan'),
+        const Key('environment-egress-profile-dialog-claude-client-plan'),
       );
       expect(dialog, findsOneWidget);
       expect(tester.getSize(dialog).width, lessThanOrEqualTo(342));
-
       await tester.tap(
-        find.byKey(
-          const Key('environment-egress-proxy-kind-claude-client-plan'),
-        ),
+        find.byKey(Key('environment-egress-profile-${profile.id}-1')),
       );
       await tester.pumpAndSettle();
       await tester.tap(
-        find.byKey(const Key('environment-egress-proxy-option-socks5')),
-      );
-      await tester.pumpAndSettle();
-      await tester.enterText(
-        find.byKey(
-          const Key('environment-egress-proxy-endpoint-claude-client-plan'),
-        ),
-        '127.0.0.1:1080',
-      );
-
-      await tester.tap(
-        find.byKey(
-          const Key('environment-egress-proxy-kind-claude-client-plan'),
-        ),
-      );
-      await tester.pumpAndSettle();
-      expect(
-        find.byKey(const Key('environment-egress-proxy-option-socks5h')),
-        findsNothing,
-      );
-      await tester.tap(
-        find.byKey(const Key('environment-egress-proxy-option-socks5')),
-      );
-      await tester.pumpAndSettle();
-      await tester.tap(
-        find.byKey(
-          const Key('environment-egress-resolver-kind-claude-client-plan'),
-        ),
-      );
-      await tester.pumpAndSettle();
-      await tester.tap(
-        find.byKey(const Key('environment-egress-resolver-option-doh')),
-      );
-      await tester.pumpAndSettle();
-      await tester.tap(
-        find.byKey(
-          const Key('environment-egress-doh-preset-claude-client-plan'),
-        ),
-      );
-      await tester.pumpAndSettle();
-      expect(
-        find.byKey(const Key('environment-egress-doh-preset-cloudflare')),
-        findsOneWidget,
-      );
-      expect(
-        find.byKey(const Key('environment-egress-doh-preset-google')),
-        findsOneWidget,
-      );
-      expect(
-        find.byKey(const Key('environment-egress-doh-preset-quad9')),
-        findsOneWidget,
-      );
-      expect(
-        find.byKey(const Key('environment-egress-doh-preset-custom')),
-        findsOneWidget,
-      );
-      await tester.tap(
-        find.byKey(const Key('environment-egress-doh-preset-cloudflare')),
-      );
-      await tester.pumpAndSettle();
-      expect(find.text('https://1.1.1.1/dns-query'), findsOneWidget);
-      await tester.tap(
-        find.byKey(
-          const Key('environment-egress-doh-preset-claude-client-plan'),
-        ),
-      );
-      await tester.pumpAndSettle();
-      await tester.tap(
-        find.byKey(const Key('environment-egress-doh-preset-quad9')),
-      );
-      await tester.pumpAndSettle();
-      expect(find.text('https://9.9.9.9/dns-query'), findsOneWidget);
-      await tester.tap(
-        find.byKey(
-          const Key('environment-egress-doh-preset-claude-client-plan'),
-        ),
-      );
-      await tester.pumpAndSettle();
-      await tester.tap(
-        find.byKey(const Key('environment-egress-doh-preset-custom')),
-      );
-      await tester.pumpAndSettle();
-      await tester.enterText(
-        find.byKey(const Key('environment-egress-doh-url-claude-client-plan')),
-        'https://8.8.8.8',
-      );
-      await tester.tap(
-        find.byKey(const Key('environment-egress-save-claude-client-plan')),
-      );
-      await tester.pumpAndSettle();
-      expect(
-        find.text(
-          '请输入包含路径且不含凭据或查询参数的完整 HTTPS DoH 地址，例如 https://8.8.8.8/dns-query。',
-        ),
-        findsOneWidget,
-      );
-      expect(dialog, findsOneWidget);
-
-      await tester.tap(
-        find.byKey(
-          const Key('environment-egress-doh-preset-claude-client-plan'),
-        ),
-      );
-      await tester.pumpAndSettle();
-      await tester.tap(
-        find.byKey(const Key('environment-egress-doh-preset-google')),
-      );
-      await tester.pumpAndSettle();
-      expect(find.text('https://8.8.8.8/dns-query'), findsOneWidget);
-      await tester.tap(
-        find.byKey(
-          const Key('environment-egress-doh-transport-claude-client-plan'),
-        ),
-      );
-      await tester.pumpAndSettle();
-      await tester.tap(
-        find.byKey(const Key('environment-egress-doh-transport-option-proxy')),
-      );
-      await tester.pumpAndSettle();
-      await tester.tap(
-        find.byKey(const Key('environment-egress-save-claude-client-plan')),
+        find.byKey(const Key('environment-egress-profile-save')),
       );
       await tester.pumpAndSettle();
       expect(dialog, findsNothing);
       expect(
         find.descendant(
           of: networkPath,
-          matching: find.textContaining('SOCKS5 · 127.0.0.1:1080'),
+          matching: find.textContaining('Team proxy · r1'),
         ),
         findsOneWidget,
       );
       expect(tester.takeException(), isNull);
+
+      await api.publishEgressProfile(
+        id: profile.id,
+        expectedRevision: 1,
+        displayName: 'Team proxy',
+        policy: const TrafficEgressPolicy.direct(),
+      );
 
       await tester.ensureVisible(find.byKey(const Key('environment-review')));
       await tester.tap(find.byKey(const Key('environment-review')));
@@ -3094,106 +3225,131 @@ void main() {
       expect(
         find.descendant(
           of: reopened,
-          matching: find.textContaining('SOCKS5 · 127.0.0.1:1080'),
-        ),
-        findsOneWidget,
-      );
-      await tester.tap(reopened);
-      await tester.pumpAndSettle();
-      expect(
-        find.descendant(
-          of: find.byKey(
-            const Key('environment-egress-dialog-claude-client-plan'),
-          ),
-          matching: find.text('Google Public DNS'),
+          matching: find.textContaining('Team proxy · r1'),
         ),
         findsOneWidget,
       );
       expect(tester.takeException(), isNull);
+      controller.dispose();
+      await tester.pumpWidget(const SizedBox.shrink());
+      await tester.pump();
     },
   );
 
-  testWidgets(
-    '390px message transform belongs to one protocol path and survives publish',
-    (tester) async {
-      await tester.binding.setSurfaceSize(const Size(390, 760));
-      addTearDown(() => tester.binding.setSurfaceSize(null));
-      await tester.pumpWidget(
-        const ViberMateApp(previewMode: true, preferChinese: true),
-      );
-      await tester.pumpAndSettle();
+  testWidgets('390px Environment freezes one ordered Code Library revision', (
+    tester,
+  ) async {
+    await tester.binding.setSurfaceSize(const Size(390, 760));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+    final api = PreviewControlApi();
+    await api.createCodeLibraryCollection(
+      id: 'privacy',
+      displayName: 'Privacy',
+    );
+    final revision = await api.publishCodeLibraryTransform(
+      id: 'transform.home-redaction',
+      expectedRevision: 0,
+      collectionId: 'privacy',
+      displayName: 'Home redaction',
+      policy: const TrafficTransformPolicy(
+        requestJavaScript: 'context.model = JSON.parse(request.body).model;',
+        responseJavaScript:
+            'response.headers["x-original-model"] = [context.model];',
+      ),
+    );
+    final controller = WorkbenchController(
+      api: api,
+      terminalCommands: PreviewTerminalCommandService(),
+      previewMode: true,
+      closeRuntime: api.close,
+      initialPreferences: const WorkbenchPreferences(
+        section: WorkbenchSection.environments,
+        language: AppLanguage.simplifiedChinese,
+      ),
+    );
+    await controller.initialize();
+    await tester.pumpWidget(
+      MaterialApp(
+        theme: ViberTheme.light(),
+        home: WorkbenchShell(controller: controller),
+      ),
+    );
+    await tester.pumpAndSettle();
 
-      await tester.tap(find.byIcon(Icons.tune).first);
-      await tester.pumpAndSettle();
-      await tester.tap(find.byKey(const Key('environment-row-work')));
-      await tester.pumpAndSettle();
-      await tester.tap(find.byKey(const Key('environment-edit')));
-      await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const Key('environment-row-work')));
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const Key('environment-edit')));
+    await tester.pumpAndSettle();
 
-      final transform = find.byKey(
-        const Key('environment-transform-claude-client-plan'),
-      );
-      await tester.ensureVisible(transform);
-      await tester.pumpAndSettle();
-      expect(
-        find.descendant(of: transform, matching: find.text('未配置')),
-        findsOneWidget,
-      );
-      await tester.tap(transform);
-      await tester.pumpAndSettle();
+    final transform = find.byKey(
+      const Key('environment-transform-claude-client-plan'),
+    );
+    await tester.ensureVisible(transform);
+    await tester.pumpAndSettle();
+    expect(
+      find.descendant(of: transform, matching: find.text('未配置')),
+      findsOneWidget,
+    );
+    await tester.tap(transform);
+    await tester.pumpAndSettle();
 
-      final dialog = find.byKey(
-        const Key('environment-transform-dialog-claude-client-plan'),
-      );
-      expect(dialog, findsOneWidget);
-      expect(tester.getSize(dialog).width, lessThanOrEqualTo(342));
-      await tester.enterText(
-        find.byKey(
-          const Key('environment-transform-request-claude-client-plan'),
+    final dialog = find.byKey(
+      const Key('environment-transform-pipeline-dialog-claude-client-plan'),
+    );
+    expect(dialog, findsOneWidget);
+    expect(tester.getSize(dialog).width, lessThanOrEqualTo(342));
+    await tester.tap(
+      find.byKey(
+        Key(
+          'environment-transform-pipeline-add-${revision.id}-${revision.revision}',
         ),
-        'context.model = JSON.parse(request.body).model;',
-      );
-      await tester.tap(
-        find.byKey(
-          const Key('environment-transform-tab-response-claude-client-plan'),
-        ),
-      );
-      await tester.pumpAndSettle();
-      await tester.enterText(
-        find.byKey(
-          const Key('environment-transform-response-claude-client-plan'),
-        ),
-        'response.headers["x-original-model"] = [context.model];',
-      );
-      await tester.tap(
-        find.byKey(const Key('environment-transform-save-claude-client-plan')),
-      );
-      await tester.pumpAndSettle();
-      expect(dialog, findsNothing);
-      expect(
-        find.descendant(of: transform, matching: find.text('请求 + 响应')),
-        findsOneWidget,
-      );
-      expect(tester.takeException(), isNull);
+      ),
+    );
+    await tester.pumpAndSettle();
+    await tester.tap(
+      find.byKey(
+        const Key('environment-transform-pipeline-save-claude-client-plan'),
+      ),
+    );
+    await tester.pumpAndSettle();
+    expect(dialog, findsNothing);
+    expect(
+      find.descendant(
+        of: transform,
+        matching: find.text('Home redaction · r1'),
+      ),
+      findsOneWidget,
+    );
+    expect(tester.takeException(), isNull);
 
-      await tester.ensureVisible(find.byKey(const Key('environment-review')));
-      await tester.tap(find.byKey(const Key('environment-review')));
-      await tester.pumpAndSettle();
-      await tester.tap(find.byKey(const Key('environment-publish')));
-      await tester.pumpAndSettle();
-      await tester.tap(find.byKey(const Key('environment-edit')));
-      await tester.pumpAndSettle();
-      final reopened = find.byKey(
-        const Key('environment-transform-claude-client-plan'),
-      );
-      await tester.ensureVisible(reopened);
-      expect(
-        find.descendant(of: reopened, matching: find.text('请求 + 响应')),
-        findsOneWidget,
-      );
-      expect(tester.takeException(), isNull);
-    },
-  );
+    await api.publishCodeLibraryTransform(
+      id: revision.id,
+      expectedRevision: revision.revision,
+      collectionId: revision.collectionId,
+      displayName: revision.displayName,
+      policy: const TrafficTransformPolicy.disabled(),
+    );
+
+    await tester.ensureVisible(find.byKey(const Key('environment-review')));
+    await tester.tap(find.byKey(const Key('environment-review')));
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const Key('environment-publish')));
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const Key('environment-edit')));
+    await tester.pumpAndSettle();
+    final reopened = find.byKey(
+      const Key('environment-transform-claude-client-plan'),
+    );
+    await tester.ensureVisible(reopened);
+    expect(
+      find.descendant(of: reopened, matching: find.text('Home redaction · r1')),
+      findsOneWidget,
+    );
+    expect(tester.takeException(), isNull);
+    controller.dispose();
+    await tester.pumpWidget(const SizedBox.shrink());
+    await tester.pump();
+  });
 
   testWidgets('390px launch environment overlay survives publish and reopen', (
     tester,

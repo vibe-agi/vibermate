@@ -14,8 +14,12 @@ CREATE TABLE capture_environment_assignments(
   CHECK(length(CAST(capture_id AS BLOB)) BETWEEN 1 AND 128),
   environment_id TEXT NOT NULL
   CHECK(length(CAST(environment_id AS BLOB)) BETWEEN 1 AND 128),
+  environment_revision INTEGER NOT NULL
+  CHECK(environment_revision BETWEEN 1 AND 9223372036854775807),
+  environment_digest BLOB NOT NULL
+  CHECK(length(environment_digest) = 32),
   assignment_revision INTEGER NOT NULL
-  CHECK(assignment_revision = 1),
+  CHECK(assignment_revision BETWEEN 1 AND 9223372036854775807),
   source TEXT NOT NULL
   CHECK(source IN('launch', 'manual_create', 'system_transparent')),
   launch_environment_id TEXT NOT NULL
@@ -80,6 +84,16 @@ CREATE TABLE capture_runs(
   CHECK(recognition IN('unknown', 'unverified', 'recognized', 'verified')),
   local_user_label TEXT NOT NULL DEFAULT ''
   CHECK(length(CAST(local_user_label AS BLOB)) <= 128),
+  home_directory TEXT NOT NULL DEFAULT ''
+  CHECK(length(CAST(home_directory AS BLOB)) <= 4096),
+  operating_system TEXT NOT NULL DEFAULT ''
+  CHECK(length(CAST(operating_system AS BLOB)) <= 64),
+  operating_system_version TEXT NOT NULL DEFAULT ''
+  CHECK(length(CAST(operating_system_version AS BLOB)) <= 256),
+  architecture TEXT NOT NULL DEFAULT ''
+  CHECK(length(CAST(architecture AS BLOB)) <= 64),
+  time_zone TEXT NOT NULL DEFAULT ''
+  CHECK(length(CAST(time_zone AS BLOB)) <= 128),
   machine_id TEXT NOT NULL DEFAULT ''
   CHECK(length(CAST(machine_id AS BLOB)) <= 128),
   machine_registration_revision INTEGER NOT NULL DEFAULT 0
@@ -143,6 +157,52 @@ CREATE TABLE client_enrollments(
     OR(state <> 'consumed'
       AND consumed_at_unix_ms IS NULL
       AND machine_registration_id IS NULL))
+) STRICT;
+CREATE TABLE code_library_collections(
+  collection_id TEXT PRIMARY KEY NOT NULL
+  CHECK(length(CAST(collection_id AS BLOB)) BETWEEN 1 AND 128),
+  display_name TEXT NOT NULL
+  CHECK(length(CAST(display_name AS BLOB)) BETWEEN 1 AND 256)
+) STRICT;
+CREATE TABLE code_library_transform_heads(
+  transform_id TEXT PRIMARY KEY NOT NULL
+  CHECK(length(CAST(transform_id AS BLOB)) BETWEEN 1 AND 128),
+  current_revision INTEGER NOT NULL
+  CHECK(current_revision BETWEEN 0 AND 9223372036854775807)
+) STRICT;
+CREATE TABLE code_library_transform_revisions(
+  transform_id TEXT NOT NULL
+  REFERENCES code_library_transform_heads(transform_id),
+  revision INTEGER NOT NULL
+  CHECK(revision BETWEEN 1 AND 9223372036854775807),
+  collection_id TEXT NOT NULL
+  REFERENCES code_library_collections(collection_id),
+  display_name TEXT NOT NULL
+  CHECK(length(CAST(display_name AS BLOB)) BETWEEN 1 AND 256),
+  request_javascript TEXT NOT NULL
+  CHECK(length(CAST(request_javascript AS BLOB)) BETWEEN 0 AND 65536),
+  response_javascript TEXT NOT NULL
+  CHECK(length(CAST(response_javascript AS BLOB)) BETWEEN 0 AND 65536),
+  published_at_unix_ms INTEGER NOT NULL,
+  PRIMARY KEY(transform_id, revision)
+) STRICT;
+CREATE TABLE egress_profile_heads(
+  egress_id TEXT PRIMARY KEY NOT NULL
+  CHECK(length(CAST(egress_id AS BLOB)) BETWEEN 1 AND 128),
+  current_revision INTEGER NOT NULL
+  CHECK(current_revision BETWEEN 0 AND 9223372036854775807)
+) STRICT;
+CREATE TABLE egress_profile_revisions(
+  egress_id TEXT NOT NULL
+  REFERENCES egress_profile_heads(egress_id),
+  revision INTEGER NOT NULL
+  CHECK(revision BETWEEN 1 AND 9223372036854775807),
+  display_name TEXT NOT NULL
+  CHECK(length(CAST(display_name AS BLOB)) BETWEEN 1 AND 256),
+  policy_json BLOB NOT NULL
+  CHECK(length(policy_json) BETWEEN 2 AND 8192 AND json_valid(CAST(policy_json AS TEXT))),
+  published_at_unix_ms INTEGER NOT NULL,
+  PRIMARY KEY(egress_id, revision)
 ) STRICT;
 CREATE TABLE connection_rule_sets(
   id INTEGER PRIMARY KEY NOT NULL CHECK(id = 1),
@@ -697,8 +757,8 @@ CREATE TABLE runtime_raw_evidence_envelopes(
   CHECK(length(CAST(writer_id AS BLOB)) BETWEEN 1 AND 512),
   watermark INTEGER NOT NULL CHECK(watermark BETWEEN 1 AND 9223372036854775807),
   layer TEXT NOT NULL CHECK(layer IN(
-    'client_ingress', 'provider_egress',
-    'provider_response', 'client_downstream'
+    'client_ingress', 'transform_request_input', 'provider_egress',
+    'provider_response', 'transform_response_input', 'client_downstream'
   )),
   scope_kind TEXT NOT NULL
   CHECK(scope_kind IN('runtime', 'managed_run', 'manual_capture')),
