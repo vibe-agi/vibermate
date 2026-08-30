@@ -6,6 +6,7 @@ import '../../core/api/control_models.dart';
 import '../../core/design/viber_theme.dart';
 import '../../core/design/workbench_widgets.dart';
 import '../../core/i18n/app_copy.dart';
+import 'account_selector_editor.dart';
 import 'message_transform_editor.dart';
 import 'workbench_controller.dart';
 
@@ -26,10 +27,12 @@ final class CodeLibraryView extends StatefulWidget {
 final class _CodeLibraryViewState extends State<CodeLibraryView> {
   CodeLibraryCatalog? _catalog;
   String? _selectedTransformId;
+  String? _selectedSelectorId;
   String? _error;
   bool _loading = true;
   bool _mutating = false;
   String _testWireProtocol = 'anthropic_messages';
+  _LibraryKind _kind = _LibraryKind.transforms;
 
   AppCopy get copy => widget.copy;
 
@@ -59,6 +62,12 @@ final class _CodeLibraryViewState extends State<CodeLibraryView> {
         if (!selectedExists) {
           _selectedTransformId = catalog.transforms.firstOrNull?.id;
         }
+        final selectedSelectorExists = catalog.accountSelectors.any(
+          (item) => item.id == _selectedSelectorId,
+        );
+        if (!selectedSelectorExists) {
+          _selectedSelectorId = catalog.accountSelectors.firstOrNull?.id;
+        }
       });
     } on Object catch (error) {
       if (!mounted) return;
@@ -71,6 +80,11 @@ final class _CodeLibraryViewState extends State<CodeLibraryView> {
 
   CodeLibraryTransformRevision? get _selected => _catalog?.transforms
       .where((item) => item.id == _selectedTransformId)
+      .firstOrNull;
+
+  CodeLibraryAccountSelectorRevision? get _selectedSelector => _catalog
+      ?.accountSelectors
+      .where((item) => item.id == _selectedSelectorId)
       .firstOrNull;
 
   @override
@@ -86,33 +100,62 @@ final class _CodeLibraryViewState extends State<CodeLibraryView> {
             tooltip: copy('common.add'),
             enabled: !_mutating,
             onSelected: (action) => switch (action) {
-              _LibraryAction.collection => unawaited(_createCollection()),
               _LibraryAction.transform => unawaited(_createTransform()),
+              _LibraryAction.accountSelector => unawaited(
+                _createAccountSelector(),
+              ),
             },
             itemBuilder: (context) => [
               PopupMenuItem(
-                value: _LibraryAction.collection,
-                child: Text(copy('code_library.collection.create')),
+                value: _LibraryAction.transform,
+                child: Text(copy('code_library.transform.create')),
               ),
               PopupMenuItem(
-                value: _LibraryAction.transform,
-                enabled: _catalog?.collections.isNotEmpty == true,
-                child: Text(copy('code_library.transform.create')),
+                value: _LibraryAction.accountSelector,
+                child: Text(copy('code_library.selector.create')),
               ),
             ],
             icon: const Icon(Icons.add_rounded, size: 18),
           ),
         ),
         const Divider(height: 1),
-        if (_error case final error?) InlineNotice(message: error, error: true),
-        if (widget.controller.capturedMessageTransformSample
-            case final captured?)
-          _CapturedSampleBanner(
-            captured: captured,
-            copy: copy,
-            onClear: () =>
-                setState(widget.controller.clearMessageTransformSample),
+        Padding(
+          padding: const EdgeInsets.fromLTRB(12, 8, 12, 8),
+          child: Align(
+            alignment: Alignment.centerLeft,
+            child: ConstrainedBox(
+              constraints: const BoxConstraints(maxWidth: 420),
+              child: CompactSegmentedControl<_LibraryKind>(
+                expanded: true,
+                segments: [
+                  CompactSegment(
+                    value: _LibraryKind.transforms,
+                    label: copy('code_library.kind.transforms'),
+                    icon: Icons.transform_rounded,
+                  ),
+                  CompactSegment(
+                    value: _LibraryKind.accountSelectors,
+                    label: copy('code_library.kind.account_selectors'),
+                    icon: Icons.account_tree_outlined,
+                  ),
+                ],
+                selected: _kind,
+                onSelected: (value) => setState(() => _kind = value),
+              ),
+            ),
           ),
+        ),
+        const Divider(height: 1),
+        if (_error case final error?) InlineNotice(message: error, error: true),
+        if (_kind == _LibraryKind.transforms)
+          if (widget.controller.capturedMessageTransformSample
+              case final captured?)
+            _CapturedSampleBanner(
+              captured: captured,
+              copy: copy,
+              onClear: () =>
+                  setState(widget.controller.clearMessageTransformSample),
+            ),
         Expanded(child: _body(context)),
       ],
     );
@@ -121,6 +164,9 @@ final class _CodeLibraryViewState extends State<CodeLibraryView> {
   Widget _body(BuildContext context) {
     if (_loading) return const Center(child: CompactProgressIndicator());
     final catalog = _catalog!;
+    if (_kind == _LibraryKind.accountSelectors) {
+      return _accountSelectorBody(catalog);
+    }
     if (catalog.transforms.isEmpty) {
       return _StarterGallery(
         copy: copy,
@@ -134,7 +180,8 @@ final class _CodeLibraryViewState extends State<CodeLibraryView> {
       builder: (context, constraints) {
         final tree = _LibraryTree(
           catalog: catalog,
-          selectedTransformId: _selectedTransformId,
+          kind: _LibraryKind.transforms,
+          selectedId: _selectedTransformId,
           copy: copy,
           onSelected: (id) => setState(() => _selectedTransformId = id),
         );
@@ -164,35 +211,68 @@ final class _CodeLibraryViewState extends State<CodeLibraryView> {
     );
   }
 
-  Future<bool> _createCollection() async {
-    final name = await showDialog<String>(
-      context: context,
-      builder: (context) => _NameDialog(
-        title: copy('code_library.collection.create'),
-        label: copy('code_library.name'),
+  Widget _accountSelectorBody(CodeLibraryCatalog catalog) {
+    if (catalog.accountSelectors.isEmpty) {
+      return _AccountSelectorStarterGallery(
         copy: copy,
+        enabled: !_mutating,
+        onUse: (starter) =>
+            unawaited(_createAccountSelector(initialStarter: starter)),
+      );
+    }
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        final tree = _LibraryTree(
+          catalog: catalog,
+          kind: _LibraryKind.accountSelectors,
+          selectedId: _selectedSelectorId,
+          copy: copy,
+          onSelected: (id) => setState(() => _selectedSelectorId = id),
+        );
+        final detail = _AccountSelectorDetail(
+          selector: _selectedSelector,
+          copy: copy,
+          enabled: !_mutating,
+          onEdit: _selectedSelector == null
+              ? null
+              : () => unawaited(_editAccountSelector(_selectedSelector!)),
+        );
+        if (constraints.maxWidth < 680) {
+          return Column(
+            children: [
+              SizedBox(height: 190, child: tree),
+              const Divider(height: 1),
+              Expanded(child: detail),
+            ],
+          );
+        }
+        return Row(
+          children: [
+            SizedBox(width: 260, child: tree),
+            const VerticalDivider(width: 1),
+            Expanded(child: detail),
+          ],
+        );
+      },
+    );
+  }
+
+  Future<CodeLibraryCatalog?> _ensureCollection() async {
+    final catalog = _catalog;
+    if (catalog == null || catalog.collections.isNotEmpty) return catalog;
+    await _mutate(
+      () => widget.controller.createCodeLibraryCollection(
+        displayName: copy('code_library.default_collection'),
       ),
     );
-    if (name == null || !mounted) return false;
-    CodeLibraryCollection? created;
-    await _mutate(() async {
-      created = await widget.controller.createCodeLibraryCollection(
-        displayName: name,
-      );
-      return created;
-    });
-    return created != null;
+    return _catalog;
   }
 
   Future<void> _createTransform({
     _TransformStarter initialStarter = _TransformStarter.blank,
   }) async {
-    var catalog = _catalog;
-    if (catalog == null) return;
-    if (catalog.collections.isEmpty) {
-      if (!await _createCollection() || !mounted) return;
-      catalog = _catalog;
-    }
+    final catalog = await _ensureCollection();
+    if (!mounted) return;
     if (catalog == null || catalog.collections.isEmpty) return;
     final availableCatalog = catalog;
     final draft = await showDialog<_TransformDraft>(
@@ -247,6 +327,68 @@ final class _CodeLibraryViewState extends State<CodeLibraryView> {
     if (policy == null || !mounted) return;
     await _mutate(
       () => widget.controller.publishCodeLibraryTransform(
+        id: current.id,
+        expectedRevision: current.revision,
+        collectionId: current.collectionId,
+        displayName: current.displayName,
+        policy: policy,
+      ),
+    );
+  }
+
+  Future<void> _createAccountSelector({
+    _AccountSelectorStarter initialStarter =
+        _AccountSelectorStarter.firstAvailable,
+  }) async {
+    final catalog = await _ensureCollection();
+    if (!mounted) return;
+    if (catalog == null || catalog.collections.isEmpty) return;
+    final draft = await showDialog<_AccountSelectorDraft>(
+      context: context,
+      builder: (context) => _AccountSelectorDraftDialog(
+        collections: catalog.collections,
+        initialStarter: initialStarter,
+        copy: copy,
+      ),
+    );
+    if (draft == null || !mounted) return;
+    final policy = await showDialog<AccountSelectorPolicy>(
+      context: context,
+      builder: (context) => AccountSelectorEditorDialog(
+        selectorId: 'new-selector',
+        initial: _accountSelectorStarterPolicy(initialStarter),
+        copy: copy,
+        testSelector: widget.controller.testAccountSelector,
+      ),
+    );
+    if (policy == null || !mounted) return;
+    await _mutate(() async {
+      final created = await widget.controller.createCodeLibraryAccountSelector(
+        collectionId: draft.collectionId,
+        displayName: draft.displayName,
+        policy: policy,
+      );
+      _kind = _LibraryKind.accountSelectors;
+      _selectedSelectorId = created.id;
+      return created;
+    });
+  }
+
+  Future<void> _editAccountSelector(
+    CodeLibraryAccountSelectorRevision current,
+  ) async {
+    final policy = await showDialog<AccountSelectorPolicy>(
+      context: context,
+      builder: (context) => AccountSelectorEditorDialog(
+        selectorId: current.id,
+        initial: current.policy,
+        copy: copy,
+        testSelector: widget.controller.testAccountSelector,
+      ),
+    );
+    if (policy == null || !mounted) return;
+    await _mutate(
+      () => widget.controller.publishCodeLibraryAccountSelector(
         id: current.id,
         expectedRevision: current.revision,
         collectionId: current.collectionId,
@@ -335,7 +477,9 @@ final class _CapturedSampleBanner extends StatelessWidget {
   );
 }
 
-enum _LibraryAction { collection, transform }
+enum _LibraryKind { transforms, accountSelectors }
+
+enum _LibraryAction { transform, accountSelector }
 
 final class _StarterGallery extends StatelessWidget {
   const _StarterGallery({
@@ -464,134 +608,286 @@ final class _StarterCard extends StatelessWidget {
                 ? 'environment.transform.request'
                 : 'environment.transform.response',
           );
-    return Container(
-      padding: const EdgeInsets.all(14),
-      decoration: BoxDecoration(
-        color: context.viberColors.panel,
-        border: Border.all(color: context.viberColors.divider),
-        borderRadius: BorderRadius.circular(10),
-      ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.stretch,
-        children: [
-          Row(
-            children: [
-              Icon(
-                starter == _TransformStarter.turnTime
-                    ? Icons.schedule_outlined
-                    : starter == _TransformStarter.localPaths
-                    ? Icons.visibility_off_outlined
-                    : Icons.tune_rounded,
-                size: 18,
-                color: context.viberColors.route,
-              ),
-              const SizedBox(width: 8),
-              Expanded(
-                child: Text(
-                  _starterLabel(copy, starter),
-                  style: Theme.of(context).textTheme.titleMedium,
-                ),
-              ),
-              Text(
-                stage,
-                style: Theme.of(context).textTheme.labelSmall?.copyWith(
-                  color: context.viberColors.textMuted,
-                ),
-              ),
-            ],
-          ),
-          const SizedBox(height: 8),
-          Text(
-            copy(_starterDetailKey(starter)),
-            style: Theme.of(context).textTheme.bodySmall?.copyWith(
-              color: context.viberColors.textMuted,
-            ),
-          ),
-          const SizedBox(height: 10),
-          Container(
-            height: 104,
-            padding: const EdgeInsets.all(10),
-            decoration: BoxDecoration(
-              color: context.viberColors.panelRaised,
-              borderRadius: BorderRadius.circular(6),
-            ),
-            child: Text(
-              source,
-              maxLines: 5,
-              overflow: TextOverflow.fade,
-              style: monoStyle.copyWith(
-                color: context.viberColors.textMuted,
-                fontSize: 10.5,
-              ),
-            ),
-          ),
-          const SizedBox(height: 10),
-          OutlinedButton.icon(
-            key: Key('code-library-starter-${starter.name}'),
-            onPressed: enabled ? onUse : null,
-            icon: const Icon(Icons.content_copy_rounded, size: 15),
-            label: Text(copy('code_library.starters.use')),
-          ),
-        ],
-      ),
+    return _ExampleCard(
+      icon: starter == _TransformStarter.turnTime
+          ? Icons.schedule_outlined
+          : starter == _TransformStarter.localPaths
+          ? Icons.visibility_off_outlined
+          : Icons.tune_rounded,
+      label: _starterLabel(copy, starter),
+      badge: stage,
+      detail: copy(_starterDetailKey(starter)),
+      source: source,
+      actionKey: Key('code-library-starter-${starter.name}'),
+      actionLabel: copy('code_library.starters.use'),
+      enabled: enabled,
+      onUse: onUse,
     );
   }
+}
+
+final class _AccountSelectorStarterGallery extends StatelessWidget {
+  const _AccountSelectorStarterGallery({
+    required this.copy,
+    required this.enabled,
+    required this.onUse,
+  });
+
+  final AppCopy copy;
+  final bool enabled;
+  final ValueChanged<_AccountSelectorStarter> onUse;
+
+  @override
+  Widget build(BuildContext context) => SingleChildScrollView(
+    padding: const EdgeInsets.all(16),
+    child: Center(
+      child: ConstrainedBox(
+        constraints: const BoxConstraints(maxWidth: 1040),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            Text(
+              copy('code_library.selector.starters.title'),
+              style: Theme.of(context).textTheme.titleLarge,
+            ),
+            const SizedBox(height: 4),
+            Text(
+              copy('code_library.selector.starters.detail'),
+              style: Theme.of(context).textTheme.bodyMedium?.copyWith(
+                color: context.viberColors.textMuted,
+              ),
+            ),
+            const SizedBox(height: 16),
+            LayoutBuilder(
+              builder: (context, constraints) {
+                final columns = constraints.maxWidth >= 900
+                    ? 3
+                    : constraints.maxWidth >= 620
+                    ? 2
+                    : 1;
+                final width =
+                    (constraints.maxWidth - (columns - 1) * 12) / columns;
+                return Wrap(
+                  spacing: 12,
+                  runSpacing: 12,
+                  children: [
+                    for (final starter in _AccountSelectorStarter.values)
+                      SizedBox(
+                        width: width,
+                        child: _ExampleCard(
+                          icon: switch (starter) {
+                            _AccountSelectorStarter.firstAvailable =>
+                              Icons.looks_one_outlined,
+                            _AccountSelectorStarter.workspace =>
+                              Icons.workspaces_outline,
+                            _AccountSelectorStarter.user =>
+                              Icons.person_outline,
+                            _AccountSelectorStarter.model =>
+                              Icons.model_training_outlined,
+                          },
+                          label: _accountSelectorStarterLabel(copy, starter),
+                          badge: 'JavaScript',
+                          detail: copy(
+                            'code_library.selector.starter.${starter.name}.detail',
+                          ),
+                          source: _accountSelectorStarterPolicy(
+                            starter,
+                          ).javaScript,
+                          actionKey: Key(
+                            'code-library-selector-starter-${starter.name}',
+                          ),
+                          actionLabel: copy('code_library.starters.use'),
+                          enabled: enabled,
+                          onUse: () => onUse(starter),
+                        ),
+                      ),
+                  ],
+                );
+              },
+            ),
+          ],
+        ),
+      ),
+    ),
+  );
+}
+
+final class _ExampleCard extends StatelessWidget {
+  const _ExampleCard({
+    required this.icon,
+    required this.label,
+    required this.badge,
+    required this.detail,
+    required this.source,
+    required this.actionKey,
+    required this.actionLabel,
+    required this.enabled,
+    required this.onUse,
+  });
+
+  final IconData icon;
+  final String label;
+  final String badge;
+  final String detail;
+  final String source;
+  final Key actionKey;
+  final String actionLabel;
+  final bool enabled;
+  final VoidCallback onUse;
+
+  @override
+  Widget build(BuildContext context) => Container(
+    padding: const EdgeInsets.all(14),
+    decoration: BoxDecoration(
+      color: context.viberColors.panel,
+      border: Border.all(color: context.viberColors.divider),
+      borderRadius: BorderRadius.circular(10),
+    ),
+    child: Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        Row(
+          children: [
+            Icon(icon, size: 18, color: context.viberColors.route),
+            const SizedBox(width: 8),
+            Expanded(
+              child: Text(
+                label,
+                style: Theme.of(context).textTheme.titleMedium,
+              ),
+            ),
+            Text(
+              badge,
+              style: Theme.of(context).textTheme.labelSmall?.copyWith(
+                color: context.viberColors.textMuted,
+              ),
+            ),
+          ],
+        ),
+        const SizedBox(height: 8),
+        Text(
+          detail,
+          style: Theme.of(
+            context,
+          ).textTheme.bodySmall?.copyWith(color: context.viberColors.textMuted),
+        ),
+        const SizedBox(height: 10),
+        Container(
+          height: 104,
+          padding: const EdgeInsets.all(10),
+          decoration: BoxDecoration(
+            color: context.viberColors.panelRaised,
+            borderRadius: BorderRadius.circular(6),
+          ),
+          child: Text(
+            source,
+            maxLines: 5,
+            overflow: TextOverflow.fade,
+            style: monoStyle.copyWith(
+              color: context.viberColors.textMuted,
+              fontSize: 10.5,
+            ),
+          ),
+        ),
+        const SizedBox(height: 10),
+        OutlinedButton.icon(
+          key: actionKey,
+          onPressed: enabled ? onUse : null,
+          icon: const Icon(Icons.content_copy_rounded, size: 15),
+          label: Text(actionLabel),
+        ),
+      ],
+    ),
+  );
 }
 
 final class _LibraryTree extends StatelessWidget {
   const _LibraryTree({
     required this.catalog,
-    required this.selectedTransformId,
+    required this.kind,
+    required this.selectedId,
     required this.copy,
     required this.onSelected,
   });
 
   final CodeLibraryCatalog catalog;
-  final String? selectedTransformId;
+  final _LibraryKind kind;
+  final String? selectedId;
   final AppCopy copy;
   final ValueChanged<String> onSelected;
 
   @override
   Widget build(BuildContext context) {
-    if (catalog.collections.isEmpty) {
+    final visibleCollections = catalog.collections
+        .where((collection) {
+          return kind == _LibraryKind.transforms
+              ? catalog.transforms.any(
+                  (item) => item.collectionId == collection.id,
+                )
+              : catalog.accountSelectors.any(
+                  (item) => item.collectionId == collection.id,
+                );
+        })
+        .toList(growable: false);
+    if (visibleCollections.isEmpty) {
       return CenteredMessage(
         icon: Icons.data_object_rounded,
         title: copy('code_library.empty'),
         detail: copy('code_library.empty.detail'),
       );
     }
+    final showCollectionNames = visibleCollections.length > 1;
     return ListView(
-      key: const Key('code-library-tree'),
+      key: Key('code-library-tree-${kind.name}'),
       padding: const EdgeInsets.symmetric(vertical: 6),
       children: [
-        for (final collection in catalog.collections) ...[
-          Padding(
-            padding: const EdgeInsets.fromLTRB(12, 8, 8, 4),
-            child: Text(
-              collection.displayName,
-              maxLines: 1,
-              overflow: TextOverflow.ellipsis,
-              style: Theme.of(context).textTheme.labelMedium?.copyWith(
-                color: context.viberColors.textMuted,
-              ),
-            ),
-          ),
-          for (final transform in catalog.transforms.where(
-            (item) => item.collectionId == collection.id,
-          ))
-            ListTile(
-              key: Key('code-library-transform-${transform.id}'),
-              dense: true,
-              selected: transform.id == selectedTransformId,
-              leading: const Icon(Icons.javascript_rounded, size: 17),
-              title: Text(
-                transform.displayName,
+        for (final collection in visibleCollections) ...[
+          if (showCollectionNames)
+            Padding(
+              padding: const EdgeInsets.fromLTRB(12, 8, 8, 4),
+              child: Text(
+                collection.displayName,
                 maxLines: 1,
                 overflow: TextOverflow.ellipsis,
+                style: Theme.of(context).textTheme.labelMedium?.copyWith(
+                  color: context.viberColors.textMuted,
+                ),
               ),
-              subtitle: Text('r${transform.revision}'),
-              onTap: () => onSelected(transform.id),
             ),
+          if (kind == _LibraryKind.transforms)
+            for (final transform in catalog.transforms.where(
+              (item) => item.collectionId == collection.id,
+            ))
+              ListTile(
+                key: Key('code-library-transform-${transform.id}'),
+                dense: true,
+                selected: transform.id == selectedId,
+                leading: const Icon(Icons.javascript_rounded, size: 17),
+                title: Text(
+                  transform.displayName,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                ),
+                subtitle: Text('r${transform.revision}'),
+                onTap: () => onSelected(transform.id),
+              )
+          else
+            for (final selector in catalog.accountSelectors.where(
+              (item) => item.collectionId == collection.id,
+            ))
+              ListTile(
+                key: Key('code-library-selector-${selector.id}'),
+                dense: true,
+                selected: selector.id == selectedId,
+                leading: const Icon(Icons.account_tree_outlined, size: 17),
+                title: Text(
+                  selector.displayName,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                ),
+                subtitle: Text('r${selector.revision}'),
+                onTap: () => onSelected(selector.id),
+              ),
         ],
       ],
     );
@@ -635,7 +931,7 @@ final class _LibraryDetail extends StatelessWidget {
                   style: Theme.of(context).textTheme.titleLarge,
                 ),
                 Text(
-                  '${value.collectionId} · r${value.revision} · ${value.publishedAt.toLocal()}',
+                  'r${value.revision} · ${value.publishedAt.toLocal()}',
                   style: Theme.of(context).textTheme.bodySmall?.copyWith(
                     color: context.viberColors.textMuted,
                   ),
@@ -703,6 +999,90 @@ final class _LibraryDetail extends StatelessWidget {
   }
 }
 
+final class _AccountSelectorDetail extends StatelessWidget {
+  const _AccountSelectorDetail({
+    required this.selector,
+    required this.copy,
+    required this.enabled,
+    required this.onEdit,
+  });
+
+  final CodeLibraryAccountSelectorRevision? selector;
+  final AppCopy copy;
+  final bool enabled;
+  final VoidCallback? onEdit;
+
+  @override
+  Widget build(BuildContext context) {
+    final value = selector;
+    if (value == null) {
+      return CenteredMessage(
+        icon: Icons.account_tree_outlined,
+        title: copy('code_library.selector.select'),
+        detail: copy('code_library.selector.select.detail'),
+      );
+    }
+    return ListView(
+      key: Key('code-library-selector-detail-${value.id}'),
+      padding: const EdgeInsets.all(14),
+      children: [
+        LayoutBuilder(
+          builder: (context, constraints) {
+            final identity = Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  value.displayName,
+                  style: Theme.of(context).textTheme.titleLarge,
+                ),
+                Text(
+                  'r${value.revision} · ${value.publishedAt.toLocal()}',
+                  style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                    color: context.viberColors.textMuted,
+                  ),
+                ),
+              ],
+            );
+            final edit = FilledButton.icon(
+              key: const Key('code-library-selector-edit'),
+              onPressed: enabled ? onEdit : null,
+              icon: const Icon(Icons.edit_outlined, size: 15),
+              label: Text(copy('code_library.edit_publish')),
+              style: FilledButton.styleFrom(
+                minimumSize: const Size(0, ViberMetrics.controlHeight),
+              ),
+            );
+            if (constraints.maxWidth < 560) {
+              return Column(
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  identity,
+                  const SizedBox(height: 10),
+                  Align(alignment: Alignment.centerRight, child: edit),
+                ],
+              );
+            }
+            return Row(
+              crossAxisAlignment: CrossAxisAlignment.center,
+              children: [
+                Expanded(child: identity),
+                const SizedBox(width: 8),
+                edit,
+              ],
+            );
+          },
+        ),
+        const SizedBox(height: 14),
+        _SourcePanel(
+          title: copy('code_library.selector.source'),
+          source: value.policy.javaScript,
+          emptyLabel: copy('code_library.no_changes'),
+        ),
+      ],
+    );
+  }
+}
+
 final class _SourcePanel extends StatelessWidget {
   const _SourcePanel({
     required this.title,
@@ -740,41 +1120,89 @@ final class _SourcePanel extends StatelessWidget {
   );
 }
 
-final class _NameDialog extends StatefulWidget {
-  const _NameDialog({
-    required this.title,
-    required this.label,
+final class _AccountSelectorDraft {
+  const _AccountSelectorDraft({
+    required this.collectionId,
+    required this.displayName,
+  });
+
+  final String collectionId;
+  final String displayName;
+}
+
+final class _AccountSelectorDraftDialog extends StatefulWidget {
+  const _AccountSelectorDraftDialog({
+    required this.collections,
+    required this.initialStarter,
     required this.copy,
   });
 
-  final String title;
-  final String label;
+  final List<CodeLibraryCollection> collections;
+  final _AccountSelectorStarter initialStarter;
   final AppCopy copy;
 
   @override
-  State<_NameDialog> createState() => _NameDialogState();
+  State<_AccountSelectorDraftDialog> createState() =>
+      _AccountSelectorDraftDialogState();
 }
 
-final class _NameDialogState extends State<_NameDialog> {
-  final _controller = TextEditingController();
+final class _AccountSelectorDraftDialogState
+    extends State<_AccountSelectorDraftDialog> {
+  late final TextEditingController _name;
+  late String _collectionId = widget.collections.first.id;
+
+  @override
+  void initState() {
+    super.initState();
+    _name = TextEditingController(
+      text: _accountSelectorStarterLabel(widget.copy, widget.initialStarter),
+    );
+  }
 
   @override
   void dispose() {
-    _controller.dispose();
+    _name.dispose();
     super.dispose();
   }
 
   @override
   Widget build(BuildContext context) => AlertDialog(
-    title: Text(widget.title),
+    title: Text(widget.copy('code_library.selector.create')),
     content: SizedBox(
       width: ViberMetrics.dialogCompactWidth,
-      child: TextField(
-        key: const Key('code-library-name'),
-        controller: _controller,
-        autofocus: true,
-        decoration: InputDecoration(labelText: widget.label),
-        onSubmitted: (_) => _save(),
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          TextField(
+            key: const Key('code-library-selector-name'),
+            controller: _name,
+            autofocus: true,
+            decoration: InputDecoration(
+              labelText: widget.copy('code_library.name'),
+            ),
+            onSubmitted: (_) => _next(),
+          ),
+          if (widget.collections.length > 1) ...[
+            const SizedBox(height: 10),
+            DropdownButtonFormField<String>(
+              initialValue: _collectionId,
+              isExpanded: true,
+              decoration: InputDecoration(
+                labelText: widget.copy('code_library.collection'),
+              ),
+              items: [
+                for (final collection in widget.collections)
+                  DropdownMenuItem(
+                    value: collection.id,
+                    child: Text(collection.displayName),
+                  ),
+              ],
+              onChanged: (value) {
+                if (value != null) setState(() => _collectionId = value);
+              },
+            ),
+          ],
+        ],
       ),
     ),
     actions: [
@@ -783,16 +1211,19 @@ final class _NameDialogState extends State<_NameDialog> {
         child: Text(widget.copy('common.cancel')),
       ),
       FilledButton(
-        key: const Key('code-library-name-save'),
-        onPressed: _save,
-        child: Text(widget.copy('common.save')),
+        key: const Key('code-library-selector-next'),
+        onPressed: _next,
+        child: Text(widget.copy('common.continue')),
       ),
     ],
   );
 
-  void _save() {
-    final value = _controller.text.trim();
-    if (value.isNotEmpty) Navigator.of(context).pop(value);
+  void _next() {
+    final name = _name.text.trim();
+    if (name.isEmpty) return;
+    Navigator.of(context).pop(
+      _AccountSelectorDraft(collectionId: _collectionId, displayName: name),
+    );
   }
 }
 
@@ -811,6 +1242,8 @@ final class _TransformDraft {
 }
 
 enum _TransformStarter { blank, localPaths, turnTime, systemPrompt }
+
+enum _AccountSelectorStarter { firstAvailable, workspace, user, model }
 
 final class _TransformDraftDialog extends StatefulWidget {
   const _TransformDraftDialog({
@@ -869,24 +1302,26 @@ final class _TransformDraftDialogState extends State<_TransformDraftDialog> {
               labelText: widget.copy('code_library.name'),
             ),
           ),
-          const SizedBox(height: 10),
-          DropdownButtonFormField<String>(
-            initialValue: _collectionId,
-            isExpanded: true,
-            decoration: InputDecoration(
-              labelText: widget.copy('code_library.collection'),
+          if (widget.collections.length > 1) ...[
+            const SizedBox(height: 10),
+            DropdownButtonFormField<String>(
+              initialValue: _collectionId,
+              isExpanded: true,
+              decoration: InputDecoration(
+                labelText: widget.copy('code_library.collection'),
+              ),
+              items: [
+                for (final collection in widget.collections)
+                  DropdownMenuItem(
+                    value: collection.id,
+                    child: Text(collection.displayName),
+                  ),
+              ],
+              onChanged: (value) {
+                if (value != null) setState(() => _collectionId = value);
+              },
             ),
-            items: [
-              for (final collection in widget.collections)
-                DropdownMenuItem(
-                  value: collection.id,
-                  child: Text(collection.displayName),
-                ),
-            ],
-            onChanged: (value) {
-              if (value != null) setState(() => _collectionId = value);
-            },
-          ),
+          ],
           const SizedBox(height: 10),
           DropdownButtonFormField<String>(
             initialValue: _wireProtocol,
@@ -975,6 +1410,53 @@ String _starterDetailKey(_TransformStarter starter) => switch (starter) {
   _TransformStarter.turnTime => 'code_library.starter.turn_time.detail',
   _TransformStarter.systemPrompt => 'code_library.starter.system_prompt.detail',
 };
+
+String _accountSelectorStarterLabel(
+  AppCopy copy,
+  _AccountSelectorStarter starter,
+) => copy('code_library.selector.starter.${starter.name}');
+
+AccountSelectorPolicy _accountSelectorStarterPolicy(
+  _AccountSelectorStarter starter,
+) => AccountSelectorPolicy(
+  javaScript: switch (starter) {
+    _AccountSelectorStarter.firstAvailable =>
+      r'''if (accounts.length === 0) {
+  throw new Error("No Account is available");
+}
+selection.accountId = accounts[0].id;''',
+    _AccountSelectorStarter.workspace =>
+      r'''const accountByWorkspace = {
+  "work": "account.work",
+  "personal": "account.personal",
+};
+const accountId = accountByWorkspace[runtime.workspace.label];
+if (!accounts.some(function (account) { return account.id === accountId; })) {
+  throw new Error("No Account is configured for this Workspace");
+}
+selection.accountId = accountId;''',
+    _AccountSelectorStarter.user =>
+      r'''const accountByUser = {
+  "alice": "account.team-a",
+  "bob": "account.team-b",
+};
+const accountId = accountByUser[runtime.user.name];
+if (!accounts.some(function (account) { return account.id === accountId; })) {
+  throw new Error("No Account is configured for this Runtime User");
+}
+selection.accountId = accountId;''',
+    _AccountSelectorStarter.model =>
+      r'''const accountByModel = {
+  "claude-opus-4-1": "account.high-capacity",
+  "claude-sonnet-4-5": "account.standard",
+};
+const accountId = accountByModel[request.requestedModel];
+if (!accounts.some(function (account) { return account.id === accountId; })) {
+  throw new Error("No Account is configured for this requested model");
+}
+selection.accountId = accountId;''',
+  },
+);
 
 TrafficTransformPolicy _starterPolicy(
   _TransformStarter starter,

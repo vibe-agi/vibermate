@@ -152,11 +152,13 @@ void main() {
         nextRoute.accountPolicy.revision,
         route.accountPolicy.revision + 1,
       );
-      expect(nextRoute.accountPolicy.preferredAccountId, account.id);
-      expect(nextRoute.accountPolicy.candidateAccountIds, [account.id]);
-      expect(nextRoute.accountPolicy.accountRevisions, {
-        account.id: account.revision,
-      });
+      expect(nextRoute.accountPolicy.mode, 'fixed');
+      expect(nextRoute.accountPolicy.fixedAccountId, account.id);
+      expect(nextRoute.accountPolicy.accounts.single.id, account.id);
+      expect(
+        nextRoute.accountPolicy.accounts.single.revision,
+        account.revision,
+      );
       expect(
         nextPlan.routes.firstWhere((value) => value.id == untouched.id),
         same(untouched),
@@ -497,7 +499,8 @@ void main() {
       () => appendEnvironmentUpstreamEndpoint(
         endpoints: const [],
         upstreamEndpoint: orbit,
-        account: foreignAccount,
+        accountPolicy: fixedRouteAccountPolicy(foreignAccount),
+        availableAccounts: dashboard.accounts,
         identityNonce: 'missing-account',
       ),
       throwsArgumentError,
@@ -506,17 +509,17 @@ void main() {
     final endpoints = appendEnvironmentUpstreamEndpoint(
       endpoints: const [],
       upstreamEndpoint: orbit,
-      account: orbitAccount,
+      accountPolicy: fixedRouteAccountPolicy(orbitAccount),
+      availableAccounts: dashboard.accounts,
       identityNonce: 'owned-account',
     );
     final plan = endpoints.single.protocolPlans.single;
     final route = plan.routes.single;
     expect(plan.destination.kind, 'upstream');
     expect(route.endpointId, orbit.id);
-    expect(route.accountPolicy.preferredAccountId, orbitAccount.id);
-    expect(route.accountPolicy.accountRevisions, {
-      orbitAccount.id: orbitAccount.revision,
-    });
+    expect(route.accountPolicy.fixedAccountId, orbitAccount.id);
+    expect(route.accountPolicy.accounts.single.id, orbitAccount.id);
+    expect(route.accountPolicy.accounts.single.revision, orbitAccount.revision);
   });
 
   test('original destination has no synthetic Route or Account', () {
@@ -548,13 +551,15 @@ void main() {
       final published = appendEnvironmentUpstreamEndpoint(
         endpoints: const [],
         upstreamEndpoint: relay,
-        account: account,
+        accountPolicy: fixedRouteAccountPolicy(account),
+        availableAccounts: dashboard.accounts,
         identityNonce: 'published-r1',
       ).single;
       final readded = appendEnvironmentUpstreamEndpoint(
         endpoints: const [],
         upstreamEndpoint: relay,
-        account: account,
+        accountPolicy: fixedRouteAccountPolicy(account),
+        availableAccounts: dashboard.accounts,
         identityNonce: 'draft-r3',
       ).single;
 
@@ -587,14 +592,16 @@ void main() {
       final anthropic = appendEnvironmentUpstreamEndpoint(
         endpoints: const [],
         upstreamEndpoint: relay,
-        account: account,
+        accountPolicy: fixedRouteAccountPolicy(account),
+        availableAccounts: dashboard.accounts,
         clientProtocol: 'anthropic_messages',
         identityNonce: 'anthropic-flow',
       );
       final combined = appendEnvironmentUpstreamEndpoint(
         endpoints: anthropic,
         upstreamEndpoint: relay,
-        account: account,
+        accountPolicy: fixedRouteAccountPolicy(account),
+        availableAccounts: dashboard.accounts,
         clientProtocol: 'openai_responses',
         identityNonce: 'responses-flow',
       );
@@ -644,7 +651,8 @@ void main() {
     final endpoints = appendEnvironmentUpstreamEndpoint(
       endpoints: research.clientEndpoints,
       upstreamEndpoint: official,
-      account: account,
+      accountPolicy: fixedRouteAccountPolicy(account),
+      availableAccounts: dashboard.accounts,
       identityNonce: 'candidate-route',
     );
     final plan = endpoints.single.protocolPlans.single;
@@ -658,7 +666,7 @@ void main() {
       plan.routes
           .firstWhere((route) => route.endpointId == official.id)
           .accountPolicy
-          .preferredAccountId,
+          .fixedAccountId,
       account.id,
     );
   });
@@ -686,7 +694,8 @@ void main() {
         clientEndpointId: clientEndpoint.id,
         protocolPlanId: originalPlan.id,
         upstreamEndpoint: openAI,
-        account: account,
+        accountPolicy: fixedRouteAccountPolicy(account),
+        availableAccounts: dashboard.accounts,
         identityNonce: 'openai-route',
       );
 
@@ -701,9 +710,168 @@ void main() {
         (value) => value.endpointId == openAI.id,
       );
       expect(route.backendProtocol, 'openai_chat');
-      expect(route.accountPolicy.preferredAccountId, account.id);
+      expect(route.accountPolicy.fixedAccountId, account.id);
       expect(route.modelPolicy.mode, 'passthrough');
       expect(route.wireProfileRef, 'follow-client');
+    },
+  );
+
+  test(
+    'Account Selector freezes only Accounts owned by the Route Endpoint',
+    () async {
+      final api = PreviewControlApi();
+      addTearDown(api.close);
+      final dashboard = await api.loadDashboard();
+      final work = dashboard.environments.firstWhere(
+        (environment) => environment.id == 'work',
+      );
+      final endpoint = work.clientEndpoints.firstWhere(
+        (client) => client.id == 'claude-client',
+      );
+      final plan = endpoint.protocolPlans.single;
+      final route = plan.routes.firstWhere(
+        (candidate) => candidate.id == 'anthropic-direct',
+      );
+      final owned = dashboard.accounts
+          .where(
+            (account) =>
+                account.upstreamEndpointId == route.endpointId &&
+                account.usable,
+          )
+          .toList(growable: false);
+      final selector = CodeLibraryAccountSelectorRevision(
+        id: 'selector.workspace',
+        revision: 3,
+        collectionId: 'collection.routing',
+        displayName: 'Workspace account',
+        policy: const AccountSelectorPolicy(
+          javaScript: 'selection.accountId = accounts[0].id;',
+        ),
+        publishedAt: DateTime.utc(2026, 8, 28, 1),
+      );
+      final policy = RouteAccountPolicy(
+        revision: route.accountPolicy.revision,
+        mode: 'javascript',
+        fixedAccountId: '',
+        selector: selector,
+        accounts: [
+          for (final account in owned)
+            RouteAccountReference(
+              id: account.id,
+              revision: account.revision,
+              displayName: account.displayName,
+            ),
+        ],
+      );
+
+      final updated = assignEnvironmentRouteAccountPolicy(
+        endpoints: work.clientEndpoints,
+        clientEndpointId: endpoint.id,
+        protocolPlanId: plan.id,
+        routeId: route.id,
+        policy: policy,
+        availableAccounts: dashboard.accounts,
+      );
+      final saved = updated
+          .firstWhere((client) => client.id == endpoint.id)
+          .protocolPlans
+          .single
+          .routes
+          .firstWhere((candidate) => candidate.id == route.id)
+          .accountPolicy;
+      expect(saved.mode, 'javascript');
+      expect(saved.selector, selector);
+      expect(
+        saved.accounts.map((account) => account.id),
+        owned.map((account) => account.id),
+      );
+      expect(saved.revision, route.accountPolicy.revision + 1);
+
+      final foreign = dashboard.accounts.firstWhere(
+        (account) => account.upstreamEndpointId != route.endpointId,
+      );
+      expect(
+        () => assignEnvironmentRouteAccountPolicy(
+          endpoints: work.clientEndpoints,
+          clientEndpointId: endpoint.id,
+          protocolPlanId: plan.id,
+          routeId: route.id,
+          policy: RouteAccountPolicy(
+            revision: route.accountPolicy.revision,
+            mode: 'javascript',
+            fixedAccountId: '',
+            selector: selector,
+            accounts: [
+              RouteAccountReference(
+                id: foreign.id,
+                revision: foreign.revision,
+                displayName: foreign.displayName,
+              ),
+            ],
+          ),
+          availableAccounts: dashboard.accounts,
+        ),
+        throwsArgumentError,
+      );
+    },
+  );
+
+  test(
+    'first Route can freeze a published Account Selector revision',
+    () async {
+      final api = PreviewControlApi();
+      addTearDown(api.close);
+      final dashboard = await api.loadDashboard();
+      final endpoint = dashboard.endpoints.firstWhere(
+        (candidate) => candidate.id == 'target.anthropic.official',
+      );
+      final owned = dashboard.accounts
+          .where(
+            (account) =>
+                account.upstreamEndpointId == endpoint.id && account.usable,
+          )
+          .toList(growable: false);
+      final selector = CodeLibraryAccountSelectorRevision(
+        id: 'selector.workspace',
+        revision: 3,
+        collectionId: 'collection.routing',
+        displayName: 'Workspace account',
+        policy: const AccountSelectorPolicy(
+          javaScript: 'selection.accountId = accounts[0].id;',
+        ),
+        publishedAt: DateTime.utc(2026, 8, 28, 1),
+      );
+      final policy = RouteAccountPolicy(
+        revision: 1,
+        mode: 'javascript',
+        fixedAccountId: '',
+        selector: selector,
+        accounts: [
+          for (final account in owned)
+            RouteAccountReference(
+              id: account.id,
+              revision: account.revision,
+              displayName: account.displayName,
+            ),
+        ],
+      );
+
+      final added = appendEnvironmentUpstreamEndpoint(
+        endpoints: const [],
+        upstreamEndpoint: endpoint,
+        accountPolicy: policy,
+        availableAccounts: dashboard.accounts,
+        identityNonce: 'selector-first-route',
+      );
+
+      final saved =
+          added.single.protocolPlans.single.routes.single.accountPolicy;
+      expect(saved.mode, 'javascript');
+      expect(saved.selector, selector);
+      expect(
+        saved.accounts.map((account) => account.id),
+        owned.map((account) => account.id),
+      );
     },
   );
 }

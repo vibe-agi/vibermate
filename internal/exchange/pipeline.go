@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"github.com/klauspost/compress/zstd"
+	"github.com/vibe-agi/vibermate/internal/accountselector"
 	"github.com/vibe-agi/vibermate/internal/agentconversation"
 	"github.com/vibe-agi/vibermate/internal/clientadapter"
 	"github.com/vibe-agi/vibermate/internal/clientannotation"
@@ -227,25 +228,22 @@ func (pipeline *Pipeline) Execute(
 	defer pipeline.finish(active)
 	defer action.Release()
 	pipeline.observeStart(request)
-	candidates, err := selection.credentialCandidates()
+	startedAt := pipeline.now().UTC()
+	candidate, err := pipeline.selectCredentialCandidate(
+		operationContext,
+		request,
+		selection,
+		startedAt,
+	)
 	if err != nil {
-		return result, newFailure(
-			ReasonEnvironmentPlanInvalid,
-			request.exchangeID,
-			0,
-			err,
-		)
+		return result, err
 	}
 
-	// A request may be attempted against more than one account, but only
-	// while the policy allows it and nothing has reached the client. The
-	// ledger lives outside the loop because commits accumulate across the
-	// whole logical Exchange, while everything a candidate decides does not.
 	ledger := &CommitLedger{}
 	transformTurn, err := newMessageTransformTurn(
 		request,
 		pipeline.annotations,
-		pipeline.now().UTC(),
+		startedAt,
 	)
 	if err != nil {
 		return result, newFailure(
@@ -255,64 +253,38 @@ func (pipeline *Pipeline) Execute(
 			err,
 		)
 	}
-	// attemptErr is the outcome the client ends up with. The loop body has its
-	// own short-lived errors; this is the one that leaves.
-	var attemptErr error
-	for candidateIndex, candidate := range candidates {
-		result.AccountID = ""
-		result.AccountRevision = 0
-		result.CredentialEpoch = 0
-		// The translation report describes the attempt whose answer the client
-		// is receiving, so it starts empty for each one.
-		result.Translation = protocolcore.TranslationReport{}
-		material, acquireErr := pipeline.acquireCredential(
-			operationContext,
-			selection,
-			candidate,
+	material, acquireErr := pipeline.acquireCredential(
+		operationContext,
+		selection,
+		candidate,
+	)
+	if acquireErr != nil {
+		err = newFailure(
+			ReasonProviderCredentialUnavailable,
+			request.exchangeID,
+			0,
+			acquireErr,
 		)
-		if acquireErr != nil {
-			attemptErr = newFailure(
-				ReasonProviderCredentialUnavailable,
-				request.exchangeID,
-				0,
-				acquireErr,
-			)
-		} else {
-			if candidate.mode == providerauth.CredentialManaged {
-				result.AccountID = material.account.ID
-				result.AccountRevision = material.account.Revision
-				result.CredentialEpoch = material.account.CredentialEpoch
-			}
-			attemptErr = pipeline.executeCandidate(
-				operationContext,
-				request,
-				selection,
-				material,
-				action,
-				downstream,
-				ledger,
-				&result,
-				captured,
-				transformTurn,
-			)
-			material.Release()
+	} else {
+		if candidate.mode == providerauth.CredentialManaged {
+			result.AccountID = material.account.ID
+			result.AccountRevision = material.account.Revision
+			result.CredentialEpoch = material.account.CredentialEpoch
 		}
-
-		if attemptErr == nil {
-			break
-		}
-		if !mayTryNextCandidate(
-			selection.accountPolicy.FailoverPolicy(),
-			len(candidates),
-			candidateIndex,
+		err = pipeline.executeCandidate(
+			operationContext,
+			request,
+			selection,
+			material,
+			action,
+			downstream,
 			ledger,
-			request.replayClass,
-			attemptErr,
-		) {
-			break
-		}
+			&result,
+			captured,
+			transformTurn,
+		)
+		material.Release()
 	}
-	err = attemptErr
 	result.Ledger = ledger.Snapshot()
 	if err != nil {
 		switch {
@@ -329,6 +301,125 @@ func (pipeline *Pipeline) Execute(
 	}
 	result.Outcome = AttemptSucceeded
 	return result, nil
+}
+
+func (pipeline *Pipeline) selectCredentialCandidate(
+	ctx context.Context,
+	request ClientRequest,
+	selection frozenSelection,
+	startedAt time.Time,
+) (credentialCandidate, error) {
+	if selection.original {
+		return credentialCandidate{mode: providerauth.CredentialClientPassthrough}, nil
+	}
+	policy := selection.accountPolicy
+	switch policy.Mode() {
+	case environment.AccountSelectionFixed:
+		account, available := policy.FixedAccount()
+		if !available {
+			return credentialCandidate{}, newFailure(
+				ReasonEnvironmentPlanInvalid,
+				request.exchangeID,
+				0,
+				errors.New("fixed account is missing from the frozen route"),
+			)
+		}
+		candidate, err := selection.managedCredentialCandidate(account)
+		if err != nil {
+			return credentialCandidate{}, newFailure(
+				ReasonEnvironmentPlanInvalid,
+				request.exchangeID,
+				0,
+				err,
+			)
+		}
+		return candidate, nil
+	case environment.AccountSelectionJavaScript:
+		protocolPath, err := pipeline.protocolPaths.Select(
+			selection.codecPlan,
+			request.operation.id,
+		)
+		if err != nil {
+			return credentialCandidate{}, newFailure(
+				ReasonEnvironmentPlanInvalid,
+				request.exchangeID,
+				0,
+				err,
+			)
+		}
+		decoded, _, err := protocolPath.Client().DecodeRequest(request.body)
+		if err != nil {
+			reason := ReasonInvalidExchangeRequest
+			if protocolcore.ReasonOf(err) == protocolcore.ReasonUnsupportedClientInput {
+				reason = ReasonUnsupportedClientInput
+			}
+			failure := newFailure(reason, request.exchangeID, 0, err)
+			failure.ClientField = classifyClientRequestField(request.body, err)
+			return credentialCandidate{}, failure
+		}
+		turn, err := policy.NewSelectorTurn(accountSelectorRuntimeMetadata(request, startedAt))
+		if err != nil {
+			return credentialCandidate{}, newFailure(
+				ReasonAccountSelectorFailed,
+				request.exchangeID,
+				0,
+				err,
+			)
+		}
+		selected, err := turn.Select(ctx, accountselector.Request{
+			Method: request.operation.Method(), Path: request.operation.Path(),
+			Headers: request.protocolHeaders(), Body: request.body,
+			ClientProtocol: string(selection.codecPlan.ClientDialect()),
+			RequestedModel: decoded.RequestedModel,
+		})
+		if err != nil {
+			return credentialCandidate{}, newFailure(
+				ReasonAccountSelectorFailed,
+				request.exchangeID,
+				0,
+				err,
+			)
+		}
+		candidate, err := selection.managedCredentialCandidateByID(selected.AccountID)
+		if err != nil {
+			return credentialCandidate{}, newFailure(
+				ReasonAccountSelectorFailed,
+				request.exchangeID,
+				0,
+				err,
+			)
+		}
+		return candidate, nil
+	default:
+		return credentialCandidate{}, newFailure(
+			ReasonEnvironmentPlanInvalid,
+			request.exchangeID,
+			0,
+			errors.New("account selection mode is invalid"),
+		)
+	}
+}
+
+func accountSelectorRuntimeMetadata(
+	request ClientRequest,
+	startedAt time.Time,
+) accountselector.RuntimeMetadata {
+	metadata := accountselector.RuntimeMetadata{TurnStartedAt: startedAt}
+	if admission, available := request.CaptureAdmission(); available {
+		if runtime, managed := admission.RuntimeMetadata(); managed {
+			metadata.LocalUserName = runtime.LocalUserName
+			metadata.HomeDirectory = runtime.HomeDirectory
+			metadata.OperatingSystem = runtime.OperatingSystem
+			metadata.OperatingSystemVersion = runtime.OperatingSystemVersion
+			metadata.Architecture = runtime.Architecture
+			metadata.TimeZone = runtime.TimeZone
+		}
+		metadata.WorkspaceRoot, _ = admission.WorkspaceRoot()
+		if workspace, scoped := admission.WorkspaceScope(); scoped {
+			metadata.WorkspaceLabel = workspace.WorkspaceLabel()
+		}
+	}
+	return metadata
 }
 
 func (pipeline *Pipeline) executeCandidate(

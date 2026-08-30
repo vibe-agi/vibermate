@@ -766,8 +766,12 @@ final class _RouteAuthorityRow extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final candidates = route.accountPolicy.candidateAccountIds
-        .map((id) => accounts.where((account) => account.id == id).firstOrNull)
+    final candidates = route.accountPolicy.accounts
+        .map(
+          (reference) => accounts
+              .where((account) => account.id == reference.id)
+              .firstOrNull,
+        )
         .whereType<ProviderAccount>()
         .toList(growable: false);
     final invalid = candidates
@@ -829,6 +833,12 @@ final class _RouteAuthorityRow extends StatelessWidget {
           spacing: 6,
           runSpacing: 5,
           children: [
+            if (route.accountPolicy.selector case final selector?)
+              StatusPill(
+                label: '${selector.displayName} · r${selector.revision}',
+                color: context.viberColors.route,
+                icon: Icons.data_object,
+              ),
             for (final account in candidates)
               StatusPill(
                 label: account.displayName,
@@ -1069,6 +1079,7 @@ final class _NewEnvironmentDialogState extends State<_NewEnvironmentDialog> {
                                   ),
                                   const SizedBox(height: 6),
                                   _EnvironmentEndpointAdder(
+                                    controller: widget.controller,
                                     current: _clientEndpoints,
                                     endpoints:
                                         widget.controller.data?.endpoints ??
@@ -1105,7 +1116,7 @@ final class _NewEnvironmentDialogState extends State<_NewEnvironmentDialog> {
                                           clientOrigin,
                                           clientProtocol,
                                           endpoint,
-                                          account,
+                                          accountPolicy,
                                         ) => setState(() {
                                           _clientEndpoints =
                                               appendEnvironmentUpstreamEndpoint(
@@ -1116,7 +1127,13 @@ final class _NewEnvironmentDialogState extends State<_NewEnvironmentDialog> {
                                                 clientOrigin: clientOrigin,
                                                 clientProtocol: clientProtocol,
                                                 upstreamEndpoint: endpoint,
-                                                account: account,
+                                                accountPolicy: accountPolicy,
+                                                availableAccounts:
+                                                    widget
+                                                        .controller
+                                                        .data
+                                                        ?.accounts ??
+                                                    const [],
                                                 identityNonce: widget.controller
                                                     .newEnvironmentChildIdentityNonce(),
                                               );
@@ -1183,16 +1200,22 @@ final class _NewEnvironmentDialogState extends State<_NewEnvironmentDialog> {
                                             (
                                               plan,
                                               route,
-                                              account,
+                                              policy,
                                             ) => setState(() {
                                               _clientEndpoints =
-                                                  assignEnvironmentRouteAccount(
+                                                  assignEnvironmentRouteAccountPolicy(
                                                     endpoints: _clientEndpoints,
                                                     clientEndpointId:
                                                         endpoint.id,
                                                     protocolPlanId: plan.id,
                                                     routeId: route.id,
-                                                    account: account,
+                                                    policy: policy,
+                                                    availableAccounts:
+                                                        widget
+                                                            .controller
+                                                            .data
+                                                            ?.accounts ??
+                                                        const [],
                                                   );
                                             }),
                                         onModelChanged:
@@ -1770,6 +1793,7 @@ final class _EnvironmentEditorDialogState
                                   ),
                                   const SizedBox(height: 6),
                                   _EnvironmentEndpointAdder(
+                                    controller: widget.controller,
                                     current: _clientEndpoints,
                                     endpoints:
                                         widget.controller.data?.endpoints ??
@@ -1806,7 +1830,7 @@ final class _EnvironmentEditorDialogState
                                           clientOrigin,
                                           clientProtocol,
                                           endpoint,
-                                          account,
+                                          accountPolicy,
                                         ) => setState(() {
                                           _clientEndpoints =
                                               appendEnvironmentUpstreamEndpoint(
@@ -1817,7 +1841,13 @@ final class _EnvironmentEditorDialogState
                                                 clientOrigin: clientOrigin,
                                                 clientProtocol: clientProtocol,
                                                 upstreamEndpoint: endpoint,
-                                                account: account,
+                                                accountPolicy: accountPolicy,
+                                                availableAccounts:
+                                                    widget
+                                                        .controller
+                                                        .data
+                                                        ?.accounts ??
+                                                    const [],
                                                 identityNonce: widget.controller
                                                     .newEnvironmentChildIdentityNonce(),
                                               );
@@ -1884,16 +1914,22 @@ final class _EnvironmentEditorDialogState
                                             (
                                               plan,
                                               route,
-                                              account,
+                                              policy,
                                             ) => setState(() {
                                               _clientEndpoints =
-                                                  assignEnvironmentRouteAccount(
+                                                  assignEnvironmentRouteAccountPolicy(
                                                     endpoints: _clientEndpoints,
                                                     clientEndpointId:
                                                         endpoint.id,
                                                     protocolPlanId: plan.id,
                                                     routeId: route.id,
-                                                    account: account,
+                                                    policy: policy,
+                                                    availableAccounts:
+                                                        widget
+                                                            .controller
+                                                            .data
+                                                            ?.accounts ??
+                                                        const [],
                                                   );
                                             }),
                                         onModelChanged:
@@ -2171,7 +2207,7 @@ typedef _RouteAccountChanged =
     void Function(
       EnvironmentProtocolPlan plan,
       EnvironmentRoute route,
-      ProviderAccount account,
+      RouteAccountPolicy policy,
     );
 
 typedef _RouteModelChanged =
@@ -2197,7 +2233,7 @@ typedef _EndpointAdded =
       Uri clientOrigin,
       String clientProtocol,
       UpstreamEndpoint endpoint,
-      ProviderAccount account,
+      RouteAccountPolicy accountPolicy,
     );
 
 typedef _OriginalDestinationSelected =
@@ -2276,6 +2312,7 @@ List<_ClientPlanTarget> _clientPlanTargets(
 
 final class _EnvironmentEndpointAdder extends StatefulWidget {
   const _EnvironmentEndpointAdder({
+    required this.controller,
     required this.current,
     required this.endpoints,
     required this.accounts,
@@ -2285,6 +2322,7 @@ final class _EnvironmentEndpointAdder extends StatefulWidget {
     required this.onAdd,
   });
 
+  final WorkbenchController controller;
   final List<EnvironmentClientEndpoint> current;
   final List<UpstreamEndpoint> endpoints;
   final List<ProviderAccount> accounts;
@@ -2301,11 +2339,18 @@ final class _EnvironmentEndpointAdder extends StatefulWidget {
 final class _EnvironmentEndpointAdderState
     extends State<_EnvironmentEndpointAdder> {
   final _pendingFieldKey = GlobalKey<FormFieldState<String>>();
+  late final Future<CodeLibraryCatalog> _codeLibrary;
   String _targetKey = '';
   String _destinationKind = 'original';
   String _endpointId = '';
-  String _accountId = '';
+  RouteAccountPolicy? _accountPolicy;
   bool _pending = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _codeLibrary = widget.controller.codeLibrary();
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -2355,7 +2400,16 @@ final class _EnvironmentEndpointAdderState
               )
               .toList(growable: false);
     final canAdd =
-        selected != null && owned.any((account) => account.id == _accountId);
+        selected != null &&
+        _accountPolicy != null &&
+        _accountPolicy!.accounts.isNotEmpty &&
+        _accountPolicy!.accounts.every(
+          (reference) => owned.any(
+            (account) =>
+                account.id == reference.id &&
+                account.revision == reference.revision,
+          ),
+        );
     final canApply = effectiveTarget != null && (originalDestination || canAdd);
     return FormField<String>(
       key: _pendingFieldKey,
@@ -2455,7 +2509,7 @@ final class _EnvironmentEndpointAdderState
                                       ?.destinationKind ??
                                   'original';
                               _endpointId = '';
-                              _accountId = '';
+                              _accountPolicy = null;
                               _pending = true;
                             });
                             field.didChange('');
@@ -2490,7 +2544,7 @@ final class _EnvironmentEndpointAdderState
                             setState(() {
                               _destinationKind = selection;
                               _endpointId = '';
-                              _accountId = '';
+                              _accountPolicy = null;
                               _pending = true;
                             });
                             field.didChange(effectiveTarget.key);
@@ -2534,44 +2588,120 @@ final class _EnvironmentEndpointAdderState
                             );
                             setState(() {
                               _endpointId = endpoint.id;
-                              _accountId = accounts.firstOrNull?.id ?? '';
+                              _accountPolicy = accounts.firstOrNull == null
+                                  ? null
+                                  : fixedRouteAccountPolicy(accounts.first);
                               _pending = true;
                             });
                             field.didChange(endpoint.id);
                           },
                   ),
                 );
-                final accountField = CompactLabeledControl(
-                  label: widget.copy('environment.account'),
-                  detail: selected != null && owned.isEmpty
-                      ? widget.copy('environment.endpoint.account_required')
-                      : null,
-                  child: CompactSelectField<String>(
-                    key: Key(
-                      'environment-endpoint-account-${selected?.id ?? 'none'}',
-                    ),
-                    initialValue: _accountId.isEmpty ? null : _accountId,
-                    isExpanded: true,
-                    items: [
-                      for (final account in owned)
-                        DropdownMenuItem(
-                          value: account.id,
-                          child: Text(
-                            account.displayName,
-                            overflow: TextOverflow.ellipsis,
-                          ),
-                        ),
-                    ],
-                    onChanged: !widget.enabled || selected == null
+                final accountField = FutureBuilder<CodeLibraryCatalog>(
+                  future: _codeLibrary,
+                  builder: (context, snapshot) {
+                    final selectors = [...?snapshot.data?.accountSelectors]
+                      ..sort(
+                        (left, right) =>
+                            left.displayName.compareTo(right.displayName),
+                      );
+                    String fixedToken(String id) => 'fixed:$id';
+                    String selectorToken(
+                      CodeLibraryAccountSelectorRevision selector,
+                    ) => 'javascript:${selector.id}:${selector.revision}';
+                    final currentPolicy = _accountPolicy;
+                    final currentToken = currentPolicy == null
                         ? null
-                        : (value) {
-                            setState(() {
-                              _accountId = value ?? '';
-                              _pending = true;
-                            });
-                            field.didChange(_endpointId);
-                          },
-                  ),
+                        : currentPolicy.mode == 'javascript'
+                        ? selectorToken(currentPolicy.selector!)
+                        : fixedToken(currentPolicy.fixedAccountId);
+                    return CompactLabeledControl(
+                      label: widget.copy('environment.account'),
+                      detail: snapshot.hasError
+                          ? widget.copy(
+                              'environment.account.selector_load_failed',
+                            )
+                          : selected != null && owned.isEmpty
+                          ? widget.copy('environment.endpoint.account_required')
+                          : snapshot.connectionState == ConnectionState.done &&
+                                selectors.isEmpty
+                          ? widget.copy('environment.account.selector_none')
+                          : currentPolicy?.mode == 'javascript'
+                          ? widget.copy.format(
+                              'environment.account.selector_scope',
+                              {'count': owned.length},
+                            )
+                          : selectors.isEmpty
+                          ? widget.copy('environment.account.owner')
+                          : widget.copy.format(
+                              'environment.account.selector_available',
+                              {'count': selectors.length},
+                            ),
+                      child: CompactSelectField<String>(
+                        key: Key(
+                          'environment-endpoint-account-${selected?.id ?? 'none'}',
+                        ),
+                        initialValue: currentToken,
+                        isExpanded: true,
+                        items: [
+                          for (final account in owned)
+                            DropdownMenuItem(
+                              value: fixedToken(account.id),
+                              child: Text(
+                                '${widget.copy('environment.account.fixed')} · ${account.displayName}',
+                                overflow: TextOverflow.ellipsis,
+                              ),
+                            ),
+                          for (final selector in selectors)
+                            DropdownMenuItem(
+                              value: selectorToken(selector),
+                              enabled: owned.isNotEmpty,
+                              child: Text(
+                                '${widget.copy('environment.account.javascript')} · ${selector.displayName} · r${selector.revision}',
+                                overflow: TextOverflow.ellipsis,
+                              ),
+                            ),
+                        ],
+                        onChanged: !widget.enabled || selected == null
+                            ? null
+                            : (value) {
+                                if (value == null) return;
+                                setState(() {
+                                  if (value.startsWith('fixed:')) {
+                                    final account = owned.firstWhere(
+                                      (candidate) =>
+                                          fixedToken(candidate.id) == value,
+                                    );
+                                    _accountPolicy = fixedRouteAccountPolicy(
+                                      account,
+                                    );
+                                  } else {
+                                    final selector = selectors.firstWhere(
+                                      (candidate) =>
+                                          selectorToken(candidate) == value,
+                                    );
+                                    _accountPolicy = RouteAccountPolicy(
+                                      revision: 1,
+                                      mode: 'javascript',
+                                      fixedAccountId: '',
+                                      selector: selector,
+                                      accounts: [
+                                        for (final account in owned)
+                                          RouteAccountReference(
+                                            id: account.id,
+                                            revision: account.revision,
+                                            displayName: account.displayName,
+                                          ),
+                                      ],
+                                    );
+                                  }
+                                  _pending = true;
+                                });
+                                field.didChange(_endpointId);
+                              },
+                      ),
+                    );
+                  },
                 );
                 final add = OutlinedButton.icon(
                   key: Key(
@@ -2705,21 +2835,20 @@ final class _EnvironmentEndpointAdderState
       final endpoint = widget.endpoints.firstWhere(
         (candidate) => candidate.id == _endpointId,
       );
-      final account = widget.accounts.firstWhere(
-        (candidate) => candidate.id == _accountId,
-      );
+      final accountPolicy = _accountPolicy;
+      if (accountPolicy == null) return;
       widget.onAdd(
         target.clientEndpointId,
         target.protocolPlanId,
         target.clientOrigin,
         target.clientProtocol,
         endpoint,
-        account,
+        accountPolicy,
       );
     }
     setState(() {
       _endpointId = '';
-      _accountId = '';
+      _accountPolicy = null;
       _pending = false;
     });
     _pendingFieldKey.currentState?.reset();
@@ -2976,7 +3105,7 @@ final class _RouteAccountEditor extends StatelessWidget {
   final List<ProviderAccount> accounts;
   final AppCopy copy;
   final bool enabled;
-  final ValueChanged<ProviderAccount> onChanged;
+  final ValueChanged<RouteAccountPolicy> onChanged;
   final ValueChanged<List<EnvironmentModelMapping>> onModelChanged;
 
   @override
@@ -2988,9 +3117,12 @@ final class _RouteAccountEditor extends StatelessWidget {
           ..sort(
             (left, right) => left.displayName.compareTo(right.displayName),
           );
-    final currentId = route.accountPolicy.preferredAccountId;
+    final currentId = route.accountPolicy.fixedAccountId;
     final currentItemExists = owned.any((account) => account.id == currentId);
-    final selectable = owned.where((account) => account.usable).length;
+    final eligible = owned
+        .where((account) => account.usable)
+        .toList(growable: false);
+    final selectable = eligible.length;
     final mappings = route.modelPolicy.mappings;
     final modelLabel = mappings.isEmpty
         ? copy('environment.model.passthrough')
@@ -3006,55 +3138,128 @@ final class _RouteAccountEditor extends StatelessWidget {
             route: route,
             endpoint: upstreamEndpoint,
           );
-          final selector = CompactLabeledControl(
-            label: copy('environment.account'),
-            detail: selectable == 0
-                ? copy('environment.account.none')
-                : copy('environment.account.owner'),
-            child: CompactSelectField<String>(
-              key: Key('environment-route-account-${route.id}-$currentId'),
-              initialValue: currentId.isEmpty ? null : currentId,
-              isExpanded: true,
-              items: [
-                if (!currentItemExists && currentId.isNotEmpty)
-                  DropdownMenuItem(
-                    value: currentId,
-                    enabled: false,
-                    child: Text(currentId),
+          final accountControl = FutureBuilder<CodeLibraryCatalog>(
+            future: controller.codeLibrary(),
+            builder: (context, snapshot) {
+              final selectors = [...?snapshot.data?.accountSelectors]
+                ..sort(
+                  (left, right) =>
+                      left.displayName.compareTo(right.displayName),
+                );
+              final frozenSelector = route.accountPolicy.selector;
+              String fixedToken(String id) => 'fixed:$id';
+              String selectorToken(CodeLibraryAccountSelectorRevision value) =>
+                  'javascript:${value.id}:${value.revision}';
+              final currentToken = route.accountPolicy.mode == 'javascript'
+                  ? selectorToken(frozenSelector!)
+                  : fixedToken(currentId);
+              final hasCurrentSelector =
+                  frozenSelector != null &&
+                  selectors.any(
+                    (item) =>
+                        item.id == frozenSelector.id &&
+                        item.revision == frozenSelector.revision,
+                  );
+              return CompactLabeledControl(
+                label: copy('environment.account'),
+                detail: snapshot.hasError
+                    ? copy('environment.account.selector_load_failed')
+                    : selectable == 0
+                    ? copy('environment.account.none')
+                    : route.accountPolicy.mode == 'javascript'
+                    ? copy.format('environment.account.selector_scope', {
+                        'count': selectable,
+                      })
+                    : selectors.isEmpty
+                    ? copy('environment.account.owner')
+                    : copy.format('environment.account.selector_available', {
+                        'count': selectors.length,
+                      }),
+                child: CompactSelectField<String>(
+                  key: Key(
+                    'environment-route-account-${route.id}-$currentToken',
                   ),
-                for (final account in owned)
-                  DropdownMenuItem(
-                    value: account.id,
-                    enabled: account.usable,
-                    child: Text(
-                      account.usable
-                          ? account.displayName
-                          : '${account.displayName} · ${copy('environment.account.unavailable')}',
-                      overflow: TextOverflow.ellipsis,
-                    ),
-                  ),
-              ],
-              onChanged: !enabled || selectable == 0
-                  ? null
-                  : (value) {
-                      if (value == null) return;
-                      final selectedAccount = owned.firstWhere(
-                        (account) => account.id == value,
-                      );
-                      onChanged(selectedAccount);
-                      if (selectedAccount.usable) {
-                        unawaited(
-                          controller
-                              .upstreamModels(
-                                route.endpointId,
-                                accountId: selectedAccount.id,
-                              )
-                              .then<void>((_) {})
-                              .onError((_, _) {}),
-                        );
-                      }
-                    },
-            ),
+                  initialValue: currentToken,
+                  isExpanded: true,
+                  items: [
+                    if (!currentItemExists && currentId.isNotEmpty)
+                      DropdownMenuItem(
+                        value: fixedToken(currentId),
+                        enabled: false,
+                        child: Text(currentId),
+                      ),
+                    for (final account in owned)
+                      DropdownMenuItem(
+                        value: fixedToken(account.id),
+                        enabled: account.usable,
+                        child: Text(
+                          '${copy('environment.account.fixed')} · ${account.displayName}${account.usable ? '' : ' · ${copy('environment.account.unavailable')}'}',
+                          overflow: TextOverflow.ellipsis,
+                        ),
+                      ),
+                    if (frozenSelector != null && !hasCurrentSelector)
+                      DropdownMenuItem(
+                        value: selectorToken(frozenSelector),
+                        child: Text(
+                          '${copy('environment.account.javascript')} · ${frozenSelector.displayName} · r${frozenSelector.revision}',
+                          overflow: TextOverflow.ellipsis,
+                        ),
+                      ),
+                    for (final selector in selectors)
+                      DropdownMenuItem(
+                        value: selectorToken(selector),
+                        enabled: eligible.isNotEmpty,
+                        child: Text(
+                          '${copy('environment.account.javascript')} · ${selector.displayName} · r${selector.revision}',
+                          overflow: TextOverflow.ellipsis,
+                        ),
+                      ),
+                  ],
+                  onChanged: !enabled || selectable == 0
+                      ? null
+                      : (value) {
+                          if (value == null || value == currentToken) return;
+                          if (value.startsWith('fixed:')) {
+                            final accountId = value.substring('fixed:'.length);
+                            final selectedAccount = owned.firstWhere(
+                              (account) => account.id == accountId,
+                            );
+                            onChanged(fixedRouteAccountPolicy(selectedAccount));
+                            unawaited(
+                              controller
+                                  .upstreamModels(
+                                    route.endpointId,
+                                    accountId: selectedAccount.id,
+                                  )
+                                  .then<void>((_) {})
+                                  .onError((_, _) {}),
+                            );
+                            return;
+                          }
+                          final selected = <CodeLibraryAccountSelectorRevision>[
+                            ?frozenSelector,
+                            ...selectors,
+                          ].firstWhere((item) => selectorToken(item) == value);
+                          onChanged(
+                            RouteAccountPolicy(
+                              revision: route.accountPolicy.revision,
+                              mode: 'javascript',
+                              fixedAccountId: '',
+                              selector: selected,
+                              accounts: [
+                                for (final account in eligible)
+                                  RouteAccountReference(
+                                    id: account.id,
+                                    revision: account.revision,
+                                    displayName: account.displayName,
+                                  ),
+                              ],
+                            ),
+                          );
+                        },
+                ),
+              );
+            },
           );
           final modelSelector = CompactLabeledControl(
             label: copy('environment.model.label'),
@@ -3096,7 +3301,7 @@ final class _RouteAccountEditor extends StatelessWidget {
               children: [
                 authority,
                 const SizedBox(height: 7),
-                selector,
+                accountControl,
                 const SizedBox(height: 7),
                 modelSelector,
               ],
@@ -3107,7 +3312,7 @@ final class _RouteAccountEditor extends StatelessWidget {
             children: [
               Expanded(flex: 4, child: authority),
               const SizedBox(width: 10),
-              Expanded(flex: 4, child: selector),
+              Expanded(flex: 4, child: accountControl),
               const SizedBox(width: 10),
               Expanded(flex: 4, child: modelSelector),
             ],
@@ -3121,7 +3326,9 @@ final class _RouteAccountEditor extends StatelessWidget {
     BuildContext context,
     List<EnvironmentModelMapping> mappings,
   ) async {
-    final catalogAccountId = route.accountPolicy.preferredAccountId;
+    final catalogAccountId = route.accountPolicy.mode == 'fixed'
+        ? route.accountPolicy.fixedAccountId
+        : '';
     final catalogAccount = catalogAccountId.isEmpty
         ? null
         : accounts

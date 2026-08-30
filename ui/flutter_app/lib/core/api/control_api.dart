@@ -41,6 +41,11 @@ abstract interface class ControlApi {
     MessageTransformTestSample? sample,
   });
 
+  Future<AccountSelectorTestResult> testAccountSelector({
+    required AccountSelectorPolicy policy,
+    required AccountSelectorTestSample sample,
+  });
+
   Future<CodeLibraryCatalog> codeLibrary();
 
   Future<CodeLibraryCollection> createCodeLibraryCollection({
@@ -57,6 +62,19 @@ abstract interface class ControlApi {
   });
 
   Future<CodeLibraryTransformRevision> codeLibraryTransformRevision(
+    String id,
+    int revision,
+  );
+
+  Future<CodeLibraryAccountSelectorRevision> publishCodeLibraryAccountSelector({
+    required String id,
+    required int expectedRevision,
+    required String collectionId,
+    required String displayName,
+    required AccountSelectorPolicy policy,
+  });
+
+  Future<CodeLibraryAccountSelectorRevision> codeLibraryAccountSelectorRevision(
     String id,
     int revision,
   );
@@ -522,6 +540,19 @@ final class HttpControlApi implements ControlApi {
   }
 
   @override
+  Future<AccountSelectorTestResult> testAccountSelector({
+    required AccountSelectorPolicy policy,
+    required AccountSelectorTestSample sample,
+  }) async => AccountSelectorTestResult.fromJson(
+    await _command(
+      'POST',
+      '/api/v1/account-selectors/actions/test',
+      body: {'policy': policy.toJson(), ...sample.toJson()},
+    ),
+    'accountSelectorTest',
+  );
+
+  @override
   Future<CodeLibraryCatalog> codeLibrary() async => CodeLibraryCatalog.fromJson(
     await _read('/api/v1/code-library'),
     'codeLibrary',
@@ -583,6 +614,50 @@ final class HttpControlApi implements ControlApi {
         '/api/v1/code-library/transforms/${Uri.encodeComponent(id)}/revisions/$revision',
       ),
       'codeLibraryTransformRevision',
+    );
+  }
+
+  @override
+  Future<CodeLibraryAccountSelectorRevision> publishCodeLibraryAccountSelector({
+    required String id,
+    required int expectedRevision,
+    required String collectionId,
+    required String displayName,
+    required AccountSelectorPolicy policy,
+  }) async {
+    if (expectedRevision < 0) {
+      throw const ControlContractException(
+        'Code Library expected revision is invalid',
+      );
+    }
+    return CodeLibraryAccountSelectorRevision.fromJson(
+      await _mutation(
+        'PUT',
+        '/api/v1/code-library/account-selectors/${Uri.encodeComponent(id)}',
+        expectedRevision: expectedRevision,
+        body: {
+          'collectionId': collectionId,
+          'displayName': displayName,
+          'policy': policy.toJson(),
+        },
+      ),
+      'codeLibraryAccountSelector',
+    );
+  }
+
+  @override
+  Future<CodeLibraryAccountSelectorRevision> codeLibraryAccountSelectorRevision(
+    String id,
+    int revision,
+  ) async {
+    if (revision < 1) {
+      throw const ControlContractException('Code Library revision is invalid');
+    }
+    return CodeLibraryAccountSelectorRevision.fromJson(
+      await _read(
+        '/api/v1/code-library/account-selectors/${Uri.encodeComponent(id)}/revisions/$revision',
+      ),
+      'codeLibraryAccountSelectorRevision',
     );
   }
 

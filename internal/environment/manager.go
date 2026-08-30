@@ -181,7 +181,9 @@ func (manager *Manager) GuardAccountDeletion(
 		for _, endpoint := range aggregate.ClientEndpoints {
 			for _, plan := range endpoint.ProtocolPlans {
 				for _, route := range destinationRoutes(plan.Destination) {
-					if !slices.Contains(route.AccountPolicy.CandidateAccountIDs, accountID) {
+					if !slices.ContainsFunc(route.AccountPolicy.Accounts, func(candidate RouteAccountReference) bool {
+						return candidate.ID == accountID
+					}) {
 						continue
 					}
 					references = append(references, AccountReference{

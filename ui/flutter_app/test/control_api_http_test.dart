@@ -325,6 +325,7 @@ void main() {
                 {'id': 'privacy', 'displayName': 'Privacy'},
               ],
               'transforms': [_transformRevisionJson(2)],
+              'accountSelectors': [_accountSelectorRevisionJson(2)],
             }),
           );
         } else if (request.method == 'POST' &&
@@ -341,6 +342,17 @@ void main() {
             request.uri.path ==
                 '/api/v1/code-library/transforms/home-redaction/revisions/1') {
           request.response.write(jsonEncode(_transformRevisionJson(1)));
+        } else if (request.method == 'PUT' &&
+            request.uri.path ==
+                '/api/v1/code-library/account-selectors/workspace-account') {
+          request.response.write(jsonEncode(_accountSelectorRevisionJson(2)));
+        } else if (request.method == 'GET' &&
+            request.uri.path ==
+                '/api/v1/code-library/account-selectors/workspace-account/revisions/1') {
+          request.response.write(jsonEncode(_accountSelectorRevisionJson(1)));
+        } else if (request.method == 'POST' &&
+            request.uri.path == '/api/v1/account-selectors/actions/test') {
+          request.response.write(jsonEncode({'accountId': 'account.work'}));
         } else {
           request.response.statusCode = HttpStatus.notFound;
         }
@@ -378,18 +390,66 @@ void main() {
       'home-redaction',
       1,
     );
+    final selector = await api.publishCodeLibraryAccountSelector(
+      id: 'workspace-account',
+      expectedRevision: 1,
+      collectionId: 'privacy',
+      displayName: 'Workspace account',
+      policy: const AccountSelectorPolicy(
+        javaScript: 'selection.accountId = accounts[0].id;',
+      ),
+    );
+    final historicalSelector = await api.codeLibraryAccountSelectorRevision(
+      'workspace-account',
+      1,
+    );
+    final selection = await api.testAccountSelector(
+      policy: selector.policy,
+      sample: AccountSelectorTestSample(
+        accounts: const [
+          AccountSelectorTestAccount(id: 'account.work', displayName: 'Work'),
+        ],
+        request: const AccountSelectorTestRequest(
+          method: 'POST',
+          path: '/v1/messages',
+          headers: {},
+          body: '{"model":"claude-sonnet-4-5"}',
+          clientProtocol: 'anthropic_messages',
+          requestedModel: 'claude-sonnet-4-5',
+        ),
+        runtime: AccountSelectorTestRuntime(
+          userName: 'alice',
+          homeDirectory: '/Users/alice',
+          operatingSystem: 'macos',
+          operatingSystemVersion: '15.6',
+          architecture: 'arm64',
+          timeZone: 'Asia/Singapore',
+          workspaceRoot: '/workspace',
+          workspaceLabel: 'work',
+          turnStartedAt: DateTime.utc(2026, 8, 28, 1, 2, 3),
+          turnIndex: 4,
+        ),
+      ),
+    );
 
     expect(catalog.collections.single.id, 'privacy');
     expect(catalog.transforms.single.revision, 2);
+    expect(catalog.accountSelectors.single.revision, 2);
     expect(collection.displayName, 'Privacy');
     expect(published.revision, 2);
     expect(historical.revision, 1);
-    expect(requests, hasLength(4));
+    expect(selector.revision, 2);
+    expect(historicalSelector.revision, 1);
+    expect(selection.accountId, 'account.work');
+    expect(requests, hasLength(7));
     expect(requests.map((request) => '${request.method} ${request.path}'), [
       'GET /api/v1/code-library',
       'POST /api/v1/code-library/collections',
       'PUT /api/v1/code-library/transforms/home-redaction',
       'GET /api/v1/code-library/transforms/home-redaction/revisions/1',
+      'PUT /api/v1/code-library/account-selectors/workspace-account',
+      'GET /api/v1/code-library/account-selectors/workspace-account/revisions/1',
+      'POST /api/v1/account-selectors/actions/test',
     ]);
     expect(requests[1].match, '0');
     expect(requests[1].body, {'id': 'privacy', 'displayName': 'Privacy'});
@@ -1598,6 +1658,15 @@ Map<String, Object?> _transformRevisionJson(int revision) => {
     'requestJavaScript': 'request.body = request.body;',
     'responseJavaScript': '',
   },
+  'publishedAt': '2026-08-27T01:02:03Z',
+};
+
+Map<String, Object?> _accountSelectorRevisionJson(int revision) => {
+  'id': 'workspace-account',
+  'revision': revision,
+  'collectionId': 'privacy',
+  'displayName': 'Workspace account',
+  'policy': {'javaScript': 'selection.accountId = accounts[0].id;'},
   'publishedAt': '2026-08-27T01:02:03Z',
 };
 

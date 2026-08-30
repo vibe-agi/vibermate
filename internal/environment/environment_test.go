@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/vibe-agi/vibermate/internal/accountselector"
 	"github.com/vibe-agi/vibermate/internal/captureidentity"
 	"github.com/vibe-agi/vibermate/internal/codelibrary"
 	"github.com/vibe-agi/vibermate/internal/egressnetwork"
@@ -659,12 +660,11 @@ func TestAccountCompatibilityAndMutableAliasesFailClosed(t *testing.T) {
 	candidate := fixture(t, "work", mustOrigin(t, "https://relay.example"))
 	route := &candidate.ClientEndpoints[0].ProtocolPlans[0].Destination.Upstream.Routes[0]
 	route.AccountPolicy = RouteAccountPolicy{
-		Revision:           1,
-		PreferredAccountID: "account.work", CandidateAccountIDs: []string{"account.work"},
-		AccountRevisions: map[string]Revision{"account.work": 2}, FailoverPolicy: FailoverOff,
+		Revision: 1, Mode: AccountSelectionFixed, FixedAccountID: "account.work",
+		Accounts: []RouteAccountReference{{ID: "account.work", Revision: 2, DisplayName: "Work"}},
 	}
 	catalog := accountCatalog{"account.work": {
-		ID: "account.work", Revision: 2,
+		ID: "account.work", Revision: 2, DisplayName: "Work",
 		UpstreamEndpointID: route.ProviderTarget.ID, UpstreamEndpointRevision: route.ProviderTarget.Revision,
 		RealmID: "realm.other", Active: true, BackendProtocols: []string{"anthropic_messages"},
 	}}
@@ -672,7 +672,7 @@ func TestAccountCompatibilityAndMutableAliasesFailClosed(t *testing.T) {
 		t.Fatal("incompatible realm was accepted")
 	}
 	catalog["account.work"] = AccountDescriptor{
-		ID: "account.work", Revision: 2,
+		ID: "account.work", Revision: 2, DisplayName: "Work",
 		UpstreamEndpointID: "target.other", UpstreamEndpointRevision: route.ProviderTarget.Revision,
 		RealmID: route.ProviderTarget.RealmID, Active: true,
 		BackendProtocols: []string{"anthropic_messages"},
@@ -697,13 +697,66 @@ func TestAccountCompatibilityAndMutableAliasesFailClosed(t *testing.T) {
 	}
 }
 
+func TestAccountSelectorCompilesItsFrozenRevisionAndEndpointAccounts(t *testing.T) {
+	t.Parallel()
+	candidate := fixture(t, "work", mustOrigin(t, "https://relay.example"))
+	route := &candidate.ClientEndpoints[0].ProtocolPlans[0].Destination.Upstream.Routes[0]
+	route.AccountPolicy = RouteAccountPolicy{
+		Revision: 1, Mode: AccountSelectionJavaScript,
+		Selector: &codelibrary.AccountSelectorRevision{
+			ID: "workspace", Revision: 3, CollectionID: "routing", DisplayName: "Workspace",
+			Policy:      accountselector.Policy{JavaScript: `selection.accountId = accounts[1].id;`},
+			PublishedAt: time.Date(2026, 8, 28, 12, 0, 0, 0, time.UTC),
+		},
+		Accounts: []RouteAccountReference{
+			{ID: "account.basic", Revision: 2, DisplayName: "Basic"},
+			{ID: "account.pro", Revision: 4, DisplayName: "Pro"},
+		},
+	}
+	catalog := accountCatalogFor(candidate)
+	catalog["account.basic"] = AccountDescriptor{
+		ID: "account.basic", Revision: 2, DisplayName: "Basic",
+		UpstreamEndpointID:       route.ProviderTarget.ID,
+		UpstreamEndpointRevision: route.ProviderTarget.Revision,
+		RealmID:                  route.ProviderTarget.RealmID, Active: true,
+		BackendProtocols: []string{route.BackendProtocol},
+	}
+	catalog["account.pro"] = AccountDescriptor{
+		ID: "account.pro", Revision: 4, DisplayName: "Pro",
+		UpstreamEndpointID:       route.ProviderTarget.ID,
+		UpstreamEndpointRevision: route.ProviderTarget.Revision,
+		RealmID:                  route.ProviderTarget.RealmID, Active: true,
+		BackendProtocols: []string{route.BackendProtocol},
+	}
+	snapshot, err := testCompiler(t, catalog).Compile(candidate)
+	if err != nil {
+		t.Fatalf("Compile() error = %v", err)
+	}
+	endpoint, ok := snapshot.LookupCompiledClientOrigin(candidate.ClientEndpoints[0].ClientOrigin)
+	if !ok || len(endpoint.ProtocolPlans()) == 0 {
+		t.Fatal("compiled client Endpoint is missing")
+	}
+	routes, ok := endpoint.ProtocolPlans()[0].UpstreamRouteSet()
+	if !ok {
+		t.Fatal("compiled RouteSet is missing")
+	}
+	compiled, err := routes.Select(route.ID)
+	if err != nil {
+		t.Fatalf("Select(%q) error = %v", route.ID, err)
+	}
+	policy := compiled.AccountPolicy()
+	if policy.Mode() != AccountSelectionJavaScript || policy.SelectorID() != "workspace" ||
+		policy.SelectorRevision() != 3 || len(policy.Accounts()) != 2 {
+		t.Fatalf("compiled Account Selector = %+v", policy)
+	}
+}
+
 func TestUpstreamRouteRequiresAnEndpointAccount(t *testing.T) {
 	t.Parallel()
 	candidate := fixture(t, "work", mustOrigin(t, "https://relay.example"))
 	route := &candidate.ClientEndpoints[0].ProtocolPlans[0].Destination.Upstream.Routes[0]
 	route.AccountPolicy = RouteAccountPolicy{
-		Revision:       1,
-		FailoverPolicy: FailoverOff,
+		Revision: 1, Mode: AccountSelectionFixed,
 	}
 
 	if _, err := testCompiler(t, nil).Compile(candidate); !errors.Is(err, ErrInvalidEnvironment) {
@@ -720,9 +773,8 @@ func TestAccountDeletionGuardReturnsPublishedRouteReferencesBeforeDeleting(t *te
 		for planIndex := range candidate.ClientEndpoints[endpointIndex].ProtocolPlans {
 			route := &candidate.ClientEndpoints[endpointIndex].ProtocolPlans[planIndex].Destination.Upstream.Routes[0]
 			route.AccountPolicy = RouteAccountPolicy{
-				Revision:           1,
-				PreferredAccountID: "account.work", CandidateAccountIDs: []string{"account.work"},
-				AccountRevisions: map[string]Revision{"account.work": 1}, FailoverPolicy: FailoverOff,
+				Revision: 1, Mode: AccountSelectionFixed, FixedAccountID: "account.work",
+				Accounts: []RouteAccountReference{{ID: "account.work", Revision: 1, DisplayName: "Work"}},
 			}
 		}
 	}
@@ -1294,10 +1346,8 @@ func fixture(t *testing.T, id string, origin originidentity.ClientOrigin) Enviro
 						},
 					},
 					BackendProtocol: string(protocol), AccountPolicy: RouteAccountPolicy{
-						Revision: 1, PreferredAccountID: accountID,
-						CandidateAccountIDs: []string{accountID},
-						AccountRevisions:    map[string]Revision{accountID: 1},
-						FailoverPolicy:      FailoverOff,
+						Revision: 1, Mode: AccountSelectionFixed, FixedAccountID: accountID,
+						Accounts: []RouteAccountReference{{ID: accountID, Revision: 1, DisplayName: accountID}},
 					},
 					ModelPolicy:    ModelPolicy{Revision: 1, Mode: "passthrough"},
 					WireProfileRef: wireprofile.UpstreamWireProfileFollowClientValue}},
@@ -1356,19 +1406,19 @@ func mustManager(t *testing.T, repository *memoryRepository, inspector CaptureIn
 	t.Helper()
 	accounts := accountCatalogFor(fixture(t, "catalog", mustOrigin(t, "https://relay.example")))
 	accounts["account.added.0"] = AccountDescriptor{
-		ID: "account.added.0", Revision: 1,
+		ID: "account.added.0", Revision: 1, DisplayName: "account.added.0",
 		UpstreamEndpointID: "target.added.0", UpstreamEndpointRevision: 1,
 		RealmID: "realm.anthropic", Active: true,
 		BackendProtocols: []string{"anthropic_messages"},
 	}
 	accounts["account.added.1"] = AccountDescriptor{
-		ID: "account.added.1", Revision: 1,
+		ID: "account.added.1", Revision: 1, DisplayName: "account.added.1",
 		UpstreamEndpointID: "target.added.1", UpstreamEndpointRevision: 1,
 		RealmID: "realm.openai", Active: true,
 		BackendProtocols: []string{"openai_responses"},
 	}
 	accounts["account.second"] = AccountDescriptor{
-		ID: "account.second", Revision: 1,
+		ID: "account.second", Revision: 1, DisplayName: "account.second",
 		UpstreamEndpointID: "target.second", UpstreamEndpointRevision: 1,
 		RealmID: "realm.anthropic", Active: true,
 		BackendProtocols: []string{"anthropic_messages"},
@@ -1385,9 +1435,9 @@ func accountCatalogFor(value Environment) accountCatalog {
 	for _, endpoint := range value.ClientEndpoints {
 		for _, plan := range endpoint.ProtocolPlans {
 			for _, route := range destinationRoutes(plan.Destination) {
-				for _, accountID := range route.AccountPolicy.CandidateAccountIDs {
-					catalog[accountID] = AccountDescriptor{
-						ID: accountID, Revision: route.AccountPolicy.AccountRevisions[accountID],
+				for _, frozen := range route.AccountPolicy.Accounts {
+					catalog[frozen.ID] = AccountDescriptor{
+						ID: frozen.ID, Revision: frozen.Revision, DisplayName: frozen.DisplayName,
 						UpstreamEndpointID:       route.ProviderTarget.ID,
 						UpstreamEndpointRevision: route.ProviderTarget.Revision,
 						RealmID:                  route.ProviderTarget.RealmID, Active: true,
@@ -1402,10 +1452,8 @@ func accountCatalogFor(value Environment) accountCatalog {
 
 func setTestRouteAccount(route *UpstreamRoute, accountID string) {
 	route.AccountPolicy = RouteAccountPolicy{
-		Revision: 1, PreferredAccountID: accountID,
-		CandidateAccountIDs: []string{accountID},
-		AccountRevisions:    map[string]Revision{accountID: 1},
-		FailoverPolicy:      FailoverOff,
+		Revision: 1, Mode: AccountSelectionFixed, FixedAccountID: accountID,
+		Accounts: []RouteAccountReference{{ID: accountID, Revision: 1, DisplayName: accountID}},
 	}
 }
 

@@ -1030,27 +1030,6 @@ String _requireDigest(JsonObject value, String key, String path) {
   throw ControlContractException('$path.$key must be a lowercase SHA-256');
 }
 
-Map<String, int> _requireRevisionMap(
-  Object? json,
-  String path, {
-  bool allowEmpty = true,
-}) {
-  final value = requireObject(json, path);
-  if (!allowEmpty && value.isEmpty) {
-    throw ControlContractException('$path must not be empty');
-  }
-  final result = <String, int>{};
-  for (final entry in value.entries) {
-    if (!_resourceIdPattern.hasMatch(entry.key) ||
-        entry.value is! int ||
-        (entry.value! as int) < 1) {
-      throw ControlContractException('$path contains an invalid revision');
-    }
-    result[entry.key] = entry.value! as int;
-  }
-  return Map.unmodifiable(result);
-}
-
 final class DesktopSession {
   const DesktopSession({
     required this.baseUrl,
@@ -2559,15 +2538,117 @@ final class CodeLibraryTransformRevision {
       Object.hash(id, revision, collectionId, displayName, policy, publishedAt);
 }
 
+final class AccountSelectorPolicy {
+  const AccountSelectorPolicy({required this.javaScript});
+
+  factory AccountSelectorPolicy.fromJson(Object? json, String path) {
+    final value = requireObject(json, path);
+    requireFields(value, path, required: const {'javaScript'});
+    final javaScript = requireStringValue(value, 'javaScript', path);
+    if (javaScript.isEmpty || !_validTransformSource(javaScript)) {
+      throw ControlContractException('$path JavaScript source is invalid');
+    }
+    return AccountSelectorPolicy(javaScript: javaScript);
+  }
+
+  final String javaScript;
+
+  JsonObject toJson() => {'javaScript': javaScript};
+
+  @override
+  bool operator ==(Object other) =>
+      other is AccountSelectorPolicy && other.javaScript == javaScript;
+
+  @override
+  int get hashCode => javaScript.hashCode;
+}
+
+final class CodeLibraryAccountSelectorRevision {
+  const CodeLibraryAccountSelectorRevision({
+    required this.id,
+    required this.revision,
+    required this.collectionId,
+    required this.displayName,
+    required this.policy,
+    required this.publishedAt,
+  });
+
+  factory CodeLibraryAccountSelectorRevision.fromJson(
+    Object? json,
+    String path,
+  ) {
+    final value = requireObject(json, path);
+    requireFields(
+      value,
+      path,
+      required: const {
+        'id',
+        'revision',
+        'collectionId',
+        'displayName',
+        'policy',
+        'publishedAt',
+      },
+    );
+    final displayName = requireString(value, 'displayName', path);
+    if (!_validDisplayLabel(displayName)) {
+      throw ControlContractException('$path display name is invalid');
+    }
+    return CodeLibraryAccountSelectorRevision(
+      id: _requireResourceId(value, 'id', path),
+      revision: requireInteger(value, 'revision', path, minimum: 1),
+      collectionId: _requireResourceId(value, 'collectionId', path),
+      displayName: displayName,
+      policy: AccountSelectorPolicy.fromJson(value['policy'], '$path.policy'),
+      publishedAt: requireTimestamp(value, 'publishedAt', path),
+    );
+  }
+
+  final String id;
+  final int revision;
+  final String collectionId;
+  final String displayName;
+  final AccountSelectorPolicy policy;
+  final DateTime publishedAt;
+
+  JsonObject toJson() => {
+    'id': id,
+    'revision': revision,
+    'collectionId': collectionId,
+    'displayName': displayName,
+    'policy': policy.toJson(),
+    'publishedAt': publishedAt.toUtc().toIso8601String(),
+  };
+
+  @override
+  bool operator ==(Object other) =>
+      other is CodeLibraryAccountSelectorRevision &&
+      other.id == id &&
+      other.revision == revision &&
+      other.collectionId == collectionId &&
+      other.displayName == displayName &&
+      other.policy == policy &&
+      other.publishedAt == publishedAt;
+
+  @override
+  int get hashCode =>
+      Object.hash(id, revision, collectionId, displayName, policy, publishedAt);
+}
+
 final class CodeLibraryCatalog {
   const CodeLibraryCatalog({
     required this.collections,
     required this.transforms,
+    required this.accountSelectors,
   });
 
   factory CodeLibraryCatalog.fromJson(Object? json, String path) {
     final value = requireObject(json, path);
-    requireFields(value, path, required: const {'collections', 'transforms'});
+    requireFields(
+      value,
+      path,
+      required: const {'collections', 'transforms', 'accountSelectors'},
+    );
     final collections = requireList(value['collections'], '$path.collections')
         .indexed
         .map(
@@ -2586,20 +2667,146 @@ final class CodeLibraryCatalog {
           ),
         )
         .toList(growable: false);
+    final accountSelectors =
+        requireList(value['accountSelectors'], '$path.accountSelectors').indexed
+            .map(
+              (entry) => CodeLibraryAccountSelectorRevision.fromJson(
+                entry.$2,
+                '$path.accountSelectors[${entry.$1}]',
+              ),
+            )
+            .toList(growable: false);
     final collectionIds = collections.map((item) => item.id).toSet();
     if (collectionIds.length != collections.length ||
         transforms.map((item) => item.id).toSet().length != transforms.length ||
-        transforms.any((item) => !collectionIds.contains(item.collectionId))) {
+        accountSelectors.map((item) => item.id).toSet().length !=
+            accountSelectors.length ||
+        transforms.any((item) => !collectionIds.contains(item.collectionId)) ||
+        accountSelectors.any(
+          (item) => !collectionIds.contains(item.collectionId),
+        )) {
       throw ControlContractException('$path catalog is inconsistent');
     }
     return CodeLibraryCatalog(
       collections: List.unmodifiable(collections),
       transforms: List.unmodifiable(transforms),
+      accountSelectors: List.unmodifiable(accountSelectors),
     );
   }
 
   final List<CodeLibraryCollection> collections;
   final List<CodeLibraryTransformRevision> transforms;
+  final List<CodeLibraryAccountSelectorRevision> accountSelectors;
+}
+
+final class AccountSelectorTestAccount {
+  const AccountSelectorTestAccount({
+    required this.id,
+    required this.displayName,
+  });
+
+  final String id;
+  final String displayName;
+
+  JsonObject toJson() => {'id': id, 'displayName': displayName};
+}
+
+final class AccountSelectorTestRequest {
+  const AccountSelectorTestRequest({
+    required this.method,
+    required this.path,
+    required this.headers,
+    required this.body,
+    required this.clientProtocol,
+    required this.requestedModel,
+  });
+
+  final String method;
+  final String path;
+  final Map<String, List<String>> headers;
+  final String body;
+  final String clientProtocol;
+  final String requestedModel;
+
+  JsonObject toJson() => {
+    'method': method,
+    'path': path,
+    'headers': headers,
+    'body': body,
+    'clientProtocol': clientProtocol,
+    'requestedModel': requestedModel,
+  };
+}
+
+final class AccountSelectorTestRuntime {
+  const AccountSelectorTestRuntime({
+    required this.userName,
+    required this.homeDirectory,
+    required this.operatingSystem,
+    required this.operatingSystemVersion,
+    required this.architecture,
+    required this.timeZone,
+    required this.workspaceRoot,
+    required this.workspaceLabel,
+    required this.turnStartedAt,
+    required this.turnIndex,
+  });
+
+  final String userName;
+  final String homeDirectory;
+  final String operatingSystem;
+  final String operatingSystemVersion;
+  final String architecture;
+  final String timeZone;
+  final String workspaceRoot;
+  final String workspaceLabel;
+  final DateTime turnStartedAt;
+  final int turnIndex;
+
+  JsonObject toJson() => {
+    'userName': userName,
+    'homeDirectory': homeDirectory,
+    'operatingSystem': operatingSystem,
+    'operatingSystemVersion': operatingSystemVersion,
+    'architecture': architecture,
+    'timeZone': timeZone,
+    'workspaceRoot': workspaceRoot,
+    'workspaceLabel': workspaceLabel,
+    'turnStartedAt': turnStartedAt.toUtc().toIso8601String(),
+    'turnIndex': turnIndex,
+  };
+}
+
+final class AccountSelectorTestSample {
+  const AccountSelectorTestSample({
+    required this.accounts,
+    required this.request,
+    required this.runtime,
+  });
+
+  final List<AccountSelectorTestAccount> accounts;
+  final AccountSelectorTestRequest request;
+  final AccountSelectorTestRuntime runtime;
+
+  JsonObject toJson() => {
+    'accounts': accounts.map((account) => account.toJson()).toList(),
+    'request': request.toJson(),
+    'runtime': runtime.toJson(),
+  };
+}
+
+final class AccountSelectorTestResult {
+  const AccountSelectorTestResult({required this.accountId});
+
+  factory AccountSelectorTestResult.fromJson(Object? json, String path) {
+    final value = requireObject(json, path);
+    requireFields(value, path, required: const {'accountId'});
+    return AccountSelectorTestResult(
+      accountId: _requireResourceId(value, 'accountId', path),
+    );
+  }
+
+  final String accountId;
 }
 
 final class MessageTransformTestRequest {
@@ -3213,13 +3420,59 @@ final class EnvironmentModelPolicy {
   };
 }
 
+final class RouteAccountReference {
+  const RouteAccountReference({
+    required this.id,
+    required this.revision,
+    required this.displayName,
+  });
+
+  factory RouteAccountReference.fromJson(Object? json, String path) {
+    final value = requireObject(json, path);
+    requireFields(
+      value,
+      path,
+      required: const {'id', 'revision', 'displayName'},
+    );
+    final displayName = requireString(value, 'displayName', path);
+    if (!_validDisplayLabel(displayName)) {
+      throw ControlContractException('$path display name is invalid');
+    }
+    return RouteAccountReference(
+      id: _requireResourceId(value, 'id', path),
+      revision: requireInteger(value, 'revision', path, minimum: 1),
+      displayName: displayName,
+    );
+  }
+
+  final String id;
+  final int revision;
+  final String displayName;
+
+  JsonObject toJson() => {
+    'id': id,
+    'revision': revision,
+    'displayName': displayName,
+  };
+
+  @override
+  bool operator ==(Object other) =>
+      other is RouteAccountReference &&
+      other.id == id &&
+      other.revision == revision &&
+      other.displayName == displayName;
+
+  @override
+  int get hashCode => Object.hash(id, revision, displayName);
+}
+
 final class RouteAccountPolicy {
   const RouteAccountPolicy({
     required this.revision,
-    required this.preferredAccountId,
-    required this.candidateAccountIds,
-    required this.accountRevisions,
-    required this.failoverPolicy,
+    required this.mode,
+    required this.fixedAccountId,
+    required this.selector,
+    required this.accounts,
   });
 
   factory RouteAccountPolicy.fromJson(Object? json, String path) {
@@ -3227,68 +3480,93 @@ final class RouteAccountPolicy {
     requireFields(
       value,
       path,
-      required: const {
-        'revision',
-        'preferredAccountId',
-        'candidateAccountIds',
-        'accountRevisions',
-        'failoverPolicy',
-      },
+      required: const {'revision', 'mode', 'accounts'},
+      optional: const {'fixedAccountId', 'selector'},
     );
-    final preferred = requireStringValue(value, 'preferredAccountId', path);
-    final candidates = requireStringList(value, 'candidateAccountIds', path);
-    final revisions = _requireRevisionMap(
-      value['accountRevisions'],
-      '$path.accountRevisions',
-    );
-    final failover = requireString(value, 'failoverPolicy', path);
-    final candidateSet = candidates.toSet();
-    if (!const {'off', 'account_scoped_safe'}.contains(failover) ||
-        candidateSet.length != candidates.length ||
-        candidates.any((id) => !_resourceIdPattern.hasMatch(id)) ||
-        !_resourceIdPattern.hasMatch(preferred) ||
-        candidates.isEmpty ||
-        !candidateSet.contains(preferred) ||
-        revisions.keys.toSet().difference(candidateSet).isNotEmpty ||
-        candidateSet.difference(revisions.keys.toSet()).isNotEmpty) {
+    final mode = requireString(value, 'mode', path);
+    final fixedAccountId = value.containsKey('fixedAccountId')
+        ? _requireResourceId(value, 'fixedAccountId', path)
+        : '';
+    final selector = value.containsKey('selector')
+        ? CodeLibraryAccountSelectorRevision.fromJson(
+            value['selector'],
+            '$path.selector',
+          )
+        : null;
+    final accounts = requireList(value['accounts'], '$path.accounts').indexed
+        .map(
+          (entry) => RouteAccountReference.fromJson(
+            entry.$2,
+            '$path.accounts[${entry.$1}]',
+          ),
+        )
+        .toList(growable: false);
+    final accountIds = accounts.map((account) => account.id).toSet();
+    final fixed =
+        mode == 'fixed' &&
+        fixedAccountId.isNotEmpty &&
+        selector == null &&
+        accounts.length == 1 &&
+        accounts.single.id == fixedAccountId;
+    final scripted =
+        mode == 'javascript' &&
+        fixedAccountId.isEmpty &&
+        selector != null &&
+        accounts.isNotEmpty;
+    if ((!fixed && !scripted) || accountIds.length != accounts.length) {
       throw ControlContractException('$path Account authority is invalid');
     }
     return RouteAccountPolicy(
       revision: requireInteger(value, 'revision', path, minimum: 1),
-      preferredAccountId: preferred,
-      candidateAccountIds: List.unmodifiable(candidates),
-      accountRevisions: revisions,
-      failoverPolicy: failover,
+      mode: mode,
+      fixedAccountId: fixedAccountId,
+      selector: selector,
+      accounts: List.unmodifiable(accounts),
     );
   }
 
   final int revision;
-  final String preferredAccountId;
-  final List<String> candidateAccountIds;
-  final Map<String, int> accountRevisions;
-  final String failoverPolicy;
+  final String mode;
+  final String fixedAccountId;
+  final CodeLibraryAccountSelectorRevision? selector;
+  final List<RouteAccountReference> accounts;
 
-  RouteAccountPolicy copyWith({
-    int? revision,
-    String? preferredAccountId,
-    List<String>? candidateAccountIds,
-    Map<String, int>? accountRevisions,
-    String? failoverPolicy,
-  }) => RouteAccountPolicy(
+  RouteAccountPolicy copyWith({int? revision}) => RouteAccountPolicy(
     revision: revision ?? this.revision,
-    preferredAccountId: preferredAccountId ?? this.preferredAccountId,
-    candidateAccountIds: candidateAccountIds ?? this.candidateAccountIds,
-    accountRevisions: accountRevisions ?? this.accountRevisions,
-    failoverPolicy: failoverPolicy ?? this.failoverPolicy,
+    mode: mode,
+    fixedAccountId: fixedAccountId,
+    selector: selector,
+    accounts: accounts,
   );
 
   JsonObject toJson() => {
     'revision': revision,
-    'preferredAccountId': preferredAccountId,
-    'candidateAccountIds': candidateAccountIds,
-    'accountRevisions': accountRevisions,
-    'failoverPolicy': failoverPolicy,
+    'mode': mode,
+    if (fixedAccountId.isNotEmpty) 'fixedAccountId': fixedAccountId,
+    if (selector != null) 'selector': selector!.toJson(),
+    'accounts': accounts
+        .map((account) => account.toJson())
+        .toList(growable: false),
   };
+
+  @override
+  bool operator ==(Object other) =>
+      other is RouteAccountPolicy &&
+      other.revision == revision &&
+      other.mode == mode &&
+      other.fixedAccountId == fixedAccountId &&
+      other.selector == selector &&
+      other.accounts.length == accounts.length &&
+      other.accounts.indexed.every((entry) => entry.$2 == accounts[entry.$1]);
+
+  @override
+  int get hashCode => Object.hash(
+    revision,
+    mode,
+    fixedAccountId,
+    selector,
+    Object.hashAll(accounts),
+  );
 }
 
 final class EnvironmentRoute {

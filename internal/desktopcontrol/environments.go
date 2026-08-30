@@ -4,13 +4,16 @@ import (
 	"bytes"
 	"context"
 	"crypto/sha256"
+	"errors"
 	"net/http"
+	"sort"
 	"strconv"
 
 	"github.com/vibe-agi/vibermate/internal/activity"
 	"github.com/vibe-agi/vibermate/internal/codelibrary"
 	"github.com/vibe-agi/vibermate/internal/egressprofile"
 	"github.com/vibe-agi/vibermate/internal/environment"
+	"github.com/vibe-agi/vibermate/internal/provideraccount"
 )
 
 type EnvironmentListResponse struct {
@@ -123,15 +126,12 @@ func environmentControlEndpoints(
 					route.ProviderTarget.Capabilities = controlCollection(
 						sourceRoute.ProviderTarget.Capabilities,
 					)
-					route.AccountPolicy.CandidateAccountIDs = controlCollection(
-						sourceRoute.AccountPolicy.CandidateAccountIDs,
+					route.AccountPolicy.Accounts = controlCollection(
+						sourceRoute.AccountPolicy.Accounts,
 					)
-					route.AccountPolicy.AccountRevisions = make(
-						map[string]environment.Revision,
-						len(sourceRoute.AccountPolicy.AccountRevisions),
-					)
-					for accountID, revision := range sourceRoute.AccountPolicy.AccountRevisions {
-						route.AccountPolicy.AccountRevisions[accountID] = revision
+					if sourceRoute.AccountPolicy.Selector != nil {
+						selector := *sourceRoute.AccountPolicy.Selector
+						route.AccountPolicy.Selector = &selector
 					}
 					route.ModelPolicy.Mappings = controlCollection(
 						sourceRoute.ModelPolicy.Mappings,
@@ -273,6 +273,9 @@ func (handler *Handler) putEnvironmentDraft(writer http.ResponseWriter, request 
 		if resolveErr := handler.resolvePublishedTransforms(request.Context(), input.ClientEndpoints); resolveErr != nil {
 			return problemResponse(classifyCodeLibraryError(resolveErr))
 		}
+		if resolveErr := handler.resolvePublishedAccountPolicies(request.Context(), input.ClientEndpoints); resolveErr != nil {
+			return problemResponse(classifyEnvironmentAccountPolicyError(resolveErr))
+		}
 		candidate := environment.Environment{
 			ID: id, Name: input.Name, State: input.State,
 			Revision: environment.Revision(expectedBase + 1), ClientEndpoints: input.ClientEndpoints,
@@ -352,6 +355,124 @@ func (handler *Handler) resolvePublishedTransforms(
 		}
 	}
 	return nil
+}
+
+func (handler *Handler) resolvePublishedAccountPolicies(
+	ctx context.Context,
+	endpoints []environment.ClientEndpoint,
+) error {
+	var accounts []provideraccount.View
+	loaded := false
+	loadAccounts := func() error {
+		if loaded {
+			return nil
+		}
+		if handler.accounts == nil {
+			return provideraccount.ErrInvalidAccount
+		}
+		var err error
+		accounts, err = handler.accounts.List(ctx)
+		loaded = err == nil
+		return err
+	}
+	for endpointIndex := range endpoints {
+		for planIndex := range endpoints[endpointIndex].ProtocolPlans {
+			upstream := endpoints[endpointIndex].ProtocolPlans[planIndex].Destination.Upstream
+			if upstream == nil {
+				continue
+			}
+			if err := loadAccounts(); err != nil {
+				return err
+			}
+			for routeIndex := range upstream.Routes {
+				route := &upstream.Routes[routeIndex]
+				policy := &route.AccountPolicy
+				policy.Accounts = nil
+				switch policy.Mode {
+				case environment.AccountSelectionFixed:
+					if policy.FixedAccountID == "" || policy.Selector != nil {
+						return environment.ErrInvalidEnvironment
+					}
+					for _, view := range accounts {
+						if view.Account.ID.String() == policy.FixedAccountID &&
+							accountBelongsToRoute(view, *route) {
+							policy.Accounts = []environment.RouteAccountReference{{
+								ID:          view.Account.ID.String(),
+								Revision:    environment.Revision(view.Account.Revision),
+								DisplayName: view.Account.DisplayName,
+							}}
+							break
+						}
+					}
+					if len(policy.Accounts) != 1 {
+						return provideraccount.ErrInvalidAccount
+					}
+				case environment.AccountSelectionJavaScript:
+					if policy.FixedAccountID != "" || policy.Selector == nil || handler.codeLibrary == nil {
+						return codelibrary.ErrInvalidLibrary
+					}
+					published, err := handler.codeLibrary.GetAccountSelectorRevision(
+						ctx,
+						policy.Selector.ID,
+						policy.Selector.Revision,
+					)
+					if err != nil {
+						return err
+					}
+					if !published.Equal(*policy.Selector) {
+						return codelibrary.ErrInvalidLibrary
+					}
+					selector := published
+					policy.Selector = &selector
+					for _, view := range accounts {
+						if accountBelongsToRoute(view, *route) {
+							policy.Accounts = append(policy.Accounts, environment.RouteAccountReference{
+								ID:          view.Account.ID.String(),
+								Revision:    environment.Revision(view.Account.Revision),
+								DisplayName: view.Account.DisplayName,
+							})
+						}
+					}
+					if len(policy.Accounts) == 0 {
+						return provideraccount.ErrInvalidAccount
+					}
+					sort.Slice(policy.Accounts, func(left, right int) bool {
+						return policy.Accounts[left].ID < policy.Accounts[right].ID
+					})
+				default:
+					return environment.ErrInvalidEnvironment
+				}
+			}
+		}
+	}
+	return nil
+}
+
+func accountBelongsToRoute(
+	view provideraccount.View,
+	route environment.UpstreamRoute,
+) bool {
+	account := view.Account
+	return account.State == provideraccount.StateActive &&
+		view.Health.State == provideraccount.HealthReady &&
+		account.UpstreamEndpointID.String() == route.ProviderTarget.ID &&
+		account.RealmID == route.ProviderTarget.RealmID
+}
+
+func classifyEnvironmentAccountPolicyError(err error) problemSpec {
+	switch {
+	case errors.Is(err, codelibrary.ErrInvalidLibrary),
+		errors.Is(err, codelibrary.ErrCollectionNotFound),
+		errors.Is(err, codelibrary.ErrSelectorNotFound),
+		errors.Is(err, codelibrary.ErrRevisionConflict):
+		return classifyCodeLibraryError(err)
+	case errors.Is(err, provideraccount.ErrInvalidAccount),
+		errors.Is(err, provideraccount.ErrAccountNotFound),
+		errors.Is(err, provideraccount.ErrManagerClosing):
+		return classifyProviderAccountError(err)
+	default:
+		return classifyEnvironmentError(err)
+	}
 }
 
 func (handler *Handler) previewEnvironmentDraft(writer http.ResponseWriter, request *http.Request) {

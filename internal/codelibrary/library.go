@@ -13,6 +13,7 @@ import (
 	"unicode"
 	"unicode/utf8"
 
+	"github.com/vibe-agi/vibermate/internal/accountselector"
 	"github.com/vibe-agi/vibermate/internal/messagetransform"
 )
 
@@ -26,6 +27,7 @@ var (
 	ErrInvalidLibrary     = errors.New("Code Library value is invalid")
 	ErrCollectionNotFound = errors.New("Code Library collection was not found")
 	ErrTransformNotFound  = errors.New("Code Library Transform revision was not found")
+	ErrSelectorNotFound   = errors.New("Code Library Account Selector revision was not found")
 	ErrRevisionConflict   = errors.New("Code Library revision conflicts with the expected revision")
 	ErrWriteNotCommitted  = errors.New("Code Library write was not committed")
 
@@ -34,6 +36,7 @@ var (
 
 type CollectionID string
 type TransformID string
+type AccountSelectorID string
 type Revision uint64
 
 func NewCollectionID(value string) (CollectionID, error) {
@@ -50,8 +53,16 @@ func NewTransformID(value string) (TransformID, error) {
 	return TransformID(value), nil
 }
 
-func (id CollectionID) String() string { return string(id) }
-func (id TransformID) String() string  { return string(id) }
+func NewAccountSelectorID(value string) (AccountSelectorID, error) {
+	if !validID(value) {
+		return "", ErrInvalidLibrary
+	}
+	return AccountSelectorID(value), nil
+}
+
+func (id CollectionID) String() string      { return string(id) }
+func (id TransformID) String() string       { return string(id) }
+func (id AccountSelectorID) String() string { return string(id) }
 
 type Collection struct {
 	ID          CollectionID `json:"id"`
@@ -67,6 +78,15 @@ type TransformRevision struct {
 	PublishedAt  time.Time               `json:"publishedAt"`
 }
 
+type AccountSelectorRevision struct {
+	ID           AccountSelectorID      `json:"id"`
+	Revision     Revision               `json:"revision"`
+	CollectionID CollectionID           `json:"collectionId"`
+	DisplayName  string                 `json:"displayName"`
+	Policy       accountselector.Policy `json:"policy"`
+	PublishedAt  time.Time              `json:"publishedAt"`
+}
+
 type CreateCollectionCommand struct {
 	ID          CollectionID
 	DisplayName string
@@ -78,6 +98,14 @@ type PublishTransformCommand struct {
 	CollectionID     CollectionID
 	DisplayName      string
 	Policy           messagetransform.Policy
+}
+
+type PublishAccountSelectorCommand struct {
+	ID               AccountSelectorID
+	ExpectedRevision Revision
+	CollectionID     CollectionID
+	DisplayName      string
+	Policy           accountselector.Policy
 }
 
 type CommitOutcome string
@@ -95,15 +123,24 @@ type CommitResult struct {
 	ActualRevision Revision
 }
 
+type AccountSelectorCommitResult struct {
+	Outcome        CommitOutcome
+	Revision       AccountSelectorRevision
+	ActualRevision Revision
+}
+
 type Catalog struct {
-	Collections []Collection
-	Transforms  []TransformRevision
+	Collections      []Collection
+	Transforms       []TransformRevision
+	AccountSelectors []AccountSelectorRevision
 }
 
 type Repository interface {
 	CreateCollection(context.Context, Collection) error
 	WriteTransform(context.Context, Revision, TransformRevision) (CommitResult, error)
 	LoadTransformRevision(context.Context, TransformID, Revision) (TransformRevision, bool, error)
+	WriteAccountSelector(context.Context, Revision, AccountSelectorRevision) (AccountSelectorCommitResult, error)
+	LoadAccountSelectorRevision(context.Context, AccountSelectorID, Revision) (AccountSelectorRevision, bool, error)
 	LoadCurrent(context.Context) (Catalog, error)
 }
 
@@ -111,6 +148,8 @@ type Controller interface {
 	CreateCollection(context.Context, CreateCollectionCommand) (Collection, error)
 	PublishTransform(context.Context, PublishTransformCommand) (TransformRevision, error)
 	GetTransformRevision(context.Context, TransformID, Revision) (TransformRevision, error)
+	PublishAccountSelector(context.Context, PublishAccountSelectorCommand) (AccountSelectorRevision, error)
+	GetAccountSelectorRevision(context.Context, AccountSelectorID, Revision) (AccountSelectorRevision, error)
 	List(context.Context) (Catalog, error)
 }
 
@@ -216,6 +255,70 @@ func (manager *Manager) GetTransformRevision(
 	return value, nil
 }
 
+func (manager *Manager) PublishAccountSelector(
+	ctx context.Context,
+	command PublishAccountSelectorCommand,
+) (AccountSelectorRevision, error) {
+	if manager == nil || ctx == nil || command.ExpectedRevision >= MaxRevision {
+		return AccountSelectorRevision{}, ErrInvalidLibrary
+	}
+	if err := ctx.Err(); err != nil {
+		return AccountSelectorRevision{}, err
+	}
+	candidate := AccountSelectorRevision{
+		ID: command.ID, Revision: command.ExpectedRevision + 1,
+		CollectionID: command.CollectionID, DisplayName: command.DisplayName,
+		Policy: command.Policy, PublishedAt: manager.clock.Now().UTC().Truncate(time.Millisecond),
+	}
+	if candidate.Validate() != nil {
+		return AccountSelectorRevision{}, ErrInvalidLibrary
+	}
+	result, err := manager.repository.WriteAccountSelector(
+		ctx,
+		command.ExpectedRevision,
+		candidate,
+	)
+	if err != nil {
+		return AccountSelectorRevision{}, err
+	}
+	switch result.Outcome {
+	case CommitCommitted:
+		if !result.Revision.Equal(candidate) {
+			return AccountSelectorRevision{}, ErrWriteNotCommitted
+		}
+		return result.Revision, nil
+	case CommitConflict:
+		return AccountSelectorRevision{}, ErrRevisionConflict
+	default:
+		return AccountSelectorRevision{}, ErrWriteNotCommitted
+	}
+}
+
+func (manager *Manager) GetAccountSelectorRevision(
+	ctx context.Context,
+	id AccountSelectorID,
+	revision Revision,
+) (AccountSelectorRevision, error) {
+	if manager == nil || ctx == nil ||
+		!validID(string(id)) || revision == 0 || revision > MaxRevision {
+		return AccountSelectorRevision{}, ErrInvalidLibrary
+	}
+	if err := ctx.Err(); err != nil {
+		return AccountSelectorRevision{}, err
+	}
+	value, exists, err := manager.repository.LoadAccountSelectorRevision(ctx, id, revision)
+	if err != nil {
+		return AccountSelectorRevision{}, err
+	}
+	if !exists {
+		return AccountSelectorRevision{}, ErrSelectorNotFound
+	}
+	if value.Validate() != nil || value.ID != id || value.Revision != revision {
+		return AccountSelectorRevision{}, ErrWriteNotCommitted
+	}
+	return value, nil
+}
+
 func (manager *Manager) List(ctx context.Context) (Catalog, error) {
 	if manager == nil || ctx == nil {
 		return Catalog{}, ErrInvalidLibrary
@@ -250,11 +353,27 @@ func (manager *Manager) List(ctx context.Context) (Catalog, error) {
 		}
 		transforms[transform.ID] = struct{}{}
 	}
+	selectors := make(map[AccountSelectorID]struct{}, len(catalog.AccountSelectors))
+	for _, selector := range catalog.AccountSelectors {
+		if selector.Validate() != nil {
+			return Catalog{}, ErrInvalidLibrary
+		}
+		if _, exists := collections[selector.CollectionID]; !exists {
+			return Catalog{}, ErrInvalidLibrary
+		}
+		if _, duplicate := selectors[selector.ID]; duplicate {
+			return Catalog{}, ErrInvalidLibrary
+		}
+		selectors[selector.ID] = struct{}{}
+	}
 	sort.Slice(catalog.Collections, func(left, right int) bool {
 		return catalog.Collections[left].ID < catalog.Collections[right].ID
 	})
 	sort.Slice(catalog.Transforms, func(left, right int) bool {
 		return catalog.Transforms[left].ID < catalog.Transforms[right].ID
+	})
+	sort.Slice(catalog.AccountSelectors, func(left, right int) bool {
+		return catalog.AccountSelectors[left].ID < catalog.AccountSelectors[right].ID
 	})
 	return catalog, nil
 }
@@ -277,6 +396,22 @@ func (revision TransformRevision) Validate() error {
 }
 
 func (revision TransformRevision) Equal(other TransformRevision) bool {
+	return revision.ID == other.ID && revision.Revision == other.Revision &&
+		revision.CollectionID == other.CollectionID && revision.DisplayName == other.DisplayName &&
+		revision.Policy == other.Policy && revision.PublishedAt.Equal(other.PublishedAt)
+}
+
+func (revision AccountSelectorRevision) Validate() error {
+	if !validID(string(revision.ID)) || !validID(string(revision.CollectionID)) ||
+		revision.Revision == 0 || revision.Revision > MaxRevision ||
+		!validDisplayName(revision.DisplayName) || revision.PublishedAt.IsZero() ||
+		revision.Policy.Validate() != nil {
+		return ErrInvalidLibrary
+	}
+	return nil
+}
+
+func (revision AccountSelectorRevision) Equal(other AccountSelectorRevision) bool {
 	return revision.ID == other.ID && revision.Revision == other.Revision &&
 		revision.CollectionID == other.CollectionID && revision.DisplayName == other.DisplayName &&
 		revision.Policy == other.Policy && revision.PublishedAt.Equal(other.PublishedAt)

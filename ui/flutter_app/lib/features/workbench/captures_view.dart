@@ -516,12 +516,27 @@ final class _CaptureDetail extends StatelessWidget {
         .firstOrNull;
     final account = controller.data?.accounts
         .where(
-          (candidate) =>
-              candidate.id == route?.accountPolicy.preferredAccountId,
+          (candidate) => candidate.id == route?.accountPolicy.fixedAccountId,
         )
         .firstOrNull;
+    final accountPolicy = route?.accountPolicy;
+    final frozenFixedAccount = accountPolicy?.accounts
+        .where((candidate) => candidate.id == accountPolicy.fixedAccountId)
+        .firstOrNull;
+    final selector = accountPolicy?.selector;
+    final accountAuthority = switch (accountPolicy?.mode) {
+      'fixed' =>
+        account?.displayName ??
+            frozenFixedAccount?.displayName ??
+            accountPolicy!.fixedAccountId,
+      'javascript' when selector != null =>
+        '${copy('environment.account.javascript')} · ${selector.displayName} · r${selector.revision}',
+      _ => copy('common.client_passthrough'),
+    };
     final accountMatches =
-        account == null || account.upstreamEndpointId == endpoint?.id;
+        route == null ||
+        route.accountPolicy.mode == 'javascript' ||
+        account != null && account.upstreamEndpointId == endpoint?.id;
     final notice = controller.operationNotice;
     return ColoredBox(
       color: context.viberColors.canvas,
@@ -554,10 +569,7 @@ final class _CaptureDetail extends StatelessWidget {
                 unawaited(controller.applyLatestSelectedCaptureEnvironment()),
             routeDetail: [
               if (endpoint != null) endpoint.displayName,
-              if (account != null)
-                account.displayName
-              else if (route != null)
-                copy('common.client_passthrough'),
+              accountAuthority,
             ].join('  ·  '),
             masterVisible: masterVisible,
             onToggleMaster: onToggleMaster,
@@ -1836,6 +1848,10 @@ final class _EnvironmentScopeControls extends StatelessWidget {
               if (latest != null) 'latest': latest.revision,
             },
           );
+    final visibleDetails = [
+      if (routeDetail.isNotEmpty) routeDetail,
+      ?revisions,
+    ];
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
@@ -1844,8 +1860,9 @@ final class _EnvironmentScopeControls extends StatelessWidget {
           icon: Icons.adjust,
           tone: context.viberColors.route,
           title: copy('capture.environment.current'),
-          visibleDetail:
-              revisions ?? (routeDetail.isEmpty ? null : routeDetail),
+          visibleDetail: visibleDetails.isEmpty
+              ? null
+              : visibleDetails.join(' · '),
           detail: [
             if (routeDetail.isNotEmpty) routeDetail,
             copy(

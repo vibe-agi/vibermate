@@ -473,10 +473,11 @@ func environmentFixture(t *testing.T, id string, adapterID string) environment.E
 							},
 							BackendProtocol: "anthropic_messages",
 							AccountPolicy: environment.RouteAccountPolicy{
-								Revision: 1, PreferredAccountID: "account.default",
-								CandidateAccountIDs: []string{"account.default"},
-								AccountRevisions:    map[string]environment.Revision{"account.default": 1},
-								FailoverPolicy:      environment.FailoverOff,
+								Revision: 1, Mode: environment.AccountSelectionFixed,
+								FixedAccountID: "account.default",
+								Accounts: []environment.RouteAccountReference{{
+									ID: "account.default", Revision: 1, DisplayName: "account.default",
+								}},
 							},
 							ModelPolicy:    environment.ModelPolicy{Revision: 1, Mode: "passthrough"},
 							WireProfileRef: wireprofile.UpstreamWireProfileFollowClientValue,
@@ -533,7 +534,7 @@ func (captureAssignmentAccountCatalog) LookupAccount(id string) (environment.Acc
 		return environment.AccountDescriptor{}, false
 	}
 	return environment.AccountDescriptor{
-		ID: id, Revision: 1,
+		ID: id, Revision: 1, DisplayName: id,
 		UpstreamEndpointID: "target.default", UpstreamEndpointRevision: 1,
 		RealmID: "realm.default", Active: true,
 		BackendProtocols: []string{"anthropic_messages"},

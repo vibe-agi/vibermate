@@ -306,51 +306,34 @@ func (selection frozenSelection) mappedModel(requested string) (string, bool) {
 	return selection.resolveModelMapping(requested)
 }
 
-func (selection frozenSelection) credentialCandidates() ([]credentialCandidate, error) {
-	if selection.original {
-		return []credentialCandidate{{mode: providerauth.CredentialClientPassthrough}}, nil
+func (selection frozenSelection) managedCredentialCandidate(
+	account environment.CompiledAccountReference,
+) (credentialCandidate, error) {
+	if account.ID == "" || account.Revision == 0 || account.Revision > environment.MaxRevision ||
+		account.UpstreamEndpointID != selection.targetRef ||
+		account.UpstreamEndpointRevision != selection.targetRevision ||
+		account.RealmID == "" || account.RealmID != selection.targetRealm {
+		return credentialCandidate{}, errors.New("managed account is outside the frozen route")
 	}
-	policy := selection.accountPolicy
-	configured := policy.CandidateAccounts()
-	if len(configured) == 0 || policy.PreferredAccountID() == "" {
-		return nil, errors.New("upstream route has no account candidates")
-	}
-	ordered := make([]credentialCandidate, 0, len(configured))
-	seen := make(map[string]struct{}, len(configured))
-	appendCandidate := func(candidate environment.CompiledAccountReference) error {
-		if candidate.ID == "" || candidate.Revision == 0 || candidate.Revision > environment.MaxRevision ||
-			candidate.UpstreamEndpointID != selection.targetRef ||
-			candidate.UpstreamEndpointRevision != selection.targetRevision ||
-			candidate.RealmID == "" || candidate.RealmID != selection.targetRealm {
-			return errors.New("managed account candidate is invalid")
-		}
-		if _, duplicate := seen[candidate.ID]; duplicate {
-			return errors.New("managed account candidate is duplicated")
-		}
-		seen[candidate.ID] = struct{}{}
-		ordered = append(ordered, credentialCandidate{mode: providerauth.CredentialManaged, account: candidate})
-		return nil
-	}
-	preferredFound := false
-	for _, candidate := range configured {
-		if candidate.ID == policy.PreferredAccountID() {
-			if err := appendCandidate(candidate); err != nil {
-				return nil, err
-			}
-			preferredFound = true
-			break
-		}
-	}
-	if !preferredFound {
-		return nil, errors.New("preferred account is outside the frozen candidate set")
-	}
-	for _, candidate := range configured {
-		if candidate.ID == policy.PreferredAccountID() {
+	return credentialCandidate{mode: providerauth.CredentialManaged, account: account}, nil
+}
+
+func (selection frozenSelection) managedCredentialCandidateByID(
+	accountID string,
+) (credentialCandidate, error) {
+	var selected *environment.CompiledAccountReference
+	for _, account := range selection.accountPolicy.Accounts() {
+		if account.ID != accountID {
 			continue
 		}
-		if err := appendCandidate(candidate); err != nil {
-			return nil, err
+		if selected != nil {
+			return credentialCandidate{}, errors.New("managed account is duplicated")
 		}
+		copy := account
+		selected = &copy
 	}
-	return ordered, nil
+	if selected == nil {
+		return credentialCandidate{}, errors.New("managed account is outside the frozen account set")
+	}
+	return selection.managedCredentialCandidate(*selected)
 }

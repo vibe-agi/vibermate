@@ -145,14 +145,16 @@ void main() {
         final anthropicRoutedEndpoints = appendEnvironmentUpstreamEndpoint(
           endpoints: const [],
           upstreamEndpoint: endpoint,
-          account: routeAccount,
+          accountPolicy: fixedRouteAccountPolicy(routeAccount),
+          availableAccounts: [routeAccount],
           clientProtocol: 'anthropic_messages',
           identityNonce: '$runSuffix-anthropic',
         );
         final routedEndpoints = appendEnvironmentUpstreamEndpoint(
           endpoints: anthropicRoutedEndpoints,
           upstreamEndpoint: endpoint,
-          account: routeAccount,
+          accountPolicy: fixedRouteAccountPolicy(routeAccount),
+          availableAccounts: [routeAccount],
           clientProtocol: 'openai_responses',
           identityNonce: '$runSuffix-responses',
         );
@@ -187,10 +189,12 @@ void main() {
         expect(routedPublish.environment.routes, hasLength(2));
         for (final routed in routedPublish.environment.routes) {
           expect(routed.endpointId, endpoint.id);
-          expect(routed.accountPolicy.preferredAccountId, routeAccount.id);
-          expect(routed.accountPolicy.accountRevisions, {
-            routeAccount.id: routeAccount.revision,
-          });
+          expect(routed.accountPolicy.fixedAccountId, routeAccount.id);
+          expect(routed.accountPolicy.accounts.single.id, routeAccount.id);
+          expect(
+            routed.accountPolicy.accounts.single.revision,
+            routeAccount.revision,
+          );
         }
         final blockedDelete = await runtime.api.deleteProviderAccount(
           routeAccount,
@@ -236,7 +240,8 @@ void main() {
         final readdedEndpoints = appendEnvironmentUpstreamEndpoint(
           endpoints: cleanupPublish.environment.clientEndpoints,
           upstreamEndpoint: endpoint,
-          account: routeAccount,
+          accountPolicy: fixedRouteAccountPolicy(routeAccount),
+          availableAccounts: [routeAccount],
           identityNonce: 'readded-$runSuffix',
         );
         final readdedDraft = await runtime.api.saveEnvironmentDraft(

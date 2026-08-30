@@ -338,6 +338,7 @@ void main() {
                           ),
                         ],
                         transforms: [alpha, beta, gamma],
+                        accountSelectors: const [],
                       ),
                     ),
                   );

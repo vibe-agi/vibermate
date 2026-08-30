@@ -83,8 +83,11 @@ func cloneRoute(route UpstreamRoute) UpstreamRoute {
 	cloned := route
 	cloned.PluginBindings = slices.Clone(route.PluginBindings)
 	cloned.ProviderTarget.Capabilities = slices.Clone(route.ProviderTarget.Capabilities)
-	cloned.AccountPolicy.CandidateAccountIDs = slices.Clone(route.AccountPolicy.CandidateAccountIDs)
-	cloned.AccountPolicy.AccountRevisions = cloneRevisionMap(route.AccountPolicy.AccountRevisions)
+	cloned.AccountPolicy.Accounts = slices.Clone(route.AccountPolicy.Accounts)
+	if route.AccountPolicy.Selector != nil {
+		selector := *route.AccountPolicy.Selector
+		cloned.AccountPolicy.Selector = &selector
+	}
 	cloned.ModelPolicy = cloneModelPolicy(route.ModelPolicy)
 	return cloned
 }
@@ -92,17 +95,6 @@ func cloneRoute(route UpstreamRoute) UpstreamRoute {
 func cloneModelPolicy(policy ModelPolicy) ModelPolicy {
 	cloned := policy
 	cloned.Mappings = slices.Clone(policy.Mappings)
-	return cloned
-}
-
-func cloneRevisionMap(source map[string]Revision) map[string]Revision {
-	if source == nil {
-		return nil
-	}
-	cloned := make(map[string]Revision, len(source))
-	for key, value := range source {
-		cloned[key] = value
-	}
 	return cloned
 }
 
@@ -458,24 +450,33 @@ func validateRoute(route *UpstreamRoute) error {
 		return fmt.Errorf("%w: route %q has an incomplete target", ErrInvalidEnvironment, route.ID)
 	}
 	policy := &route.AccountPolicy
-	if policy.Revision == 0 || policy.Revision > MaxRevision ||
-		(policy.FailoverPolicy != FailoverOff && policy.FailoverPolicy != FailoverAccountScopedSafe) {
+	if policy.Revision == 0 || policy.Revision > MaxRevision {
 		return fmt.Errorf("%w: route %q account policy is invalid", ErrInvalidEnvironment, route.ID)
 	}
-	if hasDuplicateUnsortedString(policy.CandidateAccountIDs) {
-		return fmt.Errorf("%w: route %q account policy contains duplicates", ErrInvalidEnvironment, route.ID)
-	}
-	if len(policy.CandidateAccountIDs) == 0 ||
-		!slices.Contains(policy.CandidateAccountIDs, policy.PreferredAccountID) {
-		return fmt.Errorf("%w: upstream route %q has incomplete account references", ErrInvalidEnvironment, route.ID)
-	}
-	for _, id := range policy.CandidateAccountIDs {
-		if err := validateID("ProviderAccount ID", id); err != nil || policy.AccountRevisions[id] == 0 {
+	sort.Slice(policy.Accounts, func(left, right int) bool {
+		return policy.Accounts[left].ID < policy.Accounts[right].ID
+	})
+	for index, account := range policy.Accounts {
+		if err := validateID("ProviderAccount ID", account.ID); err != nil ||
+			account.Revision == 0 || account.Revision > MaxRevision ||
+			!validDisplayName(account.DisplayName) ||
+			index > 0 && policy.Accounts[index-1].ID == account.ID {
 			return fmt.Errorf("%w: upstream route %q has an invalid account reference", ErrInvalidEnvironment, route.ID)
 		}
 	}
-	if len(policy.AccountRevisions) != len(policy.CandidateAccountIDs) {
-		return fmt.Errorf("%w: upstream route %q has mutable account aliases", ErrInvalidEnvironment, route.ID)
+	switch policy.Mode {
+	case AccountSelectionFixed:
+		if policy.FixedAccountID == "" || policy.Selector != nil || len(policy.Accounts) != 1 ||
+			policy.Accounts[0].ID != policy.FixedAccountID {
+			return fmt.Errorf("%w: route %q fixed Account selection is invalid", ErrInvalidEnvironment, route.ID)
+		}
+	case AccountSelectionJavaScript:
+		if policy.FixedAccountID != "" || policy.Selector == nil ||
+			policy.Selector.Validate() != nil || len(policy.Accounts) == 0 {
+			return fmt.Errorf("%w: route %q Account Selector is invalid", ErrInvalidEnvironment, route.ID)
+		}
+	default:
+		return fmt.Errorf("%w: route %q account selection mode is invalid", ErrInvalidEnvironment, route.ID)
 	}
 	sort.Slice(route.ModelPolicy.Mappings, func(left, right int) bool {
 		if route.ModelPolicy.Mappings[left].RequestedModel != route.ModelPolicy.Mappings[right].RequestedModel {
@@ -523,6 +524,19 @@ func validateModelIdentifier(label, value string) error {
 		}
 	}
 	return nil
+}
+
+func validDisplayName(value string) bool {
+	if value == "" || len(value) > MaxNameBytes || !utf8.ValidString(value) ||
+		strings.TrimSpace(value) != value {
+		return false
+	}
+	for _, character := range value {
+		if unicode.IsControl(character) {
+			return false
+		}
+	}
+	return true
 }
 
 func validatePluginBindings(bindings []PluginBinding) error {
@@ -649,15 +663,15 @@ func validateAccounts(aggregate Environment, catalog AccountCatalog) error {
 				if catalog == nil {
 					return fmt.Errorf("%w: upstream route %q has no account catalog", ErrInvalidEnvironment, route.ID)
 				}
-				for _, accountID := range policy.CandidateAccountIDs {
-					account, exists := catalog.LookupAccount(accountID)
-					if !exists || !account.Active || account.ID != accountID ||
-						account.Revision != policy.AccountRevisions[accountID] ||
+				for _, frozen := range policy.Accounts {
+					account, exists := catalog.LookupAccount(frozen.ID)
+					if !exists || !account.Active || account.ID != frozen.ID ||
+						account.Revision != frozen.Revision || account.DisplayName != frozen.DisplayName ||
 						account.UpstreamEndpointID != route.ProviderTarget.ID ||
 						account.UpstreamEndpointRevision != route.ProviderTarget.Revision ||
 						account.RealmID != route.ProviderTarget.RealmID ||
 						!slices.Contains(account.BackendProtocols, route.BackendProtocol) {
-						return fmt.Errorf("%w: route %q account %q is incompatible", ErrInvalidEnvironment, route.ID, accountID)
+						return fmt.Errorf("%w: route %q account %q is incompatible", ErrInvalidEnvironment, route.ID, frozen.ID)
 					}
 				}
 			}

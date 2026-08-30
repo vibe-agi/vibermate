@@ -14,6 +14,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/vibe-agi/vibermate/internal/accountselector"
 	"github.com/vibe-agi/vibermate/internal/agentconversation"
 	"github.com/vibe-agi/vibermate/internal/anthropicchat"
 	"github.com/vibe-agi/vibermate/internal/captureadmission"
@@ -1767,7 +1768,7 @@ func TestManagedResponsesStreamingKeepsIncrementalClientSemantics(t *testing.T) 
 	}
 }
 
-func TestAccountFailoverCannotEscapeFrozenRouteCandidateSet(t *testing.T) {
+func TestAccountSelectorChoosesOneFrozenEndpointAccount(t *testing.T) {
 	accounts := []testAccount{
 		{id: "account.backup", revision: 4, epoch: 5},
 		{id: "account.primary", revision: 2, epoch: 3},
@@ -1780,18 +1781,25 @@ func TestAccountFailoverCannotEscapeFrozenRouteCandidateSet(t *testing.T) {
 		mappedModel:    "gpt-provider",
 		accounts:       accounts,
 		preferred:      "account.primary",
-		failover:       environment.FailoverAccountScopedSafe,
+		selector: &codelibrary.AccountSelectorRevision{
+			ID: "model-account", Revision: 2, CollectionID: "routing", DisplayName: "Model account",
+			Policy: accountselector.Policy{JavaScript: `
+selection.accountId = request.requestedModel === "claude-client-alias"
+  ? "account.backup"
+  : "account.primary";
+`},
+			PublishedAt: time.Date(2026, time.August, 28, 0, 0, 0, 0, time.UTC),
+		},
 	})
 	authority := newAccountAuthority(t, accounts...)
-	provider := &providerDouble{results: []providerResult{
-		{response: jsonResponse(http.StatusTooManyRequests, []byte(`{"error":{"type":"rate_limit"}}`))},
-		{response: jsonResponse(http.StatusOK, completeProviderResponse("gpt-provider"))},
-	}}
+	provider := &providerDouble{results: []providerResult{{
+		response: jsonResponse(http.StatusOK, completeProviderResponse("gpt-provider")),
+	}}}
 	pipeline := newTestPipeline(t, authority, provider, approvedDecisions(), &attemptObserverDouble{})
 	defer shutdownPipeline(t, pipeline)
 	result, err := pipeline.Execute(
 		context.Background(),
-		mustClientRequest(t, "exchange-failover", plan, completeClientRequest()),
+		mustClientRequest(t, "exchange-account-selector", plan, completeClientRequest()),
 		&downstreamRecorder{},
 	)
 	if err != nil {
@@ -1801,12 +1809,11 @@ func TestAccountFailoverCannotEscapeFrozenRouteCandidateSet(t *testing.T) {
 		t.Fatalf("final account = %+v", result)
 	}
 	leaseRequests := authority.snapshot()
-	if len(leaseRequests) != 2 || leaseRequests[0].AccountID() != "account.primary" ||
-		leaseRequests[1].AccountID() != "account.backup" {
-		t.Fatalf("lease order = %+v", leaseRequests)
+	if len(leaseRequests) != 1 || leaseRequests[0].AccountID() != "account.backup" {
+		t.Fatalf("lease selection = %+v", leaseRequests)
 	}
 	providerRequests := provider.requestsSnapshot()
-	if len(providerRequests) != 2 {
+	if len(providerRequests) != 1 {
 		t.Fatalf("provider attempts = %d", len(providerRequests))
 	}
 	for _, request := range providerRequests {
@@ -1817,7 +1824,7 @@ func TestAccountFailoverCannotEscapeFrozenRouteCandidateSet(t *testing.T) {
 	}
 }
 
-func TestManagedAuthenticationRejectionIsTerminalWhenFailoverIsOff(t *testing.T) {
+func TestManagedAuthenticationRejectionNeverSelectsAnotherAccount(t *testing.T) {
 	t.Parallel()
 	for _, status := range []int{http.StatusUnauthorized, http.StatusForbidden} {
 		status := status
@@ -1831,7 +1838,7 @@ func TestManagedAuthenticationRejectionIsTerminalWhenFailoverIsOff(t *testing.T)
 				destination: environment.DestinationKindUpstream, providerOrigin: "https://provider.example/v1",
 				backend: protocolspec.DialectOpenAIChat, modelMode: environment.ModelModeMap,
 				mappedModel: "gpt-provider", accounts: accounts,
-				preferred: "account.primary", failover: environment.FailoverOff,
+				preferred: "account.primary",
 			})
 			authority := newAccountAuthority(t, accounts...)
 			provider := &providerDouble{results: []providerResult{
@@ -1866,6 +1873,39 @@ func TestManagedAuthenticationRejectionIsTerminalWhenFailoverIsOff(t *testing.T)
 				t.Fatal("authentication rejection crossed the frozen account boundary")
 			}
 		})
+	}
+}
+
+func TestAccountSelectorFailureSendsNothing(t *testing.T) {
+	accounts := []testAccount{{id: "account.only", revision: 2, epoch: 3}}
+	plan := mustEnvironmentRequestPlan(t, testPlanOptions{
+		destination:    environment.DestinationKindUpstream,
+		providerOrigin: "https://provider.example/v1",
+		backend:        protocolspec.DialectOpenAIChat,
+		modelMode:      environment.ModelModeMap,
+		mappedModel:    "gpt-provider",
+		accounts:       accounts,
+		selector: &codelibrary.AccountSelectorRevision{
+			ID: "reject", Revision: 1, CollectionID: "routing", DisplayName: "Reject",
+			Policy:      accountselector.Policy{JavaScript: `selection.accountId = "account.outside";`},
+			PublishedAt: time.Date(2026, time.August, 28, 0, 0, 0, 0, time.UTC),
+		},
+	})
+	authority := newAccountAuthority(t, accounts...)
+	provider := &providerDouble{}
+	pipeline := newTestPipeline(t, authority, provider, approvedDecisions(), &attemptObserverDouble{})
+	defer shutdownPipeline(t, pipeline)
+
+	_, err := pipeline.Execute(
+		context.Background(),
+		mustClientRequest(t, "exchange-selector-failed", plan, completeClientRequest()),
+		&downstreamRecorder{},
+	)
+	if ReasonOf(err) != ReasonAccountSelectorFailed {
+		t.Fatalf("selector failure = %v", err)
+	}
+	if len(authority.snapshot()) != 0 || provider.callCount() != 0 {
+		t.Fatal("failed selector acquired credentials or sent provider traffic")
 	}
 }
 
@@ -2079,7 +2119,7 @@ type testPlanOptions struct {
 	modelMappings      []environment.ModelMapping
 	accounts           []testAccount
 	preferred          string
-	failover           environment.FailoverPolicy
+	selector           *codelibrary.AccountSelectorRevision
 	recording          environment.ContentRecordingPolicy
 	transform          messagetransform.Policy
 }
@@ -2111,28 +2151,38 @@ func mustEnvironmentRequestPlan(t *testing.T, options testPlanOptions) environme
 	}
 	clientOrigin := mustClientOrigin(t, clientOriginValue)
 	realm := "realm.provider"
-	failover := options.failover
-	if failover == "" {
-		failover = environment.FailoverOff
-	}
 	accountPolicy := environment.RouteAccountPolicy{
-		Revision: 5, FailoverPolicy: failover,
+		Revision: 5, Mode: environment.AccountSelectionFixed,
 	}
 	catalog := make(testAccountCatalog, len(options.accounts))
 	for _, account := range options.accounts {
-		accountPolicy.CandidateAccountIDs = append(accountPolicy.CandidateAccountIDs, account.id)
-		if accountPolicy.AccountRevisions == nil {
-			accountPolicy.AccountRevisions = make(map[string]environment.Revision)
-		}
-		accountPolicy.AccountRevisions[account.id] = account.revision
 		catalog[account.id] = environment.AccountDescriptor{
-			ID: account.id, Revision: account.revision,
+			ID: account.id, Revision: account.revision, DisplayName: account.id,
 			UpstreamEndpointID: "target.primary", UpstreamEndpointRevision: 3,
 			RealmID: realm, Active: true,
 			BackendProtocols: []string{string(options.backend)},
 		}
 	}
-	accountPolicy.PreferredAccountID = options.preferred
+	if options.selector != nil {
+		selector := *options.selector
+		accountPolicy.Mode = environment.AccountSelectionJavaScript
+		accountPolicy.Selector = &selector
+		for _, account := range options.accounts {
+			accountPolicy.Accounts = append(accountPolicy.Accounts, environment.RouteAccountReference{
+				ID: account.id, Revision: account.revision, DisplayName: account.id,
+			})
+		}
+	} else if options.preferred != "" {
+		accountPolicy.FixedAccountID = options.preferred
+		for _, account := range options.accounts {
+			if account.id == options.preferred {
+				accountPolicy.Accounts = []environment.RouteAccountReference{{
+					ID: account.id, Revision: account.revision, DisplayName: account.id,
+				}}
+				break
+			}
+		}
+	}
 	recording := options.recording
 	if recording.Mode == "" {
 		recording = environment.DefaultContentRecordingPolicy()

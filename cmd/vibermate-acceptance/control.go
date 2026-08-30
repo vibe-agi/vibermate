@@ -1058,13 +1058,13 @@ func assemblyEnvironment(
 			return environment.Environment{}, originErr
 		}
 		accountPolicy := environment.RouteAccountPolicy{
-			Revision:            revision,
-			PreferredAccountID:  account.ID,
-			CandidateAccountIDs: []string{account.ID},
-			AccountRevisions: map[string]environment.Revision{
-				account.ID: environment.Revision(account.Revision),
-			},
-			FailoverPolicy: environment.FailoverOff,
+			Revision:       revision,
+			Mode:           environment.AccountSelectionFixed,
+			FixedAccountID: account.ID,
+			Accounts: []environment.RouteAccountReference{{
+				ID: account.ID, Revision: environment.Revision(account.Revision),
+				DisplayName: account.DisplayName,
+			}},
 		}
 		destination = environment.DestinationPlan{
 			Kind: environment.DestinationKindUpstream,
@@ -1077,7 +1077,7 @@ func assemblyEnvironment(
 				Routes: []environment.UpstreamRoute{{
 					ID: routeID, Revision: revision,
 					ProviderTarget: environment.ProviderTarget{
-						ID: "acceptance.target", Revision: revision, Origin: providerOrigin,
+						ID: account.UpstreamEndpointID, Revision: revision, Origin: providerOrigin,
 						RealmID: "acceptance.realm", Capabilities: []protocolspec.ProviderCapability{
 							protocolspec.ProviderCapabilityMessages,
 							protocolspec.ProviderCapabilityStreaming,

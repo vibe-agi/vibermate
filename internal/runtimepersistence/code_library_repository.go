@@ -202,6 +202,138 @@ func (repository *codeLibraryRepository) LoadTransformRevision(
 	return loadCodeLibraryTransformRevision(permit.context, repository.database, id, revision)
 }
 
+func (repository *codeLibraryRepository) WriteAccountSelector(
+	ctx context.Context,
+	expected codelibrary.Revision,
+	candidate codelibrary.AccountSelectorRevision,
+) (codelibrary.AccountSelectorCommitResult, error) {
+	if candidate.Validate() != nil || expected >= codelibrary.MaxRevision ||
+		candidate.Revision != expected+1 {
+		return codelibrary.AccountSelectorCommitResult{}, codelibrary.ErrInvalidLibrary
+	}
+	permit, err := repository.operations.admit(ctx)
+	if err != nil {
+		return codelibrary.AccountSelectorCommitResult{}, err
+	}
+	defer permit.finish()
+	transaction, err := repository.database.BeginTx(permit.context, nil)
+	if err != nil {
+		return codelibrary.AccountSelectorCommitResult{}, fmt.Errorf("begin Account Selector publish: %w", err)
+	}
+	defer func() { _ = transaction.Rollback() }()
+	var collectionExists int
+	if err := transaction.QueryRowContext(
+		permit.context,
+		`SELECT 1 FROM code_library_collections WHERE collection_id = ?`,
+		candidate.CollectionID.String(),
+	).Scan(&collectionExists); err != nil {
+		if err == sql.ErrNoRows {
+			return codelibrary.AccountSelectorCommitResult{}, codelibrary.ErrCollectionNotFound
+		}
+		return codelibrary.AccountSelectorCommitResult{}, fmt.Errorf("read Code Library collection: %w", err)
+	}
+	if _, err := transaction.ExecContext(
+		permit.context,
+		`INSERT INTO code_library_account_selector_heads(selector_id, current_revision)
+		 VALUES (?, 0) ON CONFLICT(selector_id) DO NOTHING`,
+		candidate.ID.String(),
+	); err != nil {
+		return codelibrary.AccountSelectorCommitResult{}, fmt.Errorf("create Account Selector head: %w", err)
+	}
+	result, err := transaction.ExecContext(
+		permit.context,
+		`UPDATE code_library_account_selector_heads SET current_revision = ?
+		 WHERE selector_id = ? AND current_revision = ?`,
+		int64(candidate.Revision),
+		candidate.ID.String(),
+		int64(expected),
+	)
+	if err != nil {
+		return codelibrary.AccountSelectorCommitResult{}, fmt.Errorf("advance Account Selector: %w", err)
+	}
+	affected, err := result.RowsAffected()
+	if err != nil {
+		return codelibrary.AccountSelectorCommitResult{}, err
+	}
+	if affected != 1 {
+		var actual int64
+		_ = transaction.QueryRowContext(
+			permit.context,
+			`SELECT current_revision FROM code_library_account_selector_heads WHERE selector_id = ?`,
+			candidate.ID.String(),
+		).Scan(&actual)
+		return codelibrary.AccountSelectorCommitResult{
+			Outcome: codelibrary.CommitConflict, ActualRevision: codelibrary.Revision(actual),
+		}, nil
+	}
+	if _, err := transaction.ExecContext(
+		permit.context,
+		`INSERT INTO code_library_account_selector_revisions(
+		   selector_id, revision, collection_id, display_name, javascript, published_at_unix_ms
+		 ) VALUES (?, ?, ?, ?, ?, ?)`,
+		candidate.ID.String(),
+		int64(candidate.Revision),
+		candidate.CollectionID.String(),
+		candidate.DisplayName,
+		candidate.Policy.JavaScript,
+		toUnixMillis(candidate.PublishedAt),
+	); err != nil {
+		return codelibrary.AccountSelectorCommitResult{}, fmt.Errorf("write Account Selector revision: %w", err)
+	}
+	commitErr := repository.committer.Commit(transaction)
+	if commitErr == nil {
+		return codelibrary.AccountSelectorCommitResult{
+			Outcome: codelibrary.CommitCommitted, Revision: candidate,
+		}, nil
+	}
+	_ = transaction.Rollback()
+	reconcileContext, cancel := context.WithTimeout(
+		permit.ownerContext,
+		repository.reconcileTimeout,
+	)
+	defer cancel()
+	stored, exists, reconcileErr := loadCodeLibraryAccountSelectorRevision(
+		reconcileContext, repository.database, candidate.ID, candidate.Revision,
+	)
+	actual, headExists, headErr := loadCodeLibraryAccountSelectorHead(
+		reconcileContext, repository.database, candidate.ID,
+	)
+	if reconcileErr != nil || headErr != nil {
+		return codelibrary.AccountSelectorCommitResult{Outcome: codelibrary.CommitIndeterminate},
+			errors.Join(commitErr, reconcileErr, headErr)
+	}
+	if exists && headExists && actual == candidate.Revision && stored.Equal(candidate) {
+		return codelibrary.AccountSelectorCommitResult{
+			Outcome: codelibrary.CommitCommitted, Revision: stored, ActualRevision: actual,
+		}, nil
+	}
+	if !exists && ((!headExists && expected == 0) || (headExists && actual == expected)) {
+		return codelibrary.AccountSelectorCommitResult{
+			Outcome: codelibrary.CommitNotCommitted, ActualRevision: actual,
+		}, commitErr
+	}
+	return codelibrary.AccountSelectorCommitResult{
+		Outcome: codelibrary.CommitIndeterminate, Revision: stored, ActualRevision: actual,
+	}, commitErr
+}
+
+func (repository *codeLibraryRepository) LoadAccountSelectorRevision(
+	ctx context.Context,
+	id codelibrary.AccountSelectorID,
+	revision codelibrary.Revision,
+) (codelibrary.AccountSelectorRevision, bool, error) {
+	parsed, err := codelibrary.NewAccountSelectorID(id.String())
+	if err != nil || parsed != id || revision == 0 || revision > codelibrary.MaxRevision {
+		return codelibrary.AccountSelectorRevision{}, false, codelibrary.ErrInvalidLibrary
+	}
+	permit, err := repository.operations.admit(ctx)
+	if err != nil {
+		return codelibrary.AccountSelectorRevision{}, false, err
+	}
+	defer permit.finish()
+	return loadCodeLibraryAccountSelectorRevision(permit.context, repository.database, id, revision)
+}
+
 func (repository *codeLibraryRepository) LoadCurrent(
 	ctx context.Context,
 ) (codelibrary.Catalog, error) {
@@ -211,8 +343,9 @@ func (repository *codeLibraryRepository) LoadCurrent(
 	}
 	defer permit.finish()
 	catalog := codelibrary.Catalog{
-		Collections: []codelibrary.Collection{},
-		Transforms:  []codelibrary.TransformRevision{},
+		Collections:      []codelibrary.Collection{},
+		Transforms:       []codelibrary.TransformRevision{},
+		AccountSelectors: []codelibrary.AccountSelectorRevision{},
 	}
 	rows, err := repository.database.QueryContext(
 		permit.context,
@@ -258,13 +391,40 @@ func (repository *codeLibraryRepository) LoadCurrent(
 	if err != nil {
 		return codelibrary.Catalog{}, fmt.Errorf("list Code Library Transforms: %w", err)
 	}
-	defer func() { _ = rows.Close() }()
 	for rows.Next() {
 		value, scanErr := scanCodeLibraryTransformRevision(rows)
 		if scanErr != nil {
 			return codelibrary.Catalog{}, scanErr
 		}
 		catalog.Transforms = append(catalog.Transforms, value)
+	}
+	if err := rows.Err(); err != nil {
+		_ = rows.Close()
+		return codelibrary.Catalog{}, err
+	}
+	if err := rows.Close(); err != nil {
+		return codelibrary.Catalog{}, err
+	}
+	rows, err = repository.database.QueryContext(
+		permit.context,
+		`SELECT revisions.selector_id, revisions.revision, revisions.collection_id,
+		        revisions.display_name, revisions.javascript, revisions.published_at_unix_ms
+		 FROM code_library_account_selector_heads AS heads
+		 JOIN code_library_account_selector_revisions AS revisions
+		   ON revisions.selector_id = heads.selector_id
+		  AND revisions.revision = heads.current_revision
+		 ORDER BY revisions.selector_id`,
+	)
+	if err != nil {
+		return codelibrary.Catalog{}, fmt.Errorf("list Account Selectors: %w", err)
+	}
+	defer func() { _ = rows.Close() }()
+	for rows.Next() {
+		value, scanErr := scanCodeLibraryAccountSelectorRevision(rows)
+		if scanErr != nil {
+			return codelibrary.Catalog{}, scanErr
+		}
+		catalog.AccountSelectors = append(catalog.AccountSelectors, value)
 	}
 	if err := rows.Err(); err != nil {
 		return codelibrary.Catalog{}, err
@@ -334,6 +494,63 @@ func scanCodeLibraryTransformRevision(
 	return value, nil
 }
 
+func loadCodeLibraryAccountSelectorRevision(
+	ctx context.Context,
+	query interface {
+		QueryRowContext(context.Context, string, ...any) *sql.Row
+	},
+	id codelibrary.AccountSelectorID,
+	revision codelibrary.Revision,
+) (codelibrary.AccountSelectorRevision, bool, error) {
+	value, err := scanCodeLibraryAccountSelectorRevision(query.QueryRowContext(
+		ctx,
+		`SELECT selector_id, revision, collection_id, display_name,
+		        javascript, published_at_unix_ms
+		 FROM code_library_account_selector_revisions
+		 WHERE selector_id = ? AND revision = ?`,
+		id.String(),
+		int64(revision),
+	))
+	if err == sql.ErrNoRows {
+		return codelibrary.AccountSelectorRevision{}, false, nil
+	}
+	if err != nil {
+		return codelibrary.AccountSelectorRevision{}, false,
+			fmt.Errorf("read Account Selector revision: %w", err)
+	}
+	if value.ID != id || value.Revision != revision {
+		return codelibrary.AccountSelectorRevision{}, false, codelibrary.ErrInvalidLibrary
+	}
+	return value, true, nil
+}
+
+func scanCodeLibraryAccountSelectorRevision(
+	row codeLibraryRevisionRow,
+) (codelibrary.AccountSelectorRevision, error) {
+	var value codelibrary.AccountSelectorRevision
+	var selectorID, collectionID string
+	var storedRevision, publishedAt int64
+	err := row.Scan(
+		&selectorID,
+		&storedRevision,
+		&collectionID,
+		&value.DisplayName,
+		&value.Policy.JavaScript,
+		&publishedAt,
+	)
+	if err != nil {
+		return codelibrary.AccountSelectorRevision{}, err
+	}
+	value.ID = codelibrary.AccountSelectorID(selectorID)
+	value.Revision = codelibrary.Revision(storedRevision)
+	value.CollectionID = codelibrary.CollectionID(collectionID)
+	value.PublishedAt = fromUnixMillis(publishedAt)
+	if value.Validate() != nil {
+		return codelibrary.AccountSelectorRevision{}, codelibrary.ErrInvalidLibrary
+	}
+	return value, nil
+}
+
 func loadCodeLibraryTransformHead(
 	ctx context.Context,
 	query interface {
@@ -345,6 +562,31 @@ func loadCodeLibraryTransformHead(
 	err := query.QueryRowContext(
 		ctx,
 		`SELECT current_revision FROM code_library_transform_heads WHERE transform_id = ?`,
+		id.String(),
+	).Scan(&revision)
+	if errors.Is(err, sql.ErrNoRows) {
+		return 0, false, nil
+	}
+	if err != nil {
+		return 0, false, err
+	}
+	if revision <= 0 || revision > int64(codelibrary.MaxRevision) {
+		return 0, false, codelibrary.ErrInvalidLibrary
+	}
+	return codelibrary.Revision(revision), true, nil
+}
+
+func loadCodeLibraryAccountSelectorHead(
+	ctx context.Context,
+	query interface {
+		QueryRowContext(context.Context, string, ...any) *sql.Row
+	},
+	id codelibrary.AccountSelectorID,
+) (codelibrary.Revision, bool, error) {
+	var revision int64
+	err := query.QueryRowContext(
+		ctx,
+		`SELECT current_revision FROM code_library_account_selector_heads WHERE selector_id = ?`,
 		id.String(),
 	).Scan(&revision)
 	if errors.Is(err, sql.ErrNoRows) {

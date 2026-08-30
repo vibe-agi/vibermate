@@ -362,6 +362,21 @@ func TestEnvironmentDraftPublishesOneAccountAcrossExplicitEndpointProtocols(t *t
 	if err != nil {
 		t.Fatal(err)
 	}
+	publishedSelector := environmentRequest(t, application, http.MethodPut,
+		"/api/v1/code-library/account-selectors/endpoint-account", 0,
+		"environment-selector-publish-0001",
+		[]byte(`{"collectionId":"privacy","displayName":"Endpoint account","policy":{"javaScript":"selection.accountId = accounts[0].id;"}}`))
+	if publishedSelector.Code != http.StatusOK {
+		t.Fatalf("publish Account Selector status=%d body=%s", publishedSelector.Code, publishedSelector.Body.Bytes())
+	}
+	var frozenSelector desktopcontrol.CodeLibraryAccountSelectorResponse
+	if err := json.Unmarshal(publishedSelector.Body.Bytes(), &frozenSelector); err != nil {
+		t.Fatal(err)
+	}
+	frozenSelectorJSON, err := json.Marshal(frozenSelector)
+	if err != nil {
+		t.Fatal(err)
+	}
 
 	draftBody := []byte(`{
   "expectedDraftRevision": 0,
@@ -392,10 +407,9 @@ func TestEnvironmentDraftPublishesOneAccountAcrossExplicitEndpointProtocols(t *t
           "backendProtocol":"anthropic_messages",
           "accountPolicy": {
             "revision":1,
-            "preferredAccountId":"account.cherry.bearer",
-            "candidateAccountIds":["account.cherry.bearer"],
-            "accountRevisions":{"account.cherry.bearer":1},
-            "failoverPolicy":"off"
+            "mode":"javascript",
+            "selector":` + string(frozenSelectorJSON) + `,
+            "accounts":[]
           },
           "modelPolicy":{"revision":1,"mode":"map","mappings":[{"requestedModel":"claude-client-alias","upstreamModel":"dashscope:deepseek-v4-flash-0731"}]},
           "wireProfileRef":"follow-client",
@@ -434,10 +448,9 @@ func TestEnvironmentDraftPublishesOneAccountAcrossExplicitEndpointProtocols(t *t
           "backendProtocol":"openai_responses",
           "accountPolicy": {
             "revision":1,
-            "preferredAccountId":"account.cherry.bearer",
-            "candidateAccountIds":["account.cherry.bearer"],
-            "accountRevisions":{"account.cherry.bearer":1},
-            "failoverPolicy":"off"
+            "mode":"fixed",
+            "fixedAccountId":"account.cherry.bearer",
+            "accounts":[]
           },
           "modelPolicy":{"revision":1,"mode":"passthrough","mappings":[]},
           "wireProfileRef":"follow-client",
@@ -472,6 +485,24 @@ func TestEnvironmentDraftPublishesOneAccountAcrossExplicitEndpointProtocols(t *t
 	)
 	if tampered.Code != http.StatusUnprocessableEntity {
 		t.Fatalf("tampered Transform status=%d body=%s", tampered.Code, tampered.Body.Bytes())
+	}
+	tamperedSelectorBody := bytes.Replace(
+		draftBody,
+		[]byte("selection.accountId = accounts[0].id;"),
+		[]byte("selection.accountId = accounts[accounts.length - 1].id;"),
+		1,
+	)
+	if bytes.Equal(tamperedSelectorBody, draftBody) {
+		t.Fatal("test did not alter the frozen Account Selector revision")
+	}
+	tamperedSelector := environmentRequest(
+		t, application, http.MethodPut,
+		"/api/v1/environments/cherry-mapped/draft", 0,
+		"environment-cherry-selector-tampered-0001", tamperedSelectorBody,
+	)
+	if tamperedSelector.Code != http.StatusUnprocessableEntity {
+		t.Fatalf("tampered Account Selector status=%d body=%s",
+			tamperedSelector.Code, tamperedSelector.Body.Bytes())
 	}
 	tamperedEgressBody := bytes.Replace(
 		draftBody,
@@ -535,6 +566,14 @@ func TestEnvironmentDraftPublishesOneAccountAcrossExplicitEndpointProtocols(t *t
 	if updatedTransform.Code != http.StatusOK {
 		t.Fatalf("publish newer Transform status=%d body=%s", updatedTransform.Code, updatedTransform.Body.Bytes())
 	}
+	updatedSelector := environmentRequest(t, application, http.MethodPut,
+		"/api/v1/code-library/account-selectors/endpoint-account", 1,
+		"environment-selector-publish-0002",
+		[]byte(`{"collectionId":"privacy","displayName":"Endpoint account","policy":{"javaScript":"selection.accountId = accounts[accounts.length - 1].id;"}}`))
+	if updatedSelector.Code != http.StatusOK {
+		t.Fatalf("publish newer Account Selector status=%d body=%s",
+			updatedSelector.Code, updatedSelector.Body.Bytes())
+	}
 
 	reopened := environmentRequest(
 		t,
@@ -561,8 +600,17 @@ func TestEnvironmentDraftPublishesOneAccountAcrossExplicitEndpointProtocols(t *t
 	openAIRoute := &published.ClientEndpoints[1].ProtocolPlans[0].Destination.Upstream.Routes[0]
 	if openAIRoute.BackendProtocol != "openai_responses" ||
 		openAIRoute.ProviderTarget.ID != "target.cherry.anthropic" ||
-		openAIRoute.AccountPolicy.PreferredAccountID != "account.cherry.bearer" {
+		openAIRoute.AccountPolicy.Mode != environment.AccountSelectionFixed ||
+		openAIRoute.AccountPolicy.FixedAccountID != "account.cherry.bearer" ||
+		len(openAIRoute.AccountPolicy.Accounts) != 1 ||
+		openAIRoute.AccountPolicy.Accounts[0].ID != "account.cherry.bearer" {
 		t.Fatalf("published shared-account OpenAI route = %#v", openAIRoute)
+	}
+	if route.AccountPolicy.Mode != environment.AccountSelectionJavaScript ||
+		route.AccountPolicy.Selector == nil || route.AccountPolicy.Selector.Revision != 1 ||
+		len(route.AccountPolicy.Accounts) != 1 ||
+		route.AccountPolicy.Accounts[0].ID != "account.cherry.bearer" {
+		t.Fatalf("published selector route = %#v", route.AccountPolicy)
 	}
 	wantAnthropicEgress := egressnetwork.Policy{
 		Proxy: egressnetwork.ProxyPolicy{

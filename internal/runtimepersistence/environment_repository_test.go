@@ -309,10 +309,11 @@ func environmentFixture(t *testing.T, id string, revision environment.Revision) 
 								},
 							},
 							BackendProtocol: "anthropic_messages", AccountPolicy: environment.RouteAccountPolicy{
-								Revision: 1, PreferredAccountID: "account.runtime",
-								CandidateAccountIDs: []string{"account.runtime"},
-								AccountRevisions:    map[string]environment.Revision{"account.runtime": 1},
-								FailoverPolicy:      environment.FailoverOff,
+								Revision: 1, Mode: environment.AccountSelectionFixed,
+								FixedAccountID: "account.runtime",
+								Accounts: []environment.RouteAccountReference{{
+									ID: "account.runtime", Revision: 1, DisplayName: "account.runtime",
+								}},
 							},
 							ModelPolicy:    environment.ModelPolicy{Revision: 1, Mode: "passthrough"},
 							WireProfileRef: wireprofile.UpstreamWireProfileFollowClientValue,
@@ -376,7 +377,7 @@ func (runtimeAccountCatalog) LookupAccount(id string) (environment.AccountDescri
 		return environment.AccountDescriptor{}, false
 	}
 	return environment.AccountDescriptor{
-		ID: id, Revision: 1,
+		ID: id, Revision: 1, DisplayName: id,
 		UpstreamEndpointID: "target.anthropic", UpstreamEndpointRevision: 1,
 		RealmID: "realm.anthropic", Active: true,
 		BackendProtocols: []string{"anthropic_messages"},

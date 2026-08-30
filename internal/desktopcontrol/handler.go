@@ -78,6 +78,7 @@ const (
 	ReasonModelCatalogTimeout                ReasonCode = "model_catalog_timeout"
 	ReasonModelCatalogAuthenticationRejected ReasonCode = "model_catalog_authentication_rejected"
 	ReasonMessageTransformTestFailed         ReasonCode = "message_transform_test_failed"
+	ReasonAccountSelectorTestFailed          ReasonCode = "account_selector_test_failed"
 	ReasonCodeLibraryNotFound                ReasonCode = "code_library_not_found"
 	ReasonCodeLibraryConflict                ReasonCode = "code_library_conflict"
 	ReasonCodeLibraryUnavailable             ReasonCode = "code_library_unavailable"
@@ -252,6 +253,10 @@ func New(options Options) (*Handler, error) {
 		"POST /api/v1/message-transforms/actions/test",
 		handler.testMessageTransform,
 	)
+	handler.mux.HandleFunc(
+		"POST /api/v1/account-selectors/actions/test",
+		handler.testAccountSelector,
+	)
 	if handler.codeLibrary != nil {
 		handler.mux.HandleFunc("GET /api/v1/code-library", handler.listCodeLibrary)
 		handler.mux.HandleFunc("POST /api/v1/code-library/collections", handler.createCodeLibraryCollection)
@@ -259,6 +264,14 @@ func New(options Options) (*Handler, error) {
 		handler.mux.HandleFunc(
 			"GET /api/v1/code-library/transforms/{transformId}/revisions/{transformRevision}",
 			handler.getCodeLibraryTransformRevision,
+		)
+		handler.mux.HandleFunc(
+			"PUT /api/v1/code-library/account-selectors/{selectorId}",
+			handler.publishCodeLibraryAccountSelector,
+		)
+		handler.mux.HandleFunc(
+			"GET /api/v1/code-library/account-selectors/{selectorId}/revisions/{selectorRevision}",
+			handler.getCodeLibraryAccountSelectorRevision,
 		)
 	}
 	if handler.egressProfiles != nil {
@@ -372,6 +385,7 @@ func New(options Options) (*Handler, error) {
 	)
 	handler.mux.HandleFunc("/api/v1/approvals", handler.invalidRoute)
 	handler.mux.HandleFunc("/api/v1/message-transforms/", handler.invalidRoute)
+	handler.mux.HandleFunc("/api/v1/account-selectors/", handler.invalidRoute)
 	handler.mux.HandleFunc("/api/v1/code-library", handler.invalidRoute)
 	handler.mux.HandleFunc("/api/v1/code-library/", handler.invalidRoute)
 	handler.mux.HandleFunc("/api/v1/provider-accounts", handler.invalidRoute)

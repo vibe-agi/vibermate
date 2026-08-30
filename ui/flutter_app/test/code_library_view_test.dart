@@ -4,6 +4,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:vibermate_app/core/api/control_models.dart';
 import 'package:vibermate_app/core/design/viber_theme.dart';
 import 'package:vibermate_app/core/i18n/app_copy.dart';
+import 'package:vibermate_app/features/workbench/account_selector_editor.dart';
 import 'package:vibermate_app/features/workbench/code_library_view.dart';
 import 'package:vibermate_app/features/workbench/workbench_controller.dart';
 import 'package:vibermate_app/preview/preview_control_api.dart';
@@ -55,13 +56,7 @@ void main() {
 
     await tester.tap(find.byKey(const Key('code-library-starter-localPaths')));
     await tester.pumpAndSettle();
-    expect(find.text('New collection'), findsOneWidget);
-    await tester.enterText(
-      find.byKey(const Key('code-library-name')),
-      'Privacy',
-    );
-    await tester.tap(find.byKey(const Key('code-library-name-save')));
-    await tester.pumpAndSettle();
+    expect(find.text('New collection'), findsNothing);
 
     final name = tester.widget<TextField>(
       find.byKey(const Key('code-library-transform-name')),
@@ -132,17 +127,6 @@ void main() {
       findsOneWidget,
     );
     expect(find.textContaining('exchange-private-sample'), findsOneWidget);
-
-    await tester.tap(find.byKey(const Key('code-library-add')));
-    await tester.pumpAndSettle();
-    await tester.tap(find.text('New collection'));
-    await tester.pumpAndSettle();
-    await tester.enterText(
-      find.byKey(const Key('code-library-name')),
-      'Privacy',
-    );
-    await tester.tap(find.byKey(const Key('code-library-name-save')));
-    await tester.pumpAndSettle();
 
     await tester.tap(find.byKey(const Key('code-library-add')));
     await tester.pumpAndSettle();
@@ -240,17 +224,6 @@ void main() {
       ),
     );
     await tester.pumpAndSettle();
-    await tester.tap(find.byKey(const Key('code-library-add')));
-    await tester.pumpAndSettle();
-    await tester.tap(find.text('New collection'));
-    await tester.pumpAndSettle();
-    await tester.enterText(
-      find.byKey(const Key('code-library-name')),
-      'Examples',
-    );
-    await tester.tap(find.byKey(const Key('code-library-name-save')));
-    await tester.pumpAndSettle();
-
     Future<void> openStarter(String label) async {
       await tester.tap(find.byKey(const Key('code-library-add')));
       await tester.pumpAndSettle();
@@ -320,6 +293,266 @@ void main() {
         .controller!
         .text;
     expect(systemRequest, contains('payload.system'));
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets(
+    'Account Selector sample uses the exact read-only Turn contract',
+    (tester) async {
+      await tester.binding.setSurfaceSize(const Size(820, 760));
+      addTearDown(() => tester.binding.setSurfaceSize(null));
+      AccountSelectorTestSample? observed;
+
+      await tester.pumpWidget(
+        MaterialApp(
+          theme: ViberTheme.light(),
+          home: Scaffold(
+            body: AccountSelectorEditorDialog(
+              selectorId: 'selector.test',
+              initial: const AccountSelectorPolicy(
+                javaScript: 'selection.accountId = accounts[0].id;',
+              ),
+              copy: AppCopy.forLanguage(AppLanguage.english),
+              testSelector: ({required policy, required sample}) async {
+                observed = sample;
+                return AccountSelectorTestResult(
+                  accountId: sample.accounts.last.id,
+                );
+              },
+            ),
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      await tester.scrollUntilVisible(
+        find.byKey(const Key('account-selector-suggestion-6')),
+        120,
+        scrollable: find.descendant(
+          of: find.byKey(const Key('account-selector-suggestions')),
+          matching: find.byType(Scrollable),
+        ),
+      );
+      await tester.pumpAndSettle();
+      expect(find.text('request.protocol'), findsOneWidget);
+      await tester.tap(find.byKey(const Key('account-selector-sample')));
+      await tester.pumpAndSettle();
+      await tester.enterText(
+        find.byKey(const Key('account-selector-sample-accounts')),
+        'account.red, account.blue',
+      );
+      await tester.enterText(
+        find.byKey(const Key('account-selector-sample-workspace')),
+        'blue-workspace',
+      );
+      await tester.tap(
+        find.byKey(const Key('account-selector-test-selector.test')),
+      );
+      await tester.pumpAndSettle();
+
+      expect(observed?.accounts.map((account) => account.id), [
+        'account.red',
+        'account.blue',
+      ]);
+      expect(observed?.runtime.workspaceLabel, 'blue-workspace');
+      expect(observed?.request.clientProtocol, 'anthropic_messages');
+      expect(find.text('Selected account.blue'), findsOneWidget);
+      expect(tester.takeException(), isNull);
+    },
+  );
+
+  testWidgets('built-in Runtime User selector passes its default sample', (
+    tester,
+  ) async {
+    await tester.binding.setSurfaceSize(const Size(820, 760));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+
+    await tester.pumpWidget(
+      MaterialApp(
+        theme: ViberTheme.light(),
+        home: Scaffold(
+          body: AccountSelectorEditorDialog(
+            selectorId: 'selector.user',
+            initial: const AccountSelectorPolicy(
+              javaScript: '''const accountByUser = {
+  "alice": "account.team-a",
+  "bob": "account.team-b",
+};
+selection.accountId = accountByUser[runtime.user.name];''',
+            ),
+            copy: AppCopy.forLanguage(AppLanguage.english),
+            testSelector: ({required policy, required sample}) async {
+              if (!sample.accounts.any(
+                (account) => account.id == 'account.team-a',
+              )) {
+                throw StateError('account.team-a is absent from the sample');
+              }
+              return const AccountSelectorTestResult(
+                accountId: 'account.team-a',
+              );
+            },
+          ),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    await tester.tap(
+      find.byKey(const Key('account-selector-test-selector.user')),
+    );
+    await tester.pumpAndSettle();
+
+    expect(find.text('Selected account.team-a'), findsOneWidget);
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('expanded Account Selector sample scrolls above fixed actions', (
+    tester,
+  ) async {
+    await tester.binding.setSurfaceSize(const Size(820, 760));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+
+    await tester.pumpWidget(
+      MaterialApp(
+        theme: ViberTheme.light(),
+        home: Scaffold(
+          body: AccountSelectorEditorDialog(
+            selectorId: 'selector.layout',
+            initial: const AccountSelectorPolicy(
+              javaScript: 'selection.accountId = accounts[0].id;',
+            ),
+            copy: AppCopy.forLanguage(AppLanguage.english),
+            testSelector: ({required policy, required sample}) async =>
+                AccountSelectorTestResult(accountId: sample.accounts.first.id),
+          ),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+    expect(
+      find.byKey(const Key('account-selector-body-scroll')),
+      findsOneWidget,
+    );
+    await tester.tap(find.byKey(const Key('account-selector-sample')));
+    await tester.pumpAndSettle();
+
+    final protocol = find.byKey(const Key('account-selector-sample-protocol'));
+    await tester.ensureVisible(protocol);
+    await tester.pumpAndSettle();
+
+    expect(protocol.hitTestable(), findsOneWidget);
+    expect(
+      find
+          .byKey(const Key('account-selector-save-selector.layout'))
+          .hitTestable(),
+      findsOneWidget,
+    );
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('390px Code Library publishes Account Selector revisions', (
+    tester,
+  ) async {
+    await tester.binding.setSurfaceSize(const Size(390, 760));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+    final api = PreviewControlApi();
+    final controller = WorkbenchController(
+      api: api,
+      terminalCommands: PreviewTerminalCommandService(),
+      previewMode: true,
+      closeRuntime: api.close,
+    );
+    addTearDown(controller.dispose);
+    addTearDown(api.close);
+
+    await tester.pumpWidget(
+      MaterialApp(
+        theme: ViberTheme.light(),
+        home: Scaffold(
+          body: CodeLibraryView(
+            controller: controller,
+            copy: AppCopy.forLanguage(AppLanguage.english),
+          ),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.text('Account Selectors'));
+    await tester.pumpAndSettle();
+    expect(
+      find.byKey(const Key('code-library-selector-starter-firstAvailable')),
+      findsOneWidget,
+    );
+    expect(
+      find.byKey(const Key('code-library-selector-starter-workspace')),
+      findsOneWidget,
+    );
+    expect(
+      find.byKey(const Key('code-library-selector-starter-user')),
+      findsOneWidget,
+    );
+    expect(
+      find.byKey(const Key('code-library-selector-starter-model')),
+      findsOneWidget,
+    );
+    expect(find.textContaining('runtime.workspace.label'), findsOneWidget);
+
+    final workspaceStarter = find.byKey(
+      const Key('code-library-selector-starter-workspace'),
+    );
+    await tester.ensureVisible(workspaceStarter);
+    await tester.tap(workspaceStarter);
+    await tester.pumpAndSettle();
+    expect(find.text('New collection'), findsNothing);
+    final starterName = tester.widget<TextField>(
+      find.byKey(const Key('code-library-selector-name')),
+    );
+    expect(starterName.controller?.text, 'Choose by Workspace');
+    await tester.enterText(
+      find.byKey(const Key('code-library-selector-name')),
+      'Workspace account',
+    );
+    await tester.tap(find.byKey(const Key('code-library-selector-next')));
+    await tester.pumpAndSettle();
+    expect(
+      find.byKey(const Key('account-selector-source-new-selector')),
+      findsOneWidget,
+    );
+    final source = tester.widget<TextField>(
+      find.byKey(const Key('account-selector-source-new-selector')),
+    );
+    expect(source.controller?.text, contains('runtime.workspace.label'));
+    await tester.tap(
+      find.byKey(const Key('account-selector-save-new-selector')),
+    );
+    await tester.pumpAndSettle();
+
+    final first = (await api.codeLibrary()).accountSelectors.single;
+    expect(first.revision, 1);
+    expect(first.displayName, 'Workspace account');
+    expect(
+      find.byKey(Key('code-library-selector-detail-${first.id}')),
+      findsOneWidget,
+    );
+
+    await tester.tap(find.byKey(const Key('code-library-selector-edit')));
+    await tester.pumpAndSettle();
+    await tester.enterText(
+      find.byKey(Key('account-selector-source-${first.id}')),
+      'selection.accountId = accounts[accounts.length - 1].id;',
+    );
+    await tester.tap(find.byKey(Key('account-selector-save-${first.id}')));
+    await tester.pumpAndSettle();
+
+    final latest = (await api.codeLibrary()).accountSelectors.single;
+    final historical = await api.codeLibraryAccountSelectorRevision(
+      first.id,
+      1,
+    );
+    expect(latest.revision, 2);
+    expect(latest.policy.javaScript, contains('accounts.length - 1'));
+    expect(historical.policy.javaScript, isNot(contains('accounts.length')));
     expect(tester.takeException(), isNull);
   });
 }

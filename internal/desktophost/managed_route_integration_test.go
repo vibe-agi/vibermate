@@ -373,11 +373,11 @@ func publishManagedEnvironment(
 							},
 							BackendProtocol: string(environment.ClientProtocolAnthropicMessages),
 							AccountPolicy: environment.RouteAccountPolicy{
-								Revision:            1,
-								PreferredAccountID:  accountID.String(),
-								CandidateAccountIDs: []string{accountID.String()},
-								AccountRevisions:    map[string]environment.Revision{accountID.String(): 1},
-								FailoverPolicy:      environment.FailoverOff,
+								Revision: 1, Mode: environment.AccountSelectionFixed,
+								FixedAccountID: accountID.String(),
+								Accounts: []environment.RouteAccountReference{{
+									ID: accountID.String(), Revision: 1, DisplayName: "Anthropic test",
+								}},
 							},
 							ModelPolicy:    environment.ModelPolicy{Revision: 1, Mode: "passthrough"},
 							WireProfileRef: wireprofile.UpstreamWireProfileFollowClientValue,

@@ -7,6 +7,8 @@ import (
 	"fmt"
 	"slices"
 
+	"github.com/vibe-agi/vibermate/internal/accountselector"
+	"github.com/vibe-agi/vibermate/internal/codelibrary"
 	"github.com/vibe-agi/vibermate/internal/egressnetwork"
 	"github.com/vibe-agi/vibermate/internal/egressprofile"
 	"github.com/vibe-agi/vibermate/internal/messagetransform"
@@ -57,23 +59,55 @@ func NewCompiler(
 type CompiledAccountReference struct {
 	ID                       string
 	Revision                 Revision
+	DisplayName              string
 	UpstreamEndpointID       string
 	UpstreamEndpointRevision Revision
 	RealmID                  string
 }
 
 type CompiledAccountPolicy struct {
-	revision   Revision
-	preferred  string
-	candidates []CompiledAccountReference
-	failover   FailoverPolicy
+	revision Revision
+	mode     AccountSelectionMode
+	fixed    *CompiledAccountReference
+	accounts []CompiledAccountReference
+	selector *codelibrary.AccountSelectorRevision
+	program  accountselector.Program
 }
 
-func (policy CompiledAccountPolicy) Revision() Revision             { return policy.revision }
-func (policy CompiledAccountPolicy) PreferredAccountID() string     { return policy.preferred }
-func (policy CompiledAccountPolicy) FailoverPolicy() FailoverPolicy { return policy.failover }
-func (policy CompiledAccountPolicy) CandidateAccounts() []CompiledAccountReference {
-	return slices.Clone(policy.candidates)
+func (policy CompiledAccountPolicy) Revision() Revision         { return policy.revision }
+func (policy CompiledAccountPolicy) Mode() AccountSelectionMode { return policy.mode }
+func (policy CompiledAccountPolicy) FixedAccount() (CompiledAccountReference, bool) {
+	if policy.fixed == nil {
+		return CompiledAccountReference{}, false
+	}
+	return *policy.fixed, true
+}
+func (policy CompiledAccountPolicy) Accounts() []CompiledAccountReference {
+	return slices.Clone(policy.accounts)
+}
+func (policy CompiledAccountPolicy) SelectorID() codelibrary.AccountSelectorID {
+	if policy.selector == nil {
+		return ""
+	}
+	return policy.selector.ID
+}
+func (policy CompiledAccountPolicy) SelectorRevision() codelibrary.Revision {
+	if policy.selector == nil {
+		return 0
+	}
+	return policy.selector.Revision
+}
+func (policy CompiledAccountPolicy) NewSelectorTurn(
+	metadata accountselector.RuntimeMetadata,
+) (*accountselector.Turn, error) {
+	if policy.mode != AccountSelectionJavaScript || policy.selector == nil {
+		return nil, fmt.Errorf("%w: Account Selector is not configured", ErrInvalidEnvironment)
+	}
+	accounts := make([]accountselector.Account, len(policy.accounts))
+	for index, account := range policy.accounts {
+		accounts[index] = accountselector.Account{ID: account.ID, DisplayName: account.DisplayName}
+	}
+	return policy.program.NewTurn(accountselector.TurnOptions{Runtime: metadata, Accounts: accounts})
 }
 
 type CompiledRoutePlan struct {
@@ -486,24 +520,45 @@ func compileRoute(
 
 func compileAccountPolicy(catalog AccountCatalog, route UpstreamRoute) (CompiledAccountPolicy, error) {
 	policy := route.AccountPolicy
-	compiled := CompiledAccountPolicy{
-		revision: policy.Revision, preferred: policy.PreferredAccountID,
-		failover: policy.FailoverPolicy,
-	}
+	compiled := CompiledAccountPolicy{revision: policy.Revision, mode: policy.Mode}
 	if catalog == nil {
 		return CompiledAccountPolicy{}, fmt.Errorf("%w: upstream route %q has no account catalog", ErrInvalidEnvironment, route.ID)
 	}
-	for _, accountID := range policy.CandidateAccountIDs {
-		account, exists := catalog.LookupAccount(accountID)
-		if !exists {
-			return CompiledAccountPolicy{}, fmt.Errorf("%w: managed account %q disappeared", ErrInvalidEnvironment, accountID)
+	for _, frozen := range policy.Accounts {
+		account, exists := catalog.LookupAccount(frozen.ID)
+		if !exists || account.Revision != frozen.Revision || account.DisplayName != frozen.DisplayName {
+			return CompiledAccountPolicy{}, fmt.Errorf("%w: managed account %q disappeared", ErrInvalidEnvironment, frozen.ID)
 		}
-		compiled.candidates = append(compiled.candidates, CompiledAccountReference{
+		compiled.accounts = append(compiled.accounts, CompiledAccountReference{
 			ID: account.ID, Revision: account.Revision,
+			DisplayName:              account.DisplayName,
 			UpstreamEndpointID:       account.UpstreamEndpointID,
 			UpstreamEndpointRevision: account.UpstreamEndpointRevision,
 			RealmID:                  account.RealmID,
 		})
+	}
+	switch policy.Mode {
+	case AccountSelectionFixed:
+		for index := range compiled.accounts {
+			if compiled.accounts[index].ID == policy.FixedAccountID {
+				fixed := compiled.accounts[index]
+				compiled.fixed = &fixed
+				break
+			}
+		}
+		if compiled.fixed == nil {
+			return CompiledAccountPolicy{}, fmt.Errorf("%w: fixed Account disappeared", ErrInvalidEnvironment)
+		}
+	case AccountSelectionJavaScript:
+		selector := *policy.Selector
+		program, err := accountselector.Compile(selector.Policy, accountselector.DefaultLimits())
+		if err != nil {
+			return CompiledAccountPolicy{}, fmt.Errorf("%w: compile Account Selector: %v", ErrInvalidEnvironment, err)
+		}
+		compiled.selector = &selector
+		compiled.program = program
+	default:
+		return CompiledAccountPolicy{}, ErrInvalidEnvironment
 	}
 	return compiled, nil
 }
@@ -580,7 +635,15 @@ func cloneProviderTarget(target ProviderTarget) ProviderTarget {
 
 func cloneCompiledAccountPolicy(policy CompiledAccountPolicy) CompiledAccountPolicy {
 	cloned := policy
-	cloned.candidates = slices.Clone(policy.candidates)
+	cloned.accounts = slices.Clone(policy.accounts)
+	if policy.fixed != nil {
+		fixed := *policy.fixed
+		cloned.fixed = &fixed
+	}
+	if policy.selector != nil {
+		selector := *policy.selector
+		cloned.selector = &selector
+	}
 	return cloned
 }
 

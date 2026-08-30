@@ -74,6 +74,64 @@ func TestCodeLibraryPublishesImmutableTransformRevisions(t *testing.T) {
 	assertTransformRevision(t, historical, 1, "request.headers['x-revision'] = 'one';")
 }
 
+func TestCodeLibraryPublishesImmutableAccountSelectorRevisions(t *testing.T) {
+	t.Parallel()
+	runtime := startRuntime(t)
+	defer shutdownRuntime(t, runtime)
+	application, err := desktopcontrol.New(desktopcontrol.Options{
+		Readiness: readyState(true), Status: runtime, Environments: runtime.Environments(),
+		Assignments: runtime.CaptureAssignments(), Activities: runtime.Activities(), Contents: runtime.ExchangeContents(),
+		Connections: runtime.ConnectionEvents(), Egress: runtime.EgressAttempts(),
+		Approvals: runtime.ToolApprovals(), Endpoints: runtime.UpstreamEndpoints(), Accounts: runtime.ProviderAccounts(),
+		CodeLibrary: runtime.CodeLibrary(), Offline: runtime, Clock: desktopcontrol.SystemClock{},
+		ManualCaptures: runtime.ManualCaptures(),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	created := environmentRequest(t, application, http.MethodPost,
+		"/api/v1/code-library/collections", 0, "create-selector-collection-0001",
+		[]byte(`{"id":"routing","displayName":"Routing"}`))
+	if created.Code != http.StatusCreated {
+		t.Fatalf("create collection status=%d body=%s", created.Code, created.Body.Bytes())
+	}
+	first := environmentRequest(t, application, http.MethodPut,
+		"/api/v1/code-library/account-selectors/workspace", 0, "publish-selector-0001",
+		[]byte(`{
+			"collectionId":"routing",
+			"displayName":"Workspace",
+			"policy":{"javaScript":"selection.accountId = accounts[0].id;"}
+		}`))
+	assertAccountSelectorRevision(t, first, 1, "selection.accountId = accounts[0].id;")
+	second := environmentRequest(t, application, http.MethodPut,
+		"/api/v1/code-library/account-selectors/workspace", 1, "publish-selector-0002",
+		[]byte(`{
+			"collectionId":"routing",
+			"displayName":"Workspace",
+			"policy":{"javaScript":"selection.accountId = accounts[accounts.length - 1].id;"}
+		}`))
+	assertAccountSelectorRevision(t, second, 2,
+		"selection.accountId = accounts[accounts.length - 1].id;")
+
+	catalog := environmentRequest(t, application, http.MethodGet, "/api/v1/code-library", 0, "", nil)
+	var listed struct {
+		AccountSelectors []struct {
+			ID       string `json:"id"`
+			Revision uint64 `json:"revision"`
+		} `json:"accountSelectors"`
+	}
+	if catalog.Code != http.StatusOK || json.Unmarshal(catalog.Body.Bytes(), &listed) != nil ||
+		len(listed.AccountSelectors) != 1 || listed.AccountSelectors[0].ID != "workspace" ||
+		listed.AccountSelectors[0].Revision != 2 {
+		t.Fatalf("catalog status=%d value=%+v body=%s", catalog.Code, listed, catalog.Body.Bytes())
+	}
+
+	historical := environmentRequest(t, application, http.MethodGet,
+		"/api/v1/code-library/account-selectors/workspace/revisions/1", 0, "", nil)
+	assertAccountSelectorRevision(t, historical, 1, "selection.accountId = accounts[0].id;")
+}
+
 func assertTransformRevision(t *testing.T, response interface {
 	Result() *http.Response
 }, wantRevision uint64, wantRequestJavaScript string) {
@@ -94,5 +152,29 @@ func assertTransformRevision(t *testing.T, response interface {
 	if err := json.NewDecoder(httpResponse.Body).Decode(&revision); err != nil ||
 		revision.Revision != wantRevision || revision.Policy.RequestJavaScript != wantRequestJavaScript {
 		t.Fatalf("Transform=%+v want revision=%d request=%q err=%v", revision, wantRevision, wantRequestJavaScript, err)
+	}
+}
+
+func assertAccountSelectorRevision(t *testing.T, response interface {
+	Result() *http.Response
+}, wantRevision uint64, wantJavaScript string) {
+	t.Helper()
+	httpResponse := response.Result()
+	defer httpResponse.Body.Close()
+	if httpResponse.StatusCode != http.StatusOK {
+		var body any
+		_ = json.NewDecoder(httpResponse.Body).Decode(&body)
+		t.Fatalf("Account Selector status=%d body=%v", httpResponse.StatusCode, body)
+	}
+	var revision struct {
+		Revision uint64 `json:"revision"`
+		Policy   struct {
+			JavaScript string `json:"javaScript"`
+		} `json:"policy"`
+	}
+	if err := json.NewDecoder(httpResponse.Body).Decode(&revision); err != nil ||
+		revision.Revision != wantRevision || revision.Policy.JavaScript != wantJavaScript {
+		t.Fatalf("Account Selector=%+v want revision=%d JavaScript=%q err=%v",
+			revision, wantRevision, wantJavaScript, err)
 	}
 }

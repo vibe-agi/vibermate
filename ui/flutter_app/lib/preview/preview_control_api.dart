@@ -144,6 +144,8 @@ final class PreviewControlApi implements ControlApi {
   final List<CodeLibraryCollection> _codeLibraryCollections = [];
   final Map<String, List<CodeLibraryTransformRevision>> _codeLibraryRevisions =
       {};
+  final Map<String, List<CodeLibraryAccountSelectorRevision>>
+  _accountSelectorRevisions = {};
   final Map<String, List<EgressProfileRevision>> _egressProfileRevisions = {
     EgressProfileRevision.direct.id: [EgressProfileRevision.direct],
   };
@@ -608,12 +610,9 @@ final class PreviewControlApi implements ControlApi {
     final endpoint = _endpoints.firstWhere(
       (candidate) => candidate.id == endpointId,
     );
-    final accountRevisions = <String, int>{
-      for (final accountId in accountIds)
-        accountId: _accounts
-            .firstWhere((candidate) => candidate.id == accountId)
-            .revision,
-    };
+    final account = _accounts.firstWhere(
+      (candidate) => candidate.id == accountIds.first,
+    );
     return EnvironmentRoute(
       id: id,
       revision: 1,
@@ -627,10 +626,16 @@ final class PreviewControlApi implements ControlApi {
       backendProtocol: protocol,
       accountPolicy: RouteAccountPolicy(
         revision: 1,
-        preferredAccountId: accountIds.first,
-        candidateAccountIds: accountIds,
-        accountRevisions: accountRevisions,
-        failoverPolicy: accountIds.length > 1 ? 'account_scoped_safe' : 'off',
+        mode: 'fixed',
+        fixedAccountId: account.id,
+        selector: null,
+        accounts: [
+          RouteAccountReference(
+            id: account.id,
+            revision: account.revision,
+            displayName: account.displayName,
+          ),
+        ],
       ),
       modelPolicy: const EnvironmentModelPolicy(
         revision: 1,
@@ -894,12 +899,30 @@ final class PreviewControlApi implements ControlApi {
   }
 
   @override
+  Future<AccountSelectorTestResult> testAccountSelector({
+    required AccountSelectorPolicy policy,
+    required AccountSelectorTestSample sample,
+  }) async {
+    _requireOpen();
+    throw const ControlProblem(
+      status: 501,
+      reasonCode: 'account_selector_test_unavailable',
+      messageKey: 'error.account_selector_test_unavailable',
+    );
+  }
+
+  @override
   Future<CodeLibraryCatalog> codeLibrary() async {
     _requireOpen();
     return CodeLibraryCatalog(
       collections: List.unmodifiable(_codeLibraryCollections),
       transforms: List.unmodifiable(
         _codeLibraryRevisions.values
+            .where((revisions) => revisions.isNotEmpty)
+            .map((revisions) => revisions.last),
+      ),
+      accountSelectors: List.unmodifiable(
+        _accountSelectorRevisions.values
             .where((revisions) => revisions.isNotEmpty)
             .map((revisions) => revisions.last),
       ),
@@ -968,6 +991,60 @@ final class PreviewControlApi implements ControlApi {
   ) async {
     _requireOpen();
     final match = _codeLibraryRevisions[id]
+        ?.where((item) => item.revision == revision)
+        .firstOrNull;
+    if (match == null) {
+      throw const ControlProblem(
+        status: 404,
+        reasonCode: 'code_library_not_found',
+        messageKey: 'error.code_library_not_found',
+      );
+    }
+    return match;
+  }
+
+  @override
+  Future<CodeLibraryAccountSelectorRevision> publishCodeLibraryAccountSelector({
+    required String id,
+    required int expectedRevision,
+    required String collectionId,
+    required String displayName,
+    required AccountSelectorPolicy policy,
+  }) async {
+    _requireOpen();
+    final revisions =
+        _accountSelectorRevisions[id] ??
+        const <CodeLibraryAccountSelectorRevision>[];
+    final currentRevision = revisions.lastOrNull?.revision ?? 0;
+    if (currentRevision != expectedRevision ||
+        !_codeLibraryCollections.any((item) => item.id == collectionId)) {
+      throw const ControlProblem(
+        status: 409,
+        reasonCode: 'code_library_conflict',
+        messageKey: 'error.code_library_conflict',
+      );
+    }
+    final revision = CodeLibraryAccountSelectorRevision.fromJson({
+      'id': id,
+      'revision': currentRevision + 1,
+      'collectionId': collectionId,
+      'displayName': displayName,
+      'policy': policy.toJson(),
+      'publishedAt': _now
+          .add(Duration(seconds: currentRevision + 1))
+          .toIso8601String(),
+    }, 'codeLibraryAccountSelector');
+    _accountSelectorRevisions[id] = [...revisions, revision];
+    return revision;
+  }
+
+  @override
+  Future<CodeLibraryAccountSelectorRevision> codeLibraryAccountSelectorRevision(
+    String id,
+    int revision,
+  ) async {
+    _requireOpen();
+    final match = _accountSelectorRevisions[id]
         ?.where((item) => item.revision == revision)
         .firstOrNull;
     if (match == null) {
@@ -1577,7 +1654,9 @@ final class PreviewControlApi implements ControlApi {
     final references = <ProviderAccountReference>[];
     for (final environment in _environments) {
       for (final route in environment.routes) {
-        if (route.accountPolicy.candidateAccountIds.contains(account.id)) {
+        if (route.accountPolicy.accounts.any(
+          (reference) => reference.id == account.id,
+        )) {
           references.add(
             ProviderAccountReference(
               environmentId: environment.id,
@@ -1969,7 +2048,7 @@ final class PreviewControlApi implements ControlApi {
         : _accounts
               .where(
                 (candidate) =>
-                    candidate.id == route.accountPolicy.preferredAccountId,
+                    candidate.id == route.accountPolicy.fixedAccountId,
               )
               .firstOrNull;
     final count = capture.id == 'run-1' ? 224 : 24;

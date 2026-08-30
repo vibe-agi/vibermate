@@ -57,8 +57,16 @@ The exact Header deletions and assignments applied to every Endpoint request aut
 _Avoid_: Custom auth, request script, Endpoint headers
 
 **Upstream Route**:
-An explicit destination through one Upstream Endpoint, one backend protocol, and one Account owned by that Endpoint. A Route may contain exact Model Mappings.
+An explicit destination through one Upstream Endpoint, one backend protocol, and one Account Selection Policy. A Route may contain exact Model Mappings.
 _Avoid_: Endpoint, Client Flow, inferred provider
+
+**Account Selection Policy**:
+The closed choice on one Upstream Route between one fixed Account and one published Account Selector. Every selectable Account belongs to that Route's Upstream Endpoint and is frozen with the Environment revision.
+_Avoid_: Failover, credential rotation, global account switch
+
+**Account Selector**:
+A published fail-closed JavaScript decision that selects exactly one Account from the frozen Account Set of one Upstream Route for one Turn. It cannot observe credentials, alter traffic, change Endpoint, retry another Account, or retain state across Turns.
+_Avoid_: Transform Policy, load balancer, fallback
 
 **Traffic Path**:
 One Client Flow resolved to either its Original Destination or one selected Upstream Route. Egress and Transform Policies attach to this exact path rather than to a provider name or Runtime Server.

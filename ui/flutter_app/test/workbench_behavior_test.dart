@@ -160,6 +160,60 @@ void main() {
     expect(find.text('Account two'), findsOneWidget);
   });
 
+  testWidgets('desktop select popup keeps its dark surface and text contrast', (
+    tester,
+  ) async {
+    await tester.pumpWidget(
+      MaterialApp(
+        theme: ViberTheme.dark(),
+        home: Scaffold(
+          body: Center(
+            child: SizedBox(
+              width: 260,
+              child: CompactSelectField<String>(
+                initialValue: 'fixed',
+                items: const [
+                  DropdownMenuItem(
+                    value: 'fixed',
+                    child: Text('Fixed account'),
+                  ),
+                  DropdownMenuItem(
+                    value: 'javascript',
+                    child: Text('JavaScript selector'),
+                  ),
+                ],
+                onChanged: (_) {},
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    final field = find.byType(CompactSelectField<String>);
+    final colors = ViberColors.dark;
+    final anchor = tester.widget<MenuAnchor>(
+      find.descendant(of: field, matching: find.byType(MenuAnchor)),
+    );
+    expect(anchor.style?.backgroundColor?.resolve({}), colors.panel);
+
+    await tester.tap(field);
+    await tester.pumpAndSettle();
+    final rows = find.byType(MenuItemButton);
+    expect(rows, findsNWidgets(2));
+    for (var index = 0; index < 2; index += 1) {
+      expect(
+        tester
+            .widget<MenuItemButton>(rows.at(index))
+            .style
+            ?.foregroundColor
+            ?.resolve({}),
+        colors.text,
+      );
+    }
+  });
+
   testWidgets('desktop text and select fields share one compact metric', (
     tester,
   ) async {
@@ -1287,7 +1341,10 @@ void main() {
 
       final action = find.byKey(const Key('capture-environment-apply-latest'));
       expect(action, findsOneWidget);
-      expect(find.text('Started r7 · using r7 · published r8'), findsOneWidget);
+      expect(
+        find.textContaining('Started r7 · using r7 · published r8'),
+        findsOneWidget,
+      );
 
       await tester.tap(action);
       await tester.pumpAndSettle();
@@ -1295,7 +1352,7 @@ void main() {
       expect(action, findsNothing);
       expect(controller.selectedAssignment?.launchEnvironmentRevision, 7);
       expect(controller.selectedAssignment?.environmentRevision, 8);
-      expect(find.text('Started r7 · using r8'), findsOneWidget);
+      expect(find.textContaining('Started r7 · using r8'), findsOneWidget);
       expect(tester.takeException(), isNull);
       await tester.pumpWidget(const SizedBox.shrink());
       controller.dispose();
@@ -2733,7 +2790,9 @@ void main() {
       await tester.pumpAndSettle();
 
       final accountField = find.byKey(
-        const Key('environment-route-account-anthropic-direct-anthropic-work'),
+        const Key(
+          'environment-route-account-anthropic-direct-fixed:anthropic-work',
+        ),
       );
       final accountDropdown = tester.widget<CompactSelectField<String>>(
         accountField,
@@ -2741,9 +2800,12 @@ void main() {
       final accountIds = accountDropdown.items
           .map((item) => item.value)
           .toList(growable: false);
-      expect(accountIds, containsAll(['anthropic-work', 'anthropic-lab']));
-      expect(accountIds, isNot(contains('orbit-team')));
-      expect(accountIds, isNot(contains('openai-work')));
+      expect(
+        accountIds,
+        containsAll(['fixed:anthropic-work', 'fixed:anthropic-lab']),
+      );
+      expect(accountIds, isNot(contains('fixed:orbit-team')));
+      expect(accountIds, isNot(contains('fixed:openai-work')));
       final accountMenu = tester.widget<MenuAnchor>(
         find.descendant(of: accountField, matching: find.byType(MenuAnchor)),
       );
@@ -2864,7 +2926,7 @@ void main() {
       await tester.pumpAndSettle();
       await tester.tap(accountField);
       await tester.pumpAndSettle();
-      await tester.tap(find.text('Anthropic · Lab').last);
+      await tester.tap(find.textContaining('Anthropic · Lab').last);
       await tester.pumpAndSettle();
 
       await tester.tap(find.byKey(const Key('environment-review')));
@@ -3351,6 +3413,197 @@ void main() {
     await tester.pump();
   });
 
+  testWidgets(
+    'Environment publishes and reopens one frozen Account Selector revision',
+    (tester) async {
+      await tester.binding.setSurfaceSize(const Size(390, 760));
+      addTearDown(() => tester.binding.setSurfaceSize(null));
+      final api = PreviewControlApi();
+      await api.createCodeLibraryCollection(
+        id: 'routing',
+        displayName: 'Routing',
+      );
+      final revision = await api.publishCodeLibraryAccountSelector(
+        id: 'selector.workspace',
+        expectedRevision: 0,
+        collectionId: 'routing',
+        displayName: 'Workspace account',
+        policy: const AccountSelectorPolicy(
+          javaScript: 'selection.accountId = accounts[0].id;',
+        ),
+      );
+      final controller = WorkbenchController(
+        api: api,
+        terminalCommands: PreviewTerminalCommandService(),
+        previewMode: true,
+        closeRuntime: api.close,
+        initialPreferences: const WorkbenchPreferences(
+          section: WorkbenchSection.environments,
+          language: AppLanguage.english,
+        ),
+      );
+      await controller.initialize();
+      await tester.pumpWidget(
+        MaterialApp(
+          theme: ViberTheme.light(),
+          home: WorkbenchShell(controller: controller),
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      await tester.tap(find.byKey(const Key('environment-create')));
+      await tester.pumpAndSettle();
+      final clientFlow = find.byKey(
+        const Key('environment-client-plan-target'),
+      );
+      await tester.ensureVisible(clientFlow);
+      await tester.tap(clientFlow);
+      await tester.pumpAndSettle();
+      await tester.tap(
+        find.byKey(
+          const Key(
+            'environment-client-plan-option-anthropic_messages-https://api.anthropic.com',
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+      final destination = find.byKey(const Key('environment-destination-kind'));
+      await tester.ensureVisible(destination);
+      await tester.tap(
+        find.descendant(of: destination, matching: find.text('Upstream')),
+      );
+      await tester.pumpAndSettle();
+      final endpointCatalog = find.byKey(
+        const Key('environment-endpoint-catalog'),
+      );
+      await tester.ensureVisible(endpointCatalog);
+      await tester.tap(endpointCatalog);
+      await tester.pumpAndSettle();
+      await tester.tap(find.textContaining('Anthropic API').last);
+      await tester.pumpAndSettle();
+      final initialAccount = find.byKey(
+        const Key('environment-endpoint-account-target.anthropic.official'),
+      );
+      await tester.ensureVisible(initialAccount);
+      expect(find.text('Account selection'), findsOneWidget);
+      expect(
+        find.text('Published JavaScript selectors: 1. Open to choose.'),
+        findsOneWidget,
+      );
+      final initialDropdown = tester.widget<CompactSelectField<String>>(
+        initialAccount,
+      );
+      expect(
+        initialDropdown.items.map((item) => item.value),
+        contains('javascript:selector.workspace:1'),
+      );
+      await tester.tap(initialAccount);
+      await tester.pumpAndSettle();
+      await tester.tap(
+        find.text('JavaScript selector · Workspace account · r1').last,
+      );
+      await tester.pumpAndSettle();
+      await tester.tap(find.byKey(const Key('environment-add-endpoint')));
+      await tester.pumpAndSettle();
+      expect(
+        find.text('Runs once per Turn against 2 frozen Endpoint Accounts.'),
+        findsOneWidget,
+      );
+      await tester.tap(find.text('Cancel').last);
+      await tester.pumpAndSettle();
+
+      await tester.tap(find.byKey(const Key('environment-row-work')));
+      await tester.pumpAndSettle();
+      await tester.tap(find.byKey(const Key('environment-edit')));
+      await tester.pumpAndSettle();
+      final fixed = find.byKey(
+        const Key(
+          'environment-route-account-anthropic-direct-fixed:anthropic-work',
+        ),
+      );
+      await tester.ensureVisible(fixed);
+      await tester.tap(fixed);
+      await tester.pumpAndSettle();
+      await tester.tap(
+        find.text('JavaScript selector · Workspace account · r1').last,
+      );
+      await tester.pumpAndSettle();
+      expect(
+        find.byKey(
+          const Key(
+            'environment-route-account-anthropic-direct-javascript:selector.workspace:1',
+          ),
+        ),
+        findsOneWidget,
+      );
+      expect(
+        find.text('Runs once per Turn against 2 frozen Endpoint Accounts.'),
+        findsOneWidget,
+      );
+
+      await api.publishCodeLibraryAccountSelector(
+        id: revision.id,
+        expectedRevision: revision.revision,
+        collectionId: revision.collectionId,
+        displayName: revision.displayName,
+        policy: const AccountSelectorPolicy(
+          javaScript: 'selection.accountId = accounts[accounts.length - 1].id;',
+        ),
+      );
+      await tester.ensureVisible(find.byKey(const Key('environment-review')));
+      await tester.tap(find.byKey(const Key('environment-review')));
+      await tester.pumpAndSettle();
+      await tester.tap(find.byKey(const Key('environment-publish')));
+      await tester.pumpAndSettle();
+      await tester.tap(find.byKey(const Key('environment-edit')));
+      await tester.pumpAndSettle();
+      final reopened = find.byKey(
+        const Key(
+          'environment-route-account-anthropic-direct-javascript:selector.workspace:1',
+        ),
+      );
+      await tester.ensureVisible(reopened);
+      expect(reopened, findsOneWidget);
+      expect(
+        find.descendant(
+          of: reopened,
+          matching: find.textContaining('Workspace account · r1'),
+        ),
+        findsOneWidget,
+      );
+      await tester.tap(find.text('Cancel').last);
+      await tester.binding.setSurfaceSize(const Size(1180, 760));
+      controller.selectSection(WorkbenchSection.captures);
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('Claude Code').first);
+      await tester.pumpAndSettle();
+      expect(controller.selectedCapture?.managedRun?.executableLabel, 'claude');
+      expect(controller.selectedAssignment?.environmentId, 'work');
+      await tester.tap(
+        find.byKey(const Key('capture-environment-apply-latest')),
+      );
+      await tester.pumpAndSettle();
+      expect(controller.selectedAssignment?.environmentRevision, 8);
+      expect(
+        controller.data?.environments
+            .singleWhere((environment) => environment.id == 'work')
+            .routes
+            .singleWhere((route) => route.id == 'anthropic-direct')
+            .accountPolicy
+            .mode,
+        'javascript',
+      );
+      expect(
+        find.textContaining('JavaScript selector · Workspace account · r1'),
+        findsWidgets,
+      );
+      expect(tester.takeException(), isNull);
+      controller.dispose();
+      await tester.pumpWidget(const SizedBox.shrink());
+      await tester.pump();
+    },
+  );
+
   testWidgets('390px launch environment overlay survives publish and reopen', (
     tester,
   ) async {
@@ -3707,7 +3960,19 @@ void main() {
       find.text('Orbit Relay · Tokyo · https://tokyo.orbitrelay.example').last,
     );
     await tester.pumpAndSettle();
-    await tester.tap(find.byKey(const Key('environment-add-endpoint')));
+    final firstAdd = find.byKey(const Key('environment-add-endpoint'));
+    expect(
+      tester
+          .widget<CompactSelectField<String>>(
+            find.byKey(
+              const Key('environment-endpoint-account-target.orbit.relay'),
+            ),
+          )
+          .initialValue,
+      'fixed:orbit-team',
+    );
+    expect(tester.widget<OutlinedButton>(firstAdd).onPressed, isNotNull);
+    await tester.tap(firstAdd);
     await tester.pumpAndSettle();
 
     await tester.tap(clientFlow);
@@ -3861,7 +4126,7 @@ void main() {
       );
       expect(
         relayDropdown.items.map((item) => item.value),
-        orderedEquals(['orbit-team']),
+        orderedEquals(['fixed:orbit-team']),
       );
       await tester.tap(find.byKey(const Key('environment-add-endpoint')));
       await tester.pumpAndSettle();
@@ -3924,13 +4189,16 @@ void main() {
       final accountIds = accountDropdown.items
           .map((item) => item.value)
           .toList(growable: false);
-      expect(accountIds, containsAll(['anthropic-work', 'anthropic-lab']));
-      expect(accountIds, isNot(contains('openai-work')));
-      expect(accountIds, isNot(contains('orbit-team')));
+      expect(
+        accountIds,
+        containsAll(['fixed:anthropic-work', 'fixed:anthropic-lab']),
+      );
+      expect(accountIds, isNot(contains('fixed:openai-work')));
+      expect(accountIds, isNot(contains('fixed:orbit-team')));
 
       await tester.tap(accountField);
       await tester.pumpAndSettle();
-      await tester.tap(find.text('Anthropic · Work').last);
+      await tester.tap(find.textContaining('Anthropic · Work').last);
       await tester.pumpAndSettle();
 
       // A catalog choice is still pending until it is added to the draft.
@@ -3949,7 +4217,7 @@ void main() {
         find.byKey(const Key('environment-endpoint-pending-error')),
         findsNothing,
       );
-      expect(find.text('Anthropic · Work'), findsWidgets);
+      expect(find.textContaining('Anthropic · Work'), findsWidgets);
 
       await tester.tap(find.byKey(const Key('environment-review')));
       await tester.pumpAndSettle();
@@ -3963,7 +4231,7 @@ void main() {
 
       await tester.tap(find.byKey(const Key('environment-edit')));
       await tester.pumpAndSettle();
-      expect(find.text('Anthropic · Work'), findsWidgets);
+      expect(find.textContaining('Anthropic · Work'), findsWidgets);
       expect(tester.takeException(), isNull);
 
       await tester.pumpWidget(const SizedBox.shrink());

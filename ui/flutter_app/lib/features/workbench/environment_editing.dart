@@ -74,14 +74,15 @@ bool upstreamEndpointCanUseClientCredential(UpstreamEndpoint endpoint) {
 }
 
 /// Adds one upstream Endpoint as a frozen Route without changing an existing
-/// plan's default Route. Every Upstream Route requires one ready Account owned
-/// by that exact Endpoint; Original Destination is a separate plan choice.
+/// plan's default Route. Its fixed Account or frozen selector authority may
+/// contain only ready Accounts owned by that exact Endpoint.
 List<EnvironmentClientEndpoint> appendEnvironmentUpstreamEndpoint({
   required List<EnvironmentClientEndpoint> endpoints,
   String? clientEndpointId,
   String? protocolPlanId,
   required UpstreamEndpoint upstreamEndpoint,
-  required ProviderAccount account,
+  required RouteAccountPolicy accountPolicy,
+  required List<ProviderAccount> availableAccounts,
   String? clientProtocol,
   Uri? clientOrigin,
   required String identityNonce,
@@ -107,13 +108,12 @@ List<EnvironmentClientEndpoint> appendEnvironmentUpstreamEndpoint({
       'Only active upstream Endpoints can be added',
     );
   }
-  if (account.upstreamEndpointId != upstreamEndpoint.id || !account.usable) {
-    throw ArgumentError.value(
-      account.id,
-      'account',
-      'Account is not a ready child of the selected upstream Endpoint',
-    );
-  }
+  _validateRouteAccountPolicy(
+    policy: accountPolicy,
+    endpointId: upstreamEndpoint.id,
+    availableAccounts: availableAccounts,
+  );
+  final initialAccountPolicy = accountPolicy.copyWith(revision: 1);
 
   if (clientEndpointId != null && protocolPlanId != null) {
     final clientEndpoint = endpoints
@@ -164,7 +164,7 @@ List<EnvironmentClientEndpoint> appendEnvironmentUpstreamEndpoint({
       route: _upstreamRoute(
         upstreamEndpoint,
         backendProtocol,
-        account,
+        initialAccountPolicy,
         identityNonce,
       ),
     );
@@ -184,7 +184,7 @@ List<EnvironmentClientEndpoint> appendEnvironmentUpstreamEndpoint({
   final route = _upstreamRoute(
     upstreamEndpoint,
     protocol,
-    account,
+    initialAccountPolicy,
     identityNonce,
   );
   final endpointIndex = endpoints.indexWhere(
@@ -478,7 +478,7 @@ EnvironmentProtocolPlan _protocolPlanFor(
 EnvironmentRoute _upstreamRoute(
   UpstreamEndpoint upstream,
   String protocol,
-  ProviderAccount account,
+  RouteAccountPolicy accountPolicy,
   String identityNonce,
 ) {
   final token = _stableResourceToken('${upstream.id}:$identityNonce');
@@ -493,7 +493,7 @@ EnvironmentRoute _upstreamRoute(
       capabilities: upstream.capabilities,
     ),
     backendProtocol: protocol,
-    accountPolicy: _accountPolicy(account),
+    accountPolicy: accountPolicy,
     modelPolicy: const EnvironmentModelPolicy(
       revision: 1,
       mode: 'passthrough',
@@ -504,13 +504,19 @@ EnvironmentRoute _upstreamRoute(
   );
 }
 
-RouteAccountPolicy _accountPolicy(ProviderAccount account) =>
+RouteAccountPolicy fixedRouteAccountPolicy(ProviderAccount account) =>
     RouteAccountPolicy(
       revision: 1,
-      preferredAccountId: account.id,
-      candidateAccountIds: [account.id],
-      accountRevisions: {account.id: account.revision},
-      failoverPolicy: 'off',
+      mode: 'fixed',
+      fixedAccountId: account.id,
+      selector: null,
+      accounts: [
+        RouteAccountReference(
+          id: account.id,
+          revision: account.revision,
+          displayName: account.displayName,
+        ),
+      ],
     );
 
 String _stableResourceToken(String value) {
@@ -747,6 +753,25 @@ List<EnvironmentClientEndpoint> assignEnvironmentRouteAccount({
   required String protocolPlanId,
   required String routeId,
   required ProviderAccount account,
+}) => assignEnvironmentRouteAccountPolicy(
+  endpoints: endpoints,
+  clientEndpointId: clientEndpointId,
+  protocolPlanId: protocolPlanId,
+  routeId: routeId,
+  policy: fixedRouteAccountPolicy(account),
+  availableAccounts: [account],
+);
+
+/// Rebinds one Route to either a fixed Account or one immutable JavaScript
+/// selector revision. Every selector-visible Account must be a ready child of
+/// that exact Endpoint; the server repeats this check before saving the draft.
+List<EnvironmentClientEndpoint> assignEnvironmentRouteAccountPolicy({
+  required List<EnvironmentClientEndpoint> endpoints,
+  required String clientEndpointId,
+  required String protocolPlanId,
+  required String routeId,
+  required RouteAccountPolicy policy,
+  required List<ProviderAccount> availableAccounts,
 }) {
   var found = false;
   var changed = false;
@@ -765,20 +790,13 @@ List<EnvironmentClientEndpoint> assignEnvironmentRouteAccount({
               if (routeIndex < 0) return plan;
               found = true;
               final route = upstream.routes[routeIndex];
-              if (account.upstreamEndpointId != route.endpointId ||
-                  !account.usable) {
-                throw ArgumentError.value(
-                  account.id,
-                  'account',
-                  'Account is not a ready child of Route Endpoint ${route.endpointId}',
-                );
-              }
-              final desiredPolicy = RouteAccountPolicy(
+              _validateRouteAccountPolicy(
+                policy: policy,
+                endpointId: route.endpointId,
+                availableAccounts: availableAccounts,
+              );
+              final desiredPolicy = policy.copyWith(
                 revision: route.accountPolicy.revision,
-                preferredAccountId: account.id,
-                candidateAccountIds: [account.id],
-                accountRevisions: {account.id: account.revision},
-                failoverPolicy: 'off',
               );
               if (_sameAccountPolicy(route.accountPolicy, desiredPolicy)) {
                 return plan;
@@ -832,6 +850,43 @@ List<EnvironmentClientEndpoint> assignEnvironmentRouteAccount({
     );
   }
   return changed ? List.unmodifiable(nextEndpoints) : endpoints;
+}
+
+void _validateRouteAccountPolicy({
+  required RouteAccountPolicy policy,
+  required String endpointId,
+  required List<ProviderAccount> availableAccounts,
+}) {
+  final ids = policy.accounts.map((account) => account.id).toSet();
+  final fixed =
+      policy.mode == 'fixed' &&
+      policy.fixedAccountId.isNotEmpty &&
+      policy.selector == null &&
+      policy.accounts.length == 1 &&
+      policy.accounts.single.id == policy.fixedAccountId;
+  final scripted =
+      policy.mode == 'javascript' &&
+      policy.fixedAccountId.isEmpty &&
+      policy.selector != null &&
+      policy.accounts.isNotEmpty;
+  final validAccounts = policy.accounts.every((reference) {
+    final account = availableAccounts
+        .where((candidate) => candidate.id == reference.id)
+        .firstOrNull;
+    return account != null &&
+        account.revision == reference.revision &&
+        account.upstreamEndpointId == endpointId &&
+        account.usable;
+  });
+  if ((!fixed && !scripted) ||
+      ids.length != policy.accounts.length ||
+      !validAccounts) {
+    throw ArgumentError.value(
+      policy.accounts.map((account) => account.id).toList(),
+      'policy',
+      'Account authority contains an Account that is not a ready child of Route Endpoint $endpointId',
+    );
+  }
 }
 
 /// Replaces the exact request-model to upstream-model mappings for one Route.
@@ -1232,10 +1287,13 @@ bool _sameJson(Map<String, Object?> left, Map<String, Object?> right) =>
     jsonEncode(left) == jsonEncode(right);
 
 bool _sameAccountPolicy(RouteAccountPolicy left, RouteAccountPolicy right) =>
-    left.preferredAccountId == right.preferredAccountId &&
-    left.failoverPolicy == right.failoverPolicy &&
-    _sameStrings(left.candidateAccountIds, right.candidateAccountIds) &&
-    _sameRevisions(left.accountRevisions, right.accountRevisions);
+    left.mode == right.mode &&
+    left.fixedAccountId == right.fixedAccountId &&
+    left.selector == right.selector &&
+    left.accounts.length == right.accounts.length &&
+    left.accounts.indexed.every(
+      (entry) => entry.$2 == right.accounts[entry.$1],
+    );
 
 bool _sameStrings(List<String> left, List<String> right) =>
     left.length == right.length &&
@@ -1247,7 +1305,3 @@ bool _sameTransformRevisions(
 ) =>
     left.length == right.length &&
     left.indexed.every((entry) => entry.$2 == right[entry.$1]);
-
-bool _sameRevisions(Map<String, int> left, Map<String, int> right) =>
-    left.length == right.length &&
-    left.entries.every((entry) => right[entry.key] == entry.value);

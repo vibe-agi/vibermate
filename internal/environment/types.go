@@ -136,11 +136,11 @@ const (
 	DestinationKindUpstream DestinationKind = "upstream"
 )
 
-type FailoverPolicy string
+type AccountSelectionMode string
 
 const (
-	FailoverOff               FailoverPolicy = "off"
-	FailoverAccountScopedSafe FailoverPolicy = "account_scoped_safe"
+	AccountSelectionFixed      AccountSelectionMode = "fixed"
+	AccountSelectionJavaScript AccountSelectionMode = "javascript"
 )
 
 // ContentRecordingMode controls the separate conversation-evidence plane.
@@ -314,11 +314,17 @@ type UpstreamRoute struct {
 }
 
 type RouteAccountPolicy struct {
-	Revision            Revision            `json:"revision"`
-	PreferredAccountID  string              `json:"preferredAccountId"`
-	CandidateAccountIDs []string            `json:"candidateAccountIds"`
-	AccountRevisions    map[string]Revision `json:"accountRevisions"`
-	FailoverPolicy      FailoverPolicy      `json:"failoverPolicy"`
+	Revision       Revision                             `json:"revision"`
+	Mode           AccountSelectionMode                 `json:"mode"`
+	FixedAccountID string                               `json:"fixedAccountId,omitempty"`
+	Selector       *codelibrary.AccountSelectorRevision `json:"selector,omitempty"`
+	Accounts       []RouteAccountReference              `json:"accounts"`
+}
+
+type RouteAccountReference struct {
+	ID          string   `json:"id"`
+	Revision    Revision `json:"revision"`
+	DisplayName string   `json:"displayName"`
 }
 
 // The first slice keeps these lower-level policies typed without assigning
@@ -391,6 +397,7 @@ func (policy ModelPolicy) ResolveMapping(requested string) (string, bool) {
 type AccountDescriptor struct {
 	ID                       string
 	Revision                 Revision
+	DisplayName              string
 	UpstreamEndpointID       string
 	UpstreamEndpointRevision Revision
 	RealmID                  string

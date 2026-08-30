@@ -1133,8 +1133,8 @@ void main() {
         work.routes.map((route) => route.id),
       );
       expect(
-        decoded.routes.first.accountPolicy.accountRevisions,
-        work.routes.first.accountPolicy.accountRevisions,
+        decoded.routes.first.accountPolicy.accounts,
+        work.routes.first.accountPolicy.accounts,
       );
       expect(
         decoded.clientEndpoints.first.protocolPlans.first.egressProfile,
@@ -1336,6 +1336,44 @@ void main() {
     );
   });
 
+  test('Account Selector revision and Route authority round-trip', () {
+    final selector = CodeLibraryAccountSelectorRevision.fromJson({
+      'id': 'workspace-account',
+      'revision': 3,
+      'collectionId': 'routing',
+      'displayName': 'Workspace account',
+      'policy': {'javaScript': 'selection.accountId = accounts[0].id;'},
+      'publishedAt': '2026-08-28T10:11:12.123Z',
+    }, 'selector');
+    final policy = RouteAccountPolicy.fromJson({
+      'revision': 4,
+      'mode': 'javascript',
+      'selector': selector.toJson(),
+      'accounts': [
+        {'id': 'account.work', 'revision': 2, 'displayName': 'Work'},
+      ],
+    }, 'accountPolicy');
+
+    expect(selector.policy.javaScript, contains('accounts[0]'));
+    expect(policy.mode, 'javascript');
+    expect(policy.selector, selector);
+    expect(policy.accounts.single.id, 'account.work');
+    expect(
+      RouteAccountPolicy.fromJson(
+        jsonDecode(jsonEncode(policy.toJson())),
+        'accountPolicy',
+      ),
+      policy,
+    );
+    expect(
+      () => RouteAccountPolicy.fromJson({
+        ...policy.toJson(),
+        'fixedAccountId': 'account.work',
+      }, 'accountPolicy'),
+      throwsA(isA<ControlContractException>()),
+    );
+  });
+
   test(
     'Environment rejects mutable or cross-shaped Account authority',
     () async {
@@ -1354,8 +1392,8 @@ void main() {
       final upstreamPlan = destination['upstream'] as Map;
       final route = (upstreamPlan['routes'] as List).first as Map;
       final accountPolicy = route['accountPolicy'] as Map;
-      final revisions = accountPolicy['accountRevisions'] as Map;
-      revisions.remove('anthropic-lab');
+      final accounts = accountPolicy['accounts'] as List;
+      accounts.clear();
 
       expect(
         () => EnvironmentRecord.fromJson(json, 'environment'),

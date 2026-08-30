@@ -587,19 +587,28 @@ final class _CompactSelectFieldState<T> extends State<CompactSelectField<T>> {
             return MenuAnchor(
               crossAxisUnconstrained: false,
               alignmentOffset: const Offset(0, ViberSpacing.xs),
-              style: menuWidth == null
-                  ? null
-                  : MenuStyle(
-                      minimumSize: WidgetStatePropertyAll(Size(menuWidth, 0)),
-                      maximumSize: WidgetStatePropertyAll(
-                        Size(menuWidth, menuHeight),
-                      ),
-                    ),
+              style: MenuStyle(
+                backgroundColor: WidgetStatePropertyAll(
+                  context.viberColors.panel,
+                ),
+                surfaceTintColor: const WidgetStatePropertyAll(
+                  Colors.transparent,
+                ),
+                minimumSize: menuWidth == null
+                    ? null
+                    : WidgetStatePropertyAll(Size(menuWidth, 0)),
+                maximumSize: menuWidth == null
+                    ? null
+                    : WidgetStatePropertyAll(Size(menuWidth, menuHeight)),
+              ),
               menuChildren: [
                 for (final item in widget.items)
                   MenuItemButton(
                     key: item.key,
                     style: ButtonStyle(
+                      foregroundColor: WidgetStatePropertyAll(
+                        context.viberColors.text,
+                      ),
                       minimumSize: WidgetStatePropertyAll(
                         Size(0, widget.menuItemHeight),
                       ),

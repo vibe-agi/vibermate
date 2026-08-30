@@ -135,6 +135,7 @@ func (account Account) Descriptor(
 ) environment.AccountDescriptor {
 	return environment.AccountDescriptor{
 		ID: account.ID.String(), Revision: environment.Revision(account.Revision),
+		DisplayName:              account.DisplayName,
 		UpstreamEndpointID:       account.UpstreamEndpointID.String(),
 		UpstreamEndpointRevision: environment.Revision(endpoint.Revision),
 		RealmID:                  account.RealmID, Active: account.State == StateActive && endpoint.State == upstreamendpoint.StateActive,

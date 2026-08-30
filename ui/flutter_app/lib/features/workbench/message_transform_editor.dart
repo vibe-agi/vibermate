@@ -445,8 +445,8 @@ final class _MessageTransformEditorDialogState
     extends State<MessageTransformEditorDialog>
     with SingleTickerProviderStateMixin {
   late final TabController _tabs;
-  late final _JavaScriptEditingController _request;
-  late final _JavaScriptEditingController _response;
+  late final JavaScriptEditingController _request;
+  late final JavaScriptEditingController _response;
   late String _wireProtocol;
   late MessageTransformTestSample? _sample;
   final Map<String, MessageTransformTestSample?> _samplesByProtocol = {};
@@ -460,10 +460,10 @@ final class _MessageTransformEditorDialogState
   void initState() {
     super.initState();
     _tabs = TabController(length: 2, vsync: this);
-    _request = _JavaScriptEditingController(
+    _request = JavaScriptEditingController(
       text: widget.initial.requestJavaScript,
     );
-    _response = _JavaScriptEditingController(
+    _response = JavaScriptEditingController(
       text: widget.initial.responseJavaScript,
     );
     _wireProtocol = widget.wireProtocol;
@@ -1120,7 +1120,7 @@ final class _ScriptPane extends StatefulWidget {
 
   final String planId;
   final String stage;
-  final _JavaScriptEditingController controller;
+  final JavaScriptEditingController controller;
   final AppCopy copy;
   final List<String> suggestions;
 
@@ -1482,11 +1482,11 @@ String _protocolLabel(AppCopy copy, String protocol) => switch (protocol) {
   _ => protocol,
 };
 
-final class _JavaScriptEditingController extends TextEditingController {
-  _JavaScriptEditingController({super.text});
+final class JavaScriptEditingController extends TextEditingController {
+  JavaScriptEditingController({super.text});
 
   static final _tokens = RegExp(
-    r'''//[^\n]*|/\*[\s\S]*?\*/|"(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'|`(?:\\.|[^`\\])*`|\b(?:const|let|var|if|else|for|while|return|throw|new|delete|true|false|null|undefined)\b|\b(?:request|response|context|runtime|JSON)\b''',
+    r'''//[^\n]*|/\*[\s\S]*?\*/|"(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'|`(?:\\.|[^`\\])*`|\b(?:const|let|var|if|else|for|while|return|throw|new|delete|true|false|null|undefined)\b|\b(?:request|response|context|runtime|accounts|selection|JSON)\b''',
     multiLine: true,
   );
 
@@ -1539,6 +1539,8 @@ final class _JavaScriptEditingController extends TextEditingController {
               'response',
               'context',
               'runtime',
+              'accounts',
+              'selection',
               'JSON',
             }.contains(token)
           ? TextStyle(color: palette.route, fontWeight: FontWeight.w600)

@@ -43,6 +43,7 @@ const (
 	ReasonInvalidExchangeRequest        ReasonCode = "invalid_exchange_request"
 	ReasonUnsupportedClientInput        ReasonCode = "unsupported_client_input"
 	ReasonEnvironmentPlanInvalid        ReasonCode = "environment_plan_invalid"
+	ReasonAccountSelectorFailed         ReasonCode = "account_selector_failed"
 	ReasonOfflineHoldUnavailable        ReasonCode = "offline_hold_unavailable"
 	ReasonProviderRequestInvalid        ReasonCode = "provider_request_invalid"
 	ReasonMessageTransformFailed        ReasonCode = "message_transform_failed"

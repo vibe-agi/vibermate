@@ -165,8 +165,9 @@ func TestAcceptanceManagedEnvironmentFreezesOneReadyAnthropicAccount(t *testing.
 	configured.claudePath = "/fixed/claude"
 	account := desktopcontrol.ProviderAccountResponse{
 		ID: acceptanceManagedAccountID, DisplayName: "Anthropic acceptance",
-		Kind:    desktopcontrol.ProviderAccountKindAnthropicAPIKey,
-		RealmID: "anthropic.official", State: provideraccount.StateActive,
+		UpstreamEndpointID: "acceptance.target",
+		Kind:               desktopcontrol.ProviderAccountKindAnthropicAPIKey,
+		RealmID:            "anthropic.official", State: provideraccount.StateActive,
 		Revision: 1, CredentialState: provideraccount.HealthReady,
 		CredentialEpoch: 1,
 	}
@@ -179,11 +180,12 @@ func TestAcceptanceManagedEnvironmentFreezesOneReadyAnthropicAccount(t *testing.
 		t.Fatalf("managed Environment Destination = %+v", plan.Destination)
 	}
 	route := plan.Destination.Upstream.Routes[0]
-	if route.AccountPolicy.PreferredAccountID != account.ID ||
-		len(route.AccountPolicy.CandidateAccountIDs) != 1 ||
-		route.AccountPolicy.CandidateAccountIDs[0] != account.ID ||
-		route.AccountPolicy.AccountRevisions[account.ID] != 1 ||
-		route.AccountPolicy.FailoverPolicy != environment.FailoverOff {
+	if route.AccountPolicy.Mode != environment.AccountSelectionFixed ||
+		route.AccountPolicy.FixedAccountID != account.ID ||
+		len(route.AccountPolicy.Accounts) != 1 ||
+		route.AccountPolicy.Accounts[0].ID != account.ID ||
+		route.AccountPolicy.Accounts[0].Revision != 1 ||
+		route.AccountPolicy.Accounts[0].DisplayName != account.DisplayName {
 		t.Fatalf("managed Environment = %+v", aggregate)
 	}
 }

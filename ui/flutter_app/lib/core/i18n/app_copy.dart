@@ -486,13 +486,23 @@ final class AppCopy {
     'environment.launch.value': 'Value',
     'environment.launch.validation':
         'Use a unique environment variable name that is not runtime-owned.',
-    'environment.account': 'Route Account',
+    'environment.account': 'Account selection',
     'environment.account.owner':
         'Only Accounts under this Endpoint are listed.',
     'environment.account.client': 'Use client credential · same Endpoint',
     'environment.account.none': 'No ready Account on this Endpoint.',
     'environment.account.unavailable': 'unavailable',
     'environment.account.no_candidate': 'No candidate Account',
+    'environment.account.fixed': 'Fixed Account',
+    'environment.account.javascript': 'JavaScript selector',
+    'environment.account.selector_scope':
+        'Runs once per Turn against {count} frozen Endpoint Accounts.',
+    'environment.account.selector_available':
+        'Published JavaScript selectors: {count}. Open to choose.',
+    'environment.account.selector_load_failed':
+        'Published Account Selectors could not be loaded.',
+    'environment.account.selector_none':
+        'No published JavaScript selector; create one in Code Library.',
     'environment.egress.label': 'Network path',
     'environment.egress.detail':
         'Applies only to this client flow and its AI Endpoint connections.',
@@ -587,10 +597,36 @@ final class AppCopy {
     'environment.transform.sample.save': 'Use sample',
     'code_library.title': 'Code Library',
     'code_library.subtitle':
-        'Publish immutable request and response transforms, then compose them in Environments.',
+        'Publish message transforms and Account decisions, then compose them in Environments.',
+    'code_library.default_collection': 'My code',
     'code_library.collection': 'Collection',
     'code_library.collection.create': 'New collection',
     'code_library.transform.create': 'New transform',
+    'code_library.selector.create': 'New Account Selector',
+    'code_library.kind.transforms': 'Message transforms',
+    'code_library.kind.account_selectors': 'Account Selectors',
+    'code_library.selector.empty': 'No Account Selectors yet',
+    'code_library.selector.empty.detail':
+        'Publish one selector, then choose its revision on an Environment Route.',
+    'code_library.selector.starters.title': 'Choose an Account with code',
+    'code_library.selector.starters.detail':
+        'Start with a visible JavaScript example. A Route freezes the published revision and only the Accounts from its Endpoint.',
+    'code_library.selector.starter.firstAvailable': 'Use first Account',
+    'code_library.selector.starter.firstAvailable.detail':
+        'Select the first frozen Account. Useful as the smallest editable starting point.',
+    'code_library.selector.starter.workspace': 'Choose by Workspace',
+    'code_library.selector.starter.workspace.detail':
+        'Map an exact Workspace label to an exact Account ID; fail when no mapping exists.',
+    'code_library.selector.starter.user': 'Choose by Runtime User',
+    'code_library.selector.starter.user.detail':
+        'Map the authenticated Runtime User name to an exact Account ID.',
+    'code_library.selector.starter.model': 'Choose by requested model',
+    'code_library.selector.starter.model.detail':
+        'Map the exact requested model string to an exact Account ID without inferring a provider.',
+    'code_library.selector.select': 'Select an Account Selector',
+    'code_library.selector.select.detail':
+        'The current immutable revision and its exact decision code appear here.',
+    'code_library.selector.source': 'Account decision',
     'code_library.name': 'Name',
     'code_library.starter': 'Start from',
     'code_library.starter.protocol': 'Starter protocol',
@@ -611,7 +647,7 @@ final class AppCopy {
         'Append explicit guidance to this protocol\'s system or developer instructions.',
     'code_library.empty': 'No code yet',
     'code_library.empty.detail':
-        'Create one collection, then publish a transform.',
+        'Publish a transform or Account Selector from an example.',
     'code_library.select': 'Select a transform',
     'code_library.select.detail':
         'The current published revision and both stages appear here.',
@@ -623,6 +659,25 @@ final class AppCopy {
     'code_library.sample.captured':
         'Local sample from {exchange} · {protocol}. Edit before testing; raw evidence is unchanged.',
     'code_library.sample.clear': 'Discard local sample',
+    'account_selector.editor.title': 'Account Selector',
+    'account_selector.editor.subtitle':
+        'Choose one frozen Endpoint Account for each Turn.',
+    'account_selector.editor.scope':
+        'Read-only request, runtime, and Account metadata · one exact Account ID · fail closed',
+    'account_selector.editor.detail':
+        'Set selection.accountId to exactly one ID from accounts.',
+    'account_selector.editor.sandbox':
+        'No credentials, message mutation, network, files, clock, or random source',
+    'account_selector.sample.title': 'Sample Turn',
+    'account_selector.sample.detail':
+        'Edit local metadata and verify the exact selected Account before publishing.',
+    'account_selector.sample.accounts': 'Account IDs · comma-separated',
+    'account_selector.sample.user': 'Runtime user',
+    'account_selector.sample.workspace': 'Workspace label',
+    'account_selector.sample.model': 'Requested model',
+    'account_selector.sample.protocol': 'Client protocol',
+    'account_selector.test.run': 'Run sample Turn',
+    'account_selector.test.selected': 'Selected {account}',
     'environment.model.label': 'Model mappings',
     'environment.model.passthrough': 'Keep request models',
     'environment.model.passthrough.detail':
@@ -1733,12 +1788,21 @@ final class AppCopy {
     'environment.launch.name': '变量名',
     'environment.launch.value': '值',
     'environment.launch.validation': '请输入唯一且不由运行时保留的环境变量名。',
-    'environment.account': 'Route 账号',
+    'environment.account': '账号选择方式',
     'environment.account.owner': '这里只列出属于该 Endpoint 的账号。',
     'environment.account.client': '使用客户端凭据 · 仅限同一 Endpoint',
     'environment.account.none': '该 Endpoint 下没有可用账号。',
     'environment.account.unavailable': '不可用',
     'environment.account.no_candidate': '没有候选账号',
+    'environment.account.fixed': '固定账号',
+    'environment.account.javascript': 'JavaScript 选择器',
+    'environment.account.selector_scope':
+        '每个 Turn 执行一次，仅可选择当前 Endpoint 冻结的 {count} 个账号。',
+    'environment.account.selector_available':
+        '已有 {count} 个已发布的 JavaScript 选择器；展开即可切换。',
+    'environment.account.selector_load_failed': '无法读取已发布的 Account Selector。',
+    'environment.account.selector_none':
+        '尚未发布 JavaScript 选择器；可在 Code Library 创建。',
     'environment.egress.label': '网络出口',
     'environment.egress.detail': '仅作用于这条客户端流量及其 AI Endpoint 连接。',
     'environment.egress.profile.title': '选择网络出口',
@@ -1816,10 +1880,35 @@ final class AppCopy {
     'environment.transform.sample.invalid': '请输入合法且有界的 Header、Body 与响应状态码。',
     'environment.transform.sample.save': '使用样本',
     'code_library.title': 'Code Library',
-    'code_library.subtitle': '发布不可变的请求与响应变换，再由 Environment 按顺序组合。',
+    'code_library.subtitle': '发布消息变换与账号决策，再由 Environment 组合使用。',
+    'code_library.default_collection': '我的代码',
     'code_library.collection': '集合',
     'code_library.collection.create': '新建集合',
     'code_library.transform.create': '新建变换',
+    'code_library.selector.create': '新建账号选择器',
+    'code_library.kind.transforms': '消息变换',
+    'code_library.kind.account_selectors': '账号选择器',
+    'code_library.selector.empty': '还没有账号选择器',
+    'code_library.selector.empty.detail':
+        '发布一个选择器后，即可在 Environment Route 上选择其修订。',
+    'code_library.selector.starters.title': '用代码选择账号',
+    'code_library.selector.starters.detail':
+        '从可见的 JavaScript 示例开始；Route 会冻结发布修订，且脚本只能看到该 Endpoint 的账号。',
+    'code_library.selector.starter.firstAvailable': '使用第一个账号',
+    'code_library.selector.starter.firstAvailable.detail':
+        '选择冻结列表中的第一个账号，适合作为最小的可编辑起点。',
+    'code_library.selector.starter.workspace': '按 Workspace 选择',
+    'code_library.selector.starter.workspace.detail':
+        '把精确的 Workspace 名称映射到精确账号 ID；没有匹配就失败。',
+    'code_library.selector.starter.user': '按 Runtime User 选择',
+    'code_library.selector.starter.user.detail':
+        '把已登录的 Runtime User 名称映射到精确账号 ID。',
+    'code_library.selector.starter.model': '按请求模型选择',
+    'code_library.selector.starter.model.detail':
+        '把精确的请求模型字符串映射到精确账号 ID，不推断供应商。',
+    'code_library.selector.select': '选择一个账号选择器',
+    'code_library.selector.select.detail': '这里显示当前不可变修订及其精确决策代码。',
+    'code_library.selector.source': '账号决策',
     'code_library.name': '名称',
     'code_library.starter': '起始示例',
     'code_library.starter.protocol': '示例适用协议',
@@ -1837,7 +1926,7 @@ final class AppCopy {
         '加入带签名的 Turn 时间；ViberMate 会在下一次请求前自动移除。',
     'code_library.starter.system_prompt.detail': '向当前协议的系统或开发者指令追加明确要求。',
     'code_library.empty': '还没有代码',
-    'code_library.empty.detail': '先创建一个集合，再发布变换。',
+    'code_library.empty.detail': '从示例发布消息变换或账号选择器。',
     'code_library.select': '选择一个变换',
     'code_library.select.detail': '这里显示当前已发布修订及请求、响应两个阶段。',
     'code_library.test_protocol': '测试格式',
@@ -1848,6 +1937,21 @@ final class AppCopy {
     'code_library.sample.captured':
         '本地样本来自 {exchange} · {protocol}。测试前可编辑；原始证据保持不变。',
     'code_library.sample.clear': '丢弃本地样本',
+    'account_selector.editor.title': '账号选择器',
+    'account_selector.editor.subtitle': '每个 Turn 从冻结的 Endpoint 账号中选择一个。',
+    'account_selector.editor.scope': '只读请求、运行时与账号元数据 · 返回一个精确账号 ID · 失败即停止',
+    'account_selector.editor.detail':
+        '将 selection.accountId 设为 accounts 中的一个精确 ID。',
+    'account_selector.editor.sandbox': '不暴露凭据，不修改消息，也无网络、文件、时钟或随机源',
+    'account_selector.sample.title': '样例 Turn',
+    'account_selector.sample.detail': '发布前编辑本地元数据，并验证实际选中的账号。',
+    'account_selector.sample.accounts': '账号 ID · 逗号分隔',
+    'account_selector.sample.user': '运行用户',
+    'account_selector.sample.workspace': 'Workspace 名称',
+    'account_selector.sample.model': '请求模型',
+    'account_selector.sample.protocol': '客户端协议',
+    'account_selector.test.run': '运行样例 Turn',
+    'account_selector.test.selected': '已选择 {account}',
     'environment.model.label': '模型映射',
     'environment.model.passthrough': '保持请求模型',
     'environment.model.passthrough.detail': '未匹配的模型 ID 原样转发。',

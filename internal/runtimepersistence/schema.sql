@@ -186,6 +186,26 @@ CREATE TABLE code_library_transform_revisions(
   published_at_unix_ms INTEGER NOT NULL,
   PRIMARY KEY(transform_id, revision)
 ) STRICT;
+CREATE TABLE code_library_account_selector_heads(
+  selector_id TEXT PRIMARY KEY NOT NULL
+  CHECK(length(CAST(selector_id AS BLOB)) BETWEEN 1 AND 128),
+  current_revision INTEGER NOT NULL
+  CHECK(current_revision BETWEEN 0 AND 9223372036854775807)
+) STRICT;
+CREATE TABLE code_library_account_selector_revisions(
+  selector_id TEXT NOT NULL
+  REFERENCES code_library_account_selector_heads(selector_id),
+  revision INTEGER NOT NULL
+  CHECK(revision BETWEEN 1 AND 9223372036854775807),
+  collection_id TEXT NOT NULL
+  REFERENCES code_library_collections(collection_id),
+  display_name TEXT NOT NULL
+  CHECK(length(CAST(display_name AS BLOB)) BETWEEN 1 AND 256),
+  javascript TEXT NOT NULL
+  CHECK(length(CAST(javascript AS BLOB)) BETWEEN 1 AND 65536),
+  published_at_unix_ms INTEGER NOT NULL,
+  PRIMARY KEY(selector_id, revision)
+) STRICT;
 CREATE TABLE egress_profile_heads(
   egress_id TEXT PRIMARY KEY NOT NULL
   CHECK(length(CAST(egress_id AS BLOB)) BETWEEN 1 AND 128),

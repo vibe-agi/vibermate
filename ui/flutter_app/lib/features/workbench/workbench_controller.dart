@@ -249,6 +249,11 @@ final class WorkbenchController extends ChangeNotifier {
     sample: sample,
   );
 
+  Future<AccountSelectorTestResult> testAccountSelector({
+    required AccountSelectorPolicy policy,
+    required AccountSelectorTestSample sample,
+  }) => _api.testAccountSelector(policy: policy, sample: sample);
+
   Future<CodeLibraryCatalog> codeLibrary() => _api.codeLibrary();
 
   Future<CodeLibraryCollection> createCodeLibraryCollection({
@@ -277,6 +282,32 @@ final class WorkbenchController extends ChangeNotifier {
     required String displayName,
     required TrafficTransformPolicy policy,
   }) => _api.publishCodeLibraryTransform(
+    id: id,
+    expectedRevision: expectedRevision,
+    collectionId: collectionId,
+    displayName: displayName,
+    policy: policy,
+  );
+
+  Future<CodeLibraryAccountSelectorRevision> createCodeLibraryAccountSelector({
+    required String collectionId,
+    required String displayName,
+    required AccountSelectorPolicy policy,
+  }) => _api.publishCodeLibraryAccountSelector(
+    id: 'selector.custom.${_newUuid()}',
+    expectedRevision: 0,
+    collectionId: collectionId,
+    displayName: displayName,
+    policy: policy,
+  );
+
+  Future<CodeLibraryAccountSelectorRevision> publishCodeLibraryAccountSelector({
+    required String id,
+    required int expectedRevision,
+    required String collectionId,
+    required String displayName,
+    required AccountSelectorPolicy policy,
+  }) => _api.publishCodeLibraryAccountSelector(
     id: id,
     expectedRevision: expectedRevision,
     collectionId: collectionId,
