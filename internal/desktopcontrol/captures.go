@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/vibe-agi/vibermate/internal/captureassignment"
+	"github.com/vibe-agi/vibermate/internal/capturecontrol"
 	"github.com/vibe-agi/vibermate/internal/captureidentity"
 	"github.com/vibe-agi/vibermate/internal/capturerun"
 	"github.com/vibe-agi/vibermate/internal/environment"
@@ -52,20 +53,21 @@ type CaptureResponse struct {
 }
 
 type ManagedRunResponse struct {
-	ExecutableLabel             string     `json:"executableLabel"`
-	CWD                         string     `json:"cwd"`
-	CanonicalExecutablePath     string     `json:"canonicalExecutablePath"`
-	LocalUserLabel              string     `json:"localUserLabel,omitempty"`
-	MachineID                   string     `json:"machineId,omitempty"`
-	MachineRegistrationRevision uint64     `json:"machineRegistrationRevision,omitempty"`
-	WorkspaceID                 string     `json:"workspaceId,omitempty"`
-	WorkspaceLabel              string     `json:"workspaceLabel,omitempty"`
-	WorkspaceEvidence           string     `json:"workspaceEvidence,omitempty"`
-	WorkspaceDerivationRevision uint64     `json:"workspaceDerivationRevision,omitempty"`
-	ProcessID                   int        `json:"processId,omitempty"`
-	Recognition                 string     `json:"recognition"`
-	ExpiresAt                   time.Time  `json:"expiresAt"`
-	FirstObservedAt             *time.Time `json:"firstObservedAt,omitempty"`
+	ExecutableLabel             string                            `json:"executableLabel"`
+	CWD                         string                            `json:"cwd"`
+	CanonicalExecutablePath     string                            `json:"canonicalExecutablePath"`
+	LocalUserLabel              string                            `json:"localUserLabel,omitempty"`
+	MachineID                   string                            `json:"machineId,omitempty"`
+	MachineRegistrationRevision uint64                            `json:"machineRegistrationRevision,omitempty"`
+	WorkspaceID                 string                            `json:"workspaceId,omitempty"`
+	WorkspaceLabel              string                            `json:"workspaceLabel,omitempty"`
+	WorkspaceEvidence           string                            `json:"workspaceEvidence,omitempty"`
+	WorkspaceDerivationRevision uint64                            `json:"workspaceDerivationRevision,omitempty"`
+	ProcessID                   int                               `json:"processId,omitempty"`
+	Recognition                 string                            `json:"recognition"`
+	ClientAdapter               *capturecontrol.ClientAdapterView `json:"clientAdapter,omitempty"`
+	ExpiresAt                   time.Time                         `json:"expiresAt"`
+	FirstObservedAt             *time.Time                        `json:"firstObservedAt,omitempty"`
 }
 
 type ManualCaptureResponse struct {
@@ -92,6 +94,7 @@ type CaptureAssignmentResponse struct {
 
 func captureRunResponseOf(view capturerun.View) CaptureResponse {
 	reference, _ := captureidentity.New(captureidentity.KindManagedRun, view.ID)
+	adapter := capturecontrol.CaptureRunViewOf(view).ClientAdapter
 	var firstObserved *time.Time
 	if !view.FirstObservedAt.IsZero() {
 		value := view.FirstObservedAt
@@ -110,7 +113,7 @@ func captureRunResponseOf(view capturerun.View) CaptureResponse {
 			WorkspaceEvidence:           string(view.WorkspaceEvidence),
 			WorkspaceDerivationRevision: view.WorkspaceDerivationRevision,
 			ProcessID:                   view.ProcessID, Recognition: string(capturerun.NormalizedRecognition(view.Recognition)),
-			ExpiresAt: view.ExpiresAt, FirstObservedAt: firstObserved,
+			ClientAdapter: adapter, ExpiresAt: view.ExpiresAt, FirstObservedAt: firstObserved,
 		},
 	}
 }

@@ -150,6 +150,29 @@ func TestCompileRejectsInvalidPolicyAndExecutionStopsWithRequestContext(t *testi
 	}
 }
 
+func TestExecutionStopsAtTheProgramLimitWithoutACallerDeadline(t *testing.T) {
+	t.Parallel()
+
+	limits := DefaultLimits()
+	limits.MaximumExecutionDuration = 10 * time.Millisecond
+	program, err := Compile(Policy{RequestJavaScript: `for (;;) {}`}, limits)
+	if err != nil {
+		t.Fatalf("Compile(infinite loop) error = %v", err)
+	}
+	started := time.Now()
+	_, err = program.NewTurn().ApplyRequest(context.Background(), RequestMessage{
+		Method: http.MethodPost, Path: "/v1/messages",
+		Headers: http.Header{"Content-Type": {"application/json"}},
+		Body:    []byte(`{}`),
+	})
+	if !errors.Is(err, ErrExecutionFailed) {
+		t.Fatalf("ApplyRequest(infinite loop) error = %v, want ErrExecutionFailed", err)
+	}
+	if elapsed := time.Since(started); elapsed >= time.Second {
+		t.Fatalf("ApplyRequest(infinite loop) elapsed = %v, want bounded execution", elapsed)
+	}
+}
+
 func TestPipelineTurnExposesOneTrustedRuntimeSnapshotToBothStages(t *testing.T) {
 	t.Parallel()
 

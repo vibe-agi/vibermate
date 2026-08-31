@@ -1,3 +1,5 @@
+import 'dart:convert';
+
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -398,7 +400,7 @@ void main() {
     );
     await tester.pumpAndSettle();
 
-    expect(find.bySemanticsLabel(RegExp(r'^Captures\s+⌘1$')), findsOneWidget);
+    expect(find.bySemanticsLabel(RegExp(r'^Traffic\s+⌘1$')), findsOneWidget);
     expect(
       find.bySemanticsLabel(RegExp(r'^Hold network · Online$')),
       findsOneWidget,
@@ -418,7 +420,7 @@ void main() {
     expect(restingSide?.color, ViberColors.light.divider);
 
     await tester.sendKeyDownEvent(LogicalKeyboardKey.metaLeft);
-    await tester.sendKeyEvent(LogicalKeyboardKey.digit2);
+    await tester.sendKeyEvent(LogicalKeyboardKey.digit3);
     await tester.sendKeyUpEvent(LogicalKeyboardKey.metaLeft);
     await tester.pumpAndSettle();
     // Retiring Conversations moved every later section up one slot.
@@ -478,6 +480,70 @@ void main() {
       find.bySemanticsLabel(RegExp(r'^Hold network · Online$')),
       findsOneWidget,
     );
+    await tester.pumpWidget(const SizedBox.shrink());
+    await tester.pump();
+  });
+
+  testWidgets('workbench navigation is grouped into three user task areas', (
+    tester,
+  ) async {
+    await tester.binding.setSurfaceSize(const Size(1180, 760));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+    final api = PreviewControlApi();
+    final controller = WorkbenchController(
+      api: api,
+      terminalCommands: PreviewTerminalCommandService(),
+      previewMode: false,
+      serverManagement: true,
+      terminalManagement: false,
+      runtimeTarget: 'server.local:9666',
+      closeRuntime: api.close,
+    );
+    addTearDown(controller.dispose);
+    await controller.initialize();
+    await tester.pumpWidget(
+      MaterialApp(
+        theme: ViberTheme.light(),
+        home: WorkbenchShell(controller: controller),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    expect(find.byKey(const Key('workbench-area-traffic')), findsOneWidget);
+    expect(find.byKey(const Key('workbench-area-insights')), findsOneWidget);
+    expect(
+      find.byKey(const Key('workbench-area-configuration')),
+      findsOneWidget,
+    );
+    expect(find.byKey(const Key('workbench-tab-captures')), findsOneWidget);
+    expect(find.byKey(const Key('workbench-tab-network')), findsOneWidget);
+    expect(find.byKey(const Key('workbench-tab-environments')), findsNothing);
+
+    await tester.tap(find.byKey(const Key('workbench-area-configuration')));
+    await tester.pumpAndSettle();
+
+    expect(find.byKey(const Key('workbench-tab-environments')), findsOneWidget);
+    expect(find.byKey(const Key('workbench-tab-routes')), findsOneWidget);
+    expect(find.byKey(const Key('workbench-tab-code-library')), findsOneWidget);
+    expect(find.byKey(const Key('workbench-settings-nav')), findsOneWidget);
+    expect(find.byKey(const Key('workbench-tab-captures')), findsNothing);
+
+    await tester.tap(find.byKey(const Key('workbench-settings-nav')));
+    await tester.pumpAndSettle();
+
+    expect(find.byKey(const Key('workbench-tab-environments')), findsNothing);
+    expect(find.byKey(const Key('workbench-tab-routes')), findsNothing);
+    expect(find.byKey(const Key('workbench-tab-code-library')), findsNothing);
+
+    await tester.tap(find.byKey(const Key('workbench-area-configuration')));
+    await tester.pumpAndSettle();
+
+    expect(find.byKey(const Key('workbench-tab-environments')), findsOneWidget);
+    expect(find.byKey(const Key('workbench-tab-routes')), findsOneWidget);
+    expect(find.byKey(const Key('workbench-tab-code-library')), findsOneWidget);
+    expect(tester.takeException(), isNull);
+
+    controller.dispose();
     await tester.pumpWidget(const SizedBox.shrink());
     await tester.pump();
   });
@@ -708,8 +774,11 @@ void main() {
       expect(find.text(rawDiagnostic), findsNothing);
 
       final details = find.byKey(const Key('terminal-command-details-toggle'));
-      await tester.ensureVisible(details);
-      await tester.drag(find.byType(ListView).last, const Offset(0, -80));
+      await tester.scrollUntilVisible(
+        details,
+        120,
+        scrollable: find.byType(Scrollable).last,
+      );
       await tester.pumpAndSettle();
       await tester.tap(details);
       await tester.pumpAndSettle();
@@ -720,7 +789,12 @@ void main() {
       expect(find.text(rawDiagnostic), findsOneWidget);
 
       final repair = find.byKey(const Key('terminal-command-repair'));
-      await tester.ensureVisible(repair);
+      await tester.scrollUntilVisible(
+        repair,
+        -120,
+        scrollable: find.byType(Scrollable).last,
+      );
+      await tester.pumpAndSettle();
       await tester.tap(repair);
       await tester.pumpAndSettle();
       expect(find.text('修复终端命令？'), findsOneWidget);
@@ -981,7 +1055,7 @@ void main() {
 
     expect(find.byKey(const Key('usage-dashboard')), findsOneWidget);
     expect(find.text('Server'), findsOneWidget);
-    expect(find.byKey(const Key('usage-total-turns')), findsOneWidget);
+    expect(find.byKey(const Key('usage-total-api-calls')), findsOneWidget);
     expect(find.byKey(const Key('usage-active-runs')), findsOneWidget);
     expect(find.byKey(const Key('usage-input-tokens')), findsOneWidget);
     expect(find.byKey(const Key('usage-output-tokens')), findsOneWidget);
@@ -998,13 +1072,13 @@ void main() {
       lessThan(180),
       reason: 'A short heatmap should start near its weekday axis.',
     );
-    final turnsMetric = find.byKey(const Key('usage-metric-turns'));
+    final callsMetric = find.byKey(const Key('usage-metric-api-calls'));
     final tokensMetric = find.byKey(const Key('usage-metric-tokens'));
     expect(
-      tester.getSize(turnsMetric).width,
+      tester.getSize(callsMetric).width,
       tester.getSize(tokensMetric).width,
     );
-    expect(tester.getSize(turnsMetric).height, ViberMetrics.controlHeight);
+    expect(tester.getSize(callsMetric).height, ViberMetrics.controlHeight);
     expect(tester.getSize(tokensMetric).height, ViberMetrics.controlHeight);
     String cellSemantics(String date) => tester
         .widgetList<Semantics>(
@@ -1015,7 +1089,7 @@ void main() {
         )
         .map((widget) => widget.properties.label ?? '')
         .join(' ');
-    expect(cellSemantics('2026-08-24'), contains('no retained turn'));
+    expect(cellSemantics('2026-08-24'), contains('no retained API call'));
     expect(cellSemantics('2026-08-25'), contains('complete evidence'));
     await tester.tap(find.byKey(const Key('usage-metric-tokens')));
     await tester.pump();
@@ -1130,7 +1204,7 @@ void main() {
     expect(
       find.descendant(
         of: workspace,
-        matching: find.textContaining('2 Captures · 12 turns'),
+        matching: find.textContaining('2 Captures · 12 calls'),
       ),
       findsOneWidget,
     );
@@ -1241,9 +1315,8 @@ void main() {
       expect(find.byKey(const Key('conversation-load-earlier')), findsNothing);
       expect(tester.takeException(), isNull);
 
-      await tester.tap(find.byIcon(Icons.hub_outlined).first);
-      await tester.pumpAndSettle();
-      expect(find.text('Endpoints & accounts'), findsWidgets);
+      await _openUpstreamServices(tester);
+      expect(find.text('Upstream services'), findsWidgets);
       expect(find.text('Anthropic · Work'), findsOneWidget);
       expect(find.text('Orbit · Team Pool'), findsNothing);
 
@@ -1306,6 +1379,35 @@ void main() {
     );
     expect(tester.takeException(), isNull);
   });
+
+  testWidgets(
+    'Capture surfaces exact client version and compatibility evidence',
+    (tester) async {
+      await tester.binding.setSurfaceSize(const Size(1180, 760));
+      addTearDown(() => tester.binding.setSurfaceSize(null));
+      await tester.pumpWidget(
+        const ViberMateApp(previewMode: true, preferChinese: false),
+      );
+      await tester.pumpAndSettle();
+
+      final evidence = find.byKey(
+        const Key('capture-client-compatibility-managed_run:run-1'),
+      );
+      expect(evidence, findsOneWidget);
+      expect(
+        find.descendant(of: evidence, matching: find.text('2.1.220')),
+        findsOneWidget,
+      );
+      expect(
+        find.descendant(
+          of: evidence,
+          matching: find.text('Exact release verified'),
+        ),
+        findsOneWidget,
+      );
+      expect(tester.takeException(), isNull);
+    },
+  );
 
   testWidgets(
     'running Capture offers the latest published Environment for its next Turn',
@@ -1894,13 +1996,80 @@ void main() {
       await tester.tap(copySample);
       await tester.pumpAndSettle();
 
-      expect(find.text('Code Library'), findsWidgets);
+      expect(find.text('Automations'), findsWidgets);
       expect(
         find.byKey(const Key('code-library-captured-sample')),
         findsOneWidget,
       );
       expect(find.textContaining('run-1-exchange-222'), findsOneWidget);
       expect(tester.takeException(), isNull);
+    },
+  );
+
+  testWidgets(
+    'Raw evidence exports a redacted diagnostic without retained content',
+    (tester) async {
+      String? copiedDiagnostic;
+      tester.binding.defaultBinaryMessenger.setMockMethodCallHandler(
+        SystemChannels.platform,
+        (call) async {
+          if (call.method == 'Clipboard.setData') {
+            copiedDiagnostic =
+                (call.arguments as Map<Object?, Object?>)['text'] as String?;
+          }
+          return null;
+        },
+      );
+      addTearDown(
+        () => tester.binding.defaultBinaryMessenger.setMockMethodCallHandler(
+          SystemChannels.platform,
+          null,
+        ),
+      );
+      await tester.binding.setSurfaceSize(const Size(1180, 760));
+      addTearDown(() => tester.binding.setSurfaceSize(null));
+      await tester.pumpWidget(
+        const ViberMateApp(previewMode: true, preferChinese: false),
+      );
+      await tester.pumpAndSettle();
+
+      await openCaptureConversation(tester, capture: 'managed_run:run-1');
+      final turn = find.byKey(
+        const Key('conversation-turn-run-1-exchange-222'),
+      );
+      await ensureTurnVisible(tester, turn);
+      await tester.tap(turn);
+      await tester.pumpAndSettle();
+      final raw = find.byKey(const Key('exchange-raw-run-1-exchange-222'));
+      await Scrollable.ensureVisible(tester.element(raw), alignment: 0.5);
+      await tester.pumpAndSettle();
+      await tester.tap(raw);
+      await tester.pumpAndSettle();
+
+      final export = find.byKey(
+        const Key('copy-redacted-diagnostic-run-1-exchange-222'),
+      );
+      await tester.ensureVisible(export);
+      await tester.tap(export);
+      await tester.pump();
+
+      final report = jsonDecode(copiedDiagnostic!) as Map<String, Object?>;
+      expect(report['schema'], 'vibermate.redacted-diagnostic/v1');
+      expect(report['exchange'], isA<Map<String, Object?>>());
+      expect(report['rawEvidence'], isA<Map<String, Object?>>());
+      expect(copiedDiagnostic, contains('bodySha256'));
+      expect(copiedDiagnostic, isNot(contains('Authorization')));
+      expect(copiedDiagnostic, isNot(contains('Bearer')));
+      expect(
+        copiedDiagnostic,
+        isNot(contains('{"model":"claude-sonnet-4-5","stream":true}')),
+      );
+      expect(copiedDiagnostic, isNot(contains('/Users/')));
+      expect(copiedDiagnostic, isNot(contains('rawQuery')));
+      expect(tester.takeException(), isNull);
+
+      await tester.pumpWidget(const SizedBox.shrink());
+      await tester.pump();
     },
   );
 
@@ -2650,7 +2819,7 @@ void main() {
       await tester.pumpAndSettle();
       await _openNetwork(tester);
 
-      expect(find.text('网络控制'), findsOneWidget);
+      expect(find.text('连接'), findsWidgets);
       final approvalsTab = find.byKey(const Key('network-tab-approvals'));
       final approvalsLabel = find.descendant(
         of: approvalsTab,
@@ -2744,9 +2913,11 @@ void main() {
       await tester.tap(find.byKey(const Key('environment-edit')));
       await tester.pumpAndSettle();
 
+      expect(find.byKey(const Key('environment-editor-page')), findsOneWidget);
+      expect(find.byType(AlertDialog), findsNothing);
       expect(
         tester.getSize(find.byKey(const Key('environment-editor-frame'))).width,
-        ViberMetrics.dialogWideWidth,
+        greaterThan(ViberMetrics.dialogWideWidth),
       );
 
       final nameField = find.byKey(const Key('environment-editor-name'));
@@ -2910,7 +3081,10 @@ void main() {
         find.byKey(const Key('environment-editor-name')),
         'Work reviewed',
       );
-      await tester.tap(find.byKey(const Key('environment-tab-runtime')));
+      final runtimeTab = find.byKey(const Key('environment-tab-runtime'));
+      await tester.ensureVisible(runtimeTab);
+      await tester.pumpAndSettle();
+      await tester.tap(runtimeTab);
       await tester.pumpAndSettle();
       await tester.tap(find.byKey(const Key('environment-editor-tool-mode')));
       await tester.pumpAndSettle();
@@ -2920,7 +3094,10 @@ void main() {
       await tester.pumpAndSettle();
       await tester.tap(find.text('Metadata only').last);
       await tester.pumpAndSettle();
-      await tester.tap(find.byKey(const Key('environment-tab-traffic')));
+      final trafficTab = find.byKey(const Key('environment-tab-traffic'));
+      await tester.ensureVisible(trafficTab);
+      await tester.pumpAndSettle();
+      await tester.tap(trafficTab);
       await tester.pumpAndSettle();
       await tester.ensureVisible(accountField);
       await tester.pumpAndSettle();
@@ -3682,6 +3859,12 @@ void main() {
     await tester.pumpAndSettle();
     await tester.tap(find.byKey(const Key('environment-create')));
     await tester.pumpAndSettle();
+    expect(find.byKey(const Key('environment-create-page')), findsOneWidget);
+    expect(find.byType(AlertDialog), findsNothing);
+    expect(
+      tester.getSize(find.byKey(const Key('environment-create-frame'))).width,
+      greaterThan(ViberMetrics.dialogWideWidth),
+    );
     final createToolMode = find.byKey(
       const Key('environment-create-tool-mode'),
     );
@@ -3845,6 +4028,15 @@ void main() {
         ),
       ),
       findsOneWidget,
+    );
+    expect(
+      find.byKey(
+        const Key(
+          'environment-client-plan-option-openai_chat-https://api.openai.com',
+        ),
+      ),
+      findsNothing,
+      reason: 'OpenAI Chat is an upstream backend, not a proven client edge.',
     );
     await tester.tap(
       find.byKey(
@@ -4295,8 +4487,7 @@ void main() {
         const ViberMateApp(previewMode: true, preferChinese: false),
       );
       await tester.pumpAndSettle();
-      await tester.tap(find.byIcon(Icons.hub_outlined).first);
-      await tester.pumpAndSettle();
+      await _openUpstreamServices(tester);
 
       final addAccount = find.byKey(const Key('accounts-add'));
       expect(1180 - tester.getTopRight(addAccount).dx, lessThanOrEqualTo(14));
@@ -4569,8 +4760,7 @@ void main() {
       const ViberMateApp(previewMode: true, preferChinese: true),
     );
     await tester.pumpAndSettle();
-    await tester.tap(find.byIcon(Icons.hub_outlined).first);
-    await tester.pumpAndSettle();
+    await _openUpstreamServices(tester);
 
     await tester.tap(find.byKey(const Key('endpoints-add')));
     await tester.pumpAndSettle();
@@ -4670,8 +4860,7 @@ void main() {
       const ViberMateApp(previewMode: true, preferChinese: false),
     );
     await tester.pumpAndSettle();
-    await tester.tap(find.byIcon(Icons.hub_outlined).first);
-    await tester.pumpAndSettle();
+    await _openUpstreamServices(tester);
 
     await tester.tap(find.byKey(const Key('account-delete-anthropic-work')));
     await tester.pumpAndSettle();
@@ -4696,7 +4885,17 @@ void main() {
 }
 
 Future<void> _openNetwork(WidgetTester tester) async {
-  await tester.tap(find.byIcon(Icons.security_outlined));
+  await tester.tap(find.byKey(const Key('workbench-area-traffic')));
+  await tester.pumpAndSettle();
+  await tester.tap(find.byKey(const Key('workbench-tab-network')));
   await tester.pumpAndSettle();
   expect(find.byKey(const Key('network-tab-approvals')), findsOneWidget);
+}
+
+Future<void> _openUpstreamServices(WidgetTester tester) async {
+  await tester.tap(find.byKey(const Key('workbench-area-configuration')));
+  await tester.pumpAndSettle();
+  await tester.tap(find.byKey(const Key('workbench-tab-routes')));
+  await tester.pumpAndSettle();
+  expect(find.byKey(const Key('endpoints-add')), findsOneWidget);
 }

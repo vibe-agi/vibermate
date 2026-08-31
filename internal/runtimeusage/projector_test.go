@@ -57,7 +57,7 @@ func TestProjectorContinuesAfterAFullCaptureRunPage(t *testing.T) {
 	}
 }
 
-func TestProjectorKeepsAnOverflowingTokenTurnUnknown(t *testing.T) {
+func TestProjectorKeepsAnOverflowingTokenCallUnknown(t *testing.T) {
 	t.Parallel()
 	now := time.Date(2026, 8, 24, 1, 2, 3, 0, time.UTC)
 	user := runtimeuser.User{
@@ -97,8 +97,8 @@ func TestProjectorKeepsAnOverflowingTokenTurnUnknown(t *testing.T) {
 		t.Fatalf("Report() error = %v", err)
 	}
 	aggregate := report.Users[0].Tokens.Output
-	if aggregate.Tokens != math.MaxInt64 || aggregate.KnownTurns != 1 ||
-		aggregate.UnknownTurns != 1 {
+	if aggregate.Tokens != math.MaxInt64 || aggregate.KnownCalls != 1 ||
+		aggregate.UnknownCalls != 1 {
 		t.Fatalf("overflow aggregate = %#v", aggregate)
 	}
 }
@@ -153,7 +153,7 @@ func TestProjectorReportsSparseDaysWithinAnExplicitCivilWindow(t *testing.T) {
 		report.Period.TimeZone != "Asia/Singapore" {
 		t.Fatalf("period = %#v", report.Period)
 	}
-	if report.Users[0].Turns != 2 || report.Users[0].CaptureRuns != 1 ||
+	if report.Users[0].AgentAPICalls != 2 || report.Users[0].CaptureRuns != 1 ||
 		report.Users[0].Succeeded != 1 || report.Users[0].Failed != 1 {
 		t.Fatalf("windowed totals = %#v", report.Users[0])
 	}
@@ -164,10 +164,10 @@ func TestProjectorReportsSparseDaysWithinAnExplicitCivilWindow(t *testing.T) {
 	if got := usageDates(report.Users[0].Days); !slices.Equal(got, wantDates) {
 		t.Fatalf("user day dates = %v, want %v", got, wantDates)
 	}
-	if report.Days[0].Turns != 1 || report.Days[0].Tokens.Output.Tokens != 7 ||
-		report.Days[0].Tokens.Output.KnownTurns != 1 ||
-		report.Days[1].Failed != 1 || report.Days[1].ContentUnavailableTurns != 1 ||
-		report.Days[1].Tokens.Output.UnknownTurns != 1 {
+	if report.Days[0].AgentAPICalls != 1 || report.Days[0].Tokens.Output.Tokens != 7 ||
+		report.Days[0].Tokens.Output.KnownCalls != 1 ||
+		report.Days[1].Failed != 1 || report.Days[1].ContentUnavailableCalls != 1 ||
+		report.Days[1].Tokens.Output.UnknownCalls != 1 {
 		t.Fatalf("daily evidence = %#v", report.Days)
 	}
 }
@@ -231,7 +231,7 @@ func TestProjectorReadsOneWindowedExchangeStreamForAllCaptureRuns(t *testing.T) 
 		request.OccurredBefore != time.Date(2026, 8, 26, 0, 0, 0, 0, time.UTC) {
 		t.Fatalf("windowed request = %#v", request)
 	}
-	if report.Users[0].Turns != 2 || report.Users[0].CaptureRuns != 2 {
+	if report.Users[0].AgentAPICalls != 2 || report.Users[0].CaptureRuns != 2 {
 		t.Fatalf("cross-run report = %#v", report.Users[0])
 	}
 }
@@ -294,7 +294,7 @@ func TestProjectorBoundsBreakdownsWithoutChangingUserTotals(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Report() error = %v", err)
 	}
-	if report.Users[0].Turns != 51 || len(report.Users[0].Models) != 50 ||
+	if report.Users[0].AgentAPICalls != 51 || len(report.Users[0].Models) != 50 ||
 		!report.Truncated {
 		t.Fatalf("bounded report = %#v", report)
 	}
@@ -363,30 +363,30 @@ func TestProjectorAttributesExactModelsTokensAndResumedAgentSession(t *testing.T
 		t.Fatalf("users = %#v", report.Users)
 	}
 	alice := report.Users[0]
-	if alice.CaptureRuns != 2 || alice.Turns != 3 || alice.Succeeded != 2 || alice.Failed != 1 ||
-		alice.ContentUnavailableTurns != 1 || alice.ModelUnavailableTurns != 1 {
+	if alice.CaptureRuns != 2 || alice.AgentAPICalls != 3 || alice.Succeeded != 2 || alice.Failed != 1 ||
+		alice.ContentUnavailableCalls != 1 || alice.ModelUnavailableCalls != 1 {
 		t.Fatalf("alice counters = %#v", alice)
 	}
 	if len(alice.Models) != 1 || alice.Models[0].RequestedModel != "gpt-5.6-sol" ||
 		alice.Models[0].UpstreamModel != "dashscope:deepseek-v4-flash-0731" ||
-		alice.Models[0].Turns != 2 {
+		alice.Models[0].AgentAPICalls != 2 {
 		t.Fatalf("model usage = %#v", alice.Models)
 	}
-	if alice.Tokens.InputUncached.Tokens != 10 || alice.Tokens.InputUncached.KnownTurns != 1 ||
-		alice.Tokens.InputUncached.UnknownTurns != 2 {
+	if alice.Tokens.InputUncached.Tokens != 10 || alice.Tokens.InputUncached.KnownCalls != 1 ||
+		alice.Tokens.InputUncached.UnknownCalls != 2 {
 		t.Fatalf("input token usage = %#v", alice.Tokens.InputUncached)
 	}
 	if len(alice.AgentSessions) != 1 || alice.AgentSessions[0].Client != "codex" ||
 		alice.AgentSessions[0].SessionID != "01a02deb-d420-79e2-b0bc-1a9cbdaa643f" ||
-		alice.AgentSessions[0].Turns != 3 || alice.AgentSessions[0].CaptureRuns != 2 {
+		alice.AgentSessions[0].AgentAPICalls != 3 || alice.AgentSessions[0].CaptureRuns != 2 {
 		t.Fatalf("Agent Session usage = %#v", alice.AgentSessions)
 	}
 	if len(alice.Contexts) != 1 || alice.Contexts[0].DeviceName != "Linux workstation" ||
 		alice.Contexts[0].WorkspaceLabel != "repo" || alice.Contexts[0].CaptureRuns != 2 ||
-		alice.Contexts[0].Turns != 3 {
+		alice.Contexts[0].AgentAPICalls != 3 {
 		t.Fatalf("context usage = %#v", alice.Contexts)
 	}
-	if report.Users[1].Turns != 0 || len(report.Users[1].Models) != 0 {
+	if report.Users[1].AgentAPICalls != 0 || len(report.Users[1].Models) != 0 {
 		t.Fatalf("zero-use Runtime User = %#v", report.Users[1])
 	}
 }

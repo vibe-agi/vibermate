@@ -1169,7 +1169,7 @@ final class _ExchangeEvidencePanel extends StatelessWidget {
           const SizedBox(height: 3),
           _EvidenceDisclosure(detail: detail, copy: copy),
           _RawEvidenceDisclosure(
-            exchangeId: activity.id,
+            detail: detail,
             controller: controller,
             copy: copy,
           ),
@@ -1654,14 +1654,16 @@ final class _EvidenceDisclosureState extends State<_EvidenceDisclosure> {
 
 final class _RawEvidenceDisclosure extends StatefulWidget {
   const _RawEvidenceDisclosure({
-    required this.exchangeId,
+    required this.detail,
     required this.controller,
     required this.copy,
   });
 
-  final String exchangeId;
+  final ExchangeDetail detail;
   final WorkbenchController controller;
   final AppCopy copy;
+
+  String get exchangeId => detail.id;
 
   @override
   State<_RawEvidenceDisclosure> createState() => _RawEvidenceDisclosureState();
@@ -1671,6 +1673,7 @@ final class _RawEvidenceDisclosureState extends State<_RawEvidenceDisclosure> {
   bool _expanded = false;
   bool _revealing = false;
   bool _copyingSample = false;
+  bool _copiedDiagnostic = false;
   RevealedRawEvidence? _revealed;
 
   @override
@@ -1681,6 +1684,7 @@ final class _RawEvidenceDisclosureState extends State<_RawEvidenceDisclosure> {
       _expanded = false;
       _revealing = false;
       _copyingSample = false;
+      _copiedDiagnostic = false;
     }
   }
 
@@ -1727,6 +1731,13 @@ final class _RawEvidenceDisclosureState extends State<_RawEvidenceDisclosure> {
     setState(() => _copyingSample = true);
     await widget.controller.copyMessageTransformSample(widget.exchangeId);
     if (mounted) setState(() => _copyingSample = false);
+  }
+
+  Future<void> _copyDiagnostic(RawEvidencePage page) async {
+    await Clipboard.setData(
+      ClipboardData(text: _redactedDiagnosticText(widget.detail, page)),
+    );
+    if (mounted) setState(() => _copiedDiagnostic = true);
   }
 
   @override
@@ -1812,28 +1823,47 @@ final class _RawEvidenceDisclosureState extends State<_RawEvidenceDisclosure> {
         ),
       );
     }
-    if (page.items.isEmpty) {
-      return Padding(
-        padding: const EdgeInsets.only(bottom: 7),
-        child: page.writer.degraded
-            ? InlineNotice(
-                message: copy.format('exchange.raw.writer_degraded', {
-                  'count': page.writer.queueRecords,
-                }),
-                error: true,
-              )
-            : Text(
-                copy('exchange.raw.empty'),
-                style: Theme.of(context).textTheme.bodySmall,
-              ),
-      );
-    }
     final recovery = page.recovery;
     return Padding(
       padding: const EdgeInsets.only(bottom: 7),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
+          Wrap(
+            spacing: 6,
+            runSpacing: 6,
+            children: [
+              OutlinedButton.icon(
+                key: Key('copy-redacted-diagnostic-${widget.exchangeId}'),
+                onPressed: () => unawaited(_copyDiagnostic(page)),
+                icon: Icon(
+                  _copiedDiagnostic ? Icons.check : Icons.privacy_tip_outlined,
+                  size: 15,
+                ),
+                label: Text(
+                  copy(
+                    _copiedDiagnostic
+                        ? 'exchange.raw.redacted_diagnostic_copied'
+                        : 'exchange.raw.copy_redacted_diagnostic',
+                  ),
+                ),
+              ),
+              if (widget.controller.canCopyMessageTransformSample(
+                widget.exchangeId,
+              ))
+                OutlinedButton.icon(
+                  key: Key('copy-transform-sample-${widget.exchangeId}'),
+                  onPressed: _copyingSample
+                      ? null
+                      : () => unawaited(_copySample()),
+                  icon: _copyingSample
+                      ? const CompactProgressIndicator()
+                      : const Icon(Icons.science_outlined, size: 15),
+                  label: Text(copy('exchange.raw.copy_transform_sample')),
+                ),
+            ],
+          ),
+          const SizedBox(height: 6),
           if (page.writer.degraded) ...[
             Tooltip(
               message: page.writer.lastFailure ?? '',
@@ -1854,19 +1884,11 @@ final class _RawEvidenceDisclosureState extends State<_RawEvidenceDisclosure> {
             ),
             const SizedBox(height: 6),
           ],
-          if (widget.controller.canCopyMessageTransformSample(
-            widget.exchangeId,
-          )) ...[
-            OutlinedButton.icon(
-              key: Key('copy-transform-sample-${widget.exchangeId}'),
-              onPressed: _copyingSample ? null : () => unawaited(_copySample()),
-              icon: _copyingSample
-                  ? const CompactProgressIndicator()
-                  : const Icon(Icons.science_outlined, size: 15),
-              label: Text(copy('exchange.raw.copy_transform_sample')),
+          if (page.items.isEmpty)
+            Text(
+              copy('exchange.raw.empty'),
+              style: Theme.of(context).textTheme.bodySmall,
             ),
-            const SizedBox(height: 6),
-          ],
           for (final envelope in page.items) ...[
             _RawEnvelopeRow(
               envelope: envelope,
@@ -2172,6 +2194,109 @@ String _rawEvidenceClipboardText(RevealedRawEvidence value, AppCopy copy) {
   }
   return buffer.toString();
 }
+
+String _redactedDiagnosticText(ExchangeDetail detail, RawEvidencePage page) =>
+    const JsonEncoder.withIndent('  ').convert({
+      'schema': 'vibermate.redacted-diagnostic/v1',
+      'redaction': {
+        'omitted': [
+          'message content',
+          'HTTP body',
+          'HTTP header and trailer names and values',
+          'target authority, path, and query',
+          'client session, workspace, and identity attributes',
+        ],
+      },
+      'exchange': {
+        'id': detail.id,
+        'status': detail.status,
+        'environment': {
+          'id': detail.environment.id,
+          'revision': detail.environment.revision,
+          'digest': detail.environment.digest,
+          'clientEndpointId': detail.environment.clientEndpointId,
+          'clientEndpointRevision': detail.environment.clientEndpointRevision,
+          'protocolPlanId': detail.environment.protocolPlanId,
+          'protocolPlanRevision': detail.environment.protocolPlanRevision,
+          'routeId': detail.environment.routeId,
+          'routeRevision': detail.environment.routeRevision,
+          'accountId': detail.environment.accountId,
+          'accountRevision': detail.environment.accountRevision,
+          'credentialEpoch': detail.environment.credentialEpoch,
+        },
+        'diagnosis': detail.diagnosis == null
+            ? null
+            : {
+                'providerStatus': detail.diagnosis!.providerStatus,
+                'providerField': detail.diagnosis!.providerField,
+                'clientField': detail.diagnosis!.clientField,
+                'clientPath': detail.diagnosis!.clientPath,
+              },
+        'processing': {
+          'result': detail.processingTrace.result,
+          'egressProxyId': detail.processingTrace.egressProxyId,
+          'pluginRunCount': detail.processingTrace.pluginRunIds.length,
+          'attempts': [
+            for (final attempt in detail.processingTrace.attempts)
+              {
+                'sequence': attempt.sequence,
+                'id': attempt.id,
+                'purpose': attempt.purpose,
+                'payloadClass': attempt.payloadClass,
+                'caller': attempt.caller,
+                'policyId': attempt.policyId,
+                'ruleId': attempt.ruleId,
+                'proxyId': attempt.proxyId,
+                'reusedTransport': attempt.reusedTransport,
+                'startedAt': attempt.startedAt.toUtc().toIso8601String(),
+                'terminal': attempt.terminal,
+                'outcome': attempt.outcome,
+                'errorClass': attempt.errorClass,
+                'bytesOut': attempt.bytesOut,
+                'bytesIn': attempt.bytesIn,
+                'completedAt': attempt.completedAt?.toUtc().toIso8601String(),
+              },
+          ],
+        },
+      },
+      'rawEvidence': {
+        'writer': {
+          'state': page.writer.state,
+          'admittedRecords': page.writer.admittedRecords,
+          'durableWatermark': page.writer.durableWatermark,
+          'queueRecords': page.writer.queueRecords,
+          'queueBytes': page.writer.queueBytes,
+          'maximumUnflushedTimeMs': page.writer.maximumUnflushedTimeMs,
+        },
+        'recovery': {
+          'recoveredUncleanWriters': page.recovery.recoveredUncleanWriters,
+          'purgedExpiredEnvelopes': page.recovery.purgedExpiredEnvelopes,
+          'maximumPossibleLossMs': page.recovery.maximumPossibleLossMs,
+        },
+        'boundaries': [
+          for (final envelope in page.items)
+            {
+              'layer': envelope.layer,
+              'observedAt': envelope.observedAt.toUtc().toIso8601String(),
+              'method': envelope.method,
+              'statusCode': envelope.statusCode,
+              'contentType': envelope.contentType,
+              'contentEncoding': envelope.contentEncoding,
+              'representation': envelope.representation,
+              'canonicalization': envelope.canonicalization,
+              'headerCount': envelope.headerCount,
+              'trailerCount': envelope.trailerCount,
+              'redactedCredentialFieldCount':
+                  envelope.redactedCredentialFields.length,
+              'bodyBytes': envelope.bodyBytes,
+              'bodySha256': envelope.bodySha256,
+              'digestScope': envelope.digestScope,
+              'payloadState': envelope.payloadState,
+              'payloadReason': envelope.payloadReason,
+            },
+        ],
+      },
+    });
 
 ({String value, bool binary}) _rawTextBody(RevealedRawEvidence value) {
   if (value.body.isEmpty) return (value: '', binary: false);

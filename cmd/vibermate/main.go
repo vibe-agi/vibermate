@@ -31,6 +31,7 @@ const (
 	keyEnvironmentMissing         = "cli.error.environmentNotFound"
 	keyEnvironmentDown            = "cli.error.environmentUnavailable"
 	keyRemoteLoginRequired        = "cli.error.remoteLoginRequired"
+	keyRemoteRuntimeUnavailable   = "cli.error.remoteRuntimeUnavailable"
 	reasonCatalogMissing          = "locale_catalog_unavailable"
 	reasonRenderFailed            = "locale_render_unavailable"
 )
@@ -93,6 +94,30 @@ func executeContext(
 ) (int, string) {
 	if ctx == nil {
 		return 1, keyLaunchFailed
+	}
+	if len(arguments) == 1 &&
+		(arguments[0] == "help" || arguments[0] == "--help" || arguments[0] == "-h") {
+		if err := renderCLIMessage(environment, stdout, "cli.help", nil); err != nil {
+			return 1, reasonRenderFailed
+		}
+		return 0, ""
+	}
+	if len(arguments) > 0 && (arguments[0] == "status" || arguments[0] == "doctor") {
+		status, err := parseStatus(arguments)
+		if err != nil {
+			return 2, keyUsage
+		}
+		if status.server.Valid() {
+			stateDirectory, pathErr := clientpath.DefaultRemoteStateDirectory()
+			if pathErr != nil {
+				return 1, keyRuntimePath
+			}
+			return executeRemoteStatus(
+				ctx, status.doctor, environment, stdout,
+				status.server, stateDirectory, commandClock{},
+			)
+		}
+		return executeLocalStatus(ctx, status.doctor, environment, stdout)
 	}
 	if len(arguments) > 0 && arguments[0] == "capture" {
 		return executeCapture(
@@ -204,6 +229,9 @@ func launchFailureKey(err error) string {
 	}
 	if errors.Is(err, runlauncher.ErrRemoteLoginRequired) {
 		return keyRemoteLoginRequired
+	}
+	if errors.Is(err, runlauncher.ErrRemoteRuntimeUnavailable) {
+		return keyRemoteRuntimeUnavailable
 	}
 	if errors.Is(err, runlauncher.ErrEnvironmentNotFound) {
 		return keyEnvironmentMissing

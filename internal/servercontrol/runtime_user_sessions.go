@@ -16,11 +16,12 @@ import (
 )
 
 const (
-	RuntimeUserSessionPath        = "/api/v1/server/login-sessions"
-	RuntimeUserCurrentSessionPath = "/api/v1/server/login-sessions/current"
-	RuntimeUserLoginSchema        = "vibermate-runtime-user-login-v1"
-	RuntimeUserSessionSchema      = "vibermate-runtime-user-session-v1"
-	maxRuntimeUserLoginBytes      = 16 << 10
+	RuntimeUserSessionPath          = "/api/v1/server/login-sessions"
+	RuntimeUserCurrentSessionPath   = "/api/v1/server/login-sessions/current"
+	RuntimeUserLoginSchema          = "vibermate-runtime-user-login-v1"
+	RuntimeUserSessionSchema        = "vibermate-runtime-user-session-v1"
+	RuntimeUserCurrentSessionSchema = "vibermate-runtime-user-current-session-v1"
+	maxRuntimeUserLoginBytes        = 16 << 10
 )
 
 type RuntimeUserSessionsOptions struct {
@@ -40,6 +41,7 @@ type RuntimeUserSessionsHandler struct {
 // any Argon2 allocation begins.
 type RuntimeUserSessionAuthority interface {
 	Login(context.Context, runtimeuser.LoginCommand) (runtimeuser.LoginSession, error)
+	Authenticate(context.Context, string) (runtimeuser.Identity, error)
 	Logout(context.Context, string) error
 }
 
@@ -66,6 +68,16 @@ type RuntimeUserSession struct {
 	ExpiresAt    time.Time       `json:"expiresAt"`
 }
 
+type RuntimeUserCurrentSession struct {
+	Schema     string          `json:"schema"`
+	InstanceID string          `json:"instanceId"`
+	APIVersion string          `json:"apiVersion"`
+	User       RuntimeUserView `json:"user"`
+	SessionID  string          `json:"sessionId"`
+	MachineID  string          `json:"machineId"`
+	DeviceName string          `json:"deviceName"`
+}
+
 func NewRuntimeUserSessions(
 	options RuntimeUserSessionsOptions,
 ) (*RuntimeUserSessionsHandler, error) {
@@ -90,11 +102,52 @@ func (handler *RuntimeUserSessionsHandler) ServeHTTP(
 	switch {
 	case request.URL.Path == RuntimeUserSessionPath && request.Method == http.MethodPost:
 		handler.login(writer, request)
+	case request.URL.Path == RuntimeUserCurrentSessionPath && request.Method == http.MethodGet:
+		handler.current(writer, request)
 	case request.URL.Path == RuntimeUserCurrentSessionPath && request.Method == http.MethodDelete:
 		handler.logout(writer, request)
 	default:
 		writeProblem(writer, http.StatusNotFound, "server_route_not_found")
 	}
+}
+
+func (handler *RuntimeUserSessionsHandler) current(
+	writer http.ResponseWriter,
+	request *http.Request,
+) {
+	if request.Header.Get("Proxy-Authorization") != "" {
+		writeProblem(writer, http.StatusForbidden, "runtime_user_session_transport_rejected")
+		return
+	}
+	token, valid := takeRuntimeUserBearer(request)
+	if !valid {
+		writeProblem(writer, http.StatusUnauthorized, "runtime_user_session_invalid")
+		return
+	}
+	if request.Body != nil {
+		body, err := io.ReadAll(io.LimitReader(request.Body, 1))
+		if err != nil || len(body) != 0 {
+			writeProblem(writer, http.StatusUnprocessableEntity, "invalid_runtime_user_session")
+			return
+		}
+	}
+	identity, err := handler.users.Authenticate(request.Context(), token)
+	if err != nil {
+		writeProblem(writer, http.StatusUnauthorized, "runtime_user_session_invalid")
+		return
+	}
+	writer.Header().Set("Content-Type", "application/json")
+	writer.Header().Set("Cache-Control", "no-store")
+	writer.WriteHeader(http.StatusOK)
+	_ = json.NewEncoder(writer).Encode(RuntimeUserCurrentSession{
+		Schema: RuntimeUserCurrentSessionSchema, InstanceID: handler.instanceID,
+		APIVersion: "v1",
+		User: RuntimeUserView{
+			ID: string(identity.User.ID), Username: identity.User.Username,
+		},
+		SessionID: string(identity.SessionID), MachineID: identity.MachineID.String(),
+		DeviceName: identity.DeviceName,
+	})
 }
 
 func (handler *RuntimeUserSessionsHandler) login(
@@ -178,14 +231,8 @@ func (handler *RuntimeUserSessionsHandler) logout(
 		writeProblem(writer, http.StatusForbidden, "runtime_user_logout_transport_rejected")
 		return
 	}
-	values := request.Header.Values("Authorization")
-	request.Header.Del("Authorization")
-	if len(values) != 1 {
-		writeProblem(writer, http.StatusUnauthorized, "runtime_user_session_invalid")
-		return
-	}
-	token, found := strings.CutPrefix(values[0], "Bearer ")
-	if !found || token == "" || strings.TrimSpace(token) != token {
+	token, valid := takeRuntimeUserBearer(request)
+	if !valid {
 		writeProblem(writer, http.StatusUnauthorized, "runtime_user_session_invalid")
 		return
 	}
@@ -202,4 +249,14 @@ func (handler *RuntimeUserSessionsHandler) logout(
 	}
 	writer.Header().Set("Cache-Control", "no-store")
 	writer.WriteHeader(http.StatusNoContent)
+}
+
+func takeRuntimeUserBearer(request *http.Request) (string, bool) {
+	values := request.Header.Values("Authorization")
+	request.Header.Del("Authorization")
+	if len(values) != 1 {
+		return "", false
+	}
+	token, found := strings.CutPrefix(values[0], "Bearer ")
+	return token, found && token != "" && strings.TrimSpace(token) == token
 }

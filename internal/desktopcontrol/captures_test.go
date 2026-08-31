@@ -15,6 +15,7 @@ import (
 	"github.com/vibe-agi/vibermate/internal/captureassignment"
 	"github.com/vibe-agi/vibermate/internal/captureidentity"
 	"github.com/vibe-agi/vibermate/internal/capturerun"
+	"github.com/vibe-agi/vibermate/internal/clientadapter"
 	"github.com/vibe-agi/vibermate/internal/desktopcontrol"
 	"github.com/vibe-agi/vibermate/internal/environment"
 	"github.com/vibe-agi/vibermate/internal/manualcapture"
@@ -35,7 +36,14 @@ func TestUnifiedCaptureCatalogKeepsSameRawIDInBothKinds(t *testing.T) {
 	if managed.Code != http.StatusOK || manual.Code != http.StatusOK {
 		t.Fatalf("managed=%d %s manual=%d %s", managed.Code, managed.Body.Bytes(), manual.Code, manual.Body.Bytes())
 	}
-	assertBodyContains(t, managed.Body.Bytes(), `"kind":"managed_run"`, `"managedRun":`)
+	assertBodyContains(
+		t,
+		managed.Body.Bytes(),
+		`"kind":"managed_run"`,
+		`"managedRun":`,
+		`"recognition":"verified"`,
+		`"clientAdapter":{"id":"claude-code","revision":1,"version":"2.1.220"`,
+	)
 	assertBodyContains(t, manual.Body.Bytes(), `"kind":"manual_capture"`, `"manualCapture":`)
 
 	invalid := environmentRequest(t, application, http.MethodGet, "/api/v1/captures/same-id", 0, "", nil)
@@ -210,7 +218,14 @@ func unifiedCaptureApplication(t *testing.T, assignments captureassignment.Contr
 		CaptureRuns: captureReaderFixture{view: capturerun.View{
 			ID: "same-id", ExecutableLabel: "claude", CWD: "/workspace", State: capturerun.StateFinished,
 			Observation: capturerun.ObservationObserved, CreatedAt: now, UpdatedAt: now,
-			ExpiresAt: now.Add(time.Hour),
+			ExpiresAt: now.Add(time.Hour), CatalogRevision: 1,
+			Recognition: clientadapter.RecognitionVerified,
+			Adapter: &clientadapter.Evidence{
+				ID: "claude-code", Revision: 1, Version: "2.1.220", CatalogRevision: 1,
+				InstallShape:  clientadapter.InstallNativeSingleBinary,
+				ReleaseSHA256: "8addc857f3fe64d5a0368af9ee50321b50afb4a6918ba3ef018ab84f5dbbe081",
+				LaunchRecipe:  clientadapter.LaunchNodeEnvProxy,
+			},
 		}},
 		ManualCaptures: manualCaptureFixture{view: manualcapture.View{
 			ID: "same-id", DisplayName: "Manual app", ClientClass: manualcapture.ClientDesktopApp,

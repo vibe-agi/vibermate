@@ -14,6 +14,45 @@ Observed on 2026-08-13 and re-run on 2026-08-14:
 - no API key injected by the test and no reusable credential retained in the
   fixture or log.
 
+## Compiled managed-route compatibility
+
+The Agent-facing protocol (A) and upstream protocol (B) are separate. The
+production catalog contains exactly these managed-route codec pairs:
+
+| Client | A | B | Status |
+| --- | --- | --- | --- |
+| Claude Code | Anthropic Messages | Anthropic Messages | Supported |
+| Claude Code | Anthropic Messages | OpenAI Chat | Supported |
+| Claude Code | Anthropic Messages | OpenAI Responses | Unsupported |
+| Codex CLI | OpenAI Responses | OpenAI Responses | Supported |
+| Codex CLI | OpenAI Responses | OpenAI Chat | Supported |
+| Codex CLI | OpenAI Responses | Anthropic Messages | Unsupported |
+
+OpenAI Chat is an upstream edge, not an Agent-facing client entry. An Endpoint
+declaring a protocol says which wire contract it implements; ViberMate does not
+infer that fact from its name, origin, Account, or model ID.
+
+`TestProductionProtocolCompatibilityMatrixIsExact` freezes the six outcomes
+above. The supported paths are also covered below the catalog seam:
+
+- Anthropic Messages passthrough: later-turn cited text, thinking history,
+  tool caller/result history, streaming text, streaming thinking, and the tool
+  approval barrier in `internal/anthropicchat/messages_path_test.go`;
+- Anthropic Messages to OpenAI Chat: complete and streaming text/tool
+  translation plus explicit cross-dialect loss/refusal in
+  `internal/anthropicchat/codec_test.go`;
+- OpenAI Responses passthrough: portable conversation/reasoning history and
+  incremental Responses events in `internal/openairesponses` and
+  `internal/responseschat` tests;
+- OpenAI Responses to OpenAI Chat: complete and streaming custom-tool history
+  in `internal/responseschat` tests;
+- native Claude/Codex session grouping and resume across Capture boundaries in
+  `internal/agentconversation` and `internal/capturecontrol` tests.
+
+These are ViberMate codec guarantees. They do not claim that an arbitrary
+Endpoint implements any protocol correctly; the selected Endpoint and Account
+remain the real upstream authority.
+
 ## Claude Code / Anthropic Messages
 
 | Wire evidence | Retained normalized evidence | Thread signal | UI label and rule |

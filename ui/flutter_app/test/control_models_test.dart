@@ -132,8 +132,8 @@ void main() {
       expect(alice.models.single.requestedModel, 'gpt-5.6-sol');
       expect(alice.models.single.upstreamModel, 'relay:model/custom');
       expect(alice.tokens.inputUncached.tokens, 42);
-      expect(alice.tokens.inputUncached.knownTurns, 1);
-      expect(alice.tokens.inputUncached.unknownTurns, 1);
+      expect(alice.tokens.inputUncached.knownCalls, 1);
+      expect(alice.tokens.inputUncached.unknownCalls, 1);
       expect(alice.agentSessions.single.sessionId, 'native-session-one');
     },
   );
@@ -158,6 +158,19 @@ void main() {
       }, status: 409),
       throwsA(isA<ControlContractException>()),
     );
+  });
+
+  test('Control problem retains an actionable safe detail', () {
+    final problem = ControlProblem.fromJson({
+      'type': 'urn:vibermate:error:account-selector-test-failed',
+      'title': 'Unprocessable Entity',
+      'status': 422,
+      'code': 'account_selector_test_failed',
+      'detail': 'invalid Account Selector policy: compile JavaScript',
+    }, status: 422);
+
+    expect(problem.detail, contains('compile JavaScript'));
+    expect(problem.toString(), contains('compile JavaScript'));
   });
 
   test('upstream model catalog trusts only the selected Endpoint', () {
@@ -324,6 +337,15 @@ void main() {
           'workspaceDerivationRevision': 1,
           'processId': 7300,
           'recognition': 'verified',
+          'clientAdapter': {
+            'id': 'claude-code',
+            'revision': 1,
+            'version': '2.1.220',
+            'catalogRevision': 1,
+            'source': 'prelaunch_digest_catalog',
+            'installShape': 'native_single_binary',
+            'launchRecipe': 'node_env_proxy',
+          },
           'expiresAt': '2026-08-10T10:00:00.000Z',
           'firstObservedAt': '2026-08-10T09:00:30.000Z',
         },
@@ -335,6 +357,8 @@ void main() {
       expect(record.managedRun!.workspaceEvidence, 'registered_companion');
       expect(record.managedRun!.runtimeUserId, 'user.remote');
       expect(record.managedRun!.deviceName, 'MacBook Pro');
+      expect(record.managedRun!.clientAdapter?.version, '2.1.220');
+      expect(record.managedRun!.clientAdapter?.id, 'claude-code');
       expect(
         record.managedRun!.canonicalExecutablePath,
         '/usr/local/bin/claude',

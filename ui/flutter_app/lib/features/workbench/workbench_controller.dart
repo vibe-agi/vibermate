@@ -141,6 +141,7 @@ final class WorkbenchController extends ChangeNotifier {
   final Map<String, String> _rawEvidenceErrors = {};
   final Map<String, UpstreamModelCatalog> _upstreamModelCatalogs = {};
   final Map<String, ClientModelCatalog> _clientModelCatalogs = {};
+  Future<CodeLibraryCatalog>? _codeLibraryCatalog;
   int _rawEvidenceGeneration = 0;
   Timer? _poller;
   bool _pollInFlight = false;
@@ -254,25 +255,47 @@ final class WorkbenchController extends ChangeNotifier {
     required AccountSelectorTestSample sample,
   }) => _api.testAccountSelector(policy: policy, sample: sample);
 
-  Future<CodeLibraryCatalog> codeLibrary() => _api.codeLibrary();
+  Future<CodeLibraryCatalog> codeLibrary({bool refresh = false}) {
+    if (refresh) _codeLibraryCatalog = null;
+    return _codeLibraryCatalog ??= _loadCodeLibrary();
+  }
+
+  Future<CodeLibraryCatalog> _loadCodeLibrary() async {
+    try {
+      return await _api.codeLibrary();
+    } on Object {
+      _codeLibraryCatalog = null;
+      rethrow;
+    }
+  }
+
+  Future<T> _codeLibraryMutation<T>(Future<T> mutation) async {
+    final result = await mutation;
+    _codeLibraryCatalog = null;
+    return result;
+  }
 
   Future<CodeLibraryCollection> createCodeLibraryCollection({
     required String displayName,
-  }) => _api.createCodeLibraryCollection(
-    id: 'collection.custom.${_newUuid()}',
-    displayName: displayName,
+  }) => _codeLibraryMutation(
+    _api.createCodeLibraryCollection(
+      id: 'collection.custom.${_newUuid()}',
+      displayName: displayName,
+    ),
   );
 
   Future<CodeLibraryTransformRevision> createCodeLibraryTransform({
     required String collectionId,
     required String displayName,
     required TrafficTransformPolicy policy,
-  }) => _api.publishCodeLibraryTransform(
-    id: 'transform.custom.${_newUuid()}',
-    expectedRevision: 0,
-    collectionId: collectionId,
-    displayName: displayName,
-    policy: policy,
+  }) => _codeLibraryMutation(
+    _api.publishCodeLibraryTransform(
+      id: 'transform.custom.${_newUuid()}',
+      expectedRevision: 0,
+      collectionId: collectionId,
+      displayName: displayName,
+      policy: policy,
+    ),
   );
 
   Future<CodeLibraryTransformRevision> publishCodeLibraryTransform({
@@ -281,24 +304,28 @@ final class WorkbenchController extends ChangeNotifier {
     required String collectionId,
     required String displayName,
     required TrafficTransformPolicy policy,
-  }) => _api.publishCodeLibraryTransform(
-    id: id,
-    expectedRevision: expectedRevision,
-    collectionId: collectionId,
-    displayName: displayName,
-    policy: policy,
+  }) => _codeLibraryMutation(
+    _api.publishCodeLibraryTransform(
+      id: id,
+      expectedRevision: expectedRevision,
+      collectionId: collectionId,
+      displayName: displayName,
+      policy: policy,
+    ),
   );
 
   Future<CodeLibraryAccountSelectorRevision> createCodeLibraryAccountSelector({
     required String collectionId,
     required String displayName,
     required AccountSelectorPolicy policy,
-  }) => _api.publishCodeLibraryAccountSelector(
-    id: 'selector.custom.${_newUuid()}',
-    expectedRevision: 0,
-    collectionId: collectionId,
-    displayName: displayName,
-    policy: policy,
+  }) => _codeLibraryMutation(
+    _api.publishCodeLibraryAccountSelector(
+      id: 'selector.custom.${_newUuid()}',
+      expectedRevision: 0,
+      collectionId: collectionId,
+      displayName: displayName,
+      policy: policy,
+    ),
   );
 
   Future<CodeLibraryAccountSelectorRevision> publishCodeLibraryAccountSelector({
@@ -307,12 +334,14 @@ final class WorkbenchController extends ChangeNotifier {
     required String collectionId,
     required String displayName,
     required AccountSelectorPolicy policy,
-  }) => _api.publishCodeLibraryAccountSelector(
-    id: id,
-    expectedRevision: expectedRevision,
-    collectionId: collectionId,
-    displayName: displayName,
-    policy: policy,
+  }) => _codeLibraryMutation(
+    _api.publishCodeLibraryAccountSelector(
+      id: id,
+      expectedRevision: expectedRevision,
+      collectionId: collectionId,
+      displayName: displayName,
+      policy: policy,
+    ),
   );
 
   Future<EgressProfileCatalog> egressProfiles() => _api.egressProfiles();

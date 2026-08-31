@@ -2,6 +2,7 @@ package desktopcontrol
 
 import (
 	"context"
+	"errors"
 	"net/http"
 	"time"
 
@@ -34,7 +35,6 @@ type AccountSelectorTestRuntime struct {
 	WorkspaceRoot          string    `json:"workspaceRoot"`
 	WorkspaceLabel         string    `json:"workspaceLabel"`
 	TurnStartedAt          time.Time `json:"turnStartedAt"`
-	TurnIndex              uint64    `json:"turnIndex"`
 }
 
 type AccountSelectorTestResult struct {
@@ -43,17 +43,33 @@ type AccountSelectorTestResult struct {
 
 func (handler *Handler) testAccountSelector(writer http.ResponseWriter, request *http.Request) {
 	body, err := readJSONBody(request)
+	if err != nil {
+		writeAccountSelectorTestProblem(writer, err)
+		return
+	}
+	if request.URL.RawQuery != "" {
+		writeAccountSelectorTestProblem(writer, errors.New("query parameters are not allowed"))
+		return
+	}
 	var input AccountSelectorTestInput
-	if err != nil || request.URL.RawQuery != "" || decodeStrictJSON(body, &input) != nil {
-		writeProblem(writer, http.StatusUnprocessableEntity, ReasonAccountSelectorTestFailed)
+	if err := decodeStrictJSON(body, &input); err != nil {
+		writeAccountSelectorTestProblem(writer, err)
 		return
 	}
 	result, err := runAccountSelectorSample(request.Context(), input)
 	if err != nil {
-		writeProblem(writer, http.StatusUnprocessableEntity, ReasonAccountSelectorTestFailed)
+		writeAccountSelectorTestProblem(writer, err)
 		return
 	}
 	writeJSON(writer, http.StatusOK, result)
+}
+
+func writeAccountSelectorTestProblem(writer http.ResponseWriter, err error) {
+	writeCached(writer, problemResponse(problemSpec{
+		status: http.StatusUnprocessableEntity,
+		reason: ReasonAccountSelectorTestFailed,
+		detail: err.Error(),
+	}))
 }
 
 func runAccountSelectorSample(
@@ -72,7 +88,7 @@ func runAccountSelectorSample(
 			OperatingSystemVersion: input.Runtime.OperatingSystemVersion,
 			Architecture:           input.Runtime.Architecture, TimeZone: input.Runtime.TimeZone,
 			WorkspaceRoot: input.Runtime.WorkspaceRoot, WorkspaceLabel: input.Runtime.WorkspaceLabel,
-			TurnStartedAt: input.Runtime.TurnStartedAt, TurnIndex: input.Runtime.TurnIndex,
+			TurnStartedAt: input.Runtime.TurnStartedAt,
 		},
 	})
 	if err != nil {

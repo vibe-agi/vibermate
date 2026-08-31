@@ -969,6 +969,7 @@ func (runtime *RuntimeOfflineAdapter) ResumeOfflineHold(
 type problemSpec struct {
 	status int
 	reason ReasonCode
+	detail string
 }
 
 func classifyEnvironmentError(err error) problemSpec {
@@ -1110,7 +1111,7 @@ func jsonResponse(status int, value any) cachedResponse {
 }
 
 func problemResponse(spec problemSpec) cachedResponse {
-	body, _ := json.Marshal(problemBody(spec.status, spec.reason))
+	body, _ := json.Marshal(problemBody(spec.status, spec.reason, spec.detail))
 	return cachedResponse{
 		status:      spec.status,
 		contentType: "application/problem+json",
@@ -1129,17 +1130,19 @@ func writeProblem(
 	}))
 }
 
-func problemBody(status int, reason ReasonCode) any {
+func problemBody(status int, reason ReasonCode, detail string) any {
 	return struct {
 		Type   string     `json:"type"`
 		Title  string     `json:"title"`
 		Status int        `json:"status"`
 		Code   ReasonCode `json:"code"`
+		Detail string     `json:"detail,omitempty"`
 	}{
 		Type:   "urn:vibermate:error:" + strings.ReplaceAll(string(reason), "_", "-"),
 		Title:  http.StatusText(status),
 		Status: status,
 		Code:   reason,
+		Detail: detail,
 	}
 }
 

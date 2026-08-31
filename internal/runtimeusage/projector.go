@@ -17,7 +17,7 @@ import (
 )
 
 const (
-	ReportSchema       = "vibermate-runtime-usage-report-v2"
+	ReportSchema       = "vibermate-runtime-usage-report-v3"
 	maxCaptureRuns     = 10_000
 	maxExchangeRecords = 100_000
 	maxReportedUsers   = 200
@@ -78,12 +78,12 @@ type UserUsage struct {
 	State                   runtimeuser.State   `json:"state"`
 	CaptureRuns             int                 `json:"captureRuns"`
 	ActiveRuns              int                 `json:"activeRuns"`
-	Turns                   int                 `json:"turns"`
+	AgentAPICalls           int                 `json:"agentApiCalls"`
 	Succeeded               int                 `json:"succeeded"`
 	Failed                  int                 `json:"failed"`
 	Canceled                int                 `json:"canceled"`
-	ContentUnavailableTurns int                 `json:"contentUnavailableTurns"`
-	ModelUnavailableTurns   int                 `json:"modelUnavailableTurns"`
+	ContentUnavailableCalls int                 `json:"contentUnavailableCalls"`
+	ModelUnavailableCalls   int                 `json:"modelUnavailableCalls"`
 	Tokens                  TokenUsage          `json:"tokens"`
 	LatestContext           *ContextRef         `json:"latestContext,omitempty"`
 	LastActivityAt          *time.Time          `json:"lastActivityAt,omitempty"`
@@ -110,7 +110,7 @@ type ContextUsage struct {
 	WorkspaceLabel string                     `json:"workspaceLabel,omitempty"`
 	CaptureRuns    int                        `json:"captureRuns"`
 	ActiveRuns     int                        `json:"activeRuns"`
-	Turns          int                        `json:"turns"`
+	AgentAPICalls  int                        `json:"agentApiCalls"`
 	Succeeded      int                        `json:"succeeded"`
 	Failed         int                        `json:"failed"`
 	Canceled       int                        `json:"canceled"`
@@ -121,7 +121,7 @@ type ContextUsage struct {
 type ModelUsage struct {
 	RequestedModel string     `json:"requestedModel"`
 	UpstreamModel  string     `json:"upstreamModel"`
-	Turns          int        `json:"turns"`
+	AgentAPICalls  int        `json:"agentApiCalls"`
 	Succeeded      int        `json:"succeeded"`
 	Failed         int        `json:"failed"`
 	Canceled       int        `json:"canceled"`
@@ -132,7 +132,7 @@ type AgentSessionUsage struct {
 	Client         string     `json:"client"`
 	SessionID      string     `json:"sessionId"`
 	CaptureRuns    int        `json:"captureRuns"`
-	Turns          int        `json:"turns"`
+	AgentAPICalls  int        `json:"agentApiCalls"`
 	Succeeded      int        `json:"succeeded"`
 	Failed         int        `json:"failed"`
 	Canceled       int        `json:"canceled"`
@@ -142,8 +142,8 @@ type AgentSessionUsage struct {
 
 type TokenAggregate struct {
 	Tokens       int64 `json:"tokens"`
-	KnownTurns   int   `json:"knownTurns"`
-	UnknownTurns int   `json:"unknownTurns"`
+	KnownCalls   int   `json:"knownCalls"`
+	UnknownCalls int   `json:"unknownCalls"`
 }
 
 type TokenUsage struct {
@@ -155,16 +155,17 @@ type TokenUsage struct {
 }
 
 // DayUsage is one non-empty calendar day in the requested Period. The report
-// is sparse by design: absence means no retained terminal Turn on that day,
-// while the evidence counters distinguish a known zero from missing evidence.
+// is sparse by design: absence means no retained terminal Agent API Call on
+// that day, while the evidence counters distinguish a known zero from missing
+// evidence.
 type DayUsage struct {
 	Date                    string     `json:"date"`
-	Turns                   int        `json:"turns"`
+	AgentAPICalls           int        `json:"agentApiCalls"`
 	Succeeded               int        `json:"succeeded"`
 	Failed                  int        `json:"failed"`
 	Canceled                int        `json:"canceled"`
-	ContentUnavailableTurns int        `json:"contentUnavailableTurns"`
-	ModelUnavailableTurns   int        `json:"modelUnavailableTurns"`
+	ContentUnavailableCalls int        `json:"contentUnavailableCalls"`
+	ModelUnavailableCalls   int        `json:"modelUnavailableCalls"`
 	Tokens                  TokenUsage `json:"tokens"`
 }
 
@@ -280,8 +281,8 @@ func (projector *Projector) Report(ctx context.Context, query Query) (Report, er
 }
 
 func userUsageLess(left, right UserUsage) bool {
-	if left.Turns != right.Turns {
-		return left.Turns > right.Turns
+	if left.AgentAPICalls != right.AgentAPICalls {
+		return left.AgentAPICalls > right.AgentAPICalls
 	}
 	if left.CaptureRuns != right.CaptureRuns {
 		return left.CaptureRuns > right.CaptureRuns
@@ -373,9 +374,9 @@ func (projector *Projector) addExchange(
 ) error {
 	context := user.contexts[contextKey(run)]
 	day := user.day(date)
-	user.view.Turns++
-	context.Turns++
-	day.Turns++
+	user.view.AgentAPICalls++
+	context.AgentAPICalls++
+	day.AgentAPICalls++
 	addStatus(&user.view.Succeeded, &user.view.Failed, &user.view.Canceled, record.Status)
 	addStatus(&context.Succeeded, &context.Failed, &context.Canceled, record.Status)
 	addStatus(&day.Succeeded, &day.Failed, &day.Canceled, record.Status)
@@ -389,20 +390,20 @@ func (projector *Projector) addExchange(
 	}
 	usage := exchangecontent.Usage{}
 	if !contentKnown {
-		user.view.ContentUnavailableTurns++
-		user.view.ModelUnavailableTurns++
-		day.ContentUnavailableTurns++
-		day.ModelUnavailableTurns++
+		user.view.ContentUnavailableCalls++
+		user.view.ModelUnavailableCalls++
+		day.ContentUnavailableCalls++
+		day.ModelUnavailableCalls++
 	} else {
 		if content.Response != nil {
 			usage = content.Response.Usage
 		}
 		if content.Request.RequestedModel == "" || content.Request.EffectiveModel == "" {
-			user.view.ModelUnavailableTurns++
-			day.ModelUnavailableTurns++
+			user.view.ModelUnavailableCalls++
+			day.ModelUnavailableCalls++
 		} else {
 			model := user.model(content.Request.RequestedModel, content.Request.EffectiveModel)
-			model.Turns++
+			model.AgentAPICalls++
 			addStatus(&model.Succeeded, &model.Failed, &model.Canceled, record.Status)
 			model.Tokens.add(usage)
 		}
@@ -428,7 +429,7 @@ func (projector *Projector) addExchange(
 	}
 	if identityErr == nil && identity.Client != "" && identity.SessionID != "" {
 		session := user.session(identity.Client, identity.SessionID)
-		session.view.Turns++
+		session.view.AgentAPICalls++
 		addStatus(&session.view.Succeeded, &session.view.Failed, &session.view.Canceled, record.Status)
 		session.view.Tokens.add(usage)
 		if record.OccurredAt.After(session.view.LastActivityAt) {
@@ -504,8 +505,8 @@ func (user *userAccumulator) finish() {
 		user.view.Models = append(user.view.Models, *value)
 	}
 	sort.Slice(user.view.Models, func(i, j int) bool {
-		if user.view.Models[i].Turns != user.view.Models[j].Turns {
-			return user.view.Models[i].Turns > user.view.Models[j].Turns
+		if user.view.Models[i].AgentAPICalls != user.view.Models[j].AgentAPICalls {
+			return user.view.Models[i].AgentAPICalls > user.view.Models[j].AgentAPICalls
 		}
 		if user.view.Models[i].RequestedModel != user.view.Models[j].RequestedModel {
 			return user.view.Models[i].RequestedModel < user.view.Models[j].RequestedModel
@@ -562,12 +563,12 @@ func aggregateDays(users []UserUsage) []DayUsage {
 }
 
 func (usage *DayUsage) add(value DayUsage) {
-	usage.Turns += value.Turns
+	usage.AgentAPICalls += value.AgentAPICalls
 	usage.Succeeded += value.Succeeded
 	usage.Failed += value.Failed
 	usage.Canceled += value.Canceled
-	usage.ContentUnavailableTurns += value.ContentUnavailableTurns
-	usage.ModelUnavailableTurns += value.ModelUnavailableTurns
+	usage.ContentUnavailableCalls += value.ContentUnavailableCalls
+	usage.ModelUnavailableCalls += value.ModelUnavailableCalls
 	usage.Tokens.addAggregate(value.Tokens)
 }
 
@@ -590,24 +591,24 @@ func (usage *TokenUsage) addAggregate(value TokenUsage) {
 func (aggregate *TokenAggregate) add(value exchangecontent.UsageValue) {
 	if value.Known {
 		if value.Tokens < 0 || value.Tokens > math.MaxInt64-aggregate.Tokens {
-			aggregate.UnknownTurns++
+			aggregate.UnknownCalls++
 			return
 		}
 		aggregate.Tokens += value.Tokens
-		aggregate.KnownTurns++
+		aggregate.KnownCalls++
 	} else {
-		aggregate.UnknownTurns++
+		aggregate.UnknownCalls++
 	}
 }
 
 func (aggregate *TokenAggregate) addAggregate(value TokenAggregate) {
 	if value.Tokens < 0 || value.Tokens > math.MaxInt64-aggregate.Tokens {
-		aggregate.UnknownTurns += value.KnownTurns + value.UnknownTurns
+		aggregate.UnknownCalls += value.KnownCalls + value.UnknownCalls
 		return
 	}
 	aggregate.Tokens += value.Tokens
-	aggregate.KnownTurns += value.KnownTurns
-	aggregate.UnknownTurns += value.UnknownTurns
+	aggregate.KnownCalls += value.KnownCalls
+	aggregate.UnknownCalls += value.UnknownCalls
 }
 
 func addStatus(succeeded, failed, canceled *int, status activity.Status) {

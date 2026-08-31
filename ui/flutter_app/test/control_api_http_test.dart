@@ -427,7 +427,6 @@ void main() {
           workspaceRoot: '/workspace',
           workspaceLabel: 'work',
           turnStartedAt: DateTime.utc(2026, 8, 28, 1, 2, 3),
-          turnIndex: 4,
         ),
       ),
     );
@@ -678,7 +677,7 @@ void main() {
       ),
     );
     expect(usage.users.single.username, 'alice');
-    expect(usage.users.single.turns, 2);
+    expect(usage.users.single.agentApiCalls, 2);
     expect(
       usage.users.single.models.single.upstreamModel,
       'relay:model/custom',
@@ -756,6 +755,47 @@ void main() {
       ),
     );
     expect(report.users.single.username, 'alice');
+  });
+
+  test('code library has its own bounded response budget', () async {
+    final server = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);
+    addTearDown(() => server.close(force: true));
+    server.listen((request) async {
+      await request.drain<void>();
+      request.response.headers.contentType = ContentType.json;
+      if (request.uri.path != '/api/v1/code-library') {
+        request.response.statusCode = HttpStatus.notFound;
+        await request.response.close();
+        return;
+      }
+      final padding = List.filled(1024 * 1024, ' ').join();
+      request.response.write(padding);
+      request.response.write(padding);
+      request.response.write(' ');
+      request.response.write(
+        jsonEncode({
+          'collections': [],
+          'transforms': [],
+          'accountSelectors': [],
+        }),
+      );
+      await request.response.close();
+    });
+
+    final api = await HttpControlApi.connect(
+      DesktopSession(
+        baseUrl: Uri.parse('http://127.0.0.1:${server.port}'),
+        readToken: List.filled(43, 'R').join(),
+        writeToken: List.filled(43, 'W').join(),
+        instanceId: 'instance-test',
+        expiresAt: DateTime.now().toUtc().add(const Duration(hours: 1)),
+      ),
+      inspectSession: false,
+    );
+    addTearDown(api.close);
+
+    final catalog = await api.codeLibrary();
+    expect(catalog.transforms, isEmpty);
   });
 
   test('HTTP API reads one exact Environment revision authority', () async {

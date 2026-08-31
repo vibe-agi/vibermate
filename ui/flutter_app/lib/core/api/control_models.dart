@@ -231,7 +231,7 @@ final class RuntimeUsageReport {
       },
     );
     if (requireString(value, 'schema', path) !=
-        'vibermate-runtime-usage-report-v2') {
+        'vibermate-runtime-usage-report-v3') {
       throw ControlContractException('$path schema is unsupported');
     }
     final period = RuntimeUsagePeriod.fromJson(value['period'], '$path.period');
@@ -275,12 +275,12 @@ final class RuntimeUserUsage {
     required this.state,
     required this.captureRuns,
     required this.activeRuns,
-    required this.turns,
+    required this.agentApiCalls,
     required this.succeeded,
     required this.failed,
     required this.canceled,
-    required this.contentUnavailableTurns,
-    required this.modelUnavailableTurns,
+    required this.contentUnavailableCalls,
+    required this.modelUnavailableCalls,
     required this.tokens,
     required this.latestContext,
     required this.lastActivityAt,
@@ -301,12 +301,12 @@ final class RuntimeUserUsage {
         'state',
         'captureRuns',
         'activeRuns',
-        'turns',
+        'agentApiCalls',
         'succeeded',
         'failed',
         'canceled',
-        'contentUnavailableTurns',
-        'modelUnavailableTurns',
+        'contentUnavailableCalls',
+        'modelUnavailableCalls',
         'tokens',
         'days',
         'models',
@@ -319,12 +319,14 @@ final class RuntimeUserUsage {
     if (!const {'active', 'disabled'}.contains(state)) {
       throw ControlContractException('$path.state is unsupported');
     }
-    final turns = requireInteger(value, 'turns', path);
+    final agentApiCalls = requireInteger(value, 'agentApiCalls', path);
     final succeeded = requireInteger(value, 'succeeded', path);
     final failed = requireInteger(value, 'failed', path);
     final canceled = requireInteger(value, 'canceled', path);
-    if (succeeded + failed + canceled > turns) {
-      throw ControlContractException('$path terminal counters exceed turns');
+    if (succeeded + failed + canceled > agentApiCalls) {
+      throw ControlContractException(
+        '$path terminal counters exceed agentApiCalls',
+      );
     }
     final latest = value['latestContext'];
     final days = _runtimeUsageDays(value['days'], '$path.days', null);
@@ -334,18 +336,18 @@ final class RuntimeUserUsage {
       state: state,
       captureRuns: requireInteger(value, 'captureRuns', path),
       activeRuns: requireInteger(value, 'activeRuns', path),
-      turns: turns,
+      agentApiCalls: agentApiCalls,
       succeeded: succeeded,
       failed: failed,
       canceled: canceled,
-      contentUnavailableTurns: requireInteger(
+      contentUnavailableCalls: requireInteger(
         value,
-        'contentUnavailableTurns',
+        'contentUnavailableCalls',
         path,
       ),
-      modelUnavailableTurns: requireInteger(
+      modelUnavailableCalls: requireInteger(
         value,
-        'modelUnavailableTurns',
+        'modelUnavailableCalls',
         path,
       ),
       tokens: RuntimeTokenUsage.fromJson(value['tokens'], '$path.tokens'),
@@ -377,12 +379,12 @@ final class RuntimeUserUsage {
   final String state;
   final int captureRuns;
   final int activeRuns;
-  final int turns;
+  final int agentApiCalls;
   final int succeeded;
   final int failed;
   final int canceled;
-  final int contentUnavailableTurns;
-  final int modelUnavailableTurns;
+  final int contentUnavailableCalls;
+  final int modelUnavailableCalls;
   final RuntimeTokenUsage tokens;
   final RuntimeUsageContextRef? latestContext;
   final DateTime? lastActivityAt;
@@ -392,18 +394,18 @@ final class RuntimeUserUsage {
   final List<RuntimeAgentSessionUsage> agentSessions;
 
   bool get active => state == 'active';
-  bool get partial => contentUnavailableTurns > 0 || modelUnavailableTurns > 0;
+  bool get partial => contentUnavailableCalls > 0 || modelUnavailableCalls > 0;
 }
 
 final class RuntimeDayUsage {
   const RuntimeDayUsage({
     required this.date,
-    required this.turns,
+    required this.agentApiCalls,
     required this.succeeded,
     required this.failed,
     required this.canceled,
-    required this.contentUnavailableTurns,
-    required this.modelUnavailableTurns,
+    required this.contentUnavailableCalls,
+    required this.modelUnavailableCalls,
     required this.tokens,
   });
 
@@ -414,59 +416,59 @@ final class RuntimeDayUsage {
       path,
       required: const {
         'date',
-        'turns',
+        'agentApiCalls',
         'succeeded',
         'failed',
         'canceled',
-        'contentUnavailableTurns',
-        'modelUnavailableTurns',
+        'contentUnavailableCalls',
+        'modelUnavailableCalls',
         'tokens',
       },
     );
     final date = requireString(value, 'date', path);
     _parseUsageDate(date, '$path.date');
-    final turns = requireInteger(value, 'turns', path);
+    final agentApiCalls = requireInteger(value, 'agentApiCalls', path);
     final succeeded = requireInteger(value, 'succeeded', path);
     final failed = requireInteger(value, 'failed', path);
     final canceled = requireInteger(value, 'canceled', path);
-    final contentUnavailableTurns = requireInteger(
+    final contentUnavailableCalls = requireInteger(
       value,
-      'contentUnavailableTurns',
+      'contentUnavailableCalls',
       path,
     );
-    final modelUnavailableTurns = requireInteger(
+    final modelUnavailableCalls = requireInteger(
       value,
-      'modelUnavailableTurns',
+      'modelUnavailableCalls',
       path,
     );
-    if (turns <= 0 ||
-        succeeded + failed + canceled > turns ||
-        contentUnavailableTurns > turns ||
-        modelUnavailableTurns > turns) {
+    if (agentApiCalls <= 0 ||
+        succeeded + failed + canceled > agentApiCalls ||
+        contentUnavailableCalls > agentApiCalls ||
+        modelUnavailableCalls > agentApiCalls) {
       throw ControlContractException('$path counters are inconsistent');
     }
     return RuntimeDayUsage(
       date: date,
-      turns: turns,
+      agentApiCalls: agentApiCalls,
       succeeded: succeeded,
       failed: failed,
       canceled: canceled,
-      contentUnavailableTurns: contentUnavailableTurns,
-      modelUnavailableTurns: modelUnavailableTurns,
+      contentUnavailableCalls: contentUnavailableCalls,
+      modelUnavailableCalls: modelUnavailableCalls,
       tokens: RuntimeTokenUsage.fromJson(value['tokens'], '$path.tokens'),
     );
   }
 
   final String date;
-  final int turns;
+  final int agentApiCalls;
   final int succeeded;
   final int failed;
   final int canceled;
-  final int contentUnavailableTurns;
-  final int modelUnavailableTurns;
+  final int contentUnavailableCalls;
+  final int modelUnavailableCalls;
   final RuntimeTokenUsage tokens;
 
-  bool get partial => contentUnavailableTurns > 0 || modelUnavailableTurns > 0;
+  bool get partial => contentUnavailableCalls > 0 || modelUnavailableCalls > 0;
 }
 
 final class RuntimeUsageContextRef {
@@ -519,7 +521,7 @@ final class RuntimeContextUsage {
     required this.workspaceLabel,
     required this.captureRuns,
     required this.activeRuns,
-    required this.turns,
+    required this.agentApiCalls,
     required this.succeeded,
     required this.failed,
     required this.canceled,
@@ -538,7 +540,7 @@ final class RuntimeContextUsage {
         'machineId',
         'captureRuns',
         'activeRuns',
-        'turns',
+        'agentApiCalls',
         'succeeded',
         'failed',
         'canceled',
@@ -554,7 +556,7 @@ final class RuntimeContextUsage {
       workspaceLabel: optionalString(value, 'workspaceLabel', path),
       captureRuns: requireInteger(value, 'captureRuns', path),
       activeRuns: requireInteger(value, 'activeRuns', path),
-      turns: requireInteger(value, 'turns', path),
+      agentApiCalls: requireInteger(value, 'agentApiCalls', path),
       succeeded: requireInteger(value, 'succeeded', path),
       failed: requireInteger(value, 'failed', path),
       canceled: requireInteger(value, 'canceled', path),
@@ -570,7 +572,7 @@ final class RuntimeContextUsage {
   final String? workspaceLabel;
   final int captureRuns;
   final int activeRuns;
-  final int turns;
+  final int agentApiCalls;
   final int succeeded;
   final int failed;
   final int canceled;
@@ -582,7 +584,7 @@ final class RuntimeModelUsage {
   const RuntimeModelUsage({
     required this.requestedModel,
     required this.upstreamModel,
-    required this.turns,
+    required this.agentApiCalls,
     required this.succeeded,
     required this.failed,
     required this.canceled,
@@ -597,7 +599,7 @@ final class RuntimeModelUsage {
       required: const {
         'requestedModel',
         'upstreamModel',
-        'turns',
+        'agentApiCalls',
         'succeeded',
         'failed',
         'canceled',
@@ -607,7 +609,7 @@ final class RuntimeModelUsage {
     return RuntimeModelUsage(
       requestedModel: requireString(value, 'requestedModel', path),
       upstreamModel: requireString(value, 'upstreamModel', path),
-      turns: requireInteger(value, 'turns', path),
+      agentApiCalls: requireInteger(value, 'agentApiCalls', path),
       succeeded: requireInteger(value, 'succeeded', path),
       failed: requireInteger(value, 'failed', path),
       canceled: requireInteger(value, 'canceled', path),
@@ -617,7 +619,7 @@ final class RuntimeModelUsage {
 
   final String requestedModel;
   final String upstreamModel;
-  final int turns;
+  final int agentApiCalls;
   final int succeeded;
   final int failed;
   final int canceled;
@@ -629,7 +631,7 @@ final class RuntimeAgentSessionUsage {
     required this.client,
     required this.sessionId,
     required this.captureRuns,
-    required this.turns,
+    required this.agentApiCalls,
     required this.succeeded,
     required this.failed,
     required this.canceled,
@@ -646,7 +648,7 @@ final class RuntimeAgentSessionUsage {
         'client',
         'sessionId',
         'captureRuns',
-        'turns',
+        'agentApiCalls',
         'succeeded',
         'failed',
         'canceled',
@@ -658,7 +660,7 @@ final class RuntimeAgentSessionUsage {
       client: requireString(value, 'client', path),
       sessionId: requireString(value, 'sessionId', path),
       captureRuns: requireInteger(value, 'captureRuns', path),
-      turns: requireInteger(value, 'turns', path),
+      agentApiCalls: requireInteger(value, 'agentApiCalls', path),
       succeeded: requireInteger(value, 'succeeded', path),
       failed: requireInteger(value, 'failed', path),
       canceled: requireInteger(value, 'canceled', path),
@@ -670,7 +672,7 @@ final class RuntimeAgentSessionUsage {
   final String client;
   final String sessionId;
   final int captureRuns;
-  final int turns;
+  final int agentApiCalls;
   final int succeeded;
   final int failed;
   final int canceled;
@@ -721,8 +723,8 @@ final class RuntimeTokenUsage {
 final class RuntimeTokenAggregate {
   const RuntimeTokenAggregate({
     required this.tokens,
-    required this.knownTurns,
-    required this.unknownTurns,
+    required this.knownCalls,
+    required this.unknownCalls,
   });
 
   factory RuntimeTokenAggregate.fromJson(Object? json, String path) {
@@ -730,21 +732,21 @@ final class RuntimeTokenAggregate {
     requireFields(
       value,
       path,
-      required: const {'tokens', 'knownTurns', 'unknownTurns'},
+      required: const {'tokens', 'knownCalls', 'unknownCalls'},
     );
     return RuntimeTokenAggregate(
       tokens: requireInteger(value, 'tokens', path),
-      knownTurns: requireInteger(value, 'knownTurns', path),
-      unknownTurns: requireInteger(value, 'unknownTurns', path),
+      knownCalls: requireInteger(value, 'knownCalls', path),
+      unknownCalls: requireInteger(value, 'unknownCalls', path),
     );
   }
 
   final int tokens;
-  final int knownTurns;
-  final int unknownTurns;
+  final int knownCalls;
+  final int unknownCalls;
 
-  bool get complete => unknownTurns == 0;
-  bool get observed => knownTurns > 0;
+  bool get complete => unknownCalls == 0;
+  bool get observed => knownCalls > 0;
 }
 
 List<T> _runtimeUsageList<T>(
@@ -2749,7 +2751,6 @@ final class AccountSelectorTestRuntime {
     required this.workspaceRoot,
     required this.workspaceLabel,
     required this.turnStartedAt,
-    required this.turnIndex,
   });
 
   final String userName;
@@ -2761,7 +2762,6 @@ final class AccountSelectorTestRuntime {
   final String workspaceRoot;
   final String workspaceLabel;
   final DateTime turnStartedAt;
-  final int turnIndex;
 
   JsonObject toJson() => {
     'userName': userName,
@@ -2773,7 +2773,6 @@ final class AccountSelectorTestRuntime {
     'workspaceRoot': workspaceRoot,
     'workspaceLabel': workspaceLabel,
     'turnStartedAt': turnStartedAt.toUtc().toIso8601String(),
-    'turnIndex': turnIndex,
   };
 }
 
@@ -4577,6 +4576,74 @@ final class EnvironmentPublishResult {
   final EnvironmentImpact impact;
 }
 
+final class CaptureClientAdapter {
+  const CaptureClientAdapter({
+    required this.id,
+    required this.revision,
+    required this.version,
+    required this.catalogRevision,
+    required this.source,
+    required this.installShape,
+    required this.launchRecipe,
+  });
+
+  factory CaptureClientAdapter.fromJson(Object? json, String path) {
+    final value = requireObject(json, path);
+    requireFields(
+      value,
+      path,
+      required: const {
+        'id',
+        'revision',
+        'version',
+        'catalogRevision',
+        'source',
+        'installShape',
+        'launchRecipe',
+      },
+    );
+    final version = requireString(value, 'version', path);
+    final source = requireString(value, 'source', path);
+    final installShape = requireString(value, 'installShape', path);
+    final launchRecipe = requireString(value, 'launchRecipe', path);
+    if (!_validDisplayLabel(version, maximumBytes: 128) ||
+        source != 'prelaunch_digest_catalog' ||
+        !const {
+          'native_single_binary',
+          'npm_wrapper_native_child',
+        }.contains(installShape) ||
+        !const {
+          'generic_http_proxy',
+          'node_env_proxy',
+          'codex_responses_http',
+        }.contains(launchRecipe)) {
+      throw ControlContractException('$path client adapter is invalid');
+    }
+    return CaptureClientAdapter(
+      id: _requireResourceId(value, 'id', path),
+      revision: requireInteger(value, 'revision', path, minimum: 1),
+      version: version,
+      catalogRevision: requireInteger(
+        value,
+        'catalogRevision',
+        path,
+        minimum: 1,
+      ),
+      source: source,
+      installShape: installShape,
+      launchRecipe: launchRecipe,
+    );
+  }
+
+  final String id;
+  final int revision;
+  final String version;
+  final int catalogRevision;
+  final String source;
+  final String installShape;
+  final String launchRecipe;
+}
+
 final class ManagedRunSummary {
   const ManagedRunSummary({
     required this.executableLabel,
@@ -4594,6 +4661,7 @@ final class ManagedRunSummary {
     this.workspaceLabel,
     this.workspaceEvidence,
     this.workspaceDerivationRevision,
+    this.clientAdapter,
     this.processId,
     this.firstObservedAt,
   });
@@ -4621,6 +4689,7 @@ final class ManagedRunSummary {
         'workspaceLabel',
         'workspaceEvidence',
         'workspaceDerivationRevision',
+        'clientAdapter',
         'processId',
         'firstObservedAt',
       },
@@ -4647,6 +4716,12 @@ final class ManagedRunSummary {
     final workspaceId = optionalString(value, 'workspaceId', path);
     final workspaceLabel = optionalString(value, 'workspaceLabel', path);
     final workspaceEvidence = optionalString(value, 'workspaceEvidence', path);
+    final clientAdapter = value['clientAdapter'] == null
+        ? null
+        : CaptureClientAdapter.fromJson(
+            value['clientAdapter'],
+            '$path.clientAdapter',
+          );
     final workspaceDerivationRevision = optionalInteger(
       value,
       'workspaceDerivationRevision',
@@ -4679,6 +4754,7 @@ final class ManagedRunSummary {
           'recognized',
           'verified',
         }.contains(recognition) ||
+        ((recognition == 'verified') != (clientAdapter != null)) ||
         (localUserLabel != null &&
             !_validDisplayLabel(localUserLabel, maximumBytes: 128)) ||
         (runtimeAttribution.any((item) => item != null) !=
@@ -4712,6 +4788,7 @@ final class ManagedRunSummary {
       workspaceLabel: workspaceLabel,
       workspaceEvidence: workspaceEvidence,
       workspaceDerivationRevision: workspaceDerivationRevision,
+      clientAdapter: clientAdapter,
       processId: optionalInteger(value, 'processId', path, minimum: 1),
       firstObservedAt: optionalTimestamp(value, 'firstObservedAt', path),
     );
@@ -4732,6 +4809,7 @@ final class ManagedRunSummary {
   final String? workspaceLabel;
   final String? workspaceEvidence;
   final int? workspaceDerivationRevision;
+  final CaptureClientAdapter? clientAdapter;
   final int? processId;
   final DateTime? firstObservedAt;
 

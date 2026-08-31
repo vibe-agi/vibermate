@@ -3,6 +3,7 @@ import 'dart:convert';
 import 'dart:math' as math;
 
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 
 import '../../core/api/control_api.dart';
 import '../../core/api/control_models.dart';
@@ -136,13 +137,13 @@ final class _EnvironmentsViewState extends State<EnvironmentsView> {
 
   void _openEditor(BuildContext context, EnvironmentRecord environment) {
     unawaited(
-      showDialog<void>(
-        context: context,
-        barrierDismissible: true,
-        builder: (context) => _EnvironmentEditorDialog(
-          controller: controller,
-          environment: environment,
-          copy: copy,
+      Navigator.of(context).push<void>(
+        MaterialPageRoute(
+          builder: (context) => _EnvironmentEditorDialog(
+            controller: controller,
+            environment: environment,
+            copy: copy,
+          ),
         ),
       ),
     );
@@ -150,11 +151,11 @@ final class _EnvironmentsViewState extends State<EnvironmentsView> {
 
   void _openNewEditor(BuildContext context) {
     unawaited(
-      showDialog<void>(
-        context: context,
-        barrierDismissible: true,
-        builder: (context) =>
-            _NewEnvironmentDialog(controller: controller, copy: copy),
+      Navigator.of(context).push<void>(
+        MaterialPageRoute(
+          builder: (context) =>
+              _NewEnvironmentDialog(controller: controller, copy: copy),
+        ),
       ),
     );
   }
@@ -918,6 +919,95 @@ final class _RouteAuthorityRow extends StatelessWidget {
   }
 }
 
+final class _EnvironmentEditorPageFrame extends StatelessWidget {
+  const _EnvironmentEditorPageFrame({
+    super.key,
+    required this.title,
+    required this.content,
+    required this.actions,
+    required this.backLabel,
+    required this.onBack,
+  });
+
+  final Widget title;
+  final Widget content;
+  final List<Widget> actions;
+  final String backLabel;
+  final VoidCallback? onBack;
+
+  @override
+  Widget build(BuildContext context) {
+    return CallbackShortcuts(
+      bindings: {
+        const SingleActivator(LogicalKeyboardKey.escape): () =>
+            unawaited(Navigator.of(context).maybePop()),
+      },
+      child: Focus(
+        autofocus: true,
+        child: Scaffold(
+          backgroundColor: context.viberColors.canvas,
+          body: SafeArea(
+            child: Column(
+              children: [
+                SizedBox(
+                  height: 52,
+                  child: Padding(
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: ViberSpacing.md,
+                    ),
+                    child: Row(
+                      children: [
+                        IconButton(
+                          tooltip: backLabel,
+                          onPressed: onBack,
+                          icon: const Icon(Icons.arrow_back, size: 18),
+                        ),
+                        const SizedBox(width: ViberSpacing.xs),
+                        Expanded(
+                          child: DefaultTextStyle(
+                            style: Theme.of(context).textTheme.titleLarge!,
+                            child: title,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                ),
+                const Divider(height: 1),
+                Expanded(
+                  child: Align(
+                    alignment: Alignment.topCenter,
+                    child: ConstrainedBox(
+                      constraints: const BoxConstraints(maxWidth: 1080),
+                      child: Padding(
+                        padding: const EdgeInsets.all(ViberSpacing.xl),
+                        child: content,
+                      ),
+                    ),
+                  ),
+                ),
+                const Divider(height: 1),
+                Padding(
+                  padding: ViberDialogInsets.actions,
+                  child: Align(
+                    alignment: Alignment.centerRight,
+                    child: Wrap(
+                      spacing: ViberSpacing.sm,
+                      runSpacing: ViberSpacing.xs,
+                      alignment: WrapAlignment.end,
+                      children: actions,
+                    ),
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
 final class _NewEnvironmentDialog extends StatefulWidget {
   const _NewEnvironmentDialog({required this.controller, required this.copy});
 
@@ -968,19 +1058,16 @@ final class _NewEnvironmentDialogState extends State<_NewEnvironmentDialog> {
         final reviewed =
             impact != null &&
             impact.environmentId == (_draftEnvironmentId ?? _id.text);
-        return AlertDialog(
-          insetPadding: ViberDialogInsets.inset,
-          titlePadding: ViberDialogInsets.title,
-          contentPadding: ViberDialogInsets.content,
-          actionsPadding: ViberDialogInsets.actions,
+        return _EnvironmentEditorPageFrame(
+          key: const Key('environment-create-page'),
+          backLabel: copy('common.back'),
+          onBack: widget.controller.environmentMutating ? null : _close,
           title: Text(copy('environment.create.title')),
           content: SizedBox(
             key: const Key('environment-create-frame'),
-            width: ViberMetrics.dialogWideWidth,
+            width: double.infinity,
             child: ConstrainedBox(
-              constraints: BoxConstraints(
-                maxHeight: media.height * ViberMetrics.dialogMaxHeightRatio,
-              ),
+              constraints: BoxConstraints(maxHeight: media.height),
               child: reviewed
                   ? SingleChildScrollView(
                       key: const Key('environment-create-impact'),
@@ -1539,11 +1626,10 @@ final class _EnvironmentEditorDialogState
         final impact = widget.controller.reviewedEnvironmentImpact;
         final reviewed =
             impact != null && impact.environmentId == widget.environment.id;
-        return AlertDialog(
-          insetPadding: ViberDialogInsets.inset,
-          titlePadding: ViberDialogInsets.title,
-          contentPadding: ViberDialogInsets.content,
-          actionsPadding: ViberDialogInsets.actions,
+        return _EnvironmentEditorPageFrame(
+          key: const Key('environment-editor-page'),
+          backLabel: copy('common.back'),
+          onBack: widget.controller.environmentMutating ? null : _close,
           title: Wrap(
             spacing: 9,
             runSpacing: 5,
@@ -1562,11 +1648,9 @@ final class _EnvironmentEditorDialogState
           ),
           content: SizedBox(
             key: const Key('environment-editor-frame'),
-            width: ViberMetrics.dialogWideWidth,
+            width: double.infinity,
             child: ConstrainedBox(
-              constraints: BoxConstraints(
-                maxHeight: media.height * ViberMetrics.dialogMaxHeightRatio,
-              ),
+              constraints: BoxConstraints(maxHeight: media.height),
               child: reviewed
                   ? SingleChildScrollView(
                       key: const Key('environment-impact-review'),
@@ -2286,10 +2370,6 @@ List<_ClientPlanTarget> _clientPlanTargets(
     _ClientPlanTarget(
       clientOrigin: Uri.parse('https://api.openai.com'),
       clientProtocol: 'openai_responses',
-    ),
-    _ClientPlanTarget(
-      clientOrigin: Uri.parse('https://api.openai.com'),
-      clientProtocol: 'openai_chat',
     ),
     _ClientPlanTarget(
       clientOrigin: Uri.parse('https://chatgpt.com'),

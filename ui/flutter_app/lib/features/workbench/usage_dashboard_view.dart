@@ -9,7 +9,7 @@ import '../../core/design/workbench_widgets.dart';
 import '../../core/i18n/app_copy.dart';
 import 'workbench_controller.dart';
 
-enum _ActivityMetric { turns, tokens }
+enum _ActivityMetric { agentApiCalls, tokens }
 
 /// Operator-facing projection of retained Runtime User evidence.
 ///
@@ -32,7 +32,7 @@ final class UsageDashboardView extends StatefulWidget {
 final class _UsageDashboardViewState extends State<UsageDashboardView> {
   String? _selectedUserId;
   String _userQuery = '';
-  _ActivityMetric _activityMetric = _ActivityMetric.turns;
+  _ActivityMetric _activityMetric = _ActivityMetric.agentApiCalls;
   final GlobalKey _detailKey = GlobalKey();
 
   RuntimeUserUsage? _selectedUser(RuntimeUsageReport report) {
@@ -449,7 +449,10 @@ final class _UsageOverview extends StatelessWidget {
     final users = report.users;
     final activeUsers = users.where((user) => user.active).length;
     final activeRuns = users.fold<int>(0, (sum, user) => sum + user.activeRuns);
-    final turns = report.days.fold<int>(0, (sum, day) => sum + day.turns);
+    final agentApiCalls = report.days.fold<int>(
+      0,
+      (sum, day) => sum + day.agentApiCalls,
+    );
     final input = _sumDayTokens(report.days, (tokens) => tokens.inputUncached);
     final output = _sumDayTokens(report.days, (tokens) => tokens.output);
     return LayoutBuilder(
@@ -486,12 +489,12 @@ final class _UsageOverview extends StatelessWidget {
                   : context.viberColors.textFaint,
             ),
             _OverviewCard(
-              key: const Key('usage-total-turns'),
+              key: const Key('usage-total-api-calls'),
               width: width,
               icon: Icons.forum_outlined,
-              label: copy('usage.metric.turns'),
-              value: _integer(turns),
-              detail: copy('usage.metric.turns.detail'),
+              label: copy('usage.metric.api_calls'),
+              value: _integer(agentApiCalls),
+              detail: copy('usage.metric.api_calls.detail'),
             ),
             _OverviewCard(
               key: const Key('usage-input-tokens'),
@@ -686,10 +689,10 @@ final class _ActivityMetricSelector extends StatelessWidget {
       mainAxisSize: MainAxisSize.min,
       children: [
         _MetricButton(
-          key: const Key('usage-metric-turns'),
-          label: copy('usage.activity.metric.turns'),
-          selected: selected == _ActivityMetric.turns,
-          onPressed: () => onChanged(_ActivityMetric.turns),
+          key: const Key('usage-metric-api-calls'),
+          label: copy('usage.activity.metric.api_calls'),
+          selected: selected == _ActivityMetric.agentApiCalls,
+          onPressed: () => onChanged(_ActivityMetric.agentApiCalls),
         ),
         _MetricButton(
           key: const Key('usage-metric-tokens'),
@@ -1367,7 +1370,7 @@ final class _UserUsageRow extends StatelessWidget {
                                   latest.workspaceLabel ??
                                       copy('server.usage.workspace.unknown'),
                                   copy.format('usage.ranking.result', {
-                                    'turns': '${user.turns}',
+                                    'calls': '${user.agentApiCalls}',
                                     'succeeded': '${user.succeeded}',
                                   }),
                                 ].join(' · '),
@@ -1906,7 +1909,7 @@ final class _ModelEvidence extends StatelessWidget {
                 const SizedBox(height: ViberSpacing.sm),
                 Text(
                   copy.format('usage.model.metrics', {
-                    'turns': '${model.turns}',
+                    'calls': '${model.agentApiCalls}',
                     'succeeded': '${model.succeeded}',
                     'failed': '${model.failed}',
                     'input': _tokenLabel(model.tokens.inputUncached),
@@ -1971,7 +1974,7 @@ final class _WorkspaceEvidence extends StatelessWidget {
               title: workspace.label,
               detail: copy.format('usage.workspace.metrics', {
                 'runs': '${workspace.captureRuns}',
-                'turns': '${workspace.turns}',
+                'calls': '${workspace.agentApiCalls}',
                 'devices': '${workspace.devices.length}',
                 'input': _tokenLabel(workspace.tokens.inputUncached),
                 'output': _tokenLabel(workspace.tokens.output),
@@ -2019,7 +2022,7 @@ final class _SessionEvidence extends StatelessWidget {
             title: '${session.client} · ${session.sessionId}',
             detail: copy.format('usage.session.metrics', {
               'runs': '${session.captureRuns}',
-              'turns': '${session.turns}',
+              'calls': '${session.agentApiCalls}',
               'succeeded': '${session.succeeded}',
               'failed': '${session.failed}',
             }),
@@ -2040,7 +2043,7 @@ final class _WorkspaceUsage {
     required this.devices,
     required this.captureRuns,
     required this.activeRuns,
-    required this.turns,
+    required this.agentApiCalls,
     required this.succeeded,
     required this.failed,
     required this.canceled,
@@ -2053,7 +2056,7 @@ final class _WorkspaceUsage {
   final Set<String> devices;
   final int captureRuns;
   final int activeRuns;
-  final int turns;
+  final int agentApiCalls;
   final int succeeded;
   final int failed;
   final int canceled;
@@ -2070,7 +2073,7 @@ final class _WorkspaceAccumulator {
   final List<RuntimeTokenUsage> tokenEvidence = [];
   int captureRuns = 0;
   int activeRuns = 0;
-  int turns = 0;
+  int agentApiCalls = 0;
   int succeeded = 0;
   int failed = 0;
   int canceled = 0;
@@ -2080,7 +2083,7 @@ final class _WorkspaceAccumulator {
     devices.add(context.machineId);
     captureRuns += context.captureRuns;
     activeRuns += context.activeRuns;
-    turns += context.turns;
+    agentApiCalls += context.agentApiCalls;
     succeeded += context.succeeded;
     failed += context.failed;
     canceled += context.canceled;
@@ -2099,7 +2102,7 @@ final class _WorkspaceAccumulator {
     devices: Set.unmodifiable(devices),
     captureRuns: captureRuns,
     activeRuns: activeRuns,
-    turns: turns,
+    agentApiCalls: agentApiCalls,
     succeeded: succeeded,
     failed: failed,
     canceled: canceled,
@@ -2127,8 +2130,8 @@ List<_WorkspaceUsage> _groupWorkspaces(
       .map((value) => value.freeze())
       .toList(growable: false);
   result.sort((left, right) {
-    final turns = right.turns.compareTo(left.turns);
-    if (turns != 0) return turns;
+    final agentApiCalls = right.agentApiCalls.compareTo(left.agentApiCalls);
+    if (agentApiCalls != 0) return agentApiCalls;
     return left.label.toLowerCase().compareTo(right.label.toLowerCase());
   });
   return result;
@@ -2156,18 +2159,18 @@ RuntimeTokenUsage _sumRuntimeTokens(Iterable<RuntimeTokenUsage> values) {
     RuntimeTokenAggregate Function(RuntimeTokenUsage) select,
   ) {
     var tokens = 0;
-    var knownTurns = 0;
-    var unknownTurns = 0;
+    var knownCalls = 0;
+    var unknownCalls = 0;
     for (final item in items) {
       final value = select(item);
       tokens += value.tokens;
-      knownTurns += value.knownTurns;
-      unknownTurns += value.unknownTurns;
+      knownCalls += value.knownCalls;
+      unknownCalls += value.unknownCalls;
     }
     return RuntimeTokenAggregate(
       tokens: tokens,
-      knownTurns: knownTurns,
-      unknownTurns: unknownTurns,
+      knownCalls: knownCalls,
+      unknownCalls: unknownCalls,
     );
   }
 
@@ -2367,7 +2370,7 @@ String _civilDate(DateTime value) => [
 ].join('-');
 
 int _dayValue(RuntimeDayUsage day, _ActivityMetric metric) => switch (metric) {
-  _ActivityMetric.turns => day.turns,
+  _ActivityMetric.agentApiCalls => day.agentApiCalls,
   _ActivityMetric.tokens =>
     day.tokens.inputUncached.tokens +
         day.tokens.cacheWrite.tokens +
@@ -2377,7 +2380,7 @@ int _dayValue(RuntimeDayUsage day, _ActivityMetric metric) => switch (metric) {
 };
 
 bool _dayMetricComplete(RuntimeDayUsage day, _ActivityMetric metric) {
-  if (metric == _ActivityMetric.turns) return true;
+  if (metric == _ActivityMetric.agentApiCalls) return true;
   final values = [
     day.tokens.inputUncached,
     day.tokens.cacheWrite,
@@ -2401,8 +2404,8 @@ String _dayEvidenceLabel({
     'date': date,
     'value': _integer(_dayValue(day, metric)),
     'metric': copy(
-      metric == _ActivityMetric.turns
-          ? 'usage.activity.metric.turns'
+      metric == _ActivityMetric.agentApiCalls
+          ? 'usage.activity.metric.api_calls'
           : 'usage.activity.metric.tokens',
     ),
     'failed': '${day.failed}',
@@ -2415,17 +2418,17 @@ String _dayEvidenceLabel({
 final class _ObservedTotal {
   const _ObservedTotal({
     required this.tokens,
-    required this.knownTurns,
-    required this.unknownTurns,
+    required this.knownCalls,
+    required this.unknownCalls,
   });
 
   final int tokens;
-  final int knownTurns;
-  final int unknownTurns;
+  final int knownCalls;
+  final int unknownCalls;
 
   String get label {
-    if (knownTurns == 0) return '—';
-    return '${unknownTurns > 0 ? '≥' : ''}${_integer(tokens)}';
+    if (knownCalls == 0) return '—';
+    return '${unknownCalls > 0 ? '≥' : ''}${_integer(tokens)}';
   }
 }
 
@@ -2439,13 +2442,13 @@ _ObservedTotal _sumDayTokens(
   for (final day in days) {
     final value = select(day.tokens);
     tokens += value.tokens;
-    known += value.knownTurns;
-    unknown += value.unknownTurns;
+    known += value.knownCalls;
+    unknown += value.unknownCalls;
   }
   return _ObservedTotal(
     tokens: tokens,
-    knownTurns: known,
-    unknownTurns: unknown,
+    knownCalls: known,
+    unknownCalls: unknown,
   );
 }
 
@@ -2461,8 +2464,8 @@ List<RuntimeUserUsage> _rankedUsers(Iterable<RuntimeUserUsage> users) {
       right,
     ).compareTo(_userConsumption(left));
     if (consumption != 0) return consumption;
-    final turns = right.turns.compareTo(left.turns);
-    if (turns != 0) return turns;
+    final agentApiCalls = right.agentApiCalls.compareTo(left.agentApiCalls);
+    if (agentApiCalls != 0) return agentApiCalls;
     return left.username.toLowerCase().compareTo(right.username.toLowerCase());
   });
   return ordered;

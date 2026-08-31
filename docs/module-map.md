@@ -74,8 +74,9 @@ current endpoint and Capture boundary.
 
 ## Current completion boundary
 
-The repository proves a coherent local Desktop source composition and native
-Flutter workbench. It still does not prove Server Host, linked-session account
-connectors, live provider acceptance, automatic account failover, plugins,
-QualityRun, Language Bridge, system trust mutation, Developer ID signing,
-notarization, installation, or Preview/Release readiness.
+The repository proves coherent local Desktop and Runtime Server source
+compositions, Runtime User login, remote Capture relay, and the native Flutter
+workbench. It still does not prove hardened public-Internet deployment,
+linked-session account connectors, live provider acceptance, automatic account
+failover, plugins, QualityRun, Language Bridge, system trust mutation,
+Developer ID signing, notarization, installation, or Preview/Release readiness.

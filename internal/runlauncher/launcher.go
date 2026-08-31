@@ -56,6 +56,7 @@ var (
 	ErrEnvironmentNotFound        = errors.New("selected Environment is not configured")
 	ErrEnvironmentUnavailable     = errors.New("selected Environment is unavailable")
 	ErrRemoteLoginRequired        = errors.New("remote Runtime Server login is required")
+	ErrRemoteRuntimeUnavailable   = errors.New("remote Runtime Server is unavailable")
 )
 
 type Discovery interface {

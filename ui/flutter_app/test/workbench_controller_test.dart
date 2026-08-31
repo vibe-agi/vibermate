@@ -873,6 +873,52 @@ void main() {
       expect(second.draftRevision, first.draftRevision + 1);
     },
   );
+
+  test('code library reads are shared until a successful mutation', () async {
+    final fixture = PreviewControlApi();
+    final api = _CodeLibraryTrackingApi(fixture);
+    final controller = WorkbenchController(
+      api: api,
+      terminalCommands: PreviewTerminalCommandService(),
+      previewMode: true,
+      closeRuntime: fixture.close,
+    );
+    addTearDown(controller.dispose);
+    addTearDown(fixture.close);
+
+    await Future.wait([controller.codeLibrary(), controller.codeLibrary()]);
+    expect(api.codeLibraryCalls, 1);
+
+    await controller.createCodeLibraryCollection(displayName: 'Shared');
+    await controller.codeLibrary();
+    expect(api.codeLibraryCalls, 2);
+
+    await controller.codeLibrary(refresh: true);
+    expect(api.codeLibraryCalls, 3);
+  });
+}
+
+final class _CodeLibraryTrackingApi implements ControlApi {
+  _CodeLibraryTrackingApi(this.delegate);
+
+  final PreviewControlApi delegate;
+  int codeLibraryCalls = 0;
+
+  @override
+  Future<CodeLibraryCatalog> codeLibrary() {
+    codeLibraryCalls += 1;
+    return delegate.codeLibrary();
+  }
+
+  @override
+  Future<CodeLibraryCollection> createCodeLibraryCollection({
+    required String id,
+    required String displayName,
+  }) => delegate.createCodeLibraryCollection(id: id, displayName: displayName);
+
+  @override
+  dynamic noSuchMethod(Invocation invocation) =>
+      throw UnsupportedError('${invocation.memberName}');
 }
 
 final class _UsageTrackingApi implements ControlApi {

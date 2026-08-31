@@ -32,6 +32,79 @@ type RemoteLoginResult struct {
 	TLSFingerprint string
 }
 
+type RemoteInspection struct {
+	Origin     string
+	InstanceID string
+	APIVersion string
+	UserID     string
+	Username   string
+	SessionID  string
+	Encrypted  bool
+}
+
+func InspectRemote(
+	ctx context.Context,
+	target serverconnection.Target,
+	stateDirectory string,
+	clock RemoteClock,
+	timeout time.Duration,
+) (RemoteInspection, error) {
+	if ctx == nil || !target.Valid() || stateDirectory == "" ||
+		!filepath.IsAbs(stateDirectory) || filepath.Clean(stateDirectory) != stateDirectory ||
+		clock == nil || timeout <= 0 {
+		return RemoteInspection{}, errors.New("remote Runtime inspection is incomplete")
+	}
+	loginStore, err := serverconnection.OpenLoginStore(filepath.Join(stateDirectory, "login"))
+	if err != nil {
+		return RemoteInspection{}, err
+	}
+	login, err := loginStore.Load(target, clock.Now().UTC())
+	if err != nil {
+		if errors.Is(err, serverconnection.ErrLoginRequired) {
+			return RemoteInspection{}, ErrRemoteLoginRequired
+		}
+		return RemoteInspection{}, err
+	}
+	transport, err := servertransport.Open(servertransport.Options{
+		Target: target, TrustDirectory: filepath.Join(stateDirectory, "trust"),
+		Clock: clock, Timeout: timeout,
+	})
+	if err != nil {
+		return RemoteInspection{}, fmt.Errorf("%w: %v", ErrRemoteRuntimeUnavailable, err)
+	}
+	client, err := newRemoteControlClient(
+		target.Origin(), login.SessionToken().Value(), transport, transport.Close,
+	)
+	if err != nil {
+		transport.Close()
+		return RemoteInspection{}, err
+	}
+	defer client.close()
+	var current servercontrol.RuntimeUserCurrentSession
+	if err := client.jsonRequest(
+		ctx, http.MethodGet, servercontrol.RuntimeUserCurrentSessionPath,
+		client.credential, "", nil, http.StatusOK, &current,
+	); err != nil {
+		var failure *ControlFailure
+		if errors.As(err, &failure) && failure.Status == http.StatusUnauthorized {
+			return RemoteInspection{}, ErrRemoteLoginRequired
+		}
+		return RemoteInspection{}, fmt.Errorf("%w: %v", ErrRemoteRuntimeUnavailable, err)
+	}
+	if current.Schema != servercontrol.RuntimeUserCurrentSessionSchema ||
+		current.APIVersion != "v1" || current.InstanceID != login.InstanceID() ||
+		current.User.ID != login.UserID() || current.User.Username != login.Username() ||
+		current.SessionID != login.SessionID() {
+		return RemoteInspection{}, ErrRemoteLoginRequired
+	}
+	return RemoteInspection{
+		Origin: target.Origin(), InstanceID: current.InstanceID, APIVersion: current.APIVersion,
+		UserID: current.User.ID, Username: current.User.Username,
+		SessionID: current.SessionID,
+		Encrypted: target.Transport() == serverconnection.TransportHTTPS,
+	}, nil
+}
+
 func LoginRemote(
 	ctx context.Context,
 	request RemoteLoginRequest,

@@ -1,5 +1,5 @@
 Map<String, Object?> runtimeUsagePayload() => {
-  'schema': 'vibermate-runtime-usage-report-v2',
+  'schema': 'vibermate-runtime-usage-report-v3',
   'generatedAt': '2026-08-24T14:00:00.000Z',
   'period': {
     'from': '2026-07-27',
@@ -15,12 +15,12 @@ Map<String, Object?> runtimeUsagePayload() => {
       'state': 'active',
       'captureRuns': 1,
       'activeRuns': 0,
-      'turns': 2,
+      'agentApiCalls': 2,
       'succeeded': 1,
       'failed': 1,
       'canceled': 0,
-      'contentUnavailableTurns': 0,
-      'modelUnavailableTurns': 0,
+      'contentUnavailableCalls': 0,
+      'modelUnavailableCalls': 0,
       'tokens': tokenUsagePayload(),
       'latestContext': {
         'loginSessionId': 'login.test',
@@ -36,7 +36,7 @@ Map<String, Object?> runtimeUsagePayload() => {
         {
           'requestedModel': 'gpt-5.6-sol',
           'upstreamModel': 'relay:model/custom',
-          'turns': 2,
+          'agentApiCalls': 2,
           'succeeded': 1,
           'failed': 1,
           'canceled': 0,
@@ -52,7 +52,7 @@ Map<String, Object?> runtimeUsagePayload() => {
           'workspaceLabel': 'vibermate',
           'captureRuns': 1,
           'activeRuns': 0,
-          'turns': 2,
+          'agentApiCalls': 2,
           'succeeded': 1,
           'failed': 1,
           'canceled': 0,
@@ -65,7 +65,7 @@ Map<String, Object?> runtimeUsagePayload() => {
           'client': 'codex',
           'sessionId': 'native-session-one',
           'captureRuns': 1,
-          'turns': 2,
+          'agentApiCalls': 2,
           'succeeded': 1,
           'failed': 1,
           'canceled': 0,
@@ -79,19 +79,19 @@ Map<String, Object?> runtimeUsagePayload() => {
 
 Map<String, Object?> dayUsagePayload(String date) => {
   'date': date,
-  'turns': 2,
+  'agentApiCalls': 2,
   'succeeded': 1,
   'failed': 1,
   'canceled': 0,
-  'contentUnavailableTurns': 0,
-  'modelUnavailableTurns': 0,
+  'contentUnavailableCalls': 0,
+  'modelUnavailableCalls': 0,
   'tokens': tokenUsagePayload(),
 };
 
 Map<String, Object?> tokenUsagePayload() => {
-  'inputUncached': {'tokens': 42, 'knownTurns': 1, 'unknownTurns': 1},
-  'cacheWrite': {'tokens': 0, 'knownTurns': 0, 'unknownTurns': 2},
-  'cacheRead': {'tokens': 5, 'knownTurns': 1, 'unknownTurns': 1},
-  'output': {'tokens': 9, 'knownTurns': 1, 'unknownTurns': 1},
-  'reasoning': {'tokens': 0, 'knownTurns': 0, 'unknownTurns': 2},
+  'inputUncached': {'tokens': 42, 'knownCalls': 1, 'unknownCalls': 1},
+  'cacheWrite': {'tokens': 0, 'knownCalls': 0, 'unknownCalls': 2},
+  'cacheRead': {'tokens': 5, 'knownCalls': 1, 'unknownCalls': 1},
+  'output': {'tokens': 9, 'knownCalls': 1, 'unknownCalls': 1},
+  'reasoning': {'tokens': 0, 'knownCalls': 0, 'unknownCalls': 2},
 };

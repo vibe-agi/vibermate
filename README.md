@@ -273,7 +273,8 @@ explicit deterministic or credentialed expectation.
 
 ## Not implemented or not proven
 
-- Server Host, remote enrollment, and multi-user authorization;
+- hardened public-Internet Server deployment, automatic certificate issuance,
+  and external identity providers;
 - linked client-session/OAuth account connectors, live provider acceptance,
   and automatic account failover;
 - plugin execution and marketplace UX;

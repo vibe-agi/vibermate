@@ -51,7 +51,7 @@ final class _CodeLibraryViewState extends State<CodeLibraryView> {
       _error = null;
     });
     try {
-      final catalog = await widget.controller.codeLibrary();
+      final catalog = await widget.controller.codeLibrary(refresh: true);
       if (!mounted) return;
       setState(() {
         _catalog = catalog;
@@ -286,16 +286,17 @@ final class _CodeLibraryViewState extends State<CodeLibraryView> {
       ),
     );
     if (draft == null || !mounted) return;
-    final policy = await showDialog<TrafficTransformPolicy>(
-      context: context,
-      builder: (context) => MessageTransformEditorDialog(
-        planId: 'new-transform',
-        wireProtocol: draft.wireProtocol,
-        initial: draft.policy,
-        initialSample: _capturedSampleFor(draft.wireProtocol),
-        copy: copy,
-        testTransform: widget.controller.testMessageTransform,
-        onTestWireProtocolChanged: _rememberTestWireProtocol,
+    final policy = await Navigator.of(context).push<TrafficTransformPolicy>(
+      MaterialPageRoute(
+        builder: (context) => MessageTransformEditorDialog(
+          planId: 'new-transform',
+          wireProtocol: draft.wireProtocol,
+          initial: draft.policy,
+          initialSample: _capturedSampleFor(draft.wireProtocol),
+          copy: copy,
+          testTransform: widget.controller.testMessageTransform,
+          onTestWireProtocolChanged: _rememberTestWireProtocol,
+        ),
       ),
     );
     if (policy == null || !mounted) return;
@@ -312,16 +313,17 @@ final class _CodeLibraryViewState extends State<CodeLibraryView> {
   }
 
   Future<void> _edit(CodeLibraryTransformRevision current) async {
-    final policy = await showDialog<TrafficTransformPolicy>(
-      context: context,
-      builder: (context) => MessageTransformEditorDialog(
-        planId: current.id,
-        wireProtocol: _testWireProtocol,
-        initial: current.policy,
-        initialSample: _capturedSampleFor(_testWireProtocol),
-        copy: copy,
-        testTransform: widget.controller.testMessageTransform,
-        onTestWireProtocolChanged: _rememberTestWireProtocol,
+    final policy = await Navigator.of(context).push<TrafficTransformPolicy>(
+      MaterialPageRoute(
+        builder: (context) => MessageTransformEditorDialog(
+          planId: current.id,
+          wireProtocol: _testWireProtocol,
+          initial: current.policy,
+          initialSample: _capturedSampleFor(_testWireProtocol),
+          copy: copy,
+          testTransform: widget.controller.testMessageTransform,
+          onTestWireProtocolChanged: _rememberTestWireProtocol,
+        ),
       ),
     );
     if (policy == null || !mounted) return;
@@ -352,13 +354,14 @@ final class _CodeLibraryViewState extends State<CodeLibraryView> {
       ),
     );
     if (draft == null || !mounted) return;
-    final policy = await showDialog<AccountSelectorPolicy>(
-      context: context,
-      builder: (context) => AccountSelectorEditorDialog(
-        selectorId: 'new-selector',
-        initial: _accountSelectorStarterPolicy(initialStarter),
-        copy: copy,
-        testSelector: widget.controller.testAccountSelector,
+    final policy = await Navigator.of(context).push<AccountSelectorPolicy>(
+      MaterialPageRoute(
+        builder: (context) => AccountSelectorEditorDialog(
+          selectorId: 'new-selector',
+          initial: _accountSelectorStarterPolicy(initialStarter),
+          copy: copy,
+          testSelector: widget.controller.testAccountSelector,
+        ),
       ),
     );
     if (policy == null || !mounted) return;
@@ -377,13 +380,14 @@ final class _CodeLibraryViewState extends State<CodeLibraryView> {
   Future<void> _editAccountSelector(
     CodeLibraryAccountSelectorRevision current,
   ) async {
-    final policy = await showDialog<AccountSelectorPolicy>(
-      context: context,
-      builder: (context) => AccountSelectorEditorDialog(
-        selectorId: current.id,
-        initial: current.policy,
-        copy: copy,
-        testSelector: widget.controller.testAccountSelector,
+    final policy = await Navigator.of(context).push<AccountSelectorPolicy>(
+      MaterialPageRoute(
+        builder: (context) => AccountSelectorEditorDialog(
+          selectorId: current.id,
+          initial: current.policy,
+          copy: copy,
+          testSelector: widget.controller.testAccountSelector,
+        ),
       ),
     );
     if (policy == null || !mounted) return;

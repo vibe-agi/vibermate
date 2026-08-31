@@ -64,6 +64,11 @@ void main() {
     expect(name.controller?.text, 'Hide local paths');
     await tester.tap(find.byKey(const Key('code-library-transform-next')));
     await tester.pumpAndSettle();
+    expect(
+      find.byKey(const Key('message-transform-editor-page')),
+      findsOneWidget,
+    );
+    expect(find.byType(Dialog), findsNothing);
     final request = tester.widget<TextField>(
       find.byKey(const Key('environment-transform-request-new-transform')),
     );
@@ -515,6 +520,11 @@ selection.accountId = accountByUser[runtime.user.name];''',
     );
     await tester.tap(find.byKey(const Key('code-library-selector-next')));
     await tester.pumpAndSettle();
+    expect(
+      find.byKey(const Key('account-selector-editor-page')),
+      findsOneWidget,
+    );
+    expect(find.byType(Dialog), findsNothing);
     expect(
       find.byKey(const Key('account-selector-source-new-selector')),
       findsOneWidget,

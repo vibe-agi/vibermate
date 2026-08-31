@@ -25,60 +25,65 @@ void main() {
               builder: (context) => TextButton(
                 key: const Key('open-transform-editor'),
                 onPressed: () async {
-                  saved = await showDialog<TrafficTransformPolicy>(
-                    context: context,
-                    builder: (context) => MessageTransformEditorDialog(
-                      planId: 'plan-a',
-                      wireProtocol: 'anthropic_messages',
-                      initial: const TrafficTransformPolicy.disabled(),
-                      copy: copy,
-                      testTransform:
-                          ({
-                            required wireProtocol,
-                            required policy,
-                            sample,
-                          }) async {
-                            tested = policy;
-                            return const MessageTransformTestResult(
-                              wireProtocol: 'anthropic_messages',
-                              requestBefore: MessageTransformTestRequest(
-                                method: 'POST',
-                                path: '/v1/messages',
-                                headers: {
-                                  'content-type': ['application/json'],
+                  saved = await Navigator.of(context)
+                      .push<TrafficTransformPolicy>(
+                        MaterialPageRoute(
+                          builder: (context) => MessageTransformEditorDialog(
+                            planId: 'plan-a',
+                            wireProtocol: 'anthropic_messages',
+                            initial: const TrafficTransformPolicy.disabled(),
+                            copy: copy,
+                            testTransform:
+                                ({
+                                  required wireProtocol,
+                                  required policy,
+                                  sample,
+                                }) async {
+                                  tested = policy;
+                                  return const MessageTransformTestResult(
+                                    wireProtocol: 'anthropic_messages',
+                                    requestBefore: MessageTransformTestRequest(
+                                      method: 'POST',
+                                      path: '/v1/messages',
+                                      headers: {
+                                        'content-type': ['application/json'],
+                                      },
+                                      body: '{"model":"sample-client"}',
+                                    ),
+                                    requestAfter: MessageTransformTestRequest(
+                                      method: 'POST',
+                                      path: '/v1/messages',
+                                      headers: {
+                                        'content-type': ['application/json'],
+                                        'x-sample': ['request-ok'],
+                                      },
+                                      body: '{"model":"sample-upstream"}',
+                                    ),
+                                    responseBefore:
+                                        MessageTransformTestResponse(
+                                          statusCode: 200,
+                                          streaming: false,
+                                          headers: {
+                                            'content-type': [
+                                              'application/json',
+                                            ],
+                                          },
+                                          body: '{"type":"message"}',
+                                        ),
+                                    responseAfter: MessageTransformTestResponse(
+                                      statusCode: 200,
+                                      streaming: false,
+                                      headers: {
+                                        'content-type': ['application/json'],
+                                        'x-sample': ['response-ok'],
+                                      },
+                                      body: '{"type":"message"}',
+                                    ),
+                                  );
                                 },
-                                body: '{"model":"sample-client"}',
-                              ),
-                              requestAfter: MessageTransformTestRequest(
-                                method: 'POST',
-                                path: '/v1/messages',
-                                headers: {
-                                  'content-type': ['application/json'],
-                                  'x-sample': ['request-ok'],
-                                },
-                                body: '{"model":"sample-upstream"}',
-                              ),
-                              responseBefore: MessageTransformTestResponse(
-                                statusCode: 200,
-                                streaming: false,
-                                headers: {
-                                  'content-type': ['application/json'],
-                                },
-                                body: '{"type":"message"}',
-                              ),
-                              responseAfter: MessageTransformTestResponse(
-                                statusCode: 200,
-                                streaming: false,
-                                headers: {
-                                  'content-type': ['application/json'],
-                                  'x-sample': ['response-ok'],
-                                },
-                                body: '{"type":"message"}',
-                              ),
-                            );
-                          },
-                    ),
-                  );
+                          ),
+                        ),
+                      );
                 },
                 child: const Text('open'),
               ),
@@ -94,7 +99,11 @@ void main() {
         const Key('environment-transform-dialog-plan-a'),
       );
       expect(dialog, findsOneWidget);
-      expect(tester.getSize(dialog).width, lessThanOrEqualTo(350));
+      expect(
+        find.byKey(const Key('message-transform-editor-page')),
+        findsOneWidget,
+      );
+      expect(tester.getSize(dialog).width, 390);
       expect(find.text('Anthropic Messages'), findsOneWidget);
       expect(find.text('同一 Turn 上下文'), findsOneWidget);
 
@@ -142,7 +151,7 @@ void main() {
     },
   );
 
-  testWidgets('Escape closes only the message transform child dialog', (
+  testWidgets('Escape closes only the message transform editor page', (
     tester,
   ) async {
     final copy = AppCopy.forLanguage(AppLanguage.english);
@@ -153,16 +162,17 @@ void main() {
           body: Builder(
             builder: (context) => TextButton(
               key: const Key('open-transform-editor'),
-              onPressed: () => showDialog<void>(
-                context: context,
-                builder: (context) => MessageTransformEditorDialog(
-                  planId: 'plan-a',
-                  wireProtocol: 'openai_responses',
-                  initial: const TrafficTransformPolicy.disabled(),
-                  copy: copy,
-                  testTransform:
-                      ({required wireProtocol, required policy, sample}) =>
-                          throw UnimplementedError(),
+              onPressed: () => Navigator.of(context).push<void>(
+                MaterialPageRoute(
+                  builder: (context) => MessageTransformEditorDialog(
+                    planId: 'plan-a',
+                    wireProtocol: 'openai_responses',
+                    initial: const TrafficTransformPolicy.disabled(),
+                    copy: copy,
+                    testTransform:
+                        ({required wireProtocol, required policy, sample}) =>
+                            throw UnimplementedError(),
+                  ),
                 ),
               ),
               child: const Text('parent editor'),
@@ -219,25 +229,30 @@ void main() {
           body: Builder(
             builder: (context) => TextButton(
               key: const Key('open-transform-editor'),
-              onPressed: () => showDialog<void>(
-                context: context,
-                builder: (context) => MessageTransformEditorDialog(
-                  planId: 'captured',
-                  wireProtocol: 'anthropic_messages',
-                  initial: const TrafficTransformPolicy.disabled(),
-                  initialSample: initialSample,
-                  copy: copy,
-                  testTransform:
-                      ({required wireProtocol, required policy, sample}) async {
-                        testedSample = sample;
-                        return MessageTransformTestResult(
-                          wireProtocol: wireProtocol,
-                          requestBefore: sample!.request,
-                          requestAfter: sample.request,
-                          responseBefore: sample.response,
-                          responseAfter: sample.response,
-                        );
-                      },
+              onPressed: () => Navigator.of(context).push<void>(
+                MaterialPageRoute(
+                  builder: (context) => MessageTransformEditorDialog(
+                    planId: 'captured',
+                    wireProtocol: 'anthropic_messages',
+                    initial: const TrafficTransformPolicy.disabled(),
+                    initialSample: initialSample,
+                    copy: copy,
+                    testTransform:
+                        ({
+                          required wireProtocol,
+                          required policy,
+                          sample,
+                        }) async {
+                          testedSample = sample;
+                          return MessageTransformTestResult(
+                            wireProtocol: wireProtocol,
+                            requestBefore: sample!.request,
+                            requestAfter: sample.request,
+                            responseBefore: sample.response,
+                            responseAfter: sample.response,
+                          );
+                        },
+                  ),
                 ),
               ),
               child: const Text('open'),

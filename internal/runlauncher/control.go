@@ -9,11 +9,13 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"os"
 	"strconv"
 	"strings"
 	"time"
 
 	"github.com/vibe-agi/vibermate/internal/capturecontrol"
+	"github.com/vibe-agi/vibermate/internal/desktopcontrol"
 	"github.com/vibe-agi/vibermate/internal/localdiscovery"
 	"github.com/vibe-agi/vibermate/internal/loopbackclient"
 )
@@ -43,6 +45,79 @@ type controlClient struct {
 
 type requestDoer interface {
 	Do(*http.Request) (*http.Response, error)
+}
+
+type RuntimeInspection struct {
+	Origin     string
+	ProcessID  int
+	Ready      bool
+	APIVersion string
+	State      string
+	Host       string
+	Storage    string
+}
+
+func InspectLocal(
+	ctx context.Context,
+	discovery Discovery,
+	timeout time.Duration,
+) (RuntimeInspection, error) {
+	if ctx == nil || discovery == nil || timeout <= 0 {
+		return RuntimeInspection{}, errors.New("local Runtime inspection is incomplete")
+	}
+	session, err := discovery.Load()
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) || errors.Is(err, localdiscovery.ErrExpired) {
+			return RuntimeInspection{}, fmt.Errorf("%w: %v", ErrRuntimeUnavailable, err)
+		}
+		return RuntimeInspection{}, fmt.Errorf("load local control discovery: %w", err)
+	}
+	client, err := newControlClient(session, timeout)
+	if err != nil {
+		return RuntimeInspection{}, fmt.Errorf("construct local control client: %w", err)
+	}
+	defer client.close()
+	var response desktopcontrol.StatusResponse
+	if err := client.jsonRequest(
+		ctx,
+		http.MethodGet,
+		"/api/v1/status",
+		client.credential,
+		"",
+		nil,
+		http.StatusOK,
+		&response,
+	); err != nil {
+		return RuntimeInspection{}, fmt.Errorf("%w: %v", ErrRuntimeUnavailable, err)
+	}
+	if response.Generation != session.InstanceID ||
+		response.Runtime.InstanceID != session.InstanceID ||
+		response.APIVersion != "v1" ||
+		response.StatusKey != "runtime.state."+string(response.Runtime.State) ||
+		response.Runtime.StartedAt.IsZero() {
+		return RuntimeInspection{}, errors.New("local Runtime status is invalid")
+	}
+	switch response.Runtime.State {
+	case "starting", "initialized", "degraded", "stopping", "stopped", "stop_failed":
+	default:
+		return RuntimeInspection{}, errors.New("local Runtime state is invalid")
+	}
+	switch response.Runtime.Host {
+	case "desktop", "server":
+	default:
+		return RuntimeInspection{}, errors.New("local Runtime host is invalid")
+	}
+	switch response.Runtime.Storage {
+	case "healthy", "unavailable":
+	default:
+		return RuntimeInspection{}, errors.New("local Runtime storage state is invalid")
+	}
+	return RuntimeInspection{
+		Origin: session.BaseURL, ProcessID: session.ProcessID,
+		Ready: response.Ready, APIVersion: response.APIVersion,
+		State: string(response.Runtime.State), Host: string(response.Runtime.Host),
+		Storage: string(response.Runtime.Storage),
+	}, nil
 }
 
 func newControlClient(

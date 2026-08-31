@@ -141,6 +141,63 @@ func TestRemoteLogoutRevokesServerSessionBeforeRemovingLocalCredential(t *testin
 	}
 }
 
+func TestInspectRemoteVerifiesTheStoredRuntimeUserSession(t *testing.T) {
+	t.Parallel()
+	now := time.Date(2026, 8, 24, 17, 0, 0, 0, time.UTC)
+	token := base64.RawURLEncoding.EncodeToString(bytes.Repeat([]byte{0x47}, 32))
+	machineID := base64.RawURLEncoding.EncodeToString(bytes.Repeat([]byte{0x37}, 32))
+	server := httptest.NewServer(http.HandlerFunc(func(
+		writer http.ResponseWriter,
+		request *http.Request,
+	) {
+		if request.Method != http.MethodGet ||
+			request.URL.Path != servercontrol.RuntimeUserCurrentSessionPath ||
+			request.Header.Get("Authorization") != "Bearer "+token {
+			http.NotFound(writer, request)
+			return
+		}
+		writer.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(writer).Encode(servercontrol.RuntimeUserCurrentSession{
+			Schema: servercontrol.RuntimeUserCurrentSessionSchema, InstanceID: "instance.test",
+			APIVersion: "v1", SessionID: "login.test", MachineID: machineID,
+			DeviceName: "test-device",
+			User:       servercontrol.RuntimeUserView{ID: "user.test", Username: "alice"},
+		})
+	}))
+	defer server.Close()
+	target, err := serverconnection.ParseTarget(server.URL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	stateDirectory := filepath.Join(t.TempDir(), "remote-client")
+	store, err := serverconnection.OpenLoginStore(filepath.Join(stateDirectory, "login"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	credential, err := serverconnection.NewLoginCredential(serverconnection.LoginCredentialInput{
+		Target: target, InstanceID: "instance.test", UserID: "user.test", Username: "alice",
+		SessionID: "login.test", SessionToken: token, ExpiresAt: now.Add(8 * time.Hour),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.Save(credential); err != nil {
+		t.Fatal(err)
+	}
+	inspection, err := InspectRemote(
+		context.Background(), target, stateDirectory, fixedRemoteClock{now: now}, time.Second,
+	)
+	if err != nil {
+		t.Fatalf("InspectRemote() error = %v", err)
+	}
+	if inspection.Origin != target.Origin() || inspection.InstanceID != "instance.test" ||
+		inspection.UserID != "user.test" || inspection.Username != "alice" ||
+		inspection.SessionID != "login.test" || inspection.APIVersion != "v1" ||
+		inspection.Encrypted {
+		t.Fatalf("InspectRemote() = %#v", inspection)
+	}
+}
+
 type fixedRemoteClock struct{ now time.Time }
 
 func (clock fixedRemoteClock) Now() time.Time { return clock.now }

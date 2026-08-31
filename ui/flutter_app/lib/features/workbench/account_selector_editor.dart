@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:convert';
 
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 
 import '../../core/api/control_models.dart';
 import '../../core/design/viber_theme.dart';
@@ -74,72 +75,83 @@ final class _AccountSelectorEditorDialogState
 
   @override
   Widget build(BuildContext context) {
-    final viewport = MediaQuery.sizeOf(context);
-    final width = (viewport.width - 48).clamp(280.0, 860.0).toDouble();
-    final height = (viewport.height - 48).clamp(460.0, 720.0).toDouble();
-    return Dialog(
-      insetPadding: const EdgeInsets.all(24),
-      clipBehavior: Clip.antiAlias,
-      child: SizedBox(
-        key: Key('account-selector-dialog-${widget.selectorId}'),
-        width: width,
-        height: height,
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.stretch,
-          children: [
-            _header(context),
-            const Divider(height: 1),
-            _scope(context),
-            Expanded(
-              child: LayoutBuilder(
-                builder: (context, constraints) {
-                  final editorHeight = (constraints.maxHeight - 68)
-                      .clamp(240.0, 440.0)
-                      .toDouble();
-                  return SingleChildScrollView(
-                    key: const Key('account-selector-body-scroll'),
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.stretch,
-                      children: [
-                        SizedBox(height: editorHeight, child: _editor(context)),
-                        _sample(context),
-                      ],
+    return CallbackShortcuts(
+      bindings: {
+        const SingleActivator(LogicalKeyboardKey.escape): () =>
+            unawaited(Navigator.of(context).maybePop()),
+      },
+      child: Focus(
+        autofocus: true,
+        child: Scaffold(
+          key: const Key('account-selector-editor-page'),
+          backgroundColor: context.viberColors.canvas,
+          body: SafeArea(
+            child: SizedBox.expand(
+              key: Key('account-selector-dialog-${widget.selectorId}'),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  _header(context),
+                  const Divider(height: 1),
+                  _scope(context),
+                  Expanded(
+                    child: LayoutBuilder(
+                      builder: (context, constraints) {
+                        final editorHeight = (constraints.maxHeight - 68)
+                            .clamp(240.0, 440.0)
+                            .toDouble();
+                        return SingleChildScrollView(
+                          key: const Key('account-selector-body-scroll'),
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.stretch,
+                            children: [
+                              SizedBox(
+                                height: editorHeight,
+                                child: _editor(context),
+                              ),
+                              _sample(context),
+                            ],
+                          ),
+                        );
+                      },
                     ),
-                  );
-                },
-              ),
-            ),
-            if (_result case final result?)
-              Container(
-                key: const Key('account-selector-test-result'),
-                color: context.viberColors.verified.withValues(alpha: 0.08),
-                padding: const EdgeInsets.symmetric(
-                  horizontal: 14,
-                  vertical: 9,
-                ),
-                child: Row(
-                  children: [
-                    Icon(
-                      Icons.check_circle_outline,
-                      size: 15,
-                      color: context.viberColors.verified,
-                    ),
-                    const SizedBox(width: 7),
-                    Expanded(
-                      child: Text(
-                        copy.format('account_selector.test.selected', {
-                          'account': result.accountId,
-                        }),
+                  ),
+                  if (_result case final result?)
+                    Container(
+                      key: const Key('account-selector-test-result'),
+                      color: context.viberColors.verified.withValues(
+                        alpha: 0.08,
+                      ),
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 14,
+                        vertical: 9,
+                      ),
+                      child: Row(
+                        children: [
+                          Icon(
+                            Icons.check_circle_outline,
+                            size: 15,
+                            color: context.viberColors.verified,
+                          ),
+                          const SizedBox(width: 7),
+                          Expanded(
+                            child: Text(
+                              copy.format('account_selector.test.selected', {
+                                'account': result.accountId,
+                              }),
+                            ),
+                          ),
+                        ],
                       ),
                     ),
-                  ],
-                ),
+                  if (_error case final error?)
+                    InlineNotice(message: error, error: true),
+                  const Divider(height: 1),
+                  _actions(context),
+                ],
               ),
-            if (_error case final error?)
-              InlineNotice(message: error, error: true),
-            const Divider(height: 1),
-            _actions(context),
-          ],
+            ),
+          ),
         ),
       ),
     );
@@ -462,9 +474,11 @@ final class _AccountSelectorEditorDialogState
       request: AccountSelectorTestRequest(
         method: 'POST',
         path: path,
-        headers: const {
-          'content-type': ['application/json'],
-        },
+        headers: _protocol == 'anthropic_messages'
+            ? const {
+                'anthropic-beta': ['sample-beta'],
+              }
+            : const {},
         body: jsonEncode({'model': model}),
         clientProtocol: _protocol,
         requestedModel: model,
@@ -479,7 +493,6 @@ final class _AccountSelectorEditorDialogState
         workspaceRoot: '/workspace/$workspace',
         workspaceLabel: workspace,
         turnStartedAt: DateTime.utc(2026, 8, 28, 12),
-        turnIndex: 1,
       ),
     );
   }
@@ -517,7 +530,7 @@ const _suggestions = <String>[
   'accounts[0].id',
   'accounts[0].displayName',
   'request.body',
-  'request.headers["x-name"]',
+  'request.headers["anthropic-beta"]',
   'request.requestedModel',
   'request.protocol',
   'runtime.user.name',
@@ -526,5 +539,4 @@ const _suggestions = <String>[
   'runtime.device.operatingSystem',
   'runtime.device.timeZone',
   'runtime.turn.startedAt',
-  'runtime.turn.index',
 ];

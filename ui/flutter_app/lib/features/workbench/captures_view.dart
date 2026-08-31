@@ -1603,6 +1603,16 @@ final class _CaptureContext extends StatelessWidget {
                           aggregate: aggregate,
                           detail: detail,
                         ),
+                        if (capture.managedRun case final managed?) ...[
+                          const SizedBox(height: 3),
+                          _CaptureClientCompatibility(
+                            key: Key(
+                              'capture-client-compatibility-${capture.key}',
+                            ),
+                            managed: managed,
+                            copy: copy,
+                          ),
+                        ],
                       ],
                     ),
                   ),
@@ -1796,6 +1806,58 @@ final class _CaptureSummaryLine extends StatelessWidget {
             ],
           );
         },
+      ),
+    );
+  }
+}
+
+final class _CaptureClientCompatibility extends StatelessWidget {
+  const _CaptureClientCompatibility({
+    required this.managed,
+    required this.copy,
+    super.key,
+  });
+
+  final ManagedRunSummary managed;
+  final AppCopy copy;
+
+  @override
+  Widget build(BuildContext context) {
+    final adapter = managed.clientAdapter;
+    final status = copy('capture.client.compatibility.${managed.recognition}');
+    final verified = managed.recognition == 'verified';
+    final color = verified
+        ? context.viberColors.verified
+        : managed.recognition == 'unknown'
+        ? context.viberColors.textMuted
+        : context.viberColors.warning;
+    return Tooltip(
+      message: status,
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Icon(
+            verified ? Icons.verified_outlined : Icons.info_outline,
+            size: 13,
+            color: color,
+          ),
+          const SizedBox(width: 4),
+          Text(
+            adapter?.version ?? copy('capture.client.version_unknown'),
+            style: monoStyle.copyWith(color: context.viberColors.textMuted),
+          ),
+          const SizedBox(width: 6),
+          Flexible(
+            child: Text(
+              status,
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+              style: Theme.of(
+                context,
+              ).textTheme.labelSmall?.copyWith(color: color),
+            ),
+          ),
+        ],
       ),
     );
   }

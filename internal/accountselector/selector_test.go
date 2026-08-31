@@ -16,6 +16,9 @@ if (runtime.user.name !== "jack" || runtime.workspace.label !== "vibermate") {
 if (request.method !== "POST" || request.path !== "/v1/messages") {
   throw new Error("unexpected request");
 }
+if (request.headers["anthropic-beta"][0] !== "sample-beta") {
+  throw new Error("unexpected protocol Header");
+}
 let readOnly = false;
 try { request.body = "forged"; } catch (_) { readOnly = true; }
 if (!readOnly) throw new Error("request is mutable");
@@ -39,7 +42,7 @@ selection.accountId = request.body.includes("premium") ? accounts[1].id : accoun
 	}
 	request := Request{
 		Method: "POST", Path: "/v1/messages",
-		Headers: http.Header{"Content-Type": {"application/json"}},
+		Headers: http.Header{"Anthropic-Beta": {"sample-beta"}},
 		Body:    []byte(`{"tier":"premium"}`),
 	}
 	selection, err := turn.Select(context.Background(), request)
@@ -59,6 +62,52 @@ selection.accountId = request.body.includes("premium") ? accounts[1].id : accoun
 	request.Body = []byte(`{"tier":"basic"}`)
 	if _, err := turn.Select(context.Background(), request); !errors.Is(err, ErrExecutionFailed) {
 		t.Fatalf("different second Select() error = %v, want ErrExecutionFailed", err)
+	}
+}
+
+func TestPublishedSelectorDoesNotExposeAnUnprovenTurnIndex(t *testing.T) {
+	program, err := Compile(Policy{JavaScript: `
+if ("index" in runtime.turn) throw new Error("unproven Turn index exposed");
+selection.accountId = accounts[0].id;
+`}, DefaultLimits())
+	if err != nil {
+		t.Fatalf("Compile() error = %v", err)
+	}
+	turn, err := program.NewTurn(TurnOptions{
+		Runtime:  RuntimeMetadata{TurnStartedAt: time.Date(2026, 8, 28, 12, 0, 0, 0, time.UTC)},
+		Accounts: []Account{{ID: "account.allowed", DisplayName: "Allowed"}},
+	})
+	if err != nil {
+		t.Fatalf("NewTurn() error = %v", err)
+	}
+	selection, err := turn.Select(context.Background(), Request{
+		Method: "POST", Path: "/v1/messages", Body: []byte(`{}`),
+	})
+	if err != nil {
+		t.Fatalf("Select() error = %v", err)
+	}
+	if selection.AccountID != "account.allowed" {
+		t.Fatalf("AccountID = %q, want account.allowed", selection.AccountID)
+	}
+}
+
+func TestPublishedSelectorRejectsHeadersUnavailableInProduction(t *testing.T) {
+	program, err := Compile(Policy{JavaScript: `selection.accountId = accounts[0].id;`}, DefaultLimits())
+	if err != nil {
+		t.Fatalf("Compile() error = %v", err)
+	}
+	turn, err := program.NewTurn(TurnOptions{
+		Accounts: []Account{{ID: "account.allowed", DisplayName: "Allowed"}},
+	})
+	if err != nil {
+		t.Fatalf("NewTurn() error = %v", err)
+	}
+	_, err = turn.Select(context.Background(), Request{
+		Method: "POST", Path: "/v1/messages", Body: []byte(`{}`),
+		Headers: http.Header{"X-Name": {"private"}},
+	})
+	if !errors.Is(err, ErrExecutionFailed) {
+		t.Fatalf("Select() error = %v, want ErrExecutionFailed", err)
 	}
 }
 
@@ -103,5 +152,32 @@ Object.defineProperty(selection, "accountId", {
 	})
 	if !errors.Is(err, ErrExecutionFailed) {
 		t.Fatalf("Select() error = %v, want ErrExecutionFailed", err)
+	}
+}
+
+func TestPublishedSelectorStopsAtTheProgramLimitWithoutACallerDeadline(t *testing.T) {
+	t.Parallel()
+
+	limits := DefaultLimits()
+	limits.MaximumExecutionDuration = 10 * time.Millisecond
+	program, err := Compile(Policy{JavaScript: `for (;;) {}`}, limits)
+	if err != nil {
+		t.Fatalf("Compile(infinite loop) error = %v", err)
+	}
+	turn, err := program.NewTurn(TurnOptions{
+		Accounts: []Account{{ID: "account.allowed", DisplayName: "Allowed"}},
+	})
+	if err != nil {
+		t.Fatalf("NewTurn() error = %v", err)
+	}
+	started := time.Now()
+	_, err = turn.Select(context.Background(), Request{
+		Method: "POST", Path: "/v1/messages", Body: []byte(`{}`),
+	})
+	if !errors.Is(err, ErrExecutionFailed) {
+		t.Fatalf("Select(infinite loop) error = %v, want ErrExecutionFailed", err)
+	}
+	if elapsed := time.Since(started); elapsed >= time.Second {
+		t.Fatalf("Select(infinite loop) elapsed = %v, want bounded execution", elapsed)
 	}
 }

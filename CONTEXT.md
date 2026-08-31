@@ -133,6 +133,10 @@ _Avoid_: Conversation, request
 One captured client request and its terminal downstream outcome, together with routing and evidence. An Exchange is the evidence boundary from which a Turn is presented.
 _Avoid_: Conversation, Session
 
+**Agent API Call**:
+One retained terminal Exchange counted by the Usage report. This count does not claim a user-visible Turn; one Turn may produce multiple Agent API Calls.
+_Avoid_: Turn, billing event
+
 **Usage Observation**:
 Protocol-declared model and token counts recorded for one Exchange. Missing values remain unknown; ViberMate does not infer them from model names, payload size, or provider identity.
 _Avoid_: Estimate, billing record, model guess

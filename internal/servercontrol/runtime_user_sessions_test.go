@@ -103,6 +103,36 @@ func TestRuntimeUserLoginSessionHTTPAuthorizesRepeatedCaptureControl(t *testing.
 	if strings.Contains(string(body), session.SessionToken) {
 		t.Fatal("test request unexpectedly contained issued session token")
 	}
+	current, err := http.NewRequest(
+		http.MethodGet,
+		server.URL+servercontrol.RuntimeUserCurrentSessionPath,
+		nil,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	current.Header.Set("Authorization", "Bearer "+session.SessionToken)
+	currentResponse, err := http.DefaultClient.Do(current)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer currentResponse.Body.Close()
+	if currentResponse.StatusCode != http.StatusOK {
+		t.Fatalf("GET current Login Session status = %d", currentResponse.StatusCode)
+	}
+	var currentSession servercontrol.RuntimeUserCurrentSession
+	currentDecoder := json.NewDecoder(currentResponse.Body)
+	currentDecoder.DisallowUnknownFields()
+	if err := currentDecoder.Decode(&currentSession); err != nil {
+		t.Fatalf("decode current Login Session error = %v", err)
+	}
+	if currentSession.Schema != servercontrol.RuntimeUserCurrentSessionSchema ||
+		currentSession.InstanceID != "instance.test" || currentSession.APIVersion != "v1" ||
+		currentSession.User.ID != string(created.ID) || currentSession.User.Username != "alice" ||
+		currentSession.SessionID != session.SessionID || currentSession.MachineID != machineID ||
+		currentSession.DeviceName != "Alice's MacBook" {
+		t.Fatalf("current Login Session = %#v", currentSession)
+	}
 	for attempt := 0; attempt < 2; attempt++ {
 		identity, authErr := users.Authenticate(ctx, session.SessionToken)
 		if authErr != nil || identity.User.ID != created.ID ||
@@ -252,6 +282,13 @@ func (users *rejectingRuntimeUserSessions) Login(
 
 func (*rejectingRuntimeUserSessions) Logout(context.Context, string) error { return nil }
 
+func (*rejectingRuntimeUserSessions) Authenticate(
+	context.Context,
+	string,
+) (runtimeuser.Identity, error) {
+	return runtimeuser.Identity{}, runtimeuser.ErrInvalidSession
+}
+
 type blockingRuntimeUserSessions struct {
 	active  atomic.Int32
 	maximum atomic.Int32
@@ -277,6 +314,13 @@ func (users *blockingRuntimeUserSessions) Login(
 }
 
 func (*blockingRuntimeUserSessions) Logout(context.Context, string) error { return nil }
+
+func (*blockingRuntimeUserSessions) Authenticate(
+	context.Context,
+	string,
+) (runtimeuser.Identity, error) {
+	return runtimeuser.Identity{}, runtimeuser.ErrInvalidSession
+}
 
 type loginTestClock struct{ now time.Time }
 

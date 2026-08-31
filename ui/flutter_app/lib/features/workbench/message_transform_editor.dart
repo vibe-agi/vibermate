@@ -3,6 +3,7 @@ import 'dart:convert';
 import 'dart:math' as math;
 
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 
 import '../../core/api/control_models.dart';
 import '../../core/design/viber_theme.dart';
@@ -481,97 +482,103 @@ final class _MessageTransformEditorDialogState
 
   @override
   Widget build(BuildContext context) {
-    final viewport = MediaQuery.sizeOf(context);
-    final width = math.max(280.0, math.min(860.0, viewport.width - 48));
-    final height = math.max(420.0, math.min(700.0, viewport.height - 48));
-    return Dialog(
-      insetPadding: const EdgeInsets.all(24),
-      clipBehavior: Clip.antiAlias,
-      child: SizedBox(
-        key: Key('environment-transform-dialog-${widget.planId}'),
-        width: width,
-        height: height,
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.stretch,
-          children: [
-            _header(context),
-            const Divider(height: 1),
-            _scope(context),
-            TabBar(
-              controller: _tabs,
-              isScrollable: false,
-              tabs: [
-                Tab(
-                  key: Key(
-                    'environment-transform-tab-request-${widget.planId}',
-                  ),
-                  text: copy('environment.transform.request'),
-                ),
-                Tab(
-                  key: Key(
-                    'environment-transform-tab-response-${widget.planId}',
-                  ),
-                  text: copy('environment.transform.response'),
-                ),
-              ],
-            ),
-            Expanded(
-              child: TabBarView(
-                controller: _tabs,
+    return CallbackShortcuts(
+      bindings: {
+        const SingleActivator(LogicalKeyboardKey.escape): () =>
+            unawaited(Navigator.of(context).maybePop()),
+      },
+      child: Focus(
+        autofocus: true,
+        child: Scaffold(
+          key: const Key('message-transform-editor-page'),
+          backgroundColor: context.viberColors.canvas,
+          body: SafeArea(
+            child: SizedBox.expand(
+              key: Key('environment-transform-dialog-${widget.planId}'),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.stretch,
                 children: [
-                  _ScriptPane(
-                    planId: widget.planId,
-                    stage: 'request',
-                    controller: _request,
-                    copy: copy,
-                    suggestions: const [
-                      'request.body',
-                      'request.headers["x-name"]',
-                      'context.value',
-                      'runtime.user.homeDirectory',
-                      'runtime.user.name',
-                      'runtime.workspace.root',
-                      'JSON.parse(request.body)',
+                  _header(context),
+                  const Divider(height: 1),
+                  _scope(context),
+                  TabBar(
+                    controller: _tabs,
+                    isScrollable: false,
+                    tabs: [
+                      Tab(
+                        key: Key(
+                          'environment-transform-tab-request-${widget.planId}',
+                        ),
+                        text: copy('environment.transform.request'),
+                      ),
+                      Tab(
+                        key: Key(
+                          'environment-transform-tab-response-${widget.planId}',
+                        ),
+                        text: copy('environment.transform.response'),
+                      ),
                     ],
                   ),
-                  _ScriptPane(
-                    planId: widget.planId,
-                    stage: 'response',
-                    controller: _response,
-                    copy: copy,
-                    suggestions: const [
-                      'response.body',
-                      'response.headers["x-name"]',
-                      'context.value',
-                      'runtime.turn.startedAt',
-                      'runtime.device.timeZone',
-                      'runtime.annotations.create("kind", "text")',
-                      'JSON.parse(response.body)',
-                    ],
+                  Expanded(
+                    child: TabBarView(
+                      controller: _tabs,
+                      children: [
+                        _ScriptPane(
+                          planId: widget.planId,
+                          stage: 'request',
+                          controller: _request,
+                          copy: copy,
+                          suggestions: const [
+                            'request.body',
+                            'request.headers["x-name"]',
+                            'context.value',
+                            'runtime.user.homeDirectory',
+                            'runtime.user.name',
+                            'runtime.workspace.root',
+                            'JSON.parse(request.body)',
+                          ],
+                        ),
+                        _ScriptPane(
+                          planId: widget.planId,
+                          stage: 'response',
+                          controller: _response,
+                          copy: copy,
+                          suggestions: const [
+                            'response.body',
+                            'response.headers["x-name"]',
+                            'context.value',
+                            'runtime.turn.startedAt',
+                            'runtime.device.timeZone',
+                            'runtime.annotations.create("kind", "text")',
+                            'JSON.parse(response.body)',
+                          ],
+                        ),
+                      ],
+                    ),
                   ),
+                  if (_result case final result?)
+                    _ResultPanel(result: result, copy: copy),
+                  if (_errorKey case final errorKey?)
+                    Container(
+                      key: Key('environment-transform-error-${widget.planId}'),
+                      color: context.viberColors.danger.withValues(alpha: 0.10),
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 12,
+                        vertical: 7,
+                      ),
+                      child: Text(
+                        copy(errorKey),
+                        style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                          color: context.viberColors.danger,
+                        ),
+                      ),
+                    ),
+                  const Divider(height: 1),
+                  _actions(context),
                 ],
               ),
             ),
-            if (_result case final result?)
-              _ResultPanel(result: result, copy: copy),
-            if (_errorKey case final errorKey?)
-              Container(
-                key: Key('environment-transform-error-${widget.planId}'),
-                color: context.viberColors.danger.withValues(alpha: 0.10),
-                padding: const EdgeInsets.symmetric(
-                  horizontal: 12,
-                  vertical: 7,
-                ),
-                child: Text(
-                  copy(errorKey),
-                  style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                    color: context.viberColors.danger,
-                  ),
-                ),
-              ),
-            const Divider(height: 1),
-            _actions(context),
-          ],
+          ),
         ),
       ),
     );

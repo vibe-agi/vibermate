@@ -240,6 +240,7 @@ final class ControlProblem implements Exception {
     required this.status,
     required this.reasonCode,
     required this.messageKey,
+    this.detail,
   });
 
   factory ControlProblem.fromJson(Object? json, {required int status}) {
@@ -248,6 +249,7 @@ final class ControlProblem implements Exception {
       value,
       'problem',
       required: const {'type', 'title', 'status', 'code'},
+      optional: const {'detail'},
     );
     final wireStatus = requireInteger(value, 'status', 'problem', minimum: 100);
     final code = requireString(value, 'code', 'problem');
@@ -258,19 +260,29 @@ final class ControlProblem implements Exception {
         requireString(value, 'title', 'problem').length > 128) {
       throw const ControlContractException('problem response is invalid');
     }
+    final detail = value.containsKey('detail')
+        ? requireString(value, 'detail', 'problem')
+        : null;
+    if (detail != null && detail.length > 4096) {
+      throw const ControlContractException('problem response is invalid');
+    }
     return ControlProblem(
       status: status,
       reasonCode: code,
       messageKey: 'error.$code',
+      detail: detail,
     );
   }
 
   final int status;
   final String reasonCode;
   final String messageKey;
+  final String? detail;
 
   @override
-  String toString() => 'Control problem $status: $reasonCode';
+  String toString() => detail == null
+      ? 'Control problem $status: $reasonCode'
+      : 'Control problem $status: $reasonCode — $detail';
 }
 
 final class HttpControlApi implements ControlApi {
@@ -284,6 +296,7 @@ final class HttpControlApi implements ControlApi {
 
   static const _origin = 'vibermate://desktop';
   static const _maximumResponseBytes = 2 * 1024 * 1024;
+  static const _maximumCodeLibraryResponseBytes = 16 * 1024 * 1024;
   // The Server bounds usage to 200 ranked users and 5,000 detail rows. Keep
   // this endpoint-specific wire budget aligned with that retained projection.
   static const _maximumUsageResponseBytes = 16 * 1024 * 1024;
@@ -554,7 +567,10 @@ final class HttpControlApi implements ControlApi {
 
   @override
   Future<CodeLibraryCatalog> codeLibrary() async => CodeLibraryCatalog.fromJson(
-    await _read('/api/v1/code-library'),
+    await _read(
+      '/api/v1/code-library',
+      maximumResponseBytes: _maximumCodeLibraryResponseBytes,
+    ),
     'codeLibrary',
   );
 

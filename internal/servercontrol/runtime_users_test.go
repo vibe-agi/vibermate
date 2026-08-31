@@ -39,8 +39,13 @@ func TestRuntimeUsageHTTPRequiresAndPreservesTheCivilWindow(t *testing.T) {
 	}) {
 		t.Fatalf("usage query = %#v across %d calls", usage.period, usage.calls)
 	}
+	body := response.Body.Bytes()
+	if !bytes.Contains(body, []byte(`"agentApiCalls":1`)) ||
+		bytes.Contains(body, []byte(`"turns"`)) {
+		t.Fatalf("usage response uses an inaccurate call count contract: %s", body)
+	}
 	var report runtimeusage.Report
-	decoder := json.NewDecoder(response.Body)
+	decoder := json.NewDecoder(bytes.NewReader(body))
 	decoder.DisallowUnknownFields()
 	if err := decoder.Decode(&report); err != nil {
 		t.Fatalf("decode usage response: %v", err)
@@ -99,7 +104,10 @@ func (usage *recordingRuntimeUsage) Report(
 	return runtimeusage.Report{
 		Schema: runtimeusage.ReportSchema, Period: usage.period,
 		GeneratedAt: time.Date(2026, 8, 26, 1, 2, 3, 0, time.UTC),
-		Days:        []runtimeusage.DayUsage{}, Users: []runtimeusage.UserUsage{},
+		Days: []runtimeusage.DayUsage{{
+			Date: "2026-07-27", AgentAPICalls: 1,
+		}},
+		Users: []runtimeusage.UserUsage{},
 	}, nil
 }
 

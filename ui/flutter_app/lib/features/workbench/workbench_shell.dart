@@ -35,13 +35,9 @@ final class WorkbenchShell extends StatelessWidget {
             SingleActivator(LogicalKeyboardKey.digit1, meta: true):
                 _SectionIntent(WorkbenchSection.captures),
             SingleActivator(LogicalKeyboardKey.digit2, meta: true):
-                _SectionIntent(WorkbenchSection.environments),
+                _SectionIntent(WorkbenchSection.usage),
             SingleActivator(LogicalKeyboardKey.digit3, meta: true):
-                _SectionIntent(WorkbenchSection.routes),
-            SingleActivator(LogicalKeyboardKey.digit4, meta: true):
-                _SectionIntent(WorkbenchSection.network),
-            SingleActivator(LogicalKeyboardKey.digit5, meta: true):
-                _SectionIntent(WorkbenchSection.codeLibrary),
+                _SectionIntent(WorkbenchSection.environments),
             SingleActivator(LogicalKeyboardKey.comma, meta: true):
                 _SectionIntent(WorkbenchSection.settings),
           },
@@ -96,7 +92,7 @@ final class WorkbenchShell extends StatelessWidget {
         onRetry: () => unawaited(controller.refresh(selectDefaults: true)),
       );
     }
-    return switch (controller.section) {
+    final body = switch (controller.section) {
       WorkbenchSection.usage => UsageDashboardView(
         controller: controller,
         copy: copy,
@@ -126,6 +122,15 @@ final class WorkbenchShell extends StatelessWidget {
         copy: copy,
       ),
     };
+    return Column(
+      children: [
+        if (controller.section != WorkbenchSection.settings) ...[
+          _TaskNavigation(controller: controller, copy: copy),
+          const Divider(height: 1),
+        ],
+        Expanded(child: body),
+      ],
+    );
   }
 }
 
@@ -369,6 +374,132 @@ final class _ViberMark extends StatelessWidget {
   }
 }
 
+enum _WorkbenchArea { traffic, insights, configuration }
+
+_WorkbenchArea _areaFor(WorkbenchSection section) => switch (section) {
+  WorkbenchSection.captures ||
+  WorkbenchSection.network => _WorkbenchArea.traffic,
+  WorkbenchSection.usage => _WorkbenchArea.insights,
+  WorkbenchSection.environments ||
+  WorkbenchSection.routes ||
+  WorkbenchSection.codeLibrary ||
+  WorkbenchSection.settings => _WorkbenchArea.configuration,
+};
+
+final class _TaskNavigation extends StatelessWidget {
+  const _TaskNavigation({required this.controller, required this.copy});
+
+  final WorkbenchController controller;
+  final AppCopy copy;
+
+  @override
+  Widget build(BuildContext context) {
+    final sections = switch (_areaFor(controller.section)) {
+      _WorkbenchArea.traffic => const [
+        (WorkbenchSection.captures, Icons.adjust, 'nav.captures', 'captures'),
+        (
+          WorkbenchSection.network,
+          Icons.security_outlined,
+          'nav.network',
+          'network',
+        ),
+      ],
+      _WorkbenchArea.insights => const [
+        (
+          WorkbenchSection.usage,
+          Icons.bar_chart_outlined,
+          'nav.usage',
+          'usage',
+        ),
+      ],
+      _WorkbenchArea.configuration => const [
+        (
+          WorkbenchSection.environments,
+          Icons.tune,
+          'nav.environments',
+          'environments',
+        ),
+        (WorkbenchSection.routes, Icons.hub_outlined, 'nav.routes', 'routes'),
+        (
+          WorkbenchSection.codeLibrary,
+          Icons.data_object_rounded,
+          'nav.code_library',
+          'code-library',
+        ),
+      ],
+    };
+    return Material(
+      color: context.viberColors.panel,
+      child: SizedBox(
+        height: 36,
+        child: SingleChildScrollView(
+          scrollDirection: Axis.horizontal,
+          child: Row(
+            children: [
+              const SizedBox(width: ViberSpacing.md),
+              for (final item in sections)
+                _TaskTab(
+                  key: Key('workbench-tab-${item.$4}'),
+                  icon: item.$2,
+                  label: copy(item.$3),
+                  selected: controller.section == item.$1,
+                  onPressed: () => controller.selectSection(item.$1),
+                ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+final class _TaskTab extends StatelessWidget {
+  const _TaskTab({
+    super.key,
+    required this.icon,
+    required this.label,
+    required this.selected,
+    required this.onPressed,
+  });
+
+  final IconData icon;
+  final String label;
+  final bool selected;
+  final VoidCallback onPressed;
+
+  @override
+  Widget build(BuildContext context) {
+    return Semantics(
+      selected: selected,
+      button: true,
+      child: TextButton.icon(
+        onPressed: onPressed,
+        style:
+            TextButton.styleFrom(
+              minimumSize: const Size(0, 36),
+              padding: const EdgeInsets.symmetric(horizontal: ViberSpacing.lg),
+              shape: const RoundedRectangleBorder(),
+              foregroundColor: selected
+                  ? context.viberColors.route
+                  : context.viberColors.textMuted,
+              side: BorderSide(
+                color: selected
+                    ? context.viberColors.route
+                    : Colors.transparent,
+                width: 0,
+              ),
+            ).copyWith(
+              backgroundColor: WidgetStatePropertyAll(
+                selected ? context.viberColors.selection : Colors.transparent,
+              ),
+            ),
+        icon: Icon(icon, size: 15),
+        label: Text(label),
+      ),
+    );
+  }
+}
+
 final class _NavigationRail extends StatelessWidget {
   const _NavigationRail({required this.controller, required this.copy});
 
@@ -383,50 +514,39 @@ final class _NavigationRail extends StatelessWidget {
       child: Column(
         children: [
           const SizedBox(height: ViberSpacing.xs),
-          if (controller.serverManagement)
-            _RailButton(
-              key: const Key('usage-dashboard-nav'),
-              icon: Icons.bar_chart_outlined,
-              label: copy('nav.usage'),
-              selected: controller.section == WorkbenchSection.usage,
-              onPressed: () => controller.selectSection(WorkbenchSection.usage),
-            ),
           _RailButton(
+            key: const Key('workbench-area-traffic'),
             icon: Icons.adjust,
-            label: '${copy('nav.captures')}  ⌘1',
-            selected: controller.section == WorkbenchSection.captures,
+            label: '${copy('nav.area.traffic')}  ⌘1',
+            selected: _areaFor(controller.section) == _WorkbenchArea.traffic,
             onPressed: () =>
                 controller.selectSection(WorkbenchSection.captures),
           ),
+          if (controller.serverManagement)
+            KeyedSubtree(
+              key: const Key('usage-dashboard-nav'),
+              child: _RailButton(
+                key: const Key('workbench-area-insights'),
+                icon: Icons.bar_chart_outlined,
+                label: '${copy('nav.area.insights')}  ⌘2',
+                selected:
+                    _areaFor(controller.section) == _WorkbenchArea.insights,
+                onPressed: () =>
+                    controller.selectSection(WorkbenchSection.usage),
+              ),
+            ),
           _RailButton(
+            key: const Key('workbench-area-configuration'),
             icon: Icons.tune,
-            label: '${copy('nav.environments')}  ⌘2',
-            selected: controller.section == WorkbenchSection.environments,
+            label: '${copy('nav.area.configuration')}  ⌘3',
+            selected:
+                _areaFor(controller.section) == _WorkbenchArea.configuration,
             onPressed: () =>
                 controller.selectSection(WorkbenchSection.environments),
           ),
-          _RailButton(
-            icon: Icons.hub_outlined,
-            label: '${copy('nav.routes')}  ⌘3',
-            selected: controller.section == WorkbenchSection.routes,
-            onPressed: () => controller.selectSection(WorkbenchSection.routes),
-          ),
-          _RailButton(
-            icon: Icons.security_outlined,
-            label: '${copy('nav.network')}  ⌘4',
-            selected: controller.section == WorkbenchSection.network,
-            onPressed: () => controller.selectSection(WorkbenchSection.network),
-          ),
-          _RailButton(
-            key: const Key('code-library-nav'),
-            icon: Icons.data_object_rounded,
-            label: '${copy('nav.code_library')}  ⌘5',
-            selected: controller.section == WorkbenchSection.codeLibrary,
-            onPressed: () =>
-                controller.selectSection(WorkbenchSection.codeLibrary),
-          ),
           const Spacer(),
           _RailButton(
+            key: const Key('workbench-settings-nav'),
             icon: Icons.settings_outlined,
             label: '${copy('nav.settings')}  ⌘,',
             selected: controller.section == WorkbenchSection.settings,

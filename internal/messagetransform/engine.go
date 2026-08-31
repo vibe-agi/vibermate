@@ -46,28 +46,30 @@ func (policy Policy) Validate() error {
 }
 
 type Limits struct {
-	MaximumScriptBytes      int
-	MaximumBodyBytes        int
-	MaximumHeaderFields     int
-	MaximumHeaderBytes      int
-	MaximumHeaderValueBytes int
-	MaximumContextBytes     int
-	MaximumContextDepth     int
-	MaximumContextValues    int
-	MaximumCallStackDepth   int
+	MaximumScriptBytes       int
+	MaximumBodyBytes         int
+	MaximumHeaderFields      int
+	MaximumHeaderBytes       int
+	MaximumHeaderValueBytes  int
+	MaximumContextBytes      int
+	MaximumContextDepth      int
+	MaximumContextValues     int
+	MaximumCallStackDepth    int
+	MaximumExecutionDuration time.Duration
 }
 
 func DefaultLimits() Limits {
 	return Limits{
-		MaximumScriptBytes:      64 << 10,
-		MaximumBodyBytes:        16 << 20,
-		MaximumHeaderFields:     128,
-		MaximumHeaderBytes:      64 << 10,
-		MaximumHeaderValueBytes: 16 << 10,
-		MaximumContextBytes:     64 << 10,
-		MaximumContextDepth:     16,
-		MaximumContextValues:    1024,
-		MaximumCallStackDepth:   256,
+		MaximumScriptBytes:       64 << 10,
+		MaximumBodyBytes:         16 << 20,
+		MaximumHeaderFields:      128,
+		MaximumHeaderBytes:       64 << 10,
+		MaximumHeaderValueBytes:  16 << 10,
+		MaximumContextBytes:      64 << 10,
+		MaximumContextDepth:      16,
+		MaximumContextValues:     1024,
+		MaximumCallStackDepth:    256,
+		MaximumExecutionDuration: 2 * time.Second,
 	}
 }
 
@@ -80,7 +82,8 @@ func (limits Limits) validate() error {
 		limits.MaximumContextBytes <= 0 ||
 		limits.MaximumContextDepth <= 0 ||
 		limits.MaximumContextValues <= 0 ||
-		limits.MaximumCallStackDepth <= 0 {
+		limits.MaximumCallStackDepth <= 0 ||
+		limits.MaximumExecutionDuration <= 0 {
 		return fmt.Errorf("%w: limits must be positive", ErrInvalidPolicy)
 	}
 	return nil
@@ -574,11 +577,21 @@ func (turn *Turn) apply(
 	if !ok {
 		return scriptMessage{}, fmt.Errorf("%w: %s program is not callable", ErrExecutionFailed, stage)
 	}
-	stopContext := context.AfterFunc(ctx, func() {
-		runtime.Interrupt(ctx.Err())
+	executionContext, cancelExecution := context.WithTimeout(
+		ctx,
+		turn.program.limits.MaximumExecutionDuration,
+	)
+	interruptDone := make(chan struct{})
+	stopContext := context.AfterFunc(executionContext, func() {
+		runtime.Interrupt(context.Cause(executionContext))
+		close(interruptDone)
 	})
 	_, callErr := function(goja.Undefined(), messageValue, contextValue, runtimeValue)
-	stopContext()
+	if !stopContext() {
+		<-interruptDone
+	}
+	cancelExecution()
+	runtime.ClearInterrupt()
 	if callErr != nil {
 		return scriptMessage{}, classifyRuntimeError(stage, callErr)
 	}

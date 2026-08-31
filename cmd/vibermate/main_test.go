@@ -16,11 +16,199 @@ import (
 	"testing"
 	"time"
 
+	"github.com/vibe-agi/vibermate/internal/clientpath"
+	"github.com/vibe-agi/vibermate/internal/desktopcontrol"
 	"github.com/vibe-agi/vibermate/internal/environment"
+	"github.com/vibe-agi/vibermate/internal/hostcontract"
+	"github.com/vibe-agi/vibermate/internal/localdiscovery"
+	"github.com/vibe-agi/vibermate/internal/productruntime"
 	"github.com/vibe-agi/vibermate/internal/runlauncher"
+	"github.com/vibe-agi/vibermate/internal/runtimepath"
 	"github.com/vibe-agi/vibermate/internal/serverconnection"
 	"github.com/vibe-agi/vibermate/internal/servercontrol"
 )
+
+func TestHelpExplainsTheFirstCapturedRun(t *testing.T) {
+	t.Parallel()
+	for _, arguments := range [][]string{{"help"}, {"--help"}, {"-h"}} {
+		var stdout, stderr strings.Builder
+		code, key := execute(
+			arguments,
+			[]string{"LANG=en_US.UTF-8"},
+			strings.NewReader(""),
+			&stdout,
+			&stderr,
+		)
+		if code != 0 || key != "" || stderr.Len() != 0 {
+			t.Fatalf(
+				"execute(%v) code=%d key=%q stdout=%q stderr=%q",
+				arguments,
+				code,
+				key,
+				stdout.String(),
+				stderr.String(),
+			)
+		}
+		for _, expected := range []string{
+			"vibermate run -- codex",
+			"vibermate run -- claude",
+			"vibermate doctor",
+			"vibermate login --server",
+		} {
+			if !strings.Contains(stdout.String(), expected) {
+				t.Fatalf("help for %v lacks %q: %s", arguments, expected, stdout.String())
+			}
+		}
+	}
+}
+
+func TestStatusAndDoctorVerifyTheRealLocalControlAPI(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	now := time.Now().UTC()
+	credential := base64.RawURLEncoding.EncodeToString(bytes.Repeat([]byte{0x43}, 32))
+	instanceID := base64.RawURLEncoding.EncodeToString(bytes.Repeat([]byte{0x49}, 16))
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		if request.Method != http.MethodGet || request.URL.Path != "/api/v1/status" ||
+			request.Header.Get("Authorization") != "Bearer "+credential {
+			http.Error(writer, "unexpected request", http.StatusForbidden)
+			return
+		}
+		writer.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(writer).Encode(desktopcontrol.StatusResponse{
+			Generation: instanceID,
+			Ready:      true,
+			APIVersion: "v1",
+			StatusKey:  "runtime.state.initialized",
+			Runtime: productruntime.RuntimeStatus{
+				State:      productruntime.RuntimeStateInitialized,
+				InstanceID: instanceID,
+				Host:       hostcontract.KindDesktop,
+				Storage:    productruntime.StorageStateHealthy,
+				StartedAt:  now,
+			},
+		})
+	}))
+	defer server.Close()
+	layout, err := runtimepath.Default()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(layout.RuntimeDirectory, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	session := localdiscovery.Session{
+		Schema:            localdiscovery.Schema,
+		InstanceID:        instanceID,
+		ProcessID:         os.Getpid(),
+		BaseURL:           server.URL,
+		ControlCredential: credential,
+		ExpiresAt:         now.Add(time.Hour),
+	}
+	payload, err := json.Marshal(session)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(layout.CLIControlRecord, payload, 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	for _, command := range []string{"status", "doctor"} {
+		var stdout, stderr strings.Builder
+		code, key := execute(
+			[]string{command},
+			[]string{"LANG=en_US.UTF-8"},
+			strings.NewReader(""),
+			&stdout,
+			&stderr,
+		)
+		if code != 0 || key != "" || stderr.Len() != 0 {
+			t.Fatalf(
+				"%s code=%d key=%q stdout=%q stderr=%q",
+				command,
+				code,
+				key,
+				stdout.String(),
+				stderr.String(),
+			)
+		}
+		for _, expected := range []string{"ready", server.URL, "desktop", "healthy"} {
+			if !strings.Contains(stdout.String(), expected) {
+				t.Fatalf("%s output lacks %q: %s", command, expected, stdout.String())
+			}
+		}
+		if command == "doctor" && !strings.Contains(stdout.String(), "vibermate run -- codex") {
+			t.Fatalf("doctor output lacks next action: %s", stdout.String())
+		}
+	}
+}
+
+func TestStatusAndDoctorVerifyTheRemoteRuntimeUserSession(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	now := time.Now().UTC().Truncate(time.Millisecond)
+	token := base64.RawURLEncoding.EncodeToString(bytes.Repeat([]byte{0x53}, 32))
+	machineID := base64.RawURLEncoding.EncodeToString(bytes.Repeat([]byte{0x36}, 32))
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		if request.Method != http.MethodGet ||
+			request.URL.Path != servercontrol.RuntimeUserCurrentSessionPath ||
+			request.Header.Get("Authorization") != "Bearer "+token {
+			http.NotFound(writer, request)
+			return
+		}
+		writer.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(writer).Encode(servercontrol.RuntimeUserCurrentSession{
+			Schema: servercontrol.RuntimeUserCurrentSessionSchema, InstanceID: "instance.test",
+			APIVersion: "v1", SessionID: "login.test", MachineID: machineID,
+			DeviceName: "test-device",
+			User:       servercontrol.RuntimeUserView{ID: "user.test", Username: "alice"},
+		})
+	}))
+	defer server.Close()
+	target, err := serverconnection.ParseTarget(server.URL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	stateDirectory, err := clientpath.DefaultRemoteStateDirectory()
+	if err != nil {
+		t.Fatal(err)
+	}
+	store, err := serverconnection.OpenLoginStore(filepath.Join(stateDirectory, "login"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	credential, err := serverconnection.NewLoginCredential(serverconnection.LoginCredentialInput{
+		Target: target, InstanceID: "instance.test", UserID: "user.test", Username: "alice",
+		SessionID: "login.test", SessionToken: token, ExpiresAt: now.Add(time.Hour),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.Save(credential); err != nil {
+		t.Fatal(err)
+	}
+	for _, command := range []string{"status", "doctor"} {
+		var stdout, stderr strings.Builder
+		code, key := execute(
+			[]string{command, "--server", server.URL},
+			[]string{"LANG=en_US.UTF-8"}, strings.NewReader(""), &stdout, &stderr,
+		)
+		if code != 0 || key != "" || stderr.Len() != 0 {
+			t.Fatalf(
+				"%s code=%d key=%q stdout=%q stderr=%q",
+				command, code, key, stdout.String(), stderr.String(),
+			)
+		}
+		for _, expected := range []string{"alice", server.URL, "unencrypted HTTP", "instance.test"} {
+			if !strings.Contains(stdout.String(), expected) {
+				t.Fatalf("%s output lacks %q: %s", command, expected, stdout.String())
+			}
+		}
+		if command == "doctor" &&
+			!strings.Contains(stdout.String(), "vibermate run --server "+server.URL+" -- codex") {
+			t.Fatalf("doctor output lacks next action: %s", stdout.String())
+		}
+	}
+}
 
 func TestExecuteRequiresOneExactRunSeparator(t *testing.T) {
 	t.Parallel()
@@ -35,7 +223,8 @@ func TestExecuteRequiresOneExactRunSeparator(t *testing.T) {
 		{"run", "--env", "bad ID", "--", "claude"},
 		{"run", "--environment", "work", "--", "claude"},
 		{"run", "--env", "work", "--env", "personal", "--", "claude"},
-		{"status"},
+		{"status", "--server"},
+		{"doctor", "--server", "invalid-host"},
 	} {
 		code, key := execute(
 			arguments,
@@ -60,6 +249,7 @@ func TestLaunchFailureKeyDistinguishesEnvironmentSelection(t *testing.T) {
 		{err: runlauncher.ErrEnvironmentUnavailable, want: keyEnvironmentDown},
 		{err: runlauncher.ErrRuntimeUnavailable, want: keyRuntimeUnavailable},
 		{err: runlauncher.ErrRemoteLoginRequired, want: keyRemoteLoginRequired},
+		{err: runlauncher.ErrRemoteRuntimeUnavailable, want: keyRemoteRuntimeUnavailable},
 		{err: runlauncher.ErrCapturePreparationTimedOut, want: keyCapturePreparationTimedOut},
 		{err: errors.New("other launch failure"), want: keyLaunchFailed},
 	}

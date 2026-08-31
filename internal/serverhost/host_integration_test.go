@@ -397,7 +397,8 @@ func TestServerAdminCreatesRuntimeUserWithoutExposingPasswordMaterial(t *testing
 		t.Fatal(err)
 	}
 	if usage.Schema != runtimeusage.ReportSchema || len(usage.Users) != 1 ||
-		usage.Users[0].UserID != runtimeuser.UserID(created.ID) || usage.Users[0].Turns != 0 {
+		usage.Users[0].UserID != runtimeuser.UserID(created.ID) ||
+		usage.Users[0].AgentAPICalls != 0 {
 		t.Fatalf("Runtime User usage = %#v", usage)
 	}
 	disable := sendJSON(
@@ -900,11 +901,11 @@ func TestRuntimeUserCustomClaudeHTTPOriginProducesExchangeAndUsage(t *testing.T)
 		t.Fatalf("usage status=%d", usageResponse.StatusCode)
 	}
 	if len(usage.Users) != 1 || usage.Users[0].UserID != created.ID ||
-		usage.Users[0].Turns != 1 || usage.Users[0].Succeeded != 1 ||
+		usage.Users[0].AgentAPICalls != 1 || usage.Users[0].Succeeded != 1 ||
 		usage.Users[0].Tokens.InputUncached.Tokens != 4 ||
-		usage.Users[0].Tokens.InputUncached.KnownTurns != 1 ||
+		usage.Users[0].Tokens.InputUncached.KnownCalls != 1 ||
 		usage.Users[0].Tokens.Output.Tokens != 2 ||
-		usage.Users[0].Tokens.Output.KnownTurns != 1 ||
+		usage.Users[0].Tokens.Output.KnownCalls != 1 ||
 		len(usage.Users[0].Models) != 1 ||
 		usage.Users[0].Models[0].RequestedModel != model ||
 		usage.Users[0].Models[0].UpstreamModel != model {

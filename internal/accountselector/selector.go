@@ -36,29 +36,32 @@ func (policy Policy) Validate() error {
 }
 
 type Limits struct {
-	MaximumScriptBytes    int
-	MaximumBodyBytes      int
-	MaximumHeaderFields   int
-	MaximumHeaderBytes    int
-	MaximumAccounts       int
-	MaximumCallStackDepth int
+	MaximumScriptBytes       int
+	MaximumBodyBytes         int
+	MaximumHeaderFields      int
+	MaximumHeaderBytes       int
+	MaximumAccounts          int
+	MaximumCallStackDepth    int
+	MaximumExecutionDuration time.Duration
 }
 
 func DefaultLimits() Limits {
 	return Limits{
-		MaximumScriptBytes:    64 << 10,
-		MaximumBodyBytes:      16 << 20,
-		MaximumHeaderFields:   128,
-		MaximumHeaderBytes:    64 << 10,
-		MaximumAccounts:       1024,
-		MaximumCallStackDepth: 256,
+		MaximumScriptBytes:       64 << 10,
+		MaximumBodyBytes:         16 << 20,
+		MaximumHeaderFields:      128,
+		MaximumHeaderBytes:       64 << 10,
+		MaximumAccounts:          1024,
+		MaximumCallStackDepth:    256,
+		MaximumExecutionDuration: 2 * time.Second,
 	}
 }
 
 func (limits Limits) validate() error {
 	if limits.MaximumScriptBytes <= 0 || limits.MaximumBodyBytes <= 0 ||
 		limits.MaximumHeaderFields <= 0 || limits.MaximumHeaderBytes <= 0 ||
-		limits.MaximumAccounts <= 0 || limits.MaximumCallStackDepth <= 0 {
+		limits.MaximumAccounts <= 0 || limits.MaximumCallStackDepth <= 0 ||
+		limits.MaximumExecutionDuration <= 0 {
 		return fmt.Errorf("%w: limits must be positive", ErrInvalidPolicy)
 	}
 	return nil
@@ -102,7 +105,6 @@ type RuntimeMetadata struct {
 	WorkspaceRoot          string
 	WorkspaceLabel         string
 	TurnStartedAt          time.Time
-	TurnIndex              uint64
 }
 
 type Request struct {
@@ -236,12 +238,25 @@ func (turn *Turn) execute(ctx context.Context, request []byte) (Selection, error
 	if !ok {
 		return Selection{}, fmt.Errorf("%w: JavaScript is not callable", ErrExecutionFailed)
 	}
-	stopContext := context.AfterFunc(ctx, func() { runtime.Interrupt(ctx.Err()) })
-	defer stopContext()
-	if _, err := function(
+	executionContext, cancelExecution := context.WithTimeout(
+		ctx,
+		turn.program.limits.MaximumExecutionDuration,
+	)
+	interruptDone := make(chan struct{})
+	stopContext := context.AfterFunc(executionContext, func() {
+		runtime.Interrupt(context.Cause(executionContext))
+		close(interruptDone)
+	})
+	_, callErr := function(
 		goja.Undefined(), requestValue, runtimeValue, accountsValue, selectionValue,
-	); err != nil {
-		return Selection{}, classifyRuntimeError(err)
+	)
+	if !stopContext() {
+		<-interruptDone
+	}
+	cancelExecution()
+	runtime.ClearInterrupt()
+	if callErr != nil {
+		return Selection{}, classifyRuntimeError(callErr)
 	}
 	accountID := selectionValue.Get("accountId")
 	if accountID == nil || accountID.ExportType() != reflect.TypeFor[string]() {
@@ -280,6 +295,9 @@ func encodeRequest(request Request, limits Limits) ([]byte, error) {
 		lower := strings.ToLower(name)
 		if !validBoundedText(lower, 256, false) {
 			return nil, fmt.Errorf("%w: request Header name is invalid", ErrExecutionFailed)
+		}
+		if lower != "anthropic-beta" {
+			return nil, fmt.Errorf("%w: request Header is unavailable", ErrExecutionFailed)
 		}
 		if _, duplicate := headers[lower]; duplicate {
 			return nil, fmt.Errorf("%w: request Header names collide", ErrExecutionFailed)
@@ -324,7 +342,6 @@ type runtimeJSON struct {
 	} `json:"workspace"`
 	Turn struct {
 		StartedAt string `json:"startedAt"`
-		Index     uint64 `json:"index"`
 	} `json:"turn"`
 }
 
@@ -352,7 +369,6 @@ func encodeRuntime(metadata RuntimeMetadata) ([]byte, error) {
 	output.Device.TimeZone = metadata.TimeZone
 	output.Workspace.Root = metadata.WorkspaceRoot
 	output.Workspace.Label = metadata.WorkspaceLabel
-	output.Turn.Index = metadata.TurnIndex
 	if !metadata.TurnStartedAt.IsZero() {
 		if metadata.TurnStartedAt.Year() < 1 || metadata.TurnStartedAt.Year() > 9999 {
 			return nil, fmt.Errorf("%w: Turn start time is invalid", ErrExecutionFailed)
