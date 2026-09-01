@@ -301,6 +301,12 @@ final class _ApprovalRowState extends State<_ApprovalRow> {
         ? approval.aggregateKey
         : '${approval.target!.host}:${approval.target!.port}';
     final pending = _pendingChoice;
+    final immediateChoices = approval.choices
+        .where((choice) => choice.scope == 'request')
+        .toList(growable: false);
+    final permanentChoices = approval.choices
+        .where((choice) => choice.scope != 'request')
+        .toList(growable: false);
     return ColoredBox(
       color: context.viberColors.canvas,
       child: Padding(
@@ -407,7 +413,7 @@ final class _ApprovalRowState extends State<_ApprovalRow> {
                 spacing: 7,
                 runSpacing: 7,
                 children: [
-                  for (final choice in approval.choices)
+                  for (final choice in immediateChoices)
                     OutlinedButton.icon(
                       key: Key(
                         'approval-${approval.id}-${choice.decision}-${choice.scope}',
@@ -422,6 +428,47 @@ final class _ApprovalRowState extends State<_ApprovalRow> {
                         size: 14,
                       ),
                       label: Text(copy(choice.labelKey)),
+                    ),
+                  if (permanentChoices.isNotEmpty)
+                    PopupMenuButton<ApprovalChoice>(
+                      key: Key('approval-${approval.id}-permanent-menu'),
+                      enabled: !widget.controller.networkMutating,
+                      tooltip: copy('network.approval.permanent_options'),
+                      position: PopupMenuPosition.under,
+                      onSelected: (choice) =>
+                          setState(() => _pendingChoice = choice),
+                      itemBuilder: (context) => [
+                        for (final choice in permanentChoices)
+                          PopupMenuItem(
+                            key: Key(
+                              'approval-${approval.id}-${choice.decision}-${choice.scope}',
+                            ),
+                            value: choice,
+                            child: Text(copy(choice.labelKey)),
+                          ),
+                      ],
+                      child: Container(
+                        constraints: const BoxConstraints(
+                          minHeight: ViberMetrics.controlHeight,
+                        ),
+                        padding: const EdgeInsets.symmetric(horizontal: 10),
+                        decoration: BoxDecoration(
+                          border: Border.all(
+                            color: context.viberColors.divider,
+                          ),
+                          borderRadius: ViberMetrics.controlRadius,
+                        ),
+                        child: Row(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            const Icon(Icons.rule_outlined, size: 14),
+                            const SizedBox(width: 6),
+                            Text(copy('network.approval.permanent_options')),
+                            const SizedBox(width: 4),
+                            const Icon(Icons.arrow_drop_down, size: 16),
+                          ],
+                        ),
+                      ),
                     ),
                 ],
               )

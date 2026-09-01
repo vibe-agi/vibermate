@@ -12,6 +12,7 @@ import 'package:vibermate_app/core/design/workbench_widgets.dart';
 import 'package:vibermate_app/core/i18n/app_copy.dart';
 import 'package:vibermate_app/core/preferences/workbench_preferences.dart';
 import 'package:vibermate_app/features/workbench/account_selector_editor.dart';
+import 'package:vibermate_app/features/workbench/conversation_timeline.dart';
 import 'package:vibermate_app/features/workbench/workbench_controller.dart';
 import 'package:vibermate_app/features/workbench/workbench_shell.dart';
 import 'package:vibermate_app/preview/preview_control_api.dart';
@@ -139,7 +140,7 @@ void main() {
     );
     expect(
       anchor.style?.maximumSize?.resolve({})?.height,
-      ViberMetrics.controlHeight * 2 + 4,
+      ViberMetrics.compactControlHeight * 2 + 4,
     );
     expect(
       Theme.of(tester.element(field)).textTheme.labelLarge?.fontSize,
@@ -151,7 +152,10 @@ void main() {
     final rows = find.byType(MenuItemButton);
     expect(rows, findsNWidgets(2));
     for (var index = 0; index < 2; index += 1) {
-      expect(tester.getSize(rows.at(index)).height, ViberMetrics.controlHeight);
+      expect(
+        tester.getSize(rows.at(index)).height,
+        ViberMetrics.compactControlHeight,
+      );
       expect(tester.getSize(rows.at(index)).width, fieldSize.width - 4);
     }
     expect(
@@ -275,8 +279,8 @@ void main() {
     for (final key in const ['metric-text-field', 'metric-select-field']) {
       expect(
         paintedFormSurfaceHeight(tester, find.byKey(Key(key))),
-        26,
-        reason: '$key must paint the full 26px form-control surface',
+        ViberMetrics.controlHeight,
+        reason: '$key must paint the full standard form-control surface',
       );
     }
   });
@@ -344,7 +348,7 @@ void main() {
       (
         size: Size(390, 760),
         language: AppLanguage.simplifiedChinese,
-        empty: '还没有 Capture。',
+        empty: '还没有运行记录。',
         detail: '先从终端通过 ViberMate 启动 Codex 或 Claude。',
         settings: '终端命令',
       ),
@@ -1758,6 +1762,8 @@ void main() {
         const Key('toggle-thinking-block-response-run-1-exchange-222-0'),
       );
       expect(thinkingDisclosure, findsOneWidget);
+      await tester.ensureVisible(thinkingDisclosure);
+      await tester.pumpAndSettle();
       await tester.tap(thinkingDisclosure);
       await tester.pumpAndSettle();
       expect(
@@ -2180,6 +2186,54 @@ void main() {
     );
   });
 
+  testWidgets(
+    'checkpoint evidence does not offer a nonexistent full snapshot',
+    (tester) async {
+      await tester.binding.setSurfaceSize(const Size(1180, 760));
+      addTearDown(() => tester.binding.setSurfaceSize(null));
+      final api = PreviewControlApi();
+      final controller = WorkbenchController(
+        api: api,
+        terminalCommands: PreviewTerminalCommandService(),
+        previewMode: true,
+        closeRuntime: api.close,
+      );
+      addTearDown(controller.dispose);
+      addTearDown(api.close);
+      final page = await api.activities(captureRunId: 'run-1', limit: 224);
+      final checkpoint = page.items.singleWhere(
+        (activity) => activity.id == 'run-1-exchange-1',
+      );
+      expect(await controller.loadExchangeDetail(checkpoint.id), isNotNull);
+
+      await tester.pumpWidget(
+        MaterialApp(
+          theme: ViberTheme.light(),
+          home: Scaffold(
+            body: EvidenceConversationTimeline(
+              controller: controller,
+              activities: [checkpoint],
+              copy: AppCopy.forLanguage(AppLanguage.english),
+            ),
+          ),
+        ),
+      );
+      for (var frame = 0; frame < 20; frame += 1) {
+        await tester.pump(const Duration(milliseconds: 20));
+      }
+
+      expect(
+        find.byKey(const Key('exchange-evidence-summary-run-1-exchange-1')),
+        findsOneWidget,
+      );
+      expect(
+        find.byKey(const Key('exchange-full-run-1-exchange-1')),
+        findsNothing,
+      );
+      expect(tester.takeException(), isNull);
+    },
+  );
+
   testWidgets('Account Selector sample failure preserves safe diagnosis', (
     tester,
   ) async {
@@ -2600,6 +2654,20 @@ void main() {
 
     await openCaptureConversation(tester, capture: 'managed_run:run-1');
     expect(find.textContaining('vibermate run'), findsOneWidget);
+    expect(
+      find.byWidgetPredicate(
+        (widget) =>
+            widget.key is ValueKey<String> &&
+            (widget.key! as ValueKey<String>).value.startsWith(
+              'conversation-map-turn-',
+            ),
+      ),
+      findsNothing,
+    );
+    expect(
+      find.byKey(const Key('conversation-compact-position')),
+      findsOneWidget,
+    );
 
     final turn = find.byKey(const Key('conversation-turn-run-1-exchange-224'));
     await tester.ensureVisible(turn);
@@ -2670,10 +2738,20 @@ void main() {
     await tester.pumpAndSettle();
 
     expect(find.text('RUNNING NOW'), findsOneWidget);
+    expect(
+      tester.takeException(),
+      isNull,
+      reason: 'the compact Capture directory must fit',
+    );
     await tester.tap(find.text('Figma Desktop').first);
     await tester.pumpAndSettle();
     expect(find.text('Revoke proxy login'), findsOneWidget);
     expect(find.text('Independent exchanges'), findsOneWidget);
+    expect(
+      tester.takeException(),
+      isNull,
+      reason: 'the compact Capture header must fit before confirmation',
+    );
 
     await tester.tap(find.text('Revoke proxy login'));
     await tester.pumpAndSettle();
@@ -2683,6 +2761,11 @@ void main() {
         'New connections using this login will stop. Conversation and Activity evidence remain available.',
       ),
       findsOneWidget,
+    );
+    expect(
+      tester.takeException(),
+      isNull,
+      reason: 'the compact revoke confirmation must fit',
     );
 
     await tester.tap(find.text('Revoke login'));
@@ -2908,6 +2991,36 @@ void main() {
     },
   );
 
+  testWidgets(
+    '390px Chinese approval keeps temporary decisions visible and permanent rules secondary',
+    (tester) async {
+      await tester.binding.setSurfaceSize(const Size(390, 760));
+      addTearDown(() => tester.binding.setSurfaceSize(null));
+      await tester.pumpWidget(
+        const ViberMateApp(previewMode: true, preferChinese: true),
+      );
+      await tester.pumpAndSettle();
+      await _openNetwork(tester);
+
+      expect(find.text('本次允许该连接'), findsOneWidget);
+      expect(find.text('本次拒绝该连接'), findsOneWidget);
+      expect(find.text('永久规则…'), findsOneWidget);
+      expect(find.text('始终允许该主机和端口'), findsNothing);
+      await tester.tap(
+        find.byKey(
+          const Key('approval-approval-network-github-permanent-menu'),
+        ),
+      );
+      await tester.pumpAndSettle();
+      expect(find.text('始终允许该主机和端口'), findsOneWidget);
+      expect(find.text('始终拒绝该主机和端口'), findsOneWidget);
+      expect(tester.takeException(), isNull);
+
+      await tester.pumpWidget(const SizedBox.shrink());
+      await tester.pump();
+    },
+  );
+
   testWidgets('network evidence uses real cursor pagination', (tester) async {
     await tester.binding.setSurfaceSize(const Size(1180, 760));
     addTearDown(() => tester.binding.setSurfaceSize(null));
@@ -3017,6 +3130,38 @@ void main() {
       );
       expect(tester.widget(allow), isA<OutlinedButton>());
       expect(tester.widget(deny), isA<OutlinedButton>());
+      expect(
+        find.byKey(
+          const Key('approval-approval-network-github-allow-once-host_port'),
+        ),
+        findsNothing,
+      );
+      expect(
+        find.byKey(
+          const Key('approval-approval-network-github-deny-host_port'),
+        ),
+        findsNothing,
+      );
+      await tester.tap(
+        find.byKey(
+          const Key('approval-approval-network-github-permanent-menu'),
+        ),
+      );
+      await tester.pumpAndSettle();
+      expect(
+        find.byKey(
+          const Key('approval-approval-network-github-allow-once-host_port'),
+        ),
+        findsOneWidget,
+      );
+      expect(
+        find.byKey(
+          const Key('approval-approval-network-github-deny-host_port'),
+        ),
+        findsOneWidget,
+      );
+      await tester.tapAt(const Offset(1100, 700));
+      await tester.pumpAndSettle();
       expect(find.text('approval-network-github'), findsNothing);
       await tester.tap(
         find.byKey(const Key('approval-technical-approval-network-github')),
@@ -3603,7 +3748,7 @@ void main() {
     await tester.tap(find.byKey(const Key('environment-edit')));
     await tester.pumpAndSettle();
     expect(
-      find.text('每条客户端流量可直连原始目标，也可改发到一个或多个上游服务；每条路由只能使用其上游服务所属的账号。'),
+      find.text('每种客户端协议和入口都可以保留原始目标，或把请求发往上游服务，并使用该服务所属的账号。'),
       findsOneWidget,
     );
 
@@ -3640,7 +3785,7 @@ void main() {
     await tester.tap(find.byKey(const Key('environment-review')));
     await tester.pumpAndSettle();
     expect(find.text('发布后会改变什么'), findsOneWidget);
-    expect(find.text('6 个运行中 CAPTURE 保持当前修订'), findsOneWidget);
+    expect(find.text('6 条运行中记录保持当前修订'), findsOneWidget);
     expect(find.byKey(const Key('environment-publish')), findsOneWidget);
     expect(tester.takeException(), isNull);
 
@@ -4170,7 +4315,7 @@ void main() {
     expect(captureOnlyState, findsOneWidget);
     expect(
       tester.getSize(clientFlowComposer).height,
-      lessThanOrEqualTo(100),
+      lessThanOrEqualTo(108),
       reason: 'the empty client-flow composer should remain one compact unit',
     );
     final captureOnlySize = tester.getSize(captureOnlyState);
@@ -4183,6 +4328,15 @@ void main() {
     );
     final createName = find.byKey(const Key('environment-create-name'));
     final createId = find.byKey(const Key('environment-create-id'));
+    expect(find.text('Command ID'), findsOneWidget);
+    expect(
+      find.text(
+        'Used by vibermate run --env <ID>; stays stable after publish.',
+      ),
+      findsOneWidget,
+    );
+    expect(find.text('Requests from'), findsOneWidget);
+    expect(find.text('Send to'), findsOneWidget);
     for (final field in [createName, createId]) {
       expect(tester.getSize(field).height, ViberMetrics.controlHeight);
     }
@@ -4346,14 +4500,14 @@ void main() {
     );
     expect(find.byKey(const Key('environment-endpoint-catalog')), findsNothing);
 
-    expect(find.text('添加直连流量'), findsOneWidget);
+    expect(find.text('使用原始目标'), findsOneWidget);
     expect(find.text('添加上游路由'), findsNothing);
     await tester.tap(
       find.descendant(of: destination, matching: find.text('上游服务')),
     );
     await tester.pumpAndSettle();
     expect(find.text('添加上游路由'), findsOneWidget);
-    expect(find.text('添加直连流量'), findsNothing);
+    expect(find.text('使用原始目标'), findsNothing);
     await tester.tap(
       find.descendant(of: destination, matching: find.text('原服务')),
     );
@@ -4751,277 +4905,282 @@ void main() {
     await tester.pump();
   });
 
-  testWidgets(
-    'Endpoint-owned Account can be created, rotated, and safely deleted',
-    (tester) async {
-      await tester.binding.setSurfaceSize(const Size(1180, 760));
-      addTearDown(() => tester.binding.setSurfaceSize(null));
-      await tester.pumpWidget(
-        const ViberMateApp(previewMode: true, preferChinese: false),
-      );
-      await tester.pumpAndSettle();
-      await _openUpstreamServices(tester);
+  testWidgets('Endpoint-owned Account can be created, rotated, and safely deleted', (
+    tester,
+  ) async {
+    await tester.binding.setSurfaceSize(const Size(1180, 760));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+    await tester.pumpWidget(
+      const ViberMateApp(previewMode: true, preferChinese: false),
+    );
+    await tester.pumpAndSettle();
+    await _openUpstreamServices(tester);
 
-      final addAccount = find.byKey(const Key('accounts-add'));
-      expect(1180 - tester.getTopRight(addAccount).dx, lessThanOrEqualTo(14));
-      await tester.tap(find.byKey(const Key('endpoints-add')));
-      await tester.pumpAndSettle();
+    final addAccount = find.byKey(const Key('accounts-add'));
+    expect(1180 - tester.getTopRight(addAccount).dx, lessThanOrEqualTo(14));
+    await tester.tap(find.byKey(const Key('endpoints-add')));
+    await tester.pumpAndSettle();
+    expect(
+      tester.getSize(find.byKey(const Key('endpoint-editor-frame'))).width,
+      ViberMetrics.dialogCompactWidth,
+    );
+    for (final key in const [
+      Key('endpoint-editor-name'),
+      Key('endpoint-editor-origin'),
+    ]) {
+      final field = find.byKey(key);
       expect(
-        tester.getSize(find.byKey(const Key('endpoint-editor-frame'))).width,
-        ViberMetrics.dialogCompactWidth,
+        tester.getSize(field).height,
+        ViberMetrics.controlHeight,
+        reason: '$key must use the shared desktop control height',
       );
-      for (final key in const [
-        Key('endpoint-editor-name'),
-        Key('endpoint-editor-origin'),
-      ]) {
-        final field = find.byKey(key);
-        expect(
-          tester.getSize(field).height,
-          ViberMetrics.controlHeight,
-          reason: '$key must use the shared desktop control height',
-        );
-        expect(
-          paintedFormSurfaceHeight(tester, field),
-          ViberMetrics.controlHeight,
-          reason: '$key must paint the shared form-control surface',
-        );
-      }
-      final endpointField = tester.widget<TextField>(
-        find.descendant(
-          of: find.byKey(const Key('endpoint-editor-name')),
-          matching: find.byType(TextField),
-        ),
+      expect(
+        paintedFormSurfaceHeight(tester, field),
+        ViberMetrics.controlHeight,
+        reason: '$key must paint the shared form-control surface',
       );
-      expect(endpointField.textAlignVertical, TextAlignVertical.center);
-      final endpointEditable = tester.widget<EditableText>(
-        find.descendant(
-          of: find.byKey(const Key('endpoint-editor-name')),
-          matching: find.byType(EditableText),
-        ),
-      );
-      expect(endpointEditable.style.fontSize, ViberType.control);
-      await tester.sendKeyEvent(LogicalKeyboardKey.escape);
-      await tester.pumpAndSettle();
-      expect(find.byKey(const Key('endpoint-editor-name')), findsNothing);
+    }
+    final endpointField = tester.widget<TextField>(
+      find.descendant(
+        of: find.byKey(const Key('endpoint-editor-name')),
+        matching: find.byType(TextField),
+      ),
+    );
+    expect(endpointField.textAlignVertical, TextAlignVertical.center);
+    final endpointEditable = tester.widget<EditableText>(
+      find.descendant(
+        of: find.byKey(const Key('endpoint-editor-name')),
+        matching: find.byType(EditableText),
+      ),
+    );
+    expect(endpointEditable.style.fontSize, ViberType.control);
+    await tester.sendKeyEvent(LogicalKeyboardKey.escape);
+    await tester.pumpAndSettle();
+    expect(find.byKey(const Key('endpoint-editor-name')), findsNothing);
 
-      await tester.tap(find.byKey(const Key('endpoints-add')));
-      await tester.pumpAndSettle();
-      await tester.tap(
-        find.byKey(const Key('endpoint-editor-protocol-anthropic_messages')),
-      );
-      await tester.pumpAndSettle();
-      await tester.enterText(
-        find.byKey(const Key('endpoint-editor-name')),
-        'Team Relay',
-      );
-      await tester.enterText(
-        find.byKey(const Key('endpoint-editor-origin')),
-        'http://spark-2a59:8888',
-      );
-      await tester.pump();
-      expect(
-        find.text(
-          'HTTP is limited to local or private-network peers. Conversations and credentials are sent without transport encryption.',
-        ),
-        findsOneWidget,
-      );
-      await tester.tap(find.byKey(const Key('endpoint-editor-save')));
-      await tester.pumpAndSettle();
-      expect(
-        find.text(
-          'Upstream service created. Upstream accounts can now be added to it.',
-        ),
-        findsOneWidget,
-      );
-      expect(find.text('Team Relay'), findsWidgets);
+    await tester.tap(find.byKey(const Key('endpoints-add')));
+    await tester.pumpAndSettle();
+    await tester.tap(
+      find.byKey(const Key('endpoint-editor-protocol-anthropic_messages')),
+    );
+    await tester.pumpAndSettle();
+    await tester.enterText(
+      find.byKey(const Key('endpoint-editor-name')),
+      'Team Relay',
+    );
+    await tester.enterText(
+      find.byKey(const Key('endpoint-editor-origin')),
+      'http://spark-2a59:8888',
+    );
+    await tester.pump();
+    expect(
+      find.text(
+        'HTTP is limited to local or private-network peers. Conversations and credentials are sent without transport encryption.',
+      ),
+      findsOneWidget,
+    );
+    await tester.tap(find.byKey(const Key('endpoint-editor-save')));
+    await tester.pumpAndSettle();
+    expect(
+      find.text(
+        'Upstream service created. Upstream accounts can now be added to it.',
+      ),
+      findsOneWidget,
+    );
+    expect(find.text('Team Relay'), findsWidgets);
 
-      await tester.tap(find.byKey(const Key('accounts-add')));
-      await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const Key('accounts-add')));
+    await tester.pumpAndSettle();
+    expect(
+      tester.getSize(find.byKey(const Key('account-editor-frame'))).width,
+      ViberMetrics.dialogStandardWidth,
+    );
+    expect(find.text('Team Relay'), findsWidgets);
+    for (final key in const [
+      Key('account-editor-kind'),
+      Key('account-editor-name'),
+      Key('account-editor-secret'),
+    ]) {
+      final field = find.byKey(key);
       expect(
-        tester.getSize(find.byKey(const Key('account-editor-frame'))).width,
-        ViberMetrics.dialogStandardWidth,
+        tester.getSize(field).height,
+        ViberMetrics.controlHeight,
+        reason: '$key must use the shared desktop control height',
       );
-      expect(find.text('Team Relay'), findsWidgets);
-      for (final key in const [
-        Key('account-editor-kind'),
-        Key('account-editor-name'),
-        Key('account-editor-secret'),
-      ]) {
-        final field = find.byKey(key);
-        expect(
-          tester.getSize(field).height,
-          ViberMetrics.controlHeight,
-          reason: '$key must use the shared desktop control height',
-        );
-        expect(
-          paintedFormSurfaceHeight(tester, field),
-          ViberMetrics.controlHeight,
-          reason: '$key must paint the shared form-control surface',
-        );
-      }
+      expect(
+        paintedFormSurfaceHeight(tester, field),
+        ViberMetrics.controlHeight,
+        reason: '$key must paint the shared form-control surface',
+      );
+    }
+    expect(
+      tester
+          .widget<CompactSelectField<String>>(
+            find.byKey(const Key('account-editor-kind')),
+          )
+          .decoration
+          .labelText,
+      isNull,
+    );
+    for (final key in const [
+      Key('account-editor-name'),
+      Key('account-editor-secret'),
+    ]) {
       expect(
         tester
-            .widget<CompactSelectField<String>>(
-              find.byKey(const Key('account-editor-kind')),
+            .widget<TextField>(
+              find.descendant(
+                of: find.byKey(key),
+                matching: find.byType(TextField),
+              ),
             )
             .decoration
-            .labelText,
+            ?.labelText,
         isNull,
       );
-      for (final key in const [
-        Key('account-editor-name'),
-        Key('account-editor-secret'),
-      ]) {
-        expect(
-          tester
-              .widget<TextField>(
-                find.descendant(
-                  of: find.byKey(key),
-                  matching: find.byType(TextField),
+    }
+    expect(
+      tester
+          .widget<Text>(find.byKey(const Key('account-editor-auth-transport')))
+          .data,
+      'X-Api-Key',
+    );
+    await tester.tap(find.byKey(const Key('account-editor-kind')));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Bearer token').last);
+    await tester.pumpAndSettle();
+    expect(
+      tester
+          .widget<Text>(find.byKey(const Key('account-editor-auth-transport')))
+          .data,
+      'Authorization: Bearer',
+    );
+    await tester.tap(find.byKey(const Key('account-editor-kind')));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Anthropic API key').last);
+    await tester.pumpAndSettle();
+    await tester.enterText(
+      find.byKey(const Key('account-editor-name')),
+      'Team Primary',
+    );
+    await tester.enterText(
+      find.byKey(const Key('account-editor-secret')),
+      'sk-ant-preview-one',
+    );
+    await tester.tap(find.byKey(const Key('account-header-add-set')));
+    await tester.pumpAndSettle();
+    await tester.enterText(
+      find.byKey(const Key('account-header-set-name-0')),
+      'X-Team',
+    );
+    await tester.enterText(
+      find.byKey(const Key('account-header-set-value-0')),
+      'team-a',
+    );
+    await tester.tap(find.byKey(const Key('account-header-add-delete')));
+    await tester.pumpAndSettle();
+    await tester.enterText(
+      find.byKey(const Key('account-header-delete-name-0')),
+      'X-Legacy',
+    );
+    for (final key in const [
+      Key('account-header-set-name-0'),
+      Key('account-header-set-value-0'),
+      Key('account-header-delete-name-0'),
+    ]) {
+      final field = find.byKey(key);
+      expect(
+        tester.getSize(field).height,
+        ViberMetrics.controlHeight,
+        reason: '$key must use the shared desktop control height',
+      );
+      expect(
+        paintedFormSurfaceHeight(tester, field),
+        ViberMetrics.controlHeight,
+        reason: '$key must paint the shared form-control surface',
+      );
+    }
+    await tester.tap(find.byKey(const Key('account-editor-save')));
+    await tester.pumpAndSettle();
+    expect(
+      find.text(
+        'Account connected. Use it when a traffic policy sends requests to this service.',
+      ),
+      findsOneWidget,
+    );
+    final policyNextStep = find.text('Go to traffic policies');
+    expect(policyNextStep, findsOneWidget);
+    expect(find.text('Team Primary'), findsOneWidget);
+    expect(
+      find.textContaining('Anthropic API key · X-Api-Key'),
+      findsOneWidget,
+    );
+    expect(find.textContaining('Set 1 · Delete 1'), findsOneWidget);
+
+    await tester.tap(policyNextStep);
+    await tester.pumpAndSettle();
+    expect(find.byKey(const Key('environment-create')), findsOneWidget);
+    await _openUpstreamServices(tester);
+    expect(find.text('Team Primary'), findsOneWidget);
+
+    await tester.tap(find.byIcon(Icons.key_outlined));
+    await tester.pumpAndSettle();
+    await tester.enterText(
+      find.byKey(const Key('account-editor-secret')),
+      'sk-ant-preview-two',
+    );
+    expect(find.textContaining('X-Team'), findsOneWidget);
+    await tester.tap(find.byKey(const Key('account-header-add-set')));
+    await tester.pumpAndSettle();
+    await tester.enterText(
+      find.byKey(const Key('account-header-set-name-0')),
+      'X-Team',
+    );
+    await tester.enterText(
+      find.byKey(const Key('account-header-set-value-0')),
+      'team-b',
+    );
+    await tester.tap(find.byKey(const Key('account-editor-save')));
+    await tester.pumpAndSettle();
+    expect(
+      find.text(
+        'Credential replaced with its previous epoch as the CAS boundary.',
+      ),
+      findsOneWidget,
+    );
+    expect(find.textContaining('Credential version 2'), findsOneWidget);
+
+    // Targeted by key, not by icon: the Endpoint itself now offers a delete
+    // with the same icon, and an icon is not an identity.
+    await tester.tap(
+      find
+          .byWidgetPredicate(
+            (widget) =>
+                widget is IconButton &&
+                widget.key is ValueKey<String> &&
+                (widget.key! as ValueKey<String>).value.startsWith(
+                  'account-delete-',
                 ),
-              )
-              .decoration
-              ?.labelText,
-          isNull,
-        );
-      }
-      expect(
-        tester
-            .widget<Text>(
-              find.byKey(const Key('account-editor-auth-transport')),
-            )
-            .data,
-        'X-Api-Key',
-      );
-      await tester.tap(find.byKey(const Key('account-editor-kind')));
-      await tester.pumpAndSettle();
-      await tester.tap(find.text('Bearer token').last);
-      await tester.pumpAndSettle();
-      expect(
-        tester
-            .widget<Text>(
-              find.byKey(const Key('account-editor-auth-transport')),
-            )
-            .data,
-        'Authorization: Bearer',
-      );
-      await tester.tap(find.byKey(const Key('account-editor-kind')));
-      await tester.pumpAndSettle();
-      await tester.tap(find.text('Anthropic API key').last);
-      await tester.pumpAndSettle();
-      await tester.enterText(
-        find.byKey(const Key('account-editor-name')),
-        'Team Primary',
-      );
-      await tester.enterText(
-        find.byKey(const Key('account-editor-secret')),
-        'sk-ant-preview-one',
-      );
-      await tester.tap(find.byKey(const Key('account-header-add-set')));
-      await tester.pumpAndSettle();
-      await tester.enterText(
-        find.byKey(const Key('account-header-set-name-0')),
-        'X-Team',
-      );
-      await tester.enterText(
-        find.byKey(const Key('account-header-set-value-0')),
-        'team-a',
-      );
-      await tester.tap(find.byKey(const Key('account-header-add-delete')));
-      await tester.pumpAndSettle();
-      await tester.enterText(
-        find.byKey(const Key('account-header-delete-name-0')),
-        'X-Legacy',
-      );
-      for (final key in const [
-        Key('account-header-set-name-0'),
-        Key('account-header-set-value-0'),
-        Key('account-header-delete-name-0'),
-      ]) {
-        final field = find.byKey(key);
-        expect(
-          tester.getSize(field).height,
-          ViberMetrics.controlHeight,
-          reason: '$key must use the shared desktop control height',
-        );
-        expect(
-          paintedFormSurfaceHeight(tester, field),
-          ViberMetrics.controlHeight,
-          reason: '$key must paint the shared form-control surface',
-        );
-      }
-      await tester.tap(find.byKey(const Key('account-editor-save')));
-      await tester.pumpAndSettle();
-      expect(
-        find.text('Upstream account created under the selected service.'),
-        findsOneWidget,
-      );
-      expect(find.text('Team Primary'), findsOneWidget);
-      expect(
-        find.textContaining('Anthropic API key · X-Api-Key'),
-        findsOneWidget,
-      );
-      expect(find.textContaining('Set 1 · Delete 1'), findsOneWidget);
+          )
+          .first,
+    );
+    await tester.pumpAndSettle();
+    expect(find.text('Delete Team Primary?'), findsOneWidget);
+    await tester.tap(find.byKey(const Key('account-delete-confirm')));
+    await tester.pumpAndSettle();
+    expect(
+      find.text(
+        'Upstream account and credential deleted. Captured evidence was not removed.',
+      ),
+      findsOneWidget,
+    );
+    expect(find.text('Team Primary'), findsNothing);
+    expect(find.text('No accounts yet'), findsOneWidget);
+    expect(tester.takeException(), isNull);
 
-      await tester.tap(find.byIcon(Icons.key_outlined));
-      await tester.pumpAndSettle();
-      await tester.enterText(
-        find.byKey(const Key('account-editor-secret')),
-        'sk-ant-preview-two',
-      );
-      expect(find.textContaining('X-Team'), findsOneWidget);
-      await tester.tap(find.byKey(const Key('account-header-add-set')));
-      await tester.pumpAndSettle();
-      await tester.enterText(
-        find.byKey(const Key('account-header-set-name-0')),
-        'X-Team',
-      );
-      await tester.enterText(
-        find.byKey(const Key('account-header-set-value-0')),
-        'team-b',
-      );
-      await tester.tap(find.byKey(const Key('account-editor-save')));
-      await tester.pumpAndSettle();
-      expect(
-        find.text(
-          'Credential replaced with its previous epoch as the CAS boundary.',
-        ),
-        findsOneWidget,
-      );
-      expect(find.textContaining('Credential version 2'), findsOneWidget);
-
-      // Targeted by key, not by icon: the Endpoint itself now offers a delete
-      // with the same icon, and an icon is not an identity.
-      await tester.tap(
-        find
-            .byWidgetPredicate(
-              (widget) =>
-                  widget is IconButton &&
-                  widget.key is ValueKey<String> &&
-                  (widget.key! as ValueKey<String>).value.startsWith(
-                    'account-delete-',
-                  ),
-            )
-            .first,
-      );
-      await tester.pumpAndSettle();
-      expect(find.text('Delete Team Primary?'), findsOneWidget);
-      await tester.tap(find.byKey(const Key('account-delete-confirm')));
-      await tester.pumpAndSettle();
-      expect(
-        find.text(
-          'Upstream account and credential deleted. Captured evidence was not removed.',
-        ),
-        findsOneWidget,
-      );
-      expect(find.text('Team Primary'), findsNothing);
-      expect(find.text('No accounts yet'), findsOneWidget);
-      expect(tester.takeException(), isNull);
-
-      await tester.pumpWidget(const SizedBox.shrink());
-      await tester.pump();
-    },
-  );
+    await tester.pumpWidget(const SizedBox.shrink());
+    await tester.pump();
+  });
 
   testWidgets('390px private HTTP Endpoint editor remains usable', (
     tester,

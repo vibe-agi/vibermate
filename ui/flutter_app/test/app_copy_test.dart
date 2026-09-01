@@ -12,4 +12,15 @@ void main() {
     expect(() => english('missing.public.key'), throwsAssertionError);
     expect(() => chinese('missing.public.key'), throwsAssertionError);
   });
+
+  test('Chinese user-facing evidence terms stay plain and consistent', () {
+    final chinese = AppCopy.forLanguage(AppLanguage.simplifiedChinese);
+
+    expect(chinese('nav.captures'), '运行记录');
+    expect(chinese('capture.empty'), '还没有运行记录。');
+    expect(chinese('capture.session'), '查看客户端会话');
+    expect(chinese('conversation.exchange'), 'Agent 调用');
+    expect(chinese('exchange.attempt.one'), '1 次上游尝试');
+    expect(chinese('capture.environment.apply_latest'), '下一轮应用');
+  });
 }

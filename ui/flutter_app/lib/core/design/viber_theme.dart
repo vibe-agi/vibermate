@@ -36,7 +36,7 @@ final class ViberColors extends ThemeExtension<ViberColors> {
     dividerSoft: Color(0xFFD6DEE6),
     text: Color(0xFF17212B),
     textMuted: Color(0xFF526170),
-    textFaint: Color(0xFF6E7D8B),
+    textFaint: Color(0xFF60707E),
     route: Color(0xFF1769A6),
     verified: Color(0xFF1E7653),
     warning: Color(0xFF93600D),
@@ -160,7 +160,8 @@ extension ViberThemeContext on BuildContext {
 /// Structural regions (rails, tables, split panes) deliberately stay square.
 /// Only interactive controls and bounded content surfaces receive a radius.
 abstract final class ViberMetrics {
-  static const double controlHeight = 26;
+  static const double controlHeight = 30;
+  static const double compactControlHeight = 26;
   static const double optionRowHeight = 32;
   static const double compactSegmentWidth = 58;
   static const double searchHeight = 28;
@@ -195,18 +196,17 @@ abstract final class ViberMetrics {
 
 /// A deliberately small type scale for a dense desktop evidence workbench.
 abstract final class ViberType {
-  static const double page = 20;
-  static const double dialog = 15;
-  static const double title = 12.5;
-  static const double body = 12;
-  static const double supporting = 11;
-  static const double control = 11;
-  // InputDecorator scales a floating label to 75%. Starting at 12.5 keeps the
-  // rendered desktop label near the 9-10px utility-label target instead of
-  // shrinking an already-small 10px style to an illegible 7.5px.
-  static const double floatingFieldLabel = 12.5;
-  static const double utility = 10;
-  static const double micro = 9;
+  static const double page = 22;
+  static const double dialog = 18;
+  static const double primary = 14;
+  static const double title = 13;
+  static const double body = 13;
+  static const double supporting = 12;
+  static const double control = 13;
+  // InputDecorator renders floating labels at 75% of this source size.
+  static const double floatingFieldLabel = 44 / 3;
+  static const double utility = 11;
+  static const double micro = 10;
 }
 
 /// Layout follows a 4-point rhythm. The 2px token is reserved for strokes,
@@ -330,14 +330,14 @@ abstract final class ViberTheme {
         titleMedium: TextStyle(
           color: colors.text,
           fontFamilyFallback: viberFontFallback,
-          fontSize: ViberType.title,
+          fontSize: ViberType.primary,
           height: 1.25,
           fontWeight: FontWeight.w600,
         ),
         titleSmall: TextStyle(
           color: colors.text,
           fontFamilyFallback: viberFontFallback,
-          fontSize: ViberType.supporting,
+          fontSize: ViberType.title,
           height: 1.25,
           fontWeight: FontWeight.w600,
         ),
@@ -463,7 +463,7 @@ abstract final class ViberTheme {
         // invisible space below it.
         contentPadding: const EdgeInsets.symmetric(
           horizontal: 7,
-          vertical: 7.5,
+          vertical: 8.5,
         ),
         suffixStyle: TextStyle(
           color: colors.textMuted,
@@ -534,10 +534,10 @@ abstract final class ViberTheme {
       menuButtonTheme: MenuButtonThemeData(
         style: ButtonStyle(
           minimumSize: const WidgetStatePropertyAll(
-            Size(0, ViberMetrics.controlHeight),
+            Size(0, ViberMetrics.compactControlHeight),
           ),
           maximumSize: const WidgetStatePropertyAll(
-            Size(double.infinity, ViberMetrics.controlHeight),
+            Size(double.infinity, ViberMetrics.compactControlHeight),
           ),
           padding: const WidgetStatePropertyAll(
             EdgeInsets.symmetric(horizontal: ViberSpacing.md),
@@ -582,7 +582,7 @@ abstract final class ViberTheme {
       iconButtonTheme: IconButtonThemeData(
         style:
             IconButton.styleFrom(
-              minimumSize: const Size.square(ViberMetrics.controlHeight),
+              minimumSize: const Size.square(ViberMetrics.compactControlHeight),
               padding: EdgeInsets.zero,
               shape: const RoundedRectangleBorder(
                 borderRadius: ViberMetrics.controlRadius,

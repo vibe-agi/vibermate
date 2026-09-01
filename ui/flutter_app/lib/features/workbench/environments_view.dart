@@ -1121,6 +1121,7 @@ final class _NewEnvironmentDialogState extends State<_NewEnvironmentDialog> {
                                 ),
                                 CompactLabeledControl(
                                   label: copy('environment.field.id'),
+                                  detail: copy('environment.field.id.detail'),
                                   child: TextFormField(
                                     key: const Key('environment-create-id'),
                                     controller: _id,

@@ -5,6 +5,7 @@ import 'dart:math' as math;
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
+import '../../core/api/control_api.dart';
 import '../../core/api/control_models.dart';
 import '../../core/design/viber_theme.dart';
 import '../../core/design/workbench_widgets.dart';
@@ -420,22 +421,26 @@ final class _MessageTransformPipelineDialogState
 final class MessageTransformEditorDialog extends StatefulWidget {
   const MessageTransformEditorDialog({
     required this.planId,
+    required this.displayName,
     required this.wireProtocol,
     required this.initial,
     required this.copy,
     required this.testTransform,
     this.initialSample,
+    this.baseRevision,
     this.onTestWireProtocolChanged,
     this.primaryActionLabel,
     super.key,
   });
 
   final String planId;
+  final String displayName;
   final String wireProtocol;
   final TrafficTransformPolicy initial;
   final AppCopy copy;
   final MessageTransformTestCallback testTransform;
   final MessageTransformTestSample? initialSample;
+  final int? baseRevision;
   final ValueChanged<String>? onTestWireProtocolChanged;
   final String? primaryActionLabel;
 
@@ -455,7 +460,7 @@ final class _MessageTransformEditorDialogState
   final Map<String, MessageTransformTestSample?> _samplesByProtocol = {};
   MessageTransformTestResult? _result;
   bool _testing = false;
-  String? _errorKey;
+  String? _error;
 
   AppCopy get copy => widget.copy;
 
@@ -560,7 +565,7 @@ final class _MessageTransformEditorDialogState
                   ),
                   if (_result case final result?)
                     _ResultPanel(result: result, copy: copy),
-                  if (_errorKey case final errorKey?)
+                  if (_error case final error?)
                     Container(
                       key: Key('environment-transform-error-${widget.planId}'),
                       color: context.viberColors.danger.withValues(alpha: 0.10),
@@ -569,7 +574,7 @@ final class _MessageTransformEditorDialogState
                         vertical: 7,
                       ),
                       child: Text(
-                        copy(errorKey),
+                        error,
                         style: Theme.of(context).textTheme.bodySmall?.copyWith(
                           color: context.viberColors.danger,
                         ),
@@ -602,16 +607,21 @@ final class _MessageTransformEditorDialogState
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 Text(
-                  copy('environment.transform.dialog.title'),
-                  style: Theme.of(context).textTheme.titleLarge,
+                  widget.displayName,
+                  key: Key('environment-transform-title-${widget.planId}'),
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: Theme.of(context).textTheme.headlineSmall,
                 ),
-                if (widget.onTestWireProtocolChanged == null)
-                  Text(
-                    _protocolLabel(copy, _wireProtocol),
-                    style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                      color: context.viberColors.textMuted,
-                    ),
+                Text(
+                  '${widget.baseRevision == null ? copy('environment.transform.draft.new') : copy.format('environment.transform.draft.revision', {'revision': widget.baseRevision!})} · ${_protocolLabel(copy, _wireProtocol)}',
+                  key: Key('environment-transform-subtitle-${widget.planId}'),
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                    color: context.viberColors.textMuted,
                   ),
+                ),
               ],
             ),
           ),
@@ -687,7 +697,7 @@ final class _MessageTransformEditorDialogState
       setState(() {
         _sample = edited;
         _result = null;
-        _errorKey = null;
+        _error = null;
       });
     }
   }
@@ -738,7 +748,7 @@ final class _MessageTransformEditorDialogState
       _wireProtocol = value;
       _sample = _samplesByProtocol[value];
       _result = null;
-      _errorKey = null;
+      _error = null;
     });
     widget.onTestWireProtocolChanged?.call(value);
   }
@@ -752,7 +762,7 @@ final class _MessageTransformEditorDialogState
     } on ControlContractException {
       setState(() {
         _result = null;
-        _errorKey = 'environment.transform.invalid';
+        _error = copy('environment.transform.invalid');
       });
       return null;
     }
@@ -764,7 +774,7 @@ final class _MessageTransformEditorDialogState
     setState(() {
       _testing = true;
       _result = null;
-      _errorKey = null;
+      _error = null;
     });
     try {
       final result = await widget.testTransform(
@@ -774,12 +784,21 @@ final class _MessageTransformEditorDialogState
       );
       if (!mounted) return;
       setState(() => _result = result);
-    } on Object {
+    } on Object catch (error) {
       if (!mounted) return;
-      setState(() => _errorKey = 'environment.transform.test.failed');
+      setState(() => _error = _testError(error));
     } finally {
       if (mounted) setState(() => _testing = false);
     }
+  }
+
+  String _testError(Object error) {
+    if (error is ControlProblem &&
+        error.reasonCode == 'message_transform_test_failed') {
+      final detail = error.detail?.trim();
+      return '${copy('environment.transform.test.failed')}\n${error.reasonCode}${detail == null || detail.isEmpty ? '' : ' · $detail'}';
+    }
+    return copy('environment.transform.test.unavailable');
   }
 
   void _save() {

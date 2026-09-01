@@ -413,20 +413,14 @@ final class _AccountSelectorEditorDialogState
               : const Icon(Icons.play_arrow_rounded, size: 16),
           label: Text(copy('account_selector.test.run')),
         );
-        final commit = Row(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            TextButton(
-              onPressed: () => Navigator.of(context).pop(),
-              child: Text(copy('common.cancel')),
-            ),
-            const SizedBox(width: 8),
-            FilledButton(
-              key: Key('account-selector-save-${widget.selectorId}'),
-              onPressed: _save,
-              child: Text(widget.primaryActionLabel ?? copy('common.save')),
-            ),
-          ],
+        final cancel = TextButton(
+          onPressed: () => Navigator.of(context).pop(),
+          child: Text(copy('common.cancel')),
+        );
+        final save = FilledButton(
+          key: Key('account-selector-save-${widget.selectorId}'),
+          onPressed: _save,
+          child: Text(widget.primaryActionLabel ?? copy('common.save')),
         );
         if (constraints.maxWidth < 440) {
           return Column(
@@ -434,13 +428,25 @@ final class _AccountSelectorEditorDialogState
             children: [
               test,
               const SizedBox(height: 6),
-              Align(alignment: Alignment.centerRight, child: commit),
+              Row(
+                children: [
+                  Expanded(child: cancel),
+                  const SizedBox(width: 8),
+                  Expanded(child: save),
+                ],
+              ),
             ],
           );
         }
         return Row(
           mainAxisAlignment: MainAxisAlignment.end,
-          children: [test, const SizedBox(width: 8), commit],
+          children: [
+            test,
+            const SizedBox(width: 8),
+            cancel,
+            const SizedBox(width: 8),
+            save,
+          ],
         );
       },
     ),

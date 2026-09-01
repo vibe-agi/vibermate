@@ -52,6 +52,12 @@ final class _EndpointsViewState extends State<EndpointsView> {
         if (controller.inventoryNotice case final notice?)
           InlineNotice(
             message: copy('notice.inventory.$notice'),
+            actionLabel: notice == 'account_created'
+                ? copy('notice.inventory.account_created.action')
+                : null,
+            onAction: notice == 'account_created'
+                ? () => controller.selectSection(WorkbenchSection.environments)
+                : null,
             onDismiss: controller.clearInventoryNotice,
             dismissLabel: copy('common.dismiss'),
           ),

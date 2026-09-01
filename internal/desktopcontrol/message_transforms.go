@@ -6,6 +6,7 @@ import (
 	"errors"
 	"net/http"
 	"slices"
+	"strings"
 	"time"
 
 	"github.com/vibe-agi/vibermate/internal/clientannotation"
@@ -58,20 +59,45 @@ func (handler *Handler) testMessageTransform(
 ) {
 	body, err := readJSONBody(request)
 	if err != nil {
-		writeProblem(writer, http.StatusUnprocessableEntity, ReasonMessageTransformTestFailed)
+		writeMessageTransformTestProblem(writer, err)
 		return
 	}
 	var input MessageTransformTestInput
 	if err := decodeStrictJSON(body, &input); err != nil {
-		writeProblem(writer, http.StatusUnprocessableEntity, ReasonMessageTransformTestFailed)
+		writeMessageTransformTestProblem(writer, err)
 		return
 	}
 	result, err := runMessageTransformSample(request.Context(), input)
 	if err != nil {
-		writeProblem(writer, http.StatusUnprocessableEntity, ReasonMessageTransformTestFailed)
+		writeMessageTransformTestProblem(writer, err)
 		return
 	}
 	writeJSON(writer, http.StatusOK, result)
+}
+
+func writeMessageTransformTestProblem(writer http.ResponseWriter, err error) {
+	detail := "sample · invalid test input"
+	stage := "sample"
+	if message := err.Error(); strings.Contains(message, "request") {
+		stage = "request"
+	} else if strings.Contains(message, "response") || strings.Contains(message, "streaming") {
+		stage = "response"
+	}
+	switch {
+	case errors.Is(err, messagetransform.ErrInvalidPolicy):
+		detail = stage + " · invalid JavaScript"
+	case errors.Is(err, messagetransform.ErrInvalidOutput):
+		detail = stage + " · invalid transform output"
+	case errors.Is(err, messagetransform.ErrExecutionFailed):
+		detail = stage + " · JavaScript execution failed"
+	case stage == "response":
+		detail = "response · invalid streaming sample"
+	}
+	writeCached(writer, problemResponse(problemSpec{
+		status: http.StatusUnprocessableEntity,
+		reason: ReasonMessageTransformTestFailed,
+		detail: detail,
+	}))
 }
 
 func runMessageTransformSample(

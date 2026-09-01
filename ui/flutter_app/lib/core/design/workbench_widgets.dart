@@ -525,7 +525,7 @@ final class CompactSelectField<T> extends StatefulWidget {
     this.initialValue,
     this.decoration = const InputDecoration(),
     this.isExpanded = false,
-    this.menuItemHeight = ViberMetrics.controlHeight,
+    this.menuItemHeight = ViberMetrics.compactControlHeight,
     this.menuMaxLines = 1,
     this.selectedItemBuilder,
     this.validator,
@@ -910,13 +910,17 @@ final class InlineNotice extends StatelessWidget {
   const InlineNotice({
     required this.message,
     this.error = false,
+    this.actionLabel,
+    this.onAction,
     this.onDismiss,
     this.dismissLabel = 'Dismiss',
     super.key,
-  });
+  }) : assert((actionLabel == null) == (onAction == null));
 
   final String message;
   final bool error;
+  final String? actionLabel;
+  final VoidCallback? onAction;
   final VoidCallback? onDismiss;
   final String dismissLabel;
 
@@ -955,6 +959,10 @@ final class InlineNotice extends StatelessWidget {
                 style: Theme.of(context).textTheme.bodySmall,
               ),
             ),
+            if (onAction case final action?) ...[
+              const SizedBox(width: ViberSpacing.sm),
+              TextButton(onPressed: action, child: Text(actionLabel!)),
+            ],
             if (onDismiss case final action?)
               IconButton(
                 onPressed: action,

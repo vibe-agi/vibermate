@@ -84,6 +84,7 @@ func TestMessageTransformSampleRunsOneBoundedTurn(t *testing.T) {
 	)
 	if failure.Code != http.StatusUnprocessableEntity ||
 		!bytes.Contains(failure.Body.Bytes(), []byte(`"code":"message_transform_test_failed"`)) ||
+		!bytes.Contains(failure.Body.Bytes(), []byte(`"detail":"request · JavaScript execution failed"`)) ||
 		bytes.Contains(failure.Body.Bytes(), []byte(privateError)) {
 		t.Fatalf("failed sample status=%d body=%s", failure.Code, failure.Body.Bytes())
 	}

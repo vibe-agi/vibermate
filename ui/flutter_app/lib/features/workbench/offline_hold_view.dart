@@ -232,13 +232,15 @@ final class OfflineHoldSettingsPanel extends StatelessWidget {
                   ),
                 ],
                 const SizedBox(height: 10),
-                Row(
+                Wrap(
+                  spacing: ViberSpacing.md,
+                  runSpacing: ViberSpacing.md,
+                  alignment: WrapAlignment.spaceBetween,
+                  crossAxisAlignment: WrapCrossAlignment.center,
                   children: [
-                    Expanded(
-                      child: Text(
-                        '${copy('offline.revision')} r${snapshot.revision} · ${_clock(snapshot.since.toLocal())}',
-                        style: monoStyle,
-                      ),
+                    Text(
+                      '${copy('offline.revision')} r${snapshot.revision} · ${_clock(snapshot.since.toLocal())}',
+                      style: monoStyle,
                     ),
                     OutlinedButton.icon(
                       key: const Key('offline-settings-action'),

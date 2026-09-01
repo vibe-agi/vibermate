@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:vibermate_app/core/api/control_api.dart';
 import 'package:vibermate_app/core/api/control_models.dart';
 import 'package:vibermate_app/core/design/viber_theme.dart';
 import 'package:vibermate_app/core/i18n/app_copy.dart';
@@ -30,6 +31,8 @@ void main() {
                         MaterialPageRoute(
                           builder: (context) => MessageTransformEditorDialog(
                             planId: 'plan-a',
+                            displayName: '隐藏本机身份',
+                            baseRevision: 3,
                             wireProtocol: 'anthropic_messages',
                             initial: const TrafficTransformPolicy.disabled(),
                             copy: copy,
@@ -104,8 +107,10 @@ void main() {
         findsOneWidget,
       );
       expect(tester.getSize(dialog).width, 390);
-      expect(find.text('Anthropic Messages'), findsOneWidget);
-      expect(find.text('同一 Turn 上下文'), findsOneWidget);
+      expect(find.text('隐藏本机身份'), findsOneWidget);
+      expect(find.text('基于 r3 的草稿 · Anthropic Messages'), findsOneWidget);
+      expect(find.text('消息变换'), findsNothing);
+      expect(find.text('同一轮次上下文'), findsOneWidget);
 
       await tester.enterText(
         find.byKey(const Key('environment-transform-request-plan-a')),
@@ -166,6 +171,7 @@ void main() {
                 MaterialPageRoute(
                   builder: (context) => MessageTransformEditorDialog(
                     planId: 'plan-a',
+                    displayName: 'Response cleanup',
                     wireProtocol: 'openai_responses',
                     initial: const TrafficTransformPolicy.disabled(),
                     copy: copy,
@@ -233,6 +239,7 @@ void main() {
                 MaterialPageRoute(
                   builder: (context) => MessageTransformEditorDialog(
                     planId: 'captured',
+                    displayName: 'Hide local identity',
                     wireProtocol: 'anthropic_messages',
                     initial: const TrafficTransformPolicy.disabled(),
                     initialSample: initialSample,
@@ -317,6 +324,70 @@ void main() {
     expect(testedSample?.request.body, isNot(contains('/Users/jack')));
     expect(testedSample?.request.headers['x-user'], ['guest']);
     expect(testedSample?.response.body, contains('/Users/guest'));
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('failed sample names the safe server stage and error code', (
+    tester,
+  ) async {
+    final copy = AppCopy.forLanguage(AppLanguage.english);
+    await tester.pumpWidget(
+      MaterialApp(
+        theme: ViberTheme.light(),
+        home: Scaffold(
+          body: Builder(
+            builder: (context) => TextButton(
+              key: const Key('open-transform-editor'),
+              onPressed: () => Navigator.of(context).push<void>(
+                MaterialPageRoute(
+                  builder: (context) => MessageTransformEditorDialog(
+                    planId: 'failure',
+                    displayName: 'Hide local identity',
+                    baseRevision: 2,
+                    wireProtocol: 'anthropic_messages',
+                    initial: const TrafficTransformPolicy.disabled(),
+                    copy: copy,
+                    testTransform:
+                        ({required wireProtocol, required policy, sample}) =>
+                            throw const ControlProblem(
+                              status: 422,
+                              reasonCode: 'message_transform_test_failed',
+                              messageKey: 'error.message_transform_test_failed',
+                              detail: 'request · invalid JavaScript',
+                            ),
+                  ),
+                ),
+              ),
+              child: const Text('open'),
+            ),
+          ),
+        ),
+      ),
+    );
+
+    await tester.tap(find.byKey(const Key('open-transform-editor')));
+    await tester.pumpAndSettle();
+    await tester.tap(
+      find.byKey(const Key('environment-transform-test-failure')),
+    );
+    await tester.pumpAndSettle();
+
+    final error = find.byKey(const Key('environment-transform-error-failure'));
+    expect(error, findsOneWidget);
+    expect(
+      find.descendant(
+        of: error,
+        matching: find.textContaining('message_transform_test_failed'),
+      ),
+      findsOneWidget,
+    );
+    expect(
+      find.descendant(
+        of: error,
+        matching: find.textContaining('request · invalid JavaScript'),
+      ),
+      findsOneWidget,
+    );
     expect(tester.takeException(), isNull);
   });
 

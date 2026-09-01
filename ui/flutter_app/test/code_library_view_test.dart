@@ -911,9 +911,11 @@ selection.accountId = accountByLogin[runtime.login.username];''',
       ),
     );
     await tester.pumpAndSettle();
+    expect(tester.takeException(), isNull, reason: 'initial library layout');
 
     await tester.tap(find.text('Account selection rules'));
     await tester.pumpAndSettle();
+    expect(tester.takeException(), isNull, reason: 'selector starter layout');
     expect(
       find.byKey(const Key('code-library-selector-starter-loginUser')),
       findsOneWidget,
@@ -926,6 +928,7 @@ selection.accountId = accountByLogin[runtime.login.username];''',
     await tester.ensureVisible(loginStarter);
     await tester.tap(loginStarter);
     await tester.pumpAndSettle();
+    expect(tester.takeException(), isNull, reason: 'selector naming layout');
     expect(find.text('New collection'), findsNothing);
     final starterName = tester.widget<TextField>(
       find.byKey(const Key('code-library-selector-name')),
@@ -937,6 +940,11 @@ selection.accountId = accountByLogin[runtime.login.username];''',
     );
     await tester.tap(find.byKey(const Key('code-library-selector-next')));
     await tester.pumpAndSettle();
+    expect(
+      tester.takeException(),
+      isNull,
+      reason: 'new selector editor layout',
+    );
     expect(
       find.byKey(const Key('account-selector-editor-page')),
       findsOneWidget,
@@ -955,6 +963,7 @@ selection.accountId = accountByLogin[runtime.login.username];''',
       find.byKey(const Key('account-selector-save-new-selector')),
     );
     await tester.pumpAndSettle();
+    expect(tester.takeException(), isNull, reason: 'selector detail layout');
 
     final first = (await api.codeLibrary()).accountSelectors.single;
     expect(first.revision, 1);
@@ -966,6 +975,7 @@ selection.accountId = accountByLogin[runtime.login.username];''',
 
     await tester.tap(find.byKey(const Key('code-library-selector-edit')));
     await tester.pumpAndSettle();
+    expect(tester.takeException(), isNull, reason: 'revision editor layout');
     expect(find.text('Publish new revision'), findsOneWidget);
     await tester.enterText(
       find.byKey(Key('account-selector-source-${first.id}')),

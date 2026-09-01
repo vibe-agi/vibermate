@@ -303,6 +303,7 @@ final class _CodeLibraryViewState extends State<CodeLibraryView> {
       MaterialPageRoute(
         builder: (context) => MessageTransformEditorDialog(
           planId: 'new-transform',
+          displayName: draft.displayName,
           wireProtocol: draft.wireProtocol,
           initial: draft.policy,
           initialSample: _capturedSampleFor(draft.wireProtocol),
@@ -331,6 +332,8 @@ final class _CodeLibraryViewState extends State<CodeLibraryView> {
       MaterialPageRoute(
         builder: (context) => MessageTransformEditorDialog(
           planId: current.id,
+          displayName: current.displayName,
+          baseRevision: current.revision,
           wireProtocol: _testWireProtocol,
           initial: current.policy,
           initialSample: _capturedSampleFor(_testWireProtocol),

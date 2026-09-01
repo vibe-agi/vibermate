@@ -15,6 +15,14 @@ void main() {
       _contrast(colors.textMuted, colors.panel),
       greaterThanOrEqualTo(4.5),
     );
+    expect(
+      _contrast(colors.textFaint, colors.panel),
+      greaterThanOrEqualTo(4.5),
+    );
+    expect(
+      _contrast(colors.textFaint, colors.canvas),
+      greaterThanOrEqualTo(4.5),
+    );
     expect(_contrast(colors.route, colors.panel), greaterThanOrEqualTo(4.5));
     expect(_contrast(colors.danger, colors.panel), greaterThanOrEqualTo(4.5));
     expect(_contrast(colors.divider, colors.panel), greaterThan(1.5));
@@ -62,6 +70,15 @@ void main() {
                 hintText: 'Filter captures',
                 onChanged: (_) {},
               ),
+              const SizedBox(
+                width: 180,
+                child: TextField(key: Key('standard-field')),
+              ),
+              IconButton(
+                key: const Key('compact-icon-button'),
+                onPressed: () {},
+                icon: const Icon(Icons.refresh),
+              ),
               const CompactProgressIndicator(key: Key('compact-progress')),
               const CompactLoadingMessage(
                 key: Key('compact-loading-message'),
@@ -80,6 +97,14 @@ void main() {
     expect(
       tester.getSize(find.byKey(const Key('compact-search'))).height,
       ViberMetrics.searchHeight,
+    );
+    expect(
+      tester.getSize(find.byKey(const Key('standard-field'))).height,
+      ViberMetrics.controlHeight,
+    );
+    expect(
+      tester.getSize(find.byKey(const Key('compact-icon-button'))),
+      const Size.square(ViberMetrics.compactControlHeight),
     );
     expect(
       tester.getSize(find.byKey(const Key('compact-progress'))),
@@ -119,6 +144,22 @@ void main() {
       ViberType.floatingFieldLabel,
     );
   });
+
+  test(
+    'visual tokens distinguish standard controls from compact utilities',
+    () {
+      expect(ViberMetrics.controlHeight, 30);
+      expect(ViberMetrics.compactControlHeight, 26);
+      expect(ViberType.page, 22);
+      expect(ViberType.dialog, 18);
+      expect(ViberType.primary, 14);
+      expect(ViberType.title, 13);
+      expect(ViberType.body, 13);
+      expect(ViberType.control, 13);
+      expect(ViberType.supporting, 12);
+      expect(ViberType.utility, 11);
+    },
+  );
 }
 
 double _contrast(Color first, Color second) {

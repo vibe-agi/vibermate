@@ -495,6 +495,21 @@ final class _EvidenceConversationTimelineState
                             style: Theme.of(context).textTheme.bodySmall,
                           ),
                         ],
+                        if (!widget.exchangeScoped &&
+                            constraints.maxWidth < 680) ...[
+                          const SizedBox(width: ViberSpacing.md),
+                          Text(
+                            '${_current + 1}/${activities.length}',
+                            key: const Key('conversation-compact-position'),
+                            semanticsLabel: widget.copy.format(
+                              'conversation.turn',
+                              {'number': _current + 1},
+                            ),
+                            style: monoStyle.copyWith(
+                              color: context.viberColors.textMuted,
+                            ),
+                          ),
+                        ],
                         if (widget.canLoadEarlier) ...[
                           const SizedBox(width: 4),
                           if (constraints.maxWidth < 520)
@@ -551,135 +566,138 @@ final class _EvidenceConversationTimelineState
         ),
         const Divider(height: 1),
         Expanded(
-          child: Row(
-            children: [
-              Expanded(
-                child: Listener(
-                  onPointerDown: (_) => _cancelTailFollow(),
-                  onPointerSignal: (_) => _cancelTailFollow(),
-                  child: NotificationListener<ScrollNotification>(
-                    onNotification: (notification) {
-                      final userDrag =
-                          notification is ScrollStartNotification &&
-                          notification.dragDetails != null;
-                      final unownedDirectionChange =
-                          notification is UserScrollNotification &&
-                          notification.direction != ScrollDirection.idle &&
-                          _programmaticScrollDepth == 0;
-                      if (userDrag || unownedDirectionChange) {
-                        _cancelTailFollow();
-                      }
-                      return false;
-                    },
-                    child: Scrollbar(
-                      controller: _scroll,
-                      thumbVisibility: true,
-                      child: ListView.builder(
-                        key: const Key('conversation-timeline-scroll'),
+          child: LayoutBuilder(
+            builder: (context, constraints) => Row(
+              children: [
+                Expanded(
+                  child: Listener(
+                    onPointerDown: (_) => _cancelTailFollow(),
+                    onPointerSignal: (_) => _cancelTailFollow(),
+                    child: NotificationListener<ScrollNotification>(
+                      onNotification: (notification) {
+                        final userDrag =
+                            notification is ScrollStartNotification &&
+                            notification.dragDetails != null;
+                        final unownedDirectionChange =
+                            notification is UserScrollNotification &&
+                            notification.direction != ScrollDirection.idle &&
+                            _programmaticScrollDepth == 0;
+                        if (userDrag || unownedDirectionChange) {
+                          _cancelTailFollow();
+                        }
+                        return false;
+                      },
+                      child: Scrollbar(
                         controller: _scroll,
-                        padding: const EdgeInsets.fromLTRB(14, 8, 10, 14),
+                        thumbVisibility: true,
+                        child: ListView.builder(
+                          key: const Key('conversation-timeline-scroll'),
+                          controller: _scroll,
+                          padding: const EdgeInsets.fromLTRB(14, 8, 10, 14),
+                          itemCount: activities.length,
+                          itemBuilder: (context, index) {
+                            final activity = activities[index];
+                            final expanded = activity.id == _expandedId;
+                            return _TurnEvidenceItem(
+                              key: _itemKeys.putIfAbsent(
+                                activity.id,
+                                GlobalKey.new,
+                              ),
+                              activity: activity,
+                              number: index + 1,
+                              copy: widget.copy,
+                              expanded: expanded,
+                              showFull: _fullSnapshots.contains(activity.id),
+                              controller: widget.controller,
+                              exchangeScoped: widget.exchangeScoped,
+                              onToggle: () => _toggle(activity),
+                              onToggleFull: () => _toggleFull(activity),
+                            );
+                          },
+                        ),
+                      ),
+                    ),
+                  ),
+                ),
+                if (!widget.exchangeScoped && constraints.maxWidth >= 680)
+                  Container(
+                    width: 38,
+                    decoration: BoxDecoration(
+                      color: context.viberColors.panel,
+                      border: Border(
+                        left: BorderSide(color: context.viberColors.divider),
+                      ),
+                    ),
+                    child: Semantics(
+                      label: widget.copy('conversation.map'),
+                      child: ListView.builder(
+                        controller: _mapScroll,
+                        padding: const EdgeInsets.symmetric(vertical: 8),
+                        itemExtent: _mapItemExtent,
                         itemCount: activities.length,
                         itemBuilder: (context, index) {
-                          final activity = activities[index];
-                          final expanded = activity.id == _expandedId;
-                          return _TurnEvidenceItem(
-                            key: _itemKeys.putIfAbsent(
-                              activity.id,
-                              GlobalKey.new,
+                          final selected = index == _current;
+                          final label = widget.copy.format(
+                            'conversation.turn',
+                            {'number': index + 1},
+                          );
+                          return Tooltip(
+                            message: label,
+                            child: Semantics(
+                              button: true,
+                              selected: selected,
+                              label: label,
+                              child: InkWell(
+                                key: Key('conversation-map-turn-${index + 1}'),
+                                onTap: () => _goTo(index),
+                                canRequestFocus: true,
+                                child: Center(
+                                  child: AnimatedContainer(
+                                    duration: const Duration(milliseconds: 100),
+                                    width: selected ? 22 : 8,
+                                    height: selected ? 14 : 2,
+                                    alignment: Alignment.center,
+                                    decoration: BoxDecoration(
+                                      color: selected
+                                          ? context.viberColors.route
+                                                .withValues(alpha: 0.22)
+                                          : activities[index].status == 'failed'
+                                          ? context.viberColors.danger
+                                          : activities[index].status ==
+                                                'pending'
+                                          ? context.viberColors.warning
+                                          : context.viberColors.textFaint,
+                                      borderRadius: ViberMetrics.controlRadius,
+                                      border: selected
+                                          ? Border.all(
+                                              color: context.viberColors.route,
+                                            )
+                                          : null,
+                                    ),
+                                    child: selected
+                                        ? Text(
+                                            '${index + 1}',
+                                            style: Theme.of(context)
+                                                .textTheme
+                                                .labelMedium
+                                                ?.copyWith(
+                                                  fontSize: ViberType.micro,
+                                                  color:
+                                                      context.viberColors.route,
+                                                ),
+                                          )
+                                        : null,
+                                  ),
+                                ),
+                              ),
                             ),
-                            activity: activity,
-                            number: index + 1,
-                            copy: widget.copy,
-                            expanded: expanded,
-                            showFull: _fullSnapshots.contains(activity.id),
-                            controller: widget.controller,
-                            exchangeScoped: widget.exchangeScoped,
-                            onToggle: () => _toggle(activity),
-                            onToggleFull: () => _toggleFull(activity),
                           );
                         },
                       ),
                     ),
                   ),
-                ),
-              ),
-              if (!widget.exchangeScoped)
-                Container(
-                  width: 38,
-                  decoration: BoxDecoration(
-                    color: context.viberColors.panel,
-                    border: Border(
-                      left: BorderSide(color: context.viberColors.divider),
-                    ),
-                  ),
-                  child: Semantics(
-                    label: widget.copy('conversation.map'),
-                    child: ListView.builder(
-                      controller: _mapScroll,
-                      padding: const EdgeInsets.symmetric(vertical: 8),
-                      itemExtent: _mapItemExtent,
-                      itemCount: activities.length,
-                      itemBuilder: (context, index) {
-                        final selected = index == _current;
-                        final label = widget.copy.format('conversation.turn', {
-                          'number': index + 1,
-                        });
-                        return Tooltip(
-                          message: label,
-                          child: Semantics(
-                            button: true,
-                            selected: selected,
-                            label: label,
-                            child: InkWell(
-                              key: Key('conversation-map-turn-${index + 1}'),
-                              onTap: () => _goTo(index),
-                              canRequestFocus: true,
-                              child: Center(
-                                child: AnimatedContainer(
-                                  duration: const Duration(milliseconds: 100),
-                                  width: selected ? 22 : 8,
-                                  height: selected ? 14 : 2,
-                                  alignment: Alignment.center,
-                                  decoration: BoxDecoration(
-                                    color: selected
-                                        ? context.viberColors.route.withValues(
-                                            alpha: 0.22,
-                                          )
-                                        : activities[index].status == 'failed'
-                                        ? context.viberColors.danger
-                                        : activities[index].status == 'pending'
-                                        ? context.viberColors.warning
-                                        : context.viberColors.textFaint,
-                                    borderRadius: ViberMetrics.controlRadius,
-                                    border: selected
-                                        ? Border.all(
-                                            color: context.viberColors.route,
-                                          )
-                                        : null,
-                                  ),
-                                  child: selected
-                                      ? Text(
-                                          '${index + 1}',
-                                          style: Theme.of(context)
-                                              .textTheme
-                                              .labelMedium
-                                              ?.copyWith(
-                                                fontSize: ViberType.micro,
-                                                color:
-                                                    context.viberColors.route,
-                                              ),
-                                        )
-                                      : null,
-                                ),
-                              ),
-                            ),
-                          ),
-                        );
-                      },
-                    ),
-                  ),
-                ),
-            ],
+              ],
+            ),
           ),
         ),
       ],
@@ -1069,51 +1087,71 @@ final class _ExchangeEvidencePanel extends StatelessWidget {
           if (content.state == 'not_recorded')
             InlineNotice(message: copy('exchange.content.not_recorded'))
           else ...[
-            Row(
-              children: [
-                Expanded(
-                  child: Wrap(
-                    spacing: 10,
-                    runSpacing: 4,
-                    children: [
-                      _Evidence(
-                        label: copy('exchange.model.requested'),
-                        value: content.request!.requestedModel,
+            LayoutBuilder(
+              builder: (context, constraints) {
+                final snapshotLabel = copy(
+                  showFull
+                      ? 'exchange.content.incremental'
+                      : 'exchange.content.full',
+                );
+                final snapshotAction = constraints.maxWidth < 420
+                    ? IconButton(
+                        key: Key('exchange-full-${activity.id}'),
+                        onPressed:
+                            controller.exchangeIsLoading(
+                              activity.id,
+                              contentView: 'full',
+                            )
+                            ? null
+                            : onToggleFull,
+                        tooltip: snapshotLabel,
+                        icon: Icon(
+                          showFull ? Icons.compress : Icons.unfold_more,
+                          size: 13,
+                        ),
+                      )
+                    : TextButton.icon(
+                        key: Key('exchange-full-${activity.id}'),
+                        onPressed:
+                            controller.exchangeIsLoading(
+                              activity.id,
+                              contentView: 'full',
+                            )
+                            ? null
+                            : onToggleFull,
+                        icon: Icon(
+                          showFull ? Icons.compress : Icons.unfold_more,
+                          size: 13,
+                        ),
+                        label: Text(snapshotLabel),
+                      );
+                return Row(
+                  children: [
+                    Expanded(
+                      child: Wrap(
+                        spacing: 10,
+                        runSpacing: 4,
+                        children: [
+                          _Evidence(
+                            label: copy('exchange.model.requested'),
+                            value: content.request!.requestedModel,
+                          ),
+                          _Evidence(
+                            label: copy('exchange.model.effective'),
+                            value: content.request!.effectiveModel,
+                          ),
+                          _Evidence(
+                            label: copy('exchange.max_output'),
+                            value: '${content.request!.maxOutputTokens}',
+                          ),
+                        ],
                       ),
-                      _Evidence(
-                        label: copy('exchange.model.effective'),
-                        value: content.request!.effectiveModel,
-                      ),
-                      _Evidence(
-                        label: copy('exchange.max_output'),
-                        value: '${content.request!.maxOutputTokens}',
-                      ),
-                    ],
-                  ),
-                ),
-                if (projection?.fullSnapshotAvailable == true)
-                  TextButton.icon(
-                    key: Key('exchange-full-${activity.id}'),
-                    onPressed:
-                        controller.exchangeIsLoading(
-                          activity.id,
-                          contentView: 'full',
-                        )
-                        ? null
-                        : onToggleFull,
-                    icon: Icon(
-                      showFull ? Icons.compress : Icons.unfold_more,
-                      size: 13,
                     ),
-                    label: Text(
-                      copy(
-                        showFull
-                            ? 'exchange.content.incremental'
-                            : 'exchange.content.full',
-                      ),
-                    ),
-                  ),
-              ],
+                    if (projection?.fullSnapshotAvailable == true)
+                      snapshotAction,
+                  ],
+                );
+              },
             ),
             if (!showFull && fullLoadError != null) ...[
               const SizedBox(height: 6),
