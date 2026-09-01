@@ -186,6 +186,7 @@ func TestRuntimeUserPrincipalFreezesAuthenticatedDeviceAttribution(t *testing.T)
 		MachineID:          "machine-source-one",
 		DeviceName:         "Linux workstation",
 		RuntimeUserID:      "user.source-one",
+		RuntimeUsername:    "alice",
 		LoginSessionID:     "login.source-one",
 		CredentialRevision: 1,
 		AllowedGrantKinds:  []controlprincipal.GrantKind{controlprincipal.GrantCaptureRun},
@@ -195,6 +196,9 @@ func TestRuntimeUserPrincipalFreezesAuthenticatedDeviceAttribution(t *testing.T)
 	}
 	if device, ok := principal.DeviceName(); !ok || device != "Linux workstation" {
 		t.Fatalf("Runtime User device = %q, %v", device, ok)
+	}
+	if username, ok := principal.RuntimeUsername(); !ok || username != "alice" {
+		t.Fatalf("Runtime User username = %q, %v", username, ok)
 	}
 	if !principal.Valid() {
 		t.Fatal("Runtime User principal became invalid after construction")

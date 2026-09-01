@@ -268,7 +268,7 @@ func messageTransformSample(
 			}, messagetransform.ResponseMessage{
 				StatusCode: http.StatusOK,
 				Headers:    headers.Clone(),
-				Body:       []byte(`{"id":"resp_sample","object":"response","status":"completed","model":"gpt-sample","output":[],"usage":{"input_tokens":8,"output_tokens":3,"total_tokens":11}}`),
+				Body:       []byte(`{"id":"resp_sample","object":"response","status":"completed","model":"gpt-sample","output":[{"id":"msg_sample","type":"message","role":"assistant","status":"completed","content":[{"type":"output_text","text":"Sample response","annotations":[]}]}],"usage":{"input_tokens":8,"output_tokens":3,"total_tokens":11}}`),
 			}, nil
 	case transformProtocolOpenAIChat:
 		return messagetransform.RequestMessage{

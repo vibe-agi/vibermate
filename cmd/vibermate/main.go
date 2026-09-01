@@ -136,6 +136,7 @@ func executeContext(
 		if err != nil {
 			return 2, keyLoginUsage
 		}
+		login.environment = environment
 		stateDirectory, pathErr := clientpath.DefaultRemoteStateDirectory()
 		if pathErr != nil {
 			return 1, keyRuntimePath

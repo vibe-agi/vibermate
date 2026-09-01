@@ -4432,6 +4432,5 @@ final class _EnvironmentImpactReview extends StatelessWidget {
 
 String _localizedCopy(AppCopy copy, String family, String value) {
   final key = '$family.$value';
-  final localized = copy(key);
-  return localized == key ? value : localized;
+  return copy.maybe(key) ?? value;
 }

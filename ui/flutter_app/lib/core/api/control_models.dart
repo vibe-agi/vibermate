@@ -2743,6 +2743,7 @@ final class AccountSelectorTestRequest {
 final class AccountSelectorTestRuntime {
   const AccountSelectorTestRuntime({
     required this.userName,
+    required this.loginUsername,
     required this.homeDirectory,
     required this.operatingSystem,
     required this.operatingSystemVersion,
@@ -2754,6 +2755,7 @@ final class AccountSelectorTestRuntime {
   });
 
   final String userName;
+  final String loginUsername;
   final String homeDirectory;
   final String operatingSystem;
   final String operatingSystemVersion;
@@ -2765,6 +2767,7 @@ final class AccountSelectorTestRuntime {
 
   JsonObject toJson() => {
     'userName': userName,
+    'loginUsername': loginUsername,
     'homeDirectory': homeDirectory,
     'operatingSystem': operatingSystem,
     'operatingSystemVersion': operatingSystemVersion,
@@ -4653,6 +4656,7 @@ final class ManagedRunSummary {
     required this.expiresAt,
     this.localUserLabel,
     this.runtimeUserId,
+    this.runtimeUsername,
     this.loginSessionId,
     this.deviceName,
     this.machineId,
@@ -4681,6 +4685,7 @@ final class ManagedRunSummary {
       optional: const {
         'localUserLabel',
         'runtimeUserId',
+        'runtimeUsername',
         'loginSessionId',
         'deviceName',
         'machineId',
@@ -4704,6 +4709,7 @@ final class ManagedRunSummary {
     final recognition = requireString(value, 'recognition', path);
     final localUserLabel = optionalString(value, 'localUserLabel', path);
     final runtimeUserId = optionalString(value, 'runtimeUserId', path);
+    final runtimeUsername = optionalString(value, 'runtimeUsername', path);
     final loginSessionId = optionalString(value, 'loginSessionId', path);
     final deviceName = optionalString(value, 'deviceName', path);
     final machineId = optionalString(value, 'machineId', path);
@@ -4739,6 +4745,7 @@ final class ManagedRunSummary {
     final hasWorkspace = workspaceEvidenceValues.every((item) => item != null);
     final runtimeAttribution = <Object?>[
       runtimeUserId,
+      runtimeUsername,
       loginSessionId,
       deviceName,
     ];
@@ -4780,6 +4787,7 @@ final class ManagedRunSummary {
       expiresAt: requireTimestamp(value, 'expiresAt', path),
       localUserLabel: localUserLabel,
       runtimeUserId: runtimeUserId,
+      runtimeUsername: runtimeUsername,
       loginSessionId: loginSessionId,
       deviceName: deviceName,
       machineId: machineId,
@@ -4801,6 +4809,7 @@ final class ManagedRunSummary {
   final DateTime expiresAt;
   final String? localUserLabel;
   final String? runtimeUserId;
+  final String? runtimeUsername;
   final String? loginSessionId;
   final String? deviceName;
   final String? machineId;

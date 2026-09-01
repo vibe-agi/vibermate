@@ -15,6 +15,7 @@ import (
 	"github.com/vibe-agi/vibermate/internal/captureidentity"
 	"github.com/vibe-agi/vibermate/internal/capturerun"
 	"github.com/vibe-agi/vibermate/internal/clientadapter"
+	"github.com/vibe-agi/vibermate/internal/runtimeuser"
 	"github.com/vibe-agi/vibermate/internal/workspaceidentity"
 )
 
@@ -100,6 +101,7 @@ type Admission struct {
 	workspaceRoot      string
 	adapter            *clientadapter.Evidence
 	runtime            capturerun.RuntimeMetadata
+	runtimeUsername    string
 }
 
 // NewManual constructs the route-neutral admission produced by a future
@@ -172,12 +174,17 @@ func (admission Admission) Validate() error {
 		if admission.runtime.Validate() != nil {
 			return fmt.Errorf("%w: managed runtime metadata is invalid", ErrInvalidAdmission)
 		}
+		if admission.runtimeUsername != "" &&
+			!runtimeuser.ValidUsername(admission.runtimeUsername) {
+			return fmt.Errorf("%w: Runtime username is invalid", ErrInvalidAdmission)
+		}
 	case KindManual:
 		if !validOpaqueID(admission.manualCaptureID) ||
 			admission.admissionRef != "manual-capture/"+admission.manualCaptureID ||
 			admission.captureRunID != "" || admission.adapter != nil ||
 			hasWorkspace || admission.workspaceRoot != "" ||
 			admission.runtime != (capturerun.RuntimeMetadata{}) ||
+			admission.runtimeUsername != "" ||
 			admission.confidence != AttributionConfigured {
 			return fmt.Errorf("%w: manual-capture evidence is invalid", ErrInvalidAdmission)
 		}
@@ -245,6 +252,10 @@ func (admission Admission) WorkspaceRoot() (string, bool) {
 
 func (admission Admission) RuntimeMetadata() (capturerun.RuntimeMetadata, bool) {
 	return admission.runtime, admission.kind == KindManagedRun
+}
+
+func (admission Admission) RuntimeUsername() (string, bool) {
+	return admission.runtimeUsername, admission.runtimeUsername != ""
 }
 
 // Supports reports only feature evidence carried by a digest-verified client

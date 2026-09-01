@@ -327,6 +327,7 @@ void main() {
           'canonicalExecutablePath': '/usr/local/bin/claude',
           'localUserLabel': 'mira',
           'runtimeUserId': 'user.remote',
+          'runtimeUsername': 'alice',
           'loginSessionId': 'login.remote',
           'deviceName': 'MacBook Pro',
           'machineId': machineId,
@@ -356,6 +357,7 @@ void main() {
       expect(record.managedRun!.workspaceId, workspaceId);
       expect(record.managedRun!.workspaceEvidence, 'registered_companion');
       expect(record.managedRun!.runtimeUserId, 'user.remote');
+      expect(record.managedRun!.runtimeUsername, 'alice');
       expect(record.managedRun!.deviceName, 'MacBook Pro');
       expect(record.managedRun!.clientAdapter?.version, '2.1.220');
       expect(record.managedRun!.clientAdapter?.id, 'claude-code');

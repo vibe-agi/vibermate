@@ -4,6 +4,7 @@ import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
+import '../../core/api/control_api.dart';
 import '../../core/api/control_models.dart';
 import '../../core/design/viber_theme.dart';
 import '../../core/design/workbench_widgets.dart';
@@ -22,6 +23,7 @@ final class AccountSelectorEditorDialog extends StatefulWidget {
     required this.initial,
     required this.copy,
     required this.testSelector,
+    this.primaryActionLabel,
     super.key,
   });
 
@@ -29,6 +31,7 @@ final class AccountSelectorEditorDialog extends StatefulWidget {
   final AccountSelectorPolicy initial;
   final AppCopy copy;
   final AccountSelectorTestCallback testSelector;
+  final String? primaryActionLabel;
 
   @override
   State<AccountSelectorEditorDialog> createState() =>
@@ -39,7 +42,7 @@ final class _AccountSelectorEditorDialogState
     extends State<AccountSelectorEditorDialog> {
   late final JavaScriptEditingController _source;
   late final TextEditingController _accounts;
-  late final TextEditingController _user;
+  late final TextEditingController _loginUsername;
   late final TextEditingController _workspace;
   late final TextEditingController _model;
   String _protocol = 'anthropic_messages';
@@ -58,7 +61,7 @@ final class _AccountSelectorEditorDialogState
           'account.work, account.personal, account.team-a, account.team-b, '
           'account.high-capacity, account.standard',
     );
-    _user = TextEditingController(text: 'alice');
+    _loginUsername = TextEditingController(text: 'alice');
     _workspace = TextEditingController(text: 'work');
     _model = TextEditingController(text: 'claude-sonnet-4-5');
   }
@@ -67,7 +70,7 @@ final class _AccountSelectorEditorDialogState
   void dispose() {
     _source.dispose();
     _accounts.dispose();
-    _user.dispose();
+    _loginUsername.dispose();
     _workspace.dispose();
     _model.dispose();
     super.dispose();
@@ -179,7 +182,7 @@ final class _AccountSelectorEditorDialogState
           ),
         ),
         IconButton(
-          tooltip: copy('common.close'),
+          tooltip: copy('common.dismiss'),
           onPressed: () => Navigator.of(context).pop(),
           icon: const Icon(Icons.close, size: 18),
         ),
@@ -315,7 +318,7 @@ final class _AccountSelectorEditorDialogState
             ),
             TextField(
               key: const Key('account-selector-sample-user'),
-              controller: _user,
+              controller: _loginUsername,
               decoration: InputDecoration(
                 labelText: copy('account_selector.sample.user'),
               ),
@@ -421,7 +424,7 @@ final class _AccountSelectorEditorDialogState
             FilledButton(
               key: Key('account-selector-save-${widget.selectorId}'),
               onPressed: _save,
-              child: Text(copy('common.save')),
+              child: Text(widget.primaryActionLabel ?? copy('common.save')),
             ),
           ],
         );
@@ -455,10 +458,10 @@ final class _AccountSelectorEditorDialogState
         .toSet()
         .toList(growable: false);
     if (accountIds.isEmpty) throw const FormatException('accounts');
-    final user = _user.text.trim();
+    final loginUsername = _loginUsername.text.trim();
     final workspace = _workspace.text.trim();
     final model = _model.text.trim();
-    if (user.isEmpty || workspace.isEmpty || model.isEmpty) {
+    if (loginUsername.isEmpty || workspace.isEmpty || model.isEmpty) {
       throw const FormatException('sample');
     }
     final path = switch (_protocol) {
@@ -484,8 +487,9 @@ final class _AccountSelectorEditorDialogState
         requestedModel: model,
       ),
       runtime: AccountSelectorTestRuntime(
-        userName: user,
-        homeDirectory: '/Users/$user',
+        userName: 'local-user',
+        loginUsername: loginUsername,
+        homeDirectory: '/Users/local-user',
         operatingSystem: 'macos',
         operatingSystemVersion: 'sample',
         architecture: 'arm64',
@@ -510,10 +514,19 @@ final class _AccountSelectorEditorDialogState
       );
       if (mounted) setState(() => _result = result);
     } on Object catch (error) {
-      if (mounted) setState(() => _error = error.toString());
+      if (mounted) setState(() => _error = _testError(error));
     } finally {
       if (mounted) setState(() => _testing = false);
     }
+  }
+
+  String _testError(Object error) {
+    if (error is ControlProblem &&
+        error.reasonCode == 'account_selector_test_failed') {
+      final guidance = copy('account_selector.test.failed');
+      return error.detail == null ? guidance : '$guidance\n${error.detail}';
+    }
+    return copy('account_selector.test.unavailable');
   }
 
   void _save() {
@@ -533,6 +546,7 @@ const _suggestions = <String>[
   'request.headers["anthropic-beta"]',
   'request.requestedModel',
   'request.protocol',
+  'runtime.login.username',
   'runtime.user.name',
   'runtime.workspace.label',
   'runtime.workspace.root',

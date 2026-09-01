@@ -27,6 +27,7 @@ type AccountSelectorTestRequest struct {
 
 type AccountSelectorTestRuntime struct {
 	UserName               string    `json:"userName"`
+	LoginUsername          string    `json:"loginUsername"`
 	HomeDirectory          string    `json:"homeDirectory"`
 	OperatingSystem        string    `json:"operatingSystem"`
 	OperatingSystemVersion string    `json:"operatingSystemVersion"`
@@ -83,7 +84,8 @@ func runAccountSelectorSample(
 	turn, err := program.NewTurn(accountselector.TurnOptions{
 		Accounts: input.Accounts,
 		Runtime: accountselector.RuntimeMetadata{
-			LocalUserName: input.Runtime.UserName, HomeDirectory: input.Runtime.HomeDirectory,
+			LocalUserName: input.Runtime.UserName, LoginUsername: input.Runtime.LoginUsername,
+			HomeDirectory:          input.Runtime.HomeDirectory,
 			OperatingSystem:        input.Runtime.OperatingSystem,
 			OperatingSystemVersion: input.Runtime.OperatingSystemVersion,
 			Architecture:           input.Runtime.Architecture, TimeZone: input.Runtime.TimeZone,

@@ -15,17 +15,22 @@ import '../features/workbench/workbench_shell.dart';
 import '../preview/preview_control_api.dart';
 import '../preview/preview_terminal_command.dart';
 
+typedef RuntimeConnector =
+    Future<RuntimeConnection> Function({String? accessKey});
+
 final class ViberMateApp extends StatefulWidget {
   const ViberMateApp({
     required this.previewMode,
     required this.preferChinese,
     this.preferencesStore,
+    this.runtimeConnector = connectPlatformRuntime,
     super.key,
   });
 
   final bool previewMode;
   final bool preferChinese;
   final WorkbenchPreferencesStore? preferencesStore;
+  final RuntimeConnector runtimeConnector;
 
   @override
   State<ViberMateApp> createState() => _ViberMateAppState();
@@ -70,6 +75,7 @@ final class _ViberMateAppState extends State<ViberMateApp> {
               preferencesStore: _preferencesStore,
               loadedPreferences: _loadedPreferences!,
               onThemeChanged: _setTheme,
+              runtimeConnector: widget.runtimeConnector,
             ),
     );
   }
@@ -119,6 +125,7 @@ final class _RuntimeBootstrap extends StatefulWidget {
     required this.preferencesStore,
     required this.loadedPreferences,
     required this.onThemeChanged,
+    required this.runtimeConnector,
   });
 
   final bool previewMode;
@@ -126,6 +133,7 @@ final class _RuntimeBootstrap extends StatefulWidget {
   final WorkbenchPreferencesStore preferencesStore;
   final LoadedWorkbenchPreferences loadedPreferences;
   final ValueChanged<WorkbenchTheme> onThemeChanged;
+  final RuntimeConnector runtimeConnector;
 
   @override
   State<_RuntimeBootstrap> createState() => _RuntimeBootstrapState();
@@ -166,7 +174,7 @@ final class _RuntimeBootstrapState extends State<_RuntimeBootstrap> {
         terminalCommands = PreviewTerminalCommandService();
         closeRuntime = preview.close;
       } else {
-        final runtime = await connectPlatformRuntime(accessKey: accessKey);
+        final runtime = await widget.runtimeConnector(accessKey: accessKey);
         liveRuntime = runtime;
         api = runtime.api;
         terminalCommands = runtime.terminalCommands;
@@ -260,6 +268,10 @@ final class _RuntimeBootstrapState extends State<_RuntimeBootstrap> {
         onConnect: () => _start(accessKey: _accessKey.text.trim()),
       );
     }
+    final sidecarUnavailable =
+        _failure is RuntimeConnectionException &&
+        (_failure as RuntimeConnectionException).message ==
+            'desktop_sidecar_unavailable';
     return Scaffold(
       body: Center(
         child: ConstrainedBox(
@@ -296,16 +308,19 @@ final class _RuntimeBootstrapState extends State<_RuntimeBootstrap> {
                   ),
                   const SizedBox(height: 8),
                   Text(
-                    _failure.toString(),
+                    sidecarUnavailable
+                        ? copy('bootstrap.sidecar_unavailable')
+                        : _failure.toString(),
                     textAlign: TextAlign.center,
                     style: Theme.of(context).textTheme.bodySmall,
                   ),
                   const SizedBox(height: 12),
-                  OutlinedButton.icon(
-                    onPressed: () => _start(),
-                    icon: const Icon(Icons.refresh, size: 15),
-                    label: Text(copy('common.retry')),
-                  ),
+                  if (!sidecarUnavailable)
+                    OutlinedButton.icon(
+                      onPressed: () => _start(),
+                      icon: const Icon(Icons.refresh, size: 15),
+                      label: Text(copy('common.retry')),
+                    ),
                 ],
               ],
             ),

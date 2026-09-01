@@ -2598,8 +2598,7 @@ String _humanize(String value) {
 
 String _localizedWire(AppCopy copy, String family, String value) {
   final key = '$family.$value';
-  final localized = copy(key);
-  return localized == key ? _humanize(value) : localized;
+  return copy.maybe(key) ?? _humanize(value);
 }
 
 Color _decisionColor(BuildContext context, String? decision) =>

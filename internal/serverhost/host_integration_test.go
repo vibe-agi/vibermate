@@ -184,7 +184,7 @@ func TestServerHostAuthenticatesServerCreatedRuntimeUserOverExplicitHTTP(t *test
 	if err != nil {
 		t.Fatalf("read attributed Capture Run: %v", err)
 	}
-	if view.RuntimeUserID != created.ID ||
+	if view.RuntimeUserID != created.ID || view.RuntimeUsername != "alice" ||
 		view.LoginSessionID != runtimeuser.LoginSessionID(session.SessionID) ||
 		view.DeviceName != "Linux workstation" {
 		// The raw token must never be stored; attribution uses its opaque
@@ -881,10 +881,12 @@ func TestRuntimeUserCustomClaudeHTTPOriginProducesExchangeAndUsage(t *testing.T)
 	if adminLogin.StatusCode != http.StatusCreated || json.NewDecoder(adminLogin.Body).Decode(&admin) != nil {
 		t.Fatalf("admin login status=%d", adminLogin.StatusCode)
 	}
+	now := time.Now().UTC()
 	usageRequest, err := http.NewRequest(
 		http.MethodGet,
 		"http://"+host.Status().ListenAddress+servercontrol.RuntimeUserUsagePath+
-			"?from=2026-08-01&until=2026-09-01&timeZone=UTC",
+			"?from="+now.AddDate(0, 0, -1).Format(time.DateOnly)+
+			"&until="+now.AddDate(0, 0, 1).Format(time.DateOnly)+"&timeZone=UTC",
 		nil,
 	)
 	if err != nil {

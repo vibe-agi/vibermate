@@ -189,7 +189,7 @@ final class _MessageTransformPipelineDialogState
                     ),
                   ),
                   IconButton(
-                    tooltip: copy('common.close'),
+                    tooltip: copy('common.dismiss'),
                     onPressed: () => Navigator.of(context).pop(),
                     icon: const Icon(Icons.close, size: 18),
                   ),
@@ -426,6 +426,7 @@ final class MessageTransformEditorDialog extends StatefulWidget {
     required this.testTransform,
     this.initialSample,
     this.onTestWireProtocolChanged,
+    this.primaryActionLabel,
     super.key,
   });
 
@@ -436,6 +437,7 @@ final class MessageTransformEditorDialog extends StatefulWidget {
   final MessageTransformTestCallback testTransform;
   final MessageTransformTestSample? initialSample;
   final ValueChanged<String>? onTestWireProtocolChanged;
+  final String? primaryActionLabel;
 
   @override
   State<MessageTransformEditorDialog> createState() =>
@@ -615,7 +617,7 @@ final class _MessageTransformEditorDialogState
           ),
           IconButton(
             key: Key('environment-transform-close-${widget.planId}'),
-            tooltip: copy('common.close'),
+            tooltip: copy('common.dismiss'),
             onPressed: () => Navigator.of(context).pop(),
             icon: const Icon(Icons.close, size: 18),
           ),
@@ -722,7 +724,7 @@ final class _MessageTransformEditorDialogState
           FilledButton(
             key: Key('environment-transform-save-${widget.planId}'),
             onPressed: _testing ? null : _save,
-            child: Text(copy('common.save')),
+            child: Text(widget.primaryActionLabel ?? copy('common.save')),
           ),
         ],
       ),
@@ -950,7 +952,7 @@ final class _MessageTransformSampleDialogState
                       ),
                     ),
                     IconButton(
-                      tooltip: copy('common.close'),
+                      tooltip: copy('common.dismiss'),
                       onPressed: () => Navigator.of(context).pop(),
                       icon: const Icon(Icons.close, size: 18),
                     ),
@@ -1489,13 +1491,52 @@ String _protocolLabel(AppCopy copy, String protocol) => switch (protocol) {
   _ => protocol,
 };
 
+final _javaScriptTokens = RegExp(
+  r'''//[^\n]*|/\*[\s\S]*?\*/|"(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'|`(?:\\.|[^`\\])*`|\b(?:const|let|var|if|else|for|while|return|throw|new|delete|true|false|null|undefined)\b|\b(?:request|response|context|runtime|accounts|selection|JSON)\b''',
+  multiLine: true,
+);
+
+TextSpan javaScriptTextSpan(
+  BuildContext context,
+  String source, {
+  TextStyle? style,
+}) {
+  final palette = context.viberColors;
+  final spans = <InlineSpan>[];
+  var offset = 0;
+  for (final match in _javaScriptTokens.allMatches(source)) {
+    if (match.start > offset) {
+      spans.add(TextSpan(text: source.substring(offset, match.start)));
+    }
+    final token = match.group(0)!;
+    final tokenStyle = token.startsWith('//') || token.startsWith('/*')
+        ? TextStyle(color: palette.textFaint, fontStyle: FontStyle.italic)
+        : token.startsWith('"') ||
+              token.startsWith("'") ||
+              token.startsWith('`')
+        ? TextStyle(color: palette.verified)
+        : const {
+            'request',
+            'response',
+            'context',
+            'runtime',
+            'accounts',
+            'selection',
+            'JSON',
+          }.contains(token)
+        ? TextStyle(color: palette.route, fontWeight: FontWeight.w600)
+        : TextStyle(color: palette.warning, fontWeight: FontWeight.w600);
+    spans.add(TextSpan(text: token, style: tokenStyle));
+    offset = match.end;
+  }
+  if (offset < source.length) {
+    spans.add(TextSpan(text: source.substring(offset)));
+  }
+  return TextSpan(style: style, children: spans);
+}
+
 final class JavaScriptEditingController extends TextEditingController {
   JavaScriptEditingController({super.text});
-
-  static final _tokens = RegExp(
-    r'''//[^\n]*|/\*[\s\S]*?\*/|"(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'|`(?:\\.|[^`\\])*`|\b(?:const|let|var|if|else|for|while|return|throw|new|delete|true|false|null|undefined)\b|\b(?:request|response|context|runtime|accounts|selection|JSON)\b''',
-    multiLine: true,
-  );
 
   void insertSnippet(String snippet) {
     final current = value;
@@ -1526,36 +1567,5 @@ final class JavaScriptEditingController extends TextEditingController {
     required BuildContext context,
     TextStyle? style,
     required bool withComposing,
-  }) {
-    final palette = context.viberColors;
-    final spans = <InlineSpan>[];
-    var offset = 0;
-    for (final match in _tokens.allMatches(text)) {
-      if (match.start > offset) {
-        spans.add(TextSpan(text: text.substring(offset, match.start)));
-      }
-      final token = match.group(0)!;
-      final tokenStyle = token.startsWith('//') || token.startsWith('/*')
-          ? TextStyle(color: palette.textFaint, fontStyle: FontStyle.italic)
-          : token.startsWith('"') ||
-                token.startsWith("'") ||
-                token.startsWith('`')
-          ? TextStyle(color: palette.verified)
-          : const {
-              'request',
-              'response',
-              'context',
-              'runtime',
-              'accounts',
-              'selection',
-              'JSON',
-            }.contains(token)
-          ? TextStyle(color: palette.route, fontWeight: FontWeight.w600)
-          : TextStyle(color: palette.warning, fontWeight: FontWeight.w600);
-      spans.add(TextSpan(text: token, style: tokenStyle));
-      offset = match.end;
-    }
-    if (offset < text.length) spans.add(TextSpan(text: text.substring(offset)));
-    return TextSpan(style: style, children: spans);
-  }
+  }) => javaScriptTextSpan(context, text, style: style);
 }

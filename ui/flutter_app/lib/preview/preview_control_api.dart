@@ -10,6 +10,7 @@ final class PreviewControlApi implements ControlApi {
   PreviewControlApi({
     int dashboardCaptureLimit = 50,
     ControlProblem? upstreamModelFailure,
+    bool seedCaptures = true,
   }) : _dashboardCaptureLimit = dashboardCaptureLimit,
        _upstreamModelFailure = upstreamModelFailure {
     if (dashboardCaptureLimit < 1 || dashboardCaptureLimit > 199) {
@@ -136,6 +137,12 @@ final class PreviewControlApi implements ControlApi {
       lastObservedAt: manual.manualCapture!.lastObservedAt,
     );
     _manualVersions[manualId] = manual.manualCapture!.credentialRevision;
+    if (!seedCaptures) {
+      _captures.clear();
+      _assignments.clear();
+      _manualRecords.clear();
+      _manualVersions.clear();
+    }
   }
 
   final int _dashboardCaptureLimit;
@@ -2066,7 +2073,12 @@ final class PreviewControlApi implements ControlApi {
               .firstOrNull;
     final count = capture.id == 'run-1' ? 224 : 24;
     final values = List.generate(count, (index) {
-      final succeeded = index != 5 && index != count - 6;
+      final reasonCode = switch (index) {
+        217 => 'unsupported_client_input',
+        218 => 'provider_response_idle',
+        _ => null,
+      };
+      final succeeded = reasonCode == null;
       final conversation = _previewConversation(capture, index);
       return ActivityRecord(
         id: '${capture.id}-exchange-${index + 1}',
@@ -2077,7 +2089,7 @@ final class PreviewControlApi implements ControlApi {
             : succeeded
             ? 'succeeded'
             : 'failed',
-        reasonCode: succeeded ? null : 'provider_timeout',
+        reasonCode: reasonCode,
         requestPreview: ActivityRequestPreview(
           kind: index % 4 == 0 ? 'tool_call' : 'text',
           text: index % 4 == 0
@@ -3068,6 +3080,8 @@ Evidence line 16''';
     final toolTurn = index % 4 == 0;
     final terminal = activity.status != 'pending';
     final failed = activity.status == 'failed';
+    final rejectedBeforeUpstream =
+        activity.reasonCode == 'unsupported_client_input';
     final agentTurn = activity.source.displayName == 'Codex' && index >= 20;
     final routeId = activity.routeId ?? '';
     final attempt = EgressAttemptRecord(
@@ -3223,7 +3237,14 @@ Evidence line 16''';
       status: activity.status,
       environment: activity.environment,
       parentRefs: activity.parentRefs,
-      diagnosis: failed
+      diagnosis: rejectedBeforeUpstream
+          ? const ExchangeDiagnosis(
+              providerStatus: null,
+              providerField: null,
+              clientField: 'messages',
+              clientPath: r'$.messages[0].content',
+            )
+          : failed
           ? const ExchangeDiagnosis(
               providerStatus: 504,
               providerField: 'upstream',
@@ -3235,7 +3256,7 @@ Evidence line 16''';
       processingTrace: ExchangeProcessingTrace(
         egressProxyId: null,
         pluginRunIds: const [],
-        attempts: [attempt],
+        attempts: rejectedBeforeUpstream ? const [] : [attempt],
         result: activity.reasonCode ?? activity.status,
       ),
       content: ExchangeContentDetail(

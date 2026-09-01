@@ -90,6 +90,7 @@ type DurableRecord struct {
 	CanonicalExecutablePath     string
 	Runtime                     RuntimeMetadata
 	RuntimeUserID               runtimeuser.UserID
+	RuntimeUsername             string
 	LoginSessionID              runtimeuser.LoginSessionID
 	DeviceName                  string
 	ExecutableLabel             string
@@ -156,10 +157,12 @@ func (record DurableRecord) Validate() error {
 	if err := record.Runtime.Validate(); err != nil {
 		return err
 	}
-	if (record.RuntimeUserID == "") != (record.LoginSessionID == "") ||
+	if (record.RuntimeUserID == "") != (record.RuntimeUsername == "") ||
+		(record.RuntimeUserID == "") != (record.LoginSessionID == "") ||
 		(record.RuntimeUserID == "") != (record.DeviceName == "") ||
 		(record.RuntimeUserID != "" &&
-			(!record.RuntimeUserID.Valid() || !record.LoginSessionID.Valid() ||
+			(!record.RuntimeUserID.Valid() || !runtimeuser.ValidUsername(record.RuntimeUsername) ||
+				!record.LoginSessionID.Valid() ||
 				!runtimeuser.ValidDeviceName(record.DeviceName))) {
 		return fmt.Errorf("%w: Runtime User attribution is invalid", ErrInvalidRequest)
 	}
@@ -246,6 +249,7 @@ type View struct {
 	CanonicalExecutablePath     string                     `json:"-"`
 	LocalUserLabel              string                     `json:"localUserLabel,omitempty"`
 	RuntimeUserID               runtimeuser.UserID         `json:"runtimeUserId,omitempty"`
+	RuntimeUsername             string                     `json:"runtimeUsername,omitempty"`
 	LoginSessionID              runtimeuser.LoginSessionID `json:"loginSessionId,omitempty"`
 	DeviceName                  string                     `json:"deviceName,omitempty"`
 	MachineID                   string                     `json:"machineId,omitempty"`
@@ -290,6 +294,7 @@ func ViewOf(record DurableRecord) View {
 		CanonicalExecutablePath:     record.CanonicalExecutablePath,
 		LocalUserLabel:              record.Runtime.LocalUserName,
 		RuntimeUserID:               record.RuntimeUserID,
+		RuntimeUsername:             record.RuntimeUsername,
 		LoginSessionID:              record.LoginSessionID,
 		DeviceName:                  record.DeviceName,
 		MachineID:                   record.MachineID.String(),
@@ -369,6 +374,7 @@ type CreateCommand struct {
 	Workspace       workspaceidentity.Scope
 	Runtime         RuntimeMetadata
 	RuntimeUserID   runtimeuser.UserID
+	RuntimeUsername string
 	LoginSessionID  runtimeuser.LoginSessionID
 	DeviceName      string
 }
@@ -406,10 +412,12 @@ func (command CreateCommand) validate(maxLifetime time.Duration) error {
 	if err := command.Runtime.Validate(); err != nil {
 		return err
 	}
-	if (command.RuntimeUserID == "") != (command.LoginSessionID == "") ||
+	if (command.RuntimeUserID == "") != (command.RuntimeUsername == "") ||
+		(command.RuntimeUserID == "") != (command.LoginSessionID == "") ||
 		(command.RuntimeUserID == "") != (command.DeviceName == "") ||
 		(command.RuntimeUserID != "" &&
-			(!command.RuntimeUserID.Valid() || !command.LoginSessionID.Valid() ||
+			(!command.RuntimeUserID.Valid() || !runtimeuser.ValidUsername(command.RuntimeUsername) ||
+				!command.LoginSessionID.Valid() ||
 				!runtimeuser.ValidDeviceName(command.DeviceName))) {
 		return fmt.Errorf("%w: Runtime User attribution is invalid", ErrInvalidRequest)
 	}
@@ -450,6 +458,7 @@ type Evidence struct {
 	Workspace       workspaceidentity.Scope
 	Runtime         RuntimeMetadata
 	RuntimeUserID   runtimeuser.UserID
+	RuntimeUsername string
 	LoginSessionID  runtimeuser.LoginSessionID
 	DeviceName      string
 }
@@ -485,6 +494,7 @@ func evidenceOf(record DurableRecord) Evidence {
 		Workspace:       workspace,
 		Runtime:         record.Runtime,
 		RuntimeUserID:   record.RuntimeUserID,
+		RuntimeUsername: record.RuntimeUsername,
 		LoginSessionID:  record.LoginSessionID,
 		DeviceName:      record.DeviceName,
 	}

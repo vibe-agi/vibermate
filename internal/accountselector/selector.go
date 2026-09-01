@@ -18,6 +18,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/dop251/goja"
+	"github.com/vibe-agi/vibermate/internal/runtimeuser"
 )
 
 var (
@@ -97,6 +98,7 @@ type Account struct {
 
 type RuntimeMetadata struct {
 	LocalUserName          string
+	LoginUsername          string
 	HomeDirectory          string
 	OperatingSystem        string
 	OperatingSystemVersion string
@@ -330,6 +332,9 @@ type runtimeJSON struct {
 		Name          string `json:"name"`
 		HomeDirectory string `json:"homeDirectory"`
 	} `json:"user"`
+	Login struct {
+		Username string `json:"username"`
+	} `json:"login"`
 	Device struct {
 		OperatingSystem        string `json:"operatingSystem"`
 		OperatingSystemVersion string `json:"operatingSystemVersion"`
@@ -351,6 +356,7 @@ func encodeRuntime(metadata RuntimeMetadata) ([]byte, error) {
 		limit int
 	}{
 		{metadata.LocalUserName, 128}, {metadata.HomeDirectory, 4096},
+		{metadata.LoginUsername, 64},
 		{metadata.OperatingSystem, 64}, {metadata.OperatingSystemVersion, 256},
 		{metadata.Architecture, 64}, {metadata.TimeZone, 128},
 		{metadata.WorkspaceRoot, 4096}, {metadata.WorkspaceLabel, 256},
@@ -360,9 +366,13 @@ func encodeRuntime(metadata RuntimeMetadata) ([]byte, error) {
 			return nil, fmt.Errorf("%w: Runtime Metadata is invalid", ErrExecutionFailed)
 		}
 	}
+	if metadata.LoginUsername != "" && !runtimeuser.ValidUsername(metadata.LoginUsername) {
+		return nil, fmt.Errorf("%w: Runtime Metadata is invalid", ErrExecutionFailed)
+	}
 	var output runtimeJSON
 	output.User.Name = metadata.LocalUserName
 	output.User.HomeDirectory = metadata.HomeDirectory
+	output.Login.Username = metadata.LoginUsername
 	output.Device.OperatingSystem = metadata.OperatingSystem
 	output.Device.OperatingSystemVersion = metadata.OperatingSystemVersion
 	output.Device.Architecture = metadata.Architecture

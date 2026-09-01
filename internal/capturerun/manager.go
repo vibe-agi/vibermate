@@ -167,6 +167,7 @@ func (manager *Manager) Create(
 		CanonicalExecutablePath:     command.CanonicalExecutablePath,
 		Runtime:                     command.Runtime,
 		RuntimeUserID:               command.RuntimeUserID,
+		RuntimeUsername:             command.RuntimeUsername,
 		LoginSessionID:              command.LoginSessionID,
 		DeviceName:                  command.DeviceName,
 		ExecutableLabel:             command.ExecutableLabel,

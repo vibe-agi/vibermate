@@ -15,6 +15,7 @@ import (
 	"github.com/vibe-agi/vibermate/internal/desktopcontrol"
 	"github.com/vibe-agi/vibermate/internal/egressnetwork"
 	"github.com/vibe-agi/vibermate/internal/environment"
+	"github.com/vibe-agi/vibermate/internal/messagetransform"
 )
 
 func TestMessageTransformSampleRunsOneBoundedTurn(t *testing.T) {
@@ -85,6 +86,54 @@ func TestMessageTransformSampleRunsOneBoundedTurn(t *testing.T) {
 		!bytes.Contains(failure.Body.Bytes(), []byte(`"code":"message_transform_test_failed"`)) ||
 		bytes.Contains(failure.Body.Bytes(), []byte(privateError)) {
 		t.Fatalf("failed sample status=%d body=%s", failure.Code, failure.Body.Bytes())
+	}
+
+	turnTimeBody, err := json.Marshal(desktopcontrol.MessageTransformTestInput{
+		WireProtocol: "openai_responses",
+		Policy: messagetransform.Policy{ResponseJavaScript: `const payload = JSON.parse(response.body);
+if (response.streaming && !context.turnTimeShown && payload.type === "response.output_text.delta" && typeof payload.delta === "string") {
+  const label = runtime.turn.startedAt + (runtime.device.timeZone ? " · " + runtime.device.timeZone : "");
+  payload.delta = runtime.annotations.create("turn-time", label) + "\n" + payload.delta;
+  context.turnTimeShown = true;
+} else if (!response.streaming && Array.isArray(payload.output)) {
+  for (let outputIndex = 0; outputIndex < payload.output.length; outputIndex += 1) {
+    const item = payload.output[outputIndex];
+    if (!Array.isArray(item.content)) continue;
+    for (let contentIndex = 0; contentIndex < item.content.length; contentIndex += 1) {
+      const part = item.content[contentIndex];
+      if (part.type === "output_text" && typeof part.text === "string") {
+        const label = runtime.turn.startedAt + (runtime.device.timeZone ? " · " + runtime.device.timeZone : "");
+        part.text = runtime.annotations.create("turn-time", label) + "\n" + part.text;
+        outputIndex = payload.output.length;
+        break;
+      }
+    }
+  }
+}
+response.body = JSON.stringify(payload);`},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	turnTimeResponse := environmentRequest(
+		t,
+		application,
+		http.MethodPost,
+		"/api/v1/message-transforms/actions/test",
+		0,
+		"",
+		turnTimeBody,
+	)
+	if turnTimeResponse.Code != http.StatusOK {
+		t.Fatalf("turn-time sample status=%d body=%s", turnTimeResponse.Code, turnTimeResponse.Body.Bytes())
+	}
+	var turnTimeResult desktopcontrol.MessageTransformTestResult
+	if err := json.Unmarshal(turnTimeResponse.Body.Bytes(), &turnTimeResult); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(turnTimeResult.ResponseAfter.Body, "vibermate:annotation:v1:turn-time:") ||
+		!strings.Contains(turnTimeResult.ResponseAfter.Body, "2026-01-02T03:04:05Z · Etc/UTC") {
+		t.Fatalf("OpenAI Responses turn-time sample did not demonstrate its change: %s", turnTimeResult.ResponseAfter.Body)
 	}
 }
 

@@ -4,12 +4,19 @@ final class AppCopy {
   const AppCopy._(this._values);
 
   factory AppCopy.forLanguage(AppLanguage language) {
+    assert(_catalogsAreValid);
     return AppCopy._(language == AppLanguage.simplifiedChinese ? _zh : _en);
   }
 
   final Map<String, String> _values;
 
-  String call(String key) => _values[key] ?? key;
+  String? maybe(String key) => _values[key] ?? _en[key];
+
+  String call(String key) {
+    final value = maybe(key);
+    assert(value != null, 'Missing AppCopy key: $key');
+    return value ?? '';
+  }
 
   String format(String key, Map<String, Object> values) {
     var result = call(key);
@@ -17,6 +24,30 @@ final class AppCopy {
       result = result.replaceAll('{${entry.key}}', '${entry.value}');
     }
     return result;
+  }
+
+  static final bool _catalogsAreValid = _validateCatalogs();
+
+  static bool _validateCatalogs() {
+    if (_en.length != _zh.length || !_en.keys.every(_zh.containsKey)) {
+      throw StateError('AppCopy language catalogs have different keys');
+    }
+    final placeholder = RegExp(r'\{([A-Za-z][A-Za-z0-9_]*)\}');
+    for (final key in _en.keys) {
+      final english = placeholder
+          .allMatches(_en[key]!)
+          .map((match) => match.group(1))
+          .toSet();
+      final chinese = placeholder
+          .allMatches(_zh[key]!)
+          .map((match) => match.group(1))
+          .toSet();
+      if (english.length != chinese.length ||
+          !english.every(chinese.contains)) {
+        throw StateError('AppCopy placeholders differ for $key');
+      }
+    }
+    return true;
   }
 
   static const _en = <String, String>{
@@ -45,7 +76,7 @@ final class AppCopy {
     'nav.environments': 'Traffic policies',
     'nav.routes': 'Upstream services',
     'nav.network': 'Connections',
-    'nav.code_library': 'Automations',
+    'nav.code_library': 'Script library',
     'nav.settings': 'Settings',
     'approval.attention.count': '{count} pending approvals',
     'approval.attention.pending': '{count} pending',
@@ -59,6 +90,9 @@ final class AppCopy {
     'capture.running': 'Running now',
     'capture.history': 'History',
     'capture.empty': 'No captures yet.',
+    'capture.empty.detail':
+        'Start Codex or Claude through ViberMate from Terminal.',
+    'capture.empty.action': 'Open Terminal setup',
     'capture.load_more': 'Load older captures',
     'capture.select': 'Select a Capture to inspect its evidence.',
     'capture.managed': 'Managed run',
@@ -119,18 +153,18 @@ final class AppCopy {
         'Started by vibermate run; its conversation stays with this run.',
     'capture.source.manual':
         'Dedicated proxy login; Exchanges stay separate without a client session identifier.',
-    'capture.environment': 'Environment',
+    'capture.environment': 'Traffic policy',
     'capture.environment.help':
-        'Each Turn freezes the Environment revision it starts with. Applying a published revision affects only the next Turn; launch environment changes still require a restart.',
+        'Each Turn freezes the traffic policy revision it starts with. Applying a published revision affects only the next Turn; launch environment changes still require a restart.',
     'capture.environment.history':
-        'This run has ended. Each Turn keeps the Environment actually used for that request.',
-    'capture.environment.current': 'Environment',
+        'This run has ended. Each Turn keeps the traffic policy actually used for that request.',
+    'capture.environment.current': 'Traffic policy',
     'capture.environment.revisions': 'Started r{launch} · using r{current}',
     'capture.environment.revisions_update':
         'Started r{launch} · using r{current} · published r{latest}',
     'capture.environment.apply_latest': 'Apply to next Turn',
     'notice.capture_environment_applied':
-        'The published Environment will be used by the next Turn.',
+        'The published traffic policy will be used by the next Turn.',
     'capture.conversation': 'Capture conversation',
     'capture.conversations': 'Conversations',
     'capture.conversation_select': 'Conversation',
@@ -156,13 +190,13 @@ final class AppCopy {
     'deletion.blocked': 'Nothing was deleted. This is still in use by:',
     'deletion.more_holders': 'and {count} more',
     'deletion.holder.running_capture': 'Running Capture',
-    'deletion.holder.environment_route': 'Environment route',
-    'deletion.holder.owned_account': 'Account it owns',
-    'deletion.environment.title': 'Delete this Environment?',
+    'deletion.holder.environment_route': 'Traffic policy route',
+    'deletion.holder.owned_account': 'Upstream account it owns',
+    'deletion.environment.title': 'Delete this traffic policy?',
     'deletion.environment.consequence':
         'It stops being available for new runs. Evidence already recorded '
         'against it keeps the exact revision each Turn ran under.',
-    'deletion.endpoint.title': 'Delete this upstream Endpoint?',
+    'deletion.endpoint.title': 'Delete this upstream service?',
     'deletion.endpoint.consequence':
         'It stops being available for new routes. Past Exchanges keep naming '
         'where they went.',
@@ -172,8 +206,8 @@ final class AppCopy {
         'removed, and the bytes are released. This cannot be undone.',
     'deletion.archive.title': 'Clear the evidence archive?',
     'deletion.archive.consequence':
-        'Every Capture and all recorded evidence is removed. Environments, '
-        'Endpoints and Accounts are kept. Logical records go and queries stop '
+        'Every Capture and all recorded evidence is removed. Traffic policies, '
+        'upstream services and accounts are kept. Logical records go and queries stop '
         'answering; this does not claim erasure from disk snapshots or '
         'backups.',
     'common.back': 'Back',
@@ -189,6 +223,8 @@ final class AppCopy {
     'common.confirm': 'Confirm',
     'common.dismiss': 'Dismiss',
     'common.technical_details': 'Technical details',
+    'startup.unavailable':
+        'ViberMate Runtime is unavailable. No retained evidence was changed. Check the Runtime process, then try again.',
     'common.reload': 'Reload',
     'common.edit': 'Edit',
     'common.remove': 'Remove',
@@ -204,6 +240,8 @@ final class AppCopy {
     'common.client_passthrough': 'Client passthrough',
     'bootstrap.preview': 'Preparing Preview evidence…',
     'bootstrap.live': 'Starting local traffic runtime…',
+    'bootstrap.sidecar_unavailable':
+        'ViberMate is incomplete. Reinstall or rebuild the App.',
     'server.login.title': 'Connect to this Runtime Server',
     'server.login.target': 'Server · {server}',
     'server.login.access_key': 'Admin access key',
@@ -228,11 +266,11 @@ final class AppCopy {
     'server.login.error.unavailable':
         'The Runtime Server could not be reached. Check its address and selected HTTP/HTTPS transport.',
     'flow.capture': 'Capture',
-    'flow.environment': 'Environment',
-    'flow.endpoint': 'Endpoint',
+    'flow.environment': 'Traffic policy',
+    'flow.endpoint': 'Upstream service',
     'flow.protocol': 'Protocol',
     'flow.route': 'Route',
-    'flow.account': 'Account',
+    'flow.account': 'Upstream account',
     'activity.destination.original': 'Original destination',
     'flow.digest': 'Digest',
     'conversation.title': 'Conversation',
@@ -244,11 +282,22 @@ final class AppCopy {
         'No semantic exchanges have been observed for this Capture.',
     'conversation.turn': 'Turn {number}',
     'conversation.route': 'Route',
-    'conversation.account': 'Account',
+    'conversation.account': 'Upstream account',
     'activity.status.succeeded': 'Succeeded',
     'activity.status.pending': 'In progress',
     'activity.status.failed': 'Failed',
     'activity.status.canceled': 'Canceled',
+    'exchange.failure.default.title': 'The Agent request did not complete.',
+    'exchange.failure.default.action':
+        'Inspect the frozen evidence below, correct the failing boundary, and retry.',
+    'exchange.failure.provider_response_idle.title':
+        'Upstream service did not respond in time.',
+    'exchange.failure.provider_response_idle.action':
+        'Check the upstream service and network path, then retry the Agent request.',
+    'exchange.failure.unsupported_client_input.title':
+        'ViberMate rejected the Agent request before contacting an upstream service.',
+    'exchange.failure.unsupported_client_input.action':
+        'Check the listed request field and client protocol, then retry.',
     'conversation.load_earlier': 'Load earlier turns',
     'conversation.load_earlier_exchanges': 'Load earlier exchanges',
     'conversation.latest': 'Latest',
@@ -262,7 +311,7 @@ final class AppCopy {
     'exchange.content.not_recorded':
         'Semantic content was not recorded for this Exchange; frozen routing and attempt evidence remains available.',
     'exchange.environment.frozen':
-        '{environment} · frozen Environment r{revision}',
+        '{environment} · frozen traffic policy r{revision}',
     'exchange.model.requested': 'Requested',
     'exchange.model.effective': 'Effective',
     'exchange.max_output': 'Max output',
@@ -414,28 +463,29 @@ final class AppCopy {
     'environment.clients': 'Client endpoints',
     'environment.client_target': 'Client target',
     'environment.mapping.client': 'Client protocol & origin',
-    'environment.mapping.upstream': 'Upstream Endpoint',
+    'environment.mapping.upstream': 'Upstream service',
     'environment.mapping.accounts': 'Available accounts',
     'environment.routes': '{count} upstream routes',
-    'environment.select': 'Select an Environment.',
-    'environment.history.loading': 'Loading the frozen Environment revision…',
+    'environment.select': 'Select a traffic policy.',
+    'environment.history.loading':
+        'Loading the frozen traffic policy revision…',
     'environment.history.frozen': 'Frozen evidence',
     'environment.history.current': 'Back to current',
-    'environment.history.inspect': 'Inspect frozen Environment r{revision}',
+    'environment.history.inspect': 'Inspect frozen traffic policy r{revision}',
     'environment.history.detail':
-        'Read-only Environment revision {revision}. Current configuration is unchanged.',
+        'Read-only traffic policy revision {revision}. Current configuration is unchanged.',
     'environment.history.semantics':
-        'Read-only frozen Environment revision {revision}',
+        'Read-only frozen traffic policy revision {revision}',
     'environment.system_managed': 'Built-in · read-only',
     'environment.route.default': 'Default',
     'environment.route.fallback': 'Candidate',
     'environment.account.invalid':
-        'This account does not belong to the route Endpoint.',
-    'environment.create': 'New Environment',
-    'environment.create.title': 'New Environment',
+        'This account does not belong to the selected upstream service.',
+    'environment.create': 'New traffic policy',
+    'environment.create.title': 'New traffic policy',
     'environment.create.scope':
         'Start with capture-only forwarding, or add explicit client flows. Each flow chooses its own protocol, origin, and destination.',
-    'environment.create.authority': 'Starting upstream Endpoint',
+    'environment.create.authority': 'Starting upstream service',
     'environment.create.authority.detail':
         'Optional. Capture-only forwards every request to its original destination.',
     'environment.create.observe_only':
@@ -443,16 +493,16 @@ final class AppCopy {
     'environment.field.id': 'Stable Environment ID',
     'environment.validation.id':
         'Use 1–128 lowercase letters, digits, dots, underscores, or hyphens.',
-    'environment.endpoint.add': 'Choose upstream Endpoint',
+    'environment.endpoint.add': 'Choose upstream service',
     'environment.endpoint.client_choose': 'Choose client protocol and origin',
     'environment.endpoint.add_client_flow': 'Add client flow',
     'environment.endpoint.add_action': 'Add upstream route',
     'environment.endpoint.pending':
-        'This Endpoint has not been added to the selected client flow.',
-    'environment.endpoint.remove': 'Remove Endpoint from draft',
+        'This upstream service has not been added to the selected client flow.',
+    'environment.endpoint.remove': 'Remove upstream service from draft',
     'environment.endpoint.routes': '{count} routes',
     'environment.endpoint.account_required':
-        'Create a ready Account under this Endpoint before routing to it.',
+        'Create a ready account for this upstream service before routing to it.',
     'environment.edit.title': 'Edit {name}',
     'environment.edit.scope': 'Review the impact, then publish a new revision.',
     'environment.edit.identity': 'Identity',
@@ -463,10 +513,10 @@ final class AppCopy {
         'Controls evidence and tool execution; it does not choose the traffic destination.',
     'environment.edit.routes': 'Client flows & destinations',
     'environment.edit.routes.detail':
-        'Each client flow goes either to its original destination or to one or more upstream Endpoints. Every Route uses an Account owned by its Endpoint.',
+        'Each client flow goes either to its original destination or to one or more upstream services. Every route uses an account owned by its upstream service.',
     'environment.edit.routes.empty':
         'Capture-only · Requests are forwarded unchanged.',
-    'environment.field.name': 'Environment name',
+    'environment.field.name': 'Traffic policy name',
     'environment.field.state': 'Runtime state',
     'environment.state.active': 'Active',
     'environment.state.disabled': 'Disabled',
@@ -489,7 +539,7 @@ final class AppCopy {
         'Routing, proxy, trust, credential, and ViberMate variables remain runtime-owned.',
     'environment.launch.set': 'Set variables',
     'environment.launch.set_detail':
-        'Exact name and value for this Environment revision.',
+        'Exact name and value for this traffic policy revision.',
     'environment.launch.delete': 'Delete variables',
     'environment.launch.delete_detail':
         'Remove inherited values before the Agent starts.',
@@ -500,32 +550,34 @@ final class AppCopy {
         'Use a unique environment variable name that is not runtime-owned.',
     'environment.account': 'Account selection',
     'environment.account.owner':
-        'Only Accounts under this Endpoint are listed.',
-    'environment.account.client': 'Use client credential · same Endpoint',
-    'environment.account.none': 'No ready Account on this Endpoint.',
+        'Only accounts belonging to this upstream service are listed.',
+    'environment.account.client':
+        'Use client credential · same upstream service',
+    'environment.account.none':
+        'No ready account belongs to this upstream service.',
     'environment.account.unavailable': 'unavailable',
-    'environment.account.no_candidate': 'No candidate Account',
-    'environment.account.fixed': 'Fixed Account',
-    'environment.account.javascript': 'JavaScript selector',
+    'environment.account.no_candidate': 'No candidate account',
+    'environment.account.fixed': 'Fixed account',
+    'environment.account.javascript': 'JavaScript rule',
     'environment.account.selector_scope':
-        'Runs once per Turn against {count} frozen Endpoint Accounts.',
+        'Runs once per Turn against {count} frozen upstream accounts.',
     'environment.account.selector_available':
-        'Published JavaScript selectors: {count}. Open to choose.',
+        'Published account selection rules: {count}. Open to choose.',
     'environment.account.selector_load_failed':
-        'Published Account Selectors could not be loaded.',
+        'Published account selection rules could not be loaded.',
     'environment.account.selector_none':
-        'No published JavaScript selector; create one in Code Library.',
+        'No published account selection rule; create one in Script library.',
     'environment.egress.label': 'Network path',
     'environment.egress.detail':
-        'Applies only to this client flow and its AI Endpoint connections.',
+        'Applies only to this client flow and its upstream service connections.',
     'environment.egress.profile.title': 'Choose network exit',
     'environment.egress.profile.detail':
-        'Choose an exact published Profile revision. Edit Profiles in Settings.',
+        'Choose an exact published network exit revision. Manage network exits in Settings.',
     'environment.egress.profile.load_failed':
-        'Network exit Profiles could not be loaded.',
+        'Network exit profiles could not be loaded.',
     'environment.egress.dialog.title': 'Network path',
     'environment.egress.dialog.scope':
-        'Choose how this client flow resolves and connects to its AI Endpoint.',
+        'Choose how this client flow resolves and connects to its upstream service.',
     'environment.egress.proxy.label': 'Connection',
     'environment.egress.proxy.direct': 'Direct',
     'environment.egress.proxy.socks5': 'SOCKS5 · ViberMate resolves target',
@@ -566,7 +618,7 @@ final class AppCopy {
     'environment.transform.pipeline.none_available':
         'No other published transform is available.',
     'environment.transform.pipeline.load_failed':
-        'Code Library could not be loaded.',
+        'Script library could not be loaded.',
     'environment.transform.pipeline.move_up': 'Move earlier',
     'environment.transform.pipeline.move_down': 'Move later',
     'environment.transform.summary.request': 'Request only',
@@ -607,89 +659,103 @@ final class AppCopy {
     'environment.transform.sample.invalid':
         'Enter valid bounded headers, Body, and response status.',
     'environment.transform.sample.save': 'Use sample',
-    'code_library.title': 'Automations',
+    'code_library.title': 'Script library',
     'code_library.subtitle':
-        'Publish reusable request, response, and account-selection logic',
+        'Publish reusable message transforms and account selection rules',
+    'code_library.error.load':
+        'Script library could not be loaded. Published revisions were not changed. Try again.',
+    'code_library.error.change':
+        'The change could not be published. Published revisions were not changed. Reload and try again.',
     'code_library.default_collection': 'My code',
     'code_library.collection': 'Collection',
     'code_library.collection.create': 'New collection',
-    'code_library.transform.create': 'New transform',
-    'code_library.selector.create': 'New Account Selector',
+    'code_library.transform.create': 'New message transform',
+    'code_library.selector.create': 'New account selection rule',
     'code_library.kind.transforms': 'Message transforms',
-    'code_library.kind.account_selectors': 'Account Selectors',
-    'code_library.selector.empty': 'No Account Selectors yet',
+    'code_library.kind.account_selectors': 'Account selection rules',
+    'code_library.selector.empty': 'No account selection rules yet',
     'code_library.selector.empty.detail':
-        'Publish one selector, then choose its revision on an Environment Route.',
-    'code_library.selector.starters.title': 'Choose an Account with code',
+        'Publish one rule, then choose its revision in a traffic policy.',
+    'code_library.selector.starters.title':
+        'Choose an upstream account with code',
     'code_library.selector.starters.detail':
-        'Start with a visible JavaScript example. A Route freezes the published revision and only the Accounts from its Endpoint.',
-    'code_library.selector.starter.firstAvailable': 'Use first Account',
-    'code_library.selector.starter.firstAvailable.detail':
-        'Select the first frozen Account. Useful as the smallest editable starting point.',
-    'code_library.selector.starter.workspace': 'Choose by Workspace',
-    'code_library.selector.starter.workspace.detail':
-        'Map an exact Workspace label to an exact Account ID; fail when no mapping exists.',
-    'code_library.selector.starter.user': 'Choose by Runtime User',
-    'code_library.selector.starter.user.detail':
-        'Map the authenticated Runtime User name to an exact Account ID.',
-    'code_library.selector.starter.model': 'Choose by requested model',
-    'code_library.selector.starter.model.detail':
-        'Map the exact requested model string to an exact Account ID without inferring a provider.',
-    'code_library.selector.select': 'Select an Account Selector',
+        'Start with a visible JavaScript example. A traffic policy freezes the published revision and exposes only accounts from its upstream service.',
+    'code_library.selector.starter.loginUser': 'Choose by ViberMate login',
+    'code_library.selector.starter.loginUser.detail':
+        'Map the authenticated ViberMate login username to one exact account ID; fail locally when no login or mapping exists.',
+    'code_library.selector.select': 'Select an account selection rule',
     'code_library.selector.select.detail':
         'The current immutable revision and its exact decision code appear here.',
-    'code_library.selector.source': 'Account decision',
+    'code_library.selector.source': 'Account-selection code',
     'code_library.name': 'Name',
     'code_library.starter': 'Start from',
     'code_library.starter.protocol': 'Starter protocol',
     'code_library.starter.blank': 'Blank',
-    'code_library.starter.local_paths': 'Hide local paths',
+    'code_library.starter.local_identity': 'Hide local identity',
+    'code_library.starter.block_secrets': 'Block secret leakage',
+    'code_library.starter.private_contacts': 'Hide email and private IP',
     'code_library.starter.turn_time': 'Show Turn time',
-    'code_library.starter.system_prompt': 'Adjust system prompt',
+    'code_library.starter.reply_language': 'Set default reply language',
+    'code_library.starter.workspace_rules': 'Apply Workspace rules',
+    'code_library.starter.response_model': 'Show actual response model',
     'code_library.starters.title': 'Built-in examples',
     'code_library.starters.detail':
         'Read the code now. Using an example makes an editable copy; nothing is published until you save it.',
     'code_library.starters.blank_action': 'Start blank',
-    'code_library.starters.use': 'Use example',
-    'code_library.starter.local_paths.detail':
-        'Hide the current user home path before upload, then restore it from this Turn\'s context.',
+    'code_library.starters.use': 'Create from example',
+    'code_library.starter.local_identity.detail':
+        'Replace the local user, home, and Workspace path before upload, then restore them in this Turn\'s response.',
+    'code_library.starter.block_secrets.detail':
+        'Stop a request locally when it contains a private-key marker or a recognizable access-token prefix.',
+    'code_library.starter.private_contacts.detail':
+        'Replace email addresses and private IPv4 addresses before upload, then restore them in the response.',
     'code_library.starter.turn_time.detail':
         'Add a signed Turn timestamp that ViberMate removes before the next request.',
-    'code_library.starter.system_prompt.detail':
-        'Append explicit guidance to this protocol\'s system or developer instructions.',
+    'code_library.starter.reply_language.detail':
+        'Ask for Simplified Chinese by default while preserving an explicit language request from the user.',
+    'code_library.starter.workspace_rules.detail':
+        'Append an exact rule selected by the frozen Workspace label; unknown Workspaces stay unchanged.',
+    'code_library.starter.response_model.detail':
+        'Show the provider response model as a signed note that is removed before the next request.',
     'code_library.empty': 'No code yet',
     'code_library.empty.detail':
-        'Publish a transform or Account Selector from an example.',
+        'Create and publish a message transform or account selection rule from an example.',
     'code_library.select': 'Select a transform',
     'code_library.select.detail':
         'The current published revision and both stages appear here.',
     'code_library.test_protocol': 'Test format',
     'code_library.test_protocol.detail':
         'Only selects the built-in request and response used by Run sample Turn. It does not bind this code to a protocol.',
-    'code_library.edit_publish': 'Edit & publish',
+    'code_library.edit_publish': 'Edit for new revision',
+    'code_library.create_publish': 'Create and publish',
+    'code_library.publish_revision': 'Publish new revision',
     'code_library.no_changes': 'No changes in this stage.',
     'code_library.sample.captured':
         'Local sample from {exchange} · {protocol}. Edit before testing; raw evidence is unchanged.',
     'code_library.sample.clear': 'Discard local sample',
-    'account_selector.editor.title': 'Account Selector',
+    'account_selector.editor.title': 'Account selection rule',
     'account_selector.editor.subtitle':
-        'Choose one frozen Endpoint Account for each Turn.',
+        'Choose one frozen upstream account for each Turn.',
     'account_selector.editor.scope':
-        'Read-only request, runtime, and Account metadata · one exact Account ID · fail closed',
+        'Read-only request, runtime, and account metadata · one exact account ID · fail closed',
     'account_selector.editor.detail':
         'Set selection.accountId to exactly one ID from accounts.',
     'account_selector.editor.sandbox':
         'No credentials, message mutation, network, files, clock, or random source',
     'account_selector.sample.title': 'Sample Turn',
     'account_selector.sample.detail':
-        'Edit local metadata and verify the exact selected Account before publishing.',
+        'Edit local metadata and verify the exact selected account before publishing.',
     'account_selector.sample.accounts': 'Account IDs · comma-separated',
-    'account_selector.sample.user': 'Runtime user',
+    'account_selector.sample.user': 'ViberMate login username',
     'account_selector.sample.workspace': 'Workspace label',
     'account_selector.sample.model': 'Requested model',
     'account_selector.sample.protocol': 'Client protocol',
     'account_selector.test.run': 'Run sample Turn',
     'account_selector.test.selected': 'Selected {account}',
+    'account_selector.test.failed':
+        'The sample did not select an account. Fix the JavaScript or sample values, then run it again.',
+    'account_selector.test.unavailable':
+        'The Runtime could not run this sample. Check Runtime status, then try again.',
     'environment.model.label': 'Model mappings',
     'environment.model.passthrough': 'Keep request models',
     'environment.model.passthrough.detail':
@@ -701,9 +767,9 @@ final class AppCopy {
     'environment.model.dialog.scope':
         'Map request-side model IDs to opaque IDs advertised by {endpoint}.',
     'environment.model.request_catalog': 'Current client request models',
-    'environment.model.upstream_catalog': 'Endpoint models',
+    'environment.model.upstream_catalog': 'Upstream service models',
     'environment.model.request_authority':
-        'A follows this client protocol only; it does not limit the Endpoint protocols.',
+        'A follows this client protocol only; it does not limit the protocols supported by the upstream service.',
     'environment.model.account_authority':
         'Account: {account} · {kind} · {transport}',
     'environment.model.account_missing_authority':
@@ -713,7 +779,7 @@ final class AppCopy {
     'environment.model.requested_hint':
         'Select from models.dev or enter an exact ID',
     'environment.model.upstream_hint':
-        'Select from Endpoint or enter an exact ID',
+        'Select from the upstream service or enter an exact model ID',
     'environment.model.mapping': 'Mapping {index}',
     'environment.model.add': 'Add mapping',
     'environment.model.remove': 'Remove mapping',
@@ -725,24 +791,24 @@ final class AppCopy {
         'Each requested model ID can appear only once.',
     'environment.model.client_load_error': 'Request model catalog unavailable.',
     'environment.model.upstream_load_error':
-        'Endpoint model discovery unavailable.',
+        'Upstream model discovery unavailable.',
     'environment.model.manual_available':
         'You can still enter exact model IDs manually.',
     'environment.model.account_required':
-        'Select an Account before querying this Endpoint.',
+        'Select an upstream account before querying this service.',
     'environment.model.refresh_client': 'Refresh request models',
-    'environment.model.refresh_upstream': 'Refresh Endpoint models',
+    'environment.model.refresh_upstream': 'Refresh upstream models',
     'environment.model.load_error': 'Model discovery failed.',
     'environment.model.load_problem':
         'Model discovery failed ({status} · {code}).',
     'environment.model.load_timeout':
-        'Live discovery timed out before ViberMate received the Endpoint catalog. Retry; if it persists, check system credential access and Endpoint responsiveness.',
+        'Live discovery timed out before ViberMate received the upstream model catalog. Retry; if it persists, check system credential access and upstream service responsiveness.',
     'environment.model.authentication_rejected':
-        'The Endpoint rejected this Account authentication. Confirm that the Account type matches the authentication transport required by the Endpoint.',
+        'The upstream service rejected this account. Confirm that the account type matches the authentication method required by the service.',
     'environment.model.auth_hint.anthropic_api_key':
-        'This Account sends X-Api-Key. If this relay requires Authorization: Bearer, create or select a Bearer token Account under this Endpoint.',
+        'This account sends X-Api-Key. If this relay requires Authorization: Bearer, create or select a Bearer token account under this upstream service.',
     'environment.model.auth_hint.bearer_token':
-        'This Account sends Authorization: Bearer. Verify that the credential is current and the Endpoint accepts Bearer authentication.',
+        'This account sends Authorization: Bearer. Verify that the credential is current and the upstream service accepts Bearer authentication.',
     'environment.destination.label': 'Request destination',
     'environment.destination.original': 'Original destination',
     'environment.destination.original.short': 'Original service',
@@ -752,36 +818,36 @@ final class AppCopy {
         'Choose a client flow above, then choose its destination.',
     'environment.destination.original.action': 'Add direct flow',
     'environment.destination.upstream': 'Selected upstream',
-    'environment.destination.upstream.short': 'Upstream',
+    'environment.destination.upstream.short': 'Upstream service',
     'environment.destination.upstream.detail':
-        'Send through a selected Endpoint using an Account owned by it.',
-    'environment.account.required': 'Endpoint Account required',
+        'Send through a selected upstream service using an account owned by it.',
+    'environment.account.required': 'Upstream account required',
     'environment.validation.name':
         'Enter a name without leading or trailing spaces.',
     'environment.validation.retention': 'Enter 1–3650 days.',
     'environment.review': 'Review impact',
-    'environment.publish': 'Publish Environment',
+    'environment.publish': 'Publish traffic policy',
     'environment.impact.title': 'What changes after publish',
     'environment.impact.future_only': 'Future Captures only',
     'environment.impact.description':
-        'Publishing never changes a running Capture. Each listed Capture keeps the Environment revision it started with; this draft is used only when a new Capture starts.',
+        'Publishing never changes a running Capture. Each listed Capture keeps the traffic policy revision it started with; this draft is used only when a new Capture starts.',
     'environment.impact.continuing':
         '{count} running Captures keep their current revision',
     'environment.impact.unchanged': 'Unchanged',
     'environment.impact.none':
-        'No running Capture currently uses this Environment. The new revision will be used on the next launch.',
+        'No running Capture currently uses this traffic policy. The new revision will be used on the next launch.',
     'environment.impact.more': '{count} more Captures',
     'notice.environment.published':
-        'Environment published from the reviewed draft and impact boundary.',
+        'Traffic policy published from the reviewed draft and impact boundary.',
     'routes.title': 'Upstream services',
     'routes.subtitle':
         'Manage service addresses and the credentials that belong to each one',
-    'routes.add_endpoint': 'Add Endpoint',
-    'routes.add_account': 'Add Account',
-    'routes.select_endpoint': 'Select an upstream Endpoint.',
+    'routes.add_endpoint': 'Add upstream service',
+    'routes.add_account': 'Add upstream account',
+    'routes.select_endpoint': 'Select an upstream service.',
     'routes.accounts': '{count} accounts',
     'routes.no_accounts': 'No accounts yet',
-    'routes.no_accounts.detail': 'Accounts belong to this Endpoint.',
+    'routes.no_accounts.detail': 'Upstream accounts belong to this service.',
     'routes.protocols': 'Protocols',
     'routes.protocol.anthropic_messages': 'Anthropic Messages',
     'routes.protocol.openai_responses': 'OpenAI Responses',
@@ -790,8 +856,8 @@ final class AppCopy {
     'routes.credentials.unavailable': 'Credential unavailable',
     'routes.credentials.epoch': 'Credential version {epoch}',
     'routes.update_credential': 'Replace credential',
-    'routes.delete_account': 'Delete Account',
-    'routes.endpoint.create.title': 'Add an upstream Endpoint',
+    'routes.delete_account': 'Delete upstream account',
+    'routes.endpoint.create.title': 'Add an upstream service',
     'routes.endpoint.name': 'Display name',
     'routes.endpoint.origin': 'Upstream URL',
     'routes.endpoint.protocol': 'Supported upstream protocols',
@@ -799,14 +865,14 @@ final class AppCopy {
     'routes.endpoint.protocol.detail.openai_responses': 'POST /v1/responses',
     'routes.endpoint.protocol.detail.openai_chat': 'POST /v1/chat/completions',
     'routes.endpoint.boundary':
-        'Accounts created here belong only to this Endpoint. Endpoints are not interchangeable credential buckets.',
+        'Upstream accounts created here belong only to this service. Services are not interchangeable credential buckets.',
     'routes.endpoint.cleartext_warning':
         'HTTP is limited to local or private-network peers. Conversations and credentials are sent without transport encryption.',
     'routes.validation.protocol': 'Choose at least one upstream protocol.',
-    'routes.endpoint.create.action': 'Create Endpoint',
-    'routes.account.create.title': 'Add an Account to this Endpoint',
+    'routes.endpoint.create.action': 'Create upstream service',
+    'routes.account.create.title': 'Add an account to this upstream service',
     'routes.account.replace.title': 'Replace credential · {name}',
-    'routes.account.name': 'Account name',
+    'routes.account.name': 'Upstream account name',
     'routes.account.kind': 'Credential type',
     'routes.account.kind.anthropic_api_key': 'Anthropic API key',
     'routes.account.kind.bearer_token': 'Bearer token',
@@ -815,17 +881,17 @@ final class AppCopy {
     'routes.account.api_key': 'API key',
     'routes.account.bearer_token': 'Bearer token',
     'routes.account.secret_boundary':
-        'The secret is sent once to the local runtime and stored by its secret store. It is never returned in Account responses.',
+        'The secret is sent once to the local runtime and stored by its secret store. It is never returned in account responses.',
     'routes.account.headers.auth_owned':
         '{transport} is always supplied by the credential type and cannot be overridden here.',
     'routes.account.headers.replace_warning':
         'Saving replaces the complete Header policy. Existing values are never returned; add these Headers again to retain them:',
     'routes.account.headers.set': 'Set Headers',
     'routes.account.headers.set_detail':
-        'Values are stored with the Account credential and redacted from evidence.',
+        'Values are stored with the account credential and redacted from evidence.',
     'routes.account.headers.delete': 'Delete Headers',
     'routes.account.headers.delete_detail':
-        'Remove client-supplied fields before this Account authenticates.',
+        'Remove client-supplied fields before this account authenticates.',
     'routes.account.headers.add_set': 'Add Header to set',
     'routes.account.headers.add_delete': 'Add Header to delete',
     'routes.account.headers.none_set': 'No additional Headers will be set.',
@@ -835,14 +901,14 @@ final class AppCopy {
     'routes.account.headers.validation':
         'Enter a valid, non-transport Header rule.',
     'routes.account.headers.summary': 'Set {set} · Delete {delete}',
-    'routes.account.create.action': 'Connect Account',
+    'routes.account.create.action': 'Connect account',
     'routes.account.replace.action': 'Replace credential',
     'routes.account.delete.title': 'Delete {name}?',
     'routes.account.delete.detail':
-        'This removes the Account and its credential only when no Environment route references it. It does not delete captured evidence.',
-    'routes.account.delete.action': 'Delete Account',
+        'This removes the account and its credential only when no traffic policy route references it. It does not delete captured evidence.',
+    'routes.account.delete.action': 'Delete account',
     'routes.account.delete.blocked':
-        'The runtime refused deletion because Environment routes still reference this Account.',
+        'The runtime refused deletion because traffic policy routes still reference this account.',
     'routes.account.delete.reference':
         '{environment} r{revision} · route {route}',
     'routes.account.delete.more': '{count} more references were not returned.',
@@ -904,7 +970,7 @@ final class AppCopy {
     'network.connections.load_more': 'Load more connections',
     'network.connections.source': 'Source',
     'network.connections.destination': 'Destination',
-    'network.connections.environment': 'Environment',
+    'network.connections.environment': 'Traffic policy',
     'network.connections.decision': 'Decision',
     'network.connections.phase': 'Phase',
     'network.connections.started': 'Started',
@@ -949,13 +1015,13 @@ final class AppCopy {
     'network.value.decryption.blind': 'Encrypted passthrough',
     'network.value.decryption.cleartext': 'Inspected cleartext',
     'network.value.scope.network': 'Network',
-    'network.value.scope.environment': 'Environment',
+    'network.value.scope.environment': 'Traffic policy',
     'network.value.source.network_rule': 'Connection rule',
     'network.value.caller.core': 'ViberMate runtime',
     'network.value.purpose.provider_attempt': 'Provider request',
     'network.value.purpose.route_operation': 'Route operation',
     'network.value.purpose.blind_tunnel': 'Blind tunnel',
-    'network.value.authority.environment': 'Environment',
+    'network.value.authority.environment': 'Traffic policy',
     'network.value.authority.network': 'Network',
     'network.value.payload.client_semantic': 'Agent request',
     'network.value.payload.control': 'Control traffic',
@@ -1035,18 +1101,18 @@ final class AppCopy {
         'Remote Server access, evidence and operator preferences',
     'settings.tab.general': 'General',
     'settings.tab.users': 'User management',
-    'settings.tab.proxy': 'Proxy Profiles',
-    'settings.egress.title': 'Network exit Profiles',
+    'settings.tab.proxy': 'Network exits',
+    'settings.egress.title': 'Network exit profiles',
     'settings.egress.detail':
-        'Publish reusable SOCKS5 and DNS policies. Environments freeze an exact revision.',
-    'settings.egress.add': 'Add Profile',
-    'settings.egress.create': 'Add network exit Profile',
-    'settings.egress.edit': 'Publish new Profile revision',
-    'settings.egress.name': 'Profile name',
+        'Publish reusable SOCKS5 and DNS choices. Traffic policies freeze an exact revision.',
+    'settings.egress.add': 'New network exit profile',
+    'settings.egress.create': 'New network exit profile',
+    'settings.egress.edit': 'Publish new revision',
+    'settings.egress.name': 'Network exit profile name',
     'settings.egress.publish': 'Publish',
     'settings.egress.builtin': 'Built in · read only',
-    'settings.egress.load_failed': 'Network exit Profiles could not be loaded.',
-    'settings.egress.validation.name': 'Enter a Profile name.',
+    'settings.egress.load_failed': 'Network exit profiles could not be loaded.',
+    'settings.egress.validation.name': 'Enter a network exit profile name.',
     'settings.language': 'Language',
     'settings.english': 'English',
     'settings.chinese': '简体中文',
@@ -1062,20 +1128,20 @@ final class AppCopy {
         'Conversation and Raw HTTP evidence are written to this machine\'s '
         'ViberMate application support directory.',
     'settings.storage.retention':
-        'New Environments keep full-content evidence for 30 days. Recording '
-        'mode and retention are owned by each Environment.',
+        'New traffic policies keep full-content evidence for 30 days. Recording '
+        'mode and retention are owned by each traffic policy.',
     'settings.storage.credentials':
         'Credential header values (Authorization, API key, Cookie) are removed '
         'before anything is written. Request and response bodies, tool '
         'arguments and query strings are stored as sent, so a secret written '
         'into a prompt is retained.',
     'settings.runtime': 'Runtime source',
-    'settings.preview': 'Deterministic Preview fixture',
-    'settings.live': 'Local vibermated sidecar',
+    'settings.preview': 'Deterministic Preview data',
+    'settings.live': 'Local ViberMate runtime',
     'settings.remote': 'Runtime Server · {target}',
     'server.access.title': 'Remote client access',
     'server.access.description':
-        'Create a Runtime User on this Server. A client logs in once, then ViberMate captures its managed Claude and Codex traffic here.',
+        'Create a runtime user on this Server. A client logs in once, then ViberMate captures its managed Claude and Codex traffic here.',
     'server.access.loading': 'Reading Server access…',
     'server.access.transport.http': 'HTTP',
     'server.access.transport.https': 'TLS',
@@ -1083,20 +1149,20 @@ final class AppCopy {
         'This Server uses HTTP. Login credentials and captured traffic are not encrypted between client and Server. Use it only on a trusted private network.',
     'server.access.session.title': 'One login, reusable session',
     'server.access.session.detail':
-        'The client can start later runs without returning to this App. Logout, disabling the Runtime User, or session expiry removes access.',
+        'The client can start later runs without returning to this App. Logout, disabling the runtime user, or session expiry removes access.',
     'server.access.error': 'Could not read or change Server access: {detail}',
-    'server.users.title': 'Runtime Users',
+    'server.users.title': 'Runtime users',
     'server.users.description':
         'Each person or client machine signs in with its own account.',
     'server.users.authentication':
         'Username and password · reusable login session',
-    'server.users.loading': 'Reading Runtime Users…',
+    'server.users.loading': 'Reading runtime users…',
     'server.users.empty':
-        'No Runtime User can connect yet. Create the first account to continue.',
+        'No runtime user can connect yet. Create the first account to continue.',
     'server.users.add': 'Add user',
     'server.users.state.active': 'Active',
     'server.users.state.disabled': 'Disabled',
-    'server.users.dialog.title': 'Create Runtime User',
+    'server.users.dialog.title': 'Create runtime user',
     'server.users.dialog.detail':
         'Give these credentials to the intended user through a secure channel.',
     'server.users.dialog.username': 'Username',
@@ -1105,9 +1171,9 @@ final class AppCopy {
     'server.users.dialog.create': 'Create user',
     'server.users.dialog.validation':
         'Enter a username and a password with at least 8 characters.',
-    'server.users.dialog.error': 'Could not create the Runtime User: {detail}',
+    'server.users.dialog.error': 'Could not create the runtime user: {detail}',
     'server.users.dialog.unknown': 'The Server did not accept this account.',
-    'server.users.disable.title': 'Disable this Runtime User?',
+    'server.users.disable.title': 'Disable this runtime user?',
     'server.users.disable.detail':
         '{username} will be signed out and cannot start another run.',
     'server.users.disable.action': 'Disable',
@@ -1126,7 +1192,7 @@ final class AppCopy {
     'server.usage.sessions.title': 'Agent sessions',
     'usage.title': 'Team insights',
     'usage.subtitle':
-        'Runtime User activity projected from retained Agent traffic evidence',
+        'Runtime user activity projected from retained Agent traffic evidence',
     'usage.loading': 'Reading retained usage evidence…',
     'usage.unavailable': 'Usage evidence is unavailable',
     'usage.scope.retained': 'Current retention window · cumulative evidence',
@@ -1136,10 +1202,10 @@ final class AppCopy {
     'usage.range.365': '1 year',
     'usage.activity.team.title': 'Team activity evidence',
     'usage.activity.team.detail':
-        'Daily retained Agent API calls across Runtime Users; select Token to inspect declared usage.',
+        'Daily retained Agent API calls across runtime users; select Token to inspect declared usage.',
     'usage.activity.user.title': 'User activity evidence',
     'usage.activity.user.detail':
-        'The same civil-day scale, scoped to this Runtime User.',
+        'The same civil-day scale, scoped to this runtime user.',
     'usage.activity.metric.api_calls': 'API calls',
     'usage.activity.metric.tokens': 'Tokens',
     'usage.activity.legend.less': 'Less',
@@ -1154,10 +1220,10 @@ final class AppCopy {
         '{date} · {value} {metric} · {failed} failed · {evidence}',
     'usage.activity.evidence.complete': 'complete evidence',
     'usage.activity.evidence.partial': 'incomplete evidence',
-    'usage.metric.users': 'Runtime Users',
+    'usage.metric.users': 'Runtime users',
     'usage.metric.users.detail': '{count} enabled accounts',
     'usage.metric.active_runs': 'Running Captures',
-    'usage.metric.active_runs.detail': 'Across authenticated Runtime Users',
+    'usage.metric.active_runs.detail': 'Across authenticated runtime users',
     'usage.metric.api_calls': 'Agent API calls',
     'usage.metric.api_calls.detail':
         'Counted from retained terminal Agent API Exchanges',
@@ -1167,13 +1233,13 @@ final class AppCopy {
     'usage.metric.output': 'Output tokens',
     'usage.metric.protocol_declared': 'Protocol-declared evidence only',
     'usage.users.title': 'Users',
-    'usage.users.detail': 'Select a Runtime User to inspect exact evidence.',
-    'usage.ranking.title': 'Runtime User ranking',
+    'usage.users.detail': 'Select a runtime user to inspect exact evidence.',
+    'usage.ranking.title': 'Runtime user ranking',
     'usage.ranking.detail':
         'Observed input + output tokens; unknown values remain partial.',
     'usage.ranking.search': 'Find a user, workspace, or device',
     'usage.ranking.count': '{visible} / {total} users',
-    'usage.ranking.empty': 'No Runtime User matches this search.',
+    'usage.ranking.empty': 'No runtime user matches this search.',
     'usage.ranking.running': '{count} running',
     'usage.ranking.idle': 'No active Capture',
     'usage.ranking.result': '{calls} calls · {succeeded} succeeded',
@@ -1213,10 +1279,10 @@ final class AppCopy {
     'usage.session.metrics':
         '{runs} Captures · {calls} calls · {succeeded} succeeded · {failed} failed',
     'usage.empty':
-        'Create a Runtime User, then capture Agent traffic to populate this report.',
+        'Create a runtime user, then capture Agent traffic to populate this report.',
     'server.login.command.title': '1. Sign in on the client machine',
     'server.login.command.detail':
-        'Run once, then enter the Runtime User username and password.',
+        'Run once, then enter the runtime user username and password.',
     'server.login.command.client': 'Login',
     'server.login.command.copy': 'Copy login command',
     'server.run.title': 'Connect a client',
@@ -1242,7 +1308,7 @@ final class AppCopy {
     'terminal.run.copied': '{client} command copied',
     'terminal.run.copy_failed': 'Could not copy command',
     'terminal.run.environment':
-        'Explicit Environment · vibermate run --env <environment-id> -- <command>',
+        'Specific traffic policy · vibermate run --env <environment-id> -- <command>',
     'terminal.refresh_status': 'Inspect Terminal command',
     'terminal.unavailable':
         'The packaged command could not be inspected. Rebuild or reinstall ViberMate.',
@@ -1304,17 +1370,17 @@ final class AppCopy {
         'The Terminal command state changed or the operation was refused. Inspect the current status.',
     'terminal.error.contract':
         'The packaged command returned an invalid status and was not trusted.',
-    'offline.title': 'Offline hold',
+    'offline.title': 'Offline protection',
     'offline.summary':
         'Pause new external work, drain active egress, then expose the exact safe-to-disconnect boundary.',
     'offline.state.unbound': 'Not initialized',
-    'offline.state.online': 'Online',
-    'offline.state.entering': 'Draining network work',
-    'offline.state.held': 'Safe offline',
-    'offline.state.probing': 'Checking providers',
-    'offline.state.releasing': 'Releasing queued work',
+    'offline.state.online': 'Online operation',
+    'offline.state.entering': 'Preparing to disconnect',
+    'offline.state.held': 'Safe to disconnect',
+    'offline.state.probing': 'Checking upstream services',
+    'offline.state.releasing': 'Resuming queued work',
     'offline.state.stopping': 'Stopping',
-    'offline.enter': 'Hold network',
+    'offline.enter': 'Prepare to disconnect',
     'offline.resume': 'Resume online',
     'offline.safe': 'Safe to disconnect',
     'offline.safe.yes': 'Yes',
@@ -1323,13 +1389,13 @@ final class AppCopy {
     'offline.entering_actions': 'Draining actions',
     'offline.active_egress': 'Active egress',
     'offline.queued_requests': 'Waiting requests',
-    'offline.held_bytes': 'Held bytes',
+    'offline.held_bytes': 'Waiting data',
     'offline.revision': 'Runtime revision',
     'offline.last_probe': 'Last provider check',
-    'offline.confirm.enter.title': 'Enter offline hold?',
+    'offline.confirm.enter.title': 'Prepare to disconnect?',
     'offline.confirm.enter.detail':
         'New external work will wait. Active network work must drain before ViberMate reports that disconnecting is safe.',
-    'offline.confirm.enter.action': 'Enter offline hold',
+    'offline.confirm.enter.action': 'Prepare to disconnect',
     'offline.confirm.resume.title': 'Resume external work?',
     'offline.confirm.resume.detail':
         'ViberMate checks the frozen provider targets first, then releases queued work. A failed check keeps the hold active.',
@@ -1357,15 +1423,14 @@ final class AppCopy {
         'Decision applied. Waiting work was refused.',
     'notice.network.rules_saved': 'Connection rule set saved atomically.',
     'notice.inventory.endpoint_created':
-        'Upstream Endpoint created. Accounts can now be added to it.',
+        'Upstream service created. Upstream accounts can now be added to it.',
     'notice.inventory.account_created':
-        'Account created under the selected upstream Endpoint.',
+        'Upstream account created under the selected service.',
     'notice.inventory.credential_replaced':
         'Credential replaced with its previous epoch as the CAS boundary.',
     'notice.inventory.account_deleted':
-        'Account and credential deleted. Captured evidence was not removed.',
-    'notice.offline.held':
-        'Offline hold reached the safe-to-disconnect boundary.',
+        'Upstream account and credential deleted. Captured evidence was not removed.',
+    'notice.offline.held': 'Offline protection is safe to disconnect.',
     'notice.offline.resumed':
         'Provider checks passed and external work resumed.',
     'notice.offline.releasing':
@@ -1398,7 +1463,7 @@ final class AppCopy {
     'nav.environments': '流量策略',
     'nav.routes': '上游服务',
     'nav.network': '连接',
-    'nav.code_library': '自动化',
+    'nav.code_library': '脚本库',
     'nav.settings': '设置',
     'approval.attention.count': '{count} 个待审批请求',
     'approval.attention.pending': '{count} 个待审批',
@@ -1411,6 +1476,8 @@ final class AppCopy {
     'capture.running': '正在运行',
     'capture.history': '历史记录',
     'capture.empty': '还没有 Capture。',
+    'capture.empty.detail': '先从终端通过 ViberMate 启动 Codex 或 Claude。',
+    'capture.empty.action': '打开终端设置',
     'capture.load_more': '加载更早的 Capture',
     'capture.select': '请选择一个 Capture 以检查其证据。',
     'capture.managed': '托管运行',
@@ -1466,17 +1533,16 @@ final class AppCopy {
     'capture.manual.delivery.done': '我已保存这些内容',
     'capture.source.managed': '由 vibermate run 启动；对话归入本次运行。',
     'capture.source.manual': '专属代理登录；没有客户端会话标识时，每个 Exchange 单独记录。',
-    'capture.environment': 'Environment',
+    'capture.environment': '流量策略',
     'capture.environment.help':
-        '每个 Turn 都冻结它开始时的 Environment 修订。应用已发布修订只影响下一 Turn；启动环境变量仍需重启。',
-    'capture.environment.history':
-        '该运行已结束；每轮 Turn 仍保留该次请求实际使用的 Environment 证据。',
-    'capture.environment.current': 'Environment',
+        '每个 Turn 都冻结开始时的流量策略版本。应用已发布版本只影响下一 Turn；启动环境变量仍需重启。',
+    'capture.environment.history': '该运行已结束；每轮 Turn 仍保留该次请求实际使用的流量策略证据。',
+    'capture.environment.current': '流量策略',
     'capture.environment.revisions': '启动 r{launch} · 使用 r{current}',
     'capture.environment.revisions_update':
         '启动 r{launch} · 使用 r{current} · 已发布 r{latest}',
     'capture.environment.apply_latest': '下一 Turn 应用',
-    'notice.capture_environment_applied': '下一 Turn 将使用已发布的 Environment。',
+    'notice.capture_environment_applied': '下一 Turn 将使用已发布的流量策略。',
     'capture.conversation': 'Capture 内对话',
     'capture.conversations': '对话',
     'capture.conversation_select': '对话',
@@ -1500,19 +1566,19 @@ final class AppCopy {
     'deletion.blocked': '没有删除任何内容。以下仍在使用它：',
     'deletion.more_holders': '另有 {count} 项',
     'deletion.holder.running_capture': '运行中的 Capture',
-    'deletion.holder.environment_route': 'Environment 路由',
-    'deletion.holder.owned_account': '它拥有的 Account',
-    'deletion.environment.title': '删除这个 Environment？',
+    'deletion.holder.environment_route': '流量策略路由',
+    'deletion.holder.owned_account': '它拥有的账号',
+    'deletion.environment.title': '删除这个流量策略？',
     'deletion.environment.consequence':
         '它将不再可用于新的 run。已记录的证据仍保留每个 Turn 当时运行的确切 revision。',
-    'deletion.endpoint.title': '删除这个上游 Endpoint？',
+    'deletion.endpoint.title': '删除这个上游服务？',
     'deletion.endpoint.consequence': '它将不再可用于新的路由。历史 Exchange 仍能说明自己去过哪里。',
     'deletion.capture.title': '删除这个 Capture？',
     'deletion.capture.consequence':
         '它名下的所有 Exchange、Turn 和 Raw HTTP 信封都会被移除，占用的字节会被释放。此操作不可撤销。',
     'deletion.archive.title': '清空证据存档？',
     'deletion.archive.consequence':
-        '所有 Capture 与已记录的证据都会被移除；Environment、Endpoint 和 Account 会保留。'
+        '所有 Capture 与已记录的证据都会被移除；流量策略、上游服务和账号会保留。'
         '逻辑记录会被删除、查询不再返回它们；但这不声称从磁盘快照或备份介质上抹除。',
     'common.back': '返回',
     'common.loading': '正在载入运行证据…',
@@ -1527,6 +1593,8 @@ final class AppCopy {
     'common.confirm': '确认',
     'common.dismiss': '关闭',
     'common.technical_details': '技术详情',
+    'startup.unavailable':
+        'ViberMate Runtime 暂时不可用，已保留的证据没有改变。请检查 Runtime 进程后重试。',
     'common.reload': '重新载入',
     'common.edit': '编辑',
     'common.remove': '移除',
@@ -1542,6 +1610,7 @@ final class AppCopy {
     'common.client_passthrough': '客户端凭据透传',
     'bootstrap.preview': '正在准备 Preview 证据…',
     'bootstrap.live': '正在启动本地流量运行时…',
+    'bootstrap.sidecar_unavailable': 'ViberMate 安装不完整。请重新安装或重新构建 App。',
     'server.login.title': '连接到这台 Runtime Server',
     'server.login.target': '服务器 · {server}',
     'server.login.access_key': '管理员访问密钥',
@@ -1564,11 +1633,11 @@ final class AppCopy {
     'server.login.error.unavailable':
         '无法连接 Runtime Server，请检查地址以及选择的 HTTP/HTTPS 传输方式。',
     'flow.capture': 'Capture',
-    'flow.environment': 'Environment',
-    'flow.endpoint': 'Endpoint',
+    'flow.environment': '流量策略',
+    'flow.endpoint': '上游服务',
     'flow.protocol': '协议',
-    'flow.route': 'Route',
-    'flow.account': 'Account',
+    'flow.route': '路由',
+    'flow.account': '账号',
     'activity.destination.original': '原始目标',
     'flow.digest': '摘要',
     'conversation.title': '对话',
@@ -1578,12 +1647,20 @@ final class AppCopy {
     'conversation.exchange': 'Exchange',
     'conversation.empty': '该 Capture 尚未观察到语义 Exchange。',
     'conversation.turn': '第 {number} 轮',
-    'conversation.route': 'Route',
+    'conversation.route': '路由',
     'conversation.account': '账号',
     'activity.status.succeeded': '成功',
     'activity.status.pending': '进行中',
     'activity.status.failed': '失败',
     'activity.status.canceled': '已取消',
+    'exchange.failure.default.title': 'Agent 请求未完成。',
+    'exchange.failure.default.action': '检查下方冻结证据，修复故障边界后重试。',
+    'exchange.failure.provider_response_idle.title': '上游服务未能及时响应。',
+    'exchange.failure.provider_response_idle.action':
+        '检查上游服务与网络路径，然后重试 Agent 请求。',
+    'exchange.failure.unsupported_client_input.title':
+        'ViberMate 在联系上游服务前拒绝了 Agent 请求。',
+    'exchange.failure.unsupported_client_input.action': '检查列出的请求字段和客户端协议，然后重试。',
     'conversation.load_earlier': '加载更早 Turn',
     'conversation.load_earlier_exchanges': '加载更早 Exchange',
     'conversation.latest': '最新',
@@ -1596,7 +1673,7 @@ final class AppCopy {
     'conversations.turn_count': '{count} 轮',
     'exchange.content.not_recorded':
         '此 Exchange 未记录语义内容；冻结的路由与 attempt 证据仍可检查。',
-    'exchange.environment.frozen': '{environment} · 冻结 Environment r{revision}',
+    'exchange.environment.frozen': '{environment} · 冻结流量策略 r{revision}',
     'exchange.model.requested': '请求模型',
     'exchange.model.effective': '实际模型',
     'exchange.max_output': '最大输出',
@@ -1738,39 +1815,39 @@ final class AppCopy {
     'environment.connection_only': '仅记录连接。加密流量保持客户端原始目的地；ViberMate 只记录连接元数据。',
     'environment.no_client_flows':
         '尚未配置 Client Flow。新 Capture 会保留每个请求的原始目的地，并记录连接元数据。',
-    'environment.clients': '客户端 Endpoint',
+    'environment.clients': '客户端入口',
     'environment.client_target': '客户端目标',
     'environment.mapping.client': '客户端协议与入口',
-    'environment.mapping.upstream': '上游 Endpoint',
+    'environment.mapping.upstream': '上游服务',
     'environment.mapping.accounts': '可用账号',
     'environment.routes': '{count} 条上游路由',
-    'environment.select': '请选择一个 Environment。',
-    'environment.history.loading': '正在读取冻结的 Environment 修订…',
+    'environment.select': '请选择一条流量策略。',
+    'environment.history.loading': '正在读取冻结的流量策略版本…',
     'environment.history.frozen': '冻结证据',
     'environment.history.current': '返回当前修订',
-    'environment.history.inspect': '查看冻结 Environment r{revision}',
-    'environment.history.detail': '只读 Environment 修订 {revision}；当前配置未发生改变。',
-    'environment.history.semantics': '只读的冻结 Environment 修订 {revision}',
+    'environment.history.inspect': '查看冻结的流量策略 r{revision}',
+    'environment.history.detail': '只读流量策略版本 {revision}；当前配置未发生改变。',
+    'environment.history.semantics': '只读的冻结流量策略版本 {revision}',
     'environment.system_managed': '内置 · 只读',
     'environment.route.default': '默认',
     'environment.route.fallback': '候选',
-    'environment.account.invalid': '该账号不属于此 Route 的上游 Endpoint。',
-    'environment.create': '新建 Environment',
-    'environment.create.title': '新建 Environment',
+    'environment.account.invalid': '该账号不属于所选上游服务。',
+    'environment.create': '新建流量策略',
+    'environment.create.title': '新建流量策略',
     'environment.create.scope': '默认仅抓包并按原地址转发；也可添加明确的客户端流量，每条流量分别选择协议、入口与去向。',
-    'environment.create.authority': '初始上游 Endpoint',
+    'environment.create.authority': '初始上游服务',
     'environment.create.authority.detail': '可选；仅抓包时，所有请求仍发往各自原始目标。',
     'environment.create.observe_only': '仅抓包 · 按原始目标转发',
     'environment.field.id': '稳定 Environment ID',
     'environment.validation.id': '请输入 1–128 位小写字母、数字、点、下划线或连字符。',
-    'environment.endpoint.add': '选择上游 Endpoint',
+    'environment.endpoint.add': '选择上游服务',
     'environment.endpoint.client_choose': '选择客户端协议与入口',
     'environment.endpoint.add_client_flow': '添加客户端流量',
     'environment.endpoint.add_action': '添加上游路由',
-    'environment.endpoint.pending': '此 Endpoint 尚未添加到所选客户端流量。',
-    'environment.endpoint.remove': '从草稿移除 Endpoint',
-    'environment.endpoint.routes': '{count} 条 Route',
-    'environment.endpoint.account_required': '请先在此 Endpoint 下创建可用账号，再将流量路由到这里。',
+    'environment.endpoint.pending': '此上游服务尚未添加到所选客户端流量。',
+    'environment.endpoint.remove': '从草稿移除上游服务',
+    'environment.endpoint.routes': '{count} 条路由',
+    'environment.endpoint.account_required': '请先为此上游服务创建可用账号，再将流量路由到这里。',
     'environment.edit.title': '编辑 {name}',
     'environment.edit.scope': '先检查影响，再发布新修订。',
     'environment.edit.identity': '身份',
@@ -1780,9 +1857,9 @@ final class AppCopy {
     'environment.edit.policy.detail': '只控制证据记录与工具执行；不决定模型流量去向。',
     'environment.edit.routes': '客户端流量与去向',
     'environment.edit.routes.detail':
-        '每条客户端流量可直连原始目标，也可改发到一个或多个上游 Endpoint；每条 Route 只能使用其 Endpoint 所属的账号。',
+        '每条客户端流量可直连原始目标，也可改发到一个或多个上游服务；每条路由只能使用其上游服务所属的账号。',
     'environment.edit.routes.empty': '仅抓包 · 请求保持原样转发。',
-    'environment.field.name': 'Environment 名称',
+    'environment.field.name': '流量策略名称',
     'environment.field.state': '运行状态',
     'environment.state.active': '启用',
     'environment.state.disabled': '停用',
@@ -1802,7 +1879,7 @@ final class AppCopy {
     'environment.launch.dialog.title': '子进程环境变量',
     'environment.launch.authority': '路由、代理、信任、凭据和 ViberMate 自身变量仍由运行时管理。',
     'environment.launch.set': '设置变量',
-    'environment.launch.set_detail': '精确绑定到当前 Environment 修订的名称和值。',
+    'environment.launch.set_detail': '精确绑定到当前流量策略版本的名称和值。',
     'environment.launch.delete': '删除变量',
     'environment.launch.delete_detail': '在 Agent 启动前移除继承值。',
     'environment.launch.none': '此处没有规则。',
@@ -1810,27 +1887,25 @@ final class AppCopy {
     'environment.launch.value': '值',
     'environment.launch.validation': '请输入唯一且不由运行时保留的环境变量名。',
     'environment.account': '账号选择方式',
-    'environment.account.owner': '这里只列出属于该 Endpoint 的账号。',
-    'environment.account.client': '使用客户端凭据 · 仅限同一 Endpoint',
-    'environment.account.none': '该 Endpoint 下没有可用账号。',
+    'environment.account.owner': '这里只列出属于该上游服务的账号。',
+    'environment.account.client': '使用客户端凭据 · 仅限同一上游服务',
+    'environment.account.none': '该上游服务下没有可用账号。',
     'environment.account.unavailable': '不可用',
     'environment.account.no_candidate': '没有候选账号',
     'environment.account.fixed': '固定账号',
-    'environment.account.javascript': 'JavaScript 选择器',
+    'environment.account.javascript': 'JavaScript 规则',
     'environment.account.selector_scope':
-        '每个 Turn 执行一次，仅可选择当前 Endpoint 冻结的 {count} 个账号。',
-    'environment.account.selector_available':
-        '已有 {count} 个已发布的 JavaScript 选择器；展开即可切换。',
-    'environment.account.selector_load_failed': '无法读取已发布的 Account Selector。',
-    'environment.account.selector_none':
-        '尚未发布 JavaScript 选择器；可在 Code Library 创建。',
+        '每个 Turn 执行一次，仅可选择当前冻结的 {count} 个上游账号。',
+    'environment.account.selector_available': '已有 {count} 条已发布的账号选择规则；展开即可切换。',
+    'environment.account.selector_load_failed': '无法读取已发布的账号选择规则。',
+    'environment.account.selector_none': '尚未发布账号选择规则；可在脚本库中创建。',
     'environment.egress.label': '网络出口',
-    'environment.egress.detail': '仅作用于这条客户端流量及其 AI Endpoint 连接。',
+    'environment.egress.detail': '仅作用于这条客户端流量及其上游服务连接。',
     'environment.egress.profile.title': '选择网络出口',
-    'environment.egress.profile.detail': '选择一个已发布的精确 Profile 修订；请在设置中统一编辑。',
-    'environment.egress.profile.load_failed': '无法读取网络出口 Profile。',
+    'environment.egress.profile.detail': '选择一个已发布的精确网络出口版本；请在设置中统一管理。',
+    'environment.egress.profile.load_failed': '无法读取网络出口方案。',
     'environment.egress.dialog.title': '网络出口',
-    'environment.egress.dialog.scope': '设置这条客户端流量如何解析并连接 AI Endpoint。',
+    'environment.egress.dialog.scope': '设置这条客户端流量如何解析并连接上游服务。',
     'environment.egress.proxy.label': '连接方式',
     'environment.egress.proxy.direct': '直连',
     'environment.egress.proxy.socks5': 'SOCKS5 · ViberMate 解析目标',
@@ -1866,7 +1941,7 @@ final class AppCopy {
     'environment.transform.pipeline.available': '已发布变换',
     'environment.transform.pipeline.empty': '未配置变换；消息保持原样。',
     'environment.transform.pipeline.none_available': '没有其他可用的已发布变换。',
-    'environment.transform.pipeline.load_failed': '无法读取 Code Library。',
+    'environment.transform.pipeline.load_failed': '无法读取脚本库。',
     'environment.transform.pipeline.move_up': '提前执行',
     'environment.transform.pipeline.move_down': '延后执行',
     'environment.transform.summary.request': '仅请求',
@@ -1900,66 +1975,71 @@ final class AppCopy {
     'environment.transform.sample.streaming': '流式响应',
     'environment.transform.sample.invalid': '请输入合法且有界的 Header、Body 与响应状态码。',
     'environment.transform.sample.save': '使用样本',
-    'code_library.title': '自动化',
-    'code_library.subtitle': '发布可复用的请求、响应与账号选择逻辑',
+    'code_library.title': '脚本库',
+    'code_library.subtitle': '发布可复用的消息变换与账号选择规则',
+    'code_library.error.load': '无法读取脚本库，已发布版本没有改变。请重试。',
+    'code_library.error.change': '无法发布本次更改，已发布版本没有改变。请重新读取后重试。',
     'code_library.default_collection': '我的代码',
     'code_library.collection': '集合',
     'code_library.collection.create': '新建集合',
-    'code_library.transform.create': '新建变换',
-    'code_library.selector.create': '新建账号选择器',
+    'code_library.transform.create': '新建消息变换',
+    'code_library.selector.create': '新建账号选择规则',
     'code_library.kind.transforms': '消息变换',
-    'code_library.kind.account_selectors': '账号选择器',
-    'code_library.selector.empty': '还没有账号选择器',
-    'code_library.selector.empty.detail':
-        '发布一个选择器后，即可在 Environment Route 上选择其修订。',
+    'code_library.kind.account_selectors': '账号选择规则',
+    'code_library.selector.empty': '还没有账号选择规则',
+    'code_library.selector.empty.detail': '发布一条规则后，即可在流量策略中选择其版本。',
     'code_library.selector.starters.title': '用代码选择账号',
     'code_library.selector.starters.detail':
-        '从可见的 JavaScript 示例开始；Route 会冻结发布修订，且脚本只能看到该 Endpoint 的账号。',
-    'code_library.selector.starter.firstAvailable': '使用第一个账号',
-    'code_library.selector.starter.firstAvailable.detail':
-        '选择冻结列表中的第一个账号，适合作为最小的可编辑起点。',
-    'code_library.selector.starter.workspace': '按 Workspace 选择',
-    'code_library.selector.starter.workspace.detail':
-        '把精确的 Workspace 名称映射到精确账号 ID；没有匹配就失败。',
-    'code_library.selector.starter.user': '按 Runtime User 选择',
-    'code_library.selector.starter.user.detail':
-        '把已登录的 Runtime User 名称映射到精确账号 ID。',
-    'code_library.selector.starter.model': '按请求模型选择',
-    'code_library.selector.starter.model.detail':
-        '把精确的请求模型字符串映射到精确账号 ID，不推断供应商。',
-    'code_library.selector.select': '选择一个账号选择器',
+        '从可见的 JavaScript 示例开始；流量策略会冻结已发布版本，脚本只能看到所选上游服务的账号。',
+    'code_library.selector.starter.loginUser': '按 ViberMate 登录用户选择',
+    'code_library.selector.starter.loginUser.detail':
+        '把经过认证的 ViberMate 登录用户名映射到一个精确账号 ID；未登录或未配置时在本地停止。',
+    'code_library.selector.select': '选择一条账号选择规则',
     'code_library.selector.select.detail': '这里显示当前不可变修订及其精确决策代码。',
     'code_library.selector.source': '账号决策',
     'code_library.name': '名称',
     'code_library.starter': '起始示例',
     'code_library.starter.protocol': '示例适用协议',
     'code_library.starter.blank': '空白',
-    'code_library.starter.local_paths': '隐藏本机路径',
+    'code_library.starter.local_identity': '隐藏本机身份',
+    'code_library.starter.block_secrets': '阻止密钥泄露',
+    'code_library.starter.private_contacts': '隐藏邮箱与内网 IP',
     'code_library.starter.turn_time': '显示 Turn 时间',
-    'code_library.starter.system_prompt': '调整系统提示词',
+    'code_library.starter.reply_language': '设置默认回复语言',
+    'code_library.starter.workspace_rules': '按工作区应用规则',
+    'code_library.starter.response_model': '显示实际响应模型',
     'code_library.starters.title': '内置示例',
     'code_library.starters.detail': '代码直接可见；使用后会生成可编辑副本，保存前不会发布。',
     'code_library.starters.blank_action': '从空白开始',
-    'code_library.starters.use': '使用此示例',
-    'code_library.starter.local_paths.detail':
-        '发送前隐藏当前用户的主目录路径，再通过本 Turn 的 Context 在响应中还原。',
+    'code_library.starters.use': '以此新建',
+    'code_library.starter.local_identity.detail':
+        '发送前替换本机用户名、主目录和工作区路径，再在本 Turn 的响应中还原。',
+    'code_library.starter.block_secrets.detail': '请求含私钥标记或可识别的访问令牌前缀时，在本地直接停止。',
+    'code_library.starter.private_contacts.detail':
+        '发送前替换邮箱和内网 IPv4 地址，再在响应中还原。',
     'code_library.starter.turn_time.detail':
         '加入带签名的 Turn 时间；ViberMate 会在下一次请求前自动移除。',
-    'code_library.starter.system_prompt.detail': '向当前协议的系统或开发者指令追加明确要求。',
+    'code_library.starter.reply_language.detail':
+        '默认要求使用简体中文回复，但尊重用户明确指定的其他语言。',
+    'code_library.starter.workspace_rules.detail': '按冻结的工作区名称追加精确规则；未知工作区保持原样。',
+    'code_library.starter.response_model.detail':
+        '用带签名的注解显示供应商实际返回的模型；下次请求前自动移除。',
     'code_library.empty': '还没有代码',
-    'code_library.empty.detail': '从示例发布消息变换或账号选择器。',
+    'code_library.empty.detail': '从示例新建并发布消息变换或账号选择规则。',
     'code_library.select': '选择一个变换',
     'code_library.select.detail': '这里显示当前已发布修订及请求、响应两个阶段。',
     'code_library.test_protocol': '测试格式',
     'code_library.test_protocol.detail':
         '仅选择“运行样例 Turn”使用的内置请求与响应，不会把这段代码绑定到某个协议。',
-    'code_library.edit_publish': '编辑并发布',
+    'code_library.edit_publish': '编辑新版本',
+    'code_library.create_publish': '新建并发布',
+    'code_library.publish_revision': '发布新版本',
     'code_library.no_changes': '此阶段不做修改。',
     'code_library.sample.captured':
         '本地样本来自 {exchange} · {protocol}。测试前可编辑；原始证据保持不变。',
     'code_library.sample.clear': '丢弃本地样本',
-    'account_selector.editor.title': '账号选择器',
-    'account_selector.editor.subtitle': '每个 Turn 从冻结的 Endpoint 账号中选择一个。',
+    'account_selector.editor.title': '账号选择规则',
+    'account_selector.editor.subtitle': '每个 Turn 从冻结的上游账号中选择一个。',
     'account_selector.editor.scope': '只读请求、运行时与账号元数据 · 返回一个精确账号 ID · 失败即停止',
     'account_selector.editor.detail':
         '将 selection.accountId 设为 accounts 中的一个精确 ID。',
@@ -1967,12 +2047,14 @@ final class AppCopy {
     'account_selector.sample.title': '样例 Turn',
     'account_selector.sample.detail': '发布前编辑本地元数据，并验证实际选中的账号。',
     'account_selector.sample.accounts': '账号 ID · 逗号分隔',
-    'account_selector.sample.user': '运行用户',
-    'account_selector.sample.workspace': 'Workspace 名称',
+    'account_selector.sample.user': 'ViberMate 登录用户名',
+    'account_selector.sample.workspace': '工作区名称',
     'account_selector.sample.model': '请求模型',
     'account_selector.sample.protocol': '客户端协议',
     'account_selector.test.run': '运行样例 Turn',
     'account_selector.test.selected': '已选择 {account}',
+    'account_selector.test.failed': '样例未能选出账号。请修正 JavaScript 或样例值，然后重新运行。',
+    'account_selector.test.unavailable': 'Runtime 无法运行该样例。请检查 Runtime 状态后重试。',
     'environment.model.label': '模型映射',
     'environment.model.passthrough': '保持请求模型',
     'environment.model.passthrough.detail': '未匹配的模型 ID 原样转发。',
@@ -1981,15 +2063,15 @@ final class AppCopy {
     'environment.model.dialog.title': '模型映射',
     'environment.model.dialog.scope': '将请求侧模型 ID 精确映射到 {endpoint} 声明的不透明模型 ID。',
     'environment.model.request_catalog': '当前客户端流量的请求模型',
-    'environment.model.upstream_catalog': 'Endpoint 模型',
-    'environment.model.request_authority': 'A 仅跟随当前客户端协议；不限制 Endpoint 支持的协议。',
+    'environment.model.upstream_catalog': '上游模型',
+    'environment.model.request_authority': 'A 仅跟随当前客户端协议；不限制上游服务支持的协议。',
     'environment.model.account_authority':
         '账号：{account} · {kind} · {transport}',
     'environment.model.account_missing_authority': '账号：未选择 · 实时探测已停用',
     'environment.model.requested': '请求模型',
     'environment.model.upstream': '上游模型',
     'environment.model.requested_hint': '从 models.dev 选择或输入精确 ID',
-    'environment.model.upstream_hint': '从 Endpoint 选择或输入精确 ID',
+    'environment.model.upstream_hint': '从上游服务选择或输入精确模型 ID',
     'environment.model.mapping': '映射 {index}',
     'environment.model.add': '添加映射',
     'environment.model.remove': '移除映射',
@@ -1998,21 +2080,21 @@ final class AppCopy {
     'environment.model.mapping_invalid': '每条映射都必须同时填写两个精确模型 ID。',
     'environment.model.mapping_duplicate': '同一请求模型 ID 只能出现一次。',
     'environment.model.client_load_error': '请求模型目录不可用。',
-    'environment.model.upstream_load_error': 'Endpoint 模型探测不可用。',
+    'environment.model.upstream_load_error': '无法探测上游模型。',
     'environment.model.manual_available': '仍可手动输入精确模型 ID。',
-    'environment.model.account_required': '选择 Account 后才能查询此 Endpoint。',
+    'environment.model.account_required': '选择上游账号后才能查询此服务。',
     'environment.model.refresh_client': '刷新请求模型',
-    'environment.model.refresh_upstream': '刷新 Endpoint 模型',
+    'environment.model.refresh_upstream': '刷新上游模型',
     'environment.model.load_error': '模型探测失败。',
     'environment.model.load_problem': '模型探测失败（{status} · {code}）。',
     'environment.model.load_timeout':
-        'ViberMate 在收到 Endpoint 模型目录前探测超时。请重试；若持续发生，请检查系统凭据访问与 Endpoint 响应速度。',
+        'ViberMate 在收到上游模型目录前探测超时。请重试；若持续发生，请检查系统凭据访问与上游服务响应速度。',
     'environment.model.authentication_rejected':
-        'Endpoint 拒绝了当前 Account 的鉴权。请确认账号类型与 Endpoint 要求的鉴权传输方式一致。',
+        '上游服务拒绝了当前账号。请确认账号类型与服务要求的鉴权方式一致。',
     'environment.model.auth_hint.anthropic_api_key':
-        '此账号发送 X-Api-Key。若该中转站要求 Authorization: Bearer，请在此 Endpoint 下新建或选择 Bearer Token 账号。',
+        '此账号发送 X-Api-Key。若该中转站要求 Authorization: Bearer，请在此上游服务下新建或选择 Bearer Token 账号。',
     'environment.model.auth_hint.bearer_token':
-        '此账号发送 Authorization: Bearer。请确认凭据仍有效，且 Endpoint 接受 Bearer 鉴权。',
+        '此账号发送 Authorization: Bearer。请确认凭据仍有效，且上游服务接受 Bearer 鉴权。',
     'environment.destination.label': '请求去向',
     'environment.destination.original': '直连原始目标',
     'environment.destination.original.short': '原服务',
@@ -2021,31 +2103,30 @@ final class AppCopy {
     'environment.destination.choose_first': '先选择客户端流量，再选择它的请求去向。',
     'environment.destination.original.action': '添加直连流量',
     'environment.destination.upstream': '指定上游',
-    'environment.destination.upstream.short': '上游 Endpoint',
-    'environment.destination.upstream.detail':
-        '请求改发到所选 Endpoint，并使用属于该 Endpoint 的账号。',
-    'environment.account.required': '必须选择该 Endpoint 的账号',
+    'environment.destination.upstream.short': '上游服务',
+    'environment.destination.upstream.detail': '请求改发到所选上游服务，并使用属于该服务的账号。',
+    'environment.account.required': '必须选择上游账号',
     'environment.validation.name': '请输入不含首尾空格的名称。',
     'environment.validation.retention': '请输入 1–3650 天。',
     'environment.review': '检查影响',
-    'environment.publish': '发布 Environment',
+    'environment.publish': '发布流量策略',
     'environment.impact.title': '发布后会改变什么',
     'environment.impact.future_only': '仅用于之后启动的 Capture',
     'environment.impact.description':
-        '发布不会改变正在运行的 Capture。下列 Capture 会继续使用各自启动时冻结的 Environment 修订；此草稿只用于之后新启动的 Capture。',
+        '发布不会改变正在运行的 Capture。下列 Capture 会继续使用各自启动时冻结的流量策略版本；此草稿只用于之后新启动的 Capture。',
     'environment.impact.continuing': '{count} 个运行中 Capture 保持当前修订',
     'environment.impact.unchanged': '保持不变',
-    'environment.impact.none': '当前没有运行中的 Capture 使用此 Environment；下次启动时会使用新修订。',
+    'environment.impact.none': '当前没有运行中的 Capture 使用此流量策略；下次启动时会使用新版本。',
     'environment.impact.more': '另有 {count} 个 Capture',
-    'notice.environment.published': 'Environment 已按检查过的草稿与影响边界发布。',
+    'notice.environment.published': '流量策略已按检查过的草稿与影响边界发布。',
     'routes.title': '上游服务',
     'routes.subtitle': '管理服务地址，以及只属于该服务的凭据',
-    'routes.add_endpoint': '添加 Endpoint',
+    'routes.add_endpoint': '添加上游服务',
     'routes.add_account': '添加账号',
-    'routes.select_endpoint': '请选择一个上游 Endpoint。',
+    'routes.select_endpoint': '请选择一个上游服务。',
     'routes.accounts': '{count} 个账号',
     'routes.no_accounts': '暂无账号',
-    'routes.no_accounts.detail': '账号只属于此 Endpoint。',
+    'routes.no_accounts.detail': '账号只属于此上游服务。',
     'routes.protocols': '协议',
     'routes.protocol.anthropic_messages': 'Anthropic Messages',
     'routes.protocol.openai_responses': 'OpenAI Responses',
@@ -2055,18 +2136,18 @@ final class AppCopy {
     'routes.credentials.epoch': '凭据版本 {epoch}',
     'routes.update_credential': '替换凭据',
     'routes.delete_account': '删除账号',
-    'routes.endpoint.create.title': '添加上游 Endpoint',
+    'routes.endpoint.create.title': '添加上游服务',
     'routes.endpoint.name': '显示名称',
     'routes.endpoint.origin': '上游地址',
     'routes.endpoint.protocol': '支持的上游协议',
     'routes.endpoint.protocol.detail.anthropic_messages': 'POST /v1/messages',
     'routes.endpoint.protocol.detail.openai_responses': 'POST /v1/responses',
     'routes.endpoint.protocol.detail.openai_chat': 'POST /v1/chat/completions',
-    'routes.endpoint.boundary': '在这里创建的账号只属于此 Endpoint；Endpoint 不是可互换的凭据容器。',
+    'routes.endpoint.boundary': '在这里创建的账号只属于此上游服务；上游服务不是可互换的凭据容器。',
     'routes.endpoint.cleartext_warning': 'HTTP 仅允许连接本机或私网对端；对话与凭据将以明文传输。',
     'routes.validation.protocol': '请至少选择一种上游协议。',
-    'routes.endpoint.create.action': '创建 Endpoint',
-    'routes.account.create.title': '在此 Endpoint 下添加账号',
+    'routes.endpoint.create.action': '创建上游服务',
+    'routes.account.create.title': '为此上游服务添加账号',
     'routes.account.replace.title': '替换凭据 · {name}',
     'routes.account.name': '账号名称',
     'routes.account.kind': '凭据类型',
@@ -2076,8 +2157,7 @@ final class AppCopy {
     'routes.account.transport.bearer_token': 'Authorization: Bearer',
     'routes.account.api_key': 'API Key',
     'routes.account.bearer_token': 'Bearer Token',
-    'routes.account.secret_boundary':
-        '凭据只会发送一次给本机运行时并由其密钥存储保存；Account 响应绝不会将其返回。',
+    'routes.account.secret_boundary': '凭据只会发送一次给本机运行时并由其密钥存储保存；账号响应绝不会将其返回。',
     'routes.account.headers.auth_owned': '{transport} 始终由凭据类型提供，不能在这里覆盖。',
     'routes.account.headers.replace_warning':
         '保存会替换整套 Header 规则。旧值绝不会返回；若要保留，请重新添加这些 Header：',
@@ -2096,12 +2176,10 @@ final class AppCopy {
     'routes.account.create.action': '连接账号',
     'routes.account.replace.action': '替换凭据',
     'routes.account.delete.title': '删除 {name}？',
-    'routes.account.delete.detail':
-        '仅当没有 Environment Route 引用时，才会删除账号及其凭据；已捕获证据不会被删除。',
+    'routes.account.delete.detail': '仅当没有流量策略路由引用时，才会删除账号及其凭据；已捕获证据不会被删除。',
     'routes.account.delete.action': '删除账号',
-    'routes.account.delete.blocked': '运行时拒绝删除，因为仍有 Environment Route 引用此账号。',
-    'routes.account.delete.reference':
-        '{environment} r{revision} · Route {route}',
+    'routes.account.delete.blocked': '运行时拒绝删除，因为仍有流量策略路由引用此账号。',
+    'routes.account.delete.reference': '{environment} r{revision} · 路由 {route}',
     'routes.account.delete.more': '另有 {count} 条引用未返回。',
     'routes.validation.required': '请输入内容。',
     'routes.validation.origin':
@@ -2150,7 +2228,7 @@ final class AppCopy {
     'network.connections.load_more': '加载更多连接',
     'network.connections.source': '来源',
     'network.connections.destination': '目标',
-    'network.connections.environment': 'Environment',
+    'network.connections.environment': '流量策略',
     'network.connections.decision': '裁决',
     'network.connections.phase': '阶段',
     'network.connections.started': '开始时间',
@@ -2193,13 +2271,13 @@ final class AppCopy {
     'network.value.decryption.blind': '加密直通',
     'network.value.decryption.cleartext': '已解析明文',
     'network.value.scope.network': '网络',
-    'network.value.scope.environment': 'Environment',
+    'network.value.scope.environment': '流量策略',
     'network.value.source.network_rule': '连接规则',
     'network.value.caller.core': 'ViberMate 运行时',
     'network.value.purpose.provider_attempt': '服务商请求',
     'network.value.purpose.route_operation': '路由操作',
     'network.value.purpose.blind_tunnel': '盲隧道',
-    'network.value.authority.environment': 'Environment',
+    'network.value.authority.environment': '流量策略',
     'network.value.authority.network': '网络',
     'network.value.payload.client_semantic': 'Agent 请求',
     'network.value.payload.control': '控制流量',
@@ -2210,7 +2288,7 @@ final class AppCopy {
     'network.fact.source_confidence': '来源可信度',
     'network.fact.environment_id': 'Environment ID',
     'network.fact.observed_sni': '观察到的 SNI',
-    'network.fact.route_host': 'Route 主机',
+    'network.fact.route_host': '路由主机',
     'network.fact.resolved_ip': '解析 IP',
     'network.fact.rule': '规则',
     'network.fact.decryption': '解密',
@@ -2269,16 +2347,16 @@ final class AppCopy {
     'settings.tab.general': '常规',
     'settings.tab.users': '用户管理',
     'settings.tab.proxy': '代理',
-    'settings.egress.title': '网络出口 Profile',
-    'settings.egress.detail': '统一发布可复用的 SOCKS5 与 DNS 策略；Environment 冻结所选精确修订。',
-    'settings.egress.add': '添加 Profile',
-    'settings.egress.create': '添加网络出口 Profile',
-    'settings.egress.edit': '发布新的 Profile 修订',
-    'settings.egress.name': 'Profile 名称',
+    'settings.egress.title': '网络出口方案',
+    'settings.egress.detail': '统一发布可复用的 SOCKS5 与 DNS 选择；流量策略冻结所选的精确版本。',
+    'settings.egress.add': '新建网络出口方案',
+    'settings.egress.create': '新建网络出口方案',
+    'settings.egress.edit': '发布新版本',
+    'settings.egress.name': '方案名称',
     'settings.egress.publish': '发布',
     'settings.egress.builtin': '内置 · 只读',
-    'settings.egress.load_failed': '无法读取网络出口 Profile。',
-    'settings.egress.validation.name': '请输入 Profile 名称。',
+    'settings.egress.load_failed': '无法读取网络出口方案。',
+    'settings.egress.validation.name': '请输入方案名称。',
     'settings.language': '语言',
     'settings.english': 'English',
     'settings.chinese': '简体中文',
@@ -2290,18 +2368,17 @@ final class AppCopy {
     'settings.storage.not_encrypted':
         '运行时数据库在静态时未加密，仅依赖当前用户账户的文件权限；ViberMate 不会声称相反的事。',
     'settings.storage.location': '对话与 Raw HTTP 证据写入本机 ViberMate 应用支持目录。',
-    'settings.storage.retention':
-        '新建 Environment 默认保留全文证据 30 天。记录模式与保留期由各自的 Environment 拥有。',
+    'settings.storage.retention': '新建流量策略默认保留全文证据 30 天。记录模式与保留期由各自的流量策略管理。',
     'settings.storage.credentials':
         '凭证头的值（Authorization、API key、Cookie）在写入之前就已移除。'
         '请求与响应正文、工具参数和 query 按原样保存——写进 prompt 的密钥会被保留。',
     'settings.runtime': '运行时来源',
-    'settings.preview': '确定性 Preview fixture',
-    'settings.live': '本地 vibermated sidecar',
+    'settings.preview': '确定性预览数据',
+    'settings.live': '本地 ViberMate 运行时',
     'settings.remote': 'Runtime Server · {target}',
     'server.access.title': '远程客户端访问',
     'server.access.description':
-        '在这台 Server 上创建 Runtime User。客户端登录一次后，ViberMate 会在这里捕获其托管的 Claude 与 Codex 流量。',
+        '在这台 Server 上创建运行用户。客户端登录一次后，ViberMate 会在这里捕获其托管的 Claude 与 Codex 流量。',
     'server.access.loading': '正在读取 Server 访问方式…',
     'server.access.transport.http': 'HTTP',
     'server.access.transport.https': 'TLS',
@@ -2309,31 +2386,31 @@ final class AppCopy {
         '这台 Server 使用 HTTP，客户端与 Server 之间的登录凭证和捕获流量不会加密。请只在可信私网中使用。',
     'server.access.session.title': '登录一次，后续复用',
     'server.access.session.detail':
-        '客户端后续启动无需再回到 App 操作；登出、停用 Runtime User 或会话到期后才会失去访问权限。',
+        '客户端后续启动无需再回到 App 操作；登出、停用运行用户或会话到期后才会失去访问权限。',
     'server.access.error': '无法读取或修改 Server 访问设置：{detail}',
-    'server.users.title': 'Runtime Users',
+    'server.users.title': '运行用户',
     'server.users.description': '每个人或客户端机器使用自己的账号登录。',
     'server.users.authentication': '用户名与密码 · 可复用登录会话',
-    'server.users.loading': '正在读取 Runtime Users…',
-    'server.users.empty': '当前没有可登录的 Runtime User。请先创建第一个账号。',
+    'server.users.loading': '正在读取运行用户…',
+    'server.users.empty': '当前没有可登录的运行用户。请先创建第一个账号。',
     'server.users.add': '添加用户',
     'server.users.state.active': '可用',
     'server.users.state.disabled': '已停用',
-    'server.users.dialog.title': '创建 Runtime User',
+    'server.users.dialog.title': '创建运行用户',
     'server.users.dialog.detail': '请通过安全渠道把登录信息交给对应用户。',
     'server.users.dialog.username': '用户名',
     'server.users.dialog.password': '密码',
     'server.users.dialog.password_help': '至少 8 个字符',
     'server.users.dialog.create': '创建用户',
     'server.users.dialog.validation': '请输入用户名和至少 8 个字符的密码。',
-    'server.users.dialog.error': '无法创建 Runtime User：{detail}',
+    'server.users.dialog.error': '无法创建运行用户：{detail}',
     'server.users.dialog.unknown': 'Server 未接受这个账号。',
-    'server.users.disable.title': '停用这个 Runtime User？',
+    'server.users.disable.title': '停用这个运行用户？',
     'server.users.disable.detail': '{username} 会立即退出，且不能再启动新的运行。',
     'server.users.disable.action': '停用',
     'server.usage.truncated': '统计已达到安全上限；当前显示的是部分总量。',
     'server.usage.no_traffic': '尚未捕获到 Agent 流量',
-    'server.usage.workspace.unknown': '客户端未报告 workspace',
+    'server.usage.workspace.unknown': '客户端未报告工作区',
     'server.usage.succeeded': '成功 {count}',
     'server.usage.failed': '失败 {count}',
     'server.usage.tokens': '输入 {input} · 输出 {output}',
@@ -2343,7 +2420,7 @@ final class AppCopy {
     'server.usage.models.title': '精确的请求模型 → 上游模型',
     'server.usage.sessions.title': 'Agent Session',
     'usage.title': '团队洞察',
-    'usage.subtitle': '基于已保留 Agent 流量证据统计每个 Runtime User 的实际使用',
+    'usage.subtitle': '基于已保留 Agent 流量证据统计每个运行用户的实际使用',
     'usage.loading': '正在读取已保留的用量证据…',
     'usage.unavailable': '当前无法读取用量证据',
     'usage.scope.retained': '当前保留期 · 累计证据',
@@ -2353,9 +2430,9 @@ final class AppCopy {
     'usage.range.365': '近一年',
     'usage.activity.team.title': '团队活动证据',
     'usage.activity.team.detail':
-        '按天汇总 Runtime User 的已保留 Agent API 调用；切换 Token 可查看协议声明的用量。',
+        '按天汇总运行用户的已保留 Agent API 调用；切换 Token 可查看协议声明的用量。',
     'usage.activity.user.title': '用户活动证据',
-    'usage.activity.user.detail': '沿用相同的自然日尺度，仅显示当前 Runtime User。',
+    'usage.activity.user.detail': '沿用相同的自然日尺度，仅显示当前运行用户。',
     'usage.activity.metric.api_calls': 'API 调用',
     'usage.activity.metric.tokens': 'Token',
     'usage.activity.legend.less': '少',
@@ -2370,10 +2447,10 @@ final class AppCopy {
         '{date} · {value} {metric} · 失败 {failed} · {evidence}',
     'usage.activity.evidence.complete': '证据完整',
     'usage.activity.evidence.partial': '证据不完整',
-    'usage.metric.users': 'Runtime Users',
+    'usage.metric.users': '运行用户',
     'usage.metric.users.detail': '{count} 个可用账号',
     'usage.metric.active_runs': '运行中的 Capture',
-    'usage.metric.active_runs.detail': '来自已认证的 Runtime User',
+    'usage.metric.active_runs.detail': '来自已认证的运行用户',
     'usage.metric.api_calls': 'Agent API 调用',
     'usage.metric.api_calls.detail': '按已保留的终态 Agent API Exchange 统计',
     'usage.metric.success': '成功率',
@@ -2382,19 +2459,19 @@ final class AppCopy {
     'usage.metric.output': '输出 Token',
     'usage.metric.protocol_declared': '仅统计协议明确声明的证据',
     'usage.users.title': '用户',
-    'usage.users.detail': '选择 Runtime User 查看精确证据。',
-    'usage.ranking.title': 'Runtime User 用量排行',
+    'usage.users.detail': '选择运行用户查看精确证据。',
+    'usage.ranking.title': '运行用户用量排行',
     'usage.ranking.detail': '按已观测的输入 + 输出 Token 排序；未知值仍保持不完整。',
-    'usage.ranking.search': '搜索用户、Workspace 或设备',
+    'usage.ranking.search': '搜索用户、工作区或设备',
     'usage.ranking.count': '{visible} / {total} 位用户',
-    'usage.ranking.empty': '没有匹配的 Runtime User。',
+    'usage.ranking.empty': '没有匹配的运行用户。',
     'usage.ranking.running': '{count} 个 Capture 运行中',
     'usage.ranking.idle': '当前无运行中的 Capture',
     'usage.ranking.result': '{calls} 次调用 · 成功 {succeeded}',
     'usage.user.tokens.short': '入 {input} · 出 {output}',
     'usage.user.activity': '最近活动 {time}',
     'usage.user.runs': '{runs} 个 Capture · {active} 个运行中',
-    'usage.dimension.workspaces': 'Workspace',
+    'usage.dimension.workspaces': '工作区',
     'usage.dimension.models': '模型',
     'usage.dimension.sessions': 'Session',
     'usage.tokens.title': 'Token 账本',
@@ -2409,9 +2486,9 @@ final class AppCopy {
     'usage.models.empty': '已保留 API 调用中没有同时记录两个精确模型 ID。',
     'usage.model.metrics':
         '{calls} 次调用 · 成功 {succeeded} · 失败 {failed} · 入 {input} · 出 {output}',
-    'usage.contexts.title': 'Workspace',
-    'usage.contexts.detail': '同一客户端报告的 Workspace 会跨 Capture 与登录 Session 合并。',
-    'usage.contexts.empty': '客户端尚未报告 Workspace 或设备证据。',
+    'usage.contexts.title': '工作区',
+    'usage.contexts.detail': '同一客户端报告的工作区会跨 Capture 与登录 Session 合并。',
+    'usage.contexts.empty': '客户端尚未报告工作区或设备证据。',
     'usage.context.latest': '最近上下文',
     'usage.context.metrics':
         '{device} · {runs} 个 Capture · {calls} 次调用 · 入 {input} · 出 {output}',
@@ -2423,9 +2500,9 @@ final class AppCopy {
     'usage.sessions.empty': '尚未保留精确的客户端 Session 身份。',
     'usage.session.metrics':
         '{runs} 个 Capture · {calls} 次调用 · 成功 {succeeded} · 失败 {failed}',
-    'usage.empty': '创建 Runtime User 并捕获 Agent 流量后，这里会显示报表。',
+    'usage.empty': '创建运行用户并捕获 Agent 流量后，这里会显示报表。',
     'server.login.command.title': '1. 在客户端机器登录',
-    'server.login.command.detail': '只需运行一次，然后输入 Runtime User 的用户名与密码。',
+    'server.login.command.detail': '只需运行一次，然后输入运行用户的用户名与密码。',
     'server.login.command.client': '登录',
     'server.login.command.copy': '复制登录命令',
     'server.run.title': '连接客户端',
@@ -2445,7 +2522,7 @@ final class AppCopy {
     'terminal.run.copied': '已复制 {client} 命令',
     'terminal.run.copy_failed': '无法复制命令',
     'terminal.run.environment':
-        '显式 Environment · vibermate run --env <environment-id> -- <command>',
+        '指定流量策略 · vibermate run --env <environment-id> -- <command>',
     'terminal.refresh_status': '检查终端命令',
     'terminal.unavailable': '无法检查打包命令。请重新构建或安装 ViberMate。',
     'terminal.target': '终端入口',
@@ -2494,31 +2571,31 @@ final class AppCopy {
     'terminal.error.timeout': '终端命令操作超时。',
     'terminal.error.failed': '终端命令状态已变化或操作被拒绝，请检查当前状态。',
     'terminal.error.contract': 'App 内命令返回了无效状态，ViberMate 未采信。',
-    'offline.title': '断网保持',
-    'offline.summary': '暂停新的外部工作，排空活动出站流量，再明确给出可以安全断网的边界。',
+    'offline.title': '断网保护',
+    'offline.summary': '暂停新的外部工作，等待进行中的出站流量结束，再明确提示何时可安全断网。',
     'offline.state.unbound': '尚未初始化',
-    'offline.state.online': '在线',
-    'offline.state.entering': '正在排空网络工作',
-    'offline.state.held': '可以安全断网',
-    'offline.state.probing': '正在检查服务连接',
-    'offline.state.releasing': '正在释放等待工作',
+    'offline.state.online': '联网运行',
+    'offline.state.entering': '正在准备断网',
+    'offline.state.held': '可安全断网',
+    'offline.state.probing': '正在检查上游服务',
+    'offline.state.releasing': '正在恢复等待中的工作',
     'offline.state.stopping': '正在停止',
-    'offline.enter': '保持网络',
+    'offline.enter': '准备断网',
     'offline.resume': '恢复联网',
-    'offline.safe': '可以安全断网',
+    'offline.safe': '可安全断网',
     'offline.safe.yes': '可以',
     'offline.safe.no': '还不可以',
     'offline.active_actions': '活动动作',
     'offline.entering_actions': '正在排空的动作',
-    'offline.active_egress': '活动出站',
+    'offline.active_egress': '进行中的出站连接',
     'offline.queued_requests': '等待中的请求',
-    'offline.held_bytes': '保持字节数',
+    'offline.held_bytes': '等待数据量',
     'offline.revision': '运行时修订',
     'offline.last_probe': '最近服务检查',
-    'offline.confirm.enter.title': '进入断网保持？',
+    'offline.confirm.enter.title': '准备断网？',
     'offline.confirm.enter.detail':
         '新的外部工作会进入等待；活动网络工作排空后，ViberMate 才会报告可以安全断网。',
-    'offline.confirm.enter.action': '进入断网保持',
+    'offline.confirm.enter.action': '开始准备',
     'offline.confirm.resume.title': '恢复外部工作？',
     'offline.confirm.resume.detail':
         'ViberMate 会先检查冻结的服务目标，再释放等待中的工作；检查失败时会继续保持。',
@@ -2540,12 +2617,12 @@ final class AppCopy {
     'notice.network.approval_allowed': '决定已生效；等待中的工作获准继续。',
     'notice.network.approval_denied': '决定已生效；等待中的工作已被拒绝。',
     'notice.network.rules_saved': '连接规则集已原子保存。',
-    'notice.inventory.endpoint_created': '上游 Endpoint 已创建；现在可以在这里添加账号。',
-    'notice.inventory.account_created': '账号已创建在所选上游 Endpoint 下。',
+    'notice.inventory.endpoint_created': '上游服务已创建；现在可以在这里添加账号。',
+    'notice.inventory.account_created': '账号已创建在所选上游服务下。',
     'notice.inventory.credential_replaced':
         '凭据已使用上一 credential epoch 作为 CAS 边界完成替换。',
     'notice.inventory.account_deleted': '账号与凭据已删除；捕获证据未被移除。',
-    'notice.offline.held': '断网保持已到达可以安全断网的边界。',
+    'notice.offline.held': '断网保护已进入可安全断网状态。',
     'notice.offline.resumed': '服务检查通过，外部工作已恢复。',
     'notice.offline.releasing': '服务检查通过；正在释放等待中的工作。',
   };

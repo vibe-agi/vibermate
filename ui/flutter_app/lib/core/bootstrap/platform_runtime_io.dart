@@ -8,8 +8,19 @@ String platformRuntimeTargetLabel() => 'This Mac';
 
 bool platformRuntimeUsesPlaintext() => false;
 
-Future<RuntimeConnection> connectPlatformRuntime({String? accessKey}) async {
-  final runtime = await DesktopRuntime.start();
+Future<RuntimeConnection> connectPlatformRuntime({
+  String? accessKey,
+  String? daemonPath,
+}) async {
+  final DesktopRuntime runtime;
+  try {
+    runtime = await DesktopRuntime.start(daemonPath: daemonPath);
+  } on DesktopRuntimeException catch (error) {
+    if (error.message == 'Packaged Desktop sidecar is unavailable') {
+      throw const RuntimeConnectionException('desktop_sidecar_unavailable');
+    }
+    rethrow;
+  }
   return RuntimeConnection(
     api: runtime.api,
     terminalCommands: PackagedTerminalCommandService(),

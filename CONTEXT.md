@@ -20,6 +20,10 @@ _Avoid_: Upstream Endpoint, Environment, provider server
 A person authorized by a Runtime Server to create Captures and own their usage evidence. A Runtime User is never an upstream authentication Account.
 _Avoid_: Account, Provider Account, machine, client
 
+**Local User**:
+The operating-system account observed on a Client Device. A Local User may help redact machine-local paths but is never the authenticated Runtime User.
+_Avoid_: Runtime User, login user, Account
+
 **Client Device**:
 One machine used by a Runtime User to connect to a Runtime Server. A Client Device supplies machine and workspace evidence but does not independently grant Capture authority.
 _Avoid_: Runtime User, Account, approval

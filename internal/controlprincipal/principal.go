@@ -9,6 +9,8 @@ import (
 	"strings"
 	"unicode"
 	"unicode/utf8"
+
+	"github.com/vibe-agi/vibermate/internal/runtimeuser"
 )
 
 const maxIdentityBytes = 128
@@ -57,6 +59,7 @@ type Attributes struct {
 	MachineID             string
 	DeviceName            string
 	RuntimeUserID         string
+	RuntimeUsername       string
 	LoginSessionID        string
 	CredentialRevision    CredentialRevision
 	AllowedGrantKinds     []GrantKind
@@ -72,6 +75,7 @@ type Principal struct {
 	machineID             string
 	deviceName            string
 	runtimeUserID         string
+	runtimeUsername       string
 	loginSessionID        string
 	credentialRevision    CredentialRevision
 	allowed               uint8
@@ -89,7 +93,7 @@ func New(attributes Attributes) (Principal, error) {
 		if attributes.ProxyClientBindingID != "" ||
 			attributes.MachineRegistrationID != "" || attributes.MachineID != "" ||
 			attributes.DeviceName != "" || attributes.RuntimeUserID != "" ||
-			attributes.LoginSessionID != "" {
+			attributes.RuntimeUsername != "" || attributes.LoginSessionID != "" {
 			return Principal{}, errors.New(
 				"local control principal carries remote scope",
 			)
@@ -97,7 +101,8 @@ func New(attributes Attributes) (Principal, error) {
 	case KindRemoteGuest:
 		if attributes.ProxyClientBindingID != "" ||
 			attributes.MachineRegistrationID != "" ||
-			!validIdentity(attributes.MachineID) || attributes.DeviceName != "" {
+			!validIdentity(attributes.MachineID) || attributes.DeviceName != "" ||
+			attributes.RuntimeUsername != "" {
 			return Principal{}, errors.New(
 				"guest control principal machine scope is invalid",
 			)
@@ -105,7 +110,8 @@ func New(attributes Attributes) (Principal, error) {
 	case KindEnrolledClient:
 		if !validIdentity(attributes.ProxyClientBindingID) ||
 			!validIdentity(attributes.MachineRegistrationID) ||
-			!validIdentity(attributes.MachineID) || attributes.DeviceName != "" {
+			!validIdentity(attributes.MachineID) || attributes.DeviceName != "" ||
+			attributes.RuntimeUsername != "" {
 			return Principal{}, errors.New(
 				"enrolled control principal scope is incomplete",
 			)
@@ -116,6 +122,7 @@ func New(attributes Attributes) (Principal, error) {
 			!validIdentity(attributes.MachineID) ||
 			!validDeviceName(attributes.DeviceName) ||
 			!validIdentity(attributes.RuntimeUserID) ||
+			!runtimeuser.ValidUsername(attributes.RuntimeUsername) ||
 			!validIdentity(attributes.LoginSessionID) {
 			return Principal{}, errors.New(
 				"Runtime User control principal scope is incomplete",
@@ -130,6 +137,7 @@ func New(attributes Attributes) (Principal, error) {
 		machineID:             attributes.MachineID,
 		deviceName:            attributes.DeviceName,
 		runtimeUserID:         attributes.RuntimeUserID,
+		runtimeUsername:       attributes.RuntimeUsername,
 		loginSessionID:        attributes.LoginSessionID,
 		credentialRevision:    attributes.CredentialRevision,
 	}
@@ -162,22 +170,24 @@ func (principal Principal) Valid() bool {
 		return principal.proxyClientBindingID == "" &&
 			principal.machineRegistrationID == "" && principal.machineID == "" &&
 			principal.deviceName == "" && principal.runtimeUserID == "" &&
-			principal.loginSessionID == ""
+			principal.runtimeUsername == "" && principal.loginSessionID == ""
 	case KindRemoteGuest:
 		return principal.proxyClientBindingID == "" &&
 			principal.machineRegistrationID == "" && validIdentity(principal.machineID) &&
-			principal.deviceName == ""
+			principal.deviceName == "" && principal.runtimeUsername == ""
 	case KindEnrolledClient:
 		return validIdentity(principal.proxyClientBindingID) &&
 			validIdentity(principal.machineRegistrationID) &&
 			validIdentity(principal.machineID) && principal.deviceName == "" &&
-			principal.runtimeUserID == "" &&
+			principal.runtimeUserID == "" && principal.runtimeUsername == "" &&
 			principal.loginSessionID == ""
 	case KindRuntimeUser:
 		return principal.proxyClientBindingID == "" &&
 			principal.machineRegistrationID == "" && validIdentity(principal.machineID) &&
 			validDeviceName(principal.deviceName) &&
-			validIdentity(principal.runtimeUserID) && validIdentity(principal.loginSessionID)
+			validIdentity(principal.runtimeUserID) &&
+			runtimeuser.ValidUsername(principal.runtimeUsername) &&
+			validIdentity(principal.loginSessionID)
 	default:
 		return false
 	}
@@ -215,6 +225,10 @@ func (principal Principal) RuntimeUserID() (string, bool) {
 	return principal.runtimeUserID, principal.runtimeUserID != ""
 }
 
+func (principal Principal) RuntimeUsername() (string, bool) {
+	return principal.runtimeUsername, principal.runtimeUsername != ""
+}
+
 func (principal Principal) LoginSessionID() (string, bool) {
 	return principal.loginSessionID, principal.loginSessionID != ""
 }
@@ -246,6 +260,7 @@ func (principal Principal) sameConnection(other Principal) bool {
 		principal.machineID == other.machineID &&
 		principal.deviceName == other.deviceName &&
 		principal.runtimeUserID == other.runtimeUserID &&
+		principal.runtimeUsername == other.runtimeUsername &&
 		principal.loginSessionID == other.loginSessionID
 }
 

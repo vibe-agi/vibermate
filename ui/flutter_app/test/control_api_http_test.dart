@@ -418,8 +418,9 @@ void main() {
           requestedModel: 'claude-sonnet-4-5',
         ),
         runtime: AccountSelectorTestRuntime(
-          userName: 'alice',
-          homeDirectory: '/Users/alice',
+          userName: 'local-os-user',
+          loginUsername: 'alice',
+          homeDirectory: '/Users/local-os-user',
           operatingSystem: 'macos',
           operatingSystemVersion: '15.6',
           architecture: 'arm64',

@@ -12,12 +12,13 @@ import (
 // capability is authorized. Constructing the value does not authenticate a
 // request; only an Authorizer may place an Admission on a proxy connection.
 type ManagedRunEvidence struct {
-	CaptureRunID  string
-	SourceLabel   string
-	WorkspaceRoot string
-	Workspace     workspaceidentity.Scope
-	Adapter       *clientadapter.Evidence
-	Runtime       capturerun.RuntimeMetadata
+	CaptureRunID    string
+	SourceLabel     string
+	WorkspaceRoot   string
+	Workspace       workspaceidentity.Scope
+	Adapter         *clientadapter.Evidence
+	Runtime         capturerun.RuntimeMetadata
+	RuntimeUsername string
 }
 
 type ManagedRuntimeMetadata = capturerun.RuntimeMetadata
@@ -41,6 +42,7 @@ func NewManagedRun(evidence ManagedRunEvidence) (Admission, error) {
 		workspaceRoot:      evidence.WorkspaceRoot,
 		adapter:            cloneAdapter(evidence.Adapter),
 		runtime:            evidence.Runtime,
+		runtimeUsername:    evidence.RuntimeUsername,
 	}
 	if evidence.Workspace != (admission.workspace) {
 		if err := evidence.Workspace.Validate(); err != nil {

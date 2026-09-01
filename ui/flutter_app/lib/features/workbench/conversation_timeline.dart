@@ -1060,9 +1060,9 @@ final class _ExchangeEvidencePanel extends StatelessWidget {
             ),
           ],
           const SizedBox(height: 6),
-          if (detail.diagnosis case final diagnosis?)
-            _DiagnosisNotice(
-              diagnosis: diagnosis,
+          if (detail.status == 'failed')
+            _FailureNotice(
+              diagnosis: detail.diagnosis,
               result: detail.processingTrace.result,
               copy: copy,
             ),
@@ -3465,33 +3465,57 @@ final class _PendingResponse extends StatelessWidget {
   }
 }
 
-final class _DiagnosisNotice extends StatelessWidget {
-  const _DiagnosisNotice({
+final class _FailureNotice extends StatelessWidget {
+  const _FailureNotice({
     required this.diagnosis,
     required this.result,
     required this.copy,
   });
 
-  final ExchangeDiagnosis diagnosis;
+  final ExchangeDiagnosis? diagnosis;
   final String result;
   final AppCopy copy;
 
   @override
   Widget build(BuildContext context) {
-    final resultLabel = _localizedCopy(copy, 'activity.status', result);
+    final titleKey = 'exchange.failure.$result.title';
+    final actionKey = 'exchange.failure.$result.action';
+    final title =
+        copy.maybe(titleKey) ?? copy('exchange.failure.default.title');
+    final action =
+        copy.maybe(actionKey) ?? copy('exchange.failure.default.action');
     final location = [
-      diagnosis.clientField,
-      diagnosis.clientPath,
-      diagnosis.providerField,
+      diagnosis?.clientField,
+      diagnosis?.clientPath,
+      diagnosis?.providerField,
     ].whereType<String>().join(' · ');
+    final technical = [
+      result,
+      if (diagnosis?.providerStatus case final status?) '$status',
+      if (location.isNotEmpty) location,
+    ].join(' · ');
     return Container(
       width: double.infinity,
       margin: const EdgeInsets.only(bottom: 8),
       padding: const EdgeInsets.all(8),
       color: context.viberColors.danger.withValues(alpha: 0.07),
-      child: Text(
-        '$resultLabel${diagnosis.providerStatus == null ? '' : ' · ${diagnosis.providerStatus}'}${location.isEmpty ? '' : ' · $location'}',
-        style: monoStyle.copyWith(color: context.viberColors.danger),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(
+            title,
+            style: Theme.of(
+              context,
+            ).textTheme.titleSmall?.copyWith(color: context.viberColors.danger),
+          ),
+          const SizedBox(height: 2),
+          Text(action),
+          const SizedBox(height: 4),
+          SelectableText(
+            technical,
+            style: monoStyle.copyWith(color: context.viberColors.danger),
+          ),
+        ],
       ),
     );
   }
@@ -3672,8 +3696,8 @@ String? _turnEvidenceSummary(ExchangeDetail? detail, AppCopy copy) {
 
 String _localizedCopy(AppCopy copy, String family, String value) {
   final key = '$family.$value';
-  final localized = copy(key);
-  if (localized != key) return localized;
+  final localized = copy.maybe(key);
+  if (localized != null) return localized;
   final words = value.replaceAll('-', ' ').replaceAll('_', ' ');
   if (words.isEmpty) return words;
   return '${words[0].toUpperCase()}${words.substring(1)}';

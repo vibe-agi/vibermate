@@ -406,6 +406,7 @@ func accountSelectorRuntimeMetadata(
 ) accountselector.RuntimeMetadata {
 	metadata := accountselector.RuntimeMetadata{TurnStartedAt: startedAt}
 	if admission, available := request.CaptureAdmission(); available {
+		metadata.LoginUsername, _ = admission.RuntimeUsername()
 		if runtime, managed := admission.RuntimeMetadata(); managed {
 			metadata.LocalUserName = runtime.LocalUserName
 			metadata.HomeDirectory = runtime.HomeDirectory

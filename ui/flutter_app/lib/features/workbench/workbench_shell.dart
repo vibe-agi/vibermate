@@ -87,7 +87,9 @@ final class WorkbenchShell extends StatelessWidget {
     }
     if (controller.data == null) {
       return _StartupFailure(
-        message: controller.errorMessage ?? 'Runtime unavailable',
+        message: copy('startup.unavailable'),
+        technicalDetail: controller.errorMessage,
+        technicalDetailsLabel: copy('common.technical_details'),
         retryLabel: copy('common.retry'),
         onRetry: () => unawaited(controller.refresh(selectDefaults: true)),
       );
@@ -428,73 +430,38 @@ final class _TaskNavigation extends StatelessWidget {
         ),
       ],
     };
-    return Material(
-      color: context.viberColors.panel,
-      child: SizedBox(
-        height: 36,
-        child: SingleChildScrollView(
-          scrollDirection: Axis.horizontal,
-          child: Row(
-            children: [
-              const SizedBox(width: ViberSpacing.md),
+    final selectedIndex = sections.indexWhere(
+      (item) => item.$1 == controller.section,
+    );
+    return DefaultTabController(
+      key: ValueKey(controller.section),
+      length: sections.length,
+      initialIndex: selectedIndex < 0 ? 0 : selectedIndex,
+      child: Material(
+        color: context.viberColors.panel,
+        child: Align(
+          alignment: Alignment.centerLeft,
+          child: TabBar(
+            isScrollable: true,
+            tabAlignment: TabAlignment.start,
+            dividerHeight: 0,
+            onTap: (index) => controller.selectSection(sections[index].$1),
+            tabs: [
               for (final item in sections)
-                _TaskTab(
+                Tab(
                   key: Key('workbench-tab-${item.$4}'),
-                  icon: item.$2,
-                  label: copy(item.$3),
-                  selected: controller.section == item.$1,
-                  onPressed: () => controller.selectSection(item.$1),
+                  child: Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Icon(item.$2, size: 15),
+                      const SizedBox(width: ViberSpacing.sm),
+                      Text(copy(item.$3)),
+                    ],
+                  ),
                 ),
             ],
           ),
         ),
-      ),
-    );
-  }
-}
-
-final class _TaskTab extends StatelessWidget {
-  const _TaskTab({
-    super.key,
-    required this.icon,
-    required this.label,
-    required this.selected,
-    required this.onPressed,
-  });
-
-  final IconData icon;
-  final String label;
-  final bool selected;
-  final VoidCallback onPressed;
-
-  @override
-  Widget build(BuildContext context) {
-    return Semantics(
-      selected: selected,
-      button: true,
-      child: TextButton.icon(
-        onPressed: onPressed,
-        style:
-            TextButton.styleFrom(
-              minimumSize: const Size(0, 36),
-              padding: const EdgeInsets.symmetric(horizontal: ViberSpacing.lg),
-              shape: const RoundedRectangleBorder(),
-              foregroundColor: selected
-                  ? context.viberColors.route
-                  : context.viberColors.textMuted,
-              side: BorderSide(
-                color: selected
-                    ? context.viberColors.route
-                    : Colors.transparent,
-                width: 0,
-              ),
-            ).copyWith(
-              backgroundColor: WidgetStatePropertyAll(
-                selected ? context.viberColors.selection : Colors.transparent,
-              ),
-            ),
-        icon: Icon(icon, size: 15),
-        label: Text(label),
       ),
     );
   }
@@ -710,8 +677,8 @@ final class _StatusBar extends StatelessWidget {
 
 String _runtimeStateLabel(AppCopy copy, String value) {
   final key = 'status.state.$value';
-  final localized = copy(key);
-  if (localized != key) return localized;
+  final localized = copy.maybe(key);
+  if (localized != null) return localized;
   return value.replaceAll('_', ' ');
 }
 
@@ -744,11 +711,15 @@ final class _LoadingView extends StatelessWidget {
 final class _StartupFailure extends StatelessWidget {
   const _StartupFailure({
     required this.message,
+    required this.technicalDetail,
+    required this.technicalDetailsLabel,
     required this.retryLabel,
     required this.onRetry,
   });
 
   final String message;
+  final String? technicalDetail;
+  final String technicalDetailsLabel;
   final String retryLabel;
   final VoidCallback onRetry;
 
@@ -773,6 +744,27 @@ final class _StartupFailure extends StatelessWidget {
                 textAlign: TextAlign.center,
                 style: Theme.of(context).textTheme.bodyMedium,
               ),
+              if (technicalDetail case final detail?) ...[
+                const SizedBox(height: 6),
+                ExpansionTile(
+                  key: const Key('startup-technical-details'),
+                  tilePadding: EdgeInsets.zero,
+                  childrenPadding: const EdgeInsets.only(bottom: 8),
+                  title: Text(
+                    technicalDetailsLabel,
+                    textAlign: TextAlign.center,
+                    style: Theme.of(context).textTheme.bodySmall,
+                  ),
+                  children: [
+                    SelectableText(
+                      detail,
+                      style: monoStyle.copyWith(
+                        color: context.viberColors.textMuted,
+                      ),
+                    ),
+                  ],
+                ),
+              ],
               const SizedBox(height: 12),
               OutlinedButton(onPressed: onRetry, child: Text(retryLabel)),
             ],

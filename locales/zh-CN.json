@@ -14,6 +14,7 @@
   "cli.error.remoteLoginRequired": "此 Runtime Server 要求先登录。请运行 vibermate login --server <同一主机:端口>，然后重试。",
   "cli.error.remoteRuntimeUnavailable": "无法连接 Runtime Server。请检查主机、端口和网络，然后运行 vibermate doctor --server <同一主机:端口>。",
   "cli.error.terminalCommandFailed": "无法更改受管终端命令。请打开 ViberMate 设置查看冲突。",
+  "cli.login.httpWarning": "警告：此 Runtime Server 使用未加密 HTTP；用户名和密码将以明文发送。请仅在可信网络中继续。",
   "cli.capture.client.cli": "命令行应用",
   "cli.capture.client.desktop_app": "桌面应用",
   "cli.capture.client.other": "其他应用",

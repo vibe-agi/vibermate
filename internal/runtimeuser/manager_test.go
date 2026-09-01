@@ -11,6 +11,18 @@ import (
 	"github.com/vibe-agi/vibermate/internal/workspaceidentity"
 )
 
+func TestValidUsernameRejectsMissingOrNonCanonicalValues(t *testing.T) {
+	t.Parallel()
+	for _, value := range []string{"", "AlIce", " alice", "ab"} {
+		if ValidUsername(value) {
+			t.Fatalf("ValidUsername(%q) = true", value)
+		}
+	}
+	if !ValidUsername("alice") {
+		t.Fatal("ValidUsername(\"alice\") = false")
+	}
+}
+
 func TestCreatedRuntimeUserCanReuseLoginSessionUntilLogout(t *testing.T) {
 	t.Parallel()
 	clock := fixedClock{now: time.Date(2026, 8, 24, 10, 0, 0, 0, time.UTC)}

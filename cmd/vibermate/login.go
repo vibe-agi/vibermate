@@ -16,16 +16,18 @@ import (
 )
 
 const (
-	keyLoginUsage   = "cli.usage.login"
-	keyLoginFailed  = "cli.error.loginFailed"
-	keyLogoutUsage  = "cli.usage.logout"
-	keyLogoutFailed = "cli.error.logoutFailed"
+	keyLoginUsage       = "cli.usage.login"
+	keyLoginFailed      = "cli.error.loginFailed"
+	keyLoginHTTPWarning = "cli.login.httpWarning"
+	keyLogoutUsage      = "cli.usage.logout"
+	keyLogoutFailed     = "cli.error.logoutFailed"
 
 	maxLoginInputBytes = 2 << 10
 )
 
 type loginConfig struct {
-	server serverconnection.Target
+	server      serverconnection.Target
+	environment []string
 }
 
 func parseLogin(arguments []string) (loginConfig, error) {
@@ -67,10 +69,14 @@ func executeRemoteLogin(
 		return 1, keyLoginFailed
 	}
 	if config.server.Transport() == serverconnection.TransportHTTP {
-		_, _ = fmt.Fprintln(
+		if err := renderCLIMessage(
+			config.environment,
 			stderr,
-			"Warning: this Runtime Server uses unencrypted HTTP; your username and password will be sent in cleartext. Continue only on a trusted network.",
-		)
+			keyLoginHTTPWarning,
+			nil,
+		); err != nil {
+			return 1, reasonRenderFailed
+		}
 	}
 	username, password, err := readLoginCredentials(stdin, stderr)
 	if err != nil {

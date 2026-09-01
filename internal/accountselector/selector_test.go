@@ -65,6 +65,67 @@ selection.accountId = request.body.includes("premium") ? accounts[1].id : accoun
 	}
 }
 
+func TestPublishedSelectorUsesReadOnlyLoginUsernameInsteadOfClientClaims(t *testing.T) {
+	program, err := Compile(Policy{JavaScript: `
+if (runtime.user.name !== "local-os-user") throw new Error("local user changed");
+let readOnly = false;
+try { runtime.login.username = "mallory"; } catch (_) { readOnly = true; }
+if (!readOnly || runtime.login.username !== "alice") {
+  throw new Error("login username is mutable");
+}
+selection.accountId = runtime.login.username === "alice"
+  ? "account.alice"
+  : "account.other";
+`}, DefaultLimits())
+	if err != nil {
+		t.Fatal(err)
+	}
+	turn, err := program.NewTurn(TurnOptions{
+		Runtime: RuntimeMetadata{
+			LocalUserName: "local-os-user", LoginUsername: "alice",
+		},
+		Accounts: []Account{
+			{ID: "account.alice", DisplayName: "Alice"},
+			{ID: "account.other", DisplayName: "Other"},
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	selection, err := turn.Select(context.Background(), Request{
+		Method: "POST", Path: "/v1/messages",
+		Body: []byte(`{"runtime":{"login":{"username":"mallory"}}}`),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if selection.AccountID != "account.alice" {
+		t.Fatalf("AccountID = %q, want account.alice", selection.AccountID)
+	}
+}
+
+func TestPublishedSelectorFailsClosedWithoutLoginUsername(t *testing.T) {
+	program, err := Compile(Policy{JavaScript: `
+if (!runtime.login.username) throw new Error("ViberMate login is required");
+selection.accountId = accounts[0].id;
+`}, DefaultLimits())
+	if err != nil {
+		t.Fatal(err)
+	}
+	turn, err := program.NewTurn(TurnOptions{
+		Accounts: []Account{{ID: "account.allowed", DisplayName: "Allowed"}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = turn.Select(context.Background(), Request{
+		Method: "POST", Path: "/v1/messages", Body: []byte(`{}`),
+	})
+	if !errors.Is(err, ErrExecutionFailed) {
+		t.Fatalf("Select() error = %v, want ErrExecutionFailed", err)
+	}
+}
+
 func TestPublishedSelectorDoesNotExposeAnUnprovenTurnIndex(t *testing.T) {
 	program, err := Compile(Policy{JavaScript: `
 if ("index" in runtime.turn) throw new Error("unproven Turn index exposed");

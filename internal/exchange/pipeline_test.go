@@ -1824,6 +1824,58 @@ selection.accountId = request.requestedModel === "claude-client-alias"
 	}
 }
 
+func TestAccountSelectorUsesFrozenRuntimeLoginUsername(t *testing.T) {
+	accounts := []testAccount{
+		{id: "account.alice", revision: 2, epoch: 3},
+		{id: "account.other", revision: 4, epoch: 5},
+	}
+	plan := mustEnvironmentRequestPlan(t, testPlanOptions{
+		destination:    environment.DestinationKindUpstream,
+		providerOrigin: "https://provider.example/v1",
+		backend:        protocolspec.DialectOpenAIChat,
+		modelMode:      environment.ModelModeMap,
+		mappedModel:    "gpt-provider", accounts: accounts,
+		selector: &codelibrary.AccountSelectorRevision{
+			ID: "login-account", Revision: 1, CollectionID: "routing", DisplayName: "Login account",
+			Policy: accountselector.Policy{JavaScript: `
+if (runtime.user.name !== "local-os-user") throw new Error("local user changed");
+selection.accountId = runtime.login.username === "alice"
+  ? "account.alice"
+  : "account.other";
+`},
+			PublishedAt: time.Date(2026, time.September, 1, 0, 0, 0, 0, time.UTC),
+		},
+	})
+	admission, err := captureadmission.NewManagedRun(captureadmission.ManagedRunEvidence{
+		CaptureRunID: "capture-login-account", SourceLabel: "claude",
+		RuntimeUsername: "alice",
+		Runtime:         captureadmission.ManagedRuntimeMetadata{LocalUserName: "local-os-user"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	authority := newAccountAuthority(t, accounts...)
+	provider := &providerDouble{results: []providerResult{{
+		response: jsonResponse(http.StatusOK, completeProviderResponse("gpt-provider")),
+	}}}
+	pipeline := newTestPipeline(t, authority, provider, approvedDecisions(), &attemptObserverDouble{})
+	defer shutdownPipeline(t, pipeline)
+	result, err := pipeline.Execute(
+		context.Background(),
+		mustClientRequestWithOptions(
+			t, "exchange-login-account", plan, completeClientRequest(),
+			WithIngressCorrelation(admission, "connection-login-account"),
+		),
+		&downstreamRecorder{},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.AccountID != "account.alice" {
+		t.Fatalf("selected Account = %q, want account.alice", result.AccountID)
+	}
+}
+
 func TestManagedAuthenticationRejectionNeverSelectsAnotherAccount(t *testing.T) {
 	t.Parallel()
 	for _, status := range []int{http.StatusUnauthorized, http.StatusForbidden} {

@@ -27,6 +27,7 @@ const captureRunColumns = `
 	architecture,
 	time_zone,
 	runtime_user_id,
+	runtime_username,
 	login_session_id,
 	device_name,
 	machine_id,
@@ -98,6 +99,7 @@ func (repository *captureRunRepository) Create(
 		     architecture,
 		     time_zone,
 		     runtime_user_id,
+		     runtime_username,
 		     login_session_id,
 		     device_name,
 		     machine_id,
@@ -122,7 +124,7 @@ func (repository *captureRunRepository) Create(
 		     expires_at_unix_ms,
 		     updated_at_unix_ms
 		 )
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		record.ID,
 		record.ProxyCapabilityHash[:],
 		record.ControlCapabilityHash[:],
@@ -135,6 +137,7 @@ func (repository *captureRunRepository) Create(
 		record.Runtime.Architecture,
 		record.Runtime.TimeZone,
 		nullableText(string(record.RuntimeUserID)),
+		nullableText(record.RuntimeUsername),
 		nullableText(string(record.LoginSessionID)),
 		nullableText(record.DeviceName),
 		record.MachineID.String(),
@@ -458,8 +461,8 @@ func scanCaptureRun(scanner captureRunScanner) (capturerun.DurableRecord, error)
 		machineID, workspaceID              string
 		workspaceLabel, workspaceEvidence   string
 		machineRevision, derivationRevision int64
-		runtimeUserID, loginSessionID       sql.NullString
-		deviceName                          sql.NullString
+		runtimeUserID, runtimeUsername      sql.NullString
+		loginSessionID, deviceName          sql.NullString
 	)
 	if err := scanner.Scan(
 		&record.ID,
@@ -474,6 +477,7 @@ func scanCaptureRun(scanner captureRunScanner) (capturerun.DurableRecord, error)
 		&record.Runtime.Architecture,
 		&record.Runtime.TimeZone,
 		&runtimeUserID,
+		&runtimeUsername,
 		&loginSessionID,
 		&deviceName,
 		&machineID,
@@ -510,7 +514,8 @@ func scanCaptureRun(scanner captureRunScanner) (capturerun.DurableRecord, error)
 	copy(record.ControlCapabilityHash[:], controlHash)
 	record.Observation = capturerun.Observation(observation)
 	record.Recognition = clientadapter.Recognition(recognition)
-	if runtimeUserID.Valid != loginSessionID.Valid ||
+	if runtimeUserID.Valid != runtimeUsername.Valid ||
+		runtimeUserID.Valid != loginSessionID.Valid ||
 		runtimeUserID.Valid != deviceName.Valid {
 		return capturerun.DurableRecord{}, errors.New(
 			"CaptureRun Runtime User attribution is incomplete",
@@ -518,6 +523,7 @@ func scanCaptureRun(scanner captureRunScanner) (capturerun.DurableRecord, error)
 	}
 	if runtimeUserID.Valid {
 		record.RuntimeUserID = runtimeuser.UserID(runtimeUserID.String)
+		record.RuntimeUsername = runtimeUsername.String
 		record.LoginSessionID = runtimeuser.LoginSessionID(loginSessionID.String)
 		record.DeviceName = deviceName.String
 	}

@@ -14,6 +14,7 @@
   "cli.error.remoteLoginRequired": "This Runtime Server requires a login. Run vibermate login --server <same-host:port>, then retry the command.",
   "cli.error.remoteRuntimeUnavailable": "The Runtime Server is unavailable. Check the host, port, and network, then run vibermate doctor --server <same-host:port>.",
   "cli.error.terminalCommandFailed": "The managed terminal command could not be changed. Open ViberMate Settings to inspect the conflict.",
+  "cli.login.httpWarning": "Warning: this Runtime Server uses unencrypted HTTP; your username and password will be sent in cleartext. Continue only on a trusted network.",
   "cli.capture.client.cli": "Command-line app",
   "cli.capture.client.desktop_app": "Desktop app",
   "cli.capture.client.other": "Other app",

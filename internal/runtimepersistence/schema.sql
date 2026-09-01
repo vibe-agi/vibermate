@@ -108,12 +108,18 @@ CREATE TABLE capture_runs(
   CHECK(workspace_derivation_revision BETWEEN 0 AND 9223372036854775807), runtime_user_id TEXT
 REFERENCES runtime_users(user_id)
 CHECK(runtime_user_id IS NULL OR
-  length(CAST(runtime_user_id AS BLOB)) BETWEEN 1 AND 128), login_session_id TEXT
+  length(CAST(runtime_user_id AS BLOB)) BETWEEN 1 AND 128), runtime_username TEXT
+CHECK(runtime_username IS NULL OR
+  length(CAST(runtime_username AS BLOB)) BETWEEN 3 AND 64), login_session_id TEXT
 REFERENCES runtime_user_login_sessions(session_id)
 CHECK(login_session_id IS NULL OR
   length(CAST(login_session_id AS BLOB)) BETWEEN 1 AND 128), device_name TEXT
 CHECK(device_name IS NULL OR
   length(CAST(device_name AS BLOB)) BETWEEN 1 AND 128),
+  CHECK((runtime_user_id IS NULL AND runtime_username IS NULL AND
+    login_session_id IS NULL AND device_name IS NULL) OR
+    (runtime_user_id IS NOT NULL AND runtime_username IS NOT NULL AND
+    login_session_id IS NOT NULL AND device_name IS NOT NULL)),
   CHECK(expires_at_unix_ms >= created_at_unix_ms),
   CHECK(updated_at_unix_ms >= created_at_unix_ms),
   CHECK((adapter_id = ''

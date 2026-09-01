@@ -183,6 +183,10 @@ func canonicalUsername(value string) string {
 	return builder.String()
 }
 
+func ValidUsername(value string) bool {
+	return value != "" && canonicalUsername(value) == value
+}
+
 func validPassword(password []byte) bool {
 	return len(password) >= minPasswordBytes && len(password) <= maxPasswordBytes &&
 		utf8.Valid(password)

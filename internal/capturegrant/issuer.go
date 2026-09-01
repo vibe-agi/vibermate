@@ -704,16 +704,20 @@ func (issuer *Issuer) IssueCaptureRun(
 		return CaptureRunGrant{}, classifyEnvironmentSelectionError(reviewErr)
 	}
 	var runtimeUserID runtimeuser.UserID
+	var runtimeUsername string
 	var loginSessionID runtimeuser.LoginSessionID
 	var deviceName string
 	if principal.Kind() == controlprincipal.KindRuntimeUser {
 		userValue, userOK := principal.RuntimeUserID()
+		usernameValue, usernameOK := principal.RuntimeUsername()
 		sessionValue, sessionOK := principal.LoginSessionID()
 		deviceValue, deviceOK := principal.DeviceName()
 		runtimeUserID = runtimeuser.UserID(userValue)
+		runtimeUsername = usernameValue
 		loginSessionID = runtimeuser.LoginSessionID(sessionValue)
 		deviceName = deviceValue
-		if !userOK || !sessionOK || !deviceOK || !runtimeUserID.Valid() ||
+		if !userOK || !usernameOK || !sessionOK || !deviceOK || !runtimeUserID.Valid() ||
+			!runtimeuser.ValidUsername(runtimeUsername) ||
 			!loginSessionID.Valid() || !runtimeuser.ValidDeviceName(deviceName) {
 			return CaptureRunGrant{}, ErrPrincipalUnauthorized
 		}
@@ -729,6 +733,7 @@ func (issuer *Issuer) IssueCaptureRun(
 		Workspace:               workspace,
 		Runtime:                 request.RuntimeMetadata,
 		RuntimeUserID:           runtimeUserID,
+		RuntimeUsername:         runtimeUsername,
 		LoginSessionID:          loginSessionID,
 		DeviceName:              deviceName,
 	})

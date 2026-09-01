@@ -1,6 +1,7 @@
 import 'dart:async';
 
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 
 import '../../core/api/control_models.dart';
 import '../../core/design/viber_theme.dart';
@@ -28,7 +29,8 @@ final class _CodeLibraryViewState extends State<CodeLibraryView> {
   CodeLibraryCatalog? _catalog;
   String? _selectedTransformId;
   String? _selectedSelectorId;
-  String? _error;
+  String? _errorKey;
+  String? _errorDetail;
   bool _loading = true;
   bool _mutating = false;
   String _testWireProtocol = 'anthropic_messages';
@@ -48,7 +50,8 @@ final class _CodeLibraryViewState extends State<CodeLibraryView> {
   Future<void> _load() async {
     setState(() {
       _loading = true;
-      _error = null;
+      _errorKey = null;
+      _errorDetail = null;
     });
     try {
       final catalog = await widget.controller.codeLibrary(refresh: true);
@@ -73,7 +76,8 @@ final class _CodeLibraryViewState extends State<CodeLibraryView> {
       if (!mounted) return;
       setState(() {
         _loading = false;
-        _error = error.toString();
+        _errorKey = 'code_library.error.load';
+        _errorDetail = error.toString();
       });
     }
   }
@@ -107,10 +111,12 @@ final class _CodeLibraryViewState extends State<CodeLibraryView> {
             },
             itemBuilder: (context) => [
               PopupMenuItem(
+                key: const Key('code-library-create-transform-menu'),
                 value: _LibraryAction.transform,
                 child: Text(copy('code_library.transform.create')),
               ),
               PopupMenuItem(
+                key: const Key('code-library-create-selector-menu'),
                 value: _LibraryAction.accountSelector,
                 child: Text(copy('code_library.selector.create')),
               ),
@@ -146,7 +152,13 @@ final class _CodeLibraryViewState extends State<CodeLibraryView> {
           ),
         ),
         const Divider(height: 1),
-        if (_error case final error?) InlineNotice(message: error, error: true),
+        if (_errorKey case final errorKey?)
+          _LibraryFailureNotice(
+            message: copy(errorKey),
+            detail: _errorDetail,
+            copy: copy,
+            onRetry: () => unawaited(_load()),
+          ),
         if (_kind == _LibraryKind.transforms)
           if (widget.controller.capturedMessageTransformSample
               case final captured?)
@@ -163,7 +175,8 @@ final class _CodeLibraryViewState extends State<CodeLibraryView> {
 
   Widget _body(BuildContext context) {
     if (_loading) return const Center(child: CompactProgressIndicator());
-    final catalog = _catalog!;
+    final catalog = _catalog;
+    if (catalog == null) return const SizedBox.shrink();
     if (_kind == _LibraryKind.accountSelectors) {
       return _accountSelectorBody(catalog);
     }
@@ -296,6 +309,7 @@ final class _CodeLibraryViewState extends State<CodeLibraryView> {
           copy: copy,
           testTransform: widget.controller.testMessageTransform,
           onTestWireProtocolChanged: _rememberTestWireProtocol,
+          primaryActionLabel: copy('code_library.create_publish'),
         ),
       ),
     );
@@ -323,6 +337,7 @@ final class _CodeLibraryViewState extends State<CodeLibraryView> {
           copy: copy,
           testTransform: widget.controller.testMessageTransform,
           onTestWireProtocolChanged: _rememberTestWireProtocol,
+          primaryActionLabel: copy('code_library.publish_revision'),
         ),
       ),
     );
@@ -339,8 +354,7 @@ final class _CodeLibraryViewState extends State<CodeLibraryView> {
   }
 
   Future<void> _createAccountSelector({
-    _AccountSelectorStarter initialStarter =
-        _AccountSelectorStarter.firstAvailable,
+    _AccountSelectorStarter initialStarter = _AccountSelectorStarter.loginUser,
   }) async {
     final catalog = await _ensureCollection();
     if (!mounted) return;
@@ -361,6 +375,7 @@ final class _CodeLibraryViewState extends State<CodeLibraryView> {
           initial: _accountSelectorStarterPolicy(initialStarter),
           copy: copy,
           testSelector: widget.controller.testAccountSelector,
+          primaryActionLabel: copy('code_library.create_publish'),
         ),
       ),
     );
@@ -387,6 +402,7 @@ final class _CodeLibraryViewState extends State<CodeLibraryView> {
           initial: current.policy,
           copy: copy,
           testSelector: widget.controller.testAccountSelector,
+          primaryActionLabel: copy('code_library.publish_revision'),
         ),
       ),
     );
@@ -416,14 +432,18 @@ final class _CodeLibraryViewState extends State<CodeLibraryView> {
   Future<void> _mutate(Future<Object?> Function() action) async {
     setState(() {
       _mutating = true;
-      _error = null;
+      _errorKey = null;
+      _errorDetail = null;
     });
     try {
       await action();
       if (mounted) await _load();
     } on Object catch (error) {
       if (!mounted) return;
-      setState(() => _error = error.toString());
+      setState(() {
+        _errorKey = 'code_library.error.change';
+        _errorDetail = error.toString();
+      });
     } finally {
       if (mounted) setState(() => _mutating = false);
     }
@@ -485,6 +505,60 @@ enum _LibraryKind { transforms, accountSelectors }
 
 enum _LibraryAction { transform, accountSelector }
 
+final class _LibraryFailureNotice extends StatelessWidget {
+  const _LibraryFailureNotice({
+    required this.message,
+    required this.detail,
+    required this.copy,
+    required this.onRetry,
+  });
+
+  final String message;
+  final String? detail;
+  final AppCopy copy;
+  final VoidCallback onRetry;
+
+  @override
+  Widget build(BuildContext context) => Column(
+    crossAxisAlignment: CrossAxisAlignment.stretch,
+    children: [
+      InlineNotice(message: message, error: true),
+      Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 8),
+        child: Row(
+          children: [
+            if (detail case final value?)
+              Expanded(
+                child: ExpansionTile(
+                  key: const Key('code-library-technical-details'),
+                  tilePadding: const EdgeInsets.symmetric(horizontal: 4),
+                  childrenPadding: const EdgeInsets.fromLTRB(12, 0, 12, 8),
+                  title: Text(
+                    copy('common.technical_details'),
+                    style: Theme.of(context).textTheme.bodySmall,
+                  ),
+                  children: [
+                    Align(
+                      alignment: Alignment.centerLeft,
+                      child: SelectableText(value, style: monoStyle),
+                    ),
+                  ],
+                ),
+              )
+            else
+              const Spacer(),
+            TextButton.icon(
+              onPressed: onRetry,
+              icon: const Icon(Icons.refresh_rounded, size: 15),
+              label: Text(copy('common.retry')),
+            ),
+          ],
+        ),
+      ),
+    ],
+  );
+}
+
 final class _StarterGallery extends StatelessWidget {
   const _StarterGallery({
     required this.copy,
@@ -543,37 +617,25 @@ final class _StarterGallery extends StatelessWidget {
               ],
             ),
             const SizedBox(height: 16),
-            LayoutBuilder(
-              builder: (context, constraints) {
-                final columns = constraints.maxWidth >= 900
-                    ? 3
-                    : constraints.maxWidth >= 620
-                    ? 2
-                    : 1;
-                final width =
-                    (constraints.maxWidth - (columns - 1) * 12) / columns;
-                return Wrap(
-                  spacing: 12,
-                  runSpacing: 12,
-                  children: [
-                    for (final starter in const [
-                      _TransformStarter.localPaths,
-                      _TransformStarter.turnTime,
-                      _TransformStarter.systemPrompt,
-                    ])
-                      SizedBox(
-                        width: width,
-                        child: _StarterCard(
-                          starter: starter,
-                          wireProtocol: wireProtocol,
-                          copy: copy,
-                          enabled: enabled,
-                          onUse: () => onUse(starter),
-                        ),
-                      ),
-                  ],
-                );
-              },
+            _ExampleGrid(
+              children: [
+                for (final starter in const [
+                  _TransformStarter.localIdentity,
+                  _TransformStarter.blockSecrets,
+                  _TransformStarter.privateContacts,
+                  _TransformStarter.turnTime,
+                  _TransformStarter.replyLanguage,
+                  _TransformStarter.workspaceRules,
+                  _TransformStarter.responseModel,
+                ])
+                  _StarterCard(
+                    starter: starter,
+                    wireProtocol: wireProtocol,
+                    copy: copy,
+                    enabled: enabled,
+                    onUse: () => onUse(starter),
+                  ),
+              ],
             ),
           ],
         ),
@@ -613,15 +675,21 @@ final class _StarterCard extends StatelessWidget {
                 : 'environment.transform.response',
           );
     return _ExampleCard(
-      icon: starter == _TransformStarter.turnTime
-          ? Icons.schedule_outlined
-          : starter == _TransformStarter.localPaths
-          ? Icons.visibility_off_outlined
-          : Icons.tune_rounded,
+      icon: switch (starter) {
+        _TransformStarter.localIdentity => Icons.visibility_off_outlined,
+        _TransformStarter.blockSecrets => Icons.key_off_outlined,
+        _TransformStarter.privateContacts => Icons.contact_page_outlined,
+        _TransformStarter.turnTime => Icons.schedule_outlined,
+        _TransformStarter.replyLanguage => Icons.translate_outlined,
+        _TransformStarter.workspaceRules => Icons.workspaces_outline,
+        _TransformStarter.responseModel => Icons.model_training_outlined,
+        _TransformStarter.blank => Icons.add_rounded,
+      },
       label: _starterLabel(copy, starter),
       badge: stage,
       detail: copy(_starterDetailKey(starter)),
       source: source,
+      sourceKey: Key('code-library-starter-source-${starter.name}'),
       actionKey: Key('code-library-starter-${starter.name}'),
       actionLabel: copy('code_library.starters.use'),
       enabled: enabled,
@@ -662,57 +730,72 @@ final class _AccountSelectorStarterGallery extends StatelessWidget {
               ),
             ),
             const SizedBox(height: 16),
-            LayoutBuilder(
-              builder: (context, constraints) {
-                final columns = constraints.maxWidth >= 900
-                    ? 3
-                    : constraints.maxWidth >= 620
-                    ? 2
-                    : 1;
-                final width =
-                    (constraints.maxWidth - (columns - 1) * 12) / columns;
-                return Wrap(
-                  spacing: 12,
-                  runSpacing: 12,
-                  children: [
-                    for (final starter in _AccountSelectorStarter.values)
-                      SizedBox(
-                        width: width,
-                        child: _ExampleCard(
-                          icon: switch (starter) {
-                            _AccountSelectorStarter.firstAvailable =>
-                              Icons.looks_one_outlined,
-                            _AccountSelectorStarter.workspace =>
-                              Icons.workspaces_outline,
-                            _AccountSelectorStarter.user =>
-                              Icons.person_outline,
-                            _AccountSelectorStarter.model =>
-                              Icons.model_training_outlined,
-                          },
-                          label: _accountSelectorStarterLabel(copy, starter),
-                          badge: 'JavaScript',
-                          detail: copy(
-                            'code_library.selector.starter.${starter.name}.detail',
-                          ),
-                          source: _accountSelectorStarterPolicy(
-                            starter,
-                          ).javaScript,
-                          actionKey: Key(
-                            'code-library-selector-starter-${starter.name}',
-                          ),
-                          actionLabel: copy('code_library.starters.use'),
-                          enabled: enabled,
-                          onUse: () => onUse(starter),
-                        ),
-                      ),
-                  ],
-                );
-              },
+            _ExampleGrid(
+              children: [
+                for (final starter in _AccountSelectorStarter.values)
+                  _ExampleCard(
+                    icon: Icons.person_outline,
+                    label: _accountSelectorStarterLabel(copy, starter),
+                    badge: 'JavaScript',
+                    detail: copy(
+                      'code_library.selector.starter.${starter.name}.detail',
+                    ),
+                    source: _accountSelectorStarterPolicy(starter).javaScript,
+                    sourceKey: Key(
+                      'code-library-selector-starter-source-${starter.name}',
+                    ),
+                    actionKey: Key(
+                      'code-library-selector-starter-${starter.name}',
+                    ),
+                    actionLabel: copy('code_library.starters.use'),
+                    enabled: enabled,
+                    onUse: () => onUse(starter),
+                  ),
+              ],
             ),
           ],
         ),
       ),
     ),
+  );
+}
+
+final class _ExampleGrid extends StatelessWidget {
+  const _ExampleGrid({required this.children});
+
+  final List<Widget> children;
+
+  @override
+  Widget build(BuildContext context) => LayoutBuilder(
+    builder: (context, constraints) {
+      final columns = constraints.maxWidth >= 900
+          ? 3
+          : constraints.maxWidth >= 620
+          ? 2
+          : 1;
+      return Column(
+        children: [
+          for (var start = 0; start < children.length; start += columns) ...[
+            IntrinsicHeight(
+              child: Row(
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  for (var column = 0; column < columns; column++) ...[
+                    if (column > 0) const SizedBox(width: 12),
+                    Expanded(
+                      child: start + column < children.length
+                          ? children[start + column]
+                          : const SizedBox.shrink(),
+                    ),
+                  ],
+                ],
+              ),
+            ),
+            if (start + columns < children.length) const SizedBox(height: 12),
+          ],
+        ],
+      );
+    },
   );
 }
 
@@ -723,6 +806,7 @@ final class _ExampleCard extends StatelessWidget {
     required this.badge,
     required this.detail,
     required this.source,
+    required this.sourceKey,
     required this.actionKey,
     required this.actionLabel,
     required this.enabled,
@@ -734,6 +818,7 @@ final class _ExampleCard extends StatelessWidget {
   final String badge;
   final String detail;
   final String source;
+  final Key sourceKey;
   final Key actionKey;
   final String actionLabel;
   final bool enabled;
@@ -776,20 +861,27 @@ final class _ExampleCard extends StatelessWidget {
           ).textTheme.bodySmall?.copyWith(color: context.viberColors.textMuted),
         ),
         const SizedBox(height: 10),
+        const Spacer(),
         Container(
+          key: sourceKey,
           height: 104,
           padding: const EdgeInsets.all(10),
           decoration: BoxDecoration(
             color: context.viberColors.panelRaised,
             borderRadius: BorderRadius.circular(6),
           ),
-          child: Text(
-            source,
-            maxLines: 5,
-            overflow: TextOverflow.fade,
-            style: monoStyle.copyWith(
-              color: context.viberColors.textMuted,
-              fontSize: 10.5,
+          child: SelectionArea(
+            child: Text.rich(
+              javaScriptTextSpan(
+                context,
+                source,
+                style: monoStyle.copyWith(
+                  color: context.viberColors.textMuted,
+                  fontSize: 10.5,
+                ),
+              ),
+              maxLines: 5,
+              overflow: TextOverflow.clip,
             ),
           ),
         ),
@@ -991,12 +1083,14 @@ final class _LibraryDetail extends StatelessWidget {
           title: copy('environment.transform.request'),
           source: value.policy.requestJavaScript,
           emptyLabel: copy('code_library.no_changes'),
+          copy: copy,
         ),
         const SizedBox(height: 10),
         _SourcePanel(
           title: copy('environment.transform.response'),
           source: value.policy.responseJavaScript,
           emptyLabel: copy('code_library.no_changes'),
+          copy: copy,
         ),
       ],
     );
@@ -1081,6 +1175,7 @@ final class _AccountSelectorDetail extends StatelessWidget {
           title: copy('code_library.selector.source'),
           source: value.policy.javaScript,
           emptyLabel: copy('code_library.no_changes'),
+          copy: copy,
         ),
       ],
     );
@@ -1092,11 +1187,13 @@ final class _SourcePanel extends StatelessWidget {
     required this.title,
     required this.source,
     required this.emptyLabel,
+    required this.copy,
   });
 
   final String title;
   final String source;
   final String emptyLabel;
+  final AppCopy copy;
 
   @override
   Widget build(BuildContext context) => Container(
@@ -1109,16 +1206,37 @@ final class _SourcePanel extends StatelessWidget {
     child: Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        Text(title, style: Theme.of(context).textTheme.titleSmall),
-        const SizedBox(height: 8),
-        SelectableText(
-          source.isEmpty ? emptyLabel : source,
-          style: monoStyle.copyWith(
-            color: source.isEmpty
-                ? context.viberColors.textMuted
-                : context.viberColors.text,
-          ),
+        Row(
+          children: [
+            Expanded(
+              child: Text(title, style: Theme.of(context).textTheme.titleSmall),
+            ),
+            if (source.isNotEmpty)
+              IconButton(
+                tooltip: copy.format('common.copy', {'field': title}),
+                onPressed: () =>
+                    unawaited(Clipboard.setData(ClipboardData(text: source))),
+                icon: const Icon(Icons.content_copy_rounded, size: 15),
+                visualDensity: VisualDensity.compact,
+              ),
+          ],
         ),
+        const SizedBox(height: 8),
+        if (source.isEmpty)
+          SelectableText(
+            emptyLabel,
+            style: Theme.of(context).textTheme.bodySmall?.copyWith(
+              color: context.viberColors.textMuted,
+            ),
+          )
+        else
+          SelectableText.rich(
+            javaScriptTextSpan(
+              context,
+              source,
+              style: monoStyle.copyWith(color: context.viberColors.text),
+            ),
+          ),
       ],
     ),
   );
@@ -1245,9 +1363,18 @@ final class _TransformDraft {
   final TrafficTransformPolicy policy;
 }
 
-enum _TransformStarter { blank, localPaths, turnTime, systemPrompt }
+enum _TransformStarter {
+  blank,
+  localIdentity,
+  blockSecrets,
+  privateContacts,
+  turnTime,
+  replyLanguage,
+  workspaceRules,
+  responseModel,
+}
 
-enum _AccountSelectorStarter { firstAvailable, workspace, user, model }
+enum _AccountSelectorStarter { loginUser }
 
 final class _TransformDraftDialog extends StatefulWidget {
   const _TransformDraftDialog({
@@ -1328,6 +1455,7 @@ final class _TransformDraftDialogState extends State<_TransformDraftDialog> {
           ],
           const SizedBox(height: 10),
           DropdownButtonFormField<String>(
+            key: const Key('code-library-transform-protocol'),
             initialValue: _wireProtocol,
             isExpanded: true,
             decoration: InputDecoration(
@@ -1401,18 +1529,41 @@ final class _TransformDraftDialogState extends State<_TransformDraftDialog> {
 String _starterLabel(AppCopy copy, _TransformStarter starter) =>
     switch (starter) {
       _TransformStarter.blank => copy('code_library.starter.blank'),
-      _TransformStarter.localPaths => copy('code_library.starter.local_paths'),
+      _TransformStarter.localIdentity => copy(
+        'code_library.starter.local_identity',
+      ),
+      _TransformStarter.blockSecrets => copy(
+        'code_library.starter.block_secrets',
+      ),
+      _TransformStarter.privateContacts => copy(
+        'code_library.starter.private_contacts',
+      ),
       _TransformStarter.turnTime => copy('code_library.starter.turn_time'),
-      _TransformStarter.systemPrompt => copy(
-        'code_library.starter.system_prompt',
+      _TransformStarter.replyLanguage => copy(
+        'code_library.starter.reply_language',
+      ),
+      _TransformStarter.workspaceRules => copy(
+        'code_library.starter.workspace_rules',
+      ),
+      _TransformStarter.responseModel => copy(
+        'code_library.starter.response_model',
       ),
     };
 
 String _starterDetailKey(_TransformStarter starter) => switch (starter) {
   _TransformStarter.blank => 'code_library.empty.detail',
-  _TransformStarter.localPaths => 'code_library.starter.local_paths.detail',
+  _TransformStarter.localIdentity =>
+    'code_library.starter.local_identity.detail',
+  _TransformStarter.blockSecrets => 'code_library.starter.block_secrets.detail',
+  _TransformStarter.privateContacts =>
+    'code_library.starter.private_contacts.detail',
   _TransformStarter.turnTime => 'code_library.starter.turn_time.detail',
-  _TransformStarter.systemPrompt => 'code_library.starter.system_prompt.detail',
+  _TransformStarter.replyLanguage =>
+    'code_library.starter.reply_language.detail',
+  _TransformStarter.workspaceRules =>
+    'code_library.starter.workspace_rules.detail',
+  _TransformStarter.responseModel =>
+    'code_library.starter.response_model.detail',
 };
 
 String _accountSelectorStarterLabel(
@@ -1424,39 +1575,17 @@ AccountSelectorPolicy _accountSelectorStarterPolicy(
   _AccountSelectorStarter starter,
 ) => AccountSelectorPolicy(
   javaScript: switch (starter) {
-    _AccountSelectorStarter.firstAvailable =>
-      r'''if (accounts.length === 0) {
-  throw new Error("No Account is available");
-}
-selection.accountId = accounts[0].id;''',
-    _AccountSelectorStarter.workspace =>
-      r'''const accountByWorkspace = {
-  "work": "account.work",
-  "personal": "account.personal",
-};
-const accountId = accountByWorkspace[runtime.workspace.label];
-if (!accounts.some(function (account) { return account.id === accountId; })) {
-  throw new Error("No Account is configured for this Workspace");
-}
-selection.accountId = accountId;''',
-    _AccountSelectorStarter.user =>
-      r'''const accountByUser = {
+    _AccountSelectorStarter.loginUser =>
+      r'''const accountByLogin = {
   "alice": "account.team-a",
   "bob": "account.team-b",
 };
-const accountId = accountByUser[runtime.user.name];
-if (!accounts.some(function (account) { return account.id === accountId; })) {
-  throw new Error("No Account is configured for this Runtime User");
+if (!runtime.login.username) {
+  throw new Error("ViberMate login is required");
 }
-selection.accountId = accountId;''',
-    _AccountSelectorStarter.model =>
-      r'''const accountByModel = {
-  "claude-opus-4-1": "account.high-capacity",
-  "claude-sonnet-4-5": "account.standard",
-};
-const accountId = accountByModel[request.requestedModel];
+const accountId = accountByLogin[runtime.login.username];
 if (!accounts.some(function (account) { return account.id === accountId; })) {
-  throw new Error("No Account is configured for this requested model");
+  throw new Error("No Account is configured for this ViberMate login");
 }
 selection.accountId = accountId;''',
   },
@@ -1467,26 +1596,91 @@ TrafficTransformPolicy _starterPolicy(
   String wireProtocol,
 ) => switch (starter) {
   _TransformStarter.blank => const TrafficTransformPolicy.disabled(),
-  _TransformStarter.localPaths => const TrafficTransformPolicy(
-    requestJavaScript: r'''const privateHome = runtime.user.homeDirectory;
-if (privateHome) {
-  context.privateHome = JSON.stringify(privateHome).slice(1, -1);
-  context.publicHome = "/Users/guest";
-  request.body = request.body.split(context.privateHome).join(context.publicHome);
-}''',
-    responseJavaScript: r'''if (context.privateHome && context.publicHome) {
-  response.body = response.body.split(context.publicHome).join(context.privateHome);
-}''',
+  _TransformStarter.localIdentity => const TrafficTransformPolicy(
+    requestJavaScript: _localIdentityRequest,
+    responseJavaScript: _restoreRedactionsResponse,
+  ),
+  _TransformStarter.blockSecrets => const TrafficTransformPolicy(
+    requestJavaScript: _blockSecretsRequest,
+    responseJavaScript: '',
+  ),
+  _TransformStarter.privateContacts => const TrafficTransformPolicy(
+    requestJavaScript: _privateContactsRequest,
+    responseJavaScript: _restoreRedactionsResponse,
   ),
   _TransformStarter.turnTime => TrafficTransformPolicy(
     requestJavaScript: '',
     responseJavaScript: _turnTimeStarter(wireProtocol),
   ),
-  _TransformStarter.systemPrompt => TrafficTransformPolicy(
-    requestJavaScript: _systemPromptStarter(wireProtocol),
+  _TransformStarter.replyLanguage => TrafficTransformPolicy(
+    requestJavaScript: _replyLanguageStarter(wireProtocol),
     responseJavaScript: '',
   ),
+  _TransformStarter.workspaceRules => TrafficTransformPolicy(
+    requestJavaScript: _workspaceRulesStarter(wireProtocol),
+    responseJavaScript: '',
+  ),
+  _TransformStarter.responseModel => TrafficTransformPolicy(
+    requestJavaScript: '',
+    responseJavaScript: _responseModelStarter(wireProtocol),
+  ),
 };
+
+const _localIdentityRequest = r'''const candidates = [
+  [runtime.workspace.root, "/workspace/project"],
+  [runtime.user.homeDirectory, "/Users/guest"],
+  [runtime.user.name, "vibermate-user"],
+];
+context.redactions = [];
+for (let index = 0; index < candidates.length; index += 1) {
+  const privateValue = candidates[index][0];
+  const publicValue = candidates[index][1];
+  if (!privateValue || privateValue === publicValue) continue;
+  const encodedPrivate = JSON.stringify(privateValue).slice(1, -1);
+  const encodedPublic = JSON.stringify(publicValue).slice(1, -1);
+  if (!request.body.includes(encodedPrivate)) continue;
+  request.body = request.body.split(encodedPrivate).join(encodedPublic);
+  context.redactions.push([encodedPrivate, encodedPublic]);
+}''';
+
+const _blockSecretsRequest =
+    r'''const privateKey = /-----BEGIN (?:[A-Z0-9 ]+ )?PRIVATE KEY-----/;
+const commonKey = /\b(?:sk-ant-[A-Za-z0-9_-]{16,}|sk-proj-[A-Za-z0-9_-]{16,}|sk-[A-Za-z0-9_-]{20,}|github_pat_[A-Za-z0-9_]{16,}|gh[pousr]_[A-Za-z0-9]{16,}|xox[baprs]-[A-Za-z0-9-]{16,}|AKIA[A-Z0-9]{16})\b/;
+if (privateKey.test(request.body) || commonKey.test(request.body)) {
+  throw new Error("Request blocked because it contains a private key or access token");
+}''';
+
+const _privateContactsRequest = r'''context.redactions = [];
+function hide(value, kind) {
+  const existing = context.redactions.find(function (item) { return item[0] === value; });
+  if (existing) return existing[1];
+  const suffix = context.redactions.length + 1;
+  const visible = kind === "email"
+    ? "redacted-email-" + suffix + "@example.invalid"
+    : "192.0.2." + suffix;
+  context.redactions.push([value, visible]);
+  return visible;
+}
+request.body = request.body.replace(
+  /[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/gi,
+  function (value) { return hide(value, "email"); }
+);
+request.body = request.body.replace(/\b(?:\d{1,3}\.){3}\d{1,3}\b/g, function (value) {
+  const parts = value.split(".").map(Number);
+  const privateAddress = parts.every(function (part) { return part >= 0 && part <= 255; }) &&
+    (parts[0] === 10 || parts[0] === 127 ||
+      (parts[0] === 172 && parts[1] >= 16 && parts[1] <= 31) ||
+      (parts[0] === 192 && parts[1] === 168));
+  return privateAddress ? hide(value, "ip") : value;
+});''';
+
+const _restoreRedactionsResponse = r'''if (Array.isArray(context.redactions)) {
+  for (let index = 0; index < context.redactions.length; index += 1) {
+    response.body = response.body
+      .split(context.redactions[index][1])
+      .join(context.redactions[index][0]);
+  }
+}''';
 
 String _turnTimeStarter(String wireProtocol) => switch (wireProtocol) {
   'openai_responses' =>
@@ -1538,17 +1732,17 @@ if (response.streaming && !context.turnTimeShown && payload.type === "content_bl
 response.body = JSON.stringify(payload);''',
 };
 
-String _systemPromptStarter(String wireProtocol) => switch (wireProtocol) {
+String _replyLanguageStarter(String wireProtocol) => switch (wireProtocol) {
   'openai_responses' =>
     r'''const payload = JSON.parse(request.body);
-const guidance = "Be concise. State assumptions and surface uncertainty.";
+const guidance = "Reply in Simplified Chinese unless the user explicitly requests another language.";
 payload.instructions = typeof payload.instructions === "string"
   ? payload.instructions + "\n\n" + guidance
   : guidance;
 request.body = JSON.stringify(payload);''',
   'openai_chat' =>
     r'''const payload = JSON.parse(request.body);
-const guidance = "Be concise. State assumptions and surface uncertainty.";
+const guidance = "Reply in Simplified Chinese unless the user explicitly requests another language.";
 let message;
 if (Array.isArray(payload.messages)) {
   for (let index = 0; index < payload.messages.length; index += 1) {
@@ -1568,7 +1762,7 @@ if (message && typeof message.content === "string") {
 request.body = JSON.stringify(payload);''',
   _ =>
     r'''const payload = JSON.parse(request.body);
-const guidance = "Be concise. State assumptions and surface uncertainty.";
+const guidance = "Reply in Simplified Chinese unless the user explicitly requests another language.";
 if (typeof payload.system === "string") {
   payload.system += "\n\n" + guidance;
 } else if (Array.isArray(payload.system)) {
@@ -1577,4 +1771,120 @@ if (typeof payload.system === "string") {
   payload.system = guidance;
 }
 request.body = JSON.stringify(payload);''',
+};
+
+String _workspaceRulesStarter(String wireProtocol) => switch (wireProtocol) {
+  'openai_responses' =>
+    r'''const payload = JSON.parse(request.body);
+const rules = {
+  "example": "Treat workspace details as confidential and do not repeat secrets.",
+  "work": "Treat workspace details as confidential and do not repeat secrets.",
+  "personal": "Prefer concise answers and explain destructive steps before running them.",
+};
+const guidance = rules[runtime.workspace.label];
+if (guidance) {
+  payload.instructions = typeof payload.instructions === "string"
+    ? payload.instructions + "\n\n" + guidance
+    : guidance;
+  request.body = JSON.stringify(payload);
+}''',
+  'openai_chat' =>
+    r'''const payload = JSON.parse(request.body);
+const rules = {
+  "example": "Treat workspace details as confidential and do not repeat secrets.",
+  "work": "Treat workspace details as confidential and do not repeat secrets.",
+  "personal": "Prefer concise answers and explain destructive steps before running them.",
+};
+const guidance = rules[runtime.workspace.label];
+if (guidance) {
+  let message;
+  if (Array.isArray(payload.messages)) {
+    for (let index = 0; index < payload.messages.length; index += 1) {
+      const candidate = payload.messages[index];
+      if (candidate.role === "developer" || candidate.role === "system") {
+        message = candidate;
+        break;
+      }
+    }
+  }
+  if (message && typeof message.content === "string") {
+    message.content += "\n\n" + guidance;
+  } else {
+    if (!Array.isArray(payload.messages)) payload.messages = [];
+    payload.messages.unshift({role: "developer", content: guidance});
+  }
+  request.body = JSON.stringify(payload);
+}''',
+  _ =>
+    r'''const payload = JSON.parse(request.body);
+const rules = {
+  "example": "Treat workspace details as confidential and do not repeat secrets.",
+  "work": "Treat workspace details as confidential and do not repeat secrets.",
+  "personal": "Prefer concise answers and explain destructive steps before running them.",
+};
+const guidance = rules[runtime.workspace.label];
+if (guidance) {
+  if (typeof payload.system === "string") {
+    payload.system += "\n\n" + guidance;
+  } else if (Array.isArray(payload.system)) {
+    payload.system.push({type: "text", text: guidance});
+  } else {
+    payload.system = guidance;
+  }
+  request.body = JSON.stringify(payload);
+}''',
+};
+
+String _responseModelStarter(String wireProtocol) => switch (wireProtocol) {
+  'openai_responses' =>
+    r'''const payload = JSON.parse(response.body);
+if (typeof payload.model === "string") context.responseModel = payload.model;
+if (payload.response && typeof payload.response.model === "string") {
+  context.responseModel = payload.response.model;
+}
+if (response.streaming && !context.responseModelShown && context.responseModel && payload.type === "response.output_text.delta" && typeof payload.delta === "string") {
+  payload.delta = runtime.annotations.create("response-model", context.responseModel) + "\n" + payload.delta;
+  context.responseModelShown = true;
+} else if (!response.streaming && context.responseModel && Array.isArray(payload.output)) {
+  for (let outputIndex = 0; outputIndex < payload.output.length; outputIndex += 1) {
+    const item = payload.output[outputIndex];
+    if (!Array.isArray(item.content)) continue;
+    for (let contentIndex = 0; contentIndex < item.content.length; contentIndex += 1) {
+      const part = item.content[contentIndex];
+      if (part.type === "output_text" && typeof part.text === "string") {
+        part.text = runtime.annotations.create("response-model", context.responseModel) + "\n" + part.text;
+        outputIndex = payload.output.length;
+        break;
+      }
+    }
+  }
+}
+response.body = JSON.stringify(payload);''',
+  'openai_chat' =>
+    r'''const payload = JSON.parse(response.body);
+if (typeof payload.model === "string") context.responseModel = payload.model;
+const choice = Array.isArray(payload.choices) ? payload.choices[0] : undefined;
+if (response.streaming && !context.responseModelShown && context.responseModel && choice && choice.delta && typeof choice.delta.content === "string") {
+  choice.delta.content = runtime.annotations.create("response-model", context.responseModel) + "\n" + choice.delta.content;
+  context.responseModelShown = true;
+} else if (!response.streaming && context.responseModel && choice && choice.message && typeof choice.message.content === "string") {
+  choice.message.content = runtime.annotations.create("response-model", context.responseModel) + "\n" + choice.message.content;
+}
+response.body = JSON.stringify(payload);''',
+  _ =>
+    r'''const payload = JSON.parse(response.body);
+if (payload.type === "message_start" && payload.message && typeof payload.message.model === "string") {
+  context.responseModel = payload.message.model;
+}
+if (!response.streaming && typeof payload.model === "string") context.responseModel = payload.model;
+if (response.streaming && !context.responseModelShown && context.responseModel && payload.type === "content_block_delta" && payload.delta && payload.delta.type === "text_delta") {
+  payload.delta.text = runtime.annotations.create("response-model", context.responseModel) + "\n" + payload.delta.text;
+  context.responseModelShown = true;
+} else if (!response.streaming && context.responseModel && Array.isArray(payload.content)) {
+  payload.content.unshift({
+    type: "text",
+    text: runtime.annotations.create("response-model", context.responseModel),
+  });
+}
+response.body = JSON.stringify(payload);''',
 };

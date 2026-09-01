@@ -260,6 +260,14 @@ final class _CaptureMaster extends StatelessWidget {
                 ? CenteredMessage(
                     icon: Icons.filter_alt_off,
                     title: copy('capture.empty'),
+                    detail: copy('capture.empty.detail'),
+                    action: TextButton.icon(
+                      key: const Key('capture-empty-open-terminal-settings'),
+                      onPressed: () =>
+                          controller.selectSection(WorkbenchSection.settings),
+                      icon: const Icon(Icons.terminal, size: 15),
+                      label: Text(copy('capture.empty.action')),
+                    ),
                   )
                 : ListView(
                     children: [
@@ -2720,6 +2728,5 @@ String _relativeTime(DateTime timestamp, AppCopy copy) {
 
 String _localizedCopy(AppCopy copy, String family, String value) {
   final key = '$family.$value';
-  final localized = copy(key);
-  return localized == key ? value : localized;
+  return copy.maybe(key) ?? value;
 }

@@ -141,7 +141,7 @@ final class _LaunchEnvironmentDialogState
                     ),
                   ),
                   IconButton(
-                    tooltip: copy('common.close'),
+                    tooltip: copy('common.dismiss'),
                     onPressed: () => Navigator.of(context).pop(),
                     icon: const Icon(Icons.close, size: 18),
                   ),

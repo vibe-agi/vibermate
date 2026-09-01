@@ -26,6 +26,7 @@ func (authenticator runtimeUserAuthenticator) Authenticate(
 		MachineID:          identity.MachineID.String(),
 		DeviceName:         identity.DeviceName,
 		RuntimeUserID:      string(identity.User.ID),
+		RuntimeUsername:    identity.User.Username,
 		LoginSessionID:     string(identity.SessionID),
 		CredentialRevision: 1,
 		AllowedGrantKinds: []controlprincipal.GrantKind{

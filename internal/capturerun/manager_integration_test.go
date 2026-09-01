@@ -17,6 +17,7 @@ import (
 	"github.com/vibe-agi/vibermate/internal/clientadapter"
 	"github.com/vibe-agi/vibermate/internal/evidencearchive"
 	"github.com/vibe-agi/vibermate/internal/runtimepersistence"
+	"github.com/vibe-agi/vibermate/internal/runtimeuser"
 	"github.com/vibe-agi/vibermate/internal/workspaceidentity"
 )
 
@@ -154,6 +155,61 @@ func TestCaptureRunPersistsVerifiedAdapterEvidenceWithProxyCapability(
 		t.Fatal(err)
 	}
 	assertCodexEvidence(t, recovered)
+}
+
+func TestCaptureRunFreezesRuntimeUsernameAcrossStoreReopen(t *testing.T) {
+	t.Parallel()
+
+	databasePath := filepath.Join(t.TempDir(), "data", "runtime.db")
+	clock := newClock(time.Date(2026, 9, 1, 8, 0, 0, 0, time.UTC))
+	firstStore := openStore(t, databasePath)
+	users, err := runtimeuser.New(runtimeuser.Options{
+		Repository: firstStore.RuntimeUserRepository(), Clock: clock,
+		Random:          bytes.NewReader(bytes.Repeat([]byte{0x41}, 512)),
+		SessionLifetime: 8 * time.Hour,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	user, err := users.Create(context.Background(), runtimeuser.CreateCommand{
+		Username: "alice", Password: []byte("test-only-password"),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	workspace := testWorkspaceScope(t)
+	session, err := users.Login(context.Background(), runtimeuser.LoginCommand{
+		Username: "alice", Password: []byte("test-only-password"),
+		MachineID: workspace.MachineID(), DeviceName: "Alice workstation",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	manager := newManager(t, firstStore, clock)
+	grant, err := manager.Create(context.Background(), capturerun.CreateCommand{
+		CWD:                     filepath.Join(t.TempDir(), "workspace"),
+		CanonicalExecutablePath: filepath.Join(t.TempDir(), "bin", "claude"),
+		ExecutableLabel:         "claude", Lifetime: 2 * time.Minute,
+		CatalogRevision: 1, Workspace: workspace,
+		RuntimeUserID: user.ID, RuntimeUsername: user.Username,
+		LoginSessionID: session.ID, DeviceName: session.DeviceName,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	assertRuntimeUsername := func(evidence capturerun.Evidence, err error) {
+		t.Helper()
+		if err != nil || evidence.RuntimeUsername != "alice" {
+			t.Fatalf("CaptureRun Runtime username = %q, %v", evidence.RuntimeUsername, err)
+		}
+	}
+	assertRuntimeUsername(manager.AuthorizeProxy(context.Background(), grant.ProxyCapability))
+
+	shutdownStore(t, firstStore)
+	reopened := openStore(t, databasePath)
+	defer shutdownStore(t, reopened)
+	recovered := newManager(t, reopened, clock)
+	assertRuntimeUsername(recovered.AuthorizeProxy(context.Background(), grant.ProxyCapability))
 }
 
 func TestCaptureRunCapabilitiesArePersistedAsHashesAndDriveLifecycle(

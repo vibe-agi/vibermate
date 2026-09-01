@@ -26,6 +26,7 @@ import (
 	"github.com/vibe-agi/vibermate/internal/runtimepath"
 	"github.com/vibe-agi/vibermate/internal/serverconnection"
 	"github.com/vibe-agi/vibermate/internal/servercontrol"
+	"github.com/vibe-agi/vibermate/locales"
 )
 
 func TestHelpExplainsTheFirstCapturedRun(t *testing.T) {
@@ -438,6 +439,35 @@ func TestRemoteLoginWarnsBeforeReadingCredentialsOverHTTP(t *testing.T) {
 	}
 	if !input.warnedBeforeRead {
 		t.Fatalf("credentials were read before HTTP warning: %q", stderr.String())
+	}
+}
+
+func TestRemoteLoginHTTPWarningUsesSelectedCLILanguage(t *testing.T) {
+	t.Parallel()
+	catalogs, err := locales.New()
+	if err != nil {
+		t.Fatal(err)
+	}
+	expected, err := catalogs.Render(
+		locales.SimplifiedChinese,
+		keyLoginHTTPWarning,
+		nil,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var stderr strings.Builder
+	code, key := execute(
+		[]string{"login", "--server", "http://127.0.0.1:1"},
+		[]string{"LC_ALL=zh_CN.UTF-8"},
+		strings.NewReader("\n"), io.Discard, &stderr,
+	)
+	if code != 1 || key != keyLoginFailed {
+		t.Fatalf("code=%d key=%q", code, key)
+	}
+	if !strings.Contains(stderr.String(), expected) ||
+		strings.Contains(stderr.String(), "your username and password") {
+		t.Fatalf("HTTP warning did not use selected CLI language: %q", stderr.String())
 	}
 }
 

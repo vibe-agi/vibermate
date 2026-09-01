@@ -902,6 +902,9 @@ final class _AccountEditorDialogState extends State<_AccountEditorDialog> {
   Widget build(BuildContext context) {
     final copy = widget.copy;
     return AlertDialog(
+      constraints: const BoxConstraints(
+        maxWidth: ViberMetrics.dialogStandardWidth + ViberSpacing.xl * 2,
+      ),
       insetPadding: ViberDialogInsets.inset,
       titlePadding: ViberDialogInsets.title,
       contentPadding: ViberDialogInsets.content,
@@ -1283,6 +1286,5 @@ final class _AuthorityLine extends StatelessWidget {
 
 String _localizedCopy(AppCopy copy, String family, String value) {
   final key = '$family.$value';
-  final localized = copy(key);
-  return localized == key ? value : localized;
+  return copy.maybe(key) ?? value;
 }

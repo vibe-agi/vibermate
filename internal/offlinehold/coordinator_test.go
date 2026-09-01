@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"errors"
+	"fmt"
 	"sync"
 	"testing"
 	"time"
@@ -461,6 +462,204 @@ func TestGateLeaseReleaseAndShutdownAreIdempotent(t *testing.T) {
 	gate.BeginShutdown()
 	if err := gate.Drain(context.Background()); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestDefaultConfigKeepsProductionHoldLimits(t *testing.T) {
+	t.Parallel()
+
+	config := DefaultConfig()
+	if config.MaxHeldRequests != 256 ||
+		config.MaxHeldBytes != 64<<20 ||
+		config.MaxHoldDuration != 30*time.Minute ||
+		config.ReleaseConcurrency != 8 {
+		t.Fatalf("DefaultConfig() = %+v", config)
+	}
+}
+
+func TestGateDefaultRequestCapacityReleasesAFullWindow(t *testing.T) {
+	config := DefaultConfig()
+	gate := startTestGate(t, config)
+	if _, err := gate.Enter(context.Background(), gate.Snapshot().Revision); err != nil {
+		t.Fatalf("Enter() error = %v", err)
+	}
+
+	requests := make([]AcquireRequest, config.MaxHeldRequests)
+	results := make([]chan acquireResult, config.MaxHeldRequests)
+	for index := range requests {
+		requests[index] = acquireRequest(
+			t,
+			gate,
+			fmt.Sprintf("capacity-%03d", index),
+			"target-a",
+			1,
+		)
+		results[index] = make(chan acquireResult, 1)
+		go acquireAsync(gate, requests[index], results[index])
+		waitForQueue(t, gate, index+1)
+	}
+	overflow := acquireRequest(t, gate, "capacity-overflow", "target-a", 1)
+	if lease, err := gate.Acquire(context.Background(), overflow); !errors.Is(err, ErrHeldCapacity) || lease != nil {
+		t.Fatalf("257th Acquire() = %v, %v; want nil, ErrHeldCapacity", lease, err)
+	}
+	overflow.Action.Release()
+
+	if _, err := gate.Resume(
+		context.Background(),
+		gate.Snapshot().Revision,
+		ResumeRequest{Targets: []ProbeTarget{providerTarget("target-a")}},
+		&proberStub{},
+	); err != nil {
+		t.Fatalf("Resume() error = %v", err)
+	}
+	if snapshot := gate.Snapshot(); snapshot.State != StateReleasing ||
+		snapshot.ActiveEgress != config.ReleaseConcurrency ||
+		snapshot.QueuedRequests != config.MaxHeldRequests-config.ReleaseConcurrency {
+		t.Fatalf("first production release window = %+v", snapshot)
+	}
+
+	for index, result := range results {
+		acquired := waitAcquireResult(t, result)
+		if acquired.err != nil || acquired.lease == nil {
+			t.Fatalf("Acquire(%d) = %+v", index, acquired)
+		}
+		if active := gate.Snapshot().ActiveEgress; active > config.ReleaseConcurrency {
+			t.Fatalf("active release window = %d, max %d", active, config.ReleaseConcurrency)
+		}
+		acquired.lease.Release()
+		requests[index].Action.Release()
+	}
+	waitForState(t, gate, StateOnline)
+}
+
+func TestGateDefaultByteCapacityAccepts64MiBAndRejectsTheNextByte(t *testing.T) {
+	config := DefaultConfig()
+	gate := startTestGate(t, config)
+	if _, err := gate.Enter(context.Background(), gate.Snapshot().Revision); err != nil {
+		t.Fatalf("Enter() error = %v", err)
+	}
+
+	exact := acquireRequest(t, gate, "bytes-exact", "target-a", config.MaxHeldBytes)
+	result := make(chan acquireResult, 1)
+	go acquireAsync(gate, exact, result)
+	waitForQueue(t, gate, 1)
+	if snapshot := gate.Snapshot(); snapshot.HeldBytes != 64<<20 {
+		t.Fatalf("held bytes = %d, want %d", snapshot.HeldBytes, int64(64<<20))
+	}
+	overflow := acquireRequest(t, gate, "bytes-overflow", "target-a", 1)
+	if lease, err := gate.Acquire(context.Background(), overflow); !errors.Is(err, ErrHeldCapacity) || lease != nil {
+		t.Fatalf("64 MiB + 1 Acquire() = %v, %v; want nil, ErrHeldCapacity", lease, err)
+	}
+	overflow.Action.Release()
+
+	if _, err := gate.Resume(
+		context.Background(),
+		gate.Snapshot().Revision,
+		ResumeRequest{Targets: []ProbeTarget{providerTarget("target-a")}},
+		&proberStub{},
+	); err != nil {
+		t.Fatalf("Resume() error = %v", err)
+	}
+	acquired := waitAcquireResult(t, result)
+	if acquired.err != nil || acquired.lease == nil {
+		t.Fatalf("exact-boundary Acquire() = %+v", acquired)
+	}
+	acquired.lease.Release()
+	exact.Action.Release()
+	waitForState(t, gate, StateOnline)
+}
+
+func TestGateCancellationAndResumeInterleaveAcrossRepeatedCycles(t *testing.T) {
+	gate := startTestGate(t, Config{
+		MaxHeldRequests:    4,
+		MaxHeldBytes:       1024,
+		MaxHoldDuration:    time.Second,
+		ReleaseConcurrency: 2,
+	})
+
+	for cycle := 0; cycle < 32; cycle++ {
+		if _, err := gate.Enter(
+			context.Background(),
+			gate.Snapshot().Revision,
+		); err != nil {
+			t.Fatalf("cycle %d Enter() error = %v", cycle, err)
+		}
+		canceledContext, cancel := context.WithCancel(context.Background())
+		canceledRequest := acquireRequest(
+			t,
+			gate,
+			fmt.Sprintf("cycle-%02d-canceled", cycle),
+			"target-a",
+			1,
+		)
+		canceledResult := make(chan acquireResult, 1)
+		go func() {
+			lease, err := gate.Acquire(canceledContext, canceledRequest)
+			canceledResult <- acquireResult{lease: lease, err: err}
+		}()
+		waitForQueue(t, gate, 1)
+
+		releasedRequest := acquireRequest(
+			t,
+			gate,
+			fmt.Sprintf("cycle-%02d-released", cycle),
+			"target-a",
+			1,
+		)
+		releasedResult := make(chan acquireResult, 1)
+		go acquireAsync(gate, releasedRequest, releasedResult)
+		waitForQueue(t, gate, 2)
+
+		revision := gate.Snapshot().Revision
+		start := make(chan struct{})
+		resumeResult := make(chan error, 1)
+		go func() {
+			<-start
+			_, err := gate.Resume(
+				context.Background(),
+				revision,
+				ResumeRequest{Targets: []ProbeTarget{providerTarget("target-a")}},
+				&proberStub{},
+			)
+			resumeResult <- err
+		}()
+		cancelDone := make(chan struct{})
+		go func() {
+			<-start
+			cancel()
+			close(cancelDone)
+		}()
+		close(start)
+		<-cancelDone
+		resumeErr := <-resumeResult
+		if errors.Is(resumeErr, ErrRevisionConflict) {
+			_, resumeErr = gate.Resume(
+				context.Background(),
+				gate.Snapshot().Revision,
+				ResumeRequest{Targets: []ProbeTarget{providerTarget("target-a")}},
+				&proberStub{},
+			)
+		}
+		if resumeErr != nil {
+			t.Fatalf("cycle %d Resume() error = %v", cycle, resumeErr)
+		}
+
+		canceled := waitAcquireResult(t, canceledResult)
+		switch {
+		case errors.Is(canceled.err, context.Canceled) && canceled.lease == nil:
+		case canceled.err == nil && canceled.lease != nil:
+			canceled.lease.Release()
+		default:
+			t.Fatalf("cycle %d canceled Acquire() = %+v", cycle, canceled)
+		}
+		released := waitAcquireResult(t, releasedResult)
+		if released.err != nil || released.lease == nil {
+			t.Fatalf("cycle %d released Acquire() = %+v", cycle, released)
+		}
+		canceledRequest.Action.Release()
+		released.lease.Release()
+		releasedRequest.Action.Release()
+		waitForState(t, gate, StateOnline)
 	}
 }
 
