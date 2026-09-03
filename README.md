@@ -158,4 +158,5 @@ and the most important design decisions live in [docs/adr](docs/adr).
 - A passing source build is not the same as a Developer ID-signed, notarized,
   Gatekeeper-approved release.
 
+Report suspected vulnerabilities through the [private security channel](SECURITY.md).
 ViberMate is licensed under the [Apache License 2.0](LICENSE).
