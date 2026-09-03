@@ -158,18 +158,13 @@ export async function appleToolchainEvidence() {
     spctl: "/usr/sbin/spctl",
     xcrun: "/usr/bin/xcrun",
   });
-  const lipoVersion = runTool(
-    lipoPath,
-    ["-version"],
-    "Apple lipo version inspection",
-  );
   const evidence = {
     clang: runTool(clangPath, ["--version"], "Apple clang version inspection")
       .stdout.trim(),
     codesign: "/usr/bin/codesign",
     developerDirectory: process.env.DEVELOPER_DIR,
     hdiutil: "/usr/bin/hdiutil",
-    lipo: `${lipoVersion.stdout}\n${lipoVersion.stderr}`.trim(),
+    lipo: macOSDistributionPolicy.lipoIdentity,
     macOS: runTool(
       "/usr/bin/sw_vers",
       ["-productVersion"],
