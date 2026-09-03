@@ -71,7 +71,12 @@ cleanup() {
 }
 trap cleanup EXIT
 
-clang="$(xcrun --find clang)"
+macos_sdk_root="$(xcrun --sdk macosx --show-sdk-path)"
+if ! test -d "${macos_sdk_root}"; then
+  echo "the admitted Xcode installation has no macOS SDK" >&2
+  exit 69
+fi
+clang="$(xcrun --sdk macosx --find clang)"
 build_slice() {
   local command_name="$1"
   local go_architecture="$2"
@@ -86,10 +91,11 @@ build_slice() {
       GOOS=darwin \
       GOWORK=off \
       CC="${clang}" \
-      CGO_CFLAGS="-arch ${clang_architecture} -mmacosx-version-min=14.0" \
-      CGO_CXXFLAGS="-arch ${clang_architecture} -mmacosx-version-min=14.0" \
-      CGO_LDFLAGS="-arch ${clang_architecture} -mmacosx-version-min=14.0" \
+      CGO_CFLAGS="-arch ${clang_architecture} -isysroot ${macos_sdk_root} -mmacosx-version-min=14.0" \
+      CGO_CXXFLAGS="-arch ${clang_architecture} -isysroot ${macos_sdk_root} -mmacosx-version-min=14.0" \
+      CGO_LDFLAGS="-arch ${clang_architecture} -isysroot ${macos_sdk_root} -mmacosx-version-min=14.0" \
       MACOSX_DEPLOYMENT_TARGET=14.0 \
+      SDKROOT="${macos_sdk_root}" \
       go build \
         -buildvcs=true \
         -trimpath \
