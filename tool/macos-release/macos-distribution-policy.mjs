@@ -44,6 +44,7 @@ export const macOSDistributionPolicy = Object.freeze({
   diskImageFilename: "ViberMate_0.1.0_universal.dmg",
   diskImageIdentifier: "io.vibermate.desktop.dmg",
   evidenceSchema: "vibermate.macos-distribution-notarization/v1",
+  lipoIdentity: "Apple lipo (version unavailable; SHA-256 bound)",
   codeObjectNames: Object.freeze([
     "app-framework",
     "flutter-macos-framework",
@@ -674,7 +675,7 @@ export function validateAppleToolchainEvidence(value) {
     !/^macos15\//u.test(value.runnerImage) ||
     value.node !== "v22.23.1" ||
     !value.clang.startsWith("Apple clang version 16.0.0 ") ||
-    !value.lipo.startsWith("Apple Inc. version ") ||
+    value.lipo !== macOSDistributionPolicy.lipoIdentity ||
     value.codesign !== "/usr/bin/codesign" ||
     value.hdiutil !== "/usr/bin/hdiutil" ||
     !value.toolPaths.clang.startsWith(

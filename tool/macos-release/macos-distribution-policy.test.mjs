@@ -50,7 +50,7 @@ function admittedAppleTools() {
     codesign: "/usr/bin/codesign",
     developerDirectory: "/Applications/Xcode_16.2.app/Contents/Developer",
     hdiutil: "/usr/bin/hdiutil",
-    lipo: "Apple Inc. version cctools-1010.6",
+    lipo: macOSDistributionPolicy.lipoIdentity,
     macOS: "15.7.5",
     macOSBuild: "24G617",
     node: "v22.23.1",
@@ -434,6 +434,12 @@ test("trusted revisions and Apple tool admission are closed", () => {
     validateAppleToolchainEvidence({
       ...tools,
       toolSHA256: { ...tools.toolSHA256, codesign: "not-a-digest" },
+    }),
+  );
+  assert.throws(() =>
+    validateAppleToolchainEvidence({
+      ...tools,
+      lipo: "Apple Inc. version cctools-1010.6",
     }),
   );
 });

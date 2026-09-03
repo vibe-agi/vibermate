@@ -23,6 +23,13 @@ const distributionBuilder = await readFile(
   ),
   "utf8",
 );
+const candidateVerifier = await readFile(
+  resolve(
+    repositoryDirectory,
+    "tool/macos-release/verify-macos-signed-candidate.mjs",
+  ),
+  "utf8",
+);
 const unsignedStart = workflow.indexOf("\n  unsigned:\n");
 const evidenceStart = workflow.indexOf("\n  r0_evidence:\n");
 const signStart = workflow.indexOf("\n  sign:\n");
@@ -69,6 +76,14 @@ test("Universal CGO slices compile against the admitted macOS SDK", () => {
       ),
     );
   }
+});
+
+test("lipo evidence is digest-bound without an unsupported version probe", () => {
+  assert.doesNotMatch(candidateVerifier, /lipoPath,\s*\["-version"\]/u);
+  assert.match(
+    candidateVerifier,
+    /lipo: macOSDistributionPolicy\.lipoIdentity/u,
+  );
 });
 
 test("workflow admits only the default workflow SHA and an ancestor candidate", () => {
