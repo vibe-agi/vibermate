@@ -318,7 +318,10 @@ export async function applicationTreeLedger(root) {
           "The macOS application contains an unadmitted symbolic link",
         );
       }
-      ledger.push({ mode, path: relativePath, target, type: "symlink" });
+      // POSIX does not define meaningful permission bits for symbolic links.
+      // Darwin reports 0755 for App bundle links while Linux commonly reports
+      // 0777, so encode the one canonical archive value on every host.
+      ledger.push({ mode: 0o755, path: relativePath, target, type: "symlink" });
       return;
     }
     if ((mode & 0o022) !== 0) {
