@@ -496,6 +496,7 @@ jobs:
             -s \
             -k "${keychain_password}" \
             "${SIGNING_KEYCHAIN_PATH}"
+          /usr/bin/security list-keychains -d user -s "${SIGNING_KEYCHAIN_PATH}"
 
       - name: Select exactly one Team-matched Developer ID identity
         id: signing_identity

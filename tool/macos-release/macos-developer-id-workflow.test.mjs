@@ -184,6 +184,23 @@ test("credential cleanup is ordered before every protected artifact action", () 
   );
 });
 
+test("Developer ID signing registers the temporary keychain on the user search list", () => {
+  const importIdentity = signJob.indexOf(
+    "Import the one protected Developer ID identity",
+  );
+  const registerKeychain = signJob.indexOf(
+    '/usr/bin/security list-keychains -d user -s "${SIGNING_KEYCHAIN_PATH}"',
+  );
+  const signing = signJob.indexOf(
+    "Perform the trusted inside-out signing transformation",
+  );
+  assert.ok(
+    importIdentity >= 0 &&
+      registerKeychain > importIdentity &&
+      signing > registerKeychain,
+  );
+});
+
 test("signing and notarization consume separate Hideout-compatible secrets", () => {
   assert.match(
     signJob,
