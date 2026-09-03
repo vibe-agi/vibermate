@@ -134,10 +134,10 @@ func TestAdjacentServerManagementUIRootIsOptionalButClosedWhenPresent(t *testing
 	}
 }
 
-func TestParseArgumentsAcceptsFlutterDesktopOrigin(t *testing.T) {
+func TestParseCommandConfigAcceptsFlutterDesktopOrigin(t *testing.T) {
 	t.Parallel()
 
-	config, resources, err := parseArguments([]string{
+	config, err := parseCommandConfig([]string{
 		"--app-cache-dir=/tmp/cache",
 		"--data-dir=/tmp/data",
 		"--webview-origin=vibermate://desktop",
@@ -146,10 +146,8 @@ func TestParseArgumentsAcceptsFlutterDesktopOrigin(t *testing.T) {
 		"--remote-server-listen=127.0.0.1:0",
 	})
 	if err != nil {
-		t.Fatalf("parseArguments() error = %v", err)
+		t.Fatalf("parseCommandConfig() error = %v", err)
 	}
-	defer resources.bootstrap.Close()
-	defer resources.parentLifetime.Close()
 	if config.webviewOrigin != "vibermate://desktop" {
 		t.Fatalf("webview origin = %q", config.webviewOrigin)
 	}
@@ -158,10 +156,10 @@ func TestParseArgumentsAcceptsFlutterDesktopOrigin(t *testing.T) {
 	}
 }
 
-func TestParseArgumentsDefaultsDesktopRemoteServerToLoopback(t *testing.T) {
+func TestParseCommandConfigDefaultsDesktopRemoteServerToLoopback(t *testing.T) {
 	t.Parallel()
 
-	config, resources, err := parseArguments([]string{
+	config, err := parseCommandConfig([]string{
 		"--app-cache-dir=/tmp/cache",
 		"--data-dir=/tmp/data",
 		"--webview-origin=vibermate://desktop",
@@ -171,8 +169,6 @@ func TestParseArgumentsDefaultsDesktopRemoteServerToLoopback(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer resources.bootstrap.Close()
-	defer resources.parentLifetime.Close()
 	if config.remoteServerListenAddress != "127.0.0.1:9666" {
 		t.Fatalf(
 			"default remote Server listen address = %q, want loopback",

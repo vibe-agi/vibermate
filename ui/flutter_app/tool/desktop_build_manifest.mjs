@@ -193,6 +193,27 @@ async function sha256File(path) {
   return createHash("sha256").update(payload).digest("hex");
 }
 
+export function normalizeFlutterToolchains(
+  machine,
+  { expectedVersion, expectedRevision },
+) {
+  if (
+    machine === null ||
+    typeof machine !== "object" ||
+    Array.isArray(machine) ||
+    machine.frameworkVersion !== expectedVersion ||
+    machine.frameworkRevision !== expectedRevision ||
+    typeof machine.dartSdkVersion !== "string" ||
+    machine.dartSdkVersion.length === 0
+  ) {
+    throw new Error("Flutter SDK differs from the repository authority");
+  }
+  return Object.freeze({
+    dart: `Dart ${machine.dartSdkVersion}`,
+    flutter: `Flutter ${expectedVersion} (${expectedRevision})`,
+  });
+}
+
 function normalizedFlutterToolchains() {
   const source = run("flutter", ["--version", "--machine"], {
     cwd: flutterDirectory,
@@ -209,19 +230,12 @@ function normalizedFlutterToolchains() {
   ], { cwd: flutterDirectory });
   const [expectedVersion, expectedRevision, ...extra] =
     authoritySource.split(/\r?\n/u);
-  if (
-    extra.length !== 0 ||
-    machine.frameworkVersion !== expectedVersion ||
-    machine.frameworkRevision !== expectedRevision ||
-    machine.channel !== "stable" ||
-    typeof machine.dartSdkVersion !== "string" ||
-    machine.dartSdkVersion.length === 0
-  ) {
+  if (extra.length !== 0) {
     throw new Error("Flutter SDK differs from the repository authority");
   }
-  return Object.freeze({
-    dart: `Dart ${machine.dartSdkVersion}`,
-    flutter: `Flutter ${expectedVersion} (${expectedRevision})`,
+  return normalizeFlutterToolchains(machine, {
+    expectedVersion,
+    expectedRevision,
   });
 }
 
