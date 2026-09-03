@@ -1,6 +1,9 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import {
+  macOSDistributionPolicy,
+} from "./macos-distribution-policy.mjs";
+import {
   exactApplicationCopyArguments,
   installedCandidatePathsFromEnvironment,
   installedSmokeEnvironment,
@@ -64,7 +67,8 @@ function installedReport() {
     notarization: {
       status: "Accepted",
       submissionID: "12345678-1234-1234-1234-123456789abc",
-      ticketedCodeDirectories: 6,
+      ticketedCodeDirectories:
+        macOSDistributionPolicy.notaryTicketedCodeDirectoryCount,
     },
     limitations: {
       appRemoval: "runner-cleanup-only",
@@ -125,6 +129,9 @@ test("both report validators reject extensions and weakened cleanup claims", () 
     },
     (report) => {
       report.candidate.architectures.reverse();
+    },
+    (report) => {
+      report.notarization.ticketedCodeDirectories += 1;
     },
   ]) {
     const report = structuredClone(installedReport());

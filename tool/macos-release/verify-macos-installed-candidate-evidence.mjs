@@ -285,7 +285,7 @@ export function validateIndependentInstalledCandidateReport(value) {
   requireEqual(value.notarization.status, "Accepted", "notarization status");
   requireEqual(
     value.notarization.ticketedCodeDirectories,
-    6,
+    macOSDistributionPolicy.notaryTicketedCodeDirectoryCount,
     "notarization ticket count",
   );
   if (!uuidPattern.test(value.notarization.submissionID ?? "")) {

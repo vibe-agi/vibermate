@@ -962,7 +962,7 @@ export function validateInstalledCandidateReport(value, expected = {}) {
   }
   requireFixedValue(
     value.notarization.ticketedCodeDirectories,
-    6,
+    macOSDistributionPolicy.notaryTicketedCodeDirectoryCount,
     "notarization ticket count",
   );
   const fixedLimitations = {
