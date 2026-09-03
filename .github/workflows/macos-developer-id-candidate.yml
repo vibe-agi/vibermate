@@ -466,19 +466,19 @@ jobs:
         timeout-minutes: 5
         shell: bash
         env:
-          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
-          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          DEVELOPER_ID_P12_BASE64: ${{ secrets.APPLE_DEVELOPER_ID_P12_BASE64 }}
+          DEVELOPER_ID_P12_PASSWORD: ${{ secrets.APPLE_DEVELOPER_ID_P12_PASSWORD }}
         run: |
           set -euo pipefail
-          test -n "${APPLE_CERTIFICATE}"
-          test -n "${APPLE_CERTIFICATE_PASSWORD}"
+          test -n "${DEVELOPER_ID_P12_BASE64}"
+          test -n "${DEVELOPER_ID_P12_PASSWORD}"
           test ! -e "${SIGNING_KEYCHAIN_PATH}"
           test ! -e "${SIGNING_STATE_DIRECTORY}"
           /usr/bin/install -d -m 0700 "${SIGNING_STATE_DIRECTORY}"
           certificate_path="${SIGNING_STATE_DIRECTORY}/developer-id.p12"
           trap '/bin/rm -f -- "${certificate_path}"' EXIT
           umask 077
-          printf '%s' "${APPLE_CERTIFICATE}" | /usr/bin/base64 -D > "${certificate_path}"
+          printf '%s' "${DEVELOPER_ID_P12_BASE64}" | /usr/bin/base64 -D > "${certificate_path}"
           test -s "${certificate_path}"
           test "$(/usr/bin/stat -f '%z' "${certificate_path}")" -le 1048576
           keychain_password="$(/usr/bin/openssl rand -hex 32)"
@@ -487,7 +487,7 @@ jobs:
           /usr/bin/security unlock-keychain -p "${keychain_password}" "${SIGNING_KEYCHAIN_PATH}"
           /usr/bin/security import "${certificate_path}" \
             -k "${SIGNING_KEYCHAIN_PATH}" \
-            -P "${APPLE_CERTIFICATE_PASSWORD}" \
+            -P "${DEVELOPER_ID_P12_PASSWORD}" \
             -T /usr/bin/codesign \
             -T /usr/bin/security
           /bin/rm -f -- "${certificate_path}"
@@ -642,27 +642,28 @@ jobs:
         timeout-minutes: 5
         shell: bash
         env:
-          APPLE_API_PRIVATE_KEY: ${{ secrets.APPLE_API_PRIVATE_KEY }}
+          NOTARY_KEY_P8_BASE64: ${{ secrets.APPLE_NOTARY_KEY_P8_BASE64 }}
         run: |
           set -euo pipefail
-          test -n "${APPLE_API_PRIVATE_KEY}"
+          test -n "${NOTARY_KEY_P8_BASE64}"
           key_directory="$(dirname "${PRIVATE_KEY_PATH}")"
           expected_directory="${RUNNER_TEMP}/vibermate-notary-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
           test "${key_directory}" = "${expected_directory}"
           test ! -e "${key_directory}"
           /usr/bin/install -d -m 0700 "${key_directory}"
           umask 077
-          printf '%s' "${APPLE_API_PRIVATE_KEY}" > "${PRIVATE_KEY_PATH}"
+          printf '%s' "${NOTARY_KEY_P8_BASE64}" | /usr/bin/base64 -D > "${PRIVATE_KEY_PATH}"
           /bin/chmod 0600 "${PRIVATE_KEY_PATH}"
           test -s "${PRIVATE_KEY_PATH}"
+          test "$(/usr/bin/stat -f '%z' "${PRIVATE_KEY_PATH}")" -le 65536
 
       - name: Submit and staple only the signed DMG
         id: notarize_candidate
         timeout-minutes: 120
         shell: bash
         env:
-          APPLE_API_ISSUER: ${{ vars.APPLE_API_ISSUER }}
-          APPLE_API_KEY: ${{ vars.APPLE_API_KEY }}
+          APPLE_API_ISSUER: ${{ secrets.APPLE_NOTARY_ISSUER_ID }}
+          APPLE_API_KEY: ${{ secrets.APPLE_NOTARY_KEY_ID }}
           APPLE_API_KEY_PATH: ${{ env.PRIVATE_KEY_PATH }}
           VIBERMATE_APPLE_TEAM_ID: ${{ vars.VIBERMATE_APPLE_TEAM_ID }}
         run: |

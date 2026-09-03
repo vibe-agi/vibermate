@@ -143,6 +143,31 @@ test("credential cleanup is ordered before every protected artifact action", () 
   );
 });
 
+test("signing and notarization consume separate Hideout-compatible secrets", () => {
+  assert.match(
+    signJob,
+    /secrets\.APPLE_DEVELOPER_ID_P12_BASE64/u,
+  );
+  assert.match(
+    signJob,
+    /secrets\.APPLE_DEVELOPER_ID_P12_PASSWORD/u,
+  );
+  assert.doesNotMatch(signJob, /secrets\.APPLE_NOTARY_/u);
+
+  for (const name of [
+    "APPLE_NOTARY_KEY_P8_BASE64",
+    "APPLE_NOTARY_KEY_ID",
+    "APPLE_NOTARY_ISSUER_ID",
+  ]) {
+    assert.match(notaryJob, new RegExp(`secrets\\.${name}`, "u"));
+  }
+  assert.doesNotMatch(notaryJob, /secrets\.APPLE_DEVELOPER_ID_/u);
+  assert.doesNotMatch(
+    workflow,
+    /secrets\.(?:APPLE_CERTIFICATE|APPLE_API_PRIVATE_KEY)/u,
+  );
+});
+
 test("fresh installed evidence runs without Apple distribution credentials and executes only the notarized App", () => {
   assert.ok(installedEvidenceStart > notaryStart);
   assert.match(
