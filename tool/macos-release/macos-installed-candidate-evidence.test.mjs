@@ -3,6 +3,7 @@ import { test } from "node:test";
 import {
   exactApplicationCopyArguments,
   installedCandidatePathsFromEnvironment,
+  installedSmokeEnvironment,
   macOSInstalledEvidencePolicy,
   readOnlyAttachArguments,
   rejectAppleDistributionCredentials,
@@ -176,6 +177,30 @@ test("all mutable paths are distinct direct runner children", () => {
       /outside its admitted runner path/u,
     );
   }
+});
+
+test("installed smoke isolates App data without replacing the login home", () => {
+  const input = {
+    ...environment(),
+    HOME: "/Users/runner",
+    GITHUB_TOKEN: "not inherited by the smoke process",
+  };
+  const paths = installedCandidatePathsFromEnvironment(input);
+
+  const child = installedSmokeEnvironment(input, paths.homeDirectory);
+
+  assert.equal(child.HOME, "/Users/runner");
+  assert.equal(child.TMPDIR, `${paths.homeDirectory}/tmp`);
+  assert.equal(child.CFFIXED_USER_HOME, undefined);
+  assert.equal(child.GITHUB_TOKEN, undefined);
+  assert.throws(
+    () =>
+      installedSmokeEnvironment(
+        { ...input, HOME: paths.homeDirectory },
+        paths.homeDirectory,
+      ),
+    /login HOME must remain outside the isolated App home/u,
+  );
 });
 
 test("Apple distribution credentials are rejected by name", () => {
