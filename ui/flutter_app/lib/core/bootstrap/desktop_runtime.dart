@@ -5,6 +5,7 @@ import 'dart:typed_data';
 
 import '../api/control_api.dart';
 import '../api/control_models.dart';
+import 'desktop_daemon_environment.dart';
 import 'desktop_daemon_lifecycle.dart';
 
 final class DesktopRuntimeException implements Exception {
@@ -62,6 +63,8 @@ final class DesktopRuntime {
       arguments,
       mode: ProcessStartMode.normal,
       runInShell: false,
+      environment: desktopDaemonEnvironment(Platform.environment),
+      includeParentEnvironment: false,
     );
     unawaited(process.stderr.drain<void>());
     try {

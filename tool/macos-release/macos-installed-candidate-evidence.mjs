@@ -357,6 +357,25 @@ function sanitizedToolEnvironment(environment) {
   return result;
 }
 
+export function installedSmokeEnvironment(environment, isolatedHome) {
+  const loginHome = requireAbsoluteCleanPath(
+    requireEnvironmentValue(environment, "HOME"),
+    "login HOME",
+  );
+  requireAbsoluteCleanPath(isolatedHome, "isolated App home");
+  if (
+    loginHome === isolatedHome ||
+    loginHome.startsWith(`${isolatedHome}${sep}`)
+  ) {
+    throw new Error("login HOME must remain outside the isolated App home");
+  }
+  return Object.freeze({
+    ...sanitizedToolEnvironment(environment),
+    HOME: loginHome,
+    TMPDIR: resolve(isolatedHome, "tmp"),
+  });
+}
+
 function runTool(command, arguments_, label, options = {}) {
   const result = spawnSync(command, arguments_, {
     cwd: options.cwd,
@@ -1191,11 +1210,10 @@ export async function createMacOSInstalledCandidateEvidence(
       paths.stateDirectory,
       "installed-App smoke state",
     );
-    smoke = await runInstalledSmoke(paths, {
-      ...environmentForTools,
-      HOME: paths.homeDirectory,
-      TMPDIR: resolve(paths.homeDirectory, "tmp"),
-    });
+    smoke = await runInstalledSmoke(
+      paths,
+      installedSmokeEnvironment(environment, paths.homeDirectory),
+    );
     const afterLaunch = await inspectSignedMacOSApplicationAtPath(
       paths.installedAppPath,
       expectedTeamID,

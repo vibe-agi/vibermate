@@ -157,6 +157,29 @@ final class RunnerTests: XCTestCase {
     )
   }
 
+  func testFixedUserHomeCanonicalizesAMacOSFilesystemAlias() throws {
+    let aliasedHome = "/private/tmp"
+    let canonicalHome = URL(fileURLWithPath: aliasedHome, isDirectory: true)
+      .standardizedFileURL
+    if canonicalHome.path == aliasedHome {
+      throw XCTSkip("This macOS volume does not expose the /private/tmp alias")
+    }
+
+    let bridge = try WorkbenchPreferencesBridge(environment: [
+      "HOME": "/Users/login-owner",
+      "CFFIXED_USER_HOME": aliasedHome,
+    ])
+    XCTAssertEqual(
+      bridge.stateURL.path,
+      canonicalHome
+        .appendingPathComponent("Library/Application Support", isDirectory: true)
+        .appendingPathComponent("io.vibermate.desktop", isDirectory: true)
+        .appendingPathComponent("ui-state", isDirectory: true)
+        .appendingPathComponent(WorkbenchPreferencesBridge.fileName)
+        .path
+    )
+  }
+
   func testFixedUserHomeFailsClosedInsteadOfFallingBackToLoginHome() throws {
     for invalid in ["relative", "/", "/private/tmp/../tmp"] {
       XCTAssertThrowsError(

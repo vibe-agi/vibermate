@@ -213,10 +213,19 @@ final class WorkbenchPreferencesBridge {
     guard let home = selectedHome,
           home.hasPrefix("/"),
           home != "/",
-          URL(fileURLWithPath: home, isDirectory: true).standardizedFileURL.path == home else {
+          URL(fileURLWithPath: home, isDirectory: true).standardized.path == home else {
       throw Failure.invalidState
     }
-    let directory = URL(fileURLWithPath: home, isDirectory: true)
+    // Reject lexical traversal above, then resolve macOS filesystem aliases
+    // such as /private/tmp -> /tmp once. Requiring the unresolved spelling to
+    // equal standardizedFileURL would reject a valid CFFIXED_USER_HOME and
+    // disable the entire preferences channel during an isolated launch.
+    let canonicalHome = URL(fileURLWithPath: home, isDirectory: true)
+      .standardizedFileURL
+    guard canonicalHome.path.hasPrefix("/"), canonicalHome.path != "/" else {
+      throw Failure.invalidState
+    }
+    let directory = canonicalHome
       .appendingPathComponent("Library", isDirectory: true)
       .appendingPathComponent("Application Support", isDirectory: true)
       .appendingPathComponent(Self.applicationID, isDirectory: true)
