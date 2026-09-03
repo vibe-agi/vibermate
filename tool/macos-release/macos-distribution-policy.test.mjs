@@ -637,6 +637,12 @@ test("notarization accepts only the API-key credential family", () => {
 test("Gatekeeper output is closed over notarized Developer ID", () => {
   assert.doesNotThrow(() =>
     validateGatekeeperAssessment(
+      "/candidate/ViberMate.app: accepted\nsource=Notarized Developer ID\n",
+      teamID,
+    ),
+  );
+  assert.doesNotThrow(() =>
+    validateGatekeeperAssessment(
       `/candidate/ViberMate.app: accepted\nsource=Notarized Developer ID\norigin=Developer ID Application: ViberMate (${teamID})\n`,
       teamID,
     ),
@@ -644,6 +650,12 @@ test("Gatekeeper output is closed over notarized Developer ID", () => {
   assert.throws(() =>
     validateGatekeeperAssessment(
       "/candidate/ViberMate.app: accepted\nsource=Developer ID\n",
+      teamID,
+    ),
+  );
+  assert.throws(() =>
+    validateGatekeeperAssessment(
+      "/candidate/ViberMate.app: accepted\nsource=Notarized Developer ID\norigin=Developer ID Application: ViberMate (AAAAAAAAAA)\n",
       teamID,
     ),
   );
